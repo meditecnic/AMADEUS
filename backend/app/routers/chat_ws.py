@@ -74,21 +74,36 @@ async def compress_and_update_history(session_id: str, current_history: list):
     """
     keep_count = 6
     if len(current_history) <= keep_count:
+        session_data = sessions.get(session_id)
+        if session_data:
+            async with session_data["lock"]:
+                session_data["compressing"] = False
         return
         
     to_compress = current_history[:-keep_count]
     N = len(to_compress)
     
     print(f"[History Compression] Session {session_id}: Compressing {N} messages...")
-    new_summary = await deepseek_service.compress_history(to_compress)
-    
-    if new_summary:
+    new_summary = None
+    try:
+        new_summary = await deepseek_service.compress_history(to_compress)
+        if new_summary:
+            session_data = sessions.get(session_id)
+            if session_data:
+                async with session_data["lock"]:
+                    session_data["memory_summary"] = new_summary
+                    if len(session_data["history"]) >= N:
+                        session_data["history"] = session_data["history"][N:]
+                    else:
+                        session_data["history"] = []
+                    print(f"[History Compression] Session {session_id}: Compression successful. Summary: {new_summary}")
+    except Exception as e:
+        print(f"[History Compression Error] Session {session_id}: {e}")
+    finally:
         session_data = sessions.get(session_id)
         if session_data:
             async with session_data["lock"]:
-                session_data["memory_summary"] = new_summary
-                session_data["history"] = session_data["history"][N:]
-            print(f"[History Compression] Session {session_id}: Compression successful. Summary: {new_summary}")
+                session_data["compressing"] = False
 
 @router.websocket("/ws/chat")
 async def websocket_chat_endpoint(websocket: WebSocket):
@@ -113,10 +128,12 @@ async def websocket_chat_endpoint(websocket: WebSocket):
             sessions[session_id] = {
                 "history": [],
                 "memory_summary": "",
-                "lock": asyncio.Lock()
+                "lock": asyncio.Lock(),
+                "compressing": False
             }
         
     session_data = sessions[session_id]
+    active_tts_tasks = []
     
     try:
         while True:
@@ -132,6 +149,9 @@ async def websocket_chat_endpoint(websocket: WebSocket):
             user_msg = data.get("message", "").strip()
             if not user_msg:
                 continue
+                
+            # Clean up completed tasks from previous rounds
+            active_tts_tasks = [t for t in active_tts_tasks if not t.done()]
                 
             # Acquire pessimistic lock per session to prevent race conditions during interaction
             async with session_data["lock"]:
@@ -171,6 +191,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                                 
                                 # Launch TTS task immediately in background
                                 tts_task = asyncio.create_task(tts_manager.synthesize_async(text, emotion))
+                                active_tts_tasks.append(tts_task)
                                 await sentence_queue.put({
                                     "sentence_id": sentence_id_counter,
                                     "text": text,
@@ -189,6 +210,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                                 full_ja_text_parts.append(text)
                                 
                                 tts_task = asyncio.create_task(tts_manager.synthesize_async(text, emotion))
+                                active_tts_tasks.append(tts_task)
                                 await sentence_queue.put({
                                     "sentence_id": sentence_id_counter,
                                     "text": text,
@@ -306,7 +328,8 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 await websocket.send_json({"type": "status", "state": "done"})
                 
                 # Trigger background history compression if threshold exceeded
-                if len(active_history) // 2 > config.HISTORY_COMPRESS_THRESHOLD:
+                if len(active_history) // 2 > config.HISTORY_COMPRESS_THRESHOLD and not session_data.get("compressing"):
+                    session_data["compressing"] = True
                     asyncio.create_task(compress_and_update_history(session_id, active_history))
                     
     except WebSocketDisconnect:
@@ -317,3 +340,8 @@ async def websocket_chat_endpoint(websocket: WebSocket):
             await websocket.send_json({"type": "error", "message": f"Server error: {str(e)}"})
         except Exception:
             pass
+    finally:
+        # Cancel all unfinished active TTS tasks when the client disconnects or an error occurs
+        for task in active_tts_tasks:
+            if not task.done():
+                task.cancel()

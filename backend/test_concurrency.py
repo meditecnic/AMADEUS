@@ -1,9 +1,9 @@
 import sys
 import asyncio
 import time
-import threading
 from unittest.mock import patch
-from fastapi.testclient import TestClient
+from fastapi import WebSocketDisconnect
+from starlette.websockets import WebSocketState
 
 # Mock DeepSeek Service methods
 async def mock_get_chat_stream(self, active_history, memory_summary=None):
@@ -31,12 +31,11 @@ async def mock_slow_compress_history(self, history):
     print("[MOCK] compress_history finished.")
     return "要約：会話履歴圧縮済み。"
 
-# Mock sync tts call to simulate slow GPU execution
-original_sync_tts_call = None
-def mock_sync_tts_call(self, text: str, ref_config: dict) -> bytes:
+# Mock async tts call to simulate slow GPU execution
+async def mock_async_tts_call(self, text: str, ref_config: dict) -> bytes:
     if "slow_tts" in text:
         print(f"[MOCK TTS] Starting slow TTS (12s sleep) for text: {text}")
-        time.sleep(12.0)  # Sleep 12 seconds
+        await asyncio.sleep(12.0)  # Sleep 12 seconds
         print(f"[MOCK TTS] Finished slow TTS for text: {text}")
         return b"slow_audio"
     elif "fast_tts" in text:
@@ -45,84 +44,90 @@ def mock_sync_tts_call(self, text: str, ref_config: dict) -> bytes:
     else:
         return b"default_audio"
 
-def run_client_interaction(client, session_id, message, results_list):
-    """Run a single websocket chat interaction in a background thread."""
-    try:
-        with client.websocket_connect(f"/ws/chat?session_id={session_id}") as ws:
-            ws.send_json({"message": message})
-            messages = []
-            while True:
-                msg = ws.receive_json()
-                messages.append(msg)
-                if msg.get("type") == "status" and msg.get("state") == "done":
-                    break
-            results_list.append((session_id, True, messages))
-    except Exception as e:
-        results_list.append((session_id, False, e))
+# Define MockWebSocket
+class MockWebSocket:
+    def __init__(self, session_id="default"):
+        self.query_params = {"session_id": session_id}
+        self.recv_queue = asyncio.Queue()
+        self.send_queue = asyncio.Queue()
+        self.accepted = False
+        self.closed = False
+        self.headers = {"origin": "http://localhost"}
+        self.client_state = WebSocketState.CONNECTED
 
-async def test_session_isolation(client):
+    async def accept(self):
+        self.accepted = True
+
+    async def receive_json(self):
+        item = await self.recv_queue.get()
+        if item is None:
+            raise WebSocketDisconnect()
+        return item
+
+    async def send_json(self, data):
+        await self.send_queue.put(data)
+
+    async def close(self, code=1000):
+        self.closed = True
+        self.client_state = WebSocketState.DISCONNECTED
+        await self.recv_queue.put(None)
+
+async def test_session_isolation():
     print("\n" + "="*50)
     print("TEST 1: SESSION ISOLATION & CONCURRENCY")
     print("="*50)
     
-    from app.routers.chat_ws import sessions
+    from app.routers.chat_ws import sessions, websocket_chat_endpoint
     sessions.clear()
     
-    results = []
-    # Start two concurrent clients with different session IDs
-    t1 = asyncio.to_thread(run_client_interaction, client, "session_A", "こんにちは、Aです。", results)
-    t2 = asyncio.to_thread(run_client_interaction, client, "session_B", "こんにちは、Bです。", results)
+    ws_A = MockWebSocket(session_id="session_A")
+    ws_B = MockWebSocket(session_id="session_B")
     
-    await asyncio.gather(t1, t2)
+    task1 = asyncio.create_task(websocket_chat_endpoint(ws_A))
+    task2 = asyncio.create_task(websocket_chat_endpoint(ws_B))
     
-    # Verify both succeeded
-    assert len(results) == 2, f"Expected 2 results, got {len(results)}"
+    await ws_A.recv_queue.put({"message": "こんにちは、Aです。"})
+    await ws_B.recv_queue.put({"message": "こんにちは、Bです。"})
     
-    for sess_id, success, msgs in results:
-        assert success is True, f"Connection for {sess_id} failed: {msgs}"
-        print(f"[OK] {sess_id} completed successfully.")
-        
-        # Verify session history isolation
-        session_data = sessions.get(sess_id)
-        assert session_data is not None, f"Session data for {sess_id} not found"
-        history = session_data["history"]
-        
-        # History should only contain messages for this session
-        user_msgs = [h["content"] for h in history if h["role"] == "user"]
-        assert len(user_msgs) == 1, f"Expected 1 user message in {sess_id} history, got {len(user_msgs)}"
-        if sess_id == "session_A":
-            assert "Aです" in user_msgs[0], f"Wrong message content in history of session_A: {user_msgs}"
-        else:
-            assert "Bです" in user_msgs[0], f"Wrong message content in history of session_B: {user_msgs}"
-            
+    async def collect_messages(ws):
+        messages = []
+        while True:
+            msg = await ws.send_queue.get()
+            messages.append(msg)
+            if msg.get("type") == "status" and msg.get("state") == "done":
+                break
+        return messages
+
+    msgs_A, msgs_B = await asyncio.gather(collect_messages(ws_A), collect_messages(ws_B))
+    
+    await ws_A.close()
+    await ws_B.close()
+    await asyncio.gather(task1, task2)
+    
+    # Verify session history isolation
+    session_data_A = sessions.get("session_A")
+    session_data_B = sessions.get("session_B")
+    assert session_data_A is not None
+    assert session_data_B is not None
+    
+    user_msgs_A = [h["content"] for h in session_data_A["history"] if h["role"] == "user"]
+    user_msgs_B = [h["content"] for h in session_data_B["history"] if h["role"] == "user"]
+    
+    assert len(user_msgs_A) == 1, f"Expected 1 user message, got {len(user_msgs_A)}"
+    assert "Aです" in user_msgs_A[0], f"Expected A content, got {user_msgs_A[0]}"
+    assert len(user_msgs_B) == 1, f"Expected 1 user message, got {len(user_msgs_B)}"
+    assert "Bです" in user_msgs_B[0], f"Expected B content, got {user_msgs_B[0]}"
+    
     print("[PASS] Test 1: Session isolation is verified under concurrent connections.")
 
-def run_client_race_flow(client, session_id, results_list):
-    """Run Client 1, send Round 17, and keep connection open for 3 seconds."""
-    try:
-        with client.websocket_connect(f"/ws/chat?session_id={session_id}") as ws:
-            ws.send_json({"message": "Round 17 message"})
-            messages = []
-            while True:
-                msg = ws.receive_json()
-                messages.append(msg)
-                if msg.get("type") == "status" and msg.get("state") == "done":
-                    break
-            results_list.append((session_id, True, messages))
-            # Keep connection open for 3.0s to allow background compression task to finish
-            time.sleep(3.0)
-    except Exception as e:
-        results_list.append((session_id, False, e))
-
-async def test_history_compression_race(client):
+async def test_history_compression_race():
     print("\n" + "="*50)
     print("TEST 2: HISTORY COMPRESSION RACE CONDITION")
     print("="*50)
     
-    from app.routers.chat_ws import sessions
+    from app.routers.chat_ws import sessions, websocket_chat_endpoint
     sessions.clear()
     
-    # 1. Initialize session with 32 messages (16 rounds) to exceed threshold (15 rounds)
     session_id = "race_session"
     dummy_history = []
     for i in range(16):
@@ -131,85 +136,89 @@ async def test_history_compression_race(client):
         
     sessions[session_id] = {
         "history": dummy_history,
-        "memory_summary": ""
+        "memory_summary": "",
+        "lock": asyncio.Lock(),
+        "compressing": False
     }
     
-    # 2. Setup mock for slow compression
     with patch("app.services.deepseek.DeepSeekService.compress_history", mock_slow_compress_history):
-        # We start the first request which triggers compression
-        results_1 = []
-        print("[Client] Sending Round 17 (triggers compression and keeps connection open)...")
-        # Run Round 17 in background thread and keep it open
-        t1 = asyncio.to_thread(run_client_race_flow, client, session_id, results_1)
+        ws1 = MockWebSocket(session_id=session_id)
+        ws2 = MockWebSocket(session_id=session_id)
         
-        # Wait 0.5s for Round 17 to complete its message exchanges
-        await asyncio.sleep(0.5)
+        task1 = asyncio.create_task(websocket_chat_endpoint(ws1))
+        task2 = asyncio.create_task(websocket_chat_endpoint(ws2))
         
-        # Immediately send Round 18 message *while* compression is active.
-        results_2 = []
-        print("[Client] Sending Round 18 message immediately...")
-        await asyncio.to_thread(run_client_interaction, client, session_id, "Round 18 message", results_2)
+        # Start Round 17 (triggers compression)
+        await ws1.recv_queue.put({"message": "Round 17 message"})
         
-        # Wait for Client 1 connection to close after its sleep
-        await t1
+        async def wait_for_done(ws):
+            while True:
+                msg = await ws.send_queue.get()
+                if msg.get("type") == "status" and msg.get("state") == "done":
+                    break
         
-        # Give the background compression task a tiny bit more time if needed
-        print("[Test] Waiting for background compression to complete...")
-        await asyncio.sleep(0.5)
+        await wait_for_done(ws1)
         
-        # 3. Inspect final history
+        # Immediately send Round 18 message while compression is still running
+        await ws2.recv_queue.put({"message": "Round 18 message"})
+        await wait_for_done(ws2)
+        
+        # Wait a bit to let compression finish
+        await asyncio.sleep(2.5)
+        
+        await ws1.close()
+        await ws2.close()
+        await asyncio.gather(task1, task2)
+        
         final_history = sessions[session_id]["history"]
         print(f"[Test] Final history length: {len(final_history)}")
-        print("[Test] Final history messages:")
-        for idx, msg in enumerate(final_history):
-            print(f"  {idx}: {msg['role']} -> {msg['content']}")
-            
-        # Let's check if the messages from Round 18 are lost.
+        
         has_round_18 = any("Round 18" in msg["content"] for msg in final_history)
         if not has_round_18:
             print("[FAIL/BUG DETECTED] Round 18 messages were completely lost from the session history!")
-            print("[BUG DETAILS] Due to the race condition where `compress_and_update_history` captures the history list reference before yielding, and overwrites the session history after returning, all messages sent during the API call are overwritten.")
         else:
             print("[PASS] Round 18 messages are present in history.")
+        assert has_round_18, "Round 18 messages were lost from the session history!"
 
-async def test_tts_queue_blocking(client):
+async def test_tts_queue_blocking():
     print("\n" + "="*50)
     print("TEST 3: TTS QUEUE BLOCKING (CASCADE TIMEOUT)")
     print("="*50)
     
     from app.services.tts_queue import TTSQueueManager
+    from app.routers.chat_ws import websocket_chat_endpoint
     
-    # Patch the _sync_tts_call method to simulate a slow GPU inference
-    with patch.object(TTSQueueManager, "_sync_tts_call", mock_sync_tts_call):
-        results = []
+    with patch.object(TTSQueueManager, "_async_tts_call", mock_async_tts_call):
+        ws1 = MockWebSocket(session_id="session_client1")
+        ws2 = MockWebSocket(session_id="session_client2")
         
-        # Client 1 connects and sends a message that triggers "slow_tts"
-        # Client 2 connects 1 second later and sends "fast_tts"
-        # We run them concurrently
+        task1 = asyncio.create_task(websocket_chat_endpoint(ws1))
+        task2 = asyncio.create_task(websocket_chat_endpoint(ws2))
         
-        async def run_client_1():
-            print("[Client 1] Sending message triggering slow TTS (12s)...")
-            await asyncio.to_thread(run_client_interaction, client, "session_client1", "slow_tts", results)
-            print("[Client 1] Finished.")
-            
-        async def run_client_2():
-            await asyncio.sleep(1.0)  # Wait 1 second before sending client 2 request
-            print("[Client 2] Sending message triggering fast TTS (instant)...")
-            await asyncio.to_thread(run_client_interaction, client, "session_client2", "fast_tts", results)
-            print("[Client 2] Finished.")
+        # Client 1 connects and sends slow_tts
+        await ws1.recv_queue.put({"message": "slow_tts"})
+        await asyncio.sleep(1.0)
+        
+        # Client 2 connects 1 second later and sends fast_tts
+        await ws2.recv_queue.put({"message": "fast_tts"})
+        
+        async def collect_messages(ws):
+            messages = []
+            while True:
+                msg = await ws.send_queue.get()
+                messages.append(msg)
+                if msg.get("type") == "status" and msg.get("state") == "done":
+                    break
+            return messages
             
         t0 = time.time()
-        await asyncio.gather(run_client_1(), run_client_2())
+        client1_msgs, client2_msgs = await asyncio.gather(collect_messages(ws1), collect_messages(ws2))
         duration = time.time() - t0
         print(f"[Test] Total duration of test: {duration:.2f}s")
         
-        # Analyze results
-        # We expect Client 1 to receive a response with audio_degraded = True because it timed out after 10s.
-        # We also expect Client 2 to receive a response with audio_degraded = True because its request was queued
-        # behind Client 1's request in the single-threaded executor, causing Client 2's 10s timeout to expire!
-        
-        client1_msgs = next(msgs for sid, success, msgs in results if sid == "session_client1")
-        client2_msgs = next(msgs for sid, success, msgs in results if sid == "session_client2")
+        await ws1.close()
+        await ws2.close()
+        await asyncio.gather(task1, task2)
         
         c1_text_chunk = next(m for m in client1_msgs if m.get("type") == "text_chunk")
         c2_text_chunk = next(m for m in client2_msgs if m.get("type") == "text_chunk")
@@ -219,21 +228,22 @@ async def test_tts_queue_blocking(client):
         
         if c2_text_chunk.get('audio_degraded') is True:
             print("[FAIL/BUG DETECTED] Client 2's instant TTS request was degraded due to Client 1's slow TTS request blocking the executor thread!")
-            print("[BUG DETAILS] Because the ThreadPoolExecutor has max_workers=1 and the blocking thread cannot be cancelled, a slow request blocks the queue. Subsequent requests time out in asyncio.wait_for before they can run.")
         else:
             print("[PASS] Client 2's TTS request was not degraded.")
+            
+        assert c2_text_chunk.get('audio_degraded') is not True, "Client 2's TTS request was degraded!"
 
 async def main():
-    from app.main import app
-    client = TestClient(app)
-    
     # Patch deepseek network calls for basic chatting
     with patch("app.services.deepseek.DeepSeekService.get_chat_stream", mock_get_chat_stream), \
          patch("app.services.deepseek.DeepSeekService.translate_to_zh", mock_translate_to_zh):
          
-         await test_session_isolation(client)
-         await test_history_compression_race(client)
-         await test_tts_queue_blocking(client)
+         await test_session_isolation()
+         await test_history_compression_race()
+         await test_tts_queue_blocking()
 
 if __name__ == "__main__":
+    # Add project root to path
+    import os
+    sys.path.append(os.path.dirname(os.path.abspath(__file__)))
     asyncio.run(main())

@@ -4,6 +4,7 @@ import time
 import base64
 from unittest.mock import patch
 from fastapi import WebSocketDisconnect
+from starlette.websockets import WebSocketState
 
 # Add project path to python path
 import os
@@ -21,6 +22,8 @@ class MockWebSocket:
         self.send_queue = asyncio.Queue()
         self.accepted = False
         self.closed = False
+        self.headers = {"origin": "http://localhost"}
+        self.client_state = WebSocketState.CONNECTED
 
     async def accept(self):
         self.accepted = True
@@ -36,6 +39,7 @@ class MockWebSocket:
 
     async def close(self):
         self.closed = True
+        self.client_state = WebSocketState.DISCONNECTED
         await self.recv_queue.put(None)
 
 
@@ -66,12 +70,12 @@ async def test_session_isolation():
         return f"Chinese Translation of: {text}"
 
     # Mock TTS to run instantly
-    def mock_sync_tts_call_fast(self, text: str, ref_config: dict) -> bytes:
+    async def mock_async_tts_call_fast(self, text: str, ref_config: dict) -> bytes:
         return b"audio_bytes_fast"
 
     with patch("app.services.deepseek.DeepSeekService.get_chat_stream", mock_get_chat_stream), \
          patch("app.services.deepseek.DeepSeekService.translate_to_zh", mock_translate_to_zh), \
-         patch("app.services.tts_queue.TTSQueueManager._sync_tts_call", mock_sync_tts_call_fast):
+         patch("app.services.tts_queue.TTSQueueManager._async_tts_call", mock_async_tts_call_fast):
          
         ws1 = MockWebSocket(session_id="shared_session")
         ws2 = MockWebSocket(session_id="shared_session")
@@ -159,19 +163,20 @@ async def test_tts_head_of_line_blocking():
     async def mock_translate_to_zh(self, text):
         return "Chinese Translation"
         
-    # Mock sync TTS to simulate blocking sleep on "slow" and immediate return on "fast"
-    def mock_sync_tts_call_blocking(self, text: str, ref_config: dict) -> bytes:
+    # Mock async TTS to simulate sleep on "slow" and immediate return on "fast"
+    async def mock_async_tts_call_blocking(self, text: str, ref_config: dict) -> bytes:
         if "slow" in text:
             print("[MOCK TTS] Starting slow TTS (sleep 5s)...")
-            time.sleep(5.0) # Blocking synchronous sleep
+            await asyncio.sleep(5.0) # Async sleep
             print("[MOCK TTS] Slow TTS finished.")
             return b"audio_slow"
         else:
             print("[MOCK TTS] Starting fast TTS (instant)...")
             return b"audio_fast"
 
-    with patch("app.services.tts_queue.TTSQueueManager._sync_tts_call", mock_sync_tts_call_blocking), \
-         patch("app.services.deepseek.DeepSeekService.translate_to_zh", mock_translate_to_zh):
+    with patch("app.services.tts_queue.TTSQueueManager._async_tts_call", mock_async_tts_call_blocking), \
+         patch("app.services.deepseek.DeepSeekService.translate_to_zh", mock_translate_to_zh), \
+         patch.object(tts_manager, "semaphore", asyncio.Semaphore(2)):
          
         # Run endpoints
         # Note: We must patch DeepSeekService.get_chat_stream per instance or dynamically
@@ -234,7 +239,7 @@ async def test_tts_head_of_line_blocking():
             else:
                 print("[PASS] No TTS Head-of-line blocking detected.")
                 
-            assert fast_elapsed >= 4.0, f"Expected Head-of-line blocking to cause delay >= 4.0s, but it only took {fast_elapsed:.2f}s."
+            assert fast_elapsed < 4.0, f"Expected No Head-of-line blocking (delay < 4.0s), but it took {fast_elapsed:.2f}s."
 
 
 async def main():
