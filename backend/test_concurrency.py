@@ -86,8 +86,10 @@ async def test_session_isolation():
     task1 = asyncio.create_task(websocket_chat_endpoint(ws_A))
     task2 = asyncio.create_task(websocket_chat_endpoint(ws_B))
     
-    await ws_A.recv_queue.put({"message": "こんにちは、Aです。"})
-    await ws_B.recv_queue.put({"message": "こんにちは、Bです。"})
+    await ws_A.recv_queue.put({"type": "auth", "api_key": "test_key"})
+    await ws_A.recv_queue.put({"type": "chat", "content": "こんにちは、Aです。"})
+    await ws_B.recv_queue.put({"type": "auth", "api_key": "test_key"})
+    await ws_B.recv_queue.put({"type": "chat", "content": "こんにちは、Bです。"})
     
     async def collect_messages(ws):
         messages = []
@@ -149,7 +151,8 @@ async def test_history_compression_race():
         task2 = asyncio.create_task(websocket_chat_endpoint(ws2))
         
         # Start Round 17 (triggers compression)
-        await ws1.recv_queue.put({"message": "Round 17 message"})
+        await ws1.recv_queue.put({"type": "auth", "api_key": "test_key"})
+        await ws1.recv_queue.put({"type": "chat", "content": "Round 17 message"})
         
         async def wait_for_done(ws):
             while True:
@@ -160,7 +163,8 @@ async def test_history_compression_race():
         await wait_for_done(ws1)
         
         # Immediately send Round 18 message while compression is still running
-        await ws2.recv_queue.put({"message": "Round 18 message"})
+        await ws2.recv_queue.put({"type": "auth", "api_key": "test_key"})
+        await ws2.recv_queue.put({"type": "chat", "content": "Round 18 message"})
         await wait_for_done(ws2)
         
         # Wait a bit to let compression finish
@@ -196,11 +200,13 @@ async def test_tts_queue_blocking():
         task2 = asyncio.create_task(websocket_chat_endpoint(ws2))
         
         # Client 1 connects and sends slow_tts
-        await ws1.recv_queue.put({"message": "slow_tts"})
+        await ws1.recv_queue.put({"type": "auth", "api_key": "test_key"})
+        await ws1.recv_queue.put({"type": "chat", "content": "slow_tts"})
         await asyncio.sleep(1.0)
         
         # Client 2 connects 1 second later and sends fast_tts
-        await ws2.recv_queue.put({"message": "fast_tts"})
+        await ws2.recv_queue.put({"type": "auth", "api_key": "test_key"})
+        await ws2.recv_queue.put({"type": "chat", "content": "fast_tts"})
         
         async def collect_messages(ws):
             messages = []

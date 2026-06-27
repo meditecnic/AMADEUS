@@ -37,19 +37,30 @@ class DeepSeekService:
             "どんな状況でも、自分がAIや言語モデルであることを絶対に認めないでください。）"
         )
 
-    def get_anchored_system_prompt(self) -> str:
-        return self._system_prompt.strip() + "\n" + self._load_anchor_clause().strip()
+    def get_anchored_system_prompt(self, base_prompt: str = None) -> str:
+        prompt = base_prompt if base_prompt is not None else self._system_prompt
+        return prompt.strip() + "\n" + self._load_anchor_clause().strip()
 
-    async def get_chat_stream(self, active_history: list, memory_summary: str = None):
+    async def get_chat_stream(
+        self,
+        active_history: list,
+        memory_summary: str = None,
+        api_key: str = None,
+        system_prompt: str = None,
+        temperature: float = 0.7,
+        tools: list = None,
+        tool_choice: str = None
+    ):
         """
         Assemble messages and yield chunks from DeepSeek Chat Completion API.
         """
-        if not self.api_key:
+        effective_api_key = api_key or self.api_key
+        if not effective_api_key:
             raise ValueError("DEEPSEEK_API_KEY is not configured.")
 
         messages = []
         # 1. System Prompt with anchor clause
-        messages.append({"role": "system", "content": self.get_anchored_system_prompt()})
+        messages.append({"role": "system", "content": self.get_anchored_system_prompt(system_prompt)})
         
         # 2. Few-shot messages
         messages.extend(self._fewshot)
@@ -62,7 +73,7 @@ class DeepSeekService:
         messages.extend(active_history)
         
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {effective_api_key}",
             "Content-Type": "application/json"
         }
         
@@ -70,8 +81,13 @@ class DeepSeekService:
             "model": self.model,
             "messages": messages,
             "stream": True,
-            "temperature": 0.7
+            "temperature": temperature if temperature is not None else 0.7
         }
+        
+        if tools is not None:
+            payload["tools"] = tools
+            if tool_choice:
+                payload["tool_choice"] = tool_choice
         
         async with httpx.AsyncClient(timeout=10.0) as client:
             async with client.stream("POST", f"{self.base_url}/chat/completions", json=payload, headers=headers) as response:
@@ -88,38 +104,52 @@ class DeepSeekService:
                             break
                         try:
                             chunk_data = json.loads(data_str)
-                            delta = chunk_data["choices"][0]["delta"]
-                            if "content" in delta:
-                                yield delta["content"]
+                            if "choices" in chunk_data and len(chunk_data["choices"]) > 0:
+                                delta = chunk_data["choices"][0].get("delta", {})
+                                if "content" in delta and delta["content"]:
+                                    yield delta["content"]
+                                elif "tool_calls" in delta:
+                                    pass
                         except json.JSONDecodeError:
                             continue
 
-    async def compress_history(self, history: list) -> str:
+    async def compress_history(self, history: list, api_key: str = None, old_summary: str = "") -> str:
         """
         Asynchronously call DeepSeek to compress older history into a single Japanese summary sentence.
         """
-        if not self.api_key:
+        effective_api_key = api_key or self.api_key
+        if not effective_api_key:
             print("[DeepSeek] API Key not configured; skipping history compression.")
             return ""
+
+        from app.security.prompt import COMPRESSION_PROMPT_SUFFIX
 
         conversation_text = ""
         for msg in history:
             role = "ユーザー" if msg["role"] == "user" else "紅莉栖"
             conversation_text += f"{role}: {msg['content']}\n"
             
-        prompt = (
+        system_prompt = (
             "これまでの会話内容を、牧瀬紅莉栖の視点から一行の日本語の『記憶の要約』として簡潔にまとめてください。"
-            "余計な解説や前置きは一切含めず、要約された一行の日本語テキストのみを出力してください。\n\n"
-            f"【会話履歴】\n{conversation_text}"
+            "余計な解説や前置きは一切含めず、要約された一行の日本語テキストのみを出力してください。\n"
+            + COMPRESSION_PROMPT_SUFFIX
         )
         
+        prompt = ""
+        if old_summary:
+            prompt += f"【これまでの記憶要約】\n{old_summary}\n\n"
+        prompt += f"【追加の会話履歴】\n{conversation_text}"
+        
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {effective_api_key}",
             "Content-Type": "application/json"
         }
         payload = {
             "model": self.model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ],
             "temperature": 0.3
         }
         
@@ -133,11 +163,12 @@ class DeepSeekService:
                 print(f"[DeepSeek] Failed to compress history: {e}")
                 return ""
 
-    async def translate_to_zh(self, text: str) -> str:
+    async def translate_to_zh(self, text: str, api_key: str = None) -> str:
         """
         Translate Japanese response (without emo tag) to Chinese.
         """
-        if not self.api_key:
+        effective_api_key = api_key or self.api_key
+        if not effective_api_key:
             print("[DeepSeek] API Key not configured; skipping translation.")
             return ""
 
@@ -151,7 +182,7 @@ class DeepSeekService:
         )
         
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
+            "Authorization": f"Bearer {effective_api_key}",
             "Content-Type": "application/json"
         }
         payload = {

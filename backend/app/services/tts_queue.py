@@ -3,6 +3,10 @@ import httpx
 import asyncio
 from app import config
 
+class TTSServiceError(Exception):
+    """Custom exception raised when TTS synthesis fails or times out."""
+    pass
+
 class TTSQueueManager:
     def __init__(self):
         self.sovits_url = config.SOVITS_URL
@@ -13,20 +17,20 @@ class TTSQueueManager:
         # Initialize reference audio mapping
         self.emotion_ref_map = {
             "neutral": {
-                "ref_audio_path": os.path.normpath(os.path.join(config.ASSETS_DIR, "audio/hello.ogg")),
-                "prompt_text": "こんにちは。"
+                "ref_audio_path": r"<LOCAL_PATH> 无奈.wav",
+                "prompt_text": "全く。ノルアドレナリンが過剰分泌されてる気分よ"
             },
             "tsundere": {
-                "ref_audio_path": os.path.normpath(os.path.join(config.ASSETS_DIR, "audio/pervert_confirmed.ogg")),
-                "prompt_text": "変態確定ね。"
+                "ref_audio_path": r"<LOCAL_PATH> 害羞.wav",
+                "prompt_text": "私が言ったのは、親子で仲が良くて、羨ましいってこと"
             },
             "embarrassed": {
-                "ref_audio_path": os.path.normpath(os.path.join(config.ASSETS_DIR, "audio/senpai_please_dont_tell.ogg")),
-                "prompt_text": "先輩、誰にも言わないでください……"
+                "ref_audio_path": r"<LOCAL_PATH> 害羞.wav",
+                "prompt_text": "私が言ったのは、親子で仲が良くて、羨ましいってこと"
             },
             "intellectual": {
-                "ref_audio_path": os.path.normpath(os.path.join(config.ASSETS_DIR, "audio/humans_software.ogg")),
-                "prompt_text": "人間はソフトウェアみたいなものよ。"
+                "ref_audio_path": r"<LOCAL_PATH> 无奈.wav",
+                "prompt_text": "全く。ノルアドレナリンが過剰分泌されてる気分よ"
             }
         }
 
@@ -40,7 +44,7 @@ class TTSQueueManager:
         if self.client and not self.client.is_closed:
             await self.client.aclose()
 
-    async def _async_tts_call(self, text: str, ref_config: dict) -> bytes:
+    async def _async_tts_call(self, text: str, ref_config: dict, sovits_url: str = None) -> bytes:
         """
         Asynchronous HTTP request to GPT-SoVITS API.
         Attempts POST with JSON, POST Form, and GET with Query parameters.
@@ -57,10 +61,11 @@ class TTSQueueManager:
             "format": "wav"
         }
 
+        base_url = sovits_url or self.sovits_url or "http://localhost:9880"
         urls_to_try = [
-            self.sovits_url.rstrip("/"),
-            self.sovits_url.rstrip("/") + "/tts",
-            self.sovits_url.rstrip("/") + "/"
+            base_url.rstrip("/"),
+            base_url.rstrip("/") + "/tts",
+            base_url.rstrip("/") + "/"
         ]
 
         last_exception = None
@@ -90,10 +95,10 @@ class TTSQueueManager:
             raise last_exception
         raise RuntimeError("GPT-SoVITS API returned non-200 status on all endpoints")
 
-    async def synthesize_async(self, text: str, emotion_tag: str) -> bytes:
+    async def synthesize_async(self, text: str, emotion_tag: str, sovits_url: str = None) -> bytes:
         """
         Synthesizes speech asynchronously using a semaphore to limit concurrency.
-        Provides fallback and 10s timeout, returning None on failure.
+        Provides fallback and 10s timeout, raising TTSServiceError on failure.
         """
         ref_config = self.emotion_ref_map.get(emotion_tag)
         if not ref_config:
@@ -104,19 +109,19 @@ class TTSQueueManager:
         async with self.semaphore:
             try:
                 audio_bytes = await asyncio.wait_for(
-                    self._async_tts_call(text, ref_config),
+                    self._async_tts_call(text, ref_config, sovits_url=sovits_url),
                     timeout=self.timeout
                 )
                 return audio_bytes
             except asyncio.TimeoutError:
                 print(f"[TTS Timeout] Synthesis timed out (10s) for text: {text}")
-                return None
+                raise TTSServiceError(f"TTS synthesis timed out (10s) for text: {text}")
             except asyncio.CancelledError:
                 print(f"[TTS Cancelled] Task cancelled for text: {text}")
                 raise
             except Exception as e:
                 print(f"[TTS Error] Synthesis failed: {e}")
-                return None
+                raise TTSServiceError(f"TTS synthesis failed: {e}")
 
 # Singleton manager
 tts_manager = TTSQueueManager()

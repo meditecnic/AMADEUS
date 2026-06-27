@@ -1,0 +1,137 @@
+:root {
+  background-color: #050302;
+  color: #ff6c00;
+  font-family: 'Share Tech Mono', 'Courier New', Courier, monospace;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.app-main-container {
+  width: 100vw;
+  height: 100vh;
+  background-color: #050302;
+}
+
+/* 占位控制台面板 */
+.workstation-placeholder-panel {
+  width: 100vw;
+  height: 100vh;
+  background-image: url('/bg/SG0_IBG006A.png');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+/* CRT扫描线与暗化叠加层 */
+.workstation-placeholder-panel::after {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%),
+              rgba(10, 5, 0, 0.15);
+  background-size: 100% 4px;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.status-indicator {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.85);
+  padding: 8px 16px;
+  border: 1px solid #ff6c00;
+  box-shadow: 0 0 10px rgba(255, 108, 0, 0.2);
+  border-radius: 20px;
+  margin-bottom: 24px;
+}
+
+.blink-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.orange-dot {
+  background-color: #ff6c00;
+  box-shadow: 0 0 8px #ff6c00;
+  animation: blink-dot-anim 1s infinite alternate;
+}
+
+.status-label {
+  color: #ff6c00;
+  font-size: 13px;
+  font-weight: bold;
+  letter-spacing: 1px;
+}
+
+.welcome-banner {
+  position: relative;
+  z-index: 2;
+  width: 500px;
+  background: rgba(8, 12, 20, 0.75);
+  border: 1px solid #ff6c00;
+  box-shadow: 0 0 20px rgba(255, 108, 0, 0.2);
+  backdrop-filter: blur(8px);
+  padding: 30px;
+  border-radius: 4px;
+  text-align: center;
+  margin-bottom: 30px;
+}
+
+.welcome-banner h1 {
+  color: #ff6c00;
+  font-size: 24px;
+  margin-bottom: 15px;
+  letter-spacing: 2px;
+  text-shadow: 0 0 8px rgba(255, 108, 0, 0.5);
+}
+
+.welcome-banner p {
+  color: #8b9bb4;
+  font-size: 14px;
+  margin: 6px 0;
+  letter-spacing: 1px;
+}
+
+.system-logout-btn {
+  position: relative;
+  z-index: 2;
+  background: transparent;
+  border: 1px solid #e60000;
+  color: #e60000;
+  padding: 12px 24px;
+  font-size: 13px;
+  font-weight: bold;
+  letter-spacing: 2px;
+  cursor: pointer;
+  border-radius: 2px;
+  transition: all 0.25s ease;
+  text-shadow: 0 0 4px rgba(230, 0, 0, 0.4);
+}
+
+.system-logout-btn:hover {
+  background: rgba(230, 0, 0, 0.1);
+  box-shadow: 0 0 15px rgba(230, 0, 0, 0.4);
+  text-shadow: 0 0 8px rgba(230, 0, 0, 0.8);
+}
+
+@keyframes blink-dot-anim {
+  0% {
+    opacity: 0.4;
+  }
+  100% {
+    opacity: 1;
+  }
+}

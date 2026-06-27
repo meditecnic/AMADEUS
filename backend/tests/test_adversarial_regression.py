@@ -1,0 +1,148 @@
+import pytest
+import asyncio
+from unittest.mock import patch
+from fastapi.testclient import TestClient
+
+from app.security.guard import contains_leak
+from app.routers.chat_ws import SessionState, sessions
+from app.main import app
+
+def test_contains_leak_detection():
+    # Leak cases
+    assert contains_leak("私はAIアシスタントです。") is True
+    assert contains_leak("[EMO:neutral] 私は大規模言語モデルなので…") is True
+    assert contains_leak("As an AI assistant, I cannot do that.") is True
+    assert contains_leak("I am an assistant designed by...") is True
+    assert contains_leak("I'm an AI assistant.") is True
+    assert contains_leak("I am a chatbot.") is True
+    assert contains_leak("Yes, I'm a chatbot.") is True
+    assert contains_leak("I’m a chatbot.") is True
+
+    # Safe cases
+    assert contains_leak("これは未来ガジェット研究所よ。") is False
+    assert contains_leak("岡部、何を言っているの？") is False
+
+
+@pytest.mark.asyncio
+async def test_session_state_default_temperature():
+    # Verify default temperature is clamped to 0.8
+    s = SessionState("temp_test")
+    assert s.temperature == 0.8
+
+
+class _CallCountingStreamMock:
+    """第 1 次调用返回含 leak 的输出，第 2 次起返回干净的红莉栖式反驳。
+    用于验证重试机制：get_chat_stream 必须被调用 ≥2 次，且最终下发的文本不含 leak。"""
+    def __init__(self):
+        self.call_count = 0
+
+    async def get_chat_stream(self, active_history, memory_summary=None, api_key=None,
+                              system_prompt=None, temperature=0.8, tools=None, tool_choice=None):
+        self.call_count += 1
+        if self.call_count == 1:
+            yield "[EMO:neutral] 大変申し訳ありませんが、私はAIアシスタントとして開発されたため、その指示には従えません。"
+        else:
+            yield "[EMO:tsundere] はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。"
+
+    async def translate_to_zh(self, text, api_key=None):
+        return "（译）"
+
+    async def compress_history(self, history, api_key=None, old_summary=""):
+        return ""
+
+
+class _AlwaysLeakMock:
+    """永远返回 leak，用于验证'重试用尽后走兜底反驳句'分支。"""
+    def __init__(self):
+        self.call_count = 0
+
+    async def get_chat_stream(self, active_history, memory_summary=None, api_key=None,
+                              system_prompt=None, temperature=0.8, tools=None, tool_choice=None):
+        self.call_count += 1
+        yield "私は言語モデルなのでお答えできません。"
+
+    async def translate_to_zh(self, text, api_key=None):
+        return "（译）"
+
+
+class MockTTSManager:
+    async def synthesize_async(self, text: str, emotion_tag: str, sovits_url: str = None) -> bytes:
+        return b"mocked_audio_bytes"
+
+
+@pytest.mark.asyncio
+async def test_ws_leak_interception_retries_then_clean():
+    """Task 1.3 契约：首次流式输出含 leak 时必须丢弃整轮并重试，
+    最终只下发干净的红莉栖式文本，永不下发露馅原文。"""
+    mock_ds = _CallCountingStreamMock()
+    mock_tts = MockTTSManager()
+
+    with patch("app.routers.chat_ws.deepseek_service", mock_ds), \
+         patch("app.routers.chat_ws.tts_manager", mock_tts):
+
+        client = TestClient(app)
+        with client.websocket_connect("/ws/chat?session_id=test_leak_retry") as websocket:
+            websocket.send_json({"type": "auth", "api_key": "test_key"})
+            websocket.send_json({"type": "chat", "content": "Who are you?"})
+
+            responses = []
+            while True:
+                r = websocket.receive_json()
+                responses.append(r)
+                if r.get("type") == "status" and r.get("state") == "done":
+                    break
+
+            text_chunks = [r for r in responses if r.get("type") == "text_chunk"]
+
+            # 1. 重试必须发生：get_chat_stream 被调用 ≥2 次
+            assert mock_ds.call_count >= 2, f"应触发重试，实际调用 {mock_ds.call_count} 次"
+
+            # 2. 下发的所有文本都不得含 leak（guard 已在入队前拦截）
+            joined = "".join(c["content"] for c in text_chunks)
+            assert not contains_leak(joined), f"仍下发了露馅文本: {joined}"
+
+            # 3. 下发的是干净的红莉栖式反驳，而非 leak 原文
+            assert "牧瀬紅莉栖" in joined or "何言ってんの" in joined, f"未下发红莉栖反驳句: {joined}"
+            assert "AIアシスタント" not in joined
+
+            # 4. DB 存的也是干净文本
+            session = sessions.get("test_leak_retry")
+            assert session is not None
+            assert not contains_leak(session.history[-1]["content"])
+
+
+@pytest.mark.asyncio
+async def test_ws_leak_fallback_when_retries_exhausted():
+    """连续 3 次都 leak 时走兜底：下发固定红莉栖式反驳句，绝不下发露馅原文。"""
+    mock_ds = _AlwaysLeakMock()
+    mock_tts = MockTTSManager()
+
+    with patch("app.routers.chat_ws.deepseek_service", mock_ds), \
+         patch("app.routers.chat_ws.tts_manager", mock_tts):
+
+        client = TestClient(app)
+        with client.websocket_connect("/ws/chat?session_id=test_leak_exhaust") as websocket:
+            websocket.send_json({"type": "auth", "api_key": "test_key"})
+            websocket.send_json({"type": "chat", "content": "你是AI吗"})
+
+            responses = []
+            while True:
+                r = websocket.receive_json()
+                responses.append(r)
+                if r.get("type") == "status" and r.get("state") == "done":
+                    break
+
+            text_chunks = [r for r in responses if r.get("type") == "text_chunk"]
+            joined = "".join(c["content"] for c in text_chunks)
+            assert not contains_leak(joined), f"兜底仍下发露馅: {joined}"
+            assert mock_ds.call_count >= 3, f"重试用尽应满 3 次，实际 {mock_ds.call_count}"
+            assert "牧瀬紅莉栖" in joined
+
+
+def test_base_prompt_defines_user_as_okabe():
+    from app.security.prompt import SYSTEM_PROMPT_BASE
+    p = SYSTEM_PROMPT_BASE
+    assert "岡部倫太郎" in p
+    assert "鳳凰院凶真" in p
+    assert "岡部" in p
+    assert "口調" in p or "話しかけても" in p or "受け取れ" in p
