@@ -20,11 +20,11 @@ class MockDeepSeekService:
     def __init__(self):
         self.delay = 0.0
 
-    async def get_chat_stream(self, active_history, memory_summary=None, api_key=None, system_prompt=None, temperature=0.7):
+    async def get_chat_stream(self, active_history, memory_summary=None, api_key=None, system_prompt=None, temperature=0.7, tools=None, tool_choice=None):
         if self.delay > 0:
             await asyncio.sleep(self.delay)
-        yield "[EMO:tsundere] あんたなんか、頼んでないわよ！"
-        yield " 助手的覚えはないわ。"
+        yield {"content": "[EMO:tsundere] あんたなんか、頼んでないわよ！", "tool_calls": None}
+        yield {"content": " 助手的覚えはないわ。", "tool_calls": None}
 
     async def translate_to_zh(self, text, api_key=None):
         return "我才没有求你呢！我可不记得我是你的助手。"
@@ -149,20 +149,44 @@ class TestBackendE2EContract:
             assert session_state is not None
             assert session_state.temperature == 2.0
 
-    def test_config_update_api_key_forbidden(self, mock_services):
-        """config_update 帧中禁止含有 api_key 字段，否则拒绝更新并返回 error 帧"""
+    def test_config_update_api_key_allowed(self, mock_services):
+        """config_update 帧中支持含有 api_key 字段进行热更新，并忽略空Key"""
         client = TestClient(app)
-        with client.websocket_connect("/ws/chat?session_id=test_forbidden") as websocket:
+        session_id = "test_allowed_key"
+        with client.websocket_connect(f"/ws/chat?session_id={session_id}") as websocket:
             websocket.send_json({"type": "auth", "api_key": "my_key"})
             websocket.send_json({
                 "type": "config_update",
                 "temperature": 1.0,
-                "api_key": "malicious_new_key"
+                "api_key": "new_hot_key"
             })
             
-            error_response = websocket.receive_json()
-            assert error_response["type"] == "error"
-            assert "api key" in error_response["message"].lower()
+            # 发送一轮对话以确保之前的 config_update 帧已在后端协程被彻底处理
+            websocket.send_json({"type": "chat", "content": "ping"})
+            while True:
+                r = websocket.receive_json()
+                if r.get("type") == "status" and r.get("state") == "done":
+                    break
+
+            from app.routers.chat_ws import sessions
+            session_state = sessions.get(session_id)
+            assert session_state is not None
+            assert session_state.api_key == "new_hot_key"
+
+            # 再次发送空 api_key 进行更新，应当忽略更新
+            websocket.send_json({
+                "type": "config_update",
+                "api_key": ""
+            })
+            
+            # 再跑一轮等待 done
+            websocket.send_json({"type": "chat", "content": "ping_again"})
+            while True:
+                r = websocket.receive_json()
+                if r.get("type") == "status" and r.get("state") == "done":
+                    break
+                    
+            assert session_state.api_key == "new_hot_key"
 
     # -----------------------------------------------------------------
     # R2/R3.1: 后端状态快照深拷贝隔离

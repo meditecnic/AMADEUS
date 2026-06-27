@@ -57,3 +57,12 @@ async def get_latest_summary(session_id: str) -> str:
         return row["summary"] if row else ""
     finally:
         await db.close()
+
+async def clear_session_data(session_id: str):
+    db = await get_db()
+    try:
+        await db.execute("DELETE FROM messages WHERE session_id=?", (session_id,))
+        await db.execute("DELETE FROM memory_summaries WHERE session_id=?", (session_id,))
+        await db.commit()
+    finally:
+        await db.close()

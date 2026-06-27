@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import { BootSplash } from './components/BootSplash';
 import { SalieriLogin } from './components/SalieriLogin';
+import { Workstation } from './components/Workstation';
 import './App.css';
 
 type AppStep = 'splash' | 'login' | 'workstation';
 
 function App() {
   const [step, setStep] = useState<AppStep>('splash');
+  const [worldline, setWorldline] = useState<'steins_gate' | 'beta'>('steins_gate');
 
   const handleSplashDone = () => {
     setStep('login');
@@ -21,28 +23,17 @@ function App() {
   };
 
   return (
-    <main className="app-main-container">
+    <main className={`app-main-container ${worldline === 'beta' ? 'worldline-beta' : ''}`}>
       {step === 'splash' && <BootSplash onDone={handleSplashDone} />}
       
       {step === 'login' && <SalieriLogin onLoginSuccess={handleLoginSuccess} />}
       
       {step === 'workstation' && (
-        <div className="workstation-placeholder-panel">
-          <div className="status-indicator">
-            <span className="blink-dot orange-dot" />
-            <span className="status-label">AMADEUS KURISU v3.0.0 (ONLINE)</span>
-          </div>
-          
-          <div className="welcome-banner">
-            <h1>ACCESS GRANTED</h1>
-            <p>SYSTEM SECURITY: CLEAR</p>
-            <p>Welcome back, LabMem No.004 memory module connected.</p>
-          </div>
-
-          <button className="system-logout-btn" onClick={handleLogout}>
-            DISCONNECT SESSION
-          </button>
-        </div>
+        <Workstation
+          worldline={worldline}
+          onWorldlineChange={setWorldline}
+          onLogout={handleLogout}
+        />
       )}
     </main>
   );

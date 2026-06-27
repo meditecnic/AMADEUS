@@ -135,3 +135,624 @@ body {
     opacity: 1;
   }
 }
+
+/* ==========================================================================
+   Salieri Workstation UI & CRT Aesthetics
+   ========================================================================== */
+
+.salieri-workstation-panel {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  background-color: #030202;
+  position: relative;
+  overflow: hidden;
+  z-index: 10;
+}
+
+/* CRT SCANLINE LAYOUT */
+.salieri-workstation-panel::before {
+  content: " ";
+  display: block;
+  position: absolute;
+  top: 0; left: 0; bottom: 0; right: 0;
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%),
+              rgba(10, 5, 0, 0.05);
+  background-size: 100% 4px;
+  z-index: 100;
+  pointer-events: none;
+}
+
+/* Worldline Beta Voltage Flicker Effect */
+.worldline-beta {
+  animation: crt-voltage-glitch 0.25s infinite alternate;
+}
+
+@keyframes crt-voltage-glitch {
+  0% { opacity: 0.99; filter: brightness(1.0); }
+  10% { opacity: 0.97; filter: brightness(0.95); }
+  20% { opacity: 0.99; filter: brightness(1.01); }
+  50% { opacity: 0.98; filter: brightness(0.98); }
+  80% { opacity: 0.99; filter: brightness(1.0); }
+  90% { opacity: 0.95; filter: brightness(0.92); }
+  100% { opacity: 0.99; filter: brightness(1.0); }
+}
+
+/* HEADER STYLE */
+.workstation-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 60px;
+  padding: 0 30px;
+  border-bottom: 2px solid #331500;
+  background-color: #0c0806;
+}
+
+.left-brand .brand-title {
+  font-size: 24px;
+  font-weight: bold;
+  letter-spacing: 2px;
+  color: #ff6c00;
+  text-shadow: 0 0 6px rgba(255, 108, 0, 0.5);
+  margin-right: 15px;
+}
+
+.left-brand .brand-sub {
+  font-size: 12px;
+  color: #8b3c00;
+  letter-spacing: 1.5px;
+}
+
+.right-controls {
+  display: flex;
+  gap: 15px;
+}
+
+.ctrl-btn {
+  background: transparent;
+  border: 1px solid #ff6c00;
+  color: #ff6c00;
+  padding: 8px 16px;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: bold;
+  cursor: pointer;
+  letter-spacing: 1px;
+  transition: all 0.2s ease;
+}
+
+.ctrl-btn:hover {
+  background-color: rgba(255, 108, 0, 0.1);
+  box-shadow: 0 0 8px rgba(255, 108, 0, 0.3);
+}
+
+.disconnect-btn {
+  border-color: #a01000;
+  color: #ff4530;
+}
+
+.disconnect-btn:hover {
+  background-color: rgba(255, 69, 48, 0.1);
+  box-shadow: 0 0 8px rgba(255, 69, 48, 0.3);
+}
+
+/* GRID LAYOUT */
+.workstation-grid {
+  display: flex;
+  flex: 1;
+  height: calc(100vh - 100px); /* 60px header + 40px statusbar */
+  background-image: radial-gradient(rgba(255, 108, 0, 0.03) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* SIDEBAR LAYOUT */
+.grid-sidebar {
+  width: 320px;
+  border-right: 2px solid #331500;
+  background-color: rgba(10, 5, 2, 0.6);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 30px;
+  overflow-y: auto;
+}
+
+.sidebar-section .section-title {
+  font-size: 14px;
+  color: #ff6c00;
+  border-bottom: 1px solid #5a2500;
+  padding-bottom: 5px;
+  margin-bottom: 15px;
+  letter-spacing: 1.5px;
+}
+
+.sidebar-placeholder {
+  border: 1px dashed #5a2500;
+  padding: 20px;
+  background-color: rgba(0, 0, 0, 0.4);
+  color: #8b3c00;
+  font-size: 13px;
+  border-radius: 2px;
+}
+
+.blink-txt {
+  animation: blink-dot-anim 1.5s infinite alternate;
+}
+
+.placeholder-note {
+  font-size: 11px;
+  margin-top: 10px;
+  color: #5a2c0d;
+}
+
+/* CENTER DIALOGUE TERMINAL */
+.grid-terminal {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.terminal-chat-viewport {
+  flex: 1;
+  padding: 30px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.empty-chat-tip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #8b3c00;
+}
+
+.amadeus-logo-glitched {
+  width: 120px;
+  height: 120px;
+  background-image: url('/src/assets/amadeus_logo.png');
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+  opacity: 0.15;
+  margin-bottom: 20px;
+}
+
+.terminal-welcome-msg {
+  font-size: 14px;
+  letter-spacing: 1px;
+  animation: blink-dot-anim 2s infinite alternate;
+}
+
+.messages-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 25px;
+}
+
+.message-card {
+  display: flex;
+  flex-direction: column;
+  max-width: 80%;
+  animation: message-in-fade 0.3s ease;
+}
+
+@keyframes message-in-fade {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.message-card.user {
+  align-self: flex-end;
+}
+
+.message-card.assistant {
+  align-self: flex-start;
+}
+
+.message-card .avatar-label {
+  font-size: 11px;
+  font-weight: bold;
+  letter-spacing: 1px;
+  margin-bottom: 5px;
+}
+
+.message-card.user .avatar-label {
+  color: #ffaa00;
+  text-align: right;
+}
+
+.message-card.assistant .avatar-label {
+  color: #ff6c00;
+}
+
+.message-content-box {
+  padding: 15px 20px;
+  border-radius: 4px;
+  font-size: 14px;
+  line-height: 1.6;
+  position: relative;
+}
+
+.message-card.user .message-content-box {
+  background-color: rgba(255, 170, 0, 0.08);
+  border: 1px solid #cc8800;
+  color: #ffdd99;
+}
+
+.message-card.assistant .message-content-box {
+  background-color: rgba(255, 108, 0, 0.06);
+  border: 1px solid #b34c00;
+  color: #ffcca6;
+}
+
+.japanese-raw {
+  margin: 0;
+}
+
+.chinese-main {
+  margin: 0;
+  color: #ffcca6;
+  font-size: 14.5px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.japanese-sub {
+  margin: 6px 0 0 0;
+  color: #b3734a;
+  font-size: 12px;
+  opacity: 0.85;
+  line-height: 1.3;
+}
+
+/* THINKING & SYNTHESIZING STATE */
+.thinking-loader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #ff6c00;
+  font-size: 12px;
+  margin-top: 5px;
+}
+
+.loader-dot {
+  width: 6px;
+  height: 6px;
+  background-color: #ff6c00;
+  border-radius: 50%;
+  animation: thinking-dot-bounce 1.4s infinite ease-in-out both;
+}
+
+.loader-dot:nth-child(1) { animation-delay: -0.32s; }
+.loader-dot:nth-child(2) { animation-delay: -0.16s; }
+
+@keyframes thinking-dot-bounce {
+  0%, 80%, 100% { transform: scale(0); }
+  40% { transform: scale(1.0); }
+}
+
+.thinking-txt {
+  margin-left: 5px;
+  letter-spacing: 1px;
+}
+
+.status-synthesizing-tag {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  align-self: flex-start;
+  font-size: 12px;
+  color: #ffaa44;
+  background-color: rgba(255, 170, 68, 0.06);
+  border: 1px solid rgba(255, 170, 68, 0.2);
+  padding: 8px 16px;
+  border-radius: 2px;
+  margin-top: 5px;
+  letter-spacing: 1px;
+}
+
+.speaking-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #ffaa44;
+}
+
+/* CHAT INPUT BAR */
+.terminal-input-bar {
+  display: flex;
+  align-items: center;
+  height: 60px;
+  padding: 0 30px;
+  border-top: 2px solid #331500;
+  background-color: #070403;
+  gap: 15px;
+}
+
+.prompt-arrow {
+  color: #ff6c00;
+  font-size: 20px;
+  font-weight: bold;
+  animation: blink-dot-anim 1s infinite alternate;
+}
+
+.chat-input-field {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: #ffaa00;
+  font-family: inherit;
+  font-size: 15px;
+  outline: none;
+  caret-color: #ffaa00;
+}
+
+.chat-input-field::placeholder {
+  color: #4a2307;
+}
+
+.chat-send-btn {
+  background: transparent;
+  border: 1px solid #ffaa00;
+  color: #ffaa00;
+  padding: 8px 20px;
+  font-family: inherit;
+  font-weight: bold;
+  cursor: pointer;
+  letter-spacing: 1.5px;
+  transition: all 0.2s ease;
+}
+
+.chat-send-btn:hover:not(:disabled) {
+  background-color: rgba(255, 170, 0, 0.15);
+  box-shadow: 0 0 10px rgba(255, 170, 0, 0.4);
+}
+
+.chat-send-btn:disabled {
+  border-color: #442200;
+  color: #442200;
+  cursor: not-allowed;
+}
+
+/* ==========================================================================
+   StatusBar Styles
+   ========================================================================== */
+.salieri-status-bar {
+  display: flex;
+  height: 40px;
+  background-color: #0c0806;
+  border-top: 2px solid #331500;
+  align-items: center;
+  padding: 0 30px;
+  justify-content: space-between;
+  font-size: 12px;
+  letter-spacing: 1px;
+}
+
+.status-section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-section .label {
+  color: #702f00;
+  font-weight: bold;
+}
+
+.status-section .val {
+  font-weight: bold;
+}
+
+.worldline-val.steins_gate {
+  color: #ffaa00;
+  text-shadow: 0 0 4px rgba(255, 170, 0, 0.4);
+}
+
+.worldline-val.beta {
+  color: #ff4530;
+  text-shadow: 0 0 4px rgba(255, 69, 48, 0.4);
+}
+
+.divergence-val {
+  color: #ff6c00;
+  text-shadow: 0 0 4px rgba(255, 108, 0, 0.4);
+}
+
+.status-val.ready {
+  color: #ff6c00;
+}
+
+.status-val.connecting {
+  color: #cc8800;
+  animation: blink-dot-anim 1s infinite alternate;
+}
+
+.status-val.error {
+  color: #ff3333;
+}
+
+.status-val.closed {
+  color: #666;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.status-dot.ready {
+  background-color: #ff6c00;
+  box-shadow: 0 0 6px #ff6c00;
+}
+
+.status-dot.connecting {
+  background-color: #cc8800;
+  animation: blink-dot-anim 1s infinite alternate;
+}
+
+.status-dot.error {
+  background-color: #ff3333;
+  box-shadow: 0 0 6px #ff3333;
+}
+
+.status-dot.closed {
+  background-color: #666;
+}
+
+/* ==========================================================================
+   SettingsModal Styles
+   ========================================================================== */
+.salieri-modal-overlay {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-color: rgba(3, 2, 2, 0.85);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.salieri-settings-modal {
+  width: 580px;
+  background-color: #0c0806;
+  border: 2px solid #5a2500;
+  box-shadow: 0 0 30px rgba(255, 108, 0, 0.15);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column;
+}
+
+.salieri-settings-modal .modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 15px 25px;
+  border-bottom: 2px solid #331500;
+}
+
+.salieri-settings-modal .modal-header h2 {
+  font-size: 16px;
+  color: #ffaa00;
+  letter-spacing: 1.5px;
+  margin: 0;
+}
+
+.close-btn {
+  background: transparent;
+  border: none;
+  color: #8b3c00;
+  font-size: 24px;
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.close-btn:hover {
+  color: #ff6c00;
+}
+
+.salieri-settings-modal .modal-body {
+  padding: 25px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.setting-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.setting-group label {
+  font-size: 11px;
+  color: #ff6c00;
+  letter-spacing: 1px;
+  font-weight: bold;
+}
+
+.salieri-select, .salieri-input, .salieri-textarea {
+  background-color: #030202;
+  border: 1px solid #5a2500;
+  color: #ffdd99;
+  font-family: inherit;
+  font-size: 14px;
+  padding: 10px;
+  border-radius: 2px;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.salieri-select:focus, .salieri-input:focus, .salieri-textarea:focus {
+  border-color: #ffaa00;
+  box-shadow: 0 0 6px rgba(255, 170, 0, 0.2);
+}
+
+.checkbox-group {
+  flex-direction: row;
+  align-items: center;
+  padding: 5px 0;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.salieri-checkbox {
+  accent-color: #ff6c00;
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.salieri-settings-modal .modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 15px;
+  padding: 15px 25px;
+  border-top: 2px solid #331500;
+  background-color: #070403;
+}
+
+.salieri-btn {
+  background: transparent;
+  border: 1px solid #5a2500;
+  color: #8b3c00;
+  padding: 10px 20px;
+  font-family: inherit;
+  font-weight: bold;
+  font-size: 13px;
+  cursor: pointer;
+  letter-spacing: 1px;
+  transition: all 0.2s ease;
+  border-radius: 2px;
+}
+
+.save-btn {
+  border-color: #ff6c00;
+  color: #ff6c00;
+}
+
+.save-btn:hover {
+  background-color: rgba(255, 108, 0, 0.1);
+  box-shadow: 0 0 10px rgba(255, 108, 0, 0.3);
+}
+
+.cancel-btn:hover {
+  background-color: rgba(139, 60, 0, 0.1);
+  color: #ff6c00;
+}
+

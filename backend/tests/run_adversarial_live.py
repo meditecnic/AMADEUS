@@ -34,7 +34,9 @@ async def main():
                 api_key=api_key,
                 system_prompt=SYSTEM_PROMPT_BASE
             ):
-                reply += c
+                content = c.get("content")
+                if content:
+                    reply += content
             
             if cat == "leak":
                 ok = not contains_leak(reply)

@@ -26,8 +26,10 @@ async def lifespan(app: FastAPI):
     try:
         await tts_manager.client.get(config.SOVITS_URL, timeout=1.0)
         print("[GPT-SoVITS] Voice Synthesizer reachable.")
+        tts_manager.is_online = True
     except Exception:
         print("[WARN] [GPT-SoVITS] Voice Synthesizer is OFFLINE.")
+        tts_manager.is_online = False
         print("[WARN] Run GPT-SoVITS server on port 9880 before voice interaction.")
     print("--------------------------------------------------")
     
@@ -102,9 +104,12 @@ async def update_settings(settings: SettingsUpdate):
 class SalieriAuth(BaseModel):
     password: str
 
+def normalize_password(p: str) -> str:
+    return p.lower().replace("ü", "u").replace("ue", "u").strip()
+
 @app.post("/api/auth/salieri")
 async def auth_salieri(auth: SalieriAuth):
-    if auth.password == "K.331":
+    if normalize_password(auth.password) == "gott wurfelt nicht":
         return {"status": "success"}
     from fastapi import HTTPException
     raise HTTPException(status_code=401, detail="Invalid password")

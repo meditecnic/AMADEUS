@@ -84,6 +84,8 @@ class DeepSeekService:
             "temperature": temperature if temperature is not None else 0.7
         }
         
+        print(f"[DeepSeek Payload] messages: {messages}\ntools: {payload.get('tools')}\ntool_choice: {payload.get('tool_choice')}", flush=True)
+        
         if tools is not None:
             payload["tools"] = tools
             if tool_choice:
@@ -106,10 +108,13 @@ class DeepSeekService:
                             chunk_data = json.loads(data_str)
                             if "choices" in chunk_data and len(chunk_data["choices"]) > 0:
                                 delta = chunk_data["choices"][0].get("delta", {})
-                                if "content" in delta and delta["content"]:
-                                    yield delta["content"]
-                                elif "tool_calls" in delta:
-                                    pass
+                                content = delta.get("content")
+                                tool_calls = delta.get("tool_calls")
+                                if content or tool_calls:
+                                    yield {
+                                        "content": content,
+                                        "tool_calls": tool_calls
+                                    }
                         except json.JSONDecodeError:
                             continue
 
@@ -169,15 +174,17 @@ class DeepSeekService:
         """
         effective_api_key = api_key or self.api_key
         if not effective_api_key:
-            print("[DeepSeek] API Key not configured; skipping translation.")
+            print("[DeepSeek] API Key not configured; skipping translation.", flush=True)
             return ""
 
         if not text.strip():
             return ""
 
         prompt = (
-            "あなたは優秀な翻訳家です。以下の日本語のセリフを、感情を込めた自然な中国語に翻訳してください。"
-            "余計な解説や前置きは一切含めず、翻訳後の中国語テキストのみを出力してください。\n\n"
+            "あなたは優秀な翻訳家です。以下の日本語のセリフを、感情を込めた自然な中国語に翻訳してください。\n"
+            "【翻訳の制約】\n"
+            "- 不自然な畳語（叠字、例：「好、好、好……」）や過度な繰り返し、吃音表現を生成しないこと。\n"
+            "- 余計な解説や前置きは一切含めず、翻訳後の中国語テキストのみを出力してください。\n\n"
             f"【翻訳対象】\n{text}"
         )
         
@@ -198,5 +205,5 @@ class DeepSeekService:
                 result = response.json()
                 return result["choices"][0]["message"]["content"].strip()
             except Exception as e:
-                print(f"[DeepSeek] Translation failed: {e}")
+                print(f"[DeepSeek] Translation failed: {e}", flush=True)
                 return f"(翻译失败: {text})"

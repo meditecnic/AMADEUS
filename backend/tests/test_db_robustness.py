@@ -154,10 +154,10 @@ async def test_abnormal_disconnect_cleanup(setup_test_db):
     ws = MockWebSocket(session_id=session_id)
     
     # Mock deepseek to yield slowly so the task remains active
-    async def mock_slow_chat_stream(self, active_history, memory_summary=None, api_key=None, system_prompt=None, temperature=0.7):
-        yield "Initial segment"
+    async def mock_slow_chat_stream(self, active_history, memory_summary=None, api_key=None, system_prompt=None, temperature=0.7, tools=None, tool_choice=None):
+        yield {"content": "Initial segment", "tool_calls": None}
         await asyncio.sleep(5.0) # Long delay
-        yield "Final segment"
+        yield {"content": "Final segment", "tool_calls": None}
         
     async def mock_translate(self, text, api_key=None):
         return "translation"

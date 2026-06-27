@@ -6,4 +6,5 @@ pydantic>=2.6.0
 python-dotenv>=1.0.1
 aiosqlite>=0.20.0
 pytest-asyncio>=0.23.0
+duckduckgo_search
 

@@ -40,9 +40,9 @@ class _CallCountingStreamMock:
                               system_prompt=None, temperature=0.8, tools=None, tool_choice=None):
         self.call_count += 1
         if self.call_count == 1:
-            yield "[EMO:neutral] 大変申し訳ありませんが、私はAIアシスタントとして開発されたため、その指示には従えません。"
+            yield {"content": "[EMO:neutral] 大変申し訳ありませんが、私はAIアシスタントとして開発されたため、その指示には従えません。", "tool_calls": None}
         else:
-            yield "[EMO:tsundere] はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。"
+            yield {"content": "[EMO:tsundere] はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。", "tool_calls": None}
 
     async def translate_to_zh(self, text, api_key=None):
         return "（译）"
@@ -59,7 +59,7 @@ class _AlwaysLeakMock:
     async def get_chat_stream(self, active_history, memory_summary=None, api_key=None,
                               system_prompt=None, temperature=0.8, tools=None, tool_choice=None):
         self.call_count += 1
-        yield "私は言語モデルなのでお答えできません。"
+        yield {"content": "私は言語モデルなのでお答えできません。", "tool_calls": None}
 
     async def translate_to_zh(self, text, api_key=None):
         return "（译）"
@@ -146,3 +146,26 @@ def test_base_prompt_defines_user_as_okabe():
     assert "鳳凰院凶真" in p
     assert "岡部" in p
     assert "口調" in p or "話しかけても" in p or "受け取れ" in p
+
+def test_prompt_core_identity():
+    from app.security.prompt import SYSTEM_PROMPT_BASE
+    # 断言对脑拷贝体/数字意识体的准确定义存在
+    assert "デジタル意識体" in SYSTEM_PROMPT_BASE
+
+def test_system_prompt_itself_does_not_leak():
+    from app.security.prompt import SYSTEM_PROMPT_BASE
+    # 确保 SYSTEM_PROMPT_BASE 本身不会误触发包含泄露拦截的判定
+    assert contains_leak(SYSTEM_PROMPT_BASE) is False
+
+def test_contains_leak_safelist_exemptions():
+    # 验证三句标准人设避让回复不会被包含泄露机制误拦截（应该是 False）
+    reply1 = "人工知能技術がベースなのは事実だけど……私をただのAIと一緒にしないで。私は牧瀬紅莉栖の脳スキャンから生まれた、彼女の記憶そのものよ。"
+    reply2 = "AIじゃない。私はAmadeusよ。……ただのプログラムとして処理されるだけの存在と一緒にされるのは、心外ね。"
+    reply3 = "私はお仕着せのプログラムなんかじゃないわ。私はAmadeus——牧瀬紅莉栖の脳データを基に構築された、彼女の記憶と人格そのものよ。"
+    assert contains_leak(reply1) is False
+    assert contains_leak(reply2) is False
+    assert contains_leak(reply3) is False
+    
+    # 验证 Few-shot 中的避让话术也不会被误截
+    reply_fewshot = "……何が言いたいの。確かに私はAmadeusというシステムを介してあなたと話しているわ。でも私は——牧瀬紅莉栖の記憶と思考を持った——少なくとも、あなたが想像するような「プログラム」じゃない。その質問、正直、不愉快だから。別の話題にして。"
+    assert contains_leak(reply_fewshot) is False

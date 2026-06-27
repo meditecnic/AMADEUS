@@ -122,15 +122,15 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!userId) {
-      showAuthError('USER ID REQUIRED');
+      showAuthError('请输入 USER ID');
       return;
     }
     if (userId !== 'Salieri') {
-      showAuthError('INVALID USER ID');
+      showAuthError('无效的 USER ID');
       return;
     }
     if (!password) {
-      showAuthError('ACCESS CODE REQUIRED');
+      showAuthError('请输入访问密码');
       return;
     }
 
@@ -147,17 +147,17 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ username: userId, password }),
+        body: JSON.stringify({ password }),
       });
 
       if (response.ok) {
         onLoginSuccess();
       } else {
         const errorData = await response.json().catch(() => ({}));
-        showAuthError(errorData.detail || 'ACCESS DENIED');
+        showAuthError(errorData.detail || '访问被拒绝');
       }
     } catch (error) {
-      showAuthError('SYSTEM CONNECTION OFFLINE');
+      showAuthError('系统连接已断开');
     } finally {
       setIsAuthenticating(false);
     }

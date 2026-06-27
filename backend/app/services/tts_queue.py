@@ -13,6 +13,7 @@ class TTSQueueManager:
         self.timeout = 10.0  # Strict 10s timeout
         self.semaphore = asyncio.Semaphore(1)  # Concurrency limit for GPU API
         self.client = None                     # Async client managed by lifespan
+        self.is_online = True                  # Track GPT-SoVITS availability
 
         # Initialize reference audio mapping
         self.emotion_ref_map = {
@@ -100,6 +101,9 @@ class TTSQueueManager:
         Synthesizes speech asynchronously using a semaphore to limit concurrency.
         Provides fallback and 10s timeout, raising TTSServiceError on failure.
         """
+        if not self.is_online:
+            raise TTSServiceError("GPT-SoVITS is offline (skip network check)")
+
         ref_config = self.emotion_ref_map.get(emotion_tag)
         if not ref_config:
             ref_config = self.emotion_ref_map["neutral"]
@@ -114,10 +118,10 @@ class TTSQueueManager:
                 )
                 return audio_bytes
             except asyncio.TimeoutError:
-                print(f"[TTS Timeout] Synthesis timed out (10s) for text: {text}")
-                raise TTSServiceError(f"TTS synthesis timed out (10s) for text: {text}")
+                print(f"[TTS Timeout] Synthesis timed out (10s) for text (len={len(text)})")
+                raise TTSServiceError(f"TTS synthesis timed out (10s) for text (len={len(text)})")
             except asyncio.CancelledError:
-                print(f"[TTS Cancelled] Task cancelled for text: {text}")
+                print(f"[TTS Cancelled] Task cancelled for text (len={len(text)})")
                 raise
             except Exception as e:
                 print(f"[TTS Error] Synthesis failed: {e}")

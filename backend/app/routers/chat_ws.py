@@ -30,6 +30,7 @@ class SessionState:
         self.api_key = None
         self.sovits_url = None
         self.enable_tts = True
+        self.worldline = "steins_gate"
         
         self.active_task = None
         self.is_busy = False
@@ -128,67 +129,102 @@ async def compress_and_update_history(session_id: str, current_history: list):
             async with session_data.lock:
                 session_data.compressing = False
 
-async def processor_loop(
-    session: SessionState, 
-    user_msg: str, 
-    send_queue: asyncio.Queue, 
-    epoch: int, 
-    start_history_epoch: int
+def clean_text_for_tts(text: str) -> str:
+    """
+    Remove action descriptions in brackets, e.g., (ため息をつく), （ため息をつく）, [ため息], etc.
+    """
+    cleaned = re.sub(r'\(.*?\)', '', text)
+    cleaned = re.sub(r'（.*?）', '', cleaned)
+    cleaned = re.sub(r'\[.*?\]', '', cleaned)
+    cleaned = re.sub(r'\*.*?\*', '', cleaned)
+    return cleaned.strip()
+
+async def execute_tool_call(name: str, arguments_str: str) -> str:
+    import json
+    from app.services.search import web_search
+    if name == "web_search":
+        try:
+            args = json.loads(arguments_str)
+            query = args.get("query", "")
+        except Exception:
+            query = arguments_str
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, web_search, query)
+    else:
+        return f"Error: Tool {name} not found."
+
+async def get_clean_text_stream(
+    active_history: list,
+    memory_summary: str,
+    session: SessionState,
+    tools: list = None,
+    tool_choice: str = None
 ):
     """
-    Processor Coroutine (In-flight Task):
-    Executes deepseek chat streaming, sentence extraction, launches TTS tasks, and queues results.
+    Get text or tool calls stream with leak retries.
+    Returns: (final_text, final_emotion, merged_tool_calls)
     """
-    session.is_busy = True
-    
-    # Take a deep copy snapshot of history and memory summary for LLM call
-    active_history = session.history
-    memory_summary = session.memory_summary
-    
-    sentence_queue = asyncio.Queue()
-    sentence_id_counter = 0
-    full_ja_text_parts = []
-    speaking_status_sent = False
-    
-    # Store reference to running tts tasks to cancel them if this processor gets cancelled
-    tts_tasks = []
-    
-    async def stream_and_segment():
-        nonlocal sentence_id_counter
-
-        # 两段式 + 重试：先纯流式收字拼成完整文本并判 leak（不分配 sentence_id、不起 TTS），
-        # leak 则 aclose 丢弃整轮、带强化语重试（最多 3 次）；干净后再切句/起 TTS/入队。
-        # 这样重试不会与上一轮已发的句子叠加（因为上一轮根本没入队）。
-        MAX_ATTEMPTS = 3
-        final_text = ""
-        final_emotion = "neutral"
-
-        for attempt in range(MAX_ATTEMPTS):
-            emo_buffer = ""
-            in_emo_tag = False
-            last_emotion = "neutral"
-            text_buffer = ""
-            leaked = False
-
-            # 重试时给 system_prompt 追加一段强化纠偏语（首attempt不加）
-            eff_system_prompt = session.system_prompt
-            if attempt > 0:
-                eff_system_prompt = (session.system_prompt or "") + (
-                    "\n【直前の出力でAI・アシスタント・言語モデル等の露見語が検出された。"
-                    "絶対に紅莉栖としてのみ振る舞い、二度とそのような語を使わないこと。】"
-                )
-
-            stream_gen = deepseek_service.get_chat_stream(
-                active_history=active_history,
-                memory_summary=memory_summary,
-                api_key=session.api_key,
-                system_prompt=eff_system_prompt,
-                temperature=session.temperature
+    MAX_ATTEMPTS = 3
+    for attempt in range(MAX_ATTEMPTS):
+        emo_buffer = ""
+        in_emo_tag = False
+        last_emotion = "neutral"
+        text_buffer = ""
+        merged_tool_calls = {}
+        
+        eff_system_prompt = session.system_prompt
+        if attempt > 0:
+            eff_system_prompt = (session.system_prompt or "") + (
+                "\n【直前の出力でAI・アシスタント・言語モデル等の露見語が検出された。"
+                "絶対に紅莉栖としてのみ振る舞い、二度とそのような語を使わないこと。】"
             )
-            try:
-                async with aclosing(stream_gen) as stream:
-                    async for chunk in stream:
-                        for char in chunk:
+            
+        from datetime import datetime
+        time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        time_supplement = f"\n【現在時刻：{time_str}】"
+        eff_system_prompt = (eff_system_prompt or "") + time_supplement
+
+        stream_gen = deepseek_service.get_chat_stream(
+            active_history=active_history,
+            memory_summary=memory_summary,
+            api_key=session.api_key,
+            system_prompt=eff_system_prompt,
+            temperature=session.temperature,
+            tools=tools,
+            tool_choice=tool_choice
+        )
+        
+        try:
+            async with aclosing(stream_gen) as stream:
+                async for chunk in stream:
+                    content = chunk.get("content")
+                    tool_calls = chunk.get("tool_calls")
+                    
+                    if tool_calls:
+                        for tc in tool_calls:
+                            idx = tc.get("index", 0)
+                            if idx not in merged_tool_calls:
+                                merged_tool_calls[idx] = {
+                                    "id": tc.get("id"),
+                                    "type": tc.get("type"),
+                                    "function": {
+                                        "name": tc.get("function", {}).get("name"),
+                                        "arguments": tc.get("function", {}).get("arguments", "")
+                                    }
+                                }
+                            else:
+                                target = merged_tool_calls[idx]
+                                if tc.get("id"):
+                                    target["id"] = tc.get("id")
+                                if tc.get("type"):
+                                    target["type"] = tc.get("type")
+                                if tc.get("function", {}).get("name"):
+                                    target["function"]["name"] = tc.get("function", {}).get("name")
+                                if tc.get("function", {}).get("arguments"):
+                                    target["function"]["arguments"] += tc.get("function", {}).get("arguments")
+                                    
+                    if content:
+                        for char in content:
                             if in_emo_tag:
                                 emo_buffer += char
                                 if char == ']':
@@ -210,64 +246,53 @@ async def processor_loop(
                                     emo_buffer = "["
                                 else:
                                     text_buffer += char
-                    # 流结束后把残留 emo_buffer 归并进正文
-                    if emo_buffer:
-                        text_buffer += emo_buffer
-            except asyncio.CancelledError:
-                raise
-
-            # 对完整文本做 leak 判定（完整判定比逐句判定更稳：避免半句触发误判/漏判）
-            if contains_leak(text_buffer):
-                print(f"[Guard] attempt {attempt + 1}/{MAX_ATTEMPTS} 露見検出、破棄して再試行: {text_buffer[:50]}")
-                leaked = True
-                if attempt < MAX_ATTEMPTS - 1:
-                    continue  # 还有重试机会 → 重新走一轮
-                # 重试用尽仍 leak → 兜底：用红莉栖式冷淡反驳句，绝不下发露馅原文
-                final_text = "はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。"
-                final_emotion = "tsundere"
-                break
-
-            # 干净 → 采纳
-            final_text = text_buffer
-            final_emotion = last_emotion
-            leaked = False
-            break
-
-        # 第二段：对最终干净文本切句、起 TTS、入队（只在确认干净后执行一次）
-        try:
-            remaining = final_text
-            while True:
-                sentences, remaining = extract_sentences_from_buffer(remaining, is_end=(remaining == ""))
-                for s in sentences:
-                    text = s.strip()
-                    if not text or not is_meaningful_sentence(text):
-                        continue
-                    full_ja_text_parts.append(text)
-
-                    tts_task = None
-                    if session.enable_tts:
-                        tts_task = asyncio.create_task(
-                            tts_manager.synthesize_async(text, final_emotion, sovits_url=session.sovits_url)
-                        )
-                        tts_tasks.append(tts_task)
-
-                    await sentence_queue.put({
-                        "sentence_id": sentence_id_counter,
-                        "text": text,
-                        "emotion": final_emotion,
-                        "tts_task": tts_task
-                    })
-                    sentence_id_counter += 1
-                if not sentences:
-                    break
+            if emo_buffer:
+                text_buffer += emo_buffer
         except asyncio.CancelledError:
             raise
-        except Exception as e:
-            await sentence_queue.put(e)
-            return
+            
+        if merged_tool_calls:
+            return "", "neutral", merged_tool_calls
+            
+        if contains_leak(text_buffer):
+            print(f"[Guard] attempt {attempt + 1}/{MAX_ATTEMPTS} 露見検出、破棄して再試行: {text_buffer[:50]}")
+            if attempt < MAX_ATTEMPTS - 1:
+                continue
+            return "はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。", "tsundere", {}
+            
+        return text_buffer, last_emotion, {}
 
-        await sentence_queue.put(None)
+def should_force_search(user_msg: str) -> bool:
+    import re
+    patterns = [
+        r"天气", r"气温", r"温度", r"降水", r"下雨", r"新闻", r"实时", r"search", r"查一下", r"查询",
+        r"天気", r"気温", r"降水", r"ニュース", r"調べる", r"検索"
+    ]
+    return any(re.search(p, user_msg, re.IGNORECASE) for p in patterns)
 
+async def processor_loop(
+    session: SessionState, 
+    user_msg: str, 
+    send_queue: asyncio.Queue, 
+    epoch: int, 
+    start_history_epoch: int
+):
+    """
+    Processor Coroutine (In-flight Task):
+    Executes deepseek chat streaming, sentence extraction, launches TTS tasks, and queues results.
+    """
+    session.is_busy = True
+    
+    active_history = session.history
+    memory_summary = session.memory_summary
+    
+    sentence_queue = asyncio.Queue()
+    sentence_id_counter = 0
+    full_ja_text_parts = []
+    speaking_status_sent = False
+    
+    tts_tasks = []
+    
     async def sender_task():
         nonlocal speaking_status_sent
         while True:
@@ -283,8 +308,26 @@ async def processor_loop(
             text = item["text"]
             emotion = item["emotion"]
             tts_task = item["tts_task"]
+            is_action_only = item.get("is_action_only", False)
             
-            # Check enable_tts before await
+            if is_action_only:
+                await send_queue.put((epoch, {
+                    "type": "text_chunk",
+                    "sentence_id": sentence_id,
+                    "content": text,
+                    "emotion": emotion,
+                    "audio_degraded": True,
+                    "degraded_reason": "action_only"
+                }))
+                if not speaking_status_sent:
+                    await send_queue.put((epoch, {
+                        "type": "status",
+                        "state": "speaking"
+                    }))
+                    speaking_status_sent = True
+                sentence_queue.task_done()
+                continue
+            
             if not session.enable_tts:
                 if tts_task and not tts_task.done():
                     tts_task.cancel()
@@ -311,7 +354,6 @@ async def processor_loop(
                 if audio_bytes is None:
                     raise TTSServiceError("TTS synthesis returned None or was skipped")
             except Exception as e:
-                # TTS degradation fallback
                 if not isinstance(e, TTSServiceError) and not isinstance(e, asyncio.CancelledError):
                     e = TTSServiceError(str(e))
                 if isinstance(e, asyncio.CancelledError):
@@ -337,7 +379,6 @@ async def processor_loop(
                 sentence_queue.task_done()
                 continue
                 
-            # Check enable_tts again after await, before sending audio_chunk
             if not session.enable_tts:
                 await send_queue.put((epoch, {
                     "type": "text_chunk",
@@ -356,7 +397,6 @@ async def processor_loop(
                 sentence_queue.task_done()
                 continue
 
-            # Successful TTS synthesis
             audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
             
             await send_queue.put((epoch, {
@@ -380,23 +420,102 @@ async def processor_loop(
             }))
             sentence_queue.task_done()
 
-    # Main execution inside Processor
     try:
-        # Initial status thinking
-        await send_queue.put((epoch, {"type": "status", "state": "thinking"}))
+        await send_queue.put((epoch, {
+            "type": "status",
+            "dsk": "thinking",
+            "tts": "idle",
+            "state": "thinking"
+        }))
         
-        # Persist user message to SQLite
         await models.save_message(session.session_id, "user", user_msg)
         
-        t1 = asyncio.create_task(stream_and_segment())
         t2 = asyncio.create_task(sender_task())
         
         try:
-            await asyncio.gather(t1, t2)
+            from app.agent_tools import AMADEUS_TOOLS
+            tool_choice_to_use = "auto"
+            if should_force_search(user_msg):
+                tool_choice_to_use = {"type": "function", "function": {"name": "web_search"}}
+            
+            final_text, final_emotion, merged_tool_calls = await get_clean_text_stream(
+                active_history=active_history,
+                memory_summary=memory_summary,
+                session=session,
+                tools=AMADEUS_TOOLS,
+                tool_choice=tool_choice_to_use
+            )
+            
+            if merged_tool_calls:
+                await send_queue.put((epoch, {
+                    "type": "status",
+                    "dsk": "thinking",
+                    "tts": "idle",
+                    "notice": "Amadeus web_search tool invoking...",
+                    "tool": "web_search"
+                }))
+                
+                tool_responses = []
+                for tc in merged_tool_calls.values():
+                    name = tc.get("function", {}).get("name")
+                    args = tc.get("function", {}).get("arguments")
+                    result = await execute_tool_call(name, args)
+                    tool_responses.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id"),
+                        "name": name,
+                        "content": result
+                    })
+                    
+                assistant_tool_call_msg = {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": list(merged_tool_calls.values())
+                }
+                
+                tool_context = list(active_history) + [assistant_tool_call_msg] + tool_responses
+                
+                final_text, final_emotion, _ = await get_clean_text_stream(
+                    active_history=tool_context,
+                    memory_summary=memory_summary,
+                    session=session,
+                    tools=AMADEUS_TOOLS,
+                    tool_choice="none"
+                )
+                
+            sentences, _ = extract_sentences_from_buffer(final_text, is_end=True)
+            for s in sentences:
+                text = s.strip()
+                if not text or not is_meaningful_sentence(text):
+                    continue
+                full_ja_text_parts.append(text)
+
+                tts_text = clean_text_for_tts(text)
+                is_action_only = not is_meaningful_sentence(tts_text)
+
+                tts_task = None
+                if session.enable_tts and not is_action_only:
+                    tts_task = asyncio.create_task(
+                        tts_manager.synthesize_async(tts_text, final_emotion, sovits_url=session.sovits_url)
+                    )
+                    tts_tasks.append(tts_task)
+
+                await sentence_queue.put({
+                    "sentence_id": sentence_id_counter,
+                    "text": text,
+                    "emotion": final_emotion,
+                    "tts_task": tts_task,
+                    "is_action_only": is_action_only
+                })
+                sentence_id_counter += 1
+            
+            await sentence_queue.put(None)
+            await t2
+            
         except Exception as e:
-            t1.cancel()
             t2.cancel()
-            await asyncio.gather(t1, t2, return_exceptions=True)
+            await sentence_queue.put(e)
+            await asyncio.gather(t2, return_exceptions=True)
             raise e
             
         full_ja_text = "".join(full_ja_text_parts)
@@ -413,9 +532,13 @@ async def processor_loop(
                 "content": translation
             }))
             
-        await send_queue.put((epoch, {"type": "status", "state": "done"}))
+        await send_queue.put((epoch, {
+            "type": "status",
+            "dsk": "idle",
+            "tts": "idle",
+            "state": "done"
+        }))
         
-        # History compression threshold check
         if len(session.history) // 2 > config.HISTORY_COMPRESS_THRESHOLD and not session.compressing:
             session.compressing = True
             asyncio.create_task(compress_and_update_history(session.session_id, session.history))
@@ -516,8 +639,16 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 session.api_key = api_key
                 if "sovits_url" in data:
                     session.sovits_url = data["sovits_url"]
-                if "system_prompt" in data:
-                    session.system_prompt = data["system_prompt"]
+                
+                from app.security.prompt import get_rendered_system_prompt, SYSTEM_PROMPT_BASE
+                if "worldline" in data:
+                    wl = data["worldline"]
+                    if wl in ("steins_gate", "beta"):
+                        session.worldline = wl
+                
+                base_prompt = data.get("system_prompt") or SYSTEM_PROMPT_BASE
+                session.system_prompt = get_rendered_system_prompt(base_prompt, session.worldline)
+
                 if "temperature" in data:
                     try:
                         temp = float(data["temperature"])
@@ -540,22 +671,63 @@ async def websocket_chat_endpoint(websocket: WebSocket):
             if frame_type == "ping":
                 continue
                 
+            if frame_type == "clear_history":
+                try:
+                    await models.clear_session_data(session.session_id)
+                except Exception as e:
+                    await send_queue.put((session.current_epoch, {"type": "error", "message": f"物理清除历史记录失败: {str(e)}"}))
+                    continue
+                
+                session.history = []
+                session.history_epoch += 1
+                session.current_epoch += 1
+                
+                if session.active_task and not session.active_task.done():
+                    session.active_task.cancel()
+                    
+                await send_queue.put((session.current_epoch, {
+                    "type": "status",
+                    "dsk": "idle",
+                    "tts": "idle",
+                    "notice": "History memory successfully cleared physically."
+                }))
+                continue
+                
             if frame_type == "config_update":
                 if "api_key" in data:
-                    await send_queue.put((session.current_epoch, {"type": "error", "message": "连接存活期间禁止更新 API Key"}))
-                    continue
+                    new_key = data["api_key"]
+                    if new_key and new_key.strip():
+                        session.api_key = new_key.strip()
                     
                 if "sovits_url" in data:
                     session.sovits_url = data["sovits_url"]
+                
+                from app.security.prompt import get_rendered_system_prompt, SYSTEM_PROMPT_BASE
+                needs_reset = False
                 if "system_prompt" in data:
-                    session.system_prompt = data["system_prompt"]
+                    base_prompt = data["system_prompt"]
+                    session.system_prompt = get_rendered_system_prompt(base_prompt, session.worldline)
+                    needs_reset = True
+                if "worldline" in data:
+                    new_wl = data["worldline"]
+                    if new_wl in ("steins_gate", "beta") and session.worldline != new_wl:
+                        session.worldline = new_wl
+                        current_prompt = session.system_prompt or SYSTEM_PROMPT_BASE
+                        if "【現在世界線：" in current_prompt:
+                            base_prompt = current_prompt.split("【現在世界線：")[0].strip()
+                        else:
+                            base_prompt = current_prompt
+                        session.system_prompt = get_rendered_system_prompt(base_prompt, new_wl)
+                        needs_reset = True
+                
+                if needs_reset:
                     session.history = []
                     session.history_epoch += 1
                     session.current_epoch += 1
                     if session.active_task and not session.active_task.done():
                         session.active_task.cancel()
-                    # Push done status to indicate end of cancelled state
                     await send_queue.put((session.current_epoch, {"type": "status", "state": "done"}))
+                    
                 if "temperature" in data:
                     try:
                         temp = float(data["temperature"])
