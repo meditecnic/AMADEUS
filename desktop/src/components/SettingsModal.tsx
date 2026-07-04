@@ -8,12 +8,20 @@ export interface SettingsModalProps {
   systemPrompt: string;
   enableTts: boolean;
   sovitsUrl: string;
+  enableBgm: boolean;
+  bgmVolume: number;
+  enableSfx: boolean;
+  sfxVolume: number;
   onSaveSettings: (settings: {
     worldline: 'steins_gate' | 'beta';
     apiKey: string;
     systemPrompt: string;
     enableTts: boolean;
     sovitsUrl: string;
+    enableBgm: boolean;
+    bgmVolume: number;
+    enableSfx: boolean;
+    sfxVolume: number;
   }) => void;
 }
 
@@ -25,17 +33,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   systemPrompt,
   enableTts,
   sovitsUrl,
+  enableBgm,
+  bgmVolume,
+  enableSfx,
+  sfxVolume,
   onSaveSettings,
 }) => {
+  const [activeTab, setActiveTab] = useState<'basic' | 'voice'>('basic');
   const [localWorldline, setLocalWorldline] = useState<'steins_gate' | 'beta'>(worldline);
   const [localApiKey, setLocalApiKey] = useState(apiKey);
   const [localSystemPrompt, setLocalSystemPrompt] = useState(systemPrompt);
   const [localEnableTts, setLocalEnableTts] = useState(enableTts);
   const [localSovitsUrl, setLocalSovitsUrl] = useState(sovitsUrl);
 
-  // Sync state with props when modal opens
   useEffect(() => {
     if (isOpen) {
+      setActiveTab('basic');
       setLocalWorldline(worldline);
       setLocalApiKey(apiKey);
       setLocalSystemPrompt(systemPrompt);
@@ -53,6 +66,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       systemPrompt: localSystemPrompt,
       enableTts: localEnableTts,
       sovitsUrl: localSovitsUrl,
+      enableBgm: enableBgm,
+      bgmVolume: bgmVolume,
+      enableSfx: enableSfx,
+      sfxVolume: sfxVolume,
     });
     onClose();
   };
@@ -60,76 +77,65 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   return (
     <div className="salieri-modal-overlay">
       <div className="salieri-settings-modal">
-        <div className="modal-header">
-          <h2>系统设置</h2>
-          <button className="close-btn" onClick={onClose}>×</button>
+        {/* Config ring background */}
+        <div className="config-ring-bg">
+          <img src="/assets/ui/ring_config.png" alt="" />
         </div>
-
-        <div className="modal-body">
-          <div className="setting-group">
-            <label>当前世界线</label>
-            <select
-              value={localWorldline}
-              onChange={(e) => setLocalWorldline(e.target.value as 'steins_gate' | 'beta')}
-              className="salieri-select"
-            >
-              <option value="steins_gate">Steins;Gate 世界线 (1.048596%)</option>
-              <option value="beta">β 世界线 (1.130205%)</option>
-            </select>
+        {/* Inner content */}
+        <div className="modal-inner-content">
+          <div className="modal-header">
+            <h2>SYSTEM CONFIG</h2>
+            <button className="close-btn" onClick={onClose}>×</button>
           </div>
-
-          <div className="setting-group">
-            <label>DEEPSEEK API 密钥</label>
-            <input
-              type="password"
-              value={localApiKey}
-              onChange={(e) => setLocalApiKey(e.target.value)}
-              className="salieri-input"
-              placeholder="sk-..."
-            />
+          <nav className="tab-pills-row">
+            <button className={`tab-pill ${activeTab === 'basic' ? 'active' : ''}`} onClick={() => setActiveTab('basic')}>
+              BASIC
+            </button>
+            <button className={`tab-pill ${activeTab === 'voice' ? 'active' : ''}`} onClick={() => setActiveTab('voice')}>
+              VOICE
+            </button>
+          </nav>
+          <main className="tab-panels">
+            {/* BASIC tab */}
+            <section className={`tab-panel ${activeTab === 'basic' ? 'active' : ''}`}>
+              <div className="setting-field">
+                <label>DEEPSEEK API 密钥</label>
+                <input type="password" value={localApiKey} onChange={(e) => setLocalApiKey(e.target.value)} className="salieri-input" placeholder="sk-..." />
+              </div>
+              <div className="setting-field">
+                <label>Temperature</label>
+                <input type="number" min="0" max="2" step="0.1" value={0.8} readOnly className="salieri-input" />
+              </div>
+              <div className="setting-field">
+                <label>当前世界线</label>
+                <select value={localWorldline} onChange={(e) => setLocalWorldline(e.target.value as 'steins_gate' | 'beta')} className="salieri-select">
+                  <option value="steins_gate">Steins;Gate (1.048596%)</option>
+                  <option value="beta">β 世界线 (1.130205%)</option>
+                </select>
+              </div>
+              <div className="setting-field field-full">
+                <label>系统基础提示词</label>
+                <textarea value={localSystemPrompt} onChange={(e) => setLocalSystemPrompt(e.target.value)} className="salieri-textarea" rows={4} />
+              </div>
+            </section>
+            {/* VOICE tab */}
+            <section className={`tab-panel ${activeTab === 'voice' ? 'active' : ''}`}>
+              <div className="setting-field">
+                <label className="checkbox-label">
+                  <input type="checkbox" checked={localEnableTts} onChange={(e) => setLocalEnableTts(e.target.checked)} className="salieri-checkbox" />
+                  启用语音合成 (TTS)
+                </label>
+              </div>
+              <div className="setting-field field-full">
+                <label>GPT-SoVITS 服务端点</label>
+                <input type="text" value={localSovitsUrl} onChange={(e) => setLocalSovitsUrl(e.target.value)} className="salieri-input" placeholder="http://127.0.0.1:9880" />
+              </div>
+            </section>
+          </main>
+          <div className="modal-footer">
+            <button className="salieri-btn cancel-btn" onClick={onClose}>取消</button>
+            <button className="salieri-btn save-btn" onClick={handleSave}>保存修改</button>
           </div>
-
-          <div className="setting-group">
-            <label>GPT-SoVITS 服务端点</label>
-            <input
-              type="text"
-              value={localSovitsUrl}
-              onChange={(e) => setLocalSovitsUrl(e.target.value)}
-              className="salieri-input"
-              placeholder="http://127.0.0.1:9880"
-            />
-          </div>
-
-          <div className="setting-group checkbox-group">
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={localEnableTts}
-                onChange={(e) => setLocalEnableTts(e.target.checked)}
-                className="salieri-checkbox"
-              />
-              启用语音合成 (TTS)
-            </label>
-          </div>
-
-          <div className="setting-group">
-            <label>系统基础提示词</label>
-            <textarea
-              value={localSystemPrompt}
-              onChange={(e) => setLocalSystemPrompt(e.target.value)}
-              className="salieri-textarea"
-              rows={8}
-            />
-          </div>
-        </div>
-
-        <div className="modal-footer">
-          <button className="salieri-btn cancel-btn" onClick={onClose}>
-            取消
-          </button>
-          <button className="salieri-btn save-btn" onClick={handleSave}>
-            保存修改
-          </button>
         </div>
       </div>
     </div>

@@ -24,7 +24,7 @@ class MockDeepSeekService:
         if self.delay > 0:
             await asyncio.sleep(self.delay)
         yield {"content": "[EMO:tsundere] あんたなんか、頼んでないわよ！", "tool_calls": None}
-        yield {"content": " 助手的覚えはないわ。", "tool_calls": None}
+        yield {"content": "[EMO:surprised] え、本当に？信じられない…", "tool_calls": None}
 
     async def translate_to_zh(self, text, api_key=None):
         return "我才没有求你呢！我可不记得我是你的助手。"
@@ -91,7 +91,7 @@ class TestBackendE2EContract:
             
             first_response = websocket.receive_json()
             assert first_response["type"] == "status"
-            assert first_response["state"] == "thinking"
+            assert first_response["dsk"] == "thinking"
 
     def test_ws_empty_api_key_auth_returns_error_without_policy_close(self, mock_services):
         """Empty auth credentials should be reported as an error frame, not a 1008 policy close."""
@@ -141,7 +141,7 @@ class TestBackendE2EContract:
             # 接收消息直到 done
             while True:
                 r = websocket.receive_json()
-                if r.get("type") == "status" and r.get("state") == "done":
+                if r.get("type") == "status" and r.get("dsk") == "idle":
                     break
             
             # 此处应断言后台保存的已裁剪的 temperature 属性为 2.0
@@ -165,7 +165,7 @@ class TestBackendE2EContract:
             websocket.send_json({"type": "chat", "content": "ping"})
             while True:
                 r = websocket.receive_json()
-                if r.get("type") == "status" and r.get("state") == "done":
+                if r.get("type") == "status" and r.get("dsk") == "idle":
                     break
 
             from app.routers.chat_ws import sessions
@@ -183,7 +183,7 @@ class TestBackendE2EContract:
             websocket.send_json({"type": "chat", "content": "ping_again"})
             while True:
                 r = websocket.receive_json()
-                if r.get("type") == "status" and r.get("state") == "done":
+                if r.get("type") == "status" and r.get("dsk") == "idle":
                     break
                     
             assert session_state.api_key == "new_hot_key"
@@ -203,7 +203,7 @@ class TestBackendE2EContract:
             # 接收消息直到 done
             while True:
                 r = websocket.receive_json()
-                if r.get("type") == "status" and r.get("state") == "done":
+                if r.get("type") == "status" and r.get("dsk") == "idle":
                     break
                     
             # 获取后端存储 of history
@@ -246,7 +246,7 @@ class TestBackendE2EContract:
             # 等待 Q1 完成返回
             while True:
                 r = websocket.receive_json()
-                if r.get("type") == "status" and r.get("state") == "done":
+                if r.get("type") == "status" and r.get("dsk") == "idle":
                     break
             
             # 验证最终的 session history 中不含 Q1 及其回答（已被 config_update 废弃并隔离）
@@ -297,7 +297,7 @@ class TestBackendE2EContract:
             while True:
                 r = websocket.receive_json()
                 responses.append(r)
-                if r.get("type") == "status" and r.get("state") == "done":
+                if r.get("type") == "status" and r.get("dsk") == "idle":
                     break
             
             # 断言收到 text_chunk 且 audio_degraded = True 且 degraded_reason 为 "service_error"
@@ -340,7 +340,7 @@ class TestBackendE2EContract:
             })
             r2 = websocket.receive_json()
             assert r2.get("type") == "status"
-            assert r2.get("state") == "thinking"
+            assert r2.get("dsk") == "thinking"
 
     # -----------------------------------------------------------------
     # R2.5: 动态 TTS 用户禁用降级测试
@@ -363,7 +363,7 @@ class TestBackendE2EContract:
             while True:
                 r = websocket.receive_json()
                 responses.append(r)
-                if r.get("type") == "status" and r.get("state") == "done":
+                if r.get("type") == "status" and r.get("dsk") == "idle":
                     break
             
             text_chunks = [r for r in responses if r.get("type") == "text_chunk"]
@@ -374,3 +374,13 @@ class TestBackendE2EContract:
                 
             audio_chunks = [r for r in responses if r.get("type") == "audio_chunk"]
             assert len(audio_chunks) == 0
+
+    # -----------------------------------------------------------------
+    # R2.6: 9 情绪标签全量覆盖
+    # -----------------------------------------------------------------
+    def test_ws_allows_9_emotion_tags(self, mock_services):
+        """验证后端 ALLOWED_EMOTIONS 包含全部 9 种情绪"""
+        from app.routers.chat_ws import ALLOWED_EMOTIONS
+        expected = {"neutral", "tsundere", "embarrassed", "intellectual",
+                    "happy", "surprised", "annoyed", "disappointed", "sad"}
+        assert ALLOWED_EMOTIONS == expected

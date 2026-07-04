@@ -2,9 +2,10 @@ import { useState } from 'react';
 import { BootSplash } from './components/BootSplash';
 import { SalieriLogin } from './components/SalieriLogin';
 import { Workstation } from './components/Workstation';
+import LogoTransition from './components/LogoTransition';
 import './App.css';
 
-type AppStep = 'splash' | 'login' | 'workstation';
+type AppStep = 'splash' | 'login' | 'transition' | 'workstation';
 
 function App() {
   const [step, setStep] = useState<AppStep>('splash');
@@ -15,6 +16,10 @@ function App() {
   };
 
   const handleLoginSuccess = () => {
+    setStep('transition');
+  };
+
+  const handleTransitionDone = () => {
     setStep('workstation');
   };
 
@@ -23,10 +28,12 @@ function App() {
   };
 
   return (
-    <main className={`app-main-container ${worldline === 'beta' ? 'worldline-beta' : ''}`}>
+    <main className="app-main-container">
       {step === 'splash' && <BootSplash onDone={handleSplashDone} />}
       
       {step === 'login' && <SalieriLogin onLoginSuccess={handleLoginSuccess} />}
+      
+      {step === 'transition' && <LogoTransition onComplete={handleTransitionDone} />}
       
       {step === 'workstation' && (
         <Workstation

@@ -38,3 +38,15 @@ venv.bak/
 
 # Git Worktrees
 .worktrees/
+
+# Auto-generated assets
+desktop/public/assets/sliced/
+
+# Demo screenshots
+实机演示/
+
+# Agent working logs
+.agents/
+
+# Backup files
+*.bak

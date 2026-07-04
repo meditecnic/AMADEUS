@@ -79,6 +79,16 @@
   height: 100%;
 }
 
+/* 登录表单居中容器（剪影右侧可用区域 500~1920 内居中） */
+.login-form-center {
+  position: absolute;
+  left: 500px;
+  top: 0;
+  width: 1420px;
+  height: 1080px;
+  z-index: 5;
+}
+
 /* Canvas 动态 0/1 金黄色数字雨 */
 .binary-stream-canvas {
   position: absolute;
@@ -95,7 +105,7 @@
 
 .amadeus-logo-container {
   position: absolute;
-  left: 625px; /* 居中计算：960 - 670/2 */
+  left: 130px; /* 修正水平居中，与下方输入框组左对齐 */
   top: 150px;  /* 上移 50px */
   width: 670px;
   height: 480px;
@@ -157,15 +167,28 @@
 }
 
 .user-id-group {
-  left: 620px; /* 左移以容纳标签 */
+  left: 130px;
   top: 650px; /* 整体下移，空出 Logo 尖端 */
   width: 560px; /* 105px 标签 + 15px 间距 + 440px 输入框 */
 }
 
 .password-group {
-  left: 620px; /* 左移以容纳标签 */
+  left: 130px;
   top: 735px; /* 整体下移 */
   width: 560px;
+}
+
+/* 密码框到提交按钮的引导线 */
+.password-group::after {
+  content: '';
+  position: absolute;
+  right: -20px;
+  top: 24px;
+  width: 40px;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(255, 170, 0, 0.25), rgba(255, 170, 0, 0.05));
+  pointer-events: none;
+  z-index: 0;
 }
 
 .field-title {
@@ -184,7 +207,7 @@
 .user-id-input {
   width: 440px; /* 锁定输入框物理宽度 */
   height: 48px;
-  background-color: rgba(3, 2, 2, 0.88) !important; /* 深黑色背景 */
+  background: linear-gradient(180deg, rgba(3, 2, 2, 0.92) 0%, rgba(5, 3, 2, 0.88) 100%) !important;
   backdrop-filter: blur(4px);
   border: 1px solid rgba(255, 255, 255, 0.28) !important; /* 极细灰白半透明边框 */
   border-radius: 0px !important;
@@ -198,6 +221,7 @@
   caret-color: #ffaa00 !important;
   text-shadow: 0 0 8px rgba(255, 170, 0, 0.95);
   box-sizing: border-box;
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.6), 0 0 0 rgba(255, 170, 0, 0);
   
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
@@ -233,7 +257,7 @@
 .password-input {
   width: 100%; /* 填满 wrapper */
   height: 48px;
-  background-color: rgba(3, 2, 2, 0.88) !important;
+  background: linear-gradient(180deg, rgba(3, 2, 2, 0.92) 0%, rgba(5, 3, 2, 0.88) 100%) !important;
   backdrop-filter: blur(4px);
   border: 1px solid rgba(255, 255, 255, 0.28) !important;
   border-radius: 0px !important;
@@ -247,6 +271,7 @@
   caret-color: #ffaa00 !important;
   text-shadow: 0 0 8px rgba(255, 170, 0, 0.95);
   box-sizing: border-box;
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.6);
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
@@ -258,7 +283,7 @@
 
 .btn-container {
   position: absolute;
-  left: 1210px;
+  left: 710px;
   top: 719px; /* 上移至 719px，实现与 48px 高度的输入框垂直中线完美对齐 */
   width: 80px;
   height: 80px;
@@ -356,7 +381,7 @@
 
 .auth-error-banner {
   position: absolute;
-  left: 740px;
+  left: 130px;
   top: 810px; /* 下移 */
   width: 440px;
   color: #e60000;

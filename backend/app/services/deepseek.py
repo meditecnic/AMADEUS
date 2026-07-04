@@ -85,6 +85,10 @@ class DeepSeekService:
         }
         
         print(f"[DeepSeek Payload] messages: {messages}\ntools: {payload.get('tools')}\ntool_choice: {payload.get('tool_choice')}", flush=True)
+        # Quick check: does the system prompt contain EMO format instructions?
+        sys_content = messages[0]["content"] if messages else ""
+        has_emo = "[EMO:" in sys_content
+        print(f"[DeepSeek] system_prompt has [EMO:]: {has_emo}, len={len(sys_content)}, end=...{sys_content[-80:]}", flush=True)
         
         if tools is not None:
             payload["tools"] = tools

@@ -31,12 +31,15 @@ class SessionState:
         self.sovits_url = None
         self.enable_tts = True
         self.worldline = "steins_gate"
+        self.client_type = "mobile"
         
         self.active_task = None
         self.is_busy = False
         
         self.current_epoch = 0
         self.history_epoch = 0
+        self.last_assistant_emotion = "neutral"
+        self.consecutive_no_emo_tags = 0
 
     async def load_from_db(self):
         await init_db()
@@ -60,7 +63,16 @@ sessions_creation_lock = asyncio.Lock()
 
 # Regex patterns
 EMO_TAG_PATTERN = re.compile(r'^\[(?:E?MO)[:=]([a-zA-Z0-9_]+)\]\s*')
-ALLOWED_EMOTIONS = {"neutral", "tsundere", "embarrassed", "intellectual"}
+MOBILE_ALLOWED_EMOTIONS = {"neutral", "tsundere", "embarrassed", "intellectual"}
+DESKTOP_ALLOWED_EMOTIONS = {
+    "neutral", "tsundere", "embarrassed", "intellectual",
+    "happy", "surprised", "annoyed", "disappointed", "sad"
+}
+
+def get_session_allowed_emotions(session: "SessionState") -> set:
+    if session.client_type == "desktop":
+        return DESKTOP_ALLOWED_EMOTIONS
+    return MOBILE_ALLOWED_EMOTIONS
 
 def is_meaningful_sentence(text: str) -> bool:
     """Filter out empty sentences containing only punctuation and whitespace."""
@@ -158,17 +170,21 @@ async def get_clean_text_stream(
     memory_summary: str,
     session: SessionState,
     tools: list = None,
-    tool_choice: str = None
+    tool_choice: str = None,
+    default_emotion: str = "neutral"
 ):
     """
     Get text or tool calls stream with leak retries.
-    Returns: (final_text, final_emotion, merged_tool_calls)
+    Returns: (final_text, final_emotion, merged_tool_calls, emo_tag_found)
     """
     MAX_ATTEMPTS = 3
+    _logged_content = False
     for attempt in range(MAX_ATTEMPTS):
         emo_buffer = ""
         in_emo_tag = False
-        last_emotion = "neutral"
+        emo_tag_found = False
+        allowed = get_session_allowed_emotions(session)
+        last_emotion = default_emotion if default_emotion in allowed else "neutral"
         text_buffer = ""
         merged_tool_calls = {}
         
@@ -224,6 +240,9 @@ async def get_clean_text_stream(
                                     target["function"]["arguments"] += tc.get("function", {}).get("arguments")
                                     
                     if content:
+                        if not _logged_content:
+                            print(f"[RAW CONTENT] '{content[:80]}'", flush=True)
+                            _logged_content = True
                         for char in content:
                             if in_emo_tag:
                                 emo_buffer += char
@@ -231,7 +250,10 @@ async def get_clean_text_stream(
                                     match = EMO_TAG_PATTERN.match(emo_buffer)
                                     if match:
                                         emotion = match.group(1)
-                                        last_emotion = emotion if emotion in ALLOWED_EMOTIONS else "neutral"
+                                        allowed_emotions_for_log = allowed
+                                        last_emotion = emotion if emotion in allowed else "neutral"
+                                        print(f"[DEBUG] EMO tag found: '{emotion}' → last_emotion='{last_emotion}' (allowed: {len(allowed_emotions_for_log)} emotions)", flush=True)
+                                        emo_tag_found = True
                                     else:
                                         text_buffer += emo_buffer
                                     emo_buffer = ""
@@ -252,21 +274,28 @@ async def get_clean_text_stream(
             raise
             
         if merged_tool_calls:
-            return "", "neutral", merged_tool_calls
+            return "", "neutral", merged_tool_calls, False
             
         if contains_leak(text_buffer):
             print(f"[Guard] attempt {attempt + 1}/{MAX_ATTEMPTS} 露見検出、破棄して再試行: {text_buffer[:50]}")
             if attempt < MAX_ATTEMPTS - 1:
                 continue
-            return "はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。", "tsundere", {}
+            return "はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。", "tsundere", {}, False
             
-        return text_buffer, last_emotion, {}
+            print(f"[DEBUG] get_clean_text_stream returning: emotion='{last_emotion}' emo_tag_found={emo_tag_found} text_len={len(text_buffer)}", flush=True)
+        return text_buffer, last_emotion, merged_tool_calls, emo_tag_found
 
 def should_force_search(user_msg: str) -> bool:
     import re
     patterns = [
-        r"天气", r"气温", r"温度", r"降水", r"下雨", r"新闻", r"实时", r"search", r"查一下", r"查询",
-        r"天気", r"気温", r"降水", r"ニュース", r"調べる", r"検索"
+        # Chinese
+        r"天气", r"气温", r"温度", r"降水", r"下雨", r"下雪", r"台风", r"今天.*怎么样",
+        r"新闻", r"资讯", r"实时", r"最新", r"search", r"查一下", r"查询", r"查查",
+        # Japanese
+        r"天気", r"気温", r"降水", r"天候", r"ニュース", r"調べる", r"検索",
+        # English
+        r"\bweather\b", r"\bforecast\b", r"\btemperature\b", r"\bnews\b",
+        r"\bsearch\b", r"\blook up\b", r"\bcurrent events\b",
     ]
     return any(re.search(p, user_msg, re.IGNORECASE) for p in patterns)
 
@@ -307,6 +336,7 @@ async def processor_loop(
             sentence_id = item["sentence_id"]
             text = item["text"]
             emotion = item["emotion"]
+            print(f"[DEBUG] sender_task processing sentence {sentence_id}: emotion='{emotion}' text_preview='{text[:50]}' client_type='{session.client_type}'", flush=True)
             tts_task = item["tts_task"]
             is_action_only = item.get("is_action_only", False)
             
@@ -322,6 +352,7 @@ async def processor_loop(
                 if not speaking_status_sent:
                     await send_queue.put((epoch, {
                         "type": "status",
+                        "dsk": "speaking",
                         "state": "speaking"
                     }))
                     speaking_status_sent = True
@@ -343,6 +374,7 @@ async def processor_loop(
                 if not speaking_status_sent:
                     await send_queue.put((epoch, {
                         "type": "status",
+                        "dsk": "speaking",
                         "state": "speaking"
                     }))
                     speaking_status_sent = True
@@ -373,12 +405,13 @@ async def processor_loop(
                 if not speaking_status_sent:
                     await send_queue.put((epoch, {
                         "type": "status",
+                        "dsk": "speaking",
                         "state": "speaking"
                     }))
                     speaking_status_sent = True
                 sentence_queue.task_done()
                 continue
-                
+            
             if not session.enable_tts:
                 await send_queue.put((epoch, {
                     "type": "text_chunk",
@@ -391,12 +424,13 @@ async def processor_loop(
                 if not speaking_status_sent:
                     await send_queue.put((epoch, {
                         "type": "status",
+                        "dsk": "speaking",
                         "state": "speaking"
                     }))
                     speaking_status_sent = True
                 sentence_queue.task_done()
                 continue
-
+            
             audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
             
             await send_queue.put((epoch, {
@@ -409,10 +443,11 @@ async def processor_loop(
             if not speaking_status_sent:
                 await send_queue.put((epoch, {
                     "type": "status",
+                    "dsk": "speaking",
                     "state": "speaking"
                 }))
                 speaking_status_sent = True
-                
+
             await send_queue.put((epoch, {
                 "type": "audio_chunk",
                 "sentence_id": sentence_id,
@@ -424,8 +459,8 @@ async def processor_loop(
         await send_queue.put((epoch, {
             "type": "status",
             "dsk": "thinking",
-            "tts": "idle",
-            "state": "thinking"
+            "state": "thinking",
+            "tts": "idle"
         }))
         
         await models.save_message(session.session_id, "user", user_msg)
@@ -434,22 +469,29 @@ async def processor_loop(
         
         try:
             from app.agent_tools import AMADEUS_TOOLS
-            tool_choice_to_use = "auto"
-            if should_force_search(user_msg):
-                tool_choice_to_use = {"type": "function", "function": {"name": "web_search"}}
+            tools_to_use = None
+            tool_choice_to_use = None
+            if session.client_type == "desktop":
+                tools_to_use = AMADEUS_TOOLS
+                tool_choice_to_use = "auto"
+                if should_force_search(user_msg):
+                    tool_choice_to_use = {"type": "function", "function": {"name": "web_search"}}
             
-            final_text, final_emotion, merged_tool_calls = await get_clean_text_stream(
+            final_text, final_emotion, merged_tool_calls, emo_tag_found = await get_clean_text_stream(
                 active_history=active_history,
                 memory_summary=memory_summary,
                 session=session,
-                tools=AMADEUS_TOOLS,
-                tool_choice=tool_choice_to_use
+                tools=tools_to_use,
+                tool_choice=tool_choice_to_use,
+                default_emotion=session.last_assistant_emotion
             )
+            print(f"[DEBUG] processor_loop: final_emotion='{final_emotion}' has_tool_call={bool(merged_tool_calls)} emo_tag_found={emo_tag_found}", flush=True)
             
             if merged_tool_calls:
                 await send_queue.put((epoch, {
                     "type": "status",
                     "dsk": "thinking",
+                    "state": "thinking",
                     "tts": "idle",
                     "notice": "Amadeus web_search tool invoking...",
                     "tool": "web_search"
@@ -475,14 +517,29 @@ async def processor_loop(
                 
                 tool_context = list(active_history) + [assistant_tool_call_msg] + tool_responses
                 
-                final_text, final_emotion, _ = await get_clean_text_stream(
+                final_text, final_emotion, _, emo_tag_found = await get_clean_text_stream(
                     active_history=tool_context,
                     memory_summary=memory_summary,
                     session=session,
                     tools=AMADEUS_TOOLS,
-                    tool_choice="none"
+                    tool_choice="none",
+                    default_emotion=session.last_assistant_emotion
                 )
                 
+            # Persist detected emotion for next turn fallback, with decay to neutral
+            # if the model forgets the EMO tag for multiple consecutive turns.
+            allowed = get_session_allowed_emotions(session)
+            if emo_tag_found:
+                session.consecutive_no_emo_tags = 0
+                if final_emotion in allowed:
+                    session.last_assistant_emotion = final_emotion
+            else:
+                session.consecutive_no_emo_tags += 1
+                if session.consecutive_no_emo_tags >= 2:
+                    session.last_assistant_emotion = "neutral"
+                elif final_emotion in allowed:
+                    session.last_assistant_emotion = final_emotion
+
             sentences, _ = extract_sentences_from_buffer(final_text, is_end=True)
             for s in sentences:
                 text = s.strip()
@@ -492,6 +549,14 @@ async def processor_loop(
 
                 tts_text = clean_text_for_tts(text)
                 is_action_only = not is_meaningful_sentence(tts_text)
+
+                if session.enable_tts and not is_action_only:
+                    await send_queue.put((epoch, {
+                        "type": "status",
+                        "dsk": "speaking",
+                        "state": "speaking",
+                        "tts": "synthesizing"
+                    }))
 
                 tts_task = None
                 if session.enable_tts and not is_action_only:
@@ -520,10 +585,12 @@ async def processor_loop(
             
         full_ja_text = "".join(full_ja_text_parts)
         
+        history_content = f"[EMO:{final_emotion}] {full_ja_text}" if full_ja_text.strip() else full_ja_text
+        
         if session.history_epoch == start_history_epoch:
-            session.append_message({"role": "assistant", "content": full_ja_text})
+            session.append_message({"role": "assistant", "content": history_content})
             if full_ja_text.strip():
-                await models.save_message(session.session_id, "assistant", full_ja_text)
+                await models.save_message(session.session_id, "assistant", history_content)
         
         if full_ja_text.strip():
             translation = await deepseek_service.translate_to_zh(full_ja_text, api_key=session.api_key)
@@ -535,8 +602,8 @@ async def processor_loop(
         await send_queue.put((epoch, {
             "type": "status",
             "dsk": "idle",
-            "tts": "idle",
-            "state": "done"
+            "state": "done",
+            "tts": "idle"
         }))
         
         if len(session.history) // 2 > config.HISTORY_COMPRESS_THRESHOLD and not session.compressing:
@@ -646,8 +713,11 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                     if wl in ("steins_gate", "beta"):
                         session.worldline = wl
                 
+                if "client" in data:
+                    session.client_type = data["client"]
+                
                 base_prompt = data.get("system_prompt") or SYSTEM_PROMPT_BASE
-                session.system_prompt = get_rendered_system_prompt(base_prompt, session.worldline)
+                session.system_prompt = get_rendered_system_prompt(base_prompt, session.worldline, session.client_type)
 
                 if "temperature" in data:
                     try:
@@ -688,6 +758,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 await send_queue.put((session.current_epoch, {
                     "type": "status",
                     "dsk": "idle",
+                    "state": "done",
                     "tts": "idle",
                     "notice": "History memory successfully cleared physically."
                 }))
@@ -706,7 +777,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 needs_reset = False
                 if "system_prompt" in data:
                     base_prompt = data["system_prompt"]
-                    session.system_prompt = get_rendered_system_prompt(base_prompt, session.worldline)
+                    session.system_prompt = get_rendered_system_prompt(base_prompt, session.worldline, session.client_type)
                     needs_reset = True
                 if "worldline" in data:
                     new_wl = data["worldline"]
@@ -717,7 +788,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                             base_prompt = current_prompt.split("【現在世界線：")[0].strip()
                         else:
                             base_prompt = current_prompt
-                        session.system_prompt = get_rendered_system_prompt(base_prompt, new_wl)
+                        session.system_prompt = get_rendered_system_prompt(base_prompt, new_wl, session.client_type)
                         needs_reset = True
                 
                 if needs_reset:
@@ -726,7 +797,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                     session.current_epoch += 1
                     if session.active_task and not session.active_task.done():
                         session.active_task.cancel()
-                    await send_queue.put((session.current_epoch, {"type": "status", "state": "done"}))
+                    await send_queue.put((session.current_epoch, {"type": "status", "dsk": "idle", "state": "done"}))
                     
                 if "temperature" in data:
                     try:

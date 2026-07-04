@@ -162,7 +162,8 @@ async def test_tool_calls_integration_flow():
     send_queue = asyncio.Queue()
     
     with patch("app.routers.chat_ws.deepseek_service", mock_ds), \
-         patch("app.services.search.DDGS", return_value=MagicMock(__enter__=MagicMock(return_value=mock_ddg))):
+         patch("app.services.search.DDGS", return_value=MagicMock(__enter__=MagicMock(return_value=mock_ddg))), \
+         patch("app.services.search.httpx.get", side_effect=Exception("wttr.in disabled for test")):
          
         await processor_loop(session, "今日の秋葉原の天気はどう？", send_queue, 1, 0)
         
@@ -233,11 +234,11 @@ def test_wttr_forecast_json_parser(mock_get):
 
     res = web_search("沈阳天气 2025年7月")
     
-    mock_get.assert_called_with("http://wttr.in/沈阳?format=j1", timeout=3.0)
+    mock_get.assert_called_with("http://wttr.in/沈阳?format=j1", timeout=5.0)
     
     assert "地点: 沈阳" in res
     assert "当前实况: Sunny, 24°C" in res
     assert "三天天气预报:" in res
     assert " - 2026-06-27 (今天): Partly Cloudy, 19°C ~ 30°C" in res
     assert " - 2026-06-28 (明天): Cloudy, 18°C ~ 28°C" in res
-    assert " - 2026-06-29 (后天): , 17°C ~ 29°C" in res
+    assert " - 2026-06-29 (后天): ?, 17°C ~ 29°C" in res

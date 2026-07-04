@@ -1,3 +1,10 @@
+import sys
+import io
+if hasattr(sys.stdout, "buffer"):
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+if hasattr(sys.stderr, "buffer"):
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI
@@ -21,16 +28,9 @@ async def lifespan(app: FastAPI):
     print(f"Assets Directory: {config.ASSETS_DIR}")
     print(f"History Compress Threshold: {config.HISTORY_COMPRESS_THRESHOLD} rounds")
     
-    # Initialize async TTS client and test connection
+    # Initialize async TTS client (health check per-request, not at startup)
     await tts_manager.init_client()
-    try:
-        await tts_manager.client.get(config.SOVITS_URL, timeout=1.0)
-        print("[GPT-SoVITS] Voice Synthesizer reachable.")
-        tts_manager.is_online = True
-    except Exception:
-        print("[WARN] [GPT-SoVITS] Voice Synthesizer is OFFLINE.")
-        tts_manager.is_online = False
-        print("[WARN] Run GPT-SoVITS server on port 9880 before voice interaction.")
+    print("[GPT-SoVITS] TTS will be attempted per request.")
     print("--------------------------------------------------")
     
     yield

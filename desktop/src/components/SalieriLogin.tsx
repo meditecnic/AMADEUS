@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import './SalieriLogin.css';
 import photoLeft from '../assets/photo_left.png';
 import amadeusLogo from '../assets/amadeus_logo.png';
+import { audioService } from '../services/AudioService';
+import { audioPlayer } from '../hooks/useAudioPlayer';
 
 interface SalieriLoginProps {
   onLoginSuccess: () => void;
@@ -35,6 +37,14 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
       if (errTimeoutRef.current) {
         window.clearTimeout(errTimeoutRef.current);
       }
+    };
+  }, []);
+
+  // Play login-screen BGM on mount
+  useEffect(() => {
+    audioService.playBGM('/audio/bgm/Messenger main theme.ogg');
+    return () => {
+      audioService.stopBGM();
     };
   }, []);
 
@@ -119,8 +129,13 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
     return () => clearInterval(rainTimer);
   }, []);
 
+  const handleInitAudio = () => {
+    audioPlayer.init();
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    handleInitAudio();
     if (!userId) {
       showAuthError('请输入 USER ID');
       return;
@@ -151,6 +166,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
       });
 
       if (response.ok) {
+        audioService.playSFX('/audio/sfx/连接成功，进入页面2.ogg');
         onLoginSuccess();
       } else {
         const errorData = await response.json().catch(() => ({}));
@@ -180,74 +196,71 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
         {/* Canvas 动态二进制数字背景雨 */}
         <canvas ref={canvasRef} className="binary-stream-canvas" />
 
-        <form onSubmit={handleSubmit} className="salieri-login-form">
-          
-          {/* 使用官方高清 Logo 图片替换原本用代码手绘的几何三角形 */}
-          <div className="amadeus-logo-container">
-            <img 
-              src={amadeusLogo} 
-              className="amadeus-logo-img" 
-              alt="AMADEUS Logo" 
-            />
-          </div>
+        <div className="login-form-center">
+          <form onSubmit={handleSubmit} className="salieri-login-form">
 
-          {/* USER ID 栏目（真实黑底金黄边框输入框） */}
-          <div className="input-field-group user-id-group">
-            <label className="field-title">USER ID</label>
-            <input
-              type="text"
-              className={`user-id-input ${errorMsg.includes('USER ID') ? 'input-error' : ''}`}
-              value={userId}
-              onChange={(e) => setUserId(e.target.value)}
-              disabled={isAuthenticating}
-              spellCheck={false}
-              autoComplete="off"
-            />
-          </div>
+            <div className="amadeus-logo-container">
+              <img
+                src={amadeusLogo}
+                className="amadeus-logo-img"
+                alt="AMADEUS Logo"
+              />
+            </div>
 
-          {/* PASSWORD 栏目 (仅使用一种原生橙色光标，去除了自定义假光标) */}
-          <div className="input-field-group password-group">
-            <label className="field-title">PASSWORD</label>
-            <div className="password-input-wrapper">
+            <div className="input-field-group user-id-group">
+              <label className="field-title">USER ID</label>
               <input
-                id="salieri-pwd"
-                type="password"
-                className={`password-input ${
-                  errorMsg.includes('ACCESS') || errorMsg.includes('CONNECTION') ? 'input-error' : ''
-                }`}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                type="text"
+                className={`user-id-input ${errorMsg.includes('USER ID') ? 'input-error' : ''}`}
+                value={userId}
+                onChange={(e) => setUserId(e.target.value)}
                 disabled={isAuthenticating}
                 spellCheck={false}
                 autoComplete="off"
               />
             </div>
-          </div>
 
-          {/* 纯 SVG 绘制的圆形 Arrow Connect 提交按钮 */}
-          <div className="btn-container">
-            <button 
-              type="submit" 
-              className="decrypt-btn"
-              disabled={isAuthenticating}
-              title="CONNECT"
-              aria-label="Decrypt and Connect"
-            >
-              <svg viewBox="0 0 80 80" width="76" height="76" className="connect-btn-svg">
-                <circle cx="40" cy="40" r="34" className="btn-circle-track" />
-                <circle cx="40" cy="40" r="34" className="btn-circle-glow" />
-                <path d="M 30 40 L 50 40 M 42 32 L 50 40 L 42 48" className="btn-arrow-icon" />
-              </svg>
-            </button>
-          </div>
-
-          {/* 错误警报横幅 (使用深红/正红样式) */}
-          {errorMsg && (
-            <div className="auth-error-banner glitch-flicker">
-              {errorMsg}
+            <div className="input-field-group password-group">
+              <label className="field-title">PASSWORD</label>
+              <div className="password-input-wrapper">
+                <input
+                  id="salieri-pwd"
+                  type="password"
+                  className={`password-input ${
+                    errorMsg.includes('ACCESS') || errorMsg.includes('CONNECTION') ? 'input-error' : ''
+                  }`}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  disabled={isAuthenticating}
+                  spellCheck={false}
+                  autoComplete="off"
+                />
+              </div>
             </div>
-          )}
-        </form>
+
+            <div className="btn-container">
+              <button
+                type="submit"
+                className="decrypt-btn"
+                disabled={isAuthenticating}
+                title="CONNECT"
+                aria-label="Decrypt and Connect"
+              >
+                <svg viewBox="0 0 80 80" width="76" height="76" className="connect-btn-svg">
+                  <circle cx="40" cy="40" r="34" className="btn-circle-track" />
+                  <circle cx="40" cy="40" r="34" className="btn-circle-glow" />
+                  <path d="M 30 40 L 50 40 M 42 32 L 50 40 L 42 48" className="btn-arrow-icon" />
+                </svg>
+              </button>
+            </div>
+
+            {errorMsg && (
+              <div className="auth-error-banner glitch-flicker">
+                {errorMsg}
+              </div>
+            )}
+          </form>
+        </div>
       </div>
     </div>
   );

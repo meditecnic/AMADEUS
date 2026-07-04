@@ -20,7 +20,7 @@ def _resolve_path() -> str:
     return os.path.join(d, "amadeus.db")
 
 async def get_db() -> aiosqlite.Connection:
-    db = await aiosqlite.connect(_resolve_path())
+    db = await aiosqlite.connect(_resolve_path(), timeout=30.0)
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA journal_mode=WAL")
     return db

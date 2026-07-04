@@ -8,6 +8,7 @@ export interface UseAmadeusWSParams {
   enableTts: boolean;
   sovitsUrl: string;
   onAudioChunk?: (sentenceId: number, base64Data: string) => void;
+  onAudioDegraded?: (reason: string) => void;
 }
 
 export type WSStatus = 'CONNECTING' | 'READY' | 'ERROR' | 'CLOSED';
@@ -17,6 +18,7 @@ export interface Message {
   role: 'user' | 'assistant';
   content: string;
   translation?: string;
+  emotion?: 'neutral' | 'tsundere' | 'embarrassed' | 'intellectual' | 'happy' | 'surprised' | 'annoyed' | 'disappointed' | 'sad';
 }
 
 export interface UseAmadeusWSReturn {
@@ -26,6 +28,7 @@ export interface UseAmadeusWSReturn {
   isSynthesizing: boolean;
   activeTool: string | null;
   activeNotice: string | null;
+  emotion: 'neutral' | 'tsundere' | 'embarrassed' | 'intellectual' | 'happy' | 'surprised' | 'annoyed' | 'disappointed' | 'sad';
   clearHistory: () => void;
   sendChat: (content: string) => void;
   updateConfig: (patch: Partial<Omit<UseAmadeusWSParams, 'onAudioChunk'>>) => void;
@@ -39,6 +42,13 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   const [isSynthesizing, setIsSynthesizing] = useState(false);
   const [activeTool, setActiveTool] = useState<string | null>(null);
   const [activeNotice, setActiveNotice] = useState<string | null>(null);
+  const [emotion, setEmotion] = useState<UseAmadeusWSReturn['emotion']>('neutral');
+
+  const ALLOWED_EMOTIONS: ReadonlySet<string> = new Set([
+    'neutral', 'tsundere', 'embarrassed', 'intellectual',
+    'happy', 'surprised', 'annoyed', 'disappointed', 'sad',
+  ]);
+  const lastSentenceIdRef = useRef<number>(-1);
 
   const wsRef = useRef<WebSocket | null>(null);
   const paramsRef = useRef<UseAmadeusWSParams>(params);
@@ -196,29 +206,43 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             break;
 
           case 'text_chunk':
+            startWatchdog();
             setIsThinking(false);
             setActiveTool(null);
             setActiveNotice(null);
-            // Append incoming text sentences streamingly
+            if (
+              msg.emotion &&
+              ALLOWED_EMOTIONS.has(msg.emotion) &&
+              typeof msg.sentence_id === 'number' &&
+              msg.sentence_id !== lastSentenceIdRef.current
+            ) {
+              lastSentenceIdRef.current = msg.sentence_id;
+              setEmotion(msg.emotion as UseAmadeusWSReturn['emotion']);
+            }
+            if (msg.audio_degraded && paramsRef.current.onAudioDegraded) {
+              paramsRef.current.onAudioDegraded(msg.degraded_reason || 'unknown');
+            }
             setMessages((prev) => {
-              // We identify the current running assistant sentence
               const lastMsg = prev[prev.length - 1];
               if (lastMsg && lastMsg.role === 'assistant' && lastMsg.id === activeAssistantMessageId) {
-                // If it already exists, append the new sentence
-                // Check if this sentence is already present to prevent duplicate chunks in stream
                 const updatedContent = lastMsg.content.includes(msg.content)
                   ? lastMsg.content
                   : lastMsg.content + msg.content;
+                const updatedEmotion = msg.emotion && ALLOWED_EMOTIONS.has(msg.emotion)
+                  ? (msg.emotion as Message['emotion'])
+                  : lastMsg.emotion;
                 return [
                   ...prev.slice(0, -1),
-                  { ...lastMsg, content: updatedContent }
+                  { ...lastMsg, content: updatedContent, emotion: updatedEmotion }
                 ];
               } else {
-                // Otherwise create a new assistant response card
                 activeAssistantMessageId = `assist_${Date.now()}`;
+                const initialEmotion = msg.emotion && ALLOWED_EMOTIONS.has(msg.emotion)
+                  ? (msg.emotion as Message['emotion'])
+                  : 'neutral';
                 return [
                   ...prev,
-                  { id: activeAssistantMessageId, role: 'assistant', content: msg.content }
+                  { id: activeAssistantMessageId, role: 'assistant', content: msg.content, emotion: initialEmotion }
                 ];
               }
             });
@@ -359,6 +383,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     isSynthesizing,
     activeTool,
     activeNotice,
+    emotion,
     clearHistory,
     sendChat,
     updateConfig,

@@ -89,7 +89,7 @@ async def test_ws_leak_interception_retries_then_clean():
             while True:
                 r = websocket.receive_json()
                 responses.append(r)
-                if r.get("type") == "status" and r.get("state") == "done":
+                if r.get("type") == "status" and r.get("dsk") == "idle":
                     break
 
             text_chunks = [r for r in responses if r.get("type") == "text_chunk"]
@@ -129,7 +129,7 @@ async def test_ws_leak_fallback_when_retries_exhausted():
             while True:
                 r = websocket.receive_json()
                 responses.append(r)
-                if r.get("type") == "status" and r.get("state") == "done":
+                if r.get("type") == "status" and r.get("dsk") == "idle":
                     break
 
             text_chunks = [r for r in responses if r.get("type") == "text_chunk"]

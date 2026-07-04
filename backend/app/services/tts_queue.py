@@ -2,38 +2,54 @@ import os
 import httpx
 import asyncio
 from app import config
+from pathlib import Path
 
 class TTSServiceError(Exception):
     """Custom exception raised when TTS synthesis fails or times out."""
     pass
 
+def _build_emotion_ref_map():
+    """Build 9-emotion reference audio map from config, validating file existence.
+
+    All reference clips are RMS-normalized (≈0.15, -16.5 dBFS) and peak-limited
+    (-1 dBFS) for consistent TTS output across emotions.
+    """
+    entries = [
+        ("neutral", config.REF_AUDIO_NEUTRAL, "あなたに会いに来たの、岡部倫太郎さん。あ、じゃなくて…"),
+        ("tsundere", config.REF_AUDIO_TSUNDERE, "別に、確信があって言ったわけじゃない。単に…"),
+        ("embarrassed", config.REF_AUDIO_EMBARRASSED, "私が言ったのは、親子で仲が良くて羨ましいなって…"),
+        ("intellectual", config.REF_AUDIO_INTELLECTUAL, "超重力による無限圧縮、およびカーブラックホール内の特異点通過に耐えられなかったと思われる。"),
+        ("happy", config.REF_AUDIO_HAPPY, "大好きな鳳凰院凶真からお前は男だったと言われて…"),
+        ("surprised", config.REF_AUDIO_SURPRISED, "そうなのかな… 携帯の電波なんて…"),
+        ("annoyed", config.REF_AUDIO_ANNOYED, "私は、あんたの言葉が冗談なのか本気なのか見極められるほど付き合いが長くない。"),
+        ("disappointed", config.REF_AUDIO_DISAPPOINTED, "まったく… ノルアドレナリンが過剰分泌されてる気分よ。"),
+        ("sad", config.REF_AUDIO_SAD, "あんたが死んだら、まゆりも助けられなくなると思いなさい。"),
+    ]
+    ref_map = {}
+    for emotion, path, prompt_text in entries:
+        if not Path(path).exists():
+            print(f"[WARN] TTS reference audio not found for '{emotion}': {path}")
+            print(f"[WARN] Set AMADEUS_REF_{emotion.upper()} env var to a valid WAV file path")
+            ref_map[emotion] = None
+        else:
+            ref_map[emotion] = {
+                "ref_audio_path": path,
+                "prompt_text": prompt_text,
+            }
+    return ref_map
+
+EMOTION_REF_MAP = _build_emotion_ref_map()
+
+
 class TTSQueueManager:
     def __init__(self):
         self.sovits_url = config.SOVITS_URL
-        self.timeout = 10.0  # Strict 10s timeout
+        self.timeout = config.TTS_TIMEOUT
         self.semaphore = asyncio.Semaphore(1)  # Concurrency limit for GPU API
         self.client = None                     # Async client managed by lifespan
-        self.is_online = True                  # Track GPT-SoVITS availability
+        self.is_online = True                  # Kept for backward compatibility
 
-        # Initialize reference audio mapping
-        self.emotion_ref_map = {
-            "neutral": {
-                "ref_audio_path": r"<LOCAL_PATH> 无奈.wav",
-                "prompt_text": "全く。ノルアドレナリンが過剰分泌されてる気分よ"
-            },
-            "tsundere": {
-                "ref_audio_path": r"<LOCAL_PATH> 害羞.wav",
-                "prompt_text": "私が言ったのは、親子で仲が良くて、羨ましいってこと"
-            },
-            "embarrassed": {
-                "ref_audio_path": r"<LOCAL_PATH> 害羞.wav",
-                "prompt_text": "私が言ったのは、親子で仲が良くて、羨ましいってこと"
-            },
-            "intellectual": {
-                "ref_audio_path": r"<LOCAL_PATH> 无奈.wav",
-                "prompt_text": "全く。ノルアドレナリンが過剰分泌されてる気分よ"
-            }
-        }
+        self.emotion_ref_map = EMOTION_REF_MAP
 
     async def init_client(self):
         """Initialize the HTTPX AsyncClient if it's closed or not created yet."""
@@ -56,17 +72,16 @@ class TTSQueueManager:
             "ref_audio_path": ref_config["ref_audio_path"],
             "prompt_text": ref_config["prompt_text"],
             "prompt_lang": "ja",
-            "text_language": "ja",
-            "refer_wav_path": ref_config["ref_audio_path"],
-            "prompt_language": "ja",
-            "format": "wav"
+            "media_type": "wav",
+            "top_k": 5,
+            "top_p": 0.8,
+            "temperature": 0.4,
+            "speed": 1.0,
         }
 
         base_url = sovits_url or self.sovits_url or "http://localhost:9880"
         urls_to_try = [
-            base_url.rstrip("/"),
             base_url.rstrip("/") + "/tts",
-            base_url.rstrip("/") + "/"
         ]
 
         last_exception = None
@@ -76,12 +91,12 @@ class TTSQueueManager:
                 response = await self.client.post(url, json=payload)
                 if response.status_code == 200:
                     return response.content
-                
+
                 # 2. Try POST Form
                 response = await self.client.post(url, data=payload)
                 if response.status_code == 200:
                     return response.content
-                
+
                 # 3. Try GET Query parameters
                 response = await self.client.get(url, params=payload)
                 if response.status_code == 200:
@@ -99,14 +114,11 @@ class TTSQueueManager:
     async def synthesize_async(self, text: str, emotion_tag: str, sovits_url: str = None) -> bytes:
         """
         Synthesizes speech asynchronously using a semaphore to limit concurrency.
-        Provides fallback and 10s timeout, raising TTSServiceError on failure.
+        Raises TTSServiceError on failure.
         """
-        if not self.is_online:
-            raise TTSServiceError("GPT-SoVITS is offline (skip network check)")
-
         ref_config = self.emotion_ref_map.get(emotion_tag)
-        if not ref_config:
-            ref_config = self.emotion_ref_map["neutral"]
+        if ref_config is None:
+            raise TTSServiceError(f"No valid reference audio configured for emotion '{emotion_tag}' — check AMADEUS_REF_{emotion_tag.upper()} env var")
 
         await self.init_client()
 
@@ -118,8 +130,8 @@ class TTSQueueManager:
                 )
                 return audio_bytes
             except asyncio.TimeoutError:
-                print(f"[TTS Timeout] Synthesis timed out (10s) for text (len={len(text)})")
-                raise TTSServiceError(f"TTS synthesis timed out (10s) for text (len={len(text)})")
+                print(f"[TTS Timeout] Synthesis timed out ({self.timeout}s) for text (len={len(text)})")
+                raise TTSServiceError(f"TTS synthesis timed out ({self.timeout}s) for text (len={len(text)})")
             except asyncio.CancelledError:
                 print(f"[TTS Cancelled] Task cancelled for text (len={len(text)})")
                 raise
