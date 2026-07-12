@@ -88,6 +88,16 @@ class AudioService {
     }
   }
 
+  private static WORLDLINE_BGM: Record<string, string> = {
+    steins_gate: '/audio/bgm/Amadeus.ogg',
+    beta: '/audio/bgm/Logical theme.ogg',
+  };
+
+  public playBGMForWorldline(worldline: 'steins_gate' | 'beta', volume?: number) {
+    const src = AudioService.WORLDLINE_BGM[worldline] || AudioService.WORLDLINE_BGM.steins_gate;
+    this.playBGM(src, volume);
+  }
+
   public playSFX(src: string, volume?: number) {
     if (!this.enableSFX) return;
     if (this.isMuted) return;

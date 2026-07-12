@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 
 export interface SettingsModalProps {
   isOpen: boolean;
@@ -12,6 +12,9 @@ export interface SettingsModalProps {
   bgmVolume: number;
   enableSfx: boolean;
   sfxVolume: number;
+  temperature: number;
+  model: 'deepseek-v4-flash' | 'deepseek-v4-pro';
+  reasoningEffort: 'high' | 'xhigh';
   onSaveSettings: (settings: {
     worldline: 'steins_gate' | 'beta';
     apiKey: string;
@@ -22,6 +25,9 @@ export interface SettingsModalProps {
     bgmVolume: number;
     enableSfx: boolean;
     sfxVolume: number;
+    temperature: number;
+    model: 'deepseek-v4-flash' | 'deepseek-v4-pro';
+    reasoningEffort: 'high' | 'xhigh';
   }) => void;
 }
 
@@ -37,6 +43,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   bgmVolume,
   enableSfx,
   sfxVolume,
+  temperature,
+  model,
+  reasoningEffort,
   onSaveSettings,
 }) => {
   const [activeTab, setActiveTab] = useState<'basic' | 'voice'>('basic');
@@ -45,6 +54,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [localSystemPrompt, setLocalSystemPrompt] = useState(systemPrompt);
   const [localEnableTts, setLocalEnableTts] = useState(enableTts);
   const [localSovitsUrl, setLocalSovitsUrl] = useState(sovitsUrl);
+  const [localTemperature, setLocalTemperature] = useState(temperature);
+  const [localModel, setLocalModel] = useState(model);
+  const [localReasoningIdx, setLocalReasoningIdx] = useState(
+    reasoningEffort === 'xhigh' ? 1 : 0
+  );
 
   useEffect(() => {
     if (isOpen) {
@@ -54,8 +68,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setLocalSystemPrompt(systemPrompt);
       setLocalEnableTts(enableTts);
       setLocalSovitsUrl(sovitsUrl);
+      setLocalTemperature(temperature);
+      setLocalModel(model);
+      setLocalReasoningIdx(reasoningEffort === 'xhigh' ? 1 : 0);
     }
-  }, [isOpen, worldline, apiKey, systemPrompt, enableTts, sovitsUrl]);
+  }, [isOpen, worldline, apiKey, systemPrompt, enableTts, sovitsUrl, temperature, model, reasoningEffort]);
 
   if (!isOpen) return null;
 
@@ -70,6 +87,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       bgmVolume: bgmVolume,
       enableSfx: enableSfx,
       sfxVolume: sfxVolume,
+      temperature: localTemperature,
+      model: localModel,
+      reasoningEffort: (['high', 'xhigh'] as const)[localReasoningIdx],
     });
     onClose();
   };
@@ -103,8 +123,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <input type="password" value={localApiKey} onChange={(e) => setLocalApiKey(e.target.value)} className="salieri-input" placeholder="sk-..." />
               </div>
               <div className="setting-field">
-                <label>Temperature</label>
-                <input type="number" min="0" max="2" step="0.1" value={0.8} readOnly className="salieri-input" />
+                <label>思维发散度</label>
+                <input type="range" min="0" max="2" step="0.1" value={localTemperature}
+                  onChange={(e) => setLocalTemperature(parseFloat(e.target.value))} className="salieri-input" />
+                <span style={{ color: '#8b3c00', fontSize: 12, marginLeft: 8 }}>{localTemperature.toFixed(1)}</span>
+              </div>
+              <div className="setting-field">
+                <label>模型</label>
+                <select value={localModel} onChange={(e) => setLocalModel(e.target.value as 'deepseek-v4-flash' | 'deepseek-v4-pro')} className="salieri-select">
+                  <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
+                  <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
+                </select>
+              </div>
+              <div className="setting-field">
+                <label>推理深度</label>
+                <input type="range" min={0} max={1} step={1} value={localReasoningIdx}
+                  onChange={(e) => setLocalReasoningIdx(parseInt(e.target.value))} className="salieri-input" />
+                <span style={{ color: '#8b3c00', fontSize: 12, marginLeft: 8 }}>{['高','极高'][localReasoningIdx]}</span>
               </div>
               <div className="setting-field">
                 <label>当前世界线</label>

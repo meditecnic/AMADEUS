@@ -1,8 +1,12 @@
-import os
+﻿import os
+import io
+import wave
+import struct
 import httpx
 import asyncio
 from app import config
 from pathlib import Path
+from typing import Dict, List, Optional, Callable
 
 class TTSServiceError(Exception):
     """Custom exception raised when TTS synthesis fails or times out."""
@@ -11,8 +15,9 @@ class TTSServiceError(Exception):
 def _build_emotion_ref_map():
     """Build 9-emotion reference audio map from config, validating file existence.
 
-    All reference clips are RMS-normalized (≈0.15, -16.5 dBFS) and peak-limited
-    (-1 dBFS) for consistent TTS output across emotions.
+    Reference clips are RMS-normalized (≈0.15, -16.5 dBFS) and peak-limited
+    (-1 dBFS) for consistent TTS output, except the embarrassed clip which uses
+    the original unprocessed recording for natural synthesis of short utterances.
     """
     entries = [
         ("neutral", config.REF_AUDIO_NEUTRAL, "あなたに会いに来たの、岡部倫太郎さん。あ、じゃなくて…"),
@@ -41,15 +46,63 @@ def _build_emotion_ref_map():
 EMOTION_REF_MAP = _build_emotion_ref_map()
 
 
+def _peak_limit_wav(audio_bytes: bytes, threshold: int = 32000, target_peak: int = 30000) -> bytes:
+    """对 16-bit PCM WAV 做下行 peak-limit：仅当 peak > threshold 时衰减到 target_peak，不放大。"""
+    try:
+        with wave.open(io.BytesIO(audio_bytes), 'rb') as wf:
+            nch = wf.getnchannels()
+            sw = wf.getsampwidth()
+            fr = wf.getframerate()
+            n = wf.getnframes()
+            raw = wf.readframes(n)
+        if sw != 2:
+            return audio_bytes
+        samples = struct.unpack('<' + 'h' * n, raw)
+        peak = 0
+        for s in samples:
+            a = s if s >= 0 else -s
+            if a > peak:
+                peak = a
+        if peak <= threshold:
+            return audio_bytes
+        scale = target_peak / peak
+        out = []
+        for s in samples:
+            v = int(round(s * scale))
+            if v > 32767:
+                v = 32767
+            elif v < -32768:
+                v = -32768
+            out.append(v)
+        new_raw = struct.pack('<' + 'h' * n, *out)
+        buf = io.BytesIO()
+        with wave.open(buf, 'wb') as wf:
+            wf.setnchannels(nch)
+            wf.setsampwidth(sw)
+            wf.setframerate(fr)
+            wf.writeframes(new_raw)
+        return buf.getvalue()
+    except Exception as e:
+        print(f"[TTS peak-limit] skipped: {e}", flush=True)
+        return audio_bytes
+
+
 class TTSQueueManager:
     def __init__(self):
         self.sovits_url = config.SOVITS_URL
         self.timeout = config.TTS_TIMEOUT
-        self.semaphore = asyncio.Semaphore(1)  # Concurrency limit for GPU API
+        self.semaphore = asyncio.Semaphore(3)  # 并行度提升到 3（GPU 显存允许范围内）
         self.client = None                     # Async client managed by lifespan
         self.is_online = True                  # Kept for backward compatibility
 
         self.emotion_ref_map = EMOTION_REF_MAP
+
+        # OLV 风格序号缓冲：并行合成、有序投递、失败静默兜底（按 session 隔离）
+        self._payload_queue: Dict[str, dict] = {}
+        self._pending_tasks: Dict[str, List[asyncio.Task]] = {}
+        self._send_callback: Dict[str, Optional[Callable]] = {}
+        self._next_send_seq: Dict[str, int] = {}
+        self._sequence_counter: Dict[str, int] = {}
 
     async def init_client(self):
         """Initialize the HTTPX AsyncClient if it's closed or not created yet."""
@@ -73,10 +126,8 @@ class TTSQueueManager:
             "prompt_text": ref_config["prompt_text"],
             "prompt_lang": "ja",
             "media_type": "wav",
-            "top_k": 5,
-            "top_p": 0.8,
-            "temperature": 0.4,
-            "speed": 1.0,
+            "text_split_method": "cut5",
+            "batch_size": "1",
         }
 
         base_url = sovits_url or self.sovits_url or "http://localhost:9880"
@@ -113,6 +164,9 @@ class TTSQueueManager:
 
     async def synthesize_async(self, text: str, emotion_tag: str, sovits_url: str = None) -> bytes:
         """
+        [DEPRECATED] 保留作为备用接口。
+        新调用点请使用 synthesize_and_queue（并行合成 + 有序投递 + 静默兜底）。
+
         Synthesizes speech asynchronously using a semaphore to limit concurrency.
         Raises TTSServiceError on failure.
         """
@@ -138,6 +192,88 @@ class TTSQueueManager:
             except Exception as e:
                 print(f"[TTS Error] Synthesis failed: {e}")
                 raise TTSServiceError(f"TTS synthesis failed: {e}")
+
+    # ------------------------------------------------------------------
+    # OLV 风格序号缓冲队列：并行合成、有序投递、失败静默兜底
+    # ------------------------------------------------------------------
+    def reset_sequence(self, session_id: str, send_callback):
+        """每轮对话开始时调用，重置序号并注入发送回调。传入 None 可清空缓冲。"""
+        self._sequence_counter[session_id] = 0
+        self._next_send_seq[session_id] = 0
+        self._payload_queue[session_id] = {}
+        self._send_callback[session_id] = send_callback
+
+    def cancel_pending(self, session_id: str):
+        """取消所有在途合成任务（用于中断）。"""
+        tasks = self._pending_tasks.pop(session_id, [])
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        self._payload_queue.pop(session_id, None)
+        self._next_send_seq.pop(session_id, None)
+        self._sequence_counter.pop(session_id, None)
+        self._send_callback.pop(session_id, None)
+
+    async def gather_pending(self, session_id: str):
+        """等待指定 session 的所有在途合成任务完成。"""
+        tasks = self._pending_tasks.get(session_id, [])
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _next_seq(self, session_id: str) -> int:
+        seq = self._sequence_counter.get(session_id, 0)
+        self._sequence_counter[session_id] = seq + 1
+        return seq
+
+    async def queue_silent(self, session_id: str, text: str, emotion: str, reason: str) -> int:
+        """提交一个静默占位（action_only / user_disabled），通过同一有序缓冲投递，保证顺序。"""
+        seq = self._next_seq(session_id)
+        await self._ordered_dispatch(session_id, seq, {"audio": None, "error": reason, "text": text, "emotion": emotion})
+        return seq
+
+    async def _ordered_dispatch(self, session_id: str, seq: int, payload):
+        """将完成的结果放入缓冲，按序号顺序通过 callback 发送。"""
+        if session_id not in self._payload_queue:
+            self._payload_queue[session_id] = {}
+        self._payload_queue[session_id][seq] = payload
+        cb = self._send_callback.get(session_id)
+        while self._next_send_seq.get(session_id, 0) in self._payload_queue.get(session_id, {}):
+            item = self._payload_queue[session_id].pop(self._next_send_seq[session_id])
+            if cb is not None:
+                try:
+                    await cb(self._next_send_seq[session_id], item)
+                except Exception as e:
+                    print(f"[TTS Dispatch] callback error seq={self._next_send_seq[session_id]}: {e}", flush=True)
+            self._next_send_seq[session_id] = self._next_send_seq.get(session_id, 0) + 1
+
+    async def synthesize_and_queue(self, session_id: str, text: str, emotion_tag: str, sovits_url: str = None) -> int:
+        """提交合成任务，立即返回序号。完成后自动有序投递。失败时投递 silent payload。"""
+        seq = self._next_seq(session_id)
+        task = asyncio.create_task(self._synthesize_worker(session_id, seq, text, emotion_tag, sovits_url))
+        self._pending_tasks.setdefault(session_id, []).append(task)
+        task.add_done_callback(lambda t: self._pending_tasks.get(session_id, []).remove(t) if t in self._pending_tasks.get(session_id, []) else None)
+        return seq
+
+    async def _synthesize_worker(self, session_id: str, seq: int, text: str, emotion_tag: str, sovits_url: str = None):
+        ref_config = self.emotion_ref_map.get(emotion_tag)
+        if ref_config is None:
+            await self._ordered_dispatch(session_id, seq, {"audio": None, "error": f"no_ref:{emotion_tag}", "text": text, "emotion": emotion_tag})
+            return
+        await self.init_client()
+        try:
+            async with self.semaphore:
+                audio_bytes = await asyncio.wait_for(
+                    self._async_tts_call(text, ref_config, sovits_url=sovits_url),
+                    timeout=self.timeout
+                )
+            audio_bytes = _peak_limit_wav(audio_bytes)
+            await self._ordered_dispatch(session_id, seq, {"audio": audio_bytes, "error": None, "text": text, "emotion": emotion_tag})
+        except asyncio.CancelledError:
+            await self._ordered_dispatch(session_id, seq, {"audio": None, "error": "cancelled", "text": text, "emotion": emotion_tag})
+            raise
+        except Exception as e:
+            print(f"[TTS Error] seq={seq} failed: {e}", flush=True)
+            await self._ordered_dispatch(session_id, seq, {"audio": None, "error": str(e), "text": text, "emotion": emotion_tag})
 
 # Singleton manager
 tts_manager = TTSQueueManager()

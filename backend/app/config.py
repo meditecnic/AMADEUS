@@ -1,4 +1,4 @@
-import os
+﻿import os
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -9,7 +9,7 @@ load_dotenv(dotenv_path=env_path)
 
 # Load variables
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
 SOVITS_URL = os.getenv("SOVITS_URL", "http://127.0.0.1:9880").rstrip("/")
 FRONTEND_PORT = int(os.getenv("FRONTEND_PORT", "5173"))
 BACKEND_PORT = int(os.getenv("BACKEND_PORT", "8000"))

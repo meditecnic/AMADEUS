@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+﻿import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAmadeusWS } from '../hooks/useAmadeusWS';
 import { StatusBar } from './StatusBar';
 import { SettingsModal } from './SettingsModal';
 import { SoundPanel } from './SoundPanel';
 import { HistoryPanel } from './HistoryPanel';
+import { TtsDebugPanel } from './TtsDebugPanel';
 import AvatarViewer from './AvatarViewer';
 import SpriteAnimator from './SpriteAnimator';
 import { HudBadge } from './HudBadge';
@@ -46,9 +47,20 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [sfxVolume, setSfxVolume] = useState(() => {
     try { const v = localStorage.getItem('amadeus_pc_sfx_volume'); return v ? parseFloat(v) : 1.0; } catch { return 1.0; }
   });
+  const [temperature, setTemperature] = useState(() => {
+    try { const v = localStorage.getItem('amadeus_pc_temperature'); return v ? parseFloat(v) : 0.8; } catch { return 0.8; }
+  });
+  const [model, setModel] = useState<'deepseek-v4-flash' | 'deepseek-v4-pro'>(() =>
+    (localStorage.getItem('amadeus_pc_model') as any) || 'deepseek-v4-flash');
+  const [reasoningEffort, setReasoningEffort] = useState<'high' | 'xhigh'>(() =>
+    (localStorage.getItem('amadeus_pc_reasoning_effort') as any) || 'high');
   const [audioError, setAudioError] = useState<string | null>(null);
   const [isSoundOpen, setIsSoundOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+
+  const TTS_DEBUG_ENABLED = (() => {
+    try { return localStorage.getItem('amadeus_pc_debug_tts') === 'true'; } catch { return false; }
+  })();
 
   // Sync AudioService with state
   useEffect(() => {
@@ -58,13 +70,13 @@ export const Workstation: React.FC<WorkstationProps> = ({
     audioService.setSFXVolume(sfxVolume);
   }, [enableBgm, bgmVolume, enableSfx, sfxVolume]);
 
-  // Start BGM on mount
+  // Start BGM on mount, switch on worldline change
   useEffect(() => {
-    audioService.playBGM('/audio/bgm/Amadeus.ogg', bgmVolume);
+    audioService.playBGMForWorldline(worldline, bgmVolume);
     return () => {
       audioService.stopBGM();
     };
-  }, []);
+  }, [worldline]);
 
   // Auto-clear audio error after 5s
   useEffect(() => {
@@ -84,14 +96,18 @@ export const Workstation: React.FC<WorkstationProps> = ({
     activeNotice,
     emotion,
     sendChat,
+    sendDebugTts,
     updateConfig,
+    wsRef,
   } = useAmadeusWS({
     apiKey,
     systemPrompt,
-    temperature: 0.8,
+    temperature,
     worldline,
     enableTts,
     sovitsUrl,
+    model,
+    reasoningEffort,
     onAudioChunk: (_sentenceId, base64Data) => {
       audioPlayer.playBase64(base64Data);
     },
@@ -150,6 +166,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
     bgmVolume: number;
     enableSfx: boolean;
     sfxVolume: number;
+    temperature: number;
+    model: 'deepseek-v4-flash' | 'deepseek-v4-pro';
+    reasoningEffort: 'high' | 'xhigh';
   }) => {
     // 1. Sync React parent state if worldline changed
     if (newSettings.worldline !== worldline) {
@@ -165,6 +184,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
     setBgmVolume(newSettings.bgmVolume);
     setEnableSfx(newSettings.enableSfx);
     setSfxVolume(newSettings.sfxVolume);
+    setTemperature(newSettings.temperature);
+    setModel(newSettings.model);
+    setReasoningEffort(newSettings.reasoningEffort);
 
     try {
       localStorage.setItem('amadeus_pc_api_key', newSettings.apiKey);
@@ -172,6 +194,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
       localStorage.setItem('amadeus_pc_bgm_volume', String(newSettings.bgmVolume));
       localStorage.setItem('amadeus_pc_enable_sfx', String(newSettings.enableSfx));
       localStorage.setItem('amadeus_pc_sfx_volume', String(newSettings.sfxVolume));
+      localStorage.setItem('amadeus_pc_temperature', String(newSettings.temperature));
+      localStorage.setItem('amadeus_pc_model', newSettings.model);
+      localStorage.setItem('amadeus_pc_reasoning_effort', newSettings.reasoningEffort);
     } catch (e) {
       console.warn('LocalStorage save failed:', e);
     }
@@ -183,7 +208,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
       worldline: newSettings.worldline,
       enableTts: newSettings.enableTts,
       sovitsUrl: newSettings.sovitsUrl,
-      temperature: 0.8,
+      temperature: newSettings.temperature,
+      model: newSettings.model,
+      reasoningEffort: newSettings.reasoningEffort,
     });
   };
 
@@ -346,6 +373,19 @@ export const Workstation: React.FC<WorkstationProps> = ({
             {isPlaying && (
               <span className="tts-waiting-hint">正在播放语音…</span>
             )}
+            {isPlaying && (
+              <button
+                type="button"
+                className="interrupt-btn"
+                onClick={() => {
+                  audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume);
+                  wsRef.current?.send(JSON.stringify({ type: 'interrupt-signal' }));
+                }}
+                title="中断当前语音"
+              >
+                中断
+              </button>
+            )}
             <button
               type="submit"
               className="chat-send-btn"
@@ -354,6 +394,34 @@ export const Workstation: React.FC<WorkstationProps> = ({
               发送
             </button>
           </form>
+          <div className="model-bottom-bar" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '6px 16px', borderTop: '1px solid #2a1500', background: '#0a0806' }}>
+            <select
+              value={model}
+              onChange={(e) => {
+                const v = e.target.value as 'deepseek-v4-flash' | 'deepseek-v4-pro';
+                setModel(v);
+                localStorage.setItem('amadeus_pc_model', v);
+                updateConfig({ model: v });
+              }}
+              style={{ background: '#0c0806', color: '#ff6c00', border: '1px solid #5a2500', padding: '4px 8px', fontSize: 12, fontFamily: 'Share Tech Mono, monospace' }}
+            >
+              <option value="deepseek-v4-flash">V4 Flash</option>
+              <option value="deepseek-v4-pro">V4 Pro</option>
+            </select>
+            <span style={{ color: '#5a2500', fontSize: 11, fontFamily: 'Share Tech Mono, monospace' }}>推理深度</span>
+            <input
+              type="range" min={0} max={1} step={1}
+              value={reasoningEffort === 'xhigh' ? 1 : 0}
+              onChange={(e) => {
+                const v = e.target.value === '1' ? 'xhigh' : 'high';
+                setReasoningEffort(v);
+                localStorage.setItem('amadeus_pc_reasoning_effort', v);
+                updateConfig({ reasoningEffort: v });
+              }}
+              style={{ width: 60, accentColor: '#ff6c00' }}
+            />
+            <span style={{ color: '#8b3c00', fontSize: 11, fontFamily: 'Share Tech Mono, monospace' }}>{reasoningEffort === 'xhigh' ? '极高' : '高'}</span>
+          </div>
         </div>
 
         {/* Right: Avatar Viewer Panel */}
@@ -418,6 +486,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
         bgmVolume={bgmVolume}
         enableSfx={enableSfx}
         sfxVolume={sfxVolume}
+        temperature={temperature}
+        model={model}
+        reasoningEffort={reasoningEffort}
         onSaveSettings={handleSaveSettings}
       />
 
@@ -441,6 +512,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
         onClose={() => setIsHistoryOpen(false)}
         messages={messages}
       />
+
+      {TTS_DEBUG_ENABLED && (
+        <TtsDebugPanel
+          sendDebugTts={sendDebugTts}
+          isSynthesizing={isSynthesizing}
+          isPlaying={isPlaying}
+        />
+      )}
     </div>
   );
 };

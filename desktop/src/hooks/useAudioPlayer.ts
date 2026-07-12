@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 class AudioPlayerManager {
   public ctx: AudioContext | null = null;
@@ -9,6 +9,7 @@ class AudioPlayerManager {
   private isPlaying = false;
   private onVolumeCallback: ((vol: number) => void) | null = null;
   private onPlayStateChange: ((isPlaying: boolean) => void) | null = null;
+  private onDecodeError: ((err: any) => void) | null = null;
   private animFrameId: number | null = null;
   private currentPlayId = 0;
   private isMuted = false;
@@ -55,6 +56,10 @@ class AudioPlayerManager {
     this.onPlayStateChange = cb;
   }
 
+  setDecodeErrorListener(cb: (err: any) => void) {
+    this.onDecodeError = cb;
+  }
+
   async playBase64(base64Data: string, onEnded?: () => void) {
     this.init();
     if (!this.ctx || !this.analyser) return;
@@ -84,6 +89,7 @@ class AudioPlayerManager {
       }
     } catch (err) {
       console.error('Audio decode failed:', err);
+      if (this.onDecodeError) this.onDecodeError(err);
     }
   }
 
@@ -173,23 +179,33 @@ export const audioPlayer = new AudioPlayerManager();
 export const useAudioPlayer = () => {
   const [currentVolume, setCurrentVolume] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [decodeErrors, setDecodeErrors] = useState(0);
+  const lastVolumeUpdateRef = useRef(0);
 
   useEffect(() => {
     audioPlayer.setVolumeListener((vol) => {
+      const now = Date.now();
+      if (now - lastVolumeUpdateRef.current < 100) return;
+      lastVolumeUpdateRef.current = now;
       setCurrentVolume(vol);
     });
     audioPlayer.setPlayStateListener((playing) => {
       setIsPlaying(playing);
     });
+    audioPlayer.setDecodeErrorListener((_err) => {
+      setDecodeErrors((n) => n + 1);
+    });
     return () => {
       audioPlayer.setVolumeListener(() => {});
       audioPlayer.setPlayStateListener(() => {});
+      audioPlayer.setDecodeErrorListener(() => {});
     };
   }, []);
 
   return {
     currentVolume,
     isPlaying,
+    decodeErrors,
     playAudio: (base64: string, onEnded?: () => void) => audioPlayer.playBase64(base64, onEnded),
     stopAudio: () => audioPlayer.stopAll(),
     initContext: () => audioPlayer.init(),

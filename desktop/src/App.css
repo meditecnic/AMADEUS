@@ -549,6 +549,10 @@ body {
   animation: avatar-glow-pulse 3s ease-in-out infinite;
 }
 
+.avatar-glow-ring.paused {
+  animation-play-state: paused;
+}
+
 @keyframes avatar-glow-pulse {
   0%, 100% { opacity: 0.6; transform: scale(1); }
   50% { opacity: 1; transform: scale(1.05); }

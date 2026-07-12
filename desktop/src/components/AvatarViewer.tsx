@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 
 const EMOTION_MAP: Record<string, { base: string; blink: string }> = {
   neutral: {
@@ -55,7 +55,20 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
   glitchState
 }) => {
   const [isBlinking, setIsBlinking] = useState(false);
+  const img1Ref = useRef<HTMLImageElement>(null);
+  const img2Ref = useRef<HTMLImageElement>(null);
+  const img3Ref = useRef<HTMLImageElement>(null);
+  const imgBlinkRef = useRef<HTMLImageElement>(null);
   const config = EMOTION_MAP[emotion] || EMOTION_MAP.neutral;
+
+  const isSpeakingRef = useRef(isSpeaking);
+  const isBlinkingRef = useRef(isBlinking);
+  const volumeRef = useRef(volume);
+  useEffect(() => {
+    isSpeakingRef.current = isSpeaking;
+    isBlinkingRef.current = isBlinking;
+    volumeRef.current = volume;
+  }, [isSpeaking, isBlinking, volume]);
 
   useEffect(() => {
     let blinkTimer: number | null = null;
@@ -88,29 +101,39 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
     };
   }, [isSpeaking]);
 
-  let mouthLevel = 1;
-  if (isSpeaking && volume > 0.05) {
-    if (volume > 0.25) {
-      mouthLevel = 3;
-    } else {
-      mouthLevel = 2;
-    }
-  }
-
   let glitchClass = '';
   if (glitchState === 'heavy') glitchClass = 'glitch-heavy';
   else if (glitchState === 'light') glitchClass = 'glitch-light';
-
-  const showBlink = isBlinking && !isSpeaking;
-  const opacity1 = (!showBlink && mouthLevel === 1) ? 1 : 0;
-  const opacity2 = (!showBlink && mouthLevel === 2) ? 1 : 0;
-  const opacity3 = (!showBlink && mouthLevel === 3) ? 1 : 0;
-  const opacityBlink = showBlink ? 1 : 0;
 
   const img1 = `${config.base}1.png`;
   const img2 = `${config.base}2.png`;
   const img3 = `${config.base}3.png`;
   const imgBlink = config.blink;
+
+  useLayoutEffect(() => {
+    let rafId: number | null = null;
+    const apply = () => {
+      const speaking = isSpeakingRef.current;
+      const vol = volumeRef.current;
+      const blinking = isBlinkingRef.current;
+      let mouthLevel = 1;
+      if (speaking && vol > 0.05) {
+        mouthLevel = vol > 0.25 ? 3 : 2;
+      }
+      const showBlink = blinking && !speaking;
+      const o1 = (!showBlink && mouthLevel === 1) ? 1 : 0;
+      const o2 = (!showBlink && mouthLevel === 2) ? 1 : 0;
+      const o3 = (!showBlink && mouthLevel === 3) ? 1 : 0;
+      const oBlink = showBlink ? 1 : 0;
+      if (img1Ref.current) img1Ref.current.style.opacity = String(o1);
+      if (img2Ref.current) img2Ref.current.style.opacity = String(o2);
+      if (img3Ref.current) img3Ref.current.style.opacity = String(o3);
+      if (imgBlinkRef.current) imgBlinkRef.current.style.opacity = String(oBlink);
+      rafId = requestAnimationFrame(apply);
+    };
+    rafId = requestAnimationFrame(apply);
+    return () => { if (rafId) cancelAnimationFrame(rafId); };
+  }, []);
 
   return (
     <div
@@ -126,7 +149,7 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
       }}
     >
       <div
-        className="avatar-glow-ring"
+        className={`avatar-glow-ring${isSpeaking ? ' paused' : ''}`}
         style={{
           width: '280px',
           height: '280px',
@@ -143,7 +166,7 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
           src={img1}
           alt="Kurisu Calm"
           className="avatar-sprite-layer"
-          style={{ opacity: opacity1, transition: 'opacity 120ms ease-in-out' }}
+          ref={img1Ref}
           onError={(e) => {
             e.currentTarget.src = '/assets/images/kurisu_normal1.png';
           }}
@@ -153,7 +176,7 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
           src={img2}
           alt="Kurisu Talking Half"
           className="avatar-sprite-layer"
-          style={{ opacity: opacity2, transition: 'opacity 120ms ease-in-out' }}
+          ref={img2Ref}
           onError={(e) => {
             e.currentTarget.src = '/assets/images/kurisu_normal2.png';
           }}
@@ -163,7 +186,7 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
           src={img3}
           alt="Kurisu Talking Open"
           className="avatar-sprite-layer"
-          style={{ opacity: opacity3, transition: 'opacity 120ms ease-in-out' }}
+          ref={img3Ref}
           onError={(e) => {
             e.currentTarget.src = '/assets/images/kurisu_normal3.png';
           }}
@@ -173,7 +196,7 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
           src={imgBlink}
           alt="Kurisu Blink"
           className="avatar-sprite-layer"
-          style={{ opacity: opacityBlink, transition: 'opacity 120ms ease-in-out' }}
+          ref={imgBlinkRef}
           onError={(e) => {
             e.currentTarget.src = '/assets/images/kurisu_eyes_closed1.png';
           }}
@@ -183,4 +206,4 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
   );
 };
 
-export default AvatarViewer;
+export default React.memo(AvatarViewer);

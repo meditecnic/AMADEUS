@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+﻿import { useState, useEffect, useRef, useCallback } from 'react';
 
 export interface UseAmadeusWSParams {
   apiKey: string;
@@ -7,6 +7,8 @@ export interface UseAmadeusWSParams {
   worldline: 'steins_gate' | 'beta';
   enableTts: boolean;
   sovitsUrl: string;
+  model: 'deepseek-v4-flash' | 'deepseek-v4-pro';
+  reasoningEffort: 'high' | 'xhigh';
   onAudioChunk?: (sentenceId: number, base64Data: string) => void;
   onAudioDegraded?: (reason: string) => void;
 }
@@ -31,6 +33,7 @@ export interface UseAmadeusWSReturn {
   emotion: 'neutral' | 'tsundere' | 'embarrassed' | 'intellectual' | 'happy' | 'surprised' | 'annoyed' | 'disappointed' | 'sad';
   clearHistory: () => void;
   sendChat: (content: string) => void;
+  sendDebugTts: (emotion: string, text: string) => void;
   updateConfig: (patch: Partial<Omit<UseAmadeusWSParams, 'onAudioChunk'>>) => void;
   wsRef: React.MutableRefObject<WebSocket | null>;
 }
@@ -160,7 +163,10 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
         system_prompt: paramsRef.current.systemPrompt,
         enable_tts: paramsRef.current.enableTts,
         temperature: paramsRef.current.temperature,
-        worldline: paramsRef.current.worldline
+        worldline: paramsRef.current.worldline,
+        model: paramsRef.current.model,
+        reasoning_effort: paramsRef.current.reasoningEffort,
+        client: 'desktop',
       };
       ws.send(JSON.stringify(authFrame));
       startHeartbeat();
@@ -353,6 +359,8 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     if (patch.enableTts !== undefined) mappedPatch.enable_tts = patch.enableTts;
     if (patch.sovitsUrl !== undefined) mappedPatch.sovits_url = patch.sovitsUrl;
     if (patch.apiKey !== undefined) mappedPatch.api_key = patch.apiKey;
+    if (patch.model !== undefined) mappedPatch.model = patch.model;
+    if (patch.reasoningEffort !== undefined) mappedPatch.reasoning_effort = patch.reasoningEffort;
 
     // Send config_update frame
     const configUpdateFrame = {
@@ -360,6 +368,11 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       ...mappedPatch
     };
     wsRef.current.send(JSON.stringify(configUpdateFrame));
+  }, []);
+
+  const sendDebugTts = useCallback((emotion: string, text: string) => {
+    if (!text.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({ type: 'tts_debug', emotion, content: text.trim() }));
   }, []);
 
   const clearHistory = useCallback(() => {
@@ -386,6 +399,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     emotion,
     clearHistory,
     sendChat,
+    sendDebugTts,
     updateConfig,
     wsRef
   };

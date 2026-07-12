@@ -1,4 +1,4 @@
-import re
+﻿import re
 import base64
 import asyncio
 import starlette
@@ -26,6 +26,8 @@ class SessionState:
         self.compressing = False
         
         self.temperature = 0.8
+        self.model = config.DEEPSEEK_MODEL
+        self.reasoning_effort = None
         self.system_prompt = None
         self.api_key = None
         self.sovits_url = None
@@ -207,7 +209,9 @@ async def get_clean_text_stream(
             system_prompt=eff_system_prompt,
             temperature=session.temperature,
             tools=tools,
-            tool_choice=tool_choice
+            tool_choice=tool_choice,
+            model=session.model,
+            reasoning_effort=session.reasoning_effort
         )
         
         try:
@@ -281,8 +285,7 @@ async def get_clean_text_stream(
             if attempt < MAX_ATTEMPTS - 1:
                 continue
             return "はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。", "tsundere", {}, False
-            
-            print(f"[DEBUG] get_clean_text_stream returning: emotion='{last_emotion}' emo_tag_found={emo_tag_found} text_len={len(text_buffer)}", flush=True)
+        print(f"[DEBUG] get_clean_text_stream returning: emotion='{last_emotion}' emo_tag_found={emo_tag_found} text_len={len(text_buffer)}", flush=True)
         return text_buffer, last_emotion, merged_tool_calls, emo_tag_found
 
 def should_force_search(user_msg: str) -> bool:
@@ -315,146 +318,6 @@ async def processor_loop(
     active_history = session.history
     memory_summary = session.memory_summary
     
-    sentence_queue = asyncio.Queue()
-    sentence_id_counter = 0
-    full_ja_text_parts = []
-    speaking_status_sent = False
-    
-    tts_tasks = []
-    
-    async def sender_task():
-        nonlocal speaking_status_sent
-        while True:
-            item = await sentence_queue.get()
-            if item is None:
-                sentence_queue.task_done()
-                break
-                
-            if isinstance(item, Exception):
-                raise item
-                
-            sentence_id = item["sentence_id"]
-            text = item["text"]
-            emotion = item["emotion"]
-            print(f"[DEBUG] sender_task processing sentence {sentence_id}: emotion='{emotion}' text_preview='{text[:50]}' client_type='{session.client_type}'", flush=True)
-            tts_task = item["tts_task"]
-            is_action_only = item.get("is_action_only", False)
-            
-            if is_action_only:
-                await send_queue.put((epoch, {
-                    "type": "text_chunk",
-                    "sentence_id": sentence_id,
-                    "content": text,
-                    "emotion": emotion,
-                    "audio_degraded": True,
-                    "degraded_reason": "action_only"
-                }))
-                if not speaking_status_sent:
-                    await send_queue.put((epoch, {
-                        "type": "status",
-                        "dsk": "speaking",
-                        "state": "speaking"
-                    }))
-                    speaking_status_sent = True
-                sentence_queue.task_done()
-                continue
-            
-            if not session.enable_tts:
-                if tts_task and not tts_task.done():
-                    tts_task.cancel()
-                
-                await send_queue.put((epoch, {
-                    "type": "text_chunk",
-                    "sentence_id": sentence_id,
-                    "content": text,
-                    "emotion": emotion,
-                    "audio_degraded": True,
-                    "degraded_reason": "user_disabled"
-                }))
-                if not speaking_status_sent:
-                    await send_queue.put((epoch, {
-                        "type": "status",
-                        "dsk": "speaking",
-                        "state": "speaking"
-                    }))
-                    speaking_status_sent = True
-                sentence_queue.task_done()
-                continue
-            
-            try:
-                audio_bytes = await tts_task if tts_task else None
-                if audio_bytes is None:
-                    raise TTSServiceError("TTS synthesis returned None or was skipped")
-            except Exception as e:
-                if not isinstance(e, TTSServiceError) and not isinstance(e, asyncio.CancelledError):
-                    e = TTSServiceError(str(e))
-                if isinstance(e, asyncio.CancelledError):
-                    if tts_task:
-                        tts_task.cancel()
-                    raise
-                
-                reason = "user_disabled" if not session.enable_tts else "service_error"
-                await send_queue.put((epoch, {
-                    "type": "text_chunk",
-                    "sentence_id": sentence_id,
-                    "content": text,
-                    "emotion": emotion,
-                    "audio_degraded": True,
-                    "degraded_reason": reason
-                }))
-                if not speaking_status_sent:
-                    await send_queue.put((epoch, {
-                        "type": "status",
-                        "dsk": "speaking",
-                        "state": "speaking"
-                    }))
-                    speaking_status_sent = True
-                sentence_queue.task_done()
-                continue
-            
-            if not session.enable_tts:
-                await send_queue.put((epoch, {
-                    "type": "text_chunk",
-                    "sentence_id": sentence_id,
-                    "content": text,
-                    "emotion": emotion,
-                    "audio_degraded": True,
-                    "degraded_reason": "user_disabled"
-                }))
-                if not speaking_status_sent:
-                    await send_queue.put((epoch, {
-                        "type": "status",
-                        "dsk": "speaking",
-                        "state": "speaking"
-                    }))
-                    speaking_status_sent = True
-                sentence_queue.task_done()
-                continue
-            
-            audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
-            
-            await send_queue.put((epoch, {
-                "type": "text_chunk",
-                "sentence_id": sentence_id,
-                "content": text,
-                "emotion": emotion
-            }))
-            
-            if not speaking_status_sent:
-                await send_queue.put((epoch, {
-                    "type": "status",
-                    "dsk": "speaking",
-                    "state": "speaking"
-                }))
-                speaking_status_sent = True
-
-            await send_queue.put((epoch, {
-                "type": "audio_chunk",
-                "sentence_id": sentence_id,
-                "data": audio_base64
-            }))
-            sentence_queue.task_done()
-
     try:
         await send_queue.put((epoch, {
             "type": "status",
@@ -465,125 +328,79 @@ async def processor_loop(
         
         await models.save_message(session.session_id, "user", user_msg)
         
-        t2 = asyncio.create_task(sender_task())
+        from app.agent_tools import AMADEUS_TOOLS
+        tools_to_use = None
+        tool_choice_to_use = None
+        if session.client_type == "desktop":
+            tools_to_use = AMADEUS_TOOLS
+            tool_choice_to_use = "auto"
+            if should_force_search(user_msg):
+                tool_choice_to_use = {"type": "function", "function": {"name": "web_search"}}
         
-        try:
-            from app.agent_tools import AMADEUS_TOOLS
-            tools_to_use = None
-            tool_choice_to_use = None
-            if session.client_type == "desktop":
-                tools_to_use = AMADEUS_TOOLS
-                tool_choice_to_use = "auto"
-                if should_force_search(user_msg):
-                    tool_choice_to_use = {"type": "function", "function": {"name": "web_search"}}
+        final_text, final_emotion, merged_tool_calls, emo_tag_found = await get_clean_text_stream(
+            active_history=active_history,
+            memory_summary=memory_summary,
+            session=session,
+            tools=tools_to_use,
+            tool_choice=tool_choice_to_use,
+            default_emotion=session.last_assistant_emotion
+        )
+        print(f"[DEBUG] processor_loop: final_emotion='{final_emotion}' has_tool_call={bool(merged_tool_calls)} emo_tag_found={emo_tag_found}", flush=True)
+        
+        if merged_tool_calls:
+            await send_queue.put((epoch, {
+                "type": "status",
+                "dsk": "thinking",
+                "state": "thinking",
+                "tts": "idle",
+                "notice": "Amadeus web_search tool invoking...",
+                "tool": "web_search"
+            }))
             
-            final_text, final_emotion, merged_tool_calls, emo_tag_found = await get_clean_text_stream(
-                active_history=active_history,
+            tool_responses = []
+            for tc in merged_tool_calls.values():
+                name = tc.get("function", {}).get("name")
+                args = tc.get("function", {}).get("arguments")
+                result = await execute_tool_call(name, args)
+                tool_responses.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id"),
+                    "name": name,
+                    "content": result
+                })
+                
+            assistant_tool_call_msg = {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": list(merged_tool_calls.values())
+            }
+            
+            tool_context = list(active_history) + [assistant_tool_call_msg] + tool_responses
+            
+            final_text, final_emotion, _, emo_tag_found = await get_clean_text_stream(
+                active_history=tool_context,
                 memory_summary=memory_summary,
                 session=session,
-                tools=tools_to_use,
-                tool_choice=tool_choice_to_use,
+                tools=AMADEUS_TOOLS,
+                tool_choice="none",
                 default_emotion=session.last_assistant_emotion
             )
-            print(f"[DEBUG] processor_loop: final_emotion='{final_emotion}' has_tool_call={bool(merged_tool_calls)} emo_tag_found={emo_tag_found}", flush=True)
             
-            if merged_tool_calls:
-                await send_queue.put((epoch, {
-                    "type": "status",
-                    "dsk": "thinking",
-                    "state": "thinking",
-                    "tts": "idle",
-                    "notice": "Amadeus web_search tool invoking...",
-                    "tool": "web_search"
-                }))
-                
-                tool_responses = []
-                for tc in merged_tool_calls.values():
-                    name = tc.get("function", {}).get("name")
-                    args = tc.get("function", {}).get("arguments")
-                    result = await execute_tool_call(name, args)
-                    tool_responses.append({
-                        "role": "tool",
-                        "tool_call_id": tc.get("id"),
-                        "name": name,
-                        "content": result
-                    })
-                    
-                assistant_tool_call_msg = {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": list(merged_tool_calls.values())
-                }
-                
-                tool_context = list(active_history) + [assistant_tool_call_msg] + tool_responses
-                
-                final_text, final_emotion, _, emo_tag_found = await get_clean_text_stream(
-                    active_history=tool_context,
-                    memory_summary=memory_summary,
-                    session=session,
-                    tools=AMADEUS_TOOLS,
-                    tool_choice="none",
-                    default_emotion=session.last_assistant_emotion
-                )
-                
-            # Persist detected emotion for next turn fallback, with decay to neutral
-            # if the model forgets the EMO tag for multiple consecutive turns.
-            allowed = get_session_allowed_emotions(session)
-            if emo_tag_found:
-                session.consecutive_no_emo_tags = 0
-                if final_emotion in allowed:
-                    session.last_assistant_emotion = final_emotion
-            else:
-                session.consecutive_no_emo_tags += 1
-                if session.consecutive_no_emo_tags >= 2:
-                    session.last_assistant_emotion = "neutral"
-                elif final_emotion in allowed:
-                    session.last_assistant_emotion = final_emotion
+        # Persist detected emotion for next turn fallback, with decay to neutral
+        # if the model forgets the EMO tag for multiple consecutive turns.
+        allowed = get_session_allowed_emotions(session)
+        if emo_tag_found:
+            session.consecutive_no_emo_tags = 0
+            if final_emotion in allowed:
+                session.last_assistant_emotion = final_emotion
+        else:
+            session.consecutive_no_emo_tags += 1
+            if session.consecutive_no_emo_tags >= 2:
+                session.last_assistant_emotion = "neutral"
+            elif final_emotion in allowed:
+                session.last_assistant_emotion = final_emotion
 
-            sentences, _ = extract_sentences_from_buffer(final_text, is_end=True)
-            for s in sentences:
-                text = s.strip()
-                if not text or not is_meaningful_sentence(text):
-                    continue
-                full_ja_text_parts.append(text)
-
-                tts_text = clean_text_for_tts(text)
-                is_action_only = not is_meaningful_sentence(tts_text)
-
-                if session.enable_tts and not is_action_only:
-                    await send_queue.put((epoch, {
-                        "type": "status",
-                        "dsk": "speaking",
-                        "state": "speaking",
-                        "tts": "synthesizing"
-                    }))
-
-                tts_task = None
-                if session.enable_tts and not is_action_only:
-                    tts_task = asyncio.create_task(
-                        tts_manager.synthesize_async(tts_text, final_emotion, sovits_url=session.sovits_url)
-                    )
-                    tts_tasks.append(tts_task)
-
-                await sentence_queue.put({
-                    "sentence_id": sentence_id_counter,
-                    "text": text,
-                    "emotion": final_emotion,
-                    "tts_task": tts_task,
-                    "is_action_only": is_action_only
-                })
-                sentence_id_counter += 1
-            
-            await sentence_queue.put(None)
-            await t2
-            
-        except Exception as e:
-            t2.cancel()
-            await sentence_queue.put(e)
-            await asyncio.gather(t2, return_exceptions=True)
-            raise e
-            
-        full_ja_text = "".join(full_ja_text_parts)
+        full_ja_text = await _dispatch_tts_sentences(session, final_text, final_emotion, send_queue, epoch)
         
         history_content = f"[EMO:{final_emotion}] {full_ja_text}" if full_ja_text.strip() else full_ja_text
         
@@ -611,15 +428,203 @@ async def processor_loop(
             asyncio.create_task(compress_and_update_history(session.session_id, session.history))
             
     except asyncio.CancelledError:
-        for task in tts_tasks:
-            if not task.done():
-                task.cancel()
+        tts_manager.cancel_pending(session.session_id)
         raise
     except Exception as e:
         print(f"[Processor Error] Session {session.session_id}: {e}")
         await send_queue.put((epoch, {"type": "error", "message": f"Server error: {str(e)}"}))
     finally:
         session.is_busy = False
+
+
+async def _dispatch_tts_sentences(
+    session: SessionState,
+    final_text: str,
+    final_emotion: str,
+    send_queue: asyncio.Queue,
+    epoch: int,
+) -> str:
+    sentence_queue = asyncio.Queue()
+    full_ja_text_parts = []
+
+    async def tts_send_callback(seq: int, payload):
+        await sentence_queue.put({
+            "sentence_id": seq,
+            "payload": payload
+        })
+
+    tts_manager.reset_sequence(session.session_id, tts_send_callback)
+
+    speaking_status_sent = False
+
+    async def sender_task():
+        nonlocal speaking_status_sent
+        while True:
+            item = await sentence_queue.get()
+            if item is None:
+                sentence_queue.task_done()
+                break
+
+            if isinstance(item, Exception):
+                raise item
+
+            sentence_id = item["sentence_id"]
+            payload = item.get("payload", {})
+            audio_bytes = payload.get("audio")
+            error = payload.get("error")
+            text = payload.get("text", "")
+            emotion = payload.get("emotion", "neutral")
+            print(f"[DEBUG] sender_task processing sentence {sentence_id}: emotion='{emotion}' text_preview='{text[:50]}' client_type='{session.client_type}'", flush=True)
+
+            if not speaking_status_sent:
+                await send_queue.put((epoch, {
+                    "type": "status",
+                    "dsk": "speaking",
+                    "state": "speaking"
+                }))
+                speaking_status_sent = True
+
+            if audio_bytes is None:
+                reason = "user_disabled" if not session.enable_tts else (error or "service_error")
+                await send_queue.put((epoch, {
+                    "type": "text_chunk",
+                    "sentence_id": sentence_id,
+                    "content": text,
+                    "emotion": emotion,
+                    "audio_degraded": True,
+                    "degraded_reason": reason
+                }))
+                sentence_queue.task_done()
+                continue
+
+            audio_base64 = base64.b64encode(audio_bytes).decode('utf-8')
+
+            await send_queue.put((epoch, {
+                "type": "text_chunk",
+                "sentence_id": sentence_id,
+                "content": text,
+                "emotion": emotion
+            }))
+
+            await send_queue.put((epoch, {
+                "type": "audio_chunk",
+                "sentence_id": sentence_id,
+                "data": audio_base64
+            }))
+            sentence_queue.task_done()
+
+    t2 = asyncio.create_task(sender_task())
+
+    try:
+        sentences, _ = extract_sentences_from_buffer(final_text, is_end=True)
+        tts_fragment_buffer = ""
+        tts_status_sent = False
+
+        for s in sentences:
+            text = s.strip()
+            if not text or not is_meaningful_sentence(text):
+                continue
+
+            if len(text) < 3:
+                if len(tts_fragment_buffer) > 15:
+                    forced = tts_fragment_buffer
+                    tts_fragment_buffer = text
+                    full_ja_text_parts.append(forced)
+                    tts_text = clean_text_for_tts(forced)
+                    is_action_only = not is_meaningful_sentence(tts_text)
+                    if session.enable_tts and not is_action_only:
+                        if not tts_status_sent:
+                            await send_queue.put((epoch, {
+                                "type": "status",
+                                "dsk": "speaking",
+                                "state": "speaking",
+                                "tts": "synthesizing"
+                            }))
+                            tts_status_sent = True
+                        await tts_manager.synthesize_and_queue(session.session_id, tts_text, final_emotion, sovits_url=session.sovits_url)
+                    else:
+                        reason = "user_disabled" if not session.enable_tts else "action_only"
+                        await tts_manager.queue_silent(session.session_id, forced, final_emotion, reason)
+                    continue
+                else:
+                    tts_fragment_buffer += text
+                    full_ja_text_parts.append(text)
+                    continue
+
+            if tts_fragment_buffer:
+                text = tts_fragment_buffer + text
+                tts_fragment_buffer = ""
+
+            full_ja_text_parts.append(text)
+            tts_text = clean_text_for_tts(text)
+            is_action_only = not is_meaningful_sentence(tts_text)
+
+            if session.enable_tts and not is_action_only:
+                if not tts_status_sent:
+                    await send_queue.put((epoch, {
+                        "type": "status",
+                        "dsk": "speaking",
+                        "state": "speaking",
+                        "tts": "synthesizing"
+                    }))
+                    tts_status_sent = True
+                await tts_manager.synthesize_and_queue(session.session_id, tts_text, final_emotion, sovits_url=session.sovits_url)
+            else:
+                reason = "user_disabled" if not session.enable_tts else "action_only"
+                await tts_manager.queue_silent(session.session_id, text, final_emotion, reason)
+
+        if tts_fragment_buffer:
+            text = tts_fragment_buffer
+            tts_fragment_buffer = ""
+            full_ja_text_parts.append(text)
+            tts_text = clean_text_for_tts(text)
+            is_action_only = not is_meaningful_sentence(tts_text)
+            clean_len = len(re.sub(r'[\s。！？!?,.、…\-—]', '', tts_text))
+            if clean_len < 2:
+                await tts_manager.queue_silent(session.session_id, text, final_emotion, "too_short")
+            elif session.enable_tts and not is_action_only:
+                if not tts_status_sent:
+                    await send_queue.put((epoch, {
+                        "type": "status",
+                        "dsk": "speaking",
+                        "state": "speaking",
+                        "tts": "synthesizing"
+                    }))
+                    tts_status_sent = True
+                await tts_manager.synthesize_and_queue(session.session_id, tts_text, final_emotion, sovits_url=session.sovits_url)
+            else:
+                reason = "user_disabled" if not session.enable_tts else "action_only"
+                await tts_manager.queue_silent(session.session_id, text, final_emotion, reason)
+
+        await tts_manager.gather_pending(session.session_id)
+        await sentence_queue.put(None)
+        await t2
+
+    except Exception as e:
+        t2.cancel()
+        await sentence_queue.put(e)
+        await asyncio.gather(t2, return_exceptions=True)
+        raise e
+
+    return "".join(full_ja_text_parts)
+
+
+async def run_tts_pipeline(session: SessionState, text: str, emotion: str, send_queue: asyncio.Queue, epoch: int):
+    session.is_busy = True
+    try:
+        await send_queue.put((epoch, {"type": "status", "dsk": "speaking", "state": "speaking", "tts": "synthesizing"}))
+        await _dispatch_tts_sentences(session, text, emotion, send_queue, epoch)
+        await send_queue.put((epoch, {"type": "translation", "content": ""}))
+        await send_queue.put((epoch, {"type": "status", "dsk": "idle", "state": "done", "tts": "idle"}))
+    except asyncio.CancelledError:
+        tts_manager.cancel_pending(session.session_id)
+        raise
+    except Exception as e:
+        print(f"[TTS Debug Error] {e}")
+        await send_queue.put((epoch, {"type": "error", "message": f"TTS debug error: {e}"}))
+    finally:
+        session.is_busy = False
+
 
 async def writer_loop(send_queue: asyncio.Queue, session: SessionState, websocket: WebSocket):
     try:
@@ -727,6 +732,14 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                         pass
                 if "enable_tts" in data:
                     session.enable_tts = bool(data["enable_tts"])
+                if "model" in data:
+                    m = data["model"]
+                    if m in ("deepseek-v4-flash", "deepseek-v4-pro"):
+                        session.model = m
+                if "reasoning_effort" in data:
+                    effort = data["reasoning_effort"]
+                    if effort in ("high", "xhigh"):
+                        session.reasoning_effort = effort
                     
                 authenticated = True
                 await session.load_from_db()
@@ -807,8 +820,57 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                         pass
                 if "enable_tts" in data:
                     session.enable_tts = bool(data["enable_tts"])
+                if "model" in data:
+                    m = data["model"]
+                    if m in ("deepseek-v4-flash", "deepseek-v4-pro"):
+                        session.model = m
+                if "reasoning_effort" in data:
+                    effort = data["reasoning_effort"]
+                    if effort in ("high", "xhigh"):
+                        session.reasoning_effort = effort
                 continue
                 
+            elif frame_type == "interrupt-signal":
+                if session.active_task and not session.active_task.done():
+                    session.active_task.cancel()
+                tts_manager.cancel_pending(session.session_id)
+                session.current_epoch += 1
+                await send_queue.put((session.current_epoch, {
+                    "type": "text_chunk",
+                    "content": "[Interrupted by user]",
+                    "emotion": "neutral",
+                    "audio_degraded": True,
+                    "degraded_reason": "interrupted"
+                }))
+                await send_queue.put((session.current_epoch, {
+                    "type": "status",
+                    "dsk": "idle",
+                    "state": "done",
+                    "tts": "idle"
+                }))
+                continue
+
+            elif frame_type == "tts_debug":
+                if "content" not in data or "emotion" not in data:
+                    await send_queue.put((session.current_epoch, {"type": "error", "message": "tts_debug 需要 content 和 emotion 字段"}))
+                    continue
+                emotion = data.get("emotion", "neutral")
+                content = data.get("content", "").strip()
+                if not content:
+                    continue
+                allowed = get_session_allowed_emotions(session)
+                if emotion not in allowed:
+                    await send_queue.put((session.current_epoch, {"type": "error", "message": f"未知情绪: {emotion}"}))
+                    continue
+                if session.is_busy:
+                    await send_queue.put((session.current_epoch, {"type": "error", "message": "系统正在处理中，请稍后再试"}))
+                    continue
+                session.is_busy = True
+                session.active_task = asyncio.create_task(
+                    run_tts_pipeline(session, content, emotion, send_queue, session.current_epoch)
+                )
+                continue
+
             elif frame_type == "chat":
                 if "message" in data:
                     await send_queue.put((session.current_epoch, {"type": "error", "message": "禁止使用已废弃的 'message' 字段"}))

@@ -1,12 +1,14 @@
-import json
+﻿import json
 import httpx
 from pathlib import Path
+from typing import Optional
 from app import config
+from app.services.llm_interface import LLMInterface
 
-class DeepSeekService:
+class DeepSeekService(LLMInterface):
     def __init__(self):
         self.api_key = config.DEEPSEEK_API_KEY
-        self.model = config.DEEPSEEK_MODEL
+        self.model = config.DEEPSEEK_MODEL  # defaults to deepseek-v4-flash
         self.base_url = "https://api.deepseek.com"
         
         self.system_prompt_path = config.PROMPTS_DIR / "kurisu_system_ja.md"
@@ -44,12 +46,14 @@ class DeepSeekService:
     async def get_chat_stream(
         self,
         active_history: list,
-        memory_summary: str = None,
-        api_key: str = None,
-        system_prompt: str = None,
+        memory_summary: Optional[str] = None,
+        api_key: Optional[str] = None,
+        system_prompt: Optional[str] = None,
         temperature: float = 0.7,
-        tools: list = None,
-        tool_choice: str = None
+        tools: Optional[list] = None,
+        tool_choice: Optional[str] = None,
+        model: Optional[str] = None,
+        reasoning_effort: Optional[str] = None
     ):
         """
         Assemble messages and yield chunks from DeepSeek Chat Completion API.
@@ -60,7 +64,12 @@ class DeepSeekService:
 
         messages = []
         # 1. System Prompt with anchor clause
-        messages.append({"role": "system", "content": self.get_anchored_system_prompt(system_prompt)})
+        eff_system = system_prompt
+        if reasoning_effort and (model or self.model) != "deepseek-v4-pro":
+            depth_map = {"high": "深", "xhigh": "極深"}
+            depth_zh = depth_map.get(reasoning_effort, "中")
+            eff_system = (system_prompt or "") + f"\n【システム内部設定】思考深度：{depth_zh}\n（これは内部設定タグです。応答でこの形式を模倣しないでください。必ず [EMO:xxx] から始めてください。）"
+        messages.append({"role": "system", "content": self.get_anchored_system_prompt(eff_system)})
         
         # 2. Few-shot messages
         messages.extend(self._fewshot)
@@ -78,11 +87,17 @@ class DeepSeekService:
         }
         
         payload = {
-            "model": self.model,
+            "model": model or self.model,
             "messages": messages,
             "stream": True,
             "temperature": temperature if temperature is not None else 0.7
         }
+        
+        effective_model = model or self.model
+        if effective_model == "deepseek-v4-pro":
+            payload["thinking"] = {"type": "enabled"}
+            if reasoning_effort:
+                payload["reasoning_effort"] = reasoning_effort
         
         print(f"[DeepSeek Payload] messages: {messages}\ntools: {payload.get('tools')}\ntool_choice: {payload.get('tool_choice')}", flush=True)
         # Quick check: does the system prompt contain EMO format instructions?
@@ -95,7 +110,7 @@ class DeepSeekService:
             if tool_choice:
                 payload["tool_choice"] = tool_choice
         
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=120.0, write=10.0, pool=5.0)) as client:
             async with client.stream("POST", f"{self.base_url}/chat/completions", json=payload, headers=headers) as response:
                 if response.status_code != 200:
                     err_content = await response.aread()
@@ -122,7 +137,7 @@ class DeepSeekService:
                         except json.JSONDecodeError:
                             continue
 
-    async def compress_history(self, history: list, api_key: str = None, old_summary: str = "") -> str:
+    async def compress_history(self, history: list, api_key: Optional[str] = None, old_summary: str = "") -> str:
         """
         Asynchronously call DeepSeek to compress older history into a single Japanese summary sentence.
         """
@@ -172,7 +187,7 @@ class DeepSeekService:
                 print(f"[DeepSeek] Failed to compress history: {e}")
                 return ""
 
-    async def translate_to_zh(self, text: str, api_key: str = None) -> str:
+    async def translate_to_zh(self, text: str, api_key: Optional[str] = None) -> str:
         """
         Translate Japanese response (without emo tag) to Chinese.
         """
