@@ -257,6 +257,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       )}
 
       <div className="salieri-workstation-inner">
+        <div className="workstation-panel-frame-overlay" />
         {/* Top Header Controls */}
         <div className="workstation-header">
         <div className="left-brand">
@@ -316,7 +317,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
         {/* Center: Dialogue Terminal */}
         <div className="grid-terminal border-beam">
-          <div className="terminal-panel-frame-overlay" />
           <div className="terminal-chat-viewport">
             {messages.length === 0 ? (
               <div className="empty-chat-tip">
