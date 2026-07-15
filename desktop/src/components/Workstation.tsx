@@ -1,15 +1,17 @@
-﻿import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAmadeusWS } from '../hooks/useAmadeusWS';
 import { StatusBar } from './StatusBar';
 import { SettingsModal } from './SettingsModal';
 import { SoundPanel } from './SoundPanel';
-import { HistoryPanel } from './HistoryPanel';
+import { HistorySidebar } from './HistorySidebar';
 import { TtsDebugPanel } from './TtsDebugPanel';
 import AvatarViewer from './AvatarViewer';
 import SpriteAnimator from './SpriteAnimator';
 import { HudBadge } from './HudBadge';
 import { useAudioPlayer, audioPlayer } from '../hooks/useAudioPlayer';
 import { audioService } from '../services/AudioService';
+import { CRTOverlay } from './CRTOverlay';
+import { CircuitTrace } from './CircuitTrace';
 
 interface WorkstationProps {
   worldline: 'steins_gate' | 'beta';
@@ -56,7 +58,18 @@ export const Workstation: React.FC<WorkstationProps> = ({
     (localStorage.getItem('amadeus_pc_reasoning_effort') as any) || 'high');
   const [audioError, setAudioError] = useState<string | null>(null);
   const [isSoundOpen, setIsSoundOpen] = useState(false);
-  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [isHistoryCollapsed, setIsHistoryCollapsed] = useState(() => {
+    try {
+      const stored = localStorage.getItem('amadeus_pc_history_collapsed');
+      if (stored !== null) return stored === 'true';
+    } catch {}
+    return false; // 默认展开，让三列布局立即可见
+  });
+
+  // Persist history collapsed state
+  useEffect(() => {
+    try { localStorage.setItem('amadeus_pc_history_collapsed', String(isHistoryCollapsed)); } catch {}
+  }, [isHistoryCollapsed]);
 
   const TTS_DEBUG_ENABLED = (() => {
     try { return localStorage.getItem('amadeus_pc_debug_tts') === 'true'; } catch { return false; }
@@ -92,8 +105,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
     messages,
     isThinking,
     isSynthesizing,
-    activeTool,
-    activeNotice,
     emotion,
     sendChat,
     sendDebugTts,
@@ -232,12 +243,22 @@ export const Workstation: React.FC<WorkstationProps> = ({
       <div className="workstation-bg-overlay" />
       <div className="workstation-bg-reflection" />
 
+      {/* SVG circuit trace decorative overlay */}
+      <CircuitTrace opacity={0.15} zIndex={2} />
+
+      {/* SVG feTurbulence noise overlay */}
+      <div className="workstation-bg-noise" />
+
+      {/* CRT vignette + chromatic aberration (z-index 50, above content, below modals) */}
+      <CRTOverlay glitchState={glitchState} zIndex={50} />
+
       {worldline === 'beta' && (
         <div className="beta-divergence-watermark">1.130205%</div>
       )}
 
-      {/* Top Header Controls */}
-      <div className="workstation-header">
+      <div className="salieri-workstation-inner">
+        {/* Top Header Controls */}
+        <div className="workstation-header">
         <div className="left-brand">
           <span className="brand-title">Amadeus</span>
           <span className="brand-sub">SALIERI CONSOLE</span>
@@ -255,7 +276,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           </button>
           <button
             className="ctrl-btn icon-btn"
-            onClick={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); setIsSoundOpen((v) => !v); setIsHistoryOpen(false); }}
+            onClick={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); setIsSoundOpen((v) => !v); }}
             title="音量控制"
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -265,13 +286,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
           </button>
           <button
             className="ctrl-btn icon-btn"
-            onClick={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); setIsHistoryOpen((v) => !v); setIsSoundOpen(false); }}
-            title="会话历史"
+            onClick={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); setIsHistoryCollapsed((v) => !v); }}
+            title={isHistoryCollapsed ? '展开历史面板' : '折叠历史面板'}
           >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="10" />
-              <polyline points="12 6 12 12 16 14" />
-            </svg>
+            <span style={{ fontSize: '14px', lineHeight: 1 }}>{isHistoryCollapsed ? '▶' : '◀'}</span>
           </button>
           <button
             className="ctrl-btn icon-btn disconnect-btn"
@@ -289,26 +307,16 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
       {/* Main Grid Workspace */}
       <div className="workstation-grid">
-        {/* Left Side: Sidebar Placeholders */}
-        <div className="grid-sidebar">
-          <div className="sidebar-section">
-            <h3 className="section-title">会话历史</h3>
-            <div className="sidebar-placeholder">
-              <span className="blink-txt">&gt; 历史记录离线</span>
-              <p className="placeholder-note">Tauri SQLite 数据库连接已激活。历史已同步。</p>
-            </div>
-          </div>
-          <div className="sidebar-section">
-            <h3 className="section-title">系统预设</h3>
-            <div className="sidebar-placeholder">
-              <span>&gt; 基础记忆保留模式</span>
-              <p className="placeholder-note">牧瀬红莉栖大脑模块拷贝激活。</p>
-            </div>
-          </div>
-        </div>
+        {/* Left: History Sidebar */}
+        <HistorySidebar
+          isCollapsed={isHistoryCollapsed}
+          onToggle={() => setIsHistoryCollapsed((v) => !v)}
+          messages={messages}
+        />
 
         {/* Center: Dialogue Terminal */}
-        <div className="grid-terminal">
+        <div className="grid-terminal border-beam">
+          <div className="terminal-panel-frame-overlay" />
           <div className="terminal-chat-viewport">
             {messages.length === 0 ? (
               <div className="empty-chat-tip">
@@ -335,17 +343,24 @@ export const Workstation: React.FC<WorkstationProps> = ({
                   </div>
                 ))}
                 {isThinking && (
-                  <div className="message-card assistant loading-state">
-                    <div className="avatar-label">AMADEUS: KURISU</div>
-                    <div className="thinking-loader">
-                      <span className="loader-dot" />
-                      <span className="loader-dot" />
-                      <span className="loader-dot" />
-                      <span className="thinking-txt">
-                        {activeTool === 'web_search'
-                          ? '正在联网检索外部数据库...'
-                          : (activeNotice || '正在调用记忆模块...')}
-                      </span>
+                  <div className="message-card assistant thinking-bubble-active">
+                    <div className="avatar-label" style={{ fontSize: '10px' }}>AMADEUS</div>
+                    <div className="message-content-box thinking-card-box">
+                      <div className="thinking-indicator-card">
+                        <SpriteAnimator
+                          spriteSrc={worldline === 'steins_gate' ? '/assets/ui/spinner_sg_20f.png' : '/assets/ui/spinner_beta_20f.png'}
+                          cols={10}
+                          rows={2}
+                          frameWidth={worldline === 'beta' ? 54.5 : 54}
+                          frameHeight={63}
+                          frameCount={20}
+                          fps={15}
+                          loop={true}
+                        />
+                        <span className="thinking-text-glow">
+                          Thinking<span className="thinking-cursor-blink">█</span>
+                        </span>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -390,9 +405,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
               type="submit"
               className="chat-send-btn"
               disabled={status !== 'READY' || !inputText.trim() || isThinking || isSynthesizing || isPlaying}
-            >
-              发送
-            </button>
+              aria-label="发送"
+            />
           </form>
           <div className="model-bottom-bar" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '6px 16px', borderTop: '1px solid #2a1500', background: '#0a0806' }}>
             <select
@@ -418,7 +432,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                 localStorage.setItem('amadeus_pc_reasoning_effort', v);
                 updateConfig({ reasoningEffort: v });
               }}
-              style={{ width: 60, accentColor: '#ff6c00' }}
+              style={{ '--val': `${(reasoningEffort === 'xhigh' ? 1 : 0) * 100}%`, width: 60 } as React.CSSProperties}
             />
             <span style={{ color: '#8b3c00', fontSize: 11, fontFamily: 'Share Tech Mono, monospace' }}>{reasoningEffort === 'xhigh' ? '极高' : '高'}</span>
           </div>
@@ -426,36 +440,16 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
         {/* Right: Avatar Viewer Panel */}
         <div className="grid-avatar-panel">
+          <HudBadge worldline={worldline} status={status} />
           <AvatarViewer
             emotion={emotion}
             isSpeaking={isPlaying}
             volume={currentVolume}
             glitchState={glitchState}
           />
-          {isThinking && (
-            <div className="thinking-spinner-container">
-              <SpriteAnimator
-                spriteSrc={worldline === 'steins_gate' ? '/assets/ui/spinner_sg_20f.png' : '/assets/ui/spinner_beta_20f.png'}
-                cols={10}
-                rows={2}
-                frameWidth={worldline === 'beta' ? 54.5 : undefined}
-                frameHeight={worldline === 'beta' ? 56 : undefined}
-                fps={12}
-                loop={true}
-                style={
-                  worldline === 'beta'
-                    ? { filter: 'drop-shadow(0 0 6px rgba(255, 69, 48, 0.7))' }
-                    : undefined
-                }
-              />
-              <span className="thinking-spinner-label">思考中...</span>
-            </div>
-          )}
+          {/* Thinking spinner is now rendered inside messages-flow */}
         </div>
       </div>
-
-      {/* HUD Badge */}
-      <HudBadge worldline={worldline} status={status} />
 
       {/* Audio Error Toast */}
       {audioError && (
@@ -472,6 +466,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
       {/* Bottom Status Bar */}
       <StatusBar worldline={worldline} connectionStatus={status} />
+      </div>
 
       {/* Settings Modal overlay */}
       <SettingsModal
@@ -505,12 +500,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
         onEnableSfxChange={setEnableSfx}
         onSfxVolumeChange={setSfxVolume}
         onEnableTtsChange={setEnableTts}
-      />
-
-      <HistoryPanel
-        isOpen={isHistoryOpen}
-        onClose={() => setIsHistoryOpen(false)}
-        messages={messages}
       />
 
       {TTS_DEBUG_ENABLED && (
