@@ -13,26 +13,29 @@ function formatDate(): string {
   return `${y}.${m}.${d}`;
 }
 
-function getStatusLabel(status: string): string {
-  switch (status) {
-    case 'READY': return 'ONLINE';
-    case 'CONNECTING': return 'CONNECTING';
-    case 'ERROR': return 'ERROR';
-    case 'CLOSED': return 'OFFLINE';
-    default: return status.toUpperCase();
-  }
-}
-
 export const HudBadge: React.FC<HudBadgeProps> = ({ worldline, status }) => {
   const dateStr = formatDate();
-  const worldlineLabel = worldline === 'steins_gate' ? 'SG 1.048596%' : 'β 1.130205%';
-  const statusLabel = getStatusLabel(status);
+  const currentDay = new Date().getDay(); // 0-6 (0=SUN, 1=MON...)
 
   return (
     <div className="hud-badge-container">
-      <div className="hud-pill">{dateStr}</div>
-      <div className={`hud-pill ${worldline === 'beta' ? 'worldline-beta' : 'worldline-sg'}`}>{worldlineLabel}</div>
-      <div className={`hud-pill ${status === 'ERROR' ? 'status-error' : ''}`}>{statusLabel}</div>
+      <div className="hud-pill hud-date-pill">
+        <span className="hud-date-text">{dateStr}</span>
+        <div className="hud-days-container">
+          <div 
+            className="hud-day-indicator"
+            style={{
+              backgroundPositionY: `${(currentDay / 6) * 100}%`
+            }}
+          />
+        </div>
+      </div>
+      
+      <div className={`worldline-badge ${worldline === 'steins_gate' ? 'alpha' : 'beta'}`} />
+      
+      <div className={`hud-pill hud-status-pill ${status === 'ERROR' ? 'status-error' : ''}`}>
+        {status === 'READY' ? 'ONLINE' : status.toUpperCase()}
+      </div>
     </div>
   );
 };
