@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 
 export interface SettingsModalProps {
   isOpen: boolean;
@@ -123,10 +123,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <input type="password" value={localApiKey} onChange={(e) => setLocalApiKey(e.target.value)} className="salieri-input" placeholder="sk-..." />
               </div>
               <div className="setting-field">
-                <label>思维发散度</label>
-                <input type="range" min="0" max="2" step="0.1" value={localTemperature}
-                  onChange={(e) => setLocalTemperature(parseFloat(e.target.value))} className="salieri-input" />
-                <span style={{ color: '#8b3c00', fontSize: 12, marginLeft: 8 }}>{localTemperature.toFixed(1)}</span>
+                <label>个性幅度</label>
+                <div className="slider-row">
+                  <span className="slider-endpoint">严谨</span>
+                  <input type="range" min="0" max="2" step="0.1" value={localTemperature}
+                    onChange={(e) => setLocalTemperature(parseFloat(e.target.value))} className="salieri-range"
+                    style={{ '--val': `${(localTemperature / 2) * 100}%` } as React.CSSProperties} />
+                  <span className="slider-endpoint">发散</span>
+                  <span className="slider-value">{localTemperature.toFixed(1)}</span>
+                </div>
               </div>
               <div className="setting-field">
                 <label>模型</label>
@@ -136,21 +141,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </select>
               </div>
               <div className="setting-field">
-                <label>推理深度</label>
-                <input type="range" min={0} max={1} step={1} value={localReasoningIdx}
-                  onChange={(e) => setLocalReasoningIdx(parseInt(e.target.value))} className="salieri-input" />
-                <span style={{ color: '#8b3c00', fontSize: 12, marginLeft: 8 }}>{['高','极高'][localReasoningIdx]}</span>
-              </div>
-              <div className="setting-field">
                 <label>当前世界线</label>
                 <select value={localWorldline} onChange={(e) => setLocalWorldline(e.target.value as 'steins_gate' | 'beta')} className="salieri-select">
                   <option value="steins_gate">Steins;Gate (1.048596%)</option>
                   <option value="beta">β 世界线 (1.130205%)</option>
                 </select>
-              </div>
-              <div className="setting-field field-full">
-                <label>系统基础提示词</label>
-                <textarea value={localSystemPrompt} onChange={(e) => setLocalSystemPrompt(e.target.value)} className="salieri-textarea" rows={4} />
               </div>
             </section>
             {/* VOICE tab */}
