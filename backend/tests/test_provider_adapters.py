@@ -1,0 +1,211 @@
+from __future__ import annotations
+
+import json
+
+import httpx
+import pytest
+
+from app.services.provider_adapters import (
+    GeminiAdapter,
+    OpenAICompatibleAdapter,
+    OpenAIResponsesAdapter,
+)
+from app.services.provider_runtime import deepseek_service, provider_registry
+
+
+@pytest.mark.asyncio
+async def test_openai_compatible_stream_preserves_canonical_persona_and_tools():
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"choices":[{"delta":{"content":"[EMO:neutral] テスト"}}]}\n\n'
+                'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","type":"function","function":{"name":"search_web","arguments":"{}"}}]}}]}\n\n'
+                "data: [DONE]\n\n"
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        provider_id="fake-compatible",
+        base_url="https://compatible.example/v1",
+        default_model="fake-chat",
+        message_builder=deepseek_service.build_persona_messages,
+        transport=httpx.MockTransport(handler),
+    )
+
+    chunks = [
+        chunk
+        async for chunk in adapter.get_chat_stream(
+            active_history=[{"role": "user", "content": "你好"}],
+            api_key="provider-secret",
+            system_prompt="SYSTEM",
+            tools=[{"type": "function", "function": {"name": "search_web"}}],
+            tool_choice="auto",
+        )
+    ]
+
+    payload = json.loads(requests[0].content)
+    assert requests[0].url.path == "/v1/chat/completions"
+    assert "PERSONA BIBLE v1" in payload["messages"][0]["content"]
+    assert payload["messages"][-1]["content"] == "你好"
+    assert payload["tools"][0]["function"]["name"] == "search_web"
+    assert chunks[0]["content"] == "[EMO:neutral] テスト"
+    assert chunks[1]["tool_calls"][0]["function"]["name"] == "search_web"
+
+
+@pytest.mark.asyncio
+async def test_openai_compatible_structured_output_and_model_listing():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(
+                200,
+                json={"data": [{"id": "model-z"}, {"id": "model-a"}]},
+            )
+        payload = json.loads(request.content)
+        assert payload["response_format"] == {"type": "json_object"}
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": '{"ok": true}'}}]},
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        provider_id="fake-compatible",
+        base_url="https://compatible.example/v1/",
+        default_model="fake-chat",
+        message_builder=deepseek_service.build_persona_messages,
+        transport=httpx.MockTransport(handler),
+    )
+
+    result = await adapter.complete_json(
+        [{"role": "user", "content": "Return JSON"}],
+        api_key="provider-secret",
+    )
+    models = await adapter.list_models(api_key="provider-secret")
+
+    assert result == {"ok": True}
+    assert models == ["model-z", "model-a"]
+
+
+def test_kimi_glm_and_custom_are_registered_as_compatible_providers():
+    definitions = {row.id: row for row in provider_registry.list_definitions()}
+
+    assert definitions["kimi"].default_model == "kimi-k2.6"
+    assert definitions["glm"].default_model == "glm-5.2"
+    assert definitions["custom"].base_url_configurable is True
+    assert definitions["custom"].credential_required is False
+    assert definitions["kimi"].capabilities.structured_output is True
+    assert definitions["glm"].capabilities.tools is True
+
+
+@pytest.mark.asyncio
+async def test_optional_credential_compatible_adapter_omits_authorization_header():
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"data": [{"id": "local-model"}]})
+
+    adapter = OpenAICompatibleAdapter(
+        provider_id="local",
+        base_url="http://127.0.0.1:1234/v1",
+        default_model="local-model",
+        message_builder=deepseek_service.build_persona_messages,
+        credential_required=False,
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert await adapter.list_models(api_key=None) == ["local-model"]
+    assert "authorization" not in requests[0].headers
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_stream_uses_instructions_and_delta_events():
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"type":"response.output_text.delta","delta":"[EMO:intellectual] 仮説を検証するわ。"}\n\n'
+                'data: {"type":"response.completed"}\n\n'
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    adapter = OpenAIResponsesAdapter(
+        message_builder=deepseek_service.build_persona_messages,
+        transport=httpx.MockTransport(handler),
+    )
+    chunks = [
+        chunk
+        async for chunk in adapter.get_chat_stream(
+            active_history=[{"role": "user", "content": "验证这个假设"}],
+            api_key="openai-secret",
+            model="gpt-5.6-luna",
+            reasoning_effort="high",
+        )
+    ]
+
+    payload = json.loads(requests[0].content)
+    assert requests[0].url.path == "/v1/responses"
+    assert "PERSONA BIBLE v1" in payload["instructions"]
+    assert payload["input"][-1]["content"] == "验证这个假设"
+    assert payload["reasoning"] == {"effort": "high"}
+    assert chunks == [
+        {"content": "[EMO:intellectual] 仮説を検証するわ。", "tool_calls": None}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_gemini_stream_maps_persona_roles_and_native_parts():
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"candidates":[{"content":{"parts":[{"text":"[EMO:neutral] データを確認したわ。"}]}}]}\n\n'
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    adapter = GeminiAdapter(
+        message_builder=deepseek_service.build_persona_messages,
+        transport=httpx.MockTransport(handler),
+    )
+    chunks = [
+        chunk
+        async for chunk in adapter.get_chat_stream(
+            active_history=[{"role": "user", "content": "检查数据"}],
+            api_key="gemini-secret",
+            model="gemini-3.5-flash",
+        )
+    ]
+
+    payload = json.loads(requests[0].content)
+    assert requests[0].url.path.endswith(
+        "/models/gemini-3.5-flash:streamGenerateContent"
+    )
+    assert "PERSONA BIBLE v1" in payload["systemInstruction"]["parts"][0]["text"]
+    assert payload["contents"][-1] == {
+        "role": "user",
+        "parts": [{"text": "检查数据"}],
+    }
+    assert chunks == [
+        {"content": "[EMO:neutral] データを確認したわ。", "tool_calls": None}
+    ]
+
+
+def test_openai_and_gemini_native_providers_are_registered():
+    definitions = {row.id: row for row in provider_registry.list_definitions()}
+
+    assert definitions["openai"].default_model == "gpt-5.6-luna"
+    assert "reasoning_effort" in definitions["openai"].capabilities.parameters
+    assert definitions["gemini"].default_model == "gemini-3.5-flash"
+    assert definitions["gemini"].capabilities.model_discovery is True

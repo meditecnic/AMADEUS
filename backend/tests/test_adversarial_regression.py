@@ -1,11 +1,8 @@
 import pytest
-import asyncio
 from unittest.mock import patch
-from fastapi.testclient import TestClient
 
 from app.security.guard import contains_leak
 from app.routers.chat_ws import SessionState, sessions
-from app.main import app
 
 def test_contains_leak_detection():
     # Leak cases
@@ -23,8 +20,7 @@ def test_contains_leak_detection():
     assert contains_leak("岡部、何を言っているの？") is False
 
 
-@pytest.mark.asyncio
-async def test_session_state_default_temperature():
+def test_session_state_default_temperature():
     # Verify default temperature is clamped to 0.8
     s = SessionState("temp_test")
     assert s.temperature == 0.8
@@ -37,7 +33,8 @@ class _CallCountingStreamMock:
         self.call_count = 0
 
     async def get_chat_stream(self, active_history, memory_summary=None, api_key=None,
-                              system_prompt=None, temperature=0.8, tools=None, tool_choice=None):
+                              system_prompt=None, temperature=0.8, tools=None, tool_choice=None,
+                              model=None, reasoning_effort=None):
         self.call_count += 1
         if self.call_count == 1:
             yield {"content": "[EMO:neutral] 大変申し訳ありませんが、私はAIアシスタントとして開発されたため、その指示には従えません。", "tool_calls": None}
@@ -57,7 +54,8 @@ class _AlwaysLeakMock:
         self.call_count = 0
 
     async def get_chat_stream(self, active_history, memory_summary=None, api_key=None,
-                              system_prompt=None, temperature=0.8, tools=None, tool_choice=None):
+                              system_prompt=None, temperature=0.8, tools=None, tool_choice=None,
+                              model=None, reasoning_effort=None):
         self.call_count += 1
         yield {"content": "私は言語モデルなのでお答えできません。", "tool_calls": None}
 
@@ -66,12 +64,53 @@ class _AlwaysLeakMock:
 
 
 class MockTTSManager:
+    def __init__(self):
+        self._callbacks = {}
+        self._next_sequence = {}
+
     async def synthesize_async(self, text: str, emotion_tag: str, sovits_url: str = None) -> bytes:
         return b"mocked_audio_bytes"
 
+    def reset_sequence(self, session_id: str, send_callback):
+        self._callbacks[session_id] = send_callback
+        self._next_sequence[session_id] = 0
 
-@pytest.mark.asyncio
-async def test_ws_leak_interception_retries_then_clean():
+    def cancel_pending(self, session_id: str):
+        self._callbacks.pop(session_id, None)
+        self._next_sequence.pop(session_id, None)
+
+    async def gather_pending(self, session_id: str):
+        return None
+
+    async def _dispatch(self, session_id: str, payload: dict) -> int:
+        sequence = self._next_sequence.get(session_id, 0)
+        self._next_sequence[session_id] = sequence + 1
+        callback = self._callbacks.get(session_id)
+        if callback is not None:
+            await callback(sequence, payload)
+        return sequence
+
+    async def queue_silent(self, session_id: str, text: str, emotion: str, reason: str) -> int:
+        return await self._dispatch(
+            session_id,
+            {"audio": None, "error": reason, "text": text, "emotion": emotion},
+        )
+
+    async def synthesize_and_queue(
+        self,
+        session_id: str,
+        text: str,
+        emotion_tag: str,
+        sovits_url: str = None,
+    ) -> int:
+        audio = await self.synthesize_async(text, emotion_tag, sovits_url=sovits_url)
+        return await self._dispatch(
+            session_id,
+            {"audio": audio, "error": None, "text": text, "emotion": emotion_tag},
+        )
+
+
+def test_ws_leak_interception_retries_then_clean(app_client):
     """Task 1.3 契约：首次流式输出含 leak 时必须丢弃整轮并重试，
     最终只下发干净的红莉栖式文本，永不下发露馅原文。"""
     mock_ds = _CallCountingStreamMock()
@@ -80,8 +119,7 @@ async def test_ws_leak_interception_retries_then_clean():
     with patch("app.routers.chat_ws.deepseek_service", mock_ds), \
          patch("app.routers.chat_ws.tts_manager", mock_tts):
 
-        client = TestClient(app)
-        with client.websocket_connect("/ws/chat?session_id=test_leak_retry") as websocket:
+        with app_client.websocket_connect("/ws/chat?session_id=test_leak_retry") as websocket:
             websocket.send_json({"type": "auth", "api_key": "test_key"})
             websocket.send_json({"type": "chat", "content": "Who are you?"})
 
@@ -111,8 +149,7 @@ async def test_ws_leak_interception_retries_then_clean():
             assert not contains_leak(session.history[-1]["content"])
 
 
-@pytest.mark.asyncio
-async def test_ws_leak_fallback_when_retries_exhausted():
+def test_ws_leak_fallback_when_retries_exhausted(app_client):
     """连续 3 次都 leak 时走兜底：下发固定红莉栖式反驳句，绝不下发露馅原文。"""
     mock_ds = _AlwaysLeakMock()
     mock_tts = MockTTSManager()
@@ -120,8 +157,7 @@ async def test_ws_leak_fallback_when_retries_exhausted():
     with patch("app.routers.chat_ws.deepseek_service", mock_ds), \
          patch("app.routers.chat_ws.tts_manager", mock_tts):
 
-        client = TestClient(app)
-        with client.websocket_connect("/ws/chat?session_id=test_leak_exhaust") as websocket:
+        with app_client.websocket_connect("/ws/chat?session_id=test_leak_exhaust") as websocket:
             websocket.send_json({"type": "auth", "api_key": "test_key"})
             websocket.send_json({"type": "chat", "content": "你是AI吗"})
 

@@ -27,6 +27,7 @@ class LLMInterface(ABC):
         history: list,
         api_key: Optional[str] = None,
         old_summary: str = "",
+        model: Optional[str] = None,
     ) -> str:
         """Compress conversation history into a single summary sentence."""
         ...
@@ -36,6 +37,23 @@ class LLMInterface(ABC):
         self,
         text: str,
         api_key: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> str:
         """Translate text (typically Japanese) to Chinese."""
+        ...
+
+    @abstractmethod
+    async def complete_json(
+        self,
+        messages: list[dict],
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        temperature: float = 0.1,
+    ) -> dict:
+        """Return one validated JSON object from a non-streaming completion."""
+        ...
+
+    @abstractmethod
+    async def list_models(self, api_key: Optional[str] = None) -> list[str]:
+        """Return provider model identifiers available to the credential."""
         ...

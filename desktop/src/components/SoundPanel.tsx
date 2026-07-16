@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect, useLayoutEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 interface SoundPanelProps {
   isOpen: boolean;
@@ -29,14 +30,51 @@ export const SoundPanel: React.FC<SoundPanelProps> = ({
   onSfxVolumeChange,
   onEnableTtsChange,
 }) => {
+  const [position, setPosition] = useState<{ top: number; left: number; width: number } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!isOpen) return;
+    const placePanel = () => {
+      const trigger = document.querySelector<HTMLElement>('.sound-control-anchor .ctrl-btn');
+      if (!trigger) return;
+      const rect = trigger.getBoundingClientRect();
+      const width = Math.min(300, window.innerWidth - 32);
+      setPosition({
+        top: rect.bottom + 10,
+        left: Math.max(16, Math.min(rect.right - width, window.innerWidth - width - 16)),
+        width,
+      });
+    };
+    placePanel();
+    window.addEventListener('resize', placePanel);
+    window.addEventListener('scroll', placePanel, true);
+    return () => {
+      window.removeEventListener('resize', placePanel);
+      window.removeEventListener('scroll', placePanel, true);
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
-  return (
-    <div className="sound-panel-overlay" onClick={onClose}>
-      <div className="sound-panel-dropdown" onClick={(e) => e.stopPropagation()}>
+  return createPortal(
+    <>
+      <button className="sound-panel-backdrop" type="button" aria-label="关闭音量控制" onClick={onClose} />
+      <div
+        className="sound-panel-dropdown"
+        style={position ? { position: 'fixed', top: position.top, left: position.left, width: position.width } : undefined}
+      >
         <div className="sound-panel-header">
           <span className="sound-panel-title">SOUND CONTROL</span>
-          <button className="sound-panel-close" onClick={onClose}>×</button>
+          <button className="sound-panel-close" type="button" aria-label="关闭音量控制" onClick={onClose}>×</button>
         </div>
 
         <div className="sound-panel-body">
@@ -99,7 +137,8 @@ export const SoundPanel: React.FC<SoundPanelProps> = ({
           </div>
         </div>
       </div>
-    </div>
+    </>
+    , document.body
   );
 };
 

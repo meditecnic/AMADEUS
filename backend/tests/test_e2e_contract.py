@@ -3,13 +3,12 @@ import os
 import pytest
 import asyncio
 import copy
+import threading
 from unittest.mock import patch, AsyncMock
-from fastapi.testclient import TestClient
 
 # Ensure backend root is in python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app.main import app
 from app.routers.chat_ws import sessions
 
 # =====================================================================
@@ -20,7 +19,18 @@ class MockDeepSeekService:
     def __init__(self):
         self.delay = 0.0
 
-    async def get_chat_stream(self, active_history, memory_summary=None, api_key=None, system_prompt=None, temperature=0.7, tools=None, tool_choice=None):
+    async def get_chat_stream(
+        self,
+        active_history,
+        memory_summary=None,
+        api_key=None,
+        system_prompt=None,
+        temperature=0.7,
+        tools=None,
+        tool_choice=None,
+        model=None,
+        reasoning_effort=None,
+    ):
         if self.delay > 0:
             await asyncio.sleep(self.delay)
         yield {"content": "[EMO:tsundere] あんたなんか、頼んでないわよ！", "tool_calls": None}
@@ -29,19 +39,64 @@ class MockDeepSeekService:
     async def translate_to_zh(self, text, api_key=None):
         return "我才没有求你呢！我可不记得我是你的助手。"
 
-    async def compress_history(self, history, api_key=None):
+    async def compress_history(self, history, api_key=None, old_summary=""):
         return "紅莉栖は助手の呼称を拒絶し、ツンデレな態度を取っている。"
 
 
 class MockTTSQueueManager:
     def __init__(self):
         self.fail_tts = False
+        self._callbacks = {}
+        self._next_sequence = {}
 
     async def synthesize_async(self, text: str, emotion_tag: str, sovits_url: str = None) -> bytes:
         if self.fail_tts:
             # 返回 None 模拟降级
             return None
         return b"mocked_kurisu_audio_bytes"
+
+    def reset_sequence(self, session_id: str, send_callback):
+        self._callbacks[session_id] = send_callback
+        self._next_sequence[session_id] = 0
+
+    def cancel_pending(self, session_id: str):
+        self._callbacks.pop(session_id, None)
+        self._next_sequence.pop(session_id, None)
+
+    async def gather_pending(self, session_id: str):
+        return None
+
+    async def _dispatch(self, session_id: str, payload: dict) -> int:
+        sequence = self._next_sequence.get(session_id, 0)
+        self._next_sequence[session_id] = sequence + 1
+        callback = self._callbacks.get(session_id)
+        if callback is not None:
+            await callback(sequence, payload)
+        return sequence
+
+    async def queue_silent(self, session_id: str, text: str, emotion: str, reason: str) -> int:
+        return await self._dispatch(
+            session_id,
+            {"audio": None, "error": reason, "text": text, "emotion": emotion},
+        )
+
+    async def synthesize_and_queue(
+        self,
+        session_id: str,
+        text: str,
+        emotion_tag: str,
+        sovits_url: str = None,
+    ) -> int:
+        audio = await self.synthesize_async(text, emotion_tag, sovits_url=sovits_url)
+        return await self._dispatch(
+            session_id,
+            {
+                "audio": audio,
+                "error": None if audio is not None else "service_error",
+                "text": text,
+                "emotion": emotion_tag,
+            },
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -69,12 +124,24 @@ def mock_services():
 
 class TestBackendE2EContract:
 
+    @pytest.fixture(autouse=True)
+    def managed_client(self, mock_lifespan_network, app_client):
+        """Keep one application event loop alive for the whole test.
+
+        WebSocket requests perform asynchronous SQLite work.  A bare
+        ``TestClient`` tears its portal down as soon as the socket context
+        exits, which can close the loop before aiosqlite's worker thread posts
+        its final result.  The outer client context also exercises application
+        shutdown deterministically.
+        """
+        self.client = app_client
+
     # -----------------------------------------------------------------
     # R2.1: WebSocket 首帧强制 Auth 认证契约
     # -----------------------------------------------------------------
     def test_ws_requires_auth_as_first_frame(self, mock_services):
         """连接后第一帧必须是 auth 帧，否则强行断开连接"""
-        client = TestClient(app)
+        client = self.client
         with client.websocket_connect("/ws/chat?session_id=test_auth_fail") as websocket:
             websocket.send_json({"type": "chat", "content": "Hello?"})
             # 预期后端因第一帧不是 auth 而不主动断开，而是返回 error 帧
@@ -84,7 +151,7 @@ class TestBackendE2EContract:
 
     def test_ws_successful_auth_handshake(self, mock_services):
         """第一帧发送合法 auth 帧后，连接得以维持，可以正常聊天"""
-        client = TestClient(app)
+        client = self.client
         with client.websocket_connect("/ws/chat?session_id=test_auth_success") as websocket:
             websocket.send_json({"type": "auth", "api_key": "test_valid_key"})
             websocket.send_json({"type": "chat", "content": "こんにちは"})
@@ -93,11 +160,39 @@ class TestBackendE2EContract:
             assert first_response["type"] == "status"
             assert first_response["dsk"] == "thinking"
 
-    def test_ws_empty_api_key_auth_returns_error_without_policy_close(self, mock_services):
-        """Empty auth credentials should be reported as an error frame, not a 1008 policy close."""
-        client = TestClient(app)
+    def test_auth_selects_requested_conversation_before_loading_provider(self, mock_services):
+        session_id = "test_auth_conversation_selection"
+        created = self.client.post(
+            "/api/conversations",
+            json={"session_id": session_id, "worldline": "steins_gate"},
+        )
+        assert created.status_code == 201
+        conversation_id = created.json()["id"]
+
+        with self.client.websocket_connect(f"/ws/chat?session_id={session_id}") as websocket:
+            websocket.send_json({
+                "type": "auth",
+                "client": "desktop",
+                "protocol_version": 2,
+                "worldline": "steins_gate",
+                "conversation_id": conversation_id,
+            })
+            websocket.send_json({"type": "chat.send", "content": "selected"})
+            response = websocket.receive_json()
+            assert response["type"] == "turn.started"
+
+        assert sessions[session_id].conversation_id == conversation_id
+
+    def test_ws_missing_stored_credential_returns_error_without_policy_close(
+        self,
+        mock_services,
+        isolated_provider_credentials,
+    ):
+        """Missing local credentials produce an error frame, not a policy close."""
+        isolated_provider_credentials.delete("deepseek")
+        client = self.client
         with client.websocket_connect("/ws/chat?session_id=test_auth_empty_key") as websocket:
-            websocket.send_json({"type": "auth", "api_key": ""})
+            websocket.send_json({"type": "auth"})
 
             response = websocket.receive_json()
             assert response["type"] == "error"
@@ -108,7 +203,7 @@ class TestBackendE2EContract:
     # -----------------------------------------------------------------
     def test_ws_duplicate_auth_during_session(self, mock_services):
         """成功建立连接后，再次发送 auth 帧不挂断连接，而是忽略或返回错误"""
-        client = TestClient(app)
+        client = self.client
         with client.websocket_connect("/ws/chat?session_id=test_dup_auth") as websocket:
             websocket.send_json({"type": "auth", "api_key": "my_key"})
             
@@ -127,7 +222,7 @@ class TestBackendE2EContract:
     # -----------------------------------------------------------------
     def test_config_update_temperature_clipping(self, mock_services):
         """config_update 传入越界 temperature 应被后端强制裁剪在 0.0-2.0 之间"""
-        client = TestClient(app)
+        client = self.client
         with client.websocket_connect("/ws/chat?session_id=test_clip") as websocket:
             websocket.send_json({"type": "auth", "api_key": "my_key"})
             
@@ -149,9 +244,9 @@ class TestBackendE2EContract:
             assert session_state is not None
             assert session_state.temperature == 2.0
 
-    def test_config_update_api_key_allowed(self, mock_services):
-        """config_update 帧中支持含有 api_key 字段进行热更新，并忽略空Key"""
-        client = TestClient(app)
+    def test_config_update_api_key_is_ignored(self, mock_services):
+        """WebSocket config frames cannot replace the credential-store secret."""
+        client = self.client
         session_id = "test_allowed_key"
         with client.websocket_connect(f"/ws/chat?session_id={session_id}") as websocket:
             websocket.send_json({"type": "auth", "api_key": "my_key"})
@@ -171,7 +266,7 @@ class TestBackendE2EContract:
             from app.routers.chat_ws import sessions
             session_state = sessions.get(session_id)
             assert session_state is not None
-            assert session_state.api_key == "new_hot_key"
+            assert session_state.api_key == "test-provider-credential"
 
             # 再次发送空 api_key 进行更新，应当忽略更新
             websocket.send_json({
@@ -186,14 +281,14 @@ class TestBackendE2EContract:
                 if r.get("type") == "status" and r.get("dsk") == "idle":
                     break
                     
-            assert session_state.api_key == "new_hot_key"
+            assert session_state.api_key == "test-provider-credential"
 
     # -----------------------------------------------------------------
     # R2/R3.1: 后端状态快照深拷贝隔离
     # -----------------------------------------------------------------
     def test_session_state_snapshot_isolation(self, mock_services):
         """验证会话快照为深拷贝隔离，外部修改不会污染后端历史"""
-        client = TestClient(app)
+        client = self.client
         session_id = "test_snapshot_id"
         
         with client.websocket_connect(f"/ws/chat?session_id={session_id}") as websocket:
@@ -228,7 +323,7 @@ class TestBackendE2EContract:
     def test_system_prompt_update_isolation(self, mock_services):
         """system_prompt 更新时清空 history，在飞请求返回的结果不被追加到新历史中"""
         mock_ds, _ = mock_services
-        client = TestClient(app)
+        client = self.client
         
         with client.websocket_connect("/ws/chat?session_id=test_inflight") as websocket:
             websocket.send_json({"type": "auth", "api_key": "my_key"})
@@ -260,7 +355,7 @@ class TestBackendE2EContract:
     def test_concurrent_chat_rejected(self, mock_services):
         """当一个 chat 正在处理时，发送第二个 chat 将被拒绝并返回错误帧，且不干扰前一个生成"""
         mock_ds, _ = mock_services
-        client = TestClient(app)
+        client = self.client
         
         with client.websocket_connect("/ws/chat?session_id=test_concurrency") as websocket:
             websocket.send_json({"type": "auth", "api_key": "my_key"})
@@ -275,6 +370,15 @@ class TestBackendE2EContract:
             responses = []
             for _ in range(5):
                 responses.append(websocket.receive_json())
+
+            # The first request is still running after the busy response.  Keep
+            # the WebSocket portal alive until that request has completed so
+            # its final database writes cannot target a closed event loop.
+            while not any(
+                response.get("type") == "status" and response.get("dsk") == "idle"
+                for response in responses
+            ):
+                responses.append(websocket.receive_json())
                 
             busy_error = [r for r in responses if r.get("type") == "error" and ("系统正在处理" in r.get("message", ""))]
             assert len(busy_error) == 1, "Should reject concurrent request with a busy/wait error"
@@ -287,7 +391,7 @@ class TestBackendE2EContract:
         _, mock_tts = mock_services
         mock_tts.fail_tts = True
         
-        client = TestClient(app)
+        client = self.client
         with client.websocket_connect("/ws/chat?session_id=test_tts_degrade") as websocket:
             # 发送合法 auth 帧以通过首帧校验
             websocket.send_json({"type": "auth", "api_key": "my_key"})
@@ -320,7 +424,7 @@ class TestBackendE2EContract:
     # -----------------------------------------------------------------
     def test_chat_deprecated_message_rejected(self, mock_services):
         """当发送带有废弃的 'message' 字段的 chat 帧时，后端返回报错拒绝且不断连"""
-        client = TestClient(app)
+        client = self.client
         with client.websocket_connect("/ws/chat?session_id=test_deprecated_message") as websocket:
             websocket.send_json({"type": "auth", "api_key": "my_key"})
             
@@ -348,7 +452,7 @@ class TestBackendE2EContract:
     def test_tts_user_disabled_degradation(self, mock_services):
         """流式过程中，用户发起 config_update 关闭 TTS，随后的句子全部以 user_disabled 形式降级"""
         mock_ds, _ = mock_services
-        client = TestClient(app)
+        client = self.client
         with client.websocket_connect("/ws/chat?session_id=test_user_disable") as websocket:
             websocket.send_json({"type": "auth", "api_key": "my_key"})
             
@@ -384,3 +488,130 @@ class TestBackendE2EContract:
         expected = {"neutral", "tsundere", "embarrassed", "intellectual",
                     "happy", "surprised", "annoyed", "disappointed", "sad"}
         assert ALLOWED_EMOTIONS == expected
+
+    def test_v2_chat_uses_turn_and_segment_events_without_legacy_chunks(self, mock_services):
+        client = self.client
+        with client.websocket_connect("/ws/chat?session_id=test_protocol_v2") as websocket:
+            websocket.send_json(
+                {
+                    "type": "auth",
+                    "api_key": "my_key",
+                    "client": "desktop",
+                    "protocol_version": 2,
+                }
+            )
+            websocket.send_json({"type": "chat.send", "content": "Hello v2"})
+
+            responses = []
+            while True:
+                response = websocket.receive_json()
+                responses.append(response)
+                if response.get("type") in {"turn.completed", "error"}:
+                    break
+
+            event_types = [response.get("type") for response in responses]
+            assert "turn.started" in event_types
+            assert "segment.ready" in event_types
+            assert "segment.audio" in event_types
+            assert not {"text_chunk", "audio_chunk", "translation"}.intersection(event_types)
+            segment = next(response for response in responses if response.get("type") == "segment.ready")
+            assert segment["conversation_id"]
+            assert segment["turn_id"]
+            assert segment["segment_id"] == 0
+            assert segment["ja"]
+            assert segment["zh"]
+
+    def test_v2_voice_stop_keeps_segment_text_and_suppresses_audio(self, mock_services):
+        mock_ds, _ = mock_services
+        mock_ds.delay = 0.1
+        client = self.client
+        with client.websocket_connect("/ws/chat?session_id=test_protocol_v2_voice_stop") as websocket:
+            websocket.send_json(
+                {"type": "auth", "api_key": "my_key", "client": "desktop", "protocol_version": 2}
+            )
+            websocket.send_json({"type": "chat.send", "content": "Stop voice"})
+            websocket.send_json({"type": "voice.stop"})
+
+            responses = []
+            while True:
+                response = websocket.receive_json()
+                responses.append(response)
+                if response.get("type") == "turn.completed":
+                    break
+
+            assert any(response.get("type") == "segment.ready" for response in responses)
+            assert not any(response.get("type") == "segment.audio" for response in responses)
+            assert any(
+                response.get("type") == "segment.audio_error"
+                and response.get("reason") == "voice_stopped"
+                for response in responses
+            )
+
+    def test_v2_turn_cancel_emits_cancelled_even_before_pipeline_start(self, mock_services):
+        mock_ds, _ = mock_services
+        mock_ds.delay = 0.2
+        client = self.client
+        with client.websocket_connect("/ws/chat?session_id=test_protocol_v2_cancel") as websocket:
+            websocket.send_json(
+                {"type": "auth", "api_key": "my_key", "client": "desktop", "protocol_version": 2}
+            )
+            websocket.send_json({"type": "chat.send", "content": "Cancel turn"})
+            websocket.send_json({"type": "turn.cancel"})
+
+            responses = []
+            while True:
+                response = websocket.receive_json()
+                responses.append(response)
+                if response.get("type") in {"turn.cancelled", "turn.completed"}:
+                    break
+
+            assert responses[-1]["type"] == "turn.cancelled"
+            assert responses[-1]["turn_id"]
+            assert not any(response.get("type") == "segment.ready" for response in responses)
+
+    def test_v2_emits_first_segment_before_model_stream_finishes(self, mock_services):
+        release_second = threading.Event()
+
+        class PausedStreamService:
+            async def get_chat_stream(self, *args, **kwargs):
+                yield {"content": "[EMO:neutral] 一文目。", "tool_calls": None}
+                await asyncio.to_thread(release_second.wait)
+                yield {"content": "二文目。", "tool_calls": None}
+
+            async def translate_to_zh(self, text, api_key=None):
+                return f"译:{text}"
+
+            async def compress_history(self, history, api_key=None, old_summary=""):
+                return ""
+
+        with patch("app.routers.chat_ws.deepseek_service", PausedStreamService()):
+            client = self.client
+            with client.websocket_connect("/ws/chat?session_id=test_protocol_v2_incremental") as websocket:
+                websocket.send_json(
+                    {"type": "auth", "api_key": "my_key", "client": "desktop", "protocol_version": 2}
+                )
+                websocket.send_json({"type": "chat.send", "content": "Stream"})
+
+                before_release = []
+                while True:
+                    response = websocket.receive_json()
+                    before_release.append(response)
+                    if response.get("type") == "segment.ready":
+                        break
+
+                assert before_release[-1]["segment_id"] == 0
+                assert not any(response.get("type") == "turn.completed" for response in before_release)
+
+                release_second.set()
+                after_release = []
+                while True:
+                    response = websocket.receive_json()
+                    after_release.append(response)
+                    if response.get("type") == "turn.completed":
+                        break
+
+                assert [
+                    response["segment_id"]
+                    for response in after_release
+                    if response.get("type") == "segment.ready"
+                ] == [1]

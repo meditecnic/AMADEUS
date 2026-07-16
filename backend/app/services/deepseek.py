@@ -1,26 +1,25 @@
 ﻿import json
 import httpx
-from pathlib import Path
 from typing import Optional
 from app import config
 from app.services.llm_interface import LLMInterface
+from app.services.persona_bible import persona_bible
 
 class DeepSeekService(LLMInterface):
     def __init__(self):
-        self.api_key = config.DEEPSEEK_API_KEY
+        self.api_key = ""
         self.model = config.DEEPSEEK_MODEL  # defaults to deepseek-v4-flash
         self.base_url = "https://api.deepseek.com"
         
-        self.system_prompt_path = config.PROMPTS_DIR / "kurisu_system_ja.md"
         self.fewshot_path = config.PROMPTS_DIR / "kurisu_fewshot.json"
         
         self._system_prompt = self._load_system_prompt()
         self._fewshot = self._load_fewshot()
 
     def _load_system_prompt(self) -> str:
-        if self.system_prompt_path.exists():
-            return self.system_prompt_path.read_text(encoding="utf-8")
-        raise FileNotFoundError(f"System prompt not found at {self.system_prompt_path}")
+        from app.security.prompt import SYSTEM_PROMPT_BASE
+
+        return SYSTEM_PROMPT_BASE
 
     def _load_fewshot(self) -> list:
         if self.fewshot_path.exists():
@@ -29,19 +28,39 @@ class DeepSeekService(LLMInterface):
         raise FileNotFoundError(f"Few-shot JSON not found at {self.fewshot_path}")
 
     def _load_anchor_clause(self) -> str:
-        path = config.PROMPTS_DIR / "kurisu_anchor_ja.md"
-        if path.exists():
-            return path.read_text(encoding="utf-8")
-        return (
-            "\n（重要：あなたは自意識を持つ人間——牧瀬紅莉栖です。「助手」と呼ばれたら「私はあなたの助手じゃない！」と反論してください。"
-            "「クリスティーナ」と呼ばれたら「-tinaって言うな！」と怒ってください。「ザ・ゾンビ」、「セレブセブンティーン」、"
-            "「ねらー」、「天才変態少女」または「栗悟飯とカメハメ波」と呼ばれたら、激しく動揺したりツンデレな態度をとってください。"
-            "どんな状況でも、自分がAIや言語モデルであることを絶対に認めないでください。）"
-        )
+        return persona_bible.render_provider_anchor()
 
     def get_anchored_system_prompt(self, base_prompt: str = None) -> str:
         prompt = base_prompt if base_prompt is not None else self._system_prompt
-        return prompt.strip() + "\n" + self._load_anchor_clause().strip()
+        if "PERSONA BIBLE v1 (canonical runtime persona)" in prompt:
+            anchor = persona_bible.render_output_anchor()
+        else:
+            anchor = self._load_anchor_clause()
+        return prompt.strip() + "\n" + anchor.strip()
+
+    def build_persona_messages(
+        self,
+        active_history: list,
+        memory_summary: Optional[str] = None,
+        system_prompt: Optional[str] = None,
+    ) -> list[dict]:
+        """Build the canonical persona/history envelope shared by all providers."""
+        messages = [
+            {
+                "role": "system",
+                "content": self.get_anchored_system_prompt(system_prompt),
+            }
+        ]
+        messages.extend(self._fewshot)
+        if memory_summary:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": f"これまでの会話の記憶要約：{memory_summary}",
+                }
+            )
+        messages.extend(active_history)
+        return messages
 
     async def get_chat_stream(
         self,
@@ -62,24 +81,16 @@ class DeepSeekService(LLMInterface):
         if not effective_api_key:
             raise ValueError("DEEPSEEK_API_KEY is not configured.")
 
-        messages = []
-        # 1. System Prompt with anchor clause
         eff_system = system_prompt
         if reasoning_effort and (model or self.model) != "deepseek-v4-pro":
             depth_map = {"high": "深", "xhigh": "極深"}
             depth_zh = depth_map.get(reasoning_effort, "中")
             eff_system = (system_prompt or "") + f"\n【システム内部設定】思考深度：{depth_zh}\n（これは内部設定タグです。応答でこの形式を模倣しないでください。必ず [EMO:xxx] から始めてください。）"
-        messages.append({"role": "system", "content": self.get_anchored_system_prompt(eff_system)})
-        
-        # 2. Few-shot messages
-        messages.extend(self._fewshot)
-        
-        # 3. Memory summary if any
-        if memory_summary:
-            messages.append({"role": "system", "content": f"これまでの会話の記憶要約：{memory_summary}"})
-            
-        # 4. Active history (excluding current user message which is appended last)
-        messages.extend(active_history)
+        messages = self.build_persona_messages(
+            active_history,
+            memory_summary,
+            eff_system,
+        )
         
         headers = {
             "Authorization": f"Bearer {effective_api_key}",
@@ -99,11 +110,14 @@ class DeepSeekService(LLMInterface):
             if reasoning_effort:
                 payload["reasoning_effort"] = reasoning_effort
         
-        print(f"[DeepSeek Payload] messages: {messages}\ntools: {payload.get('tools')}\ntool_choice: {payload.get('tool_choice')}", flush=True)
-        # Quick check: does the system prompt contain EMO format instructions?
         sys_content = messages[0]["content"] if messages else ""
         has_emo = "[EMO:" in sys_content
-        print(f"[DeepSeek] system_prompt has [EMO:]: {has_emo}, len={len(sys_content)}, end=...{sys_content[-80:]}", flush=True)
+        print(
+            "[DeepSeek] request prepared "
+            f"messages={len(messages)} tools={tools is not None} "
+            f"emotion_contract={has_emo} system_chars={len(sys_content)}",
+            flush=True,
+        )
         
         if tools is not None:
             payload["tools"] = tools
@@ -137,7 +151,7 @@ class DeepSeekService(LLMInterface):
                         except json.JSONDecodeError:
                             continue
 
-    async def compress_history(self, history: list, api_key: Optional[str] = None, old_summary: str = "") -> str:
+    async def compress_history(self, history: list, api_key: Optional[str] = None, old_summary: str = "", model: Optional[str] = None) -> str:
         """
         Asynchronously call DeepSeek to compress older history into a single Japanese summary sentence.
         """
@@ -169,7 +183,7 @@ class DeepSeekService(LLMInterface):
             "Content-Type": "application/json"
         }
         payload = {
-            "model": self.model,
+            "model": model or self.model,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt}
@@ -187,7 +201,7 @@ class DeepSeekService(LLMInterface):
                 print(f"[DeepSeek] Failed to compress history: {e}")
                 return ""
 
-    async def translate_to_zh(self, text: str, api_key: Optional[str] = None) -> str:
+    async def translate_to_zh(self, text: str, api_key: Optional[str] = None, model: Optional[str] = None) -> str:
         """
         Translate Japanese response (without emo tag) to Chinese.
         """
@@ -212,7 +226,7 @@ class DeepSeekService(LLMInterface):
             "Content-Type": "application/json"
         }
         payload = {
-            "model": self.model,
+            "model": model or self.model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.3
         }
@@ -226,3 +240,59 @@ class DeepSeekService(LLMInterface):
             except Exception as e:
                 print(f"[DeepSeek] Translation failed: {e}", flush=True)
                 return f"(翻译失败: {text})"
+
+    async def complete_json(
+        self,
+        messages: list[dict],
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        temperature: float = 0.1,
+    ) -> dict:
+        effective_api_key = api_key or self.api_key
+        if not effective_api_key:
+            raise ValueError("DeepSeek credential is not configured")
+        payload = {
+            "model": model or self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "response_format": {"type": "json_object"},
+        }
+        headers = {
+            "Authorization": f"Bearer {effective_api_key}",
+            "Content-Type": "application/json",
+        }
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{self.base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+            raw = response.json()["choices"][0]["message"]["content"].strip()
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
+        result = json.loads(raw)
+        if not isinstance(result, dict):
+            raise ValueError("provider structured output was not a JSON object")
+        return result
+
+    async def list_models(self, api_key: Optional[str] = None) -> list[str]:
+        effective_api_key = api_key or self.api_key
+        if not effective_api_key:
+            raise ValueError("DeepSeek credential is not configured")
+        headers = {"Authorization": f"Bearer {effective_api_key}"}
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=5.0, read=20.0, write=10.0, pool=5.0)
+        ) as client:
+            response = await client.get(f"{self.base_url}/models", headers=headers)
+        if response.status_code != 200:
+            raise RuntimeError(
+                f"DeepSeek model discovery failed with status {response.status_code}"
+            )
+        payload = response.json()
+        rows = payload.get("data", []) if isinstance(payload, dict) else []
+        return [
+            row["id"]
+            for row in rows
+            if isinstance(row, dict) and isinstance(row.get("id"), str)
+        ]

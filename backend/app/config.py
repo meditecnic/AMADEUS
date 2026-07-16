@@ -17,6 +17,23 @@ ASSETS_DIR = Path(os.getenv("ASSETS_DIR", "<LOCAL_PATH>"))
 HISTORY_COMPRESS_THRESHOLD = int(os.getenv("HISTORY_COMPRESS_THRESHOLD", "15"))
 
 PROMPTS_DIR = backend_dir / "prompts"
+CHARACTERS_DIR = backend_dir / "characters"
+
+# Memory and prompt compiler invariants
+EMBEDDING_MODEL = os.getenv("AMADEUS_EMBEDDING_MODEL", "intfloat/multilingual-e5-small")
+EMBEDDING_DIMENSION = int(os.getenv("AMADEUS_EMBEDDING_DIMENSION", "384"))
+PROMPT_INPUT_BUDGET = int(os.getenv("AMADEUS_PROMPT_INPUT_BUDGET", "12000"))
+PROMPT_OUTPUT_RESERVE = int(os.getenv("AMADEUS_PROMPT_OUTPUT_RESERVE", "2000"))
+
+# Voice endpoint defaults
+VAD_SILENCE_MS = int(os.getenv("AMADEUS_VAD_SILENCE_MS", "600"))
+VAD_MIN_SPEECH_MS = int(os.getenv("AMADEUS_VAD_MIN_SPEECH_MS", "250"))
+VAD_SPEECH_PAD_MS = int(os.getenv("AMADEUS_VAD_SPEECH_PAD_MS", "120"))
+VAD_MAX_UTTERANCE_S = int(os.getenv("AMADEUS_VAD_MAX_UTTERANCE_S", "30"))
+VAD_THRESHOLD = float(os.getenv("AMADEUS_VAD_THRESHOLD", "0.5"))
+
+if not 300 <= VAD_SILENCE_MS <= 2000:
+    raise ValueError("AMADEUS_VAD_SILENCE_MS must be between 300 and 2000")
 
 # TTS reference audio paths (overridable via env vars)
 # Optimized 9-emotion mapping using RMS-normalized reference clips.

@@ -103,7 +103,17 @@ async def test_processor_loop_triggers_web_search_for_weather(tmp_path, monkeypa
     epoch = 1
     start_history_epoch = session.history_epoch
 
-    async def fake_clean_stream(*, active_history, memory_summary, session, tools, tool_choice, default_emotion="neutral"):
+    async def fake_clean_stream(
+        *,
+        active_history,
+        memory_summary,
+        session,
+        tools,
+            tool_choice,
+            default_emotion="neutral",
+            on_text_delta=None,
+            provider_snapshot=None,
+        ):
         # First call: simulate model emitting a web_search tool call
         if tool_choice != "none":
             return "", "neutral", {

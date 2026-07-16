@@ -48,5 +48,19 @@ desktop/public/assets/sliced/
 # Agent working logs
 .agents/
 
+# Local recovery and generated review material
+.trash/
+生成素材图/
+
+# Test-generated speech artifacts
+backend/tests/tts_output/
+backend/tests/diagnose_*.py
+backend/tests/extract_raw_refs.py
+
+# Local source takes used only by voice-diagnostic scripts
+desktop/public/assets/audio/ref/*_raw.wav
+desktop/public/assets/audio/ref/*_original.wav
+desktop/public/assets/audio/ref/*_crop_*.wav
+
 # Backup files
 *.bak

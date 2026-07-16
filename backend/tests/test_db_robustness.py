@@ -1,8 +1,10 @@
 import sys
 import os
 import pytest
+import pytest_asyncio
 import asyncio
 import sqlite3
+import threading
 import aiosqlite
 from unittest.mock import patch, AsyncMock
 from fastapi import WebSocketDisconnect
@@ -49,14 +51,13 @@ class MockWebSocket:
         await self.recv_queue.put(None)
 
 
-@pytest.fixture(autouse=True)
-def setup_test_db(tmp_path, monkeypatch):
+@pytest_asyncio.fixture(autouse=True)
+async def setup_test_db(tmp_path, monkeypatch):
     """Isolate DB environment for each test and initialize schema."""
     db_file = tmp_path / "test_amadeus_robustness.db"
     monkeypatch.setenv("AMADEUS_DB_PATH", str(db_file))
     
-    # Run async init_db synchronously
-    asyncio.run(init_db())
+    await init_db()
     
     yield db_file
     # Cleanup sessions store to ensure test isolation
@@ -66,6 +67,79 @@ def setup_test_db(tmp_path, monkeypatch):
 # -----------------------------------------------------------------
 # 1. Connection lifecycle safety
 # -----------------------------------------------------------------
+@pytest.mark.asyncio
+async def test_get_db_closes_partially_initialized_connection_when_cancelled(monkeypatch):
+    """Cancellation during connection setup must not orphan an aiosqlite worker."""
+
+    class BlockingConnection:
+        def __init__(self):
+            self.row_factory = None
+            self.execute_started = asyncio.Event()
+            self.closed = asyncio.Event()
+
+        async def execute(self, _statement):
+            self.execute_started.set()
+            await asyncio.Future()
+
+        async def close(self):
+            self.closed.set()
+
+    connection = BlockingConnection()
+    monkeypatch.setattr(
+        aiosqlite,
+        "connect",
+        AsyncMock(return_value=connection),
+    )
+
+    task = asyncio.create_task(get_db())
+    await connection.execute_started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert connection.closed.is_set()
+
+
+@pytest.mark.asyncio
+async def test_get_db_waits_for_cancelled_initial_connect_worker(monkeypatch):
+    """Cancellation must not return while aiosqlite's worker is still alive."""
+
+    real_aiosqlite_connect = aiosqlite.connect
+    real_sqlite_connect = sqlite3.connect
+    connect_started = threading.Event()
+    release_connect = threading.Event()
+    captured = {}
+
+    def blocking_sqlite_connect(*args, **kwargs):
+        connect_started.set()
+        release_connect.wait(timeout=2.0)
+        return real_sqlite_connect(*args, **kwargs)
+
+    def captured_connect(*args, **kwargs):
+        connection = real_aiosqlite_connect(*args, **kwargs)
+        captured["connection"] = connection
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", blocking_sqlite_connect)
+    monkeypatch.setattr(aiosqlite, "connect", captured_connect)
+
+    task = asyncio.create_task(get_db())
+    assert await asyncio.to_thread(connect_started.wait, 1.0)
+    task.cancel()
+    release_timer = threading.Timer(0.05, release_connect.set)
+    release_timer.start()
+
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert not captured["connection"]._thread.is_alive()
+    finally:
+        release_connect.set()
+        release_timer.join(timeout=1.0)
+        captured["connection"]._thread.join(timeout=1.0)
+
+
 @pytest.mark.asyncio
 async def test_connection_lifecycle_no_leaks(setup_test_db):
     """
@@ -221,6 +295,10 @@ async def test_interrupted_writes_consistency(setup_test_db):
     """
     db_file = setup_test_db
     session_id = "interrupted-session"
+    from app.services.conversations import conversation_service
+
+    conversation = await conversation_service.get_or_create_default(session_id, "steins_gate")
+    conversation_id = conversation["id"]
     
     # Define a write that starts a transaction, inserts rows, sleeps, and commits
     async def interrupted_write():
@@ -228,14 +306,16 @@ async def test_interrupted_writes_consistency(setup_test_db):
         try:
             await db.execute("BEGIN TRANSACTION")
             await db.execute(
-                "INSERT INTO messages(session_id, role, content) VALUES(?,?,?)",
-                (session_id, "user", "msg A")
+                """INSERT INTO messages(session_id, conversation_id, role, content)
+                   VALUES(?,?,?,?)""",
+                (session_id, conversation_id, "user", "msg A")
             )
             # Sleep to allow cancellation in the middle
             await asyncio.sleep(2.0)
             await db.execute(
-                "INSERT INTO messages(session_id, role, content) VALUES(?,?,?)",
-                (session_id, "assistant", "msg B")
+                """INSERT INTO messages(session_id, conversation_id, role, content)
+                   VALUES(?,?,?,?)""",
+                (session_id, conversation_id, "assistant", "msg B")
             )
             await db.commit()
         finally:
@@ -266,8 +346,9 @@ async def test_interrupted_writes_consistency(setup_test_db):
         
         # Verify database is writeable and recovers
         await db.execute(
-            "INSERT INTO messages(session_id, role, content) VALUES(?,?,?)",
-            (session_id, "user", "post-recovery msg")
+            """INSERT INTO messages(session_id, conversation_id, role, content)
+               VALUES(?,?,?,?)""",
+            (session_id, conversation_id, "user", "post-recovery msg")
         )
         await db.commit()
         

@@ -1,11 +1,15 @@
 import { useState, useEffect, useRef } from 'react';
 
-class AudioPlayerManager {
+export class AudioPlayerManager {
   public ctx: AudioContext | null = null;
   public analyser: AnalyserNode | null = null;
   private gainNode: GainNode | null = null;
   private currentSource: AudioBufferSourceNode | null = null;
   private audioQueue: Array<{ buffer: AudioBuffer; onEnded?: () => void }> = [];
+  private decodedQueue = new Map<number, { buffer: AudioBuffer | null; onEnded?: () => void }>();
+  private nextDecodeSequence = 0;
+  private decodeSequence = 0;
+  private encodedBacklog: Array<{ base64Data: string; onEnded?: () => void }> = [];
   private isPlaying = false;
   private onVolumeCallback: ((vol: number) => void) | null = null;
   private onPlayStateChange: ((isPlaying: boolean) => void) | null = null;
@@ -14,10 +18,17 @@ class AudioPlayerManager {
   private currentPlayId = 0;
   private isMuted = false;
 
-  init() {
-    if (this.ctx) return;
+  init(): boolean {
+    if (this.ctx) return true;
     const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-    this.ctx = new AudioContextClass();
+    if (!AudioContextClass) return false;
+    try {
+      this.ctx = new AudioContextClass();
+    } catch (err) {
+      console.warn('AudioContext is not available yet:', err);
+      this.ctx = null;
+      return false;
+    }
     this.gainNode = this.ctx.createGain();
     this.analyser = this.ctx.createAnalyser();
     this.analyser.fftSize = 256;
@@ -26,6 +37,11 @@ class AudioPlayerManager {
     this.gainNode.connect(this.ctx.destination);
 
     this.gainNode.gain.setValueAtTime(this.isMuted ? 0 : 1, this.ctx.currentTime);
+    const backlog = this.encodedBacklog.splice(0);
+    backlog.forEach(({ base64Data, onEnded }) => {
+      void this.playBase64(base64Data, onEnded);
+    });
+    return true;
   }
 
   setMuted(muted: boolean) {
@@ -36,7 +52,7 @@ class AudioPlayerManager {
   }
 
   async unlockAudioContext() {
-    this.init();
+    if (!this.init()) return;
     if (!this.ctx) return;
     if (this.ctx.state === 'suspended') {
       await this.ctx.resume();
@@ -61,14 +77,19 @@ class AudioPlayerManager {
   }
 
   async playBase64(base64Data: string, onEnded?: () => void) {
-    this.init();
-    if (!this.ctx || !this.analyser) return;
+    if (!this.init() || !this.ctx || !this.analyser) {
+      this.encodedBacklog.push({ base64Data, onEnded });
+      if (this.encodedBacklog.length > 32) this.encodedBacklog.shift();
+      return;
+    }
+
+    const generation = this.currentPlayId;
+    const sequence = this.decodeSequence++;
 
     if (this.ctx.state === 'suspended') {
       await this.ctx.resume();
     }
-
-    const playId = ++this.currentPlayId;
+    if (generation !== this.currentPlayId) return;
 
     try {
       const binary = atob(base64Data);
@@ -79,17 +100,33 @@ class AudioPlayerManager {
 
       const audioBuffer = await this.ctx.decodeAudioData(bytes.buffer.slice(0));
 
-      if (playId !== this.currentPlayId) {
+      if (generation !== this.currentPlayId) {
         return;
       }
 
-      this.audioQueue.push({ buffer: audioBuffer, onEnded });
-      if (!this.isPlaying) {
-        this.processQueue();
-      }
+      this.decodedQueue.set(sequence, { buffer: audioBuffer, onEnded });
+      this.flushDecodedQueue();
     } catch (err) {
       console.error('Audio decode failed:', err);
       if (this.onDecodeError) this.onDecodeError(err);
+      if (generation === this.currentPlayId) {
+        this.decodedQueue.set(sequence, { buffer: null, onEnded });
+        this.flushDecodedQueue();
+      }
+    }
+  }
+
+  private flushDecodedQueue() {
+    while (this.decodedQueue.has(this.nextDecodeSequence)) {
+      const decoded = this.decodedQueue.get(this.nextDecodeSequence)!;
+      this.decodedQueue.delete(this.nextDecodeSequence);
+      this.nextDecodeSequence += 1;
+      if (decoded.buffer) {
+        this.audioQueue.push({ buffer: decoded.buffer, onEnded: decoded.onEnded });
+      }
+    }
+    if (!this.isPlaying && this.audioQueue.length > 0) {
+      this.processQueue();
     }
   }
 
@@ -102,12 +139,12 @@ class AudioPlayerManager {
       return;
     }
 
+    if (!this.ctx || !this.analyser) return;
+
     const wasPlaying = this.isPlaying;
     this.isPlaying = true;
     if (!wasPlaying && this.onPlayStateChange) this.onPlayStateChange(true);
     const { buffer, onEnded } = this.audioQueue.shift()!;
-
-    if (!this.ctx || !this.analyser) return;
 
     const source = this.ctx.createBufferSource();
     source.buffer = buffer;
@@ -163,6 +200,10 @@ class AudioPlayerManager {
       this.currentSource = null;
     }
     this.audioQueue = [];
+    this.decodedQueue.clear();
+    this.encodedBacklog = [];
+    this.decodeSequence = 0;
+    this.nextDecodeSequence = 0;
     const wasPlaying = this.isPlaying;
     this.isPlaying = false;
     if (wasPlaying && this.onPlayStateChange) this.onPlayStateChange(false);

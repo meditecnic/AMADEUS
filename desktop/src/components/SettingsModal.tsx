@@ -13,7 +13,11 @@ export interface SettingsModalProps {
   enableSfx: boolean;
   sfxVolume: number;
   temperature: number;
-  model: 'deepseek-v4-flash' | 'deepseek-v4-pro';
+  providerDisplayName: string;
+  providerBaseUrl?: string | null;
+  baseUrlConfigurable: boolean;
+  model: string;
+  modelOptions: string[];
   reasoningEffort: 'high' | 'xhigh';
   onSaveSettings: (settings: {
     worldline: 'steins_gate' | 'beta';
@@ -26,7 +30,8 @@ export interface SettingsModalProps {
     enableSfx: boolean;
     sfxVolume: number;
     temperature: number;
-    model: 'deepseek-v4-flash' | 'deepseek-v4-pro';
+    baseUrl: string;
+    model: string;
     reasoningEffort: 'high' | 'xhigh';
   }) => void;
 }
@@ -44,7 +49,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   enableSfx,
   sfxVolume,
   temperature,
+  providerDisplayName,
+  providerBaseUrl,
+  baseUrlConfigurable,
   model,
+  modelOptions,
   reasoningEffort,
   onSaveSettings,
 }) => {
@@ -55,6 +64,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [localEnableTts, setLocalEnableTts] = useState(enableTts);
   const [localSovitsUrl, setLocalSovitsUrl] = useState(sovitsUrl);
   const [localTemperature, setLocalTemperature] = useState(temperature);
+  const [localBaseUrl, setLocalBaseUrl] = useState(providerBaseUrl || '');
   const [localModel, setLocalModel] = useState(model);
   const [localReasoningIdx, setLocalReasoningIdx] = useState(
     reasoningEffort === 'xhigh' ? 1 : 0
@@ -69,10 +79,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setLocalEnableTts(enableTts);
       setLocalSovitsUrl(sovitsUrl);
       setLocalTemperature(temperature);
+      setLocalBaseUrl(providerBaseUrl || '');
       setLocalModel(model);
       setLocalReasoningIdx(reasoningEffort === 'xhigh' ? 1 : 0);
     }
-  }, [isOpen, worldline, apiKey, systemPrompt, enableTts, sovitsUrl, temperature, model, reasoningEffort]);
+  }, [isOpen, worldline, apiKey, systemPrompt, enableTts, sovitsUrl, temperature, providerBaseUrl, model, reasoningEffort]);
 
   if (!isOpen) return null;
 
@@ -88,6 +99,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       enableSfx: enableSfx,
       sfxVolume: sfxVolume,
       temperature: localTemperature,
+      baseUrl: localBaseUrl,
       model: localModel,
       reasoningEffort: (['high', 'xhigh'] as const)[localReasoningIdx],
     });
@@ -108,10 +120,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <button className="close-btn" onClick={onClose}>×</button>
           </div>
           <nav className="tab-pills-row">
-            <button className={`tab-pill ${activeTab === 'basic' ? 'active' : ''}`} onClick={() => setActiveTab('basic')}>
+            <button aria-label="BASIC" className={`tab-pill ${activeTab === 'basic' ? 'active' : ''}`} onClick={() => setActiveTab('basic')}>
               BASIC
             </button>
-            <button className={`tab-pill ${activeTab === 'voice' ? 'active' : ''}`} onClick={() => setActiveTab('voice')}>
+            <button aria-label="VOICE" className={`tab-pill ${activeTab === 'voice' ? 'active' : ''}`} onClick={() => setActiveTab('voice')}>
               VOICE
             </button>
           </nav>
@@ -119,27 +131,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             {/* BASIC tab */}
             <section className={`tab-panel ${activeTab === 'basic' ? 'active' : ''}`}>
               <div className="setting-field">
-                <label>DEEPSEEK API 密钥</label>
-                <input type="password" value={localApiKey} onChange={(e) => setLocalApiKey(e.target.value)} className="salieri-input" placeholder="sk-..." />
+                <label>{providerDisplayName.toUpperCase()} API 密钥</label>
+                <input type="password" value={localApiKey} onChange={(e) => setLocalApiKey(e.target.value)} className="salieri-input" placeholder="仅在本机安全存储" autoComplete="off" />
               </div>
-              <div className="setting-field">
-                <label>个性幅度</label>
+              <div className="setting-field personality-field">
+                <label>个性</label>
                 <div className="slider-row">
-                  <span className="slider-endpoint">严谨</span>
-                  <input type="range" min="0" max="2" step="0.1" value={localTemperature}
-                    onChange={(e) => setLocalTemperature(parseFloat(e.target.value))} className="salieri-range"
-                    style={{ '--val': `${(localTemperature / 2) * 100}%` } as React.CSSProperties} />
-                  <span className="slider-endpoint">发散</span>
+                  <div className="salieri-range-shell" style={{ '--val': `${(localTemperature / 2) * 100}%` } as React.CSSProperties}>
+                    <span className="salieri-range-fill" aria-hidden="true" />
+                    <input type="range" min="0" max="2" step="0.1" value={localTemperature}
+                      onChange={(e) => setLocalTemperature(parseFloat(e.target.value))} className="salieri-range"
+                      aria-label="个性" />
+                  </div>
                   <span className="slider-value">{localTemperature.toFixed(1)}</span>
                 </div>
               </div>
               <div className="setting-field">
                 <label>模型</label>
-                <select value={localModel} onChange={(e) => setLocalModel(e.target.value as 'deepseek-v4-flash' | 'deepseek-v4-pro')} className="salieri-select">
-                  <option value="deepseek-v4-flash">DeepSeek V4 Flash</option>
-                  <option value="deepseek-v4-pro">DeepSeek V4 Pro</option>
-                </select>
+                {baseUrlConfigurable ? (
+                  <input type="text" value={localModel} onChange={(e) => setLocalModel(e.target.value)} className="salieri-input" placeholder="local-model" />
+                ) : (
+                  <select value={localModel} onChange={(e) => setLocalModel(e.target.value)} className="salieri-select">
+                    {Array.from(new Set([localModel, ...modelOptions].filter(Boolean))).map((modelId) => (
+                      <option key={modelId} value={modelId}>{modelId}</option>
+                    ))}
+                  </select>
+                )}
               </div>
+              {baseUrlConfigurable && (
+                <div className="setting-field field-full">
+                  <label>OpenAI-compatible Base URL</label>
+                  <input type="url" value={localBaseUrl} onChange={(e) => setLocalBaseUrl(e.target.value)} className="salieri-input" placeholder="http://127.0.0.1:1234/v1" />
+                </div>
+              )}
               <div className="setting-field">
                 <label>当前世界线</label>
                 <select value={localWorldline} onChange={(e) => setLocalWorldline(e.target.value as 'steins_gate' | 'beta')} className="salieri-select">

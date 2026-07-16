@@ -169,27 +169,15 @@
 .user-id-group {
   left: 130px;
   top: 650px; /* 整体下移，空出 Logo 尖端 */
-  width: 560px; /* 105px 标签 + 15px 间距 + 440px 输入框 */
+  width: 585px; /* 130px 标签 + 15px 间距 + 440px 输入框 */
 }
 
 .password-group {
   left: 130px;
   top: 735px; /* 整体下移 */
-  width: 560px;
+  width: 585px;
 }
 
-/* 密码框到提交按钮的引导线 */
-.password-group::after {
-  content: '';
-  position: absolute;
-  right: -20px;
-  top: 24px;
-  width: 40px;
-  height: 1px;
-  background: linear-gradient(90deg, rgba(255, 170, 0, 0.25), rgba(255, 170, 0, 0.05));
-  pointer-events: none;
-  z-index: 0;
-}
 
 .field-title {
   color: #ffaa00;
@@ -197,7 +185,8 @@
   font-size: 19px;
   font-weight: normal;
   letter-spacing: 0.5px;
-  width: 105px; /* 固定宽度保证对齐 */
+  width: 130px; /* 加宽以适配 Audiowide 字体 */
+  flex-shrink: 0; /* 禁止 flex 压缩 */
   text-align: right;
   margin-right: 15px;
   text-shadow: 0 0 6px rgba(255, 170, 0, 0.75);
@@ -283,7 +272,7 @@
 
 .btn-container {
   position: absolute;
-  left: 710px;
+  left: 735px;
   top: 719px; /* 上移至 719px，实现与 48px 高度的输入框垂直中线完美对齐 */
   width: 80px;
   height: 80px;

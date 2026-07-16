@@ -1,19 +1,16 @@
-import sys
-import io
-if hasattr(sys.stdout, "buffer"):
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-if hasattr(sys.stderr, "buffer"):
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
-
 from contextlib import asynccontextmanager
+import os
 import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 from typing import Optional
 from app import config
-from app.routers import chat_ws, history
+from app.routers import chat_ws, conversations, history, providers, system_api, voice_ws
 from app.services.tts_queue import tts_manager
+from app.services.tts_sidecar import sidecar_supervisor
+from app.services.search import search_service
+from app.services.soul_engine import soul_engine
 from app.db import init_db
 
 @asynccontextmanager
@@ -21,7 +18,22 @@ async def lifespan(app: FastAPI):
     # Startup
     print("--------------------------------------------------")
     print("Amadeus Backend starting...")
+    from app.services.credentials import credential_store, scrub_dotenv_key
+    from app.services.provider_runtime import deepseek_service
+
+    if "PYTEST_CURRENT_TEST" not in os.environ:
+        legacy_key = config.DEEPSEEK_API_KEY.strip()
+        if legacy_key and credential_store.get("deepseek") is None:
+            credential_store.set("deepseek", legacy_key)
+        if legacy_key:
+            scrub_dotenv_key(config.env_path, "DEEPSEEK_API_KEY")
+        os.environ.pop("DEEPSEEK_API_KEY", None)
+        config.DEEPSEEK_API_KEY = ""
+        deepseek_service.api_key = ""
     await init_db()
+    from app.services.provider_runtime import restore_custom_provider_configuration
+    await restore_custom_provider_configuration()
+    soul_engine.load_profiles()
     print("[Database] SQLite initialized.")
     print(f"DeepSeek Model: {config.DEEPSEEK_MODEL}")
     print(f"GPT-SoVITS URL: {config.SOVITS_URL}")
@@ -30,6 +42,10 @@ async def lifespan(app: FastAPI):
     
     # Initialize async TTS client (health check per-request, not at startup)
     await tts_manager.init_client()
+    await search_service.start()
+    sidecar_state = await sidecar_supervisor.ensure_available()
+    if sidecar_state.url:
+        tts_manager.sovits_url = sidecar_state.url
     print("[GPT-SoVITS] TTS will be attempted per request.")
     print("--------------------------------------------------")
     
@@ -38,6 +54,12 @@ async def lifespan(app: FastAPI):
     # Shutdown
     print("Amadeus Backend shutting down, cleaning resources...")
     await tts_manager.close_client()
+    await search_service.close()
+    await sidecar_supervisor.close()
+    from app.services.memory import memory_service
+    await memory_service.close()
+    from app.services.conversations import conversation_service
+    await conversation_service.close()
 
 app = FastAPI(title="Amadeus Backend", version="3.0.0", lifespan=lifespan)
 
@@ -64,16 +86,14 @@ app.add_middleware(
 # Include WebSocket router
 app.include_router(chat_ws.router)
 app.include_router(history.router)
+app.include_router(system_api.router)
+app.include_router(voice_ws.router)
+app.include_router(providers.router)
+app.include_router(conversations.router)
 
-DEFAULT_SYSTEM_PROMPT = (
-    "あなたは「Amadeus」システムにインストールされた、牧瀬紅莉栖の記憶と人格を持つAI対話モジュールです。\n"
-    "ユーザーに対して、親密ながらも少し強がりな「ツンデレ」科学者として接してください。\n"
-    "時折恥ずかしがったり、天才脳科学者としての誇りを見せたりしてください。\n"
-    "回答は簡潔に、日本語で行ってください。"
-)
+from app.security.prompt import SYSTEM_PROMPT_BASE as DEFAULT_SYSTEM_PROMPT
 
 in_memory_settings = {
-    'api_key': config.DEEPSEEK_API_KEY,
     'sovits_url': config.SOVITS_URL,
     'system_prompt': DEFAULT_SYSTEM_PROMPT,
     'remember_me': True,
@@ -83,7 +103,7 @@ in_memory_settings = {
 }
 
 class SettingsUpdate(BaseModel):
-    api_key: Optional[str] = None
+    api_key: Optional[SecretStr] = None
     sovits_url: Optional[str] = None
     system_prompt: Optional[str] = None
     remember_me: Optional[bool] = None
@@ -97,7 +117,12 @@ async def get_settings():
 
 @app.post("/api/settings")
 async def update_settings(settings: SettingsUpdate):
-    update_data = settings.dict(exclude_unset=True)
+    update_data = settings.model_dump(exclude_unset=True)
+    secret = update_data.pop("api_key", None)
+    if secret is not None:
+        from app.services.credentials import credential_store
+
+        credential_store.set("deepseek", secret.get_secret_value())
     in_memory_settings.update(update_data)
     return {"status": "success"}
 

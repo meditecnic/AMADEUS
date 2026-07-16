@@ -13,6 +13,12 @@ interface SpriteAnimatorProps {
   // Mode — Pixel-based sprite sheet (mutually exclusive with percentage mode)
   frameWidth?: number;
   frameHeight?: number;
+  /** Vertical correction applied to rows after the first one.
+   * Some legacy sprite sheets were exported with inconsistent transparent
+   * padding between rows; this keeps the artwork anchored while preserving
+   * the original frame timing.
+   */
+  frameRowOffsetY?: number;
   // Common
   fps?: number;
   loop?: boolean;
@@ -27,6 +33,7 @@ const SpriteAnimator: React.FC<SpriteAnimatorProps> = ({
   spriteSrc,
   frameWidth,
   frameHeight,
+  frameRowOffsetY = 0,
   cols = 1,
   rows = 1,
   framePrefix,
@@ -42,11 +49,12 @@ const SpriteAnimator: React.FC<SpriteAnimatorProps> = ({
   alt = '',
 }) => {
   const isSpriteSheet = Boolean(spriteSrc);
-  const totalFrames = isSpriteSheet ? cols * rows : frameCount;
+  const totalFrames = isSpriteSheet ? (frameCount || cols * rows) : frameCount;
 
   const [currentFrame, setCurrentFrame] = useState(0);
   const [loadedFrames, setLoadedFrames] = useState<HTMLImageElement[]>([]);
   const completedRef = useRef(false);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const onCompleteRef = useRef(onComplete);
   onCompleteRef.current = onComplete;
 
@@ -77,27 +85,38 @@ const SpriteAnimator: React.FC<SpriteAnimatorProps> = ({
 
   // Animation timer
   useEffect(() => {
-    if (!autoplay) return;
-    if (totalFrames <= 1) return;
+    completedRef.current = false;
+    setCurrentFrame(0);
+    if (!autoplay || totalFrames <= 1) return;
 
     const intervalMs = 1000 / fps;
-    const timer = setInterval(() => {
+    timerRef.current = setInterval(() => {
       setCurrentFrame((prev) => {
         const next = prev + 1;
         if (next >= totalFrames) {
-          if (!loop && !completedRef.current) {
-            completedRef.current = true;
-            onCompleteRef.current?.();
-            return prev;
-          }
           return 0;
         }
         return next;
       });
     }, intervalMs);
 
-    return () => clearInterval(timer);
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+      timerRef.current = null;
+    };
   }, [autoplay, fps, totalFrames, loop]);
+
+  // Keep completion outside the state updater. React may invoke updater
+  // functions more than once in StrictMode, which used to make the splash
+  // callback race the final frame and look like a second pass.
+  useEffect(() => {
+    if (loop || !autoplay || totalFrames <= 1 || currentFrame !== totalFrames - 1) return;
+    if (completedRef.current) return;
+    completedRef.current = true;
+    if (timerRef.current) clearInterval(timerRef.current);
+    timerRef.current = null;
+    onCompleteRef.current?.();
+  }, [autoplay, currentFrame, loop, totalFrames]);
 
   // Mode A: Sprite sheet via background-position
   if (isSpriteSheet) {
@@ -125,26 +144,39 @@ const SpriteAnimator: React.FC<SpriteAnimatorProps> = ({
     if (usePixelMode) {
       const col = currentFrame % cols;
       const row = Math.floor(currentFrame / cols);
+      const yOffset = row > 0 ? frameRowOffsetY : 0;
       return (
         <div
           className={className}
           style={{
-            backgroundImage: `url(${spriteSrc})`,
-            backgroundRepeat: 'no-repeat',
-            backgroundSize: 'auto',
-            backgroundPosition: `${-col * frameWidth}px ${-row * frameHeight}px`,
             width: frameWidth,
             height: frameHeight,
+            overflow: 'hidden',
             ...style,
           }}
           role="img"
           aria-label={alt}
-        />
+        >
+          <div
+            aria-hidden="true"
+            style={{
+              width: frameWidth,
+              height: frameHeight,
+              backgroundImage: `url(${spriteSrc})`,
+              backgroundRepeat: 'no-repeat',
+              backgroundSize: 'auto',
+              backgroundPosition: `${-col * frameWidth}px ${-row * frameHeight}px`,
+              transform: yOffset ? `translateY(${yOffset}px)` : undefined,
+            }}
+          />
+        </div>
       );
     }
 
-    const frameWPercent = 100 / (cols - 1);
-    const frameHPercent = 100 / (rows - 1);
+    // A single-column/row sheet is valid too; avoid Infinity in CSS
+    // background-position when there is no axis to interpolate.
+    const frameWPercent = cols > 1 ? 100 / (cols - 1) : 0;
+    const frameHPercent = rows > 1 ? 100 / (rows - 1) : 0;
     const col = currentFrame % cols;
     const row = Math.floor(currentFrame / cols);
 

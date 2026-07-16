@@ -1,31 +1,47 @@
-import React, { useState, useRef } from 'react';
-import SpriteAnimator from './SpriteAnimator';
+import React, { useState, useEffect, useRef } from 'react';
 
 interface LogoTransitionProps {
   onComplete: () => void;
 }
 
-const BOOT_RING = {
-  sprite: '/assets/boot/boot_ring_3.png',
-  cols: 2,
-  rows: 5,
-  w: 1920,
-  h: 460.8,
-  fps: 12,
-} as const;
-
 const LogoTransition: React.FC<LogoTransitionProps> = ({ onComplete }) => {
+  const [frame, setFrame] = useState(1);
   const [fading, setFading] = useState(false);
   const doneRef = useRef(false);
 
-  const handleAnimComplete = () => {
-    if (doneRef.current) return;
-    doneRef.current = true;
-    setFading(true);
-    setTimeout(() => {
-      onComplete();
-    }, 300);
-  };
+  // 预加载所有帧
+  useEffect(() => {
+    for (let i = 1; i <= 39; i++) {
+      const img = new Image();
+      img.src = `/assets/images/logo${i}.png`;
+    }
+  }, []);
+
+  // 39帧在 2 秒内播完，每帧约 50ms
+  useEffect(() => {
+    const frameInterval = setInterval(() => {
+      setFrame((prev) => {
+        if (prev >= 39) {
+          return 39;
+        }
+        return prev + 1;
+      });
+    }, 50);
+
+    const doneTimer = setTimeout(() => {
+      if (doneRef.current) return;
+      doneRef.current = true;
+      setFading(true);
+      setTimeout(() => {
+        onComplete();
+      }, 300);
+    }, 2000);
+
+    return () => {
+      clearInterval(frameInterval);
+      clearTimeout(doneTimer);
+    };
+  }, [onComplete]);
 
   return (
     <div
@@ -35,17 +51,10 @@ const LogoTransition: React.FC<LogoTransitionProps> = ({ onComplete }) => {
         transition: fading ? 'opacity 300ms ease-out' : 'none',
       }}
     >
-      <SpriteAnimator
-        spriteSrc={BOOT_RING.sprite}
-        cols={BOOT_RING.cols}
-        rows={BOOT_RING.rows}
-        frameWidth={BOOT_RING.w}
-        frameHeight={BOOT_RING.h}
-        fps={BOOT_RING.fps}
-        loop={false}
-        autoplay={true}
-        onComplete={handleAnimComplete}
-        alt="Amadeus system boot"
+      <img
+        src={`/assets/images/logo${frame}.png`}
+        alt="Amadeus Logo Animation"
+        className="logo-transition-img"
       />
     </div>
   );

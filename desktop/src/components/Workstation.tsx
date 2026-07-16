@@ -1,17 +1,28 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useAmadeusWS } from '../hooks/useAmadeusWS';
+import {
+  getOrCreateAmadeusSessionId,
+  useAmadeusWS,
+  type Message,
+} from '../hooks/useAmadeusWS';
 import { StatusBar } from './StatusBar';
 import { SettingsModal } from './SettingsModal';
 import { SoundPanel } from './SoundPanel';
-import { HistorySidebar } from './HistorySidebar';
+import { HistorySidebar, type ConversationSummary } from './HistorySidebar';
 import { TtsDebugPanel } from './TtsDebugPanel';
 import AvatarViewer from './AvatarViewer';
 import SpriteAnimator from './SpriteAnimator';
 import { HudBadge } from './HudBadge';
+import { DivergenceMeter } from './DivergenceMeter';
 import { useAudioPlayer, audioPlayer } from '../hooks/useAudioPlayer';
 import { audioService } from '../services/AudioService';
 import { CRTOverlay } from './CRTOverlay';
 import { CircuitTrace } from './CircuitTrace';
+import { BilingualMessage } from './BilingualMessage';
+import { ForgetConversationModal } from './ForgetConversationModal';
+import {
+  ProviderControls,
+  type ProviderMetadata,
+} from './ProviderControls';
 
 interface WorkstationProps {
   worldline: 'steins_gate' | 'beta';
@@ -29,13 +40,17 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [sovitsUrl, setSovitsUrl] = useState('http://127.0.0.1:9880');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [inputText, setInputText] = useState('');
-  const [apiKey, setApiKey] = useState(() => {
-    try {
-      return localStorage.getItem('amadeus_pc_api_key') || '';
-    } catch (e) {
-      return '';
-    }
-  });
+  const [apiKey, setApiKey] = useState('');
+  const [credentialChecked, setCredentialChecked] = useState(false);
+  const [providers, setProviders] = useState<ProviderMetadata[]>([]);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [sessionId] = useState(getOrCreateAmadeusSessionId);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [conversationSearch, setConversationSearch] = useState('');
+  const [conversationBusy, setConversationBusy] = useState(false);
+  const [forgetTarget, setForgetTarget] = useState<ConversationSummary | null>(null);
 
   const [enableBgm, setEnableBgm] = useState(() => {
     try { return localStorage.getItem('amadeus_pc_enable_bgm') !== 'false'; } catch { return true; }
@@ -52,8 +67,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [temperature, setTemperature] = useState(() => {
     try { const v = localStorage.getItem('amadeus_pc_temperature'); return v ? parseFloat(v) : 0.8; } catch { return 0.8; }
   });
-  const [model, setModel] = useState<'deepseek-v4-flash' | 'deepseek-v4-pro'>(() =>
-    (localStorage.getItem('amadeus_pc_model') as any) || 'deepseek-v4-flash');
+  const [model, setModel] = useState<string>(() =>
+    localStorage.getItem('amadeus_pc_model') || 'deepseek-v4-flash');
   const [reasoningEffort, setReasoningEffort] = useState<'high' | 'xhigh'>(() =>
     (localStorage.getItem('amadeus_pc_reasoning_effort') as any) || 'high');
   const [audioError, setAudioError] = useState<string | null>(null);
@@ -83,13 +98,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
     audioService.setSFXVolume(sfxVolume);
   }, [enableBgm, bgmVolume, enableSfx, sfxVolume]);
 
-  // Start BGM on mount, switch on worldline change
+  // Start the worldline playlist on mount, switch it when the line changes,
+  // and resume it when BGM is enabled again in the settings panel.
   useEffect(() => {
-    audioService.playBGMForWorldline(worldline, bgmVolume);
+    if (enableBgm) audioService.playBGMForWorldline(worldline, bgmVolume);
+    else audioService.stopBGM();
     return () => {
       audioService.stopBGM();
     };
-  }, [worldline]);
+  }, [worldline, enableBgm]);
 
   // Auto-clear audio error after 5s
   useEffect(() => {
@@ -99,6 +116,29 @@ export const Workstation: React.FC<WorkstationProps> = ({
     }
   }, [audioError]);
 
+  const loadConversations = useCallback(async () => {
+    const response = await fetch(
+      `/api/conversations?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`
+    );
+    if (!response.ok) throw new Error(`conversation query failed: ${response.status}`);
+    const rows = await response.json() as ConversationSummary[];
+    setConversations(rows);
+    const selected = rows.find((row) => row.is_selected);
+    if (selected) {
+      setActiveConversationId(selected.id);
+      if (selected.model_id) setModel(selected.model_id);
+    }
+    return rows;
+  }, [sessionId, worldline]);
+
+  const loadProviders = useCallback(async () => {
+    const response = await fetch('/api/providers');
+    if (!response.ok) throw new Error(`provider query failed: ${response.status}`);
+    const rows = await response.json() as ProviderMetadata[];
+    setProviders(rows);
+    return rows;
+  }, []);
+
   // WebSocket hook connection management
   const {
     status,
@@ -107,11 +147,16 @@ export const Workstation: React.FC<WorkstationProps> = ({
     isSynthesizing,
     emotion,
     sendChat,
+    stopVoice,
+    cancelTurn,
     sendDebugTts,
     updateConfig,
+    reconnect,
+    switchConversation,
     wsRef,
   } = useAmadeusWS({
-    apiKey,
+    sessionId,
+    conversationId: activeConversationId,
     systemPrompt,
     temperature,
     worldline,
@@ -125,9 +170,117 @@ export const Workstation: React.FC<WorkstationProps> = ({
     onAudioDegraded: (reason: string) => {
       setAudioError(reason);
     },
+    onTurnStarted: () => {
+      audioPlayer.stopAll();
+    },
+    onTurnCompleted: () => {
+      window.setTimeout(() => { void loadConversations(); }, 250);
+    },
   });
 
+  useEffect(() => {
+    setActiveConversationId(null);
+    void loadConversations().catch((error) => {
+      console.warn('Conversation synchronization failed:', error);
+    });
+  }, [loadConversations]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const synchronizeCredential = async () => {
+      let legacyKey = '';
+      try {
+        legacyKey = localStorage.getItem('amadeus_pc_api_key') || '';
+      } catch {}
+      try {
+        if (legacyKey.trim()) {
+          const response = await fetch('/api/providers/deepseek/credentials', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ api_key: legacyKey.trim() }),
+          });
+          if (!response.ok) throw new Error(`credential migration failed: ${response.status}`);
+          try { localStorage.removeItem('amadeus_pc_api_key'); } catch {}
+          if (!cancelled) {
+            await loadProviders();
+            reconnect();
+          }
+        } else {
+          await loadProviders();
+        }
+      } catch (error) {
+        console.warn('Credential synchronization failed:', error);
+      } finally {
+        if (!cancelled) setCredentialChecked(true);
+      }
+    };
+    void synchronizeCredential();
+    return () => { cancelled = true; };
+  }, [loadProviders, reconnect]);
+
+  const activeConversation = conversations.find((row) => row.id === activeConversationId);
+  const activeProviderId = activeConversation?.provider_id || 'deepseek';
+  const activeProvider = providers.find((provider) => provider.id === activeProviderId);
+  const credentialConfigured = Boolean(
+    activeProvider && (!activeProvider.credential_required || activeProvider.configured)
+  );
+
+  const loadProviderModels = useCallback(async (
+    providerId: string,
+    refresh = false,
+  ) => {
+    const provider = providers.find((row) => row.id === providerId);
+    const fallback = [
+      activeConversation?.model_id || '',
+      provider?.default_model || '',
+    ].filter(Boolean);
+    if (
+      !provider?.model_discovery ||
+      (provider.credential_required && !provider.configured)
+    ) {
+      setAvailableModels(Array.from(new Set(fallback)));
+      return;
+    }
+    setModelsLoading(true);
+    try {
+      const response = await fetch(
+        `/api/providers/${encodeURIComponent(providerId)}/models?refresh=${refresh ? 'true' : 'false'}`
+      );
+      if (!response.ok) throw new Error(`model query failed: ${response.status}`);
+      const payload = await response.json() as { models?: string[] };
+      setAvailableModels(Array.from(new Set([...fallback, ...(payload.models || [])])));
+    } catch (error) {
+      setAvailableModels(Array.from(new Set(fallback)));
+      console.warn('Provider model discovery failed:', error);
+    } finally {
+      setModelsLoading(false);
+    }
+  }, [activeConversation?.model_id, providers]);
+
+  useEffect(() => {
+    void loadProviderModels(activeProviderId);
+  }, [activeProviderId, loadProviderModels]);
+
   const { currentVolume, isPlaying } = useAudioPlayer();
+
+  // A missing API key is an onboarding state, not chat history. The socket can
+  // emit more than one authentication-related notice while it reconnects;
+  // keeping those notices out of the transcript prevents a blank workspace
+  // from looking like a failed conversation.
+  const needsApiKey = credentialChecked && Boolean(activeProvider) && !credentialConfigured;
+  const visibleMessages = needsApiKey
+    ? messages.filter((message) => !/(API\s*Key|未认证|缺失\s*API)/i.test(message.content))
+    : messages;
+  const emptyStateKind = needsApiKey ? 'setup' : status.toLowerCase();
+  const emptyStateMessage = needsApiKey
+    ? `> 请为 ${activeProvider?.display_name || activeProviderId} 配置 API Key 以建立连接。`
+    : status === 'CONNECTING'
+      ? '> 正在建立与 Amadeus 核心的连接，请稍候...'
+      : status === 'CLOSED'
+        ? '> 会话连接已关闭，系统将尝试重新连接。'
+        : status === 'ERROR'
+          ? '> 暂时无法连接，请检查后端服务与 API Key。'
+          : '> Amadeus 系统连接已建立。等待用户输入...';
 
   const [glitchState, setGlitchState] = useState<'none' | 'light' | 'heavy'>('none');
 
@@ -154,10 +307,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   // Play error SFX on WebSocket error
   useEffect(() => {
-    if (status === 'ERROR') {
+    // Missing credentials are an expected setup state, not a runtime failure.
+    if (status === 'ERROR' && credentialConfigured) {
       audioService.playSFX('/assets/audio/gah.ogg', sfxVolume);
     }
-  }, [status]);
+  }, [status, credentialConfigured, sfxVolume]);
 
   const handleSend = (e: React.FormEvent) => {
     e.preventDefault();
@@ -167,7 +321,199 @@ export const Workstation: React.FC<WorkstationProps> = ({
     setInputText('');
   };
 
-  const handleSaveSettings = (newSettings: {
+  const selectConversation = async (conversation: ConversationSummary, force = false) => {
+    if ((!force && conversation.id === activeConversationId) || conversationBusy) return;
+    setConversationBusy(true);
+    try {
+      audioPlayer.stopAll();
+      const response = await fetch(
+        `/api/conversations/${encodeURIComponent(conversation.id)}/messages?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`
+      );
+      if (!response.ok) throw new Error(`history query failed: ${response.status}`);
+      const rows = await response.json() as Array<{
+        role: string;
+        content: string;
+        translation?: string | null;
+      }>;
+      const history: Message[] = rows
+        .filter((row) => row.role === 'user' || row.role === 'assistant')
+        .map((row, index) => ({
+          id: `history_${conversation.id}_${index}`,
+          role: row.role as 'user' | 'assistant',
+          content: row.role === 'assistant'
+            ? row.content.replace(/^\[EMO:[^\]]+\]\s*/, '')
+            : row.content,
+          translation: row.role === 'assistant' ? row.translation || '' : undefined,
+          streaming: false,
+        }));
+      switchConversation(conversation.id, history);
+      setActiveConversationId(conversation.id);
+      if (conversation.model_id) {
+        setModel(conversation.model_id);
+        localStorage.setItem('amadeus_pc_model', conversation.model_id);
+      }
+      setConversations((current) => current.map((row) => ({
+        ...row,
+        is_selected: row.id === conversation.id,
+      })));
+    } catch (error) {
+      console.warn('Conversation switch failed:', error);
+    } finally {
+      setConversationBusy(false);
+    }
+  };
+
+  const createConversation = async () => {
+    if (conversationBusy) return;
+    setConversationBusy(true);
+    try {
+      const active = conversations.find((row) => row.id === activeConversationId);
+      const response = await fetch('/api/conversations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: sessionId,
+          worldline,
+          provider_id: active?.provider_id || 'deepseek',
+          model_id: active?.model_id || model,
+        }),
+      });
+      if (!response.ok) throw new Error(`conversation create failed: ${response.status}`);
+      const created = await response.json() as ConversationSummary;
+      setConversationBusy(false);
+      await selectConversation(created);
+      window.setTimeout(() => { void loadConversations(); }, 250);
+    } catch (error) {
+      console.warn('Conversation creation failed:', error);
+      setConversationBusy(false);
+    }
+  };
+
+  const patchConversation = async (
+    conversation: ConversationSummary,
+    patch: Record<string, unknown>,
+  ) => {
+    const response = await fetch(
+      `/api/conversations/${encodeURIComponent(conversation.id)}?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`,
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      },
+    );
+    if (!response.ok) throw new Error(`conversation update failed: ${response.status}`);
+    const updated = await response.json() as ConversationSummary;
+    setConversations((current) => current.map((row) => (
+      row.id === updated.id ? { ...row, ...updated } : row
+    )));
+    return updated;
+  };
+
+  const patchActiveConversationRuntime = async (patch: Record<string, unknown>) => {
+    if (!activeConversation || conversationBusy || isThinking || isSynthesizing) return;
+    setConversationBusy(true);
+    try {
+      const updated = await patchConversation(activeConversation, patch);
+      if (!updated) return;
+      setActiveConversationId(updated.id);
+      if (updated.model_id) {
+        setModel(updated.model_id);
+        try { localStorage.setItem('amadeus_pc_model', updated.model_id); } catch {}
+      }
+      // Provider/model are authenticated and snapshotted when the socket opens.
+      // Reusing a socket that previously failed authentication leaves it in the
+      // server's unauthenticated state, so reload the durable conversation on a
+      // fresh connection after either runtime setting changes.
+      reconnect();
+      const refreshedProviders = await loadProviders();
+      const provider = refreshedProviders.find((row) => row.id === updated.provider_id);
+      if (provider && !provider.configured) setIsSettingsOpen(true);
+    } finally {
+      setConversationBusy(false);
+    }
+  };
+
+  const changeProvider = (providerId: string) => {
+    void patchActiveConversationRuntime({ provider_id: providerId }).catch((error) => {
+      console.warn('Conversation provider update failed:', error);
+    });
+  };
+
+  const changeModel = (modelId: string) => {
+    if (!modelId || modelId === activeConversation?.model_id) return;
+    void patchActiveConversationRuntime({ model_id: modelId }).catch((error) => {
+      console.warn('Conversation model update failed:', error);
+    });
+  };
+
+  const renameConversation = (conversation: ConversationSummary) => {
+    const title = window.prompt('输入新的会话标题', conversation.title)?.trim();
+    if (!title || title === conversation.title) return;
+    void patchConversation(conversation, { title }).catch((error) => {
+      console.warn('Conversation rename failed:', error);
+    });
+  };
+
+  const toggleConversationPin = (conversation: ConversationSummary) => {
+    void patchConversation(conversation, { is_pinned: !conversation.is_pinned }).catch((error) => {
+      console.warn('Conversation pin update failed:', error);
+    });
+  };
+
+  const deleteConversation = async (conversation: ConversationSummary) => {
+    if (!window.confirm(`删除会话“${conversation.title}”？长期记忆默认保留。`)) return;
+    const response = await fetch(
+      `/api/conversations/${encodeURIComponent(conversation.id)}?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`,
+      { method: 'DELETE' },
+    );
+    if (!response.ok) {
+      console.warn(`Conversation deletion failed: ${response.status}`);
+      return;
+    }
+    const rows = await loadConversations();
+    if (conversation.id === activeConversationId) {
+      const fallback = rows.find((row) => row.is_selected) || rows[0];
+      if (fallback) await selectConversation(fallback, true);
+    }
+  };
+
+  const forgetConversation = async (forgetLongTerm: boolean) => {
+    if (!forgetTarget || conversationBusy) return;
+    setConversationBusy(true);
+    try {
+      const response = await fetch(
+        `/api/conversations/${encodeURIComponent(forgetTarget.id)}/forget?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ forget_long_term: forgetLongTerm }),
+        },
+      );
+      if (!response.ok) throw new Error(`conversation forget failed: ${response.status}`);
+      if (forgetTarget.id === activeConversationId) {
+        audioPlayer.stopAll();
+        switchConversation(forgetTarget.id, []);
+      }
+      setForgetTarget(null);
+      await loadConversations();
+    } catch (error) {
+      console.warn('Conversation forget failed:', error);
+    } finally {
+      setConversationBusy(false);
+    }
+  };
+
+  const handleStopVoice = () => {
+    audioPlayer.stopAll();
+    stopVoice();
+  };
+
+  const handleCancelTurn = () => {
+    audioPlayer.stopAll();
+    cancelTurn();
+  };
+
+  const handleSaveSettings = async (newSettings: {
     worldline: 'steins_gate' | 'beta';
     apiKey: string;
     systemPrompt: string;
@@ -178,7 +524,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
     enableSfx: boolean;
     sfxVolume: number;
     temperature: number;
-    model: 'deepseek-v4-flash' | 'deepseek-v4-pro';
+    baseUrl: string;
+    model: string;
     reasoningEffort: 'high' | 'xhigh';
   }) => {
     // 1. Sync React parent state if worldline changed
@@ -187,7 +534,46 @@ export const Workstation: React.FC<WorkstationProps> = ({
     }
     
     // 2. Sync local states
-    setApiKey(newSettings.apiKey);
+    let providerConfigurationChanged = false;
+    if (
+      activeProvider?.base_url_configurable &&
+      newSettings.baseUrl.trim() &&
+      (
+        newSettings.baseUrl.trim().replace(/\/+$/, '') !== activeProvider.base_url?.replace(/\/+$/, '') ||
+        newSettings.model !== activeProvider.default_model
+      )
+    ) {
+      const response = await fetch('/api/providers/custom/configuration', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          base_url: newSettings.baseUrl.trim(),
+          default_model: newSettings.model.trim(),
+        }),
+      });
+      if (!response.ok) {
+        setAudioError('provider_config_save_failed');
+        return;
+      }
+      providerConfigurationChanged = true;
+      await loadProviders();
+    }
+    let credentialChanged = false;
+    if (newSettings.apiKey.trim()) {
+      const response = await fetch(`/api/providers/${encodeURIComponent(activeProviderId)}/credentials`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: newSettings.apiKey.trim() }),
+      });
+      if (!response.ok) {
+        setAudioError('credential_save_failed');
+        return;
+      }
+      credentialChanged = true;
+      setCredentialChecked(true);
+      try { localStorage.removeItem('amadeus_pc_api_key'); } catch {}
+    }
+    setApiKey('');
     setSystemPrompt(newSettings.systemPrompt);
     setEnableTts(newSettings.enableTts);
     setSovitsUrl(newSettings.sovitsUrl);
@@ -196,11 +582,17 @@ export const Workstation: React.FC<WorkstationProps> = ({
     setEnableSfx(newSettings.enableSfx);
     setSfxVolume(newSettings.sfxVolume);
     setTemperature(newSettings.temperature);
-    setModel(newSettings.model);
     setReasoningEffort(newSettings.reasoningEffort);
 
+    if (
+      newSettings.worldline === worldline &&
+      newSettings.model &&
+      newSettings.model !== activeConversation?.model_id
+    ) {
+      await patchActiveConversationRuntime({ model_id: newSettings.model });
+    }
+
     try {
-      localStorage.setItem('amadeus_pc_api_key', newSettings.apiKey);
       localStorage.setItem('amadeus_pc_enable_bgm', String(newSettings.enableBgm));
       localStorage.setItem('amadeus_pc_bgm_volume', String(newSettings.bgmVolume));
       localStorage.setItem('amadeus_pc_enable_sfx', String(newSettings.enableSfx));
@@ -213,16 +605,19 @@ export const Workstation: React.FC<WorkstationProps> = ({
     }
 
     // 3. Send config_update WS frame to backend
-    updateConfig({
-      apiKey: newSettings.apiKey,
-      systemPrompt: newSettings.systemPrompt,
-      worldline: newSettings.worldline,
-      enableTts: newSettings.enableTts,
-      sovitsUrl: newSettings.sovitsUrl,
-      temperature: newSettings.temperature,
-      model: newSettings.model,
-      reasoningEffort: newSettings.reasoningEffort,
-    });
+    if (credentialChanged || providerConfigurationChanged) {
+      await loadProviders();
+      reconnect();
+    } else {
+      updateConfig({
+        systemPrompt: newSettings.systemPrompt,
+        worldline: newSettings.worldline,
+        enableTts: newSettings.enableTts,
+        sovitsUrl: newSettings.sovitsUrl,
+        temperature: newSettings.temperature,
+        reasoningEffort: newSettings.reasoningEffort,
+      });
+    }
   };
 
   const handleAudioInit = () => {
@@ -230,7 +625,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
   };
 
   return (
-    <div className={`salieri-workstation-panel ${worldline === 'beta' ? 'worldline-beta' : ''}`} onMouseDown={handleAudioInit}>
+    <div
+      className={`salieri-workstation-panel worldline-${worldline === 'beta' ? 'beta' : 'sg'}`}
+      onMouseDown={handleAudioInit}
+    >
       {/* Background layers */}
       <div
         className="workstation-bg-layer"
@@ -249,20 +647,25 @@ export const Workstation: React.FC<WorkstationProps> = ({
       {/* SVG feTurbulence noise overlay */}
       <div className="workstation-bg-noise" />
 
+      {/* Mechanical shell stays above the whole scene, never as a stretched background. */}
+      <div className="workstation-panel-frame-overlay" aria-hidden="true" />
+
       {/* CRT vignette + chromatic aberration (z-index 50, above content, below modals) */}
       <CRTOverlay glitchState={glitchState} zIndex={50} />
 
-      {worldline === 'beta' && (
-        <div className="beta-divergence-watermark">1.130205%</div>
-      )}
-
       <div className="salieri-workstation-inner">
-        <div className="workstation-panel-frame-overlay" />
         {/* Top Header Controls */}
         <div className="workstation-header">
-        <div className="left-brand">
-          <span className="brand-title">Amadeus</span>
-          <span className="brand-sub">SALIERI CONSOLE</span>
+        <div className="left-brand" aria-label="Amadeus Salieri terminal">
+          <span className="brand-index">AM-01</span>
+          <div className="brand-lockup">
+            <span className="brand-title">AMADEUS</span>
+            <span className="brand-sub">SALIERI / NEURAL TERMINAL</span>
+          </div>
+        </div>
+        <div className="header-telemetry" aria-label="World line telemetry">
+          <HudBadge worldline={worldline} status={needsApiKey ? 'SETUP' : status} />
+          <DivergenceMeter worldline={worldline} />
         </div>
         <div className="right-controls">
           <button
@@ -275,23 +678,33 @@ export const Workstation: React.FC<WorkstationProps> = ({
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
             </svg>
           </button>
-          <button
-            className="ctrl-btn icon-btn"
-            onClick={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); setIsSoundOpen((v) => !v); }}
-            title="音量控制"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-              <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
-            </svg>
-          </button>
-          <button
-            className="ctrl-btn icon-btn"
-            onClick={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); setIsHistoryCollapsed((v) => !v); }}
-            title={isHistoryCollapsed ? '展开历史面板' : '折叠历史面板'}
-          >
-            <span style={{ fontSize: '14px', lineHeight: 1 }}>{isHistoryCollapsed ? '▶' : '◀'}</span>
-          </button>
+          <div className="sound-control-anchor">
+            <button
+              className={`ctrl-btn icon-btn ${isSoundOpen ? 'is-active' : ''}`}
+              onClick={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); setIsSoundOpen((v) => !v); }}
+              title="音量控制"
+              aria-expanded={isSoundOpen}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
+              </svg>
+            </button>
+            <SoundPanel
+              isOpen={isSoundOpen}
+              onClose={() => setIsSoundOpen(false)}
+              enableBgm={enableBgm}
+              bgmVolume={bgmVolume}
+              enableSfx={enableSfx}
+              sfxVolume={sfxVolume}
+              enableTts={enableTts}
+              onEnableBgmChange={setEnableBgm}
+              onBgmVolumeChange={setBgmVolume}
+              onEnableSfxChange={setEnableSfx}
+              onSfxVolumeChange={setSfxVolume}
+              onEnableTtsChange={setEnableTts}
+            />
+          </div>
           <button
             className="ctrl-btn icon-btn disconnect-btn"
             onClick={onLogout}
@@ -312,30 +725,53 @@ export const Workstation: React.FC<WorkstationProps> = ({
         <HistorySidebar
           isCollapsed={isHistoryCollapsed}
           onToggle={() => setIsHistoryCollapsed((v) => !v)}
-          messages={messages}
+          conversations={conversations}
+          activeId={activeConversationId}
+          searchQuery={conversationSearch}
+          onSearchChange={setConversationSearch}
+          onSelect={(conversation) => { void selectConversation(conversation); }}
+          onNew={() => { void createConversation(); }}
+          onRename={renameConversation}
+          onTogglePin={toggleConversationPin}
+          onDelete={(conversation) => { void deleteConversation(conversation); }}
+          onForget={setForgetTarget}
+          busy={conversationBusy}
         />
 
         {/* Center: Dialogue Terminal */}
         <div className="grid-terminal border-beam">
           <div className="terminal-chat-viewport">
-            {messages.length === 0 ? (
+            {visibleMessages.length === 0 ? (
               <div className="empty-chat-tip">
                 <div className="amadeus-logo-glitched" />
-                <p className="terminal-welcome-msg">&gt; Amadeus 系统连接已建立。等待用户输入...</p>
+                <p className={`terminal-welcome-msg ${emptyStateKind}`}>
+                  {emptyStateMessage}
+                </p>
+                {needsApiKey && (
+                  <button
+                    type="button"
+                    className="empty-chat-action"
+                    onClick={() => setIsSettingsOpen(true)}
+                  >
+                    OPEN SYSTEM CONFIG
+                  </button>
+                )}
               </div>
             ) : (
               <div className="messages-flow">
-                {messages.map((msg) => (
+                {visibleMessages.map((msg) => (
                   <div key={msg.id} className={`message-card ${msg.role}`}>
                     <div className="avatar-label">
                       {msg.role === 'user' ? 'USER ID: OKABE' : 'AMADEUS: KURISU'}
                     </div>
                     <div className="message-content-box">
-                      {msg.role === 'assistant' && msg.translation ? (
-                        <>
-                          <p className="chinese-main">{msg.translation}</p>
-                          <p className="japanese-sub">（{msg.content}）</p>
-                        </>
+                      {msg.role === 'assistant' ? (
+                        <BilingualMessage
+                          segments={msg.segments || []}
+                          streaming={Boolean(msg.streaming)}
+                          fallbackJa={msg.content}
+                          fallbackZh={msg.translation}
+                        />
                       ) : (
                         <p className="japanese-raw">{msg.content}</p>
                       )}
@@ -353,6 +789,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                           rows={2}
                           frameWidth={worldline === 'beta' ? 54.5 : 54}
                           frameHeight={63}
+                          frameRowOffsetY={worldline === 'steins_gate' ? 8 : 0}
                           frameCount={20}
                           fps={15}
                           loop={true}
@@ -368,6 +805,17 @@ export const Workstation: React.FC<WorkstationProps> = ({
                   <div className="status-synthesizing-tag">
                     <span className="speaking-dot animate-ping" />
                     正在合成语音...
+                  </div>
+                )}
+                {(isThinking || isSynthesizing) && (
+                  <div className="voice-control-capsule" role="group" aria-label="Current response controls">
+                    <span className="voice-control-signal">β SIGNAL</span>
+                    <button type="button" onClick={handleStopVoice} disabled={!isSynthesizing}>
+                      STOP VOICE
+                    </button>
+                    <button type="button" onClick={handleCancelTurn}>
+                      CANCEL TURN
+                    </button>
                   </div>
                 )}
               </div>
@@ -406,41 +854,45 @@ export const Workstation: React.FC<WorkstationProps> = ({
               className="chat-send-btn"
               disabled={status !== 'READY' || !inputText.trim() || isThinking || isSynthesizing || isPlaying}
               aria-label="发送"
-            />
-          </form>
-          <div className="model-bottom-bar" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '6px 16px', borderTop: '1px solid #2a1500', background: '#0a0806' }}>
-            <select
-              value={model}
-              onChange={(e) => {
-                const v = e.target.value as 'deepseek-v4-flash' | 'deepseek-v4-pro';
-                setModel(v);
-                localStorage.setItem('amadeus_pc_model', v);
-                updateConfig({ model: v });
-              }}
-              style={{ background: '#0c0806', color: '#ff6c00', border: '1px solid #5a2500', padding: '4px 8px', fontSize: 12, fontFamily: 'Share Tech Mono, monospace' }}
             >
-              <option value="deepseek-v4-flash">V4 Flash</option>
-              <option value="deepseek-v4-pro">V4 Pro</option>
-            </select>
-            <span style={{ color: '#5a2500', fontSize: 11, fontFamily: 'Share Tech Mono, monospace' }}>推理深度</span>
-            <input
-              type="range" min={0} max={1} step={1}
-              value={reasoningEffort === 'xhigh' ? 1 : 0}
-              onChange={(e) => {
-                const v = e.target.value === '1' ? 'xhigh' : 'high';
-                setReasoningEffort(v);
-                localStorage.setItem('amadeus_pc_reasoning_effort', v);
-                updateConfig({ reasoningEffort: v });
-              }}
-              style={{ '--val': `${(reasoningEffort === 'xhigh' ? 1 : 0) * 100}%`, width: 60 } as React.CSSProperties}
+              <span>SEND</span>
+            </button>
+          </form>
+          <div className="model-bottom-bar">
+            <ProviderControls
+              providers={providers}
+              activeProviderId={activeProviderId}
+              activeModelId={activeConversation?.model_id || model}
+              models={availableModels}
+              disabled={conversationBusy || isThinking || isSynthesizing}
+              loadingModels={modelsLoading}
+              onProviderChange={changeProvider}
+              onModelChange={changeModel}
+              onRefreshModels={() => { void loadProviderModels(activeProviderId, true); }}
+              onConfigureCredential={() => setIsSettingsOpen(true)}
             />
-            <span style={{ color: '#8b3c00', fontSize: 11, fontFamily: 'Share Tech Mono, monospace' }}>{reasoningEffort === 'xhigh' ? '极高' : '高'}</span>
+            <span className="reasoning-label">推理深度</span>
+            <div className="reasoning-toggle" role="group" aria-label="推理深度">
+              {(['high', 'xhigh'] as const).map((effort) => (
+                <button
+                  type="button"
+                  key={effort}
+                  className={reasoningEffort === effort ? 'active' : ''}
+                  onClick={() => {
+                    setReasoningEffort(effort);
+                    localStorage.setItem('amadeus_pc_reasoning_effort', effort);
+                    updateConfig({ reasoningEffort: effort });
+                  }}
+                >
+                  {effort === 'xhigh' ? 'XHIGH' : 'HIGH'}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
         {/* Right: Avatar Viewer Panel */}
         <div className="grid-avatar-panel">
-          <HudBadge worldline={worldline} status={status} />
           <AvatarViewer
             emotion={emotion}
             isSpeaking={isPlaying}
@@ -465,7 +917,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       )}
 
       {/* Bottom Status Bar */}
-      <StatusBar worldline={worldline} connectionStatus={status} />
+      <StatusBar worldline={worldline} connectionStatus={needsApiKey ? 'SETUP' : status} />
       </div>
 
       {/* Settings Modal overlay */}
@@ -482,25 +934,23 @@ export const Workstation: React.FC<WorkstationProps> = ({
         enableSfx={enableSfx}
         sfxVolume={sfxVolume}
         temperature={temperature}
+        providerDisplayName={activeProvider?.display_name || activeProviderId}
+        providerBaseUrl={activeProvider?.base_url}
+        baseUrlConfigurable={Boolean(activeProvider?.base_url_configurable)}
         model={model}
+        modelOptions={availableModels}
         reasoningEffort={reasoningEffort}
         onSaveSettings={handleSaveSettings}
       />
 
-      <SoundPanel
-        isOpen={isSoundOpen}
-        onClose={() => setIsSoundOpen(false)}
-        enableBgm={enableBgm}
-        bgmVolume={bgmVolume}
-        enableSfx={enableSfx}
-        sfxVolume={sfxVolume}
-        enableTts={enableTts}
-        onEnableBgmChange={setEnableBgm}
-        onBgmVolumeChange={setBgmVolume}
-        onEnableSfxChange={setEnableSfx}
-        onSfxVolumeChange={setSfxVolume}
-        onEnableTtsChange={setEnableTts}
-      />
+      {forgetTarget && (
+        <ForgetConversationModal
+          title={forgetTarget.title}
+          busy={conversationBusy}
+          onClose={() => { if (!conversationBusy) setForgetTarget(null); }}
+          onConfirm={(forgetLongTerm) => { void forgetConversation(forgetLongTerm); }}
+        />
+      )}
 
       {TTS_DEBUG_ENABLED && (
         <TtsDebugPanel

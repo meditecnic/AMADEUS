@@ -107,7 +107,11 @@ class TTSQueueManager:
     async def init_client(self):
         """Initialize the HTTPX AsyncClient if it's closed or not created yet."""
         if self.client is None or self.client.is_closed:
-            self.client = httpx.AsyncClient(timeout=self.timeout)
+            # GPT-SoVITS is a loopback-only sidecar.  In environments with an
+            # HTTP(S)_PROXY configured, honoring proxy variables can route
+            # 127.0.0.1 through that proxy and turn a healthy local API into a
+            # misleading 502 response.
+            self.client = httpx.AsyncClient(timeout=self.timeout, trust_env=False)
 
     async def close_client(self):
         """Close the HTTPX AsyncClient."""
@@ -136,22 +140,26 @@ class TTSQueueManager:
         ]
 
         last_exception = None
+        last_response_error = None
         for url in urls_to_try:
             try:
                 # 1. Try POST JSON
                 response = await self.client.post(url, json=payload)
                 if response.status_code == 200:
                     return response.content
+                last_response_error = f"POST JSON {url} returned HTTP {response.status_code}: {response.text[:500]}"
 
                 # 2. Try POST Form
                 response = await self.client.post(url, data=payload)
                 if response.status_code == 200:
                     return response.content
+                last_response_error = f"POST form {url} returned HTTP {response.status_code}: {response.text[:500]}"
 
                 # 3. Try GET Query parameters
                 response = await self.client.get(url, params=payload)
                 if response.status_code == 200:
                     return response.content
+                last_response_error = f"GET {url} returned HTTP {response.status_code}: {response.text[:500]}"
             except asyncio.CancelledError:
                 raise  # Always raise CancelledError upward to stop execution immediately
             except Exception as e:
@@ -160,6 +168,8 @@ class TTSQueueManager:
 
         if last_exception:
             raise last_exception
+        if last_response_error:
+            raise RuntimeError(last_response_error)
         raise RuntimeError("GPT-SoVITS API returned non-200 status on all endpoints")
 
     async def synthesize_async(self, text: str, emotion_tag: str, sovits_url: str = None) -> bytes:
@@ -192,6 +202,33 @@ class TTSQueueManager:
             except Exception as e:
                 print(f"[TTS Error] Synthesis failed: {e}")
                 raise TTSServiceError(f"TTS synthesis failed: {e}")
+
+    async def stream_pcm(self, text: str, emotion_tag: str, sovits_url: str = None):
+        """Yield (audio_format, pcm_chunk) from GPT-SoVITS streaming_mode=2."""
+        from app.services.audio_stream import WavStreamDemuxer
+        ref_config = self.emotion_ref_map.get(emotion_tag)
+        if ref_config is None:
+            raise TTSServiceError(f"No valid reference audio configured for emotion '{emotion_tag}'")
+        await self.init_client()
+        payload = {
+            "text": text,
+            "text_lang": "ja",
+            "ref_audio_path": ref_config["ref_audio_path"],
+            "prompt_text": ref_config["prompt_text"],
+            "prompt_lang": "ja",
+            "media_type": "wav",
+            "streaming_mode": 2,
+            "text_split_method": "cut5",
+            "batch_size": 1,
+        }
+        demuxer = WavStreamDemuxer()
+        url = (sovits_url or self.sovits_url or "http://127.0.0.1:9880").rstrip("/") + "/tts"
+        async with self.semaphore:
+            async with self.client.stream("POST", url, json=payload, timeout=self.timeout) as response:
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes():
+                    for pcm in demuxer.feed(chunk):
+                        yield demuxer.format, pcm
 
     # ------------------------------------------------------------------
     # OLV 风格序号缓冲队列：并行合成、有序投递、失败静默兜底

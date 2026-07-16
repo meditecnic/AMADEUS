@@ -1,55 +1,539 @@
+"""Worldline-isolated SQLite storage and idempotent startup migration."""
+
+from __future__ import annotations
+
+import asyncio
+import json
 import os
+import shutil
+import sqlite3
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Literal
+
 import aiosqlite
 
-_initialized_paths = set()
+try:
+    import portalocker
+except ImportError:  # surfaced as a readiness/startup error, never silently ignored
+    portalocker = None
 
-def _resolve_path() -> str:
-    # Use environment variable override for testing, otherwise default to APPDATA on Windows
-    override = os.environ.get("AMADEUS_DB_PATH")
+Worldline = Literal["steins_gate", "beta"]
+DatabaseKind = Literal["history", "memory", "control"]
+
+EMBEDDING_MODEL = "intfloat/multilingual-e5-small"
+EMBEDDING_DIMENSION = 384
+SCHEMA_VERSION = 3
+
+_initialized_paths: set[str] = set()
+_init_lock = asyncio.Lock()
+_migration_state: dict[str, object] = {"status": "not_started", "error": None}
+
+
+def normalize_worldline(value: str | None) -> Worldline:
+    aliases = {"sg": "steins_gate", "steins;gate": "steins_gate", "steins_gate": "steins_gate", "beta": "beta", "β": "beta"}
+    try:
+        return aliases[(value or "steins_gate").strip().lower()]  # type: ignore[return-value]
+    except KeyError as exc:
+        raise ValueError(f"unsupported worldline: {value!r}") from exc
+
+
+def get_data_root() -> Path:
+    override = os.environ.get("AMADEUS_DATA_DIR")
     if override:
-        return override
+        return Path(override).expanduser().resolve()
     appdata = os.environ.get("APPDATA")
     if appdata:
-        d = os.path.join(appdata, "Amadeus")
-        os.makedirs(d, exist_ok=True)
-        return os.path.join(d, "amadeus.db")
-    # Fallback for non-Windows platforms
-    home = os.path.expanduser("~")
-    d = os.path.join(home, ".amadeus")
-    os.makedirs(d, exist_ok=True)
-    return os.path.join(d, "amadeus.db")
+        return (Path(appdata) / "Amadeus").resolve()
+    return (Path.home() / ".amadeus").resolve()
 
-async def get_db() -> aiosqlite.Connection:
-    db = await aiosqlite.connect(_resolve_path(), timeout=30.0)
-    db.row_factory = aiosqlite.Row
-    await db.execute("PRAGMA journal_mode=WAL")
-    return db
 
-async def init_db():
-    db_path = _resolve_path()
-    if db_path in _initialized_paths:
-        return
-    db = await get_db()
+def default_conversation_id(session_id: str, worldline: str) -> str:
+    """Return the stable compatibility conversation id for a session/worldline."""
+    wl = normalize_worldline(worldline)
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"amadeus:{wl}:{session_id}:default"))
+
+
+def _resolve_path(worldline: str = "steins_gate", kind: DatabaseKind = "history") -> str:
+    """Resolve DB paths; AMADEUS_DB_PATH remains compatible with existing tests."""
+    wl = normalize_worldline(worldline)
+    legacy_override = os.environ.get("AMADEUS_DB_PATH")
+    if legacy_override:
+        base = Path(legacy_override).expanduser().resolve()
+        if kind == "history" and wl == "steins_gate":
+            return str(base)
+        suffix = "beta" if wl == "beta" else "sg"
+        if kind == "history":
+            return str(base.with_name(f"{base.stem}.{suffix}{base.suffix or '.sqlite3'}"))
+        return str(base.with_name(f"{base.stem}.{suffix}.{kind}{base.suffix or '.sqlite3'}"))
+
+    root = get_data_root()
+    if kind == "control":
+        return str(root / "control.sqlite3")
+    namespace = "sg" if wl == "steins_gate" else "beta"
+    return str(root / "worldlines" / namespace / f"{kind}.sqlite3")
+
+
+async def get_db(worldline: str = "steins_gate", kind: DatabaseKind = "history") -> aiosqlite.Connection:
+    path = Path(_resolve_path(worldline, kind))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pending_connection = aiosqlite.connect(str(path), timeout=30.0)
     try:
-        await db.executescript("""
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+        db = await pending_connection
+    except BaseException:
+        # aiosqlite queues its worker-stop sentinel when the initial await is
+        # cancelled, but does not wait for the thread. Join only on this
+        # exceptional path so the worker cannot call a closed event loop.
+        worker = getattr(pending_connection, "_thread", None)
+        if worker is not None and worker.is_alive():
+            worker.join(timeout=5.0)
+        raise
+    try:
+        db.row_factory = aiosqlite.Row
+        await db.execute("PRAGMA journal_mode=WAL")
+        await db.execute("PRAGMA foreign_keys=ON")
+        await db.execute("PRAGMA busy_timeout=30000")
+        return db
+    except BaseException:
+        # A caller can be cancelled while the connection is still being
+        # configured, before it receives the handle and establishes its own
+        # try/finally. Close here so aiosqlite's worker never outlives the loop.
+        await db.close()
+        raise
+
+
+HISTORY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS schema_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    title_source TEXT NOT NULL DEFAULT 'auto' CHECK(title_source IN ('auto','manual')),
+    is_default INTEGER NOT NULL DEFAULT 0 CHECK(is_default IN (0,1)),
+    is_pinned INTEGER NOT NULL DEFAULT 0 CHECK(is_pinned IN (0,1)),
+    provider_id TEXT,
+    model_id TEXT,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+    last_active_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_conversations_session_active
+    ON conversations(session_id, is_pinned DESC, last_active_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_conversations_one_default
+    ON conversations(session_id) WHERE is_default=1;
+CREATE TABLE IF NOT EXISTS messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK(role IN ('system','user','assistant','tool')),
+    content TEXT NOT NULL,
+    translation TEXT,
+    turn_id TEXT,
+    revision INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, id);
+CREATE TABLE IF NOT EXISTS memory_summaries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    summary TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_summary_session ON memory_summaries(session_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_summary_conversation ON memory_summaries(conversation_id, id DESC);
+CREATE TRIGGER IF NOT EXISTS messages_require_conversation_insert
+BEFORE INSERT ON messages WHEN new.conversation_id IS NULL BEGIN
+  SELECT RAISE(ABORT, 'messages.conversation_id is required');
+END;
+CREATE TRIGGER IF NOT EXISTS messages_require_conversation_update
+BEFORE UPDATE OF conversation_id ON messages WHEN new.conversation_id IS NULL BEGIN
+  SELECT RAISE(ABORT, 'messages.conversation_id is required');
+END;
+CREATE TRIGGER IF NOT EXISTS summaries_require_conversation_insert
+BEFORE INSERT ON memory_summaries WHEN new.conversation_id IS NULL BEGIN
+  SELECT RAISE(ABORT, 'memory_summaries.conversation_id is required');
+END;
+CREATE TRIGGER IF NOT EXISTS summaries_require_conversation_update
+BEFORE UPDATE OF conversation_id ON memory_summaries WHEN new.conversation_id IS NULL BEGIN
+  SELECT RAISE(ABORT, 'memory_summaries.conversation_id is required');
+END;
+CREATE TRIGGER IF NOT EXISTS messages_touch_conversation
+AFTER INSERT ON messages BEGIN
+  UPDATE conversations
+     SET updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+         last_active_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+   WHERE id=new.conversation_id;
+END;
+"""
+
+MEMORY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS episodic_memories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    confidence REAL NOT NULL CHECK(confidence BETWEEN 0 AND 1),
+    importance REAL NOT NULL CHECK(importance BETWEEN 0 AND 1),
+    source_message_ids TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    last_referenced_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_episode_session ON episodic_memories(session_id, id DESC);
+CREATE VIRTUAL TABLE IF NOT EXISTS episodic_fts USING fts5(content, content='episodic_memories', content_rowid='id');
+CREATE TRIGGER IF NOT EXISTS episodic_ai AFTER INSERT ON episodic_memories BEGIN
+  INSERT INTO episodic_fts(rowid, content) VALUES (new.id, new.content);
+END;
+CREATE TRIGGER IF NOT EXISTS episodic_ad AFTER DELETE ON episodic_memories BEGIN
+  INSERT INTO episodic_fts(episodic_fts, rowid, content) VALUES('delete', old.id, old.content);
+END;
+CREATE TABLE IF NOT EXISTS core_facts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id TEXT NOT NULL,
+    fact_key TEXT NOT NULL,
+    fact_value TEXT NOT NULL,
+    confidence REAL NOT NULL CHECK(confidence BETWEEN 0 AND 1),
+    importance REAL NOT NULL CHECK(importance BETWEEN 0 AND 1),
+    is_current INTEGER NOT NULL DEFAULT 1 CHECK(is_current IN (0,1)),
+    is_pinned INTEGER NOT NULL DEFAULT 0 CHECK(is_pinned IN (0,1)),
+    source_message_ids TEXT NOT NULL,
+    superseded_by INTEGER REFERENCES core_facts(id),
+    created_at TEXT NOT NULL,
+    last_referenced_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_current_fact ON core_facts(session_id, fact_key) WHERE is_current=1;
+CREATE INDEX IF NOT EXISTS idx_core_fact_hot ON core_facts(session_id, is_current, is_pinned, importance DESC);
+CREATE TABLE IF NOT EXISTS memory_embeddings (
+    memory_type TEXT NOT NULL CHECK(memory_type IN ('episodic','core')),
+    memory_id INTEGER NOT NULL,
+    model TEXT NOT NULL,
+    dimensions INTEGER NOT NULL CHECK(dimensions=384),
+    vector BLOB NOT NULL,
+    PRIMARY KEY(memory_type, memory_id)
+);
+CREATE TABLE IF NOT EXISTS emotion_states (
+    session_id TEXT PRIMARY KEY,
+    trust REAL NOT NULL,
+    attachment REAL NOT NULL,
+    irritation REAL NOT NULL,
+    anxiety REAL NOT NULL,
+    jealousy REAL NOT NULL,
+    volatility REAL NOT NULL,
+    updated_at_utc TEXT NOT NULL
+);
+"""
+
+CONTROL_SCHEMA = """
+CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS session_worldlines (
+    session_id TEXT PRIMARY KEY,
+    worldline TEXT NOT NULL CHECK(worldline IN ('steins_gate','beta')),
+    revision INTEGER NOT NULL DEFAULT 0,
+    updated_at_utc TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS session_conversation_selections (
+    session_id TEXT NOT NULL,
+    worldline TEXT NOT NULL CHECK(worldline IN ('steins_gate','beta')),
+    conversation_id TEXT NOT NULL,
+    updated_at_utc TEXT NOT NULL,
+    PRIMARY KEY(session_id, worldline)
+);
+CREATE TABLE IF NOT EXISTS search_usage (
+    day_utc TEXT PRIMARY KEY,
+    tavily_credits INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS provider_configurations (
+    provider_id TEXT PRIMARY KEY,
+    base_url TEXT NOT NULL,
+    default_model TEXT NOT NULL,
+    updated_at_utc TEXT NOT NULL
+);
+"""
+
+
+def _read_schema_version(connection: sqlite3.Connection) -> int | None:
+    connection.execute("CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    row = connection.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()
+    return int(row[0]) if row else None
+
+
+def _column_exists(connection: sqlite3.Connection, table: str, column: str) -> bool:
+    return any(row[1] == column for row in connection.execute(f"PRAGMA table_info({table})"))
+
+
+def _prepare_history_v2_ddl(connection: sqlite3.Connection) -> None:
+    """Commit the additive DDL stage before transactional data backfill."""
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS conversations (
+            id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            title TEXT NOT NULL,
+            title_source TEXT NOT NULL DEFAULT 'auto' CHECK(title_source IN ('auto','manual')),
+            is_default INTEGER NOT NULL DEFAULT 0 CHECK(is_default IN (0,1)),
+            is_pinned INTEGER NOT NULL DEFAULT 0 CHECK(is_pinned IN (0,1)),
+            provider_id TEXT,
+            model_id TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+            last_active_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
         );
-        CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, id);
-        
-        CREATE TABLE IF NOT EXISTS memory_summaries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT NOT NULL,
-            summary TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-        CREATE INDEX IF NOT EXISTS idx_summary_session ON memory_summaries(session_id, id DESC);
-        """)
+        """
+    )
+    if not _column_exists(connection, "messages", "conversation_id"):
+        connection.execute(
+            "ALTER TABLE messages ADD COLUMN conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE"
+        )
+    if not _column_exists(connection, "memory_summaries", "conversation_id"):
+        connection.execute(
+            "ALTER TABLE memory_summaries ADD COLUMN conversation_id TEXT REFERENCES conversations(id) ON DELETE CASCADE"
+        )
+    connection.commit()
+
+
+def _backfill_history_v2(connection: sqlite3.Connection, worldline: str) -> None:
+    """Backfill legacy rows atomically; schema DDL is intentionally separate."""
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        rows = connection.execute(
+            """SELECT session_id FROM messages
+               UNION
+               SELECT session_id FROM memory_summaries
+               ORDER BY session_id"""
+        ).fetchall()
+        for (session_id,) in rows:
+            conversation_id = default_conversation_id(session_id, worldline)
+            connection.execute(
+                """INSERT OR IGNORE INTO conversations(
+                       id,session_id,title,title_source,is_default,is_pinned
+                   ) VALUES(?,?,?,'auto',1,0)""",
+                (conversation_id, session_id, "Default Conversation"),
+            )
+            connection.execute(
+                "UPDATE messages SET conversation_id=? WHERE session_id=? AND conversation_id IS NULL",
+                (conversation_id, session_id),
+            )
+            connection.execute(
+                "UPDATE memory_summaries SET conversation_id=? WHERE session_id=? AND conversation_id IS NULL",
+                (conversation_id, session_id),
+            )
+
+        missing_messages = connection.execute(
+            "SELECT COUNT(*) FROM messages WHERE conversation_id IS NULL"
+        ).fetchone()[0]
+        missing_summaries = connection.execute(
+            "SELECT COUNT(*) FROM memory_summaries WHERE conversation_id IS NULL"
+        ).fetchone()[0]
+        if missing_messages or missing_summaries:
+            raise RuntimeError(
+                f"conversation backfill incomplete: messages={missing_messages}, summaries={missing_summaries}"
+            )
+        connection.execute(
+            "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version',?)",
+            ("2",),
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
+def _migrate_v1_to_v2(connection: sqlite3.Connection, kind: DatabaseKind, worldline: str) -> None:
+    if kind == "history":
+        _prepare_history_v2_ddl(connection)
+        _backfill_history_v2(connection, worldline)
+        return
+    connection.execute(
+        "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version',?)",
+        ("2",),
+    )
+    connection.commit()
+
+
+def _migrate_v2_to_v3(connection: sqlite3.Connection, kind: DatabaseKind) -> None:
+    """Add persisted assistant translations without rewriting existing rows."""
+    if kind == "history" and not _column_exists(connection, "messages", "translation"):
+        connection.execute("ALTER TABLE messages ADD COLUMN translation TEXT")
+    connection.execute(
+        "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version','3')"
+    )
+    connection.commit()
+
+
+async def _initialize_one(worldline: str, kind: DatabaseKind, schema: str) -> None:
+    path = _resolve_path(worldline, kind)
+    if path in _initialized_paths:
+        return
+    await asyncio.to_thread(_initialize_sync, path, schema, kind, worldline)
+    _initialized_paths.add(path)
+
+
+def _initialize_vec0(path: str) -> None:
+    """Create the dimension-locked vec0 table when sqlite-vec is installed."""
+    try:
+        import sqlite_vec
+    except ImportError:
+        return
+    connection = sqlite3.connect(path)
+    try:
+        connection.enable_load_extension(True)
+        sqlite_vec.load(connection)
+        connection.execute("CREATE VIRTUAL TABLE IF NOT EXISTS episodic_vec USING vec0(embedding float[384])")
+        connection.execute("CREATE VIRTUAL TABLE IF NOT EXISTS core_vec USING vec0(embedding float[384])")
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str = "steins_gate") -> None:
+    db_path = Path(path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path, timeout=30.0)
+    try:
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA foreign_keys=ON")
+        current = _read_schema_version(connection)
+        if current is not None and current > SCHEMA_VERSION:
+            raise RuntimeError(f"unsupported {kind} schema version at {path}: {current}")
+        if current == 1:
+            _migrate_v1_to_v2(connection, kind, worldline)
+            current = 2
+        if current == 2:
+            _migrate_v2_to_v3(connection, kind)
+            current = 3
+        if current not in (None, SCHEMA_VERSION):
+            raise RuntimeError(f"unsupported {kind} schema version at {path}: {current}")
+
+        connection.executescript(schema)
+        connection.execute(
+            "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version',?)",
+            (str(SCHEMA_VERSION),),
+        )
+        if kind == "memory":
+            model = connection.execute("SELECT value FROM schema_meta WHERE key='embedding_model'").fetchone()
+            dimension = connection.execute("SELECT value FROM schema_meta WHERE key='embedding_dimension'").fetchone()
+            if model and model[0] != EMBEDDING_MODEL:
+                raise RuntimeError(f"embedding model mismatch at {path}: {model[0]}")
+            if dimension and int(dimension[0]) != EMBEDDING_DIMENSION:
+                raise RuntimeError(f"embedding dimension mismatch at {path}: {dimension[0]}")
+            connection.execute("INSERT OR IGNORE INTO schema_meta(key,value) VALUES('embedding_model',?)", (EMBEDDING_MODEL,))
+            connection.execute("INSERT OR IGNORE INTO schema_meta(key,value) VALUES('embedding_dimension',?)", (str(EMBEDDING_DIMENSION),))
+        connection.commit()
+    finally:
+        connection.close()
+    if kind == "memory":
+        _initialize_vec0(path)
+
+
+def _run_migration_locked() -> None:
+    if portalocker is None:
+        raise RuntimeError("portalocker is required for safe database migration")
+    override = os.environ.get("AMADEUS_DB_PATH")
+    root = Path(override).expanduser().resolve().parent if override else get_data_root()
+    root.mkdir(parents=True, exist_ok=True)
+    lock_path = root / ".migration.lock"
+    marker = root / f".migration-v{SCHEMA_VERSION}.complete"
+    with portalocker.Lock(str(lock_path), mode="a+", timeout=30, flags=portalocker.LOCK_EX | portalocker.LOCK_NB) as lock_file:
+        if not marker.exists():
+            legacy = root / "amadeus.db"
+            if not override and legacy.exists():
+                stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                shutil.copy2(legacy, root / f"amadeus.legacy.{stamp}.db")
+            _initialize_sync(_resolve_path("steins_gate", "control"), CONTROL_SCHEMA, "control", "steins_gate")
+            for worldline in ("steins_gate", "beta"):
+                _initialize_sync(_resolve_path(worldline, "history"), HISTORY_SCHEMA, "history", worldline)
+                _initialize_sync(_resolve_path(worldline, "memory"), MEMORY_SCHEMA, "memory", worldline)
+            marker.write_text(json.dumps({"schema_version": SCHEMA_VERSION, "completed_at_utc": datetime.now(timezone.utc).isoformat()}), encoding="utf-8")
+            with marker.open("r+b") as handle:
+                handle.flush()
+                os.fsync(handle.fileno())
+        lock_file.flush()
+        os.fsync(lock_file.fileno())
+
+
+async def init_db() -> None:
+    global _migration_state
+    async with _init_lock:
+        try:
+            _migration_state = {"status": "running", "error": None}
+            await asyncio.to_thread(_run_migration_locked)
+            await _initialize_one("steins_gate", "control", CONTROL_SCHEMA)
+            for wl in ("steins_gate", "beta"):
+                await _initialize_one(wl, "history", HISTORY_SCHEMA)
+                await _initialize_one(wl, "memory", MEMORY_SCHEMA)
+                await asyncio.to_thread(_initialize_vec0, _resolve_path(wl, "memory"))
+            _migration_state = {"status": "ready", "error": None}
+        except Exception as exc:
+            _migration_state = {"status": "error", "error": str(exc)}
+            raise
+
+
+async def get_provider_configuration(provider_id: str) -> dict[str, str] | None:
+    db = await get_db("steins_gate", "control")
+    try:
+        cur = await db.execute(
+            "SELECT base_url,default_model FROM provider_configurations WHERE provider_id=?",
+            (provider_id,),
+        )
+        row = await cur.fetchone()
+        return dict(row) if row else None
+    finally:
+        await db.close()
+
+
+async def save_provider_configuration(
+    provider_id: str,
+    *,
+    base_url: str,
+    default_model: str,
+) -> None:
+    db = await get_db("steins_gate", "control")
+    try:
+        await db.execute(
+            """INSERT INTO provider_configurations(
+                   provider_id,base_url,default_model,updated_at_utc
+               ) VALUES(?,?,?,?)
+               ON CONFLICT(provider_id) DO UPDATE SET
+                   base_url=excluded.base_url,
+                   default_model=excluded.default_model,
+                   updated_at_utc=excluded.updated_at_utc""",
+            (
+                provider_id,
+                base_url,
+                default_model,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
         await db.commit()
     finally:
         await db.close()
-    _initialized_paths.add(db_path)
+
+
+async def validate_schema() -> dict[str, object]:
+    result: dict[str, object] = {"ok": True, "databases": {}, "migration": dict(_migration_state)}
+    for wl in ("steins_gate", "beta"):
+        for kind in ("history", "memory"):
+            db = await get_db(wl, kind)
+            try:
+                cur = await db.execute("SELECT value FROM schema_meta WHERE key='schema_version'")
+                row = await cur.fetchone()
+                ok = bool(row and int(row[0]) == SCHEMA_VERSION)
+                if kind == "memory":
+                    cur = await db.execute("SELECT value FROM schema_meta WHERE key='embedding_dimension'")
+                    dim = await cur.fetchone()
+                    ok = ok and bool(dim and int(dim[0]) == EMBEDDING_DIMENSION)
+                result["databases"][f"{wl}:{kind}"] = ok  # type: ignore[index]
+                result["ok"] = bool(result["ok"] and ok)
+            finally:
+                await db.close()
+    return result
+
+
+def reset_initialization_cache() -> None:
+    """Test helper for environment-path changes."""
+    _initialized_paths.clear()

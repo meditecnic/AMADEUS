@@ -1,16 +1,19 @@
 ﻿import { useState, useEffect, useRef, useCallback } from 'react';
 
 export interface UseAmadeusWSParams {
-  apiKey: string;
+  sessionId?: string;
+  conversationId?: string | null;
   systemPrompt: string;
   temperature: number;
   worldline: 'steins_gate' | 'beta';
   enableTts: boolean;
   sovitsUrl: string;
-  model: 'deepseek-v4-flash' | 'deepseek-v4-pro';
+  model: string;
   reasoningEffort: 'high' | 'xhigh';
   onAudioChunk?: (sentenceId: number, base64Data: string) => void;
   onAudioDegraded?: (reason: string) => void;
+  onTurnStarted?: () => void;
+  onTurnCompleted?: () => void;
 }
 
 export type WSStatus = 'CONNECTING' | 'READY' | 'ERROR' | 'CLOSED';
@@ -21,6 +24,9 @@ export interface Message {
   content: string;
   translation?: string;
   emotion?: 'neutral' | 'tsundere' | 'embarrassed' | 'intellectual' | 'happy' | 'surprised' | 'annoyed' | 'disappointed' | 'sad';
+  turnId?: string;
+  segments?: Array<{ id: number; ja: string; zh: string }>;
+  streaming?: boolean;
 }
 
 export interface UseAmadeusWSReturn {
@@ -33,9 +39,33 @@ export interface UseAmadeusWSReturn {
   emotion: 'neutral' | 'tsundere' | 'embarrassed' | 'intellectual' | 'happy' | 'surprised' | 'annoyed' | 'disappointed' | 'sad';
   clearHistory: () => void;
   sendChat: (content: string) => void;
+  stopVoice: () => void;
+  cancelTurn: () => void;
   sendDebugTts: (emotion: string, text: string) => void;
   updateConfig: (patch: Partial<Omit<UseAmadeusWSParams, 'onAudioChunk'>>) => void;
+  reconnect: () => void;
+  switchConversation: (conversationId: string, history: Message[]) => void;
   wsRef: React.MutableRefObject<WebSocket | null>;
+}
+
+export function getOrCreateAmadeusSessionId(): string {
+  let sessionId = '';
+  try {
+    sessionId = localStorage.getItem('amadeus_pc_session_id') || '';
+  } catch (error) {
+    console.warn('LocalStorage access blocked:', error);
+  }
+  if (!sessionId) {
+    sessionId = typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : Math.random().toString(36).substring(2, 15);
+    try {
+      localStorage.setItem('amadeus_pc_session_id', sessionId);
+    } catch (error) {
+      console.warn('LocalStorage write failed:', error);
+    }
+  }
+  return sessionId;
 }
 
 export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
@@ -52,6 +82,8 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     'happy', 'surprised', 'annoyed', 'disappointed', 'sad',
   ]);
   const lastSentenceIdRef = useRef<number>(-1);
+  const activeTurnIdRef = useRef<string>('');
+  const activeGenerationRef = useRef<number>(-1);
 
   const wsRef = useRef<WebSocket | null>(null);
   const paramsRef = useRef<UseAmadeusWSParams>(params);
@@ -125,23 +157,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     disconnect();
     setStatus('CONNECTING');
 
-    // Generate or load a session ID
-    let sessionId = '';
-    try {
-      sessionId = localStorage.getItem('amadeus_pc_session_id') || '';
-    } catch (e) {
-      console.warn('LocalStorage access blocked:', e);
-    }
-    if (!sessionId) {
-      sessionId = typeof crypto !== 'undefined' && crypto.randomUUID 
-        ? crypto.randomUUID() 
-        : Math.random().toString(36).substring(2, 15);
-      try {
-        localStorage.setItem('amadeus_pc_session_id', sessionId);
-      } catch (e) {
-        console.warn('LocalStorage write failed:', e);
-      }
-    }
+    const sessionId = paramsRef.current.sessionId || getOrCreateAmadeusSessionId();
 
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     // Tauri/Vite Config Proxy will route /ws to backend ws endpoint
@@ -158,15 +174,15 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       // Send auth frame immediately as first frame
       const authFrame = {
         type: 'auth',
-        api_key: paramsRef.current.apiKey,
+        conversation_id: paramsRef.current.conversationId || undefined,
         sovits_url: paramsRef.current.sovitsUrl,
         system_prompt: paramsRef.current.systemPrompt,
         enable_tts: paramsRef.current.enableTts,
         temperature: paramsRef.current.temperature,
         worldline: paramsRef.current.worldline,
-        model: paramsRef.current.model,
         reasoning_effort: paramsRef.current.reasoningEffort,
         client: 'desktop',
+        protocol_version: 2,
       };
       ws.send(JSON.stringify(authFrame));
       startHeartbeat();
@@ -180,6 +196,112 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
         const msg = JSON.parse(event.data);
         
         switch (msg.type) {
+          case 'turn.started':
+            clearWatchdog();
+            startWatchdog();
+            paramsRef.current.onTurnStarted?.();
+            activeTurnIdRef.current = msg.turn_id;
+            activeGenerationRef.current = msg.generation;
+            activeAssistantMessageId = `assist_${msg.turn_id}`;
+            lastSentenceIdRef.current = -1;
+            setIsThinking(true);
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: activeAssistantMessageId,
+                role: 'assistant',
+                content: '',
+                translation: '',
+                turnId: msg.turn_id,
+                segments: [],
+                streaming: true,
+                emotion: 'neutral',
+              },
+            ]);
+            break;
+
+          case 'segment.ready': {
+            if (
+              msg.turn_id !== activeTurnIdRef.current ||
+              msg.generation !== activeGenerationRef.current
+            ) break;
+            startWatchdog();
+            setIsThinking(false);
+            setIsSynthesizing(true);
+            setActiveTool(null);
+            setActiveNotice(null);
+            if (msg.emotion && ALLOWED_EMOTIONS.has(msg.emotion)) {
+              setEmotion(msg.emotion as UseAmadeusWSReturn['emotion']);
+            }
+            setMessages((prev) => prev.map((message) => {
+              if (message.id !== activeAssistantMessageId) return message;
+              const segments = [...(message.segments || [])];
+              const index = segments.findIndex((segment) => segment.id === msg.segment_id);
+              const nextSegment = { id: msg.segment_id, ja: msg.ja || '', zh: msg.zh || '' };
+              if (index >= 0) segments[index] = nextSegment;
+              else segments.push(nextSegment);
+              segments.sort((a, b) => a.id - b.id);
+              return {
+                ...message,
+                segments,
+                content: segments.map((segment) => segment.ja).join(''),
+                translation: segments.map((segment) => segment.zh).join(''),
+                emotion: msg.emotion && ALLOWED_EMOTIONS.has(msg.emotion)
+                  ? msg.emotion as Message['emotion']
+                  : message.emotion,
+              };
+            }));
+            break;
+          }
+
+          case 'segment.audio':
+            if (
+              msg.turn_id === activeTurnIdRef.current &&
+              msg.generation === activeGenerationRef.current &&
+              paramsRef.current.onAudioChunk && msg.data
+            ) {
+              paramsRef.current.onAudioChunk(msg.segment_id, msg.data);
+            }
+            break;
+
+          case 'segment.audio_error':
+            if (
+              msg.turn_id === activeTurnIdRef.current &&
+              msg.generation === activeGenerationRef.current &&
+              msg.reason !== 'voice_stopped'
+            ) {
+              paramsRef.current.onAudioDegraded?.(msg.reason || 'unknown');
+            }
+            break;
+
+          case 'turn.completed':
+            if (
+              msg.turn_id !== activeTurnIdRef.current ||
+              msg.generation !== activeGenerationRef.current
+            ) break;
+            clearWatchdog();
+            setIsThinking(false);
+            setIsSynthesizing(false);
+            setActiveTool(null);
+            setActiveNotice(null);
+            setMessages((prev) => prev.map((message) =>
+              message.id === activeAssistantMessageId ? { ...message, streaming: false } : message
+            ));
+            paramsRef.current.onTurnCompleted?.();
+            break;
+
+          case 'turn.cancelled':
+            if (msg.turn_id !== activeTurnIdRef.current) break;
+            clearWatchdog();
+            setIsThinking(false);
+            setIsSynthesizing(false);
+            setActiveTool(null);
+            setActiveNotice(null);
+            setMessages((prev) => prev.map((message) =>
+              message.id === activeAssistantMessageId ? { ...message, streaming: false } : message
+            ));
+            break;
+
           case 'status':
             if (msg.notice) {
               setActiveNotice(msg.notice);
@@ -343,9 +465,19 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
 
     // Send chat frame
     wsRef.current.send(JSON.stringify({
-      type: 'chat',
+      type: 'chat.send',
       content: content.trim()
     }));
+  }, []);
+
+  const stopVoice = useCallback(() => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({ type: 'voice.stop' }));
+  }, []);
+
+  const cancelTurn = useCallback(() => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({ type: 'turn.cancel' }));
   }, []);
 
   const updateConfig = useCallback((patch: Partial<Omit<UseAmadeusWSParams, 'onAudioChunk'>>) => {
@@ -358,8 +490,6 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     if (patch.worldline !== undefined) mappedPatch.worldline = patch.worldline;
     if (patch.enableTts !== undefined) mappedPatch.enable_tts = patch.enableTts;
     if (patch.sovitsUrl !== undefined) mappedPatch.sovits_url = patch.sovitsUrl;
-    if (patch.apiKey !== undefined) mappedPatch.api_key = patch.apiKey;
-    if (patch.model !== undefined) mappedPatch.model = patch.model;
     if (patch.reasoningEffort !== undefined) mappedPatch.reasoning_effort = patch.reasoningEffort;
 
     // Send config_update frame
@@ -381,6 +511,20 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     setMessages([]);
   }, []);
 
+  const switchConversation = useCallback((conversationId: string, history: Message[]) => {
+    clearWatchdog();
+    activeTurnIdRef.current = '';
+    activeGenerationRef.current = -1;
+    setIsThinking(false);
+    setIsSynthesizing(false);
+    setMessages(history);
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({
+      type: 'conversation.switch',
+      conversation_id: conversationId,
+    }));
+  }, []);
+
   // Connect on mount, disconnect on unmount
   useEffect(() => {
     connect();
@@ -399,8 +543,12 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     emotion,
     clearHistory,
     sendChat,
+    stopVoice,
+    cancelTurn,
     sendDebugTts,
     updateConfig,
+    reconnect: connect,
+    switchConversation,
     wsRef
   };
 }

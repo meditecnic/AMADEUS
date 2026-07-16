@@ -16,25 +16,19 @@ function formatDate(): string {
 export const HudBadge: React.FC<HudBadgeProps> = ({ worldline, status }) => {
   const dateStr = formatDate();
   const currentDay = new Date().getDay(); // 0-6 (0=SUN, 1=MON...)
+  const dayLabels = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+  const statusLabel = status === 'READY' ? 'ONLINE' : 'OFFLINE';
 
   return (
-    <div className="hud-badge-container">
-      <div className="hud-pill hud-date-pill">
-        <span className="hud-date-text">{dateStr}</span>
-        <div className="hud-days-container">
-          <div 
-            className="hud-day-indicator"
-            style={{
-              backgroundPositionY: `${(currentDay / 6) * 100}%`
-            }}
-          />
-        </div>
-      </div>
-      
-      <div className={`worldline-badge ${worldline === 'steins_gate' ? 'alpha' : 'beta'}`} />
-      
-      <div className={`hud-pill hud-status-pill ${status === 'ERROR' ? 'status-error' : ''}`}>
-        {status === 'READY' ? 'ONLINE' : status.toUpperCase()}
+    <div
+      className={`hud-badge-container hud-badge-${worldline === 'beta' ? 'beta' : 'sg'}`}
+      data-worldline={worldline}
+    >
+      <span className="hud-day-text">({dayLabels[currentDay]})</span>
+      <span className="hud-date-text">{dateStr}</span>
+      <div className={`hud-status-pill ${status === 'ERROR' ? 'status-error' : ''} ${status === 'SETUP' ? 'status-setup' : ''}`}>
+        <span className="hud-status-dot" aria-hidden="true" />
+        <span>{statusLabel}</span>
       </div>
     </div>
   );

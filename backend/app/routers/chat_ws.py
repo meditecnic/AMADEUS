@@ -1,13 +1,25 @@
 ﻿import re
 import base64
 import asyncio
+from uuid import uuid4
 import starlette
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app import config
-from app.services.deepseek import DeepSeekService
+from app.services.provider_registry import ProviderSnapshot, ProviderTask
+from app.services.provider_runtime import deepseek_service, provider_registry
+from app.services.credentials import credential_store
 from app.services.tts_queue import tts_manager
 from app import models
 from app.db import init_db
+from app.services.prompt_compiler import compile_for_session
+from app.services.session_manager import cancel_inflight, session_coordinator
+from app.domain.segments import (
+    IncrementalJapaneseSegmenter,
+    Segment,
+    SegmentPipeline,
+    TransientSegmentError,
+    TurnIdentity,
+)
 
 import copy
 from app.services.tts_queue import TTSServiceError
@@ -15,38 +27,65 @@ from contextlib import aclosing
 from app.security.guard import contains_leak
 
 router = APIRouter()
-deepseek_service = DeepSeekService()
+
 
 class SessionState:
     def __init__(self, session_id: str):
         self.session_id = session_id
+        self.conversation_id = None
         self._history = []
         self.memory_summary = ""
         self.lock = asyncio.Lock()
         self.compressing = False
         
         self.temperature = 0.8
+        self.provider_id = "deepseek"
         self.model = config.DEEPSEEK_MODEL
         self.reasoning_effort = None
         self.system_prompt = None
+        self.base_system_prompt = None
         self.api_key = None
         self.sovits_url = None
         self.enable_tts = True
         self.worldline = "steins_gate"
         self.client_type = "mobile"
+        self.protocol_version = 1
         
         self.active_task = None
         self.is_busy = False
         
         self.current_epoch = 0
+        self.revision = 0
+        self.active_turn_id = None
+        self.voice_stopped_turn_id = None
+        self.active_streams = set()
+        self.active_segment_pipeline = None
         self.history_epoch = 0
         self.last_assistant_emotion = "neutral"
         self.consecutive_no_emo_tags = 0
 
     async def load_from_db(self):
         await init_db()
-        self._history = await models.get_recent_messages(self.session_id, limit=6)
-        self.memory_summary = await models.get_latest_summary(self.session_id)
+        from app.services.conversations import conversation_service
+
+        selected = await conversation_service.get_selected(self.session_id, self.worldline)
+        self.conversation_id = str(selected["id"])
+        self.provider_id = str(selected.get("provider_id") or "deepseek")
+        self.model = str(selected.get("model_id") or self.model)
+        self.api_key = credential_store.get(self.provider_id)
+        self._history = await models.get_recent_messages(
+            self.session_id,
+            limit=6,
+            worldline=self.worldline,
+            conversation_id=self.conversation_id,
+        )
+        self.memory_summary = await models.get_latest_summary(
+            self.session_id,
+            worldline=self.worldline,
+            conversation_id=self.conversation_id,
+        )
+        from app.services.soul_engine import soul_engine
+        await soul_engine.restore_emotion(self.session_id, self.worldline)
 
     @property
     def history(self):
@@ -59,6 +98,10 @@ class SessionState:
     def append_message(self, message: dict):
         self._history.append(copy.deepcopy(message))
 
+    @property
+    def tts_key(self) -> str:
+        return f"{self.session_id}:{self.worldline}:{self.conversation_id or 'default'}:{self.revision}"
+
 # In-memory session store: { session_id: SessionState }
 sessions = {}
 sessions_creation_lock = asyncio.Lock()
@@ -70,9 +113,10 @@ DESKTOP_ALLOWED_EMOTIONS = {
     "neutral", "tsundere", "embarrassed", "intellectual",
     "happy", "surprised", "annoyed", "disappointed", "sad"
 }
+ALLOWED_EMOTIONS = DESKTOP_ALLOWED_EMOTIONS
 
 def get_session_allowed_emotions(session: "SessionState") -> set:
-    if session.client_type == "desktop":
+    if session.client_type in ("desktop", "voice"):
         return DESKTOP_ALLOWED_EMOTIONS
     return MOBILE_ALLOWED_EMOTIONS
 
@@ -102,8 +146,45 @@ def extract_sentences_from_buffer(buffer: str, is_end: bool = False):
     return sentences, remaining
 
 
+def _supported_kwargs(callable_obj, values: dict) -> dict:
+    import inspect
 
-async def compress_and_update_history(session_id: str, current_history: list):
+    signature = inspect.signature(callable_obj)
+    if any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    ):
+        return values
+    return {name: value for name, value in values.items() if name in signature.parameters}
+
+
+async def translate_with_provider(
+    provider_snapshot: ProviderSnapshot,
+    text: str,
+    api_key: str | None,
+) -> str:
+    provider_snapshot.require(ProviderTask.TRANSLATION)
+    method = provider_snapshot.adapter.translate_to_zh
+    kwargs = _supported_kwargs(
+        method,
+        {
+            "text": text,
+            "api_key": api_key,
+            "model": provider_snapshot.model_id,
+        },
+    )
+    return await method(**kwargs)
+
+
+
+async def compress_and_update_history(
+    session_id: str,
+    current_history: list,
+    worldline: str = "steins_gate",
+    revision: int = 0,
+    conversation_id: str | None = None,
+    provider_snapshot: ProviderSnapshot | None = None,
+):
     """
     Asynchronously compress older conversation history and update session state safely.
     Keeps the last 3 rounds (6 messages) of history.
@@ -125,16 +206,52 @@ async def compress_and_update_history(session_id: str, current_history: list):
     try:
         session_data = sessions.get(session_id)
         if session_data:
-            new_summary = await deepseek_service.compress_history(to_compress, api_key=session_data.api_key, old_summary=session_data.memory_summary)
+            if provider_snapshot is None:
+                registered = provider_registry.snapshot(
+                    session_data.provider_id,
+                    session_data.model,
+                )
+                provider_snapshot = ProviderSnapshot(
+                    registered.provider_id,
+                    registered.model_id,
+                    registered.capabilities,
+                    deepseek_service if registered.provider_id == "deepseek" else registered.adapter,
+                )
+            provider_snapshot.require(ProviderTask.COMPRESSION)
+            method = provider_snapshot.adapter.compress_history
+            kwargs = _supported_kwargs(
+                method,
+                {
+                    "history": to_compress,
+                    "api_key": session_data.api_key,
+                    "old_summary": session_data.memory_summary,
+                    "model": provider_snapshot.model_id,
+                },
+            )
+            new_summary = await method(**kwargs)
             if new_summary:
-                await models.save_memory_summary(session_id, new_summary)
+                await models.save_memory_summary(
+                    session_id,
+                    new_summary,
+                    worldline=worldline,
+                    conversation_id=conversation_id,
+                )
                 async with session_data.lock:
+                    if (
+                        session_data.worldline != worldline
+                        or session_data.revision != revision
+                        or getattr(session_data, "conversation_id", None) != conversation_id
+                    ):
+                        return
                     session_data.memory_summary = new_summary
                     if len(session_data.history) >= N:
                         session_data.history = session_data.history[N:]
                     else:
                         session_data.history = []
-                    print(f"[History Compression] Session {session_id}: Compression successful. Summary: {new_summary}")
+                    print(
+                        f"[History Compression] Session {session_id}: "
+                        f"compression successful ({len(new_summary)} chars)"
+                    )
     except Exception as e:
         print(f"[History Compression Error] Session {session_id}: {e}")
     finally:
@@ -155,15 +272,14 @@ def clean_text_for_tts(text: str) -> str:
 
 async def execute_tool_call(name: str, arguments_str: str) -> str:
     import json
-    from app.services.search import web_search
+    from app.services.search import search_service
     if name == "web_search":
         try:
             args = json.loads(arguments_str)
             query = args.get("query", "")
         except Exception:
             query = arguments_str
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, web_search, query)
+        return (await search_service.search(query)).render()
     else:
         return f"Error: Tool {name} not found."
 
@@ -173,14 +289,15 @@ async def get_clean_text_stream(
     session: SessionState,
     tools: list = None,
     tool_choice: str = None,
-    default_emotion: str = "neutral"
+    default_emotion: str = "neutral",
+    on_text_delta=None,
+    provider_snapshot: ProviderSnapshot | None = None,
 ):
     """
     Get text or tool calls stream with leak retries.
     Returns: (final_text, final_emotion, merged_tool_calls, emo_tag_found)
     """
     MAX_ATTEMPTS = 3
-    _logged_content = False
     for attempt in range(MAX_ATTEMPTS):
         emo_buffer = ""
         in_emo_tag = False
@@ -202,17 +319,26 @@ async def get_clean_text_stream(
         time_supplement = f"\n【現在時刻：{time_str}】"
         eff_system_prompt = (eff_system_prompt or "") + time_supplement
 
-        stream_gen = deepseek_service.get_chat_stream(
-            active_history=active_history,
-            memory_summary=memory_summary,
-            api_key=session.api_key,
-            system_prompt=eff_system_prompt,
-            temperature=session.temperature,
-            tools=tools,
-            tool_choice=tool_choice,
-            model=session.model,
-            reasoning_effort=session.reasoning_effort
-        )
+        import inspect
+        stream_kwargs = {
+            "active_history": active_history,
+            "memory_summary": memory_summary,
+            "api_key": session.api_key,
+            "system_prompt": eff_system_prompt,
+            "temperature": session.temperature,
+            "tools": tools,
+            "tool_choice": tool_choice,
+            "model": session.model,
+            "reasoning_effort": session.reasoning_effort,
+        }
+        provider = provider_snapshot.adapter if provider_snapshot is not None else deepseek_service
+        stream_kwargs["model"] = provider_snapshot.model_id if provider_snapshot is not None else session.model
+        signature = inspect.signature(provider.get_chat_stream)
+        accepts_kwargs = any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values())
+        if not accepts_kwargs:
+            stream_kwargs = {key: value for key, value in stream_kwargs.items() if key in signature.parameters}
+        stream_gen = provider.get_chat_stream(**stream_kwargs)
+        session.active_streams.add(stream_gen)
         
         try:
             async with aclosing(stream_gen) as stream:
@@ -244,9 +370,7 @@ async def get_clean_text_stream(
                                     target["function"]["arguments"] += tc.get("function", {}).get("arguments")
                                     
                     if content:
-                        if not _logged_content:
-                            print(f"[RAW CONTENT] '{content[:80]}'", flush=True)
-                            _logged_content = True
+                        delta_text = ""
                         for char in content:
                             if in_emo_tag:
                                 emo_buffer += char
@@ -260,10 +384,12 @@ async def get_clean_text_stream(
                                         emo_tag_found = True
                                     else:
                                         text_buffer += emo_buffer
+                                        delta_text += emo_buffer
                                     emo_buffer = ""
                                     in_emo_tag = False
                                 elif len(emo_buffer) > 20:
                                     text_buffer += emo_buffer
+                                    delta_text += emo_buffer
                                     emo_buffer = ""
                                     in_emo_tag = False
                             else:
@@ -272,16 +398,32 @@ async def get_clean_text_stream(
                                     emo_buffer = "["
                                 else:
                                     text_buffer += char
+                                    delta_text += char
+                        if delta_text and on_text_delta is not None:
+                            callback_result = on_text_delta(delta_text, last_emotion)
+                            if asyncio.iscoroutine(callback_result):
+                                await callback_result
             if emo_buffer:
                 text_buffer += emo_buffer
+                if on_text_delta is not None:
+                    callback_result = on_text_delta(emo_buffer, last_emotion)
+                    if asyncio.iscoroutine(callback_result):
+                        await callback_result
         except asyncio.CancelledError:
             raise
+        finally:
+            session.active_streams.discard(stream_gen)
             
         if merged_tool_calls:
             return "", "neutral", merged_tool_calls, False
             
         if contains_leak(text_buffer):
-            print(f"[Guard] attempt {attempt + 1}/{MAX_ATTEMPTS} 露見検出、破棄して再試行: {text_buffer[:50]}")
+            print(
+                f"[Guard] attempt {attempt + 1}/{MAX_ATTEMPTS} "
+                f"rejected leaked output ({len(text_buffer)} chars)"
+            )
+            if on_text_delta is not None:
+                return text_buffer, last_emotion, {}, emo_tag_found
             if attempt < MAX_ATTEMPTS - 1:
                 continue
             return "はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。", "tsundere", {}, False
@@ -314,11 +456,95 @@ async def processor_loop(
     Executes deepseek chat streaming, sentence extraction, launches TTS tasks, and queues results.
     """
     session.is_busy = True
+    turn_id = session.active_turn_id or str(uuid4())
+    session.active_turn_id = turn_id
+
+    if session.conversation_id is None:
+        from app.services.conversations import conversation_service
+
+        selected = await conversation_service.get_selected(session.session_id, session.worldline)
+        session.conversation_id = str(selected["id"])
+    conversation_id = session.conversation_id
+    registered_provider = provider_registry.snapshot(session.provider_id, session.model)
+    turn_provider = ProviderSnapshot(
+        provider_id=registered_provider.provider_id,
+        model_id=registered_provider.model_id,
+        capabilities=registered_provider.capabilities,
+        adapter=(
+            deepseek_service
+            if registered_provider.provider_id == "deepseek"
+            else registered_provider.adapter
+        ),
+    )
+    turn_provider.require(ProviderTask.CHAT)
+    segment_pipeline = None
+    segment_count = 0
+    history_translation = ""
+    segment_event_context = {"emotion": "neutral"}
+    streaming_splitter = None
+    streamed_segments = []
     
     active_history = session.history
     memory_summary = session.memory_summary
     
     try:
+        if session.protocol_version >= 2:
+            async def emit_segment_event(event: dict):
+                payload = dict(event)
+                if payload["type"].startswith("segment."):
+                    payload["emotion"] = segment_event_context["emotion"]
+                if isinstance(payload.get("data"), bytes):
+                    payload["data"] = base64.b64encode(payload["data"]).decode("utf-8")
+                await send_queue.put((epoch, payload))
+
+            async def translate_segment(text: str) -> str:
+                return await translate_with_provider(turn_provider, text, session.api_key)
+
+            async def synthesize_segment(text: str) -> bytes:
+                cleaned = clean_text_for_tts(text)
+                if not session.enable_tts:
+                    raise RuntimeError("user_disabled")
+                if not is_meaningful_sentence(cleaned):
+                    raise RuntimeError("action_only")
+                try:
+                    return await tts_manager.synthesize_async(
+                        cleaned,
+                        segment_event_context["emotion"],
+                        sovits_url=session.sovits_url,
+                    )
+                except TTSServiceError as exc:
+                    message = str(exc).lower()
+                    if any(token in message for token in ("timeout", "429", "500", "502", "503", "504", "network")):
+                        raise TransientSegmentError(str(exc)) from exc
+                    raise
+
+            segment_pipeline = SegmentPipeline(
+                TurnIdentity(conversation_id, turn_id, session.revision),
+                emit=emit_segment_event,
+                translate=translate_segment,
+                synthesize=synthesize_segment,
+                tts_concurrency=2,
+                tts_retries=1,
+            )
+            session.active_segment_pipeline = segment_pipeline
+            await segment_pipeline.start()
+            if session.voice_stopped_turn_id == turn_id:
+                await segment_pipeline.stop_voice()
+            streaming_splitter = IncrementalJapaneseSegmenter()
+
+            async def submit_text_delta(delta: str, emotion: str):
+                segment_event_context["emotion"] = emotion
+                for segment in streaming_splitter.feed(delta):
+                    delivered = segment
+                    if contains_leak(segment.text):
+                        delivered = Segment(
+                            segment.id,
+                            "はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。",
+                        )
+                        segment_event_context["emotion"] = "tsundere"
+                    streamed_segments.append(delivered)
+                    segment_pipeline.submit(delivered)
+
         await send_queue.put((epoch, {
             "type": "status",
             "dsk": "thinking",
@@ -326,16 +552,22 @@ async def processor_loop(
             "tts": "idle"
         }))
         
-        await models.save_message(session.session_id, "user", user_msg)
+        session.system_prompt = await compile_for_session(session, user_msg)
+        user_message_id = await models.save_message(
+            session.session_id,
+            "user",
+            user_msg,
+            worldline=session.worldline,
+            turn_id=turn_id,
+            revision=session.revision,
+            conversation_id=conversation_id,
+        )
         
         from app.agent_tools import AMADEUS_TOOLS
-        tools_to_use = None
-        tool_choice_to_use = None
-        if session.client_type == "desktop":
-            tools_to_use = AMADEUS_TOOLS
-            tool_choice_to_use = "auto"
-            if should_force_search(user_msg):
-                tool_choice_to_use = {"type": "function", "function": {"name": "web_search"}}
+        tools_to_use = AMADEUS_TOOLS
+        tool_choice_to_use = "auto"
+        if should_force_search(user_msg):
+            tool_choice_to_use = {"type": "function", "function": {"name": "web_search"}}
         
         final_text, final_emotion, merged_tool_calls, emo_tag_found = await get_clean_text_stream(
             active_history=active_history,
@@ -343,9 +575,12 @@ async def processor_loop(
             session=session,
             tools=tools_to_use,
             tool_choice=tool_choice_to_use,
-            default_emotion=session.last_assistant_emotion
+            default_emotion=session.last_assistant_emotion,
+            on_text_delta=submit_text_delta if session.protocol_version >= 2 else None,
+            provider_snapshot=turn_provider,
         )
         print(f"[DEBUG] processor_loop: final_emotion='{final_emotion}' has_tool_call={bool(merged_tool_calls)} emo_tag_found={emo_tag_found}", flush=True)
+        segment_event_context["emotion"] = final_emotion
         
         if merged_tool_calls:
             await send_queue.put((epoch, {
@@ -383,7 +618,9 @@ async def processor_loop(
                 session=session,
                 tools=AMADEUS_TOOLS,
                 tool_choice="none",
-                default_emotion=session.last_assistant_emotion
+                default_emotion=session.last_assistant_emotion,
+                on_text_delta=submit_text_delta if session.protocol_version >= 2 else None,
+                provider_snapshot=turn_provider,
             )
             
         # Persist detected emotion for next turn fallback, with decay to neutral
@@ -400,20 +637,75 @@ async def processor_loop(
             elif final_emotion in allowed:
                 session.last_assistant_emotion = final_emotion
 
-        full_ja_text = await _dispatch_tts_sentences(session, final_text, final_emotion, send_queue, epoch)
+        if session.protocol_version >= 2 and segment_pipeline is not None:
+            for segment in streaming_splitter.finish():
+                delivered = segment
+                if contains_leak(segment.text):
+                    delivered = Segment(
+                        segment.id,
+                        "はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。",
+                    )
+                    segment_event_context["emotion"] = "tsundere"
+                streamed_segments.append(delivered)
+                segment_pipeline.submit(delivered)
+            segment_count = len(streamed_segments)
+            await segment_pipeline.finish(segment_count=segment_count, emit_completed=False)
+            full_ja_text = "".join(segment.text for segment in streamed_segments)
+            history_translation = segment_pipeline.translation_text
+        elif session.client_type == "voice":
+            full_ja_text = await _dispatch_streaming_voice_tts(session, final_text, final_emotion, send_queue, epoch)
+        else:
+            full_ja_text = await _dispatch_tts_sentences(session, final_text, final_emotion, send_queue, epoch)
         
         history_content = f"[EMO:{final_emotion}] {full_ja_text}" if full_ja_text.strip() else full_ja_text
+
+        if full_ja_text.strip() and session.protocol_version < 2:
+            history_translation = await translate_with_provider(
+                turn_provider,
+                full_ja_text,
+                session.api_key,
+            )
         
-        if session.history_epoch == start_history_epoch:
+        if session.history_epoch == start_history_epoch and session.conversation_id == conversation_id:
             session.append_message({"role": "assistant", "content": history_content})
             if full_ja_text.strip():
-                await models.save_message(session.session_id, "assistant", history_content)
+                assistant_message_id = await models.save_message(
+                    session.session_id,
+                    "assistant",
+                    history_content,
+                    worldline=session.worldline,
+                    turn_id=turn_id,
+                    revision=session.revision,
+                    conversation_id=conversation_id,
+                    translation=history_translation or None,
+                )
+                from app.services.memory import memory_service
+                memory_service.schedule_turn_extraction(
+                    session_id=session.session_id,
+                    worldline=session.worldline,
+                    conversation_id=conversation_id,
+                    user_text=user_msg,
+                    assistant_text=history_content,
+                    source_message_ids=[user_message_id, assistant_message_id],
+                    api_key=session.api_key,
+                    provider_snapshot=turn_provider,
+                )
+                from app.services.conversations import conversation_service
+
+                conversation_service.schedule_auto_title(
+                    conversation_id,
+                    session.session_id,
+                    session.worldline,
+                    user_text=user_msg,
+                    assistant_text=history_content,
+                    api_key=session.api_key,
+                    provider_snapshot=turn_provider,
+                )
         
-        if full_ja_text.strip():
-            translation = await deepseek_service.translate_to_zh(full_ja_text, api_key=session.api_key)
+        if history_translation and session.protocol_version < 2:
             await send_queue.put((epoch, {
                 "type": "translation",
-                "content": translation
+                "content": history_translation
             }))
             
         await send_queue.put((epoch, {
@@ -422,18 +714,36 @@ async def processor_loop(
             "state": "done",
             "tts": "idle"
         }))
+
+        if segment_pipeline is not None:
+            await segment_pipeline.complete(segment_count=segment_count)
         
         if len(session.history) // 2 > config.HISTORY_COMPRESS_THRESHOLD and not session.compressing:
             session.compressing = True
-            asyncio.create_task(compress_and_update_history(session.session_id, session.history))
+            asyncio.create_task(
+                compress_and_update_history(
+                    session.session_id,
+                    session.history,
+                    session.worldline,
+                    session.revision,
+                    conversation_id,
+                    turn_provider,
+                )
+            )
             
     except asyncio.CancelledError:
-        tts_manager.cancel_pending(session.session_id)
+        if segment_pipeline is not None:
+            await segment_pipeline.cancel()
+        tts_manager.cancel_pending(session.tts_key)
         raise
     except Exception as e:
+        if segment_pipeline is not None:
+            await segment_pipeline.cancel()
         print(f"[Processor Error] Session {session.session_id}: {e}")
         await send_queue.put((epoch, {"type": "error", "message": f"Server error: {str(e)}"}))
     finally:
+        if session.active_segment_pipeline is segment_pipeline:
+            session.active_segment_pipeline = None
         session.is_busy = False
 
 
@@ -453,7 +763,7 @@ async def _dispatch_tts_sentences(
             "payload": payload
         })
 
-    tts_manager.reset_sequence(session.session_id, tts_send_callback)
+    tts_manager.reset_sequence(session.tts_key, tts_send_callback)
 
     speaking_status_sent = False
 
@@ -474,7 +784,11 @@ async def _dispatch_tts_sentences(
             error = payload.get("error")
             text = payload.get("text", "")
             emotion = payload.get("emotion", "neutral")
-            print(f"[DEBUG] sender_task processing sentence {sentence_id}: emotion='{emotion}' text_preview='{text[:50]}' client_type='{session.client_type}'", flush=True)
+            print(
+                f"[DEBUG] sender_task sentence={sentence_id} emotion='{emotion}' "
+                f"text_chars={len(text)} client_type='{session.client_type}'",
+                flush=True,
+            )
 
             if not speaking_status_sent:
                 await send_queue.put((epoch, {
@@ -541,10 +855,10 @@ async def _dispatch_tts_sentences(
                                 "tts": "synthesizing"
                             }))
                             tts_status_sent = True
-                        await tts_manager.synthesize_and_queue(session.session_id, tts_text, final_emotion, sovits_url=session.sovits_url)
+                        await tts_manager.synthesize_and_queue(session.tts_key, tts_text, final_emotion, sovits_url=session.sovits_url)
                     else:
                         reason = "user_disabled" if not session.enable_tts else "action_only"
-                        await tts_manager.queue_silent(session.session_id, forced, final_emotion, reason)
+                        await tts_manager.queue_silent(session.tts_key, forced, final_emotion, reason)
                     continue
                 else:
                     tts_fragment_buffer += text
@@ -568,10 +882,10 @@ async def _dispatch_tts_sentences(
                         "tts": "synthesizing"
                     }))
                     tts_status_sent = True
-                await tts_manager.synthesize_and_queue(session.session_id, tts_text, final_emotion, sovits_url=session.sovits_url)
+                await tts_manager.synthesize_and_queue(session.tts_key, tts_text, final_emotion, sovits_url=session.sovits_url)
             else:
                 reason = "user_disabled" if not session.enable_tts else "action_only"
-                await tts_manager.queue_silent(session.session_id, text, final_emotion, reason)
+                await tts_manager.queue_silent(session.tts_key, text, final_emotion, reason)
 
         if tts_fragment_buffer:
             text = tts_fragment_buffer
@@ -581,7 +895,7 @@ async def _dispatch_tts_sentences(
             is_action_only = not is_meaningful_sentence(tts_text)
             clean_len = len(re.sub(r'[\s。！？!?,.、…\-—]', '', tts_text))
             if clean_len < 2:
-                await tts_manager.queue_silent(session.session_id, text, final_emotion, "too_short")
+                await tts_manager.queue_silent(session.tts_key, text, final_emotion, "too_short")
             elif session.enable_tts and not is_action_only:
                 if not tts_status_sent:
                     await send_queue.put((epoch, {
@@ -591,12 +905,12 @@ async def _dispatch_tts_sentences(
                         "tts": "synthesizing"
                     }))
                     tts_status_sent = True
-                await tts_manager.synthesize_and_queue(session.session_id, tts_text, final_emotion, sovits_url=session.sovits_url)
+                await tts_manager.synthesize_and_queue(session.tts_key, tts_text, final_emotion, sovits_url=session.sovits_url)
             else:
                 reason = "user_disabled" if not session.enable_tts else "action_only"
-                await tts_manager.queue_silent(session.session_id, text, final_emotion, reason)
+                await tts_manager.queue_silent(session.tts_key, text, final_emotion, reason)
 
-        await tts_manager.gather_pending(session.session_id)
+        await tts_manager.gather_pending(session.tts_key)
         await sentence_queue.put(None)
         await t2
 
@@ -609,6 +923,39 @@ async def _dispatch_tts_sentences(
     return "".join(full_ja_text_parts)
 
 
+async def _dispatch_streaming_voice_tts(session: SessionState, final_text: str, emotion: str, send_queue: asyncio.Queue, epoch: int) -> str:
+    sentences, _ = extract_sentences_from_buffer(final_text, is_end=True)
+    delivered = []
+    for sentence_id, text in enumerate(sentences or [final_text]):
+        text = text.strip()
+        if not text:
+            continue
+        delivered.append(text)
+        cleaned = clean_text_for_tts(text)
+        if not session.enable_tts or not is_meaningful_sentence(cleaned):
+            reason = "user_disabled" if not session.enable_tts else "action_only"
+            await send_queue.put((epoch, {"type": "text_chunk", "sentence_id": sentence_id, "content": text, "emotion": emotion, "audio_degraded": True, "degraded_reason": reason}))
+            continue
+        await send_queue.put((epoch, {"type": "text_chunk", "sentence_id": sentence_id, "content": text, "emotion": emotion}))
+        stream = tts_manager.stream_pcm(cleaned, emotion, sovits_url=session.sovits_url)
+        session.active_streams.add(stream)
+        format_sent = False
+        try:
+            async with aclosing(stream) as chunks:
+                async for audio_format, pcm in chunks:
+                    if not format_sent and audio_format is not None:
+                        await send_queue.put((epoch, {"type": "voice_audio_format", "channels": audio_format.channels, "sample_rate": audio_format.sample_rate, "sample_width": audio_format.sample_width}))
+                        format_sent = True
+                    await send_queue.put((epoch, {"type": "voice_audio_pcm", "data": pcm}))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await send_queue.put((epoch, {"type": "voice.audio_degraded", "sentence_id": sentence_id, "reason": str(exc)}))
+        finally:
+            session.active_streams.discard(stream)
+    return "".join(delivered)
+
+
 async def run_tts_pipeline(session: SessionState, text: str, emotion: str, send_queue: asyncio.Queue, epoch: int):
     session.is_busy = True
     try:
@@ -617,7 +964,7 @@ async def run_tts_pipeline(session: SessionState, text: str, emotion: str, send_
         await send_queue.put((epoch, {"type": "translation", "content": ""}))
         await send_queue.put((epoch, {"type": "status", "dsk": "idle", "state": "done", "tts": "idle"}))
     except asyncio.CancelledError:
-        tts_manager.cancel_pending(session.session_id)
+        tts_manager.cancel_pending(session.tts_key)
         raise
     except Exception as e:
         print(f"[TTS Debug Error] {e}")
@@ -663,6 +1010,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
     
     # Increment current epoch on new connection to invalidate previous inflight messages
     session.current_epoch += 1
+    session.revision = session.current_epoch
     
     # Connection-level send_queue
     send_queue = asyncio.Queue()
@@ -696,32 +1044,64 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                         },
                     ))
                     continue
-                api_key = data.get("api_key") or config.DEEPSEEK_API_KEY
-                if not api_key:
-                    await send_queue.put((
-                        session.current_epoch,
-                        {
-                            "type": "error",
-                            "message": "缺失 API Key。请打开设置保存 DeepSeek API Key 后重新连接。",
-                        },
-                    ))
-                    continue
-                
-                # Store credentials in session
-                session.api_key = api_key
-                if "sovits_url" in data:
-                    session.sovits_url = data["sovits_url"]
-                
-                from app.security.prompt import get_rendered_system_prompt, SYSTEM_PROMPT_BASE
                 if "worldline" in data:
                     wl = data["worldline"]
                     if wl in ("steins_gate", "beta"):
                         session.worldline = wl
+                requested_conversation_id = str(
+                    data.get("conversation_id") or ""
+                ).strip()
+                if requested_conversation_id:
+                    from app.services.conversations import (
+                        ConversationNotFound,
+                        conversation_service,
+                    )
+                    try:
+                        await conversation_service.select(
+                            session.session_id,
+                            session.worldline,
+                            requested_conversation_id,
+                        )
+                    except ConversationNotFound:
+                        await send_queue.put((
+                            session.current_epoch,
+                            {
+                                "type": "error",
+                                "message": "请求的会话不存在或不属于当前世界线。",
+                            },
+                        ))
+                        continue
+                await session.load_from_db()
+                api_key = credential_store.get(session.provider_id)
+                provider_snapshot = provider_registry.snapshot(
+                    session.provider_id,
+                    session.model,
+                )
+                if provider_snapshot.credential_required and not api_key:
+                    await send_queue.put((
+                        session.current_epoch,
+                        {
+                            "type": "error",
+                            "message": (
+                                f"缺失 {session.provider_id} API Key。"
+                                "请打开设置保存供应商凭据后重新连接。"
+                            ),
+                        },
+                    ))
+                    continue
+                # Store credentials in session
+                session.api_key = api_key or ""
+                if "sovits_url" in data:
+                    session.sovits_url = data["sovits_url"]
                 
+                from app.security.prompt import get_rendered_system_prompt, SYSTEM_PROMPT_BASE
                 if "client" in data:
                     session.client_type = data["client"]
+                requested_protocol = data.get("protocol_version", data.get("protocol", 1))
+                session.protocol_version = 2 if requested_protocol in (2, "2", "v2") else 1
                 
                 base_prompt = data.get("system_prompt") or SYSTEM_PROMPT_BASE
+                session.base_system_prompt = base_prompt
                 session.system_prompt = get_rendered_system_prompt(base_prompt, session.worldline, session.client_type)
 
                 if "temperature" in data:
@@ -742,7 +1122,8 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                         session.reasoning_effort = effort
                     
                 authenticated = True
-                await session.load_from_db()
+                await session_coordinator.persist_current(session.session_id, session.worldline, session.revision)
+                await session_coordinator.acquire_lease(session.session_id, session.worldline, websocket)
                 continue
             
             # Already authenticated, check duplicate auth
@@ -753,10 +1134,82 @@ async def websocket_chat_endpoint(websocket: WebSocket):
             # Handle ping frames (keep-alive)
             if frame_type == "ping":
                 continue
+
+            if frame_type == "voice.stop":
+                session.voice_stopped_turn_id = session.active_turn_id
+                pipeline = session.active_segment_pipeline
+                if pipeline is not None:
+                    await pipeline.stop_voice()
+                tts_manager.cancel_pending(session.tts_key)
+                await send_queue.put((session.current_epoch, {
+                    "type": "status",
+                    "dsk": "thinking" if session.is_busy else "idle",
+                    "state": "voice_stopped",
+                    "tts": "idle",
+                }))
+                continue
+
+            if frame_type == "turn.cancel":
+                pipeline = session.active_segment_pipeline
+                if pipeline is not None:
+                    await pipeline.cancel()
+                elif session.protocol_version >= 2 and session.active_turn_id:
+                    await send_queue.put((session.current_epoch, {
+                        "type": "turn.cancelled",
+                        "conversation_id": session.conversation_id,
+                        "turn_id": session.active_turn_id,
+                        "generation": session.revision,
+                    }))
+                await cancel_inflight(session)
+                tts_manager.cancel_pending(session.tts_key)
+                await send_queue.put((session.current_epoch, {
+                    "type": "status",
+                    "dsk": "idle",
+                    "state": "cancelled",
+                    "tts": "idle",
+                }))
+                continue
+
+            if frame_type == "conversation.switch":
+                conversation_id = str(data.get("conversation_id") or "").strip()
+                if not conversation_id:
+                    await send_queue.put((session.current_epoch, {
+                        "type": "error",
+                        "message": "conversation.switch requires conversation_id",
+                    }))
+                    continue
+                pipeline = session.active_segment_pipeline
+                if pipeline is not None:
+                    await pipeline.cancel()
+                await cancel_inflight(session)
+                from app.services.conversations import ConversationNotFound, conversation_service
+                try:
+                    await conversation_service.select(
+                        session.session_id,
+                        session.worldline,
+                        conversation_id,
+                    )
+                except ConversationNotFound as exc:
+                    await send_queue.put((session.current_epoch, {
+                        "type": "error",
+                        "message": str(exc),
+                    }))
+                    continue
+                session.history_epoch += 1
+                session.current_epoch += 1
+                session.revision = session.current_epoch
+                await session.load_from_db()
+                await send_queue.put((session.current_epoch, {
+                    "type": "status",
+                    "dsk": "idle",
+                    "state": "conversation_switched",
+                    "conversation_id": session.conversation_id,
+                }))
+                continue
                 
             if frame_type == "clear_history":
                 try:
-                    await models.clear_session_data(session.session_id)
+                    await models.clear_session_data(session.session_id, worldline=session.worldline)
                 except Exception as e:
                     await send_queue.put((session.current_epoch, {"type": "error", "message": f"物理清除历史记录失败: {str(e)}"}))
                     continue
@@ -765,8 +1218,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 session.history_epoch += 1
                 session.current_epoch += 1
                 
-                if session.active_task and not session.active_task.done():
-                    session.active_task.cancel()
+                await cancel_inflight(session)
                     
                 await send_queue.put((session.current_epoch, {
                     "type": "status",
@@ -779,9 +1231,9 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 
             if frame_type == "config_update":
                 if "api_key" in data:
-                    new_key = data["api_key"]
-                    if new_key and new_key.strip():
-                        session.api_key = new_key.strip()
+                    # Credentials are write-only through the local provider API.
+                    # Never retain secrets received in a long-lived WS frame.
+                    pass
                     
                 if "sovits_url" in data:
                     session.sovits_url = data["sovits_url"]
@@ -790,26 +1242,25 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 needs_reset = False
                 if "system_prompt" in data:
                     base_prompt = data["system_prompt"]
+                    session.base_system_prompt = base_prompt
                     session.system_prompt = get_rendered_system_prompt(base_prompt, session.worldline, session.client_type)
                     needs_reset = True
                 if "worldline" in data:
                     new_wl = data["worldline"]
                     if new_wl in ("steins_gate", "beta") and session.worldline != new_wl:
-                        session.worldline = new_wl
-                        current_prompt = session.system_prompt or SYSTEM_PROMPT_BASE
-                        if "【現在世界線：" in current_prompt:
-                            base_prompt = current_prompt.split("【現在世界線：")[0].strip()
-                        else:
-                            base_prompt = current_prompt
+                        old_wl = session.worldline
+                        await session_coordinator.release_lease(session.session_id, old_wl, websocket)
+                        await session_coordinator.switch(session, new_wl)
+                        base_prompt = session.base_system_prompt or SYSTEM_PROMPT_BASE
                         session.system_prompt = get_rendered_system_prompt(base_prompt, new_wl, session.client_type)
-                        needs_reset = True
+                        await session_coordinator.acquire_lease(session.session_id, new_wl, websocket)
+                        needs_reset = False
                 
                 if needs_reset:
                     session.history = []
                     session.history_epoch += 1
                     session.current_epoch += 1
-                    if session.active_task and not session.active_task.done():
-                        session.active_task.cancel()
+                    await cancel_inflight(session)
                     await send_queue.put((session.current_epoch, {"type": "status", "dsk": "idle", "state": "done"}))
                     
                 if "temperature" in data:
@@ -831,9 +1282,8 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 continue
                 
             elif frame_type == "interrupt-signal":
-                if session.active_task and not session.active_task.done():
-                    session.active_task.cancel()
-                tts_manager.cancel_pending(session.session_id)
+                await cancel_inflight(session)
+                tts_manager.cancel_pending(session.tts_key)
                 session.current_epoch += 1
                 await send_queue.put((session.current_epoch, {
                     "type": "text_chunk",
@@ -871,7 +1321,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 )
                 continue
 
-            elif frame_type == "chat":
+            elif frame_type in ("chat", "chat.send"):
                 if "message" in data:
                     await send_queue.put((session.current_epoch, {"type": "error", "message": "禁止使用已废弃的 'message' 字段"}))
                     continue
@@ -890,6 +1340,8 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                     continue
                 
                 session.is_busy = True
+                session.active_turn_id = str(uuid4())
+                session.voice_stopped_turn_id = None
                 session.append_message({"role": "user", "content": content})
                 session.active_task = asyncio.create_task(
                     processor_loop(session, content, send_queue, session.current_epoch, session.history_epoch)
@@ -914,3 +1366,4 @@ async def websocket_chat_endpoint(websocket: WebSocket):
             tasks_to_gather.append(session.active_task)
         # Clean up session state active task reference if done
         await asyncio.gather(*tasks_to_gather, return_exceptions=True)
+        await session_coordinator.release_lease(session.session_id, session.worldline, websocket)
