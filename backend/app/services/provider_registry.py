@@ -62,6 +62,8 @@ class ProviderSnapshot:
     adapter: ProviderAdapter
     credential_required: bool = True
     base_url_configurable: bool = False
+    temperature: float | None = None
+    reasoning_effort: str | None = None
 
     def require(self, task: ProviderTask) -> "ProviderSnapshot":
         if task not in self.capabilities.tasks:

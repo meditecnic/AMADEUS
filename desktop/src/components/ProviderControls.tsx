@@ -7,6 +7,7 @@ export interface ProviderMetadata {
   configured: boolean;
   credential_required: boolean;
   model_discovery: boolean;
+  parameters?: string[];
   base_url_configurable?: boolean;
   base_url?: string | null;
 }

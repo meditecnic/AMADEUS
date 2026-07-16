@@ -8,12 +8,10 @@ interface SoundPanelProps {
   bgmVolume: number;
   enableSfx: boolean;
   sfxVolume: number;
-  enableTts: boolean;
   onEnableBgmChange: (v: boolean) => void;
   onBgmVolumeChange: (v: number) => void;
   onEnableSfxChange: (v: boolean) => void;
   onSfxVolumeChange: (v: number) => void;
-  onEnableTtsChange: (v: boolean) => void;
 }
 
 export const SoundPanel: React.FC<SoundPanelProps> = ({
@@ -23,12 +21,10 @@ export const SoundPanel: React.FC<SoundPanelProps> = ({
   bgmVolume,
   enableSfx,
   sfxVolume,
-  enableTts,
   onEnableBgmChange,
   onBgmVolumeChange,
   onEnableSfxChange,
   onSfxVolumeChange,
-  onEnableTtsChange,
 }) => {
   const [position, setPosition] = useState<{ top: number; left: number; width: number } | null>(null);
 
@@ -124,17 +120,6 @@ export const SoundPanel: React.FC<SoundPanelProps> = ({
             <span className="volume-label">{Math.round(sfxVolume * 100)}%</span>
           </div>
 
-          <div className="sound-setting-row">
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={enableTts}
-                onChange={(e) => onEnableTtsChange(e.target.checked)}
-                className="salieri-checkbox"
-              />
-              语音合成 (TTS)
-            </label>
-          </div>
         </div>
       </div>
     </>

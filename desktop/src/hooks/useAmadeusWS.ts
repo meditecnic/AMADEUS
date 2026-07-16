@@ -25,8 +25,9 @@ export interface Message {
   translation?: string;
   emotion?: 'neutral' | 'tsundere' | 'embarrassed' | 'intellectual' | 'happy' | 'surprised' | 'annoyed' | 'disappointed' | 'sad';
   turnId?: string;
-  segments?: Array<{ id: number; ja: string; zh: string }>;
+  segments?: Array<{ id: number; ja: string; zh: string; translationError?: string }>;
   streaming?: boolean;
+  systemError?: boolean;
 }
 
 export interface UseAmadeusWSReturn {
@@ -97,6 +98,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   const watchdogTimerRef = useRef<number | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectCountRef = useRef(0);
+  const voiceStoppedRef = useRef(false);
 
   // Stop heartbeat
   const stopHeartbeat = () => {
@@ -151,6 +153,14 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       wsRef.current = null;
     }
     setStatus('CLOSED');
+    setIsThinking(false);
+    setIsSynthesizing(false);
+    voiceStoppedRef.current = false;
+    setActiveTool(null);
+    setActiveNotice(null);
+    setMessages((prev) => prev.map((message) =>
+      message.streaming ? { ...message, streaming: false } : message
+    ));
   }, []);
 
   const connect = useCallback(() => {
@@ -204,6 +214,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             activeGenerationRef.current = msg.generation;
             activeAssistantMessageId = `assist_${msg.turn_id}`;
             lastSentenceIdRef.current = -1;
+            voiceStoppedRef.current = false;
             setIsThinking(true);
             setMessages((prev) => [
               ...prev,
@@ -227,7 +238,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             ) break;
             startWatchdog();
             setIsThinking(false);
-            setIsSynthesizing(true);
+            setIsSynthesizing(Boolean(paramsRef.current.enableTts) && !voiceStoppedRef.current);
             setActiveTool(null);
             setActiveNotice(null);
             if (msg.emotion && ALLOWED_EMOTIONS.has(msg.emotion)) {
@@ -237,7 +248,12 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
               if (message.id !== activeAssistantMessageId) return message;
               const segments = [...(message.segments || [])];
               const index = segments.findIndex((segment) => segment.id === msg.segment_id);
-              const nextSegment = { id: msg.segment_id, ja: msg.ja || '', zh: msg.zh || '' };
+              const nextSegment = {
+                id: msg.segment_id,
+                ja: msg.ja || '',
+                zh: msg.zh || '',
+                translationError: msg.translation_error || undefined,
+              };
               if (index >= 0) segments[index] = nextSegment;
               else segments.push(nextSegment);
               segments.sort((a, b) => a.id - b.id);
@@ -270,6 +286,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
               msg.generation === activeGenerationRef.current &&
               msg.reason !== 'voice_stopped'
             ) {
+              if (msg.reason === 'user_disabled') setIsSynthesizing(false);
               paramsRef.current.onAudioDegraded?.(msg.reason || 'unknown');
             }
             break;
@@ -327,7 +344,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
               setIsThinking(false);
             }
             if (msg.tts === 'synthesizing') {
-              setIsSynthesizing(true);
+              setIsSynthesizing(Boolean(paramsRef.current.enableTts) && !voiceStoppedRef.current);
             } else if (msg.tts === 'idle') {
               setIsSynthesizing(false);
             }
@@ -409,9 +426,19 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             setStatus('ERROR');
             setActiveTool(null);
             setActiveNotice(null);
+            setMessages((prev) => prev.map((message) =>
+              message.id === activeAssistantMessageId
+                ? { ...message, streaming: false }
+                : message
+            ));
             setMessages((prev) => [
               ...prev,
-              { id: `err_${Date.now()}`, role: 'assistant', content: `SYSTEM ERROR: ${msg.message}` }
+              {
+                id: `err_${Date.now()}`,
+                role: 'assistant',
+                content: `SYSTEM ERROR: ${msg.message}`,
+                systemError: true,
+              }
             ]);
             break;
 
@@ -431,6 +458,12 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       setStatus('CLOSED');
       setActiveTool(null);
       setActiveNotice(null);
+      setIsThinking(false);
+      setIsSynthesizing(false);
+      voiceStoppedRef.current = false;
+      setMessages((prev) => prev.map((message) =>
+        message.streaming ? { ...message, streaming: false } : message
+      ));
 
       // Attempt automatic reconnection up to 5 times
       if (reconnectCountRef.current < 5) {
@@ -471,11 +504,16 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   }, []);
 
   const stopVoice = useCallback(() => {
+    voiceStoppedRef.current = true;
+    setIsSynthesizing(false);
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     wsRef.current.send(JSON.stringify({ type: 'voice.stop' }));
   }, []);
 
   const cancelTurn = useCallback(() => {
+    setIsThinking(false);
+    setIsSynthesizing(false);
+    voiceStoppedRef.current = true;
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     wsRef.current.send(JSON.stringify({ type: 'turn.cancel' }));
   }, []);
@@ -515,6 +553,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     clearWatchdog();
     activeTurnIdRef.current = '';
     activeGenerationRef.current = -1;
+    voiceStoppedRef.current = false;
     setIsThinking(false);
     setIsSynthesizing(false);
     setMessages(history);

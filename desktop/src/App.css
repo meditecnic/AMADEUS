@@ -485,6 +485,18 @@ body {
   transition: color 0.25s ease, text-shadow 0.25s ease;
 }
 
+.salieri-workstation-panel.worldline-beta .amadeus-logo-glitched {
+  filter: sepia(0.55) saturate(0.82) hue-rotate(326deg) drop-shadow(0 0 20px rgba(227, 145, 70, 0.44));
+  animation: beta-empty-logo-breath 2.8s steps(2, end) infinite;
+}
+
+@keyframes beta-empty-logo-breath {
+  0%, 100% { opacity: 0.16; transform: translateX(0); }
+  48% { opacity: 0.32; transform: translateX(0); }
+  50% { opacity: 0.42; transform: translateX(1px); }
+  52% { opacity: 0.24; transform: translateX(-1px); }
+}
+
 .terminal-welcome-msg.connecting {
   color: #cc8800;
   animation: blink-dot-anim 1.4s infinite alternate;
@@ -731,6 +743,181 @@ body {
     display: none;
     animation: none;
   }
+}
+
+/* ========================================================================== */
+/* Runtime consistency pass                                                   */
+/* Keep native controls inside the terminal from falling back to Windows      */
+/* light chrome, and reuse the active worldline accent for transient states.  */
+/* ========================================================================== */
+.salieri-workstation-panel {
+  color-scheme: dark;
+}
+
+.salieri-workstation-panel select,
+.salieri-workstation-panel input,
+.salieri-workstation-panel button {
+  color-scheme: dark;
+}
+
+.history-sidebar-icon {
+  appearance: none;
+  border: 1px solid transparent;
+  padding: 0;
+  background: transparent;
+}
+
+.history-sidebar-icon:focus-visible,
+.interrupt-btn:focus-visible,
+.reasoning-toggle button:focus-visible {
+  outline: 1px solid var(--wl-accent-bright);
+  outline-offset: 2px;
+}
+
+.interrupt-btn {
+  appearance: none;
+  border: 1px solid var(--wl-accent-dim);
+  padding: 5px 9px;
+  color: var(--wl-accent-bright);
+  background: rgba(18, 9, 3, 0.9);
+  font: 600 10px/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), color var(--transition-fast);
+}
+
+.interrupt-btn:hover {
+  border-color: var(--wl-accent-bright);
+  color: #fff0d4;
+  box-shadow: 0 0 8px var(--wl-glow);
+}
+
+.voice-control-capsule {
+  border-color: color-mix(in srgb, var(--wl-accent) 65%, transparent);
+  background: color-mix(in srgb, var(--wl-edge) 75%, #080504 25%);
+  box-shadow: inset 0 0 12px color-mix(in srgb, var(--wl-glow) 45%, transparent), 0 0 14px color-mix(in srgb, var(--wl-glow) 55%, transparent);
+}
+
+.voice-control-signal {
+  color: var(--wl-accent-dim);
+}
+
+.voice-control-capsule button {
+  border-left-color: color-mix(in srgb, var(--wl-accent) 38%, transparent);
+  color: var(--wl-accent-bright);
+}
+
+.bilingual-message.streaming .chinese-main::after {
+  content: '▌';
+  color: var(--wl-accent-bright);
+}
+
+.thinking-indicator-inline,
+.status-synthesizing-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--wl-accent) 24%, transparent);
+  color: var(--wl-accent-dim);
+  font: 10px/1.2 var(--font-mono);
+  letter-spacing: 0.08em;
+}
+
+.thinking-indicator-inline > :first-child {
+  width: 26px;
+  height: 26px;
+  overflow: hidden;
+  opacity: 0.78;
+}
+
+.status-synthesizing-inline .speaking-dot {
+  background-color: var(--wl-accent);
+  box-shadow: 0 0 7px var(--wl-glow);
+}
+
+.system-error-card {
+  align-self: stretch;
+  max-width: 100%;
+  border-left: 2px solid var(--color-danger);
+  background: rgba(62, 10, 8, 0.28);
+}
+
+.system-error-content {
+  margin: 0;
+  padding: 8px 12px;
+  color: #ffb4a8;
+  font: 11px/1.5 var(--font-mono);
+}
+
+.translation-degraded {
+  margin: 8px 0 0;
+  color: var(--wl-accent-dim);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.credential-status,
+.settings-save-error {
+  margin: 6px 0 0;
+  font-size: 10px;
+  line-height: 1.4;
+  letter-spacing: 0.03em;
+}
+
+.credential-status.configured {
+  color: var(--wl-accent-bright);
+}
+
+.credential-status.not-configured,
+.settings-save-error {
+  color: #e39a78;
+}
+
+.reasoning-unavailable {
+  color: var(--wl-accent-dim);
+  font: 10px/1.2 var(--font-mono);
+  letter-spacing: 0.04em;
+  opacity: 0.78;
+}
+
+.tab-panels::-webkit-scrollbar {
+  width: 6px;
+}
+
+.tab-panels::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.24);
+}
+
+.tab-panels::-webkit-scrollbar-thumb {
+  background: var(--color-border-light);
+  border-radius: 3px;
+}
+
+.tab-panels::-webkit-scrollbar-thumb:hover {
+  background: var(--wl-accent);
+}
+
+.tab-panels {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-light) rgba(0, 0, 0, 0.24);
+}
+
+.salieri-range-shell::before {
+  inset: 18% 0;
+  border: 1px solid color-mix(in srgb, var(--wl-accent) 42%, var(--color-border-light));
+  border-radius: 2px;
+  background: linear-gradient(180deg, rgba(20, 10, 5, 0.96), rgba(7, 4, 3, 0.98));
+  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.65), 0 0 6px color-mix(in srgb, var(--wl-glow) 48%, transparent);
+}
+
+.salieri-range-fill {
+  inset: 27% 3.2%;
+  border-radius: 1px;
+  background: linear-gradient(90deg, var(--wl-accent-dim), var(--wl-accent-bright));
+  box-shadow: 0 0 7px var(--wl-glow);
+  filter: none;
 }
 
 .terminal-input-bar > * {
@@ -1533,6 +1720,10 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .salieri-workstation-panel.worldline-beta .amadeus-logo-glitched {
+    animation: none;
+  }
+
   .salieri-workstation-panel.worldline-beta::after {
     animation: none;
   }
@@ -1695,6 +1886,22 @@ body {
 
 .salieri-workstation-panel .header-telemetry .hud-status-pill.status-setup {
   color: var(--wl-accent-dim) !important;
+}
+
+/* The asset slider contains a white calibration plate; use the terminal      */
+/* track instead so settings never introduce an unrelated light rectangle.   */
+.salieri-workstation-panel .salieri-range-shell::before {
+  background: linear-gradient(180deg, rgba(20, 10, 5, 0.96), rgba(7, 4, 3, 0.98));
+  background-image: linear-gradient(180deg, rgba(20, 10, 5, 0.96), rgba(7, 4, 3, 0.98));
+  border-color: color-mix(in srgb, var(--wl-accent) 42%, var(--color-border-light));
+}
+
+.salieri-workstation-panel .salieri-range-fill {
+  inset: 27% 3.2%;
+  background-image: linear-gradient(90deg, var(--wl-accent-dim), var(--wl-accent-bright));
+  border-radius: 1px;
+  box-shadow: 0 0 7px var(--wl-glow);
+  filter: none;
 }
 
 /* HUD information stack: weekday, date, then connection state. */

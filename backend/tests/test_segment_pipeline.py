@@ -108,6 +108,98 @@ async def test_transient_tts_retries_once_and_one_failure_does_not_block_later_s
 
 
 @pytest.mark.asyncio
+async def test_translation_retries_transient_failure_and_keeps_error_code_stable():
+    events = []
+    attempts = 0
+
+    async def translate(_text):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise TransientSegmentError("upstream temporarily unavailable")
+        return "translated"
+
+    async def synthesize(_text):
+        return b"audio"
+
+    pipeline = SegmentPipeline(
+        TurnIdentity("conversation", "turn", 1),
+        emit=events.append,
+        translate=translate,
+        synthesize=synthesize,
+        translation_retries=1,
+        translation_timeout=0.1,
+    )
+    await pipeline.run([Segment(0, "sentence")])
+
+    ready = next(event for event in events if event["type"] == "segment.ready")
+    assert attempts == 2
+    assert ready["zh"] == "translated"
+    assert "translation_error" not in ready
+
+
+@pytest.mark.asyncio
+async def test_translation_retries_retryable_provider_status():
+    events = []
+    attempts = 0
+
+    class ProviderError(RuntimeError):
+        status_code = 503
+
+    async def translate(_text):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ProviderError("upstream unavailable")
+        return "recovered"
+
+    async def synthesize(_text):
+        return b"audio"
+
+    pipeline = SegmentPipeline(
+        TurnIdentity("conversation", "turn", 1),
+        emit=events.append,
+        translate=translate,
+        synthesize=synthesize,
+        translation_retries=1,
+        translation_timeout=0.1,
+    )
+    await pipeline.run([Segment(0, "sentence")])
+
+    ready = next(event for event in events if event["type"] == "segment.ready")
+    assert attempts == 2
+    assert ready["zh"] == "recovered"
+
+
+@pytest.mark.asyncio
+async def test_translation_timeout_degrades_without_exposing_provider_exception():
+    events = []
+
+    async def translate(_text):
+        await asyncio.sleep(1)
+        return "late"
+
+    async def synthesize(_text):
+        return b"audio"
+
+    pipeline = SegmentPipeline(
+        TurnIdentity("conversation", "turn", 1),
+        emit=events.append,
+        translate=translate,
+        synthesize=synthesize,
+        translation_retries=0,
+        translation_timeout=0.01,
+    )
+    await pipeline.run([Segment(0, "sentence")])
+
+    ready = next(event for event in events if event["type"] == "segment.ready")
+    assert ready["zh"] == ""
+    assert ready["translation_error"] == "translation_timeout"
+    assert "late" not in str(ready)
+    assert any(event["type"] == "segment.audio" for event in events)
+
+
+@pytest.mark.asyncio
 async def test_voice_stop_keeps_text_but_invalidates_audio_results():
     events = []
     tts_started = asyncio.Event()

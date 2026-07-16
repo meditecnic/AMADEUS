@@ -94,4 +94,81 @@ describe('useAmadeusWS v2', () => {
     ]);
     unmount();
   });
+
+  it('does not show synthesis state when TTS is disabled', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const { result, unmount } = renderHook(() => useAmadeusWS({ ...params, enableTts: false }));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => {
+      socket.onopen?.();
+      result.current.sendChat('hello');
+      socket.emit({ type: 'turn.started', conversation_id: 'c', turn_id: 't', generation: 1 });
+      socket.emit({
+        type: 'segment.ready',
+        conversation_id: 'c',
+        turn_id: 't',
+        generation: 1,
+        segment_id: 0,
+        ja: '日本語',
+        zh: '',
+      });
+    });
+
+    expect(result.current.isThinking).toBe(false);
+    expect(result.current.isSynthesizing).toBe(false);
+    unmount();
+  });
+
+  it('keeps synthesis stopped when later segments arrive after voice.stop', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const { result, unmount } = renderHook(() => useAmadeusWS(params));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => {
+      socket.onopen?.();
+      result.current.sendChat('hello');
+      socket.emit({ type: 'turn.started', conversation_id: 'c', turn_id: 't', generation: 1 });
+      socket.emit({
+        type: 'segment.ready',
+        conversation_id: 'c',
+        turn_id: 't',
+        generation: 1,
+        segment_id: 0,
+        ja: '第一句',
+        zh: '第一句',
+      });
+      result.current.stopVoice();
+      socket.emit({
+        type: 'segment.ready',
+        conversation_id: 'c',
+        turn_id: 't',
+        generation: 1,
+        segment_id: 1,
+        ja: '第二句',
+        zh: '第二句',
+      });
+    });
+
+    expect(result.current.isSynthesizing).toBe(false);
+    unmount();
+  });
+
+  it('clears an active stream when the socket closes', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const { result, unmount } = renderHook(() => useAmadeusWS(params));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => {
+      socket.onopen?.();
+      result.current.sendChat('hello');
+      socket.emit({ type: 'turn.started', conversation_id: 'c', turn_id: 't', generation: 1 });
+      socket.onclose?.();
+    });
+
+    expect(result.current.isThinking).toBe(false);
+    expect(result.current.isSynthesizing).toBe(false);
+    expect(result.current.messages.find((message) => message.turnId === 't')?.streaming).toBe(false);
+    unmount();
+  });
 });

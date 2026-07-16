@@ -325,11 +325,19 @@ async def get_clean_text_stream(
             "memory_summary": memory_summary,
             "api_key": session.api_key,
             "system_prompt": eff_system_prompt,
-            "temperature": session.temperature,
+            "temperature": (
+                provider_snapshot.temperature
+                if provider_snapshot is not None and provider_snapshot.temperature is not None
+                else session.temperature
+            ),
             "tools": tools,
             "tool_choice": tool_choice,
             "model": session.model,
-            "reasoning_effort": session.reasoning_effort,
+            "reasoning_effort": (
+                provider_snapshot.reasoning_effort
+                if provider_snapshot is not None and provider_snapshot.reasoning_effort is not None
+                else session.reasoning_effort
+            ),
         }
         provider = provider_snapshot.adapter if provider_snapshot is not None else deepseek_service
         stream_kwargs["model"] = provider_snapshot.model_id if provider_snapshot is not None else session.model
@@ -475,6 +483,10 @@ async def processor_loop(
             if registered_provider.provider_id == "deepseek"
             else registered_provider.adapter
         ),
+        credential_required=registered_provider.credential_required,
+        base_url_configurable=registered_provider.base_url_configurable,
+        temperature=session.temperature,
+        reasoning_effort=session.reasoning_effort,
     )
     turn_provider.require(ProviderTask.CHAT)
     segment_pipeline = None
@@ -525,6 +537,8 @@ async def processor_loop(
                 synthesize=synthesize_segment,
                 tts_concurrency=2,
                 tts_retries=1,
+                translation_retries=1,
+                translation_timeout=6.0,
             )
             session.active_segment_pipeline = segment_pipeline
             await segment_pipeline.start()

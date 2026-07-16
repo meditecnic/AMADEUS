@@ -5,6 +5,7 @@ export interface SettingsModalProps {
   onClose: () => void;
   worldline: 'steins_gate' | 'beta';
   apiKey: string;
+  credentialConfigured: boolean;
   systemPrompt: string;
   enableTts: boolean;
   sovitsUrl: string;
@@ -33,7 +34,7 @@ export interface SettingsModalProps {
     baseUrl: string;
     model: string;
     reasoningEffort: 'high' | 'xhigh';
-  }) => void;
+  }) => void | Promise<void>;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -41,6 +42,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   worldline,
   apiKey,
+  credentialConfigured,
   systemPrompt,
   enableTts,
   sovitsUrl,
@@ -69,12 +71,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [localReasoningIdx, setLocalReasoningIdx] = useState(
     reasoningEffort === 'xhigh' ? 1 : 0
   );
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
       setActiveTab('basic');
       setLocalWorldline(worldline);
       setLocalApiKey(apiKey);
+      setSaveError(null);
       setLocalSystemPrompt(systemPrompt);
       setLocalEnableTts(enableTts);
       setLocalSovitsUrl(sovitsUrl);
@@ -87,23 +92,33 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleSave = () => {
-    onSaveSettings({
-      worldline: localWorldline,
-      apiKey: localApiKey,
-      systemPrompt: localSystemPrompt,
-      enableTts: localEnableTts,
-      sovitsUrl: localSovitsUrl,
-      enableBgm: enableBgm,
-      bgmVolume: bgmVolume,
-      enableSfx: enableSfx,
-      sfxVolume: sfxVolume,
-      temperature: localTemperature,
-      baseUrl: localBaseUrl,
-      model: localModel,
-      reasoningEffort: (['high', 'xhigh'] as const)[localReasoningIdx],
-    });
-    onClose();
+  const handleSave = async () => {
+    if (isSaving) return;
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      await onSaveSettings({
+        worldline: localWorldline,
+        apiKey: localApiKey,
+        systemPrompt: localSystemPrompt,
+        enableTts: localEnableTts,
+        sovitsUrl: localSovitsUrl,
+        enableBgm: enableBgm,
+        bgmVolume: bgmVolume,
+        enableSfx: enableSfx,
+        sfxVolume: sfxVolume,
+        temperature: localTemperature,
+        baseUrl: localBaseUrl,
+        model: localModel,
+        reasoningEffort: (['high', 'xhigh'] as const)[localReasoningIdx],
+      });
+      onClose();
+    } catch (error) {
+      const code = error instanceof Error ? error.message : 'settings_save_failed';
+      setSaveError(code);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -132,7 +147,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <section className={`tab-panel ${activeTab === 'basic' ? 'active' : ''}`}>
               <div className="setting-field">
                 <label>{providerDisplayName.toUpperCase()} API 密钥</label>
-                <input type="password" value={localApiKey} onChange={(e) => setLocalApiKey(e.target.value)} className="salieri-input" placeholder="仅在本机安全存储" autoComplete="off" />
+                <input
+                  type="password"
+                  value={localApiKey}
+                  onChange={(e) => setLocalApiKey(e.target.value)}
+                  className="salieri-input"
+                  placeholder={credentialConfigured ? '••••••••' : '输入后仅在本机安全存储'}
+                  autoComplete="new-password"
+                />
+                <p className={`credential-status ${credentialConfigured ? 'configured' : 'not-configured'}`}>
+                  {credentialConfigured
+                    ? '已配置 · 留空保存可保持当前密钥不变'
+                    : '尚未配置 · 保存后不会在页面回显密钥'}
+                </p>
               </div>
               <div className="setting-field personality-field">
                 <label>个性</label>
@@ -146,6 +173,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <span className="slider-value">{localTemperature.toFixed(1)}</span>
                 </div>
               </div>
+              {baseUrlConfigurable && (
               <div className="setting-field">
                 <label>模型</label>
                 {baseUrlConfigurable ? (
@@ -158,6 +186,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </select>
                 )}
               </div>
+              )}
               {baseUrlConfigurable && (
                 <div className="setting-field field-full">
                   <label>OpenAI-compatible Base URL</label>
@@ -186,9 +215,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             </section>
           </main>
+          {saveError && (
+            <p className="settings-save-error" role="alert">
+              {saveError === 'credential_save_failed'
+                ? 'API 密钥保存失败，请检查后端连接后重试。'
+                : saveError === 'provider_config_save_failed'
+                  ? '供应商配置保存失败，请检查地址和模型名。'
+                  : '设置保存失败，请稍后重试。'}
+            </p>
+          )}
           <div className="modal-footer">
             <button className="salieri-btn cancel-btn" onClick={onClose}>取消</button>
-            <button className="salieri-btn save-btn" onClick={handleSave}>保存修改</button>
+            <button className="salieri-btn save-btn" onClick={() => { void handleSave(); }} disabled={isSaving}>
+              {isSaving ? '保存中…' : '保存修改'}
+            </button>
           </div>
         </div>
       </div>

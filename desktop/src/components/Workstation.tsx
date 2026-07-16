@@ -153,7 +153,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
     updateConfig,
     reconnect,
     switchConversation,
-    wsRef,
   } = useAmadeusWS({
     sessionId,
     conversationId: activeConversationId,
@@ -221,9 +220,32 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const activeConversation = conversations.find((row) => row.id === activeConversationId);
   const activeProviderId = activeConversation?.provider_id || 'deepseek';
   const activeProvider = providers.find((provider) => provider.id === activeProviderId);
+  const activeModelId = activeConversation?.model_id || model;
   const credentialConfigured = Boolean(
     activeProvider && (!activeProvider.credential_required || activeProvider.configured)
   );
+  const providerDeclaresReasoning = activeProvider?.parameters?.includes('reasoning_effort')
+    ?? (activeProviderId === 'openai' || activeProviderId === 'deepseek');
+  const nativeReasoningSupported = providerDeclaresReasoning && (
+    activeProviderId === 'openai'
+    || (activeProviderId === 'deepseek' && activeModelId === 'deepseek-v4-pro')
+  );
+  const promptGuidedReasoning = providerDeclaresReasoning
+    && activeProviderId === 'deepseek'
+    && !nativeReasoningSupported;
+  const reasoningAvailable = nativeReasoningSupported || promptGuidedReasoning;
+
+  useEffect(() => {
+    const key = `amadeus_pc_reasoning_effort_${activeProviderId}_${activeModelId}`;
+    try {
+      const scoped = localStorage.getItem(key);
+      if (scoped === 'high' || scoped === 'xhigh') {
+        setReasoningEffort(scoped);
+      }
+    } catch {
+      // Keep the in-memory selection when local storage is unavailable.
+    }
+  }, [activeProviderId, activeModelId]);
 
   const loadProviderModels = useCallback(async (
     providerId: string,
@@ -553,7 +575,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       });
       if (!response.ok) {
         setAudioError('provider_config_save_failed');
-        return;
+        throw new Error('provider_config_save_failed');
       }
       providerConfigurationChanged = true;
       await loadProviders();
@@ -567,7 +589,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       });
       if (!response.ok) {
         setAudioError('credential_save_failed');
-        return;
+        throw new Error('credential_save_failed');
       }
       credentialChanged = true;
       setCredentialChecked(true);
@@ -697,12 +719,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
               bgmVolume={bgmVolume}
               enableSfx={enableSfx}
               sfxVolume={sfxVolume}
-              enableTts={enableTts}
               onEnableBgmChange={setEnableBgm}
               onBgmVolumeChange={setBgmVolume}
               onEnableSfxChange={setEnableSfx}
               onSfxVolumeChange={setSfxVolume}
-              onEnableTtsChange={setEnableTts}
             />
           </div>
           <button
@@ -743,7 +763,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           <div className="terminal-chat-viewport">
             {visibleMessages.length === 0 ? (
               <div className="empty-chat-tip">
-                <div className="amadeus-logo-glitched" />
+                <div className={`amadeus-logo-glitched worldline-logo-${worldline}`} />
                 <p className={`terminal-welcome-msg ${emptyStateKind}`}>
                   {emptyStateMessage}
                 </p>
@@ -760,56 +780,59 @@ export const Workstation: React.FC<WorkstationProps> = ({
             ) : (
               <div className="messages-flow">
                 {visibleMessages.map((msg) => (
-                  <div key={msg.id} className={`message-card ${msg.role}`}>
-                    <div className="avatar-label">
-                      {msg.role === 'user' ? 'USER ID: OKABE' : 'AMADEUS: KURISU'}
-                    </div>
-                    <div className="message-content-box">
-                      {msg.role === 'assistant' ? (
-                        <BilingualMessage
-                          segments={msg.segments || []}
-                          streaming={Boolean(msg.streaming)}
-                          fallbackJa={msg.content}
-                          fallbackZh={msg.translation}
-                        />
-                      ) : (
-                        <p className="japanese-raw">{msg.content}</p>
-                      )}
-                    </div>
+                  <div key={msg.id} className={`message-card ${msg.role} ${msg.systemError ? 'system-error-card' : ''}`}>
+                    {msg.systemError ? (
+                      <p className="system-error-content" role="alert">{msg.content}</p>
+                    ) : (
+                      <>
+                        <div className="avatar-label">
+                          {msg.role === 'user' ? 'USER ID: OKABE' : 'AMADEUS: KURISU'}
+                        </div>
+                        <div className="message-content-box">
+                          {msg.role === 'assistant' ? (
+                            <>
+                              <BilingualMessage
+                                segments={msg.segments || []}
+                                streaming={Boolean(msg.streaming)}
+                                fallbackJa={msg.content}
+                                fallbackZh={msg.translation}
+                              />
+                            {msg.streaming && isThinking && (
+                              <div className="thinking-indicator-inline">
+                                <SpriteAnimator
+                                  spriteSrc={worldline === 'steins_gate' ? '/assets/ui/spinner_sg_20f.png' : '/assets/ui/spinner_beta_20f.png'}
+                                  cols={10}
+                                  rows={2}
+                                  frameWidth={worldline === 'beta' ? 54.5 : 54}
+                                  frameHeight={63}
+                                  frameRowOffsetY={worldline === 'steins_gate' ? 8 : 0}
+                                  frameCount={20}
+                                  fps={15}
+                                  loop={true}
+                                />
+                                <span className="thinking-text-glow">
+                                  Thinking<span className="thinking-cursor-blink">▌</span>
+                                </span>
+                              </div>
+                            )}
+                            {msg.streaming && isSynthesizing && !isThinking && (
+                              <div className="status-synthesizing-inline">
+                                <span className="speaking-dot animate-ping" />
+                                正在合成语音…
+                              </div>
+                            )}
+                            </>
+                          ) : (
+                            <p className="japanese-raw">{msg.content}</p>
+                          )}
+                        </div>
+                      </>
+                    )}
                   </div>
                 ))}
-                {isThinking && (
-                  <div className="message-card assistant thinking-bubble-active">
-                    <div className="avatar-label" style={{ fontSize: '10px' }}>AMADEUS</div>
-                    <div className="message-content-box thinking-card-box">
-                      <div className="thinking-indicator-card">
-                        <SpriteAnimator
-                          spriteSrc={worldline === 'steins_gate' ? '/assets/ui/spinner_sg_20f.png' : '/assets/ui/spinner_beta_20f.png'}
-                          cols={10}
-                          rows={2}
-                          frameWidth={worldline === 'beta' ? 54.5 : 54}
-                          frameHeight={63}
-                          frameRowOffsetY={worldline === 'steins_gate' ? 8 : 0}
-                          frameCount={20}
-                          fps={15}
-                          loop={true}
-                        />
-                        <span className="thinking-text-glow">
-                          Thinking<span className="thinking-cursor-blink">█</span>
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                )}
-                {isSynthesizing && !isThinking && (
-                  <div className="status-synthesizing-tag">
-                    <span className="speaking-dot animate-ping" />
-                    正在合成语音...
-                  </div>
-                )}
                 {(isThinking || isSynthesizing) && (
                   <div className="voice-control-capsule" role="group" aria-label="Current response controls">
-                    <span className="voice-control-signal">β SIGNAL</span>
+                    <span className="voice-control-signal">{worldline === 'beta' ? 'β SIGNAL' : 'SG SIGNAL'}</span>
                     <button type="button" onClick={handleStopVoice} disabled={!isSynthesizing}>
                       STOP VOICE
                     </button>
@@ -842,7 +865,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                 className="interrupt-btn"
                 onClick={() => {
                   audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume);
-                  wsRef.current?.send(JSON.stringify({ type: 'interrupt-signal' }));
+                  handleStopVoice();
                 }}
                 title="中断当前语音"
               >
@@ -871,23 +894,48 @@ export const Workstation: React.FC<WorkstationProps> = ({
               onRefreshModels={() => { void loadProviderModels(activeProviderId, true); }}
               onConfigureCredential={() => setIsSettingsOpen(true)}
             />
-            <span className="reasoning-label">推理深度</span>
-            <div className="reasoning-toggle" role="group" aria-label="推理深度">
-              {(['high', 'xhigh'] as const).map((effort) => (
-                <button
-                  type="button"
-                  key={effort}
-                  className={reasoningEffort === effort ? 'active' : ''}
-                  onClick={() => {
-                    setReasoningEffort(effort);
-                    localStorage.setItem('amadeus_pc_reasoning_effort', effort);
-                    updateConfig({ reasoningEffort: effort });
-                  }}
+            {reasoningAvailable ? (
+              <>
+                <span
+                  className="reasoning-label"
+                  title={promptGuidedReasoning
+                    ? '当前 DeepSeek 模型通过系统提示表达深度，不是原生 thinking 参数。'
+                    : '当前供应商会把该选项作为原生推理参数发送。'}
                 >
-                  {effort === 'xhigh' ? 'XHIGH' : 'HIGH'}
-                </button>
-              ))}
-            </div>
+                  {promptGuidedReasoning ? '提示强度' : '推理深度'}
+                </span>
+                <div className="reasoning-toggle" role="group" aria-label={promptGuidedReasoning ? '提示强度' : '推理深度'}>
+                  {(['high', 'xhigh'] as const).map((effort) => (
+                    <button
+                      type="button"
+                      key={effort}
+                      className={reasoningEffort === effort ? 'active' : ''}
+                      disabled={conversationBusy || isThinking || isSynthesizing}
+                      title={promptGuidedReasoning
+                        ? '此模式会改变提示词中的推理要求，效果取决于模型。'
+                        : `使用 ${effort.toUpperCase()} 原生推理深度`}
+                      onClick={() => {
+                        setReasoningEffort(effort);
+                        try {
+                          localStorage.setItem('amadeus_pc_reasoning_effort', effort);
+                          localStorage.setItem(`amadeus_pc_reasoning_effort_${activeProviderId}_${activeModelId}`, effort);
+                        } catch {}
+                        updateConfig({ reasoningEffort: effort });
+                      }}
+                    >
+                      {effort === 'xhigh' ? 'XHIGH' : 'HIGH'}
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : (
+              <span
+                className="reasoning-unavailable"
+                title="当前供应商或模型没有声明 reasoning_effort 能力，已避免发送无效参数。"
+              >
+                当前模型不支持推理深度
+              </span>
+            )}
           </div>
         </div>
 
@@ -926,6 +974,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         onClose={() => setIsSettingsOpen(false)}
         worldline={worldline}
         apiKey={apiKey}
+        credentialConfigured={credentialConfigured}
         systemPrompt={systemPrompt}
         enableTts={enableTts}
         sovitsUrl={sovitsUrl}

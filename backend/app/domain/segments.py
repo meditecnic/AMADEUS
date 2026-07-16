@@ -159,6 +159,8 @@ class SegmentPipeline:
         synthesize: AudioOperation,
         tts_concurrency: int = 2,
         tts_retries: int = 1,
+        translation_retries: int = 1,
+        translation_timeout: float = 6.0,
     ) -> None:
         self.identity = identity
         self._emit_callback = emit
@@ -166,6 +168,10 @@ class SegmentPipeline:
         self._synthesize = synthesize
         self._tts_semaphore = asyncio.Semaphore(max(1, tts_concurrency))
         self._tts_retries = max(0, tts_retries)
+        self._translation_retries = max(0, translation_retries)
+        if translation_timeout <= 0:
+            raise ValueError("translation timeout must be positive")
+        self._translation_timeout = translation_timeout
         self._buffer: dict[int, _SegmentResult] = {}
         self._committed_translations: list[str] = []
         self._next_segment_id = 0
@@ -278,12 +284,41 @@ class SegmentPipeline:
         )
 
     async def _translate_safe(self, text: str) -> tuple[str, str | None]:
-        try:
-            return await self._translate(text), None
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            return "", str(exc)
+        attempts = self._translation_retries + 1
+        last_error: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                translated = await asyncio.wait_for(
+                    self._translate(text),
+                    timeout=self._translation_timeout,
+                )
+                if not translated or not translated.strip():
+                    return "", "translation_empty"
+                return translated.strip(), None
+            except asyncio.CancelledError:
+                raise
+            except asyncio.TimeoutError as exc:
+                last_error = exc
+            except Exception as exc:
+                last_error = exc
+                if not self._is_retryable_translation_error(exc):
+                    break
+
+            if attempt + 1 < attempts:
+                await asyncio.sleep(0.15 * (attempt + 1))
+
+        if isinstance(last_error, asyncio.TimeoutError):
+            return "", "translation_timeout"
+        return "", "translation_unavailable"
+
+    @staticmethod
+    def _is_retryable_translation_error(error: Exception) -> bool:
+        if isinstance(error, (TransientSegmentError, TimeoutError, ConnectionError, OSError)):
+            return True
+        status_code = getattr(error, "status_code", None)
+        return status_code in {408, 425, 429} or (
+            isinstance(status_code, int) and status_code >= 500
+        )
 
     async def _synthesize_safe(self, text: str) -> tuple[bytes | None, str | None]:
         if self._voice_stopped:

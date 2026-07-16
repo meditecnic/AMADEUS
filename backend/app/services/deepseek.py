@@ -5,6 +5,15 @@ from app import config
 from app.services.llm_interface import LLMInterface
 from app.services.persona_bible import persona_bible
 
+
+class DeepSeekTranslationError(RuntimeError):
+    """Translation request failure with a retry-relevant HTTP status only."""
+
+    def __init__(self, status_code: int | None = None) -> None:
+        super().__init__("translation_unavailable")
+        self.status_code = status_code
+
+
 class DeepSeekService(LLMInterface):
     def __init__(self):
         self.api_key = ""
@@ -237,9 +246,15 @@ class DeepSeekService(LLMInterface):
                 response.raise_for_status()
                 result = response.json()
                 return result["choices"][0]["message"]["content"].strip()
+            except (httpx.TimeoutException, httpx.NetworkError) as e:
+                print(f"[DeepSeek] Translation failed: {e}", flush=True)
+                raise ConnectionError("translation_unavailable") from e
+            except httpx.HTTPStatusError as e:
+                print(f"[DeepSeek] Translation failed: {e}", flush=True)
+                raise DeepSeekTranslationError(e.response.status_code) from e
             except Exception as e:
                 print(f"[DeepSeek] Translation failed: {e}", flush=True)
-                return f"(翻译失败: {text})"
+                raise RuntimeError("translation_unavailable") from e
 
     async def complete_json(
         self,

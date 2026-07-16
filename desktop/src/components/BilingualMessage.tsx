@@ -5,6 +5,7 @@ export interface BilingualSegment {
   id: number;
   ja: string;
   zh: string;
+  translationError?: string;
 }
 
 interface RevealCount {
@@ -98,6 +99,7 @@ export function BilingualMessage({
   const chinese = ordered.length
     ? ordered.map((segment) => segment.zh.slice(0, revealed[segment.id]?.zh || 0)).join('')
     : fallbackZh;
+  const hasTranslationError = ordered.some((segment) => segment.translationError);
 
   return (
     <div
@@ -112,6 +114,11 @@ export function BilingualMessage({
     >
       {chinese && <p className="chinese-main">{chinese}</p>}
       <p className={chinese ? 'japanese-sub' : 'japanese-raw'}>{japanese}</p>
+      {hasTranslationError && (
+        <p className="translation-degraded" role="status">
+          中文翻译暂不可用，已保留日文原文
+        </p>
+      )}
     </div>
   );
 }
