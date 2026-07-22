@@ -11,6 +11,13 @@ const wsSpies = vi.hoisted(() => ({
   useAmadeusWS: vi.fn(),
 }));
 
+const audioSpies = vi.hoisted(() => ({
+  isPlaying: false,
+  init: vi.fn(),
+  playBase64: vi.fn(),
+  stopAll: vi.fn(),
+}));
+
 vi.mock('../hooks/useAmadeusWS', () => ({
   getOrCreateAmadeusSessionId: () => 'session-one',
   useAmadeusWS: (params: unknown) => {
@@ -35,8 +42,12 @@ vi.mock('../hooks/useAmadeusWS', () => ({
 }));
 
 vi.mock('../hooks/useAudioPlayer', () => ({
-  useAudioPlayer: () => ({ currentVolume: 0, isPlaying: false }),
-  audioPlayer: { init: vi.fn(), playBase64: vi.fn(), stopAll: vi.fn() },
+  useAudioPlayer: () => ({ currentVolume: 0, isPlaying: audioSpies.isPlaying }),
+  audioPlayer: {
+    init: (...args: unknown[]) => audioSpies.init(...args),
+    playBase64: (...args: unknown[]) => audioSpies.playBase64(...args),
+    stopAll: (...args: unknown[]) => audioSpies.stopAll(...args),
+  },
 }));
 
 vi.mock('../services/AudioService', () => ({
@@ -79,6 +90,10 @@ describe('Workstation provider runtime changes', () => {
 
   beforeEach(() => {
     localStorage.clear();
+    audioSpies.isPlaying = false;
+    audioSpies.init.mockClear();
+    audioSpies.playBase64.mockClear();
+    audioSpies.stopAll.mockClear();
     wsSpies.reconnect.mockClear();
     wsSpies.switchConversation.mockClear();
     wsSpies.switchWorldline.mockClear();
@@ -350,6 +365,10 @@ describe('Workstation Q14 activity operation labels', () => {
 
   beforeEach(() => {
     localStorage.clear();
+    audioSpies.isPlaying = false;
+    audioSpies.init.mockClear();
+    audioSpies.playBase64.mockClear();
+    audioSpies.stopAll.mockClear();
     wsSpies.reconnect.mockClear();
     wsSpies.switchConversation.mockClear();
     wsSpies.switchWorldline.mockClear();
@@ -426,5 +445,194 @@ describe('Workstation Q14 activity operation labels', () => {
       expect(queryByTestId('activity-operation-label')).toBeNull();
       expect(queryAllByText('正在合成语音…')).toHaveLength(0);
     });
+  });
+});
+
+
+function mockReadyChat(overrides: {
+  isThinking?: boolean;
+  isSynthesizing?: boolean;
+  sendChat?: ReturnType<typeof vi.fn>;
+  stopVoice?: ReturnType<typeof vi.fn>;
+} = {}) {
+  const sendChat = overrides.sendChat ?? vi.fn();
+  const stopVoice = overrides.stopVoice ?? vi.fn();
+  wsSpies.useAmadeusWS.mockReturnValue({
+    status: 'READY',
+    messages: [{
+      id: 'assist_done',
+      role: 'assistant',
+      content: '完了。',
+      translation: '完成。',
+      streaming: false,
+      segments: [],
+    }],
+    isThinking: overrides.isThinking ?? false,
+    isSynthesizing: overrides.isSynthesizing ?? false,
+    activeTool: null,
+    activeNotice: null,
+    emotion: 'neutral',
+    sendChat,
+    stopVoice,
+    cancelTurn: vi.fn(),
+    sendDebugTts: vi.fn(),
+    updateConfig: vi.fn(),
+    reconnect: wsSpies.reconnect,
+    switchConversation: wsSpies.switchConversation,
+    switchWorldline: wsSpies.switchWorldline,
+    wsRef: { current: null },
+  });
+  return { sendChat, stopVoice };
+}
+
+
+describe('Workstation UX-PLAYBACK-SEND-01 send while voice plays', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  beforeEach(() => {
+    localStorage.clear();
+    audioSpies.isPlaying = false;
+    audioSpies.init.mockClear();
+    audioSpies.playBase64.mockClear();
+    audioSpies.stopAll.mockClear();
+    wsSpies.reconnect.mockClear();
+    wsSpies.switchConversation.mockClear();
+    wsSpies.switchWorldline.mockClear();
+    wsSpies.switchConversation.mockReturnValue(true);
+    wsSpies.switchWorldline.mockReturnValue(true);
+    wsSpies.useAmadeusWS.mockReset();
+
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/providers') {
+        return { ok: true, status: 200, json: async () => [] } as Response;
+      }
+      if (url.startsWith('/api/conversations?')) {
+        return { ok: true, status: 200, json: async () => [] } as Response;
+      }
+      if (url === '/api/search/settings') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ provider: 'tavily', configured: false, fallback: 'duckduckgo' }),
+        } as Response;
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+  });
+
+  it('keeps input and SEND enabled when only previous voice is still playing', async () => {
+    audioSpies.isPlaying = true;
+    mockReadyChat();
+    const { container } = render(
+      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    );
+
+    const input = await waitFor(() => {
+      const element = container.querySelector<HTMLInputElement>('.chat-input-field');
+      expect(element).not.toBeNull();
+      return element as HTMLInputElement;
+    });
+    const send = container.querySelector<HTMLButtonElement>('.chat-send-btn');
+    expect(input.disabled).toBe(false);
+    expect(send?.disabled).toBe(true); // empty input still blocks send
+
+    fireEvent.change(input, { target: { value: '下一句' } });
+    expect(send?.disabled).toBe(false);
+  });
+
+  it('stops client playback and voice then sends when submitting while playing', async () => {
+    audioSpies.isPlaying = true;
+    const order: string[] = [];
+    const sendChat = vi.fn(() => { order.push('sendChat'); });
+    const stopVoice = vi.fn(() => { order.push('stopVoice'); });
+    audioSpies.stopAll.mockImplementation(() => { order.push('stopAll'); });
+    mockReadyChat({ sendChat, stopVoice });
+
+    const { container } = render(
+      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    );
+    const input = await waitFor(() => {
+      const element = container.querySelector<HTMLInputElement>('.chat-input-field');
+      expect(element).not.toBeNull();
+      return element as HTMLInputElement;
+    });
+    fireEvent.change(input, { target: { value: '新回合' } });
+    fireEvent.submit(input.closest('form') as HTMLFormElement);
+
+    expect(order).toEqual(['stopAll', 'stopVoice', 'sendChat']);
+    expect(sendChat).toHaveBeenCalledWith('新回合');
+  });
+
+  it('does not stop voice or send on blank submit while playing', async () => {
+    audioSpies.isPlaying = true;
+    const { sendChat, stopVoice } = mockReadyChat();
+    const { container } = render(
+      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    );
+    const input = await waitFor(() => {
+      const element = container.querySelector<HTMLInputElement>('.chat-input-field');
+      expect(element).not.toBeNull();
+      return element as HTMLInputElement;
+    });
+    fireEvent.change(input, { target: { value: '   ' } });
+    fireEvent.submit(input.closest('form') as HTMLFormElement);
+
+    expect(audioSpies.stopAll).not.toHaveBeenCalled();
+    expect(stopVoice).not.toHaveBeenCalled();
+    expect(sendChat).not.toHaveBeenCalled();
+  });
+
+  it('keeps send disabled while thinking even if voice is not playing', async () => {
+    audioSpies.isPlaying = false;
+    mockReadyChat({ isThinking: true });
+    const { container } = render(
+      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    );
+    const input = await waitFor(() => {
+      const element = container.querySelector<HTMLInputElement>('.chat-input-field');
+      expect(element).not.toBeNull();
+      return element as HTMLInputElement;
+    });
+    expect(input.disabled).toBe(true);
+    fireEvent.change(input, { target: { value: '被挡住' } });
+    expect(container.querySelector<HTMLButtonElement>('.chat-send-btn')?.disabled).toBe(true);
+  });
+
+  it('keeps send disabled while synthesizing', async () => {
+    audioSpies.isPlaying = false;
+    mockReadyChat({ isSynthesizing: true });
+    const { container } = render(
+      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    );
+    const input = await waitFor(() => {
+      const element = container.querySelector<HTMLInputElement>('.chat-input-field');
+      expect(element).not.toBeNull();
+      return element as HTMLInputElement;
+    });
+    expect(input.disabled).toBe(true);
+    fireEvent.change(input, { target: { value: '合成中' } });
+    expect(container.querySelector<HTMLButtonElement>('.chat-send-btn')?.disabled).toBe(true);
+  });
+
+  it('sends normally without stop when nothing is playing', async () => {
+    audioSpies.isPlaying = false;
+    const { sendChat, stopVoice } = mockReadyChat();
+    const { container } = render(
+      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    );
+    const input = await waitFor(() => {
+      const element = container.querySelector<HTMLInputElement>('.chat-input-field');
+      expect(element).not.toBeNull();
+      return element as HTMLInputElement;
+    });
+    fireEvent.change(input, { target: { value: '普通发送' } });
+    fireEvent.submit(input.closest('form') as HTMLFormElement);
+
+    expect(audioSpies.stopAll).not.toHaveBeenCalled();
+    expect(stopVoice).not.toHaveBeenCalled();
+    expect(sendChat).toHaveBeenCalledWith('普通发送');
   });
 });

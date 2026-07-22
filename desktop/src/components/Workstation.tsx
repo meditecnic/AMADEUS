@@ -510,6 +510,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const handleSend = (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputText.trim()) return;
+    // Turn text still gates send via isThinking/isSynthesizing. When only leftover
+    // voice is playing, stop the existing playback path then start the new Turn.
+    if (isPlaying) {
+      audioPlayer.stopAll();
+      stopVoice();
+    }
     audioService.playSFX('/audio/sfx/连接成功，进入页面1.ogg', sfxVolume);
     sendChat(inputText.trim());
     scrollTranscriptToLatest();
@@ -1093,7 +1099,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
               onChange={(e) => setInputText(e.target.value)}
               className="chat-input-field"
               placeholder="输入终端指令或对话内容..."
-              disabled={status !== 'READY' || isThinking || isSynthesizing || isPlaying}
+              disabled={status !== 'READY' || isThinking || isSynthesizing}
             />
             {isPlaying && (
               <span className="tts-waiting-hint">正在播放语音…</span>
@@ -1114,7 +1120,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             <button
               type="submit"
               className="chat-send-btn"
-              disabled={status !== 'READY' || !inputText.trim() || isThinking || isSynthesizing || isPlaying}
+              disabled={status !== 'READY' || !inputText.trim() || isThinking || isSynthesizing}
               aria-label="发送"
             >
               <span>SEND</span>
