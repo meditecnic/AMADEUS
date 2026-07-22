@@ -426,12 +426,12 @@ class TestBackendE2EContract:
     # R2.3: config_update 配置裁剪规则与 api_key 安全阻断
     # -----------------------------------------------------------------
     def test_config_update_temperature_clipping(self, mock_services):
-        """config_update 传入越界 temperature 应被后端强制裁剪在 0.0-2.0 之间"""
+        """config_update 传入越界 temperature 应被后端强制裁剪在 0.0-1.2 之间"""
         client = self.client
         with client.websocket_connect("/ws/chat?session_id=test_clip") as websocket:
             websocket.send_json({"type": "auth", "api_key": "my_key"})
             
-            # 发送需要裁剪的过大 temperature (2.5)
+            # 发送需要裁剪的过大 temperature (2.5) — product cap is 1.2
             websocket.send_json({
                 "type": "config_update",
                 "temperature": 2.5
@@ -444,10 +444,9 @@ class TestBackendE2EContract:
                 if r.get("type") == "status" and r.get("dsk") == "idle":
                     break
             
-            # 此处应断言后台保存的已裁剪的 temperature 属性为 2.0
             session_state = sessions.get("test_clip")
             assert session_state is not None
-            assert session_state.temperature == 2.0
+            assert session_state.temperature == 1.2
 
     def test_config_update_api_key_is_ignored(self, mock_services):
         """WebSocket config frames cannot replace the credential-store secret."""

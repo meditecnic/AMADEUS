@@ -21,9 +21,9 @@ def test_contains_leak_detection():
 
 
 def test_session_state_default_temperature():
-    # Verify default temperature is clamped to 0.8
+    # Product default sampling temperature (aligned with desktop CHAT_TEMPERATURE_DEFAULT)
     s = SessionState("temp_test")
-    assert s.temperature == 0.8
+    assert s.temperature == 0.4
 
 
 class _CallCountingStreamMock:

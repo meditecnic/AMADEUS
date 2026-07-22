@@ -2543,6 +2543,57 @@ body {
 }
 
 /* ── Personality uses the same slider language as Sound Control ── */
+.setting-field-hint {
+  margin: 0 0 8px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: rgba(196, 120, 48, 0.88);
+}
+
+.temperature-migration-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #ffcc66;
+  background: rgba(80, 40, 0, 0.45);
+  border: 1px solid rgba(255, 170, 0, 0.35);
+  border-radius: 4px;
+}
+
+.temperature-migration-dismiss {
+  margin-left: auto;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: #ffaa00;
+  background: transparent;
+  border: 1px solid rgba(255, 170, 0, 0.45);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.temperature-migration-dismiss:hover {
+  background: rgba(255, 170, 0, 0.12);
+}
+
+.temperature-warning {
+  margin: 6px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.temperature-warning-mild {
+  color: #e0a040;
+}
+
+.temperature-warning-strong {
+  color: #ff8c2a;
+  font-weight: 600;
+}
+
 .personality-slider-row {
   width: min(370px, 100%);
   gap: 12px;

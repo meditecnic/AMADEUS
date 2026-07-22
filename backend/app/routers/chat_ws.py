@@ -83,7 +83,7 @@ class SessionState:
         self.lock = asyncio.Lock()
         self.compressing = False
         
-        self.temperature = 0.8
+        self.temperature = 0.4
         self.provider_id = "deepseek"
         self.model = config.DEEPSEEK_MODEL
         self.reasoning_effort = None
@@ -1441,7 +1441,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 if "temperature" in data:
                     try:
                         temp = float(data["temperature"])
-                        session.temperature = max(0.0, min(2.0, temp))
+                        session.temperature = max(0.0, min(1.2, temp))
                     except (ValueError, TypeError):
                         pass
                 if "enable_tts" in data:
@@ -1686,7 +1686,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 if "temperature" in data:
                     try:
                         temp = float(data["temperature"])
-                        session.temperature = max(0.0, min(2.0, temp))
+                        session.temperature = max(0.0, min(1.2, temp))
                     except (ValueError, TypeError):
                         pass
                 if "enable_tts" in data:

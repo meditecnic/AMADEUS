@@ -5,7 +5,13 @@ import {
   type Message,
 } from '../hooks/useAmadeusWS';
 import { StatusBar } from './StatusBar';
-import { SettingsModal, type CredentialStatus } from './SettingsModal';
+import {
+  CHAT_TEMPERATURE_DEFAULT,
+  CHAT_TEMPERATURE_MAX,
+  clampChatTemperature,
+  SettingsModal,
+  type CredentialStatus,
+} from './SettingsModal';
 import { SoundPanel } from './SoundPanel';
 import { HistorySidebar, type ConversationSummary } from './HistorySidebar';
 import { TtsDebugPanel } from './TtsDebugPanel';
@@ -89,8 +95,31 @@ export const Workstation: React.FC<WorkstationProps> = ({
       return v ? Math.max(0, Math.min(1, parseFloat(v))) : 1.0;
     } catch { return 1.0; }
   });
+  const [temperatureMigrationNotice, setTemperatureMigrationNotice] = useState(() => {
+    try {
+      return sessionStorage.getItem('amadeus_pc_temperature_migrated_notice') === '1';
+    } catch {
+      return false;
+    }
+  });
   const [temperature, setTemperature] = useState(() => {
-    try { const v = localStorage.getItem('amadeus_pc_temperature'); return v ? parseFloat(v) : 0.8; } catch { return 0.8; }
+    try {
+      const raw = localStorage.getItem('amadeus_pc_temperature');
+      if (raw == null || raw === '') return CHAT_TEMPERATURE_DEFAULT;
+      const parsed = parseFloat(raw);
+      if (!Number.isFinite(parsed)) return CHAT_TEMPERATURE_DEFAULT;
+      if (parsed > CHAT_TEMPERATURE_MAX) {
+        const clamped = CHAT_TEMPERATURE_MAX;
+        try {
+          localStorage.setItem('amadeus_pc_temperature', String(clamped));
+          sessionStorage.setItem('amadeus_pc_temperature_migrated_notice', '1');
+        } catch { /* ignore quota / private mode */ }
+        return clamped;
+      }
+      return clampChatTemperature(parsed);
+    } catch {
+      return CHAT_TEMPERATURE_DEFAULT;
+    }
   });
   const [model, setModel] = useState<string>(() =>
     localStorage.getItem('amadeus_pc_model') || 'deepseek-v4-flash');
@@ -117,6 +146,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
   useEffect(() => {
     try { localStorage.setItem('amadeus_pc_history_collapsed', String(isHistoryCollapsed)); } catch {}
   }, [isHistoryCollapsed]);
+
+  // Temperature init may write the migration flag after the notice state constructor ran.
+  useEffect(() => {
+    try {
+      if (sessionStorage.getItem('amadeus_pc_temperature_migrated_notice') === '1') {
+        setTemperatureMigrationNotice(true);
+      }
+    } catch { /* ignore */ }
+  }, []);
 
   const TTS_DEBUG_ENABLED = (() => {
     try { return localStorage.getItem('amadeus_pc_debug_tts') === 'true'; } catch { return false; }
@@ -832,7 +870,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
     setBgmVolume(newSettings.bgmVolume);
     setEnableSfx(newSettings.enableSfx);
     setSfxVolume(newSettings.sfxVolume);
-    setTemperature(newSettings.temperature);
+    const safeTemperature = clampChatTemperature(newSettings.temperature);
+    setTemperature(safeTemperature);
     setReasoningEffort(newSettings.reasoningEffort);
 
     if (
@@ -852,7 +891,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       localStorage.setItem('amadeus_pc_bgm_volume', String(newSettings.bgmVolume));
       localStorage.setItem('amadeus_pc_enable_sfx', String(newSettings.enableSfx));
       localStorage.setItem('amadeus_pc_sfx_volume', String(newSettings.sfxVolume));
-      localStorage.setItem('amadeus_pc_temperature', String(newSettings.temperature));
+      localStorage.setItem('amadeus_pc_temperature', String(safeTemperature));
       localStorage.setItem('amadeus_pc_model', newSettings.model);
       localStorage.setItem('amadeus_pc_reasoning_effort', newSettings.reasoningEffort);
     } catch (e) {
@@ -868,7 +907,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         systemPrompt: newSettings.systemPrompt,
         enableTts: newSettings.enableTts,
         sovitsUrl: newSettings.sovitsUrl,
-        temperature: newSettings.temperature,
+        temperature: safeTemperature,
         reasoningEffort: newSettings.reasoningEffort,
       };
       if (newSettings.worldline === worldline) {
@@ -1256,6 +1295,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
         enableSfx={enableSfx}
         sfxVolume={sfxVolume}
         temperature={temperature}
+        temperatureMigrationNotice={temperatureMigrationNotice}
+        onDismissTemperatureMigrationNotice={() => {
+          setTemperatureMigrationNotice(false);
+          try { sessionStorage.removeItem('amadeus_pc_temperature_migrated_notice'); } catch { /* ignore */ }
+        }}
         providerDisplayName={activeProvider?.display_name || activeProviderId}
         providerBaseUrl={activeProvider?.base_url}
         baseUrlConfigurable={Boolean(activeProvider?.base_url_configurable)}

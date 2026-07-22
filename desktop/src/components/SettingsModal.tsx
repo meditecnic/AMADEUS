@@ -2,6 +2,18 @@ import React, { useState, useEffect } from 'react';
 
 export type CredentialStatus = 'checking' | 'configured' | 'not_configured' | 'saving' | 'error';
 
+/** Chat sampling temperature exposed as Settings「回复随机性」. Not Persona content. */
+export const CHAT_TEMPERATURE_MIN = 0;
+export const CHAT_TEMPERATURE_MAX = 1.2;
+export const CHAT_TEMPERATURE_STEP = 0.1;
+/** New-install default; daily stable band is 0–0.5 (0 is the verified safe point). */
+export const CHAT_TEMPERATURE_DEFAULT = 0.4;
+
+export function clampChatTemperature(value: number): number {
+  if (!Number.isFinite(value)) return CHAT_TEMPERATURE_DEFAULT;
+  return Math.max(CHAT_TEMPERATURE_MIN, Math.min(CHAT_TEMPERATURE_MAX, value));
+}
+
 export interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -20,6 +32,9 @@ export interface SettingsModalProps {
   enableSfx: boolean;
   sfxVolume: number;
   temperature: number;
+  /** One-shot notice after migrating a legacy localStorage value > max (1.2) */
+  temperatureMigrationNotice?: boolean;
+  onDismissTemperatureMigrationNotice?: () => void;
   providerDisplayName: string;
   providerBaseUrl?: string | null;
   baseUrlConfigurable: boolean;
@@ -63,6 +78,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   enableSfx,
   sfxVolume,
   temperature,
+  temperatureMigrationNotice = false,
+  onDismissTemperatureMigrationNotice,
   providerDisplayName,
   providerBaseUrl,
   baseUrlConfigurable,
@@ -79,7 +96,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [localSystemPrompt, setLocalSystemPrompt] = useState(systemPrompt);
   const [localEnableTts, setLocalEnableTts] = useState(enableTts);
   const [localSovitsUrl, setLocalSovitsUrl] = useState(sovitsUrl);
-  const [localTemperature, setLocalTemperature] = useState(temperature);
+  const [localTemperature, setLocalTemperature] = useState(() => clampChatTemperature(temperature));
   const [localBaseUrl, setLocalBaseUrl] = useState(providerBaseUrl || '');
   const [localModel, setLocalModel] = useState(model);
   const [localReasoningIdx, setLocalReasoningIdx] = useState(
@@ -92,6 +109,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     ?? (isSaving ? 'saving' : credentialConfigured ? 'configured' : 'not_configured');
   const displayWebSearchStatus: CredentialStatus = webSearchStatus
     ?? (isSaving || isClearingWebSearch ? 'saving' : webSearchConfigured ? 'configured' : 'not_configured');
+  const temperatureWarning =
+    localTemperature >= 0.9
+      ? 'strong' as const
+      : localTemperature >= 0.8
+        ? 'mild' as const
+        : null;
 
   useEffect(() => {
     if (isOpen) {
@@ -103,7 +126,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setLocalSystemPrompt(systemPrompt);
       setLocalEnableTts(enableTts);
       setLocalSovitsUrl(sovitsUrl);
-      setLocalTemperature(temperature);
+      setLocalTemperature(clampChatTemperature(temperature));
       setLocalBaseUrl(providerBaseUrl || '');
       setLocalModel(model);
       setLocalReasoningIdx(reasoningEffort === 'xhigh' ? 1 : 0);
@@ -128,7 +151,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         bgmVolume: bgmVolume,
         enableSfx: enableSfx,
         sfxVolume: sfxVolume,
-        temperature: localTemperature,
+        temperature: clampChatTemperature(localTemperature),
         baseUrl: localBaseUrl,
         model: localModel,
         reasoningEffort: (['high', 'xhigh'] as const)[localReasoningIdx],
@@ -234,22 +257,55 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 )}
               </div>
               <div className="setting-field personality-field">
-                <label>个性</label>
+                <label>回复随机性</label>
+                <p className="setting-field-hint" data-testid="temperature-hint">
+                  越高越发散、越容易跑题；不改变角色设定本身。日常建议 0～0.5。
+                </p>
+                {temperatureMigrationNotice && (
+                  <p
+                    className="temperature-migration-notice"
+                    data-testid="temperature-migration-notice"
+                    role="status"
+                  >
+                    已从过高采样降至安全上限 1.2。
+                    {onDismissTemperatureMigrationNotice && (
+                      <button
+                        type="button"
+                        className="temperature-migration-dismiss"
+                        onClick={onDismissTemperatureMigrationNotice}
+                      >
+                        知道了
+                      </button>
+                    )}
+                  </p>
+                )}
                 <div className="slider-row personality-slider-row">
+                  <span className="slider-endpoint" data-testid="temperature-endpoint-min">稳定 / 贴人设</span>
                   <input
                     data-testid="personality-range"
                     type="range"
-                    min="0"
-                    max="2"
-                    step="0.1"
+                    min={CHAT_TEMPERATURE_MIN}
+                    max={CHAT_TEMPERATURE_MAX}
+                    step={CHAT_TEMPERATURE_STEP}
                     value={localTemperature}
-                    onChange={(e) => setLocalTemperature(parseFloat(e.target.value))}
+                    onChange={(e) => setLocalTemperature(clampChatTemperature(parseFloat(e.target.value)))}
                     className="volume-slider personality-range"
-                    style={{ '--val': `${(localTemperature / 2) * 100}%` } as React.CSSProperties}
-                    aria-label="个性"
+                    style={{ '--val': `${(localTemperature / CHAT_TEMPERATURE_MAX) * 100}%` } as React.CSSProperties}
+                    aria-label="回复随机性"
                   />
+                  <span className="slider-endpoint" data-testid="temperature-endpoint-max">发散 / 易跑偏</span>
                   <span className="volume-label" data-testid="personality-value">{localTemperature.toFixed(1)}</span>
                 </div>
+                {temperatureWarning === 'mild' && (
+                  <p className="temperature-warning temperature-warning-mild" data-testid="temperature-warning">
+                    当前采样偏高，回复可能不够稳定。
+                  </p>
+                )}
+                {temperatureWarning === 'strong' && (
+                  <p className="temperature-warning temperature-warning-strong" data-testid="temperature-warning">
+                    当前采样很高，容易跑题或句式不稳。
+                  </p>
+                )}
               </div>
               {baseUrlConfigurable && (
               <div className="setting-field">
