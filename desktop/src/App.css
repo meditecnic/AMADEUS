@@ -2542,14 +2542,12 @@ body {
   border: none;
 }
 
-/* ── Direct themed personality range ── */
-input[type="range"].salieri-range {
-  flex: 1;
-  min-width: 150px;
-  opacity: 1;
-  position: static;
-  z-index: auto;
+/* ── Personality uses the same slider language as Sound Control ── */
+.personality-slider-row {
+  width: min(370px, 100%);
+  gap: 12px;
 }
+.personality-range { flex: 1; }
 
 /* ── HUD pill clean overrides ── */
 .hud-pill {

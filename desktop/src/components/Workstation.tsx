@@ -41,6 +41,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [inputText, setInputText] = useState('');
   const [apiKey, setApiKey] = useState('');
+  const [webSearchApiKey, setWebSearchApiKey] = useState('');
+  const [webSearchConfigured, setWebSearchConfigured] = useState(false);
+  const [webSearchCredentialStatus, setWebSearchCredentialStatus] = useState<CredentialStatus>('checking');
   const [credentialChecked, setCredentialChecked] = useState(false);
   const [credentialStatus, setCredentialStatus] = useState<CredentialStatus>('checking');
   const [providers, setProviders] = useState<ProviderMetadata[]>([]);
@@ -317,6 +320,27 @@ export const Workstation: React.FC<WorkstationProps> = ({
     void synchronizeCredential();
     return () => { cancelled = true; };
   }, [loadProviders, reconnect]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadWebSearchSettings = async () => {
+      setWebSearchCredentialStatus('checking');
+      try {
+        const response = await fetch('/api/search/settings');
+        if (!response.ok) throw new Error(`web search settings query failed: ${response.status}`);
+        const settings = await response.json() as { provider: 'tavily'; configured: boolean; fallback: 'duckduckgo' };
+        if (!cancelled) {
+          setWebSearchConfigured(Boolean(settings.configured));
+          setWebSearchCredentialStatus(settings.configured ? 'configured' : 'not_configured');
+        }
+      } catch (error) {
+        if (!cancelled) setWebSearchCredentialStatus('error');
+        console.warn('Web Search credential synchronization failed:', error);
+      }
+    };
+    void loadWebSearchSettings();
+    return () => { cancelled = true; };
+  }, []);
 
   const activeConversation = conversations.find((row) => row.id === activeConversationId);
   const activeProviderId = activeConversation?.provider_id || draftProviderId;
@@ -691,6 +715,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const handleSaveSettings = async (newSettings: {
     worldline: 'steins_gate' | 'beta';
     apiKey: string;
+    webSearchApiKey: string;
     systemPrompt: string;
     enableTts: boolean;
     sovitsUrl: string;
@@ -752,6 +777,20 @@ export const Workstation: React.FC<WorkstationProps> = ({
       setCredentialChecked(true);
       try { localStorage.removeItem('amadeus_pc_api_key'); } catch {}
     }
+    if (newSettings.webSearchApiKey.trim()) {
+      const response = await fetch('/api/search/credential', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_key: newSettings.webSearchApiKey.trim() }),
+      });
+      if (!response.ok) {
+        setWebSearchCredentialStatus('error');
+        throw new Error('web_search_credential_save_failed');
+      }
+      setWebSearchConfigured(true);
+      setWebSearchCredentialStatus('configured');
+    }
+    setWebSearchApiKey('');
     setApiKey('');
     setSystemPrompt(newSettings.systemPrompt);
     setEnableTts(newSettings.enableTts);
@@ -809,6 +848,18 @@ export const Workstation: React.FC<WorkstationProps> = ({
       setCredentialStatus('error');
       throw error;
     }
+  };
+
+  const handleClearWebSearchCredential = async () => {
+    setWebSearchCredentialStatus('saving');
+    const response = await fetch('/api/search/credential', { method: 'DELETE' });
+    if (!response.ok) {
+      setWebSearchCredentialStatus('error');
+      throw new Error('web_search_credential_clear_failed');
+    }
+    setWebSearchApiKey('');
+    setWebSearchConfigured(false);
+    setWebSearchCredentialStatus('not_configured');
   };
 
   const handleAudioInit = () => {
@@ -1147,6 +1198,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
         apiKey={apiKey}
         credentialConfigured={credentialConfigured}
         credentialStatus={credentialStatus}
+        webSearchApiKey={webSearchApiKey}
+        webSearchConfigured={webSearchConfigured}
+        webSearchStatus={webSearchCredentialStatus}
         systemPrompt={systemPrompt}
         enableTts={enableTts}
         sovitsUrl={sovitsUrl}
@@ -1162,6 +1216,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         modelOptions={availableModels}
         reasoningEffort={reasoningEffort}
         onSaveSettings={handleSaveSettings}
+        onClearWebSearchCredential={handleClearWebSearchCredential}
       />
 
       {forgetTarget && (

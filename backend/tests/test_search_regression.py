@@ -2,8 +2,15 @@ import pytest
 import json
 import asyncio
 from unittest.mock import patch, MagicMock, AsyncMock
-from app.services.search import web_search, _extract_city
-from app.routers.chat_ws import should_force_search
+from app.services.search import (
+    SearchEvidenceError,
+    SearchResponse,
+    SearchService,
+    prepare_search_query,
+    web_search,
+    _extract_city,
+)
+from app.routers.chat_ws import execute_tool_call, should_force_search
 
 
 # --- Unit tests for search.py ---
@@ -28,6 +35,150 @@ def test_should_force_search_detects_news():
 def test_should_force_search_ignores_normal_chat():
     assert not should_force_search("助手じゃない")
     assert not should_force_search("你好吗")
+
+
+def test_search_response_requires_real_evidence():
+    assert SearchResponse(
+        query="世界杯冠军",
+        source="duckduckgo",
+        evidence="Title: FIFA\nURL: https://example.test\nContent: verified result",
+        degraded_reason="tavily_key_missing",
+    ).failure_code is None
+    assert SearchResponse(
+        query="世界杯冠军",
+        source="duckduckgo",
+        evidence="No results.",
+        degraded_reason="tavily_key_missing",
+    ).failure_code == "no_results"
+    assert SearchResponse(
+        query="世界杯冠军",
+        source="none",
+        evidence="Search unavailable: local path must not leak",
+        degraded_reason="duckduckgo_error",
+    ).failure_code == "unavailable"
+
+
+def test_current_world_cup_query_is_resolved_to_official_current_result():
+    from datetime import datetime
+
+    prepared = prepare_search_query(
+        "请你web search一下今年的世界杯冠军是哪个国家队",
+        now=datetime(2026, 7, 22),
+    )
+    assert "2026 FIFA World Cup" in prepared
+    assert "winner" in prepared
+    assert "site:fifa.com" in prepared
+    assert prepare_search_query("历届世界杯冠军", now=datetime(2026, 7, 22)) == "历届世界杯冠军"
+
+
+@pytest.mark.asyncio
+async def test_keyless_current_world_cup_search_uses_rewritten_query(tmp_path, monkeypatch):
+    monkeypatch.setenv("AMADEUS_DB_PATH", str(tmp_path / "query-plan.db"))
+    from app.db import init_db
+    await init_db()
+
+    fake_ddgs = MagicMock()
+    fake_ddgs.__enter__ = MagicMock(return_value=fake_ddgs)
+    fake_ddgs.__exit__ = MagicMock(return_value=False)
+    fake_ddgs.text = MagicMock(return_value=[{
+        "title": "Spain wins the 2026 FIFA World Cup",
+        "href": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/spain-argentina-final-report-highlights",
+        "body": "Spain defeated Argentina in the final.",
+        "date": "2026-07-19",
+    }])
+
+    service = SearchService()
+    service._consume_tavily_credit = AsyncMock(return_value=(True, None))
+    with patch("app.services.search.DDGS", return_value=fake_ddgs):
+        response = await service.search("请你web search一下今年的世界杯冠军是哪个国家队")
+
+    searched_query = fake_ddgs.text.call_args.args[0]
+    assert "2026 FIFA World Cup" in searched_query
+    assert "site:fifa.com" in searched_query
+    assert response.query == "请你web search一下今年的世界杯冠军是哪个国家队"
+    assert response.failure_code is None
+    assert "Spain" in response.evidence
+
+
+@pytest.mark.asyncio
+async def test_world_cup_search_retries_without_overstrict_site_filter(tmp_path, monkeypatch):
+    monkeypatch.setenv("AMADEUS_DB_PATH", str(tmp_path / "query-fallback.db"))
+    from app.db import init_db
+    await init_db()
+
+    fake_ddgs = MagicMock()
+    fake_ddgs.__enter__ = MagicMock(return_value=fake_ddgs)
+    fake_ddgs.__exit__ = MagicMock(return_value=False)
+    fake_ddgs.text = MagicMock(side_effect=[[], [{
+        "title": "Spain wins the 2026 FIFA World Cup",
+        "href": "https://www.fifa.com/final",
+        "body": "Spain defeated Argentina in the final.",
+    }]])
+    service = SearchService()
+    service._consume_tavily_credit = AsyncMock(return_value=(True, None))
+
+    with patch("app.services.search.DDGS", return_value=fake_ddgs):
+        response = await service.search("今年的世界杯冠军")
+
+    assert response.failure_code is None
+    assert fake_ddgs.text.call_count == 2
+    assert "site:fifa.com" in fake_ddgs.text.call_args_list[0].args[0]
+    assert "site:fifa.com" not in fake_ddgs.text.call_args_list[1].args[0]
+
+
+@pytest.mark.asyncio
+async def test_search_uses_chrome_tls_fallback_when_ddgs_returns_empty(tmp_path, monkeypatch):
+    monkeypatch.setenv("AMADEUS_DB_PATH", str(tmp_path / "curl-fallback.db"))
+    from app.db import init_db
+    await init_db()
+
+    fake_ddgs = MagicMock()
+    fake_ddgs.__enter__ = MagicMock(return_value=fake_ddgs)
+    fake_ddgs.__exit__ = MagicMock(return_value=False)
+    fake_ddgs.text = MagicMock(return_value=[])
+    fake_response = MagicMock(status_code=200)
+    fake_response.text = (
+        '<div class="result">'
+        '<h2 class="result__title"><a href="https://www.fifa.com/final">'
+        "Spain wins the 2026 FIFA World Cup</a></h2>"
+        '<a class="result__snippet">Spain defeated Argentina in the final.</a>'
+        "</div>"
+    )
+    fake_curl = MagicMock(return_value=fake_response)
+    service = SearchService()
+    service._consume_tavily_credit = AsyncMock(return_value=(True, None))
+
+    with patch("app.services.search.DDGS", return_value=fake_ddgs), \
+         patch("app.services.search.curl_requests.post", fake_curl):
+        response = await service.search("今年的世界杯冠军")
+
+    assert response.failure_code is None
+    assert "Spain wins" in response.evidence
+    fake_curl.assert_called()
+    assert fake_curl.call_args.kwargs["impersonate"] == "chrome131"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_call_rejects_empty_search_evidence():
+    response = SearchResponse(
+        query="今年的世界杯冠军",
+        source="duckduckgo",
+        evidence="No results.",
+        degraded_reason="tavily_key_missing",
+    )
+    with patch(
+        "app.services.search.search_service.search",
+        new_callable=AsyncMock,
+        return_value=response,
+    ):
+        with pytest.raises(SearchEvidenceError) as caught:
+            await execute_tool_call(
+                "web_search",
+                json.dumps({"query": "今年的世界杯冠军"}, ensure_ascii=False),
+            )
+
+    assert caught.value.code == "no_results"
+    assert "local path" not in str(caught.value)
 
 @pytest.mark.asyncio
 async def test_weather_search_uses_wttrin(tmp_path, monkeypatch):
@@ -94,6 +245,7 @@ async def test_processor_loop_triggers_web_search_for_weather(tmp_path, monkeypa
     chat_ws.sessions = {}
     session = SessionState("search-test")
     session.api_key = "sk-test"
+    session.model = "deepseek-v4-pro"
     session.system_prompt = "You are Kurisu. Always use web_search for weather."
     session.enable_tts = False
     session.temperature = 0.8
@@ -102,6 +254,7 @@ async def test_processor_loop_triggers_web_search_for_weather(tmp_path, monkeypa
     send_queue = asyncio.Queue()
     epoch = 1
     start_history_epoch = session.history_epoch
+    stream_calls = 0
 
     async def fake_clean_stream(
         *,
@@ -114,8 +267,11 @@ async def test_processor_loop_triggers_web_search_for_weather(tmp_path, monkeypa
             on_text_delta=None,
             provider_snapshot=None,
         ):
+        nonlocal stream_calls
+        stream_calls += 1
         # First call: simulate model emitting a web_search tool call
-        if tool_choice != "none":
+        if tools is not None:
+            assert tools is not None
             return "", "neutral", {
                 0: {
                     "id": "call_123",
@@ -128,6 +284,10 @@ async def test_processor_loop_triggers_web_search_for_weather(tmp_path, monkeypa
             }, True
         else:
             # Second call after tool result
+            assert tools is None
+            assert tool_choice is None
+            assert active_history[-1]["role"] == "system"
+            assert "WEB SEARCH RESULT" in active_history[-1]["content"]
             return "[EMO:neutral] 北京は晴れ、24度よ。", "neutral", {}, True
 
     sent_statuses = []
@@ -150,3 +310,50 @@ async def test_processor_loop_triggers_web_search_for_weather(tmp_path, monkeypa
     # Verify a status frame with tool=web_search was emitted
     tool_statuses = [p for _, p in sent_statuses if p.get("type") == "status" and p.get("tool") == "web_search"]
     assert len(tool_statuses) >= 1
+
+
+@pytest.mark.asyncio
+async def test_processor_does_not_generate_answer_without_search_evidence(tmp_path, monkeypatch):
+    monkeypatch.setenv("AMADEUS_DB_PATH", str(tmp_path / "no-evidence.db"))
+    from app.db import init_db
+    await init_db()
+
+    from app.routers import chat_ws
+    from app.routers.chat_ws import SessionState, processor_loop
+
+    chat_ws.sessions = {}
+    session = SessionState("search-no-evidence")
+    session.api_key = "sk-test"
+    session.model = "deepseek-v4-pro"
+    session.system_prompt = "日本語で答えること。"
+    session.enable_tts = False
+    chat_ws.sessions[session.session_id] = session
+    send_queue = asyncio.Queue()
+    model_stream = AsyncMock()
+
+    with patch.object(
+        chat_ws,
+        "execute_tool_call",
+        new_callable=AsyncMock,
+        side_effect=SearchEvidenceError("no_results"),
+    ), patch.object(chat_ws, "get_clean_text_stream", model_stream):
+        await processor_loop(
+            session,
+            "请你web search一下今年的世界杯冠军是哪个国家队",
+            send_queue,
+            1,
+            session.history_epoch,
+        )
+
+    model_stream.assert_not_awaited()
+    payloads = []
+    while not send_queue.empty():
+        _, payload = await send_queue.get()
+        payloads.append(payload)
+    errors = [payload for payload in payloads if payload.get("type") == "error"]
+    assert errors == [{
+        "type": "error",
+        "code": "web_search_no_results",
+        "recoverable": True,
+        "message": "Web Search 没有返回可验证的结果，本轮未生成答案。",
+    }]

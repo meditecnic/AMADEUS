@@ -323,6 +323,33 @@ describe('useAmadeusWS v2', () => {
     unmount();
   });
 
+  it('keeps the socket ready after a recoverable turn error', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const { result, unmount } = renderHook(() => useAmadeusWS(params));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => {
+      socket.onopen?.();
+      result.current.sendChat('search the web');
+      socket.emit({
+        type: 'error',
+        code: 'turn_failed',
+        recoverable: true,
+        message: 'DeepSeek request was rejected',
+      });
+    });
+
+    expect(result.current.status).toBe('READY');
+    expect(result.current.messages[result.current.messages.length - 1]?.content).toContain('DeepSeek request was rejected');
+
+    act(() => result.current.sendChat('try another turn'));
+    expect(JSON.parse(socket.sent[socket.sent.length - 1] || '{}')).toMatchObject({
+      type: 'chat.send',
+      content: 'try another turn',
+    });
+    unmount();
+  });
+
   it('keeps synthesis stopped when later segments arrive after voice.stop', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const { result, unmount } = renderHook(() => useAmadeusWS(params));

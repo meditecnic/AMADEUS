@@ -587,7 +587,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             clearWatchdog();
             setIsThinking(false);
             setIsSynthesizing(false);
-            setStatus('ERROR');
+            setStatus(msg.recoverable === true ? 'READY' : 'ERROR');
             setActiveTool(null);
             setActiveNotice(null);
             setMessages((prev) => prev.map((message) =>

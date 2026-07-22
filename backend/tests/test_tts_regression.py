@@ -254,6 +254,12 @@ def test_emotion_ref_map_count():
     assert len(EMOTION_REF_MAP) == 9
 
 
+def test_embarrassed_reference_prompt_matches_supplied_recording():
+    entry = EMOTION_REF_MAP["embarrassed"]
+    assert entry["prompt_text"] == "別に確信があって言ったわけじゃない。単に…"
+    assert entry["ref_audio_path"].endswith("ref_embarrassed.wav")
+
+
 @pytest.mark.asyncio
 async def test_legacy_dispatch_merges_short_fragment_without_duplicating_history(
     monkeypatch,

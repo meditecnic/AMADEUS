@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, SecretStr
 from fastapi import APIRouter, HTTPException, Query
 
 from app.db import normalize_worldline, validate_schema
@@ -8,6 +8,8 @@ from app.services.memory import memory_service
 from app.services.session_manager import session_coordinator
 from app.services.soul_engine import soul_engine
 from app.services.diagnostics import diagnostic_runtime
+from app.services.credentials import credential_store
+from app.services.search import SEARCH_CREDENTIAL_ID, search_service
 
 router = APIRouter()
 
@@ -23,6 +25,39 @@ class ForgetRequest(BaseModel):
     session_id: str = "default"
     worldline: str = "steins_gate"
     scope: str = "all"
+
+
+class SearchCredentialUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    api_key: SecretStr
+
+
+@router.get("/api/search/settings")
+async def search_settings():
+    return {
+        "provider": "tavily",
+        "configured": bool(credential_store.get(SEARCH_CREDENTIAL_ID)),
+        "fallback": "duckduckgo",
+    }
+
+
+@router.put("/api/search/credential")
+async def save_search_credential(update: SearchCredentialUpdate):
+    secret = update.api_key.get_secret_value().strip()
+    if secret:
+        credential_store.set(SEARCH_CREDENTIAL_ID, secret)
+        search_service.credentials_changed()
+    return {
+        "provider": "tavily",
+        "configured": bool(credential_store.get(SEARCH_CREDENTIAL_ID)),
+    }
+
+
+@router.delete("/api/search/credential")
+async def delete_search_credential():
+    credential_store.delete(SEARCH_CREDENTIAL_ID)
+    search_service.credentials_changed()
+    return {"provider": "tavily", "configured": False}
 
 
 @router.post("/api/worldline/switch")

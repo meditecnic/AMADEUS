@@ -9,6 +9,9 @@ export interface SettingsModalProps {
   apiKey: string;
   credentialConfigured: boolean;
   credentialStatus?: CredentialStatus;
+  webSearchApiKey?: string;
+  webSearchConfigured?: boolean;
+  webSearchStatus?: CredentialStatus;
   systemPrompt: string;
   enableTts: boolean;
   sovitsUrl: string;
@@ -26,6 +29,7 @@ export interface SettingsModalProps {
   onSaveSettings: (settings: {
     worldline: 'steins_gate' | 'beta';
     apiKey: string;
+    webSearchApiKey: string;
     systemPrompt: string;
     enableTts: boolean;
     sovitsUrl: string;
@@ -38,6 +42,7 @@ export interface SettingsModalProps {
     model: string;
     reasoningEffort: 'high' | 'xhigh';
   }) => void | Promise<void>;
+  onClearWebSearchCredential?: () => void | Promise<void>;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -47,6 +52,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   apiKey,
   credentialConfigured,
   credentialStatus,
+  webSearchApiKey = '',
+  webSearchConfigured = false,
+  webSearchStatus,
   systemPrompt,
   enableTts,
   sovitsUrl,
@@ -62,10 +70,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   modelOptions,
   reasoningEffort,
   onSaveSettings,
+  onClearWebSearchCredential,
 }) => {
   const [activeTab, setActiveTab] = useState<'basic' | 'voice'>('basic');
   const [localWorldline, setLocalWorldline] = useState<'steins_gate' | 'beta'>(worldline);
   const [localApiKey, setLocalApiKey] = useState(apiKey);
+  const [localWebSearchApiKey, setLocalWebSearchApiKey] = useState(webSearchApiKey);
   const [localSystemPrompt, setLocalSystemPrompt] = useState(systemPrompt);
   const [localEnableTts, setLocalEnableTts] = useState(enableTts);
   const [localSovitsUrl, setLocalSovitsUrl] = useState(sovitsUrl);
@@ -77,14 +87,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   );
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [isClearingWebSearch, setIsClearingWebSearch] = useState(false);
   const displayCredentialStatus: CredentialStatus = credentialStatus
     ?? (isSaving ? 'saving' : credentialConfigured ? 'configured' : 'not_configured');
+  const displayWebSearchStatus: CredentialStatus = webSearchStatus
+    ?? (isSaving || isClearingWebSearch ? 'saving' : webSearchConfigured ? 'configured' : 'not_configured');
 
   useEffect(() => {
     if (isOpen) {
       setActiveTab('basic');
       setLocalWorldline(worldline);
       setLocalApiKey(apiKey);
+      setLocalWebSearchApiKey(webSearchApiKey);
       setSaveError(null);
       setLocalSystemPrompt(systemPrompt);
       setLocalEnableTts(enableTts);
@@ -94,7 +108,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setLocalModel(model);
       setLocalReasoningIdx(reasoningEffort === 'xhigh' ? 1 : 0);
     }
-  }, [isOpen, worldline, apiKey, systemPrompt, enableTts, sovitsUrl, temperature, providerBaseUrl, model, reasoningEffort]);
+  }, [isOpen, worldline, apiKey, webSearchApiKey, systemPrompt, enableTts, sovitsUrl, temperature, providerBaseUrl, model, reasoningEffort]);
 
   if (!isOpen) return null;
 
@@ -106,6 +120,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       await onSaveSettings({
         worldline: localWorldline,
         apiKey: localApiKey,
+        webSearchApiKey: localWebSearchApiKey,
         systemPrompt: localSystemPrompt,
         enableTts: localEnableTts,
         sovitsUrl: localSovitsUrl,
@@ -124,6 +139,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setSaveError(code);
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const handleClearWebSearchCredential = async () => {
+    if (!onClearWebSearchCredential || isClearingWebSearch) return;
+    setIsClearingWebSearch(true);
+    setSaveError(null);
+    try {
+      await onClearWebSearchCredential();
+      setLocalWebSearchApiKey('');
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'web_search_credential_clear_failed');
+    } finally {
+      setIsClearingWebSearch(false);
     }
   };
 
@@ -174,10 +203,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   {displayCredentialStatus === 'error' && '保存失败 · 请检查连接后重试'}
                 </p>
               </div>
+              <div className="setting-field field-full web-search-setting">
+                <label>联网搜索（Tavily）</label>
+                <input
+                  type="password"
+                  value={localWebSearchApiKey}
+                  onChange={(e) => setLocalWebSearchApiKey(e.target.value)}
+                  className="salieri-input"
+                  data-testid="web-search-credential-input"
+                  placeholder={displayWebSearchStatus === 'configured' ? '••••••••••••••••' : '输入 Tavily API 密钥'}
+                  autoComplete="new-password"
+                />
+                <p className={`credential-status ${displayWebSearchStatus.replace('_', '-')}`} data-testid="web-search-credential-status" aria-live="polite">
+                  {displayWebSearchStatus === 'checking' && '正在检查搜索凭据…'}
+                  {displayWebSearchStatus === 'configured' && '已配置 · 留空保存会保留现有密钥'}
+                  {displayWebSearchStatus === 'not_configured' && '未配置 · DuckDuckGo 免费回退可能不可用'}
+                  {displayWebSearchStatus === 'saving' && '正在保存…'}
+                  {displayWebSearchStatus === 'error' && '保存失败 · 请检查连接后重试'}
+                </p>
+                {webSearchConfigured && onClearWebSearchCredential && (
+                  <button
+                    type="button"
+                    className="salieri-btn cancel-btn"
+                    data-testid="clear-web-search-credential"
+                    onClick={() => { void handleClearWebSearchCredential(); }}
+                    disabled={isSaving || isClearingWebSearch}
+                  >
+                    清除 Tavily 密钥
+                  </button>
+                )}
+              </div>
               <div className="setting-field personality-field">
                 <label>个性</label>
-                <div className="slider-row">
-                  <span className="slider-endpoint">严谨</span>
+                <div className="slider-row personality-slider-row">
                   <input
                     data-testid="personality-range"
                     type="range"
@@ -186,11 +244,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     step="0.1"
                     value={localTemperature}
                     onChange={(e) => setLocalTemperature(parseFloat(e.target.value))}
-                    className="salieri-range"
+                    className="volume-slider personality-range"
+                    style={{ '--val': `${(localTemperature / 2) * 100}%` } as React.CSSProperties}
                     aria-label="个性"
                   />
-                  <span className="slider-endpoint">发散</span>
-                  <span className="slider-value" data-testid="personality-value">{localTemperature.toFixed(1)}</span>
+                  <span className="volume-label" data-testid="personality-value">{localTemperature.toFixed(1)}</span>
                 </div>
               </div>
               {baseUrlConfigurable && (

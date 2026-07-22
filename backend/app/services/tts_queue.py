@@ -42,7 +42,7 @@ def _build_emotion_ref_map():
     entries = [
         ("neutral", config.REF_AUDIO_NEUTRAL, "あなたに会いに来たの、岡部倫太郎さん。あ、じゃなくて…"),
         ("tsundere", config.REF_AUDIO_TSUNDERE, "別に、確信があって言ったわけじゃない。単に…"),
-        ("embarrassed", config.REF_AUDIO_EMBARRASSED, "私が言ったのは、親子で仲が良くて羨ましいなって…"),
+        ("embarrassed", config.REF_AUDIO_EMBARRASSED, "別に確信があって言ったわけじゃない。単に…"),
         ("intellectual", config.REF_AUDIO_INTELLECTUAL, "超重力による無限圧縮、およびカーブラックホール内の特異点通過に耐えられなかったと思われる。"),
         ("happy", config.REF_AUDIO_HAPPY, "大好きな鳳凰院凶真からお前は男だったと言われて…"),
         ("surprised", config.REF_AUDIO_SURPRISED, "そうなのかな… 携帯の電波なんて…"),

@@ -9,6 +9,7 @@ const baseProps = {
   worldline: 'steins_gate' as const,
   apiKey: '',
   credentialConfigured: true,
+  webSearchConfigured: true,
   systemPrompt: '',
   enableTts: true,
   sovitsUrl: 'http://127.0.0.1:9880',
@@ -31,16 +32,16 @@ afterEach(() => {
 });
 
 describe('SettingsModal UX contracts', () => {
-  it('renders the personality control as a direct themed range with endpoints', () => {
+  it('renders the personality control with the Sound Control slider style', () => {
     render(<SettingsModal {...baseProps} onSaveSettings={vi.fn()} />);
 
     const range = screen.getByTestId('personality-range');
     expect(range).toHaveAttribute('type', 'range');
-    expect(range.parentElement).toHaveClass('slider-row');
-    expect(range.closest('.salieri-range-shell')).toBeNull();
-    expect(screen.getByText('严谨')).toBeInTheDocument();
-    expect(screen.getByText('发散')).toBeInTheDocument();
+    expect(range).toHaveClass('volume-slider', 'personality-range');
+    expect(range.closest('.slider-row')).toHaveClass('personality-slider-row');
     expect(screen.getByTestId('personality-value')).toHaveTextContent('0.8');
+    expect(screen.queryByText('MIN')).toBeNull();
+    expect(screen.queryByText('MAX')).toBeNull();
   });
 
   it('keeps configured credentials empty and shows a masked placeholder', () => {
@@ -77,5 +78,46 @@ describe('SettingsModal UX contracts', () => {
 
     expect(screen.getByTestId('credential-status')).toHaveTextContent('保存失败');
     expect(screen.getByTestId('credential-input')).toHaveValue('');
+  });
+
+  it('renders Web Search credentials as an empty password input with a masked placeholder', () => {
+    render(<SettingsModal {...baseProps} onSaveSettings={vi.fn()} />);
+
+    const input = screen.getByTestId('web-search-credential-input') as HTMLInputElement;
+    expect(input.type).toBe('password');
+    expect(input.value).toBe('');
+    expect(input).toHaveAttribute('placeholder', '••••••••••••••••');
+    expect(screen.getByTestId('web-search-credential-status')).toHaveTextContent('已配置');
+  });
+
+  it('saves a Web Search key only through the save callback and shows loading during the request', async () => {
+    let resolveSave!: () => void;
+    const onSaveSettings = vi.fn(() => new Promise<void>((resolve) => { resolveSave = resolve; }));
+    render(<SettingsModal {...baseProps} onSaveSettings={onSaveSettings} />);
+
+    fireEvent.change(screen.getByTestId('web-search-credential-input'), { target: { value: 'tavily-secret' } });
+    fireEvent.click(screen.getByRole('button', { name: /保存/ }));
+
+    expect(screen.getByTestId('web-search-credential-status')).toHaveTextContent('正在保存');
+    expect(screen.getByRole('button', { name: /保存/ })).toBeDisabled();
+    expect(onSaveSettings).toHaveBeenCalledWith(expect.objectContaining({ webSearchApiKey: 'tavily-secret' }));
+    expect(window.localStorage.getItem('tavily-secret')).toBeNull();
+
+    resolveSave();
+    await waitFor(() => expect(baseProps.onClose).toHaveBeenCalled());
+  });
+
+  it('exposes a clear action for a configured Web Search credential', async () => {
+    const onClearWebSearchCredential = vi.fn().mockResolvedValue(undefined);
+    render(
+      <SettingsModal
+        {...baseProps}
+        onSaveSettings={vi.fn()}
+        onClearWebSearchCredential={onClearWebSearchCredential}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('clear-web-search-credential'));
+    await waitFor(() => expect(onClearWebSearchCredential).toHaveBeenCalledOnce());
   });
 });

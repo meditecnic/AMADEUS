@@ -27,7 +27,8 @@ describe('SoundPanel', () => {
 
     const sliders = document.querySelectorAll('.sound-panel-dropdown input[type="range"]');
     expect(sliders).toHaveLength(3);
-    expect(document.body.textContent).toContain('VOICE');
+    expect(document.body.textContent).toContain('语音 (VOICE)');
+    expect(document.body.textContent).not.toContain('語り声');
     expect(document.body.textContent).not.toContain('TTS');
 
     fireEvent.change(sliders[2], { target: { value: '40' } });

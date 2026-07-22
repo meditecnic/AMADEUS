@@ -138,6 +138,14 @@ async def test_tool_calls_integration_flow():
             
         async def get_chat_stream(self, active_history, tools=None, **kwargs):
             self.call_count += 1
+            if tools is None:
+                assert active_history[-1]["role"] == "system"
+                assert "WEB SEARCH RESULT" in active_history[-1]["content"]
+                yield {
+                    "content": "[EMO:neutral] ネットの気象データによれば、今日の秋葉原は晴れよ。",
+                    "tool_calls": None,
+                }
+                return
             if self.call_count == 1:
                 assert tools is not None
                 yield {
@@ -201,7 +209,7 @@ async def test_tool_calls_integration_flow():
         assert len(translations) == 1
         assert "今天秋叶原是晴天" in translations[0]["content"]
         
-        assert mock_ds.call_count == 2
+        assert mock_ds.call_count == 1
 
 
 @patch("httpx.get")

@@ -14,6 +14,41 @@ class DeepSeekTranslationError(RuntimeError):
         self.status_code = status_code
 
 
+def build_chat_payload(
+    *,
+    model: str,
+    messages: list[dict],
+    temperature: float | None,
+    tools: Optional[list],
+    tool_choice,
+    reasoning_effort: Optional[str],
+) -> dict:
+    """Build a DeepSeek request without combining V4 thinking and tool_choice."""
+    payload = {
+        "model": model,
+        "messages": messages,
+        "stream": True,
+        "temperature": temperature if temperature is not None else 0.7,
+    }
+
+    if model.startswith("deepseek-v4-") and tools is not None:
+        payload["thinking"] = {"type": "disabled"}
+    elif model == "deepseek-v4-pro":
+        # DeepSeek V4 rejects tool_choice while thinking is enabled. Tool
+        # routing is therefore a short non-thinking sub-request; the final
+        # answer runs without tools and restores the requested thinking mode.
+        payload["thinking"] = {"type": "enabled"}
+        if reasoning_effort:
+            payload["reasoning_effort"] = reasoning_effort
+
+    if tools is not None:
+        payload["tools"] = tools
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
+
+    return payload
+
+
 class DeepSeekService(LLMInterface):
     def __init__(self):
         self.api_key = ""
@@ -106,18 +141,15 @@ class DeepSeekService(LLMInterface):
             "Content-Type": "application/json"
         }
         
-        payload = {
-            "model": model or self.model,
-            "messages": messages,
-            "stream": True,
-            "temperature": temperature if temperature is not None else 0.7
-        }
-        
         effective_model = model or self.model
-        if effective_model == "deepseek-v4-pro":
-            payload["thinking"] = {"type": "enabled"}
-            if reasoning_effort:
-                payload["reasoning_effort"] = reasoning_effort
+        payload = build_chat_payload(
+            model=effective_model,
+            messages=messages,
+            temperature=temperature,
+            tools=tools,
+            tool_choice=tool_choice,
+            reasoning_effort=reasoning_effort,
+        )
         
         sys_content = messages[0]["content"] if messages else ""
         has_emo = "[EMO:" in sys_content
@@ -127,11 +159,6 @@ class DeepSeekService(LLMInterface):
             f"emotion_contract={has_emo} system_chars={len(sys_content)}",
             flush=True,
         )
-        
-        if tools is not None:
-            payload["tools"] = tools
-            if tool_choice:
-                payload["tool_choice"] = tool_choice
         
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=5.0, read=120.0, write=10.0, pool=5.0)) as client:
             async with client.stream("POST", f"{self.base_url}/chat/completions", json=payload, headers=headers) as response:

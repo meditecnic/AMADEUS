@@ -126,7 +126,7 @@ export const SoundPanel: React.FC<SoundPanelProps> = ({
 
           <div className="sound-setting-row">
             <label className="checkbox-label">
-              語り声 (VOICE)
+              语音 (VOICE)
             </label>
             <input
               type="range"

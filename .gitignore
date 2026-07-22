@@ -65,3 +65,5 @@ desktop/public/assets/audio/ref/*_crop_*.wav
 
 # Backup files
 *.bak
+# Local agent permission state; keep personal overrides out of version control.
+.claude/settings.local.json
