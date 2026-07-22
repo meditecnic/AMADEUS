@@ -50,6 +50,7 @@ desktop/public/assets/sliced/
 
 # Local recovery and generated review material
 .trash/
+.tmp/
 生成素材图/
 
 # Test-generated speech artifacts
