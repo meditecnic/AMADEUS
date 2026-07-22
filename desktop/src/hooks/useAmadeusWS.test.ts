@@ -187,6 +187,150 @@ describe('useAmadeusWS v2', () => {
     unmount();
   });
 
+  it('restores the pre-switch transcript after a correlated worldline switch error', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const onWorldlineSwitchError = vi.fn();
+    const { result, unmount } = renderHook(() => useAmadeusWS({
+      ...params,
+      onWorldlineSwitchError,
+    }));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => {
+      socket.onopen?.();
+      result.current.sendChat('保留这句');
+      socket.emit({ type: 'turn.started', conversation_id: 'c', turn_id: 't', generation: 2 });
+      socket.emit({
+        type: 'segment.ready', conversation_id: 'c', turn_id: 't', generation: 2,
+        segment_id: 0, ja: '旧世界线。', zh: '旧世界线。', emotion: 'neutral',
+      });
+    });
+    const beforeSwitch = result.current.messages.map((message) => ({
+      id: message.id,
+      role: message.role,
+      content: message.content,
+    }));
+    expect(beforeSwitch.length).toBeGreaterThan(0);
+
+    act(() => {
+      result.current.switchWorldline('beta');
+    });
+    const request = JSON.parse(socket.sent[socket.sent.length - 1]);
+    expect(result.current.messages).toEqual([]);
+
+    act(() => {
+      socket.emit({
+        type: 'worldline.switch_error',
+        request_id: request.request_id,
+        code: 'switch_failed',
+        message: 'target unavailable',
+      });
+    });
+
+    expect(result.current.messages.map((message) => ({
+      id: message.id,
+      role: message.role,
+      content: message.content,
+    }))).toEqual(beforeSwitch);
+    expect(onWorldlineSwitchError).toHaveBeenCalledWith({
+      worldline: 'beta',
+      code: 'switch_failed',
+      message: 'target unavailable',
+    });
+    unmount();
+  });
+
+  it('keeps an empty draft after a successful worldline ACK without restoring the snapshot', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const onWorldlineSwitched = vi.fn();
+    const { result, unmount } = renderHook(() => useAmadeusWS({
+      ...params,
+      onWorldlineSwitched,
+    }));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => {
+      socket.onopen?.();
+      result.current.sendChat('不应恢复');
+      socket.emit({ type: 'turn.started', conversation_id: 'c', turn_id: 't', generation: 1 });
+      socket.emit({
+        type: 'segment.ready', conversation_id: 'c', turn_id: 't', generation: 1,
+        segment_id: 0, ja: 'SG。', zh: 'SG。', emotion: 'neutral',
+      });
+      result.current.switchWorldline('beta');
+    });
+    const request = JSON.parse(socket.sent[socket.sent.length - 1]);
+    expect(result.current.messages).toEqual([]);
+
+    act(() => {
+      socket.emit({
+        type: 'worldline.switched',
+        request_id: request.request_id,
+        worldline: 'beta',
+        generation: 9,
+      });
+    });
+
+    expect(result.current.messages).toEqual([]);
+    expect(onWorldlineSwitched).toHaveBeenCalledWith({
+      worldline: 'beta',
+      generation: 9,
+    });
+    unmount();
+  });
+
+  it('ignores a late worldline switch_error from an older request id', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const onWorldlineSwitchError = vi.fn();
+    const { result, unmount } = renderHook(() => useAmadeusWS({
+      ...params,
+      onWorldlineSwitchError,
+    }));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => {
+      socket.onopen?.();
+      result.current.sendChat('第一批');
+      socket.emit({ type: 'turn.started', conversation_id: 'c', turn_id: 't1', generation: 1 });
+      socket.emit({
+        type: 'segment.ready', conversation_id: 'c', turn_id: 't1', generation: 1,
+        segment_id: 0, ja: '第一批。', zh: '第一批。', emotion: 'neutral',
+      });
+      result.current.switchWorldline('beta');
+    });
+    const firstRequest = JSON.parse(socket.sent[socket.sent.length - 1]);
+
+    act(() => {
+      result.current.switchWorldline('steins_gate');
+    });
+    const secondRequest = JSON.parse(socket.sent[socket.sent.length - 1]);
+    expect(secondRequest.request_id).not.toBe(firstRequest.request_id);
+    expect(result.current.messages).toEqual([]);
+
+    act(() => {
+      socket.emit({
+        type: 'worldline.switch_error',
+        request_id: firstRequest.request_id,
+        code: 'stale_switch',
+        message: 'late old error',
+      });
+    });
+
+    expect(result.current.messages).toEqual([]);
+    expect(onWorldlineSwitchError).not.toHaveBeenCalled();
+
+    act(() => {
+      socket.emit({
+        type: 'worldline.switched',
+        request_id: secondRequest.request_id,
+        worldline: 'steins_gate',
+        generation: 3,
+      });
+    });
+    expect(result.current.messages).toEqual([]);
+    unmount();
+  });
+
   it('reports the materialized conversation from turn.started', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const onTurnStarted = vi.fn();

@@ -111,6 +111,8 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   const [activeTool, setActiveTool] = useState<string | null>(null);
   const [activeNotice, setActiveNotice] = useState<string | null>(null);
   const [emotion, setEmotion] = useState<UseAmadeusWSReturn['emotion']>('neutral');
+  const messagesRef = useRef<Message[]>([]);
+  messagesRef.current = messages;
 
   const ALLOWED_EMOTIONS: ReadonlySet<string> = new Set([
     'neutral', 'tsundere', 'embarrassed', 'intellectual',
@@ -128,6 +130,8 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   const pendingWorldlineSwitchRef = useRef<{
     requestId: string;
     worldline: 'steins_gate' | 'beta';
+    /** Pre-switch transcript for one pending switch; discarded on ACK, restored on correlated error. */
+    transcriptSnapshot: Message[];
   } | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -322,6 +326,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
           case 'worldline.switched': {
             const pending = pendingWorldlineSwitchRef.current;
             if (!pending || msg.request_id !== pending.requestId) break;
+            // Discard snapshot: successful switch keeps the target draft empty.
             pendingWorldlineSwitchRef.current = null;
             activeConversationIdRef.current = null;
             activeTurnIdRef.current = '';
@@ -339,6 +344,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             const pending = pendingWorldlineSwitchRef.current;
             if (!pending || msg.request_id !== pending.requestId) break;
             pendingWorldlineSwitchRef.current = null;
+            setMessages(pending.transcriptSnapshot);
             paramsRef.current.onWorldlineSwitchError?.({
               worldline: pending.worldline,
               code: msg.code || 'switch_failed',
@@ -630,11 +636,19 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
         pendingConversationSwitchRef.current = null;
       }
       if (pendingWorldlineSwitchRef.current) {
+        const pending = pendingWorldlineSwitchRef.current;
+        pendingWorldlineSwitchRef.current = null;
+        setMessages(pending.transcriptSnapshot.map((message) => (
+          message.streaming ? { ...message, streaming: false } : message
+        )));
         paramsRef.current.onWorldlineSwitchError?.({
-          worldline: pendingWorldlineSwitchRef.current.worldline,
+          worldline: pending.worldline,
           code: 'connection_closed',
         });
-        pendingWorldlineSwitchRef.current = null;
+      } else {
+        setMessages((prev) => prev.map((message) =>
+          message.streaming ? { ...message, streaming: false } : message
+        ));
       }
       setStatus('CLOSED');
       setActiveTool(null);
@@ -642,9 +656,6 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       setIsThinking(false);
       setIsSynthesizing(false);
       voiceStoppedRef.current = false;
-      setMessages((prev) => prev.map((message) =>
-        message.streaming ? { ...message, streaming: false } : message
-      ));
 
       // Attempt automatic reconnection up to 5 times
       if (reconnectCountRef.current < 5) {
@@ -776,11 +787,24 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     activeConversationIdRef.current = null;
     voiceStoppedRef.current = true;
     pendingConversationSwitchRef.current = null;
-    pendingWorldlineSwitchRef.current = { requestId, worldline };
     setIsThinking(false);
     setIsSynthesizing(false);
-    setMessages([]);
     setEmotion('neutral');
+    // Snapshot then clear immediately so the target worldline UI never shows foreign transcript.
+    // Capture synchronously (messagesRef) so pending is set before the switch frame is sent.
+    // If a prior pending switch left messages empty, inherit its snapshot for the newest request.
+    const cloneMessages = (rows: Message[]) => rows.map((message) => ({
+      ...message,
+      segments: message.segments ? message.segments.map((segment) => ({ ...segment })) : message.segments,
+    }));
+    const current = messagesRef.current;
+    const inherited = pendingWorldlineSwitchRef.current?.transcriptSnapshot;
+    const transcriptSnapshot = current.length > 0
+      ? cloneMessages(current)
+      : (inherited ? cloneMessages(inherited) : []);
+    pendingWorldlineSwitchRef.current = { requestId, worldline, transcriptSnapshot };
+    setMessages([]);
+    messagesRef.current = [];
     wsRef.current.send(JSON.stringify({
       type: 'worldline.switch',
       request_id: requestId,
