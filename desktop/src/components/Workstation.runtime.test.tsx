@@ -1,5 +1,5 @@
-import { act, fireEvent, render, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Workstation } from './Workstation';
 
@@ -73,6 +73,10 @@ vi.mock('./ForgetConversationModal', () => ({ ForgetConversationModal: () => nul
 
 
 describe('Workstation provider runtime changes', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   beforeEach(() => {
     localStorage.clear();
     wsSpies.reconnect.mockClear();
@@ -80,7 +84,7 @@ describe('Workstation provider runtime changes', () => {
     wsSpies.switchWorldline.mockClear();
     wsSpies.switchConversation.mockReturnValue(true);
     wsSpies.switchWorldline.mockReturnValue(true);
-    wsSpies.useAmadeusWS.mockClear();
+    wsSpies.useAmadeusWS.mockReset();
 
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -120,6 +124,13 @@ describe('Workstation provider runtime changes', () => {
           ok: true,
           status: 200,
           json: async () => ({ ...conversation, provider_id: 'custom', model_id: 'local-model' }),
+        } as Response;
+      }
+      if (url === '/api/search/settings') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ provider: 'tavily', configured: false, fallback: 'duckduckgo' }),
         } as Response;
       }
       throw new Error(`unexpected fetch: ${url}`);
@@ -285,5 +296,135 @@ describe('Workstation provider runtime changes', () => {
 
     expect(sendChat).toHaveBeenCalledWith('新消息');
     expect(viewport.scrollTop).toBe(900);
+  });
+});
+
+
+function mockStreamingAssistant(overrides: {
+  isThinking?: boolean;
+  isSynthesizing?: boolean;
+  activeTool?: string | null;
+  activeNotice?: string | null;
+  streaming?: boolean;
+} = {}) {
+  const {
+    isThinking = false,
+    isSynthesizing = false,
+    activeTool = null,
+    activeNotice = null,
+    streaming = true,
+  } = overrides;
+  // Return a concrete value so the module mock's `override || default` path uses it.
+  wsSpies.useAmadeusWS.mockReturnValue({
+    status: 'READY',
+    messages: [{
+      id: 'assist_turn',
+      role: 'assistant',
+      content: streaming ? '' : '完了。',
+      translation: streaming ? '' : '完成。',
+      streaming,
+      segments: [],
+    }],
+    isThinking,
+    isSynthesizing,
+    activeTool,
+    activeNotice,
+    emotion: 'neutral',
+    sendChat: vi.fn(),
+    stopVoice: vi.fn(),
+    cancelTurn: vi.fn(),
+    sendDebugTts: vi.fn(),
+    updateConfig: vi.fn(),
+    reconnect: wsSpies.reconnect,
+    switchConversation: wsSpies.switchConversation,
+    switchWorldline: wsSpies.switchWorldline,
+    wsRef: { current: null },
+  });
+}
+
+
+describe('Workstation Q14 activity operation labels', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  beforeEach(() => {
+    localStorage.clear();
+    wsSpies.reconnect.mockClear();
+    wsSpies.switchConversation.mockClear();
+    wsSpies.switchWorldline.mockClear();
+    wsSpies.switchConversation.mockReturnValue(true);
+    wsSpies.switchWorldline.mockReturnValue(true);
+    wsSpies.useAmadeusWS.mockReset();
+
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/providers') {
+        return { ok: true, status: 200, json: async () => [] } as Response;
+      }
+      if (url.startsWith('/api/conversations?')) {
+        return { ok: true, status: 200, json: async () => [] } as Response;
+      }
+      if (url === '/api/search/settings') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ provider: 'tavily', configured: false, fallback: 'duckduckgo' }),
+        } as Response;
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+  });
+
+  it('renders Title Case Web Search when activeTool is web_search', async () => {
+    mockStreamingAssistant({ isThinking: true, activeTool: 'web_search' });
+    const { getByTestId, queryByText } = render(
+      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(getByTestId('activity-operation-label')).toHaveTextContent('Web Search');
+    });
+    expect(queryByText(/^Thinking/)).toBeNull();
+  });
+
+  it('falls back to Thinking when there is no activeTool', async () => {
+    mockStreamingAssistant({ isThinking: true, activeTool: null });
+    const { getByTestId } = render(
+      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(getByTestId('activity-operation-label')).toHaveTextContent('Thinking');
+    });
+  });
+
+  it('keeps the synthesizing voice label when synthesizing without thinking', async () => {
+    mockStreamingAssistant({ isThinking: false, isSynthesizing: true, activeTool: null });
+    const { getAllByText, queryByTestId } = render(
+      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(getAllByText('正在合成语音…').length).toBeGreaterThan(0);
+    });
+    expect(queryByTestId('activity-operation-label')).toBeNull();
+  });
+
+  it('hides the activity label after the turn is no longer streaming', async () => {
+    mockStreamingAssistant({
+      isThinking: false,
+      isSynthesizing: false,
+      activeTool: null,
+      streaming: false,
+    });
+    const { queryByTestId, queryAllByText } = render(
+      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(queryByTestId('activity-operation-label')).toBeNull();
+      expect(queryAllByText('正在合成语音…')).toHaveLength(0);
+    });
   });
 });

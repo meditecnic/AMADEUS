@@ -30,6 +30,13 @@ interface WorkstationProps {
   onLogout: () => void;
 }
 
+/** Q14: map known tool ids to Title Case labels; never render raw unknown tool names. */
+function activityOperationLabel(activeTool: string | null | undefined): string | null {
+  if (!activeTool) return null;
+  if (activeTool === 'web_search') return 'Web Search';
+  return null;
+}
+
 export const Workstation: React.FC<WorkstationProps> = ({
   worldline,
   onWorldlineChange,
@@ -169,6 +176,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
     messages,
     isThinking,
     isSynthesizing,
+    activeTool,
+    activeNotice,
     emotion,
     sendChat,
     stopVoice,
@@ -447,6 +456,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
         : status === 'ERROR'
           ? '> 暂时无法连接，请检查后端服务与 API Key。'
           : '> Amadeus 系统连接已建立。等待用户输入...';
+
+  // Q14 single activity surface: known tools override Thinking; unknown tools fall back.
+  // Raw activeNotice strings are never used as visible labels.
+  const operationLabel = activityOperationLabel(activeTool) ?? (isThinking ? 'Thinking' : null);
+  const activityBusy = Boolean(operationLabel || activeNotice);
 
   const [glitchState, setGlitchState] = useState<'none' | 'light' | 'heavy'>('none');
 
@@ -1019,8 +1033,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
                                 fallbackJa={msg.content}
                                 fallbackZh={msg.translation}
                               />
-                            {msg.streaming && isThinking && (
-                              <div className="thinking-indicator-inline">
+                            {msg.streaming && isThinking && operationLabel && (
+                              <div className="thinking-indicator-inline" aria-busy={activityBusy}>
                                 <SpriteAnimator
                                   spriteSrc={worldline === 'steins_gate' ? '/assets/ui/spinner_sg_20f.png' : '/assets/ui/spinner_beta_20f.png'}
                                   cols={10}
@@ -1032,8 +1046,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
                                   fps={15}
                                   loop={true}
                                 />
-                                <span className="thinking-text-glow">
-                                  Thinking<span className="thinking-cursor-blink">▌</span>
+                                <span
+                                  className="thinking-text-glow"
+                                  data-testid="activity-operation-label"
+                                >
+                                  {operationLabel}<span className="thinking-cursor-blink">▌</span>
                                 </span>
                               </div>
                             )}
