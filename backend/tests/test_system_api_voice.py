@@ -23,8 +23,37 @@ def test_worldline_memory_and_dependency_apis(tmp_path, monkeypatch):
         memory = client.get("/api/memory/status", params={"session_id": "okabe", "worldline": "beta"}).json()
         assert memory["episodic_count"] == 0
         dependencies = client.get("/health/dependencies").json()
-        assert dependencies["status"] == "ready"
+        expected_status = (
+            "ready" if dependencies["dependencies"]["tts"].get("ok") else "degraded"
+        )
+        assert dependencies["status"] == expected_status
         assert dependencies["dependencies"]["database"]["ok"] is True
+
+
+def test_dependency_health_is_degraded_when_tts_is_explicitly_unavailable(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("AMADEUS_DATA_DIR", str(tmp_path))
+    reset_initialization_cache()
+    from app.services.tts_sidecar import sidecar_supervisor
+
+    async def unavailable_tts():
+        return {
+            "ok": False,
+            "status": "degraded",
+            "url": None,
+            "managed": False,
+            "error": "no endpoint",
+        }
+
+    monkeypatch.setattr(sidecar_supervisor, "health", unavailable_tts)
+    with TestClient(app) as client:
+        dependencies = client.get("/health/dependencies").json()
+
+    assert dependencies["status"] == "degraded"
+    assert dependencies["dependencies"]["database"]["ok"] is True
+    assert dependencies["dependencies"]["soul"]["ok"] is True
 
 
 def test_voice_manual_commit_bypasses_vad_wait(tmp_path, monkeypatch):

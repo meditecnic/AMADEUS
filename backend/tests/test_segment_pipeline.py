@@ -5,11 +5,13 @@ import asyncio
 import pytest
 
 from app.domain.segments import (
+    AudioErrorCode,
     IncrementalJapaneseSegmenter,
     Segment,
     SegmentPipeline,
     TransientSegmentError,
     TurnIdentity,
+    prepare_tts_text,
 )
 
 
@@ -29,6 +31,52 @@ def test_incremental_segmenter_flushes_unpunctuated_tail_once():
     assert splitter.finish() == []
 
 
+def test_short_fragment_merges_before_id_and_keeps_creation_emotion():
+    splitter = IncrementalJapaneseSegmenter()
+
+    assert splitter.feed("て。", emotion="embarrassed") == []
+    assert splitter.feed("違うんだからね！", emotion="neutral") == [
+        Segment(0, "て。違うんだからね！", "embarrassed")
+    ]
+
+
+def test_tts_preparation_classifies_empty_action_and_too_short():
+    assert prepare_tts_text("   ").error is AudioErrorCode.EMPTY_TEXT
+    assert prepare_tts_text("（ため息）").error is AudioErrorCode.ACTION_ONLY
+    assert prepare_tts_text("て。").error is AudioErrorCode.TOO_SHORT
+    prepared = prepare_tts_text("（ため息）違うわよ。")
+    assert prepared.text == "違うわよ。"
+    assert prepared.error is None
+
+
+@pytest.mark.asyncio
+async def test_segment_pipeline_uses_each_segment_emotion_snapshot():
+    events = []
+    synthesized = []
+
+    async def translate(text):
+        return f"zh:{text}"
+
+    async def synthesize(text, emotion):
+        synthesized.append((text, emotion))
+        return b"audio"
+
+    pipeline = SegmentPipeline(
+        TurnIdentity("conversation", "turn", 1),
+        emit=events.append,
+        translate=translate,
+        synthesize=synthesize,
+    )
+    await pipeline.run([
+        Segment(0, "一。", "embarrassed"),
+        Segment(1, "二。", "annoyed"),
+    ])
+
+    assert synthesized == [("一。", "embarrassed"), ("二。", "annoyed")]
+    ready = [event for event in events if event["type"] == "segment.ready"]
+    assert [event["emotion"] for event in ready] == ["embarrassed", "annoyed"]
+
+
 @pytest.mark.asyncio
 async def test_segment_pipeline_emits_in_order_despite_out_of_order_completion():
     events = []
@@ -37,7 +85,7 @@ async def test_segment_pipeline_emits_in_order_despite_out_of_order_completion()
         await asyncio.sleep(0.03 if text == "一。" else 0)
         return f"zh:{text}"
 
-    async def synthesize(text):
+    async def synthesize(text, _emotion):
         await asyncio.sleep(0.03 if text == "二。" else 0)
         return f"audio:{text}".encode()
 
@@ -62,7 +110,7 @@ async def test_segment_pipeline_exposes_committed_translation_for_history():
     async def translate(text: str) -> str:
         return f"中:{text}"
 
-    async def synthesize(_text: str) -> bytes:
+    async def synthesize(_text: str, _emotion: str) -> bytes:
         return b"audio"
 
     pipeline = SegmentPipeline(
@@ -84,7 +132,7 @@ async def test_transient_tts_retries_once_and_one_failure_does_not_block_later_s
     async def translate(text):
         return f"zh:{text}"
 
-    async def synthesize(text):
+    async def synthesize(text, _emotion):
         attempts[text] = attempts.get(text, 0) + 1
         if text == "retry。" and attempts[text] == 1:
             raise TransientSegmentError("temporary")
@@ -119,7 +167,7 @@ async def test_translation_retries_transient_failure_and_keeps_error_code_stable
             raise TransientSegmentError("upstream temporarily unavailable")
         return "translated"
 
-    async def synthesize(_text):
+    async def synthesize(_text, _emotion):
         return b"audio"
 
     pipeline = SegmentPipeline(
@@ -153,7 +201,7 @@ async def test_translation_retries_retryable_provider_status():
             raise ProviderError("upstream unavailable")
         return "recovered"
 
-    async def synthesize(_text):
+    async def synthesize(_text, _emotion):
         return b"audio"
 
     pipeline = SegmentPipeline(
@@ -179,7 +227,7 @@ async def test_translation_timeout_degrades_without_exposing_provider_exception(
         await asyncio.sleep(1)
         return "late"
 
-    async def synthesize(_text):
+    async def synthesize(_text, _emotion):
         return b"audio"
 
     pipeline = SegmentPipeline(
@@ -195,6 +243,7 @@ async def test_translation_timeout_degrades_without_exposing_provider_exception(
     ready = next(event for event in events if event["type"] == "segment.ready")
     assert ready["zh"] == ""
     assert ready["translation_error"] == "translation_timeout"
+    assert pipeline.has_translation_errors is True
     assert "late" not in str(ready)
     assert any(event["type"] == "segment.audio" for event in events)
 
@@ -207,7 +256,7 @@ async def test_voice_stop_keeps_text_but_invalidates_audio_results():
     async def translate(text):
         return f"zh:{text}"
 
-    async def synthesize(text):
+    async def synthesize(text, _emotion):
         tts_started.set()
         await asyncio.sleep(60)
         return b"late"
@@ -242,7 +291,7 @@ async def test_turn_cancel_drops_late_events_and_never_completes():
         await asyncio.sleep(60)
         return "late translation"
 
-    async def synthesize(text):
+    async def synthesize(text, _emotion):
         await asyncio.sleep(60)
         return b"late audio"
 

@@ -96,3 +96,48 @@ async def test_switch_cancels_active_task_before_revision_change(isolated_store)
     assert session.active_task is None
     assert session.worldline == "beta"
     assert session.revision == 2
+
+
+@pytest.mark.asyncio
+async def test_failed_worldline_load_restores_runtime_and_persisted_mapping(isolated_store):
+    class FakeSession:
+        def __init__(self):
+            self.session_id = "rollback-user"
+            self.worldline = "steins_gate"
+            self.revision = 4
+            self.current_epoch = 4
+            self.history_epoch = 2
+            self.history = [{"role": "user", "content": "old"}]
+            self.memory_summary = "old summary"
+            self.conversation_id = "sg-conversation"
+            self.conversation_mode = "history"
+            self.provider_id = "deepseek"
+            self.model = "deepseek-v4-flash"
+            self.api_key = ""
+            self.last_assistant_emotion = "neutral"
+            self.consecutive_no_emo_tags = 0
+            self.active_streams = set()
+            self.active_task = None
+            self.is_busy = False
+
+        async def enter_draft(self):
+            self.provider_id = "kimi"
+            raise RuntimeError("target database unavailable")
+
+    session = FakeSession()
+    await session_coordinator.persist_current(
+        session.session_id,
+        session.worldline,
+        session.revision,
+    )
+
+    with pytest.raises(RuntimeError, match="target database unavailable"):
+        await session_coordinator.switch(session, "beta", conversation_mode="draft")
+
+    assert session.worldline == "steins_gate"
+    assert session.conversation_id == "sg-conversation"
+    assert session.history == [{"role": "user", "content": "old"}]
+    assert session.memory_summary == "old summary"
+    assert session.provider_id == "deepseek"
+    assert session.revision == 5
+    assert await session_coordinator.get_current(session.session_id) == ("steins_gate", 5)

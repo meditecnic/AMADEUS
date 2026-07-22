@@ -1,11 +1,14 @@
 import React, { useState, useEffect } from 'react';
 
+export type CredentialStatus = 'checking' | 'configured' | 'not_configured' | 'saving' | 'error';
+
 export interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   worldline: 'steins_gate' | 'beta';
   apiKey: string;
   credentialConfigured: boolean;
+  credentialStatus?: CredentialStatus;
   systemPrompt: string;
   enableTts: boolean;
   sovitsUrl: string;
@@ -43,6 +46,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   worldline,
   apiKey,
   credentialConfigured,
+  credentialStatus,
   systemPrompt,
   enableTts,
   sovitsUrl,
@@ -73,6 +77,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   );
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const displayCredentialStatus: CredentialStatus = credentialStatus
+    ?? (isSaving ? 'saving' : credentialConfigured ? 'configured' : 'not_configured');
 
   useEffect(() => {
     if (isOpen) {
@@ -152,25 +158,39 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   value={localApiKey}
                   onChange={(e) => setLocalApiKey(e.target.value)}
                   className="salieri-input"
-                  placeholder={credentialConfigured ? '••••••••' : '输入后仅在本机安全存储'}
+                  data-testid="credential-input"
+                  placeholder={displayCredentialStatus === 'configured' ? '••••••••' : '输入后仅在本机安全存储'}
                   autoComplete="new-password"
                 />
-                <p className={`credential-status ${credentialConfigured ? 'configured' : 'not-configured'}`}>
-                  {credentialConfigured
-                    ? '已配置 · 留空保存可保持当前密钥不变'
-                    : '尚未配置 · 保存后不会在页面回显密钥'}
+                <p
+                  className={`credential-status ${displayCredentialStatus.replace('_', '-')}`}
+                  data-testid="credential-status"
+                  aria-live="polite"
+                >
+                  {displayCredentialStatus === 'checking' && '正在读取凭据状态…'}
+                  {displayCredentialStatus === 'configured' && '已配置 · 留空保存可保持当前密钥不变'}
+                  {displayCredentialStatus === 'not_configured' && '尚未配置 · 保存后不会在页面回显密钥'}
+                  {displayCredentialStatus === 'saving' && '保存中…'}
+                  {displayCredentialStatus === 'error' && '保存失败 · 请检查连接后重试'}
                 </p>
               </div>
               <div className="setting-field personality-field">
                 <label>个性</label>
                 <div className="slider-row">
-                  <div className="salieri-range-shell" style={{ '--val': `${(localTemperature / 2) * 100}%` } as React.CSSProperties}>
-                    <span className="salieri-range-fill" aria-hidden="true" />
-                    <input type="range" min="0" max="2" step="0.1" value={localTemperature}
-                      onChange={(e) => setLocalTemperature(parseFloat(e.target.value))} className="salieri-range"
-                      aria-label="个性" />
-                  </div>
-                  <span className="slider-value">{localTemperature.toFixed(1)}</span>
+                  <span className="slider-endpoint">严谨</span>
+                  <input
+                    data-testid="personality-range"
+                    type="range"
+                    min="0"
+                    max="2"
+                    step="0.1"
+                    value={localTemperature}
+                    onChange={(e) => setLocalTemperature(parseFloat(e.target.value))}
+                    className="salieri-range"
+                    aria-label="个性"
+                  />
+                  <span className="slider-endpoint">发散</span>
+                  <span className="slider-value" data-testid="personality-value">{localTemperature.toFixed(1)}</span>
                 </div>
               </div>
               {baseUrlConfigurable && (

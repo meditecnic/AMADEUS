@@ -8,11 +8,37 @@ export interface UseAmadeusWSParams {
   worldline: 'steins_gate' | 'beta';
   enableTts: boolean;
   sovitsUrl: string;
+  providerId?: string;
   model: string;
   reasoningEffort: 'high' | 'xhigh';
   onAudioChunk?: (sentenceId: number, base64Data: string) => void;
   onAudioDegraded?: (reason: string) => void;
-  onTurnStarted?: () => void;
+  onSessionReady?: (details: {
+    conversationMode?: 'draft' | 'history';
+    conversationId?: string | null;
+    worldline?: 'steins_gate' | 'beta';
+    generation?: number;
+  }) => void;
+  onConversationSwitched?: (details: {
+    conversationId: string;
+    worldline?: 'steins_gate' | 'beta';
+    generation?: number;
+  }) => void;
+  onConversationSwitchError?: (details: {
+    conversationId: string;
+    code: string;
+    message?: string;
+  }) => void;
+  onWorldlineSwitched?: (details: {
+    worldline: 'steins_gate' | 'beta';
+    generation?: number;
+  }) => void;
+  onWorldlineSwitchError?: (details: {
+    worldline: 'steins_gate' | 'beta';
+    code: string;
+    message?: string;
+  }) => void;
+  onTurnStarted?: (conversationId?: string | null) => void;
   onTurnCompleted?: () => void;
 }
 
@@ -45,8 +71,16 @@ export interface UseAmadeusWSReturn {
   sendDebugTts: (emotion: string, text: string) => void;
   updateConfig: (patch: Partial<Omit<UseAmadeusWSParams, 'onAudioChunk'>>) => void;
   reconnect: () => void;
-  switchConversation: (conversationId: string, history: Message[]) => void;
+  switchConversation: (conversationId: string, history: Message[]) => boolean;
+  switchWorldline: (worldline: 'steins_gate' | 'beta') => boolean;
   wsRef: React.MutableRefObject<WebSocket | null>;
+}
+
+function createRequestId(prefix: string): string {
+  const suffix = typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  return `${prefix}-${suffix}`;
 }
 
 export function getOrCreateAmadeusSessionId(): string {
@@ -85,6 +119,16 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   const lastSentenceIdRef = useRef<number>(-1);
   const activeTurnIdRef = useRef<string>('');
   const activeGenerationRef = useRef<number>(-1);
+  const activeConversationIdRef = useRef<string | null>(params.conversationId || null);
+  const pendingConversationSwitchRef = useRef<{
+    requestId: string;
+    conversationId: string;
+    history: Message[];
+  } | null>(null);
+  const pendingWorldlineSwitchRef = useRef<{
+    requestId: string;
+    worldline: 'steins_gate' | 'beta';
+  } | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const paramsRef = useRef<UseAmadeusWSParams>(params);
@@ -156,6 +200,23 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     setIsThinking(false);
     setIsSynthesizing(false);
     voiceStoppedRef.current = false;
+    activeTurnIdRef.current = '';
+    activeGenerationRef.current = -1;
+    activeConversationIdRef.current = null;
+    if (pendingConversationSwitchRef.current) {
+      paramsRef.current.onConversationSwitchError?.({
+        conversationId: pendingConversationSwitchRef.current.conversationId,
+        code: 'connection_closed',
+      });
+    }
+    if (pendingWorldlineSwitchRef.current) {
+      paramsRef.current.onWorldlineSwitchError?.({
+        worldline: pendingWorldlineSwitchRef.current.worldline,
+        code: 'connection_closed',
+      });
+    }
+    pendingConversationSwitchRef.current = null;
+    pendingWorldlineSwitchRef.current = null;
     setActiveTool(null);
     setActiveNotice(null);
     setMessages((prev) => prev.map((message) =>
@@ -182,10 +243,15 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       setStatus('READY');
 
       // Send auth frame immediately as first frame
+      const conversationId = paramsRef.current.conversationId || null;
       const authFrame = {
         type: 'auth',
-        conversation_id: paramsRef.current.conversationId || undefined,
+        ...(conversationId
+          ? { conversation_id: conversationId, conversation_mode: 'history' as const }
+          : { conversation_mode: 'draft' as const }),
         sovits_url: paramsRef.current.sovitsUrl,
+        provider_id: paramsRef.current.providerId || 'deepseek',
+        model: paramsRef.current.model,
         system_prompt: paramsRef.current.systemPrompt,
         enable_tts: paramsRef.current.enableTts,
         temperature: paramsRef.current.temperature,
@@ -206,10 +272,88 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
         const msg = JSON.parse(event.data);
         
         switch (msg.type) {
+          case 'session.ready':
+            if (msg.conversation_mode === 'draft') {
+              activeConversationIdRef.current = null;
+            } else if (msg.conversation_id) {
+              activeConversationIdRef.current = msg.conversation_id;
+            }
+            paramsRef.current.onSessionReady?.({
+              conversationMode: msg.conversation_mode,
+              conversationId: msg.conversation_id || null,
+              worldline: msg.worldline,
+              generation: msg.generation,
+            });
+            break;
+
+          case 'conversation.switched': {
+            const pending = pendingConversationSwitchRef.current;
+            if (
+              !pending ||
+              msg.request_id !== pending.requestId ||
+              msg.conversation_id !== pending.conversationId
+            ) break;
+            pendingConversationSwitchRef.current = null;
+            activeConversationIdRef.current = pending.conversationId;
+            if (typeof msg.generation === 'number') {
+              activeGenerationRef.current = msg.generation;
+            }
+            setMessages(pending.history);
+            paramsRef.current.onConversationSwitched?.({
+              conversationId: pending.conversationId,
+              worldline: msg.worldline,
+              generation: msg.generation,
+            });
+            break;
+          }
+
+          case 'conversation.switch_error': {
+            const pending = pendingConversationSwitchRef.current;
+            if (!pending || msg.request_id !== pending.requestId) break;
+            pendingConversationSwitchRef.current = null;
+            paramsRef.current.onConversationSwitchError?.({
+              conversationId: pending.conversationId,
+              code: msg.code || 'switch_failed',
+              message: msg.message,
+            });
+            break;
+          }
+
+          case 'worldline.switched': {
+            const pending = pendingWorldlineSwitchRef.current;
+            if (!pending || msg.request_id !== pending.requestId) break;
+            pendingWorldlineSwitchRef.current = null;
+            activeConversationIdRef.current = null;
+            activeTurnIdRef.current = '';
+            activeGenerationRef.current = -1;
+            setMessages([]);
+            setEmotion('neutral');
+            paramsRef.current.onWorldlineSwitched?.({
+              worldline: pending.worldline,
+              generation: msg.generation,
+            });
+            break;
+          }
+
+          case 'worldline.switch_error': {
+            const pending = pendingWorldlineSwitchRef.current;
+            if (!pending || msg.request_id !== pending.requestId) break;
+            pendingWorldlineSwitchRef.current = null;
+            paramsRef.current.onWorldlineSwitchError?.({
+              worldline: pending.worldline,
+              code: msg.code || 'switch_failed',
+              message: msg.message,
+            });
+            break;
+          }
+
           case 'turn.started':
             clearWatchdog();
             startWatchdog();
-            paramsRef.current.onTurnStarted?.();
+            if (msg.conversation_id) {
+              activeConversationIdRef.current = msg.conversation_id;
+            }
+            paramsRef.current.onTurnStarted?.(msg.conversation_id || null);
             activeTurnIdRef.current = msg.turn_id;
             activeGenerationRef.current = msg.generation;
             activeAssistantMessageId = `assist_${msg.turn_id}`;
@@ -289,6 +433,26 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
               if (msg.reason === 'user_disabled') setIsSynthesizing(false);
               paramsRef.current.onAudioDegraded?.(msg.reason || 'unknown');
             }
+            break;
+
+          case 'turn.translation_repaired':
+            if (
+              msg.turn_id !== activeTurnIdRef.current ||
+              msg.generation !== activeGenerationRef.current
+            ) break;
+            setMessages((prev) => prev.map((message) => {
+              if (message.id !== activeAssistantMessageId) return message;
+              const segments = (message.segments || []).map((segment, index) => ({
+                ...segment,
+                zh: index === 0 ? (msg.content || '') : '',
+                translationError: undefined,
+              }));
+              return {
+                ...message,
+                translation: msg.content || '',
+                segments,
+              };
+            }));
             break;
 
           case 'turn.completed':
@@ -455,6 +619,22 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       stopHeartbeat();
       clearWatchdog();
       wsRef.current = null;
+      activeTurnIdRef.current = '';
+      activeGenerationRef.current = -1;
+      if (pendingConversationSwitchRef.current) {
+        paramsRef.current.onConversationSwitchError?.({
+          conversationId: pendingConversationSwitchRef.current.conversationId,
+          code: 'connection_closed',
+        });
+        pendingConversationSwitchRef.current = null;
+      }
+      if (pendingWorldlineSwitchRef.current) {
+        paramsRef.current.onWorldlineSwitchError?.({
+          worldline: pendingWorldlineSwitchRef.current.worldline,
+          code: 'connection_closed',
+        });
+        pendingWorldlineSwitchRef.current = null;
+      }
       setStatus('CLOSED');
       setActiveTool(null);
       setActiveNotice(null);
@@ -514,6 +694,8 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     setIsThinking(false);
     setIsSynthesizing(false);
     voiceStoppedRef.current = true;
+    activeTurnIdRef.current = '';
+    activeGenerationRef.current = -1;
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     wsRef.current.send(JSON.stringify({ type: 'turn.cancel' }));
   }, []);
@@ -550,18 +732,61 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   }, []);
 
   const switchConversation = useCallback((conversationId: string, history: Message[]) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      paramsRef.current.onConversationSwitchError?.({
+        conversationId,
+        code: 'socket_not_ready',
+      });
+      return false;
+    }
+    const requestId = createRequestId('conversation-switch');
     clearWatchdog();
     activeTurnIdRef.current = '';
     activeGenerationRef.current = -1;
     voiceStoppedRef.current = false;
+    pendingWorldlineSwitchRef.current = null;
+    pendingConversationSwitchRef.current = {
+      requestId,
+      conversationId,
+      history,
+    };
     setIsThinking(false);
     setIsSynthesizing(false);
-    setMessages(history);
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     wsRef.current.send(JSON.stringify({
       type: 'conversation.switch',
+      request_id: requestId,
       conversation_id: conversationId,
     }));
+    return true;
+  }, []);
+
+  const switchWorldline = useCallback((worldline: 'steins_gate' | 'beta') => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      paramsRef.current.onWorldlineSwitchError?.({
+        worldline,
+        code: 'socket_not_ready',
+      });
+      return false;
+    }
+    const requestId = createRequestId('worldline-switch');
+    clearWatchdog();
+    activeTurnIdRef.current = '';
+    activeGenerationRef.current = -1;
+    activeConversationIdRef.current = null;
+    voiceStoppedRef.current = true;
+    pendingConversationSwitchRef.current = null;
+    pendingWorldlineSwitchRef.current = { requestId, worldline };
+    setIsThinking(false);
+    setIsSynthesizing(false);
+    setMessages([]);
+    setEmotion('neutral');
+    wsRef.current.send(JSON.stringify({
+      type: 'worldline.switch',
+      request_id: requestId,
+      target_worldline: worldline,
+      conversation_mode: 'draft',
+    }));
+    return true;
   }, []);
 
   // Connect on mount, disconnect on unmount
@@ -588,6 +813,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     updateConfig,
     reconnect: connect,
     switchConversation,
+    switchWorldline,
     wsRef
   };
 }

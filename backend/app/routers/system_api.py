@@ -7,6 +7,7 @@ from app.db import normalize_worldline, validate_schema
 from app.services.memory import memory_service
 from app.services.session_manager import session_coordinator
 from app.services.soul_engine import soul_engine
+from app.services.diagnostics import diagnostic_runtime
 
 router = APIRouter()
 
@@ -72,6 +73,16 @@ async def dependencies_health():
         "search": await search_service.health(),
         "stt": speech_service.readiness(),
         "tts": await sidecar_supervisor.health(),
+        "diagnostics": diagnostic_runtime.public_health(),
     }
     required_ok = bool(schema.get("ok") and soul.get("ok"))
-    return {"status": "ready" if required_ok else "not_ready", "dependencies": dependencies}
+    if not required_ok:
+        status = "not_ready"
+    elif (
+        not dependencies["tts"].get("ok")
+        or dependencies["diagnostics"]["state"] != "ready"
+    ):
+        status = "degraded"
+    else:
+        status = "ready"
+    return {"status": status, "dependencies": dependencies}

@@ -5,12 +5,32 @@ import struct
 import httpx
 import asyncio
 from app import config
+from app.domain.segments import AudioErrorCode, prepare_tts_text
 from pathlib import Path
 from typing import Dict, List, Optional, Callable
 
 class TTSServiceError(Exception):
-    """Custom exception raised when TTS synthesis fails or times out."""
-    pass
+    """Sanitized synthesis failure with a stable client-facing code."""
+
+    def __init__(
+        self,
+        code: AudioErrorCode | str,
+        message: str | None = None,
+        *,
+        retryable: bool = False,
+        status_code: int | None = None,
+        diagnostic: str | None = None,
+    ) -> None:
+        if isinstance(code, AudioErrorCode):
+            self.code = code
+            safe_message = message or f"TTS synthesis failed: {code.value}"
+        else:
+            self.code = AudioErrorCode.SYNTHESIS_FAILED
+            safe_message = message or code
+        self.retryable = retryable
+        self.status_code = status_code
+        self.diagnostic = diagnostic
+        super().__init__(safe_message)
 
 def _build_emotion_ref_map():
     """Build 9-emotion reference audio map from config, validating file existence.
@@ -44,6 +64,19 @@ def _build_emotion_ref_map():
     return ref_map
 
 EMOTION_REF_MAP = _build_emotion_ref_map()
+
+# Production V2Pro settings recovered from the embarrassed-emotion tuning
+# matrix. In particular, repetition_penalty=1.5 prevents the model from
+# extending short boundary fragments into an audible stray mora.
+V2PRO_GENERATION_PARAMS = {
+    "top_k": 10,
+    "top_p": 0.9,
+    "temperature": 0.6,
+    "speed_factor": 1.0,
+    "repetition_penalty": 1.5,
+    "text_split_method": "cut5",
+    "batch_size": 1,
+}
 
 
 def _peak_limit_wav(audio_bytes: bytes, threshold: int = 32000, target_peak: int = 30000) -> bytes:
@@ -119,10 +152,7 @@ class TTSQueueManager:
             await self.client.aclose()
 
     async def _async_tts_call(self, text: str, ref_config: dict, sovits_url: str = None) -> bytes:
-        """
-        Asynchronous HTTP request to GPT-SoVITS API.
-        Attempts POST with JSON, POST Form, and GET with Query parameters.
-        """
+        """Call the GPT-SoVITS V2Pro JSON contract exactly once."""
         payload = {
             "text": text,
             "text_lang": "ja",
@@ -130,47 +160,65 @@ class TTSQueueManager:
             "prompt_text": ref_config["prompt_text"],
             "prompt_lang": "ja",
             "media_type": "wav",
-            "text_split_method": "cut5",
-            "batch_size": "1",
+            **V2PRO_GENERATION_PARAMS,
         }
 
         base_url = sovits_url or self.sovits_url or "http://localhost:9880"
-        urls_to_try = [
-            base_url.rstrip("/") + "/tts",
-        ]
+        url = base_url.rstrip("/") + "/tts"
+        try:
+            response = await self.client.post(url, json=payload)
+        except asyncio.CancelledError:
+            raise
+        except (httpx.TimeoutException, asyncio.TimeoutError) as exc:
+            raise TTSServiceError(
+                AudioErrorCode.TIMEOUT,
+                retryable=True,
+                diagnostic="sidecar_timeout",
+            ) from exc
+        except (httpx.RequestError, OSError) as exc:
+            raise TTSServiceError(
+                AudioErrorCode.SERVICE_UNAVAILABLE,
+                retryable=True,
+                diagnostic="sidecar_network_error",
+            ) from exc
 
-        last_exception = None
-        last_response_error = None
-        for url in urls_to_try:
-            try:
-                # 1. Try POST JSON
-                response = await self.client.post(url, json=payload)
-                if response.status_code == 200:
-                    return response.content
-                last_response_error = f"POST JSON {url} returned HTTP {response.status_code}: {response.text[:500]}"
+        status = response.status_code
+        if status == 200:
+            return response.content
 
-                # 2. Try POST Form
-                response = await self.client.post(url, data=payload)
-                if response.status_code == 200:
-                    return response.content
-                last_response_error = f"POST form {url} returned HTTP {response.status_code}: {response.text[:500]}"
-
-                # 3. Try GET Query parameters
-                response = await self.client.get(url, params=payload)
-                if response.status_code == 200:
-                    return response.content
-                last_response_error = f"GET {url} returned HTTP {response.status_code}: {response.text[:500]}"
-            except asyncio.CancelledError:
-                raise  # Always raise CancelledError upward to stop execution immediately
-            except Exception as e:
-                last_exception = e
-                continue
-
-        if last_exception:
-            raise last_exception
-        if last_response_error:
-            raise RuntimeError(last_response_error)
-        raise RuntimeError("GPT-SoVITS API returned non-200 status on all endpoints")
+        body = str(getattr(response, "text", "")).lower()
+        if status in {400, 422}:
+            empty_hint = any(
+                token in body
+                for token in ("请输入有效文本", "empty text", "text is empty", "valid text")
+            )
+            code = AudioErrorCode.EMPTY_TEXT if empty_hint else AudioErrorCode.SYNTHESIS_FAILED
+            raise TTSServiceError(code, status_code=status, diagnostic="request_validation")
+        if status in {404, 405}:
+            raise TTSServiceError(
+                AudioErrorCode.SYNTHESIS_FAILED,
+                status_code=status,
+                diagnostic="endpoint_contract_mismatch",
+            )
+        if status == 429:
+            raise TTSServiceError(
+                AudioErrorCode.RATE_LIMITED,
+                retryable=True,
+                status_code=status,
+                diagnostic="sidecar_rate_limited",
+            )
+        if status >= 500:
+            raise TTSServiceError(
+                AudioErrorCode.SERVICE_UNAVAILABLE,
+                retryable=True,
+                status_code=status,
+                diagnostic="sidecar_server_error",
+            )
+        raise TTSServiceError(
+            AudioErrorCode.SYNTHESIS_FAILED,
+            status_code=status,
+            diagnostic="sidecar_http_error",
+        )
 
     async def synthesize_async(self, text: str, emotion_tag: str, sovits_url: str = None) -> bytes:
         """
@@ -180,6 +228,10 @@ class TTSQueueManager:
         Synthesizes speech asynchronously using a semaphore to limit concurrency.
         Raises TTSServiceError on failure.
         """
+        prepared = prepare_tts_text(text)
+        if prepared.error is not None:
+            raise TTSServiceError(prepared.error)
+
         ref_config = self.emotion_ref_map.get(emotion_tag)
         if ref_config is None:
             raise TTSServiceError(f"No valid reference audio configured for emotion '{emotion_tag}' — check AMADEUS_REF_{emotion_tag.upper()} env var")
@@ -189,37 +241,49 @@ class TTSQueueManager:
         async with self.semaphore:
             try:
                 audio_bytes = await asyncio.wait_for(
-                    self._async_tts_call(text, ref_config, sovits_url=sovits_url),
+                    self._async_tts_call(prepared.text, ref_config, sovits_url=sovits_url),
                     timeout=self.timeout
                 )
                 return audio_bytes
-            except asyncio.TimeoutError:
+            except asyncio.TimeoutError as exc:
                 print(f"[TTS Timeout] Synthesis timed out ({self.timeout}s) for text (len={len(text)})")
-                raise TTSServiceError(f"TTS synthesis timed out ({self.timeout}s) for text (len={len(text)})")
+                raise TTSServiceError(
+                    AudioErrorCode.TIMEOUT,
+                    retryable=True,
+                    diagnostic="manager_timeout",
+                ) from exc
             except asyncio.CancelledError:
                 print(f"[TTS Cancelled] Task cancelled for text (len={len(text)})")
                 raise
-            except Exception as e:
-                print(f"[TTS Error] Synthesis failed: {e}")
-                raise TTSServiceError(f"TTS synthesis failed: {e}")
+            except TTSServiceError:
+                raise
+            except Exception as exc:
+                print(f"[TTS Error] Synthesis failed ({type(exc).__name__})")
+                raise TTSServiceError(
+                    AudioErrorCode.SYNTHESIS_FAILED,
+                    diagnostic="unexpected_manager_error",
+                ) from exc
 
     async def stream_pcm(self, text: str, emotion_tag: str, sovits_url: str = None):
         """Yield (audio_format, pcm_chunk) from GPT-SoVITS streaming_mode=2."""
         from app.services.audio_stream import WavStreamDemuxer
+        prepared = prepare_tts_text(text)
+        if prepared.error is not None:
+            raise TTSServiceError(prepared.error)
+
         ref_config = self.emotion_ref_map.get(emotion_tag)
         if ref_config is None:
             raise TTSServiceError(f"No valid reference audio configured for emotion '{emotion_tag}'")
         await self.init_client()
         payload = {
-            "text": text,
+            "text": prepared.text,
             "text_lang": "ja",
             "ref_audio_path": ref_config["ref_audio_path"],
             "prompt_text": ref_config["prompt_text"],
             "prompt_lang": "ja",
             "media_type": "wav",
             "streaming_mode": 2,
-            "text_split_method": "cut5",
-            "batch_size": 1,
+            **V2PRO_GENERATION_PARAMS,
         }
         demuxer = WavStreamDemuxer()
         url = (sovits_url or self.sovits_url or "http://127.0.0.1:9880").rstrip("/") + "/tts"
@@ -292,6 +356,15 @@ class TTSQueueManager:
         return seq
 
     async def _synthesize_worker(self, session_id: str, seq: int, text: str, emotion_tag: str, sovits_url: str = None):
+        prepared = prepare_tts_text(text)
+        if prepared.error is not None:
+            await self._ordered_dispatch(session_id, seq, {
+                "audio": None,
+                "error": prepared.error.value,
+                "text": text,
+                "emotion": emotion_tag,
+            })
+            return
         ref_config = self.emotion_ref_map.get(emotion_tag)
         if ref_config is None:
             await self._ordered_dispatch(session_id, seq, {"audio": None, "error": f"no_ref:{emotion_tag}", "text": text, "emotion": emotion_tag})
@@ -300,7 +373,7 @@ class TTSQueueManager:
         try:
             async with self.semaphore:
                 audio_bytes = await asyncio.wait_for(
-                    self._async_tts_call(text, ref_config, sovits_url=sovits_url),
+                    self._async_tts_call(prepared.text, ref_config, sovits_url=sovits_url),
                     timeout=self.timeout
                 )
             audio_bytes = _peak_limit_wav(audio_bytes)
@@ -308,9 +381,22 @@ class TTSQueueManager:
         except asyncio.CancelledError:
             await self._ordered_dispatch(session_id, seq, {"audio": None, "error": "cancelled", "text": text, "emotion": emotion_tag})
             raise
-        except Exception as e:
-            print(f"[TTS Error] seq={seq} failed: {e}", flush=True)
-            await self._ordered_dispatch(session_id, seq, {"audio": None, "error": str(e), "text": text, "emotion": emotion_tag})
+        except TTSServiceError as exc:
+            print(f"[TTS Error] seq={seq} failed: {exc.code.value}", flush=True)
+            await self._ordered_dispatch(session_id, seq, {
+                "audio": None,
+                "error": exc.code.value,
+                "text": text,
+                "emotion": emotion_tag,
+            })
+        except Exception as exc:
+            print(f"[TTS Error] seq={seq} failed: {type(exc).__name__}", flush=True)
+            await self._ordered_dispatch(session_id, seq, {
+                "audio": None,
+                "error": AudioErrorCode.SYNTHESIS_FAILED.value,
+                "text": text,
+                "emotion": emotion_tag,
+            })
 
 # Singleton manager
 tts_manager = TTSQueueManager()

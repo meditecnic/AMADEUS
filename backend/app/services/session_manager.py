@@ -40,9 +40,10 @@ class SessionCoordinator:
         old_connections = []
         async with self._lock:
             for existing_key, connection in list(self._leases.items()):
-                if existing_key[0] == session_id and connection is not websocket:
-                    old_connections.append(connection)
+                if existing_key[0] == session_id and existing_key != key:
                     self._leases.pop(existing_key, None)
+                    if connection is not websocket:
+                        old_connections.append(connection)
             self._leases[key] = websocket
         for old in old_connections:
             try:
@@ -79,8 +80,26 @@ class SessionCoordinator:
         finally:
             await db.close()
 
-    async def switch(self, session: Any, target_worldline: str) -> dict[str, object]:
+    async def switch(
+        self,
+        session: Any,
+        target_worldline: str,
+        *,
+        conversation_mode: str = "history",
+    ) -> dict[str, object]:
         target = normalize_worldline(target_worldline)
+        runtime_snapshot = {
+            "worldline": session.worldline,
+            "conversation_id": getattr(session, "conversation_id", None),
+            "conversation_mode": getattr(session, "conversation_mode", "history"),
+            "history": session.history,
+            "memory_summary": getattr(session, "memory_summary", ""),
+            "provider_id": getattr(session, "provider_id", "deepseek"),
+            "model": getattr(session, "model", ""),
+            "api_key": getattr(session, "api_key", ""),
+            "last_assistant_emotion": getattr(session, "last_assistant_emotion", "neutral"),
+            "consecutive_no_emo_tags": getattr(session, "consecutive_no_emo_tags", 0),
+        }
         cancelled = await cancel_inflight(session)
         session.revision = max(getattr(session, "revision", 0), getattr(session, "current_epoch", 0)) + 1
         session.current_epoch = session.revision
@@ -88,8 +107,24 @@ class SessionCoordinator:
         session.history_epoch += 1
         session.history = []
         session.memory_summary = ""
-        await self.persist_current(session.session_id, target, session.revision)
-        await session.load_from_db()
+        try:
+            if conversation_mode == "draft":
+                await session.enter_draft()
+            else:
+                await session.load_from_db()
+            await self.persist_current(session.session_id, target, session.revision)
+        except Exception:
+            for attribute, value in runtime_snapshot.items():
+                setattr(session, attribute, value)
+            try:
+                await self.persist_current(
+                    session.session_id,
+                    runtime_snapshot["worldline"],
+                    session.revision,
+                )
+            except Exception:
+                pass
+            raise
         return {"session_id": session.session_id, "worldline": target, "revision": session.revision, "cancelled_tasks": cancelled, "available": True}
 
 

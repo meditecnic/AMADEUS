@@ -4,14 +4,68 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import re
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Iterable
+from enum import StrEnum
+from typing import Any, Awaitable, Callable, Iterable
+
+
+class AudioErrorCode(StrEnum):
+    EMPTY_TEXT = "empty_text"
+    ACTION_ONLY = "action_only"
+    TOO_SHORT = "too_short"
+    USER_DISABLED = "user_disabled"
+    VOICE_STOPPED = "voice_stopped"
+    TIMEOUT = "timeout"
+    RATE_LIMITED = "rate_limited"
+    SERVICE_UNAVAILABLE = "service_unavailable"
+    SYNTHESIS_FAILED = "synthesis_failed"
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedTTSText:
+    text: str
+    error: AudioErrorCode | None = None
+
+
+_NON_SPEECH_RE = re.compile(
+    r"[\s。！\uff01？\uff1f!?,.\uff0c\u3001\"'`「」『』()（）\-—_+=\[\]{}<>#~*]"
+)
+
+
+def clean_text_for_tts(text: str) -> str:
+    """Remove stage directions while preserving the spoken Japanese text."""
+    cleaned = re.sub(r"\(.*?\)", "", text)
+    cleaned = re.sub(r"（.*?）", "", cleaned)
+    cleaned = re.sub(r"\[.*?\]", "", cleaned)
+    cleaned = re.sub(r"\*.*?\*", "", cleaned)
+    return cleaned.strip()
+
+
+def meaningful_character_count(text: str) -> int:
+    return len(_NON_SPEECH_RE.sub("", text))
+
+
+def is_meaningful_sentence(text: str) -> bool:
+    return meaningful_character_count(text) > 0
+
+
+def prepare_tts_text(text: str) -> PreparedTTSText:
+    if not text or not text.strip():
+        return PreparedTTSText("", AudioErrorCode.EMPTY_TEXT)
+    cleaned = clean_text_for_tts(text)
+    if not cleaned or not is_meaningful_sentence(cleaned):
+        return PreparedTTSText(cleaned, AudioErrorCode.ACTION_ONLY)
+    if meaningful_character_count(cleaned) < 2:
+        return PreparedTTSText(cleaned, AudioErrorCode.TOO_SHORT)
+    return PreparedTTSText(cleaned)
 
 
 @dataclass(frozen=True, slots=True)
 class Segment:
     id: int
     text: str
+    emotion: str = "neutral"
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,20 +99,24 @@ class IncrementalJapaneseSegmenter:
 
     def __init__(self) -> None:
         self._pending = ""
+        self._pending_emotions: list[str] = []
+        self._short_candidate: tuple[str, str] | None = None
         self._next_id = 0
 
     @property
     def pending(self) -> str:
         return self._pending
 
-    def feed(self, chunk: str) -> list[Segment]:
+    def feed(self, chunk: str, emotion: str = "neutral") -> list[Segment]:
         if chunk:
             self._pending += chunk
+            self._pending_emotions.extend([emotion] * len(chunk))
         return self._drain(final=False)
 
     def finish(self) -> list[Segment]:
         segments = self._drain(final=True)
         self._pending = ""
+        self._pending_emotions = []
         return segments
 
     def _drain(self, *, final: bool) -> list[Segment]:
@@ -67,19 +125,55 @@ class IncrementalJapaneseSegmenter:
             boundary = self._find_boundary(self._pending)
             if boundary is None:
                 break
-            text = self._pending[:boundary].strip()
+            raw = self._pending[:boundary]
+            text = raw.strip()
+            leading = len(raw) - len(raw.lstrip())
+            emotion = (
+                self._pending_emotions[leading]
+                if text and leading < len(self._pending_emotions)
+                else "neutral"
+            )
             self._pending = self._pending[boundary:]
+            self._pending_emotions = self._pending_emotions[boundary:]
             if text:
-                emitted.append(Segment(self._next_id, text))
-                self._next_id += 1
+                self._accept_candidate(emitted, text, emotion)
 
         if final:
-            tail = self._pending.strip()
+            raw_tail = self._pending
+            tail = raw_tail.strip()
+            leading = len(raw_tail) - len(raw_tail.lstrip())
+            emotion = (
+                self._pending_emotions[leading]
+                if tail and leading < len(self._pending_emotions)
+                else "neutral"
+            )
             self._pending = ""
+            self._pending_emotions = []
             if tail:
-                emitted.append(Segment(self._next_id, tail))
+                self._accept_candidate(emitted, tail, emotion)
+            if self._short_candidate is not None:
+                short_text, short_emotion = self._short_candidate
+                self._short_candidate = None
+                emitted.append(Segment(self._next_id, short_text, short_emotion))
                 self._next_id += 1
         return emitted
+
+    def _accept_candidate(
+        self,
+        emitted: list[Segment],
+        text: str,
+        emotion: str,
+    ) -> None:
+        if self._short_candidate is not None:
+            short_text, short_emotion = self._short_candidate
+            self._short_candidate = None
+            text = short_text + text
+            emotion = short_emotion
+        elif prepare_tts_text(text).error is AudioErrorCode.TOO_SHORT:
+            self._short_candidate = (text, emotion)
+            return
+        emitted.append(Segment(self._next_id, text, emotion))
+        self._next_id += 1
 
     def _find_boundary(self, text: str) -> int | None:
         stack: list[str] = []
@@ -144,7 +238,9 @@ class _SegmentResult:
 
 EventEmitter = Callable[[dict], object]
 TextOperation = Callable[[str], Awaitable[str]]
-AudioOperation = Callable[[str], Awaitable[bytes]]
+AudioOperation = Callable[[str, str], Awaitable[bytes]]
+TtsObserver = Callable[[TurnIdentity, Segment, bytes | None, str | None], object]
+TurnObserver = Any
 
 
 class SegmentPipeline:
@@ -160,12 +256,16 @@ class SegmentPipeline:
         tts_concurrency: int = 2,
         tts_retries: int = 1,
         translation_retries: int = 1,
-        translation_timeout: float = 6.0,
+        translation_timeout: float = 10.0,
+        tts_observer: TtsObserver | None = None,
+        turn_observer: TurnObserver | None = None,
     ) -> None:
         self.identity = identity
         self._emit_callback = emit
         self._translate = translate
         self._synthesize = synthesize
+        self._tts_observer = tts_observer
+        self._turn_observer = turn_observer
         self._tts_semaphore = asyncio.Semaphore(max(1, tts_concurrency))
         self._tts_retries = max(0, tts_retries)
         self._translation_retries = max(0, translation_retries)
@@ -174,6 +274,7 @@ class SegmentPipeline:
         self._translation_timeout = translation_timeout
         self._buffer: dict[int, _SegmentResult] = {}
         self._committed_translations: list[str] = []
+        self._translation_error_count = 0
         self._next_segment_id = 0
         self._submit_lock = asyncio.Lock()
         self._segment_tasks: set[asyncio.Task] = set()
@@ -189,6 +290,11 @@ class SegmentPipeline:
         """Return translations in the exact order committed to the client."""
         return "".join(self._committed_translations)
 
+    @property
+    def has_translation_errors(self) -> bool:
+        """Whether any committed segment exhausted its translation attempts."""
+        return self._translation_error_count > 0
+
     async def run(self, segments: Iterable[Segment]) -> None:
         await self.start()
         items = list(segments)
@@ -203,6 +309,11 @@ class SegmentPipeline:
             raise RuntimeError("segment pipeline can only run once")
         self._running = True
         await self._emit(self._event("turn.started"))
+        if self._turn_observer is not None:
+            try:
+                self._turn_observer.turn_started(self.identity)
+            except Exception:
+                pass
 
     def submit(self, segment: Segment) -> None:
         if not self._running:
@@ -231,6 +342,11 @@ class SegmentPipeline:
             return
         self._complete_event_sent = True
         await self._emit(self._event("turn.completed", segment_count=segment_count))
+        if self._turn_observer is not None:
+            try:
+                self._turn_observer.turn_terminal(self.identity, "succeeded")
+            except Exception:
+                pass
 
     async def stop_voice(self) -> None:
         self._voice_stopped = True
@@ -240,7 +356,7 @@ class SegmentPipeline:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-    async def cancel(self) -> None:
+    async def cancel(self, *, reason: str | None = "user_turn_cancel") -> None:
         if self._cancelled:
             return
         self._cancelled = True
@@ -252,10 +368,15 @@ class SegmentPipeline:
         if not self._cancel_event_sent:
             self._cancel_event_sent = True
             await self._emit(self._event("turn.cancelled"))
+            if self._turn_observer is not None and reason is not None:
+                try:
+                    self._turn_observer.turn_terminal(self.identity, "cancelled", reason)
+                except Exception:
+                    pass
 
     async def _process(self, segment: Segment) -> None:
         translation_task = asyncio.create_task(self._translate_safe(segment.text))
-        voice_task = asyncio.create_task(self._synthesize_safe(segment.text))
+        voice_task = asyncio.create_task(self._synthesize_safe(segment))
         self._voice_tasks.add(voice_task)
         try:
             translation, translation_error = await translation_task
@@ -320,7 +441,7 @@ class SegmentPipeline:
             isinstance(status_code, int) and status_code >= 500
         )
 
-    async def _synthesize_safe(self, text: str) -> tuple[bytes | None, str | None]:
+    async def _synthesize_safe(self, segment: Segment) -> tuple[bytes | None, str | None]:
         if self._voice_stopped:
             return None, "voice_stopped"
         attempts = self._tts_retries + 1
@@ -329,7 +450,7 @@ class SegmentPipeline:
                 async with self._tts_semaphore:
                     if self._voice_stopped:
                         raise _VoiceStopped()
-                    return await self._synthesize(text), None
+                    return await self._synthesize(segment.text, segment.emotion), None
             except asyncio.CancelledError:
                 raise
             except _VoiceStopped:
@@ -338,7 +459,8 @@ class SegmentPipeline:
                 if attempt + 1 >= attempts:
                     return None, str(exc) or "transient_error"
             except Exception as exc:
-                return None, str(exc) or "service_error"
+                code = getattr(exc, "code", None)
+                return None, getattr(code, "value", None) or str(exc) or "service_error"
         return None, "service_error"
 
     async def _submit(self, result: _SegmentResult) -> None:
@@ -355,10 +477,32 @@ class SegmentPipeline:
                     segment_id=current.segment.id,
                     ja=current.segment.text,
                     zh=current.translation,
+                    emotion=current.segment.emotion,
                 )
                 if current.translation_error:
                     ready["translation_error"] = current.translation_error
+                    self._translation_error_count += 1
                 await self._emit(ready)
+                if self._turn_observer is not None:
+                    try:
+                        self._turn_observer.segment_committed(self.identity, current.segment)
+                    except Exception:
+                        pass
+                if self._tts_observer is not None:
+                    try:
+                        observer_error = current.audio_error
+                        if observer_error is None and self._voice_stopped and current.audio is None:
+                            observer_error = "voice_stopped"
+                        self._tts_observer(
+                            self.identity,
+                            current.segment,
+                            current.audio,
+                            observer_error,
+                        )
+                    except Exception:
+                        # The observer is a strictly best-effort side channel.
+                        # Its owner is responsible for recording this failure.
+                        pass
                 self._committed_translations.append(current.translation)
                 if current.audio is not None and not self._voice_stopped:
                     await self._emit(
@@ -366,6 +510,7 @@ class SegmentPipeline:
                             "segment.audio",
                             segment_id=current.segment.id,
                             data=current.audio,
+                            emotion=current.segment.emotion,
                         )
                     )
                 else:
@@ -374,6 +519,7 @@ class SegmentPipeline:
                             "segment.audio_error",
                             segment_id=current.segment.id,
                             reason=current.audio_error or "voice_stopped",
+                            emotion=current.segment.emotion,
                         )
                     )
                 self._next_segment_id += 1

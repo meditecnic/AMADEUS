@@ -63,6 +63,36 @@ class ConversationService:
             await db.close()
         return await self.require_owned(conversation_id, session_id, wl)
 
+    async def create_and_select(
+        self,
+        session_id: str,
+        worldline: str,
+        *,
+        title: str | None = None,
+        provider_id: str | None = None,
+        model_id: str | None = None,
+    ) -> dict[str, object]:
+        """Materialize a draft and compensate if durable selection fails."""
+        created = await self.create(
+            session_id,
+            worldline,
+            title=title,
+            provider_id=provider_id,
+            model_id=model_id,
+        )
+        try:
+            return await self.select(
+                session_id,
+                worldline,
+                str(created["id"]),
+            )
+        except Exception:
+            try:
+                await self.delete(str(created["id"]), session_id, worldline)
+            except Exception:
+                logger.exception("failed to compensate unselected draft conversation")
+            raise
+
     async def get_or_create_default(self, session_id: str, worldline: str) -> dict[str, object]:
         wl = normalize_worldline(worldline)
         db = await get_db(wl, "history")

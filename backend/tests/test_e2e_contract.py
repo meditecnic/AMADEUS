@@ -183,6 +183,211 @@ class TestBackendE2EContract:
 
         assert sessions[session_id].conversation_id == conversation_id
 
+    def test_v2_draft_auth_materializes_a_new_conversation_on_first_send(self, mock_services):
+        session_id = "test_draft_materialization"
+        previous = self.client.post(
+            "/api/conversations",
+            json={"session_id": session_id, "worldline": "steins_gate", "title": "Previous"},
+        ).json()
+
+        with self.client.websocket_connect(f"/ws/chat?session_id={session_id}") as websocket:
+            websocket.send_json({
+                "type": "auth",
+                "client": "desktop",
+                "protocol_version": 2,
+                "worldline": "steins_gate",
+                "conversation_mode": "draft",
+                "conversation_id": previous["id"],
+            })
+            websocket.send_json({"type": "chat.send", "content": "new draft"})
+            started = websocket.receive_json()
+            assert started["type"] == "turn.started"
+            assert started["conversation_id"] != previous["id"]
+            assert sessions[session_id].conversation_id == started["conversation_id"]
+
+    def test_v2_draft_auth_can_explicitly_select_registered_provider_and_model(
+        self,
+        mock_services,
+    ):
+        """Draft auth must not silently inherit the previous DeepSeek selection."""
+        from app.routers import chat_ws
+
+        session_id = "test_draft_provider_override"
+        chat_ws.credential_store.set("kimi", "test-kimi-credential")
+
+        with self.client.websocket_connect(f"/ws/chat?session_id={session_id}") as websocket:
+            websocket.send_json({
+                "type": "auth",
+                "client": "desktop",
+                "protocol_version": 2,
+                "worldline": "steins_gate",
+                "conversation_mode": "draft",
+                "provider_id": "kimi",
+                "model": "kimi-model-selected-in-draft",
+            })
+            websocket.send_json({"type": "auth"})
+            assert websocket.receive_json()["type"] == "error"
+
+        assert sessions[session_id].provider_id == "kimi"
+        assert sessions[session_id].model == "kimi-model-selected-in-draft"
+
+    def test_v2_conversation_switch_returns_correlated_ack(self, mock_services):
+        session_id = "test_conversation_switch_ack"
+        first = self.client.post(
+            "/api/conversations",
+            json={"session_id": session_id, "worldline": "steins_gate", "title": "First"},
+        ).json()
+        second = self.client.post(
+            "/api/conversations",
+            json={"session_id": session_id, "worldline": "steins_gate", "title": "Second"},
+        ).json()
+
+        with self.client.websocket_connect(f"/ws/chat?session_id={session_id}") as websocket:
+            websocket.send_json({
+                "type": "auth",
+                "client": "desktop",
+                "protocol_version": 2,
+                "worldline": "steins_gate",
+                "conversation_id": first["id"],
+            })
+            websocket.send_json({
+                "type": "conversation.switch",
+                "request_id": "switch-1",
+                "conversation_id": second["id"],
+            })
+            ack = websocket.receive_json()
+
+        assert ack["type"] == "conversation.switched"
+        assert ack["request_id"] == "switch-1"
+        assert ack["conversation_id"] == second["id"]
+        assert ack["worldline"] == "steins_gate"
+
+    def test_invalid_conversation_switch_preserves_current_selection(self, mock_services):
+        session_id = "test_invalid_conversation_switch"
+        current = self.client.post(
+            "/api/conversations",
+            json={"session_id": session_id, "worldline": "steins_gate", "title": "Current"},
+        ).json()
+
+        with self.client.websocket_connect(f"/ws/chat?session_id={session_id}") as websocket:
+            websocket.send_json({
+                "type": "auth",
+                "client": "desktop",
+                "protocol_version": 2,
+                "worldline": "steins_gate",
+                "conversation_id": current["id"],
+            })
+            websocket.send_json({
+                "type": "conversation.switch",
+                "request_id": "invalid-1",
+                "conversation_id": "not-owned",
+            })
+            error = websocket.receive_json()
+
+        assert error["type"] == "conversation.switch_error"
+        assert error["request_id"] == "invalid-1"
+        assert sessions[session_id].conversation_id == current["id"]
+
+    def test_conversation_switch_runtime_failure_is_correlated_and_sanitized(
+        self,
+        mock_services,
+        monkeypatch,
+    ):
+        from app.services.conversations import conversation_service
+
+        session_id = "test_conversation_switch_runtime_failure"
+        target = self.client.post(
+            "/api/conversations",
+            json={"session_id": session_id, "worldline": "steins_gate"},
+        ).json()
+
+        with self.client.websocket_connect(f"/ws/chat?session_id={session_id}") as websocket:
+            websocket.send_json({
+                "type": "auth",
+                "client": "desktop",
+                "protocol_version": 2,
+                "worldline": "steins_gate",
+                "conversation_mode": "draft",
+            })
+            websocket.send_json({"type": "auth"})
+            assert websocket.receive_json()["type"] == "error"
+            monkeypatch.setattr(
+                conversation_service,
+                "select",
+                AsyncMock(side_effect=RuntimeError("private database details")),
+            )
+            websocket.send_json({
+                "type": "conversation.switch",
+                "request_id": "switch-runtime-failure",
+                "conversation_id": target["id"],
+            })
+            error = websocket.receive_json()
+
+        assert error["type"] == "conversation.switch_error"
+        assert error["request_id"] == "switch-runtime-failure"
+        assert error["code"] == "conversation_switch_failed"
+        assert "private database details" not in error["message"]
+
+    def test_worldline_switch_runtime_failure_is_correlated_and_keeps_old_lease(
+        self,
+        mock_services,
+        monkeypatch,
+    ):
+        from app.services.session_manager import session_coordinator
+
+        session_id = "test_worldline_switch_runtime_failure"
+        with self.client.websocket_connect(f"/ws/chat?session_id={session_id}") as websocket:
+            websocket.send_json({
+                "type": "auth",
+                "client": "desktop",
+                "protocol_version": 2,
+                "worldline": "steins_gate",
+            })
+            monkeypatch.setattr(
+                session_coordinator,
+                "switch",
+                AsyncMock(side_effect=RuntimeError("private switch details")),
+            )
+            websocket.send_json({
+                "type": "worldline.switch",
+                "request_id": "worldline-runtime-failure",
+                "target_worldline": "beta",
+                "conversation_mode": "draft",
+            })
+            error = websocket.receive_json()
+
+            assert (session_id, "steins_gate") in session_coordinator._leases
+
+        assert error["type"] == "worldline.switch_error"
+        assert error["request_id"] == "worldline-runtime-failure"
+        assert error["code"] == "worldline_switch_failed"
+        assert "private switch details" not in error["message"]
+
+    def test_v2_worldline_switch_enters_target_draft_without_reconnect(self, mock_services):
+        session_id = "test_worldline_switch_ack"
+        with self.client.websocket_connect(f"/ws/chat?session_id={session_id}") as websocket:
+            websocket.send_json({
+                "type": "auth",
+                "client": "desktop",
+                "protocol_version": 2,
+                "worldline": "steins_gate",
+            })
+            websocket.send_json({
+                "type": "worldline.switch",
+                "request_id": "worldline-1",
+                "target_worldline": "beta",
+                "conversation_mode": "draft",
+            })
+            ack = websocket.receive_json()
+
+        assert ack["type"] == "worldline.switched"
+        assert ack["request_id"] == "worldline-1"
+        assert ack["worldline"] == "beta"
+        assert ack["conversation_mode"] == "draft"
+        assert ack["conversation_id"] is None
+        assert sessions[session_id].worldline == "beta"
+        assert sessions[session_id].history == []
+
     def test_ws_missing_stored_credential_returns_error_without_policy_close(
         self,
         mock_services,

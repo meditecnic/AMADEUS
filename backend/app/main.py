@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import asyncio
 import os
 import httpx
 from fastapi import FastAPI
@@ -11,7 +12,18 @@ from app.services.tts_queue import tts_manager
 from app.services.tts_sidecar import sidecar_supervisor
 from app.services.search import search_service
 from app.services.soul_engine import soul_engine
+from app.services.diagnostics import diagnostic_runtime
 from app.db import init_db
+
+
+DIAGNOSTICS_SWEEP_INTERVAL_SECONDS = 24 * 60 * 60
+
+
+async def _diagnostics_sweep_loop() -> None:
+    while True:
+        await asyncio.to_thread(diagnostic_runtime.sweep_best_effort)
+        await asyncio.sleep(DIAGNOSTICS_SWEEP_INTERVAL_SECONDS)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -34,6 +46,7 @@ async def lifespan(app: FastAPI):
     from app.services.provider_runtime import restore_custom_provider_configuration
     await restore_custom_provider_configuration()
     soul_engine.load_profiles()
+    await asyncio.to_thread(diagnostic_runtime.start)
     print("[Database] SQLite initialized.")
     print(f"DeepSeek Model: {config.DEEPSEEK_MODEL}")
     print(f"GPT-SoVITS URL: {config.SOVITS_URL}")
@@ -48,11 +61,13 @@ async def lifespan(app: FastAPI):
         tts_manager.sovits_url = sidecar_state.url
     print("[GPT-SoVITS] TTS will be attempted per request.")
     print("--------------------------------------------------")
-    
+
+    diagnostics_sweep = asyncio.create_task(_diagnostics_sweep_loop())
     yield
     
     # Shutdown
     print("Amadeus Backend shutting down, cleaning resources...")
+    diagnostics_sweep.cancel()
     await tts_manager.close_client()
     await search_service.close()
     await sidecar_supervisor.close()
@@ -60,6 +75,7 @@ async def lifespan(app: FastAPI):
     await memory_service.close()
     from app.services.conversations import conversation_service
     await conversation_service.close()
+    await asyncio.gather(diagnostics_sweep, return_exceptions=True)
 
 app = FastAPI(title="Amadeus Backend", version="3.0.0", lifespan=lifespan)
 

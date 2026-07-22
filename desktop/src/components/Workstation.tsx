@@ -5,7 +5,7 @@ import {
   type Message,
 } from '../hooks/useAmadeusWS';
 import { StatusBar } from './StatusBar';
-import { SettingsModal } from './SettingsModal';
+import { SettingsModal, type CredentialStatus } from './SettingsModal';
 import { SoundPanel } from './SoundPanel';
 import { HistorySidebar, type ConversationSummary } from './HistorySidebar';
 import { TtsDebugPanel } from './TtsDebugPanel';
@@ -42,6 +42,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [inputText, setInputText] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [credentialChecked, setCredentialChecked] = useState(false);
+  const [credentialStatus, setCredentialStatus] = useState<CredentialStatus>('checking');
   const [providers, setProviders] = useState<ProviderMetadata[]>([]);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
@@ -51,6 +52,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [conversationSearch, setConversationSearch] = useState('');
   const [conversationBusy, setConversationBusy] = useState(false);
   const [forgetTarget, setForgetTarget] = useState<ConversationSummary | null>(null);
+  const transcriptViewportRef = useRef<HTMLDivElement>(null);
+  const previousWorldlineRef = useRef(worldline);
+  const committedWorldlineRef = useRef(worldline);
+  const pendingWorldlineRollbackRef = useRef<'steins_gate' | 'beta' | null>(null);
+  const suppressedWorldlineEffectRef = useRef<'steins_gate' | 'beta' | null>(null);
+  const latestWorldlineRef = useRef(worldline);
+  const conversationRequestRef = useRef(0);
+  const pendingConversationModelRef = useRef<string | null>(null);
 
   const [enableBgm, setEnableBgm] = useState(() => {
     try { return localStorage.getItem('amadeus_pc_enable_bgm') !== 'false'; } catch { return true; }
@@ -64,11 +73,20 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [sfxVolume, setSfxVolume] = useState(() => {
     try { const v = localStorage.getItem('amadeus_pc_sfx_volume'); return v ? parseFloat(v) : 1.0; } catch { return 1.0; }
   });
+  const [voiceVolume, setVoiceVolume] = useState(() => {
+    try {
+      const v = localStorage.getItem('amadeus_pc_voice_volume');
+      return v ? Math.max(0, Math.min(1, parseFloat(v))) : 1.0;
+    } catch { return 1.0; }
+  });
   const [temperature, setTemperature] = useState(() => {
     try { const v = localStorage.getItem('amadeus_pc_temperature'); return v ? parseFloat(v) : 0.8; } catch { return 0.8; }
   });
   const [model, setModel] = useState<string>(() =>
     localStorage.getItem('amadeus_pc_model') || 'deepseek-v4-flash');
+  const [draftProviderId, setDraftProviderId] = useState<string>(() => {
+    try { return localStorage.getItem('amadeus_pc_provider') || 'deepseek'; } catch { return 'deepseek'; }
+  });
   const [reasoningEffort, setReasoningEffort] = useState<'high' | 'xhigh'>(() =>
     (localStorage.getItem('amadeus_pc_reasoning_effort') as any) || 'high');
   const [audioError, setAudioError] = useState<string | null>(null);
@@ -116,18 +134,21 @@ export const Workstation: React.FC<WorkstationProps> = ({
     }
   }, [audioError]);
 
+  latestWorldlineRef.current = worldline;
+
   const loadConversations = useCallback(async () => {
+    const requestId = ++conversationRequestRef.current;
+    const requestedWorldline = worldline;
     const response = await fetch(
-      `/api/conversations?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`
+      `/api/conversations?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(requestedWorldline)}`
     );
     if (!response.ok) throw new Error(`conversation query failed: ${response.status}`);
     const rows = await response.json() as ConversationSummary[];
+    if (
+      requestId !== conversationRequestRef.current
+      || requestedWorldline !== latestWorldlineRef.current
+    ) return [];
     setConversations(rows);
-    const selected = rows.find((row) => row.is_selected);
-    if (selected) {
-      setActiveConversationId(selected.id);
-      if (selected.model_id) setModel(selected.model_id);
-    }
     return rows;
   }, [sessionId, worldline]);
 
@@ -153,6 +174,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     updateConfig,
     reconnect,
     switchConversation,
+    switchWorldline,
   } = useAmadeusWS({
     sessionId,
     conversationId: activeConversationId,
@@ -161,6 +183,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
     worldline,
     enableTts,
     sovitsUrl,
+    providerId: (
+      activeConversationId
+        ? conversations.find((row) => row.id === activeConversationId)?.provider_id
+        : null
+    ) || draftProviderId,
     model,
     reasoningEffort,
     onAudioChunk: (_sentenceId, base64Data) => {
@@ -169,8 +196,58 @@ export const Workstation: React.FC<WorkstationProps> = ({
     onAudioDegraded: (reason: string) => {
       setAudioError(reason);
     },
-    onTurnStarted: () => {
+    onTurnStarted: (conversationId) => {
       audioPlayer.stopAll();
+      if (conversationId) {
+        setActiveConversationId(conversationId);
+        setConversations((current) => current.map((row) => ({
+          ...row,
+          is_selected: row.id === conversationId,
+        })));
+        pendingConversationModelRef.current = null;
+        window.setTimeout(() => { void loadConversations(); }, 250);
+      }
+    },
+    onConversationSwitched: ({ conversationId }) => {
+      setConversationBusy(false);
+      setActiveConversationId(conversationId);
+      setConversations((current) => current.map((row) => ({
+        ...row,
+        is_selected: row.id === conversationId,
+      })));
+      const pendingModel = pendingConversationModelRef.current;
+      if (pendingModel) {
+        setModel(pendingModel);
+        try { localStorage.setItem('amadeus_pc_model', pendingModel); } catch {}
+      }
+      pendingConversationModelRef.current = null;
+    },
+    onConversationSwitchError: ({ code }) => {
+      pendingConversationModelRef.current = null;
+      setConversationBusy(false);
+      setAudioError(code);
+    },
+    onWorldlineSwitched: ({ worldline: switchedWorldline }) => {
+      committedWorldlineRef.current = switchedWorldline;
+      pendingWorldlineRollbackRef.current = null;
+      setConversationBusy(false);
+      setActiveConversationId(null);
+      pendingConversationModelRef.current = null;
+      setConversations((current) => current.map((row) => ({
+        ...row,
+        is_selected: false,
+      })));
+    },
+    onWorldlineSwitchError: ({ code }) => {
+      const rollback = pendingWorldlineRollbackRef.current
+        || committedWorldlineRef.current;
+      pendingWorldlineRollbackRef.current = null;
+      if (worldline !== rollback) {
+        suppressedWorldlineEffectRef.current = rollback;
+        onWorldlineChange(rollback);
+      }
+      setConversationBusy(false);
+      setAudioError(code);
     },
     onTurnCompleted: () => {
       window.setTimeout(() => { void loadConversations(); }, 250);
@@ -185,8 +262,31 @@ export const Workstation: React.FC<WorkstationProps> = ({
   }, [loadConversations]);
 
   useEffect(() => {
+    if (previousWorldlineRef.current === worldline) return;
+    if (suppressedWorldlineEffectRef.current === worldline) {
+      suppressedWorldlineEffectRef.current = null;
+      previousWorldlineRef.current = worldline;
+      return;
+    }
+    const rollbackWorldline = committedWorldlineRef.current;
+    previousWorldlineRef.current = worldline;
+    pendingWorldlineRollbackRef.current = rollbackWorldline;
+    audioPlayer.stopAll();
+    setConversationBusy(true);
+    setActiveConversationId(null);
+    pendingConversationModelRef.current = null;
+    if (!switchWorldline(worldline) && pendingWorldlineRollbackRef.current !== null) {
+      pendingWorldlineRollbackRef.current = null;
+      suppressedWorldlineEffectRef.current = rollbackWorldline;
+      onWorldlineChange(rollbackWorldline);
+      setConversationBusy(false);
+    }
+  }, [onWorldlineChange, switchWorldline, worldline]);
+
+  useEffect(() => {
     let cancelled = false;
     const synchronizeCredential = async () => {
+      setCredentialStatus('checking');
       let legacyKey = '';
       try {
         legacyKey = localStorage.getItem('amadeus_pc_api_key') || '';
@@ -208,6 +308,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           await loadProviders();
         }
       } catch (error) {
+        if (!cancelled) setCredentialStatus('error');
         console.warn('Credential synchronization failed:', error);
       } finally {
         if (!cancelled) setCredentialChecked(true);
@@ -218,12 +319,21 @@ export const Workstation: React.FC<WorkstationProps> = ({
   }, [loadProviders, reconnect]);
 
   const activeConversation = conversations.find((row) => row.id === activeConversationId);
-  const activeProviderId = activeConversation?.provider_id || 'deepseek';
+  const activeProviderId = activeConversation?.provider_id || draftProviderId;
   const activeProvider = providers.find((provider) => provider.id === activeProviderId);
   const activeModelId = activeConversation?.model_id || model;
   const credentialConfigured = Boolean(
     activeProvider && (!activeProvider.credential_required || activeProvider.configured)
   );
+
+  useEffect(() => {
+    if (!credentialChecked || !activeProvider || credentialStatus === 'saving') return;
+    setCredentialStatus(
+      activeProvider.credential_required && !activeProvider.configured
+        ? 'not_configured'
+        : 'configured',
+    );
+  }, [activeProvider, credentialChecked, credentialStatus]);
   const providerDeclaresReasoning = activeProvider?.parameters?.includes('reasoning_effort')
     ?? (activeProviderId === 'openai' || activeProviderId === 'deepseek');
   const nativeReasoningSupported = providerDeclaresReasoning && (
@@ -285,6 +395,16 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   const { currentVolume, isPlaying } = useAudioPlayer();
 
+  useEffect(() => {
+    audioPlayer.setVoiceVolume?.(voiceVolume);
+  }, [voiceVolume]);
+
+  const handleVoiceVolumeChange = useCallback((value: number) => {
+    const next = Math.max(0, Math.min(1, value));
+    setVoiceVolume(next);
+    try { localStorage.setItem('amadeus_pc_voice_volume', String(next)); } catch {}
+  }, []);
+
   // A missing API key is an onboarding state, not chat history. The socket can
   // emit more than one authentication-related notice while it reconnects;
   // keeping those notices out of the transcript prevents a blank workspace
@@ -314,6 +434,20 @@ export const Workstation: React.FC<WorkstationProps> = ({
     }, duration);
   }, []);
 
+  const scrollTranscriptToLatest = useCallback(() => {
+    const viewport = transcriptViewportRef.current;
+    if (!viewport) return;
+    const scroll = () => {
+      viewport.scrollTop = viewport.scrollHeight;
+    };
+    scroll();
+    window.requestAnimationFrame?.(scroll);
+  }, []);
+
+  useEffect(() => {
+    if (isThinking) scrollTranscriptToLatest();
+  }, [isThinking, scrollTranscriptToLatest]);
+
   const prevEmotionRef = useRef(emotion);
 
   useEffect(() => {
@@ -340,6 +474,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     if (!inputText.trim()) return;
     audioService.playSFX('/audio/sfx/连接成功，进入页面1.ogg', sfxVolume);
     sendChat(inputText.trim());
+    scrollTranscriptToLatest();
     setInputText('');
   };
 
@@ -367,20 +502,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
             : row.content,
           translation: row.role === 'assistant' ? row.translation || '' : undefined,
           streaming: false,
-        }));
-      switchConversation(conversation.id, history);
-      setActiveConversationId(conversation.id);
-      if (conversation.model_id) {
-        setModel(conversation.model_id);
-        localStorage.setItem('amadeus_pc_model', conversation.model_id);
+      }));
+      pendingConversationModelRef.current = conversation.model_id || null;
+      if (!switchConversation(conversation.id, history)) {
+        pendingConversationModelRef.current = null;
+        setConversationBusy(false);
       }
-      setConversations((current) => current.map((row) => ({
-        ...row,
-        is_selected: row.id === conversation.id,
-      })));
     } catch (error) {
       console.warn('Conversation switch failed:', error);
-    } finally {
       setConversationBusy(false);
     }
   };
@@ -396,7 +525,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         body: JSON.stringify({
           session_id: sessionId,
           worldline,
-          provider_id: active?.provider_id || 'deepseek',
+          provider_id: active?.provider_id || draftProviderId,
           model_id: active?.model_id || model,
         }),
       });
@@ -456,6 +585,22 @@ export const Workstation: React.FC<WorkstationProps> = ({
   };
 
   const changeProvider = (providerId: string) => {
+    if (!activeConversation) {
+      if (!providerId || providerId === draftProviderId) return;
+      const provider = providers.find((row) => row.id === providerId);
+      const nextModel = provider?.default_model || model;
+      setDraftProviderId(providerId);
+      setModel(nextModel);
+      try {
+        localStorage.setItem('amadeus_pc_provider', providerId);
+        localStorage.setItem('amadeus_pc_model', nextModel);
+      } catch {}
+      window.setTimeout(reconnect, 0);
+      if (provider?.credential_required && !provider.configured) {
+        setIsSettingsOpen(true);
+      }
+      return;
+    }
     void patchActiveConversationRuntime({ provider_id: providerId }).catch((error) => {
       console.warn('Conversation provider update failed:', error);
     });
@@ -463,6 +608,13 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   const changeModel = (modelId: string) => {
     if (!modelId || modelId === activeConversation?.model_id) return;
+    if (!activeConversation) {
+      if (modelId === model) return;
+      setModel(modelId);
+      try { localStorage.setItem('amadeus_pc_model', modelId); } catch {}
+      window.setTimeout(reconnect, 0);
+      return;
+    }
     void patchActiveConversationRuntime({ model_id: modelId }).catch((error) => {
       console.warn('Conversation model update failed:', error);
     });
@@ -502,6 +654,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const forgetConversation = async (forgetLongTerm: boolean) => {
     if (!forgetTarget || conversationBusy) return;
     setConversationBusy(true);
+    let waitingForSwitchAck = false;
     try {
       const response = await fetch(
         `/api/conversations/${encodeURIComponent(forgetTarget.id)}/forget?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`,
@@ -514,14 +667,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
       if (!response.ok) throw new Error(`conversation forget failed: ${response.status}`);
       if (forgetTarget.id === activeConversationId) {
         audioPlayer.stopAll();
-        switchConversation(forgetTarget.id, []);
+        waitingForSwitchAck = switchConversation(forgetTarget.id, []);
       }
       setForgetTarget(null);
       await loadConversations();
     } catch (error) {
       console.warn('Conversation forget failed:', error);
     } finally {
-      setConversationBusy(false);
+      if (!waitingForSwitchAck) setConversationBusy(false);
     }
   };
 
@@ -550,6 +703,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
     model: string;
     reasoningEffort: 'high' | 'xhigh';
   }) => {
+    setCredentialStatus('saving');
+    try {
     // 1. Sync React parent state if worldline changed
     if (newSettings.worldline !== worldline) {
       onWorldlineChange(newSettings.worldline);
@@ -575,6 +730,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       });
       if (!response.ok) {
         setAudioError('provider_config_save_failed');
+        setCredentialStatus('error');
         throw new Error('provider_config_save_failed');
       }
       providerConfigurationChanged = true;
@@ -589,6 +745,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       });
       if (!response.ok) {
         setAudioError('credential_save_failed');
+        setCredentialStatus('error');
         throw new Error('credential_save_failed');
       }
       credentialChanged = true;
@@ -611,7 +768,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
       newSettings.model &&
       newSettings.model !== activeConversation?.model_id
     ) {
-      await patchActiveConversationRuntime({ model_id: newSettings.model });
+      if (activeConversation) {
+        await patchActiveConversationRuntime({ model_id: newSettings.model });
+      } else {
+        setModel(newSettings.model);
+      }
     }
 
     try {
@@ -631,14 +792,22 @@ export const Workstation: React.FC<WorkstationProps> = ({
       await loadProviders();
       reconnect();
     } else {
-      updateConfig({
+      const configPatch: Parameters<typeof updateConfig>[0] = {
         systemPrompt: newSettings.systemPrompt,
-        worldline: newSettings.worldline,
         enableTts: newSettings.enableTts,
         sovitsUrl: newSettings.sovitsUrl,
         temperature: newSettings.temperature,
         reasoningEffort: newSettings.reasoningEffort,
-      });
+      };
+      if (newSettings.worldline === worldline) {
+        configPatch.worldline = newSettings.worldline;
+      }
+      updateConfig(configPatch);
+    }
+    setCredentialStatus(newSettings.apiKey.trim() || credentialConfigured ? 'configured' : 'not_configured');
+    } catch (error) {
+      setCredentialStatus('error');
+      throw error;
     }
   };
 
@@ -719,10 +888,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
               bgmVolume={bgmVolume}
               enableSfx={enableSfx}
               sfxVolume={sfxVolume}
+              voiceVolume={voiceVolume}
               onEnableBgmChange={setEnableBgm}
               onBgmVolumeChange={setBgmVolume}
               onEnableSfxChange={setEnableSfx}
               onSfxVolumeChange={setSfxVolume}
+              onVoiceVolumeChange={handleVoiceVolumeChange}
             />
           </div>
           <button
@@ -760,7 +931,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
         {/* Center: Dialogue Terminal */}
         <div className="grid-terminal border-beam">
-          <div className="terminal-chat-viewport">
+          <div ref={transcriptViewportRef} className="terminal-chat-viewport">
             {visibleMessages.length === 0 ? (
               <div className="empty-chat-tip">
                 <div className={`amadeus-logo-glitched worldline-logo-${worldline}`} />
@@ -975,6 +1146,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         worldline={worldline}
         apiKey={apiKey}
         credentialConfigured={credentialConfigured}
+        credentialStatus={credentialStatus}
         systemPrompt={systemPrompt}
         enableTts={enableTts}
         sovitsUrl={sovitsUrl}

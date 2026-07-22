@@ -8,10 +8,12 @@ interface SoundPanelProps {
   bgmVolume: number;
   enableSfx: boolean;
   sfxVolume: number;
+  voiceVolume: number;
   onEnableBgmChange: (v: boolean) => void;
   onBgmVolumeChange: (v: number) => void;
   onEnableSfxChange: (v: boolean) => void;
   onSfxVolumeChange: (v: number) => void;
+  onVoiceVolumeChange: (v: number) => void;
 }
 
 export const SoundPanel: React.FC<SoundPanelProps> = ({
@@ -21,10 +23,12 @@ export const SoundPanel: React.FC<SoundPanelProps> = ({
   bgmVolume,
   enableSfx,
   sfxVolume,
+  voiceVolume,
   onEnableBgmChange,
   onBgmVolumeChange,
   onEnableSfxChange,
   onSfxVolumeChange,
+  onVoiceVolumeChange,
 }) => {
   const [position, setPosition] = useState<{ top: number; left: number; width: number } | null>(null);
 
@@ -118,6 +122,22 @@ export const SoundPanel: React.FC<SoundPanelProps> = ({
               disabled={!enableSfx}
             />
             <span className="volume-label">{Math.round(sfxVolume * 100)}%</span>
+          </div>
+
+          <div className="sound-setting-row">
+            <label className="checkbox-label">
+              語り声 (VOICE)
+            </label>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              value={Math.round(voiceVolume * 100)}
+              onChange={(e) => onVoiceVolumeChange(Number(e.target.value) / 100)}
+              className="volume-slider"
+              style={{ '--val': `${voiceVolume * 100}%` } as React.CSSProperties}
+            />
+            <span className="volume-label">{Math.round(voiceVolume * 100)}%</span>
           </div>
 
         </div>

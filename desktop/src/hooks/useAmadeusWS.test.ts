@@ -32,6 +32,7 @@ const params: UseAmadeusWSParams = {
   worldline: 'steins_gate',
   enableTts: true,
   sovitsUrl: '',
+  providerId: 'deepseek',
   model: 'deepseek-v4-flash',
   reasoningEffort: 'high',
 };
@@ -42,6 +43,168 @@ describe('useAmadeusWS v2', () => {
     FakeWebSocket.instances = [];
     vi.unstubAllGlobals();
     localStorage.clear();
+  });
+
+  it('authenticates a fresh workstation in draft mode without activating history', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const { result, unmount } = renderHook(() => useAmadeusWS({ ...params, conversationId: null }));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => socket.onopen?.());
+
+    const auth = JSON.parse(socket.sent[0]);
+    expect(auth).toMatchObject({
+      type: 'auth',
+      protocol_version: 2,
+      conversation_mode: 'draft',
+      provider_id: 'deepseek',
+      model: 'deepseek-v4-flash',
+    });
+    expect(auth).not.toHaveProperty('conversation_id');
+    expect(result.current.messages).toEqual([]);
+    unmount();
+  });
+
+  it('applies conversation history only after the matching switch ACK', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const { result, unmount } = renderHook(() => useAmadeusWS({ ...params, conversationId: null }));
+    const socket = FakeWebSocket.instances[0];
+    const history = [{ id: 'history-1', role: 'assistant' as const, content: '历史消息', translation: 'history' }];
+
+    act(() => {
+      socket.onopen?.();
+      result.current.switchConversation('conversation-two', history);
+    });
+
+    const request = JSON.parse(socket.sent[socket.sent.length - 1]);
+    expect(request).toMatchObject({
+      type: 'conversation.switch',
+      conversation_id: 'conversation-two',
+    });
+    expect(request.request_id).toEqual(expect.any(String));
+    expect(result.current.messages).toEqual([]);
+
+    act(() => {
+      socket.emit({
+        type: 'conversation.switched',
+        request_id: request.request_id,
+        conversation_id: 'conversation-two',
+        worldline: 'steins_gate',
+        generation: 8,
+      });
+    });
+
+    expect(result.current.messages).toEqual(history);
+    unmount();
+  });
+
+  it('keeps the current transcript and reports a correlated conversation switch failure', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const onConversationSwitchError = vi.fn();
+    const { result, unmount } = renderHook(() => useAmadeusWS({
+      ...params,
+      onConversationSwitchError,
+    }));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => {
+      socket.onopen?.();
+      result.current.sendChat('仍在当前会话');
+      result.current.switchConversation('missing-conversation', []);
+    });
+    const request = JSON.parse(socket.sent[socket.sent.length - 1]);
+    expect(result.current.messages).toHaveLength(1);
+
+    act(() => socket.emit({
+      type: 'conversation.switch_error',
+      request_id: request.request_id,
+      code: 'conversation_not_found',
+      message: 'not found',
+    }));
+
+    expect(result.current.messages[0].content).toBe('仍在当前会话');
+    expect(onConversationSwitchError).toHaveBeenCalledWith({
+      conversationId: 'missing-conversation',
+      code: 'conversation_not_found',
+      message: 'not found',
+    });
+    unmount();
+  });
+
+  it('fails a switch immediately when the socket is not ready', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const onWorldlineSwitchError = vi.fn();
+    const { result, unmount } = renderHook(() => useAmadeusWS({
+      ...params,
+      onWorldlineSwitchError,
+    }));
+    const socket = FakeWebSocket.instances[0];
+    socket.readyState = 3;
+
+    let started = true;
+    act(() => { started = result.current.switchWorldline('beta'); });
+
+    expect(started).toBe(false);
+    expect(onWorldlineSwitchError).toHaveBeenCalledWith({
+      worldline: 'beta',
+      code: 'socket_not_ready',
+    });
+    unmount();
+  });
+
+  it('switches worldline in place, invalidates old output, and waits for ACK', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const { result, unmount } = renderHook(() => useAmadeusWS(params));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => {
+      socket.onopen?.();
+      result.current.sendChat('hello');
+      socket.emit({ type: 'turn.started', conversation_id: 'c', turn_id: 't', generation: 4 });
+      socket.emit({
+        type: 'segment.ready', conversation_id: 'c', turn_id: 't', generation: 4,
+        segment_id: 0, ja: '旧世界线', zh: 'old', emotion: 'neutral',
+      });
+      result.current.switchWorldline('beta');
+    });
+
+    const request = JSON.parse(socket.sent[socket.sent.length - 1]);
+    expect(request).toMatchObject({
+      type: 'worldline.switch',
+      request_id: expect.any(String),
+      target_worldline: 'beta',
+      conversation_mode: 'draft',
+    });
+    expect(result.current.messages).toEqual([]);
+
+    act(() => {
+      socket.emit({
+        type: 'segment.ready', conversation_id: 'c', turn_id: 't', generation: 4,
+        segment_id: 1, ja: '迟到', zh: 'late', emotion: 'neutral',
+      });
+    });
+    expect(result.current.messages).toEqual([]);
+    unmount();
+  });
+
+  it('reports the materialized conversation from turn.started', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const onTurnStarted = vi.fn();
+    const { result, unmount } = renderHook(() => useAmadeusWS({
+      ...params,
+      conversationId: null,
+      onTurnStarted,
+    }));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => {
+      socket.onopen?.();
+      result.current.sendChat('第一次对话');
+      socket.emit({ type: 'turn.started', conversation_id: 'materialized-conversation', turn_id: 't', generation: 1 });
+    });
+
+    expect(onTurnStarted).toHaveBeenCalledWith('materialized-conversation');
+    unmount();
   });
 
   it('negotiates v2, sends chat.send, and ignores late generations', () => {
@@ -92,6 +255,46 @@ describe('useAmadeusWS v2', () => {
       'voice.stop',
       'turn.cancel',
     ]);
+    unmount();
+  });
+
+  it('applies a whole-turn translation repair only to the active generation', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const { result, unmount } = renderHook(() => useAmadeusWS(params));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => {
+      socket.onopen?.();
+      socket.emit({ type: 'turn.started', conversation_id: 'c', turn_id: 't', generation: 4 });
+      socket.emit({
+        type: 'segment.ready',
+        conversation_id: 'c',
+        turn_id: 't',
+        generation: 4,
+        segment_id: 0,
+        ja: '全文。',
+        zh: '',
+        translation_error: 'translation_timeout',
+      });
+      socket.emit({
+        type: 'turn.translation_repaired',
+        conversation_id: 'c',
+        turn_id: 't',
+        generation: 3,
+        content: '迟到译文。',
+      });
+      socket.emit({
+        type: 'turn.translation_repaired',
+        conversation_id: 'c',
+        turn_id: 't',
+        generation: 4,
+        content: '完整译文。',
+      });
+    });
+
+    const assistant = result.current.messages.find((message) => message.turnId === 't');
+    expect(assistant?.translation).toBe('完整译文。');
+    expect(assistant?.segments?.[0].translationError).toBeUndefined();
     unmount();
   });
 

@@ -4,6 +4,39 @@ import { AudioPlayerManager } from './useAudioPlayer';
 
 
 describe('AudioPlayerManager', () => {
+  it('persists voice volume and keeps mute independent from the saved value', () => {
+    const gain = { setValueAtTime: vi.fn() };
+    class FakeAudioContext {
+      state = 'running';
+      currentTime = 0;
+      destination = {};
+      createGain() { return { connect: vi.fn(), gain }; }
+      createAnalyser() { return { connect: vi.fn(), fftSize: 0, frequencyBinCount: 1, getByteTimeDomainData: vi.fn() }; }
+    }
+
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    localStorage.clear();
+    const manager = new AudioPlayerManager();
+    manager.setVoiceVolume(0.4);
+    expect(localStorage.getItem('amadeus_pc_voice_volume')).toBe('0.4');
+
+    expect(manager.init()).toBe(true);
+    expect(gain.setValueAtTime).toHaveBeenLastCalledWith(0.4, 0);
+
+    manager.setMuted(true);
+    expect(gain.setValueAtTime).toHaveBeenLastCalledWith(0, 0);
+    expect(localStorage.getItem('amadeus_pc_voice_volume')).toBe('0.4');
+
+    manager.setMuted(false);
+    expect(gain.setValueAtTime).toHaveBeenLastCalledWith(0.4, 0);
+  });
+
+  it('restores the persisted voice volume when a new manager is created', () => {
+    localStorage.setItem('amadeus_pc_voice_volume', '0.35');
+    const manager = new AudioPlayerManager();
+    expect(manager.getVoiceVolume()).toBe(0.35);
+  });
+
   it('plays in arrival order when decoding completes out of order', async () => {
     const decodeResolvers: Array<(buffer: AudioBuffer) => void> = [];
     const started: number[] = [];

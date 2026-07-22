@@ -1,5 +1,20 @@
 import { useState, useEffect, useRef } from 'react';
 
+const VOICE_VOLUME_STORAGE_KEY = 'amadeus_pc_voice_volume';
+
+const clampVolume = (volume: number) => Math.max(0, Math.min(1, volume));
+
+const readPersistedVoiceVolume = () => {
+  try {
+    const stored = window.localStorage.getItem(VOICE_VOLUME_STORAGE_KEY);
+    if (stored === null) return 1.0;
+    const parsed = Number(stored);
+    return Number.isFinite(parsed) ? clampVolume(parsed) : 1.0;
+  } catch {
+    return 1.0;
+  }
+};
+
 export class AudioPlayerManager {
   public ctx: AudioContext | null = null;
   public analyser: AnalyserNode | null = null;
@@ -17,6 +32,7 @@ export class AudioPlayerManager {
   private animFrameId: number | null = null;
   private currentPlayId = 0;
   private isMuted = false;
+  private voiceVolume = readPersistedVoiceVolume();
 
   init(): boolean {
     if (this.ctx) return true;
@@ -36,7 +52,7 @@ export class AudioPlayerManager {
     this.analyser.connect(this.gainNode);
     this.gainNode.connect(this.ctx.destination);
 
-    this.gainNode.gain.setValueAtTime(this.isMuted ? 0 : 1, this.ctx.currentTime);
+    this.gainNode.gain.setValueAtTime(this.isMuted ? 0 : this.voiceVolume, this.ctx.currentTime);
     const backlog = this.encodedBacklog.splice(0);
     backlog.forEach(({ base64Data, onEnded }) => {
       void this.playBase64(base64Data, onEnded);
@@ -47,7 +63,23 @@ export class AudioPlayerManager {
   setMuted(muted: boolean) {
     this.isMuted = muted;
     if (this.gainNode && this.ctx) {
-      this.gainNode.gain.setValueAtTime(muted ? 0 : 1, this.ctx.currentTime);
+      this.gainNode.gain.setValueAtTime(muted ? 0 : this.voiceVolume, this.ctx.currentTime);
+    }
+  }
+
+  getVoiceVolume() {
+    return this.voiceVolume;
+  }
+
+  setVoiceVolume(volume: number) {
+    this.voiceVolume = clampVolume(volume);
+    try {
+      window.localStorage.setItem(VOICE_VOLUME_STORAGE_KEY, String(this.voiceVolume));
+    } catch {
+      // Audio playback remains usable when browser storage is unavailable.
+    }
+    if (this.gainNode && this.ctx) {
+      this.gainNode.gain.setValueAtTime(this.isMuted ? 0 : this.voiceVolume, this.ctx.currentTime);
     }
   }
 
@@ -252,5 +284,7 @@ export const useAudioPlayer = () => {
     initContext: () => audioPlayer.init(),
     unlockAudioContext: () => audioPlayer.unlockAudioContext(),
     setMuted: (muted: boolean) => audioPlayer.setMuted(muted),
+    voiceVolume: audioPlayer.getVoiceVolume(),
+    setVoiceVolume: (volume: number) => audioPlayer.setVoiceVolume(volume),
   };
 };

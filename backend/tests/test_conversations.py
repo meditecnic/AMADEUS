@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 import json
 from datetime import datetime, timezone
@@ -10,7 +11,7 @@ from unittest.mock import AsyncMock
 from app import models
 from app import db as db_module
 from app.db import init_db, reset_initialization_cache
-from app.routers.chat_ws import SessionState
+from app.routers.chat_ws import SessionState, repair_turn_translation
 from app.services.conversations import ConversationNotFound, conversation_service
 from app.services.credentials import InMemoryCredentialStore
 from app.services.provider_registry import (
@@ -58,6 +59,78 @@ async def test_assistant_translation_roundtrips_with_conversation_history(isolat
         "okabe", "steins_gate", conversation["id"]
     )
     assert messages[0]["translation"] == "理论可以复现。"
+
+
+@pytest.mark.asyncio
+async def test_translation_repair_updates_only_owned_assistant_message(isolated_store):
+    conversation = await conversation_service.create("okabe", "steins_gate", title="Repair")
+    message_id = await models.save_message(
+        "okabe",
+        "assistant",
+        "[EMO:intellectual] 再試行する。",
+        conversation_id=conversation["id"],
+    )
+
+    updated = await models.update_message_translation(
+        message_id,
+        "okabe",
+        conversation["id"],
+        "重试。",
+        worldline="steins_gate",
+    )
+    wrong_owner = await models.update_message_translation(
+        message_id,
+        "darling",
+        conversation["id"],
+        "不应写入",
+        worldline="steins_gate",
+    )
+
+    messages = await models.get_session_messages(
+        "okabe", "steins_gate", conversation["id"]
+    )
+    assert updated is True
+    assert wrong_owner is False
+    assert messages[0]["translation"] == "重试。"
+
+
+@pytest.mark.asyncio
+async def test_whole_turn_translation_repair_persists_and_rejects_stale_ui_event(isolated_store):
+    conversation = await conversation_service.create("okabe", "steins_gate", title="Repair")
+    message_id = await models.save_message(
+        "okabe",
+        "assistant",
+        "[EMO:neutral] 全文。",
+        conversation_id=conversation["id"],
+    )
+    session = SessionState("okabe")
+    session.conversation_id = conversation["id"]
+    session.current_epoch = 2
+    session.worldline = "beta"
+    queue = asyncio.Queue()
+
+    async def translate(_text: str) -> str:
+        return "全文翻译。"
+
+    repaired = await repair_turn_translation(
+        session,
+        text="全文。",
+        message_id=message_id,
+        conversation_id=conversation["id"],
+        worldline="steins_gate",
+        turn_id="turn-1",
+        generation=1,
+        send_queue=queue,
+        translate=translate,
+        timeout=0.1,
+    )
+
+    messages = await models.get_session_messages(
+        "okabe", "steins_gate", conversation["id"]
+    )
+    assert repaired == "全文翻译。"
+    assert messages[0]["translation"] == "全文翻译。"
+    assert queue.empty()
 
 
 @pytest.mark.asyncio

@@ -49,6 +49,28 @@ async def save_message(
         await db.close()
 
 
+async def update_message_translation(
+    message_id: int,
+    session_id: str,
+    conversation_id: str,
+    translation: str,
+    worldline: str = "steins_gate",
+) -> bool:
+    """Repair one assistant translation without crossing owner or conversation scope."""
+    wl = normalize_worldline(worldline)
+    db = await get_db(wl, "history")
+    try:
+        cur = await db.execute(
+            """UPDATE messages SET translation=?
+               WHERE id=? AND session_id=? AND conversation_id=? AND role='assistant'""",
+            (translation, message_id, session_id, conversation_id),
+        )
+        await db.commit()
+        return cur.rowcount == 1
+    finally:
+        await db.close()
+
+
 async def get_recent_messages(
     session_id: str,
     limit: int = 6,

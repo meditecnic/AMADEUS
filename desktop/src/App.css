@@ -487,14 +487,13 @@ body {
 
 .salieri-workstation-panel.worldline-beta .amadeus-logo-glitched {
   filter: sepia(0.55) saturate(0.82) hue-rotate(326deg) drop-shadow(0 0 20px rgba(227, 145, 70, 0.44));
-  animation: beta-empty-logo-breath 2.8s steps(2, end) infinite;
+  animation: beta-empty-logo-breath 3.2s ease-in-out infinite;
+  transition: none;
 }
 
 @keyframes beta-empty-logo-breath {
-  0%, 100% { opacity: 0.16; transform: translateX(0); }
-  48% { opacity: 0.32; transform: translateX(0); }
-  50% { opacity: 0.42; transform: translateX(1px); }
-  52% { opacity: 0.24; transform: translateX(-1px); }
+  0%, 100% { opacity: 0.16; filter: sepia(0.55) saturate(0.82) hue-rotate(326deg) drop-shadow(0 0 16px rgba(227, 145, 70, 0.34)); }
+  50% { opacity: 0.34; filter: sepia(0.55) saturate(0.9) hue-rotate(326deg) drop-shadow(0 0 24px rgba(227, 145, 70, 0.48)); }
 }
 
 .terminal-welcome-msg.connecting {
@@ -543,7 +542,6 @@ body {
   flex-direction: column;
   max-width: 80%;
   animation: message-in-fade 0.3s ease;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
 }
 
 @keyframes message-in-fade {
@@ -690,24 +688,24 @@ body {
   gap: 8px;
   align-self: center;
   padding: 6px 9px;
-  border: 1px solid rgba(90, 238, 255, 0.42);
+  border: 1px solid color-mix(in srgb, var(--wl-accent) 65%, transparent);
   border-radius: 999px;
-  background: rgba(3, 18, 29, 0.82);
-  box-shadow: inset 0 0 12px rgba(43, 211, 255, 0.08), 0 0 14px rgba(43, 211, 255, 0.08);
+  background: color-mix(in srgb, var(--wl-edge) 75%, #080504 25%);
+  box-shadow: inset 0 0 12px color-mix(in srgb, var(--wl-glow) 45%, transparent), 0 0 14px color-mix(in srgb, var(--wl-glow) 55%, transparent);
 }
 
 .voice-control-signal {
   padding-right: 3px;
-  color: rgba(120, 235, 255, 0.76);
+  color: var(--wl-accent-dim);
   font: 600 9px/1 monospace;
   letter-spacing: 0.12em;
 }
 
 .voice-control-capsule button {
   border: 0;
-  border-left: 1px solid rgba(90, 238, 255, 0.22);
+  border-left: 1px solid color-mix(in srgb, var(--wl-accent) 38%, transparent);
   padding: 2px 5px 2px 10px;
-  color: #b8f5ff;
+  color: var(--wl-accent-bright);
   background: transparent;
   font: 600 9px/1.2 monospace;
   letter-spacing: 0.06em;
@@ -730,7 +728,7 @@ body {
 .bilingual-message.streaming .chinese-main::after {
   content: '▌';
   margin-left: 2px;
-  color: rgba(103, 235, 255, 0.82);
+  color: var(--wl-accent-bright);
   animation: bilingual-cursor 0.8s steps(1) infinite;
 }
 
@@ -870,7 +868,13 @@ body {
   color: var(--wl-accent-bright);
 }
 
+.credential-status.checking,
+.credential-status.saving {
+  color: var(--wl-accent-dim);
+}
+
 .credential-status.not-configured,
+.credential-status.error,
 .settings-save-error {
   color: #e39a78;
 }
@@ -902,22 +906,6 @@ body {
 .tab-panels {
   scrollbar-width: thin;
   scrollbar-color: var(--color-border-light) rgba(0, 0, 0, 0.24);
-}
-
-.salieri-range-shell::before {
-  inset: 18% 0;
-  border: 1px solid color-mix(in srgb, var(--wl-accent) 42%, var(--color-border-light));
-  border-radius: 2px;
-  background: linear-gradient(180deg, rgba(20, 10, 5, 0.96), rgba(7, 4, 3, 0.98));
-  box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.65), 0 0 6px color-mix(in srgb, var(--wl-glow) 48%, transparent);
-}
-
-.salieri-range-fill {
-  inset: 27% 3.2%;
-  border-radius: 1px;
-  background: linear-gradient(90deg, var(--wl-accent-dim), var(--wl-accent-bright));
-  box-shadow: 0 0 7px var(--wl-glow);
-  filter: none;
 }
 
 .terminal-input-bar > * {
@@ -1888,22 +1876,6 @@ body {
   color: var(--wl-accent-dim) !important;
 }
 
-/* The asset slider contains a white calibration plate; use the terminal      */
-/* track instead so settings never introduce an unrelated light rectangle.   */
-.salieri-workstation-panel .salieri-range-shell::before {
-  background: linear-gradient(180deg, rgba(20, 10, 5, 0.96), rgba(7, 4, 3, 0.98));
-  background-image: linear-gradient(180deg, rgba(20, 10, 5, 0.96), rgba(7, 4, 3, 0.98));
-  border-color: color-mix(in srgb, var(--wl-accent) 42%, var(--color-border-light));
-}
-
-.salieri-workstation-panel .salieri-range-fill {
-  inset: 27% 3.2%;
-  background-image: linear-gradient(90deg, var(--wl-accent-dim), var(--wl-accent-bright));
-  border-radius: 1px;
-  box-shadow: 0 0 7px var(--wl-glow);
-  filter: none;
-}
-
 /* HUD information stack: weekday, date, then connection state. */
 .header-telemetry .hud-badge-container {
   position: static !important;
@@ -2458,13 +2430,6 @@ body {
   opacity: 0;
 }
 
-.thinking-card-box {
-  background-color: rgba(10, 5, 2, 0.6) !important;
-  padding: 8px 12px !important;
-  border: 1px solid #b34c00 !important;
-  border-top: none !important;
-}
-
 .thinking-indicator-card {
   display: flex;
   align-items: center;
@@ -2577,62 +2542,14 @@ body {
   border: none;
 }
 
-/* ── 个性幅度与音量滑条 (Range Slider) Gecko & Webkit ── */
+/* ── Direct themed personality range ── */
 input[type="range"].salieri-range {
-  -webkit-appearance: none;
-  appearance: none;
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  background: transparent !important;
-  border: none !important;
-  padding: 0 !important;
-  box-shadow: none !important;
-  cursor: pointer;
-  outline: none;
-  opacity: 0;
-  z-index: 3;
-}
-
-.salieri-range-shell {
-  --val: 50%;
-  position: relative;
   flex: 1;
   min-width: 150px;
-  height: 42px;
-  background: transparent;
-  isolation: isolate;
+  opacity: 1;
+  position: static;
+  z-index: auto;
 }
-
-.salieri-range-shell::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  background: url('/assets/ui/slider_track.png') center / 100% 100% no-repeat;
-  pointer-events: none;
-}
-
-.salieri-range-fill {
-  position: absolute;
-  z-index: 1;
-  left: 10px;
-  right: 10px;
-  top: 7px;
-  bottom: 7px;
-  height: auto;
-  width: auto;
-  background: url('/assets/ui/slider_thumb.png') center / 100% 100% no-repeat;
-  filter: saturate(1.12) drop-shadow(0 0 4px rgba(255, 108, 0, 0.45));
-  clip-path: inset(0 calc(100% - var(--val)) 0 0);
-  pointer-events: none;
-}
-
-input[type="range"].salieri-range::-webkit-slider-runnable-track,
-input[type="range"].salieri-range::-moz-range-track,
-input[type="range"].salieri-range::-webkit-slider-thumb,
-input[type="range"].salieri-range::-moz-range-thumb { background: transparent; border: 0; }
 
 /* ── HUD pill clean overrides ── */
 .hud-pill {
@@ -2822,21 +2739,6 @@ input[type="range"].salieri-range::-moz-range-thumb { background: transparent; b
 .personality-field { grid-column: 1 / -1; }
 .tab-panel.active > .setting-field:first-child { grid-column: 1 / -1; }
 .slider-row { width: min(370px, 100%); gap: 12px; }
-.salieri-range-shell {
-  flex: 0 0 min(350px, calc(100% - 42px));
-  min-width: 0;
-  height: 48px;
-}
-.salieri-range-shell::before { background-size: 100% 100%; }
-.salieri-range-fill {
-  left: 3.2%;
-  right: 3.2%;
-  top: 7%;
-  bottom: 7%;
-  background-image: url('/assets/ui/slider_fill.png');
-  background-size: 100% 100%;
-  filter: saturate(1.14) drop-shadow(0 0 5px rgba(255, 108, 0, 0.48));
-}
 .slider-value { min-width: 30px; font-size: 14px; }
 
 .terminal-input-bar { height: 56px; padding: 0 22px; gap: 12px; }
@@ -3110,16 +3012,6 @@ input[type="range"].salieri-range::-moz-range-thumb { background: transparent; b
   filter: drop-shadow(0 0 3px rgba(216, 115, 44, 0.16));
 }
 .divergence-meter-beta .divergence-meter-plate { filter: none; }
-
-.salieri-range-fill {
-  /* Match the actual inner pixels of slider_track.png (x≈17..491, y≈16..57).
-     The border remains visible while the texture reaches both inner ends. */
-  left: 3.2%;
-  right: 3.2%;
-  top: 21%;
-  bottom: 21%;
-  filter: saturate(1.05) drop-shadow(0 0 3px rgba(255, 108, 0, 0.32));
-}
 
 .reasoning-label {
   color: #d4813c;

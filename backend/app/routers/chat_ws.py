@@ -2,6 +2,7 @@
 import base64
 import asyncio
 from uuid import uuid4
+from collections.abc import Awaitable, Callable
 import starlette
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app import config
@@ -14,19 +15,37 @@ from app.db import init_db
 from app.services.prompt_compiler import compile_for_session
 from app.services.session_manager import cancel_inflight, session_coordinator
 from app.domain.segments import (
+    AudioErrorCode,
     IncrementalJapaneseSegmenter,
     Segment,
     SegmentPipeline,
     TransientSegmentError,
     TurnIdentity,
+    clean_text_for_tts,
+    is_meaningful_sentence,
+    prepare_tts_text,
 )
 
 import copy
 from app.services.tts_queue import TTSServiceError
+from app.services.diagnostics import diagnostic_runtime
 from contextlib import aclosing
 from app.security.guard import contains_leak
 
 router = APIRouter()
+
+_V2_DELIVERY_TYPES = frozenset(
+    {
+        "turn.started",
+        "segment.ready",
+        "segment.audio",
+        "segment.audio_error",
+        "turn.translation_repaired",
+        "turn.completed",
+        "turn.cancelled",
+    }
+)
+_V2_TERMINAL_TYPES = frozenset({"turn.completed", "turn.cancelled"})
 
 
 class SessionState:
@@ -50,6 +69,7 @@ class SessionState:
         self.worldline = "steins_gate"
         self.client_type = "mobile"
         self.protocol_version = 1
+        self.conversation_mode = "history"
         
         self.active_task = None
         self.is_busy = False
@@ -60,6 +80,7 @@ class SessionState:
         self.voice_stopped_turn_id = None
         self.active_streams = set()
         self.active_segment_pipeline = None
+        self.background_tasks = set()
         self.history_epoch = 0
         self.last_assistant_emotion = "neutral"
         self.consecutive_no_emo_tags = 0
@@ -70,6 +91,7 @@ class SessionState:
 
         selected = await conversation_service.get_selected(self.session_id, self.worldline)
         self.conversation_id = str(selected["id"])
+        self.conversation_mode = "history"
         self.provider_id = str(selected.get("provider_id") or "deepseek")
         self.model = str(selected.get("model_id") or self.model)
         self.api_key = credential_store.get(self.provider_id)
@@ -84,6 +106,22 @@ class SessionState:
             worldline=self.worldline,
             conversation_id=self.conversation_id,
         )
+        from app.services.soul_engine import soul_engine
+        await soul_engine.restore_emotion(self.session_id, self.worldline)
+
+    async def enter_draft(self):
+        """Load runtime defaults without activating any persisted conversation."""
+        await init_db()
+        from app.services.conversations import conversation_service
+
+        selected = await conversation_service.get_selected(self.session_id, self.worldline)
+        self.provider_id = str(selected.get("provider_id") or "deepseek")
+        self.model = str(selected.get("model_id") or self.model)
+        self.api_key = credential_store.get(self.provider_id)
+        self.conversation_id = None
+        self.conversation_mode = "draft"
+        self._history = []
+        self.memory_summary = ""
         from app.services.soul_engine import soul_engine
         await soul_engine.restore_emotion(self.session_id, self.worldline)
 
@@ -119,11 +157,6 @@ def get_session_allowed_emotions(session: "SessionState") -> set:
     if session.client_type in ("desktop", "voice"):
         return DESKTOP_ALLOWED_EMOTIONS
     return MOBILE_ALLOWED_EMOTIONS
-
-def is_meaningful_sentence(text: str) -> bool:
-    """Filter out empty sentences containing only punctuation and whitespace."""
-    clean = re.sub(r'[\s。！\uff01？\uff1f!?,.\uff0c\u3001\"\'`「」『』()（）\-—_+=\[\]{}<>#~*]', '', text)
-    return len(clean) > 0
 
 def extract_sentences_from_buffer(buffer: str, is_end: bool = False):
     """
@@ -259,16 +292,6 @@ async def compress_and_update_history(
         if session_data:
             async with session_data.lock:
                 session_data.compressing = False
-
-def clean_text_for_tts(text: str) -> str:
-    """
-    Remove action descriptions in brackets, e.g., (ため息をつく), （ため息をつく）, [ため息], etc.
-    """
-    cleaned = re.sub(r'\(.*?\)', '', text)
-    cleaned = re.sub(r'（.*?）', '', cleaned)
-    cleaned = re.sub(r'\[.*?\]', '', cleaned)
-    cleaned = re.sub(r'\*.*?\*', '', cleaned)
-    return cleaned.strip()
 
 async def execute_tool_call(name: str, arguments_str: str) -> str:
     import json
@@ -452,6 +475,68 @@ def should_force_search(user_msg: str) -> bool:
     ]
     return any(re.search(p, user_msg, re.IGNORECASE) for p in patterns)
 
+
+async def repair_turn_translation(
+    session: SessionState,
+    *,
+    text: str,
+    message_id: int,
+    conversation_id: str,
+    worldline: str,
+    turn_id: str,
+    generation: int,
+    send_queue: asyncio.Queue,
+    translate: Callable[[str], Awaitable[str]],
+    timeout: float = 15.0,
+) -> str | None:
+    """Retry a failed bilingual turn once and reject stale UI delivery."""
+    try:
+        repaired = await asyncio.wait_for(translate(text), timeout=timeout)
+        repaired = repaired.strip() if repaired else ""
+        if not repaired:
+            return None
+        updated = await models.update_message_translation(
+            message_id,
+            session.session_id,
+            conversation_id,
+            repaired,
+            worldline=worldline,
+        )
+        if not updated:
+            return None
+        if (
+            session.current_epoch == generation
+            and session.conversation_id == conversation_id
+        ):
+            await send_queue.put(
+                (
+                    generation,
+                    {
+                        "type": "turn.translation_repaired",
+                        "conversation_id": conversation_id,
+                        "turn_id": turn_id,
+                        "generation": generation,
+                        "content": repaired,
+                    },
+                )
+            )
+        return repaired
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        print(
+            f"[Translation Repair] {type(exc).__name__} for turn {turn_id}",
+            flush=True,
+        )
+        return None
+
+
+def _schedule_background_task(session: SessionState, coroutine) -> asyncio.Task:
+    task = asyncio.create_task(coroutine)
+    session.background_tasks.add(task)
+    task.add_done_callback(session.background_tasks.discard)
+    return task
+
 async def processor_loop(
     session: SessionState, 
     user_msg: str, 
@@ -470,9 +555,23 @@ async def processor_loop(
     if session.conversation_id is None:
         from app.services.conversations import conversation_service
 
-        selected = await conversation_service.get_selected(session.session_id, session.worldline)
+        if session.conversation_mode == "draft":
+            selected = await conversation_service.create_and_select(
+                session.session_id,
+                session.worldline,
+                provider_id=session.provider_id,
+                model_id=session.model,
+            )
+        else:
+            selected = await conversation_service.get_selected(
+                session.session_id,
+                session.worldline,
+            )
         session.conversation_id = str(selected["id"])
+        session.conversation_mode = "history"
     conversation_id = session.conversation_id
+    turn_worldline = session.worldline
+    turn_api_key = session.api_key
     registered_provider = provider_registry.snapshot(session.provider_id, session.model)
     turn_provider = ProviderSnapshot(
         provider_id=registered_provider.provider_id,
@@ -490,9 +589,11 @@ async def processor_loop(
     )
     turn_provider.require(ProviderTask.CHAT)
     segment_pipeline = None
+    diagnostic_observer = None
     segment_count = 0
     history_translation = ""
-    segment_event_context = {"emotion": "neutral"}
+    assistant_message_id = None
+    needs_translation_repair = False
     streaming_splitter = None
     streamed_segments = []
     
@@ -503,8 +604,6 @@ async def processor_loop(
         if session.protocol_version >= 2:
             async def emit_segment_event(event: dict):
                 payload = dict(event)
-                if payload["type"].startswith("segment."):
-                    payload["emotion"] = segment_event_context["emotion"]
                 if isinstance(payload.get("data"), bytes):
                     payload["data"] = base64.b64encode(payload["data"]).decode("utf-8")
                 await send_queue.put((epoch, payload))
@@ -512,33 +611,36 @@ async def processor_loop(
             async def translate_segment(text: str) -> str:
                 return await translate_with_provider(turn_provider, text, session.api_key)
 
-            async def synthesize_segment(text: str) -> bytes:
-                cleaned = clean_text_for_tts(text)
+            async def synthesize_segment(text: str, emotion: str) -> bytes:
                 if not session.enable_tts:
-                    raise RuntimeError("user_disabled")
-                if not is_meaningful_sentence(cleaned):
-                    raise RuntimeError("action_only")
+                    raise TTSServiceError(AudioErrorCode.USER_DISABLED)
+                prepared = prepare_tts_text(text)
+                if prepared.error is not None:
+                    raise TTSServiceError(prepared.error)
                 try:
                     return await tts_manager.synthesize_async(
-                        cleaned,
-                        segment_event_context["emotion"],
+                        prepared.text,
+                        emotion,
                         sovits_url=session.sovits_url,
                     )
                 except TTSServiceError as exc:
-                    message = str(exc).lower()
-                    if any(token in message for token in ("timeout", "429", "500", "502", "503", "504", "network")):
-                        raise TransientSegmentError(str(exc)) from exc
+                    if exc.retryable:
+                        raise TransientSegmentError(exc.code.value) from exc
                     raise
 
+            turn_identity = TurnIdentity(conversation_id, turn_id, session.revision)
+            diagnostic_observer = diagnostic_runtime.create_turn_observer(turn_identity)
             segment_pipeline = SegmentPipeline(
-                TurnIdentity(conversation_id, turn_id, session.revision),
+                turn_identity,
                 emit=emit_segment_event,
                 translate=translate_segment,
                 synthesize=synthesize_segment,
                 tts_concurrency=2,
                 tts_retries=1,
                 translation_retries=1,
-                translation_timeout=6.0,
+                translation_timeout=10.0,
+                tts_observer=diagnostic_observer,
+                turn_observer=diagnostic_observer,
             )
             session.active_segment_pipeline = segment_pipeline
             await segment_pipeline.start()
@@ -547,15 +649,14 @@ async def processor_loop(
             streaming_splitter = IncrementalJapaneseSegmenter()
 
             async def submit_text_delta(delta: str, emotion: str):
-                segment_event_context["emotion"] = emotion
-                for segment in streaming_splitter.feed(delta):
+                for segment in streaming_splitter.feed(delta, emotion=emotion):
                     delivered = segment
                     if contains_leak(segment.text):
                         delivered = Segment(
                             segment.id,
                             "はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。",
+                            "tsundere",
                         )
-                        segment_event_context["emotion"] = "tsundere"
                     streamed_segments.append(delivered)
                     segment_pipeline.submit(delivered)
 
@@ -594,7 +695,6 @@ async def processor_loop(
             provider_snapshot=turn_provider,
         )
         print(f"[DEBUG] processor_loop: final_emotion='{final_emotion}' has_tool_call={bool(merged_tool_calls)} emo_tag_found={emo_tag_found}", flush=True)
-        segment_event_context["emotion"] = final_emotion
         
         if merged_tool_calls:
             await send_queue.put((epoch, {
@@ -658,14 +758,15 @@ async def processor_loop(
                     delivered = Segment(
                         segment.id,
                         "はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。",
+                        "tsundere",
                     )
-                    segment_event_context["emotion"] = "tsundere"
                 streamed_segments.append(delivered)
                 segment_pipeline.submit(delivered)
             segment_count = len(streamed_segments)
             await segment_pipeline.finish(segment_count=segment_count, emit_completed=False)
             full_ja_text = "".join(segment.text for segment in streamed_segments)
             history_translation = segment_pipeline.translation_text
+            needs_translation_repair = segment_pipeline.has_translation_errors
         elif session.client_type == "voice":
             full_ja_text = await _dispatch_streaming_voice_tts(session, final_text, final_emotion, send_queue, epoch)
         else:
@@ -731,6 +832,29 @@ async def processor_loop(
 
         if segment_pipeline is not None:
             await segment_pipeline.complete(segment_count=segment_count)
+
+        if (
+            needs_translation_repair
+            and assistant_message_id is not None
+            and full_ja_text.strip()
+        ):
+            async def translate_whole_turn(text: str) -> str:
+                return await translate_with_provider(turn_provider, text, turn_api_key)
+
+            _schedule_background_task(
+                session,
+                repair_turn_translation(
+                    session,
+                    text=full_ja_text,
+                    message_id=assistant_message_id,
+                    conversation_id=conversation_id,
+                    worldline=turn_worldline,
+                    turn_id=turn_id,
+                    generation=epoch,
+                    send_queue=send_queue,
+                    translate=translate_whole_turn,
+                ),
+            )
         
         if len(session.history) // 2 > config.HISTORY_COMPRESS_THRESHOLD and not session.compressing:
             session.compressing = True
@@ -747,12 +871,14 @@ async def processor_loop(
             
     except asyncio.CancelledError:
         if segment_pipeline is not None:
-            await segment_pipeline.cancel()
+            await segment_pipeline.cancel(reason=None)
         tts_manager.cancel_pending(session.tts_key)
         raise
     except Exception as e:
         if segment_pipeline is not None:
-            await segment_pipeline.cancel()
+            await segment_pipeline.cancel(reason=None)
+        if segment_pipeline is not None and diagnostic_observer is not None:
+            diagnostic_observer.turn_error(segment_pipeline.identity, "generation_failed")
         print(f"[Processor Error] Session {session.session_id}: {e}")
         await send_queue.put((epoch, {"type": "error", "message": f"Server error: {str(e)}"}))
     finally:
@@ -876,7 +1002,6 @@ async def _dispatch_tts_sentences(
                     continue
                 else:
                     tts_fragment_buffer += text
-                    full_ja_text_parts.append(text)
                     continue
 
             if tts_fragment_buffer:
@@ -998,7 +1123,35 @@ async def writer_loop(send_queue: asyncio.Queue, session: SessionState, websocke
             # Unpack msg
             msg_epoch, payload = msg
             if msg_epoch == session.current_epoch:
-                await websocket.send_json(payload)
+                observer = None
+                payload_type = payload.get("type") if isinstance(payload, dict) else None
+                turn_id = payload.get("turn_id") if isinstance(payload, dict) else None
+                generation = payload.get("generation") if isinstance(payload, dict) else None
+                if (
+                    payload_type in _V2_DELIVERY_TYPES
+                    and isinstance(turn_id, str)
+                    and isinstance(generation, int)
+                ):
+                    observer = diagnostic_runtime.find_turn_observer(turn_id, generation)
+                try:
+                    await websocket.send_json(payload)
+                except WebSocketDisconnect:
+                    if observer is not None:
+                        observer.delivery(payload, "failed", "websocket_disconnected")
+                    if payload_type in _V2_TERMINAL_TYPES and turn_id is not None:
+                        diagnostic_runtime.release_turn_observer(turn_id, generation)
+                    raise
+                except Exception:
+                    if observer is not None:
+                        observer.delivery(payload, "failed", "transport_failed")
+                    if payload_type in _V2_TERMINAL_TYPES and turn_id is not None:
+                        diagnostic_runtime.release_turn_observer(turn_id, generation)
+                    raise
+                else:
+                    if observer is not None:
+                        observer.delivery(payload, "succeeded")
+                    if payload_type in _V2_TERMINAL_TYPES and turn_id is not None:
+                        diagnostic_runtime.release_turn_observer(turn_id, generation)
                 
             send_queue.task_done()
     except WebSocketDisconnect:
@@ -1062,10 +1215,15 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                     wl = data["worldline"]
                     if wl in ("steins_gate", "beta"):
                         session.worldline = wl
+                requested_protocol = data.get("protocol_version", data.get("protocol", 1))
+                session.protocol_version = 2 if requested_protocol in (2, "2", "v2") else 1
+                requested_mode = str(data.get("conversation_mode") or "history").strip()
+                if session.protocol_version < 2 or requested_mode not in {"draft", "history"}:
+                    requested_mode = "history"
                 requested_conversation_id = str(
                     data.get("conversation_id") or ""
                 ).strip()
-                if requested_conversation_id:
+                if requested_mode == "history" and requested_conversation_id:
                     from app.services.conversations import (
                         ConversationNotFound,
                         conversation_service,
@@ -1085,7 +1243,34 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                             },
                         ))
                         continue
-                await session.load_from_db()
+                if requested_mode == "draft":
+                    await session.enter_draft()
+                    requested_provider_id = str(
+                        data.get("provider_id") or session.provider_id
+                    ).strip()
+                    requested_model = str(data.get("model") or "").strip() or None
+                    try:
+                        draft_provider = provider_registry.snapshot(
+                            requested_provider_id,
+                            requested_model,
+                        )
+                    except KeyError:
+                        await send_queue.put((
+                            session.current_epoch,
+                            {
+                                "type": "error",
+                                "message": "请求的模型供应商不可用。",
+                            },
+                        ))
+                        continue
+                    session.provider_id = draft_provider.provider_id
+                    session.model = draft_provider.model_id
+                else:
+                    await session.load_from_db()
+                    if "model" in data and session.provider_id == "deepseek":
+                        requested_model = str(data.get("model") or "").strip()
+                        if requested_model in ("deepseek-v4-flash", "deepseek-v4-pro"):
+                            session.model = requested_model
                 api_key = credential_store.get(session.provider_id)
                 provider_snapshot = provider_registry.snapshot(
                     session.provider_id,
@@ -1111,9 +1296,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 from app.security.prompt import get_rendered_system_prompt, SYSTEM_PROMPT_BASE
                 if "client" in data:
                     session.client_type = data["client"]
-                requested_protocol = data.get("protocol_version", data.get("protocol", 1))
-                session.protocol_version = 2 if requested_protocol in (2, "2", "v2") else 1
-                
+
                 base_prompt = data.get("system_prompt") or SYSTEM_PROMPT_BASE
                 session.base_system_prompt = base_prompt
                 session.system_prompt = get_rendered_system_prompt(base_prompt, session.worldline, session.client_type)
@@ -1126,10 +1309,6 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                         pass
                 if "enable_tts" in data:
                     session.enable_tts = bool(data["enable_tts"])
-                if "model" in data:
-                    m = data["model"]
-                    if m in ("deepseek-v4-flash", "deepseek-v4-pro"):
-                        session.model = m
                 if "reasoning_effort" in data:
                     effort = data["reasoning_effort"]
                     if effort in ("high", "xhigh"):
@@ -1166,7 +1345,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
             if frame_type == "turn.cancel":
                 pipeline = session.active_segment_pipeline
                 if pipeline is not None:
-                    await pipeline.cancel()
+                    await pipeline.cancel(reason="user_turn_cancel")
                 elif session.protocol_version >= 2 and session.active_turn_id:
                     await send_queue.put((session.current_epoch, {
                         "type": "turn.cancelled",
@@ -1186,38 +1365,128 @@ async def websocket_chat_endpoint(websocket: WebSocket):
 
             if frame_type == "conversation.switch":
                 conversation_id = str(data.get("conversation_id") or "").strip()
+                request_id = str(data.get("request_id") or "").strip()
                 if not conversation_id:
                     await send_queue.put((session.current_epoch, {
                         "type": "error",
                         "message": "conversation.switch requires conversation_id",
                     }))
                     continue
-                pipeline = session.active_segment_pipeline
-                if pipeline is not None:
-                    await pipeline.cancel()
-                await cancel_inflight(session)
                 from app.services.conversations import ConversationNotFound, conversation_service
                 try:
+                    await conversation_service.require_owned(
+                        conversation_id,
+                        session.session_id,
+                        session.worldline,
+                    )
+                except ConversationNotFound as exc:
+                    await send_queue.put((session.current_epoch, {
+                        "type": "conversation.switch_error",
+                        "request_id": request_id,
+                        "code": "conversation_not_found",
+                        "message": "请求的会话不存在或不属于当前世界线。",
+                    }))
+                    continue
+                runtime_snapshot = {
+                    "conversation_id": session.conversation_id,
+                    "conversation_mode": session.conversation_mode,
+                    "history": session.history,
+                    "memory_summary": session.memory_summary,
+                    "provider_id": session.provider_id,
+                    "model": session.model,
+                    "api_key": session.api_key,
+                }
+                previous_selected = None
+                try:
+                    previous_selected = await conversation_service.get_selected(
+                        session.session_id,
+                        session.worldline,
+                    )
+                    pipeline = session.active_segment_pipeline
+                    if pipeline is not None:
+                        await pipeline.cancel(reason="superseded_generation")
+                    await cancel_inflight(session)
                     await conversation_service.select(
                         session.session_id,
                         session.worldline,
                         conversation_id,
                     )
-                except ConversationNotFound as exc:
+                    session.history_epoch += 1
+                    session.current_epoch += 1
+                    session.revision = session.current_epoch
+                    await session.load_from_db()
+                except Exception:
+                    for attribute, value in runtime_snapshot.items():
+                        setattr(session, attribute, value)
+                    try:
+                        if previous_selected is None:
+                            raise RuntimeError("previous selection unavailable")
+                        await conversation_service.select(
+                            session.session_id,
+                            session.worldline,
+                            str(previous_selected["id"]),
+                        )
+                    except Exception:
+                        pass
                     await send_queue.put((session.current_epoch, {
-                        "type": "error",
-                        "message": str(exc),
+                        "type": "conversation.switch_error",
+                        "request_id": request_id,
+                        "code": "conversation_switch_failed",
+                        "message": "会话切换失败，当前会话已保留。",
                     }))
                     continue
-                session.history_epoch += 1
-                session.current_epoch += 1
-                session.revision = session.current_epoch
-                await session.load_from_db()
                 await send_queue.put((session.current_epoch, {
-                    "type": "status",
-                    "dsk": "idle",
-                    "state": "conversation_switched",
+                    "type": "conversation.switched",
+                    "request_id": request_id,
                     "conversation_id": session.conversation_id,
+                    "worldline": session.worldline,
+                    "generation": session.current_epoch,
+                }))
+                continue
+
+            if frame_type == "worldline.switch":
+                request_id = str(data.get("request_id") or "").strip()
+                target_worldline = str(data.get("target_worldline") or "").strip()
+                requested_mode = str(data.get("conversation_mode") or "draft").strip()
+                if target_worldline not in {"steins_gate", "beta"}:
+                    await send_queue.put((session.current_epoch, {
+                        "type": "worldline.switch_error",
+                        "request_id": request_id,
+                        "code": "invalid_worldline",
+                        "message": "worldline.switch requires a valid target_worldline",
+                    }))
+                    continue
+                if requested_mode not in {"draft", "history"}:
+                    requested_mode = "draft"
+                pipeline = session.active_segment_pipeline
+                if pipeline is not None:
+                    await pipeline.cancel(reason="superseded_generation")
+                try:
+                    await session_coordinator.switch(
+                        session,
+                        target_worldline,
+                        conversation_mode=requested_mode,
+                    )
+                    await session_coordinator.acquire_lease(
+                        session.session_id,
+                        target_worldline,
+                        websocket,
+                    )
+                except Exception:
+                    await send_queue.put((session.current_epoch, {
+                        "type": "worldline.switch_error",
+                        "request_id": request_id,
+                        "code": "worldline_switch_failed",
+                        "message": "世界线切换失败，当前世界线已保留。",
+                    }))
+                    continue
+                await send_queue.put((session.current_epoch, {
+                    "type": "worldline.switched",
+                    "request_id": request_id,
+                    "worldline": session.worldline,
+                    "conversation_mode": session.conversation_mode,
+                    "conversation_id": session.conversation_id,
+                    "generation": session.current_epoch,
                 }))
                 continue
                 
