@@ -636,3 +636,152 @@ describe('Workstation UX-PLAYBACK-SEND-01 send while voice plays', () => {
     expect(sendChat).toHaveBeenCalledWith('普通发送');
   });
 });
+
+
+describe('Workstation UX-ERROR-SURFACE-01 switch vs TTS errors', () => {
+  afterEach(() => {
+    cleanup();
+  });
+
+  beforeEach(() => {
+    localStorage.clear();
+    audioSpies.isPlaying = false;
+    audioSpies.init.mockClear();
+    audioSpies.playBase64.mockClear();
+    audioSpies.stopAll.mockClear();
+    wsSpies.reconnect.mockClear();
+    wsSpies.switchConversation.mockClear();
+    wsSpies.switchWorldline.mockClear();
+    wsSpies.switchConversation.mockReturnValue(true);
+    wsSpies.switchWorldline.mockReturnValue(true);
+    wsSpies.useAmadeusWS.mockReset();
+
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/providers') {
+        return { ok: true, status: 200, json: async () => [] } as Response;
+      }
+      if (url.startsWith('/api/conversations?')) {
+        return { ok: true, status: 200, json: async () => [] } as Response;
+      }
+      if (url === '/api/search/settings') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ provider: 'tavily', configured: false, fallback: 'duckduckgo' }),
+        } as Response;
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+  });
+
+  function mountWithReadyCallbacks() {
+    let params: {
+      onConversationSwitchError?: (details: { conversationId: string; code: string }) => void;
+      onWorldlineSwitchError?: (details: { worldline: 'steins_gate' | 'beta'; code: string }) => void;
+      onAudioDegraded?: (reason: string) => void;
+    } = {};
+    wsSpies.useAmadeusWS.mockImplementation((p: unknown) => {
+      params = p as typeof params;
+      return {
+        status: 'READY',
+        messages: [],
+        isThinking: false,
+        isSynthesizing: false,
+        activeTool: null,
+        activeNotice: null,
+        emotion: 'neutral',
+        sendChat: vi.fn(),
+        stopVoice: vi.fn(),
+        cancelTurn: vi.fn(),
+        sendDebugTts: vi.fn(),
+        updateConfig: vi.fn(),
+        reconnect: wsSpies.reconnect,
+        switchConversation: wsSpies.switchConversation,
+        switchWorldline: wsSpies.switchWorldline,
+        wsRef: { current: null },
+      };
+    });
+    const view = render(
+      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    );
+    return { ...view, getParams: () => params };
+  }
+
+  it('shows a Session label without TTS prefix on conversation switch error', async () => {
+    const { getByTestId, queryByText, getParams } = mountWithReadyCallbacks();
+    await waitFor(() => expect(getParams().onConversationSwitchError).toBeTypeOf('function'));
+
+    act(() => {
+      getParams().onConversationSwitchError?.({
+        conversationId: 'missing',
+        code: 'conversation_not_found',
+      });
+    });
+
+    await waitFor(() => {
+      expect(getByTestId('session-error-toast')).toHaveTextContent('Session');
+      expect(getByTestId('session-error-toast')).toHaveTextContent('conversation_not_found');
+    });
+    expect(queryByText(/> TTS:/)).toBeNull();
+    expect(queryByText(/> TTS /)).toBeNull();
+  });
+
+  it('shows a Worldline label without TTS prefix on worldline switch error', async () => {
+    const { getByTestId, queryByText, getParams } = mountWithReadyCallbacks();
+    await waitFor(() => expect(getParams().onWorldlineSwitchError).toBeTypeOf('function'));
+
+    act(() => {
+      getParams().onWorldlineSwitchError?.({
+        worldline: 'beta',
+        code: 'switch_failed',
+      });
+    });
+
+    await waitFor(() => {
+      expect(getByTestId('session-error-toast')).toHaveTextContent('Worldline');
+      expect(getByTestId('session-error-toast')).toHaveTextContent('switch_failed');
+    });
+    expect(queryByText(/> TTS:/)).toBeNull();
+  });
+
+  it('still shows TTS prefix for real audio degradation', async () => {
+    const { getByTestId, queryByTestId, getParams } = mountWithReadyCallbacks();
+    await waitFor(() => expect(getParams().onAudioDegraded).toBeTypeOf('function'));
+
+    act(() => {
+      getParams().onAudioDegraded?.('service_error');
+    });
+
+    await waitFor(() => {
+      expect(getByTestId('audio-error-toast')).toHaveTextContent('> TTS service unavailable');
+    });
+    expect(queryByTestId('session-error-toast')).toBeNull();
+  });
+
+  it('does not write switch errors into the TTS audioError surface', async () => {
+    const { getByTestId, queryByTestId, getParams } = mountWithReadyCallbacks();
+    await waitFor(() => expect(getParams().onAudioDegraded).toBeTypeOf('function'));
+
+    act(() => {
+      getParams().onAudioDegraded?.('service_error');
+    });
+    await waitFor(() => {
+      expect(getByTestId('audio-error-toast')).toBeTruthy();
+    });
+
+    act(() => {
+      getParams().onConversationSwitchError?.({
+        conversationId: 'x',
+        code: 'conversation_not_found',
+      });
+    });
+
+    await waitFor(() => {
+      expect(getByTestId('session-error-toast')).toHaveTextContent('conversation_not_found');
+    });
+    // Real TTS error remains; switch error did not replace it.
+    expect(getByTestId('audio-error-toast')).toHaveTextContent('> TTS service unavailable');
+    expect(queryByTestId('session-error-toast')).not.toBeNull();
+  });
+});

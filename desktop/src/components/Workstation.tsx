@@ -100,6 +100,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [reasoningEffort, setReasoningEffort] = useState<'high' | 'xhigh'>(() =>
     (localStorage.getItem('amadeus_pc_reasoning_effort') as any) || 'high');
   const [audioError, setAudioError] = useState<string | null>(null);
+  const [sessionError, setSessionError] = useState<{
+    kind: 'session' | 'worldline';
+    code: string;
+  } | null>(null);
   const [isSoundOpen, setIsSoundOpen] = useState(false);
   const [isHistoryCollapsed, setIsHistoryCollapsed] = useState(() => {
     try {
@@ -136,13 +140,20 @@ export const Workstation: React.FC<WorkstationProps> = ({
     };
   }, [worldline, enableBgm]);
 
-  // Auto-clear audio error after 5s
+  // Auto-clear audio / session surface errors after 5s (independent channels).
   useEffect(() => {
     if (audioError) {
       const timer = window.setTimeout(() => setAudioError(null), 5000);
       return () => window.clearTimeout(timer);
     }
   }, [audioError]);
+
+  useEffect(() => {
+    if (sessionError) {
+      const timer = window.setTimeout(() => setSessionError(null), 5000);
+      return () => window.clearTimeout(timer);
+    }
+  }, [sessionError]);
 
   latestWorldlineRef.current = worldline;
 
@@ -237,7 +248,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
     onConversationSwitchError: ({ code }) => {
       pendingConversationModelRef.current = null;
       setConversationBusy(false);
-      setAudioError(code);
+      // Do not use the TTS toast channel for session lifecycle failures.
+      setSessionError({ kind: 'session', code });
     },
     onWorldlineSwitched: ({ worldline: switchedWorldline }) => {
       committedWorldlineRef.current = switchedWorldline;
@@ -259,7 +271,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
         onWorldlineChange(rollback);
       }
       setConversationBusy(false);
-      setAudioError(code);
+      // Keep audioError untouched so a concurrent TTS failure is not overwritten.
+      setSessionError({ kind: 'worldline', code });
     },
     onTurnCompleted: () => {
       window.setTimeout(() => { void loadConversations(); }, 250);
@@ -1196,9 +1209,20 @@ export const Workstation: React.FC<WorkstationProps> = ({
         </div>
       </div>
 
-      {/* Audio Error Toast */}
+      {/* Session / worldline lifecycle errors (not TTS). */}
+      {sessionError && (
+        <div className="audio-error-toast session-error-toast" data-testid="session-error-toast" role="status">
+          <span className="audio-error-msg">
+            {sessionError.kind === 'session'
+              ? `> Session: ${sessionError.code}`
+              : `> Worldline: ${sessionError.code}`}
+          </span>
+        </div>
+      )}
+
+      {/* Audio Error Toast — real TTS/audio degradation only. */}
       {audioError && (
-        <div className="audio-error-toast">
+        <div className="audio-error-toast" data-testid="audio-error-toast">
           <span className="audio-error-msg">
             {audioError === 'action_only' && '> TTS skipped (action description)'}
             {audioError === 'user_disabled' && '> TTS disabled'}
