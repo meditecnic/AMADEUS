@@ -258,6 +258,75 @@ describe('useAmadeusWS v2', () => {
     unmount();
   });
 
+  it('drops late segment.audio for the same turn after stopVoice', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const onAudioChunk = vi.fn();
+    const { result, unmount } = renderHook(() => useAmadeusWS({ ...params, onAudioChunk }));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => {
+      socket.onopen?.();
+      socket.emit({ type: 'turn.started', conversation_id: 'c', turn_id: 't', generation: 4 });
+      socket.emit({
+        type: 'segment.audio',
+        conversation_id: 'c',
+        turn_id: 't',
+        generation: 4,
+        segment_id: 0,
+        data: 'YXVkaW8tYmVmb3Jl',
+      });
+      result.current.stopVoice();
+      socket.emit({
+        type: 'segment.audio',
+        conversation_id: 'c',
+        turn_id: 't',
+        generation: 4,
+        segment_id: 1,
+        data: 'YXVkaW8tbGF0ZQ==',
+      });
+    });
+
+    expect(onAudioChunk).toHaveBeenCalledTimes(1);
+    expect(onAudioChunk).toHaveBeenCalledWith(0, 'YXVkaW8tYmVmb3Jl');
+    expect(onAudioChunk).not.toHaveBeenCalledWith(1, 'YXVkaW8tbGF0ZQ==');
+    unmount();
+  });
+
+  it('accepts segment.audio again after a new turn starts following stopVoice', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const onAudioChunk = vi.fn();
+    const { result, unmount } = renderHook(() => useAmadeusWS({ ...params, onAudioChunk }));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => {
+      socket.onopen?.();
+      socket.emit({ type: 'turn.started', conversation_id: 'c', turn_id: 't1', generation: 1 });
+      result.current.stopVoice();
+      socket.emit({
+        type: 'segment.audio',
+        conversation_id: 'c',
+        turn_id: 't1',
+        generation: 1,
+        segment_id: 0,
+        data: 'bGF0ZS1vbGQ=',
+      });
+      socket.emit({ type: 'turn.started', conversation_id: 'c', turn_id: 't2', generation: 2 });
+      socket.emit({
+        type: 'segment.audio',
+        conversation_id: 'c',
+        turn_id: 't2',
+        generation: 2,
+        segment_id: 0,
+        data: 'bmV3LXR1cm4=',
+      });
+    });
+
+    expect(onAudioChunk).toHaveBeenCalledTimes(1);
+    expect(onAudioChunk).toHaveBeenCalledWith(0, 'bmV3LXR1cm4=');
+    expect(onAudioChunk).not.toHaveBeenCalledWith(0, 'bGF0ZS1vbGQ=');
+    unmount();
+  });
+
   it('applies a whole-turn translation repair only to the active generation', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const { result, unmount } = renderHook(() => useAmadeusWS(params));

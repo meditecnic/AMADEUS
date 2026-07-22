@@ -418,6 +418,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             if (
               msg.turn_id === activeTurnIdRef.current &&
               msg.generation === activeGenerationRef.current &&
+              !voiceStoppedRef.current &&
               paramsRef.current.onAudioChunk && msg.data
             ) {
               paramsRef.current.onAudioChunk(msg.segment_id, msg.data);
