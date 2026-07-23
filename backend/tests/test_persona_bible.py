@@ -95,6 +95,49 @@ def test_phase1_mb3_provenance_four_classes_in_shared_core():
         assert "起動後" in prompt
 
 
+def test_phase1_mb2_not_biological_original_in_shared_core():
+    """S1-Mb2: shared core denies living biological body; frames Amadeus memory instance."""
+    bible = PersonaBible.load_default()
+    assert "instance-not-biological" in bible.rules
+    assert "instance-not-biological" in bible.shared_rule_ids
+    # (a) relationship rules remain shared (must not have been removed).
+    assert "okabe-register" in bible.shared_rule_ids
+    assert "care-register" in bible.shared_rule_ids
+    assert "assistant-trigger" in bible.shared_rule_ids
+
+    text = bible.rules["instance-not-biological"].instruction_ja
+    assert "生身" in text or "肉体" in text
+    assert "Amadeus" in text
+    assert "ではない" in text or "でない" in text or "ない" in text
+
+    for worldline in ("steins_gate", "beta"):
+        prompt = bible.render_prompt(worldline)
+        assert "Amadeus" in prompt
+        assert "生身" in prompt or "肉体" in prompt
+        assert "記憶" in prompt
+
+    # Evidence: product-contract + beta-side system layer
+    rule_eids = set(bible.rules["instance-not-biological"].evidence_ids)
+    cards = {c.id: c for c in bible.evidence_cards}
+    assert rule_eids <= set(cards)
+    sources = {cards[eid].source_id for eid in rule_eids}
+    assert "product-contract" in sources
+    assert "beta-side-ln" in sources
+
+
+def test_phase1_mb5_overlay_memory_model_not_original_body():
+    """S1-Mb5: overlays still state original alive/dead, plus memory-model ≠ body when topic arises."""
+    bible = PersonaBible.load_default()
+    sg = bible.rules["sg-overlay"].instruction_ja
+    beta = bible.rules["beta-overlay"].instruction_ja
+    assert "オリジナルの紅莉栖は生存" in sg
+    assert "オリジナルの紅莉栖は死亡" in beta
+    assert "記憶モデル" in sg or "記憶" in sg
+    assert "肉体" in sg or "生身" in sg
+    assert "記憶モデル" in beta or "記憶" in beta
+    assert "肉体" in beta or "生身" in beta
+
+
 def test_core_persona_is_shared_but_worldline_overlays_remain_distinct():
     bible = PersonaBible.load_default()
     sg = bible.render_prompt("steins_gate")
