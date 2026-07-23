@@ -14,6 +14,10 @@ class AudioErrorCode(StrEnum):
     EMPTY_TEXT = "empty_text"
     ACTION_ONLY = "action_only"
     TOO_SHORT = "too_short"
+    # Fail-closed preflight: source is not safe Japanese speech for default TTS.
+    INVALID_LANGUAGE = "invalid_language"
+    # Fail-closed preflight: segment source exceeds the sidecar-safe codepoint budget.
+    TEXT_TOO_LONG = "text_too_long"
     USER_DISABLED = "user_disabled"
     VOICE_STOPPED = "voice_stopped"
     TIMEOUT = "timeout"
@@ -28,9 +32,38 @@ class PreparedTTSText:
     error: AudioErrorCode | None = None
 
 
+# Per-request budget keeps GPT-SoVITS T2S well below the ~1500 decode ceiling.
+# Segmentation already splits on punctuation; a single spoken unit should not approach this.
+MAX_TTS_SOURCE_CODEPOINTS = 280
+
 _NON_SPEECH_RE = re.compile(
-    r"[\s。！\uff01？\uff1f!?,.\uff0c\u3001\"'`「」『』()（）\-—_+=\[\]{}<>#~*]"
+    r"[\s。！\uff01？\uff1f!?,.\uff0c\u3001\"'`「」『』()（）\-—_+=\[\]{}<>#~*…]"
 )
+# Bare ellipsis / punctuation runs must never fail closed as "language collapse".
+_IGNORABLE_NON_SPEECH_RE = re.compile(
+    r"^[\s。！\uff01？\uff1f!?,.\uff0c\u3001\"'`「」『』()（）\-—_+=\[\]{}<>#~*…・．]+$"
+)
+_KANA_RE = re.compile(r"[\u3040-\u30ff\u31f0-\u31ff]")
+_HAN_RE = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
+_LATIN_RUN_RE = re.compile(r"[A-Za-z]{2,}")
+_HALFWIDTH_KATA_RE = re.compile(r"[\uff61-\uff9f]")
+_WEIRD_MARK_RE = re.compile(r"[＿_\uFF00-\uFFEF\u2000-\u200f\u2028-\u202f]")
+# Allowlisted Latin tokens that appear in legitimate Kurisu-register replies.
+_SAFE_LATIN_TOKENS = frozenset({
+    "pdf", "api", "dna", "gpt", "url", "http", "https", "json", "xml",
+    "cpu", "gpu", "tts", "stt", "id", "ok", "ng", "pc", "ai", "llm",
+    "sdk", "cli", "ui", "ux", "csv", "png", "wav", "mp3", "tcp", "udp",
+    "ip", "lan", "wan", "ssh", "tls", "ssl", "sql", "rest", "web", "html",
+    "css", "js", "mac", "windows", "linux", "ios", "android", "mackenzie",
+    "okabe", "kurisu", "amadeus", "mayuri", "daru", "suzuha", "fb", "lab",
+    "vhf", "uhf", "ghz", "mhz", "httpx", "openai", "deepseek",
+})
+# High-frequency Japanese function/grammar markers that real speech almost always carries once it is long enough.
+_JA_FUNCTION_HINT_RE = re.compile(
+    r"[はがをにのでへとやもかねしか]|です|ます|だ|た|て|ない|いる|ある|する|なる|こと|もの|よう|から|まで|より"
+)
+# Conservative simplified-Chinese markers (aligned with diagnostics language gate).
+_CONSERVATIVE_ZH_MARKERS = frozenset("的是不了在有人这中大为上个国我以要他时来用们生到作地于出就分对成会可主发年动同工也能下过子说产种面而方后多定行学法所民得经十三之进着等部度家电力里如水化高自二理起小物现实加量都两体制机当使点从业本去把性好应开它合还因由其些然前外天政四日那社义事平形相全表间样与关各重新线内数正心反你明看原又么利比或但质气第向道命此变条只没结解问意建月公无系军很情者最立代想已通并提直题党程展五果料象员革位入常文总次品式活设及管特件长求老头基资边流路级少图山统接知较将组见计别她手角期根论运农指几九区强放决西被干做必战先回则任取据处队南给色光门即保治北造百规热领七海口东导器压志世金增争济阶油思术极交受联什认六共权收证改清己美再采转更单风切打白教速花带安场身车例真务具万每目至达走积示议声报斗完类八离华名确才科张信马节话米整空元况今集温传土许步群广石记需段研界拉林律叫且究观越织装影算低持音众书布复容儿须际商非验连断深难近矿千周委素技备半办青省列习响约支般史感劳便团往酸历市克何除消构府称太准精值号率族维划选标写存候毛亲快效斯院查江型眼王按格养易置派层片始却专状育厂京识适属圆包火住调满县局照参红细引听该铁价严龙飞")
 
 
 def clean_text_for_tts(text: str) -> str:
@@ -50,14 +83,180 @@ def is_meaningful_sentence(text: str) -> bool:
     return meaningful_character_count(text) > 0
 
 
+def is_ignorable_non_speech_segment(text: str) -> bool:
+    """True for bare ellipsis/punctuation that must not reject a turn mid-stream.
+
+    Japanese writers often produce 「ね。……続き」; the segmenter may split a
+    standalone 「……」 between sentences. That fragment is not speech and must
+    never flip publication_rejected / source_collapse.
+    """
+    stripped = (text or "").strip()
+    if not stripped:
+        return True
+    if _IGNORABLE_NON_SPEECH_RE.fullmatch(stripped):
+        return True
+    # No kana/han/latin left after stripping common non-speech marks.
+    return meaningful_character_count(stripped) <= 0
+
+
+def classify_tts_script(text: str) -> str:
+    """Local script class for TTS preflight (mirrors diagnostics, no DB dependency)."""
+    has_kana = bool(_KANA_RE.search(text))
+    has_han = bool(_HAN_RE.search(text))
+    has_alnum = bool(re.search(r"[A-Za-z0-9]", text))
+    if not has_kana and not has_han and not has_alnum:
+        return "symbol_only"
+    has_zh_marker = any(character in _CONSERVATIVE_ZH_MARKERS for character in text)
+    if has_kana and has_zh_marker:
+        return "mixed"
+    if has_kana:
+        return "ja"
+    if has_han:
+        return "zh"
+    return "unknown"
+
+
+def _has_suspicious_latin_embedding(text: str) -> bool:
+    """Detect garbage Latin (flee/newidInfo) without banning PDF/API/DNA/names."""
+    for match in _LATIN_RUN_RE.finditer(text):
+        token = match.group(0)
+        lowered = token.lower()
+        if lowered in _SAFE_LATIN_TOKENS:
+            continue
+        # Short all-caps tokens (PDF, API, DNA, HTML) are treated as safe labels.
+        if token.isupper() and 2 <= len(token) <= 8:
+            continue
+        # Title Case proper names (Mackenzie) are allowed in otherwise clean speech.
+        if (
+            len(token) >= 2
+            and token[0].isupper()
+            and token[1:].islower()
+            and len(token) <= 24
+        ):
+            continue
+        # camelCase / internal capitals (newidInfo) and lowercase words (flee).
+        if re.search(r"[a-z][A-Z]", token):
+            return True
+        if token.islower() and len(token) >= 3:
+            return True
+        if len(token) >= 10:
+            return True
+    return False
+
+
+def is_plausible_japanese_tts_source(text: str) -> bool:
+    """Reject Chinese-only, random CJK soup, and non-speech noise for default JA TTS.
+
+    Prior iterations over-trusted kana count and particle hits, so kana-heavy
+    garbage with embedded Latin (flee/newidInfo/halfwidth kata) still passed.
+    Later over-tightened gates false-rejected legitimate speech (bare ellipsis
+    segments, short kanji interjections, medium-length low-kana lines).
+    """
+    if not text or not text.strip():
+        return False
+    if is_ignorable_non_speech_segment(text):
+        return False
+    script = classify_tts_script(text)
+    if script in {"symbol_only", "unknown"}:
+        return False
+
+    kana = _KANA_RE.findall(text)
+    han = _HAN_RE.findall(text)
+    kana_n = len(kana)
+    han_n = len(han)
+    letters = meaningful_character_count(text)
+    if letters <= 0:
+        return False
+    # Short Japanese is often kana-only ("うん") or kanji-only ("大丈夫" / "了解").
+    if letters <= 10:
+        if script in {"ja", "mixed"} and kana_n >= 1:
+            return True
+        if script == "zh" and han_n == letters:
+            # Brief kanji-only interjections (了解。大丈夫？) are speakable.
+            # Longer Chinese prose is rejected by the letters>10 / script==zh path.
+            if letters <= 4 and not _LATIN_RUN_RE.search(text) and not _HALFWIDTH_KATA_RE.search(text):
+                return True
+            zh_hits = sum(1 for ch in text if ch in _CONSERVATIVE_ZH_MARKERS)
+            return zh_hits <= max(1, letters // 3)
+        return False
+    if script == "zh":
+        return False
+    # Character speech never uses halfwidth katakana; ｯ mixed with Latin is collapse.
+    if _HALFWIDTH_KATA_RE.search(text):
+        return False
+    # Embedded garbage Latin runs must fail even when kana density looks high.
+    if _has_suspicious_latin_embedding(text):
+        return False
+    # Real spoken Japanese needs at least one kana once past the short path;
+    # require two only for longer lines without grammar hints.
+    if kana_n < 1:
+        return False
+    if kana_n < 2:
+        if letters >= 16 and not _JA_FUNCTION_HINT_RE.search(text):
+            return False
+    # Random Han-dominant soup with a couple of kana (the incident shape).
+    if letters >= 16 and kana_n < 4 and han_n >= max(10, kana_n * 4):
+        return False
+    if letters >= 24 and (kana_n / letters) < 0.12 and han_n > kana_n * 2:
+        return False
+    # Long speech without any Japanese function/grammar hints is almost never legitimate.
+    if letters >= 28 and not _JA_FUNCTION_HINT_RE.search(text) and (kana_n / letters) < 0.22:
+        return False
+    weird_marks = len(_WEIRD_MARK_RE.findall(text)) + len(re.findall(r"[―─━]", text))
+    if letters >= 20 and weird_marks >= 2 and _LATIN_RUN_RE.search(text):
+        return False
+    # Extremely high unique-character density is typical of model garbage, not dialogue.
+    unique = len(set(ch for ch in text if not ch.isspace()))
+    unique_ratio = unique / max(letters, 1)
+    if letters >= 40 and unique_ratio > 0.82:
+        if weird_marks >= 1 or not _JA_FUNCTION_HINT_RE.search(text) or han_n >= kana_n:
+            return False
+    # mixed with only one kana is usually a Chinese draft with a stray kana.
+    if script == "mixed" and kana_n < 2:
+        return False
+    return True
+
+
+def should_hard_reject_tts_source(text: str) -> bool:
+    """True only for substantive bad sources that must stop further segment accept.
+
+    Bare ellipsis, empty/action/too-short non-speech, and other ignorable fragments
+    return False so callers can skip without source_collapse.
+    """
+    if is_ignorable_non_speech_segment(text):
+        return False
+    prepared = prepare_tts_text(text)
+    if prepared.error is None:
+        return False
+    if prepared.error in {
+        AudioErrorCode.EMPTY_TEXT,
+        AudioErrorCode.ACTION_ONLY,
+        AudioErrorCode.TOO_SHORT,
+    }:
+        # Non-speech or fragment: skip, do not kill the rest of the turn.
+        return False
+    return True
+
+
 def prepare_tts_text(text: str) -> PreparedTTSText:
+    """Fail-closed preflight for every sidecar-bound utterance.
+
+    Rejects empty/action/too-short text, non-Japanese speech sources, and overlong
+    segments before any GPT-SoVITS HTTP call. Returns an immutable cleaned snapshot.
+    """
     if not text or not text.strip():
         return PreparedTTSText("", AudioErrorCode.EMPTY_TEXT)
+    if is_ignorable_non_speech_segment(text):
+        return PreparedTTSText(text.strip(), AudioErrorCode.ACTION_ONLY)
     cleaned = clean_text_for_tts(text)
     if not cleaned or not is_meaningful_sentence(cleaned):
         return PreparedTTSText(cleaned, AudioErrorCode.ACTION_ONLY)
     if meaningful_character_count(cleaned) < 2:
         return PreparedTTSText(cleaned, AudioErrorCode.TOO_SHORT)
+    if len(cleaned) > MAX_TTS_SOURCE_CODEPOINTS:
+        return PreparedTTSText(cleaned, AudioErrorCode.TEXT_TOO_LONG)
+    if not is_plausible_japanese_tts_source(cleaned):
+        return PreparedTTSText(cleaned, AudioErrorCode.INVALID_LANGUAGE)
     return PreparedTTSText(cleaned)
 
 
@@ -154,8 +353,10 @@ class IncrementalJapaneseSegmenter:
             if self._short_candidate is not None:
                 short_text, short_emotion = self._short_candidate
                 self._short_candidate = None
-                emitted.append(Segment(self._next_id, short_text, short_emotion))
-                self._next_id += 1
+                # Drop trailing bare ellipsis/punctuation; never emit as speech.
+                if not is_ignorable_non_speech_segment(short_text):
+                    emitted.append(Segment(self._next_id, short_text, short_emotion))
+                    self._next_id += 1
         return emitted
 
     def _accept_candidate(
@@ -169,7 +370,11 @@ class IncrementalJapaneseSegmenter:
             self._short_candidate = None
             text = short_text + text
             emotion = short_emotion
-        elif prepare_tts_text(text).error is AudioErrorCode.TOO_SHORT:
+        # Bare 「……」 after 「ね。」 must merge into the next sentence, not emit alone.
+        if is_ignorable_non_speech_segment(text):
+            self._short_candidate = (text, emotion)
+            return
+        if prepare_tts_text(text).error is AudioErrorCode.TOO_SHORT:
             self._short_candidate = (text, emotion)
             return
         emitted.append(Segment(self._next_id, text, emotion))

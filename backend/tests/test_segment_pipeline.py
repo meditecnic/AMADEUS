@@ -11,6 +11,7 @@ from app.domain.segments import (
     SegmentPipeline,
     TransientSegmentError,
     TurnIdentity,
+    is_ignorable_non_speech_segment,
     prepare_tts_text,
 )
 
@@ -22,6 +23,27 @@ def test_incremental_segmenter_preserves_cross_token_quotes_and_ellipsis():
     assert splitter.feed("…ないでしょ？」次は") == [Segment(0, "「そんなこと、あるわけ……ないでしょ？」")]
     assert splitter.feed("実験よ。") == [Segment(1, "次は実験よ。")]
     assert splitter.finish() == []
+
+
+def test_period_then_ellipsis_merges_into_next_sentence_not_bare_segment():
+    """「ね。……続き」 must not emit a standalone 「……」 speech segment."""
+    splitter = IncrementalJapaneseSegmenter()
+    text = "朝からその呼び方ね。……はあ、面倒なんだから。"
+    parts = splitter.feed(text) + splitter.finish()
+    texts = [part.text for part in parts]
+    assert "……" not in texts
+    assert any("朝からその呼び方ね" in part for part in texts)
+    assert any("面倒" in part for part in texts)
+    joined = "".join(texts)
+    assert "朝からその呼び方ね" in joined
+    assert "面倒なんだから" in joined
+
+
+def test_bare_ellipsis_is_ignorable_non_speech():
+    assert is_ignorable_non_speech_segment("……")
+    assert is_ignorable_non_speech_segment("…")
+    assert is_ignorable_non_speech_segment("  。  ")
+    assert not is_ignorable_non_speech_segment("朝からその呼び方ね。")
 
 
 def test_incremental_segmenter_flushes_unpunctuated_tail_once():

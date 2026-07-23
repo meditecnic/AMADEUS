@@ -24,8 +24,10 @@ from app.domain.segments import (
     TransientSegmentError,
     TurnIdentity,
     clean_text_for_tts,
+    is_ignorable_non_speech_segment,
     is_meaningful_sentence,
     prepare_tts_text,
+    should_hard_reject_tts_source,
 )
 
 import copy
@@ -52,26 +54,29 @@ _JAPANESE_KANA = re.compile(r"[\u3040-\u30ff\u31f0-\u31ff]")
 
 
 def _is_publishable_japanese(text: str) -> bool:
-    """Reject substantive Chinese drafts while allowing short Han-only replies."""
+    """Reject substantive Chinese drafts and random CJK soup before UI/TTS."""
 
+    from app.domain.segments import is_plausible_japanese_tts_source
+
+    if is_ignorable_non_speech_segment(text):
+        return False
     language = classify_source_language(text)
     kana_count = len(_JAPANESE_KANA.findall(text))
+    stripped = text.strip()
     if language == "ja":
-        return True
+        # Short real Japanese remains publishable; incident-shaped garbage fails.
+        if len(stripped) <= 10:
+            return kana_count >= 1
+        return is_plausible_japanese_tts_source(text)
     if language == "mixed":
         # A lone kana in a Chinese draft is not enough to route it into the
         # Japanese lane. Real Japanese sentences normally provide several.
-        return kana_count >= 3
+        if kana_count < 2:
+            return False
+        return is_plausible_japanese_tts_source(text)
     if language == "zh":
-        return len(text.strip()) <= 4
+        return len(stripped) <= 4
     return False
-
-
-def _has_japanese_publication_evidence(text: str) -> bool:
-    language = classify_source_language(text)
-    if language == "ja":
-        return True
-    return language == "mixed" and len(_JAPANESE_KANA.findall(text)) >= 3
 
 
 class SessionState:
@@ -356,9 +361,62 @@ async def get_clean_text_stream(
         allowed = get_session_allowed_emotions(session)
         last_emotion = default_emotion if default_emotion in allowed else "neutral"
         text_buffer = ""
-        pending_publication = ""
-        publication_started = False
+        publication_segmenter = IncrementalJapaneseSegmenter()
+        published_parts: list[str] = []
+        publication_rejected = False
+        publication_rejection_reason: str | None = None
         merged_tool_calls = {}
+
+        async def publish_completed_segments(delta: str, emotion: str) -> None:
+            """Publish only complete, locally validated Japanese segments.
+
+            Once a segment in an attempt is rejected, the remaining tail stays
+            closed. Previously published valid segments cannot be retracted, so
+            the caller will append one stable recovery instead of retrying and
+            duplicating the visible prefix.
+            """
+
+            nonlocal publication_rejected, publication_rejection_reason
+            for segment in publication_segmenter.feed(delta, emotion=emotion):
+                if publication_rejected:
+                    continue
+                if is_ignorable_non_speech_segment(segment.text):
+                    # Bare 「……」 etc.: skip without rejecting the rest of the turn.
+                    continue
+                if contains_leak(segment.text):
+                    publication_rejected = True
+                    publication_rejection_reason = "leak"
+                    continue
+                if not _is_publishable_japanese(segment.text):
+                    publication_rejected = True
+                    publication_rejection_reason = "language"
+                    continue
+                if on_text_delta is not None:
+                    callback_result = on_text_delta(segment.text, segment.emotion)
+                    if asyncio.iscoroutine(callback_result):
+                        await callback_result
+                published_parts.append(segment.text)
+
+        async def finish_publication() -> None:
+            nonlocal publication_rejected, publication_rejection_reason
+            for segment in publication_segmenter.finish():
+                if publication_rejected:
+                    continue
+                if is_ignorable_non_speech_segment(segment.text):
+                    continue
+                if contains_leak(segment.text):
+                    publication_rejected = True
+                    publication_rejection_reason = "leak"
+                    continue
+                if not _is_publishable_japanese(segment.text):
+                    publication_rejected = True
+                    publication_rejection_reason = "language"
+                    continue
+                if on_text_delta is not None:
+                    callback_result = on_text_delta(segment.text, segment.emotion)
+                    if asyncio.iscoroutine(callback_result):
+                        await callback_result
+                published_parts.append(segment.text)
         
         eff_system_prompt = session.system_prompt
         if attempt > 0:
@@ -469,30 +527,13 @@ async def get_clean_text_stream(
                                     text_buffer += char
                                     delta_text += char
                         if delta_text and on_text_delta is not None:
-                            if publication_started:
-                                callback_result = on_text_delta(delta_text, last_emotion)
-                                if asyncio.iscoroutine(callback_result):
-                                    await callback_result
-                            else:
-                                pending_publication += delta_text
-                                # Hold the first deltas until kana proves this is
-                                # Japanese. A Chinese-only attempt is never exposed
-                                # to the Segment pipeline or the Japanese UI lane.
-                                if _has_japanese_publication_evidence(text_buffer):
-                                    callback_result = on_text_delta(pending_publication, last_emotion)
-                                    if asyncio.iscoroutine(callback_result):
-                                        await callback_result
-                                    pending_publication = ""
-                                    publication_started = True
+                            await publish_completed_segments(delta_text, last_emotion)
             if emo_buffer:
                 text_buffer += emo_buffer
                 if on_text_delta is not None:
-                    if publication_started:
-                        callback_result = on_text_delta(emo_buffer, last_emotion)
-                        if asyncio.iscoroutine(callback_result):
-                            await callback_result
-                    else:
-                        pending_publication += emo_buffer
+                    await publish_completed_segments(emo_buffer, last_emotion)
+            if on_text_delta is not None:
+                await finish_publication()
         except asyncio.CancelledError:
             raise
         finally:
@@ -501,40 +542,53 @@ async def get_clean_text_stream(
         if merged_tool_calls:
             return "", "neutral", merged_tool_calls, False
             
-        if contains_leak(text_buffer):
-            print(
-                f"[Guard] attempt {attempt + 1}/{MAX_ATTEMPTS} "
-                f"rejected leaked output ({len(text_buffer)} chars)"
-            )
-            if on_text_delta is not None:
-                return text_buffer, last_emotion, {}, emo_tag_found
-            if attempt < MAX_ATTEMPTS - 1:
-                rejection_reason = "leak"
-                continue
-            return "はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。", "tsundere", {}, False
-
+        leaked_output = contains_leak(text_buffer) or publication_rejection_reason == "leak"
         language = classify_source_language(text_buffer)
         publishable_japanese = _is_publishable_japanese(text_buffer)
-        if not publishable_japanese:
+        # The aggregate classifier cannot disambiguate multiple legitimate
+        # short kanji-only Japanese sentences (for example "一文目。二文目。").
+        # If every completed segment passed the stricter per-segment gate, that
+        # evidence takes precedence over the aggregate script label.
+        rejected_output = (
+            leaked_output
+            or publication_rejected
+            or (not publishable_japanese and not published_parts)
+        )
+
+        if rejected_output:
+            rejection_reason = "leak" if leaked_output else "language"
             print(
-                f"[Language Guard] attempt {attempt + 1}/{MAX_ATTEMPTS} "
-                f"rejected {language} output ({len(text_buffer)} chars)",
-                flush=True,
+                f"[Guard] attempt {attempt + 1}/{MAX_ATTEMPTS} "
+                f"rejected {rejection_reason} output ({len(text_buffer)} chars)"
             )
-            if attempt < MAX_ATTEMPTS - 1:
-                rejection_reason = "language"
-                continue
-            fallback = "ごめん。日本語の応答を正しく生成できなかった。もう一度試して。"
-            if on_text_delta is not None:
-                callback_result = on_text_delta(fallback, "disappointed")
+            if on_text_delta is not None and published_parts:
+                if rejection_reason == "leak":
+                    fallback = "はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。"
+                    fallback_emotion = "tsundere"
+                else:
+                    fallback = "ごめん。応答の途中で生成が崩れたみたい。もう一度試して。"
+                    fallback_emotion = "disappointed"
+                callback_result = on_text_delta(fallback, fallback_emotion)
                 if asyncio.iscoroutine(callback_result):
                     await callback_result
-            return fallback, "disappointed", {}, False
+                safe_text = "".join([*published_parts, fallback])
+                return safe_text, fallback_emotion, {}, emo_tag_found
+            if attempt < MAX_ATTEMPTS - 1:
+                continue
+            if rejection_reason == "leak":
+                fallback = "はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。"
+                fallback_emotion = "tsundere"
+            else:
+                fallback = "ごめん。日本語の応答を正しく生成できなかった。もう一度試して。"
+                fallback_emotion = "disappointed"
+            if on_text_delta is not None:
+                callback_result = on_text_delta(fallback, fallback_emotion)
+                if asyncio.iscoroutine(callback_result):
+                    await callback_result
+            return fallback, fallback_emotion, {}, False
 
-        if on_text_delta is not None and not publication_started and pending_publication:
-            callback_result = on_text_delta(pending_publication, last_emotion)
-            if asyncio.iscoroutine(callback_result):
-                await callback_result
+        if on_text_delta is not None:
+            text_buffer = "".join(published_parts)
         print(f"[DEBUG] get_clean_text_stream returning: emotion='{last_emotion}' emo_tag_found={emo_tag_found} text_len={len(text_buffer)}", flush=True)
         return text_buffer, last_emotion, merged_tool_calls, emo_tag_found
 
@@ -747,15 +801,42 @@ async def processor_loop(
                 await segment_pipeline.stop_voice()
             streaming_splitter = IncrementalJapaneseSegmenter()
 
+            source_collapse = {"active": False}
+
             async def submit_text_delta(delta: str, emotion: str):
+                """Accept only validated Japanese sentences into the v2 pipeline.
+
+                get_clean_text_stream already gates before calling this, but the
+                pipeline path must fail closed again so corrupt text cannot become
+                segment.ready / history / TTS even if an earlier gate regresses.
+                """
+                if source_collapse["active"]:
+                    return
                 for segment in streaming_splitter.feed(delta, emotion=emotion):
+                    if source_collapse["active"]:
+                        return
                     delivered = segment
+                    if is_ignorable_non_speech_segment(segment.text):
+                        continue
                     if contains_leak(segment.text):
                         delivered = Segment(
                             segment.id,
                             "はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。",
                             "tsundere",
                         )
+                    elif should_hard_reject_tts_source(segment.text):
+                        # Substantive bad Japanese only. Bare ellipsis / too-short
+                        # non-speech must not kill the rest of the turn.
+                        source_collapse["active"] = True
+                        print(
+                            f"[SourceGate] rejected segment before pipeline "
+                            f"(len={len(segment.text)})",
+                            flush=True,
+                        )
+                        return
+                    elif prepare_tts_text(segment.text).error is not None:
+                        # Soft skip (empty/action/too_short): do not collapse.
+                        continue
                     streamed_segments.append(delivered)
                     segment_pipeline.submit(delivered)
 
@@ -872,16 +953,43 @@ async def processor_loop(
                 session.last_assistant_emotion = final_emotion
 
         if session.protocol_version >= 2 and segment_pipeline is not None:
-            for segment in streaming_splitter.finish():
-                delivered = segment
-                if contains_leak(segment.text):
-                    delivered = Segment(
-                        segment.id,
-                        "はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。",
-                        "tsundere",
-                    )
-                streamed_segments.append(delivered)
-                segment_pipeline.submit(delivered)
+            if not source_collapse.get("active"):
+                for segment in streaming_splitter.finish():
+                    delivered = segment
+                    if is_ignorable_non_speech_segment(segment.text):
+                        continue
+                    if contains_leak(segment.text):
+                        delivered = Segment(
+                            segment.id,
+                            "はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。",
+                            "tsundere",
+                        )
+                    elif should_hard_reject_tts_source(segment.text):
+                        source_collapse["active"] = True
+                        print(
+                            f"[SourceGate] rejected finish segment before pipeline "
+                            f"(len={len(segment.text)})",
+                            flush=True,
+                        )
+                        break
+                    elif prepare_tts_text(segment.text).error is not None:
+                        continue
+                    streamed_segments.append(delivered)
+                    segment_pipeline.submit(delivered)
+            # Never leave the user with only an empty assistant shell (e.g. Chinese
+            # body rejected without a published fallback, or empty model stream).
+            # Never seed recovery from unvalidated final_text (may contain garbage).
+            if not streamed_segments:
+                recovery = "ごめん。応答を正しく生成できなかった。もう一度試して。"
+                recovery_emotion = "disappointed"
+                recovery_segment = Segment(0, recovery, recovery_emotion)
+                streamed_segments.append(recovery_segment)
+                segment_pipeline.submit(recovery_segment)
+                print(
+                    f"[Recovery] empty v2 turn forced recovery segment "
+                    f"(len={len(recovery)})",
+                    flush=True,
+                )
             segment_count = len(streamed_segments)
             await segment_pipeline.finish(segment_count=segment_count, emit_completed=False)
             full_ja_text = "".join(segment.text for segment in streamed_segments)
