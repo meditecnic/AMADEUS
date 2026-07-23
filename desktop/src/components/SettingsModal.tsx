@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 
 export type CredentialStatus = 'checking' | 'configured' | 'not_configured' | 'saving' | 'error';
 
-/** Paid web-search backends; DuckDuckGo remains last-resort only. */
+/** Paid web-search backends only (Tavily | Firecrawl). No free HTML fallback. */
 export type WebSearchProviderId = 'tavily' | 'firecrawl';
 
 export interface WebSearchProviderInfo {
@@ -96,7 +96,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   webSearchStatus,
   webSearchActiveProvider = 'tavily',
   webSearchProviders,
-  webSearchFallbackNote = '无可用密钥时才回退 DuckDuckGo（常不可用）。',
+  webSearchFallbackNote = '须配置 Tavily 或 Firecrawl；不再回退 DuckDuckGo。',
   systemPrompt,
   enableTts,
   sovitsUrl,

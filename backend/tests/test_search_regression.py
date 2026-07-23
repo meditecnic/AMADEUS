@@ -170,93 +170,56 @@ def test_current_world_cup_query_is_resolved_to_official_current_result():
 
 
 @pytest.mark.asyncio
-async def test_keyless_current_world_cup_search_uses_rewritten_query(tmp_path, monkeypatch):
+async def test_keyless_search_fails_closed_without_duckduckgo(tmp_path, monkeypatch):
+    """No paid key → unavailable; DuckDuckGo degradation path is removed."""
     monkeypatch.setenv("AMADEUS_DB_PATH", str(tmp_path / "query-plan.db"))
     from app.db import init_db
     await init_db()
 
-    fake_ddgs = MagicMock()
-    fake_ddgs.__enter__ = MagicMock(return_value=fake_ddgs)
-    fake_ddgs.__exit__ = MagicMock(return_value=False)
-    fake_ddgs.text = MagicMock(return_value=[{
-        "title": "Spain wins the 2026 FIFA World Cup",
-        "href": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/spain-argentina-final-report-highlights",
-        "body": "Spain defeated Argentina in the final.",
-        "date": "2026-07-19",
-    }])
-
     service = SearchService()
     service.configured_key = lambda provider: ""  # type: ignore[method-assign]
     service._consume_search_credit = AsyncMock(return_value=(True, None))
-    with patch("app.services.search.DDGS", return_value=fake_ddgs):
-        response = await service.search("请你web search一下今年的世界杯冠军是哪个国家队")
+    service._tavily = AsyncMock()
+    service._firecrawl = AsyncMock()
 
-    searched_query = fake_ddgs.text.call_args.args[0]
-    assert "2026 FIFA World Cup" in searched_query
-    assert "site:fifa.com" in searched_query
-    assert response.query == "请你web search一下今年的世界杯冠军是哪个国家队"
-    assert response.failure_code is None
-    assert "Spain" in response.evidence
+    response = await service.search("请你web search一下今年的世界杯冠军是哪个国家队")
 
-
-@pytest.mark.asyncio
-async def test_world_cup_search_retries_without_overstrict_site_filter(tmp_path, monkeypatch):
-    monkeypatch.setenv("AMADEUS_DB_PATH", str(tmp_path / "query-fallback.db"))
-    from app.db import init_db
-    await init_db()
-
-    fake_ddgs = MagicMock()
-    fake_ddgs.__enter__ = MagicMock(return_value=fake_ddgs)
-    fake_ddgs.__exit__ = MagicMock(return_value=False)
-    fake_ddgs.text = MagicMock(side_effect=[[], [{
-        "title": "Spain wins the 2026 FIFA World Cup",
-        "href": "https://www.fifa.com/final",
-        "body": "Spain defeated Argentina in the final.",
-    }]])
-    service = SearchService()
-    service.configured_key = lambda provider: ""  # type: ignore[method-assign]
-    service._consume_search_credit = AsyncMock(return_value=(True, None))
-
-    with patch("app.services.search.DDGS", return_value=fake_ddgs):
-        response = await service.search("今年的世界杯冠军")
-
-    assert response.failure_code is None
-    assert fake_ddgs.text.call_count == 2
-    assert "site:fifa.com" in fake_ddgs.text.call_args_list[0].args[0]
-    assert "site:fifa.com" not in fake_ddgs.text.call_args_list[1].args[0]
-
-
-@pytest.mark.asyncio
-async def test_search_uses_chrome_tls_fallback_when_ddgs_returns_empty(tmp_path, monkeypatch):
-    monkeypatch.setenv("AMADEUS_DB_PATH", str(tmp_path / "curl-fallback.db"))
-    from app.db import init_db
-    await init_db()
-
-    fake_ddgs = MagicMock()
-    fake_ddgs.__enter__ = MagicMock(return_value=fake_ddgs)
-    fake_ddgs.__exit__ = MagicMock(return_value=False)
-    fake_ddgs.text = MagicMock(return_value=[])
-    fake_response = MagicMock(status_code=200)
-    fake_response.text = (
-        '<div class="result">'
-        '<h2 class="result__title"><a href="https://www.fifa.com/final">'
-        "Spain wins the 2026 FIFA World Cup</a></h2>"
-        '<a class="result__snippet">Spain defeated Argentina in the final.</a>'
-        "</div>"
+    assert response.source == "none"
+    assert response.failure_code == "unavailable"
+    assert "tavily_key_missing" in (response.degraded_reason or "") or "firecrawl" in (
+        response.degraded_reason or ""
+    ) or "no_paid" in (response.degraded_reason or "") or "key_missing" in (
+        response.degraded_reason or ""
     )
-    fake_curl = MagicMock(return_value=fake_response)
+    service._tavily.assert_not_awaited()
+    service._firecrawl.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_paid_provider_failure_does_not_call_duckduckgo(tmp_path, monkeypatch):
+    monkeypatch.setenv("AMADEUS_DB_PATH", str(tmp_path / "query-fail.db"))
+    from app.db import init_db
+    await init_db()
+
     service = SearchService()
-    service.configured_key = lambda provider: ""  # type: ignore[method-assign]
+    service.configured_key = lambda provider: "tvly-x" if provider == "tavily" else ""  # type: ignore[method-assign]
+    service.get_active_provider = lambda: "tavily"  # type: ignore[method-assign]
     service._consume_search_credit = AsyncMock(return_value=(True, None))
+    service._tavily = AsyncMock(side_effect=RuntimeError("upstream down"))
+    service._firecrawl = AsyncMock()
 
-    with patch("app.services.search.DDGS", return_value=fake_ddgs), \
-         patch("app.services.search.curl_requests.post", fake_curl):
-        response = await service.search("今年的世界杯冠军")
+    with patch("app.services.search.DDGS") as mock_ddgs:
+        response = await service.search("秋葉原 天気")
 
-    assert response.failure_code is None
-    assert "Spain wins" in response.evidence
-    fake_curl.assert_called()
-    assert fake_curl.call_args.kwargs["impersonate"] == "chrome131"
+    assert response.source == "none"
+    assert response.failure_code == "unavailable"
+    # After tavily fails, inactive firecrawl is key_missing — still no DDG.
+    assert response.degraded_reason in {
+        "tavily_error:RuntimeError",
+        "firecrawl_key_missing",
+    }
+    mock_ddgs.assert_not_called()
+    service._firecrawl.assert_not_awaited()
 
 
 @pytest.mark.asyncio

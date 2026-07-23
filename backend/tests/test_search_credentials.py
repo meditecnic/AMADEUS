@@ -166,13 +166,12 @@ async def test_keyless_search_does_not_consume_tavily_credit(monkeypatch):
     monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
     service = SearchService()
     service._consume_search_credit = AsyncMock()
-    service._duckduckgo = AsyncMock(
-        return_value=SearchResponse("query", "none", "unavailable", "tavily_key_missing")
-    )
 
-    await service.search("query")
+    response = await service.search("query")
 
     service._consume_search_credit.assert_not_awaited()
+    assert response.source == "none"
+    assert response.failure_code == "unavailable"
 
 
 def test_format_firecrawl_evidence_web_hits():

@@ -1,4 +1,4 @@
-"""Rate-limited multi-provider web search (Tavily / Firecrawl) with DDG last-resort fallback."""
+"""Rate-limited multi-provider web search (Tavily / Firecrawl only; no DDG fallback)."""
 
 from __future__ import annotations
 
@@ -12,12 +12,8 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 import httpx
-from bs4 import BeautifulSoup
-from curl_cffi import requests as curl_requests
 try:
-    # `duckduckgo_search` 8.x delegates text search through Bing. The project
-    # was renamed to `ddgs`, which keeps the same public DDGS API and uses the
-    # maintained multi-backend implementation.
+    # Legacy sync web_search() helper only; chat path never uses DDG.
     from ddgs import DDGS
 except ImportError:  # pragma: no cover - compatibility for an old install
     from duckduckgo_search import DDGS
@@ -190,9 +186,9 @@ class SearchService:
                     "hint": "Search + 页面内容抽取；免费额度按官方控制台为准。",
                 },
             },
-            # DuckDuckGo is last-resort only; free HTML path is often blocked.
-            "fallback": "duckduckgo",
-            "fallback_note": "无可用付费密钥或付费源失败时才尝试 DuckDuckGo（常不可用）。",
+            # No free HTML fallback: must configure Tavily and/or Firecrawl.
+            "fallback": None,
+            "fallback_note": "须配置 Tavily 或 Firecrawl 之一；不再回退 DuckDuckGo。",
             "configured": self.provider_configured(active) or self.any_paid_provider_configured(),
             # Back-compat fields for older desktop clients.
             "provider": active,
@@ -266,9 +262,16 @@ class SearchService:
             except Exception as exc:
                 last_reason = f"{provider}_error:{type(exc).__name__}"
 
-        response = await self._duckduckgo(provider_query, last_reason or "no_paid_provider")
-        self._cache[key] = (time.monotonic() + 300, response)
-        return SearchResponse(query, response.source, response.evidence, response.degraded_reason)
+        # No DuckDuckGo (or other free HTML) degradation path — fail closed.
+        reason = last_reason or "no_paid_provider"
+        response = SearchResponse(
+            query,
+            "none",
+            "Web Search unavailable: configure Tavily or Firecrawl.",
+            reason,
+        )
+        self._cache[key] = (time.monotonic() + 120, response)
+        return response
 
     async def _consume_search_credit(self) -> tuple[bool, str | None]:
         """Shared local rate limit for all paid search providers."""
@@ -375,81 +378,6 @@ class SearchService:
             chunks.append(f"Title: {title}\nURL: {url}\nContent: {content}")
         return "\n\n".join(chunks)
 
-    async def _duckduckgo(self, query: str, reason: str | None) -> SearchResponse:
-        def curl_results(candidate: str) -> list[dict[str, str]]:
-            response = curl_requests.post(
-                "https://html.duckduckgo.com/html/",
-                data={"q": candidate, "b": "", "kl": "", "kp": "-1"},
-                impersonate="chrome131",
-                timeout=30,
-            )
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, "html.parser")
-            parsed = []
-            for result in soup.select(".result"):
-                title_link = result.select_one(".result__title a")
-                if title_link is None or "y.js" in title_link.get("href", ""):
-                    continue
-                snippet = result.select_one(".result__snippet")
-                parsed.append({
-                    "title": title_link.get_text(" ", strip=True),
-                    "href": title_link.get("href", ""),
-                    "body": snippet.get_text(" ", strip=True) if snippet else "",
-                })
-                if len(parsed) >= 5:
-                    break
-            return parsed
-
-        def run() -> str:
-            with DDGS() as ddgs:
-                queries = [query]
-                if "site:fifa.com" in query:
-                    queries.append(query.replace(" site:fifa.com", ""))
-                results = []
-                last_error = None
-                for candidate in queries:
-                    try:
-                        try:
-                            results = list(ddgs.text(
-                                candidate,
-                                max_results=5,
-                                backend="duckduckgo",
-                            ))
-                        except TypeError:
-                            # Older duckduckgo_search compatibility.
-                            results = list(ddgs.text(candidate, max_results=5))
-                        if results:
-                            break
-                    except Exception as exc:
-                        last_error = exc
-                if not results:
-                    for candidate in queries:
-                        try:
-                            results = curl_results(candidate)
-                            if results:
-                                break
-                        except Exception as exc:
-                            last_error = exc
-                if not results and last_error is not None:
-                    raise last_error
-            return "\n\n".join(
-                f"Rank: {index}\n"
-                f"Title: {row.get('title','')}\n"
-                f"URL: {row.get('href','')}\n"
-                f"Published: {row.get('date') or row.get('published') or 'unknown'}\n"
-                f"Content: {row.get('body','')}"
-                for index, row in enumerate(results, 1)
-            ) or "No results."
-        try:
-            return SearchResponse(query, "duckduckgo", await asyncio.to_thread(run), reason)
-        except Exception as exc:
-            return SearchResponse(
-                query,
-                "none",
-                f"Search unavailable: {exc}",
-                reason or "duckduckgo_error",
-            )
-
     async def health(self) -> dict[str, object]:
         day = datetime.now(timezone.utc).date().isoformat()
         db = await get_db("steins_gate", "control")
@@ -464,16 +392,21 @@ class SearchService:
         finally:
             await db.close()
         active = self.get_active_provider()
+        if self.provider_configured(active):
+            primary = active
+        elif self.provider_configured("tavily"):
+            primary = "tavily"
+        elif self.provider_configured("firecrawl"):
+            primary = "firecrawl"
+        else:
+            primary = "none"
         return {
             "ok": True,
-            "primary": active if self.provider_configured(active) else (
-                "tavily" if self.provider_configured("tavily")
-                else "firecrawl" if self.provider_configured("firecrawl")
-                else "duckduckgo"
-            ),
+            "primary": primary,
             "active_provider": active,
             "tavily_configured": self.provider_configured("tavily"),
             "firecrawl_configured": self.provider_configured("firecrawl"),
+            "fallback": None,
             "local_daily_used": used,
             "local_daily_limit": self.daily_limit,
             "minute_limit": self.minute_limit,
