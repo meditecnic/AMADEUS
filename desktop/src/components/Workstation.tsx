@@ -523,19 +523,84 @@ export const Workstation: React.FC<WorkstationProps> = ({
     }, duration);
   }, []);
 
-  const scrollTranscriptToLatest = useCallback(() => {
+  const NEAR_BOTTOM_THRESHOLD_PX = 72;
+  const stickToBottomRef = useRef(true);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+
+  const prefersReducedMotion = useCallback(() => (
+    typeof window !== 'undefined'
+    && Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)
+  ), []);
+
+  const measureTranscriptScroll = useCallback(() => {
     const viewport = transcriptViewportRef.current;
-    if (!viewport) return;
-    const scroll = () => {
-      viewport.scrollTop = viewport.scrollHeight;
+    if (!viewport) return { nearBottom: true, overflow: false };
+    const distance = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
+    return {
+      nearBottom: distance <= NEAR_BOTTOM_THRESHOLD_PX,
+      overflow: viewport.scrollHeight > viewport.clientHeight + 1,
     };
-    scroll();
-    window.requestAnimationFrame?.(scroll);
   }, []);
 
+  const refreshJumpToLatestVisibility = useCallback((messageCount: number) => {
+    if (messageCount <= 0) {
+      setShowJumpToLatest(false);
+      return;
+    }
+    const { nearBottom, overflow } = measureTranscriptScroll();
+    setShowJumpToLatest(overflow && !nearBottom);
+  }, [measureTranscriptScroll]);
+
+  const scrollTranscriptToLatest = useCallback((options?: {
+    force?: boolean;
+    smooth?: boolean;
+  }) => {
+    const viewport = transcriptViewportRef.current;
+    if (!viewport) return;
+    // force:true (send / thinking / jump) re-enables auto-follow.
+    // force:false only scrolls when the caller already knows we are sticky.
+    if (options?.force ?? true) {
+      stickToBottomRef.current = true;
+    }
+    const useSmooth = Boolean(options?.smooth) && !prefersReducedMotion();
+    const apply = () => {
+      const top = viewport.scrollHeight;
+      if (useSmooth && typeof viewport.scrollTo === 'function') {
+        viewport.scrollTo({ top, behavior: 'smooth' });
+      } else {
+        viewport.scrollTop = top;
+      }
+    };
+    apply();
+    window.requestAnimationFrame?.(apply);
+    setShowJumpToLatest(false);
+  }, [prefersReducedMotion]);
+
+  const handleTranscriptScroll = useCallback(() => {
+    const { nearBottom, overflow } = measureTranscriptScroll();
+    stickToBottomRef.current = nearBottom;
+    setShowJumpToLatest(overflow && !nearBottom && messages.length > 0);
+  }, [measureTranscriptScroll, messages.length]);
+
+  // Conditional auto-follow: only when the user remains near the bottom.
   useEffect(() => {
-    if (isThinking) scrollTranscriptToLatest();
+    if (!stickToBottomRef.current) {
+      refreshJumpToLatestVisibility(messages.length);
+      return;
+    }
+    scrollTranscriptToLatest({ force: false, smooth: false });
+  }, [messages, isThinking, isSynthesizing, scrollTranscriptToLatest, refreshJumpToLatestVisibility]);
+
+  // Sending / thinking still force-jumps to the latest area (approved send behavior).
+  useEffect(() => {
+    if (isThinking) {
+      scrollTranscriptToLatest({ force: true, smooth: false });
+    }
   }, [isThinking, scrollTranscriptToLatest]);
+
+  const handleJumpToLatest = useCallback(() => {
+    scrollTranscriptToLatest({ force: true, smooth: true });
+  }, [scrollTranscriptToLatest]);
 
   const prevEmotionRef = useRef(emotion);
 
@@ -1054,7 +1119,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
         {/* Center: Dialogue Terminal */}
         <div className="grid-terminal border-beam">
-          <div ref={transcriptViewportRef} className="terminal-chat-viewport">
+          <div
+            ref={transcriptViewportRef}
+            className="terminal-chat-viewport"
+            data-testid="transcript-viewport"
+            onScroll={handleTranscriptScroll}
+          >
             {visibleMessages.length === 0 ? (
               <div className="empty-chat-tip">
                 <div className={`amadeus-logo-glitched worldline-logo-${worldline}`} />
@@ -1141,6 +1211,39 @@ export const Workstation: React.FC<WorkstationProps> = ({
               </div>
             )}
           </div>
+
+          {showJumpToLatest && (
+            <button
+              type="button"
+              className="jump-to-latest-btn"
+              data-testid="jump-to-latest"
+              aria-label="跳到最新"
+              onClick={handleJumpToLatest}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  handleJumpToLatest();
+                }
+              }}
+            >
+              <svg
+                className="jump-to-latest-chevron"
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                width="16"
+                height="16"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                {/* Full double-chevron: upper and lower arcs both present */}
+                <path d="M7 7l5 5 5-5" />
+                <path d="M7 13l5 5 5-5" />
+              </svg>
+            </button>
+          )}
 
           {/* Bottom Chat Input Form */}
           <form className="terminal-input-bar" onSubmit={handleSend}>

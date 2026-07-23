@@ -63,7 +63,17 @@ vi.mock('../services/AudioService', () => ({
 }));
 
 vi.mock('./StatusBar', () => ({ StatusBar: () => null }));
-vi.mock('./SettingsModal', () => ({ SettingsModal: () => null }));
+vi.mock('./SettingsModal', () => ({
+  SettingsModal: () => null,
+  CHAT_TEMPERATURE_MIN: 0,
+  CHAT_TEMPERATURE_MAX: 1.2,
+  CHAT_TEMPERATURE_STEP: 0.1,
+  CHAT_TEMPERATURE_DEFAULT: 0.4,
+  clampChatTemperature: (value: number) => {
+    if (!Number.isFinite(value)) return 0.4;
+    return Math.max(0, Math.min(1.2, value));
+  },
+}));
 vi.mock('./SoundPanel', () => ({ SoundPanel: () => null }));
 vi.mock('./HistorySidebar', () => ({
   HistorySidebar: (props: { conversations: Array<{ id: string; title: string }> }) => (
@@ -783,5 +793,335 @@ describe('Workstation UX-ERROR-SURFACE-01 switch vs TTS errors', () => {
     // Real TTS error remains; switch error did not replace it.
     expect(getByTestId('audio-error-toast')).toHaveTextContent('> TTS service unavailable');
     expect(queryByTestId('session-error-toast')).not.toBeNull();
+  });
+});
+
+
+type ScrollMetrics = {
+  scrollHeight: number;
+  clientHeight: number;
+  scrollTop: number;
+};
+
+function attachScrollMetrics(el: HTMLElement, metrics: ScrollMetrics) {
+  Object.defineProperty(el, 'scrollHeight', {
+    configurable: true,
+    get: () => metrics.scrollHeight,
+  });
+  Object.defineProperty(el, 'clientHeight', {
+    configurable: true,
+    get: () => metrics.clientHeight,
+  });
+  Object.defineProperty(el, 'scrollTop', {
+    configurable: true,
+    get: () => metrics.scrollTop,
+    set: (value: number) => {
+      metrics.scrollTop = value;
+    },
+  });
+  el.scrollTo = vi.fn((options?: ScrollToOptions | number) => {
+    if (typeof options === 'number') {
+      metrics.scrollTop = options;
+      return;
+    }
+    if (options && typeof options.top === 'number') {
+      metrics.scrollTop = options.top;
+    }
+  }) as typeof el.scrollTo;
+}
+
+describe('Workstation UX-TRANSCRIPT-FOLLOW-01 conditional stick + jump', () => {
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  beforeEach(() => {
+    localStorage.clear();
+    audioSpies.isPlaying = false;
+    audioSpies.init.mockClear();
+    audioSpies.playBase64.mockClear();
+    audioSpies.stopAll.mockClear();
+    wsSpies.reconnect.mockClear();
+    wsSpies.switchConversation.mockClear();
+    wsSpies.switchWorldline.mockClear();
+    wsSpies.switchConversation.mockReturnValue(true);
+    wsSpies.switchWorldline.mockReturnValue(true);
+    wsSpies.useAmadeusWS.mockReset();
+
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/providers') {
+        return { ok: true, status: 200, json: async () => [] } as Response;
+      }
+      if (url.startsWith('/api/conversations?')) {
+        return { ok: true, status: 200, json: async () => [] } as Response;
+      }
+      if (url === '/api/search/settings') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ provider: 'tavily', configured: false, fallback: 'duckduckgo' }),
+        } as Response;
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+  });
+
+  function mountFollowHarness(initialMessages: Array<Record<string, unknown>>) {
+    const state = {
+      messages: initialMessages,
+      isThinking: false,
+    };
+    wsSpies.useAmadeusWS.mockImplementation(() => ({
+      status: 'READY',
+      messages: state.messages,
+      isThinking: state.isThinking,
+      isSynthesizing: false,
+      activeTool: null,
+      activeNotice: null,
+      emotion: 'neutral',
+      sendChat: vi.fn(),
+      stopVoice: vi.fn(),
+      cancelTurn: vi.fn(),
+      sendDebugTts: vi.fn(),
+      updateConfig: vi.fn(),
+      reconnect: wsSpies.reconnect,
+      switchConversation: wsSpies.switchConversation,
+      switchWorldline: wsSpies.switchWorldline,
+      wsRef: { current: null },
+    }));
+    const view = render(
+      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    );
+    return { ...view, state };
+  }
+
+  it('auto-follows new segments when the user is near the bottom', async () => {
+    const { getByTestId, state, rerender } = mountFollowHarness([
+      { id: 'm1', role: 'assistant', content: '一段。', streaming: false, segments: [] },
+    ]);
+    const viewport = await waitFor(() => getByTestId('transcript-viewport'));
+    const metrics: ScrollMetrics = { scrollHeight: 900, clientHeight: 300, scrollTop: 600 };
+    attachScrollMetrics(viewport, metrics);
+    fireEvent.scroll(viewport);
+
+    state.messages = [
+      ...state.messages,
+      { id: 'm2', role: 'assistant', content: '二段。', streaming: true, segments: [{ id: 0, ja: '二段。', zh: '二段。' }] },
+    ];
+    metrics.scrollHeight = 1200;
+    rerender(
+      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(metrics.scrollTop).toBe(1200);
+    });
+  });
+
+  it('does not force-follow when the user has scrolled up', async () => {
+    const { getByTestId, state, rerender } = mountFollowHarness([
+      { id: 'm1', role: 'assistant', content: '一段。', streaming: false, segments: [] },
+    ]);
+    const viewport = await waitFor(() => getByTestId('transcript-viewport'));
+    const metrics: ScrollMetrics = { scrollHeight: 900, clientHeight: 300, scrollTop: 80 };
+    attachScrollMetrics(viewport, metrics);
+    fireEvent.scroll(viewport);
+
+    state.messages = [
+      ...state.messages,
+      { id: 'm2', role: 'assistant', content: '二段。', streaming: true, segments: [] },
+    ];
+    metrics.scrollHeight = 1200;
+    rerender(
+      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(metrics.scrollTop).toBe(80);
+    });
+  });
+
+  it('resumes auto-follow after the user returns to the bottom', async () => {
+    const { getByTestId, state, rerender } = mountFollowHarness([
+      { id: 'm1', role: 'assistant', content: '一段。', streaming: false, segments: [] },
+    ]);
+    const viewport = await waitFor(() => getByTestId('transcript-viewport'));
+    const metrics: ScrollMetrics = { scrollHeight: 900, clientHeight: 300, scrollTop: 40 };
+    attachScrollMetrics(viewport, metrics);
+    fireEvent.scroll(viewport);
+
+    metrics.scrollTop = 600;
+    fireEvent.scroll(viewport);
+
+    state.messages = [
+      ...state.messages,
+      { id: 'm2', role: 'assistant', content: '二段。', streaming: true, segments: [] },
+    ];
+    metrics.scrollHeight = 1100;
+    rerender(
+      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(metrics.scrollTop).toBe(1100);
+    });
+  });
+
+  it('shows the jump button when scrolled away with overflow, and hides at the bottom', async () => {
+    const { getByTestId, queryByTestId } = mountFollowHarness([
+      { id: 'm1', role: 'assistant', content: '一段。', streaming: false, segments: [] },
+      { id: 'm2', role: 'assistant', content: '二段。', streaming: false, segments: [] },
+    ]);
+    const viewport = await waitFor(() => getByTestId('transcript-viewport'));
+    const metrics: ScrollMetrics = { scrollHeight: 900, clientHeight: 300, scrollTop: 40 };
+    attachScrollMetrics(viewport, metrics);
+    fireEvent.scroll(viewport);
+
+    await waitFor(() => {
+      expect(getByTestId('jump-to-latest')).toBeTruthy();
+    });
+
+    metrics.scrollTop = 600;
+    fireEvent.scroll(viewport);
+    await waitFor(() => {
+      expect(queryByTestId('jump-to-latest')).toBeNull();
+    });
+  });
+
+  it('jumps to latest on click and restores follow for later segments', async () => {
+    const { getByTestId, state, rerender } = mountFollowHarness([
+      { id: 'm1', role: 'assistant', content: '一段。', streaming: false, segments: [] },
+    ]);
+    const viewport = await waitFor(() => getByTestId('transcript-viewport'));
+    const metrics: ScrollMetrics = { scrollHeight: 900, clientHeight: 300, scrollTop: 20 };
+    attachScrollMetrics(viewport, metrics);
+    fireEvent.scroll(viewport);
+    const jump = await waitFor(() => getByTestId('jump-to-latest'));
+    fireEvent.click(jump);
+
+    await waitFor(() => {
+      expect(metrics.scrollTop).toBe(900);
+    });
+
+    state.messages = [
+      ...state.messages,
+      { id: 'm2', role: 'assistant', content: '二段。', streaming: true, segments: [] },
+    ];
+    metrics.scrollHeight = 1300;
+    rerender(
+      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    );
+    await waitFor(() => {
+      expect(metrics.scrollTop).toBe(1300);
+    });
+  });
+
+  it('hides jump control for empty transcripts and non-overflowing content', async () => {
+    const empty = mountFollowHarness([]);
+    await waitFor(() => empty.getByTestId('transcript-viewport'));
+    expect(empty.queryByTestId('jump-to-latest')).toBeNull();
+    empty.unmount();
+
+    const short = mountFollowHarness([
+      { id: 'm1', role: 'assistant', content: '短。', streaming: false, segments: [] },
+    ]);
+    const viewport = await waitFor(() => short.getByTestId('transcript-viewport'));
+    const metrics: ScrollMetrics = { scrollHeight: 200, clientHeight: 300, scrollTop: 0 };
+    attachScrollMetrics(viewport, metrics);
+    fireEvent.scroll(viewport);
+    expect(short.queryByTestId('jump-to-latest')).toBeNull();
+  });
+
+  it('activates jump-to-latest with Enter and Space', async () => {
+    const { getByTestId } = mountFollowHarness([
+      { id: 'm1', role: 'assistant', content: '一段。', streaming: false, segments: [] },
+    ]);
+    const viewport = await waitFor(() => getByTestId('transcript-viewport'));
+    const metrics: ScrollMetrics = { scrollHeight: 900, clientHeight: 300, scrollTop: 10 };
+    attachScrollMetrics(viewport, metrics);
+    fireEvent.scroll(viewport);
+    const jump = await waitFor(() => getByTestId('jump-to-latest'));
+    expect(jump).toHaveAttribute('aria-label', '跳到最新');
+
+    metrics.scrollTop = 10;
+    fireEvent.keyDown(jump, { key: 'Enter' });
+    await waitFor(() => expect(metrics.scrollTop).toBe(900));
+
+    metrics.scrollTop = 10;
+    fireEvent.scroll(viewport);
+    const jumpAgain = await waitFor(() => getByTestId('jump-to-latest'));
+    fireEvent.keyDown(jumpAgain, { key: ' ' });
+    await waitFor(() => expect(metrics.scrollTop).toBe(900));
+  });
+
+  it('uses immediate scroll under reduced motion instead of smooth behavior', async () => {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: query.includes('prefers-reduced-motion'),
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    }));
+    const { getByTestId } = mountFollowHarness([
+      { id: 'm1', role: 'assistant', content: '一段。', streaming: false, segments: [] },
+    ]);
+    const viewport = await waitFor(() => getByTestId('transcript-viewport'));
+    const metrics: ScrollMetrics = { scrollHeight: 900, clientHeight: 300, scrollTop: 15 };
+    attachScrollMetrics(viewport, metrics);
+    fireEvent.scroll(viewport);
+    const jump = await waitFor(() => getByTestId('jump-to-latest'));
+    fireEvent.click(jump);
+
+    await waitFor(() => {
+      expect(metrics.scrollTop).toBe(900);
+    });
+    const scrollToMock = viewport.scrollTo as unknown as ReturnType<typeof vi.fn>;
+    const smoothCalls = scrollToMock.mock.calls.filter((call) => {
+      const arg = call[0] as ScrollToOptions | undefined;
+      return arg && arg.behavior === 'smooth';
+    });
+    expect(smoothCalls).toHaveLength(0);
+  });
+
+  it('keeps force-scroll on send so thinking area is revealed', async () => {
+    const sendChat = vi.fn();
+    wsSpies.useAmadeusWS.mockImplementation(() => ({
+      status: 'READY',
+      messages: [{ id: 'old', role: 'assistant', content: '旧消息', streaming: false, segments: [] }],
+      isThinking: false,
+      isSynthesizing: false,
+      activeTool: null,
+      activeNotice: null,
+      emotion: 'neutral',
+      sendChat,
+      stopVoice: vi.fn(),
+      cancelTurn: vi.fn(),
+      sendDebugTts: vi.fn(),
+      updateConfig: vi.fn(),
+      reconnect: wsSpies.reconnect,
+      switchConversation: wsSpies.switchConversation,
+      switchWorldline: wsSpies.switchWorldline,
+      wsRef: { current: null },
+    }));
+    const { container, getByTestId } = render(
+      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    );
+    const viewport = await waitFor(() => getByTestId('transcript-viewport'));
+    const metrics: ScrollMetrics = { scrollHeight: 900, clientHeight: 300, scrollTop: 100 };
+    attachScrollMetrics(viewport, metrics);
+    fireEvent.scroll(viewport);
+
+    const input = container.querySelector<HTMLInputElement>('.chat-input-field');
+    expect(input).not.toBeNull();
+    fireEvent.change(input as HTMLInputElement, { target: { value: '新消息' } });
+    fireEvent.submit((input as HTMLInputElement).closest('form') as HTMLFormElement);
+
+    expect(sendChat).toHaveBeenCalledWith('新消息');
+    expect(metrics.scrollTop).toBe(900);
   });
 });
