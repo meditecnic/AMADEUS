@@ -1301,6 +1301,104 @@ body {
   font-weight: bold;
 }
 
+/* Credential cards: model key + multi-provider web search */
+.credential-card {
+  gap: 8px;
+}
+.credential-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.credential-badge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  letter-spacing: 0.6px;
+  border: 1px solid rgba(255, 170, 0, 0.35);
+  color: #c88848;
+  background: rgba(40, 18, 4, 0.55);
+}
+.credential-badge.configured {
+  color: #ffcc66;
+  border-color: rgba(255, 200, 80, 0.55);
+  background: rgba(70, 40, 8, 0.55);
+}
+.credential-badge.not-configured {
+  color: #8b5a2b;
+}
+.credential-badge.error {
+  color: #ff6b4a;
+  border-color: rgba(255, 80, 50, 0.5);
+}
+.credential-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.search-provider-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.search-provider-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 10px 12px;
+  text-align: left;
+  border: 1px solid rgba(90, 37, 0, 0.85);
+  border-radius: 6px;
+  background: rgba(8, 4, 2, 0.72);
+  color: #e0a060;
+  cursor: pointer;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+.search-provider-card:hover:not(:disabled),
+.search-provider-card:focus-visible {
+  outline: none;
+  border-color: #ffaa00;
+  box-shadow: 0 0 8px rgba(255, 170, 0, 0.22);
+}
+.search-provider-card.active {
+  border-color: #ff6c00;
+  background: rgba(40, 16, 4, 0.88);
+  box-shadow: 0 0 10px rgba(255, 108, 0, 0.25);
+}
+.search-provider-card:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.search-provider-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: #ffaa00;
+  letter-spacing: 0.4px;
+}
+.search-provider-state {
+  font-size: 11px;
+  color: #c88848;
+  line-height: 1.35;
+}
+.search-provider-docs {
+  font-size: 11px;
+  color: #ffcc66;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.search-provider-docs:hover {
+  color: #ffe1aa;
+}
+@media (max-width: 640px) {
+  .search-provider-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .close-btn {
   background: transparent;
   border: none;

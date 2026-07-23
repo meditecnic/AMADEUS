@@ -186,8 +186,8 @@ async def test_keyless_current_world_cup_search_uses_rewritten_query(tmp_path, m
     }])
 
     service = SearchService()
-    service.configured_tavily_key = staticmethod(lambda: "")  # type: ignore[method-assign]
-    service._consume_tavily_credit = AsyncMock(return_value=(True, None))
+    service.configured_key = lambda provider: ""  # type: ignore[method-assign]
+    service._consume_search_credit = AsyncMock(return_value=(True, None))
     with patch("app.services.search.DDGS", return_value=fake_ddgs):
         response = await service.search("请你web search一下今年的世界杯冠军是哪个国家队")
 
@@ -214,8 +214,8 @@ async def test_world_cup_search_retries_without_overstrict_site_filter(tmp_path,
         "body": "Spain defeated Argentina in the final.",
     }]])
     service = SearchService()
-    service.configured_tavily_key = staticmethod(lambda: "")  # type: ignore[method-assign]
-    service._consume_tavily_credit = AsyncMock(return_value=(True, None))
+    service.configured_key = lambda provider: ""  # type: ignore[method-assign]
+    service._consume_search_credit = AsyncMock(return_value=(True, None))
 
     with patch("app.services.search.DDGS", return_value=fake_ddgs):
         response = await service.search("今年的世界杯冠军")
@@ -246,8 +246,8 @@ async def test_search_uses_chrome_tls_fallback_when_ddgs_returns_empty(tmp_path,
     )
     fake_curl = MagicMock(return_value=fake_response)
     service = SearchService()
-    service.configured_tavily_key = staticmethod(lambda: "")  # type: ignore[method-assign]
-    service._consume_tavily_credit = AsyncMock(return_value=(True, None))
+    service.configured_key = lambda provider: ""  # type: ignore[method-assign]
+    service._consume_search_credit = AsyncMock(return_value=(True, None))
 
     with patch("app.services.search.DDGS", return_value=fake_ddgs), \
          patch("app.services.search.curl_requests.post", fake_curl):

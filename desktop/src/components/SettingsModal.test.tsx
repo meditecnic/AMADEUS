@@ -124,8 +124,9 @@ describe('SettingsModal UX contracts', () => {
 
     const input = screen.getByTestId('credential-input') as HTMLInputElement;
     expect(input.value).toBe('');
-    expect(input).toHaveAttribute('placeholder', '••••••••');
-    expect(screen.getByTestId('credential-status')).toHaveTextContent('已配置');
+    expect(input).toHaveAttribute('placeholder', '已连接 · 粘贴新密钥以更换');
+    expect(screen.getByTestId('credential-status')).toHaveTextContent('已连接');
+    expect(screen.getByTestId('credential-badge')).toHaveTextContent('已连接');
   });
 
   it('shows saving while the save request is pending and preserves a blank key', async () => {
@@ -155,44 +156,95 @@ describe('SettingsModal UX contracts', () => {
     expect(screen.getByTestId('credential-input')).toHaveValue('');
   });
 
-  it('renders Web Search credentials as an empty password input with a masked placeholder', () => {
-    render(<SettingsModal {...baseProps} onSaveSettings={vi.fn()} />);
+  it('renders dual search providers and only shows key input when not connected', () => {
+    render(
+      <SettingsModal
+        {...baseProps}
+        webSearchConfigured={false}
+        webSearchStatus="not_configured"
+        webSearchActiveProvider="tavily"
+        webSearchProviders={{
+          tavily: { id: 'tavily', label: 'Tavily', configured: false },
+          firecrawl: { id: 'firecrawl', label: 'Firecrawl', configured: false },
+        }}
+        onSaveSettings={vi.fn()}
+      />,
+    );
 
+    expect(screen.getByTestId('web-search-provider-tavily')).toBeTruthy();
+    expect(screen.getByTestId('web-search-provider-firecrawl')).toBeTruthy();
     const input = screen.getByTestId('web-search-credential-input') as HTMLInputElement;
     expect(input.type).toBe('password');
     expect(input.value).toBe('');
-    expect(input).toHaveAttribute('placeholder', '••••••••••••••••');
-    expect(screen.getByTestId('web-search-credential-status')).toHaveTextContent('已配置');
+    expect(screen.getByTestId('web-search-badge')).toHaveTextContent('未配置');
   });
 
-  it('saves a Web Search key only through the save callback and shows loading during the request', async () => {
-    let resolveSave!: () => void;
-    const onSaveSettings = vi.fn(() => new Promise<void>((resolve) => { resolveSave = resolve; }));
-    render(<SettingsModal {...baseProps} onSaveSettings={onSaveSettings} />);
-
-    fireEvent.change(screen.getByTestId('web-search-credential-input'), { target: { value: 'tavily-secret' } });
-    fireEvent.click(screen.getByRole('button', { name: /保存/ }));
-
-    expect(screen.getByTestId('web-search-credential-status')).toHaveTextContent('正在保存');
-    expect(screen.getByRole('button', { name: /保存/ })).toBeDisabled();
-    expect(onSaveSettings).toHaveBeenCalledWith(expect.objectContaining({ webSearchApiKey: 'tavily-secret' }));
-    expect(window.localStorage.getItem('tavily-secret')).toBeNull();
-
-    resolveSave();
-    await waitFor(() => expect(baseProps.onClose).toHaveBeenCalled());
-  });
-
-  it('exposes a clear action for a configured Web Search credential', async () => {
+  it('hides the key field when connected and exposes replace/clear actions', async () => {
     const onClearWebSearchCredential = vi.fn().mockResolvedValue(undefined);
     render(
       <SettingsModal
         {...baseProps}
+        webSearchConfigured
+        webSearchStatus="configured"
+        webSearchActiveProvider="tavily"
+        webSearchProviders={{
+          tavily: { id: 'tavily', label: 'Tavily', configured: true },
+          firecrawl: { id: 'firecrawl', label: 'Firecrawl', configured: false },
+        }}
         onSaveSettings={vi.fn()}
         onClearWebSearchCredential={onClearWebSearchCredential}
       />,
     );
 
+    expect(screen.queryByTestId('web-search-credential-input')).toBeNull();
+    expect(screen.getByTestId('web-search-badge')).toHaveTextContent('已连接');
     fireEvent.click(screen.getByTestId('clear-web-search-credential'));
-    await waitFor(() => expect(onClearWebSearchCredential).toHaveBeenCalledOnce());
+    await waitFor(() => expect(onClearWebSearchCredential).toHaveBeenCalledWith('tavily'));
+  });
+
+  it('saves a Web Search key with the selected provider and never stores it in localStorage', async () => {
+    let resolveSave!: () => void;
+    const onSaveSettings = vi.fn(() => new Promise<void>((resolve) => { resolveSave = resolve; }));
+    render(
+      <SettingsModal
+        {...baseProps}
+        webSearchConfigured={false}
+        webSearchStatus="not_configured"
+        webSearchActiveProvider="firecrawl"
+        onSaveSettings={onSaveSettings}
+      />,
+    );
+
+    fireEvent.change(screen.getByTestId('web-search-credential-input'), { target: { value: 'fc-secret' } });
+    fireEvent.click(screen.getByRole('button', { name: /保存/ }));
+
+    expect(screen.getByTestId('web-search-credential-status')).toHaveTextContent('正在保存');
+    expect(onSaveSettings).toHaveBeenCalledWith(expect.objectContaining({
+      webSearchApiKey: 'fc-secret',
+      webSearchProvider: 'firecrawl',
+    }));
+    expect(window.localStorage.getItem('fc-secret')).toBeNull();
+
+    resolveSave();
+    await waitFor(() => expect(baseProps.onClose).toHaveBeenCalled());
+  });
+
+  it('switches active search provider through the dedicated callback', async () => {
+    const onSelectWebSearchProvider = vi.fn().mockResolvedValue(undefined);
+    render(
+      <SettingsModal
+        {...baseProps}
+        webSearchActiveProvider="tavily"
+        webSearchProviders={{
+          tavily: { id: 'tavily', label: 'Tavily', configured: true },
+          firecrawl: { id: 'firecrawl', label: 'Firecrawl', configured: true },
+        }}
+        onSaveSettings={vi.fn()}
+        onSelectWebSearchProvider={onSelectWebSearchProvider}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('web-search-provider-firecrawl'));
+    await waitFor(() => expect(onSelectWebSearchProvider).toHaveBeenCalledWith('firecrawl'));
   });
 });

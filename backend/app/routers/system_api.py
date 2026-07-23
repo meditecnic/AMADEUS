@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, SecretStr
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from fastapi import APIRouter, HTTPException, Query
 
 from app.db import normalize_worldline, validate_schema
@@ -9,9 +11,16 @@ from app.services.session_manager import session_coordinator
 from app.services.soul_engine import soul_engine
 from app.services.diagnostics import diagnostic_runtime
 from app.services.credentials import credential_store
-from app.services.search import SEARCH_CREDENTIAL_ID, search_service
+from app.services.search import (
+    SEARCH_CREDENTIAL_BY_PROVIDER,
+    SEARCH_PROVIDERS,
+    normalize_search_provider,
+    search_service,
+)
 
 router = APIRouter()
+
+SearchProviderLiteral = Literal["tavily", "firecrawl"]
 
 
 class SwitchRequest(BaseModel):
@@ -28,36 +37,77 @@ class ForgetRequest(BaseModel):
 
 
 class SearchCredentialUpdate(BaseModel):
+    """Write-only search credential update for one provider.
+
+    Blank api_key preserves the existing secret (industry standard: never echo keys).
+    """
+
     model_config = ConfigDict(extra="forbid")
-    api_key: SecretStr
+    provider: SearchProviderLiteral = "tavily"
+    api_key: SecretStr = Field(default=SecretStr(""))
+
+
+class SearchSettingsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    active_provider: SearchProviderLiteral
 
 
 @router.get("/api/search/settings")
 async def search_settings():
-    return {
-        "provider": "tavily",
-        "configured": bool(credential_store.get(SEARCH_CREDENTIAL_ID)),
-        "fallback": "duckduckgo",
-    }
+    return search_service.settings_snapshot()
+
+
+@router.patch("/api/search/settings")
+async def patch_search_settings(update: SearchSettingsUpdate):
+    active = search_service.set_active_provider(update.active_provider)
+    search_service.credentials_changed()
+    snapshot = search_service.settings_snapshot()
+    snapshot["active_provider"] = active
+    snapshot["provider"] = active
+    return snapshot
 
 
 @router.put("/api/search/credential")
 async def save_search_credential(update: SearchCredentialUpdate):
+    provider = normalize_search_provider(update.provider)
+    cred_id = SEARCH_CREDENTIAL_BY_PROVIDER[provider]
     secret = update.api_key.get_secret_value().strip()
     if secret:
-        credential_store.set(SEARCH_CREDENTIAL_ID, secret)
+        credential_store.set(cred_id, secret)
+        # First successful key for a provider can become active if none preferred.
+        if not search_service.provider_configured(search_service.get_active_provider()):
+            search_service.set_active_provider(provider)
         search_service.credentials_changed()
+    snapshot = search_service.settings_snapshot()
     return {
-        "provider": "tavily",
-        "configured": bool(credential_store.get(SEARCH_CREDENTIAL_ID)),
+        "provider": provider,
+        "active_provider": snapshot["active_provider"],
+        "configured": search_service.provider_configured(provider),
+        "providers": snapshot["providers"],
     }
 
 
 @router.delete("/api/search/credential")
-async def delete_search_credential():
-    credential_store.delete(SEARCH_CREDENTIAL_ID)
+async def delete_search_credential(
+    provider: SearchProviderLiteral = Query("tavily"),
+):
+    normalized = normalize_search_provider(provider)
+    cred_id = SEARCH_CREDENTIAL_BY_PROVIDER[normalized]
+    credential_store.delete(cred_id)
+    # If active provider lost its key, prefer any still-configured paid source.
+    if search_service.get_active_provider() == normalized:
+        for candidate in SEARCH_PROVIDERS:
+            if candidate != normalized and search_service.provider_configured(candidate):
+                search_service.set_active_provider(candidate)
+                break
     search_service.credentials_changed()
-    return {"provider": "tavily", "configured": False}
+    snapshot = search_service.settings_snapshot()
+    return {
+        "provider": normalized,
+        "active_provider": snapshot["active_provider"],
+        "configured": False,
+        "providers": snapshot["providers"],
+    }
 
 
 @router.post("/api/worldline/switch")

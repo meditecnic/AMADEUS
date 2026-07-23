@@ -11,6 +11,9 @@ import {
   clampChatTemperature,
   SettingsModal,
   type CredentialStatus,
+  type WebSearchProviderId,
+  type WebSearchProviderInfo,
+  type WebSearchSettingsSnapshot,
 } from './SettingsModal';
 import { SoundPanel } from './SoundPanel';
 import { HistorySidebar, type ConversationSummary } from './HistorySidebar';
@@ -57,6 +60,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [webSearchApiKey, setWebSearchApiKey] = useState('');
   const [webSearchConfigured, setWebSearchConfigured] = useState(false);
   const [webSearchCredentialStatus, setWebSearchCredentialStatus] = useState<CredentialStatus>('checking');
+  const [webSearchActiveProvider, setWebSearchActiveProvider] = useState<WebSearchProviderId>('tavily');
+  const [webSearchProviders, setWebSearchProviders] = useState<Partial<Record<WebSearchProviderId, WebSearchProviderInfo>>>({});
+  const [webSearchFallbackNote, setWebSearchFallbackNote] = useState(
+    '无可用密钥时才回退 DuckDuckGo（常不可用）。',
+  );
   const [credentialChecked, setCredentialChecked] = useState(false);
   const [credentialStatus, setCredentialStatus] = useState<CredentialStatus>('checking');
   const [providers, setProviders] = useState<ProviderMetadata[]>([]);
@@ -381,6 +389,22 @@ export const Workstation: React.FC<WorkstationProps> = ({
     return () => { cancelled = true; };
   }, [loadProviders, reconnect]);
 
+  const applyWebSearchSettings = useCallback((settings: WebSearchSettingsSnapshot) => {
+    const active = (settings.active_provider || settings.provider || 'tavily') as WebSearchProviderId;
+    const providers = settings.providers || {};
+    setWebSearchActiveProvider(active);
+    setWebSearchProviders(providers);
+    if (settings.fallback_note) setWebSearchFallbackNote(settings.fallback_note);
+    const activeConfigured = Boolean(providers[active]?.configured);
+    const anyConfigured = Boolean(
+      settings.configured
+      || activeConfigured
+      || Object.values(providers).some((row) => row?.configured),
+    );
+    setWebSearchConfigured(activeConfigured || anyConfigured);
+    setWebSearchCredentialStatus(activeConfigured ? 'configured' : 'not_configured');
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     const loadWebSearchSettings = async () => {
@@ -388,11 +412,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
       try {
         const response = await fetch('/api/search/settings');
         if (!response.ok) throw new Error(`web search settings query failed: ${response.status}`);
-        const settings = await response.json() as { provider: 'tavily'; configured: boolean; fallback: 'duckduckgo' };
-        if (!cancelled) {
-          setWebSearchConfigured(Boolean(settings.configured));
-          setWebSearchCredentialStatus(settings.configured ? 'configured' : 'not_configured');
-        }
+        const settings = await response.json() as WebSearchSettingsSnapshot & { provider?: WebSearchProviderId };
+        if (!cancelled) applyWebSearchSettings(settings);
       } catch (error) {
         if (!cancelled) setWebSearchCredentialStatus('error');
         console.warn('Web Search credential synchronization failed:', error);
@@ -400,7 +421,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     };
     void loadWebSearchSettings();
     return () => { cancelled = true; };
-  }, []);
+  }, [applyWebSearchSettings]);
 
   const activeConversation = conversations.find((row) => row.id === activeConversationId);
   const activeProviderId = activeConversation?.provider_id || draftProviderId;
@@ -852,6 +873,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     worldline: 'steins_gate' | 'beta';
     apiKey: string;
     webSearchApiKey: string;
+    webSearchProvider: WebSearchProviderId;
     systemPrompt: string;
     enableTts: boolean;
     sovitsUrl: string;
@@ -917,14 +939,28 @@ export const Workstation: React.FC<WorkstationProps> = ({
       const response = await fetch('/api/search/credential', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ api_key: newSettings.webSearchApiKey.trim() }),
+        body: JSON.stringify({
+          provider: newSettings.webSearchProvider,
+          api_key: newSettings.webSearchApiKey.trim(),
+        }),
       });
       if (!response.ok) {
         setWebSearchCredentialStatus('error');
         throw new Error('web_search_credential_save_failed');
       }
-      setWebSearchConfigured(true);
-      setWebSearchCredentialStatus('configured');
+      const payload = await response.json() as WebSearchSettingsSnapshot & {
+        provider?: WebSearchProviderId;
+        configured?: boolean;
+      };
+      applyWebSearchSettings({
+        active_provider: (payload.active_provider || newSettings.webSearchProvider) as WebSearchProviderId,
+        providers: payload.providers || webSearchProviders,
+        configured: payload.configured,
+        fallback_note: webSearchFallbackNote,
+      });
+      setWebSearchActiveProvider(newSettings.webSearchProvider);
+    } else if (newSettings.webSearchProvider !== webSearchActiveProvider) {
+      setWebSearchActiveProvider(newSettings.webSearchProvider);
     }
     setWebSearchApiKey('');
     setApiKey('');
@@ -987,16 +1023,40 @@ export const Workstation: React.FC<WorkstationProps> = ({
     }
   };
 
-  const handleClearWebSearchCredential = async () => {
+  const handleSelectWebSearchProvider = async (provider: WebSearchProviderId) => {
     setWebSearchCredentialStatus('saving');
-    const response = await fetch('/api/search/credential', { method: 'DELETE' });
+    const response = await fetch('/api/search/settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ active_provider: provider }),
+    });
+    if (!response.ok) {
+      setWebSearchCredentialStatus('error');
+      throw new Error('web_search_provider_switch_failed');
+    }
+    const settings = await response.json() as WebSearchSettingsSnapshot;
+    applyWebSearchSettings(settings);
+  };
+
+  const handleClearWebSearchCredential = async (provider: WebSearchProviderId) => {
+    setWebSearchCredentialStatus('saving');
+    const response = await fetch(
+      `/api/search/credential?provider=${encodeURIComponent(provider)}`,
+      { method: 'DELETE' },
+    );
     if (!response.ok) {
       setWebSearchCredentialStatus('error');
       throw new Error('web_search_credential_clear_failed');
     }
+    const payload = await response.json() as WebSearchSettingsSnapshot & {
+      provider?: WebSearchProviderId;
+    };
     setWebSearchApiKey('');
-    setWebSearchConfigured(false);
-    setWebSearchCredentialStatus('not_configured');
+    applyWebSearchSettings({
+      active_provider: (payload.active_provider || webSearchActiveProvider) as WebSearchProviderId,
+      providers: payload.providers || {},
+      fallback_note: webSearchFallbackNote,
+    });
   };
 
   const handleAudioInit = () => {
@@ -1390,6 +1450,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
         webSearchApiKey={webSearchApiKey}
         webSearchConfigured={webSearchConfigured}
         webSearchStatus={webSearchCredentialStatus}
+        webSearchActiveProvider={webSearchActiveProvider}
+        webSearchProviders={webSearchProviders}
+        webSearchFallbackNote={webSearchFallbackNote}
+        onSelectWebSearchProvider={handleSelectWebSearchProvider}
         systemPrompt={systemPrompt}
         enableTts={enableTts}
         sovitsUrl={sovitsUrl}

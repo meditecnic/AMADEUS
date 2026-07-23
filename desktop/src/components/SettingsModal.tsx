@@ -2,6 +2,25 @@ import React, { useState, useEffect } from 'react';
 
 export type CredentialStatus = 'checking' | 'configured' | 'not_configured' | 'saving' | 'error';
 
+/** Paid web-search backends; DuckDuckGo remains last-resort only. */
+export type WebSearchProviderId = 'tavily' | 'firecrawl';
+
+export interface WebSearchProviderInfo {
+  id: WebSearchProviderId;
+  label: string;
+  configured: boolean;
+  docs_url?: string;
+  hint?: string;
+}
+
+export interface WebSearchSettingsSnapshot {
+  active_provider: WebSearchProviderId;
+  providers: Record<WebSearchProviderId, WebSearchProviderInfo>;
+  fallback?: string;
+  fallback_note?: string;
+  configured?: boolean;
+}
+
 /** Chat sampling temperature exposed as Settings「回复随机性」. Not Persona content. */
 export const CHAT_TEMPERATURE_MIN = 0;
 export const CHAT_TEMPERATURE_MAX = 1.2;
@@ -24,6 +43,9 @@ export interface SettingsModalProps {
   webSearchApiKey?: string;
   webSearchConfigured?: boolean;
   webSearchStatus?: CredentialStatus;
+  webSearchActiveProvider?: WebSearchProviderId;
+  webSearchProviders?: Partial<Record<WebSearchProviderId, WebSearchProviderInfo>>;
+  webSearchFallbackNote?: string;
   systemPrompt: string;
   enableTts: boolean;
   sovitsUrl: string;
@@ -45,6 +67,7 @@ export interface SettingsModalProps {
     worldline: 'steins_gate' | 'beta';
     apiKey: string;
     webSearchApiKey: string;
+    webSearchProvider: WebSearchProviderId;
     systemPrompt: string;
     enableTts: boolean;
     sovitsUrl: string;
@@ -57,7 +80,8 @@ export interface SettingsModalProps {
     model: string;
     reasoningEffort: 'high' | 'xhigh';
   }) => void | Promise<void>;
-  onClearWebSearchCredential?: () => void | Promise<void>;
+  onSelectWebSearchProvider?: (provider: WebSearchProviderId) => void | Promise<void>;
+  onClearWebSearchCredential?: (provider: WebSearchProviderId) => void | Promise<void>;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -70,6 +94,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   webSearchApiKey = '',
   webSearchConfigured = false,
   webSearchStatus,
+  webSearchActiveProvider = 'tavily',
+  webSearchProviders,
+  webSearchFallbackNote = '无可用密钥时才回退 DuckDuckGo（常不可用）。',
   systemPrompt,
   enableTts,
   sovitsUrl,
@@ -87,12 +114,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   modelOptions,
   reasoningEffort,
   onSaveSettings,
+  onSelectWebSearchProvider,
   onClearWebSearchCredential,
 }) => {
   const [activeTab, setActiveTab] = useState<'basic' | 'voice'>('basic');
   const [localWorldline, setLocalWorldline] = useState<'steins_gate' | 'beta'>(worldline);
   const [localApiKey, setLocalApiKey] = useState(apiKey);
   const [localWebSearchApiKey, setLocalWebSearchApiKey] = useState(webSearchApiKey);
+  const [localWebSearchProvider, setLocalWebSearchProvider] = useState<WebSearchProviderId>(webSearchActiveProvider);
+  const [replacingWebSearchKey, setReplacingWebSearchKey] = useState(false);
   const [localSystemPrompt, setLocalSystemPrompt] = useState(systemPrompt);
   const [localEnableTts, setLocalEnableTts] = useState(enableTts);
   const [localSovitsUrl, setLocalSovitsUrl] = useState(sovitsUrl);
@@ -105,16 +135,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isClearingWebSearch, setIsClearingWebSearch] = useState(false);
-  const displayCredentialStatus: CredentialStatus = credentialStatus
-    ?? (isSaving ? 'saving' : credentialConfigured ? 'configured' : 'not_configured');
-  const displayWebSearchStatus: CredentialStatus = webSearchStatus
-    ?? (isSaving || isClearingWebSearch ? 'saving' : webSearchConfigured ? 'configured' : 'not_configured');
+  const [isSwitchingSearchProvider, setIsSwitchingSearchProvider] = useState(false);
+  // In-flight save/clear always wins over the parent snapshot status.
+  const displayCredentialStatus: CredentialStatus = isSaving
+    ? 'saving'
+    : (credentialStatus ?? (credentialConfigured ? 'configured' : 'not_configured'));
+  const activeSearchMeta = webSearchProviders?.[localWebSearchProvider];
+  const activeSearchConfigured = Boolean(activeSearchMeta?.configured ?? webSearchConfigured);
+  const displayWebSearchStatus: CredentialStatus =
+    (isSaving || isClearingWebSearch || isSwitchingSearchProvider)
+      ? 'saving'
+      : (webSearchStatus ?? (activeSearchConfigured ? 'configured' : 'not_configured'));
   const temperatureWarning =
     localTemperature >= 0.9
       ? 'strong' as const
       : localTemperature >= 0.8
         ? 'mild' as const
         : null;
+  const searchProviderCards: WebSearchProviderInfo[] = (
+    ['tavily', 'firecrawl'] as const
+  ).map((id) => webSearchProviders?.[id] ?? {
+    id,
+    label: id === 'tavily' ? 'Tavily' : 'Firecrawl',
+    configured: id === localWebSearchProvider ? activeSearchConfigured : false,
+    docs_url: id === 'tavily' ? 'https://app.tavily.com/home' : 'https://www.firecrawl.dev/app/api-keys',
+    hint: id === 'tavily'
+      ? '面向 AI 检索；免费额度见官方控制台。'
+      : 'Search + 页面内容；免费额度见官方控制台。',
+  });
 
   useEffect(() => {
     if (isOpen) {
@@ -122,6 +170,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setLocalWorldline(worldline);
       setLocalApiKey(apiKey);
       setLocalWebSearchApiKey(webSearchApiKey);
+      setLocalWebSearchProvider(webSearchActiveProvider);
+      setReplacingWebSearchKey(false);
       setSaveError(null);
       setLocalSystemPrompt(systemPrompt);
       setLocalEnableTts(enableTts);
@@ -131,7 +181,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setLocalModel(model);
       setLocalReasoningIdx(reasoningEffort === 'xhigh' ? 1 : 0);
     }
-  }, [isOpen, worldline, apiKey, webSearchApiKey, systemPrompt, enableTts, sovitsUrl, temperature, providerBaseUrl, model, reasoningEffort]);
+  }, [isOpen, worldline, apiKey, webSearchApiKey, webSearchActiveProvider, systemPrompt, enableTts, sovitsUrl, temperature, providerBaseUrl, model, reasoningEffort]);
 
   if (!isOpen) return null;
 
@@ -144,6 +194,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         worldline: localWorldline,
         apiKey: localApiKey,
         webSearchApiKey: localWebSearchApiKey,
+        webSearchProvider: localWebSearchProvider,
         systemPrompt: localSystemPrompt,
         enableTts: localEnableTts,
         sovitsUrl: localSovitsUrl,
@@ -156,6 +207,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         model: localModel,
         reasoningEffort: (['high', 'xhigh'] as const)[localReasoningIdx],
       });
+      setReplacingWebSearchKey(false);
       onClose();
     } catch (error) {
       const code = error instanceof Error ? error.message : 'settings_save_failed';
@@ -165,13 +217,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  const handleSelectSearchProvider = async (provider: WebSearchProviderId) => {
+    if (provider === localWebSearchProvider || isSwitchingSearchProvider) return;
+    setLocalWebSearchProvider(provider);
+    setLocalWebSearchApiKey('');
+    setReplacingWebSearchKey(false);
+    if (!onSelectWebSearchProvider) return;
+    setIsSwitchingSearchProvider(true);
+    setSaveError(null);
+    try {
+      await onSelectWebSearchProvider(provider);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'web_search_provider_switch_failed');
+    } finally {
+      setIsSwitchingSearchProvider(false);
+    }
+  };
+
   const handleClearWebSearchCredential = async () => {
     if (!onClearWebSearchCredential || isClearingWebSearch) return;
     setIsClearingWebSearch(true);
     setSaveError(null);
     try {
-      await onClearWebSearchCredential();
+      await onClearWebSearchCredential(localWebSearchProvider);
       setLocalWebSearchApiKey('');
+      setReplacingWebSearchKey(false);
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : 'web_search_credential_clear_failed');
     } finally {
@@ -203,15 +273,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <main className="tab-panels">
             {/* BASIC tab */}
             <section className={`tab-panel ${activeTab === 'basic' ? 'active' : ''}`}>
-              <div className="setting-field">
-                <label>{providerDisplayName.toUpperCase()} API 密钥</label>
+              <div className="setting-field credential-card">
+                <div className="credential-card-header">
+                  <label>{providerDisplayName.toUpperCase()} API 密钥</label>
+                  <span
+                    className={`credential-badge ${displayCredentialStatus.replace('_', '-')}`}
+                    data-testid="credential-badge"
+                  >
+                    {displayCredentialStatus === 'configured' && '已连接'}
+                    {displayCredentialStatus === 'not_configured' && '未配置'}
+                    {displayCredentialStatus === 'checking' && '检查中'}
+                    {displayCredentialStatus === 'saving' && '保存中'}
+                    {displayCredentialStatus === 'error' && '失败'}
+                  </span>
+                </div>
+                <p className="setting-field-hint">
+                  密钥只写不读：已连接时输入框为空表示「不改动」；仅在粘贴新密钥后点「保存修改」才会覆盖。
+                </p>
                 <input
                   type="password"
                   value={localApiKey}
                   onChange={(e) => setLocalApiKey(e.target.value)}
                   className="salieri-input"
                   data-testid="credential-input"
-                  placeholder={displayCredentialStatus === 'configured' ? '••••••••' : '输入后仅在本机安全存储'}
+                  placeholder={displayCredentialStatus === 'configured' ? '已连接 · 粘贴新密钥以更换' : '粘贴 API 密钥（仅本机存储）'}
                   autoComplete="new-password"
                 />
                 <p
@@ -220,40 +305,123 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   aria-live="polite"
                 >
                   {displayCredentialStatus === 'checking' && '正在读取凭据状态…'}
-                  {displayCredentialStatus === 'configured' && '已配置 · 留空保存可保持当前密钥不变'}
+                  {displayCredentialStatus === 'configured' && '已连接 · 不会在界面回显密钥'}
                   {displayCredentialStatus === 'not_configured' && '尚未配置 · 保存后不会在页面回显密钥'}
                   {displayCredentialStatus === 'saving' && '保存中…'}
                   {displayCredentialStatus === 'error' && '保存失败 · 请检查连接后重试'}
                 </p>
               </div>
-              <div className="setting-field field-full web-search-setting">
-                <label>联网搜索（Tavily）</label>
-                <input
-                  type="password"
-                  value={localWebSearchApiKey}
-                  onChange={(e) => setLocalWebSearchApiKey(e.target.value)}
-                  className="salieri-input"
-                  data-testid="web-search-credential-input"
-                  placeholder={displayWebSearchStatus === 'configured' ? '••••••••••••••••' : '输入 Tavily API 密钥'}
-                  autoComplete="new-password"
-                />
-                <p className={`credential-status ${displayWebSearchStatus.replace('_', '-')}`} data-testid="web-search-credential-status" aria-live="polite">
-                  {displayWebSearchStatus === 'checking' && '正在检查搜索凭据…'}
-                  {displayWebSearchStatus === 'configured' && '已配置 · 留空保存会保留现有密钥'}
-                  {displayWebSearchStatus === 'not_configured' && '未配置 · DuckDuckGo 免费回退可能不可用'}
-                  {displayWebSearchStatus === 'saving' && '正在保存…'}
-                  {displayWebSearchStatus === 'error' && '保存失败 · 请检查连接后重试'}
-                </p>
-                {webSearchConfigured && onClearWebSearchCredential && (
-                  <button
-                    type="button"
-                    className="salieri-btn cancel-btn"
-                    data-testid="clear-web-search-credential"
-                    onClick={() => { void handleClearWebSearchCredential(); }}
-                    disabled={isSaving || isClearingWebSearch}
+              <div className="setting-field field-full web-search-setting credential-card">
+                <div className="credential-card-header">
+                  <label>联网搜索</label>
+                  <span
+                    className={`credential-badge ${displayWebSearchStatus.replace('_', '-')}`}
+                    data-testid="web-search-badge"
                   >
-                    清除 Tavily 密钥
-                  </button>
+                    {displayWebSearchStatus === 'configured' && '已连接'}
+                    {displayWebSearchStatus === 'not_configured' && '未配置'}
+                    {displayWebSearchStatus === 'checking' && '检查中'}
+                    {displayWebSearchStatus === 'saving' && '保存中'}
+                    {displayWebSearchStatus === 'error' && '失败'}
+                  </span>
+                </div>
+                <p className="setting-field-hint" data-testid="web-search-hint">
+                  选择主力提供商并各自保存密钥；可随时切换。{webSearchFallbackNote}
+                </p>
+                <div className="search-provider-grid" data-testid="web-search-provider-grid" role="radiogroup" aria-label="搜索提供商">
+                  {searchProviderCards.map((card) => {
+                    const selected = localWebSearchProvider === card.id;
+                    return (
+                      <button
+                        key={card.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        className={`search-provider-card ${selected ? 'active' : ''} ${card.configured ? 'configured' : ''}`}
+                        data-testid={`web-search-provider-${card.id}`}
+                        onClick={() => { void handleSelectSearchProvider(card.id); }}
+                        disabled={isSaving || isClearingWebSearch || isSwitchingSearchProvider}
+                      >
+                        <span className="search-provider-name">{card.label}</span>
+                        <span className="search-provider-state">
+                          {card.configured ? '密钥已存' : '未存密钥'}
+                          {selected ? ' · 当前使用' : ''}
+                        </span>
+                        {card.docs_url && (
+                          <a
+                            className="search-provider-docs"
+                            href={card.docs_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            获取密钥
+                          </a>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                {activeSearchConfigured && !replacingWebSearchKey ? (
+                  <div className="credential-actions">
+                    <p className={`credential-status configured`} data-testid="web-search-credential-status" aria-live="polite">
+                      {searchProviderCards.find((c) => c.id === localWebSearchProvider)?.label ?? localWebSearchProvider}
+                      {' '}已连接 · 密钥不回显
+                    </p>
+                    <button
+                      type="button"
+                      className="salieri-btn cancel-btn"
+                      data-testid="replace-web-search-credential"
+                      onClick={() => setReplacingWebSearchKey(true)}
+                      disabled={isSaving || isClearingWebSearch}
+                    >
+                      更换密钥
+                    </button>
+                    {onClearWebSearchCredential && (
+                      <button
+                        type="button"
+                        className="salieri-btn cancel-btn"
+                        data-testid="clear-web-search-credential"
+                        onClick={() => { void handleClearWebSearchCredential(); }}
+                        disabled={isSaving || isClearingWebSearch}
+                      >
+                        清除此提供商密钥
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <input
+                      type="password"
+                      value={localWebSearchApiKey}
+                      onChange={(e) => setLocalWebSearchApiKey(e.target.value)}
+                      className="salieri-input"
+                      data-testid="web-search-credential-input"
+                      placeholder={`粘贴 ${searchProviderCards.find((c) => c.id === localWebSearchProvider)?.label ?? ''} API 密钥`}
+                      autoComplete="new-password"
+                    />
+                    <p className={`credential-status ${displayWebSearchStatus.replace('_', '-')}`} data-testid="web-search-credential-status" aria-live="polite">
+                      {displayWebSearchStatus === 'checking' && '正在检查搜索凭据…'}
+                      {displayWebSearchStatus === 'configured' && replacingWebSearchKey && '粘贴新密钥后点「保存修改」以覆盖'}
+                      {displayWebSearchStatus === 'not_configured' && '尚未配置此提供商 · 保存后不会回显密钥'}
+                      {displayWebSearchStatus === 'saving' && '正在保存…'}
+                      {displayWebSearchStatus === 'error' && '保存失败 · 请检查连接后重试'}
+                    </p>
+                    {replacingWebSearchKey && (
+                      <button
+                        type="button"
+                        className="salieri-btn cancel-btn"
+                        data-testid="cancel-replace-web-search-credential"
+                        onClick={() => {
+                          setReplacingWebSearchKey(false);
+                          setLocalWebSearchApiKey('');
+                        }}
+                        disabled={isSaving}
+                      >
+                        取消更换
+                      </button>
+                    )}
+                  </>
                 )}
               </div>
               <div className="setting-field personality-field">
