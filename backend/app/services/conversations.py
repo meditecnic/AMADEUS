@@ -7,7 +7,13 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from app.db import default_conversation_id, get_db, normalize_worldline
+from app.db import (
+    DEFAULT_IDENTITY_MODE,
+    default_conversation_id,
+    get_db,
+    normalize_identity_mode,
+    normalize_worldline,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -21,6 +27,10 @@ class DefaultConversationError(ValueError):
     pass
 
 
+class IdentityModeImmutableError(ValueError):
+    """identity_mode cannot be changed after conversation creation (Q21)."""
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -30,6 +40,9 @@ def _record(row, worldline: str) -> dict[str, object]:
     result["is_default"] = bool(result["is_default"])
     result["is_pinned"] = bool(result["is_pinned"])
     result["worldline"] = normalize_worldline(worldline)
+    # Pre-v4 rows should not appear after migration; default for safety.
+    mode = result.get("identity_mode") or DEFAULT_IDENTITY_MODE
+    result["identity_mode"] = normalize_identity_mode(str(mode))
     return result
 
 
@@ -45,8 +58,10 @@ class ConversationService:
         title: str | None = None,
         provider_id: str | None = None,
         model_id: str | None = None,
+        identity_mode: str | None = None,
     ) -> dict[str, object]:
         wl = normalize_worldline(worldline)
+        mode = normalize_identity_mode(identity_mode)
         conversation_id = str(uuid.uuid4())
         clean_title = (title or "").strip() or "New Conversation"
         title_source = "manual" if title and title.strip() else "auto"
@@ -54,9 +69,18 @@ class ConversationService:
         try:
             await db.execute(
                 """INSERT INTO conversations(
-                       id,session_id,title,title_source,is_default,is_pinned,provider_id,model_id
-                   ) VALUES(?,?,?,?,0,0,?,?)""",
-                (conversation_id, session_id, clean_title, title_source, provider_id, model_id),
+                       id,session_id,title,title_source,is_default,is_pinned,
+                       provider_id,model_id,identity_mode
+                   ) VALUES(?,?,?,?,0,0,?,?,?)""",
+                (
+                    conversation_id,
+                    session_id,
+                    clean_title,
+                    title_source,
+                    provider_id,
+                    model_id,
+                    mode,
+                ),
             )
             await db.commit()
         finally:
@@ -71,6 +95,7 @@ class ConversationService:
         title: str | None = None,
         provider_id: str | None = None,
         model_id: str | None = None,
+        identity_mode: str | None = None,
     ) -> dict[str, object]:
         """Materialize a draft and compensate if durable selection fails."""
         created = await self.create(
@@ -79,6 +104,7 @@ class ConversationService:
             title=title,
             provider_id=provider_id,
             model_id=model_id,
+            identity_mode=identity_mode,
         )
         try:
             return await self.select(
@@ -107,9 +133,14 @@ class ConversationService:
                 conversation_id = default_conversation_id(session_id, wl)
                 await db.execute(
                     """INSERT OR IGNORE INTO conversations(
-                           id,session_id,title,title_source,is_default,is_pinned
-                       ) VALUES(?,?,?,'auto',1,0)""",
-                    (conversation_id, session_id, "Default Conversation"),
+                           id,session_id,title,title_source,is_default,is_pinned,identity_mode
+                       ) VALUES(?,?,?,'auto',1,0,?)""",
+                    (
+                        conversation_id,
+                        session_id,
+                        "Default Conversation",
+                        DEFAULT_IDENTITY_MODE,
+                    ),
                 )
                 await db.commit()
                 row = await (
@@ -184,6 +215,10 @@ class ConversationService:
     ) -> dict[str, object]:
         wl = normalize_worldline(worldline)
         await self.require_owned(conversation_id, session_id, wl)
+        if "identity_mode" in changes:
+            raise IdentityModeImmutableError(
+                "identity_mode cannot be changed after conversation creation"
+            )
         assignments: list[str] = []
         values: list[object] = []
         if "title" in changes:

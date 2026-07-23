@@ -384,7 +384,7 @@ async def test_v1_history_migration_backfills_one_default_per_session(tmp_path, 
     try:
         version = connection.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()[0]
         conversations = connection.execute(
-            "SELECT session_id,id,is_default FROM conversations ORDER BY session_id"
+            "SELECT session_id,id,is_default,identity_mode FROM conversations ORDER BY session_id"
         ).fetchall()
         messages = connection.execute(
             "SELECT session_id,conversation_id FROM messages ORDER BY id"
@@ -395,14 +395,18 @@ async def test_v1_history_migration_backfills_one_default_per_session(tmp_path, 
         message_columns = {
             row[1] for row in connection.execute("PRAGMA table_info(messages)")
         }
+        conversation_columns = {
+            row[1] for row in connection.execute("PRAGMA table_info(conversations)")
+        }
     finally:
         connection.close()
 
-    assert version == "3"
+    assert version == "4"
     assert "translation" in message_columns
-    assert [(row["session_id"], row["is_default"]) for row in conversations] == [
-        ("darling", 1),
-        ("okabe", 1),
+    assert "identity_mode" in conversation_columns
+    assert [(row["session_id"], row["is_default"], row["identity_mode"]) for row in conversations] == [
+        ("darling", 1, "okabe"),
+        ("okabe", 1, "okabe"),
     ]
     by_session = {row["session_id"]: row["id"] for row in conversations}
     assert all(row["conversation_id"] == by_session[row["session_id"]] for row in messages)
@@ -436,5 +440,64 @@ def test_v1_backfill_rolls_back_all_data_changes_on_failure(tmp_path):
         assert connection.execute(
             "SELECT value FROM schema_meta WHERE key='schema_version'"
         ).fetchone()[0] == "1"
+    finally:
+        connection.close()
+
+
+def test_v4_identity_mode_backfill_rejects_non_enum_and_rolls_back(tmp_path, monkeypatch):
+    history_path = tmp_path / "history_v3_bad.sqlite3"
+    history_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(history_path)
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO schema_meta(key,value) VALUES('schema_version','3');
+            CREATE TABLE conversations (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                title_source TEXT NOT NULL DEFAULT 'auto',
+                is_default INTEGER NOT NULL DEFAULT 0,
+                is_pinned INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO conversations(id,session_id,title,title_source,is_default,is_pinned)
+            VALUES('c1','s1','T','auto',1,0);
+            """
+        )
+        connection.commit()
+        db_module._prepare_history_v4_ddl(connection)
+
+        def sabotaged_backfill(conn):
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute("UPDATE conversations SET identity_mode='garbage'")
+                bad = conn.execute(
+                    """SELECT COUNT(*) FROM conversations
+                        WHERE identity_mode IS NULL OR identity_mode NOT IN ('okabe','self')"""
+                ).fetchone()[0]
+                if bad:
+                    raise RuntimeError(
+                        f"identity_mode backfill incomplete: invalid_rows={bad}"
+                    )
+                conn.execute(
+                    "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version',?)",
+                    ("4",),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+        monkeypatch.setattr(db_module, "_backfill_history_v4", sabotaged_backfill)
+        with pytest.raises(RuntimeError, match="identity_mode backfill incomplete"):
+            db_module._backfill_history_v4(connection)
+        assert connection.execute(
+            "SELECT value FROM schema_meta WHERE key='schema_version'"
+        ).fetchone()[0] == "3"
+        # Rolled back garbage write: column still okabe from ADD DEFAULT
+        assert connection.execute(
+            "SELECT identity_mode FROM conversations WHERE id='c1'"
+        ).fetchone()[0] == "okabe"
     finally:
         connection.close()

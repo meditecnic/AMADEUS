@@ -9,6 +9,8 @@ export interface ConversationSummary {
   is_selected?: boolean;
   provider_id?: string | null;
   model_id?: string | null;
+  /** Q20-A / Q21: set at create; immutable for the conversation lifetime. */
+  identity_mode?: 'okabe' | 'self';
   last_active_at: string;
 }
 

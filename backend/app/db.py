@@ -24,7 +24,11 @@ DatabaseKind = Literal["history", "memory", "control"]
 
 EMBEDDING_MODEL = "intfloat/multilingual-e5-small"
 EMBEDDING_DIMENSION = 384
-SCHEMA_VERSION = 3
+# v4: conversations.identity_mode (okabe|self); existing rows backfilled to okabe.
+SCHEMA_VERSION = 4
+
+DEFAULT_IDENTITY_MODE = "okabe"
+IDENTITY_MODES = frozenset({"okabe", "self"})
 
 _initialized_paths: set[str] = set()
 _init_lock = asyncio.Lock()
@@ -37,6 +41,16 @@ def normalize_worldline(value: str | None) -> Worldline:
         return aliases[(value or "steins_gate").strip().lower()]  # type: ignore[return-value]
     except KeyError as exc:
         raise ValueError(f"unsupported worldline: {value!r}") from exc
+
+
+def normalize_identity_mode(value: str | None) -> str:
+    """Return okabe|self; None/empty → product default okabe (Q20-A)."""
+    if value is None or str(value).strip() == "":
+        return DEFAULT_IDENTITY_MODE
+    cleaned = str(value).strip().lower()
+    if cleaned not in IDENTITY_MODES:
+        raise ValueError(f"unsupported identity_mode: {value!r}")
+    return cleaned
 
 
 def get_data_root() -> Path:
@@ -117,6 +131,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     is_pinned INTEGER NOT NULL DEFAULT 0 CHECK(is_pinned IN (0,1)),
     provider_id TEXT,
     model_id TEXT,
+    identity_mode TEXT NOT NULL DEFAULT 'okabe' CHECK(identity_mode IN ('okabe','self')),
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     last_active_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -365,6 +380,56 @@ def _migrate_v2_to_v3(connection: sqlite3.Connection, kind: DatabaseKind) -> Non
     connection.commit()
 
 
+def _prepare_history_v4_ddl(connection: sqlite3.Connection) -> None:
+    """Additive DDL: identity_mode column with okabe default (existing rows get default)."""
+    if not _column_exists(connection, "conversations", "identity_mode"):
+        connection.execute(
+            "ALTER TABLE conversations ADD COLUMN identity_mode TEXT NOT NULL DEFAULT 'okabe'"
+        )
+    connection.commit()
+
+
+def _backfill_history_v4(connection: sqlite3.Connection) -> None:
+    """Normalize identity_mode to okabe|self; fail closed with full rollback."""
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            """UPDATE conversations
+                   SET identity_mode='okabe'
+                 WHERE identity_mode IS NULL
+                    OR identity_mode NOT IN ('okabe','self')"""
+        )
+        bad = connection.execute(
+            """SELECT COUNT(*) FROM conversations
+                WHERE identity_mode IS NULL OR identity_mode NOT IN ('okabe','self')"""
+        ).fetchone()[0]
+        if bad:
+            raise RuntimeError(
+                f"identity_mode backfill incomplete: invalid_rows={bad}"
+            )
+        connection.execute(
+            "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version',?)",
+            ("4",),
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
+def _migrate_v3_to_v4(connection: sqlite3.Connection, kind: DatabaseKind) -> None:
+    """Conversation identity_mode (Q20-A default / Q21 immutable session field)."""
+    if kind == "history":
+        _prepare_history_v4_ddl(connection)
+        _backfill_history_v4(connection)
+        return
+    connection.execute(
+        "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version',?)",
+        ("4",),
+    )
+    connection.commit()
+
+
 async def _initialize_one(worldline: str, kind: DatabaseKind, schema: str) -> None:
     path = _resolve_path(worldline, kind)
     if path in _initialized_paths:
@@ -406,6 +471,9 @@ def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str 
         if current == 2:
             _migrate_v2_to_v3(connection, kind)
             current = 3
+        if current == 3:
+            _migrate_v3_to_v4(connection, kind)
+            current = 4
         if current not in (None, SCHEMA_VERSION):
             raise RuntimeError(f"unsupported {kind} schema version at {path}: {current}")
 

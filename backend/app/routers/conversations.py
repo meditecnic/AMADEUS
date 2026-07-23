@@ -7,9 +7,11 @@ from pydantic import BaseModel, Field
 
 from app import models
 from app.db import normalize_worldline
+from app.db import normalize_identity_mode
 from app.services.conversations import (
     ConversationNotFound,
     DefaultConversationError,
+    IdentityModeImmutableError,
     conversation_service,
 )
 from app.services.provider_runtime import provider_registry
@@ -24,6 +26,8 @@ class ConversationCreate(BaseModel):
     title: str | None = Field(default=None, max_length=200)
     provider_id: str | None = None
     model_id: str | None = Field(default=None, max_length=200)
+    # Q20-A default okabe when omitted; only okabe|self accepted.
+    identity_mode: str | None = Field(default=None, max_length=32)
 
 
 class ConversationPatch(BaseModel):
@@ -31,6 +35,8 @@ class ConversationPatch(BaseModel):
     is_pinned: bool | None = None
     provider_id: str | None = None
     model_id: str | None = Field(default=None, max_length=200)
+    # Present only so clients that send it get an explicit immutable error (Q21).
+    identity_mode: str | None = Field(default=None, max_length=32)
 
 
 class ConversationForget(BaseModel):
@@ -74,12 +80,20 @@ async def create_conversation(request: ConversationCreate):
     wl = normalize_worldline(request.worldline)
     provider_id = request.provider_id or "deepseek"
     provider = _provider(provider_id)
+    try:
+        identity_mode = normalize_identity_mode(request.identity_mode)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_identity_mode"},
+        ) from exc
     return await conversation_service.create(
         request.session_id,
         wl,
         title=request.title,
         provider_id=provider_id,
         model_id=request.model_id or provider.model_id,
+        identity_mode=identity_mode,
     )
 
 
@@ -114,6 +128,11 @@ async def patch_conversation(
     except ConversationNotFound as exc:
         raise _not_found(exc) from exc
     changes = request.model_dump(exclude_unset=True)
+    if "identity_mode" in changes:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "identity_mode_immutable"},
+        )
     if "title" in changes and not str(changes["title"] or "").strip():
         raise HTTPException(status_code=422, detail={"code": "invalid_title"})
     if "provider_id" in changes or "model_id" in changes:
@@ -124,12 +143,18 @@ async def patch_conversation(
         changes["provider_id"] = provider_id
         if not changes.get("model_id"):
             changes["model_id"] = provider.model_id
-    return await conversation_service.update(
-        conversation_id,
-        session_id,
-        wl,
-        changes,
-    )
+    try:
+        return await conversation_service.update(
+            conversation_id,
+            session_id,
+            wl,
+            changes,
+        )
+    except IdentityModeImmutableError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "identity_mode_immutable"},
+        ) from exc
 
 
 @router.delete("/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)

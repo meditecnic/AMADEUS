@@ -25,6 +25,7 @@ def test_conversation_crud_search_pin_and_model_selection(app_client):
     assert conversation["title"] == "PhoneWave analysis"
     assert conversation["title_source"] == "manual"
     assert conversation["provider_id"] == "openai"
+    assert conversation["identity_mode"] == "okabe"
 
     patched = app_client.patch(
         f"/api/conversations/{conversation['id']}",
@@ -41,6 +42,7 @@ def test_conversation_crud_search_pin_and_model_selection(app_client):
     assert patched.json()["title_source"] == "manual"
     assert patched.json()["is_pinned"] is True
     assert patched.json()["provider_id"] == "gemini"
+    assert patched.json()["identity_mode"] == "okabe"
 
     listed = app_client.get(
         "/api/conversations",
@@ -52,6 +54,7 @@ def test_conversation_crud_search_pin_and_model_selection(app_client):
     )
     assert listed.status_code == 200
     assert [row["id"] for row in listed.json()] == [conversation["id"]]
+    assert listed.json()[0]["identity_mode"] == "okabe"
 
     messages = app_client.get(
         f"/api/conversations/{conversation['id']}/messages",
@@ -70,6 +73,64 @@ def test_conversation_crud_search_pin_and_model_selection(app_client):
         params={"session_id": session_id, "worldline": "steins_gate"},
     )
     assert missing.status_code == 404
+
+
+def test_conversation_identity_mode_default_explicit_and_immutable(app_client):
+    session_id = _session("identity-mode")
+    defaulted = app_client.post(
+        "/api/conversations",
+        json={"session_id": session_id, "worldline": "steins_gate", "title": "Default mode"},
+    )
+    assert defaulted.status_code == 201
+    assert defaulted.json()["identity_mode"] == "okabe"
+
+    self_mode = app_client.post(
+        "/api/conversations",
+        json={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "title": "Self mode",
+            "identity_mode": "self",
+        },
+    )
+    assert self_mode.status_code == 201
+    assert self_mode.json()["identity_mode"] == "self"
+
+    illegal = app_client.post(
+        "/api/conversations",
+        json={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "admin",
+        },
+    )
+    assert illegal.status_code == 422
+    assert illegal.json()["detail"]["code"] == "invalid_identity_mode"
+
+    cid = defaulted.json()["id"]
+    patched = app_client.patch(
+        f"/api/conversations/{cid}",
+        params={"session_id": session_id, "worldline": "steins_gate"},
+        json={"identity_mode": "self"},
+    )
+    assert patched.status_code == 422
+    assert patched.json()["detail"]["code"] == "identity_mode_immutable"
+
+    fetched = app_client.get(
+        f"/api/conversations/{cid}",
+        params={"session_id": session_id, "worldline": "steins_gate"},
+    )
+    assert fetched.status_code == 200
+    assert fetched.json()["identity_mode"] == "okabe"
+
+    listed = app_client.get(
+        "/api/conversations",
+        params={"session_id": session_id, "worldline": "steins_gate"},
+    )
+    assert listed.status_code == 200
+    modes = {row["id"]: row["identity_mode"] for row in listed.json()}
+    assert modes[cid] == "okabe"
+    assert modes[self_mode.json()["id"]] == "self"
 
 
 def test_conversation_api_enforces_owner_worldline_and_provider(app_client):
