@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
+
+import pytest
+from pydantic import ValidationError
 
 from app import config
 from app.services.deepseek import DeepSeekService
@@ -136,6 +140,47 @@ def test_phase1_mb5_overlay_memory_model_not_original_body():
     assert "肉体" in sg or "生身" in sg
     assert "記憶モデル" in beta or "記憶" in beta
     assert "肉体" in beta or "生身" in beta
+
+
+def test_phase2_s2_mode_rule_ids_schema_and_neutral_render():
+    """P2-S2: mode_rule_ids M1 present; empty lists keep okabe/self/default renders identical."""
+    bible = PersonaBible.load_default()
+    assert set(bible.mode_rule_ids) == {"okabe", "self"}
+    assert bible.mode_rule_ids["okabe"] == []
+    assert bible.mode_rule_ids["self"] == []
+    # (a) still unconditionally shared this slice — not moved yet (S4).
+    assert "okabe-register" in bible.shared_rule_ids
+    assert "care-register" in bible.shared_rule_ids
+    assert "assistant-trigger" in bible.shared_rule_ids
+
+    for worldline in ("steins_gate", "beta"):
+        baseline = bible.render_prompt(worldline)
+        as_okabe = bible.render_prompt(worldline, identity_mode="okabe")
+        as_self = bible.render_prompt(worldline, identity_mode="self")
+        assert baseline == as_okabe == as_self
+        assert "PERSONA BIBLE v1" in baseline
+
+    with pytest.raises(ValueError, match="identity_mode"):
+        bible.render_prompt("steins_gate", identity_mode="admin")
+
+
+def test_phase2_s2_mode_rule_ids_validator_rejects_bad_keys_and_unknown_rules():
+    raw = json.loads(
+        (config.CHARACTERS_DIR / "persona_bible_v1.json").read_text(encoding="utf-8")
+    )
+    bad_keys = deepcopy(raw)
+    bad_keys["mode_rule_ids"] = {"okabe": [], "other": []}
+    with pytest.raises(ValidationError):
+        PersonaBible.model_validate(bad_keys)
+
+    bad_rule = deepcopy(raw)
+    bad_rule["mode_rule_ids"] = {"okabe": ["not-a-real-rule"], "self": []}
+    with pytest.raises(ValidationError):
+        PersonaBible.model_validate(bad_rule)
+
+    empty_ok = deepcopy(raw)
+    empty_ok["mode_rule_ids"] = {"okabe": [], "self": []}
+    PersonaBible.model_validate(empty_ok)
 
 
 def test_core_persona_is_shared_but_worldline_overlays_remain_distinct():

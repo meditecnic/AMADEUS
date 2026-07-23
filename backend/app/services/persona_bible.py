@@ -8,7 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app import config
-from app.db import normalize_worldline
+from app.db import IDENTITY_MODES, DEFAULT_IDENTITY_MODE, normalize_worldline
 
 
 class MemoryAnchor(BaseModel):
@@ -66,6 +66,8 @@ class PersonaBible(BaseModel):
     evidence_cards: list[EvidenceCard] = Field(min_length=1)
     rules: dict[str, PersonaRule]
     shared_rule_ids: list[str] = Field(min_length=1)
+    # Phase-2 S2 (M1): per-identity-mode rule lists. Empty until S4 moves (a) rules.
+    mode_rule_ids: dict[str, list[str]]
     worldline_rule_ids: dict[str, list[str]]
     emotion_tones: dict[str, str]
 
@@ -92,6 +94,13 @@ class PersonaBible(BaseModel):
         selected_rules = set(self.shared_rule_ids)
         for rule_ids in self.worldline_rule_ids.values():
             selected_rules.update(rule_ids)
+        if set(self.mode_rule_ids) != set(IDENTITY_MODES):
+            raise ValueError(
+                "Persona Bible mode_rule_ids must define exactly keys "
+                f"{sorted(IDENTITY_MODES)}; got {sorted(self.mode_rule_ids)}"
+            )
+        for rule_ids in self.mode_rule_ids.values():
+            selected_rules.update(rule_ids)
         missing_rules = selected_rules.difference(self.rules)
         if missing_rules:
             raise ValueError(f"unknown persona rules: {sorted(missing_rules)}")
@@ -104,9 +113,31 @@ class PersonaBible(BaseModel):
         path = config.CHARACTERS_DIR / "persona_bible_v1.json"
         return cls.model_validate(json.loads(path.read_text(encoding="utf-8")))
 
-    def render_prompt(self, worldline: str) -> str:
+    def _normalize_identity_mode(self, identity_mode: str | None) -> str:
+        if identity_mode is None or str(identity_mode).strip() == "":
+            return DEFAULT_IDENTITY_MODE
+        cleaned = str(identity_mode).strip().lower()
+        if cleaned not in IDENTITY_MODES:
+            raise ValueError(f"unsupported identity_mode: {identity_mode!r}")
+        return cleaned
+
+    def render_prompt(
+        self,
+        worldline: str,
+        identity_mode: str = DEFAULT_IDENTITY_MODE,
+    ) -> str:
+        """Compose shared + mode + worldline rules.
+
+        Phase-2 S2: mode_rule_ids may be empty for both modes (behavior-neutral).
+        Default identity_mode=okabe keeps legacy single-arg callers valid until S3.
+        """
         worldline = normalize_worldline(worldline)
-        rule_ids = [*self.shared_rule_ids, *self.worldline_rule_ids[worldline]]
+        mode = self._normalize_identity_mode(identity_mode)
+        rule_ids = [
+            *self.shared_rule_ids,
+            *self.mode_rule_ids[mode],
+            *self.worldline_rule_ids[worldline],
+        ]
         lines = [
             "PERSONA BIBLE v1 (canonical runtime persona)",
             f"MEMORY ANCHOR: {self.memory_anchor.year}年時点の{self.memory_anchor.age}歳。",
@@ -121,6 +152,9 @@ class PersonaBible(BaseModel):
         return "\n".join(lines)
 
     def render_provider_anchor(self) -> str:
+        # TODO-S4: after (a) rules move into mode_rule_ids, this path must become
+        # mode-aware (or dump only mode-agnostic shared rules). S2 leaves behavior
+        # unchanged: still dumps full shared_rule_ids including okabe/care/assistant.
         allowed = "|".join(self.emotion_tones)
         lines = [
             "PERSONA BIBLE v1 PROVIDER ANCHOR",
