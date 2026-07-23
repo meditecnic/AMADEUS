@@ -26,6 +26,7 @@ from app.domain.segments import (
     clean_text_for_tts,
     is_ignorable_non_speech_segment,
     is_meaningful_sentence,
+    is_soft_skip_unpublishable_segment,
     prepare_tts_text,
     should_hard_reject_tts_source,
 )
@@ -354,6 +355,9 @@ async def get_clean_text_stream(
     """
     MAX_ATTEMPTS = 3
     rejection_reason: str | None = None
+    # Buffer UI publication when search/tool evidence is present so a Chinese/English
+    # body after a short Japanese opener can still retry without a locked prefix.
+    buffer_ui_until_attempt_ok = _history_has_external_evidence(active_history)
     for attempt in range(MAX_ATTEMPTS):
         emo_buffer = ""
         in_emo_tag = False
@@ -363,17 +367,27 @@ async def get_clean_text_stream(
         text_buffer = ""
         publication_segmenter = IncrementalJapaneseSegmenter()
         published_parts: list[str] = []
+        published_emotions: list[str] = []
         publication_rejected = False
         publication_rejection_reason: str | None = None
         merged_tool_calls = {}
 
+        async def _accept_publishable_segment(text: str, emotion: str) -> None:
+            """Record a validated segment; flush to UI unless buffering this attempt."""
+            published_parts.append(text)
+            published_emotions.append(emotion)
+            if buffer_ui_until_attempt_ok or on_text_delta is None:
+                return
+            callback_result = on_text_delta(text, emotion)
+            if asyncio.iscoroutine(callback_result):
+                await callback_result
+
         async def publish_completed_segments(delta: str, emotion: str) -> None:
             """Publish only complete, locally validated Japanese segments.
 
-            Once a segment in an attempt is rejected, the remaining tail stays
-            closed. Previously published valid segments cannot be retracted, so
-            the caller will append one stable recovery instead of retrying and
-            duplicating the visible prefix.
+            Soft-skip product-name Latin fragments (「Kimi K3。」) without killing
+            the turn. Hard language rejects (Chinese/English prose) close the tail.
+            When buffering, UI is flushed only after the attempt fully succeeds.
             """
 
             nonlocal publication_rejected, publication_rejection_reason
@@ -381,21 +395,32 @@ async def get_clean_text_stream(
                 if publication_rejected:
                     continue
                 if is_ignorable_non_speech_segment(segment.text):
-                    # Bare 「……」 etc.: skip without rejecting the rest of the turn.
                     continue
                 if contains_leak(segment.text):
                     publication_rejected = True
                     publication_rejection_reason = "leak"
+                    print(
+                        f"[Guard] hard-reject leak segment len={len(segment.text)}",
+                        flush=True,
+                    )
                     continue
                 if not _is_publishable_japanese(segment.text):
+                    if is_soft_skip_unpublishable_segment(segment.text):
+                        print(
+                            f"[Guard] soft-skip unpublishable fragment "
+                            f"len={len(segment.text)} script=latin/unknown",
+                            flush=True,
+                        )
+                        continue
                     publication_rejected = True
                     publication_rejection_reason = "language"
+                    print(
+                        f"[Guard] hard-reject language segment len={len(segment.text)} "
+                        f"preview={segment.text[:40]!r}",
+                        flush=True,
+                    )
                     continue
-                if on_text_delta is not None:
-                    callback_result = on_text_delta(segment.text, segment.emotion)
-                    if asyncio.iscoroutine(callback_result):
-                        await callback_result
-                published_parts.append(segment.text)
+                await _accept_publishable_segment(segment.text, segment.emotion)
 
         async def finish_publication() -> None:
             nonlocal publication_rejected, publication_rejection_reason
@@ -409,14 +434,22 @@ async def get_clean_text_stream(
                     publication_rejection_reason = "leak"
                     continue
                 if not _is_publishable_japanese(segment.text):
+                    if is_soft_skip_unpublishable_segment(segment.text):
+                        print(
+                            f"[Guard] soft-skip unpublishable finish fragment "
+                            f"len={len(segment.text)}",
+                            flush=True,
+                        )
+                        continue
                     publication_rejected = True
                     publication_rejection_reason = "language"
+                    print(
+                        f"[Guard] hard-reject language finish segment "
+                        f"len={len(segment.text)} preview={segment.text[:40]!r}",
+                        flush=True,
+                    )
                     continue
-                if on_text_delta is not None:
-                    callback_result = on_text_delta(segment.text, segment.emotion)
-                    if asyncio.iscoroutine(callback_result):
-                        await callback_result
-                published_parts.append(segment.text)
+                await _accept_publishable_segment(segment.text, segment.emotion)
         
         eff_system_prompt = session.system_prompt
         if attempt > 0:
@@ -565,9 +598,14 @@ async def get_clean_text_stream(
             rejection_reason = "leak" if leaked_output else "language"
             print(
                 f"[Guard] attempt {attempt + 1}/{MAX_ATTEMPTS} "
-                f"rejected {rejection_reason} output ({len(text_buffer)} chars)"
+                f"rejected {rejection_reason} output ({len(text_buffer)} chars) "
+                f"buffered={buffer_ui_until_attempt_ok} published={len(published_parts)}"
             )
-            if on_text_delta is not None and published_parts:
+            # Buffered search turns never flush failed attempts to the UI, so retry.
+            if buffer_ui_until_attempt_ok and attempt < MAX_ATTEMPTS - 1:
+                continue
+            # Live-streamed prefix already visible: append mid-collapse recovery once.
+            if on_text_delta is not None and published_parts and not buffer_ui_until_attempt_ok:
                 if rejection_reason == "leak":
                     fallback = "はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。"
                     fallback_emotion = "tsundere"
@@ -593,6 +631,17 @@ async def get_clean_text_stream(
                     await callback_result
             return fallback, fallback_emotion, {}, False
 
+        # Successful attempt: flush buffered segments for search/tool turns.
+        if buffer_ui_until_attempt_ok and on_text_delta is not None:
+            for text, emotion in zip(published_parts, published_emotions):
+                callback_result = on_text_delta(text, emotion)
+                if asyncio.iscoroutine(callback_result):
+                    await callback_result
+        # Only rewrite text_buffer from publication parts when the publish path
+        # actually ran (on_text_delta set). When on_text_delta is None (e.g.
+        # protocol v1), published_parts stays empty and raw text_buffer is final.
+        # BUG-1: never use `or buffer_ui_until_attempt_ok` here — that wiped
+        # legitimate tool-answer text_len to 0 after web search injection.
         if on_text_delta is not None:
             text_buffer = "".join(published_parts)
         print(f"[DEBUG] get_clean_text_stream returning: emotion='{last_emotion}' emo_tag_found={emo_tag_found} text_len={len(text_buffer)}", flush=True)

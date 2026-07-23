@@ -47,7 +47,9 @@ _KANA_RE = re.compile(r"[\u3040-\u30ff\u31f0-\u31ff]")
 _HAN_RE = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
 _LATIN_RUN_RE = re.compile(r"[A-Za-z]{2,}")
 _HALFWIDTH_KATA_RE = re.compile(r"[\uff61-\uff9f]")
-_WEIRD_MARK_RE = re.compile(r"[＿_\uFF00-\uFFEF\u2000-\u200f\u2028-\u202f]")
+# Collapse-only marks for incident soup (not fullwidth JP punctuation （）『』).
+# Former _WEIRD_MARK_RE (U+FF00 block) mis-counted fullwidth parens as weird.
+_COLLAPSE_MARK_RE = re.compile(r"[＿_―─━]")
 # Allowlisted Latin tokens that appear in legitimate Kurisu-register replies.
 _SAFE_LATIN_TOKENS = frozenset({
     "pdf", "api", "dna", "gpt", "url", "http", "https", "json", "xml",
@@ -57,6 +59,11 @@ _SAFE_LATIN_TOKENS = frozenset({
     "css", "js", "mac", "windows", "linux", "ios", "android", "mackenzie",
     "okabe", "kurisu", "amadeus", "mayuri", "daru", "suzuha", "fb", "lab",
     "vhf", "uhf", "ghz", "mhz", "httpx", "openai", "deepseek",
+    # Common technical loanwords that appear inside legitimate Japanese speech.
+    "model", "models", "parameter", "parameters", "version", "update", "search",
+    "result", "results", "flagship", "token", "tokens", "context", "prompt",
+    "chat", "agent", "agents", "benchmark", "release", "beta", "alpha",
+    "moonshot", "kimi", "claude", "gemini", "grok",
 })
 # High-frequency Japanese function/grammar markers that real speech almost always carries once it is long enough.
 _JA_FUNCTION_HINT_RE = re.compile(
@@ -117,7 +124,13 @@ def classify_tts_script(text: str) -> str:
 
 
 def _has_suspicious_latin_embedding(text: str) -> bool:
-    """Detect garbage Latin (flee/newidInfo) without banning PDF/API/DNA/names."""
+    """Detect garbage Latin (flee/newidInfo) without banning PDF/API/DNA/names.
+
+    Japanese technical speech often embeds lowercase loanwords (parameters).
+    Those are allowed when the sentence already has solid Japanese support.
+    """
+    kana_n = len(_KANA_RE.findall(text))
+    has_ja_support = kana_n >= 2 or bool(_JA_FUNCTION_HINT_RE.search(text))
     for match in _LATIN_RUN_RE.finditer(text):
         token = match.group(0)
         lowered = token.lower()
@@ -126,7 +139,7 @@ def _has_suspicious_latin_embedding(text: str) -> bool:
         # Short all-caps tokens (PDF, API, DNA, HTML) are treated as safe labels.
         if token.isupper() and 2 <= len(token) <= 8:
             continue
-        # Title Case proper names (Mackenzie) are allowed in otherwise clean speech.
+        # Title Case proper names (Mackenzie / Moonshot) are allowed.
         if (
             len(token) >= 2
             and token[0].isupper()
@@ -134,14 +147,46 @@ def _has_suspicious_latin_embedding(text: str) -> bool:
             and len(token) <= 24
         ):
             continue
-        # camelCase / internal capitals (newidInfo) and lowercase words (flee).
+        # Mixed alnum product codes (K3, GPT4) are not collapse by themselves.
+        if re.fullmatch(r"[A-Za-z]+\d+|\d+[A-Za-z]+", token) and len(token) <= 12:
+            continue
+        # camelCase / internal capitals:
+        # - newidInfo (long) → hard-fail collapse
+        # - MoE / PoC / TfT (short tech acronyms) → allowed in JP tech speech
         if re.search(r"[a-z][A-Z]", token):
+            if len(token) >= 8:
+                return True
+            if token[0].isupper() and len(token) <= 6:
+                continue
             return True
+        # Lowercase words: allow short/common loanwords inside real Japanese.
         if token.islower() and len(token) >= 3:
+            if has_ja_support and len(token) <= 16:
+                continue
             return True
-        if len(token) >= 10:
+        if len(token) >= 10 and not has_ja_support:
             return True
     return False
+
+
+def is_soft_skip_unpublishable_segment(text: str) -> bool:
+    """Fragments that must not abort the rest of a turn when unpublishable.
+
+    Examples: bare ellipsis; short product-name sentences like 「Kimi K3。」.
+    Long Chinese/English prose returns False so callers hard-reject.
+    """
+    if is_ignorable_non_speech_segment(text):
+        return True
+    stripped = (text or "").strip()
+    if not stripped:
+        return True
+    has_kana = bool(_KANA_RE.search(stripped))
+    has_han = bool(_HAN_RE.search(stripped))
+    if has_kana or has_han:
+        return False
+    # Pure Latin / digits / punctuation product fragments.
+    letters = meaningful_character_count(stripped)
+    return 0 < letters <= 32
 
 
 def is_plausible_japanese_tts_source(text: str) -> bool:
@@ -202,14 +247,25 @@ def is_plausible_japanese_tts_source(text: str) -> bool:
     # Long speech without any Japanese function/grammar hints is almost never legitimate.
     if letters >= 28 and not _JA_FUNCTION_HINT_RE.search(text) and (kana_n / letters) < 0.22:
         return False
-    weird_marks = len(_WEIRD_MARK_RE.findall(text)) + len(re.findall(r"[―─━]", text))
-    if letters >= 20 and weird_marks >= 2 and _LATIN_RUN_RE.search(text):
+    # Fullwidth JP punctuation （）『』 must NOT count as collapse marks (MoE parens).
+    collapse_marks = len(_COLLAPSE_MARK_RE.findall(text))
+    if letters >= 20 and collapse_marks >= 2 and _LATIN_RUN_RE.search(text):
         return False
     # Extremely high unique-character density is typical of model garbage, not dialogue.
+    # Real Japanese plot/tech summaries are often kanji-heavy with high uniqueness
+    # and fullwidth parentheses around acronyms (MoE) — that must remain publishable.
     unique = len(set(ch for ch in text if not ch.isspace()))
     unique_ratio = unique / max(letters, 1)
     if letters >= 40 and unique_ratio > 0.82:
-        if weird_marks >= 1 or not _JA_FUNCTION_HINT_RE.search(text) or han_n >= kana_n:
+        has_hint = bool(_JA_FUNCTION_HINT_RE.search(text))
+        kana_ratio = kana_n / max(letters, 1)
+        # Collapse soup: high uniqueness AND no grammar / almost no kana.
+        if not has_hint and kana_ratio < 0.22:
+            return False
+        # Underscore / bar soup (incident fixtures) even if a particle appears.
+        if collapse_marks >= 2 and unique_ratio > 0.90 and han_n >= kana_n:
+            return False
+        if collapse_marks >= 1 and _LATIN_RUN_RE.search(text) and kana_ratio < 0.32:
             return False
     # mixed with only one kana is usually a Chinese draft with a stray kana.
     if script == "mixed" and kana_n < 2:
@@ -224,6 +280,8 @@ def should_hard_reject_tts_source(text: str) -> bool:
     return False so callers can skip without source_collapse.
     """
     if is_ignorable_non_speech_segment(text):
+        return False
+    if is_soft_skip_unpublishable_segment(text):
         return False
     prepared = prepare_tts_text(text)
     if prepared.error is None:

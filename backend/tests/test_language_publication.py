@@ -50,6 +50,114 @@ def test_publication_gate_rejects_mixed_chinese_with_only_one_kana():
 
 
 @pytest.mark.asyncio
+async def test_latin_product_name_sentence_does_not_kill_following_japanese():
+    """SEARCH-PUBLISH-SOFT-01: 「Kimi K3。」 must soft-skip, not mid-collapse."""
+    provider = _SequencedStreamProvider(
+        [
+            "[EMO:neutral] 検索してみたわ。Kimi K3。Moonshot AIが2026年7月に発表したモデルね。"
+        ]
+    )
+    session = SessionState("latin-product-soft-skip")
+    session.api_key = "test-key"
+    session.system_prompt = "日本語で答えること。"
+    published: list[str] = []
+
+    with patch("app.routers.chat_ws.deepseek_service", provider):
+        text, _, _, _ = await get_clean_text_stream(
+            active_history=[],
+            memory_summary="",
+            session=session,
+            on_text_delta=lambda delta, _emotion: published.append(delta),
+        )
+
+    visible = "".join(published)
+    assert "検索してみたわ。" in visible
+    assert "Moonshot AIが2026年7月に発表したモデルね。" in visible
+    assert "崩れた" not in visible
+    assert "もう一度試して" not in text
+    assert "Kimi K3。" not in visible  # soft-skipped fragment
+
+
+@pytest.mark.asyncio
+async def test_lowercase_loanword_inside_japanese_is_publishable():
+    """Technical loanwords like parameters must not hard-fail a JP sentence."""
+    assert _is_publishable_japanese(
+        "Kimi K3は2.8T parametersのフラッグシップモデルね。"
+    )
+
+
+def test_kanji_heavy_anime_blurb_is_publishable():
+    """Live miss: plot-summary JP with han>=kana was rejected as unique-ratio soup."""
+    title_line = (
+        "『尼古喵喵』（原題：ヤニねこ）は、にゃんにゃんファクトリー作の漫画が原作で、"
+        "2024年にアニメ化されたわ。"
+    )
+    plot_line = (
+        "人間と獣人が共存する世界で、重度の喫煙習慣を持つダメ猫娘・ヤニねこ"
+        "（佐藤ヤニ子）が主人公よ。"
+    )
+    assert _is_publishable_japanese(title_line)
+    assert _is_publishable_japanese(plot_line)
+    # Pure Chinese opener still hard-fails (not soft-skip).
+    assert not _is_publishable_japanese("调了一下外部数据。")
+
+
+def test_tech_acronyms_in_japanese_are_publishable():
+    """Live Tavily miss: MoE / KDA lines hard-rejected despite solid Japanese."""
+    moe = (
+        "混合エキスパート（MoE）アーキテクチャを採用し、"
+        "896のエキスパートのうち16が活性化されるのよ。"
+    )
+    kda = (
+        "KDA（Kimi Delta Attention）っていう"
+        "ハイブリッド線形アテンション機構を使ってるわ。"
+    )
+    assert _is_publishable_japanese(moe)
+    assert _is_publishable_japanese(kda)
+    # Long camelCase garbage still fails.
+    assert not _is_publishable_japanese(
+        "これはnewidInfoが混ざったfleeのゴミ出力です。"
+    )
+
+
+@pytest.mark.asyncio
+async def test_search_turn_buffers_chinese_body_and_retries_to_japanese():
+    """With web evidence, Chinese after short JP opener must retry, not mid-collapse."""
+    from app.routers.chat_ws import build_web_search_evidence_context
+
+    provider = _SequencedStreamProvider(
+        [
+            "[EMO:neutral] 調べたわ。根据搜索结果，这部动画没有明确信息。",
+            "[EMO:neutral] 調べたわ。検索結果では十分な情報は見つからなかったわ。",
+        ]
+    )
+    session = SessionState("search-buffer-retry")
+    session.api_key = "test-key"
+    session.system_prompt = "日本語で答えること。"
+    history = build_web_search_evidence_context(
+        [{"role": "user", "content": "请你web search一下尼古喵喵这部动画作品"}],
+        "[source: tavily]\nNo clear match for that title.",
+    )
+    published: list[str] = []
+
+    with patch("app.routers.chat_ws.deepseek_service", provider):
+        text, _, _, _ = await get_clean_text_stream(
+            active_history=history,
+            memory_summary="",
+            session=session,
+            on_text_delta=lambda delta, _emotion: published.append(delta),
+        )
+
+    visible = "".join(published)
+    assert provider.call_count == 2
+    # Failed Chinese attempt must not leak into the UI as a mid-collapse prefix.
+    assert "根据搜索结果" not in visible
+    assert "崩れた" not in visible
+    assert "見つからなかった" in visible
+    assert "もう一度試して" not in text
+
+
+@pytest.mark.asyncio
 async def test_period_ellipsis_does_not_trigger_mid_collapse_recovery():
     """LANG-GATE-RELAX-01: 「ね。……続き」 must not append generation-failed recovery.
 
