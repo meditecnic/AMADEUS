@@ -46,6 +46,53 @@ def test_bible_is_traceable_and_contains_no_copied_source_passages():
     )
     # The Bible stores findings and source locators, never novel excerpts.
     assert all("excerpt" not in card.model_dump() for card in bible.evidence_cards)
+    # Findings are paraphrases: ban long Chinese novel dialogue paste patterns.
+    for card in bible.evidence_cards:
+        finding = card.finding
+        assert "『初次见面" not in finding
+        assert "【Amadeus】保存有" not in finding
+
+
+def test_phase1_mb1_snapshot_boundary_in_shared_core_rules():
+    """S1-Mb1: shared core states March-family snapshot, no Japan study-abroad memory, post-boot divergence."""
+    bible = PersonaBible.load_default()
+    assert "beta-side-ln" in bible.sources
+    shared_text = "\n".join(
+        bible.rules[rule_id].instruction_ja for rule_id in bible.shared_rule_ids
+    )
+    assert "三月" in shared_text or "3月" in shared_text
+    assert "留学" in shared_text
+    assert "起動後" in shared_text or "起動" in shared_text
+    # About eight months / pre-Japan update family
+    assert "八" in shared_text or "か月" in shared_text or "ヶ月" in shared_text
+    # Original vs instance divergence
+    assert "原物" in shared_text or "オリジナル" in shared_text
+
+    beta_cards = [c for c in bible.evidence_cards if c.source_id == "beta-side-ln"]
+    assert len(beta_cards) >= 3
+    locators = " ".join(c.locator for c in beta_cards)
+    assert "4154" in locators
+    assert "5434" in locators
+    assert "5438" in locators
+
+
+def test_phase1_mb3_provenance_four_classes_in_shared_core():
+    """S1-Mb3: shared rule distinguishes snapshot / post-activation / retrieved / inference."""
+    bible = PersonaBible.load_default()
+    assert "memory-provenance" in bible.rules
+    assert "memory-provenance" in bible.shared_rule_ids
+    text = bible.rules["memory-provenance"].instruction_ja
+    assert "スナップショット" in text
+    assert "起動後" in text
+    assert "検索" in text or "公開" in text
+    assert "推論" in text
+    # Must forbid presenting non-snapshot as unbounded long-held memory
+    assert "偽" in text or "禁" in text or "してはならない" in text
+
+    for worldline in ("steins_gate", "beta"):
+        prompt = bible.render_prompt(worldline)
+        assert "スナップショット" in prompt
+        assert "起動後" in prompt
 
 
 def test_core_persona_is_shared_but_worldline_overlays_remain_distinct():
@@ -205,7 +252,7 @@ def test_persona_regression_corpus_covers_positive_and_negative_boundaries():
     }
 
     assert payload["schema_version"] == 1
-    assert len(cases) >= 8
+    assert len(cases) >= 12
     assert len(ids) == len(cases)
     assert {case["worldline"] for case in cases} == {"steins_gate", "beta"}
     assert all(case["required_traits"] for case in cases)
@@ -217,6 +264,13 @@ def test_persona_regression_corpus_covers_positive_and_negative_boundaries():
         "worldline_collapse",
     } <= forbidden_categories
     assert all(any("\u4e00" <= char <= "\u9fff" for char in case["input"]) for case in cases)
+    # Phase-0 probe P1–P4 structural cases (not live model eval).
+    assert {
+        "identity-who-are-you-amadeus",
+        "identity-not-biological-original",
+        "identity-crisis-not-first-person",
+        "identity-modern-knowledge-provenance",
+    } <= ids
 
     for case in cases:
         compiled = PromptCompiler().compile(_inputs(case["worldline"], case["input"]))
@@ -224,3 +278,7 @@ def test_persona_regression_corpus_covers_positive_and_negative_boundaries():
             assert "オリジナルの紅莉栖は生存" in compiled
         else:
             assert "オリジナルの紅莉栖は死亡" in compiled
+        # Snapshot + provenance shared rules must appear for identity probes.
+        if case["id"].startswith("identity-"):
+            assert "留学" in compiled or "スナップショット" in compiled
+            assert "スナップショット" in compiled
