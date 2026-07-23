@@ -24,7 +24,7 @@ const baseProps = {
   bgmVolume: 0.15,
   enableSfx: true,
   sfxVolume: 1,
-  temperature: 0.4,
+  temperature: 0.0,
   providerDisplayName: 'DeepSeek',
   providerBaseUrl: null,
   baseUrlConfigurable: false,
@@ -62,7 +62,7 @@ describe('SettingsModal UX contracts', () => {
     expect(range).toHaveClass('volume-slider', 'personality-range');
     expect(range.closest('.slider-row')).toHaveClass('personality-slider-row');
     expect(screen.getByTestId('personality-control')).toBeTruthy();
-    expect(screen.getByTestId('personality-value')).toHaveTextContent('0.4');
+    expect(screen.getByTestId('personality-value')).toHaveTextContent('0.0');
     expect(screen.getByText('回复随机性')).toBeTruthy();
     expect(screen.getByTestId('temperature-hint')).toHaveTextContent('不改变角色设定');
     expect(screen.getByTestId('temperature-endpoint-min')).toHaveTextContent('稳定 / 贴人设');

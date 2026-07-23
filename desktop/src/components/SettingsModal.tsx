@@ -26,7 +26,7 @@ export const CHAT_TEMPERATURE_MIN = 0;
 export const CHAT_TEMPERATURE_MAX = 1.2;
 export const CHAT_TEMPERATURE_STEP = 0.1;
 /** New-install default; daily stable band is 0–0.5 (0 is the verified safe point). */
-export const CHAT_TEMPERATURE_DEFAULT = 0.4;
+export const CHAT_TEMPERATURE_DEFAULT = 0.0;
 
 export function clampChatTemperature(value: number): number {
   if (!Number.isFinite(value)) return CHAT_TEMPERATURE_DEFAULT;
@@ -427,7 +427,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <div className="setting-field personality-field">
                 <label>回复随机性</label>
                 <p className="setting-field-hint" data-testid="temperature-hint">
-                  越高越发散、越容易跑题；不改变角色设定本身。日常建议 0～0.5。
+                  越高越发散、越容易跑题；不改变角色设定本身。默认 0（最稳）；需要轻微变化可用 0.1～0.3。
                 </p>
                 {temperatureMigrationNotice && (
                   <p

@@ -68,9 +68,9 @@ vi.mock('./SettingsModal', () => ({
   CHAT_TEMPERATURE_MIN: 0,
   CHAT_TEMPERATURE_MAX: 1.2,
   CHAT_TEMPERATURE_STEP: 0.1,
-  CHAT_TEMPERATURE_DEFAULT: 0.4,
+  CHAT_TEMPERATURE_DEFAULT: 0.0,
   clampChatTemperature: (value: number) => {
-    if (!Number.isFinite(value)) return 0.4;
+    if (!Number.isFinite(value)) return 0.0;
     return Math.max(0, Math.min(1.2, value));
   },
 }));

@@ -89,7 +89,7 @@ class SessionState:
         self.lock = asyncio.Lock()
         self.compressing = False
         
-        self.temperature = 0.4
+        self.temperature = 0.0
         self.provider_id = "deepseek"
         self.model = config.DEEPSEEK_MODEL
         self.reasoning_effort = None
