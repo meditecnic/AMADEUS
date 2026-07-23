@@ -178,6 +178,8 @@ sessions_creation_lock = asyncio.Lock()
 
 # Regex patterns
 EMO_TAG_PATTERN = re.compile(r'^\[(?:E?MO)[:=]([a-zA-Z0-9_]+)\]\s*')
+# SOFT-02: final language fail may flush goods when enough JP segments exist.
+_MAJORITY_PUBLISH_MIN_SEGMENTS = 2
 MOBILE_ALLOWED_EMOTIONS = {"neutral", "tsundere", "embarrassed", "intellectual"}
 DESKTOP_ALLOWED_EMOTIONS = {
     "neutral", "tsundere", "embarrassed", "intellectual",
@@ -619,6 +621,29 @@ async def get_clean_text_stream(
                 return safe_text, fallback_emotion, {}, emo_tag_found
             if attempt < MAX_ATTEMPTS - 1:
                 continue
+            # SOFT-02 majority-publish (E7): final language fail with enough good JP
+            # segments → flush the goods instead of a whole-turn recovery string.
+            # Leak never takes this path. Threshold is ≥2 complete publishable segments.
+            if (
+                rejection_reason == "language"
+                and len(published_parts) >= _MAJORITY_PUBLISH_MIN_SEGMENTS
+            ):
+                print(
+                    f"[Guard] majority-publish segments={len(published_parts)} "
+                    f"buffered={buffer_ui_until_attempt_ok} "
+                    f"(skip full language recovery)",
+                    flush=True,
+                )
+                if buffer_ui_until_attempt_ok and on_text_delta is not None:
+                    for text, emotion in zip(published_parts, published_emotions):
+                        callback_result = on_text_delta(text, emotion)
+                        if asyncio.iscoroutine(callback_result):
+                            await callback_result
+                safe_text = "".join(published_parts)
+                majority_emotion = (
+                    published_emotions[-1] if published_emotions else last_emotion
+                )
+                return safe_text, majority_emotion, {}, emo_tag_found
             if rejection_reason == "leak":
                 fallback = "はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。"
                 fallback_emotion = "tsundere"

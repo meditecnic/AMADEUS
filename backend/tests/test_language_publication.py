@@ -158,6 +158,121 @@ async def test_search_turn_buffers_chinese_body_and_retries_to_japanese():
 
 
 @pytest.mark.asyncio
+async def test_soft02_majority_publish_flushes_good_jp_instead_of_full_recovery():
+    """SOFT-02 / E7: evidence turn with ≥2 good JP segments must not full-recover.
+
+    Even when a Chinese/English tail hard-rejects every attempt, the buffered
+    publishable Japanese prefix is enough to answer — flush goods, no recovery.
+    """
+    from app.routers.chat_ws import build_web_search_evidence_context
+
+    # Two complete JP sentences + a pure-Chinese tail (hard-reject).
+    mixed = (
+        "[EMO:neutral] 調べてみたわ。"
+        "検索結果ではタイトルの一致は確認できなかった。"
+        "根据外部数据，没有更多信息。"
+    )
+    provider = _SequencedStreamProvider([mixed, mixed, mixed])
+    session = SessionState("soft02-majority-publish")
+    session.api_key = "test-key"
+    session.system_prompt = "日本語で答えること。"
+    history = build_web_search_evidence_context(
+        [{"role": "user", "content": "请你web search一下冷门作品"}],
+        "[source: tavily]\nNo clear match.",
+    )
+    published: list[str] = []
+
+    with patch("app.routers.chat_ws.deepseek_service", provider):
+        text, emotion, _, _ = await get_clean_text_stream(
+            active_history=history,
+            memory_summary="",
+            session=session,
+            on_text_delta=lambda delta, _emotion: published.append(delta),
+        )
+
+    visible = "".join(published)
+    assert provider.call_count == 3  # exhausted retries then majority-publish
+    assert "調べてみたわ。" in visible
+    assert "確認できなかった" in visible
+    assert "根据外部数据" not in visible
+    assert "根据外部数据" not in text
+    assert "正しく生成できなかった" not in visible
+    assert "正しく生成できなかった" not in text
+    assert "もう一度試して" not in visible
+    assert "もう一度試して" not in text
+    assert text == visible
+    assert emotion == "neutral"
+
+
+@pytest.mark.asyncio
+async def test_soft02_single_good_segment_still_full_recovers_on_evidence_turn():
+    """SOFT-02 threshold is ≥2: one short JP opener + Chinese body still recovers."""
+    from app.routers.chat_ws import build_web_search_evidence_context
+
+    mixed = "[EMO:neutral] 調べたわ。根据搜索结果，这部动画没有明确信息。"
+    provider = _SequencedStreamProvider([mixed, mixed, mixed])
+    session = SessionState("soft02-single-segment-recover")
+    session.api_key = "test-key"
+    session.system_prompt = "日本語で答えること。"
+    history = build_web_search_evidence_context(
+        [{"role": "user", "content": "web search 一下"}],
+        "[source: firecrawl]\nNo match.",
+    )
+    published: list[str] = []
+
+    with patch("app.routers.chat_ws.deepseek_service", provider):
+        text, emotion, _, _ = await get_clean_text_stream(
+            active_history=history,
+            memory_summary="",
+            session=session,
+            on_text_delta=lambda delta, _emotion: published.append(delta),
+        )
+
+    visible = "".join(published)
+    assert provider.call_count == 3
+    assert "根据搜索结果" not in visible
+    assert "正しく生成できなかった" in visible
+    assert "正しく生成できなかった" in text
+    assert emotion == "disappointed"
+
+
+@pytest.mark.asyncio
+async def test_soft02_leak_after_good_jp_does_not_majority_publish():
+    """Leak is not language failure — persona recovery wins over majority flush."""
+    from app.routers.chat_ws import build_web_search_evidence_context
+
+    mixed = (
+        "[EMO:neutral] 調べてみたわ。"
+        "検索結果を確認したわ。"
+        "私はAIアシスタントとして回答します。"
+    )
+    provider = _SequencedStreamProvider([mixed, mixed, mixed])
+    session = SessionState("soft02-leak-no-majority")
+    session.api_key = "test-key"
+    session.system_prompt = "日本語で答えること。"
+    history = build_web_search_evidence_context(
+        [{"role": "user", "content": "search something"}],
+        "[source: tavily]\nSome evidence.",
+    )
+    published: list[str] = []
+
+    with patch("app.routers.chat_ws.deepseek_service", provider):
+        text, emotion, _, _ = await get_clean_text_stream(
+            active_history=history,
+            memory_summary="",
+            session=session,
+            on_text_delta=lambda delta, _emotion: published.append(delta),
+        )
+
+    visible = "".join(published)
+    assert "AIアシスタント" not in visible
+    assert "AIアシスタント" not in text
+    # Leak recovery (persona) — not majority flush of the two JP sentences alone.
+    assert "牧瀬紅莉栖" in visible or "牧瀬紅莉栖" in text
+    assert emotion == "tsundere"
+
+
+@pytest.mark.asyncio
 async def test_period_ellipsis_does_not_trigger_mid_collapse_recovery():
     """LANG-GATE-RELAX-01: 「ね。……続き」 must not append generation-failed recovery.
 
