@@ -63,7 +63,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [webSearchActiveProvider, setWebSearchActiveProvider] = useState<WebSearchProviderId>('tavily');
   const [webSearchProviders, setWebSearchProviders] = useState<Partial<Record<WebSearchProviderId, WebSearchProviderInfo>>>({});
   const [webSearchFallbackNote, setWebSearchFallbackNote] = useState(
-    '须配置 Tavily 或 Firecrawl；不再回退 DuckDuckGo。',
+    '请至少配置一个搜索提供商并设为当前使用。',
   );
   const [credentialChecked, setCredentialChecked] = useState(false);
   const [credentialStatus, setCredentialStatus] = useState<CredentialStatus>('checking');

@@ -96,7 +96,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   webSearchStatus,
   webSearchActiveProvider = 'tavily',
   webSearchProviders,
-  webSearchFallbackNote = '须配置 Tavily 或 Firecrawl；不再回退 DuckDuckGo。',
+  webSearchFallbackNote = '请至少配置一个搜索提供商并设为当前使用。',
   systemPrompt,
   enableTts,
   sovitsUrl,

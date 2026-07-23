@@ -186,9 +186,8 @@ class SearchService:
                     "hint": "Search + 页面内容抽取；免费额度按官方控制台为准。",
                 },
             },
-            # No free HTML fallback: must configure Tavily and/or Firecrawl.
             "fallback": None,
-            "fallback_note": "须配置 Tavily 或 Firecrawl 之一；不再回退 DuckDuckGo。",
+            "fallback_note": "请至少配置一个搜索提供商并设为当前使用。",
             "configured": self.provider_configured(active) or self.any_paid_provider_configured(),
             # Back-compat fields for older desktop clients.
             "provider": active,
