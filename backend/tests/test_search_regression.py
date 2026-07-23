@@ -10,7 +10,16 @@ from app.services.search import (
     web_search,
     _extract_city,
 )
-from app.routers.chat_ws import execute_tool_call, should_force_search
+from app.routers.chat_ws import (
+    build_tool_result_context,
+    build_web_search_evidence_context,
+    execute_tool_call,
+    get_clean_text_stream,
+    SessionState,
+    should_force_search,
+    _ANSWER_LANGUAGE_HARD_REQUIREMENT,
+    _history_has_external_evidence,
+)
 
 
 # --- Unit tests for search.py ---
@@ -35,6 +44,95 @@ def test_should_force_search_detects_news():
 def test_should_force_search_ignores_normal_chat():
     assert not should_force_search("助手じゃない")
     assert not should_force_search("你好吗")
+
+
+def test_should_force_search_detects_explicit_web_search_phrase():
+    assert should_force_search("请你web search一下今年的世界杯冠军是哪个国家队")
+
+
+def test_web_search_evidence_context_requires_japanese_answer_body():
+    history = [{"role": "user", "content": "请你web search一下今年的世界杯冠军"}]
+    injected = build_web_search_evidence_context(
+        history,
+        "[source: tavily]\nSpain won the 2026 FIFA World Cup.",
+    )
+    assert len(injected) == 2
+    content = injected[-1]["content"]
+    assert "WEB SEARCH RESULT" in content
+    assert "Spain won" in content
+    assert "ANSWER LANGUAGE — HARD REQUIREMENT" in content
+    assert "自然な日本語" in content
+    assert _ANSWER_LANGUAGE_HARD_REQUIREMENT.split("\n")[0] in content
+    assert _history_has_external_evidence(injected)
+
+
+def test_tool_result_context_requires_japanese_answer_body():
+    history = [{"role": "user", "content": "search weather"}]
+    injected = build_tool_result_context(
+        history,
+        [("web_search", "[source: tavily]\nrain in Tokyo")],
+    )
+    content = injected[-1]["content"]
+    assert "TOOL RESULTS" in content
+    assert "ANSWER LANGUAGE — HARD REQUIREMENT" in content
+    assert _history_has_external_evidence(injected)
+
+
+@pytest.mark.asyncio
+async def test_post_search_chinese_draft_retries_to_japanese_without_full_recovery():
+    """WEB-SEARCH-LANG-01: Chinese body after evidence must not end as bare recovery."""
+
+    class _SequencedStreamProvider:
+        def __init__(self, outputs: list[str]):
+            self.outputs = outputs
+            self.call_count = 0
+            self.prompts: list[str] = []
+            self.temperatures: list[float] = []
+
+        async def get_chat_stream(self, **kwargs):
+            self.prompts.append(kwargs.get("system_prompt") or "")
+            self.temperatures.append(float(kwargs.get("temperature") or 0))
+            output = self.outputs[min(self.call_count, len(self.outputs) - 1)]
+            self.call_count += 1
+            midpoint = max(1, len(output) // 2)
+            yield {"content": output[:midpoint], "tool_calls": None}
+            yield {"content": output[midpoint:], "tool_calls": None}
+
+    provider = _SequencedStreamProvider(
+        [
+            "[EMO:intellectual] 根据搜索结果，2026年世界杯冠军是西班牙。",
+            "[EMO:intellectual] 検索結果を見る限り、2026年ワールドカップ優勝はスペインと出てるわ。",
+        ]
+    )
+    session = SessionState("web-search-lang")
+    session.api_key = "test-key"
+    session.system_prompt = "日本語で答えること。"
+    session.temperature = 0.4
+    history = build_web_search_evidence_context(
+        [{"role": "user", "content": "请你web search一下今年的世界杯冠军是哪个国家队"}],
+        "[source: tavily]\nSpain won the 2026 FIFA World Cup.",
+    )
+    published: list[str] = []
+
+    with patch("app.routers.chat_ws.deepseek_service", provider):
+        text, emotion, _, found = await get_clean_text_stream(
+            active_history=history,
+            memory_summary="",
+            session=session,
+            on_text_delta=lambda delta, _emotion: published.append(delta),
+        )
+
+    visible = "".join(published)
+    assert provider.call_count == 2
+    assert any("中国語または英語" in prompt or "自然な日本語" in prompt for prompt in provider.prompts[1:])
+    assert provider.temperatures[1] == 0.0
+    assert "スペイン" in visible
+    assert "根据搜索结果" not in visible
+    assert "日本語の応答を正しく生成できなかった" not in visible
+    assert "もう一度試して" not in text
+    assert text.strip() == "検索結果を見る限り、2026年ワールドカップ優勝はスペインと出てるわ。"
+    assert emotion == "intellectual"
+    assert found is True
 
 
 def test_search_response_requires_real_evidence():
@@ -88,6 +186,7 @@ async def test_keyless_current_world_cup_search_uses_rewritten_query(tmp_path, m
     }])
 
     service = SearchService()
+    service.configured_tavily_key = staticmethod(lambda: "")  # type: ignore[method-assign]
     service._consume_tavily_credit = AsyncMock(return_value=(True, None))
     with patch("app.services.search.DDGS", return_value=fake_ddgs):
         response = await service.search("请你web search一下今年的世界杯冠军是哪个国家队")
@@ -115,6 +214,7 @@ async def test_world_cup_search_retries_without_overstrict_site_filter(tmp_path,
         "body": "Spain defeated Argentina in the final.",
     }]])
     service = SearchService()
+    service.configured_tavily_key = staticmethod(lambda: "")  # type: ignore[method-assign]
     service._consume_tavily_credit = AsyncMock(return_value=(True, None))
 
     with patch("app.services.search.DDGS", return_value=fake_ddgs):
@@ -146,6 +246,7 @@ async def test_search_uses_chrome_tls_fallback_when_ddgs_returns_empty(tmp_path,
     )
     fake_curl = MagicMock(return_value=fake_response)
     service = SearchService()
+    service.configured_tavily_key = staticmethod(lambda: "")  # type: ignore[method-assign]
     service._consume_tavily_credit = AsyncMock(return_value=(True, None))
 
     with patch("app.services.search.DDGS", return_value=fake_ddgs), \
