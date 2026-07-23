@@ -279,22 +279,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     )}
                   </p>
                 )}
-                <div className="slider-row personality-slider-row">
-                  <span className="slider-endpoint" data-testid="temperature-endpoint-min">稳定 / 贴人设</span>
-                  <input
-                    data-testid="personality-range"
-                    type="range"
-                    min={CHAT_TEMPERATURE_MIN}
-                    max={CHAT_TEMPERATURE_MAX}
-                    step={CHAT_TEMPERATURE_STEP}
-                    value={localTemperature}
-                    onChange={(e) => setLocalTemperature(clampChatTemperature(parseFloat(e.target.value)))}
-                    className="volume-slider personality-range"
-                    style={{ '--val': `${(localTemperature / CHAT_TEMPERATURE_MAX) * 100}%` } as React.CSSProperties}
-                    aria-label="回复随机性"
-                  />
-                  <span className="slider-endpoint" data-testid="temperature-endpoint-max">发散 / 易跑偏</span>
-                  <span className="volume-label" data-testid="personality-value">{localTemperature.toFixed(1)}</span>
+                <div className="personality-control" data-testid="personality-control">
+                  <div className="slider-row personality-slider-row">
+                    <input
+                      data-testid="personality-range"
+                      type="range"
+                      min={CHAT_TEMPERATURE_MIN}
+                      max={CHAT_TEMPERATURE_MAX}
+                      step={CHAT_TEMPERATURE_STEP}
+                      value={localTemperature}
+                      onChange={(e) => setLocalTemperature(clampChatTemperature(parseFloat(e.target.value)))}
+                      className="volume-slider personality-range"
+                      style={{ '--val': `${(localTemperature / CHAT_TEMPERATURE_MAX) * 100}%` } as React.CSSProperties}
+                      aria-label="回复随机性"
+                    />
+                    <span className="volume-label personality-value" data-testid="personality-value">
+                      {localTemperature.toFixed(1)}
+                    </span>
+                  </div>
+                  <div className="personality-endpoints" aria-hidden="true">
+                    <span className="slider-endpoint" data-testid="temperature-endpoint-min">稳定 / 贴人设</span>
+                    <span className="slider-endpoint" data-testid="temperature-endpoint-max">发散 / 易跑偏</span>
+                  </div>
                 </div>
                 {temperatureWarning === 'mild' && (
                   <p className="temperature-warning temperature-warning-mild" data-testid="temperature-warning">

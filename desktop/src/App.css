@@ -1416,7 +1416,7 @@ body {
 }
 .volume-slider:disabled, input[type="range"]:disabled { opacity: 0.35; cursor: not-allowed; }
 
-/* Slider row layout (for settings like 个性幅度) */
+/* Slider row layout (for settings like 回复随机性) */
 .slider-row {
   display: flex;
   align-items: center;
@@ -1425,11 +1425,12 @@ body {
 }
 .slider-row input[type="range"] {
   flex: 1;
+  min-width: 0;
 }
 .slider-endpoint {
   font-size: 11px;
-  color: #5a2500;
-  letter-spacing: 1px;
+  color: #e0a060;
+  letter-spacing: 0.4px;
   white-space: nowrap;
   user-select: none;
 }
@@ -2542,12 +2543,12 @@ body {
   border: none;
 }
 
-/* ── Personality uses the same slider language as Sound Control ── */
+/* ── Reply randomness (sampling temperature) control ── */
 .setting-field-hint {
-  margin: 0 0 8px;
-  font-size: 11px;
-  line-height: 1.45;
-  color: rgba(196, 120, 48, 0.88);
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #c88848;
 }
 
 .temperature-migration-notice {
@@ -2580,25 +2581,85 @@ body {
 }
 
 .temperature-warning {
-  margin: 6px 0 0;
-  font-size: 11px;
+  margin: 8px 0 0;
+  font-size: 12px;
   line-height: 1.4;
 }
 
 .temperature-warning-mild {
-  color: #e0a040;
+  color: #e8a848;
 }
 
 .temperature-warning-strong {
-  color: #ff8c2a;
+  color: #ff9a3a;
   font-weight: 600;
 }
 
+/*
+ * Reply-randomness control layout (multi-agent contract):
+ * - Width: moderate band min(28rem, 100%) ≈ 448px — not the old 370px stub,
+ *   not full modal width.
+ * - Track + value on one row; endpoint legends under the track (high contrast).
+ */
+.personality-control {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(28rem, 100%);
+  max-width: 100%;
+}
+
 .personality-slider-row {
-  width: min(370px, 100%);
+  width: 100%;
+  max-width: none;
+  gap: 14px;
+  align-items: center;
+}
+
+.personality-range {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+}
+
+.personality-value {
+  flex: 0 0 auto;
+  min-width: 2.4em;
+  font-size: 14px;
+  font-weight: 600;
+  color: #ffaa00;
+  text-align: right;
+  text-shadow: 0 0 6px rgba(255, 170, 0, 0.35);
+  font-variant-numeric: tabular-nums;
+}
+
+.personality-endpoints {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  /* Align legends under the track (not under the numeric value). */
+  padding-right: calc(2.4em + 14px);
+  box-sizing: border-box;
   gap: 12px;
 }
-.personality-range { flex: 1; }
+
+.personality-endpoints .slider-endpoint {
+  font-size: 12px;
+  line-height: 1.35;
+  color: #e8b070;
+  letter-spacing: 0.3px;
+  text-shadow: 0 0 8px rgba(255, 140, 40, 0.18);
+}
+
+.personality-endpoints .slider-endpoint[data-testid="temperature-endpoint-min"] {
+  color: #f0c080;
+}
+
+.personality-endpoints .slider-endpoint[data-testid="temperature-endpoint-max"] {
+  color: #e89850;
+  text-align: right;
+}
 
 /* ── HUD pill clean overrides ── */
 .hud-pill {
@@ -2787,7 +2848,8 @@ body {
 
 .personality-field { grid-column: 1 / -1; }
 .tab-panel.active > .setting-field:first-child { grid-column: 1 / -1; }
-.slider-row { width: min(370px, 100%); gap: 12px; }
+/* Keep short width only for generic/sound-style rows; personality is full-width. */
+.slider-row:not(.personality-slider-row) { width: min(370px, 100%); gap: 12px; }
 .slider-value { min-width: 30px; font-size: 14px; }
 
 .terminal-input-bar { height: 56px; padding: 0 22px; gap: 12px; }
@@ -3403,6 +3465,5 @@ body {
 .salieri-workstation-panel .header-telemetry .hud-status-pill.status-setup {
   color: var(--wl-accent-dim) !important;
 }
-
 
 

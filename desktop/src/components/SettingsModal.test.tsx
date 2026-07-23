@@ -61,11 +61,15 @@ describe('SettingsModal UX contracts', () => {
     expect(range).toHaveAttribute('step', String(CHAT_TEMPERATURE_STEP));
     expect(range).toHaveClass('volume-slider', 'personality-range');
     expect(range.closest('.slider-row')).toHaveClass('personality-slider-row');
+    expect(screen.getByTestId('personality-control')).toBeTruthy();
     expect(screen.getByTestId('personality-value')).toHaveTextContent('0.4');
     expect(screen.getByText('回复随机性')).toBeTruthy();
     expect(screen.getByTestId('temperature-hint')).toHaveTextContent('不改变角色设定');
     expect(screen.getByTestId('temperature-endpoint-min')).toHaveTextContent('稳定 / 贴人设');
     expect(screen.getByTestId('temperature-endpoint-max')).toHaveTextContent('发散 / 易跑偏');
+    // Endpoints sit under the track; control uses a moderate (not full-modal) width.
+    expect(screen.getByTestId('temperature-endpoint-min').closest('.personality-endpoints')).toBeTruthy();
+    expect(screen.getByTestId('personality-control')).toHaveClass('personality-control');
     expect(screen.queryByText('个性')).toBeNull();
     expect(screen.queryByTestId('temperature-warning')).toBeNull();
   });
