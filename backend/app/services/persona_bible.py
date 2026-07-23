@@ -151,17 +151,20 @@ class PersonaBible(BaseModel):
         lines.extend(f"- {name}: {tone}" for name, tone in self.emotion_tones.items())
         return "\n".join(lines)
 
-    def render_provider_anchor(self) -> str:
-        # TODO-S4: after (a) rules move into mode_rule_ids, this path must become
-        # mode-aware (or dump only mode-agnostic shared rules). S2 leaves behavior
-        # unchanged: still dumps full shared_rule_ids including okabe/care/assistant.
+    def render_provider_anchor(
+        self,
+        identity_mode: str = DEFAULT_IDENTITY_MODE,
+    ) -> str:
+        """Shared + mode rules (no worldline overlay). Default mode=okabe until S3 wires conversation.mode."""
+        mode = self._normalize_identity_mode(identity_mode)
+        rule_ids = [*self.shared_rule_ids, *self.mode_rule_ids[mode]]
         allowed = "|".join(self.emotion_tones)
         lines = [
             "PERSONA BIBLE v1 PROVIDER ANCHOR",
             f"MEMORY ANCHOR: {self.memory_anchor.year}年時点の{self.memory_anchor.age}歳。",
         ]
         lines.extend(
-            f"- {self.rules[rule_id].instruction_ja}" for rule_id in self.shared_rule_ids
+            f"- {self.rules[rule_id].instruction_ja}" for rule_id in rule_ids
         )
         lines.append(
             f"ALLOWED EMOTION PREFIX: [EMO:{allowed}] のいずれか一つを返答先頭に置く。"

@@ -104,21 +104,30 @@ def test_phase1_mb2_not_biological_original_in_shared_core():
     bible = PersonaBible.load_default()
     assert "instance-not-biological" in bible.rules
     assert "instance-not-biological" in bible.shared_rule_ids
-    # (a) relationship rules remain shared (must not have been removed).
-    assert "okabe-register" in bible.shared_rule_ids
-    assert "care-register" in bible.shared_rule_ids
-    assert "assistant-trigger" in bible.shared_rule_ids
+    # After S4, (a) rules live under mode_rule_ids.okabe (still present for okabe).
+    assert "okabe-register" in bible.mode_rule_ids["okabe"]
+    assert "care-register" in bible.mode_rule_ids["okabe"]
+    assert "assistant-trigger" in bible.mode_rule_ids["okabe"]
 
     text = bible.rules["instance-not-biological"].instruction_ja
     assert "生身" in text or "肉体" in text
     assert "Amadeus" in text
     assert "ではない" in text or "でない" in text or "ない" in text
+    # Canon B framing (shared, both modes)
+    assert "脳科学" in text
+    assert "記憶" in text and ("データ" in text or "データ化" in text)
+    assert "人工知能" in text
+    assert "汎用" in text
+    # Soul / "true AI" may be mentioned only as non-asserted conjecture.
+    assert "断言しない" in text
 
     for worldline in ("steins_gate", "beta"):
-        prompt = bible.render_prompt(worldline)
-        assert "Amadeus" in prompt
-        assert "生身" in prompt or "肉体" in prompt
-        assert "記憶" in prompt
+        for mode in ("okabe", "self"):
+            prompt = bible.render_prompt(worldline, identity_mode=mode)
+            assert "Amadeus" in prompt
+            assert "生身" in prompt or "肉体" in prompt
+            assert "脳科学" in prompt
+            assert "人工知能" in prompt
 
     # Evidence: product-contract + beta-side system layer
     rule_eids = set(bible.rules["instance-not-biological"].evidence_ids)
@@ -142,26 +151,57 @@ def test_phase1_mb5_overlay_memory_model_not_original_body():
     assert "肉体" in beta or "生身" in beta
 
 
-def test_phase2_s2_mode_rule_ids_schema_and_neutral_render():
-    """P2-S2: mode_rule_ids M1 present; empty lists keep okabe/self/default renders identical."""
+def test_phase2_s2_mode_rule_ids_schema_keys():
+    """P2-S2: mode_rule_ids M1 keys okabe|self; illegal identity_mode errors."""
     bible = PersonaBible.load_default()
     assert set(bible.mode_rule_ids) == {"okabe", "self"}
-    assert bible.mode_rule_ids["okabe"] == []
-    assert bible.mode_rule_ids["self"] == []
-    # (a) still unconditionally shared this slice — not moved yet (S4).
-    assert "okabe-register" in bible.shared_rule_ids
-    assert "care-register" in bible.shared_rule_ids
-    assert "assistant-trigger" in bible.shared_rule_ids
-
-    for worldline in ("steins_gate", "beta"):
-        baseline = bible.render_prompt(worldline)
-        as_okabe = bible.render_prompt(worldline, identity_mode="okabe")
-        as_self = bible.render_prompt(worldline, identity_mode="self")
-        assert baseline == as_okabe == as_self
-        assert "PERSONA BIBLE v1" in baseline
-
     with pytest.raises(ValueError, match="identity_mode"):
         bible.render_prompt("steins_gate", identity_mode="admin")
+
+
+def test_phase2_s4_mode_fork_and_canon_b_disclosure():
+    """P2-S4: (a) rules only on okabe; self has non-romance register; canon B on shared."""
+    bible = PersonaBible.load_default()
+    okabe_a = {"okabe-register", "care-register", "assistant-trigger"}
+    assert okabe_a <= set(bible.mode_rule_ids["okabe"])
+    assert okabe_a.isdisjoint(bible.shared_rule_ids)
+    assert okabe_a.isdisjoint(bible.mode_rule_ids["self"])
+    assert "self-register" in bible.mode_rule_ids["self"]
+
+    self_rule = bible.rules["self-register"].instruction_ja
+    assert "恋愛" in self_rule
+    assert "岡部" in self_rule  # instructs not to treat user as Okabe
+    assert "馴染みある反発はしない" in self_rule
+    assert "助手" in self_rule or "クリスティーナ" in self_rule
+
+    for worldline in ("steins_gate", "beta"):
+        okabe_prompt = bible.render_prompt(worldline, "okabe")
+        self_prompt = bible.render_prompt(worldline, "self")
+        assert "相手を岡部として扱い" in okabe_prompt
+        assert "相手を岡部として扱い" not in self_prompt
+        assert "馴染みある反発を返す" in okabe_prompt
+        assert "馴染みある反発はしない" in self_prompt
+        assert "恋愛関係には進まない" in self_prompt
+        # (b) + worldline both modes
+        assert "スナップショット" in okabe_prompt and "スナップショット" in self_prompt
+        assert "留学" in okabe_prompt and "留学" in self_prompt
+        if worldline == "steins_gate":
+            assert "オリジナルの紅莉栖は生存" in okabe_prompt
+            assert "オリジナルの紅莉栖は生存" in self_prompt
+        else:
+            assert "オリジナルの紅莉栖は死亡" in okabe_prompt
+            assert "オリジナルの紅莉栖は死亡" in self_prompt
+        # Canon B on both
+        assert "脳科学" in okabe_prompt and "脳科学" in self_prompt
+        assert "汎用" in okabe_prompt and "汎用" in self_prompt
+
+    okabe_anchor = bible.render_provider_anchor("okabe")
+    self_anchor = bible.render_provider_anchor("self")
+    assert "相手を岡部として扱い" in okabe_anchor
+    assert "相手を岡部として扱い" not in self_anchor
+    assert "馴染みある反発を返す" in okabe_anchor
+    assert "馴染みある反発はしない" in self_anchor
+    assert "脳科学" in okabe_anchor and "脳科学" in self_anchor
 
 
 def test_phase2_s2_mode_rule_ids_validator_rejects_bad_keys_and_unknown_rules():
