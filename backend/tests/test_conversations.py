@@ -482,7 +482,7 @@ async def test_v1_history_migration_backfills_one_default_per_session(tmp_path, 
     finally:
         connection.close()
 
-    assert version == "5"
+    assert version == "6"
     assert "translation" in message_columns
     assert "identity_mode" in conversation_columns
     assert [(row["session_id"], row["is_default"], row["identity_mode"]) for row in conversations] == [
@@ -580,6 +580,115 @@ def test_v4_identity_mode_backfill_rejects_non_enum_and_rolls_back(tmp_path, mon
         assert connection.execute(
             "SELECT identity_mode FROM conversations WHERE id='c1'"
         ).fetchone()[0] == "okabe"
+    finally:
+        connection.close()
+
+
+def test_v6_memory_identity_mode_backfill_okabe_and_rolls_back_on_failure(tmp_path, monkeypatch):
+    """P2-S6: legacy core/episodic rows → okabe; failed migration does not advance version."""
+    memory_path = tmp_path / "memory_v5.sqlite3"
+    memory_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(memory_path)
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO schema_meta(key,value) VALUES('schema_version','5');
+            CREATE TABLE episodic_memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                importance REAL NOT NULL,
+                source_message_ids TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE core_facts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                fact_key TEXT NOT NULL,
+                fact_value TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                importance REAL NOT NULL,
+                is_current INTEGER NOT NULL DEFAULT 1,
+                is_pinned INTEGER NOT NULL DEFAULT 0,
+                source_message_ids TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            INSERT INTO episodic_memories(
+                session_id,content,confidence,importance,source_message_ids,created_at
+            ) VALUES ('legacy','promise',0.9,0.8,'[1]','2026-07-16T00:00:00+00:00');
+            INSERT INTO core_facts(
+                session_id,fact_key,fact_value,confidence,importance,is_current,is_pinned,
+                source_message_ids,created_at
+            ) VALUES ('legacy','drink','coffee',0.9,0.8,1,0,'[1]','2026-07-16T00:00:00+00:00');
+            """
+        )
+        connection.commit()
+
+        db_module._backfill_memory_v6(connection)
+
+        assert connection.execute(
+            "SELECT identity_mode FROM core_facts WHERE session_id='legacy'"
+        ).fetchone()[0] == "okabe"
+        assert connection.execute(
+            "SELECT identity_mode FROM episodic_memories WHERE session_id='legacy'"
+        ).fetchone()[0] == "okabe"
+        assert connection.execute(
+            "SELECT COUNT(*) FROM core_facts WHERE identity_mode='self'"
+        ).fetchone()[0] == 0
+        assert connection.execute(
+            "SELECT value FROM schema_meta WHERE key='schema_version'"
+        ).fetchone()[0] == "6"
+    finally:
+        connection.close()
+
+    memory_bad = tmp_path / "memory_v5_bad.sqlite3"
+    connection = sqlite3.connect(memory_bad)
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO schema_meta(key,value) VALUES('schema_version','5');
+            CREATE TABLE core_facts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                fact_key TEXT NOT NULL,
+                fact_value TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                importance REAL NOT NULL,
+                is_current INTEGER NOT NULL DEFAULT 1,
+                is_pinned INTEGER NOT NULL DEFAULT 0,
+                source_message_ids TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            INSERT INTO core_facts(
+                session_id,fact_key,fact_value,confidence,importance,is_current,is_pinned,
+                source_message_ids,created_at
+            ) VALUES ('x','k','v',0.5,0.5,1,0,'[1]','2026-07-16T00:00:00+00:00');
+            """
+        )
+        connection.commit()
+
+        def sabotaged(conn):
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                db_module._prepare_memory_v6_identity_scope(conn)
+                raise RuntimeError(
+                    "core_facts identity_mode backfill incomplete: invalid_rows=1"
+                )
+            except Exception:
+                conn.rollback()
+                raise
+
+        monkeypatch.setattr(db_module, "_backfill_memory_v6", sabotaged)
+        with pytest.raises(RuntimeError, match="identity_mode backfill incomplete"):
+            db_module._backfill_memory_v6(connection)
+        assert connection.execute(
+            "SELECT value FROM schema_meta WHERE key='schema_version'"
+        ).fetchone()[0] == "5"
+        cols = {r[1] for r in connection.execute("PRAGMA table_info(core_facts)")}
+        assert "identity_mode" not in cols
     finally:
         connection.close()
 

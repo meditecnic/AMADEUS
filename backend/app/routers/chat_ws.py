@@ -1183,6 +1183,7 @@ async def processor_loop(
                     source_message_ids=[user_message_id, assistant_message_id],
                     api_key=session.api_key,
                     provider_snapshot=turn_provider,
+                    identity_mode=getattr(session, "identity_mode", "okabe"),
                 )
                 from app.services.conversations import conversation_service
 

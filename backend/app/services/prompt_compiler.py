@@ -106,8 +106,18 @@ async def compile_for_session(session, user_message: str) -> str:
         session.worldline,
         identity_mode=mode,
     )
-    facts = await memory_service.select_core_facts(session.session_id, session.worldline, user_message)
-    episodes = await memory_service.lexical_search(session.session_id, session.worldline, user_message)
+    facts = await memory_service.select_core_facts(
+        session.session_id,
+        session.worldline,
+        user_message,
+        identity_mode=mode,
+    )
+    episodes = await memory_service.lexical_search(
+        session.session_id,
+        session.worldline,
+        user_message,
+        identity_mode=mode,
+    )
     return prompt_compiler.compile(PromptInputs(
         worldline=session.worldline,
         base_identity=base_identity or "You are Amadeus Kurisu.",

@@ -15,7 +15,15 @@ from typing import Awaitable, Callable, Iterable, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app import config
-from app.db import EMBEDDING_DIMENSION, EMBEDDING_MODEL, _resolve_path, get_db, normalize_worldline
+from app.db import (
+    DEFAULT_IDENTITY_MODE,
+    EMBEDDING_DIMENSION,
+    EMBEDDING_MODEL,
+    _resolve_path,
+    get_db,
+    normalize_identity_mode,
+    normalize_worldline,
+)
 from app.services.provider_registry import ProviderSnapshot, ProviderTask
 
 logger = logging.getLogger(__name__)
@@ -105,14 +113,31 @@ class MemoryService:
         self.embedder = embedder or EmbeddingAdapter()
         self._extraction_tasks: set[asyncio.Task] = set()
 
-    async def add_episode(self, session_id: str, worldline: str, candidate: EpisodicCandidate) -> int:
+    async def add_episode(
+        self,
+        session_id: str,
+        worldline: str,
+        candidate: EpisodicCandidate,
+        identity_mode: str = DEFAULT_IDENTITY_MODE,
+    ) -> int:
         wl = normalize_worldline(worldline)
+        mode = normalize_identity_mode(identity_mode)
         now = datetime.now(timezone.utc).isoformat()
         db = await get_db(wl, "memory")
         try:
             cursor = await db.execute(
-                "INSERT INTO episodic_memories(session_id,content,confidence,importance,source_message_ids,created_at) VALUES(?,?,?,?,?,?)",
-                (session_id, candidate.content, candidate.confidence, candidate.importance, json.dumps(candidate.source_message_ids), now),
+                """INSERT INTO episodic_memories(
+                       session_id,identity_mode,content,confidence,importance,source_message_ids,created_at
+                   ) VALUES(?,?,?,?,?,?,?)""",
+                (
+                    session_id,
+                    mode,
+                    candidate.content,
+                    candidate.confidence,
+                    candidate.importance,
+                    json.dumps(candidate.source_message_ids),
+                    now,
+                ),
             )
             await db.commit()
             memory_id = int(cursor.lastrowid)
@@ -121,20 +146,43 @@ class MemoryService:
         await self._try_index(wl, "episodic", memory_id, candidate.content)
         return memory_id
 
-    async def upsert_core_fact(self, session_id: str, worldline: str, candidate: CoreFactCandidate) -> int:
+    async def upsert_core_fact(
+        self,
+        session_id: str,
+        worldline: str,
+        candidate: CoreFactCandidate,
+        identity_mode: str = DEFAULT_IDENTITY_MODE,
+    ) -> int:
         wl = normalize_worldline(worldline)
+        mode = normalize_identity_mode(identity_mode)
         now = datetime.now(timezone.utc).isoformat()
         db = await get_db(wl, "memory")
         try:
             await db.execute("BEGIN IMMEDIATE")
-            cur = await db.execute("SELECT id FROM core_facts WHERE session_id=? AND fact_key=? AND is_current=1", (session_id, candidate.fact_key))
+            cur = await db.execute(
+                """SELECT id FROM core_facts
+                    WHERE session_id=? AND identity_mode=? AND fact_key=? AND is_current=1""",
+                (session_id, mode, candidate.fact_key),
+            )
             old = await cur.fetchone()
             if old:
                 await db.execute("UPDATE core_facts SET is_current=0 WHERE id=?", (old["id"],))
             cursor = await db.execute(
-                """INSERT INTO core_facts(session_id,fact_key,fact_value,confidence,importance,is_current,is_pinned,source_message_ids,created_at)
-                   VALUES(?,?,?,?,?,1,?,?,?)""",
-                (session_id, candidate.fact_key, candidate.fact_value, candidate.confidence, candidate.importance, int(candidate.is_pinned), json.dumps(candidate.source_message_ids), now),
+                """INSERT INTO core_facts(
+                       session_id,identity_mode,fact_key,fact_value,confidence,importance,
+                       is_current,is_pinned,source_message_ids,created_at
+                   ) VALUES(?,?,?,?,?,?,1,?,?,?)""",
+                (
+                    session_id,
+                    mode,
+                    candidate.fact_key,
+                    candidate.fact_value,
+                    candidate.confidence,
+                    candidate.importance,
+                    int(candidate.is_pinned),
+                    json.dumps(candidate.source_message_ids),
+                    now,
+                ),
             )
             new_id = int(cursor.lastrowid)
             if old:
@@ -148,31 +196,91 @@ class MemoryService:
         await self._try_index(wl, "core", new_id, f"{candidate.fact_key}: {candidate.fact_value}")
         return new_id
 
-    async def apply_extraction(self, session_id: str, worldline: str, extraction: ExtractionResult) -> None:
+    async def apply_extraction(
+        self,
+        session_id: str,
+        worldline: str,
+        extraction: ExtractionResult,
+        identity_mode: str = DEFAULT_IDENTITY_MODE,
+    ) -> None:
+        mode = normalize_identity_mode(identity_mode)
         for episode in extraction.episodic:
-            await self.add_episode(session_id, worldline, episode)
+            await self.add_episode(session_id, worldline, episode, identity_mode=mode)
         for fact in extraction.core_facts:
-            await self.upsert_core_fact(session_id, worldline, fact)
+            await self.upsert_core_fact(session_id, worldline, fact, identity_mode=mode)
 
-    def schedule_turn_extraction(self, *, session_id: str, worldline: str, user_text: str, assistant_text: str, source_message_ids: list[int], api_key: str | None, provider_snapshot: ProviderSnapshot, conversation_id: str | None = None) -> None:
+    def schedule_turn_extraction(
+        self,
+        *,
+        session_id: str,
+        worldline: str,
+        user_text: str,
+        assistant_text: str,
+        source_message_ids: list[int],
+        api_key: str | None,
+        provider_snapshot: ProviderSnapshot,
+        conversation_id: str | None = None,
+        identity_mode: str = DEFAULT_IDENTITY_MODE,
+    ) -> None:
         # Test/demo tokens must never spawn a real background provider request.
         if not api_key or api_key.lower().startswith("test") or len(api_key) < 8 or not user_text.strip() or not assistant_text.strip():
             return
         provider_snapshot.require(ProviderTask.MEMORY)
-        task = asyncio.create_task(self._extract_turn(session_id, worldline, user_text, assistant_text, source_message_ids, api_key, provider_snapshot, conversation_id))
+        mode = normalize_identity_mode(identity_mode)
+        task = asyncio.create_task(
+            self._extract_turn(
+                session_id,
+                worldline,
+                user_text,
+                assistant_text,
+                source_message_ids,
+                api_key,
+                provider_snapshot,
+                conversation_id,
+                mode,
+            )
+        )
         self._extraction_tasks.add(task)
         task.add_done_callback(self._extraction_tasks.discard)
 
-    async def _extract_turn(self, session_id: str, worldline: str, user_text: str, assistant_text: str, source_message_ids: list[int], api_key: str, provider_snapshot: ProviderSnapshot, conversation_id: str | None = None) -> None:
+    async def _extract_turn(
+        self,
+        session_id: str,
+        worldline: str,
+        user_text: str,
+        assistant_text: str,
+        source_message_ids: list[int],
+        api_key: str,
+        provider_snapshot: ProviderSnapshot,
+        conversation_id: str | None = None,
+        identity_mode: str = DEFAULT_IDENTITY_MODE,
+    ) -> None:
         from app import models
-        instruction = """Extract memory from one conversation turn and return a JSON object with exactly:
+
+        mode = normalize_identity_mode(identity_mode)
+        # Q23: write only into the conversation's identity_mode scope; never reclassify
+        # okabe-role first-person statements into a real-user/self profile.
+        instruction = f"""Extract memory from one conversation turn and return a JSON object with exactly:
 working_summary (dialogue flow/open topics only; no discrete facts), episodic (events/promises/shared experiences), core_facts (only stable facts explicitly stated by the user).
 Each episodic item requires content, confidence, importance, source_message_ids.
 Each core fact requires fact_key, fact_value, confidence, importance, source_message_ids, is_pinned.
-Never infer a core fact. If evidence is ambiguous, omit it. Use the supplied source ids only."""
+Never infer a core fact. If evidence is ambiguous, omit it. Use the supplied source ids only.
+Identity scope for this turn is "{mode}". Persist facts only for this scope.
+Do not reclassify the speaker as a different identity. Do not promote role-play (okabe) statements into a real-user profile, and do not merge scopes."""
         messages = [
             {"role": "system", "content": instruction},
-            {"role": "user", "content": json.dumps({"source_message_ids": source_message_ids, "user": user_text, "assistant": assistant_text}, ensure_ascii=False)},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "identity_mode": mode,
+                        "source_message_ids": source_message_ids,
+                        "user": user_text,
+                        "assistant": assistant_text,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
         ]
         try:
             provider_snapshot.require(ProviderTask.MEMORY)
@@ -187,7 +295,9 @@ Never infer a core fact. If evidence is ambiguous, omit it. Use the supplied sou
             for candidate in [*extraction.episodic, *extraction.core_facts]:
                 if not set(candidate.source_message_ids).issubset(allowed_sources):
                     raise ValueError("memory extractor returned an untraceable source_message_id")
-            await self.apply_extraction(session_id, worldline, extraction)
+            await self.apply_extraction(
+                session_id, worldline, extraction, identity_mode=mode
+            )
             if extraction.working_summary:
                 await models.save_memory_summary(
                     session_id,
@@ -207,10 +317,22 @@ Never infer a core fact. If evidence is ambiguous, omit it. Use the supplied sou
                     task.cancel()
             await asyncio.gather(*self._extraction_tasks, return_exceptions=True)
 
-    async def select_core_facts(self, session_id: str, worldline: str, query: str, limit: int = 24) -> list[RetrievedMemory]:
+    async def select_core_facts(
+        self,
+        session_id: str,
+        worldline: str,
+        query: str,
+        limit: int = 24,
+        identity_mode: str = DEFAULT_IDENTITY_MODE,
+    ) -> list[RetrievedMemory]:
+        mode = normalize_identity_mode(identity_mode)
         db = await get_db(normalize_worldline(worldline), "memory")
         try:
-            cur = await db.execute("SELECT * FROM core_facts WHERE session_id=? AND is_current=1", (session_id,))
+            cur = await db.execute(
+                """SELECT * FROM core_facts
+                    WHERE session_id=? AND identity_mode=? AND is_current=1""",
+                (session_id, mode),
+            )
             rows = await cur.fetchall()
         finally:
             await db.close()
@@ -226,13 +348,23 @@ Never infer a core fact. If evidence is ambiguous, omit it. Use the supplied sou
             ranked.append(RetrievedMemory(id=row["id"], kind="core", content=f"{row['fact_key']}: {row['fact_value']}", score=score, confidence=row["confidence"], importance=row["importance"], pinned=bool(row["is_pinned"])))
         return sorted(ranked, key=lambda item: item.score, reverse=True)[:limit]
 
-    async def hybrid_search(self, session_id: str, worldline: str, query: str, top_k: int = 12) -> list[RetrievedMemory]:
+    async def hybrid_search(
+        self,
+        session_id: str,
+        worldline: str,
+        query: str,
+        top_k: int = 12,
+        identity_mode: str = DEFAULT_IDENTITY_MODE,
+    ) -> list[RetrievedMemory]:
         wl = normalize_worldline(worldline)
-        fts_rows = await self._fts_search(session_id, wl, query, 40)
+        mode = normalize_identity_mode(identity_mode)
+        fts_rows = await self._fts_search(session_id, wl, query, 40, identity_mode=mode)
         vector_rows: list[tuple[int, float]] = []
         try:
             query_vector = await self.embedder.encode_query(query)
-            vector_rows = await asyncio.to_thread(self._vector_search_sync, session_id, wl, query_vector, 40)
+            vector_rows = await asyncio.to_thread(
+                self._vector_search_sync, session_id, wl, query_vector, 40, mode
+            )
         except (ImportError, RuntimeError, sqlite3.Error):
             pass
         fused = reciprocal_rank_fusion([row[0] for row in fts_rows], [row[0] for row in vector_rows])
@@ -242,7 +374,11 @@ Never infer a core fact. If evidence is ambiguous, omit it. Use the supplied sou
             try:
                 ids = [row[0] for row in vector_rows if row[0] not in content]
                 for item_id in ids:
-                    cur = await db.execute("SELECT content FROM episodic_memories WHERE id=? AND session_id=?", (item_id, session_id))
+                    cur = await db.execute(
+                        """SELECT content FROM episodic_memories
+                            WHERE id=? AND session_id=? AND identity_mode=?""",
+                        (item_id, session_id, mode),
+                    )
                     row = await cur.fetchone()
                     if row:
                         content[item_id] = row["content"]
@@ -251,11 +387,26 @@ Never infer a core fact. If evidence is ambiguous, omit it. Use the supplied sou
         ordered = sorted(fused.items(), key=lambda pair: pair[1], reverse=True)[:top_k]
         return [RetrievedMemory(id=item_id, kind="episodic", content=content.get(item_id, ""), score=score) for item_id, score in ordered if content.get(item_id)]
 
-    async def lexical_search(self, session_id: str, worldline: str, query: str, top_k: int = 12) -> list[RetrievedMemory]:
-        rows = await self._fts_search(session_id, normalize_worldline(worldline), query, min(40, max(1, top_k)))
+    async def lexical_search(
+        self,
+        session_id: str,
+        worldline: str,
+        query: str,
+        top_k: int = 12,
+        identity_mode: str = DEFAULT_IDENTITY_MODE,
+    ) -> list[RetrievedMemory]:
+        mode = normalize_identity_mode(identity_mode)
+        rows = await self._fts_search(
+            session_id,
+            normalize_worldline(worldline),
+            query,
+            min(40, max(1, top_k)),
+            identity_mode=mode,
+        )
         return [RetrievedMemory(id=item_id, kind="episodic", content=content, score=1.0 / rank) for rank, (item_id, content) in enumerate(rows, 1)]
 
     async def status(self, session_id: str, worldline: str) -> dict[str, object]:
+        # Session-level totals across modes (wipe/status); retrieval remains mode-scoped.
         db = await get_db(normalize_worldline(worldline), "memory")
         try:
             episode = await (await db.execute("SELECT COUNT(*) FROM episodic_memories WHERE session_id=?", (session_id,))).fetchone()
@@ -348,15 +499,30 @@ Never infer a core fact. If evidence is ambiguous, omit it. Use the supplied sou
             "core_facts_deleted": len(core_ids),
         }
 
-    async def _fts_search(self, session_id: str, worldline: str, query: str, limit: int) -> list[tuple[int, str]]:
+    async def _fts_search(
+        self,
+        session_id: str,
+        worldline: str,
+        query: str,
+        limit: int,
+        identity_mode: str = DEFAULT_IDENTITY_MODE,
+    ) -> list[tuple[int, str]]:
         if not query.strip():
             return []
+        mode = normalize_identity_mode(identity_mode)
         db = await get_db(worldline, "memory")
         try:
             try:
                 cur = await db.execute(
-                    "SELECT e.id,e.content FROM episodic_fts f JOIN episodic_memories e ON e.id=f.rowid WHERE episodic_fts MATCH ? AND e.session_id=? ORDER BY bm25(episodic_fts) LIMIT ?",
-                    (query, session_id, limit),
+                    """SELECT e.id,e.content
+                         FROM episodic_fts f
+                         JOIN episodic_memories e ON e.id=f.rowid
+                        WHERE episodic_fts MATCH ?
+                          AND e.session_id=?
+                          AND e.identity_mode=?
+                        ORDER BY bm25(episodic_fts)
+                        LIMIT ?""",
+                    (query, session_id, mode, limit),
                 )
                 return [(row["id"], row["content"]) for row in await cur.fetchall()]
             except sqlite3.OperationalError:
@@ -388,16 +554,30 @@ Never infer a core fact. If evidence is ambiguous, omit it. Use the supplied sou
             connection.close()
 
     @staticmethod
-    def _vector_search_sync(session_id: str, worldline: str, vector: list[float], limit: int) -> list[tuple[int, float]]:
+    def _vector_search_sync(
+        session_id: str,
+        worldline: str,
+        vector: list[float],
+        limit: int,
+        identity_mode: str = DEFAULT_IDENTITY_MODE,
+    ) -> list[tuple[int, float]]:
         import sqlite_vec
+        mode = normalize_identity_mode(identity_mode)
         connection = sqlite3.connect(_resolve_path(worldline, "memory"))
         try:
             connection.enable_load_extension(True)
             sqlite_vec.load(connection)
             blob = struct.pack(f"<{len(vector)}f", *vector)
             return [(int(row[0]), float(row[1])) for row in connection.execute(
-                "SELECT v.rowid,v.distance FROM episodic_vec v JOIN episodic_memories e ON e.id=v.rowid WHERE v.embedding MATCH ? AND k=? AND e.session_id=? ORDER BY v.distance",
-                (blob, limit, session_id),
+                """SELECT v.rowid,v.distance
+                     FROM episodic_vec v
+                     JOIN episodic_memories e ON e.id=v.rowid
+                    WHERE v.embedding MATCH ?
+                      AND k=?
+                      AND e.session_id=?
+                      AND e.identity_mode=?
+                    ORDER BY v.distance""",
+                (blob, limit, session_id, mode),
             ).fetchall()]
         finally:
             connection.close()

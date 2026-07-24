@@ -47,6 +47,102 @@ async def test_core_fact_supersession_keeps_one_hot_record(isolated_store):
     assert "Dr Pepper" in selected[0].content
 
 
+@pytest.mark.asyncio
+async def test_phase2_s6_memory_isolated_by_identity_mode_no_auto_upgrade(isolated_store):
+    """P2-S6 Q23: okabe facts invisible to self retrieval; no clone/upgrade into self."""
+    from app.services.memory import ExtractionResult
+
+    await memory_service.upsert_core_fact(
+        "s6-user",
+        "steins_gate",
+        CoreFactCandidate(
+            fact_key="okabe_drink",
+            fact_value="Dr Pepper",
+            confidence=0.95,
+            importance=0.8,
+            source_message_ids=[1],
+        ),
+        identity_mode="okabe",
+    )
+    await memory_service.add_episode(
+        "s6-user",
+        "steins_gate",
+        EpisodicCandidate(
+            content="Okabe promised to return the PhoneWave",
+            confidence=0.9,
+            importance=0.8,
+            source_message_ids=[1],
+        ),
+        identity_mode="okabe",
+    )
+
+    # self lane starts blank — cannot see okabe-scoped memories
+    self_facts = await memory_service.select_core_facts(
+        "s6-user", "steins_gate", "Dr Pepper", identity_mode="self"
+    )
+    self_eps = await memory_service.lexical_search(
+        "s6-user", "steins_gate", "PhoneWave", identity_mode="self"
+    )
+    assert self_facts == []
+    assert self_eps == []
+
+    # okabe lane still sees its own writes (default omit = okabe)
+    okabe_facts = await memory_service.select_core_facts(
+        "s6-user", "steins_gate", "Dr Pepper"
+    )
+    assert len(okabe_facts) == 1
+    assert "Dr Pepper" in okabe_facts[0].content
+
+    # Same fact_key may coexist per mode without superseding across modes
+    await memory_service.upsert_core_fact(
+        "s6-user",
+        "steins_gate",
+        CoreFactCandidate(
+            fact_key="okabe_drink",
+            fact_value="tea",
+            confidence=0.9,
+            importance=0.7,
+            source_message_ids=[2],
+        ),
+        identity_mode="self",
+    )
+    okabe_after = await memory_service.select_core_facts(
+        "s6-user", "steins_gate", "drink", identity_mode="okabe"
+    )
+    self_after = await memory_service.select_core_facts(
+        "s6-user", "steins_gate", "drink", identity_mode="self"
+    )
+    assert any("Dr Pepper" in item.content for item in okabe_after)
+    assert any("tea" in item.content for item in self_after)
+    assert not any("Dr Pepper" in item.content for item in self_after)
+
+    # apply_extraction under okabe must not land in self (negative upgrade path)
+    extraction = ExtractionResult(
+        working_summary="",
+        episodic=[],
+        core_facts=[
+            CoreFactCandidate(
+                fact_key="lab_member",
+                fact_value="I am Okabe Rintaro",
+                confidence=0.9,
+                importance=0.9,
+                source_message_ids=[3],
+            )
+        ],
+    )
+    await memory_service.apply_extraction(
+        "s6-user", "steins_gate", extraction, identity_mode="okabe"
+    )
+    self_lab = await memory_service.select_core_facts(
+        "s6-user", "steins_gate", "lab_member Rintaro", identity_mode="self"
+    )
+    okabe_lab = await memory_service.select_core_facts(
+        "s6-user", "steins_gate", "lab_member Rintaro", identity_mode="okabe"
+    )
+    assert not any("lab_member" in item.content for item in self_lab)
+    assert any("lab_member" in item.content and "Rintaro" in item.content for item in okabe_lab)
+
+
 def test_rrf_merges_independent_rankings_in_python():
     scores = reciprocal_rank_fusion([1, 2, 3], [3, 2, 4])
     assert scores[2] > scores[1]

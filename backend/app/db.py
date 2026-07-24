@@ -26,7 +26,8 @@ EMBEDDING_MODEL = "intfloat/multilingual-e5-small"
 EMBEDDING_DIMENSION = 384
 # v4: conversations.identity_mode (okabe|self); existing rows backfilled to okabe.
 # v5: emotion_states keyed by (session_id, identity_mode); existing rows → okabe (U-M2).
-SCHEMA_VERSION = 5
+# v6: core_facts / episodic_memories scoped by identity_mode; existing rows → okabe (U-M3).
+SCHEMA_VERSION = 6
 
 DEFAULT_IDENTITY_MODE = "okabe"
 IDENTITY_MODES = frozenset({"okabe", "self"})
@@ -193,6 +194,7 @@ CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NUL
 CREATE TABLE IF NOT EXISTS episodic_memories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL,
+    identity_mode TEXT NOT NULL DEFAULT 'okabe' CHECK(identity_mode IN ('okabe','self')),
     content TEXT NOT NULL,
     confidence REAL NOT NULL CHECK(confidence BETWEEN 0 AND 1),
     importance REAL NOT NULL CHECK(importance BETWEEN 0 AND 1),
@@ -200,7 +202,7 @@ CREATE TABLE IF NOT EXISTS episodic_memories (
     created_at TEXT NOT NULL,
     last_referenced_at TEXT
 );
-CREATE INDEX IF NOT EXISTS idx_episode_session ON episodic_memories(session_id, id DESC);
+CREATE INDEX IF NOT EXISTS idx_episode_session ON episodic_memories(session_id, identity_mode, id DESC);
 CREATE VIRTUAL TABLE IF NOT EXISTS episodic_fts USING fts5(content, content='episodic_memories', content_rowid='id');
 CREATE TRIGGER IF NOT EXISTS episodic_ai AFTER INSERT ON episodic_memories BEGIN
   INSERT INTO episodic_fts(rowid, content) VALUES (new.id, new.content);
@@ -211,6 +213,7 @@ END;
 CREATE TABLE IF NOT EXISTS core_facts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL,
+    identity_mode TEXT NOT NULL DEFAULT 'okabe' CHECK(identity_mode IN ('okabe','self')),
     fact_key TEXT NOT NULL,
     fact_value TEXT NOT NULL,
     confidence REAL NOT NULL CHECK(confidence BETWEEN 0 AND 1),
@@ -222,8 +225,8 @@ CREATE TABLE IF NOT EXISTS core_facts (
     created_at TEXT NOT NULL,
     last_referenced_at TEXT
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_current_fact ON core_facts(session_id, fact_key) WHERE is_current=1;
-CREATE INDEX IF NOT EXISTS idx_core_fact_hot ON core_facts(session_id, is_current, is_pinned, importance DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_current_fact ON core_facts(session_id, identity_mode, fact_key) WHERE is_current=1;
+CREATE INDEX IF NOT EXISTS idx_core_fact_hot ON core_facts(session_id, identity_mode, is_current, is_pinned, importance DESC);
 CREATE TABLE IF NOT EXISTS memory_embeddings (
     memory_type TEXT NOT NULL CHECK(memory_type IN ('episodic','core')),
     memory_id INTEGER NOT NULL,
@@ -548,6 +551,93 @@ def _migrate_v4_to_v5(connection: sqlite3.Connection, kind: DatabaseKind) -> Non
     connection.commit()
 
 
+def _prepare_memory_v6_identity_scope(connection: sqlite3.Connection) -> None:
+    """Additive DDL: identity_mode on episodic/core memories; mode-scoped unique fact key.
+
+    Existing rows receive DEFAULT okabe (U-M3). self is never cloned (Q23/Q25).
+    """
+    if connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='episodic_memories'"
+    ).fetchone():
+        if not _column_exists(connection, "episodic_memories", "identity_mode"):
+            connection.execute(
+                "ALTER TABLE episodic_memories ADD COLUMN identity_mode TEXT NOT NULL DEFAULT 'okabe'"
+            )
+        connection.execute("DROP INDEX IF EXISTS idx_episode_session")
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_episode_session "
+            "ON episodic_memories(session_id, identity_mode, id DESC)"
+        )
+
+    if connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='core_facts'"
+    ).fetchone():
+        if not _column_exists(connection, "core_facts", "identity_mode"):
+            connection.execute(
+                "ALTER TABLE core_facts ADD COLUMN identity_mode TEXT NOT NULL DEFAULT 'okabe'"
+            )
+        connection.execute("DROP INDEX IF EXISTS idx_current_fact")
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_current_fact "
+            "ON core_facts(session_id, identity_mode, fact_key) WHERE is_current=1"
+        )
+        connection.execute("DROP INDEX IF EXISTS idx_core_fact_hot")
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_core_fact_hot "
+            "ON core_facts(session_id, identity_mode, is_current, is_pinned, importance DESC)"
+        )
+
+
+def _backfill_memory_v6(connection: sqlite3.Connection) -> None:
+    """Normalize memory identity_mode to okabe|self; fail closed with full rollback."""
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        _prepare_memory_v6_identity_scope(connection)
+        for table in ("episodic_memories", "core_facts"):
+            if not connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            ).fetchone():
+                continue
+            if not _column_exists(connection, table, "identity_mode"):
+                continue
+            connection.execute(
+                f"""UPDATE {table}
+                       SET identity_mode='okabe'
+                     WHERE identity_mode IS NULL
+                        OR identity_mode NOT IN ('okabe','self')"""
+            )
+            bad = connection.execute(
+                f"""SELECT COUNT(*) FROM {table}
+                    WHERE identity_mode IS NULL
+                       OR identity_mode NOT IN ('okabe','self')"""
+            ).fetchone()[0]
+            if bad:
+                raise RuntimeError(
+                    f"{table} identity_mode backfill incomplete: invalid_rows={bad}"
+                )
+        connection.execute(
+            "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version',?)",
+            ("6",),
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
+def _migrate_v5_to_v6(connection: sqlite3.Connection, kind: DatabaseKind) -> None:
+    """Memory extraction scope by identity_mode (Q23 / U-M3=okabe)."""
+    if kind == "memory":
+        _backfill_memory_v6(connection)
+        return
+    connection.execute(
+        "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version',?)",
+        ("6",),
+    )
+    connection.commit()
+
+
 async def _initialize_one(worldline: str, kind: DatabaseKind, schema: str) -> None:
     path = _resolve_path(worldline, kind)
     if path in _initialized_paths:
@@ -595,6 +685,9 @@ def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str 
         if current == 4:
             _migrate_v4_to_v5(connection, kind)
             current = 5
+        if current == 5:
+            _migrate_v5_to_v6(connection, kind)
+            current = 6
         if current not in (None, SCHEMA_VERSION):
             raise RuntimeError(f"unsupported {kind} schema version at {path}: {current}")
 
