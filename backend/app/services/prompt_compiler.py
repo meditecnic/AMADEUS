@@ -92,14 +92,21 @@ def _session_identity_mode(session) -> str:
 
 async def compile_for_session(session, user_message: str) -> str:
     """Build a turn prompt without loading the heavyweight embedding model."""
+    from app.security.prompt import resolve_system_prompt_base
     from app.services.memory import memory_service
     from app.services.soul_engine import soul_engine
+
+    mode = _session_identity_mode(session)
+    # Re-resolve product default base by mode so auth-frozen okabe base cannot
+    # stick on a self conversation (custom client bases stay untouched).
+    raw_base = session.base_system_prompt or session.system_prompt
+    base_identity = resolve_system_prompt_base(raw_base, mode)
     emotion = await soul_engine.restore_emotion(session.session_id, session.worldline)
     facts = await memory_service.select_core_facts(session.session_id, session.worldline, user_message)
     episodes = await memory_service.lexical_search(session.session_id, session.worldline, user_message)
     return prompt_compiler.compile(PromptInputs(
         worldline=session.worldline,
-        base_identity=session.base_system_prompt or session.system_prompt or "You are Amadeus Kurisu.",
+        base_identity=base_identity or "You are Amadeus Kurisu.",
         emotion=emotion,
         core_facts=facts,
         episodic=episodes,
@@ -107,5 +114,5 @@ async def compile_for_session(session, user_message: str) -> str:
         working_summary=session.memory_summary,
         recent_history=session.history,
         current_user_message=user_message,
-        identity_mode=_session_identity_mode(session),
+        identity_mode=mode,
     ))
