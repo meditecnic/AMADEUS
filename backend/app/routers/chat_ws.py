@@ -143,7 +143,11 @@ class SessionState:
             conversation_id=self.conversation_id,
         )
         from app.services.soul_engine import soul_engine
-        await soul_engine.restore_emotion(self.session_id, self.worldline)
+        await soul_engine.restore_emotion(
+            self.session_id,
+            self.worldline,
+            identity_mode=self.identity_mode,
+        )
 
     async def enter_draft(self):
         """Load runtime defaults without activating any persisted conversation."""
@@ -163,7 +167,11 @@ class SessionState:
         self._history = []
         self.memory_summary = ""
         from app.services.soul_engine import soul_engine
-        await soul_engine.restore_emotion(self.session_id, self.worldline)
+        await soul_engine.restore_emotion(
+            self.session_id,
+            self.worldline,
+            identity_mode=self.identity_mode,
+        )
 
     @property
     def history(self):

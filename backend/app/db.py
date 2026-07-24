@@ -25,7 +25,8 @@ DatabaseKind = Literal["history", "memory", "control"]
 EMBEDDING_MODEL = "intfloat/multilingual-e5-small"
 EMBEDDING_DIMENSION = 384
 # v4: conversations.identity_mode (okabe|self); existing rows backfilled to okabe.
-SCHEMA_VERSION = 4
+# v5: emotion_states keyed by (session_id, identity_mode); existing rows → okabe (U-M2).
+SCHEMA_VERSION = 5
 
 DEFAULT_IDENTITY_MODE = "okabe"
 IDENTITY_MODES = frozenset({"okabe", "self"})
@@ -232,14 +233,16 @@ CREATE TABLE IF NOT EXISTS memory_embeddings (
     PRIMARY KEY(memory_type, memory_id)
 );
 CREATE TABLE IF NOT EXISTS emotion_states (
-    session_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    identity_mode TEXT NOT NULL DEFAULT 'okabe' CHECK(identity_mode IN ('okabe','self')),
     trust REAL NOT NULL,
     attachment REAL NOT NULL,
     irritation REAL NOT NULL,
     anxiety REAL NOT NULL,
     jealousy REAL NOT NULL,
     volatility REAL NOT NULL,
-    updated_at_utc TEXT NOT NULL
+    updated_at_utc TEXT NOT NULL,
+    PRIMARY KEY(session_id, identity_mode)
 );
 """
 
@@ -430,6 +433,121 @@ def _migrate_v3_to_v4(connection: sqlite3.Connection, kind: DatabaseKind) -> Non
     connection.commit()
 
 
+def _prepare_memory_v5_emotion_rebuild(connection: sqlite3.Connection) -> None:
+    """Rebuild emotion_states with composite PK (session_id, identity_mode); backfill okabe.
+
+    Additive intent with SQLite PK change: rebuild in a transaction; existing rows
+    map to identity_mode=okabe (U-M2). self is never cloned from okabe (Q25).
+    """
+    exists = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='emotion_states'"
+    ).fetchone()
+    if not exists:
+        return
+    # Already on v5 shape?
+    columns = {
+        row[1]: row
+        for row in connection.execute("PRAGMA table_info(emotion_states)")
+    }
+    pk_cols = [
+        name
+        for name, row in sorted(
+            ((name, row) for name, row in columns.items() if row[5] > 0),
+            key=lambda item: item[1][5],
+        )
+    ]
+    if "identity_mode" in columns and pk_cols == ["session_id", "identity_mode"]:
+        return
+
+    connection.execute(
+        """CREATE TABLE emotion_states_v5 (
+               session_id TEXT NOT NULL,
+               identity_mode TEXT NOT NULL DEFAULT 'okabe'
+                   CHECK(identity_mode IN ('okabe','self')),
+               trust REAL NOT NULL,
+               attachment REAL NOT NULL,
+               irritation REAL NOT NULL,
+               anxiety REAL NOT NULL,
+               jealousy REAL NOT NULL,
+               volatility REAL NOT NULL,
+               updated_at_utc TEXT NOT NULL,
+               PRIMARY KEY(session_id, identity_mode)
+           )"""
+    )
+    if "identity_mode" in columns:
+        connection.execute(
+            """INSERT INTO emotion_states_v5(
+                   session_id, identity_mode, trust, attachment, irritation,
+                   anxiety, jealousy, volatility, updated_at_utc
+               )
+               SELECT session_id,
+                      CASE
+                          WHEN identity_mode IN ('okabe','self') THEN identity_mode
+                          ELSE 'okabe'
+                      END,
+                      trust, attachment, irritation, anxiety, jealousy,
+                      volatility, updated_at_utc
+                 FROM emotion_states"""
+        )
+    else:
+        connection.execute(
+            """INSERT INTO emotion_states_v5(
+                   session_id, identity_mode, trust, attachment, irritation,
+                   anxiety, jealousy, volatility, updated_at_utc
+               )
+               SELECT session_id, 'okabe', trust, attachment, irritation,
+                      anxiety, jealousy, volatility, updated_at_utc
+                 FROM emotion_states"""
+        )
+    connection.execute("DROP TABLE emotion_states")
+    connection.execute("ALTER TABLE emotion_states_v5 RENAME TO emotion_states")
+
+
+def _backfill_memory_v5(connection: sqlite3.Connection) -> None:
+    """Validate emotion_states modes; fail closed with full rollback."""
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        _prepare_memory_v5_emotion_rebuild(connection)
+        if connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='emotion_states'"
+        ).fetchone():
+            connection.execute(
+                """UPDATE emotion_states
+                       SET identity_mode='okabe'
+                     WHERE identity_mode IS NULL
+                        OR identity_mode NOT IN ('okabe','self')"""
+            )
+            bad = connection.execute(
+                """SELECT COUNT(*) FROM emotion_states
+                    WHERE identity_mode IS NULL
+                       OR identity_mode NOT IN ('okabe','self')"""
+            ).fetchone()[0]
+            if bad:
+                raise RuntimeError(
+                    f"emotion_states identity_mode backfill incomplete: invalid_rows={bad}"
+                )
+        connection.execute(
+            "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version',?)",
+            ("5",),
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
+def _migrate_v4_to_v5(connection: sqlite3.Connection, kind: DatabaseKind) -> None:
+    """emotion_states (session, identity_mode) isolation (Q25 / U-M2=okabe)."""
+    if kind == "memory":
+        _backfill_memory_v5(connection)
+        return
+    connection.execute(
+        "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version',?)",
+        ("5",),
+    )
+    connection.commit()
+
+
 async def _initialize_one(worldline: str, kind: DatabaseKind, schema: str) -> None:
     path = _resolve_path(worldline, kind)
     if path in _initialized_paths:
@@ -474,6 +592,9 @@ def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str 
         if current == 3:
             _migrate_v3_to_v4(connection, kind)
             current = 4
+        if current == 4:
+            _migrate_v4_to_v5(connection, kind)
+            current = 5
         if current not in (None, SCHEMA_VERSION):
             raise RuntimeError(f"unsupported {kind} schema version at {path}: {current}")
 

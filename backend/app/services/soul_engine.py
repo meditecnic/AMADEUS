@@ -12,7 +12,7 @@ from typing import ClassVar
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app import config
-from app.db import get_db, normalize_worldline
+from app.db import DEFAULT_IDENTITY_MODE, get_db, normalize_identity_mode, normalize_worldline
 
 logger = logging.getLogger(__name__)
 EMOTION_KEYS = ("trust", "attachment", "irritation", "anxiety", "jealousy", "volatility")
@@ -105,13 +105,28 @@ class SoulEngine:
             self.load_profiles()
         return self._profiles[normalize_worldline(worldline)]
 
-    async def restore_emotion(self, session_id: str, worldline: str, now: datetime | None = None) -> EmotionVector:
+    async def restore_emotion(
+        self,
+        session_id: str,
+        worldline: str,
+        now: datetime | None = None,
+        identity_mode: str = DEFAULT_IDENTITY_MODE,
+    ) -> EmotionVector:
+        """Load/decay emotion for (session, worldline, identity_mode).
+
+        Q25: modes are isolated; missing row → profile baseline (self starts blank).
+        Default identity_mode=okabe keeps legacy callers on the okabe lane (U-M2).
+        """
         wl = normalize_worldline(worldline)
+        mode = normalize_identity_mode(identity_mode)
         profile = self.profile(wl)
         now = now or datetime.now(timezone.utc)
         db = await get_db(wl, "memory")
         try:
-            cur = await db.execute("SELECT * FROM emotion_states WHERE session_id=?", (session_id,))
+            cur = await db.execute(
+                "SELECT * FROM emotion_states WHERE session_id=? AND identity_mode=?",
+                (session_id, mode),
+            )
             row = await cur.fetchone()
             if not row:
                 state = profile.baselines.model_copy(deep=True)
@@ -123,15 +138,25 @@ class SoulEngine:
                     logger.warning("system clock moved backwards; emotion decay skipped")
                     delta_seconds = 0
                 state = self._decay(state, profile, delta_seconds)
-            await self._persist(db, session_id, state, now)
+            await self._persist(db, session_id, mode, state, now)
             await db.commit()
             return state
         finally:
             await db.close()
 
-    async def apply_deltas(self, session_id: str, worldline: str, deltas: dict[str, float], now: datetime | None = None) -> EmotionVector:
+    async def apply_deltas(
+        self,
+        session_id: str,
+        worldline: str,
+        deltas: dict[str, float],
+        now: datetime | None = None,
+        identity_mode: str = DEFAULT_IDENTITY_MODE,
+    ) -> EmotionVector:
         now = now or datetime.now(timezone.utc)
-        state = await self.restore_emotion(session_id, worldline, now)
+        mode = normalize_identity_mode(identity_mode)
+        state = await self.restore_emotion(
+            session_id, worldline, now, identity_mode=mode
+        )
         payload = state.model_dump()
         for key, delta in deltas.items():
             if key in payload:
@@ -139,15 +164,27 @@ class SoulEngine:
         updated_state = EmotionVector.model_validate(payload)
         db = await get_db(normalize_worldline(worldline), "memory")
         try:
-            await self._persist(db, session_id, updated_state, now)
+            await self._persist(db, session_id, mode, updated_state, now)
             await db.commit()
         finally:
             await db.close()
         return updated_state
 
-    async def apply_speech_emotion(self, session_id: str, worldline: str, label: str, confidence: float) -> EmotionVector:
+    async def apply_speech_emotion(
+        self,
+        session_id: str,
+        worldline: str,
+        label: str,
+        confidence: float,
+        identity_mode: str = DEFAULT_IDENTITY_MODE,
+    ) -> EmotionVector:
         profile = self.profile(worldline)
-        return await self.apply_deltas(session_id, worldline, SpeechEmotionMapper.map(label, confidence, profile))
+        return await self.apply_deltas(
+            session_id,
+            worldline,
+            SpeechEmotionMapper.map(label, confidence, profile),
+            identity_mode=identity_mode,
+        )
 
     @staticmethod
     def _decay(state: EmotionVector, profile: CharacterProfile, delta_seconds: float) -> EmotionVector:
@@ -160,15 +197,30 @@ class SoulEngine:
         })
 
     @staticmethod
-    async def _persist(db, session_id: str, state: EmotionVector, now: datetime) -> None:
+    async def _persist(
+        db,
+        session_id: str,
+        identity_mode: str,
+        state: EmotionVector,
+        now: datetime,
+    ) -> None:
+        mode = normalize_identity_mode(identity_mode)
         values = state.model_dump()
         await db.execute(
-            """INSERT INTO emotion_states(session_id,trust,attachment,irritation,anxiety,jealousy,volatility,updated_at_utc)
-               VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(session_id) DO UPDATE SET
+            """INSERT INTO emotion_states(
+                   session_id,identity_mode,trust,attachment,irritation,anxiety,jealousy,volatility,updated_at_utc
+               )
+               VALUES(?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(session_id, identity_mode) DO UPDATE SET
                trust=excluded.trust,attachment=excluded.attachment,irritation=excluded.irritation,
                anxiety=excluded.anxiety,jealousy=excluded.jealousy,volatility=excluded.volatility,
                updated_at_utc=excluded.updated_at_utc""",
-            (session_id, *(values[key] for key in EMOTION_KEYS), now.astimezone(timezone.utc).isoformat()),
+            (
+                session_id,
+                mode,
+                *(values[key] for key in EMOTION_KEYS),
+                now.astimezone(timezone.utc).isoformat(),
+            ),
         )
 
     def readiness(self) -> dict[str, object]:

@@ -482,7 +482,7 @@ async def test_v1_history_migration_backfills_one_default_per_session(tmp_path, 
     finally:
         connection.close()
 
-    assert version == "4"
+    assert version == "5"
     assert "translation" in message_columns
     assert "identity_mode" in conversation_columns
     assert [(row["session_id"], row["is_default"], row["identity_mode"]) for row in conversations] == [
@@ -580,5 +580,108 @@ def test_v4_identity_mode_backfill_rejects_non_enum_and_rolls_back(tmp_path, mon
         assert connection.execute(
             "SELECT identity_mode FROM conversations WHERE id='c1'"
         ).fetchone()[0] == "okabe"
+    finally:
+        connection.close()
+
+
+def test_v5_emotion_states_backfill_okabe_and_rolls_back_on_failure(tmp_path, monkeypatch):
+    """P2-S5: legacy emotion_states rows → okabe; failed migration does not advance version."""
+    memory_path = tmp_path / "memory_v4.sqlite3"
+    memory_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(memory_path)
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO schema_meta(key,value) VALUES('schema_version','4');
+            CREATE TABLE emotion_states (
+                session_id TEXT PRIMARY KEY,
+                trust REAL NOT NULL,
+                attachment REAL NOT NULL,
+                irritation REAL NOT NULL,
+                anxiety REAL NOT NULL,
+                jealousy REAL NOT NULL,
+                volatility REAL NOT NULL,
+                updated_at_utc TEXT NOT NULL
+            );
+            INSERT INTO emotion_states(
+                session_id,trust,attachment,irritation,anxiety,jealousy,volatility,updated_at_utc
+            ) VALUES
+                ('legacy',0.8,0.7,0.1,0.1,0.1,0.2,'2026-07-16T00:00:00+00:00');
+            """
+        )
+        connection.commit()
+
+        db_module._backfill_memory_v5(connection)
+
+        row = connection.execute(
+            "SELECT session_id, identity_mode, trust FROM emotion_states"
+        ).fetchone()
+        assert row == ("legacy", "okabe", 0.8)
+        pk = [
+            r[1]
+            for r in connection.execute("PRAGMA table_info(emotion_states)")
+            if r[5] > 0
+        ]
+        assert pk == ["session_id", "identity_mode"]
+        assert connection.execute(
+            "SELECT value FROM schema_meta WHERE key='schema_version'"
+        ).fetchone()[0] == "5"
+
+        # No self row was cloned from okabe.
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM emotion_states WHERE identity_mode='self'"
+            ).fetchone()[0]
+            == 0
+        )
+    finally:
+        connection.close()
+
+    # Failure path: sabotage after rebuild would roll back version.
+    memory_bad = tmp_path / "memory_v4_bad.sqlite3"
+    connection = sqlite3.connect(memory_bad)
+    try:
+        connection.executescript(
+            """
+            CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO schema_meta(key,value) VALUES('schema_version','4');
+            CREATE TABLE emotion_states (
+                session_id TEXT PRIMARY KEY,
+                trust REAL NOT NULL,
+                attachment REAL NOT NULL,
+                irritation REAL NOT NULL,
+                anxiety REAL NOT NULL,
+                jealousy REAL NOT NULL,
+                volatility REAL NOT NULL,
+                updated_at_utc TEXT NOT NULL
+            );
+            INSERT INTO emotion_states(
+                session_id,trust,attachment,irritation,anxiety,jealousy,volatility,updated_at_utc
+            ) VALUES
+                ('x',0.5,0.5,0.5,0.5,0.5,0.5,'2026-07-16T00:00:00+00:00');
+            """
+        )
+        connection.commit()
+
+        def sabotaged(conn):
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                db_module._prepare_memory_v5_emotion_rebuild(conn)
+                raise RuntimeError("emotion_states identity_mode backfill incomplete: invalid_rows=1")
+            except Exception:
+                conn.rollback()
+                raise
+
+        monkeypatch.setattr(db_module, "_backfill_memory_v5", sabotaged)
+        with pytest.raises(RuntimeError, match="emotion_states identity_mode backfill incomplete"):
+            db_module._backfill_memory_v5(connection)
+        assert connection.execute(
+            "SELECT value FROM schema_meta WHERE key='schema_version'"
+        ).fetchone()[0] == "4"
+        # Rolled back: original single-column PK table still present
+        cols = {r[1] for r in connection.execute("PRAGMA table_info(emotion_states)")}
+        assert "identity_mode" not in cols
+        assert connection.execute("SELECT COUNT(*) FROM emotion_states").fetchone()[0] == 1
     finally:
         connection.close()

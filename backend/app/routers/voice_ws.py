@@ -86,7 +86,13 @@ async def websocket_voice_endpoint(websocket: WebSocket):
         except Exception as exc:
             await websocket.send_json({"type": "voice.error", "stage": "stt", "message": str(exc), "degraded": True})
             return
-        await soul_engine.apply_speech_emotion(session_id, worldline, emotion, confidence)
+        await soul_engine.apply_speech_emotion(
+            session_id,
+            worldline,
+            emotion,
+            confidence,
+            identity_mode=getattr(session, "identity_mode", "okabe"),
+        )
         await websocket.send_json({"type": "stt.final", "content": text, "emotion": emotion, "confidence": confidence})
         if text and not session.is_busy:
             session.append_message({"role": "user", "content": text})

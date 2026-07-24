@@ -101,7 +101,11 @@ async def compile_for_session(session, user_message: str) -> str:
     # stick on a self conversation (custom client bases stay untouched).
     raw_base = session.base_system_prompt or session.system_prompt
     base_identity = resolve_system_prompt_base(raw_base, mode)
-    emotion = await soul_engine.restore_emotion(session.session_id, session.worldline)
+    emotion = await soul_engine.restore_emotion(
+        session.session_id,
+        session.worldline,
+        identity_mode=mode,
+    )
     facts = await memory_service.select_core_facts(session.session_id, session.worldline, user_message)
     episodes = await memory_service.lexical_search(session.session_id, session.worldline, user_message)
     return prompt_compiler.compile(PromptInputs(

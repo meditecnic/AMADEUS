@@ -63,6 +63,63 @@ async def test_emotion_decay_uses_persisted_updated_at(isolated_store):
     assert restored.irritation == pytest.approx(baseline, abs=.08)
 
 
+@pytest.mark.asyncio
+async def test_phase2_s5_emotion_states_isolated_by_identity_mode(isolated_store):
+    """P2-S5 Q25: okabe and self emotion lanes do not merge; self starts from baseline."""
+    start = datetime(2026, 7, 16, 12, 0, tzinfo=timezone.utc)
+    baselines = soul_engine.profile("steins_gate").baselines
+
+    raised = await soul_engine.apply_deltas(
+        "s5-user",
+        "steins_gate",
+        {"trust": 0.4, "attachment": 0.35},
+        now=start,
+        identity_mode="okabe",
+    )
+    assert raised.trust > baselines.trust
+    assert raised.attachment > baselines.attachment
+
+    # Same session+worldline, self lane is independent blank baseline (not a copy).
+    self_state = await soul_engine.restore_emotion(
+        "s5-user",
+        "steins_gate",
+        now=start,
+        identity_mode="self",
+    )
+    assert self_state.trust == pytest.approx(baselines.trust, abs=1e-6)
+    assert self_state.attachment == pytest.approx(baselines.attachment, abs=1e-6)
+
+    # Raising self must not pollute okabe.
+    await soul_engine.apply_deltas(
+        "s5-user",
+        "steins_gate",
+        {"irritation": 0.45},
+        now=start,
+        identity_mode="self",
+    )
+    okabe_again = await soul_engine.restore_emotion(
+        "s5-user",
+        "steins_gate",
+        now=start,
+        identity_mode="okabe",
+    )
+    assert okabe_again.trust == pytest.approx(raised.trust, abs=1e-6)
+    assert okabe_again.irritation == pytest.approx(baselines.irritation, abs=0.05)
+
+    # Default omit mode → okabe lane (backward compatible).
+    defaulted = await soul_engine.restore_emotion("s5-user", "steins_gate", now=start)
+    assert defaulted.trust == pytest.approx(raised.trust, abs=1e-6)
+
+    # Same mode shares continuity across "new conversations" (session-scoped key).
+    shared = await soul_engine.restore_emotion(
+        "s5-user",
+        "steins_gate",
+        now=start,
+        identity_mode="okabe",
+    )
+    assert shared.trust == pytest.approx(raised.trust, abs=1e-6)
+
+
 def test_speech_emotion_scale_and_caps_are_worldline_specific():
     sg = SpeechEmotionMapper.map("ANGRY", 1.0, soul_engine.profile("steins_gate"))
     beta = SpeechEmotionMapper.map("ANGRY", 1.0, soul_engine.profile("beta"))
