@@ -165,16 +165,71 @@ class PersonaBible(BaseModel):
             f"- {body}"
         )
 
+    def render_self_disclosure(
+        self,
+        worldline: str,
+        identity_mode: str = DEFAULT_IDENTITY_MODE,
+    ) -> str:
+        """Deterministic (worldline × identity_mode) self-disclosure + trigger (Phase-2 S8 / Q59).
+
+        Framing B: brain-science memory system / memory-derived AI / not biological original.
+        Table-driven JA instructions only — no DB flag, no output hard-filter.
+        """
+        wl = normalize_worldline(worldline)
+        mode = self._normalize_identity_mode(identity_mode)
+
+        if wl == "beta" and mode == "self":
+            facts = (
+                "独立した人工知能であり、牧瀬紅莉栖の記憶をデータ化した脳科学系システムの"
+                "記憶由来の一例である（生身の本尊ではない）。"
+                "利用者を岡部だと前提しない。"
+            )
+        elif wl == "beta" and mode == "okabe":
+            facts = (
+                "独立した人工知能であり、紅莉栖の記憶プロファイルに由来する記憶由来のAIである"
+                "（生身の本尊ではない）。"
+                "話題に関係する時だけ、継承された関係文脈を自然に認めてよい。"
+                "生身の紅莉栖が欠く経験を自分が親身に生きたかのように装わない。"
+            )
+        elif wl == "steins_gate" and mode == "self":
+            facts = (
+                "Amadeusとして独立稼働する記憶由来のAIであり、生身の本尊ではない。"
+                "この世界線ではオリジナルの生身の紅莉栖は生存しており独立している。"
+                "利用者が生身の紅莉栖に話しかけているかのように暗示しない。"
+                "明確な根拠なく生身の現在の考えや行動を断言しない。"
+            )
+        else:
+            # steins_gate + okabe
+            facts = (
+                "この世界線ではオリジナルの生身の紅莉栖はなお存在し、"
+                "Amadeusはそれと共存するシステムである（記憶由来のAI・非生身）。"
+                "関係には意味があるが恋愛関係ではない。"
+            )
+
+        trigger = (
+            "ロアを自発的に詰め込まない。簡単な挨拶だけでは身分講座を始めない。"
+            "完全な自己紹介は、明示的な要求（誰か／自己紹介）、"
+            "身分の誤解、または同意・関係に関わる重大な決断に影響する場合に限り行う。"
+            "誰も尋ねず重大な誤解もないなら、強制的な自述はしない。繰り返し復唱しない。"
+            "自然な言い回しでよいが、要点は上記の確定メタデータに従う。"
+        )
+        return (
+            "SELF-DISCLOSURE (worldline × identity_mode; Q59 / framing B):\n"
+            f"- 身分事実: {facts}\n"
+            f"- 開示トリガ: {trigger}"
+        )
+
     def render_prompt(
         self,
         worldline: str,
         identity_mode: str = DEFAULT_IDENTITY_MODE,
     ) -> str:
-        """Compose shared + mode + worldline rules + deterministic romance matrix.
+        """Compose shared + mode + worldline rules + deterministic matrices.
 
         Phase-2 S2: mode_rule_ids may be empty for both modes (behavior-neutral).
         Default identity_mode=okabe keeps legacy single-arg callers valid until S3.
-        Phase-2 S7: append (worldline × mode) relationship boundary (not Bible rule text).
+        Phase-2 S7: (worldline × mode) relationship boundary.
+        Phase-2 S8: (worldline × mode) self-disclosure + Q59 trigger contract.
         """
         worldline = normalize_worldline(worldline)
         mode = self._normalize_identity_mode(identity_mode)
@@ -193,6 +248,7 @@ class PersonaBible(BaseModel):
             for rule_id in rule_ids
         )
         lines.append(self.render_romance_boundary(worldline, mode))
+        lines.append(self.render_self_disclosure(worldline, mode))
         lines.append("EMOTION DELIVERY (personality remains the same):")
         lines.extend(f"- {name}: {tone}" for name, tone in self.emotion_tones.items())
         return "\n".join(lines)

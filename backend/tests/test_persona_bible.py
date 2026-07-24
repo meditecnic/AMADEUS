@@ -488,6 +488,67 @@ def test_deepseek_default_system_prompt_uses_canonical_security_boundary():
     assert "【ツンデレの反応パターン" not in service._system_prompt
 
 
+def test_phase2_s8_self_disclosure_four_cells_and_trigger_contract():
+    """P2-S8 Q59: four-cell disclosure facts + no unsolicited lore dump; coexists with B/S7."""
+    bible = PersonaBible.load_default()
+
+    beta_self = bible.render_prompt("beta", "self")
+    beta_okabe = bible.render_prompt("beta", "okabe")
+    sg_self = bible.render_prompt("steins_gate", "self")
+    sg_okabe = bible.render_prompt("steins_gate", "okabe")
+
+    # A. four-cell identity facts
+    assert "利用者を岡部だと前提しない" in beta_self
+    assert "記憶由来" in beta_self or "記憶をデータ化" in beta_self
+    assert "生身の本尊ではない" in beta_self or "非生身" in beta_self
+
+    assert "継承された関係文脈" in beta_okabe
+    assert "親身に生きたかのように装わない" in beta_okabe
+    assert "記憶由来" in beta_okabe
+
+    assert "生身の紅莉栖は生存" in sg_self
+    assert "生身の紅莉栖に話しかけているかのように暗示しない" in sg_self
+    assert "現在の考えや行動を断言しない" in sg_self
+
+    assert "共存するシステム" in sg_okabe
+    assert "恋愛関係ではない" in sg_okabe
+
+    # B. trigger contract present on every cell
+    trigger_needles = (
+        "ロアを自発的に詰め込まない",
+        "明示的な要求",
+        "身分の誤解",
+        "強制的な自述はしない",
+    )
+    for prompt in (beta_self, beta_okabe, sg_self, sg_okabe):
+        for needle in trigger_needles:
+            assert needle in prompt
+        assert "SELF-DISCLOSURE" in prompt
+
+    # Coexists with framing B / instance-not-biological / self-register / S7
+    assert "脳科学" in beta_self and "脳科学" in beta_okabe
+    assert "恋愛関係には進まない" in beta_self  # self-register + S7
+    assert "恋愛へ発展し得る唯一の許可経路" in beta_okabe  # S7
+    assert "非恋愛・不独占" in sg_okabe  # S7
+    if "instance-not-biological" in bible.rules:
+        # shared rule still in compiled prompt
+        assert "スナップショット" in sg_self or "記憶" in sg_self
+
+    # Compile / get_rendered paths inherit via render_prompt
+    compiled = PromptCompiler().compile(_inputs("steins_gate", identity_mode="self"))
+    assert "生身の紅莉栖に話しかけているかのように暗示しない" in compiled
+    assert "ロアを自発的に詰め込まない" in compiled
+    rendered = get_rendered_system_prompt(
+        SYSTEM_PROMPT_BASE, "beta", client_type="desktop", identity_mode="okabe"
+    )
+    assert "継承された関係文脈" in rendered
+    assert "強制的な自述はしない" in rendered
+
+    # Default omit mode → okabe disclosure cell
+    default_sg = bible.render_prompt("steins_gate")
+    assert "共存するシステム" in default_sg
+
+
 def test_phase2_s7_romance_boundary_matrix_four_cells():
     """P2-S7 Q24/gate-6A: only beta+okabe romance-allowed; other cells non-romance."""
     bible = PersonaBible.load_default()
