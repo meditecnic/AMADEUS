@@ -85,6 +85,12 @@ class DeepSeekService(LLMInterface):
             # Full Bible already carries mode rules from compile; output contract only.
             anchor = persona_bible.render_output_anchor()
         else:
+            # S3c: product default base (_system_prompt / SYSTEM_PROMPT_BASE) is okabe
+            # text; re-resolve by mode so self does not get okabe frame + self anchor.
+            # Custom bases are left unchanged (resolve_system_prompt_base contract).
+            from app.security.prompt import resolve_system_prompt_base
+
+            prompt = resolve_system_prompt_base(prompt, identity_mode)
             anchor = self._load_anchor_clause(identity_mode)
         return prompt.strip() + "\n" + anchor.strip()
 
