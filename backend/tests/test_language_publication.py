@@ -49,6 +49,76 @@ def test_publication_gate_rejects_mixed_chinese_with_only_one_kana():
     assert _is_publishable_japanese("中国語ではなく、日本語で答えるわ")
 
 
+def test_publication_gate_rejects_short_pure_chinese_greetings_keeps_ja_short():
+    """Live miss: 你好。 was published as JP then mid-collapse recovery fired."""
+    from app.domain.segments import is_plausible_japanese_tts_source
+
+    for bad in ("你好", "你好。", "谢谢", "谢谢。", "再见", "哈喽。"):
+        assert not _is_publishable_japanese(bad), bad
+        assert not is_plausible_japanese_tts_source(bad), bad
+
+    for good in ("了解", "了解。", "大丈夫", "大丈夫。", "うん", "うん。", "ね。"):
+        assert _is_publishable_japanese(good), good
+        assert is_plausible_japanese_tts_source(good), good
+
+
+@pytest.mark.asyncio
+async def test_chinese_user_greeting_gets_first_pass_japanese_hard_requirement():
+    """Chinese 你好 must inject JA hard requirement on attempt 0 (not only after fail)."""
+    from app.routers.chat_ws import (
+        _ANSWER_LANGUAGE_HARD_REQUIREMENT,
+        _CHINESE_INPUT_FIRST_PASS_JA,
+    )
+
+    provider = _SequencedStreamProvider(
+        ["[EMO:neutral] こんにちは。何か用？"]
+    )
+    session = SessionState("zh-greeting-first-pass")
+    session.api_key = "test-key"
+    session.system_prompt = "あなたはAmadeusだ。"
+    published: list[str] = []
+
+    with patch("app.routers.chat_ws.deepseek_service", provider):
+        text, _, _, _ = await get_clean_text_stream(
+            active_history=[{"role": "user", "content": "你好"}],
+            memory_summary="",
+            session=session,
+            on_text_delta=lambda delta, _emotion: published.append(delta),
+        )
+
+    assert provider.call_count == 1
+    first_prompt = provider.prompts[0]
+    assert "ANSWER LANGUAGE — HARD REQUIREMENT" in first_prompt
+    assert "必ず自然な日本語のみ" in first_prompt
+    assert "短い挨拶" in first_prompt or "你好" in first_prompt
+    assert _ANSWER_LANGUAGE_HARD_REQUIREMENT.split("\n")[0] in first_prompt
+    assert "こんにちは" in text
+    assert "生成できなかった" not in text
+    assert "崩れた" not in text
+    assert "こんにちは" in "".join(published)
+
+
+@pytest.mark.asyncio
+async def test_japanese_user_message_skips_chinese_input_first_pass_hint():
+    provider = _SequencedStreamProvider(["[EMO:neutral] ああ、岡部。"])
+    session = SessionState("ja-user-no-zh-hint")
+    session.api_key = "test-key"
+    session.system_prompt = "あなたはAmadeusだ。"
+
+    with patch("app.routers.chat_ws.deepseek_service", provider):
+        await get_clean_text_stream(
+            active_history=[{"role": "user", "content": "調子はどうだ？"}],
+            memory_summary="",
+            session=session,
+            on_text_delta=None,
+        )
+
+    first_prompt = provider.prompts[0]
+    assert "短い挨拶" not in first_prompt
+    # Pure JA user turns should not need the Chinese-input first-pass add-on.
+    assert "ユーザー入力が中国語でも" not in first_prompt
+
+
 @pytest.mark.asyncio
 async def test_latin_product_name_sentence_does_not_kill_following_japanese():
     """SEARCH-PUBLISH-SOFT-01: 「Kimi K3。」 must soft-skip, not mid-collapse."""

@@ -31,6 +31,77 @@ async def isolated_store(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_phase2_p3_turn_resyncs_stale_identity_mode_from_conversation(isolated_store):
+    """P3: conversation_id set with stale session.identity_mode must re-read DB (Q21)."""
+    from unittest.mock import AsyncMock, patch
+
+    from app.db import normalize_identity_mode
+    from app.services.prompt_compiler import compile_for_session
+    from app.services.soul_engine import soul_engine
+
+    okabe_conv = await conversation_service.create(
+        "p3-user", "steins_gate", title="Okabe", identity_mode="okabe"
+    )
+    self_conv = await conversation_service.create(
+        "p3-user", "steins_gate", title="Self", identity_mode="self"
+    )
+    await conversation_service.select("p3-user", "steins_gate", str(okabe_conv["id"]))
+
+    session = SessionState("p3-user")
+    session.worldline = "steins_gate"
+    session.base_system_prompt = "SECURITY BOUNDARY"
+    session.conversation_id = str(okabe_conv["id"])
+    session.conversation_mode = "history"
+    # Stale: leftover self after a previous conversation (the P3 bug).
+    session.identity_mode = "self"
+    session.history = []
+    session.memory_summary = ""
+
+    owned = await conversation_service.require_owned(
+        str(okabe_conv["id"]), "p3-user", "steins_gate"
+    )
+    session.identity_mode = normalize_identity_mode(owned.get("identity_mode"))
+    assert session.identity_mode == "okabe"
+
+    emotion = soul_engine.profile("steins_gate").baselines
+    with patch(
+        "app.services.soul_engine.soul_engine.restore_emotion",
+        new=AsyncMock(return_value=emotion),
+    ), patch(
+        "app.services.memory.memory_service.select_core_facts",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "app.services.memory.memory_service.lexical_search",
+        new=AsyncMock(return_value=[]),
+    ):
+        prompt = await compile_for_session(session, "こんにちは")
+
+    assert "相手を岡部として扱い" in prompt
+    assert "相手は岡部ではなく" not in prompt
+
+    # Switch authority: self conversation row drives self rules.
+    owned_self = await conversation_service.require_owned(
+        str(self_conv["id"]), "p3-user", "steins_gate"
+    )
+    session.conversation_id = str(self_conv["id"])
+    session.identity_mode = normalize_identity_mode(owned_self.get("identity_mode"))
+    assert session.identity_mode == "self"
+    with patch(
+        "app.services.soul_engine.soul_engine.restore_emotion",
+        new=AsyncMock(return_value=emotion),
+    ), patch(
+        "app.services.memory.memory_service.select_core_facts",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "app.services.memory.memory_service.lexical_search",
+        new=AsyncMock(return_value=[]),
+    ):
+        self_prompt = await compile_for_session(session, "こんにちは")
+    assert "相手は岡部ではなく" in self_prompt
+    assert "相手を岡部として扱い" not in self_prompt
+
+
+@pytest.mark.asyncio
 async def test_phase2_s3_session_identity_mode_feeds_compile(isolated_store):
     """P2-S3: conversation.identity_mode is loaded onto session and compile uses it."""
     from unittest.mock import AsyncMock, patch

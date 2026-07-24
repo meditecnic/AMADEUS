@@ -76,7 +76,11 @@ def _is_publishable_japanese(text: str) -> bool:
             return False
         return is_plausible_japanese_tts_source(text)
     if language == "zh":
-        return len(stripped) <= 4
+        # Short pure Chinese (你好 / 谢谢) is NOT Japanese. Only allowlisted
+        # kanji-only Japanese interjections (了解 / 大丈夫) may pass.
+        from app.domain.segments import is_allowlisted_short_ja_kanji
+
+        return is_allowlisted_short_ja_kanji(stripped)
     return False
 
 
@@ -101,6 +105,8 @@ class SessionState:
         self.worldline = "steins_gate"
         # Q20-A / Q21: conversation-scoped; never inferred. Default okabe until load.
         self.identity_mode = "okabe"
+        # Preference for draft materialize / new conversation (from client settings).
+        self.default_identity_mode = "okabe"
         self.client_type = "mobile"
         self.protocol_version = 1
         self.conversation_mode = "history"
@@ -152,7 +158,7 @@ class SessionState:
     async def enter_draft(self):
         """Load runtime defaults without activating any persisted conversation."""
         await init_db()
-        from app.db import DEFAULT_IDENTITY_MODE
+        from app.db import normalize_identity_mode
         from app.services.conversations import conversation_service
 
         selected = await conversation_service.get_selected(self.session_id, self.worldline)
@@ -161,9 +167,10 @@ class SessionState:
         self.api_key = credential_store.get(self.provider_id)
         self.conversation_id = None
         self.conversation_mode = "draft"
-        # Draft has no conversation yet; first send materializes with default okabe
-        # unless create path passes an explicit mode (S9 UI). Never infer.
-        self.identity_mode = DEFAULT_IDENTITY_MODE
+        # Draft materialize will stamp this mode (client settings default; never infer).
+        self.identity_mode = normalize_identity_mode(
+            getattr(self, "default_identity_mode", None)
+        )
         self._history = []
         self.memory_summary = ""
         from app.services.soul_engine import soul_engine
@@ -469,7 +476,21 @@ async def get_clean_text_stream(
                     continue
                 await _accept_publishable_segment(segment.text, segment.emotion)
         
-        eff_system_prompt = session.system_prompt
+        eff_system_prompt = session.system_prompt or ""
+        # Chinese/mixed user turns: inject Japanese body discipline on attempt 0
+        # (search path may already carry ANSWER LANGUAGE hard requirement).
+        if (
+            attempt == 0
+            and _latest_user_message_is_chinese_or_mixed(active_history)
+            and "ANSWER LANGUAGE — HARD REQUIREMENT" not in eff_system_prompt
+            and "表示本文は必ず自然な日本語のみ" not in eff_system_prompt
+        ):
+            eff_system_prompt = (
+                eff_system_prompt
+                + "\n"
+                + _ANSWER_LANGUAGE_HARD_REQUIREMENT
+                + _CHINESE_INPUT_FIRST_PASS_JA
+            )
         if attempt > 0:
             if rejection_reason == "language":
                 if _history_has_external_evidence(active_history):
@@ -482,6 +503,12 @@ async def get_clean_text_stream(
                     "絶対に紅莉栖としてのみ振る舞い、二度とそのような語を使わないこと。】"
                 )
             eff_system_prompt = (session.system_prompt or "") + retry_instruction
+            # Keep Chinese-input discipline on retries as well.
+            if (
+                _latest_user_message_is_chinese_or_mixed(active_history)
+                and "表示本文は必ず自然な日本語のみ" not in eff_system_prompt
+            ):
+                eff_system_prompt = eff_system_prompt + _CHINESE_INPUT_FIRST_PASS_JA
             
         from datetime import datetime
         time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -495,7 +522,10 @@ async def get_clean_text_stream(
             else session.temperature
         )
         # Language retries after search/tools must not wander into Chinese/English.
-        if attempt > 0 and rejection_reason == "language":
+        # Also clamp when Chinese input already forces first-pass JP discipline.
+        if (attempt > 0 and rejection_reason == "language") or (
+            attempt == 0 and _latest_user_message_is_chinese_or_mixed(active_history)
+        ):
             try:
                 base_temperature = min(float(base_temperature), 0.0)
             except (TypeError, ValueError):
@@ -729,6 +759,14 @@ _LANGUAGE_RETRY_DEFAULT = (
     "中国語は翻訳層が別途生成するので本文に書かないこと。】"
 )
 
+# First-pass discipline when the latest user message is Chinese/mixed (你好, etc.).
+# Without this, models mirror Chinese and every segment hard-rejects → full recovery.
+_CHINESE_INPUT_FIRST_PASS_JA = (
+    "\n【ユーザー入力が中国語でも、表示本文は必ず自然な日本語のみ。"
+    "中国語・英語の本文で返事しない。短い挨拶（例：你好）にも日本語で返す。"
+    "中国語字幕は翻訳層が別途生成する。】"
+)
+
 
 def _history_has_external_evidence(active_history: list) -> bool:
     """True when search/tool evidence was injected into this turn's history."""
@@ -742,6 +780,21 @@ def _history_has_external_evidence(active_history: list) -> bool:
             or "ANSWER LANGUAGE — HARD REQUIREMENT" in content
         ):
             return True
+    return False
+
+
+def _latest_user_message_is_chinese_or_mixed(active_history: list) -> bool:
+    """True when the latest user turn is Chinese or mixed (needs first-pass JA hard requirement)."""
+    for message in reversed(active_history or []):
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") != "user":
+            continue
+        content = str(message.get("content") or "").strip()
+        if not content:
+            return False
+        language = classify_source_language(content)
+        return language in {"zh", "mixed"}
     return False
 
 
@@ -862,16 +915,21 @@ async def processor_loop(
     turn_id = session.active_turn_id or str(uuid4())
     session.active_turn_id = turn_id
 
-    if session.conversation_id is None:
-        from app.db import normalize_identity_mode
-        from app.services.conversations import conversation_service
+    from app.db import normalize_identity_mode
+    from app.services.conversations import ConversationNotFound, conversation_service
 
+    if session.conversation_id is None:
+        draft_mode = normalize_identity_mode(
+            getattr(session, "default_identity_mode", None)
+            or getattr(session, "identity_mode", None)
+        )
         if session.conversation_mode == "draft":
             selected = await conversation_service.create_and_select(
                 session.session_id,
                 session.worldline,
                 provider_id=session.provider_id,
                 model_id=session.model,
+                identity_mode=draft_mode,
             )
         else:
             selected = await conversation_service.get_selected(
@@ -882,6 +940,20 @@ async def processor_loop(
         session.conversation_mode = "history"
         # Turn-start snapshot from conversation record (Q21 immutable); never infer.
         session.identity_mode = normalize_identity_mode(selected.get("identity_mode"))
+    else:
+        # Always re-sync mode from durable conversation row so switch/rollback
+        # cannot leave a stale self/okabe label on the wrong session (P3).
+        try:
+            owned = await conversation_service.require_owned(
+                str(session.conversation_id),
+                session.session_id,
+                session.worldline,
+            )
+            session.identity_mode = normalize_identity_mode(owned.get("identity_mode"))
+        except ConversationNotFound:
+            session.identity_mode = normalize_identity_mode(
+                getattr(session, "identity_mode", None)
+            )
     conversation_id = session.conversation_id
     turn_worldline = session.worldline
     turn_api_key = session.api_key
@@ -1640,6 +1712,15 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                             },
                         ))
                         continue
+                # Client settings default for draft materialize (never infer from nicknames).
+                raw_default_mode = data.get("default_identity_mode", data.get("identity_mode"))
+                if raw_default_mode is not None:
+                    from app.db import normalize_identity_mode as _norm_mode
+                    try:
+                        session.default_identity_mode = _norm_mode(str(raw_default_mode))
+                    except ValueError:
+                        session.default_identity_mode = "okabe"
+
                 if requested_mode == "draft":
                     await session.enter_draft()
                     requested_provider_id = str(
@@ -1926,6 +2007,15 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 
                 from app.security.prompt import get_rendered_system_prompt, SYSTEM_PROMPT_BASE
                 needs_reset = False
+                raw_default_mode = data.get("default_identity_mode", data.get("identity_mode"))
+                if raw_default_mode is not None:
+                    from app.db import normalize_identity_mode as _norm_mode
+                    try:
+                        session.default_identity_mode = _norm_mode(str(raw_default_mode))
+                    except ValueError:
+                        session.default_identity_mode = "okabe"
+                    if session.conversation_id is None:
+                        session.identity_mode = session.default_identity_mode
                 if "system_prompt" in data:
                     base_prompt = data["system_prompt"]
                     session.base_system_prompt = base_prompt
