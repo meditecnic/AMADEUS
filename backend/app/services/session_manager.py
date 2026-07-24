@@ -97,6 +97,7 @@ class SessionCoordinator:
             "provider_id": getattr(session, "provider_id", "deepseek"),
             "model": getattr(session, "model", ""),
             "api_key": getattr(session, "api_key", ""),
+            "identity_mode": getattr(session, "identity_mode", "okabe"),
             "last_assistant_emotion": getattr(session, "last_assistant_emotion", "neutral"),
             "consecutive_no_emo_tags": getattr(session, "consecutive_no_emo_tags", 0),
         }

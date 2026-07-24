@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from app.db import DEFAULT_IDENTITY_MODE, normalize_identity_mode
 from app.services.memory import RetrievedMemory
 from app.services.persona_bible import persona_bible
 from app.services.soul_engine import EmotionVector, soul_engine
@@ -21,6 +22,8 @@ class PromptInputs:
     working_summary: str
     recent_history: list[dict[str, str]]
     current_user_message: str
+    # Q20-A / Q21: from conversation record only; default okabe for legacy callers.
+    identity_mode: str = DEFAULT_IDENTITY_MODE
 
 
 class PromptCompiler:
@@ -41,10 +44,15 @@ class PromptCompiler:
 
     def compile(self, inputs: PromptInputs) -> str:
         profile = soul_engine.profile(inputs.worldline)
+        mode = normalize_identity_mode(inputs.identity_mode)
         sections = [
             self._fit("IDENTITY AND SECURITY\n" + inputs.base_identity, self.BUDGETS["identity"], keep_tail=False),
-            self._fit(persona_bible.render_prompt(profile.worldline), self.BUDGETS["persona"], keep_tail=False),
-            self._fit(f"CURRENT STATE\nworldline={profile.worldline}; memory_anchor_year={persona_bible.memory_anchor.year}; memory_anchor_age={persona_bible.memory_anchor.age}; emotion={inputs.emotion.model_dump_json()}", self.BUDGETS["state"]),
+            self._fit(
+                persona_bible.render_prompt(profile.worldline, identity_mode=mode),
+                self.BUDGETS["persona"],
+                keep_tail=False,
+            ),
+            self._fit(f"CURRENT STATE\nworldline={profile.worldline}; identity_mode={mode}; memory_anchor_year={persona_bible.memory_anchor.year}; memory_anchor_age={persona_bible.memory_anchor.age}; emotion={inputs.emotion.model_dump_json()}", self.BUDGETS["state"]),
             self._fit("CORE FACTS\n" + "\n".join(f"- {item.content}" for item in inputs.core_facts), self.BUDGETS["core"]),
             self._fit("EPISODIC MEMORY\n" + "\n".join(f"- {item.content}" for item in inputs.episodic), self.BUDGETS["episodic"]),
             self._fit("WEB EVIDENCE\n" + "\n".join(inputs.web_evidence), self.BUDGETS["web"]),
@@ -77,6 +85,11 @@ class PromptCompiler:
 prompt_compiler = PromptCompiler()
 
 
+def _session_identity_mode(session) -> str:
+    """Read conversation-scoped mode only; never infer from nickname/session_id."""
+    return normalize_identity_mode(getattr(session, "identity_mode", None))
+
+
 async def compile_for_session(session, user_message: str) -> str:
     """Build a turn prompt without loading the heavyweight embedding model."""
     from app.services.memory import memory_service
@@ -94,4 +107,5 @@ async def compile_for_session(session, user_message: str) -> str:
         working_summary=session.memory_summary,
         recent_history=session.history,
         current_user_message=user_message,
+        identity_mode=_session_identity_mode(session),
     ))

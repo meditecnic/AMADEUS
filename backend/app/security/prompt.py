@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from app.db import DEFAULT_IDENTITY_MODE, normalize_identity_mode
 from app.services.persona_bible import persona_bible
 
 
@@ -51,8 +52,13 @@ def get_rendered_system_prompt(
     base_prompt: str,
     worldline: str,
     client_type: str = "mobile",
+    identity_mode: str = DEFAULT_IDENTITY_MODE,
 ) -> str:
-    sections = [base_prompt.strip(), persona_bible.render_prompt(worldline)]
+    mode = normalize_identity_mode(identity_mode)
+    sections = [
+        base_prompt.strip(),
+        persona_bible.render_prompt(worldline, identity_mode=mode),
+    ]
     if client_type == "desktop":
         sections.append(DESKTOP_PROMPT_ADDON.strip())
     return "\n\n".join(section for section in sections if section)

@@ -31,6 +31,87 @@ async def isolated_store(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_phase2_s3_session_identity_mode_feeds_compile(isolated_store):
+    """P2-S3: conversation.identity_mode is loaded onto session and compile uses it."""
+    from unittest.mock import AsyncMock, patch
+
+    from app.services.prompt_compiler import compile_for_session
+    from app.services.soul_engine import soul_engine
+
+    self_conv = await conversation_service.create(
+        "s3-self", "steins_gate", title="Self", identity_mode="self"
+    )
+    await conversation_service.select("s3-self", "steins_gate", str(self_conv["id"]))
+    session = SessionState("s3-self")
+    session.worldline = "steins_gate"
+    session.base_system_prompt = "SECURITY BOUNDARY"
+    await session.load_from_db()
+    assert session.identity_mode == "self"
+
+    emotion = soul_engine.profile("steins_gate").baselines
+    with patch(
+        "app.services.soul_engine.soul_engine.restore_emotion",
+        new=AsyncMock(return_value=emotion),
+    ), patch(
+        "app.services.memory.memory_service.select_core_facts",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "app.services.memory.memory_service.lexical_search",
+        new=AsyncMock(return_value=[]),
+    ):
+        self_prompt = await compile_for_session(session, "こんにちは")
+
+    assert "恋愛関係には進まない" in self_prompt
+    assert "馴染みある反発はしない" in self_prompt
+    assert "相手を岡部として扱い" not in self_prompt
+
+    okabe_conv = await conversation_service.create(
+        "s3-okabe", "steins_gate", title="Okabe", identity_mode="okabe"
+    )
+    await conversation_service.select("s3-okabe", "steins_gate", str(okabe_conv["id"]))
+    okabe_session = SessionState("s3-okabe")
+    okabe_session.worldline = "steins_gate"
+    okabe_session.base_system_prompt = "SECURITY BOUNDARY"
+    await okabe_session.load_from_db()
+    assert okabe_session.identity_mode == "okabe"
+
+    with patch(
+        "app.services.soul_engine.soul_engine.restore_emotion",
+        new=AsyncMock(return_value=emotion),
+    ), patch(
+        "app.services.memory.memory_service.select_core_facts",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "app.services.memory.memory_service.lexical_search",
+        new=AsyncMock(return_value=[]),
+    ):
+        okabe_prompt = await compile_for_session(okabe_session, "こんにちは")
+
+    assert "相手を岡部として扱い" in okabe_prompt
+    assert "恋愛関係には進まない" not in okabe_prompt
+
+    # Legacy / missing field → okabe (never infer from nicknames etc.)
+    bare = SessionState("s3-legacy")
+    bare.worldline = "steins_gate"
+    bare.base_system_prompt = "SECURITY BOUNDARY"
+    bare.history = []
+    bare.memory_summary = ""
+    assert bare.identity_mode == "okabe"
+    with patch(
+        "app.services.soul_engine.soul_engine.restore_emotion",
+        new=AsyncMock(return_value=emotion),
+    ), patch(
+        "app.services.memory.memory_service.select_core_facts",
+        new=AsyncMock(return_value=[]),
+    ), patch(
+        "app.services.memory.memory_service.lexical_search",
+        new=AsyncMock(return_value=[]),
+    ):
+        legacy_prompt = await compile_for_session(bare, "hi")
+    assert "相手を岡部として扱い" in legacy_prompt
+
+
+@pytest.mark.asyncio
 async def test_default_conversation_preserves_legacy_session_api(isolated_store):
     default = await conversation_service.get_or_create_default("okabe", "steins_gate")
 

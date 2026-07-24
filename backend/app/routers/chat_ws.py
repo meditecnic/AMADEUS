@@ -99,6 +99,8 @@ class SessionState:
         self.sovits_url = None
         self.enable_tts = True
         self.worldline = "steins_gate"
+        # Q20-A / Q21: conversation-scoped; never inferred. Default okabe until load.
+        self.identity_mode = "okabe"
         self.client_type = "mobile"
         self.protocol_version = 1
         self.conversation_mode = "history"
@@ -119,6 +121,7 @@ class SessionState:
 
     async def load_from_db(self):
         await init_db()
+        from app.db import normalize_identity_mode
         from app.services.conversations import conversation_service
 
         selected = await conversation_service.get_selected(self.session_id, self.worldline)
@@ -126,6 +129,7 @@ class SessionState:
         self.conversation_mode = "history"
         self.provider_id = str(selected.get("provider_id") or "deepseek")
         self.model = str(selected.get("model_id") or self.model)
+        self.identity_mode = normalize_identity_mode(selected.get("identity_mode"))
         self.api_key = credential_store.get(self.provider_id)
         self._history = await models.get_recent_messages(
             self.session_id,
@@ -144,6 +148,7 @@ class SessionState:
     async def enter_draft(self):
         """Load runtime defaults without activating any persisted conversation."""
         await init_db()
+        from app.db import DEFAULT_IDENTITY_MODE
         from app.services.conversations import conversation_service
 
         selected = await conversation_service.get_selected(self.session_id, self.worldline)
@@ -152,6 +157,9 @@ class SessionState:
         self.api_key = credential_store.get(self.provider_id)
         self.conversation_id = None
         self.conversation_mode = "draft"
+        # Draft has no conversation yet; first send materializes with default okabe
+        # unless create path passes an explicit mode (S9 UI). Never infer.
+        self.identity_mode = DEFAULT_IDENTITY_MODE
         self._history = []
         self.memory_summary = ""
         from app.services.soul_engine import soul_engine
@@ -847,6 +855,7 @@ async def processor_loop(
     session.active_turn_id = turn_id
 
     if session.conversation_id is None:
+        from app.db import normalize_identity_mode
         from app.services.conversations import conversation_service
 
         if session.conversation_mode == "draft":
@@ -863,6 +872,8 @@ async def processor_loop(
             )
         session.conversation_id = str(selected["id"])
         session.conversation_mode = "history"
+        # Turn-start snapshot from conversation record (Q21 immutable); never infer.
+        session.identity_mode = normalize_identity_mode(selected.get("identity_mode"))
     conversation_id = session.conversation_id
     turn_worldline = session.worldline
     turn_api_key = session.api_key
@@ -1676,7 +1687,12 @@ async def websocket_chat_endpoint(websocket: WebSocket):
 
                 base_prompt = data.get("system_prompt") or SYSTEM_PROMPT_BASE
                 session.base_system_prompt = base_prompt
-                session.system_prompt = get_rendered_system_prompt(base_prompt, session.worldline, session.client_type)
+                session.system_prompt = get_rendered_system_prompt(
+                    base_prompt,
+                    session.worldline,
+                    session.client_type,
+                    identity_mode=session.identity_mode,
+                )
 
                 if "temperature" in data:
                     try:
@@ -1772,6 +1788,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                     "provider_id": session.provider_id,
                     "model": session.model,
                     "api_key": session.api_key,
+                    "identity_mode": session.identity_mode,
                 }
                 previous_selected = None
                 try:
@@ -1903,7 +1920,12 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 if "system_prompt" in data:
                     base_prompt = data["system_prompt"]
                     session.base_system_prompt = base_prompt
-                    session.system_prompt = get_rendered_system_prompt(base_prompt, session.worldline, session.client_type)
+                    session.system_prompt = get_rendered_system_prompt(
+                        base_prompt,
+                        session.worldline,
+                        session.client_type,
+                        identity_mode=session.identity_mode,
+                    )
                     needs_reset = True
                 if "worldline" in data:
                     new_wl = data["worldline"]
@@ -1912,7 +1934,12 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                         await session_coordinator.release_lease(session.session_id, old_wl, websocket)
                         await session_coordinator.switch(session, new_wl)
                         base_prompt = session.base_system_prompt or SYSTEM_PROMPT_BASE
-                        session.system_prompt = get_rendered_system_prompt(base_prompt, new_wl, session.client_type)
+                        session.system_prompt = get_rendered_system_prompt(
+                            base_prompt,
+                            new_wl,
+                            session.client_type,
+                            identity_mode=session.identity_mode,
+                        )
                         await session_coordinator.acquire_lease(session.session_id, new_wl, websocket)
                         needs_reset = False
                 

@@ -19,8 +19,12 @@ from app.security.prompt import (
 )
 
 
-def _inputs(worldline: str, message: str = "今天过得怎么样？") -> PromptInputs:
-    return PromptInputs(
+def _inputs(
+    worldline: str,
+    message: str = "今天过得怎么样？",
+    identity_mode: str | None = None,
+) -> PromptInputs:
+    kwargs = dict(
         worldline=worldline,
         base_identity="SECURITY BOUNDARY",
         emotion=soul_engine.profile(worldline).baselines,
@@ -31,6 +35,9 @@ def _inputs(worldline: str, message: str = "今天过得怎么样？") -> Prompt
         recent_history=[],
         current_user_message=message,
     )
+    if identity_mode is not None:
+        kwargs["identity_mode"] = identity_mode
+    return PromptInputs(**kwargs)
 
 
 def test_bible_is_traceable_and_contains_no_copied_source_passages():
@@ -255,6 +262,58 @@ def test_prompt_compiler_uses_fixed_memory_anchor_and_no_realtime_age():
     assert "current_date=" not in prompt
     assert "living Kurisu age=" not in prompt
     assert "34歳" not in prompt
+
+
+def test_phase2_s3_prompt_compiler_forks_by_identity_mode():
+    """P2-S3: same worldline, mode=self vs okabe injects the matching mode rules only."""
+    for worldline in ("steins_gate", "beta"):
+        okabe = PromptCompiler().compile(_inputs(worldline, identity_mode="okabe"))
+        self_mode = PromptCompiler().compile(_inputs(worldline, identity_mode="self"))
+        defaulted = PromptCompiler().compile(_inputs(worldline))
+
+        assert "相手を岡部として扱い" in okabe
+        assert "馴染みある反発を返す" in okabe
+        assert "恋愛関係には進まない" not in okabe
+        assert "馴染みある反発はしない" not in okabe
+
+        assert "恋愛関係には進まない" in self_mode
+        assert "馴染みある反発はしない" in self_mode
+        assert "相手を岡部として扱い" not in self_mode
+        assert "馴染みある反発を返す" not in self_mode
+
+        # Default / legacy omit → okabe (backward compatible)
+        assert "相手を岡部として扱い" in defaulted
+        assert "恋愛関係には進まない" not in defaulted
+
+        # (b) + worldline + canon B not regressed by mode wiring
+        assert "脳科学" in okabe and "脳科学" in self_mode
+        assert "スナップショット" in okabe and "スナップショット" in self_mode
+        if worldline == "steins_gate":
+            assert "オリジナルの紅莉栖は生存" in okabe
+            assert "オリジナルの紅莉栖は生存" in self_mode
+        else:
+            assert "オリジナルの紅莉栖は死亡" in okabe
+            assert "オリジナルの紅莉栖は死亡" in self_mode
+
+
+def test_phase2_s3_get_rendered_and_provider_anchor_respect_mode():
+    """Auth-path render + provider_anchor also carry identity_mode (not only compile)."""
+    okabe = get_rendered_system_prompt(
+        SYSTEM_PROMPT_BASE, "steins_gate", client_type="desktop", identity_mode="okabe"
+    )
+    self_mode = get_rendered_system_prompt(
+        SYSTEM_PROMPT_BASE, "steins_gate", client_type="desktop", identity_mode="self"
+    )
+    assert "相手を岡部として扱い" in okabe
+    assert "相手を岡部として扱い" not in self_mode
+    assert "恋愛関係には進まない" in self_mode
+
+    service = object.__new__(DeepSeekService)
+    assert "相手を岡部として扱い" in service._load_anchor_clause("okabe")
+    assert "相手を岡部として扱い" not in service._load_anchor_clause("self")
+    assert "馴染みある反発はしない" in service._load_anchor_clause("self")
+    # Default anchor remains okabe for legacy callers
+    assert "相手を岡部として扱い" in service._load_anchor_clause()
 
 
 def test_prompt_compiler_retains_the_selected_worldline_overlay():

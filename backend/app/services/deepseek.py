@@ -71,15 +71,21 @@ class DeepSeekService(LLMInterface):
                 return json.load(f)
         raise FileNotFoundError(f"Few-shot JSON not found at {self.fewshot_path}")
 
-    def _load_anchor_clause(self) -> str:
-        return persona_bible.render_provider_anchor()
+    def _load_anchor_clause(self, identity_mode: str = "okabe") -> str:
+        # Default okabe for legacy; chat path usually already has full Bible in system_prompt.
+        return persona_bible.render_provider_anchor(identity_mode)
 
-    def get_anchored_system_prompt(self, base_prompt: str = None) -> str:
+    def get_anchored_system_prompt(
+        self,
+        base_prompt: str = None,
+        identity_mode: str = "okabe",
+    ) -> str:
         prompt = base_prompt if base_prompt is not None else self._system_prompt
         if "PERSONA BIBLE v1 (canonical runtime persona)" in prompt:
+            # Full Bible already carries mode rules from compile; output contract only.
             anchor = persona_bible.render_output_anchor()
         else:
-            anchor = self._load_anchor_clause()
+            anchor = self._load_anchor_clause(identity_mode)
         return prompt.strip() + "\n" + anchor.strip()
 
     def build_persona_messages(
@@ -87,12 +93,15 @@ class DeepSeekService(LLMInterface):
         active_history: list,
         memory_summary: Optional[str] = None,
         system_prompt: Optional[str] = None,
+        identity_mode: str = "okabe",
     ) -> list[dict]:
         """Build the canonical persona/history envelope shared by all providers."""
         messages = [
             {
                 "role": "system",
-                "content": self.get_anchored_system_prompt(system_prompt),
+                "content": self.get_anchored_system_prompt(
+                    system_prompt, identity_mode=identity_mode
+                ),
             }
         ]
         messages.extend(self._fewshot)
