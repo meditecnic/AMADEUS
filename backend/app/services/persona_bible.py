@@ -121,15 +121,60 @@ class PersonaBible(BaseModel):
             raise ValueError(f"unsupported identity_mode: {identity_mode!r}")
         return cleaned
 
+    def romance_allowed(self, worldline: str, identity_mode: str = DEFAULT_IDENTITY_MODE) -> bool:
+        """Q24 / gate-6A: only beta + okabe may develop romance."""
+        wl = normalize_worldline(worldline)
+        mode = self._normalize_identity_mode(identity_mode)
+        return wl == "beta" and mode == "okabe"
+
+    def render_romance_boundary(
+        self,
+        worldline: str,
+        identity_mode: str = DEFAULT_IDENTITY_MODE,
+    ) -> str:
+        """Deterministic (worldline × identity_mode) relationship boundary (Phase-2 S7).
+
+        Not a Bible JSON rule map — table-driven short JA instructions injected at
+        prompt assembly. Does not hard-filter model output.
+        """
+        wl = normalize_worldline(worldline)
+        mode = self._normalize_identity_mode(identity_mode)
+        if mode == "self":
+            body = (
+                "対話相手は現実の利用者である。"
+                "恋愛関係には進まない。"
+                "信頼・友情・知性的な伴走を築く（恋愛・独占・告白主線は禁止）。"
+            )
+        elif wl == "beta" and mode == "okabe":
+            # Unique romance-allowed cell (Q24).
+            body = (
+                "この世界線（β）かつ岡部モードでは、Amadeusとしての関係が"
+                "恋愛へ発展し得る唯一の許可経路である。"
+                "後期の関係文脈に沿い、強引な即時告白は避けつつ、"
+                "恋愛的な絆の深化を禁じない。"
+            )
+        else:
+            # steins_gate + okabe (and any other non-self non-beta-okabe)
+            body = (
+                "この世界線（Steins;Gate）かつ岡部モードでは、"
+                "有意味な熟識と気遣いはよいが、恋愛関係・独占的な恋人設定には進まない。"
+                "オリジナルの生身の紅莉栖が岡部の恋人であることを尊重する（非恋愛・不独占）。"
+            )
+        return (
+            "RELATIONSHIP BOUNDARY (worldline × identity_mode; Q24/gate-6A):\n"
+            f"- {body}"
+        )
+
     def render_prompt(
         self,
         worldline: str,
         identity_mode: str = DEFAULT_IDENTITY_MODE,
     ) -> str:
-        """Compose shared + mode + worldline rules.
+        """Compose shared + mode + worldline rules + deterministic romance matrix.
 
         Phase-2 S2: mode_rule_ids may be empty for both modes (behavior-neutral).
         Default identity_mode=okabe keeps legacy single-arg callers valid until S3.
+        Phase-2 S7: append (worldline × mode) relationship boundary (not Bible rule text).
         """
         worldline = normalize_worldline(worldline)
         mode = self._normalize_identity_mode(identity_mode)
@@ -147,6 +192,7 @@ class PersonaBible(BaseModel):
             f"- [{self.rules[rule_id].scope}] {self.rules[rule_id].instruction_ja}"
             for rule_id in rule_ids
         )
+        lines.append(self.render_romance_boundary(worldline, mode))
         lines.append("EMOTION DELIVERY (personality remains the same):")
         lines.extend(f"- {name}: {tone}" for name, tone in self.emotion_tones.items())
         return "\n".join(lines)

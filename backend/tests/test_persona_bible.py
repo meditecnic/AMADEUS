@@ -488,6 +488,58 @@ def test_deepseek_default_system_prompt_uses_canonical_security_boundary():
     assert "【ツンデレの反応パターン" not in service._system_prompt
 
 
+def test_phase2_s7_romance_boundary_matrix_four_cells():
+    """P2-S7 Q24/gate-6A: only beta+okabe romance-allowed; other cells non-romance."""
+    bible = PersonaBible.load_default()
+
+    assert bible.romance_allowed("beta", "okabe") is True
+    assert bible.romance_allowed("steins_gate", "okabe") is False
+    assert bible.romance_allowed("beta", "self") is False
+    assert bible.romance_allowed("steins_gate", "self") is False
+
+    beta_okabe = bible.render_prompt("beta", "okabe")
+    sg_okabe = bible.render_prompt("steins_gate", "okabe")
+    beta_self = bible.render_prompt("beta", "self")
+    sg_self = bible.render_prompt("steins_gate", "self")
+
+    # beta+okabe: unique romance path
+    assert "恋愛へ発展し得る唯一の許可経路" in beta_okabe
+    assert "恋愛的な絆の深化を禁じない" in beta_okabe
+    assert "非恋愛・不独占" not in beta_okabe
+
+    # SG+okabe: warm familiarity, non-romance, respect biological Kurisu as Okabe's partner
+    assert "非恋愛・不独占" in sg_okabe
+    assert "生身の紅莉栖が岡部の恋人" in sg_okabe
+    assert "有意味な熟識" in sg_okabe or "気遣いはよい" in sg_okabe
+    assert "恋愛へ発展し得る唯一の許可経路" not in sg_okabe
+    assert "恋愛的な絆の深化を禁じない" not in sg_okabe
+
+    # self both worldlines: non-romance friendship/trust
+    for self_prompt in (beta_self, sg_self):
+        assert "恋愛関係には進まない" in self_prompt
+        assert "信頼・友情・知性的な伴走" in self_prompt
+        assert "恋愛へ発展し得る唯一の許可経路" not in self_prompt
+        assert "告白主線は禁止" in self_prompt
+
+    # Compile + get_rendered paths also carry the matrix (via render_prompt)
+    compiled_sg = PromptCompiler().compile(_inputs("steins_gate", identity_mode="okabe"))
+    compiled_beta = PromptCompiler().compile(_inputs("beta", identity_mode="okabe"))
+    compiled_self = PromptCompiler().compile(_inputs("steins_gate", identity_mode="self"))
+    assert "非恋愛・不独占" in compiled_sg
+    assert "恋愛へ発展し得る唯一の許可経路" in compiled_beta
+    assert "恋愛関係には進まない" in compiled_self
+
+    rendered_self = get_rendered_system_prompt(
+        SYSTEM_PROMPT_BASE, "beta", client_type="desktop", identity_mode="self"
+    )
+    assert "恋愛関係には進まない" in rendered_self
+    assert "恋愛へ発展し得る唯一の許可経路" not in rendered_self
+
+    # Default omit mode → okabe cell for that worldline
+    default_sg = bible.render_prompt("steins_gate")
+    assert "非恋愛・不独占" in default_sg
+
+
 def test_phase2_s3c_build_persona_messages_resolves_default_base_by_mode():
     """P2-S3c: system_prompt=None else-branch must not leak okabe base under self mode."""
     service = DeepSeekService()
