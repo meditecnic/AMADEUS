@@ -11,6 +11,8 @@ export interface UseAmadeusWSParams {
   providerId?: string;
   model: string;
   reasoningEffort: 'high' | 'xhigh';
+  /** Settings default for draft materialize / new conversation (never inferred). */
+  identityMode?: 'okabe' | 'self';
   onAudioChunk?: (sentenceId: number, base64Data: string) => void;
   onAudioDegraded?: (reason: string) => void;
   onSessionReady?: (details: {
@@ -261,6 +263,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
         temperature: paramsRef.current.temperature,
         worldline: paramsRef.current.worldline,
         reasoning_effort: paramsRef.current.reasoningEffort,
+        default_identity_mode: paramsRef.current.identityMode || 'okabe',
         client: 'desktop',
         protocol_version: 2,
       };
@@ -723,6 +726,9 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     if (patch.enableTts !== undefined) mappedPatch.enable_tts = patch.enableTts;
     if (patch.sovitsUrl !== undefined) mappedPatch.sovits_url = patch.sovitsUrl;
     if (patch.reasoningEffort !== undefined) mappedPatch.reasoning_effort = patch.reasoningEffort;
+    if (patch.identityMode !== undefined) {
+      mappedPatch.default_identity_mode = patch.identityMode;
+    }
 
     // Send config_update frame
     const configUpdateFrame = {

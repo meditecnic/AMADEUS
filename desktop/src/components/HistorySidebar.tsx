@@ -1,4 +1,8 @@
 import React from 'react';
+import {
+  type IdentityMode,
+  normalizeIdentityMode,
+} from './SettingsModal';
 
 export interface ConversationSummary {
   id: string;
@@ -10,7 +14,7 @@ export interface ConversationSummary {
   provider_id?: string | null;
   model_id?: string | null;
   /** Q20-A / Q21: set at create; immutable for the conversation lifetime. */
-  identity_mode?: 'okabe' | 'self';
+  identity_mode?: IdentityMode;
   last_active_at: string;
 }
 
@@ -28,6 +32,10 @@ interface HistorySidebarProps {
   onDelete: (conversation: ConversationSummary) => void;
   onForget: (conversation: ConversationSummary) => void;
   busy?: boolean;
+}
+
+function modeBadgeLabel(mode: IdentityMode | undefined): string {
+  return normalizeIdentityMode(mode) === 'self' ? 'SELF' : 'OKABE';
 }
 
 export const HistorySidebar: React.FC<HistorySidebarProps> = ({
@@ -113,6 +121,13 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
                     {conversation.title}
                   </span>
                   <span className="conversation-meta">
+                    <span
+                      className={`identity-mode-badge mode-${normalizeIdentityMode(conversation.identity_mode)}`}
+                      data-testid={`identity-badge-${conversation.id}`}
+                    >
+                      {modeBadgeLabel(conversation.identity_mode)}
+                    </span>
+                    {' · '}
                     {(conversation.provider_id || 'deepseek').toUpperCase()} · {conversation.model_id || 'DEFAULT'}
                   </span>
                 </button>

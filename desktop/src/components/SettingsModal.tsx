@@ -33,6 +33,41 @@ export function clampChatTemperature(value: number): number {
   return Math.max(CHAT_TEMPERATURE_MIN, Math.min(CHAT_TEMPERATURE_MAX, value));
 }
 
+/** Q20-A / Q21: conversation identity mode. Never infer from nicknames. */
+export type IdentityMode = 'okabe' | 'self';
+/** Product default for new conversations (Q20-A). */
+export const DEFAULT_IDENTITY_MODE: IdentityMode = 'okabe';
+export const IDENTITY_MODE_STORAGE_KEY = 'amadeus_pc_identity_mode';
+
+export function normalizeIdentityMode(value: unknown): IdentityMode {
+  return value === 'self' ? 'self' : DEFAULT_IDENTITY_MODE;
+}
+
+export function loadStoredIdentityMode(): IdentityMode {
+  try {
+    return normalizeIdentityMode(localStorage.getItem(IDENTITY_MODE_STORAGE_KEY));
+  } catch {
+    return DEFAULT_IDENTITY_MODE;
+  }
+}
+
+export function persistIdentityMode(mode: IdentityMode): void {
+  try {
+    localStorage.setItem(IDENTITY_MODE_STORAGE_KEY, normalizeIdentityMode(mode));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+/** Confirm copy when creating a conversation with an explicit mode (memory isolation). */
+export function identityModeNewConversationConfirm(mode: IdentityMode): string {
+  const label = mode === 'self' ? 'Self' : 'Okabe';
+  return (
+    `将以 ${label} 模式新建会话。\n` +
+    'Self 与 Okabe 的记忆与关系不会合并；开始后不可在本会话内切换模式。'
+  );
+}
+
 export interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -57,6 +92,8 @@ export interface SettingsModalProps {
   /** One-shot notice after migrating a legacy localStorage value > max (1.2) */
   temperatureMigrationNotice?: boolean;
   onDismissTemperatureMigrationNotice?: () => void;
+  /** Default for newly created conversations (not the active conversation's mode). */
+  identityMode?: IdentityMode;
   providerDisplayName: string;
   providerBaseUrl?: string | null;
   baseUrlConfigurable: boolean;
@@ -76,6 +113,7 @@ export interface SettingsModalProps {
     enableSfx: boolean;
     sfxVolume: number;
     temperature: number;
+    identityMode: IdentityMode;
     baseUrl: string;
     model: string;
     reasoningEffort: 'high' | 'xhigh';
@@ -107,6 +145,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   temperature,
   temperatureMigrationNotice = false,
   onDismissTemperatureMigrationNotice,
+  identityMode = DEFAULT_IDENTITY_MODE,
   providerDisplayName,
   providerBaseUrl,
   baseUrlConfigurable,
@@ -127,6 +166,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [localEnableTts, setLocalEnableTts] = useState(enableTts);
   const [localSovitsUrl, setLocalSovitsUrl] = useState(sovitsUrl);
   const [localTemperature, setLocalTemperature] = useState(() => clampChatTemperature(temperature));
+  const [localIdentityMode, setLocalIdentityMode] = useState<IdentityMode>(() =>
+    normalizeIdentityMode(identityMode),
+  );
   const [localBaseUrl, setLocalBaseUrl] = useState(providerBaseUrl || '');
   const [localModel, setLocalModel] = useState(model);
   const [localReasoningIdx, setLocalReasoningIdx] = useState(
@@ -177,11 +219,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setLocalEnableTts(enableTts);
       setLocalSovitsUrl(sovitsUrl);
       setLocalTemperature(clampChatTemperature(temperature));
+      setLocalIdentityMode(normalizeIdentityMode(identityMode));
       setLocalBaseUrl(providerBaseUrl || '');
       setLocalModel(model);
       setLocalReasoningIdx(reasoningEffort === 'xhigh' ? 1 : 0);
     }
-  }, [isOpen, worldline, apiKey, webSearchApiKey, webSearchActiveProvider, systemPrompt, enableTts, sovitsUrl, temperature, providerBaseUrl, model, reasoningEffort]);
+  }, [isOpen, worldline, apiKey, webSearchApiKey, webSearchActiveProvider, systemPrompt, enableTts, sovitsUrl, temperature, identityMode, providerBaseUrl, model, reasoningEffort]);
 
   if (!isOpen) return null;
 
@@ -203,6 +246,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         enableSfx: enableSfx,
         sfxVolume: sfxVolume,
         temperature: clampChatTemperature(localTemperature),
+        identityMode: normalizeIdentityMode(localIdentityMode),
         baseUrl: localBaseUrl,
         model: localModel,
         reasoningEffort: (['high', 'xhigh'] as const)[localReasoningIdx],
@@ -507,6 +551,35 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <option value="steins_gate">Steins;Gate (1.048596%)</option>
                   <option value="beta">β 世界线 (1.130205%)</option>
                 </select>
+              </div>
+              <div className="setting-field field-full" data-testid="identity-settings">
+                <label>新会话默认身份模式</label>
+                <div className="identity-mode-options" role="radiogroup" aria-label="新会话默认身份模式">
+                  <label className="checkbox-label identity-mode-option">
+                    <input
+                      type="radio"
+                      name="identity-mode"
+                      value="okabe"
+                      data-testid="identity-mode-okabe"
+                      checked={localIdentityMode === 'okabe'}
+                      onChange={() => setLocalIdentityMode('okabe')}
+                      className="salieri-checkbox"
+                    />
+                    冈部（默认）
+                  </label>
+                  <label className="checkbox-label identity-mode-option">
+                    <input
+                      type="radio"
+                      name="identity-mode"
+                      value="self"
+                      data-testid="identity-mode-self"
+                      checked={localIdentityMode === 'self'}
+                      onChange={() => setLocalIdentityMode('self')}
+                      className="salieri-checkbox"
+                    />
+                    自己
+                  </label>
+                </div>
               </div>
             </section>
             {/* VOICE tab */}

@@ -6,7 +6,13 @@ import {
   CHAT_TEMPERATURE_MAX,
   CHAT_TEMPERATURE_MIN,
   CHAT_TEMPERATURE_STEP,
+  DEFAULT_IDENTITY_MODE,
+  IDENTITY_MODE_STORAGE_KEY,
   clampChatTemperature,
+  identityModeNewConversationConfirm,
+  loadStoredIdentityMode,
+  normalizeIdentityMode,
+  persistIdentityMode,
   SettingsModal,
 } from './SettingsModal';
 
@@ -36,6 +42,11 @@ const baseProps = {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  try {
+    window.localStorage.removeItem(IDENTITY_MODE_STORAGE_KEY);
+  } catch {
+    /* ignore */
+  }
 });
 
 describe('clampChatTemperature', () => {
@@ -47,6 +58,22 @@ describe('clampChatTemperature', () => {
     expect(clampChatTemperature(1.2)).toBe(CHAT_TEMPERATURE_MAX);
     expect(clampChatTemperature(2)).toBe(CHAT_TEMPERATURE_MAX);
     expect(clampChatTemperature(Number.NaN)).toBe(CHAT_TEMPERATURE_DEFAULT);
+  });
+});
+
+describe('identity mode helpers (Phase-2 S9)', () => {
+  it('defaults to okabe and never treats nicknames as mode signals', () => {
+    expect(DEFAULT_IDENTITY_MODE).toBe('okabe');
+    expect(normalizeIdentityMode(undefined)).toBe('okabe');
+    expect(normalizeIdentityMode('Christina')).toBe('okabe');
+    expect(normalizeIdentityMode('助手')).toBe('okabe');
+    expect(normalizeIdentityMode('self')).toBe('self');
+    expect(loadStoredIdentityMode()).toBe('okabe');
+    persistIdentityMode('self');
+    expect(window.localStorage.getItem(IDENTITY_MODE_STORAGE_KEY)).toBe('self');
+    expect(loadStoredIdentityMode()).toBe('self');
+    expect(identityModeNewConversationConfirm('self')).toMatch(/不会合并/);
+    expect(identityModeNewConversationConfirm('okabe')).toMatch(/不会合并/);
   });
 });
 
@@ -105,6 +132,41 @@ describe('SettingsModal UX contracts', () => {
     expect(screen.getByTestId('temperature-migration-notice')).toHaveTextContent('安全上限 1.2');
     fireEvent.click(screen.getByRole('button', { name: '知道了' }));
     expect(onDismiss).toHaveBeenCalledOnce();
+  });
+
+  it('renders Identity settings with plain labels only (okabe default; no lore/about notes)', () => {
+    render(<SettingsModal {...baseProps} onSaveSettings={vi.fn()} />);
+    expect(screen.getByTestId('identity-settings')).toBeTruthy();
+    expect(screen.getByTestId('identity-mode-okabe')).toBeChecked();
+    expect(screen.getByTestId('identity-mode-self')).not.toBeChecked();
+    expect(screen.getByText('冈部（默认）')).toBeTruthy();
+    expect(screen.getByText('自己')).toBeTruthy();
+    expect(screen.queryByTestId('identity-boundary-note')).toBeNull();
+    expect(screen.queryByTestId('identity-no-about')).toBeNull();
+    expect(screen.queryByText(/非生身本尊/)).toBeNull();
+    expect(screen.queryByText(/About this Amadeus/)).toBeNull();
+    // No in-session mode switch control — only default for *new* conversations
+    expect(screen.queryByTestId('identity-mode-switch-active')).toBeNull();
+    expect(screen.queryByLabelText(/当前会话身份/)).toBeNull();
+  });
+
+  it('saves the selected default identity_mode (self) without nickname inference UI', async () => {
+    const onSaveSettings = vi.fn().mockResolvedValue(undefined);
+    render(
+      <SettingsModal
+        {...baseProps}
+        identityMode="okabe"
+        onSaveSettings={onSaveSettings}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('identity-mode-self'));
+    fireEvent.click(screen.getByRole('button', { name: '保存修改' }));
+    await waitFor(() =>
+      expect(onSaveSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ identityMode: 'self', temperature: 0.0 }),
+      ),
+    );
+    expect(screen.queryByText(/Christina/)).toBeNull();
   });
 
   it('saves a clamped temperature never above 1.2', async () => {

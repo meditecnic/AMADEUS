@@ -69,14 +69,22 @@ vi.mock('./SettingsModal', () => ({
   CHAT_TEMPERATURE_MAX: 1.2,
   CHAT_TEMPERATURE_STEP: 0.1,
   CHAT_TEMPERATURE_DEFAULT: 0.0,
+  DEFAULT_IDENTITY_MODE: 'okabe',
+  IDENTITY_MODE_STORAGE_KEY: 'amadeus_pc_identity_mode',
   clampChatTemperature: (value: number) => {
     if (!Number.isFinite(value)) return 0.0;
     return Math.max(0, Math.min(1.2, value));
   },
+  normalizeIdentityMode: (value: unknown) => (value === 'self' ? 'self' : 'okabe'),
+  loadStoredIdentityMode: () => 'okabe' as const,
+  persistIdentityMode: () => {},
 }));
 vi.mock('./SoundPanel', () => ({ SoundPanel: () => null }));
 vi.mock('./HistorySidebar', () => ({
-  HistorySidebar: (props: { conversations: Array<{ id: string; title: string }> }) => (
+  HistorySidebar: (props: {
+    conversations: Array<{ id: string; title: string }>;
+    onNew?: () => void;
+  }) => (
     <div data-testid="history-rows">
       {props.conversations.map((row) => <span key={row.id}>{row.title}</span>)}
     </div>

@@ -1,15 +1,22 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HistorySidebar, type ConversationSummary } from './HistorySidebar';
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
 
 const conversations: ConversationSummary[] = [
   {
     id: 'one', title: '时间机器实验', title_source: 'auto', is_default: true,
-    is_pinned: false, provider_id: 'deepseek', model_id: 'deepseek-v4-flash', last_active_at: '1',
+    is_pinned: false, provider_id: 'deepseek', model_id: 'deepseek-v4-flash',
+    identity_mode: 'okabe', last_active_at: '1',
   },
   {
     id: 'two', title: 'β 世界线', title_source: 'manual', is_default: false,
-    is_pinned: true, provider_id: 'openai', model_id: 'gpt-5.6-luna', last_active_at: '2',
+    is_pinned: true, provider_id: 'openai', model_id: 'gpt-5.6-luna',
+    identity_mode: 'self', last_active_at: '2',
   },
 ];
 
@@ -57,5 +64,36 @@ describe('HistorySidebar conversations', () => {
     expect(onForget).toHaveBeenCalledWith(conversations[1]);
     expect(onNew).toHaveBeenCalled();
     expect(screen.queryByText('时间机器实验')).not.toBeInTheDocument();
+  });
+
+  it('shows identity mode badges and has no alternate-mode or in-session switch control', () => {
+    const onNew = vi.fn();
+    render(
+      <HistorySidebar
+        isCollapsed={false}
+        onToggle={vi.fn()}
+        conversations={conversations}
+        activeId="one"
+        searchQuery=""
+        onSearchChange={vi.fn()}
+        onSelect={vi.fn()}
+        onNew={onNew}
+        onRename={vi.fn()}
+        onTogglePin={vi.fn()}
+        onDelete={vi.fn()}
+        onForget={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId('identity-badge-one')).toHaveTextContent('OKABE');
+    expect(screen.getByTestId('identity-badge-two')).toHaveTextContent('SELF');
+    // No control to mutate the active conversation's mode in place (Q21).
+    expect(screen.queryByTestId('identity-mode-switch-active')).toBeNull();
+    expect(screen.queryByLabelText(/切换当前会话身份/)).toBeNull();
+    // Product: only one "新建会话" (inherits settings default); no alternate-mode entry.
+    expect(screen.queryByTestId('new-conversation-alternate-mode')).toBeNull();
+    expect(screen.queryByText(/以 Self 新建/)).toBeNull();
+    fireEvent.click(screen.getByText('新建会话'));
+    expect(onNew).toHaveBeenCalled();
   });
 });

@@ -9,8 +9,12 @@ import {
   CHAT_TEMPERATURE_DEFAULT,
   CHAT_TEMPERATURE_MAX,
   clampChatTemperature,
+  loadStoredIdentityMode,
+  normalizeIdentityMode,
+  persistIdentityMode,
   SettingsModal,
   type CredentialStatus,
+  type IdentityMode,
   type WebSearchProviderId,
   type WebSearchProviderInfo,
   type WebSearchSettingsSnapshot,
@@ -129,6 +133,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
       return CHAT_TEMPERATURE_DEFAULT;
     }
   });
+  /** Default for *new* conversations only (Q20-A). Active conversation mode is immutable (Q21). */
+  const [defaultIdentityMode, setDefaultIdentityMode] = useState<IdentityMode>(() =>
+    loadStoredIdentityMode(),
+  );
   const [model, setModel] = useState<string>(() =>
     localStorage.getItem('amadeus_pc_model') || 'deepseek-v4-flash');
   const [draftProviderId, setDraftProviderId] = useState<string>(() => {
@@ -250,6 +258,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     systemPrompt,
     temperature,
     worldline,
+    identityMode: defaultIdentityMode,
     enableTts,
     sovitsUrl,
     providerId: (
@@ -390,7 +399,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
   }, [loadProviders, reconnect]);
 
   const applyWebSearchSettings = useCallback((settings: WebSearchSettingsSnapshot) => {
-    const active = (settings.active_provider || settings.provider || 'tavily') as WebSearchProviderId;
+    const legacyProvider = (settings as WebSearchSettingsSnapshot & { provider?: WebSearchProviderId }).provider;
+    const active = (settings.active_provider || legacyProvider || 'tavily') as WebSearchProviderId;
     const providers = settings.providers || {};
     setWebSearchActiveProvider(active);
     setWebSearchProviders(providers);
@@ -644,7 +654,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     }
   }, [status, credentialConfigured, sfxVolume]);
 
-  const handleSend = (e: React.FormEvent) => {
+  const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputText.trim()) return;
     // Turn text still gates send via isThinking/isSynthesizing. When only leftover
@@ -652,6 +662,13 @@ export const Workstation: React.FC<WorkstationProps> = ({
     if (isPlaying) {
       audioPlayer.stopAll();
       stopVoice();
+    }
+    // Draft materialize (no conversation_id) always stamps okabe on the backend.
+    // When the settings default is self, pre-create via API so mode is correct.
+    // Okabe default keeps the existing draft path (zero regression for most sessions).
+    if (!activeConversationId && normalizeIdentityMode(defaultIdentityMode) === 'self') {
+      const created = await createConversation('self');
+      if (!created) return;
     }
     audioService.playSFX('/audio/sfx/连接成功，进入页面1.ogg', sfxVolume);
     sendChat(inputText.trim());
@@ -695,11 +712,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
     }
   };
 
-  const createConversation = async () => {
-    if (conversationBusy) return;
+  const createConversation = async (
+    identityMode: IdentityMode = defaultIdentityMode,
+  ): Promise<ConversationSummary | null> => {
+    if (conversationBusy) return null;
     setConversationBusy(true);
     try {
       const active = conversations.find((row) => row.id === activeConversationId);
+      const mode = normalizeIdentityMode(identityMode);
       const response = await fetch('/api/conversations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -708,6 +728,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
           worldline,
           provider_id: active?.provider_id || draftProviderId,
           model_id: active?.model_id || model,
+          // Never infer from nickname/session — only settings default or explicit UI.
+          identity_mode: mode,
         }),
       });
       if (!response.ok) throw new Error(`conversation create failed: ${response.status}`);
@@ -715,9 +737,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
       setConversationBusy(false);
       await selectConversation(created);
       window.setTimeout(() => { void loadConversations(); }, 250);
+      return created;
     } catch (error) {
       console.warn('Conversation creation failed:', error);
       setConversationBusy(false);
+      return null;
     }
   };
 
@@ -882,6 +906,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     enableSfx: boolean;
     sfxVolume: number;
     temperature: number;
+    identityMode: IdentityMode;
     baseUrl: string;
     model: string;
     reasoningEffort: 'high' | 'xhigh';
@@ -973,6 +998,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
     setSfxVolume(newSettings.sfxVolume);
     const safeTemperature = clampChatTemperature(newSettings.temperature);
     setTemperature(safeTemperature);
+    const nextIdentityMode = normalizeIdentityMode(newSettings.identityMode);
+    setDefaultIdentityMode(nextIdentityMode);
     setReasoningEffort(newSettings.reasoningEffort);
 
     if (
@@ -993,6 +1020,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       localStorage.setItem('amadeus_pc_enable_sfx', String(newSettings.enableSfx));
       localStorage.setItem('amadeus_pc_sfx_volume', String(newSettings.sfxVolume));
       localStorage.setItem('amadeus_pc_temperature', String(safeTemperature));
+      persistIdentityMode(nextIdentityMode);
       localStorage.setItem('amadeus_pc_model', newSettings.model);
       localStorage.setItem('amadeus_pc_reasoning_effort', newSettings.reasoningEffort);
     } catch (e) {
@@ -1010,6 +1038,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         sovitsUrl: newSettings.sovitsUrl,
         temperature: safeTemperature,
         reasoningEffort: newSettings.reasoningEffort,
+        identityMode: nextIdentityMode,
       };
       if (newSettings.worldline === worldline) {
         configPatch.worldline = newSettings.worldline;
@@ -1169,7 +1198,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           searchQuery={conversationSearch}
           onSearchChange={setConversationSearch}
           onSelect={(conversation) => { void selectConversation(conversation); }}
-          onNew={() => { void createConversation(); }}
+          onNew={() => { void createConversation(defaultIdentityMode); }}
           onRename={renameConversation}
           onTogglePin={toggleConversationPin}
           onDelete={(conversation) => { void deleteConversation(conversation); }}
@@ -1467,6 +1496,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           setTemperatureMigrationNotice(false);
           try { sessionStorage.removeItem('amadeus_pc_temperature_migrated_notice'); } catch { /* ignore */ }
         }}
+        identityMode={defaultIdentityMode}
         providerDisplayName={activeProvider?.display_name || activeProviderId}
         providerBaseUrl={activeProvider?.base_url}
         baseUrlConfigurable={Boolean(activeProvider?.base_url_configurable)}
