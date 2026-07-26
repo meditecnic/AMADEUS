@@ -64,6 +64,24 @@ class RetrievedMemory(BaseModel):
     pinned: bool = False
 
 
+class SharedFactPromotionError(ValueError):
+    """Gate 7A promotion failure with a stable, client-safe error code."""
+
+    CODES = frozenset({
+        "fact_not_found",
+        "fact_not_promotable",
+        "source_evidence_unavailable",
+        "identity_scope_violation",
+        "stale_fact",
+    })
+
+    def __init__(self, code: str) -> None:
+        if code not in self.CODES:
+            code = "fact_not_promotable"
+        self.code = code
+        super().__init__(code)
+
+
 def reciprocal_rank_fusion(*rankings: Iterable[int], k: int = 60) -> dict[int, float]:
     scores: dict[int, float] = {}
     for ranking in rankings:
@@ -397,6 +415,91 @@ Do not reclassify the speaker as a different identity. Do not promote role-play 
         finally:
             await db.close()
 
+    @staticmethod
+    def _shared_row_matches(old, candidate: CoreFactCandidate, wl: str, cid: str) -> bool:
+        """Idempotency comparison for a current shared row (inside the txn)."""
+        try:
+            old_ids = sorted(int(item) for item in json.loads(old["source_message_ids"]))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return False
+        return (
+            old["fact_value"] == candidate.fact_value
+            and float(old["confidence"]) == float(candidate.confidence)
+            and float(old["importance"]) == float(candidate.importance)
+            and int(old["is_pinned"]) == int(candidate.is_pinned)
+            and old["origin_worldline"] == wl
+            and old["origin_conversation_id"] == cid
+            and old["origin_identity_mode"] == "self"
+            and old_ids == sorted(candidate.source_message_ids)
+        )
+
+    async def _write_shared_fact_current(
+        self,
+        owner_session_id: str,
+        candidate: CoreFactCandidate,
+        wl: str,
+        origin_conversation_id: str,
+    ) -> tuple[int, bool]:
+        """Shared-store write inside one BEGIN IMMEDIATE transaction.
+
+        The idempotency check runs inside the same transaction (never a
+        check-then-write across transactions): a fully identical current row
+        is a no-op returning (old_id, False); anything else supersedes and
+        returns (new_id, True). Superseded rows are kept for the audit chain.
+        """
+        now = datetime.now(timezone.utc).isoformat()
+        db = await get_db("steins_gate", "control")
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            cur = await db.execute(
+                """SELECT * FROM shared_user_facts
+                    WHERE owner_session_id=? AND fact_key=? AND is_current=1""",
+                (owner_session_id, candidate.fact_key),
+            )
+            old = await cur.fetchone()
+            if old is not None and self._shared_row_matches(
+                old, candidate, wl, origin_conversation_id
+            ):
+                await db.commit()
+                return int(old["id"]), False
+            if old:
+                await db.execute(
+                    "UPDATE shared_user_facts SET is_current=0 WHERE id=?", (old["id"],)
+                )
+            cursor = await db.execute(
+                """INSERT INTO shared_user_facts(
+                       owner_session_id,fact_key,fact_value,confidence,importance,
+                       is_current,is_pinned,origin_worldline,origin_conversation_id,
+                       origin_identity_mode,source_message_ids,created_at
+                   ) VALUES(?,?,?,?,?,1,?,?,?,?,?,?)""",
+                (
+                    owner_session_id,
+                    candidate.fact_key,
+                    candidate.fact_value,
+                    candidate.confidence,
+                    candidate.importance,
+                    int(candidate.is_pinned),
+                    wl,
+                    origin_conversation_id,
+                    "self",
+                    json.dumps(candidate.source_message_ids),
+                    now,
+                ),
+            )
+            new_id = int(cursor.lastrowid)
+            if old:
+                await db.execute(
+                    "UPDATE shared_user_facts SET superseded_by=? WHERE id=?",
+                    (new_id, old["id"]),
+                )
+            await db.commit()
+            return new_id, True
+        except Exception:
+            await db.rollback()
+            raise
+        finally:
+            await db.close()
+
     async def upsert_shared_user_fact(
         self,
         owner_session_id: str,
@@ -424,52 +527,9 @@ Do not reclassify the speaker as a different identity. Do not promote role-play 
         await self._verify_shared_provenance(
             owner_session_id, wl, origin_conversation_id, mode, candidate.source_message_ids
         )
-        now = datetime.now(timezone.utc).isoformat()
-        db = await get_db("steins_gate", "control")
-        try:
-            await db.execute("BEGIN IMMEDIATE")
-            cur = await db.execute(
-                """SELECT id FROM shared_user_facts
-                    WHERE owner_session_id=? AND fact_key=? AND is_current=1""",
-                (owner_session_id, candidate.fact_key),
-            )
-            old = await cur.fetchone()
-            if old:
-                await db.execute(
-                    "UPDATE shared_user_facts SET is_current=0 WHERE id=?", (old["id"],)
-                )
-            cursor = await db.execute(
-                """INSERT INTO shared_user_facts(
-                       owner_session_id,fact_key,fact_value,confidence,importance,
-                       is_current,is_pinned,origin_worldline,origin_conversation_id,
-                       origin_identity_mode,source_message_ids,created_at
-                   ) VALUES(?,?,?,?,?,1,?,?,?,?,?,?)""",
-                (
-                    owner_session_id,
-                    candidate.fact_key,
-                    candidate.fact_value,
-                    candidate.confidence,
-                    candidate.importance,
-                    int(candidate.is_pinned),
-                    wl,
-                    origin_conversation_id,
-                    mode,
-                    json.dumps(candidate.source_message_ids),
-                    now,
-                ),
-            )
-            new_id = int(cursor.lastrowid)
-            if old:
-                await db.execute(
-                    "UPDATE shared_user_facts SET superseded_by=? WHERE id=?",
-                    (new_id, old["id"]),
-                )
-            await db.commit()
-        except Exception:
-            await db.rollback()
-            raise
-        finally:
-            await db.close()
+        new_id, _ = await self._write_shared_fact_current(
+            owner_session_id, candidate, wl, origin_conversation_id
+        )
         return new_id
 
     async def _current_shared_fact_rows(self, owner_session_id: str) -> list:
@@ -482,6 +542,216 @@ Do not reclassify the speaker as a different identity. Do not promote role-play 
             return list(await cur.fetchall())
         finally:
             await db.close()
+
+    # ------------------------------------------------------------------
+    # Gate 7A: Memory Ledger listing and explicit local→shared promotion.
+    # Promotion is a deterministic DB copy — no LLM, provider, translation
+    # or TTS involvement, and the client is never trusted for fact content.
+    # ------------------------------------------------------------------
+
+    async def _evaluate_promotion_evidence(
+        self,
+        owner_session_id: str,
+        worldline: str,
+        source_message_ids_json: str,
+    ) -> tuple[str | None, str | None]:
+        """Return (origin_conversation_id, reason); reason None means eligible.
+
+        Mirrors the Q18 evidence rules with stable reason codes only — raw SQL
+        or storage details never leak to callers.
+        """
+        # Q18 type rules verbatim: a non-empty JSON list of actual ints (bool
+        # is not an int here), positive and unique. No silent coercion of
+        # strings/floats — corrupted persisted data must read as unavailable.
+        try:
+            raw = json.loads(source_message_ids_json)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None, "source_evidence_unavailable"
+        if not isinstance(raw, list) or not raw:
+            return None, "source_evidence_unavailable"
+        if any(
+            not isinstance(item, int) or isinstance(item, bool) or item <= 0
+            for item in raw
+        ):
+            return None, "source_evidence_unavailable"
+        ids = list(raw)
+        if len(set(ids)) != len(ids):
+            return None, "source_evidence_unavailable"
+        db = await get_db(worldline, "history")
+        try:
+            conversation_ids: set[str] = set()
+            for message_id in ids:
+                cur = await db.execute(
+                    "SELECT session_id,conversation_id,role FROM messages WHERE id=?",
+                    (message_id,),
+                )
+                message = await cur.fetchone()
+                if message is None or message["session_id"] != owner_session_id:
+                    return None, "source_evidence_unavailable"
+                if message["role"] != "user":
+                    return None, "fact_not_promotable"
+                conversation_ids.add(message["conversation_id"])
+            if len(conversation_ids) != 1:
+                return None, "fact_not_promotable"
+            origin_conversation_id = next(iter(conversation_ids))
+            cur = await db.execute(
+                "SELECT session_id,identity_mode FROM conversations WHERE id=?",
+                (origin_conversation_id,),
+            )
+            conversation = await cur.fetchone()
+            if conversation is None or conversation["session_id"] != owner_session_id:
+                return None, "source_evidence_unavailable"
+            try:
+                persisted_mode = normalize_identity_mode(conversation["identity_mode"])
+            except ValueError:
+                return None, "identity_scope_violation"
+            if persisted_mode != "self":
+                return None, "identity_scope_violation"
+            return origin_conversation_id, None
+        finally:
+            await db.close()
+
+    async def list_memory_facts_for_ledger(
+        self,
+        session_id: str,
+        worldline: str,
+    ) -> dict[str, list[dict[str, object]]]:
+        """Minimal display model for the Settings Memory Ledger.
+
+        local = the current worldline's self-scope current facts; shared = the
+        owner's whole shared profile. Never okabe facts, never raw message
+        text, never source ids or storage details.
+        """
+        wl = normalize_worldline(worldline)
+        db = await get_db(wl, "memory")
+        try:
+            cur = await db.execute(
+                """SELECT * FROM core_facts
+                    WHERE session_id=? AND identity_mode='self' AND is_current=1
+                    ORDER BY is_pinned DESC, importance DESC, id DESC""",
+                (session_id,),
+            )
+            local_rows = await cur.fetchall()
+        finally:
+            await db.close()
+        local_items: list[dict[str, object]] = []
+        shared_rows = await self._current_shared_fact_rows(session_id)
+        shared_by_key = {row["fact_key"]: row for row in shared_rows}
+        for row in local_rows:
+            origin_conversation_id, reason = await self._evaluate_promotion_evidence(
+                session_id, wl, row["source_message_ids"]
+            )
+            # Display-bug fix: when re-promoting this fact would be an exact
+            # no-op (same idempotency comparison as the write path), tell the
+            # client so the UI stops offering the share action.
+            already_shared = False
+            if reason is None and origin_conversation_id is not None:
+                existing = shared_by_key.get(row["fact_key"])
+                if existing is not None:
+                    already_shared = self._shared_row_matches(
+                        existing,
+                        CoreFactCandidate(
+                            fact_key=row["fact_key"],
+                            fact_value=row["fact_value"],
+                            confidence=row["confidence"],
+                            importance=row["importance"],
+                            source_message_ids=list(json.loads(row["source_message_ids"])),
+                            is_pinned=bool(row["is_pinned"]),
+                        ),
+                        wl,
+                        origin_conversation_id,
+                    )
+            local_items.append({
+                "id": row["id"],
+                "fact_key": row["fact_key"],
+                "fact_value": row["fact_value"],
+                "confidence": row["confidence"],
+                "importance": row["importance"],
+                "is_pinned": bool(row["is_pinned"]),
+                "created_at": row["created_at"],
+                "promotion_eligible": reason is None,
+                "promotion_reason": reason,
+                "already_shared": already_shared,
+            })
+        shared_rows.sort(
+            key=lambda row: (-int(row["is_pinned"]), -float(row["importance"]), -int(row["id"]))
+        )
+        shared_items = [
+            {
+                "id": row["id"],
+                "fact_key": row["fact_key"],
+                "fact_value": row["fact_value"],
+                "confidence": row["confidence"],
+                "importance": row["importance"],
+                "is_pinned": bool(row["is_pinned"]),
+                "created_at": row["created_at"],
+                "origin_worldline": row["origin_worldline"],
+            }
+            for row in shared_rows
+        ]
+        return {"local": local_items, "shared": shared_items}
+
+    async def promote_local_self_fact(
+        self,
+        session_id: str,
+        worldline: str,
+        local_fact_id: int,
+    ) -> tuple[int, bool]:
+        """Explicitly promote one local self core fact into the shared store.
+
+        Everything is re-read from the persistent stores; the caller only
+        names the fact. Promotion copies — the local fact is never touched.
+        """
+        wl = normalize_worldline(worldline)
+        if not session_id or not str(session_id).strip():
+            raise SharedFactPromotionError("fact_not_found")
+        db = await get_db(wl, "memory")
+        try:
+            cur = await db.execute(
+                "SELECT * FROM core_facts WHERE id=?", (int(local_fact_id),)
+            )
+            row = await cur.fetchone()
+        finally:
+            await db.close()
+        # Ownership failures answer exactly like a missing fact (no existence leak).
+        if row is None or row["session_id"] != session_id:
+            raise SharedFactPromotionError("fact_not_found")
+        try:
+            fact_mode = normalize_identity_mode(row["identity_mode"])
+        except ValueError as exc:
+            raise SharedFactPromotionError("identity_scope_violation") from exc
+        if fact_mode != "self":
+            raise SharedFactPromotionError("identity_scope_violation")
+        if not row["is_current"]:
+            raise SharedFactPromotionError("stale_fact")
+        origin_conversation_id, reason = await self._evaluate_promotion_evidence(
+            session_id, wl, row["source_message_ids"]
+        )
+        if reason is not None or origin_conversation_id is None:
+            raise SharedFactPromotionError(reason or "fact_not_promotable")
+        candidate = CoreFactCandidate(
+            fact_key=row["fact_key"],
+            fact_value=row["fact_value"],
+            confidence=row["confidence"],
+            importance=row["importance"],
+            # Evidence types were already strictly validated by the evaluate
+            # step above; the persisted list is used as-is (no coercion).
+            source_message_ids=list(json.loads(row["source_message_ids"])),
+            is_pinned=bool(row["is_pinned"]),
+        )
+        # Final hard gate: the Q18 provenance verification stays authoritative
+        # (defense in depth against evaluate/submit TOCTOU drift).
+        try:
+            await self._verify_shared_provenance(
+                session_id, wl, origin_conversation_id, "self", candidate.source_message_ids
+            )
+        except SharedFactPromotionError:
+            raise
+        except ValueError as exc:
+            raise SharedFactPromotionError("fact_not_promotable") from exc
+        return await self._write_shared_fact_current(
+            session_id, candidate, wl, origin_conversation_id
+        )
 
     async def select_core_facts(
         self,

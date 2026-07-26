@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from fastapi import APIRouter, HTTPException, Query
 
 from app.db import normalize_worldline, validate_schema
-from app.services.memory import memory_service
+from app.services.memory import SharedFactPromotionError, memory_service
 from app.services.session_manager import session_coordinator
 from app.services.soul_engine import soul_engine
 from app.services.diagnostics import diagnostic_runtime
@@ -142,6 +142,41 @@ async def forget_memory(request: ForgetRequest):
         raise HTTPException(status_code=422, detail="scope must be all, episodic, core, or emotion")
     await memory_service.forget(request.session_id, normalize_worldline(request.worldline), request.scope)
     return {"status": "forgotten", "scope": request.scope, "worldline": normalize_worldline(request.worldline)}
+
+
+@router.get("/api/memory/facts")
+async def memory_facts_ledger(
+    session_id: str = Query("default"),
+    worldline: str = Query("steins_gate"),
+):
+    """Gate 7A Memory Ledger: worldline self-local facts + all shared facts."""
+    try:
+        wl = normalize_worldline(worldline)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return await memory_service.list_memory_facts_for_ledger(session_id, wl)
+
+
+@router.post("/api/memory/facts/{local_fact_id}/promote")
+async def promote_memory_fact(
+    local_fact_id: int,
+    session_id: str = Query("default"),
+    worldline: str = Query("steins_gate"),
+):
+    """Gate 7A explicit promotion. No request body is accepted: the server
+    re-reads and re-verifies everything from the persistent stores."""
+    try:
+        wl = normalize_worldline(worldline)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        shared_id, changed = await memory_service.promote_local_self_fact(
+            session_id, wl, local_fact_id
+        )
+    except SharedFactPromotionError as exc:
+        status = 404 if exc.code == "fact_not_found" else 409
+        raise HTTPException(status_code=status, detail=exc.code) from exc
+    return {"id": shared_id, "scope": "shared", "changed": changed}
 
 
 @router.get("/health/dependencies")
