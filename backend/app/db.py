@@ -27,7 +27,8 @@ EMBEDDING_DIMENSION = 384
 # v4: conversations.identity_mode (okabe|self); existing rows backfilled to okabe.
 # v5: emotion_states keyed by (session_id, identity_mode); existing rows → okabe (U-M2).
 # v6: core_facts / episodic_memories scoped by identity_mode; existing rows → okabe (U-M3).
-SCHEMA_VERSION = 6
+# v7: conversations.identity_acknowledged (0|1); existing rows backfilled to 0 (IDENTITY-ACK-01).
+SCHEMA_VERSION = 7
 
 DEFAULT_IDENTITY_MODE = "okabe"
 IDENTITY_MODES = frozenset({"okabe", "self"})
@@ -134,6 +135,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     provider_id TEXT,
     model_id TEXT,
     identity_mode TEXT NOT NULL DEFAULT 'okabe' CHECK(identity_mode IN ('okabe','self')),
+    identity_acknowledged INTEGER NOT NULL DEFAULT 0 CHECK(identity_acknowledged IN (0,1)),
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
     last_active_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -638,6 +640,42 @@ def _migrate_v5_to_v6(connection: sqlite3.Connection, kind: DatabaseKind) -> Non
     connection.commit()
 
 
+def _migrate_v6_to_v7(connection: sqlite3.Connection, kind: DatabaseKind) -> None:
+    """IDENTITY-ACK-01: conversation-scoped identity_acknowledged flag.
+
+    Additive column; legacy rows backfill to 0 (never explained yet). The flag
+    lives on the conversation row only — no global or memory-system state.
+    """
+    if kind == "history":
+        if not _column_exists(connection, "conversations", "identity_acknowledged"):
+            connection.execute(
+                "ALTER TABLE conversations "
+                "ADD COLUMN identity_acknowledged INTEGER NOT NULL DEFAULT 0"
+            )
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute(
+                """UPDATE conversations
+                       SET identity_acknowledged=0
+                     WHERE identity_acknowledged IS NULL
+                        OR identity_acknowledged NOT IN (0,1)"""
+            )
+            connection.execute(
+                "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version',?)",
+                ("7",),
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        return
+    connection.execute(
+        "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version',?)",
+        ("7",),
+    )
+    connection.commit()
+
+
 async def _initialize_one(worldline: str, kind: DatabaseKind, schema: str) -> None:
     path = _resolve_path(worldline, kind)
     if path in _initialized_paths:
@@ -688,6 +726,9 @@ def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str 
         if current == 5:
             _migrate_v5_to_v6(connection, kind)
             current = 6
+        if current == 6:
+            _migrate_v6_to_v7(connection, kind)
+            current = 7
         if current not in (None, SCHEMA_VERSION):
             raise RuntimeError(f"unsupported {kind} schema version at {path}: {current}")
 

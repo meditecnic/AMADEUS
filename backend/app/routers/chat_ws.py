@@ -68,6 +68,77 @@ def _is_publishable_japanese(text: str) -> bool:
     return is_plausible_japanese_tts_source(text)
 
 
+# IDENTITY-ACK-01: deterministic local trigger for explicit identity questions.
+# Conservative substring/full-match sets — the model never decides this. Kept
+# in normalized form (NFKC, casefold, whitespace removed).
+import unicodedata as _unicodedata
+
+_IDENTITY_QUESTION_SUBSTRINGS = (
+    "你是谁",
+    "你到底是谁",
+    "自我介绍",
+    "你是不是ai",
+    "你是ai吗",
+    "你是人工智能吗",
+    "あなたは誰",
+    "君は誰",
+    "お前は誰",
+    "自己紹介",
+    "aiなの",
+    "あなたはai",
+    "aiですか",
+)
+_IDENTITY_QUESTION_EXACT = ("誰?", "だれ?", "誰", "だれ")
+
+
+def _is_explicit_identity_question(text: str) -> bool:
+    """True only for explicit self-identity asks (你是谁 / 誰？ / AIなの？).
+
+    Greetings, capability-boundary questions, worldline or relationship talk
+    must never match; 『犯人は誰？』 style third-party questions stay out
+    because 『誰』 alone only matches as the whole utterance.
+    """
+    if not isinstance(text, str):
+        return False
+    normalized = re.sub(
+        r"\s+", "", _unicodedata.normalize("NFKC", text)
+    ).casefold()
+    if not normalized:
+        return False
+    if normalized in _IDENTITY_QUESTION_EXACT:
+        return True
+    return any(pattern in normalized for pattern in _IDENTITY_QUESTION_SUBSTRINGS)
+
+
+# Fallback/recovery lines never count as a successful identity briefing.
+_IDENTITY_ACK_BLOCKERS = (
+    "もう一度試して",
+    "何言ってんの。あたしは牧瀬紅莉栖よ",
+)
+
+# IDENTITY-ACK-01 rework: the published Japanese reply must actually contain the
+# minimal identity-boundary fact set before the flag may flip. Three evidence
+# classes, ALL required (fail-safe: an on-topic dodge, a too-short answer, or a
+# partial briefing keeps the flag False — better to re-explain once than to
+# wrongly confirm). Checked on the published reply only; user input keywords or
+# bare self-claims never substitute for it, and the model never decides.
+_IDENTITY_BRIEFING_MEMORY_MARKERS = ("記憶をデータ化", "記憶由来", "記憶プロファイル")
+_IDENTITY_BRIEFING_SYSTEM_MARKERS = ("ai", "人工知能", "システム")
+_IDENTITY_BRIEFING_BOUNDARY_MARKERS = ("生身", "本人ではない", "本人そのものじゃない", "本尊ではない")
+
+
+def _looks_like_complete_identity_briefing(text: str) -> bool:
+    """True only when memory-origin, AI/system, and not-biological evidence all appear."""
+    if not isinstance(text, str) or not text.strip():
+        return False
+    normalized = _unicodedata.normalize("NFKC", text).casefold()
+    return (
+        any(marker in normalized for marker in _IDENTITY_BRIEFING_MEMORY_MARKERS)
+        and any(marker in normalized for marker in _IDENTITY_BRIEFING_SYSTEM_MARKERS)
+        and any(marker in normalized for marker in _IDENTITY_BRIEFING_BOUNDARY_MARKERS)
+    )
+
+
 class SessionState:
     def __init__(self, session_id: str):
         self.session_id = session_id
@@ -91,6 +162,9 @@ class SessionState:
         self.identity_mode = "okabe"
         # Preference for draft materialize / new conversation (from client settings).
         self.default_identity_mode = "okabe"
+        # IDENTITY-ACK-01: conversation-scoped; loaded from the conversation row,
+        # one-way False→True, never global and never memory-system state.
+        self.identity_acknowledged = False
         # Slice B: app-level self-mode call name (client config; in-memory only,
         # re-sent on every auth). Sanitized fail-closed at ingestion.
         self.self_name = ""
@@ -123,6 +197,7 @@ class SessionState:
         self.provider_id = str(selected.get("provider_id") or "deepseek")
         self.model = str(selected.get("model_id") or self.model)
         self.identity_mode = normalize_identity_mode(selected.get("identity_mode"))
+        self.identity_acknowledged = bool(selected.get("identity_acknowledged") or 0)
         self.api_key = credential_store.get(self.provider_id)
         self._history = await models.get_recent_messages(
             self.session_id,
@@ -158,6 +233,7 @@ class SessionState:
         self.identity_mode = normalize_identity_mode(
             getattr(self, "default_identity_mode", None)
         )
+        self.identity_acknowledged = False
         self._history = []
         self.memory_summary = ""
         from app.services.soul_engine import soul_engine
@@ -927,6 +1003,7 @@ async def processor_loop(
         session.conversation_mode = "history"
         # Turn-start snapshot from conversation record (Q21 immutable); never infer.
         session.identity_mode = normalize_identity_mode(selected.get("identity_mode"))
+        session.identity_acknowledged = bool(selected.get("identity_acknowledged") or 0)
     else:
         # Always re-sync mode from durable conversation row so switch/rollback
         # cannot leave a stale self/okabe label on the wrong session (P3).
@@ -937,6 +1014,7 @@ async def processor_loop(
                 session.worldline,
             )
             session.identity_mode = normalize_identity_mode(owned.get("identity_mode"))
+            session.identity_acknowledged = bool(owned.get("identity_acknowledged") or 0)
         except ConversationNotFound:
             session.identity_mode = normalize_identity_mode(
                 getattr(session, "identity_mode", None)
@@ -1245,6 +1323,27 @@ async def processor_loop(
                     identity_mode=getattr(session, "identity_mode", "okabe"),
                 )
                 from app.services.conversations import conversation_service
+
+                # IDENTITY-ACK-01: only an explicit identity ask whose turn
+                # published real canonical Japanese (guarded above by
+                # full_ja_text.strip() + epoch/conversation match) AND whose
+                # reply carries the complete identity-boundary fact set may set
+                # the flag. Recovery/leak fallbacks never count; one-way.
+                if (
+                    not session.identity_acknowledged
+                    and _is_explicit_identity_question(user_msg)
+                    and not any(
+                        blocker in full_ja_text
+                        for blocker in _IDENTITY_ACK_BLOCKERS
+                    )
+                    and _looks_like_complete_identity_briefing(full_ja_text)
+                ):
+                    await conversation_service.mark_identity_acknowledged(
+                        session.session_id,
+                        session.worldline,
+                        conversation_id,
+                    )
+                    session.identity_acknowledged = True
 
                 conversation_service.schedule_auto_title(
                     conversation_id,

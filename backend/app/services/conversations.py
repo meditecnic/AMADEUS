@@ -43,6 +43,8 @@ def _record(row, worldline: str) -> dict[str, object]:
     # Pre-v4 rows should not appear after migration; default for safety.
     mode = result.get("identity_mode") or DEFAULT_IDENTITY_MODE
     result["identity_mode"] = normalize_identity_mode(str(mode))
+    # IDENTITY-ACK-01: pre-v7 rows default to "never explained" (False).
+    result["identity_acknowledged"] = bool(result.get("identity_acknowledged") or 0)
     return result
 
 
@@ -175,6 +177,29 @@ class ConversationService:
                     f"conversation {conversation_id!r} is not owned by session {session_id!r} in {wl}"
                 )
             return _record(row, wl)
+        finally:
+            await db.close()
+
+    async def mark_identity_acknowledged(
+        self,
+        session_id: str,
+        worldline: str,
+        conversation_id: str,
+    ) -> None:
+        """IDENTITY-ACK-01: one-way False→True on the owned conversation row only.
+
+        No global state, no memory-system writes; conversation binding keeps the
+        flag scoped per (session, worldline, identity_mode) automatically.
+        """
+        wl = normalize_worldline(worldline)
+        db = await get_db(wl, "history")
+        try:
+            await db.execute(
+                "UPDATE conversations SET identity_acknowledged=1 "
+                "WHERE id=? AND session_id=?",
+                (conversation_id, session_id),
+            )
+            await db.commit()
         finally:
             await db.close()
 

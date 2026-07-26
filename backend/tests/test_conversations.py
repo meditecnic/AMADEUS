@@ -536,7 +536,8 @@ async def test_v1_history_migration_backfills_one_default_per_session(tmp_path, 
     try:
         version = connection.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()[0]
         conversations = connection.execute(
-            "SELECT session_id,id,is_default,identity_mode FROM conversations ORDER BY session_id"
+            "SELECT session_id,id,is_default,identity_mode,identity_acknowledged "
+            "FROM conversations ORDER BY session_id"
         ).fetchall()
         messages = connection.execute(
             "SELECT session_id,conversation_id FROM messages ORDER BY id"
@@ -553,9 +554,12 @@ async def test_v1_history_migration_backfills_one_default_per_session(tmp_path, 
     finally:
         connection.close()
 
-    assert version == "6"
+    assert version == str(db_module.SCHEMA_VERSION)
     assert "translation" in message_columns
     assert "identity_mode" in conversation_columns
+    # v7 (IDENTITY-ACK-01): legacy rows backfill to "never explained".
+    assert "identity_acknowledged" in conversation_columns
+    assert all(row["identity_acknowledged"] == 0 for row in conversations)
     assert [(row["session_id"], row["is_default"], row["identity_mode"]) for row in conversations] == [
         ("darling", 1, "okabe"),
         ("okabe", 1, "okabe"),
