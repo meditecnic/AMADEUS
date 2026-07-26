@@ -503,3 +503,63 @@ describe('SettingsModal UX contracts', () => {
     await waitFor(() => expect(onSelectWebSearchProvider).toHaveBeenCalledWith('firecrawl'));
   });
 });
+
+describe('Memory Ledger tab (Gate 7A)', () => {
+  it('opens on a non-memory tab and issues zero ledger requests by default', () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      render(<SettingsModal {...baseProps} sessionId="s-okabe" onSaveSettings={vi.fn()} />);
+      const basicTab = screen.getByRole('button', { name: 'BASIC' });
+      expect(basicTab.className).toContain('active');
+      const memoryTab = screen.getByRole('button', { name: 'MEMORY' });
+      expect(memoryTab.className).not.toContain('active');
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('shows the self ledger even while the app defaults to okabe mode', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        local: [{
+          id: 5,
+          fact_key: 'favorite_drink',
+          fact_value: 'コーヒー',
+          confidence: 0.9,
+          importance: 0.7,
+          is_pinned: false,
+          created_at: '2026-07-26T00:00:00+00:00',
+          promotion_eligible: true,
+          promotion_reason: null,
+        }],
+        shared: [],
+      }),
+    } as unknown as Response);
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      // identityMode is the new-conversation default, NOT a ledger filter:
+      // the ledger always manages the user's own self facts (never okabe).
+      render(
+        <SettingsModal
+          {...baseProps}
+          sessionId="s-okabe"
+          identityMode="okabe"
+          onSaveSettings={vi.fn()}
+        />,
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'MEMORY' }));
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+      expect(String(fetchMock.mock.calls[0][0])).toContain(
+        '/api/memory/facts?session_id=s-okabe&worldline=steins_gate',
+      );
+      await waitFor(() => expect(screen.getByTestId('local-fact-5')).toBeTruthy());
+      expect(screen.getByText('本世界线')).toBeTruthy();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});

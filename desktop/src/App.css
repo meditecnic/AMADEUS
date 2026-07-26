@@ -3647,3 +3647,161 @@ body {
     transition: none;
   }
 }
+
+/* ============================================================
+   Gate 7A — Memory Ledger (Settings > MEMORY tab only)
+   Follows the Salieri instrument language: burnt blacks, signal
+   orange/gold accents, clipped corners. No white surfaces, no
+   browser-default list/button styling.
+   ============================================================ */
+.memory-ledger {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  color: var(--color-text);
+}
+.memory-ledger-note {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  color: #b87332;
+}
+.memory-ledger-loading,
+.memory-ledger-empty {
+  margin: 0;
+  font-size: 11px;
+  color: #b87332;
+}
+.memory-ledger-error {
+  margin: 0;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  color: var(--color-danger);
+  border: 1px solid var(--color-danger-dim);
+  background: rgba(160, 16, 0, 0.12);
+  padding: 6px 10px;
+}
+.memory-ledger-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.memory-ledger-section h3 {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 2px;
+  color: var(--color-primary);
+  border-bottom: 1px solid var(--color-border);
+  padding-bottom: 4px;
+  text-shadow: 0 0 5px rgba(255, 108, 0, 0.35);
+}
+.memory-ledger-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.memory-ledger-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 8px 12px;
+  background: linear-gradient(180deg, rgba(19, 8, 10, 0.92), rgba(10, 6, 4, 0.96));
+  border: 1px solid var(--color-border);
+  clip-path: polygon(6px 0, calc(100% - 6px) 0, 100% 6px, 100% calc(100% - 6px), calc(100% - 6px) 100%, 6px 100%, 0 calc(100% - 6px), 0 6px);
+}
+.memory-fact-scope {
+  flex-shrink: 0;
+  font-size: 9px;
+  letter-spacing: 1.2px;
+  color: var(--color-gold);
+  border: 1px solid var(--color-border-light);
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+.memory-fact-key {
+  font-size: 12px;
+  letter-spacing: 0.5px;
+  color: #ffd27a;
+}
+.memory-fact-value {
+  font-size: 12px;
+  color: var(--color-text);
+  flex: 1 1 auto;
+  min-width: 120px;
+  overflow-wrap: anywhere;
+}
+.memory-fact-pinned {
+  font-size: 9px;
+  letter-spacing: 1px;
+  color: var(--color-gold);
+  border: 1px solid var(--color-border-light);
+  padding: 1px 6px;
+}
+.memory-fact-origin {
+  font-size: 10px;
+  color: #b87332;
+  white-space: nowrap;
+}
+.memory-share-btn {
+  font-size: 10px;
+  letter-spacing: 1px;
+  padding: 5px 12px;
+  white-space: nowrap;
+}
+.memory-share-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: grayscale(0.4);
+}
+.memory-fact-reason {
+  font-size: 10px;
+  color: #b87332;
+  white-space: nowrap;
+}
+.memory-fact-shared-mark {
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--color-success);
+  border: 1px solid rgba(102, 255, 102, 0.35);
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+/* Confirm sheet: in-flow raised panel; never covers the modal chrome. */
+.memory-promote-confirm {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px;
+  background: linear-gradient(180deg, rgba(35, 13, 5, 0.98), rgba(12, 7, 4, 0.99));
+  border: 1px solid #ff8c24;
+  box-shadow: 0 0 12px rgba(255, 170, 0, 0.25);
+  clip-path: polygon(8px 0, calc(100% - 8px) 0, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0 calc(100% - 8px), 0 8px);
+}
+.memory-promote-confirm p {
+  margin: 0;
+  font-size: 12px;
+  color: #ffe1aa;
+}
+.memory-promote-target {
+  font-size: 11px;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+.memory-promote-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.memory-promote-confirm button:focus-visible,
+.memory-share-btn:focus-visible {
+  outline: 1px solid var(--color-gold);
+  outline-offset: 2px;
+}

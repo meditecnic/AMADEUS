@@ -1491,6 +1491,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         worldline={worldline}
+        sessionId={sessionId}
         apiKey={apiKey}
         credentialConfigured={credentialConfigured}
         credentialStatus={credentialStatus}

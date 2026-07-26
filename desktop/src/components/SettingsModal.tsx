@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 
+import { MemoryLedger } from './MemoryLedger';
+
 export type CredentialStatus = 'checking' | 'configured' | 'not_configured' | 'saving' | 'error';
 
 /** Paid web-search backends only (Tavily | Firecrawl). No free HTML fallback. */
@@ -154,6 +156,8 @@ export interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
   worldline: 'steins_gate' | 'beta';
+  /** Gate 7A: durable session id for the Memory Ledger (read-only wiring). */
+  sessionId?: string;
   apiKey: string;
   credentialConfigured: boolean;
   credentialStatus?: CredentialStatus;
@@ -211,6 +215,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
   worldline,
+  sessionId = '',
   apiKey,
   credentialConfigured,
   credentialStatus,
@@ -242,7 +247,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onSelectWebSearchProvider,
   onClearWebSearchCredential,
 }) => {
-  const [activeTab, setActiveTab] = useState<'basic' | 'voice'>('basic');
+  const [activeTab, setActiveTab] = useState<'basic' | 'voice' | 'memory'>('basic');
   const [localWorldline, setLocalWorldline] = useState<'steins_gate' | 'beta'>(worldline);
   const [localApiKey, setLocalApiKey] = useState(apiKey);
   const [localWebSearchApiKey, setLocalWebSearchApiKey] = useState(webSearchApiKey);
@@ -410,6 +415,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </button>
             <button aria-label="VOICE" className={`tab-pill ${activeTab === 'voice' ? 'active' : ''}`} onClick={() => setActiveTab('voice')}>
               VOICE
+            </button>
+            <button aria-label="MEMORY" className={`tab-pill ${activeTab === 'memory' ? 'active' : ''}`} onClick={() => setActiveTab('memory')}>
+              MEMORY
             </button>
           </nav>
           <main className="tab-panels">
@@ -712,6 +720,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <label>GPT-SoVITS 服务端点</label>
                 <input type="text" value={localSovitsUrl} onChange={(e) => setLocalSovitsUrl(e.target.value)} className="salieri-input" placeholder="http://127.0.0.1:9880" />
               </div>
+            </section>
+            {/* MEMORY tab (Gate 7A ledger; identity-agnostic, self facts only) */}
+            <section className={`tab-panel ${activeTab === 'memory' ? 'active' : ''}`}>
+              <MemoryLedger
+                sessionId={sessionId}
+                worldline={worldline}
+                active={isOpen && activeTab === 'memory'}
+              />
             </section>
           </main>
           {saveError && (
