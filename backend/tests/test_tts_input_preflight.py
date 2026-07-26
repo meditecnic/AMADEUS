@@ -34,6 +34,13 @@ REAL_LOG_COLLAPSE = (
     "子おろしてましせただしま角環プロｯtま字です、とのデータつきはしてい 。"
 )
 
+
+def test_preflight_accepts_kanji_only_japanese_identity_lines():
+    """LANG-GATE-RELAX-01: kana-less natural Japanese must not be invalid_language."""
+    for line in ("岡部倫太郎、通称鳳凰院凶真。", "岡部倫太郎。"):
+        prepared = prepare_tts_text(line)
+        assert prepared.error is None, (line, prepared.error)
+
 LEGIT_LATIN_EXAMPLES = [
     "大丈夫？",
     "そんなこと、あるわけないでしょ？",

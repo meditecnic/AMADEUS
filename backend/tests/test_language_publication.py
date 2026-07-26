@@ -62,6 +62,110 @@ def test_publication_gate_rejects_short_pure_chinese_greetings_keeps_ja_short():
         assert is_plausible_japanese_tts_source(good), good
 
 
+def test_publication_gate_keeps_kanji_only_japanese_identity_lines():
+    """LANG-GATE-RELAX-01: live hard-rejects of natural kana-less Japanese.
+
+    [Guard] hard-reject language segment len=14 preview='岡部倫太郎、通称鳳凰院凶真。'
+    [Guard] hard-reject language segment len=6 preview='岡部倫太郎。'
+    Missing kana or a zh script classification alone must not reject text.
+    """
+    from app.domain.segments import is_plausible_japanese_tts_source
+
+    for line in ("岡部倫太郎、通称鳳凰院凶真。", "岡部倫太郎。"):
+        assert _is_publishable_japanese(line), line
+        assert is_plausible_japanese_tts_source(line), line
+
+
+def test_publication_gate_still_rejects_incident_garbage_shapes():
+    """Relaxing the kana requirement must not re-admit the real incident soup."""
+    from app.domain.segments import is_plausible_japanese_tts_source
+
+    for garbage in (INCIDENT_GARBAGE_TAIL, REAL_LOG_COLLAPSE):
+        assert not _is_publishable_japanese(garbage)
+        assert not is_plausible_japanese_tts_source(garbage)
+
+
+# >32 meaningful kanji, no Chinese-only characters/words, no garbage signals.
+KANJI_DENSE_JA_TITLE_LINE = (
+    "東京大学脳科学研究所主催国際学術会議開催決定、"
+    "量子計算機関連技術発表多数、産学連携強化推進委員会設立準備室新設。"
+)
+
+
+def test_relax01_single_gate_no_second_router_door():
+    """LANG-GATE-RELAX-01 rework: ja/mixed/zh all defer to the single domain gate.
+
+    - short mixed Japanese with one kana (あ、岡部。) publishes;
+    - kanji-dense kana-less Japanese beyond 32 letters publishes;
+    - definite Chinese wording and incident garbage still fail.
+    """
+    from app.domain.segments import (
+        is_plausible_japanese_tts_source,
+        meaningful_character_count,
+        prepare_tts_text,
+    )
+
+    assert meaningful_character_count(KANJI_DENSE_JA_TITLE_LINE) > 32
+
+    for good in ("あ、岡部。", KANJI_DENSE_JA_TITLE_LINE):
+        assert _is_publishable_japanese(good), good
+        assert is_plausible_japanese_tts_source(good), good
+        assert prepare_tts_text(good).error is None, good
+
+    for bad in ("这就是だ", "你好", "根据外部数据，没有更多信息。"):
+        assert not _is_publishable_japanese(bad), bad
+        assert not is_plausible_japanese_tts_source(bad), bad
+
+
+@pytest.mark.asyncio
+async def test_short_mixed_japanese_reply_publishes_without_retry():
+    """あ、岡部。 must stream through: no retry, no language-failure fallback."""
+    provider = _SequencedStreamProvider(["[EMO:neutral] あ、岡部。"])
+    session = SessionState("short-mixed-ja-publish")
+    session.api_key = "test-key"
+    session.system_prompt = "あなたはAmadeusだ。"
+    published: list[str] = []
+
+    with patch("app.routers.chat_ws.deepseek_service", provider):
+        text, _, _, _ = await get_clean_text_stream(
+            active_history=[{"role": "user", "content": "俺だ。"}],
+            memory_summary="",
+            session=session,
+            on_text_delta=lambda delta, _emotion: published.append(delta),
+        )
+
+    assert provider.call_count == 1
+    assert "岡部" in text
+    assert "生成できなかった" not in text
+    assert "岡部" in "".join(published)
+
+
+@pytest.mark.asyncio
+async def test_kanji_only_identity_line_publishes_without_retry():
+    """The Okabe identity sentence streams through: no retry, no failure text."""
+    provider = _SequencedStreamProvider(
+        ["[EMO:neutral] 岡部倫太郎、通称鳳凰院凶真。"]
+    )
+    session = SessionState("kanji-only-identity-publish")
+    session.api_key = "test-key"
+    session.system_prompt = "あなたはAmadeusだ。"
+    published: list[str] = []
+
+    with patch("app.routers.chat_ws.deepseek_service", provider):
+        text, _, _, _ = await get_clean_text_stream(
+            active_history=[{"role": "user", "content": "お前は俺を知っているか？"}],
+            memory_summary="",
+            session=session,
+            on_text_delta=lambda delta, _emotion: published.append(delta),
+        )
+
+    assert provider.call_count == 1
+    assert "岡部倫太郎" in text
+    assert "生成できなかった" not in text
+    assert "崩れた" not in text
+    assert "岡部倫太郎" in "".join(published)
+
+
 @pytest.mark.asyncio
 async def test_chinese_user_greeting_gets_first_pass_japanese_hard_requirement():
     """Chinese 你好 must inject JA hard requirement on attempt 0 (not only after fail)."""

@@ -51,37 +51,21 @@ _V2_DELIVERY_TYPES = frozenset(
     }
 )
 _V2_TERMINAL_TYPES = frozenset({"turn.completed", "turn.cancelled"})
-_JAPANESE_KANA = re.compile(r"[\u3040-\u30ff\u31f0-\u31ff]")
 
 
 def _is_publishable_japanese(text: str) -> bool:
-    """Reject substantive Chinese drafts and random CJK soup before UI/TTS."""
+    """Single-gate publication check (LANG-GATE-RELAX-01 rework).
+
+    ja/mixed/zh all defer to segments.is_plausible_japanese_tts_source — the
+    router adds NO second door based on language labels or kana counts.
+    Definite Chinese wording and incident garbage shapes still fail there.
+    """
 
     from app.domain.segments import is_plausible_japanese_tts_source
 
     if is_ignorable_non_speech_segment(text):
         return False
-    language = classify_source_language(text)
-    kana_count = len(_JAPANESE_KANA.findall(text))
-    stripped = text.strip()
-    if language == "ja":
-        # Short real Japanese remains publishable; incident-shaped garbage fails.
-        if len(stripped) <= 10:
-            return kana_count >= 1
-        return is_plausible_japanese_tts_source(text)
-    if language == "mixed":
-        # A lone kana in a Chinese draft is not enough to route it into the
-        # Japanese lane. Real Japanese sentences normally provide several.
-        if kana_count < 2:
-            return False
-        return is_plausible_japanese_tts_source(text)
-    if language == "zh":
-        # Short pure Chinese (你好 / 谢谢) is NOT Japanese. Only allowlisted
-        # kanji-only Japanese interjections (了解 / 大丈夫) may pass.
-        from app.domain.segments import is_allowlisted_short_ja_kanji
-
-        return is_allowlisted_short_ja_kanji(stripped)
-    return False
+    return is_plausible_japanese_tts_source(text)
 
 
 class SessionState:

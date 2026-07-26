@@ -72,6 +72,27 @@ _JA_FUNCTION_HINT_RE = re.compile(
 # Conservative simplified-Chinese markers (aligned with diagnostics language gate).
 _CONSERVATIVE_ZH_MARKERS = frozenset("的是不了在有人这中大为上个国我以要他时来用们生到作地于出就分对成会可主发年动同工也能下过子说产种面而方后多定行学法所民得经十三之进着等部度家电力里如水化高自二理起小物现实加量都两体制机当使点从业本去把性好应开它合还因由其些然前外天政四日那社义事平形相全表间样与关各重新线内数正心反你明看原又么利比或但质气第向道命此变条只没结解问意建月公无系军很情者最立代想已通并提直题党程展五果料象员革位入常文总次品式活设及管特件长求老头基资边流路级少图山统接知较将组见计别她手角期根论运农指几九区强放决西被干做必战先回则任取据处队南给色光门即保治北造百规热领七海口东导器压志世金增争济阶油思术极交受联什认六共权收证改清己美再采转更单风切打白教速花带安场身车例真务具万每目至达走积示议声报斗完类八离华名确才科张信马节话米整空元况今集温传土许步群广石记需段研界拉林律叫且究观越织装影算低持音众书布复容儿须际商非验连断深难近矿千周委素技备半办青省列习响约支般史感劳便团往酸历市克何除消构府称太准精值号率族维划选标写存候毛亲快效斯院查江型眼王按格养易置派层片始却专状育厂京识适属圆包火住调满县局照参红细引听该铁价严龙飞")
 
+# Characters that natural Japanese essentially never prints (simplified-only
+# forms and Chinese colloquial particles). Presence is a HIGH-CONFIDENCE sign
+# the Han-only line is Chinese wording, not kana-less Japanese.
+# NOTE: shinjitai shared with simplified (学/国/体…) must stay OUT of this set.
+_CHINESE_ONLY_HAN = frozenset(
+    "你您咱们这谢见对说问请语门马东车红时实现发头买卖过还进远运动让认识记应给谁怎么吗呢吧啊哦呀哈喽嘛哟调开为"
+)
+
+# Chinese-only multi-character words whose glyphs are all shared with Japanese
+# (没有/根据/数据…). Japanese never writes these compounds; they mark a
+# Chinese draft even when every single character looks JP-safe.
+_CHINESE_ONLY_WORDS = (
+    "没有", "根据", "数据", "信息", "什么", "一下", "更多", "可以", "但是",
+)
+
+
+def _looks_like_chinese_wording(text: str) -> bool:
+    if any(ch in _CHINESE_ONLY_HAN for ch in text):
+        return True
+    return any(word in text for word in _CHINESE_ONLY_WORDS)
+
 # Short kanji-only Japanese speech (no kana) that must remain publishable.
 # Pure Chinese greetings (你好/谢谢/…) must NOT match this set.
 _SHORT_JA_KANJI_ALLOWLIST = frozenset({
@@ -95,6 +116,31 @@ def is_allowlisted_short_ja_kanji(text: str) -> bool:
     if _KANA_RE.search(core) or _LATIN_RUN_RE.search(core):
         return False
     return core in _SHORT_JA_KANJI_ALLOWLIST
+
+
+def _is_publishable_kanji_only_japanese(text: str) -> bool:
+    """LANG-GATE-RELAX-01: Han-only (no kana) lines are publishable Japanese
+    unless a HIGH-CONFIDENCE Chinese/garbage signal fires.
+
+    Live incident: 『岡部倫太郎、通称鳳凰院凶真。』 was hard-rejected three
+    times just for lacking kana, and the whole turn was replaced by the
+    language-failure fallback. Missing kana and raw length are NOT collapse
+    evidence — kanji-dense titles/terms/quotes stay publishable at any length.
+    """
+    core = _core_cjk_letters(text)
+    if len(core) <= 0:
+        return False
+    # Definitely-Chinese wording (你好/谢谢/没有/根据…): only the short Japanese
+    # interjection allowlist may pass — the E-series contract stays intact.
+    if _looks_like_chinese_wording(text):
+        return is_allowlisted_short_ja_kanji(text)
+    if _HALFWIDTH_KATA_RE.search(text):
+        return False
+    if _has_suspicious_latin_embedding(text):
+        return False
+    if len(_COLLAPSE_MARK_RE.findall(text)) >= 2:
+        return False
+    return True
 
 
 def clean_text_for_tts(text: str) -> str:
@@ -228,6 +274,14 @@ def is_plausible_japanese_tts_source(text: str) -> bool:
     script = classify_tts_script(text)
     if script in {"symbol_only", "unknown"}:
         return False
+    # High-confidence Chinese wording rejects on every path (ja/mixed/zh alike);
+    # only the short kanji-only Japanese interjection allowlist survives it.
+    if _looks_like_chinese_wording(text):
+        return is_allowlisted_short_ja_kanji(text)
+    # Han-only lines (script "zh") are no longer fail-closed on missing kana;
+    # they publish unless a high-confidence garbage signal fires.
+    if script == "zh":
+        return _is_publishable_kanji_only_japanese(text)
 
     kana = _KANA_RE.findall(text)
     han = _HAN_RE.findall(text)
@@ -236,15 +290,10 @@ def is_plausible_japanese_tts_source(text: str) -> bool:
     letters = meaningful_character_count(text)
     if letters <= 0:
         return False
-    # Short Japanese is often kana-only ("うん") or allowlisted kanji-only ("大丈夫" / "了解").
-    # Pure Chinese greetings (你好 / 谢谢) must never pass as Japanese speech.
+    # Short Japanese is often kana-only ("うん").
     if letters <= 10:
-        if script in {"ja", "mixed"} and kana_n >= 1:
+        if kana_n >= 1:
             return True
-        if script == "zh" and han_n == letters:
-            return is_allowlisted_short_ja_kanji(text)
-        return False
-    if script == "zh":
         return False
     # Character speech never uses halfwidth katakana; ｯ mixed with Latin is collapse.
     if _HALFWIDTH_KATA_RE.search(text):
@@ -252,13 +301,6 @@ def is_plausible_japanese_tts_source(text: str) -> bool:
     # Embedded garbage Latin runs must fail even when kana density looks high.
     if _has_suspicious_latin_embedding(text):
         return False
-    # Real spoken Japanese needs at least one kana once past the short path;
-    # require two only for longer lines without grammar hints.
-    if kana_n < 1:
-        return False
-    if kana_n < 2:
-        if letters >= 16 and not _JA_FUNCTION_HINT_RE.search(text):
-            return False
     # Random Han-dominant soup with a couple of kana (the incident shape).
     if letters >= 16 and kana_n < 4 and han_n >= max(10, kana_n * 4):
         return False
@@ -287,9 +329,6 @@ def is_plausible_japanese_tts_source(text: str) -> bool:
             return False
         if collapse_marks >= 1 and _LATIN_RUN_RE.search(text) and kana_ratio < 0.32:
             return False
-    # mixed with only one kana is usually a Chinese draft with a stray kana.
-    if script == "mixed" and kana_n < 2:
-        return False
     return True
 
 
