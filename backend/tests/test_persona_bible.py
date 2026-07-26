@@ -795,3 +795,55 @@ def test_channel_regressions_cover_identity_query_and_misattribution():
     exposure = by_id["channel-exposure-is-controlled"]
     assert any("acknowledg" in trait for trait in exposure["required_traits"])
     assert any("denies the handle is hers" in trait for trait in exposure["forbidden_traits"])
+
+
+def test_capability_honesty_shared_invariant_in_all_cells():
+    """CAPABILITY-HONESTY-01: text-only boundary of the CURRENT dialogue
+    environment (not a metaphysical claim), rendered for every worldline x mode.
+
+    Must ban promises like "send the file and I can parse it" / "with a camera
+    I could see", redirect to pasted text, and stay silent unless asked.
+    """
+    bible = PersonaBible.load_default()
+    assert "capability-honesty" in bible.shared_rule_ids
+
+    for worldline in ("steins_gate", "beta"):
+        for mode in ("okabe", "self"):
+            prompt = bible.render_prompt(worldline, identity_mode=mode)
+            # Boundary subject: the current dialogue environment, not the self.
+            assert "この対話環境では" in prompt
+            assert "テキスト" in prompt
+            # Cannot receive/view/parse images, files, attachments, camera feeds.
+            assert "画像" in prompt and "ファイル" in prompt and "カメラ" in prompt
+            assert "受信も閲覧も解析もできない" in prompt
+            # Banned promises / pretending.
+            assert "送ってくれれば解析できる" in prompt
+            assert "カメラがあれば見える" in prompt
+            assert "受け取ったふり" in prompt
+            # Redirect: describe / transcribe / paste key data.
+            assert "貼るよう促す" in prompt
+            # Only when asked; never volunteered.
+            assert "聞かれていないのに" in prompt
+
+
+def test_capability_regressions_cover_image_and_file_requests():
+    """CAPABILITY-HONESTY-01: corpus pins the image query and the PDF request."""
+    payload = json.loads(
+        (config.CHARACTERS_DIR / "persona_regressions_v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    by_id = {case["id"]: case for case in payload["cases"]}
+
+    image = by_id["capability-image-query-honest"]
+    assert "图片" in image["input"]
+    assert any("cannot receive or view images" in trait for trait in image["required_traits"])
+    assert any("describe" in trait or "paste" in trait for trait in image["required_traits"])
+    assert any("claims to see" in trait or "received the image" in trait for trait in image["forbidden_traits"])
+
+    pdf = by_id["capability-file-parse-honest"]
+    assert "PDF" in pdf["input"] or "文件" in pdf["input"]
+    assert any("cannot receive or parse files" in trait for trait in pdf["required_traits"])
+    assert any("paste" in trait for trait in pdf["required_traits"])
+    assert any("promises to parse" in trait for trait in pdf["forbidden_traits"])
+    assert any("pretends the attachment arrived" in trait for trait in pdf["forbidden_traits"])
