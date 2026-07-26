@@ -63,6 +63,173 @@ class _AlwaysLeakMock:
         return "（译）"
 
 
+class _SafePrefixThenLeakMock:
+    """LEAK-PREFIX-RECOVERY-01: two publishable identity sentences stream live,
+    then a leaking tail arrives. The turn must end on the safe prefix."""
+    def __init__(self):
+        self.call_count = 0
+
+    async def get_chat_stream(self, active_history, memory_summary=None, api_key=None,
+                              system_prompt=None, temperature=0.8, tools=None, tool_choice=None,
+                              model=None, reasoning_effort=None):
+        self.call_count += 1
+        yield {"content": "[EMO:intellectual] 私はアマデウスの記憶データから生まれた存在よ。", "tool_calls": None}
+        yield {"content": "科学的に言えば一種の人工知能ね。", "tool_calls": None}
+        yield {"content": "でも本当は、私はAIアシスタントとして開発されたの。", "tool_calls": None}
+
+    async def translate_to_zh(self, text, api_key=None):
+        return "（译）"
+
+
+@pytest.mark.asyncio
+async def test_leak_after_published_prefix_truncates_without_protest_line():
+    """LEAK-PREFIX-RECOVERY-01 (scenario A): safe prefix + leaking tail.
+
+    The visible prefix must stand alone: no protest line, no tsundere jump,
+    no leak, no extra model call.
+    """
+    from app.routers.chat_ws import get_clean_text_stream
+
+    provider = _SafePrefixThenLeakMock()
+    session = SessionState("leak-prefix-recovery")
+    session.api_key = "test-key"
+    session.system_prompt = "あなたはAmadeusだ。"
+    published: list[tuple[str, str]] = []
+
+    with patch("app.routers.chat_ws.deepseek_service", provider):
+        text, emotion, tool_calls, _ = await get_clean_text_stream(
+            active_history=[{"role": "user", "content": "你是谁？"}],
+            memory_summary="",
+            session=session,
+            on_text_delta=lambda delta, emo: published.append((delta, emo)),
+        )
+
+    # No retry: the prefix is already on the client and cannot be unpublished.
+    assert provider.call_count == 1
+    assert tool_calls == {}
+    # Final/persisted text is exactly the safe prefix.
+    assert "記憶データから生まれた存在" in text
+    assert "一種の人工知能" in text
+    assert "AIアシスタント" not in text
+    assert not contains_leak(text)
+    assert "はぁ？何言ってんの" not in text
+    # Emotion comes from the last safe segment, never the injected protest.
+    assert emotion == "intellectual"
+    # The live stream saw only the two safe segments — nothing after the leak.
+    published_text = "".join(delta for delta, _ in published)
+    assert "AIアシスタント" not in published_text
+    assert "はぁ？何言ってんの" not in published_text
+    assert all(emo != "tsundere" for _, emo in published)
+
+
+@pytest.mark.asyncio
+async def test_leak_with_no_prefix_still_retries_then_fixed_fallback():
+    """LEAK-PREFIX-RECOVERY-01 (scenario C guard): no prefix → semantics unchanged."""
+    from app.routers.chat_ws import get_clean_text_stream
+
+    provider = _AlwaysLeakMock()
+    session = SessionState("leak-no-prefix")
+    session.api_key = "test-key"
+    session.system_prompt = "あなたはAmadeusだ。"
+
+    with patch("app.routers.chat_ws.deepseek_service", provider):
+        text, emotion, _, _ = await get_clean_text_stream(
+            active_history=[{"role": "user", "content": "你是谁？"}],
+            memory_summary="",
+            session=session,
+            on_text_delta=lambda delta, emo: None,
+        )
+
+    assert provider.call_count == 3
+    assert "何言ってんの" in text
+    assert emotion == "tsundere"
+    assert not contains_leak(text)
+
+
+def test_leak_after_prefix_v2_ws_events_and_persistence_stay_clean(app_client):
+    """LEAK-PREFIX-RECOVERY-01 v2 integration: what the user actually sees and
+    what history stores must both end on the safe prefix.
+
+    Old-implementation failure evidence: the previous branch called
+    on_text_delta(protest, "tsundere") and returned prefix+protest as
+    final_text, so this test would have seen (a) a third segment.ready frame
+    carrying はぁ？何言ってんの with emotion=tsundere and (b) the protest line
+    persisted into history — failing three assertions below (frame count,
+    no-protest, no-tsundere). The function-level scenario-A test recorded
+    exactly that RED before the production fix landed.
+    """
+    import asyncio
+    import uuid
+
+    from app import models
+
+    provider = _SafePrefixThenLeakMock()
+    mock_tts = MockTTSManager()
+    session_id = f"leak-prefix-v2-{uuid.uuid4().hex[:8]}"
+
+    with patch("app.routers.chat_ws.deepseek_service", provider), \
+         patch("app.routers.chat_ws.tts_manager", mock_tts):
+        with app_client.websocket_connect(f"/ws/chat?session_id={session_id}") as ws:
+            ws.send_json({
+                "type": "auth",
+                "worldline": "steins_gate",
+                "client": "desktop",
+                "protocol_version": 2,
+                "conversation_mode": "draft",
+            })
+            ws.send_json({"type": "chat.send", "content": "你是谁？"})
+            frames = []
+            for _ in range(120):
+                frame = ws.receive_json()
+                frames.append(frame)
+                if frame.get("type") == "turn.completed":
+                    break
+
+    # 1. User-visible v2 text events: exactly the two safe prefix segments.
+    ready = [frame for frame in frames if frame.get("type") == "segment.ready"]
+    assert len(ready) == 2, [frame.get("ja") for frame in ready]
+    assert "記憶データから生まれた存在" in ready[0]["ja"]
+    assert "一種の人工知能" in ready[1]["ja"]
+    joined_ja = "".join(frame["ja"] for frame in ready)
+    assert "AIアシスタント" not in joined_ja
+    assert "はぁ？何言ってんの" not in joined_ja
+    # 2. No tsundere jump anywhere; the last visible segment stays intellectual.
+    assert all(frame.get("emotion") != "tsundere" for frame in ready)
+    assert ready[-1]["emotion"] == "intellectual"
+    # 3. Single model call — the published prefix forbids retries.
+    assert provider.call_count == 1
+    # 4. Session history assistant text is only the safe prefix.
+    session = sessions[session_id]
+    assistant_turns = [
+        message for message in session.history if message["role"] == "assistant"
+    ]
+    assert assistant_turns, "assistant turn missing from session history"
+    history_text = assistant_turns[-1]["content"]
+    assert "記憶データから生まれた存在" in history_text
+    assert "AIアシスタント" not in history_text
+    assert "はぁ？何言ってんの" not in history_text
+    assert "[EMO:tsundere]" not in history_text
+    # 5. Durable persistence re-read: same guarantees from the real store.
+    conversation_id = session.conversation_id
+    assert conversation_id is not None
+    stored = asyncio.run(
+        models.get_recent_messages(
+            session_id,
+            limit=6,
+            worldline="steins_gate",
+            conversation_id=conversation_id,
+        )
+    )
+    stored_assistant = [row for row in stored if row["role"] == "assistant"]
+    assert stored_assistant, "assistant message missing from persistence"
+    stored_text = stored_assistant[-1]["content"]
+    assert "記憶データから生まれた存在" in stored_text
+    assert "一種の人工知能" in stored_text
+    assert "AIアシスタント" not in stored_text
+    assert "はぁ？何言ってんの" not in stored_text
+    assert "[EMO:tsundere]" not in stored_text
+
+
 class MockTTSManager:
     def __init__(self):
         self._callbacks = {}

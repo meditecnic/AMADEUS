@@ -715,14 +715,27 @@ async def get_clean_text_stream(
             # Buffered search turns never flush failed attempts to the UI, so retry.
             if buffer_ui_until_attempt_ok and attempt < MAX_ATTEMPTS - 1:
                 continue
-            # Live-streamed prefix already visible: append mid-collapse recovery once.
+            # Live-streamed prefix already visible: the prefix cannot be
+            # unpublished, so never retry from here.
             if on_text_delta is not None and published_parts and not buffer_ui_until_attempt_ok:
                 if rejection_reason == "leak":
-                    fallback = "はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。"
-                    fallback_emotion = "tsundere"
-                else:
-                    fallback = "ごめん。応答の途中で生成が崩れたみたい。もう一度試して。"
-                    fallback_emotion = "disappointed"
+                    # LEAK-PREFIX-RECOVERY-01: the visible prefix already passed
+                    # every gate. Appending the fixed protest line here produced
+                    # contradictory self-introductions and a fake neutral→tsundere
+                    # jump. Truncate the unsafe tail instead: no protest line, no
+                    # injected emotion, no resend of the leaked fragment, no
+                    # extra model call.
+                    print(
+                        "[Guard] leak after published prefix; truncating unsafe tail",
+                        flush=True,
+                    )
+                    safe_text = "".join(published_parts)
+                    prefix_emotion = (
+                        published_emotions[-1] if published_emotions else last_emotion
+                    )
+                    return safe_text, prefix_emotion, {}, emo_tag_found
+                fallback = "ごめん。応答の途中で生成が崩れたみたい。もう一度試して。"
+                fallback_emotion = "disappointed"
                 callback_result = on_text_delta(fallback, fallback_emotion)
                 if asyncio.iscoroutine(callback_result):
                     await callback_result
