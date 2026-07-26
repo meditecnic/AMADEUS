@@ -5,7 +5,11 @@ import struct
 import httpx
 import asyncio
 from app import config
-from app.domain.segments import AudioErrorCode, prepare_tts_text
+from app.domain.segments import (
+    AudioErrorCode,
+    prepare_tts_text,
+    render_tts_pronunciation_surface,
+)
 from pathlib import Path
 from typing import Dict, List, Optional, Callable
 
@@ -154,7 +158,9 @@ class TTSQueueManager:
     async def _async_tts_call(self, text: str, ref_config: dict, sovits_url: str = None) -> bytes:
         """Call the GPT-SoVITS V2Pro JSON contract exactly once."""
         payload = {
-            "text": text,
+            # Pronunciation lexicon applies only to the sidecar-bound target
+            # text; callers keep the canonical surface everywhere else.
+            "text": render_tts_pronunciation_surface(text),
             "text_lang": "ja",
             "ref_audio_path": ref_config["ref_audio_path"],
             "prompt_text": ref_config["prompt_text"],
@@ -276,7 +282,8 @@ class TTSQueueManager:
             raise TTSServiceError(f"No valid reference audio configured for emotion '{emotion_tag}'")
         await self.init_client()
         payload = {
-            "text": prepared.text,
+            # Same sidecar-only pronunciation surface as _async_tts_call.
+            "text": render_tts_pronunciation_surface(prepared.text),
             "text_lang": "ja",
             "ref_audio_path": ref_config["ref_audio_path"],
             "prompt_text": ref_config["prompt_text"],

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import re
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable
 
 
@@ -375,6 +378,77 @@ def prepare_tts_text(text: str) -> PreparedTTSText:
     if not is_plausible_japanese_tts_source(cleaned):
         return PreparedTTSText(cleaned, AudioErrorCode.INVALID_LANGUAGE)
     return PreparedTTSText(cleaned)
+
+
+# ---------------------------------------------------------------------------
+# Canonical pronunciation lexicon (TTS surface only).
+# Rewrites proper-noun readings for the GPT-SoVITS target text exclusively;
+# canonical UI text, translations, history, prompts and client payloads keep
+# the original surface. The lexicon never injects lore or knowledge — it only
+# applies when the model already produced the proper noun.
+# ---------------------------------------------------------------------------
+
+_PRONUNCIATION_LEXICON_PATH = (
+    Path(__file__).resolve().parents[2] / "characters" / "tts_pronunciation_lexicon_v1.json"
+)
+_PRONUNCIATION_KINDS = frozenset(
+    {"character", "alias", "organization", "system", "location", "handle"}
+)
+
+
+def _is_ascii_surface(surface: str) -> bool:
+    return all(ord(ch) < 128 for ch in surface)
+
+
+@lru_cache(maxsize=1)
+def _pronunciation_rules() -> tuple[re.Pattern[str], dict[str, str]]:
+    """Compile the version-controlled lexicon into one longest-first pattern.
+
+    Exact surface matches only — no generic transliteration, no fuzzy match.
+    ASCII surfaces match case-insensitively with word boundaries so partial
+    Latin words are never rewritten.
+    """
+    data = json.loads(_PRONUNCIATION_LEXICON_PATH.read_text(encoding="utf-8"))
+    entries = data["entries"]
+    seen: set[str] = set()
+    spoken_by_key: dict[str, str] = {}
+    parts: list[str] = []
+    for entry in sorted(entries, key=lambda e: len(e["surface"]), reverse=True):
+        surface = entry["surface"]
+        spoken = entry["spoken"]
+        kind = entry["kind"]
+        folded = surface.casefold()
+        if not surface or not spoken or kind not in _PRONUNCIATION_KINDS:
+            raise ValueError(f"invalid pronunciation lexicon entry: {entry!r}")
+        if folded in seen:
+            raise ValueError(f"duplicate pronunciation surface: {surface}")
+        seen.add(folded)
+        if _is_ascii_surface(surface):
+            # Case-insensitive, guarded against partial Latin-word matches.
+            parts.append(rf"(?<![0-9A-Za-z])(?i:{re.escape(surface)})(?![0-9A-Za-z])")
+            spoken_by_key[folded] = spoken
+        else:
+            parts.append(re.escape(surface))
+            spoken_by_key[surface] = spoken
+    return re.compile("|".join(parts)), spoken_by_key
+
+
+def render_tts_pronunciation_surface(text: str) -> str:
+    """Return the sidecar-bound spoken surface for canonical Japanese text.
+
+    Pure and idempotent: longest surface wins, exact matches only, already-kana
+    text is untouched, and unmatched text passes through unchanged. Call this
+    solely at the GPT-SoVITS HTTP `text` boundary.
+    """
+    if not text:
+        return text
+    pattern, spoken_by_key = _pronunciation_rules()
+
+    def _replace(match: re.Match[str]) -> str:
+        token = match.group(0)
+        return spoken_by_key.get(token) or spoken_by_key.get(token.casefold(), token)
+
+    return pattern.sub(_replace, text)
 
 
 @dataclass(frozen=True, slots=True)

@@ -41,6 +41,20 @@ def test_preflight_accepts_kanji_only_japanese_identity_lines():
         prepared = prepare_tts_text(line)
         assert prepared.error is None, (line, prepared.error)
 
+
+def test_preflight_keeps_canonical_text_without_pronunciation_rewrite():
+    """TTS-CANONICAL-PRONUNCIATION-LEXICON-01: preflight output stays canonical.
+
+    The pronunciation surface is applied only at the GPT-SoVITS HTTP boundary;
+    prepare_tts_text must never rewrite proper nouns itself.
+    """
+    src = "牧瀬紅莉栖、鳳凰院凶真と岡部倫太郎。Amadeusと未来ガジェット研究所について話す。"
+    prepared = prepare_tts_text(src)
+    assert prepared.error is None
+    assert "牧瀬紅莉栖" in prepared.text
+    assert "Amadeus" in prepared.text
+    assert "マキセクリス" not in prepared.text
+
 LEGIT_LATIN_EXAMPLES = [
     "大丈夫？",
     "そんなこと、あるわけないでしょ？",

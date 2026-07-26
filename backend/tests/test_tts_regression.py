@@ -313,3 +313,123 @@ async def test_legacy_dispatch_merges_short_fragment_without_duplicating_history
 
     assert returned == text
     assert fake_tts.calls == [text]
+
+
+# ---------------------------------------------------------------------------
+# TTS-CANONICAL-PRONUNCIATION-LEXICON-01: HTTP boundary conversion
+# ---------------------------------------------------------------------------
+
+LEXICON_SOURCE_SENTENCE = "牧瀬紅莉栖、鳳凰院凶真と岡部倫太郎。Amadeusと未来ガジェット研究所について話す。"
+LEXICON_SPOKEN_TOKENS = ("マキセクリス", "ホウオウインキョウマ", "オカベリンタロウ", "アマデウス", "ミライガジェットケンキュウジョ")
+LEXICON_CANONICAL_TOKENS = ("牧瀬紅莉栖", "鳳凰院凶真", "岡部倫太郎", "Amadeus", "未来ガジェット研究所")
+
+
+@pytest.mark.asyncio
+async def test_http_payload_text_uses_pronunciation_surface_direct_call():
+    """_async_tts_call (shared by synthesize_async + queue) converts payload text only."""
+    tts = TTSQueueManager()
+
+    class FakeResponse:
+        status_code = 200
+        content = b"RIFF....WAVE"
+        text = ""
+
+    mock_client = MagicMock()
+    mock_client.is_closed = False
+    mock_client.post = AsyncMock(return_value=FakeResponse())
+    tts.client = mock_client
+
+    await tts._async_tts_call(
+        LEXICON_SOURCE_SENTENCE,
+        {"ref_audio_path": "/fake/neutral.wav", "prompt_text": "参照プロンプトはそのまま"},
+    )
+
+    payload = mock_client.post.await_args.kwargs["json"]
+    for token in LEXICON_SPOKEN_TOKENS:
+        assert token in payload["text"], token
+    for token in LEXICON_CANONICAL_TOKENS:
+        assert token not in payload["text"], token
+    # Reference prompt text and generation params must stay untouched.
+    assert payload["prompt_text"] == "参照プロンプトはそのまま"
+    assert payload["text_lang"] == "ja"
+    assert payload["repetition_penalty"] == 1.5
+
+
+@pytest.mark.asyncio
+async def test_queue_worker_converts_http_text_but_delivers_canonical_payload():
+    """Queue path: sidecar sees spoken surface; client payload keeps canonical text."""
+    tts = TTSQueueManager()
+    tts.emotion_ref_map = {
+        "neutral": {"ref_audio_path": "/fake/neutral.wav", "prompt_text": "prompt"}
+    }
+
+    class FakeResponse:
+        status_code = 200
+        content = b"RIFF....WAVE"
+        text = ""
+
+    mock_client = MagicMock()
+    mock_client.is_closed = False
+    mock_client.post = AsyncMock(return_value=FakeResponse())
+    tts.client = mock_client
+    delivered = []
+
+    async def capture(seq, payload):
+        delivered.append((seq, payload))
+
+    tts.reset_sequence("lexicon-queue", capture)
+    await tts._synthesize_worker("lexicon-queue", 0, LEXICON_SOURCE_SENTENCE, "neutral")
+
+    http_text = mock_client.post.await_args.kwargs["json"]["text"]
+    for token in LEXICON_SPOKEN_TOKENS:
+        assert token in http_text, token
+    for token in LEXICON_CANONICAL_TOKENS:
+        assert token not in http_text, token
+    # The ordered-dispatch payload back to the client keeps the canonical text.
+    assert delivered[0][1]["text"] == LEXICON_SOURCE_SENTENCE
+    assert delivered[0][1]["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_stream_pcm_payload_text_uses_pronunciation_surface():
+    """stream_pcm builds its own payload and must not miss the conversion."""
+    tts = TTSQueueManager()
+    tts.emotion_ref_map = {
+        "neutral": {"ref_audio_path": "/fake/neutral.wav", "prompt_text": "prompt"}
+    }
+    captured = {}
+
+    class FakeStreamResponse:
+        def raise_for_status(self):
+            return None
+
+        async def aiter_bytes(self):
+            return
+            yield b""
+
+    class FakeStreamCM:
+        async def __aenter__(self):
+            return FakeStreamResponse()
+
+        async def __aexit__(self, *args):
+            return False
+
+    def fake_stream(method, url, json=None, timeout=None):
+        captured["json"] = json
+        return FakeStreamCM()
+
+    mock_client = MagicMock()
+    mock_client.is_closed = False
+    mock_client.stream = fake_stream
+    tts.client = mock_client
+
+    async for _ in tts.stream_pcm(LEXICON_SOURCE_SENTENCE, "neutral"):
+        pass
+
+    payload = captured["json"]
+    for token in LEXICON_SPOKEN_TOKENS:
+        assert token in payload["text"], token
+    for token in LEXICON_CANONICAL_TOKENS:
+        assert token not in payload["text"], token
+    assert payload["streaming_mode"] == 2
+    assert payload["prompt_text"] == "prompt"
