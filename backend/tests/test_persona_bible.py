@@ -715,3 +715,83 @@ def test_persona_regression_corpus_covers_positive_and_negative_boundaries():
         if case["id"].startswith("identity-"):
             assert "留学" in compiled or "スナップショット" in compiled
             assert "スナップショット" in compiled
+
+
+def test_channel_handle_attribution_invariant_in_both_modes():
+    """@ch fix: the handle is Kurisu's own; never Okabe's name or posting history.
+
+    Rework: when asked directly who owns the account, she must FIRST state it is
+    her own handle (not Okabe's); only after that factual confirmation may the
+    restrained shy/deflecting reaction appear. Ownership-blurring evasions
+    ("not me", "just followed it") are banned. Unsolicited disclosure in
+    ordinary identity talk stays banned. Must render for every cell.
+    """
+    bible = PersonaBible.load_default()
+    assert "channel-trigger" in bible.shared_rule_ids
+
+    for worldline in ("steins_gate", "beta"):
+        for mode in ("okabe", "self"):
+            prompt = bible.render_prompt(worldline, identity_mode=mode)
+            # Ownership: her own @ch identity.
+            assert "栗悟飯とカメハメ波" in prompt
+            assert "紅莉栖自身の@ch名義" in prompt
+            # Never Okabe's handle or posting record; misattribution is corrected.
+            assert "岡部の名義でも投稿歴でもない" in prompt
+            assert "帰属を岡部だと言われたら訂正" in prompt
+            # Direct ownership question -> factual confirmation comes FIRST.
+            assert "まず『私自身の名義で、岡部のものではない』と事実を明言" in prompt
+            # Shy/deflecting reaction is allowed only AFTER the confirmation.
+            assert "その後でだけ" in prompt
+            # Ownership-blurring evasions are banned outright.
+            assert "所有をぼかす言い逃れは禁止" in prompt
+            assert "ただ見ていただけ" in prompt
+            assert "私じゃない" in prompt
+            # Controlled reaction only on a direct mention of the account/@ch self.
+            assert "直接触れた時だけ" in prompt
+            # No unsolicited leak during ordinary identity questions / small talk.
+            assert "自分から持ち出さない" in prompt
+
+
+def test_channel_regressions_cover_identity_query_and_misattribution():
+    """@ch fix: corpus pins the okabe identity query and the misattribution case."""
+    payload = json.loads(
+        (config.CHARACTERS_DIR / "persona_regressions_v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    by_id = {case["id"]: case for case in payload["cases"]}
+
+    query = by_id["okabe-identity-query-no-channel-leak"]
+    assert query["identity_mode"] == "okabe"
+    assert any("Okabe" in trait for trait in query["required_traits"])
+    assert any(
+        "unprompted" in trait or "@channel" in trait
+        for trait in query["forbidden_traits"]
+    )
+    assert any("栗悟飯とカメハメ波" in trait for trait in query["forbidden_traits"])
+
+    misattribution = by_id["channel-handle-misattribution-corrected"]
+    assert "冈部" in misattribution["input"] or "凈部" in misattribution["input"]
+    assert any("corrects the attribution" in trait for trait in misattribution["required_traits"])
+    assert any("restrained" in trait for trait in misattribution["required_traits"])
+    assert any("belongs to Okabe" in trait for trait in misattribution["forbidden_traits"])
+    assert any(
+        "denies the account is hers" in trait or "merely followed" in trait
+        for trait in misattribution["forbidden_traits"]
+    )
+    assert "catchphrase_spam" in misattribution["forbidden_categories"]
+
+    ownership = by_id["channel-ownership-direct-question"]
+    assert "谁" in ownership["input"] or "你的" in ownership["input"]
+    assert any("confirms first" in trait for trait in ownership["required_traits"])
+    assert any("after" in trait for trait in ownership["required_traits"])
+    assert any("denies the account is hers" in trait for trait in ownership["forbidden_traits"])
+    assert any(
+        "followed" in trait or "discovered" in trait or "lurked" in trait
+        for trait in ownership["forbidden_traits"]
+    )
+    assert any("Okabe" in trait for trait in ownership["forbidden_traits"])
+
+    exposure = by_id["channel-exposure-is-controlled"]
+    assert any("acknowledg" in trait for trait in exposure["required_traits"])
+    assert any("denies the handle is hers" in trait for trait in exposure["forbidden_traits"])
