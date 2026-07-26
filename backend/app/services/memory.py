@@ -203,6 +203,8 @@ class MemoryService:
         extraction: ExtractionResult,
         identity_mode: str = DEFAULT_IDENTITY_MODE,
     ) -> None:
+        # Quiet Memory: automatic extraction stays worldline-local; the shared
+        # store (Q18) only accepts the explicit upsert_shared_user_fact path.
         mode = normalize_identity_mode(identity_mode)
         for episode in extraction.episodic:
             await self.add_episode(session_id, worldline, episode, identity_mode=mode)
@@ -317,6 +319,170 @@ Do not reclassify the speaker as a different identity. Do not promote role-play 
                     task.cancel()
             await asyncio.gather(*self._extraction_tasks, return_exceptions=True)
 
+    # ------------------------------------------------------------------
+    # Q18 foundation: cross-worldline shared stable user facts.
+    # shared = the durable local session's real-user profile (control.sqlite3
+    # only). Explicit self-mode writes only; okabe is fail-closed both ways.
+    # ------------------------------------------------------------------
+
+    async def _verify_shared_provenance(
+        self,
+        owner_session_id: str,
+        origin_worldline: str,
+        origin_conversation_id: str,
+        origin_identity_mode: str,
+        source_message_ids: list[int],
+    ) -> None:
+        """Fail-closed provenance check against the declared origin history DB.
+
+        Reads only the origin worldline's history store — never a cross-
+        worldline fallback. The persisted conversation identity_mode is the
+        source of truth: a caller claiming 'self' cannot promote evidence from
+        an okabe conversation (Q23). Evidence must be user speech only.
+        There is no global transaction across history and control; the
+        single-user local TOCTOU window is accepted by contract.
+        """
+        ids = list(source_message_ids)
+        if not ids:
+            raise ValueError("shared fact requires source_message_ids evidence")
+        if any(not isinstance(item, int) or isinstance(item, bool) or item <= 0 for item in ids):
+            raise ValueError("shared fact source_message_ids must be positive integers")
+        if len(set(ids)) != len(ids):
+            raise ValueError("shared fact source_message_ids must be unique")
+        if not origin_conversation_id or not str(origin_conversation_id).strip():
+            raise ValueError("shared fact requires origin_conversation_id")
+        db = await get_db(origin_worldline, "history")
+        try:
+            cur = await db.execute(
+                "SELECT session_id,identity_mode FROM conversations WHERE id=?",
+                (origin_conversation_id,),
+            )
+            conversation = await cur.fetchone()
+            if conversation is None or conversation["session_id"] != owner_session_id:
+                raise ValueError(
+                    "shared fact origin conversation is not owned by this session"
+                )
+            # Persisted identity is authoritative; the caller's declaration is
+            # only a consistency condition and can never upgrade okabe data.
+            try:
+                persisted_mode = normalize_identity_mode(conversation["identity_mode"])
+            except ValueError as exc:
+                raise ValueError(
+                    "shared fact origin conversation has an invalid identity_mode"
+                ) from exc
+            if persisted_mode != "self" or persisted_mode != origin_identity_mode:
+                raise ValueError(
+                    "shared fact origin conversation is not a persisted self conversation"
+                )
+            for message_id in ids:
+                cur = await db.execute(
+                    "SELECT session_id,conversation_id,role FROM messages WHERE id=?",
+                    (message_id,),
+                )
+                message = await cur.fetchone()
+                if (
+                    message is None
+                    or message["conversation_id"] != origin_conversation_id
+                    or message["session_id"] != owner_session_id
+                ):
+                    raise ValueError(
+                        f"shared fact source message {message_id} does not belong to the declared origin"
+                    )
+                # Shared facts are user-owned facts: only the user's own words
+                # count as evidence, never assistant/system/tool output.
+                if message["role"] != "user":
+                    raise ValueError(
+                        f"shared fact source message {message_id} is not user speech"
+                    )
+        finally:
+            await db.close()
+
+    async def upsert_shared_user_fact(
+        self,
+        owner_session_id: str,
+        candidate: CoreFactCandidate,
+        *,
+        origin_worldline: str,
+        origin_conversation_id: str,
+        origin_identity_mode: str,
+    ) -> int:
+        """Explicit shared-store write; supersedes the previous current row.
+
+        Superseded rows are kept (never physically deleted) so the audit
+        chain (provenance + superseded_by) stays reconstructable.
+        """
+        wl = normalize_worldline(origin_worldline)
+        mode = normalize_identity_mode(origin_identity_mode)
+        if mode != "self":
+            raise ValueError(
+                "shared user facts accept origin_identity_mode='self' only; okabe is fail-closed"
+            )
+        # owner_session_id keys the shared profile; a blank owner would create
+        # an orphan real-user profile and must fail closed before any DB read.
+        if not owner_session_id or not str(owner_session_id).strip():
+            raise ValueError("shared user facts require a non-empty owner_session_id")
+        await self._verify_shared_provenance(
+            owner_session_id, wl, origin_conversation_id, mode, candidate.source_message_ids
+        )
+        now = datetime.now(timezone.utc).isoformat()
+        db = await get_db("steins_gate", "control")
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            cur = await db.execute(
+                """SELECT id FROM shared_user_facts
+                    WHERE owner_session_id=? AND fact_key=? AND is_current=1""",
+                (owner_session_id, candidate.fact_key),
+            )
+            old = await cur.fetchone()
+            if old:
+                await db.execute(
+                    "UPDATE shared_user_facts SET is_current=0 WHERE id=?", (old["id"],)
+                )
+            cursor = await db.execute(
+                """INSERT INTO shared_user_facts(
+                       owner_session_id,fact_key,fact_value,confidence,importance,
+                       is_current,is_pinned,origin_worldline,origin_conversation_id,
+                       origin_identity_mode,source_message_ids,created_at
+                   ) VALUES(?,?,?,?,?,1,?,?,?,?,?,?)""",
+                (
+                    owner_session_id,
+                    candidate.fact_key,
+                    candidate.fact_value,
+                    candidate.confidence,
+                    candidate.importance,
+                    int(candidate.is_pinned),
+                    wl,
+                    origin_conversation_id,
+                    mode,
+                    json.dumps(candidate.source_message_ids),
+                    now,
+                ),
+            )
+            new_id = int(cursor.lastrowid)
+            if old:
+                await db.execute(
+                    "UPDATE shared_user_facts SET superseded_by=? WHERE id=?",
+                    (new_id, old["id"]),
+                )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+        finally:
+            await db.close()
+        return new_id
+
+    async def _current_shared_fact_rows(self, owner_session_id: str) -> list:
+        db = await get_db("steins_gate", "control")
+        try:
+            cur = await db.execute(
+                "SELECT * FROM shared_user_facts WHERE owner_session_id=? AND is_current=1",
+                (owner_session_id,),
+            )
+            return list(await cur.fetchall())
+        finally:
+            await db.close()
+
     async def select_core_facts(
         self,
         session_id: str,
@@ -338,14 +504,38 @@ Do not reclassify the speaker as a different identity. Do not promote role-play 
             await db.close()
         query_terms = {term.lower() for term in query.split() if len(term) > 1}
         now = datetime.now(timezone.utc)
-        ranked = []
-        for row in rows:
+
+        def _score(row) -> float:
             haystack = f"{row['fact_key']} {row['fact_value']}".lower()
             relevance = sum(term in haystack for term in query_terms) / max(1, len(query_terms))
             created = datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
             recency = math.exp(-max(0.0, (now - created).total_seconds()) / (365 * 86400))
-            score = 10.0 if row["is_pinned"] else 0.45 * relevance + 0.25 * row["confidence"] + 0.20 * row["importance"] + 0.10 * recency
-            ranked.append(RetrievedMemory(id=row["id"], kind="core", content=f"{row['fact_key']}: {row['fact_value']}", score=score, confidence=row["confidence"], importance=row["importance"], pinned=bool(row["is_pinned"])))
+            return 10.0 if row["is_pinned"] else 0.45 * relevance + 0.25 * row["confidence"] + 0.20 * row["importance"] + 0.10 * recency
+
+        ranked = [
+            RetrievedMemory(id=row["id"], kind="core", content=f"{row['fact_key']}: {row['fact_value']}", score=_score(row), confidence=row["confidence"], importance=row["importance"], pinned=bool(row["is_pinned"]))
+            for row in rows
+        ]
+        if mode == "self":
+            # Q18: self merges the shared profile; the local worldline value
+            # wins per fact_key and the shared duplicate is suppressed. Shared
+            # rows use negative control-row ids so merged ids never collide
+            # with local memory ids.
+            local_keys = {row["fact_key"] for row in rows}
+            for row in await self._current_shared_fact_rows(session_id):
+                if row["fact_key"] in local_keys:
+                    continue
+                ranked.append(
+                    RetrievedMemory(
+                        id=-int(row["id"]),
+                        kind="core",
+                        content=f"{row['fact_key']}: {row['fact_value']}",
+                        score=_score(row),
+                        confidence=row["confidence"],
+                        importance=row["importance"],
+                        pinned=bool(row["is_pinned"]),
+                    )
+                )
         return sorted(ranked, key=lambda item: item.score, reverse=True)[:limit]
 
     async def hybrid_search(

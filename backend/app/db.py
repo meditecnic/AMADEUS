@@ -28,7 +28,8 @@ EMBEDDING_DIMENSION = 384
 # v5: emotion_states keyed by (session_id, identity_mode); existing rows → okabe (U-M2).
 # v6: core_facts / episodic_memories scoped by identity_mode; existing rows → okabe (U-M3).
 # v7: conversations.identity_acknowledged (0|1); existing rows backfilled to 0 (IDENTITY-ACK-01).
-SCHEMA_VERSION = 7
+# v8: control-only shared_user_facts (Q18 foundation); worldline stores bump meta only.
+SCHEMA_VERSION = 8
 
 DEFAULT_IDENTITY_MODE = "okabe"
 IDENTITY_MODES = frozenset({"okabe", "self"})
@@ -251,6 +252,52 @@ CREATE TABLE IF NOT EXISTS emotion_states (
 );
 """
 
+# Q18 foundation: cross-worldline shared stable user facts live only in
+# control.sqlite3. origin_identity_mode is constrained to 'self' — okabe
+# role-play must never populate the real-user profile. Superseded rows are
+# kept (not deleted) for a minimal audit chain.
+# Table and index DDL stay as separate statements so the v7→v8 migration can
+# run them inside one explicit transaction (executescript would auto-commit).
+SHARED_USER_FACTS_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS shared_user_facts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_session_id TEXT NOT NULL,
+    fact_key TEXT NOT NULL,
+    fact_value TEXT NOT NULL,
+    confidence REAL NOT NULL CHECK(confidence BETWEEN 0 AND 1),
+    importance REAL NOT NULL CHECK(importance BETWEEN 0 AND 1),
+    is_current INTEGER NOT NULL DEFAULT 1 CHECK(is_current IN (0,1)),
+    is_pinned INTEGER NOT NULL DEFAULT 0 CHECK(is_pinned IN (0,1)),
+    origin_worldline TEXT NOT NULL CHECK(origin_worldline IN ('steins_gate','beta')),
+    origin_conversation_id TEXT NOT NULL,
+    origin_identity_mode TEXT NOT NULL CHECK(origin_identity_mode='self'),
+    source_message_ids TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    superseded_by INTEGER REFERENCES shared_user_facts(id)
+)
+"""
+SHARED_USER_FACTS_INDEX_DDL = (
+    """CREATE UNIQUE INDEX IF NOT EXISTS idx_shared_current_fact
+    ON shared_user_facts(owner_session_id, fact_key) WHERE is_current=1""",
+    """CREATE INDEX IF NOT EXISTS idx_shared_fact_hot
+    ON shared_user_facts(owner_session_id, is_current, is_pinned, importance DESC)""",
+)
+SHARED_USER_FACTS_DDL = (
+    SHARED_USER_FACTS_TABLE_DDL.rstrip().rstrip(";") + ";\n"
+    + ";\n".join(SHARED_USER_FACTS_INDEX_DDL) + ";\n"
+)
+
+# Columns any healthy control store must expose on shared_user_facts.
+SHARED_USER_FACTS_REQUIRED_COLUMNS = frozenset({
+    "id", "owner_session_id", "fact_key", "fact_value", "confidence",
+    "importance", "is_current", "is_pinned", "origin_worldline",
+    "origin_conversation_id", "origin_identity_mode", "source_message_ids",
+    "created_at", "superseded_by",
+})
+SHARED_USER_FACTS_REQUIRED_INDEXES = frozenset({
+    "idx_shared_current_fact", "idx_shared_fact_hot",
+})
+
 CONTROL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS session_worldlines (
@@ -276,7 +323,7 @@ CREATE TABLE IF NOT EXISTS provider_configurations (
     default_model TEXT NOT NULL,
     updated_at_utc TEXT NOT NULL
 );
-"""
+""" + SHARED_USER_FACTS_DDL
 
 
 def _read_schema_version(connection: sqlite3.Connection) -> int | None:
@@ -676,6 +723,29 @@ def _migrate_v6_to_v7(connection: sqlite3.Connection, kind: DatabaseKind) -> Non
     connection.commit()
 
 
+def _migrate_v7_to_v8(connection: sqlite3.Connection, kind: DatabaseKind) -> None:
+    """Q18 foundation: shared_user_facts in control.sqlite3 only.
+
+    control creates the table, both indexes and the version bump inside one
+    BEGIN IMMEDIATE transaction — a failed migration rolls everything back.
+    history/memory perform a meta-only version bump (no DDL).
+    """
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        if kind == "control":
+            connection.execute(SHARED_USER_FACTS_TABLE_DDL)
+            for index_ddl in SHARED_USER_FACTS_INDEX_DDL:
+                connection.execute(index_ddl)
+        connection.execute(
+            "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version',?)",
+            ("8",),
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
 async def _initialize_one(worldline: str, kind: DatabaseKind, schema: str) -> None:
     path = _resolve_path(worldline, kind)
     if path in _initialized_paths:
@@ -729,6 +799,9 @@ def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str 
         if current == 6:
             _migrate_v6_to_v7(connection, kind)
             current = 7
+        if current == 7:
+            _migrate_v7_to_v8(connection, kind)
+            current = 8
         if current not in (None, SCHEMA_VERSION):
             raise RuntimeError(f"unsupported {kind} schema version at {path}: {current}")
 
@@ -854,6 +927,26 @@ async def validate_schema() -> dict[str, object]:
                 result["ok"] = bool(result["ok"] and ok)
             finally:
                 await db.close()
+    # The control store is a single worldline-agnostic database; validate it
+    # exactly once outside the worldline loop (Q18 foundation). A partially
+    # migrated control schema (missing columns/indexes) must fail validation.
+    db = await get_db("steins_gate", "control")
+    try:
+        cur = await db.execute("SELECT value FROM schema_meta WHERE key='schema_version'")
+        row = await cur.fetchone()
+        ok = bool(row and int(row[0]) == SCHEMA_VERSION)
+        cur = await db.execute("PRAGMA table_info(shared_user_facts)")
+        columns = {info[1] for info in await cur.fetchall()}
+        ok = ok and SHARED_USER_FACTS_REQUIRED_COLUMNS <= columns
+        cur = await db.execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='shared_user_facts'"
+        )
+        indexes = {info[0] for info in await cur.fetchall()}
+        ok = ok and SHARED_USER_FACTS_REQUIRED_INDEXES <= indexes
+        result["databases"]["control"] = ok  # type: ignore[index]
+        result["ok"] = bool(result["ok"] and ok)
+    finally:
+        await db.close()
     return result
 
 
