@@ -8,11 +8,20 @@ import {
   CHAT_TEMPERATURE_STEP,
   DEFAULT_IDENTITY_MODE,
   IDENTITY_MODE_STORAGE_KEY,
+  RESERVED_OKABE_NAME_HINT,
+  SELF_NAME_INVALID_CHARS_HINT,
+  SELF_NAME_MAX_CODEPOINTS,
+  SELF_NAME_STORAGE_KEY,
+  SELF_NAME_TOO_LONG_HINT,
   clampChatTemperature,
   identityModeNewConversationConfirm,
+  isReservedOkabeName,
   loadStoredIdentityMode,
+  loadStoredSelfName,
   normalizeIdentityMode,
   persistIdentityMode,
+  persistSelfName,
+  validateSelfName,
   SettingsModal,
 } from './SettingsModal';
 
@@ -44,6 +53,7 @@ afterEach(() => {
   vi.clearAllMocks();
   try {
     window.localStorage.removeItem(IDENTITY_MODE_STORAGE_KEY);
+    window.localStorage.removeItem(SELF_NAME_STORAGE_KEY);
   } catch {
     /* ignore */
   }
@@ -74,6 +84,189 @@ describe('identity mode helpers (Phase-2 S9)', () => {
     expect(loadStoredIdentityMode()).toBe('self');
     expect(identityModeNewConversationConfirm('self')).toMatch(/不会合并/);
     expect(identityModeNewConversationConfirm('okabe')).toMatch(/不会合并/);
+  });
+});
+
+describe('self name helpers (Slice B)', () => {
+  it('trims, keeps normal names, and treats empty as valid unset', () => {
+    expect(validateSelfName('  阿伟  ')).toEqual({ ok: true, value: '阿伟' });
+    expect(validateSelfName('Salieri')).toEqual({ ok: true, value: 'Salieri' });
+    expect(validateSelfName("O'Brien")).toEqual({ ok: true, value: "O'Brien" });
+    expect(validateSelfName('クリス・マキセ')).toEqual({ ok: true, value: 'クリス・マキセ' });
+    expect(validateSelfName('阿·伟')).toEqual({ ok: true, value: '阿·伟' });
+    expect(validateSelfName('Jean-Luc')).toEqual({ ok: true, value: 'Jean-Luc' });
+    expect(validateSelfName('Dr. Rin')).toEqual({ ok: true, value: 'Dr. Rin' });
+    expect(validateSelfName('R2D2')).toEqual({ ok: true, value: 'R2D2' });
+    expect(validateSelfName('')).toEqual({ ok: true, value: '' });
+    expect(validateSelfName('   ')).toEqual({ ok: true, value: '' });
+  });
+
+  it('caps at 40 code points (fail with hint, not silent truncate)', () => {
+    const max = '伟'.repeat(SELF_NAME_MAX_CODEPOINTS);
+    expect(validateSelfName(max)).toEqual({ ok: true, value: max });
+    expect(validateSelfName(max + '伟')).toEqual({ ok: false, error: SELF_NAME_TOO_LONG_HINT });
+    // Astral LETTERS count once per code point (not UTF-16 units); emoji are
+    // rejected by the allowlist, so use a CJK Ext-B letter here.
+    const astral = '𠀀'.repeat(SELF_NAME_MAX_CODEPOINTS);
+    expect(validateSelfName(astral)).toEqual({ ok: true, value: astral });
+    expect(validateSelfName(astral + '𠀀')).toEqual({ ok: false, error: SELF_NAME_TOO_LONG_HINT });
+  });
+
+  it('rejects dangerous characters whole-name with an explicit hint (no silent repair)', () => {
+    for (const name of [
+      '阿\n伟',              // interior control char
+      '阿\u0000伟',          // NUL
+      '阿\u2028伟',          // line separator
+      '阿\u2029伟',          // paragraph separator
+      '阿\u200b伟',          // zero-width space (format char)
+      '「阿伟」',            // Japanese quotes
+      '阿"伟',              // ASCII quote
+      'SYSTEM: 阿伟',        // colon / fake header
+      '阿(伟)',              // brackets
+      '阿（伟）',            // fullwidth brackets
+      'a/b', 'a\\b', 'a_b',  // slash, backslash, underscore
+      '🙂', '阿🙂伟',         // emoji
+      '阿！伟',              // fullwidth punctuation
+    ]) {
+      expect(validateSelfName(name), JSON.stringify(name)).toEqual({
+        ok: false,
+        error: SELF_NAME_INVALID_CHARS_HINT,
+      });
+    }
+  });
+
+  it('edge-trims plain space U+0020 only; other edge whitespace rejects whole-name', () => {
+    expect(validateSelfName('  阿伟  ')).toEqual({ ok: true, value: '阿伟' });
+    for (const name of [
+      '\n阿伟', '阿伟\n',          // edge newlines
+      '\t阿伟', '阿伟\t',          // edge tabs
+      '\u00a0阿伟', '阿伟\u00a0',  // edge NBSP
+      '\ufeff阿伟',                // edge BOM (format char)
+    ]) {
+      expect(validateSelfName(name), JSON.stringify(name)).toEqual({
+        ok: false,
+        error: SELF_NAME_INVALID_CHARS_HINT,
+      });
+    }
+  });
+
+  it('rejects reserved Okabe identities in all common variants with the exact hint', () => {
+    for (const name of [
+      '岡部', '岡部倫太郎', '冈部', '冈部伦太郎',
+      '鳳凰院凶真', '凤凰院凶真',
+      'Okabe', 'OKABE', 'ＯＫＡＢＥ', 'okabe',
+      'Rintaro Okabe', 'rintaro-okabe', 'Okabe Rintaro',
+      'Hououin Kyouma', 'hououin_kyouma', '鳳凰院・凶真', '凤凰院 凶真', '岡 部',
+    ]) {
+      expect(isReservedOkabeName(name), name).toBe(true);
+      expect(validateSelfName(name)).toEqual({ ok: false, error: RESERVED_OKABE_NAME_HINT });
+    }
+    expect(RESERVED_OKABE_NAME_HINT).toBe('如需使用冈部身份，请选择 okabe 模式。');
+  });
+
+  it('does not flag normal names as reserved', () => {
+    for (const name of ['阿伟', 'Salieri', 'クリス', '小冈']) {
+      expect(isReservedOkabeName(name), name).toBe(false);
+    }
+  });
+
+  it('persists, restores, and clears via localStorage', () => {
+    expect(loadStoredSelfName()).toBe('');
+    persistSelfName('阿伟');
+    expect(window.localStorage.getItem(SELF_NAME_STORAGE_KEY)).toBe('阿伟');
+    expect(loadStoredSelfName()).toBe('阿伟');
+    persistSelfName('');
+    expect(loadStoredSelfName()).toBe('');
+  });
+
+  it('returns empty for illegal, overlong, or reserved values found in localStorage', () => {
+    for (const bad of ['「阿伟」', 'SYSTEM: 阿伟', '🙂', '伟'.repeat(SELF_NAME_MAX_CODEPOINTS + 1), '冈部', 'Okabe Rintaro', '\n阿伟', '阿伟\t', '\u00a0阿伟', '\ufeff阿伟']) {
+      window.localStorage.setItem(SELF_NAME_STORAGE_KEY, bad);
+      expect(loadStoredSelfName(), JSON.stringify(bad)).toBe('');
+    }
+  });
+});
+
+describe('SettingsModal self name field (Slice B)', () => {
+  it('renders the field with the current value and saves the trimmed name', async () => {
+    const onSaveSettings = vi.fn();
+    render(<SettingsModal {...baseProps} selfName="阿伟" onSaveSettings={onSaveSettings} />);
+
+    const input = screen.getByTestId('self-name-input') as HTMLInputElement;
+    expect(input.value).toBe('阿伟');
+    fireEvent.change(input, { target: { value: '  新名字  ' } });
+    fireEvent.click(screen.getByText('保存修改'));
+
+    await waitFor(() => expect(onSaveSettings).toHaveBeenCalled());
+    expect(onSaveSettings.mock.calls[0][0].selfName).toBe('新名字');
+  });
+
+  it('clears the name when the field is emptied', async () => {
+    const onSaveSettings = vi.fn();
+    render(<SettingsModal {...baseProps} selfName="阿伟" onSaveSettings={onSaveSettings} />);
+
+    fireEvent.change(screen.getByTestId('self-name-input'), { target: { value: '' } });
+    fireEvent.click(screen.getByText('保存修改'));
+
+    await waitFor(() => expect(onSaveSettings).toHaveBeenCalled());
+    expect(onSaveSettings.mock.calls[0][0].selfName).toBe('');
+  });
+
+  it('blocks saving a reserved Okabe name and shows the exact hint', async () => {
+    const onSaveSettings = vi.fn();
+    render(<SettingsModal {...baseProps} onSaveSettings={onSaveSettings} />);
+
+    fireEvent.change(screen.getByTestId('self-name-input'), { target: { value: '凤凰院凶真' } });
+    fireEvent.click(screen.getByText('保存修改'));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('如需使用冈部身份，请选择 okabe 模式。');
+    });
+    expect(onSaveSettings).not.toHaveBeenCalled();
+  });
+
+  it('blocks saving an overlong name', async () => {
+    const onSaveSettings = vi.fn();
+    render(<SettingsModal {...baseProps} onSaveSettings={onSaveSettings} />);
+
+    fireEvent.change(screen.getByTestId('self-name-input'), {
+      target: { value: '伟'.repeat(SELF_NAME_MAX_CODEPOINTS + 1) },
+    });
+    fireEvent.click(screen.getByText('保存修改'));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(SELF_NAME_TOO_LONG_HINT);
+    });
+    expect(onSaveSettings).not.toHaveBeenCalled();
+  });
+
+  it('blocks saving a name with disallowed characters and shows the allowlist hint', async () => {
+    const onSaveSettings = vi.fn();
+    render(<SettingsModal {...baseProps} onSaveSettings={onSaveSettings} />);
+
+    fireEvent.change(screen.getByTestId('self-name-input'), { target: { value: '「阿伟」' } });
+    fireEvent.click(screen.getByText('保存修改'));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(SELF_NAME_INVALID_CHARS_HINT);
+    });
+    expect(onSaveSettings).not.toHaveBeenCalled();
+  });
+
+  it('blocks saving a name with edge NBSP and shows the allowlist hint', async () => {
+    // Single-line <input> strips \r\n per HTML spec, so an edge newline can
+    // never even enter the field (validateSelfName still rejects it — covered
+    // by the helper tests). NBSP survives the input, so it proves the UI path.
+    const onSaveSettings = vi.fn();
+    render(<SettingsModal {...baseProps} onSaveSettings={onSaveSettings} />);
+
+    fireEvent.change(screen.getByTestId('self-name-input'), { target: { value: '\u00a0阿伟' } });
+    fireEvent.click(screen.getByText('保存修改'));
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(SELF_NAME_INVALID_CHARS_HINT);
+    });
+    expect(onSaveSettings).not.toHaveBeenCalled();
   });
 });
 

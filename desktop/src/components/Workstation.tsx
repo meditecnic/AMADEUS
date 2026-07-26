@@ -10,8 +10,10 @@ import {
   CHAT_TEMPERATURE_MAX,
   clampChatTemperature,
   loadStoredIdentityMode,
+  loadStoredSelfName,
   normalizeIdentityMode,
   persistIdentityMode,
+  persistSelfName,
   SettingsModal,
   type CredentialStatus,
   type IdentityMode,
@@ -137,6 +139,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [defaultIdentityMode, setDefaultIdentityMode] = useState<IdentityMode>(() =>
     loadStoredIdentityMode(),
   );
+  /** Slice B: app-level self-mode call name (validated in SettingsModal; empty = unset). */
+  const [selfName, setSelfName] = useState<string>(() => loadStoredSelfName());
   const [model, setModel] = useState<string>(() =>
     localStorage.getItem('amadeus_pc_model') || 'deepseek-v4-flash');
   const [draftProviderId, setDraftProviderId] = useState<string>(() => {
@@ -259,6 +263,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     temperature,
     worldline,
     identityMode: defaultIdentityMode,
+    selfName,
     enableTts,
     sovitsUrl,
     providerId: (
@@ -437,6 +442,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const activeProviderId = activeConversation?.provider_id || draftProviderId;
   const activeProvider = providers.find((provider) => provider.id === activeProviderId);
   const activeModelId = activeConversation?.model_id || model;
+  /** Q21: HUD label follows the active conversation's immutable mode; drafts inherit the
+   *  settings default (the mode a materialized draft receives). Unknown/missing → okabe. */
+  const activeIdentityMode = normalizeIdentityMode(
+    activeConversation ? activeConversation.identity_mode : defaultIdentityMode,
+  );
+  const userHudLabel = activeIdentityMode === 'self'
+    ? (selfName ? `USER ID: ${selfName}` : 'USER ID: ————')
+    : 'USER ID: OKABE';
   const credentialConfigured = Boolean(
     activeProvider && (!activeProvider.credential_required || activeProvider.configured)
   );
@@ -907,6 +920,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     sfxVolume: number;
     temperature: number;
     identityMode: IdentityMode;
+    selfName: string;
     baseUrl: string;
     model: string;
     reasoningEffort: 'high' | 'xhigh';
@@ -1000,6 +1014,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
     setTemperature(safeTemperature);
     const nextIdentityMode = normalizeIdentityMode(newSettings.identityMode);
     setDefaultIdentityMode(nextIdentityMode);
+    // Slice B: already validated by SettingsModal (reserved/overlong never arrive here).
+    setSelfName(newSettings.selfName);
     setReasoningEffort(newSettings.reasoningEffort);
 
     if (
@@ -1021,6 +1037,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       localStorage.setItem('amadeus_pc_sfx_volume', String(newSettings.sfxVolume));
       localStorage.setItem('amadeus_pc_temperature', String(safeTemperature));
       persistIdentityMode(nextIdentityMode);
+      persistSelfName(newSettings.selfName);
       localStorage.setItem('amadeus_pc_model', newSettings.model);
       localStorage.setItem('amadeus_pc_reasoning_effort', newSettings.reasoningEffort);
     } catch (e) {
@@ -1039,6 +1056,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         temperature: safeTemperature,
         reasoningEffort: newSettings.reasoningEffort,
         identityMode: nextIdentityMode,
+        selfName: newSettings.selfName,
       };
       if (newSettings.worldline === worldline) {
         configPatch.worldline = newSettings.worldline;
@@ -1239,7 +1257,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                     ) : (
                       <>
                         <div className="avatar-label">
-                          {msg.role === 'user' ? 'USER ID: OKABE' : 'AMADEUS: KURISU'}
+                          {msg.role === 'user' ? userHudLabel : 'AMADEUS: KURISU'}
                         </div>
                         <div className="message-content-box">
                           {msg.role === 'assistant' ? (
@@ -1497,6 +1515,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           try { sessionStorage.removeItem('amadeus_pc_temperature_migrated_notice'); } catch { /* ignore */ }
         }}
         identityMode={defaultIdentityMode}
+        selfName={selfName}
         providerDisplayName={activeProvider?.display_name || activeProviderId}
         providerBaseUrl={activeProvider?.base_url}
         baseUrlConfigurable={Boolean(activeProvider?.base_url_configurable)}

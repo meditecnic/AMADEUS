@@ -59,6 +59,88 @@ export function persistIdentityMode(mode: IdentityMode): void {
   }
 }
 
+/* --- Slice B: self-mode call name (application-level config, not memory) --- */
+
+export const SELF_NAME_MAX_CODEPOINTS = 40;
+export const SELF_NAME_STORAGE_KEY = 'amadeus_pc_self_name';
+export const RESERVED_OKABE_NAME_HINT = '如需使用冈部身份，请选择 okabe 模式。';
+export const SELF_NAME_TOO_LONG_HINT = `称呼最多 ${SELF_NAME_MAX_CODEPOINTS} 个字符。`;
+export const SELF_NAME_INVALID_CHARS_HINT =
+  "称呼只能包含字母、数字、空格及 - ' · ・ . 分隔符。";
+
+// Rework contract: self_name is a NAME, not free text. Allowlist only — Unicode
+// letters/digits, plain space, and common name separators - ' · ・ .
+// Everything else (quotes, brackets, colons, slashes, underscores, control or
+// format chars, U+2028/U+2029, emoji, symbols) fails with an explicit error;
+// no silent repair. Mirrors backend prompt_compiler allowlist exactly.
+const NAME_ALLOWED_RE = /^[\p{L}\p{Nd} \-'.\u00b7\u30fb]+$/u;
+
+// Separators/punctuation ignored when comparing against reserved Okabe names
+// (mirrors backend prompt_compiler._NAME_SEPARATORS_RE).
+const NAME_SEPARATORS_RE = /[\s\u3000\u30fb.,\u00b7\-_'\u2019"\u201c\u201d\u300c\u300d\u300e\u300f()\uff08\uff09!\uff01?\uff1f~\uff5e*\u00d7+|/\\:;\uff1a\uff1b]/g;
+
+// Q21 guard: names that would blur self mode into the Okabe identity.
+// MUST stay identical to _RESERVED_OKABE_NAMES in backend prompt_compiler.py.
+const RESERVED_OKABE_NAMES = new Set([
+  '岡部', '岡部倫太郎', '冈部', '冈部伦太郎',
+  '鳳凰院凶真', '凤凰院凶真',
+  'okabe', 'rintarookabe', 'okaberintaro', 'hououinkyouma', 'kyoumahououin',
+]);
+
+function normalizeNameForGuard(value: string): string {
+  return value.normalize('NFKC').toLowerCase().replace(NAME_SEPARATORS_RE, '');
+}
+
+export function isReservedOkabeName(value: string): boolean {
+  return RESERVED_OKABE_NAMES.has(normalizeNameForGuard(value));
+}
+
+export type SelfNameValidation =
+  | { ok: true; value: string }
+  | { ok: false; error: string };
+
+/** Validate the call name; empty means "unset" and is valid.
+ *  Order mirrors backend sanitize_self_name: edge-trim (plain space U+0020 ONLY)
+ *  -> length -> reserved -> allowlist. Edge newlines/tabs/NBSP/BOM are NOT
+ *  trimmed — they reject the whole name via the allowlist (no silent repair). */
+export function validateSelfName(raw: unknown): SelfNameValidation {
+  if (typeof raw !== 'string') return { ok: true, value: '' };
+  const name = raw.replace(/^\u0020+|\u0020+$/g, '');
+  if (!name) return { ok: true, value: '' };
+  if (Array.from(name).length > SELF_NAME_MAX_CODEPOINTS) {
+    return { ok: false, error: SELF_NAME_TOO_LONG_HINT };
+  }
+  if (isReservedOkabeName(name)) {
+    return { ok: false, error: RESERVED_OKABE_NAME_HINT };
+  }
+  if (!NAME_ALLOWED_RE.test(name)) {
+    return { ok: false, error: SELF_NAME_INVALID_CHARS_HINT };
+  }
+  return { ok: true, value: name };
+}
+
+export function loadStoredSelfName(): string {
+  try {
+    const stored = localStorage.getItem(SELF_NAME_STORAGE_KEY) || '';
+    const checked = validateSelfName(stored);
+    return checked.ok ? checked.value : '';
+  } catch {
+    return '';
+  }
+}
+
+export function persistSelfName(name: string): void {
+  try {
+    if (name) {
+      localStorage.setItem(SELF_NAME_STORAGE_KEY, name);
+    } else {
+      localStorage.removeItem(SELF_NAME_STORAGE_KEY);
+    }
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
 /** Confirm copy when creating a conversation with an explicit mode (memory isolation). */
 export function identityModeNewConversationConfirm(mode: IdentityMode): string {
   const label = mode === 'self' ? 'Self' : 'Okabe';
@@ -94,6 +176,8 @@ export interface SettingsModalProps {
   onDismissTemperatureMigrationNotice?: () => void;
   /** Default for newly created conversations (not the active conversation's mode). */
   identityMode?: IdentityMode;
+  /** Slice B: app-level call name for self conversations (empty = unset). */
+  selfName?: string;
   providerDisplayName: string;
   providerBaseUrl?: string | null;
   baseUrlConfigurable: boolean;
@@ -114,6 +198,7 @@ export interface SettingsModalProps {
     sfxVolume: number;
     temperature: number;
     identityMode: IdentityMode;
+    selfName: string;
     baseUrl: string;
     model: string;
     reasoningEffort: 'high' | 'xhigh';
@@ -146,6 +231,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   temperatureMigrationNotice = false,
   onDismissTemperatureMigrationNotice,
   identityMode = DEFAULT_IDENTITY_MODE,
+  selfName = '',
   providerDisplayName,
   providerBaseUrl,
   baseUrlConfigurable,
@@ -169,6 +255,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [localIdentityMode, setLocalIdentityMode] = useState<IdentityMode>(() =>
     normalizeIdentityMode(identityMode),
   );
+  const [localSelfName, setLocalSelfName] = useState(selfName);
+  const [selfNameError, setSelfNameError] = useState<string | null>(null);
   const [localBaseUrl, setLocalBaseUrl] = useState(providerBaseUrl || '');
   const [localModel, setLocalModel] = useState(model);
   const [localReasoningIdx, setLocalReasoningIdx] = useState(
@@ -220,16 +308,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setLocalSovitsUrl(sovitsUrl);
       setLocalTemperature(clampChatTemperature(temperature));
       setLocalIdentityMode(normalizeIdentityMode(identityMode));
+      setLocalSelfName(selfName);
+      setSelfNameError(null);
       setLocalBaseUrl(providerBaseUrl || '');
       setLocalModel(model);
       setLocalReasoningIdx(reasoningEffort === 'xhigh' ? 1 : 0);
     }
-  }, [isOpen, worldline, apiKey, webSearchApiKey, webSearchActiveProvider, systemPrompt, enableTts, sovitsUrl, temperature, identityMode, providerBaseUrl, model, reasoningEffort]);
+  }, [isOpen, worldline, apiKey, webSearchApiKey, webSearchActiveProvider, systemPrompt, enableTts, sovitsUrl, temperature, identityMode, selfName, providerBaseUrl, model, reasoningEffort]);
 
   if (!isOpen) return null;
 
   const handleSave = async () => {
     if (isSaving) return;
+    // Slice B: reserved/overlong call names never save and never reach the backend.
+    const selfNameCheck = validateSelfName(localSelfName);
+    if (!selfNameCheck.ok) {
+      setSelfNameError(selfNameCheck.error);
+      return;
+    }
+    setSelfNameError(null);
     setIsSaving(true);
     setSaveError(null);
     try {
@@ -247,6 +344,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         sfxVolume: sfxVolume,
         temperature: clampChatTemperature(localTemperature),
         identityMode: normalizeIdentityMode(localIdentityMode),
+        selfName: selfNameCheck.value,
         baseUrl: localBaseUrl,
         model: localModel,
         reasoningEffort: (['high', 'xhigh'] as const)[localReasoningIdx],
@@ -580,6 +678,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     自己
                   </label>
                 </div>
+              </div>
+              <div className="setting-field field-full" data-testid="self-name-settings">
+                <label htmlFor="self-name-input">self 模式称呼</label>
+                <input
+                  id="self-name-input"
+                  data-testid="self-name-input"
+                  type="text"
+                  className="salieri-input"
+                  value={localSelfName}
+                  placeholder="留空表示不设置"
+                  onChange={(e) => {
+                    setLocalSelfName(e.target.value);
+                    setSelfNameError(null);
+                  }}
+                />
+                {selfNameError && (
+                  <p className="settings-save-error self-name-error" role="alert">
+                    {selfNameError}
+                  </p>
+                )}
               </div>
             </section>
             {/* VOICE tab */}

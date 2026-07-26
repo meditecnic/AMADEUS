@@ -107,6 +107,9 @@ class SessionState:
         self.identity_mode = "okabe"
         # Preference for draft materialize / new conversation (from client settings).
         self.default_identity_mode = "okabe"
+        # Slice B: app-level self-mode call name (client config; in-memory only,
+        # re-sent on every auth). Sanitized fail-closed at ingestion.
+        self.self_name = ""
         self.client_type = "mobile"
         self.protocol_version = 1
         self.conversation_mode = "history"
@@ -1720,6 +1723,10 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                         session.default_identity_mode = _norm_mode(str(raw_default_mode))
                     except ValueError:
                         session.default_identity_mode = "okabe"
+                if "self_name" in data:
+                    # Reserved/overlong names fail closed to "" (client shows the hint).
+                    from app.services.prompt_compiler import sanitize_self_name
+                    session.self_name = sanitize_self_name(data.get("self_name"))
 
                 if requested_mode == "draft":
                     await session.enter_draft()
@@ -2016,6 +2023,10 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                         session.default_identity_mode = "okabe"
                     if session.conversation_id is None:
                         session.identity_mode = session.default_identity_mode
+                if "self_name" in data:
+                    # Reserved/overlong names fail closed to "" (client shows the hint).
+                    from app.services.prompt_compiler import sanitize_self_name
+                    session.self_name = sanitize_self_name(data.get("self_name"))
                 if "system_prompt" in data:
                     base_prompt = data["system_prompt"]
                     session.base_system_prompt = base_prompt

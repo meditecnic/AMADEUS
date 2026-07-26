@@ -351,6 +351,27 @@ describe('useAmadeusWS v2', () => {
     unmount();
   });
 
+  it('carries self_name on auth and maps it in config_update (Slice B)', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const { result, unmount } = renderHook(() => useAmadeusWS({
+      ...params,
+      selfName: '阿伟',
+    }));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => socket.onopen?.());
+    const auth = JSON.parse(socket.sent[0]);
+    expect(auth.self_name).toBe('阿伟');
+
+    act(() => result.current.updateConfig({ selfName: '新名字' }));
+    const frame = JSON.parse(socket.sent[socket.sent.length - 1]);
+    expect(frame).toMatchObject({ type: 'config_update', self_name: '新名字' });
+
+    act(() => result.current.updateConfig({ selfName: '' }));
+    expect(JSON.parse(socket.sent[socket.sent.length - 1]).self_name).toBe('');
+    unmount();
+  });
+
   it('negotiates v2, sends chat.send, and ignores late generations', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const { result, unmount } = renderHook(() => useAmadeusWS(params));

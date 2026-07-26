@@ -71,6 +71,7 @@ vi.mock('./SettingsModal', () => ({
   CHAT_TEMPERATURE_DEFAULT: 0.0,
   DEFAULT_IDENTITY_MODE: 'okabe',
   IDENTITY_MODE_STORAGE_KEY: 'amadeus_pc_identity_mode',
+  SELF_NAME_STORAGE_KEY: 'amadeus_pc_self_name',
   clampChatTemperature: (value: number) => {
     if (!Number.isFinite(value)) return 0.0;
     return Math.max(0, Math.min(1.2, value));
@@ -78,6 +79,20 @@ vi.mock('./SettingsModal', () => ({
   normalizeIdentityMode: (value: unknown) => (value === 'self' ? 'self' : 'okabe'),
   loadStoredIdentityMode: () => 'okabe' as const,
   persistIdentityMode: () => {},
+  loadStoredSelfName: () => {
+    try {
+      return localStorage.getItem('amadeus_pc_self_name') || '';
+    } catch {
+      return '';
+    }
+  },
+  persistSelfName: (name: string) => {
+    try {
+      localStorage.setItem('amadeus_pc_self_name', name);
+    } catch {
+      /* ignore */
+    }
+  },
 }));
 vi.mock('./SoundPanel', () => ({ SoundPanel: () => null }));
 vi.mock('./HistorySidebar', () => ({
@@ -1131,5 +1146,185 @@ describe('Workstation UX-TRANSCRIPT-FOLLOW-01 conditional stick + jump', () => {
 
     expect(sendChat).toHaveBeenCalledWith('新消息');
     expect(metrics.scrollTop).toBe(900);
+  });
+});
+
+
+describe('Workstation identity HUD label (backlog issue-2)', () => {
+  // Q21: label follows the active conversation's immutable mode; unknown values fall back to okabe.
+  const conversationRows = [
+    {
+      id: 'conv-okabe', title: 'Okabe 会话', title_source: 'auto', is_default: true,
+      is_pinned: false, provider_id: 'deepseek', model_id: 'deepseek-v4-flash',
+      identity_mode: 'okabe', last_active_at: '1',
+    },
+    {
+      id: 'conv-self', title: 'Self 会话', title_source: 'manual', is_default: false,
+      is_pinned: false, provider_id: 'deepseek', model_id: 'deepseek-v4-flash',
+      identity_mode: 'self', last_active_at: '2',
+    },
+    {
+      id: 'conv-missing', title: '缺失 mode 会话', title_source: 'auto', is_default: false,
+      is_pinned: false, provider_id: 'deepseek', model_id: 'deepseek-v4-flash',
+      last_active_at: '3',
+    },
+    {
+      id: 'conv-unknown', title: '未知 mode 会话', title_source: 'auto', is_default: false,
+      is_pinned: false, provider_id: 'deepseek', model_id: 'deepseek-v4-flash',
+      identity_mode: 'kurisu', last_active_at: '4',
+    },
+  ];
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  beforeEach(() => {
+    localStorage.clear();
+    audioSpies.isPlaying = false;
+    audioSpies.init.mockClear();
+    audioSpies.playBase64.mockClear();
+    audioSpies.stopAll.mockClear();
+    wsSpies.reconnect.mockClear();
+    wsSpies.switchConversation.mockClear();
+    wsSpies.switchWorldline.mockClear();
+    wsSpies.switchConversation.mockReturnValue(true);
+    wsSpies.switchWorldline.mockReturnValue(true);
+    wsSpies.useAmadeusWS.mockReset();
+
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/providers') {
+        return { ok: true, status: 200, json: async () => [] } as Response;
+      }
+      if (url.startsWith('/api/conversations?')) {
+        return { ok: true, status: 200, json: async () => conversationRows } as Response;
+      }
+      if (url === '/api/search/settings') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ provider: 'tavily', configured: false, fallback: 'duckduckgo' }),
+        } as Response;
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+  });
+
+  function mountIdentityHarness() {
+    let params: {
+      onConversationSwitched?: (details: { conversationId: string }) => void;
+    } = {};
+    wsSpies.useAmadeusWS.mockImplementation((p: unknown) => {
+      params = p as typeof params;
+      return {
+        status: 'READY',
+        messages: [
+          { id: 'user_turn', role: 'user', content: '身份标签检查' },
+          { id: 'assist_turn', role: 'assistant', content: '完了。', translation: '完成。', streaming: false, segments: [] },
+        ],
+        isThinking: false,
+        isSynthesizing: false,
+        activeTool: null,
+        activeNotice: null,
+        emotion: 'neutral',
+        sendChat: vi.fn(),
+        stopVoice: vi.fn(),
+        cancelTurn: vi.fn(),
+        sendDebugTts: vi.fn(),
+        updateConfig: vi.fn(),
+        reconnect: wsSpies.reconnect,
+        switchConversation: wsSpies.switchConversation,
+        switchWorldline: wsSpies.switchWorldline,
+        wsRef: { current: null },
+      };
+    });
+    const view = render(
+      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    );
+    return { ...view, getParams: () => params };
+  }
+
+  async function activate(
+    view: ReturnType<typeof mountIdentityHarness>,
+    conversationId: string,
+  ) {
+    await waitFor(() => expect(view.getParams().onConversationSwitched).toBeTypeOf('function'));
+    act(() => view.getParams().onConversationSwitched?.({ conversationId }));
+  }
+
+  it('shows USER ID: OKABE for an okabe conversation', async () => {
+    const view = mountIdentityHarness();
+    await activate(view, 'conv-okabe');
+    await waitFor(() => expect(view.queryByText('USER ID: OKABE')).not.toBeNull());
+    expect(view.queryByText('USER ID: ————')).toBeNull();
+  });
+
+  it('shows the blank-start placeholder for a self conversation', async () => {
+    const view = mountIdentityHarness();
+    await activate(view, 'conv-self');
+    await waitFor(() => expect(view.queryByText('USER ID: ————')).not.toBeNull());
+    expect(view.queryByText('USER ID: OKABE')).toBeNull();
+  });
+
+  it('falls back to OKABE when identity_mode is missing', async () => {
+    const view = mountIdentityHarness();
+    await activate(view, 'conv-missing');
+    await waitFor(() => expect(view.queryByText('USER ID: OKABE')).not.toBeNull());
+    expect(view.queryByText('USER ID: ————')).toBeNull();
+  });
+
+  it('falls back to OKABE for unknown identity_mode values', async () => {
+    const view = mountIdentityHarness();
+    await activate(view, 'conv-unknown');
+    await waitFor(() => expect(view.queryByText('USER ID: OKABE')).not.toBeNull());
+    expect(view.queryByText('USER ID: ————')).toBeNull();
+  });
+
+  it('updates the label when switching from okabe to self', async () => {
+    const view = mountIdentityHarness();
+    await activate(view, 'conv-okabe');
+    await waitFor(() => expect(view.queryByText('USER ID: OKABE')).not.toBeNull());
+
+    await activate(view, 'conv-self');
+    await waitFor(() => expect(view.queryByText('USER ID: ————')).not.toBeNull());
+    expect(view.queryByText('USER ID: OKABE')).toBeNull();
+  });
+
+  it('restores the OKABE label when switching back from self', async () => {
+    const view = mountIdentityHarness();
+    await activate(view, 'conv-self');
+    await waitFor(() => expect(view.queryByText('USER ID: ————')).not.toBeNull());
+
+    await activate(view, 'conv-okabe');
+    await waitFor(() => expect(view.queryByText('USER ID: OKABE')).not.toBeNull());
+    expect(view.queryByText('USER ID: ————')).toBeNull();
+  });
+
+  it('shows the stored self name for a self conversation (Slice B)', async () => {
+    localStorage.setItem('amadeus_pc_self_name', '阿伟');
+    const view = mountIdentityHarness();
+    await activate(view, 'conv-self');
+    await waitFor(() => expect(view.queryByText('USER ID: 阿伟')).not.toBeNull());
+    expect(view.queryByText('USER ID: ————')).toBeNull();
+    expect(view.queryByText('USER ID: OKABE')).toBeNull();
+  });
+
+  it('never shows the self name on an okabe conversation (Slice B isolation)', async () => {
+    localStorage.setItem('amadeus_pc_self_name', '阿伟');
+    const view = mountIdentityHarness();
+    await activate(view, 'conv-okabe');
+    await waitFor(() => expect(view.queryByText('USER ID: OKABE')).not.toBeNull());
+    expect(view.queryByText('USER ID: 阿伟')).toBeNull();
+  });
+
+  it('hands the stored self name to the WS config chain on mount (reload retention)', async () => {
+    localStorage.setItem('amadeus_pc_self_name', '阿伟');
+    mountIdentityHarness();
+    await waitFor(() => {
+      const calls = wsSpies.useAmadeusWS.mock.calls;
+      const latest = calls[calls.length - 1]?.[0] as { selfName?: string };
+      expect(latest.selfName).toBe('阿伟');
+    });
   });
 });

@@ -13,6 +13,8 @@ export interface UseAmadeusWSParams {
   reasoningEffort: 'high' | 'xhigh';
   /** Settings default for draft materialize / new conversation (never inferred). */
   identityMode?: 'okabe' | 'self';
+  /** Slice B: app-level self-mode call name (empty = unset); resent on every auth. */
+  selfName?: string;
   onAudioChunk?: (sentenceId: number, base64Data: string) => void;
   onAudioDegraded?: (reason: string) => void;
   onSessionReady?: (details: {
@@ -264,6 +266,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
         worldline: paramsRef.current.worldline,
         reasoning_effort: paramsRef.current.reasoningEffort,
         default_identity_mode: paramsRef.current.identityMode || 'okabe',
+        self_name: paramsRef.current.selfName ?? '',
         client: 'desktop',
         protocol_version: 2,
       };
@@ -729,6 +732,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     if (patch.identityMode !== undefined) {
       mappedPatch.default_identity_mode = patch.identityMode;
     }
+    if (patch.selfName !== undefined) mappedPatch.self_name = patch.selfName;
 
     // Send config_update frame
     const configUpdateFrame = {
