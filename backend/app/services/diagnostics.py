@@ -40,6 +40,8 @@ REASON_CODES = frozenset(
     {
         "action_only",
         "too_short",
+        "invalid_language",
+        "text_too_long",
         "user_disabled",
         "voice_stopped",
         "user_turn_cancel",
@@ -55,7 +57,13 @@ LATE_REJECTED_REASONS = frozenset(
         "turn_terminal",
     }
 )
-SKIP_REASONS = frozenset({"action_only", "too_short", "user_disabled"})
+SKIP_REASONS = frozenset({
+    "action_only",
+    "too_short",
+    "invalid_language",
+    "text_too_long",
+    "user_disabled",
+})
 STAGES = frozenset({"generation", "tts", "delivery", "decode", "playback"})
 SOURCES = frozenset({"server", "client_reported"})
 LANGUAGE_VALUES = frozenset({"ja", "zh", "mixed", "symbol_only", "unknown"})

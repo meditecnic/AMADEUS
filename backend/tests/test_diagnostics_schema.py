@@ -75,6 +75,8 @@ def test_schema_versions_and_enums_are_closed():
     assert REASON_CODES == {
         "action_only",
         "too_short",
+        "invalid_language",
+        "text_too_long",
         "user_disabled",
         "voice_stopped",
         "user_turn_cancel",
@@ -87,7 +89,13 @@ def test_schema_versions_and_enums_are_closed():
         "superseded_generation",
         "turn_terminal",
     }
-    assert SKIP_REASONS == {"action_only", "too_short", "user_disabled"}
+    assert SKIP_REASONS == {
+        "action_only",
+        "too_short",
+        "invalid_language",
+        "text_too_long",
+        "user_disabled",
+    }
 
 
 def test_event_allowlist_rejects_silent_field_expansion():
