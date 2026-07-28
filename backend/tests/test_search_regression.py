@@ -10,6 +10,7 @@ from app.services.search import (
     web_search,
     _extract_city,
 )
+from app.routers import chat_ws as _chat_ws_mod
 from app.routers.chat_ws import (
     build_tool_result_context,
     build_web_search_evidence_context,
@@ -20,6 +21,20 @@ from app.routers.chat_ws import (
     _ANSWER_LANGUAGE_HARD_REQUIREMENT,
     _history_has_external_evidence,
 )
+
+
+@pytest.fixture(autouse=True)
+def _clean_sessions():
+    """Ensure each test starts with an empty sessions dict (in-place).
+
+    IMPORTANT: use .clear() — never reassign chat_ws.sessions = {}.
+    Reassignment replaces the module-level dict object, breaking other
+    test modules that captured the original reference via
+    ``from app.routers.chat_ws import sessions``.
+    """
+    _chat_ws_mod.sessions.clear()
+    yield
+    _chat_ws_mod.sessions.clear()
 
 
 # --- Unit tests for search.py ---
@@ -306,7 +321,7 @@ async def test_processor_loop_triggers_web_search_for_weather(tmp_path, monkeypa
     from app.routers import chat_ws
     from app.routers.chat_ws import SessionState, processor_loop
 
-    chat_ws.sessions = {}
+    chat_ws.sessions.clear()
     session = SessionState("search-test")
     session.api_key = "sk-test"
     session.model = "deepseek-v4-pro"
@@ -385,7 +400,7 @@ async def test_processor_does_not_generate_answer_without_search_evidence(tmp_pa
     from app.routers import chat_ws
     from app.routers.chat_ws import SessionState, processor_loop
 
-    chat_ws.sessions = {}
+    chat_ws.sessions.clear()
     session = SessionState("search-no-evidence")
     session.api_key = "sk-test"
     session.model = "deepseek-v4-pro"
