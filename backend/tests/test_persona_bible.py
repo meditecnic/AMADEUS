@@ -42,6 +42,22 @@ def _inputs(
     return PromptInputs(**kwargs)
 
 
+def test_gate7a_nat_user_fact_familiarity_rule_self_only():
+    """GATE7A-NAT: the familiarity rule is injected for self on both
+    worldlines and never for okabe (okabe has no shared profile access)."""
+    bible = PersonaBible.load_default()
+    assert "user-fact-familiarity" in bible.rules
+    assert "user-fact-familiarity" in bible.mode_rule_ids["self"]
+    assert "user-fact-familiarity" not in bible.mode_rule_ids["okabe"]
+    assert "user-fact-familiarity" not in bible.shared_rule_ids
+    marker = "既に知っている事実"
+    for worldline in ("steins_gate", "beta"):
+        self_prompt = bible.render_prompt(worldline, identity_mode="self")
+        okabe_prompt = bible.render_prompt(worldline, identity_mode="okabe")
+        assert marker in self_prompt, worldline
+        assert marker not in okabe_prompt, worldline
+
+
 def test_bible_is_traceable_and_contains_no_copied_source_passages():
     bible = PersonaBible.load_default()
 

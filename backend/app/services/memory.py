@@ -28,6 +28,11 @@ from app.services.provider_registry import ProviderSnapshot, ProviderTask
 
 logger = logging.getLogger(__name__)
 
+# GATE7A-NAT: seats reserved for shared profile facts in self-mode core fact
+# retrieval, so CJK zero-overlap queries cannot evict the stable user profile.
+# Small on purpose — must never crowd out the worldline-local budget.
+_SHARED_PROFILE_RESERVED_SEATS = 8
+
 
 class EpisodicCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -806,7 +811,25 @@ Do not reclassify the speaker as a different identity. Do not promote role-play 
                         pinned=bool(row["is_pinned"]),
                     )
                 )
-        return sorted(ranked, key=lambda item: item.score, reverse=True)[:limit]
+        ordered = sorted(ranked, key=lambda item: item.score, reverse=True)
+        if mode != "self":
+            return ordered[:limit]
+        # GATE7A-NAT: CJK queries often share zero surface tokens with fact
+        # keys/values, so relevance collapses to 0 and a flood of unrelated
+        # high-importance local facts can evict the shared profile entirely.
+        # Reserve a few seats for the top-scored shared entries — the stable
+        # user profile must stay visible; ordering semantics stay score-based.
+        selected = ordered[:limit]
+        selected_ids = {item.id for item in selected}
+        reserved = [item for item in ordered if item.id < 0][:_SHARED_PROFILE_RESERVED_SEATS]
+        missing = [item for item in reserved if item.id not in selected_ids]
+        if missing:
+            shared_in = [item for item in selected if item.id < 0]
+            non_shared = [item for item in selected if item.id > 0]
+            room = max(0, limit - len(shared_in) - len(missing))
+            selected = shared_in + missing + non_shared[:room]
+            selected.sort(key=lambda item: item.score, reverse=True)
+        return selected[:limit]
 
     async def hybrid_search(
         self,

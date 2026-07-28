@@ -154,7 +154,9 @@ class PromptCompiler:
                 keep_tail=False,
             ),
             self._fit(state_section, self.BUDGETS["state"]),
-            self._fit("CORE FACTS\n" + "\n".join(f"- {item.content}" for item in inputs.core_facts), self.BUDGETS["core"]),
+            # GATE7A-NAT: keep_tail=False so the FACT_USE_CONTRACT head always
+            # survives _fit truncation; low-ranked tail facts are trimmed first.
+            self._fit(self._format_core_facts(inputs.core_facts), self.BUDGETS["core"], keep_tail=False),
             self._fit("EPISODIC MEMORY\n" + "\n".join(f"- {item.content}" for item in inputs.episodic), self.BUDGETS["episodic"]),
             self._fit("WEB EVIDENCE\n" + "\n".join(inputs.web_evidence), self.BUDGETS["web"]),
             self._fit("WORKING CONTEXT\n" + inputs.working_summary + "\nRECENT DIALOGUE\n" + "\n".join(f"{row['role']}: {row['content']}" for row in inputs.recent_history), self.BUDGETS["history"], keep_tail=True),
@@ -172,6 +174,34 @@ class PromptCompiler:
             while self.token_counter("\n\n".join(sections)) > self.input_budget and len(sections[index]) > 120:
                 sections[index] = sections[index][: max(120, len(sections[index]) * 4 // 5)]
         return "\n\n".join(section for section in sections if section.strip())
+
+    @staticmethod
+    def _format_core_facts(facts: list[RetrievedMemory]) -> str:
+        """CORE FACTS with a short usage contract (GATE7A-NAT).
+
+        The stable ASCII anchor keeps tests copy-independent. The contract
+        constrains HOW facts are used (natural familiarity; no deny-then-guess
+        on listed items; no storage/worldline mechanism talk) and never adds
+        persona lore. Empty fact lists skip the contract to save budget.
+        """
+        if not facts:
+            return "CORE FACTS\n(none)"
+        lines = "\n".join(f"- {item.content}" for item in facts)
+        return (
+            "CORE FACTS\n"
+            "FACT_USE_CONTRACT: Listed items are known stable user-profile facts for this identity. "
+            "When the user asks about a listed fact, answer from knowledge with natural familiarity "
+            "(a light uncertain tone like「…だっけ」is fine). "
+            "Speak like someone who genuinely knows the user, focused on what this turn is actually about. "
+            "Do not pad the reply with other listed facts to show off your memory, and do not use filler "
+            "transitions like「あとは…」「接下来…」just to attach one; if another fact does not truly belong "
+            "in this reply, let it stay unsaid — you still know it for later. "
+            "NEVER claim ignorance of a listed fact and then guess it. "
+            "NEVER mention other worldlines, MEMORY settings, databases, sync, or sharing UI as a source. "
+            "Facts not listed here are simply unknown — saying so is fine. "
+            "Do not read fact keys aloud; weave values into in-character speech.\n"
+            f"{lines}"
+        )
 
     def _fit(self, text: str, budget: int, keep_tail: bool = True) -> str:
         if self.token_counter(text) <= budget:
