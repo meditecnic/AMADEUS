@@ -95,7 +95,8 @@ async def websocket_voice_endpoint(websocket: WebSocket):
         )
         await websocket.send_json({"type": "stt.final", "content": text, "emotion": emotion, "confidence": confidence})
         if text and not session.is_busy:
-            session.append_message({"role": "user", "content": text})
+            # id filled after chat processor save_message (Memory Ingest v2).
+            session.append_message({"role": "user", "content": text, "id": None})
             session.is_busy = True
             session.active_task = asyncio.create_task(processor_loop(session, text, send_queue, session.current_epoch, session.history_epoch))
 

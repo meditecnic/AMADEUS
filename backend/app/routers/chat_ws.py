@@ -254,7 +254,45 @@ class SessionState:
         self._history = copy.deepcopy(value)
 
     def append_message(self, message: dict):
-        self._history.append(copy.deepcopy(message))
+        """Append a history row. Optional ``id`` is the durable messages.id."""
+        row = copy.deepcopy(message)
+        if "id" not in row:
+            row["id"] = None
+        self._history.append(row)
+
+    def set_last_message_id(self, role: str, message_id: int) -> None:
+        """Backfill DB id onto the newest matching role row without id."""
+        if not isinstance(message_id, int) or isinstance(message_id, bool) or message_id <= 0:
+            return
+        for msg in reversed(self._history):
+            if msg.get("role") == role and msg.get("id") in (None, 0):
+                msg["id"] = int(message_id)
+                return
+
+    def recent_messages(self, n: int | None = None) -> list:
+        """Shallow window for memory ingest — no full-history deepcopy.
+
+        ``n`` must not exceed MEMORY_INGEST_WINDOW_N (aligned with compression keep).
+        """
+        from app.services.memory import MEMORY_INGEST_WINDOW_N
+
+        limit = MEMORY_INGEST_WINDOW_N if n is None else int(n)
+        if limit > MEMORY_INGEST_WINDOW_N:
+            raise ValueError(
+                f"recent_messages n={limit} exceeds MEMORY_INGEST_WINDOW_N="
+                f"{MEMORY_INGEST_WINDOW_N} (must stay ≤ history compression keep)"
+            )
+        if limit <= 0:
+            return []
+        tail = self._history[-limit:]
+        return [
+            {
+                "role": item.get("role"),
+                "content": item.get("content"),
+                "id": item.get("id"),
+            }
+            for item in tail
+        ]
 
     @property
     def tts_key(self) -> str:
@@ -342,10 +380,12 @@ async def compress_and_update_history(
 ):
     """
     Asynchronously compress older conversation history and update session state safely.
-    Keeps the last 3 rounds (6 messages) of history.
+    Keeps the last MEMORY_INGEST_WINDOW_N messages (aligned with memory ingest window).
     Preserves any new messages added during the compression network call.
     """
-    keep_count = 6
+    from app.services.memory import MEMORY_INGEST_WINDOW_N
+
+    keep_count = MEMORY_INGEST_WINDOW_N
     if len(current_history) <= keep_count:
         session_data = sessions.get(session_id)
         if session_data:
@@ -1169,6 +1209,7 @@ async def processor_loop(
             revision=session.revision,
             conversation_id=conversation_id,
         )
+        session.set_last_message_id("user", int(user_message_id))
         
         from app.agent_tools import AMADEUS_TOOLS
         tools_to_use = AMADEUS_TOOLS
@@ -1313,7 +1354,6 @@ async def processor_loop(
             )
         
         if session.history_epoch == start_history_epoch and session.conversation_id == conversation_id:
-            session.append_message({"role": "assistant", "content": history_content})
             if full_ja_text.strip():
                 assistant_message_id = await models.save_message(
                     session.session_id,
@@ -1325,57 +1365,74 @@ async def processor_loop(
                     conversation_id=conversation_id,
                     translation=history_translation or None,
                 )
-                from app.services.memory import memory_service, _has_memory_intent, _N_TURNS_CORE_THROTTLE
-                session.turns_since_last_core += 1
-                intent_hit = _has_memory_intent(user_msg)
-                skip_core = not (intent_hit or session.turns_since_last_core >= _N_TURNS_CORE_THROTTLE)
+                session.append_message(
+                    {
+                        "role": "assistant",
+                        "content": history_content,
+                        "id": int(assistant_message_id),
+                    }
+                )
+                from app.services.memory import memory_service
+                # Memory Ingest v2: recent window + allowed source ids (no keyword gate).
+                window = session.recent_messages()
+                allowed_ids = [
+                    int(item["id"])
+                    for item in window
+                    if isinstance(item.get("id"), int)
+                    and not isinstance(item.get("id"), bool)
+                    and int(item["id"]) > 0
+                ]
+                for mid in (user_message_id, assistant_message_id):
+                    if isinstance(mid, int) and mid > 0 and mid not in allowed_ids:
+                        allowed_ids.append(int(mid))
                 memory_service.schedule_turn_extraction(
                     session_id=session.session_id,
                     worldline=session.worldline,
                     conversation_id=conversation_id,
                     user_text=user_msg,
                     assistant_text=history_content,
-                    source_message_ids=[user_message_id, assistant_message_id],
+                    source_message_ids=allowed_ids,
                     api_key=session.api_key,
                     provider_snapshot=turn_provider,
                     identity_mode=getattr(session, "identity_mode", "okabe"),
-                    turns_since_last_core=session.turns_since_last_core,
-                    skip_core=skip_core,
+                    skip_core=False,
+                    recent_messages=window,
                 )
-                if not skip_core:
-                    session.turns_since_last_core = 0
-                from app.services.conversations import conversation_service
+            else:
+                session.append_message({"role": "assistant", "content": history_content, "id": None})
 
-                # IDENTITY-ACK-01: only an explicit identity ask whose turn
-                # published real canonical Japanese (guarded above by
-                # full_ja_text.strip() + epoch/conversation match) AND whose
-                # reply carries the complete identity-boundary fact set may set
-                # the flag. Recovery/leak fallbacks never count; one-way.
-                if (
-                    not session.identity_acknowledged
-                    and _is_explicit_identity_question(user_msg)
-                    and not any(
-                        blocker in full_ja_text
-                        for blocker in _IDENTITY_ACK_BLOCKERS
-                    )
-                    and _looks_like_complete_identity_briefing(full_ja_text)
-                ):
-                    await conversation_service.mark_identity_acknowledged(
-                        session.session_id,
-                        session.worldline,
-                        conversation_id,
-                    )
-                    session.identity_acknowledged = True
+            from app.services.conversations import conversation_service
 
-                conversation_service.schedule_auto_title(
-                    conversation_id,
+            # IDENTITY-ACK-01: only an explicit identity ask whose turn
+            # published real canonical Japanese (guarded above by
+            # full_ja_text.strip() + epoch/conversation match) AND whose
+            # reply carries the complete identity-boundary fact set may set
+            # the flag. Recovery/leak fallbacks never count; one-way.
+            if (
+                not session.identity_acknowledged
+                and _is_explicit_identity_question(user_msg)
+                and not any(
+                    blocker in full_ja_text
+                    for blocker in _IDENTITY_ACK_BLOCKERS
+                )
+                and _looks_like_complete_identity_briefing(full_ja_text)
+            ):
+                await conversation_service.mark_identity_acknowledged(
                     session.session_id,
                     session.worldline,
-                    user_text=user_msg,
-                    assistant_text=history_content,
-                    api_key=session.api_key,
-                    provider_snapshot=turn_provider,
+                    conversation_id,
                 )
+                session.identity_acknowledged = True
+
+            conversation_service.schedule_auto_title(
+                conversation_id,
+                session.session_id,
+                session.worldline,
+                user_text=user_msg,
+                assistant_text=history_content,
+                api_key=session.api_key,
+                provider_snapshot=turn_provider,
+            )
         
         if history_translation and session.protocol_version < 2:
             await send_queue.put((epoch, {
@@ -2244,7 +2301,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 session.is_busy = True
                 session.active_turn_id = str(uuid4())
                 session.voice_stopped_turn_id = None
-                session.append_message({"role": "user", "content": content})
+                session.append_message({"role": "user", "content": content, "id": None})
                 session.active_task = asyncio.create_task(
                     processor_loop(session, content, send_queue, session.current_epoch, session.history_epoch)
                 )

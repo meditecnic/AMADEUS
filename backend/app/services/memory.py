@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import logging
 import math
+import re
 import sqlite3
 import struct
-import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Awaitable, Callable, Iterable, Literal
+from typing import Any, Awaitable, Callable, Iterable, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app import config
 from app.db import (
@@ -33,32 +35,130 @@ logger = logging.getLogger(__name__)
 # Small on purpose — must never crowd out the worldline-local budget.
 _SHARED_PROFILE_RESERVED_SEATS = 8
 
-# M2: Memory quality gate thresholds
+# M2: Memory quality gate thresholds (universal write control — not keywords)
 _CORE_CONFIDENCE_THRESHOLD = 0.7
 _CORE_IMPORTANCE_THRESHOLD = 0.65
 _MAX_CORE_PER_TURN = 2
-_N_TURNS_CORE_THROTTLE = 3  # Extract core every N user turns if no intent detected
+# Deprecated as a production write gate (AUTO-PROFILE universal path).
+# Kept for test/back-compat imports only; chat_ws no longer throttles on N.
+_N_TURNS_CORE_THROTTLE = 3
+# Memory Ingest v2: extraction window size. MUST match chat history compression
+# keep_count (chat_ws.compress_and_update_history). Do not raise one without the other.
+MEMORY_INGEST_WINDOW_N = 6
+_EMO_HISTORY_PREFIX = re.compile(r"^\[(?:E?MO)[:=][a-zA-Z0-9_]+\]\s*")
 
-# M2: Memory intent keywords (Chinese + Japanese + English)
+# Legacy keyword list — NOT used to gate core writes anymore.
+# Production relies on extractor + conf/imp + durable-profile filter + cap.
+# Retained only so older diagnostic helpers/tests can still import shapes.
 _MEMORY_INTENT_KEYWORDS = [
-    # Chinese
     '记住', '别忘了', '请记住', '记下来', '不要忘记', '别忘记',
-    '我是', '我叫', '我的名字', '我喜欢', '我讨厌', '我不喜欢',
+    '我是', '我叫', '我的名字',
+    '我喜欢', '最喜欢', '最爱', '我讨厌', '我不喜欢', '不喜欢',
     '我的爱好', '我的职业', '我的工作', '我住在', '我来自',
     '年龄', '岁', '生日',
-    # Japanese
-    '覚えて', '忘れない', '記憶', '好き', '嫌い',
+    '最拿手', '拿手', '最擅长', '擅长', '主玩', '爱玩', '常玩',
+    '不吃', '过敏', '忌口', '素食', '叫我', '别叫我', '请叫我',
+    '我习惯', '一般不', '从不', '我不用', '我不要',
+    '覚えて', '忘れない', '記憶', '好き', '嫌い', '大好き', '得意',
     '名前は', '私の名', '趣味', '職業', '年齢',
-    # English
+    '苦手', 'アレルギー', '呼んで', '呼ばないで',
     'remember', "don't forget", 'my name', 'I like', 'I hate',
+    'my favorite', 'favourite', 'my main', 'i main',
     'my hobby', 'my job', 'I live', 'I am from',
+    "i don't eat", "i do not eat", 'allergic', 'call me', "don't call me",
+    'i prefer', 'i usually',
 ]
+
+# Keys that must never land as quiet user-profile cores (character / system / ephemeral).
+_BLOCKED_PROFILE_KEY_MARKERS = (
+    'amadeus', 'kurisu', 'makise', '紅莉栖', '牧瀬',
+    'assistant', 'persona', 'system_prompt', 'npc_',
+)
+_EPHEMERAL_PROFILE_KEY_MARKERS = (
+    'today_', 'mood', 'tmp_', 'temp_', 'ephemeral', 'session_only',
+)
+_HOLLOW_FACT_VALUES = frozenset({
+    '', '…', '...', '—', '-', '?', '？', '是', '否', 'yes', 'no', 'ok', 'okay',
+})
 
 
 def _has_memory_intent(text: str) -> bool:
-    """Check if user text contains memory-intent keywords."""
+    """Legacy keyword probe only — must not gate production core writes."""
+    if not text or not str(text).strip():
+        return False
     text_lower = text.lower()
     return any(kw.lower() in text_lower for kw in _MEMORY_INTENT_KEYWORDS)
+
+
+def should_skip_core_extraction(user_text: str, turns_since_last_core: int) -> bool:
+    """Production always returns False (universal auto-profile).
+
+    Keyword/N-turn rhythm was removed: it discarded valid cores for natural
+    phrasing (e.g. 我最喜欢 vs 我喜欢). Write control is conf/imp + durable
+    filter + per-turn cap. ``user_text`` / ``turns_since_last_core`` kept for
+    call-site compatibility only.
+    """
+    return False
+
+
+def is_durable_profile_core(candidate: "CoreFactCandidate") -> bool:
+    """Deterministic second gate: keep only durable user-profile shaped cores."""
+    key = (candidate.fact_key or "").strip().lower()
+    value = (candidate.fact_value or "").strip()
+    if len(key) < 2 or len(value) < 2:
+        return False
+    if value.lower() in _HOLLOW_FACT_VALUES or value in _HOLLOW_FACT_VALUES:
+        return False
+    # Reject pure punctuation / ellipsis values
+    if all(ch in ".…·・-—_~～、。，,!！?？ \t" for ch in value):
+        return False
+    if any(marker in key for marker in _BLOCKED_PROFILE_KEY_MARKERS):
+        return False
+    if any(marker in key for marker in _EPHEMERAL_PROFILE_KEY_MARKERS):
+        return False
+    return True
+
+
+def strip_history_emo_prefix(content: str) -> str:
+    """Remove leading [EMO:…] tags from assistant history lines before extraction."""
+    if not content:
+        return ""
+    return _EMO_HISTORY_PREFIX.sub("", str(content), count=1)
+
+
+def build_extraction_instruction(identity_mode: str) -> str:
+    """System prompt: unified facts[] + horizon (Scheme A). No domain word lists."""
+    mode = normalize_identity_mode(identity_mode)
+    return f"""Extract memory from a short recent conversation window and return ONE JSON object:
+{{
+  "working_summary": "...",
+  "facts": [ /* 0..8 items */ ]
+}}
+
+Each facts[] item:
+- horizon: "durable" | "contextual" only
+- confidence, importance: numbers 0..1 (for durable self-attributes use importance >= 0.7 when clear)
+- source_message_ids: from allowed ids (prefer the user message that states the claim)
+- if durable: fact_key (snake_case), fact_value (short natural claim in the user's language)
+- if contextual: content (event sentence). You may omit fact_key/fact_value.
+
+Priority (critical):
+1) Start from the LATEST user message. If it asserts something about the user that would still be true next week, you MUST emit horizon=durable for it.
+2) Use earlier turns only to bind short answers (e.g. prior question + short reply).
+3) Do NOT let older topical chatter replace a clear durable claim in the latest user line
+   (e.g. earlier "want to play a game" is contextual; a later self-description of a lasting preference/skill is durable).
+
+Horizon rule (NOT domain labels / not a category list):
+- durable = still true if you strip time and scene ("the user …" stands alone next week)
+- contextual = tied to tonight/just now/one match/mood/plan/this beat only
+- If conf>=0.8 and no clear time/scene binding → default durable
+- Never put a durable user attribute ONLY as contextual narrative
+
+Other:
+- Prefer empty facts over invention. Never invent. Assistant paraphrase alone is insufficient.
+- "Did you remember?" with no new claim → no new fact.
+- No Amadeus/Kurisu/assistant/persona keys. No shared cross-worldline writes.
+Identity scope="{mode}" only. Do not reclassify okabe role-play into a real-user profile."""
 
 
 class EpisodicCandidate(BaseModel):
@@ -79,11 +179,185 @@ class CoreFactCandidate(BaseModel):
     is_pinned: bool = False
 
 
+class HorizonFactCandidate(BaseModel):
+    """Unified extraction fact with code-routed horizon (Scheme A)."""
+
+    # ignore: providers often add extra prose fields that must not kill the batch
+    model_config = ConfigDict(extra="ignore")
+    horizon: Literal["durable", "contextual"]
+    confidence: float = Field(ge=0, le=1)
+    importance: float = Field(ge=0, le=1)
+    source_message_ids: list[int] = Field(min_length=1)
+    fact_key: str | None = Field(default=None, max_length=120)
+    fact_value: str | None = Field(default=None, max_length=1000)
+    content: str | None = Field(default=None, max_length=2000)
+    is_pinned: bool = False
+
+    @field_validator("horizon", mode="before")
+    @classmethod
+    def _normalize_horizon(cls, value: object) -> object:
+        if isinstance(value, str):
+            cleaned = value.strip().lower()
+            if cleaned in {"durable", "stable", "long_term", "long-term", "profile"}:
+                return "durable"
+            if cleaned in {"contextual", "episode", "episodic", "event", "temporary"}:
+                return "contextual"
+            return cleaned
+        return value
+
+    @field_validator("source_message_ids", mode="before")
+    @classmethod
+    def _coerce_source_ids(cls, value: object) -> object:
+        if not isinstance(value, list):
+            return value
+        out: list[int] = []
+        for item in value:
+            try:
+                mid = int(item)
+            except (TypeError, ValueError):
+                continue
+            if mid > 0:
+                out.append(mid)
+        return out
+
+    @model_validator(mode="after")
+    def _require_shape_for_horizon(self) -> "HorizonFactCandidate":
+        if self.horizon == "durable":
+            key = (self.fact_key or "").strip()
+            val = (self.fact_value or "").strip()
+            # Soft fill: models often return only content for durable claims.
+            if not val and (self.content or "").strip():
+                val = str(self.content).strip()
+            if not key and val:
+                digest = hashlib.sha1(val.encode("utf-8")).hexdigest()[:10]
+                key = f"user_attr_{digest}"
+            if len(key) < 2 or not val:
+                raise ValueError("durable facts require fact_key/fact_value or content")
+            object.__setattr__(self, "fact_key", key[:120])
+            object.__setattr__(self, "fact_value", val[:1000])
+        else:
+            text = (self.content or "").strip()
+            if len(text) < 3:
+                if self.fact_key and self.fact_value:
+                    text = f"{self.fact_key}: {self.fact_value}".strip()
+                elif self.fact_value:
+                    text = str(self.fact_value).strip()
+            if len(text) < 3:
+                raise ValueError("contextual facts require content")
+            object.__setattr__(self, "content", text[:2000])
+        return self
+
+    def as_core(self) -> CoreFactCandidate:
+        return CoreFactCandidate(
+            fact_key=str(self.fact_key),
+            fact_value=str(self.fact_value),
+            confidence=self.confidence,
+            importance=self.importance,
+            source_message_ids=list(self.source_message_ids),
+            is_pinned=self.is_pinned,
+        )
+
+    def as_episode(self) -> EpisodicCandidate:
+        return EpisodicCandidate(
+            content=str(self.content),
+            confidence=self.confidence,
+            importance=self.importance,
+            source_message_ids=list(self.source_message_ids),
+        )
+
+
 class ExtractionResult(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    """Primary path: facts[] + horizon. Legacy core_facts/episodic still accepted."""
+
+    # ignore unknown provider keys so one extra field does not abort the turn
+    model_config = ConfigDict(extra="ignore")
     working_summary: str = Field(default="", max_length=4000)
+    facts: list[HorizonFactCandidate] = Field(default_factory=list, max_length=8)
+    # Legacy dual-array shape (tests / old models); normalized into facts when facts empty.
     episodic: list[EpisodicCandidate] = Field(default_factory=list, max_length=8)
     core_facts: list[CoreFactCandidate] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def _legacy_arrays_to_facts(self) -> "ExtractionResult":
+        if self.facts:
+            return self
+        merged: list[HorizonFactCandidate] = []
+        for core in self.core_facts:
+            merged.append(
+                HorizonFactCandidate(
+                    horizon="durable",
+                    fact_key=core.fact_key,
+                    fact_value=core.fact_value,
+                    confidence=core.confidence,
+                    importance=core.importance,
+                    source_message_ids=list(core.source_message_ids),
+                    is_pinned=core.is_pinned,
+                )
+            )
+        for ep in self.episodic:
+            merged.append(
+                HorizonFactCandidate(
+                    horizon="contextual",
+                    content=ep.content,
+                    confidence=ep.confidence,
+                    importance=ep.importance,
+                    source_message_ids=list(ep.source_message_ids),
+                )
+            )
+        if merged:
+            object.__setattr__(self, "facts", merged)
+        return self
+
+    def durable_cores(self) -> list[CoreFactCandidate]:
+        return [f.as_core() for f in self.facts if f.horizon == "durable"]
+
+    def contextual_episodes(self) -> list[EpisodicCandidate]:
+        return [f.as_episode() for f in self.facts if f.horizon == "contextual"]
+
+
+def parse_extraction_payload(payload: object) -> ExtractionResult:
+    """Parse provider JSON with per-fact soft failure (never abort the whole batch)."""
+    if not isinstance(payload, dict):
+        raise ValueError("memory extractor returned a non-object")
+    data = dict(payload)
+    raw_facts = data.get("facts")
+    if isinstance(raw_facts, list):
+        soft: list[dict[str, Any]] = []
+        for index, item in enumerate(raw_facts):
+            if not isinstance(item, dict):
+                logger.warning("memory_ingest skip non-object fact index=%s", index)
+                continue
+            try:
+                # Validate/coerce one fact; re-dump to plain dict for model_validate
+                coerced = HorizonFactCandidate.model_validate(item)
+                soft.append(coerced.model_dump())
+            except Exception as exc:
+                logger.warning(
+                    "memory_ingest skip bad fact index=%s err=%s item=%s",
+                    index,
+                    exc,
+                    str(item)[:240],
+                )
+        data["facts"] = soft
+    try:
+        return ExtractionResult.model_validate(data)
+    except Exception:
+        # Last resort: drop facts and try legacy arrays only
+        data_legacy = {
+            "working_summary": data.get("working_summary") or "",
+            "core_facts": data.get("core_facts") or [],
+            "episodic": data.get("episodic") or [],
+            "facts": [],
+        }
+        return ExtractionResult.model_validate(data_legacy)
+
+
+# Observation-only markers for Scheme B logging (never auto-promote).
+_CONTEXTUAL_TIME_MARKERS = (
+    "今天", "昨天", "刚才", "明天", "今晚", "今日", "昨晚", "今早",
+    "さっき", "今日", "昨日", "明日", "tonight", "today", "yesterday", "tomorrow",
+    "just now", "this morning",
+)
 
 
 class RetrievedMemory(BaseModel):
@@ -251,6 +525,7 @@ class MemoryService:
         candidate: CoreFactCandidate,
         identity_mode: str = DEFAULT_IDENTITY_MODE,
     ) -> int:
+        """Insert or supersede a core fact. Same value → noop (return existing id)."""
         wl = normalize_worldline(worldline)
         mode = normalize_identity_mode(identity_mode)
         now = datetime.now(timezone.utc).isoformat()
@@ -258,11 +533,15 @@ class MemoryService:
         try:
             await db.execute("BEGIN IMMEDIATE")
             cur = await db.execute(
-                """SELECT id FROM core_facts
+                """SELECT id,fact_value,confidence,importance FROM core_facts
                     WHERE session_id=? AND identity_mode=? AND fact_key=? AND is_current=1""",
                 (session_id, mode, candidate.fact_key),
             )
             old = await cur.fetchone()
+            if old is not None and str(old["fact_value"]) == str(candidate.fact_value):
+                # Same durable claim — no audit churn (Mem0-style noop).
+                await db.commit()
+                return int(old["id"])
             if old:
                 await db.execute("UPDATE core_facts SET is_current=0 WHERE id=?", (old["id"],))
             cursor = await db.execute(
@@ -301,31 +580,125 @@ class MemoryService:
         extraction: ExtractionResult,
         identity_mode: str = DEFAULT_IDENTITY_MODE,
         *,
-        skip_core: bool = False,  # M2: rhythm control — skip core when not triggered
+        skip_core: bool = False,  # force-skip durable cores only
     ) -> None:
         # Quiet Memory: automatic extraction stays worldline-local; the shared
         # store (Q18) only accepts the explicit upsert_shared_user_fact path.
+        # Scheme A: code routes facts[].horizon → core | episodic tables.
         mode = normalize_identity_mode(identity_mode)
-        for episode in extraction.episodic:
-            await self.add_episode(session_id, worldline, episode, identity_mode=mode)
+        written: list[str] = []
+        dropped: list[str] = []
+        horizon_log: list[str] = []
+
+        # Contextual → episodic always (even when skip_core).
+        for item in extraction.facts:
+            if item.horizon != "contextual":
+                continue
+            horizon_log.append("contextual")
+            # Scheme B observation only: high-conf contextual without time markers.
+            blob = f"{item.content or ''} {item.fact_key or ''} {item.fact_value or ''}"
+            blob_l = blob.lower()
+            if (
+                item.confidence >= 0.85
+                and not any(m.lower() in blob_l for m in _CONTEXTUAL_TIME_MARKERS)
+            ):
+                logger.info(
+                    "memory_ingest horizon_override_candidate session=%s content=%s",
+                    session_id,
+                    (item.content or "")[:120],
+                )
+            try:
+                await self.add_episode(
+                    session_id, worldline, item.as_episode(), identity_mode=mode
+                )
+                written.append(f"episodic:{(item.content or '')[:40]}")
+            except Exception as exc:
+                dropped.append(f"episodic:error:{exc}")
+
         if skip_core:
+            logger.info(
+                "memory_ingest skip_force session=%s mode=%s durable=%s horizons=%s",
+                session_id,
+                mode,
+                sum(1 for f in extraction.facts if f.horizon == "durable"),
+                horizon_log,
+            )
             return
-        # M2: Quality gate — filter by thresholds, cap at _MAX_CORE_PER_TURN
-        # M2: User evidence check — core facts must have at least one
-        # valid source_message_id (positive int). Pydantic enforces min_length=1
-        # on CoreFactCandidate, but we add a defensive check for robustness.
-        qualified_cores = [
-            fact for fact in extraction.core_facts
-            if fact.confidence >= _CORE_CONFIDENCE_THRESHOLD
-            and fact.importance >= _CORE_IMPORTANCE_THRESHOLD
-            and fact.source_message_ids  # non-empty (Pydantic min_length=1)
-            and all(
+
+        qualified: list[CoreFactCandidate] = []
+        for item in extraction.facts:
+            if item.horizon != "durable":
+                continue
+            horizon_log.append("durable")
+            fact = item.as_core()
+            if fact.confidence < _CORE_CONFIDENCE_THRESHOLD:
+                dropped.append(f"{fact.fact_key}:conf")
+                continue
+            # Models often under-score importance on clear self-attributes.
+            # Keep hard 0.65, but allow conf>=0.85 with imp>=0.5 (still not trash).
+            imp_ok = fact.importance >= _CORE_IMPORTANCE_THRESHOLD or (
+                fact.confidence >= 0.85 and fact.importance >= 0.5
+            )
+            if not imp_ok:
+                dropped.append(f"{fact.fact_key}:imp")
+                continue
+            if not fact.source_message_ids or not all(
                 isinstance(mid, int) and not isinstance(mid, bool) and mid > 0
                 for mid in fact.source_message_ids
+            ):
+                dropped.append(f"{fact.fact_key}:provenance")
+                continue
+            if not is_durable_profile_core(fact):
+                dropped.append(f"{fact.fact_key}:shape")
+                continue
+            # Durable that fails gates is DROPPED — never demoted to episodic.
+            qualified.append(fact)
+        for fact in qualified[_MAX_CORE_PER_TURN:]:
+            dropped.append(f"{fact.fact_key}:cap")
+        for fact in qualified[:_MAX_CORE_PER_TURN]:
+            before = await self._current_core_value(
+                session_id, worldline, fact.fact_key, identity_mode=mode
             )
-        ]
-        for fact in qualified_cores[:_MAX_CORE_PER_TURN]:
             await self.upsert_core_fact(session_id, worldline, fact, identity_mode=mode)
+            if before is not None and before == str(fact.fact_value):
+                dropped.append(f"{fact.fact_key}:noop")
+            else:
+                written.append(f"core:{fact.fact_key}")
+        print(
+            f"[MemoryIngest] apply mode={mode} written={written} "
+            f"dropped={dropped} horizons={horizon_log}",
+            flush=True,
+        )
+        if written or dropped or horizon_log:
+            logger.info(
+                "memory_ingest session=%s mode=%s written=%s dropped=%s horizons=%s",
+                session_id,
+                mode,
+                written,
+                dropped,
+                horizon_log,
+            )
+
+    async def _current_core_value(
+        self,
+        session_id: str,
+        worldline: str,
+        fact_key: str,
+        identity_mode: str = DEFAULT_IDENTITY_MODE,
+    ) -> str | None:
+        wl = normalize_worldline(worldline)
+        mode = normalize_identity_mode(identity_mode)
+        db = await get_db(wl, "memory")
+        try:
+            cur = await db.execute(
+                """SELECT fact_value FROM core_facts
+                    WHERE session_id=? AND identity_mode=? AND fact_key=? AND is_current=1""",
+                (session_id, mode, fact_key),
+            )
+            row = await cur.fetchone()
+            return None if row is None else str(row["fact_value"])
+        finally:
+            await db.close()
 
     def schedule_turn_extraction(
         self,
@@ -339,18 +712,50 @@ class MemoryService:
         provider_snapshot: ProviderSnapshot,
         conversation_id: str | None = None,
         identity_mode: str = DEFAULT_IDENTITY_MODE,
-        turns_since_last_core: int = 0,  # M2: rhythm control
-        skip_core: bool | None = None,  # M2: caller pre-computed rhythm decision
+        turns_since_last_core: int = 0,  # unused (compat); not a write gate
+        skip_core: bool | None = None,  # default False; True only for tests/force-skip
+        recent_messages: list[dict[str, Any]] | None = None,
     ) -> None:
         # Test/demo tokens must never spawn a real background provider request.
         if not api_key or api_key.lower().startswith("test") or len(api_key) < 8 or not user_text.strip() or not assistant_text.strip():
+            print(
+                f"[MemoryIngest] skip schedule reason=bad_key_or_empty "
+                f"key_len={len(api_key or '')} user_len={len(user_text or '')} "
+                f"asst_len={len(assistant_text or '')}",
+                flush=True,
+            )
             return
-        provider_snapshot.require(ProviderTask.MEMORY)
+        try:
+            provider_snapshot.require(ProviderTask.MEMORY)
+        except Exception as exc:
+            print(f"[MemoryIngest] skip schedule reason=no_memory_capability err={exc!r}", flush=True)
+            return
         mode = normalize_identity_mode(identity_mode)
-        # M2: Rhythm control — caller may pre-compute skip_core to avoid race
+        # Universal auto-profile: never keyword-throttle. Explicit True only skips.
         if skip_core is None:
-            intent_hit = _has_memory_intent(user_text)
-            skip_core = not (intent_hit or (turns_since_last_core >= _N_TURNS_CORE_THROTTLE))
+            skip_core = False
+        window = list(recent_messages or [])
+        if not window:
+            window = [
+                {"role": "user", "content": user_text},
+                {"role": "assistant", "content": assistant_text},
+            ]
+        preview = (user_text or "").replace("\n", " ")[:48]
+        print(
+            f"[MemoryIngest] schedule mode={mode} window={len(window)} "
+            f"ids={len(source_message_ids)} user={preview!r}",
+            flush=True,
+        )
+
+        def _on_done(task: asyncio.Task) -> None:
+            self._extraction_tasks.discard(task)
+            if task.cancelled():
+                print("[MemoryIngest] task cancelled", flush=True)
+                return
+            exc = task.exception()
+            if exc is not None:
+                print(f"[MemoryIngest] task FAILED: {exc!r}", flush=True)
+
         task = asyncio.create_task(
             self._extract_turn(
                 session_id,
@@ -363,10 +768,11 @@ class MemoryService:
                 conversation_id,
                 mode,
                 skip_core=skip_core,
+                recent_messages=window,
             )
         )
         self._extraction_tasks.add(task)
-        task.add_done_callback(self._extraction_tasks.discard)
+        task.add_done_callback(_on_done)
 
     async def _extract_turn(
         self,
@@ -380,20 +786,38 @@ class MemoryService:
         conversation_id: str | None = None,
         identity_mode: str = DEFAULT_IDENTITY_MODE,
         skip_core: bool = False,  # M2: rhythm control
+        recent_messages: list[dict[str, Any]] | None = None,
     ) -> None:
         from app import models
 
         mode = normalize_identity_mode(identity_mode)
         # Q23: write only into the conversation's identity_mode scope; never reclassify
         # okabe-role first-person statements into a real-user/self profile.
-        instruction = f"""Extract memory from one conversation turn and return a JSON object with exactly:
-working_summary (dialogue flow/open topics only; no discrete facts), episodic (events/promises/shared experiences), core_facts (only stable facts explicitly stated by the user).
-Each episodic item requires content, confidence, importance, source_message_ids.
-Each core fact requires fact_key, fact_value, confidence, importance, source_message_ids, is_pinned.
-Never infer a core fact. If evidence is ambiguous, omit it. Use the supplied source ids only.
-Prefer empty core_facts over uncertain ones. If unsure, return empty core_facts list.
-Identity scope for this turn is "{mode}". Persist facts only for this scope.
-Do not reclassify the speaker as a different identity. Do not promote role-play (okabe) statements into a real-user profile, and do not merge scopes."""
+        instruction = build_extraction_instruction(mode)
+        window = list(recent_messages or [])
+        if not window:
+            window = [
+                {"role": "user", "content": user_text},
+                {"role": "assistant", "content": assistant_text},
+            ]
+        # Allowed provenance: explicit turn ids ∪ positive ids present on window rows.
+        allowed_sources: set[int] = {
+            int(mid)
+            for mid in source_message_ids
+            if isinstance(mid, int) and not isinstance(mid, bool) and mid > 0
+        }
+        payload_messages: list[dict[str, Any]] = []
+        for item in window[-MEMORY_INGEST_WINDOW_N:]:
+            role = str(item.get("role") or "")
+            raw = str(item.get("content") or "")
+            content = strip_history_emo_prefix(raw) if role == "assistant" else raw
+            entry: dict[str, Any] = {"role": role, "content": content}
+            mid = item.get("id")
+            if isinstance(mid, int) and not isinstance(mid, bool) and mid > 0:
+                entry["id"] = mid
+                allowed_sources.add(mid)
+            payload_messages.append(entry)
+        allowed_list = sorted(allowed_sources)
         messages = [
             {"role": "system", "content": instruction},
             {
@@ -401,9 +825,8 @@ Do not reclassify the speaker as a different identity. Do not promote role-play 
                 "content": json.dumps(
                     {
                         "identity_mode": mode,
-                        "source_message_ids": source_message_ids,
-                        "user": user_text,
-                        "assistant": assistant_text,
+                        "source_message_ids": allowed_list,
+                        "messages": payload_messages,
                     },
                     ensure_ascii=False,
                 ),
@@ -417,11 +840,51 @@ Do not reclassify the speaker as a different identity. Do not promote role-play 
                 model=provider_snapshot.model_id,
                 temperature=0.1,
             )
-            extraction = ExtractionResult.model_validate(payload)
-            allowed_sources = set(source_message_ids)
-            for candidate in [*extraction.episodic, *extraction.core_facts]:
-                if not set(candidate.source_message_ids).issubset(allowed_sources):
-                    raise ValueError("memory extractor returned an untraceable source_message_id")
+            print(
+                f"[MemoryIngest] provider ok keys="
+                f"{list(payload.keys()) if isinstance(payload, dict) else type(payload)}",
+                flush=True,
+            )
+            try:
+                extraction = parse_extraction_payload(payload)
+            except Exception as exc:
+                print(
+                    f"[MemoryIngest] parse FAILED: {exc!r} "
+                    f"keys={list(payload.keys()) if isinstance(payload, dict) else type(payload)}",
+                    flush=True,
+                )
+                logger.warning(
+                    "memory extraction parse failed: %s payload_keys=%s",
+                    exc,
+                    list(payload.keys()) if isinstance(payload, dict) else type(payload),
+                )
+                raise
+            print(
+                f"[MemoryIngest] parsed facts={len(extraction.facts)} "
+                f"horizons={[f.horizon for f in extraction.facts]}",
+                flush=True,
+            )
+            # Repair provenance: intersect with allowed; if empty, fall back to window ids.
+            kept: list[HorizonFactCandidate] = []
+            allowed_sorted = sorted(allowed_sources)
+            for candidate in extraction.facts:
+                ids = [
+                    mid
+                    for mid in candidate.source_message_ids
+                    if mid in allowed_sources
+                ]
+                if not ids:
+                    ids = allowed_sorted[:4]
+                    logger.warning(
+                        "memory_ingest provenance fallback keys=%s raw_ids=%s allowed=%s",
+                        candidate.fact_key or candidate.content,
+                        candidate.source_message_ids,
+                        allowed_sorted,
+                    )
+                if ids != list(candidate.source_message_ids):
+                    object.__setattr__(candidate, "source_message_ids", ids)
+                kept.append(candidate)
+            object.__setattr__(extraction, "facts", kept)
             await self.apply_extraction(
                 session_id, worldline, extraction, identity_mode=mode,
                 skip_core=skip_core,
@@ -434,8 +897,10 @@ Do not reclassify the speaker as a different identity. Do not promote role-play 
                     conversation_id=conversation_id,
                 )
         except asyncio.CancelledError:
+            print("[MemoryIngest] extract cancelled", flush=True)
             raise
         except Exception as exc:
+            print(f"[MemoryIngest] extract FAILED: {exc!r}", flush=True)
             logger.warning("memory extraction skipped: %s", exc)
 
     async def close(self) -> None:

@@ -1,10 +1,10 @@
-"""M2: Memory quality gate — thresholds, throttle, prefer-empty.
+"""M2: Memory quality gate — thresholds, prefer-empty (no keyword write gate).
 
 Frozen semantics under test:
 - Hard thresholds: confidence >= 0.7 AND importance >= 0.65 to persist.
 - Per-turn cap: at most 2 core facts after filtering.
-- Rhythm: intent trigger OR N=3 turns since last core extraction.
-- Greeting/chitchat → no core extraction.
+- Production does NOT keyword/N-turn throttle core writes (AUTO-PROFILE).
+- skip_core=True remains a force-skip for tests/callers only.
 - Only user evidence counts; assistant-only → rejected.
 - self and okabe share the same thresholds.
 """
@@ -18,8 +18,8 @@ from app.services.memory import (
     CoreFactCandidate,
     ExtractionResult,
     EpisodicCandidate,
-    MemoryService,
     _has_memory_intent,
+    should_skip_core_extraction,
     _CORE_CONFIDENCE_THRESHOLD,
     _CORE_IMPORTANCE_THRESHOLD,
     _MAX_CORE_PER_TURN,
@@ -310,41 +310,20 @@ def test_threshold_constants():
 
 
 # ---------------------------------------------------------------------------
-# N=3 rhythm integration
+# Universal write path (keyword/N rhythm retired)
 # ---------------------------------------------------------------------------
 
-def test_n3_rhythm_constants():
-    """N=3 throttle constant is correctly set."""
+def test_n3_constant_retained_for_compat_only():
+    """Legacy constant remains importable; not a production write gate."""
     assert _N_TURNS_CORE_THROTTLE == 3
 
 
-@pytest.mark.asyncio
-async def test_skip_core_false_when_turns_reached(isolated_store):
-    """When turns_since_last_core >= N=3 and no intent, skip_core should be False."""
-    # Simulate: no intent, but 3 turns elapsed
-    user_text = "今天天气不错"  # no intent
-    assert _has_memory_intent(user_text) is False
-    turns = 3
-    skip_core = not (_has_memory_intent(user_text) or turns >= _N_TURNS_CORE_THROTTLE)
-    assert skip_core is False  # should NOT skip — N=3 reached
-
-
-@pytest.mark.asyncio
-async def test_skip_core_true_when_under_threshold(isolated_store):
-    """When turns_since_last_core < N=3 and no intent, skip_core should be True."""
-    user_text = "今天天气不错"
-    turns = 2
-    skip_core = not (_has_memory_intent(user_text) or turns >= _N_TURNS_CORE_THROTTLE)
-    assert skip_core is True  # should skip — under threshold
-
-
-@pytest.mark.asyncio
-async def test_intent_overrides_turn_counter(isolated_store):
-    """Intent keyword should trigger core even at turn 1."""
-    user_text = "请记住我喜欢咖啡"
-    turns = 1
-    skip_core = not (_has_memory_intent(user_text) or turns >= _N_TURNS_CORE_THROTTLE)
-    assert skip_core is False  # should NOT skip — intent detected
+def test_should_skip_core_always_false_in_production_helper():
+    """No keyword/N throttle: natural phrasing and chitchat both do not skip."""
+    assert should_skip_core_extraction("今天天气不错", 1) is False
+    assert should_skip_core_extraction("今天天气不错", 2) is False
+    assert should_skip_core_extraction("请记住我喜欢咖啡", 1) is False
+    assert should_skip_core_extraction("我最拿手的英雄是塞拉斯", 1) is False
 
 
 # ---------------------------------------------------------------------------
@@ -383,8 +362,8 @@ async def test_invalid_source_message_ids_rejected(isolated_store):
             ),
         ],
     )
-    # Manually corrupt source_message_ids to simulate bad data
-    extraction.core_facts[0].source_message_ids = [0, -1]  # non-positive
+    # Corrupt the normalized facts[] provenance (legacy core_facts is copied at construct).
+    extraction.facts[0].source_message_ids = [0, -1]  # non-positive
     await memory_service.apply_extraction(owner, "steins_gate", extraction, identity_mode="self")
     facts = await memory_service.select_core_facts(owner, "steins_gate", "valid", identity_mode="self")
     assert len(facts) == 0  # rejected by defensive check

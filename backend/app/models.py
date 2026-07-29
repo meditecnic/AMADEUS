@@ -82,12 +82,16 @@ async def get_recent_messages(
     db = await get_db(wl, "history")
     try:
         cur = await db.execute(
-            """SELECT role,content FROM messages
+            """SELECT id,role,content FROM messages
                WHERE session_id=? AND conversation_id=? ORDER BY id DESC LIMIT ?""",
             (session_id, cid, limit),
         )
         rows = await cur.fetchall()
-        return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
+        # Include message id for Memory Ingest v2 provenance windows.
+        return [
+            {"id": int(row["id"]), "role": row["role"], "content": row["content"]}
+            for row in reversed(rows)
+        ]
     finally:
         await db.close()
 
