@@ -16,6 +16,7 @@ from app import models
 from app.db import init_db
 from app.services.prompt_compiler import compile_for_session
 from app.services.session_manager import cancel_inflight, session_coordinator
+from app.domain.subtitle_glossary_rewrite import apply_first_batch_rewrites
 from app.domain.segments import (
     AudioErrorCode,
     IncrementalJapaneseSegmenter,
@@ -366,7 +367,12 @@ async def translate_with_provider(
             "model": provider_snapshot.model_id,
         },
     )
-    return await method(**kwargs)
+    # Q87 Slice A (P-NORM-1): normalize Chinese subtitle after successful
+    # translation, before WS emit and persistence consumers see the string.
+    raw = await method(**kwargs)
+    if not raw:
+        return raw
+    return apply_first_batch_rewrites(raw)
 
 
 
