@@ -25,9 +25,9 @@ from app.services.provider_registry import (
 
 
 def _apply(text: str) -> str:
-    from app.domain.subtitle_glossary_rewrite import apply_first_batch_rewrites
+    from app.domain.subtitle_glossary_rewrite import apply_subtitle_glossary_rewrites
 
-    return apply_first_batch_rewrites(text)
+    return apply_subtitle_glossary_rewrites(text)
 
 
 def test_r01_full_five_char_token_only():
@@ -121,6 +121,94 @@ def test_r06_rejects_loose_cross_text():
     assert _apply("普通邮件") == "普通邮件"
 
 
+_R07_JA_WITH_TERM = "このアトラクタフィールドは収束するわ。"
+_R07_JA_VENUE = "会場の外に観光客が集まっているわ。"
+
+
+def test_r07_rewrites_when_ja_source_has_attractor_field():
+    """R07: JA source with アトラクタフィールド + ZH 吸引场 → product form."""
+    from app.domain.subtitle_glossary_rewrite import apply_subtitle_glossary_rewrites
+
+    zh = "这个吸引场会收敛。"
+    assert (
+        apply_subtitle_glossary_rewrites(zh, source=_R07_JA_WITH_TERM)
+        == "这个世界线收束范围会收敛。"
+    )
+    assert (
+        apply_subtitle_glossary_rewrites("吸引域收敛了。", source=_R07_JA_WITH_TERM)
+        == "世界线收束范围收敛了。"
+    )
+    # Elongated orthographic variant in source also opens the gate.
+    assert (
+        apply_subtitle_glossary_rewrites(
+            "吸引场稳定了。",
+            source="アトラクターフィールドが安定したわ。",
+        )
+        == "世界线收束范围稳定了。"
+    )
+    # Idempotent target
+    assert (
+        apply_subtitle_glossary_rewrites(
+            "世界线收束范围",
+            source=_R07_JA_WITH_TERM,
+        )
+        == "世界线收束范围"
+    )
+
+
+def test_r07_fails_closed_without_source_or_without_ja_term():
+    """No source / ordinary venue JA → never rewrite ordinary 吸引场* Chinese."""
+    from app.domain.subtitle_glossary_rewrite import apply_subtitle_glossary_rewrites
+
+    ordinary_zh = (
+        "吸引场景、吸引场所、场内观众、场外游客、场馆合作方、吸引域名、这个吸引场会。"
+    )
+    # Single-arg (R01–R06 path): R07 must not fire.
+    assert apply_subtitle_glossary_rewrites(ordinary_zh) == ordinary_zh
+    assert apply_subtitle_glossary_rewrites(ordinary_zh, source=None) == ordinary_zh
+    assert apply_subtitle_glossary_rewrites(ordinary_zh, source="") == ordinary_zh
+    # Venue-sense JA without attractor-field term.
+    assert (
+        apply_subtitle_glossary_rewrites(ordinary_zh, source=_R07_JA_VENUE)
+        == ordinary_zh
+    )
+    assert apply_subtitle_glossary_rewrites("吸引场景", source=_R07_JA_VENUE) == "吸引场景"
+    assert apply_subtitle_glossary_rewrites("吸引场所", source=_R07_JA_VENUE) == "吸引场所"
+    assert apply_subtitle_glossary_rewrites("吸引域名", source=_R07_JA_VENUE) == "吸引域名"
+    assert apply_subtitle_glossary_rewrites("场内观众", source=_R07_JA_VENUE) == "场内观众"
+    assert apply_subtitle_glossary_rewrites("场外游客", source=_R07_JA_VENUE) == "场外游客"
+    assert (
+        apply_subtitle_glossary_rewrites("场馆合作方", source=_R07_JA_VENUE)
+        == "场馆合作方"
+    )
+
+
+def test_r07_zh_has_attract_field_but_ja_is_ordinary_venue_no_rewrite():
+    """Coincidence ZH 吸引场 with venue JA must not rewrite."""
+    from app.domain.subtitle_glossary_rewrite import apply_subtitle_glossary_rewrites
+
+    zh = "这个吸引场会很热闹。"
+    assert apply_subtitle_glossary_rewrites(zh, source=_R07_JA_VENUE) == zh
+    assert (
+        apply_subtitle_glossary_rewrites(
+            zh,
+            source="その会場は観光客で賑わっているわ。",
+        )
+        == zh
+    )
+
+
+def test_r07_with_source_compatible_with_first_batch():
+    from app.domain.subtitle_glossary_rewrite import apply_subtitle_glossary_rewrites
+
+    raw = "克里斯缇娜说这个吸引场和 labmen 用IBN5100发D邮件。"
+    expected = "克里斯蒂娜说这个世界线收束范围和 Labmem 用IBN 5100发D-Mail。"
+    ja = "クリスティーナはアトラクタフィールドとラボメンについて話したわ。"
+    once = apply_subtitle_glossary_rewrites(raw, source=ja)
+    assert once == expected
+    assert apply_subtitle_glossary_rewrites(once, source=ja) == expected
+
+
 def test_r06_proper_name_left_right_boundaries():
     assert _apply("XD邮件") == "XD邮件"
     assert _apply("ID邮件") == "ID邮件"
@@ -169,12 +257,13 @@ def test_empty_and_passthrough():
 def test_rewrite_exception_returns_raw_without_logging_body(monkeypatch, capsys):
     from app.domain import subtitle_glossary_rewrite as mod
 
-    def boom(_text: str) -> str:
+    def boom(_text: str, **_kwargs) -> str:
         raise RuntimeError("synthetic")
 
     monkeypatch.setattr(mod, "_apply_rules", boom)
     raw = "克里斯缇娜秘密内容不应出现在日志"
-    assert mod.apply_first_batch_rewrites(raw) == raw
+    assert mod.apply_subtitle_glossary_rewrites(raw) == raw
+    assert mod.apply_subtitle_glossary_rewrites(raw, source="アトラクタフィールド") == raw
     captured = capsys.readouterr().out + capsys.readouterr().err
     assert "克里斯缇娜" not in captured
     assert "秘密内容" not in captured
@@ -478,4 +567,33 @@ def test_v1_and_repair_sites_call_translate_with_provider():
         source,
     ), "repair whole-turn must call translate_with_provider"
     hook_src = inspect.getsource(chat_ws.translate_with_provider)
-    assert "apply_first_batch_rewrites" in hook_src
+    assert "apply_subtitle_glossary_rewrites" in hook_src
+    assert "apply_first_batch_rewrites" not in hook_src
+    # v2 segment + v1 whole-turn + repair all use translate_with_provider, which
+    # must pass the original Japanese `text` as R07 source.
+    assert "source=text" in hook_src or "source= text" in hook_src
+
+
+@pytest.mark.asyncio
+async def test_translate_with_provider_passes_ja_source_for_r07():
+    """Production hook: JA attractor source opens R07; venue JA does not."""
+    from app.routers.chat_ws import translate_with_provider
+
+    class Adapter:
+        async def translate_to_zh(self, text, api_key=None, model=None):
+            return "这个吸引场会收敛。"
+
+    snap = _translation_snapshot(Adapter())
+    with_term = await translate_with_provider(
+        snap,
+        "このアトラクタフィールドは収束するわ。",
+        api_key="k",
+    )
+    assert with_term == "这个世界线收束范围会收敛。"
+
+    venue = await translate_with_provider(
+        snap,
+        "会場の外に観光客が集まっているわ。",
+        api_key="k",
+    )
+    assert venue == "这个吸引场会收敛。"
