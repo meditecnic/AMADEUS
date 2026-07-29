@@ -557,7 +557,8 @@ describe('Memory Ledger tab (Gate 7A)', () => {
         '/api/memory/facts?session_id=s-okabe&worldline=steins_gate',
       );
       await waitFor(() => expect(screen.getByTestId('local-fact-5')).toBeTruthy());
-      expect(screen.getByText('本世界线')).toBeTruthy();
+      // M1: scope labels replaced by tab bar
+      expect(screen.getByRole('button', { name: '本线记忆' })).toBeTruthy();
     } finally {
       vi.unstubAllGlobals();
     }
