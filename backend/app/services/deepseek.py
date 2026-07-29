@@ -264,21 +264,18 @@ class DeepSeekService(LLMInterface):
         if not text.strip():
             return ""
 
-        prompt = (
-            "あなたは優秀な翻訳家です。以下の日本語のセリフを、感情を込めた自然な中国語に翻訳してください。\n"
-            "【翻訳の制約】\n"
-            "- 不自然な畳語（叠字、例：「好、好、好……」）や過度な繰り返し、吃音表現を生成しないこと。\n"
-            "- 余計な解説や前置きは一切含めず、翻訳後の中国語テキストのみを出力してください。\n\n"
-            f"【翻訳対象】\n{text}"
-        )
-        
+        from app.domain.subtitle_glossary_prompt import build_translation_messages
+
+        # Q87 Slice B PROMPT-ENVELOPE: system (guards+glossary) + user (<source>).
+        messages = build_translation_messages(text)
+
         headers = {
             "Authorization": f"Bearer {effective_api_key}",
             "Content-Type": "application/json"
         }
         payload = {
             "model": model or self.model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             "temperature": 0.3
         }
         

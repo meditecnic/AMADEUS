@@ -172,13 +172,9 @@ class OpenAICompatibleAdapter(LLMInterface):
     ) -> str:
         if not text.strip():
             return ""
-        prompt = (
-            "以下の日本語のセリフを、感情を保った自然な中国語に翻訳してください。"
-            "不自然な反復や吃音、解説、前置きを加えず、翻訳本文だけを返してください。\n\n"
-            f"【翻訳対象】\n{text}"
-        )
+        # Q87 Slice B PROMPT-ENVELOPE: shared system+user (see _translation_messages).
         return await self._complete_text(
-            [{"role": "user", "content": prompt}],
+            _translation_messages(text),
             api_key=api_key,
             model=model,
             temperature=0.3,
@@ -231,16 +227,9 @@ class OpenAICompatibleAdapter(LLMInterface):
 
 
 def _translation_messages(text: str) -> list[dict]:
-    return [
-        {
-            "role": "user",
-            "content": (
-                "以下の日本語のセリフを、感情を保った自然な中国語に翻訳してください。"
-                "不自然な反復や吃音、解説、前置きを加えず、翻訳本文だけを返してください。\n\n"
-                f"【翻訳対象】\n{text}"
-            ),
-        }
-    ]
+    from app.domain.subtitle_glossary_prompt import build_translation_messages
+
+    return build_translation_messages(text)
 
 
 def _compression_messages(history: list, old_summary: str) -> list[dict]:
