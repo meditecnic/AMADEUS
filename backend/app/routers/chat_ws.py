@@ -766,15 +766,15 @@ async def get_clean_text_stream(
             # Live-streamed prefix already visible: the prefix cannot be
             # unpublished, so never retry from here.
             if on_text_delta is not None and published_parts and not buffer_ui_until_attempt_ok:
-                if rejection_reason == "leak":
-                    # LEAK-PREFIX-RECOVERY-01: the visible prefix already passed
-                    # every gate. Appending the fixed protest line here produced
-                    # contradictory self-introductions and a fake neutral→tsundere
-                    # jump. Truncate the unsafe tail instead: no protest line, no
-                    # injected emotion, no resend of the leaked fragment, no
-                    # extra model call.
+                if rejection_reason in {"leak", "language"}:
+                    # LEAK-PREFIX-RECOVERY-01 + LANG-GATE-CODE-SWITCH-RELAX-02:
+                    # visible prefix already passed every gate. Truncate the
+                    # unsafe tail only: no 「生成が崩れた」 copy, no injected
+                    # disappointed/tsundere emotion, no resend of the bad
+                    # fragment, no extra model call. Last safe emotion stands.
                     print(
-                        "[Guard] leak after published prefix; truncating unsafe tail",
+                        f"[Guard] {rejection_reason} after published prefix; "
+                        "truncating unsafe tail",
                         flush=True,
                     )
                     safe_text = "".join(published_parts)
@@ -782,13 +782,6 @@ async def get_clean_text_stream(
                         published_emotions[-1] if published_emotions else last_emotion
                     )
                     return safe_text, prefix_emotion, {}, emo_tag_found
-                fallback = "ごめん。応答の途中で生成が崩れたみたい。もう一度試して。"
-                fallback_emotion = "disappointed"
-                callback_result = on_text_delta(fallback, fallback_emotion)
-                if asyncio.iscoroutine(callback_result):
-                    await callback_result
-                safe_text = "".join([*published_parts, fallback])
-                return safe_text, fallback_emotion, {}, emo_tag_found
             if attempt < MAX_ATTEMPTS - 1:
                 continue
             # SOFT-02 majority-publish (E7): final language fail with enough good JP

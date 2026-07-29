@@ -644,6 +644,179 @@ def test_v2_chinese_input_gets_visible_recovery_and_never_persists_garbage(app_c
     assert "嫌身無等業" not in persisted
 
 
+# --- LANG-GATE-CODE-SWITCH-RELAX-02 -----------------------------------------
+
+# Live user-log natural Japanese frames with Simplified Chinese terms in quotes.
+CODE_SWITCH_LIVE_FRAGMENTS = (
+    "日本語なら「研」とか「研究室」、中国語なら「实验室」とか「研究室」って場面で使い…",
+    "中国語の正式な表記としては『命运石之门』が広く使われているわ。",
+    "中国語の公式表記としては『命运石之门』が一般的ね。",
+    "公式の中国語表記は『命运石之门』。",
+)
+
+
+def test_code_switch_live_fragments_publish_and_preflight():
+    """LANG-GATE-CODE-SWITCH-RELAX-02: live mixed JA+quoted SC must pass both gates."""
+    from app.domain.segments import is_plausible_japanese_tts_source, prepare_tts_text
+
+    for line in CODE_SWITCH_LIVE_FRAGMENTS:
+        assert _is_publishable_japanese(line), line
+        assert is_plausible_japanese_tts_source(line), line
+        prepared = prepare_tts_text(line)
+        assert prepared.error is None, (line, prepared.error)
+        # Canonical publish/TTS source keeps the original Chinese inside quotes.
+        assert "命运石之门" in prepared.text or "实验室" in prepared.text or "研" in prepared.text
+
+
+def test_code_switch_steins_gate_title_in_natural_japanese_passes():
+    from app.domain.segments import is_plausible_japanese_tts_source, prepare_tts_text
+
+    line = "作品タイトルは STEINS;GATE（命运石之门） として知られているわ。"
+    assert _is_publishable_japanese(line)
+    assert is_plausible_japanese_tts_source(line)
+    assert prepare_tts_text(line).error is None
+
+
+def test_code_switch_same_chinese_body_without_japanese_frame_still_rejected():
+    from app.domain.segments import is_plausible_japanese_tts_source, prepare_tts_text
+
+    for bad in (
+        "命运石之门",
+        "命运石之门。",
+        "实验室",
+        "实验室。",
+        "现在是搜索结果没有冠军信息。",
+    ):
+        assert not _is_publishable_japanese(bad), bad
+        assert not is_plausible_japanese_tts_source(bad), bad
+        assert prepare_tts_text(bad).error is not None, bad
+
+
+def test_code_switch_still_rejects_collapse_and_leak_shapes():
+    from app.domain.segments import is_plausible_japanese_tts_source
+
+    for garbage in (INCIDENT_GARBAGE_TAIL, REAL_LOG_COLLAPSE):
+        assert not _is_publishable_japanese(garbage)
+        assert not is_plausible_japanese_tts_source(garbage)
+
+
+class _SilentTTSManager:
+    async def synthesize_async(self, *a, **k):
+        return b""
+
+    def reset_sequence(self, *a, **k):
+        return None
+
+    def cancel_pending(self, *a, **k):
+        return None
+
+    async def gather_pending(self, *a, **k):
+        return None
+
+
+def test_code_switch_v2_ws_natural_mix_publishes_once_without_failure_copy(app_client):
+    """Real v2: natural code-switch line publishes fully; one provider call."""
+    import uuid
+
+    body = (
+        "[EMO:intellectual] "
+        "中国語の正式な表記としては『命运石之门』が広く使われているわ。"
+    )
+    provider = _SequencedStreamProvider([body])
+    session_id = f"code-switch-ok-{uuid.uuid4().hex[:8]}"
+
+    with patch("app.routers.chat_ws.deepseek_service", provider), patch(
+        "app.routers.chat_ws.tts_manager", _SilentTTSManager()
+    ):
+        with app_client.websocket_connect(f"/ws/chat?session_id={session_id}") as ws:
+            ws.send_json(
+                {
+                    "type": "auth",
+                    "api_key": "test-key",
+                    "client": "desktop",
+                    "protocol_version": 2,
+                    "enable_tts": False,
+                }
+            )
+            ws.send_json({"type": "chat.send", "content": "中文标题怎么写？"})
+            responses = []
+            while True:
+                frame = ws.receive_json()
+                responses.append(frame)
+                if frame.get("type") in {"turn.completed", "error", "turn.cancelled"}:
+                    break
+
+    assert responses[-1]["type"] == "turn.completed"
+    ready = [f for f in responses if f.get("type") == "segment.ready"]
+    assert ready
+    joined = "".join(f.get("ja", "") for f in ready)
+    assert "命运石之门" in joined
+    assert "正しく生成できなかった" not in joined
+    assert "生成が崩れた" not in joined
+    assert all(f.get("emotion") != "disappointed" for f in ready)
+    assert provider.call_count == 1
+
+
+def test_code_switch_v2_ws_language_tail_keeps_prefix_only(app_client):
+    """Real v2: safe JA prefix + pure-Chinese body tail → prefix only, no recovery copy."""
+    import uuid
+
+    class PrefixThenChineseBody:
+        def __init__(self):
+            self.call_count = 0
+
+        async def get_chat_stream(self, **kwargs):
+            self.call_count += 1
+            yield {
+                "content": "[EMO:intellectual] それは日本語の話ね。",
+                "tool_calls": None,
+            }
+            yield {
+                "content": "现在完全是中文正文而且没有日语外围句法。",
+                "tool_calls": None,
+            }
+
+        async def translate_to_zh(self, text, api_key=None):
+            return "译"
+
+        async def compress_history(self, history, api_key=None, old_summary=""):
+            return old_summary
+
+    provider = PrefixThenChineseBody()
+    session_id = f"code-switch-prefix-{uuid.uuid4().hex[:8]}"
+
+    with patch("app.routers.chat_ws.deepseek_service", provider), patch(
+        "app.routers.chat_ws.tts_manager", _SilentTTSManager()
+    ):
+        with app_client.websocket_connect(f"/ws/chat?session_id={session_id}") as ws:
+            ws.send_json(
+                {
+                    "type": "auth",
+                    "api_key": "test-key",
+                    "client": "desktop",
+                    "protocol_version": 2,
+                    "enable_tts": False,
+                }
+            )
+            ws.send_json({"type": "chat.send", "content": "说明一下"})
+            responses = []
+            while True:
+                frame = ws.receive_json()
+                responses.append(frame)
+                if frame.get("type") in {"turn.completed", "error", "turn.cancelled"}:
+                    break
+
+    assert responses[-1]["type"] == "turn.completed"
+    ready = [f for f in responses if f.get("type") == "segment.ready"]
+    joined = "".join(f.get("ja", "") for f in ready)
+    assert "日本語の話" in joined
+    assert "现在完全是中文正文" not in joined
+    assert "生成が崩れた" not in joined
+    assert "正しく生成できなかった" not in joined
+    assert all(f.get("emotion") != "disappointed" for f in ready)
+    assert provider.call_count == 1
+
+
 def test_real_log_collapse_never_enters_segment_ready_or_history(app_client):
     """Live /tts 200 fixture must never appear in segment.ready or history."""
     good = "Mackenzieの肝機能活性データをPDFにする？"

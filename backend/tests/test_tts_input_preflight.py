@@ -122,6 +122,25 @@ def test_random_ja_zh_mix_rejected():
     assert prepared.error is AudioErrorCode.INVALID_LANGUAGE
 
 
+def test_code_switch_quoted_chinese_terms_pass_preflight():
+    """LANG-GATE-CODE-SWITCH-RELAX-02: quoted SC terms inside JA speech are speakable."""
+    lines = (
+        "日本語なら「研」とか「研究室」、中国語なら「实验室」とか「研究室」って場面で使い…",
+        "中国語の正式な表記としては『命运石之门』が広く使われているわ。",
+        "中国語の公式表記としては『命运石之门』が一般的ね。",
+        "公式の中国語表記は『命运石之门』。",
+        "作品タイトルは STEINS;GATE（命运石之门） として知られているわ。",
+    )
+    for line in lines:
+        prepared = prepare_tts_text(line)
+        assert prepared.error is None, (line, prepared.error)
+
+
+def test_code_switch_bare_chinese_still_fails_preflight():
+    for bad in ("命运石之门。", "实验室。"):
+        assert prepare_tts_text(bad).error is AudioErrorCode.INVALID_LANGUAGE
+
+
 def test_overlong_text_is_rejected_without_split_into_sidecar():
     long_ja = "あ" * (MAX_TTS_SOURCE_CODEPOINTS + 1) + "。"
     prepared = prepare_tts_text(long_ja)

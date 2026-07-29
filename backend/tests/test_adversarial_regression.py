@@ -122,6 +122,70 @@ async def test_leak_after_published_prefix_truncates_without_protest_line():
     assert all(emo != "tsundere" for _, emo in published)
 
 
+class _SafePrefixThenChineseBodyMock:
+    """LANG-GATE-CODE-SWITCH-RELAX-02: safe JA then pure Chinese body (no frame)."""
+
+    def __init__(self):
+        self.call_count = 0
+
+    async def get_chat_stream(
+        self,
+        active_history,
+        memory_summary=None,
+        api_key=None,
+        system_prompt=None,
+        temperature=0.8,
+        tools=None,
+        tool_choice=None,
+        model=None,
+        reasoning_effort=None,
+    ):
+        self.call_count += 1
+        yield {
+            "content": "[EMO:intellectual] それは日本語の話ね。",
+            "tool_calls": None,
+        }
+        yield {
+            "content": "现在完全是中文正文而且没有日语外围句法。",
+            "tool_calls": None,
+        }
+
+    async def translate_to_zh(self, text, api_key=None):
+        return "（译）"
+
+
+@pytest.mark.asyncio
+async def test_language_after_published_prefix_truncates_without_failure_copy():
+    """Language hard-reject after live prefix mirrors LEAK-PREFIX (no 崩れた)."""
+    from app.routers.chat_ws import get_clean_text_stream
+
+    provider = _SafePrefixThenChineseBodyMock()
+    session = SessionState("lang-prefix-truncate")
+    session.api_key = "test-key"
+    session.system_prompt = "あなたはAmadeusだ。"
+    published: list[tuple[str, str]] = []
+
+    with patch("app.routers.chat_ws.deepseek_service", provider):
+        text, emotion, tool_calls, _ = await get_clean_text_stream(
+            active_history=[{"role": "user", "content": "说明一下"}],
+            memory_summary="",
+            session=session,
+            on_text_delta=lambda delta, emo: published.append((delta, emo)),
+        )
+
+    assert provider.call_count == 1
+    assert tool_calls == {}
+    assert "日本語の話" in text
+    assert "现在完全是中文正文" not in text
+    assert "生成が崩れた" not in text
+    assert "正しく生成できなかった" not in text
+    assert emotion == "intellectual"
+    assert all(emo != "disappointed" for _, emo in published)
+    published_text = "".join(delta for delta, _ in published)
+    assert "生成が崩れた" not in published_text
+    assert "现在完全是中文正文" not in published_text
+
+
 @pytest.mark.asyncio
 async def test_leak_with_no_prefix_still_retries_then_fixed_fallback():
     """LEAK-PREFIX-RECOVERY-01 (scenario C guard): no prefix → semantics unchanged."""

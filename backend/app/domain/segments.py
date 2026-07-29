@@ -90,6 +90,34 @@ _CHINESE_ONLY_WORDS = (
     "没有", "根据", "数据", "信息", "什么", "一下", "更多", "可以", "但是",
 )
 
+# LANG-GATE-CODE-SWITCH-RELAX-02: bounded quote/paren/bracket interiors are
+# embedded data (terms, titles, citations). Their Chinese/Latin content must not
+# alone hard-reject a Japanese outer sentence. Category-level — not per-term
+# allowlists. Patterns are non-greedy single-level pairs.
+_BOUNDED_EMBED_RES = (
+    re.compile(r"「[^」]*」"),
+    re.compile(r"『[^』]*』"),
+    re.compile(r"（[^）]*）"),
+    re.compile(r"\([^)]*\)"),
+    re.compile(r"【[^】]*】"),
+)
+
+
+def analysis_surface_without_bounded_embeds(text: str) -> str:
+    """Return text with bounded embed interiors removed for language analysis.
+
+    Delimiters and interiors are stripped (category-level). Callers that publish
+    or synthesize must keep the original string; this surface is analysis-only.
+    """
+    out = text or ""
+    for _ in range(4):
+        prev = out
+        for pattern in _BOUNDED_EMBED_RES:
+            out = pattern.sub("", out)
+        if out == prev:
+            break
+    return out
+
 
 def _looks_like_chinese_wording(text: str) -> bool:
     if any(ch in _CHINESE_ONLY_HAN for ch in text):
@@ -269,28 +297,49 @@ def is_plausible_japanese_tts_source(text: str) -> bool:
     garbage with embedded Latin (flee/newidInfo/halfwidth kata) still passed.
     Later over-tightened gates false-rejected legitimate speech (bare ellipsis
     segments, short kanji interjections, medium-length low-kana lines).
+
+    LANG-GATE-CODE-SWITCH-RELAX-02: Chinese/Latin *inside* bounded quotes or
+    fullwidth/halfwidth parentheses is treated as embedded data. Chinese-marker
+    and Han/kana density checks run on the outer Japanese frame only. Halfwidth
+    kata and flee/newidInfo-class Latin collapse still inspect the full string.
+    Published/TTS canonical text remains the original (this function does not
+    rewrite).
     """
     if not text or not text.strip():
         return False
     if is_ignorable_non_speech_segment(text):
         return False
-    script = classify_tts_script(text)
+
+    # Analysis surface: drop bounded embeds for Chinese-marker + density gates.
+    analysis = analysis_surface_without_bounded_embeds(text)
+    analysis_letters = meaningful_character_count(analysis)
+    # Value compare (not object identity): True when embed interiors were removed.
+    analysis_changed = analysis != text
+    # No outer frame left → not a Japanese sentence with cited embeds; fall back
+    # to full-text checks (pure Chinese / pure English / quote-only body).
+    gate_text = analysis if analysis_letters > 0 else text
+
+    script = classify_tts_script(gate_text)
     if script in {"symbol_only", "unknown"}:
-        return False
-    # High-confidence Chinese wording rejects on every path (ja/mixed/zh alike);
-    # only the short kanji-only Japanese interjection allowlist survives it.
-    if _looks_like_chinese_wording(text):
+        # Outer frame may be Latin-only product labels after stripping embeds;
+        # fall back to full-text script once before fail-closed.
+        if analysis_changed:
+            script = classify_tts_script(text)
+        if script in {"symbol_only", "unknown"}:
+            return False
+    # High-confidence Chinese wording on the *outer* frame only.
+    if _looks_like_chinese_wording(gate_text):
         return is_allowlisted_short_ja_kanji(text)
     # Han-only lines (script "zh") are no longer fail-closed on missing kana;
     # they publish unless a high-confidence garbage signal fires.
     if script == "zh":
-        return _is_publishable_kanji_only_japanese(text)
+        return _is_publishable_kanji_only_japanese(gate_text)
 
-    kana = _KANA_RE.findall(text)
-    han = _HAN_RE.findall(text)
+    kana = _KANA_RE.findall(gate_text)
+    han = _HAN_RE.findall(gate_text)
     kana_n = len(kana)
     han_n = len(han)
-    letters = meaningful_character_count(text)
+    letters = meaningful_character_count(gate_text)
     if letters <= 0:
         return False
     # Short Japanese is often kana-only ("うん").
@@ -298,10 +347,9 @@ def is_plausible_japanese_tts_source(text: str) -> bool:
         if kana_n >= 1:
             return True
         return False
-    # Character speech never uses halfwidth katakana; ｯ mixed with Latin is collapse.
+    # Collapse signals inspect the full original (not only the outer frame).
     if _HALFWIDTH_KATA_RE.search(text):
         return False
-    # Embedded garbage Latin runs must fail even when kana density looks high.
     if _has_suspicious_latin_embedding(text):
         return False
     # Random Han-dominant soup with a couple of kana (the incident shape).
@@ -310,7 +358,7 @@ def is_plausible_japanese_tts_source(text: str) -> bool:
     if letters >= 24 and (kana_n / letters) < 0.12 and han_n > kana_n * 2:
         return False
     # Long speech without any Japanese function/grammar hints is almost never legitimate.
-    if letters >= 28 and not _JA_FUNCTION_HINT_RE.search(text) and (kana_n / letters) < 0.22:
+    if letters >= 28 and not _JA_FUNCTION_HINT_RE.search(gate_text) and (kana_n / letters) < 0.22:
         return False
     # Fullwidth JP punctuation （）『』 must NOT count as collapse marks (MoE parens).
     collapse_marks = len(_COLLAPSE_MARK_RE.findall(text))
@@ -319,10 +367,10 @@ def is_plausible_japanese_tts_source(text: str) -> bool:
     # Extremely high unique-character density is typical of model garbage, not dialogue.
     # Real Japanese plot/tech summaries are often kanji-heavy with high uniqueness
     # and fullwidth parentheses around acronyms (MoE) — that must remain publishable.
-    unique = len(set(ch for ch in text if not ch.isspace()))
+    unique = len(set(ch for ch in gate_text if not ch.isspace()))
     unique_ratio = unique / max(letters, 1)
     if letters >= 40 and unique_ratio > 0.82:
-        has_hint = bool(_JA_FUNCTION_HINT_RE.search(text))
+        has_hint = bool(_JA_FUNCTION_HINT_RE.search(gate_text))
         kana_ratio = kana_n / max(letters, 1)
         # Collapse soup: high uniqueness AND no grammar / almost no kana.
         if not has_hint and kana_ratio < 0.22:
