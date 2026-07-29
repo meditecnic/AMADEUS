@@ -97,6 +97,52 @@ def test_p13_dmail_is_keep_use_not_tendency():
     assert "倾向" not in block
 
 
+def test_r08_handle_glossary_bounded_product_form():
+    """B2-B R08 prompt-only: @ch handle 栗悟飯とカメハメ波 → 栗悟饭和龟波功."""
+    from app.domain.subtitle_glossary_prompt import (
+        build_translation_glossary_block,
+        build_translation_messages,
+        build_translation_system_content,
+    )
+
+    block = build_translation_glossary_block()
+    system = build_translation_system_content()
+    # Product form + JA handle surface + handle bound.
+    assert "栗悟饭和龟波功" in block
+    assert "栗悟飯とカメハメ波" in block
+    assert "@ch" in block
+    assert "handle" in block or "ハンドル" in block or "马甲" in block or "handle" in system.lower()
+    # Exclude ordinary Kamehameha / joke / move-name application.
+    assert "カメハメ波" in block
+    assert "不得套用" in block or "不得" in block
+    assert "招式" in block or "玩笑" in block or "话题" in block
+    # No meta / evidence pollution in runtime glossary or full system.
+    for forbidden in (
+        "非唯一官方",
+        "唯一官方",
+        "evidence debt",
+        "evidence",
+        "debt",
+        "project-approved",
+        "project approved",
+        "E-debt",
+    ):
+        assert forbidden not in block, forbidden
+        assert forbidden not in system, forbidden
+    # No plot/persona expansion license.
+    assert "不得" in block and ("归属" in block or "剧情" in block or "人格" in block)
+    # Envelope: user remains source-only once.
+    messages = build_translation_messages("栗悟飯とカメハメ波だわ。")
+    assert len(messages) == 2
+    assert messages[0]["role"] == "system"
+    assert messages[1]["role"] == "user"
+    assert "栗悟饭和龟波功" in messages[0]["content"]
+    assert messages[1]["content"] == "<source>\n栗悟飯とカメハメ波だわ。\n</source>"
+    assert messages[1]["content"].count("栗悟飯とカメハメ波だわ。") == 1
+    assert "栗悟饭和龟波功" not in messages[1]["content"]
+    assert "专名与术语" not in messages[1]["content"]
+
+
 def test_envelope_is_exactly_system_plus_user():
     from app.domain.subtitle_glossary_prompt import (
         build_translation_glossary_block,
