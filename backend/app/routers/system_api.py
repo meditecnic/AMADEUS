@@ -6,7 +6,13 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from fastapi import APIRouter, HTTPException, Query
 
 from app.db import normalize_worldline, validate_schema
-from app.services.memory import SharedFactPromotionError, memory_service
+from app.services.memory import (
+    DismissError,
+    MemoryDeleteError,
+    SharedFactPromotionError,
+    ReclassifyError,
+    memory_service,
+)
 from app.services.session_manager import session_coordinator
 from app.services.soul_engine import soul_engine
 from app.services.diagnostics import diagnostic_runtime
@@ -34,6 +40,11 @@ class ForgetRequest(BaseModel):
     session_id: str = "default"
     worldline: str = "steins_gate"
     scope: str = "all"
+
+
+class DismissBatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ids: list[int] = Field(default_factory=list, max_length=100)
 
 
 class SearchCredentialUpdate(BaseModel):
@@ -177,6 +188,107 @@ async def promote_memory_fact(
         status = 404 if exc.code == "fact_not_found" else 409
         raise HTTPException(status_code=status, detail=exc.code) from exc
     return {"id": shared_id, "scope": "shared", "changed": changed}
+
+
+@router.post("/api/memory/facts/{okabe_fact_id}/reclassify")
+async def reclassify_okabe_fact(
+    okabe_fact_id: int,
+    session_id: str = Query("default"),
+    worldline: str = Query("steins_gate"),
+    confirmed: bool = Query(False),
+):
+    """Gate 7B explicit reclassify: okabe → self local. Copy semantics."""
+    try:
+        wl = normalize_worldline(worldline)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        self_fact_id, changed = await memory_service.reclassify_okabe_fact_to_self(
+            session_id, wl, okabe_fact_id, confirmed=confirmed
+        )
+    except ReclassifyError as exc:
+        status = 404 if exc.code == "fact_not_found" else 409
+        raise HTTPException(status_code=status, detail=exc.code) from exc
+    return {"id": self_fact_id, "scope": "self", "changed": changed}
+
+
+@router.post("/api/memory/facts/{okabe_fact_id}/dismiss")
+async def dismiss_okabe_fact(
+    okabe_fact_id: int,
+    session_id: str = Query("default"),
+    worldline: str = Query("steins_gate"),
+):
+    """M3 soft-dismiss: hide okabe candidate from ledger and prompt; keep audit row."""
+    try:
+        wl = normalize_worldline(worldline)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        fact_id, changed = await memory_service.dismiss_okabe_fact(
+            session_id, wl, okabe_fact_id
+        )
+    except DismissError as exc:
+        status = 404 if exc.code == "fact_not_found" else 409
+        raise HTTPException(status_code=status, detail=exc.code) from exc
+    return {"id": fact_id, "scope": "okabe", "changed": changed, "dismissed": True}
+
+
+@router.post("/api/memory/facts/dismiss-batch")
+async def dismiss_okabe_facts_batch(
+    body: DismissBatchRequest,
+    session_id: str = Query("default"),
+    worldline: str = Query("steins_gate"),
+):
+    """M3 bulk soft-dismiss. Body: {\"ids\": [1,2,3]}."""
+    try:
+        wl = normalize_worldline(worldline)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        result = await memory_service.dismiss_okabe_facts_bulk(
+            session_id, wl, list(body.ids)
+        )
+    except DismissError as exc:
+        status = 404 if exc.code == "fact_not_found" else 409
+        raise HTTPException(status_code=status, detail=exc.code) from exc
+    return result
+
+
+@router.post("/api/memory/facts/{local_fact_id}/delete-local")
+async def delete_local_memory_fact(
+    local_fact_id: int,
+    session_id: str = Query("default"),
+    worldline: str = Query("steins_gate"),
+):
+    """Soft-delete one self-local established fact. Does not touch shared."""
+    try:
+        wl = normalize_worldline(worldline)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        fact_id, changed = await memory_service.delete_local_self_fact(
+            session_id, wl, local_fact_id
+        )
+    except MemoryDeleteError as exc:
+        status = 404 if exc.code == "fact_not_found" else 409
+        raise HTTPException(status_code=status, detail=exc.code) from exc
+    return {"id": fact_id, "scope": "local", "changed": changed, "deleted": True}
+
+
+@router.post("/api/memory/shared-facts/{shared_fact_id}/delete")
+async def delete_shared_memory_fact(
+    shared_fact_id: int,
+    session_id: str = Query("default"),
+):
+    """Soft-delete one shared profile fact. Does not touch worldline-local copies."""
+    try:
+        fact_id, changed = await memory_service.delete_shared_fact(
+            session_id, shared_fact_id
+        )
+    except MemoryDeleteError as exc:
+        status = 404 if exc.code == "fact_not_found" else 409
+        raise HTTPException(status_code=status, detail=exc.code) from exc
+    return {"id": fact_id, "scope": "shared", "changed": changed, "deleted": True}
 
 
 @router.get("/health/dependencies")

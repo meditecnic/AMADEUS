@@ -29,7 +29,8 @@ EMBEDDING_DIMENSION = 384
 # v6: core_facts / episodic_memories scoped by identity_mode; existing rows → okabe (U-M3).
 # v7: conversations.identity_acknowledged (0|1); existing rows backfilled to 0 (IDENTITY-ACK-01).
 # v8: control-only shared_user_facts (Q18 foundation); worldline stores bump meta only.
-SCHEMA_VERSION = 8
+# v9: core_facts.is_dismissed (M3 soft-hide pending okabe candidates; audit retained).
+SCHEMA_VERSION = 9
 
 DEFAULT_IDENTITY_MODE = "okabe"
 IDENTITY_MODES = frozenset({"okabe", "self"})
@@ -223,6 +224,7 @@ CREATE TABLE IF NOT EXISTS core_facts (
     importance REAL NOT NULL CHECK(importance BETWEEN 0 AND 1),
     is_current INTEGER NOT NULL DEFAULT 1 CHECK(is_current IN (0,1)),
     is_pinned INTEGER NOT NULL DEFAULT 0 CHECK(is_pinned IN (0,1)),
+    is_dismissed INTEGER NOT NULL DEFAULT 0 CHECK(is_dismissed IN (0,1)),
     source_message_ids TEXT NOT NULL,
     superseded_by INTEGER REFERENCES core_facts(id),
     created_at TEXT NOT NULL,
@@ -230,6 +232,7 @@ CREATE TABLE IF NOT EXISTS core_facts (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_current_fact ON core_facts(session_id, identity_mode, fact_key) WHERE is_current=1;
 CREATE INDEX IF NOT EXISTS idx_core_fact_hot ON core_facts(session_id, identity_mode, is_current, is_pinned, importance DESC);
+CREATE INDEX IF NOT EXISTS idx_core_fact_dismissed ON core_facts(session_id, identity_mode, is_current, is_dismissed);
 CREATE TABLE IF NOT EXISTS memory_embeddings (
     memory_type TEXT NOT NULL CHECK(memory_type IN ('episodic','core')),
     memory_id INTEGER NOT NULL,
@@ -746,6 +749,33 @@ def _migrate_v7_to_v8(connection: sqlite3.Connection, kind: DatabaseKind) -> Non
         raise
 
 
+def _migrate_v8_to_v9(connection: sqlite3.Connection, kind: DatabaseKind) -> None:
+    """M3: soft-dismiss flag on core_facts (hide from ledger/prompt; keep row)."""
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        if kind == "memory":
+            if connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='core_facts'"
+            ).fetchone():
+                if not _column_exists(connection, "core_facts", "is_dismissed"):
+                    connection.execute(
+                        "ALTER TABLE core_facts "
+                        "ADD COLUMN is_dismissed INTEGER NOT NULL DEFAULT 0"
+                    )
+                connection.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_core_fact_dismissed "
+                    "ON core_facts(session_id, identity_mode, is_current, is_dismissed)"
+                )
+        connection.execute(
+            "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version',?)",
+            ("9",),
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
 async def _initialize_one(worldline: str, kind: DatabaseKind, schema: str) -> None:
     path = _resolve_path(worldline, kind)
     if path in _initialized_paths:
@@ -802,6 +832,9 @@ def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str 
         if current == 7:
             _migrate_v7_to_v8(connection, kind)
             current = 8
+        if current == 8:
+            _migrate_v8_to_v9(connection, kind)
+            current = 9
         if current not in (None, SCHEMA_VERSION):
             raise RuntimeError(f"unsupported {kind} schema version at {path}: {current}")
 

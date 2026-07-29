@@ -287,7 +287,7 @@ async def test_legacy_v7_stores_migrate_to_v8_preserving_data(tmp_path, monkeypa
             ).fetchone()
         finally:
             connection.close()
-        assert version == "8", path
+        assert version == str(db_module.SCHEMA_VERSION), path
         # Only control gains the table; worldline stores complete a meta-only bump.
         assert (has_shared is not None) == (path == control_path), path
 

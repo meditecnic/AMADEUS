@@ -185,6 +185,8 @@ class SessionState:
         self.history_epoch = 0
         self.last_assistant_emotion = "neutral"
         self.consecutive_no_emo_tags = 0
+        # M2: core extraction rhythm counter
+        self.turns_since_last_core = 0
 
     async def load_from_db(self):
         await init_db()
@@ -1323,7 +1325,10 @@ async def processor_loop(
                     conversation_id=conversation_id,
                     translation=history_translation or None,
                 )
-                from app.services.memory import memory_service
+                from app.services.memory import memory_service, _has_memory_intent, _N_TURNS_CORE_THROTTLE
+                session.turns_since_last_core += 1
+                intent_hit = _has_memory_intent(user_msg)
+                skip_core = not (intent_hit or session.turns_since_last_core >= _N_TURNS_CORE_THROTTLE)
                 memory_service.schedule_turn_extraction(
                     session_id=session.session_id,
                     worldline=session.worldline,
@@ -1334,7 +1339,11 @@ async def processor_loop(
                     api_key=session.api_key,
                     provider_snapshot=turn_provider,
                     identity_mode=getattr(session, "identity_mode", "okabe"),
+                    turns_since_last_core=session.turns_since_last_core,
+                    skip_core=skip_core,
                 )
+                if not skip_core:
+                    session.turns_since_last_core = 0
                 from app.services.conversations import conversation_service
 
                 # IDENTITY-ACK-01: only an explicit identity ask whose turn

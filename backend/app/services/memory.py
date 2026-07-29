@@ -33,6 +33,33 @@ logger = logging.getLogger(__name__)
 # Small on purpose — must never crowd out the worldline-local budget.
 _SHARED_PROFILE_RESERVED_SEATS = 8
 
+# M2: Memory quality gate thresholds
+_CORE_CONFIDENCE_THRESHOLD = 0.7
+_CORE_IMPORTANCE_THRESHOLD = 0.65
+_MAX_CORE_PER_TURN = 2
+_N_TURNS_CORE_THROTTLE = 3  # Extract core every N user turns if no intent detected
+
+# M2: Memory intent keywords (Chinese + Japanese + English)
+_MEMORY_INTENT_KEYWORDS = [
+    # Chinese
+    '记住', '别忘了', '请记住', '记下来', '不要忘记', '别忘记',
+    '我是', '我叫', '我的名字', '我喜欢', '我讨厌', '我不喜欢',
+    '我的爱好', '我的职业', '我的工作', '我住在', '我来自',
+    '年龄', '岁', '生日',
+    # Japanese
+    '覚えて', '忘れない', '記憶', '好き', '嫌い',
+    '名前は', '私の名', '趣味', '職業', '年齢',
+    # English
+    'remember', "don't forget", 'my name', 'I like', 'I hate',
+    'my hobby', 'my job', 'I live', 'I am from',
+]
+
+
+def _has_memory_intent(text: str) -> bool:
+    """Check if user text contains memory-intent keywords."""
+    text_lower = text.lower()
+    return any(kw.lower() in text_lower for kw in _MEMORY_INTENT_KEYWORDS)
+
 
 class EpisodicCandidate(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -83,6 +110,54 @@ class SharedFactPromotionError(ValueError):
     def __init__(self, code: str) -> None:
         if code not in self.CODES:
             code = "fact_not_promotable"
+        self.code = code
+        super().__init__(code)
+
+
+class ReclassifyError(ValueError):
+    """Gate 7B reclassify failure with a stable, client-safe error code."""
+
+    CODES = frozenset({
+        "fact_not_found",
+        "not_okabe_fact",
+        "evidence_chain_broken",
+        "confirmation_required",
+        "fact_dismissed",
+    })
+
+    def __init__(self, code: str) -> None:
+        if code not in self.CODES:
+            code = "fact_not_found"
+        self.code = code
+        super().__init__(code)
+
+
+class DismissError(ValueError):
+    """M3 soft-dismiss failure with a stable, client-safe error code."""
+
+    CODES = frozenset({
+        "fact_not_found",
+        "not_okabe_fact",
+    })
+
+    def __init__(self, code: str) -> None:
+        if code not in self.CODES:
+            code = "fact_not_found"
+        self.code = code
+        super().__init__(code)
+
+
+class MemoryDeleteError(ValueError):
+    """Soft-delete failure for established local/shared memory facts."""
+
+    CODES = frozenset({
+        "fact_not_found",
+        "wrong_scope",
+    })
+
+    def __init__(self, code: str) -> None:
+        if code not in self.CODES:
+            code = "fact_not_found"
         self.code = code
         super().__init__(code)
 
@@ -225,13 +300,31 @@ class MemoryService:
         worldline: str,
         extraction: ExtractionResult,
         identity_mode: str = DEFAULT_IDENTITY_MODE,
+        *,
+        skip_core: bool = False,  # M2: rhythm control — skip core when not triggered
     ) -> None:
         # Quiet Memory: automatic extraction stays worldline-local; the shared
         # store (Q18) only accepts the explicit upsert_shared_user_fact path.
         mode = normalize_identity_mode(identity_mode)
         for episode in extraction.episodic:
             await self.add_episode(session_id, worldline, episode, identity_mode=mode)
-        for fact in extraction.core_facts:
+        if skip_core:
+            return
+        # M2: Quality gate — filter by thresholds, cap at _MAX_CORE_PER_TURN
+        # M2: User evidence check — core facts must have at least one
+        # valid source_message_id (positive int). Pydantic enforces min_length=1
+        # on CoreFactCandidate, but we add a defensive check for robustness.
+        qualified_cores = [
+            fact for fact in extraction.core_facts
+            if fact.confidence >= _CORE_CONFIDENCE_THRESHOLD
+            and fact.importance >= _CORE_IMPORTANCE_THRESHOLD
+            and fact.source_message_ids  # non-empty (Pydantic min_length=1)
+            and all(
+                isinstance(mid, int) and not isinstance(mid, bool) and mid > 0
+                for mid in fact.source_message_ids
+            )
+        ]
+        for fact in qualified_cores[:_MAX_CORE_PER_TURN]:
             await self.upsert_core_fact(session_id, worldline, fact, identity_mode=mode)
 
     def schedule_turn_extraction(
@@ -246,12 +339,18 @@ class MemoryService:
         provider_snapshot: ProviderSnapshot,
         conversation_id: str | None = None,
         identity_mode: str = DEFAULT_IDENTITY_MODE,
+        turns_since_last_core: int = 0,  # M2: rhythm control
+        skip_core: bool | None = None,  # M2: caller pre-computed rhythm decision
     ) -> None:
         # Test/demo tokens must never spawn a real background provider request.
         if not api_key or api_key.lower().startswith("test") or len(api_key) < 8 or not user_text.strip() or not assistant_text.strip():
             return
         provider_snapshot.require(ProviderTask.MEMORY)
         mode = normalize_identity_mode(identity_mode)
+        # M2: Rhythm control — caller may pre-compute skip_core to avoid race
+        if skip_core is None:
+            intent_hit = _has_memory_intent(user_text)
+            skip_core = not (intent_hit or (turns_since_last_core >= _N_TURNS_CORE_THROTTLE))
         task = asyncio.create_task(
             self._extract_turn(
                 session_id,
@@ -263,6 +362,7 @@ class MemoryService:
                 provider_snapshot,
                 conversation_id,
                 mode,
+                skip_core=skip_core,
             )
         )
         self._extraction_tasks.add(task)
@@ -279,6 +379,7 @@ class MemoryService:
         provider_snapshot: ProviderSnapshot,
         conversation_id: str | None = None,
         identity_mode: str = DEFAULT_IDENTITY_MODE,
+        skip_core: bool = False,  # M2: rhythm control
     ) -> None:
         from app import models
 
@@ -290,6 +391,7 @@ working_summary (dialogue flow/open topics only; no discrete facts), episodic (e
 Each episodic item requires content, confidence, importance, source_message_ids.
 Each core fact requires fact_key, fact_value, confidence, importance, source_message_ids, is_pinned.
 Never infer a core fact. If evidence is ambiguous, omit it. Use the supplied source ids only.
+Prefer empty core_facts over uncertain ones. If unsure, return empty core_facts list.
 Identity scope for this turn is "{mode}". Persist facts only for this scope.
 Do not reclassify the speaker as a different identity. Do not promote role-play (okabe) statements into a real-user profile, and do not merge scopes."""
         messages = [
@@ -321,7 +423,8 @@ Do not reclassify the speaker as a different identity. Do not promote role-play 
                 if not set(candidate.source_message_ids).issubset(allowed_sources):
                     raise ValueError("memory extractor returned an untraceable source_message_id")
             await self.apply_extraction(
-                session_id, worldline, extraction, identity_mode=mode
+                session_id, worldline, extraction, identity_mode=mode,
+                skip_core=skip_core,
             )
             if extraction.working_summary:
                 await models.save_memory_summary(
@@ -633,10 +736,30 @@ Do not reclassify the speaker as a different identity. Do not promote role-play 
             cur = await db.execute(
                 """SELECT * FROM core_facts
                     WHERE session_id=? AND identity_mode='self' AND is_current=1
+                      AND COALESCE(is_dismissed, 0)=0
                     ORDER BY is_pinned DESC, importance DESC, id DESC""",
                 (session_id,),
             )
             local_rows = await cur.fetchall()
+            # Include soft-deleted self facts when judging okabe "already_reclassified".
+            # Otherwise deleting a reclassified self copy resurrects the okabe row
+            # as a pending candidate (user-visible regression).
+            cur = await db.execute(
+                """SELECT * FROM core_facts
+                    WHERE session_id=? AND identity_mode='self' AND is_current=1
+                    ORDER BY is_pinned DESC, importance DESC, id DESC""",
+                (session_id,),
+            )
+            local_rows_for_reclassify_match = await cur.fetchall()
+            # Gate 7B: okabe candidate facts for reclassify UI (exclude soft-dismissed).
+            cur = await db.execute(
+                """SELECT * FROM core_facts
+                    WHERE session_id=? AND identity_mode='okabe' AND is_current=1
+                      AND COALESCE(is_dismissed, 0)=0
+                    ORDER BY importance DESC, id DESC""",
+                (session_id,),
+            )
+            okabe_rows = await cur.fetchall()
         finally:
             await db.close()
         local_items: list[dict[str, object]] = []
@@ -694,7 +817,37 @@ Do not reclassify the speaker as a different identity. Do not promote role-play 
             }
             for row in shared_rows
         ]
-        return {"local": local_items, "shared": shared_items}
+        # Gate 7B: okabe candidates with already_reclassified flag.
+        okabe_items: list[dict[str, object]] = []
+        for row in okabe_rows:
+            src_ids = self._strict_parse_source_ids(row["source_message_ids"])
+            already_reclassified = False
+            if src_ids is not None:
+                for local_row in local_rows_for_reclassify_match:
+                    local_src_ids = self._strict_parse_source_ids(local_row["source_message_ids"])
+                    if local_src_ids is None:
+                        continue
+                    if (
+                        local_row["fact_key"] == row["fact_key"]
+                        and local_row["fact_value"] == row["fact_value"]
+                        and float(local_row["confidence"]) == float(row["confidence"])
+                        and float(local_row["importance"]) == float(row["importance"])
+                        and int(local_row["is_pinned"]) == int(row["is_pinned"])
+                        and local_src_ids == src_ids
+                    ):
+                        already_reclassified = True
+                        break
+            okabe_items.append({
+                "id": row["id"],
+                "fact_key": row["fact_key"],
+                "fact_value": row["fact_value"],
+                "confidence": row["confidence"],
+                "importance": row["importance"],
+                "is_pinned": bool(row["is_pinned"]),
+                "created_at": row["created_at"],
+                "already_reclassified": already_reclassified,
+            })
+        return {"local": local_items, "shared": shared_items, "okabe": okabe_items}
 
     async def promote_local_self_fact(
         self,
@@ -729,6 +882,8 @@ Do not reclassify the speaker as a different identity. Do not promote role-play 
             raise SharedFactPromotionError("identity_scope_violation")
         if not row["is_current"]:
             raise SharedFactPromotionError("stale_fact")
+        if int(row["is_dismissed"] if "is_dismissed" in row.keys() else 0):
+            raise SharedFactPromotionError("fact_not_promotable")
         origin_conversation_id, reason = await self._evaluate_promotion_evidence(
             session_id, wl, row["source_message_ids"]
         )
@@ -758,6 +913,449 @@ Do not reclassify the speaker as a different identity. Do not promote role-play 
             session_id, candidate, wl, origin_conversation_id
         )
 
+    async def reclassify_okabe_fact_to_self(
+        self,
+        session_id: str,
+        worldline: str,
+        okabe_fact_id: int,
+        *,
+        confirmed: bool = False,
+    ) -> tuple[int, bool]:
+        """Gate 7B: reclassify one okabe-scope core fact into self scope.
+
+        Copy semantics (Q1=A): the okabe fact is retained untouched.
+        Irreversible (Q2=A): no reverse path in this version.
+        Two-step (Q0=A): writes only to self local core_facts, never shared.
+        """
+        wl = normalize_worldline(worldline)
+
+        # --- Pre-transaction: explicit user confirmation gate ---
+        if not confirmed:
+            raise ReclassifyError("confirmation_required")
+
+        # --- Pre-transaction: read okabe fact (memory DB) ---
+        db = await get_db(wl, "memory")
+        try:
+            cur = await db.execute(
+                "SELECT * FROM core_facts WHERE id=?", (int(okabe_fact_id),)
+            )
+            row = await cur.fetchone()
+        finally:
+            await db.close()
+
+        if row is None or row["session_id"] != session_id:
+            raise ReclassifyError("fact_not_found")
+        try:
+            fact_mode = normalize_identity_mode(row["identity_mode"])
+        except ValueError:
+            raise ReclassifyError("not_okabe_fact")
+        if fact_mode != "okabe":
+            raise ReclassifyError("not_okabe_fact")
+        if not row["is_current"]:
+            raise ReclassifyError("fact_not_found")
+        if int(row["is_dismissed"] if "is_dismissed" in row.keys() else 0):
+            raise ReclassifyError("fact_dismissed")
+
+        # --- Pre-transaction: evidence chain validation ---
+        source_ids = await self._validate_reclassify_evidence(
+            session_id, wl, row["source_message_ids"]
+        )
+
+        # --- Write transaction: BEGIN IMMEDIATE on memory DB ---
+        now = datetime.now(timezone.utc).isoformat()
+        db = await get_db(wl, "memory")
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+
+            # Step 3a: Re-read source fact inside transaction
+            cur = await db.execute(
+                "SELECT * FROM core_facts WHERE id=?", (int(okabe_fact_id),)
+            )
+            fresh = await cur.fetchone()
+            if (
+                fresh is None
+                or fresh["session_id"] != session_id
+                or normalize_identity_mode(fresh["identity_mode"]) != "okabe"
+                or not fresh["is_current"]
+            ):
+                await db.rollback()
+                raise ReclassifyError("fact_not_found")
+            if int(fresh["is_dismissed"] if "is_dismissed" in fresh.keys() else 0):
+                await db.rollback()
+                raise ReclassifyError("fact_dismissed")
+
+            # Step 3b: Exact-match idempotency check
+            cur = await db.execute(
+                """SELECT * FROM core_facts
+                    WHERE session_id=? AND identity_mode='self'
+                      AND fact_key=? AND is_current=1
+                      AND COALESCE(is_dismissed, 0)=0""",
+                (session_id, row["fact_key"]),
+            )
+            existing = await cur.fetchone()
+            if existing is not None and self._reclassify_row_matches(existing, row, source_ids):
+                await db.commit()
+                return int(existing["id"]), False
+
+            # Step 3c: Supersede existing self fact with same key (if any)
+            if existing is not None:
+                await db.execute(
+                    "UPDATE core_facts SET is_current=0 WHERE id=?",
+                    (existing["id"],),
+                )
+
+            # Step 3d: INSERT new self fact
+            cursor = await db.execute(
+                """INSERT INTO core_facts(
+                       session_id,identity_mode,fact_key,fact_value,confidence,importance,
+                       is_current,is_pinned,source_message_ids,created_at
+                   ) VALUES(?,?,?,?,?,?,1,?,?,?)""",
+                (
+                    session_id,
+                    "self",
+                    row["fact_key"],
+                    row["fact_value"],
+                    row["confidence"],
+                    row["importance"],
+                    int(row["is_pinned"]),
+                    row["source_message_ids"],
+                    now,
+                ),
+            )
+            new_id = int(cursor.lastrowid)
+
+            # Step 3e: Update superseded_by
+            if existing is not None:
+                await db.execute(
+                    "UPDATE core_facts SET superseded_by=? WHERE id=?",
+                    (new_id, existing["id"]),
+                )
+
+            await db.commit()
+        except ReclassifyError:
+            raise
+        except Exception:
+            await db.rollback()
+            raise
+        finally:
+            await db.close()
+
+        # Post-commit: embedding index (only on changed=True)
+        await self._try_index(wl, "core", new_id, f"{row['fact_key']}: {row['fact_value']}")
+
+        return new_id, True
+
+    async def dismiss_okabe_fact(
+        self,
+        session_id: str,
+        worldline: str,
+        okabe_fact_id: int,
+    ) -> tuple[int, bool]:
+        """M3: soft-dismiss one okabe candidate (hide from ledger + prompt; keep row)."""
+        wl = normalize_worldline(worldline)
+        if not session_id or not str(session_id).strip():
+            raise DismissError("fact_not_found")
+        db = await get_db(wl, "memory")
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            cur = await db.execute(
+                "SELECT * FROM core_facts WHERE id=?", (int(okabe_fact_id),)
+            )
+            row = await cur.fetchone()
+            if row is None or row["session_id"] != session_id:
+                await db.rollback()
+                raise DismissError("fact_not_found")
+            try:
+                mode = normalize_identity_mode(row["identity_mode"])
+            except ValueError:
+                await db.rollback()
+                raise DismissError("not_okabe_fact")
+            if mode != "okabe" or not row["is_current"]:
+                await db.rollback()
+                raise DismissError("not_okabe_fact" if mode != "okabe" else "fact_not_found")
+            dismissed = int(row["is_dismissed"] if "is_dismissed" in row.keys() else 0)
+            if dismissed:
+                await db.commit()
+                return int(row["id"]), False
+            await db.execute(
+                "UPDATE core_facts SET is_dismissed=1 WHERE id=?",
+                (int(okabe_fact_id),),
+            )
+            await db.commit()
+            return int(okabe_fact_id), True
+        except DismissError:
+            raise
+        except Exception:
+            await db.rollback()
+            raise
+        finally:
+            await db.close()
+
+    async def dismiss_okabe_facts_bulk(
+        self,
+        session_id: str,
+        worldline: str,
+        fact_ids: list[int],
+    ) -> dict[str, list[int]]:
+        """M3: soft-dismiss many okabe candidates in one transaction."""
+        wl = normalize_worldline(worldline)
+        if not session_id or not str(session_id).strip():
+            raise DismissError("fact_not_found")
+        ids = [int(x) for x in fact_ids if int(x) > 0]
+        dismissed: list[int] = []
+        skipped: list[int] = []
+        if not ids:
+            return {"dismissed": dismissed, "skipped": skipped}
+        db = await get_db(wl, "memory")
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            for fid in ids:
+                cur = await db.execute("SELECT * FROM core_facts WHERE id=?", (fid,))
+                row = await cur.fetchone()
+                if (
+                    row is None
+                    or row["session_id"] != session_id
+                    or not row["is_current"]
+                ):
+                    skipped.append(fid)
+                    continue
+                try:
+                    mode = normalize_identity_mode(row["identity_mode"])
+                except ValueError:
+                    skipped.append(fid)
+                    continue
+                if mode != "okabe":
+                    skipped.append(fid)
+                    continue
+                if int(row["is_dismissed"] if "is_dismissed" in row.keys() else 0):
+                    skipped.append(fid)
+                    continue
+                await db.execute(
+                    "UPDATE core_facts SET is_dismissed=1 WHERE id=?", (fid,)
+                )
+                dismissed.append(fid)
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+        finally:
+            await db.close()
+        return {"dismissed": dismissed, "skipped": skipped}
+
+    async def delete_local_self_fact(
+        self,
+        session_id: str,
+        worldline: str,
+        local_fact_id: int,
+    ) -> tuple[int, bool]:
+        """Soft-delete one established self-local core fact (ledger + prompt).
+
+        Does not touch shared copies. Audit row retained via is_dismissed=1.
+        """
+        wl = normalize_worldline(worldline)
+        if not session_id or not str(session_id).strip():
+            raise MemoryDeleteError("fact_not_found")
+        db = await get_db(wl, "memory")
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            cur = await db.execute(
+                "SELECT * FROM core_facts WHERE id=?", (int(local_fact_id),)
+            )
+            row = await cur.fetchone()
+            if row is None or row["session_id"] != session_id or not row["is_current"]:
+                await db.rollback()
+                raise MemoryDeleteError("fact_not_found")
+            try:
+                mode = normalize_identity_mode(row["identity_mode"])
+            except ValueError:
+                await db.rollback()
+                raise MemoryDeleteError("wrong_scope")
+            if mode != "self":
+                await db.rollback()
+                raise MemoryDeleteError("wrong_scope")
+            if int(row["is_dismissed"] if "is_dismissed" in row.keys() else 0):
+                await db.commit()
+                return int(row["id"]), False
+            await db.execute(
+                "UPDATE core_facts SET is_dismissed=1 WHERE id=?",
+                (int(local_fact_id),),
+            )
+            # If this self fact was a reclassify copy, also soft-dismiss the
+            # matching okabe source so it cannot reappear as 待确认 or stay in
+            # okabe-mode prompt after the user deleted the real-profile copy.
+            try:
+                src_ids = sorted(
+                    int(x) for x in json.loads(row["source_message_ids"] or "[]")
+                )
+            except (TypeError, ValueError, json.JSONDecodeError):
+                src_ids = []
+            if src_ids:
+                cur = await db.execute(
+                    """SELECT * FROM core_facts
+                        WHERE session_id=? AND identity_mode='okabe' AND is_current=1
+                          AND COALESCE(is_dismissed, 0)=0
+                          AND fact_key=? AND fact_value=?""",
+                    (session_id, row["fact_key"], row["fact_value"]),
+                )
+                for okabe_row in await cur.fetchall():
+                    try:
+                        okabe_ids = sorted(
+                            int(x)
+                            for x in json.loads(okabe_row["source_message_ids"] or "[]")
+                        )
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        continue
+                    if (
+                        okabe_ids == src_ids
+                        and float(okabe_row["confidence"]) == float(row["confidence"])
+                        and float(okabe_row["importance"]) == float(row["importance"])
+                        and int(okabe_row["is_pinned"]) == int(row["is_pinned"])
+                    ):
+                        await db.execute(
+                            "UPDATE core_facts SET is_dismissed=1 WHERE id=?",
+                            (int(okabe_row["id"]),),
+                        )
+            await db.commit()
+            return int(local_fact_id), True
+        except MemoryDeleteError:
+            raise
+        except Exception:
+            await db.rollback()
+            raise
+        finally:
+            await db.close()
+
+    async def delete_shared_fact(
+        self,
+        owner_session_id: str,
+        shared_fact_id: int,
+    ) -> tuple[int, bool]:
+        """Soft-delete one shared profile fact (is_current=0). Local copies untouched."""
+        if not owner_session_id or not str(owner_session_id).strip():
+            raise MemoryDeleteError("fact_not_found")
+        db = await get_db("steins_gate", "control")
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            cur = await db.execute(
+                "SELECT * FROM shared_user_facts WHERE id=?",
+                (int(shared_fact_id),),
+            )
+            row = await cur.fetchone()
+            if row is None or row["owner_session_id"] != owner_session_id:
+                await db.rollback()
+                raise MemoryDeleteError("fact_not_found")
+            if not row["is_current"]:
+                await db.commit()
+                return int(row["id"]), False
+            await db.execute(
+                "UPDATE shared_user_facts SET is_current=0 WHERE id=?",
+                (int(shared_fact_id),),
+            )
+            await db.commit()
+            return int(shared_fact_id), True
+        except MemoryDeleteError:
+            raise
+        except Exception:
+            await db.rollback()
+            raise
+        finally:
+            await db.close()
+
+    async def _validate_reclassify_evidence(
+        self,
+        session_id: str,
+        worldline: str,
+        source_message_ids_json: str,
+    ) -> list[int]:
+        """Validate source_message_ids for Gate 7B reclassify.
+
+        Returns the validated list of positive int IDs on success.
+        Raises ReclassifyError("evidence_chain_broken") on any failure.
+        """
+        ids = self._strict_parse_source_ids(source_message_ids_json)
+        if ids is None:
+            raise ReclassifyError("evidence_chain_broken")
+
+        db = await get_db(worldline, "history")
+        try:
+            conversation_ids: set[str] = set()
+            for message_id in ids:
+                cur = await db.execute(
+                    "SELECT session_id,conversation_id,role FROM messages WHERE id=?",
+                    (message_id,),
+                )
+                message = await cur.fetchone()
+                if message is None or message["session_id"] != session_id:
+                    raise ReclassifyError("evidence_chain_broken")
+                if message["role"] != "user":
+                    raise ReclassifyError("evidence_chain_broken")
+                conversation_ids.add(message["conversation_id"])
+            if len(conversation_ids) != 1:
+                raise ReclassifyError("evidence_chain_broken")
+            origin_conversation_id = next(iter(conversation_ids))
+            cur = await db.execute(
+                "SELECT session_id,identity_mode FROM conversations WHERE id=?",
+                (origin_conversation_id,),
+            )
+            conversation = await cur.fetchone()
+            if conversation is None or conversation["session_id"] != session_id:
+                raise ReclassifyError("evidence_chain_broken")
+            try:
+                persisted_mode = normalize_identity_mode(conversation["identity_mode"])
+            except ValueError:
+                raise ReclassifyError("evidence_chain_broken")
+            if persisted_mode != "okabe":
+                raise ReclassifyError("evidence_chain_broken")
+        finally:
+            await db.close()
+
+        return ids
+
+    @staticmethod
+    def _strict_parse_source_ids(raw_json: str) -> list[int] | None:
+        """Strict source_message_ids parser: actual positive ints only.
+
+        Returns sorted list on success, None on any type violation.
+        Never coerces bool/str/float via int(). Rejects duplicates and empty lists.
+        """
+        try:
+            raw = json.loads(raw_json)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+        if not isinstance(raw, list) or not raw:
+            return None
+        result: list[int] = []
+        for item in raw:
+            # isinstance(bool, int) is True in Python, so we must reject bools first
+            if isinstance(item, bool) or not isinstance(item, int):
+                return None
+            if item <= 0:
+                return None
+            result.append(item)
+        if len(set(result)) != len(result):
+            return None
+        return sorted(result)
+
+    @staticmethod
+    def _reclassify_row_matches(old, okabe_row, validated_source_ids: list[int]) -> bool:
+        """Idempotency comparison for Gate 7B reclassify (inside the txn).
+
+        Uses strict parsing: malformed source ids never match (returns False),
+        so a legitimate okabe fact reclassify always goes through changed=True
+        even if a malformed self row exists with the same fact_key.
+        """
+        old_ids = MemoryService._strict_parse_source_ids(old["source_message_ids"])
+        if old_ids is None:
+            return False
+        return (
+            old["fact_key"] == okabe_row["fact_key"]
+            and old["fact_value"] == okabe_row["fact_value"]
+            and float(old["confidence"]) == float(okabe_row["confidence"])
+            and float(old["importance"]) == float(okabe_row["importance"])
+            and int(old["is_pinned"]) == int(okabe_row["is_pinned"])
+            and old_ids == sorted(validated_source_ids)
+        )
+
     async def select_core_facts(
         self,
         session_id: str,
@@ -771,7 +1369,8 @@ Do not reclassify the speaker as a different identity. Do not promote role-play 
         try:
             cur = await db.execute(
                 """SELECT * FROM core_facts
-                    WHERE session_id=? AND identity_mode=? AND is_current=1""",
+                    WHERE session_id=? AND identity_mode=? AND is_current=1
+                      AND COALESCE(is_dismissed, 0)=0""",
                 (session_id, mode),
             )
             rows = await cur.fetchall()
