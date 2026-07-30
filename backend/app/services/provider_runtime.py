@@ -6,6 +6,7 @@ import os
 from urllib.parse import urlsplit, urlunsplit
 
 from app.services.deepseek import DeepSeekService
+from app.services.model_catalog import model_catalog
 from app.services.provider_adapters import (
     GeminiAdapter,
     OpenAICompatibleAdapter,
@@ -20,7 +21,7 @@ from app.services.provider_registry import (
 
 
 deepseek_service = DeepSeekService()
-provider_registry = ProviderRegistry()
+provider_registry = ProviderRegistry(model_catalog=model_catalog)
 provider_registry.register(
     ProviderDefinition(
         id="deepseek",
@@ -49,7 +50,10 @@ provider_registry.register(
 )
 
 
-def _compatible_capabilities() -> ProviderCapabilities:
+def _compatible_capabilities(*, reasoning: bool = False) -> ProviderCapabilities:
+    parameters = {"temperature", "tools", "tool_choice"}
+    if reasoning:
+        parameters.add("reasoning_effort")
     return ProviderCapabilities(
         tasks=frozenset(
             {
@@ -61,7 +65,7 @@ def _compatible_capabilities() -> ProviderCapabilities:
                 ProviderTask.MODELS,
             }
         ),
-        parameters=frozenset({"temperature", "tools", "tool_choice"}),
+        parameters=frozenset(parameters),
         structured_output=True,
         tools=True,
         model_discovery=True,
@@ -91,6 +95,7 @@ def _register_compatible(
     default_model: str,
     base_url_configurable: bool = False,
     credential_required: bool = True,
+    thinking_request_mode: str | None = None,
 ) -> None:
     adapter = OpenAICompatibleAdapter(
         provider_id=provider_id,
@@ -98,13 +103,16 @@ def _register_compatible(
         default_model=default_model,
         message_builder=deepseek_service.build_persona_messages,
         credential_required=credential_required,
+        thinking_request_mode=thinking_request_mode,
     )
     provider_registry.register(
         ProviderDefinition(
             id=provider_id,
             display_name=display_name,
             default_model=default_model,
-            capabilities=_compatible_capabilities(),
+            capabilities=_compatible_capabilities(
+                reasoning=thinking_request_mode is not None
+            ),
             base_url_configurable=base_url_configurable,
             credential_required=credential_required,
         ),
@@ -113,16 +121,11 @@ def _register_compatible(
 
 
 _register_compatible(
-    provider_id="kimi",
-    display_name="Kimi",
-    base_url="https://api.moonshot.cn/v1",
-    default_model="kimi-k2.6",
-)
-_register_compatible(
     provider_id="glm",
     display_name="GLM",
     base_url="https://open.bigmodel.cn/api/paas/v4",
     default_model="glm-5.2",
+    thinking_request_mode="reasoning_effort",
 )
 _register_compatible(
     provider_id="custom",
@@ -138,7 +141,7 @@ _register_compatible(
 
 
 def custom_provider_settings() -> dict[str, str]:
-    snapshot = provider_registry.snapshot("custom")
+    snapshot = provider_registry.snapshot("custom", allow_unavailable=True)
     return {
         "base_url": str(snapshot.adapter.base_url),
         "default_model": snapshot.model_id,
@@ -225,7 +228,9 @@ provider_registry.register(
                     ProviderTask.MODELS,
                 }
             ),
-            parameters=frozenset({"temperature", "tools", "tool_choice"}),
+            parameters=frozenset(
+                {"temperature", "tools", "tool_choice", "reasoning_effort"}
+            ),
             structured_output=True,
             tools=True,
             model_discovery=True,

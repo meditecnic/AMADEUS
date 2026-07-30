@@ -10,7 +10,7 @@ export interface UseAmadeusWSParams {
   sovitsUrl: string;
   providerId?: string;
   model: string;
-  reasoningEffort: 'high' | 'xhigh';
+  reasoningEffort: string | null;
   /** Settings default for draft materialize / new conversation (never inferred). */
   identityMode?: 'okabe' | 'self';
   /** Slice B: app-level self-mode call name (empty = unset); resent on every auth. */
@@ -44,6 +44,10 @@ export interface UseAmadeusWSParams {
   }) => void;
   onTurnStarted?: (conversationId?: string | null) => void;
   onTurnCompleted?: () => void;
+  /** Backend-normalized config after config_update (e.g. reasoning_effort aliases). */
+  onConfigApplied?: (details: {
+    reasoningEffort?: string | null;
+  }) => void;
 }
 
 export type WSStatus = 'CONNECTING' | 'READY' | 'ERROR' | 'CLOSED';
@@ -495,6 +499,18 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
               message.id === activeAssistantMessageId ? { ...message, streaming: false } : message
             ));
             break;
+
+          case 'config_applied': {
+            // Backend may alias/normalize thinking controls; surface effective values.
+            if ('reasoning_effort' in msg) {
+              const value = msg.reasoning_effort;
+              paramsRef.current.onConfigApplied?.({
+                reasoningEffort:
+                  value === null || typeof value === 'string' ? value : undefined,
+              });
+            }
+            break;
+          }
 
           case 'status':
             if (msg.notice) {

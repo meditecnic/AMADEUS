@@ -213,7 +213,7 @@ class TestBackendE2EContract:
         from app.routers import chat_ws
 
         session_id = "test_draft_provider_override"
-        chat_ws.credential_store.set("kimi", "test-kimi-credential")
+        chat_ws.credential_store.set("glm", "test-glm-credential")
 
         with self.client.websocket_connect(f"/ws/chat?session_id={session_id}") as websocket:
             websocket.send_json({
@@ -222,14 +222,14 @@ class TestBackendE2EContract:
                 "protocol_version": 2,
                 "worldline": "steins_gate",
                 "conversation_mode": "draft",
-                "provider_id": "kimi",
-                "model": "kimi-model-selected-in-draft",
+                "provider_id": "glm",
+                "model": "glm-5.2",
             })
             websocket.send_json({"type": "auth"})
             assert websocket.receive_json()["type"] == "error"
 
-        assert sessions[session_id].provider_id == "kimi"
-        assert sessions[session_id].model == "kimi-model-selected-in-draft"
+        assert sessions[session_id].provider_id == "glm"
+        assert sessions[session_id].model == "glm-5.2"
 
     def test_v2_conversation_switch_returns_correlated_ack(self, mock_services):
         session_id = "test_conversation_switch_ack"

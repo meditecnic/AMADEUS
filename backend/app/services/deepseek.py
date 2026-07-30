@@ -31,19 +31,25 @@ def build_chat_payload(
         "temperature": temperature if temperature is not None else 0.7,
     }
 
-    if model.startswith("deepseek-v4-") and tools is not None:
-        payload["thinking"] = {"type": "disabled"}
-    elif model == "deepseek-v4-pro":
-        # DeepSeek V4 rejects tool_choice while thinking is enabled. Tool
-        # routing is therefore a short non-thinking sub-request; the final
-        # answer runs without tools and restores the requested thinking mode.
-        payload["thinking"] = {"type": "enabled"}
-        if reasoning_effort:
+    is_v4 = model in {"deepseek-v4-flash", "deepseek-v4-pro"}
+    forced_tool_choice = (
+        tools is not None
+        and tool_choice is not None
+        and tool_choice != "auto"
+    )
+    if is_v4:
+        # Thinking-mode tool calls are supported, but DeepSeek rejects an
+        # explicit forced tool_choice with thinking enabled. "auto" is the API
+        # default, so omit that redundant field and preserve native thinking.
+        payload["thinking"] = {
+            "type": "disabled" if forced_tool_choice else "enabled"
+        }
+        if reasoning_effort and not forced_tool_choice:
             payload["reasoning_effort"] = reasoning_effort
 
     if tools is not None:
         payload["tools"] = tools
-        if tool_choice is not None:
+        if tool_choice is not None and (not is_v4 or forced_tool_choice):
             payload["tool_choice"] = tool_choice
 
     return payload
@@ -140,15 +146,10 @@ class DeepSeekService(LLMInterface):
         if not effective_api_key:
             raise ValueError("DEEPSEEK_API_KEY is not configured.")
 
-        eff_system = system_prompt
-        if reasoning_effort and (model or self.model) != "deepseek-v4-pro":
-            depth_map = {"high": "深", "xhigh": "極深"}
-            depth_zh = depth_map.get(reasoning_effort, "中")
-            eff_system = (system_prompt or "") + f"\n【システム内部設定】思考深度：{depth_zh}\n（これは内部設定タグです。応答でこの形式を模倣しないでください。必ず [EMO:xxx] から始めてください。）"
         messages = self.build_persona_messages(
             active_history,
             memory_summary,
-            eff_system,
+            system_prompt,
         )
         
         headers = {
@@ -330,7 +331,10 @@ class DeepSeekService(LLMInterface):
             raise ValueError("provider structured output was not a JSON object")
         return result
 
-    async def list_models(self, api_key: Optional[str] = None) -> list[str]:
+    async def list_models(
+        self,
+        api_key: Optional[str] = None,
+    ) -> list[str | dict]:
         effective_api_key = api_key or self.api_key
         if not effective_api_key:
             raise ValueError("DeepSeek credential is not configured")
@@ -346,7 +350,7 @@ class DeepSeekService(LLMInterface):
         payload = response.json()
         rows = payload.get("data", []) if isinstance(payload, dict) else []
         return [
-            row["id"]
+            row
             for row in rows
             if isinstance(row, dict) and isinstance(row.get("id"), str)
         ]

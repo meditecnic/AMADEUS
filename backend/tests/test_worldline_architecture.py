@@ -274,7 +274,7 @@ async def test_failed_worldline_load_restores_runtime_and_persisted_mapping(isol
             self.is_busy = False
 
         async def enter_draft(self):
-            self.provider_id = "kimi"
+            self.provider_id = "changed-provider"
             raise RuntimeError("target database unavailable")
 
     session = FakeSession()

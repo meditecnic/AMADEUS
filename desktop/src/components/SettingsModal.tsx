@@ -1,6 +1,10 @@
 import React, { useState, useEffect } from 'react';
 
 import { MemoryLedger } from './MemoryLedger';
+import {
+  modelLifecycleSuffix,
+  type ModelCatalogEntry,
+} from './ProviderControls';
 
 export type CredentialStatus = 'checking' | 'configured' | 'not_configured' | 'saving' | 'error';
 
@@ -186,8 +190,8 @@ export interface SettingsModalProps {
   providerBaseUrl?: string | null;
   baseUrlConfigurable: boolean;
   model: string;
-  modelOptions: string[];
-  reasoningEffort: 'high' | 'xhigh';
+  modelOptions: ModelCatalogEntry[];
+  reasoningEffort: string | null;
   onSaveSettings: (settings: {
     worldline: 'steins_gate' | 'beta';
     apiKey: string;
@@ -205,7 +209,7 @@ export interface SettingsModalProps {
     selfName: string;
     baseUrl: string;
     model: string;
-    reasoningEffort: 'high' | 'xhigh';
+    reasoningEffort: string | null;
   }) => void | Promise<void>;
   onSelectWebSearchProvider?: (provider: WebSearchProviderId) => void | Promise<void>;
   onClearWebSearchCredential?: (provider: WebSearchProviderId) => void | Promise<void>;
@@ -264,8 +268,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [selfNameError, setSelfNameError] = useState<string | null>(null);
   const [localBaseUrl, setLocalBaseUrl] = useState(providerBaseUrl || '');
   const [localModel, setLocalModel] = useState(model);
-  const [localReasoningIdx, setLocalReasoningIdx] = useState(
-    reasoningEffort === 'xhigh' ? 1 : 0
+  const [localReasoningEffort, setLocalReasoningEffort] = useState(
+    reasoningEffort,
   );
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -317,7 +321,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setSelfNameError(null);
       setLocalBaseUrl(providerBaseUrl || '');
       setLocalModel(model);
-      setLocalReasoningIdx(reasoningEffort === 'xhigh' ? 1 : 0);
+      setLocalReasoningEffort(reasoningEffort);
     }
   }, [isOpen, worldline, apiKey, webSearchApiKey, webSearchActiveProvider, systemPrompt, enableTts, sovitsUrl, temperature, identityMode, selfName, providerBaseUrl, model, reasoningEffort]);
 
@@ -352,7 +356,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         selfName: selfNameCheck.value,
         baseUrl: localBaseUrl,
         model: localModel,
-        reasoningEffort: (['high', 'xhigh'] as const)[localReasoningIdx],
+        reasoningEffort: localReasoningEffort,
       });
       setReplacingWebSearchKey(false);
       onClose();
@@ -638,8 +642,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <input type="text" value={localModel} onChange={(e) => setLocalModel(e.target.value)} className="salieri-input" placeholder="local-model" />
                 ) : (
                   <select value={localModel} onChange={(e) => setLocalModel(e.target.value)} className="salieri-select">
-                    {Array.from(new Set([localModel, ...modelOptions].filter(Boolean))).map((modelId) => (
-                      <option key={modelId} value={modelId}>{modelId}</option>
+                    {(
+                      modelOptions.some((row) => row.id === localModel)
+                        ? modelOptions
+                        : [{
+                            id: localModel,
+                            display_name: localModel,
+                            lifecycle: 'unverified' as const,
+                            callable: true,
+                            source: 'dynamic' as const,
+                            thinking_control: null,
+                          }, ...modelOptions]
+                    ).map((row) => (
+                      <option key={row.id} value={row.id} disabled={!row.callable}>
+                        {row.display_name}{modelLifecycleSuffix(row.lifecycle)}
+                      </option>
                     ))}
                   </select>
                 )}

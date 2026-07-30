@@ -36,6 +36,8 @@ import { BilingualMessage } from './BilingualMessage';
 import { ForgetConversationModal } from './ForgetConversationModal';
 import {
   ProviderControls,
+  resolveThinkingValue,
+  type ModelCatalogEntry,
   type ProviderMetadata,
 } from './ProviderControls';
 
@@ -74,8 +76,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [credentialChecked, setCredentialChecked] = useState(false);
   const [credentialStatus, setCredentialStatus] = useState<CredentialStatus>('checking');
   const [providers, setProviders] = useState<ProviderMetadata[]>([]);
-  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [availableModels, setAvailableModels] = useState<ModelCatalogEntry[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
+  const providerModelsRequestEpochRef = useRef(0);
   const [sessionId] = useState(getOrCreateAmadeusSessionId);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
@@ -146,8 +149,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [draftProviderId, setDraftProviderId] = useState<string>(() => {
     try { return localStorage.getItem('amadeus_pc_provider') || 'deepseek'; } catch { return 'deepseek'; }
   });
-  const [reasoningEffort, setReasoningEffort] = useState<'high' | 'xhigh'>(() =>
-    (localStorage.getItem('amadeus_pc_reasoning_effort') as any) || 'high');
+  const [reasoningEffort, setReasoningEffort] = useState<string | null>(() =>
+    localStorage.getItem('amadeus_pc_reasoning_effort'));
   const [audioError, setAudioError] = useState<string | null>(null);
   const [sessionError, setSessionError] = useState<{
     kind: 'session' | 'worldline';
@@ -238,6 +241,24 @@ export const Workstation: React.FC<WorkstationProps> = ({
     setProviders(rows);
     return rows;
   }, []);
+
+  useEffect(() => {
+    if (
+      providers.length === 0
+      || providers.some((provider) => provider.id === draftProviderId)
+    ) return;
+    const fallback = (
+      providers.find((provider) => provider.id === 'deepseek')
+      || providers[0]
+    );
+    if (!fallback) return;
+    setDraftProviderId(fallback.id);
+    setModel(fallback.default_model);
+    try {
+      localStorage.setItem('amadeus_pc_provider', fallback.id);
+      localStorage.setItem('amadeus_pc_model', fallback.default_model);
+    } catch {}
+  }, [draftProviderId, providers]);
 
   // WebSocket hook connection management
   const {
@@ -336,6 +357,38 @@ export const Workstation: React.FC<WorkstationProps> = ({
     },
     onTurnCompleted: () => {
       window.setTimeout(() => { void loadConversations(); }, 250);
+    },
+    onConfigApplied: ({ reasoningEffort: appliedEffort }) => {
+      if (appliedEffort === undefined) return;
+      setReasoningEffort(appliedEffort);
+      // Resolve provider/model from the same sources as the hook params (these
+      // locals are declared after this call site).
+      const scopedProviderId = (
+        activeConversationId
+          ? conversations.find((row) => row.id === activeConversationId)?.provider_id
+          : null
+      ) || draftProviderId;
+      const scopedModelId = (
+        activeConversationId
+          ? conversations.find((row) => row.id === activeConversationId)?.model_id
+          : null
+      ) || model;
+      try {
+        if (appliedEffort) {
+          localStorage.setItem('amadeus_pc_reasoning_effort', appliedEffort);
+          localStorage.setItem(
+            `amadeus_pc_reasoning_effort_${scopedProviderId}_${scopedModelId}`,
+            appliedEffort,
+          );
+        } else {
+          localStorage.removeItem('amadeus_pc_reasoning_effort');
+          localStorage.removeItem(
+            `amadeus_pc_reasoning_effort_${scopedProviderId}_${scopedModelId}`,
+          );
+        }
+      } catch {
+        // LocalStorage may be blocked; session state still tracks the applied value.
+      }
     },
   });
 
@@ -462,43 +515,62 @@ export const Workstation: React.FC<WorkstationProps> = ({
         : 'configured',
     );
   }, [activeProvider, credentialChecked, credentialStatus]);
-  const providerDeclaresReasoning = activeProvider?.parameters?.includes('reasoning_effort')
-    ?? (activeProviderId === 'openai' || activeProviderId === 'deepseek');
-  const nativeReasoningSupported = providerDeclaresReasoning && (
-    activeProviderId === 'openai'
-    || (activeProviderId === 'deepseek' && activeModelId === 'deepseek-v4-pro')
+  const activeModelCapability = availableModels.find(
+    (row) => row.id === activeModelId,
+  ) || (
+    activeProvider?.default_model_capability?.id === activeModelId
+      ? activeProvider.default_model_capability
+      : null
   );
-  const promptGuidedReasoning = providerDeclaresReasoning
-    && activeProviderId === 'deepseek'
-    && !nativeReasoningSupported;
-  const reasoningAvailable = nativeReasoningSupported || promptGuidedReasoning;
 
   useEffect(() => {
     const key = `amadeus_pc_reasoning_effort_${activeProviderId}_${activeModelId}`;
+    let scoped: string | null = null;
     try {
-      const scoped = localStorage.getItem(key);
-      if (scoped === 'high' || scoped === 'xhigh') {
-        setReasoningEffort(scoped);
-      }
+      scoped = localStorage.getItem(key);
     } catch {
-      // Keep the in-memory selection when local storage is unavailable.
+      // Fall through to the model-catalog default.
     }
-  }, [activeProviderId, activeModelId]);
+    setReasoningEffort(resolveThinkingValue(
+      activeModelCapability?.thinking_control,
+      scoped,
+      reasoningEffort,
+    ));
+  }, [
+    activeModelCapability,
+    activeModelId,
+    activeProviderId,
+  ]);
 
   const loadProviderModels = useCallback(async (
     providerId: string,
     refresh = false,
   ) => {
+    const requestEpoch = ++providerModelsRequestEpochRef.current;
     const provider = providers.find((row) => row.id === providerId);
-    const fallback = [
-      activeConversation?.model_id || '',
-      provider?.default_model || '',
-    ].filter(Boolean);
+    const fallback: ModelCatalogEntry[] = [];
+    if (provider?.default_model_capability) {
+      fallback.push(provider.default_model_capability);
+    }
+    const selectedModel = activeConversation?.model_id || model;
+    if (selectedModel && !fallback.some((row) => row.id === selectedModel)) {
+      fallback.push({
+        id: selectedModel,
+        display_name: selectedModel,
+        lifecycle: 'unverified',
+        callable: true,
+        source: 'dynamic',
+        thinking_control: null,
+      });
+    }
     if (
       !provider?.model_discovery ||
       (provider.credential_required && !provider.configured)
     ) {
-      setAvailableModels(Array.from(new Set(fallback)));
+      if (providerModelsRequestEpochRef.current === requestEpoch) {
+        setAvailableModels(fallback);
+        setModelsLoading(false);
+      }
       return;
     }
     setModelsLoading(true);
@@ -507,15 +579,36 @@ export const Workstation: React.FC<WorkstationProps> = ({
         `/api/providers/${encodeURIComponent(providerId)}/models?refresh=${refresh ? 'true' : 'false'}`
       );
       if (!response.ok) throw new Error(`model query failed: ${response.status}`);
-      const payload = await response.json() as { models?: string[] };
-      setAvailableModels(Array.from(new Set([...fallback, ...(payload.models || [])])));
+      const payload = await response.json() as { catalog?: ModelCatalogEntry[] };
+      if (providerModelsRequestEpochRef.current === requestEpoch) {
+        const catalog = payload.catalog?.length ? [...payload.catalog] : fallback;
+        if (
+          payload.catalog
+          && selectedModel
+          && !catalog.some((row) => row.id === selectedModel)
+        ) {
+          catalog.push({
+            id: selectedModel,
+            display_name: selectedModel,
+            lifecycle: 'unavailable',
+            callable: false,
+            source: 'dynamic',
+            thinking_control: null,
+          });
+        }
+        setAvailableModels(catalog);
+      }
     } catch (error) {
-      setAvailableModels(Array.from(new Set(fallback)));
-      console.warn('Provider model discovery failed:', error);
+      if (providerModelsRequestEpochRef.current === requestEpoch) {
+        setAvailableModels(fallback);
+        console.warn('Provider model discovery failed:', error);
+      }
     } finally {
-      setModelsLoading(false);
+      if (providerModelsRequestEpochRef.current === requestEpoch) {
+        setModelsLoading(false);
+      }
     }
-  }, [activeConversation?.model_id, providers]);
+  }, [activeConversation?.model_id, model, providers]);
 
   useEffect(() => {
     void loadProviderModels(activeProviderId);
@@ -923,7 +1016,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     selfName: string;
     baseUrl: string;
     model: string;
-    reasoningEffort: 'high' | 'xhigh';
+    reasoningEffort: string | null;
   }) => {
     setCredentialStatus('saving');
     try {
@@ -1039,7 +1132,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
       persistIdentityMode(nextIdentityMode);
       persistSelfName(newSettings.selfName);
       localStorage.setItem('amadeus_pc_model', newSettings.model);
-      localStorage.setItem('amadeus_pc_reasoning_effort', newSettings.reasoningEffort);
+      if (newSettings.reasoningEffort) {
+        localStorage.setItem('amadeus_pc_reasoning_effort', newSettings.reasoningEffort);
+      } else {
+        localStorage.removeItem('amadeus_pc_reasoning_effort');
+      }
     } catch (e) {
       console.warn('LocalStorage save failed:', e);
     }
@@ -1396,53 +1493,23 @@ export const Workstation: React.FC<WorkstationProps> = ({
               models={availableModels}
               disabled={conversationBusy || isThinking || isSynthesizing}
               loadingModels={modelsLoading}
+              thinkingValue={reasoningEffort}
               onProviderChange={changeProvider}
               onModelChange={changeModel}
+              onThinkingChange={(value) => {
+                setReasoningEffort(value);
+                try {
+                  localStorage.setItem('amadeus_pc_reasoning_effort', value);
+                  localStorage.setItem(
+                    `amadeus_pc_reasoning_effort_${activeProviderId}_${activeModelId}`,
+                    value,
+                  );
+                } catch {}
+                updateConfig({ reasoningEffort: value });
+              }}
               onRefreshModels={() => { void loadProviderModels(activeProviderId, true); }}
               onConfigureCredential={() => setIsSettingsOpen(true)}
             />
-            {reasoningAvailable ? (
-              <>
-                <span
-                  className="reasoning-label"
-                  title={promptGuidedReasoning
-                    ? '当前 DeepSeek 模型通过系统提示表达深度，不是原生 thinking 参数。'
-                    : '当前供应商会把该选项作为原生推理参数发送。'}
-                >
-                  {promptGuidedReasoning ? '提示强度' : '推理深度'}
-                </span>
-                <div className="reasoning-toggle" role="group" aria-label={promptGuidedReasoning ? '提示强度' : '推理深度'}>
-                  {(['high', 'xhigh'] as const).map((effort) => (
-                    <button
-                      type="button"
-                      key={effort}
-                      className={reasoningEffort === effort ? 'active' : ''}
-                      disabled={conversationBusy || isThinking || isSynthesizing}
-                      title={promptGuidedReasoning
-                        ? '此模式会改变提示词中的推理要求，效果取决于模型。'
-                        : `使用 ${effort.toUpperCase()} 原生推理深度`}
-                      onClick={() => {
-                        setReasoningEffort(effort);
-                        try {
-                          localStorage.setItem('amadeus_pc_reasoning_effort', effort);
-                          localStorage.setItem(`amadeus_pc_reasoning_effort_${activeProviderId}_${activeModelId}`, effort);
-                        } catch {}
-                        updateConfig({ reasoningEffort: effort });
-                      }}
-                    >
-                      {effort === 'xhigh' ? 'XHIGH' : 'HIGH'}
-                    </button>
-                  ))}
-                </div>
-              </>
-            ) : (
-              <span
-                className="reasoning-unavailable"
-                title="当前供应商或模型没有声明 reasoning_effort 能力，已避免发送无效参数。"
-              >
-                当前模型不支持推理深度
-              </span>
-            )}
           </div>
         </div>
 

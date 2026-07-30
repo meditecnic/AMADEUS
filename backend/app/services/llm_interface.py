@@ -54,6 +54,9 @@ class LLMInterface(ABC):
         ...
 
     @abstractmethod
-    async def list_models(self, api_key: Optional[str] = None) -> list[str]:
-        """Return provider model identifiers available to the credential."""
+    async def list_models(
+        self,
+        api_key: Optional[str] = None,
+    ) -> list[str | dict]:
+        """Return provider model identifiers and any safe discovery metadata."""
         ...

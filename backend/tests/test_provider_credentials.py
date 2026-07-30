@@ -191,25 +191,28 @@ def test_scrub_dotenv_key_removes_only_legacy_secret(tmp_path):
 
 def test_provider_models_are_cached_and_refreshable(app_client, monkeypatch):
     from app.routers import providers
+    from app.services.model_catalog import model_catalog
     from app.services.provider_runtime import deepseek_service
 
     providers.provider_model_cache.clear("deepseek")
     discover = AsyncMock(return_value=["deepseek-reasoner", "deepseek-chat"])
     monkeypatch.setattr(deepseek_service, "list_models", discover)
 
-    first = app_client.get("/api/providers/deepseek/models")
-    cached = app_client.get("/api/providers/deepseek/models")
-    refreshed = app_client.get("/api/providers/deepseek/models?refresh=true")
+    try:
+        first = app_client.get("/api/providers/deepseek/models")
+        cached = app_client.get("/api/providers/deepseek/models")
+        refreshed = app_client.get("/api/providers/deepseek/models?refresh=true")
 
-    assert first.status_code == 200
-    assert first.json() == {
-        "provider_id": "deepseek",
-        "models": ["deepseek-chat", "deepseek-reasoner"],
-        "cache_hit": False,
-    }
-    assert cached.json()["cache_hit"] is True
-    assert refreshed.json()["cache_hit"] is False
-    assert discover.await_count == 2
+        assert first.status_code == 200
+        assert first.json()["provider_id"] == "deepseek"
+        assert first.json()["models"] == ["deepseek-chat", "deepseek-reasoner"]
+        assert first.json()["catalog_version"] == 1
+        assert first.json()["cache_hit"] is False
+        assert cached.json()["cache_hit"] is True
+        assert refreshed.json()["cache_hit"] is False
+        assert discover.await_count == 2
+    finally:
+        model_catalog.clear_discovery("deepseek")
 
 
 def test_provider_test_is_secret_free_and_normalizes_upstream_errors(

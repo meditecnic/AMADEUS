@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, SecretStr
 
 from app.db import save_provider_configuration
 from app.services.credentials import credential_store
+from app.services.model_catalog import model_catalog
 from app.services.provider_registry import ProviderModelCache, ProviderTask
 from app.services.provider_runtime import provider_registry
 from app.services.provider_runtime import configure_custom_provider
@@ -27,7 +30,7 @@ class CustomProviderConfiguration(BaseModel):
 
 def _definition(provider_id: str):
     try:
-        return provider_registry.snapshot(provider_id)
+        return provider_registry.snapshot(provider_id, allow_unavailable=True)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -36,12 +39,21 @@ def _definition(provider_id: str):
 async def list_providers():
     rows = []
     for definition in provider_registry.list_definitions():
-        snapshot = provider_registry.snapshot(definition.id)
+        snapshot = provider_registry.snapshot(
+            definition.id,
+            allow_unavailable=True,
+        )
         rows.append(
             {
                 "id": definition.id,
                 "display_name": definition.display_name,
                 "default_model": definition.default_model,
+                "catalog_version": model_catalog.version,
+                "catalog_verified_at": model_catalog.verified_at,
+                "default_model_capability": model_catalog.public_model(
+                    definition.id,
+                    definition.default_model,
+                ),
                 "tasks": sorted(task.value for task in definition.capabilities.tasks),
                 "parameters": sorted(definition.capabilities.parameters),
                 "structured_output": definition.capabilities.structured_output,
@@ -74,6 +86,7 @@ async def update_custom_provider_configuration(update: CustomProviderConfigurati
         ) from exc
     await save_provider_configuration("custom", **settings)
     provider_model_cache.clear("custom")
+    model_catalog.clear_discovery("custom")
     return {"provider_id": "custom", **settings}
 
 
@@ -82,6 +95,7 @@ async def save_provider_credential(provider_id: str, update: CredentialUpdate):
     _definition(provider_id)
     credential_store.set(provider_id, update.api_key.get_secret_value())
     provider_model_cache.clear(provider_id)
+    model_catalog.clear_discovery(provider_id)
     return {"provider_id": provider_id, "configured": True}
 
 
@@ -90,6 +104,7 @@ async def delete_provider_credential(provider_id: str):
     _definition(provider_id)
     credential_store.delete(provider_id)
     provider_model_cache.clear(provider_id)
+    model_catalog.clear_discovery(provider_id)
     return {"provider_id": provider_id, "configured": False}
 
 
@@ -116,7 +131,7 @@ async def _discover_models(provider_id: str, *, refresh: bool):
             detail={"code": "adapter_contract_error"},
         )
 
-    async def load() -> list[str]:
+    async def load() -> list[str | dict[str, Any]]:
         return await method(api_key=secret)
 
     try:
@@ -140,9 +155,17 @@ async def _discover_models(provider_id: str, *, refresh: bool):
 @router.get("/{provider_id}/models")
 async def list_provider_models(provider_id: str, refresh: bool = False):
     result = await _discover_models(provider_id, refresh=refresh)
+    catalog = model_catalog.reconcile(
+        provider_id,
+        result.models,
+        result.metadata,
+    )
     return {
         "provider_id": provider_id,
         "models": list(result.models),
+        "catalog_version": model_catalog.version,
+        "catalog_verified_at": model_catalog.verified_at,
+        "catalog": catalog,
         "cache_hit": result.cache_hit,
     }
 

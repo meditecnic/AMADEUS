@@ -9,6 +9,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app import config
 from app.services.provider_registry import ProviderSnapshot, ProviderTask
 from app.services.provider_runtime import deepseek_service, provider_registry
+from app.services.model_catalog import ModelUnavailableError, model_catalog
 from app.services.search import SearchEvidenceError, search_service
 from app.services.credentials import credential_store
 from app.services.tts_queue import tts_manager
@@ -1077,22 +1078,9 @@ async def processor_loop(
     conversation_id = session.conversation_id
     turn_worldline = session.worldline
     turn_api_key = session.api_key
-    registered_provider = provider_registry.snapshot(session.provider_id, session.model)
-    turn_provider = ProviderSnapshot(
-        provider_id=registered_provider.provider_id,
-        model_id=registered_provider.model_id,
-        capabilities=registered_provider.capabilities,
-        adapter=(
-            deepseek_service
-            if registered_provider.provider_id == "deepseek"
-            else registered_provider.adapter
-        ),
-        credential_required=registered_provider.credential_required,
-        base_url_configurable=registered_provider.base_url_configurable,
-        temperature=session.temperature,
-        reasoning_effort=session.reasoning_effort,
-    )
-    turn_provider.require(ProviderTask.CHAT)
+    # Pipeline resources are owned by the outer try/finally below. Fail-closed
+    # model_unavailable returns early *inside* that try so is_busy / pipeline
+    # cleanup always run — do not reintroduce a pre-try return that skips finally.
     segment_pipeline = None
     diagnostic_observer = None
     segment_count = 0
@@ -1101,11 +1089,44 @@ async def processor_loop(
     needs_translation_repair = False
     streaming_splitter = None
     streamed_segments = []
-    
+    turn_provider = None
+
     active_history = session.history
     memory_summary = session.memory_summary
-    
+
     try:
+        try:
+            registered_provider = provider_registry.snapshot(
+                session.provider_id,
+                session.model,
+            )
+        except (KeyError, ModelUnavailableError):
+            await send_queue.put((epoch, {
+                "type": "error",
+                "code": "model_unavailable",
+                "recoverable": True,
+                "message": "所选模型当前不可用，请刷新模型列表或选择其他模型。",
+            }))
+            return
+        turn_provider = ProviderSnapshot(
+            provider_id=registered_provider.provider_id,
+            model_id=registered_provider.model_id,
+            capabilities=registered_provider.capabilities,
+            adapter=(
+                deepseek_service
+                if registered_provider.provider_id == "deepseek"
+                else registered_provider.adapter
+            ),
+            credential_required=registered_provider.credential_required,
+            base_url_configurable=registered_provider.base_url_configurable,
+            temperature=session.temperature,
+            reasoning_effort=model_catalog.normalize_control(
+                registered_provider.provider_id,
+                registered_provider.model_id,
+                session.reasoning_effort,
+            ),
+        )
+        turn_provider.require(ProviderTask.CHAT)
         if session.protocol_version >= 2:
             async def emit_segment_event(event: dict):
                 payload = dict(event)
@@ -1901,11 +1922,13 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                             requested_provider_id,
                             requested_model,
                         )
-                    except KeyError:
+                    except (KeyError, ModelUnavailableError):
                         await send_queue.put((
                             session.current_epoch,
                             {
                                 "type": "error",
+                                "code": "model_unavailable",
+                                "recoverable": True,
                                 "message": "请求的模型供应商不可用。",
                             },
                         ))
@@ -1919,10 +1942,22 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                         if requested_model in ("deepseek-v4-flash", "deepseek-v4-pro"):
                             session.model = requested_model
                 api_key = credential_store.get(session.provider_id)
-                provider_snapshot = provider_registry.snapshot(
-                    session.provider_id,
-                    session.model,
-                )
+                try:
+                    provider_snapshot = provider_registry.snapshot(
+                        session.provider_id,
+                        session.model,
+                    )
+                except (KeyError, ModelUnavailableError):
+                    await send_queue.put((
+                        session.current_epoch,
+                        {
+                            "type": "error",
+                            "code": "model_unavailable",
+                            "recoverable": True,
+                            "message": "请求的模型当前不可用。",
+                        },
+                    ))
+                    continue
                 if provider_snapshot.credential_required and not api_key:
                     await send_queue.put((
                         session.current_epoch,
@@ -1961,10 +1996,11 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                         pass
                 if "enable_tts" in data:
                     session.enable_tts = bool(data["enable_tts"])
-                if "reasoning_effort" in data:
-                    effort = data["reasoning_effort"]
-                    if effort in ("high", "xhigh"):
-                        session.reasoning_effort = effort
+                session.reasoning_effort = model_catalog.normalize_control(
+                    session.provider_id,
+                    session.model,
+                    data.get("reasoning_effort"),
+                )
                     
                 authenticated = True
                 await session_coordinator.persist_current(session.session_id, session.worldline, session.revision)
@@ -2235,9 +2271,17 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                     if m in ("deepseek-v4-flash", "deepseek-v4-pro"):
                         session.model = m
                 if "reasoning_effort" in data:
-                    effort = data["reasoning_effort"]
-                    if effort in ("high", "xhigh"):
-                        session.reasoning_effort = effort
+                    session.reasoning_effort = model_catalog.normalize_control(
+                        session.provider_id,
+                        session.model,
+                        data.get("reasoning_effort"),
+                    )
+                    # Echo the effective value so clients can reconcile aliases
+                    # (e.g. xhigh → max) instead of assuming the raw input stuck.
+                    await send_queue.put((session.current_epoch, {
+                        "type": "config_applied",
+                        "reasoning_effort": session.reasoning_effort,
+                    }))
                 continue
                 
             elif frame_type == "interrupt-signal":

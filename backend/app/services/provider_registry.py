@@ -87,12 +87,14 @@ class ProviderSnapshot:
 @dataclass(frozen=True, slots=True)
 class ModelDiscoveryResult:
     models: tuple[str, ...]
+    metadata: tuple[dict[str, Any], ...]
     cache_hit: bool
 
 
 @dataclass(frozen=True, slots=True)
 class _ModelCacheEntry:
     models: tuple[str, ...]
+    metadata: tuple[dict[str, Any], ...]
     expires_at: float
 
 
@@ -115,39 +117,69 @@ class ProviderModelCache:
     async def get(
         self,
         provider_id: str,
-        loader: Callable[[], Awaitable[list[str]]],
+        loader: Callable[[], Awaitable[list[str | dict[str, Any]]]],
         *,
         refresh: bool = False,
     ) -> ModelDiscoveryResult:
         entry = self._entries.get(provider_id)
         now = self._clock()
         if not refresh and entry is not None and entry.expires_at > now:
-            return ModelDiscoveryResult(entry.models, cache_hit=True)
+            return ModelDiscoveryResult(
+                entry.models,
+                entry.metadata,
+                cache_hit=True,
+            )
 
         lock = self._locks.setdefault(provider_id, asyncio.Lock())
         async with lock:
             entry = self._entries.get(provider_id)
             now = self._clock()
             if not refresh and entry is not None and entry.expires_at > now:
-                return ModelDiscoveryResult(entry.models, cache_hit=True)
+                return ModelDiscoveryResult(
+                    entry.models,
+                    entry.metadata,
+                    cache_hit=True,
+                )
 
             discovered = await loader()
-            models = tuple(
-                sorted(
-                    {
-                        model.strip()
-                        for model in discovered
-                        if isinstance(model, str) and model.strip()
+            safe_keys = {
+                "id",
+                "context_window",
+                "max_output_tokens",
+                "supported_generation_methods",
+                "supports_reasoning",
+                "owned_by",
+                "created",
+                "object",
+            }
+            rows: dict[str, dict[str, Any]] = {}
+            for raw in discovered:
+                if isinstance(raw, str):
+                    model_id = raw.strip()
+                    candidate: dict[str, Any] = {"id": model_id}
+                elif isinstance(raw, dict):
+                    model_id = str(raw.get("id") or "").strip()
+                    candidate = {
+                        key: value
+                        for key, value in raw.items()
+                        if key in safe_keys
+                        and isinstance(value, (str, int, float, bool, list))
                     }
-                )
-            )
+                    candidate["id"] = model_id
+                else:
+                    continue
+                if model_id:
+                    rows[model_id] = candidate
+            models = tuple(sorted(rows))
             if not models:
                 raise ValueError("provider returned no usable models")
+            metadata = tuple(rows[model_id] for model_id in models)
             self._entries[provider_id] = _ModelCacheEntry(
                 models=models,
+                metadata=metadata,
                 expires_at=now + self._ttl_seconds,
             )
-            return ModelDiscoveryResult(models, cache_hit=False)
+            return ModelDiscoveryResult(models, metadata, cache_hit=False)
 
     def clear(self, provider_id: str | None = None) -> None:
         if provider_id is None:
@@ -159,8 +191,9 @@ class ProviderModelCache:
 
 
 class ProviderRegistry:
-    def __init__(self) -> None:
+    def __init__(self, *, model_catalog: Any | None = None) -> None:
         self._entries: dict[str, tuple[ProviderDefinition, ProviderAdapter]] = {}
+        self._model_catalog = model_catalog
 
     def register(self, definition: ProviderDefinition, adapter: ProviderAdapter) -> None:
         if definition.id in self._entries:
@@ -175,14 +208,23 @@ class ProviderRegistry:
             raise KeyError(f"unknown provider: {definition.id}")
         self._entries[definition.id] = (definition, adapter)
 
-    def snapshot(self, provider_id: str, model_id: str | None = None) -> ProviderSnapshot:
+    def snapshot(
+        self,
+        provider_id: str,
+        model_id: str | None = None,
+        *,
+        allow_unavailable: bool = False,
+    ) -> ProviderSnapshot:
         try:
             definition, adapter = self._entries[provider_id]
         except KeyError as exc:
             raise KeyError(f"unknown provider: {provider_id}") from exc
+        selected_model = model_id or definition.default_model
+        if self._model_catalog is not None and not allow_unavailable:
+            self._model_catalog.ensure_callable(definition.id, selected_model)
         return ProviderSnapshot(
             provider_id=definition.id,
-            model_id=model_id or definition.default_model,
+            model_id=selected_model,
             capabilities=definition.capabilities,
             adapter=adapter,
             credential_required=definition.credential_required,

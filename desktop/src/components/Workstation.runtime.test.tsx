@@ -211,6 +211,124 @@ describe('Workstation provider runtime changes', () => {
     expect(wsSpies.switchConversation).not.toHaveBeenCalled();
   });
 
+  it('replaces a removed stored Kimi draft selection with DeepSeek', async () => {
+    localStorage.setItem('amadeus_pc_provider', 'kimi');
+    localStorage.setItem('amadeus_pc_model', 'kimi-k2.6');
+
+    render(
+      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      const calls = wsSpies.useAmadeusWS.mock.calls;
+      const latest = calls[calls.length - 1]?.[0] as {
+        providerId?: string;
+        model?: string;
+      };
+      expect(latest.providerId).toBe('deepseek');
+      expect(latest.model).toBe('deepseek-v4-flash');
+    });
+    expect(localStorage.getItem('amadeus_pc_provider')).toBe('deepseek');
+    expect(localStorage.getItem('amadeus_pc_model')).toBe('deepseek-v4-flash');
+  });
+
+  it('does not let a late old-provider model response overwrite the active catalog', async () => {
+    let resolveDeepSeekModels!: (response: Response) => void;
+    const deepSeekModels = new Promise<Response>((resolve) => {
+      resolveDeepSeekModels = resolve;
+    });
+    const capability = (id: string) => ({
+      id,
+      display_name: id,
+      lifecycle: 'stable' as const,
+      callable: true,
+      source: 'manifest' as const,
+      thinking_control: null,
+    });
+    const providers = [
+      {
+        id: 'deepseek',
+        display_name: 'DeepSeek',
+        default_model: 'deepseek-v4-flash',
+        default_model_capability: capability('deepseek-v4-flash'),
+        catalog_version: 1,
+        configured: true,
+        credential_required: true,
+        model_discovery: true,
+      },
+      {
+        id: 'custom',
+        display_name: 'OpenAI-compatible',
+        default_model: 'custom-model',
+        default_model_capability: capability('custom-model'),
+        catalog_version: 1,
+        configured: true,
+        credential_required: false,
+        model_discovery: true,
+      },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/providers') {
+        return { ok: true, status: 200, json: async () => providers } as Response;
+      }
+      if (url.startsWith('/api/conversations?')) {
+        return { ok: true, status: 200, json: async () => [] } as Response;
+      }
+      if (url === '/api/search/settings') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ provider: 'tavily', configured: false, fallback: 'duckduckgo' }),
+        } as Response;
+      }
+      if (url.startsWith('/api/providers/deepseek/models')) {
+        return deepSeekModels;
+      }
+      if (url.startsWith('/api/providers/custom/models')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ catalog: [capability('custom-model')] }),
+        } as Response;
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+
+    const { container } = render(
+      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    );
+    const providerSelect = await waitFor(() => {
+      const select = container.querySelector<HTMLSelectElement>('.provider-select');
+      expect(select).not.toBeNull();
+      return select as HTMLSelectElement;
+    });
+    fireEvent.change(providerSelect, { target: { value: 'custom' } });
+
+    await waitFor(() => {
+      const options = Array.from(
+        container.querySelectorAll<HTMLOptionElement>('.provider-model-select option'),
+      ).map((option) => option.value);
+      expect(options).toContain('custom-model');
+    });
+
+    resolveDeepSeekModels({
+      ok: true,
+      status: 200,
+      json: async () => ({ catalog: [capability('deepseek-late')] }),
+    } as Response);
+    await act(async () => {
+      await deepSeekModels;
+      await Promise.resolve();
+    });
+
+    const options = Array.from(
+      container.querySelectorAll<HTMLOptionElement>('.provider-model-select option'),
+    ).map((option) => option.value);
+    expect(options).toContain('custom-model');
+    expect(options).not.toContain('deepseek-late');
+  });
+
   it('keeps the initial workstation in draft mode without activating the selected history row', async () => {
     render(
       <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,

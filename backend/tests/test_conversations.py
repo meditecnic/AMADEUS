@@ -341,21 +341,21 @@ async def test_session_restores_credential_for_selected_conversation_provider(
     selected = await conversation_service.create(
         "okabe",
         "steins_gate",
-        title="Kimi",
-        provider_id="kimi",
-        model_id="kimi-k2.6",
+        title="GLM",
+        provider_id="glm",
+        model_id="glm-5.2",
     )
     await conversation_service.select("okabe", "steins_gate", selected["id"])
     store = InMemoryCredentialStore()
-    store.set("kimi", "kimi-provider-secret")
+    store.set("glm", "glm-provider-secret")
     monkeypatch.setattr("app.routers.chat_ws.credential_store", store)
 
     session = SessionState("okabe")
     await session.load_from_db()
 
-    assert session.provider_id == "kimi"
-    assert session.model == "kimi-k2.6"
-    assert session.api_key == "kimi-provider-secret"
+    assert session.provider_id == "glm"
+    assert session.model == "glm-5.2"
+    assert session.api_key == "glm-provider-secret"
 
 
 @pytest.mark.asyncio

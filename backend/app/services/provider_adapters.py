@@ -30,6 +30,7 @@ class OpenAICompatibleAdapter(LLMInterface):
         default_model: str,
         message_builder: Callable[..., list[dict]],
         credential_required: bool = True,
+        thinking_request_mode: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.provider_id = provider_id
@@ -37,6 +38,7 @@ class OpenAICompatibleAdapter(LLMInterface):
         self.model = default_model
         self._message_builder = message_builder
         self.credential_required = credential_required
+        self.thinking_request_mode = thinking_request_mode
         self._transport = transport
 
     def _headers(self, api_key: str | None) -> dict[str, str]:
@@ -68,6 +70,7 @@ class OpenAICompatibleAdapter(LLMInterface):
         tools: Optional[list] = None,
         tool_choice: Optional[str] = None,
         model: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
     ):
         messages = self._message_builder(
             active_history,
@@ -84,6 +87,15 @@ class OpenAICompatibleAdapter(LLMInterface):
             payload["tools"] = tools
             if tool_choice is not None:
                 payload["tool_choice"] = tool_choice
+        if self.thinking_request_mode == "reasoning_effort" and reasoning_effort:
+            payload["thinking"] = {
+                "type": (
+                    "disabled"
+                    if reasoning_effort in {"none", "minimal"}
+                    else "enabled"
+                )
+            }
+            payload["reasoning_effort"] = reasoning_effort
 
         async with self._client() as client:
             async with client.stream(
@@ -209,7 +221,10 @@ class OpenAICompatibleAdapter(LLMInterface):
             temperature=0.3,
         )
 
-    async def list_models(self, api_key: Optional[str] = None) -> list[str]:
+    async def list_models(
+        self,
+        api_key: Optional[str] = None,
+    ) -> list[str | dict[str, Any]]:
         async with self._client(read_timeout=20.0) as client:
             response = await client.get(
                 f"{self.base_url}/models",
@@ -220,7 +235,7 @@ class OpenAICompatibleAdapter(LLMInterface):
         payload = response.json()
         rows = payload.get("data", []) if isinstance(payload, dict) else []
         return [
-            row["id"]
+            row
             for row in rows
             if isinstance(row, dict) and isinstance(row.get("id"), str)
         ]
@@ -469,7 +484,10 @@ class OpenAIResponsesAdapter(LLMInterface):
             _compression_messages(history, old_summary), api_key=api_key, model=model
         )
 
-    async def list_models(self, api_key: Optional[str] = None) -> list[str]:
+    async def list_models(
+        self,
+        api_key: Optional[str] = None,
+    ) -> list[str | dict[str, Any]]:
         async with self._client(20.0) as client:
             response = await client.get(
                 f"{self.base_url}/models",
@@ -478,7 +496,7 @@ class OpenAIResponsesAdapter(LLMInterface):
         if response.status_code != 200:
             raise ProviderRequestError(self.provider_id, response.status_code)
         return [
-            row["id"]
+            row
             for row in response.json().get("data", [])
             if isinstance(row, dict) and isinstance(row.get("id"), str)
         ]
@@ -554,6 +572,7 @@ class GeminiAdapter(LLMInterface):
         tools: Optional[list] = None,
         tool_choice: Optional[str] = None,
         model: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
     ):
         messages = self._message_builder(active_history, memory_summary, system_prompt)
         system_instruction, contents = self._contents(messages)
@@ -562,6 +581,10 @@ class GeminiAdapter(LLMInterface):
             "contents": contents,
             "generationConfig": {"temperature": temperature},
         }
+        if reasoning_effort:
+            payload["generationConfig"]["thinkingConfig"] = {
+                "thinkingLevel": reasoning_effort
+            }
         converted_tools = self._tools(tools)
         if converted_tools is not None:
             payload["tools"] = converted_tools
@@ -663,7 +686,10 @@ class GeminiAdapter(LLMInterface):
             _compression_messages(history, old_summary), api_key=api_key, model=model
         )
 
-    async def list_models(self, api_key: Optional[str] = None) -> list[str]:
+    async def list_models(
+        self,
+        api_key: Optional[str] = None,
+    ) -> list[str | dict[str, Any]]:
         async with self._client(20.0) as client:
             response = await client.get(
                 f"{self.base_url}/models",
@@ -676,5 +702,10 @@ class GeminiAdapter(LLMInterface):
             name = row.get("name") if isinstance(row, dict) else None
             methods = row.get("supportedGenerationMethods", []) if isinstance(row, dict) else []
             if isinstance(name, str) and (not methods or "generateContent" in methods):
-                models.append(name.removeprefix("models/"))
+                models.append({
+                    "id": name.removeprefix("models/"),
+                    "context_window": row.get("inputTokenLimit"),
+                    "max_output_tokens": row.get("outputTokenLimit"),
+                    "supported_generation_methods": methods,
+                })
         return models

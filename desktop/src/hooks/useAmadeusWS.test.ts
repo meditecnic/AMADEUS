@@ -65,6 +65,53 @@ describe('useAmadeusWS v2', () => {
     unmount();
   });
 
+  it('forwards backend-catalog control values without a two-value frontend enum', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const { result, unmount } = renderHook(() => useAmadeusWS({
+      ...params,
+      providerId: 'openai',
+      model: 'gpt-5.6-luna',
+      reasoningEffort: 'max',
+      conversationId: null,
+    }));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => socket.onopen?.());
+    expect(JSON.parse(socket.sent[0])).toMatchObject({
+      provider_id: 'openai',
+      model: 'gpt-5.6-luna',
+      reasoning_effort: 'max',
+    });
+
+    act(() => result.current.updateConfig({ reasoningEffort: 'none' }));
+    expect(JSON.parse(socket.sent[socket.sent.length - 1])).toMatchObject({
+      type: 'config_update',
+      reasoning_effort: 'none',
+    });
+    unmount();
+  });
+
+  it('forwards config_applied reasoning_effort to onConfigApplied', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const onConfigApplied = vi.fn();
+    const { unmount } = renderHook(() => useAmadeusWS({
+      ...params,
+      onConfigApplied,
+    }));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => {
+      socket.onopen?.();
+      socket.emit({
+        type: 'config_applied',
+        reasoning_effort: 'max',
+      });
+    });
+
+    expect(onConfigApplied).toHaveBeenCalledWith({ reasoningEffort: 'max' });
+    unmount();
+  });
+
   it('applies conversation history only after the matching switch ACK', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const { result, unmount } = renderHook(() => useAmadeusWS({ ...params, conversationId: null }));

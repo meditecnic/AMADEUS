@@ -87,17 +87,17 @@ async def test_openai_compatible_structured_output_and_model_listing():
     models = await adapter.list_models(api_key="provider-secret")
 
     assert result == {"ok": True}
-    assert models == ["model-z", "model-a"]
+    assert models == [{"id": "model-z"}, {"id": "model-a"}]
 
 
-def test_kimi_glm_and_custom_are_registered_as_compatible_providers():
+def test_glm_and_custom_are_registered_without_kimi():
     definitions = {row.id: row for row in provider_registry.list_definitions()}
 
-    assert definitions["kimi"].default_model == "kimi-k2.6"
+    assert set(definitions) == {"deepseek", "glm", "custom", "openai", "gemini"}
+    assert "kimi" not in definitions
     assert definitions["glm"].default_model == "glm-5.2"
     assert definitions["custom"].base_url_configurable is True
     assert definitions["custom"].credential_required is False
-    assert definitions["kimi"].capabilities.structured_output is True
     assert definitions["glm"].capabilities.tools is True
 
 
@@ -118,7 +118,7 @@ async def test_optional_credential_compatible_adapter_omits_authorization_header
         transport=httpx.MockTransport(handler),
     )
 
-    assert await adapter.list_models(api_key=None) == ["local-model"]
+    assert await adapter.list_models(api_key=None) == [{"id": "local-model"}]
     assert "authorization" not in requests[0].headers
 
 
@@ -185,6 +185,7 @@ async def test_gemini_stream_maps_persona_roles_and_native_parts():
             active_history=[{"role": "user", "content": "检查数据"}],
             api_key="gemini-secret",
             model="gemini-3.5-flash",
+            reasoning_effort="low",
         )
     ]
 
@@ -196,6 +197,9 @@ async def test_gemini_stream_maps_persona_roles_and_native_parts():
     assert payload["contents"][-1] == {
         "role": "user",
         "parts": [{"text": "检查数据"}],
+    }
+    assert payload["generationConfig"]["thinkingConfig"] == {
+        "thinkingLevel": "low"
     }
     assert chunks == [
         {"content": "[EMO:neutral] データを確認したわ。", "tool_calls": None}
@@ -209,3 +213,77 @@ def test_openai_and_gemini_native_providers_are_registered():
     assert "reasoning_effort" in definitions["openai"].capabilities.parameters
     assert definitions["gemini"].default_model == "gemini-3.5-flash"
     assert definitions["gemini"].capabilities.model_discovery is True
+
+
+@pytest.mark.asyncio
+async def test_glm_native_thinking_payload_is_model_controlled():
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"choices":[{"delta":{"content":"[EMO:neutral] 検証するわ。"}}]}\n\n'
+                "data: [DONE]\n\n"
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        provider_id="glm",
+        base_url="https://open.bigmodel.cn/api/paas/v4",
+        default_model="glm-5.2",
+        message_builder=deepseek_service.build_persona_messages,
+        thinking_request_mode="reasoning_effort",
+        transport=httpx.MockTransport(handler),
+    )
+
+    _ = [
+        chunk
+        async for chunk in adapter.get_chat_stream(
+            active_history=[{"role": "user", "content": "验证"}],
+            api_key="glm-secret",
+            model="glm-5.2",
+            reasoning_effort="minimal",
+        )
+    ]
+
+    payload = json.loads(requests[0].content)
+    assert payload["thinking"] == {"type": "disabled"}
+    assert payload["reasoning_effort"] == "minimal"
+
+
+@pytest.mark.asyncio
+async def test_custom_compatible_provider_never_guesses_reasoning_parameters():
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            text="data: [DONE]\n\n",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        provider_id="custom",
+        base_url="http://127.0.0.1:1234/v1",
+        default_model="unknown-local",
+        message_builder=deepseek_service.build_persona_messages,
+        credential_required=False,
+        transport=httpx.MockTransport(handler),
+    )
+
+    _ = [
+        chunk
+        async for chunk in adapter.get_chat_stream(
+            active_history=[{"role": "user", "content": "验证"}],
+            api_key=None,
+            reasoning_effort="high",
+        )
+    ]
+
+    payload = json.loads(requests[0].content)
+    assert "thinking" not in payload
+    assert "reasoning_effort" not in payload
