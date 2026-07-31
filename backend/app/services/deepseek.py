@@ -23,7 +23,14 @@ def build_chat_payload(
     tool_choice,
     reasoning_effort: Optional[str],
 ) -> dict:
-    """Build a DeepSeek request without combining V4 thinking and tool_choice."""
+    """Build a DeepSeek request; never combine V4 thinking with tools.
+
+    Amadeus tool architecture injects tool results as untrusted system evidence
+    and never round-trips assistant reasoning_content. DeepSeek thinking mode
+    with tools requires that field on the next turn, so any tools-bearing
+    request must disable thinking. Final answer requests (no tools) restore the
+    user-selected reasoning_effort.
+    """
     payload = {
         "model": model,
         "messages": messages,
@@ -32,22 +39,22 @@ def build_chat_payload(
     }
 
     is_v4 = model in {"deepseek-v4-flash", "deepseek-v4-pro"}
+    has_tools = tools is not None
     forced_tool_choice = (
-        tools is not None
+        has_tools
         and tool_choice is not None
         and tool_choice != "auto"
     )
     if is_v4:
-        # Thinking-mode tool calls are supported, but DeepSeek rejects an
-        # explicit forced tool_choice with thinking enabled. "auto" is the API
-        # default, so omit that redundant field and preserve native thinking.
+        # Close thinking whenever tools are present (auto or forced). Only the
+        # post-tool final answer request re-enables native thinking + effort.
         payload["thinking"] = {
-            "type": "disabled" if forced_tool_choice else "enabled"
+            "type": "disabled" if has_tools else "enabled"
         }
-        if reasoning_effort and not forced_tool_choice:
+        if reasoning_effort and not has_tools:
             payload["reasoning_effort"] = reasoning_effort
 
-    if tools is not None:
+    if has_tools:
         payload["tools"] = tools
         if tool_choice is not None and (not is_v4 or forced_tool_choice):
             payload["tool_choice"] = tool_choice

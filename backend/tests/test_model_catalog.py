@@ -107,6 +107,7 @@ def test_live_discovery_merges_known_and_unknown_models_without_guessing_control
         assert by_id["gpt-5.6-luna"]["lifecycle"] == "stable"
         assert by_id["gpt-5.6-luna"]["thinking_control"]["default"] == "medium"
         assert by_id["gpt-future-unverified"]["lifecycle"] == "unverified"
+        assert by_id["gpt-future-unverified"]["callable"] is False
         assert by_id["gpt-future-unverified"]["thinking_control"] is None
     finally:
         model_catalog.clear_discovery("openai")
@@ -130,9 +131,24 @@ def test_unknown_models_fail_closed_for_builtins_but_custom_remains_extensible()
         model_catalog.ensure_callable("deepseek", "future-model")
 
     model_catalog.ensure_callable("custom", "operator-local-model")
-    assert model_catalog.public_model("custom", "operator-local-model")[
-        "lifecycle"
-    ] == "unverified"
+    custom_row = model_catalog.public_model("custom", "operator-local-model")
+    assert custom_row["lifecycle"] == "unverified"
+    assert custom_row["callable"] is True
+
+
+def test_discovered_unknown_builtin_models_are_visible_but_not_callable():
+    try:
+        rows = model_catalog.reconcile(
+            "deepseek",
+            ["deepseek-v4-flash", "deepseek-next"],
+        )
+        by_id = {row["id"]: row for row in rows}
+        assert by_id["deepseek-next"]["lifecycle"] == "unverified"
+        assert by_id["deepseek-next"]["callable"] is False
+        with pytest.raises(ModelUnavailableError, match="deepseek/deepseek-next"):
+            model_catalog.ensure_callable("deepseek", "deepseek-next")
+    finally:
+        model_catalog.clear_discovery("deepseek")
 
 
 def test_live_discovery_metadata_survives_catalog_reconciliation():
@@ -216,9 +232,10 @@ def test_registry_blocks_retired_or_unavailable_models_before_adapter_use():
     catalog.reconcile("fake", ["unverified-live-model"])
     with pytest.raises(ModelUnavailableError, match="stable-model"):
         registry.snapshot("fake", "stable-model")
-    assert registry.snapshot("fake", "unverified-live-model").model_id == (
-        "unverified-live-model"
-    )
+    # Discovered-but-unknown on non-custom providers stay visible, not callable.
+    assert catalog.public_model("fake", "unverified-live-model")["callable"] is False
+    with pytest.raises(ModelUnavailableError, match="unverified-live-model"):
+        registry.snapshot("fake", "unverified-live-model")
     assert catalog.public_model("fake", "missing-unknown")["lifecycle"] == (
         "unavailable"
     )
@@ -289,6 +306,7 @@ def test_models_endpoint_keeps_legacy_ids_and_adds_reconciled_catalog(
         assert by_id["deepseek-v4-pro"]["lifecycle"] == "unavailable"
         assert by_id["deepseek-v4-flash"]["context_window"] == 1_500_000
         assert by_id["deepseek-next"]["lifecycle"] == "unverified"
+        assert by_id["deepseek-next"]["callable"] is False
         assert by_id["deepseek-next"]["live_metadata"]["owned_by"] == "deepseek"
         assert by_id["deepseek-next"]["thinking_control"] is None
         assert "source_message_ids" not in json.dumps(payload)
@@ -373,6 +391,49 @@ def test_config_update_echoes_normalized_reasoning_effort(app_client, monkeypatc
             "reasoning_effort": "max",
         }
     assert chat_ws.sessions["q41-effort-echo"].reasoning_effort == "max"
+
+
+def test_config_update_accepts_catalog_model_and_rejects_unknown(
+    app_client,
+    monkeypatch,
+):
+    from app.routers import chat_ws
+
+    store = InMemoryCredentialStore()
+    store.set("deepseek", "test-deepseek-secret")
+    monkeypatch.setattr(chat_ws, "credential_store", store)
+    session_id = "q41-config-model"
+
+    with app_client.websocket_connect(
+        f"/ws/chat?session_id={session_id}"
+    ) as websocket:
+        websocket.send_json(
+            {
+                "type": "auth",
+                "client": "desktop",
+                "protocol_version": 2,
+                "conversation_mode": "draft",
+                "provider_id": "deepseek",
+                "model": "deepseek-v4-flash",
+            }
+        )
+        websocket.send_json(
+            {
+                "type": "config_update",
+                "model": "deepseek-v4-pro",
+            }
+        )
+        websocket.send_json(
+            {
+                "type": "config_update",
+                "model": "deepseek-not-in-catalog",
+            }
+        )
+        # Drain any frames; model rejection is silent (keep prior model).
+        websocket.send_json({"type": "auth"})
+        assert websocket.receive_json()["type"] == "error"
+
+    assert chat_ws.sessions[session_id].model == "deepseek-v4-pro"
 
 
 def test_websocket_blocks_model_that_disappeared_before_any_provider_call(

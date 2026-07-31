@@ -5,6 +5,7 @@ import {
   modelLifecycleSuffix,
   type ModelCatalogEntry,
 } from './ProviderControls';
+import { SalieriSelect } from './SalieriSelect';
 
 export type CredentialStatus = 'checking' | 'configured' | 'not_configured' | 'saving' | 'error';
 
@@ -641,24 +642,29 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 {baseUrlConfigurable ? (
                   <input type="text" value={localModel} onChange={(e) => setLocalModel(e.target.value)} className="salieri-input" placeholder="local-model" />
                 ) : (
-                  <select value={localModel} onChange={(e) => setLocalModel(e.target.value)} className="salieri-select">
-                    {(
+                  <SalieriSelect
+                    aria-label="模型"
+                    className="settings-salieri-select"
+                    triggerClassName="salieri-select-trigger settings-select-trigger"
+                    value={localModel}
+                    onChange={setLocalModel}
+                    options={(
                       modelOptions.some((row) => row.id === localModel)
                         ? modelOptions
                         : [{
                             id: localModel,
                             display_name: localModel,
                             lifecycle: 'unverified' as const,
-                            callable: true,
+                            callable: false,
                             source: 'dynamic' as const,
                             thinking_control: null,
                           }, ...modelOptions]
-                    ).map((row) => (
-                      <option key={row.id} value={row.id} disabled={!row.callable}>
-                        {row.display_name}{modelLifecycleSuffix(row.lifecycle)}
-                      </option>
-                    ))}
-                  </select>
+                    ).map((row) => ({
+                      value: row.id,
+                      label: `${row.display_name}${modelLifecycleSuffix(row.lifecycle)}`,
+                      disabled: !row.callable,
+                    }))}
+                  />
                 )}
               </div>
               )}
@@ -670,10 +676,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               )}
               <div className="setting-field">
                 <label>当前世界线</label>
-                <select value={localWorldline} onChange={(e) => setLocalWorldline(e.target.value as 'steins_gate' | 'beta')} className="salieri-select">
-                  <option value="steins_gate">Steins;Gate (1.048596%)</option>
-                  <option value="beta">β 世界线 (1.130205%)</option>
-                </select>
+                <SalieriSelect
+                  aria-label="当前世界线"
+                  className="settings-salieri-select"
+                  triggerClassName="salieri-select-trigger settings-select-trigger"
+                  value={localWorldline}
+                  onChange={(next) => setLocalWorldline(next as 'steins_gate' | 'beta')}
+                  options={[
+                    { value: 'steins_gate', label: 'Steins;Gate (1.048596%)' },
+                    { value: 'beta', label: 'β 世界线 (1.130205%)' },
+                  ]}
+                />
               </div>
               <div className="setting-field field-full" data-testid="identity-settings">
                 <label>新会话默认身份模式</label>

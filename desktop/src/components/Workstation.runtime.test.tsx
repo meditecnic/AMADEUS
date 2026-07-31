@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Workstation } from './Workstation';
@@ -186,17 +186,17 @@ describe('Workstation provider runtime changes', () => {
   });
 
   it('keeps a real provider/model selection while the workstation is still a draft', async () => {
-    const { container } = render(
+    render(
       <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
 
-    const providerSelect = await waitFor(() => {
-      const select = container.querySelector<HTMLSelectElement>('.provider-select');
-      expect(select).not.toBeNull();
-      expect(select?.disabled).toBe(false);
-      return select as HTMLSelectElement;
+    const providerTrigger = await waitFor(() => {
+      const trigger = screen.getByRole('button', { name: '模型供应商' });
+      expect(trigger).not.toBeDisabled();
+      return trigger;
     });
-    fireEvent.change(providerSelect, { target: { value: 'custom' } });
+    fireEvent.click(providerTrigger);
+    fireEvent.click(screen.getByRole('option', { name: 'OpenAI-compatible' }));
 
     await waitFor(() => expect(wsSpies.reconnect).toHaveBeenCalled());
     await waitFor(() => {
@@ -295,21 +295,18 @@ describe('Workstation provider runtime changes', () => {
       throw new Error(`unexpected fetch: ${url}`);
     }));
 
-    const { container } = render(
+    render(
       <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
-    const providerSelect = await waitFor(() => {
-      const select = container.querySelector<HTMLSelectElement>('.provider-select');
-      expect(select).not.toBeNull();
-      return select as HTMLSelectElement;
-    });
-    fireEvent.change(providerSelect, { target: { value: 'custom' } });
+    const providerTrigger = await waitFor(() => screen.getByRole('button', { name: '模型供应商' }));
+    fireEvent.click(providerTrigger);
+    fireEvent.click(screen.getByRole('option', { name: 'OpenAI-compatible' }));
 
     await waitFor(() => {
-      const options = Array.from(
-        container.querySelectorAll<HTMLOptionElement>('.provider-model-select option'),
-      ).map((option) => option.value);
-      expect(options).toContain('custom-model');
+      fireEvent.click(screen.getByRole('button', { name: '模型' }));
+      expect(screen.getByRole('option', { name: 'custom-model' })).toBeInTheDocument();
+      // Close menu so a later open re-reads options.
+      fireEvent.keyDown(screen.getByRole('listbox', { name: '模型' }), { key: 'Escape' });
     });
 
     resolveDeepSeekModels({
@@ -322,11 +319,9 @@ describe('Workstation provider runtime changes', () => {
       await Promise.resolve();
     });
 
-    const options = Array.from(
-      container.querySelectorAll<HTMLOptionElement>('.provider-model-select option'),
-    ).map((option) => option.value);
-    expect(options).toContain('custom-model');
-    expect(options).not.toContain('deepseek-late');
+    fireEvent.click(screen.getByRole('button', { name: '模型' }));
+    expect(screen.getByRole('option', { name: 'custom-model' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'deepseek-late' })).toBeNull();
   });
 
   it('keeps the initial workstation in draft mode without activating the selected history row', async () => {

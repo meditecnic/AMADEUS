@@ -1,4 +1,5 @@
 import React from 'react';
+import { SalieriSelect } from './SalieriSelect';
 
 export type ModelLifecycle =
   | 'stable'
@@ -147,32 +148,31 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
 
   return (
     <div className="provider-controls" aria-label="对话模型配置">
-      <select
-        className="provider-select"
+      <SalieriSelect
         aria-label="模型供应商"
+        className="provider-select-root"
+        triggerClassName="provider-select"
         value={activeProviderId}
         disabled={disabled || providers.length === 0}
-        onChange={(event) => onProviderChange(event.target.value)}
-      >
-        {providers.map((provider) => (
-          <option key={provider.id} value={provider.id}>
-            {provider.display_name}
-          </option>
-        ))}
-      </select>
-      <select
-        className="provider-model-select"
+        options={providers.map((provider) => ({
+          value: provider.id,
+          label: provider.display_name,
+        }))}
+        onChange={onProviderChange}
+      />
+      <SalieriSelect
         aria-label="模型"
+        className="provider-model-select-root"
+        triggerClassName="provider-model-select"
         value={activeModelId}
         disabled={disabled || modelOptions.length === 0}
-        onChange={(event) => onModelChange(event.target.value)}
-      >
-        {modelOptions.map((model) => (
-          <option key={model.id} value={model.id} disabled={!model.callable}>
-            {model.display_name}{modelLifecycleSuffix(model.lifecycle)}
-          </option>
-        ))}
-      </select>
+        options={modelOptions.map((model) => ({
+          value: model.id,
+          label: `${model.display_name}${modelLifecycleSuffix(model.lifecycle)}`,
+          disabled: !model.callable,
+        }))}
+        onChange={onModelChange}
+      />
       {activeProvider?.model_discovery && (
         <button
           type="button"
@@ -199,37 +199,25 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
           需要凭据
         </button>
       )}
-      {thinkingControl ? (
-        <>
-          <span
-            className="reasoning-label"
-            title={
-              thinkingControl.native
-                ? '供应商原生模型控制。'
-                : '提示词引导，不是供应商原生推理参数。'
-            }
-          >
-            {thinkingControl.label}
-          </span>
-          <div
-            className="reasoning-toggle"
-            role="group"
-            aria-label={thinkingControl.label}
-          >
-            {thinkingControl.options.map((option) => (
-              <button
-                type="button"
-                key={option.value}
-                className={selectedThinking === option.value ? 'active' : ''}
-                disabled={disabled || !activeModel?.callable}
-                aria-label={option.label}
-                onClick={() => onThinkingChange(option.value)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </>
+      {thinkingControl && selectedThinking ? (
+        <SalieriSelect
+          aria-label={thinkingControl.label}
+          className="reasoning-compact"
+          triggerClassName="reasoning-compact-trigger"
+          value={selectedThinking}
+          disabled={disabled || !activeModel?.callable}
+          triggerPrefix={`${thinkingControl.label} · `}
+          title={
+            thinkingControl.native
+              ? '供应商原生模型控制。'
+              : '提示词引导，不是供应商原生推理参数。'
+          }
+          options={thinkingControl.options.map((option) => ({
+            value: option.value,
+            label: option.label,
+          }))}
+          onChange={onThinkingChange}
+        />
       ) : (
         <span
           className="reasoning-unavailable"

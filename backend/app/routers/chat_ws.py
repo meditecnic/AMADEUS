@@ -2267,9 +2267,15 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 if "enable_tts" in data:
                     session.enable_tts = bool(data["enable_tts"])
                 if "model" in data:
-                    m = data["model"]
-                    if m in ("deepseek-v4-flash", "deepseek-v4-pro"):
-                        session.model = m
+                    requested_model = str(data.get("model") or "").strip()
+                    if requested_model:
+                        row = model_catalog.public_model(
+                            session.provider_id,
+                            requested_model,
+                        )
+                        # Catalog-driven only: refuse unknown/unverified non-custom.
+                        if row.get("callable"):
+                            session.model = requested_model
                 if "reasoning_effort" in data:
                     session.reasoning_effort = model_catalog.normalize_control(
                         session.provider_id,

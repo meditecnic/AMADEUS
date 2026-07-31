@@ -94,7 +94,7 @@ describe('useAmadeusWS v2', () => {
   it('forwards config_applied reasoning_effort to onConfigApplied', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const onConfigApplied = vi.fn();
-    const { unmount } = renderHook(() => useAmadeusWS({
+    const { result, unmount } = renderHook(() => useAmadeusWS({
       ...params,
       onConfigApplied,
     }));
@@ -102,12 +102,101 @@ describe('useAmadeusWS v2', () => {
 
     act(() => {
       socket.onopen?.();
+      result.current.updateConfig({ reasoningEffort: 'xhigh' });
       socket.emit({
         type: 'config_applied',
         reasoning_effort: 'max',
       });
     });
 
+    expect(onConfigApplied).toHaveBeenCalledWith({ reasoningEffort: 'max' });
+    unmount();
+  });
+
+  it('discards late config_applied after provider context changes', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const onConfigApplied = vi.fn();
+    const { result, rerender, unmount } = renderHook(
+      (hookParams: UseAmadeusWSParams) => useAmadeusWS(hookParams),
+      { initialProps: { ...params, onConfigApplied } },
+    );
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => {
+      socket.onopen?.();
+      result.current.updateConfig({ reasoningEffort: 'max' });
+    });
+
+    rerender({
+      ...params,
+      onConfigApplied,
+      providerId: 'openai',
+      model: 'gpt-5.6-luna',
+    });
+
+    act(() => {
+      socket.emit({
+        type: 'config_applied',
+        reasoning_effort: 'max',
+      });
+    });
+
+    expect(onConfigApplied).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('rejects stale config_applied after switching away and back to the original context', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const onConfigApplied = vi.fn();
+    const { result, rerender, unmount } = renderHook(
+      (hookParams: UseAmadeusWSParams) => useAmadeusWS(hookParams),
+      { initialProps: { ...params, onConfigApplied } },
+    );
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => {
+      socket.onopen?.();
+      result.current.updateConfig({ reasoningEffort: 'max' });
+    });
+
+    // Switch away — invalidates pending epoch even if we later restore context.
+    rerender({
+      ...params,
+      onConfigApplied,
+      providerId: 'openai',
+      model: 'gpt-5.6-luna',
+    });
+    // Switch back to the original provider/model/conversation.
+    rerender({ ...params, onConfigApplied });
+
+    act(() => {
+      socket.emit({
+        type: 'config_applied',
+        reasoning_effort: 'max',
+      });
+    });
+
+    expect(onConfigApplied).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('consumes config_applied only once for duplicate frames', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const onConfigApplied = vi.fn();
+    const { result, unmount } = renderHook(() => useAmadeusWS({
+      ...params,
+      onConfigApplied,
+    }));
+    const socket = FakeWebSocket.instances[0];
+
+    act(() => {
+      socket.onopen?.();
+      result.current.updateConfig({ reasoningEffort: 'xhigh' });
+      socket.emit({ type: 'config_applied', reasoning_effort: 'max' });
+      socket.emit({ type: 'config_applied', reasoning_effort: 'max' });
+    });
+
+    expect(onConfigApplied).toHaveBeenCalledTimes(1);
     expect(onConfigApplied).toHaveBeenCalledWith({ reasoningEffort: 'max' });
     unmount();
   });

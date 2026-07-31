@@ -115,8 +115,10 @@ describe('ProviderControls', () => {
       />
     );
 
-    fireEvent.change(screen.getByLabelText('模型供应商'), { target: { value: 'deepseek' } });
-    fireEvent.change(screen.getByLabelText('模型'), { target: { value: 'deepseek-v4-pro' } });
+    fireEvent.click(screen.getByRole('button', { name: '模型供应商' }));
+    fireEvent.click(screen.getByRole('option', { name: 'DeepSeek' }));
+    fireEvent.click(screen.getByRole('button', { name: '模型' }));
+    fireEvent.click(screen.getByRole('option', { name: 'DeepSeek V4 Pro' }));
     fireEvent.click(screen.getByRole('button', { name: '刷新模型列表' }));
     rerender(
       <ProviderControls
@@ -161,8 +163,8 @@ describe('ProviderControls', () => {
       />
     );
 
-    expect(screen.getByLabelText('模型供应商')).toBeDisabled();
-    expect(screen.getByLabelText('模型')).toBeDisabled();
+    expect(screen.getByRole('button', { name: '模型供应商' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '模型' })).toBeDisabled();
   });
 
   it('allows local custom model discovery without forcing a credential', () => {
@@ -187,7 +189,7 @@ describe('ProviderControls', () => {
     expect(screen.queryByText('需要凭据')).not.toBeInTheDocument();
   });
 
-  it('renders backend-owned thinking options without provider-name heuristics', () => {
+  it('renders compact backend-owned thinking menu without provider-name heuristics', () => {
     const onThinkingChange = vi.fn();
     render(
       <ProviderControls
@@ -206,13 +208,16 @@ describe('ProviderControls', () => {
       />
     );
 
-    expect(screen.getByText('推理强度')).toBeInTheDocument();
-    expect(screen.getByRole('group', { name: '推理强度' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'MAX' }));
+    expect(screen.getByRole('button', { name: '推理强度' })).toHaveTextContent(
+      '推理强度 · MEDIUM',
+    );
+    fireEvent.click(screen.getByRole('button', { name: '推理强度' }));
+    expect(screen.getByRole('listbox', { name: '推理强度' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('option', { name: 'MAX' }));
     expect(onThinkingChange).toHaveBeenCalledWith('max');
   });
 
-  it('labels native DeepSeek effort and blocks unavailable models', () => {
+  it('labels native DeepSeek effort and blocks unavailable or unverified models', () => {
     render(
       <ProviderControls
         providers={providers}
@@ -232,6 +237,7 @@ describe('ProviderControls', () => {
             id: 'deepseek-next',
             display_name: 'deepseek-next',
             lifecycle: 'unverified',
+            callable: false,
             source: 'dynamic',
             thinking_control: null,
           },
@@ -247,15 +253,17 @@ describe('ProviderControls', () => {
       />
     );
 
-    expect(screen.getByText('推理强度')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '推理强度' })).toHaveTextContent(
+      '推理强度 · HIGH',
+    );
     expect(screen.getByTitle('供应商原生模型控制。')).toBeInTheDocument();
-    const unavailable = screen.getByRole('option', {
+    fireEvent.click(screen.getByRole('button', { name: '模型' }));
+    expect(screen.getByRole('option', {
       name: 'DeepSeek V4 Pro（不可用）',
-    });
-    expect(unavailable).toBeDisabled();
+    })).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByRole('option', {
       name: 'deepseek-next（未验证）',
-    })).toBeEnabled();
+    })).toHaveAttribute('aria-disabled', 'true');
   });
 
   it('falls back to the backend default when a stored value is invalid', () => {
@@ -289,8 +297,10 @@ describe('ProviderControls', () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole('button', { name: '模型' }));
     expect(screen.getByRole('option', {
       name: 'missing-pinned-model（不可用）',
-    })).toBeDisabled();
+    })).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByText('当前模型未声明思考控制')).toBeInTheDocument();
   });
 });

@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useRef, useCallback } from 'react';
+﻿import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 
 export interface UseAmadeusWSParams {
   sessionId?: string;
@@ -141,14 +141,36 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     /** Pre-switch transcript for one pending switch; discarded on ACK, restored on correlated error. */
     transcriptSnapshot: Message[];
   } | null>(null);
+  /** Discard late config_applied after provider/conversation/model switch. */
+  const configAppliedEpochRef = useRef(0);
+  const pendingConfigAppliedRef = useRef<{
+    epoch: number;
+    providerId?: string;
+    model: string;
+    conversationId?: string | null;
+  } | null>(null);
+  const configContextKeyRef = useRef(
+    `${params.providerId || ''}|${params.model}|${params.conversationId || ''}`,
+  );
+
+  const invalidatePendingConfigApplied = useCallback(() => {
+    configAppliedEpochRef.current += 1;
+    pendingConfigAppliedRef.current = null;
+  }, []);
 
   const wsRef = useRef<WebSocket | null>(null);
   const paramsRef = useRef<UseAmadeusWSParams>(params);
   
-  // Keep params ref updated
-  useEffect(() => {
+  // Sync before paint so a late WS config_applied cannot observe stale
+  // paramsRef/pending in the post-commit, pre-useEffect window.
+  useLayoutEffect(() => {
     paramsRef.current = params;
-  }, [params]);
+    const nextKey = `${params.providerId || ''}|${params.model}|${params.conversationId || ''}`;
+    if (nextKey !== configContextKeyRef.current) {
+      configContextKeyRef.current = nextKey;
+      invalidatePendingConfigApplied();
+    }
+  }, [params, invalidatePendingConfigApplied]);
 
   const heartbeatTimerRef = useRef<number | null>(null);
   const watchdogTimerRef = useRef<number | null>(null);
@@ -501,7 +523,20 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             break;
 
           case 'config_applied': {
-            // Backend may alias/normalize thinking controls; surface effective values.
+            // Backend may alias/normalize thinking controls; surface effective values
+            // only when this socket still owns the matching provider/model context.
+            const pending = pendingConfigAppliedRef.current;
+            if (
+              !pending
+              || pending.epoch !== configAppliedEpochRef.current
+              || pending.providerId !== paramsRef.current.providerId
+              || pending.model !== paramsRef.current.model
+              || (pending.conversationId || null) !== (paramsRef.current.conversationId || null)
+            ) {
+              break;
+            }
+            // Consume once: clear before callback so duplicate frames cannot reapply.
+            pendingConfigAppliedRef.current = null;
             if ('reasoning_effort' in msg) {
               const value = msg.reasoning_effort;
               paramsRef.current.onConfigApplied?.({
@@ -749,6 +784,17 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       mappedPatch.default_identity_mode = patch.identityMode;
     }
     if (patch.selfName !== undefined) mappedPatch.self_name = patch.selfName;
+    if (patch.model !== undefined) mappedPatch.model = patch.model;
+
+    if (patch.reasoningEffort !== undefined || patch.model !== undefined) {
+      const epoch = ++configAppliedEpochRef.current;
+      pendingConfigAppliedRef.current = {
+        epoch,
+        providerId: paramsRef.current.providerId,
+        model: patch.model ?? paramsRef.current.model,
+        conversationId: paramsRef.current.conversationId ?? null,
+      };
+    }
 
     // Send config_update frame
     const configUpdateFrame = {

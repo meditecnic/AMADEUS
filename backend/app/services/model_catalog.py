@@ -283,6 +283,16 @@ class ModelCatalog:
             return "unavailable"
         return model.lifecycle
 
+    def _is_callable(self, provider_id: str, lifecycle: str) -> bool:
+        """Non-custom unknown/unverified models are never selectable."""
+        if lifecycle in _BLOCKED_LIFECYCLES:
+            return False
+        if lifecycle == "unverified" and not self._allow_undiscovered.get(
+            provider_id, False
+        ):
+            return False
+        return True
+
     def _public_known(self, model: CatalogModel) -> dict[str, Any]:
         lifecycle = self._effective_lifecycle(model)
         live = self._live_metadata(model.provider_id, model.id)
@@ -290,7 +300,7 @@ class ModelCatalog:
             "id": model.id,
             "display_name": model.display_name,
             "lifecycle": lifecycle,
-            "callable": lifecycle not in _BLOCKED_LIFECYCLES,
+            "callable": self._is_callable(model.provider_id, lifecycle),
             "source": "manifest",
             "context_window": self._live_positive_int(
                 live,
@@ -312,19 +322,21 @@ class ModelCatalog:
             ),
         }
 
-    @staticmethod
     def _public_unknown(
+        self,
+        provider_id: str,
         model_id: str,
         *,
         available: bool = True,
         live_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         live = dict(live_metadata or {})
+        lifecycle = "unverified" if available else "unavailable"
         return {
             "id": model_id,
             "display_name": model_id,
-            "lifecycle": "unverified" if available else "unavailable",
-            "callable": available,
+            "lifecycle": lifecycle,
+            "callable": self._is_callable(provider_id, lifecycle),
             "source": "dynamic",
             "context_window": live.get("context_window"),
             "max_output_tokens": live.get("max_output_tokens"),
@@ -340,6 +352,7 @@ class ModelCatalog:
             return self._public_known(known)
         discovered = self._discovered.get(provider_id)
         return self._public_unknown(
+            provider_id,
             model_id,
             available=(
                 model_id in discovered
@@ -358,6 +371,7 @@ class ModelCatalog:
         known_ids = set(self._providers.get(provider_id, ()))
         rows.extend(
             self._public_unknown(
+                provider_id,
                 model_id,
                 live_metadata=self._live_metadata(provider_id, model_id),
             )
@@ -411,11 +425,16 @@ class ModelCatalog:
     def ensure_callable(self, provider_id: str, model_id: str) -> None:
         model = self._models.get((provider_id, model_id))
         if model is None:
+            # Built-in providers: unknown/unverified models never receive paid calls.
+            if not self._allow_undiscovered.get(provider_id, False):
+                raise ModelUnavailableError(
+                    f"model {provider_id}/{model_id} is unavailable"
+                )
             discovered = self._discovered.get(provider_id)
             unavailable = (
                 model_id not in discovered
                 if discovered is not None
-                else not self._allow_undiscovered.get(provider_id, False)
+                else False
             )
             if unavailable:
                 raise ModelUnavailableError(
@@ -423,7 +442,7 @@ class ModelCatalog:
                 )
             return
         lifecycle = self._effective_lifecycle(model)
-        if lifecycle in _BLOCKED_LIFECYCLES:
+        if not self._is_callable(provider_id, lifecycle):
             raise ModelUnavailableError(
                 f"model {provider_id}/{model_id} is {lifecycle}"
             )

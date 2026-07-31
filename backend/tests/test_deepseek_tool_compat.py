@@ -40,7 +40,8 @@ def test_v4_pro_final_answer_keeps_thinking_without_tool_parameters():
     assert "tool_choice" not in payload
 
 
-def test_v4_flash_auto_tool_routing_preserves_native_thinking():
+def test_v4_flash_any_tools_disables_thinking_even_with_auto_choice():
+    """Slice A: any tools payload must close thinking (no reasoning_content round-trip)."""
     payload = build_chat_payload(
         model="deepseek-v4-flash",
         messages=[{"role": "user", "content": "search the web"}],
@@ -50,9 +51,25 @@ def test_v4_flash_auto_tool_routing_preserves_native_thinking():
         reasoning_effort="high",
     )
 
-    assert payload["thinking"] == {"type": "enabled"}
-    assert payload["reasoning_effort"] == "high"
+    assert payload["thinking"] == {"type": "disabled"}
+    assert "reasoning_effort" not in payload
+    assert payload["tools"][0]["function"]["name"] == "web_search"
     assert "tool_choice" not in payload
+
+
+def test_v4_pro_tools_without_choice_disables_thinking():
+    payload = build_chat_payload(
+        model="deepseek-v4-pro",
+        messages=[{"role": "user", "content": "search"}],
+        temperature=0.5,
+        tools=[{"type": "function", "function": {"name": "web_search"}}],
+        tool_choice=None,
+        reasoning_effort="max",
+    )
+
+    assert payload["thinking"] == {"type": "disabled"}
+    assert "reasoning_effort" not in payload
+    assert "tools" in payload
 
 
 def test_v4_flash_final_answer_uses_native_thinking_effort():
@@ -67,6 +84,7 @@ def test_v4_flash_final_answer_uses_native_thinking_effort():
 
     assert payload["thinking"] == {"type": "enabled"}
     assert payload["reasoning_effort"] == "max"
+    assert "tools" not in payload
 
 
 @pytest.mark.asyncio

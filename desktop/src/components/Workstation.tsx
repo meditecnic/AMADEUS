@@ -234,10 +234,13 @@ export const Workstation: React.FC<WorkstationProps> = ({
     return rows;
   }, [sessionId, worldline]);
 
+  const providersRequestEpochRef = useRef(0);
   const loadProviders = useCallback(async () => {
+    const requestEpoch = ++providersRequestEpochRef.current;
     const response = await fetch('/api/providers');
     if (!response.ok) throw new Error(`provider query failed: ${response.status}`);
     const rows = await response.json() as ProviderMetadata[];
+    if (providersRequestEpochRef.current !== requestEpoch) return rows;
     setProviders(rows);
     return rows;
   }, []);
@@ -557,8 +560,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
       fallback.push({
         id: selectedModel,
         display_name: selectedModel,
-        lifecycle: 'unverified',
-        callable: true,
+        lifecycle: providerId === 'custom' ? 'unverified' : 'unavailable',
+        callable: providerId === 'custom',
         source: 'dynamic',
         thinking_control: null,
       });
