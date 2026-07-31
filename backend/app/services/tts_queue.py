@@ -76,9 +76,13 @@ V2PRO_GENERATION_PARAMS = {
     "top_k": 10,
     "top_p": 0.9,
     "temperature": 0.6,
-    "speed_factor": 1.0,
+    "speed_factor": 0.93,
     "repetition_penalty": 1.5,
-    "text_split_method": "cut5",
+    # cut0: no comma/period-driven internal splits; avoids SoVITS default
+    # inter-fragment silence that made multi-clause lines feel choppy (user A/B).
+    "text_split_method": "cut0",
+    # Explicit short gap only when the sidecar still emits multi-piece audio.
+    "fragment_interval": 0.05,
     "batch_size": 1,
 }
 
