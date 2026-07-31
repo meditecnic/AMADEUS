@@ -31,6 +31,11 @@ class ModelUnavailableError(ValueError):
     """A selected model is known but must not receive a paid request."""
 
 
+def is_user_custom_provider(provider_id: str) -> bool:
+    """Legacy `custom` plus multi-profile ids `custom:<uuid>`."""
+    return provider_id == "custom" or provider_id.startswith("custom:")
+
+
 @dataclass(frozen=True, slots=True)
 class ModelControl:
     kind: str
@@ -283,13 +288,17 @@ class ModelCatalog:
             return "unavailable"
         return model.lifecycle
 
+    def _allows_undiscovered(self, provider_id: str) -> bool:
+        return (
+            is_user_custom_provider(provider_id)
+            or self._allow_undiscovered.get(provider_id, False)
+        )
+
     def _is_callable(self, provider_id: str, lifecycle: str) -> bool:
         """Non-custom unknown/unverified models are never selectable."""
         if lifecycle in _BLOCKED_LIFECYCLES:
             return False
-        if lifecycle == "unverified" and not self._allow_undiscovered.get(
-            provider_id, False
-        ):
+        if lifecycle == "unverified" and not self._allows_undiscovered(provider_id):
             return False
         return True
 
@@ -357,7 +366,7 @@ class ModelCatalog:
             available=(
                 model_id in discovered
                 if discovered is not None
-                else self._allow_undiscovered.get(provider_id, False)
+                else self._allows_undiscovered(provider_id)
             ),
             live_metadata=self._live_metadata(provider_id, model_id),
         )
@@ -426,7 +435,7 @@ class ModelCatalog:
         model = self._models.get((provider_id, model_id))
         if model is None:
             # Built-in providers: unknown/unverified models never receive paid calls.
-            if not self._allow_undiscovered.get(provider_id, False):
+            if not self._allows_undiscovered(provider_id):
                 raise ModelUnavailableError(
                     f"model {provider_id}/{model_id} is unavailable"
                 )

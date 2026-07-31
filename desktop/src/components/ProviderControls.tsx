@@ -50,6 +50,8 @@ export interface ProviderMetadata {
   catalog_version: number;
   catalog_verified_at: string;
   default_model_capability: ModelCatalogEntry;
+  source?: 'builtin' | 'user_config' | string;
+  enabled?: boolean;
 }
 
 interface ProviderControlsProps {
@@ -154,10 +156,16 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
         triggerClassName="provider-select"
         value={activeProviderId}
         disabled={disabled || providers.length === 0}
-        options={providers.map((provider) => ({
-          value: provider.id,
-          label: provider.display_name,
-        }))}
+        options={providers.map((provider) => {
+          const disabledProvider = provider.enabled === false;
+          return {
+            value: provider.id,
+            label: disabledProvider
+              ? `${provider.display_name}（已停用/不可用）`
+              : provider.display_name,
+            disabled: disabledProvider,
+          };
+        })}
         onChange={onProviderChange}
       />
       <SalieriSelect

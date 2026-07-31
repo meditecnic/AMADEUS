@@ -12,14 +12,23 @@ from pathlib import Path
 from typing import Protocol
 
 
-_PROVIDER_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+# Built-in ids (deepseek, custom, …) plus multi-profile `custom:<uuid>`.
+_PROVIDER_ID = re.compile(
+    r"^(?:"
+    r"[a-z0-9][a-z0-9._-]{0,63}"
+    r"|custom:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    r")$",
+    re.IGNORECASE,
+)
 _ENV_KEY = re.compile(r"^[A-Z_][A-Z0-9_]*$")
 
 
 def _target(provider_id: str) -> str:
     if not _PROVIDER_ID.fullmatch(provider_id):
         raise ValueError("invalid provider id")
-    return f"Amadeus/provider/{provider_id}"
+    # Windows Credential Manager target names cannot contain ':'; map to safe form.
+    safe_id = provider_id.replace(":", "/")
+    return f"Amadeus/provider/{safe_id}"
 
 
 def scrub_dotenv_key(path: Path, key: str) -> bool:

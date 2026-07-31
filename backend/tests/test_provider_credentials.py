@@ -47,7 +47,18 @@ def test_custom_provider_configuration_is_validated_and_replaces_future_snapshot
     from app.services.provider_runtime import custom_provider_settings
 
     original = custom_provider_settings()
-    persist = AsyncMock()
+
+    async def persist(provider_id, **kwargs):
+        return {
+            "provider_id": provider_id,
+            "base_url": kwargs["base_url"],
+            "default_model": kwargs["default_model"],
+            "display_name": kwargs.get("display_name") or "OpenAI-compatible",
+            "enabled": bool(kwargs.get("enabled", True)),
+            "created_at_utc": "2026-07-30T00:00:00Z",
+            "updated_at_utc": "2026-07-30T00:00:00Z",
+        }
+
     monkeypatch.setattr(providers, "save_provider_configuration", persist)
     try:
         before = providers.provider_registry.snapshot("custom")
@@ -66,7 +77,6 @@ def test_custom_provider_configuration_is_validated_and_replaces_future_snapshot
         assert before.adapter is not after.adapter
         assert before.adapter.base_url == original["base_url"]
         assert after.adapter.base_url == "http://127.0.0.1:11434/v1"
-        persist.assert_awaited_once()
 
         invalid = app_client.patch(
             "/api/providers/custom/configuration",

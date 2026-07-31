@@ -71,6 +71,469 @@ describe('clampChatTemperature', () => {
   });
 });
 
+function openConnectionsTab() {
+  fireEvent.click(screen.getByRole('button', { name: 'CONNECTIONS' }));
+}
+
+describe('SYSTEM CONFIG information architecture', () => {
+  it('clips the modal shell so only tab-panels is the scrollport host', () => {
+    render(<SettingsModal {...baseProps} onSaveSettings={vi.fn()} />);
+    const shell = screen.getByTestId('settings-modal-shell');
+    const inner = screen.getByTestId('settings-modal-inner');
+    expect(shell.querySelector('.config-ring-clip')).toBeTruthy();
+    expect(shell.querySelector('.config-ring-bg')?.parentElement).toHaveClass('config-ring-clip');
+    expect(inner.querySelector('.tab-panels')).toBeTruthy();
+    // Layout contract: ring is not a sibling that can inflate modal overflow.
+    expect(shell.contains(inner)).toBe(true);
+  });
+
+  it('defaults to BASIC without credentials, search, or custom management', () => {
+    render(
+      <SettingsModal
+        {...baseProps}
+        onSaveSettings={vi.fn()}
+        onCreateCustomProfile={vi.fn()}
+        customProfiles={[
+          {
+            id: 'custom:a',
+            display_name: 'Local A',
+            default_model: 'm',
+            enabled: true,
+          },
+        ]}
+      />,
+    );
+    expect(screen.getByRole('button', { name: 'BASIC' }).className).toContain('active');
+    expect(screen.getByTestId('personality-control')).toBeInTheDocument();
+    expect(screen.getByTestId('identity-settings')).toBeInTheDocument();
+    expect(screen.queryByTestId('credential-input')).toBeNull();
+    expect(screen.queryByTestId('web-search-provider-grid')).toBeNull();
+    expect(screen.queryByTestId('custom-profile-manager')).toBeNull();
+    expect(screen.getByRole('button', { name: '保存基本设置' })).toBeInTheDocument();
+  });
+
+  it('keeps session defaults off CONNECTIONS and connection controls off BASIC', () => {
+    render(
+      <SettingsModal
+        {...baseProps}
+        onSaveSettings={vi.fn()}
+        onCreateCustomProfile={vi.fn()}
+        customProfiles={[]}
+      />,
+    );
+    openConnectionsTab();
+    expect(screen.getByTestId('credential-input')).toBeInTheDocument();
+    expect(screen.getByTestId('web-search-provider-grid')).toBeInTheDocument();
+    expect(screen.getByTestId('custom-profile-manager')).toBeInTheDocument();
+    expect(screen.queryByTestId('personality-control')).toBeNull();
+    expect(screen.queryByTestId('identity-settings')).toBeNull();
+    expect(screen.queryByTestId('self-name-input')).toBeNull();
+    expect(screen.queryByLabelText('当前世界线')).toBeNull();
+    expect(screen.getByRole('button', { name: '保存连接设置' })).toBeInTheDocument();
+  });
+
+  it('exposes four tabs with correct footers and memory close-only', () => {
+    render(<SettingsModal {...baseProps} sessionId="s1" onSaveSettings={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'BASIC' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'CONNECTIONS' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'VOICE' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'MEMORY' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'VOICE' }));
+    expect(screen.getByRole('button', { name: '保存语音设置' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'MEMORY' }));
+    expect(screen.getByRole('button', { name: '关闭' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '保存基本设置' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '保存连接设置' })).toBeNull();
+  });
+
+  it('keeps create form collapsed until expanded, and cancel does not create', async () => {
+    const onCreate = vi.fn();
+    render(
+      <SettingsModal
+        {...baseProps}
+        onSaveSettings={vi.fn()}
+        onCreateCustomProfile={onCreate}
+      />,
+    );
+    openConnectionsTab();
+    expect(screen.getByRole('button', { name: '新建连接' })).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText('显示名称')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '新建连接' }));
+    expect(screen.getByPlaceholderText('显示名称')).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText('显示名称'), { target: { value: 'X' } });
+    fireEvent.click(screen.getByTestId('cancel-create-profile'));
+    expect(screen.queryByPlaceholderText('显示名称')).toBeNull();
+    expect(onCreate).not.toHaveBeenCalled();
+  });
+
+  it('hides clean soft-deletes, keeps pending cleanup folded, and reveals UUID only after details expand', () => {
+    render(
+      <SettingsModal
+        {...baseProps}
+        onSaveSettings={vi.fn()}
+        onDisableCustomProfile={vi.fn()}
+        customProfiles={[
+          {
+            id: 'custom:11111111-1111-1111-1111-111111111111',
+            display_name: 'Active Link',
+            default_model: 'a',
+            base_url: 'http://127.0.0.1:1/v1',
+            enabled: true,
+          },
+          {
+            id: 'custom:22222222-2222-2222-2222-222222222222',
+            display_name: 'Dead Link',
+            default_model: 'b',
+            base_url: 'http://127.0.0.1:2/v1',
+            enabled: false,
+            configured: false,
+          },
+          {
+            id: 'custom:33333333-3333-3333-3333-333333333333',
+            display_name: 'Pending Link',
+            default_model: 'c',
+            base_url: 'http://127.0.0.1:3/v1',
+            enabled: false,
+            configured: true,
+          },
+        ]}
+      />,
+    );
+    openConnectionsTab();
+    expect(screen.getByText('Active Link')).toBeInTheDocument();
+    // Fully cleaned soft-deletes leave the Settings list entirely.
+    expect(screen.queryByText('Dead Link')).toBeNull();
+    expect(screen.queryByText('Pending Link')).toBeNull();
+    expect(screen.getByTestId('disabled-profiles-toggle')).toHaveTextContent('凭据待清理（1）');
+    expect(screen.queryByText('custom:11111111-1111-1111-1111-111111111111')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('disabled-profiles-toggle'));
+    expect(screen.getByText('Pending Link')).toBeInTheDocument();
+    expect(screen.queryByText('Dead Link')).toBeNull();
+
+    fireEvent.click(screen.getAllByRole('button', { name: '详细信息' })[0]);
+    expect(screen.getByText('custom:11111111-1111-1111-1111-111111111111')).toBeInTheDocument();
+  });
+
+  it('deletes a custom connection from the UI when delete succeeds', async () => {
+    const onDisable = vi.fn().mockResolvedValue(undefined);
+    let profiles = [
+      {
+        id: 'custom:to-delete',
+        display_name: 'Remove Me',
+        default_model: 'local',
+        base_url: 'http://127.0.0.1:9/v1',
+        enabled: true,
+        configured: true,
+      },
+    ];
+    const { rerender } = render(
+      <SettingsModal
+        {...baseProps}
+        onSaveSettings={vi.fn()}
+        customProfiles={profiles}
+        onDisableCustomProfile={async (id) => {
+          await onDisable(id);
+          profiles = [];
+        }}
+      />,
+    );
+    openConnectionsTab();
+    expect(screen.getByText('Remove Me')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('profile-delete-custom:to-delete'));
+    await waitFor(() => expect(onDisable).toHaveBeenCalledWith('custom:to-delete'));
+    // Optimistic removal before parent snapshot arrives.
+    expect(screen.queryByText('Remove Me')).toBeNull();
+
+    rerender(
+      <SettingsModal
+        {...baseProps}
+        onSaveSettings={vi.fn()}
+        customProfiles={profiles}
+        onDisableCustomProfile={onDisable}
+      />,
+    );
+    expect(screen.queryByText('Remove Me')).toBeNull();
+    expect(screen.queryByTestId('profile-delete-custom:to-delete')).toBeNull();
+  });
+
+  it('keeps the connection visible when delete fails', async () => {
+    const onDisable = vi.fn().mockRejectedValue(new Error('profile_disable_failed'));
+    render(
+      <SettingsModal
+        {...baseProps}
+        onSaveSettings={vi.fn()}
+        customProfiles={[
+          {
+            id: 'custom:keep-on-fail',
+            display_name: 'Stay Put',
+            default_model: 'local',
+            base_url: 'http://127.0.0.1:8/v1',
+            enabled: true,
+          },
+        ]}
+        onDisableCustomProfile={onDisable}
+      />,
+    );
+    openConnectionsTab();
+    fireEvent.click(screen.getByTestId('profile-delete-custom:keep-on-fail'));
+    await waitFor(() => expect(onDisable).toHaveBeenCalled());
+    expect(screen.getByText('Stay Put')).toBeInTheDocument();
+    expect(screen.getByTestId('profile-delete-custom:keep-on-fail')).toBeInTheDocument();
+  });
+
+  it('keeps CONNECTIONS tab and draft UI when parent props update while open', async () => {
+    const onSelectWebSearchProvider = vi.fn().mockResolvedValue(undefined);
+    const profiles = [
+      {
+        id: 'custom:active-keep',
+        display_name: 'Keep Active',
+        default_model: 'a',
+        base_url: 'http://127.0.0.1:1/v1',
+        enabled: true,
+      },
+      {
+        id: 'custom:disabled-keep',
+        display_name: 'Keep Pending',
+        default_model: 'b',
+        base_url: 'http://127.0.0.1:2/v1',
+        enabled: false,
+        configured: true,
+      },
+    ];
+    const { rerender } = render(
+      <SettingsModal
+        {...baseProps}
+        apiKey=""
+        webSearchActiveProvider="tavily"
+        webSearchProviders={{
+          tavily: { id: 'tavily', label: 'Tavily', configured: true },
+          firecrawl: { id: 'firecrawl', label: 'Firecrawl', configured: true },
+        }}
+        customProfiles={profiles}
+        onCreateCustomProfile={vi.fn()}
+        onSaveSettings={vi.fn()}
+        onSelectWebSearchProvider={onSelectWebSearchProvider}
+      />,
+    );
+
+    openConnectionsTab();
+    expect(screen.getByTestId('settings-panel-connections')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId('credential-input'), {
+      target: { value: 'sk-draft-unsaved' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '新建连接' }));
+    expect(screen.getByPlaceholderText('显示名称')).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText('显示名称'), {
+      target: { value: 'Draft Name' },
+    });
+    fireEvent.click(screen.getByTestId('disabled-profiles-toggle'));
+    expect(screen.getByText('Keep Pending')).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole('button', { name: '详细信息' })[0]);
+    expect(screen.getByText('custom:active-keep')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('web-search-provider-firecrawl'));
+    await waitFor(() => expect(onSelectWebSearchProvider).toHaveBeenCalledWith('firecrawl'));
+
+    // Parent pushes the new active search provider (and other snapshots) while modal stays open.
+    rerender(
+      <SettingsModal
+        {...baseProps}
+        apiKey=""
+        webSearchActiveProvider="firecrawl"
+        webSearchProviders={{
+          tavily: { id: 'tavily', label: 'Tavily', configured: true },
+          firecrawl: { id: 'firecrawl', label: 'Firecrawl', configured: true },
+        }}
+        customProfiles={profiles}
+        onCreateCustomProfile={vi.fn()}
+        onSaveSettings={vi.fn()}
+        onSelectWebSearchProvider={onSelectWebSearchProvider}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'CONNECTIONS' }).className).toContain('active');
+    expect(screen.getByTestId('settings-panel-connections')).toBeInTheDocument();
+    expect(screen.queryByTestId('settings-panel-basic')).toBeNull();
+    expect(screen.getByTestId('credential-input')).toHaveValue('sk-draft-unsaved');
+    expect(screen.getByPlaceholderText('显示名称')).toHaveValue('Draft Name');
+    expect(screen.getByTestId('disabled-profiles-toggle')).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText('Keep Pending')).toBeInTheDocument();
+    expect(screen.getByText('custom:active-keep')).toBeInTheDocument();
+    expect(screen.getByTestId('web-search-provider-firecrawl')).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('resets to BASIC and latest props only on close → open edge', () => {
+    const profiles = [
+      {
+        id: 'custom:edge-pending',
+        display_name: 'Edge Pending',
+        default_model: 'b',
+        base_url: 'http://127.0.0.1:9/v1',
+        enabled: false,
+        configured: true,
+      },
+    ];
+    const { rerender } = render(
+      <SettingsModal
+        {...baseProps}
+        isOpen
+        apiKey=""
+        temperature={0.2}
+        webSearchActiveProvider="tavily"
+        customProfiles={profiles}
+        onCreateCustomProfile={vi.fn()}
+        onSaveSettings={vi.fn()}
+      />,
+    );
+
+    openConnectionsTab();
+    fireEvent.change(screen.getByTestId('credential-input'), {
+      target: { value: 'sk-should-reset' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '新建连接' }));
+    fireEvent.click(screen.getByTestId('disabled-profiles-toggle'));
+    expect(screen.getByText('Edge Pending')).toBeInTheDocument();
+
+    rerender(
+      <SettingsModal
+        {...baseProps}
+        isOpen={false}
+        apiKey=""
+        temperature={0.2}
+        webSearchActiveProvider="tavily"
+        customProfiles={profiles}
+        onCreateCustomProfile={vi.fn()}
+        onSaveSettings={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('settings-panel-connections')).toBeNull();
+
+    rerender(
+      <SettingsModal
+        {...baseProps}
+        isOpen
+        apiKey=""
+        temperature={0.9}
+        webSearchActiveProvider="firecrawl"
+        customProfiles={profiles}
+        onCreateCustomProfile={vi.fn()}
+        onSaveSettings={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('button', { name: 'BASIC' }).className).toContain('active');
+    expect(screen.getByTestId('settings-panel-basic')).toBeInTheDocument();
+    expect(screen.queryByTestId('settings-panel-connections')).toBeNull();
+    expect(screen.getByTestId('personality-value')).toHaveTextContent('0.9');
+
+    openConnectionsTab();
+    expect(screen.getByTestId('credential-input')).toHaveValue('');
+    expect(screen.queryByPlaceholderText('显示名称')).toBeNull();
+    expect(screen.getByRole('button', { name: '新建连接' })).toBeInTheDocument();
+    expect(screen.getByTestId('disabled-profiles-toggle')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText('Edge Pending')).toBeNull();
+    expect(screen.getByTestId('web-search-provider-firecrawl')).toHaveAttribute('aria-checked', 'true');
+  });
+});
+
+describe('custom profile credential cleanup UX', () => {
+  it('shows pending credential cleanup and retries DELETE until configured=false', async () => {
+    const onDisable = vi.fn()
+      .mockRejectedValueOnce(new Error('credential_cleanup_pending'))
+      .mockResolvedValueOnce(undefined);
+    let profiles = [
+      {
+        id: 'custom:pending',
+        display_name: 'Pending Clean',
+        default_model: 'local',
+        base_url: 'http://127.0.0.1:1/v1',
+        enabled: false,
+        configured: true,
+      },
+    ];
+
+    const { rerender } = render(
+      <SettingsModal
+        {...baseProps}
+        onSaveSettings={vi.fn()}
+        customProfiles={profiles}
+        onDisableCustomProfile={async (id) => {
+          await onDisable(id);
+          profiles = profiles.map((row) => (
+            row.id === id ? { ...row, configured: false } : row
+          ));
+        }}
+      />,
+    );
+    const expandDisabled = () => {
+      const fold = screen.getByTestId('disabled-profiles-toggle');
+      if (fold.getAttribute('aria-expanded') !== 'true') {
+        fireEvent.click(fold);
+      }
+    };
+
+    openConnectionsTab();
+    expandDisabled();
+    expect(screen.getByTestId('profile-credential-pending-custom:pending')).toHaveTextContent(
+      '已停用 · 凭据待清理',
+    );
+    const retry = screen.getByTestId('profile-credential-retry-custom:pending');
+    expect(retry).toHaveTextContent('重试清理');
+
+    fireEvent.click(retry);
+    await waitFor(() => expect(onDisable).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/sk-/i)).toBeNull();
+
+    rerender(
+      <SettingsModal
+        {...baseProps}
+        onSaveSettings={vi.fn()}
+        customProfiles={profiles}
+        onDisableCustomProfile={async (id) => {
+          await onDisable(id);
+          profiles = profiles.map((row) => (
+            row.id === id ? { ...row, configured: false } : row
+          ));
+        }}
+      />,
+    );
+    openConnectionsTab();
+    expandDisabled();
+    fireEvent.click(screen.getByTestId('profile-credential-retry-custom:pending'));
+    await waitFor(() => expect(onDisable).toHaveBeenCalledTimes(2));
+
+    rerender(
+      <SettingsModal
+        {...baseProps}
+        onSaveSettings={vi.fn()}
+        customProfiles={[
+          {
+            id: 'custom:pending',
+            display_name: 'Pending Clean',
+            default_model: 'local',
+            base_url: 'http://127.0.0.1:1/v1',
+            enabled: false,
+            configured: false,
+          },
+        ]}
+        onDisableCustomProfile={onDisable}
+      />,
+    );
+    openConnectionsTab();
+    // Fully cleaned soft-delete is removed from Settings UI (not kept as a zombie row).
+    expect(screen.queryByText('Pending Clean')).toBeNull();
+    expect(screen.queryByTestId('disabled-profiles-toggle')).toBeNull();
+    expect(screen.queryByTestId('profile-credential-pending-custom:pending')).toBeNull();
+    expect(screen.queryByTestId('profile-credential-retry-custom:pending')).toBeNull();
+    expect(screen.queryByText(/sk-/i)).toBeNull();
+  });
+});
+
 describe('identity mode helpers (Phase-2 S9)', () => {
   it('defaults to okabe and never treats nicknames as mode signals', () => {
     expect(DEFAULT_IDENTITY_MODE).toBe('okabe');
@@ -195,7 +658,7 @@ describe('SettingsModal self name field (Slice B)', () => {
     const input = screen.getByTestId('self-name-input') as HTMLInputElement;
     expect(input.value).toBe('阿伟');
     fireEvent.change(input, { target: { value: '  新名字  ' } });
-    fireEvent.click(screen.getByText('保存修改'));
+    fireEvent.click(screen.getByText('保存基本设置'));
 
     await waitFor(() => expect(onSaveSettings).toHaveBeenCalled());
     expect(onSaveSettings.mock.calls[0][0].selfName).toBe('新名字');
@@ -206,7 +669,7 @@ describe('SettingsModal self name field (Slice B)', () => {
     render(<SettingsModal {...baseProps} selfName="阿伟" onSaveSettings={onSaveSettings} />);
 
     fireEvent.change(screen.getByTestId('self-name-input'), { target: { value: '' } });
-    fireEvent.click(screen.getByText('保存修改'));
+    fireEvent.click(screen.getByText('保存基本设置'));
 
     await waitFor(() => expect(onSaveSettings).toHaveBeenCalled());
     expect(onSaveSettings.mock.calls[0][0].selfName).toBe('');
@@ -217,7 +680,7 @@ describe('SettingsModal self name field (Slice B)', () => {
     render(<SettingsModal {...baseProps} onSaveSettings={onSaveSettings} />);
 
     fireEvent.change(screen.getByTestId('self-name-input'), { target: { value: '凤凰院凶真' } });
-    fireEvent.click(screen.getByText('保存修改'));
+    fireEvent.click(screen.getByText('保存基本设置'));
 
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent('如需使用冈部身份，请选择 okabe 模式。');
@@ -232,7 +695,7 @@ describe('SettingsModal self name field (Slice B)', () => {
     fireEvent.change(screen.getByTestId('self-name-input'), {
       target: { value: '伟'.repeat(SELF_NAME_MAX_CODEPOINTS + 1) },
     });
-    fireEvent.click(screen.getByText('保存修改'));
+    fireEvent.click(screen.getByText('保存基本设置'));
 
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent(SELF_NAME_TOO_LONG_HINT);
@@ -245,7 +708,7 @@ describe('SettingsModal self name field (Slice B)', () => {
     render(<SettingsModal {...baseProps} onSaveSettings={onSaveSettings} />);
 
     fireEvent.change(screen.getByTestId('self-name-input'), { target: { value: '「阿伟」' } });
-    fireEvent.click(screen.getByText('保存修改'));
+    fireEvent.click(screen.getByText('保存基本设置'));
 
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent(SELF_NAME_INVALID_CHARS_HINT);
@@ -261,7 +724,7 @@ describe('SettingsModal self name field (Slice B)', () => {
     render(<SettingsModal {...baseProps} onSaveSettings={onSaveSettings} />);
 
     fireEvent.change(screen.getByTestId('self-name-input'), { target: { value: '\u00a0阿伟' } });
-    fireEvent.click(screen.getByText('保存修改'));
+    fireEvent.click(screen.getByText('保存基本设置'));
 
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent(SELF_NAME_INVALID_CHARS_HINT);
@@ -295,12 +758,11 @@ describe('SettingsModal UX contracts', () => {
   });
 
   it('shows mild then strong sampling warnings at 0.8 and 0.9', () => {
-    const { rerender } = render(
-      <SettingsModal {...baseProps} temperature={0.8} onSaveSettings={vi.fn()} />,
-    );
+    render(<SettingsModal {...baseProps} temperature={0.8} onSaveSettings={vi.fn()} />);
     expect(screen.getByTestId('temperature-warning')).toHaveTextContent('不够稳定');
 
-    rerender(<SettingsModal {...baseProps} temperature={0.9} onSaveSettings={vi.fn()} />);
+    // Warnings track local draft edits, not parent prop patches while open.
+    fireEvent.change(screen.getByTestId('personality-range'), { target: { value: '0.9' } });
     expect(screen.getByTestId('temperature-warning')).toHaveTextContent('容易跑题');
   });
 
@@ -353,7 +815,7 @@ describe('SettingsModal UX contracts', () => {
       />,
     );
     fireEvent.click(screen.getByTestId('identity-mode-self'));
-    fireEvent.click(screen.getByRole('button', { name: '保存修改' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存基本设置' }));
     await waitFor(() =>
       expect(onSaveSettings).toHaveBeenCalledWith(
         expect.objectContaining({ identityMode: 'self', temperature: 0.0 }),
@@ -367,7 +829,7 @@ describe('SettingsModal UX contracts', () => {
     render(<SettingsModal {...baseProps} temperature={0.5} onSaveSettings={onSaveSettings} />);
 
     fireEvent.change(screen.getByTestId('personality-range'), { target: { value: '1.2' } });
-    fireEvent.click(screen.getByRole('button', { name: '保存修改' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存基本设置' }));
 
     await waitFor(() =>
       expect(onSaveSettings).toHaveBeenCalledWith(expect.objectContaining({ temperature: 1.2 })),
@@ -376,6 +838,7 @@ describe('SettingsModal UX contracts', () => {
 
   it('keeps configured credentials empty and shows a masked placeholder', () => {
     render(<SettingsModal {...baseProps} credentialStatus="configured" onSaveSettings={vi.fn()} />);
+    openConnectionsTab();
 
     const input = screen.getByTestId('credential-input') as HTMLInputElement;
     expect(input.value).toBe('');
@@ -388,8 +851,9 @@ describe('SettingsModal UX contracts', () => {
     let resolveSave!: () => void;
     const onSaveSettings = vi.fn(() => new Promise<void>((resolve) => { resolveSave = resolve; }));
     render(<SettingsModal {...baseProps} onSaveSettings={onSaveSettings} />);
+    openConnectionsTab();
 
-    fireEvent.click(screen.getByRole('button', { name: '保存修改' }));
+    fireEvent.click(screen.getByRole('button', { name: '保存连接设置' }));
     expect(screen.getByTestId('credential-status')).toHaveTextContent('保存中');
     expect(screen.getByRole('button', { name: /保存中/ })).toBeDisabled();
     expect(onSaveSettings).toHaveBeenCalledWith(expect.objectContaining({ apiKey: '' }));
@@ -406,6 +870,7 @@ describe('SettingsModal UX contracts', () => {
         onSaveSettings={vi.fn()}
       />,
     );
+    openConnectionsTab();
 
     expect(screen.getByTestId('credential-status')).toHaveTextContent('保存失败');
     expect(screen.getByTestId('credential-input')).toHaveValue('');
@@ -425,6 +890,7 @@ describe('SettingsModal UX contracts', () => {
         onSaveSettings={vi.fn()}
       />,
     );
+    openConnectionsTab();
 
     expect(screen.getByTestId('web-search-provider-tavily')).toBeTruthy();
     expect(screen.getByTestId('web-search-provider-firecrawl')).toBeTruthy();
@@ -450,6 +916,7 @@ describe('SettingsModal UX contracts', () => {
         onClearWebSearchCredential={onClearWebSearchCredential}
       />,
     );
+    openConnectionsTab();
 
     expect(screen.queryByTestId('web-search-credential-input')).toBeNull();
     expect(screen.getByTestId('web-search-badge')).toHaveTextContent('已连接');
@@ -469,9 +936,10 @@ describe('SettingsModal UX contracts', () => {
         onSaveSettings={onSaveSettings}
       />,
     );
+    openConnectionsTab();
 
     fireEvent.change(screen.getByTestId('web-search-credential-input'), { target: { value: 'fc-secret' } });
-    fireEvent.click(screen.getByRole('button', { name: /保存/ }));
+    fireEvent.click(screen.getByRole('button', { name: '保存连接设置' }));
 
     expect(screen.getByTestId('web-search-credential-status')).toHaveTextContent('正在保存');
     expect(onSaveSettings).toHaveBeenCalledWith(expect.objectContaining({
@@ -498,6 +966,7 @@ describe('SettingsModal UX contracts', () => {
         onSelectWebSearchProvider={onSelectWebSearchProvider}
       />,
     );
+    openConnectionsTab();
 
     fireEvent.click(screen.getByTestId('web-search-provider-firecrawl'));
     await waitFor(() => expect(onSelectWebSearchProvider).toHaveBeenCalledWith('firecrawl'));

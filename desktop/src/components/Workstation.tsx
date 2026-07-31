@@ -557,11 +557,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
     }
     const selectedModel = activeConversation?.model_id || model;
     if (selectedModel && !fallback.some((row) => row.id === selectedModel)) {
+      const userCustom = providerId === 'custom' || providerId.startsWith('custom:');
+      const providerEnabled = provider?.enabled !== false;
       fallback.push({
         id: selectedModel,
         display_name: selectedModel,
-        lifecycle: providerId === 'custom' ? 'unverified' : 'unavailable',
-        callable: providerId === 'custom',
+        lifecycle: userCustom && providerEnabled ? 'unverified' : 'unavailable',
+        // Disabled custom connections must never appear selectable.
+        callable: Boolean(userCustom && providerEnabled),
         source: 'dynamic',
         thinking_control: null,
       });
@@ -1038,12 +1041,16 @@ export const Workstation: React.FC<WorkstationProps> = ({
         newSettings.model !== activeProvider.default_model
       )
     ) {
-      const response = await fetch('/api/providers/custom/configuration', {
+      const endpoint = activeProviderId === 'custom'
+        ? '/api/providers/custom/configuration'
+        : `/api/providers/custom-profiles/${encodeURIComponent(activeProviderId)}`;
+      const response = await fetch(endpoint, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           base_url: newSettings.baseUrl.trim(),
           default_model: newSettings.model.trim(),
+          display_name: activeProvider.display_name,
         }),
       });
       if (!response.ok) {
@@ -1593,6 +1600,46 @@ export const Workstation: React.FC<WorkstationProps> = ({
         model={model}
         modelOptions={availableModels}
         reasoningEffort={reasoningEffort}
+        customProfiles={providers
+          .filter((row) => row.source === 'user_config' || row.id === 'custom' || row.id.startsWith('custom:'))
+          .map((row) => ({
+            id: row.id,
+            display_name: row.display_name,
+            default_model: row.default_model,
+            base_url: row.base_url,
+            enabled: row.enabled !== false,
+            configured: Boolean(row.configured),
+          }))}
+        onCreateCustomProfile={async (input) => {
+          const response = await fetch('/api/providers/custom-profiles', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(input),
+          });
+          if (!response.ok) throw new Error('profile_create_failed');
+          const created = await response.json() as { provider_id: string; default_model?: string };
+          await loadProviders();
+          setDraftProviderId(created.provider_id);
+          if (created.default_model) setModel(created.default_model);
+          try {
+            localStorage.setItem('amadeus_pc_provider', created.provider_id);
+            if (created.default_model) {
+              localStorage.setItem('amadeus_pc_model', created.default_model);
+            }
+          } catch {}
+          reconnect();
+        }}
+        onDisableCustomProfile={async (providerId) => {
+          const response = await fetch(
+            `/api/providers/custom-profiles/${encodeURIComponent(providerId)}`,
+            { method: 'DELETE' },
+          );
+          if (!response.ok) throw new Error('profile_disable_failed');
+          // Keep the current selection so the user sees「已停用/不可用」until
+          // they explicitly pick another provider — never auto-jump to DeepSeek.
+          await loadProviders();
+          void loadProviderModels(providerId, true);
+        }}
         onSaveSettings={handleSaveSettings}
         onClearWebSearchCredential={handleClearWebSearchCredential}
       />

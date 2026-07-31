@@ -324,6 +324,83 @@ describe('Workstation provider runtime changes', () => {
     expect(screen.queryByRole('option', { name: 'deepseek-late' })).toBeNull();
   });
 
+  it('keeps a disabled custom provider selected instead of auto-switching to DeepSeek', async () => {
+    // SettingsModal is mocked null in this suite; assert draft selection + disabled
+    // catalog semantics directly from the provider list payload.
+    const capability = (id: string, callable = true) => ({
+      id,
+      display_name: id,
+      lifecycle: callable ? 'stable' as const : 'unavailable' as const,
+      callable,
+      source: 'dynamic' as const,
+      thinking_control: null,
+    });
+    const providersPayload = [
+      {
+        id: 'deepseek',
+        display_name: 'DeepSeek',
+        default_model: 'deepseek-v4-flash',
+        default_model_capability: capability('deepseek-v4-flash'),
+        catalog_version: 1,
+        configured: true,
+        credential_required: true,
+        model_discovery: true,
+        source: 'builtin',
+        enabled: true,
+      },
+      {
+        id: 'custom:keep-me',
+        display_name: 'Keep Me',
+        default_model: 'local-keep',
+        default_model_capability: capability('local-keep', false),
+        catalog_version: 1,
+        configured: false,
+        credential_required: false,
+        model_discovery: false,
+        base_url_configurable: true,
+        base_url: 'http://127.0.0.1:9/v1',
+        source: 'user_config',
+        enabled: false,
+      },
+    ];
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/providers') {
+        return { ok: true, status: 200, json: async () => providersPayload } as Response;
+      }
+      if (url.startsWith('/api/conversations?')) {
+        return { ok: true, status: 200, json: async () => [] } as Response;
+      }
+      if (url === '/api/search/settings') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ provider: 'tavily', configured: false, fallback: 'duckduckgo' }),
+        } as Response;
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+
+    localStorage.setItem('amadeus_pc_provider', 'custom:keep-me');
+    localStorage.setItem('amadeus_pc_model', 'local-keep');
+    render(
+      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: '模型供应商' })).toHaveTextContent(
+        'Keep Me（已停用/不可用）',
+      );
+    });
+    // Must not auto-switch draft provider to DeepSeek.
+    expect(localStorage.getItem('amadeus_pc_provider')).toBe('custom:keep-me');
+    fireEvent.click(screen.getByRole('button', { name: '模型' }));
+    expect(screen.getByRole('option', { name: 'local-keep（不可用）' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+  });
+
   it('keeps the initial workstation in draft mode without activating the selected history row', async () => {
     render(
       <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,

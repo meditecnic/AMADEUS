@@ -1,8 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 import { MemoryLedger } from './MemoryLedger';
 import {
-  modelLifecycleSuffix,
   type ModelCatalogEntry,
 } from './ProviderControls';
 import { SalieriSelect } from './SalieriSelect';
@@ -193,6 +192,21 @@ export interface SettingsModalProps {
   model: string;
   modelOptions: ModelCatalogEntry[];
   reasoningEffort: string | null;
+  /** Enabled OpenAI-compatible connections for multi-profile management. */
+  customProfiles?: Array<{
+    id: string;
+    display_name: string;
+    default_model: string;
+    base_url?: string | null;
+    enabled?: boolean;
+    configured?: boolean;
+  }>;
+  onCreateCustomProfile?: (input: {
+    display_name: string;
+    base_url: string;
+    default_model: string;
+  }) => void | Promise<void>;
+  onDisableCustomProfile?: (providerId: string) => void | Promise<void>;
   onSaveSettings: (settings: {
     worldline: 'steins_gate' | 'beta';
     apiKey: string;
@@ -229,7 +243,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   webSearchStatus,
   webSearchActiveProvider = 'tavily',
   webSearchProviders,
-  webSearchFallbackNote = '请至少配置一个搜索提供商并设为当前使用。',
+  webSearchFallbackNote: _webSearchFallbackNote = '请至少配置一个搜索提供商并设为当前使用。',
   systemPrompt,
   enableTts,
   sovitsUrl,
@@ -246,13 +260,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   providerBaseUrl,
   baseUrlConfigurable,
   model,
-  modelOptions,
+  modelOptions: _modelOptions,
   reasoningEffort,
+  customProfiles = [],
+  onCreateCustomProfile,
+  onDisableCustomProfile,
   onSaveSettings,
   onSelectWebSearchProvider,
   onClearWebSearchCredential,
 }) => {
-  const [activeTab, setActiveTab] = useState<'basic' | 'voice' | 'memory'>('basic');
+  type SettingsTab = 'basic' | 'connections' | 'voice' | 'memory';
+  const [activeTab, setActiveTab] = useState<SettingsTab>('basic');
   const [localWorldline, setLocalWorldline] = useState<'steins_gate' | 'beta'>(worldline);
   const [localApiKey, setLocalApiKey] = useState(apiKey);
   const [localWebSearchApiKey, setLocalWebSearchApiKey] = useState(webSearchApiKey);
@@ -267,6 +285,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   );
   const [localSelfName, setLocalSelfName] = useState(selfName);
   const [selfNameError, setSelfNameError] = useState<string | null>(null);
+  const [newProfileName, setNewProfileName] = useState('');
+  const [newProfileBaseUrl, setNewProfileBaseUrl] = useState('http://127.0.0.1:1234/v1');
+  const [newProfileModel, setNewProfileModel] = useState('local-model');
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [showCreateProfileForm, setShowCreateProfileForm] = useState(false);
+  const [showDisabledProfiles, setShowDisabledProfiles] = useState(false);
+  const [expandedProfileDetails, setExpandedProfileDetails] = useState<Record<string, boolean>>({});
+  /** Optimistic hide after successful delete until parent snapshot catches up. */
+  const [removedProfileIds, setRemovedProfileIds] = useState<Record<string, true>>({});
+  // Retained for Workstation prop contract; model pick lives on the bottom bar.
+  void _modelOptions;
   const [localBaseUrl, setLocalBaseUrl] = useState(providerBaseUrl || '');
   const [localModel, setLocalModel] = useState(model);
   const [localReasoningEffort, setLocalReasoningEffort] = useState(
@@ -276,6 +305,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isClearingWebSearch, setIsClearingWebSearch] = useState(false);
   const [isSwitchingSearchProvider, setIsSwitchingSearchProvider] = useState(false);
+  /** True only while the modal has already completed an open-edge init. */
+  const wasOpenRef = useRef(false);
   // In-flight save/clear always wins over the parent snapshot status.
   const displayCredentialStatus: CredentialStatus = isSaving
     ? 'saving'
@@ -303,27 +334,53 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       ? '面向 AI 检索；免费额度见官方控制台。'
       : 'Search + 页面内容；免费额度见官方控制台。',
   });
+  const activeSearchLabel =
+    searchProviderCards.find((c) => c.id === localWebSearchProvider)?.label ?? localWebSearchProvider;
+  // Clean soft-deletes leave the UI; only active rows and credential-pending rows remain.
+  const enabledCustomProfiles = customProfiles.filter(
+    (p) => p.enabled !== false && !removedProfileIds[p.id],
+  );
+  const pendingCleanupProfiles = customProfiles.filter(
+    (p) => p.enabled === false && p.configured === true,
+  );
+  const enabledCustomCount = enabledCustomProfiles.length;
+  const pendingCleanupCount = pendingCleanupProfiles.length;
 
+  // Initialize local draft state only on the closed→open edge. Parent prop
+  // updates while open must not reset tab, unsaved fields, or fold UI.
   useEffect(() => {
-    if (isOpen) {
-      setActiveTab('basic');
-      setLocalWorldline(worldline);
-      setLocalApiKey(apiKey);
-      setLocalWebSearchApiKey(webSearchApiKey);
-      setLocalWebSearchProvider(webSearchActiveProvider);
-      setReplacingWebSearchKey(false);
-      setSaveError(null);
-      setLocalSystemPrompt(systemPrompt);
-      setLocalEnableTts(enableTts);
-      setLocalSovitsUrl(sovitsUrl);
-      setLocalTemperature(clampChatTemperature(temperature));
-      setLocalIdentityMode(normalizeIdentityMode(identityMode));
-      setLocalSelfName(selfName);
-      setSelfNameError(null);
-      setLocalBaseUrl(providerBaseUrl || '');
-      setLocalModel(model);
-      setLocalReasoningEffort(reasoningEffort);
+    if (!isOpen) {
+      wasOpenRef.current = false;
+      return;
     }
+    if (wasOpenRef.current) {
+      return;
+    }
+    wasOpenRef.current = true;
+    setActiveTab('basic');
+    setLocalWorldline(worldline);
+    setLocalApiKey(apiKey);
+    setLocalWebSearchApiKey(webSearchApiKey);
+    setLocalWebSearchProvider(webSearchActiveProvider);
+    setReplacingWebSearchKey(false);
+    setSaveError(null);
+    setLocalSystemPrompt(systemPrompt);
+    setLocalEnableTts(enableTts);
+    setLocalSovitsUrl(sovitsUrl);
+    setLocalTemperature(clampChatTemperature(temperature));
+    setLocalIdentityMode(normalizeIdentityMode(identityMode));
+    setLocalSelfName(selfName);
+    setSelfNameError(null);
+    setLocalBaseUrl(providerBaseUrl || '');
+    setLocalModel(model);
+    setLocalReasoningEffort(reasoningEffort);
+    setShowCreateProfileForm(false);
+    setShowDisabledProfiles(false);
+    setExpandedProfileDetails({});
+    setRemovedProfileIds({});
+    setNewProfileName('');
+    setNewProfileBaseUrl('http://127.0.0.1:1234/v1');
+    setNewProfileModel('local-model');
   }, [isOpen, worldline, apiKey, webSearchApiKey, webSearchActiveProvider, systemPrompt, enableTts, sovitsUrl, temperature, identityMode, selfName, providerBaseUrl, model, reasoningEffort]);
 
   if (!isOpen) return null;
@@ -403,13 +460,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   return (
     <div className="salieri-modal-overlay">
-      <div className="salieri-settings-modal">
-        {/* Config ring background */}
-        <div className="config-ring-bg">
-          <img src="/assets/ui/ring_config.png" alt="" />
+      <div className="salieri-settings-modal" data-testid="settings-modal-shell">
+        {/* Rotating ring is clipped to modal bounds so it cannot expand a scrollport. */}
+        <div className="config-ring-clip" aria-hidden="true">
+          <div className="config-ring-bg">
+            <img src="/assets/ui/ring_config.png" alt="" />
+          </div>
         </div>
-        {/* Inner content */}
-        <div className="modal-inner-content">
+        <div className="modal-inner-content" data-testid="settings-modal-inner">
           <div className="modal-header">
             <h2>SYSTEM CONFIG</h2>
             <button className="close-btn" onClick={onClose}>×</button>
@@ -417,6 +475,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <nav className="tab-pills-row">
             <button aria-label="BASIC" className={`tab-pill ${activeTab === 'basic' ? 'active' : ''}`} onClick={() => setActiveTab('basic')}>
               BASIC
+            </button>
+            <button aria-label="CONNECTIONS" className={`tab-pill ${activeTab === 'connections' ? 'active' : ''}`} onClick={() => setActiveTab('connections')}>
+              CONNECTIONS
             </button>
             <button aria-label="VOICE" className={`tab-pill ${activeTab === 'voice' ? 'active' : ''}`} onClick={() => setActiveTab('voice')}>
               VOICE
@@ -426,159 +487,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </button>
           </nav>
           <main className="tab-panels">
-            {/* BASIC tab */}
-            <section className={`tab-panel ${activeTab === 'basic' ? 'active' : ''}`}>
-              <div className="setting-field credential-card">
-                <div className="credential-card-header">
-                  <label>{providerDisplayName.toUpperCase()} API 密钥</label>
-                  <span
-                    className={`credential-badge ${displayCredentialStatus.replace('_', '-')}`}
-                    data-testid="credential-badge"
-                  >
-                    {displayCredentialStatus === 'configured' && '已连接'}
-                    {displayCredentialStatus === 'not_configured' && '未配置'}
-                    {displayCredentialStatus === 'checking' && '检查中'}
-                    {displayCredentialStatus === 'saving' && '保存中'}
-                    {displayCredentialStatus === 'error' && '失败'}
-                  </span>
-                </div>
-                <p className="setting-field-hint">
-                  密钥只写不读：已连接时输入框为空表示「不改动」；仅在粘贴新密钥后点「保存修改」才会覆盖。
-                </p>
-                <input
-                  type="password"
-                  value={localApiKey}
-                  onChange={(e) => setLocalApiKey(e.target.value)}
-                  className="salieri-input"
-                  data-testid="credential-input"
-                  placeholder={displayCredentialStatus === 'configured' ? '已连接 · 粘贴新密钥以更换' : '粘贴 API 密钥（仅本机存储）'}
-                  autoComplete="new-password"
-                />
-                <p
-                  className={`credential-status ${displayCredentialStatus.replace('_', '-')}`}
-                  data-testid="credential-status"
-                  aria-live="polite"
-                >
-                  {displayCredentialStatus === 'checking' && '正在读取凭据状态…'}
-                  {displayCredentialStatus === 'configured' && '已连接 · 不会在界面回显密钥'}
-                  {displayCredentialStatus === 'not_configured' && '尚未配置 · 保存后不会在页面回显密钥'}
-                  {displayCredentialStatus === 'saving' && '保存中…'}
-                  {displayCredentialStatus === 'error' && '保存失败 · 请检查连接后重试'}
-                </p>
-              </div>
-              <div className="setting-field field-full web-search-setting credential-card">
-                <div className="credential-card-header">
-                  <label>联网搜索</label>
-                  <span
-                    className={`credential-badge ${displayWebSearchStatus.replace('_', '-')}`}
-                    data-testid="web-search-badge"
-                  >
-                    {displayWebSearchStatus === 'configured' && '已连接'}
-                    {displayWebSearchStatus === 'not_configured' && '未配置'}
-                    {displayWebSearchStatus === 'checking' && '检查中'}
-                    {displayWebSearchStatus === 'saving' && '保存中'}
-                    {displayWebSearchStatus === 'error' && '失败'}
-                  </span>
-                </div>
-                <p className="setting-field-hint" data-testid="web-search-hint">
-                  选择主力提供商并各自保存密钥；可随时切换。{webSearchFallbackNote}
-                </p>
-                <div className="search-provider-grid" data-testid="web-search-provider-grid" role="radiogroup" aria-label="搜索提供商">
-                  {searchProviderCards.map((card) => {
-                    const selected = localWebSearchProvider === card.id;
-                    return (
-                      <button
-                        key={card.id}
-                        type="button"
-                        role="radio"
-                        aria-checked={selected}
-                        className={`search-provider-card ${selected ? 'active' : ''} ${card.configured ? 'configured' : ''}`}
-                        data-testid={`web-search-provider-${card.id}`}
-                        onClick={() => { void handleSelectSearchProvider(card.id); }}
-                        disabled={isSaving || isClearingWebSearch || isSwitchingSearchProvider}
-                      >
-                        <span className="search-provider-name">{card.label}</span>
-                        <span className="search-provider-state">
-                          {card.configured ? '密钥已存' : '未存密钥'}
-                          {selected ? ' · 当前使用' : ''}
-                        </span>
-                        {card.docs_url && (
-                          <a
-                            className="search-provider-docs"
-                            href={card.docs_url}
-                            target="_blank"
-                            rel="noreferrer"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            获取密钥
-                          </a>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-                {activeSearchConfigured && !replacingWebSearchKey ? (
-                  <div className="credential-actions">
-                    <p className={`credential-status configured`} data-testid="web-search-credential-status" aria-live="polite">
-                      {searchProviderCards.find((c) => c.id === localWebSearchProvider)?.label ?? localWebSearchProvider}
-                      {' '}已连接 · 密钥不回显
-                    </p>
-                    <button
-                      type="button"
-                      className="salieri-btn cancel-btn"
-                      data-testid="replace-web-search-credential"
-                      onClick={() => setReplacingWebSearchKey(true)}
-                      disabled={isSaving || isClearingWebSearch}
-                    >
-                      更换密钥
-                    </button>
-                    {onClearWebSearchCredential && (
-                      <button
-                        type="button"
-                        className="salieri-btn cancel-btn"
-                        data-testid="clear-web-search-credential"
-                        onClick={() => { void handleClearWebSearchCredential(); }}
-                        disabled={isSaving || isClearingWebSearch}
-                      >
-                        清除此提供商密钥
-                      </button>
-                    )}
-                  </div>
-                ) : (
-                  <>
-                    <input
-                      type="password"
-                      value={localWebSearchApiKey}
-                      onChange={(e) => setLocalWebSearchApiKey(e.target.value)}
-                      className="salieri-input"
-                      data-testid="web-search-credential-input"
-                      placeholder={`粘贴 ${searchProviderCards.find((c) => c.id === localWebSearchProvider)?.label ?? ''} API 密钥`}
-                      autoComplete="new-password"
-                    />
-                    <p className={`credential-status ${displayWebSearchStatus.replace('_', '-')}`} data-testid="web-search-credential-status" aria-live="polite">
-                      {displayWebSearchStatus === 'checking' && '正在检查搜索凭据…'}
-                      {displayWebSearchStatus === 'configured' && replacingWebSearchKey && '粘贴新密钥后点「保存修改」以覆盖'}
-                      {displayWebSearchStatus === 'not_configured' && '尚未配置此提供商 · 保存后不会回显密钥'}
-                      {displayWebSearchStatus === 'saving' && '正在保存…'}
-                      {displayWebSearchStatus === 'error' && '保存失败 · 请检查连接后重试'}
-                    </p>
-                    {replacingWebSearchKey && (
-                      <button
-                        type="button"
-                        className="salieri-btn cancel-btn"
-                        data-testid="cancel-replace-web-search-credential"
-                        onClick={() => {
-                          setReplacingWebSearchKey(false);
-                          setLocalWebSearchApiKey('');
-                        }}
-                        disabled={isSaving}
-                      >
-                        取消更换
-                      </button>
-                    )}
-                  </>
-                )}
-              </div>
+            {/* BASIC tab — session defaults only */}
+            {activeTab === 'basic' && (
+            <section className="tab-panel active" data-testid="settings-panel-basic">
               <div className="setting-field personality-field">
                 <label>回复随机性</label>
                 <p className="setting-field-hint" data-testid="temperature-hint">
@@ -636,44 +547,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </p>
                 )}
               </div>
-              {baseUrlConfigurable && (
-              <div className="setting-field">
-                <label>模型</label>
-                {baseUrlConfigurable ? (
-                  <input type="text" value={localModel} onChange={(e) => setLocalModel(e.target.value)} className="salieri-input" placeholder="local-model" />
-                ) : (
-                  <SalieriSelect
-                    aria-label="模型"
-                    className="settings-salieri-select"
-                    triggerClassName="salieri-select-trigger settings-select-trigger"
-                    value={localModel}
-                    onChange={setLocalModel}
-                    options={(
-                      modelOptions.some((row) => row.id === localModel)
-                        ? modelOptions
-                        : [{
-                            id: localModel,
-                            display_name: localModel,
-                            lifecycle: 'unverified' as const,
-                            callable: false,
-                            source: 'dynamic' as const,
-                            thinking_control: null,
-                          }, ...modelOptions]
-                    ).map((row) => ({
-                      value: row.id,
-                      label: `${row.display_name}${modelLifecycleSuffix(row.lifecycle)}`,
-                      disabled: !row.callable,
-                    }))}
-                  />
-                )}
-              </div>
-              )}
-              {baseUrlConfigurable && (
-                <div className="setting-field field-full">
-                  <label>OpenAI-compatible Base URL</label>
-                  <input type="url" value={localBaseUrl} onChange={(e) => setLocalBaseUrl(e.target.value)} className="salieri-input" placeholder="http://127.0.0.1:1234/v1" />
-                </div>
-              )}
               <div className="setting-field">
                 <label>当前世界线</label>
                 <SalieriSelect
@@ -738,8 +611,442 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 )}
               </div>
             </section>
+            )}
+
+            {/* CONNECTIONS tab — credentials, custom profiles, web search */}
+            {activeTab === 'connections' && (
+            <section
+              className="tab-panel tab-panel-connections active"
+              data-testid="settings-panel-connections"
+            >
+              <div className="connections-summary" data-testid="connections-summary">
+                <span className="connections-status-chip">
+                  {providerDisplayName} · {displayCredentialStatus === 'configured' ? '密钥已配置' : '密钥未配置'}
+                </span>
+                <span className="connections-status-chip">
+                  搜索 · {activeSearchLabel}
+                  {' '}({displayWebSearchStatus === 'configured' ? '已连接' : '未配置'})
+                </span>
+                <span className="connections-status-chip">
+                  自定义 · {enabledCustomCount} 启用
+                  {pendingCleanupCount > 0 ? ` / ${pendingCleanupCount} 待清理` : ''}
+                </span>
+              </div>
+
+              <div className="connections-section credential-card" data-testid="connections-provider-credentials">
+                <div className="connections-section-title">模型供应商凭据</div>
+                <div className="credential-card-header">
+                  <label>{providerDisplayName.toUpperCase()} API 密钥</label>
+                  <span
+                    className={`credential-badge ${displayCredentialStatus.replace('_', '-')}`}
+                    data-testid="credential-badge"
+                  >
+                    {displayCredentialStatus === 'configured' && '已连接'}
+                    {displayCredentialStatus === 'not_configured' && '未配置'}
+                    {displayCredentialStatus === 'checking' && '检查中'}
+                    {displayCredentialStatus === 'saving' && '保存中'}
+                    {displayCredentialStatus === 'error' && '失败'}
+                  </span>
+                </div>
+                <p className="setting-field-hint">
+                  密钥只写不读：空表示不改动；粘贴新密钥后点「保存连接设置」。
+                </p>
+                <input
+                  type="password"
+                  value={localApiKey}
+                  onChange={(e) => setLocalApiKey(e.target.value)}
+                  className="salieri-input connections-secret-input"
+                  data-testid="credential-input"
+                  placeholder={displayCredentialStatus === 'configured' ? '已连接 · 粘贴新密钥以更换' : '粘贴 API 密钥（仅本机存储）'}
+                  autoComplete="new-password"
+                  spellCheck={false}
+                />
+                <p
+                  className={`credential-status ${displayCredentialStatus.replace('_', '-')}`}
+                  data-testid="credential-status"
+                  aria-live="polite"
+                >
+                  {displayCredentialStatus === 'checking' && '正在读取凭据状态…'}
+                  {displayCredentialStatus === 'configured' && '已连接 · 不会在界面回显密钥'}
+                  {displayCredentialStatus === 'not_configured' && '尚未配置 · 保存后不会在页面回显密钥'}
+                  {displayCredentialStatus === 'saving' && '保存中…'}
+                  {displayCredentialStatus === 'error' && '保存失败 · 请检查连接后重试'}
+                </p>
+                {baseUrlConfigurable && (
+                  <div className="connections-base-url-fields">
+                    <div className="setting-field">
+                      <label>Base URL</label>
+                      <input type="url" value={localBaseUrl} onChange={(e) => setLocalBaseUrl(e.target.value)} className="salieri-input connections-wide-input" placeholder="http://127.0.0.1:1234/v1" />
+                    </div>
+                    <div className="setting-field">
+                      <label>默认模型</label>
+                      <input type="text" value={localModel} onChange={(e) => setLocalModel(e.target.value)} className="salieri-input connections-wide-input" placeholder="local-model" />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {(onCreateCustomProfile || enabledCustomProfiles.length > 0 || pendingCleanupProfiles.length > 0) && (() => {
+                const renderProfileRow = (profile: (typeof customProfiles)[number]) => {
+                  const disabled = profile.enabled === false;
+                  const credentialPending = disabled && profile.configured === true;
+                  const detailsOpen = Boolean(expandedProfileDetails[profile.id]);
+                  return (
+                    <li key={profile.id} className={`custom-profile-row ${disabled ? 'is-disabled' : ''}`}>
+                      <div className="custom-profile-row-main">
+                        <div className="custom-profile-row-head">
+                          <strong>{profile.display_name}</strong>
+                          {!disabled && (
+                            <span className="custom-profile-pill">启用中</span>
+                          )}
+                          {credentialPending && (
+                            <span className="custom-profile-pill is-warn">凭据待清理</span>
+                          )}
+                        </div>
+                        <div className="custom-profile-meta">
+                          <span className="custom-profile-meta-item" title={profile.base_url || undefined}>
+                            {profile.base_url || '—'}
+                          </span>
+                          <span className="custom-profile-meta-sep">·</span>
+                          <span className="custom-profile-meta-item" title={profile.default_model}>
+                            模型 {profile.default_model}
+                          </span>
+                        </div>
+                        {credentialPending && (
+                          <small
+                            className="custom-profile-credential-warn"
+                            data-testid={`profile-credential-pending-${profile.id}`}
+                          >
+                            已停用 · 凭据待清理
+                          </small>
+                        )}
+                        <div className="custom-profile-row-foot">
+                          <button
+                            type="button"
+                            className="profile-details-toggle"
+                            onClick={() => setExpandedProfileDetails((prev) => ({
+                              ...prev,
+                              [profile.id]: !prev[profile.id],
+                            }))}
+                          >
+                            {detailsOpen ? '收起详情' : '详细信息'}
+                          </button>
+                          {detailsOpen && (
+                            <small className="profile-uuid" data-testid={`profile-id-${profile.id}`}>
+                              {profile.id}
+                            </small>
+                          )}
+                        </div>
+                      </div>
+                      <div className="custom-profile-row-actions">
+                        {onDisableCustomProfile && !disabled && (
+                          <button
+                            type="button"
+                            className="profile-action-delete"
+                            data-testid={`profile-delete-${profile.id}`}
+                            disabled={profileBusy}
+                            aria-label={`删除连接 ${profile.display_name}`}
+                            onClick={async () => {
+                              setProfileBusy(true);
+                              setSaveError(null);
+                              try {
+                                await onDisableCustomProfile(profile.id);
+                                // Drop from the list immediately; clean soft-deletes stay hidden.
+                                setRemovedProfileIds((prev) => ({ ...prev, [profile.id]: true }));
+                                setExpandedProfileDetails((prev) => {
+                                  if (!prev[profile.id]) return prev;
+                                  const next = { ...prev };
+                                  delete next[profile.id];
+                                  return next;
+                                });
+                              } catch (error) {
+                                setSaveError(
+                                  error instanceof Error ? error.message : 'profile_disable_failed',
+                                );
+                              } finally {
+                                setProfileBusy(false);
+                              }
+                            }}
+                          >
+                            删除
+                          </button>
+                        )}
+                        {credentialPending && onDisableCustomProfile && (
+                          <button
+                            type="button"
+                            className="profile-action-retry"
+                            data-testid={`profile-credential-retry-${profile.id}`}
+                            disabled={profileBusy}
+                            onClick={async () => {
+                              setProfileBusy(true);
+                              setSaveError(null);
+                              try {
+                                await onDisableCustomProfile(profile.id);
+                              } catch (error) {
+                                setSaveError(
+                                  error instanceof Error
+                                    ? error.message
+                                    : 'profile_credential_retry_failed',
+                                );
+                              } finally {
+                                setProfileBusy(false);
+                              }
+                            }}
+                          >
+                            重试清理
+                          </button>
+                        )}
+                      </div>
+                    </li>
+                  );
+                };
+                return (
+                  <div className="connections-section" data-testid="custom-profile-manager">
+                    <div className="connections-section-title">OpenAI-compatible 连接</div>
+                    {enabledCustomProfiles.length > 0 && (
+                      <ul className="custom-profile-list">
+                        {enabledCustomProfiles.map(renderProfileRow)}
+                      </ul>
+                    )}
+                    {enabledCustomProfiles.length === 0 && pendingCleanupProfiles.length === 0 && (
+                      <p className="setting-hint connections-inline-hint">暂无自定义连接</p>
+                    )}
+                    {pendingCleanupProfiles.length > 0 && (
+                      <div className="disabled-profiles-fold">
+                        <button
+                          type="button"
+                          className="disabled-profiles-toggle"
+                          data-testid="disabled-profiles-toggle"
+                          aria-expanded={showDisabledProfiles}
+                          onClick={() => setShowDisabledProfiles((v) => !v)}
+                        >
+                          凭据待清理（{pendingCleanupProfiles.length}）
+                        </button>
+                        {showDisabledProfiles && (
+                          <ul className="custom-profile-list custom-profile-list-disabled">
+                            {pendingCleanupProfiles.map(renderProfileRow)}
+                          </ul>
+                        )}
+                      </div>
+                    )}
+                    {onCreateCustomProfile && (
+                      <div className="custom-profile-create-wrap">
+                        {!showCreateProfileForm ? (
+                          <button
+                            type="button"
+                            className="salieri-btn primary custom-profile-create-open"
+                            onClick={() => setShowCreateProfileForm(true)}
+                          >
+                            新建连接
+                          </button>
+                        ) : (
+                          <div className="custom-profile-create">
+                            <div className="setting-field">
+                              <label>显示名称</label>
+                              <input
+                                type="text"
+                                className="salieri-input connections-wide-input"
+                                placeholder="显示名称"
+                                value={newProfileName}
+                                onChange={(e) => setNewProfileName(e.target.value)}
+                              />
+                            </div>
+                            <div className="setting-field">
+                              <label>Base URL</label>
+                              <input
+                                type="url"
+                                className="salieri-input connections-wide-input"
+                                placeholder="http://127.0.0.1:1234/v1"
+                                value={newProfileBaseUrl}
+                                onChange={(e) => setNewProfileBaseUrl(e.target.value)}
+                              />
+                            </div>
+                            <div className="setting-field">
+                              <label>默认模型</label>
+                              <input
+                                type="text"
+                                className="salieri-input connections-wide-input"
+                                placeholder="local-model"
+                                value={newProfileModel}
+                                onChange={(e) => setNewProfileModel(e.target.value)}
+                              />
+                            </div>
+                            <div className="custom-profile-create-actions">
+                              <button
+                                type="button"
+                                className="salieri-btn cancel-btn"
+                                data-testid="cancel-create-profile"
+                                disabled={profileBusy}
+                                onClick={() => {
+                                  setShowCreateProfileForm(false);
+                                  setNewProfileName('');
+                                  setNewProfileBaseUrl('http://127.0.0.1:1234/v1');
+                                  setNewProfileModel('local-model');
+                                }}
+                              >
+                                取消
+                              </button>
+                              <button
+                                type="button"
+                                className="salieri-btn primary"
+                                disabled={profileBusy || !newProfileName.trim() || !newProfileBaseUrl.trim() || !newProfileModel.trim()}
+                                onClick={async () => {
+                                  setProfileBusy(true);
+                                  setSaveError(null);
+                                  try {
+                                    await onCreateCustomProfile({
+                                      display_name: newProfileName.trim(),
+                                      base_url: newProfileBaseUrl.trim(),
+                                      default_model: newProfileModel.trim(),
+                                    });
+                                    setNewProfileName('');
+                                    setShowCreateProfileForm(false);
+                                  } catch (error) {
+                                    setSaveError(
+                                      error instanceof Error ? error.message : 'profile_create_failed',
+                                    );
+                                  } finally {
+                                    setProfileBusy(false);
+                                  }
+                                }}
+                              >
+                                创建
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              <div className="connections-section web-search-setting" data-testid="connections-web-search">
+                <div className="connections-section-title">联网搜索</div>
+                <p className="connections-web-search-status" data-testid="web-search-hint">
+                  当前：{activeSearchLabel} · {
+                    displayWebSearchStatus === 'configured' ? '已连接'
+                      : displayWebSearchStatus === 'checking' ? '检查中'
+                        : displayWebSearchStatus === 'saving' ? '处理中'
+                          : displayWebSearchStatus === 'error' ? '失败'
+                            : '未配置'
+                  }
+                  <span
+                    className={`credential-badge ${displayWebSearchStatus.replace('_', '-')}`}
+                    data-testid="web-search-badge"
+                  >
+                    {displayWebSearchStatus === 'configured' && '已连接'}
+                    {displayWebSearchStatus === 'not_configured' && '未配置'}
+                    {displayWebSearchStatus === 'checking' && '检查中'}
+                    {displayWebSearchStatus === 'saving' && '保存中'}
+                    {displayWebSearchStatus === 'error' && '失败'}
+                  </span>
+                  <span className="connections-web-search-ops-note">
+                    切换即时生效；密钥用「保存连接设置」写入。
+                  </span>
+                </p>
+                <div className="search-provider-grid" data-testid="web-search-provider-grid" role="radiogroup" aria-label="搜索提供商">
+                  {searchProviderCards.map((card) => {
+                    const selected = localWebSearchProvider === card.id;
+                    return (
+                      <button
+                        key={card.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        className={`search-provider-card ${selected ? 'active' : ''} ${card.configured ? 'configured' : ''}`}
+                        data-testid={`web-search-provider-${card.id}`}
+                        onClick={() => { void handleSelectSearchProvider(card.id); }}
+                        disabled={isSaving || isClearingWebSearch || isSwitchingSearchProvider}
+                      >
+                        <span className="search-provider-name">{card.label}</span>
+                        <span className="search-provider-state">
+                          {card.configured ? '密钥已存' : '未存密钥'}
+                          {selected ? ' · 当前使用' : ''}
+                        </span>
+                        {card.docs_url && (
+                          <a
+                            className="search-provider-docs"
+                            href={card.docs_url}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            获取密钥
+                          </a>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                {activeSearchConfigured && !replacingWebSearchKey ? (
+                  <div className="credential-actions">
+                    <p className={`credential-status configured`} data-testid="web-search-credential-status" aria-live="polite">
+                      {activeSearchLabel} 已连接 · 密钥不回显
+                    </p>
+                    <button
+                      type="button"
+                      className="salieri-btn cancel-btn"
+                      data-testid="replace-web-search-credential"
+                      onClick={() => setReplacingWebSearchKey(true)}
+                      disabled={isSaving || isClearingWebSearch}
+                    >
+                      更换密钥
+                    </button>
+                    {onClearWebSearchCredential && (
+                      <button
+                        type="button"
+                        className="salieri-btn cancel-btn"
+                        data-testid="clear-web-search-credential"
+                        onClick={() => { void handleClearWebSearchCredential(); }}
+                        disabled={isSaving || isClearingWebSearch}
+                      >
+                        清除此提供商密钥
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    <input
+                      type="password"
+                      value={localWebSearchApiKey}
+                      onChange={(e) => setLocalWebSearchApiKey(e.target.value)}
+                      className="salieri-input connections-secret-input"
+                      data-testid="web-search-credential-input"
+                      placeholder={`粘贴 ${activeSearchLabel} API 密钥`}
+                      autoComplete="new-password"
+                      spellCheck={false}
+                    />
+                    <p className={`credential-status ${displayWebSearchStatus.replace('_', '-')}`} data-testid="web-search-credential-status" aria-live="polite">
+                      {displayWebSearchStatus === 'checking' && '正在检查搜索凭据…'}
+                      {displayWebSearchStatus === 'configured' && replacingWebSearchKey && '粘贴新密钥后点「保存连接设置」以覆盖'}
+                      {displayWebSearchStatus === 'not_configured' && '尚未配置此提供商 · 保存后不会回显密钥'}
+                      {displayWebSearchStatus === 'saving' && '正在保存…'}
+                      {displayWebSearchStatus === 'error' && '保存失败 · 请检查连接后重试'}
+                    </p>
+                    {replacingWebSearchKey && (
+                      <button
+                        type="button"
+                        className="salieri-btn cancel-btn"
+                        data-testid="cancel-replace-web-search-credential"
+                        onClick={() => {
+                          setReplacingWebSearchKey(false);
+                          setLocalWebSearchApiKey('');
+                        }}
+                        disabled={isSaving}
+                      >
+                        取消更换
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            </section>
+            )}
+
             {/* VOICE tab */}
-            <section className={`tab-panel ${activeTab === 'voice' ? 'active' : ''}`}>
+            {activeTab === 'voice' && (
+            <section className="tab-panel active">
               <div className="setting-field">
                 <label className="checkbox-label">
                   <input type="checkbox" checked={localEnableTts} onChange={(e) => setLocalEnableTts(e.target.checked)} className="salieri-checkbox" />
@@ -751,14 +1058,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <input type="text" value={localSovitsUrl} onChange={(e) => setLocalSovitsUrl(e.target.value)} className="salieri-input" placeholder="http://127.0.0.1:9880" />
               </div>
             </section>
+            )}
             {/* MEMORY tab (Gate 7A ledger; identity-agnostic, self facts only) */}
-            <section className={`tab-panel ${activeTab === 'memory' ? 'active' : ''}`}>
+            {activeTab === 'memory' && (
+            <section className="tab-panel active">
               <MemoryLedger
                 sessionId={sessionId}
                 worldline={worldline}
                 active={isOpen && activeTab === 'memory'}
               />
             </section>
+            )}
           </main>
           {saveError && (
             <p className="settings-save-error" role="alert">
@@ -770,10 +1080,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </p>
           )}
           <div className="modal-footer">
-            <button className="salieri-btn cancel-btn" onClick={onClose}>取消</button>
-            <button className="salieri-btn save-btn" onClick={() => { void handleSave(); }} disabled={isSaving}>
-              {isSaving ? '保存中…' : '保存修改'}
-            </button>
+            {activeTab === 'memory' ? (
+              <button className="salieri-btn cancel-btn" onClick={onClose}>关闭</button>
+            ) : (
+              <>
+                <button className="salieri-btn cancel-btn" onClick={onClose}>取消</button>
+                <button className="salieri-btn save-btn" onClick={() => { void handleSave(); }} disabled={isSaving}>
+                  {isSaving
+                    ? '保存中…'
+                    : activeTab === 'basic'
+                      ? '保存基本设置'
+                      : activeTab === 'connections'
+                        ? '保存连接设置'
+                        : '保存语音设置'}
+                </button>
+              </>
+            )}
           </div>
         </div>
       </div>

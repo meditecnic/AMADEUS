@@ -208,6 +208,12 @@ class ProviderRegistry:
             raise KeyError(f"unknown provider: {definition.id}")
         self._entries[definition.id] = (definition, adapter)
 
+    def upsert(self, definition: ProviderDefinition, adapter: ProviderAdapter) -> None:
+        self._entries[definition.id] = (definition, adapter)
+
+    def unregister(self, provider_id: str) -> None:
+        self._entries.pop(provider_id, None)
+
     def snapshot(
         self,
         provider_id: str,

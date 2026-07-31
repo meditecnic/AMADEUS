@@ -279,6 +279,53 @@ describe('ProviderControls', () => {
     expect(resolveThinkingValue(null, 'high', 'high')).toBeNull();
   });
 
+  it('marks disabled custom providers as non-selectable unavailable options', () => {
+    render(
+      <ProviderControls
+        providers={[
+          ...providers,
+          {
+            id: 'custom:dead',
+            display_name: 'Dead Link',
+            default_model: 'gone',
+            configured: false,
+            model_discovery: false,
+            credential_required: false,
+            catalog_version: 1,
+            catalog_verified_at: '2026-07-29',
+            source: 'user_config',
+            enabled: false,
+            default_model_capability: {
+              id: 'gone',
+              display_name: 'gone',
+              lifecycle: 'unavailable',
+              callable: false,
+              source: 'dynamic',
+              thinking_control: null,
+            },
+          },
+        ]}
+        activeProviderId="deepseek"
+        activeModelId="deepseek-v4-flash"
+        models={[flashModel]}
+        disabled={false}
+        loadingModels={false}
+        thinkingValue="high"
+        onProviderChange={vi.fn()}
+        onModelChange={vi.fn()}
+        onThinkingChange={vi.fn()}
+        onRefreshModels={vi.fn()}
+        onConfigureCredential={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '模型供应商' }));
+    expect(screen.getByRole('option', { name: 'Dead Link（已停用/不可用）' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+  });
+
   it('fails closed when the active model is absent from the backend catalog', () => {
     render(
       <ProviderControls

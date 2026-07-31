@@ -30,7 +30,8 @@ EMBEDDING_DIMENSION = 384
 # v7: conversations.identity_acknowledged (0|1); existing rows backfilled to 0 (IDENTITY-ACK-01).
 # v8: control-only shared_user_facts (Q18 foundation); worldline stores bump meta only.
 # v9: core_facts.is_dismissed (M3 soft-hide pending okabe candidates; audit retained).
-SCHEMA_VERSION = 9
+# v10: provider_configurations multi-profile fields (display_name/enabled/created_at).
+SCHEMA_VERSION = 10
 
 DEFAULT_IDENTITY_MODE = "okabe"
 IDENTITY_MODES = frozenset({"okabe", "self"})
@@ -324,6 +325,9 @@ CREATE TABLE IF NOT EXISTS provider_configurations (
     provider_id TEXT PRIMARY KEY,
     base_url TEXT NOT NULL,
     default_model TEXT NOT NULL,
+    display_name TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+    created_at_utc TEXT NOT NULL DEFAULT '',
     updated_at_utc TEXT NOT NULL
 );
 """ + SHARED_USER_FACTS_DDL
@@ -776,6 +780,63 @@ def _migrate_v8_to_v9(connection: sqlite3.Connection, kind: DatabaseKind) -> Non
         raise
 
 
+def _migrate_v9_to_v10(connection: sqlite3.Connection, kind: DatabaseKind) -> None:
+    """Q41 Slice B: multi OpenAI-compatible profiles on control DB (atomic)."""
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        if kind == "control":
+            if connection.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type='table' AND name='provider_configurations'"
+            ).fetchone():
+                if not _column_exists(connection, "provider_configurations", "display_name"):
+                    connection.execute(
+                        "ALTER TABLE provider_configurations "
+                        "ADD COLUMN display_name TEXT NOT NULL DEFAULT ''"
+                    )
+                if not _column_exists(connection, "provider_configurations", "enabled"):
+                    connection.execute(
+                        "ALTER TABLE provider_configurations "
+                        "ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1"
+                    )
+                if not _column_exists(connection, "provider_configurations", "created_at_utc"):
+                    connection.execute(
+                        "ALTER TABLE provider_configurations "
+                        "ADD COLUMN created_at_utc TEXT NOT NULL DEFAULT ''"
+                    )
+                now = datetime.now(timezone.utc).isoformat()
+                rows = connection.execute(
+                    "SELECT provider_id, updated_at_utc, display_name, created_at_utc "
+                    "FROM provider_configurations"
+                ).fetchall()
+                for provider_id, updated_at, display_name, created_at in rows:
+                    fallback_name = (
+                        "OpenAI-compatible"
+                        if provider_id == "custom"
+                        else str(provider_id)
+                    )
+                    connection.execute(
+                        """UPDATE provider_configurations
+                           SET display_name=?,
+                               enabled=COALESCE(enabled, 1),
+                               created_at_utc=?
+                           WHERE provider_id=?""",
+                        (
+                            (display_name or "").strip() or fallback_name,
+                            (created_at or "").strip() or (updated_at or now),
+                            provider_id,
+                        ),
+                    )
+        connection.execute(
+            "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version',?)",
+            ("10",),
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
 async def _initialize_one(worldline: str, kind: DatabaseKind, schema: str) -> None:
     path = _resolve_path(worldline, kind)
     if path in _initialized_paths:
@@ -835,6 +896,9 @@ def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str 
         if current == 8:
             _migrate_v8_to_v9(connection, kind)
             current = 9
+        if current == 9:
+            _migrate_v9_to_v10(connection, kind)
+            current = 10
         if current not in (None, SCHEMA_VERSION):
             raise RuntimeError(f"unsupported {kind} schema version at {path}: {current}")
 
@@ -902,15 +966,60 @@ async def init_db() -> None:
             raise
 
 
-async def get_provider_configuration(provider_id: str) -> dict[str, str] | None:
+def _provider_configuration_row(row) -> dict[str, object]:
+    payload = dict(row)
+    payload["enabled"] = bool(int(payload.get("enabled") or 0))
+    return payload
+
+
+async def get_provider_configuration(provider_id: str) -> dict[str, object] | None:
     db = await get_db("steins_gate", "control")
     try:
         cur = await db.execute(
-            "SELECT base_url,default_model FROM provider_configurations WHERE provider_id=?",
+            """SELECT provider_id, base_url, default_model, display_name,
+                      enabled, created_at_utc, updated_at_utc
+               FROM provider_configurations
+               WHERE provider_id=?""",
             (provider_id,),
         )
         row = await cur.fetchone()
-        return dict(row) if row else None
+        return _provider_configuration_row(row) if row else None
+    finally:
+        await db.close()
+
+
+async def list_provider_configurations(
+    *,
+    enabled_only: bool = False,
+    include_disabled: bool = True,
+) -> list[dict[str, object]]:
+    db = await get_db("steins_gate", "control")
+    try:
+        if enabled_only:
+            cur = await db.execute(
+                """SELECT provider_id, base_url, default_model, display_name,
+                          enabled, created_at_utc, updated_at_utc
+                   FROM provider_configurations
+                   WHERE enabled=1
+                   ORDER BY created_at_utc ASC, provider_id ASC"""
+            )
+        elif include_disabled:
+            cur = await db.execute(
+                """SELECT provider_id, base_url, default_model, display_name,
+                          enabled, created_at_utc, updated_at_utc
+                   FROM provider_configurations
+                   ORDER BY enabled DESC, created_at_utc ASC, provider_id ASC"""
+            )
+        else:
+            cur = await db.execute(
+                """SELECT provider_id, base_url, default_model, display_name,
+                          enabled, created_at_utc, updated_at_utc
+                   FROM provider_configurations
+                   WHERE enabled=1
+                   ORDER BY created_at_utc ASC, provider_id ASC"""
+            )
+        rows = await cur.fetchall()
+        return [_provider_configuration_row(row) for row in rows]
     finally:
         await db.close()
 
@@ -920,27 +1029,134 @@ async def save_provider_configuration(
     *,
     base_url: str,
     default_model: str,
-) -> None:
+    display_name: str | None = None,
+    enabled: bool = True,
+) -> dict[str, object]:
+    """Persist a profile row. Success is declared after COMMIT using known values.
+
+    A post-commit re-read must never be required to decide whether the write
+    landed — that path can mis-classify a committed row as failure.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    fallback_name = (
+        "OpenAI-compatible" if provider_id == "custom" else provider_id
+    )
+    name = (display_name or "").strip() or fallback_name
     db = await get_db("steins_gate", "control")
     try:
+        cur = await db.execute(
+            "SELECT created_at_utc FROM provider_configurations WHERE provider_id=?",
+            (provider_id,),
+        )
+        existing = await cur.fetchone()
+        created_at = (
+            str(existing["created_at_utc"] or now)
+            if existing is not None
+            else now
+        )
         await db.execute(
             """INSERT INTO provider_configurations(
-                   provider_id,base_url,default_model,updated_at_utc
-               ) VALUES(?,?,?,?)
+                   provider_id,base_url,default_model,display_name,
+                   enabled,created_at_utc,updated_at_utc
+               ) VALUES(?,?,?,?,?,?,?)
                ON CONFLICT(provider_id) DO UPDATE SET
                    base_url=excluded.base_url,
                    default_model=excluded.default_model,
+                   display_name=excluded.display_name,
+                   enabled=excluded.enabled,
                    updated_at_utc=excluded.updated_at_utc""",
             (
                 provider_id,
                 base_url,
                 default_model,
-                datetime.now(timezone.utc).isoformat(),
+                name,
+                1 if enabled else 0,
+                created_at,
+                now,
             ),
         )
         await db.commit()
+        return {
+            "provider_id": provider_id,
+            "base_url": base_url,
+            "default_model": default_model,
+            "display_name": name,
+            "enabled": bool(enabled),
+            "created_at_utc": created_at,
+            "updated_at_utc": now,
+        }
     finally:
         await db.close()
+
+
+async def soft_disable_provider_configuration(
+    provider_id: str,
+    *,
+    base_url: str | None = None,
+    default_model: str | None = None,
+    display_name: str | None = None,
+) -> dict[str, object]:
+    """Persist enabled=0. Creates a disabled stub row when the profile had no DB row yet.
+
+    Return value is built from pre-commit known fields after a successful COMMIT.
+    """
+    existing = await get_provider_configuration(provider_id)
+    now = datetime.now(timezone.utc).isoformat()
+    if existing is None:
+        if not base_url or not default_model:
+            raise ValueError(
+                f"cannot soft-disable missing profile {provider_id!r} without configuration"
+            )
+        return await save_provider_configuration(
+            provider_id,
+            base_url=base_url,
+            default_model=default_model,
+            display_name=display_name,
+            enabled=False,
+        )
+    effective_base = str(base_url or existing["base_url"])
+    effective_model = str(default_model or existing["default_model"])
+    effective_name = (
+        (display_name or "").strip()
+        or str(existing.get("display_name") or "")
+        or provider_id
+    )
+    created_at = str(existing.get("created_at_utc") or now)
+    db = await get_db("steins_gate", "control")
+    try:
+        await db.execute(
+            """UPDATE provider_configurations
+               SET enabled=0,
+                   base_url=?,
+                   default_model=?,
+                   display_name=?,
+                   updated_at_utc=?
+               WHERE provider_id=?""",
+            (effective_base, effective_model, effective_name, now, provider_id),
+        )
+        await db.commit()
+        return {
+            "provider_id": provider_id,
+            "base_url": effective_base,
+            "default_model": effective_model,
+            "display_name": effective_name,
+            "enabled": False,
+            "created_at_utc": created_at,
+            "updated_at_utc": now,
+        }
+    finally:
+        await db.close()
+
+
+PROVIDER_CONFIGURATIONS_REQUIRED_COLUMNS = frozenset({
+    "provider_id",
+    "base_url",
+    "default_model",
+    "display_name",
+    "enabled",
+    "created_at_utc",
+    "updated_at_utc",
+})
 
 
 async def validate_schema() -> dict[str, object]:
@@ -976,6 +1192,16 @@ async def validate_schema() -> dict[str, object]:
         )
         indexes = {info[0] for info in await cur.fetchall()}
         ok = ok and SHARED_USER_FACTS_REQUIRED_INDEXES <= indexes
+        cur = await db.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name='provider_configurations'"
+        )
+        has_provider_table = bool(await cur.fetchone())
+        ok = ok and has_provider_table
+        if has_provider_table:
+            cur = await db.execute("PRAGMA table_info(provider_configurations)")
+            provider_columns = {info[1] for info in await cur.fetchall()}
+            ok = ok and PROVIDER_CONFIGURATIONS_REQUIRED_COLUMNS <= provider_columns
         result["databases"]["control"] = ok  # type: ignore[index]
         result["ok"] = bool(result["ok"] and ok)
     finally:
