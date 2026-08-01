@@ -9,7 +9,7 @@ from typing import Any, Optional
 import httpx
 
 from app.security.prompt import COMPRESSION_PROMPT_SUFFIX
-from app.services.llm_interface import LLMInterface
+from app.services.llm_interface import LLMInterface, build_stream_messages
 
 
 class ProviderRequestError(RuntimeError):
@@ -71,11 +71,14 @@ class OpenAICompatibleAdapter(LLMInterface):
         tool_choice: Optional[str] = None,
         model: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
+        isolated: bool = False,
     ):
-        messages = self._message_builder(
+        messages = build_stream_messages(
+            self._message_builder,
             active_history,
             memory_summary,
             system_prompt,
+            isolated=isolated,
         )
         payload: dict[str, Any] = {
             "model": model or self.model,
@@ -344,8 +347,15 @@ class OpenAIResponsesAdapter(LLMInterface):
         tool_choice: Optional[str] = None,
         model: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
+        isolated: bool = False,
     ):
-        messages = self._message_builder(active_history, memory_summary, system_prompt)
+        messages = build_stream_messages(
+            self._message_builder,
+            active_history,
+            memory_summary,
+            system_prompt,
+            isolated=isolated,
+        )
         instructions, inputs = self._split_instructions(messages)
         payload: dict[str, Any] = {
             "model": model or self.model,
@@ -573,8 +583,15 @@ class GeminiAdapter(LLMInterface):
         tool_choice: Optional[str] = None,
         model: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
+        isolated: bool = False,
     ):
-        messages = self._message_builder(active_history, memory_summary, system_prompt)
+        messages = build_stream_messages(
+            self._message_builder,
+            active_history,
+            memory_summary,
+            system_prompt,
+            isolated=isolated,
+        )
         system_instruction, contents = self._contents(messages)
         payload: dict[str, Any] = {
             "systemInstruction": system_instruction,

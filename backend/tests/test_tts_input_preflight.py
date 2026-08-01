@@ -117,6 +117,39 @@ def test_chinese_only_rejected_in_default_japanese_mode():
     assert prepared.error is AudioErrorCode.INVALID_LANGUAGE
 
 
+def test_ambiguous_han_only_chinese_is_rejected_before_sidecar():
+    for line in (
+        "笑话……",
+        "一加一等于二。",
+        "今天心情很好。",
+        "這個笑話很好笑。",
+        "這個設定很重要。",
+    ):
+        prepared = prepare_tts_text(line)
+        assert prepared.error is AudioErrorCode.INVALID_LANGUAGE, line
+
+    # Shared-Han single-character fragments are not Chinese proof. They may be
+    # skipped as too short, but must not be classified as invalid language.
+    for line in ("話。", "来。", "行。", "見。", "食。"):
+        prepared = prepare_tts_text(line)
+        assert prepared.error is not AudioErrorCode.INVALID_LANGUAGE, line
+
+    for line in (
+        "了解。",
+        "大丈夫？",
+        "笑話……",
+        "一文目。",
+        "岡部倫太郎。",
+        "岡部倫太郎、通称鳳凰院凶真。",
+        "未来道具研究所。",
+        "牧瀬紅莉栖。",
+        "助手。",
+        "世界線収束範囲。",
+    ):
+        prepared = prepare_tts_text(line)
+        assert prepared.error is None, (line, prepared.error)
+
+
 def test_random_ja_zh_mix_rejected():
     prepared = prepare_tts_text("这就是だ相模玉行答到景非／少式音念響路")
     assert prepared.error is AudioErrorCode.INVALID_LANGUAGE

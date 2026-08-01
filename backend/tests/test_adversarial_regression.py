@@ -155,8 +155,8 @@ class _SafePrefixThenChineseBodyMock:
 
 
 @pytest.mark.asyncio
-async def test_language_after_published_prefix_truncates_without_failure_copy():
-    """Language hard-reject after live prefix mirrors LEAK-PREFIX (no 崩れた)."""
+async def test_renderer_failure_after_published_prefix_is_explicit_and_consistent():
+    """A failed render keeps the prefix but must not silently discard its tail."""
     from app.routers.chat_ws import get_clean_text_stream
 
     provider = _SafePrefixThenChineseBodyMock()
@@ -173,14 +173,14 @@ async def test_language_after_published_prefix_truncates_without_failure_copy():
             on_text_delta=lambda delta, emo: published.append((delta, emo)),
         )
 
-    assert provider.call_count == 1
+    assert provider.call_count == 3
     assert tool_calls == {}
     assert "日本語の話" in text
     assert "现在完全是中文正文" not in text
     assert "生成が崩れた" not in text
-    assert "正しく生成できなかった" not in text
-    assert emotion == "intellectual"
-    assert all(emo != "disappointed" for _, emo in published)
+    assert "正しく生成できなかった" in text
+    assert emotion == "disappointed"
+    assert [emo for _, emo in published] == ["intellectual", "disappointed"]
     published_text = "".join(delta for delta, _ in published)
     assert "生成が崩れた" not in published_text
     assert "现在完全是中文正文" not in published_text

@@ -80,7 +80,7 @@ _CONSERVATIVE_ZH_MARKERS = frozenset("的是不了在有人这中大为上个国
 # the Han-only line is Chinese wording, not kana-less Japanese.
 # NOTE: shinjitai shared with simplified (学/国/体…) must stay OUT of this set.
 _CHINESE_ONLY_HAN = frozenset(
-    "你您咱们这谢见对说问请语门马东车红时实现发头买卖过还进远运动让认识记应给谁怎么吗呢吧啊哦呀哈喽嘛哟调开为"
+    "你您咱们这這谢见对说问请语门马东车红时实现发头买卖过还进远运动让认识记应给谁怎么吗呢吧啊哦呀哈喽嘛哟调开为话很"
 )
 
 # Chinese-only multi-character words whose glyphs are all shared with Japanese
@@ -88,6 +88,8 @@ _CHINESE_ONLY_HAN = frozenset(
 # Chinese draft even when every single character looks JP-safe.
 _CHINESE_ONLY_WORDS = (
     "没有", "根据", "数据", "信息", "什么", "一下", "更多", "可以", "但是",
+    "這個", "这个", "等于", "等於", "还是", "還是", "已经", "已經",
+    "因为", "因為", "所以", "如果", "我们", "我們", "应该", "應該",
 )
 
 # LANG-GATE-CODE-SWITCH-RELAX-02: bounded quote/paren/bracket interiors are
@@ -100,6 +102,9 @@ _BOUNDED_EMBED_RES = (
     re.compile(r"（[^）]*）"),
     re.compile(r"\([^)]*\)"),
     re.compile(r"【[^】]*】"),
+    re.compile(r'"[^"\r\n]*"'),
+    re.compile(r"“[^”\r\n]*”"),
+    re.compile(r"`[^`\r\n]*`"),
 )
 
 
@@ -127,12 +132,10 @@ def _looks_like_chinese_wording(text: str) -> bool:
 # Short kanji-only Japanese speech (no kana) that must remain publishable.
 # Pure Chinese greetings (你好/谢谢/…) must NOT match this set.
 _SHORT_JA_KANJI_ALLOWLIST = frozenset({
-    "了解", "大丈夫", "承知", "感謝", "失礼", "本当", "嘘", "馬鹿",
-    "何", "誰", "何故", "勿論", "当然", "結構", "残念", "無事",
-    "無理", "暇", "待", "来", "行", "見", "聞", "話", "食", "飲",
+    "了解", "大丈夫", "承知", "感謝", "失礼", "本当", "馬鹿",
+    "何故", "勿論", "当然", "結構", "残念", "無事", "無理",
     "駄目", "承知した", "了解した", "大丈夫か", "本当か",
 })
-
 
 def _core_cjk_letters(text: str) -> str:
     """Letters only (no punctuation/whitespace) for short allowlist match."""
@@ -171,6 +174,10 @@ def _is_publishable_kanji_only_japanese(text: str) -> bool:
         return False
     if len(_COLLAPSE_MARK_RE.findall(text)) >= 2:
         return False
+    # Open-domain contract: missing kana is not evidence of Chinese. Shared-Han
+    # surfaces such as 「一文目」「笑話」「世界線収束範囲」 cannot be classified
+    # safely by a topic whitelist. They remain publishable unless one of the
+    # high-confidence Chinese/garbage checks above fires.
     return True
 
 
@@ -270,6 +277,32 @@ def _has_suspicious_latin_embedding(text: str) -> bool:
     return False
 
 
+def _has_dominant_unbounded_latin_prose(text: str) -> bool:
+    """Reject foreign prose disguised by a small Japanese prefix or suffix.
+
+    Product names and short technical labels remain valid. Multi-word foreign
+    quotations remain valid when bounded by quotes/brackets and are removed
+    from the analysis surface above. What is rejected here is an unbounded run
+    whose Latin prose dominates the actual Japanese sentence frame.
+    """
+
+    surface = analysis_surface_without_bounded_embeds(text)
+    tokens = _LATIN_RUN_RE.findall(surface)
+    if len(tokens) < 3:
+        return False
+    ordinary_tokens = [
+        token
+        for token in tokens
+        if token.lower() not in _SAFE_LATIN_TOKENS
+        and not (token.isupper() and 2 <= len(token) <= 8)
+    ]
+    if len(ordinary_tokens) < 2:
+        return False
+    latin_letters = sum(len(token) for token in tokens)
+    japanese_letters = len(_KANA_RE.findall(surface)) + len(_HAN_RE.findall(surface))
+    return latin_letters >= 8 and latin_letters > japanese_letters
+
+
 def is_soft_skip_unpublishable_segment(text: str) -> bool:
     """Fragments that must not abort the rest of a turn when unpublishable.
 
@@ -341,6 +374,8 @@ def is_plausible_japanese_tts_source(text: str) -> bool:
     han_n = len(han)
     letters = meaningful_character_count(gate_text)
     if letters <= 0:
+        return False
+    if _has_dominant_unbounded_latin_prose(text):
         return False
     # Short Japanese is often kana-only ("うん").
     if letters <= 10:

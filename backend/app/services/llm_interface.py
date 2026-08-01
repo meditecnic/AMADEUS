@@ -1,5 +1,30 @@
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from typing import AsyncGenerator, Optional
+
+
+def build_stream_messages(
+    message_builder: Callable[..., list[dict]],
+    active_history: list,
+    memory_summary: Optional[str],
+    system_prompt: Optional[str],
+    *,
+    isolated: bool,
+) -> list[dict]:
+    """Build either the normal Persona envelope or an isolated request.
+
+    Isolated calls are presentation-layer transforms. They must not inherit
+    few-shot examples, Persona anchors, memory, or any other chat envelope
+    supplied by ``message_builder``.
+    """
+
+    if not isolated:
+        return message_builder(active_history, memory_summary, system_prompt)
+    messages: list[dict] = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.extend(dict(message) for message in active_history)
+    return messages
 
 
 class LLMInterface(ABC):
@@ -17,6 +42,7 @@ class LLMInterface(ABC):
         tool_choice: Optional[str] = None,
         model: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
+        isolated: bool = False,
     ) -> AsyncGenerator[dict, None]:
         """Yield chunks from the LLM chat completion stream."""
         ...

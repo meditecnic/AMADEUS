@@ -137,6 +137,60 @@ async def test_v4_flash_no_longer_injects_prompt_depth(monkeypatch):
     assert captured["payload"]["reasoning_effort"] == "max"
 
 
+@pytest.mark.asyncio
+async def test_isolated_stream_payload_excludes_persona_fewshot_and_memory(monkeypatch):
+    captured: dict = {}
+
+    class _Response:
+        status_code = 200
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def aiter_lines(self):
+            yield "data: [DONE]"
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def stream(self, method, url, *, json, headers):
+            captured["payload"] = json
+            return _Response()
+
+    monkeypatch.setattr(deepseek.httpx, "AsyncClient", lambda **_kwargs: _Client())
+    service = DeepSeekService()
+    renderer_history = [
+        {"role": "user", "content": "SOURCE JSON"},
+        {"role": "user", "content": "RENDER CONTROL"},
+    ]
+
+    _ = [
+        chunk
+        async for chunk in service.get_chat_stream(
+            renderer_history,
+            memory_summary="SECRET MEMORY",
+            api_key="test-secret",
+            system_prompt="ISOLATED RENDERER",
+            isolated=True,
+        )
+    ]
+
+    assert captured["payload"]["messages"] == [
+        {"role": "system", "content": "ISOLATED RENDERER"},
+        *renderer_history,
+    ]
+    serialized = str(captured["payload"]["messages"])
+    assert "PERSONA BIBLE" not in serialized
+    assert "SECRET MEMORY" not in serialized
+
+
 def test_tool_results_do_not_fabricate_reasoning_dependent_messages():
     context = build_tool_result_context(
         [{"role": "user", "content": "What changed?"}],

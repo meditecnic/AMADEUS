@@ -2,7 +2,7 @@
 import httpx
 from typing import Optional
 from app import config
-from app.services.llm_interface import LLMInterface
+from app.services.llm_interface import LLMInterface, build_stream_messages
 from app.services.persona_bible import persona_bible
 
 
@@ -144,7 +144,8 @@ class DeepSeekService(LLMInterface):
         tools: Optional[list] = None,
         tool_choice: Optional[str] = None,
         model: Optional[str] = None,
-        reasoning_effort: Optional[str] = None
+        reasoning_effort: Optional[str] = None,
+        isolated: bool = False,
     ):
         """
         Assemble messages and yield chunks from DeepSeek Chat Completion API.
@@ -153,10 +154,12 @@ class DeepSeekService(LLMInterface):
         if not effective_api_key:
             raise ValueError("DEEPSEEK_API_KEY is not configured.")
 
-        messages = self.build_persona_messages(
+        messages = build_stream_messages(
+            self.build_persona_messages,
             active_history,
             memory_summary,
             system_prompt,
+            isolated=isolated,
         )
         
         headers = {

@@ -58,6 +58,40 @@ async def test_openai_compatible_stream_preserves_canonical_persona_and_tools():
 
 
 @pytest.mark.asyncio
+async def test_openai_compatible_isolated_stream_bypasses_persona_envelope():
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, text="data: [DONE]\n\n")
+
+    adapter = OpenAICompatibleAdapter(
+        provider_id="fake-compatible",
+        base_url="https://compatible.example/v1",
+        default_model="fake-chat",
+        message_builder=deepseek_service.build_persona_messages,
+        transport=httpx.MockTransport(handler),
+    )
+    history = [{"role": "user", "content": "SOURCE JSON"}]
+    _ = [
+        chunk
+        async for chunk in adapter.get_chat_stream(
+            active_history=history,
+            memory_summary="SECRET MEMORY",
+            api_key="provider-secret",
+            system_prompt="ISOLATED RENDERER",
+            isolated=True,
+        )
+    ]
+
+    payload = json.loads(requests[0].content)
+    assert payload["messages"] == [
+        {"role": "system", "content": "ISOLATED RENDERER"},
+        *history,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_openai_compatible_structured_output_and_model_listing():
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/models"):
@@ -162,6 +196,38 @@ async def test_openai_responses_stream_uses_instructions_and_delta_events():
 
 
 @pytest.mark.asyncio
+async def test_openai_responses_isolated_stream_bypasses_persona_envelope():
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            text='data: {"type":"response.completed"}\n\n',
+            headers={"content-type": "text/event-stream"},
+        )
+
+    adapter = OpenAIResponsesAdapter(
+        message_builder=deepseek_service.build_persona_messages,
+        transport=httpx.MockTransport(handler),
+    )
+    _ = [
+        chunk
+        async for chunk in adapter.get_chat_stream(
+            active_history=[{"role": "user", "content": "SOURCE JSON"}],
+            memory_summary="SECRET MEMORY",
+            api_key="openai-secret",
+            system_prompt="ISOLATED RENDERER",
+            isolated=True,
+        )
+    ]
+
+    payload = json.loads(requests[0].content)
+    assert payload["instructions"] == "ISOLATED RENDERER"
+    assert payload["input"] == [{"role": "user", "content": "SOURCE JSON"}]
+
+
+@pytest.mark.asyncio
 async def test_gemini_stream_maps_persona_roles_and_native_parts():
     requests: list[httpx.Request] = []
 
@@ -203,6 +269,42 @@ async def test_gemini_stream_maps_persona_roles_and_native_parts():
     }
     assert chunks == [
         {"content": "[EMO:neutral] データを確認したわ。", "tool_calls": None}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_gemini_isolated_stream_bypasses_persona_envelope():
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            text='data: {"candidates":[]}\n\n',
+            headers={"content-type": "text/event-stream"},
+        )
+
+    adapter = GeminiAdapter(
+        message_builder=deepseek_service.build_persona_messages,
+        transport=httpx.MockTransport(handler),
+    )
+    _ = [
+        chunk
+        async for chunk in adapter.get_chat_stream(
+            active_history=[{"role": "user", "content": "SOURCE JSON"}],
+            memory_summary="SECRET MEMORY",
+            api_key="gemini-secret",
+            system_prompt="ISOLATED RENDERER",
+            isolated=True,
+        )
+    ]
+
+    payload = json.loads(requests[0].content)
+    assert payload["systemInstruction"] == {
+        "parts": [{"text": "ISOLATED RENDERER"}]
+    }
+    assert payload["contents"] == [
+        {"role": "user", "parts": [{"text": "SOURCE JSON"}]}
     ]
 
 

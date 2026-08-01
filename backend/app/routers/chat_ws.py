@@ -2,6 +2,7 @@
 import base64
 import json
 import asyncio
+import hashlib
 from uuid import uuid4
 from collections.abc import Awaitable, Callable
 import starlette
@@ -18,6 +19,12 @@ from app.db import init_db
 from app.services.prompt_compiler import compile_for_session
 from app.services.session_manager import cancel_inflight, session_coordinator
 from app.domain.subtitle_glossary_rewrite import apply_subtitle_glossary_rewrites
+from app.domain.japanese_response_renderer import (
+    JAPANESE_RENDERER_SYSTEM_PROMPT,
+    build_japanese_renderer_history,
+    is_valid_rendered_japanese,
+    normalize_rendered_japanese,
+)
 from app.domain.segments import (
     AudioErrorCode,
     IncrementalJapaneseSegmenter,
@@ -35,7 +42,7 @@ from app.domain.segments import (
 
 import copy
 from app.services.tts_queue import TTSServiceError
-from app.services.diagnostics import classify_source_language, diagnostic_runtime
+from app.services.diagnostics import diagnostic_runtime
 from contextlib import aclosing
 from app.security.guard import contains_leak
 
@@ -307,7 +314,6 @@ sessions_creation_lock = asyncio.Lock()
 # Regex patterns
 EMO_TAG_PATTERN = re.compile(r'^\[(?:E?MO)[:=]([a-zA-Z0-9_]+)\]\s*')
 # SOFT-02: final language fail may flush goods when enough JP segments exist.
-_MAJORITY_PUBLISH_MIN_SEGMENTS = 2
 MOBILE_ALLOWED_EMOTIONS = {"neutral", "tsundere", "embarrassed", "intellectual"}
 DESKTOP_ALLOWED_EMOTIONS = {
     "neutral", "tsundere", "embarrassed", "intellectual",
@@ -402,6 +408,7 @@ async def compress_and_update_history(
         return
         
     to_compress = current_history[:-keep_count]
+    prompt_history = _language_safe_prompt_history(to_compress)
     N = len(to_compress)
     
     print(f"[History Compression] Session {session_id}: Compressing {N} messages...")
@@ -409,6 +416,24 @@ async def compress_and_update_history(
     try:
         session_data = sessions.get(session_id)
         if session_data:
+            if not prompt_history:
+                # Durable/API history stays untouched. Only the in-memory prompt
+                # window discards old assistant output that never met the
+                # Japanese publication contract.
+                async with session_data.lock:
+                    if (
+                        session_data.worldline != worldline
+                        or session_data.revision != revision
+                        or getattr(session_data, "conversation_id", None) != conversation_id
+                    ):
+                        return
+                    session_data.history = session_data.history[N:]
+                print(
+                    f"[History Compression] Session {session_id}: "
+                    f"discarded {N} non-promptable old messages",
+                    flush=True,
+                )
+                return
             if provider_snapshot is None:
                 registered = provider_registry.snapshot(
                     session_data.provider_id,
@@ -425,7 +450,7 @@ async def compress_and_update_history(
             kwargs = _supported_kwargs(
                 method,
                 {
-                    "history": to_compress,
+                    "history": prompt_history,
                     "api_key": session_data.api_key,
                     "old_summary": session_data.memory_summary,
                     "model": provider_snapshot.model_id,
@@ -491,11 +516,19 @@ async def get_clean_text_stream(
     Get text or tool calls stream with leak retries.
     Returns: (final_text, final_emotion, merged_tool_calls, emo_tag_found)
     """
-    MAX_ATTEMPTS = 3
+    MAX_ATTEMPTS = 3  # Leak recovery keeps the historical three-attempt budget.
     rejection_reason: str | None = None
+    prompt_history = _language_safe_prompt_history(active_history)
+    filtered_history_count = len(active_history or []) - len(prompt_history)
+    if filtered_history_count:
+        print(
+            f"[Guard] prompt history excluded invalid assistant messages "
+            f"count={filtered_history_count}",
+            flush=True,
+        )
     # Buffer UI publication when search/tool evidence is present so a Chinese/English
     # body after a short Japanese opener can still retry without a locked prefix.
-    buffer_ui_until_attempt_ok = _history_has_external_evidence(active_history)
+    buffer_ui_until_attempt_ok = _history_has_external_evidence(prompt_history)
     for attempt in range(MAX_ATTEMPTS):
         emo_buffer = ""
         in_emo_tag = False
@@ -506,6 +539,7 @@ async def get_clean_text_stream(
         publication_segmenter = IncrementalJapaneseSegmenter()
         published_parts: list[str] = []
         published_emotions: list[str] = []
+        rejected_language_parts: list[str] = []
         publication_rejected = False
         publication_rejection_reason: str | None = None
         merged_tool_calls = {}
@@ -523,14 +557,16 @@ async def get_clean_text_stream(
         async def publish_completed_segments(delta: str, emotion: str) -> None:
             """Publish only complete, locally validated Japanese segments.
 
-            Soft-skip product-name Latin fragments (「Kimi K3。」) without killing
-            the turn. Hard language rejects (Chinese/English prose) close the tail.
+            Route foreign-language fragments (including short Latin text) into the
+            isolated renderer without killing the turn. Leak rejects close the tail.
             When buffering, UI is flushed only after the attempt fully succeeds.
             """
 
             nonlocal publication_rejected, publication_rejection_reason
             for segment in publication_segmenter.feed(delta, emotion=emotion):
                 if publication_rejected:
+                    if publication_rejection_reason == "language":
+                        rejected_language_parts.append(segment.text)
                     continue
                 if is_ignorable_non_speech_segment(segment.text):
                     continue
@@ -545,13 +581,17 @@ async def get_clean_text_stream(
                 if not _is_publishable_japanese(segment.text):
                     if is_soft_skip_unpublishable_segment(segment.text):
                         print(
-                            f"[Guard] soft-skip unpublishable fragment "
-                            f"len={len(segment.text)} script=latin/unknown",
+                            f"[Guard] route short foreign fragment to renderer "
+                            f"len={len(segment.text)}",
                             flush=True,
                         )
+                        publication_rejected = True
+                        publication_rejection_reason = "language"
+                        rejected_language_parts.append(segment.text)
                         continue
                     publication_rejected = True
                     publication_rejection_reason = "language"
+                    rejected_language_parts.append(segment.text)
                     print(
                         f"[Guard] hard-reject language segment len={len(segment.text)} "
                         f"preview={segment.text[:40]!r}",
@@ -564,6 +604,8 @@ async def get_clean_text_stream(
             nonlocal publication_rejected, publication_rejection_reason
             for segment in publication_segmenter.finish():
                 if publication_rejected:
+                    if publication_rejection_reason == "language":
+                        rejected_language_parts.append(segment.text)
                     continue
                 if is_ignorable_non_speech_segment(segment.text):
                     continue
@@ -574,13 +616,17 @@ async def get_clean_text_stream(
                 if not _is_publishable_japanese(segment.text):
                     if is_soft_skip_unpublishable_segment(segment.text):
                         print(
-                            f"[Guard] soft-skip unpublishable finish fragment "
+                            f"[Guard] route short foreign finish fragment to renderer "
                             f"len={len(segment.text)}",
                             flush=True,
                         )
+                        publication_rejected = True
+                        publication_rejection_reason = "language"
+                        rejected_language_parts.append(segment.text)
                         continue
                     publication_rejected = True
                     publication_rejection_reason = "language"
+                    rejected_language_parts.append(segment.text)
                     print(
                         f"[Guard] hard-reject language finish segment "
                         f"len={len(segment.text)} preview={segment.text[:40]!r}",
@@ -590,11 +636,11 @@ async def get_clean_text_stream(
                 await _accept_publishable_segment(segment.text, segment.emotion)
         
         eff_system_prompt = session.system_prompt or ""
-        # Chinese/mixed user turns: inject Japanese body discipline on attempt 0
-        # (search path may already carry ANSWER LANGUAGE hard requirement).
+        # Non-Japanese user turns: improve the happy path before the isolated
+        # renderer is ever needed (search may already carry the requirement).
         if (
             attempt == 0
-            and _latest_user_message_is_chinese_or_mixed(active_history)
+            and _latest_user_message_requires_japanese_reply(prompt_history)
             and "ANSWER LANGUAGE — HARD REQUIREMENT" not in eff_system_prompt
             and "表示本文は必ず自然な日本語のみ" not in eff_system_prompt
         ):
@@ -602,26 +648,20 @@ async def get_clean_text_stream(
                 eff_system_prompt
                 + "\n"
                 + _ANSWER_LANGUAGE_HARD_REQUIREMENT
-                + _CHINESE_INPUT_FIRST_PASS_JA
+                + _NON_JAPANESE_INPUT_FIRST_PASS_JA
             )
         if attempt > 0:
-            if rejection_reason == "language":
-                if _history_has_external_evidence(active_history):
-                    retry_instruction = _LANGUAGE_RETRY_AFTER_EVIDENCE
-                else:
-                    retry_instruction = _LANGUAGE_RETRY_DEFAULT
-            else:
-                retry_instruction = (
-                    "\n【直前の出力でAI・アシスタント・言語モデル等の露見語が検出された。"
-                    "絶対に紅莉栖としてのみ振る舞い、二度とそのような語を使わないこと。】"
-                )
+            retry_instruction = (
+                "\n【直前の出力でAI・アシスタント・言語モデル等の露見語が検出された。"
+                "絶対に紅莉栖としてのみ振る舞い、二度とそのような語を使わないこと。】"
+            )
             eff_system_prompt = (session.system_prompt or "") + retry_instruction
-            # Keep Chinese-input discipline on retries as well.
+            # Keep non-Japanese-input discipline on leak retries as well.
             if (
-                _latest_user_message_is_chinese_or_mixed(active_history)
+                _latest_user_message_requires_japanese_reply(prompt_history)
                 and "表示本文は必ず自然な日本語のみ" not in eff_system_prompt
             ):
-                eff_system_prompt = eff_system_prompt + _CHINESE_INPUT_FIRST_PASS_JA
+                eff_system_prompt = eff_system_prompt + _NON_JAPANESE_INPUT_FIRST_PASS_JA
             
         from datetime import datetime
         time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -634,17 +674,8 @@ async def get_clean_text_stream(
             if provider_snapshot is not None and provider_snapshot.temperature is not None
             else session.temperature
         )
-        # Language retries after search/tools must not wander into Chinese/English.
-        # Also clamp when Chinese input already forces first-pass JP discipline.
-        if (attempt > 0 and rejection_reason == "language") or (
-            attempt == 0 and _latest_user_message_is_chinese_or_mixed(active_history)
-        ):
-            try:
-                base_temperature = min(float(base_temperature), 0.0)
-            except (TypeError, ValueError):
-                base_temperature = 0.0
         stream_kwargs = {
-            "active_history": active_history,
+            "active_history": prompt_history,
             "memory_summary": memory_summary,
             "api_key": session.api_key,
             "system_prompt": eff_system_prompt,
@@ -672,7 +703,7 @@ async def get_clean_text_stream(
                 async for chunk in stream:
                     content = chunk.get("content")
                     tool_calls = chunk.get("tool_calls")
-                    
+
                     if tool_calls:
                         for tc in tool_calls:
                             idx = tc.get("index", 0)
@@ -726,14 +757,12 @@ async def get_clean_text_stream(
                                 else:
                                     text_buffer += char
                                     delta_text += char
-                        if delta_text and on_text_delta is not None:
+                        if delta_text:
                             await publish_completed_segments(delta_text, last_emotion)
             if emo_buffer:
                 text_buffer += emo_buffer
-                if on_text_delta is not None:
-                    await publish_completed_segments(emo_buffer, last_emotion)
-            if on_text_delta is not None:
-                await finish_publication()
+                await publish_completed_segments(emo_buffer, last_emotion)
+            await finish_publication()
         except asyncio.CancelledError:
             raise
         finally:
@@ -743,7 +772,6 @@ async def get_clean_text_stream(
             return "", "neutral", merged_tool_calls, False
             
         leaked_output = contains_leak(text_buffer) or publication_rejection_reason == "leak"
-        language = classify_source_language(text_buffer)
         publishable_japanese = _is_publishable_japanese(text_buffer)
         # The aggregate classifier cannot disambiguate multiple legitimate
         # short kanji-only Japanese sentences (for example "一文目。二文目。").
@@ -762,21 +790,12 @@ async def get_clean_text_stream(
                 f"rejected {rejection_reason} output ({len(text_buffer)} chars) "
                 f"buffered={buffer_ui_until_attempt_ok} published={len(published_parts)}"
             )
-            # Buffered search turns never flush failed attempts to the UI, so retry.
-            if buffer_ui_until_attempt_ok and attempt < MAX_ATTEMPTS - 1:
-                continue
-            # Live-streamed prefix already visible: the prefix cannot be
-            # unpublished, so never retry from here.
+            # A leaked tail can never be transformed safely.  Preserve a prefix
+            # that was already published and truncate only that unsafe tail.
             if on_text_delta is not None and published_parts and not buffer_ui_until_attempt_ok:
-                if rejection_reason in {"leak", "language"}:
-                    # LEAK-PREFIX-RECOVERY-01 + LANG-GATE-CODE-SWITCH-RELAX-02:
-                    # visible prefix already passed every gate. Truncate the
-                    # unsafe tail only: no 「生成が崩れた」 copy, no injected
-                    # disappointed/tsundere emotion, no resend of the bad
-                    # fragment, no extra model call. Last safe emotion stands.
+                if rejection_reason == "leak":
                     print(
-                        f"[Guard] {rejection_reason} after published prefix; "
-                        "truncating unsafe tail",
+                        "[Guard] leak after published prefix; truncating unsafe tail",
                         flush=True,
                     )
                     safe_text = "".join(published_parts)
@@ -784,31 +803,36 @@ async def get_clean_text_stream(
                         published_emotions[-1] if published_emotions else last_emotion
                     )
                     return safe_text, prefix_emotion, {}, emo_tag_found
-            if attempt < MAX_ATTEMPTS - 1:
-                continue
-            # SOFT-02 majority-publish (E7): final language fail with enough good JP
-            # segments → flush the goods instead of a whole-turn recovery string.
-            # Leak never takes this path. Threshold is ≥2 complete publishable segments.
-            if (
-                rejection_reason == "language"
-                and len(published_parts) >= _MAJORITY_PUBLISH_MIN_SEGMENTS
-            ):
-                print(
-                    f"[Guard] majority-publish segments={len(published_parts)} "
-                    f"buffered={buffer_ui_until_attempt_ok} "
-                    f"(skip full language recovery)",
-                    flush=True,
+            if rejection_reason == "language":
+                foreign_tail = "".join(rejected_language_parts).strip()
+                if not foreign_tail:
+                    foreign_tail = text_buffer.strip()
+                rendered = await _render_foreign_speech_to_japanese(
+                    provider=provider,
+                    provider_snapshot=provider_snapshot,
+                    session=session,
+                    source_text=foreign_tail,
+                    user_request=_latest_real_user_request(prompt_history),
                 )
-                if buffer_ui_until_attempt_ok and on_text_delta is not None:
-                    for text, emotion in zip(published_parts, published_emotions):
-                        callback_result = on_text_delta(text, emotion)
+                if rendered:
+                    if buffer_ui_until_attempt_ok and on_text_delta is not None:
+                        for text, emotion in zip(published_parts, published_emotions):
+                            callback_result = on_text_delta(text, emotion)
+                            if asyncio.iscoroutine(callback_result):
+                                await callback_result
+                    if on_text_delta is not None:
+                        callback_result = on_text_delta(rendered, last_emotion)
                         if asyncio.iscoroutine(callback_result):
                             await callback_result
-                safe_text = "".join(published_parts)
-                majority_emotion = (
-                    published_emotions[-1] if published_emotions else last_emotion
-                )
-                return safe_text, majority_emotion, {}, emo_tag_found
+                    safe_text = "".join(published_parts) + rendered
+                    print(
+                        f"[LanguageRenderer] published source_len={len(foreign_tail)} "
+                        f"rendered_len={len(rendered)} prefix={len(published_parts)}",
+                        flush=True,
+                    )
+                    return safe_text, last_emotion, {}, emo_tag_found
+            elif attempt < MAX_ATTEMPTS - 1:
+                continue
             if rejection_reason == "leak":
                 fallback = "はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。"
                 fallback_emotion = "tsundere"
@@ -819,7 +843,10 @@ async def get_clean_text_stream(
                 callback_result = on_text_delta(fallback, fallback_emotion)
                 if asyncio.iscoroutine(callback_result):
                     await callback_result
-            return fallback, fallback_emotion, {}, False
+            returned_fallback = fallback
+            if published_parts and not buffer_ui_until_attempt_ok:
+                returned_fallback = "".join(published_parts) + fallback
+            return returned_fallback, fallback_emotion, {}, False
 
         # Successful attempt: flush buffered segments for search/tool turns.
         if buffer_ui_until_attempt_ok and on_text_delta is not None:
@@ -827,13 +854,10 @@ async def get_clean_text_stream(
                 callback_result = on_text_delta(text, emotion)
                 if asyncio.iscoroutine(callback_result):
                     await callback_result
-        # Only rewrite text_buffer from publication parts when the publish path
-        # actually ran (on_text_delta set). When on_text_delta is None (e.g.
-        # protocol v1), published_parts stays empty and raw text_buffer is final.
-        # BUG-1: never use `or buffer_ui_until_attempt_ok` here — that wiped
-        # legitimate tool-answer text_len to 0 after web search injection.
-        if on_text_delta is not None:
-            text_buffer = "".join(published_parts)
+        # v1 and v2 share the same per-segment publication gate.  v1 has no
+        # incremental callback, but still builds the validated parts here so
+        # ambiguous Han-only prefixes cannot bypass the gate before TTS/DB.
+        text_buffer = "".join(published_parts)
         print(f"[DEBUG] get_clean_text_stream returning: emotion='{last_emotion}' emo_tag_found={emo_tag_found} text_len={len(text_buffer)}", flush=True)
         return text_buffer, last_emotion, merged_tool_calls, emo_tag_found
 
@@ -857,32 +881,169 @@ def should_force_search(user_msg: str) -> bool:
 _ANSWER_LANGUAGE_HARD_REQUIREMENT = (
     "[ANSWER LANGUAGE — HARD REQUIREMENT]\n"
     "The visible character reply MUST be natural Japanese only. "
-    "Do not write Chinese or English body text (proper nouns may stay in original "
+    "Do not write body text in any other language (proper nouns may stay in original "
     "script sparingly). Chinese subtitles are produced by a separate translation "
     "layer. If evidence is insufficient, unfinished, or conflicting, say so in "
     "Japanese; do not invent winners, scores, or dates.\n"
-    "【表示本文】必ず自然な日本語のみ。中国語・英語の本文は禁止。"
+    "【表示本文】必ず自然な日本語のみ。中国語・英語・ドイツ語などの本文は禁止。"
     "証拠不足・未確定・矛盾なら日本語で不明と述べ、捏造しないこと。"
 )
 
-_LANGUAGE_RETRY_AFTER_EVIDENCE = (
-    "\n【直前の出力は中国語または英語本文になっていたため破棄された。"
-    "外部検索・ツール結果があっても、表示本文は必ず自然な日本語だけで回答すること。"
-    "中国語・英語の本文は禁止。中国語字幕は翻訳層が別途生成する。"
-    "証拠が不足・未確定なら日本語で不明と述べ、事実を捏造しないこと。】"
-)
+def _assistant_history_is_publishable(content: str) -> bool:
+    """Validate assistant history without changing the durable/API record."""
 
-_LANGUAGE_RETRY_DEFAULT = (
-    "\n【直前の出力は中国語本文になっていたため破棄された。"
-    "表示本文は必ず自然な日本語だけで回答すること。"
-    "中国語は翻訳層が別途生成するので本文に書かないこと。】"
-)
+    body = EMO_TAG_PATTERN.sub("", str(content or "").lstrip(), count=1).strip()
+    if not body:
+        return True
+    segmenter = IncrementalJapaneseSegmenter()
+    segments = list(segmenter.feed(body)) + list(segmenter.finish())
+    saw_speech = False
+    for segment in segments:
+        if is_ignorable_non_speech_segment(segment.text):
+            continue
+        saw_speech = True
+        if contains_leak(segment.text) or not _is_publishable_japanese(segment.text):
+            return False
+    return saw_speech
 
-# First-pass discipline when the latest user message is Chinese/mixed (你好, etc.).
-# Without this, models mirror Chinese and every segment hard-rejects → full recovery.
-_CHINESE_INPUT_FIRST_PASS_JA = (
-    "\n【ユーザー入力が中国語でも、表示本文は必ず自然な日本語のみ。"
-    "中国語・英語の本文で返事しない。短い挨拶（例：你好）にも日本語で返す。"
+
+def _language_safe_prompt_history(active_history: list | None) -> list:
+    """Return a non-mutating provider projection without invalid assistant prose."""
+
+    projected: list = []
+    for message in active_history or []:
+        if not isinstance(message, dict):
+            projected.append(message)
+            continue
+        if (
+            message.get("role") == "assistant"
+            and not message.get("tool_calls")
+            and not _assistant_history_is_publishable(str(message.get("content") or ""))
+        ):
+            continue
+        projected.append(dict(message))
+    return projected
+
+
+def _latest_real_user_request(active_history: list | None) -> str:
+    """Return the latest actual user message, skipping tool/system evidence."""
+
+    for message in reversed(active_history or []):
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = str(message.get("content") or "").strip()
+        if content:
+            return content
+    return ""
+
+
+async def _render_foreign_speech_to_japanese(
+    *,
+    provider,
+    provider_snapshot: ProviderSnapshot | None,
+    session: SessionState,
+    source_text: str,
+    user_request: str,
+) -> str | None:
+    """Render foreign draft data through an isolated, tool-free provider call.
+
+    This deliberately receives neither chat history, persona prompt, memory nor
+    tool evidence.  Those influenced the semantic draft already; carrying them
+    into a repair call caused language mirroring in live DeepSeek runs.
+    """
+
+    import inspect
+
+    source = str(source_text or "").strip()
+    if not source:
+        return None
+    digest = hashlib.sha256(source.encode("utf-8", errors="replace")).hexdigest()[:12]
+    for renderer_attempt in range(2):
+        stream_kwargs = {
+            "active_history": build_japanese_renderer_history(
+                source,
+                user_request,
+                strict=renderer_attempt > 0,
+            ),
+            "memory_summary": "",
+            "api_key": session.api_key,
+            "system_prompt": JAPANESE_RENDERER_SYSTEM_PROMPT,
+            "temperature": 0.0,
+            "tools": None,
+            "tool_choice": None,
+            "model": (
+                provider_snapshot.model_id
+                if provider_snapshot is not None
+                else session.model
+            ),
+            "reasoning_effort": None,
+            "isolated": True,
+        }
+        signature = inspect.signature(provider.get_chat_stream)
+        accepts_kwargs = any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        )
+        if not accepts_kwargs:
+            stream_kwargs = {
+                key: value
+                for key, value in stream_kwargs.items()
+                if key in signature.parameters
+            }
+
+        raw_parts: list[str] = []
+        blocked_tool = False
+        stream_gen = None
+        try:
+            stream_gen = provider.get_chat_stream(**stream_kwargs)
+            session.active_streams.add(stream_gen)
+            async with aclosing(stream_gen) as stream:
+                async for chunk in stream:
+                    if chunk.get("tool_calls"):
+                        blocked_tool = True
+                        continue
+                    content = chunk.get("content")
+                    if content:
+                        raw_parts.append(str(content))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(
+                f"[LanguageRenderer] attempt={renderer_attempt + 1}/2 "
+                f"provider_error={type(exc).__name__} source_sha256={digest}",
+                flush=True,
+            )
+            continue
+        finally:
+            if stream_gen is not None:
+                session.active_streams.discard(stream_gen)
+
+        rendered = normalize_rendered_japanese("".join(raw_parts))
+        if (
+            not blocked_tool
+            and not contains_leak(rendered)
+            and is_valid_rendered_japanese(rendered)
+        ):
+            print(
+                f"[LanguageRenderer] attempt={renderer_attempt + 1}/2 ok "
+                f"source_sha256={digest}",
+                flush=True,
+            )
+            return rendered
+        print(
+            f"[LanguageRenderer] attempt={renderer_attempt + 1}/2 rejected "
+            f"tool={blocked_tool} rendered_len={len(rendered)} "
+            f"source_sha256={digest}",
+            flush=True,
+        )
+    return None
+
+
+# First-pass discipline for any non-Japanese user language.  This improves the
+# happy path; the isolated renderer below remains the actual publication safety net.
+_NON_JAPANESE_INPUT_FIRST_PASS_JA = (
+    "\n【ユーザー入力の言語に関係なく、表示本文は必ず自然な日本語のみ。"
+    "中国語・英語・ドイツ語などの本文で返事しない。固有名詞以外は日本語で話す。"
     "中国語字幕は翻訳層が別途生成する。】"
 )
 
@@ -902,8 +1063,11 @@ def _history_has_external_evidence(active_history: list) -> bool:
     return False
 
 
-def _latest_user_message_is_chinese_or_mixed(active_history: list) -> bool:
-    """True when the latest user turn is Chinese or mixed (needs first-pass JA hard requirement)."""
+def _latest_user_message_requires_japanese_reply(active_history: list) -> bool:
+    """True when the latest user turn is not already plausible Japanese."""
+
+    from app.domain.segments import is_plausible_japanese_tts_source
+
     for message in reversed(active_history or []):
         if not isinstance(message, dict):
             continue
@@ -912,8 +1076,7 @@ def _latest_user_message_is_chinese_or_mixed(active_history: list) -> bool:
         content = str(message.get("content") or "").strip()
         if not content:
             return False
-        language = classify_source_language(content)
-        return language in {"zh", "mixed"}
+        return not is_plausible_japanese_tts_source(content)
     return False
 
 
@@ -1395,7 +1558,7 @@ async def processor_loop(
                 )
                 from app.services.memory import memory_service
                 # Memory Ingest v2: recent window + allowed source ids (no keyword gate).
-                window = session.recent_messages()
+                window = _language_safe_prompt_history(session.recent_messages())
                 allowed_ids = [
                     int(item["id"])
                     for item in window
