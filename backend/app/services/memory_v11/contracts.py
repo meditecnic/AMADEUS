@@ -1,12 +1,17 @@
-"""Stable contracts and error types for Memory v11 (S1)."""
+"""Stable contracts and error types for Memory v11 (S1+S2)."""
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Final
 
 
 PIPELINE_VERSION: Final[str] = "memory-v11-1"
 MAX_PINNED_FACTS_PER_SCOPE: Final[int] = 8
+# Conservative auto-activation threshold (shadow default).
+AUTO_STABLE_CONFIDENCE: Final[float] = 0.85
+MAX_AUTO_RETRIES: Final[int] = 3
+LEASE_SECONDS: Final[int] = 120
 
 IDENTITY_MODES: Final[frozenset[str]] = frozenset({"self", "okabe"})
 FACT_STATES: Final[frozenset[str]] = frozenset({"active", "deleted"})
@@ -15,6 +20,27 @@ CHANGE_KINDS: Final[frozenset[str]] = frozenset(
 )
 JOB_STATES: Final[frozenset[str]] = frozenset(
     {"pending", "processing", "completed", "failed", "cancelled"}
+)
+ALLOWED_OPS: Final[frozenset[str]] = frozenset(
+    {"CREATE", "ATTACH", "REFINE", "SUPERSEDE", "REJECT"}
+)
+
+
+class MemoryJobErrorCode(str, Enum):
+    """Stable job diagnostic codes — no user content."""
+
+    PROVIDER_UNAVAILABLE = "provider_unavailable"
+    INVALID_JSON = "invalid_json"
+    VALIDATION_FAILED = "validation_failed"
+    SOURCE_MISSING = "source_missing"
+    SOURCE_NOT_USER = "source_not_user"
+    LEASE_CONFLICT = "lease_conflict"
+    TIMEOUT = "timeout"
+    INTERNAL = "internal"
+
+
+MEMORY_JOB_ERROR_CODES: Final[frozenset[str]] = frozenset(
+    code.value for code in MemoryJobErrorCode
 )
 
 

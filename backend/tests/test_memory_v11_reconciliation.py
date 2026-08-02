@@ -549,3 +549,181 @@ async def test_s0_target_outside_allowlist_fail_closed(isolated_store):
         "allowlist_violation",
         "invalid_target_fact_id",
     }
+
+
+@pytest.mark.asyncio
+async def test_s2_second_operation_failure_rolls_back_entire_batch(isolated_store):
+    """P1: if a later operation fails, earlier CREATE/observation must not remain."""
+    from app.db import get_db
+
+    recon = _reconciler()
+    session_id = "s-batch-atomic"
+    source_id = 7001
+    observations = [
+        _observation(
+            ref="o1",
+            display_text="喜欢猫",
+            semantic={"subject": "user", "predicate": "likes", "object": {"name": "cat"}},
+            source_message_ids=[source_id],
+        ),
+        _observation(
+            ref="o2",
+            display_text="喜欢狗",
+            semantic={"subject": "user", "predicate": "likes", "object": {"name": "dog"}},
+            source_message_ids=[source_id],
+        ),
+    ]
+    operations = [
+        {
+            "op": "CREATE",
+            "observation_ref": "o1",
+            "target_fact_id": None,
+            "expected_version": None,
+            "fact_text": "喜欢猫",
+            "reason_code": "direct_durable_statement",
+        },
+        {
+            "op": "ATTACH",
+            "observation_ref": "o2",
+            "target_fact_id": "missing-target",
+            "expected_version": 1,
+            "fact_text": "喜欢狗",
+            "reason_code": "equivalent_evidence",
+        },
+    ]
+    with pytest.raises(Exception):
+        await recon.apply_validated_memory_operations(
+            session_id=session_id,
+            worldline="steins_gate",
+            identity_mode="self",
+            observations=observations,
+            operations=operations,
+            source_evidence=[
+                _source_evidence(
+                    source_message_id=source_id,
+                    conversation_id="conv-atomic",
+                    fingerprint="fp-atomic",
+                    excerpt="猫和狗",
+                )
+            ],
+            candidate_allowlist=[],  # ATTACH target not allowed → fail after CREATE pre-validate
+        )
+
+    # Pre-validate rejects before write when allowlist fails; also cover mid-batch:
+    # CREATE succeeds validation, second op fails at apply-time expected_version.
+    # Seed one fact then batch CREATE + ATTACH with stale expected_version.
+    first = await recon.apply_validated_memory_operations(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="seed",
+                display_text="喜欢鱼",
+                semantic={
+                    "subject": "user",
+                    "predicate": "likes",
+                    "object": {"name": "fish"},
+                },
+                source_message_ids=[8001],
+            )
+        ],
+        operations=[
+            {
+                "op": "CREATE",
+                "observation_ref": "seed",
+                "target_fact_id": None,
+                "expected_version": None,
+                "fact_text": "喜欢鱼",
+                "reason_code": "direct_durable_statement",
+            }
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=8001,
+                conversation_id="conv-seed",
+                fingerprint="fp-seed",
+                excerpt="鱼",
+            )
+        ],
+        candidate_allowlist=[],
+    )
+    fact_id = first["created_facts"][0]["fact_id"]
+    before_facts = len(first["active_facts"])
+
+    with pytest.raises(Exception):
+        await recon.apply_validated_memory_operations(
+            session_id=session_id,
+            worldline="steins_gate",
+            identity_mode="self",
+            observations=[
+                _observation(
+                    ref="n1",
+                    display_text="喜欢鸟",
+                    semantic={
+                        "subject": "user",
+                        "predicate": "likes",
+                        "object": {"name": "bird"},
+                    },
+                    source_message_ids=[8002],
+                ),
+                _observation(
+                    ref="n2",
+                    display_text="喜欢鱼细化",
+                    semantic={
+                        "subject": "user",
+                        "predicate": "likes",
+                        "object": {"name": "fish"},
+                    },
+                    source_message_ids=[8002],
+                ),
+            ],
+            operations=[
+                {
+                    "op": "CREATE",
+                    "observation_ref": "n1",
+                    "target_fact_id": None,
+                    "expected_version": None,
+                    "fact_text": "喜欢鸟",
+                    "reason_code": "direct_durable_statement",
+                },
+                {
+                    "op": "ATTACH",
+                    "observation_ref": "n2",
+                    "target_fact_id": fact_id,
+                    "expected_version": 99,  # stale → fail after CREATE in same txn
+                    "fact_text": "喜欢鱼",
+                    "reason_code": "equivalent_evidence",
+                },
+            ],
+            source_evidence=[
+                _source_evidence(
+                    source_message_id=8002,
+                    conversation_id="conv-batch2",
+                    fingerprint="fp-batch2",
+                    excerpt="鸟和鱼",
+                )
+            ],
+            candidate_allowlist=[fact_id],
+        )
+
+    db = await get_db("steins_gate", "memory")
+    try:
+        facts = await (
+            await db.execute(
+                "SELECT COUNT(*) AS n FROM stable_facts WHERE session_id=?",
+                (session_id,),
+            )
+        ).fetchone()
+        obs = await (
+            await db.execute(
+                "SELECT COUNT(*) AS n FROM memory_observations WHERE session_id=?",
+                (session_id,),
+            )
+        ).fetchone()
+        # Only the successful seed CREATE remains; rolled-back batch leaves nothing new.
+        assert int(facts["n"]) == 1
+        assert int(obs["n"]) == 1
+    finally:
+        await db.close()
+    assert before_facts == 1

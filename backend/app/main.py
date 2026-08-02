@@ -60,6 +60,20 @@ async def lifespan(app: FastAPI):
     if sidecar_state.url:
         tts_manager.sovits_url = sidecar_state.url
     print("[GPT-SoVITS] TTS will be attempted per request.")
+
+    # MEMORY-V11: background worker only when shadow/v11 is explicitly enabled.
+    from app.services.memory_v11.jobs import (
+        memory_mode,
+        start_background_worker,
+        stop_background_worker,
+    )
+
+    _mem_mode = memory_mode()
+    if _mem_mode in {"shadow", "v11"}:
+        await start_background_worker()
+        print(f"[MemoryV11] worker started (AMADEUS_MEMORY_MODE={_mem_mode})")
+    else:
+        print(f"[MemoryV11] mode={_mem_mode} (legacy ingest; no v11 worker)")
     print("--------------------------------------------------")
 
     diagnostics_sweep = asyncio.create_task(_diagnostics_sweep_loop())
@@ -68,6 +82,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     print("Amadeus Backend shutting down, cleaning resources...")
     diagnostics_sweep.cancel()
+    await stop_background_worker()
     await tts_manager.close_client()
     await search_service.close()
     await sidecar_supervisor.close()

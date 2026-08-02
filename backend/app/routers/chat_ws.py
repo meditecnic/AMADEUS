@@ -1556,32 +1556,63 @@ async def processor_loop(
                         "id": int(assistant_message_id),
                     }
                 )
-                from app.services.memory import memory_service
-                # Memory Ingest v2: recent window + allowed source ids (no keyword gate).
-                window = _language_safe_prompt_history(session.recent_messages())
-                allowed_ids = [
-                    int(item["id"])
-                    for item in window
-                    if isinstance(item.get("id"), int)
-                    and not isinstance(item.get("id"), bool)
-                    and int(item["id"]) > 0
-                ]
-                for mid in (user_message_id, assistant_message_id):
-                    if isinstance(mid, int) and mid > 0 and mid not in allowed_ids:
-                        allowed_ids.append(int(mid))
-                memory_service.schedule_turn_extraction(
-                    session_id=session.session_id,
-                    worldline=session.worldline,
-                    conversation_id=conversation_id,
-                    user_text=user_msg,
-                    assistant_text=history_content,
-                    source_message_ids=allowed_ids,
-                    api_key=session.api_key,
-                    provider_snapshot=turn_provider,
-                    identity_mode=getattr(session, "identity_mode", "okabe"),
-                    skip_core=False,
-                    recent_messages=window,
-                )
+                # MEMORY-V11: default legacy Quiet Ingest. Explicit shadow/v11
+                # enables durable enqueue (worker started at app lifespan).
+                import os
+
+                memory_mode = (os.environ.get("AMADEUS_MEMORY_MODE") or "legacy").strip().lower()
+                if memory_mode in {"shadow", "v11"}:
+                    from app.services.memory_v11.jobs import enqueue_memory_job
+
+                    async def _enqueue_memory_v11() -> None:
+                        try:
+                            provider_id = getattr(turn_provider, "provider_id", None) or "deepseek"
+                            model_id = getattr(turn_provider, "model_id", None) or ""
+                            await enqueue_memory_job(
+                                session_id=session.session_id,
+                                worldline=session.worldline,
+                                conversation_id=conversation_id,
+                                identity_mode=getattr(session, "identity_mode", "okabe"),
+                                source_message_id=int(user_message_id),
+                                provider_id=str(provider_id),
+                                model_id=str(model_id),
+                            )
+                        except Exception as exc:
+                            print(
+                                f"[MemoryV11] enqueue failed (chat continues): {exc!r}",
+                                flush=True,
+                            )
+
+                    if isinstance(user_message_id, int) and user_message_id > 0:
+                        asyncio.create_task(_enqueue_memory_v11())
+                else:
+                    from app.services.memory import memory_service
+
+                    # Memory Ingest v2: recent window + allowed source ids (no keyword gate).
+                    window = _language_safe_prompt_history(session.recent_messages())
+                    allowed_ids = [
+                        int(item["id"])
+                        for item in window
+                        if isinstance(item.get("id"), int)
+                        and not isinstance(item.get("id"), bool)
+                        and int(item["id"]) > 0
+                    ]
+                    for mid in (user_message_id, assistant_message_id):
+                        if isinstance(mid, int) and mid > 0 and mid not in allowed_ids:
+                            allowed_ids.append(int(mid))
+                    memory_service.schedule_turn_extraction(
+                        session_id=session.session_id,
+                        worldline=session.worldline,
+                        conversation_id=conversation_id,
+                        user_text=user_msg,
+                        assistant_text=history_content,
+                        source_message_ids=allowed_ids,
+                        api_key=session.api_key,
+                        provider_snapshot=turn_provider,
+                        identity_mode=getattr(session, "identity_mode", "okabe"),
+                        skip_core=False,
+                        recent_messages=window,
+                    )
             else:
                 session.append_message({"role": "assistant", "content": history_content, "id": None})
 
