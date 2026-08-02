@@ -286,27 +286,49 @@ async def list_active_stable_facts(
     session_id: str,
     worldline: str,
     identity_mode: str,
+    query: str | None = None,
+    topic_id: str | None = None,
+    pinned_only: bool = False,
 ) -> list[dict[str, Any]]:
-    """List active facts with their open version display text (scope-strict)."""
+    """List active facts with their open version display text (scope-strict).
+
+    Local filters only (no LLM): optional substring ``query`` on display_text,
+    exact ``topic_id``, and ``pinned_only``.
+    """
     wl = normalize_worldline(worldline)
     mode = normalize_identity_mode(identity_mode)
     session = _require_session_id(session_id)
+    topic_filter = (topic_id or "").strip() or None
+    query_norm = (query or "").strip().lower() or None
+
     db = await get_db(wl, "memory")
     try:
+        clauses = [
+            "f.session_id=?",
+            "f.identity_mode=?",
+            "f.state='active'",
+        ]
+        params: list[Any] = [session, mode]
+        if topic_filter is not None:
+            clauses.append("f.topic_id=?")
+            params.append(topic_filter)
+        if pinned_only:
+            clauses.append("f.is_pinned=1")
+        where = " AND ".join(clauses)
         cur = await db.execute(
-            """SELECT f.fact_id, f.active_version, f.is_pinned, f.topic_id,
+            f"""SELECT f.fact_id, f.active_version, f.is_pinned, f.topic_id,
                       v.display_text, v.version_no, v.confidence
                  FROM stable_facts f
                  JOIN stable_fact_versions v
                    ON v.fact_id = f.fact_id
                   AND v.version_no = f.active_version
                   AND v.invalid_at IS NULL
-                WHERE f.session_id=? AND f.identity_mode=? AND f.state='active'
+                WHERE {where}
                 ORDER BY f.is_pinned DESC, f.updated_at DESC""",
-            (session, mode),
+            params,
         )
         rows = await cur.fetchall()
-        return [
+        items = [
             {
                 "fact_id": row["fact_id"],
                 "display_text": row["display_text"],
@@ -318,5 +340,53 @@ async def list_active_stable_facts(
             }
             for row in rows
         ]
+        if query_norm is not None:
+            items = [
+                item
+                for item in items
+                if query_norm in str(item.get("display_text") or "").lower()
+            ]
+        return items
+    finally:
+        await db.close()
+
+
+async def job_status_summary(
+    *,
+    session_id: str,
+    worldline: str,
+    identity_mode: str,
+) -> dict[str, Any]:
+    """Aggregate ingest job counts for one full scope (no message bodies)."""
+    wl = normalize_worldline(worldline)
+    mode = normalize_identity_mode(identity_mode)
+    session = _require_session_id(session_id)
+    db = await get_db(wl, "memory")
+    try:
+        cur = await db.execute(
+            """SELECT state, COUNT(*) AS n
+                 FROM memory_ingest_jobs
+                WHERE session_id=? AND identity_mode=?
+                GROUP BY state""",
+            (session, mode),
+        )
+        counts = {str(row["state"]): int(row["n"]) for row in await cur.fetchall()}
+        cur = await db.execute(
+            """SELECT MAX(completed_at) AS latest
+                 FROM memory_ingest_jobs
+                WHERE session_id=? AND identity_mode=? AND state='completed'""",
+            (session, mode),
+        )
+        latest_row = await cur.fetchone()
+        latest = latest_row["latest"] if latest_row is not None else None
+        return {
+            "session_id": session,
+            "worldline": wl,
+            "identity_mode": mode,
+            "pending_count": int(counts.get("pending", 0)),
+            "processing_count": int(counts.get("processing", 0)),
+            "failed_count": int(counts.get("failed", 0)),
+            "latest_completed_at": latest,
+        }
     finally:
         await db.close()

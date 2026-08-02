@@ -349,6 +349,7 @@ async def retry_memory_job(
     job_id: str,
     session_id: str,
     worldline: str,
+    identity_mode: str | None = None,
 ) -> dict[str, Any]:
     wl = normalize_worldline(worldline)
     found = await _find_job(job_id, worldline=wl)
@@ -357,6 +358,10 @@ async def retry_memory_job(
     job, job_wl = found
     if job["session_id"] != session_id:
         raise PermissionError("session_id mismatch for job retry")
+    if identity_mode is not None and str(identity_mode).strip() != "":
+        mode = normalize_identity_mode(identity_mode)
+        if job["identity_mode"] != mode:
+            raise PermissionError("identity_mode mismatch for job retry")
     if job["state"] != "failed":
         return job
 

@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from fastapi import APIRouter, HTTPException, Query
 
-from app.db import normalize_worldline, validate_schema
+from app.db import normalize_identity_mode, normalize_worldline, validate_schema
 from app.services.memory import (
     DismissError,
     MemoryDeleteError,
@@ -140,11 +140,85 @@ async def current_worldline(session_id: str = Query("default")):
 
 
 @router.get("/api/memory/status")
-async def memory_status(session_id: str = Query("default"), worldline: str = Query("steins_gate")):
+async def memory_status(
+    session_id: str = Query("default"),
+    worldline: str = Query("steins_gate"),
+    identity_mode: str | None = Query(None),
+):
+    """Memory status.
+
+    With explicit ``identity_mode`` → v11 scoped job aggregates (S3a).
+    Without → legacy Quiet Ingest counts (existing Ledger clients).
+    """
     try:
-        return await memory_service.status(session_id, normalize_worldline(worldline))
+        wl = normalize_worldline(worldline)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if identity_mode is not None and str(identity_mode).strip() != "":
+        from app.services.memory_v11.contracts import MemoryValidationError
+        from app.services.memory_v11.repository import job_status_summary
+
+        try:
+            mode = normalize_identity_mode(identity_mode)
+            return await job_status_summary(
+                session_id=session_id,
+                worldline=wl,
+                identity_mode=mode,
+            )
+        except MemoryValidationError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        return await memory_service.status(session_id, wl)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/api/memory/jobs/{job_id}/retry")
+async def retry_memory_job_endpoint(
+    job_id: str,
+    session_id: str = Query(...),
+    worldline: str = Query("steins_gate"),
+    identity_mode: str = Query(...),
+):
+    """Retry a failed v11 ingest job; requires full scope ownership match."""
+    from app.services.memory_v11.jobs import retry_memory_job
+
+    try:
+        wl = normalize_worldline(worldline)
+        mode = normalize_identity_mode(identity_mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
+        job = await retry_memory_job(
+            job_id=job_id,
+            session_id=session_id,
+            worldline=wl,
+            identity_mode=mode,
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "job_not_found", "message": str(exc)},
+        ) from exc
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "scope_mismatch", "message": str(exc)},
+        ) from exc
+    return {
+        "job_id": job["job_id"],
+        "state": job["state"],
+        "session_id": job["session_id"],
+        "worldline": job.get("worldline", wl),
+        "identity_mode": job["identity_mode"],
+        "attempt_count": job.get("attempt_count", 0),
+        "last_error_code": job.get("last_error_code"),
+    }
 
 
 @router.post("/api/memory/forget")
@@ -159,12 +233,49 @@ async def forget_memory(request: ForgetRequest):
 async def memory_facts_ledger(
     session_id: str = Query("default"),
     worldline: str = Query("steins_gate"),
+    identity_mode: str | None = Query(None),
+    query: str | None = Query(None),
+    topic_id: str | None = Query(None),
+    pinned_only: bool = Query(False),
 ):
-    """Gate 7A Memory Ledger: worldline self-local facts + all shared facts."""
+    """Memory facts list.
+
+    With explicit ``identity_mode`` → v11 scoped active stable facts (S3a).
+    Without → legacy Gate 7A Ledger (local/shared/okabe) for existing UI.
+    """
     try:
         wl = normalize_worldline(worldline)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if identity_mode is not None and str(identity_mode).strip() != "":
+        from app.services.memory_v11.contracts import MemoryValidationError
+        from app.services.memory_v11.repository import list_active_stable_facts
+
+        try:
+            mode = normalize_identity_mode(identity_mode)
+            facts = await list_active_stable_facts(
+                session_id=session_id,
+                worldline=wl,
+                identity_mode=mode,
+                query=query,
+                topic_id=topic_id,
+                pinned_only=pinned_only,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except MemoryValidationError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": exc.code, "message": str(exc)},
+            ) from exc
+        return {
+            "facts": facts,
+            "scope": {
+                "session_id": session_id,
+                "worldline": wl,
+                "identity_mode": mode,
+            },
+        }
     return await memory_service.list_memory_facts_for_ledger(session_id, wl)
 
 

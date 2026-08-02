@@ -226,10 +226,79 @@ def _session_self_name(session) -> str:
     return sanitize_self_name(getattr(session, "self_name", ""))
 
 
+def _stable_fact_prompt_id(fact_id: str) -> int:
+    """Map UUID fact_id to a stable positive int for RetrievedMemory.id."""
+    import hashlib
+
+    digest = hashlib.sha256(fact_id.encode("utf-8")).digest()
+    return int.from_bytes(digest[:4], "big") % 2_147_483_647 or 1
+
+
+async def _select_v11_prompt_memories(
+    *,
+    session_id: str,
+    worldline: str,
+    identity_mode: str,
+    user_message: str,
+    limit: int = 24,
+) -> tuple[list[RetrievedMemory], list[RetrievedMemory]]:
+    """Read-only v11 prompt surface: active stable facts only (S3a).
+
+    No experience table yet; episodic list stays empty. Never merges legacy
+    core_facts/shared rows. Local lexical ranking only (no LLM).
+    """
+    from app.services.memory_v11.repository import list_active_stable_facts
+
+    rows = await list_active_stable_facts(
+        session_id=session_id,
+        worldline=worldline,
+        identity_mode=identity_mode,
+    )
+    query_terms = {
+        term.lower()
+        for term in (user_message or "").split()
+        if len(term) > 1
+    }
+
+    def _score(display_text: str, pinned: bool) -> float:
+        haystack = (display_text or "").lower()
+        relevance = (
+            sum(term in haystack for term in query_terms) / max(1, len(query_terms))
+            if query_terms
+            else 0.0
+        )
+        return (2.0 if pinned else 0.0) + relevance
+
+    ranked = sorted(
+        rows,
+        key=lambda row: (
+            _score(str(row.get("display_text") or ""), bool(row.get("is_pinned"))),
+            float(row.get("confidence") or 0.0),
+        ),
+        reverse=True,
+    )[: max(1, limit)]
+    facts = [
+        RetrievedMemory(
+            id=_stable_fact_prompt_id(str(row["fact_id"])),
+            kind="core",
+            content=str(row.get("display_text") or ""),
+            score=_score(str(row.get("display_text") or ""), bool(row.get("is_pinned"))),
+            confidence=float(row.get("confidence") or 1.0),
+            importance=1.0 if row.get("is_pinned") else 0.5,
+            pinned=bool(row.get("is_pinned")),
+        )
+        for row in ranked
+        if str(row.get("display_text") or "").strip()
+    ]
+    # Experience layer not in current v11 DDL — leave episodic empty.
+    return facts, []
+
+
 async def compile_for_session(session, user_message: str) -> str:
     """Build a turn prompt without loading the heavyweight embedding model."""
     from app.security.prompt import resolve_system_prompt_base
     from app.services.memory import memory_service
+    from app.services.memory_v11.jobs import memory_mode
     from app.services.soul_engine import soul_engine
 
     mode = _session_identity_mode(session)
@@ -242,18 +311,28 @@ async def compile_for_session(session, user_message: str) -> str:
         session.worldline,
         identity_mode=mode,
     )
-    facts = await memory_service.select_core_facts(
-        session.session_id,
-        session.worldline,
-        user_message,
-        identity_mode=mode,
-    )
-    episodes = await memory_service.lexical_search(
-        session.session_id,
-        session.worldline,
-        user_message,
-        identity_mode=mode,
-    )
+    # S3a prompt gate: only AMADEUS_MEMORY_MODE=v11 reads v11 stable facts.
+    # legacy + shadow keep Quiet Ingest retrieval so shadow writes never leak.
+    if memory_mode() == "v11":
+        facts, episodes = await _select_v11_prompt_memories(
+            session_id=session.session_id,
+            worldline=session.worldline,
+            identity_mode=mode,
+            user_message=user_message,
+        )
+    else:
+        facts = await memory_service.select_core_facts(
+            session.session_id,
+            session.worldline,
+            user_message,
+            identity_mode=mode,
+        )
+        episodes = await memory_service.lexical_search(
+            session.session_id,
+            session.worldline,
+            user_message,
+            identity_mode=mode,
+        )
     return prompt_compiler.compile(PromptInputs(
         worldline=session.worldline,
         base_identity=base_identity or "You are Amadeus Kurisu.",
