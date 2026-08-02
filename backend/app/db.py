@@ -31,7 +31,8 @@ EMBEDDING_DIMENSION = 384
 # v8: control-only shared_user_facts (Q18 foundation); worldline stores bump meta only.
 # v9: core_facts.is_dismissed (M3 soft-hide pending okabe candidates; audit retained).
 # v10: provider_configurations multi-profile fields (display_name/enabled/created_at).
-SCHEMA_VERSION = 10
+# v11: Memory observation–fact pipeline (additive tables; legacy core_facts retained).
+SCHEMA_VERSION = 11
 
 DEFAULT_IDENTITY_MODE = "okabe"
 IDENTITY_MODES = frozenset({"okabe", "self"})
@@ -255,6 +256,194 @@ CREATE TABLE IF NOT EXISTS emotion_states (
     PRIMARY KEY(session_id, identity_mode)
 );
 """
+
+# MEMORY-V11 additive structures (observation / stable fact / job / tombstone).
+# Applied by MEMORY_SCHEMA (fresh install) and _migrate_v10_to_v11 (upgrade).
+MEMORY_V11_DDL = """
+CREATE TABLE IF NOT EXISTS memory_ingest_jobs (
+    job_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    identity_mode TEXT NOT NULL CHECK(identity_mode IN ('self','okabe')),
+    source_message_id INTEGER NOT NULL,
+    pipeline_version TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('pending','processing','completed','failed','cancelled')),
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TEXT,
+    lease_owner TEXT,
+    lease_expires_at TEXT,
+    last_error_code TEXT,
+    last_error_hash TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    completed_at TEXT
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_ingest_jobs_source_cursor
+    ON memory_ingest_jobs(
+        session_id, conversation_id, identity_mode, source_message_id, pipeline_version
+    );
+CREATE INDEX IF NOT EXISTS idx_memory_ingest_jobs_state
+    ON memory_ingest_jobs(state, next_attempt_at);
+
+CREATE TABLE IF NOT EXISTS memory_observations (
+    observation_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    identity_mode TEXT NOT NULL CHECK(identity_mode IN ('self','okabe')),
+    display_text TEXT,
+    semantic_json TEXT,
+    semantic_fingerprint TEXT,
+    evidence_kind TEXT NOT NULL CHECK(
+        evidence_kind IN ('direct_user','inferred_user','contextual_user','legacy_import')
+    ),
+    memory_class TEXT NOT NULL CHECK(
+        memory_class IN ('stable_candidate','episodic','none')
+    ),
+    confidence REAL,
+    topic_label_proposal TEXT,
+    status TEXT NOT NULL CHECK(
+        status IN ('candidate','attached','rejected','ignored','deleted','expired')
+    ),
+    extractor_version TEXT,
+    reanalysis_count INTEGER NOT NULL DEFAULT 0 CHECK(reanalysis_count BETWEEN 0 AND 1),
+    expires_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_observations_scope_status
+    ON memory_observations(session_id, identity_mode, status);
+CREATE INDEX IF NOT EXISTS idx_memory_observations_fingerprint
+    ON memory_observations(semantic_fingerprint);
+
+CREATE TABLE IF NOT EXISTS memory_observation_sources (
+    observation_id TEXT NOT NULL REFERENCES memory_observations(observation_id),
+    source_message_id INTEGER NOT NULL,
+    conversation_id TEXT NOT NULL,
+    source_role TEXT NOT NULL CHECK(source_role = 'user'),
+    source_fingerprint TEXT NOT NULL,
+    source_created_at TEXT NOT NULL,
+    source_state TEXT NOT NULL CHECK(source_state IN ('present','deleted')),
+    excerpt TEXT,
+    PRIMARY KEY(observation_id, source_message_id)
+);
+
+-- Topic identity is fully scoped: (topic_id, session_id, identity_mode).
+-- Aliases and stable_facts must FK that composite so topics cannot attach across users/identities.
+CREATE TABLE IF NOT EXISTS memory_topics (
+    topic_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    identity_mode TEXT NOT NULL CHECK(identity_mode IN ('self','okabe')),
+    normalized_label TEXT NOT NULL,
+    display_label TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(topic_id, session_id, identity_mode)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_topics_scope_label
+    ON memory_topics(session_id, identity_mode, normalized_label);
+
+CREATE TABLE IF NOT EXISTS memory_topic_aliases (
+    topic_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    identity_mode TEXT NOT NULL CHECK(identity_mode IN ('self','okabe')),
+    normalized_alias TEXT NOT NULL,
+    PRIMARY KEY(session_id, identity_mode, normalized_alias),
+    FOREIGN KEY(topic_id, session_id, identity_mode)
+        REFERENCES memory_topics(topic_id, session_id, identity_mode)
+);
+
+CREATE TABLE IF NOT EXISTS stable_facts (
+    fact_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    identity_mode TEXT NOT NULL CHECK(identity_mode IN ('self','okabe')),
+    topic_id TEXT,
+    state TEXT NOT NULL CHECK(state IN ('active','deleted')),
+    active_version INTEGER,
+    is_pinned INTEGER NOT NULL DEFAULT 0 CHECK(is_pinned IN (0,1)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT,
+    FOREIGN KEY(topic_id, session_id, identity_mode)
+        REFERENCES memory_topics(topic_id, session_id, identity_mode)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_stable_facts_scope_id
+    ON stable_facts(fact_id, session_id, identity_mode);
+CREATE INDEX IF NOT EXISTS idx_stable_facts_scope_state
+    ON stable_facts(session_id, identity_mode, state);
+
+CREATE TABLE IF NOT EXISTS stable_fact_versions (
+    fact_id TEXT NOT NULL REFERENCES stable_facts(fact_id),
+    version_no INTEGER NOT NULL,
+    display_text TEXT NOT NULL,
+    semantic_json TEXT NOT NULL,
+    semantic_fingerprint TEXT NOT NULL,
+    confidence REAL NOT NULL CHECK(confidence BETWEEN 0 AND 1),
+    change_kind TEXT NOT NULL CHECK(
+        change_kind IN ('create','refine','supersede','user_edit','legacy_import')
+    ),
+    previous_version INTEGER,
+    valid_from TEXT NOT NULL,
+    invalid_at TEXT,
+    created_by_job_id TEXT,
+    PRIMARY KEY(fact_id, version_no)
+);
+-- Exactly one open (invalid_at IS NULL) version per fact.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_stable_fact_versions_one_open
+    ON stable_fact_versions(fact_id) WHERE invalid_at IS NULL;
+
+CREATE TABLE IF NOT EXISTS stable_fact_evidence (
+    fact_id TEXT NOT NULL,
+    version_no INTEGER NOT NULL,
+    observation_id TEXT NOT NULL REFERENCES memory_observations(observation_id),
+    evidence_role TEXT NOT NULL CHECK(evidence_role IN ('primary','supporting')),
+    PRIMARY KEY(fact_id, version_no, observation_id),
+    FOREIGN KEY(fact_id, version_no)
+        REFERENCES stable_fact_versions(fact_id, version_no)
+);
+
+CREATE TABLE IF NOT EXISTS memory_tombstones (
+    tombstone_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    identity_mode TEXT NOT NULL CHECK(identity_mode IN ('self','okabe')),
+    fact_id TEXT NOT NULL,
+    source_fingerprint TEXT,
+    semantic_fingerprint TEXT,
+    reason TEXT,
+    deleted_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_tombstones_scope
+    ON memory_tombstones(session_id, identity_mode, fact_id);
+
+CREATE TABLE IF NOT EXISTS memory_consolidation_proposals (
+    proposal_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    identity_mode TEXT NOT NULL CHECK(identity_mode IN ('self','okabe')),
+    survivor_fact_ids TEXT NOT NULL,
+    duplicate_fact_ids TEXT NOT NULL,
+    reason_codes TEXT NOT NULL,
+    preview_json TEXT NOT NULL,
+    snapshot_hash TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('open','applied','cancelled')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_memory_consolidation_scope_status
+    ON memory_consolidation_proposals(session_id, identity_mode, status);
+
+CREATE TABLE IF NOT EXISTS stable_fact_version_embeddings (
+    fact_id TEXT NOT NULL,
+    version_no INTEGER NOT NULL,
+    model TEXT NOT NULL,
+    dimensions INTEGER NOT NULL CHECK(dimensions=384),
+    vector BLOB NOT NULL,
+    PRIMARY KEY(fact_id, version_no),
+    FOREIGN KEY(fact_id, version_no)
+        REFERENCES stable_fact_versions(fact_id, version_no)
+);
+"""
+
+MEMORY_SCHEMA = MEMORY_SCHEMA + MEMORY_V11_DDL
 
 # Q18 foundation: cross-worldline shared stable user facts live only in
 # control.sqlite3. origin_identity_mode is constrained to 'self' — okabe
@@ -837,6 +1026,60 @@ def _migrate_v9_to_v10(connection: sqlite3.Connection, kind: DatabaseKind) -> No
         raise
 
 
+def _split_sql_statements(script: str) -> list[str]:
+    """Split a DDL script into statements without using executescript (avoids auto-commit)."""
+    statements: list[str] = []
+    buf: list[str] = []
+    for raw_line in script.splitlines():
+        line = raw_line.rstrip()
+        stripped = line.strip()
+        if not stripped or stripped.startswith("--"):
+            continue
+        buf.append(line)
+        if stripped.endswith(";"):
+            sql = "\n".join(buf).strip().rstrip(";").strip()
+            if sql:
+                statements.append(sql)
+            buf = []
+    tail = "\n".join(buf).strip().rstrip(";").strip()
+    if tail:
+        statements.append(tail)
+    return statements
+
+
+def _migrate_v10_to_v11(
+    connection: sqlite3.Connection,
+    kind: DatabaseKind,
+    worldline: str = "steins_gate",
+) -> None:
+    """MEMORY-V11: additive observation/fact/job tables on memory DBs; bump all kinds to 11.
+
+    - memory: non-overwrite backup, then transactional DDL (legacy core_facts retained).
+    - history/control: schema_version bump only (no shared row deletion in S1).
+    Failures roll back DDL and leave schema_version at 10 with no partial v11 tables.
+    """
+    if kind == "memory":
+        # Backup before any DDL so a later failure never loses the pre-migration file.
+        from app.services.memory_v11.migration import backup_memory_connection
+
+        backup_memory_connection(connection, worldline=worldline, schema_label="v10")
+
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        if kind == "memory":
+            # Do not use executescript here — it auto-COMMITs and breaks atomic rollback.
+            for statement in _split_sql_statements(MEMORY_V11_DDL):
+                connection.execute(statement)
+        connection.execute(
+            "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version',?)",
+            ("11",),
+        )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+
 async def _initialize_one(worldline: str, kind: DatabaseKind, schema: str) -> None:
     path = _resolve_path(worldline, kind)
     if path in _initialized_paths:
@@ -899,6 +1142,9 @@ def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str 
         if current == 9:
             _migrate_v9_to_v10(connection, kind)
             current = 10
+        if current == 10:
+            _migrate_v10_to_v11(connection, kind, worldline)
+            current = 11
         if current not in (None, SCHEMA_VERSION):
             raise RuntimeError(f"unsupported {kind} schema version at {path}: {current}")
 
