@@ -3752,3 +3752,469 @@ async def test_s3d4_d47_past_expiry_inherited_blocks_prompt_retrieval(isolated_s
     assert retrieved == [], (
         "a past-expiry experience must never be prompt-eligible"
     )
+
+
+# ---------------------------------------------------------------------------
+# MEMORY-V11-S3E-1: truth mutation gates.
+#   P1-A: ATTACH/REFINE/SUPERSEDE require an explicit positive int
+#         expected_version (missing / bool / string / float / <=0 rejected).
+#   P1-B: REFINE/SUPERSEDE may only rewrite stable truth from the same
+#         evidence authority as an automatic stable CREATE.
+# ---------------------------------------------------------------------------
+
+
+async def _s3e1_seed_fact(
+    session_id: str, *, text: str = "喜欢喝黑咖啡", source_message_id: int = 8601
+) -> dict[str, Any]:
+    """Direct stable CREATE → active fact v1 (strong evidence, 0.94)."""
+    result = await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="seed",
+                display_text=text,
+                semantic={"subject": "user", "predicate": "likes", "object": "coffee"},
+                source_message_ids=[source_message_id],
+            )
+        ],
+        operations=[
+            {"op": "CREATE", "observation_ref": "seed", "fact_text": text,
+             "reason_code": "direct_durable_statement"}
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=source_message_id,
+                conversation_id=f"conv-s3e1-{source_message_id}",
+                fingerprint=f"fp-s3e1-{source_message_id}",
+                excerpt=text,
+            )
+        ],
+        candidate_allowlist=[],
+    )
+    return result["created_facts"][0]
+
+
+def _s3e1_obs(
+    ref: str,
+    text: str,
+    source_message_id: int,
+    *,
+    evidence_kind: str = "direct_user",
+    memory_class: str = "stable_candidate",
+    confidence: float = 0.94,
+) -> dict[str, Any]:
+    return _observation(
+        ref=ref,
+        display_text=text,
+        semantic={"subject": "user", "predicate": "likes", "object": text[:8]},
+        source_message_ids=[source_message_id],
+        evidence_kind=evidence_kind,
+        memory_class=memory_class,
+        confidence=confidence,
+    )
+
+
+async def _s3e1_fact_state(fact_id: str) -> dict[str, Any]:
+    """Persistent truth snapshot for zero-mutation assertions."""
+    db = await get_db("steins_gate", "memory")
+    try:
+        fact = await (await db.execute(
+            "SELECT active_version, state FROM stable_facts WHERE fact_id=?",
+            (fact_id,),
+        )).fetchone()
+        v1 = await (await db.execute(
+            """SELECT invalid_at FROM stable_fact_versions
+                WHERE fact_id=? AND version_no=1""",
+            (fact_id,),
+        )).fetchone()
+        out: dict[str, Any] = {
+            "active_version": int(fact["active_version"]),
+            "state": str(fact["state"]),
+            "v1_invalid_at": v1["invalid_at"],
+        }
+        for key, sql in (
+            (
+                "versions",
+                "SELECT COUNT(*) AS n FROM stable_fact_versions WHERE fact_id=?",
+            ),
+            (
+                "evidence",
+                "SELECT COUNT(*) AS n FROM stable_fact_evidence WHERE fact_id=?",
+            ),
+            (
+                "embeddings",
+                "SELECT COUNT(*) AS n FROM stable_fact_version_embeddings "
+                "WHERE fact_id=?",
+            ),
+        ):
+            out[key] = int(
+                (await (await db.execute(sql, (fact_id,))).fetchone())["n"]
+            )
+        return out
+    finally:
+        await db.close()
+
+
+async def _s3e1_attempt(
+    session_id: str,
+    *,
+    op_name: str,
+    fact_id: str,
+    obs: dict[str, Any],
+    expected_version: Any = "__absent__",
+    source_message_id: int = 8602,
+) -> Any:
+    """Run one op through the real production seam; returns raised error info."""
+    op = {
+        "op": op_name,
+        "observation_ref": obs["observation_ref"],
+        "target_fact_id": fact_id,
+        "fact_text": obs["display_text"],
+        "reason_code": "s3e1",
+    }
+    if expected_version != "__absent__":
+        op["expected_version"] = expected_version
+    with pytest.raises(_contracts().MemoryValidationError) as exc_info:
+        await _apply_validated(
+            session_id=session_id,
+            worldline="steins_gate",
+            identity_mode="self",
+            observations=[obs],
+            operations=[op],
+            source_evidence=[
+                _source_evidence(
+                    source_message_id=source_message_id,
+                    conversation_id=f"conv-s3e1-{source_message_id}",
+                    fingerprint=f"fp-s3e1-{source_message_id}",
+                    excerpt=obs["display_text"],
+                )
+            ],
+            candidate_allowlist=[fact_id],
+        )
+    return exc_info
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("op_name", ["ATTACH", "REFINE", "SUPERSEDE"])
+@pytest.mark.parametrize(
+    "ev", [pytest.param("__absent__", id="absent"), pytest.param(None, id="none")]
+)
+async def test_s3e1_e1_e3_missing_expected_version(
+    isolated_store, monkeypatch, op_name, ev
+):
+    """P1-A: key ABSENT and explicit None are both MISSING → zero mutation.
+
+    The previous dangerous omitted-version path silently skipped version checks;
+    it must now fail earlier as missing_expected_version.
+    """
+    embedder = _DeterministicEmbedder()
+    monkeypatch.setattr(memory_service, "embedder", embedder)
+    session_id = f"s3e1-e-{uuid4().hex[:8]}"
+    fact = await _s3e1_seed_fact(session_id)
+    fact_id = fact["fact_id"]
+    before = await _s3e1_fact_state(fact_id)
+    obs = _s3e1_obs("o1", "喜欢喝黑咖啡", 8602)
+    calls_before = embedder.encode_passage_calls
+    exc_info = await _s3e1_attempt(
+        session_id, op_name=op_name, fact_id=fact_id, obs=obs,
+        expected_version=ev, source_message_id=8602,
+    )
+    assert exc_info.value.code == "missing_expected_version"
+    assert embedder.encode_passage_calls == calls_before, (
+        "missing expected_version must fail BEFORE encode_passage"
+    )
+    assert await _s3e1_fact_state(fact_id) == before, "zero truth mutation"
+    assert await _count_rows(
+        sql="SELECT COUNT(*) AS n FROM memory_observations WHERE session_id=?",
+        params=(session_id,),
+    ) == 1, "no observation residue from rejected batch"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("op_name", ["ATTACH", "REFINE", "SUPERSEDE"])
+@pytest.mark.parametrize(
+    "bad",
+    [True, False, 0, -1, "1", 1.0],
+    ids=["true", "false", "zero", "negative", "string", "float"],
+)
+async def test_s3e1_e_invalid_expected_version(isolated_store, monkeypatch, op_name, bad):
+    """P1-A: bool / string / float / zero / negative versions are invalid."""
+    embedder = _DeterministicEmbedder()
+    monkeypatch.setattr(memory_service, "embedder", embedder)
+    session_id = f"s3e1-ev-{uuid4().hex[:8]}"
+    fact = await _s3e1_seed_fact(session_id)
+    fact_id = fact["fact_id"]
+    before = await _s3e1_fact_state(fact_id)
+    obs = _s3e1_obs("o1", "喜欢喝黑咖啡", 8603)
+    calls_before = embedder.encode_passage_calls
+    exc_info = await _s3e1_attempt(
+        session_id, op_name=op_name, fact_id=fact_id, obs=obs,
+        expected_version=bad, source_message_id=8603,
+    )
+    assert exc_info.value.code == "invalid_expected_version"
+    assert embedder.encode_passage_calls == calls_before, (
+        "invalid expected_version must fail BEFORE encode_passage"
+    )
+    assert await _s3e1_fact_state(fact_id) == before, "zero truth mutation"
+    assert await _count_rows(
+        sql="SELECT COUNT(*) AS n FROM memory_observations WHERE session_id=?",
+        params=(session_id,),
+    ) == 1, "no observation residue from rejected batch"
+
+
+@pytest.mark.asyncio
+async def test_s3e1_t1_stale_version_snapshot_rejected(isolated_store, monkeypatch):
+    """Reviewer race: expected_version=1 vs active v2 → mismatch, no v3/evidence."""
+    embedder = _DeterministicEmbedder()
+    monkeypatch.setattr(memory_service, "embedder", embedder)
+    session_id = f"s3e1-t1-{uuid4().hex[:8]}"
+    fact = await _s3e1_seed_fact(session_id)
+    fact_id = fact["fact_id"]
+    obs_v2 = _s3e1_obs("v2", "喜欢喝冰黑咖啡", 8604)
+    await _apply_validated(
+        session_id=session_id, worldline="steins_gate", identity_mode="self",
+        observations=[obs_v2],
+        operations=[
+            {"op": "REFINE", "observation_ref": "v2", "target_fact_id": fact_id,
+             "expected_version": 1, "fact_text": "喜欢喝冰黑咖啡",
+             "reason_code": "compatible_refinement"}
+        ],
+        source_evidence=[
+            _source_evidence(source_message_id=8604, conversation_id="conv-s3e1-8604",
+                             fingerprint="fp-s3e1-8604", excerpt="喜欢喝冰黑咖啡")
+        ],
+        candidate_allowlist=[fact_id],
+    )
+    assert (await _s3e1_fact_state(fact_id))["active_version"] == 2
+    before = await _s3e1_fact_state(fact_id)
+    for op_name, new_text in (
+        ("SUPERSEDE", "现在更喜欢茶"),
+        ("REFINE", "喜欢喝热美式"),
+        ("ATTACH", "喜欢喝冰黑咖啡"),
+    ):
+        obs = _s3e1_obs("o1", new_text, 8605)
+        exc_info = await _s3e1_attempt(
+            session_id, op_name=op_name, fact_id=fact_id, obs=obs,
+            expected_version=1, source_message_id=8605,
+        )
+        assert exc_info.value.code == "expected_version_mismatch", (
+            f"stale {op_name} expected_version=1 vs active=2 must mismatch"
+        )
+        assert await _s3e1_fact_state(fact_id) == before, (
+            f"{op_name} stale snapshot must leave zero mutation"
+        )
+    assert await _count_rows(
+        sql="SELECT COUNT(*) AS n FROM memory_observations WHERE session_id=?",
+        params=(session_id,),
+    ) == 2, "only seed + v2 observations exist; rejected attempts add none"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("op_name", ["SUPERSEDE", "REFINE"])
+async def test_s3e1_m1_m2_inferred_weak_evidence_rejected(
+    isolated_store, monkeypatch, op_name
+):
+    """inferred_user @ 0.20 can never rewrite stable truth."""
+    embedder = _DeterministicEmbedder()
+    monkeypatch.setattr(memory_service, "embedder", embedder)
+    session_id = f"s3e1-m1-{uuid4().hex[:8]}"
+    fact = await _s3e1_seed_fact(session_id)
+    fact_id = fact["fact_id"]
+    before = await _s3e1_fact_state(fact_id)
+    obs = _s3e1_obs(
+        "o1", "喜欢喝黑咖啡", 8606,
+        evidence_kind="inferred_user", confidence=0.20,
+    )
+    calls_before = embedder.encode_passage_calls
+    exc_info = await _s3e1_attempt(
+        session_id, op_name=op_name, fact_id=fact_id, obs=obs,
+        expected_version=1, source_message_id=8606,
+    )
+    assert exc_info.value.code == "fact_mutation_not_eligible"
+    assert embedder.encode_passage_calls == calls_before, (
+        "ineligible mutation must fail BEFORE encode_passage"
+    )
+    assert await _s3e1_fact_state(fact_id) == before, (
+        "old active fact must remain untouched"
+    )
+    assert await _count_rows(
+        sql="SELECT COUNT(*) AS n FROM memory_observations WHERE session_id=?",
+        params=(session_id,),
+    ) == 1, "no observation residue from rejected batch"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("op_name", ["SUPERSEDE", "REFINE"])
+async def test_s3e1_m3_m4_low_confidence_rejected(
+    isolated_store, monkeypatch, op_name
+):
+    """direct_user @ 0.50 < AUTO_STABLE_CONFIDENCE → reject."""
+    embedder = _DeterministicEmbedder()
+    monkeypatch.setattr(memory_service, "embedder", embedder)
+    session_id = f"s3e1-m3-{uuid4().hex[:8]}"
+    fact = await _s3e1_seed_fact(session_id)
+    fact_id = fact["fact_id"]
+    before = await _s3e1_fact_state(fact_id)
+    obs = _s3e1_obs("o1", "喜欢喝黑咖啡", 8607, confidence=0.50)
+    calls_before = embedder.encode_passage_calls
+    exc_info = await _s3e1_attempt(
+        session_id, op_name=op_name, fact_id=fact_id, obs=obs,
+        expected_version=1, source_message_id=8607,
+    )
+    assert exc_info.value.code == "fact_mutation_not_eligible"
+    assert embedder.encode_passage_calls == calls_before
+    assert await _s3e1_fact_state(fact_id) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("op_name", ["SUPERSEDE", "REFINE"])
+async def test_s3e1_m_threshold_boundary_rejected(
+    isolated_store, monkeypatch, op_name
+):
+    """confidence 0.84 with AUTO_STABLE_CONFIDENCE==0.85 → reject.
+
+    The shared predicate uses the authoritative threshold; no second constant.
+    """
+    contracts = _contracts()
+    assert float(contracts.AUTO_STABLE_CONFIDENCE) == 0.85
+    embedder = _DeterministicEmbedder()
+    monkeypatch.setattr(memory_service, "embedder", embedder)
+    session_id = f"s3e1-mt-{uuid4().hex[:8]}"
+    fact = await _s3e1_seed_fact(session_id)
+    fact_id = fact["fact_id"]
+    before = await _s3e1_fact_state(fact_id)
+    obs = _s3e1_obs("o1", "喜欢喝黑咖啡", 8608, confidence=0.84)
+    exc_info = await _s3e1_attempt(
+        session_id, op_name=op_name, fact_id=fact_id, obs=obs,
+        expected_version=1, source_message_id=8608,
+    )
+    assert exc_info.value.code == "fact_mutation_not_eligible"
+    assert await _s3e1_fact_state(fact_id) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("op_name", ["SUPERSEDE", "REFINE"])
+async def test_s3e1_m5_non_candidate_class_rejected(
+    isolated_store, monkeypatch, op_name
+):
+    """memory_class != stable_candidate → fact_mutation_not_eligible.
+
+    Episodic keeps its existing stronger prohibition
+    (episodic_target_operation_forbidden, covered by test_s3c1_*).
+    """
+    embedder = _DeterministicEmbedder()
+    monkeypatch.setattr(memory_service, "embedder", embedder)
+    session_id = f"s3e1-m5-{uuid4().hex[:8]}"
+    fact = await _s3e1_seed_fact(session_id)
+    fact_id = fact["fact_id"]
+    before = await _s3e1_fact_state(fact_id)
+    obs = _s3e1_obs("o1", "喜欢喝黑咖啡", 8609, memory_class="transient")
+    exc_info = await _s3e1_attempt(
+        session_id, op_name=op_name, fact_id=fact_id, obs=obs,
+        expected_version=1, source_message_id=8609,
+    )
+    assert exc_info.value.code == "fact_mutation_not_eligible"
+    assert await _s3e1_fact_state(fact_id) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("op_name", ["SUPERSEDE", "REFINE"])
+async def test_s3e1_m6_m7_strong_mutation_controls(
+    isolated_store, monkeypatch, op_name
+):
+    """Control: direct_user + stable_candidate + 0.94 + correct version → v2."""
+    embedder = _DeterministicEmbedder()
+    monkeypatch.setattr(memory_service, "embedder", embedder)
+    session_id = f"s3e1-m6-{uuid4().hex[:8]}"
+    fact = await _s3e1_seed_fact(session_id)
+    fact_id = fact["fact_id"]
+    obs = _s3e1_obs("o1", "喜欢喝冰黑咖啡", 8610)
+    await _apply_validated(
+        session_id=session_id, worldline="steins_gate", identity_mode="self",
+        observations=[obs],
+        operations=[
+            {"op": op_name, "observation_ref": "o1", "target_fact_id": fact_id,
+             "expected_version": 1, "fact_text": "喜欢喝冰黑咖啡",
+             "reason_code": "compatible_refinement"}
+        ],
+        source_evidence=[
+            _source_evidence(source_message_id=8610, conversation_id="conv-s3e1-8610",
+                             fingerprint="fp-s3e1-8610", excerpt="喜欢喝冰黑咖啡")
+        ],
+        candidate_allowlist=[fact_id],
+    )
+    state = await _s3e1_fact_state(fact_id)
+    assert state["active_version"] == 2, "valid mutation must advance version"
+    assert state["versions"] == 2, "v1 + v2"
+    assert state["evidence"] == 2, "v1 primary + v2 primary"
+    assert state["embeddings"] == 1, "v1 vector replaced by v2 vector"
+    assert state["v1_invalid_at"] is not None, "v1 closed by v2"
+
+
+@pytest.mark.asyncio
+async def test_s3e1_a1_attach_weak_evidence_allowed(isolated_store):
+    """ATTACH is intentionally different: inferred 0.20 + correct version links.
+
+    Fact text/version stay untouched; exactly one supporting evidence link
+    lands on the expected active version.
+    """
+    session_id = f"s3e1-a1-{uuid4().hex[:8]}"
+    fact = await _s3e1_seed_fact(session_id)
+    fact_id = fact["fact_id"]
+    obs = _s3e1_obs(
+        "o1", "喜欢喝黑咖啡", 8611,
+        evidence_kind="inferred_user", confidence=0.20,
+    )
+    await _apply_validated(
+        session_id=session_id, worldline="steins_gate", identity_mode="self",
+        observations=[obs],
+        operations=[
+            {"op": "ATTACH", "observation_ref": "o1", "target_fact_id": fact_id,
+             "expected_version": 1, "fact_text": "喜欢喝黑咖啡",
+             "reason_code": "equivalent_evidence"}
+        ],
+        source_evidence=[
+            _source_evidence(source_message_id=8611, conversation_id="conv-s3e1-8611",
+                             fingerprint="fp-s3e1-8611", excerpt="喜欢喝黑咖啡")
+        ],
+        candidate_allowlist=[fact_id],
+    )
+    state = await _s3e1_fact_state(fact_id)
+    assert state["active_version"] == 1, "ATTACH must not advance the version"
+    assert state["versions"] == 1, "ATTACH must not open a version"
+    assert state["evidence"] == 2, "seed primary + one supporting link"
+    assert state["v1_invalid_at"] is None
+    # supporting link must exist for the new observation at v1
+    assert await _count_rows(
+        sql="""SELECT COUNT(*) AS n FROM stable_fact_evidence
+                WHERE fact_id=? AND version_no=1 AND evidence_role='supporting'""",
+        params=(fact_id,),
+    ) == 1, "exactly one supporting evidence link on expected active version"
+    assert await _attached_observation_count(session_id) == 2, (
+        "seed + attached weak observation"
+    )
+
+
+@pytest.mark.asyncio
+async def test_s3e1_a2_attach_stale_version_no_evidence(isolated_store):
+    """ATTACH with stale expected_version → mismatch, zero evidence added."""
+    session_id = f"s3e1-a2-{uuid4().hex[:8]}"
+    fact = await _s3e1_seed_fact(session_id)
+    fact_id = fact["fact_id"]
+    before = await _s3e1_fact_state(fact_id)
+    obs = _s3e1_obs(
+        "o1", "喜欢喝黑咖啡", 8612,
+        evidence_kind="inferred_user", confidence=0.20,
+    )
+    exc_info = await _s3e1_attempt(
+        session_id, op_name="ATTACH", fact_id=fact_id, obs=obs,
+        expected_version=2, source_message_id=8612,
+    )
+    assert exc_info.value.code == "expected_version_mismatch"
+    assert await _s3e1_fact_state(fact_id) == before, "no evidence added"
+    assert await _count_rows(
+        sql="SELECT COUNT(*) AS n FROM memory_observations WHERE session_id=?",
+        params=(session_id,),
+    ) == 1, "no observation residue from rejected batch"

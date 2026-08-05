@@ -435,8 +435,14 @@ async def _get_fact_active_version(
     return int(row["active_version"])
 
 
-def _will_create_stable_fact(obs: dict[str, Any]) -> bool:
-    """True when CREATE will open a new stable fact (not candidate-only)."""
+def _stable_truth_eligible(obs: dict[str, Any]) -> bool:
+    """S3E-1 P1-B: the single evidence authority for stable-truth writes.
+
+    REFINE/SUPERSEDE may only rewrite stable truth when the observation meets
+    the SAME predicate as an automatic stable CREATE (stable_candidate +
+    direct_user + confidence >= AUTO_STABLE_CONFIDENCE). reason_code is
+    provider-supplied explanatory text with ZERO write authority.
+    """
     evidence_kind = str(obs.get("evidence_kind") or "direct_user")
     memory_class = str(obs.get("memory_class") or "stable_candidate")
     confidence = float(obs.get("confidence") or 0.0)
@@ -445,6 +451,32 @@ def _will_create_stable_fact(obs: dict[str, Any]) -> bool:
         and evidence_kind == "direct_user"
         and confidence >= AUTO_STABLE_CONFIDENCE
     )
+
+
+def _will_create_stable_fact(obs: dict[str, Any]) -> bool:
+    """True when CREATE will open a new stable fact (not candidate-only)."""
+    return _stable_truth_eligible(obs)
+
+
+def _require_expected_version(op: dict[str, Any], op_name: str) -> int:
+    """S3E-1 P1-A: ATTACH/REFINE/SUPERSEDE require an explicit version snapshot.
+
+    Key ABSENT or None → missing_expected_version (mandatory).
+    bool / non-int / <= 0 → invalid_expected_version.
+    Never accept None, "1", 1.0, True, False, 0, -1.
+    """
+    expected = op.get("expected_version")
+    if expected is None:
+        raise MemoryValidationError(
+            "missing_expected_version", f"{op_name} requires expected_version"
+        )
+    if isinstance(expected, bool) or not isinstance(expected, int) or expected <= 0:
+        raise MemoryValidationError(
+            "invalid_expected_version",
+            f"{op_name} expected_version must be a positive integer, "
+            f"got {expected!r}",
+        )
+    return expected
 
 
 def _op_fact_text(op: dict[str, Any], obs: dict[str, Any]) -> str:
@@ -492,7 +524,8 @@ async def apply_validated_memory_operations(
             all_source_ids.add(int(mid))
 
     # Pre-validate ops (no writes).
-    for op in operations or []:
+    expected_by_op: dict[int, int] = {}
+    for index, op in enumerate(operations or []):
         op_name = str(op.get("op") or "").upper()
         if op_name not in ALLOWED_OPS:
             raise MemoryValidationError("invalid_op", f"op={op_name!r}")
@@ -528,6 +561,22 @@ async def apply_validated_memory_operations(
                     "episodic_target_operation_forbidden",
                     f"{op_name} cannot target a stable fact from an episodic "
                     "observation",
+                )
+            # S3E-1 P1-A: every fact-mutating op needs an explicit positive int
+            # snapshot. Key ABSENT / None → missing; bool/non-int/<=0 → invalid.
+            # This closes the hole where an omitted expected_version silently
+            # skipped the version equality check.
+            expected_by_op[index] = _require_expected_version(op, op_name)
+            # S3E-1 P1-B: REFINE/SUPERSEDE may only rewrite stable truth backed
+            # by the same evidence authority as an automatic stable CREATE.
+            # reason_code stays provider explanation with zero write authority.
+            if op_name in {"REFINE", "SUPERSEDE"} and not _stable_truth_eligible(
+                obs_map[ref]
+            ):
+                raise MemoryValidationError(
+                    "fact_mutation_not_eligible",
+                    f"{op_name} requires stable_candidate + direct_user + "
+                    f"confidence>={AUTO_STABLE_CONFIDENCE}",
                 )
         for mid in obs_map[ref].get("source_message_ids") or []:
             if int(mid) not in source_by_id:
@@ -772,7 +821,7 @@ async def apply_validated_memory_operations(
 
             if op_name == "ATTACH":
                 target = str(op.get("target_fact_id"))
-                expected = op.get("expected_version")
+                expected = expected_by_op[index]
                 active_version = await _get_fact_active_version(
                     db, fact_id=target, session_id=session, identity_mode=mode
                 )
@@ -780,7 +829,7 @@ async def apply_validated_memory_operations(
                     raise MemoryValidationError(
                         "fact_not_found", f"target_fact_id={target}"
                     )
-                if expected is not None and int(expected) != active_version:
+                if expected != active_version:
                     raise MemoryValidationError(
                         "expected_version_mismatch",
                         f"expected={expected} active={active_version}",
@@ -805,7 +854,7 @@ async def apply_validated_memory_operations(
 
             if op_name in {"REFINE", "SUPERSEDE"}:
                 target = str(op.get("target_fact_id"))
-                expected = op.get("expected_version")
+                expected = expected_by_op[index]
                 change_kind = "refine" if op_name == "REFINE" else "supersede"
                 prepared = prepared_by_op.get(index)
                 if prepared is None:
@@ -820,7 +869,7 @@ async def apply_validated_memory_operations(
                     raise MemoryValidationError(
                         "fact_not_found", f"target_fact_id={target}"
                     )
-                if expected is not None and int(expected) != active_version:
+                if expected != active_version:
                     raise MemoryValidationError(
                         "expected_version_mismatch",
                         f"expected={expected} active={active_version}",
