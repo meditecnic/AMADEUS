@@ -19,6 +19,8 @@ class AudioErrorCode(StrEnum):
     TOO_SHORT = "too_short"
     # Fail-closed preflight: source is not safe Japanese speech for default TTS.
     INVALID_LANGUAGE = "invalid_language"
+    # Intentional UI-only segment (neutral data label): no sidecar call, no toast.
+    DISPLAY_ONLY = "display_only"
     # Fail-closed preflight: segment source exceeds the sidecar-safe codepoint budget.
     TEXT_TOO_LONG = "text_too_long"
     USER_DISABLED = "user_disabled"
@@ -27,6 +29,13 @@ class AudioErrorCode(StrEnum):
     RATE_LIMITED = "rate_limited"
     SERVICE_UNAVAILABLE = "service_unavailable"
     SYNTHESIS_FAILED = "synthesis_failed"
+
+
+# Intentional UI-only skips: no segment.audio_error (desktop toasts any reason
+# except voice_stopped). Real voice_stopped still emits for protocol.
+SILENT_AUDIO_SKIP_REASONS = frozenset({
+    AudioErrorCode.DISPLAY_ONLY.value,
+})
 
 
 @dataclass(frozen=True, slots=True)
@@ -421,13 +430,25 @@ def is_plausible_japanese_tts_source(text: str) -> bool:
 def should_hard_reject_tts_source(text: str) -> bool:
     """True only for substantive bad sources that must stop further segment accept.
 
-    Bare ellipsis, empty/action/too-short non-speech, and other ignorable fragments
-    return False so callers can skip without source_collapse.
+    LANG-GATE-PUBLICATION-RETIRE-04: neutral data fragments and soft TTS
+    preflight failures must NOT flip source_collapse. Only high-confidence
+    foreign prose and collapse garbage hard-stop the TTS accept path.
     """
     if is_ignorable_non_speech_segment(text):
         return False
+    # Local import avoids circular import at module load.
+    from app.domain.language_publication import (
+        is_high_confidence_foreign_prose,
+        is_language_collapse_garbage,
+        is_neutral_data_fragment,
+    )
+
+    if is_neutral_data_fragment(text):
+        return False
     if is_soft_skip_unpublishable_segment(text):
         return False
+    if is_high_confidence_foreign_prose(text) or is_language_collapse_garbage(text):
+        return True
     prepared = prepare_tts_text(text)
     if prepared.error is None:
         return False
@@ -435,8 +456,11 @@ def should_hard_reject_tts_source(text: str) -> bool:
         AudioErrorCode.EMPTY_TEXT,
         AudioErrorCode.ACTION_ONLY,
         AudioErrorCode.TOO_SHORT,
+        AudioErrorCode.INVALID_LANGUAGE,
     }:
-        # Non-speech or fragment: skip, do not kill the rest of the turn.
+        # Non-speech, data, or soft language: skip/fail audio, do not collapse turn.
+        return False
+    if prepared.error is AudioErrorCode.TEXT_TOO_LONG:
         return False
     return True
 
@@ -993,14 +1017,18 @@ class SegmentPipeline:
                         )
                     )
                 else:
-                    await self._emit(
-                        self._event(
-                            "segment.audio_error",
-                            segment_id=current.segment.id,
-                            reason=current.audio_error or "voice_stopped",
-                            emotion=current.segment.emotion,
+                    reason = current.audio_error or "voice_stopped"
+                    # Display-only / non-speech skips: keep segment.ready, never
+                    # emit audio_error (desktop treats it as TTS degradation toast).
+                    if reason not in SILENT_AUDIO_SKIP_REASONS:
+                        await self._emit(
+                            self._event(
+                                "segment.audio_error",
+                                segment_id=current.segment.id,
+                                reason=reason,
+                                emotion=current.segment.emotion,
+                            )
                         )
-                    )
                 self._next_segment_id += 1
 
     def _event(self, event_type: str, **payload) -> dict:

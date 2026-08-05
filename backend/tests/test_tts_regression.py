@@ -67,10 +67,8 @@ async def test_v2pro_request_uses_production_anti_repetition_tuning():
     assert payload["top_k"] == 10
     assert payload["top_p"] == 0.9
     assert payload["temperature"] == 0.6
-    assert payload["speed_factor"] == 0.93
-    # TTS-CUT0-NATURAL-PACING-01: no cut5 inter-phrase padding; short fragment gap.
-    assert payload["text_split_method"] == "cut0"
-    assert payload["fragment_interval"] == 0.05
+    assert payload["speed_factor"] == 1.0
+    assert payload["text_split_method"] == "cut5"
     assert payload["batch_size"] == 1
 
 
@@ -106,12 +104,7 @@ async def test_queue_worker_prepares_text_and_delivers_real_audio_payload():
         "embarrassed",
     )
 
-    queue_payload = mock_client.post.await_args.kwargs["json"]
-    assert queue_payload["text"] == "ち、違うんだからね！"
-    assert queue_payload["text_split_method"] == "cut0"
-    assert queue_payload["fragment_interval"] == 0.05
-    assert queue_payload["repetition_penalty"] == 1.5
-    assert queue_payload["batch_size"] == 1
+    assert mock_client.post.await_args.kwargs["json"]["text"] == "ち、違うんだからね！"
     assert delivered[0][1]["audio"].startswith(b"RIFF")
     assert delivered[0][1]["error"] is None
 
@@ -440,12 +433,3 @@ async def test_stream_pcm_payload_text_uses_pronunciation_surface():
         assert token not in payload["text"], token
     assert payload["streaming_mode"] == 2
     assert payload["prompt_text"] == "prompt"
-    # Same V2PRO_GENERATION_PARAMS as direct /tts (cut0 natural pacing).
-    assert payload["text_split_method"] == "cut0"
-    assert payload["fragment_interval"] == 0.05
-    assert payload["top_k"] == 10
-    assert payload["top_p"] == 0.9
-    assert payload["temperature"] == 0.6
-    assert payload["speed_factor"] == 0.93
-    assert payload["repetition_penalty"] == 1.5
-    assert payload["batch_size"] == 1

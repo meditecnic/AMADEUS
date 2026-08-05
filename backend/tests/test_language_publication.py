@@ -147,11 +147,9 @@ KANJI_DENSE_JA_TITLE_LINE = (
 
 
 def test_relax01_single_gate_no_second_router_door():
-    """LANG-GATE-RELAX-01 rework: ja/mixed/zh all defer to the single domain gate.
+    """Publication fail-open for JP; TTS may still use a stricter preflight.
 
-    - short mixed Japanese with one kana (あ、岡部。) publishes;
-    - kanji-dense kana-less Japanese beyond 32 letters publishes;
-    - definite Chinese wording and incident garbage still fail.
+    RETIRE-04 decouples UI publication from is_plausible_japanese_tts_source.
     """
     from app.domain.segments import (
         is_plausible_japanese_tts_source,
@@ -287,10 +285,10 @@ async def test_japanese_user_message_skips_non_japanese_first_pass_hint():
 
 @pytest.mark.asyncio
 async def test_latin_product_name_sentence_is_rendered_without_losing_following_japanese():
+    """RETIRE-04: product labels publish in-stream; no soft-route Renderer."""
     provider = _SequencedStreamProvider(
         [
             "[EMO:neutral] 検索してみたわ。Kimi K3。Moonshot AIが2026年7月に発表したモデルね。",
-            "Kimi K3は、Moonshot AIが2026年7月に発表したモデルね。",
         ]
     )
     session = SessionState("latin-product-soft-skip")
@@ -307,7 +305,7 @@ async def test_latin_product_name_sentence_is_rendered_without_losing_following_
         )
 
     visible = "".join(published)
-    assert provider.call_count == 2
+    assert provider.call_count == 1
     assert "検索してみたわ。" in visible
     assert "Kimi K3" in visible
     assert "Moonshot AIが2026年7月に発表したモデルね。" in visible

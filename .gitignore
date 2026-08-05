@@ -67,3 +67,11 @@ desktop/public/assets/audio/ref/*_crop_*.wav
 *.bak
 # Local agent permission state; keep personal overrides out of version control.
 .claude/settings.local.json
+
+# Local Grok Build session / tool cache (not for work-remote)
+.grok/
+
+# Qoder local harness/wiki dumps — only project-atlas may be force-added if needed
+.qoder/*
+!.qoder/project-atlas/
+!.qoder/project-atlas/**
