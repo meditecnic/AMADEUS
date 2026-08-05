@@ -1455,3 +1455,333 @@ async def test_s3b3_vector_only_candidate_reaches_completion(
     assert result["state"] == "completed"
     ids = {c["fact_id"] for c in captured["candidates"]}
     assert target["fact_id"] in ids
+
+
+# ---------------------------------------------------------------------------
+# MEMORY-V11-S3D-PROBE: D18 bounded reanalysis (plan §6.4 / R08).
+#
+# Permanent RED contracts — the current job payload carries stable-fact
+# candidates only (jobs.default_memory_completion / process_memory_job), and
+# the reconciler always INSERTs a new observation with reanalysis_count=0
+# (_insert_observation). Nothing today:
+#   - carries bounded unresolved-observation context into the single completion
+#   - updates the EXISTING observation on resolution
+#   - increments reanalysis_count / respects its 0..1 cap
+#
+# Unspecified surface → Coordinator decision point (NOT guessed here):
+#   - the exact context key name carried into the completion (the probe
+#     accepts a small documented alias set)
+#   - the bound on how many unresolved observations are offered
+#   - the resolution op shape returned by the model
+# ---------------------------------------------------------------------------
+
+
+async def _seed_unresolved_candidate(
+    *,
+    session_id: str,
+    identity_mode: str,
+    conversation_id: str,
+    source_message_id: int,
+    display_text: str,
+) -> str:
+    """Low-confidence CREATE → status='candidate', reanalysis_count=0, source linked."""
+    recon = importlib.import_module("app.services.memory_v11.reconciler")
+    await recon.apply_validated_memory_operations(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode=identity_mode,
+        observations=[
+            {
+                "observation_ref": "o1",
+                "source_message_ids": [int(source_message_id)],
+                "display_text": display_text,
+                "semantic": {
+                    "subject": "user",
+                    "predicate": "watching",
+                    "object": {"kind": "anime"},
+                },
+                "evidence_kind": "direct_user",
+                "memory_class": "stable_candidate",
+                "confidence": 0.4,
+                "topic_label": "动漫",
+                "expires_at": None,
+            }
+        ],
+        operations=[
+            {
+                "op": "CREATE",
+                "observation_ref": "o1",
+                "target_fact_id": None,
+                "expected_version": None,
+                "fact_text": display_text,
+                "reason_code": "unresolved_placeholder",
+            }
+        ],
+        source_evidence=[
+            {
+                "source_message_id": int(source_message_id),
+                "conversation_id": conversation_id,
+                "source_role": "user",
+                "source_fingerprint": f"fp-{display_text[:12]}",
+                "source_created_at": "2026-08-01T00:00:00+00:00",
+                "excerpt": display_text,
+            }
+        ],
+        candidate_allowlist=[],
+    )
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (
+            await db.execute(
+                """SELECT observation_id FROM memory_observations
+                    WHERE session_id=? AND identity_mode=?
+                      AND display_text=? AND reanalysis_count=0
+                    ORDER BY created_at DESC LIMIT 1""",
+                (session_id, identity_mode, display_text),
+            )
+        ).fetchone()
+        assert row is not None
+        return str(row["observation_id"])
+    finally:
+        await db.close()
+
+
+def _unresolved_context(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Locate the unresolved-observation context under any documented key.
+
+    Key naming is a Coordinator decision point; the probe accepts the small
+    alias set below and fails with a clear message when none is present.
+    """
+    for key in ("unresolved_observations", "unresolved_context", "pending_observations"):
+        value = payload.get(key)
+        if isinstance(value, list):
+            return value
+    return []
+
+
+@pytest.mark.asyncio
+async def test_s3d_probe_d18_completion_receives_bounded_unresolved_context(
+    isolated_store, monkeypatch
+):
+    """R08/§6.4 (input side): the SINGLE completion receives bounded unresolved context.
+
+    Scenario: same-scope candidate with reanalysis_count=0; new message
+    resolves it. RED: today the payload carries stable-fact candidates only
+    (jobs.py default_memory_completion) — no unresolved-observation context.
+    """
+    jobs = _jobs()
+    session_id = f"s3d-d18-in-{uuid4().hex[:8]}"
+    conv = await conversation_service.create(
+        session_id, "steins_gate", title="d18-in", identity_mode="self"
+    )
+    conversation_id = str(conv["id"])
+    mid_vague = await models.save_message(
+        session_id,
+        "user",
+        "我最近在看一部动漫",
+        worldline="steins_gate",
+        conversation_id=conversation_id,
+    )
+    mid_resolves = await models.save_message(
+        session_id,
+        "user",
+        "那部动漫是《为美好的世界献上祝福》",
+        worldline="steins_gate",
+        conversation_id=conversation_id,
+    )
+    # Unresolved candidate (reanalysis_count=0) — must be offered.
+    obs_offer = await _seed_unresolved_candidate(
+        session_id=session_id,
+        identity_mode="self",
+        conversation_id=conversation_id,
+        source_message_id=int(mid_vague),
+        display_text="在看一部动漫",
+    )
+    # Already-reanalysed candidate (cap hit) — must NEVER be offered again.
+    obs_done = await _seed_unresolved_candidate(
+        session_id=session_id,
+        identity_mode="self",
+        conversation_id=conversation_id,
+        source_message_id=int(mid_vague) + 1,
+        display_text="在玩一个游戏",
+    )
+    db = await get_db("steins_gate", "memory")
+    try:
+        await db.execute(
+            """UPDATE memory_observations SET reanalysis_count=1, status='candidate'
+                WHERE observation_id=?""",
+            (obs_done,),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    # Cross-identity candidate must never enter a self-scope context.
+    obs_okabe = await _seed_unresolved_candidate(
+        session_id=session_id,
+        identity_mode="okabe",
+        conversation_id=conversation_id,
+        source_message_id=int(mid_vague) + 2,
+        display_text="在看科幻小说",
+    )
+    assert obs_offer != obs_done and obs_offer != obs_okabe
+
+    call_count = {"n": 0}
+    captured: dict[str, Any] = {}
+
+    async def d18_completion(**kwargs: Any) -> dict[str, Any]:
+        call_count["n"] += 1
+        captured["payload"] = kwargs
+        return {"observations": [], "operations": []}
+
+    job = await jobs.enqueue_memory_job(
+        session_id=session_id,
+        worldline="steins_gate",
+        conversation_id=conversation_id,
+        identity_mode="self",
+        source_message_id=int(mid_resolves),
+        pipeline_version="memory-v11-1",
+        provider_id="deepseek",
+        model_id="deepseek-chat",
+    )
+    result = await jobs.process_memory_job(
+        job_id=job["job_id"],
+        lease_owner="w-d18-in",
+        memory_completion=d18_completion,
+    )
+    assert result["state"] == "completed"
+    assert call_count["n"] == 1, "D18 stays inside the single-completion rule (R11)"
+    unresolved = _unresolved_context(captured["payload"])
+    assert unresolved, (
+        "D18: completion payload carries no bounded unresolved-observation "
+        "context; job payload currently contains stable-fact candidates only "
+        "(plan §6.4)"
+    )
+    offered_ids = {str(u.get("observation_id") or u.get("id") or "") for u in unresolved}
+    assert obs_offer in offered_ids, (
+        "unresolved candidate (reanalysis_count=0) must be offered for reanalysis"
+    )
+    assert obs_done not in offered_ids, (
+        "observation with reanalysis_count=1 must never be offered again (R08)"
+    )
+    assert obs_okabe not in offered_ids, (
+        "D18 context must stay same-scope; okabe observation leaked in (R05)"
+    )
+
+
+@pytest.mark.asyncio
+async def test_s3d_probe_d18_resolution_updates_existing_observation(
+    isolated_store, monkeypatch
+):
+    """R08/§6.4 (output side): resolution updates the EXISTING observation.
+
+    After a resolving turn, the original observation row must carry
+    reanalysis_count=1 and no parallel duplicate observation may appear for
+    the old source. RED: reconciler._insert_observation always inserts a new
+    row with reanalysis_count=0; nothing updates the existing candidate.
+    """
+    jobs = _jobs()
+    session_id = f"s3d-d18-out-{uuid4().hex[:8]}"
+    conv = await conversation_service.create(
+        session_id, "steins_gate", title="d18-out", identity_mode="self"
+    )
+    conversation_id = str(conv["id"])
+    mid_vague = await models.save_message(
+        session_id,
+        "user",
+        "我最近在看一部动漫",
+        worldline="steins_gate",
+        conversation_id=conversation_id,
+    )
+    mid_resolves = await models.save_message(
+        session_id,
+        "user",
+        "那部动漫是《为美好的世界献上祝福》",
+        worldline="steins_gate",
+        conversation_id=conversation_id,
+    )
+    obs_id = await _seed_unresolved_candidate(
+        session_id=session_id,
+        identity_mode="self",
+        conversation_id=conversation_id,
+        source_message_id=int(mid_vague),
+        display_text="在看一部动漫",
+    )
+
+    async def resolve_completion(**kwargs: Any) -> dict[str, Any]:
+        sid = int(kwargs["source_message_id"])
+        return {
+            "observations": [
+                {
+                    "observation_ref": "o1",
+                    "source_message_ids": [sid],
+                    "display_text": "喜欢《为美好的世界献上祝福》",
+                    "semantic": {
+                        "subject": "user",
+                        "predicate": "likes_work",
+                        "object": {"name": "konosuba"},
+                    },
+                    "evidence_kind": "direct_user",
+                    "memory_class": "stable_candidate",
+                    "confidence": 0.96,
+                    "topic_label": "动漫",
+                    "expires_at": None,
+                }
+            ],
+            "operations": [
+                {
+                    "op": "CREATE",
+                    "observation_ref": "o1",
+                    "target_fact_id": None,
+                    "expected_version": None,
+                    "fact_text": "喜欢《为美好的世界献上祝福》",
+                    "reason_code": "direct_durable_statement",
+                }
+            ],
+        }
+
+    job = await jobs.enqueue_memory_job(
+        session_id=session_id,
+        worldline="steins_gate",
+        conversation_id=conversation_id,
+        identity_mode="self",
+        source_message_id=int(mid_resolves),
+        pipeline_version="memory-v11-1",
+        provider_id="deepseek",
+        model_id="deepseek-chat",
+    )
+    result = await jobs.process_memory_job(
+        job_id=job["job_id"],
+        lease_owner="w-d18-out",
+        memory_completion=resolve_completion,
+    )
+    assert result["state"] == "completed"
+
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (
+            await db.execute(
+                """SELECT reanalysis_count, status FROM memory_observations
+                    WHERE observation_id=? AND session_id=?""",
+                (obs_id, session_id),
+            )
+        ).fetchone()
+        assert row is not None
+        assert int(row["reanalysis_count"]) == 1, (
+            "D18: resolving turn must update the EXISTING observation and set "
+            f"reanalysis_count=1; still reanalysis_count={row['reanalysis_count']} "
+            "status=" + str(row["status"]) + " (plan §6.4 / R08)"
+        )
+        parallel = await (
+            await db.execute(
+                """SELECT COUNT(*) AS n FROM memory_observation_sources s
+                    JOIN memory_observations o ON o.observation_id = s.observation_id
+                   WHERE s.source_message_id=? AND o.session_id=?
+                     AND o.observation_id != ?""",
+                (int(mid_vague), session_id, obs_id),
+            )
+        ).fetchone()
+        assert int(parallel["n"]) == 0, (
+            "D18: no parallel duplicate observation may be created for the old source"
+        )
+    finally:
+        await db.close()

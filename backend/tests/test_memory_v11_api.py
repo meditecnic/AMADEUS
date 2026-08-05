@@ -12,6 +12,8 @@ Deferred (still red / xfail until later slices):
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -476,3 +478,589 @@ def test_s0_conversation_delete_derived_memory_false(client: TestClient):
     assert body["delete_derived_memory"] is False, (
         f"expected delete_derived_memory is False, got {body['delete_derived_memory']!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# MEMORY-V11-S3D-PROBE: remaining S3 REST closure contracts (plan §7 / §8).
+#
+# Permanent RED probes — these plan-required routes are NOT implemented yet.
+# Tests only; no production code changes (evidence collection for the S3 gap
+# audit). Missing registered surface today:
+#   PATCH  /api/memory/facts/{fact_id}               (§7.1 user edit)
+#   DELETE /api/memory/facts/{fact_id}               (§7.2 delete + tombstone)
+#   PATCH  /api/memory/facts/{fact_id}/presentation  (§8.2 is_pinned/topic only)
+#   GET    /api/memory/facts/{fact_id}/details       (§8.2 versions + provenance)
+#   GET    /api/memory/topics / PATCH /api/memory/topics/{topic_id}    (§8.3)
+#   GET    /api/memory/experiences + details + DELETE                   (§8.3)
+#   GET    /api/memory/observations + .../ignore                        (§8.3)
+#
+# Coordinator decision points (NOT guessed here):
+#   - response payload shapes beyond plan text ("versions + minimal provenance")
+#   - exact stable codes for scope-mismatch / stale expected_version on the
+#     new mutators (existing v11 routes use 403 scope_mismatch; P06 requires
+#     the same stability, the concrete code is C's call)
+# ---------------------------------------------------------------------------
+
+
+def _seed_fact(
+    *,
+    session_id: str,
+    identity_mode: str = "self",
+    display_text: str,
+    topic_id: str | None = None,
+) -> str:
+    import asyncio
+
+    from app.services.memory_v11.repository import create_stable_fact
+
+    async def _insert() -> str:
+        row = await create_stable_fact(
+            session_id=session_id,
+            worldline="steins_gate",
+            identity_mode=identity_mode,
+            display_text=display_text,
+            semantic_json={"subject": "user", "relation": "marker", "object": display_text[:16]},
+            topic_id=topic_id,
+        )
+        return str(row["fact_id"])
+
+    return asyncio.run(_insert())
+
+
+def _seed_topic(session_id: str, identity_mode: str, label: str) -> str:
+    import asyncio
+
+    from app.db import get_db
+
+    async def _insert() -> str:
+        db = await get_db("steins_gate", "memory")
+        try:
+            topic_id = str(uuid4())
+            now = "2026-08-01T00:00:00+00:00"
+            await db.execute(
+                """INSERT INTO memory_topics(
+                       topic_id, session_id, identity_mode,
+                       normalized_label, display_label, created_at, updated_at
+                   ) VALUES(?,?,?,?,?,?,?)""",
+                (topic_id, session_id, identity_mode, label, label, now, now),
+            )
+            await db.commit()
+            return topic_id
+        finally:
+            await db.close()
+
+    return asyncio.run(_insert())
+
+
+def _seed_experience(
+    *, session_id: str, identity_mode: str = "self", display_text: str
+) -> str:
+    """Seed one v11 experience with its observation row (source_state=present)."""
+    import asyncio
+    import json
+
+    from app.db import get_db
+
+    async def _insert() -> str:
+        db = await get_db("steins_gate", "memory")
+        try:
+            observation_id = str(uuid4())
+            experience_id = str(uuid4())
+            now = "2026-08-01T00:00:00+00:00"
+            semantic = {"subject": "user", "predicate": "event", "object": display_text[:24]}
+            fingerprint = hashlib.sha256(
+                json.dumps(
+                    semantic, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+                ).encode("utf-8")
+            ).hexdigest()
+            await db.execute(
+                """INSERT INTO memory_observations(
+                       observation_id, session_id, identity_mode, display_text,
+                       semantic_json, semantic_fingerprint, evidence_kind, memory_class,
+                       confidence, topic_label_proposal, status, extractor_version,
+                       reanalysis_count, expires_at, created_at, updated_at
+                   ) VALUES(?,?,?,?,?,?, 'direct_user', 'episodic', 0.9, NULL,
+                            'attached', 'memory-v11-1', 0, NULL, ?, ?)""",
+                (
+                    observation_id,
+                    session_id,
+                    identity_mode,
+                    display_text,
+                    json.dumps(semantic, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                    fingerprint,
+                    now,
+                    now,
+                ),
+            )
+            await db.execute(
+                """INSERT INTO memory_observation_sources(
+                       observation_id, source_message_id, conversation_id, source_role,
+                       source_fingerprint, source_created_at, source_state, excerpt
+                   ) VALUES(?,?,?, 'user', ?, ?, 'present', NULL)""",
+                (
+                    observation_id,
+                    int(uuid4().int % 10**9),
+                    "conv-s3d-exp",
+                    f"fp-{observation_id[:8]}",
+                    now,
+                ),
+            )
+            await db.execute(
+                """INSERT INTO experiences(
+                       experience_id, session_id, conversation_id, identity_mode,
+                       observation_id, display_text, semantic_json, semantic_fingerprint,
+                       confidence, status, expires_at, created_at, updated_at, deleted_at
+                   ) VALUES(?,?,?,?,?,?,?,?,0.9,'active',NULL,?,?,NULL)""",
+                (
+                    experience_id,
+                    session_id,
+                    "conv-s3d-exp",
+                    identity_mode,
+                    observation_id,
+                    display_text,
+                    json.dumps(semantic, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                    fingerprint,
+                    now,
+                    now,
+                ),
+            )
+            await db.commit()
+            return experience_id
+        finally:
+            await db.close()
+
+    return asyncio.run(_insert())
+
+
+def _seed_candidate_observation(
+    *, session_id: str, identity_mode: str = "self", display_text: str
+) -> str:
+    """Seed one unresolved candidate observation (status='candidate', reanalysis_count=0)."""
+    import asyncio
+
+    from app.db import get_db
+
+    async def _insert() -> str:
+        db = await get_db("steins_gate", "memory")
+        try:
+            observation_id = str(uuid4())
+            now = "2026-08-01T00:00:00+00:00"
+            await db.execute(
+                """INSERT INTO memory_observations(
+                       observation_id, session_id, identity_mode, display_text,
+                       semantic_json, semantic_fingerprint, evidence_kind, memory_class,
+                       confidence, topic_label_proposal, status, extractor_version,
+                       reanalysis_count, expires_at, created_at, updated_at
+                   ) VALUES(?,?,?,?,?,?, 'direct_user', 'stable_candidate', 0.4, NULL,
+                            'candidate', 'memory-v11-1', 0, NULL, ?, ?)""",
+                (
+                    observation_id,
+                    session_id,
+                    identity_mode,
+                    display_text,
+                    "{}",
+                    f"fp-{observation_id[:8]}",
+                    now,
+                    now,
+                ),
+            )
+            await db.commit()
+            return observation_id
+        finally:
+            await db.close()
+
+    return asyncio.run(_insert())
+
+
+def _obs_status(session_id: str, observation_id: str) -> tuple[str, int]:
+    import asyncio
+
+    from app.db import get_db
+
+    async def _read() -> tuple[str, int]:
+        db = await get_db("steins_gate", "memory")
+        try:
+            row = await (
+                await db.execute(
+                    """SELECT status, reanalysis_count FROM memory_observations
+                        WHERE observation_id=? AND session_id=?""",
+                    (observation_id, session_id),
+                )
+            ).fetchone()
+            assert row is not None
+            return str(row["status"]), int(row["reanalysis_count"])
+        finally:
+            await db.close()
+
+    return asyncio.run(_read())
+
+
+# -- A. canonical stable-fact REST surface (plan §7 / §8.2) ------------------
+
+
+def test_s3d_probe_fact_patch_user_edit_creates_version(isolated_client: TestClient):
+    """§7.1: PATCH /api/memory/facts/{fact_id} — full scope + expected_version + new text.
+
+    Success creates change_kind=user_edit version; the active card text changes;
+    wrong identity must not mutate the target (P06 scope safety).
+    """
+    session_id = _session("s3d-patch")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢咖啡")
+    response = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "self",
+        },
+        json={"display_text": "喜欢黑咖啡", "expected_version": 1},
+    )
+    assert response.status_code == 200, (
+        f"PATCH fact user-edit route missing or broken: {response.status_code} "
+        f"{response.text} (plan §7.1)"
+    )
+    listed = isolated_client.get(
+        "/api/memory/facts",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "self",
+        },
+    )
+    assert listed.status_code == 200, listed.text
+    texts = [f["display_text"] for f in listed.json()["facts"]]
+    assert "喜欢黑咖啡" in texts
+    assert "喜欢咖啡" not in texts
+
+    cross = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "okabe",
+        },
+        json={"display_text": "被篡改", "expected_version": 2},
+    )
+    assert cross.status_code != 200, "okabe scope must not edit a self fact (P06)"
+
+
+def test_s3d_probe_fact_delete_scoped_tombstone_idempotent(
+    isolated_client: TestClient,
+):
+    """§7.2: DELETE /api/memory/facts/{fact_id} — scope + expected_version; tombstone.
+
+    The fact disappears from the active list; repeated DELETE stays idempotent
+    (not a 500); the fact must never be revived by later retrieval.
+    """
+    session_id = _session("s3d-del")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢茶")
+    response = isolated_client.delete(
+        f"/api/memory/facts/{fact_id}",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "self",
+            "expected_version": 1,
+        },
+    )
+    assert response.status_code == 200, (
+        f"DELETE fact route missing or broken: {response.status_code} "
+        f"{response.text} (plan §7.2)"
+    )
+    listed = isolated_client.get(
+        "/api/memory/facts",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "self",
+        },
+    )
+    assert listed.status_code == 200, listed.text
+    assert not any(f["fact_id"] == fact_id for f in listed.json()["facts"]), (
+        "deleted fact must not remain active"
+    )
+    again = isolated_client.delete(
+        f"/api/memory/facts/{fact_id}",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "self",
+            "expected_version": 1,
+        },
+    )
+    assert again.status_code == 200, "repeated DELETE must be idempotent (§7.2)"
+
+
+def test_s3d_probe_fact_presentation_only_presentation_fields(
+    isolated_client: TestClient,
+):
+    """§8.2/§7.3: PATCH .../presentation — is_pinned/topic_id only, local, no LLM.
+
+    A presentation request must never change display_text/semantics, and a
+    body carrying display_text must be rejected (P06).
+    """
+    session_id = _session("s3d-present")
+    topic_id = _seed_topic(session_id, "self", "动漫")
+    fact_id = _seed_fact(
+        session_id=session_id, display_text="喜欢看动漫", topic_id=topic_id
+    )
+    response = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}/presentation",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "self",
+        },
+        json={"is_pinned": True, "topic_id": topic_id},
+    )
+    assert response.status_code == 200, (
+        f"presentation route missing or broken: {response.status_code} "
+        f"{response.text} (plan §8.2)"
+    )
+    listed = isolated_client.get(
+        "/api/memory/facts",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "self",
+        },
+    )
+    assert listed.status_code == 200, listed.text
+    card = next(f for f in listed.json()["facts"] if f["fact_id"] == fact_id)
+    assert card["is_pinned"] is True
+    assert card["display_text"] == "喜欢看动漫"
+
+    semantic = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}/presentation",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "self",
+        },
+        json={"display_text": "偷偷改文本"},
+    )
+    assert semantic.status_code not in (200, 201), (
+        "presentation must reject non-presentation fields (§8.2)"
+    )
+
+
+def test_s3d_probe_fact_details_returns_version_history(
+    isolated_client: TestClient,
+):
+    """§8.2: GET /api/memory/facts/{fact_id}/details — versions + minimal provenance.
+
+    Response shape beyond "versions are present" is a Coordinator decision
+    point; the probe only requires version data to be returned.
+    """
+    session_id = _session("s3d-details")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢动漫")
+    response = isolated_client.get(
+        f"/api/memory/facts/{fact_id}/details",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "self",
+        },
+    )
+    assert response.status_code == 200, (
+        f"fact details route missing or broken: {response.status_code} "
+        f"{response.text} (plan §8.2)"
+    )
+    assert "version" in str(response.json()).lower(), (
+        "details must include version history data"
+    )
+    cross = isolated_client.get(
+        f"/api/memory/facts/{fact_id}/details",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "okabe",
+        },
+    )
+    assert cross.status_code != 200, "details must be scope-strict (P06)"
+
+
+# -- B. topic / experience / observation REST (plan §8.3) --------------------
+
+
+def test_s3d_probe_topics_list_scoped(isolated_client: TestClient):
+    """§8.3: GET /api/memory/topics — scoped local list; no cross identity."""
+    session_id = _session("s3d-topics")
+    _seed_topic(session_id, "self", "动漫")
+    _seed_topic(session_id, "okabe", "冈部话题")
+    response = isolated_client.get(
+        "/api/memory/topics",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "self",
+        },
+    )
+    assert response.status_code == 200, (
+        f"topics list route missing or broken: {response.status_code} "
+        f"{response.text} (plan §8.3)"
+    )
+    body = response.json()
+    assert "动漫" in str(body)
+    assert "冈部话题" not in str(body), "okabe topic must not leak into self scope"
+
+
+def test_s3d_probe_topic_rename_presentation_only(isolated_client: TestClient):
+    """§8.3: PATCH /api/memory/topics/{topic_id} — rename is presentation-only.
+
+    Facts attached to the topic keep their topic_id; semantic/scope unchanged.
+    """
+    session_id = _session("s3d-topic-rename")
+    topic_id = _seed_topic(session_id, "self", "动漫")
+    _seed_fact(session_id=session_id, display_text="喜欢看动漫", topic_id=topic_id)
+    response = isolated_client.patch(
+        f"/api/memory/topics/{topic_id}",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "self",
+        },
+        json={"display_label": "动画"},
+    )
+    assert response.status_code == 200, (
+        f"topic rename route missing or broken: {response.status_code} "
+        f"{response.text} (plan §8.3)"
+    )
+    listed = isolated_client.get(
+        "/api/memory/facts",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "self",
+            "topic_id": topic_id,
+        },
+    )
+    assert listed.status_code == 200, listed.text
+    assert any(f["topic_id"] == topic_id for f in listed.json()["facts"]), (
+        "rename must keep facts attached to the same topic_id (§4.4)"
+    )
+
+
+def test_s3d_probe_experiences_list_scoped(isolated_client: TestClient):
+    """§8.3: GET /api/memory/experiences — same-scope active experiences only."""
+    session_id = _session("s3d-exp-list")
+    marker_self = f"EXP_SELF_{uuid4().hex[:8]}"
+    marker_okabe = f"EXP_OKABE_{uuid4().hex[:8]}"
+    _seed_experience(session_id=session_id, display_text=f"{marker_self} 去了秋叶原")
+    _seed_experience(
+        session_id=session_id, identity_mode="okabe", display_text=f"{marker_okabe} 买了一些装备"
+    )
+    response = isolated_client.get(
+        "/api/memory/experiences",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "self",
+        },
+    )
+    assert response.status_code == 200, (
+        f"experiences list route missing or broken: {response.status_code} "
+        f"{response.text} (plan §8.3)"
+    )
+    body = response.json()
+    assert marker_self in str(body)
+    assert marker_okabe not in str(body), "cross-identity experience must not appear"
+
+
+def test_s3d_probe_experience_details(isolated_client: TestClient):
+    """§8.3: GET /api/memory/experiences/{id}/details — scoped detail."""
+    session_id = _session("s3d-exp-details")
+    experience_id = _seed_experience(session_id=session_id, display_text="本周去了图书馆")
+    response = isolated_client.get(
+        f"/api/memory/experiences/{experience_id}/details",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "self",
+        },
+    )
+    assert response.status_code == 200, (
+        f"experience details route missing or broken: {response.status_code} "
+        f"{response.text} (plan §8.3)"
+    )
+
+
+def test_s3d_probe_experience_delete_scoped(isolated_client: TestClient):
+    """§8.3: DELETE /api/memory/experiences/{id} — scoped removal from active list."""
+    session_id = _session("s3d-exp-del")
+    experience_id = _seed_experience(session_id=session_id, display_text="本周去了秋叶原")
+    response = isolated_client.delete(
+        f"/api/memory/experiences/{experience_id}",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "self",
+        },
+    )
+    assert response.status_code == 200, (
+        f"experience delete route missing or broken: {response.status_code} "
+        f"{response.text} (plan §8.3)"
+    )
+    listed = isolated_client.get(
+        "/api/memory/experiences",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "self",
+        },
+    )
+    assert listed.status_code == 200, listed.text
+    assert experience_id not in str(listed.json())
+
+
+def test_s3d_probe_observations_list_scoped(isolated_client: TestClient):
+    """§8.3: GET /api/memory/observations — scoped diagnostics; no cross identity."""
+    session_id = _session("s3d-obs")
+    marker_self = f"OBS_SELF_{uuid4().hex[:8]}"
+    marker_okabe = f"OBS_OKABE_{uuid4().hex[:8]}"
+    _seed_candidate_observation(session_id=session_id, display_text=marker_self)
+    _seed_candidate_observation(
+        session_id=session_id, identity_mode="okabe", display_text=marker_okabe
+    )
+    response = isolated_client.get(
+        "/api/memory/observations",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "self",
+        },
+    )
+    assert response.status_code == 200, (
+        f"observations list route missing or broken: {response.status_code} "
+        f"{response.text} (plan §8.3)"
+    )
+    body = response.json()
+    assert marker_self in str(body)
+    assert marker_okabe not in str(body), "cross-identity observation must not appear"
+
+
+def test_s3d_probe_observation_ignore_blocks_not_promotes(
+    isolated_client: TestClient,
+):
+    """§8.3: POST /api/memory/observations/{id}/ignore — blocks reconciliation only.
+
+    ignore is not promote and not delete: the observation row survives.
+    """
+    session_id = _session("s3d-obs-ignore")
+    observation_id = _seed_candidate_observation(
+        session_id=session_id, display_text="低置信候选"
+    )
+    response = isolated_client.post(
+        f"/api/memory/observations/{observation_id}/ignore",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "self",
+        },
+    )
+    assert response.status_code == 200, (
+        f"observation ignore route missing or broken: {response.status_code} "
+        f"{response.text} (plan §8.3)"
+    )
+    status, _ = _obs_status(session_id, observation_id)
+    assert status == "ignored", "ignore must mark the observation, not delete it"
