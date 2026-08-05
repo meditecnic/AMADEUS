@@ -133,6 +133,7 @@ async def _apply_validated(
     operations: list[dict[str, Any]],
     source_evidence: list[dict[str, Any]],
     candidate_allowlist: list[str],
+    reanalysis_allowlist: list[str] | None = None,
 ) -> Any:
     """Call the validated reconciler entry — never a raw unvalidated writer."""
     recon = _reconciler()
@@ -153,6 +154,7 @@ async def _apply_validated(
         operations=operations,
         source_evidence=source_evidence,
         candidate_allowlist=candidate_allowlist,
+        reanalysis_allowlist=reanalysis_allowlist,
     )
 
 
@@ -2554,3 +2556,1037 @@ async def test_s3d2_e_dual_match_conflict_fails_closed(isolated_store):
         await db.rollback()
     finally:
         await db.close()
+
+
+# ---------------------------------------------------------------------------
+# MEMORY-V11-S3D-4: D18 bounded contextual reanalysis — reconciler surface.
+# ---------------------------------------------------------------------------
+
+
+async def _d18_candidate(
+    session_id: str,
+    *,
+    source_message_id: int,
+    display_text: str = "在看一部动漫",
+    confidence: float = 0.4,
+) -> str:
+    """Real reconciler low-confidence CREATE → candidate observation id."""
+    result = await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="o1",
+                display_text=display_text,
+                semantic={"subject": "user", "predicate": "watching", "object": "anime"},
+                source_message_ids=[source_message_id],
+                confidence=confidence,
+            )
+        ],
+        operations=[
+            {"op": "CREATE", "observation_ref": "o1", "fact_text": display_text,
+             "reason_code": "low_confidence"}
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=source_message_id,
+                conversation_id=f"conv-d18-{source_message_id}",
+                fingerprint=f"fp-d18-{source_message_id}",
+                excerpt=display_text,
+            )
+        ],
+        candidate_allowlist=[],
+    )
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (
+            await db.execute(
+                """SELECT observation_id FROM memory_observations
+                    WHERE session_id=? AND display_text=? AND status='candidate'
+                    ORDER BY created_at DESC LIMIT 1""",
+                (session_id, display_text),
+            )
+        ).fetchone()
+        assert row is not None
+        return str(row["observation_id"])
+    finally:
+        await db.close()
+
+
+def _d18_resolve_ops(
+    *,
+    op: str,
+    new_text: str,
+    source_message_id: int,
+    target_id: str,
+    confidence: float = 0.96,
+    memory_class: str = "stable_candidate",
+    expires_at: str | None = None,
+    semantic: dict | None = None,
+    fact_target: str | None = None,
+    expected_version: int | None = None,
+    reanalysis_allowlist: list[str] | None = None,
+    op_override: dict | None = None,
+) -> dict:
+    obs = {
+        "observation_ref": "r1",
+        "reanalysis_target_observation_id": target_id,
+        "source_message_ids": [source_message_id],
+        "display_text": new_text,
+        "semantic": semantic
+        or {"subject": "user", "predicate": "resolved", "object": new_text[:12]},
+        "evidence_kind": "direct_user",
+        "memory_class": memory_class,
+        "confidence": confidence,
+        "topic_label": None,
+        "expires_at": expires_at,
+    }
+    op_dict = {
+        "op": op,
+        "observation_ref": "r1",
+        "fact_text": new_text,
+        "reason_code": "d18",
+    }
+    if op_override is not None:
+        op_dict = op_override
+    elif fact_target is not None:
+        op_dict["target_fact_id"] = fact_target
+        op_dict["expected_version"] = expected_version
+    return {
+        "observations": [obs],
+        "operations": [op_dict],
+        "source_evidence": [
+            _source_evidence(
+                source_message_id=source_message_id,
+                conversation_id=f"conv-d18-{source_message_id}",
+                fingerprint=f"fp-d18-{source_message_id}",
+                excerpt=new_text,
+            )
+        ],
+        "candidate_allowlist": [fact_target] if fact_target else [],
+        "reanalysis_allowlist": reanalysis_allowlist if reanalysis_allowlist is not None else [target_id],
+    }
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d16_target_not_allowed(isolated_store):
+    """Target outside frozen reanalysis_allowlist → fail closed, zero mutation."""
+    contracts = _contracts()
+    session_id = f"s3d4-d16-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8101)
+    kwargs = _d18_resolve_ops(
+        op="CREATE", new_text="解析后", source_message_id=8102, target_id=target_id,
+        reanalysis_allowlist=[],  # frozen allowlist does NOT contain the target
+    )
+    with pytest.raises(contracts.MemoryValidationError) as exc_info:
+        await _apply_validated(session_id=session_id, worldline="steins_gate",
+                               identity_mode="self", **kwargs)
+    assert exc_info.value.code == "reanalysis_target_not_allowed"
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db.execute(
+            "SELECT status, reanalysis_count FROM memory_observations WHERE observation_id=?",
+            (target_id,),
+        )).fetchone()
+    finally:
+        await db.close()
+    assert row["status"] == "candidate" and int(row["reanalysis_count"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d17_target_reused(isolated_store):
+    """Same target referenced by two output observations → fail closed."""
+    contracts = _contracts()
+    session_id = f"s3d4-d17-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8111)
+    kwargs = _d18_resolve_ops(
+        op="CREATE", new_text="解析后", source_message_id=8112, target_id=target_id,
+    )
+    second_obs = dict(kwargs["observations"][0])
+    second_obs["observation_ref"] = "r2"
+    kwargs["observations"].append(second_obs)
+    kwargs["operations"].append(
+        {"op": "REJECT", "observation_ref": "r2", "fact_text": "解析后", "reason_code": "d18"}
+    )
+    with pytest.raises(contracts.MemoryValidationError) as exc_info:
+        await _apply_validated(session_id=session_id, worldline="steins_gate",
+                               identity_mode="self", **kwargs)
+    assert exc_info.value.code == "reanalysis_target_reused"
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d17b_two_distinct_targets_rejected(isolated_store):
+    """Two DIFFERENT targets in one message → fail closed (single-target rule)."""
+    contracts = _contracts()
+    session_id = f"s3d4-d17b-{uuid4().hex[:8]}"
+    t1 = await _d18_candidate(session_id, source_message_id=8121, display_text="候选一")
+    t2 = await _d18_candidate(session_id, source_message_id=8122, display_text="候选二")
+    obs1 = {
+        "observation_ref": "r1", "reanalysis_target_observation_id": t1,
+        "source_message_ids": [8123], "display_text": "解析一",
+        "semantic": {"subject": "user", "predicate": "a", "object": "x"},
+        "evidence_kind": "direct_user", "memory_class": "stable_candidate",
+        "confidence": 0.96, "topic_label": None, "expires_at": None,
+    }
+    obs2 = {
+        "observation_ref": "r2", "reanalysis_target_observation_id": t2,
+        "source_message_ids": [8123], "display_text": "解析二",
+        "semantic": {"subject": "user", "predicate": "b", "object": "y"},
+        "evidence_kind": "direct_user", "memory_class": "stable_candidate",
+        "confidence": 0.96, "topic_label": None, "expires_at": None,
+    }
+    with pytest.raises(contracts.MemoryValidationError) as exc_info:
+        await _apply_validated(
+            session_id=session_id, worldline="steins_gate", identity_mode="self",
+            observations=[obs1, obs2],
+            operations=[
+                {"op": "CREATE", "observation_ref": "r1", "fact_text": "解析一", "reason_code": "d18"},
+                {"op": "CREATE", "observation_ref": "r2", "fact_text": "解析二", "reason_code": "d18"},
+            ],
+            source_evidence=[
+                _source_evidence(source_message_id=8123, conversation_id="conv-8123",
+                                 fingerprint="fp-8123", excerpt="解析")
+            ],
+            candidate_allowlist=[],
+            reanalysis_allowlist=[t1, t2],
+        )
+    assert exc_info.value.code == "reanalysis_target_reused"
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d18_target_unconsumed(isolated_store):
+    """Targeted observation with NO consuming operation → fail closed."""
+    contracts = _contracts()
+    session_id = f"s3d4-d18-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8131)
+    kwargs = _d18_resolve_ops(
+        op="CREATE", new_text="解析后", source_message_id=8132, target_id=target_id,
+    )
+    kwargs["operations"] = []  # target marked resolved but no operation consumes it
+    with pytest.raises(contracts.MemoryValidationError) as exc_info:
+        await _apply_validated(session_id=session_id, worldline="steins_gate",
+                               identity_mode="self", **kwargs)
+    assert exc_info.value.code == "reanalysis_target_unconsumed"
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d19_no_target_ordinary_unchanged(isolated_store):
+    """Context offered but model does not target → old observation untouched."""
+    session_id = f"s3d4-d19-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8141)
+    result = await _apply_validated(
+        session_id=session_id, worldline="steins_gate", identity_mode="self",
+        observations=[
+            _observation(
+                ref="o1", display_text="新话题",
+                semantic={"subject": "user", "predicate": "new", "object": "topic"},
+                source_message_ids=[8142],
+            )
+        ],
+        operations=[
+            {"op": "CREATE", "observation_ref": "o1", "fact_text": "新话题",
+             "reason_code": "direct_durable_statement"}
+        ],
+        source_evidence=[
+            _source_evidence(source_message_id=8142, conversation_id="conv-8142",
+                             fingerprint="fp-8142", excerpt="新话题")
+        ],
+        candidate_allowlist=[],
+        reanalysis_allowlist=[target_id],
+    )
+    assert len(result["created_facts"]) == 1
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db.execute(
+            "SELECT status, reanalysis_count FROM memory_observations WHERE observation_id=?",
+            (target_id,),
+        )).fetchone()
+    finally:
+        await db.close()
+    assert row["status"] == "candidate" and int(row["reanalysis_count"]) == 0, (
+        "merely offered observations must not be mutated"
+    )
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d20_legacy_caller_without_allowlist(isolated_store):
+    """Direct callers without reanalysis_allowlist keep working (backward compat)."""
+    session_id = f"s3d4-d20-{uuid4().hex[:8]}"
+    result = await _apply_validated(
+        session_id=session_id, worldline="steins_gate", identity_mode="self",
+        observations=[
+            _observation(
+                ref="o1", display_text="普通事实",
+                semantic={"subject": "user", "predicate": "x", "object": "y"},
+                source_message_ids=[8151],
+            )
+        ],
+        operations=[
+            {"op": "CREATE", "observation_ref": "o1", "fact_text": "普通事实",
+             "reason_code": "direct_durable_statement"}
+        ],
+        source_evidence=[
+            _source_evidence(source_message_id=8151, conversation_id="conv-8151",
+                             fingerprint="fp-8151", excerpt="普通事实")
+        ],
+        candidate_allowlist=[],
+    )
+    assert len(result["created_facts"]) == 1
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db.execute(
+            "SELECT reanalysis_count FROM memory_observations WHERE session_id=?",
+            (session_id,),
+        )).fetchone()
+    finally:
+        await db.close()
+    assert int(row["reanalysis_count"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d21_23_same_row_dual_source_count(isolated_store):
+    """D21/D22/D23: same observation_id; old+current sources; count 0→1."""
+    session_id = f"s3d4-d21-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8161)
+    kwargs = _d18_resolve_ops(
+        op="CREATE", new_text="解析后", source_message_id=8162, target_id=target_id,
+    )
+    await _apply_validated(session_id=session_id, worldline="steins_gate",
+                           identity_mode="self", **kwargs)
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db.execute(
+            "SELECT status, reanalysis_count FROM memory_observations WHERE observation_id=?",
+            (target_id,),
+        )).fetchone()
+        assert row is not None
+        assert int(row["reanalysis_count"]) == 1
+        assert str(row["status"]) == "attached"
+        sources = await (await db.execute(
+            """SELECT source_message_id FROM memory_observation_sources
+                WHERE observation_id=? ORDER BY source_message_id""",
+            (target_id,),
+        )).fetchall()
+        assert [int(s["source_message_id"]) for s in sources] == [8161, 8162]
+        n = await (await db.execute(
+            """SELECT COUNT(*) AS n FROM memory_observations
+                WHERE session_id=? AND display_text='解析后'""",
+            (session_id,),
+        )).fetchone()
+        assert int(n["n"]) == 1, "no parallel observation row"
+        evidence = await (await db.execute(
+            "SELECT COUNT(*) AS n FROM stable_fact_evidence WHERE observation_id=?",
+            (target_id,),
+        )).fetchone()
+        assert int(evidence["n"]) == 1, "resolved observation is primary evidence"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d24_fingerprint_recomputed(isolated_store):
+    """Semantic fingerprint follows the resolved content, never stays stale."""
+    session_id = f"s3d4-d24-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8171)
+    db = await get_db("steins_gate", "memory")
+    try:
+        old_fp = (await (await db.execute(
+            "SELECT semantic_fingerprint FROM memory_observations WHERE observation_id=?",
+            (target_id,),
+        )).fetchone())["semantic_fingerprint"]
+    finally:
+        await db.close()
+    kwargs = _d18_resolve_ops(
+        op="CREATE", new_text="解析后内容", source_message_id=8172, target_id=target_id,
+        semantic={"subject": "user", "predicate": "likes_work", "object": "konosuba"},
+    )
+    await _apply_validated(session_id=session_id, worldline="steins_gate",
+                           identity_mode="self", **kwargs)
+    db = await get_db("steins_gate", "memory")
+    try:
+        new_fp = (await (await db.execute(
+            "SELECT semantic_fingerprint FROM memory_observations WHERE observation_id=?",
+            (target_id,),
+        )).fetchone())["semantic_fingerprint"]
+    finally:
+        await db.close()
+    assert new_fp != old_fp, "fingerprint must be recomputed from resolved content"
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d25_expires_at_applied_including_null_clear(isolated_store):
+    """Model expires_at applied exactly; explicit null clears the old expiry."""
+    session_id = f"s3d4-d25-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8181)
+    db = await get_db("steins_gate", "memory")
+    try:
+        await db.execute(
+            "UPDATE memory_observations SET expires_at=? WHERE observation_id=?",
+            ("2025-01-01T00:00:00+00:00", target_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    kwargs = _d18_resolve_ops(
+        op="CREATE", new_text="解析后", source_message_id=8182, target_id=target_id,
+        expires_at=None,  # explicit null clears the old expiry
+    )
+    await _apply_validated(session_id=session_id, worldline="steins_gate",
+                           identity_mode="self", **kwargs)
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db.execute(
+            "SELECT expires_at FROM memory_observations WHERE observation_id=?",
+            (target_id,),
+        )).fetchone()
+    finally:
+        await db.close()
+    assert row["expires_at"] is None, "null expires_at must clear the old expiry"
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d26_forged_old_source_rejected(isolated_store):
+    """Output listing the OLD source id (not current evidence) → fail closed."""
+    contracts = _contracts()
+    session_id = f"s3d4-d26-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8191)
+    kwargs = _d18_resolve_ops(
+        op="CREATE", new_text="解析后", source_message_id=8192, target_id=target_id,
+    )
+    kwargs["observations"][0]["source_message_ids"] = [8191]  # forged OLD source
+    with pytest.raises(contracts.MemoryValidationError) as exc_info:
+        await _apply_validated(session_id=session_id, worldline="steins_gate",
+                               identity_mode="self", **kwargs)
+    assert exc_info.value.code == "unknown_source_message_id"
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db.execute(
+            "SELECT status, reanalysis_count FROM memory_observations WHERE observation_id=?",
+            (target_id,),
+        )).fetchone()
+    finally:
+        await db.close()
+    assert row["status"] == "candidate" and int(row["reanalysis_count"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d27_reject_target(isolated_store):
+    session_id = f"s3d4-d27-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8201)
+    kwargs = _d18_resolve_ops(
+        op="REJECT", new_text="拒绝此解析", source_message_id=8202, target_id=target_id,
+    )
+    await _apply_validated(session_id=session_id, worldline="steins_gate",
+                           identity_mode="self", **kwargs)
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db.execute(
+            "SELECT status, reanalysis_count FROM memory_observations WHERE observation_id=?",
+            (target_id,),
+        )).fetchone()
+        facts = await (await db.execute(
+            "SELECT COUNT(*) AS n FROM stable_facts WHERE session_id=?", (session_id,)
+        )).fetchone()
+    finally:
+        await db.close()
+    assert row["status"] == "rejected" and int(row["reanalysis_count"]) == 1
+    assert int(facts["n"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d28_candidate_create_target(isolated_store):
+    """Low-confidence CREATE on target → stays candidate, count=1, no D18 again."""
+    session_id = f"s3d4-d28-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8211)
+    kwargs = _d18_resolve_ops(
+        op="CREATE", new_text="仍低置信", source_message_id=8212, target_id=target_id,
+        confidence=0.4,
+    )
+    await _apply_validated(session_id=session_id, worldline="steins_gate",
+                           identity_mode="self", **kwargs)
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db.execute(
+            "SELECT status, reanalysis_count FROM memory_observations WHERE observation_id=?",
+            (target_id,),
+        )).fetchone()
+    finally:
+        await db.close()
+    assert row["status"] == "candidate" and int(row["reanalysis_count"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d29_stable_create_target(isolated_store):
+    """High-confidence CREATE on target → attached + fact + vector + evidence."""
+    session_id = f"s3d4-d29-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8221)
+    kwargs = _d18_resolve_ops(
+        op="CREATE", new_text="喜欢看动漫", source_message_id=8222, target_id=target_id,
+        confidence=0.96,
+    )
+    await _apply_validated(session_id=session_id, worldline="steins_gate",
+                           identity_mode="self", **kwargs)
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db.execute(
+            "SELECT status, reanalysis_count FROM memory_observations WHERE observation_id=?",
+            (target_id,),
+        )).fetchone()
+        fact = await (await db.execute(
+            """SELECT f.fact_id FROM stable_facts f
+                 JOIN stable_fact_evidence e ON e.fact_id = f.fact_id
+                WHERE e.observation_id=?""",
+            (target_id,),
+        )).fetchone()
+        vector = await (await db.execute(
+            """SELECT COUNT(*) AS n FROM stable_fact_version_embeddings e
+                 JOIN stable_facts f ON f.fact_id = e.fact_id
+                WHERE f.fact_id=?""",
+            (fact["fact_id"],),
+        )).fetchone()
+    finally:
+        await db.close()
+    assert row["status"] == "attached" and int(row["reanalysis_count"]) == 1
+    assert fact is not None
+    assert int(vector["n"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d30_episodic_target(isolated_store):
+    """Episodic CREATE on target → attached + Experience with SAME observation_id."""
+    session_id = f"s3d4-d30-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8231)
+    kwargs = _d18_resolve_ops(
+        op="CREATE", new_text="上周去了秋叶原", source_message_id=8232,
+        target_id=target_id, memory_class="episodic",
+    )
+    await _apply_validated(session_id=session_id, worldline="steins_gate",
+                           identity_mode="self", **kwargs)
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db.execute(
+            "SELECT status, reanalysis_count, memory_class FROM memory_observations WHERE observation_id=?",
+            (target_id,),
+        )).fetchone()
+        exp = await (await db.execute(
+            "SELECT observation_id FROM experiences WHERE observation_id=?",
+            (target_id,),
+        )).fetchone()
+    finally:
+        await db.close()
+    assert row["status"] == "attached" and int(row["reanalysis_count"]) == 1
+    assert row["memory_class"] == "episodic"
+    assert exp is not None, "experience must reference the SAME observation_id"
+    assert str(exp["observation_id"]) == target_id
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d31_attach_target(isolated_store):
+    """ATTACH on target → attached + supporting evidence."""
+    session_id = f"s3d4-d31-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8241)
+    fact_result = await _apply_validated(
+        session_id=session_id, worldline="steins_gate", identity_mode="self",
+        observations=[
+            _observation(
+                ref="seed", display_text="喜欢看动漫",
+                semantic={"subject": "user", "predicate": "likes", "object": "anime"},
+                source_message_ids=[8243],
+            )
+        ],
+        operations=[
+            {"op": "CREATE", "observation_ref": "seed", "fact_text": "喜欢看动漫",
+             "reason_code": "direct_durable_statement"}
+        ],
+        source_evidence=[
+            _source_evidence(source_message_id=8243, conversation_id="conv-8243",
+                             fingerprint="fp-8243", excerpt="喜欢看动漫")
+        ],
+        candidate_allowlist=[],
+    )
+    fact_id = fact_result["created_facts"][0]["fact_id"]
+    kwargs = _d18_resolve_ops(
+        op="ATTACH", new_text="喜欢看动漫", source_message_id=8242, target_id=target_id,
+        fact_target=fact_id, expected_version=1,
+    )
+    await _apply_validated(session_id=session_id, worldline="steins_gate",
+                           identity_mode="self", **kwargs)
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db.execute(
+            "SELECT status, reanalysis_count FROM memory_observations WHERE observation_id=?",
+            (target_id,),
+        )).fetchone()
+        evidence = await (await db.execute(
+            """SELECT evidence_role FROM stable_fact_evidence
+                WHERE observation_id=? AND fact_id=?""",
+            (target_id, fact_id),
+        )).fetchone()
+    finally:
+        await db.close()
+    assert row["status"] == "attached" and int(row["reanalysis_count"]) == 1
+    assert evidence is not None and str(evidence["evidence_role"]) == "supporting"
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d32_refine_target(isolated_store):
+    """REFINE on target → attached + new fact version + primary evidence."""
+    session_id = f"s3d4-d32-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8251)
+    fact_result = await _apply_validated(
+        session_id=session_id, worldline="steins_gate", identity_mode="self",
+        observations=[
+            _observation(
+                ref="seed", display_text="喜欢咖啡",
+                semantic={"subject": "user", "predicate": "likes", "object": "coffee"},
+                source_message_ids=[8253],
+            )
+        ],
+        operations=[
+            {"op": "CREATE", "observation_ref": "seed", "fact_text": "喜欢咖啡",
+             "reason_code": "direct_durable_statement"}
+        ],
+        source_evidence=[
+            _source_evidence(source_message_id=8253, conversation_id="conv-8253",
+                             fingerprint="fp-8253", excerpt="喜欢咖啡")
+        ],
+        candidate_allowlist=[],
+    )
+    fact_id = fact_result["created_facts"][0]["fact_id"]
+    kwargs = _d18_resolve_ops(
+        op="REFINE", new_text="喜欢黑咖啡", source_message_id=8252, target_id=target_id,
+        fact_target=fact_id, expected_version=1,
+    )
+    await _apply_validated(session_id=session_id, worldline="steins_gate",
+                           identity_mode="self", **kwargs)
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db.execute(
+            "SELECT status, reanalysis_count FROM memory_observations WHERE observation_id=?",
+            (target_id,),
+        )).fetchone()
+        active = await (await db.execute(
+            "SELECT active_version FROM stable_facts WHERE fact_id=?", (fact_id,)
+        )).fetchone()
+        evidence = await (await db.execute(
+            """SELECT evidence_role FROM stable_fact_evidence
+                WHERE observation_id=? AND fact_id=? AND version_no=2""",
+            (target_id, fact_id),
+        )).fetchone()
+    finally:
+        await db.close()
+    assert row["status"] == "attached" and int(row["reanalysis_count"]) == 1
+    assert int(active["active_version"]) == 2
+    assert evidence is not None and str(evidence["evidence_role"]) == "primary"
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d33_supersede_target(isolated_store):
+    """SUPERSEDE on target → attached + new fact version + primary evidence."""
+    session_id = f"s3d4-d33-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8261)
+    fact_result = await _apply_validated(
+        session_id=session_id, worldline="steins_gate", identity_mode="self",
+        observations=[
+            _observation(
+                ref="seed", display_text="喜欢咖啡",
+                semantic={"subject": "user", "predicate": "likes", "object": "coffee"},
+                source_message_ids=[8263],
+            )
+        ],
+        operations=[
+            {"op": "CREATE", "observation_ref": "seed", "fact_text": "喜欢咖啡",
+             "reason_code": "direct_durable_statement"}
+        ],
+        source_evidence=[
+            _source_evidence(source_message_id=8263, conversation_id="conv-8263",
+                             fingerprint="fp-8263", excerpt="喜欢咖啡")
+        ],
+        candidate_allowlist=[],
+    )
+    fact_id = fact_result["created_facts"][0]["fact_id"]
+    kwargs = _d18_resolve_ops(
+        op="SUPERSEDE", new_text="现在更喜欢茶", source_message_id=8262, target_id=target_id,
+        fact_target=fact_id, expected_version=1,
+    )
+    await _apply_validated(session_id=session_id, worldline="steins_gate",
+                           identity_mode="self", **kwargs)
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db.execute(
+            "SELECT status, reanalysis_count FROM memory_observations WHERE observation_id=?",
+            (target_id,),
+        )).fetchone()
+        active = await (await db.execute(
+            "SELECT active_version FROM stable_facts WHERE fact_id=?", (fact_id,)
+        )).fetchone()
+        evidence = await (await db.execute(
+            """SELECT evidence_role FROM stable_fact_evidence
+                WHERE observation_id=? AND fact_id=? AND version_no=2""",
+            (target_id, fact_id),
+        )).fetchone()
+    finally:
+        await db.close()
+    assert row["status"] == "attached" and int(row["reanalysis_count"]) == 1
+    assert int(active["active_version"]) == 2
+    assert evidence is not None and str(evidence["evidence_role"]) == "primary"
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d34_stale_target_fails_closed(isolated_store):
+    """Racing target already resolved elsewhere → stale, whole batch rollback."""
+    contracts = _contracts()
+    session_id = f"s3d4-d34-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8271)
+    db = await get_db("steins_gate", "memory")
+    try:
+        await db.execute(
+            "UPDATE memory_observations SET reanalysis_count=1 WHERE observation_id=?",
+            (target_id,),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    kwargs = _d18_resolve_ops(
+        op="CREATE", new_text="解析后", source_message_id=8272, target_id=target_id,
+    )
+    with pytest.raises(contracts.MemoryValidationError) as exc_info:
+        await _apply_validated(session_id=session_id, worldline="steins_gate",
+                               identity_mode="self", **kwargs)
+    assert exc_info.value.code == "reanalysis_target_stale"
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db.execute(
+            "SELECT reanalysis_count, display_text FROM memory_observations WHERE observation_id=?",
+            (target_id,),
+        )).fetchone()
+        facts = await (await db.execute(
+            "SELECT COUNT(*) AS n FROM stable_facts WHERE session_id=?", (session_id,)
+        )).fetchone()
+    finally:
+        await db.close()
+    assert int(row["reanalysis_count"]) == 1
+    assert "在看一部动漫" in str(row["display_text"])
+    assert int(facts["n"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d35_evidence_conflict(isolated_store):
+    """Candidate illegally backing stable fact evidence → fail closed."""
+    contracts = _contracts()
+    session_id = f"s3d4-d35-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8281)
+    fact_result = await _apply_validated(
+        session_id=session_id, worldline="steins_gate", identity_mode="self",
+        observations=[
+            _observation(
+                ref="seed", display_text="独立事实",
+                semantic={"subject": "user", "predicate": "x", "object": "y"},
+                source_message_ids=[8283],
+            )
+        ],
+        operations=[
+            {"op": "CREATE", "observation_ref": "seed", "fact_text": "独立事实",
+             "reason_code": "direct_durable_statement"}
+        ],
+        source_evidence=[
+            _source_evidence(source_message_id=8283, conversation_id="conv-8283",
+                             fingerprint="fp-8283", excerpt="独立事实")
+        ],
+        candidate_allowlist=[],
+    )
+    fact_id = fact_result["created_facts"][0]["fact_id"]
+    db = await get_db("steins_gate", "memory")
+    try:
+        await db.execute(
+            """INSERT INTO stable_fact_evidence(
+                   fact_id, version_no, observation_id, evidence_role
+               ) VALUES(?,1,?,'supporting')""",
+            (fact_id, target_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    kwargs = _d18_resolve_ops(
+        op="CREATE", new_text="解析后", source_message_id=8282, target_id=target_id,
+    )
+    with pytest.raises(contracts.MemoryValidationError) as exc_info:
+        await _apply_validated(session_id=session_id, worldline="steins_gate",
+                               identity_mode="self", **kwargs)
+    assert exc_info.value.code == "reanalysis_target_conflict"
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db.execute(
+            "SELECT status, reanalysis_count FROM memory_observations WHERE observation_id=?",
+            (target_id,),
+        )).fetchone()
+    finally:
+        await db.close()
+    assert row["status"] == "candidate" and int(row["reanalysis_count"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d36_experience_conflict(isolated_store):
+    """Candidate illegally backing an experience → fail closed."""
+    contracts = _contracts()
+    session_id = f"s3d4-d36-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8291)
+    db = await get_db("steins_gate", "memory")
+    try:
+        await db.execute(
+            """INSERT INTO experiences(
+                   experience_id, session_id, conversation_id, identity_mode,
+                   observation_id, display_text, semantic_json, semantic_fingerprint,
+                   confidence, status, expires_at, created_at, updated_at, deleted_at
+               ) VALUES(?,?, 'conv-corrupt', 'self', ?, '非法经历', '{}', 'fp-x',
+                        0.9, 'active', NULL, '2026-08-01T00:00:00+00:00',
+                        '2026-08-01T00:00:00+00:00', NULL)""",
+            (str(uuid4()), session_id, target_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    kwargs = _d18_resolve_ops(
+        op="CREATE", new_text="解析后", source_message_id=8292, target_id=target_id,
+    )
+    with pytest.raises(contracts.MemoryValidationError) as exc_info:
+        await _apply_validated(session_id=session_id, worldline="steins_gate",
+                               identity_mode="self", **kwargs)
+    assert exc_info.value.code == "reanalysis_target_conflict"
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db.execute(
+            "SELECT status, reanalysis_count FROM memory_observations WHERE observation_id=?",
+            (target_id,),
+        )).fetchone()
+    finally:
+        await db.close()
+    assert row["status"] == "candidate" and int(row["reanalysis_count"]) == 0
+
+
+# ---------------------------------------------------------------------------
+# MEMORY-V11-S3D-4 MICRO-REWORK: missing/null target fields + crash replay.
+# ---------------------------------------------------------------------------
+
+
+def _target_obs(
+    target_id: str,
+    new_text: str,
+    source_message_id: int,
+    **overrides,
+) -> dict:
+    obs = {
+        "observation_ref": "r1",
+        "reanalysis_target_observation_id": target_id,
+        "source_message_ids": [source_message_id],
+        "display_text": new_text,
+        "semantic": {"subject": "user", "predicate": "resolved", "object": new_text[:12]},
+        "evidence_kind": "direct_user",
+        "memory_class": "stable_candidate",
+        "confidence": 0.96,
+        "topic_label": None,
+        "expires_at": None,
+    }
+    obs.update(overrides)
+    return obs
+
+
+def _target_kwargs(*, session_id: str, obs: dict, source_message_id: int) -> dict:
+    return {
+        "observations": [obs],
+        "operations": [
+            # Server-side fact_text independent of the observation payload so a
+            # missing observation field is the ONLY defect under test.
+            {"op": "CREATE", "observation_ref": obs["observation_ref"],
+             "fact_text": "解析后", "reason_code": "d18"}
+        ],
+        "source_evidence": [
+            _source_evidence(
+                source_message_id=source_message_id,
+                conversation_id=f"conv-d18-{source_message_id}",
+                fingerprint=f"fp-d18-{source_message_id}",
+                excerpt="解析后",
+            )
+        ],
+        "candidate_allowlist": [],
+        "reanalysis_allowlist": [obs["reanalysis_target_observation_id"]],
+    }
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d39_expires_absent_preserves(isolated_store):
+    """P1-A: target output OMITS expires_at → old expiry preserved."""
+    session_id = f"s3d4-d39-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8401)
+    db = await get_db("steins_gate", "memory")
+    try:
+        await db.execute(
+            "UPDATE memory_observations SET expires_at=? WHERE observation_id=?",
+            ("2030-01-01T00:00:00+00:00", target_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    obs = _target_obs(target_id, "解析后", 8402)
+    obs.pop("expires_at")  # ABSENT
+    await _apply_validated(session_id=session_id, worldline="steins_gate",
+                           identity_mode="self", **_target_kwargs(session_id=session_id, obs=obs, source_message_id=8402))
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db.execute(
+            "SELECT expires_at FROM memory_observations WHERE observation_id=?", (target_id,)
+        )).fetchone()
+    finally:
+        await db.close()
+    assert str(row["expires_at"]) == "2030-01-01T00:00:00+00:00", (
+        "absent expires_at must preserve the existing expiry"
+    )
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d41_expires_value_replaces(isolated_store):
+    """P1-A: target output expires_at=<value> → replaced."""
+    session_id = f"s3d4-d41-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8411)
+    db = await get_db("steins_gate", "memory")
+    try:
+        await db.execute(
+            "UPDATE memory_observations SET expires_at=? WHERE observation_id=?",
+            ("2030-01-01T00:00:00+00:00", target_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    obs = _target_obs(
+        target_id, "解析后", 8412, expires_at="2031-02-03T00:00:00+00:00"
+    )
+    await _apply_validated(session_id=session_id, worldline="steins_gate",
+                           identity_mode="self", **_target_kwargs(session_id=session_id, obs=obs, source_message_id=8412))
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db.execute(
+            "SELECT expires_at FROM memory_observations WHERE observation_id=?", (target_id,)
+        )).fetchone()
+    finally:
+        await db.close()
+    assert str(row["expires_at"]) == "2031-02-03T00:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d42_topic_absent_preserves(isolated_store):
+    """P1-A: target output OMITS topic_label → old proposal preserved."""
+    session_id = f"s3d4-d42-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8421)
+    db = await get_db("steins_gate", "memory")
+    try:
+        await db.execute(
+            "UPDATE memory_observations SET topic_label_proposal='动漫' WHERE observation_id=?",
+            (target_id,),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    obs = _target_obs(target_id, "解析后", 8422)
+    obs.pop("topic_label")  # ABSENT
+    await _apply_validated(session_id=session_id, worldline="steins_gate",
+                           identity_mode="self", **_target_kwargs(session_id=session_id, obs=obs, source_message_id=8422))
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db.execute(
+            "SELECT topic_label_proposal FROM memory_observations WHERE observation_id=?",
+            (target_id,),
+        )).fetchone()
+    finally:
+        await db.close()
+    assert str(row["topic_label_proposal"]) == "动漫", (
+        "absent topic_label must preserve the existing proposal"
+    )
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d43_topic_null_clears(isolated_store):
+    """P1-A: target output topic_label=null → proposal cleared."""
+    session_id = f"s3d4-d43-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8431)
+    db = await get_db("steins_gate", "memory")
+    try:
+        await db.execute(
+            "UPDATE memory_observations SET topic_label_proposal='动漫' WHERE observation_id=?",
+            (target_id,),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    obs = _target_obs(target_id, "解析后", 8432, topic_label=None)
+    await _apply_validated(session_id=session_id, worldline="steins_gate",
+                           identity_mode="self", **_target_kwargs(session_id=session_id, obs=obs, source_message_id=8432))
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db.execute(
+            "SELECT topic_label_proposal FROM memory_observations WHERE observation_id=?",
+            (target_id,),
+        )).fetchone()
+    finally:
+        await db.close()
+    assert row["topic_label_proposal"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field",
+    ["display_text", "semantic", "evidence_kind", "memory_class", "confidence",
+     "source_message_ids"],
+)
+async def test_s3d4_d44_incomplete_core_fields_fail_closed(isolated_store, field):
+    """P1-A: missing required target field → reanalysis_target_incomplete, zero mutation."""
+    contracts = _contracts()
+    session_id = f"s3d4-d44-{field}-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8441)
+    db = await get_db("steins_gate", "memory")
+    try:
+        before = dict((await (await db.execute(
+            """SELECT display_text, semantic_json, semantic_fingerprint, evidence_kind,
+                      memory_class, confidence, topic_label_proposal, expires_at,
+                      status, reanalysis_count
+                 FROM memory_observations WHERE observation_id=?""",
+            (target_id,),
+        )).fetchone()))
+    finally:
+        await db.close()
+
+    obs = _target_obs(target_id, "解析后", 8442)
+    obs.pop(field)
+    with pytest.raises(contracts.MemoryValidationError) as exc_info:
+        await _apply_validated(
+            session_id=session_id, worldline="steins_gate", identity_mode="self",
+            **_target_kwargs(session_id=session_id, obs=obs, source_message_id=8442),
+        )
+    assert exc_info.value.code == "reanalysis_target_incomplete"
+
+    db = await get_db("steins_gate", "memory")
+    try:
+        after = dict((await (await db.execute(
+            """SELECT display_text, semantic_json, semantic_fingerprint, evidence_kind,
+                      memory_class, confidence, topic_label_proposal, expires_at,
+                      status, reanalysis_count
+                 FROM memory_observations WHERE observation_id=?""",
+            (target_id,),
+        )).fetchone()))
+        sources_n = await (await db.execute(
+            "SELECT COUNT(*) AS n FROM memory_observation_sources WHERE observation_id=?",
+            (target_id,),
+        )).fetchone()
+        facts_n = await (await db.execute(
+            "SELECT COUNT(*) AS n FROM stable_facts WHERE session_id=?", (session_id,)
+        )).fetchone()
+        exps_n = await (await db.execute(
+            "SELECT COUNT(*) AS n FROM experiences WHERE session_id=?", (session_id,)
+        )).fetchone()
+    finally:
+        await db.close()
+    for key, value in before.items():
+        assert after[key] == value, f"field {key} must be untouched"
+    assert int(sources_n["n"]) == 1, "sources unchanged"
+    assert int(facts_n["n"]) == 0, "no fact side effect"
+    assert int(exps_n["n"]) == 0, "no experience side effect"

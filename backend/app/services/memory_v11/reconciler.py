@@ -156,18 +156,200 @@ async def _insert_observation(
                    observation_id, source_message_id, conversation_id,
                    source_role, source_fingerprint, source_created_at,
                    source_state, excerpt
-               ) VALUES(?,?,?,?,?,?, 'present', ?)""",
+               ) VALUES(?,?,?, 'user', ?, ?, 'present', ?)""",
             (
                 observation_id,
                 mid_i,
                 str(ev.get("conversation_id") or ""),
-                "user",
                 str(ev.get("source_fingerprint") or ""),
                 str(ev.get("source_created_at") or now),
                 ev.get("excerpt"),
             ),
         )
     return observation_id
+
+
+def _require_target_core_fields(obs: dict[str, Any]) -> None:
+    """P1-A: a targeted rewrite must carry explicit core fields.
+
+    Absent core fields must never silently rewrite meaningful existing state
+    to defaults (display_text -> '', semantic -> {}, confidence -> 0.0 ...).
+    """
+    missing = [
+        field
+        for field in (
+            "display_text",
+            "semantic",
+            "evidence_kind",
+            "memory_class",
+            "confidence",
+            "source_message_ids",
+        )
+        if field not in obs or obs[field] is None
+    ]
+    if missing:
+        raise MemoryValidationError(
+            "reanalysis_target_incomplete",
+            f"target rewrite missing required fields: {sorted(missing)}",
+        )
+    if not str(obs["display_text"] or "").strip():
+        raise MemoryValidationError(
+            "reanalysis_target_incomplete", "display_text must be non-empty"
+        )
+    if not isinstance(obs["semantic"], dict):
+        raise MemoryValidationError(
+            "reanalysis_target_incomplete", "semantic must be a JSON object"
+        )
+    if not isinstance(obs["evidence_kind"], str) or not isinstance(
+        obs["memory_class"], str
+    ):
+        raise MemoryValidationError(
+            "reanalysis_target_incomplete",
+            "evidence_kind and memory_class must be strings",
+        )
+    if isinstance(obs["confidence"], bool) or not isinstance(
+        obs["confidence"], (int, float)
+    ):
+        raise MemoryValidationError(
+            "reanalysis_target_incomplete", "confidence must be numeric"
+        )
+    if not isinstance(obs["source_message_ids"], list) or not obs[
+        "source_message_ids"
+    ]:
+        raise MemoryValidationError(
+            "reanalysis_target_incomplete",
+            "source_message_ids must be a non-empty list",
+        )
+
+
+async def materialize_observation(
+    db: Any,
+    *,
+    session_id: str,
+    identity_mode: str,
+    obs: dict[str, Any],
+    status: str,
+    source_by_id: dict[int, dict[str, Any]],
+    reanalysis_allow: set[str],
+) -> str:
+    """Insert a new observation OR reanalyze an existing D18 target.
+
+    D18 target path (SAME transaction): preserve observation_id / created_at /
+    all old source rows; recompute display/semantic fields and the canonical
+    semantic fingerprint; set the branch-requested status; reanalysis_count
+    0→1; append the CURRENT source row. No parallel observation row.
+
+    Fail-closed re-checks under the write lock (race-safe): target still
+    candidate + reanalysis_count=0, and no illegal stable_fact_evidence or
+    experiences backing. Structural corruption → reanalysis_target_conflict.
+    """
+    target = obs.get("reanalysis_target_observation_id")
+    if target is None or str(target).strip() == "":
+        return await _insert_observation(
+            db,
+            session_id=session_id,
+            identity_mode=identity_mode,
+            obs=obs,
+            status=status,
+            source_by_id=source_by_id,
+        )
+    target_id = str(target).strip()
+    if target_id not in reanalysis_allow:
+        raise MemoryValidationError(
+            "reanalysis_target_not_allowed",
+            f"reanalysis_target_observation_id={target_id} not on allowlist",
+        )
+    state = await (
+        await db.execute(
+            """SELECT status, reanalysis_count, created_at, expires_at,
+                      topic_label_proposal FROM memory_observations
+                WHERE observation_id=? AND session_id=? AND identity_mode=?""",
+            (target_id, session_id, identity_mode),
+        )
+    ).fetchone()
+    if (
+        state is None
+        or str(state["status"]) != "candidate"
+        or int(state["reanalysis_count"] or 0) != 0
+    ):
+        raise MemoryValidationError(
+            "reanalysis_target_stale", f"target={target_id} no longer unresolved"
+        )
+    evidence = await (
+        await db.execute(
+            """SELECT COUNT(*) AS n FROM stable_fact_evidence
+                WHERE observation_id=?""",
+            (target_id,),
+        )
+    ).fetchone()
+    experiences = await (
+        await db.execute(
+            """SELECT COUNT(*) AS n FROM experiences
+                WHERE observation_id=?""",
+            (target_id,),
+        )
+    ).fetchone()
+    if int(evidence["n"]) > 0 or int(experiences["n"]) > 0:
+        raise MemoryValidationError(
+            "reanalysis_target_conflict",
+            f"target={target_id} illegally backs stable fact or experience data",
+        )
+    # P1-A: explicit core fields required for an existing-row rewrite.
+    _require_target_core_fields(obs)
+    semantic_blob, fingerprint = _semantic_blob_and_fp(obs["semantic"])
+    # Three-state optional fields: ABSENT preserves, null clears, value replaces.
+    new_expires_at = state["expires_at"]
+    if "expires_at" in obs:
+        new_expires_at = obs["expires_at"]
+    new_topic = state["topic_label_proposal"]
+    if "topic_label" in obs:
+        new_topic = obs["topic_label"]
+    now = _utc_now()
+    await db.execute(
+        """UPDATE memory_observations
+           SET display_text=?, semantic_json=?, semantic_fingerprint=?,
+               evidence_kind=?, memory_class=?, confidence=?,
+               topic_label_proposal=?, expires_at=?, status=?,
+               reanalysis_count=1, updated_at=?
+         WHERE observation_id=?""",
+        (
+            obs["display_text"],
+            semantic_blob,
+            fingerprint,
+            str(obs["evidence_kind"]),
+            str(obs["memory_class"]),
+            float(obs["confidence"]),
+            new_topic,
+            new_expires_at,
+            status,
+            now,
+            target_id,
+        ),
+    )
+    for mid in obs.get("source_message_ids") or []:
+        mid_i = int(mid)
+        ev = source_by_id.get(mid_i)
+        if ev is None:
+            raise MemoryValidationError(
+                "unknown_source_message_id",
+                f"source_message_id={mid_i} not in source_evidence",
+            )
+        await db.execute(
+            """INSERT INTO memory_observation_sources(
+                   observation_id, source_message_id, conversation_id,
+                   source_role, source_fingerprint, source_created_at,
+                   source_state, excerpt
+               ) VALUES(?,?,?, 'user', ?, ?, 'present', ?)""",
+            (
+                target_id,
+                mid_i,
+                str(ev.get("conversation_id") or ""),
+                str(ev.get("source_fingerprint") or ""),
+                str(ev.get("source_created_at") or now),
+                ev.get("excerpt"),
+            ),
+        )
+    return target_id
 
 
 async def _link_evidence(
@@ -279,12 +461,16 @@ async def apply_validated_memory_operations(
     source_evidence: list[dict[str, Any]],
     candidate_allowlist: list[str],
     embedder: Any | None = None,
+    reanalysis_allowlist: list[str] | None = None,
 ) -> dict[str, Any]:
     """Validate then apply all operations in ONE connection / ONE transaction.
 
     Passage embeddings for CREATE / REFINE / SUPERSEDE are prepared *before*
     BEGIN IMMEDIATE. Indexing failure aborts the whole batch with no residue.
     Source replay is idempotent via observation-source receipts.
+
+    D18 (S3D-4): ``reanalysis_allowlist`` freezes the offered unresolved
+    observation ids; it is optional and backward compatible — None → empty.
     """
     wl = normalize_worldline(worldline)
     mode = normalize_identity_mode(identity_mode)
@@ -295,7 +481,9 @@ async def apply_validated_memory_operations(
     source_by_id = _validate_source_evidence(source_evidence)
     obs_map = _obs_by_ref(list(observations or []))
     allow = {str(x) for x in (candidate_allowlist or []) if x}
+    reanalysis_allow = {str(x) for x in (reanalysis_allowlist or []) if x}
     consumed: set[str] = set()
+    used_targets: dict[str, str] = {}
     created_facts: list[dict[str, Any]] = []
 
     all_source_ids: set[int] = set(source_by_id.keys())
@@ -346,6 +534,38 @@ async def apply_validated_memory_operations(
                 raise MemoryValidationError(
                     "unknown_source_message_id",
                     f"source_message_id={mid} not in source_evidence",
+                )
+        # D18: reanalysis target must be frozen, single per message, and
+        # never duplicated across output observations.
+        target_obs_id = obs_map[ref].get("reanalysis_target_observation_id")
+        if target_obs_id is not None and str(target_obs_id).strip() != "":
+            tid = str(target_obs_id).strip()
+            if tid not in reanalysis_allow:
+                raise MemoryValidationError(
+                    "reanalysis_target_not_allowed",
+                    f"reanalysis_target_observation_id={tid} not on allowlist",
+                )
+            if tid in used_targets:
+                raise MemoryValidationError(
+                    "reanalysis_target_reused",
+                    f"reanalysis target {tid} used by multiple observations",
+                )
+            used_targets[tid] = ref
+
+    if len(used_targets) > 1:
+        raise MemoryValidationError(
+            "reanalysis_target_reused",
+            "at most one distinct reanalysis target per processed message",
+        )
+    # P0: a targeted observation must be consumed by exactly one operation.
+    for ref, obs in obs_map.items():
+        target_obs_id = obs.get("reanalysis_target_observation_id")
+        if target_obs_id is not None and str(target_obs_id).strip() != "":
+            if ref not in consumed:
+                raise MemoryValidationError(
+                    "reanalysis_target_unconsumed",
+                    f"observation_ref={ref} targets an observation but has no "
+                    "operation",
                 )
 
     # Short read-only replay precheck: avoid heavyweight encode on pure replays.
@@ -423,13 +643,14 @@ async def apply_validated_memory_operations(
             fact_text = _op_fact_text(op, obs)
 
             if op_name == "REJECT":
-                await _insert_observation(
+                await materialize_observation(
                     db,
                     session_id=session,
                     identity_mode=mode,
                     obs=obs,
                     status="rejected",
                     source_by_id=source_by_id,
+                    reanalysis_allow=reanalysis_allow,
                 )
                 continue
 
@@ -438,13 +659,14 @@ async def apply_validated_memory_operations(
                 if obs_memory_class == "episodic":
                     # S3C-1: episodic CREATE -> first-class experience only.
                     # No stable_facts / stable_fact_versions / embedding rows.
-                    observation_id = await _insert_observation(
+                    observation_id = await materialize_observation(
                         db,
                         session_id=session,
                         identity_mode=mode,
                         obs=obs,
                         status="attached",
                         source_by_id=source_by_id,
+                        reanalysis_allow=reanalysis_allow,
                     )
                     source_ids = [int(m) for m in (obs.get("source_message_ids") or [])]
                     conversation_id = (
@@ -465,13 +687,14 @@ async def apply_validated_memory_operations(
                     )
                     continue
                 if not _will_create_stable_fact(obs):
-                    await _insert_observation(
+                    await materialize_observation(
                         db,
                         session_id=session,
                         identity_mode=mode,
                         obs=obs,
                         status="candidate",
                         source_by_id=source_by_id,
+                        reanalysis_allow=reanalysis_allow,
                     )
                     continue
 
@@ -512,13 +735,14 @@ async def apply_validated_memory_operations(
                     version_no=int(created["version_no"]),
                     prepared=prepared,
                 )
-                observation_id = await _insert_observation(
+                observation_id = await materialize_observation(
                     db,
                     session_id=session,
                     identity_mode=mode,
                     obs=obs,
                     status="attached",
                     source_by_id=source_by_id,
+                    reanalysis_allow=reanalysis_allow,
                 )
                 await _link_evidence(
                     db,
@@ -546,13 +770,14 @@ async def apply_validated_memory_operations(
                         "expected_version_mismatch",
                         f"expected={expected} active={active_version}",
                     )
-                observation_id = await _insert_observation(
+                observation_id = await materialize_observation(
                     db,
                     session_id=session,
                     identity_mode=mode,
                     obs=obs,
                     status="attached",
                     source_by_id=source_by_id,
+                    reanalysis_allow=reanalysis_allow,
                 )
                 await _link_evidence(
                     db,
@@ -630,13 +855,14 @@ async def apply_validated_memory_operations(
                     version_no=new_version,
                     prepared=prepared,
                 )
-                observation_id = await _insert_observation(
+                observation_id = await materialize_observation(
                     db,
                     session_id=session,
                     identity_mode=mode,
                     obs=obs,
                     status="attached",
                     source_by_id=source_by_id,
+                    reanalysis_allow=reanalysis_allow,
                 )
                 await _link_evidence(
                     db,

@@ -395,6 +395,40 @@ async def retry_memory_job(
         await db.close()
 
 
+async def _current_source_already_applied(
+    *,
+    session_id: str,
+    worldline: str,
+    identity_mode: str,
+    source_message_id: int,
+) -> bool:
+    """Durable-receipt precheck grounded in the JOB's frozen source Y.
+
+    Same receipt semantics as the reconciler replay guard: a source row joined
+    to an observation in the same scope proves the Memory transaction for this
+    source already committed atomically — observation status is irrelevant.
+    Never derived from model output / target ids / provider-supplied evidence.
+    """
+    wl = normalize_worldline(worldline)
+    mode = normalize_identity_mode(identity_mode)
+    db = await get_db(wl, "memory")
+    try:
+        row = await (
+            await db.execute(
+                """SELECT 1
+                     FROM memory_observation_sources s
+                     JOIN memory_observations o
+                       ON o.observation_id = s.observation_id
+                    WHERE s.source_message_id=? AND o.session_id=? AND o.identity_mode=?
+                    LIMIT 1""",
+                (int(source_message_id), session_id, mode),
+            )
+        ).fetchone()
+        return row is not None
+    finally:
+        await db.close()
+
+
 async def _load_user_source(
     *,
     session_id: str,
@@ -406,7 +440,7 @@ async def _load_user_source(
     db = await get_db(wl, "history")
     try:
         cur = await db.execute(
-            """SELECT id, role, content, conversation_id, session_id
+            """SELECT id, role, content, conversation_id, session_id, created_at
                  FROM messages
                 WHERE id=? AND session_id=? AND conversation_id=?""",
             (int(source_message_id), session_id, conversation_id),
@@ -420,6 +454,7 @@ async def _load_user_source(
             "content": str(row["content"] or ""),
             "conversation_id": str(row["conversation_id"]),
             "session_id": str(row["session_id"]),
+            "created_at": row["created_at"],
         }
     finally:
         await db.close()
@@ -463,6 +498,16 @@ Rules:
 - Do not generate server-owned fact_id values for CREATE.
 - memory_class=episodic: CREATE with target_fact_id=null stores an experience;
   never use ATTACH/REFINE/SUPERSEDE on a stable fact from an episodic observation.
+- "unresolved_observations" are OLD unresolved context, NOT new evidence.
+  Only the CURRENT user message supplies new user evidence in this completion.
+- At most ONE existing unresolved observation may be directly clarified by
+  this message. A returned observation may optionally set
+  "reanalysis_target_observation_id" to an id FROM unresolved_observations —
+  use it ONLY when the current speech directly resolves that old observation;
+  otherwise omit or null. Never invent observation ids.
+- Never copy old source_message_ids from unresolved context into a returned
+  observation; a resolving observation lists only the CURRENT source id.
+- Stable fact candidates and reanalysis targets are separate allowlists.
 """
 
 
@@ -501,6 +546,7 @@ async def default_memory_completion(**kwargs: Any) -> Mapping[str, Any]:
     source_message_id = int(kwargs.get("source_message_id") or 0)
     identity_mode = str(kwargs.get("identity_mode") or "okabe")
     candidates = list(kwargs.get("candidates") or [])
+    unresolved = list(kwargs.get("unresolved_observations") or [])
 
     api_key = credential_store.get(provider_id)
     if not api_key or str(api_key).lower().startswith("test") or len(str(api_key)) < 8:
@@ -523,6 +569,7 @@ async def default_memory_completion(**kwargs: Any) -> Mapping[str, Any]:
                     "source_message_id": source_message_id,
                     "user_text": user_text,
                     "candidates": candidates,
+                    "unresolved_observations": unresolved,
                 },
                 ensure_ascii=False,
             ),
@@ -583,6 +630,24 @@ async def process_memory_job(
     if job.get("lease_owner") != lease_owner or job["state"] != "processing":
         return (await get_memory_job(job_id, worldline=wl)) or job
 
+    # P1-B: durable-receipt precheck for the CURRENT job source (crash replay).
+    # If source Y already has an observation receipt in this scope, the Memory
+    # transaction already committed atomically; converge to completed WITHOUT
+    # re-running stable/unresolved selectors or the provider. This closes the
+    # window where Memory commits but the job crashes before state='completed'.
+    if await _current_source_already_applied(
+        session_id=job["session_id"],
+        worldline=wl,
+        identity_mode=job["identity_mode"],
+        source_message_id=int(job["source_message_id"]),
+    ):
+        return await _transition_owned(
+            job_id=job_id,
+            worldline=wl,
+            lease_owner=lease_owner,
+            state="completed",
+        )
+
     completion_fn: MemoryCompletionFn = memory_completion or default_memory_completion
 
     try:
@@ -613,8 +678,13 @@ async def process_memory_job(
 
         # §6.1: local same-scope candidate selection BEFORE the single completion.
         # Allowlist is frozen to these IDs only (no post-completion widening).
+        # D18: bounded unresolved-observation context is selected locally too;
+        # it rides the SAME single completion (no second model call).
         try:
-            from app.services.memory_v11.retrieval import select_stable_fact_candidates
+            from app.services.memory_v11.retrieval import (
+                select_stable_fact_candidates,
+                select_unresolved_observations,
+            )
 
             selected_rows = await select_stable_fact_candidates(
                 session_id=job["session_id"],
@@ -624,6 +694,19 @@ async def process_memory_job(
             )
             candidates = _candidate_payload_for_completion(list(selected_rows or []))
             candidate_allowlist = [str(item["fact_id"]) for item in candidates]
+
+            unresolved_rows = await select_unresolved_observations(
+                session_id=job["session_id"],
+                worldline=wl,
+                identity_mode=job["identity_mode"],
+                conversation_id=job["conversation_id"],
+                current_source_message_id=int(job["source_message_id"]),
+                query=redacted,
+            )
+            unresolved_observations = list(unresolved_rows or [])
+            reanalysis_allowlist = [
+                str(item["observation_id"]) for item in unresolved_observations
+            ]
         except Exception:
             # Selection failure: never call provider; use existing failed_or_retry path.
             return await _transition_owned(
@@ -648,6 +731,7 @@ async def process_memory_job(
                 model_id=job["model_id"],
                 pipeline_version=job["pipeline_version"],
                 candidates=candidates,
+                unresolved_observations=unresolved_observations,
             )
         except Exception:
             return await _transition_owned(
@@ -688,7 +772,9 @@ async def process_memory_job(
                     "conversation_id": job["conversation_id"],
                     "source_role": "user",
                     "source_fingerprint": fp,
-                    "source_created_at": _iso(),
+                    # Persisted message created_at (S3D-4 narrow fix); fall back
+                    # to processing time only when the value is unusable.
+                    "source_created_at": source.get("created_at") or _iso(),
                     "excerpt": redacted[:200],
                 }
             ]
@@ -701,6 +787,7 @@ async def process_memory_job(
                     operations=operations,
                     source_evidence=source_evidence,
                     candidate_allowlist=candidate_allowlist,
+                    reanalysis_allowlist=reanalysis_allowlist,
                 )
             except Exception:
                 return await _transition_owned(

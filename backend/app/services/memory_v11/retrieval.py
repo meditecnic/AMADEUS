@@ -7,6 +7,7 @@ worldline or identity_mode boundaries.
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import struct
@@ -16,6 +17,11 @@ from functools import cmp_to_key
 from typing import Any, Protocol
 
 from app.db import get_db, normalize_identity_mode, normalize_worldline
+from app.services.memory_v11.contracts import (
+    D18_UNRESOLVED_CONTEXT_CAP,
+    D18_UNRESOLVED_POOL_LIMIT,
+    D18_UNRESOLVED_TOKEN_BUDGET,
+)
 from app.services.memory_v11.repository import list_active_stable_facts
 
 logger = logging.getLogger(__name__)
@@ -533,3 +539,127 @@ async def select_experience_candidates(
         token_budget=token_budget,
         contract_overhead_tokens=EXPERIENCE_CONTRACT_OVERHEAD_TOKENS,
     )
+
+
+async def select_unresolved_observations(
+    *,
+    session_id: str,
+    worldline: str,
+    identity_mode: str,
+    conversation_id: str,
+    current_source_message_id: int,
+    query: str,
+    pool_limit: int = D18_UNRESOLVED_POOL_LIMIT,
+    context_cap: int = D18_UNRESOLVED_CONTEXT_CAP,
+    token_budget: int = D18_UNRESOLVED_TOKEN_BUDGET,
+) -> list[dict[str, Any]]:
+    """Bounded recent unresolved-observation context for the SAME completion.
+
+    Eligibility: same worldline/session/identity/conversation; observation
+    status='candidate' AND reanalysis_count=0; at least one present source in
+    the current conversation with source_message_id < current.
+
+    P0: one observation = one pool slot — the recent pool derives
+    MAX(present source_message_id) per observation (GROUP BY), never a raw
+    JOIN + LIMIT. source_excerpt comes from the EARLIEST present source
+    (original unresolved wording); recency uses the latest source id.
+
+    Ranking uses the existing local lexical relevance as ORDER ONLY: zero
+    lexical overlap is still eligible (pronoun resolution has weak overlap).
+
+    Whole-item packing under D18_UNRESOLVED_CONTEXT_CAP + TOKEN_BUDGET; an
+    oversized whole item is omitted, never char-sliced.
+    """
+    wl = normalize_worldline(worldline)
+    mode = normalize_identity_mode(identity_mode)
+    session = (session_id or "").strip()
+    if not session:
+        return []
+    conv = (conversation_id or "").strip()
+    current = int(current_source_message_id)
+
+    db = await get_db(wl, "memory")
+    try:
+        pool_rows = await (
+            await db.execute(
+                """SELECT o.observation_id, o.display_text,
+                          MAX(s.source_message_id) AS latest_source_id
+                     FROM memory_observations o
+                     JOIN memory_observation_sources s
+                       ON s.observation_id = o.observation_id
+                    WHERE o.session_id=? AND o.identity_mode=?
+                      AND o.status='candidate' AND o.reanalysis_count=0
+                      AND s.source_state='present'
+                      AND s.conversation_id=?
+                      AND s.source_message_id < ?
+                    GROUP BY o.observation_id, o.display_text
+                    ORDER BY latest_source_id DESC, o.observation_id ASC
+                    LIMIT ?""",
+                (session, mode, conv, current, int(pool_limit)),
+            )
+        ).fetchall()
+        candidates: list[dict[str, Any]] = []
+        for row in pool_rows:
+            observation_id = str(row["observation_id"])
+            display_text = str(row["display_text"] or "")
+            # EARLIEST present source excerpt (original unresolved wording).
+            excerpt = None
+            src = await (
+                await db.execute(
+                    """SELECT excerpt FROM memory_observation_sources
+                        WHERE observation_id=? AND source_state='present'
+                          AND conversation_id=? AND source_message_id < ?
+                        ORDER BY source_message_id ASC LIMIT 1""",
+                    (observation_id, conv, current),
+                )
+            ).fetchone()
+            if src is not None and src["excerpt"] is not None:
+                excerpt = str(src["excerpt"])
+            relevance = _lexical_relevance(display_text, query)
+            candidates.append(
+                {
+                    "observation_id": observation_id,
+                    "display_text": display_text,
+                    "source_excerpt": excerpt,
+                    "_latest_source_id": int(row["latest_source_id"]),
+                    "_relevance": relevance,
+                }
+            )
+    finally:
+        await db.close()
+
+    # Relevance ranks only; zero relevance stays eligible.
+    def _cmp_unresolved(
+        left: dict[str, Any], right: dict[str, Any]
+    ) -> int:
+        for field in ("_relevance", "_latest_source_id"):
+            lv, rv = left[field], right[field]
+            if lv == rv:
+                continue
+            return -1 if lv > rv else 1
+        lid, rid = left["observation_id"], right["observation_id"]
+        if lid == rid:
+            return 0
+        return -1 if lid < rid else 1
+
+    ranked = sorted(candidates, key=cmp_to_key(_cmp_unresolved))
+
+    # Whole-item packing: both bounds independently.
+    selected: list[dict[str, Any]] = []
+    remaining = int(token_budget)
+    for item in ranked:
+        if len(selected) >= int(context_cap):
+            break
+        payload_item = {
+            "observation_id": item["observation_id"],
+            "display_text": item["display_text"],
+            "source_excerpt": item["source_excerpt"],
+        }
+        cost = _estimate_tokens(
+            json.dumps(payload_item, ensure_ascii=False, sort_keys=True)
+        ) + 8  # conservative per-item JSON/contract overhead
+        if cost > remaining:
+            continue  # omit the whole item; never char-slice
+        selected.append(payload_item)
+        remaining -= cost
+    return selected

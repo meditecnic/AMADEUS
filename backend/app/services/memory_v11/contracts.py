@@ -13,6 +13,12 @@ AUTO_STABLE_CONFIDENCE: Final[float] = 0.85
 MAX_AUTO_RETRIES: Final[int] = 3
 LEASE_SECONDS: Final[int] = 120
 
+# D18 bounded contextual reanalysis (S3D-4): recent same-conversation pool cap,
+# completion context item cap, and whole-item token budget.
+D18_UNRESOLVED_POOL_LIMIT: Final[int] = 16
+D18_UNRESOLVED_CONTEXT_CAP: Final[int] = 3
+D18_UNRESOLVED_TOKEN_BUDGET: Final[int] = 480
+
 IDENTITY_MODES: Final[frozenset[str]] = frozenset({"self", "okabe"})
 FACT_STATES: Final[frozenset[str]] = frozenset({"active", "deleted"})
 CHANGE_KINDS: Final[frozenset[str]] = frozenset(
