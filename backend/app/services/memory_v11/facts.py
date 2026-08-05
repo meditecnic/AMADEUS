@@ -120,7 +120,7 @@ async def user_edit_fact(
                 "expected_version_mismatch",
                 f"expected={version} active={active_version}",
             )
-        confidence = float(row["active_confidence"] or 0.9)
+        confidence = float(row["active_confidence"])
         new_version = active_version + 1
 
         await db.execute(

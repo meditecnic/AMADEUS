@@ -440,7 +440,16 @@ def _memory_error_response(exc: MemoryValidationError) -> HTTPException:
 def _validate_memory_scope(
     worldline: str | None, identity_mode: str | None
 ) -> tuple[str, str]:
-    """Canonical 422 envelopes for scope normalization (never bare strings)."""
+    """Canonical 422 envelopes for scope normalization (never bare strings).
+
+    The three lifecycle routes require an EXPLICIT worldline: blank/missing
+    is a caller error, never a silent steins_gate default.
+    """
+    if worldline is None or str(worldline).strip() == "":
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "missing_worldline", "message": "worldline is required"},
+        )
     try:
         wl = normalize_worldline(worldline)
     except ValueError:
@@ -482,7 +491,7 @@ async def patch_memory_fact(
     fact_id: str,
     request: Request,
     session_id: str | None = Query(None),
-    worldline: str = Query("steins_gate"),
+    worldline: str | None = Query(None),
     identity_mode: str | None = Query(None),
 ):
     """v11 user edit (plan §7.1): new ``user_edit`` version on the same fact.
@@ -558,7 +567,7 @@ async def patch_memory_fact(
 async def delete_memory_fact(
     fact_id: str,
     session_id: str | None = Query(None),
-    worldline: str = Query("steins_gate"),
+    worldline: str | None = Query(None),
     identity_mode: str | None = Query(None),
     expected_version: str | None = Query(None),
 ):
@@ -611,7 +620,7 @@ async def delete_memory_fact(
 async def memory_fact_details(
     fact_id: str,
     session_id: str | None = Query(None),
-    worldline: str = Query("steins_gate"),
+    worldline: str | None = Query(None),
     identity_mode: str | None = Query(None),
 ):
     """v11 details (plan §8.2): active-fact version history + minimal provenance."""

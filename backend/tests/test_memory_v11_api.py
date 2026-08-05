@@ -1712,6 +1712,120 @@ def test_s3d1_edit_semantic_json_canonical_shape(isolated_client: TestClient):
     assert new_semantic != old_semantic
 
 
+# -- POST-PUSH HOTFIX: zero-confidence preservation + explicit worldline ------
+
+
+def test_s3d1_edit_preserves_zero_confidence(isolated_client: TestClient):
+    """Hotfix: user_edit preserves the exact stored confidence (0.0 is legal)."""
+    import asyncio
+
+    from app.services.memory_v11.repository import create_stable_fact
+
+    session_id = _session("s3d1-zero-conf")
+
+    async def _seed() -> str:
+        row = await create_stable_fact(
+            session_id=session_id,
+            worldline="steins_gate",
+            identity_mode="self",
+            display_text="低置信事实",
+            semantic_json={"subject": "user", "relation": "x", "object": "y"},
+            confidence=0.0,
+        )
+        return str(row["fact_id"])
+
+    fact_id = asyncio.run(_seed())
+    assert float(
+        _db_rows(
+            "SELECT confidence FROM stable_fact_versions WHERE fact_id=? AND version_no=1",
+            (fact_id,),
+        )[0]["confidence"]
+    ) == 0.0
+
+    response = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}",
+        params=_facts_scope(session_id),
+        json={"display_text": "更新后的低置信事实", "expected_version": 1},
+    )
+    assert response.status_code == 200, response.text
+    rows = _db_rows(
+        """SELECT version_no, confidence FROM stable_fact_versions
+            WHERE fact_id=? ORDER BY version_no ASC""",
+        (fact_id,),
+    )
+    assert len(rows) == 2
+    assert float(rows[0]["confidence"]) == 0.0
+    assert float(rows[1]["confidence"]) == 0.0, (
+        f"user_edit must preserve exact confidence 0.0, got {rows[1]['confidence']}"
+    )
+    details = isolated_client.get(
+        f"/api/memory/facts/{fact_id}/details", params=_facts_scope(session_id)
+    )
+    assert details.status_code == 200, details.text
+    active = next(v for v in details.json()["versions"] if v["is_active"])
+    assert float(active["confidence"]) == 0.0
+
+
+def test_s3d1_scope_missing_worldline_422(isolated_client: TestClient):
+    """Hotfix: the three lifecycle routes require an EXPLICIT worldline.
+
+    Missing / blank → 422 missing_worldline; invalid → invalid_worldline.
+    """
+    session_id = _session("s3d1-missing-wl")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢咖啡")
+    base = {"session_id": session_id, "identity_mode": "self"}
+    body = {"display_text": "喜欢黑咖啡", "expected_version": 1}
+
+    def _assert(code: str, response) -> None:
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"]["code"] == code, response.text
+
+    for wl_value in (None, ""):
+        params = dict(base)
+        if wl_value is not None:
+            params["worldline"] = wl_value
+        _assert(
+            "missing_worldline",
+            isolated_client.patch(
+                f"/api/memory/facts/{fact_id}", params=params, json=body
+            ),
+        )
+        _assert(
+            "missing_worldline",
+            isolated_client.delete(
+                f"/api/memory/facts/{fact_id}",
+                params={**params, "expected_version": 1},
+            ),
+        )
+        _assert(
+            "missing_worldline",
+            isolated_client.get(f"/api/memory/facts/{fact_id}/details", params=params),
+        )
+
+    # Invalid value keeps the existing invalid_worldline envelope.
+    bogus = {**base, "worldline": "bogus"}
+    _assert(
+        "invalid_worldline",
+        isolated_client.patch(f"/api/memory/facts/{fact_id}", params=bogus, json=body),
+    )
+    _assert(
+        "invalid_worldline",
+        isolated_client.delete(
+            f"/api/memory/facts/{fact_id}", params={**bogus, "expected_version": 1}
+        ),
+    )
+    _assert(
+        "invalid_worldline",
+        isolated_client.get(f"/api/memory/facts/{fact_id}/details", params=bogus),
+    )
+
+    # The fact is untouched by all rejected requests.
+    facts = _db_rows(
+        "SELECT state, active_version FROM stable_facts WHERE fact_id=?", (fact_id,)
+    )
+    assert facts[0]["state"] == "active" and facts[0]["active_version"] == 1
+
+
 # -- B. DELETE ---------------------------------------------------------------
 
 
