@@ -3392,21 +3392,24 @@ def _target_obs(
     return obs
 
 
-def _target_kwargs(*, session_id: str, obs: dict, source_message_id: int) -> dict:
+def _target_kwargs(
+    *, session_id: str, obs: dict, source_message_id: int, fact_text: str | None = None
+) -> dict:
+    text = fact_text if fact_text is not None else obs.get("display_text", "解析后")
     return {
         "observations": [obs],
         "operations": [
             # Server-side fact_text independent of the observation payload so a
-            # missing observation field is the ONLY defect under test.
+            # missing observation field is the ONLY defect under test (D44).
             {"op": "CREATE", "observation_ref": obs["observation_ref"],
-             "fact_text": "解析后", "reason_code": "d18"}
+             "fact_text": text, "reason_code": "d18"}
         ],
         "source_evidence": [
             _source_evidence(
                 source_message_id=source_message_id,
                 conversation_id=f"conv-d18-{source_message_id}",
                 fingerprint=f"fp-d18-{source_message_id}",
-                excerpt="解析后",
+                excerpt=text,
             )
         ],
         "candidate_allowlist": [],
@@ -3590,3 +3593,162 @@ async def test_s3d4_d44_incomplete_core_fields_fail_closed(isolated_store, field
     assert int(sources_n["n"]) == 1, "sources unchanged"
     assert int(facts_n["n"]) == 0, "no fact side effect"
     assert int(exps_n["n"]) == 0, "no experience side effect"
+
+
+# ---------------------------------------------------------------------------
+# MEMORY-V11-S3D-4 HOTFIX: episodic expiry alignment (observation authoritative).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode, expected",
+    [
+        ("absent", "2030-01-01T00:00:00+00:00"),  # A: ABSENT → old observation expiry
+        ("null", None),  # B: explicit null → clear BOTH
+    ],
+    ids=["absent-preserves", "null-clears"],
+)
+async def test_s3d4_d45_episodic_target_expiry_alignment(
+    isolated_store, mode, expected
+):
+    """Episodic D18 target: experience.expires_at == effective observation expiry."""
+    from app.services.memory_v11.retrieval import select_experience_candidates
+
+    session_id = f"s3d4-d45-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8501)
+    db = await get_db("steins_gate", "memory")
+    try:
+        await db.execute(
+            "UPDATE memory_observations SET expires_at=? WHERE observation_id=?",
+            ("2030-01-01T00:00:00+00:00", target_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    obs = _target_obs(target_id, "上周去了秋叶原", 8502, memory_class="episodic")
+    if mode == "absent":
+        obs.pop("expires_at")  # ABSENT → old value preserved
+    else:
+        obs["expires_at"] = None  # explicit null → clear
+
+    await _apply_validated(
+        session_id=session_id, worldline="steins_gate", identity_mode="self",
+        **_target_kwargs(session_id=session_id, obs=obs, source_message_id=8502),
+    )
+
+    db = await get_db("steins_gate", "memory")
+    try:
+        obs_row = await (await db.execute(
+            """SELECT status, reanalysis_count, expires_at FROM memory_observations
+                WHERE observation_id=?""",
+            (target_id,),
+        )).fetchone()
+        exp_row = await (await db.execute(
+            """SELECT observation_id, expires_at FROM experiences
+                WHERE observation_id=?""",
+            (target_id,),
+        )).fetchone()
+    finally:
+        await db.close()
+    assert str(obs_row["status"]) == "attached"
+    assert int(obs_row["reanalysis_count"]) == 1
+    assert str(exp_row["observation_id"]) == target_id, "experience keeps SAME observation"
+    if expected is None:
+        assert obs_row["expires_at"] is None
+        assert exp_row["expires_at"] is None
+    else:
+        assert str(obs_row["expires_at"]) == expected
+        assert str(exp_row["expires_at"]) == expected, (
+            "experience.expires_at must equal the effective observation expiry"
+        )
+    # The linked Experience must be retrievable under the aligned expiry.
+    retrieved = await select_experience_candidates(
+        session_id=session_id, worldline="steins_gate", identity_mode="self",
+        query="秋叶原", limit=16, token_budget=1400,
+    )
+    if expected is None:
+        assert retrieved, "null expiry must remain retrievable"
+    else:
+        assert retrieved, "future expiry must remain retrievable"
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d46_episodic_target_expiry_replaced(isolated_store):
+    """C: targeted episodic output replaces expiry on BOTH linked rows."""
+    session_id = f"s3d4-d46-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8511)
+    db = await get_db("steins_gate", "memory")
+    try:
+        await db.execute(
+            "UPDATE memory_observations SET expires_at=? WHERE observation_id=?",
+            ("2030-01-01T00:00:00+00:00", target_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    obs = _target_obs(
+        target_id, "上周去了咖啡厅", 8512,
+        memory_class="episodic", expires_at="2031-02-03T00:00:00+00:00",
+    )
+    await _apply_validated(
+        session_id=session_id, worldline="steins_gate", identity_mode="self",
+        **_target_kwargs(session_id=session_id, obs=obs, source_message_id=8512),
+    )
+    db = await get_db("steins_gate", "memory")
+    try:
+        obs_row = await (await db.execute(
+            "SELECT expires_at FROM memory_observations WHERE observation_id=?",
+            (target_id,),
+        )).fetchone()
+        exp_row = await (await db.execute(
+            "SELECT expires_at FROM experiences WHERE observation_id=?",
+            (target_id,),
+        )).fetchone()
+    finally:
+        await db.close()
+    assert str(obs_row["expires_at"]) == "2031-02-03T00:00:00+00:00"
+    assert str(exp_row["expires_at"]) == "2031-02-03T00:00:00+00:00"
+
+
+@pytest.mark.asyncio
+async def test_s3d4_d47_past_expiry_inherited_blocks_prompt_retrieval(isolated_store):
+    """Product consequence: past expiry inherited → NOT prompt-eligible."""
+    from app.services.memory_v11.retrieval import select_experience_candidates
+
+    session_id = f"s3d4-d47-{uuid4().hex[:8]}"
+    target_id = await _d18_candidate(session_id, source_message_id=8521)
+    db = await get_db("steins_gate", "memory")
+    try:
+        await db.execute(
+            "UPDATE memory_observations SET expires_at=? WHERE observation_id=?",
+            ("2020-01-01T00:00:00+00:00", target_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    obs = _target_obs(target_id, "很久以前的活动", 8522, memory_class="episodic")
+    obs.pop("expires_at")  # ABSENT → old past expiry preserved
+    await _apply_validated(
+        session_id=session_id, worldline="steins_gate", identity_mode="self",
+        **_target_kwargs(session_id=session_id, obs=obs, source_message_id=8522),
+    )
+    db = await get_db("steins_gate", "memory")
+    try:
+        exp_row = await (await db.execute(
+            "SELECT expires_at FROM experiences WHERE observation_id=?",
+            (target_id,),
+        )).fetchone()
+    finally:
+        await db.close()
+    assert str(exp_row["expires_at"]) == "2020-01-01T00:00:00+00:00", (
+        "time-bound item must stay time-bound after reanalysis"
+    )
+    retrieved = await select_experience_candidates(
+        session_id=session_id, worldline="steins_gate", identity_mode="self",
+        query="活动", limit=16, token_budget=1400,
+    )
+    assert retrieved == [], (
+        "a past-expiry experience must never be prompt-eligible"
+    )

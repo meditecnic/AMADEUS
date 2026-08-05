@@ -674,6 +674,21 @@ async def apply_validated_memory_operations(
                         if source_ids
                         else ""
                     )
+                    # Episodic expiry alignment: the Experience must inherit the
+                    # EFFECTIVE persisted observation expiry after materialization
+                    # (three-state D18 semantics), never the raw model field.
+                    exp_row = await (
+                        await db.execute(
+                            """SELECT expires_at FROM memory_observations
+                                WHERE observation_id=? AND session_id=? AND identity_mode=?""",
+                            (observation_id, session, mode),
+                        )
+                    ).fetchone()
+                    if exp_row is None:
+                        raise MemoryValidationError(
+                            "observation_not_found",
+                            f"observation_id={observation_id} missing after materialization",
+                        )
                     await insert_experience(
                         db,
                         session_id=session,
@@ -683,7 +698,7 @@ async def apply_validated_memory_operations(
                         display_text=fact_text,
                         semantic=obs.get("semantic") or {},
                         confidence=confidence,
-                        expires_at=obs.get("expires_at"),
+                        expires_at=exp_row["expires_at"],
                     )
                     continue
                 if not _will_create_stable_fact(obs):
