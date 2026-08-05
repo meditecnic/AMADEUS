@@ -423,7 +423,12 @@ _USER_VALIDATION_CODES = frozenset(
 
 def _memory_error_response(exc: MemoryValidationError) -> HTTPException:
     code = exc.code
-    if code in {"fact_not_found", "topic_not_found"}:
+    if code in {
+        "fact_not_found",
+        "topic_not_found",
+        "experience_not_found",
+        "observation_not_found",
+    }:
         return HTTPException(
             status_code=404, detail={"code": code, "message": str(exc)}
         )
@@ -431,6 +436,8 @@ def _memory_error_response(exc: MemoryValidationError) -> HTTPException:
         "expected_version_mismatch",
         "pin_limit_reached",
         "topic_label_conflict",
+        "experience_delete_pending",
+        "observation_not_ignorable",
     }:
         return HTTPException(
             status_code=409, detail={"code": code, "message": str(exc)}
@@ -495,6 +502,27 @@ def _require_session_id(session_id: str | None) -> str:
 
 def _body_error(code: str, message: str) -> HTTPException:
     return HTTPException(status_code=422, detail={"code": code, "message": message})
+
+
+def _parse_pagination_param(
+    name: str,
+    raw: str | None,
+    default: int,
+    minimum: int,
+    maximum: int | None,
+) -> int:
+    """Deterministic local paging parse → stable invalid_<name> envelope."""
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        value = int(str(raw))
+    except (TypeError, ValueError):
+        raise _body_error(f"invalid_{name}", f"{name} must be an integer")
+    if value < minimum:
+        raise _body_error(f"invalid_{name}", f"{name} must be >= {minimum}")
+    if maximum is not None and value > maximum:
+        raise _body_error(f"invalid_{name}", f"{name} must be <= {maximum}")
+    return value
 
 
 @router.patch("/api/memory/facts/{fact_id}")
@@ -804,6 +832,166 @@ async def patch_memory_topic(
             identity_mode=mode,
             topic_id=topic_id,
             display_label=raw["display_label"],
+        )
+    except MemoryValidationError as exc:
+        raise _memory_error_response(exc) from exc
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "memory_operation_failed",
+                "message": "memory operation failed",
+            },
+        ) from None
+
+
+@router.get("/api/memory/experiences")
+async def list_memory_experiences(
+    session_id: str | None = Query(None),
+    worldline: str | None = Query(None),
+    identity_mode: str | None = Query(None),
+    limit: str | None = Query(None),
+    offset: str | None = Query(None),
+):
+    """v11 experience browse (plan §8.3 / §10.2): active+expired history only."""
+    from app.services.memory_v11.contracts import MemoryValidationError
+    from app.services.memory_v11.experiences import list_experiences
+
+    wl, mode = _validate_memory_scope(worldline, identity_mode)
+    sid = _require_session_id(session_id)
+    lim = _parse_pagination_param("limit", limit, 20, 1, 100)
+    off = _parse_pagination_param("offset", offset, 0, 0, None)
+    try:
+        return await list_experiences(
+            session_id=sid, worldline=wl, identity_mode=mode, limit=lim, offset=off
+        )
+    except MemoryValidationError as exc:
+        raise _memory_error_response(exc) from exc
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "memory_operation_failed",
+                "message": "memory operation failed",
+            },
+        ) from None
+
+
+@router.get("/api/memory/experiences/{experience_id}/details")
+async def memory_experience_details(
+    experience_id: str,
+    session_id: str | None = Query(None),
+    worldline: str | None = Query(None),
+    identity_mode: str | None = Query(None),
+):
+    """v11 experience details (plan §8.3): minimal provenance, local only."""
+    from app.services.memory_v11.contracts import MemoryValidationError
+    from app.services.memory_v11.experiences import experience_details
+
+    wl, mode = _validate_memory_scope(worldline, identity_mode)
+    sid = _require_session_id(session_id)
+    try:
+        return await experience_details(
+            session_id=sid,
+            worldline=wl,
+            identity_mode=mode,
+            experience_id=experience_id,
+        )
+    except MemoryValidationError as exc:
+        raise _memory_error_response(exc) from exc
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "memory_operation_failed",
+                "message": "memory operation failed",
+            },
+        ) from None
+
+
+@router.delete("/api/memory/experiences/{experience_id}")
+async def delete_memory_experience(
+    experience_id: str,
+    session_id: str | None = Query(None),
+    worldline: str | None = Query(None),
+    identity_mode: str | None = Query(None),
+):
+    """v11 experience delete (plan §8.3): real erasure, idempotent repeat."""
+    from app.services.memory_v11.contracts import MemoryValidationError
+    from app.services.memory_v11.experiences import delete_experience
+
+    wl, mode = _validate_memory_scope(worldline, identity_mode)
+    sid = _require_session_id(session_id)
+    try:
+        return await delete_experience(
+            session_id=sid,
+            worldline=wl,
+            identity_mode=mode,
+            experience_id=experience_id,
+        )
+    except MemoryValidationError as exc:
+        raise _memory_error_response(exc) from exc
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "memory_operation_failed",
+                "message": "memory operation failed",
+            },
+        ) from None
+
+
+@router.get("/api/memory/observations")
+async def list_memory_observations(
+    session_id: str | None = Query(None),
+    worldline: str | None = Query(None),
+    identity_mode: str | None = Query(None),
+    limit: str | None = Query(None),
+    offset: str | None = Query(None),
+):
+    """v11 observation diagnostics (plan §8.3): all statuses, local, bounded."""
+    from app.services.memory_v11.contracts import MemoryValidationError
+    from app.services.memory_v11.observations import list_observations
+
+    wl, mode = _validate_memory_scope(worldline, identity_mode)
+    sid = _require_session_id(session_id)
+    lim = _parse_pagination_param("limit", limit, 20, 1, 100)
+    off = _parse_pagination_param("offset", offset, 0, 0, None)
+    try:
+        return await list_observations(
+            session_id=sid, worldline=wl, identity_mode=mode, limit=lim, offset=off
+        )
+    except MemoryValidationError as exc:
+        raise _memory_error_response(exc) from exc
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "memory_operation_failed",
+                "message": "memory operation failed",
+            },
+        ) from None
+
+
+@router.post("/api/memory/observations/{observation_id}/ignore")
+async def ignore_memory_observation(
+    observation_id: str,
+    session_id: str | None = Query(None),
+    worldline: str | None = Query(None),
+    identity_mode: str | None = Query(None),
+):
+    """v11 observation ignore (plan §8.3): candidate → ignored, not promote."""
+    from app.services.memory_v11.contracts import MemoryValidationError
+    from app.services.memory_v11.observations import ignore_observation
+
+    wl, mode = _validate_memory_scope(worldline, identity_mode)
+    sid = _require_session_id(session_id)
+    try:
+        return await ignore_observation(
+            session_id=sid,
+            worldline=wl,
+            identity_mode=mode,
+            observation_id=observation_id,
         )
     except MemoryValidationError as exc:
         raise _memory_error_response(exc) from exc
