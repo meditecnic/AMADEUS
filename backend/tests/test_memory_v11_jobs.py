@@ -7,14 +7,21 @@ No fallback to legacy app.services.memory.
 """
 from __future__ import annotations
 
+import hashlib
 import importlib
+import json
+import math
+import struct
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
 from app import models
-from app.db import init_db, reset_initialization_cache
+from app.db import get_db, init_db, reset_initialization_cache
 from app.services.conversations import conversation_service
+from app.services.memory import EmbeddingAdapter, memory_service
+from app.services.memory_v11.repository import create_stable_fact
 
 
 def _jobs():
@@ -25,12 +32,46 @@ def _contracts():
     return importlib.import_module("app.services.memory_v11.contracts")
 
 
+def _unit_vector(seed: str) -> list[float]:
+    values: list[float] = []
+    for block in range(12):
+        digest = hashlib.sha256(f"{seed}:{block}".encode("utf-8")).digest()
+        values.extend(int(byte) - 127.5 for byte in digest)
+    norm = math.sqrt(sum(v * v for v in values))
+    return [v / norm for v in values]
+
+
+class _DeterministicEmbedder(EmbeddingAdapter):
+    """Offline EmbeddingAdapter stub (no SentenceTransformer / network)."""
+
+    def __init__(
+        self,
+        vocabulary: dict[str, str] | None = None,
+        *,
+        model_name: str = "test-deterministic-384",
+    ):
+        super().__init__(model_name=model_name, dimensions=384)
+        self._vocabulary = dict(vocabulary or {})
+        self.encode_passage_calls = 0
+        self.encode_query_calls = 0
+
+    async def encode_passage(self, text: str) -> list[float]:
+        self.encode_passage_calls += 1
+        return _unit_vector(self._vocabulary.get(text, f"passage:{text}"))
+
+    async def encode_query(self, text: str) -> list[float]:
+        self.encode_query_calls += 1
+        return _unit_vector(self._vocabulary.get(text, f"query:{text}"))
+
+
 @pytest.fixture
 async def isolated_store(tmp_path, monkeypatch):
     monkeypatch.delenv("AMADEUS_DB_PATH", raising=False)
     monkeypatch.setenv("AMADEUS_DATA_DIR", str(tmp_path))
     reset_initialization_cache()
     await init_db()
+    # CREATE/REFINE through jobs need passage embeddings offline.
+    monkeypatch.setattr(memory_service, "embedder", _DeterministicEmbedder())
     return tmp_path
 
 
@@ -712,3 +753,705 @@ async def test_s2_source_replay_is_idempotent(isolated_store):
         await db.close()
     assert int(facts["n"]) == 1
     assert int(obs["n"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# MEMORY-V11-S3B-3: pre-completion same-scope candidate context
+# ---------------------------------------------------------------------------
+
+
+async def _enqueue_user_job(
+    *,
+    session_id: str,
+    user_text: str,
+    identity_mode: str = "self",
+    title: str = "s3b3",
+) -> tuple[Any, str, int]:
+    jobs = _jobs()
+    conv = await conversation_service.create(
+        session_id, "steins_gate", title=title, identity_mode=identity_mode
+    )
+    mid = await models.save_message(
+        session_id,
+        "user",
+        user_text,
+        worldline="steins_gate",
+        conversation_id=str(conv["id"]),
+    )
+    job = await jobs.enqueue_memory_job(
+        session_id=session_id,
+        worldline="steins_gate",
+        conversation_id=str(conv["id"]),
+        identity_mode=identity_mode,
+        source_message_id=int(mid),
+        pipeline_version="memory-v11-1",
+        provider_id="deepseek",
+        model_id="deepseek-chat",
+    )
+    return job, str(conv["id"]), int(mid)
+
+
+@pytest.mark.asyncio
+async def test_s3b3_candidates_arrive_before_completion(isolated_store, monkeypatch):
+    """A: completion receives bounded same-scope candidates only."""
+    jobs = _jobs()
+    session_id = f"s3b3-cand-{uuid4().hex[:8]}"
+    relevant = await create_stable_fact(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        display_text="喜欢看动漫",
+        semantic_json={"subject": "user", "relation": "likes", "object": "anime"},
+    )
+    await create_stable_fact(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        display_text="数学の本を読んでいる",
+        semantic_json={"subject": "user", "relation": "study", "object": "math"},
+    )
+    okabe = await create_stable_fact(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="okabe",
+        display_text="喜欢看动漫",
+        semantic_json={"subject": "user", "relation": "likes", "object": "anime"},
+    )
+
+    captured: dict[str, Any] = {}
+
+    async def fake_completion(**kwargs: Any) -> dict[str, Any]:
+        captured["candidates"] = list(kwargs.get("candidates") or [])
+        captured["user_text"] = kwargs.get("user_text")
+        return {"observations": [], "operations": []}
+
+    job, _, _ = await _enqueue_user_job(
+        session_id=session_id,
+        # Query must lexically hit display_text (retrieval uses substring terms).
+        user_text="喜欢看动漫",
+        title="cand",
+    )
+    result = await jobs.process_memory_job(
+        job_id=job["job_id"],
+        lease_owner="w-cand",
+        memory_completion=fake_completion,
+    )
+    assert result["state"] == "completed"
+    cands = captured["candidates"]
+    ids = {str(c["fact_id"]) for c in cands}
+    assert relevant["fact_id"] in ids
+    assert okabe["fact_id"] not in ids
+    assert all("数学" not in str(c.get("display_text") or "") for c in cands)
+    for c in cands:
+        assert set(c.keys()) >= {"fact_id", "version_no", "display_text", "is_pinned"}
+        assert isinstance(c["version_no"], int) and c["version_no"] >= 1
+    hit = next(c for c in cands if c["fact_id"] == relevant["fact_id"])
+    assert hit["display_text"] == "喜欢看动漫"
+    assert hit["version_no"] == 1
+
+
+@pytest.mark.asyncio
+async def test_s3b3_selected_target_refine_succeeds(isolated_store, monkeypatch):
+    """B: REFINE on a preselected candidate applies successfully (fully offline)."""
+    jobs = _jobs()
+    # Explicit deterministic stub — never the real SentenceTransformer embedder.
+    embedder = _DeterministicEmbedder()
+    monkeypatch.setattr(memory_service, "embedder", embedder)
+    assert isinstance(memory_service.embedder, _DeterministicEmbedder)
+
+    session_id = f"s3b3-refine-{uuid4().hex[:8]}"
+    text_v1 = "喜欢咖啡"
+    text_v2 = "喜欢黑咖啡"
+    seed = await create_stable_fact(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        display_text=text_v1,
+        semantic_json={"subject": "user", "relation": "likes", "object": "coffee"},
+    )
+    vec_v1 = await embedder.encode_passage(text_v1)
+    db = await get_db("steins_gate", "memory")
+    try:
+        await db.execute(
+            """INSERT INTO stable_fact_version_embeddings(
+                   fact_id, version_no, model, dimensions, vector
+               ) VALUES(?,?,?,?,?)""",
+            (
+                seed["fact_id"],
+                1,
+                embedder.model_name,
+                384,
+                struct.pack(f"{384}f", *vec_v1),
+            ),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    async def refine_completion(**kwargs: Any) -> dict[str, Any]:
+        cands = list(kwargs.get("candidates") or [])
+        assert any(c["fact_id"] == seed["fact_id"] for c in cands)
+        target = next(c for c in cands if c["fact_id"] == seed["fact_id"])
+        sid = int(kwargs["source_message_id"])
+        return {
+            "observations": [
+                {
+                    "observation_ref": "o1",
+                    "source_message_ids": [sid],
+                    "display_text": text_v2,
+                    "semantic": {
+                        "subject": "user",
+                        "predicate": "likes",
+                        "object": {"name": "black_coffee"},
+                    },
+                    "evidence_kind": "direct_user",
+                    "memory_class": "stable_candidate",
+                    "confidence": 0.96,
+                }
+            ],
+            "operations": [
+                {
+                    "op": "REFINE",
+                    "observation_ref": "o1",
+                    "target_fact_id": target["fact_id"],
+                    "expected_version": target["version_no"],
+                    "fact_text": text_v2,
+                    "reason_code": "compatible_refinement",
+                }
+            ],
+        }
+
+    job, _, _ = await _enqueue_user_job(
+        session_id=session_id,
+        user_text=text_v1,
+        title="refine",
+    )
+    result = await jobs.process_memory_job(
+        job_id=job["job_id"],
+        lease_owner="w-refine",
+        memory_completion=refine_completion,
+    )
+    assert result["state"] == "completed"
+    expected_v2 = struct.pack(f"{384}f", *(await embedder.encode_passage(text_v2)))
+    db = await get_db("steins_gate", "memory")
+    try:
+        cur = await db.execute(
+            "SELECT active_version FROM stable_facts WHERE fact_id=?",
+            (seed["fact_id"],),
+        )
+        assert int((await cur.fetchone())["active_version"]) == 2
+        cur = await db.execute(
+            """SELECT display_text FROM stable_fact_versions
+                WHERE fact_id=? AND version_no=2""",
+            (seed["fact_id"],),
+        )
+        assert "黑咖啡" in str((await cur.fetchone())["display_text"])
+        # v1 vector removed; v2 vector present under the same offline model_name.
+        cur = await db.execute(
+            """SELECT COUNT(*) AS n FROM stable_fact_version_embeddings
+                WHERE fact_id=? AND version_no=1""",
+            (seed["fact_id"],),
+        )
+        assert int((await cur.fetchone())["n"]) == 0
+        cur = await db.execute(
+            """SELECT model, dimensions, vector FROM stable_fact_version_embeddings
+                WHERE fact_id=? AND version_no=2""",
+            (seed["fact_id"],),
+        )
+        emb = await cur.fetchone()
+        assert emb is not None
+        assert emb["model"] == embedder.model_name
+        assert int(emb["dimensions"]) == 384
+        assert bytes(emb["vector"]) == expected_v2
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_s3b3_unselected_same_scope_target_rejected(isolated_store, monkeypatch):
+    """C: unselected same-scope fact_id fails validation; no mutation."""
+    jobs = _jobs()
+    session_id = f"s3b3-unsel-{uuid4().hex[:8]}"
+    selected = await create_stable_fact(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        display_text="喜欢看动漫",
+        semantic_json={"subject": "user", "relation": "likes", "object": "anime"},
+    )
+    unselected = await create_stable_fact(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        display_text="数学の本を読んでいる",
+        semantic_json={"subject": "user", "relation": "study", "object": "math"},
+    )
+
+    async def malicious_completion(**kwargs: Any) -> dict[str, Any]:
+        cands = list(kwargs.get("candidates") or [])
+        assert all(c["fact_id"] != unselected["fact_id"] for c in cands)
+        assert any(c["fact_id"] == selected["fact_id"] for c in cands)
+        sid = int(kwargs["source_message_id"])
+        return {
+            "observations": [
+                {
+                    "observation_ref": "o1",
+                    "source_message_ids": [sid],
+                    "display_text": "喜欢拓扑学",
+                    "semantic": {
+                        "subject": "user",
+                        "predicate": "likes",
+                        "object": {"name": "topology"},
+                    },
+                    "evidence_kind": "direct_user",
+                    "memory_class": "stable_candidate",
+                    "confidence": 0.96,
+                }
+            ],
+            "operations": [
+                {
+                    "op": "REFINE",
+                    "observation_ref": "o1",
+                    "target_fact_id": unselected["fact_id"],
+                    "expected_version": 1,
+                    "fact_text": "喜欢拓扑学",
+                    "reason_code": "malicious_unselected",
+                }
+            ],
+        }
+
+    job, _, _ = await _enqueue_user_job(
+        session_id=session_id,
+        user_text="喜欢看动漫",
+        title="unsel",
+    )
+    result = await jobs.process_memory_job(
+        job_id=job["job_id"],
+        lease_owner="w-unsel",
+        memory_completion=malicious_completion,
+    )
+    assert result["state"] != "completed"
+    assert result["state"] in {"pending", "failed"}
+    assert result.get("last_error_code") == "validation_failed"
+    db = await get_db("steins_gate", "memory")
+    try:
+        cur = await db.execute(
+            "SELECT active_version FROM stable_facts WHERE fact_id=?",
+            (unselected["fact_id"],),
+        )
+        assert int((await cur.fetchone())["active_version"]) == 1
+        cur = await db.execute(
+            """SELECT invalid_at FROM stable_fact_versions
+                WHERE fact_id=? AND version_no=1""",
+            (unselected["fact_id"],),
+        )
+        assert (await cur.fetchone())["invalid_at"] is None
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_s3b3_cross_identity_target_impossible(isolated_store, monkeypatch):
+    """D: self job never lists okabe candidates; okabe target is rejected."""
+    jobs = _jobs()
+    session_id = f"s3b3-xident-{uuid4().hex[:8]}"
+    self_fact = await create_stable_fact(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        display_text="喜欢看动漫",
+        semantic_json={"subject": "user", "relation": "likes", "object": "anime"},
+    )
+    okabe_fact = await create_stable_fact(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="okabe",
+        display_text="喜欢看动漫",
+        semantic_json={"subject": "user", "relation": "likes", "object": "anime"},
+    )
+
+    async def cross_completion(**kwargs: Any) -> dict[str, Any]:
+        cands = list(kwargs.get("candidates") or [])
+        assert all(c["fact_id"] != okabe_fact["fact_id"] for c in cands)
+        sid = int(kwargs["source_message_id"])
+        return {
+            "observations": [
+                {
+                    "observation_ref": "o1",
+                    "source_message_ids": [sid],
+                    "display_text": "喜欢动漫",
+                    "semantic": {
+                        "subject": "user",
+                        "predicate": "likes",
+                        "object": {"name": "anime"},
+                    },
+                    "evidence_kind": "direct_user",
+                    "memory_class": "stable_candidate",
+                    "confidence": 0.96,
+                }
+            ],
+            "operations": [
+                {
+                    "op": "ATTACH",
+                    "observation_ref": "o1",
+                    "target_fact_id": okabe_fact["fact_id"],
+                    "expected_version": 1,
+                    "fact_text": "喜欢动漫",
+                    "reason_code": "cross_identity_attempt",
+                }
+            ],
+        }
+
+    job, _, _ = await _enqueue_user_job(
+        session_id=session_id,
+        user_text="喜欢看动漫",
+        title="xident",
+    )
+    result = await jobs.process_memory_job(
+        job_id=job["job_id"],
+        lease_owner="w-xident",
+        memory_completion=cross_completion,
+    )
+    assert result["state"] != "completed"
+    db = await get_db("steins_gate", "memory")
+    try:
+        cur = await db.execute(
+            """SELECT COUNT(*) AS n FROM stable_fact_evidence e
+                 WHERE e.fact_id=?""",
+            (okabe_fact["fact_id"],),
+        )
+        assert int((await cur.fetchone())["n"]) == 0
+        cur = await db.execute(
+            "SELECT active_version FROM stable_facts WHERE fact_id=?",
+            (self_fact["fact_id"],),
+        )
+        assert int((await cur.fetchone())["active_version"]) == 1
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_s3b3_empty_candidates_allows_create(isolated_store, monkeypatch):
+    """E: candidates [] still allows CREATE with one completion + vector row."""
+    jobs = _jobs()
+    session_id = f"s3b3-empty-{uuid4().hex[:8]}"
+    call_count = {"n": 0}
+
+    async def create_completion(**kwargs: Any) -> dict[str, Any]:
+        call_count["n"] += 1
+        assert list(kwargs.get("candidates") or []) == []
+        sid = int(kwargs["source_message_id"])
+        return {
+            "observations": [
+                {
+                    "observation_ref": "o1",
+                    "source_message_ids": [sid],
+                    "display_text": "喜欢抹茶",
+                    "semantic": {
+                        "subject": "user",
+                        "predicate": "likes",
+                        "object": {"name": "matcha"},
+                    },
+                    "evidence_kind": "direct_user",
+                    "memory_class": "stable_candidate",
+                    "confidence": 0.97,
+                }
+            ],
+            "operations": [
+                {
+                    "op": "CREATE",
+                    "observation_ref": "o1",
+                    "target_fact_id": None,
+                    "expected_version": None,
+                    "fact_text": "喜欢抹茶",
+                    "reason_code": "direct_durable_statement",
+                }
+            ],
+        }
+
+    job, _, _ = await _enqueue_user_job(
+        session_id=session_id,
+        user_text="我喜欢抹茶",
+        title="empty",
+    )
+    result = await jobs.process_memory_job(
+        job_id=job["job_id"],
+        lease_owner="w-empty",
+        memory_completion=create_completion,
+    )
+    assert result["state"] == "completed"
+    assert call_count["n"] == 1
+    db = await get_db("steins_gate", "memory")
+    try:
+        cur = await db.execute(
+            "SELECT fact_id FROM stable_facts WHERE session_id=?",
+            (session_id,),
+        )
+        rows = await cur.fetchall()
+        assert len(rows) == 1
+        fact_id = rows[0]["fact_id"]
+        cur = await db.execute(
+            """SELECT COUNT(*) AS n FROM stable_fact_version_embeddings
+                WHERE fact_id=? AND version_no=1""",
+            (fact_id,),
+        )
+        assert int((await cur.fetchone())["n"]) == 1
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_s3b3_one_completion_only(isolated_store, monkeypatch):
+    """F: one job → completion_fn called exactly once."""
+    jobs = _jobs()
+    session_id = f"s3b3-once-{uuid4().hex[:8]}"
+    call_count = {"n": 0}
+
+    async def counting_completion(**kwargs: Any) -> dict[str, Any]:
+        call_count["n"] += 1
+        return {"observations": [], "operations": []}
+
+    job, _, _ = await _enqueue_user_job(
+        session_id=session_id,
+        user_text="你好",
+        title="once",
+    )
+    result = await jobs.process_memory_job(
+        job_id=job["job_id"],
+        lease_owner="w-once",
+        memory_completion=counting_completion,
+    )
+    assert result["state"] == "completed"
+    assert call_count["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_s3b3_default_provider_payload_includes_candidates(
+    isolated_store, monkeypatch
+):
+    """G: default_memory_completion user JSON includes candidates."""
+    from unittest.mock import AsyncMock
+
+    from app.services import credentials
+    from app.services.provider_registry import (
+        ProviderCapabilities,
+        ProviderSnapshot,
+        ProviderTask,
+    )
+    from app.services.provider_runtime import provider_registry
+
+    jobs = _jobs()
+    session_id = f"s3b3-default-{uuid4().hex[:8]}"
+    seed = await create_stable_fact(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        display_text="喜欢动漫",
+        semantic_json={"subject": "user", "relation": "likes", "object": "anime"},
+    )
+    store = credentials.InMemoryCredentialStore()
+    store.set("deepseek", "live-style-key-not-test-prefix")
+    monkeypatch.setattr(credentials, "credential_store", store)
+
+    captured_messages: list[Any] = []
+
+    async def fake_complete_json(**kwargs: Any):
+        captured_messages.append(kwargs.get("messages"))
+        return {"observations": [], "operations": []}
+
+    adapter = AsyncMock()
+    adapter.complete_json = AsyncMock(side_effect=fake_complete_json)
+
+    def fake_snapshot(provider_id, model_id=None, **kwargs):
+        return ProviderSnapshot(
+            provider_id=provider_id,
+            model_id=model_id or "fallback",
+            capabilities=ProviderCapabilities(
+                tasks=frozenset({ProviderTask.MEMORY, ProviderTask.CHAT}),
+                structured_output=True,
+            ),
+            adapter=adapter,
+        )
+
+    monkeypatch.setattr(provider_registry, "snapshot", fake_snapshot)
+
+    job, _, _ = await _enqueue_user_job(
+        session_id=session_id,
+        user_text="喜欢动漫",
+        title="default-cand",
+    )
+    result = await jobs.process_memory_job(
+        job_id=job["job_id"],
+        lease_owner="w-default",
+        memory_completion=None,
+    )
+    assert result["state"] == "completed"
+    adapter.complete_json.assert_awaited_once()
+    user_content = captured_messages[0][1]["content"]
+    payload = json.loads(user_content)
+    assert "candidates" in payload
+    assert any(c.get("fact_id") == seed["fact_id"] for c in payload["candidates"])
+    cand = next(c for c in payload["candidates"] if c["fact_id"] == seed["fact_id"])
+    assert set(cand.keys()) >= {"fact_id", "version_no", "display_text", "is_pinned"}
+
+
+@pytest.mark.asyncio
+async def test_s3b3_candidate_selection_failure_skips_provider(
+    isolated_store, monkeypatch
+):
+    """Selection raise → no completion call; failed_or_retry + validation_failed."""
+    jobs = _jobs()
+    session_id = f"s3b3-sel-fail-{uuid4().hex[:8]}"
+    seed = await create_stable_fact(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        display_text="喜欢动漫",
+        semantic_json={"subject": "user", "relation": "likes", "object": "anime"},
+    )
+
+    async def boom_select(**kwargs: Any):
+        raise RuntimeError("forced candidate selection failure")
+
+    monkeypatch.setattr(
+        "app.services.memory_v11.retrieval.select_stable_fact_candidates",
+        boom_select,
+    )
+
+    call_count = {"n": 0}
+
+    async def must_not_run(**kwargs: Any) -> dict[str, Any]:
+        call_count["n"] += 1
+        return {"observations": [], "operations": []}
+
+    job, _, _ = await _enqueue_user_job(
+        session_id=session_id,
+        user_text="喜欢动漫",
+        title="sel-fail",
+    )
+    result = await jobs.process_memory_job(
+        job_id=job["job_id"],
+        lease_owner="w-sel-fail",
+        memory_completion=must_not_run,
+    )
+    assert call_count["n"] == 0, "provider/completion must not run after selection fail"
+    assert result["state"] != "processing"
+    assert result["state"] in {"pending", "failed"}
+    assert result.get("last_error_code") == "validation_failed"
+
+    db = await get_db("steins_gate", "memory")
+    try:
+        cur = await db.execute(
+            "SELECT active_version, state FROM stable_facts WHERE fact_id=?",
+            (seed["fact_id"],),
+        )
+        row = await cur.fetchone()
+        assert int(row["active_version"]) == 1
+        assert row["state"] == "active"
+        cur = await db.execute(
+            "SELECT COUNT(*) AS n FROM memory_observations WHERE session_id=?",
+            (session_id,),
+        )
+        assert int((await cur.fetchone())["n"]) == 0
+        cur = await db.execute(
+            """SELECT COUNT(*) AS n FROM stable_fact_evidence e
+                 JOIN stable_facts f ON f.fact_id=e.fact_id
+                WHERE f.session_id=?""",
+            (session_id,),
+        )
+        assert int((await cur.fetchone())["n"]) == 0
+        cur = await db.execute(
+            """SELECT COUNT(*) AS n FROM stable_fact_version_embeddings e
+                 JOIN stable_facts f ON f.fact_id=e.fact_id
+                WHERE f.session_id=?""",
+            (session_id,),
+        )
+        assert int((await cur.fetchone())["n"]) == 0
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_s3b3_vector_only_candidate_reaches_completion(
+    isolated_store, monkeypatch
+):
+    """H: zero lexical + compatible high-sim vector → in completion candidates."""
+    jobs = _jobs()
+    session_id = f"s3b3-vec-{uuid4().hex[:8]}"
+    query_text = "ペット"
+    target_text = "犬を飼っている"
+    embedder = _DeterministicEmbedder(
+        vocabulary={query_text: "pet", target_text: "pet"}
+    )
+    monkeypatch.setattr(memory_service, "embedder", embedder)
+
+    target = await create_stable_fact(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        display_text=target_text,
+        semantic_json={"subject": "user", "relation": "has_pet", "object": "dog"},
+        confidence=0.5,
+    )
+    for i in range(29):
+        await create_stable_fact(
+            session_id=session_id,
+            worldline="steins_gate",
+            identity_mode="self",
+            display_text=f"FILLER_{i:02d} study notes about topology",
+            semantic_json={
+                "subject": "user",
+                "relation": "study",
+                "object": f"topic_{i:02d}",
+            },
+            confidence=0.9,
+        )
+
+    db = await get_db("steins_gate", "memory")
+    try:
+        cur = await db.execute(
+            """SELECT f.fact_id, v.display_text FROM stable_facts f
+                 JOIN stable_fact_versions v
+                   ON v.fact_id=f.fact_id AND v.version_no=f.active_version
+                WHERE f.session_id=? AND f.identity_mode='self' AND f.state='active'""",
+            (session_id,),
+        )
+        rows = await cur.fetchall()
+        for row in rows:
+            text = str(row["display_text"])
+            vector = await embedder.encode_passage(text)
+            await db.execute(
+                """INSERT INTO stable_fact_version_embeddings(
+                       fact_id, version_no, model, dimensions, vector
+                   ) VALUES(?,?,?,?,?)""",
+                (
+                    row["fact_id"],
+                    1,
+                    embedder.model_name,
+                    384,
+                    struct.pack(f"{384}f", *vector),
+                ),
+            )
+        await db.commit()
+    finally:
+        await db.close()
+
+    captured: dict[str, Any] = {}
+
+    async def vec_completion(**kwargs: Any) -> dict[str, Any]:
+        captured["candidates"] = list(kwargs.get("candidates") or [])
+        return {"observations": [], "operations": []}
+
+    job, _, _ = await _enqueue_user_job(
+        session_id=session_id,
+        user_text=query_text,
+        title="vec",
+    )
+    result = await jobs.process_memory_job(
+        job_id=job["job_id"],
+        lease_owner="w-vec",
+        memory_completion=vec_completion,
+    )
+    assert result["state"] == "completed"
+    ids = {c["fact_id"] for c in captured["candidates"]}
+    assert target["fact_id"] in ids

@@ -452,9 +452,33 @@ Return ONE JSON object only:
     }
   ]
 }
-Rules: only user speech establishes facts; prefer empty over invention;
-do not invent conversational-act facts (e.g. 'recommended'); confidence 0..1.
+Rules:
+- only user speech establishes facts; prefer empty over invention;
+- do not invent conversational-act facts (e.g. 'recommended'); confidence 0..1.
+- "candidates" lists the ONLY active facts you may reference for ATTACH/REFINE/SUPERSEDE.
+- For ATTACH/REFINE/SUPERSEDE: target_fact_id MUST be a candidates[].fact_id;
+  expected_version MUST be that candidate's version_no.
+- Never invent or guess fact_id values that are not in candidates.
+- If no candidate fits: use CREATE (new fact; backend assigns fact_id) or REJECT.
+- Do not generate server-owned fact_id values for CREATE.
 """
+
+
+def _candidate_payload_for_completion(rows: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Minimal fields for Memory LLM + frozen allowlist (no internal noise)."""
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item: dict[str, Any] = {
+            "fact_id": str(row["fact_id"]),
+            "version_no": int(row.get("version_no") or row.get("active_version") or 1),
+            "display_text": str(row.get("display_text") or ""),
+            "is_pinned": bool(row.get("is_pinned")),
+        }
+        topic_id = row.get("topic_id")
+        if topic_id:
+            item["topic_id"] = str(topic_id)
+        out.append(item)
+    return out
 
 
 async def default_memory_completion(**kwargs: Any) -> Mapping[str, Any]:
@@ -474,6 +498,7 @@ async def default_memory_completion(**kwargs: Any) -> Mapping[str, Any]:
     user_text = str(kwargs.get("user_text") or "")
     source_message_id = int(kwargs.get("source_message_id") or 0)
     identity_mode = str(kwargs.get("identity_mode") or "okabe")
+    candidates = list(kwargs.get("candidates") or [])
 
     api_key = credential_store.get(provider_id)
     if not api_key or str(api_key).lower().startswith("test") or len(str(api_key)) < 8:
@@ -495,6 +520,7 @@ async def default_memory_completion(**kwargs: Any) -> Mapping[str, Any]:
                     "identity_mode": identity_mode,
                     "source_message_id": source_message_id,
                     "user_text": user_text,
+                    "candidates": candidates,
                 },
                 ensure_ascii=False,
             ),
@@ -583,6 +609,31 @@ async def process_memory_job(
                 state="completed",
             )
 
+        # §6.1: local same-scope candidate selection BEFORE the single completion.
+        # Allowlist is frozen to these IDs only (no post-completion widening).
+        try:
+            from app.services.memory_v11.retrieval import select_stable_fact_candidates
+
+            selected_rows = await select_stable_fact_candidates(
+                session_id=job["session_id"],
+                worldline=wl,
+                identity_mode=job["identity_mode"],
+                query=redacted,
+            )
+            candidates = _candidate_payload_for_completion(list(selected_rows or []))
+            candidate_allowlist = [str(item["fact_id"]) for item in candidates]
+        except Exception:
+            # Selection failure: never call provider; use existing failed_or_retry path.
+            return await _transition_owned(
+                job_id=job_id,
+                worldline=wl,
+                lease_owner=lease_owner,
+                state="failed_or_retry",
+                error_code=MemoryJobErrorCode.VALIDATION_FAILED.value,
+                permanent=False,
+                attempt_count=int(job["attempt_count"] or 0),
+            )
+
         try:
             completion_payload = await completion_fn(
                 session_id=job["session_id"],
@@ -594,6 +645,7 @@ async def process_memory_job(
                 provider_id=job["provider_id"],
                 model_id=job["model_id"],
                 pipeline_version=job["pipeline_version"],
+                candidates=candidates,
             )
         except Exception:
             return await _transition_owned(
@@ -622,7 +674,6 @@ async def process_memory_job(
             from app.services.memory_v11.reconciler import (
                 apply_validated_memory_operations,
             )
-            from app.services.memory_v11.repository import list_active_stable_facts
 
             fp = hashlib.sha256(
                 f"{job['session_id']}:{job['source_message_id']}:{redacted}".encode(
@@ -639,12 +690,6 @@ async def process_memory_job(
                     "excerpt": redacted[:200],
                 }
             ]
-            active = await list_active_stable_facts(
-                session_id=job["session_id"],
-                worldline=wl,
-                identity_mode=job["identity_mode"],
-            )
-            allowlist = [str(item["fact_id"]) for item in active]
             try:
                 await apply_validated_memory_operations(
                     session_id=job["session_id"],
@@ -653,7 +698,7 @@ async def process_memory_job(
                     observations=observations,
                     operations=operations,
                     source_evidence=source_evidence,
-                    candidate_allowlist=allowlist,
+                    candidate_allowlist=candidate_allowlist,
                 )
             except Exception:
                 return await _transition_owned(
