@@ -23,6 +23,10 @@ from app.services.memory_v11.repository import (
     _canonical_fingerprint,
     list_active_stable_facts,
 )
+from app.services.memory_v11.topics import (
+    prepare_topic_label,
+    resolve_or_create_topic,
+)
 
 
 def _utc_now() -> str:
@@ -191,6 +195,7 @@ async def _create_fact_on_conn(
     semantic: Any,
     confidence: float,
     change_kind: str = "create",
+    topic_id: str | None = None,
 ) -> dict[str, Any]:
     fact_id = str(uuid.uuid4())
     version_no = 1
@@ -203,8 +208,8 @@ async def _create_fact_on_conn(
         """INSERT INTO stable_facts(
                fact_id, session_id, identity_mode, topic_id, state,
                active_version, is_pinned, created_at, updated_at, deleted_at
-           ) VALUES(?,?,?,NULL,'active',?,0,?,?,NULL)""",
-        (fact_id, session_id, identity_mode, version_no, now, now),
+           ) VALUES(?,?,?,?, 'active', ?, 0, ?, ?, NULL)""",
+        (fact_id, session_id, identity_mode, topic_id, version_no, now, now),
     )
     await db.execute(
         """INSERT INTO stable_fact_versions(
@@ -476,6 +481,21 @@ async def apply_validated_memory_operations(
                         "embedding_missing",
                         "CREATE stable fact requires a prepared passage embedding",
                     )
+                # S3D-2: CREATE-only automatic topic materialization. Only a
+                # stable fact's first CREATE may use the model topic_label;
+                # resolution/reuse/create happens inside THIS transaction so a
+                # later failure rolls the topic back with the fact batch.
+                fact_topic_id: str | None = None
+                prepared_label = prepare_topic_label(obs.get("topic_label"))
+                if prepared_label is not None:
+                    label_display, label_normalized = prepared_label
+                    fact_topic_id = await resolve_or_create_topic(
+                        db,
+                        session_id=session,
+                        identity_mode=mode,
+                        display_label=label_display,
+                        normalized_label=label_normalized,
+                    )
                 created = await _create_fact_on_conn(
                     db,
                     session_id=session,
@@ -484,6 +504,7 @@ async def apply_validated_memory_operations(
                     semantic=obs.get("semantic") or {},
                     confidence=confidence,
                     change_kind="create",
+                    topic_id=fact_topic_id,
                 )
                 await insert_version_embedding(
                     db,

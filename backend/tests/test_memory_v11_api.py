@@ -922,9 +922,14 @@ def test_s3d_probe_fact_details_returns_version_history(
 
 
 def test_s3d_probe_topics_list_scoped(isolated_client: TestClient):
-    """§8.3: GET /api/memory/topics — scoped local list; no cross identity."""
+    """§8.3: GET /api/memory/topics — scoped local list; no cross identity.
+
+    Zero-active-count topics are hidden (product rule S3D-2), so the self
+    topic carries one attached active fact.
+    """
     session_id = _session("s3d-topics")
-    _seed_topic(session_id, "self", "动漫")
+    topic_id = _seed_topic(session_id, "self", "动漫")
+    _seed_fact(session_id=session_id, display_text="喜欢看动漫", topic_id=topic_id)
     _seed_topic(session_id, "okabe", "冈部话题")
     response = isolated_client.get(
         "/api/memory/topics",
@@ -1162,6 +1167,8 @@ def _seed_fact_via_reconciler(
     display_text: str,
     source_message_id: int,
     excerpt: str | None = None,
+    topic_label: str | None = None,
+    identity_mode: str = "self",
 ) -> tuple[str, str]:
     """Public reconciler CREATE → (fact_id, observation_id) with vector + evidence."""
     import asyncio
@@ -1170,27 +1177,28 @@ def _seed_fact_via_reconciler(
     from app.services.memory_v11.reconciler import apply_validated_memory_operations
 
     async def _seed() -> tuple[str, str]:
+        obs = {
+            "observation_ref": "o1",
+            "source_message_ids": [source_message_id],
+            "display_text": display_text,
+            "semantic": {
+                "subject": "user",
+                "predicate": "likes",
+                "object": {"name": display_text[:12]},
+            },
+            "evidence_kind": "direct_user",
+            "memory_class": "stable_candidate",
+            "confidence": 0.96,
+            "topic_label": topic_label,
+            "expires_at": None,
+        }
+        if topic_label is None:
+            obs.pop("topic_label")
         result = await apply_validated_memory_operations(
             session_id=session_id,
             worldline="steins_gate",
-            identity_mode="self",
-            observations=[
-                {
-                    "observation_ref": "o1",
-                    "source_message_ids": [source_message_id],
-                    "display_text": display_text,
-                    "semantic": {
-                        "subject": "user",
-                        "predicate": "likes",
-                        "object": {"name": display_text[:12]},
-                    },
-                    "evidence_kind": "direct_user",
-                    "memory_class": "stable_candidate",
-                    "confidence": 0.96,
-                    "topic_label": "动漫",
-                    "expires_at": None,
-                }
-            ],
+            identity_mode=identity_mode,
+            observations=[obs],
             operations=[
                 {
                     "op": "CREATE",
@@ -1230,6 +1238,67 @@ def _seed_fact_via_reconciler(
         return fact_id, observation_id
 
     return asyncio.run(_seed())
+
+
+def _reconciler_apply(
+    *,
+    session_id: str,
+    observations: list[dict],
+    operations: list[dict],
+    source_message_id: int,
+    identity_mode: str = "self",
+    candidate_allowlist: tuple = (),
+) -> dict:
+    """Generic direct reconciler apply via asyncio.run (offline embedder stub)."""
+    import asyncio
+
+    from app.services.memory_v11.reconciler import apply_validated_memory_operations
+
+    async def _run() -> dict:
+        return await apply_validated_memory_operations(
+            session_id=session_id,
+            worldline="steins_gate",
+            identity_mode=identity_mode,
+            observations=observations,
+            operations=operations,
+            source_evidence=[
+                {
+                    "source_message_id": source_message_id,
+                    "conversation_id": f"conv-s3d2-{source_message_id}",
+                    "source_role": "user",
+                    "source_fingerprint": f"fp-s3d2-{source_message_id}",
+                    "source_created_at": "2026-08-01T00:00:00+00:00",
+                    "excerpt": "s3d2 excerpt",
+                }
+            ],
+            candidate_allowlist=list(candidate_allowlist),
+        )
+
+    return asyncio.run(_run())
+
+
+def _s3d2_obs(
+    *,
+    ref: str,
+    display_text: str,
+    source_message_id: int,
+    topic_label: str | None = None,
+    confidence: float = 0.96,
+) -> dict:
+    obs = {
+        "observation_ref": ref,
+        "source_message_ids": [source_message_id],
+        "display_text": display_text,
+        "semantic": {"subject": "user", "predicate": "marker", "object": display_text[:12]},
+        "evidence_kind": "direct_user",
+        "memory_class": "stable_candidate",
+        "confidence": confidence,
+        "topic_label": topic_label,
+        "expires_at": None,
+    }
+    if topic_label is None:
+        obs.pop("topic_label")
+    return obs
 
 
 def _db_rows(sql: str, params: tuple = ()) -> list[dict]:
@@ -1663,6 +1732,28 @@ def test_s3d1_scope_invalid_identity_and_worldline_canonical_422(
     )
     assert det_bad_wl.status_code == 422
     assert det_bad_wl.json()["detail"]["code"] == "invalid_worldline"
+
+    # S3D-2 frozen envelope: missing/blank identity_mode → missing_identity_mode.
+    for missing_mode in (
+        {"session_id": session_id, "worldline": "steins_gate"},
+        {"session_id": session_id, "worldline": "steins_gate", "identity_mode": ""},
+    ):
+        patch_no_mode = isolated_client.patch(
+            f"/api/memory/facts/{fact_id}", params=missing_mode, json=body
+        )
+        assert patch_no_mode.status_code == 422
+        assert patch_no_mode.json()["detail"]["code"] == "missing_identity_mode"
+        del_no_mode = isolated_client.delete(
+            f"/api/memory/facts/{fact_id}",
+            params={**missing_mode, "expected_version": 1},
+        )
+        assert del_no_mode.status_code == 422
+        assert del_no_mode.json()["detail"]["code"] == "missing_identity_mode"
+        det_no_mode = isolated_client.get(
+            f"/api/memory/facts/{fact_id}/details", params=missing_mode
+        )
+        assert det_no_mode.status_code == 422
+        assert det_no_mode.json()["detail"]["code"] == "missing_identity_mode"
 
     facts = _db_rows(
         "SELECT state, active_version FROM stable_facts WHERE fact_id=?", (fact_id,)
@@ -2356,3 +2447,645 @@ def _create_completion(source_message_id: int):
         }
 
     return completion
+
+# ---------------------------------------------------------------------------
+# MEMORY-V11-S3D-2: topics + presentation foundation.
+# ---------------------------------------------------------------------------
+
+
+def _fact_topic_id_db(fact_id: str) -> str | None:
+    rows = _db_rows("SELECT topic_id FROM stable_facts WHERE fact_id=?", (fact_id,))
+    assert rows
+    return rows[0]["topic_id"]
+
+
+def _alias_rows(topic_id: str) -> list[dict]:
+    return _db_rows(
+        """SELECT session_id, identity_mode, normalized_alias
+             FROM memory_topic_aliases WHERE topic_id=?
+             ORDER BY normalized_alias""",
+        (topic_id,),
+    )
+
+
+def _pin_facts(client: TestClient, session_id: str, fact_ids: list[str]) -> None:
+    for fact_id in fact_ids:
+        response = client.patch(
+            f"/api/memory/facts/{fact_id}/presentation",
+            params=_facts_scope(session_id),
+            json={"is_pinned": True},
+        )
+        assert response.status_code == 200, response.text
+
+
+# -- 13. post-create stickiness ---------------------------------------------
+
+
+def test_s3d2_sticky_create_attach_preserves_topic(isolated_client: TestClient):
+    session_id = _session("s3d2-sticky-attach")
+    fact_id, _ = _seed_fact_via_reconciler(
+        session_id=session_id, display_text="喜欢看动漫", source_message_id=4101,
+        topic_label="动漫",
+    )
+    topic_before = _fact_topic_id_db(fact_id)
+    assert topic_before is not None
+    _reconciler_apply(
+        session_id=session_id,
+        observations=[_s3d2_obs(ref="o2", display_text="喜欢看动漫", source_message_id=4102, topic_label="游戏")],
+        operations=[{"op": "ATTACH", "observation_ref": "o2", "target_fact_id": fact_id, "expected_version": 1, "fact_text": "喜欢看动漫", "reason_code": "equivalent_evidence"}],
+        source_message_id=4102,
+        candidate_allowlist=(fact_id,),
+    )
+    assert _fact_topic_id_db(fact_id) == topic_before, "ATTACH must preserve topic"
+
+
+def test_s3d2_sticky_refine_preserves_topic(isolated_client: TestClient):
+    session_id = _session("s3d2-sticky-refine")
+    fact_id, _ = _seed_fact_via_reconciler(
+        session_id=session_id, display_text="喜欢咖啡", source_message_id=4201,
+        topic_label="饮食",
+    )
+    topic_before = _fact_topic_id_db(fact_id)
+    _reconciler_apply(
+        session_id=session_id,
+        observations=[_s3d2_obs(ref="o2", display_text="喜欢黑咖啡", source_message_id=4202, topic_label="游戏")],
+        operations=[{"op": "REFINE", "observation_ref": "o2", "target_fact_id": fact_id, "expected_version": 1, "fact_text": "喜欢黑咖啡", "reason_code": "compatible_refinement"}],
+        source_message_id=4202,
+        candidate_allowlist=(fact_id,),
+    )
+    assert _fact_topic_id_db(fact_id) == topic_before, "REFINE must preserve topic"
+
+
+def test_s3d2_sticky_supersede_preserves_topic(isolated_client: TestClient):
+    session_id = _session("s3d2-sticky-super")
+    fact_id, _ = _seed_fact_via_reconciler(
+        session_id=session_id, display_text="喜欢咖啡", source_message_id=4301,
+        topic_label="饮食",
+    )
+    topic_before = _fact_topic_id_db(fact_id)
+    _reconciler_apply(
+        session_id=session_id,
+        observations=[_s3d2_obs(ref="o2", display_text="现在更喜欢茶", source_message_id=4302, topic_label="游戏")],
+        operations=[{"op": "SUPERSEDE", "observation_ref": "o2", "target_fact_id": fact_id, "expected_version": 1, "fact_text": "现在更喜欢茶", "reason_code": "preference_change"}],
+        source_message_id=4302,
+        candidate_allowlist=(fact_id,),
+    )
+    assert _fact_topic_id_db(fact_id) == topic_before, "SUPERSEDE must preserve topic"
+
+
+def test_s3d2_sticky_null_stays_null_refine_and_supersede(isolated_client: TestClient):
+    session_id = _session("s3d2-sticky-null")
+    fact_id, _ = _seed_fact_via_reconciler(
+        session_id=session_id, display_text="喜欢咖啡", source_message_id=4401,
+        topic_label=None,
+    )
+    assert _fact_topic_id_db(fact_id) is None
+    _reconciler_apply(
+        session_id=session_id,
+        observations=[_s3d2_obs(ref="o2", display_text="喜欢黑咖啡", source_message_id=4402, topic_label="动漫")],
+        operations=[{"op": "REFINE", "observation_ref": "o2", "target_fact_id": fact_id, "expected_version": 1, "fact_text": "喜欢黑咖啡", "reason_code": "compatible_refinement"}],
+        source_message_id=4402,
+        candidate_allowlist=(fact_id,),
+    )
+    assert _fact_topic_id_db(fact_id) is None, "REFINE must never auto-fill NULL topic"
+    _reconciler_apply(
+        session_id=session_id,
+        observations=[_s3d2_obs(ref="o3", display_text="现在更喜欢茶", source_message_id=4403, topic_label="动漫")],
+        operations=[{"op": "SUPERSEDE", "observation_ref": "o3", "target_fact_id": fact_id, "expected_version": 2, "fact_text": "现在更喜欢茶", "reason_code": "preference_change"}],
+        source_message_id=4403,
+        candidate_allowlist=(fact_id,),
+    )
+    assert _fact_topic_id_db(fact_id) is None, "SUPERSEDE must never auto-fill NULL topic"
+
+
+def test_s3d2_sticky_ungroup_survives_refine(isolated_client: TestClient):
+    session_id = _session("s3d2-sticky-ungroup")
+    fact_id, _ = _seed_fact_via_reconciler(
+        session_id=session_id, display_text="喜欢看动漫", source_message_id=4501,
+        topic_label="动漫",
+    )
+    topic_id = _fact_topic_id_db(fact_id)
+    ungroup = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}/presentation",
+        params=_facts_scope(session_id),
+        json={"topic_id": None},
+    )
+    assert ungroup.status_code == 200, ungroup.text
+    assert _fact_topic_id_db(fact_id) is None
+    _reconciler_apply(
+        session_id=session_id,
+        observations=[_s3d2_obs(ref="o2", display_text="偏好搞笑动漫", source_message_id=4502, topic_label="动漫")],
+        operations=[{"op": "REFINE", "observation_ref": "o2", "target_fact_id": fact_id, "expected_version": 1, "fact_text": "偏好搞笑动漫", "reason_code": "compatible_refinement"}],
+        source_message_id=4502,
+        candidate_allowlist=(fact_id,),
+    )
+    assert _fact_topic_id_db(fact_id) is None, (
+        "explicit ungroup must survive later REFINE (topic_id NULL is sticky)"
+    )
+    assert topic_id is not None
+
+
+# -- 14. alias / rename ------------------------------------------------------
+
+
+def test_s3d2_rename_old_label_becomes_alias_facts_keep_topic(
+    isolated_client: TestClient,
+):
+    session_id = _session("s3d2-rename")
+    topic_id = _seed_topic(session_id, "self", "动漫")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢看动漫", topic_id=topic_id)
+    response = isolated_client.patch(
+        f"/api/memory/topics/{topic_id}",
+        params=_facts_scope(session_id),
+        json={"display_label": "动画"},
+    )
+    assert response.status_code == 200, response.text
+    rows = _db_rows(
+        """SELECT normalized_label, display_label FROM memory_topics
+            WHERE topic_id=? AND session_id=? AND identity_mode='self'""",
+        (topic_id, session_id),
+    )
+    assert rows[0]["normalized_label"] == "动画"
+    assert rows[0]["display_label"] == "动画"
+    aliases = _alias_rows(topic_id)
+    assert [a["normalized_alias"] for a in aliases] == ["动漫"], (
+        "old normalized label must become an alias of the SAME topic"
+    )
+    listed = isolated_client.get("/api/memory/facts", params=_facts_scope(session_id))
+    card = next(f for f in listed.json()["facts"] if f["fact_id"] == fact_id)
+    assert card["topic_id"] == topic_id, "rename must keep facts attached to the topic"
+
+
+def test_s3d2_rename_back_to_own_alias(isolated_client: TestClient):
+    session_id = _session("s3d2-rename-back")
+    topic_id = _seed_topic(session_id, "self", "动漫")
+    first = isolated_client.patch(
+        f"/api/memory/topics/{topic_id}",
+        params=_facts_scope(session_id),
+        json={"display_label": "动画"},
+    )
+    assert first.status_code == 200, first.text
+    back = isolated_client.patch(
+        f"/api/memory/topics/{topic_id}",
+        params=_facts_scope(session_id),
+        json={"display_label": "动漫"},
+    )
+    assert back.status_code == 200, back.text
+    rows = _db_rows(
+        "SELECT normalized_label FROM memory_topics WHERE topic_id=?", (topic_id,)
+    )
+    assert rows[0]["normalized_label"] == "动漫"
+    aliases = [a["normalized_alias"] for a in _alias_rows(topic_id)]
+    assert "动画" in aliases, "old canonical must become alias after rename-back"
+    assert "动漫" not in aliases, "own alias must not remain after becoming canonical"
+
+
+def test_s3d2_rename_conflict_other_canonical_409(isolated_client: TestClient):
+    session_id = _session("s3d2-rename-conflict")
+    topic_a = _seed_topic(session_id, "self", "动漫")
+    topic_b = _seed_topic(session_id, "self", "游戏")
+    response = isolated_client.patch(
+        f"/api/memory/topics/{topic_b}",
+        params=_facts_scope(session_id),
+        json={"display_label": "动漫"},
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "topic_label_conflict"
+    rows = _db_rows(
+        "SELECT normalized_label FROM memory_topics WHERE topic_id=?", (topic_b,)
+    )
+    assert rows[0]["normalized_label"] == "游戏", "conflict must not mutate"
+    assert _alias_rows(topic_a) == [] and _alias_rows(topic_b) == []
+
+
+def test_s3d2_rename_conflict_other_alias_409(isolated_client: TestClient):
+    session_id = _session("s3d2-rename-alias-conflict")
+    topic_a = _seed_topic(session_id, "self", "动漫")
+    first = isolated_client.patch(
+        f"/api/memory/topics/{topic_a}",
+        params=_facts_scope(session_id),
+        json={"display_label": "动画"},
+    )
+    assert first.status_code == 200, first.text
+    topic_b = _seed_topic(session_id, "self", "喜剧")
+    response = isolated_client.patch(
+        f"/api/memory/topics/{topic_b}",
+        params=_facts_scope(session_id),
+        json={"display_label": "动漫"},
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "topic_label_conflict"
+    rows = _db_rows(
+        "SELECT normalized_label FROM memory_topics WHERE topic_id=?", (topic_b,)
+    )
+    assert rows[0]["normalized_label"] == "喜剧"
+
+
+def test_s3d2_rename_alias_reused_by_new_create(isolated_client: TestClient):
+    session_id = _session("s3d2-alias-reuse")
+    topic_id = _seed_topic(session_id, "self", "动漫")
+    renamed = isolated_client.patch(
+        f"/api/memory/topics/{topic_id}",
+        params=_facts_scope(session_id),
+        json={"display_label": "动画"},
+    )
+    assert renamed.status_code == 200, renamed.text
+    fact_id, _ = _seed_fact_via_reconciler(
+        session_id=session_id, display_text="喜欢看动漫", source_message_id=4601,
+        topic_label="动漫",
+    )
+    assert _fact_topic_id_db(fact_id) == topic_id, (
+        "future model proposal using the old alias wording must reuse the topic"
+    )
+
+
+# -- 15. presentation / pin --------------------------------------------------
+
+
+def test_s3d2_presentation_pin_move_ungroup(isolated_client: TestClient):
+    session_id = _session("s3d2-present-basic")
+    topic1 = _seed_topic(session_id, "self", "动漫")
+    topic2 = _seed_topic(session_id, "self", "饮食")
+    fact_id, _ = _seed_fact_via_reconciler(
+        session_id=session_id, display_text="喜欢看动漫", source_message_id=4701,
+        topic_label="动漫",
+    )
+    assert _fact_topic_id_db(fact_id) == topic1
+    move = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}/presentation",
+        params=_facts_scope(session_id),
+        json={"is_pinned": True, "topic_id": topic2},
+    )
+    assert move.status_code == 200, move.text
+    body = move.json()
+    assert body["is_pinned"] is True and body["topic_id"] == topic2
+    listed = isolated_client.get("/api/memory/facts", params=_facts_scope(session_id))
+    card = next(f for f in listed.json()["facts"] if f["fact_id"] == fact_id)
+    assert card["is_pinned"] is True and card["topic_id"] == topic2
+    ungroup = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}/presentation",
+        params=_facts_scope(session_id),
+        json={"topic_id": None},
+    )
+    assert ungroup.status_code == 200, ungroup.text
+    assert _fact_topic_id_db(fact_id) is None
+    unpin = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}/presentation",
+        params=_facts_scope(session_id),
+        json={"is_pinned": False},
+    )
+    assert unpin.status_code == 200, unpin.text
+
+
+def test_s3d2_presentation_cross_scope_topic_move_404(isolated_client: TestClient):
+    session_id = _session("s3d2-present-xscope")
+    fact_id, _ = _seed_fact_via_reconciler(
+        session_id=session_id, display_text="喜欢看动漫", source_message_id=4801,
+        topic_label="动漫",
+    )
+    other_topic = _seed_topic(session_id, "okabe", "冈部话题")
+    cross_identity = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}/presentation",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "self",
+        },
+        json={"topic_id": other_topic},
+    )
+    assert cross_identity.status_code == 404, cross_identity.text
+    assert cross_identity.json()["detail"]["code"] == "topic_not_found"
+    assert _fact_topic_id_db(fact_id) is not None
+    assert _fact_topic_id_db(fact_id) != other_topic
+
+    other_session = _session("s3d2-other-session")
+    topic_other = _seed_topic(other_session, "self", "别人的话题")
+    cross_session = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}/presentation",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "self",
+        },
+        json={"topic_id": topic_other},
+    )
+    assert cross_session.status_code == 404, cross_session.text
+    assert cross_session.json()["detail"]["code"] == "topic_not_found"
+
+    cross_worldline = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}/presentation",
+        params={
+            "session_id": session_id,
+            "worldline": "beta",
+            "identity_mode": "self",
+        },
+        json={"topic_id": other_topic},
+    )
+    assert cross_worldline.status_code == 404, cross_worldline.text
+    assert cross_worldline.json()["detail"]["code"] == "fact_not_found"
+
+
+def test_s3d2_presentation_rejects_bad_bodies(isolated_client: TestClient):
+    session_id = _session("s3d2-present-bad")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢咖啡")
+
+    def _assert_code(body, code: str) -> None:
+        response = isolated_client.patch(
+            f"/api/memory/facts/{fact_id}/presentation",
+            params=_facts_scope(session_id),
+            json=body,
+        )
+        assert response.status_code == 422, response.text
+        assert response.json()["detail"]["code"] == code, response.text
+
+    _assert_code({}, "missing_presentation_fields")
+    _assert_code({"display_text": "偷偷改"}, "extra_fields_forbidden")
+    _assert_code({"is_pinned": "yes"}, "invalid_is_pinned")
+    _assert_code({"is_pinned": None}, "invalid_is_pinned")
+    _assert_code({"topic_id": 123}, "invalid_topic_id")
+    _assert_code({"topic_id": "  "}, "invalid_topic_id")
+    _assert_code({"expected_version": 1}, "extra_fields_forbidden")
+
+
+def test_s3d2_presentation_no_versions_vectors_evidence(isolated_client: TestClient):
+    session_id = _session("s3d2-present-pure")
+    fact_id, _ = _seed_fact_via_reconciler(
+        session_id=session_id, display_text="喜欢看动漫", source_message_id=4901,
+        topic_label="动漫",
+    )
+    versions_before = _db_rows(
+        "SELECT version_no, semantic_json FROM stable_fact_versions WHERE fact_id=?",
+        (fact_id,),
+    )
+    vectors_before = _db_rows(
+        "SELECT version_no FROM stable_fact_version_embeddings WHERE fact_id=?",
+        (fact_id,),
+    )
+    evidence_before = _db_rows(
+        "SELECT observation_id FROM stable_fact_evidence WHERE fact_id=?", (fact_id,)
+    )
+    response = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}/presentation",
+        params=_facts_scope(session_id),
+        json={"is_pinned": True},
+    )
+    assert response.status_code == 200, response.text
+    versions_after = _db_rows(
+        "SELECT version_no, semantic_json FROM stable_fact_versions WHERE fact_id=?",
+        (fact_id,),
+    )
+    vectors_after = _db_rows(
+        "SELECT version_no FROM stable_fact_version_embeddings WHERE fact_id=?",
+        (fact_id,),
+    )
+    evidence_after = _db_rows(
+        "SELECT observation_id FROM stable_fact_evidence WHERE fact_id=?", (fact_id,)
+    )
+    assert versions_before == versions_after
+    assert vectors_before == vectors_after
+    assert evidence_before == evidence_after
+
+
+def test_s3d2_presentation_and_topics_zero_provider(
+    isolated_client: TestClient, monkeypatch
+):
+    import app.services.credentials as cred_mod
+    import app.services.provider_runtime as pr_mod
+
+    def boom(*args, **kwargs):
+        raise AssertionError("provider must not be called")
+
+    monkeypatch.setattr(pr_mod.provider_registry, "snapshot", boom)
+    monkeypatch.setattr(cred_mod.credential_store, "get", boom)
+
+    session_id = _session("s3d2-noprov")
+    fact_id, _ = _seed_fact_via_reconciler(
+        session_id=session_id, display_text="喜欢看动漫", source_message_id=5001,
+        topic_label="动漫",
+    )
+    presentation = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}/presentation",
+        params=_facts_scope(session_id),
+        json={"is_pinned": True},
+    )
+    assert presentation.status_code == 200, presentation.text
+    listed = isolated_client.get("/api/memory/topics", params=_facts_scope(session_id))
+    assert listed.status_code == 200, listed.text
+    renamed = isolated_client.patch(
+        f"/api/memory/topics/{listed.json()['topics'][0]['topic_id']}",
+        params=_facts_scope(session_id),
+        json={"display_label": "动画"},
+    )
+    assert renamed.status_code == 200, renamed.text
+
+
+def test_s3d2_pin_cap_8_ninth_rejected(isolated_client: TestClient):
+    session_id = _session("s3d2-pin-cap")
+    fact_ids = [
+        _seed_fact(session_id=session_id, display_text=f"事实{i}") for i in range(9)
+    ]
+    _pin_facts(isolated_client, session_id, fact_ids[:7])
+    eighth = isolated_client.patch(
+        f"/api/memory/facts/{fact_ids[7]}/presentation",
+        params=_facts_scope(session_id),
+        json={"is_pinned": True},
+    )
+    assert eighth.status_code == 200, eighth.text
+    ninth = isolated_client.patch(
+        f"/api/memory/facts/{fact_ids[8]}/presentation",
+        params=_facts_scope(session_id),
+        json={"is_pinned": True},
+    )
+    assert ninth.status_code == 409, ninth.text
+    assert ninth.json()["detail"]["code"] == "pin_limit_reached"
+    rows = _db_rows(
+        """SELECT is_pinned FROM stable_facts
+            WHERE session_id=? AND identity_mode='self' AND fact_id=?""",
+        (session_id, fact_ids[8]),
+    )
+    assert rows[0]["is_pinned"] == 0, "rejected pin must not mutate"
+
+
+def test_s3d2_pin_idempotent_and_unpin(isolated_client: TestClient):
+    session_id = _session("s3d2-pin-idem")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢咖啡")
+    first = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}/presentation",
+        params=_facts_scope(session_id),
+        json={"is_pinned": True},
+    )
+    assert first.status_code == 200, first.text
+    again = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}/presentation",
+        params=_facts_scope(session_id),
+        json={"is_pinned": True},
+    )
+    assert again.status_code == 200, "already-pinned → true must stay idempotent"
+    unpin = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}/presentation",
+        params=_facts_scope(session_id),
+        json={"is_pinned": False},
+    )
+    assert unpin.status_code == 200, unpin.text
+
+
+def test_s3d2_pin_deleted_not_counted(isolated_client: TestClient):
+    session_id = _session("s3d2-pin-deleted")
+    fact_ids = [
+        _seed_fact(session_id=session_id, display_text=f"事实{i}") for i in range(9)
+    ]
+    _pin_facts(isolated_client, session_id, fact_ids[:8])
+    deleted = isolated_client.delete(
+        f"/api/memory/facts/{fact_ids[0]}",
+        params={**_facts_scope(session_id), "expected_version": 1},
+    )
+    assert deleted.status_code == 200, deleted.text
+    ninth = isolated_client.patch(
+        f"/api/memory/facts/{fact_ids[8]}/presentation",
+        params=_facts_scope(session_id),
+        json={"is_pinned": True},
+    )
+    assert ninth.status_code == 200, (
+        f"deleted facts must not count toward the pin cap: {ninth.text}"
+    )
+
+
+def test_s3d2_pin_joint_rollback_topic_move(isolated_client: TestClient):
+    session_id = _session("s3d2-pin-joint")
+    topic1 = _seed_topic(session_id, "self", "动漫")
+    topic2 = _seed_topic(session_id, "self", "饮食")
+    fact_id, _ = _seed_fact_via_reconciler(
+        session_id=session_id, display_text="喜欢看动漫", source_message_id=5101,
+        topic_label="动漫",
+    )
+    assert _fact_topic_id_db(fact_id) == topic1
+    others = [
+        _seed_fact(session_id=session_id, display_text=f"填充{i}") for i in range(8)
+    ]
+    _pin_facts(isolated_client, session_id, others)
+    joint = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}/presentation",
+        params=_facts_scope(session_id),
+        json={"topic_id": topic2, "is_pinned": True},
+    )
+    assert joint.status_code == 409, joint.text
+    assert joint.json()["detail"]["code"] == "pin_limit_reached"
+    assert _fact_topic_id_db(fact_id) == topic1, (
+        "rejected pin must roll back the simultaneous topic move"
+    )
+
+
+# -- 16. topic list ----------------------------------------------------------
+
+
+def test_s3d2_topics_list_counts_hides_zero_active_and_reuse(
+    isolated_client: TestClient,
+):
+    session_id = _session("s3d2-list-counts")
+    topic_id = _seed_topic(session_id, "self", "动漫")
+    hidden_id = _seed_topic(session_id, "self", "空主题")
+    f1 = _seed_fact(session_id=session_id, display_text="喜欢看动漫", topic_id=topic_id)
+    f2 = _seed_fact(session_id=session_id, display_text="偏好搞笑动漫", topic_id=topic_id)
+    deleted = isolated_client.delete(
+        f"/api/memory/facts/{f2}",
+        params={**_facts_scope(session_id), "expected_version": 1},
+    )
+    assert deleted.status_code == 200, deleted.text
+    listed = isolated_client.get("/api/memory/topics", params=_facts_scope(session_id))
+    assert listed.status_code == 200, listed.text
+    topics = listed.json()["topics"]
+    assert [t["topic_id"] for t in topics] == [topic_id]
+    assert topics[0]["fact_count"] == 1, "deleted facts must be excluded from count"
+    assert "aliases" not in str(listed.json())
+
+    hidden_rows = _db_rows(
+        "SELECT topic_id FROM memory_topics WHERE topic_id=?", (hidden_id,)
+    )
+    assert hidden_rows, "zero-active topic row must remain in DB"
+
+    new_fact, _ = _seed_fact_via_reconciler(
+        session_id=session_id, display_text="学习空主题", source_message_id=5201,
+        topic_label="空主题",
+    )
+    assert _fact_topic_id_db(new_fact) == hidden_id, (
+        "later CREATE with matching label must reuse the hidden topic"
+    )
+    after = isolated_client.get("/api/memory/topics", params=_facts_scope(session_id))
+    visible = [t["topic_id"] for t in after.json()["topics"]]
+    assert hidden_id in visible, "reused topic must become visible again"
+    assert f1 != new_fact
+
+
+def test_s3d2_topics_list_ordering_no_aliases(isolated_client: TestClient):
+    session_id = _session("s3d2-list-order")
+    t_b = _seed_topic(session_id, "self", "B动漫")
+    t_a = _seed_topic(session_id, "self", "A游戏")
+    _seed_fact(session_id=session_id, display_text="看B动漫", topic_id=t_b)
+    _seed_fact(session_id=session_id, display_text="玩A游戏", topic_id=t_a)
+    listed = isolated_client.get("/api/memory/topics", params=_facts_scope(session_id))
+    assert listed.status_code == 200, listed.text
+    topics = listed.json()["topics"]
+    assert [t["topic_id"] for t in topics] == [t_a, t_b]
+    assert set(topics[0].keys()) == {"topic_id", "display_label", "fact_count"}
+
+
+# -- 17. scope envelopes for the 3 new routes --------------------------------
+
+
+def test_s3d2_scope_envelopes_all_routes(isolated_client: TestClient):
+    session_id = _session("s3d2-env")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢咖啡")
+    topic_id = _seed_topic(session_id, "self", "动漫")
+
+    cases = [
+        (None, None, "missing_worldline"),
+        ("", None, "missing_worldline"),
+        ("bogus", None, "invalid_worldline"),
+        ("steins_gate", None, "missing_identity_mode"),
+        ("steins_gate", "", "missing_identity_mode"),
+        ("steins_gate", "bogus", "invalid_identity_mode"),
+    ]
+    for worldline, identity_mode, expected in cases:
+        params = {"session_id": session_id}
+        if worldline is not None:
+            params["worldline"] = worldline
+        if identity_mode is not None:
+            params["identity_mode"] = identity_mode
+
+        presentation = isolated_client.patch(
+            f"/api/memory/facts/{fact_id}/presentation",
+            params=params,
+            json={"is_pinned": True},
+        )
+        assert presentation.status_code == 422, presentation.text
+        assert presentation.json()["detail"]["code"] == expected
+
+        listed = isolated_client.get("/api/memory/topics", params=params)
+        assert listed.status_code == 422, listed.text
+        assert listed.json()["detail"]["code"] == expected
+
+        renamed = isolated_client.patch(
+            f"/api/memory/topics/{topic_id}", params=params, json={"display_label": "动画"}
+        )
+        assert renamed.status_code == 422, renamed.text
+        assert renamed.json()["detail"]["code"] == expected
+
+    for params in (
+        {"worldline": "steins_gate", "identity_mode": "self"},
+        {"worldline": "steins_gate", "identity_mode": "self", "session_id": ""},
+    ):
+        presentation = isolated_client.patch(
+            f"/api/memory/facts/{fact_id}/presentation",
+            params=params,
+            json={"is_pinned": True},
+        )
+        assert presentation.status_code == 422
+        assert presentation.json()["detail"]["code"] == "empty_session_id"
+        listed = isolated_client.get("/api/memory/topics", params=params)
+        assert listed.status_code == 422
+        assert listed.json()["detail"]["code"] == "empty_session_id"
+        renamed = isolated_client.patch(
+            f"/api/memory/topics/{topic_id}", params=params, json={"display_label": "动画"}
+        )
+        assert renamed.status_code == 422
+        assert renamed.json()["detail"]["code"] == "empty_session_id"

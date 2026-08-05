@@ -2164,3 +2164,393 @@ async def test_s3c1_worldline_identity_isolation(isolated_store):
         sql="SELECT COUNT(*) AS n FROM experiences WHERE session_id=?",
         params=(session_id,),
     ) == 0, "SG experiences must never appear in the beta physical DB"
+
+# ---------------------------------------------------------------------------
+# MEMORY-V11-S3D-2: CREATE-only automatic topic materialization (R1-R7 + E).
+# ---------------------------------------------------------------------------
+
+
+async def _topic_rows(session_id: str, identity_mode: str) -> list[dict]:
+    db = await get_db("steins_gate", "memory")
+    try:
+        rows = await (
+            await db.execute(
+                """SELECT topic_id, normalized_label, display_label
+                     FROM memory_topics
+                    WHERE session_id=? AND identity_mode=?
+                    ORDER BY topic_id""",
+                (session_id, identity_mode),
+            )
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        await db.close()
+
+
+async def _fact_topic_id(fact_id: str) -> str | None:
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (
+            await db.execute(
+                "SELECT topic_id FROM stable_facts WHERE fact_id=?", (fact_id,)
+            )
+        ).fetchone()
+        assert row is not None
+        return row["topic_id"]
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_s3d2_r1_stable_create_materializes_topic(isolated_store):
+    """R1: stable CREATE with topic_label → memory_topics row + fact.topic_id."""
+    session_id = f"s3d2-r1-{uuid4().hex[:8]}"
+    result = await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="o1",
+                display_text="喜欢看动漫",
+                semantic={"subject": "user", "predicate": "likes", "object": "anime"},
+                source_message_ids=[3101],
+            )
+        ],
+        operations=[
+            {
+                "op": "CREATE",
+                "observation_ref": "o1",
+                "target_fact_id": None,
+                "expected_version": None,
+                "fact_text": "喜欢看动漫",
+                "reason_code": "direct_durable_statement",
+            }
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=3101,
+                conversation_id="conv-s3d2-r1",
+                fingerprint="fp-s3d2-r1",
+                excerpt="喜欢看动漫",
+            )
+        ],
+        candidate_allowlist=[],
+    )
+    fact_id = result["created_facts"][0]["fact_id"]
+    topics = await _topic_rows(session_id, "self")
+    assert len(topics) == 1, (
+        "stable CREATE with topic_label must materialize one memory_topics row"
+    )
+    assert topics[0]["normalized_label"] == "动漫"
+    assert topics[0]["display_label"] == "动漫"
+    assert await _fact_topic_id(fact_id) == topics[0]["topic_id"]
+
+
+@pytest.mark.asyncio
+async def test_s3d2_r2_normalized_equivalent_labels_reuse_topic(isolated_store):
+    """R2: '动漫' then '动漫。' resolve to the SAME topic_id."""
+    session_id = f"s3d2-r2-{uuid4().hex[:8]}"
+    first = await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="o1",
+                display_text="喜欢看动漫",
+                semantic={"subject": "user", "predicate": "likes", "object": "anime"},
+                source_message_ids=[3201],
+            )
+        ],
+        operations=[
+            {"op": "CREATE", "observation_ref": "o1", "fact_text": "喜欢看动漫",
+             "reason_code": "direct_durable_statement"}
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=3201, conversation_id="conv-s3d2-r2",
+                fingerprint="fp-s3d2-r2", excerpt="喜欢看动漫",
+            )
+        ],
+        candidate_allowlist=[],
+    )
+    obs2 = _observation(
+        ref="o2",
+        display_text="偏好搞笑类型的动漫",
+        semantic={"subject": "user", "predicate": "prefers_genre", "object": "comedy"},
+        source_message_ids=[3202],
+    )
+    obs2["topic_label"] = "动漫。"
+    second = await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[obs2],
+        operations=[
+            {"op": "CREATE", "observation_ref": "o2", "fact_text": "偏好搞笑类型的动漫",
+             "reason_code": "direct_durable_statement"}
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=3202, conversation_id="conv-s3d2-r2",
+                fingerprint="fp-s3d2-r2b", excerpt="偏好搞笑类型的动漫",
+            )
+        ],
+        candidate_allowlist=[],
+    )
+    topics = await _topic_rows(session_id, "self")
+    assert len(topics) == 1, "normalized-equivalent labels must reuse one topic"
+    assert await _fact_topic_id(first["created_facts"][0]["fact_id"]) == topics[0]["topic_id"]
+    assert await _fact_topic_id(second["created_facts"][0]["fact_id"]) == topics[0]["topic_id"]
+
+
+@pytest.mark.asyncio
+async def test_s3d2_r3_same_label_identity_isolated(isolated_store):
+    """R3: same normalized label under self vs okabe → distinct topic rows."""
+    session_id = f"s3d2-r3-{uuid4().hex[:8]}"
+    await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="o1", display_text="喜欢看动漫",
+                semantic={"subject": "user", "predicate": "likes", "object": "anime"},
+                source_message_ids=[3301],
+            )
+        ],
+        operations=[
+            {"op": "CREATE", "observation_ref": "o1", "fact_text": "喜欢看动漫",
+             "reason_code": "direct_durable_statement"}
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=3301, conversation_id="conv-s3d2-r3",
+                fingerprint="fp-s3d2-r3a", excerpt="喜欢看动漫",
+            )
+        ],
+        candidate_allowlist=[],
+    )
+    okabe = await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="okabe",
+        observations=[
+            _observation(
+                ref="o1", display_text="喜欢吃水果",
+                semantic={"subject": "user", "predicate": "likes", "object": "fruit"},
+                source_message_ids=[3302],
+            )
+        ],
+        operations=[
+            {"op": "CREATE", "observation_ref": "o1", "fact_text": "喜欢吃水果",
+             "reason_code": "direct_durable_statement"}
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=3302, conversation_id="conv-s3d2-r3",
+                fingerprint="fp-s3d2-r3b", excerpt="喜欢吃水果",
+            )
+        ],
+        candidate_allowlist=[],
+    )
+    topics_self = await _topic_rows(session_id, "self")
+    topics_okabe = await _topic_rows(session_id, "okabe")
+    assert len(topics_self) == 1 and len(topics_okabe) == 1
+    assert topics_self[0]["topic_id"] != topics_okabe[0]["topic_id"], (
+        "identity_mode must isolate topic scope"
+    )
+    assert await _fact_topic_id(okabe["created_facts"][0]["fact_id"]) == topics_okabe[0]["topic_id"]
+
+
+@pytest.mark.asyncio
+async def test_s3d2_r4_candidate_only_no_topic(isolated_store):
+    """R4: candidate-only CREATE must not create a topic."""
+    session_id = f"s3d2-r4-{uuid4().hex[:8]}"
+    await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="o1", display_text="可能喜欢咖啡",
+                semantic={"subject": "user", "predicate": "maybe", "object": "coffee"},
+                source_message_ids=[3401],
+                confidence=0.4,
+            )
+        ],
+        operations=[
+            {"op": "CREATE", "observation_ref": "o1", "fact_text": "可能喜欢咖啡",
+             "reason_code": "low_confidence"}
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=3401, conversation_id="conv-s3d2-r4",
+                fingerprint="fp-s3d2-r4", excerpt="可能喜欢咖啡",
+            )
+        ],
+        candidate_allowlist=[],
+    )
+    assert await _topic_rows(session_id, "self") == [], (
+        "candidate-only CREATE must not materialize a topic"
+    )
+
+
+@pytest.mark.asyncio
+async def test_s3d2_r5_episodic_no_topic(isolated_store):
+    """R5: episodic CREATE must not create a topic."""
+    session_id = f"s3d2-r5-{uuid4().hex[:8]}"
+    await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="o1", display_text="上周去了秋叶原",
+                semantic={"subject": "user", "predicate": "went", "object": "akiba"},
+                source_message_ids=[3501],
+                memory_class="episodic",
+            )
+        ],
+        operations=[
+            {"op": "CREATE", "observation_ref": "o1", "fact_text": "上周去了秋叶原",
+             "reason_code": "contextual_event"}
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=3501, conversation_id="conv-s3d2-r5",
+                fingerprint="fp-s3d2-r5", excerpt="上周去了秋叶原",
+            )
+        ],
+        candidate_allowlist=[],
+    )
+    assert await _topic_rows(session_id, "self") == [], (
+        "episodic CREATE must not materialize a topic"
+    )
+
+
+@pytest.mark.asyncio
+async def test_s3d2_r6_reject_no_topic(isolated_store):
+    """R6: REJECT must not create a topic."""
+    session_id = f"s3d2-r6-{uuid4().hex[:8]}"
+    await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="o1", display_text="推荐过动漫",
+                semantic={"subject": "user", "predicate": "recommended", "object": "anime"},
+                source_message_ids=[3601],
+                confidence=0.5,
+            )
+        ],
+        operations=[
+            {"op": "REJECT", "observation_ref": "o1", "fact_text": "推荐过动漫",
+             "reason_code": "conversational_act"}
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=3601, conversation_id="conv-s3d2-r6",
+                fingerprint="fp-s3d2-r6", excerpt="推荐过动漫",
+            )
+        ],
+        candidate_allowlist=[],
+    )
+    assert await _topic_rows(session_id, "self") == [], "REJECT must not materialize a topic"
+
+
+@pytest.mark.asyncio
+async def test_s3d2_r7_failed_batch_rolls_back_topic(isolated_store, monkeypatch):
+    """R7: failure after topic creation rolls back topic + whole fact batch."""
+    from app.services.memory_v11 import reconciler as recon_mod
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("injected insert_version_embedding failure")
+
+    monkeypatch.setattr(recon_mod, "insert_version_embedding", boom)
+    session_id = f"s3d2-r7-{uuid4().hex[:8]}"
+    with pytest.raises(Exception):
+        await _apply_validated(
+            session_id=session_id,
+            worldline="steins_gate",
+            identity_mode="self",
+            observations=[
+                _observation(
+                    ref="o1", display_text="喜欢看动漫",
+                    semantic={"subject": "user", "predicate": "likes", "object": "anime"},
+                    source_message_ids=[3701],
+                )
+            ],
+            operations=[
+                {"op": "CREATE", "observation_ref": "o1", "fact_text": "喜欢看动漫",
+                 "reason_code": "direct_durable_statement"}
+            ],
+            source_evidence=[
+                _source_evidence(
+                    source_message_id=3701, conversation_id="conv-s3d2-r7",
+                    fingerprint="fp-s3d2-r7", excerpt="喜欢看动漫",
+                )
+            ],
+            candidate_allowlist=[],
+        )
+    assert await _topic_rows(session_id, "self") == [], (
+        "failed batch must roll back the newly created topic (no orphan)"
+    )
+    db = await get_db("steins_gate", "memory")
+    try:
+        n = await (
+            await db.execute(
+                "SELECT COUNT(*) AS n FROM stable_facts WHERE session_id=?",
+                (session_id,),
+            )
+        ).fetchone()
+        assert int(n["n"]) == 0
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_s3d2_e_dual_match_conflict_fails_closed(isolated_store):
+    """E: canonical=A + alias=B for one token → topic_conflict, never a pick."""
+    contracts = _contracts()
+    from app.services.memory_v11.topics import resolve_or_create_topic
+
+    session_id = f"s3d2-e-{uuid4().hex[:8]}"
+    db = await get_db("steins_gate", "memory")
+    try:
+        now = "2026-08-01T00:00:00+00:00"
+        await db.execute("BEGIN IMMEDIATE")
+        await db.execute(
+            """INSERT INTO memory_topics(
+                   topic_id, session_id, identity_mode, normalized_label,
+                   display_label, created_at, updated_at
+               ) VALUES('t-a', ?, 'self', 'anime', 'anime', ?, ?)""",
+            (session_id, now, now),
+        )
+        await db.execute(
+            """INSERT INTO memory_topics(
+                   topic_id, session_id, identity_mode, normalized_label,
+                   display_label, created_at, updated_at
+               ) VALUES('t-b', ?, 'self', 'other', 'other', ?, ?)""",
+            (session_id, now, now),
+        )
+        await db.execute(
+            """INSERT INTO memory_topic_aliases(
+                   session_id, identity_mode, normalized_alias, topic_id
+               ) VALUES(?, 'self', 'anime', 't-b')""",
+            (session_id,),
+        )
+        with pytest.raises(contracts.MemoryValidationError) as exc_info:
+            await resolve_or_create_topic(
+                db,
+                session_id=session_id,
+                identity_mode="self",
+                display_label="anime",
+                normalized_label="anime",
+            )
+        assert exc_info.value.code == "topic_conflict"
+        await db.rollback()
+    finally:
+        await db.close()

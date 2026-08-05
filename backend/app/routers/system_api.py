@@ -411,17 +411,27 @@ _USER_VALIDATION_CODES = frozenset(
         "empty_display_text",
         "missing_expected_version",
         "invalid_expected_version",
+        "missing_display_label",
+        "invalid_display_label",
+        "empty_display_label",
+        "invalid_is_pinned",
+        "invalid_topic_id",
+        "empty_topic_id",
     }
 )
 
 
 def _memory_error_response(exc: MemoryValidationError) -> HTTPException:
     code = exc.code
-    if code == "fact_not_found":
+    if code in {"fact_not_found", "topic_not_found"}:
         return HTTPException(
             status_code=404, detail={"code": code, "message": str(exc)}
         )
-    if code == "expected_version_mismatch":
+    if code in {
+        "expected_version_mismatch",
+        "pin_limit_reached",
+        "topic_label_conflict",
+    }:
         return HTTPException(
             status_code=409, detail={"code": code, "message": str(exc)}
         )
@@ -442,8 +452,9 @@ def _validate_memory_scope(
 ) -> tuple[str, str]:
     """Canonical 422 envelopes for scope normalization (never bare strings).
 
-    The three lifecycle routes require an EXPLICIT worldline: blank/missing
-    is a caller error, never a silent steins_gate default.
+    The v11 lifecycle/presentation/topic routes require EXPLICIT scope:
+    blank/missing worldline or identity is a caller error, never a silent
+    default.
     """
     if worldline is None or str(worldline).strip() == "":
         raise HTTPException(
@@ -460,7 +471,7 @@ def _validate_memory_scope(
     if identity_mode is None or str(identity_mode).strip() == "":
         raise HTTPException(
             status_code=422,
-            detail={"code": "invalid_identity_mode", "message": "invalid identity_mode"},
+            detail={"code": "missing_identity_mode", "message": "identity_mode is required"},
         )
     try:
         mode = normalize_identity_mode(identity_mode)
@@ -636,6 +647,163 @@ async def memory_fact_details(
             worldline=wl,
             identity_mode=mode,
             fact_id=fact_id,
+        )
+    except MemoryValidationError as exc:
+        raise _memory_error_response(exc) from exc
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "memory_operation_failed",
+                "message": "memory operation failed",
+            },
+        ) from None
+
+
+@router.patch("/api/memory/facts/{fact_id}/presentation")
+async def patch_memory_fact_presentation(
+    fact_id: str,
+    request: Request,
+    session_id: str | None = Query(None),
+    worldline: str | None = Query(None),
+    identity_mode: str | None = Query(None),
+):
+    """v11 presentation (plan §7.3/§8.2): is_pinned + topic_id only, local."""
+    from app.services.memory_v11.contracts import MemoryValidationError
+    from app.services.memory_v11.facts import _UNSET, update_fact_presentation
+
+    wl, mode = _validate_memory_scope(worldline, identity_mode)
+    sid = _require_session_id(session_id)
+
+    try:
+        raw = await request.json()
+    except Exception:
+        raise _body_error(
+            "invalid_json_body", "request body must be valid JSON"
+        ) from None
+    if not isinstance(raw, dict):
+        raise _body_error(
+            "invalid_request_body", "request body must be a JSON object"
+        ) from None
+    extras = sorted(set(raw) - {"is_pinned", "topic_id"})
+    if extras:
+        raise _body_error("extra_fields_forbidden", "unknown body fields are forbidden")
+    if not raw:
+        raise _body_error(
+            "missing_presentation_fields", "at least one presentation field is required"
+        )
+
+    is_pinned: bool | None = None
+    if "is_pinned" in raw:
+        if not isinstance(raw["is_pinned"], bool):
+            raise _body_error("invalid_is_pinned", "is_pinned must be a boolean")
+        is_pinned = raw["is_pinned"]
+    topic_id: str | None | object = _UNSET  # sentinel: field omitted
+    if "topic_id" in raw:
+        target = raw["topic_id"]
+        if target is not None:
+            if not isinstance(target, str):
+                raise _body_error(
+                    "invalid_topic_id", "topic_id must be a string or null"
+                )
+            if not str(target).strip():
+                raise _body_error(
+                    "invalid_topic_id", "topic_id must be a non-empty string or null"
+                )
+        topic_id = target
+
+    try:
+        result = await update_fact_presentation(
+            session_id=sid,
+            worldline=wl,
+            identity_mode=mode,
+            fact_id=fact_id,
+            is_pinned=is_pinned,
+            topic_id=topic_id,
+        )
+    except MemoryValidationError as exc:
+        raise _memory_error_response(exc) from exc
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "memory_operation_failed",
+                "message": "memory operation failed",
+            },
+        ) from None
+    return result
+
+
+@router.get("/api/memory/topics")
+async def list_memory_topics(
+    session_id: str | None = Query(None),
+    worldline: str | None = Query(None),
+    identity_mode: str | None = Query(None),
+):
+    """v11 topics list (plan §8.3): scoped, active-fact counts, local only."""
+    from app.services.memory_v11.contracts import MemoryValidationError
+    from app.services.memory_v11.topics import list_topics
+
+    wl, mode = _validate_memory_scope(worldline, identity_mode)
+    sid = _require_session_id(session_id)
+    try:
+        return await list_topics(
+            session_id=sid,
+            worldline=wl,
+            identity_mode=mode,
+        )
+    except MemoryValidationError as exc:
+        raise _memory_error_response(exc) from exc
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "memory_operation_failed",
+                "message": "memory operation failed",
+            },
+        ) from None
+
+
+@router.patch("/api/memory/topics/{topic_id}")
+async def patch_memory_topic(
+    topic_id: str,
+    request: Request,
+    session_id: str | None = Query(None),
+    worldline: str | None = Query(None),
+    identity_mode: str | None = Query(None),
+):
+    """v11 topic rename (plan §8.3): display_label only, no merges, local."""
+    from app.services.memory_v11.contracts import MemoryValidationError
+    from app.services.memory_v11.topics import rename_topic
+
+    wl, mode = _validate_memory_scope(worldline, identity_mode)
+    sid = _require_session_id(session_id)
+
+    try:
+        raw = await request.json()
+    except Exception:
+        raise _body_error(
+            "invalid_json_body", "request body must be valid JSON"
+        ) from None
+    if not isinstance(raw, dict):
+        raise _body_error(
+            "invalid_request_body", "request body must be a JSON object"
+        ) from None
+    extras = sorted(set(raw) - {"display_label"})
+    if extras:
+        raise _body_error("extra_fields_forbidden", "unknown body fields are forbidden")
+    if "display_label" not in raw:
+        raise _body_error("missing_display_label", "display_label is required")
+    if not isinstance(raw["display_label"], str):
+        raise _body_error("invalid_display_label", "display_label must be a string")
+
+    try:
+        return await rename_topic(
+            session_id=sid,
+            worldline=wl,
+            identity_mode=mode,
+            topic_id=topic_id,
+            display_label=raw["display_label"],
         )
     except MemoryValidationError as exc:
         raise _memory_error_response(exc) from exc

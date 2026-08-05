@@ -14,13 +14,20 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.db import get_db, normalize_identity_mode, normalize_worldline
-from app.services.memory_v11.contracts import MemoryValidationError
+from app.services.memory_v11.contracts import (
+    MAX_PINNED_FACTS_PER_SCOPE,
+    MemoryValidationError,
+)
 from app.services.memory_v11.indexing import (
     delete_version_embedding,
     insert_version_embedding,
     prepare_passage_embedding,
 )
 from app.services.memory_v11.repository import _canonical_fingerprint
+
+
+# Sentinel distinguishing "field omitted" from "topic_id=null (ungroup)".
+_UNSET = object()
 
 
 def _utc_now() -> str:
@@ -448,3 +455,103 @@ async def fact_details(
         }
     finally:
         await db.close()
+
+
+async def update_fact_presentation(
+    *,
+    session_id: str,
+    worldline: str,
+    identity_mode: str,
+    fact_id: str,
+    is_pinned: bool | None = None,
+    topic_id: str | None | object = _UNSET,
+) -> dict[str, Any]:
+    """Presentation-only update (plan §7.3 / §8.2): pin and/or topic move.
+
+    - is_pinned=None → preserved; topic_id=_UNSET → preserved;
+      topic_id=None → explicit ungroup
+    - pin false→true counts ACTIVE same-scope pinned facts inside the SAME
+      BEGIN IMMEDIATE and rejects at MAX_PINNED_FACTS_PER_SCOPE
+    - target topic must exist in the SAME scope (never auto-created)
+    - no version/vector/observation/evidence/provider side effects
+    """
+    wl = normalize_worldline(worldline)
+    mode = normalize_identity_mode(identity_mode)
+    session = _require_session_id(session_id)
+    fid = _require_fact_id(fact_id)
+    if is_pinned is not None and not isinstance(is_pinned, bool):
+        raise MemoryValidationError(
+            "invalid_is_pinned", "is_pinned must be a boolean"
+        )
+
+    now = _utc_now()
+    db = await get_db(wl, "memory")
+    try:
+        await db.execute("BEGIN IMMEDIATE")
+        row = await (
+            await db.execute(
+                """SELECT state, active_version, is_pinned, topic_id
+                     FROM stable_facts
+                    WHERE fact_id=? AND session_id=? AND identity_mode=?""",
+                (fid, session, mode),
+            )
+        ).fetchone()
+        if row is None or str(row["state"]) != "active":
+            raise MemoryValidationError("fact_not_found", f"fact_id={fid}")
+        current_pinned = bool(row["is_pinned"])
+        new_pinned = current_pinned if is_pinned is None else bool(is_pinned)
+        new_topic = row["topic_id"]
+        if topic_id is not _UNSET:
+            target = topic_id
+            if target is not None:
+                if not isinstance(target, str) or not str(target).strip():
+                    raise MemoryValidationError(
+                        "invalid_topic_id", "topic_id must be a non-empty string or null"
+                    )
+                exists = await (
+                    await db.execute(
+                        """SELECT 1 FROM memory_topics
+                            WHERE topic_id=? AND session_id=? AND identity_mode=?""",
+                        (str(target), session, mode),
+                    )
+                ).fetchone()
+                if exists is None:
+                    raise MemoryValidationError(
+                        "topic_not_found", f"topic_id={target}"
+                    )
+            new_topic = target
+
+        if new_pinned and not current_pinned:
+            count_row = await (
+                await db.execute(
+                    """SELECT COUNT(*) AS n FROM stable_facts
+                        WHERE session_id=? AND identity_mode=?
+                          AND state='active' AND is_pinned=1""",
+                    (session, mode),
+                )
+            ).fetchone()
+            if int(count_row["n"]) >= MAX_PINNED_FACTS_PER_SCOPE:
+                raise MemoryValidationError(
+                    "pin_limit_reached",
+                    f"max pinned facts per scope is {MAX_PINNED_FACTS_PER_SCOPE}",
+                )
+
+        await db.execute(
+            """UPDATE stable_facts
+               SET is_pinned=?, topic_id=?, updated_at=?
+             WHERE fact_id=? AND session_id=? AND identity_mode=?""",
+            (1 if new_pinned else 0, new_topic, now, fid, session, mode),
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
+
+    return {
+        "fact_id": fid,
+        "is_pinned": new_pinned,
+        "topic_id": new_topic,
+        "scope": {"session_id": session, "worldline": wl, "identity_mode": mode},
+    }
