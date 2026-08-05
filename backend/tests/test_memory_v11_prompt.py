@@ -80,14 +80,16 @@ async def test_s3a_v11_mode_injects_same_scope_active_facts_only(
         session_id=session_id,
         worldline="steins_gate",
         identity_mode="self",
-        display_text=self_marker,
+        # Display text carries the query term so relevance-aware retrieval
+        # can select the same-scope card (S3b does not bulk-inject zeros).
+        display_text=f"{self_marker} 喜欢动漫",
         semantic_json={"subject": "user", "relation": "likes", "object": "anime"},
     )
     await create_stable_fact(
         session_id=session_id,
         worldline="steins_gate",
         identity_mode="okabe",
-        display_text=okabe_marker,
+        display_text=f"{okabe_marker} 喜欢水果",
         semantic_json={"subject": "user", "relation": "likes", "object": "fruit"},
     )
 

@@ -27,7 +27,7 @@ from uuid import uuid4
 import pytest
 
 from app.db import get_db, init_db, reset_initialization_cache
-from app.services.memory import EmbeddingAdapter
+from app.services.memory import EmbeddingAdapter, memory_service
 from app.services.memory_v11.repository import create_stable_fact
 from app.services.prompt_compiler import compile_for_session
 
@@ -69,6 +69,10 @@ def _cosine(left: list[float], right: list[float]) -> float:
     return sum(a * b for a, b in zip(left, right))
 
 
+# Must match seeded stable_fact_version_embeddings.model for vector scoring.
+_TEST_EMBED_MODEL = "test-deterministic-384"
+
+
 class _DeterministicEmbedder(EmbeddingAdapter):
     """Stub of the existing EmbeddingAdapter boundary: no model, no network.
 
@@ -76,8 +80,8 @@ class _DeterministicEmbedder(EmbeddingAdapter):
     maps to a deterministic hash unit vector of the text itself.
     """
 
-    def __init__(self, vocabulary: dict[str, str]):
-        super().__init__()
+    def __init__(self, vocabulary: dict[str, str], *, model_name: str = _TEST_EMBED_MODEL):
+        super().__init__(model_name=model_name, dimensions=384)
         self._vocabulary = dict(vocabulary)
 
     async def encode_passage(self, text: str) -> list[float]:
@@ -115,7 +119,10 @@ async def test_r3_vector_candidate_participates_with_zero_lexical_overlap(
     filler_confidence = 0.9
 
     # Vector evidence is produced through the existing embedding boundary.
+    # Inject the same stub so production query encoding matches seeded vectors
+    # (no real model / network).
     embedder = _DeterministicEmbedder(vocabulary={query_text: "pet", target_text: "pet"})
+    monkeypatch.setattr(memory_service, "embedder", embedder)
     query_vector = await embedder.encode_query(query_text)
     target_vector = await embedder.encode_passage(target_text)
     filler_vectors = [
@@ -179,6 +186,8 @@ async def test_r3_vector_candidate_participates_with_zero_lexical_overlap(
         )
 
     # Seed stable_fact_version_embeddings through the same boundary.
+    # model must equal embedder.model_name (fail-closed compatibility gate).
+    assert embedder.model_name == _TEST_EMBED_MODEL
     db = await get_db("steins_gate", "memory")
     try:
         vector_rows = [(target["fact_id"], target_vector)] + [
@@ -193,7 +202,7 @@ async def test_r3_vector_candidate_participates_with_zero_lexical_overlap(
                 (
                     fact_id,
                     1,
-                    "test-deterministic-384",
+                    _TEST_EMBED_MODEL,
                     384,
                     struct.pack(f"{384}f", *vector),
                 ),
@@ -210,4 +219,81 @@ async def test_r3_vector_candidate_participates_with_zero_lexical_overlap(
         "vector candidate signal unused: target fact (zero lexical overlap, "
         "strongest same-scope vector candidate in "
         "stable_fact_version_embeddings) was dropped from the v11 prompt"
+    )
+
+
+@pytest.mark.asyncio
+async def test_r3_incompatible_embedding_model_is_ignored(
+    isolated_store, monkeypatch
+):
+    """Stored vectors with a different model_name must not affect candidates.
+
+    Same-scope target has a high-similarity BLOB under a foreign model id.
+    Active embedder.model_name differs → vector signal fail-closed skipped;
+    with zero lexical overlap the target stays out of the prompt.
+    """
+    session_id = f"vec-model-compat-{uuid4()}"
+    query_text = "ペット"
+    target_text = "犬を飼っている"
+    foreign_model = "other-model-not-active"
+    active_model = _TEST_EMBED_MODEL
+    assert foreign_model != active_model
+
+    embedder = _DeterministicEmbedder(
+        vocabulary={query_text: "pet", target_text: "pet"},
+        model_name=active_model,
+    )
+    monkeypatch.setattr(memory_service, "embedder", embedder)
+
+    query_vector = await embedder.encode_query(query_text)
+    target_vector = await embedder.encode_passage(target_text)
+    assert _cosine(query_vector, target_vector) >= 0.99
+    assert query_text not in target_text
+
+    target = await create_stable_fact(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        display_text=target_text,
+        semantic_json={"subject": "user", "relation": "has_pet", "object": "dog"},
+        confidence=0.5,
+    )
+    # Fillers keep the non-vector top slots if anything were bulk-selected.
+    for i in range(29):
+        await create_stable_fact(
+            session_id=session_id,
+            worldline="steins_gate",
+            identity_mode="self",
+            display_text=f"FILLER_{i:02d} study notes about topology",
+            semantic_json={
+                "subject": "user",
+                "relation": "study",
+                "object": f"topic_{i:02d}",
+            },
+            confidence=0.9,
+        )
+
+    db = await get_db("steins_gate", "memory")
+    try:
+        await db.execute(
+            """INSERT INTO stable_fact_version_embeddings(
+                   fact_id, version_no, model, dimensions, vector
+               ) VALUES(?,?,?,?,?)""",
+            (
+                target["fact_id"],
+                1,
+                foreign_model,
+                384,
+                struct.pack(f"{384}f", *target_vector),
+            ),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    prompt = await _compile_v11(session_id, query_text, monkeypatch)
+    assert target_text not in prompt, (
+        "incompatible embedding model influenced retrieval: target with "
+        f"stored model={foreign_model!r} must not score under active "
+        f"embedder.model_name={active_model!r}"
     )

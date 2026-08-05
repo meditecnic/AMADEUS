@@ -242,52 +242,32 @@ async def _select_v11_prompt_memories(
     user_message: str,
     limit: int = 24,
 ) -> tuple[list[RetrievedMemory], list[RetrievedMemory]]:
-    """Read-only v11 prompt surface: active stable facts only (S3a).
+    """Read-only v11 prompt surface: same-scope active stable facts (S3b).
 
-    No experience table yet; episodic list stays empty. Never merges legacy
-    core_facts/shared rows. Local lexical ranking only (no LLM).
+    Delegates to memory_v11.retrieval for pin/lexical/vector scoring,
+    fingerprint dedupe, and whole-fact token packing. Experience layer
+    remains empty until S3c. Never merges legacy/shared rows.
     """
-    from app.services.memory_v11.repository import list_active_stable_facts
+    from app.services.memory_v11.retrieval import select_stable_fact_candidates
 
-    rows = await list_active_stable_facts(
+    rows = await select_stable_fact_candidates(
         session_id=session_id,
         worldline=worldline,
         identity_mode=identity_mode,
+        query=user_message,
+        limit=limit,
     )
-    query_terms = {
-        term.lower()
-        for term in (user_message or "").split()
-        if len(term) > 1
-    }
-
-    def _score(display_text: str, pinned: bool) -> float:
-        haystack = (display_text or "").lower()
-        relevance = (
-            sum(term in haystack for term in query_terms) / max(1, len(query_terms))
-            if query_terms
-            else 0.0
-        )
-        return (2.0 if pinned else 0.0) + relevance
-
-    ranked = sorted(
-        rows,
-        key=lambda row: (
-            _score(str(row.get("display_text") or ""), bool(row.get("is_pinned"))),
-            float(row.get("confidence") or 0.0),
-        ),
-        reverse=True,
-    )[: max(1, limit)]
     facts = [
         RetrievedMemory(
             id=_stable_fact_prompt_id(str(row["fact_id"])),
             kind="core",
             content=str(row.get("display_text") or ""),
-            score=_score(str(row.get("display_text") or ""), bool(row.get("is_pinned"))),
+            score=float(row.get("score") or 0.0),
             confidence=float(row.get("confidence") or 1.0),
             importance=1.0 if row.get("is_pinned") else 0.5,
             pinned=bool(row.get("is_pinned")),
         )
-        for row in ranked
+        for row in rows
         if str(row.get("display_text") or "").strip()
     ]
     # Experience layer not in current v11 DDL — leave episodic empty.

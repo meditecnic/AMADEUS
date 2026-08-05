@@ -317,7 +317,8 @@ async def list_active_stable_facts(
         where = " AND ".join(clauses)
         cur = await db.execute(
             f"""SELECT f.fact_id, f.active_version, f.is_pinned, f.topic_id,
-                      v.display_text, v.version_no, v.confidence
+                      v.display_text, v.version_no, v.confidence,
+                      v.semantic_fingerprint
                  FROM stable_facts f
                  JOIN stable_fact_versions v
                    ON v.fact_id = f.fact_id
@@ -337,6 +338,7 @@ async def list_active_stable_facts(
                 "is_pinned": bool(row["is_pinned"]),
                 "topic_id": row["topic_id"],
                 "confidence": row["confidence"],
+                "semantic_fingerprint": row["semantic_fingerprint"],
             }
             for row in rows
         ]
