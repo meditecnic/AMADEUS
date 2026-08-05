@@ -10,13 +10,17 @@ reconciler — raw operations are not a public write bypass.
 """
 from __future__ import annotations
 
+import hashlib
 import importlib
+import math
+import struct
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
-from app.db import init_db, reset_initialization_cache
-from app.services.memory import CoreFactCandidate, memory_service
+from app.db import get_db, init_db, reset_initialization_cache
+from app.services.memory import CoreFactCandidate, EmbeddingAdapter, memory_service
 
 
 def _reconciler():
@@ -31,12 +35,51 @@ def _repository():
     return importlib.import_module("app.services.memory_v11.repository")
 
 
+def _unit_vector(seed: str) -> list[float]:
+    values: list[float] = []
+    for block in range(12):
+        digest = hashlib.sha256(f"{seed}:{block}".encode("utf-8")).digest()
+        values.extend(int(byte) - 127.5 for byte in digest)
+    norm = math.sqrt(sum(v * v for v in values))
+    return [v / norm for v in values]
+
+
+class _DeterministicEmbedder(EmbeddingAdapter):
+    """Offline passage/query stub — no SentenceTransformer, no network."""
+
+    def __init__(
+        self,
+        *,
+        model_name: str = "test-deterministic-384",
+        fail_after: int | None = None,
+        fail_always: bool = False,
+    ):
+        super().__init__(model_name=model_name, dimensions=384)
+        self.encode_passage_calls = 0
+        self.fail_after = fail_after
+        self.fail_always = fail_always
+
+    async def encode_passage(self, text: str) -> list[float]:
+        self.encode_passage_calls += 1
+        if self.fail_always:
+            raise RuntimeError("stub encode_passage forced failure")
+        if self.fail_after is not None and self.encode_passage_calls > self.fail_after:
+            raise RuntimeError("stub encode_passage batch failure")
+        return _unit_vector(f"passage:{text}")
+
+    async def encode_query(self, text: str) -> list[float]:
+        return _unit_vector(f"query:{text}")
+
+
 @pytest.fixture
 async def isolated_store(tmp_path, monkeypatch):
     monkeypatch.delenv("AMADEUS_DB_PATH", raising=False)
     monkeypatch.setenv("AMADEUS_DATA_DIR", str(tmp_path))
     reset_initialization_cache()
     await init_db()
+    # Production CREATE/REFINE/SUPERSEDE now require passage embeddings.
+    # Keep neighborhood tests offline with a deterministic EmbeddingAdapter stub.
+    monkeypatch.setattr(memory_service, "embedder", _DeterministicEmbedder())
     return tmp_path
 
 
@@ -727,3 +770,891 @@ async def test_s2_second_operation_failure_rolls_back_entire_batch(isolated_stor
     finally:
         await db.close()
     assert before_facts == 1
+
+
+# ---------------------------------------------------------------------------
+# MEMORY-V11-S3B-2: stable-fact version embedding lifecycle
+# ---------------------------------------------------------------------------
+
+
+async def _count_embeddings(fact_id: str | None = None) -> int:
+    db = await get_db("steins_gate", "memory")
+    try:
+        if fact_id is None:
+            cur = await db.execute(
+                "SELECT COUNT(*) AS n FROM stable_fact_version_embeddings"
+            )
+        else:
+            cur = await db.execute(
+                "SELECT COUNT(*) AS n FROM stable_fact_version_embeddings WHERE fact_id=?",
+                (fact_id,),
+            )
+        row = await cur.fetchone()
+        return int(row["n"])
+    finally:
+        await db.close()
+
+
+async def _embedding_row(fact_id: str, version_no: int) -> dict[str, Any] | None:
+    db = await get_db("steins_gate", "memory")
+    try:
+        cur = await db.execute(
+            """SELECT fact_id, version_no, model, dimensions, vector
+                 FROM stable_fact_version_embeddings
+                WHERE fact_id=? AND version_no=?""",
+            (fact_id, version_no),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return None
+        return {
+            "fact_id": row["fact_id"],
+            "version_no": int(row["version_no"]),
+            "model": row["model"],
+            "dimensions": int(row["dimensions"]),
+            "vector": bytes(row["vector"]),
+        }
+    finally:
+        await db.close()
+
+
+async def _session_residue_counts(session_id: str) -> dict[str, int]:
+    db = await get_db("steins_gate", "memory")
+    try:
+        facts = await (
+            await db.execute(
+                "SELECT COUNT(*) AS n FROM stable_facts WHERE session_id=?",
+                (session_id,),
+            )
+        ).fetchone()
+        versions = await (
+            await db.execute(
+                """SELECT COUNT(*) AS n FROM stable_fact_versions v
+                     JOIN stable_facts f ON f.fact_id=v.fact_id
+                    WHERE f.session_id=?""",
+                (session_id,),
+            )
+        ).fetchone()
+        obs = await (
+            await db.execute(
+                "SELECT COUNT(*) AS n FROM memory_observations WHERE session_id=?",
+                (session_id,),
+            )
+        ).fetchone()
+        evidence = await (
+            await db.execute(
+                """SELECT COUNT(*) AS n FROM stable_fact_evidence e
+                     JOIN stable_facts f ON f.fact_id=e.fact_id
+                    WHERE f.session_id=?""",
+                (session_id,),
+            )
+        ).fetchone()
+        vectors = await (
+            await db.execute(
+                """SELECT COUNT(*) AS n FROM stable_fact_version_embeddings e
+                     JOIN stable_facts f ON f.fact_id=e.fact_id
+                    WHERE f.session_id=?""",
+                (session_id,),
+            )
+        ).fetchone()
+        return {
+            "facts": int(facts["n"]),
+            "versions": int(versions["n"]),
+            "observations": int(obs["n"]),
+            "evidence": int(evidence["n"]),
+            "vectors": int(vectors["n"]),
+        }
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_s3b2_create_writes_matching_embedding(isolated_store, monkeypatch):
+    """A: CREATE commits fact/version/vector together with model/dim contract."""
+    embedder = _DeterministicEmbedder()
+    monkeypatch.setattr(memory_service, "embedder", embedder)
+    session_id = f"s3b2-create-{uuid4().hex[:8]}"
+    text = "好きなアニメはこのすば"
+    result = await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="o1",
+                display_text=text,
+                semantic={"subject": "user", "relation": "likes", "object": "konosuba"},
+                source_message_ids=[9001],
+            )
+        ],
+        operations=[
+            {
+                "op": "CREATE",
+                "observation_ref": "o1",
+                "target_fact_id": None,
+                "expected_version": None,
+                "fact_text": text,
+                "reason_code": "direct_durable_statement",
+            }
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=9001,
+                conversation_id="conv-s3b2-c",
+                fingerprint="fp-s3b2-c",
+                excerpt=text,
+            )
+        ],
+        candidate_allowlist=[],
+    )
+    fact_id = result["created_facts"][0]["fact_id"]
+    row = await _embedding_row(fact_id, 1)
+    assert row is not None, "CREATE must write stable_fact_version_embeddings(v1)"
+    assert row["model"] == embedder.model_name
+    assert row["dimensions"] == 384
+    expected = struct.pack(f"{384}f", *_unit_vector(f"passage:{text}"))
+    assert row["vector"] == expected
+    assert embedder.encode_passage_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_s3b2_refine_replaces_vector(isolated_store, monkeypatch):
+    """B: REFINE invalidates v1, promotes v2, swaps embedding rows."""
+    embedder = _DeterministicEmbedder()
+    monkeypatch.setattr(memory_service, "embedder", embedder)
+    session_id = f"s3b2-refine-{uuid4().hex[:8]}"
+    text_v1 = "好きな飲み物はコーヒー"
+    create = await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="o1",
+                display_text=text_v1,
+                semantic={"subject": "user", "relation": "drinks", "object": "coffee"},
+                source_message_ids=[9101],
+            )
+        ],
+        operations=[
+            {
+                "op": "CREATE",
+                "observation_ref": "o1",
+                "fact_text": text_v1,
+                "reason_code": "direct_durable_statement",
+            }
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=9101,
+                conversation_id="conv-s3b2-r",
+                fingerprint="fp-s3b2-r1",
+                excerpt=text_v1,
+            )
+        ],
+        candidate_allowlist=[],
+    )
+    fact_id = create["created_facts"][0]["fact_id"]
+    assert await _embedding_row(fact_id, 1) is not None
+
+    text_v2 = "好きな飲み物は紅茶"
+    calls_before = embedder.encode_passage_calls
+    await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="o2",
+                display_text=text_v2,
+                semantic={"subject": "user", "relation": "drinks", "object": "tea"},
+                source_message_ids=[9102],
+            )
+        ],
+        operations=[
+            {
+                "op": "REFINE",
+                "observation_ref": "o2",
+                "target_fact_id": fact_id,
+                "expected_version": 1,
+                "fact_text": text_v2,
+                "reason_code": "compatible_refinement",
+            }
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=9102,
+                conversation_id="conv-s3b2-r",
+                fingerprint="fp-s3b2-r2",
+                excerpt=text_v2,
+            )
+        ],
+        candidate_allowlist=[fact_id],
+    )
+    assert embedder.encode_passage_calls == calls_before + 1
+    assert await _embedding_row(fact_id, 1) is None, "old v1 vector must be deleted"
+    row_v2 = await _embedding_row(fact_id, 2)
+    assert row_v2 is not None
+    assert row_v2["vector"] == struct.pack(
+        f"{384}f", *_unit_vector(f"passage:{text_v2}")
+    )
+    db = await get_db("steins_gate", "memory")
+    try:
+        cur = await db.execute(
+            "SELECT active_version FROM stable_facts WHERE fact_id=?",
+            (fact_id,),
+        )
+        active = int((await cur.fetchone())["active_version"])
+        cur = await db.execute(
+            """SELECT invalid_at FROM stable_fact_versions
+                WHERE fact_id=? AND version_no=1""",
+            (fact_id,),
+        )
+        invalid_at = (await cur.fetchone())["invalid_at"]
+    finally:
+        await db.close()
+    assert active == 2
+    assert invalid_at is not None
+
+
+@pytest.mark.asyncio
+async def test_s3b2_supersede_replaces_vector(isolated_store, monkeypatch):
+    """C: SUPERSEDE same vector lifecycle as REFINE."""
+    embedder = _DeterministicEmbedder()
+    monkeypatch.setattr(memory_service, "embedder", embedder)
+    session_id = f"s3b2-super-{uuid4().hex[:8]}"
+    text_v1 = "猫が好き"
+    create = await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="o1",
+                display_text=text_v1,
+                semantic={"subject": "user", "relation": "likes", "object": "cat"},
+                source_message_ids=[9201],
+            )
+        ],
+        operations=[
+            {
+                "op": "CREATE",
+                "observation_ref": "o1",
+                "fact_text": text_v1,
+                "reason_code": "direct_durable_statement",
+            }
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=9201,
+                conversation_id="conv-s3b2-s",
+                fingerprint="fp-s3b2-s1",
+                excerpt=text_v1,
+            )
+        ],
+        candidate_allowlist=[],
+    )
+    fact_id = create["created_facts"][0]["fact_id"]
+    text_v2 = "犬が好き"
+    await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="o2",
+                display_text=text_v2,
+                semantic={"subject": "user", "relation": "likes", "object": "dog"},
+                source_message_ids=[9202],
+            )
+        ],
+        operations=[
+            {
+                "op": "SUPERSEDE",
+                "observation_ref": "o2",
+                "target_fact_id": fact_id,
+                "expected_version": 1,
+                "fact_text": text_v2,
+                "reason_code": "preference_change",
+            }
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=9202,
+                conversation_id="conv-s3b2-s",
+                fingerprint="fp-s3b2-s2",
+                excerpt=text_v2,
+            )
+        ],
+        candidate_allowlist=[fact_id],
+    )
+    assert await _embedding_row(fact_id, 1) is None
+    assert await _embedding_row(fact_id, 2) is not None
+    db = await get_db("steins_gate", "memory")
+    try:
+        cur = await db.execute(
+            "SELECT active_version FROM stable_facts WHERE fact_id=?",
+            (fact_id,),
+        )
+        assert int((await cur.fetchone())["active_version"]) == 2
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_s3b2_create_embedding_failure_is_atomic(isolated_store, monkeypatch):
+    """D: encode failure leaves zero fact/version/observation/evidence/vector residue."""
+    embedder = _DeterministicEmbedder(fail_always=True)
+    monkeypatch.setattr(memory_service, "embedder", embedder)
+    contracts = _contracts()
+    session_id = f"s3b2-fail-create-{uuid4().hex[:8]}"
+    with pytest.raises(contracts.MemoryValidationError) as exc_info:
+        await _apply_validated(
+            session_id=session_id,
+            worldline="steins_gate",
+            identity_mode="self",
+            observations=[
+                _observation(
+                    ref="o1",
+                    display_text="失敗する記憶",
+                    semantic={"subject": "user", "relation": "x", "object": "y"},
+                    source_message_ids=[9301],
+                )
+            ],
+            operations=[
+                {
+                    "op": "CREATE",
+                    "observation_ref": "o1",
+                    "fact_text": "失敗する記憶",
+                    "reason_code": "direct_durable_statement",
+                }
+            ],
+            source_evidence=[
+                _source_evidence(
+                    source_message_id=9301,
+                    conversation_id="conv-s3b2-fail",
+                    fingerprint="fp-s3b2-fail",
+                    excerpt="失敗する記憶",
+                )
+            ],
+            candidate_allowlist=[],
+        )
+    assert exc_info.value.code == "embedding_failed"
+    residue = await _session_residue_counts(session_id)
+    assert residue == {
+        "facts": 0,
+        "versions": 0,
+        "observations": 0,
+        "evidence": 0,
+        "vectors": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_s3b2_refine_embedding_failure_preserves_old_truth(
+    isolated_store, monkeypatch
+):
+    """E: REFINE encode failure keeps v1 active/open and v1 vector intact."""
+    embedder = _DeterministicEmbedder()
+    monkeypatch.setattr(memory_service, "embedder", embedder)
+    session_id = f"s3b2-fail-refine-{uuid4().hex[:8]}"
+    text_v1 = "元の事実"
+    create = await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="o1",
+                display_text=text_v1,
+                semantic={"subject": "user", "relation": "base", "object": "v1"},
+                source_message_ids=[9401],
+            )
+        ],
+        operations=[
+            {
+                "op": "CREATE",
+                "observation_ref": "o1",
+                "fact_text": text_v1,
+                "reason_code": "direct_durable_statement",
+            }
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=9401,
+                conversation_id="conv-s3b2-fr",
+                fingerprint="fp-s3b2-fr1",
+                excerpt=text_v1,
+            )
+        ],
+        candidate_allowlist=[],
+    )
+    fact_id = create["created_facts"][0]["fact_id"]
+    v1_before = await _embedding_row(fact_id, 1)
+    assert v1_before is not None
+
+    failing = _DeterministicEmbedder(fail_always=True)
+    monkeypatch.setattr(memory_service, "embedder", failing)
+    contracts = _contracts()
+    with pytest.raises(contracts.MemoryValidationError) as exc_info:
+        await _apply_validated(
+            session_id=session_id,
+            worldline="steins_gate",
+            identity_mode="self",
+            observations=[
+                _observation(
+                    ref="o2",
+                    display_text="新しい事実",
+                    semantic={"subject": "user", "relation": "base", "object": "v2"},
+                    source_message_ids=[9402],
+                )
+            ],
+            operations=[
+                {
+                    "op": "REFINE",
+                    "observation_ref": "o2",
+                    "target_fact_id": fact_id,
+                    "expected_version": 1,
+                    "fact_text": "新しい事実",
+                    "reason_code": "compatible_refinement",
+                }
+            ],
+            source_evidence=[
+                _source_evidence(
+                    source_message_id=9402,
+                    conversation_id="conv-s3b2-fr",
+                    fingerprint="fp-s3b2-fr2",
+                    excerpt="新しい事実",
+                )
+            ],
+            candidate_allowlist=[fact_id],
+        )
+    assert exc_info.value.code == "embedding_failed"
+    v1_after = await _embedding_row(fact_id, 1)
+    assert v1_after is not None
+    assert v1_after["vector"] == v1_before["vector"]
+    assert await _embedding_row(fact_id, 2) is None
+    db = await get_db("steins_gate", "memory")
+    try:
+        cur = await db.execute(
+            "SELECT active_version, state FROM stable_facts WHERE fact_id=?",
+            (fact_id,),
+        )
+        row = await cur.fetchone()
+        assert int(row["active_version"]) == 1
+        assert row["state"] == "active"
+        cur = await db.execute(
+            """SELECT invalid_at FROM stable_fact_versions
+                WHERE fact_id=? AND version_no=1""",
+            (fact_id,),
+        )
+        assert (await cur.fetchone())["invalid_at"] is None
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_s3b2_attach_does_not_reindex(isolated_store, monkeypatch):
+    """F: ATTACH does not call encode_passage or mutate the current vector."""
+    embedder = _DeterministicEmbedder()
+    monkeypatch.setattr(memory_service, "embedder", embedder)
+    session_id = f"s3b2-attach-{uuid4().hex[:8]}"
+    text = "添付される事実"
+    create = await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="o1",
+                display_text=text,
+                semantic={"subject": "user", "relation": "likes", "object": "x"},
+                source_message_ids=[9501],
+            )
+        ],
+        operations=[
+            {
+                "op": "CREATE",
+                "observation_ref": "o1",
+                "fact_text": text,
+                "reason_code": "direct_durable_statement",
+            }
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=9501,
+                conversation_id="conv-s3b2-a",
+                fingerprint="fp-s3b2-a1",
+                excerpt=text,
+            )
+        ],
+        candidate_allowlist=[],
+    )
+    fact_id = create["created_facts"][0]["fact_id"]
+    before = await _embedding_row(fact_id, 1)
+    calls_before = embedder.encode_passage_calls
+    await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="o2",
+                display_text=text,
+                semantic={"subject": "user", "relation": "likes", "object": "x"},
+                source_message_ids=[9502],
+            )
+        ],
+        operations=[
+            {
+                "op": "ATTACH",
+                "observation_ref": "o2",
+                "target_fact_id": fact_id,
+                "expected_version": 1,
+                "fact_text": text,
+                "reason_code": "supporting_evidence",
+            }
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=9502,
+                conversation_id="conv-s3b2-a",
+                fingerprint="fp-s3b2-a2",
+                excerpt=text,
+            )
+        ],
+        candidate_allowlist=[fact_id],
+    )
+    assert embedder.encode_passage_calls == calls_before
+    after = await _embedding_row(fact_id, 1)
+    assert after is not None and after["vector"] == before["vector"]
+    assert await _count_embeddings(fact_id) == 1
+
+
+@pytest.mark.asyncio
+async def test_s3b2_replay_does_not_reembed(isolated_store, monkeypatch):
+    """G: successful apply then same-source replay does not re-encode."""
+    embedder = _DeterministicEmbedder()
+    monkeypatch.setattr(memory_service, "embedder", embedder)
+    session_id = f"s3b2-replay-{uuid4().hex[:8]}"
+    text = "再生される事実"
+    kwargs = dict(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="o1",
+                display_text=text,
+                semantic={"subject": "user", "relation": "likes", "object": "replay"},
+                source_message_ids=[9601],
+            )
+        ],
+        operations=[
+            {
+                "op": "CREATE",
+                "observation_ref": "o1",
+                "fact_text": text,
+                "reason_code": "direct_durable_statement",
+            }
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=9601,
+                conversation_id="conv-s3b2-rp",
+                fingerprint="fp-s3b2-rp",
+                excerpt=text,
+            )
+        ],
+        candidate_allowlist=[],
+    )
+    first = await _apply_validated(**kwargs)
+    assert first.get("replay") is False
+    calls_after_first = embedder.encode_passage_calls
+    assert calls_after_first == 1
+    second = await _apply_validated(**kwargs)
+    assert second.get("replay") is True
+    assert embedder.encode_passage_calls == calls_after_first
+    assert await _count_embeddings(first["created_facts"][0]["fact_id"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_s3b2_batch_embedding_failure_is_atomic(isolated_store, monkeypatch):
+    """H: multi-CREATE batch — one encode failure leaves no partial writes."""
+    embedder = _DeterministicEmbedder(fail_after=1)
+    monkeypatch.setattr(memory_service, "embedder", embedder)
+    contracts = _contracts()
+    session_id = f"s3b2-batch-{uuid4().hex[:8]}"
+    with pytest.raises(contracts.MemoryValidationError) as exc_info:
+        await _apply_validated(
+            session_id=session_id,
+            worldline="steins_gate",
+            identity_mode="self",
+            observations=[
+                _observation(
+                    ref="o1",
+                    display_text="バッチA",
+                    semantic={"subject": "user", "relation": "a", "object": "1"},
+                    source_message_ids=[9701],
+                ),
+                _observation(
+                    ref="o2",
+                    display_text="バッチB",
+                    semantic={"subject": "user", "relation": "b", "object": "2"},
+                    source_message_ids=[9702],
+                ),
+            ],
+            operations=[
+                {
+                    "op": "CREATE",
+                    "observation_ref": "o1",
+                    "fact_text": "バッチA",
+                    "reason_code": "direct_durable_statement",
+                },
+                {
+                    "op": "CREATE",
+                    "observation_ref": "o2",
+                    "fact_text": "バッチB",
+                    "reason_code": "direct_durable_statement",
+                },
+            ],
+            source_evidence=[
+                _source_evidence(
+                    source_message_id=9701,
+                    conversation_id="conv-s3b2-b",
+                    fingerprint="fp-s3b2-b1",
+                    excerpt="バッチA",
+                ),
+                _source_evidence(
+                    source_message_id=9702,
+                    conversation_id="conv-s3b2-b",
+                    fingerprint="fp-s3b2-b2",
+                    excerpt="バッチB",
+                ),
+            ],
+            candidate_allowlist=[],
+        )
+    assert exc_info.value.code == "embedding_failed"
+    residue = await _session_residue_counts(session_id)
+    assert residue == {
+        "facts": 0,
+        "versions": 0,
+        "observations": 0,
+        "evidence": 0,
+        "vectors": 0,
+    }
+    assert embedder.encode_passage_calls == 2
+
+
+class _NonFiniteEmbedder(EmbeddingAdapter):
+    """Returns a full-dim vector with one non-finite component (offline)."""
+
+    def __init__(self, bad_value: float):
+        super().__init__(model_name="test-deterministic-384", dimensions=384)
+        self.bad_value = float(bad_value)
+        self.encode_passage_calls = 0
+
+    async def encode_passage(self, text: str) -> list[float]:
+        self.encode_passage_calls += 1
+        vector = _unit_vector(f"passage:{text}")
+        vector[0] = self.bad_value
+        return vector
+
+    async def encode_query(self, text: str) -> list[float]:
+        return _unit_vector(f"query:{text}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "bad_value",
+    [float("nan"), float("inf"), float("-inf")],
+    ids=["nan", "pos_inf", "neg_inf"],
+)
+async def test_s3b2_nonfinite_vector_rejected_atomically(
+    isolated_store, monkeypatch, bad_value
+):
+    """Non-finite passage vectors fail closed with zero CREATE residue."""
+    embedder = _NonFiniteEmbedder(bad_value)
+    monkeypatch.setattr(memory_service, "embedder", embedder)
+    contracts = _contracts()
+    session_id = f"s3b2-nonfinite-{uuid4().hex[:8]}"
+    with pytest.raises(contracts.MemoryValidationError) as exc_info:
+        await _apply_validated(
+            session_id=session_id,
+            worldline="steins_gate",
+            identity_mode="self",
+            observations=[
+                _observation(
+                    ref="o1",
+                    display_text="非有限ベクトル",
+                    semantic={"subject": "user", "relation": "x", "object": "nf"},
+                    source_message_ids=[9801],
+                )
+            ],
+            operations=[
+                {
+                    "op": "CREATE",
+                    "observation_ref": "o1",
+                    "fact_text": "非有限ベクトル",
+                    "reason_code": "direct_durable_statement",
+                }
+            ],
+            source_evidence=[
+                _source_evidence(
+                    source_message_id=9801,
+                    conversation_id="conv-s3b2-nf",
+                    fingerprint="fp-s3b2-nf",
+                    excerpt="非有限ベクトル",
+                )
+            ],
+            candidate_allowlist=[],
+        )
+    assert exc_info.value.code == "invalid_embedding_vector"
+    assert embedder.encode_passage_calls == 1
+    residue = await _session_residue_counts(session_id)
+    assert residue == {
+        "facts": 0,
+        "versions": 0,
+        "observations": 0,
+        "evidence": 0,
+        "vectors": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_s3b2_refine_txn_insert_embedding_failure_rolls_back(
+    isolated_store, monkeypatch
+):
+    """REFINE: insert_version_embedding failure after BEGIN rolls back fully.
+
+    Proves failure is in the write transaction (prepare already succeeded),
+    not encode_passage: v1 stays active/open with unchanged embedding.
+    """
+    embedder = _DeterministicEmbedder()
+    monkeypatch.setattr(memory_service, "embedder", embedder)
+    session_id = f"s3b2-txn-ins-{uuid4().hex[:8]}"
+    text_v1 = "事務内失敗の元事実"
+    create = await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="o1",
+                display_text=text_v1,
+                semantic={"subject": "user", "relation": "base", "object": "txn1"},
+                source_message_ids=[9901],
+            )
+        ],
+        operations=[
+            {
+                "op": "CREATE",
+                "observation_ref": "o1",
+                "fact_text": text_v1,
+                "reason_code": "direct_durable_statement",
+            }
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=9901,
+                conversation_id="conv-s3b2-txn",
+                fingerprint="fp-s3b2-txn1",
+                excerpt=text_v1,
+            )
+        ],
+        candidate_allowlist=[],
+    )
+    fact_id = create["created_facts"][0]["fact_id"]
+    v1_before = await _embedding_row(fact_id, 1)
+    assert v1_before is not None
+    obs_before = (await _session_residue_counts(session_id))["observations"]
+    evidence_before = (await _session_residue_counts(session_id))["evidence"]
+
+    recon = _reconciler()
+    insert_calls = {"n": 0}
+    prepare_ok = {"n": 0}
+    real_prepare = recon.prepare_passage_embedding
+
+    async def tracking_prepare(text, *, embedder=None):
+        prepared = await real_prepare(text, embedder=embedder)
+        prepare_ok["n"] += 1
+        return prepared
+
+    async def boom_insert(db, *, fact_id, version_no, prepared):
+        insert_calls["n"] += 1
+        raise RuntimeError("forced insert_version_embedding failure inside txn")
+
+    monkeypatch.setattr(recon, "prepare_passage_embedding", tracking_prepare)
+    monkeypatch.setattr(recon, "insert_version_embedding", boom_insert)
+
+    with pytest.raises(RuntimeError, match="forced insert_version_embedding"):
+        await _apply_validated(
+            session_id=session_id,
+            worldline="steins_gate",
+            identity_mode="self",
+            observations=[
+                _observation(
+                    ref="o2",
+                    display_text="事務内失敗の新事実",
+                    semantic={"subject": "user", "relation": "base", "object": "txn2"},
+                    source_message_ids=[9902],
+                )
+            ],
+            operations=[
+                {
+                    "op": "REFINE",
+                    "observation_ref": "o2",
+                    "target_fact_id": fact_id,
+                    "expected_version": 1,
+                    "fact_text": "事務内失敗の新事実",
+                    "reason_code": "compatible_refinement",
+                }
+            ],
+            source_evidence=[
+                _source_evidence(
+                    source_message_id=9902,
+                    conversation_id="conv-s3b2-txn",
+                    fingerprint="fp-s3b2-txn2",
+                    excerpt="事務内失敗の新事実",
+                )
+            ],
+            candidate_allowlist=[fact_id],
+        )
+
+    assert prepare_ok["n"] == 1, "preparation must succeed before write txn"
+    assert insert_calls["n"] == 1, "failure must occur at insert_version_embedding"
+
+    v1_after = await _embedding_row(fact_id, 1)
+    assert v1_after is not None
+    assert v1_after["vector"] == v1_before["vector"]
+    assert await _embedding_row(fact_id, 2) is None
+
+    db = await get_db("steins_gate", "memory")
+    try:
+        cur = await db.execute(
+            "SELECT active_version, state FROM stable_facts WHERE fact_id=?",
+            (fact_id,),
+        )
+        row = await cur.fetchone()
+        assert int(row["active_version"]) == 1
+        assert row["state"] == "active"
+        cur = await db.execute(
+            """SELECT invalid_at FROM stable_fact_versions
+                WHERE fact_id=? AND version_no=1""",
+            (fact_id,),
+        )
+        assert (await cur.fetchone())["invalid_at"] is None
+        cur = await db.execute(
+            """SELECT COUNT(*) AS n FROM stable_fact_versions
+                WHERE fact_id=? AND version_no=2""",
+            (fact_id,),
+        )
+        assert int((await cur.fetchone())["n"]) == 0
+    finally:
+        await db.close()
+
+    residue = await _session_residue_counts(session_id)
+    assert residue["observations"] == obs_before
+    assert residue["evidence"] == evidence_before
+    assert residue["versions"] == 1
+    assert residue["vectors"] == 1
