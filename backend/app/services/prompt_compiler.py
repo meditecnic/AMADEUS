@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -11,6 +12,8 @@ from app.db import DEFAULT_IDENTITY_MODE, normalize_identity_mode
 from app.services.memory import RetrievedMemory
 from app.services.persona_bible import persona_bible
 from app.services.soul_engine import EmotionVector, soul_engine
+
+logger = logging.getLogger(__name__)
 
 # --- Slice B: self-mode user call name (application-level config, not memory) ---
 
@@ -146,34 +149,84 @@ class PromptCompiler:
                 "\u666e\u901a\u306e\u4f1a\u8a71\u3084\u8efd\u3044\u8aa4\u89e3\u3067\u306f\u3001\u8a18\u61b6\u7531\u6765AI\u30fb\u975e\u751f\u8eab\u3068\u3044\u3046\u8aac\u660e\u3092\u6700\u521d\u304b\u3089\u7e70\u308a\u8fd4\u3055\u306a\u3044\u3002"
                 "\u305f\u3060\u3057\u300e\u8ab0\uff1f\u300f\u300eAI\u306a\u306e\uff1f\u300f\u300e\u81ea\u5df1\u7d39\u4ecb\u300f\u306a\u3069\u660e\u78ba\u306b\u554f\u308f\u308c\u305f\u6642\u306f\u3001\u5f93\u6765\u3069\u304a\u308a\u5b8c\u5168\u306b\u7b54\u3048\u308b\u3002"
             )
-        sections = [
-            self._fit("IDENTITY AND SECURITY\n" + inputs.base_identity, self.BUDGETS["identity"], keep_tail=False),
-            self._fit(
-                persona_bible.render_prompt(profile.worldline, identity_mode=mode),
-                self.BUDGETS["persona"],
-                keep_tail=False,
-            ),
-            self._fit(state_section, self.BUDGETS["state"]),
-            # GATE7A-NAT: keep_tail=False so the FACT_USE_CONTRACT head always
-            # survives _fit truncation; low-ranked tail facts are trimmed first.
-            self._fit(self._format_core_facts(inputs.core_facts), self.BUDGETS["core"], keep_tail=False),
-            self._fit("EPISODIC MEMORY\n" + "\n".join(f"- {item.content}" for item in inputs.episodic), self.BUDGETS["episodic"]),
-            self._fit("WEB EVIDENCE\n" + "\n".join(inputs.web_evidence), self.BUDGETS["web"]),
-            self._fit("WORKING CONTEXT\n" + inputs.working_summary + "\nRECENT DIALOGUE\n" + "\n".join(f"{row['role']}: {row['content']}" for row in inputs.recent_history), self.BUDGETS["history"], keep_tail=True),
-            "CURRENT USER MESSAGE (authoritative)\n" + inputs.current_user_message,
-        ]
+        core_items = list(inputs.core_facts)
+        episodic_items = list(inputs.episodic)
+
+        def render() -> list[str]:
+            return [
+                self._fit("IDENTITY AND SECURITY\n" + inputs.base_identity, self.BUDGETS["identity"], keep_tail=False),
+                self._fit(
+                    persona_bible.render_prompt(profile.worldline, identity_mode=mode),
+                    self.BUDGETS["persona"],
+                    keep_tail=False,
+                ),
+                self._fit(state_section, self.BUDGETS["state"]),
+                # Whole-item memory sections: never char-slice core facts or
+                # experiences; drop lowest-ranked tail items instead.
+                self._render_whole_items(core_items, self._format_core_facts, self.BUDGETS["core"]),
+                self._render_whole_items(episodic_items, self._format_episodic_memory, self.BUDGETS["episodic"]),
+                self._fit("WEB EVIDENCE\n" + "\n".join(inputs.web_evidence), self.BUDGETS["web"]),
+                self._fit("WORKING CONTEXT\n" + inputs.working_summary + "\nRECENT DIALOGUE\n" + "\n".join(f"{row['role']}: {row['content']}" for row in inputs.recent_history), self.BUDGETS["history"], keep_tail=True),
+                "CURRENT USER MESSAGE (authoritative)\n" + inputs.current_user_message,
+            ]
+
+        sections = render()
         # Drop low-priority context first. Identity/security and the current
-        # message are never removed.
-        for index in (6, 5, 4, 3):
+        # message are never removed. Web evidence and history keep the legacy
+        # char-slice degradation; memory sections shrink whole-item only.
+        for index in (6, 5):
             while self.token_counter("\n\n".join(sections)) > self.input_budget and sections[index]:
                 if len(sections[index]) <= 120:
                     sections[index] = ""
                 else:
                     sections[index] = sections[index][max(1, len(sections[index]) // 5):]
+
+        # Whole-item global shrinking: remove one lowest-ranked tail item at a
+        # time and re-render the section; empty the section only when no item
+        # remains. No string slicing ever touches the memory sections.
+        while self.token_counter("\n\n".join(sections)) > self.input_budget:
+            if episodic_items:
+                episodic_items = episodic_items[:-1]
+                sections[4] = self._render_whole_items(
+                    episodic_items, self._format_episodic_memory, self.BUDGETS["episodic"]
+                )
+                continue
+            if core_items:
+                core_items = core_items[:-1]
+                sections[3] = self._render_whole_items(
+                    core_items, self._format_core_facts, self.BUDGETS["core"]
+                )
+                continue
+            if sections[4]:
+                sections[4] = ""
+                continue
+            if sections[3]:
+                sections[3] = ""
+                continue
+            break
         for index in (2, 1):
             while self.token_counter("\n\n".join(sections)) > self.input_budget and len(sections[index]) > 120:
                 sections[index] = sections[index][: max(120, len(sections[index]) * 4 // 5)]
         return "\n\n".join(section for section in sections if section.strip())
+
+    def _render_whole_items(
+        self,
+        items: list[RetrievedMemory],
+        format_fn: Callable[[list[RetrievedMemory]], str],
+        budget: int,
+    ) -> str:
+        """Render a memory section by dropping whole tail items until it fits.
+
+        The caller order is already the ranking order, so the tail is the
+        lowest priority. Never char-slices; with zero items the compact
+        section form is returned and fits trivially.
+        """
+        remaining = list(items)
+        while True:
+            section = format_fn(remaining)
+            if self.token_counter(section) <= budget or not remaining:
+                return section
+            remaining = remaining[:-1]
 
     @staticmethod
     def _format_core_facts(facts: list[RetrievedMemory]) -> str:
@@ -200,6 +253,29 @@ class PromptCompiler:
             "NEVER mention other worldlines, MEMORY settings, databases, sync, or sharing UI as a source. "
             "Facts not listed here are simply unknown — saying so is fine. "
             "Do not read fact keys aloud; weave values into in-character speech.\n"
+            f"{lines}"
+        )
+
+    @staticmethod
+    def _format_episodic_memory(items: list[RetrievedMemory]) -> str:
+        """EPISODIC MEMORY with a compact natural-use contract (S3C-2).
+
+        The contract appears only when experiences exist, so an empty list
+        keeps the historical compact header without wasting episodic budget.
+        """
+        if not items:
+            return "EPISODIC MEMORY\n"
+        lines = "\n".join(f"- {item.content}" for item in items)
+        return (
+            "EPISODIC MEMORY\n"
+            "EXPERIENCE_USE_CONTRACT: Listed items are relevant past experiences "
+            "for this identity. Use them as natural familiarity and background; "
+            "do not recite the list. Never mention databases, Memory UI, "
+            "provenance, or source IDs. Do not treat an old event as a currently "
+            "true stable preference or profile fact. Do not force unrelated "
+            "experiences into the answer to show memory. Absence from this list "
+            "means no relevant long-term experience was retrieved this turn, "
+            "not proof an event never happened.\n"
             f"{lines}"
         )
 
@@ -234,6 +310,14 @@ def _stable_fact_prompt_id(fact_id: str) -> int:
     return int.from_bytes(digest[:4], "big") % 2_147_483_647 or 1
 
 
+def _experience_prompt_id(experience_id: str) -> int:
+    """Map UUID experience_id to a stable positive int (never expose raw UUIDs)."""
+    import hashlib
+
+    digest = hashlib.sha256(experience_id.encode("utf-8")).digest()
+    return int.from_bytes(digest[:4], "big") % 2_147_483_647 or 1
+
+
 async def _select_v11_prompt_memories(
     *,
     session_id: str,
@@ -242,13 +326,17 @@ async def _select_v11_prompt_memories(
     user_message: str,
     limit: int = 24,
 ) -> tuple[list[RetrievedMemory], list[RetrievedMemory]]:
-    """Read-only v11 prompt surface: same-scope active stable facts (S3b).
+    """Read-only v11 prompt surface: same-scope stable facts + experiences (S3C-2).
 
-    Delegates to memory_v11.retrieval for pin/lexical/vector scoring,
-    fingerprint dedupe, and whole-fact token packing. Experience layer
-    remains empty until S3c. Never merges legacy/shared rows.
+    Delegates to memory_v11.retrieval for scoring, dedupe, and whole-item
+    token packing with separate budgets (core 1200 / episodic 1400+contract).
+    Experience retrieval failure is fail-soft: omit experiences, never fall
+    back to legacy episodic memory. Never merges legacy/shared rows.
     """
-    from app.services.memory_v11.retrieval import select_stable_fact_candidates
+    from app.services.memory_v11.retrieval import (
+        select_experience_candidates,
+        select_stable_fact_candidates,
+    )
 
     rows = await select_stable_fact_candidates(
         session_id=session_id,
@@ -270,8 +358,36 @@ async def _select_v11_prompt_memories(
         for row in rows
         if str(row.get("display_text") or "").strip()
     ]
-    # Experience layer not in current v11 DDL — leave episodic empty.
-    return facts, []
+
+    episodes: list[RetrievedMemory] = []
+    try:
+        exp_rows = await select_experience_candidates(
+            session_id=session_id,
+            worldline=worldline,
+            identity_mode=identity_mode,
+            query=user_message,
+        )
+        episodes = [
+            RetrievedMemory(
+                id=_experience_prompt_id(str(row["experience_id"])),
+                kind="episodic",
+                content=str(row.get("display_text") or ""),
+                score=float(row.get("relevance") or 0.0),
+                confidence=float(row.get("confidence") or 1.0),
+                importance=0.5,
+                pinned=False,
+            )
+            for row in exp_rows
+            if str(row.get("display_text") or "").strip()
+        ]
+    except Exception:
+        # Fail-soft: experience retrieval failure omits experiences only.
+        # v11 never degrades to legacy episodic retrieval.
+        logger.warning(
+            "v11 prompt: experience retrieval failed; omitting experiences",
+            exc_info=True,
+        )
+    return facts, episodes
 
 
 async def compile_for_session(session, user_message: str) -> str:

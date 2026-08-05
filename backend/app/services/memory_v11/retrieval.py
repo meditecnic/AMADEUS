@@ -8,10 +8,14 @@ worldline or identity_mode boundaries.
 from __future__ import annotations
 
 import logging
+import re
 import struct
+import unicodedata
+from datetime import datetime, timezone
+from functools import cmp_to_key
 from typing import Any, Protocol
 
-from app.db import normalize_identity_mode, normalize_worldline
+from app.db import get_db, normalize_identity_mode, normalize_worldline
 from app.services.memory_v11.repository import list_active_stable_facts
 
 logger = logging.getLogger(__name__)
@@ -23,6 +27,12 @@ CORE_TOKEN_BUDGET: int = 1200
 CONTRACT_OVERHEAD_TOKENS: int = 420
 # Pin priority contribution (same scale as legacy v11 pin boost).
 PIN_SCORE: float = 2.0
+
+# S3C-2: experiences use their own bounds (PromptCompiler.BUDGETS["episodic"]=1600).
+EXPERIENCE_CANDIDATE_LIMIT: int = 16
+EXPERIENCE_TOKEN_BUDGET: int = 1400
+# Overhead for "EPISODIC MEMORY" + EXPERIENCE_USE_CONTRACT header lines.
+EXPERIENCE_CONTRACT_OVERHEAD_TOKENS: int = 180
 
 
 class QueryEmbedder(Protocol):
@@ -205,9 +215,10 @@ def _pack_whole_facts(
     *,
     limit: int,
     token_budget: int,
+    contract_overhead_tokens: int = CONTRACT_OVERHEAD_TOKENS,
 ) -> list[dict[str, Any]]:
     """Greedy whole-fact pack under count + token budget; never slice display_text."""
-    remaining = max(0, token_budget - CONTRACT_OVERHEAD_TOKENS)
+    remaining = max(0, token_budget - contract_overhead_tokens)
     selected: list[dict[str, Any]] = []
     for item in ranked:
         text = str(item.get("display_text") or "").strip()
@@ -341,3 +352,184 @@ async def select_stable_fact_candidates(
         ),
     )
     return _pack_whole_facts(ranked, limit=limit, token_budget=token_budget)
+
+# ---------------------------------------------------------------------------
+# S3C-2: first-class experience retrieval (plan §10.2 / §10.3).
+# ---------------------------------------------------------------------------
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _normalized_text(text: str) -> str:
+    return unicodedata.normalize("NFKC", text or "").casefold()
+
+
+def _cjk_chars(text: str) -> list[str]:
+    return [ch for ch in text if unicodedata.category(ch).startswith("Lo")]
+
+
+def _meaningful_cjk_evidence(display_text: str, query: str) -> bool:
+    """Eligibility gate: a single shared bigram (e.g. 昨天) is NOT evidence.
+
+    Eligible when any of:
+    1. exact normalized substring match (query inside display);
+    2. at least one matched ASCII word token;
+    3. at least 2 DISTINCT matched CJK bigrams;
+    4. at least 4 distinct matched CJK query characters with >= 0.5 coverage.
+
+    The continuous ranking score stays in _lexical_relevance; this gate only
+    decides whether an experience may enter at all.
+    """
+    query_norm = _normalized_text(query)
+    display_norm = _normalized_text(display_text)
+    if not query_norm or not display_norm:
+        return False
+    if query_norm in display_norm:
+        return True
+
+    words_q = [w for w in re.findall(r"[0-9a-z]+", query_norm) if len(w) > 1]
+    words_h = {w for w in re.findall(r"[0-9a-z]+", display_norm)}
+    if words_q and any(w in words_h for w in words_q):
+        return True
+
+    cjk_q = _cjk_chars(query_norm)
+    cjk_h = _cjk_chars(display_norm)
+    bigrams_q = [a + b for a, b in zip(cjk_q, cjk_q[1:])]
+    bigrams_h = {a + b for a, b in zip(cjk_h, cjk_h[1:])}
+    matched_bigrams = {b for b in bigrams_q if b in bigrams_h}
+    if len(matched_bigrams) >= 2:
+        return True
+
+    matched_chars = {ch for ch in cjk_q if ch in display_norm}
+    return (
+        len(matched_chars) >= 4
+        and (len(matched_chars) / len(cjk_q)) >= 0.5
+    )
+
+
+def _lexical_relevance(display_text: str, query: str) -> float:
+    """Deterministic local CJK-aware relevance; no embeddings, no network.
+
+    Exact normalized substring is the strongest signal (1.0). Otherwise the
+    score is a weighted mix of CJK bigram overlap (0.6) and ASCII word-token
+    overlap (0.4). Very short pure-CJK queries fall back to character overlap
+    scaled at 0.5. Anything unrelated scores exactly 0.0.
+    """
+    query_norm = _normalized_text(query)
+    display_norm = _normalized_text(display_text)
+    if not query_norm or not display_norm:
+        return 0.0
+    if query_norm in display_norm:
+        return 1.0
+
+    cjk_q = _cjk_chars(query_norm)
+    cjk_h = _cjk_chars(display_norm)
+    bigrams_q = [a + b for a, b in zip(cjk_q, cjk_q[1:])]
+    bigrams_h = {a + b for a, b in zip(cjk_h, cjk_h[1:])}
+    words_q = [w for w in re.findall(r"[0-9a-z]+", query_norm) if len(w) > 1]
+    words_h = {w for w in re.findall(r"[0-9a-z]+", display_norm)}
+
+    if bigrams_q or words_q:
+        score = 0.0
+        if bigrams_q:
+            hits = sum(1 for b in bigrams_q if b in bigrams_h)
+            score += 0.6 * (hits / len(bigrams_q))
+        if words_q:
+            hits = sum(1 for w in words_q if w in words_h)
+            score += 0.4 * (hits / len(words_q))
+        return score
+    if cjk_q:
+        hits = sum(1 for ch in cjk_q if ch in display_norm)
+        return 0.5 * (hits / len(cjk_q))
+    return 0.0
+
+
+async def select_experience_candidates(
+    *,
+    session_id: str,
+    worldline: str,
+    identity_mode: str,
+    query: str,
+    limit: int = EXPERIENCE_CANDIDATE_LIMIT,
+    token_budget: int = EXPERIENCE_TOKEN_BUDGET,
+    now: str | None = None,
+) -> list[dict[str, Any]]:
+    """Read-only same-scope experience selection for prompt injection.
+
+    Eligible rows: session/identity scope, status='active', and either no
+    expires_at or an expiry in the future. Expiry filtering is read behavior
+    only (no DELETE, no status rewrite, no TTL cleanup). Relevance is a
+    deterministic local signal; recency ranks but never grants eligibility.
+
+    Deliberately no fingerprint dedupe: repeated life events are legitimate
+    separate experiences; same-source idempotence already lives in S3C-1.
+    """
+    wl = normalize_worldline(worldline)
+    mode = normalize_identity_mode(identity_mode)
+    now_iso = now or _utc_now_iso()
+
+    db = await get_db(wl, "memory")
+    try:
+        cur = await db.execute(
+            """SELECT experience_id, conversation_id, display_text,
+                      semantic_fingerprint, confidence, expires_at, created_at
+                 FROM experiences
+                WHERE session_id=? AND identity_mode=? AND status='active'""",
+            (session_id, mode),
+        )
+        rows = await cur.fetchall()
+    finally:
+        await db.close()
+
+    eligible: list[dict[str, Any]] = []
+    for row in rows:
+        expires_at = row["expires_at"]
+        if expires_at is not None:
+            try:
+                if datetime.fromisoformat(expires_at) <= datetime.fromisoformat(now_iso):
+                    continue
+            except (TypeError, ValueError):
+                # Unparseable expiry: fail closed, never inject.
+                continue
+        display = str(row["display_text"] or "")
+        if not _meaningful_cjk_evidence(display, query):
+            continue
+        relevance = _lexical_relevance(display, query)
+        if relevance <= 0.0:
+            continue
+        eligible.append(
+            {
+                "experience_id": str(row["experience_id"]),
+                "conversation_id": str(row["conversation_id"] or ""),
+                "display_text": display,
+                "semantic_fingerprint": str(row["semantic_fingerprint"] or ""),
+                "confidence": float(row["confidence"] or 0.0),
+                "created_at": str(row["created_at"] or ""),
+                "expires_at": expires_at,
+                "relevance": relevance,
+            }
+        )
+
+    # Rank: relevance desc, newer created_at desc, confidence desc, id tie-break.
+    def _cmp_experience(
+        left: dict[str, Any], right: dict[str, Any]
+    ) -> int:
+        for field in ("relevance", "created_at", "confidence"):
+            lv, rv = left[field], right[field]
+            if lv == rv:
+                continue
+            return -1 if lv > rv else 1
+        lid, rid = left["experience_id"], right["experience_id"]
+        if lid == rid:
+            return 0
+        return -1 if lid < rid else 1
+
+    ranked = sorted(eligible, key=cmp_to_key(_cmp_experience))
+    return _pack_whole_facts(
+        ranked,
+        limit=limit,
+        token_budget=token_budget,
+        contract_overhead_tokens=EXPERIENCE_CONTRACT_OVERHEAD_TOKENS,
+    )

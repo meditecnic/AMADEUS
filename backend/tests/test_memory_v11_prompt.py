@@ -1,12 +1,13 @@
 """MEMORY-V11 S3a: mode-gated prompt retrieval (P01 / P02)."""
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
-from app.db import init_db, reset_initialization_cache
+from app.db import get_db, init_db, reset_initialization_cache
 from app.services.memory_v11.repository import create_stable_fact
 from app.services.prompt_compiler import compile_for_session
 
@@ -216,3 +217,278 @@ async def test_r2_semantic_fingerprint_dedupe_before_injection(
         "same semantic fingerprint injected twice; final injection surface "
         "must dedupe by fingerprint before consuming budget"
     )
+
+# ---------------------------------------------------------------------------
+# MEMORY-V11-S3C-2: experience prompt integration (plan §10.2 / §10.3).
+# ---------------------------------------------------------------------------
+
+
+def _exp_fingerprint(semantic: dict) -> str:
+    import hashlib
+
+    return hashlib.sha256(
+        json.dumps(
+            semantic, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+async def _seed_prompt_experience(
+    *,
+    session_id: str,
+    identity_mode: str = "self",
+    display_text: str,
+    status: str = "active",
+    expires_at: str | None = None,
+    source_state: str = "present",
+) -> str:
+    semantic = {"subject": "user", "predicate": "event", "object": display_text[:24]}
+    db = await get_db("steins_gate", "memory")
+    try:
+        observation_id = str(uuid4())
+        now = "2026-08-01T00:00:00+00:00"
+        await db.execute(
+            """INSERT INTO memory_observations(
+                   observation_id, session_id, identity_mode, display_text,
+                   semantic_json, semantic_fingerprint, evidence_kind, memory_class,
+                   confidence, topic_label_proposal, status, extractor_version,
+                   reanalysis_count, expires_at, created_at, updated_at
+               ) VALUES(?,?,?,?,?,?, 'direct_user', 'episodic', 0.9, NULL, 'attached',
+                        'memory-v11-1', 0, ?, ?, ?)""",
+            (
+                observation_id,
+                session_id,
+                identity_mode,
+                display_text,
+                json.dumps(semantic, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                _exp_fingerprint(semantic),
+                expires_at,
+                now,
+                now,
+            ),
+        )
+        await db.execute(
+            """INSERT INTO memory_observation_sources(
+                   observation_id, source_message_id, conversation_id, source_role,
+                   source_fingerprint, source_created_at, source_state, excerpt
+               ) VALUES(?,?,?, 'user', ?, ?, ?, NULL)""",
+            (
+                observation_id,
+                int(uuid4().int % 10**9),
+                "conv-p",
+                f"fp-{observation_id[:8]}",
+                now,
+                source_state,
+            ),
+        )
+        experience_id = str(uuid4())
+        await db.execute(
+            """INSERT INTO experiences(
+                   experience_id, session_id, conversation_id, identity_mode,
+                   observation_id, display_text, semantic_json, semantic_fingerprint,
+                   confidence, status, expires_at, created_at, updated_at, deleted_at
+               ) VALUES(?,?,?,?,?,?,?,?,0.9,?,?,?,?,NULL)""",
+            (
+                experience_id,
+                session_id,
+                conversation_id := "conv-p",
+                identity_mode,
+                observation_id,
+                display_text,
+                json.dumps(semantic, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                _exp_fingerprint(semantic),
+                status,
+                expires_at,
+                now,
+                now,
+            ),
+        )
+        await db.commit()
+        return experience_id
+    finally:
+        await db.close()
+
+
+def _compile_with_mode(session_id: str, message: str, mode: str, monkeypatch) -> str:
+    monkeypatch.setenv("AMADEUS_MEMORY_MODE", mode)
+    return compile_for_session(_session_obj(session_id), message)
+
+
+@pytest.mark.asyncio
+async def test_r5_v11_prompt_injects_both_sections(isolated_store, monkeypatch):
+    """H: v11 prompt shows stable fact + experience in separate sections."""
+    session_id = f"r5-both-{uuid4()}"
+    fact_marker = f"ANIME_FACT_{uuid4().hex[:8]}"
+    exp_marker = f"ANIME_EXP_{uuid4().hex[:8]}"
+    await create_stable_fact(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        display_text=f"{fact_marker} 好きなアニメはこのすば",
+        semantic_json={"subject": "user", "relation": "likes", "object": "anime"},
+    )
+    await _seed_prompt_experience(
+        session_id=session_id,
+        display_text=f"{exp_marker} このすばのイベントに行った",
+    )
+    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
+    prompt = await compile_for_session(_session_obj(session_id), "このすば")
+    assert fact_marker in prompt
+    assert exp_marker in prompt
+    assert "FACT_USE_CONTRACT" in prompt
+    assert "EXPERIENCE_USE_CONTRACT" in prompt
+    assert "CORE FACTS" in prompt
+    assert "EPISODIC MEMORY" in prompt
+    assert "WORKING CONTEXT" in prompt
+
+
+@pytest.mark.asyncio
+async def test_r5_v11_no_legacy_episodic_leak(isolated_store, monkeypatch):
+    """I: v11 never reads legacy episodic_memories."""
+    session_id = f"r5-legacy-{uuid4()}"
+    legacy_marker = f"LEGACY_ONLY_{uuid4().hex[:8]}"
+    v11_marker = f"V11_EXP_{uuid4().hex[:8]}"
+    db = await get_db("steins_gate", "memory")
+    try:
+        await db.execute(
+            """INSERT INTO episodic_memories(
+                   session_id, identity_mode, content, confidence, importance,
+                   source_message_ids, created_at
+               ) VALUES(?, 'self', ?, 0.9, 0.5, '[]', ?)""",
+            (session_id, legacy_marker, "2026-08-01T00:00:00+00:00"),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    await _seed_prompt_experience(
+        session_id=session_id,
+        display_text=f"{v11_marker} このすばのイベントに行った",
+    )
+    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
+    prompt = await compile_for_session(_session_obj(session_id), "このすば")
+    assert legacy_marker not in prompt
+    assert v11_marker in prompt
+
+
+@pytest.mark.asyncio
+async def test_r5_shadow_and_legacy_gates_no_v11_experience_leak(
+    isolated_store, monkeypatch
+):
+    """J: shadow/legacy modes never inject v11 experiences."""
+    session_id = f"r5-gate-{uuid4()}"
+    v11_marker = f"V11_ONLY_{uuid4().hex[:8]}"
+    await _seed_prompt_experience(
+        session_id=session_id,
+        display_text=f"{v11_marker} このすばのイベントに行った",
+    )
+    for mode in ("shadow", "legacy"):
+        prompt = await _compile_with_mode(session_id, "このすば", mode, monkeypatch)
+        assert v11_marker not in prompt, f"{mode} must not leak v11 experiences"
+
+
+@pytest.mark.asyncio
+async def test_r5_experience_retrieval_failure_fail_soft(isolated_store, monkeypatch):
+    """K: experience selector failure omits experiences; chat still compiles."""
+    import app.services.memory_v11.retrieval as retrieval_module
+
+    session_id = f"r5-soft-{uuid4()}"
+    fact_marker = f"SOFT_FACT_{uuid4().hex[:8]}"
+    exp_marker = f"SOFT_EXP_{uuid4().hex[:8]}"
+    await create_stable_fact(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        display_text=f"{fact_marker} 好きなアニメはこのすば",
+        semantic_json={"subject": "user", "relation": "likes", "object": "anime"},
+    )
+    await _seed_prompt_experience(
+        session_id=session_id,
+        display_text=f"{exp_marker} このすばのイベントに行った",
+    )
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("forced experience selector failure")
+
+    monkeypatch.setattr(retrieval_module, "select_experience_candidates", boom)
+    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
+    prompt = await compile_for_session(_session_obj(session_id), "このすば")
+    assert fact_marker in prompt, "stable facts must still appear"
+    assert exp_marker not in prompt, "failed experience retrieval must omit experiences"
+    assert "FACT_USE_CONTRACT" in prompt
+
+@pytest.mark.asyncio
+async def test_r5_final_prompt_experience_whole_item_under_global_pressure(
+    isolated_store, monkeypatch
+):
+    """P0: global budget pressure drops whole experiences; never char-slices."""
+    from app.services import prompt_compiler as pc_module
+
+    session_id = f"r5-final-exp-{uuid4()}"
+    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
+    seeded = []
+    for i in range(15):
+        marker = f"EXP_END_{i:02d}"
+        text = f"先週秋葉原で買った本 {marker} " + "。" * 200
+        seeded.append((marker, text))
+        await _seed_prompt_experience(session_id=session_id, display_text=text)
+
+    real_counter = pc_module.prompt_compiler.token_counter
+    monkeypatch.setattr(
+        pc_module.prompt_compiler,
+        "token_counter",
+        lambda text: int(real_counter(text) * 1.5),
+    )
+    monkeypatch.setattr(pc_module.prompt_compiler, "input_budget", 2400)
+
+    prompt = await compile_for_session(_session_obj(session_id), "秋葉原")
+    survivors = [marker for marker, _ in seeded if marker in prompt]
+    for marker, text in seeded:
+        assert marker not in prompt or text in prompt, (
+            f"{marker}: experience marker present but content partial/truncated"
+        )
+    if survivors:
+        assert "EXPERIENCE_USE_CONTRACT" in prompt, (
+            "surviving experiences must keep the usage contract intact"
+        )
+
+
+@pytest.mark.asyncio
+async def test_r5_final_prompt_core_facts_whole_item_under_global_pressure(
+    isolated_store, monkeypatch
+):
+    """P0 probe: core facts must share the whole-item safety mechanism."""
+    from app.services import prompt_compiler as pc_module
+
+    session_id = f"r5-final-fact-{uuid4()}"
+    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
+    seeded = []
+    for i in range(12):
+        marker = f"FACT_END_{i:02d}"
+        text = f"好きなアニメはこのすば {marker} " + "。" * 180
+        seeded.append((marker, text))
+        await create_stable_fact(
+            session_id=session_id,
+            worldline="steins_gate",
+            identity_mode="self",
+            display_text=text,
+            semantic_json={"subject": "user", "relation": "likes", "object": f"a{i:02d}"},
+        )
+
+    real_counter = pc_module.prompt_compiler.token_counter
+    monkeypatch.setattr(
+        pc_module.prompt_compiler,
+        "token_counter",
+        lambda text: int(real_counter(text) * 1.5),
+    )
+    monkeypatch.setattr(pc_module.prompt_compiler, "input_budget", 2400)
+
+    prompt = await compile_for_session(_session_obj(session_id), "このすば")
+    survivors = [marker for marker, _ in seeded if marker in prompt]
+    for marker, text in seeded:
+        assert marker not in prompt or text in prompt, (
+            f"{marker}: stable fact marker present but content partial/truncated"
+        )
+    if survivors:
+        assert "FACT_USE_CONTRACT" in prompt, (
+            "surviving facts must keep the usage contract intact"
+        )

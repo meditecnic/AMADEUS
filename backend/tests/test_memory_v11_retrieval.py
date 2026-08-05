@@ -297,3 +297,308 @@ async def test_r3_incompatible_embedding_model_is_ignored(
         f"stored model={foreign_model!r} must not score under active "
         f"embedder.model_name={active_model!r}"
     )
+
+# ---------------------------------------------------------------------------
+# MEMORY-V11-S3C-2: first-class experience retrieval (plan §10.2 / §10.3).
+# Local CJK-aware relevance, active + unexpired only, independent budget.
+# ---------------------------------------------------------------------------
+
+
+def _selector():
+    import app.services.memory_v11.retrieval as mod
+
+    return mod
+
+
+def _semantic_fingerprint(semantic: dict) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            semantic, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+async def _seed_experience(
+    *,
+    worldline: str = "steins_gate",
+    session_id: str,
+    identity_mode: str = "self",
+    conversation_id: str = "conv-x",
+    display_text: str,
+    semantic: dict | None = None,
+    confidence: float = 0.9,
+    status: str = "active",
+    expires_at: str | None = None,
+    created_at: str = "2026-08-01T00:00:00+00:00",
+    source_state: str = "present",
+    excerpt: str | None = "excerpt",
+) -> str:
+    semantic = semantic or {
+        "subject": "user",
+        "predicate": "event",
+        "object": display_text[:24],
+    }
+    db = await get_db(worldline, "memory")
+    try:
+        observation_id = str(uuid4())
+        await db.execute(
+            """INSERT INTO memory_observations(
+                   observation_id, session_id, identity_mode, display_text,
+                   semantic_json, semantic_fingerprint, evidence_kind, memory_class,
+                   confidence, topic_label_proposal, status, extractor_version,
+                   reanalysis_count, expires_at, created_at, updated_at
+               ) VALUES(?,?,?,?,?,?, 'direct_user', 'episodic', ?, NULL, 'attached',
+                        'memory-v11-1', 0, ?, ?, ?)""",
+            (
+                observation_id,
+                session_id,
+                identity_mode,
+                display_text,
+                json.dumps(semantic, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                _semantic_fingerprint(semantic),
+                confidence,
+                expires_at,
+                created_at,
+                created_at,
+            ),
+        )
+        await db.execute(
+            """INSERT INTO memory_observation_sources(
+                   observation_id, source_message_id, conversation_id, source_role,
+                   source_fingerprint, source_created_at, source_state, excerpt
+               ) VALUES(?,?,?, 'user', ?, ?, ?, ?)""",
+            (
+                observation_id,
+                int(uuid4().int % 10**9),
+                conversation_id,
+                f"fp-{observation_id[:8]}",
+                created_at,
+                source_state,
+                excerpt,
+            ),
+        )
+        experience_id = str(uuid4())
+        await db.execute(
+            """INSERT INTO experiences(
+                   experience_id, session_id, conversation_id, identity_mode,
+                   observation_id, display_text, semantic_json, semantic_fingerprint,
+                   confidence, status, expires_at, created_at, updated_at, deleted_at
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,NULL)""",
+            (
+                experience_id,
+                session_id,
+                conversation_id,
+                identity_mode,
+                observation_id,
+                display_text,
+                json.dumps(semantic, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                _semantic_fingerprint(semantic),
+                confidence,
+                status,
+                expires_at,
+                created_at,
+                created_at,
+            ),
+        )
+        await db.commit()
+        return experience_id
+    finally:
+        await db.close()
+
+
+async def _select_experiences(
+    session_id: str, query: str, *, worldline: str = "steins_gate", **kwargs
+) -> list[dict]:
+    selector = _selector()
+    return await selector.select_experience_candidates(
+        session_id=session_id,
+        worldline=worldline,
+        identity_mode="self",
+        query=query,
+        **kwargs,
+    )
+
+
+async def _count_experiences(*, worldline: str = "steins_gate") -> int:
+    db = await get_db(worldline, "memory")
+    try:
+        cur = await db.execute("SELECT COUNT(*) AS n FROM experiences")
+        return int((await cur.fetchone())["n"])
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_r5_experience_same_scope_relevance(isolated_store):
+    """A: relevant self selected; irrelevant self + okabe excluded."""
+    session_id = f"r5-scope-{uuid4()}"
+    relevant_id = await _seed_experience(
+        session_id=session_id,
+        display_text="先週秋葉原で本を買った",
+        conversation_id="conv-a",
+    )
+    await _seed_experience(
+        session_id=session_id,
+        display_text="数学の本を読んでいる",
+        conversation_id="conv-b",
+    )
+    await _seed_experience(
+        session_id=session_id,
+        identity_mode="okabe",
+        display_text="先週秋葉原で本を買った",
+        conversation_id="conv-c",
+    )
+    rows = await _select_experiences(session_id, "秋葉原")
+    ids = {r["experience_id"] for r in rows}
+    assert ids == {relevant_id}
+
+
+@pytest.mark.asyncio
+async def test_r5_experience_worldline_isolation(isolated_store):
+    """B: SG experiences never appear via the beta selector."""
+    session_id = f"r5-wl-{uuid4()}"
+    await _seed_experience(
+        session_id=session_id, display_text="先週秋葉原で本を買った"
+    )
+    rows = await _select_experiences(session_id, "秋葉原", worldline="beta")
+    assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_r5_experience_expiry_behavior(isolated_store):
+    """C: future enters; past/expired excluded; rows stay physically present."""
+    session_id = f"r5-exp-{uuid4()}"
+    future_id = await _seed_experience(
+        session_id=session_id,
+        display_text="先週秋葉原で本を買った",
+        expires_at="2099-01-01T00:00:00+00:00",
+    )
+    await _seed_experience(
+        session_id=session_id,
+        display_text="先週秋葉原で本を買った",
+        expires_at="2020-01-01T00:00:00+00:00",
+    )
+    await _seed_experience(
+        session_id=session_id,
+        display_text="先週秋葉原で本を買った",
+        status="expired",
+        expires_at=None,
+    )
+    rows = await _select_experiences(session_id, "秋葉原")
+    assert [r["experience_id"] for r in rows] == [future_id]
+    assert await _count_experiences() == 3, (
+        "expiry filtering must be read behavior; rows stay in storage"
+    )
+
+
+@pytest.mark.asyncio
+async def test_r5_experience_pending_source_delete_excluded(isolated_store):
+    """D: status=pending_source_delete never enters retrieval."""
+    session_id = f"r5-psd-{uuid4()}"
+    active_id = await _seed_experience(
+        session_id=session_id, display_text="先週秋葉原で本を買った"
+    )
+    await _seed_experience(
+        session_id=session_id,
+        display_text="先週秋葉原で本を買った",
+        status="pending_source_delete",
+    )
+    rows = await _select_experiences(session_id, "秋葉原")
+    assert [r["experience_id"] for r in rows] == [active_id]
+
+
+@pytest.mark.asyncio
+async def test_r5_experience_no_bulk_flood_recency_is_not_relevance(isolated_store):
+    """E: 20 newer irrelevant experiences never flood; recency alone pulls nothing."""
+    session_id = f"r5-flood-{uuid4()}"
+    relevant_id = await _seed_experience(
+        session_id=session_id,
+        display_text="先週秋葉原で本を買った",
+        created_at="2020-01-01T00:00:00+00:00",
+    )
+    for i in range(20):
+        await _seed_experience(
+            session_id=session_id,
+            display_text=f"NOISE_{i:02d} 数学の本を読んでいる",
+            created_at=f"2099-01-0{1 + i % 9}T00:00:00+00:00",
+        )
+    rows = await _select_experiences(session_id, "秋葉原")
+    assert [r["experience_id"] for r in rows] == [relevant_id]
+
+
+@pytest.mark.asyncio
+async def test_r5_experience_cjk_relevance_without_whitespace(isolated_store):
+    """F: Japanese/Chinese substring overlap matches without tokenization."""
+    session_id = f"r5-cjk-{uuid4()}"
+    ja_id = await _seed_experience(
+        session_id=session_id, display_text="先週秋葉原で本を買った"
+    )
+    zh_id = await _seed_experience(
+        session_id=session_id, display_text="昨天在书店买了一本科幻小说"
+    )
+    await _seed_experience(
+        session_id=session_id, display_text="天体観測の本を読んだ"
+    )
+    ja = await _select_experiences(session_id, "秋葉原のこと")
+    assert [r["experience_id"] for r in ja] == [ja_id]
+    zh = await _select_experiences(session_id, "昨天买的书")
+    assert [r["experience_id"] for r in zh] == [zh_id]
+    none = await _select_experiences(session_id, "マラソン大会")
+    assert none == []
+
+
+@pytest.mark.asyncio
+async def test_r5_experience_independent_budget_whole_items(isolated_store):
+    """G: bounded count, whole display_text only, no fragments."""
+    session_id = f"r5-budget-{uuid4()}"
+    texts = [
+        f"先週秋葉原で買った{item:03d}番目の本" + "。" * 120
+        for item in range(25)
+    ]
+    for text in texts:
+        await _seed_experience(session_id=session_id, display_text=text)
+    rows = await _select_experiences(session_id, "秋葉原")
+    assert len(rows) <= 16, "experience selector must have its own count bound"
+    seeded_texts = set(texts)
+    returned_texts = [r["display_text"] for r in rows]
+    assert len(returned_texts) == len(set(returned_texts))
+    assert all(text in seeded_texts for text in returned_texts), (
+        "every returned experience must be a whole seeded display_text; "
+        "no char-slicing and no fabricated fragments"
+    )
+    assert all(len(text) == len(texts[0]) for text in returned_texts)
+
+
+@pytest.mark.asyncio
+async def test_r5_experience_source_state_deleted_retained(isolated_store):
+    """L: finalized retained memory (source_state=deleted) may still be retrieved."""
+    session_id = f"r5-retained-{uuid4()}"
+    retained_id = await _seed_experience(
+        session_id=session_id,
+        display_text="先週秋葉原で本を買った",
+        source_state="deleted",
+        excerpt=None,
+    )
+    rows = await _select_experiences(session_id, "秋葉原")
+    assert [r["experience_id"] for r in rows] == [retained_id]
+
+@pytest.mark.asyncio
+async def test_r5_cjk_eligibility_positive_and_negative(isolated_store):
+    """P1: weak single-bigram overlap must not grant CJK eligibility."""
+    session_id = f"r5-gate-{uuid4()}"
+    zh_pos_id = await _seed_experience(
+        session_id=session_id, display_text="昨天在书店买了一本科幻小说"
+    )
+    await _seed_experience(session_id=session_id, display_text="昨天吃了拉面")
+    await _seed_experience(session_id=session_id, display_text="书架需要整理")
+    ja_pos_id = await _seed_experience(
+        session_id=session_id, display_text="先週秋葉原で本を買った"
+    )
+    await _seed_experience(session_id=session_id, display_text="昨日病院に行った")
+
+    zh = await _select_experiences(session_id, "昨天买的书")
+    assert [r["experience_id"] for r in zh] == [zh_pos_id], (
+        "weak shared temporal bigram must not grant eligibility"
+    )
+    ja = await _select_experiences(session_id, "秋葉原のこと")
+    assert [r["experience_id"] for r in ja] == [ja_pos_id]
