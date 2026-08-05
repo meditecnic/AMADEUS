@@ -21,6 +21,37 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+from app.services.memory import EmbeddingAdapter
+
+
+def _unit_vector(seed: str) -> list[float]:
+    values: list[float] = []
+    for block in range(12):
+        digest = hashlib.sha256(f"{seed}:{block}".encode("utf-8")).digest()
+        values.extend(int(byte) - 127.5 for byte in digest)
+    norm = sum(v * v for v in values) ** 0.5
+    return [v / norm for v in values]
+
+
+class _ApiDeterministicEmbedder(EmbeddingAdapter):
+    """Offline EmbeddingAdapter stub — no SentenceTransformer / network."""
+
+    def __init__(self, *, model_name: str = "test-deterministic-384", fail_always: bool = False):
+        super().__init__(model_name=model_name, dimensions=384)
+        self.fail_always = fail_always
+        self.encode_passage_calls = 0
+        self.encode_query_calls = 0
+
+    async def encode_passage(self, text: str) -> list[float]:
+        self.encode_passage_calls += 1
+        if self.fail_always:
+            raise RuntimeError("forced encode_passage failure")
+        return _unit_vector(f"passage:{text}")
+
+    async def encode_query(self, text: str) -> list[float]:
+        self.encode_query_calls += 1
+        return _unit_vector(f"query:{text}")
+
 
 # Exact path templates as registered today; must leave production after cutover.
 LEGACY_ROUTE_TEMPLATES = (
@@ -40,13 +71,20 @@ def client(app_client: TestClient) -> TestClient:
 
 @pytest.fixture
 def isolated_client(tmp_path, monkeypatch, isolated_provider_credentials):
-    """TestClient with isolated AMADEUS_DATA_DIR (v11 schema + jobs)."""
+    """TestClient with isolated AMADEUS_DATA_DIR (v11 schema + jobs).
+
+    memory_service.embedder is stubbed with a deterministic offline embedder
+    because the S3D-1 edit route follows the S3B-2 vector contract (passage
+    encoding) and must never load a real SentenceTransformer model in tests.
+    """
     from app.db import reset_initialization_cache
     from app.main import app
+    from app.services.memory import memory_service
 
     monkeypatch.delenv("AMADEUS_DB_PATH", raising=False)
     monkeypatch.setenv("AMADEUS_DATA_DIR", str(tmp_path))
     reset_initialization_cache()
+    monkeypatch.setattr(memory_service, "embedder", _ApiDeterministicEmbedder())
     with patch(
         "app.main.sidecar_supervisor.ensure_available",
         new=AsyncMock(return_value=SimpleNamespace(url=None)),
@@ -1064,3 +1102,1143 @@ def test_s3d_probe_observation_ignore_blocks_not_promotes(
     )
     status, _ = _obs_status(session_id, observation_id)
     assert status == "ignored", "ignore must mark the observation, not delete it"
+
+
+# ---------------------------------------------------------------------------
+# MEMORY-V11-S3D-1: stable-fact lifecycle REST (plan §7.1 / §7.2 / §8.2).
+# ---------------------------------------------------------------------------
+
+
+def _seed_fact_with_vector(
+    *, session_id: str, display_text: str, identity_mode: str = "self"
+) -> str:
+    """create_stable_fact + explicit v1 embedding row (offline deterministic)."""
+    import asyncio
+    import struct
+
+    from app.db import get_db
+    from app.services.memory import memory_service
+    from app.services.memory_v11.repository import create_stable_fact
+
+    async def _seed() -> str:
+        row = await create_stable_fact(
+            session_id=session_id,
+            worldline="steins_gate",
+            identity_mode=identity_mode,
+            display_text=display_text,
+            semantic_json={
+                "subject": "user",
+                "relation": "marker",
+                "object": display_text[:16],
+            },
+        )
+        fact_id = str(row["fact_id"])
+        embedder = memory_service.embedder
+        vector = await embedder.encode_passage(display_text)
+        db = await get_db("steins_gate", "memory")
+        try:
+            await db.execute(
+                """INSERT INTO stable_fact_version_embeddings(
+                       fact_id, version_no, model, dimensions, vector
+                   ) VALUES(?,1,?,?,?)""",
+                (
+                    fact_id,
+                    embedder.model_name,
+                    embedder.dimensions,
+                    struct.pack(f"{embedder.dimensions}f", *vector),
+                ),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+        return fact_id
+
+    return asyncio.run(_seed())
+
+
+def _seed_fact_via_reconciler(
+    *,
+    session_id: str,
+    display_text: str,
+    source_message_id: int,
+    excerpt: str | None = None,
+) -> tuple[str, str]:
+    """Public reconciler CREATE → (fact_id, observation_id) with vector + evidence."""
+    import asyncio
+
+    from app.db import get_db
+    from app.services.memory_v11.reconciler import apply_validated_memory_operations
+
+    async def _seed() -> tuple[str, str]:
+        result = await apply_validated_memory_operations(
+            session_id=session_id,
+            worldline="steins_gate",
+            identity_mode="self",
+            observations=[
+                {
+                    "observation_ref": "o1",
+                    "source_message_ids": [source_message_id],
+                    "display_text": display_text,
+                    "semantic": {
+                        "subject": "user",
+                        "predicate": "likes",
+                        "object": {"name": display_text[:12]},
+                    },
+                    "evidence_kind": "direct_user",
+                    "memory_class": "stable_candidate",
+                    "confidence": 0.96,
+                    "topic_label": "动漫",
+                    "expires_at": None,
+                }
+            ],
+            operations=[
+                {
+                    "op": "CREATE",
+                    "observation_ref": "o1",
+                    "target_fact_id": None,
+                    "expected_version": None,
+                    "fact_text": display_text,
+                    "reason_code": "direct_durable_statement",
+                }
+            ],
+            source_evidence=[
+                {
+                    "source_message_id": source_message_id,
+                    "conversation_id": f"conv-s3d1-{source_message_id}",
+                    "source_role": "user",
+                    "source_fingerprint": f"fp-s3d1-{source_message_id}",
+                    "source_created_at": "2026-08-01T00:00:00+00:00",
+                    "excerpt": excerpt if excerpt is not None else display_text,
+                }
+            ],
+            candidate_allowlist=[],
+        )
+        fact_id = str(result["created_facts"][0]["fact_id"])
+        db = await get_db("steins_gate", "memory")
+        try:
+            row = await (
+                await db.execute(
+                    """SELECT observation_id FROM stable_fact_evidence
+                        WHERE fact_id=? LIMIT 1""",
+                    (fact_id,),
+                )
+            ).fetchone()
+            assert row is not None
+            observation_id = str(row["observation_id"])
+        finally:
+            await db.close()
+        return fact_id, observation_id
+
+    return asyncio.run(_seed())
+
+
+def _db_rows(sql: str, params: tuple = ()) -> list[dict]:
+    import asyncio
+
+    from app.db import get_db
+
+    async def _read() -> list[dict]:
+        db = await get_db("steins_gate", "memory")
+        try:
+            rows = await (await db.execute(sql, params)).fetchall()
+            return [dict(row) for row in rows]
+        finally:
+            await db.close()
+
+    return asyncio.run(_read())
+
+
+def _db_execute(sql: str, params: tuple = ()) -> None:
+    import asyncio
+
+    from app.db import get_db
+
+    async def _run() -> None:
+        db = await get_db("steins_gate", "memory")
+        try:
+            await db.execute(sql, params)
+            await db.commit()
+        finally:
+            await db.close()
+
+    asyncio.run(_run())
+
+
+def _facts_scope(session_id: str) -> dict[str, str]:
+    return {
+        "session_id": session_id,
+        "worldline": "steins_gate",
+        "identity_mode": "self",
+    }
+
+
+# -- A. PATCH user edit -----------------------------------------------------
+
+
+def test_s3d1_edit_version_lineage_old_version_in_details(
+    isolated_client: TestClient,
+):
+    """§7.1: user_edit creates exactly one new version; old stays in details."""
+    import asyncio
+
+    from app.services.memory_v11.repository import create_stable_fact
+
+    session_id = _session("s3d1-edit-lineage")
+
+    async def _seed() -> str:
+        row = await create_stable_fact(
+            session_id=session_id,
+            worldline="steins_gate",
+            identity_mode="self",
+            display_text="喜欢咖啡",
+            semantic_json={"subject": "user", "relation": "likes", "object": "coffee"},
+        )
+        return str(row["fact_id"])
+
+    fact_id = asyncio.run(_seed())
+    response = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}",
+        params=_facts_scope(session_id),
+        json={"display_text": "喜欢黑咖啡", "expected_version": 1},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["fact_id"] == fact_id
+    assert body["version_no"] == 2
+    assert body["active_version"] == 2
+    assert body["change_kind"] == "user_edit"
+
+    listed = isolated_client.get("/api/memory/facts", params=_facts_scope(session_id))
+    assert listed.status_code == 200, listed.text
+    facts = listed.json()["facts"]
+    assert len(facts) == 1, "edit must not create a new fact_id"
+    assert facts[0]["display_text"] == "喜欢黑咖啡"
+    assert facts[0]["fact_id"] == fact_id
+
+    details = isolated_client.get(
+        f"/api/memory/facts/{fact_id}/details", params=_facts_scope(session_id)
+    )
+    assert details.status_code == 200, details.text
+    d = details.json()
+    assert d["fact"]["fact_id"] == fact_id
+    assert d["fact"]["active_version"] == 2
+    assert d["fact"]["display_text"] == "喜欢黑咖啡"
+    versions = d["versions"]
+    assert [v["version_no"] for v in versions] == [1, 2]
+    assert versions[0]["is_active"] is False
+    assert versions[0]["invalid_at"] is not None
+    assert versions[0]["display_text"] == "喜欢咖啡"
+    assert versions[1]["is_active"] is True
+    assert versions[1]["invalid_at"] is None
+    assert versions[1]["previous_version"] == 1
+    assert versions[1]["change_kind"] == "user_edit"
+    assert versions[1]["display_text"] == "喜欢黑咖啡"
+
+
+def test_s3d1_edit_wrong_identity_no_mutation(isolated_client: TestClient):
+    session_id = _session("s3d1-edit-xident")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢茶")
+    cross = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "okabe",
+        },
+        json={"display_text": "被篡改", "expected_version": 1},
+    )
+    assert cross.status_code == 404, cross.text
+    assert cross.json()["detail"]["code"] == "fact_not_found"
+    versions = _db_rows(
+        """SELECT version_no, display_text FROM stable_fact_versions
+            WHERE fact_id=?""",
+        (fact_id,),
+    )
+    assert len(versions) == 1
+    assert versions[0]["display_text"] == "喜欢茶"
+
+
+def test_s3d1_edit_stale_expected_version_409_no_mutation(
+    isolated_client: TestClient,
+):
+    session_id = _session("s3d1-edit-stale")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢咖啡")
+    stale = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}",
+        params=_facts_scope(session_id),
+        json={"display_text": "喜欢白咖啡", "expected_version": 99},
+    )
+    assert stale.status_code == 409, stale.text
+    assert stale.json()["detail"]["code"] == "expected_version_mismatch"
+    rows = _db_rows(
+        "SELECT version_no, invalid_at FROM stable_fact_versions WHERE fact_id=?",
+        (fact_id,),
+    )
+    assert len(rows) == 1 and rows[0]["invalid_at"] is None
+
+
+def test_s3d1_edit_empty_text_422_and_invalid_version(
+    isolated_client: TestClient,
+):
+    session_id = _session("s3d1-edit-empty")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢咖啡")
+    empty = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}",
+        params=_facts_scope(session_id),
+        json={"display_text": "   ", "expected_version": 1},
+    )
+    assert empty.status_code == 422, empty.text
+    assert empty.json()["detail"]["code"] == "empty_display_text"
+    bad_version = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}",
+        params=_facts_scope(session_id),
+        json={"display_text": "喜欢黑咖啡", "expected_version": -3},
+    )
+    assert bad_version.status_code == 422, bad_version.text
+    assert bad_version.json()["detail"]["code"] == "invalid_expected_version"
+    extra = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}",
+        params=_facts_scope(session_id),
+        json={"display_text": "喜欢黑咖啡", "expected_version": 1, "topic_id": "x"},
+    )
+    assert extra.status_code == 422, "extra fields must be forbidden"
+    assert extra.json()["detail"]["code"] == "extra_fields_forbidden"
+
+
+def test_s3d1_edit_vector_swap(isolated_client: TestClient):
+    """§7.1/S3B-2: old vector removed, new vector present, both in one txn."""
+    import struct
+
+    from app.services.memory import memory_service
+
+    session_id = _session("s3d1-edit-vec")
+    text_v1 = "喜欢咖啡"
+    text_v2 = "喜欢黑咖啡"
+    fact_id = _seed_fact_with_vector(session_id=session_id, display_text=text_v1)
+    embedder = memory_service.embedder
+    assert embedder.encode_passage_calls == 1  # seeding only
+
+    response = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}",
+        params=_facts_scope(session_id),
+        json={"display_text": text_v2, "expected_version": 1},
+    )
+    assert response.status_code == 200, response.text
+    assert embedder.encode_passage_calls == 2, "exactly one new passage encode"
+
+    rows = _db_rows(
+        """SELECT version_no, model, dimensions, vector
+             FROM stable_fact_version_embeddings WHERE fact_id=?""",
+        (fact_id,),
+    )
+    assert [r["version_no"] for r in rows] == [2]
+    expected_v2 = struct.pack(
+        f"{embedder.dimensions}f", *_unit_vector(f"passage:{text_v2}")
+    )
+    assert rows[0]["vector"] == expected_v2
+    assert rows[0]["model"] == embedder.model_name
+
+
+def test_s3d1_edit_embedding_failure_leaves_everything(
+    isolated_client: TestClient, monkeypatch
+):
+    """Embedding failure: 500 (stable, not user validation); fact fully intact."""
+    from app.services.memory import memory_service
+
+    session_id = _session("s3d1-edit-embfail")
+    fact_id = _seed_fact_with_vector(session_id=session_id, display_text="喜欢咖啡")
+    monkeypatch.setattr(memory_service, "embedder", _ApiDeterministicEmbedder(fail_always=True))
+    response = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}",
+        params=_facts_scope(session_id),
+        json={"display_text": "喜欢黑咖啡", "expected_version": 1},
+    )
+    assert response.status_code == 500, response.text
+    assert response.json()["detail"]["code"] == "embedding_failed"
+    facts = _db_rows(
+        "SELECT state, active_version FROM stable_facts WHERE fact_id=?", (fact_id,)
+    )
+    assert facts[0]["state"] == "active"
+    assert facts[0]["active_version"] == 1
+    versions = _db_rows(
+        """SELECT version_no, invalid_at FROM stable_fact_versions WHERE fact_id=?""",
+        (fact_id,),
+    )
+    assert len(versions) == 1 and versions[0]["invalid_at"] is None
+    vectors = _db_rows(
+        "SELECT version_no FROM stable_fact_version_embeddings WHERE fact_id=?",
+        (fact_id,),
+    )
+    assert [v["version_no"] for v in vectors] == [1]
+
+
+def test_s3d1_edit_zero_provider_calls(isolated_client: TestClient, monkeypatch):
+    """PATCH must never touch provider registry / credential store / network."""
+    import app.services.credentials as cred_mod
+    import app.services.provider_runtime as pr_mod
+
+    def boom(*args, **kwargs):
+        raise AssertionError("provider must not be called during user edit")
+
+    monkeypatch.setattr(pr_mod.provider_registry, "snapshot", boom)
+    monkeypatch.setattr(cred_mod.credential_store, "get", boom)
+
+    session_id = _session("s3d1-edit-noprov")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢咖啡")
+    response = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}",
+        params=_facts_scope(session_id),
+        json={"display_text": "喜欢黑咖啡", "expected_version": 1},
+    )
+    assert response.status_code == 200, response.text
+
+
+# -- A2. canonical validation envelopes (REWORK 01 P1) ------------------------
+
+
+def _patch_code(
+    client: TestClient, fact_id: str, session_id: str, body
+) -> tuple[int, str]:
+    response = client.patch(
+        f"/api/memory/facts/{fact_id}", params=_facts_scope(session_id), json=body
+    )
+    return response.status_code, response.json().get("detail", {}).get("code")
+
+
+def test_s3d1_edit_missing_expected_version_canonical_422(
+    isolated_client: TestClient,
+):
+    session_id = _session("s3d1-env-missver")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢咖啡")
+    status, code = _patch_code(
+        isolated_client, fact_id, session_id, {"display_text": "喜欢黑咖啡"}
+    )
+    assert status == 422 and code == "missing_expected_version", (status, code)
+
+
+def test_s3d1_edit_expected_version_non_int_canonical_422(
+    isolated_client: TestClient,
+):
+    session_id = _session("s3d1-env-nonint")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢咖啡")
+    status, code = _patch_code(
+        isolated_client, fact_id, session_id,
+        {"display_text": "喜欢黑咖啡", "expected_version": "abc"},
+    )
+    assert status == 422 and code == "invalid_expected_version", (status, code)
+
+
+def test_s3d1_edit_expected_version_non_positive_canonical_422(
+    isolated_client: TestClient,
+):
+    session_id = _session("s3d1-env-zerover")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢咖啡")
+    status, code = _patch_code(
+        isolated_client, fact_id, session_id,
+        {"display_text": "喜欢黑咖啡", "expected_version": 0},
+    )
+    assert status == 422 and code == "invalid_expected_version", (status, code)
+
+
+def test_s3d1_edit_missing_display_text_canonical_422(
+    isolated_client: TestClient,
+):
+    session_id = _session("s3d1-env-misstext")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢咖啡")
+    status, code = _patch_code(
+        isolated_client, fact_id, session_id, {"expected_version": 1}
+    )
+    assert status == 422 and code == "missing_display_text", (status, code)
+
+
+def test_s3d1_edit_invalid_display_text_type_canonical_422(
+    isolated_client: TestClient,
+):
+    session_id = _session("s3d1-env-badtype")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢咖啡")
+    status, code = _patch_code(
+        isolated_client, fact_id, session_id,
+        {"display_text": 123, "expected_version": 1},
+    )
+    assert status == 422 and code == "invalid_display_text", (status, code)
+
+
+def test_s3d1_edit_malformed_json_canonical_422(isolated_client: TestClient):
+    session_id = _session("s3d1-env-badjson")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢咖啡")
+    response = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}",
+        params=_facts_scope(session_id),
+        content="{not valid json",
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "invalid_json_body"
+
+
+def test_s3d1_edit_non_object_body_canonical_422(isolated_client: TestClient):
+    session_id = _session("s3d1-env-nonobj")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢咖啡")
+    response = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}",
+        params=_facts_scope(session_id),
+        content="[1, 2, 3]",
+        headers={"content-type": "application/json"},
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "invalid_request_body"
+
+
+def test_s3d1_delete_expected_version_non_int_canonical_422(
+    isolated_client: TestClient,
+):
+    session_id = _session("s3d1-env-del-nonint")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢咖啡")
+    response = isolated_client.delete(
+        f"/api/memory/facts/{fact_id}",
+        params={**_facts_scope(session_id), "expected_version": "abc"},
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "invalid_expected_version"
+
+
+def test_s3d1_delete_expected_version_non_positive_canonical_422(
+    isolated_client: TestClient,
+):
+    session_id = _session("s3d1-env-del-zero")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢咖啡")
+    response = isolated_client.delete(
+        f"/api/memory/facts/{fact_id}",
+        params={**_facts_scope(session_id), "expected_version": "0"},
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "invalid_expected_version"
+
+
+def test_s3d1_scope_invalid_identity_and_worldline_canonical_422(
+    isolated_client: TestClient,
+):
+    """All three routes: invalid worldline/identity_mode → canonical envelopes."""
+    session_id = _session("s3d1-env-scope")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢咖啡")
+    body = {"display_text": "喜欢黑咖啡", "expected_version": 1}
+
+    patch_bad_mode = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}",
+        params={"session_id": session_id, "worldline": "steins_gate", "identity_mode": "invalid"},
+        json=body,
+    )
+    assert patch_bad_mode.status_code == 422
+    assert patch_bad_mode.json()["detail"]["code"] == "invalid_identity_mode"
+    patch_bad_wl = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}",
+        params={"session_id": session_id, "worldline": "bogus", "identity_mode": "self"},
+        json=body,
+    )
+    assert patch_bad_wl.status_code == 422
+    assert patch_bad_wl.json()["detail"]["code"] == "invalid_worldline"
+
+    del_bad_mode = isolated_client.delete(
+        f"/api/memory/facts/{fact_id}",
+        params={"session_id": session_id, "worldline": "steins_gate", "identity_mode": "invalid", "expected_version": 1},
+    )
+    assert del_bad_mode.status_code == 422
+    assert del_bad_mode.json()["detail"]["code"] == "invalid_identity_mode"
+    del_bad_wl = isolated_client.delete(
+        f"/api/memory/facts/{fact_id}",
+        params={"session_id": session_id, "worldline": "bogus", "identity_mode": "self", "expected_version": 1},
+    )
+    assert del_bad_wl.status_code == 422
+    assert del_bad_wl.json()["detail"]["code"] == "invalid_worldline"
+
+    det_bad_mode = isolated_client.get(
+        f"/api/memory/facts/{fact_id}/details",
+        params={"session_id": session_id, "worldline": "steins_gate", "identity_mode": "invalid"},
+    )
+    assert det_bad_mode.status_code == 422
+    assert det_bad_mode.json()["detail"]["code"] == "invalid_identity_mode"
+    det_bad_wl = isolated_client.get(
+        f"/api/memory/facts/{fact_id}/details",
+        params={"session_id": session_id, "worldline": "bogus", "identity_mode": "self"},
+    )
+    assert det_bad_wl.status_code == 422
+    assert det_bad_wl.json()["detail"]["code"] == "invalid_worldline"
+
+    facts = _db_rows(
+        "SELECT state, active_version FROM stable_facts WHERE fact_id=?", (fact_id,)
+    )
+    assert facts[0]["state"] == "active" and facts[0]["active_version"] == 1
+
+
+def test_s3d1_edit_semantic_json_canonical_shape(isolated_client: TestClient):
+    """P2: active user_edit version semantic_json is the canonical payload."""
+    import asyncio
+
+    from app.services.memory_v11.repository import create_stable_fact
+
+    session_id = _session("s3d1-sem")
+
+    async def _seed() -> str:
+        row = await create_stable_fact(
+            session_id=session_id,
+            worldline="steins_gate",
+            identity_mode="self",
+            display_text="喜欢咖啡",
+            semantic_json={"subject": "user", "relation": "likes", "object": "coffee"},
+        )
+        return str(row["fact_id"])
+
+    fact_id = asyncio.run(_seed())
+    response = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}",
+        params=_facts_scope(session_id),
+        json={"display_text": "喜欢黑咖啡", "expected_version": 1},
+    )
+    assert response.status_code == 200, response.text
+    rows = _db_rows(
+        """SELECT version_no, semantic_json FROM stable_fact_versions
+            WHERE fact_id=? ORDER BY version_no ASC""",
+        (fact_id,),
+    )
+    assert len(rows) == 2
+    old_semantic = json.loads(rows[0]["semantic_json"])
+    new_semantic = json.loads(rows[1]["semantic_json"])
+    assert new_semantic == {
+        "subject": "user",
+        "predicate": "states",
+        "object": {"text": "喜欢黑咖啡"},
+        "qualifiers": {"source": "user_edit"},
+    }, f"unexpected user_edit semantic_json: {new_semantic}"
+    assert new_semantic != old_semantic
+
+
+# -- B. DELETE ---------------------------------------------------------------
+
+
+def test_s3d1_delete_erases_versions_vectors_shell(isolated_client: TestClient):
+    session_id = _session("s3d1-del-erase")
+    fact_id = _seed_fact_with_vector(session_id=session_id, display_text="喜欢茶")
+    response = isolated_client.delete(
+        f"/api/memory/facts/{fact_id}",
+        params={**_facts_scope(session_id), "expected_version": 1},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["state"] == "deleted"
+    assert body["idempotent"] is False
+
+    shell = _db_rows(
+        """SELECT state, active_version, is_pinned, topic_id, deleted_at
+             FROM stable_facts WHERE fact_id=?""",
+        (fact_id,),
+    )
+    assert shell[0]["state"] == "deleted"
+    assert shell[0]["active_version"] is None
+    assert shell[0]["is_pinned"] == 0
+    assert shell[0]["topic_id"] is None
+    assert shell[0]["deleted_at"] is not None
+    assert len(_db_rows("SELECT * FROM stable_fact_versions WHERE fact_id=?", (fact_id,))) == 0
+    assert len(_db_rows("SELECT * FROM stable_fact_version_embeddings WHERE fact_id=?", (fact_id,))) == 0
+    assert len(_db_rows("SELECT * FROM stable_fact_evidence WHERE fact_id=?", (fact_id,))) == 0
+
+    listed = isolated_client.get("/api/memory/facts", params=_facts_scope(session_id))
+    assert listed.status_code == 200
+    assert not any(f["fact_id"] == fact_id for f in listed.json()["facts"])
+    details = isolated_client.get(
+        f"/api/memory/facts/{fact_id}/details", params=_facts_scope(session_id)
+    )
+    assert details.status_code == 404
+
+
+def test_s3d1_delete_tombstone_no_recoverable_text(isolated_client: TestClient):
+    session_id = _session("s3d1-del-tomb")
+    text = "喜欢咖啡"
+    fact_id, observation_id = _seed_fact_via_reconciler(
+        session_id=session_id, display_text=text, source_message_id=70001
+    )
+    fingerprint = _db_rows(
+        "SELECT semantic_fingerprint FROM stable_fact_versions WHERE fact_id=?",
+        (fact_id,),
+    )[0]["semantic_fingerprint"]
+    response = isolated_client.delete(
+        f"/api/memory/facts/{fact_id}",
+        params={**_facts_scope(session_id), "expected_version": 1},
+    )
+    assert response.status_code == 200, response.text
+    tombstones = _db_rows(
+        """SELECT * FROM memory_tombstones
+            WHERE fact_id=? AND session_id=? ORDER BY tombstone_id""",
+        (fact_id, session_id),
+    )
+    assert len(tombstones) >= 1
+    assert all(t["reason"] == "user_delete" for t in tombstones)
+    blob = str(tombstones)
+    assert text not in blob, "tombstone must not carry recoverable fact text"
+    fps = {t["semantic_fingerprint"] for t in tombstones} | {
+        t["source_fingerprint"] for t in tombstones
+    }
+    assert fingerprint in fps, "semantic fingerprint tombstone must be recorded"
+    assert "fp-s3d1-70001" in fps, "source fingerprint tombstone must be recorded"
+
+
+def test_s3d1_delete_repeat_idempotent(isolated_client: TestClient):
+    session_id = _session("s3d1-del-repeat")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢咖啡")
+    first = isolated_client.delete(
+        f"/api/memory/facts/{fact_id}",
+        params={**_facts_scope(session_id), "expected_version": 1},
+    )
+    assert first.status_code == 200, first.text
+    second = isolated_client.delete(
+        f"/api/memory/facts/{fact_id}",
+        params={**_facts_scope(session_id), "expected_version": 1},
+    )
+    assert second.status_code == 200, second.text
+    body = second.json()
+    assert body["idempotent"] is True
+    assert body["state"] == "deleted"
+    assert len(_db_rows("SELECT * FROM stable_fact_versions WHERE fact_id=?", (fact_id,))) == 0
+    tombstones = _db_rows("SELECT * FROM memory_tombstones WHERE fact_id=?", (fact_id,))
+    assert len(tombstones) == 1, "repeat delete must not duplicate tombstones"
+
+
+def test_s3d1_delete_stale_expected_version_409_no_mutation(
+    isolated_client: TestClient,
+):
+    session_id = _session("s3d1-del-stale")
+    fact_id = _seed_fact_with_vector(session_id=session_id, display_text="喜欢咖啡")
+    stale = isolated_client.delete(
+        f"/api/memory/facts/{fact_id}",
+        params={**_facts_scope(session_id), "expected_version": 99},
+    )
+    assert stale.status_code == 409, stale.text
+    assert stale.json()["detail"]["code"] == "expected_version_mismatch"
+    facts = _db_rows(
+        "SELECT state, active_version FROM stable_facts WHERE fact_id=?", (fact_id,)
+    )
+    assert facts[0]["state"] == "active" and facts[0]["active_version"] == 1
+    assert len(_db_rows("SELECT * FROM stable_fact_versions WHERE fact_id=?", (fact_id,))) == 1
+    assert len(_db_rows("SELECT * FROM stable_fact_version_embeddings WHERE fact_id=?", (fact_id,))) == 1
+    assert len(_db_rows("SELECT * FROM memory_tombstones WHERE fact_id=?", (fact_id,))) == 0
+
+
+def test_s3d1_delete_missing_expected_version_422(isolated_client: TestClient):
+    session_id = _session("s3d1-del-missingver")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢咖啡")
+    response = isolated_client.delete(
+        f"/api/memory/facts/{fact_id}", params=_facts_scope(session_id)
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "missing_expected_version"
+
+
+def test_s3d1_delete_wrong_scope_404(isolated_client: TestClient):
+    session_id = _session("s3d1-del-xscope")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢咖啡")
+    for scope in (
+        {"session_id": session_id, "worldline": "steins_gate", "identity_mode": "okabe"},
+        {"session_id": "someone-else", "worldline": "steins_gate", "identity_mode": "self"},
+        {"session_id": session_id, "worldline": "beta", "identity_mode": "self"},
+    ):
+        response = isolated_client.delete(
+            f"/api/memory/facts/{fact_id}",
+            params={**scope, "expected_version": 1},
+        )
+        assert response.status_code == 404, response.text
+        assert response.json()["detail"]["code"] == "fact_not_found"
+    facts = _db_rows(
+        "SELECT state, active_version FROM stable_facts WHERE fact_id=?", (fact_id,)
+    )
+    assert facts[0]["state"] == "active" and facts[0]["active_version"] == 1
+
+
+def test_s3d1_delete_exclusive_observation_scrubbed_receipt_retained(
+    isolated_client: TestClient,
+):
+    session_id = _session("s3d1-del-excl")
+    text = "喜欢咖啡"
+    fact_id, observation_id = _seed_fact_via_reconciler(
+        session_id=session_id, display_text=text, source_message_id=70002
+    )
+    response = isolated_client.delete(
+        f"/api/memory/facts/{fact_id}",
+        params={**_facts_scope(session_id), "expected_version": 1},
+    )
+    assert response.status_code == 200, response.text
+    obs = _db_rows(
+        """SELECT status, display_text, semantic_json, semantic_fingerprint,
+                  topic_label_proposal FROM memory_observations
+            WHERE observation_id=?""",
+        (observation_id,),
+    )
+    assert obs[0]["status"] == "deleted"
+    assert obs[0]["display_text"] is None
+    assert obs[0]["semantic_json"] is None
+    assert obs[0]["topic_label_proposal"] is None
+    assert obs[0]["semantic_fingerprint"] is not None, "non-content hash retained"
+    sources = _db_rows(
+        """SELECT source_message_id, source_fingerprint, source_state
+             FROM memory_observation_sources WHERE observation_id=?""",
+        (observation_id,),
+    )
+    assert len(sources) == 1, "source receipt must be retained for replay blocking"
+    assert sources[0]["source_message_id"] == 70002
+    assert sources[0]["source_state"] == "present"
+
+
+def test_s3d1_delete_shared_observation_kept(isolated_client: TestClient):
+    session_id = _session("s3d1-del-shared")
+    text_a = "喜欢动漫"
+    text_b = "喜欢看番"
+    fact_a, obs_a = _seed_fact_via_reconciler(
+        session_id=session_id, display_text=text_a, source_message_id=70003
+    )
+    fact_b, obs_b = _seed_fact_via_reconciler(
+        session_id=session_id, display_text=text_b, source_message_id=70004
+    )
+    # obs_a now supports fact B as well → shared.
+    _db_execute(
+        """INSERT INTO stable_fact_evidence(fact_id, version_no, observation_id, evidence_role)
+           VALUES(?,1,?,'supporting')""",
+        (fact_b, obs_a),
+    )
+    response = isolated_client.delete(
+        f"/api/memory/facts/{fact_a}",
+        params={**_facts_scope(session_id), "expected_version": 1},
+    )
+    assert response.status_code == 200, response.text
+    obs = _db_rows(
+        """SELECT status, display_text FROM memory_observations
+            WHERE observation_id=?""",
+        (obs_a,),
+    )
+    assert obs[0]["status"] == "attached", "shared observation must not be scrubbed"
+    assert obs[0]["display_text"] == text_a
+    details_b = isolated_client.get(
+        f"/api/memory/facts/{fact_b}/details", params=_facts_scope(session_id)
+    )
+    assert details_b.status_code == 200, details_b.text
+    provenance = details_b.json()["provenance"]
+    assert any(p["observation_id"] == obs_a for p in provenance)
+    assert any(p["observation_id"] == obs_b for p in provenance)
+    assert len(_db_rows("SELECT * FROM stable_fact_evidence WHERE fact_id=?", (fact_a,))) == 0
+
+
+def test_s3d1_delete_old_source_no_resurrect_new_source_relearns(
+    isolated_client: TestClient, monkeypatch
+):
+    """D12: same historical source stays blocked; a NEW source can relearn."""
+    import asyncio
+
+    from app import models
+    from app.services.conversations import conversation_service
+    from app.services.memory_v11 import jobs as jobs_mod
+    from app.services.memory_v11.reconciler import apply_validated_memory_operations
+
+    session_id = _session("s3d1-del-resurrect")
+
+    async def _save_user_message(title: str) -> tuple[int, str]:
+        conv = await conversation_service.create(
+            session_id, "steins_gate", title=title, identity_mode="self"
+        )
+        conversation_id = str(conv["id"])
+        mid = await models.save_message(
+            session_id, "user", "我喜欢咖啡",
+            worldline="steins_gate", conversation_id=conversation_id,
+        )
+        return int(mid), conversation_id
+
+    async def _learn_via_job(source_message_id: int, conversation_id: str) -> None:
+        job = await jobs_mod.enqueue_memory_job(
+            session_id=session_id, worldline="steins_gate",
+            conversation_id=conversation_id, identity_mode="self",
+            source_message_id=source_message_id, pipeline_version="memory-v11-1",
+            provider_id="deepseek", model_id="deepseek-chat",
+        )
+        result = await jobs_mod.process_memory_job(
+            job_id=job["job_id"], lease_owner="w-s3d1",
+            memory_completion=_create_completion(source_message_id),
+        )
+        assert result["state"] == "completed"
+
+    async def _apply_direct(source_message_id: int, conversation_id: str) -> dict:
+        return await apply_validated_memory_operations(
+            session_id=session_id,
+            worldline="steins_gate",
+            identity_mode="self",
+            observations=[
+                {
+                    "observation_ref": "o1",
+                    "source_message_ids": [source_message_id],
+                    "display_text": "喜欢咖啡",
+                    "semantic": {
+                        "subject": "user",
+                        "predicate": "likes",
+                        "object": {"name": "coffee"},
+                    },
+                    "evidence_kind": "direct_user",
+                    "memory_class": "stable_candidate",
+                    "confidence": 0.96,
+                    "topic_label": "饮食",
+                    "expires_at": None,
+                }
+            ],
+            operations=[
+                {
+                    "op": "CREATE",
+                    "observation_ref": "o1",
+                    "target_fact_id": None,
+                    "expected_version": None,
+                    "fact_text": "喜欢咖啡",
+                    "reason_code": "direct_durable_statement",
+                }
+            ],
+            source_evidence=[
+                {
+                    "source_message_id": source_message_id,
+                    "conversation_id": conversation_id,
+                    "source_role": "user",
+                    "source_fingerprint": f"fp-{source_message_id}",
+                    "source_created_at": "2026-08-01T00:00:00+00:00",
+                    "excerpt": "我喜欢咖啡",
+                }
+            ],
+            candidate_allowlist=[],
+        )
+
+    # Phase 1: real job pipeline learns from source mid1 (real source receipt).
+    mid1, conv1 = asyncio.run(_save_user_message("learn"))
+    asyncio.run(_learn_via_job(mid1, conv1))
+    facts = _db_rows(
+        "SELECT fact_id, state FROM stable_facts WHERE session_id=?", (session_id,)
+    )
+    assert len(facts) == 1 and facts[0]["state"] == "active"
+    fact_id = facts[0]["fact_id"]
+
+    response = isolated_client.delete(
+        f"/api/memory/facts/{fact_id}",
+        params={**_facts_scope(session_id), "expected_version": 1},
+    )
+    assert response.status_code == 200, response.text
+
+    # Phase 2: replay the SAME historical source → receipt blocks resurrection.
+    replay = asyncio.run(_apply_direct(mid1, conv1))
+    assert replay.get("replay") is True, (
+        "same historical source must be blocked by the retained source receipt (D12)"
+    )
+    active_after_replay = _db_rows(
+        "SELECT fact_id FROM stable_facts WHERE session_id=? AND state='active'",
+        (session_id,),
+    )
+    assert active_after_replay == [], "old source replay must not resurrect the fact"
+
+    # Phase 3: a genuinely NEW source may establish the fact again (D03).
+    mid2, conv2 = asyncio.run(_save_user_message("relearn"))
+    relearned = asyncio.run(_apply_direct(mid2, conv2))
+    assert relearned.get("replay") is False
+    assert len(relearned.get("created_facts") or []) == 1
+    active_after_new = _db_rows(
+        "SELECT fact_id FROM stable_facts WHERE session_id=? AND state='active'",
+        (session_id,),
+    )
+    assert len(active_after_new) == 1, "a genuinely new source may relearn (D03)"
+
+
+# -- C. DETAILS --------------------------------------------------------------
+
+
+def test_s3d1_details_ordered_versions_and_provenance(isolated_client: TestClient):
+    session_id = _session("s3d1-details")
+    text = "喜欢咖啡"
+    fact_id, observation_id = _seed_fact_via_reconciler(
+        session_id=session_id, display_text=text, source_message_id=70005,
+        excerpt="我今天喜欢咖啡",
+    )
+    response = isolated_client.get(
+        f"/api/memory/facts/{fact_id}/details", params=_facts_scope(session_id)
+    )
+    assert response.status_code == 200, response.text
+    d = response.json()
+    assert d["scope"] == _facts_scope(session_id)
+    assert d["fact"]["fact_id"] == fact_id
+    assert d["fact"]["display_text"] == text
+    assert d["fact"]["active_version"] == 1
+    assert len(d["versions"]) == 1
+    assert d["versions"][0]["is_active"] is True
+    assert d["provenance"][0]["observation_id"] == observation_id
+    assert d["provenance"][0]["source_message_id"] == 70005
+    assert d["provenance"][0]["conversation_id"] == "conv-s3d1-70005"
+    assert d["provenance"][0]["source_state"] == "present"
+    assert d["provenance"][0]["excerpt"] == "我今天喜欢咖啡"
+
+    edited = isolated_client.patch(
+        f"/api/memory/facts/{fact_id}",
+        params=_facts_scope(session_id),
+        json={"display_text": "喜欢黑咖啡", "expected_version": 1},
+    )
+    assert edited.status_code == 200, edited.text
+    after = isolated_client.get(
+        f"/api/memory/facts/{fact_id}/details", params=_facts_scope(session_id)
+    )
+    assert after.status_code == 200
+    d2 = after.json()
+    assert [v["version_no"] for v in d2["versions"]] == [1, 2]
+    assert d2["versions"][1]["is_active"] is True
+    assert d2["versions"][1]["previous_version"] == 1
+    assert d2["versions"][0]["is_active"] is False
+    assert d2["fact"]["display_text"] == "喜欢黑咖啡"
+    prov_versions = {p["version_no"] for p in d2["provenance"]}
+    assert prov_versions == {1}, "user-edit versions have no observation provenance"
+    body_text = str(d2)
+    assert "semantic_json" not in body_text
+    assert "semantic_fingerprint" not in body_text
+    assert "vector" not in body_text
+
+
+def test_s3d1_details_source_deleted_forces_excerpt_null(
+    isolated_client: TestClient,
+):
+    session_id = _session("s3d1-details-nexcerpt")
+    fact_id, observation_id = _seed_fact_via_reconciler(
+        session_id=session_id, display_text="喜欢咖啡", source_message_id=70006,
+        excerpt="stale-content-that-must-not-leak",
+    )
+    _db_execute(
+        """UPDATE memory_observation_sources SET source_state='deleted'
+            WHERE observation_id=?""",
+        (observation_id,),
+    )
+    response = isolated_client.get(
+        f"/api/memory/facts/{fact_id}/details", params=_facts_scope(session_id)
+    )
+    assert response.status_code == 200, response.text
+    prov = response.json()["provenance"]
+    assert prov[0]["source_state"] == "deleted"
+    assert prov[0]["excerpt"] is None, "deleted source must force excerpt=null"
+
+
+def test_s3d1_details_cross_scope_and_deleted_404(isolated_client: TestClient):
+    session_id = _session("s3d1-details-404")
+    fact_id = _seed_fact(session_id=session_id, display_text="喜欢咖啡")
+    for scope in (
+        {"session_id": session_id, "worldline": "steins_gate", "identity_mode": "okabe"},
+        {"session_id": "someone-else", "worldline": "steins_gate", "identity_mode": "self"},
+        {"session_id": session_id, "worldline": "beta", "identity_mode": "self"},
+    ):
+        response = isolated_client.get(
+            f"/api/memory/facts/{fact_id}/details", params=scope
+        )
+        assert response.status_code == 404, response.text
+        assert response.json()["detail"]["code"] == "fact_not_found"
+    missing = isolated_client.get(
+        f"/api/memory/facts/{uuid4()}/details", params=_facts_scope(session_id)
+    )
+    assert missing.status_code == 404
+
+    deleted = isolated_client.delete(
+        f"/api/memory/facts/{fact_id}",
+        params={**_facts_scope(session_id), "expected_version": 1},
+    )
+    assert deleted.status_code == 200, deleted.text
+    after = isolated_client.get(
+        f"/api/memory/facts/{fact_id}/details", params=_facts_scope(session_id)
+    )
+    assert after.status_code == 404, "deleted facts are not part of the details surface"
+
+
+def test_s3d1_details_zero_provider_calls(isolated_client: TestClient, monkeypatch):
+    import app.services.credentials as cred_mod
+    import app.services.provider_runtime as pr_mod
+
+    def boom(*args, **kwargs):
+        raise AssertionError("provider must not be called during details")
+
+    monkeypatch.setattr(pr_mod.provider_registry, "snapshot", boom)
+    monkeypatch.setattr(cred_mod.credential_store, "get", boom)
+
+    session_id = _session("s3d1-details-noprov")
+    fact_id, _ = _seed_fact_via_reconciler(
+        session_id=session_id, display_text="喜欢咖啡", source_message_id=70007
+    )
+    response = isolated_client.get(
+        f"/api/memory/facts/{fact_id}/details", params=_facts_scope(session_id)
+    )
+    assert response.status_code == 200, response.text
+
+
+# -- D. transaction rollback -------------------------------------------------
+
+
+def test_s3d1_delete_mid_transaction_failure_rolls_back(
+    isolated_client: TestClient, monkeypatch
+):
+    """Injected failure after tombstone insert must roll back EVERYTHING."""
+    session_id = _session("s3d1-del-rollback")
+    text = "喜欢咖啡"
+    fact_id, observation_id = _seed_fact_via_reconciler(
+        session_id=session_id, display_text=text, source_message_id=70008
+    )
+
+    async def boom(*args, **kwargs):
+        raise RuntimeError("injected mid-transaction failure")
+
+    monkeypatch.setattr(
+        "app.services.memory_v11.facts.delete_version_embedding", boom
+    )
+    response = isolated_client.delete(
+        f"/api/memory/facts/{fact_id}",
+        params={**_facts_scope(session_id), "expected_version": 1},
+    )
+    assert response.status_code == 500, response.text
+    assert response.json()["detail"]["code"] == "memory_operation_failed"
+
+    facts = _db_rows(
+        "SELECT state, active_version FROM stable_facts WHERE fact_id=?", (fact_id,)
+    )
+    assert facts[0]["state"] == "active" and facts[0]["active_version"] == 1
+    assert len(_db_rows("SELECT * FROM stable_fact_versions WHERE fact_id=?", (fact_id,))) == 1
+    assert len(_db_rows("SELECT * FROM stable_fact_version_embeddings WHERE fact_id=?", (fact_id,))) == 1
+    assert len(_db_rows("SELECT * FROM stable_fact_evidence WHERE fact_id=?", (fact_id,))) == 1
+    assert len(_db_rows("SELECT * FROM memory_tombstones WHERE fact_id=?", (fact_id,))) == 0
+    obs = _db_rows(
+        "SELECT status, display_text FROM memory_observations WHERE observation_id=?",
+        (observation_id,),
+    )
+    assert obs[0]["status"] == "attached"
+    assert obs[0]["display_text"] == text
+
+
+def _create_completion(source_message_id: int):
+    async def completion(**kwargs):
+        sid = int(kwargs["source_message_id"])
+        return {
+            "observations": [
+                {
+                    "observation_ref": "o1",
+                    "source_message_ids": [sid],
+                    "display_text": "喜欢咖啡",
+                    "semantic": {
+                        "subject": "user",
+                        "predicate": "likes",
+                        "object": {"name": "coffee"},
+                    },
+                    "evidence_kind": "direct_user",
+                    "memory_class": "stable_candidate",
+                    "confidence": 0.96,
+                    "topic_label": "饮食",
+                    "expires_at": None,
+                }
+            ],
+            "operations": [
+                {
+                    "op": "CREATE",
+                    "observation_ref": "o1",
+                    "target_fact_id": None,
+                    "expected_version": None,
+                    "fact_text": "喜欢咖啡",
+                    "reason_code": "direct_durable_statement",
+                }
+            ],
+        }
+
+    return completion

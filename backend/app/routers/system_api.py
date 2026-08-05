@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.db import normalize_identity_mode, normalize_worldline, validate_schema
 from app.services.memory import (
@@ -400,6 +400,244 @@ async def delete_shared_memory_fact(
         status = 404 if exc.code == "fact_not_found" else 409
         raise HTTPException(status_code=status, detail=exc.code) from exc
     return {"id": fact_id, "scope": "shared", "changed": changed, "deleted": True}
+
+
+# Caller-input validation codes (everything else is server/indexing side and
+# must never be reported as user validation).
+_USER_VALIDATION_CODES = frozenset(
+    {
+        "empty_session_id",
+        "empty_fact_id",
+        "empty_display_text",
+        "missing_expected_version",
+        "invalid_expected_version",
+    }
+)
+
+
+def _memory_error_response(exc: MemoryValidationError) -> HTTPException:
+    code = exc.code
+    if code == "fact_not_found":
+        return HTTPException(
+            status_code=404, detail={"code": code, "message": str(exc)}
+        )
+    if code == "expected_version_mismatch":
+        return HTTPException(
+            status_code=409, detail={"code": code, "message": str(exc)}
+        )
+    if code in _USER_VALIDATION_CODES:
+        return HTTPException(
+            status_code=422, detail={"code": code, "message": str(exc)}
+        )
+    # Indexing/server failures: stable non-2xx, no raw internals or provider
+    # bodies in the response.
+    return HTTPException(
+        status_code=500,
+        detail={"code": code, "message": "memory operation failed"},
+    )
+
+
+def _validate_memory_scope(
+    worldline: str | None, identity_mode: str | None
+) -> tuple[str, str]:
+    """Canonical 422 envelopes for scope normalization (never bare strings)."""
+    try:
+        wl = normalize_worldline(worldline)
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_worldline", "message": "invalid worldline"},
+        ) from None
+    if identity_mode is None or str(identity_mode).strip() == "":
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_identity_mode", "message": "invalid identity_mode"},
+        )
+    try:
+        mode = normalize_identity_mode(identity_mode)
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "invalid_identity_mode", "message": "invalid identity_mode"},
+        ) from None
+    return wl, mode
+
+
+def _require_session_id(session_id: str | None) -> str:
+    sid = (session_id or "").strip()
+    if not sid:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "empty_session_id", "message": "session_id is required"},
+        )
+    return sid
+
+
+def _body_error(code: str, message: str) -> HTTPException:
+    return HTTPException(status_code=422, detail={"code": code, "message": message})
+
+
+@router.patch("/api/memory/facts/{fact_id}")
+async def patch_memory_fact(
+    fact_id: str,
+    request: Request,
+    session_id: str | None = Query(None),
+    worldline: str = Query("steins_gate"),
+    identity_mode: str | None = Query(None),
+):
+    """v11 user edit (plan §7.1): new ``user_edit`` version on the same fact.
+
+    Full explicit scope; stale expected_version → 409; no provider/LLM call
+    (deterministic canonical semantic payload in this slice). Body parsing is
+    local so every caller-validation failure returns the stable detail.code
+    envelope instead of FastAPI's raw validation array.
+    """
+    from app.services.memory_v11.contracts import MemoryValidationError
+    from app.services.memory_v11.facts import user_edit_fact
+
+    wl, mode = _validate_memory_scope(worldline, identity_mode)
+    sid = _require_session_id(session_id)
+
+    try:
+        raw = await request.json()
+    except Exception:
+        raise _body_error(
+            "invalid_json_body", "request body must be valid JSON"
+        ) from None
+    if not isinstance(raw, dict):
+        raise _body_error(
+            "invalid_request_body", "request body must be a JSON object"
+        ) from None
+    extras = sorted(set(raw) - {"display_text", "expected_version"})
+    if extras:
+        raise _body_error(
+            "extra_fields_forbidden", "unknown body fields are forbidden"
+        )
+    if "display_text" not in raw:
+        raise _body_error("missing_display_text", "display_text is required")
+    display_text = raw["display_text"]
+    if not isinstance(display_text, str):
+        raise _body_error("invalid_display_text", "display_text must be a string")
+    text = display_text.strip()
+    if not text:
+        raise _body_error("empty_display_text", "display_text is required")
+    if "expected_version" not in raw:
+        raise _body_error("missing_expected_version", "expected_version is required")
+    expected_version = raw["expected_version"]
+    if isinstance(expected_version, bool) or not isinstance(expected_version, int):
+        raise _body_error(
+            "invalid_expected_version", "expected_version must be a positive int"
+        )
+    if expected_version <= 0:
+        raise _body_error(
+            "invalid_expected_version", "expected_version must be a positive int"
+        )
+
+    try:
+        return await user_edit_fact(
+            session_id=sid,
+            worldline=wl,
+            identity_mode=mode,
+            fact_id=fact_id,
+            display_text=text,
+            expected_version=expected_version,
+        )
+    except MemoryValidationError as exc:
+        raise _memory_error_response(exc) from exc
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "memory_operation_failed",
+                "message": "memory operation failed",
+            },
+        ) from None
+
+
+@router.delete("/api/memory/facts/{fact_id}")
+async def delete_memory_fact(
+    fact_id: str,
+    session_id: str | None = Query(None),
+    worldline: str = Query("steins_gate"),
+    identity_mode: str | None = Query(None),
+    expected_version: str | None = Query(None),
+):
+    """v11 delete (plan §7.2): tombstone + content erasure, idempotent repeat.
+
+    expected_version is read as a raw string so malformed values map to the
+    stable detail.code envelope instead of FastAPI's validation array.
+    """
+    from app.services.memory_v11.contracts import MemoryValidationError
+    from app.services.memory_v11.facts import delete_fact
+
+    wl, mode = _validate_memory_scope(worldline, identity_mode)
+    sid = _require_session_id(session_id)
+
+    raw_version = (expected_version or "").strip()
+    if not raw_version:
+        raise _body_error("missing_expected_version", "expected_version is required")
+    try:
+        version = int(raw_version)
+    except ValueError:
+        raise _body_error(
+            "invalid_expected_version", "expected_version must be a positive int"
+        ) from None
+    if version <= 0:
+        raise _body_error(
+            "invalid_expected_version", "expected_version must be a positive int"
+        )
+
+    try:
+        return await delete_fact(
+            session_id=sid,
+            worldline=wl,
+            identity_mode=mode,
+            fact_id=fact_id,
+            expected_version=version,
+        )
+    except MemoryValidationError as exc:
+        raise _memory_error_response(exc) from exc
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "memory_operation_failed",
+                "message": "memory operation failed",
+            },
+        ) from None
+
+
+@router.get("/api/memory/facts/{fact_id}/details")
+async def memory_fact_details(
+    fact_id: str,
+    session_id: str | None = Query(None),
+    worldline: str = Query("steins_gate"),
+    identity_mode: str | None = Query(None),
+):
+    """v11 details (plan §8.2): active-fact version history + minimal provenance."""
+    from app.services.memory_v11.contracts import MemoryValidationError
+    from app.services.memory_v11.facts import fact_details
+
+    wl, mode = _validate_memory_scope(worldline, identity_mode)
+    sid = _require_session_id(session_id)
+
+    try:
+        return await fact_details(
+            session_id=sid,
+            worldline=wl,
+            identity_mode=mode,
+            fact_id=fact_id,
+        )
+    except MemoryValidationError as exc:
+        raise _memory_error_response(exc) from exc
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "memory_operation_failed",
+                "message": "memory operation failed",
+            },
+        ) from None
 
 
 @router.get("/health/dependencies")
