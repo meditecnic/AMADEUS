@@ -864,3 +864,48 @@ async def test_s0_dual_worldline_sequential_migration(tmp_path, monkeypatch):
             assert count == 1
         finally:
             connection.close()
+
+
+# ---------------------------------------------------------------------------
+# MEMORY-V11-S3-GAP-PROBE R4: v11 experience storage contract.
+# Red until S3/S4 lands the experience layer (plan §4.10); the legacy
+# episodic_memories shape without the v11 columns does not satisfy it.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_r4_v11_experience_storage_contract(isolated_store):
+    """R4: experiences must be first-class, conversation-aware, scoped, time-boxed.
+
+    Required surface (plan §4.10 / §10.2): conversation/source lineage,
+    session + worldline + identity_mode scope, active/deleted state,
+    expires_at, and a source_state present|deleted marker — either as an
+    ``experiences`` table or as episodic_memories extended with the v11
+    columns. Absent today: fail with the exact contract-missing verdict.
+    """
+    connection = _open_memory("steins_gate")
+    try:
+        names = _table_names(connection)
+        if "experiences" in names:
+            return
+        assert "episodic_memories" in names, (
+            "v11 experience storage contract missing: no experience table in "
+            "memory DB"
+        )
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(episodic_memories)")
+        }
+        required = {
+            "conversation_id",
+            "semantic_fingerprint",
+            "status",
+            "expires_at",
+        }
+        missing = sorted(required - columns)
+        assert not missing, (
+            "v11 experience storage contract missing: episodic_memories lacks "
+            f"v11 experience columns {missing}"
+        )
+    finally:
+        connection.close()
