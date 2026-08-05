@@ -461,6 +461,8 @@ Rules:
 - Never invent or guess fact_id values that are not in candidates.
 - If no candidate fits: use CREATE (new fact; backend assigns fact_id) or REJECT.
 - Do not generate server-owned fact_id values for CREATE.
+- memory_class=episodic: CREATE with target_fact_id=null stores an experience;
+  never use ATTACH/REFINE/SUPERSEDE on a stable fact from an episodic observation.
 """
 
 

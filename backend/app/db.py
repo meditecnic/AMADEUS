@@ -441,6 +441,33 @@ CREATE TABLE IF NOT EXISTS stable_fact_version_embeddings (
     FOREIGN KEY(fact_id, version_no)
         REFERENCES stable_fact_versions(fact_id, version_no)
 );
+
+-- MEMORY-V11-S3C: first-class experiences (plan §4.10). Worldline stays
+-- physical-DB isolation; identity_mode is the in-DB scope, same as stable_facts.
+CREATE TABLE IF NOT EXISTS experiences (
+    experience_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    identity_mode TEXT NOT NULL CHECK(identity_mode IN ('self','okabe')),
+    observation_id TEXT NOT NULL UNIQUE REFERENCES memory_observations(observation_id),
+    display_text TEXT NOT NULL,
+    semantic_json TEXT NOT NULL,
+    semantic_fingerprint TEXT NOT NULL,
+    confidence REAL NOT NULL CHECK(confidence BETWEEN 0 AND 1),
+    status TEXT NOT NULL CHECK(
+        status IN ('active','deleted','expired','pending_source_delete')
+    ),
+    expires_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    deleted_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_experiences_scope_status
+    ON experiences(session_id, identity_mode, status);
+CREATE INDEX IF NOT EXISTS idx_experiences_fingerprint
+    ON experiences(semantic_fingerprint);
+CREATE INDEX IF NOT EXISTS idx_experiences_expires
+    ON experiences(expires_at);
 """
 
 MEMORY_SCHEMA = MEMORY_SCHEMA + MEMORY_V11_DDL

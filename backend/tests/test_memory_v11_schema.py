@@ -30,6 +30,7 @@ V11_MEMORY_TABLES = (
     "stable_fact_evidence",
     "memory_tombstones",
     "memory_consolidation_proposals",
+    "experiences",
 )
 
 # Frozen minimal real v10 memory DDL — do NOT call db_module.MEMORY_SCHEMA (mutable).
@@ -867,45 +868,202 @@ async def test_s0_dual_worldline_sequential_migration(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# MEMORY-V11-S3-GAP-PROBE R4: v11 experience storage contract.
-# Red until S3/S4 lands the experience layer (plan §4.10); the legacy
-# episodic_memories shape without the v11 columns does not satisfy it.
+# MEMORY-V11-S3C-1: first-class experiences storage contract (plan §4.10).
+# The legacy episodic_memories shape does NOT satisfy this contract.
 # ---------------------------------------------------------------------------
+
+EXPERIENCES_REQUIRED_COLUMNS = frozenset(
+    {
+        "experience_id",
+        "session_id",
+        "conversation_id",
+        "identity_mode",
+        "observation_id",
+        "display_text",
+        "semantic_json",
+        "semantic_fingerprint",
+        "confidence",
+        "status",
+        "expires_at",
+        "created_at",
+        "updated_at",
+        "deleted_at",
+    }
+)
 
 
 @pytest.mark.asyncio
 async def test_r4_v11_experience_storage_contract(isolated_store):
-    """R4: experiences must be first-class, conversation-aware, scoped, time-boxed.
+    """R4: experiences are first-class, conversation-aware, scoped, time-boxed.
 
-    Required surface (plan §4.10 / §10.2): conversation/source lineage,
-    session + worldline + identity_mode scope, active/deleted state,
-    expires_at, and a source_state present|deleted marker — either as an
-    ``experiences`` table or as episodic_memories extended with the v11
-    columns. Absent today: fail with the exact contract-missing verdict.
+    Required (plan §4.10): conversation lineage, identity scope, semantic
+    fingerprint, status, expires_at, observation FK, scope/status index.
     """
     connection = _open_memory("steins_gate")
     try:
         names = _table_names(connection)
-        if "experiences" in names:
-            return
-        assert "episodic_memories" in names, (
-            "v11 experience storage contract missing: no experience table in "
+        assert "experiences" in names, (
+            "v11 experience storage contract missing: no experiences table in "
             "memory DB"
         )
         columns = {
             row[1]
-            for row in connection.execute("PRAGMA table_info(episodic_memories)")
+            for row in connection.execute("PRAGMA table_info(experiences)")
         }
-        required = {
-            "conversation_id",
-            "semantic_fingerprint",
-            "status",
-            "expires_at",
-        }
-        missing = sorted(required - columns)
-        assert not missing, (
-            "v11 experience storage contract missing: episodic_memories lacks "
-            f"v11 experience columns {missing}"
+        missing = sorted(EXPERIENCES_REQUIRED_COLUMNS - columns)
+        assert not missing, f"experiences missing columns: {missing}"
+
+        sql = _table_sql(connection, "experiences")
+        assert "CHECK(identity_mode IN ('self','okabe'))" in sql.replace(
+            " ", ""
+        ) or "identity_mode IN ('self','okabe')" in sql, (
+            "experiences must constrain identity_mode to self/okabe"
         )
+        assert any(
+            "CHECK(status IN" in stmt
+            for stmt in sql.replace(" ", "").split(",")
+        ) or "status IN ('active','deleted','expired','pending_source_delete')" in sql, (
+            "experiences must constrain status to active/deleted/expired/"
+            "pending_source_delete"
+        )
+
+        fks = _foreign_keys(connection, "experiences")
+        obs_fk = next(
+            (
+                fk
+                for fk in fks
+                if fk["table"] == "memory_observations"
+                and fk["from"] == "observation_id"
+            ),
+            None,
+        )
+        assert obs_fk is not None, (
+            "experiences.observation_id must FK memory_observations"
+        )
+
+        indexes = {
+            row[1]
+            for row in connection.execute("PRAGMA index_list('experiences')")
+        }
+        assert "idx_experiences_scope_status" in indexes, (
+            "experiences needs a (session_id, identity_mode, status) index"
+        )
+    finally:
+        connection.close()
+
+
+def _seed_v11_memory_db_without_experiences(
+    path: Path, *, session_id: str = "v11-legacy"
+) -> None:
+    """Construct an already-v11 memory DB that predates the S3C experiences DDL.
+
+    Uses the frozen v10 DDL plus every production v11 statement except the
+    experiences block, then seeds one pre-existing stable fact/version pair.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(str(path))
+    try:
+        connection.executescript(FROZEN_V10_MEMORY_DDL)
+        statements = db_module._split_sql_statements(db_module.MEMORY_V11_DDL)
+        for statement in statements:
+            if "experiences" in statement:
+                continue
+            connection.execute(statement)
+        connection.execute(
+            "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version','11')"
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('embedding_model',?)",
+            (db_module.EMBEDDING_MODEL,),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('embedding_dimension',?)",
+            (str(db_module.EMBEDDING_DIMENSION),),
+        )
+        now = "2026-08-01T00:00:00+00:00"
+        connection.execute(
+            """INSERT INTO stable_facts(
+                   fact_id, session_id, identity_mode, topic_id, state,
+                   active_version, is_pinned, created_at, updated_at, deleted_at
+               ) VALUES(?,?,?,NULL,'active',1,0,?,?,NULL)""",
+            ("fact-v11-legacy-1", session_id, "self", now, now),
+        )
+        connection.execute(
+            """INSERT INTO stable_fact_versions(
+                   fact_id, version_no, display_text, semantic_json,
+                   semantic_fingerprint, confidence, change_kind,
+                   previous_version, valid_from, invalid_at, created_by_job_id
+               ) VALUES(?,?,?,?,?,?,?,NULL,?,NULL,NULL)""",
+            (
+                "fact-v11-legacy-1",
+                1,
+                "legacy v11 fact",
+                '{"subject":"user","object":"legacy"}',
+                "fp-legacy-v11",
+                0.9,
+                "legacy_import",
+                now,
+            ),
+        )
+        connection.commit()
+        names = _table_names(connection)
+        assert "experiences" not in names, (
+            "fixture must represent a pre-experiences v11 DB"
+        )
+    finally:
+        connection.close()
+
+
+@pytest.mark.asyncio
+async def test_r4_v11_additive_upgrade_on_existing_v11_db(tmp_path, monkeypatch):
+    """An already-v11 DB receives experiences additively on normal init.
+
+    - experiences table appears
+    - schema_version stays 11 (no SCHEMA_VERSION bump)
+    - pre-existing v11 rows survive
+    - a second init is idempotent
+    """
+    monkeypatch.delenv("AMADEUS_DB_PATH", raising=False)
+    data_root = tmp_path / "additive_v11"
+    monkeypatch.setenv("AMADEUS_DATA_DIR", str(data_root))
+    path = Path(db_module._resolve_path("steins_gate", "memory"))
+    _seed_v11_memory_db_without_experiences(path, session_id="v11-legacy")
+
+    reset_initialization_cache()
+    await init_db()
+
+    connection = _open_memory("steins_gate")
+    try:
+        names = _table_names(connection)
+        assert "experiences" in names, "additive install must create experiences"
+        version = connection.execute(
+            "SELECT value FROM schema_meta WHERE key='schema_version'"
+        ).fetchone()[0]
+        assert version == "11"
+        count = connection.execute(
+            "SELECT COUNT(*) FROM stable_facts WHERE session_id='v11-legacy'"
+        ).fetchone()[0]
+        assert count == 1, "pre-existing v11 rows must survive"
+        version_count = connection.execute(
+            "SELECT COUNT(*) FROM stable_fact_versions WHERE fact_id='fact-v11-legacy-1'"
+        ).fetchone()[0]
+        assert version_count == 1
+    finally:
+        connection.close()
+
+    # Second normal init must be idempotent.
+    reset_initialization_cache()
+    await init_db()
+    connection = _open_memory("steins_gate")
+    try:
+        assert "experiences" in _table_names(connection)
+        version = connection.execute(
+            "SELECT value FROM schema_meta WHERE key='schema_version'"
+        ).fetchone()[0]
+        assert version == "11"
+        count = connection.execute(
+            "SELECT COUNT(*) FROM stable_facts WHERE session_id='v11-legacy'"
+        ).fetchone()[0]
+        assert count == 1
     finally:
         connection.close()

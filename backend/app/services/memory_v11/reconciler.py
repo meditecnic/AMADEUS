@@ -13,6 +13,7 @@ from app.services.memory_v11.contracts import (
     AUTO_STABLE_CONFIDENCE,
     MemoryValidationError,
 )
+from app.services.memory_v11.experiences import insert_experience
 from app.services.memory_v11.indexing import (
     delete_version_embedding,
     insert_version_embedding,
@@ -324,6 +325,17 @@ async def apply_validated_memory_operations(
                     "target_not_in_allowlist",
                     f"target_fact_id={target} not on allowlist",
                 )
+            # S3C-1: episodic observations may only become experiences; they can
+            # never mutate a stable fact, even if target_fact_id happens to exist.
+            obs_memory_class = str(
+                obs_map[ref].get("memory_class") or "stable_candidate"
+            )
+            if obs_memory_class == "episodic":
+                raise MemoryValidationError(
+                    "episodic_target_operation_forbidden",
+                    f"{op_name} cannot target a stable fact from an episodic "
+                    "observation",
+                )
         for mid in obs_map[ref].get("source_message_ids") or []:
             if int(mid) not in source_by_id:
                 raise MemoryValidationError(
@@ -417,6 +429,36 @@ async def apply_validated_memory_operations(
                 continue
 
             if op_name == "CREATE":
+                obs_memory_class = str(obs.get("memory_class") or "stable_candidate")
+                if obs_memory_class == "episodic":
+                    # S3C-1: episodic CREATE -> first-class experience only.
+                    # No stable_facts / stable_fact_versions / embedding rows.
+                    observation_id = await _insert_observation(
+                        db,
+                        session_id=session,
+                        identity_mode=mode,
+                        obs=obs,
+                        status="attached",
+                        source_by_id=source_by_id,
+                    )
+                    source_ids = [int(m) for m in (obs.get("source_message_ids") or [])]
+                    conversation_id = (
+                        str(source_by_id[source_ids[0]].get("conversation_id") or "")
+                        if source_ids
+                        else ""
+                    )
+                    await insert_experience(
+                        db,
+                        session_id=session,
+                        conversation_id=conversation_id,
+                        identity_mode=mode,
+                        observation_id=observation_id,
+                        display_text=fact_text,
+                        semantic=obs.get("semantic") or {},
+                        confidence=confidence,
+                        expires_at=obs.get("expires_at"),
+                    )
+                    continue
                 if not _will_create_stable_fact(obs):
                     await _insert_observation(
                         db,

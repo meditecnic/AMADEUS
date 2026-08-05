@@ -1658,3 +1658,509 @@ async def test_s3b2_refine_txn_insert_embedding_failure_rolls_back(
     assert residue["evidence"] == evidence_before
     assert residue["versions"] == 1
     assert residue["vectors"] == 1
+
+# ---------------------------------------------------------------------------
+# MEMORY-V11-S3C-1: episodic observations route to first-class experiences.
+# memory_class=episodic + CREATE -> experience (never a stable fact/vector).
+# ---------------------------------------------------------------------------
+
+
+async def _experience_rows(
+    *, worldline: str = "steins_gate", session_id: str | None = None
+) -> list[dict[str, Any]]:
+    db = await get_db(worldline, "memory")
+    try:
+        if session_id is None:
+            cur = await db.execute(
+                "SELECT * FROM experiences ORDER BY experience_id"
+            )
+        else:
+            cur = await db.execute(
+                "SELECT * FROM experiences WHERE session_id=? ORDER BY experience_id",
+                (session_id,),
+            )
+        rows = await cur.fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        await db.close()
+
+
+async def _count_rows(
+    *, worldline: str = "steins_gate", sql: str, params: tuple[Any, ...] = ()
+) -> int:
+    db = await get_db(worldline, "memory")
+    try:
+        cur = await db.execute(sql, params)
+        return int((await cur.fetchone())["n"])
+    finally:
+        await db.close()
+
+
+async def _attached_observation_count(session_id: str) -> int:
+    return await _count_rows(
+        sql="""SELECT COUNT(*) AS n FROM memory_observations
+                WHERE session_id=? AND status='attached'""",
+        params=(session_id,),
+    )
+
+
+async def _source_rows_for_session(session_id: str) -> int:
+    return await _count_rows(
+        sql="""SELECT COUNT(*) AS n FROM memory_observation_sources s
+                JOIN memory_observations o ON o.observation_id=s.observation_id
+               WHERE o.session_id=?""",
+        params=(session_id,),
+    )
+
+
+def _canonical_fingerprint_hex(semantic: dict[str, Any]) -> str:
+    import json as _json
+
+    return hashlib.sha256(
+        _json.dumps(
+            semantic, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_s3c1_episodic_create_stores_experience_only(isolated_store):
+    """C: episodic CREATE -> exactly one experience, zero stable facts/vectors."""
+    session_id = f"s3c1-ep-{uuid4().hex[:8]}"
+    text = "先週秋葉原でフィギュアを買った"
+    semantic = {
+        "subject": "user",
+        "predicate": "visited",
+        "object": {"place": "akihabara"},
+    }
+    expires_at = "2026-09-01T00:00:00+00:00"
+    obs = _observation(
+        ref="o1",
+        display_text=text,
+        semantic=semantic,
+        source_message_ids=[7001],
+        memory_class="episodic",
+        confidence=0.9,
+    )
+    obs["expires_at"] = expires_at
+    result = await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[obs],
+        operations=[
+            {
+                "op": "CREATE",
+                "observation_ref": "o1",
+                "target_fact_id": None,
+                "expected_version": None,
+                "fact_text": text,
+                "reason_code": "contextual_event",
+            }
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=7001,
+                conversation_id="conv-ep-1",
+                fingerprint="fp-ep-1",
+                excerpt=text,
+            )
+        ],
+        candidate_allowlist=[],
+    )
+    assert result["created_facts"] == []
+    exps = await _experience_rows(session_id=session_id)
+    assert len(exps) == 1, "episodic CREATE must store exactly one experience"
+    exp = exps[0]
+    assert exp["conversation_id"] == "conv-ep-1"
+    assert exp["identity_mode"] == "self"
+    assert exp["status"] == "active"
+    assert exp["expires_at"] == expires_at
+    assert exp["semantic_fingerprint"] == _canonical_fingerprint_hex(semantic)
+    assert exp["deleted_at"] is None
+    assert await _attached_observation_count(session_id) == 1
+    assert await _source_rows_for_session(session_id) == 1
+    assert await _count_rows(
+        sql="SELECT COUNT(*) AS n FROM stable_facts WHERE session_id=?",
+        params=(session_id,),
+    ) == 0, "episodic CREATE must not create stable facts"
+    assert await _count_rows(
+        sql="""SELECT COUNT(*) AS n FROM stable_fact_version_embeddings e
+                JOIN stable_facts f ON f.fact_id=e.fact_id
+               WHERE f.session_id=?""",
+        params=(session_id,),
+    ) == 0, "episodic CREATE must not create stable fact embeddings"
+    assert await _count_rows(
+        sql="""SELECT COUNT(*) AS n FROM stable_fact_versions v
+                JOIN stable_facts f ON f.fact_id=v.fact_id
+               WHERE f.session_id=?""",
+        params=(session_id,),
+    ) == 0
+
+
+@pytest.mark.asyncio
+async def test_s3c1_stable_create_regression_no_experience(isolated_store):
+    """D: stable_candidate CREATE still writes fact+vector, zero experience."""
+    session_id = f"s3c1-stable-{uuid4().hex[:8]}"
+    text = "コーヒーが好き"
+    result = await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="o1",
+                display_text=text,
+                semantic={"subject": "user", "relation": "likes", "object": "coffee"},
+                source_message_ids=[7101],
+            )
+        ],
+        operations=[
+            {
+                "op": "CREATE",
+                "observation_ref": "o1",
+                "target_fact_id": None,
+                "expected_version": None,
+                "fact_text": text,
+                "reason_code": "direct_durable_statement",
+            }
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=7101,
+                conversation_id="conv-st-1",
+                fingerprint="fp-st-1",
+                excerpt=text,
+            )
+        ],
+        candidate_allowlist=[],
+    )
+    assert len(result["created_facts"]) == 1
+    fact_id = result["created_facts"][0]["fact_id"]
+    assert await _count_rows(
+        sql="""SELECT COUNT(*) AS n FROM stable_fact_version_embeddings
+                WHERE fact_id=? AND version_no=1""",
+        params=(fact_id,),
+    ) == 1, "stable CREATE must still write its v1 vector"
+    assert await _experience_rows(session_id=session_id) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("op_name", ["ATTACH", "REFINE", "SUPERSEDE"])
+async def test_s3c1_episodic_target_operation_rejected(
+    isolated_store, op_name
+):
+    """E: episodic observations must never mutate a real selected stable fact."""
+    session_id = f"s3c1-reject-{uuid4().hex[:8]}"
+    text = "毎朝ジョギングする"
+    seed = await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="s1",
+                display_text=text,
+                semantic={"subject": "user", "relation": "habit", "object": "jog"},
+                source_message_ids=[7201],
+            )
+        ],
+        operations=[
+            {
+                "op": "CREATE",
+                "observation_ref": "s1",
+                "fact_text": text,
+                "reason_code": "direct_durable_statement",
+            }
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=7201,
+                conversation_id="conv-rj-1",
+                fingerprint="fp-rj-1",
+                excerpt=text,
+            )
+        ],
+        candidate_allowlist=[],
+    )
+    fact_id = seed["created_facts"][0]["fact_id"]
+
+    with pytest.raises(_contracts().MemoryValidationError) as exc_info:
+        await _apply_validated(
+            session_id=session_id,
+            worldline="steins_gate",
+            identity_mode="self",
+            observations=[
+                _observation(
+                    ref="o1",
+                    display_text="台風でジョギングを休んだ",
+                    semantic={
+                        "subject": "user",
+                        "predicate": "skipped",
+                        "object": {"event": "typhoon"},
+                    },
+                    source_message_ids=[7202],
+                    memory_class="episodic",
+                    confidence=0.8,
+                )
+            ],
+            operations=[
+                {
+                    "op": op_name,
+                    "observation_ref": "o1",
+                    "target_fact_id": fact_id,
+                    "expected_version": 1,
+                    "fact_text": "台風でジョギングを休んだ",
+                    "reason_code": "episodic_attempt",
+                }
+            ],
+            source_evidence=[
+                _source_evidence(
+                    source_message_id=7202,
+                    conversation_id="conv-rj-2",
+                    fingerprint="fp-rj-2",
+                    excerpt="台風でジョギングを休んだ",
+                )
+            ],
+            candidate_allowlist=[fact_id],
+        )
+    assert exc_info.value.code == "episodic_target_operation_forbidden"
+
+    db = await get_db("steins_gate", "memory")
+    try:
+        cur = await db.execute(
+            "SELECT active_version, state FROM stable_facts WHERE fact_id=?",
+            (fact_id,),
+        )
+        row = await cur.fetchone()
+        assert int(row["active_version"]) == 1
+        assert row["state"] == "active"
+        cur = await db.execute(
+            """SELECT invalid_at FROM stable_fact_versions
+                WHERE fact_id=? AND version_no=1""",
+            (fact_id,),
+        )
+        assert (await cur.fetchone())["invalid_at"] is None
+    finally:
+        await db.close()
+    assert await _experience_rows(session_id=session_id) == []
+    residue = await _session_residue_counts(session_id)
+    assert residue["observations"] == 1, "no partial observation from rejected batch"
+    assert residue["evidence"] == 1, "no partial evidence from rejected batch"
+
+
+@pytest.mark.asyncio
+async def test_s3c1_episodic_reject_stores_rejected_observation(isolated_store):
+    """F: episodic + REJECT -> rejected observation only, no experience."""
+    session_id = f"s3c1-rej-{uuid4().hex[:8]}"
+    text = "昨日は雨だった"
+    await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="o1",
+                display_text=text,
+                semantic={"subject": "user", "predicate": "weather", "object": "rain"},
+                source_message_ids=[7301],
+                memory_class="episodic",
+                confidence=0.6,
+            )
+        ],
+        operations=[
+            {
+                "op": "REJECT",
+                "observation_ref": "o1",
+                "fact_text": text,
+                "reason_code": "noise",
+            }
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=7301,
+                conversation_id="conv-rej-1",
+                fingerprint="fp-rej-1",
+                excerpt=text,
+            )
+        ],
+        candidate_allowlist=[],
+    )
+    assert await _experience_rows(session_id=session_id) == []
+    assert await _count_rows(
+        sql="""SELECT COUNT(*) AS n FROM memory_observations
+                WHERE session_id=? AND status='rejected'""",
+        params=(session_id,),
+    ) == 1
+    assert await _count_rows(
+        sql="SELECT COUNT(*) AS n FROM stable_facts WHERE session_id=?",
+        params=(session_id,),
+    ) == 0
+
+
+@pytest.mark.asyncio
+async def test_s3c1_episodic_replay_idempotent(isolated_store):
+    """G: same-source replay adds no second experience/observation/source."""
+    session_id = f"s3c1-replay-{uuid4().hex[:8]}"
+    text = "先週京都に行った"
+    kwargs = dict(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="o1",
+                display_text=text,
+                semantic={"subject": "user", "predicate": "visited", "object": "kyoto"},
+                source_message_ids=[7401],
+                memory_class="episodic",
+                confidence=0.9,
+            )
+        ],
+        operations=[
+            {
+                "op": "CREATE",
+                "observation_ref": "o1",
+                "fact_text": text,
+                "reason_code": "contextual_event",
+            }
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=7401,
+                conversation_id="conv-rp-1",
+                fingerprint="fp-rp-1",
+                excerpt=text,
+            )
+        ],
+        candidate_allowlist=[],
+    )
+    first = await _apply_validated(**kwargs)
+    assert first.get("replay") is False
+    second = await _apply_validated(**kwargs)
+    assert second.get("replay") is True
+    assert len(await _experience_rows(session_id=session_id)) == 1
+    assert await _attached_observation_count(session_id) == 1
+    assert await _source_rows_for_session(session_id) == 1
+
+
+@pytest.mark.asyncio
+async def test_s3c1_experience_insert_failure_rolls_back_all(isolated_store):
+    """H: experience INSERT failure rolls back observation + source too."""
+    session_id = f"s3c1-txn-{uuid4().hex[:8]}"
+    text = "花火大会に行った"
+    recon = _reconciler()
+    original = recon.insert_experience
+
+    async def boom_insert(*args: Any, **kwargs: Any):
+        raise RuntimeError("forced experience insert failure inside txn")
+
+    recon.insert_experience = boom_insert
+    try:
+        with pytest.raises(RuntimeError, match="forced experience insert"):
+            await _apply_validated(
+                session_id=session_id,
+                worldline="steins_gate",
+                identity_mode="self",
+                observations=[
+                    _observation(
+                        ref="o1",
+                        display_text=text,
+                        semantic={
+                            "subject": "user",
+                            "predicate": "attended",
+                            "object": "fireworks",
+                        },
+                        source_message_ids=[7501],
+                        memory_class="episodic",
+                        confidence=0.9,
+                    )
+                ],
+                operations=[
+                    {
+                        "op": "CREATE",
+                        "observation_ref": "o1",
+                        "fact_text": text,
+                        "reason_code": "contextual_event",
+                    }
+                ],
+                source_evidence=[
+                    _source_evidence(
+                        source_message_id=7501,
+                        conversation_id="conv-tx-1",
+                        fingerprint="fp-tx-1",
+                        excerpt=text,
+                    )
+                ],
+                candidate_allowlist=[],
+            )
+    finally:
+        recon.insert_experience = original
+
+    residue = await _session_residue_counts(session_id)
+    assert residue == {
+        "facts": 0,
+        "versions": 0,
+        "observations": 0,
+        "evidence": 0,
+        "vectors": 0,
+    }, "experience INSERT failure must roll back observation + sources"
+    assert await _experience_rows(session_id=session_id) == []
+
+
+@pytest.mark.asyncio
+async def test_s3c1_worldline_identity_isolation(isolated_store):
+    """I: self/okabe and SG/beta experiences never cross boundaries."""
+    session_id = f"s3c1-iso-{uuid4().hex[:8]}"
+    text_self = "self: 鎌倉の寺を巡った"
+    text_okabe = "okabe: ラボで電話レンジを試した"
+    await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="o1",
+                display_text=text_self,
+                semantic={"subject": "user", "predicate": "visited", "object": "kamakura"},
+                source_message_ids=[7601],
+                memory_class="episodic",
+                confidence=0.9,
+            )
+        ],
+        operations=[{"op": "CREATE", "observation_ref": "o1", "fact_text": text_self,
+                     "reason_code": "contextual_event"}],
+        source_evidence=[_source_evidence(source_message_id=7601,
+                                          conversation_id="conv-iso-1",
+                                          fingerprint="fp-iso-1", excerpt=text_self)],
+        candidate_allowlist=[],
+    )
+    await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="okabe",
+        observations=[
+            _observation(
+                ref="o2",
+                display_text=text_okabe,
+                semantic={"subject": "okabe", "predicate": "tried", "object": "phonewave"},
+                source_message_ids=[7602],
+                memory_class="episodic",
+                confidence=0.9,
+            )
+        ],
+        operations=[{"op": "CREATE", "observation_ref": "o2", "fact_text": text_okabe,
+                     "reason_code": "contextual_event"}],
+        source_evidence=[_source_evidence(source_message_id=7602,
+                                          conversation_id="conv-iso-2",
+                                          fingerprint="fp-iso-2", excerpt=text_okabe)],
+        candidate_allowlist=[],
+    )
+    rows = await _experience_rows(session_id=session_id)
+    assert len(rows) == 2
+    assert {r["identity_mode"] for r in rows} == {"self", "okabe"}
+    assert await _count_rows(
+        worldline="beta",
+        sql="SELECT COUNT(*) AS n FROM experiences WHERE session_id=?",
+        params=(session_id,),
+    ) == 0, "SG experiences must never appear in the beta physical DB"
