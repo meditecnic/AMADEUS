@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
-import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Mapping
@@ -21,14 +20,9 @@ from app.services.memory_v11.contracts import (
     MemoryJobErrorCode,
     PIPELINE_VERSION,
 )
+from app.services.memory_v11.privacy import classify_memory_sensitive_text
 
 MemoryCompletionFn = Callable[..., Awaitable[Mapping[str, Any]]]
-
-_SECRET_PATTERNS = (
-    re.compile(r"(?i)\b(api[_-]?key|password|passwd|secret)\s*[:=]\s*\S+"),
-    re.compile(r"\b(?:sk|pk)-[A-Za-z0-9]{16,}\b"),
-    re.compile(r"\b\d{13,19}\b"),
-)
 
 _worker_task: asyncio.Task | None = None
 _worker_stop: asyncio.Event | None = None
@@ -71,15 +65,18 @@ def _row_to_job(row: Any, *, worldline: str) -> dict[str, Any]:
 
 
 def redact_user_text(text: str) -> tuple[str, bool]:
+    """D30 privacy boundary: whole-message sensitive-text gate.
+
+    Any sensitive class → ("[REDACTED]", True); otherwise (text, False).
+    The blocked string is never sent to the provider: process_memory_job
+    completes the job immediately instead. Raw sensitive fragments are never
+    preserved inside the blocked return value.
+    """
     if not text:
         return "", False
-    blocked = False
-    out = text
-    for pattern in _SECRET_PATTERNS:
-        if pattern.search(out):
-            blocked = True
-            out = pattern.sub("[REDACTED]", out)
-    return out, blocked
+    if classify_memory_sensitive_text(text):
+        return "[REDACTED]", True
+    return text, False
 
 
 async def enqueue_memory_job(

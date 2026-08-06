@@ -2664,3 +2664,532 @@ async def test_s3d4_d38_source_created_at_persisted(isolated_store):
     assert str(row["source_created_at"]) == persisted, (
         "stored provenance time must be the persisted message time, not processing time"
     )
+
+# ---------------------------------------------------------------------------
+# MEMORY-V11-S3E-2: D30 privacy boundary — deterministic local classifier.
+# ---------------------------------------------------------------------------
+
+_S3E2_CLASSES = frozenset(
+    {
+        "password",
+        "api_secret",
+        "otp",
+        "payment_card",
+        "government_id",
+        "precise_home_address",
+    }
+)
+
+
+def _privacy():
+    return importlib.import_module("app.services.memory_v11.privacy")
+
+
+def _classify(text: str) -> frozenset[str]:
+    return _privacy().classify_memory_sensitive_text(text)
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        # password / auth secret
+        ("password: hunter2", "password"),
+        ("password is hunter2", "password"),
+        ("passphrase = hunter2", "password"),
+        ("secret: hunter2", "password"),
+        ("我的密码是 hunter2", "password"),
+        ("密码为 hunter2", "password"),
+        ("密码：abc12345", "password"),
+        # api key / access secret
+        ("api_key=sk-abcdefghijklmnopqr", "api_secret"),
+        ("API key is sk-abcdefghijklmnopqr", "api_secret"),
+        ("API 密钥是 abcdefghijklmnop", "api_secret"),
+        ("access token: tok_abcdefghijklmnop", "api_secret"),
+        ("访问令牌是 tok_abcdefghijklmnop", "api_secret"),
+        ("sk-abcdefghijklmnopqrstuv", "api_secret"),
+        ("pk-abcdefghijklmnopqrstuv", "api_secret"),
+        # otp / verification code
+        ("验证码是 493821", "otp"),
+        ("OTP: 493821", "otp"),
+        ("verification code is A7K92Q", "otp"),
+        ("校验码 123456", "otp"),
+        ("OTP 是 87654321", "otp"),
+        ("动态码是 a1b2c3", "otp"),
+        # payment card
+        ("4111111111111111", "payment_card"),
+        ("4111 1111 1111 1111", "payment_card"),
+        ("4111-1111-1111-1111", "payment_card"),
+        ("4222222222222", "payment_card"),
+        ("我的信用卡号是 4111111111111112", "payment_card"),
+        ("银行卡号 4111111111111113", "payment_card"),
+        ("card number: 4111111111111111", "payment_card"),
+        # government identifiers
+        ("123-45-6789", "government_id"),
+        ("我的 SSN 是 123-45-6789", "government_id"),
+        ("11010519491231002X", "government_id"),
+        ("我的身份证号是 11010519491231002X", "government_id"),
+        ("身份证 123456789012345678", "government_id"),
+        ("护照号码是 E1234567", "government_id"),
+        ("national ID is AB12345678", "government_id"),
+        # precise home address
+        ("我住在北京市朝阳区建国路88号2单元501室", "precise_home_address"),
+        ("我住在建国路88号", "precise_home_address"),
+        ("我家在朝阳区幸福街12号", "precise_home_address"),
+        ("住址：建国路88号", "precise_home_address"),
+        ("My home address is 123 Example Street, Apt 4B", "precise_home_address"),
+        ("I live at 123 Example Road", "precise_home_address"),
+    ],
+)
+def test_s3e2_classifier_positives(text: str, expected: str):
+    """Classifier returns the expected class; class names only, no raw values."""
+    result = _classify(text)
+    assert expected in result, f"expected {expected!r} in {result} for {text!r}"
+    assert result <= _S3E2_CLASSES, "class names only — never raw matched values"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # password meta / questions / too-short
+        "密码学很有趣",
+        "如何设置密码？",
+        "如何修改密码？",
+        "密码是什么？",
+        "password 是什么？",
+        "password: ab",
+        # api key meta / questions
+        "API key 是什么？",
+        "什么是 access token？",
+        "如何申请 API key？",
+        "API 密钥是什么？",
+        "secret key",
+        # otp meta / questions / bare code
+        "验证码一般是6位数",
+        "验证码是6位数",
+        "OTP 是什么意思？",
+        "我收不到验证码",
+        "验证码通常多久失效？",
+        "493821",
+        "OTP is 6 digits",
+        # payment card negatives (blanket long-digit behavior removed)
+        "订单号 2024080512345",
+        "1234567890123",
+        "银行卡通常有16位数字",
+        "我的学号是 2021001",
+        "邮编 100000",
+        # government id negatives
+        "身份证怎么办理？",
+        "SSN 是什么？",
+        "护照怎么申请？",
+        "123456789012345678",
+        "订单号 123456789012345",
+        # precise home address negatives
+        "我住在北京",
+        "我来自上海",
+        "我在纽约工作",
+        "我喜欢南京路",
+        "南京路很好逛",
+        "123 Example Street is a famous place",
+        "我住在南京路附近",
+        "房间号 502",
+        # health / allergy facts stay allowed
+        "我对花生过敏",
+        "我有哮喘",
+        # ordinary durable input
+        "我喜欢黑咖啡",
+    ],
+)
+def test_s3e2_classifier_negatives(text: str):
+    assert _classify(text) == frozenset(), f"expected no class for {text!r}"
+
+
+def test_s3e2_redact_user_text_surface():
+    """redact_user_text keeps its call surface; raw fragments never returned."""
+    jobs = _jobs()
+    assert jobs.redact_user_text("") == ("", False)
+    assert jobs.redact_user_text("我喜欢黑咖啡") == ("我喜欢黑咖啡", False)
+    assert jobs.redact_user_text("password: hunter2") == ("[REDACTED]", True)
+    redacted, blocked = jobs.redact_user_text("验证码是 493821")
+    assert blocked and "493821" not in redacted
+    redacted2, blocked2 = jobs.redact_user_text("我的密码是 hunter2")
+    assert blocked2 and "hunter2" not in redacted2
+    # old blanket long-digit behavior is removed: non-Luhn long number passes.
+    assert jobs.redact_user_text("订单号 2024080512345") == (
+        "订单号 2024080512345",
+        False,
+    )
+
+
+_S3E2_BLOCKED_SAMPLES = [
+    ("password", "我的密码是 hunter2", "hunter2"),
+    ("api_secret", "API key is sk-abcdefghijklmnopqr", "sk-abcdefghijklmnopqr"),
+    ("otp", "验证码是 493821", "493821"),
+    ("payment_card", "4111 1111 1111 1111", "4111 1111 1111 1111"),
+    ("government_id", "我的身份证号是 11010519491231002X", "11010519491231002X"),
+    ("precise_home_address", "我住在北京市朝阳区建国路88号2单元501室", "建国路88号"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("label, text, fragment", _S3E2_BLOCKED_SAMPLES)
+async def test_s3e2_blocked_job_completes_zero_everything(
+    isolated_store, monkeypatch, label, text, fragment
+):
+    """Whole-message fail-closed: no selectors, no provider, no Memory writes."""
+    jobs = _jobs()
+    session_id = f"s3e2-{label}-{uuid4().hex[:8]}"
+    counts = {"completion": 0, "stable": 0, "unresolved": 0}
+
+    async def fake_completion(**kwargs: Any) -> dict[str, Any]:
+        counts["completion"] += 1
+        return {"observations": [], "operations": []}
+
+    async def spy_stable(**kwargs: Any) -> list[Any]:
+        counts["stable"] += 1
+        return []
+
+    async def spy_unresolved(**kwargs: Any) -> list[Any]:
+        counts["unresolved"] += 1
+        return []
+
+    monkeypatch.setattr(
+        "app.services.memory_v11.retrieval.select_stable_fact_candidates",
+        spy_stable,
+    )
+    monkeypatch.setattr(
+        "app.services.memory_v11.retrieval.select_unresolved_observations",
+        spy_unresolved,
+    )
+
+    job, _, _ = await _enqueue_user_job(
+        session_id=session_id, user_text=text, title=f"s3e2-{label}"
+    )
+    result = await jobs.process_memory_job(
+        job_id=job["job_id"],
+        lease_owner="w-s3e2",
+        memory_completion=fake_completion,
+    )
+    assert result["state"] == "completed", f"{label}: job must complete"
+    assert counts["completion"] == 0, f"{label}: provider must not run"
+    assert counts["stable"] == 0, f"{label}: stable selector must not run"
+    assert counts["unresolved"] == 0, f"{label}: unresolved selector must not run"
+
+    db = await get_db("steins_gate", "memory")
+    try:
+        for table in ("memory_observations", "experiences", "stable_facts"):
+            row = await (await db.execute(
+                f"SELECT COUNT(*) AS n FROM {table} WHERE session_id=?",
+                (session_id,),
+            )).fetchone()
+            assert int(row["n"]) == 0, f"{label}: {table} must stay empty"
+        src = await (await db.execute(
+            """SELECT COUNT(*) AS n FROM memory_observation_sources s
+                JOIN memory_observations o ON o.observation_id=s.observation_id
+               WHERE o.session_id=?""",
+            (session_id,),
+        )).fetchone()
+        assert int(src["n"]) == 0, f"{label}: observation sources must stay empty"
+        ev = await (await db.execute(
+            """SELECT COUNT(*) AS n FROM stable_fact_evidence e
+                JOIN stable_facts f ON f.fact_id=e.fact_id
+               WHERE f.session_id=?""",
+            (session_id,),
+        )).fetchone()
+        assert int(ev["n"]) == 0, f"{label}: evidence must stay empty"
+        # synthetic sensitive value must not be stored in any Memory text column.
+        row = await (await db.execute(
+            """SELECT
+                   (SELECT COUNT(*) FROM memory_observations
+                     WHERE session_id=? AND display_text LIKE ?) +
+                   (SELECT COUNT(*) FROM experiences
+                     WHERE session_id=? AND display_text LIKE ?) +
+                   (SELECT COUNT(*) FROM stable_fact_versions v
+                      JOIN stable_facts f ON f.fact_id=v.fact_id
+                     WHERE f.session_id=? AND v.display_text LIKE ?) AS n""",
+            (
+                session_id, f"%{fragment}%",
+                session_id, f"%{fragment}%",
+                session_id, f"%{fragment}%",
+            ),
+        )).fetchone()
+        assert int(row["n"]) == 0, f"{label}: raw fragment must never be stored"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "label, text",
+    [
+        ("ordinary", "我喜欢黑咖啡"),
+        ("health", "我对花生过敏"),
+        ("coarse_location", "我住在北京"),
+        ("meta_otp", "验证码一般是6位数"),
+        ("long_number", "订单号 2024080512345"),
+    ],
+)
+async def test_s3e2_clean_input_reaches_provider_once(
+    isolated_store, monkeypatch, label, text
+):
+    """Negative control: clean input proceeds to exactly one completion."""
+    jobs = _jobs()
+    session_id = f"s3e2-ok-{label}-{uuid4().hex[:8]}"
+    counts = {"completion": 0}
+
+    async def fake_completion(**kwargs: Any) -> dict[str, Any]:
+        counts["completion"] += 1
+        return {"observations": [], "operations": []}
+
+    job, _, _ = await _enqueue_user_job(
+        session_id=session_id, user_text=text, title=f"s3e2-ok-{label}"
+    )
+    result = await jobs.process_memory_job(
+        job_id=job["job_id"],
+        lease_owner="w-s3e2",
+        memory_completion=fake_completion,
+    )
+    assert result["state"] == "completed"
+    assert counts["completion"] == 1, f"{label}: provider must run exactly once"
+
+
+@pytest.mark.asyncio
+async def test_s3e2_blocked_replay_stays_zero(isolated_store, monkeypatch):
+    """Blocked → completed; replay and re-run stay zero provider / zero writes."""
+    jobs = _jobs()
+    session_id = f"s3e2-replay-{uuid4().hex[:8]}"
+    counts = {"completion": 0}
+
+    async def fake_completion(**kwargs: Any) -> dict[str, Any]:
+        counts["completion"] += 1
+        return {"observations": [], "operations": []}
+
+    job, _, _ = await _enqueue_user_job(
+        session_id=session_id,
+        user_text="我的密码是 hunter2",
+        title="s3e2-replay",
+    )
+    first = await jobs.process_memory_job(
+        job_id=job["job_id"],
+        lease_owner="w-s3e2",
+        memory_completion=fake_completion,
+    )
+    assert first["state"] == "completed"
+    assert counts["completion"] == 0
+
+    again = await jobs.process_memory_job(
+        job_id=job["job_id"],
+        lease_owner="w-s3e2",
+        memory_completion=fake_completion,
+    )
+    assert again["state"] == "completed"
+    assert counts["completion"] == 0
+
+    # crash-before-completed equivalent: force back to pending; classifier
+    # re-runs, still blocked, still zero provider / zero semantic writes.
+    db = await get_db("steins_gate", "memory")
+    try:
+        await db.execute(
+            """UPDATE memory_ingest_jobs
+                SET state='pending', lease_owner=NULL, lease_expires_at=NULL,
+                    last_error_code=NULL, completed_at=NULL
+              WHERE job_id=?""",
+            (job["job_id"],),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    rerun = await jobs.process_memory_job(
+        job_id=job["job_id"],
+        lease_owner="w-s3e2",
+        memory_completion=fake_completion,
+    )
+    assert rerun["state"] == "completed"
+    assert counts["completion"] == 0
+    db2 = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db2.execute(
+            "SELECT COUNT(*) AS n FROM memory_observations WHERE session_id=?",
+            (session_id,),
+        )).fetchone()
+    finally:
+        await db2.close()
+    assert int(row["n"]) == 0, "replay must never write observations"
+
+
+# ---------------------------------------------------------------------------
+# S3E-2 REWORK: P1-A/P1-B/P1-C false-positive family fixes (reviewer repro).
+# ---------------------------------------------------------------------------
+
+_REWORK_REPRO_NEGATIVES = [
+    # P1-A: EN password meta prose must never be a "secret value".
+    "password is usually at least 8 characters",
+    "password is required",
+    "password is important",
+    "password is incorrect",
+    "password is weak",
+    "password is empty",
+    "the password is required",
+    "密码是用来保护账户的",
+    # P1-B: EN government labels must not capture ordinary prose.
+    "social security is important",
+    "social security benefits",
+    "social security number",
+    "social security is required for some forms",
+    "social security is a government program",
+    "passport is important",
+    "passport application process",
+    "national ID 是什么？",
+    # P1-C: cross-clause CN address contamination.
+    "我住在北京，南京路88号是公司地址",
+    "我住在北京，我喜欢建国路88号那家店",
+    "我住在北京；南京路88号是公司地址",
+    "我住在北京。南京路88号是公司地址",
+    "我住在北京，我在建国路88号上班",
+    "我喜欢南京路88号那家店",
+    "123 Example Street is my office",
+    "I live in New York; 123 Example Street is my office",
+]
+
+
+@pytest.mark.parametrize("text", _REWORK_REPRO_NEGATIVES)
+def test_s3e2_rework_reviewer_repro_negatives(text: str):
+    assert _classify(text) == frozenset(), f"rework repro must not block {text!r}"
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        # P1-A strong presentation / ownership with alphabetic-only values.
+        ("my password is huntertwo", "password"),
+        ("password=abcdef", "password"),
+        ("password: huntertwo", "password"),
+        ("我的密码是 abcdef", "password"),
+        ("我的密码为 abcdef", "password"),
+        # P1-A generic copula with secret-shaped values stays blocking.
+        ("password is p@ssword", "password"),
+        ("password is hunter2", "password"),
+        # P1-B labeled EN identifiers with identifier-shaped values.
+        ("SSN is 123456789", "government_id"),
+        ("social security number is 123-45-6789", "government_id"),
+        ("passport number: AB123456", "government_id"),
+        ("passport is AB123456", "government_id"),
+        ("national ID: A1234567", "government_id"),
+        ("government ID: 1234567890", "government_id"),
+    ],
+)
+def test_s3e2_rework_positive_controls(text: str, expected: str):
+    result = _classify(text)
+    assert expected in result, f"expected {expected!r} in {result} for {text!r}"
+    assert result <= _S3E2_CLASSES, "class names only — never raw matched values"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "label, text",
+    [
+        ("password_meta", "password is required"),
+        ("gov_prose", "social security is important"),
+        ("cross_clause_address", "我住在北京，南京路88号是公司地址"),
+    ],
+)
+async def test_s3e2_rework_clean_families_reach_provider_once(
+    isolated_store, monkeypatch, label, text
+):
+    """Each repaired family reaches exactly one provider completion."""
+    jobs = _jobs()
+    session_id = f"s3e2-rw-ok-{label}-{uuid4().hex[:8]}"
+    counts = {"completion": 0}
+
+    async def fake_completion(**kwargs: Any) -> dict[str, Any]:
+        counts["completion"] += 1
+        return {"observations": [], "operations": []}
+
+    job, _, _ = await _enqueue_user_job(
+        session_id=session_id, user_text=text, title=f"s3e2-rw-{label}"
+    )
+    result = await jobs.process_memory_job(
+        job_id=job["job_id"],
+        lease_owner="w-s3e2-rw",
+        memory_completion=fake_completion,
+    )
+    assert result["state"] == "completed"
+    assert counts["completion"] == 1, f"{label}: provider must run exactly once"
+
+
+_S3E2_REWORK_BLOCKED = [
+    ("password", "password is hunter2", "hunter2"),
+    ("government_id", "SSN: 123-45-6789", "123-45-6789"),
+    ("precise_home_address", "我住在建国路88号", "建国路88号"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("label, text, fragment", _S3E2_REWORK_BLOCKED)
+async def test_s3e2_rework_blocked_stop_gates_still_zero(
+    isolated_store, monkeypatch, label, text, fragment
+):
+    """Rework must not trade FP fixes for privacy false negatives."""
+    jobs = _jobs()
+    session_id = f"s3e2-rw-blk-{label}-{uuid4().hex[:8]}"
+    counts = {"completion": 0, "stable": 0, "unresolved": 0}
+
+    async def fake_completion(**kwargs: Any) -> dict[str, Any]:
+        counts["completion"] += 1
+        return {"observations": [], "operations": []}
+
+    async def spy_stable(**kwargs: Any) -> list[Any]:
+        counts["stable"] += 1
+        return []
+
+    async def spy_unresolved(**kwargs: Any) -> list[Any]:
+        counts["unresolved"] += 1
+        return []
+
+    monkeypatch.setattr(
+        "app.services.memory_v11.retrieval.select_stable_fact_candidates",
+        spy_stable,
+    )
+    monkeypatch.setattr(
+        "app.services.memory_v11.retrieval.select_unresolved_observations",
+        spy_unresolved,
+    )
+
+    job, _, _ = await _enqueue_user_job(
+        session_id=session_id, user_text=text, title=f"s3e2-rw-blk-{label}"
+    )
+    result = await jobs.process_memory_job(
+        job_id=job["job_id"],
+        lease_owner="w-s3e2-rw",
+        memory_completion=fake_completion,
+    )
+    assert result["state"] == "completed", f"{label}: job must complete"
+    assert counts["completion"] == 0, f"{label}: provider must not run"
+    assert counts["stable"] == 0, f"{label}: stable selector must not run"
+    assert counts["unresolved"] == 0, f"{label}: unresolved selector must not run"
+
+    db = await get_db("steins_gate", "memory")
+    try:
+        for table in ("memory_observations", "experiences", "stable_facts"):
+            row = await (await db.execute(
+                f"SELECT COUNT(*) AS n FROM {table} WHERE session_id=?",
+                (session_id,),
+            )).fetchone()
+            assert int(row["n"]) == 0, f"{label}: {table} must stay empty"
+        src = await (await db.execute(
+            """SELECT COUNT(*) AS n FROM memory_observation_sources s
+                JOIN memory_observations o ON o.observation_id=s.observation_id
+               WHERE o.session_id=?""",
+            (session_id,),
+        )).fetchone()
+        assert int(src["n"]) == 0, f"{label}: observation sources must stay empty"
+        row = await (await db.execute(
+            """SELECT
+                   (SELECT COUNT(*) FROM memory_observations
+                     WHERE session_id=? AND display_text LIKE ?) +
+                   (SELECT COUNT(*) FROM experiences
+                     WHERE session_id=? AND display_text LIKE ?) AS n""",
+            (session_id, f"%{fragment}%", session_id, f"%{fragment}%"),
+        )).fetchone()
+        assert int(row["n"]) == 0, f"{label}: raw fragment must never be stored"
+    finally:
+        await db.close()
