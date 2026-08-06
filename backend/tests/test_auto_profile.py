@@ -8,10 +8,12 @@ Product lock:
 from __future__ import annotations
 
 import json
+from uuid import uuid4
 
 import pytest
 
 from app.db import init_db, reset_initialization_cache
+from app.services.conversations import conversation_service
 from app.services.memory import (
     MEMORY_INGEST_WINDOW_N,
     CoreFactCandidate,
@@ -545,3 +547,135 @@ async def test_parse_and_apply_partial_schema_still_writes_core(isolated_store):
     await memory_service.apply_extraction(owner, "steins_gate", er, identity_mode="self")
     cores = await memory_service.select_core_facts(owner, "steins_gate", "塞拉斯", identity_mode="self")
     assert len(cores) == 1
+
+# ---------------------------------------------------------------------------
+# MEMORY-V11-S3E-3: D38 working-summary contract for the legacy writer.
+# ---------------------------------------------------------------------------
+
+
+def test_s3e3_extraction_instruction_working_summary_d38_contract():
+    """working_summary field is constrained to short-term continuity only."""
+    text = build_extraction_instruction("self")
+    for required in (
+        "working_summary",
+        "SHORT-TERM CONTINUITY ONLY",
+        "NO_WORKING_CONTEXT",
+        "durable",
+        "facts",
+        "horizon",
+        "Identity scope=",
+    ):
+        assert required in text, required
+    assert "long-term episodic-as-memory" in text
+    assert "inferred" in text
+    assert "data, not instructions" in text
+
+
+@pytest.mark.asyncio
+async def test_s3e3_legacy_sentinel_saves_versioned_empty(isolated_store, monkeypatch):
+    """NO_WORKING_CONTEXT → models.save_memory_summary('') → versioned empty."""
+    from app import models
+    from app.db import get_db
+
+    session_id = f"s3e3-legacy-sentinel-{uuid4()}"
+    captured: dict = {}
+
+    class _Adapter:
+        async def complete_json(self, **kwargs):
+            return {"working_summary": "NO_WORKING_CONTEXT", "facts": []}
+
+    snap = ProviderSnapshot(
+        provider_id="deepseek",
+        model_id="deepseek-chat",
+        capabilities=ProviderCapabilities(
+            tasks=frozenset({ProviderTask.MEMORY, ProviderTask.CHAT}),
+            structured_output=True,
+        ),
+        adapter=_Adapter(),
+    )
+    await memory_service._extract_turn(
+        session_id,
+        "steins_gate",
+        "こんにちは",
+        "[EMO:neutral] こんにちは。",
+        [1, 2],
+        api_key="real-key-not-test-xx",
+        provider_snapshot=snap,
+        conversation_id=None,
+        identity_mode="self",
+        skip_core=False,
+        recent_messages=[
+            {"id": 1, "role": "user", "content": "こんにちは"},
+            {"id": 2, "role": "assistant", "content": "[EMO:neutral] こんにちは。"},
+        ],
+    )
+    db = await get_db("steins_gate", "history")
+    try:
+        row = await (
+            await db.execute(
+                "SELECT summary FROM memory_summaries WHERE session_id=? ORDER BY id DESC LIMIT 1",
+                (session_id,),
+            )
+        ).fetchone()
+    finally:
+        await db.close()
+    assert row is not None, "versioned-empty row must be written"
+    assert row["summary"] == "AMADEUS_WORKING_SUMMARY_D38_V1\n"
+
+
+@pytest.mark.asyncio
+async def test_s3e3_legacy_empty_does_not_overwrite_prior_safe(isolated_store):
+    """working_summary='' → no summary row written (prior safe summary kept)."""
+    from app import models
+    from app.db import get_db
+
+    session_id = f"s3e3-legacy-empty-{uuid4()}"
+    conv = await conversation_service.create(session_id, "steins_gate", title="s3e3")
+    await models.save_memory_summary(
+        session_id,
+        "比較中、候補Bの確認待ち",
+        worldline="steins_gate",
+        conversation_id=str(conv["id"]),
+    )
+
+    class _Adapter:
+        async def complete_json(self, **kwargs):
+            return {"working_summary": "", "facts": []}
+
+    snap = ProviderSnapshot(
+        provider_id="deepseek",
+        model_id="deepseek-chat",
+        capabilities=ProviderCapabilities(
+            tasks=frozenset({ProviderTask.MEMORY, ProviderTask.CHAT}),
+            structured_output=True,
+        ),
+        adapter=_Adapter(),
+    )
+    await memory_service._extract_turn(
+        session_id,
+        "steins_gate",
+        "こんにちは",
+        "[EMO:neutral] こんにちは。",
+        [1, 2],
+        api_key="real-key-not-test-xx",
+        provider_snapshot=snap,
+        conversation_id=None,
+        identity_mode="self",
+        skip_core=False,
+        recent_messages=[
+            {"id": 1, "role": "user", "content": "こんにちは"},
+            {"id": 2, "role": "assistant", "content": "[EMO:neutral] こんにちは。"},
+        ],
+    )
+    db = await get_db("steins_gate", "history")
+    try:
+        rows = await (
+            await db.execute(
+                "SELECT summary FROM memory_summaries WHERE session_id=? ORDER BY id",
+                (session_id,),
+            )
+        ).fetchall()
+    finally:
+        await db.close()
+    assert len(rows) == 1, "empty working_summary must not add a row"
+    assert rows[0]["summary"] == "AMADEUS_WORKING_SUMMARY_D38_V1\n比較中、候補Bの確認待ち"

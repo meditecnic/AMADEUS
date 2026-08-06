@@ -453,13 +453,28 @@ async def compress_and_update_history(
                     "api_key": session_data.api_key,
                     "old_summary": session_data.memory_summary,
                     "model": provider_snapshot.model_id,
+                    # D38: compression is identity-aware; never inferred.
+                    "identity_mode": session_data.identity_mode,
                 },
             )
-            new_summary = await method(**kwargs)
-            if new_summary:
+            from app.services.working_summary import (
+                normalize_generated_working_summary,
+            )
+
+            raw = await method(**kwargs)
+            success, summary = normalize_generated_working_summary(raw)
+            if not success:
+                # Failure ('' / whitespace / provider error / reserved marker):
+                # no save, no history trim; previous safe runtime summary stays.
+                print(
+                    f"[History Compression] Session {session_id}: "
+                    "no working context (no save / no trim)",
+                    flush=True,
+                )
+            else:
                 await models.save_memory_summary(
                     session_id,
-                    new_summary,
+                    summary,
                     worldline=worldline,
                     conversation_id=conversation_id,
                 )
@@ -470,14 +485,14 @@ async def compress_and_update_history(
                         or getattr(session_data, "conversation_id", None) != conversation_id
                     ):
                         return
-                    session_data.memory_summary = new_summary
+                    session_data.memory_summary = summary
                     if len(session_data.history) >= N:
                         session_data.history = session_data.history[N:]
                     else:
                         session_data.history = []
                     print(
                         f"[History Compression] Session {session_id}: "
-                        f"compression successful ({len(new_summary)} chars)"
+                        f"compression successful ({len(summary)} chars)"
                     )
     except Exception as e:
         print(f"[History Compression Error] Session {session_id}: {e}")
@@ -1286,7 +1301,6 @@ async def processor_loop(
     turn_provider = None
 
     active_history = session.history
-    memory_summary = session.memory_summary
 
     try:
         try:
@@ -1509,7 +1523,7 @@ async def processor_loop(
         
         final_text, final_emotion, merged_tool_calls, emo_tag_found = await get_clean_text_stream(
             active_history=active_history,
-            memory_summary=memory_summary,
+            memory_summary="",
             session=session,
             tools=tools_to_use,
             tool_choice=tool_choice_to_use,
@@ -1540,7 +1554,7 @@ async def processor_loop(
             
             final_text, final_emotion, _, emo_tag_found = await get_clean_text_stream(
                 active_history=tool_context,
-                memory_summary=memory_summary,
+                memory_summary="",
                 session=session,
                 tools=None,
                 tool_choice=None,

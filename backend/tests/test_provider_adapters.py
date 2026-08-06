@@ -389,3 +389,63 @@ async def test_custom_compatible_provider_never_guesses_reasoning_parameters():
     payload = json.loads(requests[0].content)
     assert "thinking" not in payload
     assert "reasoning_effort" not in payload
+
+
+# ---------------------------------------------------------------------------
+# MEMORY-V11-S3E-3: D38 identity-aware compression construction.
+# ---------------------------------------------------------------------------
+
+
+def test_compression_messages_identity_self_vs_okabe():
+    from app.services.provider_adapters import _compression_messages
+
+    history = [{"role": "user", "content": "こんにちは"}]
+    self_msgs = _compression_messages(history, "", "self")
+    sys_self = self_msgs[0]["content"]
+    assert "利用者を岡部と決めつけない" in sys_self
+    assert "ユーザーは岡部と呼ぶ" not in sys_self
+    assert "NO_WORKING_CONTEXT" in sys_self
+    assert "作業中コンテキスト" in sys_self
+    assert "比較中" not in sys_self
+
+    okabe_msgs = _compression_messages(history, "", "okabe")
+    assert "ユーザーは岡部と呼ぶ" in okabe_msgs[0]["content"]
+
+    with_old = _compression_messages(history, "比較中、候補Bの確認待ち", "self")
+    user_content = with_old[1]["content"]
+    assert "比較中、候補Bの確認待ち" in user_content
+    assert "これまでの作業コンテキスト" in user_content
+
+
+@pytest.mark.asyncio
+async def test_openai_compatible_compression_uses_d38_identity_contract():
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "比較中、候補Bの確認待ち"}}]},
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        provider_id="fake-compatible",
+        base_url="https://compatible.example/v1",
+        default_model="fake-chat",
+        message_builder=deepseek_service.build_persona_messages,
+        transport=httpx.MockTransport(handler),
+    )
+    result = await adapter.compress_history(
+        history=[{"role": "user", "content": "こんにちは"}],
+        api_key="provider-secret",
+        old_summary="",
+        model="fake-chat",
+        identity_mode="self",
+    )
+    assert result == "比較中、候補Bの確認待ち"
+    payload = json.loads(requests[0].content)
+    system = payload["messages"][0]["content"]
+    assert "利用者を岡部と決めつけない" in system
+    assert "ユーザーは岡部と呼ぶ" not in system
+    assert "NO_WORKING_CONTEXT" in system
+    assert "作業中コンテキスト" in system

@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 from app.db import get_db, normalize_worldline
+from app.services.working_summary import decode_working_summary, encode_working_summary
 
 
 async def _resolve_conversation_id(
@@ -121,13 +122,19 @@ async def save_memory_summary(
     worldline: str = "steins_gate",
     conversation_id: str | None = None,
 ):
+    """Persist a working summary (D38).
+
+    Accepts decoded/runtime PLAIN text and encodes internally before INSERT so
+    the storage marker can never escape through this API. Callers never encode
+    DB strings manually.
+    """
     wl = normalize_worldline(worldline)
     cid = await _resolve_conversation_id(session_id, wl, conversation_id)
     db = await get_db(wl, "history")
     try:
         await db.execute(
             "INSERT INTO memory_summaries(session_id,conversation_id,summary) VALUES(?,?,?)",
-            (session_id, cid, summary),
+            (session_id, cid, encode_working_summary(summary)),
         )
         await db.commit()
     finally:
@@ -139,6 +146,7 @@ async def get_latest_summary(
     worldline: str = "steins_gate",
     conversation_id: str | None = None,
 ) -> str:
+    """Read the newest working summary as decoded PLAIN text (fail closed)."""
     wl = normalize_worldline(worldline)
     cid = await _resolve_conversation_id(session_id, wl, conversation_id)
     db = await get_db(wl, "history")
@@ -149,7 +157,7 @@ async def get_latest_summary(
             (session_id, cid),
         )
         row = await cur.fetchone()
-        return row["summary"] if row else ""
+        return decode_working_summary(row["summary"]) if row else ""
     finally:
         await db.close()
 

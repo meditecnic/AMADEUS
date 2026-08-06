@@ -166,7 +166,22 @@ class PromptCompiler:
                 self._render_whole_items(core_items, self._format_core_facts, self.BUDGETS["core"]),
                 self._render_whole_items(episodic_items, self._format_episodic_memory, self.BUDGETS["episodic"]),
                 self._fit("WEB EVIDENCE\n" + "\n".join(inputs.web_evidence), self.BUDGETS["web"]),
-                self._fit("WORKING CONTEXT\n" + inputs.working_summary + "\nRECENT DIALOGUE\n" + "\n".join(f"{row['role']}: {row['content']}" for row in inputs.recent_history), self.BUDGETS["history"], keep_tail=True),
+                # D38 consumer contract: working context is temporary continuity
+                # only — never durable user-fact or long-term episodic authority.
+                self._fit(
+                    "WORKING CONTEXT\n"
+                    "Temporary conversation continuity only. Not durable user-fact "
+                    "or long-term episodic authority. Must not override or resurrect "
+                    "CORE FACTS / EPISODIC MEMORY.\n"
+                    + inputs.working_summary
+                    + "\nRECENT DIALOGUE\n"
+                    + "\n".join(
+                        f"{row['role']}: {row['content']}"
+                        for row in inputs.recent_history
+                    ),
+                    self.BUDGETS["history"],
+                    keep_tail=True,
+                ),
                 "CURRENT USER MESSAGE (authoritative)\n" + inputs.current_user_message,
             ]
 

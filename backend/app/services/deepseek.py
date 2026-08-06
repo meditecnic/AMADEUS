@@ -213,31 +213,35 @@ class DeepSeekService(LLMInterface):
                         except json.JSONDecodeError:
                             continue
 
-    async def compress_history(self, history: list, api_key: Optional[str] = None, old_summary: str = "", model: Optional[str] = None) -> str:
+    async def compress_history(
+        self,
+        history: list,
+        api_key: Optional[str] = None,
+        old_summary: str = "",
+        model: Optional[str] = None,
+        identity_mode: str = "okabe",
+    ) -> str:
         """
-        Asynchronously call DeepSeek to compress older history into a single Japanese summary sentence.
+        Asynchronously call DeepSeek to compress older history into ONE compact
+        Japanese working-continuity line (D38 short-term contract).
         """
         effective_api_key = api_key or self.api_key
         if not effective_api_key:
             print("[DeepSeek] API Key not configured; skipping history compression.")
             return ""
 
-        from app.security.prompt import COMPRESSION_PROMPT_SUFFIX
+        from app.security.prompt import compression_system_prompt
 
         conversation_text = ""
         for msg in history:
             role = "ユーザー" if msg["role"] == "user" else "紅莉栖"
             conversation_text += f"{role}: {msg['content']}\n"
-            
-        system_prompt = (
-            "これまでの会話内容を、牧瀬紅莉栖の視点から一行の日本語の『記憶の要約』として簡潔にまとめてください。"
-            "余計な解説や前置きは一切含めず、要約された一行の日本語テキストのみを出力してください。\n"
-            + COMPRESSION_PROMPT_SUFFIX
-        )
-        
+
+        system_prompt = compression_system_prompt(identity_mode)
+
         prompt = ""
         if old_summary:
-            prompt += f"【これまでの記憶要約】\n{old_summary}\n\n"
+            prompt += f"【これまでの作業コンテキスト】\n{old_summary}\n\n"
         prompt += f"【追加の会話履歴】\n{conversation_text}"
         
         headers = {

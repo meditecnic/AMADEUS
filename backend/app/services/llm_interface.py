@@ -2,6 +2,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import AsyncGenerator, Optional
 
+from app.db import DEFAULT_IDENTITY_MODE
+
 
 def build_stream_messages(
     message_builder: Callable[..., list[dict]],
@@ -54,8 +56,9 @@ class LLMInterface(ABC):
         api_key: Optional[str] = None,
         old_summary: str = "",
         model: Optional[str] = None,
+        identity_mode: str = DEFAULT_IDENTITY_MODE,
     ) -> str:
-        """Compress conversation history into a single summary sentence."""
+        """Compress conversation history into a working-summary line (D38)."""
         ...
 
     @abstractmethod

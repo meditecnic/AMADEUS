@@ -8,7 +8,7 @@ from typing import Any, Optional
 
 import httpx
 
-from app.security.prompt import COMPRESSION_PROMPT_SUFFIX
+from app.security.prompt import compression_system_prompt
 from app.services.llm_interface import LLMInterface, build_stream_messages
 
 
@@ -201,6 +201,7 @@ class OpenAICompatibleAdapter(LLMInterface):
         api_key: Optional[str] = None,
         old_summary: str = "",
         model: Optional[str] = None,
+        identity_mode: str = "okabe",
     ) -> str:
         conversation = "\n".join(
             f"{'ユーザー' if message['role'] == 'user' else '紅莉栖'}: {message['content']}"
@@ -208,12 +209,9 @@ class OpenAICompatibleAdapter(LLMInterface):
         )
         prompt = ""
         if old_summary:
-            prompt += f"【これまでの記憶要約】\n{old_summary}\n\n"
+            prompt += f"【これまでの作業コンテキスト】\n{old_summary}\n\n"
         prompt += f"【追加の会話履歴】\n{conversation}"
-        system = (
-            "会話内容を牧瀬紅莉栖の視点から簡潔な一行の日本語記憶に要約してください。"
-            "前置きや解説は含めません。\n" + COMPRESSION_PROMPT_SUFFIX
-        )
+        system = compression_system_prompt(identity_mode)
         return await self._complete_text(
             [
                 {"role": "system", "content": system},
@@ -250,22 +248,21 @@ def _translation_messages(text: str) -> list[dict]:
     return build_translation_messages(text)
 
 
-def _compression_messages(history: list, old_summary: str) -> list[dict]:
+def _compression_messages(
+    history: list, old_summary: str, identity_mode: str = "okabe"
+) -> list[dict]:
     conversation = "\n".join(
         f"{'ユーザー' if message['role'] == 'user' else '紅莉栖'}: {message['content']}"
         for message in history
     )
     prompt = ""
     if old_summary:
-        prompt += f"【これまでの記憶要約】\n{old_summary}\n\n"
+        prompt += f"【これまでの作業コンテキスト】\n{old_summary}\n\n"
     prompt += f"【追加の会話履歴】\n{conversation}"
     return [
         {
             "role": "system",
-            "content": (
-                "会話内容を牧瀬紅莉栖の視点から簡潔な一行の日本語記憶に要約してください。"
-                "前置きや解説は含めません。\n" + COMPRESSION_PROMPT_SUFFIX
-            ),
+            "content": compression_system_prompt(identity_mode),
         },
         {"role": "user", "content": prompt},
     ]
@@ -489,9 +486,18 @@ class OpenAIResponsesAdapter(LLMInterface):
             _translation_messages(text), api_key=api_key, model=model
         )
 
-    async def compress_history(self, history: list, api_key=None, old_summary="", model=None) -> str:
+    async def compress_history(
+        self,
+        history: list,
+        api_key=None,
+        old_summary="",
+        model=None,
+        identity_mode: str = "okabe",
+    ) -> str:
         return await self._complete_text(
-            _compression_messages(history, old_summary), api_key=api_key, model=model
+            _compression_messages(history, old_summary, identity_mode),
+            api_key=api_key,
+            model=model,
         )
 
     async def list_models(
@@ -698,9 +704,18 @@ class GeminiAdapter(LLMInterface):
             _translation_messages(text), api_key=api_key, model=model
         )
 
-    async def compress_history(self, history: list, api_key=None, old_summary="", model=None) -> str:
+    async def compress_history(
+        self,
+        history: list,
+        api_key=None,
+        old_summary="",
+        model=None,
+        identity_mode: str = "okabe",
+    ) -> str:
         return await self._complete_text(
-            _compression_messages(history, old_summary), api_key=api_key, model=model
+            _compression_messages(history, old_summary, identity_mode),
+            api_key=api_key,
+            model=model,
         )
 
     async def list_models(

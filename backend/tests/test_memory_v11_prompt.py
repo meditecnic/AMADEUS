@@ -492,3 +492,36 @@ async def test_r5_final_prompt_core_facts_whole_item_under_global_pressure(
         assert "FACT_USE_CONTRACT" in prompt, (
             "surviving facts must keep the usage contract intact"
         )
+
+
+# ---------------------------------------------------------------------------
+# MEMORY-V11-S3E-3: D38 working-context consumer authority (single injection).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_s3e3_working_context_consumer_authority(isolated_store, monkeypatch):
+    """WORKING CONTEXT carries a temporary/non-authoritative boundary."""
+    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
+    session_id = f"s3e3-wc-{uuid4()}"
+    session = _session_obj(session_id)
+    session.memory_summary = "比較中、候補Bの確認待ち"
+    prompt = await compile_for_session(session, "こんにちは")
+    assert "WORKING CONTEXT" in prompt
+    assert "Temporary conversation continuity only" in prompt
+    assert "Not durable user-fact or long-term episodic authority" in prompt
+    assert "Must not override" in prompt
+    assert prompt.count("比較中、候補Bの確認待ち") == 1
+    assert "AMADEUS_WORKING_SUMMARY_D38_V1" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_s3e3_working_context_empty_still_renders_boundary(
+    isolated_store, monkeypatch
+):
+    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
+    session_id = f"s3e3-wc-empty-{uuid4()}"
+    session = _session_obj(session_id)
+    prompt = await compile_for_session(session, "こんにちは")
+    assert "WORKING CONTEXT" in prompt
+    assert "Temporary conversation continuity only" in prompt
