@@ -21,6 +21,7 @@ from app.db import init_db, reset_initialization_cache
 
 V11_MEMORY_TABLES = (
     "memory_ingest_jobs",
+    "memory_ingest_receipts",
     "memory_observations",
     "memory_observation_sources",
     "memory_topics",
@@ -1065,5 +1066,191 @@ async def test_r4_v11_additive_upgrade_on_existing_v11_db(tmp_path, monkeypatch)
             "SELECT COUNT(*) FROM stable_facts WHERE session_id='v11-legacy'"
         ).fetchone()[0]
         assert count == 1
+    finally:
+        connection.close()
+
+
+# ---------------------------------------------------------------------------
+# MEMORY-V11-S3F-1: D28 durable ingest receipts — schema contract.
+# ---------------------------------------------------------------------------
+
+RECEIPT_CURSOR_COLUMNS = [
+    "session_id",
+    "conversation_id",
+    "identity_mode",
+    "source_message_id",
+    "pipeline_version",
+]
+
+
+def _receipt_column_names(connection: sqlite3.Connection) -> list[str]:
+    return [row[1] for row in connection.execute("PRAGMA table_info('memory_ingest_receipts')")]
+
+
+def _receipt_pk_columns(connection: sqlite3.Connection) -> list[str]:
+    return [
+        row[1]
+        for row in connection.execute("PRAGMA table_info('memory_ingest_receipts')")
+        if int(row[5]) != 0
+    ]
+
+
+@pytest.mark.asyncio
+async def test_s0f1_receipts_table_contract(isolated_store):
+    """S3F-1: exact receipt table, columns, PK cursor, CHECKs."""
+    connection = _open_memory()
+    try:
+        names = _table_names(connection)
+        assert "memory_ingest_receipts" in names
+        for worldline in ("steins_gate", "beta"):
+            names_wl = _table_names(_open_memory(worldline))
+            assert "memory_ingest_receipts" in names_wl, worldline
+        cols = _receipt_column_names(connection)
+        assert cols == [
+            "session_id",
+            "conversation_id",
+            "identity_mode",
+            "source_message_id",
+            "pipeline_version",
+            "receipt_kind",
+            "created_at",
+        ], cols
+        # PRAGMA table_info reports composite-PK columns as pk=1..N in order.
+        assert _receipt_pk_columns(connection) == RECEIPT_CURSOR_COLUMNS
+        import re as _re
+
+        pk_match = _re.search(r"PRIMARY KEY\s*\(([^)]+)\)", _table_sql(connection, "memory_ingest_receipts"))
+        assert pk_match is not None
+        pk_cols = [c.strip() for c in pk_match.group(1).split(",")]
+        assert pk_cols == RECEIPT_CURSOR_COLUMNS, pk_cols
+        ddl = _table_sql(connection, "memory_ingest_receipts")
+        checks = {
+            _re.sub(r"\s+", "", f"{col} IN ({values})").upper()
+            for col, values in _re.findall(
+                r"CHECK\s*\(\s*([A-Za-z_]+)\s+IN\s*\(([^)]*)\)\s*\)",
+                ddl,
+                flags=_re.S | _re.I,
+            )
+        }
+        assert "IDENTITY_MODEIN('SELF','OKABE')" in checks, checks
+        assert "RECEIPT_KINDIN('PROVIDER_EMPTY','PROVIDER_NONEMPTY')" in checks, checks
+    finally:
+        connection.close()
+
+
+@pytest.mark.asyncio
+async def test_s0f1_receipts_checks_reject_invalid_rows(isolated_store):
+    connection = _open_memory()
+    try:
+        base = (
+            "INSERT INTO memory_ingest_receipts("
+            "session_id,conversation_id,identity_mode,source_message_id,"
+            "pipeline_version,receipt_kind,created_at"
+            ") VALUES(?,?,?,?,?,?,?)"
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                base, ("s", "c", "bogus", 1, "memory-v11-1", "provider_empty", "now")
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                base, ("s", "c", "self", 1, "memory-v11-1", "provider_bogus", "now")
+            )
+        # exact duplicate cursor converges to one row
+        connection.execute(
+            base, ("s", "c", "self", 1, "memory-v11-1", "provider_empty", "now")
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO memory_ingest_receipts("
+            "session_id,conversation_id,identity_mode,source_message_id,"
+            "pipeline_version,receipt_kind,created_at"
+            ") VALUES(?,?,?,?,?,?,?)",
+            ("s", "c", "self", 1, "memory-v11-1", "provider_nonempty", "now2"),
+        )
+        n = connection.execute(
+            "SELECT COUNT(*) FROM memory_ingest_receipts WHERE session_id='s'"
+        ).fetchone()[0]
+        assert n == 1, "duplicate exact cursor must not create a second row"
+    finally:
+        connection.close()
+
+
+def _seed_v11_memory_db_without_receipts(
+    path: Path, *, session_id: str = "v11-no-receipts"
+) -> None:
+    """An already-v11 memory DB that predates the S3F-1 receipts DDL."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(str(path))
+    try:
+        connection.executescript(FROZEN_V10_MEMORY_DDL)
+        statements = db_module._split_sql_statements(db_module.MEMORY_V11_DDL)
+        for statement in statements:
+            if "memory_ingest_receipts" in statement:
+                continue
+            connection.execute(statement)
+        connection.execute(
+            "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version','11')"
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('embedding_model',?)",
+            (db_module.EMBEDDING_MODEL,),
+        )
+        connection.execute(
+            "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('embedding_dimension',?)",
+            (str(db_module.EMBEDDING_DIMENSION),),
+        )
+        now = "2026-08-01T00:00:00+00:00"
+        connection.execute(
+            """INSERT INTO stable_facts(
+                   fact_id, session_id, identity_mode, topic_id, state,
+                   active_version, is_pinned, created_at, updated_at, deleted_at
+               ) VALUES(?,?,?,NULL,'active',1,0,?,?,NULL)""",
+            ("fact-no-receipts-1", session_id, "self", now, now),
+        )
+        connection.commit()
+        names = _table_names(connection)
+        assert "memory_ingest_receipts" not in names, (
+            "fixture must represent a pre-receipts v11 DB"
+        )
+    finally:
+        connection.close()
+
+
+@pytest.mark.asyncio
+async def test_s0f1_receipts_additive_upgrade_on_existing_v11_db(tmp_path, monkeypatch):
+    """An already-v11 DB receives the receipt table on normal init, no bump."""
+    monkeypatch.delenv("AMADEUS_DB_PATH", raising=False)
+    data_root = tmp_path / "additive_v11_receipts"
+    monkeypatch.setenv("AMADEUS_DATA_DIR", str(data_root))
+    path = Path(db_module._resolve_path("steins_gate", "memory"))
+    _seed_v11_memory_db_without_receipts(path, session_id="v11-no-receipts")
+
+    reset_initialization_cache()
+    await init_db()
+
+    connection = _open_memory("steins_gate")
+    try:
+        assert "memory_ingest_receipts" in _table_names(connection)
+        version = connection.execute(
+            "SELECT value FROM schema_meta WHERE key='schema_version'"
+        ).fetchone()[0]
+        assert version == "11", "additive receipt table must not bump the version"
+        count = connection.execute(
+            "SELECT COUNT(*) FROM stable_facts WHERE session_id='v11-no-receipts'"
+        ).fetchone()[0]
+        assert count == 1, "pre-existing v11 rows must survive"
+    finally:
+        connection.close()
+
+    # second init idempotent
+    reset_initialization_cache()
+    await init_db()
+    connection = _open_memory("steins_gate")
+    try:
+        assert "memory_ingest_receipts" in _table_names(connection)
+        version = connection.execute(
+            "SELECT value FROM schema_meta WHERE key='schema_version'"
+        ).fetchone()[0]
+        assert version == "11"
     finally:
         connection.close()

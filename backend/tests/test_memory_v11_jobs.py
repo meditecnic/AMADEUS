@@ -2553,6 +2553,15 @@ async def test_s3d4_d37_crash_window_retry_no_duplicates(isolated_store, monkeyp
     assert int(src_after_crash["n"]) == 2
     assert int(count_after_crash["reanalysis_count"]) == 1
     assert int(facts_after_crash["n"]) == 1
+    # S3F-1 E3: a provider_nonempty dedicated receipt now exists for the cursor.
+    receipt_rows = await _receipt_rows(session_id)
+    assert len(receipt_rows) == 1
+    assert receipt_rows[0]["receipt_kind"] == "provider_nonempty"
+    assert receipt_rows[0]["session_id"] == session_id
+    assert receipt_rows[0]["conversation_id"] == conversation_id
+    assert receipt_rows[0]["identity_mode"] == "self"
+    assert int(receipt_rows[0]["source_message_id"]) == int(mid_resolves)
+    assert receipt_rows[0]["pipeline_version"] == "memory-v11-1"
 
     call_count = {"n": 0}
 
@@ -2567,6 +2576,7 @@ async def test_s3d4_d37_crash_window_retry_no_duplicates(isolated_store, monkeyp
     assert call_count["n"] == 0, (
         "crash retry must converge via the source receipt WITHOUT re-running completion"
     )
+    assert len(await _receipt_rows(session_id)) == 1, "no duplicate receipt on retry"
 
     db = await get_db("steins_gate", "memory")
     try:
@@ -3191,5 +3201,589 @@ async def test_s3e2_rework_blocked_stop_gates_still_zero(
             (session_id, f"%{fragment}%", session_id, f"%{fragment}%"),
         )).fetchone()
         assert int(row["n"]) == 0, f"{label}: raw fragment must never be stored"
+    finally:
+        await db.close()
+
+
+# ---------------------------------------------------------------------------
+# MEMORY-V11-S3F-1: D28 durable ingest receipts.
+# ---------------------------------------------------------------------------
+
+
+async def _receipt_rows(session_id: str | None = None) -> list[dict[str, Any]]:
+    db = await get_db("steins_gate", "memory")
+    try:
+        if session_id is None:
+            rows = await (
+                await db.execute(
+                    "SELECT * FROM memory_ingest_receipts ORDER BY created_at, session_id"
+                )
+            ).fetchall()
+        else:
+            rows = await (
+                await db.execute(
+                    "SELECT * FROM memory_ingest_receipts WHERE session_id=? ORDER BY created_at",
+                    (session_id,),
+                )
+            ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        await db.close()
+
+
+async def _session_zero_semantic_rows(session_id: str) -> None:
+    """Zero observations / sources / facts / versions / evidence / experiences / vectors / topics."""
+    db = await get_db("steins_gate", "memory")
+    try:
+        checks = {
+            "observations": "SELECT COUNT(*) AS n FROM memory_observations WHERE session_id=?",
+            "experiences": "SELECT COUNT(*) AS n FROM experiences WHERE session_id=?",
+            "facts": "SELECT COUNT(*) AS n FROM stable_facts WHERE session_id=?",
+            "versions": """SELECT COUNT(*) AS n FROM stable_fact_versions v
+                             JOIN stable_facts f ON f.fact_id=v.fact_id
+                            WHERE f.session_id=?""",
+            "evidence": """SELECT COUNT(*) AS n FROM stable_fact_evidence e
+                             JOIN stable_facts f ON f.fact_id=e.fact_id
+                            WHERE f.session_id=?""",
+            "sources": """SELECT COUNT(*) AS n FROM memory_observation_sources s
+                            JOIN memory_observations o ON o.observation_id=s.observation_id
+                           WHERE o.session_id=?""",
+            "vectors": """SELECT COUNT(*) AS n FROM stable_fact_version_embeddings e
+                            JOIN stable_facts f ON f.fact_id=e.fact_id
+                           WHERE f.session_id=?""",
+            "topics": "SELECT COUNT(*) AS n FROM memory_topics WHERE session_id=?",
+        }
+        for label, sql in checks.items():
+            row = await (await db.execute(sql, (session_id,))).fetchone()
+            assert int(row["n"]) == 0, f"{label} must be zero"
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_s3f1_e0_empty_completion_writes_provider_empty_receipt(isolated_store):
+    """E0/R3: valid empty completion → one full-cursor provider_empty receipt, zero semantic rows."""
+    jobs = _jobs()
+    session_id = f"s3f1-e0-{uuid4().hex[:8]}"
+    conv = await conversation_service.create(
+        session_id, "steins_gate", title="e0", identity_mode="self"
+    )
+    conversation_id = str(conv["id"])
+    mid = await models.save_message(
+        session_id, "user", "今天天气不错",
+        worldline="steins_gate", conversation_id=conversation_id,
+    )
+    call_count = {"n": 0}
+
+    async def empty_completion(**kwargs):
+        call_count["n"] += 1
+        return {"observations": [], "operations": []}
+
+    result = await _run_capture_job(
+        session_id=session_id, conversation_id=conversation_id,
+        source_message_id=int(mid), completion=empty_completion,
+    )
+    assert result["state"] == "completed"
+    assert call_count["n"] == 1
+    receipts = await _receipt_rows(session_id)
+    assert len(receipts) == 1, "exactly one receipt for the empty completion"
+    receipt = receipts[0]
+    assert receipt["receipt_kind"] == "provider_empty"
+    assert receipt["session_id"] == session_id
+    assert receipt["conversation_id"] == conversation_id
+    assert receipt["identity_mode"] == "self"
+    assert int(receipt["source_message_id"]) == int(mid)
+    assert receipt["pipeline_version"] == "memory-v11-1"
+    await _session_zero_semantic_rows(session_id)
+
+
+@pytest.mark.asyncio
+async def test_s3f1_e1_empty_crash_window_retry_zero(isolated_store, monkeypatch):
+    """E1/R2: empty receipt commits, crash before completed → retry provider/selectors/reconciler zero."""
+    jobs = _jobs()
+    session_id = f"s3f1-e1-{uuid4().hex[:8]}"
+    conv = await conversation_service.create(
+        session_id, "steins_gate", title="e1", identity_mode="self"
+    )
+    conversation_id = str(conv["id"])
+    mid = await models.save_message(
+        session_id, "user", "今天天气不错",
+        worldline="steins_gate", conversation_id=conversation_id,
+    )
+
+    async def empty_completion(**kwargs):
+        return {"observations": [], "operations": []}
+
+    original_transition = jobs._transition_owned
+    crashed = {"done": False}
+
+    async def crash_after_receipt(**kwargs):
+        if kwargs.get("state") == "completed" and not crashed["done"]:
+            crashed["done"] = True
+            raise RuntimeError("simulated crash after empty receipt commit")
+        return await original_transition(**kwargs)
+
+    monkeypatch.setattr(jobs, "_transition_owned", crash_after_receipt)
+    job_id = await _enqueue_self_job(
+        session_id=session_id, conversation_id=conversation_id,
+        source_message_id=int(mid),
+    )
+    with pytest.raises(RuntimeError):
+        await jobs.process_memory_job(
+            job_id=job_id, lease_owner="w-e1", memory_completion=empty_completion
+        )
+    receipts = await _receipt_rows(session_id)
+    assert len(receipts) == 1 and receipts[0]["receipt_kind"] == "provider_empty"
+
+    db = await get_db("steins_gate", "memory")
+    try:
+        await db.execute(
+            "UPDATE memory_ingest_jobs SET lease_expires_at=? WHERE job_id=?",
+            ("2000-01-01T00:00:00+00:00", job_id),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    counts = {"completion": 0, "stable": 0, "unresolved": 0, "reconciler": 0}
+
+    async def must_not_run(**kwargs):
+        counts["completion"] += 1
+        return {"observations": [], "operations": []}
+
+    async def spy_stable(**kwargs):
+        counts["stable"] += 1
+        return []
+
+    async def spy_unresolved(**kwargs):
+        counts["unresolved"] += 1
+        return []
+
+    async def spy_reconciler(**kwargs):
+        counts["reconciler"] += 1
+        return {}
+
+    monkeypatch.setattr(
+        "app.services.memory_v11.retrieval.select_stable_fact_candidates", spy_stable
+    )
+    monkeypatch.setattr(
+        "app.services.memory_v11.retrieval.select_unresolved_observations",
+        spy_unresolved,
+    )
+    monkeypatch.setattr(
+        "app.services.memory_v11.reconciler.apply_validated_memory_operations",
+        spy_reconciler,
+    )
+
+    retried = await jobs.process_memory_job(
+        job_id=job_id, lease_owner="w-e1-retry", memory_completion=must_not_run
+    )
+    assert retried["state"] == "completed"
+    assert counts == {"completion": 0, "stable": 0, "unresolved": 0, "reconciler": 0}
+    assert len(await _receipt_rows(session_id)) == 1, "no duplicate receipt"
+
+
+@pytest.mark.asyncio
+async def test_s3f1_e2_pre_receipt_crash_retry_may_call_provider(
+    isolated_store, monkeypatch
+):
+    """E2 honesty boundary: crash BEFORE the empty-receipt commit → no receipt;
+    retry is allowed to invoke the provider again (no provider exactly-once)."""
+    jobs = _jobs()
+    session_id = f"s3f1-e2-{uuid4().hex[:8]}"
+    conv = await conversation_service.create(
+        session_id, "steins_gate", title="e2", identity_mode="self"
+    )
+    conversation_id = str(conv["id"])
+    mid = await models.save_message(
+        session_id, "user", "今天天气不错",
+        worldline="steins_gate", conversation_id=conversation_id,
+    )
+
+    async def empty_completion(**kwargs):
+        return {"observations": [], "operations": []}
+
+    async def boom_insert(**kwargs):
+        raise RuntimeError("simulated crash before receipt commit")
+
+    receipts_module = importlib.import_module("app.services.memory_v11.receipts")
+    original_insert = receipts_module.insert_ingest_receipt
+    monkeypatch.setattr(
+        "app.services.memory_v11.receipts.insert_ingest_receipt", boom_insert
+    )
+    job_id = await _enqueue_self_job(
+        session_id=session_id, conversation_id=conversation_id,
+        source_message_id=int(mid),
+    )
+    result = await jobs.process_memory_job(
+        job_id=job_id, lease_owner="w-e2", memory_completion=empty_completion
+    )
+    assert result["state"] in {"pending", "failed"}
+    assert await _receipt_rows(session_id) == [], "no receipt before commit"
+
+    db = await get_db("steins_gate", "memory")
+    try:
+        await db.execute(
+            "UPDATE memory_ingest_jobs SET state='pending', next_attempt_at=NULL WHERE job_id=?",
+            (job_id,),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    # restore the insert so the retry may complete normally
+    monkeypatch.setattr(
+        "app.services.memory_v11.receipts.insert_ingest_receipt", original_insert
+    )
+
+    counts = {"completion": 0}
+
+    async def again(**kwargs):
+        counts["completion"] += 1
+        return {"observations": [], "operations": []}
+
+    retried = await jobs.process_memory_job(
+        job_id=job_id, lease_owner="w-e2-retry", memory_completion=again
+    )
+    assert retried["state"] == "completed"
+    assert counts["completion"] == 1, "retry without receipt may call provider again"
+    assert len(await _receipt_rows(session_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_s3f1_e4_receipt_cursor_isolation(isolated_store):
+    """E4: receipt does not suppress a different identity / conversation / pipeline."""
+    from app.services.memory_v11.receipts import has_ingest_receipt, insert_ingest_receipt
+
+    db = await get_db("steins_gate", "memory")
+    try:
+        await db.execute("BEGIN IMMEDIATE")
+        await insert_ingest_receipt(
+            db,
+            session_id="s4",
+            conversation_id="c1",
+            identity_mode="self",
+            source_message_id=9001,
+            pipeline_version="memory-v11-1",
+            receipt_kind="provider_empty",
+        )
+        await db.commit()
+        assert await has_ingest_receipt(
+            db, session_id="s4", conversation_id="c1", identity_mode="self",
+            source_message_id=9001, pipeline_version="memory-v11-1",
+        )
+        for cursor in (
+            dict(session_id="s4", conversation_id="c1", identity_mode="okabe",
+                 source_message_id=9001, pipeline_version="memory-v11-1"),
+            dict(session_id="s4", conversation_id="c2", identity_mode="self",
+                 source_message_id=9001, pipeline_version="memory-v11-1"),
+            dict(session_id="s4", conversation_id="c1", identity_mode="self",
+                 source_message_id=9002, pipeline_version="memory-v11-1"),
+            dict(session_id="s4", conversation_id="c1", identity_mode="self",
+                 source_message_id=9001, pipeline_version="memory-v11-2"),
+            dict(session_id="other", conversation_id="c1", identity_mode="self",
+                 source_message_id=9001, pipeline_version="memory-v11-1"),
+        ):
+            assert not await has_ingest_receipt(db, **cursor), cursor
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_s3f1_e4b_future_pipeline_not_suppressed_by_v1_receipt(
+    isolated_store,
+):
+    """Mandatory pipeline isolation: a memory-v11-1 receipt must not suppress a v2 job."""
+    jobs = _jobs()
+    from app.services.memory_v11.receipts import insert_ingest_receipt
+
+    session_id = f"s3f1-e4b-{uuid4().hex[:8]}"
+    conv = await conversation_service.create(
+        session_id, "steins_gate", title="e4b", identity_mode="self"
+    )
+    conversation_id = str(conv["id"])
+    mid = await models.save_message(
+        session_id, "user", "今天天气不错",
+        worldline="steins_gate", conversation_id=conversation_id,
+    )
+    db = await get_db("steins_gate", "memory")
+    try:
+        await db.execute("BEGIN IMMEDIATE")
+        await insert_ingest_receipt(
+            db,
+            session_id=session_id,
+            conversation_id=conversation_id,
+            identity_mode="self",
+            source_message_id=int(mid),
+            pipeline_version="memory-v11-1",
+            receipt_kind="provider_empty",
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+    counts = {"completion": 0}
+
+    async def empty_completion(**kwargs):
+        counts["completion"] += 1
+        return {"observations": [], "operations": []}
+
+    job = await jobs.enqueue_memory_job(
+        session_id=session_id,
+        worldline="steins_gate",
+        conversation_id=conversation_id,
+        identity_mode="self",
+        source_message_id=int(mid),
+        pipeline_version="memory-v11-2",
+        provider_id="deepseek",
+        model_id="deepseek-chat",
+    )
+    result = await jobs.process_memory_job(
+        job_id=job["job_id"], lease_owner="w-e4b", memory_completion=empty_completion
+    )
+    assert result["state"] == "completed"
+    assert counts["completion"] == 1, "v1 receipt must never suppress a v2 job"
+    receipts = await _receipt_rows(session_id)
+    assert len(receipts) == 2, "v2 job writes its own receipt"
+
+
+@pytest.mark.asyncio
+async def test_s3f1_e5_legacy_observation_receipt_current_pipeline_only(
+    isolated_store, monkeypatch
+):
+    """E5: current-pipeline legacy observation proof suppresses; future pipeline does not."""
+    jobs = _jobs()
+    session_id = f"s3f1-e5-{uuid4().hex[:8]}"
+    conv = await conversation_service.create(
+        session_id, "steins_gate", title="e5", identity_mode="self"
+    )
+    conversation_id = str(conv["id"])
+    mid = await models.save_message(
+        session_id, "user", "在看一部动漫",
+        worldline="steins_gate", conversation_id=conversation_id,
+    )
+    await _seed_unresolved_candidate(
+        session_id=session_id, identity_mode="self",
+        conversation_id=conversation_id, source_message_id=int(mid),
+        display_text="在看一部动漫",
+    )
+    assert await _receipt_rows(session_id) == [], "no dedicated receipt seeded"
+
+    counts = {"completion": 0, "stable": 0, "unresolved": 0}
+
+    async def must_not_run(**kwargs):
+        counts["completion"] += 1
+        return {"observations": [], "operations": []}
+
+    async def spy_stable(**kwargs):
+        counts["stable"] += 1
+        return []
+
+    async def spy_unresolved(**kwargs):
+        counts["unresolved"] += 1
+        return []
+
+    monkeypatch.setattr(
+        "app.services.memory_v11.retrieval.select_stable_fact_candidates", spy_stable
+    )
+    monkeypatch.setattr(
+        "app.services.memory_v11.retrieval.select_unresolved_observations",
+        spy_unresolved,
+    )
+    job_id = await _enqueue_self_job(
+        session_id=session_id, conversation_id=conversation_id,
+        source_message_id=int(mid),
+    )
+    retried = await jobs.process_memory_job(
+        job_id=job_id, lease_owner="w-e5", memory_completion=must_not_run
+    )
+    assert retried["state"] == "completed"
+    assert counts == {"completion": 0, "stable": 0, "unresolved": 0}, (
+        "current-pipeline legacy observation receipt must suppress replay"
+    )
+
+    future_job = await jobs.enqueue_memory_job(
+        session_id=session_id,
+        worldline="steins_gate",
+        conversation_id=conversation_id,
+        identity_mode="self",
+        source_message_id=int(mid),
+        pipeline_version="memory-v11-2",
+        provider_id="deepseek",
+        model_id="deepseek-chat",
+    )
+    future_result = await jobs.process_memory_job(
+        job_id=future_job["job_id"], lease_owner="w-e5-future",
+        memory_completion=must_not_run,
+    )
+    assert future_result["state"] == "completed"
+    assert counts["completion"] == 1, (
+        "legacy observation receipt must NOT suppress a future pipeline"
+    )
+
+
+@pytest.mark.asyncio
+async def test_s3f1_e6_receipt_insert_failure_rolls_back_semantic_writes(
+    isolated_store, monkeypatch
+):
+    """E6: receipt insert failure after semantic writes → full transaction rollback."""
+    jobs = _jobs()
+    session_id = f"s3f1-e6-{uuid4().hex[:8]}"
+    conv = await conversation_service.create(
+        session_id, "steins_gate", title="e6", identity_mode="self"
+    )
+    conversation_id = str(conv["id"])
+    mid = await models.save_message(
+        session_id, "user", "我喜欢黑咖啡",
+        worldline="steins_gate", conversation_id=conversation_id,
+    )
+
+    async def create_completion(**kwargs):
+        sid = int(kwargs["source_message_id"])
+        return {
+            "observations": [
+                {
+                    "observation_ref": "o1",
+                    "source_message_ids": [sid],
+                    "display_text": "我喜欢黑咖啡",
+                    "semantic": {"subject": "user", "predicate": "likes", "object": "coffee"},
+                    "evidence_kind": "direct_user",
+                    "memory_class": "stable_candidate",
+                    "confidence": 0.95,
+                    "topic_label": "咖啡",
+                    "expires_at": None,
+                }
+            ],
+            "operations": [
+                {"op": "CREATE", "observation_ref": "o1", "fact_text": "我喜欢黑咖啡",
+                 "reason_code": "direct_durable_statement"}
+            ],
+        }
+
+    async def boom_receipt(**kwargs):
+        raise RuntimeError("forced receipt insert failure after semantic writes")
+
+    monkeypatch.setattr(
+        "app.services.memory_v11.reconciler.insert_ingest_receipt", boom_receipt
+    )
+    result = await _run_capture_job(
+        session_id=session_id, conversation_id=conversation_id,
+        source_message_id=int(mid), completion=create_completion,
+    )
+    assert result["state"] in {"pending", "failed"}
+    assert result.get("last_error_code") == "validation_failed"
+    assert await _receipt_rows(session_id) == [], "no receipt may survive rollback"
+    await _session_zero_semantic_rows(session_id)
+
+
+@pytest.mark.asyncio
+async def test_s3f1_e7_semantic_failure_certifies_no_receipt(isolated_store):
+    """E7: failed semantic validation never certifies a processed receipt."""
+    jobs = _jobs()
+    session_id = f"s3f1-e7-{uuid4().hex[:8]}"
+    conv = await conversation_service.create(
+        session_id, "steins_gate", title="e7", identity_mode="self"
+    )
+    conversation_id = str(conv["id"])
+    mid = await models.save_message(
+        session_id, "user", "解析目标",
+        worldline="steins_gate", conversation_id=conversation_id,
+    )
+
+    async def forged_completion(**kwargs):
+        sid = int(kwargs["source_message_id"])
+        return {
+            "observations": [
+                {
+                    "observation_ref": "o1",
+                    "reanalysis_target_observation_id": "ghost-target",
+                    "source_message_ids": [sid],
+                    "display_text": "解析后",
+                    "semantic": {"subject": "user", "predicate": "x", "object": "y"},
+                    "evidence_kind": "direct_user",
+                    "memory_class": "stable_candidate",
+                    "confidence": 0.96,
+                    "topic_label": None,
+                    "expires_at": None,
+                }
+            ],
+            "operations": [
+                {"op": "CREATE", "observation_ref": "o1", "fact_text": "解析后",
+                 "reason_code": "d18"}
+            ],
+        }
+
+    result = await _run_capture_job(
+        session_id=session_id, conversation_id=conversation_id,
+        source_message_id=int(mid), completion=forged_completion,
+    )
+    assert result["state"] in {"pending", "failed"}
+    assert result.get("last_error_code") == "validation_failed"
+    assert await _receipt_rows(session_id) == [], (
+        "failed semantic result must never be certified as processed"
+    )
+    await _session_zero_semantic_rows(session_id)
+
+
+@pytest.mark.asyncio
+async def test_s3f1_e8_privacy_blocked_no_receipt(isolated_store, monkeypatch):
+    """E8: S3E-2 privacy-blocked path — provider/selectors zero AND no receipt."""
+    jobs = _jobs()
+    session_id = f"s3f1-e8-{uuid4().hex[:8]}"
+    conv = await conversation_service.create(
+        session_id, "steins_gate", title="e8", identity_mode="self"
+    )
+    conversation_id = str(conv["id"])
+    mid = await models.save_message(
+        session_id, "user", "我的密码是 hunter2",
+        worldline="steins_gate", conversation_id=conversation_id,
+    )
+    counts = {"completion": 0, "stable": 0, "unresolved": 0}
+
+    async def must_not_run(**kwargs):
+        counts["completion"] += 1
+        return {"observations": [], "operations": []}
+
+    async def spy_stable(**kwargs):
+        counts["stable"] += 1
+        return []
+
+    async def spy_unresolved(**kwargs):
+        counts["unresolved"] += 1
+        return []
+
+    monkeypatch.setattr(
+        "app.services.memory_v11.retrieval.select_stable_fact_candidates", spy_stable
+    )
+    monkeypatch.setattr(
+        "app.services.memory_v11.retrieval.select_unresolved_observations",
+        spy_unresolved,
+    )
+    job_id = await _enqueue_self_job(
+        session_id=session_id, conversation_id=conversation_id,
+        source_message_id=int(mid),
+    )
+    result = await jobs.process_memory_job(
+        job_id=job_id, lease_owner="w-e8", memory_completion=must_not_run
+    )
+    assert result["state"] == "completed"
+    assert counts == {"completion": 0, "stable": 0, "unresolved": 0}
+    assert await _receipt_rows(session_id) == [], (
+        "privacy-blocked path must never write a provider receipt"
+    )
+    await _session_zero_semantic_rows(session_id)
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db.execute(
+            """SELECT
+                   (SELECT COUNT(*) FROM memory_observations WHERE session_id=? AND display_text LIKE ?) +
+                   (SELECT COUNT(*) FROM experiences WHERE session_id=? AND display_text LIKE ?) +
+                   (SELECT COUNT(*) FROM stable_fact_versions v
+                      JOIN stable_facts f ON f.fact_id=v.fact_id
+                     WHERE f.session_id=? AND v.display_text LIKE ?) AS n""",
+            (session_id, "%hunter2%", session_id, "%hunter2%",
+             session_id, "%hunter2%"),
+        )).fetchone()
+        assert int(row["n"]) == 0, "raw sensitive fragment must never be stored"
     finally:
         await db.close()

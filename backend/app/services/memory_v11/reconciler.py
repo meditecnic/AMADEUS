@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Mapping
 
 from app.db import get_db, normalize_identity_mode, normalize_worldline
 from app.services.memory_v11.contracts import (
     ALLOWED_OPS,
     AUTO_STABLE_CONFIDENCE,
+    PIPELINE_VERSION,
     MemoryValidationError,
 )
 from app.services.memory_v11.experiences import insert_experience
@@ -18,6 +19,11 @@ from app.services.memory_v11.indexing import (
     delete_version_embedding,
     insert_version_embedding,
     prepare_passage_embedding,
+)
+from app.services.memory_v11.receipts import (
+    RECEIPT_KIND_NONEMPTY,
+    has_ingest_receipt,
+    insert_ingest_receipt,
 )
 from app.services.memory_v11.repository import (
     _canonical_fingerprint,
@@ -104,6 +110,47 @@ async def _sources_already_applied(
         if await cur.fetchone() is not None:
             return True
     return False
+
+
+async def _source_receipt_already_applied(
+    db: Any,
+    *,
+    session_id: str,
+    conversation_id: str,
+    identity_mode: str,
+    source_message_id: int,
+    pipeline_version: str,
+) -> bool:
+    """S3F-1 D28: dedicated full-cursor receipt OR legacy observation proof.
+
+    The legacy observation-source fallback (rows created before the receipt
+    table existed) requires the conversation_id too — old source rows already
+    store it — and is valid ONLY for the current PIPELINE_VERSION. A future
+    pipeline must never be suppressed by a legacy receipt. No backfill.
+    """
+    if await has_ingest_receipt(
+        db,
+        session_id=session_id,
+        conversation_id=conversation_id,
+        identity_mode=identity_mode,
+        source_message_id=int(source_message_id),
+        pipeline_version=pipeline_version,
+    ):
+        return True
+    if pipeline_version != PIPELINE_VERSION:
+        return False
+    row = await (
+        await db.execute(
+            """SELECT 1
+                 FROM memory_observation_sources s
+                 JOIN memory_observations o ON o.observation_id = s.observation_id
+                WHERE s.source_message_id=? AND s.conversation_id=?
+                  AND o.session_id=? AND o.identity_mode=?
+                LIMIT 1""",
+            (int(source_message_id), conversation_id, session_id, identity_mode),
+        )
+    ).fetchone()
+    return row is not None
 
 
 async def _insert_observation(
@@ -494,6 +541,7 @@ async def apply_validated_memory_operations(
     candidate_allowlist: list[str],
     embedder: Any | None = None,
     reanalysis_allowlist: list[str] | None = None,
+    processing_receipt: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Validate then apply all operations in ONE connection / ONE transaction.
 
@@ -503,6 +551,16 @@ async def apply_validated_memory_operations(
 
     D18 (S3D-4): ``reanalysis_allowlist`` freezes the offered unresolved
     observation ids; it is optional and backward compatible — None → empty.
+
+    S3F-1 (D28): ``processing_receipt`` is optional live-job metadata
+    (conversation_id / source_message_id / pipeline_version). When supplied:
+    - the replay guards (pre-embedding read-only + final under BEGIN IMMEDIATE)
+      consult the dedicated full-cursor receipt OR the current-pipeline legacy
+      observation proof;
+    - a ``provider_nonempty`` receipt is inserted INSIDE this transaction after
+      all semantic writes and before the single commit. If the insert fails the
+      whole transaction rolls back — no semantic residue, no receipt.
+    Existing direct callers that pass no receipt metadata are unchanged.
     """
     wl = normalize_worldline(worldline)
     mode = normalize_identity_mode(identity_mode)
@@ -620,12 +678,23 @@ async def apply_validated_memory_operations(
     # Short read-only replay precheck: avoid heavyweight encode on pure replays.
     db_pre = await get_db(wl, "memory")
     try:
-        if await _sources_already_applied(
-            db_pre,
-            session_id=session,
-            identity_mode=mode,
-            source_message_ids=all_source_ids,
-        ):
+        if processing_receipt is not None:
+            already = await _source_receipt_already_applied(
+                db_pre,
+                session_id=session,
+                conversation_id=processing_receipt["conversation_id"],
+                identity_mode=mode,
+                source_message_id=int(processing_receipt["source_message_id"]),
+                pipeline_version=processing_receipt["pipeline_version"],
+            )
+        else:
+            already = await _sources_already_applied(
+                db_pre,
+                session_id=session,
+                identity_mode=mode,
+                source_message_ids=all_source_ids,
+            )
+        if already:
             active = await list_active_stable_facts(
                 session_id=session, worldline=wl, identity_mode=mode
             )
@@ -663,12 +732,23 @@ async def apply_validated_memory_operations(
         await db.execute("BEGIN IMMEDIATE")
 
         # Final replay guard under write lock (race-safe).
-        if await _sources_already_applied(
-            db,
-            session_id=session,
-            identity_mode=mode,
-            source_message_ids=all_source_ids,
-        ):
+        if processing_receipt is not None:
+            already = await _source_receipt_already_applied(
+                db,
+                session_id=session,
+                conversation_id=processing_receipt["conversation_id"],
+                identity_mode=mode,
+                source_message_id=int(processing_receipt["source_message_id"]),
+                pipeline_version=processing_receipt["pipeline_version"],
+            )
+        else:
+            already = await _sources_already_applied(
+                db,
+                session_id=session,
+                identity_mode=mode,
+                source_message_ids=all_source_ids,
+            )
+        if already:
             await db.commit()
             active = await list_active_stable_facts(
                 session_id=session, worldline=wl, identity_mode=mode
@@ -937,6 +1017,22 @@ async def apply_validated_memory_operations(
                 )
                 continue
 
+        # S3F-1 D28: durable provider_nonempty receipt INSIDE this transaction,
+        # after all semantic operations succeeded and BEFORE the single commit.
+        # If the receipt insert fails, the whole transaction rolls back (no
+        # semantic residue, no receipt). provider_nonempty means the validated
+        # provider result was processed — it does NOT promise a stable fact
+        # necessarily changed.
+        if processing_receipt is not None:
+            await insert_ingest_receipt(
+                db,
+                session_id=session,
+                conversation_id=processing_receipt["conversation_id"],
+                identity_mode=mode,
+                source_message_id=int(processing_receipt["source_message_id"]),
+                pipeline_version=processing_receipt["pipeline_version"],
+                receipt_kind=RECEIPT_KIND_NONEMPTY,
+            )
         await db.commit()
     except Exception:
         await db.rollback()

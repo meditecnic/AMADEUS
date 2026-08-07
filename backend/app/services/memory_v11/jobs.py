@@ -397,28 +397,46 @@ async def _current_source_already_applied(
     session_id: str,
     worldline: str,
     identity_mode: str,
+    conversation_id: str,
     source_message_id: int,
+    pipeline_version: str,
 ) -> bool:
-    """Durable-receipt precheck grounded in the JOB's frozen source Y.
+    """D28 durable-receipt precheck for the CURRENT job source cursor.
 
-    Same receipt semantics as the reconciler replay guard: a source row joined
-    to an observation in the same scope proves the Memory transaction for this
-    source already committed atomically — observation status is irrelevant.
-    Never derived from model output / target ids / provider-supplied evidence.
+    Dedicated full-cursor receipt (S3F-1) OR legacy observation-source proof
+    allowed only for the current PIPELINE_VERSION (old observation rows store
+    the conversation_id; a future pipeline must never be suppressed by them).
+
+    Grounded ONLY in the job's frozen source cursor — never derived from model
+    output / target ids / provider-supplied evidence.
     """
     wl = normalize_worldline(worldline)
     mode = normalize_identity_mode(identity_mode)
     db = await get_db(wl, "memory")
     try:
+        from app.services.memory_v11.receipts import has_ingest_receipt
+
+        if await has_ingest_receipt(
+            db,
+            session_id=session_id,
+            conversation_id=conversation_id,
+            identity_mode=mode,
+            source_message_id=int(source_message_id),
+            pipeline_version=pipeline_version,
+        ):
+            return True
+        if pipeline_version != PIPELINE_VERSION:
+            return False
         row = await (
             await db.execute(
                 """SELECT 1
                      FROM memory_observation_sources s
                      JOIN memory_observations o
                        ON o.observation_id = s.observation_id
-                    WHERE s.source_message_id=? AND o.session_id=? AND o.identity_mode=?
+                    WHERE s.source_message_id=? AND s.conversation_id=?
+                      AND o.session_id=? AND o.identity_mode=?
                     LIMIT 1""",
-                (int(source_message_id), session_id, mode),
+                (int(source_message_id), conversation_id, session_id, mode),
             )
         ).fetchone()
         return row is not None
@@ -627,16 +645,19 @@ async def process_memory_job(
     if job.get("lease_owner") != lease_owner or job["state"] != "processing":
         return (await get_memory_job(job_id, worldline=wl)) or job
 
-    # P1-B: durable-receipt precheck for the CURRENT job source (crash replay).
-    # If source Y already has an observation receipt in this scope, the Memory
-    # transaction already committed atomically; converge to completed WITHOUT
-    # re-running stable/unresolved selectors or the provider. This closes the
-    # window where Memory commits but the job crashes before state='completed'.
+    # P1-B + S3F-1 (D28): durable-receipt precheck for the CURRENT job source
+    # cursor (dedicated full-cursor receipt OR current-pipeline legacy
+    # observation proof). If the receipt exists, the Memory transaction already
+    # committed atomically; converge to completed WITHOUT re-running selectors
+    # or the provider. This closes the window where Memory commits but the job
+    # crashes before state='completed'.
     if await _current_source_already_applied(
         session_id=job["session_id"],
         worldline=wl,
         identity_mode=job["identity_mode"],
+        conversation_id=job["conversation_id"],
         source_message_id=int(job["source_message_id"]),
+        pipeline_version=job["pipeline_version"],
     ):
         return await _transition_owned(
             job_id=job_id,
@@ -776,6 +797,9 @@ async def process_memory_job(
                 }
             ]
             try:
+                # S3F-1 D28: the reconciler receives the live-job receipt cursor
+                # and inserts a provider_nonempty receipt inside its own atomic
+                # semantic transaction (after semantic writes, before commit).
                 await apply_validated_memory_operations(
                     session_id=job["session_id"],
                     worldline=wl,
@@ -785,6 +809,11 @@ async def process_memory_job(
                     source_evidence=source_evidence,
                     candidate_allowlist=candidate_allowlist,
                     reanalysis_allowlist=reanalysis_allowlist,
+                    processing_receipt={
+                        "conversation_id": job["conversation_id"],
+                        "source_message_id": int(job["source_message_id"]),
+                        "pipeline_version": job["pipeline_version"],
+                    },
                 )
             except Exception:
                 return await _transition_owned(
@@ -796,6 +825,52 @@ async def process_memory_job(
                     permanent=False,
                     attempt_count=int(job["attempt_count"] or 0),
                 )
+        else:
+            # S3F-1 D28: valid EMPTY completion → receipt-only Memory
+            # transaction (no fake observations). Receipt commit and the job
+            # completion CAS stay separate on purpose: a crash between them is
+            # the replay window the durable receipt now closes.
+            from app.services.memory_v11.receipts import (
+                RECEIPT_KIND_EMPTY,
+                has_ingest_receipt,
+                insert_ingest_receipt,
+            )
+
+            db = await get_db(wl, "memory")
+            try:
+                await db.execute("BEGIN IMMEDIATE")
+                # Final full-cursor check under the write lock (idempotent).
+                if not await has_ingest_receipt(
+                    db,
+                    session_id=job["session_id"],
+                    conversation_id=job["conversation_id"],
+                    identity_mode=job["identity_mode"],
+                    source_message_id=int(job["source_message_id"]),
+                    pipeline_version=job["pipeline_version"],
+                ):
+                    await insert_ingest_receipt(
+                        db,
+                        session_id=job["session_id"],
+                        conversation_id=job["conversation_id"],
+                        identity_mode=job["identity_mode"],
+                        source_message_id=int(job["source_message_id"]),
+                        pipeline_version=job["pipeline_version"],
+                        receipt_kind=RECEIPT_KIND_EMPTY,
+                    )
+                await db.commit()
+            except Exception:
+                await db.rollback()
+                return await _transition_owned(
+                    job_id=job_id,
+                    worldline=wl,
+                    lease_owner=lease_owner,
+                    state="failed_or_retry",
+                    error_code=MemoryJobErrorCode.VALIDATION_FAILED.value,
+                    permanent=False,
+                    attempt_count=int(job["attempt_count"] or 0),
+                )
+            finally:
+                await db.close()
 
         return await _transition_owned(
             job_id=job_id,

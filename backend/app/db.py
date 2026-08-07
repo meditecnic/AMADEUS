@@ -468,6 +468,30 @@ CREATE INDEX IF NOT EXISTS idx_experiences_fingerprint
     ON experiences(semantic_fingerprint);
 CREATE INDEX IF NOT EXISTS idx_experiences_expires
     ON experiences(expires_at);
+
+-- MEMORY-V11-S3F-1 (D28): durable non-semantic ingest receipts. Processing
+-- infrastructure, not Memory content: no user text / excerpt / fingerprint /
+-- provider response. Receipt identity mirrors the ingest job source cursor;
+-- pipeline_version is mandatory so a receipt never suppresses a future
+-- pipeline's deliberate reprocessing. Worldline stays physical DB isolation.
+CREATE TABLE IF NOT EXISTS memory_ingest_receipts (
+    session_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    identity_mode TEXT NOT NULL CHECK(identity_mode IN ('self','okabe')),
+    source_message_id INTEGER NOT NULL,
+    pipeline_version TEXT NOT NULL,
+    receipt_kind TEXT NOT NULL CHECK(
+        receipt_kind IN ('provider_empty','provider_nonempty')
+    ),
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(
+        session_id,
+        conversation_id,
+        identity_mode,
+        source_message_id,
+        pipeline_version
+    )
+);
 """
 
 MEMORY_SCHEMA = MEMORY_SCHEMA + MEMORY_V11_DDL
