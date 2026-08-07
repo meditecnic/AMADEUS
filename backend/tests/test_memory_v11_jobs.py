@@ -3787,3 +3787,243 @@ async def test_s3f1_e8_privacy_blocked_no_receipt(isolated_store, monkeypatch):
         assert int(row["n"]) == 0, "raw sensitive fragment must never be stored"
     finally:
         await db.close()
+
+
+# ---------------------------------------------------------------------------
+# MEMORY-V11-S3F-2A: provider output type/count hard bounds.
+# ---------------------------------------------------------------------------
+
+
+def _s3f2_reject_batch(count: int, sid: int) -> tuple[list[dict], list[dict]]:
+    observations = []
+    operations = []
+    for i in range(count):
+        observations.append(
+            {
+                "observation_ref": f"r{i}",
+                "source_message_ids": [sid],
+                "display_text": f"候选{i}",
+                "semantic": {"subject": "user", "predicate": "p", "object": str(i)},
+                "evidence_kind": "direct_user",
+                "memory_class": "stable_candidate",
+                "confidence": 0.2,
+                "topic_label": None,
+                "expires_at": None,
+            }
+        )
+        operations.append(
+            {"op": "REJECT", "observation_ref": f"r{i}", "fact_text": f"候选{i}",
+             "reason_code": "s3f2"}
+        )
+    return observations, operations
+
+
+async def _run_output_job(
+    *,
+    session_id: str,
+    conversation_id: str,
+    source_message_id: int,
+    completion: Any,
+    monkeypatch,
+    spy_reconciler: bool = True,
+) -> tuple[dict[str, Any], dict[str, int]]:
+    jobs = _jobs()
+    counts = {"completion": 0, "reconciler": 0}
+
+    async def counting_completion(**kwargs):
+        counts["completion"] += 1
+        return await completion(**kwargs)
+
+    if spy_reconciler:
+        from app.services.memory_v11 import reconciler as reconciler_mod
+
+        original = reconciler_mod.apply_validated_memory_operations
+
+        async def spy_apply(**kwargs):
+            counts["reconciler"] += 1
+            return await original(**kwargs)
+
+        monkeypatch.setattr(
+            "app.services.memory_v11.reconciler.apply_validated_memory_operations",
+            spy_apply,
+        )
+    job_id = await _enqueue_self_job(
+        session_id=session_id, conversation_id=conversation_id,
+        source_message_id=source_message_id,
+    )
+    result = await jobs.process_memory_job(
+        job_id=job_id, lease_owner="w-s3f2", memory_completion=counting_completion
+    )
+    return result, counts
+
+
+_S3F2_MALFORMED = [
+    ("observations_string", lambda sid: {"observations": "oops", "operations": []}),
+    ("observations_null", lambda sid: {"observations": None, "operations": []}),
+    ("operations_null", lambda sid: {"observations": [], "operations": None}),
+    ("operations_dict", lambda sid: {"observations": [], "operations": {"op": "REJECT"}}),
+    ("observations_tuple", lambda sid: {"observations": ("x",), "operations": []}),
+    ("observations_scalar", lambda sid: {"observations": 7, "operations": []}),
+    ("obs_item_string", lambda sid: {"observations": ["x"], "operations": []}),
+    ("ops_item_number", lambda sid: {"observations": [], "operations": [1]}),
+    ("obs_item_null", lambda sid: {"observations": [None], "operations": []}),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("label, builder", _S3F2_MALFORMED, ids=[b[0] for b in _S3F2_MALFORMED])
+async def test_s3f2a_malformed_output_permanent_failed_zero_everything(
+    isolated_store, monkeypatch, label, builder
+):
+    """A1/A2 + malformed matrix: validation_failed, failed, provider once, all zero."""
+    session_id = f"s3f2a-{label}-{uuid4().hex[:8]}"
+    conv = await conversation_service.create(
+        session_id, "steins_gate", title="s3f2a", identity_mode="self"
+    )
+    conversation_id = str(conv["id"])
+    mid = await models.save_message(
+        session_id, "user", "测试输入",
+        worldline="steins_gate", conversation_id=conversation_id,
+    )
+    payload = builder(int(mid))
+
+    async def completion(**kwargs):
+        return payload
+
+    result, counts = await _run_output_job(
+        session_id=session_id, conversation_id=conversation_id,
+        source_message_id=int(mid), completion=completion, monkeypatch=monkeypatch,
+    )
+    assert result["state"] == "failed", f"{label}: final state must be failed"
+    assert result.get("last_error_code") == "validation_failed"
+    assert counts["completion"] == 1, f"{label}: provider exactly once"
+    assert counts["reconciler"] == 0, f"{label}: reconciler must not run"
+    assert await _receipt_rows(session_id) == [], f"{label}: no receipt on invalid output"
+    await _session_zero_semantic_rows(session_id)
+
+
+@pytest.mark.asyncio
+async def test_s3f2a_nine_observations_rejected(isolated_store, monkeypatch):
+    """A3: 9 observations (cap+1) via the real seam → failed, reconciler 0."""
+    session_id = f"s3f2a-9obs-{uuid4().hex[:8]}"
+    conv = await conversation_service.create(
+        session_id, "steins_gate", title="s3f2a-9", identity_mode="self"
+    )
+    conversation_id = str(conv["id"])
+    mid = await models.save_message(
+        session_id, "user", "批量测试",
+        worldline="steins_gate", conversation_id=conversation_id,
+    )
+    observations, operations = _s3f2_reject_batch(9, int(mid))
+
+    async def completion(**kwargs):
+        return {"observations": observations, "operations": operations}
+
+    result, counts = await _run_output_job(
+        session_id=session_id, conversation_id=conversation_id,
+        source_message_id=int(mid), completion=completion, monkeypatch=monkeypatch,
+    )
+    assert result["state"] == "failed"
+    assert result.get("last_error_code") == "validation_failed"
+    assert counts["completion"] == 1
+    assert counts["reconciler"] == 0
+    assert await _receipt_rows(session_id) == []
+    await _session_zero_semantic_rows(session_id)
+
+
+@pytest.mark.asyncio
+async def test_s3f2a_nine_operations_rejected(isolated_store, monkeypatch):
+    """9 operations (cap+1) → failed, reconciler 0."""
+    session_id = f"s3f2a-9ops-{uuid4().hex[:8]}"
+    conv = await conversation_service.create(
+        session_id, "steins_gate", title="s3f2a-9o", identity_mode="self"
+    )
+    conversation_id = str(conv["id"])
+    mid = await models.save_message(
+        session_id, "user", "批量测试",
+        worldline="steins_gate", conversation_id=conversation_id,
+    )
+    observations, operations = _s3f2_reject_batch(9, int(mid))
+    del observations[-1]
+
+    async def completion(**kwargs):
+        return {"observations": observations, "operations": operations}
+
+    result, counts = await _run_output_job(
+        session_id=session_id, conversation_id=conversation_id,
+        source_message_id=int(mid), completion=completion, monkeypatch=monkeypatch,
+    )
+    assert result["state"] == "failed"
+    assert result.get("last_error_code") == "validation_failed"
+    assert counts["completion"] == 1
+    assert counts["reconciler"] == 0
+    assert await _receipt_rows(session_id) == []
+    await _session_zero_semantic_rows(session_id)
+
+
+@pytest.mark.asyncio
+async def test_s3f2a_empty_missing_fields_still_valid(isolated_store, monkeypatch):
+    """{} and exact empty arrays remain valid empty completions (S3F-1)."""
+    for label, payload in (
+        ("missing", {}),
+        ("exact_empty", {"observations": [], "operations": []}),
+    ):
+        session_id = f"s3f2a-{label}-{uuid4().hex[:8]}"
+        conv = await conversation_service.create(
+            session_id, "steins_gate", title="s3f2a-e", identity_mode="self"
+        )
+        conversation_id = str(conv["id"])
+        mid = await models.save_message(
+            session_id, "user", "空输出",
+            worldline="steins_gate", conversation_id=conversation_id,
+        )
+
+        async def completion(**kwargs):
+            return dict(payload)
+
+        result, counts = await _run_output_job(
+            session_id=session_id, conversation_id=conversation_id,
+            source_message_id=int(mid), completion=completion, monkeypatch=monkeypatch,
+        )
+        assert result["state"] == "completed", label
+        assert counts["completion"] == 1, label
+        receipts = await _receipt_rows(session_id)
+        assert len(receipts) == 1 and receipts[0]["receipt_kind"] == "provider_empty", label
+        await _session_zero_semantic_rows(session_id)
+
+
+@pytest.mark.asyncio
+async def test_s3f2a_exact_eight_accepted(isolated_store, monkeypatch):
+    """Exactly 8 observations + 8 operations accepted → provider_nonempty receipt."""
+    session_id = f"s3f2a-8ok-{uuid4().hex[:8]}"
+    conv = await conversation_service.create(
+        session_id, "steins_gate", title="s3f2a-8", identity_mode="self"
+    )
+    conversation_id = str(conv["id"])
+    mid = await models.save_message(
+        session_id, "user", "批量测试",
+        worldline="steins_gate", conversation_id=conversation_id,
+    )
+    observations, operations = _s3f2_reject_batch(8, int(mid))
+
+    async def completion(**kwargs):
+        return {"observations": observations, "operations": operations}
+
+    result, counts = await _run_output_job(
+        session_id=session_id, conversation_id=conversation_id,
+        source_message_id=int(mid), completion=completion, monkeypatch=monkeypatch,
+    )
+    assert result["state"] == "completed"
+    assert counts["completion"] == 1
+    assert counts["reconciler"] == 1
+    receipts = await _receipt_rows(session_id)
+    assert len(receipts) == 1 and receipts[0]["receipt_kind"] == "provider_nonempty"
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db.execute(
+            "SELECT COUNT(*) AS n FROM memory_observations WHERE session_id=?",
+            (session_id,),
+        )).fetchone()
+    finally:
+        await db.close()
+    assert int(row["n"]) == 8, "exactly 8 observations materialized (rejected)"

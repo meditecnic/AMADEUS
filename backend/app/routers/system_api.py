@@ -237,10 +237,13 @@ async def memory_facts_ledger(
     query: str | None = Query(None),
     topic_id: str | None = Query(None),
     pinned_only: bool = Query(False),
+    limit: str | None = Query(None),
+    offset: str | None = Query(None),
 ):
     """Memory facts list.
 
-    With explicit ``identity_mode`` → v11 scoped active stable facts (S3a).
+    With explicit ``identity_mode`` → v11 scoped active stable facts (S3a) with
+    bounded offset pagination (S3F-2B).
     Without → legacy Gate 7A Ledger (local/shared/okabe) for existing UI.
     """
     try:
@@ -249,17 +252,21 @@ async def memory_facts_ledger(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if identity_mode is not None and str(identity_mode).strip() != "":
         from app.services.memory_v11.contracts import MemoryValidationError
-        from app.services.memory_v11.repository import list_active_stable_facts
+        from app.services.memory_v11.repository import list_active_stable_facts_page
 
         try:
             mode = normalize_identity_mode(identity_mode)
-            facts = await list_active_stable_facts(
+            lim = _parse_pagination_param("limit", limit, 20, 1, 100)
+            off = _parse_pagination_param("offset", offset, 0, 0, None)
+            page = await list_active_stable_facts_page(
                 session_id=session_id,
                 worldline=wl,
                 identity_mode=mode,
                 query=query,
                 topic_id=topic_id,
                 pinned_only=pinned_only,
+                limit=lim,
+                offset=off,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -268,12 +275,20 @@ async def memory_facts_ledger(
                 status_code=422,
                 detail={"code": exc.code, "message": str(exc)},
             ) from exc
+        facts = list(page["facts"])
+        total = int(page["total"])
         return {
             "facts": facts,
             "scope": {
                 "session_id": session_id,
                 "worldline": wl,
                 "identity_mode": mode,
+            },
+            "pagination": {
+                "limit": lim,
+                "offset": off,
+                "total": total,
+                "has_more": off + len(facts) < total,
             },
         }
     return await memory_service.list_memory_facts_for_ledger(session_id, wl)

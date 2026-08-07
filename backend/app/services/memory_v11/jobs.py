@@ -79,6 +79,62 @@ def redact_user_text(text: str) -> tuple[str, bool]:
     return text, False
 
 
+_MISSING = object()
+
+
+def _canonical_completion_array(
+    raw: Any, field: str, maximum: int
+) -> list[dict[str, Any]]:
+    """S3F-2A: one completion array — container type, item type, hard count.
+
+    - _MISSING (field ABSENT) → canonical empty list (compat with injected
+      completion callbacks and the S3F-1 empty-result seams);
+    - field PRESENT must be a Python list — never coerced via list();
+    - every item must be a Mapping (canonicalized to a plain dict);
+    - len <= maximum (exact cap accepted, cap+1 rejected).
+    Semantic rules stay owned by the reconciler.
+    """
+    if raw is _MISSING:
+        return []
+    if not isinstance(raw, list):
+        raise ValueError(f"completion field {field} must be a list")
+    items: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            raise ValueError(f"completion field {field} items must be objects")
+        items.append(dict(item))
+    if len(items) > maximum:
+        raise ValueError(f"completion field {field} exceeds {maximum} items")
+    return items
+
+
+def _validate_completion_collections(
+    completion_payload: Mapping[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """S3F-2A: deterministic container/item/count validation of provider output.
+
+    Runs right after the outer Mapping check and BEFORE any receipt /
+    source_evidence / reconciler work. Raises ValueError on shape/count
+    violations; the caller transitions to failed(validation_failed).
+    """
+    from app.services.memory_v11.contracts import (
+        MAX_MEMORY_OBSERVATIONS_PER_MESSAGE,
+        MAX_MEMORY_OPERATIONS_PER_MESSAGE,
+    )
+
+    observations = _canonical_completion_array(
+        completion_payload.get("observations", _MISSING),
+        "observations",
+        MAX_MEMORY_OBSERVATIONS_PER_MESSAGE,
+    )
+    operations = _canonical_completion_array(
+        completion_payload.get("operations", _MISSING),
+        "operations",
+        MAX_MEMORY_OPERATIONS_PER_MESSAGE,
+    )
+    return observations, operations
+
+
 async def enqueue_memory_job(
     *,
     session_id: str,
@@ -772,8 +828,28 @@ async def process_memory_job(
                 attempt_count=int(job["attempt_count"] or 0),
             )
 
-        observations = list(completion_payload.get("observations") or [])
-        operations = list(completion_payload.get("operations") or [])
+        # S3F-2A: strict container/item/count validation BEFORE any receipt /
+        # source_evidence / reconciler work. A provider response that already
+        # succeeded but violated a deterministic local contract is not worth
+        # retrying with the same schema → permanent failed(validation_failed).
+        # Note: stable/unresolved selectors have already run before the provider
+        # under the one-call architecture; they are not re-run here, and the
+        # provider is never called a second time.
+        try:
+            observations, operations = _validate_completion_collections(
+                completion_payload
+            )
+        except ValueError:
+            return await _transition_owned(
+                job_id=job_id,
+                worldline=wl,
+                lease_owner=lease_owner,
+                state="failed_or_retry",
+                error_code=MemoryJobErrorCode.VALIDATION_FAILED.value,
+                permanent=True,
+                attempt_count=int(job["attempt_count"] or 0),
+            )
+
         if observations or operations:
             from app.services.memory_v11.reconciler import (
                 apply_validated_memory_operations,

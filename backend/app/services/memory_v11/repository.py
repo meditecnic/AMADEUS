@@ -353,6 +353,98 @@ async def list_active_stable_facts(
         await db.close()
 
 
+async def list_active_stable_facts_page(
+    *,
+    session_id: str,
+    worldline: str,
+    identity_mode: str,
+    query: str | None = None,
+    topic_id: str | None = None,
+    pinned_only: bool = False,
+    limit: int,
+    offset: int,
+) -> dict[str, Any]:
+    """Bounded offset pagination over active stable facts (S3F-2B).
+
+    Filter-then-page, entirely in SQL so COUNT and page share the SAME filter
+    clauses: scope → active → active-version join → topic → pinned → query
+    (literal substring via escaped LIKE) → deterministic order → COUNT → LIMIT.
+
+    The unbounded sibling ``list_active_stable_facts`` is unchanged for prompt
+    retrieval / reconciler replay paths.
+    """
+    wl = normalize_worldline(worldline)
+    mode = normalize_identity_mode(identity_mode)
+    session = _require_session_id(session_id)
+    topic_filter = (topic_id or "").strip() or None
+    query_norm = (query or "").strip().lower() or None
+
+    clauses = [
+        "f.session_id=?",
+        "f.identity_mode=?",
+        "f.state='active'",
+    ]
+    params: list[Any] = [session, mode]
+    if topic_filter is not None:
+        clauses.append("f.topic_id=?")
+        params.append(topic_filter)
+    if pinned_only:
+        clauses.append("f.is_pinned=1")
+    if query_norm is not None:
+        # Literal substring: caller wildcards must not become pattern operators.
+        escaped = (
+            query_norm.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        )
+        clauses.append("v.display_text LIKE ? ESCAPE '\\'")
+        params.append(f"%{escaped}%")
+    where = " AND ".join(clauses)
+
+    db = await get_db(wl, "memory")
+    try:
+        cur = await db.execute(
+            f"""SELECT COUNT(*) AS n
+                  FROM stable_facts f
+                  JOIN stable_fact_versions v
+                    ON v.fact_id = f.fact_id
+                   AND v.version_no = f.active_version
+                   AND v.invalid_at IS NULL
+                 WHERE {where}""",
+            params,
+        )
+        total = int((await cur.fetchone())["n"])
+        cur = await db.execute(
+            f"""SELECT f.fact_id, f.active_version, f.is_pinned, f.topic_id,
+                      v.display_text, v.version_no, v.confidence,
+                      v.semantic_fingerprint
+                 FROM stable_facts f
+                 JOIN stable_fact_versions v
+                   ON v.fact_id = f.fact_id
+                  AND v.version_no = f.active_version
+                  AND v.invalid_at IS NULL
+                WHERE {where}
+                ORDER BY f.is_pinned DESC, f.updated_at DESC, f.fact_id ASC
+                LIMIT ? OFFSET ?""",
+            [*params, int(limit), int(offset)],
+        )
+        rows = await cur.fetchall()
+        items = [
+            {
+                "fact_id": row["fact_id"],
+                "display_text": row["display_text"],
+                "version_no": int(row["version_no"]),
+                "active_version": int(row["active_version"]),
+                "is_pinned": bool(row["is_pinned"]),
+                "topic_id": row["topic_id"],
+                "confidence": row["confidence"],
+                "semantic_fingerprint": row["semantic_fingerprint"],
+            }
+            for row in rows
+        ]
+        return {"facts": items, "total": total}
+    finally:
+        await db.close()
+
+
 async def job_status_summary(
     *,
     session_id: str,

@@ -4023,3 +4023,325 @@ def test_s3d3_o12_attached_with_real_evidence_409(isolated_client: TestClient):
         "SELECT state FROM stable_facts WHERE fact_id=?", (fact_id,)
     )
     assert facts[0]["state"] == "active"
+
+
+# ---------------------------------------------------------------------------
+# MEMORY-V11-S3F-2B: scoped stable-fact REST pagination.
+# ---------------------------------------------------------------------------
+
+
+def _seed_stable_facts(
+    session_id: str, texts: list[str], *, identity_mode: str = "self"
+) -> None:
+    import asyncio
+
+    from app.services.memory_v11.repository import create_stable_fact
+
+    async def _seed() -> None:
+        for text in texts:
+            await create_stable_fact(
+                session_id=session_id,
+                worldline="steins_gate",
+                identity_mode=identity_mode,
+                display_text=text,
+                semantic_json={"subject": "user", "predicate": "x", "object": text[:8]},
+            )
+
+    asyncio.run(_seed())
+
+
+def _facts_params(session_id: str, **extra) -> dict:
+    params = {
+        "session_id": session_id,
+        "worldline": "steins_gate",
+        "identity_mode": "self",
+    }
+    params.update(extra)
+    return params
+
+
+def test_s3f2b_default_pagination_envelope(isolated_client: TestClient):
+    """Explicit v11 default pagination = limit 20 / offset 0 with envelope."""
+    session_id = _session("s3f2b-default")
+    _seed_stable_facts(session_id, ["事实一", "事实二"])
+    resp = isolated_client.get(
+        "/api/memory/facts", params=_facts_params(session_id)
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert "facts" in body and "scope" in body
+    assert body["pagination"] == {
+        "limit": 20,
+        "offset": 0,
+        "total": 2,
+        "has_more": False,
+    }
+    assert sorted(f["display_text"] for f in body["facts"]) == ["事实一", "事实二"]
+
+
+def test_s3f2b_limit_one_and_has_more(isolated_client: TestClient):
+    session_id = _session("s3f2b-limit")
+    _seed_stable_facts(session_id, [f"事实{i}" for i in range(5)])
+    resp = isolated_client.get(
+        "/api/memory/facts", params=_facts_params(session_id, limit="1")
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body["facts"]) == 1
+    assert body["pagination"] == {"limit": 1, "offset": 0, "total": 5, "has_more": True}
+
+
+def test_s3f2b_offset_page_continuity(isolated_client: TestClient):
+    session_id = _session("s3f2b-offset")
+    _seed_stable_facts(session_id, [f"事实{i}" for i in range(5)])
+    page1 = isolated_client.get(
+        "/api/memory/facts", params=_facts_params(session_id, limit="2", offset="0")
+    ).json()
+    page2 = isolated_client.get(
+        "/api/memory/facts", params=_facts_params(session_id, limit="2", offset="2")
+    ).json()
+    page3 = isolated_client.get(
+        "/api/memory/facts", params=_facts_params(session_id, limit="2", offset="4")
+    ).json()
+    ids1 = {f["fact_id"] for f in page1["facts"]}
+    ids2 = {f["fact_id"] for f in page2["facts"]}
+    ids3 = {f["fact_id"] for f in page3["facts"]}
+    assert len(page1["facts"]) == 2 and page1["pagination"]["has_more"] is True
+    assert len(page2["facts"]) == 2 and page2["pagination"]["has_more"] is True
+    assert len(page3["facts"]) == 1 and page3["pagination"]["has_more"] is False
+    assert ids1.isdisjoint(ids2) and ids2.isdisjoint(ids3)
+
+
+def test_s3f2b_query_filter_before_page(isolated_client: TestClient):
+    """Query-before-page: page 1 contains only matches; total == matching count."""
+    session_id = _session("s3f2b-query")
+    # Seed non-matches first (newer → would fill an unfiltered first page).
+    _seed_stable_facts(session_id, ["无关内容甲", "无关内容乙", "无关内容丙"])
+    _seed_stable_facts(session_id, ["目标事实Z", "目标事实Y"])
+    resp = isolated_client.get(
+        "/api/memory/facts",
+        params=_facts_params(session_id, query="目标", limit="1", offset="0"),
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body["facts"]) == 1
+    assert "目标" in body["facts"][0]["display_text"]
+    assert body["pagination"]["total"] == 2
+    assert body["pagination"]["has_more"] is True
+
+
+def test_s3f2b_query_literal_percent_not_wildcard(isolated_client: TestClient):
+    """Caller % must not become a LIKE pattern operator."""
+    session_id = _session("s3f2b-literal")
+    _seed_stable_facts(session_id, ["进度100%完成", "普通事实"])
+    resp = isolated_client.get(
+        "/api/memory/facts",
+        params=_facts_params(session_id, query="%", limit="10"),
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["pagination"]["total"] == 1, body["pagination"]
+    assert body["facts"][0]["display_text"] == "进度100%完成"
+
+
+def test_s3f2b_topic_filter_total(isolated_client: TestClient):
+    from app.services.memory_v11 import repository as repo
+
+    session_id = _session("s3f2b-topic")
+    _seed_stable_facts(session_id, [f"咖啡事实{i}" for i in range(5)])
+    _seed_stable_facts(session_id, ["茶事实一", "茶事实二"])
+    import asyncio
+
+    async def _topic() -> str:
+        from app.services.memory_v11.topics import resolve_or_create_topic
+        from app.db import get_db
+
+        db = await get_db("steins_gate", "memory")
+        try:
+            await db.execute("BEGIN IMMEDIATE")
+            topic_id = await resolve_or_create_topic(
+                db, session_id=session_id, identity_mode="self",
+                display_label="茶", normalized_label="茶",
+            )
+            await db.execute(
+                """UPDATE stable_facts
+                    SET topic_id=?
+                  WHERE session_id=? AND fact_id IN (
+                        SELECT f.fact_id FROM stable_facts f
+                        JOIN stable_fact_versions v
+                          ON v.fact_id=f.fact_id
+                         AND v.version_no=f.active_version
+                       WHERE f.session_id=? AND v.display_text LIKE '茶%'
+                  )""",
+                (topic_id, session_id, session_id),
+            )
+            await db.commit()
+            return topic_id
+        finally:
+            await db.close()
+
+    topic_id = asyncio.run(_topic())
+    resp = isolated_client.get(
+        "/api/memory/facts",
+        params=_facts_params(session_id, topic_id=topic_id, limit="1"),
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["pagination"]["total"] == 2, "total must reflect the topic filter"
+
+
+def test_s3f2b_pinned_filter_total(isolated_client: TestClient):
+    session_id = _session("s3f2b-pinned")
+    _seed_stable_facts(session_id, ["普通事实一", "普通事实二"])
+    import asyncio
+
+    async def _pin() -> None:
+        from app.db import get_db
+
+        db = await get_db("steins_gate", "memory")
+        try:
+            await db.execute(
+                """UPDATE stable_facts SET is_pinned=1
+                    WHERE fact_id=(SELECT fact_id FROM stable_facts
+                                    WHERE session_id=? ORDER BY fact_id LIMIT 1)""",
+                (session_id,),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+    asyncio.run(_pin())
+    resp = isolated_client.get(
+        "/api/memory/facts",
+        params=_facts_params(session_id, pinned_only="true", limit="10"),
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["pagination"]["total"] == 1
+    assert all(f["is_pinned"] is True for f in body["facts"])
+
+
+def test_s3f2b_deterministic_fact_id_tie_break(isolated_client: TestClient):
+    """Same is_pinned + same updated_at → fact_id ASC order."""
+    session_id = _session("s3f2b-tie")
+    _seed_stable_facts(session_id, ["并列事实A", "并列事实B", "并列事实C"])
+    import asyncio
+
+    async def _equalize() -> None:
+        from app.db import get_db
+
+        db = await get_db("steins_gate", "memory")
+        try:
+            await db.execute(
+                "UPDATE stable_facts SET updated_at=? WHERE session_id=?",
+                ("2026-01-01T00:00:00+00:00", session_id),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+    asyncio.run(_equalize())
+    resp = isolated_client.get(
+        "/api/memory/facts",
+        params=_facts_params(session_id, limit="10"),
+    )
+    assert resp.status_code == 200, resp.text
+    ids = [f["fact_id"] for f in resp.json()["facts"]]
+    assert ids == sorted(ids), "fact_id ASC tie-break required"
+
+
+def test_s3f2b_deleted_fact_excluded(isolated_client: TestClient):
+    session_id = _session("s3f2b-deleted")
+    _seed_stable_facts(session_id, ["保留事实", "待删除事实"])
+    import asyncio
+
+    async def _delete() -> str:
+        from app.db import get_db
+
+        db = await get_db("steins_gate", "memory")
+        try:
+            row = await (
+                await db.execute(
+                    "SELECT fact_id FROM stable_facts WHERE session_id=? ORDER BY fact_id LIMIT 1",
+                    (session_id,),
+                )
+            ).fetchone()
+            deleted_id = str(row["fact_id"])
+            await db.execute(
+                "UPDATE stable_facts SET state='deleted' WHERE fact_id=?",
+                (deleted_id,),
+            )
+            await db.commit()
+            return deleted_id
+        finally:
+            await db.close()
+
+    deleted_id = asyncio.run(_delete())
+    resp = isolated_client.get(
+        "/api/memory/facts", params=_facts_params(session_id, limit="10")
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["pagination"]["total"] == 1
+    assert len(body["facts"]) == 1
+    assert body["facts"][0]["fact_id"] != deleted_id, "deleted fact must be excluded"
+
+
+def test_s3f2b_invalid_limit_offset_422(isolated_client: TestClient):
+    session_id = _session("s3f2b-invalid")
+    _seed_stable_facts(session_id, ["事实"])
+    cases = [
+        ("limit", "0", "invalid_limit"),
+        ("limit", "101", "invalid_limit"),
+        ("limit", "-1", "invalid_limit"),
+        ("limit", "abc", "invalid_limit"),
+        ("limit", "1.5", "invalid_limit"),
+        ("offset", "-1", "invalid_offset"),
+        ("offset", "abc", "invalid_offset"),
+    ]
+    for name, value, code in cases:
+        resp = isolated_client.get(
+            "/api/memory/facts",
+            params=_facts_params(session_id, **{name: value}),
+        )
+        assert resp.status_code == 422, (name, value, resp.text)
+        assert resp.json()["detail"]["code"] == code, (name, value)
+
+
+def test_s3f2b_okabe_isolation_paginated(isolated_client: TestClient):
+    session_id = _session("s3f2b-isolation")
+    _seed_stable_facts(session_id, ["self 独有事实"], identity_mode="self")
+    _seed_stable_facts(session_id, ["okabe 独有事实"], identity_mode="okabe")
+    self_resp = isolated_client.get(
+        "/api/memory/facts", params=_facts_params(session_id, limit="10")
+    )
+    okabe_resp = isolated_client.get(
+        "/api/memory/facts",
+        params={
+            "session_id": session_id,
+            "worldline": "steins_gate",
+            "identity_mode": "okabe",
+            "limit": "10",
+        },
+    )
+    assert self_resp.json()["pagination"]["total"] == 1
+    assert okabe_resp.json()["pagination"]["total"] == 1
+    assert "okabe 独有事实" not in [
+        f["display_text"] for f in self_resp.json()["facts"]
+    ]
+    assert "self 独有事实" not in [
+        f["display_text"] for f in okabe_resp.json()["facts"]
+    ]
+
+
+def test_s3f2b_legacy_path_no_pagination_key(isolated_client: TestClient):
+    session_id = _session("s3f2b-legacy")
+    response = isolated_client.get(
+        "/api/memory/facts",
+        params={"session_id": session_id, "worldline": "steins_gate"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert "local" in body or "shared" in body, body
+    assert "pagination" not in body, "legacy ledger must not gain a pagination key"
+    assert "facts" not in body, "legacy ledger keeps its own shape"

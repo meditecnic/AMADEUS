@@ -19,6 +19,14 @@ D18_UNRESOLVED_POOL_LIMIT: Final[int] = 16
 D18_UNRESOLVED_CONTEXT_CAP: Final[int] = 3
 D18_UNRESOLVED_TOKEN_BUDGET: Final[int] = 480
 
+# S3F-2A: hard per-message provider output bounds. One user utterance normally
+# produces few atomic claims (legacy extraction already frames facts[] as 0..8);
+# D18 permits at most one contextual reanalysis target. Hard 8/8 caps prevent
+# model-controlled local write amplification. No environment/provider-specific
+# values.
+MAX_MEMORY_OBSERVATIONS_PER_MESSAGE: Final[int] = 8
+MAX_MEMORY_OPERATIONS_PER_MESSAGE: Final[int] = 8
+
 IDENTITY_MODES: Final[frozenset[str]] = frozenset({"self", "okabe"})
 FACT_STATES: Final[frozenset[str]] = frozenset({"active", "deleted"})
 CHANGE_KINDS: Final[frozenset[str]] = frozenset(
