@@ -141,8 +141,8 @@ async def current_worldline(session_id: str = Query("default")):
 
 @router.get("/api/memory/status")
 async def memory_status(
-    session_id: str = Query("default"),
-    worldline: str = Query("steins_gate"),
+    session_id: str | None = Query(None),
+    worldline: str | None = Query(None),
     identity_mode: str | None = Query(None),
 ):
     """Memory status.
@@ -150,16 +150,13 @@ async def memory_status(
     With explicit ``identity_mode`` → v11 scoped job aggregates (S3a).
     Without → legacy Quiet Ingest counts (existing Ledger clients).
     """
-    try:
-        wl = normalize_worldline(worldline)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if identity_mode is not None and str(identity_mode).strip() != "":
+    if identity_mode is not None:
+        session_id = _require_session_id(session_id)
+        wl, mode = _validate_memory_scope(worldline, identity_mode)
         from app.services.memory_v11.contracts import MemoryValidationError
         from app.services.memory_v11.repository import job_status_summary
 
         try:
-            mode = normalize_identity_mode(identity_mode)
             return await job_status_summary(
                 session_id=session_id,
                 worldline=wl,
@@ -172,8 +169,11 @@ async def memory_status(
             ) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+    legacy_session_id = "default" if session_id is None else session_id
+    legacy_worldline = "steins_gate" if worldline is None else worldline
     try:
-        return await memory_service.status(session_id, wl)
+        wl = normalize_worldline(legacy_worldline)
+        return await memory_service.status(legacy_session_id, wl)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -231,8 +231,8 @@ async def forget_memory(request: ForgetRequest):
 
 @router.get("/api/memory/facts")
 async def memory_facts_ledger(
-    session_id: str = Query("default"),
-    worldline: str = Query("steins_gate"),
+    session_id: str | None = Query(None),
+    worldline: str | None = Query(None),
     identity_mode: str | None = Query(None),
     query: str | None = Query(None),
     topic_id: str | None = Query(None),
@@ -246,16 +246,13 @@ async def memory_facts_ledger(
     bounded offset pagination (S3F-2B).
     Without → legacy Gate 7A Ledger (local/shared/okabe) for existing UI.
     """
-    try:
-        wl = normalize_worldline(worldline)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    if identity_mode is not None and str(identity_mode).strip() != "":
+    if identity_mode is not None:
+        session_id = _require_session_id(session_id)
+        wl, mode = _validate_memory_scope(worldline, identity_mode)
         from app.services.memory_v11.contracts import MemoryValidationError
         from app.services.memory_v11.repository import list_active_stable_facts_page
 
         try:
-            mode = normalize_identity_mode(identity_mode)
             lim = _parse_pagination_param("limit", limit, 20, 1, 100)
             off = _parse_pagination_param("offset", offset, 0, 0, None)
             page = await list_active_stable_facts_page(
@@ -291,7 +288,13 @@ async def memory_facts_ledger(
                 "has_more": off + len(facts) < total,
             },
         }
-    return await memory_service.list_memory_facts_for_ledger(session_id, wl)
+    legacy_session_id = "default" if session_id is None else session_id
+    legacy_worldline = "steins_gate" if worldline is None else worldline
+    try:
+        wl = normalize_worldline(legacy_worldline)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return await memory_service.list_memory_facts_for_ledger(legacy_session_id, wl)
 
 
 @router.post("/api/memory/facts/{local_fact_id}/promote")

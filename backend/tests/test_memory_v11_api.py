@@ -449,6 +449,78 @@ def test_s3a_legacy_facts_path_without_identity_mode(isolated_client: TestClient
     assert "local" in body or "shared" in body, body
 
 
+def test_s3f2c_explicit_scope_required_legacy_defaults_preserved(
+    isolated_client: TestClient,
+):
+    """Shared status/facts routes distinguish explicit v11 scope from legacy calls."""
+    routes = ("/api/memory/status", "/api/memory/facts")
+    valid_session = _session("s3f2c-scope")
+    cases = (
+        ({"worldline": "steins_gate", "identity_mode": "self"}, "empty_session_id"),
+        (
+            {"session_id": "", "worldline": "steins_gate", "identity_mode": "self"},
+            "empty_session_id",
+        ),
+        (
+            {"session_id": "   ", "worldline": "steins_gate", "identity_mode": "self"},
+            "empty_session_id",
+        ),
+        ({"session_id": valid_session, "identity_mode": "self"}, "missing_worldline"),
+        (
+            {"session_id": valid_session, "worldline": "", "identity_mode": "self"},
+            "missing_worldline",
+        ),
+        (
+            {"session_id": valid_session, "worldline": "   ", "identity_mode": "self"},
+            "missing_worldline",
+        ),
+        (
+            {
+                "session_id": valid_session,
+                "worldline": "steins_gate",
+                "identity_mode": "",
+            },
+            "missing_identity_mode",
+        ),
+        (
+            {
+                "session_id": valid_session,
+                "worldline": "bogus",
+                "identity_mode": "self",
+            },
+            "invalid_worldline",
+        ),
+        (
+            {
+                "session_id": valid_session,
+                "worldline": "steins_gate",
+                "identity_mode": "bogus",
+            },
+            "invalid_identity_mode",
+        ),
+    )
+    for route in routes:
+        for params, expected_code in cases:
+            response = isolated_client.get(route, params=params)
+            assert response.status_code == 422, (route, params, response.text)
+            assert response.json()["detail"]["code"] == expected_code, (route, params)
+
+    legacy_status = isolated_client.get("/api/memory/status")
+    assert legacy_status.status_code == 200, legacy_status.text
+    status_body = legacy_status.json()
+    assert status_body["session_id"] == "default"
+    assert status_body["worldline"] == "steins_gate"
+    assert "episodic_count" in status_body
+    assert "pending_count" not in status_body
+
+    legacy_facts = isolated_client.get("/api/memory/facts")
+    assert legacy_facts.status_code == 200, legacy_facts.text
+    facts_body = legacy_facts.json()
+    assert "local" in facts_body or "shared" in facts_body, facts_body
+    assert "facts" not in facts_body
+    assert "pagination" not in facts_body
+
+
 # ---------------------------------------------------------------------------
 # Deferred contracts — not S3a stop-gate
 # ---------------------------------------------------------------------------
