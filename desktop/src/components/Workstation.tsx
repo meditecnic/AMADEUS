@@ -21,7 +21,7 @@ import {
   type WebSearchProviderInfo,
   type WebSearchSettingsSnapshot,
 } from './SettingsModal';
-import { SoundPanel } from './SoundPanel';
+import { SoundMixerRail } from './SoundMixerRail';
 import { HistorySidebar, type ConversationSummary } from './HistorySidebar';
 import { TtsDebugPanel } from './TtsDebugPanel';
 import AvatarViewer from './AvatarViewer';
@@ -31,7 +31,6 @@ import { DivergenceMeter } from './DivergenceMeter';
 import { useAudioPlayer, audioPlayer } from '../hooks/useAudioPlayer';
 import { audioService } from '../services/AudioService';
 import { CRTOverlay } from './CRTOverlay';
-import { CircuitTrace } from './CircuitTrace';
 import { BilingualMessage } from './BilingualMessage';
 import { ForgetConversationModal } from './ForgetConversationModal';
 import {
@@ -45,6 +44,15 @@ interface WorkstationProps {
   worldline: 'steins_gate' | 'beta';
   onWorldlineChange: (wl: 'steins_gate' | 'beta') => void;
   onLogout: () => void;
+}
+
+/**
+ * User message language tag: only when content includes real Japanese kana.
+ * Hiragana / Katakana (incl. halfwidth). Han-only CJK (e.g. Chinese) must NOT
+ * force lang="ja" — document root is zh-CN.
+ */
+export function contentHasJapaneseKana(text: string): boolean {
+  return /[\u3040-\u309F\u30A0-\u30FF\uFF66-\uFF9D]/.test(text);
 }
 
 /** Q14: map known tool ids to Title Case labels; never render raw unknown tool names. */
@@ -157,6 +165,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     code: string;
   } | null>(null);
   const [isSoundOpen, setIsSoundOpen] = useState(false);
+  const soundTriggerRef = useRef<HTMLButtonElement>(null);
   const [isHistoryCollapsed, setIsHistoryCollapsed] = useState(() => {
     try {
       const stored = localStorage.getItem('amadeus_pc_history_collapsed');
@@ -503,9 +512,17 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const activeIdentityMode = normalizeIdentityMode(
     activeConversation ? activeConversation.identity_mode : defaultIdentityMode,
   );
+  /** S4-DS speaker contract: OKABE or configured self name only — never USER ID / user. */
   const userHudLabel = activeIdentityMode === 'self'
-    ? (selfName ? `USER ID: ${selfName}` : 'USER ID: ————')
-    : 'USER ID: OKABE';
+    ? (selfName.trim() ? selfName.trim() : '——')
+    : 'OKABE';
+
+  /** DEV-only MEMORY placement specimen. Exact gate: ?s4ds=1 (not bare/0/false). */
+  const showMemorySpecimen = Boolean(
+    import.meta.env.DEV
+    && typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).get('s4ds') === '1',
+  );
   const credentialConfigured = Boolean(
     activeProvider && (!activeProvider.credential_required || activeProvider.configured)
   );
@@ -1234,10 +1251,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       <div className="workstation-bg-overlay" />
       <div className="workstation-bg-reflection" />
 
-      {/* SVG circuit trace decorative overlay */}
-      <CircuitTrace opacity={0.15} zIndex={2} />
-
-      {/* SVG feTurbulence noise overlay */}
+      {/* Restrained grain only — no full-screen circuit/constellation pattern. */}
       <div className="workstation-bg-noise" />
 
       {/* Mechanical shell stays above the whole scene, never as a stretched background. */}
@@ -1247,68 +1261,100 @@ export const Workstation: React.FC<WorkstationProps> = ({
       <CRTOverlay glitchState={glitchState} zIndex={50} />
 
       <div className="salieri-workstation-inner">
-        {/* Top Header Controls */}
+        {/* Top Header Controls — brand | audio zone | telemetry | utilities */}
         <div className="workstation-header">
-        <div className="left-brand" aria-label="Amadeus Salieri terminal">
-          <span className="brand-index">AM-01</span>
+        <div className="left-brand" aria-label="AMADEUS">
+          <span className="brand-marker" aria-hidden="true" />
           <div className="brand-lockup">
             <span className="brand-title">AMADEUS</span>
-            <span className="brand-sub">SALIERI / NEURAL TERMINAL</span>
           </div>
+        </div>
+        <div
+          className={`header-audio-zone${isSoundOpen ? ' is-open' : ''}`}
+          data-header-audio-zone="true"
+        >
+          <SoundMixerRail
+            isOpen={isSoundOpen}
+            onClose={() => setIsSoundOpen(false)}
+            panelId="sound-mixer-rail"
+            triggerRef={soundTriggerRef}
+            enableBgm={enableBgm}
+            bgmVolume={bgmVolume}
+            enableSfx={enableSfx}
+            sfxVolume={sfxVolume}
+            voiceVolume={voiceVolume}
+            onEnableBgmChange={setEnableBgm}
+            onBgmVolumeChange={setBgmVolume}
+            onEnableSfxChange={setEnableSfx}
+            onSfxVolumeChange={setSfxVolume}
+            onVoiceVolumeChange={handleVoiceVolumeChange}
+          />
         </div>
         <div className="header-telemetry" aria-label="World line telemetry">
           <HudBadge worldline={worldline} status={needsApiKey ? 'SETUP' : status} />
           <DivergenceMeter worldline={worldline} />
         </div>
         <div className="right-controls">
-          <button
-            className="ctrl-btn icon-btn"
-            onClick={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); setIsSettingsOpen(true); }}
-            title="系统设置"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-            </svg>
-          </button>
-          <div className="sound-control-anchor">
+          {import.meta.env.DEV && showMemorySpecimen ? (
+            <div className="memory-control-specimen" data-s4ds-memory-specimen="true">
+              <button
+                type="button"
+                className="memory-control-btn"
+                aria-label="MEMORY"
+                title="MEMORY (placement specimen)"
+                onClick={(event) => {
+                  // Placement-only: never open Archive or call Memory APIs.
+                  event.preventDefault();
+                }}
+              >
+                MEMORY
+              </button>
+            </div>
+          ) : null}
+          <div className="workstation-utilities" data-workstation-utilities="true">
             <button
-              className={`ctrl-btn icon-btn ${isSoundOpen ? 'is-active' : ''}`}
-              onClick={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); setIsSoundOpen((v) => !v); }}
-              title="音量控制"
-              aria-expanded={isSoundOpen}
+              type="button"
+              className="ctrl-btn icon-btn"
+              onClick={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); setIsSettingsOpen(true); }}
+              title="系统设置"
+              aria-label="系统设置"
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
               </svg>
             </button>
-            <SoundPanel
-              isOpen={isSoundOpen}
-              onClose={() => setIsSoundOpen(false)}
-              enableBgm={enableBgm}
-              bgmVolume={bgmVolume}
-              enableSfx={enableSfx}
-              sfxVolume={sfxVolume}
-              voiceVolume={voiceVolume}
-              onEnableBgmChange={setEnableBgm}
-              onBgmVolumeChange={setBgmVolume}
-              onEnableSfxChange={setEnableSfx}
-              onSfxVolumeChange={setSfxVolume}
-              onVoiceVolumeChange={handleVoiceVolumeChange}
-            />
+            <div className="sound-control-anchor">
+              <button
+                type="button"
+                ref={soundTriggerRef}
+                className={`ctrl-btn icon-btn ${isSoundOpen ? 'is-active' : ''}`}
+                onClick={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); setIsSoundOpen((v) => !v); }}
+                title="音量控制"
+                aria-label="音量控制"
+                aria-expanded={isSoundOpen}
+                {...(isSoundOpen ? { 'aria-controls': 'sound-mixer-rail' } : {})}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                  <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
+                </svg>
+              </button>
+            </div>
+            <button
+              type="button"
+              className="ctrl-btn icon-btn disconnect-btn"
+              onClick={onLogout}
+              title="断开连接"
+              aria-label="断开连接"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                <polyline points="16 17 21 12 16 7" />
+                <line x1="21" y1="12" x2="9" y2="12" />
+              </svg>
+            </button>
           </div>
-          <button
-            className="ctrl-btn icon-btn disconnect-btn"
-            onClick={onLogout}
-            title="断开连接"
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-              <polyline points="16 17 21 12 16 7" />
-              <line x1="21" y1="12" x2="9" y2="12" />
-            </svg>
-          </button>
         </div>
       </div>
 
@@ -1363,9 +1409,20 @@ export const Workstation: React.FC<WorkstationProps> = ({
                       <p className="system-error-content" role="alert">{msg.content}</p>
                     ) : (
                       <>
-                        <div className="avatar-label">
-                          {msg.role === 'user' ? userHudLabel : 'AMADEUS: KURISU'}
-                        </div>
+                        {msg.role === 'user' ? (
+                          <div className="avatar-label speaker-user" data-testid="speaker-user">
+                            {userHudLabel}
+                          </div>
+                        ) : (
+                          <div className="avatar-label speaker-assistant" data-testid="speaker-assistant">
+                            <span className="speaker-primary" data-testid="speaker-assistant-primary">
+                              KURISU
+                            </span>
+                            <span className="speaker-secondary" data-testid="speaker-assistant-secondary">
+                              Amadeus
+                            </span>
+                          </div>
+                        )}
                         <div className="message-content-box">
                           {msg.role === 'assistant' ? (
                             <>
@@ -1404,7 +1461,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
                             )}
                             </>
                           ) : (
-                            <p className="japanese-raw">{msg.content}</p>
+                            <p
+                              className="japanese-raw"
+                              {...(contentHasJapaneseKana(msg.content) ? { lang: 'ja' as const } : {})}
+                            >
+                              {msg.content}
+                            </p>
                           )}
                         </div>
                       </>

@@ -1,11 +1,21 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/png" href="/assets/ui/amadeus_logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
-    <title>Tauri + React + Typescript</title>
+    <meta name="color-scheme" content="dark" />
+    <title>Amadeus</title>
+    <!-- Canonical product visual is a single dark instrument theme (no day/system switch). -->
+    <script>
+      (function () {
+        try {
+          var root = document.documentElement;
+          root.style.colorScheme = 'dark';
+          root.dataset.colorScheme = 'dark';
+        } catch (e) {}
+      })();
+    </script>
   </head>
 
   <body>

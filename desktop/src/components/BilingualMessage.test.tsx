@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BilingualMessage } from './BilingualMessage';
@@ -12,6 +12,7 @@ const segments = [
 
 describe('BilingualMessage', () => {
   afterEach(() => {
+    cleanup();
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
@@ -55,5 +56,27 @@ describe('BilingualMessage', () => {
 
     rerender(<BilingualMessage segments={segments} streaming />);
     expect(screen.getByText('日本語一。日本語二。')).toBeInTheDocument();
+  });
+
+  it('marks bilingual assistant Japanese with lang=ja (not class-only inference)', () => {
+    render(<BilingualMessage segments={segments} streaming={false} />);
+    const ja = screen.getByText('日本語一。日本語二。');
+    expect(ja.tagName).toBe('P');
+    expect(ja).toHaveClass('japanese-sub');
+    expect(ja).toHaveAttribute('lang', 'ja');
+  });
+
+  it('marks assistant raw-Japanese fallback with lang=ja', () => {
+    render(
+      <BilingualMessage
+        segments={[]}
+        streaming={false}
+        fallbackJa="これは原文フォールバックです。"
+        fallbackZh=""
+      />,
+    );
+    const ja = screen.getByText('これは原文フォールバックです。');
+    expect(ja).toHaveClass('japanese-raw');
+    expect(ja).toHaveAttribute('lang', 'ja');
   });
 });

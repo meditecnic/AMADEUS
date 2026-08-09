@@ -113,7 +113,9 @@ export function BilingualMessage({
       aria-label={streaming ? 'Reveal current response segment' : undefined}
     >
       {chinese && <p className="chinese-main">{chinese}</p>}
-      <p className={chinese ? 'japanese-sub' : 'japanese-raw'}>{japanese}</p>
+      <p className={chinese ? 'japanese-sub' : 'japanese-raw'} lang="ja">
+        {japanese}
+      </p>
       {hasTranslationError && (
         <p className="translation-degraded" role="status">
           中文翻译暂不可用，已保留日文原文

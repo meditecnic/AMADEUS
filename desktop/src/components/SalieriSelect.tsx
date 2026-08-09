@@ -236,7 +236,8 @@ export const SalieriSelect: React.FC<SalieriSelectProps> = ({
         tabIndex={-1}
         aria-label={ariaLabel}
         aria-activedescendant={activeDescendantId}
-        className={`salieri-select-menu ${listClassName}`.trim()}
+        className={`salieri-select-menu salieri-select-menu--portal ${listClassName}`.trim()}
+        data-salieri-portal="true"
         style={{
           position: 'fixed',
           top: geometry.openUp ? undefined : geometry.top,

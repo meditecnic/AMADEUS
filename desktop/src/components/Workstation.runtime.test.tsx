@@ -94,7 +94,7 @@ vi.mock('./SettingsModal', () => ({
     }
   },
 }));
-vi.mock('./SoundPanel', () => ({ SoundPanel: () => null }));
+vi.mock('./SoundMixerRail', () => ({ SoundMixerRail: () => null }));
 vi.mock('./HistorySidebar', () => ({
   HistorySidebar: (props: {
     conversations: Array<{ id: string; title: string }>;
@@ -111,7 +111,6 @@ vi.mock('./SpriteAnimator', () => ({ default: () => null }));
 vi.mock('./HudBadge', () => ({ HudBadge: () => null }));
 vi.mock('./DivergenceMeter', () => ({ DivergenceMeter: () => null }));
 vi.mock('./CRTOverlay', () => ({ CRTOverlay: () => null }));
-vi.mock('./CircuitTrace', () => ({ CircuitTrace: () => null }));
 vi.mock('./BilingualMessage', () => ({ BilingualMessage: () => null }));
 vi.mock('./ForgetConversationModal', () => ({ ForgetConversationModal: () => null }));
 
@@ -186,8 +185,7 @@ describe('Workstation provider runtime changes', () => {
   });
 
   it('keeps a real provider/model selection while the workstation is still a draft', async () => {
-    render(
-      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
 
     const providerTrigger = await waitFor(() => {
@@ -215,8 +213,7 @@ describe('Workstation provider runtime changes', () => {
     localStorage.setItem('amadeus_pc_provider', 'kimi');
     localStorage.setItem('amadeus_pc_model', 'kimi-k2.6');
 
-    render(
-      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
 
     await waitFor(() => {
@@ -295,8 +292,7 @@ describe('Workstation provider runtime changes', () => {
       throw new Error(`unexpected fetch: ${url}`);
     }));
 
-    render(
-      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
     const providerTrigger = await waitFor(() => screen.getByRole('button', { name: '模型供应商' }));
     fireEvent.click(providerTrigger);
@@ -383,8 +379,7 @@ describe('Workstation provider runtime changes', () => {
 
     localStorage.setItem('amadeus_pc_provider', 'custom:keep-me');
     localStorage.setItem('amadeus_pc_model', 'local-keep');
-    render(
-      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
 
     await waitFor(() => {
@@ -402,8 +397,7 @@ describe('Workstation provider runtime changes', () => {
   });
 
   it('keeps the initial workstation in draft mode without activating the selected history row', async () => {
-    render(
-      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
 
     await waitFor(() => expect(wsSpies.useAmadeusWS).toHaveBeenCalled());
@@ -415,8 +409,7 @@ describe('Workstation provider runtime changes', () => {
 
   it('requests an in-place worldline draft switch when the parent worldline changes', async () => {
     const onWorldlineChange = vi.fn();
-    const { rerender } = render(
-      <Workstation worldline="steins_gate" onWorldlineChange={onWorldlineChange} onLogout={vi.fn()} />,
+    const { rerender } = render(<Workstation worldline="steins_gate" onWorldlineChange={onWorldlineChange} onLogout={vi.fn()} />,
     );
 
     rerender(
@@ -428,8 +421,7 @@ describe('Workstation provider runtime changes', () => {
 
   it('rolls the parent worldline back after a correlated switch failure without resending', async () => {
     const onWorldlineChange = vi.fn();
-    const { rerender } = render(
-      <Workstation worldline="steins_gate" onWorldlineChange={onWorldlineChange} onLogout={vi.fn()} />,
+    const { rerender } = render(<Workstation worldline="steins_gate" onWorldlineChange={onWorldlineChange} onLogout={vi.fn()} />,
     );
     rerender(
       <Workstation worldline="beta" onWorldlineChange={onWorldlineChange} onLogout={vi.fn()} />,
@@ -466,8 +458,7 @@ describe('Workstation provider runtime changes', () => {
       throw new Error(`unexpected fetch: ${url}`);
     }));
 
-    const { queryByText, rerender } = render(
-      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    const { queryByText, rerender } = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
     await waitFor(() => expect(resolveSg).toBeTypeOf('function'));
     rerender(
@@ -513,8 +504,7 @@ describe('Workstation provider runtime changes', () => {
         wsRef: { current: null },
       };
     });
-    const { container } = render(
-      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    const { container } = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
     const viewport = await waitFor(() => {
       const element = container.querySelector<HTMLElement>('.terminal-chat-viewport');
@@ -620,8 +610,7 @@ describe('Workstation Q14 activity operation labels', () => {
 
   it('renders Title Case Web Search when activeTool is web_search', async () => {
     mockStreamingAssistant({ isThinking: true, activeTool: 'web_search' });
-    const { getByTestId, queryByText } = render(
-      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    const { getByTestId, queryByText } = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
 
     await waitFor(() => {
@@ -632,8 +621,7 @@ describe('Workstation Q14 activity operation labels', () => {
 
   it('falls back to Thinking when there is no activeTool', async () => {
     mockStreamingAssistant({ isThinking: true, activeTool: null });
-    const { getByTestId } = render(
-      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    const { getByTestId } = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
 
     await waitFor(() => {
@@ -643,8 +631,7 @@ describe('Workstation Q14 activity operation labels', () => {
 
   it('keeps the synthesizing voice label when synthesizing without thinking', async () => {
     mockStreamingAssistant({ isThinking: false, isSynthesizing: true, activeTool: null });
-    const { getAllByText, queryByTestId } = render(
-      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    const { getAllByText, queryByTestId } = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
 
     await waitFor(() => {
@@ -660,8 +647,7 @@ describe('Workstation Q14 activity operation labels', () => {
       activeTool: null,
       streaming: false,
     });
-    const { queryByTestId, queryAllByText } = render(
-      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    const { queryByTestId, queryAllByText } = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
 
     await waitFor(() => {
@@ -749,8 +735,7 @@ describe('Workstation UX-PLAYBACK-SEND-01 send while voice plays', () => {
   it('keeps input and SEND enabled when only previous voice is still playing', async () => {
     audioSpies.isPlaying = true;
     mockReadyChat();
-    const { container } = render(
-      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    const { container } = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
 
     const input = await waitFor(() => {
@@ -774,8 +759,7 @@ describe('Workstation UX-PLAYBACK-SEND-01 send while voice plays', () => {
     audioSpies.stopAll.mockImplementation(() => { order.push('stopAll'); });
     mockReadyChat({ sendChat, stopVoice });
 
-    const { container } = render(
-      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    const { container } = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
     const input = await waitFor(() => {
       const element = container.querySelector<HTMLInputElement>('.chat-input-field');
@@ -792,8 +776,7 @@ describe('Workstation UX-PLAYBACK-SEND-01 send while voice plays', () => {
   it('does not stop voice or send on blank submit while playing', async () => {
     audioSpies.isPlaying = true;
     const { sendChat, stopVoice } = mockReadyChat();
-    const { container } = render(
-      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    const { container } = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
     const input = await waitFor(() => {
       const element = container.querySelector<HTMLInputElement>('.chat-input-field');
@@ -811,8 +794,7 @@ describe('Workstation UX-PLAYBACK-SEND-01 send while voice plays', () => {
   it('keeps send disabled while thinking even if voice is not playing', async () => {
     audioSpies.isPlaying = false;
     mockReadyChat({ isThinking: true });
-    const { container } = render(
-      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    const { container } = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
     const input = await waitFor(() => {
       const element = container.querySelector<HTMLInputElement>('.chat-input-field');
@@ -827,8 +809,7 @@ describe('Workstation UX-PLAYBACK-SEND-01 send while voice plays', () => {
   it('keeps send disabled while synthesizing', async () => {
     audioSpies.isPlaying = false;
     mockReadyChat({ isSynthesizing: true });
-    const { container } = render(
-      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    const { container } = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
     const input = await waitFor(() => {
       const element = container.querySelector<HTMLInputElement>('.chat-input-field');
@@ -843,8 +824,7 @@ describe('Workstation UX-PLAYBACK-SEND-01 send while voice plays', () => {
   it('sends normally without stop when nothing is playing', async () => {
     audioSpies.isPlaying = false;
     const { sendChat, stopVoice } = mockReadyChat();
-    const { container } = render(
-      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    const { container } = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
     const input = await waitFor(() => {
       const element = container.querySelector<HTMLInputElement>('.chat-input-field');
@@ -925,8 +905,7 @@ describe('Workstation UX-ERROR-SURFACE-01 switch vs TTS errors', () => {
         wsRef: { current: null },
       };
     });
-    const view = render(
-      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    const view = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
     return { ...view, getParams: () => params };
   }
@@ -1104,8 +1083,7 @@ describe('Workstation UX-TRANSCRIPT-FOLLOW-01 conditional stick + jump', () => {
       switchWorldline: wsSpies.switchWorldline,
       wsRef: { current: null },
     }));
-    const view = render(
-      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    const view = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
     return { ...view, state };
   }
@@ -1321,8 +1299,7 @@ describe('Workstation UX-TRANSCRIPT-FOLLOW-01 conditional stick + jump', () => {
       switchWorldline: wsSpies.switchWorldline,
       wsRef: { current: null },
     }));
-    const { container, getByTestId } = render(
-      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    const { container, getByTestId } = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
     const viewport = await waitFor(() => getByTestId('transcript-viewport'));
     const metrics: ScrollMetrics = { scrollHeight: 900, clientHeight: 300, scrollTop: 100 };
@@ -1429,8 +1406,7 @@ describe('Workstation identity HUD label (backlog issue-2)', () => {
         wsRef: { current: null },
       };
     });
-    const view = render(
-      <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
+    const view = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
     return { ...view, getParams: () => params };
   }
@@ -1443,69 +1419,72 @@ describe('Workstation identity HUD label (backlog issue-2)', () => {
     act(() => view.getParams().onConversationSwitched?.({ conversationId }));
   }
 
-  it('shows USER ID: OKABE for an okabe conversation', async () => {
+  it('shows OKABE for an okabe conversation (S4-DS speaker contract)', async () => {
     const view = mountIdentityHarness();
     await activate(view, 'conv-okabe');
-    await waitFor(() => expect(view.queryByText('USER ID: OKABE')).not.toBeNull());
-    expect(view.queryByText('USER ID: ————')).toBeNull();
+    await waitFor(() => expect(view.queryByTestId('speaker-user')).toHaveTextContent('OKABE'));
+    expect(view.queryByText(/USER ID/i)).toBeNull();
+    expect(view.queryByText('——')).toBeNull();
   });
 
   it('shows the blank-start placeholder for a self conversation', async () => {
     const view = mountIdentityHarness();
     await activate(view, 'conv-self');
-    await waitFor(() => expect(view.queryByText('USER ID: ————')).not.toBeNull());
-    expect(view.queryByText('USER ID: OKABE')).toBeNull();
+    await waitFor(() => expect(view.queryByTestId('speaker-user')).toHaveTextContent('——'));
+    expect(view.queryByText(/USER ID/i)).toBeNull();
+    expect(view.queryByText('OKABE')).toBeNull();
   });
 
   it('falls back to OKABE when identity_mode is missing', async () => {
     const view = mountIdentityHarness();
     await activate(view, 'conv-missing');
-    await waitFor(() => expect(view.queryByText('USER ID: OKABE')).not.toBeNull());
-    expect(view.queryByText('USER ID: ————')).toBeNull();
+    await waitFor(() => expect(view.queryByTestId('speaker-user')).toHaveTextContent('OKABE'));
+    expect(view.queryByText('——')).toBeNull();
   });
 
   it('falls back to OKABE for unknown identity_mode values', async () => {
     const view = mountIdentityHarness();
     await activate(view, 'conv-unknown');
-    await waitFor(() => expect(view.queryByText('USER ID: OKABE')).not.toBeNull());
-    expect(view.queryByText('USER ID: ————')).toBeNull();
+    await waitFor(() => expect(view.queryByTestId('speaker-user')).toHaveTextContent('OKABE'));
+    expect(view.queryByText('——')).toBeNull();
   });
 
   it('updates the label when switching from okabe to self', async () => {
     const view = mountIdentityHarness();
     await activate(view, 'conv-okabe');
-    await waitFor(() => expect(view.queryByText('USER ID: OKABE')).not.toBeNull());
+    await waitFor(() => expect(view.queryByTestId('speaker-user')).toHaveTextContent('OKABE'));
 
     await activate(view, 'conv-self');
-    await waitFor(() => expect(view.queryByText('USER ID: ————')).not.toBeNull());
-    expect(view.queryByText('USER ID: OKABE')).toBeNull();
+    await waitFor(() => expect(view.queryByTestId('speaker-user')).toHaveTextContent('——'));
+    expect(view.queryByText('OKABE')).toBeNull();
   });
 
   it('restores the OKABE label when switching back from self', async () => {
     const view = mountIdentityHarness();
     await activate(view, 'conv-self');
-    await waitFor(() => expect(view.queryByText('USER ID: ————')).not.toBeNull());
+    await waitFor(() => expect(view.queryByTestId('speaker-user')).toHaveTextContent('——'));
 
     await activate(view, 'conv-okabe');
-    await waitFor(() => expect(view.queryByText('USER ID: OKABE')).not.toBeNull());
-    expect(view.queryByText('USER ID: ————')).toBeNull();
+    await waitFor(() => expect(view.queryByTestId('speaker-user')).toHaveTextContent('OKABE'));
+    expect(view.queryByText('——')).toBeNull();
   });
 
   it('shows the stored self name for a self conversation (Slice B)', async () => {
     localStorage.setItem('amadeus_pc_self_name', '阿伟');
     const view = mountIdentityHarness();
     await activate(view, 'conv-self');
-    await waitFor(() => expect(view.queryByText('USER ID: 阿伟')).not.toBeNull());
-    expect(view.queryByText('USER ID: ————')).toBeNull();
-    expect(view.queryByText('USER ID: OKABE')).toBeNull();
+    await waitFor(() => expect(view.queryByTestId('speaker-user')).toHaveTextContent('阿伟'));
+    expect(view.queryByText('——')).toBeNull();
+    expect(view.queryByText('OKABE')).toBeNull();
+    expect(view.queryByText(/USER ID/i)).toBeNull();
   });
 
   it('never shows the self name on an okabe conversation (Slice B isolation)', async () => {
     localStorage.setItem('amadeus_pc_self_name', '阿伟');
     const view = mountIdentityHarness();
     await activate(view, 'conv-okabe');
-    await waitFor(() => expect(view.queryByText('USER ID: OKABE')).not.toBeNull());
-    expect(view.queryByText('USER ID: 阿伟')).toBeNull();
+    await waitFor(() => expect(view.queryByTestId('speaker-user')).toHaveTextContent('OKABE'));
+    expect(view.queryByText('阿伟')).toBeNull();
   });
 
   it('hands the stored self name to the WS config chain on mount (reload retention)', async () => {

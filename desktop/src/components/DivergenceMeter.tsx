@@ -43,7 +43,8 @@ const WorldlineGlyphs: React.FC<{ value: string; idPrefix: string }> = ({ value,
 export const DivergenceMeter: React.FC<DivergenceMeterProps> = ({ worldline, value }) => {
   const displayValue = value ?? VALUES[worldline];
   const meterId = `divergence-glyph-${worldline}`;
-  const accent = worldline === 'beta' ? '#e39146' : '#ffb85c';
+  // Meter readout color is CSS-only: --wl-meter-accent → .divergence-meter → currentColor.
+  // Ghost (beta) uses --wl-accent via CSS; no hex in TSX.
 
   return (
     <div
@@ -51,7 +52,12 @@ export const DivergenceMeter: React.FC<DivergenceMeterProps> = ({ worldline, val
       role="img"
       aria-label={`World line divergence ${displayValue}`}
     >
-      <img className="divergence-meter-plate" src="/assets/ui/worldline_meter_frame_v3.png" alt="" aria-hidden="true" />
+      <img
+        className="divergence-meter-plate"
+        src="/assets/ui/worldline_meter_frame_v3.png"
+        alt=""
+        aria-hidden="true"
+      />
       <svg className="divergence-meter-value" viewBox="0 0 1200 260" aria-hidden="true">
         <defs>
           <filter id={`${meterId}-glow`} x="-18%" y="-36%" width="136%" height="172%">
@@ -71,11 +77,11 @@ export const DivergenceMeter: React.FC<DivergenceMeterProps> = ({ worldline, val
           <g id={`${meterId}-percent`}><path d="M8 90 56 4" /><circle cx="14" cy="20" r="10" /><circle cx="50" cy="74" r="10" /></g>
         </defs>
         {worldline === 'beta' && (
-          <g className="divergence-meter-glyph-ghost" color={accent} stroke={accent} fill="none" strokeWidth="2.65" strokeLinecap="round" strokeLinejoin="round">
+          <g className="divergence-meter-glyph-ghost" fill="none" strokeWidth="2.65" strokeLinecap="round" strokeLinejoin="round">
             <WorldlineGlyphs value={displayValue} idPrefix={meterId} />
           </g>
         )}
-        <g className="divergence-meter-glyph-primary" filter={`url(#${meterId}-glow)`} color={accent} stroke={accent} fill="none" strokeWidth="2.65" strokeLinecap="round" strokeLinejoin="round">
+        <g className="divergence-meter-glyph-primary" filter={`url(#${meterId}-glow)`} fill="none" strokeWidth="2.65" strokeLinecap="round" strokeLinejoin="round">
           <WorldlineGlyphs value={displayValue} idPrefix={meterId} />
         </g>
       </svg>

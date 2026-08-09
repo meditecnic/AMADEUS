@@ -3,7 +3,7 @@ import { BootSplash } from './components/BootSplash';
 import { SalieriLogin } from './components/SalieriLogin';
 import { Workstation } from './components/Workstation';
 import LogoTransition from './components/LogoTransition';
-import './App.css';
+/* App.css is imported once from main.tsx (tokens.css → App.css) — sole cascade owner. */
 
 type AppStep = 'splash' | 'login' | 'transition' | 'workstation';
 
