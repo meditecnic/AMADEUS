@@ -780,6 +780,38 @@ async def patch_memory_fact_presentation(
     return result
 
 
+@router.get("/api/memory/graph/projection")
+async def memory_graph_projection(request: Request):
+    """Canonical Constellation Overview projection (S4-MEMORY-SPINE / G61)."""
+    from app.services.memory_v11.projection import (
+        ProjectionError,
+        parse_projection_request,
+        project_overview,
+    )
+
+    raw: dict[str, list[str]] = {}
+    for key, value in request.query_params.multi_items():
+        raw.setdefault(key, []).append(value)
+    try:
+        criteria = parse_projection_request(raw)
+        return await project_overview(criteria)
+    except ProjectionError as exc:
+        status = 422
+        if exc.code == "projection_failed":
+            status = 500
+        if exc.code == "projection_unavailable":
+            status = 503
+        raise HTTPException(
+            status_code=status,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "projection_failed", "message": "projection failed"},
+        ) from None
+
+
 @router.get("/api/memory/topics")
 async def list_memory_topics(
     session_id: str | None = Query(None),

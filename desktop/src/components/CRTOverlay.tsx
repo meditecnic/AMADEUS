@@ -60,6 +60,7 @@ export const CRTOverlay: React.FC<CRTOverlayProps> = ({
       {/* CRT physical vignette and shadow for retro decayed feel */}
       <div
         className="pointer-events-none absolute inset-0"
+        data-crt-vignette="true"
         style={{
           zIndex,
           boxShadow: 'inset 0 0 96px rgba(0, 0, 0, 0.72)',

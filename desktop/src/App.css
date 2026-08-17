@@ -376,14 +376,10 @@
   border-left: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
 }
 
-/* MEMORY specimen (DEV-only placement; inert) */
-.memory-control-specimen {
-  display: inline-flex;
-  align-items: center;
-}
-.memory-control-specimen .memory-control-btn {
-  min-height: 32px;
-  padding: 0 12px;
+.memory-aperture-btn {
+  min-height: 28px;
+  margin-left: 12px;
+  padding: 0 10px;
   border: 1px solid color-mix(in srgb, var(--color-border-active) 55%, transparent);
   border-radius: 2px;
   background: color-mix(in srgb, var(--color-bg-panel) 70%, transparent);
@@ -392,9 +388,9 @@
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.16em;
-  cursor: default;
+  cursor: pointer;
 }
-.memory-control-specimen .memory-control-btn:focus-visible {
+.memory-aperture-btn:focus-visible {
   outline: 2px solid var(--color-signal);
   outline-offset: 2px;
 }
@@ -3391,6 +3387,14 @@
   z-index: 60;
   border-image-width: 30px;
   filter: brightness(0.76) saturate(0.86) contrast(1.06);
+}
+.salieri-workstation-panel.memory-space-open .workstation-panel-frame-overlay,
+.salieri-workstation-panel.memory-space-open .salieri-workstation-inner::before,
+.salieri-workstation-panel.memory-space-open [data-crt-vignette] {
+  display: none;
+}
+.salieri-workstation-panel.memory-space-open::before {
+  display: none;
 }
 /* .workstation-header base owner is the sole block near HEADER STYLE (above). */
 .left-brand {

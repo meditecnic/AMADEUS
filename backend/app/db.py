@@ -460,7 +460,8 @@ CREATE TABLE IF NOT EXISTS experiences (
     expires_at TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    deleted_at TEXT
+    deleted_at TEXT,
+    is_pinned INTEGER NOT NULL DEFAULT 0 CHECK(is_pinned IN (0,1))
 );
 CREATE INDEX IF NOT EXISTS idx_experiences_scope_status
     ON experiences(session_id, identity_mode, status);
@@ -1077,6 +1078,24 @@ def _migrate_v9_to_v10(connection: sqlite3.Connection, kind: DatabaseKind) -> No
         raise
 
 
+def _ensure_experiences_is_pinned(connection: sqlite3.Connection) -> None:
+    """M3: experiences.is_pinned NOT NULL DEFAULT 0 with existing-row backfill."""
+    exists = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='experiences'"
+    ).fetchone()
+    if exists is None:
+        return
+    columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(experiences)")}
+    if "is_pinned" in columns:
+        connection.execute(
+            "UPDATE experiences SET is_pinned=0 WHERE is_pinned IS NULL"
+        )
+        return
+    connection.execute(
+        "ALTER TABLE experiences ADD COLUMN is_pinned INTEGER NOT NULL DEFAULT 0"
+    )
+
+
 def _split_sql_statements(script: str) -> list[str]:
     """Split a DDL script into statements without using executescript (avoids auto-commit)."""
     statements: list[str] = []
@@ -1200,6 +1219,8 @@ def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str 
             raise RuntimeError(f"unsupported {kind} schema version at {path}: {current}")
 
         connection.executescript(schema)
+        if kind == "memory":
+            _ensure_experiences_is_pinned(connection)
         connection.execute(
             "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version',?)",
             (str(SCHEMA_VERSION),),

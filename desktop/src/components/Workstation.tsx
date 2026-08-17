@@ -33,6 +33,8 @@ import { audioService } from '../services/AudioService';
 import { CRTOverlay } from './CRTOverlay';
 import { BilingualMessage } from './BilingualMessage';
 import { ForgetConversationModal } from './ForgetConversationModal';
+import { MemorySpace } from '../memory-space/MemorySpace';
+import '../memory-space/MemorySpace.css';
 import {
   ProviderControls,
   resolveThinkingValue,
@@ -71,6 +73,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [enableTts, setEnableTts] = useState(true);
   const [sovitsUrl, setSovitsUrl] = useState('http://127.0.0.1:9880');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isMemoryOpen, setIsMemoryOpen] = useState(false);
   const [inputText, setInputText] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [webSearchApiKey, setWebSearchApiKey] = useState('');
@@ -517,12 +520,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     ? (selfName.trim() ? selfName.trim() : '——')
     : 'OKABE';
 
-  /** DEV-only MEMORY placement specimen. Exact gate: ?s4ds=1 (not bare/0/false). */
-  const showMemorySpecimen = Boolean(
-    import.meta.env.DEV
-    && typeof window !== 'undefined'
-    && new URLSearchParams(window.location.search).get('s4ds') === '1',
-  );
+
   const credentialConfigured = Boolean(
     activeProvider && (!activeProvider.credential_required || activeProvider.configured)
   );
@@ -1236,7 +1234,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   return (
     <div
-      className={`salieri-workstation-panel worldline-${worldline === 'beta' ? 'beta' : 'sg'}`}
+      className={`salieri-workstation-panel worldline-${worldline === 'beta' ? 'beta' : 'sg'}${isMemoryOpen ? ' memory-space-open' : ''}`}
       onMouseDown={handleAudioInit}
     >
       {/* Background layers */}
@@ -1268,6 +1266,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
           <div className="brand-lockup">
             <span className="brand-title">AMADEUS</span>
           </div>
+          <button
+            type="button"
+            className="memory-aperture-btn"
+            aria-label="MEMORY"
+            title="MEMORY"
+            onClick={() => setIsMemoryOpen(true)}
+          >
+            MEMORY
+          </button>
         </div>
         <div
           className={`header-audio-zone${isSoundOpen ? ' is-open' : ''}`}
@@ -1295,22 +1302,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
           <DivergenceMeter worldline={worldline} />
         </div>
         <div className="right-controls">
-          {import.meta.env.DEV && showMemorySpecimen ? (
-            <div className="memory-control-specimen" data-s4ds-memory-specimen="true">
-              <button
-                type="button"
-                className="memory-control-btn"
-                aria-label="MEMORY"
-                title="MEMORY (placement specimen)"
-                onClick={(event) => {
-                  // Placement-only: never open Archive or call Memory APIs.
-                  event.preventDefault();
-                }}
-              >
-                MEMORY
-              </button>
-            </div>
-          ) : null}
           <div className="workstation-utilities" data-workstation-utilities="true">
             <button
               type="button"
@@ -1624,6 +1615,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
       {/* Bottom Status Bar */}
       <StatusBar worldline={worldline} connectionStatus={needsApiKey ? 'SETUP' : status} />
       </div>
+
+      {isMemoryOpen ? (
+        <MemorySpace
+          sessionId={sessionId}
+          chatWorldline={worldline}
+          chatIdentityMode={activeIdentityMode}
+          onClose={() => setIsMemoryOpen(false)}
+        />
+      ) : null}
 
       {/* Settings Modal overlay */}
       <SettingsModal

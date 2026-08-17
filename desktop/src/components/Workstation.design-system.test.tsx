@@ -180,6 +180,52 @@ function defaultFetch(input: RequestInfo | URL) {
       json: async () => ({ provider: 'tavily', configured: false, fallback: 'duckduckgo' }),
     } as Response);
   }
+  if (url.includes('/api/memory/status')) {
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => ({ pending_count: 0, processing_count: 0, failed_count: 0 }),
+    } as Response);
+  }
+  if (url.includes('/api/memory/graph/projection')) {
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        scope: { session_id: 'session-ds', worldline: 'steins_gate', identity_mode: 'okabe' },
+        view: 'overview',
+        projection_version: 'memory-projection-v1',
+        generated_at: '2026-08-14T00:00:00Z',
+        criteria: { query: null, kinds: [], topic_id: null, pinned_only: false, updated_from: null, updated_to: null },
+        center: {
+          kind: 'continuity_hub',
+          projection_id: 'hub:continuity:session-ds:steins_gate:okabe',
+          label_primary: 'AMADEUS',
+          label_secondary: 'SOUL',
+        },
+        composition: {
+          active_facts: 0,
+          active_experiences: 0,
+          eligible_topics: 0,
+          latest_memory_change_at: null,
+          person_anchors_supported: false,
+        },
+        budgets: { nodes: 64, edges: 128, hard_max_nodes: 160, hard_max_edges: 320 },
+        eligible: { nodes: 1, edges: 0, records: 0, results: 0 },
+        shown: { nodes: 1, edges: 0, records: 0, results: 0 },
+        truncated: { nodes: false, edges: false, records: false, results: false },
+        empty: true,
+        result_ids: [],
+        nodes: [{
+          kind: 'continuity_hub',
+          projection_id: 'hub:continuity:session-ds:steins_gate:okabe',
+          label_primary: 'AMADEUS',
+          label_secondary: 'SOUL',
+        }],
+        edges: [],
+      }),
+    } as Response);
+  }
   if (url.includes('/api/memory')) {
     throw new Error(`memory API must not be called in S4-DS: ${url}`);
   }
@@ -371,24 +417,34 @@ describe('Workstation S4-DS dark-only chrome', () => {
     await waitFor(() => expect(screen.getByText('AMADEUS')).toBeInTheDocument());
   });
 
-  it('DEV MEMORY specimen exact gate: only ?s4ds=1', async () => {
-    window.history.replaceState({}, '', '/?s4ds=0');
-    const { unmount } = renderWorkstation();
-    await waitFor(() => expect(screen.getByText('AMADEUS')).toBeInTheDocument());
-    expect(screen.queryByRole('button', { name: /^MEMORY$/i })).not.toBeInTheDocument();
-    unmount();
-    cleanup();
-    window.history.replaceState({}, '', '/?s4ds=1');
+  it('first-class MEMORY aperture opens Memory Space Overview', async () => {
     renderWorkstation();
-    expect(await screen.findByRole('button', { name: /^MEMORY$/i })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /^MEMORY$/i }));
-    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/memory'))).toBe(false);
+    await waitFor(() => expect(screen.getByText('AMADEUS')).toBeInTheDocument());
+    const aperture = await screen.findByRole('button', { name: /^MEMORY$/i });
+    fireEvent.click(aperture);
+    expect(await screen.findByTestId('memory-space')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/memory/graph/projection'))).toBe(true);
+    });
+    expect(screen.getByTestId('constellation-stage')).toBeInTheDocument();
+    expect(document.querySelector('.salieri-workstation-panel')).toHaveClass('memory-space-open');
   });
 
-  it('production DCE: DEV gate uses get(s4ds)===1', () => {
+  it('hides the workstation panel frame while Memory Space is open', () => {
+    const appCss = fs.readFileSync(path.resolve(__dirname, '../App.css'), 'utf8');
+    expect(appCss).toMatch(
+      /\.salieri-workstation-panel\.memory-space-open\s+\.workstation-panel-frame-overlay/,
+    );
+    expect(appCss).toMatch(
+      /\.salieri-workstation-panel\.memory-space-open::before/,
+    );
+  });
+
+  it('production DCE: MEMORY aperture is not a DEV-only specimen', () => {
     const source = fs.readFileSync(path.resolve(__dirname, './Workstation.tsx'), 'utf8');
-    expect(source).toMatch(/import\.meta\.env\.DEV/);
-    expect(source).toMatch(/get\(['"]s4ds['"]\)\s*===\s*['"]1['"]/);
+    expect(source).toMatch(/memory-aperture-btn/);
+    expect(source).not.toMatch(/showMemorySpecimen/);
+    expect(source).not.toMatch(/placement specimen/);
   });
 
   it('composer/model-bottom-bar and portal menus use semantic tokens (dark-only)', () => {
