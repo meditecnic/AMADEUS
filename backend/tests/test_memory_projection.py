@@ -489,3 +489,132 @@ def test_projection_route_does_not_import_provider(client: TestClient, monkeypat
     )
     assert response.status_code == 200
     assert projection.PROJECTION_VERSION == "memory-projection-v1"
+
+
+A2_T0_FACT = "A2-T0-fact"
+A2_T0_EXPERIENCE = "A2-T0-experience"
+A2_T1_FACT = "A2-T1-fact"
+A2_T1_EXPERIENCE = "A2-T1-experience"
+_A2_CONTROL_SQL = frozenset(
+    {"BEGIN", "COMMIT", "ROLLBACK", "PRAGMA", "SAVEPOINT", "RELEASE"}
+)
+
+
+def _a2_sql_verb(sql: object) -> str:
+    if not isinstance(sql, str):
+        return ""
+    stripped = sql.lstrip()
+    if not stripped:
+        return ""
+    return stripped.split(None, 1)[0].upper()
+
+
+def test_projection_no_mixed_era_under_concurrent_write(
+    client: TestClient, monkeypatch
+) -> None:
+    """A2: one GET must be entirely T0 or entirely T1, never mixed-era."""
+    import threading
+
+    from app.db import _resolve_path
+    import app.services.memory_v11.projection as projection
+
+    sid = _session("a2-snap")
+    fact_id = _seed_fact(sid, A2_T0_FACT)
+    experience_id = _seed_experience(sid, A2_T0_EXPERIENCE)
+    memory_path = _resolve_path("steins_gate", "memory")
+
+    first_data_read = threading.Event()
+    t1_committed = threading.Event()
+    writer_errors: list[BaseException] = []
+
+    def write_t1() -> None:
+        try:
+            if not first_data_read.wait(timeout=5.0):
+                raise TimeoutError("projection never issued a data read")
+            connection = sqlite3.connect(memory_path, timeout=10.0)
+            try:
+                connection.execute("BEGIN IMMEDIATE")
+                connection.execute(
+                    "UPDATE stable_fact_versions SET display_text=? WHERE fact_id=?",
+                    (A2_T1_FACT, fact_id),
+                )
+                connection.execute(
+                    "UPDATE experiences SET display_text=? WHERE experience_id=?",
+                    (A2_T1_EXPERIENCE, experience_id),
+                )
+                connection.commit()
+            finally:
+                connection.close()
+        except BaseException as exc:
+            writer_errors.append(exc)
+        finally:
+            t1_committed.set()
+
+    real_get_db = projection.get_db
+
+    async def get_db_with_test_barrier(worldline: str = "steins_gate", kind: str = "history"):
+        db = await real_get_db(worldline, kind)
+        real_execute = db.execute
+
+        async def execute(sql, parameters=None):
+            result = (
+                await real_execute(sql)
+                if parameters is None
+                else await real_execute(sql, parameters)
+            )
+            # Test-only barrier after the first non-control statement.
+            # Does not name tables, aliases, or a required read order.
+            if (
+                _a2_sql_verb(sql) not in _A2_CONTROL_SQL
+                and not first_data_read.is_set()
+            ):
+                first_data_read.set()
+                if not t1_committed.wait(timeout=5.0):
+                    raise TimeoutError("T1 writer did not commit in the read window")
+            return result
+
+        db.execute = execute
+        return db
+
+    monkeypatch.setattr(projection, "get_db", get_db_with_test_barrier)
+    writer = threading.Thread(target=write_t1, name="a2-t1-writer")
+    writer.start()
+    try:
+        response = _get(
+            client,
+            session_id=sid,
+            worldline="steins_gate",
+            identity_mode="self",
+            view="overview",
+        )
+    finally:
+        writer.join(timeout=10.0)
+
+    assert not writer_errors, f"T1 writer failed: {writer_errors!r}"
+    assert writer.is_alive() is False
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    fact_labels = {node.get("label") for node in body["nodes"] if node["kind"] == "fact"}
+    experience_labels = {
+        node.get("label") for node in body["nodes"] if node["kind"] == "experience"
+    }
+    all_labels = fact_labels | experience_labels
+    result_ids = list(body["result_ids"])
+
+    entirely_t0 = fact_labels == {A2_T0_FACT} and experience_labels == {A2_T0_EXPERIENCE}
+    entirely_t1 = fact_labels == {A2_T1_FACT} and experience_labels == {A2_T1_EXPERIENCE}
+    assert entirely_t0 or entirely_t1, (
+        "mixed-era projection: "
+        f"fact_labels={sorted(fact_labels)} "
+        f"experience_labels={sorted(experience_labels)} "
+        f"result_ids={result_ids} "
+        f"shown={body.get('shown')} eligible={body.get('eligible')}"
+    )
+    assert A2_T0_FACT not in all_labels or A2_T1_EXPERIENCE not in all_labels
+    assert A2_T1_FACT not in all_labels or A2_T0_EXPERIENCE not in all_labels
+    assert body["shown"]["nodes"] == len(body["nodes"])
+    assert body["shown"]["edges"] == len(body["edges"])
+    assert len(result_ids) == body["shown"]["results"]
+    assert f"fact:{fact_id}" in result_ids
+    assert f"experience:{experience_id}" in result_ids

@@ -256,43 +256,53 @@ async def project_overview(criteria: dict[str, Any]) -> dict[str, Any]:
 
     db = await get_db(worldline, "memory")
     try:
-        fact_rows = await (
-            await db.execute(
-                """SELECT f.fact_id, f.topic_id, f.is_pinned, f.updated_at,
-                          v.display_text
-                     FROM stable_facts f
-                     JOIN stable_fact_versions v
-                       ON v.fact_id = f.fact_id
-                      AND v.version_no = f.active_version
-                      AND v.invalid_at IS NULL
-                    WHERE f.session_id=? AND f.identity_mode=? AND f.state='active'""",
-                (session_id, identity_mode),
-            )
-        ).fetchall()
-        exp_columns = {
-            str(row[1])
-            for row in await (await db.execute("PRAGMA table_info(experiences)")).fetchall()
-        }
-        pin_sql = "e.is_pinned" if "is_pinned" in exp_columns else "0 AS is_pinned"
-        exp_rows = await (
-            await db.execute(
-                f"""SELECT e.experience_id, e.conversation_id, e.display_text,
-                           e.status, e.expires_at, e.created_at, e.updated_at,
-                           {pin_sql}
-                      FROM experiences e
-                     WHERE e.session_id=? AND e.identity_mode=?
-                       AND e.status='active'""",
-                (session_id, identity_mode),
-            )
-        ).fetchall()
-        topic_rows = await (
-            await db.execute(
-                """SELECT topic_id, display_label
-                     FROM memory_topics
-                    WHERE session_id=? AND identity_mode=?""",
-                (session_id, identity_mode),
-            )
-        ).fetchall()
+        await db.execute("BEGIN")
+        try:
+            fact_rows = await (
+                await db.execute(
+                    """SELECT f.fact_id, f.topic_id, f.is_pinned, f.updated_at,
+                              v.display_text
+                         FROM stable_facts f
+                         JOIN stable_fact_versions v
+                           ON v.fact_id = f.fact_id
+                          AND v.version_no = f.active_version
+                          AND v.invalid_at IS NULL
+                        WHERE f.session_id=? AND f.identity_mode=? AND f.state='active'""",
+                    (session_id, identity_mode),
+                )
+            ).fetchall()
+            exp_columns = {
+                str(row[1])
+                for row in await (await db.execute("PRAGMA table_info(experiences)")).fetchall()
+            }
+            pin_sql = "e.is_pinned" if "is_pinned" in exp_columns else "0 AS is_pinned"
+            exp_rows = await (
+                await db.execute(
+                    f"""SELECT e.experience_id, e.conversation_id, e.display_text,
+                               e.status, e.expires_at, e.created_at, e.updated_at,
+                               {pin_sql}
+                          FROM experiences e
+                         WHERE e.session_id=? AND e.identity_mode=?
+                           AND e.status='active'""",
+                    (session_id, identity_mode),
+                )
+            ).fetchall()
+            topic_rows = await (
+                await db.execute(
+                    """SELECT topic_id, display_label
+                         FROM memory_topics
+                        WHERE session_id=? AND identity_mode=?""",
+                    (session_id, identity_mode),
+                )
+            ).fetchall()
+        except BaseException:
+            try:
+                await db.execute("ROLLBACK")
+            except Exception:
+                pass
+            raise
+        else:
+            await db.execute("COMMIT")
     finally:
         await db.close()
 
