@@ -60,6 +60,7 @@ export function MemorySpace({
   onClose,
 }: MemorySpaceProps) {
   const controllerRef = useRef(createProjectionController());
+  const [browseSessionId, setBrowseSessionId] = useState(sessionId);
   const [worldline, setWorldline] = useState<Worldline>(chatWorldline);
   const [identityMode, setIdentityMode] = useState<IdentityMode>(chatIdentityMode);
   const [criteria, setCriteria] = useState<CriteriaInput>(EMPTY_CRITERIA);
@@ -76,6 +77,7 @@ export function MemorySpace({
   const [listOwnsFocus, setListOwnsFocus] = useState(false);
   const [forceCompat, setForceCompat] = useState(false);
   const [capability, setCapability] = useState<CapabilityState>(HEALTHY_CAPABILITY);
+  const [runtimeGeneration, setRuntimeGeneration] = useState(0);
   const [overviewOpen] = useState(true);
   const [expandedTopicIds, setExpandedTopicIds] = useState<string[]>([]);
   const [toolsOpen, setToolsOpen] = useState(false);
@@ -90,9 +92,13 @@ export function MemorySpace({
     return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   });
 
+  useEffect(() => {
+    setBrowseSessionId(sessionId);
+  }, [sessionId]);
+
   const scope: ScopeKey = useMemo(
-    () => ({ sessionId, worldline, identityMode }),
-    [identityMode, sessionId, worldline],
+    () => ({ sessionId: browseSessionId, worldline, identityMode }),
+    [browseSessionId, identityMode, worldline],
   );
 
   useEffect(() => {
@@ -146,6 +152,7 @@ export function MemorySpace({
         return;
       }
       if (outcome.restore) {
+        setBrowseSessionId(outcome.restore.scope.sessionId);
         setWorldline(outcome.restore.scope.worldline);
         setIdentityMode(outcome.restore.scope.identityMode);
         setCriteria(outcome.restore.criteria);
@@ -406,6 +413,7 @@ export function MemorySpace({
           className={`memory-space-tools${toolsOpen ? ' is-open' : ''}`}
           data-testid="memory-space-tools"
           data-open={String(toolsOpen)}
+          hidden={!toolsOpen}
         >
           {liveProjection ? (
             <span className="memory-space-count" data-testid="memory-shown-eligible">
@@ -554,7 +562,10 @@ export function MemorySpace({
       {presentation.phase === 'loading' && !liveProjection ? (
         <p className="memory-space-state" data-testid="memory-loading">正在读取记忆投影…</p>
       ) : null}
-      {presentation.stale && liveProjection ? (
+      {presentation.phase === 'scope-switching' && liveProjection ? (
+        <p className="memory-space-state" data-testid="memory-stale">{presentation.copy}</p>
+      ) : null}
+      {presentation.stale && presentation.phase !== 'scope-switching' && liveProjection ? (
         <p className="memory-space-state" data-testid="memory-stale">{presentation.copy ?? '同步中'}</p>
       ) : null}
       {presentation.phase === 'unavailable' ? (
@@ -607,6 +618,7 @@ export function MemorySpace({
       >
         {liveProjection && renderSurface === '3d' ? (
           <ConstellationStage
+            key={runtimeGeneration}
             projection={liveProjection}
             selectedId={selectedId}
             mode={cameraMode}
@@ -624,7 +636,13 @@ export function MemorySpace({
               });
             }}
             onCreateFail={() => setCapability((current) => applyCreateFailure(current))}
-            onContextLost={() => setCapability((current) => applyContextLoss(current))}
+            onContextLost={() => {
+              setCapability((current) => {
+                const next = applyContextLoss(current);
+                if (next.retrying) setRuntimeGeneration((value) => value + 1);
+                return next;
+              });
+            }}
             onFrame={(sample) => {
               framesRef.current = [...framesRef.current.slice(-240), sample];
               setCapability((current) => applyPerformanceSample(current, framesRef.current, sample.at));

@@ -352,6 +352,80 @@ describe('MemorySpace', () => {
     expect(screen.getByTestId('memory-space')).toHaveAttribute('data-reduced-motion', 'true');
   });
 
+  it('sends kind and pin criteria on the live projection request', async () => {
+    const seen: string[] = [];
+    mockApi((url) => {
+      seen.push(url);
+      return okJson(projection);
+    });
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.click(screen.getByLabelText('事实'));
+    fireEvent.click(screen.getByLabelText('仅置顶'));
+    await waitFor(() => {
+      expect(seen.some((url) => url.includes('kind=fact') && url.includes('pinned_only=true'))).toBe(true);
+    });
+  });
+
+  it('uses unfiltered composition in the SOUL inspector under active criteria', async () => {
+    const filtered: MemoryProjection = {
+      ...projection,
+      empty: false,
+      criteria: { query: '咖啡', kinds: ['fact'], topic_id: null, pinned_only: false, updated_from: null, updated_to: null },
+      composition: {
+        active_facts: 9,
+        active_experiences: 2,
+        eligible_topics: 4,
+        latest_memory_change_at: '2026-08-14T00:00:00Z',
+        person_anchors_supported: false,
+      },
+      shown: { nodes: 2, edges: 1, records: 1, results: 1 },
+      eligible: { nodes: 2, edges: 1, records: 1, results: 1 },
+    };
+    mockApi((url) => {
+      if (url.includes('/api/memory/status')) {
+        return okJson({ pending_count: 0, processing_count: 0, failed_count: 4 });
+      }
+      return okJson(filtered);
+    });
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByTestId('select-soul'));
+    expect(screen.getByTestId('inspector-composition')).toHaveTextContent('9');
+    expect(screen.getByTestId('inspector-composition')).toHaveTextContent('2');
+    expect(screen.getByTestId('inspector-projection-counts')).toHaveTextContent('1 / 1');
+    expect(screen.getByTestId('soul-inspector').textContent).not.toMatch(/people\s*=\s*0/i);
+    await waitFor(() => expect(screen.getByTestId('inspector-jobs')).toHaveTextContent('失败 4'));
+  });
+
+  it('restores the previous worldline when a scope switch is unavailable', async () => {
+    mockApi((url) => {
+      if (url.includes('worldline=beta')) {
+        return Promise.resolve({
+          ok: false,
+          status: 503,
+          json: async () => ({ detail: { code: 'projection_unavailable' } }),
+        });
+      }
+      return okJson(projection);
+    });
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.change(screen.getByLabelText('浏览世界线'), { target: { value: 'beta' } });
+    await waitFor(() => {
+      expect(screen.getByTestId('memory-plaque')).toHaveTextContent('SG');
+      expect(screen.getByTestId('memory-announce')).toHaveTextContent('范围切换失败');
+    });
+  });
+
   it('moves a shared selection with arrows and Home', async () => {
     mockApi(() => okJson(projection));
     render(

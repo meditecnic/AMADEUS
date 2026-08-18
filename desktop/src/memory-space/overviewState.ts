@@ -27,9 +27,7 @@ export type OverviewPresentation = {
 
 export function classifyEmpty(envelope: MemoryProjection): 'true-empty' | 'criteria-empty' | 'populated' {
   if (!envelope.empty) return 'populated';
-  if (hasActiveCriteria(envelope.criteria) || hasLongTermMemory(envelope.composition)) {
-    return 'criteria-empty';
-  }
+  if (hasActiveCriteria(envelope.criteria)) return 'criteria-empty';
   return 'true-empty';
 }
 
@@ -45,7 +43,7 @@ export function classifyOverviewState(input: {
   if (input.scopeSwitching && input.loading) {
     return {
       phase: 'scope-switching',
-      envelope: null,
+      envelope: previousTruth,
       previousTruth,
       stale: Boolean(previousTruth),
       error: null,
@@ -96,7 +94,11 @@ export function classifyOverviewState(input: {
       previousTruth: input.envelope,
       stale: Boolean(input.loading),
       error: null,
-      copy: input.loading ? '同步中' : '这个范围里还没有可呈现的长期记忆。',
+      copy: input.loading
+        ? '同步中'
+        : hasLongTermMemory(input.envelope.composition)
+          ? '当前没有可呈现的记忆。'
+          : '这个范围里还没有可呈现的长期记忆。',
       showRetry: false,
     };
   }

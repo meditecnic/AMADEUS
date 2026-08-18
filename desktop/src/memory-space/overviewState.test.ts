@@ -76,6 +76,23 @@ describe('classifyOverviewState', () => {
     expect(filtered.phase).toBe('criteria-empty');
     expect(filtered.copy).toContain('没有匹配');
     expect(filtered.copy).not.toContain('长期记忆');
+
+    const leftover = classifyOverviewState({
+      loading: false,
+      envelope: envelope({
+        empty: true,
+        composition: {
+          active_facts: 4,
+          active_experiences: 0,
+          eligible_topics: 2,
+          latest_memory_change_at: null,
+          person_anchors_supported: false,
+        },
+      }),
+      error: null,
+    });
+    expect(leftover.phase).toBe('true-empty');
+    expect(leftover.copy).not.toContain('没有匹配');
   });
 
   it('keeps a trusted snapshot labeled when unavailable', () => {

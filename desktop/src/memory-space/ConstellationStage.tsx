@@ -220,7 +220,7 @@ export function ConstellationStage(props: {
       onPointerMove={(event) => {
         const canvas = canvasRef.current;
         const runtime = runtimeRef.current;
-        if (dragRef.current && props.mode !== '2d' && !props.reducedMotion) {
+        if (dragRef.current && props.mode !== '2d') {
           const dx = event.clientX - dragRef.current.x;
           const dy = event.clientY - dragRef.current.y;
           if (Math.abs(dx) + Math.abs(dy) > 2) movedRef.current = true;
@@ -269,11 +269,14 @@ export function ConstellationStage(props: {
         props.onSelect(hit ? hit.id : null);
       }}
       onWheel={(event) => {
-        if (props.mode === '2d' || props.reducedMotion) return;
+        if (props.mode === '2d') return;
         event.preventDefault();
+        const factor = props.reducedMotion
+          ? (event.deltaY > 0 ? 1.12 : 1 / 1.12)
+          : (1 + event.deltaY * 0.0012);
         const next = Math.max(
           ZOOM_MIN,
-          Math.min(ZOOM_MAX, orbitRef.current.zoom * (1 + event.deltaY * 0.0012)),
+          Math.min(ZOOM_MAX, orbitRef.current.zoom * factor),
         );
         orbitRef.current = { ...orbitRef.current, zoom: next };
         setOrbit({ ...orbitRef.current });

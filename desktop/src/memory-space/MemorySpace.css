@@ -225,6 +225,25 @@
 .memory-space-list { right: 16px; top: 64px; }
 .memory-inspector,
 .memory-reading-dom { left: 16px; top: 64px; }
+@media (max-width: 900px) {
+  .memory-inspector,
+  .memory-reading-dom,
+  .memory-space-list {
+    left: 12px;
+    right: 12px;
+    top: auto;
+    bottom: 12px;
+    max-width: none;
+    max-height: 42vh;
+    overflow: auto;
+  }
+  .memory-space-list {
+    bottom: 12px;
+  }
+  .memory-compatibility {
+    inset: 56px 8px 46vh;
+  }
+}
 .memory-reading-scene {
   left: 0;
   top: 0;
