@@ -346,7 +346,7 @@ describe('MemorySpace', () => {
     const first = await screen.findByRole('option', { name: '喜欢黑咖啡' });
     await waitFor(() => expect(document.activeElement).toBe(first));
     expect(screen.getByTestId('memory-space')).toHaveAttribute('data-narrow-sheet', 'list');
-    fireEvent.keyDown(first, { key: 'ArrowDown' });
+    first.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
     await waitFor(() => expect(document.activeElement).toHaveTextContent('后来的记忆'));
     expect(screen.getByTestId('memory-space')).toHaveAttribute('data-narrow-sheet', 'list');
     expect(screen.getByTestId('memory-list')).toBeInTheDocument();

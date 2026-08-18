@@ -87,6 +87,7 @@ export function MemorySpace({
   const graphRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLOListElement | null>(null);
   const listWasOpen = useRef(false);
+  const lastListRoveAt = useRef(0);
   const [narrowPrefer, setNarrowPrefer] = useState<'list' | 'detail'>('detail');
   const framesRef = useRef<FrameSample[]>([]);
   const [width, setWidth] = useState(typeof window === 'undefined' ? 1280 : window.innerWidth);
@@ -279,6 +280,22 @@ export function MemorySpace({
     if (next) handleSelect(next);
   };
 
+  const roveList = (fromId: string, key: 'ArrowDown' | 'ArrowUp') => {
+    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    if (now - lastListRoveAt.current < 24) return;
+    lastListRoveAt.current = now;
+    const ids = liveProjection?.result_ids ?? [];
+    const index = ids.indexOf(fromId);
+    if (index < 0) return;
+    const next = key === 'ArrowDown' ? ids[index + 1] : ids[index - 1];
+    if (!next) return;
+    handleSelect(next, 'rove');
+    setListOwnsFocus(true);
+    window.requestAnimationFrame(() => {
+      listRef.current?.querySelector<HTMLElement>(`[data-result-id="${next}"]`)?.focus();
+    });
+  };
+
   const emphasis = emphasisMode({
     query: criteria.query,
     resultIds: liveProjection?.result_ids ?? [],
@@ -362,6 +379,20 @@ export function MemorySpace({
       if (event.key === 'Enter' && focusedId) {
         event.preventDefault();
         handleSelect(focusedId);
+        return;
+      }
+      const targetEl = event.target instanceof Element ? event.target : null;
+      const fromListOption = Boolean(
+        targetEl?.getAttribute('role') === 'option'
+        && listRef.current?.contains(targetEl),
+      );
+      if (fromListOption && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
+        event.preventDefault();
+        const fromId = targetEl?.getAttribute('data-result-id') || focusedId;
+        if (fromId) roveList(fromId, event.key);
+        return;
+      }
+      if (fromListOption && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
         return;
       }
       const optionFocused = document.activeElement?.getAttribute('role') === 'option'
@@ -741,6 +772,7 @@ export function MemorySpace({
                   aria-selected={selectedItem}
                   className={selectedItem ? 'is-selected' : undefined}
                   tabIndex={roving ? 0 : -1}
+                  onFocus={() => setListOwnsFocus(true)}
                   onClick={() => {
                     const parent = evidenceParentId(id, liveProjection.edges);
                     if (parent) revealTopic(parent);
@@ -753,16 +785,8 @@ export function MemorySpace({
                   onKeyDown={(event) => {
                     if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
                     event.preventDefault();
-                    event.stopPropagation();
-                    const next = event.key === 'ArrowDown'
-                      ? liveProjection.result_ids[index + 1]
-                      : liveProjection.result_ids[index - 1];
-                    if (!next) return;
-                    handleSelect(next, 'rove');
-                    setListOwnsFocus(true);
-                    window.requestAnimationFrame(() => {
-                      listRef.current?.querySelector<HTMLElement>(`[data-result-id="${next}"]`)?.focus();
-                    });
+                    const fromId = event.currentTarget.getAttribute('data-result-id');
+                    if (fromId) roveList(fromId, event.key);
                   }}
                 >
                   {node.label}
