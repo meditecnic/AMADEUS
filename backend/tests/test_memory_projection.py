@@ -731,3 +731,98 @@ def test_anchor_coverage_before_recency_fill(client: TestClient) -> None:
         "recency fill did not occupy leftover capacity: "
         f"standalone_experiences={len(recency_nodes)} shown={body.get('shown')}"
     )
+
+
+@pytest.mark.parametrize("failure", ["open", "read"])
+def test_unavailable_store_returns_503(
+    client: TestClient, monkeypatch, tmp_path, failure: str
+) -> None:
+    """G1: governed-store open/read unavailable → 503 projection_unavailable."""
+    import aiosqlite
+
+    import app.services.memory_v11.projection as projection
+
+    sid = _session("g1-store")
+    real_get_db = projection.get_db
+
+    async def get_db_open_unavailable(
+        worldline: str = "steins_gate", kind: str = "history"
+    ):
+        if kind != "memory":
+            return await real_get_db(worldline, kind)
+        # Path exists as a directory so this is not a missing-file fixture.
+        blocker = tmp_path / "g1-open-blocker"
+        blocker.mkdir(exist_ok=True)
+        return await aiosqlite.connect(str(blocker))
+
+    async def get_db_read_unavailable(
+        worldline: str = "steins_gate", kind: str = "history"
+    ):
+        db = await real_get_db(worldline, kind)
+        if kind != "memory":
+            return db
+        async def execute(sql, parameters=None):
+            raise sqlite3.OperationalError("disk I/O error")
+
+        db.execute = execute
+        return db
+
+    monkeypatch.setattr(
+        projection,
+        "get_db",
+        get_db_open_unavailable if failure == "open" else get_db_read_unavailable,
+    )
+    response = _get(
+        client,
+        session_id=sid,
+        worldline="steins_gate",
+        identity_mode="self",
+        view="overview",
+    )
+    assert response.status_code == 503, (
+        f"G1 {failure} expected 503, got {response.status_code}: {response.text}"
+    )
+    assert _code(response) == "projection_unavailable", (
+        f"G1 {failure} expected projection_unavailable, got {_code(response)!r}: "
+        f"{response.text}"
+    )
+
+
+def test_program_operational_error_stays_projection_failed(
+    client: TestClient, monkeypatch
+) -> None:
+    """Unrecognized OperationalError stays 500; not mapped to 503."""
+    import app.services.memory_v11.projection as projection
+
+    sid = _session("g1-sql-bug")
+    real_get_db = projection.get_db
+
+    async def get_db_program_sql_error(
+        worldline: str = "steins_gate", kind: str = "history"
+    ):
+        db = await real_get_db(worldline, kind)
+        if kind != "memory":
+            return db
+
+        async def execute(sql, parameters=None):
+            raise sqlite3.OperationalError("ambiguous column name")
+
+        db.execute = execute
+        return db
+
+    monkeypatch.setattr(projection, "get_db", get_db_program_sql_error)
+    response = _get(
+        client,
+        session_id=sid,
+        worldline="steins_gate",
+        identity_mode="self",
+        view="overview",
+    )
+    assert response.status_code == 500, (
+        "program OperationalError must stay 500, "
+        f"got {response.status_code}: {response.text}"
+    )
+    assert _code(response) == "projection_failed", (
+        "program OperationalError must stay projection_failed, "
+        f"got {_code(response)!r}: {response.text}"
+    )

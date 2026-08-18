@@ -5,6 +5,7 @@ Provider-free. Deterministic. Exact-scope. Reads governed SQLite only.
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
@@ -52,6 +53,55 @@ KIND_EDGE_RANK = {
 
 class ProjectionError(MemoryValidationError):
     """Stable projection parameter / view error."""
+
+
+_UNAVAILABLE_SQLITE_PRIMARY = frozenset(
+    {
+        int(getattr(sqlite3, "SQLITE_CANTOPEN", 14)),
+        int(getattr(sqlite3, "SQLITE_BUSY", 5)),
+        int(getattr(sqlite3, "SQLITE_LOCKED", 6)),
+        int(getattr(sqlite3, "SQLITE_IOERR", 10)),
+    }
+)
+_UNAVAILABLE_SQLITE_PRIMARY_NAMES = frozenset(
+    {"CANTOPEN", "BUSY", "LOCKED", "IOERR"}
+)
+_UNAVAILABLE_MESSAGE_MARKERS = (
+    "unable to open",
+    "disk i/o",
+    "database is locked",
+    "database is busy",
+)
+
+
+def _is_unavailable_store_error(exc: BaseException) -> bool:
+    # Open-boundary permission only. FileNotFoundError stays out: init may
+    # create a missing file, and missing-file is not a G1 fixture.
+    if isinstance(exc, PermissionError):
+        return True
+    if not isinstance(exc, sqlite3.OperationalError):
+        return False
+    code = getattr(exc, "sqlite_errorcode", None)
+    if isinstance(code, int):
+        return (code & 0xFF) in _UNAVAILABLE_SQLITE_PRIMARY
+    name = getattr(exc, "sqlite_errorname", None)
+    if isinstance(name, str) and name.startswith("SQLITE_"):
+        parts = name.split("_")
+        if len(parts) >= 2:
+            return parts[1] in _UNAVAILABLE_SQLITE_PRIMARY_NAMES
+    text = str(exc).casefold()
+    return any(marker in text for marker in _UNAVAILABLE_MESSAGE_MARKERS)
+
+
+def _raise_storage_unavailable_or_reraise(exc: BaseException) -> None:
+    if not isinstance(exc, Exception) or isinstance(exc, ProjectionError):
+        raise exc
+    if _is_unavailable_store_error(exc):
+        raise ProjectionError(
+            "projection_unavailable",
+            "memory store unavailable",
+        ) from None
+    raise exc
 
 
 def _utc_now() -> str:
@@ -254,55 +304,62 @@ async def project_overview(criteria: dict[str, Any]) -> dict[str, Any]:
     generated_at = _utc_now()
     hub_pid = _hub_id(session_id, worldline, identity_mode)
 
-    db = await get_db(worldline, "memory")
     try:
-        await db.execute("BEGIN")
+        db = await get_db(worldline, "memory")
+    except BaseException as exc:
+        _raise_storage_unavailable_or_reraise(exc)
+
+    try:
         try:
-            fact_rows = await (
-                await db.execute(
-                    """SELECT f.fact_id, f.topic_id, f.is_pinned, f.updated_at,
-                              v.display_text
-                         FROM stable_facts f
-                         JOIN stable_fact_versions v
-                           ON v.fact_id = f.fact_id
-                          AND v.version_no = f.active_version
-                          AND v.invalid_at IS NULL
-                        WHERE f.session_id=? AND f.identity_mode=? AND f.state='active'""",
-                    (session_id, identity_mode),
-                )
-            ).fetchall()
-            exp_columns = {
-                str(row[1])
-                for row in await (await db.execute("PRAGMA table_info(experiences)")).fetchall()
-            }
-            pin_sql = "e.is_pinned" if "is_pinned" in exp_columns else "0 AS is_pinned"
-            exp_rows = await (
-                await db.execute(
-                    f"""SELECT e.experience_id, e.conversation_id, e.display_text,
-                               e.status, e.expires_at, e.created_at, e.updated_at,
-                               {pin_sql}
-                          FROM experiences e
-                         WHERE e.session_id=? AND e.identity_mode=?
-                           AND e.status='active'""",
-                    (session_id, identity_mode),
-                )
-            ).fetchall()
-            topic_rows = await (
-                await db.execute(
-                    """SELECT topic_id, display_label
-                         FROM memory_topics
-                        WHERE session_id=? AND identity_mode=?""",
-                    (session_id, identity_mode),
-                )
-            ).fetchall()
-        except BaseException:
+            await db.execute("BEGIN")
             try:
-                await db.execute("ROLLBACK")
-            except Exception:
-                pass
-            raise
-        else:
-            await db.execute("COMMIT")
+                fact_rows = await (
+                    await db.execute(
+                        """SELECT f.fact_id, f.topic_id, f.is_pinned, f.updated_at,
+                                  v.display_text
+                             FROM stable_facts f
+                             JOIN stable_fact_versions v
+                               ON v.fact_id = f.fact_id
+                              AND v.version_no = f.active_version
+                              AND v.invalid_at IS NULL
+                            WHERE f.session_id=? AND f.identity_mode=? AND f.state='active'""",
+                        (session_id, identity_mode),
+                    )
+                ).fetchall()
+                exp_columns = {
+                    str(row[1])
+                    for row in await (await db.execute("PRAGMA table_info(experiences)")).fetchall()
+                }
+                pin_sql = "e.is_pinned" if "is_pinned" in exp_columns else "0 AS is_pinned"
+                exp_rows = await (
+                    await db.execute(
+                        f"""SELECT e.experience_id, e.conversation_id, e.display_text,
+                                   e.status, e.expires_at, e.created_at, e.updated_at,
+                                   {pin_sql}
+                              FROM experiences e
+                             WHERE e.session_id=? AND e.identity_mode=?
+                               AND e.status='active'""",
+                        (session_id, identity_mode),
+                    )
+                ).fetchall()
+                topic_rows = await (
+                    await db.execute(
+                        """SELECT topic_id, display_label
+                             FROM memory_topics
+                            WHERE session_id=? AND identity_mode=?""",
+                        (session_id, identity_mode),
+                    )
+                ).fetchall()
+            except BaseException:
+                try:
+                    await db.execute("ROLLBACK")
+                except Exception:
+                    pass
+                raise
+            else:
+                await db.execute("COMMIT")
+        except BaseException as exc:
+            _raise_storage_unavailable_or_reraise(exc)
     finally:
         await db.close()
 
