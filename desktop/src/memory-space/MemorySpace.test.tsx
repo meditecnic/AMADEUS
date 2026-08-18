@@ -329,6 +329,11 @@ describe('MemorySpace', () => {
     expect(await screen.findByTestId('memory-empty')).toHaveTextContent('长期记忆');
     fireEvent.click(screen.getByRole('button', { name: '仪器' }));
     fireEvent.change(screen.getByLabelText('搜索记忆'), { target: { value: '拿铁' } });
+    const search = screen.getByLabelText('搜索记忆') as HTMLInputElement;
+    search.focus();
+    search.setSelectionRange(search.value.length, search.value.length);
+    fireEvent.keyDown(search, { key: 'Home' });
+    expect(search.value).toBe('拿铁');
     expect(await screen.findByTestId('memory-criteria-empty')).toHaveTextContent('没有匹配');
     expect(screen.getByTestId('memory-criteria-chips')).toHaveTextContent('拿铁');
   });

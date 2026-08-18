@@ -93,6 +93,11 @@ export function ConstellationStage(props: {
     if (!canvas) return undefined;
     let cancelled = false;
     let frame = 0;
+    const onLost = (event: Event) => {
+      event.preventDefault();
+      if (cancelled) return;
+      propsRef.current.onContextLost?.();
+    };
     const onWinResize = () => {
       runtimeRef.current?.setSize(canvas.clientWidth, canvas.clientHeight);
     };
@@ -109,10 +114,7 @@ export function ConstellationStage(props: {
       runtime.setSelected(propsRef.current.selectedId);
       runtime.setGraph(displayRef.current, propsRef.current.projection.edges, propsRef.current.projection.result_ids);
       window.addEventListener('resize', onWinResize);
-      canvas.addEventListener('webglcontextlost', (event) => {
-        event.preventDefault();
-        propsRef.current.onContextLost?.();
-      });
+      canvas.addEventListener('webglcontextlost', onLost);
       if (!runtime.supported) {
         propsRef.current.onCreateFail?.();
         return;
@@ -185,6 +187,7 @@ export function ConstellationStage(props: {
       cancelled = true;
       window.cancelAnimationFrame(frame);
       window.removeEventListener('resize', onWinResize);
+      canvas.removeEventListener('webglcontextlost', onLost);
       runtimeRef.current?.dispose();
       runtimeRef.current = null;
     };
@@ -202,7 +205,7 @@ export function ConstellationStage(props: {
     runtime.setQuery(props.query);
     runtime.setSelected(props.selectedId);
     runtime.setGraph(nextDisplay, props.projection.edges, props.projection.result_ids);
-  }, [liveTopicIds, props.projection, props.query, props.reducedMotion, props.selectedId, props.worldline]);
+  }, [liveTopicIds, props.decoration, props.projection, props.query, props.reducedMotion, props.selectedId, props.worldline]);
 
   return (
     <canvas

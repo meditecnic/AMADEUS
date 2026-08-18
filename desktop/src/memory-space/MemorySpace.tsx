@@ -316,10 +316,14 @@ export function MemorySpace({
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      const target = event.target as { tagName?: string } | null;
+      const tag = target && 'tagName' in target ? target.tagName : undefined;
+      const inField = tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA';
       if (event.key === 'Escape') {
         unwind();
         return;
       }
+      if (inField) return;
       const shortcut = memorySpaceShortcut(event);
       if (shortcut === 'search') {
         event.preventDefault();
@@ -691,6 +695,7 @@ export function MemorySpace({
                   role="option"
                   aria-selected={selectedItem}
                   className={selectedItem ? 'is-selected' : undefined}
+                  tabIndex={listOwnsFocus && selectedItem ? 0 : -1}
                   onClick={() => {
                     const parent = evidenceParentId(id, liveProjection.edges);
                     if (parent) revealTopic(parent);
