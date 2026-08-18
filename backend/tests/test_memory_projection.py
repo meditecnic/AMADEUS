@@ -80,6 +80,80 @@ def _code(response) -> str:
     return ""
 
 
+G_STORE_LEAK_SENTINEL = "G3-LEAK-SENTINEL"
+G_STORE_LEAK_SQL = "SELECT leak FROM g3_forbidden"
+G_STORE_LEAK_REPR = "OperationalError('planted-repr')"
+
+
+def _install_unavailable_store(
+    monkeypatch, tmp_path, failure: str, *, plant_leak: bool = False
+) -> str:
+    """Patch projection.get_db with a governed-store open or read failure.
+
+    G1/G2 use the native aiosqlite open error (codes preserved).
+    G3 may wrap that open/read error so the underlying exception carries
+    leak sentinels; the public HTTP body must not echo them.
+    """
+    import aiosqlite
+
+    import app.services.memory_v11.projection as projection
+
+    real_get_db = projection.get_db
+    blocker = tmp_path / "store-open-blocker"
+    leak = ""
+    if plant_leak:
+        leak = (
+            f"{G_STORE_LEAK_SENTINEL} path={blocker} sql={G_STORE_LEAK_SQL} "
+            f"{G_STORE_LEAK_REPR}"
+        )
+
+    async def get_db_open_unavailable(
+        worldline: str = "steins_gate", kind: str = "history"
+    ):
+        if kind != "memory":
+            return await real_get_db(worldline, kind)
+        # Path exists as a directory so this is not a missing-file fixture.
+        blocker.mkdir(exist_ok=True)
+        if not plant_leak:
+            return await aiosqlite.connect(str(blocker))
+        try:
+            return await aiosqlite.connect(str(blocker))
+        except sqlite3.OperationalError as exc:
+            raise sqlite3.OperationalError(f"{exc}; unable to open; {leak}") from None
+
+    async def get_db_read_unavailable(
+        worldline: str = "steins_gate", kind: str = "history"
+    ):
+        db = await real_get_db(worldline, kind)
+        if kind != "memory":
+            return db
+
+        async def execute(sql, parameters=None):
+            if plant_leak:
+                raise sqlite3.OperationalError(f"disk I/O error; {leak}")
+            raise sqlite3.OperationalError("disk I/O error")
+
+        db.execute = execute
+        return db
+
+    monkeypatch.setattr(
+        projection,
+        "get_db",
+        get_db_open_unavailable if failure == "open" else get_db_read_unavailable,
+    )
+    return leak
+
+
+def _unavailable_store_response(client: TestClient, prefix: str):
+    return _get(
+        client,
+        session_id=_session(prefix),
+        worldline="steins_gate",
+        identity_mode="self",
+        view="overview",
+    )
+
+
 def _seed_topic(session_id: str, label: str, identity_mode: str = "self") -> str:
     from app.db import get_db
     from app.services.memory_v11.topics import prepare_topic_label, resolve_or_create_topic
@@ -738,47 +812,8 @@ def test_unavailable_store_returns_503(
     client: TestClient, monkeypatch, tmp_path, failure: str
 ) -> None:
     """G1: governed-store open/read unavailable → 503 projection_unavailable."""
-    import aiosqlite
-
-    import app.services.memory_v11.projection as projection
-
-    sid = _session("g1-store")
-    real_get_db = projection.get_db
-
-    async def get_db_open_unavailable(
-        worldline: str = "steins_gate", kind: str = "history"
-    ):
-        if kind != "memory":
-            return await real_get_db(worldline, kind)
-        # Path exists as a directory so this is not a missing-file fixture.
-        blocker = tmp_path / "g1-open-blocker"
-        blocker.mkdir(exist_ok=True)
-        return await aiosqlite.connect(str(blocker))
-
-    async def get_db_read_unavailable(
-        worldline: str = "steins_gate", kind: str = "history"
-    ):
-        db = await real_get_db(worldline, kind)
-        if kind != "memory":
-            return db
-        async def execute(sql, parameters=None):
-            raise sqlite3.OperationalError("disk I/O error")
-
-        db.execute = execute
-        return db
-
-    monkeypatch.setattr(
-        projection,
-        "get_db",
-        get_db_open_unavailable if failure == "open" else get_db_read_unavailable,
-    )
-    response = _get(
-        client,
-        session_id=sid,
-        worldline="steins_gate",
-        identity_mode="self",
-        view="overview",
-    )
+    _install_unavailable_store(monkeypatch, tmp_path, failure)
+    response = _unavailable_store_response(client, "g1-store")
     assert response.status_code == 503, (
         f"G1 {failure} expected 503, got {response.status_code}: {response.text}"
     )
@@ -786,6 +821,53 @@ def test_unavailable_store_returns_503(
         f"G1 {failure} expected projection_unavailable, got {_code(response)!r}: "
         f"{response.text}"
     )
+
+
+@pytest.mark.parametrize("failure", ["open", "read"])
+def test_storage_failure_is_not_200_empty(
+    client: TestClient, monkeypatch, tmp_path, failure: str
+) -> None:
+    """G2: storage unavailable is not a 200 response with empty=true."""
+    _install_unavailable_store(monkeypatch, tmp_path, failure)
+    response = _unavailable_store_response(client, "g2-store")
+    body = response.json()
+    assert response.status_code != 200, (
+        f"G2 {failure} must not be 200: {response.status_code} {response.text}"
+    )
+    assert body.get("empty") is not True, (
+        f"G2 {failure} must not set empty=true: {response.text}"
+    )
+
+
+@pytest.mark.parametrize("failure", ["open", "read"])
+def test_storage_error_body_is_stable(
+    client: TestClient, monkeypatch, tmp_path, failure: str
+) -> None:
+    """G3: storage unavailable returns a stable short detail, with no leak."""
+    leak = _install_unavailable_store(
+        monkeypatch, tmp_path, failure, plant_leak=True
+    )
+    assert G_STORE_LEAK_SENTINEL in leak
+    assert G_STORE_LEAK_SQL in leak
+    assert G_STORE_LEAK_REPR in leak
+    response = _unavailable_store_response(client, "g3-store")
+    body = response.json()
+    assert body == {
+        "detail": {
+            "code": "projection_unavailable",
+            "message": "memory store unavailable",
+        }
+    }, f"G3 {failure} unexpected public body: {response.text}"
+    message = body["detail"]["message"]
+    assert isinstance(message, str) and 0 < len(message) <= 40
+    public = response.text
+    assert G_STORE_LEAK_SENTINEL not in public
+    assert G_STORE_LEAK_SQL not in public
+    assert G_STORE_LEAK_REPR not in public
+    assert str(tmp_path / "store-open-blocker") not in public
+    assert "disk I/O error" not in public
+    assert "unable to open" not in public
+    assert "Traceback" not in public
 
 
 def test_program_operational_error_stays_projection_failed(
