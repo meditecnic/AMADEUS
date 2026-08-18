@@ -296,6 +296,14 @@ def _topic_matches(label: str, criteria: dict[str, Any]) -> bool:
     return True
 
 
+def _topics_are_primary(criteria: dict[str, Any]) -> bool:
+    """Topics are primary matches under kind=topic or an active text query."""
+    kinds = criteria["kinds"]
+    if kinds:
+        return "topic" in kinds
+    return criteria["query"] is not None
+
+
 async def project_overview(criteria: dict[str, Any]) -> dict[str, Any]:
     session_id = criteria["session_id"]
     worldline = criteria["worldline"]
@@ -322,7 +330,13 @@ async def project_overview(criteria: dict[str, Any]) -> dict[str, Any]:
                                ON v.fact_id = f.fact_id
                               AND v.version_no = f.active_version
                               AND v.invalid_at IS NULL
-                            WHERE f.session_id=? AND f.identity_mode=? AND f.state='active'""",
+                            WHERE f.session_id=? AND f.identity_mode=? AND f.state='active'
+                              AND NOT EXISTS (
+                                    SELECT 1 FROM memory_tombstones t
+                                     WHERE t.fact_id = f.fact_id
+                                       AND t.session_id = f.session_id
+                                       AND t.identity_mode = f.identity_mode
+                              )""",
                         (session_id, identity_mode),
                     )
                 ).fetchall()
@@ -449,12 +463,22 @@ async def project_overview(criteria: dict[str, Any]) -> dict[str, Any]:
     ]
 
     kinds = criteria["kinds"]
+    matching_records: list[dict[str, Any]]
     if kinds == ["topic"]:
-        primary_matches: list[dict[str, Any]] = matching_topics
-        matching_records: list[dict[str, Any]] = []
+        primary_matches: list[dict[str, Any]] = list(matching_topics)
+        matching_records = []
     elif kinds:
-        primary_matches = matching_facts + matching_experiences
-        matching_records = list(primary_matches)
+        matching_records = [
+            item
+            for item in matching_facts + matching_experiences
+            if item["kind"] in kinds
+        ]
+        primary_matches = list(matching_records)
+        if "topic" in kinds:
+            primary_matches = list(matching_topics) + primary_matches
+    elif criteria["query"] is not None:
+        primary_matches = list(matching_topics) + matching_facts + matching_experiences
+        matching_records = matching_facts + matching_experiences
     else:
         primary_matches = matching_facts + matching_experiences
         matching_records = list(primary_matches)
@@ -528,16 +552,21 @@ async def project_overview(criteria: dict[str, Any]) -> dict[str, Any]:
         return (0 if item["is_pinned"] else 1, -stamp, item["id"])
 
     candidate_evidence = matching_facts + matching_experiences
-    if kinds == ["topic"]:
-        # Still admit one supporting fact per matched topic for backbone.
+    if _topics_are_primary(criteria):
+        # Admit one supporting fact per matched topic so anchors are not orphans.
+        used_topics = {
+            str(item["topic_id"])
+            for item in candidate_evidence
+            if item.get("topic_id")
+        }
         support: list[dict[str, Any]] = []
-        used_topics: set[str] = set()
+        matched_topic_ids = {t["id"] for t in matching_topics}
         for fact in sorted(unfiltered_facts, key=evidence_rank_key):
             tid = fact["topic_id"]
-            if tid and tid in {t["id"] for t in matching_topics} and tid not in used_topics:
+            if tid and tid in matched_topic_ids and tid not in used_topics:
                 support.append(fact)
                 used_topics.add(tid)
-        candidate_evidence = support
+        candidate_evidence = candidate_evidence + support
 
     remaining_nodes = OVERVIEW_NODE_BUDGET - 1
     remaining_edges = OVERVIEW_EDGE_BUDGET
@@ -614,11 +643,10 @@ async def project_overview(criteria: dict[str, Any]) -> dict[str, Any]:
     for item in ranked:
         try_admit(item)
 
-    if kinds == ["topic"]:
+    if _topics_are_primary(criteria):
         for topic in sorted(matching_topics, key=lambda t: (t["label"], t["id"])):
             if topic["id"] in shown_topics:
                 continue
-            # need one supporting evidence
             support_item = next(
                 (
                     fact
@@ -694,12 +722,30 @@ async def project_overview(criteria: dict[str, Any]) -> dict[str, Any]:
     nodes.sort(key=lambda n: (KIND_NODE_RANK[n["kind"]], n["projection_id"]))
     edges.sort(key=lambda e: (KIND_EDGE_RANK[e["kind"]], e["from"], e["to"]))
 
+    matched_topic_ids = {t["id"] for t in matching_topics}
     if kinds == ["topic"]:
         shown_primary = [
-            n for n in nodes if n["kind"] == "topic" and n["topic_id"] in {t["id"] for t in matching_topics}
+            n for n in nodes if n["kind"] == "topic" and n["topic_id"] in matched_topic_ids
         ]
         result_rank = sorted(shown_primary, key=lambda n: (n["label"], n["projection_id"]))
         shown_records = 0
+    elif _topics_are_primary(criteria):
+        topic_results = [
+            n for n in nodes if n["kind"] == "topic" and n["topic_id"] in matched_topic_ids
+        ]
+        topic_results.sort(key=lambda n: (n["label"], n["projection_id"]))
+        primary_evidence_ids = {item["projection_id"] for item in matching_records}
+        primary_evidence_results = sorted(
+            [item for item in shown_evidence if item["projection_id"] in primary_evidence_ids],
+            key=evidence_rank_key,
+        )
+        # Genuine primary evidence first, then matching Topics — not KIND_NODE_RANK.
+        # Support-only facts admitted for backbone stay out of result_ids.
+        result_rank = (
+            [{"projection_id": item["projection_id"]} for item in primary_evidence_results]
+            + [{"projection_id": node["projection_id"]} for node in topic_results]
+        )
+        shown_records = len(primary_evidence_results)
     elif not kinds:
         shown_primary = [n for n in nodes if n["kind"] in {"fact", "experience"}]
         result_rank = sorted(
@@ -733,6 +779,30 @@ async def project_overview(criteria: dict[str, Any]) -> dict[str, Any]:
     )
     if kinds == ["topic"]:
         eligible_nodes = 1 + len(matching_topics) + min(len(matching_topics), len(unfiltered_facts))
+    elif _topics_are_primary(criteria):
+        primary_topic_ids = {t["id"] for t in matching_topics}
+        structural_topics = {
+            fact["topic_id"]
+            for fact in matching_facts
+            if fact["topic_id"] and fact["topic_id"] not in primary_topic_ids
+        }
+        topics_with_primary_fact = {
+            fact["topic_id"] for fact in matching_facts if fact["topic_id"]
+        }
+        structural_supports = 0
+        for topic in matching_topics:
+            if topic["id"] in topics_with_primary_fact:
+                continue
+            if any(fact.get("topic_id") == topic["id"] for fact in unfiltered_facts):
+                structural_supports += 1
+        eligible_nodes = (
+            1
+            + len(primary_topic_ids)
+            + len(structural_topics)
+            + len(matching_facts)
+            + len(matching_experiences)
+            + structural_supports
+        )
     else:
         eligible_topic_ids = {f["topic_id"] for f in matching_facts if f["topic_id"]}
         eligible_nodes = 1 + len(eligible_topic_ids) + len(matching_facts) + len(matching_experiences)

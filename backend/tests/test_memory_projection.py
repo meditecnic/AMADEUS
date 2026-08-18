@@ -154,7 +154,12 @@ def _unavailable_store_response(client: TestClient, prefix: str):
     )
 
 
-def _seed_topic(session_id: str, label: str, identity_mode: str = "self") -> str:
+def _seed_topic(
+    session_id: str,
+    label: str,
+    identity_mode: str = "self",
+    worldline: str = "steins_gate",
+) -> str:
     from app.db import get_db
     from app.services.memory_v11.topics import prepare_topic_label, resolve_or_create_topic
 
@@ -163,7 +168,7 @@ def _seed_topic(session_id: str, label: str, identity_mode: str = "self") -> str
     display, norm = prepared
 
     async def _run() -> str:
-        db = await get_db("steins_gate", "memory")
+        db = await get_db(worldline, "memory")
         try:
             await db.execute("BEGIN IMMEDIATE")
             topic_id = await resolve_or_create_topic(
@@ -182,6 +187,42 @@ def _seed_topic(session_id: str, label: str, identity_mode: str = "self") -> str
             await db.close()
 
     return asyncio.run(_run())
+
+
+def _seed_topic_with_id(
+    session_id: str,
+    topic_id: str,
+    label: str,
+    *,
+    identity_mode: str = "self",
+    worldline: str = "steins_gate",
+) -> None:
+    from app.db import get_db
+    from app.services.memory_v11.topics import prepare_topic_label
+
+    prepared = prepare_topic_label(label)
+    assert prepared is not None
+    display, norm = prepared
+    stamp = "2026-08-01T00:00:00+00:00"
+
+    async def _run() -> None:
+        db = await get_db(worldline, "memory")
+        try:
+            await db.execute(
+                """INSERT INTO memory_topics(
+                       topic_id, session_id, identity_mode, normalized_label,
+                       display_label, created_at, updated_at
+                   ) VALUES(?,?,?,?,?,?,?)""",
+                (topic_id, session_id, identity_mode, norm, display, stamp, stamp),
+            )
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+        finally:
+            await db.close()
+
+    asyncio.run(_run())
 
 
 def _seed_fact(
@@ -1187,3 +1228,931 @@ def test_optional_associations_cut_first(client: TestClient) -> None:
         assert edge["from"] in node_ids
         assert edge["to"] in node_ids
     assert len(body["edges"]) == len(body["nodes"]) - 1
+
+
+D3_TOPIC_LABEL = "黑咖啡"
+D3_FACT_LABEL = "喜欢黑咖啡"
+D3_QUERY = "黑咖啡"
+
+
+def test_cross_kind_query_result_ids_unique(client: TestClient) -> None:
+    """D3: query hitting Topic + Fact lists each genuine shown primary match once."""
+    sid = _session("d3-cross")
+    topic_id = _seed_topic(sid, D3_TOPIC_LABEL)
+    fact_id = _seed_fact(sid, D3_FACT_LABEL, topic_id=topic_id)
+    topic_pid = f"topic:{topic_id}"
+    fact_pid = f"fact:{fact_id}"
+
+    body = _get(
+        client,
+        session_id=sid,
+        worldline="steins_gate",
+        identity_mode="self",
+        view="overview",
+        query=D3_QUERY,
+    ).json()
+
+    node_by_id = {node["projection_id"]: node for node in body["nodes"]}
+    assert topic_pid in node_by_id, body["nodes"]
+    assert fact_pid in node_by_id, body["nodes"]
+    assert node_by_id[topic_pid]["kind"] == "topic"
+    assert node_by_id[fact_pid]["kind"] == "fact"
+
+    result_ids = list(body["result_ids"])
+    assert topic_pid in result_ids, (
+        "D3 Topic is a genuine shown primary match but missing from result_ids: "
+        f"result_ids={result_ids} eligible={body.get('eligible')} shown={body.get('shown')}"
+    )
+    assert fact_pid in result_ids
+    assert result_ids.count(topic_pid) == 1
+    assert result_ids.count(fact_pid) == 1
+    assert len(result_ids) == len(set(result_ids))
+    for result_id in result_ids:
+        assert result_id in node_by_id
+        assert sum(1 for node in body["nodes"] if node["projection_id"] == result_id) == 1
+    assert body["shown"]["results"] == len(result_ids)
+    assert body["eligible"]["results"] == 2, (
+        "D3 isolated Topic+Fact fixture must count both primary matches: "
+        f"eligible={body.get('eligible')}"
+    )
+    assert result_ids.count(topic_pid) == 1
+    assert result_ids.count(fact_pid) == 1
+    hub = body["center"]["projection_id"]
+    assert hub not in result_ids
+
+
+KIND_NODE_RANK = {
+    "continuity_hub": 0,
+    "topic": 1,
+    "fact": 2,
+    "experience": 3,
+}
+
+
+def _result_nodes(body: dict) -> list[dict]:
+    by_id = {node["projection_id"]: node for node in body["nodes"]}
+    return [by_id[result_id] for result_id in body["result_ids"]]
+
+
+def test_unfiltered_result_ids_are_shown_primary_evidence(client: TestClient) -> None:
+    """D1: unfiltered result_ids are shown Fact/Experience ids only."""
+    sid = _session("d1-unfiltered")
+    topic_id = _seed_topic(sid, "D1-topic")
+    fact_id = _seed_fact(sid, "D1-fact", topic_id=topic_id)
+    exp_id = _seed_experience(sid, "D1-experience")
+    expected_ids = {f"fact:{fact_id}", f"experience:{exp_id}"}
+    body = _get_overview_body(client, sid)
+    result_ids = list(body["result_ids"])
+    assert set(result_ids) == expected_ids
+    assert len(result_ids) == len(set(result_ids)) == 2
+    assert len(result_ids) == body["shown"]["results"]
+    node_ids = [node["projection_id"] for node in body["nodes"]]
+    for result_id in expected_ids:
+        assert node_ids.count(result_id) == 1
+    assert f"topic:{topic_id}" not in result_ids
+    assert body["center"]["projection_id"] not in result_ids
+    assert all(item in expected_ids for item in result_ids)
+
+
+def test_topic_only_result_ids(client: TestClient) -> None:
+    """D2: kind=topic result_ids are the matched Topic; records stay 0."""
+    sid = _session("d2-topic")
+    topic_id = _seed_topic(sid, "D2-topic")
+    fact_id = _seed_fact(sid, "D2-support-fact", topic_id=topic_id)
+    topic_pid = f"topic:{topic_id}"
+    fact_pid = f"fact:{fact_id}"
+    body = _get(
+        client,
+        session_id=sid,
+        worldline="steins_gate",
+        identity_mode="self",
+        view="overview",
+        kind="topic",
+    ).json()
+    assert body["shown"]["records"] == 0
+    assert body["shown"]["results"] > 0
+    assert body["result_ids"] == [topic_pid]
+    assert fact_pid not in body["result_ids"]
+    assert any(node["projection_id"] == fact_pid for node in body["nodes"])
+    assert body["center"]["projection_id"] not in body["result_ids"]
+
+
+def test_result_ids_exclude_soul_and_support_only(client: TestClient) -> None:
+    """D4: hub and supporting-only evidence never enter result_ids."""
+    sid = _session("d4-exclude")
+    topic_id = _seed_topic(sid, "D4-topic")
+    fact_id = _seed_fact(sid, "D4-support-fact", topic_id=topic_id)
+    topic_pid = f"topic:{topic_id}"
+    fact_pid = f"fact:{fact_id}"
+    body = _get(
+        client,
+        session_id=sid,
+        worldline="steins_gate",
+        identity_mode="self",
+        view="overview",
+        kind="topic",
+    ).json()
+    hub = body["center"]["projection_id"]
+    assert hub not in body["result_ids"]
+    assert fact_pid not in body["result_ids"]
+    assert any(node["projection_id"] == fact_pid for node in body["nodes"])
+    assert topic_pid in body["result_ids"]
+    assert all(result_id != hub for result_id in body["result_ids"])
+
+
+def test_query_topic_support_fact_excluded_from_result_ids(
+    client: TestClient,
+) -> None:
+    """D4 query path: Topic-label hit with a non-matching support Fact.
+
+    The Fact is structural backbone only: shown in nodes, absent from
+    result_ids; eligible.results counts the Topic alone.
+    """
+    sid = _session("d4-q-support")
+    topic_id = _seed_topic(sid, "黑咖啡")
+    fact_id = _seed_fact(sid, "喜欢拿铁", topic_id=topic_id)
+    topic_pid = f"topic:{topic_id}"
+    fact_pid = f"fact:{fact_id}"
+    body = _get(
+        client,
+        session_id=sid,
+        worldline="steins_gate",
+        identity_mode="self",
+        view="overview",
+        query="黑咖啡",
+    ).json()
+    assert body["empty"] is False
+    node_ids = {node["projection_id"] for node in body["nodes"]}
+    assert topic_pid in node_ids
+    assert fact_pid in node_ids
+    assert fact_pid not in body["result_ids"], (
+        "support-only Fact must not enter result_ids: "
+        f"result_ids={body['result_ids']} shown={body.get('shown')} "
+        f"eligible={body.get('eligible')}"
+    )
+    assert body["result_ids"] == [topic_pid]
+    assert body["shown"] == {"nodes": 3, "edges": 2, "records": 0, "results": 1}
+    assert body["eligible"]["nodes"] == 3
+    assert body["eligible"]["edges"] == 2
+    assert body["eligible"]["records"] == 0
+    assert body["eligible"]["results"] == 1
+    hub = body["center"]["projection_id"]
+    assert hub not in body["result_ids"]
+    node_ids = {node["projection_id"] for node in body["nodes"]}
+    edge_kinds = {edge["kind"] for edge in body["edges"]}
+    assert "hub_to_anchor" in edge_kinds
+    assert "has_topic" in edge_kinds
+    for edge in body["edges"]:
+        assert edge["from"] in node_ids
+        assert edge["to"] in node_ids
+    assert any(
+        edge["kind"] == "hub_to_anchor" and edge["from"] == hub and edge["to"] == topic_pid
+        for edge in body["edges"]
+    )
+    assert any(
+        edge["kind"] == "has_topic" and edge["from"] == fact_pid and edge["to"] == topic_pid
+        for edge in body["edges"]
+    )
+
+
+def test_result_ids_use_result_rank_not_kind_sort(client: TestClient) -> None:
+    """D5: same primary IDs, result-rank order ≠ kind-rank order."""
+    sid = _session("d5-rank")
+    fact_id = _seed_fact(sid, "D5-unpinned-fact", is_pinned=False)
+    pinned_exp = _seed_experience(
+        sid,
+        "D5-pinned-experience",
+        is_pinned=True,
+        updated_at="2026-08-10T00:00:00+00:00",
+    )
+    old_exp = _seed_experience(
+        sid,
+        "D5-old-unpinned-experience",
+        is_pinned=False,
+        updated_at="2026-07-01T00:00:00+00:00",
+    )
+    expected_primary = {
+        f"fact:{fact_id}",
+        f"experience:{pinned_exp}",
+        f"experience:{old_exp}",
+    }
+    body = _get_overview_body(client, sid)
+    result_ids = list(body["result_ids"])
+    assert set(result_ids) == expected_primary
+    primary_nodes = [
+        node for node in body["nodes"] if node["projection_id"] in expected_primary
+    ]
+    assert {node["projection_id"] for node in primary_nodes} == expected_primary
+    kind_ranked = [
+        node["projection_id"]
+        for node in sorted(
+            primary_nodes,
+            key=lambda node: (KIND_NODE_RANK[node["kind"]], node["projection_id"]),
+        )
+    ]
+    assert set(kind_ranked) == expected_primary
+    assert result_ids != kind_ranked, (
+        "D5 result_ids followed kind-rank of the same primary IDs: "
+        f"result_ids={result_ids} kind_ranked={kind_ranked}"
+    )
+    assert result_ids[0] == f"experience:{pinned_exp}"
+
+
+def test_pinned_facts_and_experiences_processed_first(client: TestClient) -> None:
+    """B1: every admitted pinned evidence ranks before unpinned in result_ids."""
+    sid = _session("b1-pin")
+    pinned_fact = _seed_fact(
+        sid, "B1-pinned-fact", is_pinned=True
+    )
+    unpinned_fact = _seed_fact(
+        sid, "B1-unpinned-fact", is_pinned=False
+    )
+    pinned_exp = _seed_experience(
+        sid,
+        "B1-pinned-experience",
+        is_pinned=True,
+        updated_at="2020-01-01T00:00:00+00:00",
+    )
+    unpinned_exp = _seed_experience(
+        sid,
+        "B1-unpinned-experience",
+        is_pinned=False,
+        updated_at="2026-08-01T00:00:00+00:00",
+    )
+    _set_fact_updated_at(pinned_fact, "2019-01-01T00:00:00+00:00")
+    _set_fact_updated_at(unpinned_fact, "2026-08-02T00:00:00+00:00")
+    body = _get_overview_body(client, sid)
+    result_ids = list(body["result_ids"])
+    pinned_ids = {f"fact:{pinned_fact}", f"experience:{pinned_exp}"}
+    unpinned_ids = {f"fact:{unpinned_fact}", f"experience:{unpinned_exp}"}
+    assert pinned_ids <= set(result_ids)
+    assert unpinned_ids <= set(result_ids)
+    last_pinned = max(result_ids.index(item) for item in pinned_ids)
+    first_unpinned = min(result_ids.index(item) for item in unpinned_ids)
+    assert last_pinned < first_unpinned, result_ids
+
+
+def test_anchor_overflow_stable_order(client: TestClient) -> None:
+    """B3: overflow anchors follow (label ASC, projection_id ASC), not insert order."""
+    sid = _session("b3-overflow")
+    for index in range(59):
+        _seed_experience(sid, f"B3-pin-{index:02d}", is_pinned=True)
+    # Same display_label is UNIQUE per (session, identity) on normalized_label.
+    # Secondary key is therefore proven with controlled IDs under distinct
+    # labels ordered by (label ASC, projection_id ASC).
+    planted = [
+        ("B3-00", "bbbbbbbb-b303-4000-8000-000000000004"),
+        ("B3-01", "bbbbbbbb-b303-4000-8000-000000000003"),
+        ("B3-02", "bbbbbbbb-b303-4000-8000-000000000002"),
+        ("B3-03", "bbbbbbbb-b303-4000-8000-000000000001"),
+    ]
+    created: list[tuple[str, str]] = []
+    for label, topic_id in reversed(planted):
+        _seed_topic_with_id(sid, topic_id, label)
+        _seed_fact(sid, f"{label}-fact", topic_id=topic_id, is_pinned=False)
+        created.append((label, topic_id))
+    ordered = sorted(created, key=lambda item: (item[0], f"topic:{item[1]}"))
+    expected_admitted = [f"topic:{topic_id}" for _label, topic_id in ordered[:2]]
+    expected_skipped = [f"topic:{topic_id}" for _label, topic_id in ordered[2:]]
+    body = _get_overview_body(client, sid)
+    shown_ids = [node["projection_id"] for node in _nodes_of(body, "topic")]
+    assert set(shown_ids) == set(expected_admitted)
+    assert [pid for pid in expected_admitted if pid in shown_ids] == expected_admitted
+    assert all(pid not in shown_ids for pid in expected_skipped)
+    assert expected_skipped
+    assert body["shown"]["nodes"] == C_NODE_BUDGET
+
+
+def test_anchor_requires_supporting_evidence(client: TestClient) -> None:
+    """B4: a Topic with no displayable evidence is not shown."""
+    sid = _session("b4-orphan")
+    orphan_topic = _seed_topic(sid, "B4-orphan-topic")
+    live_topic = _seed_topic(sid, "B4-live-topic")
+    _seed_fact(sid, "B4-live-fact", topic_id=live_topic)
+    body = _get_overview_body(client, sid)
+    labels = {node.get("label") for node in body["nodes"]}
+    assert "B4-orphan-topic" not in labels
+    assert "B4-live-topic" in labels
+    assert f"topic:{orphan_topic}" not in {node["projection_id"] for node in body["nodes"]}
+
+
+def test_overbudget_bundle_skipped_without_orphan(client: TestClient) -> None:
+    """B5: leftover=1 skips the whole Topic+Fact bundle; no hub-only Topic."""
+    sid = _session("b5-bundle")
+    for index in range(62):
+        _seed_experience(sid, f"B5-pin-{index:02d}", is_pinned=True)
+    topic_id = _seed_topic(sid, "B5-bundle-topic")
+    fact_id = _seed_fact(sid, "B5-bundle-fact", topic_id=topic_id, is_pinned=False)
+    body = _get_overview_body(client, sid)
+    labels = {node.get("label") for node in body["nodes"]}
+    assert "B5-bundle-topic" not in labels
+    assert "B5-bundle-fact" not in labels
+    assert f"topic:{topic_id}" not in body["result_ids"]
+    assert f"fact:{fact_id}" not in body["result_ids"]
+    assert "topic" not in {node["kind"] for node in body["nodes"]}
+
+
+def test_ranking_independent_of_insert_order(client: TestClient) -> None:
+    """B6: same pin/time/id set yields the same result_ids regardless of insert order."""
+    sid = _session("b6-order")
+    ids = {
+        "pinned_fact": "bbbbbbbb-0001-4000-8000-000000000001",
+        "unpinned_fact": "bbbbbbbb-0001-4000-8000-000000000002",
+        "pinned_exp": "bbbbbbbb-0001-4000-8000-000000000003",
+        "unpinned_exp": "bbbbbbbb-0001-4000-8000-000000000004",
+        "topic": "bbbbbbbb-0001-4000-8000-000000000005",
+    }
+    _seed_ranked_set(
+        sid,
+        order=("pinned_fact", "unpinned_exp", "pinned_exp", "unpinned_fact"),
+        ids=ids,
+    )
+    first = _get_overview_body(client, sid)
+    _clear_ranked_set(sid, ids)
+    _seed_ranked_set(
+        sid,
+        order=("unpinned_fact", "pinned_exp", "unpinned_exp", "pinned_fact"),
+        ids=ids,
+    )
+    second = _get_overview_body(client, sid)
+    assert first["result_ids"] == second["result_ids"]
+    assert [node["projection_id"] for node in first["nodes"]] == [
+        node["projection_id"] for node in second["nodes"]
+    ]
+    assert [(edge["kind"], edge["from"], edge["to"]) for edge in first["edges"]] == [
+        (edge["kind"], edge["from"], edge["to"]) for edge in second["edges"]
+    ]
+
+
+def _clear_ranked_set(session_id: str, ids: dict[str, str]) -> None:
+    from app.db import _resolve_path
+
+    connection = sqlite3.connect(_resolve_path("steins_gate", "memory"))
+    try:
+        connection.execute(
+            "DELETE FROM stable_fact_versions WHERE fact_id IN (?,?)",
+            (ids["pinned_fact"], ids["unpinned_fact"]),
+        )
+        connection.execute(
+            "DELETE FROM stable_facts WHERE session_id=?",
+            (session_id,),
+        )
+        connection.execute(
+            "DELETE FROM experiences WHERE session_id=?",
+            (session_id,),
+        )
+        connection.execute(
+            "DELETE FROM memory_topics WHERE session_id=?",
+            (session_id,),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _seed_ranked_set(
+    session_id: str,
+    *,
+    order: tuple[str, ...],
+    ids: dict[str, str],
+) -> None:
+    from app.db import _resolve_path
+
+    connection = sqlite3.connect(_resolve_path("steins_gate", "memory"))
+    try:
+        now = "2026-08-01T00:00:00+00:00"
+        connection.execute(
+            """INSERT INTO memory_topics(
+                   topic_id, session_id, identity_mode, normalized_label,
+                   display_label, created_at, updated_at
+               ) VALUES(?,?, 'self', 'b6-topic', 'B6-topic', ?, ?)""",
+            (ids["topic"], session_id, now, now),
+        )
+        specs = {
+            "pinned_fact": ("fact", ids["pinned_fact"], "B6-pinned-fact", 1, "2020-01-01T00:00:00+00:00", ids["topic"]),
+            "unpinned_fact": ("fact", ids["unpinned_fact"], "B6-unpinned-fact", 0, "2026-08-01T00:00:00+00:00", ids["topic"]),
+            "pinned_exp": ("experience", ids["pinned_exp"], "B6-pinned-exp", 1, "2020-01-02T00:00:00+00:00", None),
+            "unpinned_exp": ("experience", ids["unpinned_exp"], "B6-unpinned-exp", 0, "2026-08-02T00:00:00+00:00", None),
+        }
+        for key in order:
+            kind, item_id, label, pinned, updated, tid = specs[key]
+            if kind == "fact":
+                connection.execute(
+                    """INSERT INTO stable_facts(
+                           fact_id, session_id, identity_mode, topic_id, state,
+                           active_version, is_pinned, created_at, updated_at, deleted_at
+                       ) VALUES(?,?, 'self', ?, 'active', 1, ?, ?, ?, NULL)""",
+                    (item_id, session_id, tid, pinned, updated, updated),
+                )
+                semantic = json.dumps({"text": label}, ensure_ascii=False)
+                fingerprint = hashlib.sha256(semantic.encode("utf-8")).hexdigest()
+                connection.execute(
+                    """INSERT INTO stable_fact_versions(
+                           fact_id, version_no, display_text, semantic_json,
+                           semantic_fingerprint, confidence, change_kind,
+                           previous_version, valid_from, invalid_at, created_by_job_id
+                       ) VALUES(?,1,?,?,?,0.9,'create',NULL,?,NULL,NULL)""",
+                    (item_id, label, semantic, fingerprint, updated),
+                )
+            else:
+                _insert_experience_row(
+                    connection,
+                    session_id=session_id,
+                    experience_id=item_id,
+                    text=label,
+                    is_pinned=bool(pinned),
+                    updated_at=updated,
+                )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _insert_experience_row(
+    connection: sqlite3.Connection,
+    *,
+    session_id: str,
+    experience_id: str,
+    text: str,
+    is_pinned: bool,
+    updated_at: str,
+    status: str = "active",
+    expires_at: str | None = None,
+) -> None:
+    observation_id = str(uuid4())
+    semantic = json.dumps({"object": text[:24]}, ensure_ascii=False)
+    fingerprint = hashlib.sha256(semantic.encode("utf-8")).hexdigest()
+    connection.execute(
+        """INSERT INTO memory_observations(
+               observation_id, session_id, identity_mode, display_text,
+               semantic_json, semantic_fingerprint, evidence_kind, memory_class,
+               confidence, topic_label_proposal, status, extractor_version,
+               reanalysis_count, expires_at, created_at, updated_at
+           ) VALUES(?,?, 'self', ?,?,?, 'direct_user', 'episodic', 0.9, NULL,
+                    'attached', 'memory-v11-1', 0, NULL, ?, ?)""",
+        (observation_id, session_id, text, semantic, fingerprint, updated_at, updated_at),
+    )
+    connection.execute(
+        """INSERT INTO memory_observation_sources(
+               observation_id, source_message_id, conversation_id, source_role,
+               source_fingerprint, source_created_at, source_state, excerpt
+           ) VALUES(?,?,?, 'user', ?, ?, 'present', NULL)""",
+        (observation_id, int(uuid4().int % 10**9), "conv-proj", f"fp-{observation_id[:8]}", updated_at),
+    )
+    connection.execute(
+        """INSERT INTO experiences(
+               experience_id, session_id, conversation_id, identity_mode,
+               observation_id, display_text, semantic_json, semantic_fingerprint,
+               confidence, status, expires_at, created_at, updated_at, deleted_at,
+               is_pinned
+           ) VALUES(?,?,?,?,?,?,?,?,0.9,?,?,?,?,NULL,?)""",
+        (
+            experience_id,
+            session_id,
+            "conv-proj",
+            "self",
+            observation_id,
+            text,
+            semantic,
+            fingerprint,
+            status,
+            expires_at,
+            updated_at,
+            updated_at,
+            1 if is_pinned else 0,
+        ),
+    )
+
+
+def test_query_percent_and_underscore_literal(client: TestClient) -> None:
+    """E1: % and _ in query/labels are literal, not SQL wildcards."""
+    sid = _session("e1-lit")
+    _seed_fact(sid, "has%sign")
+    _seed_fact(sid, "hasXsign")
+    _seed_fact(sid, "has_under")
+    _seed_fact(sid, "hasZunder")
+    percent = _get(
+        client,
+        session_id=sid,
+        worldline="steins_gate",
+        identity_mode="self",
+        view="overview",
+        query="has%sign",
+    ).json()
+    percent_labels = [node.get("label") for node in _nodes_of(percent, "fact")]
+    assert percent_labels == ["has%sign"]
+    underscore = _get(
+        client,
+        session_id=sid,
+        worldline="steins_gate",
+        identity_mode="self",
+        view="overview",
+        query="has_under",
+    ).json()
+    under_labels = [node.get("label") for node in _nodes_of(underscore, "fact")]
+    assert under_labels == ["has_under"]
+    wild = _get(
+        client,
+        session_id=sid,
+        worldline="steins_gate",
+        identity_mode="self",
+        view="overview",
+        query="%",
+    ).json()
+    wild_labels = [node.get("label") for node in _nodes_of(wild, "fact")]
+    assert wild_labels == ["has%sign"]
+
+
+def test_kinds_normalized_deduped_sorted(client: TestClient) -> None:
+    """E2: repeated kind params echo as sorted unique criteria.kinds."""
+    sid = _session("e2-kinds")
+    _seed_fact(sid, "E2-fact")
+    _seed_experience(sid, "E2-experience")
+    body = _get(
+        client,
+        session_id=sid,
+        worldline="steins_gate",
+        identity_mode="self",
+        view="overview",
+        kind=["experience", "fact", "fact"],
+    ).json()
+    assert body["criteria"]["kinds"] == ["experience", "fact"]
+
+
+def test_topic_id_pinned_only_updated_bounds(client: TestClient) -> None:
+    """E3: topic_id, pinned_only, and inclusive updated bounds each filter."""
+    sid = _session("e3-bounds")
+    topic_a = _seed_topic(sid, "E3-topic-a")
+    topic_b = _seed_topic(sid, "E3-topic-b")
+    fact_a = _seed_fact(sid, "E3-fact-a", topic_id=topic_a, is_pinned=False)
+    fact_b = _seed_fact(sid, "E3-fact-b", topic_id=topic_b, is_pinned=True)
+    _set_fact_updated_at(fact_a, "2026-01-01T00:00:00+00:00")
+    _set_fact_updated_at(fact_b, "2026-06-01T00:00:00+00:00")
+    base = {
+        "session_id": sid,
+        "worldline": "steins_gate",
+        "identity_mode": "self",
+        "view": "overview",
+    }
+    by_topic = _get(client, **base, topic_id=topic_a).json()
+    assert [node.get("label") for node in _nodes_of(by_topic, "fact")] == ["E3-fact-a"]
+    pinned = _get(client, **base, pinned_only="true").json()
+    assert [node.get("label") for node in _nodes_of(pinned, "fact")] == ["E3-fact-b"]
+    bounded = _get(
+        client,
+        **base,
+        updated_from="2026-05-01T00:00:00Z",
+        updated_to="2026-07-01T00:00:00Z",
+    ).json()
+    assert [node.get("label") for node in _nodes_of(bounded, "fact")] == ["E3-fact-b"]
+    inclusive = _get(
+        client,
+        **base,
+        updated_from="2026-01-01T00:00:00Z",
+        updated_to="2026-01-01T00:00:00Z",
+    ).json()
+    assert [node.get("label") for node in _nodes_of(inclusive, "fact")] == ["E3-fact-a"]
+    bad_from = _get(client, **base, updated_from="not-a-date")
+    assert bad_from.status_code == 422
+    assert _code(bad_from) == "invalid_updated_from"
+    bad_to = _get(client, **base, updated_to="also-bad")
+    assert bad_to.status_code == 422
+    assert _code(bad_to) == "invalid_updated_to"
+
+
+def test_filtered_zero_keeps_unfiltered_composition(client: TestClient) -> None:
+    """E4: a miss query keeps unfiltered composition and the 1/0/0/0 envelope."""
+    sid = _session("e4-comp")
+    _seed_fact(sid, "E4-live-fact")
+    body = _get(
+        client,
+        session_id=sid,
+        worldline="steins_gate",
+        identity_mode="self",
+        view="overview",
+        query="no-such-memory",
+    ).json()
+    assert body["composition"]["active_facts"] > 0
+    _assert_empty_envelope(body)
+
+
+def test_true_empty_envelope_1_0_0_0(client: TestClient) -> None:
+    """E5: a scope with no rows is the full empty 1/0/0/0 envelope."""
+    sid = _session("e5-empty")
+    body = _get_overview_body(client, sid)
+    assert body["composition"]["active_facts"] == 0
+    assert body["composition"]["active_experiences"] == 0
+    _assert_empty_envelope(body)
+
+
+def test_filtered_empty_envelope_1_0_0_0(client: TestClient) -> None:
+    """E6: rows exist but criteria miss; empty counts, composition unfiltered."""
+    sid = _session("e6-miss")
+    _seed_fact(sid, "E6-present")
+    _seed_experience(sid, "E6-lived")
+    body = _get(
+        client,
+        session_id=sid,
+        worldline="steins_gate",
+        identity_mode="self",
+        view="overview",
+        query="zzzz-no-hit",
+    ).json()
+    assert body["composition"]["active_facts"] == 1
+    assert body["composition"]["active_experiences"] == 1
+    _assert_empty_envelope(body)
+
+
+def _assert_empty_envelope(body: dict) -> None:
+    assert body["empty"] is True
+    assert body["eligible"] == {"nodes": 1, "edges": 0, "records": 0, "results": 0}
+    assert body["shown"] == {"nodes": 1, "edges": 0, "records": 0, "results": 0}
+    assert body["truncated"] == {
+        "nodes": False,
+        "edges": False,
+        "records": False,
+        "results": False,
+    }
+    assert body["result_ids"] == []
+    assert len(body["nodes"]) == 1
+    assert body["nodes"][0]["kind"] == "continuity_hub"
+    assert body["nodes"][0]["projection_id"] == body["center"]["projection_id"]
+    assert body["edges"] == []
+
+
+def test_excluded_lifecycle_states_absent(client: TestClient) -> None:
+    """F1: deleted/tombstoned facts and excluded experiences never appear."""
+    sid = _session("f1-life")
+    live = _seed_fact(sid, "F1-live")
+    deleted = _seed_fact(sid, "F1-deleted-fact")
+    tombstoned = _seed_fact(sid, "F1-tombstoned-fact")
+    expired = _seed_experience(sid, "F1-expired")
+    deleted_exp = _seed_experience(sid, "F1-deleted-exp")
+    pending = _seed_experience(sid, "F1-pending")
+    _set_fact_state(deleted, "deleted")
+    _set_fact_state(tombstoned, "deleted")
+    _insert_tombstone(sid, tombstoned)
+    _set_experience_status(expired, "expired")
+    _set_experience_status(deleted_exp, "deleted")
+    _set_experience_status(pending, "pending_source_delete")
+    body = _get_overview_body(client, sid)
+    labels = {node.get("label") for node in body["nodes"]}
+    assert "F1-live" in labels
+    assert "F1-deleted-fact" not in labels
+    assert "F1-tombstoned-fact" not in labels
+    assert "F1-expired" not in labels
+    assert "F1-deleted-exp" not in labels
+    assert "F1-pending" not in labels
+    result_ids = set(body["result_ids"])
+    assert f"fact:{live}" in result_ids
+    assert f"fact:{deleted}" not in result_ids
+    assert f"fact:{tombstoned}" not in result_ids
+    assert f"experience:{expired}" not in result_ids
+    assert f"experience:{deleted_exp}" not in result_ids
+    assert f"experience:{pending}" not in result_ids
+    assert body["eligible"]["records"] == 1
+    assert body["eligible"]["results"] == 1
+
+
+def test_active_fact_matching_tombstone_absent(client: TestClient) -> None:
+    """F1: an still-active Fact with a matching same-scope tombstone is excluded."""
+    sid = _session("f1-tomb")
+    live = _seed_fact(sid, "F1-live-keep")
+    marked = _seed_fact(sid, "F1-active-tombstoned")
+    _insert_tombstone(sid, marked)
+    body = _get_overview_body(client, sid)
+    labels = {node.get("label") for node in body["nodes"]}
+    assert "F1-live-keep" in labels
+    assert "F1-active-tombstoned" not in labels, (
+        "active Fact with matching tombstone leaked: "
+        f"labels={sorted(item for item in labels if item)} "
+        f"result_ids={body.get('result_ids')} eligible={body.get('eligible')}"
+    )
+    assert f"fact:{marked}" not in body["result_ids"]
+    assert f"fact:{live}" in body["result_ids"]
+    assert body["eligible"]["records"] == 1
+    assert body["eligible"]["results"] == 1
+
+
+def test_scope_isolation_on_eligible_and_composition(client: TestClient) -> None:
+    """F2: foreign session/worldline/identity rows stay out of graph, eligible, composition."""
+    sid = _session("f2-scope")
+    other = _session("f2-other")
+    sg_fact = _seed_fact(sid, "F2-sg-fact")
+    sg_exp = _seed_experience(sid, "F2-sg-exp")
+    _seed_fact(other, "F2-foreign-session")
+    _seed_fact(sid, "F2-okabe-only", identity_mode="okabe")
+    beta_fact = _seed_fact(sid, "F2-beta-fact", worldline="beta")
+    beta_exp = _seed_experience(sid, "F2-beta-exp", worldline="beta")
+    sg = _get_overview_body(client, sid)
+    assert sg["composition"]["active_facts"] == 1
+    assert sg["composition"]["active_experiences"] == 1
+    sg_labels = {node.get("label") for node in sg["nodes"]}
+    sg_ids = set(sg["result_ids"])
+    assert "F2-sg-fact" in sg_labels
+    assert "F2-sg-exp" in sg_labels
+    assert "F2-beta-fact" not in sg_labels
+    assert "F2-beta-exp" not in sg_labels
+    assert "F2-foreign-session" not in sg_labels
+    assert "F2-okabe-only" not in sg_labels
+    assert f"fact:{sg_fact}" in sg_ids
+    assert f"experience:{sg_exp}" in sg_ids
+    assert f"fact:{beta_fact}" not in sg_ids
+    assert f"experience:{beta_exp}" not in sg_ids
+    assert sg["eligible"]["records"] == 2
+    assert sg["eligible"]["results"] == 2
+    okabe = _get(
+        client,
+        session_id=sid,
+        worldline="steins_gate",
+        identity_mode="okabe",
+        view="overview",
+    ).json()
+    assert okabe["composition"]["active_facts"] == 1
+    assert {node.get("label") for node in okabe["nodes"]} >= {"F2-okabe-only"}
+    assert "F2-sg-fact" not in {node.get("label") for node in okabe["nodes"]}
+    beta = _get(
+        client,
+        session_id=sid,
+        worldline="beta",
+        identity_mode="self",
+        view="overview",
+    ).json()
+    beta_labels = {node.get("label") for node in beta["nodes"]}
+    beta_ids = set(beta["result_ids"])
+    assert beta["empty"] is False
+    assert beta["composition"]["active_facts"] == 1
+    assert beta["composition"]["active_experiences"] == 1
+    assert "F2-beta-fact" in beta_labels
+    assert "F2-beta-exp" in beta_labels
+    assert "F2-sg-fact" not in beta_labels
+    assert "F2-sg-exp" not in beta_labels
+    assert f"fact:{beta_fact}" in beta_ids
+    assert f"experience:{beta_exp}" in beta_ids
+    assert f"fact:{sg_fact}" not in beta_ids
+    assert f"experience:{sg_exp}" not in beta_ids
+    assert beta["eligible"]["records"] == 2
+    assert beta["eligible"]["results"] == 2
+
+
+def test_lifecycle_exclusion_hits_all_three_surfaces(client: TestClient) -> None:
+    """F3: one deleted fact is omitted from graph, eligible, and composition."""
+    sid = _session("f3-three")
+    live = _seed_fact(sid, "F3-live")
+    dead = _seed_fact(sid, "F3-dead")
+    _set_fact_state(dead, "deleted")
+    body = _get_overview_body(client, sid)
+    labels = {node.get("label") for node in body["nodes"]}
+    assert "F3-live" in labels
+    assert "F3-dead" not in labels
+    assert f"fact:{dead}" not in body["result_ids"]
+    assert f"fact:{live}" in body["result_ids"]
+    assert body["composition"]["active_facts"] == 1
+    assert body["eligible"]["records"] == 1
+    assert body["eligible"]["results"] == 1
+
+
+def _set_fact_state(fact_id: str, state: str) -> None:
+    from app.db import _resolve_path
+
+    connection = sqlite3.connect(_resolve_path("steins_gate", "memory"))
+    try:
+        connection.execute(
+            "UPDATE stable_facts SET state=?, deleted_at=? WHERE fact_id=?",
+            (state, "2026-08-01T00:00:00+00:00" if state == "deleted" else None, fact_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _insert_tombstone(session_id: str, fact_id: str) -> None:
+    from app.db import _resolve_path
+
+    connection = sqlite3.connect(_resolve_path("steins_gate", "memory"))
+    try:
+        connection.execute(
+            """INSERT INTO memory_tombstones(
+                   tombstone_id, session_id, identity_mode, fact_id,
+                   source_fingerprint, semantic_fingerprint, reason, deleted_at
+               ) VALUES(?,?, 'self', ?, NULL, NULL, 'test', ?)""",
+            (str(uuid4()), session_id, fact_id, "2026-08-01T00:00:00+00:00"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _set_experience_status(experience_id: str, status: str) -> None:
+    from app.db import _resolve_path
+
+    connection = sqlite3.connect(_resolve_path("steins_gate", "memory"))
+    try:
+        connection.execute(
+            "UPDATE experiences SET status=? WHERE experience_id=?",
+            (status, experience_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def test_projection_route_has_no_provider_import() -> None:
+    """I1: route + projection module have no Provider import or call target."""
+    import ast
+    import inspect
+    from pathlib import Path
+
+    import app.routers.system_api as system_api
+    import app.services.memory_v11.projection as projection
+
+    forbidden_needles = ("provider_runtime", "provider.complete", "complete")
+
+    def _is_provider_name(name: str) -> bool:
+        lowered = name.lower()
+        return "provider_runtime" in lowered or lowered.endswith(".provider")
+
+    proj_tree = ast.parse(Path(projection.__file__).read_text(encoding="utf-8"))
+    proj_imports: set[str] = set()
+    proj_calls: set[str] = set()
+    for node in ast.walk(proj_tree):
+        if isinstance(node, ast.Import):
+            proj_imports.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            proj_imports.add(node.module)
+        elif isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name):
+                proj_calls.add(func.id)
+            elif isinstance(func, ast.Attribute):
+                proj_calls.add(func.attr)
+                if isinstance(func.value, ast.Name):
+                    proj_calls.add(f"{func.value.id}.{func.attr}")
+    assert not any(_is_provider_name(name) for name in proj_imports), proj_imports
+    assert "complete" not in proj_calls
+    assert not any(_is_provider_name(name) for name in proj_calls), proj_calls
+
+    route_src = inspect.getsource(system_api.memory_graph_projection)
+    route_tree = ast.parse(route_src)
+    route_names = set(system_api.memory_graph_projection.__code__.co_names)
+    route_imports: set[str] = set()
+    route_calls: set[str] = set()
+    for node in ast.walk(route_tree):
+        if isinstance(node, ast.Import):
+            route_imports.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            route_imports.add(node.module)
+        elif isinstance(node, ast.Name):
+            route_names.add(node.id)
+        elif isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name):
+                route_calls.add(func.id)
+            elif isinstance(func, ast.Attribute):
+                route_calls.add(func.attr)
+                if isinstance(func.value, ast.Name):
+                    route_calls.add(f"{func.value.id}.{func.attr}")
+    assert route_imports <= {
+        "app.services.memory_v11.projection",
+    }, route_imports
+    assert {"parse_projection_request", "project_overview", "ProjectionError"} <= route_names
+    assert "project_overview" in route_calls
+    assert "memory_service" not in route_names
+    assert "complete" not in route_names
+    assert "complete" not in route_calls
+    assert not any(_is_provider_name(name) for name in route_imports | route_names | route_calls)
+    assert "provider_runtime" not in route_src
+    # Module-level system_api Provider imports may exist for other routes.
+
+
+@pytest.mark.parametrize("path", ["success", "validation", "open", "read"])
+def test_projection_error_and_storage_paths_do_not_call_provider(
+    client: TestClient, monkeypatch, tmp_path, path: str
+) -> None:
+    """I2: success, 4xx, and storage-failure paths never call Provider.complete."""
+    calls: list[str] = []
+
+    def boom(*_args, **_kwargs):
+        calls.append("complete")
+        raise AssertionError("provider must not be called")
+
+    monkeypatch.setattr("app.services.provider_runtime.complete", boom, raising=False)
+    if path in {"open", "read"}:
+        _install_unavailable_store(monkeypatch, tmp_path, path)
+        response = _unavailable_store_response(client, f"i2-{path}")
+        assert response.status_code != 200
+    elif path == "validation":
+        response = _get(client, worldline="steins_gate", identity_mode="self", view="overview")
+        assert response.status_code == 422
+    else:
+        sid = _session("i2-ok")
+        _seed_fact(sid, "I2-ok")
+        response = _get(
+            client,
+            session_id=sid,
+            worldline="steins_gate",
+            identity_mode="self",
+            view="overview",
+        )
+        assert response.status_code == 200
+    assert calls == [], f"I2 {path} called Provider: {response.text}"

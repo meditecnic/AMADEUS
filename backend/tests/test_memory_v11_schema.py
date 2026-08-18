@@ -889,8 +889,146 @@ EXPERIENCES_REQUIRED_COLUMNS = frozenset(
         "created_at",
         "updated_at",
         "deleted_at",
+        "is_pinned",
     }
 )
+
+
+@pytest.mark.asyncio
+async def test_experiences_is_pinned_required_on_bootstrap(isolated_store):
+    """H1: supported init exposes experiences.is_pinned NOT NULL DEFAULT 0."""
+    connection = _open_memory("steins_gate")
+    try:
+        columns = {
+            str(row[1]): row
+            for row in connection.execute("PRAGMA table_info(experiences)")
+        }
+        assert "is_pinned" in columns, columns.keys()
+        _cid, name, col_type, notnull, default, _pk = columns["is_pinned"]
+        assert name == "is_pinned"
+        assert "INT" in str(col_type).upper()
+        assert int(notnull) == 1
+        assert default is not None and str(default).strip() in {"0", "'0'"}
+    finally:
+        connection.close()
+
+
+def _h2_insert_zero_experience(connection: sqlite3.Connection, experience_id: str) -> None:
+    stamp = "2026-08-01T00:00:00+00:00"
+    connection.execute(
+        """INSERT INTO memory_observations(
+               observation_id, session_id, identity_mode, display_text,
+               semantic_json, semantic_fingerprint, evidence_kind, memory_class,
+               confidence, topic_label_proposal, status, extractor_version,
+               reanalysis_count, expires_at, created_at, updated_at
+           ) VALUES(?,?, 'self', 'h2', '{}', 'fp', 'direct_user', 'episodic',
+                    0.9, NULL, 'attached', 'memory-v11-1', 0, NULL, ?, ?)""",
+        (f"obs-{experience_id}", "h2-session", stamp, stamp),
+    )
+    connection.execute(
+        """INSERT INTO experiences(
+               experience_id, session_id, conversation_id, identity_mode,
+               observation_id, display_text, semantic_json, semantic_fingerprint,
+               confidence, status, expires_at, created_at, updated_at, deleted_at,
+               is_pinned
+           ) VALUES(?,?, 'c', 'self', ?, 'h2-zero', '{}', 'fp', 0.9, 'active',
+                    NULL, ?, ?, NULL, 0)""",
+        (experience_id, "h2-session", f"obs-{experience_id}", stamp, stamp),
+    )
+    connection.commit()
+
+
+@pytest.mark.asyncio
+async def test_m3_is_pinned_init_idempotent(tmp_path, monkeypatch):
+    """H2: public init_db() twice on current and pre-M3 memory keeps zeros."""
+    monkeypatch.delenv("AMADEUS_DB_PATH", raising=False)
+    current_root = tmp_path / "current"
+    monkeypatch.setenv("AMADEUS_DATA_DIR", str(current_root))
+    reset_initialization_cache()
+    await init_db()
+    current = _open_memory("steins_gate")
+    try:
+        _h2_insert_zero_experience(current, "h2-cur")
+        pinned = current.execute(
+            "SELECT is_pinned FROM experiences WHERE experience_id='h2-cur'"
+        ).fetchone()[0]
+        assert int(pinned) == 0
+    finally:
+        current.close()
+    await init_db()
+    await init_db()
+    current = _open_memory("steins_gate")
+    try:
+        cols = {
+            str(row[1]): row
+            for row in current.execute("PRAGMA table_info(experiences)")
+        }
+        assert "is_pinned" in cols
+        assert int(cols["is_pinned"][3]) == 1
+        pinned = current.execute(
+            "SELECT is_pinned FROM experiences WHERE experience_id='h2-cur'"
+        ).fetchone()[0]
+        assert int(pinned) == 0
+    finally:
+        current.close()
+
+    pre_root = tmp_path / "pre-m3"
+    monkeypatch.setenv("AMADEUS_DATA_DIR", str(pre_root))
+    reset_initialization_cache()
+    memory_path = Path(db_module._resolve_path("steins_gate", "memory"))
+    memory_path.parent.mkdir(parents=True, exist_ok=True)
+    pre = sqlite3.connect(memory_path)
+    try:
+        pre.executescript(
+            """
+            CREATE TABLE schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE experiences (
+                experience_id TEXT PRIMARY KEY,
+                session_id TEXT,
+                conversation_id TEXT,
+                identity_mode TEXT,
+                observation_id TEXT,
+                display_text TEXT,
+                semantic_json TEXT,
+                semantic_fingerprint TEXT,
+                confidence REAL,
+                status TEXT,
+                expires_at TEXT,
+                created_at TEXT,
+                updated_at TEXT,
+                deleted_at TEXT
+            );
+            """
+        )
+        pre.execute(
+            "INSERT INTO schema_meta(key,value) VALUES('schema_version','11')"
+        )
+        pre.execute(
+            """INSERT INTO experiences(
+                   experience_id, session_id, conversation_id, identity_mode,
+                   observation_id, display_text, semantic_json, semantic_fingerprint,
+                   confidence, status, expires_at, created_at, updated_at, deleted_at
+               ) VALUES('h2-pre','s','c','self','obs','old','{}','fp',0.5,'active',
+                        NULL,'t','t',NULL)"""
+        )
+        pre.commit()
+    finally:
+        pre.close()
+    await init_db()
+    await init_db()
+    after = sqlite3.connect(str(memory_path))
+    try:
+        cols = {row[1] for row in after.execute("PRAGMA table_info(experiences)")}
+        assert "is_pinned" in cols, (
+            f"public init_db did not add is_pinned on {memory_path}: {sorted(cols)}"
+        )
+        pinned = after.execute(
+            "SELECT is_pinned FROM experiences WHERE experience_id='h2-pre'"
+        ).fetchone()[0]
+        assert int(pinned) == 0
+    finally:
+        after.close()
+
 
 
 @pytest.mark.asyncio
