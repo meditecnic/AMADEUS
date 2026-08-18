@@ -226,6 +226,11 @@ export class OrreryRuntime {
     this.reducedMotion = value;
   }
 
+  setDecoration(level: 'full' | 'reduced'): void {
+    if (this.bloom) this.bloom.strength = level === 'full' ? this.palette.bloom : 0;
+    if (this.starfield) this.starfield.visible = level === 'full';
+  }
+
   setGraph(
     display: DisplayNode[],
     edges: MemoryProjection['edges'],

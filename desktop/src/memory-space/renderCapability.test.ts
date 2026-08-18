@@ -39,7 +39,15 @@ describe('renderCapability', () => {
     const reduced = applyPerformanceSample(HEALTHY_CAPABILITY, low, now);
     expect(reduced.decoration).toBe('reduced');
     expect(reduced.surface).toBe('3d');
-    const fallback = applyPerformanceSample(reduced, low, now);
+    const stillMeasuring = applyPerformanceSample(reduced, low, now);
+    expect(stillMeasuring.surface).toBe('3d');
+    const later = now + 5000;
+    const laterWindow = Array.from({ length: 21 }, (_, index) => ({
+      at: later - 5000 + index * 250,
+      visible: true,
+      warmup: false,
+    }));
+    const fallback = applyPerformanceSample(reduced, laterWindow, later);
     expect(fallback.surface).toBe('compatibility');
     expect(averageFps(low, now)).toBeLessThan(40);
     expect(reducedMotionChangesSurface()).toBe(false);

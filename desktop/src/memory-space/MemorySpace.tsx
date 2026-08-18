@@ -623,6 +623,7 @@ export function MemorySpace({
             selectedId={selectedId}
             mode={cameraMode}
             reducedMotion={!ambientMotionEnabled(reducedMotion, renderSurface)}
+            decoration={capability.decoration}
             expanded={overviewOpen}
             expandedTopicIds={expandedTopicIds}
             worldline={worldline}

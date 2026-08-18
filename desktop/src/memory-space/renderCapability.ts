@@ -16,6 +16,7 @@ export type CapabilityState = {
   contextLosses: number;
   decoration: DecorationLevel;
   retrying: boolean;
+  decorationReducedAt: number | null;
 };
 
 export const HEALTHY_CAPABILITY: CapabilityState = {
@@ -25,6 +26,7 @@ export const HEALTHY_CAPABILITY: CapabilityState = {
   contextLosses: 0,
   decoration: 'full',
   retrying: false,
+  decorationReducedAt: null,
 };
 
 export function applyCreateFailure(state: CapabilityState): CapabilityState {
@@ -92,6 +94,7 @@ export function applyRetry3d(state: CapabilityState, canCreate: boolean): Capabi
     sticky: false,
     retrying: false,
     decoration: 'full',
+    decorationReducedAt: null,
   };
 }
 
@@ -119,7 +122,10 @@ export function applyPerformanceSample(
   if (fps === null) return state;
   if (fps < 40) {
     if (state.decoration === 'full') {
-      return { ...state, decoration: 'reduced' };
+      return { ...state, decoration: 'reduced', decorationReducedAt: now };
+    }
+    if (state.decorationReducedAt !== null && now - state.decorationReducedAt < 5000) {
+      return state;
     }
     return {
       ...state,

@@ -7,7 +7,7 @@ import {
   pickDisplayNode,
 } from './layout';
 import type { OrreryCamera, OrreryRuntime } from './orreryRenderer';
-import type { FrameSample } from './renderCapability';
+import type { DecorationLevel, FrameSample } from './renderCapability';
 import type { DisplayNode, MemoryProjection, Point3, Worldline } from './types';
 
 const ORIGIN: Point3 = { x: 0, y: 0, z: 0 };
@@ -55,6 +55,7 @@ export function ConstellationStage(props: {
   selectedId: string | null;
   mode: '3d' | '2d';
   reducedMotion: boolean;
+  decoration?: DecorationLevel;
   expanded: boolean;
   expandedTopicIds: readonly string[];
   worldline: Worldline;
@@ -102,6 +103,7 @@ export function ConstellationStage(props: {
       runtime.setSize(canvas.clientWidth, canvas.clientHeight);
       runtime.setWorldline(propsRef.current.worldline);
       runtime.setReducedMotion(propsRef.current.reducedMotion);
+      runtime.setDecoration(propsRef.current.decoration ?? 'full');
       runtime.setExpanded(true);
       runtime.setQuery(propsRef.current.query);
       runtime.setSelected(propsRef.current.selectedId);
@@ -195,6 +197,7 @@ export function ConstellationStage(props: {
     displayRef.current = nextDisplay;
     runtime.setWorldline(props.worldline);
     runtime.setReducedMotion(props.reducedMotion);
+    runtime.setDecoration(props.decoration ?? 'full');
     runtime.setExpanded(true);
     runtime.setQuery(props.query);
     runtime.setSelected(props.selectedId);
