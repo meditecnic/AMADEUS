@@ -926,7 +926,7 @@ def _seed_oversize_overview_scope() -> str:
     return sid
 
 
-def _get_oversize_overview_body(client: TestClient, session_id: str) -> dict:
+def _get_overview_body(client: TestClient, session_id: str) -> dict:
     response = _get(
         client,
         session_id=session_id,
@@ -935,15 +935,40 @@ def _get_oversize_overview_body(client: TestClient, session_id: str) -> dict:
         view="overview",
     )
     assert response.status_code == 200, (
-        f"oversize overview GET must be 200, got {response.status_code}: "
-        f"{response.text}"
+        f"overview GET must be 200, got {response.status_code}: {response.text}"
     )
     return response.json()
 
 
+def _nodes_of(body: dict, kind: str) -> list[dict]:
+    return [node for node in body["nodes"] if node["kind"] == kind]
+
+
+def _primary_edges(body: dict, *, kind: str, node_id: str) -> list[dict]:
+    if kind == "hub_to_anchor":
+        return [
+            edge
+            for edge in body["edges"]
+            if edge["kind"] == "hub_to_anchor" and edge["to"] == node_id
+        ]
+    if kind == "has_topic":
+        return [
+            edge
+            for edge in body["edges"]
+            if edge["kind"] == "has_topic" and edge["from"] == node_id
+        ]
+    if kind == "hub_to_evidence":
+        return [
+            edge
+            for edge in body["edges"]
+            if edge["kind"] == "hub_to_evidence" and edge["to"] == node_id
+        ]
+    raise AssertionError(f"unknown primary edge kind: {kind!r}")
+
+
 def test_count_groups_coherent(client: TestClient) -> None:
     """C4: truncated populated envelope keeps shown/eligible/truncated coherent."""
-    body = _get_oversize_overview_body(client, _seed_oversize_overview_scope())
+    body = _get_overview_body(client, _seed_oversize_overview_scope())
     assert body["empty"] is False
     shown = body["shown"]
     eligible = body["eligible"]
@@ -964,7 +989,7 @@ def test_count_groups_coherent(client: TestClient) -> None:
 
 def test_default_overview_budget_64_128(client: TestClient) -> None:
     """C5: default Overview budget is 64/128 and actually binds on oversize."""
-    body = _get_oversize_overview_body(client, _seed_oversize_overview_scope())
+    body = _get_overview_body(client, _seed_oversize_overview_scope())
     shown = body["shown"]
     budgets = body["budgets"]
     assert body["eligible"]["nodes"] > C_NODE_BUDGET, (
@@ -983,7 +1008,7 @@ def test_default_overview_budget_64_128(client: TestClient) -> None:
 
 def test_hard_max_reported_not_used_as_silent_raise(client: TestClient) -> None:
     """C6: hard max is reported 160/320 and is not the live admission budget."""
-    body = _get_oversize_overview_body(client, _seed_oversize_overview_scope())
+    body = _get_overview_body(client, _seed_oversize_overview_scope())
     shown = body["shown"]
     budgets = body["budgets"]
     eligible_nodes = body["eligible"]["nodes"]
@@ -1000,3 +1025,165 @@ def test_hard_max_reported_not_used_as_silent_raise(client: TestClient) -> None:
         f"shown.nodes={shown['nodes']} budgets={budgets} eligible={body['eligible']}"
     )
     assert shown["nodes"] < budgets["hard_max_nodes"]
+
+
+C1_PINNED_STANDALONE = 62
+C1_TOPIC_LABEL = "C1-atomic-topic"
+C1_FACT_LABEL = "C1-atomic-fact"
+C2_TOPIC_LABEL = "C2-backbone-topic"
+C2_FACT_LABEL = "C2-backbone-fact"
+C3_TOPIC_LABEL = "C3-optional-topic"
+C3_FACT_LABEL = "C3-optional-fact"
+C3_EXPERIENCE_LABEL = "C3-optional-experience"
+
+
+def test_node_and_mandatory_edge_cost_atomic(client: TestClient) -> None:
+    """C1: leftover=1 cannot admit a Topic+Fact bundle piecemeal."""
+    sid = _session("c1-atomic")
+    for index in range(C1_PINNED_STANDALONE):
+        _seed_experience(
+            sid,
+            f"C1-pinned-{index:02d}",
+            is_pinned=True,
+        )
+    topic_id = _seed_topic(sid, C1_TOPIC_LABEL)
+    fact_id = _seed_fact(sid, C1_FACT_LABEL, topic_id=topic_id, is_pinned=False)
+    fact_pid = f"fact:{fact_id}"
+    topic_pid = f"topic:{topic_id}"
+
+    body = _get_overview_body(client, sid)
+    assert body["empty"] is False
+    assert body["eligible"]["results"] == C1_PINNED_STANDALONE + 1
+    assert body["eligible"]["nodes"] == C_NODE_BUDGET + 1
+    assert body["shown"]["nodes"] == C_NODE_BUDGET - 1, (
+        "C1 leftover=1 fixture did not leave one live node slot after pinned "
+        f"fill: shown={body['shown']} eligible={body['eligible']}"
+    )
+    assert body["shown"]["results"] == C1_PINNED_STANDALONE
+
+    labels = {node.get("label") for node in body["nodes"]}
+    kinds = {node["kind"] for node in body["nodes"]}
+    assert C1_TOPIC_LABEL not in labels
+    assert C1_FACT_LABEL not in labels
+    assert "topic" not in kinds
+    assert "fact" not in kinds
+    assert fact_pid not in body["result_ids"]
+    assert topic_pid not in body["result_ids"]
+    assert all(
+        node.get("is_pinned") is True
+        for node in _nodes_of(body, "experience")
+    )
+
+    edge_kinds = {edge["kind"] for edge in body["edges"]}
+    assert "hub_to_anchor" not in edge_kinds
+    assert "has_topic" not in edge_kinds
+    node_ids = {node["projection_id"] for node in body["nodes"]}
+    for edge in body["edges"]:
+        assert edge["from"] in node_ids
+        assert edge["to"] in node_ids
+
+
+def test_mandatory_backbone_never_truncated(client: TestClient) -> None:
+    """C2: every shown non-hub node keeps exactly one mandatory primary edge."""
+    sid = _session("c2-back")
+    topic_id = _seed_topic(sid, C2_TOPIC_LABEL)
+    fact_id = _seed_fact(sid, C2_FACT_LABEL, topic_id=topic_id, is_pinned=True)
+    for index in range(C_OVERSIZE_ELIGIBLE):
+        _seed_experience(sid, f"C2-stand-{index:03d}", is_pinned=False)
+
+    body = _get_overview_body(client, sid)
+    assert body["empty"] is False
+    assert body["truncated"]["nodes"] is True
+    topics = _nodes_of(body, "topic")
+    facts = _nodes_of(body, "fact")
+    experiences = _nodes_of(body, "experience")
+    assert topics, f"C2 must show a Topic: shown={body['shown']}"
+    assert facts, f"C2 must show a topic-backed Fact: shown={body['shown']}"
+    assert experiences, f"C2 must show a standalone Experience: shown={body['shown']}"
+    assert any(node.get("label") == C2_TOPIC_LABEL for node in topics)
+    assert any(node.get("label") == C2_FACT_LABEL for node in facts)
+    node_ids = {node["projection_id"] for node in body["nodes"]}
+    hub = body["center"]["projection_id"]
+
+    for topic in topics:
+        primaries = _primary_edges(
+            body, kind="hub_to_anchor", node_id=topic["projection_id"]
+        )
+        assert len(primaries) == 1, topic
+        assert primaries[0]["from"] == hub
+        assert primaries[0]["from"] in node_ids
+        assert primaries[0]["to"] in node_ids
+
+    for fact in facts:
+        primaries = _primary_edges(
+            body, kind="has_topic", node_id=fact["projection_id"]
+        )
+        assert len(primaries) == 1, fact
+        assert primaries[0]["to"] == f"topic:{fact['topic_id']}"
+        assert primaries[0]["from"] in node_ids
+        assert primaries[0]["to"] in node_ids
+        assert not _primary_edges(
+            body, kind="hub_to_evidence", node_id=fact["projection_id"]
+        )
+
+    for experience in experiences:
+        primaries = _primary_edges(
+            body, kind="hub_to_evidence", node_id=experience["projection_id"]
+        )
+        assert len(primaries) == 1, experience
+        assert primaries[0]["from"] == hub
+        assert primaries[0]["from"] in node_ids
+        assert primaries[0]["to"] in node_ids
+        assert not _primary_edges(
+            body, kind="has_topic", node_id=experience["projection_id"]
+        )
+
+
+def test_optional_associations_cut_first(client: TestClient) -> None:
+    """C3: Spine emits no optional/extra associations; do not invent them."""
+    sid = _session("c3-opt")
+    topic_id = _seed_topic(sid, C3_TOPIC_LABEL)
+    fact_id = _seed_fact(sid, C3_FACT_LABEL, topic_id=topic_id)
+    experience_id = _seed_experience(sid, C3_EXPERIENCE_LABEL)
+    fact_pid = f"fact:{fact_id}"
+    experience_pid = f"experience:{experience_id}"
+
+    body = _get_overview_body(client, sid)
+    assert body["empty"] is False
+    fact_labels = {node.get("label") for node in _nodes_of(body, "fact")}
+    experience_labels = {node.get("label") for node in _nodes_of(body, "experience")}
+    assert C3_FACT_LABEL in fact_labels
+    assert C3_EXPERIENCE_LABEL in experience_labels
+
+    for edge in body["edges"]:
+        assert edge["kind"] in {"hub_to_anchor", "has_topic", "hub_to_evidence"}
+
+    hub = body["center"]["projection_id"]
+    topic_pid = f"topic:{topic_id}"
+    node_ids = {node["projection_id"] for node in body["nodes"]}
+    topics = _nodes_of(body, "topic")
+    assert len(topics) == 1
+    assert topics[0]["projection_id"] == topic_pid
+    topic_anchors = _primary_edges(
+        body, kind="hub_to_anchor", node_id=topic_pid
+    )
+    assert len(topic_anchors) == 1
+    assert topic_anchors[0]["from"] == hub
+    assert topic_anchors[0]["to"] == topic_pid
+
+    fact_topics = _primary_edges(body, kind="has_topic", node_id=fact_pid)
+    assert len(fact_topics) == 1
+    assert fact_topics[0]["to"] == topic_pid
+    assert not _primary_edges(body, kind="hub_to_evidence", node_id=fact_pid)
+
+    experience_hubs = _primary_edges(
+        body, kind="hub_to_evidence", node_id=experience_pid
+    )
+    assert len(experience_hubs) == 1
+    assert experience_hubs[0]["from"] == hub
+    assert not _primary_edges(body, kind="has_topic", node_id=experience_pid)
+
+    for edge in body["edges"]:
+        assert edge["from"] in node_ids
+        assert edge["to"] in node_ids
+    assert len(body["edges"]) == len(body["nodes"]) - 1
