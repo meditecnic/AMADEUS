@@ -237,10 +237,18 @@
     max-height: 42vh;
     overflow: auto;
   }
-  .memory-space-list {
-    bottom: 12px;
+  .memory-space[data-narrow-sheet="list"] .memory-inspector,
+  .memory-space[data-narrow-sheet="list"] .memory-reading-dom,
+  .memory-space[data-narrow-sheet="inspector"] .memory-space-list,
+  .memory-space[data-narrow-sheet="inspector"] .memory-reading-dom,
+  .memory-space[data-narrow-sheet="reading"] .memory-space-list,
+  .memory-space[data-narrow-sheet="reading"] .memory-inspector {
+    display: none;
   }
-  .memory-compatibility {
+  .memory-space[data-narrow-sheet]:not([data-narrow-sheet="none"]) .memory-constellation-host {
+    padding-bottom: 44vh;
+  }
+  .memory-space[data-narrow-sheet]:not([data-narrow-sheet="none"]) .memory-compatibility {
     inset: 56px 8px 46vh;
   }
 }

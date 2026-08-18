@@ -85,6 +85,9 @@ export function MemorySpace({
   const [announcement, setAnnouncement] = useState('');
   const searchRef = useRef<HTMLInputElement | null>(null);
   const graphRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<HTMLOListElement | null>(null);
+  const listWasOpen = useRef(false);
+  const [narrowPrefer, setNarrowPrefer] = useState<'list' | 'detail'>('detail');
   const framesRef = useRef<FrameSample[]>([]);
   const [width, setWidth] = useState(typeof window === 'undefined' ? 1280 : window.innerWidth);
   const [reducedMotion, setReducedMotion] = useState(() => {
@@ -240,6 +243,7 @@ export function MemorySpace({
   };
 
   const handleSelect = (id: string | null) => {
+    setNarrowPrefer('detail');
     if (!id) {
       setSelectedId(null);
       setFocusedId(null);
@@ -284,6 +288,15 @@ export function MemorySpace({
 
   const changeCriteria = (next: CriteriaInput) => {
     setCriteria(normalizeCriteria(next));
+  };
+
+  const toggleList = () => {
+    if (listOpen && narrowPrefer !== 'list') {
+      setNarrowPrefer('list');
+      return;
+    }
+    setListOpen((value) => !value);
+    setNarrowPrefer('list');
   };
 
   const retryProjection = () => {
@@ -332,11 +345,7 @@ export function MemorySpace({
         return;
       }
       if (shortcut === 'list') {
-        setListOpen((value) => {
-          const next = !value;
-          setListOwnsFocus(next);
-          return next;
-        });
+        toggleList();
         return;
       }
       if (shortcut === 'view-mode') {
@@ -355,7 +364,9 @@ export function MemorySpace({
         handleSelect(focusedId);
         return;
       }
-      if (listOwnsFocus) return;
+      const optionFocused = document.activeElement?.getAttribute('role') === 'option'
+        && Boolean(listRef.current?.contains(document.activeElement));
+      if (listOwnsFocus && optionFocused) return;
       if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
         event.preventDefault();
         moveSemantic(1);
@@ -368,6 +379,43 @@ export function MemorySpace({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   });
+
+  const listIds = liveProjection?.result_ids ?? [];
+  const listRovingId = (selectedId && listIds.includes(selectedId))
+    ? selectedId
+    : (focusedId && listIds.includes(focusedId) ? focusedId : (listIds[0] ?? null));
+
+  useEffect(() => {
+    const opened = listOpen && !listWasOpen.current;
+    listWasOpen.current = listOpen;
+    if (!listOpen) {
+      setListOwnsFocus(false);
+      return undefined;
+    }
+    if (!opened) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      const preferred = listRovingId;
+      if (!preferred) {
+        listRef.current?.focus();
+        return;
+      }
+      const option = listRef.current?.querySelector<HTMLElement>(`[data-result-id="${preferred}"]`);
+      option?.focus();
+      if (option && document.activeElement === option) {
+        setFocusedId(preferred);
+        setListOwnsFocus(true);
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [listOpen, listRovingId]);
+
+  const narrowSheet = (() => {
+    if (narrowPrefer === 'list' && listOpen) return 'list';
+    if (inspectorOpen) return 'inspector';
+    if (memoOpen) return 'reading';
+    if (listOpen) return 'list';
+    return 'none';
+  })();
 
   const truncated = Boolean(
     liveProjection
@@ -384,6 +432,7 @@ export function MemorySpace({
       data-emphasis={emphasis}
       data-surface={renderSurface}
       data-reduced-motion={String(reducedMotion)}
+      data-narrow-sheet={narrowSheet}
       aria-label="Memory Space"
     >
       <div className="sr-only" role="status" aria-live="polite" data-testid="memory-announce">{announcement}</div>
@@ -501,14 +550,7 @@ export function MemorySpace({
               })}
             />
           </label>
-          <button type="button" aria-pressed={listOpen} onClick={() => {
-            setListOpen((value) => {
-              const next = !value;
-              setListOwnsFocus(next);
-              if (next) graphRef.current?.blur();
-              return next;
-            });
-          }} tabIndex={toolsOpen ? 0 : -1}>
+          <button type="button" aria-pressed={listOpen} onClick={toggleList} tabIndex={toolsOpen ? 0 : -1}>
             LIST
           </button>
           <button
@@ -681,40 +723,46 @@ export function MemorySpace({
           data-testid="memory-list"
           role="listbox"
           aria-label="记忆列表"
-          tabIndex={listOwnsFocus ? 0 : -1}
+          ref={listRef}
+          tabIndex={-1}
           onFocus={() => setListOwnsFocus(true)}
         >
           {liveProjection.result_ids.map((id, index) => {
             const node = display.find((item) => item.id === id);
             if (!node) return null;
             const selectedItem = selectedId === id;
+            const roving = id === listRovingId;
             return (
               <li key={id}>
                 <button
                   type="button"
                   role="option"
+                  data-result-id={id}
                   aria-selected={selectedItem}
                   className={selectedItem ? 'is-selected' : undefined}
-                  tabIndex={listOwnsFocus && selectedItem ? 0 : -1}
+                  tabIndex={roving ? 0 : -1}
                   onClick={() => {
                     const parent = evidenceParentId(id, liveProjection.edges);
                     if (parent) revealTopic(parent);
                     setSelectedId(id);
                     setFocusedId(id);
                     setListOwnsFocus(true);
+                    setNarrowPrefer('detail');
                     setAnnouncement(announceNode(liveProjection, id));
                   }}
                   onKeyDown={(event) => {
-                    if (event.key === 'ArrowDown') {
-                      event.preventDefault();
-                      const next = liveProjection.result_ids[index + 1];
-                      if (next) handleSelect(next);
-                    }
-                    if (event.key === 'ArrowUp') {
-                      event.preventDefault();
-                      const prev = liveProjection.result_ids[index - 1];
-                      if (prev) handleSelect(prev);
-                    }
+                    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const next = event.key === 'ArrowDown'
+                      ? liveProjection.result_ids[index + 1]
+                      : liveProjection.result_ids[index - 1];
+                    if (!next) return;
+                    handleSelect(next);
+                    setListOwnsFocus(true);
+                    window.requestAnimationFrame(() => {
+                      listRef.current?.querySelector<HTMLElement>(`[data-result-id="${next}"]`)?.focus();
+                    });
                   }}
                 >
                   {node.label}

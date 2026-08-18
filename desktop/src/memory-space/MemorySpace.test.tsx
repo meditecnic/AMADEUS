@@ -283,6 +283,58 @@ describe('MemorySpace', () => {
     expect(screen.queryByText('SELF MODEL')).toBeNull();
   });
 
+  it('focuses the selected or first LIST option so arrows rove there', async () => {
+    const dual: MemoryProjection = {
+      ...projection,
+      result_ids: ['fact:1', 'fact:2'],
+      shown: { ...projection.shown, results: 2 },
+      eligible: { ...projection.eligible, results: 2 },
+      nodes: [
+        ...projection.nodes,
+        {
+          kind: 'fact',
+          projection_id: 'fact:2',
+          fact_id: '2',
+          label: '后来的记忆',
+          is_pinned: true,
+          updated_at: '2026-08-15T00:00:00Z',
+          topic_id: null,
+        },
+      ],
+    };
+    mockApi(() => okJson(dual));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    const first = await screen.findByRole('option', { name: '喜欢黑咖啡' });
+    await waitFor(() => expect(document.activeElement).toBe(first));
+    fireEvent.keyDown(first, { key: 'ArrowDown' });
+    await waitFor(() => expect(document.activeElement).toHaveTextContent('后来的记忆'));
+  });
+
+  it('keeps one exclusive narrow bottom sheet for inspector versus LIST', async () => {
+    const previousWidth = window.innerWidth;
+    window.innerWidth = 480;
+    mockApi(() => okJson(projection));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    await screen.findByTestId('memory-list');
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-narrow-sheet', 'list');
+    fireEvent.click(screen.getByTestId('select-soul'));
+    expect(screen.getByTestId('soul-inspector')).toBeInTheDocument();
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-narrow-sheet', 'inspector');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-narrow-sheet', 'list');
+    window.innerWidth = previousWidth;
+  });
+
   it('distinguishes 503 unavailable from generic failure and does not leak paths', async () => {
     mockApi(() => Promise.resolve({
       ok: false,
@@ -295,6 +347,40 @@ describe('MemorySpace', () => {
     expect(await screen.findByTestId('memory-unavailable')).toHaveTextContent('暂时不可用');
     expect(screen.queryByText(/secret\.db/)).toBeNull();
     expect(screen.getByTestId('memory-retry')).toBeInTheDocument();
+  });
+
+  it('shows a bounded generic error for non-503 failures without leaking a path', async () => {
+    mockApi(() => Promise.resolve({
+      ok: false,
+      status: 500,
+      json: async () => ({ detail: { code: 'projection_failed', message: 'C:\\\\data\\\\memory.sqlite IOERR' } }),
+    }));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    const alert = await screen.findByTestId('memory-error');
+    expect(alert).toHaveTextContent('无法读取记忆投影');
+    expect(screen.queryByTestId('memory-unavailable')).toBeNull();
+    expect(screen.queryByText(/memory\.sqlite/)).toBeNull();
+    expect(screen.queryByText(/IOERR/)).toBeNull();
+    expect(screen.getByTestId('memory-retry')).toBeInTheDocument();
+  });
+
+  it('discloses shown/eligible truncation on the shipped Overview', async () => {
+    const clipped: MemoryProjection = {
+      ...projection,
+      shown: { nodes: 3, edges: 2, records: 1, results: 1 },
+      eligible: { nodes: 20, edges: 18, records: 12, results: 8 },
+      truncated: { nodes: true, edges: true, records: true, results: true },
+    };
+    mockApi(() => okJson(clipped));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    const note = await screen.findByTestId('memory-truncation');
+    expect(note).toHaveTextContent('当前呈现 1 / 8');
+    expect(note).toHaveTextContent('并非全部记忆');
+    expect(screen.getByTestId('memory-shown-eligible')).toHaveTextContent('1 / 8');
   });
 
   it('explains criteria-zero separately from true-empty', async () => {
