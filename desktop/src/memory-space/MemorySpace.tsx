@@ -758,7 +758,7 @@ export function MemorySpace({
           tabIndex={-1}
           onFocus={() => setListOwnsFocus(true)}
         >
-          {liveProjection.result_ids.map((id, index) => {
+          {liveProjection.result_ids.map((id) => {
             const node = display.find((item) => item.id === id);
             if (!node) return null;
             const selectedItem = selectedId === id;
