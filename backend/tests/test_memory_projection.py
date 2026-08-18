@@ -618,3 +618,116 @@ def test_projection_no_mixed_era_under_concurrent_write(
     assert len(result_ids) == body["shown"]["results"]
     assert f"fact:{fact_id}" in result_ids
     assert f"experience:{experience_id}" in result_ids
+
+
+B2_TOPIC_ALPHA = "B2-anchor-alpha"
+B2_TOPIC_BETA = "B2-anchor-beta"
+B2_SUPPORT_ALPHA = "B2-support-alpha"
+B2_SUPPORT_BETA = "B2-support-beta"
+B2_OLD_AT = "2020-01-01T00:00:00+00:00"
+B2_NEW_AT = "2026-08-01T00:00:00+00:00"
+# Hub consumes 1 of 64. Recency-first standalone experiences must fill the
+# remaining 63 slots so older topic bundles (2 nodes each) cannot enter.
+B2_RECENCY_COUNT = 63
+B2_SHOWN_RECENCY = 59
+B2_NODE_BUDGET = 64
+B2_RECENCY_PREFIX = "B2-recency-"
+
+
+def _set_fact_updated_at(fact_id: str, updated_at: str) -> None:
+    from app.db import _resolve_path
+
+    connection = sqlite3.connect(_resolve_path("steins_gate", "memory"))
+    try:
+        connection.execute(
+            "UPDATE stable_facts SET updated_at=? WHERE fact_id=?",
+            (updated_at, fact_id),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def test_anchor_coverage_before_recency_fill(client: TestClient) -> None:
+    """B2: coverable Topic bundles must take capacity before recency fill."""
+    sid = _session("b2-cover")
+    topic_alpha = _seed_topic(sid, B2_TOPIC_ALPHA)
+    topic_beta = _seed_topic(sid, B2_TOPIC_BETA)
+    support_alpha = _seed_fact(sid, B2_SUPPORT_ALPHA, topic_id=topic_alpha)
+    support_beta = _seed_fact(sid, B2_SUPPORT_BETA, topic_id=topic_beta)
+    _set_fact_updated_at(support_alpha, B2_OLD_AT)
+    _set_fact_updated_at(support_beta, B2_OLD_AT)
+    for index in range(B2_RECENCY_COUNT):
+        _seed_experience(
+            sid,
+            f"B2-recency-{index:02d}",
+            is_pinned=False,
+            updated_at=B2_NEW_AT,
+        )
+
+    body = _get(
+        client,
+        session_id=sid,
+        worldline="steins_gate",
+        identity_mode="self",
+        view="overview",
+    ).json()
+
+    topic_nodes = [node for node in body["nodes"] if node["kind"] == "topic"]
+    fact_nodes = [node for node in body["nodes"] if node["kind"] == "fact"]
+    topic_labels = {node["label"] for node in topic_nodes}
+    fact_labels = {node["label"] for node in fact_nodes}
+    node_ids = {node["projection_id"] for node in body["nodes"]}
+    hub = body["center"]["projection_id"]
+
+    assert {B2_TOPIC_ALPHA, B2_TOPIC_BETA} <= topic_labels, (
+        "coverable Topic anchors lost to recency fill: "
+        f"topic_labels={sorted(topic_labels)} "
+        f"fact_labels={sorted(fact_labels)} "
+        f"shown={body.get('shown')}"
+    )
+    assert {B2_SUPPORT_ALPHA, B2_SUPPORT_BETA} <= fact_labels
+
+    for topic_node in topic_nodes:
+        assert any(
+            fact["topic_id"] == topic_node["topic_id"] for fact in fact_nodes
+        ), f"orphan topic without supporting fact: {topic_node['label']}"
+        assert any(
+            edge["kind"] == "hub_to_anchor" and edge["to"] == topic_node["projection_id"]
+            for edge in body["edges"]
+        )
+
+    for edge in body["edges"]:
+        assert edge["from"] in node_ids
+        assert edge["to"] in node_ids
+
+    undirected: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
+    for edge in body["edges"]:
+        undirected[edge["from"]].add(edge["to"])
+        undirected[edge["to"]].add(edge["from"])
+    seen = {hub}
+    stack = [hub]
+    while stack:
+        current = stack.pop()
+        for nxt in undirected[current]:
+            if nxt not in seen:
+                seen.add(nxt)
+                stack.append(nxt)
+    assert seen == node_ids
+    assert body["shown"]["nodes"] == len(body["nodes"])
+    assert body["shown"]["edges"] == len(body["edges"])
+
+    recency_nodes = [
+        node
+        for node in body["nodes"]
+        if node["kind"] == "experience"
+        and str(node.get("label") or "").startswith(B2_RECENCY_PREFIX)
+    ]
+    assert body["shown"]["nodes"] == B2_NODE_BUDGET, (
+        "remaining node capacity not filled after anchor coverage: "
+        f"shown={body.get('shown')} recency={len(recency_nodes)}"
+    )
+    assert len(recency_nodes) == B2_SHOWN_RECENCY, (
+        "recency fill did not occupy leftover capacity: "
+        f"standalone_experiences={len(recency_nodes)} shown={body.get('shown')}"
+    )

@@ -482,12 +482,11 @@ async def project_overview(criteria: dict[str, Any]) -> dict[str, Any]:
                 used_topics.add(tid)
         candidate_evidence = support
 
-    candidate_evidence.sort(key=evidence_rank_key)
-
     remaining_nodes = OVERVIEW_NODE_BUDGET - 1
     remaining_edges = OVERVIEW_EDGE_BUDGET
     shown_topics: dict[str, dict[str, Any]] = {}
     shown_evidence: list[dict[str, Any]] = []
+    shown_ids: set[str] = set()
 
     def can_admit(item: dict[str, Any]) -> bool:
         node_cost = 1
@@ -515,12 +514,48 @@ async def project_overview(criteria: dict[str, Any]) -> dict[str, Any]:
             remaining_nodes -= 1
             remaining_edges -= 1
         shown_evidence.append(item)
+        shown_ids.add(item["projection_id"])
 
-    for item in candidate_evidence:
-        if item["projection_id"] in {e["projection_id"] for e in shown_evidence}:
+    def try_admit(item: dict[str, Any]) -> bool:
+        if item["projection_id"] in shown_ids:
+            return False
+        if not can_admit(item):
+            return False
+        admit(item)
+        return True
+
+    ranked = sorted(candidate_evidence, key=evidence_rank_key)
+    for item in ranked:
+        if item["is_pinned"]:
+            try_admit(item)
+
+    support_by_topic: dict[str, list[dict[str, Any]]] = {}
+    for item in ranked:
+        tid = item.get("topic_id")
+        if tid and tid in topics:
+            support_by_topic.setdefault(str(tid), []).append(item)
+    coverage_topics = [
+        topic
+        for topic in matching_topics
+        if topic["id"] in support_by_topic
+    ]
+    coverage_topics.sort(key=lambda topic: (topic["label"], topic["id"]))
+    for topic in coverage_topics:
+        if topic["id"] in shown_topics:
             continue
-        if can_admit(item):
-            admit(item)
+        support = next(
+            (
+                item
+                for item in support_by_topic[topic["id"]]
+                if item["projection_id"] not in shown_ids
+            ),
+            None,
+        )
+        if support is not None:
+            try_admit(support)
+
+    for item in ranked:
+        try_admit(item)
 
     if kinds == ["topic"]:
         for topic in sorted(matching_topics, key=lambda t: (t["label"], t["id"])):
