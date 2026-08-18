@@ -246,6 +246,76 @@
   font-size: 11px;
   opacity: 0.7;
 }
+.memory-space-chips {
+  position: absolute;
+  top: 52px;
+  left: 24px;
+  z-index: 6;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.memory-space-chips button,
+.memory-space-kinds label {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+.memory-compatibility {
+  position: absolute;
+  inset: 48px 16px 16px;
+  z-index: 3;
+  display: grid;
+  align-content: start;
+  justify-items: center;
+}
+.memory-compatibility-label,
+.memory-space-truncation {
+  margin: 0 0 8px;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  opacity: 0.72;
+}
+.memory-compatibility-svg {
+  width: min(520px, 92vw);
+  height: min(520px, 70vh);
+}
+.memory-compatibility-edge {
+  stroke: rgba(168, 192, 208, 0.45);
+  stroke-width: 1.2;
+}
+.memory-compatibility-node {
+  fill: rgba(198, 214, 226, 0.86);
+  stroke: rgba(244, 248, 252, 0.35);
+  cursor: pointer;
+}
+.memory-compatibility-node.is-continuity_hub {
+  fill: rgba(230, 240, 248, 0.95);
+}
+.memory-compatibility-node.is-selected,
+.memory-compatibility-node.is-focused {
+  stroke: #e8c48a;
+  stroke-width: 2;
+}
+.memory-compatibility-caption {
+  fill: rgba(230, 240, 248, 0.86);
+  font-size: 8px;
+}
+.memory-space-list button.is-selected,
+.memory-graph:focus,
+.memory-constellation-host:focus {
+  outline: 1px solid rgba(232, 196, 138, 0.8);
+  outline-offset: 2px;
+}
+.memory-space-kinds {
+  display: flex;
+  gap: 6px;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
 .sr-only {
   position: absolute;
   width: 1px;

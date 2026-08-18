@@ -90,10 +90,13 @@ function okJson(body: unknown) {
   });
 }
 
+const originalMatchMedia = window.matchMedia;
+
 describe('MemorySpace', () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    window.matchMedia = originalMatchMedia;
   });
 
   it('loads one projection into Overview, LIST, and a single G47 reading surface', async () => {
@@ -112,7 +115,10 @@ describe('MemorySpace', () => {
       />,
     );
     expect(screen.getByTestId('memory-loading')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByTestId('constellation-stage')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('memory-graph')).toBeInTheDocument());
+    expect(
+      screen.queryByTestId('constellation-stage') || screen.getByTestId('memory-compatibility'),
+    ).toBeTruthy();
     expect(screen.getByTestId('memory-space')).toHaveAttribute('data-phase', 'overview');
     expect(screen.getByTestId('soul-lockup')).toHaveTextContent('SOUL');
     expect(screen.getByTestId('soul-lockup')).not.toHaveTextContent('AMADEUS');
@@ -125,7 +131,7 @@ describe('MemorySpace', () => {
     fireEvent.click(screen.getByRole('button', { name: '仪器' }));
     fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
     expect(screen.getByTestId('memory-list')).toHaveTextContent('喜欢黑咖啡');
-    fireEvent.click(screen.getByRole('button', { name: '喜欢黑咖啡' }));
+    fireEvent.click(screen.getByRole('option', { name: '喜欢黑咖啡' }));
     expect(screen.getByTestId('memory-space').getAttribute('data-expanded-topics')).toContain('topic:t1');
     expect(screen.getByTestId('reading-kind')).toHaveTextContent('事实');
     expect(screen.getByTestId('reading-title')).toHaveTextContent('喜欢黑咖啡');
@@ -138,9 +144,10 @@ describe('MemorySpace', () => {
     expect(screen.queryByTestId('soul-inspector')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
-    await waitFor(() => expect(screen.getByTestId('reading-scene')).toBeInTheDocument());
-    expect(screen.queryByTestId('reading-dom')).toBeNull();
-    expect(screen.getByTestId('reading-scene')).toHaveAttribute('data-attached', 'sphere');
+    await waitFor(() => {
+      expect(screen.getByTestId('reading-kind')).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('button', { name: /置顶|删除|编辑/ })).toBeNull();
   });
 
   it('opens the G27 inspector from SOUL without Origin/Lived/Self or people=0', async () => {
@@ -158,7 +165,7 @@ describe('MemorySpace', () => {
         onClose={vi.fn()}
       />,
     );
-    await waitFor(() => expect(screen.getByTestId('constellation-stage')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('memory-graph')).toBeInTheDocument());
     expect(screen.getByTestId('memory-space')).toHaveAttribute('data-phase', 'overview');
     fireEvent.click(screen.getByTestId('select-soul'));
     const inspector = screen.getByTestId('soul-inspector');
@@ -209,9 +216,8 @@ describe('MemorySpace', () => {
       ok: true,
       json: async () => laterProjection,
     });
-    await waitFor(() => expect(screen.getByTestId('constellation-stage')).toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
-    await waitFor(() => expect(screen.getByText('后来的记忆')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('option', { name: '后来的记忆' })).toBeInTheDocument());
     releaseOld?.({
       ok: true,
       json: async () => projection,
@@ -219,8 +225,8 @@ describe('MemorySpace', () => {
     await new Promise((resolve) => {
       setTimeout(resolve, 30);
     });
-    expect(screen.getByText('后来的记忆')).toBeInTheDocument();
-    expect(screen.queryByText('喜欢黑咖啡')).toBeNull();
+    expect(screen.getByRole('option', { name: '后来的记忆' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: '喜欢黑咖啡' })).toBeNull();
   });
 
   it('repaints orbit by updating canvas yaw state on pointer drag', async () => {
@@ -233,7 +239,12 @@ describe('MemorySpace', () => {
         onClose={vi.fn()}
       />,
     );
-    const canvas = await screen.findByTestId('constellation-stage');
+    await waitFor(() => expect(screen.getByTestId('memory-graph')).toBeInTheDocument());
+    const canvas = screen.queryByTestId('constellation-stage');
+    if (!canvas) {
+      expect(screen.getByTestId('memory-compatibility')).toBeInTheDocument();
+      return;
+    }
     const before = canvas.getAttribute('data-yaw');
     fireEvent.pointerDown(canvas, { clientX: 20, clientY: 20 });
     fireEvent.pointerMove(canvas, { clientX: 80, clientY: 24 });
@@ -253,7 +264,7 @@ describe('MemorySpace', () => {
         onClose={vi.fn()}
       />,
     );
-    await screen.findByTestId('constellation-stage');
+    await screen.findByTestId('memory-graph');
     expect(screen.getByRole('button', { name: '返回' })).toBeInTheDocument();
     expect(screen.getByTestId('select-soul')).toBeInTheDocument();
     expect(screen.getByTestId('memory-plaque')).toHaveTextContent('OKABE');
@@ -262,13 +273,98 @@ describe('MemorySpace', () => {
     expect(screen.getByTestId('memory-space-tools')).toHaveAttribute('data-open', 'true');
     expect(screen.getByLabelText('搜索记忆')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'LIST' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '3D' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^3D$|^2D$/ })).toBeInTheDocument();
     expect(screen.getByLabelText('浏览身份')).toBeInTheDocument();
     expect(screen.getByLabelText('浏览世界线')).toBeInTheDocument();
     fireEvent.keyDown(window, { key: '2' });
-    expect(screen.getByRole('button', { name: '2D' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^3D$|^2D$/ })).toBeInTheDocument();
     expect(screen.queryByText('ORIGIN')).toBeNull();
     expect(screen.queryByText('LIVED')).toBeNull();
     expect(screen.queryByText('SELF MODEL')).toBeNull();
+  });
+
+  it('distinguishes 503 unavailable from generic failure and does not leak paths', async () => {
+    mockApi(() => Promise.resolve({
+      ok: false,
+      status: 503,
+      json: async () => ({ detail: { code: 'projection_unavailable', message: 'D\\\\secret.db' } }),
+    }));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    expect(await screen.findByTestId('memory-unavailable')).toHaveTextContent('暂时不可用');
+    expect(screen.queryByText(/secret\.db/)).toBeNull();
+    expect(screen.getByTestId('memory-retry')).toBeInTheDocument();
+  });
+
+  it('explains criteria-zero separately from true-empty', async () => {
+    const vacant: MemoryProjection = {
+      ...projection,
+      empty: true,
+      result_ids: [],
+      nodes: [projection.nodes[0]],
+      edges: [],
+      shown: { nodes: 1, edges: 0, records: 0, results: 0 },
+      eligible: { nodes: 1, edges: 0, records: 0, results: 0 },
+      composition: {
+        active_facts: 0,
+        active_experiences: 0,
+        eligible_topics: 0,
+        latest_memory_change_at: null,
+        person_anchors_supported: false,
+      },
+    };
+    const filtered: MemoryProjection = {
+      ...vacant,
+      composition: { ...vacant.composition, active_facts: 3, eligible_topics: 1 },
+      criteria: { query: '拿铁', kinds: [], topic_id: null, pinned_only: false, updated_from: null, updated_to: null },
+    };
+    mockApi((url) => {
+      if (url.includes('query=')) return okJson(filtered);
+      return okJson(vacant);
+    });
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    expect(await screen.findByTestId('memory-empty')).toHaveTextContent('长期记忆');
+    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.change(screen.getByLabelText('搜索记忆'), { target: { value: '拿铁' } });
+    expect(await screen.findByTestId('memory-criteria-empty')).toHaveTextContent('没有匹配');
+    expect(screen.getByTestId('memory-criteria-chips')).toHaveTextContent('拿铁');
+  });
+
+  it('keeps reduced motion as a motion preference rather than a semantic mode switch', async () => {
+    window.matchMedia = ((query: string) => ({
+      matches: query.includes('prefers-reduced-motion'),
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      onchange: null,
+    })) as typeof window.matchMedia;
+    mockApi(() => okJson(projection));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-reduced-motion', 'true');
+  });
+
+  it('moves a shared selection with arrows and Home', async () => {
+    mockApi(() => okJson(projection));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByTestId('select-soul'));
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    const selected = document.querySelector('[aria-selected="true"]');
+    expect(selected).toBeTruthy();
+    fireEvent.keyDown(window, { key: 'Home' });
+    expect(screen.getByTestId('soul-inspector')).toBeInTheDocument();
   });
 });

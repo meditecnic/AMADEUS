@@ -7,6 +7,7 @@ import {
   pickDisplayNode,
 } from './layout';
 import type { OrreryCamera, OrreryRuntime } from './orreryRenderer';
+import type { FrameSample } from './renderCapability';
 import type { DisplayNode, MemoryProjection, Point3, Worldline } from './types';
 
 const ORIGIN: Point3 = { x: 0, y: 0, z: 0 };
@@ -60,6 +61,9 @@ export function ConstellationStage(props: {
   query: string;
   onSelect: (id: string | null) => void;
   onSelectedAnchor?: (anchor: ScreenAnchor | null) => void;
+  onCreateFail?: () => void;
+  onContextLost?: () => void;
+  onFrame?: (sample: FrameSample) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const runtimeRef = useRef<OrreryRuntime | null>(null);
@@ -103,7 +107,16 @@ export function ConstellationStage(props: {
       runtime.setSelected(propsRef.current.selectedId);
       runtime.setGraph(displayRef.current, propsRef.current.projection.edges, propsRef.current.projection.result_ids);
       window.addEventListener('resize', onWinResize);
-      if (!runtime.supported) return;
+      canvas.addEventListener('webglcontextlost', (event) => {
+        event.preventDefault();
+        propsRef.current.onContextLost?.();
+      });
+      if (!runtime.supported) {
+        propsRef.current.onCreateFail?.();
+        return;
+      }
+      let frames = 0;
+      const started = performance.now();
       const tick = () => {
         const live = runtimeRef.current;
         const current = propsRef.current;
@@ -112,6 +125,12 @@ export function ConstellationStage(props: {
           orbitRef.current.yaw += 0.00028;
         }
         const now = performance.now();
+        frames += 1;
+        current.onFrame?.({
+          at: now,
+          visible: typeof document === 'undefined' ? true : document.visibilityState === 'visible',
+          warmup: now - started < 1200 || frames < 12,
+        });
         const dt = lastTickRef.current ? Math.min(0.05, (now - lastTickRef.current) / 1000) : 0;
         lastTickRef.current = now;
         const want = new Set(current.expandedTopicIds);

@@ -1,35 +1,56 @@
-import type { IdentityMode, MemoryProjection, Worldline } from './types';
+import { buildProjectionUrl, normalizeCriteria, type CriteriaInput, type ScopeKey } from './criteria';
+import type { MemoryProjection } from './types';
 
-export type ProjectionQuery = {
-  sessionId: string;
-  worldline: Worldline;
-  identityMode: IdentityMode;
-  query?: string;
+export type ProjectionQuery = ScopeKey & Partial<CriteriaInput> & {
   epoch: number;
+  signal?: AbortSignal;
 };
+
+export type ProjectionTransportError = Error & {
+  kind: 'unavailable' | 'generic';
+  code: string;
+  status: number;
+};
+
+export function isProjectionTransportError(error: unknown): error is ProjectionTransportError {
+  return Boolean(error && typeof error === 'object' && 'kind' in error && 'code' in error);
+}
+
+export function projectionError(
+  kind: 'unavailable' | 'generic',
+  code: string,
+  status: number,
+): ProjectionTransportError {
+  const error = new Error(code) as ProjectionTransportError;
+  error.kind = kind;
+  error.code = code;
+  error.status = status;
+  return error;
+}
+
+function readErrorCode(body: unknown): string | null {
+  if (!body || typeof body !== 'object') return null;
+  const detail = (body as { detail?: { code?: unknown } }).detail;
+  return typeof detail?.code === 'string' && detail.code.trim() ? detail.code : null;
+}
 
 export async function fetchMemoryProjection(
   input: ProjectionQuery,
   fetcher: typeof fetch = fetch,
 ): Promise<{ epoch: number; projection: MemoryProjection }> {
-  const params = new URLSearchParams({
-    session_id: input.sessionId,
-    worldline: input.worldline,
-    identity_mode: input.identityMode,
-    view: 'overview',
-  });
-  const q = (input.query || '').trim();
-  if (q) params.set('query', q);
-  const response = await fetcher(`/api/memory/graph/projection?${params.toString()}`);
+  const criteria = normalizeCriteria(input);
+  const url = buildProjectionUrl(input, criteria);
+  const init: RequestInit = input.signal ? { signal: input.signal } : {};
+  const response = await fetcher(url, init);
   if (!response.ok) {
     let code = 'projection_failed';
     try {
-      const body = await response.json() as { detail?: { code?: string } };
-      if (body.detail?.code) code = body.detail.code;
+      code = readErrorCode(await response.json()) ?? code;
     } catch {
-      /* keep default */
+      /* keep default; never leak body text */
     }
-    throw new Error(code);
+    const unavailable = response.status === 503 || code === 'projection_unavailable';
+    throw projectionError(unavailable ? 'unavailable' : 'generic', code, response.status);
   }
   const projection = await response.json() as MemoryProjection;
   return { epoch: input.epoch, projection };
