@@ -315,6 +315,45 @@ describe('MemorySpace', () => {
     await waitFor(() => expect(document.activeElement).toHaveTextContent('后来的记忆'));
   });
 
+  it('keeps the narrow LIST sheet while ArrowDown roves to the next result', async () => {
+    const previousWidth = window.innerWidth;
+    window.innerWidth = 480;
+    const dual: MemoryProjection = {
+      ...projection,
+      result_ids: ['fact:1', 'fact:2'],
+      shown: { ...projection.shown, results: 2 },
+      eligible: { ...projection.eligible, results: 2 },
+      nodes: [
+        ...projection.nodes,
+        {
+          kind: 'fact',
+          projection_id: 'fact:2',
+          fact_id: '2',
+          label: '后来的记忆',
+          is_pinned: true,
+          updated_at: '2026-08-15T00:00:00Z',
+          topic_id: null,
+        },
+      ],
+    };
+    mockApi(() => okJson(dual));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    const first = await screen.findByRole('option', { name: '喜欢黑咖啡' });
+    await waitFor(() => expect(document.activeElement).toBe(first));
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-narrow-sheet', 'list');
+    fireEvent.keyDown(first, { key: 'ArrowDown' });
+    await waitFor(() => expect(document.activeElement).toHaveTextContent('后来的记忆'));
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-narrow-sheet', 'list');
+    expect(screen.getByTestId('memory-list')).toBeInTheDocument();
+    expect(screen.getByTestId('memory-list')).not.toHaveAttribute('hidden');
+    window.innerWidth = previousWidth;
+  });
+
   it('keeps one exclusive narrow bottom sheet for inspector versus LIST', async () => {
     const previousWidth = window.innerWidth;
     window.innerWidth = 480;

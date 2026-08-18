@@ -242,8 +242,8 @@ export function MemorySpace({
     setExpandedTopicIds((current) => openTopicBranch(topicId, current));
   };
 
-  const handleSelect = (id: string | null) => {
-    setNarrowPrefer('detail');
+  const handleSelect = (id: string | null, mode: 'rove' | 'activate' = 'activate') => {
+    if (mode === 'activate') setNarrowPrefer('detail');
     if (!id) {
       setSelectedId(null);
       setFocusedId(null);
@@ -758,7 +758,7 @@ export function MemorySpace({
                       ? liveProjection.result_ids[index + 1]
                       : liveProjection.result_ids[index - 1];
                     if (!next) return;
-                    handleSelect(next);
+                    handleSelect(next, 'rove');
                     setListOwnsFocus(true);
                     window.requestAnimationFrame(() => {
                       listRef.current?.querySelector<HTMLElement>(`[data-result-id="${next}"]`)?.focus();
