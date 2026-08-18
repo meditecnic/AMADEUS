@@ -908,3 +908,95 @@ def test_program_operational_error_stays_projection_failed(
         "program OperationalError must stay projection_failed, "
         f"got {_code(response)!r}: {response.text}"
     )
+
+
+C_OVERSIZE_ELIGIBLE = 80
+C_NODE_BUDGET = 64
+C_EDGE_BUDGET = 128
+C_HARD_MAX_NODES = 160
+C_HARD_MAX_EDGES = 320
+C_COUNT_KEYS = ("nodes", "edges", "records", "results")
+
+
+def _seed_oversize_overview_scope() -> str:
+    """Standalone experiences only: hub + 80 results exceeds the 64-node budget."""
+    sid = _session("c-oversize")
+    for index in range(C_OVERSIZE_ELIGIBLE):
+        _seed_experience(sid, f"C-oversize-{index:03d}", is_pinned=False)
+    return sid
+
+
+def _get_oversize_overview_body(client: TestClient, session_id: str) -> dict:
+    response = _get(
+        client,
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        view="overview",
+    )
+    assert response.status_code == 200, (
+        f"oversize overview GET must be 200, got {response.status_code}: "
+        f"{response.text}"
+    )
+    return response.json()
+
+
+def test_count_groups_coherent(client: TestClient) -> None:
+    """C4: truncated populated envelope keeps shown/eligible/truncated coherent."""
+    body = _get_oversize_overview_body(client, _seed_oversize_overview_scope())
+    assert body["empty"] is False
+    shown = body["shown"]
+    eligible = body["eligible"]
+    truncated = body["truncated"]
+    assert shown["nodes"] == len(body["nodes"])
+    assert shown["edges"] == len(body["edges"])
+    assert len(body["result_ids"]) == shown["results"]
+    assert any(truncated[key] is True for key in C_COUNT_KEYS), (
+        "C4 fixture must truncate at least one count group: "
+        f"eligible={eligible} shown={shown} truncated={truncated}"
+    )
+    for key in C_COUNT_KEYS:
+        assert truncated[key] == (eligible[key] > shown[key]), (
+            f"C4 truncated.{key} != (eligible.{key} > shown.{key}): "
+            f"eligible={eligible} shown={shown} truncated={truncated}"
+        )
+
+
+def test_default_overview_budget_64_128(client: TestClient) -> None:
+    """C5: default Overview budget is 64/128 and actually binds on oversize."""
+    body = _get_oversize_overview_body(client, _seed_oversize_overview_scope())
+    shown = body["shown"]
+    budgets = body["budgets"]
+    assert body["eligible"]["nodes"] > C_NODE_BUDGET, (
+        "C5 fixture must exceed the node budget: "
+        f"eligible.nodes={body['eligible']['nodes']}"
+    )
+    assert shown["nodes"] <= C_NODE_BUDGET
+    assert shown["edges"] <= C_EDGE_BUDGET
+    assert shown["nodes"] == C_NODE_BUDGET, (
+        "C5 node budget was not reached: "
+        f"shown.nodes={shown['nodes']} eligible={body['eligible']}"
+    )
+    assert budgets["nodes"] == C_NODE_BUDGET
+    assert budgets["edges"] == C_EDGE_BUDGET
+
+
+def test_hard_max_reported_not_used_as_silent_raise(client: TestClient) -> None:
+    """C6: hard max is reported 160/320 and is not the live admission budget."""
+    body = _get_oversize_overview_body(client, _seed_oversize_overview_scope())
+    shown = body["shown"]
+    budgets = body["budgets"]
+    eligible_nodes = body["eligible"]["nodes"]
+    assert budgets["hard_max_nodes"] == C_HARD_MAX_NODES
+    assert budgets["hard_max_edges"] == C_HARD_MAX_EDGES
+    assert shown["nodes"] <= budgets["nodes"]
+    assert shown["edges"] <= budgets["edges"]
+    assert eligible_nodes > budgets["nodes"], (
+        "C6 fixture must exceed the live node budget: "
+        f"eligible.nodes={eligible_nodes} budgets.nodes={budgets['nodes']}"
+    )
+    assert shown["nodes"] == budgets["nodes"], (
+        "C6 live admission used something other than the default budget: "
+        f"shown.nodes={shown['nodes']} budgets={budgets} eligible={body['eligible']}"
+    )
+    assert shown["nodes"] < budgets["hard_max_nodes"]
