@@ -193,12 +193,31 @@
   display: block;
   cursor: grab;
 }
-.memory-space-state {
+.memory-space-truncation {
   position: absolute;
   left: 16px;
   bottom: 16px;
+  z-index: 4;
   margin: 0;
-  color: rgba(220, 228, 234, 0.78);
+  max-width: min(36rem, calc(100% - 32px));
+}
+.memory-space-state {
+  position: absolute;
+  left: 16px;
+  bottom: 48px;
+  z-index: 4;
+  margin: 0;
+  max-width: min(36rem, calc(100% - 32px));
+  color: rgba(220, 228, 234, 0.92);
+}
+.memory-space-state button {
+  pointer-events: auto;
+}
+[data-testid="memory-retry-3d"] {
+  position: absolute;
+  left: 16px;
+  bottom: 80px;
+  z-index: 4;
 }
 .memory-constellation-host {
   position: relative;
@@ -210,6 +229,7 @@
 .memory-reading-dom,
 .memory-reading-scene {
   position: absolute;
+  z-index: 5;
   max-width: 280px;
   padding: 12px 14px;
   background: rgba(10, 14, 18, 0.88);
@@ -235,6 +255,7 @@
     bottom: 12px;
     max-width: none;
     max-height: 42vh;
+    box-sizing: border-box;
     overflow: auto;
   }
   .memory-space[data-narrow-sheet="list"] .memory-inspector,
@@ -250,6 +271,21 @@
   }
   .memory-space[data-narrow-sheet]:not([data-narrow-sheet="none"]) .memory-compatibility {
     inset: 56px 8px 46vh;
+  }
+  /* Keep status/truncation above the 42vh sheet, never over options. */
+  .memory-space[data-narrow-sheet]:not([data-narrow-sheet="none"]) .memory-space-truncation {
+    left: 12px;
+    bottom: calc(42vh + 36px);
+    max-width: min(36rem, calc(100% - 24px));
+  }
+  .memory-space[data-narrow-sheet]:not([data-narrow-sheet="none"]) .memory-space-state {
+    left: 12px;
+    bottom: calc(42vh + 64px);
+    max-width: min(36rem, calc(100% - 24px));
+  }
+  .memory-space[data-narrow-sheet]:not([data-narrow-sheet="none"]) [data-testid="memory-retry-3d"] {
+    left: 12px;
+    bottom: calc(42vh + 92px);
   }
 }
 .memory-reading-scene {
