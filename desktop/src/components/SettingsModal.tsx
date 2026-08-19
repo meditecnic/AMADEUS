@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-import { MemoryLedger } from './MemoryLedger';
 import {
   type ModelCatalogEntry,
 } from './ProviderControls';
@@ -234,7 +233,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
   worldline,
-  sessionId = '',
   apiKey,
   credentialConfigured,
   credentialStatus,
@@ -269,7 +267,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onSelectWebSearchProvider,
   onClearWebSearchCredential,
 }) => {
-  type SettingsTab = 'basic' | 'connections' | 'voice' | 'memory';
+  type SettingsTab = 'basic' | 'connections' | 'voice';
   const [activeTab, setActiveTab] = useState<SettingsTab>('basic');
   const [localWorldline, setLocalWorldline] = useState<'steins_gate' | 'beta'>(worldline);
   const [localApiKey, setLocalApiKey] = useState(apiKey);
@@ -481,9 +479,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </button>
             <button aria-label="VOICE" className={`tab-pill ${activeTab === 'voice' ? 'active' : ''}`} onClick={() => setActiveTab('voice')}>
               VOICE
-            </button>
-            <button aria-label="MEMORY" className={`tab-pill ${activeTab === 'memory' ? 'active' : ''}`} onClick={() => setActiveTab('memory')}>
-              MEMORY
             </button>
           </nav>
           <main className="tab-panels">
@@ -1059,16 +1054,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             </section>
             )}
-            {/* MEMORY tab (Gate 7A ledger; identity-agnostic, self facts only) */}
-            {activeTab === 'memory' && (
-            <section className="tab-panel active">
-              <MemoryLedger
-                sessionId={sessionId}
-                worldline={worldline}
-                active={isOpen && activeTab === 'memory'}
-              />
-            </section>
-            )}
           </main>
           {saveError && (
             <p className="settings-save-error" role="alert">
@@ -1080,22 +1065,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </p>
           )}
           <div className="modal-footer">
-            {activeTab === 'memory' ? (
-              <button className="salieri-btn cancel-btn" onClick={onClose}>关闭</button>
-            ) : (
-              <>
-                <button className="salieri-btn cancel-btn" onClick={onClose}>取消</button>
-                <button className="salieri-btn save-btn" onClick={() => { void handleSave(); }} disabled={isSaving}>
-                  {isSaving
-                    ? '保存中…'
-                    : activeTab === 'basic'
-                      ? '保存基本设置'
-                      : activeTab === 'connections'
-                        ? '保存连接设置'
-                        : '保存语音设置'}
-                </button>
-              </>
-            )}
+            <button className="salieri-btn cancel-btn" onClick={onClose}>取消</button>
+            <button className="salieri-btn save-btn" onClick={() => { void handleSave(); }} disabled={isSaving}>
+              {isSaving
+                ? '保存中…'
+                : activeTab === 'basic'
+                  ? '保存基本设置'
+                  : activeTab === 'connections'
+                    ? '保存连接设置'
+                    : '保存语音设置'}
+            </button>
           </div>
         </div>
       </div>

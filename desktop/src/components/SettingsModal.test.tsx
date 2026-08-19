@@ -132,20 +132,15 @@ describe('SYSTEM CONFIG information architecture', () => {
     expect(screen.getByRole('button', { name: '保存连接设置' })).toBeInTheDocument();
   });
 
-  it('exposes four tabs with correct footers and memory close-only', () => {
+  it('exposes three tabs and no Settings Memory Ledger path', () => {
     render(<SettingsModal {...baseProps} sessionId="s1" onSaveSettings={vi.fn()} />);
     expect(screen.getByRole('button', { name: 'BASIC' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'CONNECTIONS' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'VOICE' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'MEMORY' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'MEMORY' })).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'VOICE' }));
     expect(screen.getByRole('button', { name: '保存语音设置' })).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'MEMORY' }));
-    expect(screen.getByRole('button', { name: '关闭' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '保存基本设置' })).toBeNull();
-    expect(screen.queryByRole('button', { name: '保存连接设置' })).toBeNull();
   });
 
   it('keeps create form collapsed until expanded, and cancel does not create', async () => {
@@ -973,61 +968,15 @@ describe('SettingsModal UX contracts', () => {
   });
 });
 
-describe('Memory Ledger tab (Gate 7A)', () => {
-  it('opens on a non-memory tab and issues zero ledger requests by default', () => {
+describe('Memory Ledger tab (Gate 7A) retired by G60', () => {
+  it('does not expose a Settings Memory Ledger product path', () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     try {
       render(<SettingsModal {...baseProps} sessionId="s-okabe" onSaveSettings={vi.fn()} />);
-      const basicTab = screen.getByRole('button', { name: 'BASIC' });
-      expect(basicTab.className).toContain('active');
-      const memoryTab = screen.getByRole('button', { name: 'MEMORY' });
-      expect(memoryTab.className).not.toContain('active');
+      expect(screen.queryByRole('button', { name: 'MEMORY' })).toBeNull();
+      expect(screen.queryByTestId('local-fact-5')).toBeNull();
       expect(fetchMock).not.toHaveBeenCalled();
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it('shows the self ledger even while the app defaults to okabe mode', async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        local: [{
-          id: 5,
-          fact_key: 'favorite_drink',
-          fact_value: 'コーヒー',
-          confidence: 0.9,
-          importance: 0.7,
-          is_pinned: false,
-          created_at: '2026-07-26T00:00:00+00:00',
-          promotion_eligible: true,
-          promotion_reason: null,
-        }],
-        shared: [],
-      }),
-    } as unknown as Response);
-    vi.stubGlobal('fetch', fetchMock);
-    try {
-      // identityMode is the new-conversation default, NOT a ledger filter:
-      // the ledger always manages the user's own self facts (never okabe).
-      render(
-        <SettingsModal
-          {...baseProps}
-          sessionId="s-okabe"
-          identityMode="okabe"
-          onSaveSettings={vi.fn()}
-        />,
-      );
-      fireEvent.click(screen.getByRole('button', { name: 'MEMORY' }));
-      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
-      expect(String(fetchMock.mock.calls[0][0])).toContain(
-        '/api/memory/facts?session_id=s-okabe&worldline=steins_gate',
-      );
-      await waitFor(() => expect(screen.getByTestId('local-fact-5')).toBeTruthy());
-      // M1: scope labels replaced by tab bar
-      expect(screen.getByRole('button', { name: '本线记忆' })).toBeTruthy();
     } finally {
       vi.unstubAllGlobals();
     }
