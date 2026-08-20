@@ -90,6 +90,11 @@ function okJson(body: unknown) {
   });
 }
 
+function activateWithEnter(el: HTMLElement) {
+  const allowed = fireEvent.keyDown(el, { key: 'Enter' });
+  if (allowed) fireEvent.click(el);
+}
+
 const originalMatchMedia = window.matchMedia;
 
 describe('MemorySpace', () => {
@@ -131,9 +136,18 @@ describe('MemorySpace', () => {
     fireEvent.click(screen.getByRole('button', { name: '仪器' }));
     fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
     expect(screen.getByTestId('memory-list')).toHaveTextContent('喜欢黑咖啡');
+    expect(screen.getByRole('option', { name: '上下文 SOUL' })).toBeInTheDocument();
+    expect(screen.getAllByRole('option', { name: '喜欢黑咖啡' })).toHaveLength(1);
     fireEvent.click(screen.getByRole('option', { name: '喜欢黑咖啡' }));
     expect(screen.getByTestId('memory-space').getAttribute('data-expanded-topics')).toContain('topic:t1');
-    expect(screen.getByTestId('reading-kind')).toHaveTextContent('事实');
+    expect(screen.getByTestId('memory-list')).toBeInTheDocument();
+    expect(screen.queryByTestId('reading-kind')).toBeNull();
+    expect(screen.queryByTestId('soul-inspector')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('reading-kind')).toBeInTheDocument();
+    });
     expect(screen.getByTestId('reading-title')).toHaveTextContent('喜欢黑咖啡');
     expect(screen.getByTestId('reading-summary')).toHaveTextContent('喜欢黑咖啡');
     expect(screen.getByTestId('reading-provenance')).toHaveTextContent('否');
@@ -142,11 +156,7 @@ describe('MemorySpace', () => {
     expect(screen.queryByRole('button', { name: /置顶|删除|编辑/ })).toBeNull();
     expect(screen.queryByTestId('reading-scene') && screen.queryByTestId('reading-dom')).toBeNull();
     expect(screen.queryByTestId('soul-inspector')).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
-    await waitFor(() => {
-      expect(screen.getByTestId('reading-kind')).toBeInTheDocument();
-    });
+    expect(screen.queryByTestId('memory-list')).toBeNull();
     expect(screen.queryByRole('button', { name: /置顶|删除|编辑/ })).toBeNull();
   });
 
@@ -217,7 +227,7 @@ describe('MemorySpace', () => {
       json: async () => laterProjection,
     });
     fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
-    await waitFor(() => expect(screen.getByRole('option', { name: '后来的记忆' })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('option', { name: /后来的记忆/ })).toBeInTheDocument());
     releaseOld?.({
       ok: true,
       json: async () => projection,
@@ -225,7 +235,7 @@ describe('MemorySpace', () => {
     await new Promise((resolve) => {
       setTimeout(resolve, 30);
     });
-    expect(screen.getByRole('option', { name: '后来的记忆' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: /后来的记忆/ })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: '喜欢黑咖啡' })).toBeNull();
   });
 
@@ -352,6 +362,253 @@ describe('MemorySpace', () => {
     expect(screen.getByTestId('memory-list')).toBeInTheDocument();
     expect(screen.getByTestId('memory-list')).not.toHaveAttribute('hidden');
     window.innerWidth = previousWidth;
+  });
+
+  it('focuses the supporting LIST row after selecting SOUL and keeps arrow continuity', async () => {
+    mockApi(() => okJson(projection));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByTestId('select-soul'));
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    const soul = await screen.findByRole('option', { name: '上下文 SOUL' });
+    await waitFor(() => {
+      expect(document.activeElement?.getAttribute('data-outline-id')).toBe(projection.center.projection_id);
+    });
+    expect(soul).toHaveAttribute('data-outline-id', projection.center.projection_id);
+    expect(soul).not.toHaveAttribute('data-result-id');
+    fireEvent.keyDown(document.activeElement as Element, { key: 'ArrowDown' });
+    await waitFor(() => {
+      expect(document.activeElement?.getAttribute('data-outline-id')).not.toBe(projection.center.projection_id);
+      expect(document.activeElement?.getAttribute('role')).toBe('option');
+    });
+    await new Promise((resolve) => {
+      setTimeout(resolve, 30);
+    });
+    fireEvent.keyDown(document.activeElement as Element, { key: 'ArrowUp' });
+    await waitFor(() => {
+      expect(document.activeElement?.getAttribute('data-outline-id')).toBe(projection.center.projection_id);
+    });
+  });
+
+  it('focuses a supporting Topic row when LIST opens from Compatibility', async () => {
+    mockApi(() => okJson(projection));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.click(screen.getByRole('button', { name: '3D' }));
+    fireEvent.click(await screen.findByRole('button', { name: '上下文 咖啡' }));
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    const topic = await screen.findByRole('option', { name: '上下文 咖啡' });
+    await waitFor(() => expect(document.activeElement?.getAttribute('data-outline-id')).toBe('topic:t1'));
+    expect(topic).toHaveAttribute('data-outline-id', 'topic:t1');
+    fireEvent.keyDown(document.activeElement as Element, { key: 'ArrowUp' });
+    await waitFor(() => expect(document.activeElement?.getAttribute('data-outline-id')).not.toBe('topic:t1'));
+  });
+
+  it('shows only one auxiliary surface and keeps the semantic selection', async () => {
+    mockApi(() => okJson(projection));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-narrow-sheet', 'tools');
+    expect(screen.getByTestId('memory-space-tools')).toHaveAttribute('data-open', 'true');
+    expect(screen.queryByTestId('memory-list')).toBeNull();
+    expect(screen.queryByTestId('soul-inspector')).toBeNull();
+    expect(screen.queryByTestId('reading-dom')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-narrow-sheet', 'list');
+    expect(screen.getByTestId('memory-space-tools')).toHaveAttribute('data-open', 'false');
+    const fact = await screen.findByRole('option', { name: '喜欢黑咖啡' });
+    fireEvent.click(fact);
+    expect(fact).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByTestId('reading-dom')).toBeNull();
+    expect(screen.queryByTestId('soul-inspector')).toBeNull();
+
+    fireEvent.click(screen.getByTestId('select-soul'));
+    expect(screen.getByTestId('soul-inspector')).toBeInTheDocument();
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-narrow-sheet', 'inspector');
+    expect(screen.queryByTestId('memory-list')).toBeNull();
+    expect(screen.getByTestId('memory-space-tools')).toHaveAttribute('data-open', 'false');
+
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    expect(screen.getByTestId('memory-list')).toBeInTheDocument();
+    expect(screen.queryByTestId('soul-inspector')).toBeNull();
+    expect(screen.getByRole('option', { name: '上下文 SOUL' })).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('lets a focused group summary toggle with Enter instead of hijacking selection', async () => {
+    const facts = Array.from({ length: 8 }, (_, index) => ({
+      kind: 'fact' as const,
+      projection_id: `fact:${index + 1}`,
+      fact_id: String(index + 1),
+      label: `分组事实${index + 1}`,
+      is_pinned: false,
+      updated_at: '2026-08-19T00:00:00Z',
+      topic_id: index < 4 ? 't1' : 't2',
+    }));
+    const dense: MemoryProjection = {
+      ...projection,
+      result_ids: facts.map((item) => item.projection_id),
+      shown: { ...projection.shown, results: 8 },
+      eligible: { ...projection.eligible, results: 8 },
+      nodes: [
+        projection.nodes[0],
+        projection.nodes[1],
+        {
+          kind: 'topic',
+          projection_id: 'topic:t2',
+          topic_id: 't2',
+          label: '研究',
+          fact_count: 4,
+          experience_count: 0,
+        },
+        ...facts,
+      ],
+      edges: [
+        projection.edges[0],
+        { kind: 'hub_to_anchor', from: 'hub:continuity:s:steins_gate:okabe', to: 'topic:t2' },
+        ...facts.map((item) => ({
+          kind: 'has_topic' as const,
+          from: item.projection_id,
+          to: item.topic_id === 't1' ? 'topic:t1' : 'topic:t2',
+        })),
+      ],
+    };
+    mockApi(() => okJson(dense));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    await waitFor(() => {
+      expect(document.activeElement?.getAttribute('role')).toBe('option');
+    });
+    const research = await screen.findByText(/研究 · 4 条/);
+    const details = research.closest('details');
+    expect(details).toBeTruthy();
+    expect(details?.open).toBe(false);
+    const summary = details?.querySelector('summary');
+    expect(summary).toBeTruthy();
+    (summary as HTMLElement).focus();
+    activateWithEnter(summary as HTMLElement);
+    expect(details?.open).toBe(true);
+    activateWithEnter(summary as HTMLElement);
+    expect(details?.open).toBe(false);
+  });
+
+  it('lets Enter on a Compatibility control select that item instead of the old focusedId', async () => {
+    mockApi(() => okJson(projection));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
+    expect(screen.getByRole('button', { name: '喜欢黑咖啡' })).toHaveAttribute('aria-current', 'true');
+    const topic = screen.getByRole('button', { name: '上下文 咖啡' });
+    topic.focus();
+    activateWithEnter(topic);
+    expect(topic).toHaveAttribute('aria-current', 'true');
+    expect(screen.getByRole('button', { name: '喜欢黑咖啡' })).not.toHaveAttribute('aria-current');
+  });
+
+  it('lets the ranked-browse control activate from the keyboard', async () => {
+    mockApi(() => okJson(projection));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '按主题' }));
+    expect(screen.getByTestId('memory-list')).toHaveAttribute('data-browse', 'grouped');
+    const ranked = screen.getByRole('button', { name: '按排序' });
+    ranked.focus();
+    activateWithEnter(ranked);
+    expect(screen.getByTestId('memory-list')).toHaveAttribute('data-browse', 'ranked');
+  });
+
+  it('advances LIST focus on every consecutive ArrowDown without dropping keys', async () => {
+    const dual: MemoryProjection = {
+      ...projection,
+      result_ids: ['fact:1', 'fact:2'],
+      shown: { ...projection.shown, results: 2 },
+      eligible: { ...projection.eligible, results: 2 },
+      nodes: [
+        ...projection.nodes,
+        {
+          kind: 'fact',
+          projection_id: 'fact:2',
+          fact_id: '2',
+          label: '后来的记忆',
+          is_pinned: true,
+          updated_at: '2026-08-15T00:00:00Z',
+          topic_id: null,
+        },
+      ],
+    };
+    mockApi(() => okJson(dual));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    await waitFor(() => {
+      expect(document.activeElement?.getAttribute('data-outline-id')).toBe('fact:1');
+    });
+    const first = document.activeElement as HTMLElement;
+    fireEvent.keyDown(first, { key: 'ArrowDown' });
+    fireEvent.keyDown(document.activeElement as Element, { key: 'ArrowDown' });
+    await waitFor(() => {
+      expect(document.activeElement?.getAttribute('data-outline-id')).toBe(
+        projection.center.projection_id,
+      );
+    });
+  });
+
+  it('auto-focuses the selected supporting row after LIST remounts from Inspector', async () => {
+    mockApi(() => okJson(projection));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByTestId('select-soul'));
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    await waitFor(() => {
+      expect(document.activeElement?.getAttribute('data-outline-id')).toBe(projection.center.projection_id);
+    });
+    fireEvent.click(screen.getByTestId('select-soul'));
+    expect(screen.queryByTestId('memory-list')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    await waitFor(() => {
+      expect(document.activeElement?.getAttribute('data-outline-id')).toBe(projection.center.projection_id);
+    });
+  });
+
+  it('auto-focuses the selected result after LIST remounts from tools', async () => {
+    mockApi(() => okJson(projection));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    const fact = await screen.findByRole('option', { name: '喜欢黑咖啡' });
+    fireEvent.click(fact);
+    await waitFor(() => {
+      expect(document.activeElement?.getAttribute('data-outline-id')).toBe('fact:1');
+    });
+    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    expect(screen.queryByTestId('memory-list')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    await waitFor(() => {
+      expect(document.activeElement?.getAttribute('data-outline-id')).toBe('fact:1');
+    });
   });
 
   it('keeps one exclusive narrow bottom sheet for inspector versus LIST', async () => {
@@ -554,6 +811,84 @@ describe('MemorySpace', () => {
       expect(screen.getByTestId('memory-plaque')).toHaveTextContent('SG');
       expect(screen.getByTestId('memory-announce')).toHaveTextContent('范围切换失败');
     });
+  });
+
+  it('clears an illegal selection after a successful scope switch', async () => {
+    const beta: MemoryProjection = {
+      ...projection,
+      scope: { ...projection.scope, worldline: 'beta' },
+      center: { ...projection.center, projection_id: 'hub:continuity:s:beta:okabe' },
+      result_ids: ['fact:beta'],
+      nodes: [
+        {
+          kind: 'continuity_hub',
+          projection_id: 'hub:continuity:s:beta:okabe',
+          label_primary: 'AMADEUS',
+          label_secondary: 'SOUL',
+        },
+        {
+          kind: 'fact',
+          projection_id: 'fact:beta',
+          fact_id: 'beta',
+          label: 'β 记忆',
+          is_pinned: false,
+          updated_at: '2026-08-19T00:00:00Z',
+          topic_id: null,
+        },
+      ],
+      edges: [],
+    };
+    mockApi((url) => okJson(String(url).includes('worldline=beta') ? beta : projection));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
+    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.change(screen.getByLabelText('浏览世界线'), { target: { value: 'beta' } });
+    await waitFor(() => expect(screen.getByTestId('memory-plaque')).toHaveTextContent('β'));
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    expect(screen.queryByRole('option', { name: '喜欢黑咖啡' })).toBeNull();
+    expect(screen.getByRole('option', { name: /β 记忆/ })).toBeInTheDocument();
+    expect(document.querySelector('[data-result-id="fact:1"]')).toBeNull();
+  });
+
+  it('does not render a fabricated row for a malformed result_id', async () => {
+    const broken: MemoryProjection = {
+      ...projection,
+      result_ids: ['fact:1', 'fact:ghost'],
+      shown: { ...projection.shown, results: 2 },
+      eligible: { ...projection.eligible, results: 2 },
+    };
+    mockApi(() => okJson(broken));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    expect(screen.getByTestId('memory-malformed')).toBeInTheDocument();
+    expect(screen.getByTestId('memory-malformed')).toHaveTextContent(/无效|无法生成/);
+    expect(screen.queryByTestId('memory-list')).toBeNull();
+    expect(document.querySelector('[data-result-id]')).toBeNull();
+    expect(screen.queryByRole('option', { name: '喜欢黑咖啡' })).toBeNull();
+    expect(screen.queryByRole('option', { name: /fact:ghost|unknown/ })).toBeNull();
+    expect(screen.queryByText('结果 2')).toBeNull();
+  });
+
+  it('opens Compatibility as a structure tree without dumping every evidence caption', async () => {
+    mockApi(() => okJson(projection));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.click(screen.getByRole('button', { name: '3D' }));
+    expect(await screen.findByRole('region', { name: '记忆结构' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'SOUL' })).toBeInTheDocument();
+    expect(screen.queryByText('喜欢黑咖啡')).toBeNull();
   });
 
   it('moves a shared selection with arrows and Home', async () => {

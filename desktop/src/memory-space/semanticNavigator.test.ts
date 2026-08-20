@@ -43,12 +43,12 @@ const projection: MemoryProjection = {
 };
 
 describe('semanticNavigator', () => {
-  it('orders SOUL then result_ids and steps with arrows/Home', () => {
+  it('orders primary result_ids before supporting context', () => {
     const order = semanticOrder(projection);
-    expect(order[0]).toBe('hub');
-    expect(order).toContain('fact:1');
-    expect(neighborId(order, 'hub', 1)).toBe(order[1]);
-    expect(neighborId(order, order[1], -1)).toBe('hub');
+    expect(order[0]).toBe('fact:1');
+    expect(order).toContain('hub');
+    expect(neighborId(order, 'fact:1', 1)).toBe(order[1]);
+    expect(neighborId(order, order[1], -1)).toBe('fact:1');
   });
 
   it('falls back to SOUL when the selected node disappears', () => {

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { CompatibilityView } from './CompatibilityView';
+import { MemoryResultOutline } from './MemoryResultOutline';
+import { deriveOverviewPresentation, outlineIds } from './overviewPresentation';
 import { memorySpaceShortcut } from './chrome';
 import { ConstellationStage, type ScreenAnchor } from './ConstellationStage';
 import {
@@ -85,9 +87,8 @@ export function MemorySpace({
   const [announcement, setAnnouncement] = useState('');
   const searchRef = useRef<HTMLInputElement | null>(null);
   const graphRef = useRef<HTMLDivElement | null>(null);
-  const listRef = useRef<HTMLOListElement | null>(null);
-  const listWasOpen = useRef(false);
-  const lastListRoveAt = useRef(0);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const listWasShown = useRef(false);
   const [narrowPrefer, setNarrowPrefer] = useState<'list' | 'detail'>('detail');
   const framesRef = useRef<FrameSample[]>([]);
   const [width, setWidth] = useState(typeof window === 'undefined' ? 1280 : window.innerWidth);
@@ -123,6 +124,8 @@ export function MemorySpace({
 
   const selectedRef = useRef<string | null>(null);
   selectedRef.current = selectedId;
+  const focusedRef = useRef<string | null>(null);
+  focusedRef.current = focusedId;
 
   const applyEnvelope = useCallback((next: NonNullable<typeof projection>, keepError = false) => {
     setProjection(next);
@@ -130,9 +133,10 @@ export function MemorySpace({
     if (!keepError) setError(null);
     const reconciled = reconcileSelection(selectedRef.current, next);
     setSelectedId(reconciled.selectedId);
-    if (reconciled.fellBack) {
-      setFocusedId(reconciled.selectedId);
-      setAnnouncement(reconciled.announced ?? '');
+    const focused = reconcileSelection(focusedRef.current, next);
+    setFocusedId(focused.selectedId);
+    if (reconciled.fellBack && reconciled.announced) {
+      setAnnouncement(reconciled.announced);
     }
   }, []);
 
@@ -214,6 +218,15 @@ export function MemorySpace({
     requestedCriteria: criteria,
   });
   const liveProjection = presentation.envelope;
+  const disclosurePlan = liveProjection
+    ? deriveOverviewPresentation(liveProjection, {
+      expandedTopicIds,
+      selectedId,
+      focusedId,
+      query: criteria.query,
+    })
+    : null;
+  const planReady = Boolean(disclosurePlan?.valid);
   const display = liveProjection ? layoutProjection(liveProjection) : [];
   const selected = display.find((node) => node.id === selectedId) ?? null;
   const card = selected ? readingCardFromNode(selected) : null;
@@ -244,7 +257,10 @@ export function MemorySpace({
   };
 
   const handleSelect = (id: string | null, mode: 'rove' | 'activate' = 'activate') => {
-    if (mode === 'activate') setNarrowPrefer('detail');
+    if (mode === 'activate') {
+      setNarrowPrefer('detail');
+      setToolsOpen(false);
+    }
     if (!id) {
       setSelectedId(null);
       setFocusedId(null);
@@ -280,20 +296,11 @@ export function MemorySpace({
     if (next) handleSelect(next);
   };
 
-  const roveList = (fromId: string, key: 'ArrowDown' | 'ArrowUp') => {
-    const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    if (now - lastListRoveAt.current < 24) return;
-    lastListRoveAt.current = now;
-    const ids = liveProjection?.result_ids ?? [];
-    const index = ids.indexOf(fromId);
-    if (index < 0) return;
-    const next = key === 'ArrowDown' ? ids[index + 1] : ids[index - 1];
-    if (!next) return;
-    handleSelect(next, 'rove');
+  const roveList = (nextId: string) => {
+    if (!nextId) return;
+    handleSelect(nextId, 'rove');
     setListOwnsFocus(true);
-    window.requestAnimationFrame(() => {
-      listRef.current?.querySelector<HTMLElement>(`[data-result-id="${next}"]`)?.focus();
-    });
+    listRef.current?.querySelector<HTMLElement>(`[data-outline-id="${nextId}"]`)?.focus();
   };
 
   const emphasis = emphasisMode({
@@ -308,7 +315,10 @@ export function MemorySpace({
   };
 
   const toggleList = () => {
-    if (listOpen && narrowPrefer !== 'list') {
+    const restoreList = toolsOpen && listOpen;
+    setToolsOpen(false);
+    if (restoreList || (listOpen && narrowPrefer !== 'list')) {
+      setListOpen(true);
       setNarrowPrefer('list');
       return;
     }
@@ -370,6 +380,17 @@ export function MemorySpace({
         setCapability((current) => applyExplicitCompatibility(current, !forceCompat));
         return;
       }
+      const targetEl = event.target instanceof Element ? event.target : null;
+      const nativeInteractive = Boolean(
+        targetEl?.closest('button, summary, a, input, select, textarea, [contenteditable="true"]'),
+      );
+      if (nativeInteractive) {
+        if (event.key === 'Home' || event.key === 'Enter'
+          || event.key === 'ArrowDown' || event.key === 'ArrowUp'
+          || event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+          return;
+        }
+      }
       if (event.key === 'Home') {
         event.preventDefault();
         handleSelect(liveProjection?.center.projection_id ?? null);
@@ -381,15 +402,11 @@ export function MemorySpace({
         handleSelect(focusedId);
         return;
       }
-      const targetEl = event.target instanceof Element ? event.target : null;
       const fromListOption = Boolean(
         targetEl?.getAttribute('role') === 'option'
         && listRef.current?.contains(targetEl),
       );
       if (fromListOption && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
-        event.preventDefault();
-        const fromId = targetEl?.getAttribute('data-result-id') || focusedId;
-        if (fromId) roveList(fromId, event.key);
         return;
       }
       if (fromListOption && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
@@ -411,26 +428,39 @@ export function MemorySpace({
     return () => window.removeEventListener('keydown', onKey);
   });
 
-  const listIds = liveProjection?.result_ids ?? [];
+  const listIds = disclosurePlan ? outlineIds(disclosurePlan) : [];
   const listRovingId = (selectedId && listIds.includes(selectedId))
     ? selectedId
     : (focusedId && listIds.includes(focusedId) ? focusedId : (listIds[0] ?? null));
 
+  const narrowSheet = (() => {
+    if (toolsOpen) return 'tools';
+    if (listOpen && narrowPrefer === 'list') return 'list';
+    if (inspectorOpen) return 'inspector';
+    if (memoOpen) return 'reading';
+    if (listOpen) return 'list';
+    return 'none';
+  })();
+  const showList = Boolean(disclosurePlan && planReady && narrowSheet === 'list');
+  const showInspector = Boolean(inspectorOpen && liveProjection && narrowSheet === 'inspector');
+  const showReading = Boolean(showDomMemo && card && narrowSheet === 'reading');
+  const showSceneReading = Boolean(showSceneMemo && card && narrowSheet === 'reading');
+
   useEffect(() => {
-    const opened = listOpen && !listWasOpen.current;
-    listWasOpen.current = listOpen;
-    if (!listOpen) {
+    const opened = showList && !listWasShown.current;
+    listWasShown.current = showList;
+    if (!showList) {
       setListOwnsFocus(false);
       return undefined;
     }
     if (!opened) return undefined;
+    const preferred = listRovingId;
     const frame = window.requestAnimationFrame(() => {
-      const preferred = listRovingId;
       if (!preferred) {
         listRef.current?.focus();
         return;
       }
-      const option = listRef.current?.querySelector<HTMLElement>(`[data-result-id="${preferred}"]`);
+      const option = listRef.current?.querySelector<HTMLElement>(`[data-outline-id="${preferred}"]`);
       option?.focus();
       if (option && document.activeElement === option) {
         setFocusedId(preferred);
@@ -438,15 +468,7 @@ export function MemorySpace({
       }
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [listOpen, listRovingId]);
-
-  const narrowSheet = (() => {
-    if (narrowPrefer === 'list' && listOpen) return 'list';
-    if (inspectorOpen) return 'inspector';
-    if (memoOpen) return 'reading';
-    if (listOpen) return 'list';
-    return 'none';
-  })();
+  }, [showList, listRovingId]);
 
   const truncated = Boolean(
     liveProjection
@@ -464,6 +486,7 @@ export function MemorySpace({
       data-surface={renderSurface}
       data-reduced-motion={String(reducedMotion)}
       data-narrow-sheet={narrowSheet}
+      data-tools-open={String(toolsOpen)}
       aria-label="Memory Space"
     >
       <div className="sr-only" role="status" aria-live="polite" data-testid="memory-announce">{announcement}</div>
@@ -491,6 +514,20 @@ export function MemorySpace({
           onClick={() => setToolsOpen((value) => !value)}
         >
           仪器
+        </button>
+        <button type="button" aria-pressed={listOpen && narrowSheet === 'list'} onClick={toggleList}>
+          LIST
+        </button>
+        <button
+          type="button"
+          aria-pressed={renderSurface === 'compatibility'}
+          onClick={() => {
+            const next = renderSurface !== 'compatibility';
+            setForceCompat(next);
+            setCapability((current) => applyExplicitCompatibility(current, next));
+          }}
+        >
+          {renderSurface === 'compatibility' || cameraMode === '2d' ? '2D' : '3D'}
         </button>
         <div
           id="memory-space-tools"
@@ -581,21 +618,6 @@ export function MemorySpace({
               })}
             />
           </label>
-          <button type="button" aria-pressed={listOpen} onClick={toggleList} tabIndex={toolsOpen ? 0 : -1}>
-            LIST
-          </button>
-          <button
-            type="button"
-            aria-pressed={renderSurface === 'compatibility'}
-            onClick={() => {
-              const next = renderSurface !== 'compatibility';
-              setForceCompat(next);
-              setCapability((current) => applyExplicitCompatibility(current, next));
-            }}
-            tabIndex={toolsOpen ? 0 : -1}
-          >
-            {renderSurface === 'compatibility' || cameraMode === '2d' ? '2D' : '3D'}
-          </button>
           <select
             aria-label="浏览身份"
             value={identityMode}
@@ -667,9 +689,14 @@ export function MemorySpace({
       {presentation.phase === 'criteria-empty' ? (
         <p className="memory-space-state" data-testid="memory-criteria-empty">{presentation.copy}</p>
       ) : null}
-      {truncated && liveProjection ? (
+      {truncated && liveProjection && planReady ? (
         <p className="memory-space-truncation" data-testid="memory-truncation">
           当前呈现 {liveProjection.shown.results} / {liveProjection.eligible.results}，并非全部记忆。
+        </p>
+      ) : null}
+      {disclosurePlan && !disclosurePlan.valid ? (
+        <p className="memory-space-state" role="alert" data-testid="memory-malformed">
+          当前投影无效：有结果缺少对应节点，无法生成完整列表。
         </p>
       ) : null}
       {renderSurface === 'compatibility' ? (
@@ -693,15 +720,14 @@ export function MemorySpace({
         aria-label="记忆星座仪"
         onFocus={() => setListOwnsFocus(false)}
       >
-        {liveProjection && renderSurface === '3d' ? (
+        {liveProjection && disclosurePlan && planReady && renderSurface === '3d' ? (
           <ConstellationStage
             key={runtimeGeneration}
-            projection={liveProjection}
+            plan={disclosurePlan}
             selectedId={selectedId}
             mode={cameraMode}
             reducedMotion={!ambientMotionEnabled(reducedMotion, renderSurface)}
             decoration={capability.decoration}
-            expanded={overviewOpen}
             expandedTopicIds={expandedTopicIds}
             worldline={worldline}
             query={criteria.query}
@@ -727,16 +753,16 @@ export function MemorySpace({
             }}
           />
         ) : null}
-        {liveProjection && renderSurface === 'compatibility' ? (
+        {disclosurePlan && planReady && renderSurface === 'compatibility' ? (
           <CompatibilityView
-            projection={liveProjection}
+            plan={disclosurePlan}
             selectedId={selectedId}
             focusedId={focusedId}
             onSelect={handleSelect}
           />
         ) : null}
 
-        {showSceneMemo && card ? (
+        {showSceneReading && card ? (
           <aside
             className="memory-reading-scene"
             data-testid="reading-scene"
@@ -748,56 +774,23 @@ export function MemorySpace({
         ) : null}
       </div>
 
-      {listOpen && liveProjection ? (
-        <ol
-          className="memory-space-list"
-          data-testid="memory-list"
-          role="listbox"
-          aria-label="记忆列表"
-          ref={listRef}
-          tabIndex={-1}
-          onFocus={() => setListOwnsFocus(true)}
-        >
-          {liveProjection.result_ids.map((id) => {
-            const node = display.find((item) => item.id === id);
-            if (!node) return null;
-            const selectedItem = selectedId === id;
-            const roving = id === listRovingId;
-            return (
-              <li key={id}>
-                <button
-                  type="button"
-                  role="option"
-                  data-result-id={id}
-                  aria-selected={selectedItem}
-                  className={selectedItem ? 'is-selected' : undefined}
-                  tabIndex={roving ? 0 : -1}
-                  onFocus={() => setListOwnsFocus(true)}
-                  onClick={() => {
-                    const parent = evidenceParentId(id, liveProjection.edges);
-                    if (parent) revealTopic(parent);
-                    setSelectedId(id);
-                    setFocusedId(id);
-                    setListOwnsFocus(true);
-                    setNarrowPrefer('detail');
-                    setAnnouncement(announceNode(liveProjection, id));
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
-                    event.preventDefault();
-                    const fromId = event.currentTarget.getAttribute('data-result-id');
-                    if (fromId) roveList(fromId, event.key);
-                  }}
-                >
-                  {node.label}
-                </button>
-              </li>
-            );
-          })}
-        </ol>
+      {showList && disclosurePlan ? (
+        <MemoryResultOutline
+          plan={disclosurePlan}
+          selectedId={selectedId}
+          focusedId={focusedId ?? listRovingId}
+          listRef={listRef}
+          onOwnsFocus={setListOwnsFocus}
+          onSelect={(id) => {
+            handleSelect(id, 'activate');
+            setListOpen(true);
+            setNarrowPrefer('list');
+          }}
+          onRove={(nextId) => roveList(nextId)}
+        />
       ) : null}
 
-      {inspectorOpen && liveProjection ? (
+      {showInspector && liveProjection ? (
         <aside className="memory-inspector" data-testid="soul-inspector">
           <h2>AMADEUS / SOUL</h2>
           <p>SOUL 是当前 Amadeus 记忆连续性的投影中心，不是一条可编辑的记忆。</p>
@@ -864,7 +857,7 @@ export function MemorySpace({
         </aside>
       ) : null}
 
-      {showDomMemo && card ? (
+      {showReading && card ? (
         <aside className="memory-reading-dom" data-testid="reading-dom">
           <ReadingFields card={card} />
         </aside>

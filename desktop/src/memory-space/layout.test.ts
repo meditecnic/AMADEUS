@@ -86,6 +86,32 @@ function topicNodes(count: number): ProjectionNode[] {
 }
 
 describe('constellation layout', () => {
+  it('does not attach a Fact to a Topic from topic_id without has_topic', () => {
+    const display = layoutProjection(
+      envelope({
+        nodes: [
+          envelope().nodes[0],
+          envelope().nodes[1],
+          {
+            kind: 'fact',
+            projection_id: 'fact:orphan',
+            fact_id: 'orphan',
+            label: '无边',
+            is_pinned: false,
+            updated_at: '2026-08-14T00:00:00Z',
+            topic_id: 't1',
+          },
+        ],
+        edges: [
+          { kind: 'hub_to_anchor', from: 'hub:continuity:s:steins_gate:self', to: 'topic:t1' },
+        ],
+      }),
+    );
+    const topic = display.find((n) => n.id === 'topic:t1')!;
+    const orphan = display.find((n) => n.id === 'fact:orphan')!;
+    expect(dist(orphan.position, topic.position)).toBeGreaterThan(0.9);
+  });
+
   it('places one sphere per node with SOUL at the origin', () => {
     const display = layoutProjection(envelope());
     expect(display).toHaveLength(3);

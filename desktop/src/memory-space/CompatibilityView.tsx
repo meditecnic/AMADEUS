@@ -1,65 +1,159 @@
-import { layoutProjection } from './layout';
-import type { MemoryProjection } from './types';
+import { accessibleNameById, type OverviewDisclosurePlan, type TopicGroup } from './overviewPresentation';
+import type { ProjectionNode } from './types';
 
-const VIEW = 240;
+function topicChildren(
+  group: TopicGroup | undefined,
+  selectedId: string | null,
+  focusedId: string | null | undefined,
+  visible: Set<string>,
+): string[] {
+  const located = [selectedId, focusedId].filter((id): id is string => {
+    if (!id || !group) return false;
+    return group.admittedChildIds.includes(id);
+  });
+  return [...new Set([...(group?.representativeIds ?? []), ...located])]
+    .filter((id) => visible.has(id) || located.includes(id));
+}
+
+function evidenceButton(
+  id: string,
+  node: Extract<ProjectionNode, { kind: 'fact' | 'experience' }>,
+  selectedId: string | null,
+  showCaption: boolean,
+  onSelect: (id: string | null) => void,
+  ariaLabel?: string,
+) {
+  return (
+    <li key={id}>
+      <button
+        type="button"
+        className={`memory-compatibility-evidence${selectedId === id ? ' is-selected' : ''}`}
+        aria-current={selectedId === id ? 'true' : undefined}
+        aria-label={ariaLabel ?? node.label}
+        onClick={() => onSelect(id)}
+      >
+        {showCaption ? node.label : (node.kind === 'fact' ? '事实' : '经历')}
+      </button>
+    </li>
+  );
+}
 
 export function CompatibilityView(props: {
-  projection: MemoryProjection;
+  plan: OverviewDisclosurePlan;
   selectedId: string | null;
   focusedId?: string | null;
   onSelect: (id: string | null) => void;
 }) {
-  const display = layoutProjection(props.projection);
-  const points = display.map((node) => ({
-    ...node,
-    sx: VIEW / 2 + node.position.x * 38,
-    sy: VIEW / 2 - node.position.y * 38,
-  }));
-  const byId = new Map(points.map((node) => [node.id, node]));
+  const { plan } = props;
+  const envelope = plan.envelope;
+  const topics = envelope.nodes.filter((node) => node.kind === 'topic');
+  const anchored = new Set(plan.anchoredTopicIds);
+  const soulTopics = topics.filter((topic) => anchored.has(topic.projection_id));
+  const orphanTopics = topics.filter((topic) => !anchored.has(topic.projection_id));
+  const caption = new Set(plan.visualPlan.captionIds);
+  const visible = new Set(plan.visualPlan.visibleEvidenceIds);
+  if (props.selectedId) visible.add(props.selectedId);
+  if (props.focusedId) visible.add(props.focusedId);
+  const nodeById = new Map(envelope.nodes.map((node) => [node.projection_id, node]));
+  const names = accessibleNameById(plan);
+
   return (
     <div className="memory-compatibility" data-testid="memory-compatibility" data-webgl="false">
       <p className="memory-compatibility-label">兼容视图 / COMPATIBILITY VIEW</p>
-      <svg
-        viewBox={`0 0 ${VIEW} ${VIEW}`}
-        role="img"
-        aria-label="记忆兼容视图"
-        className="memory-compatibility-svg"
+      <div
+        className="memory-compatibility-tree"
+        role="region"
+        aria-label="记忆结构"
       >
-        {props.projection.edges.map((edge) => {
-          const from = byId.get(edge.from);
-          const to = byId.get(edge.to);
-          if (!from || !to) return null;
-          return (
-            <line
-              key={`${edge.kind}:${edge.from}:${edge.to}`}
-              x1={from.sx}
-              y1={from.sy}
-              x2={to.sx}
-              y2={to.sy}
-              className={`memory-compatibility-edge is-${edge.kind}`}
-            />
-          );
-        })}
-        {points.map((node) => {
-          const selected = node.id === props.selectedId;
-          const focused = node.id === (props.focusedId ?? props.selectedId);
-          const r = node.kind === 'continuity_hub' ? 14 : node.kind === 'topic' ? 7 : 4;
-          return (
-            <g key={node.id}>
-              <circle
-                cx={node.sx}
-                cy={node.sy}
-                r={r}
-                className={`memory-compatibility-node is-${node.kind}${selected ? ' is-selected' : ''}${focused ? ' is-focused' : ''}`}
-                onClick={() => props.onSelect(node.id)}
-              />
-              <text x={node.sx + r + 4} y={node.sy + 3} className="memory-compatibility-caption">
-                {node.kind === 'continuity_hub' ? 'SOUL' : node.label}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
+        <button
+          type="button"
+          className={`memory-compatibility-hub${props.selectedId === envelope.center.projection_id ? ' is-selected' : ''}`}
+          aria-current={props.selectedId === envelope.center.projection_id ? 'true' : undefined}
+          onClick={() => props.onSelect(envelope.center.projection_id)}
+        >
+          SOUL
+        </button>
+        <ul className="memory-compatibility-topics" data-region="soul-topics">
+          {soulTopics.map((topic) => {
+            const group = plan.topicGroups.find((item) => item.topicProjectionId === topic.projection_id);
+            const children = topicChildren(group, props.selectedId, props.focusedId, visible);
+            return (
+              <li key={topic.projection_id}>
+                <button
+                  type="button"
+                  className={`memory-compatibility-topic${props.selectedId === topic.projection_id ? ' is-selected' : ''}`}
+                  aria-current={props.selectedId === topic.projection_id ? 'true' : undefined}
+                  aria-expanded={children.length > 0}
+                  aria-label={names.get(topic.projection_id) ?? topic.label}
+                  onClick={() => props.onSelect(topic.projection_id)}
+                >
+                  {topic.label}
+                  {group && group.localRemainder > 0 ? (
+                    <span className="memory-compatibility-remainder"> · 另有 {group.localRemainder}</span>
+                  ) : null}
+                </button>
+                {children.length ? (
+                  <ul>
+                    {children.map((id) => {
+                      const node = nodeById.get(id);
+                      if (!node || (node.kind !== 'fact' && node.kind !== 'experience')) return null;
+                      return evidenceButton(id, node, props.selectedId, caption.has(id), props.onSelect, names.get(id));
+                    })}
+                  </ul>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+        {orphanTopics.length || plan.ungroupedIds.length ? (
+          <ul className="memory-compatibility-ungrouped" data-region="contextual" aria-label="未归组">
+            {orphanTopics.map((topic) => {
+              const group = plan.topicGroups.find((item) => item.topicProjectionId === topic.projection_id);
+              const children = topicChildren(group, props.selectedId, props.focusedId, visible);
+              return (
+                <li key={topic.projection_id}>
+                  <button
+                    type="button"
+                    aria-current={props.selectedId === topic.projection_id ? 'true' : undefined}
+                    aria-expanded={children.length > 0}
+                    aria-label={names.get(topic.projection_id) ?? topic.label}
+                    onClick={() => props.onSelect(topic.projection_id)}
+                  >
+                    {topic.label}
+                  </button>
+                  {children.length ? (
+                    <ul>
+                      {children.map((id) => {
+                        const node = nodeById.get(id);
+                        if (!node || (node.kind !== 'fact' && node.kind !== 'experience')) return null;
+                        return evidenceButton(id, node, props.selectedId, caption.has(id), props.onSelect, names.get(id));
+                      })}
+                    </ul>
+                  ) : null}
+                </li>
+              );
+            })}
+            {plan.ungroupedIds.map((id) => {
+              const node = nodeById.get(id);
+              if (!node) return null;
+              const label = node.kind === 'continuity_hub' ? 'SOUL' : node.label;
+              return (
+                <li key={id}>
+                  <button
+                    type="button"
+                    className={props.selectedId === id ? 'is-selected' : undefined}
+                    aria-current={props.selectedId === id ? 'true' : undefined}
+                    aria-label={names.get(id) ?? `未归组 ${label}`}
+                    onClick={() => props.onSelect(id)}
+                  >
+                    {label}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        ) : null}
+      </div>
     </div>
   );
 }

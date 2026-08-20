@@ -1,31 +1,8 @@
-import type { MemoryProjection, ProjectionNode } from './types';
-
-const KIND_RANK: Record<ProjectionNode['kind'], number> = {
-  continuity_hub: 0,
-  topic: 1,
-  fact: 2,
-  experience: 3,
-};
+import { deriveOverviewPresentation, outlineIds } from './overviewPresentation';
+import type { MemoryProjection } from './types';
 
 export function semanticOrder(projection: MemoryProjection): string[] {
-  const ids: string[] = [];
-  const seen = new Set<string>();
-  const push = (id: string | null | undefined) => {
-    if (!id || seen.has(id)) return;
-    seen.add(id);
-    ids.push(id);
-  };
-  push(projection.center.projection_id);
-  for (const id of projection.result_ids) push(id);
-  const rest = projection.nodes
-    .slice()
-    .sort((a, b) => {
-      const rank = KIND_RANK[a.kind] - KIND_RANK[b.kind];
-      if (rank !== 0) return rank;
-      return a.projection_id.localeCompare(b.projection_id);
-    });
-  for (const node of rest) push(node.projection_id);
-  return ids;
+  return outlineIds(deriveOverviewPresentation(projection, {}));
 }
 
 export function neighborId(order: readonly string[], current: string | null, delta: number): string | null {

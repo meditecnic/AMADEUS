@@ -98,12 +98,14 @@
 .memory-space-tools {
   position: absolute;
   top: 46px;
-  right: 20px;
+  left: 16px;
+  right: auto;
+  z-index: 6;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  max-width: min(520px, calc(100vw - 48px));
+  max-width: min(420px, calc(100vw - 320px));
   padding: 8px 10px;
   background: rgba(8, 12, 16, 0.72);
   border: 1px solid rgba(168, 192, 208, 0.16);
@@ -242,7 +244,72 @@
   background: rgba(14, 12, 10, 0.88);
   border-color: rgba(220, 196, 160, 0.16);
 }
-.memory-space-list { right: 16px; top: 64px; }
+.memory-space-list {
+  right: 16px;
+  top: 64px;
+  max-height: min(68vh, 560px);
+  overflow: auto;
+}
+.memory-outline-browse {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.memory-outline-browse button[aria-pressed="true"] {
+  border-color: rgba(168, 192, 208, 0.45);
+}
+.memory-result-outline details {
+  margin-bottom: 8px;
+}
+.memory-result-outline summary {
+  cursor: pointer;
+}
+.memory-result-outline h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  opacity: 0.7;
+}
+.memory-result-outline section + section {
+  margin-top: 14px;
+}
+.memory-result-outline ol {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.memory-outline-meta {
+  display: block;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  opacity: 0.62;
+}
+.memory-compatibility-tree {
+  width: min(36rem, 92%);
+  margin: 0 auto;
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+}
+.memory-compatibility-tree button {
+  background: transparent;
+  color: inherit;
+  border: 1px solid rgba(168, 192, 208, 0.2);
+  min-height: 32px;
+  padding: 4px 10px;
+}
+.memory-compatibility-tree button.is-selected,
+.memory-compatibility-tree button[aria-selected="true"] {
+  outline: 1px solid rgba(232, 196, 138, 0.7);
+}
+.memory-compatibility-topics,
+.memory-compatibility-ungrouped {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+.memory-compatibility-remainder {
+  opacity: 0.7;
+}
 .memory-inspector,
 .memory-reading-dom { left: 16px; top: 64px; }
 @media (max-width: 900px) {
@@ -266,24 +333,31 @@
   .memory-space[data-narrow-sheet="reading"] .memory-inspector {
     display: none;
   }
-  .memory-space[data-narrow-sheet]:not([data-narrow-sheet="none"]) .memory-constellation-host {
+  .memory-space[data-narrow-sheet="tools"] .memory-space-list,
+  .memory-space[data-narrow-sheet="tools"] .memory-inspector,
+  .memory-space[data-narrow-sheet="tools"] .memory-reading-dom {
+    display: none;
+  }
+  .memory-space[data-narrow-sheet]:not([data-narrow-sheet="none"]):not([data-narrow-sheet="tools"]) .memory-constellation-host {
     padding-bottom: 44vh;
   }
-  .memory-space[data-narrow-sheet]:not([data-narrow-sheet="none"]) .memory-compatibility {
+  .memory-space[data-narrow-sheet]:not([data-narrow-sheet="none"]):not([data-narrow-sheet="tools"]) .memory-compatibility {
+    position: fixed;
     inset: 56px 8px 46vh;
+    overflow: auto;
   }
   /* Keep status/truncation above the 42vh sheet, never over options. */
-  .memory-space[data-narrow-sheet]:not([data-narrow-sheet="none"]) .memory-space-truncation {
+  .memory-space[data-narrow-sheet]:not([data-narrow-sheet="none"]):not([data-narrow-sheet="tools"]) .memory-space-truncation {
     left: 12px;
     bottom: calc(42vh + 36px);
     max-width: min(36rem, calc(100% - 24px));
   }
-  .memory-space[data-narrow-sheet]:not([data-narrow-sheet="none"]) .memory-space-state {
+  .memory-space[data-narrow-sheet]:not([data-narrow-sheet="none"]):not([data-narrow-sheet="tools"]) .memory-space-state {
     left: 12px;
     bottom: calc(42vh + 64px);
     max-width: min(36rem, calc(100% - 24px));
   }
-  .memory-space[data-narrow-sheet]:not([data-narrow-sheet="none"]) [data-testid="memory-retry-3d"] {
+  .memory-space[data-narrow-sheet]:not([data-narrow-sheet="none"]):not([data-narrow-sheet="tools"]) [data-testid="memory-retry-3d"] {
     left: 12px;
     bottom: calc(42vh + 92px);
   }

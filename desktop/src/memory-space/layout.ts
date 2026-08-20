@@ -69,15 +69,14 @@ function unboundPocket(index: number, total: number, seed: string): Point3 {
   };
 }
 
-function parentTopicId(
-  node: ProjectionNode,
+function parentTopicProjectionId(
+  nodeId: string,
   projection: MemoryProjection,
 ): string | null {
-  if (node.kind === 'fact' && node.topic_id) return node.topic_id;
-  const parentPid = evidenceParentId(node.projection_id, projection.edges);
+  const parentPid = evidenceParentId(nodeId, projection.edges);
   if (!parentPid) return null;
   const topic = projection.nodes.find((item) => item.kind === 'topic' && item.projection_id === parentPid);
-  return topic && topic.kind === 'topic' ? topic.topic_id : null;
+  return topic && topic.kind === 'topic' ? topic.projection_id : null;
 }
 
 function moonOffset(home: Point3, index: number, total: number): Point3 {
@@ -94,16 +93,16 @@ export function layoutProjection(projection: MemoryProjection): DisplayNode[] {
   const topics = projection.nodes
     .filter((node) => node.kind === 'topic')
     .slice()
-    .sort((a, b) => a.topic_id.localeCompare(b.topic_id));
+    .sort((a, b) => a.projection_id.localeCompare(b.projection_id));
   const topicHome = new Map<string, Point3>();
   topics.forEach((node, index) => {
-    topicHome.set(node.topic_id, placeOnSphere(index, topics.length, SHELL_RADIUS));
+    topicHome.set(node.projection_id, placeOnSphere(index, topics.length, SHELL_RADIUS));
   });
 
   const moons = new Map<string, ProjectionNode[]>();
   for (const node of projection.nodes) {
     if (node.kind !== 'fact' && node.kind !== 'experience') continue;
-    const key = parentTopicId(node, projection) ?? `unbound:${node.kind}`;
+    const key = parentTopicProjectionId(node.projection_id, projection) ?? `unbound:${node.kind}`;
     const list = moons.get(key) ?? [];
     list.push(node);
     moons.set(key, list);
@@ -126,11 +125,11 @@ export function layoutProjection(projection: MemoryProjection): DisplayNode[] {
         kind: node.kind,
         label: nodeLabel(node),
         radius: topicScale(node),
-        position: topicHome.get(node.topic_id) ?? { x: SHELL_RADIUS, y: 0, z: 0 },
+        position: topicHome.get(node.projection_id) ?? { x: SHELL_RADIUS, y: 0, z: 0 },
         node,
       };
     }
-    const homeKey = parentTopicId(node, projection);
+    const homeKey = parentTopicProjectionId(node.projection_id, projection);
     const packKey = homeKey ?? `unbound:${node.kind}`;
     const pack = moons.get(packKey) ?? [node];
     const index = pack.findIndex((item) => item.projection_id === node.projection_id);

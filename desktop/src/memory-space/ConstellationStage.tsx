@@ -1,14 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { visibleDisplayNodes } from './graphPaths';
 import {
   focusLookAt,
-  layoutProjection,
   pickDisplayNode,
 } from './layout';
+import { displayNodesFromPlan, type OverviewDisclosurePlan } from './overviewPresentation';
 import type { OrreryCamera, OrreryRuntime } from './orreryRenderer';
 import type { DecorationLevel, FrameSample } from './renderCapability';
-import type { DisplayNode, MemoryProjection, Point3, Worldline } from './types';
+import type { DisplayNode, Point3, Worldline } from './types';
 
 const ORIGIN: Point3 = { x: 0, y: 0, z: 0 };
 const ZOOM_MIN = 2.4;
@@ -37,26 +36,19 @@ function cameraOf(
   };
 }
 
-function revealedDisplay(
-  projection: MemoryProjection,
-  expandedTopicIds: readonly string[],
-  query: string,
-): DisplayNode[] {
-  return visibleDisplayNodes(layoutProjection(projection), projection.edges, {
-    overviewOpen: true,
-    expandedTopicIds,
-    query,
-    resultIds: projection.result_ids,
-  });
+function evidenceIds(nodes: readonly DisplayNode[]): string {
+  return nodes
+    .filter((node) => node.kind === 'fact' || node.kind === 'experience')
+    .map((node) => node.id)
+    .join(',');
 }
 
 export function ConstellationStage(props: {
-  projection: MemoryProjection;
+  plan: OverviewDisclosurePlan;
   selectedId: string | null;
   mode: '3d' | '2d';
   reducedMotion: boolean;
   decoration?: DecorationLevel;
-  expanded: boolean;
   expandedTopicIds: readonly string[];
   worldline: Worldline;
   query: string;
@@ -83,7 +75,7 @@ export function ConstellationStage(props: {
     branchRef.current.forEach((_, id) => ids.add(id));
     return [...ids];
   }, [props.expandedTopicIds, revealRev]);
-  const display = revealedDisplay(props.projection, liveTopicIds, props.query);
+  const display = displayNodesFromPlan(props.plan);
   displayRef.current = display;
   propsRef.current = props;
   const cam = cameraOf(display, props.selectedId, props.mode, orbit.yaw, orbit.pitch, orbit.zoom);
@@ -112,7 +104,11 @@ export function ConstellationStage(props: {
       runtime.setExpanded(true);
       runtime.setQuery(propsRef.current.query);
       runtime.setSelected(propsRef.current.selectedId);
-      runtime.setGraph(displayRef.current, propsRef.current.projection.edges, propsRef.current.projection.result_ids);
+      runtime.setGraph(
+        displayRef.current,
+        propsRef.current.plan.envelope.edges,
+        propsRef.current.plan.envelope.result_ids,
+      );
       window.addEventListener('resize', onWinResize);
       canvas.addEventListener('webglcontextlost', onLost);
       if (!runtime.supported) {
@@ -196,7 +192,7 @@ export function ConstellationStage(props: {
   useEffect(() => {
     const runtime = runtimeRef.current;
     if (!runtime) return;
-    const nextDisplay = revealedDisplay(props.projection, liveTopicIds, props.query);
+    const nextDisplay = displayNodesFromPlan(props.plan);
     displayRef.current = nextDisplay;
     runtime.setWorldline(props.worldline);
     runtime.setReducedMotion(props.reducedMotion);
@@ -204,14 +200,23 @@ export function ConstellationStage(props: {
     runtime.setExpanded(true);
     runtime.setQuery(props.query);
     runtime.setSelected(props.selectedId);
-    runtime.setGraph(nextDisplay, props.projection.edges, props.projection.result_ids);
-  }, [liveTopicIds, props.decoration, props.projection, props.query, props.reducedMotion, props.selectedId, props.worldline]);
+    runtime.setGraph(nextDisplay, props.plan.envelope.edges, props.plan.envelope.result_ids);
+  }, [
+    liveTopicIds,
+    props.decoration,
+    props.plan,
+    props.query,
+    props.reducedMotion,
+    props.selectedId,
+    props.worldline,
+  ]);
 
   return (
     <canvas
       ref={canvasRef}
       className="memory-constellation-stage"
       data-testid="constellation-stage"
+      data-visible-evidence={evidenceIds(display)}
       data-mode={props.mode}
       data-phase="overview"
       data-yaw={cam.yaw.toFixed(3)}
