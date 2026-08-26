@@ -90,11 +90,31 @@ describe('CompatibilityView', () => {
     expect(screen.queryByText('喜欢黑咖啡')).toBeNull();
   });
 
+  it('owns a vertical scroll region for dense structure on wide and narrow hosts', () => {
+    const plan = deriveOverviewPresentation(projection, { expandedTopicIds: [] });
+    const { rerender } = render(
+      <div style={{ width: 1280, height: 720 }}>
+        <CompatibilityView plan={plan} selectedId={null} onSelect={vi.fn()} />
+      </div>,
+    );
+    const scroll = screen.getByTestId('memory-compatibility-scroll');
+    expect(scroll).toHaveAttribute('data-overflow', 'vertical');
+    expect(scroll).toHaveStyle({ overflowY: 'auto', minHeight: '0px', maxHeight: '100%' });
+    rerender(
+      <div style={{ width: 504, height: 900 }}>
+        <CompatibilityView plan={plan} selectedId={null} onSelect={vi.fn()} />
+      </div>,
+    );
+    expect(screen.getByTestId('memory-compatibility-scroll')).toHaveAttribute('data-overflow', 'vertical');
+    expect(screen.getByTestId('memory-compatibility-scroll')).toHaveStyle({ overflowY: 'auto' });
+  });
+
   it('locates a selected child that sits outside the representative subset', () => {
     const dense = denseProjection();
     const plan = deriveOverviewPresentation(dense, { expandedTopicIds: ['topic:t1'] });
     expect(plan.topicGroups[0].representativeIds).not.toContain('fact:5');
     expect(plan.topicGroups[0].representativeIds).toHaveLength(3);
+    expect(plan.topicGroups[0].admittedChildIds).toContain('fact:5');
     render(
       <CompatibilityView
         plan={plan}
@@ -342,8 +362,8 @@ describe('CompatibilityView', () => {
     const view = render(
       <CompatibilityView plan={collapsed} selectedId={null} focusedId={null} onSelect={vi.fn()} />,
     );
-    expect(screen.getByRole('button', { name: '上下文 咖啡' })).toHaveAttribute('aria-expanded', 'false');
-    expect(screen.queryByRole('button', { name: '喜欢黑咖啡' })).toBeNull();
+    expect(screen.getByRole('button', { name: '上下文 咖啡' })).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.queryByText('喜欢黑咖啡')).toBeNull();
 
     view.rerender(
       <CompatibilityView plan={collapsed} selectedId="fact:1" focusedId="fact:1" onSelect={vi.fn()} />,

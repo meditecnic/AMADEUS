@@ -225,6 +225,7 @@
   position: relative;
   min-height: 0;
   height: 100%;
+  overflow: hidden;
 }
 .memory-space-list,
 .memory-inspector,
@@ -290,6 +291,15 @@
   display: grid;
   gap: 10px;
   justify-items: start;
+  align-content: start;
+  flex: 1 1 0;
+  min-height: 0;
+  max-height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 32px;
+  box-sizing: border-box;
 }
 .memory-compatibility-tree button {
   background: transparent;
@@ -344,7 +354,7 @@
   .memory-space[data-narrow-sheet]:not([data-narrow-sheet="none"]):not([data-narrow-sheet="tools"]) .memory-compatibility {
     position: fixed;
     inset: 56px 8px 46vh;
-    overflow: auto;
+    overflow: hidden;
   }
   /* Keep status/truncation above the 42vh sheet, never over options. */
   .memory-space[data-narrow-sheet]:not([data-narrow-sheet="none"]):not([data-narrow-sheet="tools"]) .memory-space-truncation {
@@ -402,11 +412,13 @@
 }
 .memory-compatibility {
   position: absolute;
-  inset: 48px 16px 16px;
+  inset: 48px 16px 48px;
   z-index: 3;
-  display: grid;
-  align-content: start;
-  justify-items: center;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
 }
 .memory-compatibility-label,
 .memory-space-truncation {

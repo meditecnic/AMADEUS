@@ -169,6 +169,7 @@ describe('R0 overview reconstruction', () => {
     expect(opened.some((node) => node.id === 'fact:2')).toBe(false);
     expect(openTopicBranch('topic:t1', [])).toEqual(['topic:t1']);
     expect(openTopicBranch('topic:t1', ['topic:t1'])).toEqual(['topic:t1']);
+    expect(openTopicBranch('topic:t2', ['topic:t1'])).toEqual(['topic:t2']);
     const searched = visibleDisplayNodes(display, projection.edges, {
       overviewOpen: true,
       expandedTopicIds: [],
@@ -347,6 +348,21 @@ describe('R0 overview reconstruction', () => {
     expect(emphasisMode(input)).toBe('focus');
     expect(nodeWeight('topic:t1', input)).toBeGreaterThan(nodeWeight('topic:t3', input));
     expect(nodeWeight('fact:1', input)).toBeGreaterThan(nodeWeight('fact:2', input));
+    expect(nodeWeight('topic:t3', input)).toBeGreaterThan(0.5);
+    const soulHover = {
+      ...input,
+      hoverId: 'hub:continuity:s:steins_gate:okabe' as string | null,
+      selectedId: null as string | null,
+    };
+    expect(nodeWeight('topic:t1', soulHover)).toBeGreaterThan(0.3);
+    expect(nodeWeight('topic:t1', soulHover)).toBeGreaterThanOrEqual(nodeWeight('fact:2', soulHover));
+    const selectedAndHover = {
+      ...input,
+      selectedId: 'topic:t1' as string | null,
+      hoverId: 'topic:t3' as string | null,
+    };
+    expect(nodeWeight('topic:t3', selectedAndHover)).toBeGreaterThan(nodeWeight('fact:2', selectedAndHover));
+    expect(nodeWeight('topic:t1', selectedAndHover)).toBeGreaterThan(0.7);
     const soulHood = neighborhoodIds('hub:continuity:s:steins_gate:okabe', projection.edges, display);
     expect([...soulHood]).toEqual(['hub:continuity:s:steins_gate:okabe']);
     const soulPaths = visibleOverviewPaths({

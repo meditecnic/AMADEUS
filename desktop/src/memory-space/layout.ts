@@ -148,6 +148,81 @@ export function layoutProjection(projection: MemoryProjection): DisplayNode[] {
   });
 }
 
+export const OVERVIEW_FOV_DEG = 42;
+const OVERVIEW_FOV_RAD = (OVERVIEW_FOV_DEG * Math.PI) / 180;
+
+export function overviewFocalPx(height: number): number {
+  return (height / 2) / Math.tan(OVERVIEW_FOV_RAD / 2);
+}
+
+export type OrbitPose = {
+  pivot: Point3;
+  azimuth: number;
+  elevation: number;
+  radius: number;
+  aimPoint: Point3;
+};
+
+export type OrbitCamera = {
+  yaw: number;
+  pitch: number;
+  distance: number;
+  lookAt: Point3;
+};
+
+export function cameraWorldPosition(camera: OrbitCamera): Point3 {
+  const cp = Math.cos(camera.pitch);
+  const sp = Math.sin(camera.pitch);
+  return {
+    x: camera.lookAt.x - camera.distance * cp * Math.sin(camera.yaw),
+    y: camera.lookAt.y - camera.distance * sp,
+    z: camera.lookAt.z - camera.distance * cp * Math.cos(camera.yaw),
+  };
+}
+
+export function worldFromOrbitPose(pose: OrbitPose): Point3 {
+  const cp = Math.cos(pose.elevation);
+  const sp = Math.sin(pose.elevation);
+  return {
+    x: pose.pivot.x - pose.radius * cp * Math.sin(pose.azimuth),
+    y: pose.pivot.y - pose.radius * sp,
+    z: pose.pivot.z - pose.radius * cp * Math.cos(pose.azimuth),
+  };
+}
+
+export function orbitPoseFromWorld(world: Point3, pivot: Point3, aimPoint: Point3): OrbitPose {
+  const rx = pivot.x - world.x;
+  const ry = pivot.y - world.y;
+  const rz = pivot.z - world.z;
+  const radius = Math.max(1e-4, Math.hypot(rx, ry, rz));
+  return {
+    pivot: { x: pivot.x, y: pivot.y, z: pivot.z },
+    azimuth: Math.atan2(rx, rz),
+    elevation: Math.asin(Math.max(-0.999, Math.min(0.999, ry / radius))),
+    radius,
+    aimPoint: { x: aimPoint.x, y: aimPoint.y, z: aimPoint.z },
+  };
+}
+
+export function orbitPoseFromCamera(camera: OrbitCamera, pivot: Point3, aimPoint: Point3): OrbitPose {
+  return orbitPoseFromWorld(cameraWorldPosition(camera), pivot, aimPoint);
+}
+
+export function cameraFromOrbitPose(pose: OrbitPose): OrbitCamera {
+  const world = worldFromOrbitPose(pose);
+  const lookAt = pose.aimPoint;
+  const relX = lookAt.x - world.x;
+  const relY = lookAt.y - world.y;
+  const relZ = lookAt.z - world.z;
+  const distance = Math.max(1e-4, Math.hypot(relX, relY, relZ));
+  return {
+    yaw: Math.atan2(relX, relZ),
+    pitch: Math.asin(Math.max(-0.999, Math.min(0.999, relY / distance))),
+    distance,
+    lookAt: { x: lookAt.x, y: lookAt.y, z: lookAt.z },
+  };
+}
+
 export function projectToScreen(
   point: Point3,
   width: number,
@@ -157,23 +232,26 @@ export function projectToScreen(
   distance: number,
   lookAt: Point3,
 ): { x: number; y: number; depth: number } {
-  const cosY = Math.cos(yaw);
-  const sinY = Math.sin(yaw);
-  const cosP = Math.cos(pitch);
-  const sinP = Math.sin(pitch);
-  const dx = point.x - lookAt.x;
-  const dy = point.y - lookAt.y;
-  const dz = point.z - lookAt.z;
-  const x1 = dx * cosY - dz * sinY;
-  const z1 = dx * sinY + dz * cosY;
-  const y1 = dy * cosP - z1 * sinP;
-  const z2 = dy * sinP + z1 * cosP + distance;
-  const fov = 520;
-  const scale = fov / Math.max(0.35, z2);
+  const cy = Math.cos(yaw);
+  const sy = Math.sin(yaw);
+  const cp = Math.cos(pitch);
+  const sp = Math.sin(pitch);
+  const px = point.x - lookAt.x + distance * cp * sy;
+  const py = point.y - lookAt.y + distance * sp;
+  const pz = point.z - lookAt.z + distance * cp * cy;
+  const xCam = -px * cy + pz * sy;
+  const yCam = -px * sp * sy + py * cp - pz * sp * cy;
+  const zCam = -px * cp * sy - py * sp - pz * cp * cy;
+  const depth = -zCam;
+  const focal = 1 / Math.tan(OVERVIEW_FOV_RAD / 2);
+  const aspect = Math.max(1e-6, width / Math.max(1e-6, height));
+  const denom = Math.max(1e-6, depth);
+  const xNdc = (focal * xCam) / (aspect * denom);
+  const yNdc = (focal * yCam) / denom;
   return {
-    x: width / 2 + x1 * scale,
-    y: height / 2 - y1 * scale,
-    depth: z2,
+    x: (xNdc * 0.5 + 0.5) * width,
+    y: (0.5 - yNdc * 0.5) * height,
+    depth,
   };
 }
 
@@ -193,9 +271,13 @@ export function pickDisplayNode(
       node,
       screen: projectToScreen(node.position, width, height, yaw, pitch, distance, lookAt),
     }))
+    .filter((item) => item.screen.depth > 0)
     .sort((a, b) => a.screen.depth - b.screen.depth);
   for (const item of projected) {
-    const hit = Math.max(10, item.node.radius * (520 / Math.max(0.35, item.screen.depth)));
+    const hit = Math.max(
+      10,
+      item.node.radius * (overviewFocalPx(height) / Math.max(0.35, item.screen.depth)),
+    );
     const dx = screenX - item.screen.x;
     const dy = screenY - item.screen.y;
     if (dx * dx + dy * dy <= hit * hit) return item.node;

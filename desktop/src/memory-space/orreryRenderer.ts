@@ -6,14 +6,13 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 
 import { nodeWeight, type EmphasisInput } from './emphasis';
 import {
-  branchReveal,
-  evidenceParentId,
-  filamentPrefix,
   soulLockupLines,
   soulMarkOffset,
   visibleOverviewPaths,
   type GraphPath,
 } from './graphPaths';
+import { OVERVIEW_FOV_DEG } from './layout';
+import { pickLiveNode, type OverviewFrame } from './overviewMotion';
 import { worldlinePalette, type OrreryPalette } from './palette';
 import type { DisplayNode, MemoryProjection, Point3, Worldline } from './types';
 
@@ -130,7 +129,7 @@ export class OrreryRuntime {
   private composer: EffectComposer | null = null;
   private bloom: UnrealBloomPass | null = null;
   private readonly scene = new THREE.Scene();
-  private readonly camera = new THREE.PerspectiveCamera(42, 1, 0.08, 40);
+  private readonly camera = new THREE.PerspectiveCamera(OVERVIEW_FOV_DEG, 1, 0.08, 40);
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
   private readonly nodeGroup = new THREE.Group();
@@ -142,6 +141,18 @@ export class OrreryRuntime {
   private readonly nodes = new Map<string, THREE.Object3D>();
   private readonly labels = new Map<string, THREE.Sprite>();
   private readonly pathLines: Array<{ line: THREE.Line; path: GraphPath }> = [];
+  private readonly edgeLines = new Map<string, THREE.Line>();
+  readonly allocationStats = {
+    rebuildGraph: 0,
+    nodeBuilds: 0,
+    nodeDisposals: 0,
+    edgeCreates: 0,
+    edgeDisposals: 0,
+    labelTextureBuilds: 0,
+  };
+  private liveDriven = false;
+  private emphasisDirty = true;
+  private readonly labelLooks = new Map<string, { text: string; hot: boolean }>();
   private soulHit: THREE.Mesh | null = null;
   private soulWord: THREE.Sprite | null = null;
   private soulCore: THREE.Mesh | null = null;
@@ -153,14 +164,17 @@ export class OrreryRuntime {
   private query = '';
   private resultIds: string[] = [];
   private expanded = false;
-  private branchProgress = new Map<string, number>();
   private soulRadius = 0.5;
   private worldline: Worldline = 'steins_gate';
   private palette = worldlinePalette('steins_gate');
   private reducedMotion = false;
+  private ambientPaused = false;
   private width = 1;
   private height = 1;
   private disposed = false;
+  private liveFrame: OverviewFrame | null = null;
+  private ambientElapsed = 0;
+  private ambientClockMs: number | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.supported = canWebGL(canvas);
@@ -205,11 +219,11 @@ export class OrreryRuntime {
   }
 
   setSize(width: number, height: number): void {
-    if (!this.renderer || !this.composer) return;
     this.width = Math.max(1, width);
     this.height = Math.max(1, height);
     this.camera.aspect = this.width / this.height;
     this.camera.updateProjectionMatrix();
+    if (!this.renderer || !this.composer) return;
     this.renderer.setSize(this.width, this.height, false);
     this.composer.setSize(this.width, this.height);
   }
@@ -219,11 +233,36 @@ export class OrreryRuntime {
     this.worldline = worldline;
     this.palette = worldlinePalette(worldline);
     this.applyPalette();
-    this.rebuildGraph();
+    if (!this.liveDriven) this.rebuildGraph();
+    else this.emphasisDirty = true;
   }
 
   setReducedMotion(value: boolean): void {
     this.reducedMotion = value;
+  }
+
+  setAmbientPaused(
+    value: boolean,
+    nowMs = typeof performance !== 'undefined' ? performance.now() : 0,
+  ): void {
+    if (value === this.ambientPaused) return;
+    this.syncAmbientClock(nowMs);
+    this.ambientPaused = value;
+  }
+
+  get ambientElapsedMs(): number {
+    return this.ambientElapsed;
+  }
+
+  syncAmbientClock(nowMs: number): void {
+    if (this.ambientPaused || this.reducedMotion) {
+      this.ambientClockMs = nowMs;
+      return;
+    }
+    if (this.ambientClockMs !== null) {
+      this.ambientElapsed += Math.max(0, nowMs - this.ambientClockMs);
+    }
+    this.ambientClockMs = nowMs;
   }
 
   setDecoration(level: 'full' | 'reduced'): void {
@@ -239,25 +278,30 @@ export class OrreryRuntime {
     this.display = display;
     this.edges = edges;
     this.resultIds = resultIds;
-    this.rebuildGraph();
+    if (!this.liveDriven) this.rebuildGraph();
   }
 
   setSelected(id: string | null): void {
     if (this.selectedId === id) return;
     this.selectedId = id;
-    this.syncVisiblePaths();
+    this.emphasisDirty = true;
+    if (!this.liveDriven) this.syncVisiblePaths();
+    else this.flushEmphasis();
   }
 
   setHover(id: string | null): void {
     if (this.hoverId === id) return;
     this.hoverId = id;
-    this.syncVisiblePaths();
+    this.emphasisDirty = true;
+    if (!this.liveDriven) this.syncVisiblePaths();
+    else this.flushEmphasis();
   }
 
   setQuery(query: string): void {
     if (this.query === query) return;
     this.query = query;
-    this.applyEmphasis();
+    this.emphasisDirty = true;
+    this.flushEmphasis();
   }
 
   visiblePaths(): GraphPath[] {
@@ -267,18 +311,38 @@ export class OrreryRuntime {
   setExpanded(expanded: boolean): void {
     if (this.expanded === expanded) return;
     this.expanded = expanded;
-    this.rebuildGraph();
+    if (!this.liveDriven) this.rebuildGraph();
   }
 
-  setBranchProgress(progress: Readonly<Record<string, number>>): void {
-    this.branchProgress = new Map(Object.entries(progress));
+  applyFrame(frame: OverviewFrame, display?: DisplayNode[]): void {
+    this.liveDriven = true;
+    this.liveFrame = frame;
+    if (display) this.display = display;
+    this.reconcileLiveNodes(frame);
+    this.reconcileLiveEdges(frame);
+    for (const [id, object] of this.nodes) {
+      const live = frame.nodes.get(id);
+      if (!live) {
+        object.visible = false;
+        continue;
+      }
+      object.visible = true;
+      object.position.set(live.position.x, live.position.y, live.position.z);
+      const label = this.labels.get(id);
+      if (label) label.position.set(live.position.x, live.position.y + 0.14, live.position.z);
+    }
+    this.syncCameraFromFrame(frame);
+    this.flushEmphasis();
   }
 
   render(cam: OrreryCamera): void {
     if (!this.renderer || this.disposed) return;
-    const pos = cameraWorld(cam);
-    this.camera.position.copy(pos);
-    this.camera.lookAt(cam.lookAt.x, cam.lookAt.y, cam.lookAt.z);
+    if (this.liveFrame) this.syncCameraFromFrame(this.liveFrame);
+    else {
+      const pos = cameraWorld(cam);
+      this.camera.position.copy(pos);
+      this.camera.lookAt(cam.lookAt.x, cam.lookAt.y, cam.lookAt.z);
+    }
     if (this.soulWord) {
       const mark = soulMarkOffset(
         { x: this.camera.position.x, y: this.camera.position.y, z: this.camera.position.z },
@@ -286,11 +350,22 @@ export class OrreryRuntime {
       );
       this.soulWord.position.set(mark.x, mark.y, mark.z);
     }
-    this.applyBranchReveal();
-    if (this.soulCore && !this.reducedMotion) {
+    if (!this.liveFrame) this.applyBranchReveal();
+    this.syncAmbientClock(typeof performance !== 'undefined' ? performance.now() : 0);
+    const t = this.ambientElapsed * 0.001;
+    if (this.soulCore && !this.reducedMotion && !this.ambientPaused) {
       const material = this.soulCore.material as THREE.MeshStandardMaterial;
-      const t = performance.now() * 0.001;
-      material.emissiveIntensity = 0.26 + Math.sin(t * 0.65) * 0.05;
+      material.emissiveIntensity = 0.2 + Math.sin(t * 0.31) * 0.015;
+    }
+    if (!this.reducedMotion && !this.ambientPaused) {
+      this.pathLines.forEach(({ line }, index) => {
+        const material = line.material as THREE.LineBasicMaterial;
+        if (!material || Array.isArray(material)) return;
+        const base = typeof material.userData.baseOpacity === 'number' ? material.userData.baseOpacity : material.opacity;
+        material.userData.baseOpacity = base;
+        const pulse = 1 + Math.sin(t * 0.17 + index * 0.9) * 0.018;
+        material.opacity = Math.max(0.04, Math.min(0.9, base * pulse));
+      });
     }
     this.soulGroup.scale.setScalar(this.expanded ? 1 : 1.18);
     if (this.composer) this.composer.render();
@@ -298,6 +373,14 @@ export class OrreryRuntime {
   }
 
   pick(clientX: number, clientY: number, rect: DOMRect): string | null {
+    const frame = this.liveFrame;
+    if (frame && this.width >= 64 && rect.width >= 64) {
+      this.syncCameraFromFrame(frame);
+      const viewport = frame.viewport ?? { x: 0, y: 0, width: this.width, height: this.height };
+      const x = ((clientX - rect.left) / Math.max(1, rect.width)) * Math.max(1, viewport.width);
+      const y = ((clientY - rect.top) / Math.max(1, rect.height)) * Math.max(1, viewport.height);
+      return pickLiveNode(frame, x, y);
+    }
     if (!this.supported) return null;
     this.pointer.x = ((clientX - rect.left) / Math.max(1, rect.width)) * 2 - 1;
     this.pointer.y = -((clientY - rect.top) / Math.max(1, rect.height)) * 2 + 1;
@@ -313,13 +396,23 @@ export class OrreryRuntime {
   }
 
   project(id: string): { x: number; y: number } | null {
-    const node = this.display.find((item) => item.id === id);
-    if (!node) return null;
-    const vector = new THREE.Vector3(
-      node.position.x,
-      node.position.y + node.radius * 0.2,
-      node.position.z,
-    ).project(this.camera);
+    const frame = this.liveFrame;
+    if (frame) {
+      this.syncCameraFromFrame(frame);
+      const projected = frame.projected.get(id);
+      if (projected) {
+        const viewport = frame.viewport ?? { x: 0, y: 0, width: this.width, height: this.height };
+        return {
+          x: projected.x * this.width / Math.max(1, viewport.width),
+          y: projected.y * this.height / Math.max(1, viewport.height),
+        };
+      }
+    }
+    const live = frame?.nodes.get(id)?.position
+      ?? this.nodes.get(id)?.position
+      ?? this.display.find((item) => item.id === id)?.position;
+    if (!live) return null;
+    const vector = new THREE.Vector3(live.x, live.y, live.z).project(this.camera);
     return {
       x: (vector.x * 0.5 + 0.5) * this.width,
       y: (-vector.y * 0.5 + 0.5) * this.height,
@@ -370,7 +463,143 @@ export class OrreryRuntime {
     });
   }
 
+  private disposeObject(object: THREE.Object3D): void {
+    object.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      mesh.geometry?.dispose?.();
+      const material = mesh.material;
+      if (Array.isArray(material)) material.forEach((item) => item.dispose());
+      else if (material) {
+        const sprite = material as THREE.SpriteMaterial;
+        sprite.map?.dispose?.();
+        material.dispose();
+      }
+    });
+  }
+
+  private syncCameraFromFrame(frame: OverviewFrame): void {
+    this.camera.aspect = Math.max(1, this.width) / Math.max(1, this.height);
+    this.camera.updateProjectionMatrix();
+    const pos = cameraWorld({
+      yaw: frame.camera.yaw,
+      pitch: frame.camera.pitch,
+      distance: frame.camera.distance,
+      lookAt: { x: frame.camera.lookAt.x, y: frame.camera.lookAt.y, z: frame.camera.lookAt.z },
+      mode: '3d',
+    });
+    this.camera.position.copy(pos);
+    this.camera.lookAt(frame.camera.lookAt.x, frame.camera.lookAt.y, frame.camera.lookAt.z);
+    this.camera.updateMatrixWorld(true);
+  }
+
+  private flushEmphasis(): void {
+    if (!this.emphasisDirty) return;
+    this.applyEmphasis();
+    this.emphasisDirty = false;
+  }
+
+  private reconcileLiveNodes(frame: OverviewFrame): void {
+    const keep = new Set(frame.nodes.keys());
+    for (const [id, object] of [...this.nodes]) {
+      if (keep.has(id)) continue;
+      this.nodeGroup.remove(object);
+      this.disposeObject(object);
+      this.nodes.delete(id);
+      const label = this.labels.get(id);
+      if (label) {
+        this.nodeGroup.remove(label);
+        this.disposeObject(label);
+        this.labels.delete(id);
+      }
+      this.labelLooks.delete(id);
+      this.allocationStats.nodeDisposals += 1;
+      this.emphasisDirty = true;
+    }
+    const byDisplay = new Map(this.display.map((node) => [node.id, node]));
+    for (const [id, live] of frame.nodes) {
+      if (live.kind === 'continuity_hub' || this.nodes.has(id)) continue;
+      const display = byDisplay.get(id) ?? {
+        id,
+        kind: live.kind,
+        label: id,
+        radius: live.hitRadius,
+        position: { x: live.position.x, y: live.position.y, z: live.position.z },
+        node: { kind: live.kind, projection_id: id, label: id } as DisplayNode['node'],
+      };
+      const mesh = this.buildNode({ ...display, position: { ...live.position }, radius: live.hitRadius });
+      this.nodeGroup.add(mesh);
+      this.nodes.set(id, mesh);
+      if (live.kind === 'topic') {
+        const label = this.buildLabel(display.label, false);
+        label.position.set(live.position.x, live.position.y + 0.14, live.position.z);
+        this.nodeGroup.add(label);
+        this.labels.set(id, label);
+        this.labelLooks.set(id, { text: display.label, hot: false });
+        this.allocationStats.labelTextureBuilds += 1;
+      }
+      this.allocationStats.nodeBuilds += 1;
+      this.emphasisDirty = true;
+    }
+  }
+
+  private edgeKey(from: string, to: string, kind: string): string {
+    return `${kind}:${from}:${to}`;
+  }
+
+  private updateLinePoints(line: THREE.Line, points: readonly { x: number; y: number; z: number }[]): void {
+    const positions = line.geometry.getAttribute('position');
+    if (!positions || positions.count !== points.length) {
+      line.geometry.dispose();
+      line.geometry = new THREE.BufferGeometry().setFromPoints(points.map((point) => new THREE.Vector3(point.x, point.y, point.z)));
+      return;
+    }
+    for (let i = 0; i < points.length; i += 1) {
+      positions.setXYZ(i, points[i].x, points[i].y, points[i].z);
+    }
+    positions.needsUpdate = true;
+  }
+
+  private reconcileLiveEdges(frame: OverviewFrame): void {
+    const keep = new Set(frame.edges.map((edge) => this.edgeKey(edge.from, edge.to, edge.kind)));
+    for (const [key, line] of [...this.edgeLines]) {
+      if (keep.has(key)) continue;
+      this.pathGroup.remove(line);
+      this.disposeObject(line);
+      this.edgeLines.delete(key);
+      this.allocationStats.edgeDisposals += 1;
+      this.emphasisDirty = true;
+    }
+    this.pathLines.length = 0;
+    for (const edge of frame.edges) {
+      const key = this.edgeKey(edge.from, edge.to, edge.kind);
+      let line = this.edgeLines.get(key);
+      if (!line) {
+        const color = edge.kind === 'has_topic' ? this.palette.signal : this.palette.accent;
+        line = lineFromPoints([...edge.points], color, edge.kind === 'has_topic' ? 0.34 : 0.38, false);
+        line.userData.class = 'typed_relation';
+        line.userData.kind = edge.kind;
+        this.pathGroup.add(line);
+        this.edgeLines.set(key, line);
+        this.allocationStats.edgeCreates += 1;
+        this.emphasisDirty = true;
+      } else {
+        this.updateLinePoints(line, edge.points);
+      }
+      this.pathLines.push({
+        line,
+        path: {
+          class: 'typed_relation',
+          kind: edge.kind as GraphPath['kind'],
+          from: edge.from,
+          to: edge.to,
+          points: [...edge.points],
+        },
+      });
+    }
+  }
+
   private rebuildGraph(): void {
+    this.allocationStats.rebuildGraph += 1;
     const hub = this.display.find((node) => node.kind === 'continuity_hub');
     if (this.soulHit && hub) this.soulHit.userData.nodeId = hub.id;
     if (this.soulWord && hub && hub.node.kind === 'continuity_hub') {
@@ -388,6 +617,8 @@ export class OrreryRuntime {
       material.dispose();
     });
     this.labels.clear();
+    this.labelLooks.clear();
+    this.emphasisDirty = true;
     this.syncVisiblePaths();
 
     if (!this.expanded) {
@@ -456,34 +687,7 @@ export class OrreryRuntime {
   }
 
   private applyBranchReveal(): void {
-    const byId = new Map(this.display.map((node) => [node.id, node]));
-    for (const [id, object] of this.nodes) {
-      const node = byId.get(id);
-      if (!node || (node.kind !== 'fact' && node.kind !== 'experience')) continue;
-      const parent = evidenceParentId(id, this.edges);
-      const topic = parent ? byId.get(parent) : undefined;
-      const rest = (object.userData.rest as Point3 | undefined) ?? node.position;
-      const progress = parent ? (this.branchProgress.get(parent) ?? 0) : 1;
-      const next = topic ? branchReveal(progress, topic.position, rest) : rest;
-      object.position.set(next.x, next.y, next.z);
-      object.visible = progress > 0.03;
-      object.traverse((child) => {
-        const mesh = child as THREE.Mesh;
-        const material = mesh.material as THREE.MeshStandardMaterial | undefined;
-        if (material && 'opacity' in material) material.opacity = Math.max(0.08, progress);
-      });
-    }
-    for (const { line, path } of this.pathLines) {
-      if (path.kind !== 'has_topic' || !path.to) continue;
-      const progress = this.branchProgress.get(path.to) ?? 0;
-      const pts = filamentPrefix(path.points, progress);
-      line.geometry.dispose();
-      line.geometry = new THREE.BufferGeometry().setFromPoints(
-        pts.map((point) => new THREE.Vector3(point.x, point.y, point.z)),
-      );
-      const material = line.material as THREE.LineBasicMaterial;
-      material.opacity = 0.12 + progress * 0.4;
-    }
+    /* Live geometry is owned by OverviewFrame; rest-polyline prefix is retired. */
   }
 
   private emphasisInput(): EmphasisInput {
@@ -517,9 +721,15 @@ export class OrreryRuntime {
       const label = this.labels.get(id);
       if (label) {
         const material = label.material as THREE.SpriteMaterial;
-        material.map?.dispose();
         const node = this.display.find((item) => item.id === id);
-        material.map = makeLabelTexture(node?.label ?? '', hot || weight > 0.8, this.palette);
+        const look = { text: node?.label ?? '', hot: hot || weight > 0.8 };
+        const prev = this.labelLooks.get(id);
+        if (!prev || prev.text !== look.text || prev.hot !== look.hot) {
+          material.map?.dispose();
+          material.map = makeLabelTexture(look.text, look.hot, this.palette);
+          this.labelLooks.set(id, look);
+          this.allocationStats.labelTextureBuilds += 1;
+        }
         material.opacity = 0.16 + weight * 0.8;
         material.needsUpdate = true;
       }
@@ -531,7 +741,7 @@ export class OrreryRuntime {
         continue;
       }
       if (path.class === 'field_belt') {
-        material.opacity = this.selectedId || this.hoverId ? 0.12 : 0.26;
+        material.opacity = this.selectedId ? 0.12 : this.hoverId ? 0.22 : 0.26;
         continue;
       }
       const involved =
@@ -545,11 +755,15 @@ export class OrreryRuntime {
       if (!this.selectedId && !this.hoverId) {
         material.opacity =
           path.kind === 'has_topic' ? 0.32 : path.kind === 'hub_to_evidence' ? 0.12 : 0.2;
+      } else if (!this.selectedId && this.hoverId) {
+        material.opacity = involved
+          ? 0.42
+          : path.kind === 'has_topic' ? 0.28 : path.kind === 'hub_to_evidence' ? 0.12 : 0.18;
       } else if (soulFocus) {
         material.opacity =
           path.kind === 'hub_to_anchor' ? 0.16 : path.kind === 'has_topic' ? 0.14 : 0.08;
       } else {
-        material.opacity = involved ? 0.78 : path.kind === 'hub_to_anchor' ? 0.06 : 0.05;
+        material.opacity = involved ? 0.78 : path.kind === 'hub_to_anchor' ? 0.12 : 0.1;
       }
     }
   }

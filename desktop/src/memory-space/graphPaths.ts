@@ -45,8 +45,9 @@ export function visibleDisplayNodes(
   });
 }
 
-export function openTopicBranch(topicId: string, current: readonly string[]): string[] {
-  return current.includes(topicId) ? [...current] : [...current, topicId];
+export function openTopicBranch(topicId: string, current: readonly string[] = []): string[] {
+  if (current.length === 1 && current[0] === topicId) return [...current];
+  return [topicId];
 }
 
 export const SOUL_MARK_LIFT = 0.1;

@@ -100,6 +100,16 @@ describe('deriveOverviewPresentation', () => {
     expect(plan.envelope).toBe(projection);
   });
 
+  it('keeps ungrouped evidence in LIST identity without stacking it on rest Overview', () => {
+    const projection = envelope();
+    const rest = deriveOverviewPresentation(projection, { expandedTopicIds: [] });
+    expect(rest.ungroupedIds).toContain('exp:u');
+    expect(rest.visualPlan.visibleEvidenceIds).not.toContain('exp:u');
+    expect(rest.primaryResults.some((row) => row.id === 'exp:u' || rest.ungroupedIds.includes('exp:u'))).toBe(true);
+    const focused = deriveOverviewPresentation(projection, { expandedTopicIds: [], selectedId: 'exp:u' });
+    expect(focused.visualPlan.visibleEvidenceIds).toContain('exp:u');
+  });
+
   it('separates supporting context from primary results and does not count them as results', () => {
     const projection = envelope();
     const plan = deriveOverviewPresentation(projection, { expandedTopicIds: [] });

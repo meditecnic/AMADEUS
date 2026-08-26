@@ -45,6 +45,10 @@ export function neighborhoodIds(
   return ids;
 }
 
+function kindOf(nodeId: string, nodes: readonly DisplayNode[]): DisplayNode['kind'] | undefined {
+  return nodes.find((node) => node.id === nodeId)?.kind;
+}
+
 export function nodeWeight(nodeId: string, input: EmphasisInput): number {
   const mode = emphasisMode(input);
   if (mode === 'rest') return 0.35;
@@ -52,10 +56,32 @@ export function nodeWeight(nodeId: string, input: EmphasisInput): number {
     const hits = searchHitIds(input.query, input.resultIds);
     return hits.includes(nodeId) ? 1 : 0.12;
   }
-  const focus = input.selectedId ?? input.hoverId;
-  if (!focus) return 0.35;
-  const hood = neighborhoodIds(focus, input.edges, input.nodes);
-  return hood.has(nodeId) ? 1 : 0.1;
+  const kind = kindOf(nodeId, input.nodes);
+  const selected = input.selectedId;
+  const hover = input.hoverId;
+  if (hover && !selected && kindOf(hover, input.nodes) === 'continuity_hub') {
+    if (nodeId === hover) return 1;
+    if (kind === 'topic' || kind === 'continuity_hub') return 0.62;
+    return 0.52;
+  }
+  const selectedHood = selected ? neighborhoodIds(selected, input.edges, input.nodes) : new Set<string>();
+  if (selected && hover && hover !== selected) {
+    if (nodeId === selected) return 1;
+    if (nodeId === hover) return 0.92;
+    if (selectedHood.has(nodeId)) return 0.78;
+    if (kind === 'topic' || kind === 'continuity_hub') return 0.48;
+    return 0.28;
+  }
+  if (selected) {
+    const hood = neighborhoodIds(selected, input.edges, input.nodes);
+    if (hood.has(nodeId)) return nodeId === selected ? 1 : 0.82;
+    if (kind === 'topic' || kind === 'continuity_hub') return 0.48;
+    return 0.28;
+  }
+  const hood = neighborhoodIds(hover ?? '', input.edges, input.nodes);
+  if (hover && hood.has(nodeId)) return nodeId === hover ? 1 : 0.78;
+  if (kind === 'topic' || kind === 'continuity_hub') return 0.62;
+  return 0.52;
 }
 
 export function pathInNeighborhood(

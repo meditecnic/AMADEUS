@@ -200,10 +200,11 @@ export function deriveOverviewPresentation(
   if (disclosure.selectedId) captionIds.push(disclosure.selectedId);
   if (disclosure.focusedId) captionIds.push(disclosure.focusedId);
 
+  const query = disclosure.query?.trim() ?? '';
   const visibleEvidenceIds = [
     ...topicGroups.flatMap((group) => group.representativeIds),
-    ...ungroupedIds,
   ];
+  if (query) visibleEvidenceIds.push(...ungroupedIds);
   if (disclosure.selectedId) visibleEvidenceIds.push(disclosure.selectedId);
   if (disclosure.focusedId) visibleEvidenceIds.push(disclosure.focusedId);
 

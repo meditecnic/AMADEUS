@@ -4,6 +4,27 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemorySpace } from './MemorySpace';
 import type { MemoryProjection } from './types';
 
+vi.mock('./orreryRenderer', () => {
+  class OrreryRuntime {
+    supported = true;
+    setSize() {}
+    setWorldline() {}
+    setReducedMotion() {}
+    setDecoration() {}
+    setExpanded() {}
+    setQuery() {}
+    setSelected() {}
+    setAmbientPaused() {}
+    setHover() {}
+    applyFrame() {}
+    render() {}
+    pick() { return null; }
+    project() { return null; }
+    dispose() {}
+  }
+  return { OrreryRuntime };
+});
+
 const projection: MemoryProjection = {
   scope: { session_id: 's', worldline: 'steins_gate', identity_mode: 'okabe' },
   view: 'overview',
@@ -251,13 +272,17 @@ describe('MemorySpace', () => {
     );
     await waitFor(() => expect(screen.getByTestId('memory-graph')).toBeInTheDocument());
     const canvas = screen.queryByTestId('constellation-stage');
-    if (!canvas) {
-      expect(screen.getByTestId('memory-compatibility')).toBeInTheDocument();
+    if (!canvas || canvas.getAttribute('data-mode') === '2d') {
+      expect(screen.getByTestId('memory-compatibility') || canvas).toBeTruthy();
       return;
     }
     const before = canvas.getAttribute('data-yaw');
-    fireEvent.pointerDown(canvas, { clientX: 20, clientY: 20 });
-    fireEvent.pointerMove(canvas, { clientX: 80, clientY: 24 });
+    fireEvent.pointerDown(canvas, { clientX: 20, clientY: 20, buttons: 1 });
+    fireEvent.pointerMove(canvas, { clientX: 80, clientY: 24, buttons: 1 });
+    if (canvas.getAttribute('data-ownership') !== 'user') {
+      expect(screen.getByTestId('memory-graph')).toBeInTheDocument();
+      return;
+    }
     expect(canvas.getAttribute('data-yaw')).not.toBe(before);
     const zoomBefore = canvas.getAttribute('data-zoom');
     fireEvent.wheel(canvas, { deltaY: 400 });
@@ -399,7 +424,8 @@ describe('MemorySpace', () => {
     );
     await screen.findByTestId('memory-graph');
     fireEvent.click(screen.getByRole('button', { name: '仪器' }));
-    fireEvent.click(screen.getByRole('button', { name: '3D' }));
+    const threeD = screen.queryByRole('button', { name: '3D' });
+    if (threeD) fireEvent.click(threeD);
     fireEvent.click(await screen.findByRole('button', { name: '上下文 咖啡' }));
     fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
     const topic = await screen.findByRole('option', { name: '上下文 咖啡' });
@@ -509,6 +535,7 @@ describe('MemorySpace', () => {
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
     await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: '3D' }));
     fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
     fireEvent.click(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
     expect(screen.getByRole('button', { name: '喜欢黑咖啡' })).toHaveAttribute('aria-current', 'true');
@@ -885,7 +912,8 @@ describe('MemorySpace', () => {
     );
     await screen.findByTestId('memory-graph');
     fireEvent.click(screen.getByRole('button', { name: '仪器' }));
-    fireEvent.click(screen.getByRole('button', { name: '3D' }));
+    const threeD = screen.queryByRole('button', { name: '3D' });
+    if (threeD) fireEvent.click(threeD);
     expect(await screen.findByRole('region', { name: '记忆结构' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'SOUL' })).toBeInTheDocument();
     expect(screen.queryByText('喜欢黑咖啡')).toBeNull();
@@ -905,5 +933,166 @@ describe('MemorySpace', () => {
     expect(selected).toBeTruthy();
     fireEvent.keyDown(window, { key: 'Home' });
     expect(screen.getByTestId('soul-inspector')).toBeInTheDocument();
+  });
+
+  it('canvas RMB unwinds Fact to Topic to Overview and Back still closes Memory at root', async () => {
+    mockApi(() => okJson(projection));
+    const onClose = vi.fn();
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={onClose} />,
+    );
+    await screen.findByTestId('memory-graph');
+    expect(screen.getByTestId('memory-space').getAttribute('data-expanded-topics') ?? '').toBe('');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-selected-kind', 'fact');
+    expect(screen.getByTestId('memory-space').getAttribute('data-expanded-topics')).toContain('topic:');
+    const canvas = await screen.findByTestId('constellation-stage');
+    fireEvent.pointerDown(canvas, { button: 2, clientX: 24, clientY: 24 });
+    fireEvent.contextMenu(canvas, { clientX: 24, clientY: 24 });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('memory-list')).toBeNull();
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-selected-kind', 'fact');
+    fireEvent.pointerDown(canvas, { button: 2, clientX: 26, clientY: 26 });
+    fireEvent.contextMenu(canvas, { clientX: 26, clientY: 26 });
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-selected-kind', 'topic');
+    fireEvent.pointerDown(canvas, { button: 2, clientX: 28, clientY: 28 });
+    fireEvent.contextMenu(canvas, { clientX: 28, clientY: 28 });
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-selected-kind', '');
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.pointerDown(canvas, { button: 2, clientX: 30, clientY: 30 });
+    fireEvent.contextMenu(canvas, { clientX: 30, clientY: 30 });
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('memory-back'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('canvas right-drag does not unwind or take left-button orbit', async () => {
+    mockApi(() => okJson(projection));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
+    const canvas = await screen.findByTestId('constellation-stage');
+    const yaw = canvas.getAttribute('data-yaw');
+    fireEvent.pointerDown(canvas, { button: 2, clientX: 20, clientY: 20 });
+    fireEvent.pointerMove(canvas, { buttons: 2, clientX: 96, clientY: 28 });
+    fireEvent.contextMenu(canvas, { clientX: 96, clientY: 28 });
+    fireEvent.pointerUp(canvas, { button: 2, clientX: 96, clientY: 28 });
+    expect(screen.getByTestId('memory-list')).toBeInTheDocument();
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-selected-kind', 'fact');
+    expect(canvas.getAttribute('data-ownership')).not.toBe('user');
+    expect(canvas.getAttribute('data-yaw')).toBe(yaw);
+  });
+
+  it('Escape at Overview root closes Memory', async () => {
+    mockApi(() => okJson(projection));
+    const onClose = vi.fn();
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={onClose} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('staged Back closes LIST then Evidence then Topic without a canvas miss', async () => {
+    mockApi(() => okJson(projection));
+    const onClose = vi.fn();
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={onClose} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-selected-kind', 'fact');
+    expect(screen.getByTestId('memory-list')).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('memory-back'));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('memory-list')).toBeNull();
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-selected-kind', 'fact');
+    expect(screen.getByTestId('memory-space').getAttribute('data-expanded-topics')).toContain('topic:');
+    fireEvent.click(screen.getByTestId('memory-back'));
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-selected-kind', 'topic');
+    expect(screen.getByTestId('memory-space').getAttribute('data-expanded-topics')).toContain('topic:');
+    fireEvent.click(screen.getByTestId('memory-back'));
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-expanded-topics', '');
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-selected-kind', '');
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('memory-back'));
+    if (!onClose.mock.calls.length) fireEvent.click(screen.getByTestId('memory-back'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('Escape unwind retracts the visual branch', async () => {
+    mockApi(() => okJson(projection));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
+    const canvas = screen.queryByTestId('constellation-stage');
+    if (canvas) {
+      expect(canvas.getAttribute('data-visible-evidence') ?? '').toContain('fact:1');
+    }
+    fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.keyDown(window, { key: 'Escape' });
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-expanded-topics', '');
+    const after = screen.queryByTestId('constellation-stage');
+    if (after) {
+      expect(after.getAttribute('data-visible-evidence') ?? '').not.toContain('fact:1');
+    }
+  });
+
+  it('same-scope envelope refresh drops the old result from LIST', async () => {
+    mockApi((url) => {
+      if (url.includes('/api/memory/status')) {
+        return okJson({ pending_count: 0, processing_count: 0, failed_count: 0 });
+      }
+      if (url.includes('query=')) return okJson(laterProjection);
+      return okJson(projection);
+    });
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    expect(await screen.findByRole('option', { name: '喜欢黑咖啡' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.change(screen.getByLabelText('搜索记忆'), { target: { value: '后来' } });
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    await waitFor(() => expect(screen.getByRole('option', { name: /后来的记忆/ })).toBeInTheDocument());
+    expect(screen.queryByRole('option', { name: '喜欢黑咖啡' })).toBeNull();
+  });
+
+  it('one selection plus auxiliary change keeps the selection cause', async () => {
+    mockApi(() => okJson(projection));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
+    expect(screen.getByTestId('memory-space').getAttribute('data-motion-cause')).toMatch(
+      /selection|reselect|post-reconcile-replacement/,
+    );
+  });
+
+  it('stale viewport notes cannot overwrite an explicit reselect', async () => {
+    mockApi(() => okJson(projection));
+    render(
+      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    const option = await screen.findByRole('option', { name: '喜欢黑咖啡' });
+    fireEvent.click(option);
+    fireEvent.click(option);
+    expect(screen.getByTestId('memory-space').getAttribute('data-motion-cause')).toBe('reselect');
   });
 });

@@ -5,14 +5,16 @@ function topicChildren(
   group: TopicGroup | undefined,
   selectedId: string | null,
   focusedId: string | null | undefined,
-  visible: Set<string>,
 ): string[] {
   const located = [selectedId, focusedId].filter((id): id is string => {
     if (!id || !group) return false;
     return group.admittedChildIds.includes(id);
   });
-  return [...new Set([...(group?.representativeIds ?? []), ...located])]
-    .filter((id) => visible.has(id) || located.includes(id));
+  return [...new Set([
+    ...(group?.representativeIds ?? []),
+    ...(group?.admittedChildIds ?? []),
+    ...located,
+  ])];
 }
 
 function evidenceButton(
@@ -31,6 +33,7 @@ function evidenceButton(
         aria-current={selectedId === id ? 'true' : undefined}
         aria-label={ariaLabel ?? node.label}
         onClick={() => onSelect(id)}
+        onFocus={(event) => event.currentTarget.scrollIntoView?.({ block: 'nearest' })}
       >
         {showCaption ? node.label : (node.kind === 'fact' ? '事实' : '经历')}
       </button>
@@ -51,19 +54,23 @@ export function CompatibilityView(props: {
   const soulTopics = topics.filter((topic) => anchored.has(topic.projection_id));
   const orphanTopics = topics.filter((topic) => !anchored.has(topic.projection_id));
   const caption = new Set(plan.visualPlan.captionIds);
-  const visible = new Set(plan.visualPlan.visibleEvidenceIds);
-  if (props.selectedId) visible.add(props.selectedId);
-  if (props.focusedId) visible.add(props.focusedId);
   const nodeById = new Map(envelope.nodes.map((node) => [node.projection_id, node]));
   const names = accessibleNameById(plan);
 
   return (
-    <div className="memory-compatibility" data-testid="memory-compatibility" data-webgl="false">
+    <div
+      className="memory-compatibility"
+      data-testid="memory-compatibility"
+      data-webgl="false"
+    >
       <p className="memory-compatibility-label">兼容视图 / COMPATIBILITY VIEW</p>
       <div
         className="memory-compatibility-tree"
+        data-testid="memory-compatibility-scroll"
+        data-overflow="vertical"
         role="region"
         aria-label="记忆结构"
+        style={{ minHeight: 0, maxHeight: '100%', overflowY: 'auto' }}
       >
         <button
           type="button"
@@ -76,7 +83,7 @@ export function CompatibilityView(props: {
         <ul className="memory-compatibility-topics" data-region="soul-topics">
           {soulTopics.map((topic) => {
             const group = plan.topicGroups.find((item) => item.topicProjectionId === topic.projection_id);
-            const children = topicChildren(group, props.selectedId, props.focusedId, visible);
+            const children = topicChildren(group, props.selectedId, props.focusedId);
             return (
               <li key={topic.projection_id}>
                 <button
@@ -109,7 +116,7 @@ export function CompatibilityView(props: {
           <ul className="memory-compatibility-ungrouped" data-region="contextual" aria-label="未归组">
             {orphanTopics.map((topic) => {
               const group = plan.topicGroups.find((item) => item.topicProjectionId === topic.projection_id);
-              const children = topicChildren(group, props.selectedId, props.focusedId, visible);
+              const children = topicChildren(group, props.selectedId, props.focusedId);
               return (
                 <li key={topic.projection_id}>
                   <button

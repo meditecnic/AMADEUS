@@ -1,10 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { CompatibilityView } from './CompatibilityView';
 import { MemoryResultOutline } from './MemoryResultOutline';
 import { deriveOverviewPresentation, outlineIds } from './overviewPresentation';
 import { memorySpaceShortcut } from './chrome';
 import { ConstellationStage, type ScreenAnchor } from './ConstellationStage';
+import type { OverviewFrame, PresentationChangeCause } from './overviewMotion';
+import {
+  arbitrateMotionDelivery,
+  splitOrderedCauses,
+  type MotionPresentationSnapshot,
+} from './motionCause';
 import {
   EMPTY_CRITERIA,
   criteriaChips,
@@ -17,13 +23,13 @@ import {
 } from './criteria';
 import { emphasisMode } from './emphasis';
 import { evidenceParentId, openTopicBranch, soulLockupLines } from './graphPaths';
+import { nextMemoryUnwind } from './memoryUnwind';
 import { layoutProjection, readingSurfaceMode } from './layout';
 import { classifyOverviewState } from './overviewState';
 import { createProjectionController } from './projectionController';
 import { ReadingFields, readingCardFromNode } from './readingContent';
 import {
   HEALTHY_CAPABILITY,
-  ambientMotionEnabled,
   applyContextLoss,
   applyCreateFailure,
   applyExplicitCompatibility,
@@ -96,6 +102,16 @@ export function MemorySpace({
     if (typeof window === 'undefined' || !window.matchMedia) return false;
     return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   });
+  const [motionCause, setMotionCause] = useState<PresentationChangeCause>('viewport');
+  const [motionCauses, setMotionCauses] = useState<PresentationChangeCause[]>([]);
+  const [motionEpoch, setMotionEpoch] = useState(0);
+  const [camOwnership, setCamOwnership] = useState<OverviewFrame['ownership']>('rest');
+  const motionNotes = useRef<PresentationChangeCause[]>([]);
+  const scopeNote = useRef(false);
+  const prevMotionSnap = useRef<MotionPresentationSnapshot | null>(null);
+  const noteMotion = (cause: PresentationChangeCause) => {
+    motionNotes.current.push(cause);
+  };
 
   useEffect(() => {
     setBrowseSessionId(sessionId);
@@ -107,7 +123,10 @@ export function MemorySpace({
   );
 
   useEffect(() => {
-    const onResize = () => setWidth(window.innerWidth);
+    const onResize = () => {
+      noteMotion('viewport');
+      setWidth(window.innerWidth);
+    };
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
@@ -115,7 +134,10 @@ export function MemorySpace({
   useEffect(() => {
     if (!window.matchMedia) return undefined;
     const media = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const onChange = () => setReducedMotion(media.matches);
+    const onChange = () => {
+      noteMotion('motion-preference');
+      setReducedMotion(media.matches);
+    };
     media.addEventListener?.('change', onChange);
     return () => media.removeEventListener?.('change', onChange);
   }, []);
@@ -138,6 +160,7 @@ export function MemorySpace({
     if (reconciled.fellBack && reconciled.announced) {
       setAnnouncement(reconciled.announced);
     }
+    noteMotion(reconciled.fellBack ? 'post-reconcile-replacement' : 'disclosure');
   }, []);
 
   useEffect(() => {
@@ -145,11 +168,13 @@ export function MemorySpace({
     setLoading(true);
     setError(null);
     const prior = controllerRef.current.lastSuccessful();
-    setScopeSwitching(Boolean(prior && (
+    const switched = Boolean(prior && (
       prior.scope.sessionId !== scope.sessionId
       || prior.scope.worldline !== scope.worldline
       || prior.scope.identityMode !== scope.identityMode
-    )));
+    ));
+    setScopeSwitching(switched);
+    if (switched) scopeNote.current = true;
     void controllerRef.current.load(scope, criteria).then((outcome) => {
       if (cancelled) return;
       if (outcome.type === 'stale') return;
@@ -235,7 +260,7 @@ export function MemorySpace({
   const renderSurface = capability.surface;
   const inspectorOpen = overviewOpen && selected?.kind === 'continuity_hub';
   const memoOpen = Boolean(card) && overviewOpen;
-  const showSceneMemo = memoOpen && surface === 'scene' && renderSurface === '3d' && cameraMode === '3d';
+  const showSceneMemo = memoOpen && surface === 'scene' && renderSurface === '3d' && cameraMode === '3d' && camOwnership !== 'user';
   const showDomMemo = memoOpen && !showSceneMemo;
   const phase = overviewOpen ? 'overview' : 'soul';
   const lockup = soulLockupLines(
@@ -265,6 +290,7 @@ export function MemorySpace({
       setSelectedId(null);
       setFocusedId(null);
       setExpandedTopicIds([]);
+      noteMotion('disclosure');
       return;
     }
     const hit = display.find((node) => node.id === id);
@@ -273,8 +299,10 @@ export function MemorySpace({
       setSelectedId(fallback.selectedId);
       setFocusedId(fallback.selectedId);
       if (fallback.announced) setAnnouncement(fallback.announced);
+      noteMotion('post-reconcile-replacement');
       return;
     }
+    noteMotion(id === selectedId ? 'reselect' : 'selection');
     setFocusedId(hit.id);
     if (hit.kind === 'continuity_hub') {
       setSelectedId(hit.id);
@@ -282,11 +310,15 @@ export function MemorySpace({
     }
     if (hit.kind === 'topic') {
       revealTopic(hit.id);
+      noteMotion('disclosure');
       setSelectedId(hit.id);
       return;
     }
     const parent = evidenceParentId(hit.id, liveProjection?.edges ?? []);
-    if (parent) revealTopic(parent);
+    if (parent) {
+      revealTopic(parent);
+      noteMotion('disclosure');
+    }
     setSelectedId(hit.id);
     if (liveProjection) setAnnouncement(announceNode(liveProjection, hit.id));
   };
@@ -317,6 +349,7 @@ export function MemorySpace({
   const toggleList = () => {
     const restoreList = toolsOpen && listOpen;
     setToolsOpen(false);
+    noteMotion('auxiliary-surface');
     if (restoreList || (listOpen && narrowPrefer !== 'list')) {
       setListOpen(true);
       setNarrowPrefer('list');
@@ -332,26 +365,60 @@ export function MemorySpace({
     setCriteria((current) => ({ ...current }));
   };
 
-  const unwind = () => {
-    if (toolsOpen || hasActiveCriteria(criteria)) {
-      if (hasActiveCriteria(criteria)) {
-        changeCriteria(EMPTY_CRITERIA);
-        return;
-      }
-      setToolsOpen(false);
+  const unwind = (opts?: { closeAtRoot?: boolean }) => {
+    const selectedKind = selected?.kind
+      ?? liveProjection?.nodes.find((node) => node.projection_id === selectedId)?.kind
+      ?? null;
+    const action = nextMemoryUnwind({
+      toolsOpen,
+      hasActiveCriteria: hasActiveCriteria(criteria),
+      listVisible: Boolean(listOpen && (width >= 900 || narrowPrefer === 'list')),
+      selectedKind: selectedKind === 'fact' || selectedKind === 'experience' || selectedKind === 'topic' || selectedKind === 'continuity_hub'
+        ? selectedKind
+        : null,
+      expanded: expandedTopicIds.length > 0,
+      closeAtRoot: opts?.closeAtRoot !== false,
+    });
+    if (action === 'clear-criteria') {
+      changeCriteria(EMPTY_CRITERIA);
+      noteMotion('auxiliary-surface');
       return;
     }
-    if (selectedId) {
+    if (action === 'close-tools') {
+      setToolsOpen(false);
+      noteMotion('auxiliary-surface');
+      return;
+    }
+    if (action === 'close-list') {
+      setListOpen(false);
+      noteMotion('auxiliary-surface');
+      return;
+    }
+    if (action === 'evidence-to-topic') {
+      const parent = selectedId
+        ? evidenceParentId(selectedId, liveProjection?.edges ?? [])
+        : null;
+      setSelectedId(parent);
+      setFocusedId(parent);
+      setExpandedTopicIds(parent ? [parent] : []);
+      noteMotion('selection');
+      noteMotion('disclosure');
+      return;
+    }
+    if (action === 'topic-to-overview') {
       setSelectedId(null);
       setFocusedId(null);
       setExpandedTopicIds([]);
+      noteMotion('selection');
+      noteMotion('disclosure');
       return;
     }
-    if (expandedTopicIds.length) {
+    if (action === 'collapse-branch') {
       setExpandedTopicIds([]);
+      noteMotion('disclosure');
       return;
     }
-    onClose();
+    if (action === 'close-memory') onClose();
   };
 
   useEffect(() => {
@@ -441,7 +508,14 @@ export function MemorySpace({
     if (listOpen) return 'list';
     return 'none';
   })();
-  const showList = Boolean(disclosurePlan && planReady && narrowSheet === 'list');
+  const showList = Boolean(
+    disclosurePlan
+    && planReady
+    && listOpen
+    && (width >= 900
+      ? narrowSheet !== 'tools' && narrowSheet !== 'inspector'
+      : narrowSheet === 'list'),
+  );
   const showInspector = Boolean(inspectorOpen && liveProjection && narrowSheet === 'inspector');
   const showReading = Boolean(showDomMemo && card && narrowSheet === 'reading');
   const showSceneReading = Boolean(showSceneMemo && card && narrowSheet === 'reading');
@@ -475,24 +549,88 @@ export function MemorySpace({
     && (liveProjection.truncated.results || liveProjection.shown.results < liveProjection.eligible.results),
   );
 
+  const scopeKey = `${browseSessionId}|${worldline}|${identityMode}`;
+  const motionInsets = {
+    top: 64,
+    right: 16,
+    bottom: narrowSheet !== 'none' && width < 900 ? Math.round((typeof window === 'undefined' ? 800 : window.innerHeight) * 0.42) : 16,
+    left: 16,
+  };
+
+  useLayoutEffect(() => {
+    const snap: MotionPresentationSnapshot = {
+      scopeKey,
+      selectedId,
+      expandedTopicIds,
+      planIdentity: `${liveProjection?.generated_at ?? ''}|${liveProjection?.result_ids.join(',') ?? ''}`,
+      renderSurface,
+      auxiliary: narrowSheet,
+      reducedMotion,
+      viewport: { width, height: typeof window === 'undefined' ? 800 : window.innerHeight },
+      insets: motionInsets,
+    };
+    const notes = motionNotes.current;
+    const delivery = arbitrateMotionDelivery(
+      prevMotionSnap.current,
+      snap,
+      notes,
+      scopeNote.current,
+    );
+    motionNotes.current = [];
+    scopeNote.current = false;
+    prevMotionSnap.current = snap;
+    if (delivery.type === 'none') return;
+    if (delivery.type === 'scopeChanged') {
+      setMotionEpoch((value) => value + 1);
+      return;
+    }
+    setMotionCause(delivery.cause);
+    setMotionCauses(splitOrderedCauses(notes));
+    setMotionEpoch((value) => value + 1);
+  }, [
+    cameraMode,
+    expandedTopicIds,
+    identityMode,
+    liveProjection,
+    motionInsets.bottom,
+    motionInsets.left,
+    motionInsets.right,
+    motionInsets.top,
+    narrowSheet,
+    reducedMotion,
+    renderSurface,
+    scopeKey,
+    selectedId,
+    width,
+    worldline,
+  ]);
+
   return (
     <section
       className="memory-space"
       data-testid="memory-space"
       data-phase={phase}
       data-expanded-topics={expandedTopicIds.join(',')}
+      data-selected-id={selectedId ?? ''}
+      data-selected-kind={selected?.kind ?? ''}
       data-worldline={worldline}
       data-emphasis={emphasis}
       data-surface={renderSurface}
       data-reduced-motion={String(reducedMotion)}
       data-narrow-sheet={narrowSheet}
+      data-motion-cause={motionCause}
       data-tools-open={String(toolsOpen)}
       aria-label="Memory Space"
     >
       <div className="sr-only" role="status" aria-live="polite" data-testid="memory-announce">{announcement}</div>
       <header className="memory-space-veil" data-testid="memory-space-veil" data-chrome="compact">
-        <button type="button" className="memory-space-return" onClick={onClose}>
-          返回
+        <button
+          type="button"
+          className="memory-space-return"
+          data-testid="memory-back"
+          onClick={() => unwind({ closeAtRoot: true })}
+        >
+          {!selectedId && !expandedTopicIds.length && !listOpen && !toolsOpen && !hasActiveCriteria(criteria) ? '返回' : '回退'}
         </button>
         <button
           type="button"
@@ -511,7 +649,10 @@ export function MemorySpace({
           className="memory-space-tools-toggle"
           aria-expanded={toolsOpen}
           aria-controls="memory-space-tools"
-          onClick={() => setToolsOpen((value) => !value)}
+          onClick={() => {
+            noteMotion('auxiliary-surface');
+            setToolsOpen((value) => !value);
+          }}
         >
           仪器
         </button>
@@ -523,6 +664,7 @@ export function MemorySpace({
           aria-pressed={renderSurface === 'compatibility'}
           onClick={() => {
             const next = renderSurface !== 'compatibility';
+            noteMotion('render-surface');
             setForceCompat(next);
             setCapability((current) => applyExplicitCompatibility(current, next));
           }}
@@ -726,12 +868,19 @@ export function MemorySpace({
             plan={disclosurePlan}
             selectedId={selectedId}
             mode={cameraMode}
-            reducedMotion={!ambientMotionEnabled(reducedMotion, renderSurface)}
+            reducedMotion={reducedMotion}
             decoration={capability.decoration}
             expandedTopicIds={expandedTopicIds}
             worldline={worldline}
             query={criteria.query}
+            motionCause={motionCause}
+            motionCauses={motionCauses}
+            motionEpoch={motionEpoch}
+            scopeKey={scopeKey}
+            insets={motionInsets}
             onSelect={handleSelect}
+            onUnwind={() => unwind({ closeAtRoot: false })}
+            onOwnershipChange={setCamOwnership}
             onSelectedAnchor={(next) => {
               setAnchor((prev) => {
                 if (!next && !prev) return prev;

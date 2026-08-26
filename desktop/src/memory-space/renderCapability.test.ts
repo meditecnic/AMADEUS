@@ -12,10 +12,16 @@ import {
 } from './renderCapability';
 
 describe('renderCapability', () => {
-  it('goes to compatibility immediately on WebGL create failure', () => {
-    const next = applyCreateFailure(HEALTHY_CAPABILITY);
-    expect(next.surface).toBe('compatibility');
-    expect(next.sticky).toBe(true);
+  it('28. context-loss and create-fail still follow renderCapability', () => {
+    const created = applyCreateFailure(HEALTHY_CAPABILITY);
+    expect(created.surface).toBe('compatibility');
+    expect(created.sticky).toBe(true);
+    const firstLoss = applyContextLoss(HEALTHY_CAPABILITY);
+    expect(firstLoss.surface).toBe('3d');
+    expect(firstLoss.retrying).toBe(true);
+    const secondLoss = applyContextLoss(firstLoss);
+    expect(secondLoss.surface).toBe('compatibility');
+    expect(secondLoss.sticky).toBe(true);
   });
 
   it('retries once on first context loss and sticks on the second', () => {

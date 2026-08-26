@@ -1,5 +1,5 @@
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ConstellationStage } from './ConstellationStage';
 import { deriveOverviewPresentation } from './overviewPresentation';
@@ -46,7 +46,266 @@ const projection: MemoryProjection = {
   ],
 };
 
+describe('ConstellationStage camera ownership', () => {
+  afterEach(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+    cleanup();
+  });
+
+  it('29. pointer drag produces userCamera without idle yaw', () => {
+    const plan = deriveOverviewPresentation(projection, { expandedTopicIds: [] });
+    render(
+      <ConstellationStage
+        plan={plan}
+        selectedId={null}
+        mode="3d"
+        reducedMotion={false}
+        expandedTopicIds={[]}
+        worldline="steins_gate"
+        query=""
+        onSelect={vi.fn()}
+      />,
+    );
+    const canvas = screen.getByTestId('constellation-stage');
+    expect(canvas).toHaveAttribute('data-ownership', 'rest');
+    const before = canvas.getAttribute('data-yaw');
+    fireEvent.pointerDown(canvas, { clientX: 20, clientY: 20 });
+    fireEvent.pointerMove(canvas, { clientX: 80, clientY: 24 });
+    expect(canvas.getAttribute('data-ownership')).toBe('user');
+    expect(canvas.getAttribute('data-yaw')).not.toBe(before);
+    const userYaw = canvas.getAttribute('data-yaw');
+    fireEvent.pointerUp(canvas, { clientX: 80, clientY: 24 });
+    expect(canvas.getAttribute('data-yaw')).toBe(userYaw);
+    expect(canvas.getAttribute('data-ownership')).toBe('user');
+    const zoomBefore = canvas.getAttribute('data-zoom');
+    fireEvent.wheel(canvas, { deltaY: 400 });
+    expect(canvas.getAttribute('data-zoom')).not.toBe(zoomBefore);
+    expect(canvas.getAttribute('data-ownership')).toBe('user');
+  });
+
+  it('holds ambient immediately while either pointer button is active', () => {
+    const plan = deriveOverviewPresentation(projection, { expandedTopicIds: [] });
+    const props = {
+      plan,
+      selectedId: null,
+      mode: '3d' as const,
+      reducedMotion: false,
+      expandedTopicIds: [] as string[],
+      worldline: 'steins_gate' as const,
+      query: '',
+      nowMs: 0,
+      onSelect: vi.fn(),
+    };
+    const { rerender } = render(<ConstellationStage {...props} />);
+    const canvas = screen.getByTestId('constellation-stage');
+    expect(canvas).toHaveAttribute('data-ambient', 'pulse');
+    expect(canvas).toHaveAttribute('data-ownership', 'rest');
+
+    fireEvent.pointerDown(canvas, { button: 0, clientX: 4, clientY: 4 });
+    expect(canvas).toHaveAttribute('data-ambient', 'settled');
+    expect(canvas).toHaveAttribute('data-ownership', 'rest');
+    const heldYaw = canvas.getAttribute('data-yaw');
+    rerender(<ConstellationStage {...props} nowMs={5200} />);
+    expect(screen.getByTestId('constellation-stage')).toHaveAttribute('data-yaw', heldYaw);
+    fireEvent.pointerUp(canvas, { button: 0, clientX: 4, clientY: 4 });
+    expect(canvas).toHaveAttribute('data-ambient', 'pulse');
+
+    fireEvent.pointerDown(canvas, { button: 2, clientX: 8, clientY: 8 });
+    expect(canvas).toHaveAttribute('data-ambient', 'settled');
+    expect(canvas).toHaveAttribute('data-ownership', 'rest');
+    fireEvent.pointerCancel(canvas, { button: 2, clientX: 8, clientY: 8 });
+    expect(canvas).toHaveAttribute('data-ambient', 'pulse');
+    expect(canvas).toHaveAttribute('data-ownership', 'rest');
+  });
+
+  it('right-click without drag unwinds and does not open a context menu', () => {
+    const plan = deriveOverviewPresentation(projection, { expandedTopicIds: [] });
+    const onSelect = vi.fn();
+    const onUnwind = vi.fn();
+    render(
+      <ConstellationStage
+        plan={plan}
+        selectedId="topic:t1"
+        mode="3d"
+        reducedMotion
+        expandedTopicIds={['topic:t1']}
+        worldline="steins_gate"
+        query=""
+        onSelect={onSelect}
+        onUnwind={onUnwind}
+      />,
+    );
+    const canvas = screen.getByTestId('constellation-stage');
+    fireEvent.pointerDown(canvas, { button: 2, clientX: 40, clientY: 40 });
+    const menu = fireEvent.contextMenu(canvas, { clientX: 41, clientY: 41 });
+    expect(menu).toBe(false);
+    expect(onUnwind).toHaveBeenCalledTimes(1);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(canvas.getAttribute('data-ownership')).not.toBe('user');
+  });
+
+  it('right-drag does not unwind or take user camera ownership', () => {
+    const plan = deriveOverviewPresentation(projection, { expandedTopicIds: [] });
+    const onUnwind = vi.fn();
+    render(
+      <ConstellationStage
+        plan={plan}
+        selectedId={null}
+        mode="3d"
+        reducedMotion={false}
+        expandedTopicIds={[]}
+        worldline="steins_gate"
+        query=""
+        onSelect={vi.fn()}
+        onUnwind={onUnwind}
+      />,
+    );
+    const canvas = screen.getByTestId('constellation-stage');
+    const yaw = canvas.getAttribute('data-yaw');
+    fireEvent.pointerDown(canvas, { button: 2, clientX: 20, clientY: 20 });
+    fireEvent.pointerMove(canvas, { buttons: 2, clientX: 90, clientY: 28 });
+    fireEvent.contextMenu(canvas, { clientX: 90, clientY: 28 });
+    fireEvent.pointerUp(canvas, { button: 2, clientX: 90, clientY: 28 });
+    expect(onUnwind).not.toHaveBeenCalled();
+    expect(canvas.getAttribute('data-ownership')).not.toBe('user');
+    expect(canvas.getAttribute('data-yaw')).toBe(yaw);
+  });
+
+  it('a background miss does not call onSelect', () => {
+    const plan = deriveOverviewPresentation(projection, { expandedTopicIds: [] });
+    const onSelect = vi.fn();
+    render(
+      <ConstellationStage
+        plan={plan}
+        selectedId="topic:t1"
+        mode="3d"
+        reducedMotion
+        expandedTopicIds={['topic:t1']}
+        worldline="steins_gate"
+        query=""
+        onSelect={onSelect}
+      />,
+    );
+    const canvas = screen.getByTestId('constellation-stage');
+    fireEvent.pointerDown(canvas, { clientX: 4, clientY: 4 });
+    fireEvent.pointerMove(canvas, { clientX: 7, clientY: 6 });
+    fireEvent.pointerUp(canvas, { clientX: 7, clientY: 6 });
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it('ordinary pointer jitter does not take user camera ownership', () => {
+    const plan = deriveOverviewPresentation(projection, { expandedTopicIds: [] });
+    render(
+      <ConstellationStage
+        plan={plan}
+        selectedId={null}
+        mode="3d"
+        reducedMotion={false}
+        expandedTopicIds={[]}
+        worldline="steins_gate"
+        query=""
+        onSelect={vi.fn()}
+      />,
+    );
+    const canvas = screen.getByTestId('constellation-stage');
+    const yaw = canvas.getAttribute('data-yaw');
+    fireEvent.pointerDown(canvas, { clientX: 20, clientY: 20 });
+    fireEvent.pointerMove(canvas, { clientX: 24, clientY: 22 });
+    fireEvent.pointerUp(canvas, { clientX: 24, clientY: 22 });
+    expect(canvas.getAttribute('data-ownership')).not.toBe('user');
+    expect(canvas.getAttribute('data-yaw')).toBe(yaw);
+  });
+
+  it('30. advancing nowMs after pointer-up does not resume yaw', () => {
+    const plan = deriveOverviewPresentation(projection, { expandedTopicIds: [] });
+    const props = {
+      plan,
+      selectedId: null,
+      mode: '3d' as const,
+      reducedMotion: false,
+      expandedTopicIds: [] as string[],
+      worldline: 'steins_gate' as const,
+      query: '',
+      nowMs: 0,
+      onSelect: vi.fn(),
+    };
+    const { rerender } = render(<ConstellationStage {...props} />);
+    const canvas = screen.getByTestId('constellation-stage');
+    fireEvent.pointerDown(canvas, { clientX: 10, clientY: 10 });
+    fireEvent.pointerMove(canvas, { clientX: 70, clientY: 12 });
+    fireEvent.pointerUp(canvas, { clientX: 70, clientY: 12 });
+    const yaw = canvas.getAttribute('data-yaw');
+    expect(canvas).toHaveAttribute('data-ownership', 'user');
+    rerender(<ConstellationStage {...props} nowMs={2500} />);
+    expect(screen.getByTestId('constellation-stage').getAttribute('data-yaw')).toBe(yaw);
+    expect(screen.getByTestId('constellation-stage')).toHaveAttribute('data-ownership', 'user');
+    rerender(<ConstellationStage {...props} nowMs={8000} />);
+    const later = screen.getByTestId('constellation-stage');
+    expect(Math.abs(Number(later.getAttribute('data-yaw')) - Number(yaw))).toBeLessThan(0.09);
+    expect(later.getAttribute('data-zoom')).toBe(canvas.getAttribute('data-zoom'));
+  });
+
+  it('hidden document pauses the clock and does not catch up when visible again', () => {
+    const plan = deriveOverviewPresentation(projection, { expandedTopicIds: [] });
+    const props = {
+      plan,
+      selectedId: null,
+      mode: '3d' as const,
+      reducedMotion: false,
+      expandedTopicIds: [] as string[],
+      worldline: 'steins_gate' as const,
+      query: '',
+      nowMs: 0,
+      onSelect: vi.fn(),
+    };
+    const { rerender } = render(<ConstellationStage {...props} />);
+    const canvas = screen.getByTestId('constellation-stage');
+    const restYaw = canvas.getAttribute('data-yaw');
+    expect(canvas.getAttribute('data-clock')).toBe('running');
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(screen.getByTestId('constellation-stage').getAttribute('data-clock')).toBe('paused');
+    expect(screen.getByTestId('constellation-stage').getAttribute('data-yaw')).toBe(restYaw);
+    rerender(<ConstellationStage {...props} nowMs={8000} />);
+    expect(screen.getByTestId('constellation-stage').getAttribute('data-yaw')).toBe(restYaw);
+    expect(screen.getByTestId('constellation-stage').getAttribute('data-clock')).toBe('paused');
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(screen.getByTestId('constellation-stage').getAttribute('data-clock')).toBe('running');
+    rerender(<ConstellationStage {...props} nowMs={8020} />);
+    const after = screen.getByTestId('constellation-stage');
+    expect(Math.abs(Number(after.getAttribute('data-yaw')) - Number(restYaw))).toBeLessThan(0.01);
+  });
+
+  it('31. wheel zoom then advancing nowMs does not start idle yaw', () => {
+    const plan = deriveOverviewPresentation(projection, { expandedTopicIds: [] });
+    const props = {
+      plan,
+      selectedId: null,
+      mode: '3d' as const,
+      reducedMotion: false,
+      expandedTopicIds: [] as string[],
+      worldline: 'steins_gate' as const,
+      query: '',
+      nowMs: 10,
+      onSelect: vi.fn(),
+    };
+    const { rerender } = render(<ConstellationStage {...props} />);
+    const canvas = screen.getByTestId('constellation-stage');
+    fireEvent.wheel(canvas, { deltaY: 300 });
+    const yaw = canvas.getAttribute('data-yaw');
+    const zoom = canvas.getAttribute('data-zoom');
+    expect(canvas).toHaveAttribute('data-ownership', 'user');
+    rerender(<ConstellationStage {...props} nowMs={4000} />);
+    const later = screen.getByTestId('constellation-stage');
+    expect(later.getAttribute('data-yaw')).toBe(yaw);
+    expect(later.getAttribute('data-zoom')).toBe(zoom);
+  });
+});
+
 describe('ConstellationStage presentation display', () => {
+  afterEach(() => cleanup());
+
   it('uses the shared plan evidence set even when query would reveal every result', () => {
     const plan = deriveOverviewPresentation(projection, { expandedTopicIds: ['topic:t1'] });
     const { rerender } = render(
