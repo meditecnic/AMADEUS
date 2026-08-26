@@ -1015,6 +1015,8 @@ function rebaseClocks(inner: Internal, nowMs: number): void {
     if (inner.system?.startMs !== null && inner.system) inner.system.startMs += gap;
     if (inner.ambientStartedAt !== null) inner.ambientStartedAt += gap;
     inner.lastActivityMs += gap;
+  } else {
+    inner.lastActivityMs = nowMs;
   }
   inner.lastTickMs = nowMs;
 }

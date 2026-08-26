@@ -976,15 +976,15 @@ describe('MemorySpace', () => {
     fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
     fireEvent.click(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
     const canvas = await screen.findByTestId('constellation-stage');
-    const yaw = canvas.getAttribute('data-yaw');
     fireEvent.pointerDown(canvas, { button: 2, clientX: 20, clientY: 20 });
+    const heldYaw = canvas.getAttribute('data-yaw');
     fireEvent.pointerMove(canvas, { buttons: 2, clientX: 96, clientY: 28 });
     fireEvent.contextMenu(canvas, { clientX: 96, clientY: 28 });
+    expect(canvas.getAttribute('data-yaw')).toBe(heldYaw);
     fireEvent.pointerUp(canvas, { button: 2, clientX: 96, clientY: 28 });
     expect(screen.getByTestId('memory-list')).toBeInTheDocument();
     expect(screen.getByTestId('memory-space')).toHaveAttribute('data-selected-kind', 'fact');
     expect(canvas.getAttribute('data-ownership')).not.toBe('user');
-    expect(canvas.getAttribute('data-yaw')).toBe(yaw);
   });
 
   it('Escape at Overview root closes Memory', async () => {

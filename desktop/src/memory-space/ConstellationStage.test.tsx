@@ -118,6 +118,53 @@ describe('ConstellationStage camera ownership', () => {
     expect(canvas).toHaveAttribute('data-ownership', 'rest');
   });
 
+  it('releases an active pointer hold when the pointer leaves the canvas', () => {
+    const plan = deriveOverviewPresentation(projection, { expandedTopicIds: [] });
+    const props = {
+      plan,
+      selectedId: null,
+      mode: '3d' as const,
+      reducedMotion: false,
+      expandedTopicIds: [] as string[],
+      worldline: 'steins_gate' as const,
+      query: '',
+      nowMs: 0,
+      onSelect: vi.fn(),
+    };
+    const { rerender } = render(<ConstellationStage {...props} />);
+    const canvas = screen.getByTestId('constellation-stage');
+    fireEvent.pointerDown(canvas, { button: 0, buttons: 1, clientX: 8, clientY: 8 });
+    expect(canvas).toHaveAttribute('data-ambient', 'settled');
+    fireEvent.pointerLeave(canvas, { buttons: 1, clientX: -4, clientY: 8 });
+    expect(canvas).toHaveAttribute('data-ambient', 'pulse');
+    const releasedYaw = canvas.getAttribute('data-yaw');
+    rerender(<ConstellationStage {...props} nowMs={5200} />);
+    expect(canvas.getAttribute('data-yaw')).not.toBe(releasedYaw);
+    expect(canvas).toHaveAttribute('data-ownership', 'rest');
+  });
+
+  it('starts the idle delay from a late stage mount clock sample', () => {
+    const plan = deriveOverviewPresentation(projection, { expandedTopicIds: [] });
+    const props = {
+      plan,
+      selectedId: null,
+      mode: '3d' as const,
+      reducedMotion: false,
+      expandedTopicIds: [] as string[],
+      worldline: 'steins_gate' as const,
+      query: '',
+      nowMs: 10_000,
+      onSelect: vi.fn(),
+    };
+    const { rerender } = render(<ConstellationStage {...props} />);
+    const canvas = screen.getByTestId('constellation-stage');
+    const restYaw = canvas.getAttribute('data-yaw');
+    rerender(<ConstellationStage {...props} nowMs={10_016} />);
+    expect(canvas.getAttribute('data-yaw')).toBe(restYaw);
+    rerender(<ConstellationStage {...props} nowMs={15_200} />);
+    expect(canvas.getAttribute('data-yaw')).not.toBe(restYaw);
+  });
+
   it('right-click without drag unwinds and does not open a context menu', () => {
     const plan = deriveOverviewPresentation(projection, { expandedTopicIds: [] });
     const onSelect = vi.fn();

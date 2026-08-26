@@ -1224,6 +1224,19 @@ describe('overviewMotion planner', () => {
     expect(reduced.frame.camera.yaw).toBeCloseTo(restYaw, 5);
   });
 
+  it('starts the ambient idle delay at the first real clock sample', () => {
+    const seed = seedFrom(envelope());
+    let { state, frame } = step(
+      createOverviewMotion(seed),
+      { type: 'tick', nowMs: 10_000, paused: true },
+    );
+    const restYaw = frame.camera.yaw;
+    ({ state, frame } = step(state, { type: 'tick', nowMs: 10_016 }));
+    expect(frame.camera.yaw).toBeCloseTo(restYaw, 6);
+    ({ state, frame } = step(state, { type: 'tick', nowMs: 15_200 }));
+    expect(Math.abs(frame.camera.yaw - restYaw)).toBeGreaterThan(0.001);
+  });
+
   it('userCamera delay resumes without snapping lookAt or distance', () => {
     const seed = seedFrom(envelope());
     let { state, frame } = step(createOverviewMotion(seed), { type: 'tick', nowMs: 0 });

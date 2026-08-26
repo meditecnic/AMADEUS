@@ -135,7 +135,7 @@ export function ConstellationStage(props: {
   if (!motionRef.current) {
     const created = step(
       createOverviewMotion(seedFromProps(props, 1280, 800)),
-      { type: 'tick', nowMs: props.nowMs ?? 0 },
+      { type: 'tick', nowMs: clockMs(), paused: true },
     );
     motionRef.current = created.state;
     frameRef.current = created.frame;
@@ -170,7 +170,10 @@ export function ConstellationStage(props: {
 
   const ensureMotion = (current: typeof props, width: number, height: number) => {
     if (!motionRef.current) {
-      const created = step(createOverviewMotion(seedFromProps(current, width, height)), { type: 'tick', nowMs: 0 });
+      const created = step(
+        createOverviewMotion(seedFromProps(current, width, height)),
+        { type: 'tick', nowMs: current.nowMs ?? clockMs(), paused: true },
+      );
       motionRef.current = created.state;
       frameRef.current = created.frame;
       epochRef.current = current.motionEpoch ?? 0;
@@ -180,10 +183,15 @@ export function ConstellationStage(props: {
     const seed = seedFromProps(current, width, height);
     if (seed.scopeKey !== scopeRef.current) {
       const changed = step(motionRef.current, { type: 'scopeChanged', seed });
-      motionRef.current = changed.state;
+      const rebased = step(changed.state, {
+        type: 'tick',
+        nowMs: current.nowMs ?? clockMs(),
+        paused: true,
+      });
+      motionRef.current = rebased.state;
       scopeRef.current = seed.scopeKey;
       epochRef.current = current.motionEpoch ?? epochRef.current;
-      return changed.frame;
+      return rebased.frame;
     }
     const epoch = current.motionEpoch ?? 0;
     if (epoch !== epochRef.current) {
@@ -324,7 +332,11 @@ export function ConstellationStage(props: {
       ensureMotion(current, canvas.clientWidth, canvas.clientHeight);
       const nowMs = current.nowMs ?? now;
       canvas.setAttribute('data-clock', 'running');
-      const stepped = step(motionRef.current, { type: 'tick', nowMs });
+      const stepped = step(motionRef.current, {
+        type: 'tick',
+        nowMs,
+        paused: pointerActiveRef.current,
+      });
       motionRef.current = stepped.state;
       live.setWorldline(current.worldline);
       live.setReducedMotion(current.reducedMotion);
@@ -404,7 +416,11 @@ export function ConstellationStage(props: {
         next = gated.frame;
       }
       if (!hidden) {
-        const stepped = step(motionRef.current, { type: 'tick', nowMs: props.nowMs });
+        const stepped = step(motionRef.current, {
+          type: 'tick',
+          nowMs: props.nowMs,
+          paused: pointerActiveRef.current,
+        });
         motionRef.current = stepped.state;
         next = stepped.frame;
       }
@@ -565,6 +581,9 @@ export function ConstellationStage(props: {
       }}
       onPointerLeave={() => {
         dragRef.current = null;
+        rightPressRef.current = null;
+        movedRef.current = false;
+        setPointerHold(false);
         runtimeRef.current?.setHover(null);
         setHoverId(null);
         if (motionRef.current && hoverGateRef.current) {
