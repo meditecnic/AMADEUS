@@ -16,7 +16,11 @@ export default defineConfig(async () => ({
   server: {
     port: 1420,
     strictPort: true,
-    host: host || false,
+    // Keep local development on an explicit IPv4 loopback. On this Windows
+    // host, Vite's `localhost` default resolves to ::1 but the IPv6 loopback
+    // socket is unavailable, so Vite can print "ready" without a reachable
+    // server. TAURI_DEV_HOST still wins for intentional remote-device use.
+    host: host || "127.0.0.1",
     hmr: host
       ? {
           protocol: "ws",
