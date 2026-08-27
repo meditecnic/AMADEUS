@@ -59,11 +59,7 @@ export function nodeWeight(nodeId: string, input: EmphasisInput): number {
   const kind = kindOf(nodeId, input.nodes);
   const selected = input.selectedId;
   const hover = input.hoverId;
-  if (hover && !selected && kindOf(hover, input.nodes) === 'continuity_hub') {
-    if (nodeId === hover) return 1;
-    if (kind === 'topic' || kind === 'continuity_hub') return 0.62;
-    return 0.52;
-  }
+  if (hover && !selected) return nodeId === hover ? 1 : 0.35;
   const selectedHood = selected ? neighborhoodIds(selected, input.edges, input.nodes) : new Set<string>();
   if (selected && hover && hover !== selected) {
     if (nodeId === selected) return 1;
@@ -78,10 +74,7 @@ export function nodeWeight(nodeId: string, input: EmphasisInput): number {
     if (kind === 'topic' || kind === 'continuity_hub') return 0.48;
     return 0.28;
   }
-  const hood = neighborhoodIds(hover ?? '', input.edges, input.nodes);
-  if (hover && hood.has(nodeId)) return nodeId === hover ? 1 : 0.78;
-  if (kind === 'topic' || kind === 'continuity_hub') return 0.62;
-  return 0.52;
+  return 0.35;
 }
 
 export function pathInNeighborhood(

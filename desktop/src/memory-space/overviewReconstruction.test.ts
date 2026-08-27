@@ -328,7 +328,7 @@ describe('R0 overview reconstruction', () => {
     expect(searchHit).toBeGreaterThan(searchMiss);
   });
 
-  it('hover and selection lift only the one-hop neighborhood, and SOUL does not light every spoke', () => {
+  it('hover lights only the hovered sphere while selection retains its semantic neighborhood', () => {
     const projection = envelope();
     const display = layoutProjection(projection);
     const hood = neighborhoodIds('topic:t1', projection.edges, display);
@@ -345,17 +345,20 @@ describe('R0 overview reconstruction', () => {
       edges: projection.edges,
       nodes: display,
     };
+    const restInput = { ...input, hoverId: null as string | null };
     expect(emphasisMode(input)).toBe('focus');
     expect(nodeWeight('topic:t1', input)).toBeGreaterThan(nodeWeight('topic:t3', input));
-    expect(nodeWeight('fact:1', input)).toBeGreaterThan(nodeWeight('fact:2', input));
-    expect(nodeWeight('topic:t3', input)).toBeGreaterThan(0.5);
+    expect(nodeWeight('fact:1', input)).toBe(nodeWeight('fact:2', input));
+    expect(nodeWeight('topic:t2', input)).toBe(nodeWeight('topic:t2', restInput));
+    expect(nodeWeight('topic:t3', input)).toBe(nodeWeight('topic:t3', restInput));
     const soulHover = {
       ...input,
       hoverId: 'hub:continuity:s:steins_gate:okabe' as string | null,
       selectedId: null as string | null,
     };
-    expect(nodeWeight('topic:t1', soulHover)).toBeGreaterThan(0.3);
-    expect(nodeWeight('topic:t1', soulHover)).toBeGreaterThanOrEqual(nodeWeight('fact:2', soulHover));
+    expect(nodeWeight('topic:t1', soulHover)).toBe(nodeWeight('topic:t1', restInput));
+    expect(nodeWeight('topic:t2', soulHover)).toBe(nodeWeight('topic:t2', restInput));
+    expect(nodeWeight('topic:t3', soulHover)).toBe(nodeWeight('topic:t3', restInput));
     const selectedAndHover = {
       ...input,
       selectedId: 'topic:t1' as string | null,

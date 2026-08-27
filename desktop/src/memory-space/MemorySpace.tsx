@@ -1136,15 +1136,20 @@ export function MemorySpace({
             className="memory-reading-scene"
             data-testid="reading-scene"
             data-attached="sphere"
-            style={anchor ? { left: anchor.x, top: anchor.y } : undefined}
+            data-reading-id={selectedId ?? ''}
+            style={anchor ? {
+              transform: `translate3d(${anchor.x}px, ${anchor.y}px, 0) translate(-108%, -18%)`,
+            } : undefined}
           >
-            <ReadingBody
-              card={card}
-              details={effectiveDetails}
-              model={readingModel}
-              onRetry={retryDetails}
-              scope={liveProjection?.scope ?? null}
-            />
+            <div className="memory-reading-card-content" key={selectedId ?? 'reading'}>
+              <ReadingBody
+                card={card}
+                details={effectiveDetails}
+                model={readingModel}
+                onRetry={retryDetails}
+                scope={liveProjection?.scope ?? null}
+              />
+            </div>
           </aside>
         ) : null}
       </div>
@@ -1233,14 +1238,20 @@ export function MemorySpace({
       ) : null}
 
       {showReading && card ? (
-        <aside className="memory-reading-dom" data-testid="reading-dom">
-          <ReadingBody
-            card={card}
-            details={effectiveDetails}
-            model={readingModel}
-            onRetry={retryDetails}
-            scope={liveProjection?.scope ?? null}
-          />
+        <aside
+          className="memory-reading-dom"
+          data-testid="reading-dom"
+          data-reading-id={selectedId ?? ''}
+        >
+          <div className="memory-reading-card-content" key={selectedId ?? 'reading'}>
+            <ReadingBody
+              card={card}
+              details={effectiveDetails}
+              model={readingModel}
+              onRetry={retryDetails}
+              scope={liveProjection?.scope ?? null}
+            />
+          </div>
         </aside>
       ) : null}
     </section>

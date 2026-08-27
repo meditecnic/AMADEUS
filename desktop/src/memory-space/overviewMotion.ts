@@ -428,6 +428,41 @@ function radiusForApparent(
   return clampZoom(best);
 }
 
+function compositionInterference(
+  camera: Camera,
+  live: LiveNode,
+  nodes: Map<string, LiveNode>,
+  ids: readonly string[],
+  viewport: Rect,
+): number {
+  const selectedRadius = visualRadiusPx(camera, live.position, live.hitRadius, viewport);
+  const dominanceLimit = Math.max(
+    selectedRadius * 2,
+    Math.min(150, Math.min(viewport.width, viewport.height) * 0.22),
+  );
+  const requiredIds = new Set(ids.filter((id) => id !== live.id));
+  let penalty = 0;
+  for (const [id, node] of nodes) {
+    if (id === live.id) continue;
+    const nodeAt = projectCam(camera, node.position, viewport);
+    const nodeRadius = visualRadiusPx(camera, node.position, node.hitRadius, viewport);
+    const visible = nodeAt.depth > 0.2
+      && nodeAt.x + nodeRadius >= viewport.x
+      && nodeAt.x - nodeRadius <= viewport.x + viewport.width
+      && nodeAt.y + nodeRadius >= viewport.y
+      && nodeAt.y - nodeRadius <= viewport.y + viewport.height;
+    if (visible && nodeRadius > dominanceLimit) {
+      penalty += Math.min(220, (nodeRadius - dominanceLimit) * 0.9);
+    }
+    if (!requiredIds.has(id) || node.kind === 'continuity_hub') continue;
+    const contextOccluded = [...nodes.entries()].some(([otherId, other]) => (
+      otherId !== id && diskCovers(camera, other, node, viewport)
+    ));
+    if (contextOccluded) penalty += 90;
+  }
+  return penalty;
+}
+
 function scorePose(
   pose: OrbitPose,
   live: LiveNode,
@@ -452,6 +487,7 @@ function scorePose(
     }
   }
   score += occluded ? -50 : 110;
+  score -= compositionInterference(camera, live, nodes, ids, viewport);
   if (size >= band.min && size <= band.max) score += 42;
   else score += Math.max(0, 36 - Math.abs(size - band.target) * 0.35);
   if (inSoftZone(safe, projected)) score += 28;
@@ -606,11 +642,19 @@ function framingTarget(inner: Internal, presentation: ReadonlyMotionPresentation
   const sizedOccluded = [...geometry.nodes.values()].some((node) => (
     node.id !== focus.id && diskCovers(sizedCam, node, focus, viewport)
   ));
+  const sizedInterference = compositionInterference(
+    sizedCam,
+    focus,
+    geometry.nodes,
+    ids,
+    viewport,
+  );
   if (
     apparentPx(sizedCam, focus.position, focus.hitRadius, viewport) >= targetPx * 0.96
     && pointInRect(safe, sizedProj, 8)
     && (safe.width < 280 || inSoftZone(safe, sizedProj))
     && !sizedOccluded
+    && sizedInterference === 0
   ) {
     return composeAim(sized, focus, viewport, safe);
   }
@@ -618,7 +662,7 @@ function framingTarget(inner: Internal, presentation: ReadonlyMotionPresentation
   const el0 = clampPitch(current.elevation);
   let best = sized;
   let bestScore = -Infinity;
-  const headings = [0, 0.32, -0.32, 0.7, -0.7, 1.15, -1.15];
+  const headings = [0, 0.32, -0.32, 0.7, -0.7, 1.15, -1.15, 1.65, -1.65, 2.2, -2.2, Math.PI];
   const pitches = [el0, clampPitch(el0 + 0.14), clampPitch(el0 - 0.1), 0.36, 0.52];
   const evidenceCloser = focus.kind === 'topic' ? 1 : 0.86;
   const radii = [

@@ -875,6 +875,75 @@ describe('overviewMotion planner', () => {
     expect(Math.abs(again.frame.camera.distance - topic.frame.camera.distance)).toBeLessThan(0.2);
   });
 
+  it('dense Topic focus keeps the selected Topic as the visual weight', () => {
+    const topics = Array.from({ length: 2 }, (_, index) => topic(`dense-${index}`, `主题${index}`));
+    const facts = topics.map((item, index) => fact(`dense-${index}`, `事实${index}`, item.topic_id));
+    const projection = envelope({
+      composition: {
+        active_facts: facts.length,
+        active_experiences: 0,
+        eligible_topics: topics.length,
+        latest_memory_change_at: null,
+        person_anchors_supported: false,
+      },
+      eligible: { nodes: 5, edges: 4, records: 2, results: 2 },
+      shown: { nodes: 5, edges: 4, records: 2, results: 2 },
+      truncated: { nodes: false, edges: false, records: false, results: false },
+      result_ids: facts.map((item) => item.projection_id),
+      nodes: [hub(), ...topics, ...facts],
+      edges: [
+        ...topics.map((item) => ({ kind: 'hub_to_anchor' as const, from: 'hub', to: item.projection_id })),
+        ...facts.map((item, index) => ({
+          kind: 'has_topic' as const,
+          from: item.projection_id,
+          to: topics[index]!.projection_id,
+        })),
+      ],
+    });
+    const base = seedFrom(projection, { reducedMotion: true });
+
+    for (const item of topics) {
+      const focused = step(createOverviewMotion(base), {
+        type: 'presentationChanged',
+        cause: 'selection',
+        presentation: present(base, {
+          selectedId: item.projection_id,
+          expandedTopicIds: [item.projection_id],
+          reducedMotion: true,
+        }),
+      });
+      const selected = visualDisk(focused.frame, item.projection_id)!;
+      const unrelated = topics
+        .filter((other) => other.projection_id !== item.projection_id)
+        .map((other) => visualDisk(focused.frame, other.projection_id))
+        .filter((disk): disk is NonNullable<typeof disk> => Boolean(disk));
+      const largestOther = Math.max(...unrelated.map((disk) => disk.r));
+      expect(largestOther).toBeLessThanOrEqual(Math.max(150, selected.r * 2));
+      expect(pickLiveNode(focused.frame, selected.x, selected.y)).toBe(item.projection_id);
+    }
+  });
+
+  it('Topic focus leaves every visible representative Fact directly pickable at its center', () => {
+    const seed = seedFrom(envelope(), { reducedMotion: true });
+    const focused = step(createOverviewMotion(seed), {
+      type: 'presentationChanged',
+      cause: 'selection',
+      presentation: present(seed, {
+        selectedId: 'topic:t1',
+        expandedTopicIds: ['topic:t1'],
+        reducedMotion: true,
+      }),
+    });
+    const visibleFacts = [...focused.frame.nodes.values()].filter((node) => (
+      node.kind === 'fact' && node.parentId === 'topic:t1'
+    ));
+    expect(visibleFacts.length).toBeGreaterThan(0);
+    for (const node of visibleFacts) {
+      const at = focused.frame.projected.get(node.id)!;
+      expect(pickLiveNode(focused.frame, at.x, at.y)).toBe(node.id);
+    }
+  });
+
   it('system framing settles inside the 180–250ms design band', () => {
     const seed = seedFrom(envelope(), { reducedMotion: false });
     let { state, frame } = step(createOverviewMotion(seed), { type: 'tick', nowMs: 0 });
@@ -1067,7 +1136,18 @@ describe('overviewMotion planner', () => {
     expect(frame.ownership).toBe('system');
     ({ state, frame } = step(state, { type: 'tick', nowMs: 4090 }));
     expect(frame.ownership).toBe('system');
-    expect(Math.abs(frame.camera.yaw - frozenCam.yaw)).toBeLessThan(0.08);
+    let control = step(createOverviewMotion(seed), { type: 'tick', nowMs: 0 });
+    control = step(control.state, {
+      type: 'presentationChanged',
+      cause: 'selection',
+      presentation: present(seed, { selectedId: 'topic:t1', expandedTopicIds: ['topic:t1'] }),
+    });
+    control = step(control.state, { type: 'tick', nowMs: 0 });
+    control = step(control.state, { type: 'tick', nowMs: 90 });
+    control = step(control.state, { type: 'tick', nowMs: 180 });
+    expect(frame.camera.yaw).toBeCloseTo(control.frame.camera.yaw, 6);
+    expect(frame.camera.pitch).toBeCloseTo(control.frame.camera.pitch, 6);
+    expect(frame.camera.distance).toBeCloseTo(control.frame.camera.distance, 6);
     const rest = step(createOverviewMotion(seed), { type: 'tick', nowMs: 0 });
     const drifted = step(rest.state, { type: 'tick', nowMs: 5200 });
     expect(Math.abs(drifted.frame.camera.yaw - rest.frame.camera.yaw)).toBeGreaterThan(0.002);
