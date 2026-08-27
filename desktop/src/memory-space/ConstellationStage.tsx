@@ -13,6 +13,7 @@ import {
 import { displayNodesFromPlan, type OverviewDisclosurePlan } from './overviewPresentation';
 import type { OrreryCamera, OrreryRuntime } from './orreryRenderer';
 import type { DecorationLevel, FrameSample } from './renderCapability';
+import { perfSampleVisible } from './renderCapability';
 import { isPointerDrag } from './pointerIntent';
 import type { DisplayNode, Worldline } from './types';
 
@@ -97,6 +98,9 @@ export function ConstellationStage(props: {
   onCreateFail?: () => void;
   onContextLost?: () => void;
   onFrame?: (sample: FrameSample) => void;
+  /** P1 (round 5): visibility/focus recovery; the parent must clear its
+   *  full FPS sampling window on this boundary. */
+  onPerfBaselineReset?: () => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const runtimeRef = useRef<OrreryRuntime | null>(null);
@@ -109,6 +113,7 @@ export function ConstellationStage(props: {
   const propsRef = useRef(props);
 
   const documentHidden = () => typeof document !== 'undefined' && document.visibilityState !== 'visible';
+  const windowFocused = () => typeof document === 'undefined' || typeof document.hasFocus !== 'function' || document.hasFocus();
   const clockMs = () => propsRef.current.nowMs ?? (typeof performance !== 'undefined' ? performance.now() : 0);
   const ambientHold = () => (
     documentHidden()
@@ -141,8 +146,14 @@ export function ConstellationStage(props: {
     frameRef.current = created.frame;
   }
 
+  const lastPublishedRef = useRef<OverviewFrame | null>(null);
   const publish = (next: OverviewFrame) => {
     frameRef.current = next;
+    // P1-A (round 4): an identical frame must not re-run the callback chain.
+    // Effect re-runs that publish the frame they already published become
+    // no-ops instead of re-projecting anchors into the parent.
+    if (next === lastPublishedRef.current) return;
+    lastPublishedRef.current = next;
     const camera = next.camera;
     setView((prev) => {
       if (
@@ -309,6 +320,13 @@ export function ConstellationStage(props: {
     };
     const applyVisible = (nowMs: number) => {
       canvas.setAttribute('data-clock', 'running');
+      // P1-B (round 4): returning from a throttled state re-establishes the
+      // FPS baseline; warmup restarts so throttled samples cannot demote.
+      // P1 (round 5): the parent's full sampling window is cleared on the
+      // same boundary.
+      frames = 0;
+      started = 0;
+      propsRef.current.onPerfBaselineReset?.();
       if (hiddenClockRef.current && motionRef.current) {
         const resumed = step(motionRef.current, { type: 'tick', nowMs, paused: true });
         motionRef.current = resumed.state;
@@ -318,6 +336,13 @@ export function ConstellationStage(props: {
       runtimeRef.current?.setAmbientPaused(ambientHold());
       startLoop();
     };
+    const onFocusGained = () => {
+      if (cancelled) return;
+      frames = 0;
+      started = 0;
+      // P1 (round 5): regaining focus restarts the sampling window upstream.
+      propsRef.current.onPerfBaselineReset?.();
+    };
     const runFrame = (now: number) => {
       raf = 0;
       const live = runtimeRef.current;
@@ -326,7 +351,9 @@ export function ConstellationStage(props: {
       frames += 1;
       current.onFrame?.({
         at: now,
-        visible: true,
+        // P1-B (round 4): hidden OR unfocused time never counts toward the
+        // low-FPS judgment; rAF is system-throttled in both states.
+        visible: perfSampleVisible(document.visibilityState, windowFocused()),
         warmup: now - started < 1200 || frames < 12,
       });
       ensureMotion(current, canvas.clientWidth, canvas.clientHeight);
@@ -365,6 +392,7 @@ export function ConstellationStage(props: {
       else applyVisible(nowMs);
     };
     document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('focus', onFocusGained);
     void import('./orreryRenderer').then(({ OrreryRuntime }) => {
       if (cancelled || !canvasRef.current) return;
       const runtime = new OrreryRuntime(canvas);
@@ -392,6 +420,7 @@ export function ConstellationStage(props: {
       cancelled = true;
       stopLoop();
       document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('focus', onFocusGained);
       window.removeEventListener('resize', onWinResize);
       canvas.removeEventListener('webglcontextlost', onLost);
       runtimeRef.current?.dispose();

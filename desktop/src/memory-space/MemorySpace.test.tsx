@@ -111,6 +111,44 @@ function okJson(body: unknown) {
   });
 }
 
+function errorJson(status: number, code: string) {
+  return Promise.resolve({
+    ok: false,
+    status,
+    json: async () => ({ detail: { code } }),
+  });
+}
+
+// Frozen fact-details payload shape (system_api.py L676). Confidence is
+// intentionally present here to prove the reading surface never renders it.
+const factDetailsFixture = {
+  scope: { session_id: 's', worldline: 'steins_gate', identity_mode: 'okabe' },
+  fact: { fact_id: '1', topic_id: 't1', is_pinned: false, active_version: 1, display_text: '喜欢黑咖啡' },
+  versions: [
+    {
+      version_no: 1,
+      display_text: '喜欢黑咖啡',
+      confidence: 0.92,
+      change_kind: 'create',
+      previous_version: null,
+      valid_from: '2026-08-13T00:00:00Z',
+      invalid_at: null,
+      is_active: true,
+    },
+  ],
+  provenance: [
+    {
+      version_no: 1,
+      observation_id: 'o1',
+      source_message_id: 11,
+      conversation_id: 'c1',
+      source_created_at: '2026-08-13T00:00:00Z',
+      source_state: 'present',
+      excerpt: '我挺喜欢黑咖啡的',
+    },
+  ],
+};
+
 function activateWithEnter(el: HTMLElement) {
   const allowed = fireEvent.keyDown(el, { key: 'Enter' });
   if (allowed) fireEvent.click(el);
@@ -129,6 +167,9 @@ describe('MemorySpace', () => {
     mockApi((url) => {
       if (url.includes('/api/memory/status')) {
         return okJson({ pending_count: 0, processing_count: 0, failed_count: 1 });
+      }
+      if (url.includes('/api/memory/facts/1/details')) {
+        return okJson(factDetailsFixture);
       }
       return okJson(projection);
     });
@@ -170,15 +211,652 @@ describe('MemorySpace', () => {
       expect(screen.getByTestId('reading-kind')).toBeInTheDocument();
     });
     expect(screen.getByTestId('reading-title')).toHaveTextContent('喜欢黑咖啡');
-    expect(screen.getByTestId('reading-summary')).toHaveTextContent('喜欢黑咖啡');
+    // P1R-3 §7.1: the title is not duplicated as a second label.
+    expect(screen.queryByTestId('reading-summary')).toBeNull();
     expect(screen.getByTestId('reading-provenance')).toHaveTextContent('否');
-    expect(screen.getByTestId('reading-provenance')).toHaveTextContent('2026-08-14T00:00:00Z');
-    expect(screen.getByTestId('reading-provenance')).toHaveTextContent('t1');
+    // Humanized envelope fields; raw ISO and raw ids stay out of default slots.
+    expect(screen.getByTestId('reading-provenance').textContent ?? '').not.toContain('2026-08-14T');
+    expect(screen.getByTestId('reading-provenance').textContent ?? '').not.toContain('t1');
+    expect(screen.getByTestId('reading-topic-label')).toHaveTextContent('咖啡');
+    // P1 spec-3: exactly one payload-owned primary text in the success state.
+    await waitFor(() => {
+      expect(screen.getByTestId('reading-evidence')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('reading-title')).toHaveTextContent('喜欢黑咖啡');
+    expect(screen.queryByTestId('reading-evidence-text')).toBeNull();
+    expect(screen.queryByTestId('reading-projection-summary')).toBeNull();
+    expect(screen.getByTestId('reading-source-excerpt')).toHaveTextContent('我挺喜欢黑咖啡的');
+    expect(screen.getByTestId('reading-correction-notice')).toHaveTextContent('当前视图只读，不能在此纠正');
+    expect(screen.getByTestId('reading-deeplink-notice')).toBeInTheDocument();
+    expect(screen.getByTestId('reading-dom').textContent ?? '').not.toContain('0.92');
+    // P1 spec-4: diagnostics carry source ids, raw ISO, and the scope echo.
+    expect(screen.getByTestId('reading-diagnostics-source-messages')).toHaveTextContent('11');
+    expect(screen.getByTestId('reading-diagnostics-raw-time').textContent ?? '').toContain('2026-08-13T00:00:00Z');
+    expect(screen.getByTestId('reading-diagnostics-scope')).toHaveTextContent('s / steins_gate / okabe');
+    // P1 spec-4 + P2-B: here the LIST closes before the payload resolves, so
+    // the reading surface is visible at resolution time.
+    await waitFor(() => {
+      expect(screen.getByTestId('memory-announce')).toHaveTextContent('证据已读取');
+    });
     expect(screen.queryByRole('button', { name: /置顶|删除|编辑/ })).toBeNull();
     expect(screen.queryByTestId('reading-scene') && screen.queryByTestId('reading-dom')).toBeNull();
     expect(screen.queryByTestId('soul-inspector')).toBeNull();
     expect(screen.queryByTestId('memory-list')).toBeNull();
     expect(screen.queryByRole('button', { name: /置顶|删除|编辑/ })).toBeNull();
+  });
+
+  it('pure LIST rove moves focus only: zero selection and zero details requests', async () => {
+    const dualProjection: MemoryProjection = {
+      ...projection,
+      result_ids: ['fact:1', 'fact:2'],
+      shown: { ...projection.shown, results: 2 },
+      eligible: { ...projection.eligible, results: 2 },
+      nodes: [
+        ...projection.nodes,
+        {
+          kind: 'fact',
+          projection_id: 'fact:2',
+          fact_id: '2',
+          label: '后来的记忆',
+          is_pinned: false,
+          updated_at: '2026-08-15T00:00:00Z',
+          topic_id: null,
+        },
+      ],
+    };
+    const calls: string[] = [];
+    mockApi((url) => {
+      calls.push(url);
+      if (url.includes('/api/memory/status')) {
+        return okJson({ pending_count: 0, processing_count: 0, failed_count: 0 });
+      }
+      if (url.includes('/details')) {
+        return okJson(factDetailsFixture);
+      }
+      return okJson(dualProjection);
+    });
+    render(
+      <MemorySpace
+        sessionId="s"
+        chatWorldline="steins_gate"
+        chatIdentityMode="okabe"
+        onClose={vi.fn()}
+      />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    const first = await screen.findByRole('option', { name: '喜欢黑咖啡' });
+    // Pure rove: arrows move focus only; no selection, no request — even
+    // after the async effect flush window.
+    fireEvent.focus(first);
+    fireEvent.keyDown(first, { key: 'ArrowDown' });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(screen.getByTestId('memory-space').getAttribute('data-selected-id')).toBe('');
+    expect(calls.filter((url) => url.includes('/details'))).toHaveLength(0);
+    fireEvent.keyDown(screen.getByRole('option', { name: /后来的记忆/ }), { key: 'ArrowUp' });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(screen.getByTestId('memory-space').getAttribute('data-selected-id')).toBe('');
+    expect(calls.filter((url) => url.includes('/details'))).toHaveLength(0);
+    // Keyboard-activated selection loads details once, using the canonical
+    // fact_id read from the projection node (never projection_id parsing).
+    activateWithEnter(first);
+    await waitFor(() => {
+      expect(calls.filter((url) => url.includes('/api/memory/facts/1/details'))).toHaveLength(1);
+    });
+    expect(calls.filter((url) => url.includes('fact:1/details'))).toHaveLength(0);
+    // The same active record is retained across views; no refetch.
+    fireEvent.click(first);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(calls.filter((url) => url.includes('/details'))).toHaveLength(1);
+  });
+
+  it('renders only the payload-owned primary text when it differs from the envelope label', async () => {
+    const verifiedFixture = {
+      ...factDetailsFixture,
+      fact: { ...factDetailsFixture.fact, display_text: '已核验的正文' },
+    };
+    mockApi((url) => {
+      if (url.includes('/api/memory/status')) {
+        return okJson({ pending_count: 0, processing_count: 0, failed_count: 0 });
+      }
+      if (url.includes('/details')) {
+        return okJson(verifiedFixture);
+      }
+      return okJson(projection);
+    });
+    render(
+      <MemorySpace
+        sessionId="s"
+        chatWorldline="steins_gate"
+        chatIdentityMode="okabe"
+        onClose={vi.fn()}
+      />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('reading-title')).toHaveTextContent('已核验的正文');
+    });
+    // The stale envelope label must not head the verified card; the title is
+    // the single payload-owned primary text.
+    expect(screen.getByTestId('reading-title')).not.toHaveTextContent('喜欢黑咖啡');
+    expect(screen.queryByTestId('reading-summary')).toBeNull();
+    expect(screen.queryByTestId('reading-projection-summary')).toBeNull();
+  });
+
+  it('never issues a new-scope details request for a stale selection during scope switch', async () => {
+    const calls: string[] = [];
+    let releaseBeta: ((value: unknown) => void) | undefined;
+    mockApi((url) => {
+      calls.push(url);
+      if (url.includes('/api/memory/status')) {
+        return okJson({ pending_count: 0, processing_count: 0, failed_count: 0 });
+      }
+      if (url.includes('/details')) {
+        return okJson(factDetailsFixture);
+      }
+      if (url.includes('worldline=beta')) {
+        return new Promise((resolve) => {
+          releaseBeta = resolve;
+        });
+      }
+      return okJson(projection);
+    });
+    render(
+      <MemorySpace
+        sessionId="s"
+        chatWorldline="steins_gate"
+        chatIdentityMode="okabe"
+        onClose={vi.fn()}
+      />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
+    await waitFor(() => {
+      expect(calls.filter((url) => url.includes('/api/memory/facts/1/details'))).toHaveLength(1);
+    });
+    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.change(screen.getByLabelText('浏览世界线'), { target: { value: 'beta' } });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    // Before the new envelope arrives, the stale SG selection must not be
+    // requested under the beta scope.
+    expect(calls.filter((url) => url.includes('/details') && url.includes('worldline=beta'))).toHaveLength(0);
+    releaseBeta?.({
+      ok: true,
+      json: async () => ({
+        ...projection,
+        scope: { session_id: 's', worldline: 'beta', identity_mode: 'okabe' },
+        result_ids: [],
+        nodes: [projection.nodes[0]],
+        edges: [],
+        empty: true,
+        eligible: { nodes: 1, edges: 0, records: 0, results: 0 },
+        shown: { nodes: 1, edges: 0, records: 0, results: 0 },
+      }),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(calls.filter((url) => url.includes('/details') && url.includes('worldline=beta'))).toHaveLength(0);
+  });
+
+  it('never revives a stale activation across scope switch or roundtrip without a fresh gesture', async () => {
+    const calls: string[] = [];
+    // Both worldlines contain the SAME record id, so a stale activation
+    // would match again after the roundtrip unless it is invalidated.
+    const betaProjection: MemoryProjection = {
+      ...projection,
+      scope: { session_id: 's', worldline: 'beta', identity_mode: 'okabe' },
+    };
+    mockApi((url) => {
+      calls.push(url);
+      if (url.includes('/api/memory/status')) {
+        return okJson({ pending_count: 0, processing_count: 0, failed_count: 0 });
+      }
+      if (url.includes('/details')) {
+        return okJson(factDetailsFixture);
+      }
+      if (url.includes('worldline=beta')) {
+        return okJson(betaProjection);
+      }
+      return okJson(projection);
+    });
+    render(
+      <MemorySpace
+        sessionId="s"
+        chatWorldline="steins_gate"
+        chatIdentityMode="okabe"
+        onClose={vi.fn()}
+      />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('reading-evidence')).toBeInTheDocument();
+    });
+    expect(calls.filter((url) => url.includes('/details') && url.includes('worldline=steins_gate'))).toHaveLength(1);
+
+    // Switch to beta; the new envelope still contains the same record.
+    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.change(screen.getByLabelText('浏览世界线'), { target: { value: 'beta' } });
+    // Close the tools sheet so the reading surface becomes active again.
+    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('memory-plaque')).toHaveTextContent('β');
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    // No beta request without a fresh gesture, and the stale SG payload must
+    // not reappear on the reading surface.
+    expect(calls.filter((url) => url.includes('/details') && url.includes('worldline=beta'))).toHaveLength(0);
+    expect(screen.queryByTestId('reading-evidence')).toBeNull();
+    expect(screen.getByTestId('reading-projection-summary')).toBeInTheDocument();
+
+    // Roundtrip back to SG: still no automatic request, no revival.
+    fireEvent.change(screen.getByLabelText('浏览世界线'), { target: { value: 'steins_gate' } });
+    await waitFor(() => {
+      expect(screen.getByTestId('memory-plaque')).toHaveTextContent('SG');
+    });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(calls.filter((url) => url.includes('/details') && url.includes('worldline=steins_gate'))).toHaveLength(1);
+    expect(screen.queryByTestId('reading-evidence')).toBeNull();
+
+    // A fresh activation gesture is allowed to request again.
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
+    await waitFor(() => {
+      expect(calls.filter((url) => url.includes('/details') && url.includes('worldline=steins_gate'))).toHaveLength(2);
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('reading-evidence')).toBeInTheDocument();
+    });
+  });
+
+  it('canvas semantic arrows rove only: zero details requests until keyboard activation', async () => {
+    const calls: string[] = [];
+    mockApi((url) => {
+      calls.push(url);
+      if (url.includes('/api/memory/status')) {
+        return okJson({ pending_count: 0, processing_count: 0, failed_count: 0 });
+      }
+      if (url.includes('/details')) {
+        // Stall the payload so the loading transition stays observable.
+        return new Promise(() => undefined);
+      }
+      return okJson(projection);
+    });
+    render(
+      <MemorySpace
+        sessionId="s"
+        chatWorldline="steins_gate"
+        chatIdentityMode="okabe"
+        onClose={vi.fn()}
+      />,
+    );
+    await screen.findByTestId('memory-graph');
+    // Rove across the semantic order without touching selection. The first
+    // result sits at order[0]; further arrows move to SOUL / Topic, which
+    // must still not trigger evidence requests.
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(screen.getByTestId('memory-space').getAttribute('data-selected-id')).toBe('');
+    expect(calls.filter((url) => url.includes('/details'))).toHaveLength(0);
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    fireEvent.keyDown(window, { key: 'ArrowDown' });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(screen.getByTestId('memory-space').getAttribute('data-selected-id')).toBe('');
+    expect(calls.filter((url) => url.includes('/details'))).toHaveLength(0);
+    // Rove back to the fact and activate it with Enter.
+    fireEvent.keyDown(window, { key: 'ArrowUp' });
+    fireEvent.keyDown(window, { key: 'ArrowUp' });
+    fireEvent.keyDown(window, { key: 'Enter' });
+    await waitFor(() => {
+      expect(calls.filter((url) => url.includes('/api/memory/facts/1/details'))).toHaveLength(1);
+    });
+    expect(calls.filter((url) => url.includes('fact:1/details'))).toHaveLength(0);
+    // P2 spec-3: the loading transition is perceivable in the live region and
+    // on the reading surface.
+    await waitFor(() => {
+      expect(screen.getByTestId('memory-announce')).toHaveTextContent('正在读取证据');
+    });
+    expect(screen.getByTestId('reading-evidence-loading')).toBeInTheDocument();
+  });
+
+  it('shows total versions plus the latest change in the collapsed revision summary', async () => {
+    const revisedFixture = {
+      ...factDetailsFixture,
+      fact: { ...factDetailsFixture.fact, active_version: 2 },
+      versions: [
+        {
+          ...factDetailsFixture.versions[0],
+          is_active: false,
+          invalid_at: '2026-08-14T00:00:00Z',
+        },
+        {
+          version_no: 2,
+          display_text: '喜欢黑咖啡',
+          confidence: 0.9,
+          change_kind: 'user_edit',
+          previous_version: 1,
+          valid_from: '2026-08-14T00:00:00Z',
+          invalid_at: null,
+          is_active: true,
+        },
+      ],
+      provenance: [
+        factDetailsFixture.provenance[0],
+        { ...factDetailsFixture.provenance[0], version_no: 2, observation_id: 'o2', source_message_id: 12 },
+      ],
+    };
+    mockApi((url) => {
+      if (url.includes('/api/memory/status')) {
+        return okJson({ pending_count: 0, processing_count: 0, failed_count: 0 });
+      }
+      if (url.includes('/details')) {
+        return okJson(revisedFixture);
+      }
+      return okJson(projection);
+    });
+    render(
+      <MemorySpace
+        sessionId="s"
+        chatWorldline="steins_gate"
+        chatIdentityMode="okabe"
+        onClose={vi.fn()}
+      />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('reading-revision-summary')).toHaveTextContent('2 个版本 · 最新变更：用户修订');
+    });
+    // Historical versions keep their invalidation disclosure.
+    expect(screen.getByTestId('reading-version-invalid').textContent ?? '').toContain('失效于');
+  });
+
+  it('P2-A: reactivating the same record never re-GETs; other records and retry do', async () => {
+    const calls: string[] = [];
+    mockApi((url) => {
+      calls.push(url);
+      if (url.includes('/api/memory/status')) {
+        return okJson({ pending_count: 0, processing_count: 0, failed_count: 0 });
+      }
+      if (url.includes('/details')) {
+        return okJson(factDetailsFixture);
+      }
+      return okJson(projection);
+    });
+    const factCalls = () => calls.filter((url) => url.includes('/api/memory/facts/1/details')).length;
+    render(
+      <MemorySpace
+        sessionId="s"
+        chatWorldline="steins_gate"
+        chatIdentityMode="okabe"
+        onClose={vi.fn()}
+      />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('reading-evidence')).toBeInTheDocument();
+    });
+    expect(factCalls()).toBe(1);
+    // Deactivate through SOUL, then reactivate the SAME record.
+    fireEvent.click(screen.getByTestId('select-soul'));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('reading-evidence')).toBeInTheDocument();
+    });
+    // Cache reuse across LIST / 3D reactivation: no second GET.
+    expect(factCalls()).toBe(1);
+  });
+
+  it('P2-B: LIST-covered resolution announces loaded-and-where without flipping later', async () => {
+    mockApi((url) => {
+      if (url.includes('/api/memory/status')) {
+        return okJson({ pending_count: 0, processing_count: 0, failed_count: 0 });
+      }
+      if (url.includes('/details')) {
+        return okJson(factDetailsFixture);
+      }
+      return okJson(projection);
+    });
+    render(
+      <MemorySpace
+        sessionId="s"
+        chatWorldline="steins_gate"
+        chatIdentityMode="okabe"
+        onClose={vi.fn()}
+      />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
+    // Keep LIST open: the reading surface stays covered.
+    await waitFor(() => {
+      expect(screen.getByTestId('memory-announce')).toHaveTextContent('证据已载入，可在阅读面查看');
+    });
+    // Closing LIST reveals the evidence; the announcement never lies and
+    // never duplicates.
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('reading-evidence')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('memory-announce')).toHaveTextContent('证据已载入，可在阅读面查看');
+  });
+
+  it('P2 round 5: a repeated failure after retry announces the terminal wording again', async () => {
+    mockApi((url) => {
+      if (url.includes('/api/memory/status')) {
+        return okJson({ pending_count: 0, processing_count: 0, failed_count: 0 });
+      }
+      if (url.includes('/details')) {
+        return errorJson(500, 'memory_operation_failed');
+      }
+      return okJson(projection);
+    });
+    render(
+      <MemorySpace
+        sessionId="s"
+        chatWorldline="steins_gate"
+        chatIdentityMode="okabe"
+        onClose={vi.fn()}
+      />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('reading-evidence-error')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('memory-announce')).toHaveTextContent('证据暂时不可用');
+    });
+    // Retry: the fresh attempt re-arms the terminal announcement. The
+    // transient loading wording is racy to observe; the contract point is
+    // that the repeated failure is announced again, not swallowed.
+    fireEvent.click(screen.getByTestId('reading-evidence-retry'));
+    await waitFor(() => {
+      expect(screen.getByTestId('reading-evidence-error')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('memory-announce')).toHaveTextContent('证据暂时不可用');
+    });
+  });
+
+  it('P2 round 5: a fact without provenance shows an honest empty-source disclosure', async () => {
+    mockApi((url) => {
+      if (url.includes('/api/memory/status')) {
+        return okJson({ pending_count: 0, processing_count: 0, failed_count: 0 });
+      }
+      if (url.includes('/details')) {
+        return okJson({ ...factDetailsFixture, provenance: [] });
+      }
+      return okJson(projection);
+    });
+    render(
+      <MemorySpace
+        sessionId="s"
+        chatWorldline="steins_gate"
+        chatIdentityMode="okabe"
+        onClose={vi.fn()}
+      />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('reading-sources-empty')).toHaveTextContent('未提供可显示的来源');
+    });
+    expect(screen.getByTestId('reading-sources-empty').textContent ?? '').not.toContain('删除');
+  });
+
+  it('P2 round 5: an experience without provenance shows the same honest disclosure', async () => {
+    const projectionWithExperience: MemoryProjection = {
+      ...projection,
+      result_ids: ['experience:e1'],
+      eligible: { nodes: 2, edges: 1, records: 1, results: 1 },
+      shown: { nodes: 2, edges: 1, records: 1, results: 1 },
+      nodes: [
+        projection.nodes[0],
+        {
+          kind: 'experience',
+          projection_id: 'experience:e1',
+          experience_id: 'e1',
+          label: '一起看星空',
+          is_pinned: false,
+          created_at: '2026-08-13T00:00:00Z',
+          updated_at: '2026-08-13T00:00:00Z',
+          expires_at: null,
+          is_expired: false,
+          conversation_id: 'c1',
+        },
+      ],
+      edges: [{ kind: 'hub_to_evidence', from: projection.center.projection_id, to: 'experience:e1' }],
+    };
+    mockApi((url) => {
+      if (url.includes('/api/memory/status')) {
+        return okJson({ pending_count: 0, processing_count: 0, failed_count: 0 });
+      }
+      if (url.includes('/api/memory/experiences/e1/details')) {
+        return okJson({
+          scope: { session_id: 's', worldline: 'steins_gate', identity_mode: 'okabe' },
+          experience: {
+            experience_id: 'e1',
+            conversation_id: 'c1',
+            display_text: '一起看星空',
+            status: 'active',
+            expires_at: null,
+            created_at: '2026-08-13T00:00:00Z',
+            is_expired: false,
+          },
+          observation_id: 'o9',
+          provenance: [],
+        });
+      }
+      return okJson(projectionWithExperience);
+    });
+    render(
+      <MemorySpace
+        sessionId="s"
+        chatWorldline="steins_gate"
+        chatIdentityMode="okabe"
+        onClose={vi.fn()}
+      />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    activateWithEnter(await screen.findByRole('option', { name: /一起看星空/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('reading-sources-empty')).toHaveTextContent('未提供可显示的来源');
+    });
+    expect(screen.getByTestId('reading-sources-empty').textContent ?? '').not.toContain('删除');
+  });
+
+  it('renders honest not-found wording when the details endpoint returns 404', async () => {
+    mockApi((url) => {
+      if (url.includes('/api/memory/status')) {
+        return okJson({ pending_count: 0, processing_count: 0, failed_count: 0 });
+      }
+      if (url.includes('/details')) {
+        return errorJson(404, 'fact_not_found');
+      }
+      return okJson(projection);
+    });
+    render(
+      <MemorySpace
+        sessionId="s"
+        chatWorldline="steins_gate"
+        chatIdentityMode="okabe"
+        onClose={vi.fn()}
+      />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
+    // Close LIST so the reading surface becomes the active sheet (wide IA).
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('reading-evidence-missing')).toHaveTextContent('该记忆在此范围内不再可用');
+    });
+    // Envelope text stays labeled as an unverified projection summary.
+    expect(screen.getByTestId('reading-projection-summary')).toBeInTheDocument();
+    // No ghost verified content, no retry loop against a 404.
+    expect(screen.queryByTestId('reading-evidence-text')).toBeNull();
+    expect(screen.queryByTestId('reading-evidence-retry')).toBeNull();
+  });
+
+  it('offers one retry on a 500-class backend failure and recovers on success', async () => {
+    let attempts = 0;
+    mockApi((url) => {
+      if (url.includes('/api/memory/status')) {
+        return okJson({ pending_count: 0, processing_count: 0, failed_count: 0 });
+      }
+      if (url.includes('/details')) {
+        attempts += 1;
+        return attempts === 1
+          ? errorJson(500, 'memory_operation_failed')
+          : okJson(factDetailsFixture);
+      }
+      return okJson(projection);
+    });
+    render(
+      <MemorySpace
+        sessionId="s"
+        chatWorldline="steins_gate"
+        chatIdentityMode="okabe"
+        onClose={vi.fn()}
+      />,
+    );
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
+    // Close LIST so the reading surface becomes the active sheet (wide IA).
+    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('reading-evidence-error')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('reading-evidence-error').textContent ?? '').not.toMatch(/SOUL.*(损伤|受伤)/);
+    fireEvent.click(screen.getByTestId('reading-evidence-retry'));
+    await waitFor(() => {
+      expect(screen.getByTestId('reading-title')).toHaveTextContent('喜欢黑咖啡');
+    });
+    expect(screen.getByTestId('reading-evidence')).toBeInTheDocument();
+    expect(screen.queryByTestId('reading-projection-summary')).toBeNull();
+    expect(attempts).toBe(2);
   });
 
   it('opens the G27 inspector from SOUL without Origin/Lived/Self or people=0', async () => {
@@ -927,6 +1605,8 @@ describe('MemorySpace', () => {
     await screen.findByTestId('memory-graph');
     fireEvent.click(screen.getByTestId('select-soul'));
     fireEvent.keyDown(window, { key: 'ArrowRight' });
+    // Arrows rove only; Enter activates the focused node.
+    fireEvent.keyDown(window, { key: 'Enter' });
     fireEvent.click(screen.getByRole('button', { name: '仪器' }));
     fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
     const selected = document.querySelector('[aria-selected="true"]');

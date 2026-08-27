@@ -121,6 +121,28 @@ function projectWithRenderedCamera(
 }
 
 describe('OrreryRuntime live frame adapter', () => {
+  it('P1R-I8: SOUL is a quiet nested core without text skin or decorative orbit lines', () => {
+    const runtime = new OrreryRuntime(document.createElement('canvas'));
+    const internal = runtime as unknown as {
+      supported: boolean;
+      soulGroup: THREE.Group;
+      palette: unknown;
+      buildSoul(palette: unknown): void;
+    };
+    // jsdom has no WebGL context; build the soul structure directly.
+    // Real-Chromium occlusion / readability stays a Gate 2 runtime cell.
+    if (!internal.supported) internal.buildSoul(internal.palette);
+    const group = internal.soulGroup;
+    const sprites = group.children.filter((child) => Boolean((child as THREE.Sprite).isSprite));
+    expect(sprites).toHaveLength(0);
+    expect(group.getObjectByName('soul-mark')).toBeUndefined();
+    expect(group.getObjectByName('soul-continuity-rings')).toBeUndefined();
+    expect(group.getObjectByName('soul-glass')).toBeTruthy();
+    expect(group.getObjectByName('soul-kernel')).toBeTruthy();
+    expect(group.getObjectByName('soul-hit')).toBeTruthy();
+    runtime.dispose();
+  });
+
   it('projects off-center nodes where the rendered Three camera draws them', () => {
     const { frame } = frameOf([], null);
     const rendered = projectWithRenderedCamera(frame, 'topic:t1');

@@ -27,13 +27,22 @@ import { nextMemoryUnwind } from './memoryUnwind';
 import { layoutProjection, readingSurfaceMode } from './layout';
 import { classifyOverviewState } from './overviewState';
 import { createProjectionController } from './projectionController';
-import { ReadingFields, readingCardFromNode } from './readingContent';
+import { ReadingFields, ReadingProvenance, readingCardFromNode } from './readingContent';
+import {
+  createDetailsController,
+  deriveExperienceReading,
+  deriveFactReading,
+  NOT_FOUND_NOTICE,
+  type DetailsOutcome,
+  type ExperienceReadingModel,
+  type FactReadingModel,
+} from './readingDetails';
 import {
   HEALTHY_CAPABILITY,
   applyContextLoss,
   applyCreateFailure,
   applyExplicitCompatibility,
-  applyPerformanceSample,
+  applyFrameSample,
   applyRetry3d,
   type CapabilityState,
   type FrameSample,
@@ -44,7 +53,7 @@ import {
   reconcileSelection,
   semanticOrder,
 } from './semanticNavigator';
-import type { IdentityMode, Worldline } from './types';
+import type { IdentityMode, MemoryProjection, Worldline } from './types';
 
 export type MemorySpaceProps = {
   sessionId: string;
@@ -68,6 +77,12 @@ export function MemorySpace({
   onClose,
 }: MemorySpaceProps) {
   const controllerRef = useRef(createProjectionController());
+  const detailsControllerRef = useRef(createDetailsController());
+  const [details, setDetails] = useState<DetailsOutcome>({ type: 'idle' });
+  // P1 spec-1/2 (round 2): activation is owned by explicit user gestures
+  // (Enter / Space / click), never by focus movement. The key encodes
+  // {scope, kind, recordId} of the LAST activated evidence record.
+  const [activationKey, setActivationKey] = useState<string | null>(null);
   const [browseSessionId, setBrowseSessionId] = useState(sessionId);
   const [worldline, setWorldline] = useState<Worldline>(chatWorldline);
   const [identityMode, setIdentityMode] = useState<IdentityMode>(chatIdentityMode);
@@ -142,7 +157,10 @@ export function MemorySpace({
     return () => media.removeEventListener?.('change', onChange);
   }, []);
 
-  useEffect(() => () => controllerRef.current.dispose(), []);
+  useEffect(() => () => {
+    controllerRef.current.dispose();
+    detailsControllerRef.current.deactivate();
+  }, []);
 
   const selectedRef = useRef<string | null>(null);
   selectedRef.current = selectedId;
@@ -153,7 +171,11 @@ export function MemorySpace({
     setProjection(next);
     setPreviousTruth(next);
     if (!keepError) setError(null);
+    const previousSelected = selectedRef.current;
     const reconciled = reconcileSelection(selectedRef.current, next);
+    // P1 (round 3): an envelope-driven selection change invalidates the
+    // previous evidence activation.
+    if (reconciled.selectedId !== previousSelected) setActivationKey(null);
     setSelectedId(reconciled.selectedId);
     const focused = reconcileSelection(focusedRef.current, next);
     setFocusedId(focused.selectedId);
@@ -243,45 +265,112 @@ export function MemorySpace({
     requestedCriteria: criteria,
   });
   const liveProjection = presentation.envelope;
-  const disclosurePlan = liveProjection
-    ? deriveOverviewPresentation(liveProjection, {
-      expandedTopicIds,
-      selectedId,
-      focusedId,
-      query: criteria.query,
-    })
-    : null;
+  // P1-A (round 4): derivations are memoized so a parent re-render (e.g. an
+  // anchor update during drag) does not hand ConstellationStage fresh
+  // object identities and retrigger its apply/publish effect chain.
+  const disclosurePlan = useMemo(
+    () => (liveProjection
+      ? deriveOverviewPresentation(liveProjection, {
+        expandedTopicIds,
+        selectedId,
+        focusedId,
+        query: criteria.query,
+      })
+      : null),
+    [liveProjection, expandedTopicIds, selectedId, focusedId, criteria.query],
+  );
   const planReady = Boolean(disclosurePlan?.valid);
-  const display = liveProjection ? layoutProjection(liveProjection) : [];
+  const display = useMemo(
+    () => (liveProjection ? layoutProjection(liveProjection) : []),
+    [liveProjection],
+  );
   const selected = display.find((node) => node.id === selectedId) ?? null;
-  const card = selected ? readingCardFromNode(selected) : null;
+  const card = useMemo(
+    () => (selected ? readingCardFromNode(selected, liveProjection) : null),
+    [selected, liveProjection],
+  );
+  const scopeKey = `${browseSessionId}|${worldline}|${identityMode}`;
+
+  // P1R-3 §5: activated Fact/Experience selections lazily load scoped
+  // details through the frozen endpoints. Pure rove (focus without
+  // activation) never reaches this effect because selectedId is unchanged.
+  const selectedProjectionNode = selectedId
+    ? liveProjection?.nodes.find((node) => node.projection_id === selectedId) ?? null
+    : null;
+  const detailsRecordId =
+    selectedProjectionNode?.kind === 'fact'
+      ? selectedProjectionNode.fact_id
+      : selectedProjectionNode?.kind === 'experience'
+        ? selectedProjectionNode.experience_id
+        : null;
+  const detailsKey = detailsRecordId && selectedProjectionNode
+    ? `${scopeKey}|${selectedProjectionNode.kind}|${detailsRecordId}`
+    : null;
+
+  // P1 spec-2: never combine the new browse scope with a stale envelope.
+  const scopeFresh = Boolean(
+    liveProjection
+    && liveProjection.scope.session_id === browseSessionId
+    && liveProjection.scope.worldline === worldline
+    && liveProjection.scope.identity_mode === identityMode,
+  );
+
+  // P1 spec-2 (round 2 / round 3): render-time alignment. A payload only
+  // renders when its request identity equals the CURRENT activated
+  // {scope, kind, recordId} AND that activation still matches the current
+  // selection-derived details key; any mismatch is treated as idle
+  // synchronously, without waiting for the effect to clean up.
+  const detailsAligned = (() => {
+    if (details.type === 'idle') return true;
+    const req = details.request;
+    const requestId = `${req.scope.sessionId}|${req.scope.worldline}|${req.scope.identityMode}|${req.kind}|${req.recordId}`;
+    return scopeFresh
+      && activationKey !== null
+      && requestId === activationKey
+      && activationKey === detailsKey;
+  })();
+  const effectiveDetails: DetailsOutcome = detailsAligned ? details : { type: 'idle' };
+
   const surface = readingSurfaceMode({ width, preferList: listOpen, reducedMotion });
   const cameraMode: '3d' | '2d' = forceCompat ? '2d' : '3d';
   const renderSurface = capability.surface;
   const inspectorOpen = overviewOpen && selected?.kind === 'continuity_hub';
   const memoOpen = Boolean(card) && overviewOpen;
-  const showSceneMemo = memoOpen && surface === 'scene' && renderSurface === '3d' && cameraMode === '3d' && camOwnership !== 'user';
+  const showSceneMemo = memoOpen && surface === 'scene' && renderSurface === '3d' && cameraMode === '3d' && camOwnership !== 'user' && (effectiveDetails.type === 'idle' || effectiveDetails.type === 'loading');
   const showDomMemo = memoOpen && !showSceneMemo;
   const phase = overviewOpen ? 'overview' : 'soul';
   const lockup = soulLockupLines(
     liveProjection?.center.label_primary ?? 'AMADEUS',
     liveProjection?.center.label_secondary ?? 'SOUL',
   );
-  const chips = criteriaChips(liveProjection ? {
+  const chips = useMemo(() => criteriaChips(liveProjection ? {
     query: liveProjection.criteria.query ?? '',
     kinds: liveProjection.criteria.kinds,
     topicId: liveProjection.criteria.topic_id,
     pinnedOnly: liveProjection.criteria.pinned_only,
     updatedFrom: liveProjection.criteria.updated_from,
     updatedTo: liveProjection.criteria.updated_to,
-  } : criteria);
-  const order = liveProjection ? semanticOrder(liveProjection) : [];
+  } : criteria), [liveProjection, criteria]);
+  const order = useMemo(
+    () => (liveProjection ? semanticOrder(liveProjection) : []),
+    [liveProjection],
+  );
 
   const revealTopic = (topicId: string) => {
     setExpandedTopicIds((current) => openTopicBranch(topicId, current));
   };
 
   const handleSelect = (id: string | null, mode: 'rove' | 'activate' = 'activate') => {
+    // P1 spec-1: rove moves focus only. Activation (Enter / Space / click)
+    // is the sole owner of selectedId and therefore of details loading.
+    if (mode === 'rove') {
+      if (!id) return;
+      const roveHit = display.find((node) => node.id === id);
+      if (!roveHit) return;
+      setFocusedId(roveHit.id);
+      if (liveProjection) setAnnouncement(announceNode(liveProjection, roveHit.id));
+      return;
+    }
     if (mode === 'activate') {
       setNarrowPrefer('detail');
       setToolsOpen(false);
@@ -290,6 +379,7 @@ export function MemorySpace({
       setSelectedId(null);
       setFocusedId(null);
       setExpandedTopicIds([]);
+      setActivationKey(null);
       noteMotion('disclosure');
       return;
     }
@@ -298,6 +388,7 @@ export function MemorySpace({
       const fallback = reconcileSelection(id, liveProjection);
       setSelectedId(fallback.selectedId);
       setFocusedId(fallback.selectedId);
+      setActivationKey(null);
       if (fallback.announced) setAnnouncement(fallback.announced);
       noteMotion('post-reconcile-replacement');
       return;
@@ -306,12 +397,14 @@ export function MemorySpace({
     setFocusedId(hit.id);
     if (hit.kind === 'continuity_hub') {
       setSelectedId(hit.id);
+      setActivationKey(null);
       return;
     }
     if (hit.kind === 'topic') {
       revealTopic(hit.id);
       noteMotion('disclosure');
       setSelectedId(hit.id);
+      setActivationKey(null);
       return;
     }
     const parent = evidenceParentId(hit.id, liveProjection?.edges ?? []);
@@ -320,12 +413,19 @@ export function MemorySpace({
       noteMotion('disclosure');
     }
     setSelectedId(hit.id);
+    const activatedRecordId = hit.node.kind === 'fact'
+      ? hit.node.fact_id
+      : hit.node.kind === 'experience'
+        ? hit.node.experience_id
+        : null;
+    setActivationKey(activatedRecordId ? `${scopeKey}|${hit.kind}|${activatedRecordId}` : null);
     if (liveProjection) setAnnouncement(announceNode(liveProjection, hit.id));
   };
 
   const moveSemantic = (delta: number) => {
+    // P1 spec-1 (round 2): canvas arrows rove only; Enter / Space activate.
     const next = neighborId(order, focusedId ?? selectedId, delta);
-    if (next) handleSelect(next);
+    if (next) handleSelect(next, 'rove');
   };
 
   const roveList = (nextId: string) => {
@@ -335,12 +435,12 @@ export function MemorySpace({
     listRef.current?.querySelector<HTMLElement>(`[data-outline-id="${nextId}"]`)?.focus();
   };
 
-  const emphasis = emphasisMode({
+  const emphasis = useMemo(() => emphasisMode({
     query: criteria.query,
     resultIds: liveProjection?.result_ids ?? [],
     hoverId: null,
     selectedId,
-  });
+  }), [criteria.query, liveProjection, selectedId]);
 
   const changeCriteria = (next: CriteriaInput) => {
     setCriteria(normalizeCriteria(next));
@@ -401,6 +501,7 @@ export function MemorySpace({
       setSelectedId(parent);
       setFocusedId(parent);
       setExpandedTopicIds(parent ? [parent] : []);
+      setActivationKey(null);
       noteMotion('selection');
       noteMotion('disclosure');
       return;
@@ -409,12 +510,14 @@ export function MemorySpace({
       setSelectedId(null);
       setFocusedId(null);
       setExpandedTopicIds([]);
+      setActivationKey(null);
       noteMotion('selection');
       noteMotion('disclosure');
       return;
     }
     if (action === 'collapse-branch') {
       setExpandedTopicIds([]);
+      setActivationKey(null);
       noteMotion('disclosure');
       return;
     }
@@ -465,6 +568,13 @@ export function MemorySpace({
         return;
       }
       if (event.key === 'Enter' && focusedId) {
+        event.preventDefault();
+        handleSelect(focusedId);
+        return;
+      }
+      // P1 spec-1: Space activates the focused node outside native controls;
+      // native buttons keep their own Space-click activation path.
+      if (event.key === ' ' && focusedId && !nativeInteractive) {
         event.preventDefault();
         handleSelect(focusedId);
         return;
@@ -520,6 +630,44 @@ export function MemorySpace({
   const showReading = Boolean(showDomMemo && card && narrowSheet === 'reading');
   const showSceneReading = Boolean(showSceneMemo && card && narrowSheet === 'reading');
 
+  // P2-B (round 4): honest terminal announcement. When the reading surface
+  // is visible at resolution time we say "证据已读取"; otherwise we say the
+  // payload is loaded and where to read it. One announcement per
+  // (record, outcome) — never a misleading "read" while the surface is
+  // covered by LIST/tools/inspector.
+  const lastAnnouncedRef = useRef<string | null>(null);
+  useEffect(() => {
+    const eff = effectiveDetails;
+    if (eff.type === 'loading') {
+      // P2 (round 5): a fresh attempt re-arms the terminal announcement so a
+      // repeated failure after retry is never swallowed by the dedupe marker.
+      lastAnnouncedRef.current = null;
+      return;
+    }
+    if (
+      eff.type !== 'ok'
+      && eff.type !== 'not-found'
+      && eff.type !== 'backend-failure'
+      && eff.type !== 'transport-error'
+    ) {
+      return;
+    }
+    const req = eff.request;
+    const marker = `${req.scope.sessionId}|${req.scope.worldline}|${req.scope.identityMode}|${req.kind}|${req.recordId}|${eff.type}`;
+    if (lastAnnouncedRef.current === marker) return;
+    lastAnnouncedRef.current = marker;
+    if (eff.type === 'ok') {
+      setAnnouncement(showReading || showSceneReading ? '证据已读取' : '证据已载入，可在阅读面查看');
+    } else if (eff.type === 'not-found') {
+      setAnnouncement(NOT_FOUND_NOTICE);
+    } else {
+      setAnnouncement('证据暂时不可用');
+    }
+    // effectiveDetails identity changes with details/scope; visibility flags
+    // intentionally do not retrigger a second announcement.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveDetails]);
+
   useEffect(() => {
     const opened = showList && !listWasShown.current;
     listWasShown.current = showList;
@@ -549,7 +697,71 @@ export function MemorySpace({
     && (liveProjection.truncated.results || liveProjection.shown.results < liveProjection.eligible.results),
   );
 
-  const scopeKey = `${browseSessionId}|${worldline}|${identityMode}`;
+  // P1 spec-4: details transitions enter the live region.
+  // P2-B (round 4): loading is announced here; terminal wording is decided
+  // by the announcement effect below, which knows whether the reading
+  // surface is actually visible when the outcome lands.
+  const updateDetails = useCallback((outcome: DetailsOutcome) => {
+    setDetails(outcome);
+    // P2 spec-3 (round 2): loading is announced quietly as well.
+    if (outcome.type === 'loading') setAnnouncement('正在读取证据');
+  }, []);
+
+  useEffect(() => {
+    const controller = detailsControllerRef.current;
+    if (
+      !scopeFresh
+      || !activationKey
+      || activationKey !== detailsKey
+      || !detailsKey
+      || !selectedProjectionNode
+      || !detailsRecordId
+      || (selectedProjectionNode.kind !== 'fact' && selectedProjectionNode.kind !== 'experience')
+    ) {
+      controller.deactivate();
+      setDetails({ type: 'idle' });
+      return;
+    }
+    const request = {
+      scope: { sessionId: browseSessionId, worldline, identityMode },
+      kind: selectedProjectionNode.kind,
+      recordId: detailsRecordId,
+    };
+    const initial = controller.activate(request, updateDetails);
+    updateDetails(initial);
+    // detailsKey already encodes scope, kind, and canonical record id.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detailsKey, activationKey, scopeFresh]);
+
+  // P1 (round 3): any scope change invalidates every previous activation;
+  // a new scope always requires a fresh Enter / Space / click gesture.
+  // P2-A (round 4): the retained payload is dropped on scope change too.
+  useEffect(() => {
+    setActivationKey(null);
+    detailsControllerRef.current.invalidate();
+  }, [scopeKey]);
+
+  const retryDetails = () => {
+    if (details.type !== 'backend-failure' && details.type !== 'transport-error') return;
+    // Explicit retry bypasses the retained payload per contract.
+    const initial = detailsControllerRef.current.activate(details.request, updateDetails, { force: true });
+    updateDetails(initial);
+  };
+
+  const readingModel: FactReadingModel | ExperienceReadingModel | null = (() => {
+    if (effectiveDetails.type !== 'ok' || !selectedProjectionNode || !liveProjection) return null;
+    const payload = effectiveDetails.payload;
+    if (selectedProjectionNode.kind === 'fact' && 'fact' in payload) {
+      return deriveFactReading(payload, liveProjection, {
+        projectionId: selectedProjectionNode.projection_id,
+        topicId: selectedProjectionNode.topic_id,
+      });
+    }
+    if (selectedProjectionNode.kind === 'experience' && 'experience' in payload) {
+      return deriveExperienceReading(payload);
+    }
+    return null;
+  })();
   const motionInsets = {
     top: 64,
     right: 16,
@@ -897,8 +1109,16 @@ export function MemorySpace({
               });
             }}
             onFrame={(sample) => {
-              framesRef.current = [...framesRef.current.slice(-240), sample];
-              setCapability((current) => applyPerformanceSample(current, framesRef.current, sample.at));
+              // P1 (round 5): the buffer itself is part of the judgment
+              // window; keep it in the same accumulation seam.
+              const next = applyFrameSample(capability, framesRef.current, sample);
+              framesRef.current = next.buffer;
+              setCapability(next.state);
+            }}
+            onPerfBaselineReset={() => {
+              // P1 (round 5): visibility/focus recovery clears the FULL
+              // sampling window, not just the stage-local warmup counters.
+              framesRef.current = [];
             }}
           />
         ) : null}
@@ -918,7 +1138,13 @@ export function MemorySpace({
             data-attached="sphere"
             style={anchor ? { left: anchor.x, top: anchor.y } : undefined}
           >
-            <ReadingFields card={card} />
+            <ReadingBody
+              card={card}
+              details={effectiveDetails}
+              model={readingModel}
+              onRetry={retryDetails}
+              scope={liveProjection?.scope ?? null}
+            />
           </aside>
         ) : null}
       </div>
@@ -1008,9 +1234,218 @@ export function MemorySpace({
 
       {showReading && card ? (
         <aside className="memory-reading-dom" data-testid="reading-dom">
-          <ReadingFields card={card} />
+          <ReadingBody
+            card={card}
+            details={effectiveDetails}
+            model={readingModel}
+            onRetry={retryDetails}
+            scope={liveProjection?.scope ?? null}
+          />
         </aside>
       ) : null}
     </section>
+  );
+}
+
+type SourceLineModel = {
+  sourceCreatedHuman: string | null;
+  sourceErased: boolean;
+  excerpt: string | null;
+};
+
+function SourceLines({ lines }: { lines: SourceLineModel[] }) {
+  if (!lines.length) {
+    // P2 (round 5): an absent field gets an honest disclosure; never imply
+    // that the source was deleted or never existed.
+    return <p className="memory-reading-sources-empty" data-testid="reading-sources-empty">未提供可显示的来源</p>;
+  }
+  return (
+    <ul className="memory-reading-sources">
+      {lines.map((line, index) => (
+        <li key={`${index}-${line.sourceErased ? 'erased' : 'present'}`}>
+          {line.sourceErased ? (
+            <span data-testid="reading-source-erased">原始消息已删除，仅保留来源记录</span>
+          ) : (
+            <>
+              <blockquote data-testid="reading-source-excerpt">{line.excerpt}</blockquote>
+              {line.sourceCreatedHuman ? <span>{line.sourceCreatedHuman}</span> : null}
+            </>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function ReadingEvidence({
+  outcome,
+  onRetry,
+}: {
+  outcome: DetailsOutcome;
+  onRetry: () => void;
+}) {
+  if (outcome.type === 'idle' || outcome.type === 'ok') return null;
+  if (outcome.type === 'loading') {
+    return <p data-testid="reading-evidence-loading">正在读取来源与版本…</p>;
+  }
+  if (outcome.type === 'not-found') {
+    return <p data-testid="reading-evidence-missing">{NOT_FOUND_NOTICE}</p>;
+  }
+  return (
+    <p data-testid="reading-evidence-error">
+      证据暂时不可用。
+      <button type="button" data-testid="reading-evidence-retry" onClick={onRetry}>重试</button>
+    </p>
+  );
+}
+
+type ScopeEcho = MemoryProjection['scope'] | null;
+
+function DiagnosticsBlock({
+  model,
+  scope,
+}: {
+  model: FactReadingModel | ExperienceReadingModel;
+  scope: ScopeEcho;
+}) {
+  return (
+    <details data-testid="reading-diagnostics">
+      <summary>诊断</summary>
+      <dl>
+        {model.kind === 'fact' ? (
+          <>
+            <div><dt>fact_id</dt><dd>{model.diagnostics.factId}</dd></div>
+            {model.diagnostics.topicIdRaw ? (
+              <div><dt>topic_id</dt><dd>{model.diagnostics.topicIdRaw}</dd></div>
+            ) : null}
+          </>
+        ) : (
+          <div><dt>experience_id</dt><dd>{model.diagnostics.experienceId}</dd></div>
+        )}
+        <div>
+          <dt>observation_id</dt>
+          <dd>
+            {model.kind === 'fact'
+              ? model.diagnostics.observationIds.join(', ')
+              : model.diagnostics.observationId}
+          </dd>
+        </div>
+        <div><dt>conversation_id</dt><dd>{model.diagnostics.conversationIds.join(', ')}</dd></div>
+        <div>
+          <dt>source_message_id</dt>
+          <dd data-testid="reading-diagnostics-source-messages">
+            {model.diagnostics.sourceMessageIds.join(', ')}
+          </dd>
+        </div>
+        <div>
+          <dt>raw ISO</dt>
+          <dd data-testid="reading-diagnostics-raw-time">{model.diagnostics.rawTimestamps.join(' / ')}</dd>
+        </div>
+        {scope ? (
+          <div>
+            <dt>scope</dt>
+            <dd data-testid="reading-diagnostics-scope">
+              {scope.session_id} / {scope.worldline} / {scope.identity_mode}
+            </dd>
+          </div>
+        ) : null}
+      </dl>
+    </details>
+  );
+}
+
+function EvidenceDetails({
+  model,
+  scope,
+}: {
+  model: FactReadingModel | ExperienceReadingModel;
+  scope: ScopeEcho;
+}) {
+  return (
+    <div className="memory-reading-evidence" data-testid="reading-evidence">
+      {model.kind === 'fact' ? (
+        <>
+          {model.revisionSummary ? (
+            <p data-testid="reading-revision-summary">{model.revisionSummary}</p>
+          ) : null}
+          <SourceLines lines={model.activeSources} />
+          {model.versionCount > 1 ? (
+            <details data-testid="reading-versions">
+              <summary>版本历史（{model.versionCount}）</summary>
+              <ol className="memory-reading-versions">
+                {model.historyVersions.map((version) => (
+                  <li key={version.versionNo} data-active={version.isActive ? 'true' : 'false'}>
+                    <span data-testid="reading-version-kind">{version.changeKindHuman}</span>
+                    {version.validFromHuman ? <span> · {version.validFromHuman}</span> : null}
+                    {version.isActive ? (
+                      <span> · 当前版本</span>
+                    ) : version.invalidAtHuman ? (
+                      <span data-testid="reading-version-invalid"> · 失效于 {version.invalidAtHuman}</span>
+                    ) : null}
+                    <p>{version.displayText}</p>
+                    <SourceLines lines={version.sources} />
+                  </li>
+                ))}
+              </ol>
+            </details>
+          ) : null}
+        </>
+      ) : (
+        <>
+          {model.createdHuman ? (
+            <p data-testid="reading-created-human">发生于 {model.createdHuman}</p>
+          ) : null}
+          {model.expiry ? (
+            model.expiry.expired ? (
+              <p data-testid="reading-expired">已过期{model.expiry.expiresHuman ? `（${model.expiry.expiresHuman}）` : ''}</p>
+            ) : (
+              <p data-testid="reading-expires">{model.expiry.expiresHuman ? `将于 ${model.expiry.expiresHuman} 过期` : ''}</p>
+            )
+          ) : null}
+          <SourceLines lines={model.sources} />
+        </>
+      )}
+      <DiagnosticsBlock model={model} scope={scope} />
+      <p data-testid="reading-correction-notice">{model.correctionNotice}</p>
+      <p data-testid="reading-deeplink-notice">{model.deepLinkNotice}</p>
+    </div>
+  );
+}
+
+// P1 spec-3: one payload-owned primary text in the success state; the
+// envelope card is an explicitly labeled projection summary everywhere else.
+function ReadingBody({
+  card,
+  details,
+  model,
+  onRetry,
+  scope,
+}: {
+  card: NonNullable<ReturnType<typeof readingCardFromNode>>;
+  details: DetailsOutcome;
+  model: FactReadingModel | ExperienceReadingModel | null;
+  onRetry: () => void;
+  scope: ScopeEcho;
+}) {
+  if (details.type === 'ok' && model) {
+    return (
+      <>
+        <p className="memory-reading-kind" data-testid="reading-kind">{card.kind}</p>
+        <h2 data-testid="reading-title">{model.primaryText}</h2>
+        <ReadingProvenance provenance={card.provenance} />
+        <EvidenceDetails model={model} scope={scope} />
+      </>
+    );
+  }
+  return (
+    <>
+      {card.kindKey !== 'topic' ? (
+        <p className="memory-reading-projection-summary" data-testid="reading-projection-summary">
+          投影摘要（未核验）
+        </p>
+      ) : null}
+      <ReadingFields card={card} />
+      <ReadingEvidence outcome={details} onRetry={onRetry} />
+    </>
   );
 }

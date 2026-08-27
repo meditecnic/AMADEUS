@@ -5,12 +5,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
 import { nodeWeight, type EmphasisInput } from './emphasis';
-import {
-  soulLockupLines,
-  soulMarkOffset,
-  visibleOverviewPaths,
-  type GraphPath,
-} from './graphPaths';
+import { visibleOverviewPaths, type GraphPath } from './graphPaths';
 import { OVERVIEW_FOV_DEG } from './layout';
 import { pickLiveNode, type OverviewFrame } from './overviewMotion';
 import { worldlinePalette, type OrreryPalette } from './palette';
@@ -64,32 +59,6 @@ function makeLabelTexture(text: string, hot: boolean, palette: OrreryPalette): T
     ctx.shadowBlur = hot ? 12 : 0;
     ctx.fillStyle = hot ? palette.lockup : palette.lockupSoft;
     ctx.fillText(text, 16, 64);
-  }
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
-}
-
-function makeSoulTexture(
-  primary: string,
-  secondary: string,
-  palette: OrreryPalette,
-): THREE.CanvasTexture {
-  const canvas = document.createElement('canvas');
-  canvas.width = 1024;
-  canvas.height = 1024;
-  const ctx = canvas.getContext('2d');
-  if (ctx) {
-    const [mark] = soulLockupLines(primary, secondary);
-    ctx.clearRect(0, 0, 1024, 1024);
-    ctx.translate(512, 512);
-    ctx.shadowColor = palette.lockup;
-    ctx.shadowBlur = 36;
-    ctx.fillStyle = palette.lockup;
-    ctx.font = '600 220px "Times New Roman", "Songti SC", serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(mark, 0, 8);
   }
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
@@ -154,7 +123,6 @@ export class OrreryRuntime {
   private emphasisDirty = true;
   private readonly labelLooks = new Map<string, { text: string; hot: boolean }>();
   private soulHit: THREE.Mesh | null = null;
-  private soulWord: THREE.Sprite | null = null;
   private soulCore: THREE.Mesh | null = null;
   private starfield: THREE.Points | null = null;
   private display: DisplayNode[] = [];
@@ -343,19 +311,14 @@ export class OrreryRuntime {
       this.camera.position.copy(pos);
       this.camera.lookAt(cam.lookAt.x, cam.lookAt.y, cam.lookAt.z);
     }
-    if (this.soulWord) {
-      const mark = soulMarkOffset(
-        { x: this.camera.position.x, y: this.camera.position.y, z: this.camera.position.z },
-        this.soulRadius,
-      );
-      this.soulWord.position.set(mark.x, mark.y, mark.z);
-    }
+    // P1R-I8: SOUL identity is carried by the core geometry itself; there is
+    // no detached or camera-facing text object to reposition each frame.
     if (!this.liveFrame) this.applyBranchReveal();
     this.syncAmbientClock(typeof performance !== 'undefined' ? performance.now() : 0);
     const t = this.ambientElapsed * 0.001;
     if (this.soulCore && !this.reducedMotion && !this.ambientPaused) {
       const material = this.soulCore.material as THREE.MeshStandardMaterial;
-      material.emissiveIntensity = 0.2 + Math.sin(t * 0.31) * 0.015;
+      material.emissiveIntensity = 0.52 + Math.sin(t * 0.31) * 0.025;
     }
     if (!this.reducedMotion && !this.ambientPaused) {
       this.pathLines.forEach(({ line }, index) => {
@@ -447,7 +410,6 @@ export class OrreryRuntime {
       material.color.setHex(this.palette.accent);
     }
     this.soulGroup.traverse((child) => {
-      if (child === this.soulWord) return;
       const mesh = child as THREE.Mesh;
       const material = mesh.material as THREE.MeshPhysicalMaterial | THREE.MeshStandardMaterial | THREE.MeshBasicMaterial | undefined;
       if (!material) return;
@@ -602,13 +564,6 @@ export class OrreryRuntime {
     this.allocationStats.rebuildGraph += 1;
     const hub = this.display.find((node) => node.kind === 'continuity_hub');
     if (this.soulHit && hub) this.soulHit.userData.nodeId = hub.id;
-    if (this.soulWord && hub && hub.node.kind === 'continuity_hub') {
-      const material = this.soulWord.material;
-      material.map?.dispose();
-      material.map = makeSoulTexture(hub.node.label_primary, hub.node.label_secondary, this.palette);
-      material.visible = true;
-      material.needsUpdate = true;
-    }
     this.nodeGroup.clear();
     this.nodes.clear();
     this.labels.forEach((sprite) => {
@@ -771,62 +726,44 @@ export class OrreryRuntime {
   private buildSoul(palette: OrreryPalette): void {
     this.soulGroup.clear();
     this.soulGroup.name = 'soul';
-    const radius = 0.5;
+    const radius = this.soulRadius;
     const glass = new THREE.Mesh(
       new THREE.SphereGeometry(radius, 72, 56),
       new THREE.MeshPhysicalMaterial({
         color: palette.soulGlass,
         emissive: palette.soulEmissive,
-        emissiveIntensity: 0.28,
+        emissiveIntensity: 0.18,
         metalness: 0.12,
-        roughness: 0.14,
-        transmission: 0.58,
+        roughness: 0.18,
+        transmission: 0.66,
         thickness: 1.1,
         ior: 1.36,
         transparent: true,
-        opacity: 0.9,
+        opacity: 0.76,
         clearcoat: 0.7,
         clearcoatRoughness: 0.16,
       }),
     );
+    glass.name = 'soul-glass';
     const core = new THREE.Mesh(
-      new THREE.SphereGeometry(radius * 0.42, 32, 24),
+      new THREE.SphereGeometry(radius * 0.36, 32, 24),
       new THREE.MeshStandardMaterial({
         color: palette.soulGlass,
         emissive: palette.soulEmissive,
-        emissiveIntensity: 0.28,
-        roughness: 0.35,
-        metalness: 0.2,
+        emissiveIntensity: 0.52,
+        roughness: 0.3,
+        metalness: 0.16,
       }),
     );
-    const lattice = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(radius * 0.8, 2),
-      new THREE.MeshBasicMaterial({
-        color: palette.soulLattice,
-        wireframe: true,
-        transparent: true,
-        opacity: 0.26,
-      }),
-    );
-    const word = new THREE.Sprite(
-      new THREE.SpriteMaterial({
-        map: makeSoulTexture('AMADEUS', 'SOUL', palette),
-        transparent: true,
-        depthTest: false,
-        depthWrite: false,
-      }),
-    );
-    word.scale.set(1.38, 0.48, 1);
-    word.renderOrder = 4;
+    core.name = 'soul-kernel';
     const hit = new THREE.Mesh(
       new THREE.SphereGeometry(radius * 1.08, 16, 12),
       new THREE.MeshBasicMaterial({ visible: false }),
     );
     hit.name = 'soul-hit';
-    this.soulWord = word;
     this.soulHit = hit;
     this.soulCore = core;
-    this.soulGroup.add(glass, core, lattice, word, hit);
+    this.soulGroup.add(glass, core, hit);
   }
 
   private buildNode(node: DisplayNode): THREE.Group {

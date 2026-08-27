@@ -104,6 +104,15 @@ export type FrameSample = {
   warmup: boolean;
 };
 
+/**
+ * P1-B (round 4): deterministic visibility seam. rAF is system-throttled
+ * when the document is hidden AND when the window is unfocused; neither
+ * state may count toward the low-FPS judgment.
+ */
+export function perfSampleVisible(visibilityState: string, hasFocus: boolean): boolean {
+  return visibilityState === 'visible' && hasFocus;
+}
+
 export function averageFps(samples: readonly FrameSample[], now: number, windowMs = 5000): number | null {
   const start = now - windowMs;
   const windowed = samples.filter((sample) => sample.at >= start && sample.at <= now && sample.visible && !sample.warmup);
@@ -140,6 +149,34 @@ export function applyPerformanceSample(
 
 export function ambientMotionEnabled(reducedMotion: boolean, surface: RenderSurface): boolean {
   return surface === '3d' && !reducedMotion;
+}
+
+export const FRAME_BUFFER_LIMIT = 240;
+
+export type FrameAccumulation = {
+  state: CapabilityState;
+  buffer: FrameSample[];
+};
+
+/**
+ * P1 (round 5): one sample applied against the rolling buffer. The buffer
+ * itself is part of the FPS judgment window, so a visibility/focus recovery
+ * MUST clear it together with the stage warmup; otherwise stale visible
+ * low-fps samples demote the surface the moment recovery samples (all
+ * warmup) arrive.
+ */
+export function applyFrameSample(
+  state: CapabilityState,
+  buffer: readonly FrameSample[],
+  sample: FrameSample,
+  limit: number = FRAME_BUFFER_LIMIT,
+): FrameAccumulation {
+  const trimmed = buffer.length >= limit ? buffer.slice(buffer.length - limit + 1) : buffer.slice();
+  const nextBuffer = [...trimmed, sample];
+  return {
+    state: applyPerformanceSample(state, nextBuffer, sample.at),
+    buffer: nextBuffer,
+  };
 }
 
 export function reducedMotionChangesSurface(): false {
