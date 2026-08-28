@@ -414,6 +414,7 @@ async def list_active_stable_facts_page(
         total = int((await cur.fetchone())["n"])
         cur = await db.execute(
             f"""SELECT f.fact_id, f.active_version, f.is_pinned, f.topic_id,
+                      f.updated_at,
                       v.display_text, v.version_no, v.confidence,
                       v.semantic_fingerprint
                  FROM stable_facts f
@@ -435,6 +436,10 @@ async def list_active_stable_facts_page(
                 "active_version": int(row["active_version"]),
                 "is_pinned": bool(row["is_pinned"]),
                 "topic_id": row["topic_id"],
+                # S4-ARCHIVE Gate 2 additive field (parent contract §8): the
+                # browse row carries the fact's own updated_at; ordering and
+                # admission are unchanged.
+                "updated_at": row["updated_at"],
                 "confidence": row["confidence"],
                 "semantic_fingerprint": row["semantic_fingerprint"],
             }
@@ -473,6 +478,30 @@ async def job_status_summary(
         )
         latest_row = await cur.fetchone()
         latest = latest_row["latest"] if latest_row is not None else None
+        # S4-ARCHIVE Gate 2 §16 C3: bounded failed-jobs surface — max 8,
+        # updated_at DESC / job_id ASC, fields ONLY job_id, last_error_code,
+        # attempt_count, updated_at, retryable. ``state`` is never exposed
+        # (the list is definitionally failed jobs). ``retryable`` is read
+        # from the persisted per-job authority stamped by the ingest
+        # pipeline (jobs._transition_owned) — never a client inference.
+        cur = await db.execute(
+            """SELECT job_id, attempt_count, last_error_code, updated_at, retryable
+                 FROM memory_ingest_jobs
+                WHERE session_id=? AND identity_mode=? AND state='failed'
+                ORDER BY updated_at DESC, job_id ASC
+                LIMIT 8""",
+            (session, mode),
+        )
+        failed_jobs = [
+            {
+                "job_id": str(row["job_id"]),
+                "last_error_code": row["last_error_code"],
+                "attempt_count": int(row["attempt_count"] or 0),
+                "updated_at": row["updated_at"],
+                "retryable": bool(int(row["retryable"] if row["retryable"] is not None else 1)),
+            }
+            for row in await cur.fetchall()
+        ]
         return {
             "session_id": session,
             "worldline": wl,
@@ -480,6 +509,7 @@ async def job_status_summary(
             "pending_count": int(counts.get("pending", 0)),
             "processing_count": int(counts.get("processing", 0)),
             "failed_count": int(counts.get("failed", 0)),
+            "failed_jobs": failed_jobs,
             "latest_completed_at": latest,
         }
     finally:

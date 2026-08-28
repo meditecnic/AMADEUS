@@ -284,6 +284,18 @@ function cacheKey(request: DetailsRequest): string {
   ].join('|');
 }
 
+// S4-ARCHIVE Gate 2: the retained-payload cache can be SHARED between the
+// Constellation reading controller and the Archive governance module by
+// injecting the same Map. A successful erasure then purges the SAME
+// (scope, kind, record) entry that any peer surface still holds (hard
+// invariant 6). Controllers without an injected cache stay fully isolated.
+export type DetailsCache = Map<string, DetailsPayload>;
+
+/** Drop one cached details payload (post-mutation refresh / post-erasure purge). */
+export function invalidateDetailsCache(cache: DetailsCache, request: DetailsRequest): void {
+  cache.delete(cacheKey(request));
+}
+
 function withRequest(result: DetailsLoadResult, request: DetailsRequest): DetailsOutcome {
   if (result.type === 'ok') return { type: 'ok', request, payload: result.payload };
   if (result.type === 'not-found') return { type: 'not-found', request };
@@ -300,6 +312,7 @@ export type DetailsActivateOptions = {
 
 export function createDetailsController(deps?: {
   load?: (request: DetailsRequest, signal?: AbortSignal) => Promise<DetailsLoadResult>;
+  cache?: DetailsCache;
 }) {
   // §15.2: epoch is owned internally; the active {scope, kind, recordId}
   // result is retained across views; selection/scope change clears it.
@@ -310,9 +323,14 @@ export function createDetailsController(deps?: {
   // never re-GETs. Activating a DIFFERENT record/scope replaces the slot;
   // explicit retry (force) bypasses it.
   const load = deps?.load ?? ((request: DetailsRequest, signal?: AbortSignal) => fetchDetails(request, { signal }));
+  const cache: DetailsCache = deps?.cache ?? new Map();
   let epoch = 0;
   let inflight: AbortController | null = null;
-  let cached: { key: string; payload: DetailsPayload } | null = null;
+  // One retained slot per controller (P2-A): the shared Map may hold more
+  // entries, but THIS controller only reuses the key it last retained. That
+  // keeps activation semantics identical to the single-slot model while still
+  // letting a peer governance seam purge entries via invalidateDetailsCache.
+  let retainedKey: string | null = null;
 
   function activate(
     request: DetailsRequest,
@@ -325,15 +343,22 @@ export function createDetailsController(deps?: {
     const controller = new AbortController();
     inflight = controller;
     const key = cacheKey(request);
-    if (options.force) cached = null;
-    if (cached && cached.key === key) {
-      return { type: 'ok', request, payload: cached.payload };
+    if (options.force) {
+      cache.delete(key);
+      retainedKey = null;
     }
-    cached = null;
+    const shared = retainedKey === key ? cache.get(key) : undefined;
+    if (shared) {
+      return { type: 'ok', request, payload: shared };
+    }
+    retainedKey = null;
     void (async () => {
       const result = await load(request, controller.signal);
       if (myEpoch !== epoch) return; // stale: never render, announce, or cache
-      if (result.type === 'ok') cached = { key, payload: result.payload };
+      if (result.type === 'ok') {
+        cache.set(key, result.payload);
+        retainedKey = key;
+      }
       notify(withRequest(result, request));
     })();
     return { type: 'loading', request };
@@ -352,7 +377,8 @@ export function createDetailsController(deps?: {
     epoch += 1;
     inflight?.abort();
     inflight = null;
-    cached = null;
+    if (retainedKey) cache.delete(retainedKey);
+    retainedKey = null;
   }
 
   return { activate, deactivate, invalidate };
@@ -382,6 +408,83 @@ export function topicAttributionForFact(fact: FactRef, envelope: MemoryProjectio
     return { kind: 'grouped', label: topicNode.label };
   }
   return { kind: 'unavailable-in-projection', topicId: fact.topicId };
+}
+
+// S4-ARCHIVE Gate 2: Archive reads the Topics seam directly (hard invariant 2
+// — never the bounded projection). Attribution is label-owned by the backend
+// topics list; an unknown topic id stays honestly unavailable.
+export type ArchiveTopicLabel = { topicId: string; displayLabel: string };
+
+export function topicAttributionFromTopics(
+  topicId: string | null,
+  topics: ArchiveTopicLabel[],
+): TopicAttribution {
+  if (topicId === null) return { kind: 'ungrouped' };
+  const hit = topics.find((topic) => topic.topicId === topicId);
+  if (hit) return { kind: 'grouped', label: hit.displayLabel };
+  return { kind: 'unavailable-in-projection', topicId };
+}
+
+function factReadingCore(
+  payload: FactDetailsPayload,
+): Omit<FactReadingModel, 'topicAttribution'> {
+  const activeVersion = payload.fact.active_version;
+  const activeSources = payload.provenance
+    .filter((row) => row.version_no === activeVersion)
+    .map(sourceLine);
+  const historyVersions: HistoryVersion[] = payload.versions.map((version) => ({
+    versionNo: version.version_no,
+    displayText: version.display_text,
+    changeKind: version.change_kind,
+    changeKindHuman: changeKindHuman(version.change_kind),
+    validFromHuman: formatTimeHuman(version.valid_from),
+    invalidAtHuman: formatTimeHuman(version.invalid_at),
+    isActive: version.is_active,
+    sources: payload.provenance
+      .filter((row) => row.version_no === version.version_no)
+      .map(sourceLine),
+  }));
+  const latestVersion =
+    payload.versions.find((version) => version.is_active)
+    ?? payload.versions[payload.versions.length - 1]
+    ?? null;
+  return {
+    kind: 'fact',
+    primaryText: payload.fact.display_text,
+    isPinned: payload.fact.is_pinned,
+    versionCount: payload.versions.length,
+    revisionSummary:
+      payload.versions.length > 1 && latestVersion
+        ? `${payload.versions.length} 个版本 · 最新变更：${changeKindHuman(latestVersion.change_kind)}`
+        : null,
+    activeSources,
+    historyVersions,
+    correctionNotice: CORRECTION_NOTICE,
+    deepLinkNotice: DEEP_LINK_NOTICE,
+    diagnostics: {
+      factId: payload.fact.fact_id,
+      topicIdRaw: payload.fact.topic_id,
+      observationIds: uniqueStrings(payload.provenance.map((row) => row.observation_id)),
+      conversationIds: uniqueStrings(payload.provenance.map((row) => row.conversation_id)),
+      sourceMessageIds: payload.provenance.map((row) => row.source_message_id),
+      rawTimestamps: uniqueStrings([
+        ...payload.versions.map((version) => version.valid_from),
+        ...payload.versions.map((version) => version.invalid_at),
+        ...payload.provenance.map((row) => row.source_created_at),
+      ]),
+    },
+  };
+}
+
+/** Archive fact reading: same P1R-3 derivation, Topics-seam attribution. */
+export function deriveFactReadingArchive(
+  payload: FactDetailsPayload,
+  topics: ArchiveTopicLabel[],
+): FactReadingModel {
+  return {
+    ...factReadingCore(payload),
+    topicAttribution: topicAttributionFromTopics(payload.fact.topic_id, topics),
+  };
 }
 
 export type SourceLine = {
@@ -501,54 +604,9 @@ export function deriveFactReading(
   envelope: MemoryProjection,
   fact: FactRef,
 ): FactReadingModel {
-  const activeVersion = payload.fact.active_version;
-  const activeSources = payload.provenance
-    .filter((row) => row.version_no === activeVersion)
-    .map(sourceLine);
-  const historyVersions: HistoryVersion[] = payload.versions.map((version) => ({
-    versionNo: version.version_no,
-    displayText: version.display_text,
-    changeKind: version.change_kind,
-    changeKindHuman: changeKindHuman(version.change_kind),
-    validFromHuman: formatTimeHuman(version.valid_from),
-    invalidAtHuman: formatTimeHuman(version.invalid_at),
-    isActive: version.is_active,
-    sources: payload.provenance
-      .filter((row) => row.version_no === version.version_no)
-      .map(sourceLine),
-  }));
-  const latestVersion =
-    payload.versions.find((version) => version.is_active)
-    ?? payload.versions[payload.versions.length - 1]
-    ?? null;
   return {
-    kind: 'fact',
-    primaryText: payload.fact.display_text,
-    isPinned: payload.fact.is_pinned,
+    ...factReadingCore(payload),
     topicAttribution: topicAttributionForFact(fact, envelope),
-    versionCount: payload.versions.length,
-    // §7.3: the collapsed disclosure shows the total version count AND the
-    // latest change kind.
-    revisionSummary:
-      payload.versions.length > 1 && latestVersion
-        ? `${payload.versions.length} 个版本 · 最新变更：${changeKindHuman(latestVersion.change_kind)}`
-        : null,
-    activeSources,
-    historyVersions,
-    correctionNotice: CORRECTION_NOTICE,
-    deepLinkNotice: DEEP_LINK_NOTICE,
-    diagnostics: {
-      factId: payload.fact.fact_id,
-      topicIdRaw: payload.fact.topic_id,
-      observationIds: uniqueStrings(payload.provenance.map((row) => row.observation_id)),
-      conversationIds: uniqueStrings(payload.provenance.map((row) => row.conversation_id)),
-      sourceMessageIds: payload.provenance.map((row) => row.source_message_id),
-      rawTimestamps: uniqueStrings([
-        ...payload.versions.map((version) => version.valid_from),
-        ...payload.versions.map((version) => version.invalid_at),
-        ...payload.provenance.map((row) => row.source_created_at),
-      ]),
-    },
   };
 }
 

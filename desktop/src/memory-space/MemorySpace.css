@@ -417,3 +417,123 @@
   overflow: hidden;
   clip: rect(0 0 0 0);
 }
+
+/* S4-ARCHIVE Gate 2: restrained record-list peer mode. */
+.memory-space-modes {
+  display: flex;
+  gap: 6px;
+}
+.memory-space-modes button[aria-pressed='true'] {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+.archive-view {
+  position: absolute;
+  inset: 64px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+  padding: 12px;
+  background: color-mix(in srgb, canvas 88%, transparent);
+  border: 1px solid canvasText;
+  border-radius: 8px;
+}
+.archive-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.archive-kind-tabs {
+  display: flex;
+  gap: 6px;
+}
+.archive-body {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 4fr);
+  gap: 12px;
+  align-items: start;
+}
+.archive-body.is-narrow {
+  grid-template-columns: minmax(0, 1fr);
+}
+.archive-lists section {
+  margin-bottom: 12px;
+}
+.archive-lists ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.archive-lists button[data-testid='archive-row'] {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  align-items: baseline;
+}
+.archive-lists button[data-testid='archive-row'][data-selected='true'] {
+  outline: 2px solid canvasText;
+}
+.archive-row-kind {
+  font-variant: small-caps;
+}
+.archive-row-marker {
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.archive-pager {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.archive-detail {
+  border-left: 1px solid canvasText;
+  padding-left: 12px;
+}
+.archive-body.is-narrow .archive-detail {
+  border-left: 0;
+  padding-left: 0;
+}
+.archive-editor textarea {
+  width: 100%;
+  min-height: 96px;
+}
+.archive-conflict blockquote,
+.archive-sources blockquote {
+  margin: 4px 0;
+  padding-left: 8px;
+  border-left: 2px solid currentColor;
+}
+.archive-delete-confirm {
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  padding: 8px;
+}
+.archive-discard-confirm {
+  border: 1px solid currentColor;
+  border-radius: 6px;
+  padding: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.archive-discard-confirm p {
+  margin: 0;
+  flex-basis: 100%;
+}
+.archive-pending ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.archive-disclosure {
+  opacity: 0.85;
+}

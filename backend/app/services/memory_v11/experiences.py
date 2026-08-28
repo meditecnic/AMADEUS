@@ -108,6 +108,8 @@ async def list_experiences(
     session_id: str,
     worldline: str,
     identity_mode: str,
+    query: str | None = None,
+    pinned_only: bool = False,
     limit: int = 20,
     offset: int = 0,
 ) -> dict[str, Any]:
@@ -116,32 +118,53 @@ async def list_experiences(
     Visible: status 'active' + 'expired' (past-expiry active rows included,
     flagged is_expired). Hidden: 'deleted' and 'pending_source_delete'.
     Deterministic local ordering; total counts the identical visible set.
+
+    S4-ARCHIVE Gate 2 additive filters (filter-then-page): optional literal
+    substring ``query`` on display_text (caller wildcards are escaped, never
+    pattern operators) and ``pinned_only``. COUNT and page share the SAME
+    filter clauses.
     """
     wl = normalize_worldline(worldline)
     mode = normalize_identity_mode(identity_mode)
     session = _require_session_id(session_id)
     now_iso = _utc_now()
+    query_norm = (query or "").strip().lower() or None
+
+    clauses = [
+        "session_id=?",
+        "identity_mode=?",
+        "status IN ('active','expired')",
+    ]
+    params: list[Any] = [session, mode]
+    if pinned_only:
+        clauses.append("is_pinned=1")
+    if query_norm is not None:
+        # Literal substring: caller wildcards must not become pattern operators.
+        escaped = (
+            query_norm.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        )
+        clauses.append("LOWER(display_text) LIKE ? ESCAPE '\\'")
+        params.append(f"%{escaped}%")
+    where = " AND ".join(clauses)
 
     db = await get_db(wl, "memory")
     try:
         rows = await (
             await db.execute(
-                """SELECT experience_id, conversation_id, display_text,
-                          confidence, status, expires_at, created_at
+                f"""SELECT experience_id, conversation_id, display_text,
+                          confidence, status, expires_at, created_at, is_pinned
                      FROM experiences
-                    WHERE session_id=? AND identity_mode=?
-                      AND status IN ('active','expired')
+                    WHERE {where}
                     ORDER BY created_at DESC, experience_id ASC
                     LIMIT ? OFFSET ?""",
-                (session, mode, int(limit), int(offset)),
+                [*params, int(limit), int(offset)],
             )
         ).fetchall()
         total_row = await (
             await db.execute(
-                """SELECT COUNT(*) AS n FROM experiences
-                    WHERE session_id=? AND identity_mode=?
-                      AND status IN ('active','expired')""",
-                (session, mode),
+                f"""SELECT COUNT(*) AS n FROM experiences
+                    WHERE {where}""",
+                params,
             )
         ).fetchone()
         total = int(total_row["n"])
@@ -155,6 +178,7 @@ async def list_experiences(
                 "expires_at": row["expires_at"],
                 "created_at": row["created_at"],
                 "is_expired": _is_expired(row["status"], row["expires_at"], now_iso),
+                "is_pinned": bool(row["is_pinned"]),
             }
             for row in rows
         ]
@@ -197,7 +221,8 @@ async def experience_details(
         row = await (
             await db.execute(
                 """SELECT experience_id, conversation_id, display_text,
-                          confidence, status, expires_at, created_at, observation_id
+                          confidence, status, expires_at, created_at,
+                          observation_id, is_pinned
                      FROM experiences
                     WHERE experience_id=? AND session_id=? AND identity_mode=?
                       AND status IN ('active','expired')""",
@@ -247,6 +272,7 @@ async def experience_details(
                 "expires_at": row["expires_at"],
                 "created_at": row["created_at"],
                 "is_expired": _is_expired(row["status"], row["expires_at"], now_iso),
+                "is_pinned": bool(row["is_pinned"]),
             },
             "observation_id": str(row["observation_id"]),
             "provenance": provenance,
@@ -374,4 +400,64 @@ async def delete_experience(
         "state": "deleted",
         "deleted": True,
         "idempotent": False,
+    }
+
+
+async def update_experience_presentation(
+    *,
+    session_id: str,
+    worldline: str,
+    identity_mode: str,
+    experience_id: str,
+    is_pinned: bool,
+) -> dict[str, Any]:
+    """S4-ARCHIVE Gate 2: presentation-only pin change for one experience.
+
+    The ONE authorized presentation seam: ``is_pinned`` only. It never edits
+    display_text, never invents a version/history, and never touches the
+    observation/source lineage. Visible rows ('active' + 'expired') may be
+    pinned; deleted / pending_source_delete / cross-scope rows are
+    experience_not_found (404 that never discloses which case applied).
+    """
+    wl = normalize_worldline(worldline)
+    mode = normalize_identity_mode(identity_mode)
+    session = _require_session_id(session_id)
+    eid = (experience_id or "").strip()
+    if not eid:
+        raise MemoryValidationError("empty_experience_id", "experience_id is required")
+    if not isinstance(is_pinned, bool):
+        raise MemoryValidationError("invalid_is_pinned", "is_pinned must be a boolean")
+
+    db = await get_db(wl, "memory")
+    try:
+        await db.execute("BEGIN IMMEDIATE")
+        row = await (
+            await db.execute(
+                """SELECT experience_id FROM experiences
+                    WHERE experience_id=? AND session_id=? AND identity_mode=?
+                      AND status IN ('active','expired')""",
+                (eid, session, mode),
+            )
+        ).fetchone()
+        if row is None:
+            raise MemoryValidationError(
+                "experience_not_found", f"experience_id={eid}"
+            )
+        await db.execute(
+            """UPDATE experiences
+               SET is_pinned=?, updated_at=?
+             WHERE experience_id=? AND session_id=? AND identity_mode=?""",
+            (1 if is_pinned else 0, _utc_now(), eid, session, mode),
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
+
+    return {
+        "experience_id": eid,
+        "is_pinned": bool(is_pinned),
+        "scope": {"session_id": session, "worldline": wl, "identity_mode": mode},
     }

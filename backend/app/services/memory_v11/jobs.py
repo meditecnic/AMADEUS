@@ -52,6 +52,7 @@ def _row_to_job(row: Any, *, worldline: str) -> dict[str, Any]:
         "model_id": row["model_id"],
         "state": row["state"],
         "attempt_count": int(row["attempt_count"] or 0),
+        "retryable": bool(int(row["retryable"] if row["retryable"] is not None else 1)),
         "next_attempt_at": row["next_attempt_at"],
         "lease_owner": row["lease_owner"],
         "lease_expires_at": row["lease_expires_at"],
@@ -302,9 +303,14 @@ async def _transition_owned(
     )
     next_attempt = None
     final_state = state
+    # S4-ARCHIVE Gate 2: stamp the persisted retry-eligibility authority at
+    # the moment the failure lands. permanent → 0; transient (including
+    # auto-retry exhaustion) → 1. Non-failed outcomes keep the neutral 1.
+    final_retryable = 1
     if state == "failed_or_retry":
         if permanent or attempt_count >= MAX_AUTO_RETRIES:
             final_state = "failed"
+            final_retryable = 0 if permanent else 1
         else:
             final_state = "pending"
             delay = min(60, 2 ** max(1, attempt_count))
@@ -315,6 +321,7 @@ async def _transition_owned(
         cur = await db.execute(
             """UPDATE memory_ingest_jobs
                SET state=?,
+                   retryable=?,
                    last_error_code=?,
                    last_error_hash=?,
                    next_attempt_at=?,
@@ -332,6 +339,7 @@ async def _transition_owned(
                AND lease_expires_at > ?""",
             (
                 final_state,
+                final_retryable,
                 error_code,
                 err_hash,
                 next_attempt,
@@ -416,6 +424,13 @@ async def retry_memory_job(
         if job["identity_mode"] != mode:
             raise PermissionError("identity_mode mismatch for job retry")
     if job["state"] != "failed":
+        return job
+
+    # S4-ARCHIVE Gate 2 re-validation against the PERSISTED authority: a
+    # permanent failure (retryable=0) never moves to pending. Idempotent
+    # no-op replay — returns the unchanged failed job, mirroring the
+    # already-pending idempotent contract above.
+    if not int(job["retryable"] if job["retryable"] is not None else 1):
         return job
 
     now = _iso()

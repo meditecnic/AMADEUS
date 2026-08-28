@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
+import { ArchiveView } from './ArchiveView';
+import { parseMemoryStatusBody } from './archiveApi';
+import { createArchiveModule, type ArchiveModule } from './archiveState';
 import { MemoryResultOutline } from './MemoryResultOutline';
 import { deriveOverviewPresentation, outlineIds } from './overviewPresentation';
 import { memorySpaceShortcut } from './chrome';
@@ -32,6 +35,7 @@ import {
   deriveExperienceReading,
   deriveFactReading,
   NOT_FOUND_NOTICE,
+  type DetailsCache,
   type DetailsOutcome,
   type ExperienceReadingModel,
   type FactReadingModel,
@@ -60,7 +64,17 @@ export type MemorySpaceProps = {
   onClose: () => void;
 };
 
+// S4-ARCHIVE Gate 2: Memory Space gains two mutually exclusive peer modes.
+// Constellation stays the default; Archive is the exact-scope record browser
+// and governance owner. Each mode keeps its own per-scope in-session state.
+export type MemorySpaceMode = 'constellation' | 'archive';
+
 type JobSummary = {
+  // The v11 status payload echoes the exact scope as top-level fields; the
+  // direct /api/memory/status read is fail-closed against this echo.
+  session_id?: string;
+  worldline?: string;
+  identity_mode?: string;
   pending_count?: number;
   processing_count?: number;
   failed_count?: number;
@@ -75,7 +89,63 @@ export function MemorySpace({
   onClose,
 }: MemorySpaceProps) {
   const controllerRef = useRef(createProjectionController());
-  const detailsControllerRef = useRef(createDetailsController());
+  // S4-ARCHIVE Gate 2: one shared P1R-3 details cache. Archive governance
+  // purges the SAME entries the Constellation reading controller retains.
+  const detailsCacheRef = useRef<DetailsCache>(new Map());
+  const detailsControllerRef = useRef(
+    createDetailsController({ cache: detailsCacheRef.current }),
+  );
+  // The Archive module survives mode switches so committed Archive state and
+  // unsaved drafts are never lost by moving to Constellation and back.
+  const archiveModuleRef = useRef<ArchiveModule | null>(null);
+  // P1R-3 outcome mirror: lets the Archive erasure callback inspect the
+  // active reading request without effect timing.
+  const detailsOutcomeRef = useRef<DetailsOutcome>({ type: 'idle' });
+  // Backend-authoritative projection refresh counter: bumped when Archive
+  // erases a record so Constellation re-reads the projection seam. The
+  // result_ids are never edited client-side.
+  const [projectionRefreshTick, setProjectionRefreshTick] = useState(0);
+  // Erasure refresh barrier: until the authoritative post-erasure projection
+  // arrives, the previous envelope is NOT rendered — no old LIST row, reading
+  // card, or projection summary may survive a backend erasure. A failed
+  // refresh drops the stale envelope instead of restoring it.
+  const [erasureSyncing, setErasureSyncing] = useState(false);
+  const erasureSyncRef = useRef(false);
+  const handleArchiveRecordErased = useCallback(
+    (kind: 'fact' | 'experience', recordId: string) => {
+      const active = detailsOutcomeRef.current;
+      if (
+        active.type !== 'idle'
+        && active.request.kind === kind
+        && active.request.recordId === recordId
+      ) {
+        detailsControllerRef.current.invalidate();
+        detailsOutcomeRef.current = { type: 'idle' };
+        setDetails({ type: 'idle' });
+        setActivationKey((current) =>
+          current !== null && current.endsWith(`|${kind}|${recordId}`) ? null : current,
+        );
+      }
+      setProjectionRefreshTick((tick) => tick + 1);
+      erasureSyncRef.current = true;
+      setErasureSyncing(true);
+    },
+    [],
+  );
+  if (!archiveModuleRef.current) {
+    archiveModuleRef.current = createArchiveModule({
+      detailsCache: detailsCacheRef.current,
+      onRecordErased: handleArchiveRecordErased,
+      // §4.14: the peer shell may only switch away after Archive's explicit
+      // discard confirmation resolved the pending draft.
+      onExitArchive: () => setMode('constellation'),
+      onScopeChangeSettled: () => {
+        archiveOpenedRef.current = scopeKeyRef.current;
+      },
+    });
+  }
+  const archiveOpenedRef = useRef<string | null>(null);
+  const [mode, setMode] = useState<MemorySpaceMode>('constellation');
   const [details, setDetails] = useState<DetailsOutcome>({ type: 'idle' });
   // P1 spec-1/2 (round 2): activation is owned by explicit user gestures
   // (Enter / Space / click), never by focus movement. The key encodes
@@ -158,6 +228,7 @@ export function MemorySpace({
   useEffect(() => () => {
     controllerRef.current.dispose();
     detailsControllerRef.current.deactivate();
+    archiveModuleRef.current?.dispose();
   }, []);
 
   const selectedRef = useRef<string | null>(null);
@@ -199,7 +270,25 @@ export function MemorySpace({
       if (cancelled) return;
       if (outcome.type === 'stale') return;
       if (outcome.type === 'ok') {
+        // The authoritative envelope arrived: the erasure barrier lifts and
+        // the NEW envelope replaces every readable trace.
+        erasureSyncRef.current = false;
+        setErasureSyncing(false);
         applyEnvelope(outcome.envelope);
+        setLoading(false);
+        setScopeSwitching(false);
+        return;
+      }
+      if (erasureSyncRef.current) {
+        // Barrier active and the refresh did NOT deliver a new envelope:
+        // never restore the stale previous/restore envelope — the deleted
+        // record would resurrect. Drop the stale envelope and surface the
+        // error honestly instead.
+        erasureSyncRef.current = false;
+        setErasureSyncing(false);
+        setProjection(null);
+        setPreviousTruth(null);
+        setError(outcome.error);
         setLoading(false);
         setScopeSwitching(false);
         return;
@@ -224,10 +313,27 @@ export function MemorySpace({
       setScopeSwitching(false);
     });
     void fetch(`/api/memory/status?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}&identity_mode=${encodeURIComponent(identityMode)}`)
-      .then(async (response) => (response.ok ? response.json() as Promise<JobSummary> : null))
-      .then((summary) => {
-        if (cancelled || !summary) return;
-        setJobs(summary);
+      .then(async (response) => (response.ok ? (response.json() as Promise<unknown>) : null))
+      .then((body) => {
+        if (cancelled || !body) return;
+        // Fail-closed (hard invariant 1): the SAME strict shared validator
+        // used by Archive checks the scope echo AND the payload shape
+        // (failed_jobs array, count fields, exact failed-job row contract).
+        // A rejected summary is discarded, never defaulted to zeros.
+        const parsed = parseMemoryStatusBody(body, {
+          sessionId,
+          worldline,
+          identityMode,
+        });
+        if (!parsed) return;
+        setJobs({
+          session_id: sessionId,
+          worldline,
+          identity_mode: identityMode,
+          pending_count: parsed.pendingCount,
+          processing_count: parsed.processingCount,
+          failed_count: parsed.failedCount,
+        });
       })
       .catch(() => {
         /* operational summary is optional */
@@ -235,7 +341,7 @@ export function MemorySpace({
     return () => {
       cancelled = true;
     };
-  }, [applyEnvelope, criteria, scope]);
+  }, [applyEnvelope, criteria, scope, projectionRefreshTick]);
 
   useEffect(() => {
     if (!toolsOpen) return undefined;
@@ -262,7 +368,11 @@ export function MemorySpace({
     error,
     requestedCriteria: criteria,
   });
-  const liveProjection = presentation.envelope;
+
+  // While the post-erasure refresh is pending the previous envelope is
+  // withheld from every reader: LIST, reading card, inspector and summary
+  // all derive from liveProjection, so they cannot show stale content.
+  const liveProjection = erasureSyncing ? null : presentation.envelope;
   // P1-A (round 4): derivations are memoized so a parent re-render (e.g. an
   // anchor update during drag) does not hand ConstellationStage fresh
   // object identities and retrigger its apply/publish effect chain.
@@ -288,6 +398,27 @@ export function MemorySpace({
     [selected, liveProjection],
   );
   const scopeKey = `${browseSessionId}|${worldline}|${identityMode}`;
+
+  // S4-ARCHIVE Gate 2: opening Archive happens once per (mode, scope) pair;
+  // deep-link opens mark the pair themselves so a focus open is never
+  // clobbered by the restore open.
+  const scopeKeyRef = useRef(scopeKey);
+  scopeKeyRef.current = scopeKey;
+  useEffect(() => {
+    if (mode !== 'archive') return;
+    if (archiveOpenedRef.current === scopeKey) return;
+    // A pending draft defers the scope switch behind the explicit discard
+    // confirmation; the module settles it via onScopeChangeSettled.
+    if (!archiveModuleRef.current?.open(scope, { restore: true })) return;
+    archiveOpenedRef.current = scopeKey;
+  }, [mode, scope, scopeKey]);
+
+  const openArchiveForRecord = (kind: 'fact' | 'experience', recordId: string) => {
+    archiveOpenedRef.current = scopeKey;
+    setMode('archive');
+    archiveModuleRef.current?.open(scope, { focus: { kind, recordId } });
+  };
+
 
   // P1R-3 §5: activated Fact/Experience selections lazily load scoped
   // details through the frozen endpoints. Pure rove (focus without
@@ -472,6 +603,12 @@ export function MemorySpace({
   };
 
   const unwind = (opts?: { closeAtRoot?: boolean }) => {
+    // Semantic Back in Archive mode: editor/confirm → detail → list → close.
+    if (mode === 'archive') {
+      if (archiveModuleRef.current?.handleBack()) return;
+      if (opts?.closeAtRoot !== false) onClose();
+      return;
+    }
     const selectedKind = selected?.kind
       ?? liveProjection?.nodes.find((node) => node.projection_id === selectedId)?.kind
       ?? null;
@@ -638,16 +775,17 @@ export function MemorySpace({
   })();
 
   const showList = Boolean(
-    disclosurePlan
+    mode === 'constellation'
+    && disclosurePlan
     && planReady
     && listVisible
     && (width >= 900
       ? narrowSheet !== 'tools' && narrowSheet !== 'inspector'
       : narrowSheet === 'list'),
   );
-  const showInspector = Boolean(inspectorOpen && liveProjection && narrowSheet === 'inspector');
-  const showReading = Boolean(showDomMemo && card && narrowSheet === 'reading');
-  const showSceneReading = Boolean(showSceneMemo && card && narrowSheet === 'reading');
+  const showInspector = Boolean(mode === 'constellation' && inspectorOpen && liveProjection && narrowSheet === 'inspector');
+  const showReading = Boolean(mode === 'constellation' && showDomMemo && card && narrowSheet === 'reading');
+  const showSceneReading = Boolean(mode === 'constellation' && showSceneMemo && card && narrowSheet === 'reading');
 
   // P2-B (round 4): honest terminal announcement. When the reading surface
   // is visible at resolution time we say "证据已读取"; otherwise we say the
@@ -721,6 +859,7 @@ export function MemorySpace({
   // by the announcement effect below, which knows whether the reading
   // surface is actually visible when the outcome lands.
   const updateDetails = useCallback((outcome: DetailsOutcome) => {
+    detailsOutcomeRef.current = outcome;
     setDetails(outcome);
     // P2 spec-3 (round 2): loading is announced quietly as well.
     if (outcome.type === 'loading') setAnnouncement('正在读取证据');
@@ -874,21 +1013,48 @@ export function MemorySpace({
         <span className="memory-space-scope" data-testid="memory-plaque">
           {identityMode === 'self' ? 'USER' : 'OKABE'} · {worldline === 'steins_gate' ? 'SG' : 'β'}
         </span>
-        <button
-          type="button"
-          className="memory-space-tools-toggle"
-          aria-expanded={toolsOpen}
-          aria-controls="memory-space-tools"
-          onClick={() => {
-            noteMotion('auxiliary-surface');
-            setToolsOpen((value) => !value);
-          }}
-        >
-          仪器
-        </button>
-        <button type="button" aria-pressed={narrowSheet === 'list'} onClick={toggleList}>
-          LIST
-        </button>
+        <div className="memory-space-modes" role="group" aria-label="记忆空间模式">
+          <button
+            type="button"
+            data-testid="memory-mode-constellation"
+            aria-pressed={mode === 'constellation'}
+            onClick={() => {
+              // §4.14: leaving Archive with unsaved edits needs the explicit
+              // discard choice, handled inside the Archive module.
+              if (mode === 'archive' && !archiveModuleRef.current?.handleExitRequest()) return;
+              setMode('constellation');
+            }}
+          >
+            CONSTELLATION · 记忆星图
+          </button>
+          <button
+            type="button"
+            data-testid="memory-mode-archive"
+            aria-pressed={mode === 'archive'}
+            onClick={() => setMode('archive')}
+          >
+            ARCHIVE · 记忆档案
+          </button>
+        </div>
+        {mode === 'constellation' ? (
+          <>
+            <button
+              type="button"
+              className="memory-space-tools-toggle"
+              aria-expanded={toolsOpen}
+              aria-controls="memory-space-tools"
+              onClick={() => {
+                noteMotion('auxiliary-surface');
+                setToolsOpen((value) => !value);
+              }}
+            >
+              仪器
+            </button>
+            <button type="button" aria-pressed={narrowSheet === 'list'} onClick={toggleList}>
+              LIST
+            </button>
+          </>
+        ) : null}
         <div
           id="memory-space-tools"
           className={`memory-space-tools${toolsOpen ? ' is-open' : ''}`}
@@ -999,7 +1165,7 @@ export function MemorySpace({
         </div>
       </header>
 
-      {chips.length ? (
+      {mode === 'constellation' && chips.length ? (
         <ul className="memory-space-chips" data-testid="memory-criteria-chips">
           {chips.map((chip: CriteriaChip) => (
             <li key={chip.id}>
@@ -1014,20 +1180,27 @@ export function MemorySpace({
         </ul>
       ) : null}
 
-      <p className="memory-soul-lockup is-mirror" data-testid="soul-lockup">
-        <span className="memory-soul-lockup-soul">{lockup[0]}</span>
-      </p>
+      {mode === 'constellation' ? (
+        <p className="memory-soul-lockup is-mirror" data-testid="soul-lockup">
+          <span className="memory-soul-lockup-soul">{lockup[0]}</span>
+        </p>
+      ) : null}
 
-      {presentation.phase === 'loading' && !liveProjection ? (
+      {mode === 'constellation' && presentation.phase === 'loading' && !liveProjection ? (
         <p className="memory-space-state" data-testid="memory-loading">正在读取记忆投影…</p>
       ) : null}
-      {presentation.phase === 'scope-switching' && liveProjection ? (
+      {mode === 'constellation' && erasureSyncing ? (
+        <p className="memory-space-state" role="status" data-testid="memory-erasure-sync">
+          记忆已删除，正在同步档案视图…
+        </p>
+      ) : null}
+      {mode === 'constellation' && presentation.phase === 'scope-switching' && liveProjection ? (
         <p className="memory-space-state" data-testid="memory-stale">{presentation.copy}</p>
       ) : null}
-      {presentation.stale && presentation.phase !== 'scope-switching' && liveProjection ? (
+      {mode === 'constellation' && presentation.stale && presentation.phase !== 'scope-switching' && liveProjection ? (
         <p className="memory-space-state" data-testid="memory-stale">{presentation.copy ?? '同步中'}</p>
       ) : null}
-      {presentation.phase === 'unavailable' ? (
+      {mode === 'constellation' && presentation.phase === 'unavailable' ? (
         <p className="memory-space-state" role="alert" data-testid="memory-unavailable">
           {presentation.copy}
           {presentation.showRetry ? (
@@ -1035,7 +1208,7 @@ export function MemorySpace({
           ) : null}
         </p>
       ) : null}
-      {presentation.phase === 'error' ? (
+      {mode === 'constellation' && presentation.phase === 'error' ? (
         <p className="memory-space-state" role="alert" data-testid="memory-error">
           {presentation.copy}
           {presentation.showRetry ? (
@@ -1043,28 +1216,28 @@ export function MemorySpace({
           ) : null}
         </p>
       ) : null}
-      {presentation.phase === 'true-empty' ? (
+      {mode === 'constellation' && presentation.phase === 'true-empty' ? (
         <p className="memory-space-state" data-testid="memory-empty">{presentation.copy}</p>
       ) : null}
-      {presentation.phase === 'criteria-empty' ? (
+      {mode === 'constellation' && presentation.phase === 'criteria-empty' ? (
         <p className="memory-space-state" data-testid="memory-criteria-empty">{presentation.copy}</p>
       ) : null}
-      {truncated && liveProjection && planReady ? (
+      {mode === 'constellation' && truncated && liveProjection && planReady ? (
         <p className="memory-space-truncation" data-testid="memory-truncation">
           当前呈现 {liveProjection.shown.results} / {liveProjection.eligible.results}，并非全部记忆。
         </p>
       ) : null}
-      {disclosurePlan && !disclosurePlan.valid ? (
+      {mode === 'constellation' && disclosurePlan && !disclosurePlan.valid ? (
         <p className="memory-space-state" role="alert" data-testid="memory-malformed">
           当前投影无效：有结果缺少对应节点，无法生成完整列表。
         </p>
       ) : null}
-      {renderSurface === 'list' ? (
+      {mode === 'constellation' && renderSurface === 'list' ? (
         <p className="memory-space-state" data-testid="memory-list-fallback">
           3D 当前不可用，已切换至完整列表。
         </p>
       ) : null}
-      {capability.reason !== 'healthy' && renderSurface === 'list' ? (
+      {mode === 'constellation' && capability.reason !== 'healthy' && renderSurface === 'list' ? (
         <button type="button" data-testid="memory-retry-3d" onClick={() => {
           framesRef.current = [];
           setFallbackDetailOpen(false);
@@ -1080,7 +1253,7 @@ export function MemorySpace({
         className="memory-constellation-host"
         ref={graphRef}
         data-testid="memory-graph"
-        hidden={renderSurface !== '3d'}
+        hidden={renderSurface !== '3d' || mode === 'archive'}
         tabIndex={listOwnsFocus ? -1 : 0}
         role="group"
         aria-label="记忆星座仪"
@@ -1152,11 +1325,20 @@ export function MemorySpace({
                 model={readingModel}
                 onRetry={retryDetails}
                 scope={liveProjection?.scope ?? null}
+                recordKind={selectedProjectionNode?.kind === 'fact' || selectedProjectionNode?.kind === 'experience'
+                  ? selectedProjectionNode.kind
+                  : null}
+                recordId={detailsRecordId}
+                onOpenInArchive={openArchiveForRecord}
               />
             </div>
           </aside>
         ) : null}
       </div>
+
+      {mode === 'archive' && archiveModuleRef.current ? (
+        <ArchiveView module={archiveModuleRef.current} scope={scope} width={width} />
+      ) : null}
 
       {showList && disclosurePlan ? (
         <MemoryResultOutline
@@ -1259,6 +1441,11 @@ export function MemorySpace({
               model={readingModel}
               onRetry={retryDetails}
               scope={liveProjection?.scope ?? null}
+              recordKind={selectedProjectionNode?.kind === 'fact' || selectedProjectionNode?.kind === 'experience'
+                ? selectedProjectionNode.kind
+                : null}
+              recordId={detailsRecordId}
+              onOpenInArchive={openArchiveForRecord}
             />
           </div>
         </aside>
@@ -1440,12 +1627,18 @@ function ReadingBody({
   model,
   onRetry,
   scope,
+  recordKind,
+  recordId,
+  onOpenInArchive,
 }: {
   card: NonNullable<ReturnType<typeof readingCardFromNode>>;
   details: DetailsOutcome;
   model: FactReadingModel | ExperienceReadingModel | null;
   onRetry: () => void;
   scope: ScopeEcho;
+  recordKind?: 'fact' | 'experience' | null;
+  recordId?: string | null;
+  onOpenInArchive?: (kind: 'fact' | 'experience', recordId: string) => void;
 }) {
   if (details.type === 'ok' && model) {
     return (
@@ -1454,6 +1647,15 @@ function ReadingBody({
         <h2 data-testid="reading-title">{model.primaryText}</h2>
         <ReadingProvenance provenance={card.provenance} />
         <EvidenceDetails model={model} scope={scope} />
+        {onOpenInArchive && recordKind && recordId ? (
+          <button
+            type="button"
+            data-testid="open-in-archive"
+            onClick={() => onOpenInArchive(recordKind, recordId)}
+          >
+            在档案中查看与治理
+          </button>
+        ) : null}
       </>
     );
   }

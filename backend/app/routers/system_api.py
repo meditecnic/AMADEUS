@@ -900,10 +900,16 @@ async def list_memory_experiences(
     session_id: str | None = Query(None),
     worldline: str | None = Query(None),
     identity_mode: str | None = Query(None),
+    query: str | None = Query(None),
+    pinned_only: bool = Query(False),
     limit: str | None = Query(None),
     offset: str | None = Query(None),
 ):
-    """v11 experience browse (plan §8.3 / §10.2): active+expired history only."""
+    """v11 experience browse (plan §8.3 / §10.2): active+expired history only.
+
+    S4-ARCHIVE Gate 2 additive filters: literal ``query`` and ``pinned_only``
+    with filter-then-page totals; ordering/admission otherwise unchanged.
+    """
     from app.services.memory_v11.contracts import MemoryValidationError
     from app.services.memory_v11.experiences import list_experiences
 
@@ -913,7 +919,13 @@ async def list_memory_experiences(
     off = _parse_pagination_param("offset", offset, 0, 0, None)
     try:
         return await list_experiences(
-            session_id=sid, worldline=wl, identity_mode=mode, limit=lim, offset=off
+            session_id=sid,
+            worldline=wl,
+            identity_mode=mode,
+            query=query,
+            pinned_only=pinned_only,
+            limit=lim,
+            offset=off,
         )
     except MemoryValidationError as exc:
         raise _memory_error_response(exc) from exc
@@ -946,6 +958,66 @@ async def memory_experience_details(
             worldline=wl,
             identity_mode=mode,
             experience_id=experience_id,
+        )
+    except MemoryValidationError as exc:
+        raise _memory_error_response(exc) from exc
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "memory_operation_failed",
+                "message": "memory operation failed",
+            },
+        ) from None
+
+
+@router.patch("/api/memory/experiences/{experience_id}/presentation")
+async def patch_memory_experience_presentation(
+    experience_id: str,
+    request: Request,
+    session_id: str | None = Query(None),
+    worldline: str | None = Query(None),
+    identity_mode: str | None = Query(None),
+):
+    """S4-ARCHIVE Gate 2: Experience presentation = ``is_pinned`` ONLY.
+
+    No text editor, no version history, no other field: the body grammar is
+    frozen to a single boolean so this seam can never grow into an edit
+    surface without a new contract.
+    """
+    from app.services.memory_v11.contracts import MemoryValidationError
+    from app.services.memory_v11.experiences import update_experience_presentation
+
+    wl, mode = _validate_memory_scope(worldline, identity_mode)
+    sid = _require_session_id(session_id)
+
+    try:
+        raw = await request.json()
+    except Exception:
+        raise _body_error(
+            "invalid_json_body", "request body must be valid JSON"
+        ) from None
+    if not isinstance(raw, dict):
+        raise _body_error(
+            "invalid_request_body", "request body must be a JSON object"
+        ) from None
+    extras = sorted(set(raw) - {"is_pinned"})
+    if extras:
+        raise _body_error("extra_fields_forbidden", "unknown body fields are forbidden")
+    if "is_pinned" not in raw:
+        raise _body_error(
+            "missing_presentation_fields", "is_pinned is required"
+        )
+    if not isinstance(raw["is_pinned"], bool):
+        raise _body_error("invalid_is_pinned", "is_pinned must be a boolean")
+
+    try:
+        return await update_experience_presentation(
+            session_id=sid,
+            worldline=wl,
+            identity_mode=mode,
+            experience_id=experience_id,
+            is_pinned=raw["is_pinned"],
         )
     except MemoryValidationError as exc:
         raise _memory_error_response(exc) from exc

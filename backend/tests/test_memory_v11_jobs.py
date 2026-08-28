@@ -4027,3 +4027,114 @@ async def test_s3f2a_exact_eight_accepted(isolated_store, monkeypatch):
     finally:
         await db.close()
     assert int(row["n"]) == 8, "exactly 8 observations materialized (rejected)"
+
+
+# ---------------------------------------------------------------------------
+# S4-ARCHIVE Gate 2 rework: persisted retry-eligibility authority
+# ---------------------------------------------------------------------------
+
+
+async def _clear_retry_backoff(job_id: str) -> None:
+    """Test orchestration: make a backoff-delayed pending job claimable now."""
+    db = await get_db("steins_gate", "memory")
+    try:
+        await db.execute(
+            "UPDATE memory_ingest_jobs SET next_attempt_at=NULL WHERE job_id=?",
+            (job_id,),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def _job_row(job_id: str) -> Any:
+    db = await get_db("steins_gate", "memory")
+    try:
+        row = await (await db.execute(
+            "SELECT * FROM memory_ingest_jobs WHERE job_id=?", (job_id,)
+        )).fetchone()
+        assert row is not None
+        return dict(row)
+    finally:
+        await db.close()
+
+
+async def _enqueue_one(jobs: Any) -> str:
+    job = await jobs.enqueue_memory_job(
+        session_id="s-jobs",
+        worldline="steins_gate",
+        conversation_id="c-1",
+        identity_mode="self",
+        source_message_id=int(uuid4().int % 10**9),
+        pipeline_version="memory-v11-1",
+        provider_id="deepseek",
+        model_id="deepseek-chat",
+    )
+    return job.job_id if hasattr(job, "job_id") else job["job_id"]
+
+
+@pytest.mark.asyncio
+async def test_s4_permanent_failure_persists_retryable_false(isolated_store):
+    """Permanent failure is terminal: retryable=false is persisted, and the
+    retry seam refuses to move it to pending."""
+    jobs = _jobs()
+    job_id = await _enqueue_one(jobs)
+    claimed = await jobs.claim_memory_job(job_id=job_id, lease_owner="worker-a")
+    assert claimed is not None
+    await jobs.mark_memory_job_failed(
+        job_id=job_id, error_code="validation_failed", permanent=True,
+    )
+    row = await _job_row(job_id)
+    assert row["state"] == "failed"
+    assert int(row["retryable"] if row["retryable"] is not None else 1) == 0, "permanent failure must persist retryable=false"
+    # The retry seam re-validates against the persisted authority.
+    result = await jobs.retry_memory_job(
+        job_id=job_id, session_id="s-jobs", worldline="steins_gate",
+    )
+    result_state = result["state"] if isinstance(result, dict) else result.state
+    assert result_state == "failed", "non-retryable job must not move to pending"
+    row = await _job_row(job_id)
+    assert row["state"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_s4_transient_exhaustion_persists_retryable_true(isolated_store):
+    """Auto-retry budget exhausted (transient): still retryable=true."""
+    jobs = _jobs()
+    job_id = await _enqueue_one(jobs)
+    for _ in range(3):
+        claimed = await jobs.claim_memory_job(job_id=job_id, lease_owner="worker-a")
+        assert claimed is not None
+        await jobs.mark_memory_job_failed(
+            job_id=job_id, error_code="provider_unavailable", permanent=False,
+        )
+        await _clear_retry_backoff(job_id)
+    row = await _job_row(job_id)
+    assert row["state"] == "failed"
+    assert int(row["retryable"] if row["retryable"] is not None else 1) == 1, "exhausted transient failure stays retryable"
+    # The retry seam accepts it: failed → pending.
+    result = await jobs.retry_memory_job(
+        job_id=job_id, session_id="s-jobs", worldline="steins_gate",
+    )
+    result_state = result["state"] if isinstance(result, dict) else result.state
+    assert result_state == "pending"
+    row = await _job_row(job_id)
+    assert row["state"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_s4_ingest_jobs_retryable_column_default_true(isolated_store):
+    """Compat semantics: rows predating the column (provenance never persisted)
+    migrate to retryable=1. New inserts default to 1 as well."""
+    db = await get_db("steins_gate", "memory")
+    try:
+        columns = {
+            str(row[1]): row
+            for row in await (await db.execute(
+                "PRAGMA table_info(memory_ingest_jobs)"
+            )).fetchall()
+        }
+        assert "retryable" in columns, "memory_ingest_jobs.retryable must exist"
+        assert int(columns["retryable"][4] or 0) == 1, "default must be 1"
+    finally:
+        await db.close()

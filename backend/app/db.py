@@ -271,6 +271,12 @@ CREATE TABLE IF NOT EXISTS memory_ingest_jobs (
     model_id TEXT NOT NULL,
     state TEXT NOT NULL CHECK(state IN ('pending','processing','completed','failed','cancelled')),
     attempt_count INTEGER NOT NULL DEFAULT 0,
+    -- S4-ARCHIVE Gate 2: persisted retry-eligibility authority. 1 = the
+    -- manual retry seam may move this failed row to pending; 0 = permanent
+    -- failure (never retried). COMPAT SEMANTICS: rows that predate this
+    -- column could not record failure provenance, so migration defaults
+    -- them to 1 — explicitly documented, never inferred from error text.
+    retryable INTEGER NOT NULL DEFAULT 1,
     next_attempt_at TEXT,
     lease_owner TEXT,
     lease_expires_at TEXT,
@@ -1096,6 +1102,29 @@ def _ensure_experiences_is_pinned(connection: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_memory_ingest_jobs_retryable(connection: sqlite3.Connection) -> None:
+    """S4-ARCHIVE Gate 2: memory_ingest_jobs.retryable NOT NULL DEFAULT 1.
+
+    Persisted retry-eligibility authority for the Archive failed-jobs surface.
+    COMPAT SEMANTICS (explicit): rows written before this column could not
+    record failure provenance (permanent vs auto-retry exhaustion), so the
+    migration defaults them to 1 — the retry seam remains open for them,
+    exactly as it was before the column existed. New terminal failures are
+    stamped by the ingest pipeline (jobs._transition_owned).
+    """
+    exists = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='memory_ingest_jobs'"
+    ).fetchone()
+    if exists is None:
+        return
+    columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(memory_ingest_jobs)")}
+    if "retryable" in columns:
+        return
+    connection.execute(
+        "ALTER TABLE memory_ingest_jobs ADD COLUMN retryable INTEGER NOT NULL DEFAULT 1"
+    )
+
+
 def _split_sql_statements(script: str) -> list[str]:
     """Split a DDL script into statements without using executescript (avoids auto-commit)."""
     statements: list[str] = []
@@ -1221,6 +1250,7 @@ def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str 
         connection.executescript(schema)
         if kind == "memory":
             _ensure_experiences_is_pinned(connection)
+            _ensure_memory_ingest_jobs_retryable(connection)
         connection.execute(
             "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version',?)",
             (str(SCHEMA_VERSION),),

@@ -942,7 +942,7 @@ describe('MemorySpace', () => {
   it('opens the G27 inspector from SOUL without Origin/Lived/Self or people=0', async () => {
     mockApi((url) => {
       if (url.includes('/api/memory/status')) {
-        return okJson({ pending_count: 2, processing_count: 1, failed_count: 3 });
+        return okJson({ session_id: 's', worldline: 'steins_gate', identity_mode: 'okabe', pending_count: 2, processing_count: 1, failed_count: 3, failed_jobs: [] });
       }
       return okJson(projection);
     });
@@ -1538,7 +1538,7 @@ describe('MemorySpace', () => {
     };
     mockApi((url) => {
       if (url.includes('/api/memory/status')) {
-        return okJson({ pending_count: 0, processing_count: 0, failed_count: 4 });
+        return okJson({ session_id: 's', worldline: 'steins_gate', identity_mode: 'okabe', pending_count: 0, processing_count: 0, failed_count: 4, failed_jobs: [] });
       }
       return okJson(filtered);
     });
