@@ -229,6 +229,10 @@ export function MemorySpace({
     controllerRef.current.dispose();
     detailsControllerRef.current.deactivate();
     archiveModuleRef.current?.dispose();
+    // Disposing invalidates the module's open lifecycle: forget the open
+    // marker so a StrictMode remount (or any remount reusing this ref)
+    // re-issues open() and re-arms the SAME module instance.
+    archiveOpenedRef.current = null;
   }, []);
 
   const selectedRef = useRef<string | null>(null);

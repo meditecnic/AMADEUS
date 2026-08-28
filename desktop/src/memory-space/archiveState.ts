@@ -503,6 +503,14 @@ export function createArchiveModule(deps?: {
   const SAVING_NOTICE = '正在保存，请稍候';
 
   function open(scope: ArchiveScope, options: ArchiveOpenOptions = {}): boolean {
+    // Re-arm after a StrictMode-style dispose: React's double-mount runs the
+    // unmount cleanup (dispose) and then remounts the SAME useRef instance.
+    // The explicit open() re-enables the lifecycle on that instance — no
+    // second module state is ever created. Old in-flight responses stay
+    // invalidated: epoch and every kind/sequence counter are bumped below,
+    // so any completion racing this re-open is discarded before it commits.
+    // A true unmount (dispose without a later open) keeps dropping responses.
+    disposed = false;
     // A save in flight must not be raced into a discard or a scope reset.
     if (state.editor?.status === 'saving') {
       commit({ announcement: SAVING_NOTICE }, { persist: false });

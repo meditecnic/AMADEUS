@@ -1141,6 +1141,43 @@ describe('archive deep module: semantic back, restore and deep links', () => {
     module.dispose();
   });
 
+  it('a true unmount still discards late responses after dispose', async () => {
+    let release: ((value: Response) => void) | null = null;
+    const fetcher = vi.fn((input: string) => {
+      if (input.startsWith('/api/memory/facts?')) {
+        return new Promise<Response>((resolve) => {
+          release = resolve;
+        });
+      }
+      const scripted = defaultResponder(SCOPE_A)(input);
+      const body = scripted?.body ?? {};
+      return Promise.resolve({ ok: true, status: 200, json: async () => body } as unknown as Response);
+    });
+    const module = createArchiveModule({ fetcher });
+    module.open(SCOPE_A);
+    await flush();
+    // Real unmount: the module is disposed WITHOUT a subsequent open().
+    module.dispose();
+    release?.({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        facts: [factRow({ fact_id: 'late-f', display_text: '迟到响应行' })],
+        scope: {
+          session_id: SCOPE_A.sessionId,
+          worldline: SCOPE_A.worldline,
+          identity_mode: SCOPE_A.identityMode,
+        },
+        pagination: { limit: 20, offset: 0, total: 1, has_more: false },
+      }),
+    } as unknown as Response);
+    await flush();
+    // The late response must never be committed into the disposed module.
+    const state = module.snapshot();
+    expect(state.facts.rows).toHaveLength(0);
+    expect(state.facts.total).toBe(0);
+  });
+
   it('focus-record deep link falls back honestly when the target is unavailable', async () => {
     const responder: Responder = (url) => {
       if (url.startsWith('/api/memory/facts/missing/details')) {

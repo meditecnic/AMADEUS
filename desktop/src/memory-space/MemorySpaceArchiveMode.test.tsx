@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { MemorySpace } from './MemorySpace';
@@ -554,6 +555,104 @@ describe('Memory Space peer modes', () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
     });
     expect(screen.queryByTestId('inspector-jobs')).toBeNull();
+  });
+
+  it('StrictMode remount: Archive exits loading once the held responses land', async () => {
+    // Shortest repro of the runtime RED: <React.StrictMode> double-mounts
+    // MemorySpace; the FIRST cleanup disposes the shared Archive module, and
+    // a second open() on the same instance must still reach a settled state.
+    const held: Array<{ url: string; resolve: (v: unknown) => void }> = [];
+    let released = false;
+    const factRowBody = {
+      fact_id: '1',
+      display_text: '档案里的黑咖啡',
+      version_no: 1,
+      active_version: 1,
+      is_pinned: false,
+      topic_id: 't1',
+      updated_at: '2026-08-14T00:00:00Z',
+    };
+    const bodyFor = (url: string): Record<string, unknown> | null => {
+      if (url.startsWith('/api/memory/facts?')) {
+        return {
+          facts: [factRowBody],
+          scope: scopeBody,
+          pagination: { limit: 20, offset: 0, total: 1, has_more: false },
+        };
+      }
+      if (url.startsWith('/api/memory/experiences?')) {
+        return {
+          experiences: [],
+          scope: scopeBody,
+          pagination: { limit: 20, offset: 0, total: 0, has_more: false },
+        };
+      }
+      if (url.startsWith('/api/memory/topics?')) {
+        return { scope: scopeBody, topics: [{ topic_id: 't1', display_label: '咖啡', fact_count: 1 }] };
+      }
+      if (url.startsWith('/api/memory/observations?')) {
+        return {
+          scope: scopeBody,
+          observations: [],
+          pagination: { limit: 20, offset: 0, total: 0, has_more: false },
+        };
+      }
+      if (url.startsWith('/api/memory/status?')) {
+        return {
+          session_id: 's',
+          worldline: 'steins_gate',
+          identity_mode: 'okabe',
+          pending_count: 0,
+          processing_count: 0,
+          failed_count: 0,
+          failed_jobs: [],
+        };
+      }
+      return null;
+    };
+    mockApi((url) => {
+      if (url.includes('graph/projection')) return okJson(projection);
+      const body = bodyFor(String(url));
+      if (body === null) return okJson({});
+      if (released) return okJson(body);
+      return new Promise((resolve) => {
+        held.push({ url: String(url), resolve });
+      });
+    });
+    render(
+      <React.StrictMode>
+        <MemorySpace
+          sessionId="s"
+          chatWorldline="steins_gate"
+          chatIdentityMode="okabe"
+          onClose={() => undefined}
+        />
+      </React.StrictMode>,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('memory-space')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByTestId('memory-mode-archive'));
+    await waitFor(() => {
+      expect(screen.getByTestId('archive-view')).toBeTruthy();
+    });
+    // The Archive requests are held in flight: loading is the honest state.
+    expect(screen.getByText('正在读取事实…')).toBeTruthy();
+    // Release the held responses with real contract-shaped payloads.
+    released = true;
+    for (const h of held.splice(0)) {
+      h.resolve(okJson(bodyFor(h.url) as Record<string, unknown>));
+    }
+    // THE FIX UNDER TEST: Archive must leave loading and present results —
+    // the StrictMode-disposed module must recover on the explicit re-open.
+    await waitFor(
+      () => {
+        expect(screen.queryByText('正在读取事实…')).toBeNull();
+      },
+      { timeout: 2000 },
+    );
+    expect(screen.getByTestId('archive-facts-total').textContent).toContain('1');
+    expect(screen.getByText('档案里的黑咖啡')).toBeTruthy();
   });
 
   it('after an Archive deletion, Constellation shows no resurrected row or old reading card', async () => {
