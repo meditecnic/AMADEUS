@@ -371,6 +371,49 @@ describe('archiveApi honest outcome mapping', () => {
     expect(mistypedField).toEqual({ type: 'backend-failure', code: 'invalid_payload', status: 200 });
   });
 
+  it('topics rows read the real backend field fact_count', async () => {
+    const result = await fetchTopics(scope, {
+      fetcher: vi.fn(async () =>
+        jsonResponse(200, {
+          scope: { session_id: 's1', worldline: 'steins_gate', identity_mode: 'okabe' },
+          topics: [
+            { topic_id: 't1', display_label: '咖啡', fact_count: 2 },
+            { topic_id: 't2', display_label: '研究', fact_count: 0 },
+          ],
+        }),
+      ),
+    });
+    expect(result.type).toBe('ok');
+    if (result.type !== 'ok') return;
+    expect(result.payload).toEqual([
+      { topicId: 't1', displayLabel: '咖啡', activeFactCount: 2 },
+      { topicId: 't2', displayLabel: '研究', activeFactCount: 0 },
+    ]);
+  });
+
+  it('topics browse fails closed when fact_count is missing or mistyped', async () => {
+    const missing = await fetchTopics(scope, {
+      fetcher: vi.fn(async () =>
+        jsonResponse(200, {
+          scope: { session_id: 's1', worldline: 'steins_gate', identity_mode: 'okabe' },
+          // fact_count deliberately missing — must never default to 0.
+          topics: [{ topic_id: 't1', display_label: '缺计数' }],
+        }),
+      ),
+    });
+    expect(missing).toEqual({ type: 'backend-failure', code: 'invalid_payload', status: 200 });
+
+    const mistyped = await fetchTopics(scope, {
+      fetcher: vi.fn(async () =>
+        jsonResponse(200, {
+          scope: { session_id: 's1', worldline: 'steins_gate', identity_mode: 'okabe' },
+          topics: [{ topic_id: 't1', display_label: '错型计数', fact_count: '2' }],
+        }),
+      ),
+    });
+    expect(mistyped).toEqual({ type: 'backend-failure', code: 'invalid_payload', status: 200 });
+  });
+
   it('topics browse fails closed on wrong or missing scope echo', async () => {
     const wrongScope = await fetchTopics(scope, {
       fetcher: vi.fn(async () =>

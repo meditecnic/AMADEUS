@@ -128,7 +128,7 @@ function archiveBody(url: string, deletedRef?: { value: boolean }): Promise<unkn
     });
   }
   if (url.startsWith('/api/memory/topics?')) {
-    return okJson({ topics: [{ topic_id: 't1', display_label: '咖啡', active_fact_count: 1 }] });
+    return okJson({ topics: [{ topic_id: 't1', display_label: '咖啡', fact_count: 1 }] });
   }
   if (url.startsWith('/api/memory/status?')) {
     return okJson({ session_id: 's', worldline: 'steins_gate', identity_mode: 'okabe', pending_count: 0, processing_count: 0, failed_count: 0, failed_jobs: [] });

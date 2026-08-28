@@ -81,7 +81,7 @@ function defaultResponder(scope: ArchiveScope): Responder {
         status: 200,
         body: {
           scope: { session_id: scope.sessionId, worldline: scope.worldline, identity_mode: scope.identityMode },
-          topics: [{ topic_id: 't1', display_label: '咖啡', active_fact_count: 1 }],
+          topics: [{ topic_id: 't1', display_label: '咖啡', fact_count: 1 }],
         },
       };
     }

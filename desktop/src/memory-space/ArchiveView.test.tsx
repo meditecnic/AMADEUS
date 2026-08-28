@@ -64,7 +64,7 @@ function viewResponder(deletedRef: { value: boolean }) {
       };
     }
     if (url.startsWith('/api/memory/topics?')) {
-      return { status: 200, body: { topics: [{ topic_id: 't1', display_label: '咖啡', active_fact_count: 1 }] } };
+      return { status: 200, body: { topics: [{ topic_id: 't1', display_label: '咖啡', fact_count: 1 }] } };
     }
     if (url.startsWith('/api/memory/status?')) {
       return {

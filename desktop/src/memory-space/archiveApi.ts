@@ -267,10 +267,19 @@ function parseTopics(body: unknown, expected: ArchiveScope): TopicRow[] | null {
     if (!raw || typeof raw !== 'object') return null;
     const row = raw as Record<string, unknown>;
     if (!isString(row.topic_id) || !isString(row.display_label)) return null;
+    // The backend field is fact_count. A missing/mistyped count is never
+    // defaulted to 0 — the WHOLE topics response fails closed instead.
+    if (
+      typeof row.fact_count !== 'number'
+      || !Number.isFinite(row.fact_count)
+      || row.fact_count < 0
+    ) {
+      return null;
+    }
     rows.push({
       topicId: row.topic_id,
       displayLabel: row.display_label,
-      activeFactCount: typeof row.active_fact_count === 'number' ? row.active_fact_count : 0,
+      activeFactCount: row.fact_count,
     });
   }
   return rows;
