@@ -17,15 +17,23 @@ import {
 } from './renderCapability';
 
 describe('renderCapability', () => {
+  it('routes unavailable 3D to the semantic LIST instead of a second graph', () => {
+    const fallback = applyCreateFailure(HEALTHY_CAPABILITY);
+    expect(fallback.surface).toBe('list');
+    expect(fallback.reason).toBe('create-fail');
+    expect(applyRetry3d(fallback, true).surface).toBe('3d');
+    expect(applyRetry3d(fallback, false).surface).toBe('list');
+  });
+
   it('28. context-loss and create-fail still follow renderCapability', () => {
     const created = applyCreateFailure(HEALTHY_CAPABILITY);
-    expect(created.surface).toBe('compatibility');
+    expect(created.surface).toBe('list');
     expect(created.sticky).toBe(true);
     const firstLoss = applyContextLoss(HEALTHY_CAPABILITY);
     expect(firstLoss.surface).toBe('3d');
     expect(firstLoss.retrying).toBe(true);
     const secondLoss = applyContextLoss(firstLoss);
-    expect(secondLoss.surface).toBe('compatibility');
+    expect(secondLoss.surface).toBe('list');
     expect(secondLoss.sticky).toBe(true);
   });
 
@@ -34,10 +42,10 @@ describe('renderCapability', () => {
     expect(first.surface).toBe('3d');
     expect(first.retrying).toBe(true);
     const second = applyContextLoss(first);
-    expect(second.surface).toBe('compatibility');
+    expect(second.surface).toBe('list');
     expect(second.sticky).toBe(true);
     const failedRetry = applyRetry3d(second, false);
-    expect(failedRetry.surface).toBe('compatibility');
+    expect(failedRetry.surface).toBe('list');
   });
 
   it('reduces decoration before falling under a 5s visible window', () => {
@@ -59,7 +67,7 @@ describe('renderCapability', () => {
       warmup: false,
     }));
     const fallback = applyPerformanceSample(reduced, laterWindow, later);
-    expect(fallback.surface).toBe('compatibility');
+    expect(fallback.surface).toBe('list');
     expect(averageFps(low, now)).toBeLessThan(40);
     expect(reducedMotionChangesSurface()).toBe(false);
     expect(ambientMotionEnabled(true, '3d')).toBe(false);
@@ -130,7 +138,7 @@ describe('applyPerformanceSample honesty (P1-B)', () => {
       [150, true],
     ]);
     const next = applyPerformanceSample(reduced, window, 150);
-    expect(next.surface).toBe('compatibility');
+    expect(next.surface).toBe('list');
     expect(next.reason).toBe('low-fps');
     expect(next.sticky).toBe(true);
   });
@@ -162,7 +170,7 @@ describe('visibility recovery boundary (P1 round 5)', () => {
       Array.from({ length: 12 }, (_, index) => [index * 50, true] as [number, boolean]),
     );
     // Hazard control: judging on the stale window alone demotes immediately.
-    expect(applyPerformanceSample(base, stale, stale[stale.length - 1].at).surface).toBe('compatibility');
+    expect(applyPerformanceSample(base, stale, stale[stale.length - 1].at).surface).toBe('list');
     // Recovery boundary: the full sampling window is cleared; only warmup
     // samples exist afterwards. They must not demote.
     let acc: FrameAccumulation = { state: base, buffer: [] };

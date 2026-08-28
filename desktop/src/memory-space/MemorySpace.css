@@ -285,41 +285,6 @@
   letter-spacing: 0.08em;
   opacity: 0.62;
 }
-.memory-compatibility-tree {
-  width: min(36rem, 92%);
-  margin: 0 auto;
-  display: grid;
-  gap: 10px;
-  justify-items: start;
-  align-content: start;
-  flex: 1 1 0;
-  min-height: 0;
-  max-height: 100%;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding-bottom: 32px;
-  box-sizing: border-box;
-}
-.memory-compatibility-tree button {
-  background: transparent;
-  color: inherit;
-  border: 1px solid rgba(168, 192, 208, 0.2);
-  min-height: 32px;
-  padding: 4px 10px;
-}
-.memory-compatibility-tree button.is-selected,
-.memory-compatibility-tree button[aria-selected="true"] {
-  outline: 1px solid rgba(232, 196, 138, 0.7);
-}
-.memory-compatibility-topics,
-.memory-compatibility-ungrouped {
-  margin: 0;
-  padding-left: 1.2rem;
-}
-.memory-compatibility-remainder {
-  opacity: 0.7;
-}
 .memory-inspector,
 .memory-reading-dom { left: 16px; top: 64px; }
 @media (max-width: 900px) {
@@ -350,11 +315,6 @@
   }
   .memory-space[data-narrow-sheet]:not([data-narrow-sheet="none"]):not([data-narrow-sheet="tools"]) .memory-constellation-host {
     padding-bottom: 44vh;
-  }
-  .memory-space[data-narrow-sheet]:not([data-narrow-sheet="none"]):not([data-narrow-sheet="tools"]) .memory-compatibility {
-    position: fixed;
-    inset: 56px 8px 46vh;
-    overflow: hidden;
   }
   /* Keep status/truncation above the 42vh sheet, never over options. */
   .memory-space[data-narrow-sheet]:not([data-narrow-sheet="none"]):not([data-narrow-sheet="tools"]) .memory-space-truncation {
@@ -431,47 +391,11 @@
   font-size: 11px;
   letter-spacing: 0.04em;
 }
-.memory-compatibility {
-  position: absolute;
-  inset: 48px 16px 48px;
-  z-index: 3;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  max-height: 100%;
-  overflow: hidden;
-}
-.memory-compatibility-label,
 .memory-space-truncation {
   margin: 0 0 8px;
   font-size: 12px;
   letter-spacing: 0.12em;
   opacity: 0.72;
-}
-.memory-compatibility-svg {
-  width: min(520px, 92vw);
-  height: min(520px, 70vh);
-}
-.memory-compatibility-edge {
-  stroke: rgba(168, 192, 208, 0.45);
-  stroke-width: 1.2;
-}
-.memory-compatibility-node {
-  fill: rgba(198, 214, 226, 0.86);
-  stroke: rgba(244, 248, 252, 0.35);
-  cursor: pointer;
-}
-.memory-compatibility-node.is-continuity_hub {
-  fill: rgba(230, 240, 248, 0.95);
-}
-.memory-compatibility-node.is-selected,
-.memory-compatibility-node.is-focused {
-  stroke: #e8c48a;
-  stroke-width: 2;
-}
-.memory-compatibility-caption {
-  fill: rgba(230, 240, 248, 0.86);
-  font-size: 8px;
 }
 .memory-space-list button.is-selected,
 .memory-graph:focus,

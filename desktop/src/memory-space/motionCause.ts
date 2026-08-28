@@ -48,7 +48,7 @@ export type MotionPresentationSnapshot = {
   selectedId: string | null;
   expandedTopicIds: readonly string[];
   planIdentity: string;
-  renderSurface: '3d' | 'compatibility';
+  renderSurface: '3d' | 'list';
   auxiliary: string;
   reducedMotion: boolean;
   viewport: { width: number; height: number };

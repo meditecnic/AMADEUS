@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
-import { CompatibilityView } from './CompatibilityView';
 import { MemoryResultOutline } from './MemoryResultOutline';
 import { deriveOverviewPresentation, outlineIds } from './overviewPresentation';
 import { memorySpaceShortcut } from './chrome';
@@ -41,7 +40,6 @@ import {
   HEALTHY_CAPABILITY,
   applyContextLoss,
   applyCreateFailure,
-  applyExplicitCompatibility,
   applyFrameSample,
   applyRetry3d,
   type CapabilityState,
@@ -98,7 +96,7 @@ export function MemorySpace({
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [listOpen, setListOpen] = useState(false);
   const [listOwnsFocus, setListOwnsFocus] = useState(false);
-  const [forceCompat, setForceCompat] = useState(false);
+  const [fallbackDetailOpen, setFallbackDetailOpen] = useState(false);
   const [capability, setCapability] = useState<CapabilityState>(HEALTHY_CAPABILITY);
   const [runtimeGeneration, setRuntimeGeneration] = useState(0);
   const [overviewOpen] = useState(true);
@@ -332,11 +330,12 @@ export function MemorySpace({
   const effectiveDetails: DetailsOutcome = detailsAligned ? details : { type: 'idle' };
 
   const surface = readingSurfaceMode({ width, preferList: listOpen, reducedMotion });
-  const cameraMode: '3d' | '2d' = forceCompat ? '2d' : '3d';
   const renderSurface = capability.surface;
+  const fallbackList = renderSurface === 'list';
+  const listVisible = listOpen || fallbackList;
   const inspectorOpen = overviewOpen && selected?.kind === 'continuity_hub';
   const memoOpen = Boolean(card) && overviewOpen;
-  const showSceneMemo = memoOpen && surface === 'scene' && renderSurface === '3d' && cameraMode === '3d' && camOwnership !== 'user' && (effectiveDetails.type === 'idle' || effectiveDetails.type === 'loading');
+  const showSceneMemo = memoOpen && surface === 'scene' && renderSurface === '3d' && camOwnership !== 'user' && (effectiveDetails.type === 'idle' || effectiveDetails.type === 'loading');
   const showDomMemo = memoOpen && !showSceneMemo;
   const phase = overviewOpen ? 'overview' : 'soul';
   const lockup = soulLockupLines(
@@ -447,6 +446,13 @@ export function MemorySpace({
   };
 
   const toggleList = () => {
+    if (fallbackList) {
+      setToolsOpen(false);
+      setFallbackDetailOpen(false);
+      setNarrowPrefer('list');
+      noteMotion('auxiliary-surface');
+      return;
+    }
     const restoreList = toolsOpen && listOpen;
     setToolsOpen(false);
     noteMotion('auxiliary-surface');
@@ -469,10 +475,22 @@ export function MemorySpace({
     const selectedKind = selected?.kind
       ?? liveProjection?.nodes.find((node) => node.projection_id === selectedId)?.kind
       ?? null;
+
+    if (fallbackList && !toolsOpen && !hasActiveCriteria(criteria)) {
+      if (narrowSheet !== 'list') {
+        setFallbackDetailOpen(false);
+        setNarrowPrefer('list');
+        noteMotion('auxiliary-surface');
+        return;
+      }
+      if (opts?.closeAtRoot !== false) onClose();
+      return;
+    }
+
     const action = nextMemoryUnwind({
       toolsOpen,
       hasActiveCriteria: hasActiveCriteria(criteria),
-      listVisible: Boolean(listOpen && (width >= 900 || narrowPrefer === 'list')),
+      listVisible: Boolean(listOpen && !fallbackList && (width >= 900 || narrowPrefer === 'list')),
       selectedKind: selectedKind === 'fact' || selectedKind === 'experience' || selectedKind === 'topic' || selectedKind === 'continuity_hub'
         ? selectedKind
         : null,
@@ -545,11 +563,6 @@ export function MemorySpace({
         toggleList();
         return;
       }
-      if (shortcut === 'view-mode') {
-        setForceCompat((value) => !value);
-        setCapability((current) => applyExplicitCompatibility(current, !forceCompat));
-        return;
-      }
       const targetEl = event.target instanceof Element ? event.target : null;
       const nativeInteractive = Boolean(
         targetEl?.closest('button, summary, a, input, select, textarea, [contenteditable="true"]'),
@@ -612,16 +625,22 @@ export function MemorySpace({
 
   const narrowSheet = (() => {
     if (toolsOpen) return 'tools';
-    if (listOpen && narrowPrefer === 'list') return 'list';
+    if (fallbackList) {
+      if (fallbackDetailOpen && inspectorOpen) return 'inspector';
+      if (fallbackDetailOpen && memoOpen) return 'reading';
+      return 'list';
+    }
+    if (listVisible && narrowPrefer === 'list') return 'list';
     if (inspectorOpen) return 'inspector';
     if (memoOpen) return 'reading';
-    if (listOpen) return 'list';
+    if (listVisible) return 'list';
     return 'none';
   })();
+
   const showList = Boolean(
     disclosurePlan
     && planReady
-    && listOpen
+    && listVisible
     && (width >= 900
       ? narrowSheet !== 'tools' && narrowSheet !== 'inspector'
       : narrowSheet === 'list'),
@@ -800,7 +819,6 @@ export function MemorySpace({
     setMotionCauses(splitOrderedCauses(notes));
     setMotionEpoch((value) => value + 1);
   }, [
-    cameraMode,
     expandedTopicIds,
     identityMode,
     liveProjection,
@@ -868,20 +886,8 @@ export function MemorySpace({
         >
           仪器
         </button>
-        <button type="button" aria-pressed={listOpen && narrowSheet === 'list'} onClick={toggleList}>
+        <button type="button" aria-pressed={narrowSheet === 'list'} onClick={toggleList}>
           LIST
-        </button>
-        <button
-          type="button"
-          aria-pressed={renderSurface === 'compatibility'}
-          onClick={() => {
-            const next = renderSurface !== 'compatibility';
-            noteMotion('render-surface');
-            setForceCompat(next);
-            setCapability((current) => applyExplicitCompatibility(current, next));
-          }}
-        >
-          {renderSurface === 'compatibility' || cameraMode === '2d' ? '2D' : '3D'}
         </button>
         <div
           id="memory-space-tools"
@@ -1053,13 +1059,18 @@ export function MemorySpace({
           当前投影无效：有结果缺少对应节点，无法生成完整列表。
         </p>
       ) : null}
-      {renderSurface === 'compatibility' ? (
-        <p className="memory-space-state" data-testid="memory-compat-label">兼容视图</p>
+      {renderSurface === 'list' ? (
+        <p className="memory-space-state" data-testid="memory-list-fallback">
+          3D 当前不可用，已切换至完整列表。
+        </p>
       ) : null}
-      {capability.reason !== 'healthy' && renderSurface === 'compatibility' ? (
+      {capability.reason !== 'healthy' && renderSurface === 'list' ? (
         <button type="button" data-testid="memory-retry-3d" onClick={() => {
+          framesRef.current = [];
+          setFallbackDetailOpen(false);
+          setRuntimeGeneration((value) => value + 1);
+          noteMotion('render-surface');
           setCapability((current) => applyRetry3d(current, true));
-          setForceCompat(false);
         }}>
           重试 3D
         </button>
@@ -1069,6 +1080,7 @@ export function MemorySpace({
         className="memory-constellation-host"
         ref={graphRef}
         data-testid="memory-graph"
+        hidden={renderSurface !== '3d'}
         tabIndex={listOwnsFocus ? -1 : 0}
         role="group"
         aria-label="记忆星座仪"
@@ -1079,7 +1091,6 @@ export function MemorySpace({
             key={runtimeGeneration}
             plan={disclosurePlan}
             selectedId={selectedId}
-            mode={cameraMode}
             reducedMotion={reducedMotion}
             decoration={capability.decoration}
             expandedTopicIds={expandedTopicIds}
@@ -1122,15 +1133,6 @@ export function MemorySpace({
             }}
           />
         ) : null}
-        {disclosurePlan && planReady && renderSurface === 'compatibility' ? (
-          <CompatibilityView
-            plan={disclosurePlan}
-            selectedId={selectedId}
-            focusedId={focusedId}
-            onSelect={handleSelect}
-          />
-        ) : null}
-
         {showSceneReading && card ? (
           <aside
             className="memory-reading-scene"
@@ -1163,8 +1165,13 @@ export function MemorySpace({
           onOwnsFocus={setListOwnsFocus}
           onSelect={(id) => {
             handleSelect(id, 'activate');
-            setListOpen(true);
-            setNarrowPrefer('list');
+            if (fallbackList) {
+              setFallbackDetailOpen(true);
+              setNarrowPrefer('detail');
+            } else {
+              setListOpen(true);
+              setNarrowPrefer('list');
+            }
           }}
           onRove={(nextId) => roveList(nextId)}
         />

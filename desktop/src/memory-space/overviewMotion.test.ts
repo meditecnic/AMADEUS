@@ -500,7 +500,7 @@ describe('overviewMotion planner', () => {
     expect(seed.plan.topicGroups[0].representativeIds).toEqual(representative);
   });
 
-  it('14. compatibility surface does not require a 3D flight or rewrite membership', () => {
+  it('14. LIST fallback does not require a 3D flight or rewrite membership', () => {
     const projection = envelope();
     const seed = seedFrom(projection);
     const { frame } = run(seed, [
@@ -508,7 +508,7 @@ describe('overviewMotion planner', () => {
       {
         type: 'presentationChanged',
         cause: 'render-surface',
-        presentation: present(seed, { renderSurface: 'compatibility' }),
+        presentation: present(seed, { renderSurface: 'list' }),
       },
     ]);
     expect(projection.result_ids).toEqual(['fact:1', 'fact:2', 'fact:3', 'fact:4']);
@@ -1360,7 +1360,7 @@ describe('overviewMotion cause ranking', () => {
       const next = step(state, {
         type: 'presentationChanged',
         cause,
-        presentation: present(seed, cause === 'render-surface' ? { renderSurface: 'compatibility' } : {}),
+        presentation: present(seed, cause === 'render-surface' ? { renderSurface: 'list' } : {}),
       });
       state = next.state;
       expect(next.frame.generation).toBeGreaterThan(0);

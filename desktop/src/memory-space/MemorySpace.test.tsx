@@ -4,9 +4,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemorySpace } from './MemorySpace';
 import type { MemoryProjection } from './types';
 
+const rendererHarness = vi.hoisted(() => ({ supported: true }));
+
 vi.mock('./orreryRenderer', () => {
   class OrreryRuntime {
-    supported = true;
+    supported = rendererHarness.supported;
     setSize() {}
     setWorldline() {}
     setReducedMotion() {}
@@ -161,6 +163,43 @@ describe('MemorySpace', () => {
     cleanup();
     vi.unstubAllGlobals();
     window.matchMedia = originalMatchMedia;
+    rendererHarness.supported = true;
+  });
+
+  it('uses the complete LIST as the only unavailable-3D path and preserves reading through retry', async () => {
+    rendererHarness.supported = false;
+    mockApi((url) => {
+      if (url.includes('/api/memory/facts/1/details')) return okJson(factDetailsFixture);
+      return okJson(projection);
+    });
+    render(
+      <MemorySpace
+        sessionId="s"
+        chatWorldline="steins_gate"
+        chatIdentityMode="okabe"
+        onClose={vi.fn()}
+      />,
+    );
+
+    const list = await screen.findByTestId('memory-list');
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-surface', 'list');
+    expect(list).toHaveTextContent('喜欢黑咖啡');
+    expect(screen.queryByTestId('memory-compatibility')).toBeNull();
+    expect(screen.queryByRole('button', { name: /^2D$|^3D$/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole('option', { name: '喜欢黑咖啡' }));
+    await waitFor(() => expect(screen.getByTestId('reading-dom')).toBeInTheDocument());
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-selected-id', 'fact:1');
+
+    fireEvent.click(screen.getByTestId('memory-back'));
+    expect(await screen.findByTestId('memory-list')).toBeInTheDocument();
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-selected-id', 'fact:1');
+
+    rendererHarness.supported = true;
+    fireEvent.click(screen.getByTestId('memory-retry-3d'));
+    await waitFor(() => expect(screen.getByTestId('constellation-stage')).toBeInTheDocument());
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-surface', '3d');
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-selected-id', 'fact:1');
   });
 
   it('loads one projection into Overview, LIST, and a single G47 reading surface', async () => {
@@ -183,9 +222,7 @@ describe('MemorySpace', () => {
     );
     expect(screen.getByTestId('memory-loading')).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId('memory-graph')).toBeInTheDocument());
-    expect(
-      screen.queryByTestId('constellation-stage') || screen.getByTestId('memory-compatibility'),
-    ).toBeTruthy();
+    expect(screen.getByTestId('constellation-stage')).toBeInTheDocument();
     expect(screen.getByTestId('memory-space')).toHaveAttribute('data-phase', 'overview');
     expect(screen.getByTestId('soul-lockup')).toHaveTextContent('SOUL');
     expect(screen.getByTestId('soul-lockup')).not.toHaveTextContent('AMADEUS');
@@ -949,11 +986,8 @@ describe('MemorySpace', () => {
       />,
     );
     await waitFor(() => expect(screen.getByTestId('memory-graph')).toBeInTheDocument());
-    const canvas = screen.queryByTestId('constellation-stage');
-    if (!canvas || canvas.getAttribute('data-mode') === '2d') {
-      expect(screen.getByTestId('memory-compatibility') || canvas).toBeTruthy();
-      return;
-    }
+    const canvas = screen.getByTestId('constellation-stage');
+    expect(canvas).toHaveAttribute('data-mode', '3d');
     const before = canvas.getAttribute('data-yaw');
     fireEvent.pointerDown(canvas, { clientX: 20, clientY: 20, buttons: 1 });
     fireEvent.pointerMove(canvas, { clientX: 80, clientY: 24, buttons: 1 });
@@ -967,7 +1001,7 @@ describe('MemorySpace', () => {
     expect(canvas.getAttribute('data-zoom')).not.toBe(zoomBefore);
   });
 
-  it('keeps overflow and keyboard paths to search, LIST, 2D, identity, and worldline', async () => {
+  it('keeps overflow and keyboard paths to search, LIST, identity, and worldline', async () => {
     mockApi(() => okJson(projection));
     render(
       <MemorySpace
@@ -986,11 +1020,11 @@ describe('MemorySpace', () => {
     expect(screen.getByTestId('memory-space-tools')).toHaveAttribute('data-open', 'true');
     expect(screen.getByLabelText('搜索记忆')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'LIST' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /^3D$|^2D$/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^3D$|^2D$/ })).toBeNull();
     expect(screen.getByLabelText('浏览身份')).toBeInTheDocument();
     expect(screen.getByLabelText('浏览世界线')).toBeInTheDocument();
     fireEvent.keyDown(window, { key: '2' });
-    expect(screen.getByRole('button', { name: /^3D$|^2D$/ })).toBeInTheDocument();
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-surface', '3d');
     expect(screen.queryByText('ORIGIN')).toBeNull();
     expect(screen.queryByText('LIVED')).toBeNull();
     expect(screen.queryByText('SELF MODEL')).toBeNull();
@@ -1095,16 +1129,15 @@ describe('MemorySpace', () => {
     });
   });
 
-  it('focuses a supporting Topic row when LIST opens from Compatibility', async () => {
+  it('focuses a supporting Topic row when LIST opens from graph selection', async () => {
     mockApi(() => okJson(projection));
     render(
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
-    const threeD = screen.queryByRole('button', { name: '3D' });
-    if (threeD) fireEvent.click(threeD);
-    fireEvent.click(await screen.findByRole('button', { name: '上下文 咖啡' }));
+    fireEvent.click(screen.getByTestId('select-soul'));
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    fireEvent.keyDown(window, { key: 'Enter' });
     fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
     const topic = await screen.findByRole('option', { name: '上下文 咖啡' });
     await waitFor(() => expect(document.activeElement?.getAttribute('data-outline-id')).toBe('topic:t1'));
@@ -1205,23 +1238,6 @@ describe('MemorySpace', () => {
     expect(details?.open).toBe(true);
     activateWithEnter(summary as HTMLElement);
     expect(details?.open).toBe(false);
-  });
-
-  it('lets Enter on a Compatibility control select that item instead of the old focusedId', async () => {
-    mockApi(() => okJson(projection));
-    render(
-      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
-    );
-    await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: '3D' }));
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
-    fireEvent.click(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
-    expect(screen.getByRole('button', { name: '喜欢黑咖啡' })).toHaveAttribute('aria-current', 'true');
-    const topic = screen.getByRole('button', { name: '上下文 咖啡' });
-    topic.focus();
-    activateWithEnter(topic);
-    expect(topic).toHaveAttribute('aria-current', 'true');
-    expect(screen.getByRole('button', { name: '喜欢黑咖啡' })).not.toHaveAttribute('aria-current');
   });
 
   it('lets the ranked-browse control activate from the keyboard', async () => {
@@ -1581,20 +1597,6 @@ describe('MemorySpace', () => {
     expect(screen.queryByRole('option', { name: '喜欢黑咖啡' })).toBeNull();
     expect(screen.queryByRole('option', { name: /fact:ghost|unknown/ })).toBeNull();
     expect(screen.queryByText('结果 2')).toBeNull();
-  });
-
-  it('opens Compatibility as a structure tree without dumping every evidence caption', async () => {
-    mockApi(() => okJson(projection));
-    render(
-      <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
-    );
-    await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
-    const threeD = screen.queryByRole('button', { name: '3D' });
-    if (threeD) fireEvent.click(threeD);
-    expect(await screen.findByRole('region', { name: '记忆结构' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'SOUL' })).toBeInTheDocument();
-    expect(screen.queryByText('喜欢黑咖啡')).toBeNull();
   });
 
   it('moves a shared selection with arrows and Home', async () => {

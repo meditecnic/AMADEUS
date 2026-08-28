@@ -1,11 +1,10 @@
-export type RenderSurface = '3d' | 'compatibility';
+export type RenderSurface = '3d' | 'list';
 
 export type CapabilityReason =
   | 'healthy'
   | 'create-fail'
   | 'context-loss'
-  | 'low-fps'
-  | 'explicit';
+  | 'low-fps';
 
 export type DecorationLevel = 'full' | 'reduced';
 
@@ -32,7 +31,7 @@ export const HEALTHY_CAPABILITY: CapabilityState = {
 export function applyCreateFailure(state: CapabilityState): CapabilityState {
   return {
     ...state,
-    surface: 'compatibility',
+    surface: 'list',
     reason: 'create-fail',
     sticky: true,
     decoration: 'reduced',
@@ -54,7 +53,7 @@ export function applyContextLoss(state: CapabilityState): CapabilityState {
   return {
     ...state,
     contextLosses: losses,
-    surface: 'compatibility',
+    surface: 'list',
     reason: 'context-loss',
     sticky: true,
     decoration: 'reduced',
@@ -62,25 +61,11 @@ export function applyContextLoss(state: CapabilityState): CapabilityState {
   };
 }
 
-export function applyExplicitCompatibility(state: CapabilityState, on: boolean): CapabilityState {
-  if (state.sticky && state.reason !== 'explicit') {
-    return on ? { ...state, surface: 'compatibility' } : state;
-  }
-  return {
-    ...state,
-    surface: on ? 'compatibility' : '3d',
-    reason: on ? 'explicit' : 'healthy',
-    sticky: false,
-    retrying: false,
-    decoration: on ? 'reduced' : 'full',
-  };
-}
-
 export function applyRetry3d(state: CapabilityState, canCreate: boolean): CapabilityState {
   if (!canCreate) {
     return {
       ...state,
-      surface: 'compatibility',
+      surface: 'list',
       reason: state.reason === 'healthy' ? 'create-fail' : state.reason,
       sticky: true,
       retrying: false,
@@ -138,7 +123,7 @@ export function applyPerformanceSample(
     }
     return {
       ...state,
-      surface: 'compatibility',
+      surface: 'list',
       reason: 'low-fps',
       sticky: true,
       decoration: 'reduced',

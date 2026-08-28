@@ -70,7 +70,7 @@ export type ReadonlyMotionPresentation = Readonly<{
   expandedTopicIds: readonly string[];
   viewport: Rect;
   insets: Insets;
-  renderSurface: '3d' | 'compatibility';
+  renderSurface: '3d' | 'list';
   reducedMotion: boolean;
 }>;
 

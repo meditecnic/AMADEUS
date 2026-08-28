@@ -397,7 +397,7 @@ describe('R0 overview reconstruction', () => {
   it('maps compact chrome shortcuts without stealing input typing', () => {
     expect(memorySpaceShortcut({ key: '/' })).toBe('search');
     expect(memorySpaceShortcut({ key: 'l' })).toBe('list');
-    expect(memorySpaceShortcut({ key: '2' })).toBe('view-mode');
+    expect(memorySpaceShortcut({ key: '2' })).toBeNull();
     expect(memorySpaceShortcut({ key: '/', target: { tagName: 'INPUT' } })).toBeNull();
     expect(memorySpaceShortcut({ key: 'a' })).toBeNull();
   });

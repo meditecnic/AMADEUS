@@ -58,7 +58,6 @@ describe('ConstellationStage camera ownership', () => {
       <ConstellationStage
         plan={plan}
         selectedId={null}
-        mode="3d"
         reducedMotion={false}
         expandedTopicIds={[]}
         worldline="steins_gate"
@@ -88,7 +87,6 @@ describe('ConstellationStage camera ownership', () => {
     const props = {
       plan,
       selectedId: null,
-      mode: '3d' as const,
       reducedMotion: false,
       expandedTopicIds: [] as string[],
       worldline: 'steins_gate' as const,
@@ -123,7 +121,6 @@ describe('ConstellationStage camera ownership', () => {
     const props = {
       plan,
       selectedId: null,
-      mode: '3d' as const,
       reducedMotion: false,
       expandedTopicIds: [] as string[],
       worldline: 'steins_gate' as const,
@@ -148,7 +145,6 @@ describe('ConstellationStage camera ownership', () => {
     const props = {
       plan,
       selectedId: null,
-      mode: '3d' as const,
       reducedMotion: false,
       expandedTopicIds: [] as string[],
       worldline: 'steins_gate' as const,
@@ -173,7 +169,6 @@ describe('ConstellationStage camera ownership', () => {
       <ConstellationStage
         plan={plan}
         selectedId="topic:t1"
-        mode="3d"
         reducedMotion
         expandedTopicIds={['topic:t1']}
         worldline="steins_gate"
@@ -198,7 +193,6 @@ describe('ConstellationStage camera ownership', () => {
       <ConstellationStage
         plan={plan}
         selectedId={null}
-        mode="3d"
         reducedMotion={false}
         expandedTopicIds={[]}
         worldline="steins_gate"
@@ -225,7 +219,6 @@ describe('ConstellationStage camera ownership', () => {
       <ConstellationStage
         plan={plan}
         selectedId="topic:t1"
-        mode="3d"
         reducedMotion
         expandedTopicIds={['topic:t1']}
         worldline="steins_gate"
@@ -246,7 +239,6 @@ describe('ConstellationStage camera ownership', () => {
       <ConstellationStage
         plan={plan}
         selectedId={null}
-        mode="3d"
         reducedMotion={false}
         expandedTopicIds={[]}
         worldline="steins_gate"
@@ -268,7 +260,6 @@ describe('ConstellationStage camera ownership', () => {
     const props = {
       plan,
       selectedId: null,
-      mode: '3d' as const,
       reducedMotion: false,
       expandedTopicIds: [] as string[],
       worldline: 'steins_gate' as const,
@@ -297,7 +288,6 @@ describe('ConstellationStage camera ownership', () => {
     const props = {
       plan,
       selectedId: null,
-      mode: '3d' as const,
       reducedMotion: false,
       expandedTopicIds: [] as string[],
       worldline: 'steins_gate' as const,
@@ -329,7 +319,6 @@ describe('ConstellationStage camera ownership', () => {
     const props = {
       plan,
       selectedId: null,
-      mode: '3d' as const,
       reducedMotion: false,
       expandedTopicIds: [] as string[],
       worldline: 'steins_gate' as const,
@@ -359,7 +348,6 @@ describe('ConstellationStage presentation display', () => {
       <ConstellationStage
         plan={plan}
         selectedId={null}
-        mode="3d"
         reducedMotion
         expandedTopicIds={['topic:t1']}
         worldline="steins_gate"
@@ -378,7 +366,6 @@ describe('ConstellationStage presentation display', () => {
       <ConstellationStage
         plan={nextPlan}
         selectedId={null}
-        mode="3d"
         reducedMotion
         expandedTopicIds={['topic:t1']}
         worldline="steins_gate"

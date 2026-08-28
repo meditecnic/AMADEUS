@@ -19,13 +19,13 @@ import type { DisplayNode, Worldline } from './types';
 
 export type ScreenAnchor = { x: number; y: number };
 
-function cameraFromFrame(frame: OverviewFrame, mode: '3d' | '2d'): OrreryCamera {
+function cameraFromFrame(frame: OverviewFrame): OrreryCamera {
   return {
-    yaw: mode === '2d' ? 0 : frame.camera.yaw,
-    pitch: mode === '2d' ? 0 : frame.camera.pitch,
-    distance: mode === '2d' ? 6.4 : frame.camera.distance,
+    yaw: frame.camera.yaw,
+    pitch: frame.camera.pitch,
+    distance: frame.camera.distance,
     lookAt: frame.camera.lookAt,
-    mode,
+    mode: '3d',
   };
 }
 
@@ -45,7 +45,6 @@ function seedFromProps(
   current: {
     plan: OverviewDisclosurePlan;
     selectedId: string | null;
-    mode: '3d' | '2d';
     reducedMotion: boolean;
     expandedTopicIds: readonly string[];
     scopeKey?: string;
@@ -64,7 +63,7 @@ function seedFromProps(
     expandedTopicIds: current.expandedTopicIds,
     viewport: { x: 0, y: 0, width: Math.max(1, width || 1280), height: Math.max(1, height || 800) },
     insets: current.insets ?? { top: 64, right: 16, bottom: 16, left: 16 },
-    renderSurface: current.mode === '2d' ? 'compatibility' as const : '3d' as const,
+    renderSurface: '3d' as const,
     reducedMotion: current.reducedMotion,
   };
 }
@@ -79,7 +78,6 @@ function evidenceIds(plan: OverviewDisclosurePlan): string {
 export function ConstellationStage(props: {
   plan: OverviewDisclosurePlan;
   selectedId: string | null;
-  mode: '3d' | '2d';
   reducedMotion: boolean;
   decoration?: DecorationLevel;
   expandedTopicIds: readonly string[];
@@ -265,7 +263,7 @@ export function ConstellationStage(props: {
       if (runtime) {
         runtime.setAmbientPaused(ambientHold());
         runtime.applyFrame(gated.frame, displayFromFrame(propsRef.current.plan, gated.frame));
-        runtime.render(cameraFromFrame(gated.frame, propsRef.current.mode));
+        runtime.render(cameraFromFrame(gated.frame));
       }
       publish(gated.frame);
       return;
@@ -297,7 +295,7 @@ export function ConstellationStage(props: {
       live?.setAmbientPaused(true);
       if (live && frame) {
         live.applyFrame(frame, displayFromFrame(propsRef.current.plan, frame));
-        live.render(cameraFromFrame(frame, propsRef.current.mode));
+        live.render(cameraFromFrame(frame));
       }
       publish(frame);
     };
@@ -372,7 +370,7 @@ export function ConstellationStage(props: {
       live.setQuery(current.query);
       live.setSelected(current.selectedId);
       live.applyFrame(stepped.frame, displayFromFrame(current.plan, stepped.frame));
-      live.render(cameraFromFrame(stepped.frame, current.mode));
+      live.render(cameraFromFrame(stepped.frame));
       publish(stepped.frame);
       canvas.setAttribute('data-ambient', ambientHold() ? 'settled' : 'pulse');
       if (!cancelled && !hiddenClockRef.current) raf = window.requestAnimationFrame(runFrame);
@@ -486,7 +484,7 @@ export function ConstellationStage(props: {
       className="memory-constellation-stage"
       data-testid="constellation-stage"
       data-visible-evidence={evidenceIds(props.plan)}
-      data-mode={props.mode}
+      data-mode="3d"
       data-phase="overview"
       data-yaw={view.yaw.toFixed(3)}
       data-pitch={view.pitch.toFixed(3)}
@@ -498,7 +496,6 @@ export function ConstellationStage(props: {
       data-hover={hoverId ?? ''}
       aria-label="记忆星座仪"
       onPointerDown={(event) => {
-        if (props.mode === '2d') return;
         if (event.button === 2) {
           setPointerHold(true);
           rightPressRef.current = { x: event.clientX, y: event.clientY, dragged: false };
@@ -521,7 +518,7 @@ export function ConstellationStage(props: {
           if (isPointerDrag(dx, dy)) rightPressRef.current.dragged = true;
           return;
         }
-        if (dragRef.current && props.mode !== '2d' && motionRef.current) {
+        if (dragRef.current && motionRef.current) {
           const dx = event.clientX - dragRef.current.x;
           const dy = event.clientY - dragRef.current.y;
           if (!movedRef.current && !isPointerDrag(dx, dy)) return;
@@ -537,12 +534,12 @@ export function ConstellationStage(props: {
           motionRef.current = moved.state;
           if (runtime) {
             runtime.applyFrame(moved.frame, displayFromFrame(propsRef.current.plan, moved.frame));
-            runtime.render(cameraFromFrame(moved.frame, propsRef.current.mode));
+            runtime.render(cameraFromFrame(moved.frame));
           }
           publish(moved.frame);
           return;
         }
-        if (!canvas || !runtime || props.mode === '2d') {
+        if (!canvas || !runtime) {
           runtime?.setHover(null);
           setHoverId(null);
           return;
@@ -563,7 +560,7 @@ export function ConstellationStage(props: {
           motionRef.current = gated.state;
           if (runtime) {
             runtime.applyFrame(gated.frame, displayFromFrame(propsRef.current.plan, gated.frame));
-            runtime.render(cameraFromFrame(gated.frame, propsRef.current.mode));
+            runtime.render(cameraFromFrame(gated.frame));
           }
           publish(gated.frame);
         }
@@ -589,7 +586,7 @@ export function ConstellationStage(props: {
       }}
       onWheel={(event) => {
         ensureMotion(props, canvasRef.current?.clientWidth || 1280, canvasRef.current?.clientHeight || 800);
-        if (props.mode === '2d' || !motionRef.current) return;
+        if (!motionRef.current) return;
         event.preventDefault();
         const factor = props.reducedMotion
           ? (event.deltaY > 0 ? 1.12 : 1 / 1.12)
@@ -604,7 +601,7 @@ export function ConstellationStage(props: {
         const runtime = runtimeRef.current;
         if (runtime) {
           runtime.applyFrame(moved.frame, displayFromFrame(props.plan, moved.frame));
-          runtime.render(cameraFromFrame(moved.frame, props.mode));
+          runtime.render(cameraFromFrame(moved.frame));
         }
         publish(moved.frame);
       }}

@@ -16,7 +16,7 @@ export type OrreryCamera = {
   pitch: number;
   distance: number;
   lookAt: Point3;
-  mode: '3d' | '2d';
+  mode: '3d';
 };
 
 function canWebGL(canvas: HTMLCanvasElement): boolean {
