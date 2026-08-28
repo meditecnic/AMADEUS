@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { MemorySpace } from './MemorySpace';
@@ -200,6 +200,49 @@ describe('MemorySpace', () => {
     await waitFor(() => expect(screen.getByTestId('constellation-stage')).toBeInTheDocument());
     expect(screen.getByTestId('memory-space')).toHaveAttribute('data-surface', '3d');
     expect(screen.getByTestId('memory-space')).toHaveAttribute('data-selected-id', 'fact:1');
+  });
+
+  it('keeps the sticky LIST after repeated context loss even when another frame arrives', async () => {
+    let runFrame: FrameRequestCallback | null = null;
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
+      runFrame = callback;
+      return 1;
+    }));
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    mockApi(() => okJson(projection));
+    render(
+      <MemorySpace
+        sessionId="s"
+        chatWorldline="steins_gate"
+        chatIdentityMode="okabe"
+        onClose={vi.fn()}
+      />,
+    );
+
+    const firstStage = await screen.findByTestId('constellation-stage');
+    await waitFor(() => expect(runFrame).not.toBeNull());
+    act(() => {
+      firstStage.dispatchEvent(new Event('webglcontextlost', { cancelable: true }));
+      runFrame?.(16);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('constellation-stage')).not.toBe(firstStage);
+    });
+
+    act(() => {
+      screen.getByTestId('constellation-stage').dispatchEvent(
+        new Event('webglcontextlost', { cancelable: true }),
+      );
+      runFrame?.(32);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('memory-space')).toHaveAttribute('data-surface', 'list');
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-surface', 'list');
+    expect(screen.getByTestId('memory-list')).toBeInTheDocument();
+    expect(screen.getAllByRole('option', { name: '喜欢黑咖啡' })).toHaveLength(1);
   });
 
   it('loads one projection into Overview, LIST, and a single G47 reading surface', async () => {

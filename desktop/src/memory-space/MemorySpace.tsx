@@ -1122,9 +1122,11 @@ export function MemorySpace({
             onFrame={(sample) => {
               // P1 (round 5): the buffer itself is part of the judgment
               // window; keep it in the same accumulation seam.
-              const next = applyFrameSample(capability, framesRef.current, sample);
-              framesRef.current = next.buffer;
-              setCapability(next.state);
+              setCapability((current) => {
+                const next = applyFrameSample(current, framesRef.current, sample);
+                framesRef.current = next.buffer;
+                return next.state;
+              });
             }}
             onPerfBaselineReset={() => {
               // P1 (round 5): visibility/focus recovery clears the FULL
