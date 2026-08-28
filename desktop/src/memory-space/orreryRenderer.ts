@@ -104,8 +104,9 @@ export class OrreryRuntime {
   private readonly nodeGroup = new THREE.Group();
   private readonly pathGroup = new THREE.Group();
   private readonly soulGroup = new THREE.Group();
+  private readonly memoryBodyGroup = new THREE.Group();
   private readonly ambient = new THREE.AmbientLight(0x1a2430, 0.7);
-  private readonly key = new THREE.PointLight(0xb8d4e8, 14, 18, 1.6);
+  private readonly key = new THREE.PointLight(0xb8d4e8, 6, 18, 1.6);
   private readonly rim = new THREE.DirectionalLight(0xd8e6f0, 0.42);
   private readonly nodes = new Map<string, THREE.Object3D>();
   private readonly labels = new Map<string, THREE.Sprite>();
@@ -124,7 +125,7 @@ export class OrreryRuntime {
   private readonly labelLooks = new Map<string, { text: string; hot: boolean }>();
   private soulHit: THREE.Mesh | null = null;
   private soulCore: THREE.Mesh | null = null;
-  private starfield: THREE.Points | null = null;
+  private memoryField: THREE.Points | null = null;
   private display: DisplayNode[] = [];
   private edges: MemoryProjection['edges'] = [];
   private selectedId: string | null = null;
@@ -163,11 +164,11 @@ export class OrreryRuntime {
 
       this.scene.background = new THREE.Color(this.palette.void);
       this.scene.fog = new THREE.FogExp2(this.palette.fog, 0.04);
-      this.key.position.set(0, 0.1, 0);
+      this.key.position.set(-2.8, 2.4, -3.6);
       this.rim.position.set(3.6, 5.0, 2.8);
       this.scene.add(this.ambient, this.key, this.rim);
-      this.starfield = this.buildStarfield();
-      this.scene.add(this.starfield);
+      this.buildMemoryBody(this.palette);
+      this.scene.add(this.memoryBodyGroup);
       this.buildSoul(this.palette);
       this.scene.add(this.soulGroup);
       this.scene.add(this.pathGroup);
@@ -235,7 +236,7 @@ export class OrreryRuntime {
 
   setDecoration(level: 'full' | 'reduced'): void {
     if (this.bloom) this.bloom.strength = level === 'full' ? this.palette.bloom : 0;
-    if (this.starfield) this.starfield.visible = level === 'full';
+    if (this.memoryField) this.memoryField.visible = level === 'full';
   }
 
   setGraph(
@@ -321,6 +322,12 @@ export class OrreryRuntime {
       material.emissiveIntensity = 0.52 + Math.sin(t * 0.31) * 0.025;
     }
     if (!this.reducedMotion && !this.ambientPaused) {
+      this.memoryBodyGroup.rotation.x = 0.04 + Math.sin(t * 0.31) * 0.006;
+      this.memoryBodyGroup.rotation.y = -0.06 + Math.sin(t * 0.35) * 0.008;
+      if (this.memoryField) {
+        const material = this.memoryField.material as THREE.PointsMaterial;
+        material.opacity = 0.105 + Math.sin(t * 0.35) * 0.008;
+      }
       this.pathLines.forEach(({ line }, index) => {
         const material = line.material as THREE.LineBasicMaterial;
         if (!material || Array.isArray(material)) return;
@@ -405,15 +412,25 @@ export class OrreryRuntime {
     this.key.color.setHex(this.palette.key);
     this.rim.color.setHex(this.palette.rim);
     if (this.bloom) this.bloom.strength = this.palette.bloom;
-    if (this.starfield) {
-      const material = this.starfield.material as THREE.PointsMaterial;
+    if (this.memoryField) {
+      const material = this.memoryField.material as THREE.PointsMaterial;
       material.color.setHex(this.palette.accent);
     }
+    this.memoryBodyGroup.traverse((child) => {
+      const points = child as THREE.Points;
+      if (points.name === 'memory-body-shell') {
+        const material = points.material as THREE.PointsMaterial;
+        material.color.setHex(this.palette.belt);
+      } else if (points.name === 'memory-body-shell-inner') {
+        const material = points.material as THREE.PointsMaterial;
+        material.color.setHex(this.palette.accent);
+      }
+    });
     this.soulGroup.traverse((child) => {
       const mesh = child as THREE.Mesh;
       const material = mesh.material as THREE.MeshPhysicalMaterial | THREE.MeshStandardMaterial | THREE.MeshBasicMaterial | undefined;
       if (!material) return;
-      if ('transmission' in material) {
+      if (mesh.name === 'soul-glass') {
         material.color.setHex(this.palette.soulGlass);
         (material as THREE.MeshPhysicalMaterial).emissive?.setHex(this.palette.soulEmissive);
       } else if ('emissive' in material && mesh === this.soulCore) {
@@ -732,27 +749,27 @@ export class OrreryRuntime {
       new THREE.MeshPhysicalMaterial({
         color: palette.soulGlass,
         emissive: palette.soulEmissive,
-        emissiveIntensity: 0.18,
-        metalness: 0.12,
-        roughness: 0.18,
-        transmission: 0.66,
-        thickness: 1.1,
-        ior: 1.36,
+        emissiveIntensity: 0.12,
+        metalness: 0.05,
+        roughness: 0.24,
+        transmission: 0.82,
+        thickness: 0.8,
+        ior: 1.22,
         transparent: true,
-        opacity: 0.76,
-        clearcoat: 0.7,
-        clearcoatRoughness: 0.16,
+        opacity: 0.58,
+        clearcoat: 0.85,
+        clearcoatRoughness: 0.2,
       }),
     );
     glass.name = 'soul-glass';
     const core = new THREE.Mesh(
-      new THREE.SphereGeometry(radius * 0.36, 32, 24),
+      new THREE.SphereGeometry(radius * 0.42, 32, 24),
       new THREE.MeshStandardMaterial({
         color: palette.soulGlass,
         emissive: palette.soulEmissive,
-        emissiveIntensity: 0.52,
-        roughness: 0.3,
-        metalness: 0.16,
+        emissiveIntensity: 0.12,
+        roughness: 0.32,
+        metalness: 0.04,
       }),
     );
     core.name = 'soul-kernel';
@@ -831,28 +848,73 @@ export class OrreryRuntime {
     return sprite;
   }
 
-  private buildStarfield(): THREE.Points {
-    const count = 40;
-    const positions = new Float32Array(count * 3);
-    for (let i = 0; i < count; i += 1) {
-      const r = 10 + Math.random() * 14;
-      const theta = Math.random() * Math.PI * 2;
-      const phi = Math.acos(2 * Math.random() - 1);
-      positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
-      positions[i * 3 + 1] = r * Math.cos(phi) * 0.65;
-      positions[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
-    }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    return new THREE.Points(
-      geometry,
+  private buildMemoryBody(palette: OrreryPalette): void {
+    for (const child of [...this.memoryBodyGroup.children]) this.disposeObject(child);
+    this.memoryBodyGroup.clear();
+    this.memoryBodyGroup.name = 'memory-body';
+    this.memoryBodyGroup.rotation.set(0.04, -0.06, 0.02);
+
+    const shell = new THREE.Points(
+      new THREE.IcosahedronGeometry(2.5, 3),
       new THREE.PointsMaterial({
-        color: this.palette.accent,
-        size: 0.018,
+        color: palette.belt,
+        size: 0.007,
         transparent: true,
-        opacity: 0.16,
+        opacity: 0.065,
         depthWrite: false,
       }),
     );
+    shell.name = 'memory-body-shell';
+    shell.position.set(0.12, -0.08, 0.02);
+    shell.rotation.set(0.12, -0.18, 0.08);
+    shell.scale.set(1.18, 0.76, 1.02);
+    shell.renderOrder = -3;
+
+    const innerShell = new THREE.Points(
+      new THREE.IcosahedronGeometry(2.2, 2),
+      new THREE.PointsMaterial({
+        color: palette.accent,
+        size: 0.005,
+        transparent: true,
+        opacity: 0.028,
+        depthWrite: false,
+      }),
+    );
+    innerShell.name = 'memory-body-shell-inner';
+    innerShell.position.set(-0.08, 0.06, -0.1);
+    innerShell.rotation.set(-0.14, 0.22, -0.06);
+    innerShell.scale.set(1.02, 0.72, 1.08);
+    innerShell.renderOrder = -2;
+
+    const count = 420;
+    const positions = new Float32Array(count * 3);
+    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+    for (let i = 0; i < count; i += 1) {
+      const y = 1 - ((i + 0.5) / count) * 2;
+      const ring = Math.sqrt(Math.max(0, 1 - y * y));
+      const theta = i * goldenAngle;
+      const hash = Math.sin((i + 1) * 12.9898) * 43758.5453;
+      const radius = 0.38 + (hash - Math.floor(hash)) * 0.58;
+      positions[i * 3] = Math.cos(theta) * ring * radius * 2.85 + (1 - y * y) * 0.05;
+      positions[i * 3 + 1] = y * radius * 1.75 - 0.04;
+      positions[i * 3 + 2] = Math.sin(theta) * ring * radius * 2.65;
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const field = new THREE.Points(
+      geometry,
+      new THREE.PointsMaterial({
+        color: palette.accent,
+        size: 0.009,
+        transparent: true,
+        opacity: 0.095,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }),
+    );
+    field.name = 'memory-body-field';
+    field.renderOrder = -1;
+    this.memoryField = field;
+    this.memoryBodyGroup.add(shell, innerShell, field);
   }
 }

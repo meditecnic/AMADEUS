@@ -143,6 +143,40 @@ describe('OrreryRuntime live frame adapter', () => {
     runtime.dispose();
   });
 
+  it('builds a deterministic bounded memory body instead of a distant starfield', () => {
+    const runtime = new OrreryRuntime(document.createElement('canvas'));
+    const internal = runtime as unknown as {
+      supported: boolean;
+      memoryBodyGroup: THREE.Group;
+      palette: unknown;
+      buildMemoryBody(palette: unknown): void;
+    };
+    if (!internal.supported) internal.buildMemoryBody(internal.palette);
+
+    const shell = internal.memoryBodyGroup.getObjectByName('memory-body-shell');
+    const field = internal.memoryBodyGroup.getObjectByName('memory-body-field') as THREE.Points;
+    expect(shell).toBeTruthy();
+    expect(field?.isPoints).toBe(true);
+
+    const positions = field.geometry.getAttribute('position') as THREE.BufferAttribute;
+    expect(positions.count).toBeGreaterThanOrEqual(120);
+    expect(positions.count).toBeLessThanOrEqual(640);
+    for (let index = 0; index < positions.count; index += 1) {
+      const normalized = Math.hypot(
+        positions.getX(index) / 3.35,
+        positions.getY(index) / 2.55,
+        positions.getZ(index) / 3.05,
+      );
+      expect(normalized).toBeLessThanOrEqual(1.01);
+    }
+
+    const firstBuild = Array.from(positions.array).slice(0, 18);
+    internal.buildMemoryBody(internal.palette);
+    const rebuilt = internal.memoryBodyGroup.getObjectByName('memory-body-field') as THREE.Points;
+    expect(Array.from(rebuilt.geometry.getAttribute('position').array).slice(0, 18)).toEqual(firstBuild);
+    runtime.dispose();
+  });
+
   it('projects off-center nodes where the rendered Three camera draws them', () => {
     const { frame } = frameOf([], null);
     const rendered = projectWithRenderedCamera(frame, 'topic:t1');
