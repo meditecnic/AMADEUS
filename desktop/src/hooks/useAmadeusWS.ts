@@ -177,6 +177,10 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectCountRef = useRef(0);
   const voiceStoppedRef = useRef(false);
+  /** Legacy v1 per-send degradation flag (text_chunk has no turn identity). */
+  const audioDegradedNotifiedRef = useRef(false);
+  /** B1 v2: dedup bound to the server-accepted {turn_id, generation}, never to sendChat. */
+  const audioDegradedV2Ref = useRef<{ turnId: string; generation: number; notified: boolean } | null>(null);
 
   // Stop heartbeat
   const stopHeartbeat = () => {
@@ -234,6 +238,8 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     setIsThinking(false);
     setIsSynthesizing(false);
     voiceStoppedRef.current = false;
+    audioDegradedNotifiedRef.current = false;
+    audioDegradedV2Ref.current = null;
     activeTurnIdRef.current = '';
     activeGenerationRef.current = -1;
     activeConversationIdRef.current = null;
@@ -397,6 +403,9 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             activeAssistantMessageId = `assist_${msg.turn_id}`;
             lastSentenceIdRef.current = -1;
             voiceStoppedRef.current = false;
+            audioDegradedNotifiedRef.current = false;
+            // Authoritative new round: bind v2 dedup identity to the accepted turn.
+            audioDegradedV2Ref.current = { turnId: msg.turn_id, generation: msg.generation, notified: false };
             setIsThinking(true);
             setMessages((prev) => [
               ...prev,
@@ -463,15 +472,39 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             }
             break;
 
-          case 'segment.audio_error':
+          case 'segment.audio_error': {
             if (
               msg.turn_id === activeTurnIdRef.current &&
               msg.generation === activeGenerationRef.current &&
               msg.reason !== 'voice_stopped'
             ) {
               if (msg.reason === 'user_disabled') setIsSynthesizing(false);
-              paramsRef.current.onAudioDegraded?.(msg.reason || 'unknown');
+              // B1: backend keeps per-segment errors; surface at most one toast
+              // per server-accepted turn. The slot is (re)armed only by
+              // turn.started, so a busy resend can never re-arm the old turn.
+              const slot = audioDegradedV2Ref.current;
+              if (
+                slot !== null &&
+                slot.turnId === msg.turn_id &&
+                slot.generation === msg.generation &&
+                !slot.notified
+              ) {
+                slot.notified = true;
+                paramsRef.current.onAudioDegraded?.(msg.reason || 'unknown');
+              }
             }
+            break;
+          }
+
+          case 'turn.heartbeat':
+            // B1 liveness only: proves the turn/connection is alive during
+            // legal provider/translation/TTS waits. Never drives content,
+            // progress, completion, or success. Stale turns are ignored.
+            if (
+              msg.turn_id !== activeTurnIdRef.current ||
+              msg.generation !== activeGenerationRef.current
+            ) break;
+            startWatchdog();
             break;
 
           case 'turn.translation_repaired':
@@ -593,7 +626,10 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
               setEmotion(msg.emotion as UseAmadeusWSReturn['emotion']);
             }
             if (msg.audio_degraded && paramsRef.current.onAudioDegraded) {
-              paramsRef.current.onAudioDegraded(msg.degraded_reason || 'unknown');
+              if (!audioDegradedNotifiedRef.current) {
+                audioDegradedNotifiedRef.current = true;
+                paramsRef.current.onAudioDegraded(msg.degraded_reason || 'unknown');
+              }
             }
             setMessages((prev) => {
               const lastMsg = prev[prev.length - 1];
@@ -735,6 +771,9 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
 
     // Start 30s watchdog wait immediately on sending chat
     startWatchdog();
+    // Legacy v1 per-send flag only. The v2 slot is bound to the accepted
+    // turn.started, so a busy-rejected resend cannot re-arm the old turn.
+    audioDegradedNotifiedRef.current = false;
     
     // Add user message to state
     const userMsgId = `user_${Date.now()}`;
@@ -760,11 +799,22 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   }, []);
 
   const cancelTurn = useCallback(() => {
+    // Clear the watchdog before dropping identity: the server turn.cancelled
+    // ACK can no longer match (and therefore clear) it afterwards.
+    clearWatchdog();
+    const cancelledTurnId = activeTurnIdRef.current;
+    activeTurnIdRef.current = '';
+    activeGenerationRef.current = -1;
     setIsThinking(false);
     setIsSynthesizing(false);
     voiceStoppedRef.current = true;
-    activeTurnIdRef.current = '';
-    activeGenerationRef.current = -1;
+    // Keep partial content, but end streaming immediately so the bubble
+    // never stays live when the ACK is ignored.
+    if (cancelledTurnId) {
+      setMessages((prev) => prev.map((message) =>
+        message.turnId === cancelledTurnId ? { ...message, streaming: false } : message
+      ));
+    }
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     wsRef.current.send(JSON.stringify({ type: 'turn.cancel' }));
   }, []);

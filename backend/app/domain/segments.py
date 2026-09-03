@@ -580,6 +580,15 @@ class _VoiceStopped(RuntimeError):
     pass
 
 
+def _consume_heartbeat_task(task: asyncio.Task) -> None:
+    """Swallow a best-effort heartbeat stop so teardown never fails."""
+    try:
+        if not task.cancelled():
+            task.exception()
+    except Exception:
+        pass
+
+
 class IncrementalJapaneseSegmenter:
     _OPEN_TO_CLOSE = {
         "「": "」",
@@ -730,15 +739,6 @@ class IncrementalJapaneseSegmenter:
         return None
 
 
-@dataclass(slots=True)
-class _SegmentResult:
-    segment: Segment
-    translation: str
-    translation_error: str | None
-    audio: bytes | None
-    audio_error: str | None
-
-
 EventEmitter = Callable[[dict], object]
 TextOperation = Callable[[str], Awaitable[str]]
 AudioOperation = Callable[[str, str], Awaitable[bytes]]
@@ -747,7 +747,13 @@ TurnObserver = Any
 
 
 class SegmentPipeline:
-    """Process segments concurrently while committing their events in order."""
+    """Process segments concurrently while committing their events in order.
+
+    B1 dual-cursor: ``segment.ready`` (ja+zh) commits as soon as translation
+    finishes, in segment-id order, without waiting for TTS. Audio commits on
+    an independent ordered cursor so a slow TTS never blocks later text.
+    ``turn.completed`` still waits for both cursors (necessary attachments).
+    """
 
     def __init__(
         self,
@@ -762,6 +768,7 @@ class SegmentPipeline:
         translation_timeout: float = 10.0,
         tts_observer: TtsObserver | None = None,
         turn_observer: TurnObserver | None = None,
+        heartbeat_interval: float | None = 10.0,
     ) -> None:
         self.identity = identity
         self._emit_callback = emit
@@ -775,11 +782,20 @@ class SegmentPipeline:
         if translation_timeout <= 0:
             raise ValueError("translation timeout must be positive")
         self._translation_timeout = translation_timeout
-        self._buffer: dict[int, _SegmentResult] = {}
+        if heartbeat_interval is not None and heartbeat_interval <= 0:
+            raise ValueError("heartbeat interval must be positive or None")
+        self._heartbeat_interval = heartbeat_interval
+        self._heartbeat_task: asyncio.Task | None = None
+        # Text cursor (segment.ready) and audio cursor (segment.audio/error)
+        # are independent; only the public event order is contractual.
+        self._text_buffer: dict[int, tuple[Segment, str, str | None]] = {}
+        self._audio_buffer: dict[int, tuple[Segment, bytes | None, str | None]] = {}
         self._committed_translations: list[str] = []
         self._translation_error_count = 0
-        self._next_segment_id = 0
-        self._submit_lock = asyncio.Lock()
+        self._next_text_id = 0
+        self._next_audio_id = 0
+        self._text_lock = asyncio.Lock()
+        self._audio_lock = asyncio.Lock()
         self._segment_tasks: set[asyncio.Task] = set()
         self._voice_tasks: set[asyncio.Task] = set()
         self._voice_stopped = False
@@ -802,7 +818,9 @@ class SegmentPipeline:
         await self.start()
         items = list(segments)
         if items:
-            self._next_segment_id = min(segment.id for segment in items)
+            lowest = min(segment.id for segment in items)
+            self._next_text_id = lowest
+            self._next_audio_id = lowest
         for segment in items:
             self.submit(segment)
         await self.finish(segment_count=len(items))
@@ -817,6 +835,7 @@ class SegmentPipeline:
                 self._turn_observer.turn_started(self.identity)
             except Exception:
                 pass
+        self._start_heartbeat()
 
     def submit(self, segment: Segment) -> None:
         if not self._running:
@@ -835,7 +854,7 @@ class SegmentPipeline:
             await asyncio.gather(*self._segment_tasks, return_exceptions=True)
         completed_count = segment_count
         if completed_count is None:
-            completed_count = self._next_segment_id
+            completed_count = self._next_text_id
         self._segment_tasks.clear()
         if emit_completed:
             await self.complete(segment_count=completed_count)
@@ -844,12 +863,43 @@ class SegmentPipeline:
         if self._cancelled or self._complete_event_sent:
             return
         self._complete_event_sent = True
+        await self._stop_heartbeat()
         await self._emit(self._event("turn.completed", segment_count=segment_count))
         if self._turn_observer is not None:
             try:
                 self._turn_observer.turn_terminal(self.identity, "succeeded")
             except Exception:
                 pass
+
+    def _start_heartbeat(self) -> None:
+        """Start the turn-scoped liveness loop (proves alive, never progress)."""
+        if self._heartbeat_interval is None or self._heartbeat_task is not None:
+            return
+        self._heartbeat_task = asyncio.create_task(self._heartbeat_loop())
+
+    async def _stop_heartbeat(self) -> None:
+        task = self._heartbeat_task
+        self._heartbeat_task = None
+        if task is None:
+            return
+        # Best-effort stop: never await teardown here. Awaiting a background
+        # sleep races connection teardown (TestClient portal cancels the
+        # awaiting chain and the whole websocket exit fails). Flags set by
+        # complete()/cancel() already prevent any further heartbeat emit.
+        if not task.done():
+            task.cancel()
+            task.add_done_callback(_consume_heartbeat_task)
+
+    async def _heartbeat_loop(self) -> None:
+        assert self._heartbeat_interval is not None
+        try:
+            while True:
+                await asyncio.sleep(self._heartbeat_interval)
+                if self._cancelled or self._complete_event_sent:
+                    return
+                await self._emit(self._event("turn.heartbeat"))
+        except asyncio.CancelledError:
+            pass
 
     async def stop_voice(self) -> None:
         self._voice_stopped = True
@@ -868,6 +918,7 @@ class SegmentPipeline:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        await self._stop_heartbeat()
         if not self._cancel_event_sent:
             self._cancel_event_sent = True
             await self._emit(self._event("turn.cancelled"))
@@ -882,11 +933,21 @@ class SegmentPipeline:
         voice_task = asyncio.create_task(self._synthesize_safe(segment))
         self._voice_tasks.add(voice_task)
         try:
-            translation, translation_error = await translation_task
+            try:
+                translation, translation_error = await translation_task
+            except asyncio.CancelledError:
+                voice_task.cancel()
+                await asyncio.gather(translation_task, voice_task, return_exceptions=True)
+                raise
+            # Text commits as soon as translation finishes; never wait for TTS.
+            await self._submit_text(segment, translation, translation_error)
             try:
                 audio, audio_error = await voice_task
             except asyncio.CancelledError:
-                if self._cancelled:
+                # Only a real stop_voice() may synthesize voice_stopped: it sets
+                # _voice_stopped before cancelling. Outer-task-first cancellation
+                # (flag not yet set) must propagate, never forge a user event.
+                if self._cancelled or not self._voice_stopped:
                     raise
                 audio, audio_error = None, "voice_stopped"
         except asyncio.CancelledError:
@@ -897,15 +958,7 @@ class SegmentPipeline:
         finally:
             self._voice_tasks.discard(voice_task)
 
-        await self._submit(
-            _SegmentResult(
-                segment=segment,
-                translation=translation,
-                translation_error=translation_error,
-                audio=audio,
-                audio_error=audio_error,
-            )
-        )
+        await self._submit_audio(segment, audio, audio_error)
 
     async def _translate_safe(self, text: str) -> tuple[str, str | None]:
         attempts = self._translation_retries + 1
@@ -966,70 +1019,95 @@ class SegmentPipeline:
                 return None, getattr(code, "value", None) or str(exc) or "service_error"
         return None, "service_error"
 
-    async def _submit(self, result: _SegmentResult) -> None:
+    async def _submit_text(
+        self, segment: Segment, translation: str, translation_error: str | None
+    ) -> None:
+        """Commit ordered text (segment.ready) without waiting for audio."""
         if self._cancelled:
             return
-        async with self._submit_lock:
+        async with self._text_lock:
             if self._cancelled:
                 return
-            self._buffer[result.segment.id] = result
-            while self._next_segment_id in self._buffer:
-                current = self._buffer.pop(self._next_segment_id)
+            self._text_buffer[segment.id] = (segment, translation, translation_error)
+            while self._next_text_id in self._text_buffer:
+                current_segment, current_translation, current_error = self._text_buffer.pop(
+                    self._next_text_id
+                )
                 ready = self._event(
                     "segment.ready",
-                    segment_id=current.segment.id,
-                    ja=current.segment.text,
-                    zh=current.translation,
-                    emotion=current.segment.emotion,
+                    segment_id=current_segment.id,
+                    ja=current_segment.text,
+                    zh=current_translation,
+                    emotion=current_segment.emotion,
                 )
-                if current.translation_error:
-                    ready["translation_error"] = current.translation_error
+                if current_error:
+                    ready["translation_error"] = current_error
                     self._translation_error_count += 1
                 await self._emit(ready)
                 if self._turn_observer is not None:
                     try:
-                        self._turn_observer.segment_committed(self.identity, current.segment)
+                        self._turn_observer.segment_committed(self.identity, current_segment)
                     except Exception:
                         pass
+                self._committed_translations.append(current_translation)
+                self._next_text_id += 1
+
+    async def _submit_audio(
+        self, segment: Segment, audio: bytes | None, audio_error: str | None
+    ) -> None:
+        """Commit ordered audio on its own cursor; never blocks text."""
+        if self._cancelled:
+            return
+        async with self._audio_lock:
+            if self._cancelled:
+                return
+            self._audio_buffer[segment.id] = (segment, audio, audio_error)
+            while self._next_audio_id in self._audio_buffer:
+                current_segment, current_audio, current_error = self._audio_buffer.pop(
+                    self._next_audio_id
+                )
                 if self._tts_observer is not None:
                     try:
-                        observer_error = current.audio_error
-                        if observer_error is None and self._voice_stopped and current.audio is None:
+                        observer_error = current_error
+                        if (
+                            observer_error is None
+                            and self._voice_stopped
+                            and current_audio is None
+                        ):
                             observer_error = "voice_stopped"
                         self._tts_observer(
                             self.identity,
-                            current.segment,
-                            current.audio,
+                            current_segment,
+                            current_audio,
                             observer_error,
                         )
                     except Exception:
                         # The observer is a strictly best-effort side channel.
                         # Its owner is responsible for recording this failure.
                         pass
-                self._committed_translations.append(current.translation)
-                if current.audio is not None and not self._voice_stopped:
+                if current_audio is not None and not self._voice_stopped:
                     await self._emit(
                         self._event(
                             "segment.audio",
-                            segment_id=current.segment.id,
-                            data=current.audio,
-                            emotion=current.segment.emotion,
+                            segment_id=current_segment.id,
+                            data=current_audio,
+                            emotion=current_segment.emotion,
                         )
                     )
                 else:
-                    reason = current.audio_error or "voice_stopped"
+                    reason = current_error or "voice_stopped"
                     # Display-only / non-speech skips: keep segment.ready, never
                     # emit audio_error (desktop treats it as TTS degradation toast).
                     if reason not in SILENT_AUDIO_SKIP_REASONS:
                         await self._emit(
                             self._event(
                                 "segment.audio_error",
-                                segment_id=current.segment.id,
+                                segment_id=current_segment.id,
                                 reason=reason,
-                                emotion=current.segment.emotion,
+                                emotion=current_segment.emotion,
                             )
                         )
-                self._next_segment_id += 1
+                self._next_audio_id += 1
 
     def _event(self, event_type: str, **payload) -> dict:
         return {
