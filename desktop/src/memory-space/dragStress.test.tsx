@@ -96,10 +96,10 @@ describe('P1-A fast drag stress', () => {
     const canvas = await screen.findByTestId('constellation-stage');
 
     // Select the fact so the anchor callback path is live during the drag.
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     const option = await screen.findByRole('option', { name: '喜欢黑咖啡' });
     fireEvent.click(option);
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
 
     const before = renderCount;
     fireEvent.pointerDown(canvas, { button: 0, clientX: 40, clientY: 40 });

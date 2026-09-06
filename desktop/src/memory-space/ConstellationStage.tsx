@@ -1,10 +1,13 @@
+// @refresh reset
+// Opaque motion handles and WebGL resources belong to the loaded module instance.
 import { useEffect, useRef, useState } from 'react';
 
-import { layoutProjection } from './layout';
+import { layoutProjection, OVERVIEW_FOV_DEG, OVERVIEW_REST_CAMERA } from './layout';
 import {
   createOverviewMotion,
   pickLiveNode,
   restLayoutFromProjection,
+  screenHitRadiusPx,
   step,
   type MotionState,
   type OverviewFrame,
@@ -17,7 +20,7 @@ import { perfSampleVisible } from './renderCapability';
 import { isPointerDrag } from './pointerIntent';
 import type { DisplayNode, Worldline } from './types';
 
-export type ScreenAnchor = { x: number; y: number };
+export type ScreenAnchor = { x: number; y: number; radius: number };
 
 function cameraFromFrame(frame: OverviewFrame): OrreryCamera {
   return {
@@ -116,24 +119,21 @@ export function ConstellationStage(props: {
   const ambientHold = () => (
     documentHidden()
     || propsRef.current.reducedMotion
-    || Boolean(propsRef.current.selectedId)
-    || Boolean(hoverGateRef.current)
-    || pointerActiveRef.current
-    || frameRef.current?.ownership === 'user'
   );
   const motionRef = useRef<MotionState | null>(null);
   const frameRef = useRef<OverviewFrame | null>(null);
   const epochRef = useRef(props.motionEpoch ?? 0);
   const scopeRef = useRef(props.scopeKey ?? '');
   const [view, setView] = useState({
-    yaw: 0.62,
-    pitch: 0.48,
-    zoom: 6.15,
+    yaw: Number(OVERVIEW_REST_CAMERA.yaw),
+    pitch: Number(OVERVIEW_REST_CAMERA.pitch),
+    zoom: Number(OVERVIEW_REST_CAMERA.distance),
     ownership: 'rest' as OverviewFrame['ownership'],
     generation: 1,
   });
   const [hoverId, setHoverId] = useState<string | null>(null);
-  const [pointerActive, setPointerActive] = useState(false);
+  const [labels, setLabels] = useState<Array<{ id: string; text: string; x: number; y: number; hot: boolean }>>([]);
+  const labelTickRef = useRef(0);
   propsRef.current = props;
   if (!motionRef.current) {
     const created = step(
@@ -173,7 +173,14 @@ export function ConstellationStage(props: {
     const selected = propsRef.current.selectedId;
     const fromRuntime = selected ? runtimeRef.current?.project(selected) : null;
     const fromFrame = selected ? next.projected.get(selected) : null;
-    const projected = fromRuntime ?? (fromFrame ? { x: fromFrame.x, y: fromFrame.y } : null);
+    const liveNode = selected ? next.nodes.get(selected) : null;
+    const projectedPoint = fromRuntime ?? (fromFrame ? { x: fromFrame.x, y: fromFrame.y } : null);
+    const projected = projectedPoint && liveNode
+      ? {
+        ...projectedPoint,
+        radius: screenHitRadiusPx(liveNode, next.camera, next.viewport) / 1.45,
+      }
+      : null;
     propsRef.current.onSelectedAnchor?.(projected);
   };
 
@@ -250,7 +257,6 @@ export function ConstellationStage(props: {
 
   const setPointerHold = (active: boolean) => {
     pointerActiveRef.current = active;
-    setPointerActive(active);
     const runtime = runtimeRef.current;
     if (motionRef.current) {
       const gated = step(motionRef.current, {
@@ -372,6 +378,66 @@ export function ConstellationStage(props: {
       live.applyFrame(stepped.frame, displayFromFrame(current.plan, stepped.frame));
       live.render(cameraFromFrame(stepped.frame));
       publish(stepped.frame);
+      labelTickRef.current += 1;
+      if (labelTickRef.current % 3 === 0) {
+        const display = displayFromFrame(current.plan, stepped.frame);
+        const nextLabels: Array<{ id: string; text: string; x: number; y: number; hot: boolean }> = [];
+        const width = canvas.clientWidth;
+        const height = canvas.clientHeight;
+        const hub = display.find((node) => node.kind === 'continuity_hub');
+        const soulAt = hub ? live.project(hub.id) : { x: width * 0.5, y: height * 0.5 };
+        const cam = stepped.frame.camera;
+        const cp = Math.cos(cam.pitch);
+        const camX = cam.lookAt.x - cam.distance * cp * Math.sin(cam.yaw);
+        const camY = cam.lookAt.y - cam.distance * Math.sin(cam.pitch);
+        const camZ = cam.lookAt.z - cam.distance * cp * Math.cos(cam.yaw);
+        const fov = (OVERVIEW_FOV_DEG * Math.PI) / 180;
+        const pxAt = (pos: { x: number; y: number; z: number }, radius: number) => {
+          const dist = Math.hypot(pos.x - camX, pos.y - camY, pos.z - camZ);
+          return dist > 0.001 ? ((height / 2) / Math.tan(fov / 2) / dist) * radius : 12;
+        };
+        const soulLive = hub ? stepped.frame.nodes.get(hub.id) : undefined;
+        const soulR = soulAt && soulLive ? pxAt(soulLive.position, soulLive.hitRadius) : 80;
+        for (const node of display) {
+          if (node.kind === 'continuity_hub') continue;
+          const record = node.kind === 'fact' || node.kind === 'experience';
+          if (record && node.id !== current.selectedId && node.id !== hoverGateRef.current) continue;
+          const at = live.project(node.id);
+          if (!at) continue;
+          if (at.x < -48 || at.y < -48 || at.x > width + 48 || at.y > height + 48) continue;
+          if (soulAt && Math.hypot(at.x - soulAt.x, at.y - soulAt.y) < soulR * 0.9) continue;
+          const liveNode = stepped.frame.nodes.get(node.id);
+          const pos = liveNode?.position ?? node.position;
+          const lift = pxAt(pos, liveNode?.hitRadius ?? node.radius) + 10;
+          let x = at.x;
+          let y = at.y - lift;
+          if (soulAt) {
+            const dx = x - soulAt.x;
+            const dy = y - soulAt.y;
+            const d = Math.hypot(dx, dy);
+            const minD = soulR + 26;
+            if (d < minD && d > 0.001) {
+              const s = minD / d;
+              x = soulAt.x + dx * s;
+              y = soulAt.y + dy * s;
+            }
+          }
+          nextLabels.push({
+            id: node.id,
+            text: node.label,
+            x,
+            y,
+            hot: node.id === current.selectedId || node.id === hoverGateRef.current,
+          });
+        }
+        nextLabels.sort((a, b) => a.x - b.x);
+        for (let i = 1; i < nextLabels.length; i += 1) {
+          const prev = nextLabels[i - 1];
+          const cur = nextLabels[i];
+          if (Math.abs(cur.x - prev.x) < 96 && Math.abs(cur.y - prev.y) < 20) cur.y = prev.y + 20;
+        }
+        setLabels(nextLabels);
+      }
       canvas.setAttribute('data-ambient', ambientHold() ? 'settled' : 'pulse');
       if (!cancelled && !hiddenClockRef.current) raf = window.requestAnimationFrame(runFrame);
     };
@@ -478,7 +544,34 @@ export function ConstellationStage(props: {
     props.worldline,
   ]);
 
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const onWheel = (event: WheelEvent) => {
+      const current = propsRef.current;
+      ensureMotion(current, canvas.clientWidth || 1280, canvas.clientHeight || 800);
+      if (!motionRef.current) return;
+      event.preventDefault();
+      const factor = current.reducedMotion
+        ? (event.deltaY > 0 ? 1.12 : 1 / 1.12)
+        : (1 + event.deltaY * 0.0012);
+      const moved = step(motionRef.current, {
+        type: 'userCamera', source: 'wheel', zoomMul: factor, nowMs: clockMs(),
+      });
+      motionRef.current = moved.state;
+      const runtime = runtimeRef.current;
+      if (runtime) {
+        runtime.applyFrame(moved.frame, displayFromFrame(current.plan, moved.frame));
+        runtime.render(cameraFromFrame(moved.frame));
+      }
+      publish(moved.frame);
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', onWheel);
+  }, []);
+
   return (
+    <>
     <canvas
       ref={canvasRef}
       className="memory-constellation-stage"
@@ -492,7 +585,7 @@ export function ConstellationStage(props: {
       data-ownership={view.ownership}
       data-generation={String(view.generation)}
       data-clock="running"
-      data-ambient={props.reducedMotion || view.ownership === 'user' || props.selectedId || hoverId || pointerActive ? 'settled' : 'pulse'}
+      data-ambient={props.reducedMotion ? 'settled' : 'pulse'}
       data-hover={hoverId ?? ''}
       aria-label="记忆星座仪"
       onPointerDown={(event) => {
@@ -584,27 +677,6 @@ export function ConstellationStage(props: {
         rightPressRef.current = null;
         setPointerHold(false);
       }}
-      onWheel={(event) => {
-        ensureMotion(props, canvasRef.current?.clientWidth || 1280, canvasRef.current?.clientHeight || 800);
-        if (!motionRef.current) return;
-        event.preventDefault();
-        const factor = props.reducedMotion
-          ? (event.deltaY > 0 ? 1.12 : 1 / 1.12)
-          : (1 + event.deltaY * 0.0012);
-        const moved = step(motionRef.current, {
-          type: 'userCamera',
-          source: 'wheel',
-          zoomMul: factor,
-          nowMs: clockMs(),
-        });
-        motionRef.current = moved.state;
-        const runtime = runtimeRef.current;
-        if (runtime) {
-          runtime.applyFrame(moved.frame, displayFromFrame(props.plan, moved.frame));
-          runtime.render(cameraFromFrame(moved.frame));
-        }
-        publish(moved.frame);
-      }}
       onPointerLeave={() => {
         dragRef.current = null;
         rightPressRef.current = null;
@@ -625,11 +697,25 @@ export function ConstellationStage(props: {
       }}
       onContextMenu={(event) => {
         event.preventDefault();
+        event.stopPropagation();
         const press = rightPressRef.current;
         rightPressRef.current = null;
+        setPointerHold(false);
         if (press?.dragged) return;
         props.onUnwind?.();
       }}
     />
+    <div className="memory-constellation-labels" aria-hidden="true">
+      {labels.map((label) => (
+        <span
+          key={label.id}
+          className={label.hot ? 'memory-constellation-label is-hot' : 'memory-constellation-label'}
+          style={{ left: `${label.x}px`, top: `${label.y}px` }}
+        >
+          {label.text}
+        </span>
+      ))}
+    </div>
+    </>
   );
 }

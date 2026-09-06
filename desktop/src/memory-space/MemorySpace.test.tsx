@@ -275,8 +275,8 @@ describe('MemorySpace', () => {
     expect(screen.queryByText('COMING SOON')).toBeNull();
     expect(screen.queryByRole('button', { name: '深入查看' })).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     expect(screen.getByTestId('memory-list')).toHaveTextContent('喜欢黑咖啡');
     expect(screen.getByRole('option', { name: '上下文 SOUL' })).toBeInTheDocument();
     expect(screen.getAllByRole('option', { name: '喜欢黑咖啡' })).toHaveLength(1);
@@ -286,7 +286,7 @@ describe('MemorySpace', () => {
     expect(screen.queryByTestId('reading-kind')).toBeNull();
     expect(screen.queryByTestId('soul-inspector')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     await waitFor(() => {
       expect(screen.getByTestId('reading-kind')).toBeInTheDocument();
     });
@@ -364,7 +364,7 @@ describe('MemorySpace', () => {
       />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     const first = await screen.findByRole('option', { name: '喜欢黑咖啡' });
     // Pure rove: arrows move focus only; no selection, no request — even
     // after the async effect flush window.
@@ -413,9 +413,9 @@ describe('MemorySpace', () => {
       />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     await waitFor(() => {
       expect(screen.getByTestId('reading-title')).toHaveTextContent('已核验的正文');
     });
@@ -453,12 +453,12 @@ describe('MemorySpace', () => {
       />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
     await waitFor(() => {
       expect(calls.filter((url) => url.includes('/api/memory/facts/1/details'))).toHaveLength(1);
     });
-    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
     fireEvent.change(screen.getByLabelText('浏览世界线'), { target: { value: 'beta' } });
     await new Promise((resolve) => setTimeout(resolve, 40));
     // Before the new envelope arrives, the stale SG selection must not be
@@ -511,19 +511,19 @@ describe('MemorySpace', () => {
       />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     await waitFor(() => {
       expect(screen.getByTestId('reading-evidence')).toBeInTheDocument();
     });
     expect(calls.filter((url) => url.includes('/details') && url.includes('worldline=steins_gate'))).toHaveLength(1);
 
     // Switch to beta; the new envelope still contains the same record.
-    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
     fireEvent.change(screen.getByLabelText('浏览世界线'), { target: { value: 'beta' } });
     // Close the tools sheet so the reading surface becomes active again.
-    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
     await waitFor(() => {
       expect(screen.getByTestId('memory-plaque')).toHaveTextContent('β');
     });
@@ -544,12 +544,12 @@ describe('MemorySpace', () => {
     expect(screen.queryByTestId('reading-evidence')).toBeNull();
 
     // A fresh activation gesture is allowed to request again.
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
     await waitFor(() => {
       expect(calls.filter((url) => url.includes('/details') && url.includes('worldline=steins_gate'))).toHaveLength(2);
     });
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     await waitFor(() => {
       expect(screen.getByTestId('reading-evidence')).toBeInTheDocument();
     });
@@ -649,9 +649,9 @@ describe('MemorySpace', () => {
       />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     await waitFor(() => {
       expect(screen.getByTestId('reading-revision-summary')).toHaveTextContent('2 个版本 · 最新变更：用户修订');
     });
@@ -681,9 +681,9 @@ describe('MemorySpace', () => {
       />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     await waitFor(() => {
       expect(screen.getByTestId('reading-evidence')).toBeInTheDocument();
     });
@@ -691,9 +691,9 @@ describe('MemorySpace', () => {
     // Deactivate through SOUL, then reactivate the SAME record.
     fireEvent.click(screen.getByTestId('select-soul'));
     await new Promise((resolve) => setTimeout(resolve, 30));
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     await waitFor(() => {
       expect(screen.getByTestId('reading-evidence')).toBeInTheDocument();
     });
@@ -720,7 +720,7 @@ describe('MemorySpace', () => {
       />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
     // Keep LIST open: the reading surface stays covered.
     await waitFor(() => {
@@ -728,7 +728,7 @@ describe('MemorySpace', () => {
     });
     // Closing LIST reveals the evidence; the announcement never lies and
     // never duplicates.
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     await waitFor(() => {
       expect(screen.getByTestId('reading-evidence')).toBeInTheDocument();
     });
@@ -754,9 +754,9 @@ describe('MemorySpace', () => {
       />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     await waitFor(() => {
       expect(screen.getByTestId('reading-evidence-error')).toBeInTheDocument();
     });
@@ -794,9 +794,9 @@ describe('MemorySpace', () => {
       />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     await waitFor(() => {
       expect(screen.getByTestId('reading-sources-empty')).toHaveTextContent('未提供可显示的来源');
     });
@@ -857,9 +857,9 @@ describe('MemorySpace', () => {
       />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     activateWithEnter(await screen.findByRole('option', { name: /一起看星空/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     await waitFor(() => {
       expect(screen.getByTestId('reading-sources-empty')).toHaveTextContent('未提供可显示的来源');
     });
@@ -885,10 +885,10 @@ describe('MemorySpace', () => {
       />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
     // Close LIST so the reading surface becomes the active sheet (wide IA).
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     await waitFor(() => {
       expect(screen.getByTestId('reading-evidence-missing')).toHaveTextContent('该记忆在此范围内不再可用');
     });
@@ -922,10 +922,10 @@ describe('MemorySpace', () => {
       />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
     // Close LIST so the reading surface becomes the active sheet (wide IA).
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     await waitFor(() => {
       expect(screen.getByTestId('reading-evidence-error')).toBeInTheDocument();
     });
@@ -959,7 +959,7 @@ describe('MemorySpace', () => {
     fireEvent.click(screen.getByTestId('select-soul'));
     const inspector = screen.getByTestId('soul-inspector');
     expect(inspector).toHaveTextContent('投影中心');
-    expect(screen.getByTestId('inspector-latest-change')).toHaveTextContent('2026-08-14T00:00:00Z');
+    expect(screen.getByTestId('inspector-latest-change')).toHaveAttribute('title', '2026-08-14T00:00:00Z');
     expect(screen.getByTestId('inspector-projection-counts')).toHaveTextContent('1 / 1');
     expect(screen.getByTestId('inspector-projection-counts')).toHaveTextContent('3 / 3');
     expect(screen.getByTestId('inspector-diagnostics')).toHaveTextContent('memory-projection-v1');
@@ -998,14 +998,14 @@ describe('MemorySpace', () => {
       />,
     );
     await waitFor(() => expect(releaseOld).toBeTypeOf('function'));
-    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
     fireEvent.change(screen.getByLabelText('搜索记忆'), { target: { value: '后来' } });
     await waitFor(() => expect(releaseNew).toBeTypeOf('function'));
     releaseNew?.({
       ok: true,
       json: async () => laterProjection,
     });
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     await waitFor(() => expect(screen.getByRole('option', { name: /后来的记忆/ })).toBeInTheDocument());
     releaseOld?.({
       ok: true,
@@ -1059,10 +1059,10 @@ describe('MemorySpace', () => {
     expect(screen.getByTestId('select-soul')).toBeInTheDocument();
     expect(screen.getByTestId('memory-plaque')).toHaveTextContent('OKABE');
     expect(screen.getByTestId('memory-space-tools')).toHaveAttribute('data-open', 'false');
-    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
     expect(screen.getByTestId('memory-space-tools')).toHaveAttribute('data-open', 'true');
     expect(screen.getByLabelText('搜索记忆')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'LIST' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '索引' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /^3D$|^2D$/ })).toBeNull();
     expect(screen.getByLabelText('浏览身份')).toBeInTheDocument();
     expect(screen.getByLabelText('浏览世界线')).toBeInTheDocument();
@@ -1097,8 +1097,8 @@ describe('MemorySpace', () => {
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     const first = await screen.findByRole('option', { name: '喜欢黑咖啡' });
     await waitFor(() => expect(document.activeElement).toBe(first));
     fireEvent.keyDown(first, { key: 'ArrowDown' });
@@ -1131,8 +1131,8 @@ describe('MemorySpace', () => {
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     const first = await screen.findByRole('option', { name: '喜欢黑咖啡' });
     await waitFor(() => expect(document.activeElement).toBe(first));
     expect(screen.getByTestId('memory-space')).toHaveAttribute('data-narrow-sheet', 'list');
@@ -1151,7 +1151,7 @@ describe('MemorySpace', () => {
     );
     await screen.findByTestId('memory-graph');
     fireEvent.click(screen.getByTestId('select-soul'));
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     const soul = await screen.findByRole('option', { name: '上下文 SOUL' });
     await waitFor(() => {
       expect(document.activeElement?.getAttribute('data-outline-id')).toBe(projection.center.projection_id);
@@ -1181,7 +1181,7 @@ describe('MemorySpace', () => {
     fireEvent.click(screen.getByTestId('select-soul'));
     fireEvent.keyDown(window, { key: 'ArrowRight' });
     fireEvent.keyDown(window, { key: 'Enter' });
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     const topic = await screen.findByRole('option', { name: '上下文 咖啡' });
     await waitFor(() => expect(document.activeElement?.getAttribute('data-outline-id')).toBe('topic:t1'));
     expect(topic).toHaveAttribute('data-outline-id', 'topic:t1');
@@ -1195,14 +1195,14 @@ describe('MemorySpace', () => {
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
     expect(screen.getByTestId('memory-space')).toHaveAttribute('data-narrow-sheet', 'tools');
     expect(screen.getByTestId('memory-space-tools')).toHaveAttribute('data-open', 'true');
     expect(screen.queryByTestId('memory-list')).toBeNull();
     expect(screen.queryByTestId('soul-inspector')).toBeNull();
     expect(screen.queryByTestId('reading-dom')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     expect(screen.getByTestId('memory-space')).toHaveAttribute('data-narrow-sheet', 'list');
     expect(screen.getByTestId('memory-space-tools')).toHaveAttribute('data-open', 'false');
     const fact = await screen.findByRole('option', { name: '喜欢黑咖啡' });
@@ -1217,7 +1217,7 @@ describe('MemorySpace', () => {
     expect(screen.queryByTestId('memory-list')).toBeNull();
     expect(screen.getByTestId('memory-space-tools')).toHaveAttribute('data-open', 'false');
 
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     expect(screen.getByTestId('memory-list')).toBeInTheDocument();
     expect(screen.queryByTestId('soul-inspector')).toBeNull();
     expect(screen.getByRole('option', { name: '上下文 SOUL' })).toHaveAttribute('aria-selected', 'true');
@@ -1266,7 +1266,7 @@ describe('MemorySpace', () => {
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     await waitFor(() => {
       expect(document.activeElement?.getAttribute('role')).toBe('option');
     });
@@ -1289,7 +1289,7 @@ describe('MemorySpace', () => {
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     fireEvent.click(screen.getByRole('button', { name: '按主题' }));
     expect(screen.getByTestId('memory-list')).toHaveAttribute('data-browse', 'grouped');
     const ranked = screen.getByRole('button', { name: '按排序' });
@@ -1322,7 +1322,7 @@ describe('MemorySpace', () => {
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     await waitFor(() => {
       expect(document.activeElement?.getAttribute('data-outline-id')).toBe('fact:1');
     });
@@ -1343,13 +1343,13 @@ describe('MemorySpace', () => {
     );
     await screen.findByTestId('memory-graph');
     fireEvent.click(screen.getByTestId('select-soul'));
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     await waitFor(() => {
       expect(document.activeElement?.getAttribute('data-outline-id')).toBe(projection.center.projection_id);
     });
     fireEvent.click(screen.getByTestId('select-soul'));
     expect(screen.queryByTestId('memory-list')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     await waitFor(() => {
       expect(document.activeElement?.getAttribute('data-outline-id')).toBe(projection.center.projection_id);
     });
@@ -1361,15 +1361,15 @@ describe('MemorySpace', () => {
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     const fact = await screen.findByRole('option', { name: '喜欢黑咖啡' });
     fireEvent.click(fact);
     await waitFor(() => {
       expect(document.activeElement?.getAttribute('data-outline-id')).toBe('fact:1');
     });
-    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
     expect(screen.queryByTestId('memory-list')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     await waitFor(() => {
       expect(document.activeElement?.getAttribute('data-outline-id')).toBe('fact:1');
     });
@@ -1383,14 +1383,14 @@ describe('MemorySpace', () => {
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     await screen.findByTestId('memory-list');
     expect(screen.getByTestId('memory-space')).toHaveAttribute('data-narrow-sheet', 'list');
     fireEvent.click(screen.getByTestId('select-soul'));
     expect(screen.getByTestId('soul-inspector')).toBeInTheDocument();
     expect(screen.getByTestId('memory-space')).toHaveAttribute('data-narrow-sheet', 'inspector');
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     expect(screen.getByTestId('memory-space')).toHaveAttribute('data-narrow-sheet', 'list');
     window.innerWidth = previousWidth;
   });
@@ -1473,7 +1473,7 @@ describe('MemorySpace', () => {
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
     expect(await screen.findByTestId('memory-empty')).toHaveTextContent('长期记忆');
-    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
     fireEvent.change(screen.getByLabelText('搜索记忆'), { target: { value: '拿铁' } });
     const search = screen.getByLabelText('搜索记忆') as HTMLInputElement;
     search.focus();
@@ -1513,7 +1513,7 @@ describe('MemorySpace', () => {
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
     fireEvent.click(screen.getByLabelText('事实'));
     fireEvent.click(screen.getByLabelText('仅置顶'));
     await waitFor(() => {
@@ -1569,7 +1569,7 @@ describe('MemorySpace', () => {
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
     fireEvent.change(screen.getByLabelText('浏览世界线'), { target: { value: 'beta' } });
     await waitFor(() => {
       expect(screen.getByTestId('memory-plaque')).toHaveTextContent('SG');
@@ -1607,13 +1607,13 @@ describe('MemorySpace', () => {
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     fireEvent.click(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
-    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
     fireEvent.change(screen.getByLabelText('浏览世界线'), { target: { value: 'beta' } });
     await waitFor(() => expect(screen.getByTestId('memory-plaque')).toHaveTextContent('β'));
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     expect(screen.queryByRole('option', { name: '喜欢黑咖啡' })).toBeNull();
     expect(screen.getByRole('option', { name: /β 记忆/ })).toBeInTheDocument();
     expect(document.querySelector('[data-result-id="fact:1"]')).toBeNull();
@@ -1631,8 +1631,8 @@ describe('MemorySpace', () => {
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     expect(screen.getByTestId('memory-malformed')).toBeInTheDocument();
     expect(screen.getByTestId('memory-malformed')).toHaveTextContent(/无效|无法生成/);
     expect(screen.queryByTestId('memory-list')).toBeNull();
@@ -1652,12 +1652,60 @@ describe('MemorySpace', () => {
     fireEvent.keyDown(window, { key: 'ArrowRight' });
     // Arrows rove only; Enter activates the focused node.
     fireEvent.keyDown(window, { key: 'Enter' });
-    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     const selected = document.querySelector('[aria-selected="true"]');
     expect(selected).toBeTruthy();
     fireEvent.keyDown(window, { key: 'Home' });
     expect(screen.getByTestId('soul-inspector')).toBeInTheDocument();
+  });
+
+  it('panel close preserves the selected node and activation reopens it', async () => {
+    mockApi((url) => url.includes('/details') ? okJson(factDetailsFixture) : okJson(projection));
+    render(<MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />);
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByTestId('select-soul'));
+    fireEvent.click(screen.getByRole('button', { name: '关闭 SOUL 概览' }));
+    expect(screen.queryByTestId('soul-inspector')).toBeNull();
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-selected-kind', 'continuity_hub');
+    fireEvent.click(screen.getByTestId('select-soul'));
+    expect(screen.getByTestId('soul-inspector')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
+    fireEvent.click(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
+    await screen.findByTestId('reading-dom');
+    const branch = screen.getByTestId('memory-space').getAttribute('data-expanded-topics');
+    fireEvent.click(screen.getByRole('button', { name: '关闭阅读' }));
+    expect(screen.queryByTestId('reading-dom')).toBeNull();
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-selected-id', 'fact:1');
+    expect(screen.getByTestId('memory-space')).toHaveAttribute('data-expanded-topics', branch);
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
+    fireEvent.click(screen.getByRole('option', { name: '喜欢黑咖啡' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
+    expect(await screen.findByTestId('reading-dom')).toBeInTheDocument();
+  });
+
+  it('RMB and Escape dismiss the SOUL inspector before leaving Memory', async () => {
+    mockApi(() => okJson(projection));
+    const onClose = vi.fn();
+    render(<MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={onClose} />);
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByTestId('select-soul'));
+    expect(screen.getByTestId('soul-inspector')).toBeInTheDocument();
+    fireEvent.contextMenu(screen.getByTestId('constellation-stage'));
+    expect(screen.queryByTestId('soul-inspector')).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('select-soul'));
+    expect(screen.getByTestId('soul-inspector')).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByTestId('soul-inspector')).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('select-soul'));
+    fireEvent.contextMenu(screen.getByTestId('soul-inspector'));
+    expect(screen.queryByTestId('soul-inspector')).toBeNull();
+    fireEvent.click(screen.getByTestId('select-soul'));
+    fireEvent.click(screen.getByRole('button', { name: '关闭 SOUL 概览' }));
+    expect(screen.queryByTestId('soul-inspector')).toBeNull();
   });
 
   it('canvas RMB unwinds Fact to Topic to Overview and Back still closes Memory at root', async () => {
@@ -1668,7 +1716,7 @@ describe('MemorySpace', () => {
     );
     await screen.findByTestId('memory-graph');
     expect(screen.getByTestId('memory-space').getAttribute('data-expanded-topics') ?? '').toBe('');
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     fireEvent.click(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
     expect(screen.getByTestId('memory-space')).toHaveAttribute('data-selected-kind', 'fact');
     expect(screen.getByTestId('memory-space').getAttribute('data-expanded-topics')).toContain('topic:');
@@ -1698,7 +1746,7 @@ describe('MemorySpace', () => {
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     fireEvent.click(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
     const canvas = await screen.findByTestId('constellation-stage');
     fireEvent.pointerDown(canvas, { button: 2, clientX: 20, clientY: 20 });
@@ -1730,7 +1778,7 @@ describe('MemorySpace', () => {
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={onClose} />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     fireEvent.click(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
     expect(screen.getByTestId('memory-space')).toHaveAttribute('data-selected-kind', 'fact');
     expect(screen.getByTestId('memory-list')).toBeInTheDocument();
@@ -1757,7 +1805,7 @@ describe('MemorySpace', () => {
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     fireEvent.click(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
     const canvas = screen.queryByTestId('constellation-stage');
     if (canvas) {
@@ -1785,11 +1833,11 @@ describe('MemorySpace', () => {
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     expect(await screen.findByRole('option', { name: '喜欢黑咖啡' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
     fireEvent.change(screen.getByLabelText('搜索记忆'), { target: { value: '后来' } });
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     await waitFor(() => expect(screen.getByRole('option', { name: /后来的记忆/ })).toBeInTheDocument());
     expect(screen.queryByRole('option', { name: '喜欢黑咖啡' })).toBeNull();
   });
@@ -1800,8 +1848,8 @@ describe('MemorySpace', () => {
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: '仪器' }));
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '筛选' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     fireEvent.click(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
     expect(screen.getByTestId('memory-space').getAttribute('data-motion-cause')).toMatch(
       /selection|reselect|post-reconcile-replacement/,
@@ -1814,7 +1862,7 @@ describe('MemorySpace', () => {
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
     await screen.findByTestId('memory-graph');
-    fireEvent.click(screen.getByRole('button', { name: 'LIST' }));
+    fireEvent.click(screen.getByRole('button', { name: '索引' }));
     const option = await screen.findByRole('option', { name: '喜欢黑咖啡' });
     fireEvent.click(option);
     fireEvent.click(option);

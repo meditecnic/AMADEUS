@@ -237,7 +237,7 @@ describe('Memory Space peer modes', () => {
       expect(screen.getByTestId('memory-graph')).toBeTruthy();
     });
     // Open the LIST outline so constellation rows are DOM-observable.
-    fireEvent.click(screen.getByText('LIST'));
+    fireEvent.click(screen.getByText('索引'));
     await waitFor(() => {
       expect(screen.getByText('喜欢黑咖啡')).toBeTruthy();
     });
@@ -401,7 +401,7 @@ describe('Memory Space peer modes', () => {
     await waitFor(() => {
       expect(screen.getByTestId('memory-graph')).toBeTruthy();
     });
-    fireEvent.click(screen.getByText('LIST'));
+    fireEvent.click(screen.getByText('索引'));
     await waitFor(() => {
       expect(screen.getByText('喜欢黑咖啡')).toBeTruthy();
     });
@@ -486,7 +486,7 @@ describe('Memory Space peer modes', () => {
     await waitFor(() => {
       expect(screen.getByTestId('memory-graph')).toBeTruthy();
     });
-    fireEvent.click(screen.getByText('LIST'));
+    fireEvent.click(screen.getByText('索引'));
     await waitFor(() => {
       expect(screen.getByText('喜欢黑咖啡')).toBeTruthy();
     });
@@ -662,7 +662,7 @@ describe('Memory Space peer modes', () => {
       expect(screen.getByTestId('memory-graph')).toBeTruthy();
     });
     // Constellation LIST first shows the record from the backend projection.
-    fireEvent.click(screen.getByText('LIST'));
+    fireEvent.click(screen.getByText('索引'));
     await waitFor(() => {
       expect(screen.getByText('喜欢黑咖啡')).toBeTruthy();
     });

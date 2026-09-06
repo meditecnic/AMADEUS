@@ -34,6 +34,7 @@ import {
   createDetailsController,
   deriveExperienceReading,
   deriveFactReading,
+  formatTimeHuman,
   NOT_FOUND_NOTICE,
   type DetailsCache,
   type DetailsOutcome,
@@ -163,6 +164,7 @@ export function MemorySpace({
   const [jobs, setJobs] = useState<JobSummary | null>(null);
   const [topics, setTopics] = useState<TopicOption[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [dismissedPanel, setDismissedPanel] = useState<string | null>(null);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [listOpen, setListOpen] = useState(false);
   const [listOwnsFocus, setListOwnsFocus] = useState(false);
@@ -468,8 +470,10 @@ export function MemorySpace({
   const renderSurface = capability.surface;
   const fallbackList = renderSurface === 'list';
   const listVisible = listOpen || fallbackList;
-  const inspectorOpen = overviewOpen && selected?.kind === 'continuity_hub';
-  const memoOpen = Boolean(card) && overviewOpen;
+  const panelVisible = dismissedPanel !== `${scopeKey}|${selectedId}`;
+  const dismissPanel = () => setDismissedPanel(`${scopeKey}|${selectedId}`);
+  const inspectorOpen = panelVisible && overviewOpen && selected?.kind === 'continuity_hub';
+  const memoOpen = panelVisible && Boolean(card) && overviewOpen;
   const showSceneMemo = memoOpen && surface === 'scene' && renderSurface === '3d' && camOwnership !== 'user' && (effectiveDetails.type === 'idle' || effectiveDetails.type === 'loading');
   const showDomMemo = memoOpen && !showSceneMemo;
   const phase = overviewOpen ? 'overview' : 'soul';
@@ -495,6 +499,7 @@ export function MemorySpace({
   };
 
   const handleSelect = (id: string | null, mode: 'rove' | 'activate' = 'activate') => {
+    if (mode === 'activate') setDismissedPanel(null);
     // P1 spec-1: rove moves focus only. Activation (Enter / Space / click)
     // is the sole owner of selectedId and therefore of details loading.
     if (mode === 'rove') {
@@ -606,6 +611,17 @@ export function MemorySpace({
     setCriteria((current) => ({ ...current }));
   };
 
+  const returnToOverview = () => {
+    setSelectedId(null);
+    setFocusedId(null);
+    setExpandedTopicIds([]);
+    setActivationKey(null);
+    setToolsOpen(false);
+    setListOpen(false);
+    noteMotion('reselect');
+    noteMotion('disclosure');
+  };
+
   const unwind = (opts?: { closeAtRoot?: boolean }) => {
     // Semantic Back in Archive mode: editor/confirm → detail → list → close.
     if (mode === 'archive') {
@@ -663,6 +679,12 @@ export function MemorySpace({
       setActivationKey(null);
       noteMotion('selection');
       noteMotion('disclosure');
+      return;
+    }
+    if (action === 'close-inspector') {
+      setSelectedId(null);
+      setFocusedId(null);
+      noteMotion('selection');
       return;
     }
     if (action === 'topic-to-overview') {
@@ -790,6 +812,14 @@ export function MemorySpace({
   const showInspector = Boolean(mode === 'constellation' && inspectorOpen && liveProjection && narrowSheet === 'inspector');
   const showReading = Boolean(mode === 'constellation' && showDomMemo && card && narrowSheet === 'reading');
   const showSceneReading = Boolean(mode === 'constellation' && showSceneMemo && card && narrowSheet === 'reading');
+  const sceneReadingTransform = anchor
+    ? (() => {
+      const gap = Math.max(42, anchor.radius + 24);
+      const fitsRight = anchor.x + gap + 320 <= width - 16;
+      const horizontal = fitsRight ? `${gap}px` : `calc(-100% - ${gap}px)`;
+      return `translate3d(${anchor.x}px, ${anchor.y}px, 0) translate(${horizontal}, -50%)`;
+    })()
+    : undefined;
 
   // P2-B (round 4): honest terminal announcement. When the reading surface
   // is visible at resolution time we say "证据已读取"; otherwise we say the
@@ -925,10 +955,10 @@ export function MemorySpace({
     return null;
   })();
   const motionInsets = {
-    top: 64,
-    right: 16,
+    top: width < 900 ? 104 : 64,
+    right: width >= 900 && showList ? 332 : 16,
     bottom: narrowSheet !== 'none' && width < 900 ? Math.round((typeof window === 'undefined' ? 800 : window.innerHeight) * 0.42) : 16,
-    left: 16,
+    left: width >= 900 && (showReading || showInspector) ? 400 : 16,
   };
 
   useLayoutEffect(() => {
@@ -994,6 +1024,13 @@ export function MemorySpace({
       data-motion-cause={motionCause}
       data-tools-open={String(toolsOpen)}
       aria-label="Memory Space"
+      onContextMenu={(event) => {
+        if (mode !== 'constellation') return;
+        const target = event.target as HTMLElement;
+        if (target.closest('input, textarea, select, [contenteditable="true"]') || window.getSelection()?.toString()) return;
+        event.preventDefault();
+        unwind({ closeAtRoot: false });
+      }}
     >
       <div className="sr-only" role="status" aria-live="polite" data-testid="memory-announce">{announcement}</div>
       <header className="memory-space-veil" data-testid="memory-space-veil" data-chrome="compact">
@@ -1014,6 +1051,9 @@ export function MemorySpace({
           <span>MEMORY</span>
           <span className="memory-space-soul-mark">SOUL</span>
         </button>
+        {mode === 'constellation' && !fallbackList ? (
+          <button type="button" className="memory-space-overview" title="保留筛选条件，恢复总览视角" onClick={returnToOverview}>回到总览</button>
+        ) : null}
         <span className="memory-space-scope" data-testid="memory-plaque">
           {identityMode === 'self' ? 'USER' : 'OKABE'} · {worldline === 'steins_gate' ? 'SG' : 'β'}
         </span>
@@ -1029,7 +1069,7 @@ export function MemorySpace({
               setMode('constellation');
             }}
           >
-            CONSTELLATION · 记忆星图
+            记忆星图
           </button>
           <button
             type="button"
@@ -1037,7 +1077,7 @@ export function MemorySpace({
             aria-pressed={mode === 'archive'}
             onClick={() => setMode('archive')}
           >
-            ARCHIVE · 记忆档案
+            记忆档案
           </button>
         </div>
         {mode === 'constellation' ? (
@@ -1052,10 +1092,10 @@ export function MemorySpace({
                 setToolsOpen((value) => !value);
               }}
             >
-              仪器
+              筛选
             </button>
             <button type="button" aria-pressed={narrowSheet === 'list'} onClick={toggleList}>
-              LIST
+              索引
             </button>
           </>
         ) : null}
@@ -1284,7 +1324,7 @@ export function MemorySpace({
             onSelectedAnchor={(next) => {
               setAnchor((prev) => {
                 if (!next && !prev) return prev;
-                if (next && prev && next.x === prev.x && next.y === prev.y) return prev;
+                if (next && prev && next.x === prev.x && next.y === prev.y && next.radius === prev.radius) return prev;
                 return next;
               });
             }}
@@ -1318,10 +1358,9 @@ export function MemorySpace({
             data-testid="reading-scene"
             data-attached="sphere"
             data-reading-id={selectedId ?? ''}
-            style={anchor ? {
-              transform: `translate3d(${anchor.x}px, ${anchor.y}px, 0) translate(-108%, -18%)`,
-            } : undefined}
+            style={sceneReadingTransform ? { transform: sceneReadingTransform } : undefined}
           >
+            <button type="button" className="memory-panel-close memory-reading-close" aria-label="关闭阅读" onClick={dismissPanel}>×</button>
             <div className="memory-reading-card-content" key={selectedId ?? 'reading'}>
               <ReadingBody
                 card={card}
@@ -1367,7 +1406,10 @@ export function MemorySpace({
 
       {showInspector && liveProjection ? (
         <aside className="memory-inspector" data-testid="soul-inspector">
-          <h2>AMADEUS / SOUL</h2>
+          <div className="memory-panel-heading">
+            <h2>AMADEUS / SOUL</h2>
+            <button type="button" className="memory-panel-close" aria-label="关闭 SOUL 概览" onClick={dismissPanel}>×</button>
+          </div>
           <p>SOUL 是当前 Amadeus 记忆连续性的投影中心，不是一条可编辑的记忆。</p>
           <dl data-testid="inspector-composition">
             <div><dt>稳定事实</dt><dd>{liveProjection.composition.active_facts}</dd></div>
@@ -1375,8 +1417,8 @@ export function MemorySpace({
             <div><dt>主题</dt><dd>{liveProjection.composition.eligible_topics}</dd></div>
             <div>
               <dt>最近变更</dt>
-              <dd data-testid="inspector-latest-change">
-                {liveProjection.composition.latest_memory_change_at ?? '无'}
+              <dd data-testid="inspector-latest-change" title={liveProjection.composition.latest_memory_change_at ?? undefined}>
+                {formatTimeHuman(liveProjection.composition.latest_memory_change_at) ?? '无'}
               </dd>
             </div>
           </dl>
@@ -1438,6 +1480,7 @@ export function MemorySpace({
           data-testid="reading-dom"
           data-reading-id={selectedId ?? ''}
         >
+          <button type="button" className="memory-panel-close memory-reading-close" aria-label="关闭阅读" onClick={dismissPanel}>×</button>
           <div className="memory-reading-card-content" key={selectedId ?? 'reading'}>
             <ReadingBody
               card={card}

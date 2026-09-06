@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { describe, expect, it, vi } from 'vitest';
 
 import { layoutProjection } from './layout';
+import { tickCognitionBody } from './cognitionMaterials';
 import { createOverviewMotion, pickLiveNode, restLayoutFromProjection, step } from './overviewMotion';
 import { deriveOverviewPresentation } from './overviewPresentation';
 import { OrreryRuntime } from './orreryRenderer';
@@ -138,7 +139,7 @@ describe('OrreryRuntime live frame adapter', () => {
     expect(group.getObjectByName('soul-mark')).toBeUndefined();
     expect(group.getObjectByName('soul-continuity-rings')).toBeUndefined();
     expect(group.getObjectByName('soul-glass')).toBeTruthy();
-    expect(group.getObjectByName('soul-kernel')).toBeTruthy();
+    expect(group.getObjectByName('soul-kernel')).toBeUndefined();
     expect(group.getObjectByName('soul-hit')).toBeTruthy();
     runtime.dispose();
   });
@@ -192,6 +193,32 @@ describe('OrreryRuntime live frame adapter', () => {
     runtime.applyFrame(frame, display);
     runtime.applyFrame(frame, display);
     expect(vi.mocked(filamentPrefix)).not.toHaveBeenCalled();
+    runtime.dispose();
+  });
+
+  it('uses hover for the material response while keeping click selection independent', () => {
+    const runtime = new OrreryRuntime(document.createElement('canvas'));
+    const { frame, display } = frameOf();
+    runtime.applyFrame(frame, display);
+    runtime.setSelected('topic:t1');
+    const internal = runtime as unknown as { nodes: Map<string, THREE.Group> };
+    const flow = internal.nodes.get('topic:t1')!.getObjectByName('inner-flow') as THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
+    const normalColor = flow.material.uniforms.uColor.value.getHex();
+    expect(flow.userData.hovered).toBe(false);
+    runtime.setHover('topic:t1');
+    expect(flow.userData.hovered).toBe(true);
+    tickCognitionBody(flow, 1, 1);
+    tickCognitionBody(flow, 1.1, 1);
+    const hoverStrength = flow.material.uniforms.uHoverStrength.value;
+    expect(hoverStrength).toBeGreaterThan(0);
+    expect(flow.scale.toArray()).toEqual([1, 1, 1]);
+    expect(flow.material.uniforms.uColor.value.getHex()).not.toBe(normalColor);
+    runtime.setHover(null);
+    tickCognitionBody(flow, 1.2, 1);
+    expect(flow.material.uniforms.uHoverStrength.value).toBeLessThan(hoverStrength);
+    expect(flow.scale.toArray()).toEqual([1, 1, 1]);
+    expect(flow.userData.hovered).toBe(false);
+    expect(flow.material.uniforms.uColor.value.getHex()).toBe(normalColor);
     runtime.dispose();
   });
 

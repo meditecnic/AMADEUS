@@ -15,8 +15,25 @@ export function nodeLabel(node: ProjectionNode): string {
   return node.label;
 }
 
-const SHELL_RADIUS = 2.35;
+const SHELL_RADIUS = 2.1;
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+export const OVERVIEW_REST_CAMERA = { yaw: 0, pitch: 0.25, distance: 7.8 } as const;
+
+function overviewPoint(x: number, y: number, depth: number): Point3 {
+  const cy = Math.cos(OVERVIEW_REST_CAMERA.yaw);
+  const sy = Math.sin(OVERVIEW_REST_CAMERA.yaw);
+  const cp = Math.cos(OVERVIEW_REST_CAMERA.pitch);
+  const sp = Math.sin(OVERVIEW_REST_CAMERA.pitch);
+  return {
+    x: -x * cy - y * sp * sy + depth * cp * sy,
+    y: y * cp + depth * sp,
+    z: x * sy - y * sp * cy + depth * cp * cy,
+  };
+}
+
+function topicPosition(index: number, total: number): Point3 {
+  return placeOnSphere(index, total, SHELL_RADIUS);
+}
 
 export type OrbitRing = {
   radiusX: number;
@@ -43,11 +60,11 @@ function topicScale(node: Extract<ProjectionNode, { kind: 'topic' }>): number {
 export function placeOnSphere(index: number, total: number, radius: number): Point3 {
   const count = Math.max(1, total);
   if (count === 1) {
-    return { x: radius * 0.55, y: radius * 0.18, z: radius * 0.81 };
+    return { x: radius * 0.55, y: radius * 0.18, z: radius * Math.sqrt(1 - 0.55 ** 2 - 0.18 ** 2) };
   }
   if (count === 2) {
     const sign = index <= 0 ? 1 : -1;
-    return { x: sign * radius * 0.82, y: sign * radius * 0.28, z: sign * radius * 0.5 };
+    return { x: sign * radius * 0.82, y: sign * radius * 0.28, z: sign * radius * Math.sqrt(1 - 0.82 ** 2 - 0.28 ** 2) };
   }
   const y = 1 - ((index + 0.5) * 2) / count;
   const ring = Math.sqrt(Math.max(0, 1 - y * y));
@@ -61,12 +78,8 @@ export function placeOnSphere(index: number, total: number, radius: number): Poi
 
 function unboundPocket(index: number, total: number, seed: string): Point3 {
   const angle = (Math.PI * 2 * index) / Math.max(1, total) + hash01(`${seed}|u`) * 0.5;
-  const r = 0.92 + hash01(`${seed}|ur`) * 0.18;
-  return {
-    x: r * Math.cos(angle) * 0.52,
-    y: -0.58 + (hash01(`${seed}|uy`) - 0.5) * 0.16,
-    z: r * Math.sin(angle) * 0.52,
-  };
+  const r = 0.14 + hash01(`${seed}|ur`) * 0.12;
+  return overviewPoint(r * Math.cos(angle), -0.94 + r * Math.sin(angle) * 0.35, 0.2);
 }
 
 function parentTopicProjectionId(
@@ -96,7 +109,7 @@ export function layoutProjection(projection: MemoryProjection): DisplayNode[] {
     .sort((a, b) => a.projection_id.localeCompare(b.projection_id));
   const topicHome = new Map<string, Point3>();
   topics.forEach((node, index) => {
-    topicHome.set(node.projection_id, placeOnSphere(index, topics.length, SHELL_RADIUS));
+    topicHome.set(node.projection_id, topicPosition(index, topics.length));
   });
 
   const moons = new Map<string, ProjectionNode[]>();

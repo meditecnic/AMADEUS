@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import * as THREE from 'three';
 
-import { cameraWorldPosition, layoutProjection, OVERVIEW_FOV_DEG, projectToScreen } from './layout';
+import { cameraWorldPosition, layoutProjection, OVERVIEW_FOV_DEG, OVERVIEW_REST_CAMERA, projectToScreen } from './layout';
 import {
   createOverviewMotion,
   pickLiveNode,
@@ -788,6 +788,19 @@ describe('overviewMotion planner', () => {
     expect(frame.edges.some((item) => item.from === 'fact:1' || item.to === 'fact:1')).toBe(false);
   });
 
+  it('explicitly returning to Overview restores the entry composition after manual orbit and zoom', () => {
+    const seed = seedFrom(envelope(), { reducedMotion: true });
+    const initial = step(createOverviewMotion(seed), { type: 'tick', nowMs: 0 });
+    const dragged = step(initial.state, { type: 'userCamera', source: 'pointer', dyaw: 1.2, dpitch: 0.2, zoomMul: 0.6, nowMs: 20 });
+    const restored = step(dragged.state, {
+      type: 'presentationChanged', cause: 'reselect', presentation: present(seed, { selectedId: null }),
+    });
+    expect(restored.frame.camera.yaw).toBeCloseTo(initial.frame.camera.yaw);
+    expect(restored.frame.camera.pitch).toBeCloseTo(initial.frame.camera.pitch);
+    expect(restored.frame.camera.distance).toBeCloseTo(initial.frame.camera.distance);
+    expect(restored.frame.ownership).toBe('rest');
+  });
+
   it('Topic focus dollies in when the live node is too small at rest distance', () => {
     const seed = seedFrom(envelope(), {
       viewport: { x: 0, y: 0, width: 1280, height: 800 },
@@ -826,7 +839,7 @@ describe('overviewMotion planner', () => {
     expect(settled.frame.inFlightIds).toEqual([]);
   });
 
-  it('Topic and Evidence framing keep required context in the safe rect by apparent size, not a fixed distance', () => {
+  it('Topic and Evidence framing make the selected body visually dominant without losing context', () => {
     const seed = seedFrom(envelope(), {
       viewport: { x: 0, y: 0, width: 1280, height: 800 },
       reducedMotion: true,
@@ -852,17 +865,25 @@ describe('overviewMotion planner', () => {
     });
     const topicPx = apparentSizePx(topic.frame, 'topic:t1');
     const evidencePx = apparentSizePx(evidence.frame, 'fact:1');
+    const topicHubPx = apparentSizePx(topic.frame, 'hub');
+    const evidenceHubPx = apparentSizePx(evidence.frame, 'hub');
+    const evidenceParentPx = apparentSizePx(evidence.frame, 'topic:t1');
     expect(inside(topic.frame.safeRect, topic.frame.projected.get('topic:t1'))).toBe(true);
-    expect(inside(topic.frame.safeRect, topic.frame.projected.get('hub'))).toBe(true);
+    expect(inSoftZone(topic.frame.safeRect, topic.frame.projected.get('topic:t1'))).toBe(true);
+    expect(inside(topic.frame.viewport, topic.frame.projected.get('hub'))).toBe(true);
     expect(inside(topic.frame.safeRect, topic.frame.projected.get('fact:1'))).toBe(true);
     expect(inside(evidence.frame.safeRect, evidence.frame.projected.get('fact:1'))).toBe(true);
-    expect(inside(evidence.frame.safeRect, evidence.frame.projected.get('topic:t1'))).toBe(true);
-    expect(topicPx).toBeGreaterThanOrEqual(36);
-    expect(topicPx).toBeLessThanOrEqual(96);
+    expect(inSoftZone(evidence.frame.safeRect, evidence.frame.projected.get('fact:1'))).toBe(true);
+    expect(inside(evidence.frame.viewport, evidence.frame.projected.get('topic:t1'))).toBe(true);
+    expect(topicPx).toBeGreaterThanOrEqual(80);
+    expect(topicPx).toBeLessThanOrEqual(140);
+    expect(topicPx).toBeGreaterThan(topicHubPx * 1.15);
     const evidenceAtTopic = apparentSizePx({ ...topic.frame, camera: topic.frame.camera }, 'fact:1');
     expect(evidence.frame.camera.distance).toBeLessThan(topic.frame.camera.distance);
     expect(evidencePx).toBeGreaterThan(evidenceAtTopic - 0.5);
-    expect(evidencePx).toBeGreaterThanOrEqual(18);
+    expect(evidencePx).toBeGreaterThanOrEqual(72);
+    expect(evidencePx).toBeGreaterThan(evidenceParentPx * 1.15);
+    expect(evidencePx).toBeGreaterThan(evidenceHubPx);
     const again = step(topic.state, {
       type: 'presentationChanged',
       cause: 'reselect',
@@ -876,7 +897,7 @@ describe('overviewMotion planner', () => {
   });
 
   it('dense Topic focus keeps the selected Topic as the visual weight', () => {
-    const topics = Array.from({ length: 2 }, (_, index) => topic(`dense-${index}`, `主题${index}`));
+    const topics = Array.from({ length: 11 }, (_, index) => topic(`dense-${index}`, `主题${index}`));
     const facts = topics.map((item, index) => fact(`dense-${index}`, `事实${index}`, item.topic_id));
     const projection = envelope({
       composition: {
@@ -902,7 +923,7 @@ describe('overviewMotion planner', () => {
     });
     const base = seedFrom(projection, { reducedMotion: true });
 
-    for (const item of topics) {
+    for (const [index, item] of topics.entries()) {
       const focused = step(createOverviewMotion(base), {
         type: 'presentationChanged',
         cause: 'selection',
@@ -913,12 +934,13 @@ describe('overviewMotion planner', () => {
         }),
       });
       const selected = visualDisk(focused.frame, item.projection_id)!;
-      const unrelated = topics
-        .filter((other) => other.projection_id !== item.projection_id)
-        .map((other) => visualDisk(focused.frame, other.projection_id))
-        .filter((disk): disk is NonNullable<typeof disk> => Boolean(disk));
-      const largestOther = Math.max(...unrelated.map((disk) => disk.r));
-      expect(largestOther).toBeLessThanOrEqual(Math.max(150, selected.r * 2));
+      const representative = visualDisk(focused.frame, facts[index].projection_id)!;
+      const soul = visualDisk(focused.frame, 'hub')!;
+      expect(selected.r).toBeGreaterThanOrEqual(80);
+      expect(inside(focused.frame.viewport, representative)).toBe(true);
+      expect(representative.r).toBeLessThan(selected.r * 0.55);
+      expect(inside(focused.frame.viewport, soul)).toBe(true);
+      expect(soul.r).toBeLessThan(selected.r);
       expect(pickLiveNode(focused.frame, selected.x, selected.y)).toBe(item.projection_id);
     }
   });
@@ -944,7 +966,7 @@ describe('overviewMotion planner', () => {
     }
   });
 
-  it('system framing settles inside the 180–250ms design band', () => {
+  it('system framing settles within the bounded smooth transition', () => {
     const seed = seedFrom(envelope(), { reducedMotion: false });
     let { state, frame } = step(createOverviewMotion(seed), { type: 'tick', nowMs: 0 });
     ({ state, frame } = step(state, {
@@ -1081,7 +1103,21 @@ describe('overviewMotion planner', () => {
     expect(projected!.y).toBeLessThanOrEqual(frame.safeRect.y + frame.safeRect.height);
   });
 
-  it('Topic focus orbits the selected sphere instead of trucking lookAt', () => {
+  it('starts focus and interrupted focus at the visible camera without snapping its aim', () => {
+    const seed = seedFrom(envelope(), { reducedMotion: false, expandedTopicIds: ['topic:t1'] });
+    let current = step(createOverviewMotion(seed), { type: 'tick', nowMs: 0 });
+    for (const [id, now] of [['topic:t1', 0], ['fact:1', 160], [null, 320]] as const) {
+      const before = current.frame.camera;
+      current = step(current.state, { type: 'presentationChanged', cause: id ? 'selection' : 'reselect',
+        presentation: present(seed, { selectedId: id, expandedTopicIds: ['topic:t1'] }) });
+      current = step(current.state, { type: 'tick', nowMs: now });
+      expect(dist(current.frame.camera.lookAt, before.lookAt)).toBeLessThan(0.000001);
+      expect(dist(cameraWorldPosition(current.frame.camera), cameraWorldPosition(before))).toBeLessThan(0.000001);
+      current = step(current.state, { type: 'tick', nowMs: now + 160 });
+    }
+  });
+
+  it('Topic focus carries the aim gradually while orbiting toward the selected sphere', () => {
     const seed = seedFrom(envelope(), { reducedMotion: false });
     let { state, frame } = step(createOverviewMotion(seed), { type: 'tick', nowMs: 0 });
     const rest = frame;
@@ -1097,8 +1133,9 @@ describe('overviewMotion planner', () => {
     const mid = frame;
     expect(mid.ownership).toBe('system');
     const midPivot = mid.nodes.get('topic:t1')!.position;
-    expect(dist(mid.camera.lookAt, midPivot)).toBeLessThan(0.7);
-    expect(dist(mid.camera.lookAt, { x: 0, y: 0, z: 0 })).toBeGreaterThan(1.2);
+    expect(dist(mid.camera.lookAt, midPivot)).toBeLessThan(dist(rest.camera.lookAt, midPivot));
+    expect(dist(mid.camera.lookAt, rest.camera.lookAt)).toBeGreaterThan(0);
+    expect(dist(mid.camera.lookAt, rest.camera.lookAt)).toBeLessThan(0.5);
     const midWorld = cameraWorldPosition(mid.camera);
     for (let nowMs = 200; nowMs <= 900; nowMs += 80) {
       ({ state, frame } = step(state, { type: 'tick', nowMs }));
@@ -1214,7 +1251,7 @@ describe('overviewMotion planner', () => {
     const projection = envelope();
     const seed = seedFrom(projection, { reducedMotion: true, expandedTopicIds: ['topic:t1'] });
     const restLayout = new Map(seed.restLayout);
-    const restCam = { yaw: 0.62, pitch: 0.48, distance: 6.15, lookAt: { x: 0, y: 0, z: 0 } };
+    const restCam = { ...OVERVIEW_REST_CAMERA, lookAt: { x: 0, y: 0, z: 0 } };
     const world = cameraWorldPosition(restCam);
     const axisLen = Math.hypot(world.x, world.y, world.z);
     const axis = { x: -world.x / axisLen, y: -world.y / axisLen, z: -world.z / axisLen };
@@ -1300,6 +1337,10 @@ describe('overviewMotion planner', () => {
     expect(frame.camera.yaw).toBeCloseTo(drifted, 5);
     ({ state, frame } = step(state, { type: 'tick', nowMs: 10100 }));
     expect(Math.abs(frame.camera.yaw - drifted)).toBeLessThan(0.01);
+    ({ state, frame } = step(state, { type: 'tick', nowMs: 30_000 }));
+    const orbitYaw = frame.camera.yaw;
+    ({ state, frame } = step(state, { type: 'tick', nowMs: 60_000 }));
+    expect(frame.camera.yaw - orbitYaw).toBeGreaterThan(0.5);
     const reduced = step(createOverviewMotion({ ...seed, reducedMotion: true }), { type: 'tick', nowMs: 8000 });
     expect(reduced.frame.camera.yaw).toBeCloseTo(restYaw, 5);
   });

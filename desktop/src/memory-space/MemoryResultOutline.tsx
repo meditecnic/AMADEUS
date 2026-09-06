@@ -90,7 +90,7 @@ export function MemoryResultOutline(props: {
           }}
         >
           <span className="memory-outline-meta" aria-hidden="true">
-            排序 {row.rank} · {KIND_ZH[row.kind] ?? row.kind}
+            {browse === 'ranked' ? `${row.rank} · ` : ''}{KIND_ZH[row.kind] ?? row.kind}
           </span>
           <span className="memory-outline-label">{row.label}</span>
         </button>
@@ -152,6 +152,7 @@ export function MemoryResultOutline(props: {
         <button type="button" aria-pressed={browse === 'ranked'} onClick={() => setBrowse('ranked')}>按排序</button>
         <button type="button" aria-pressed={browse === 'grouped'} onClick={() => setBrowse('grouped')}>按主题</button>
       </div>
+      {browse === 'grouped' ? <p className="memory-outline-meta">按主题分组，组内保留结果顺序</p> : null}
       <section data-region="primary">
         <h3>结果 {props.plan.backendTruncation.shown.results}</h3>
         {browse === 'ranked' ? (
@@ -169,7 +170,6 @@ export function MemoryResultOutline(props: {
               >
                 <summary>
                   {group.label} · {group.childResultIds.length} 条
-                  <span className="memory-outline-meta"> 分组浏览，非排序</span>
                 </summary>
                 <ol role="listbox" aria-label={`${group.label} 结果`}>
                   {group.childResultIds.map((id) => {

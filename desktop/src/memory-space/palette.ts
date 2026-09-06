@@ -22,8 +22,8 @@ export type OrreryPalette = {
 export function worldlinePalette(worldline: Worldline): OrreryPalette {
   if (worldline === 'steins_gate') {
     return {
-      void: 0x040607,
-      fog: 0x071118,
+      void: 0x080b0e,
+      fog: 0x0c1218,
       accent: 0xa9cfdd,
       signal: 0xa9cfdd,
       topic: 0x7fa8b7,
@@ -41,8 +41,8 @@ export function worldlinePalette(worldline: Worldline): OrreryPalette {
     };
   }
   return {
-    void: 0x050403,
-    fog: 0x1a100b,
+    void: 0x0c0a08,
+    fog: 0x14100e,
     accent: 0xbd784c,
     signal: 0xbd784c,
     topic: 0xbd784c,

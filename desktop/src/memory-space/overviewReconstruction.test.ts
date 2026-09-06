@@ -435,10 +435,24 @@ describe('R0 overview reconstruction', () => {
     runtime.setSelected(null);
     const hubSpokes = () =>
       runtime.visiblePaths().filter((path) => path.class === 'typed_relation' && path.kind === 'hub_to_anchor');
+    const pathOpacity = () => (runtime as unknown as {
+      pathLines: Array<{ line: THREE.Line; path: { from?: string; to?: string } }>;
+    }).pathLines.map(({ line, path }) => ({
+      from: path.from,
+      to: path.to,
+      opacity: (line.material as THREE.LineBasicMaterial).opacity,
+    }));
 
     expect(hubSpokes()).toHaveLength(3);
+    expect(pathOpacity().every((path) => path.opacity <= 0.055)).toBe(true);
     runtime.setSelected('topic:t1');
     expect(hubSpokes()).toHaveLength(3);
+    const focusedPaths = pathOpacity();
+    const focusTether = focusedPaths.find((path) => path.from === 'hub:continuity:s:steins_gate:okabe'
+      && path.to === 'topic:t1')?.opacity ?? 0;
+    expect(focusTether).toBeGreaterThanOrEqual(0.14);
+    expect(focusTether).toBeLessThanOrEqual(0.2);
+    expect(focusedPaths.filter((path) => path.to !== 'topic:t1').every((path) => path.opacity <= 0.035)).toBe(true);
 
     runtime.setGraph(display, projection.edges, projection.result_ids);
     runtime.setSelected(null);

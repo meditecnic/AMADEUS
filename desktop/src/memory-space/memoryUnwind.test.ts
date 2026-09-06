@@ -3,6 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { nextMemoryUnwind } from './memoryUnwind';
 
 describe('nextMemoryUnwind', () => {
+  it('dismisses the visible surface before clearing the current filter', () => {
+    const input = { toolsOpen: true, hasActiveCriteria: true, listVisible: false, selectedKind: 'continuity_hub' as const, expanded: false, closeAtRoot: false };
+    expect(nextMemoryUnwind(input)).toBe('close-tools');
+    expect(nextMemoryUnwind({ ...input, toolsOpen: false })).toBe('close-inspector');
+    expect(nextMemoryUnwind({ ...input, toolsOpen: false, selectedKind: null })).toBe('clear-criteria');
+  });
   it('closes LIST before Evidence even when a Fact is selected', () => {
     expect(nextMemoryUnwind({
       toolsOpen: false,

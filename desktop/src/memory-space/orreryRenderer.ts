@@ -4,6 +4,15 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 
+import {
+  applyCognitionOptics,
+  buildCognitionBody,
+  cognitionKind,
+  cognitionOptics,
+  tickCognitionBody,
+  topicChildCount,
+} from './cognitionMaterials';
+import { createFilament, relationCurve, updateFilamentPaths, type Filament } from './filaments';
 import { nodeWeight, type EmphasisInput } from './emphasis';
 import { visibleOverviewPaths, type GraphPath } from './graphPaths';
 import { OVERVIEW_FOV_DEG } from './layout';
@@ -27,6 +36,55 @@ function canWebGL(canvas: HTMLCanvasElement): boolean {
   }
 }
 
+function buildMemoryEnvironment(
+  renderer: THREE.WebGLRenderer,
+  worldline: Worldline,
+): THREE.WebGLRenderTarget {
+  const sg = worldline === 'steins_gate';
+  const environment = new THREE.Scene();
+  environment.background = new THREE.Color(sg ? 0x01070c : 0x0a0605);
+
+  const panels = sg
+    ? [
+        { color: 0x64dcf2, position: [-3.8, 2.2, -3.2], scale: [2.4, 0.32], roll: -0.28, gain: 2.7 },
+        { color: 0x9a82ff, position: [3.5, -1.4, -2.1], scale: [1.25, 0.18], roll: 0.42, gain: 2.35 },
+        { color: 0x786bff, position: [0.8, 3.7, 2.4], scale: [1.65, 0.12], roll: -0.55, gain: 1.65 },
+        { color: 0x245f9d, position: [-1.5, -3.2, 3.1], scale: [2.1, 0.44], roll: 0.18, gain: 1.25 },
+      ]
+    : [
+        { color: 0xf17b4e, position: [-3.7, 2.1, -3.0], scale: [2.2, 0.3], roll: -0.34, gain: 2.45 },
+        { color: 0xc46a73, position: [3.6, -1.3, -2.4], scale: [1.35, 0.2], roll: 0.5, gain: 2.05 },
+        { color: 0xb94e35, position: [0.7, 3.6, 2.6], scale: [1.55, 0.14], roll: -0.62, gain: 1.7 },
+        { color: 0x5a294a, position: [-1.6, -3.1, 3.0], scale: [2.0, 0.46], roll: 0.22, gain: 1.15 },
+      ];
+
+  for (const panel of panels) {
+    const material = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(panel.color).multiplyScalar(panel.gain),
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    });
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material);
+    mesh.position.set(panel.position[0], panel.position[1], panel.position[2]);
+    mesh.scale.set(panel.scale[0], panel.scale[1], 1);
+    mesh.lookAt(0, 0, 0);
+    mesh.rotateZ(panel.roll);
+    environment.add(mesh);
+  }
+
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const target = pmrem.fromScene(environment, 0.04);
+  environment.traverse((object) => {
+    const mesh = object as THREE.Mesh;
+    mesh.geometry?.dispose?.();
+    const material = mesh.material;
+    if (Array.isArray(material)) material.forEach((item) => item.dispose());
+    else material?.dispose?.();
+  });
+  pmrem.dispose();
+  return target;
+}
+
 function cameraWorld(cam: OrreryCamera): THREE.Vector3 {
   const look = cam.lookAt;
   const d = cam.distance;
@@ -39,57 +97,10 @@ function cameraWorld(cam: OrreryCamera): THREE.Vector3 {
   );
 }
 
-function vec(point: Point3): THREE.Vector3 {
-  return new THREE.Vector3(point.x, point.y, point.z);
-}
-
-function makeLabelTexture(text: string, hot: boolean, palette: OrreryPalette): THREE.CanvasTexture {
-  const canvas = document.createElement('canvas');
-  canvas.width = 512;
-  canvas.height = 128;
-  const ctx = canvas.getContext('2d');
-  if (ctx) {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.font = hot
-      ? '600 44px "Times New Roman", "Songti SC", "Microsoft YaHei", serif'
-      : '400 40px "Times New Roman", "Songti SC", "Microsoft YaHei", serif';
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'middle';
-    ctx.shadowColor = hot ? palette.lockup : 'rgba(0, 0, 0, 0)';
-    ctx.shadowBlur = hot ? 12 : 0;
-    ctx.fillStyle = hot ? palette.lockup : palette.lockupSoft;
-    ctx.fillText(text, 16, 64);
-  }
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  return texture;
-}
-
-function lineFromPoints(
-  points: Point3[],
-  color: number,
-  opacity: number,
-  dashed: boolean,
-): THREE.Line {
-  const geometry = new THREE.BufferGeometry().setFromPoints(points.map(vec));
-  const material = dashed
-    ? new THREE.LineDashedMaterial({
-        color,
-        transparent: true,
-        opacity,
-        depthWrite: false,
-        dashSize: 0.07,
-        gapSize: 0.055,
-      })
-    : new THREE.LineBasicMaterial({
-        color,
-        transparent: true,
-        opacity,
-        depthWrite: false,
-      });
-  const line = new THREE.Line(geometry, material);
-  if (dashed) line.computeLineDistances();
-  return line;
+function lineFromPoints(points: Point3[], color: number, opacity: number, dashed: boolean): Filament {
+  return createFilament([points], {
+    color, accent: color, width: dashed ? 0.8 : 1.5, opacity, screenSpace: true,
+  });
 }
 
 export class OrreryRuntime {
@@ -97,6 +108,7 @@ export class OrreryRuntime {
   private renderer: THREE.WebGLRenderer | null = null;
   private composer: EffectComposer | null = null;
   private bloom: UnrealBloomPass | null = null;
+  private environmentTarget: THREE.WebGLRenderTarget | null = null;
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(OVERVIEW_FOV_DEG, 1, 0.08, 40);
   private readonly raycaster = new THREE.Raycaster();
@@ -105,13 +117,16 @@ export class OrreryRuntime {
   private readonly pathGroup = new THREE.Group();
   private readonly soulGroup = new THREE.Group();
   private readonly memoryBodyGroup = new THREE.Group();
-  private readonly ambient = new THREE.AmbientLight(0x1a2430, 0.7);
-  private readonly key = new THREE.PointLight(0xb8d4e8, 6, 18, 1.6);
-  private readonly rim = new THREE.DirectionalLight(0xd8e6f0, 0.42);
+  private readonly ambient = new THREE.AmbientLight(0xd8e6f0, 0.16);
+  private readonly hemi = new THREE.HemisphereLight(0xb0c8d4, 0x0a0e12, 0.36);
+  private readonly key = new THREE.PointLight(0xb8d4e8, 18, 18, 1.8);
+  private readonly phase = new THREE.PointLight(0x9b8df1, 10, 14, 2);
+  private readonly rim = new THREE.DirectionalLight(0xd8e6f0, 0.58);
+  private readonly viscidGroup = new THREE.Group();
   private readonly nodes = new Map<string, THREE.Object3D>();
   private readonly labels = new Map<string, THREE.Sprite>();
-  private readonly pathLines: Array<{ line: THREE.Line; path: GraphPath }> = [];
-  private readonly edgeLines = new Map<string, THREE.Line>();
+  private readonly pathLines: Array<{ line: Filament; path: GraphPath }> = [];
+  private readonly edgeLines = new Map<string, Filament>();
   readonly allocationStats = {
     rebuildGraph: 0,
     nodeBuilds: 0,
@@ -122,9 +137,8 @@ export class OrreryRuntime {
   };
   private liveDriven = false;
   private emphasisDirty = true;
-  private readonly labelLooks = new Map<string, { text: string; hot: boolean }>();
   private soulHit: THREE.Mesh | null = null;
-  private soulCore: THREE.Mesh | null = null;
+  private viscidUntilMs = 0;
   private memoryField: THREE.Points | null = null;
   private display: DisplayNode[] = [];
   private edges: MemoryProjection['edges'] = [];
@@ -157,26 +171,30 @@ export class OrreryRuntime {
       });
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = 1.04;
+      renderer.toneMappingExposure = 1.24;
+      renderer.transmissionResolutionScale = 0.65;
       renderer.setClearColor(this.palette.void, 1);
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.25));
       this.renderer = renderer;
 
       this.scene.background = new THREE.Color(this.palette.void);
-      this.scene.fog = new THREE.FogExp2(this.palette.fog, 0.04);
+      this.scene.fog = new THREE.FogExp2(this.palette.fog, 0.012);
+      this.refreshEnvironment();
       this.key.position.set(-2.8, 2.4, -3.6);
+      this.phase.position.set(3.4, -1.2, 2.6);
       this.rim.position.set(3.6, 5.0, 2.8);
-      this.scene.add(this.ambient, this.key, this.rim);
+      this.scene.add(this.ambient, this.hemi, this.key, this.phase, this.rim);
       this.buildMemoryBody(this.palette);
       this.scene.add(this.memoryBodyGroup);
       this.buildSoul(this.palette);
       this.scene.add(this.soulGroup);
       this.scene.add(this.pathGroup);
       this.scene.add(this.nodeGroup);
+      this.scene.add(this.viscidGroup);
 
       const composer = new EffectComposer(renderer);
       composer.addPass(new RenderPass(this.scene, this.camera));
-      this.bloom = new UnrealBloomPass(new THREE.Vector2(1024, 576), this.palette.bloom, 0.42, 0.22);
+      this.bloom = new UnrealBloomPass(new THREE.Vector2(960, 540), 0.42, 0.34, 0.96);
       composer.addPass(this.bloom);
       composer.addPass(new OutputPass());
       this.composer = composer;
@@ -235,7 +253,7 @@ export class OrreryRuntime {
   }
 
   setDecoration(level: 'full' | 'reduced'): void {
-    if (this.bloom) this.bloom.strength = level === 'full' ? this.palette.bloom : 0;
+    if (this.bloom) this.bloom.strength = level === 'full' ? 0.42 : 0.12;
     if (this.memoryField) this.memoryField.visible = level === 'full';
   }
 
@@ -253,6 +271,12 @@ export class OrreryRuntime {
   setSelected(id: string | null): void {
     if (this.selectedId === id) return;
     this.selectedId = id;
+    const kind = this.display.find((node) => node.id === id)?.kind;
+    if ((kind === 'fact' || kind === 'experience') && !this.reducedMotion) {
+      this.viscidUntilMs = (typeof performance !== 'undefined' ? performance.now() : 0) + 520;
+    } else {
+      this.viscidUntilMs = 0;
+    }
     this.emphasisDirty = true;
     if (!this.liveDriven) this.syncVisiblePaths();
     else this.flushEmphasis();
@@ -297,8 +321,15 @@ export class OrreryRuntime {
       }
       object.visible = true;
       object.position.set(live.position.x, live.position.y, live.position.z);
+      const baseRadius = Number(object.userData.baseRadius);
+      if (Number.isFinite(baseRadius) && baseRadius > 0) {
+        object.scale.setScalar(live.hitRadius / baseRadius);
+      }
       const label = this.labels.get(id);
-      if (label) label.position.set(live.position.x, live.position.y + 0.14, live.position.z);
+      if (label) {
+        const radius = live.hitRadius;
+        label.position.set(live.position.x, live.position.y + radius + 0.16, live.position.z);
+      }
     }
     this.syncCameraFromFrame(frame);
     this.flushEmphasis();
@@ -317,27 +348,23 @@ export class OrreryRuntime {
     if (!this.liveFrame) this.applyBranchReveal();
     this.syncAmbientClock(typeof performance !== 'undefined' ? performance.now() : 0);
     const t = this.ambientElapsed * 0.001;
-    if (this.soulCore && !this.reducedMotion && !this.ambientPaused) {
-      const material = this.soulCore.material as THREE.MeshStandardMaterial;
-      material.emissiveIntensity = 0.52 + Math.sin(t * 0.31) * 0.025;
+    const life = this.reducedMotion ? 0 : 1;
+    const selectedKind = this.display.find(node => node.id === this.selectedId)?.kind;
+    const readingRecord = selectedKind === 'fact' || selectedKind === 'experience';
+    const soulOptics = cognitionOptics(this.worldline, 'soul', readingRecord && !this.display.some(node => node.id === this.hoverId && node.kind === 'continuity_hub') ? 0.12 : this.selectedId ? 0.55 : 1, 0,
+      this.display.some(node => node.id === this.hoverId && node.kind === 'continuity_hub'));
+    applyCognitionOptics(this.soulGroup, soulOptics, t, life);
+    for (const object of this.nodes.values()) tickCognitionBody(object, t, life);
+    for (const { line } of this.pathLines) {
+      line.material.uniforms.uTime.value = t;
+      line.material.uniforms.uLife.value = life;
+      line.material.uniforms.uResolution.value.set(this.width, this.height);
     }
-    if (!this.reducedMotion && !this.ambientPaused) {
-      this.memoryBodyGroup.rotation.x = 0.04 + Math.sin(t * 0.31) * 0.006;
-      this.memoryBodyGroup.rotation.y = -0.06 + Math.sin(t * 0.35) * 0.008;
-      if (this.memoryField) {
-        const material = this.memoryField.material as THREE.PointsMaterial;
-        material.opacity = 0.105 + Math.sin(t * 0.35) * 0.008;
-      }
-      this.pathLines.forEach(({ line }, index) => {
-        const material = line.material as THREE.LineBasicMaterial;
-        if (!material || Array.isArray(material)) return;
-        const base = typeof material.userData.baseOpacity === 'number' ? material.userData.baseOpacity : material.opacity;
-        material.userData.baseOpacity = base;
-        const pulse = 1 + Math.sin(t * 0.17 + index * 0.9) * 0.018;
-        material.opacity = Math.max(0.04, Math.min(0.9, base * pulse));
-      });
-    }
-    this.soulGroup.scale.setScalar(this.expanded ? 1 : 1.18);
+    this.syncViscid(typeof performance !== 'undefined' ? performance.now() : 0);
+    const hubId = this.display.find((node) => node.kind === 'continuity_hub')?.id;
+    const hubRadius = hubId && this.liveFrame?.nodes.get(hubId)?.hitRadius;
+    const contextualScale = hubRadius ? hubRadius / this.soulRadius : 1;
+    this.soulGroup.scale.setScalar(contextualScale);
     if (this.composer) this.composer.render();
     else this.renderer.render(this.scene, this.camera);
   }
@@ -400,6 +427,9 @@ export class OrreryRuntime {
       else material?.dispose?.();
     });
     this.composer?.dispose();
+    this.scene.environment = null;
+    this.environmentTarget?.dispose();
+    this.environmentTarget = null;
     this.renderer?.dispose();
   }
 
@@ -407,11 +437,15 @@ export class OrreryRuntime {
     if (!this.renderer) return;
     this.renderer.setClearColor(this.palette.void, 1);
     this.scene.background = new THREE.Color(this.palette.void);
-    this.scene.fog = new THREE.FogExp2(this.palette.fog, 0.04);
+    this.scene.fog = new THREE.FogExp2(this.palette.fog, 0.012);
     this.ambient.color.setHex(this.palette.ambient);
+    this.hemi.color.setHex(this.worldline === 'steins_gate' ? 0xb0c8d4 : 0xd0bea8);
+    this.hemi.groundColor.setHex(this.worldline === 'steins_gate' ? 0x0a0e12 : 0x100c0a);
     this.key.color.setHex(this.palette.key);
+    this.phase.color.setHex(this.worldline === 'steins_gate' ? 0x9b8df1 : 0xc66859);
     this.rim.color.setHex(this.palette.rim);
-    if (this.bloom) this.bloom.strength = this.palette.bloom;
+    this.refreshEnvironment();
+    if (this.bloom) this.bloom.strength = 0.42;
     if (this.memoryField) {
       const material = this.memoryField.material as THREE.PointsMaterial;
       material.color.setHex(this.palette.accent);
@@ -426,20 +460,16 @@ export class OrreryRuntime {
         material.color.setHex(this.palette.accent);
       }
     });
-    this.soulGroup.traverse((child) => {
-      const mesh = child as THREE.Mesh;
-      const material = mesh.material as THREE.MeshPhysicalMaterial | THREE.MeshStandardMaterial | THREE.MeshBasicMaterial | undefined;
-      if (!material) return;
-      if (mesh.name === 'soul-glass') {
-        material.color.setHex(this.palette.soulGlass);
-        (material as THREE.MeshPhysicalMaterial).emissive?.setHex(this.palette.soulEmissive);
-      } else if ('emissive' in material && mesh === this.soulCore) {
-        material.color.setHex(this.palette.soulGlass);
-        material.emissive.setHex(this.palette.soulEmissive);
-      } else if (mesh !== this.soulHit && 'color' in material) {
-        material.color.setHex(this.palette.soulLattice);
-      }
-    });
+    applyCognitionOptics(this.soulGroup, cognitionOptics(this.worldline, 'soul', 1), 0, this.reducedMotion ? 0 : 1);
+    this.emphasisDirty = true;
+  }
+
+  private refreshEnvironment(): void {
+    if (!this.renderer) return;
+    this.environmentTarget?.dispose();
+    this.environmentTarget = buildMemoryEnvironment(this.renderer, this.worldline);
+    this.scene.environment = this.environmentTarget.texture;
+    this.scene.environmentIntensity = 0.9;
   }
 
   private disposeObject(object: THREE.Object3D): void {
@@ -490,7 +520,6 @@ export class OrreryRuntime {
         this.disposeObject(label);
         this.labels.delete(id);
       }
-      this.labelLooks.delete(id);
       this.allocationStats.nodeDisposals += 1;
       this.emphasisDirty = true;
     }
@@ -505,17 +534,9 @@ export class OrreryRuntime {
         position: { x: live.position.x, y: live.position.y, z: live.position.z },
         node: { kind: live.kind, projection_id: id, label: id } as DisplayNode['node'],
       };
-      const mesh = this.buildNode({ ...display, position: { ...live.position }, radius: live.hitRadius });
+      const mesh = this.buildNode({ ...display, position: { ...live.position } });
       this.nodeGroup.add(mesh);
       this.nodes.set(id, mesh);
-      if (live.kind === 'topic') {
-        const label = this.buildLabel(display.label, false);
-        label.position.set(live.position.x, live.position.y + 0.14, live.position.z);
-        this.nodeGroup.add(label);
-        this.labels.set(id, label);
-        this.labelLooks.set(id, { text: display.label, hot: false });
-        this.allocationStats.labelTextureBuilds += 1;
-      }
       this.allocationStats.nodeBuilds += 1;
       this.emphasisDirty = true;
     }
@@ -525,17 +546,14 @@ export class OrreryRuntime {
     return `${kind}:${from}:${to}`;
   }
 
-  private updateLinePoints(line: THREE.Line, points: readonly { x: number; y: number; z: number }[]): void {
-    const positions = line.geometry.getAttribute('position');
-    if (!positions || positions.count !== points.length) {
-      line.geometry.dispose();
-      line.geometry = new THREE.BufferGeometry().setFromPoints(points.map((point) => new THREE.Vector3(point.x, point.y, point.z)));
-      return;
-    }
-    for (let i = 0; i < points.length; i += 1) {
-      positions.setXYZ(i, points[i].x, points[i].y, points[i].z);
-    }
-    positions.needsUpdate = true;
+  private updateLinePoints(line: Filament, points: readonly Point3[], fromRadius: number, toRadius: number): void {
+    const from = points[0];
+    const to = points[points.length - 1];
+    if (!from || !to) return;
+    const stamp = [from.x, from.y, from.z, to.x, to.y, to.z, fromRadius, toRadius].join('|');
+    if (line.userData.pathStamp === stamp) return;
+    line.userData.pathStamp = stamp;
+    updateFilamentPaths(line, [relationCurve(from, to, fromRadius, toRadius)]);
   }
 
   private reconcileLiveEdges(frame: OverviewFrame): void {
@@ -561,9 +579,10 @@ export class OrreryRuntime {
         this.edgeLines.set(key, line);
         this.allocationStats.edgeCreates += 1;
         this.emphasisDirty = true;
-      } else {
-        this.updateLinePoints(line, edge.points);
       }
+      this.updateLinePoints(line, edge.points,
+        frame.nodes.get(edge.from)?.hitRadius ?? 0,
+        frame.nodes.get(edge.to)?.hitRadius ?? 0);
       this.pathLines.push({
         line,
         path: {
@@ -589,7 +608,6 @@ export class OrreryRuntime {
       material.dispose();
     });
     this.labels.clear();
-    this.labelLooks.clear();
     this.emphasisDirty = true;
     this.syncVisiblePaths();
 
@@ -602,12 +620,6 @@ export class OrreryRuntime {
       const mesh = this.buildNode(node);
       this.nodeGroup.add(mesh);
       this.nodes.set(node.id, mesh);
-      if (node.kind === 'topic') {
-        const label = this.buildLabel(node.label, false);
-        label.position.set(node.position.x, node.position.y + node.radius + 0.14, node.position.z);
-        this.nodeGroup.add(label);
-        this.labels.set(node.id, label);
-      }
     }
     this.applyEmphasis();
   }
@@ -675,39 +687,37 @@ export class OrreryRuntime {
 
   private applyEmphasis(): void {
     const input = this.emphasisInput();
+    const selected = this.display.find((node) => node.id === this.selectedId);
+    const t = this.ambientElapsed * 0.001;
+    const life = this.reducedMotion ? 0 : 1;
+    const parentOfRecord = selected && (selected.kind === 'fact' || selected.kind === 'experience')
+      ? this.edges.find((edge) => (
+        edge.kind === 'has_topic'
+        && (edge.from === selected.id || edge.to === selected.id)
+      ))
+      : undefined;
+    const parentTopicId = parentOfRecord
+      ? (parentOfRecord.from === selected?.id ? parentOfRecord.to : parentOfRecord.from)
+      : null;
     for (const [id, object] of this.nodes) {
-      const hot = id === this.selectedId;
-      const weight = nodeWeight(id, input);
-      object.traverse((child) => {
-        const mesh = child as THREE.Mesh;
-        if (mesh.userData.wire) {
-          mesh.visible = hot;
-          return;
-        }
-        const material = mesh.material as THREE.MeshStandardMaterial | undefined;
-        if (material && 'emissiveIntensity' in material) {
-          material.emissiveIntensity = hot ? 1.6 : 0.35 + weight * 0.7;
-          material.opacity = 0.22 + weight * 0.74;
-        }
-      });
-      const label = this.labels.get(id);
-      if (label) {
-        const material = label.material as THREE.SpriteMaterial;
-        const node = this.display.find((item) => item.id === id);
-        const look = { text: node?.label ?? '', hot: hot || weight > 0.8 };
-        const prev = this.labelLooks.get(id);
-        if (!prev || prev.text !== look.text || prev.hot !== look.hot) {
-          material.map?.dispose();
-          material.map = makeLabelTexture(look.text, look.hot, this.palette);
-          this.labelLooks.set(id, look);
-          this.allocationStats.labelTextureBuilds += 1;
-        }
-        material.opacity = 0.16 + weight * 0.8;
-        material.needsUpdate = true;
+      const node = this.display.find((item) => item.id === id);
+      if (!node) continue;
+      let weight = nodeWeight(id, input);
+      if (this.hoverId && !this.selectedId) {
+        weight = id === this.hoverId ? 1 : 0.22;
+      } else if (selected && (selected.kind === 'fact' || selected.kind === 'experience')) {
+        if (id === selected.id) weight = 1;
+        else if (id === this.hoverId) weight = Math.max(weight, 0.9);
+        else if (node.kind === 'topic' && id === parentTopicId) weight = Math.min(weight, 0.16);
+        else if (node.kind === 'topic') weight = Math.min(weight, 0.2);
+        else if (id !== selected.id) weight = Math.min(weight, 0.18);
       }
+      const kind = cognitionKind(node.kind);
+      const optics = cognitionOptics(this.worldline, kind, weight, topicChildCount(node), id === this.hoverId);
+      applyCognitionOptics(object, optics, t, life);
     }
     for (const { line, path } of this.pathLines) {
-      const material = line.material as THREE.LineBasicMaterial;
+      const material = line.material;
       if (path.class === 'soul_instrument') {
         material.opacity = 0.2;
         continue;
@@ -724,128 +734,107 @@ export class OrreryRuntime {
           path.to === this.hoverId);
       const selected = this.display.find((node) => node.id === this.selectedId);
       const soulFocus = selected?.kind === 'continuity_hub';
+      const parentContext = Boolean(
+        parentTopicId
+        && path.kind === 'hub_to_anchor'
+        && (path.from === parentTopicId || path.to === parentTopicId),
+      );
       if (!this.selectedId && !this.hoverId) {
         material.opacity =
-          path.kind === 'has_topic' ? 0.32 : path.kind === 'hub_to_evidence' ? 0.12 : 0.2;
+          path.kind === 'has_topic' ? 0.05 : path.kind === 'hub_to_evidence' ? 0.018 : 0.035;
       } else if (!this.selectedId && this.hoverId) {
         material.opacity = involved
-          ? 0.42
-          : path.kind === 'has_topic' ? 0.28 : path.kind === 'hub_to_evidence' ? 0.12 : 0.18;
+          ? 0.16
+          : 0.025;
       } else if (soulFocus) {
         material.opacity =
-          path.kind === 'hub_to_anchor' ? 0.16 : path.kind === 'has_topic' ? 0.14 : 0.08;
+          path.kind === 'hub_to_anchor' ? 0.055 : 0.022;
       } else {
-        material.opacity = involved ? 0.78 : path.kind === 'hub_to_anchor' ? 0.12 : 0.1;
+        material.opacity = selected?.kind === 'topic'
+          ? involved
+            ? path.kind === 'has_topic' ? 0.22 : 0.16
+            : 0.018
+          : involved
+            ? 0.16
+            : parentContext ? 0.05 : 0.012;
       }
     }
   }
 
   private buildSoul(palette: OrreryPalette): void {
+    void palette;
     this.soulGroup.clear();
     this.soulGroup.name = 'soul';
-    const radius = this.soulRadius;
-    const glass = new THREE.Mesh(
-      new THREE.SphereGeometry(radius, 72, 56),
-      new THREE.MeshPhysicalMaterial({
-        color: palette.soulGlass,
-        emissive: palette.soulEmissive,
-        emissiveIntensity: 0.12,
-        metalness: 0.05,
-        roughness: 0.24,
-        transmission: 0.82,
-        thickness: 0.8,
-        ior: 1.22,
-        transparent: true,
-        opacity: 0.58,
-        clearcoat: 0.85,
-        clearcoatRoughness: 0.2,
-      }),
-    );
-    glass.name = 'soul-glass';
-    const core = new THREE.Mesh(
-      new THREE.SphereGeometry(radius * 0.42, 32, 24),
-      new THREE.MeshStandardMaterial({
-        color: palette.soulGlass,
-        emissive: palette.soulEmissive,
-        emissiveIntensity: 0.12,
-        roughness: 0.32,
-        metalness: 0.04,
-      }),
-    );
-    core.name = 'soul-kernel';
-    const hit = new THREE.Mesh(
-      new THREE.SphereGeometry(radius * 1.08, 16, 12),
-      new THREE.MeshBasicMaterial({ visible: false }),
-    );
-    hit.name = 'soul-hit';
-    this.soulHit = hit;
-    this.soulCore = core;
-    this.soulGroup.add(glass, core, hit);
+    const body = buildCognitionBody({
+      id: 'soul',
+      kind: 'soul',
+      radius: this.soulRadius,
+      optics: cognitionOptics(this.worldline, 'soul', 1),
+      names: { membrane: 'soul-glass', hit: 'soul-hit' },
+    });
+    while (body.children.length) this.soulGroup.add(body.children[0]);
+    this.soulHit = (this.soulGroup.getObjectByName('soul-hit') as THREE.Mesh | undefined) ?? null;
+    if (this.soulHit) this.soulHit.userData.nodeId = this.display.find((node) => node.kind === 'continuity_hub')?.id ?? 'soul';
   }
 
   private buildNode(node: DisplayNode): THREE.Group {
-    const group = new THREE.Group();
+    const kind = cognitionKind(node.kind);
+    const group = buildCognitionBody({
+      id: node.id,
+      kind,
+      radius: node.radius,
+      optics: cognitionOptics(this.worldline, kind, 0.7, topicChildCount(node)),
+    });
     group.position.set(node.position.x, node.position.y, node.position.z);
     group.userData.rest = node.position;
     group.userData.nodeId = node.id;
     group.userData.kind = node.kind;
-    const color =
-      node.kind === 'topic'
-        ? this.palette.topic
-        : node.kind === 'experience'
-          ? this.palette.evidence
-          : this.palette.signal;
-    const core = new THREE.Mesh(
-      new THREE.SphereGeometry(node.radius, 32, 24),
-      new THREE.MeshStandardMaterial({
-        color,
-        emissive: color,
-        emissiveIntensity: node.kind === 'topic' ? 0.9 : 0.4,
-        roughness: 0.28,
-        metalness: 0.16,
-        transparent: true,
-        opacity: 0.92,
-      }),
-    );
-    core.userData.nodeId = node.id;
-    const halo = new THREE.Mesh(
-      new THREE.SphereGeometry(node.radius * 1.45, 20, 14),
-      new THREE.MeshBasicMaterial({
-        color: this.palette.accent,
-        transparent: true,
-        opacity: node.kind === 'topic' ? 0.12 : 0.05,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      }),
-    );
-    halo.userData.nodeId = node.id;
-    const wire = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(node.radius * 1.1, 1),
-      new THREE.MeshBasicMaterial({
-        color: this.palette.lockup ? this.palette.soulLattice : this.palette.accent,
-        wireframe: true,
-        transparent: true,
-        opacity: 0.62,
-      }),
-    );
-    wire.userData.nodeId = node.id;
-    wire.userData.wire = true;
-    wire.visible = false;
-    group.add(core, halo, wire);
+    group.userData.baseRadius = node.radius;
     return group;
   }
 
-  private buildLabel(text: string, hot: boolean): THREE.Sprite {
-    const sprite = new THREE.Sprite(
-      new THREE.SpriteMaterial({
-        map: makeLabelTexture(text, hot, this.palette),
-        transparent: true,
-        depthWrite: false,
-      }),
+  private syncViscid(nowMs: number): void {
+    for (const child of [...this.viscidGroup.children]) this.disposeObject(child);
+    this.viscidGroup.clear();
+    if (this.reducedMotion || nowMs > this.viscidUntilMs) return;
+    const selected = this.display.find((node) => node.id === this.selectedId);
+    if (!selected || (selected.kind !== 'fact' && selected.kind !== 'experience')) return;
+    const parentEdge = this.edges.find(
+      (edge) =>
+        edge.kind === 'has_topic'
+        && (edge.from === selected.id || edge.to === selected.id),
     );
-    sprite.scale.set(0.95, 0.24, 1);
-    sprite.center.set(0, 0.5);
-    return sprite;
+    if (!parentEdge) return;
+    const parentId = parentEdge.from === selected.id ? parentEdge.to : parentEdge.from;
+    const parent = this.nodes.get(parentId);
+    const child = this.nodes.get(selected.id);
+    if (!parent || !child) return;
+    const a = parent.position;
+    const b = child.position;
+    const count = 12;
+    const positions = new Float32Array(count * 3);
+    const remain = Math.max(0, (this.viscidUntilMs - nowMs) / 520);
+    for (let i = 0; i < count; i += 1) {
+      const u = i / (count - 1);
+      const wobble = Math.sin(u * Math.PI) * 0.05 * remain;
+      positions[i * 3] = a.x + (b.x - a.x) * u;
+      positions[i * 3 + 1] = a.y + (b.y - a.y) * u + wobble;
+      positions[i * 3 + 2] = a.z + (b.z - a.z) * u;
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    this.viscidGroup.add(
+      new THREE.Points(
+        geometry,
+        new THREE.PointsMaterial({
+          color: this.worldline === 'steins_gate' ? 0xd4eef6 : 0xf0d4b4,
+          size: 0.024,
+          transparent: true,
+          opacity: 0.45 * remain,
+          depthWrite: false,
+        }),
+      ),
+    );
   }
 
   private buildMemoryBody(palette: OrreryPalette): void {
@@ -907,7 +896,7 @@ export class OrreryRuntime {
         color: palette.accent,
         size: 0.009,
         transparent: true,
-        opacity: 0.095,
+        opacity: 0.038,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
       }),

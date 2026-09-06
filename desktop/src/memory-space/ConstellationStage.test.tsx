@@ -52,6 +52,26 @@ describe('ConstellationStage camera ownership', () => {
     cleanup();
   });
 
+  it('keeps material motion alive after dragging and when a node is selected', () => {
+    const plan = deriveOverviewPresentation(projection, { expandedTopicIds: [] });
+    const props = {
+      plan, selectedId: null as string | null, reducedMotion: false,
+      expandedTopicIds: [] as string[], worldline: 'steins_gate' as const,
+      query: '', nowMs: 0, onSelect: vi.fn(),
+    };
+    const { rerender } = render(<ConstellationStage {...props} />);
+    const canvas = screen.getByTestId('constellation-stage');
+    fireEvent.pointerDown(canvas, { button: 0, clientX: 20, clientY: 20 });
+    fireEvent.pointerMove(canvas, { clientX: 90, clientY: 26 });
+    fireEvent.pointerUp(canvas, { button: 0, clientX: 90, clientY: 26 });
+    expect(canvas).toHaveAttribute('data-ownership', 'user');
+    expect(canvas).toHaveAttribute('data-ambient', 'pulse');
+    rerender(<ConstellationStage {...props} selectedId="topic:t1" nowMs={1500} />);
+    expect(canvas).toHaveAttribute('data-ambient', 'pulse');
+    rerender(<ConstellationStage {...props} selectedId="topic:t1" reducedMotion nowMs={2000} />);
+    expect(canvas).toHaveAttribute('data-ambient', 'settled');
+  });
+
   it('29. pointer drag produces userCamera without idle yaw', () => {
     const plan = deriveOverviewPresentation(projection, { expandedTopicIds: [] });
     render(
@@ -82,7 +102,7 @@ describe('ConstellationStage camera ownership', () => {
     expect(canvas.getAttribute('data-ownership')).toBe('user');
   });
 
-  it('holds ambient immediately while either pointer button is active', () => {
+  it('keeps ambient alive while pointer hold pauses camera automation', () => {
     const plan = deriveOverviewPresentation(projection, { expandedTopicIds: [] });
     const props = {
       plan,
@@ -100,7 +120,7 @@ describe('ConstellationStage camera ownership', () => {
     expect(canvas).toHaveAttribute('data-ownership', 'rest');
 
     fireEvent.pointerDown(canvas, { button: 0, clientX: 4, clientY: 4 });
-    expect(canvas).toHaveAttribute('data-ambient', 'settled');
+    expect(canvas).toHaveAttribute('data-ambient', 'pulse');
     expect(canvas).toHaveAttribute('data-ownership', 'rest');
     const heldYaw = canvas.getAttribute('data-yaw');
     rerender(<ConstellationStage {...props} nowMs={5200} />);
@@ -109,7 +129,7 @@ describe('ConstellationStage camera ownership', () => {
     expect(canvas).toHaveAttribute('data-ambient', 'pulse');
 
     fireEvent.pointerDown(canvas, { button: 2, clientX: 8, clientY: 8 });
-    expect(canvas).toHaveAttribute('data-ambient', 'settled');
+    expect(canvas).toHaveAttribute('data-ambient', 'pulse');
     expect(canvas).toHaveAttribute('data-ownership', 'rest');
     fireEvent.pointerCancel(canvas, { button: 2, clientX: 8, clientY: 8 });
     expect(canvas).toHaveAttribute('data-ambient', 'pulse');
@@ -131,7 +151,7 @@ describe('ConstellationStage camera ownership', () => {
     const { rerender } = render(<ConstellationStage {...props} />);
     const canvas = screen.getByTestId('constellation-stage');
     fireEvent.pointerDown(canvas, { button: 0, buttons: 1, clientX: 8, clientY: 8 });
-    expect(canvas).toHaveAttribute('data-ambient', 'settled');
+    expect(canvas).toHaveAttribute('data-ambient', 'pulse');
     fireEvent.pointerLeave(canvas, { buttons: 1, clientX: -4, clientY: 8 });
     expect(canvas).toHaveAttribute('data-ambient', 'pulse');
     const releasedYaw = canvas.getAttribute('data-yaw');

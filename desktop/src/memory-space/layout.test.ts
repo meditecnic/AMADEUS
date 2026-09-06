@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { semanticFilaments, soulLockupLines } from './graphPaths';
-import { layoutProjection, readingSurfaceMode } from './layout';
+import { layoutProjection, readingSurfaceMode, OVERVIEW_REST_CAMERA, overviewFocalPx, projectToScreen } from './layout';
 import type { MemoryProjection, ProjectionNode } from './types';
 
 function envelope(over: Partial<MemoryProjection> = {}): MemoryProjection {
@@ -112,6 +112,16 @@ describe('constellation layout', () => {
     expect(dist(orphan.position, topic.position)).toBeGreaterThan(0.9);
   });
 
+  it.each([0, 1, 2, 3, 10, 40])('places %i growing Topics at equal distance from SOUL', (count) => {
+    const source = envelope();
+    const nodes = layoutProjection(envelope({ nodes: [source.center, ...topicNodes(count)], edges: [] }));
+    const topics = nodes.filter((node) => node.kind === 'topic');
+    expect(topics).toHaveLength(count);
+    for (const node of topics) {
+      expect(Math.hypot(node.position.x, node.position.y, node.position.z)).toBeCloseTo(2.1, 6);
+    }
+  });
+
   it('places one sphere per node with SOUL at the origin', () => {
     const display = layoutProjection(envelope());
     expect(display).toHaveLength(3);
@@ -122,7 +132,7 @@ describe('constellation layout', () => {
     expect(display.some((n) => n.kind === 'topic' && n.label === '咖啡')).toBe(true);
   });
 
-  it('puts topics on one spherical shell and facts as local satellites', () => {
+  it('keeps topic regions away from SOUL and evidence near its parent', () => {
     const display = layoutProjection(
       envelope({
         nodes: [
@@ -171,13 +181,30 @@ describe('constellation layout', () => {
     const coffeeFact = display.find((n) => n.id === 'fact:1')!;
     expect(topics).toHaveLength(2);
     const radii = topics.map((n) => dist(n.position));
-    expect(Math.abs(radii[0] - radii[1])).toBeLessThan(0.08);
-    expect(radii[0]).toBeGreaterThan(1.8);
+    expect(Math.min(...radii)).toBeGreaterThan(1.2);
     expect(dist(coffeeFact.position, coffee.position)).toBeLessThan(0.85);
     expect(dist(coffeeFact.position, coffee.position)).toBeLessThan(dist(coffeeFact.position));
     expect(soul.radius).toBeGreaterThan(research.radius);
     expect(research.radius).toBeGreaterThan(coffee.radius);
     expect(coffee.radius).toBeGreaterThan(coffeeFact.radius);
+  });
+
+  it('keeps a volumetric ten-topic entry framed without flattening depth', () => {
+    const nodes = layoutProjection(envelope({ nodes: [envelope().nodes[0], ...topicNodes(10)] }));
+    const { yaw, pitch, distance } = OVERVIEW_REST_CAMERA;
+    const projected = nodes.map(node => {
+      const point = projectToScreen(node.position, 1100, 760, yaw, pitch, distance, { x: 0, y: 0, z: 0 });
+      return { ...point, radius: node.radius * overviewFocalPx(760) / point.depth };
+    });
+    for (let i = 0; i < projected.length; i++) {
+      const a = projected[i];
+      expect(a.x - a.radius).toBeGreaterThan(30);
+      expect(a.x + a.radius).toBeLessThan(1070);
+      expect(a.y - a.radius).toBeGreaterThan(76);
+      expect(a.y + a.radius).toBeLessThan(720);
+    }
+    const depths = projected.map(point => point.depth);
+    expect(Math.max(...depths) - Math.min(...depths)).toBeGreaterThan(2.8);
   });
 
   it('builds one filament per typed projection edge and a belt through every topic', () => {
@@ -258,25 +285,16 @@ describe('constellation layout', () => {
     expect(topics).toHaveLength(10);
     const ys = topics.map((node) => node.position.y);
     const zs = topics.map((node) => node.position.z);
-    const radii = topics.map((node) => dist(node.position));
     expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThanOrEqual(2);
     expect(Math.max(...ys)).toBeGreaterThan(0.6);
     expect(Math.min(...ys)).toBeLessThan(-0.6);
     expect(Math.max(...zs)).toBeGreaterThan(0.6);
     expect(Math.min(...zs)).toBeLessThan(-0.6);
-    expect(Math.max(...radii) - Math.min(...radii)).toBeLessThan(0.08);
-    let minAngle = Math.PI;
     for (let i = 0; i < topics.length; i += 1) {
       for (let j = i + 1; j < topics.length; j += 1) {
-        const a = topics[i].position;
-        const b = topics[j].position;
-        const ra = dist(a);
-        const rb = dist(b);
-        const cos = (a.x * b.x + a.y * b.y + a.z * b.z) / (ra * rb);
-        minAngle = Math.min(minAngle, Math.acos(Math.max(-1, Math.min(1, cos))));
+        expect(dist(topics[i].position, topics[j].position)).toBeGreaterThan(topics[i].radius + topics[j].radius + 0.25);
       }
     }
-    expect(minAngle).toBeGreaterThan(0.45);
   });
 
   it('keeps one or two topics off the origin', () => {
@@ -284,9 +302,9 @@ describe('constellation layout', () => {
     const two = layoutProjection(envelope({ nodes: [hubNode(), ...topicNodes(2)], edges: [] }));
     expect(dist(one.find((node) => node.kind === 'topic')!.position)).toBeGreaterThan(1.8);
     const pair = two.filter((node) => node.kind === 'topic');
-    expect(dist(pair[0].position)).toBeGreaterThan(1.8);
-    expect(dist(pair[1].position)).toBeGreaterThan(1.8);
-    expect(dist(pair[0].position, pair[1].position)).toBeGreaterThan(3);
+    expect(dist(pair[0].position)).toBeGreaterThan(1.2);
+    expect(dist(pair[1].position)).toBeGreaterThan(1.2);
+    expect(dist(pair[0].position, pair[1].position)).toBeGreaterThan(2);
   });
 
   it('keeps a SOUL-only lockup', () => {

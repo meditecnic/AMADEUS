@@ -4,6 +4,7 @@ import {
   layoutProjection,
   orbitPoseFromCamera,
   overviewFocalPx,
+  OVERVIEW_REST_CAMERA,
   projectToScreen,
   type OrbitPose,
 } from './layout';
@@ -174,20 +175,20 @@ type Internal = {
   ambientStartedAt: number | null;
 };
 
+// Handles belong to this module instance; ConstellationStage remounts on Fast Refresh.
 const STORE = new WeakMap<MotionState, Internal>();
 const ORIGIN: Point3 = { x: 0, y: 0, z: 0 };
-const REST_CAMERA: Camera = { yaw: 0.62, pitch: 0.48, distance: 6.15, lookAt: ORIGIN };
+const REST_CAMERA: Camera = { ...OVERVIEW_REST_CAMERA, lookAt: ORIGIN };
 const ZOOM_MIN = 1.15;
 const ZOOM_MAX = 9;
 const HALO_SCALE = 1.45;
 const MIN_HIT_PX = 16;
 const BRANCH_MS = 220;
 const AMBIENT_DELAY_MS = 4000;
-const AMBIENT_AMP = 0.05;
-const AMBIENT_OMEGA = 0.23;
+const AMBIENT_SPEED = 0.025;
 const SOFT_INSET = 0.22;
-const TOPIC_APPARENT = { min: 36, target: 52, max: 88 };
-const EVIDENCE_APPARENT = { min: 64, target: 96, max: 140 };
+const TOPIC_APPARENT = { min: 80, target: 98, max: 132 };
+const EVIDENCE_APPARENT = { min: 40, target: 56, max: 72 };
 const DT_MAX_MS = 1000;
 const MERGE_EPS = 0.02;
 
@@ -376,7 +377,8 @@ function diskCovers(
   const aim = projectCam(camera, target.position, viewport);
   if (front.depth >= aim.depth - 0.02) return false;
   const radius = visualRadiusPx(camera, occluder.position, occluder.hitRadius, viewport);
-  return Math.hypot(front.x - aim.x, front.y - aim.y) < radius * 0.92;
+  const targetRadius = visualRadiusPx(camera, target.position, target.hitRadius, viewport);
+  return Math.hypot(front.x - aim.x, front.y - aim.y) < radius + targetRadius * 0.65;
 }
 
 function aimFromPivot(pivot: Point3, context: readonly Point3[]): Point3 {
@@ -493,7 +495,10 @@ function scorePose(
   if (inSoftZone(safe, projected)) score += 28;
   else if (pointInRect(safe, projected, 8)) score += 10;
   const parent = live.parentId ? nodes.get(live.parentId) : undefined;
-  if (parent && pointInRect(safe, projectCam(camera, parent.position, viewport), 8)) score += 18;
+  if (parent) {
+    const parentProjection = projectCam(camera, parent.position, viewport);
+    score += parentProjection.depth > 0.2 && pointInRect(viewport, parentProjection, 20) ? 28 : -80;
+  }
   for (const id of ids) {
     if (id === live.id) continue;
     const node = nodes.get(id);
@@ -502,7 +507,10 @@ function scorePose(
     }
   }
   const hub = [...nodes.values()].find((node) => node.kind === 'continuity_hub');
-  if (hub && pointInRect(safe, projectCam(camera, hub.position, viewport), 8)) score += 8;
+  if (hub) {
+    const hubProjection = projectCam(camera, hub.position, viewport);
+    score += hubProjection.depth > 0.2 && pointInRect(viewport, hubProjection, 20) ? 64 : -140;
+  }
   if ((live.kind === 'fact' || live.kind === 'experience') && parent) {
     if (projectCam(camera, live.position, viewport).depth < projectCam(camera, parent.position, viewport).depth) {
       score += 12;
@@ -523,6 +531,8 @@ function scorePose(
 
 function lerpOrbit(from: OrbitPose, to: OrbitPose, t: number, pivot: Point3): OrbitPose {
   const k = ease(t);
+  // Follow a moving branch gradually instead of dragging the entire camera on frame one.
+  const movingPivot = lerpPoint(from.pivot, pivot, k);
   const fromBias = {
     x: from.aimPoint.x - from.pivot.x,
     y: from.aimPoint.y - from.pivot.y,
@@ -534,14 +544,14 @@ function lerpOrbit(from: OrbitPose, to: OrbitPose, t: number, pivot: Point3): Or
     z: to.aimPoint.z - to.pivot.z,
   };
   return {
-    pivot: copyPoint(pivot),
+    pivot: copyPoint(movingPivot),
     azimuth: from.azimuth + shortestAngle(from.azimuth, to.azimuth) * k,
     elevation: lerp(from.elevation, to.elevation, k),
     radius: lerp(from.radius, to.radius, k),
     aimPoint: {
-      x: pivot.x + lerp(fromBias.x, toBias.x, k),
-      y: pivot.y + lerp(fromBias.y, toBias.y, k),
-      z: pivot.z + lerp(fromBias.z, toBias.z, k),
+      x: movingPivot.x + lerp(fromBias.x, toBias.x, k),
+      y: movingPivot.y + lerp(fromBias.y, toBias.y, k),
+      z: movingPivot.z + lerp(fromBias.z, toBias.z, k),
     },
   };
 }
@@ -593,8 +603,10 @@ function composeAim(pose: OrbitPose, live: LiveNode, viewport: Rect, safe: Rect)
 function tweenDurationMs(from: OrbitPose, to: OrbitPose): number {
   const ang = Math.hypot(shortestAngle(from.azimuth, to.azimuth), to.elevation - from.elevation);
   const dolly = Math.abs(Math.log(Math.max(0.2, to.radius) / Math.max(0.2, from.radius)));
-  if (ang < 0.035 && dolly < 0.04) return 180;
-  return Math.max(180, Math.min(560, 200 + ang * 280 + dolly * 160));
+  const pan = Math.hypot(to.aimPoint.x - from.aimPoint.x, to.aimPoint.y - from.aimPoint.y,
+    to.aimPoint.z - from.aimPoint.z) / Math.max(1, from.radius);
+  if (ang < 0.035 && dolly < 0.04 && pan < 0.02) return 280;
+  return Math.max(380, Math.min(680, 340 + ang * 180 + dolly * 140 + pan * 200));
 }
 
 function framingTarget(inner: Internal, presentation: ReadonlyMotionPresentation): OrbitPose {
@@ -630,13 +642,34 @@ function framingTarget(inner: Internal, presentation: ReadonlyMotionPresentation
     viewport,
   );
   const targetPx = Math.min(band.target, Math.max(12, reachable * 0.92));
-  const aim = aimFromPivot(pivot, contextPts);
+  const recordFocus = focus.kind === 'fact' || focus.kind === 'experience';
+  const aim = recordFocus ? copyPoint(pivot) : aimFromPivot(pivot, contextPts);
   const sized: OrbitPose = {
     ...current,
     pivot: copyPoint(pivot),
     aimPoint: aim,
     radius: radiusForApparent({ ...current, pivot: copyPoint(pivot), aimPoint: aim }, focus, viewport, targetPx),
   };
+  if (recordFocus) {
+    // A record is the next step inward, not a new overview of its ancestors.
+    sized.radius = Math.min(current.radius, sized.radius);
+    let best = composeAim(sized, focus, viewport, safe);
+    let bestCost = Infinity;
+    for (const turn of [0, 0.18, -0.18, 0.38, -0.38, 0.65, -0.65]) {
+      for (const tilt of [0, 0.14, -0.14]) {
+        const pose = composeAim({ ...sized, azimuth: current.azimuth + turn,
+          elevation: clampPitch(current.elevation + tilt) }, focus, viewport, safe);
+        const camera = poseCamera(pose);
+        const blocked = [...geometry.nodes.values()].some(node =>
+          node.id !== focus.id && diskCovers(camera, node, focus, viewport));
+        const edgeInterference = compositionInterference(camera, focus, geometry.nodes, [], viewport);
+        const cost = (blocked ? 1000 : 0) + edgeInterference * 0.5
+          + Math.abs(turn) * 12 + Math.abs(tilt) * 18;
+        if (cost < bestCost) { best = pose; bestCost = cost; }
+      }
+    }
+    return best;
+  }
   const sizedCam = poseCamera(sized);
   const sizedProj = projectCam(sizedCam, focus.position, viewport);
   const sizedOccluded = [...geometry.nodes.values()].some((node) => (
@@ -649,12 +682,20 @@ function framingTarget(inner: Internal, presentation: ReadonlyMotionPresentation
     ids,
     viewport,
   );
+  const sizedContextVisible = ids.every((id) => {
+    if (id === focus.id) return true;
+    const node = geometry.nodes.get(id);
+    if (!node) return true;
+    const projection = projectCam(sizedCam, node.position, viewport);
+    return projection.depth > 0.2 && pointInRect(viewport, projection, 20);
+  });
   if (
     apparentPx(sizedCam, focus.position, focus.hitRadius, viewport) >= targetPx * 0.96
     && pointInRect(safe, sizedProj, 8)
     && (safe.width < 280 || inSoftZone(safe, sizedProj))
     && !sizedOccluded
     && sizedInterference === 0
+    && sizedContextVisible
   ) {
     return composeAim(sized, focus, viewport, safe);
   }
@@ -662,27 +703,59 @@ function framingTarget(inner: Internal, presentation: ReadonlyMotionPresentation
   const el0 = clampPitch(current.elevation);
   let best = sized;
   let bestScore = -Infinity;
-  const headings = [0, 0.32, -0.32, 0.7, -0.7, 1.15, -1.15, 1.65, -1.65, 2.2, -2.2, Math.PI];
-  const pitches = [el0, clampPitch(el0 + 0.14), clampPitch(el0 - 0.1), 0.36, 0.52];
-  const evidenceCloser = focus.kind === 'topic' ? 1 : 0.86;
-  const radii = [
-    clampZoom(sized.radius * evidenceCloser),
-    clampZoom(sized.radius * evidenceCloser * 0.9),
-    clampZoom(sized.radius * (focus.kind === 'topic' ? 1.08 : 0.78)),
+  const hubNode = [...geometry.nodes.values()].find((node) => node.kind === 'continuity_hub');
+  const contextAzimuth = hubNode
+    ? Math.atan2(hubNode.position.x - pivot.x, hubNode.position.z - pivot.z)
+    : az0;
+  const contextElevation = hubNode
+    ? Math.atan2(
+      hubNode.position.y - pivot.y,
+      Math.hypot(hubNode.position.x - pivot.x, hubNode.position.z - pivot.z),
+    )
+    : el0;
+  const azimuths = [
+    az0,
+    az0 + 0.32,
+    az0 - 0.32,
+    az0 + 0.7,
+    az0 - 0.7,
+    az0 + 1.15,
+    az0 - 1.15,
+    az0 + 1.65,
+    az0 - 1.65,
+    az0 + 2.2,
+    az0 - 2.2,
+    az0 + Math.PI,
+    contextAzimuth,
+    contextAzimuth + 0.34,
+    contextAzimuth - 0.34,
+    contextAzimuth + 0.7,
+    contextAzimuth - 0.7,
   ];
-  for (const dAz of headings) {
+  const pitches = [
+    el0,
+    clampPitch(el0 + 0.14),
+    clampPitch(el0 - 0.1),
+    0.36,
+    0.52,
+    clampPitch(contextElevation),
+    clampPitch(contextElevation + 0.16),
+    clampPitch(contextElevation - 0.16),
+  ];
+  const radii = [1, 0.9, 1.08]
+    .map((factor) => clampZoom(sized.radius * factor));
+  for (const azimuth of azimuths) {
     for (const elevation of pitches) {
       for (const radius of radii) {
         const pose: OrbitPose = {
           pivot: copyPoint(pivot),
-          azimuth: az0 + dAz,
+          azimuth,
           elevation,
           radius,
           aimPoint: aim,
         };
-        const travel = Math.hypot(dAz, elevation - el0);
+        const travel = Math.hypot(shortestAngle(az0, azimuth), elevation - el0);
         let score = scorePose(pose, focus, geometry.nodes, ids, viewport, safe, travel);
-        if (focus.kind !== 'topic' && radius > sized.radius) score -= 24;
         if (score > bestScore) {
           bestScore = score;
           best = pose;
@@ -691,7 +764,6 @@ function framingTarget(inner: Internal, presentation: ReadonlyMotionPresentation
     }
   }
   let framed = composeAim(best, focus, viewport, safe);
-  const hubNode = [...geometry.nodes.values()].find((node) => node.kind === 'continuity_hub');
   if (hubNode) {
     const cam = poseCamera(framed);
     const liveP = projectCam(cam, focus.position, viewport);
@@ -699,18 +771,6 @@ function framingTarget(inner: Internal, presentation: ReadonlyMotionPresentation
     const hubR = visualRadiusPx(cam, hubNode.position, hubNode.hitRadius, viewport);
     if (hubP.depth < liveP.depth - 0.02 && Math.hypot(liveP.x - hubP.x, liveP.y - hubP.y) < hubR) {
       framed = composeAim({ ...framed, azimuth: framed.azimuth + Math.PI }, focus, viewport, safe);
-    }
-  }
-  const parent = focus.parentId ? geometry.nodes.get(focus.parentId) : undefined;
-  if (parent && (focus.kind === 'fact' || focus.kind === 'experience')) {
-    for (let i = 0; i < 4; i += 1) {
-      const camera = poseCamera(framed);
-      const parentPx = apparentPx(camera, parent.position, parent.hitRadius, viewport);
-      if (parentPx <= 180 || framed.radius >= 2.2) break;
-      framed = composeAim({
-        ...framed,
-        radius: clampZoom(framed.radius * 1.12),
-      }, focus, viewport, safe);
     }
   }
   return framed;
@@ -946,17 +1006,19 @@ function livePivot(inner: Internal, followId: string | null): Point3 {
   return live ? copyPoint(live.position) : copyPoint(ORIGIN);
 }
 
-function startSystem(inner: Internal, presentation: ReadonlyMotionPresentation): void {
+function startSystem(inner: Internal, presentation: ReadonlyMotionPresentation, resetOverview = false): void {
   bakeAmbient(inner, inner.lastTickMs ?? inner.lastActivityMs);
   inner.generation += 1;
   inner.presentation = presentation;
-  const to = framingTarget(inner, presentation);
+  const to = resetOverview
+    ? orbitPoseFromCamera(REST_CAMERA, ORIGIN, ORIGIN)
+    : framingTarget(inner, presentation);
   const followId = presentation.selectedId
     && liveGeometry(inner).nodes.get(presentation.selectedId)?.kind !== 'continuity_hub'
     ? presentation.selectedId
     : null;
   const pivot = livePivot(inner, followId);
-  const from = orbitPoseFromCamera(inner.camera, pivot, to.aimPoint);
+  const from = orbitPoseFromCamera(inner.camera, pivot, inner.camera.lookAt);
   inner.system = {
     generation: inner.generation,
     from: copyOrbit(from),
@@ -1015,8 +1077,8 @@ function advanceSystem(inner: Internal, nowMs: number): void {
 function ambientOffset(inner: Internal, nowMs: number): number {
   if (inner.ambientStartedAt == null) return 0;
   const t = Math.max(0, (nowMs - inner.ambientStartedAt) / 1000);
-  const envelope = (t * t) / (t * t + 1.6);
-  return AMBIENT_AMP * Math.sin(AMBIENT_OMEGA * t) * envelope;
+  // Ease into a continuous orbit; a tiny reversing wobble cannot reveal volume.
+  return AMBIENT_SPEED * (t - 2 * (1 - Math.exp(-t / 2)));
 }
 
 function bakeAmbient(inner: Internal, nowMs: number): void {
@@ -1155,7 +1217,7 @@ export function step(state: MotionState, event: MotionEvent): { state: MotionSta
       || event.cause === 'render-surface'
       || event.cause === 'auxiliary-surface'
     ) {
-      startSystem(inner, event.presentation);
+      startSystem(inner, event.presentation, event.cause === 'reselect' && !event.presentation.selectedId);
     }
     if (event.presentation.reducedMotion) completeReduced(inner);
   }
