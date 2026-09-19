@@ -3,6 +3,7 @@ import httpx
 from typing import Optional
 from app import config
 from app.services.llm_interface import LLMInterface, build_stream_messages
+from app.services.model_catalog import model_catalog
 from app.services.persona_bible import persona_bible
 
 
@@ -38,14 +39,14 @@ def build_chat_payload(
         "temperature": temperature if temperature is not None else 0.7,
     }
 
-    is_v4 = model in {"deepseek-v4-flash", "deepseek-v4-pro"}
+    uses_thinking = model_catalog.uses_native_reasoning("deepseek", model)
     has_tools = tools is not None
     forced_tool_choice = (
         has_tools
         and tool_choice is not None
         and tool_choice != "auto"
     )
-    if is_v4:
+    if uses_thinking:
         # Close thinking whenever tools are present (auto or forced). Only the
         # post-tool final answer request re-enables native thinking + effort.
         payload["thinking"] = {
@@ -56,7 +57,7 @@ def build_chat_payload(
 
     if has_tools:
         payload["tools"] = tools
-        if tool_choice is not None and (not is_v4 or forced_tool_choice):
+        if tool_choice is not None and (not uses_thinking or forced_tool_choice):
             payload["tool_choice"] = tool_choice
 
     return payload
@@ -65,7 +66,7 @@ def build_chat_payload(
 class DeepSeekService(LLMInterface):
     def __init__(self):
         self.api_key = ""
-        self.model = config.DEEPSEEK_MODEL  # defaults to deepseek-v4-flash
+        self.model = config.DEEPSEEK_MODEL  # defaults to catalog preferred request ID
         self.base_url = "https://api.deepseek.com"
         
         self.fewshot_path = config.PROMPTS_DIR / "kurisu_fewshot.json"

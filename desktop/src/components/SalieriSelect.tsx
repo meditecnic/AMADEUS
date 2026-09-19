@@ -13,6 +13,7 @@ export interface SalieriSelectOption {
   value: string;
   label: string;
   disabled?: boolean;
+  title?: string;
 }
 
 export interface SalieriSelectProps {
@@ -262,6 +263,7 @@ export const SalieriSelect: React.FC<SalieriSelectProps> = ({
               data-salieri-option-index={index}
               aria-selected={selected}
               aria-disabled={option.disabled || undefined}
+              title={option.title}
               className={[
                 'salieri-select-option',
                 selected ? 'is-selected' : '',

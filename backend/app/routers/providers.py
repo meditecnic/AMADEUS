@@ -83,6 +83,8 @@ def _provider_row(definition) -> dict[str, Any]:
             definition.id,
             definition.default_model,
         ),
+        "preferred_model_id": model_catalog.preferred_id(definition.id),
+        "catalog": model_catalog.list_provider(definition.id),
         "tasks": sorted(task.value for task in definition.capabilities.tasks),
         "parameters": sorted(definition.capabilities.parameters),
         "structured_output": definition.capabilities.structured_output,
@@ -486,6 +488,9 @@ async def _discover_models(provider_id: str, *, refresh: bool):
     except HTTPException:
         raise
     except Exception as exc:
+        stale = provider_model_cache.peek(provider_id)
+        if stale is not None:
+            return stale
         raise HTTPException(
             status_code=502,
             detail={
@@ -503,6 +508,15 @@ async def list_provider_models(provider_id: str, refresh: bool = False):
         result.models,
         result.metadata,
     )
+    id_only = bool(catalog) and all(
+        row.get("display_source") == "request_id" for row in catalog
+    )
+    if result.stale:
+        discovery_status = "failed_using_cache"
+    elif result.cache_hit:
+        discovery_status = "cache"
+    else:
+        discovery_status = "live"
     return {
         "provider_id": provider_id,
         "models": list(result.models),
@@ -510,6 +524,9 @@ async def list_provider_models(provider_id: str, refresh: bool = False):
         "catalog_verified_at": model_catalog.verified_at,
         "catalog": catalog,
         "cache_hit": result.cache_hit,
+        "discovery_status": discovery_status,
+        "preferred_model_id": model_catalog.preferred_id(provider_id),
+        "id_only": id_only,
     }
 
 

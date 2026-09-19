@@ -36,7 +36,7 @@ def test_versioned_manifest_is_strict_and_covers_current_builtins():
     payload = model_catalog.manifest
 
     assert payload["version"] == 1
-    assert payload["verified_at"] == "2026-07-29"
+    assert payload["verified_at"] == "2026-09-12"
     assert set(payload["providers"]) == {
         "deepseek",
         "glm",
@@ -118,7 +118,9 @@ def test_successful_discovery_marks_missing_known_models_unavailable():
         rows = model_catalog.reconcile("deepseek", ["deepseek-v4-flash"])
         by_id = {row["id"]: row for row in rows}
 
-        assert by_id["deepseek-v4-flash"]["lifecycle"] == "stable"
+        assert by_id["deepseek-v4-flash"]["lifecycle"] == "deprecated"
+        assert by_id["deepseek-v4-flash"]["callable"] is True
+        assert by_id["deepseek-flash"]["lifecycle"] == "unavailable"
         assert by_id["deepseek-v4-pro"]["lifecycle"] == "unavailable"
         assert by_id["deepseek-v4-pro"]["callable"] is False
     finally:
@@ -177,6 +179,7 @@ def test_live_discovery_metadata_survives_catalog_reconciliation():
 @pytest.mark.parametrize(
     ("provider_id", "model_id", "raw", "expected"),
     [
+        ("deepseek", "deepseek-flash", "xhigh", "max"),
         ("deepseek", "deepseek-v4-flash", "xhigh", "max"),
         ("deepseek", "deepseek-v4-flash", "low", "high"),
         ("deepseek", "deepseek-v4-pro", "max", "max"),
@@ -251,9 +254,13 @@ def test_provider_metadata_exposes_default_model_control_schema_and_no_kimi(app_
     assert all(row["id"] != "kimi" for row in rows)
     by_id = {row["id"]: row for row in rows}
     flash = by_id["deepseek"]["default_model_capability"]
-    assert by_id["deepseek"]["catalog_verified_at"] == "2026-07-29"
-    assert flash["context_window"] == 1_000_000
-    assert flash["max_output_tokens"] == 393_216
+    assert by_id["deepseek"]["catalog_verified_at"] == "2026-09-12"
+    assert by_id["deepseek"]["preferred_model_id"] == "deepseek-flash"
+    assert flash["id"] == "deepseek-flash"
+    assert flash["display_name"] == "DeepSeek Flash"
+    assert flash["context_window"] is None
+    assert flash["max_output_tokens"] is None
+    assert flash["disclosed_version"] == "DeepSeek-V4.1-Flash"
     assert flash["thinking_control"]["native"] is True
     assert [row["value"] for row in flash["thinking_control"]["options"]] == [
         "high",
@@ -261,7 +268,8 @@ def test_provider_metadata_exposes_default_model_control_schema_and_no_kimi(app_
     ]
     assert flash["thinking_control"]["aliases"]["xhigh"] == "max"
     assert flash["thinking_control"]["request_mode"] == "reasoning_effort"
-    assert "https://api-docs.deepseek.com/quick_start/pricing" in flash["evidence"]
+    assert "https://www.deepseek.com/en/news/deepseek-v4-1-flash/" in flash["evidence"]
+    assert "https://api-docs.deepseek.com/" in flash["evidence"]
     assert by_id["openai"]["catalog_version"] == 1
     assert by_id["openai"]["default_model_capability"]["thinking_control"][
         "options"
@@ -301,10 +309,14 @@ def test_models_endpoint_keeps_legacy_ids_and_adds_reconciled_catalog(
         payload = response.json()
         assert payload["models"] == ["deepseek-next", "deepseek-v4-flash"]
         assert payload["catalog_version"] == 1
-        assert payload["catalog_verified_at"] == "2026-07-29"
+        assert payload["catalog_verified_at"] == "2026-09-12"
+        assert payload["discovery_status"] == "live"
+        assert payload["preferred_model_id"] == "deepseek-flash"
         by_id = {row["id"]: row for row in payload["catalog"]}
+        assert by_id["deepseek-flash"]["lifecycle"] == "unavailable"
         assert by_id["deepseek-v4-pro"]["lifecycle"] == "unavailable"
         assert by_id["deepseek-v4-flash"]["context_window"] == 1_500_000
+        assert by_id["deepseek-v4-flash"]["compatibility_of"] == "deepseek-flash"
         assert by_id["deepseek-next"]["lifecycle"] == "unverified"
         assert by_id["deepseek-next"]["callable"] is False
         assert by_id["deepseek-next"]["live_metadata"]["owned_by"] == "deepseek"

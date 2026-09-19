@@ -218,9 +218,40 @@ def test_provider_models_are_cached_and_refreshable(app_client, monkeypatch):
         assert first.json()["models"] == ["deepseek-chat", "deepseek-reasoner"]
         assert first.json()["catalog_version"] == 1
         assert first.json()["cache_hit"] is False
+        assert first.json()["discovery_status"] == "live"
         assert cached.json()["cache_hit"] is True
+        assert cached.json()["discovery_status"] == "cache"
         assert refreshed.json()["cache_hit"] is False
+        assert refreshed.json()["discovery_status"] == "live"
         assert discover.await_count == 2
+    finally:
+        model_catalog.clear_discovery("deepseek")
+
+
+def test_refresh_failure_keeps_last_discovery_cache(app_client, monkeypatch):
+    from app.routers import providers
+    from app.services.model_catalog import model_catalog
+    from app.services.provider_runtime import deepseek_service
+
+    providers.provider_model_cache.clear("deepseek")
+    discover = AsyncMock(
+        side_effect=[
+            ["deepseek-flash"],
+            RuntimeError("upstream-timeout"),
+        ]
+    )
+    monkeypatch.setattr(deepseek_service, "list_models", discover)
+    try:
+        first = app_client.get("/api/providers/deepseek/models?refresh=true")
+        failed = app_client.get("/api/providers/deepseek/models?refresh=true")
+
+        assert first.status_code == 200
+        assert first.json()["discovery_status"] == "live"
+        assert failed.status_code == 200
+        assert failed.json()["discovery_status"] == "failed_using_cache"
+        assert failed.json()["cache_hit"] is True
+        assert failed.json()["models"] == ["deepseek-flash"]
+        assert "upstream-timeout" not in json.dumps(failed.json())
     finally:
         model_catalog.clear_discovery("deepseek")
 

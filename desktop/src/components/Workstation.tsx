@@ -39,6 +39,7 @@ import {
   ProviderControls,
   resolveThinkingValue,
   type ModelCatalogEntry,
+  type ModelDiscoveryStatus,
   type ProviderMetadata,
 } from './ProviderControls';
 
@@ -89,6 +90,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [providers, setProviders] = useState<ProviderMetadata[]>([]);
   const [availableModels, setAvailableModels] = useState<ModelCatalogEntry[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsDiscoveryStatus, setModelsDiscoveryStatus] = useState<ModelDiscoveryStatus>('idle');
   const providerModelsRequestEpochRef = useRef(0);
   const [sessionId] = useState(getOrCreateAmadeusSessionId);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
@@ -156,7 +158,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   /** Slice B: app-level self-mode call name (validated in SettingsModal; empty = unset). */
   const [selfName, setSelfName] = useState<string>(() => loadStoredSelfName());
   const [model, setModel] = useState<string>(() =>
-    localStorage.getItem('amadeus_pc_model') || 'deepseek-v4-flash');
+    localStorage.getItem('amadeus_pc_model') || 'deepseek-flash');
   const [draftProviderId, setDraftProviderId] = useState<string>(() => {
     try { return localStorage.getItem('amadeus_pc_provider') || 'deepseek'; } catch { return 'deepseek'; }
   });
@@ -567,7 +569,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
     const requestEpoch = ++providerModelsRequestEpochRef.current;
     const provider = providers.find((row) => row.id === providerId);
     const fallback: ModelCatalogEntry[] = [];
-    if (provider?.default_model_capability) {
+    if (provider?.catalog?.length) {
+      fallback.push(...provider.catalog);
+    } else if (provider?.default_model_capability) {
       fallback.push(provider.default_model_capability);
     }
     const selectedModel = activeConversation?.model_id || model;
@@ -591,6 +595,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
       if (providerModelsRequestEpochRef.current === requestEpoch) {
         setAvailableModels(fallback);
         setModelsLoading(false);
+        setModelsDiscoveryStatus(
+          provider?.credential_required && !provider.configured
+            ? 'credential_missing'
+            : 'idle',
+        );
       }
       return;
     }
@@ -599,29 +608,42 @@ export const Workstation: React.FC<WorkstationProps> = ({
       const response = await fetch(
         `/api/providers/${encodeURIComponent(providerId)}/models?refresh=${refresh ? 'true' : 'false'}`
       );
-      if (!response.ok) throw new Error(`model query failed: ${response.status}`);
-      const payload = await response.json() as { catalog?: ModelCatalogEntry[] };
-      if (providerModelsRequestEpochRef.current === requestEpoch) {
-        const catalog = payload.catalog?.length ? [...payload.catalog] : fallback;
-        if (
-          payload.catalog
-          && selectedModel
-          && !catalog.some((row) => row.id === selectedModel)
-        ) {
-          catalog.push({
-            id: selectedModel,
-            display_name: selectedModel,
-            lifecycle: 'unavailable',
-            callable: false,
-            source: 'dynamic',
-            thinking_control: null,
-          });
-        }
-        setAvailableModels(catalog);
+      if (providerModelsRequestEpochRef.current !== requestEpoch) return;
+      if (response.status === 409) {
+        setAvailableModels(fallback);
+        setModelsDiscoveryStatus('credential_missing');
+        return;
       }
+      if (!response.ok) throw new Error(`model query failed: ${response.status}`);
+      const payload = await response.json() as {
+        catalog?: ModelCatalogEntry[];
+        discovery_status?: ModelDiscoveryStatus;
+        id_only?: boolean;
+      };
+      const catalog = payload.catalog?.length ? [...payload.catalog] : fallback;
+      if (
+        payload.catalog
+        && selectedModel
+        && !catalog.some((row) => row.id === selectedModel)
+      ) {
+        catalog.push({
+          id: selectedModel,
+          request_id: selectedModel,
+          display_name: selectedModel,
+          lifecycle: 'unavailable',
+          callable: false,
+          source: 'dynamic',
+          thinking_control: null,
+        });
+      }
+      setAvailableModels(catalog);
+      setModelsDiscoveryStatus(
+        payload.id_only ? 'id_only' : (payload.discovery_status || 'live'),
+      );
     } catch (error) {
       if (providerModelsRequestEpochRef.current === requestEpoch) {
-        setAvailableModels(fallback);
+        setAvailableModels((current) => (current.length ? current : fallback));
+        setModelsDiscoveryStatus('failed');
         console.warn('Provider model discovery failed:', error);
       }
     } finally {
@@ -1556,6 +1578,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
               models={availableModels}
               disabled={conversationBusy || isThinking || isSynthesizing}
               loadingModels={modelsLoading}
+              discoveryStatus={modelsDiscoveryStatus}
               thinkingValue={reasoningEffort}
               onProviderChange={changeProvider}
               onModelChange={changeModel}

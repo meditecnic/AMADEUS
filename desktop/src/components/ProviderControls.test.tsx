@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ProviderControls,
+  modelOptionLabel,
   resolveThinkingValue,
   type ModelCatalogEntry,
   type ProviderMetadata,
@@ -349,5 +350,111 @@ describe('ProviderControls', () => {
       name: 'missing-pinned-model（不可用）',
     })).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByText('当前模型未声明思考控制')).toBeInTheDocument();
+  });
+
+  it('shows preferred request id, compatibility alias, and discovery status', () => {
+    const currentFlash: ModelCatalogEntry = {
+      id: 'deepseek-flash',
+      request_id: 'deepseek-flash',
+      display_name: 'DeepSeek Flash',
+      display_source: 'manifest',
+      lifecycle: 'stable',
+      callable: true,
+      source: 'manifest',
+      disclosed_version: 'DeepSeek-V4.1-Flash',
+      preferred: true,
+      thinking_control: flashModel.thinking_control,
+    };
+    const alias: ModelCatalogEntry = {
+      id: 'deepseek-v4-flash',
+      request_id: 'deepseek-v4-flash',
+      display_name: 'deepseek-v4-flash',
+      lifecycle: 'deprecated',
+      callable: true,
+      source: 'manifest',
+      compatibility_of: 'deepseek-flash',
+      compatibility_scope: 'official_direct',
+      disclosed_version: 'DeepSeek-V4.1-Flash',
+      thinking_control: flashModel.thinking_control,
+    };
+    const unverified: ModelCatalogEntry = {
+      id: 'deepseek-next',
+      request_id: 'deepseek-next',
+      display_name: 'deepseek-next',
+      display_source: 'request_id',
+      lifecycle: 'unverified',
+      callable: false,
+      source: 'dynamic',
+      thinking_control: null,
+    };
+    render(
+      <ProviderControls
+        providers={[
+          {
+            ...providers[0],
+            default_model: 'deepseek-flash',
+            default_model_capability: currentFlash,
+            preferred_model_id: 'deepseek-flash',
+          },
+        ]}
+        activeProviderId="deepseek"
+        activeModelId="deepseek-v4-flash"
+        models={[currentFlash, alias, unverified]}
+        disabled={false}
+        loadingModels={false}
+        discoveryStatus="live"
+        thinkingValue="high"
+        onProviderChange={vi.fn()}
+        onModelChange={vi.fn()}
+        onThinkingChange={vi.fn()}
+        onRefreshModels={vi.fn()}
+        onConfigureCredential={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('已刷新')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '模型' }));
+    expect(screen.getByRole('option', { name: 'DeepSeek Flash' })).toBeEnabled();
+    expect(screen.getByRole('option', { name: 'deepseek-v4-flash（兼容 ID）' })).toBeEnabled();
+    expect(screen.getByRole('option', { name: 'deepseek-next（未验证）' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+    expect(screen.getByRole('option', { name: 'deepseek-v4-flash（兼容 ID）' })).toHaveAttribute(
+      'title',
+      expect.stringContaining('请求 ID：deepseek-v4-flash'),
+    );
+  });
+
+  it('keeps a saved alias visible when discovery fails', () => {
+    render(
+      <ProviderControls
+        providers={providers}
+        activeProviderId="deepseek"
+        activeModelId="deepseek-v4-flash"
+        models={[flashModel]}
+        disabled={false}
+        loadingModels={false}
+        discoveryStatus="failed"
+        thinkingValue="high"
+        onProviderChange={vi.fn()}
+        onModelChange={vi.fn()}
+        onThinkingChange={vi.fn()}
+        onRefreshModels={vi.fn()}
+        onConfigureCredential={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('刷新失败')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '模型' })).toHaveTextContent('DeepSeek V4 Flash');
+  });
+
+  it('labels compatibility aliases without rewriting their request id', () => {
+    expect(modelOptionLabel({
+      ...flashModel,
+      display_name: 'deepseek-v4-flash',
+      lifecycle: 'deprecated',
+      compatibility_of: 'deepseek-flash',
+    })).toBe('deepseek-v4-flash（兼容 ID）');
   });
 });

@@ -5,11 +5,20 @@ from dotenv import load_dotenv
 # Resolve paths
 backend_dir = Path(__file__).resolve().parent.parent
 env_path = backend_dir / ".env"
-load_dotenv(dotenv_path=env_path)
+# Isolated runtimes set PYTHON_DOTENV_DISABLED before importing this module.
+# The flag is checked here so config import cannot scrub or inherit a real .env.
+_DOTENV_DISABLED = os.environ.get("PYTHON_DOTENV_DISABLED", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+if not _DOTENV_DISABLED:
+    load_dotenv(dotenv_path=env_path)
 
 # Load variables
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")
 SOVITS_URL = os.getenv("SOVITS_URL", "http://127.0.0.1:9880").rstrip("/")
 FRONTEND_PORT = int(os.getenv("FRONTEND_PORT", "5173"))
 BACKEND_PORT = int(os.getenv("BACKEND_PORT", "8000"))

@@ -25,6 +25,8 @@ _REQUEST_MODES = {
     "reasoning_effort",
     "gemini_thinking_level",
 }
+_COMPATIBILITY_SCOPES = {"official_direct"}
+_LIVE_DISPLAY_KEYS = ("name", "display_name")
 
 
 class ModelUnavailableError(ValueError):
@@ -76,6 +78,10 @@ class CatalogModel:
     persona_certification: str
     thinking_control: ModelControl | None
     evidence: tuple[str, ...]
+    disclosed_version: str | None = None
+    compatibility_of: str | None = None
+    compatibility_scope: str | None = None
+    preferred: bool = False
 
 
 class ModelCatalog:
@@ -139,6 +145,7 @@ class ModelCatalog:
                 )
             self._allow_undiscovered[provider_id] = allow_undiscovered
             ids: list[str] = []
+            preferred_count = 0
             for raw in rows:
                 model = self._parse_model(provider_id, raw)
                 key = (provider_id, model.id)
@@ -146,7 +153,27 @@ class ModelCatalog:
                     raise ValueError(f"duplicate model catalog row: {key!r}")
                 self._models[key] = model
                 ids.append(model.id)
+                if model.preferred:
+                    preferred_count += 1
+            if preferred_count > 1:
+                raise ValueError(
+                    f"provider {provider_id!r} has multiple preferred models"
+                )
             self._providers[provider_id] = tuple(ids)
+            for model_id in ids:
+                model = self._models[(provider_id, model_id)]
+                if model.compatibility_of is None:
+                    continue
+                target = self._models.get((provider_id, model.compatibility_of))
+                if target is None or target.id == model.id:
+                    raise ValueError(
+                        f"invalid compatibility_of for {provider_id}/{model.id}"
+                    )
+                if is_user_custom_provider(provider_id):
+                    raise ValueError(
+                        "official compatibility aliases cannot be attached "
+                        "to custom providers"
+                    )
 
     @staticmethod
     def _parse_control(raw: Any) -> ModelControl | None:
@@ -236,6 +263,32 @@ class ModelCatalog:
                 or value <= 0
             ):
                 raise ValueError(f"{name} must be a positive integer or null")
+        disclosed_version = raw.get("disclosed_version")
+        if disclosed_version is None:
+            version = None
+        elif isinstance(disclosed_version, str) and disclosed_version.strip():
+            if not evidence:
+                raise ValueError("disclosed_version requires evidence URLs")
+            version = disclosed_version.strip()
+        else:
+            raise ValueError("disclosed_version must be a non-empty string or null")
+        compatibility_of = raw.get("compatibility_of")
+        compatibility_scope = raw.get("compatibility_scope")
+        if compatibility_of is None and compatibility_scope is None:
+            alias_of = None
+            alias_scope = None
+        elif (
+            isinstance(compatibility_of, str)
+            and compatibility_of.strip()
+            and compatibility_scope in _COMPATIBILITY_SCOPES
+        ):
+            alias_of = compatibility_of.strip()
+            alias_scope = str(compatibility_scope)
+        else:
+            raise ValueError("invalid compatibility alias fields")
+        preferred = raw.get("preferred", False)
+        if not isinstance(preferred, bool):
+            raise ValueError("preferred must be boolean")
         return CatalogModel(
             provider_id=provider_id,
             id=model_id,
@@ -248,6 +301,10 @@ class ModelCatalog:
             ),
             thinking_control=cls._parse_control(raw.get("thinking_control")),
             evidence=tuple(evidence),
+            disclosed_version=version,
+            compatibility_of=alias_of,
+            compatibility_scope=alias_scope,
+            preferred=preferred,
         )
 
     def clear_discovery(self, provider_id: str | None = None) -> None:
@@ -266,6 +323,14 @@ class ModelCatalog:
         return dict(
             self._discovered_metadata.get(provider_id, {}).get(model_id, {})
         )
+
+    @staticmethod
+    def _live_display_name(live: dict[str, Any], model_id: str) -> str | None:
+        for key in _LIVE_DISPLAY_KEYS:
+            value = live.get(key)
+            if isinstance(value, str) and value.strip() and value.strip() != model_id:
+                return value.strip()
+        return None
 
     @staticmethod
     def _live_positive_int(
@@ -302,34 +367,79 @@ class ModelCatalog:
             return False
         return True
 
+    def _public_row(
+        self,
+        *,
+        provider_id: str,
+        model_id: str,
+        display_name: str,
+        display_source: str,
+        lifecycle: str,
+        source: str,
+        context_window: int | None,
+        max_output_tokens: int | None,
+        persona_certification: str,
+        evidence: list[str],
+        live: dict[str, Any],
+        thinking_control: dict[str, Any] | None,
+        disclosed_version: str | None = None,
+        compatibility_of: str | None = None,
+        compatibility_scope: str | None = None,
+        preferred: bool = False,
+    ) -> dict[str, Any]:
+        return {
+            "id": model_id,
+            "request_id": model_id,
+            "display_name": display_name,
+            "display_source": display_source,
+            "lifecycle": lifecycle,
+            "callable": self._is_callable(provider_id, lifecycle),
+            "source": source,
+            "context_window": context_window,
+            "max_output_tokens": max_output_tokens,
+            "persona_certification": persona_certification,
+            "evidence": evidence,
+            "live_metadata": live,
+            "thinking_control": thinking_control,
+            "disclosed_version": disclosed_version,
+            "compatibility_of": compatibility_of,
+            "compatibility_scope": compatibility_scope,
+            "preferred": preferred,
+        }
+
     def _public_known(self, model: CatalogModel) -> dict[str, Any]:
         lifecycle = self._effective_lifecycle(model)
         live = self._live_metadata(model.provider_id, model.id)
-        return {
-            "id": model.id,
-            "display_name": model.display_name,
-            "lifecycle": lifecycle,
-            "callable": self._is_callable(model.provider_id, lifecycle),
-            "source": "manifest",
-            "context_window": self._live_positive_int(
+        return self._public_row(
+            provider_id=model.provider_id,
+            model_id=model.id,
+            display_name=model.display_name,
+            display_source="manifest",
+            lifecycle=lifecycle,
+            source="manifest",
+            context_window=self._live_positive_int(
                 live,
                 "context_window",
                 model.context_window,
             ),
-            "max_output_tokens": self._live_positive_int(
+            max_output_tokens=self._live_positive_int(
                 live,
                 "max_output_tokens",
                 model.max_output_tokens,
             ),
-            "persona_certification": model.persona_certification,
-            "evidence": list(model.evidence),
-            "live_metadata": live,
-            "thinking_control": (
+            persona_certification=model.persona_certification,
+            evidence=list(model.evidence),
+            live=live,
+            thinking_control=(
                 model.thinking_control.public()
                 if model.thinking_control is not None
                 else None
             ),
-        }
+            disclosed_version=model.disclosed_version,
+            compatibility_of=model.compatibility_of,
+            compatibility_scope=model.compatibility_scope,
+            preferred=model.preferred,
+        )
 
     def _public_unknown(
         self,
@@ -341,19 +451,23 @@ class ModelCatalog:
     ) -> dict[str, Any]:
         live = dict(live_metadata or {})
         lifecycle = "unverified" if available else "unavailable"
-        return {
-            "id": model_id,
-            "display_name": model_id,
-            "lifecycle": lifecycle,
-            "callable": self._is_callable(provider_id, lifecycle),
-            "source": "dynamic",
-            "context_window": live.get("context_window"),
-            "max_output_tokens": live.get("max_output_tokens"),
-            "persona_certification": "not_evaluated",
-            "evidence": [],
-            "live_metadata": live,
-            "thinking_control": None,
-        }
+        live_name = self._live_display_name(live, model_id)
+        return self._public_row(
+            provider_id=provider_id,
+            model_id=model_id,
+            display_name=live_name or model_id,
+            display_source="live_name" if live_name else "request_id",
+            lifecycle=lifecycle,
+            source="dynamic",
+            context_window=self._live_positive_int(live, "context_window", None),
+            max_output_tokens=self._live_positive_int(
+                live, "max_output_tokens", None
+            ),
+            persona_certification="not_evaluated",
+            evidence=[],
+            live=live,
+            thinking_control=None,
+        )
 
     def public_model(self, provider_id: str, model_id: str) -> dict[str, Any]:
         known = self._models.get((provider_id, model_id))
@@ -409,6 +523,20 @@ class ModelCatalog:
                 metadata[model_id] = dict(raw)
         self._discovered_metadata[provider_id] = metadata
         return self.list_provider(provider_id)
+
+    def preferred_id(self, provider_id: str) -> str | None:
+        for model_id in self._providers.get(provider_id, ()):
+            if self._models[(provider_id, model_id)].preferred:
+                return model_id
+        return None
+
+    def uses_native_reasoning(self, provider_id: str, model_id: str) -> bool:
+        control = self.control_for(provider_id, model_id)
+        return (
+            control is not None
+            and control.native
+            and control.request_mode == "reasoning_effort"
+        )
 
     def control_for(self, provider_id: str, model_id: str) -> ModelControl | None:
         model = self._models.get((provider_id, model_id))

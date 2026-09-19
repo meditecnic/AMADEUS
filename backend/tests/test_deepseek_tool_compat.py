@@ -87,6 +87,21 @@ def test_v4_flash_final_answer_uses_native_thinking_effort():
     assert "tools" not in payload
 
 
+def test_flash_alias_request_id_uses_catalog_thinking_payload():
+    payload = build_chat_payload(
+        model="deepseek-flash",
+        messages=[{"role": "user", "content": "answer carefully"}],
+        temperature=0.0,
+        tools=None,
+        tool_choice=None,
+        reasoning_effort="high",
+    )
+
+    assert payload["model"] == "deepseek-flash"
+    assert payload["thinking"] == {"type": "enabled"}
+    assert payload["reasoning_effort"] == "high"
+
+
 @pytest.mark.asyncio
 async def test_v4_flash_no_longer_injects_prompt_depth(monkeypatch):
     captured: dict = {}

@@ -89,6 +89,7 @@ class ModelDiscoveryResult:
     models: tuple[str, ...]
     metadata: tuple[dict[str, Any], ...]
     cache_hit: bool
+    stale: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +152,8 @@ class ProviderModelCache:
                 "owned_by",
                 "created",
                 "object",
+                "name",
+                "display_name",
             }
             rows: dict[str, dict[str, Any]] = {}
             for raw in discovered:
@@ -180,6 +183,18 @@ class ProviderModelCache:
                 expires_at=now + self._ttl_seconds,
             )
             return ModelDiscoveryResult(models, metadata, cache_hit=False)
+
+    def peek(self, provider_id: str) -> ModelDiscoveryResult | None:
+        """Return the last successful discovery even after TTL expiry."""
+        entry = self._entries.get(provider_id)
+        if entry is None:
+            return None
+        return ModelDiscoveryResult(
+            entry.models,
+            entry.metadata,
+            cache_hit=True,
+            stale=True,
+        )
 
     def clear(self, provider_id: str | None = None) -> None:
         if provider_id is None:

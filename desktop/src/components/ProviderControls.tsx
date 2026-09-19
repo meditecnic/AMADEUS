@@ -24,9 +24,21 @@ export interface ModelThinkingControl {
   aliases?: Record<string, string>;
 }
 
+export type ModelDiscoveryStatus =
+  | 'idle'
+  | 'loading'
+  | 'live'
+  | 'cache'
+  | 'failed'
+  | 'failed_using_cache'
+  | 'credential_missing'
+  | 'id_only';
+
 export interface ModelCatalogEntry {
   id: string;
+  request_id?: string;
   display_name: string;
+  display_source?: 'manifest' | 'live_name' | 'request_id' | string;
   lifecycle: ModelLifecycle;
   callable: boolean;
   source: 'manifest' | 'dynamic';
@@ -35,6 +47,10 @@ export interface ModelCatalogEntry {
   persona_certification?: string;
   evidence?: string[];
   thinking_control: ModelThinkingControl | null;
+  disclosed_version?: string | null;
+  compatibility_of?: string | null;
+  compatibility_scope?: string | null;
+  preferred?: boolean;
 }
 
 export interface ProviderMetadata {
@@ -50,6 +66,8 @@ export interface ProviderMetadata {
   catalog_version: number;
   catalog_verified_at: string;
   default_model_capability: ModelCatalogEntry;
+  catalog?: ModelCatalogEntry[];
+  preferred_model_id?: string | null;
   source?: 'builtin' | 'user_config' | string;
   enabled?: boolean;
 }
@@ -61,6 +79,7 @@ interface ProviderControlsProps {
   models: ModelCatalogEntry[];
   disabled: boolean;
   loadingModels: boolean;
+  discoveryStatus?: ModelDiscoveryStatus;
   thinkingValue: string | null;
   onProviderChange: (providerId: string) => void;
   onModelChange: (modelId: string) => void;
@@ -106,13 +125,62 @@ export function modelLifecycleSuffix(lifecycle: ModelLifecycle): string {
   }[lifecycle];
 }
 
+export function modelOptionLabel(model: ModelCatalogEntry): string {
+  const life = modelLifecycleSuffix(model.lifecycle);
+  if (model.compatibility_of) {
+    const availability = model.lifecycle === 'deprecated' ? '' : life;
+    return `${model.display_name}（兼容 ID）${availability}`;
+  }
+  return `${model.display_name}${life}`;
+}
+
+export function modelOptionTitle(model: ModelCatalogEntry): string {
+  const requestId = model.request_id || model.id;
+  const parts = [`请求 ID：${requestId}`];
+  if (model.disclosed_version) {
+    parts.push(
+      `目录披露：${model.disclosed_version}（有证据来源；GET /models 返回的 ID 不能证明底层版本）`,
+    );
+  } else {
+    parts.push('未披露底层版本');
+  }
+  return parts.join('\n');
+}
+
+export function discoveryStatusLabel(status: ModelDiscoveryStatus | undefined): string | null {
+  switch (status) {
+    case 'loading':
+      return '刷新中';
+    case 'live':
+      return '已刷新';
+    case 'cache':
+      return '已缓存';
+    case 'failed':
+      return '刷新失败';
+    case 'failed_using_cache':
+      return '刷新失败，使用缓存';
+    case 'credential_missing':
+      return '缺少凭据';
+    case 'id_only':
+      return '仅有请求 ID';
+    default:
+      return null;
+  }
+}
+
 function mergeModels(
   activeModelId: string,
   provider: ProviderMetadata | undefined,
   models: ModelCatalogEntry[],
 ): ModelCatalogEntry[] {
   const byId = new Map(models.map((row) => [row.id, row]));
-  if (provider?.default_model_capability) {
+  for (const row of provider?.catalog || []) {
+    if (!byId.has(row.id)) byId.set(row.id, row);
+  }
+  if (
+    provider?.default_model_capability
+    && !byId.has(provider.default_model_capability.id)
+  ) {
     byId.set(
       provider.default_model_capability.id,
       provider.default_model_capability,
@@ -131,6 +199,7 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
   models,
   disabled,
   loadingModels,
+  discoveryStatus,
   thinkingValue,
   onProviderChange,
   onModelChange,
@@ -146,6 +215,9 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
     thinkingControl,
     thinkingValue,
     thinkingValue,
+  );
+  const statusLabel = discoveryStatusLabel(
+    loadingModels ? 'loading' : discoveryStatus,
   );
 
   return (
@@ -176,11 +248,18 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
         disabled={disabled || modelOptions.length === 0}
         options={modelOptions.map((model) => ({
           value: model.id,
-          label: `${model.display_name}${modelLifecycleSuffix(model.lifecycle)}`,
+          label: modelOptionLabel(model),
           disabled: !model.callable,
+          title: modelOptionTitle(model),
         }))}
+        title={activeModel ? modelOptionTitle(activeModel) : undefined}
         onChange={onModelChange}
       />
+      {statusLabel ? (
+        <span className="provider-discovery-status" title={statusLabel}>
+          {statusLabel}
+        </span>
+      ) : null}
       {activeProvider?.model_discovery && (
         <button
           type="button"

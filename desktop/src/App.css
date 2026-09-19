@@ -3259,6 +3259,16 @@
   width: clamp(150px, 21vw, 260px);
   min-width: 120px;
 }
+.provider-discovery-status {
+  color: var(--wl-accent-dim);
+  font: 10px/1.2 var(--font-mono);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  max-width: 10em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.86;
+}
 .provider-controls .provider-select,
 .provider-controls .provider-model-select {
   width: 100%;
