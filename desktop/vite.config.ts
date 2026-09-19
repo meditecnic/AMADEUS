@@ -3,6 +3,8 @@ import react from "@vitejs/plugin-react";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
+const backendOrigin = process.env.AMADEUS_BACKEND_ORIGIN || "http://127.0.0.1:8000";
+const frontendPort = Number(process.env.AMADEUS_FRONTEND_PORT || "1420");
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
@@ -14,7 +16,7 @@ export default defineConfig(async () => ({
   clearScreen: false,
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
-    port: 1420,
+    port: frontendPort,
     strictPort: true,
     // Keep local development on an explicit IPv4 loopback. On this Windows
     // host, Vite's `localhost` default resolves to ::1 but the IPv6 loopback
@@ -34,12 +36,12 @@ export default defineConfig(async () => ({
     },
     proxy: {
       '/ws': {
-        target: 'http://127.0.0.1:8000',
+        target: backendOrigin,
         ws: true,
         changeOrigin: true
       },
       '/api': {
-        target: 'http://127.0.0.1:8000',
+        target: backendOrigin,
         changeOrigin: true
       }
     }

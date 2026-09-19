@@ -507,6 +507,11 @@ class MemoryService:
         now = datetime.now(timezone.utc).isoformat()
         db = await get_db(wl, "memory")
         try:
+            await db.execute('BEGIN IMMEDIATE')
+            from app.services.conversation_erasure import sources_erased
+            if await sources_erased(db, session_id=session_id, identity_mode=mode,
+                                    source_message_ids=candidate.source_message_ids):
+                raise ValueError('source history has been erased')
             cursor = await db.execute(
                 """INSERT INTO episodic_memories(
                        session_id,identity_mode,content,confidence,importance,source_message_ids,created_at
@@ -542,6 +547,10 @@ class MemoryService:
         db = await get_db(wl, "memory")
         try:
             await db.execute("BEGIN IMMEDIATE")
+            from app.services.conversation_erasure import sources_erased
+            if await sources_erased(db, session_id=session_id, identity_mode=mode,
+                                    source_message_ids=candidate.source_message_ids):
+                raise ValueError('source history has been erased')
             cur = await db.execute(
                 """SELECT id,fact_value,confidence,importance FROM core_facts
                     WHERE session_id=? AND identity_mode=? AND fact_key=? AND is_current=1""",
@@ -843,6 +852,17 @@ class MemoryService:
             },
         ]
         try:
+            summary_epoch = await models.get_conversation_content_epoch(
+                session_id, worldline=worldline, conversation_id=conversation_id,
+            )
+            from app.services.conversation_erasure import sources_erased
+            erasure_db = await get_db(worldline, 'memory')
+            try:
+                if await sources_erased(erasure_db, session_id=session_id, identity_mode=mode,
+                                        source_message_ids=source_message_ids, conversation_id=conversation_id):
+                    return
+            finally:
+                await erasure_db.close()
             provider_snapshot.require(ProviderTask.MEMORY)
             payload = await provider_snapshot.adapter.complete_json(
                 messages=messages,
@@ -917,6 +937,7 @@ class MemoryService:
                         summary,
                         worldline=worldline,
                         conversation_id=conversation_id,
+                        expected_epoch=summary_epoch,
                     )
         except asyncio.CancelledError:
             print("[MemoryIngest] extract cancelled", flush=True)
@@ -2009,6 +2030,8 @@ class MemoryService:
         session_id: str,
         worldline: str,
         source_message_ids: set[int],
+        *,
+        identity_mode: str | None = None,
     ) -> dict[str, int]:
         """Delete memories whose complete evidence set belongs to one conversation."""
         if not source_message_ids:
@@ -2018,14 +2041,15 @@ class MemoryService:
         episodic_ids: list[int] = []
         core_ids: list[int] = []
         try:
+            await db.execute('BEGIN IMMEDIATE')
             for table, destination in (
                 ("episodic_memories", episodic_ids),
                 ("core_facts", core_ids),
             ):
                 rows = await (
                     await db.execute(
-                        f"SELECT id,source_message_ids FROM {table} WHERE session_id=?",
-                        (session_id,),
+                        f"SELECT id,source_message_ids FROM {table} WHERE session_id=? AND (? IS NULL OR identity_mode=?)",
+                        (session_id, identity_mode, identity_mode),
                     )
                 ).fetchall()
                 for row in rows:
@@ -2037,6 +2061,19 @@ class MemoryService:
                         continue
                     if sources and sources.issubset(source_message_ids):
                         destination.append(int(row["id"]))
+            # Keep row and vector erasure atomic; a failed vector delete must
+            # not lose the row ids needed to retry the durable request.
+            if episodic_ids or core_ids:
+                import sqlite_vec
+                await db.enable_load_extension(True)
+                await db.load_extension(sqlite_vec.loadable_path())
+                await db.enable_load_extension(False)
+                for kind, vector_table, memory_ids in (
+                    ('episodic', 'episodic_vec', episodic_ids), ('core', 'core_vec', core_ids),
+                ):
+                    for memory_id in memory_ids:
+                        await db.execute(f'DELETE FROM {vector_table} WHERE rowid=?', (memory_id,))
+                        await db.execute('DELETE FROM memory_embeddings WHERE memory_type=? AND memory_id=?', (kind, memory_id))
             if core_ids:
                 placeholders = ",".join("?" for _ in core_ids)
                 await db.execute(
@@ -2056,13 +2093,6 @@ class MemoryService:
             await db.commit()
         finally:
             await db.close()
-        if episodic_ids or core_ids:
-            await asyncio.to_thread(
-                self._delete_vectors_sync,
-                wl,
-                episodic_ids,
-                core_ids,
-            )
         return {
             "episodic_deleted": len(episodic_ids),
             "core_facts_deleted": len(core_ids),
@@ -2114,6 +2144,11 @@ class MemoryService:
         try:
             connection.enable_load_extension(True)
             sqlite_vec.load(connection)
+            connection.execute('BEGIN IMMEDIATE')
+            source_table = 'episodic_memories' if kind == 'episodic' else 'core_facts'
+            if not connection.execute(f'SELECT 1 FROM {source_table} WHERE id=?', (memory_id,)).fetchone():
+                connection.rollback()
+                return
             blob = struct.pack(f"<{len(vector)}f", *vector)
             table = "episodic_vec" if kind == "episodic" else "core_vec"
             connection.execute(f"INSERT OR REPLACE INTO {table}(rowid,embedding) VALUES(?,?)", (memory_id, blob))

@@ -381,15 +381,10 @@ class ConversationService:
         record = await self.require_owned(conversation_id, session_id, wl)
         if record["is_default"]:
             raise DefaultConversationError("default conversation cannot be deleted")
-        db = await get_db(wl, "history")
-        try:
-            await db.execute(
-                "DELETE FROM conversations WHERE id=? AND session_id=?",
-                (conversation_id, session_id),
-            )
-            await db.commit()
-        finally:
-            await db.close()
+        from app.services.conversation_erasure import request_erasure
+        await request_erasure(session_id=session_id, identity_mode=str(record['identity_mode']),
+                              worldline=wl, conversation_id=conversation_id,
+                              action='delete', forget_long_term=False)
 
     async def forget(
         self,
@@ -400,43 +395,11 @@ class ConversationService:
         forget_long_term: bool = False,
     ) -> dict[str, int]:
         wl = normalize_worldline(worldline)
-        await self.require_owned(conversation_id, session_id, wl)
-        db = await get_db(wl, "history")
-        try:
-            rows = await (
-                await db.execute(
-                    "SELECT id FROM messages WHERE session_id=? AND conversation_id=?",
-                    (session_id, conversation_id),
-                )
-            ).fetchall()
-            source_ids = {int(row["id"]) for row in rows}
-            message_cursor = await db.execute(
-                "DELETE FROM messages WHERE session_id=? AND conversation_id=?",
-                (session_id, conversation_id),
-            )
-            summary_cursor = await db.execute(
-                "DELETE FROM memory_summaries WHERE session_id=? AND conversation_id=?",
-                (session_id, conversation_id),
-            )
-            await db.commit()
-            messages_deleted = max(0, message_cursor.rowcount)
-            summaries_deleted = max(0, summary_cursor.rowcount)
-        finally:
-            await db.close()
-        memory_counts = {"episodic_deleted": 0, "core_facts_deleted": 0}
-        if forget_long_term:
-            from app.services.memory import memory_service
-
-            memory_counts = await memory_service.forget_exclusive_sources(
-                session_id,
-                wl,
-                source_ids,
-            )
-        return {
-            "messages_deleted": messages_deleted,
-            "summaries_deleted": summaries_deleted,
-            **memory_counts,
-        }
+        record = await self.require_owned(conversation_id, session_id, wl)
+        from app.services.conversation_erasure import request_erasure
+        return await request_erasure(session_id=session_id, identity_mode=str(record['identity_mode']),
+                                     worldline=wl, conversation_id=conversation_id,
+                                     action='forget', forget_long_term=forget_long_term)
 
     async def select(
         self,

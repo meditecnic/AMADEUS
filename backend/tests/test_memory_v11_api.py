@@ -65,8 +65,10 @@ LEGACY_ROUTE_TEMPLATES = (
 
 
 @pytest.fixture
-def client(app_client: TestClient) -> TestClient:
-    return app_client
+def client(isolated_client: TestClient) -> TestClient:
+    # Legacy compatibility tests can create/delete conversations too. Never
+    # let this alias start the application against the user's data directory.
+    return isolated_client
 
 
 @pytest.fixture
@@ -369,10 +371,17 @@ def test_s3a_job_retry_scope_and_idempotence(isolated_client: TestClient):
             job_id=job["job_id"], lease_owner="tester", worldline="steins_gate"
         )
         assert claimed is not None
+        from app.db import get_db
+        db = await get_db('steins_gate', 'memory')
+        try:
+            await db.execute('UPDATE memory_ingest_jobs SET attempt_count=3 WHERE job_id=?', (job['job_id'],))
+            await db.commit()
+        finally:
+            await db.close()
         await jobs_mod.mark_memory_job_failed(
             job_id=claimed["job_id"],
             error_code="timeout",
-            permanent=True,
+            permanent=False,
             worldline="steins_gate",
             lease_owner="tester",
         )
@@ -1295,6 +1304,8 @@ def _seed_fact_via_reconciler(
     excerpt: str | None = None,
     topic_label: str | None = None,
     identity_mode: str = "self",
+    conversation_id: str | None = None,
+    pipeline_version: str | None = None,
 ) -> tuple[str, str]:
     """Public reconciler CREATE → (fact_id, observation_id) with vector + evidence."""
     import asyncio
@@ -1338,7 +1349,7 @@ def _seed_fact_via_reconciler(
             source_evidence=[
                 {
                     "source_message_id": source_message_id,
-                    "conversation_id": f"conv-s3d1-{source_message_id}",
+                    "conversation_id": conversation_id or f"conv-s3d1-{source_message_id}",
                     "source_role": "user",
                     "source_fingerprint": f"fp-s3d1-{source_message_id}",
                     "source_created_at": "2026-08-01T00:00:00+00:00",
@@ -1346,6 +1357,11 @@ def _seed_fact_via_reconciler(
                 }
             ],
             candidate_allowlist=[],
+            processing_receipt={
+                'conversation_id': conversation_id or f'conv-s3d1-{source_message_id}',
+                'source_message_id': source_message_id,
+                'pipeline_version': pipeline_version,
+            } if pipeline_version else None,
         )
         fact_id = str(result["created_facts"][0]["fact_id"])
         db = await get_db("steins_gate", "memory")
@@ -2236,13 +2252,14 @@ def test_s3d1_delete_exclusive_observation_scrubbed_receipt_retained(
     assert obs[0]["topic_label_proposal"] is None
     assert obs[0]["semantic_fingerprint"] is not None, "non-content hash retained"
     sources = _db_rows(
-        """SELECT source_message_id, source_fingerprint, source_state
+        """SELECT source_message_id, source_fingerprint, source_state, excerpt
              FROM memory_observation_sources WHERE observation_id=?""",
         (observation_id,),
     )
     assert len(sources) == 1, "source receipt must be retained for replay blocking"
     assert sources[0]["source_message_id"] == 70002
     assert sources[0]["source_state"] == "present"
+    assert sources[0]["excerpt"] is None, "deleted fact must erase its exclusive source excerpt"
 
 
 def test_s3d1_delete_shared_observation_kept(isolated_client: TestClient):

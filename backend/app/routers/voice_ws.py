@@ -81,10 +81,14 @@ async def websocket_voice_endpoint(websocket: WebSocket):
             await websocket.send_json({"type": "voice.discarded", "reason": "too_short"})
             return
         await websocket.send_json({"type": "stt.status", "state": "transcribing", "reason": reason})
+        transcription_history_epoch = session.history_epoch
         try:
             text, emotion, confidence = await speech_service.transcribe_pcm(pcm, sample_rate, channels)
         except Exception as exc:
             await websocket.send_json({"type": "voice.error", "stage": "stt", "message": str(exc), "degraded": True})
+            return
+        if session.erasure_pending or session.history_epoch != transcription_history_epoch:
+            await websocket.send_json({'type':'voice.discarded', 'reason':'context_changed'})
             return
         await soul_engine.apply_speech_emotion(
             session_id,
@@ -94,7 +98,7 @@ async def websocket_voice_endpoint(websocket: WebSocket):
             identity_mode=getattr(session, "identity_mode", "okabe"),
         )
         await websocket.send_json({"type": "stt.final", "content": text, "emotion": emotion, "confidence": confidence})
-        if text and not session.is_busy:
+        if text and not session.is_busy and not session.erasure_pending:
             # id filled after chat processor save_message (Memory Ingest v2).
             session.append_message({"role": "user", "content": text, "id": None})
             session.is_busy = True

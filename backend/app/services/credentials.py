@@ -192,6 +192,22 @@ class WindowsCredentialStore:
             raise ctypes.WinError(error)
 
 
-credential_store: CredentialStore = (
-    WindowsCredentialStore() if sys.platform == "win32" else InMemoryCredentialStore()
+def _select_credential_store() -> CredentialStore:
+    """Bind the process-wide store once, at import.
+
+    ``AMADEUS_CREDENTIAL_BACKEND=memory`` selects the non-persistent store
+    before Windows Credential Manager is constructed. Changing DATA_DIR
+    alone does not isolate system credentials.
+    """
+    backend = (os.environ.get("AMADEUS_CREDENTIAL_BACKEND") or "").strip().lower()
+    if backend in {"memory", "inmemory", "in-memory"}:
+        return InMemoryCredentialStore()
+    if sys.platform == "win32":
+        return WindowsCredentialStore()
+    return InMemoryCredentialStore()
+
+
+credential_store: CredentialStore = _select_credential_store()
+WINDOWS_CREDENTIAL_STORE_CONSTRUCTED = (
+    type(credential_store).__name__ == "WindowsCredentialStore"
 )

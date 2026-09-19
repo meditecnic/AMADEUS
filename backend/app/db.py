@@ -168,6 +168,16 @@ CREATE TABLE IF NOT EXISTS memory_summaries (
     summary TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
+-- Kept independently of conversation deletion so stale tasks cannot reuse an epoch.
+CREATE TABLE IF NOT EXISTS conversation_content_epochs (
+    session_id TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    epoch INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(session_id, conversation_id)
+);
+CREATE TABLE IF NOT EXISTS conversation_erasure_commits (
+    request_id TEXT PRIMARY KEY
+);
 CREATE INDEX IF NOT EXISTS idx_summary_session ON memory_summaries(session_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_summary_conversation ON memory_summaries(conversation_id, id DESC);
 CREATE TRIGGER IF NOT EXISTS messages_require_conversation_insert
@@ -292,6 +302,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_ingest_jobs_source_cursor
     );
 CREATE INDEX IF NOT EXISTS idx_memory_ingest_jobs_state
     ON memory_ingest_jobs(state, next_attempt_at);
+
+-- Durable, non-content intent across the separate history/memory databases.
+-- Retained source ids also prevent in-flight extraction from reviving erased history.
+CREATE TABLE IF NOT EXISTS conversation_erasure_requests (
+    request_id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    identity_mode TEXT NOT NULL,
+    conversation_id TEXT NOT NULL,
+    action TEXT NOT NULL CHECK(action IN ('forget','delete')),
+    forget_long_term INTEGER NOT NULL,
+    source_message_ids TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('pending','completed')),
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_conversation_erasure_scope
+    ON conversation_erasure_requests(session_id, identity_mode, conversation_id);
 
 CREATE TABLE IF NOT EXISTS memory_observations (
     observation_id TEXT PRIMARY KEY,

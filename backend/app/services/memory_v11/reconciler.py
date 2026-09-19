@@ -732,6 +732,11 @@ async def apply_validated_memory_operations(
         await db.execute("BEGIN IMMEDIATE")
 
         # Final replay guard under write lock (race-safe).
+        from app.services.conversation_erasure import sources_erased
+        if await sources_erased(db, session_id=session, identity_mode=mode,
+                                source_message_ids=list(all_source_ids),
+                                conversation_id=processing_receipt.get('conversation_id') if processing_receipt else None):
+            raise MemoryValidationError('source_erased', 'source history has been erased')
         if processing_receipt is not None:
             already = await _source_receipt_already_applied(
                 db,

@@ -116,27 +116,59 @@ async def get_session_messages(
         await db.close()
 
 
+async def get_conversation_content_epoch(
+    session_id: str,
+    worldline: str = "steins_gate",
+    conversation_id: str | None = None,
+) -> int:
+    """Freeze the history generation before starting asynchronous summarization."""
+    wl = normalize_worldline(worldline)
+    cid = await _resolve_conversation_id(session_id, wl, conversation_id)
+    db = await get_db(wl, "history")
+    try:
+        row = await (await db.execute(
+            "SELECT epoch FROM conversation_content_epochs WHERE session_id=? AND conversation_id=?",
+            (session_id, cid),
+        )).fetchone()
+        return int(row["epoch"]) if row else 0
+    finally:
+        await db.close()
+
+
 async def save_memory_summary(
     session_id: str,
     summary: str,
     worldline: str = "steins_gate",
     conversation_id: str | None = None,
-):
+    *,
+    expected_epoch: int | None = None,
+) -> bool:
     """Persist a working summary (D38).
 
     Accepts decoded/runtime PLAIN text and encodes internally before INSERT so
     the storage marker can never escape through this API. Callers never encode
-    DB strings manually.
+    DB strings manually. A stale generated result returns False without writing.
     """
     wl = normalize_worldline(worldline)
     cid = await _resolve_conversation_id(session_id, wl, conversation_id)
     db = await get_db(wl, "history")
     try:
+        await db.execute("BEGIN IMMEDIATE")
+        if expected_epoch is not None:
+            row = await (await db.execute(
+                "SELECT epoch FROM conversation_content_epochs WHERE session_id=? AND conversation_id=?",
+                (session_id, cid),
+            )).fetchone()
+            current_epoch = int(row["epoch"]) if row else 0
+            if current_epoch != expected_epoch:
+                await db.rollback()
+                return False
         await db.execute(
             "INSERT INTO memory_summaries(session_id,conversation_id,summary) VALUES(?,?,?)",
             (session_id, cid, encode_working_summary(summary)),
         )
         await db.commit()
+        return True
     finally:
         await db.close()
 

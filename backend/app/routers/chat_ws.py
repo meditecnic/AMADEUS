@@ -191,6 +191,8 @@ class SessionState:
         self.active_segment_pipeline = None
         self.background_tasks = set()
         self.history_epoch = 0
+        self.content_epoch = 0
+        self.erasure_pending = False
         self.last_assistant_emotion = "neutral"
         self.consecutive_no_emo_tags = 0
         # M2: core extraction rhythm counter
@@ -209,6 +211,9 @@ class SessionState:
         self.identity_mode = normalize_identity_mode(selected.get("identity_mode"))
         self.identity_acknowledged = bool(selected.get("identity_acknowledged") or 0)
         self.api_key = credential_store.get(self.provider_id)
+        self.content_epoch = await models.get_conversation_content_epoch(
+            self.session_id, worldline=self.worldline, conversation_id=self.conversation_id,
+        )
         self._history = await models.get_recent_messages(
             self.session_id,
             limit=6,
@@ -415,6 +420,9 @@ async def compress_and_update_history(
     try:
         session_data = sessions.get(session_id)
         if session_data:
+            if (session_data.worldline != worldline or session_data.revision != revision
+                    or session_data.conversation_id != conversation_id or session_data.erasure_pending):
+                return
             if not prompt_history:
                 # Durable/API history stays untouched. Only the in-memory prompt
                 # window discards old assistant output that never met the
@@ -461,6 +469,7 @@ async def compress_and_update_history(
                 normalize_generated_working_summary,
             )
 
+            summary_epoch = session_data.content_epoch
             raw = await method(**kwargs)
             success, summary = normalize_generated_working_summary(raw)
             if not success:
@@ -472,12 +481,15 @@ async def compress_and_update_history(
                     flush=True,
                 )
             else:
-                await models.save_memory_summary(
+                persisted = await models.save_memory_summary(
                     session_id,
                     summary,
                     worldline=worldline,
                     conversation_id=conversation_id,
+                    expected_epoch=summary_epoch,
                 )
+                if not persisted:
+                    return
                 async with session_data.lock:
                     if (
                         session_data.worldline != worldline
@@ -1239,6 +1251,10 @@ async def processor_loop(
     Processor Coroutine (In-flight Task):
     Executes deepseek chat streaming, sentence extraction, launches TTS tasks, and queues results.
     """
+    if session.erasure_pending:
+        session.is_busy = False
+        await send_queue.put((epoch, {'type': 'error', 'message': '正在清空会话，请稍后再试。'}))
+        return
     session.is_busy = True
     turn_id = session.active_turn_id or str(uuid4())
     session.active_turn_id = turn_id
@@ -1411,7 +1427,6 @@ async def processor_loop(
                 without audio_error toast). Collapse hard-stops; leaks sanitize.
                 """
                 from app.domain.language_publication import is_neutral_data_fragment
-                from app.domain.segments import AudioErrorCode
 
                 if source_collapse["active"]:
                     return
@@ -1579,7 +1594,6 @@ async def processor_loop(
 
         if session.protocol_version >= 2 and segment_pipeline is not None:
             from app.domain.language_publication import is_neutral_data_fragment
-            from app.domain.segments import AudioErrorCode
 
             if not source_collapse.get("active"):
                 for segment in streaming_splitter.finish():
@@ -1693,10 +1707,8 @@ async def processor_loop(
                 )
                 # MEMORY-V11: default legacy Quiet Ingest. Explicit shadow/v11
                 # enables durable enqueue (worker started at app lifespan).
-                import os
-
-                memory_mode = (os.environ.get("AMADEUS_MEMORY_MODE") or "legacy").strip().lower()
-                if memory_mode in {"shadow", "v11"}:
+                from app.services.memory_v11.jobs import memory_mode
+                if memory_mode() in {"shadow", "v11"}:
                     from app.services.memory_v11.jobs import enqueue_memory_job
 
                     async def _enqueue_memory_v11() -> None:
@@ -2268,8 +2280,15 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                     await session.load_from_db()
                     if "model" in data and session.provider_id == "deepseek":
                         requested_model = str(data.get("model") or "").strip()
-                        if requested_model in ("deepseek-v4-flash", "deepseek-v4-pro"):
-                            session.model = requested_model
+                        if requested_model:
+                            try:
+                                model_catalog.ensure_callable(
+                                    session.provider_id,
+                                    requested_model,
+                                )
+                                session.model = requested_model
+                            except ModelUnavailableError:
+                                pass
                 api_key = credential_store.get(session.provider_id)
                 try:
                     provider_snapshot = provider_registry.snapshot(
@@ -2660,6 +2679,9 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 continue
 
             elif frame_type in ("chat", "chat.send"):
+                if session.erasure_pending:
+                    await send_queue.put((session.current_epoch, {'type':'error', 'message':'正在清空会话，请稍后再试。'}))
+                    continue
                 if "message" in data:
                     await send_queue.put((session.current_epoch, {"type": "error", "message": "禁止使用已废弃的 'message' 字段"}))
                     continue

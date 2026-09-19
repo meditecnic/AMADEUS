@@ -299,6 +299,7 @@ async def delete_experience(
     worldline: str,
     identity_mode: str,
     experience_id: str,
+    _transaction: Any | None = None,
 ) -> dict[str, Any]:
     """Explicit user delete with real content erasure, one atomic transaction.
 
@@ -322,9 +323,10 @@ async def delete_experience(
     if not eid:
         raise MemoryValidationError("empty_experience_id", "experience_id is required")
 
-    db = await get_db(wl, "memory")
+    db = _transaction if _transaction is not None else await get_db(wl, "memory")
     try:
-        await db.execute("BEGIN IMMEDIATE")
+        if _transaction is None:
+            await db.execute("BEGIN IMMEDIATE")
         row = await (
             await db.execute(
                 """SELECT experience_id, status, observation_id FROM experiences
@@ -338,7 +340,8 @@ async def delete_experience(
             )
         status = str(row["status"])
         if status == "deleted":
-            await db.commit()
+            if _transaction is None:
+                await db.commit()
             return {
                 "experience_id": eid,
                 "scope": {
@@ -387,12 +390,15 @@ async def delete_experience(
             (now, observation_id),
         )
         await _scrub_observation_sources(db, observation_id=observation_id, now=now)
-        await db.commit()
+        if _transaction is None:
+            await db.commit()
     except Exception:
-        await db.rollback()
+        if _transaction is None:
+            await db.rollback()
         raise
     finally:
-        await db.close()
+        if _transaction is None:
+            await db.close()
 
     return {
         "experience_id": eid,

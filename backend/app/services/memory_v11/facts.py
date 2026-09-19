@@ -188,6 +188,7 @@ async def delete_fact(
     identity_mode: str,
     fact_id: str,
     expected_version: int | None = None,
+    _transaction: Any | None = None,
 ) -> dict[str, Any]:
     """Delete (plan §7.2): tombstone + content erasure, one atomic transaction.
 
@@ -204,9 +205,10 @@ async def delete_fact(
     version = _parse_expected_version(expected_version)
 
     now = _utc_now()
-    db = await get_db(wl, "memory")
+    db = _transaction if _transaction is not None else await get_db(wl, "memory")
     try:
-        await db.execute("BEGIN IMMEDIATE")
+        if _transaction is None:
+            await db.execute("BEGIN IMMEDIATE")
         row = await (
             await db.execute(
                 """SELECT state, active_version FROM stable_facts
@@ -219,7 +221,8 @@ async def delete_fact(
         if str(row["state"]) == "deleted":
             # Idempotent repeat: destructive effects are already applied; the
             # caller's expected_version is no longer meaningful.
-            await db.commit()
+            if _transaction is None:
+                await db.commit()
             return {
                 "fact_id": fid,
                 "scope": {
@@ -306,6 +309,10 @@ async def delete_fact(
                      WHERE observation_id=?""",
                     (now, observation_id),
                 )
+                await db.execute(
+                    "UPDATE memory_observation_sources SET excerpt=NULL WHERE observation_id=?",
+                    (observation_id,),
+                )
         # 4. Evidence / vectors / versions removal.
         await db.execute("DELETE FROM stable_fact_evidence WHERE fact_id=?", (fid,))
         vector_rows = await (
@@ -328,12 +335,15 @@ async def delete_fact(
              WHERE fact_id=? AND session_id=? AND identity_mode=?""",
             (now, now, fid, session, mode),
         )
-        await db.commit()
+        if _transaction is None:
+            await db.commit()
     except Exception:
-        await db.rollback()
+        if _transaction is None:
+            await db.rollback()
         raise
     finally:
-        await db.close()
+        if _transaction is None:
+            await db.close()
 
     return {
         "fact_id": fid,

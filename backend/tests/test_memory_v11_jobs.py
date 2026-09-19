@@ -239,20 +239,13 @@ async def test_s0_process_job_one_llm_call_via_fake_provider(isolated_store):
     assert state == "completed", f"expected job completed, got {state!r}"
 
 
-def test_s0_chat_ws_enqueues_not_legacy_only():
-    import inspect
-
-    from app.routers import chat_ws
-
-    source = inspect.getsource(chat_ws)
-    assert "enqueue_memory_job" in source or "memory_v11" in source, (
-        "chat_ws still only uses legacy schedule_turn_extraction"
-    )
-    # Default production mode is legacy; shadow only when explicitly set.
-    assert 'or "legacy"' in source or "or 'legacy'" in source or 'or "legacy"' in source.replace(
-        "'", '"'
-    )
-    assert "legacy" in source
+def test_memory_mode_defaults_to_legacy_until_cutover(monkeypatch):
+    from app.services.memory_v11.jobs import memory_mode
+    monkeypatch.delenv('AMADEUS_MEMORY_MODE', raising=False)
+    assert memory_mode() == 'legacy'
+    for mode in ('shadow', 'v11'):
+        monkeypatch.setenv('AMADEUS_MEMORY_MODE', mode)
+        assert memory_mode() == mode
 
 
 @pytest.mark.asyncio

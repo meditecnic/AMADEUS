@@ -1,6 +1,7 @@
 """Durable, worldline-scoped conversation HTTP API."""
 
 from __future__ import annotations
+from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, HTTPException, Response, status
 from pydantic import BaseModel, Field
@@ -18,6 +19,38 @@ from app.services.provider_runtime import provider_registry
 
 
 router = APIRouter(prefix="/api/conversations", tags=["conversations"])
+
+
+@asynccontextmanager
+async def _erasure_runtime(conversation_id: str, session_id: str, worldline: str, *, deleting: bool = False):
+    record = await conversation_service.require_owned(conversation_id, session_id, worldline)
+    if deleting and record['is_default']:
+        raise DefaultConversationError('default conversation cannot be deleted')
+    from app.routers.chat_ws import sessions
+    from app.services.session_manager import cancel_inflight
+    session = sessions.get(session_id)
+    if session is None or session.worldline != worldline or session.conversation_id != conversation_id:
+        yield
+        return
+    if getattr(session, 'erasure_pending', False):
+        raise HTTPException(status_code=409, detail={'code':'conversation_erasure_pending'})
+    session.erasure_pending = True
+    session.history_epoch += 1
+    session.current_epoch += 1
+    session.revision = session.current_epoch
+    try:
+        if session.active_segment_pipeline is not None:
+            await session.active_segment_pipeline.cancel(reason='superseded_generation')
+        await cancel_inflight(session)
+        session.history = []
+        session.memory_summary = ''
+        yield
+        if not deleting and session.worldline == worldline and session.conversation_id == conversation_id:
+            session.content_epoch = await models.get_conversation_content_epoch(
+                session_id, worldline=worldline, conversation_id=conversation_id,
+            )
+    finally:
+        session.erasure_pending = False
 
 
 class ConversationCreate(BaseModel):
@@ -164,11 +197,8 @@ async def delete_conversation(
     worldline: str = "steins_gate",
 ):
     try:
-        await conversation_service.delete(
-            conversation_id,
-            session_id,
-            normalize_worldline(worldline),
-        )
+        async with _erasure_runtime(conversation_id, session_id, normalize_worldline(worldline), deleting=True):
+            await conversation_service.delete(conversation_id, session_id, normalize_worldline(worldline))
     except ConversationNotFound as exc:
         raise _not_found(exc) from exc
     except DefaultConversationError as exc:
@@ -205,11 +235,10 @@ async def forget_conversation(
     worldline: str = "steins_gate",
 ):
     try:
-        return await conversation_service.forget(
-            conversation_id,
-            session_id,
-            normalize_worldline(worldline),
-            forget_long_term=request.forget_long_term,
-        )
+        async with _erasure_runtime(conversation_id, session_id, normalize_worldline(worldline)):
+            return await conversation_service.forget(
+                conversation_id, session_id, normalize_worldline(worldline),
+                forget_long_term=request.forget_long_term,
+            )
     except ConversationNotFound as exc:
         raise _not_found(exc) from exc

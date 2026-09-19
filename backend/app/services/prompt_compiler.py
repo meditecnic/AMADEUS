@@ -345,34 +345,48 @@ async def _select_v11_prompt_memories(
 
     Delegates to memory_v11.retrieval for scoring, dedupe, and whole-item
     token packing with separate budgets (core 1200 / episodic 1400+contract).
-    Experience retrieval failure is fail-soft: omit experiences, never fall
-    back to legacy episodic memory. Never merges legacy/shared rows.
+    Both selectors fail-soft independently (D52: a Memory retrieval failure
+    cannot fail the visible chat turn): an unavailable surface is simply
+    omitted for this turn, the other surface still loads, and there is never
+    a fallback to legacy retrieval or reuse of a previous prompt. The narrow
+    boundary covers retrieval AND result conversion; cancellation
+    (asyncio.CancelledError is not an Exception) still propagates.
     """
     from app.services.memory_v11.retrieval import (
         select_experience_candidates,
         select_stable_fact_candidates,
     )
 
-    rows = await select_stable_fact_candidates(
-        session_id=session_id,
-        worldline=worldline,
-        identity_mode=identity_mode,
-        query=user_message,
-        limit=limit,
-    )
-    facts = [
-        RetrievedMemory(
-            id=_stable_fact_prompt_id(str(row["fact_id"])),
-            kind="core",
-            content=str(row.get("display_text") or ""),
-            score=float(row.get("score") or 0.0),
-            confidence=float(row.get("confidence") or 1.0),
-            importance=1.0 if row.get("is_pinned") else 0.5,
-            pinned=bool(row.get("is_pinned")),
+    facts: list[RetrievedMemory] = []
+    try:
+        rows = await select_stable_fact_candidates(
+            session_id=session_id,
+            worldline=worldline,
+            identity_mode=identity_mode,
+            query=user_message,
+            limit=limit,
         )
-        for row in rows
-        if str(row.get("display_text") or "").strip()
-    ]
+        facts = [
+            RetrievedMemory(
+                id=_stable_fact_prompt_id(str(row["fact_id"])),
+                kind="core",
+                content=str(row.get("display_text") or ""),
+                score=float(row.get("score") or 0.0),
+                confidence=float(row.get("confidence") or 1.0),
+                importance=1.0 if row.get("is_pinned") else 0.5,
+                pinned=bool(row.get("is_pinned")),
+            )
+            for row in rows
+            if str(row.get("display_text") or "").strip()
+        ]
+    except Exception:
+        # D52 fail-open chat: omit Facts for this turn only. The caller
+        # recompiles this turn's prompt from scratch, so no stale memory can
+        # ride along; experiences below load independently.
+        logger.warning(
+            "v11 prompt: stable fact retrieval failed; omitting facts for this turn",
+            exc_info=True,
+        )
 
     episodes: list[RetrievedMemory] = []
     try:

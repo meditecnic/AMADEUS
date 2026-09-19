@@ -155,13 +155,15 @@ async def memory_status(
         wl, mode = _validate_memory_scope(worldline, identity_mode)
         from app.services.memory_v11.contracts import MemoryValidationError
         from app.services.memory_v11.repository import job_status_summary
+        from app.services.memory_v11.jobs import memory_mode
 
         try:
-            return await job_status_summary(
+            summary = await job_status_summary(
                 session_id=session_id,
                 worldline=wl,
                 identity_mode=mode,
             )
+            return {**summary, 'runtime_mode': memory_mode()}
         except MemoryValidationError as exc:
             raise HTTPException(
                 status_code=422,

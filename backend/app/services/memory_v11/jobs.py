@@ -906,7 +906,12 @@ async def process_memory_job(
                         "pipeline_version": job["pipeline_version"],
                     },
                 )
-            except Exception:
+            except Exception as exc:
+                if getattr(exc, 'code', None) == 'source_erased':
+                    return await _transition_owned(
+                        job_id=job_id, worldline=wl, lease_owner=lease_owner,
+                        state='cancelled', error_code=MemoryJobErrorCode.SOURCE_MISSING.value,
+                    )
                 return await _transition_owned(
                     job_id=job_id,
                     worldline=wl,
