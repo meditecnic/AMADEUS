@@ -45,13 +45,36 @@ desktop/public/assets/sliced/
 # Demo screenshots
 实机演示/
 
-# Agent working logs
-.agents/
+# Agent logs remain local; project instruction adapters can be versioned.
+.agents/*
+!.agents/rules/
+.agents/rules/*
+!.agents/rules/amadeus-governance.md
+!.agents/workflows/
+.agents/workflows/*
+!.agents/workflows/amadeus-review.md
+!.agents/workflows/amadeus-handoff.md
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/amadeus-review/
+!.agents/skills/amadeus-handoff/
+!.agents/skills/amadeus-verification/
+!.agents/skills/amadeus-persona-guardian/
+.agents/skills/amadeus-*/**
+!.agents/skills/amadeus-*/SKILL.md
+!.agents/skills/amadeus-*/agents/
+.agents/skills/amadeus-*/agents/*
+!.agents/skills/amadeus-*/agents/openai.yaml
 
 # Local recovery and generated review material
 .trash/
 .tmp/
 生成素材图/
+
+# Local browser and bundler output
+.playwright-cli/
+output/playwright/
+.vite/
 
 # Test-generated speech artifacts
 backend/tests/tts_output/
