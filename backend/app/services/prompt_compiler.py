@@ -106,6 +106,8 @@ class PromptInputs:
     self_name: str = ""
     # IDENTITY-ACK-01: this conversation already got one full identity briefing.
     identity_acknowledged: bool = False
+    # v11 tool mode: first-round prompt must not inject CORE FACTS or (none).
+    omit_stable_facts: bool = False
 
 
 class PromptCompiler:
@@ -163,7 +165,13 @@ class PromptCompiler:
                 self._fit(state_section, self.BUDGETS["state"]),
                 # Whole-item memory sections: never char-slice core facts or
                 # experiences; drop lowest-ranked tail items instead.
-                self._render_whole_items(core_items, self._format_core_facts, self.BUDGETS["core"]),
+                (
+                    ""
+                    if inputs.omit_stable_facts
+                    else self._render_whole_items(
+                        core_items, self._format_core_facts, self.BUDGETS["core"]
+                    )
+                ),
                 self._render_whole_items(episodic_items, self._format_episodic_memory, self.BUDGETS["episodic"]),
                 self._fit("WEB EVIDENCE\n" + "\n".join(inputs.web_evidence), self.BUDGETS["web"]),
                 # D38 consumer contract: working context is temporary continuity
@@ -206,7 +214,7 @@ class PromptCompiler:
                     episodic_items, self._format_episodic_memory, self.BUDGETS["episodic"]
                 )
                 continue
-            if core_items:
+            if core_items and not inputs.omit_stable_facts:
                 core_items = core_items[:-1]
                 sections[3] = self._render_whole_items(
                     core_items, self._format_core_facts, self.BUDGETS["core"]
@@ -341,52 +349,17 @@ async def _select_v11_prompt_memories(
     user_message: str,
     limit: int = 24,
 ) -> tuple[list[RetrievedMemory], list[RetrievedMemory]]:
-    """Read-only v11 prompt surface: same-scope stable facts + experiences (S3C-2).
+    """v11 first-round prompt: Experience only. Stable facts use recall_memory.
 
-    Delegates to memory_v11.retrieval for scoring, dedupe, and whole-item
-    token packing with separate budgets (core 1200 / episodic 1400+contract).
-    Both selectors fail-soft independently (D52: a Memory retrieval failure
-    cannot fail the visible chat turn): an unavailable surface is simply
-    omitted for this turn, the other surface still loads, and there is never
-    a fallback to legacy retrieval or reuse of a previous prompt. The narrow
-    boundary covers retrieval AND result conversion; cancellation
-    (asyncio.CancelledError is not an Exception) still propagates.
+    Experiences still fail-soft independently (D52). Stable facts are not
+    queried here so CORE FACTS / CORE FACTS (none) cannot leak into the
+    first provider call. Cancellation still propagates from experience
+    retrieval.
     """
-    from app.services.memory_v11.retrieval import (
-        select_experience_candidates,
-        select_stable_fact_candidates,
-    )
+    del limit
+    from app.services.memory_v11.retrieval import select_experience_candidates
 
     facts: list[RetrievedMemory] = []
-    try:
-        rows = await select_stable_fact_candidates(
-            session_id=session_id,
-            worldline=worldline,
-            identity_mode=identity_mode,
-            query=user_message,
-            limit=limit,
-        )
-        facts = [
-            RetrievedMemory(
-                id=_stable_fact_prompt_id(str(row["fact_id"])),
-                kind="core",
-                content=str(row.get("display_text") or ""),
-                score=float(row.get("score") or 0.0),
-                confidence=float(row.get("confidence") or 1.0),
-                importance=1.0 if row.get("is_pinned") else 0.5,
-                pinned=bool(row.get("is_pinned")),
-            )
-            for row in rows
-            if str(row.get("display_text") or "").strip()
-        ]
-    except Exception:
-        # D52 fail-open chat: omit Facts for this turn only. The caller
-        # recompiles this turn's prompt from scratch, so no stale memory can
-        # ride along; experiences below load independently.
-        logger.warning(
-            "v11 prompt: stable fact retrieval failed; omitting facts for this turn",
-            exc_info=True,
-        )
 
     episodes: list[RetrievedMemory] = []
     try:
@@ -438,6 +411,7 @@ async def compile_for_session(session, user_message: str) -> str:
     )
     # S3a prompt gate: only AMADEUS_MEMORY_MODE=v11 reads v11 stable facts.
     # legacy + shadow keep Quiet Ingest retrieval so shadow writes never leak.
+    omit_stable_facts = False
     if memory_mode() == "v11":
         facts, episodes = await _select_v11_prompt_memories(
             session_id=session.session_id,
@@ -445,6 +419,7 @@ async def compile_for_session(session, user_message: str) -> str:
             identity_mode=mode,
             user_message=user_message,
         )
+        omit_stable_facts = True
     else:
         facts = await memory_service.select_core_facts(
             session.session_id,
@@ -471,4 +446,5 @@ async def compile_for_session(session, user_message: str) -> str:
         identity_mode=mode,
         self_name=_session_self_name(session),
         identity_acknowledged=bool(getattr(session, "identity_acknowledged", False)),
+        omit_stable_facts=omit_stable_facts,
     ))

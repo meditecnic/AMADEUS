@@ -537,6 +537,8 @@ async def get_clean_text_stream(
     default_emotion: str = "neutral",
     on_text_delta=None,
     provider_snapshot: ProviderSnapshot | None = None,
+    mode_state=None,
+    before_send=None,
 ):
     """
     Get text or tool calls stream with leak retries.
@@ -556,6 +558,13 @@ async def get_clean_text_stream(
     # body after a short Japanese opener can still retry without a locked prefix.
     buffer_ui_until_attempt_ok = _history_has_external_evidence(prompt_history)
     for attempt in range(MAX_ATTEMPTS):
+        if before_send is not None:
+            replacement = before_send(attempt)
+            if asyncio.iscoroutine(replacement):
+                replacement = await replacement
+            if replacement is not None:
+                prompt_history = _language_safe_prompt_history(replacement)
+                buffer_ui_until_attempt_ok = _history_has_external_evidence(prompt_history)
         emo_buffer = ""
         in_emo_tag = False
         emo_tag_found = False
@@ -569,6 +578,12 @@ async def get_clean_text_stream(
         publication_rejected = False
         publication_rejection_reason: str | None = None
         merged_tool_calls = {}
+        event_seq = 0
+        from app.services.turn_events import ToolCallAssembler
+
+        assembler = ToolCallAssembler()
+        if mode_state is not None:
+            mode_state.assembler = assembler
 
         async def _accept_publishable_segment(text: str, emotion: str) -> None:
             """Record a validated segment; flush to UI unless buffering this attempt."""
@@ -689,6 +704,10 @@ async def get_clean_text_stream(
             ):
                 eff_system_prompt = eff_system_prompt + _NON_JAPANESE_INPUT_FIRST_PASS_JA
             
+        # Memory read gate: only when this request actually offers recall_memory,
+        # and exactly one copy per send (including leak-retry attempts).
+        eff_system_prompt = _with_memory_recall_read_gate(eff_system_prompt, tools)
+
         from datetime import datetime
         time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         time_supplement = f"\n【現在時刻：{time_str}】"
@@ -729,31 +748,24 @@ async def get_clean_text_stream(
                 async for chunk in stream:
                     content = chunk.get("content")
                     tool_calls = chunk.get("tool_calls")
+                    event_seq += 1
+                    suppress_text = False
+                    if mode_state is not None:
+                        from app.services.turn_events import observe_chunk
 
-                    if tool_calls:
-                        for tc in tool_calls:
-                            idx = tc.get("index", 0)
-                            if idx not in merged_tool_calls:
-                                merged_tool_calls[idx] = {
-                                    "id": tc.get("id"),
-                                    "type": tc.get("type"),
-                                    "function": {
-                                        "name": tc.get("function", {}).get("name"),
-                                        "arguments": tc.get("function", {}).get("arguments", "")
-                                    }
-                                }
-                            else:
-                                target = merged_tool_calls[idx]
-                                if tc.get("id"):
-                                    target["id"] = tc.get("id")
-                                if tc.get("type"):
-                                    target["type"] = tc.get("type")
-                                if tc.get("function", {}).get("name"):
-                                    target["function"]["name"] = tc.get("function", {}).get("name")
-                                if tc.get("function", {}).get("arguments"):
-                                    target["function"]["arguments"] += tc.get("function", {}).get("arguments")
-                                    
-                    if content:
+                        observe_chunk(mode_state, chunk, event_seq)
+                        if mode_state.mode == "answer_mode" and tool_calls:
+                            tool_calls = None
+                        elif tool_calls:
+                            assembler.ingest(list(tool_calls), seq=event_seq)
+                            merged_tool_calls = assembler.calls
+                        if mode_state.mode != "answer_mode":
+                            suppress_text = True
+                    elif tool_calls:
+                        assembler.ingest(list(tool_calls), seq=event_seq)
+                        merged_tool_calls = assembler.calls
+
+                    if content and not suppress_text:
                         delta_text = ""
                         for char in content:
                             if in_emo_tag:
@@ -940,6 +952,24 @@ _ANSWER_LANGUAGE_HARD_REQUIREMENT = (
     "【表示本文】必ず自然な日本語のみ。中国語・英語・ドイツ語などの本文は禁止。"
     "証拠不足・未確定・矛盾なら日本語で不明と述べ、捏造しないこと。"
 )
+
+def _with_memory_recall_read_gate(system_prompt: str | None, tools) -> str:
+    """Append the Memory read-gate rule once when this request offers recall_memory.
+
+    Pure in its inputs: the rule is derived per send from the caller's own prompt
+    and tool list. It is never written back to ``session.system_prompt``, message
+    history, or the durable conversation, so retries cannot accumulate copies.
+    """
+
+    from app.agent_tools import MEMORY_RECALL_DECISION_RULE, tools_include_recall_memory
+
+    base = system_prompt or ""
+    if not tools_include_recall_memory(tools):
+        return base
+    if MEMORY_RECALL_DECISION_RULE in base:
+        return base
+    return base + "\n" + MEMORY_RECALL_DECISION_RULE
+
 
 def _assistant_history_is_publishable(content: str) -> bool:
     """Validate assistant history without changing the durable/API record."""
@@ -1507,14 +1537,80 @@ async def processor_loop(
         )
         session.set_last_message_id("user", int(user_message_id))
         
-        from app.agent_tools import AMADEUS_TOOLS
+        from app.agent_tools import AMADEUS_TOOLS, RECALL_MEMORY_TOOL_NAME
+        from app.services.memory_v11.jobs import memory_mode as _memory_mode
+        from app.services.turn_events import TurnModeState
+        from app.services.turn_tool_orchestrator import (
+            TurnExecutionRecord,
+            apply_unsupported_combo,
+            apply_v11_tool_batch,
+            build_v11_web_evidence_context,
+            plan_first_round_tools,
+            prepare_second_round_payload,
+            refresh_candidates_for_send,
+            snapshot_from_session,
+            tool_status_payload,
+            unsupported_failsoft_history,
+        )
+
+        v11_tools = _memory_mode() == "v11"
+        turn_record = TurnExecutionRecord(snapshot=snapshot_from_session(session, turn_provider))
+        session.turn_execution = turn_record
         tools_to_use = AMADEUS_TOOLS
         tool_choice_to_use = "auto"
         force_direct_search = (
             should_force_search(user_msg)
             and turn_provider.provider_id == "deepseek"
+            and not v11_tools
         )
-        if force_direct_search:
+        if v11_tools:
+            force_now = should_force_search(user_msg)
+            adapter_kind = type(getattr(turn_provider, "adapter", None) or object).__name__
+            tool_plan = plan_first_round_tools(
+                v11=True,
+                force_search=force_now,
+                provider_id=str(getattr(turn_provider, "provider_id", "") or ""),
+                adapter_kind=adapter_kind,
+            )
+            turn_record.tool_plan_status = tool_plan.status
+            turn_record.tool_plan_reason = tool_plan.reason
+            if tool_plan.status == "unsupported":
+                tools_to_use = None
+                tool_choice_to_use = None
+                notice = apply_unsupported_combo(
+                    turn_record, reason=tool_plan.reason or "undeclared_combo"
+                )
+                active_history = unsupported_failsoft_history(active_history, notice)
+                await send_queue.put((epoch, {
+                    "type": "status",
+                    "dsk": "thinking",
+                    "state": "thinking",
+                    "tts": "idle",
+                    "notice": "Amadeus memory tools unsupported for this provider.",
+                    "reason": notice.diagnostics.get("reason") or "undeclared_combo",
+                }))
+            else:
+                tools_to_use = tool_plan.tools
+                tool_choice_to_use = "auto"
+            if force_now and tool_plan.status != "unsupported":
+                web_status = tool_status_payload("web_search")
+                await send_queue.put((epoch, {
+                    "type": "status",
+                    "dsk": "thinking",
+                    "state": "thinking",
+                    "tts": "idle",
+                    **web_status,
+                }))
+                search_result = await execute_tool_call(
+                    "web_search",
+                    json.dumps({"query": user_msg}, ensure_ascii=False),
+                )
+                turn_record.web_results.append(("web_search", search_result))
+                active_history = build_v11_web_evidence_context(
+                    active_history,
+                    [("web_search", search_result)],
+                )
+        elif force_direct_search:
             await send_queue.put((epoch, {
                 "type": "status",
                 "dsk": "thinking",
@@ -1545,28 +1641,90 @@ async def processor_loop(
             default_emotion=session.last_assistant_emotion,
             on_text_delta=submit_text_delta if session.protocol_version >= 2 else None,
             provider_snapshot=turn_provider,
+            mode_state=turn_record.mode_state if v11_tools else None,
         )
         print(f"[DEBUG] processor_loop: final_emotion='{final_emotion}' has_tool_call={bool(merged_tool_calls)} emo_tag_found={emo_tag_found}", flush=True)
         
         if merged_tool_calls:
-            await send_queue.put((epoch, {
-                "type": "status",
-                "dsk": "thinking",
-                "state": "thinking",
-                "tts": "idle",
-                "notice": "Amadeus web_search tool invoking...",
-                "tool": "web_search"
-            }))
-            
-            tool_results = []
+            call_names = []
             for tc in merged_tool_calls.values():
-                name = tc.get("function", {}).get("name")
-                args = tc.get("function", {}).get("arguments")
-                result = await execute_tool_call(name, args)
-                tool_results.append((name or "unknown_tool", result))
+                call_names.append(str((tc.get("function") or {}).get("name") or "unknown_tool"))
+            shown = []
+            for name in call_names:
+                if name in shown:
+                    continue
+                shown.append(name)
+                status = tool_status_payload(name)
+                await send_queue.put((epoch, {
+                    "type": "status",
+                    "dsk": "thinking",
+                    "state": "thinking",
+                    "tts": "idle",
+                    **status,
+                }))
 
-            tool_context = build_tool_result_context(active_history, tool_results)
+            recall_result = None
+            extra_web = None
+            if v11_tools:
+                calls = list(merged_tool_calls.values())
+                turn_record.raw_calls = calls
+                if turn_record.mode_state.late_tool_calls:
+                    turn_record.late_tool_call = True
+                outcome = await apply_v11_tool_batch(
+                    record=turn_record,
+                    session=session,
+                    provider=turn_provider,
+                    calls=calls,
+                    web_executor=execute_tool_call,
+                    cancelled=bool(getattr(session, "erasure_pending", False)),
+                )
+                recall_result = outcome.recall_result
+                extra_web = (
+                    turn_record.web_results[1:]
+                    if should_force_search(user_msg)
+                    else turn_record.web_results
+                )
+                if recall_result is not None:
+                    payload = prepare_second_round_payload(
+                        active_history,
+                        recall_result,
+                        extra_web or None,
+                        system_prompt=session.system_prompt,
+                    )
+                    if payload.result is not None:
+                        turn_record.recall_result = payload.result
+                        turn_record.ranked_items = list(payload.result.ranked_items or [])
+                    tool_context = payload.history
+                elif turn_record.web_results:
+                    tool_context = build_v11_web_evidence_context(
+                        active_history,
+                        list(turn_record.web_results),
+                    )
+                else:
+                    tool_context = build_tool_result_context(active_history, [])
+            else:
+                tool_results = []
+                for tc in merged_tool_calls.values():
+                    name = tc.get("function", {}).get("name")
+                    args = tc.get("function", {}).get("arguments")
+                    result = await execute_tool_call(name, args)
+                    tool_results.append((name or "unknown_tool", result))
+                tool_context = build_tool_result_context(active_history, tool_results)
             
+            async def _refresh_candidate_history(_attempt: int):
+                if not v11_tools or recall_result is None:
+                    return None
+                refreshed = await refresh_candidates_for_send(
+                    turn_record, session, turn_provider
+                )
+                extra = extra_web if v11_tools else None
+                return prepare_second_round_payload(
+                    active_history,
+                    refreshed,
+                    extra or None,
+                    system_prompt=session.system_prompt,
+                ).history
+
             final_text, final_emotion, _, emo_tag_found = await get_clean_text_stream(
                 active_history=tool_context,
                 memory_summary="",
@@ -1576,6 +1734,8 @@ async def processor_loop(
                 default_emotion=session.last_assistant_emotion,
                 on_text_delta=submit_text_delta if session.protocol_version >= 2 else None,
                 provider_snapshot=turn_provider,
+                mode_state=TurnModeState() if v11_tools else None,
+                before_send=_refresh_candidate_history if v11_tools and recall_result is not None else None,
             )
             
         # Persist detected emotion for next turn fallback, with decay to neutral
@@ -1680,11 +1840,18 @@ async def processor_loop(
         history_content = f"[EMO:{final_emotion}] {full_ja_text}" if full_ja_text.strip() else full_ja_text
 
         if full_ja_text.strip() and session.protocol_version < 2:
-            history_translation = await translate_with_provider(
-                turn_provider,
-                full_ja_text,
-                session.api_key,
-            )
+            try:
+                history_translation = await translate_with_provider(
+                    turn_provider,
+                    full_ja_text,
+                    session.api_key,
+                )
+            except Exception as exc:
+                print(
+                    f"[Translation] unavailable; chat continues ({type(exc).__name__})",
+                    flush=True,
+                )
+                history_translation = ""
         
         if session.history_epoch == start_history_epoch and session.conversation_id == conversation_id:
             if full_ja_text.strip():

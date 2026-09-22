@@ -267,9 +267,43 @@ async def test_gemini_stream_maps_persona_roles_and_native_parts():
     assert payload["generationConfig"]["thinkingConfig"] == {
         "thinkingLevel": "low"
     }
-    assert chunks == [
-        {"content": "[EMO:neutral] データを確認したわ。", "tool_calls": None}
+    assert chunks[0]["content"] == "[EMO:neutral] データを確認したわ。"
+    assert chunks[0]["tool_calls"] is None
+
+
+@pytest.mark.asyncio
+async def test_gemini_same_event_text_and_function_call_stay_one_chunk():
+    requests: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            text=(
+                'data: {"candidates":[{"content":{"parts":['
+                '{"text":"前言"},'
+                '{"functionCall":{"name":"recall_memory","args":{"needs":["pet"]}}}'
+                ']}}]}\n\n'
+            ),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    adapter = GeminiAdapter(
+        message_builder=deepseek_service.build_persona_messages,
+        transport=httpx.MockTransport(handler),
+    )
+    chunks = [
+        chunk
+        async for chunk in adapter.get_chat_stream(
+            active_history=[{"role": "user", "content": "宠物"}],
+            api_key="gemini-secret",
+            model="gemini-3.5-flash",
+        )
     ]
+    assert len(chunks) == 1
+    assert chunks[0]["content"] == "前言"
+    assert chunks[0]["tool_calls"][0]["function"]["name"] == "recall_memory"
+    assert chunks[0]["tool_calls"][0]["id"].startswith("gemini-")
 
 
 @pytest.mark.asyncio

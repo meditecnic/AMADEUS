@@ -215,11 +215,31 @@ async def test_r3_vector_candidate_participates_with_zero_lexical_overlap(
     assert seeded == 30, "vector evidence must be present for every same-scope fact"
 
     prompt = await _compile_v11(session_id, query_text, monkeypatch)
-    assert target_text in prompt, (
-        "vector candidate signal unused: target fact (zero lexical overlap, "
-        "strongest same-scope vector candidate in "
-        "stable_fact_version_embeddings) was dropped from the v11 prompt"
+    assert target_text not in prompt
+    assert "\nCORE FACTS\n" not in prompt
+    from app.services.memory_v11.recall import MemoryScope, RecallRequest, recall_stable_facts
+
+    recalled = await recall_stable_facts(
+        scope=MemoryScope(session_id=session_id, worldline="steins_gate", identity_mode="self"),
+        request=RecallRequest(needs=(query_text,)),
+        embedder=embedder,
     )
+    assert target_text in recalled.records.values(), (
+        "vector candidate signal unused: target fact (zero lexical overlap, "
+        "strongest same-scope vector candidate) was dropped from recall"
+    )
+    from app.services.memory_v11.reconciliation_select import (
+        select_reconciliation_candidates,
+    )
+
+    jobs_rows = await select_reconciliation_candidates(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        source_text=query_text,
+        embedder=embedder,
+    )
+    assert any(row.get("display_text") == target_text for row in jobs_rows)
 
 
 @pytest.mark.asyncio

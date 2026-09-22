@@ -98,16 +98,18 @@ async def test_s3a_v11_mode_injects_same_scope_active_facts_only(
         _session_obj(session_id, identity_mode="self"),
         "动漫",
     )
-    assert self_marker in self_prompt
+    assert self_marker not in self_prompt
     assert okabe_marker not in self_prompt
-    assert "FACT_USE_CONTRACT" in self_prompt
+    assert "\nCORE FACTS\n" not in self_prompt
+    assert "FACT_USE_CONTRACT" not in self_prompt
 
     okabe_prompt = await compile_for_session(
         _session_obj(session_id, identity_mode="okabe"),
         "水果",
     )
-    assert okabe_marker in okabe_prompt
+    assert okabe_marker not in okabe_prompt
     assert self_marker not in okabe_prompt
+    assert "\nCORE FACTS\n" not in okabe_prompt
 
 
 # ---------------------------------------------------------------------------
@@ -333,11 +335,11 @@ async def test_r5_v11_prompt_injects_both_sections(isolated_store, monkeypatch):
     )
     monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     prompt = await compile_for_session(_session_obj(session_id), "このすば")
-    assert fact_marker in prompt
+    assert fact_marker not in prompt
     assert exp_marker in prompt
-    assert "FACT_USE_CONTRACT" in prompt
+    assert "FACT_USE_CONTRACT" not in prompt
     assert "EXPERIENCE_USE_CONTRACT" in prompt
-    assert "CORE FACTS" in prompt
+    assert "\nCORE FACTS\n" not in prompt
     assert "EPISODIC MEMORY" in prompt
     assert "WORKING CONTEXT" in prompt
 
@@ -412,9 +414,10 @@ async def test_r5_experience_retrieval_failure_fail_soft(isolated_store, monkeyp
     monkeypatch.setattr(retrieval_module, "select_experience_candidates", boom)
     monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     prompt = await compile_for_session(_session_obj(session_id), "このすば")
-    assert fact_marker in prompt, "stable facts must still appear"
+    assert fact_marker not in prompt, "stable facts now use recall_memory, not first prompt"
     assert exp_marker not in prompt, "failed experience retrieval must omit experiences"
-    assert "FACT_USE_CONTRACT" in prompt
+    assert "FACT_USE_CONTRACT" not in prompt
+    assert "\nCORE FACTS\n" not in prompt
 
 @pytest.mark.asyncio
 async def test_r5_final_prompt_experience_whole_item_under_global_pressure(

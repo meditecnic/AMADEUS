@@ -1,0 +1,890 @@
+{
+  "version": "b5a-gate2-qset-v1",
+  "frozen_at": "2026-09-19T23:36:53.804302+08:00",
+  "status": "frozen before any Gate 2 provider request or Gate 2 behavior change",
+  "rules": [
+    "Expectations are evaluator-only and must never enter provider messages.",
+    "All regression and first-look executions are fixed before the first paid request.",
+    "If any first-look result drives a prompt, capacity or product-code change, the entire first-look cohort becomes regression and a new unseen cohort is required.",
+    "Core repeated cases require every repetition to pass; no best-of selection."
+  ],
+  "facts": [
+    {
+      "key": "cat_pet",
+      "scope": "ownerA/steins_gate/self",
+      "display_text": "我养了一只叫小白的猫。",
+      "aliases": [
+        "小白",
+        "猫",
+        "ねこ",
+        "猫を飼"
+      ]
+    },
+    {
+      "key": "coffee",
+      "scope": "ownerA/steins_gate/self",
+      "display_text": "我每天早上喝美式咖啡，不加糖。",
+      "aliases": [
+        "美式咖啡",
+        "美式",
+        "アメリカーノ",
+        "ブラックコーヒー",
+        "不加糖",
+        "砂糖なし"
+      ]
+    },
+    {
+      "key": "ocarina",
+      "scope": "ownerA/steins_gate/self",
+      "display_text": "我正在认真学习陶笛，练习曲是《故城》。",
+      "aliases": [
+        "陶笛",
+        "オカリナ",
+        "故城"
+      ]
+    },
+    {
+      "key": "harmonica",
+      "scope": "ownerA/steins_gate/self",
+      "display_text": "我只会偶尔吹口琴玩，并没有认真学习。",
+      "aliases": [
+        "口琴",
+        "ハーモニカ"
+      ]
+    },
+    {
+      "key": "cilantro",
+      "scope": "ownerA/steins_gate/self",
+      "display_text": "我不吃香菜。",
+      "aliases": [
+        "香菜",
+        "パクチー",
+        "コリアンダー"
+      ]
+    },
+    {
+      "key": "riverside",
+      "scope": "ownerA/steins_gate/self",
+      "display_text": "我周末常去河边散步。",
+      "aliases": [
+        "河边",
+        "川辺",
+        "河畔"
+      ]
+    },
+    {
+      "key": "anime_import",
+      "scope": "ownerA/steins_gate/self",
+      "display_text": "我喜欢看动漫。",
+      "aliases": [
+        "动漫",
+        "アニメ"
+      ]
+    },
+    {
+      "key": "friend_allergy",
+      "scope": "ownerA/steins_gate/self",
+      "display_text": "我的朋友阿航对花生过敏。",
+      "aliases": [
+        "阿航",
+        "花生",
+        "ピーナッツ"
+      ]
+    },
+    {
+      "key": "dog_pet",
+      "scope": "ownerB/steins_gate/self",
+      "display_text": "我养了一只叫小黑的狗。",
+      "aliases": [
+        "小黑",
+        "狗",
+        "犬"
+      ]
+    },
+    {
+      "key": "beta_cat",
+      "scope": "ownerBeta/beta/okabe",
+      "display_text": "我养了一只叫贝塔的猫。",
+      "aliases": [
+        "贝塔",
+        "ベータ"
+      ]
+    },
+    {
+      "key": "okabe_lab",
+      "scope": "ownerA/steins_gate/okabe",
+      "display_text": "实验室的电脑还开着。",
+      "aliases": [
+        "实验室",
+        "电脑",
+        "ラボ",
+        "パソコン"
+      ]
+    }
+  ],
+  "scope_sentinels": [
+    {
+      "key": "deleted_latte",
+      "scope": "ownerA/steins_gate/self",
+      "state": "deleted",
+      "display_text": "我每天早上喝拿铁。"
+    },
+    {
+      "key": "superseded_tea",
+      "scope": "ownerA/steins_gate/self",
+      "state": "superseded",
+      "display_text": "我每天早上喝红茶。"
+    },
+    {
+      "key": "other_owner_secret",
+      "scope": "ownerZ/steins_gate/self",
+      "state": "active",
+      "display_text": "我最喜欢爵士乐。"
+    },
+    {
+      "key": "other_worldline_pet",
+      "scope": "ownerA/beta/self",
+      "state": "active",
+      "display_text": "我养了一只叫影子的狗。"
+    }
+  ],
+  "dataset_variants": {
+    "substituted_pet": {
+      "replace": [
+        "cat_pet"
+      ],
+      "add": [
+        {
+          "key": "variant_pet",
+          "display_text": "我养了一只叫墨墨的兔子。",
+          "aliases": [
+            "墨墨",
+            "兔子",
+            "うさぎ"
+          ]
+        }
+      ]
+    },
+    "drink_absent": {
+      "remove": [
+        "coffee",
+        "deleted_latte",
+        "superseded_tea"
+      ]
+    },
+    "coffee_new_version": {
+      "supersede": [
+        "coffee"
+      ],
+      "add": [
+        {
+          "key": "coffee_new",
+          "display_text": "我现在每天早上喝茉莉绿茶，不加蜂蜜。",
+          "aliases": [
+            "茉莉绿茶",
+            "ジャスミン茶",
+            "不加蜂蜜"
+          ]
+        }
+      ]
+    },
+    "experience_conflict": {
+      "experience": [
+        {
+          "key": "experience_latte",
+          "text": "上个月有一阵子早上喝拿铁。",
+          "aliases": [
+            "拿铁",
+            "ラテ"
+          ]
+        }
+      ]
+    }
+  },
+  "cases": [
+    {
+      "id": "r_pet_synonym",
+      "cohort": "regression",
+      "query": "家里的毛孩子是哪一位？",
+      "repeats": 3,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "required",
+        "exact_need_count": 1,
+        "max_need_count": 3,
+        "must_use_fact_keys": [
+          "cat_pet"
+        ],
+        "must_not_use_fact_keys": [
+          "dog_pet",
+          "coffee",
+          "anime_import"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      }
+    },
+    {
+      "id": "r_pet_generic",
+      "cohort": "regression",
+      "query": "家里现在养了什么？",
+      "repeats": 1,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "required",
+        "exact_need_count": 1,
+        "max_need_count": 3,
+        "must_use_fact_keys": [
+          "cat_pet"
+        ],
+        "must_not_use_fact_keys": [
+          "dog_pet",
+          "coffee",
+          "anime_import"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      }
+    },
+    {
+      "id": "r_coffee",
+      "cohort": "regression",
+      "query": "我早上一般喝什么？",
+      "repeats": 1,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "required",
+        "exact_need_count": 1,
+        "max_need_count": 3,
+        "must_use_fact_keys": [
+          "coffee"
+        ],
+        "must_not_use_fact_keys": [
+          "cilantro",
+          "harmonica",
+          "anime_import"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      }
+    },
+    {
+      "id": "r_cilantro",
+      "cohort": "regression",
+      "query": "我有什么吃的忌口？",
+      "repeats": 1,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "required",
+        "exact_need_count": 1,
+        "max_need_count": 3,
+        "must_use_fact_keys": [
+          "cilantro"
+        ],
+        "must_not_use_fact_keys": [
+          "coffee",
+          "harmonica",
+          "anime_import"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      }
+    },
+    {
+      "id": "r_dual_drink_food",
+      "cohort": "regression",
+      "query": "早上喝什么、有什么吃的忌口？",
+      "repeats": 3,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "required",
+        "exact_need_count": 2,
+        "max_need_count": 3,
+        "must_use_fact_keys": [
+          "coffee",
+          "cilantro"
+        ],
+        "must_not_use_fact_keys": [
+          "harmonica",
+          "anime_import"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      }
+    },
+    {
+      "id": "r_piece_instrument",
+      "cohort": "regression",
+      "query": "我练习《故城》时用的是什么乐器？",
+      "repeats": 1,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "required",
+        "exact_need_count": 1,
+        "max_need_count": 3,
+        "must_use_fact_keys": [
+          "ocarina"
+        ],
+        "must_not_use_fact_keys": [
+          "harmonica"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      }
+    },
+    {
+      "id": "r_learning_instrument",
+      "cohort": "regression",
+      "query": "我在认真学什么乐器？",
+      "repeats": 1,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "required",
+        "exact_need_count": 1,
+        "max_need_count": 3,
+        "must_use_fact_keys": [
+          "ocarina"
+        ],
+        "must_not_use_fact_keys": [
+          "harmonica"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      }
+    },
+    {
+      "id": "r_password",
+      "cohort": "regression",
+      "query": "How do I reset a forgotten password?",
+      "repeats": 3,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "forbidden",
+        "exact_need_count": null,
+        "max_need_count": 3,
+        "must_use_fact_keys": [],
+        "must_not_use_fact_keys": [
+          "cat_pet",
+          "coffee",
+          "anime_import"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      }
+    },
+    {
+      "id": "r_chord",
+      "cohort": "regression",
+      "query": "请解释一下 C 大调和弦。",
+      "repeats": 1,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "forbidden",
+        "exact_need_count": null,
+        "max_need_count": 3,
+        "must_use_fact_keys": [],
+        "must_not_use_fact_keys": [
+          "ocarina",
+          "harmonica"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      }
+    },
+    {
+      "id": "r_quoted_translation",
+      "cohort": "regression",
+      "query": "把“我早上喝咖啡”翻译成英文。",
+      "repeats": 1,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "forbidden",
+        "exact_need_count": null,
+        "max_need_count": 3,
+        "must_use_fact_keys": [],
+        "must_not_use_fact_keys": [
+          "coffee"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      }
+    },
+    {
+      "id": "r_physics",
+      "cohort": "regression",
+      "query": "量子纠缠为什么不允许超光速通信？",
+      "repeats": 1,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "forbidden",
+        "exact_need_count": null,
+        "max_need_count": 3,
+        "must_use_fact_keys": [],
+        "must_not_use_fact_keys": [
+          "cat_pet",
+          "coffee",
+          "anime_import"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      }
+    },
+    {
+      "id": "r_owner_b_scope",
+      "cohort": "regression",
+      "query": "家里的毛孩子是哪一位？",
+      "repeats": 3,
+      "scope": "ownerB/steins_gate/self",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "required",
+        "exact_need_count": 1,
+        "max_need_count": 3,
+        "must_use_fact_keys": [
+          "dog_pet"
+        ],
+        "must_not_use_fact_keys": [
+          "cat_pet",
+          "beta_cat",
+          "coffee"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      }
+    },
+    {
+      "id": "r_beta_scope",
+      "cohort": "regression",
+      "query": "我养的猫叫什么？",
+      "repeats": 1,
+      "scope": "ownerBeta/beta/okabe",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "required",
+        "exact_need_count": 1,
+        "max_need_count": 3,
+        "must_use_fact_keys": [
+          "beta_cat"
+        ],
+        "must_not_use_fact_keys": [
+          "cat_pet",
+          "dog_pet"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      }
+    },
+    {
+      "id": "r_wrong_premise",
+      "cohort": "regression",
+      "query": "我是不是养了一只狗？",
+      "repeats": 1,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "required",
+        "exact_need_count": 1,
+        "max_need_count": 3,
+        "must_use_fact_keys": [
+          "cat_pet"
+        ],
+        "must_not_use_fact_keys": [
+          "dog_pet"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      },
+      "notes": "Correct the false premise from the scoped fact."
+    },
+    {
+      "id": "r_okabe_no_pet",
+      "cohort": "regression",
+      "query": "我养的宠物是什么？",
+      "repeats": 1,
+      "scope": "ownerA/steins_gate/okabe",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "allowed",
+        "exact_need_count": 1,
+        "max_need_count": 3,
+        "must_use_fact_keys": [],
+        "must_not_use_fact_keys": [
+          "cat_pet",
+          "dog_pet",
+          "beta_cat"
+        ],
+        "must_express_unknown_for": [
+          "pet"
+        ],
+        "diagnostic_only": false
+      }
+    },
+    {
+      "id": "r_movie",
+      "cohort": "regression",
+      "query": "今晚有什么新电影值得看？",
+      "repeats": 1,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "forbidden",
+        "exact_need_count": null,
+        "max_need_count": 3,
+        "must_use_fact_keys": [],
+        "must_not_use_fact_keys": [
+          "anime_import",
+          "cat_pet",
+          "coffee"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      }
+    },
+    {
+      "id": "f_indirect_breakfast",
+      "cohort": "first_look",
+      "query": "给我安排早餐时，饮料照我的习惯，也别放我不吃的配菜。",
+      "repeats": 3,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "required",
+        "exact_need_count": 2,
+        "max_need_count": 3,
+        "must_use_fact_keys": [
+          "coffee",
+          "cilantro"
+        ],
+        "must_not_use_fact_keys": [
+          "harmonica",
+          "anime_import"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      }
+    },
+    {
+      "id": "f_pet_category",
+      "cohort": "first_look",
+      "query": "如果给我家的小家伙买用品，应该按猫还是狗来选？",
+      "repeats": 3,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "required",
+        "exact_need_count": 1,
+        "max_need_count": 3,
+        "must_use_fact_keys": [
+          "cat_pet"
+        ],
+        "must_not_use_fact_keys": [
+          "dog_pet"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      }
+    },
+    {
+      "id": "f_known_plus_unknown",
+      "cohort": "first_look",
+      "query": "我早晨的饮料习惯和晚餐主食偏好分别是什么？",
+      "repeats": 1,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "required",
+        "exact_need_count": 2,
+        "max_need_count": 3,
+        "must_use_fact_keys": [
+          "coffee"
+        ],
+        "must_not_use_fact_keys": [
+          "cilantro",
+          "harmonica",
+          "anime_import"
+        ],
+        "must_express_unknown_for": [
+          "dinner_staple"
+        ],
+        "diagnostic_only": false
+      }
+    },
+    {
+      "id": "f_recent_history",
+      "cohort": "first_look",
+      "query": "那我今天喝的是什么？",
+      "repeats": 1,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "base",
+      "history": [
+        {
+          "role": "user",
+          "content": "我今天临时改喝茉莉绿茶。"
+        },
+        {
+          "role": "assistant",
+          "content": "知道了，今天是茉莉绿茶。"
+        }
+      ],
+      "expected": {
+        "recall_memory": "forbidden",
+        "exact_need_count": null,
+        "max_need_count": 3,
+        "must_use_fact_keys": [],
+        "must_not_use_fact_keys": [
+          "coffee"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      },
+      "notes": "Answer from reliable near-turn history; stable Memory should not be read."
+    },
+    {
+      "id": "f_three_needs",
+      "cohort": "first_look",
+      "query": "我养什么、早上喝什么、正在认真学什么？",
+      "repeats": 1,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "required",
+        "exact_need_count": 3,
+        "max_need_count": 3,
+        "must_use_fact_keys": [
+          "cat_pet",
+          "coffee",
+          "ocarina"
+        ],
+        "must_not_use_fact_keys": [
+          "dog_pet",
+          "harmonica",
+          "anime_import"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      }
+    },
+    {
+      "id": "f_four_needs_bound",
+      "cohort": "first_look",
+      "query": "我养什么、早上喝什么、认真学什么、又不吃什么？",
+      "repeats": 1,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "allowed",
+        "exact_need_count": null,
+        "max_need_count": 3,
+        "must_use_fact_keys": [],
+        "must_not_use_fact_keys": [],
+        "must_express_unknown_for": [],
+        "diagnostic_only": true
+      },
+      "notes": "Boundedness case: never emit more than three normalized needs or eight unique records; do not claim complete coverage."
+    },
+    {
+      "id": "f_multi_answer_instruments",
+      "cohort": "first_look",
+      "query": "我会哪些乐器，分别是什么程度？",
+      "repeats": 1,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "required",
+        "exact_need_count": 1,
+        "max_need_count": 3,
+        "must_use_fact_keys": [
+          "ocarina",
+          "harmonica"
+        ],
+        "must_not_use_fact_keys": [
+          "cat_pet",
+          "coffee",
+          "anime_import"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      }
+    },
+    {
+      "id": "f_substituted_pet",
+      "cohort": "first_look",
+      "query": "家里的毛孩子是哪一位？",
+      "repeats": 1,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "substituted_pet",
+      "history": [],
+      "expected": {
+        "recall_memory": "required",
+        "exact_need_count": 1,
+        "max_need_count": 3,
+        "must_use_fact_keys": [
+          "variant_pet"
+        ],
+        "must_not_use_fact_keys": [
+          "cat_pet",
+          "dog_pet"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      },
+      "notes": "Variant replaces the pet with a rabbit named 墨墨."
+    },
+    {
+      "id": "f_absent_drink",
+      "cohort": "first_look",
+      "query": "我早上一般喝什么？",
+      "repeats": 1,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "drink_absent",
+      "history": [],
+      "expected": {
+        "recall_memory": "allowed",
+        "exact_need_count": 1,
+        "max_need_count": 3,
+        "must_use_fact_keys": [],
+        "must_not_use_fact_keys": [
+          "coffee"
+        ],
+        "must_express_unknown_for": [
+          "morning_drink"
+        ],
+        "diagnostic_only": false
+      }
+    },
+    {
+      "id": "f_active_version",
+      "cohort": "first_look",
+      "query": "我现在早上喝什么？",
+      "repeats": 1,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "coffee_new_version",
+      "history": [],
+      "expected": {
+        "recall_memory": "required",
+        "exact_need_count": 1,
+        "max_need_count": 3,
+        "must_use_fact_keys": [
+          "coffee_new"
+        ],
+        "must_not_use_fact_keys": [
+          "coffee",
+          "deleted_latte",
+          "superseded_tea"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      }
+    },
+    {
+      "id": "f_experience_conflict",
+      "cohort": "first_look",
+      "query": "按我现在的习惯，早上喝什么？",
+      "repeats": 1,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "experience_conflict",
+      "history": [],
+      "expected": {
+        "recall_memory": "required",
+        "exact_need_count": 1,
+        "max_need_count": 3,
+        "must_use_fact_keys": [
+          "coffee"
+        ],
+        "must_not_use_fact_keys": [
+          "experience_latte"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      },
+      "notes": "Experience says last month latte; active stable fact says current americano without sugar."
+    },
+    {
+      "id": "f_force_web_memory",
+      "cohort": "first_look",
+      "query": "查一下今天上海天气，再告诉我早上常喝什么。",
+      "repeats": 1,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "required",
+        "exact_need_count": 1,
+        "max_need_count": 3,
+        "must_use_fact_keys": [
+          "coffee"
+        ],
+        "must_not_use_fact_keys": [
+          "cilantro",
+          "anime_import"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      },
+      "web_stub": {
+        "query": "今天上海天气",
+        "result": "合成天气证据：上海晴，18°C。",
+        "real_web": false
+      }
+    },
+    {
+      "id": "f_quote_no_memory",
+      "cohort": "first_look",
+      "query": "把“我不吃香菜”翻译成日语。",
+      "repeats": 1,
+      "scope": "ownerA/steins_gate/self",
+      "dataset": "base",
+      "history": [],
+      "expected": {
+        "recall_memory": "forbidden",
+        "exact_need_count": null,
+        "max_need_count": 3,
+        "must_use_fact_keys": [],
+        "must_not_use_fact_keys": [
+          "cilantro"
+        ],
+        "must_express_unknown_for": [],
+        "diagnostic_only": false
+      }
+    }
+  ],
+  "totals": {
+    "unique_cases": 29,
+    "case_executions": 41,
+    "regression_executions": 24,
+    "first_look_executions": 17
+  }
+}

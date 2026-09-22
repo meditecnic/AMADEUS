@@ -251,7 +251,11 @@ async def select_stable_fact_candidates(
     token_budget: int = CORE_TOKEN_BUDGET,
     embedder: QueryEmbedder | None = None,
 ) -> list[dict[str, Any]]:
-    """Select whole active stable facts for prompt injection (same-scope only).
+    """High-recall same-scope rows for background reconciliation.
+
+    Chat PromptCompiler and recall_memory must not call this. Background jobs
+    keep allowlist / version / idempotent semantics via
+    ``select_reconciliation_candidates``.
 
     Signals: pin priority, lexical relevance, optional vector cosine when a
     valid active-version embedding exists, confidence as tie-break.

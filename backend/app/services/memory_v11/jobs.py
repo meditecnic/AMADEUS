@@ -770,16 +770,18 @@ async def process_memory_job(
         # D18: bounded unresolved-observation context is selected locally too;
         # it rides the SAME single completion (no second model call).
         try:
+            from app.services.memory_v11.reconciliation_select import (
+                select_reconciliation_candidates,
+            )
             from app.services.memory_v11.retrieval import (
-                select_stable_fact_candidates,
                 select_unresolved_observations,
             )
 
-            selected_rows = await select_stable_fact_candidates(
+            selected_rows = await select_reconciliation_candidates(
                 session_id=job["session_id"],
                 worldline=wl,
                 identity_mode=job["identity_mode"],
-                query=redacted,
+                source_text=redacted,
             )
             candidates = _candidate_payload_for_completion(list(selected_rows or []))
             candidate_allowlist = [str(item["fact_id"]) for item in candidates]

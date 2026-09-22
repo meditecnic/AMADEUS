@@ -400,6 +400,8 @@ class OpenAIResponsesAdapter(LLMInterface):
                                     {
                                         "index": event.get("output_index", 0),
                                         "id": item.get("call_id") or item.get("id"),
+                                        "call_id": item.get("call_id"),
+                                        "item_id": item.get("id"),
                                         "type": "function",
                                         "function": {
                                             "name": item.get("name"),
@@ -414,7 +416,9 @@ class OpenAIResponsesAdapter(LLMInterface):
                             "tool_calls": [
                                 {
                                     "index": event.get("output_index", 0),
-                                    "id": event.get("item_id"),
+                                    "id": event.get("call_id") or event.get("item_id"),
+                                    "call_id": event.get("call_id"),
+                                    "item_id": event.get("item_id"),
                                     "type": "function",
                                     "function": {
                                         "name": None,
@@ -622,6 +626,7 @@ class GeminiAdapter(LLMInterface):
                 if response.status_code != 200:
                     await response.aread()
                     raise ProviderRequestError(self.provider_id, response.status_code)
+                event_seq = 0
                 async for line in response.aiter_lines():
                     if not line.startswith("data:"):
                         continue
@@ -632,30 +637,12 @@ class GeminiAdapter(LLMInterface):
                     candidates = event.get("candidates", [])
                     if not candidates:
                         continue
-                    for index, part in enumerate(
-                        candidates[0].get("content", {}).get("parts", [])
-                    ):
-                        if part.get("text"):
-                            yield {"content": part["text"], "tool_calls": None}
-                        elif part.get("functionCall"):
-                            call = part["functionCall"]
-                            yield {
-                                "content": None,
-                                "tool_calls": [
-                                    {
-                                        "index": index,
-                                        "id": f"gemini-{index}",
-                                        "type": "function",
-                                        "function": {
-                                            "name": call.get("name"),
-                                            "arguments": json.dumps(
-                                                call.get("args", {}),
-                                                ensure_ascii=False,
-                                            ),
-                                        },
-                                    }
-                                ],
-                            }
+                    from app.services.turn_events import coalesce_gemini_parts
+
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if parts:
+                        yield coalesce_gemini_parts(parts, stream_seq=event_seq)
+                        event_seq += 1
 
     @staticmethod
     def _response_text(payload: dict) -> str:
