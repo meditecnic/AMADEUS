@@ -481,16 +481,27 @@ export function createArchiveModule(deps?: {
   }
 
   function selectedRowText(): { text: string; version?: number } | null {
+    // A star-map deep link can open a record outside the current list page.
+    // Matching, scope-validated details still provide its text and revision.
     if (!state.selection) return null;
     if (state.selection.kind === 'fact') {
       const row = state.facts.rows.find((item) => item.factId === state.selection?.recordId);
-      if (!row) return null;
+      if (!row) {
+        const payload = state.details.status === 'ready' ? state.details.payload : null;
+        return payload && 'fact' in payload && payload.fact.fact_id === state.selection.recordId
+          ? { text: payload.fact.display_text, version: payload.fact.active_version }
+          : null;
+      }
       return { text: row.displayText, version: row.activeVersion };
     }
     const row = state.experiences.rows.find(
       (item) => item.experienceId === state.selection?.recordId,
     );
-    return row ? { text: row.displayText } : null;
+    if (row) return { text: row.displayText };
+    const payload = state.details.status === 'ready' ? state.details.payload : null;
+    return payload && 'experience' in payload && payload.experience.experience_id === state.selection.recordId
+      ? { text: payload.experience.display_text }
+      : null;
   }
 
   function refreshAfterMutation(guardEpoch: number) {
@@ -556,6 +567,14 @@ export function createArchiveModule(deps?: {
 
   function dispatch(intent: ArchiveIntent) {
     if (!state.scope) return;
+    if (state.pending.counts?.runtimeMode !== 'v11' && [
+      'open-editor', 'save-edit', 'reapply-draft', 'assign-topic', 'toggle-pin',
+      'request-delete', 'confirm-delete', 'rename-topic-start', 'rename-topic-save',
+      'ignore-observation', 'retry-job',
+    ].includes(intent.type)) {
+      commit({ announcement: '尚未确认档案与当前对话使用同一套记忆，暂时只能查看。' });
+      return;
+    }
     const guardEpoch = epoch;
     switch (intent.type) {
       case 'set-kind':
@@ -602,13 +621,13 @@ export function createArchiveModule(deps?: {
         // Only Facts have a text editor, and only one explicit mutation
         // workflow may be pending at a time.
         if (state.selection?.kind !== 'fact' || state.editor || state.deleteFlow) return;
-        const row = state.facts.rows.find((item) => item.factId === state.selection?.recordId);
-        if (!row) return;
+        const record = selectedRowText();
+        if (!record || typeof record.version !== 'number') return;
         commit({
           editor: {
-            factId: row.factId,
-            draft: row.displayText,
-            baseVersion: row.activeVersion,
+            factId: state.selection.recordId,
+            draft: record.text,
+            baseVersion: record.version,
             status: 'editing',
             conflict: null,
           },
@@ -864,11 +883,14 @@ export function createArchiveModule(deps?: {
     if (!scope || state.editor?.status === 'saving' || state.deleteFlow?.status === 'deleting') return;
     if (kind === 'fact') {
       const row = state.facts.rows.find((item) => item.factId === recordId);
-      if (!row) return;
+      const payload = state.details.status === 'ready' ? state.details.payload : null;
+      const isPinned = row?.isPinned ?? (payload && 'fact' in payload && payload.fact.fact_id === recordId
+        ? payload.fact.is_pinned : null);
+      if (isPinned === null) return;
       await runAuxiliaryMutation(async () => {
-        const result = await updateFactPresentation(scope, recordId, { isPinned: !row.isPinned }, { fetcher });
+        const result = await updateFactPresentation(scope, recordId, { isPinned: !isPinned }, { fetcher });
         if (stale(guardEpoch)) return;
-        commit({ announcement: result.type === 'ok' ? (!row.isPinned ? '已置顶' : '已取消置顶') : '置顶状态未变更' });
+        commit({ announcement: result.type === 'ok' ? (!isPinned ? '已置顶' : '已取消置顶') : '置顶状态未变更' });
         refreshAfterMutation(guardEpoch);
       });
       return;

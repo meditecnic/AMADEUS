@@ -92,7 +92,7 @@ function defaultResponder(scope: ArchiveScope): Responder {
           session_id: scope.sessionId,
           worldline: scope.worldline,
           identity_mode: scope.identityMode,
-          pending_count: 0,
+          runtime_mode: 'v11', pending_count: 0,
           processing_count: 0,
           failed_count: 0,
           failed_jobs: [],
@@ -140,6 +140,29 @@ async function openReady(scope: ArchiveScope = SCOPE_A) {
 }
 
 describe('archive deep module: browse seams', () => {
+  it.each(['legacy', 'shadow', undefined])('keeps browsing but blocks governance when runtime is %s', async (runtimeMode) => {
+    const base = defaultResponder(SCOPE_A);
+    const { fetcher } = scriptedFetcher((url, init) => {
+      const response = base(url, init);
+      if (response && url.startsWith('/api/memory/status?')) {
+        response.body = { ...(response.body as object), runtime_mode: runtimeMode };
+      }
+      return response;
+    });
+    const module = createArchiveModule({ fetcher });
+    module.open(SCOPE_A);
+    await flush();
+    expect(module.snapshot().facts.rows.length).toBe(1);
+    module.dispatch({ type: 'select', kind: 'fact', recordId: 'f1' });
+    await flush();
+    module.dispatch({ type: 'open-editor' });
+    module.dispatch({ type: 'request-delete' });
+    module.dispatch({ type: 'confirm-delete' });
+    expect(module.snapshot().editor).toBeNull();
+    expect(module.snapshot().deleteFlow).toBeNull();
+    expect(fetcher.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true);
+    module.dispose();
+  });
   it('open(scope) loads facts + experiences + topics through repository seams only', async () => {
     const { module, urls } = await openReady();
     const state = module.snapshot();
@@ -443,7 +466,7 @@ describe('archive deep module: browse seams', () => {
           status: 200,
           json: async () => ({
             ...scopeEcho,
-            pending_count: 0,
+            runtime_mode: 'v11', pending_count: 0,
             processing_count: 0,
             failed_count: 0,
             failed_jobs: [],
@@ -512,7 +535,7 @@ describe('archive deep module: browse seams', () => {
           status: 200,
           json: async () => ({
             ...scopeEcho,
-            pending_count: 0,
+            runtime_mode: 'v11', pending_count: 0,
             processing_count: 0,
             failed_count: 1,
             failed_jobs: [
@@ -570,7 +593,7 @@ describe('archive deep module: browse seams', () => {
           status: 200,
           json: async () => ({
             ...scopeEcho,
-            pending_count: 0,
+            runtime_mode: 'v11', pending_count: 0,
             processing_count: 0,
             failed_count: 1,
             failed_jobs: [

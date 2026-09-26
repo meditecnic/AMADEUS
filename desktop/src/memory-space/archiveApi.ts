@@ -49,6 +49,7 @@ export type FailedJobRow = {
   retryable: boolean;
 };
 export type MemoryStatusPayload = {
+  runtimeMode?: 'legacy' | 'shadow' | 'v11';
   pendingCount: number;
   processingCount: number;
   failedCount: number;
@@ -332,6 +333,7 @@ export function parseMemoryStatusBody(
   }
   return {
     pendingCount: candidate.pending_count as number,
+    runtimeMode: candidate.runtime_mode === 'legacy' || candidate.runtime_mode === 'shadow' || candidate.runtime_mode === 'v11' ? candidate.runtime_mode : undefined,
     processingCount: candidate.processing_count as number,
     failedCount: candidate.failed_count as number,
     failedJobs,

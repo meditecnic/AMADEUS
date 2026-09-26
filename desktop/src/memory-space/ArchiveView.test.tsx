@@ -64,7 +64,7 @@ function viewResponder(deletedRef: { value: boolean }) {
       };
     }
     if (url.startsWith('/api/memory/topics?')) {
-      return { status: 200, body: { topics: [{ topic_id: 't1', display_label: '咖啡', fact_count: 1 }] } };
+      return { status: 200, body: { scope: scopeBody(), topics: [{ topic_id: 't1', display_label: '咖啡', fact_count: 1 }] } };
     }
     if (url.startsWith('/api/memory/status?')) {
       return {
@@ -73,7 +73,7 @@ function viewResponder(deletedRef: { value: boolean }) {
           session_id: SCOPE.sessionId,
           worldline: SCOPE.worldline,
           identity_mode: SCOPE.identityMode,
-          pending_count: 0,
+          runtime_mode: 'v11', pending_count: 0,
           processing_count: 0,
           failed_count: 2,
           failed_jobs: [
@@ -210,6 +210,51 @@ afterEach(() => {
 });
 
 describe('ArchiveView list and reading', () => {
+  it('explains a disconnected runtime and disables record mutations while preserving reading', async () => {
+    const base = viewResponder({ value: false });
+    stubFetch((url, init) => {
+      const response = base(url, init);
+      if (response && url.startsWith('/api/memory/status?')) {
+        response.body = { ...(response.body as object), runtime_mode: 'legacy' };
+      }
+      return response;
+    });
+    const module = createArchiveModule();
+    await act(async () => { module.open(SCOPE, { focus: { kind: 'fact', recordId: 'f1' } }); });
+    render(<ArchiveView module={module} />);
+    await screen.findByTestId('archive-detail-title');
+    expect(screen.getByTestId('archive-runtime-notice')).toHaveTextContent('当前对话尚未使用本页的记忆');
+    expect(screen.getByTestId('archive-edit-fact')).toBeDisabled();
+    expect(screen.getByTestId('archive-delete-record')).toBeDisabled();
+    expect(screen.getByTestId('archive-toggle-pin')).toBeDisabled();
+    expect(screen.getByTestId('archive-detail-title')).toHaveTextContent('喜欢黑咖啡');
+    module.dispose();
+  });
+  it('keeps correction and delete confirmation usable for a record outside the current page', async () => {
+    const respond = viewResponder({ value: false });
+    stubFetch((url, init) => url.startsWith('/api/memory/facts?') ? {
+      status: 200,
+      body: { facts: [], scope: scopeBody(), pagination: { limit: 20, offset: 20, total: 40, has_more: false } },
+    } : respond(url, init));
+    const module = createArchiveModule();
+    await act(async () => { module.open(SCOPE, { focus: { kind: 'fact', recordId: 'f1' } }); });
+    render(<ArchiveView module={module} />);
+    await screen.findByTestId('archive-detail-title');
+    expect(screen.getByText('这条记忆不在当前页，已读取完整记录。')).toBeInTheDocument();
+    expect(screen.getByTestId('archive-assign-topic')).toHaveValue('t1');
+    expect(screen.getByTestId('archive-toggle-pin')).toHaveTextContent('取消置顶');
+    fireEvent.click(screen.getByTestId('archive-edit-fact'));
+    expect(screen.getByTestId('archive-editor-input')).toHaveValue('喜欢黑咖啡');
+    expect(module.snapshot().editor?.baseVersion).toBe(1);
+    fireEvent.click(screen.getByRole('button', { name: '放弃草稿' }));
+    fireEvent.click(screen.getByTestId('archive-delete-record'));
+    expect(screen.getByTestId('archive-delete-confirm')).toHaveTextContent('喜欢黑咖啡');
+    expect(module.snapshot().deleteFlow?.expectedVersion).toBe(1);
+    fireEvent.click(screen.getByTestId('archive-delete-cancel'));
+    expect(screen.queryByTestId('archive-delete-confirm')).toBeNull();
+    module.dispose();
+  });
+
   it('renders fact and experience rows with text-based pin/expiry markers', async () => {
     await renderArchive();
     await waitFor(() => {

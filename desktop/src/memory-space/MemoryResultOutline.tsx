@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type Ref } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type Ref } from 'react';
+import { motion, useReducedMotion } from 'motion/react';
 
 import { neighborId } from './semanticNavigator';
 import {
@@ -25,8 +26,12 @@ export function MemoryResultOutline(props: {
   onRove: (nextId: string) => void;
   onOwnsFocus?: (owns: boolean) => void;
   listRef?: Ref<HTMLDivElement>;
+  reducedMotion?: boolean;
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const selectionId = useId();
+  const systemReducedMotion = useReducedMotion();
+  const reducedMotion = props.reducedMotion ?? systemReducedMotion;
   const dense = props.plan.primaryResults.length >= 8;
   const [browse, setBrowse] = useState<'ranked' | 'grouped'>(dense ? 'grouped' : 'ranked');
   const groupedPrimary = new Set(props.plan.topicGroups.flatMap((group) => group.childResultIds));
@@ -77,6 +82,7 @@ export function MemoryResultOutline(props: {
           data-result-id={row.id}
           data-outline-id={row.id}
           data-rank={row.rank}
+          data-kind={row.kind}
           aria-label={names.get(row.id) ?? row.label}
           aria-selected={selected}
           className={selected ? 'is-selected' : undefined}
@@ -90,7 +96,10 @@ export function MemoryResultOutline(props: {
           }}
         >
           <span className="memory-outline-meta" aria-hidden="true">
-            {browse === 'ranked' ? `${row.rank} · ` : ''}{KIND_ZH[row.kind] ?? row.kind}
+            {selected ? <motion.span className="memory-result-highlight" aria-hidden="true" layoutId={selectionId}
+              transition={reducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 350, damping: 35 }} /> : null}
+            <span className="memory-result-number">{String(row.rank).padStart(2, '0')}</span>
+            <span>{KIND_ZH[row.kind] ?? row.kind}</span>
           </span>
           <span className="memory-outline-label">{row.label}</span>
         </button>
@@ -138,7 +147,7 @@ export function MemoryResultOutline(props: {
 
   return (
     <div
-      className="memory-space-list memory-result-outline"
+      className="memory-result-outline"
       data-testid="memory-list"
       data-browse={browse}
       ref={(node) => {

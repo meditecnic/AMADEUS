@@ -1,3 +1,5 @@
+import { MemorySelect } from './MemorySelect';
+import { motion } from 'motion/react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { ArchiveView } from './ArchiveView';
@@ -6,8 +8,8 @@ import { createArchiveModule, type ArchiveModule } from './archiveState';
 import { MemoryResultOutline } from './MemoryResultOutline';
 import { deriveOverviewPresentation, outlineIds } from './overviewPresentation';
 import { memorySpaceShortcut } from './chrome';
-import { ConstellationStage, type ScreenAnchor } from './ConstellationStage';
-import type { OverviewFrame, PresentationChangeCause } from './overviewMotion';
+import { ConstellationStage } from './ConstellationStage';
+import type { PresentationChangeCause } from './overviewMotion';
 import {
   arbitrateMotionDelivery,
   splitOrderedCauses,
@@ -26,10 +28,10 @@ import {
 import { emphasisMode } from './emphasis';
 import { evidenceParentId, openTopicBranch, soulLockupLines } from './graphPaths';
 import { nextMemoryUnwind } from './memoryUnwind';
-import { layoutProjection, readingSurfaceMode } from './layout';
+import { layoutProjection } from './layout';
 import { classifyOverviewState } from './overviewState';
 import { createProjectionController } from './projectionController';
-import { ReadingFields, ReadingProvenance, readingCardFromNode } from './readingContent';
+import { ReadingProvenance, readingCardFromNode } from './readingContent';
 import {
   createDetailsController,
   deriveExperienceReading,
@@ -71,6 +73,7 @@ export type MemorySpaceProps = {
 export type MemorySpaceMode = 'constellation' | 'archive';
 
 type JobSummary = {
+  runtime_mode?: 'legacy' | 'shadow' | 'v11';
   // The v11 status payload echoes the exact scope as top-level fields; the
   // direct /api/memory/status read is fail-closed against this echo.
   session_id?: string;
@@ -173,10 +176,11 @@ export function MemorySpace({
   const [runtimeGeneration, setRuntimeGeneration] = useState(0);
   const [overviewOpen] = useState(true);
   const [expandedTopicIds, setExpandedTopicIds] = useState<string[]>([]);
-  const [toolsOpen, setToolsOpen] = useState(false);
-  const [anchor, setAnchor] = useState<ScreenAnchor | null>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [announcement, setAnnouncement] = useState('');
   const searchRef = useRef<HTMLInputElement | null>(null);
+  const findToggleRef = useRef<HTMLButtonElement | null>(null);
+  const readingPanelRef = useRef<HTMLDivElement | null>(null);
   const graphRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const listWasShown = useRef(false);
@@ -190,7 +194,6 @@ export function MemorySpace({
   const [motionCause, setMotionCause] = useState<PresentationChangeCause>('viewport');
   const [motionCauses, setMotionCauses] = useState<PresentationChangeCause[]>([]);
   const [motionEpoch, setMotionEpoch] = useState(0);
-  const [camOwnership, setCamOwnership] = useState<OverviewFrame['ownership']>('rest');
   const motionNotes = useRef<PresentationChangeCause[]>([]);
   const scopeNote = useRef(false);
   const prevMotionSnap = useRef<MotionPresentationSnapshot | null>(null);
@@ -333,6 +336,7 @@ export function MemorySpace({
         });
         if (!parsed) return;
         setJobs({
+          runtime_mode: parsed.runtimeMode,
           session_id: sessionId,
           worldline,
           identity_mode: identityMode,
@@ -350,7 +354,7 @@ export function MemorySpace({
   }, [applyEnvelope, criteria, scope, projectionRefreshTick]);
 
   useEffect(() => {
-    if (!toolsOpen) return undefined;
+    if (!listOpen && capability.surface !== 'list') return undefined;
     let cancelled = false;
     void fetch(`/api/memory/topics?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}&identity_mode=${encodeURIComponent(identityMode)}`)
       .then(async (response) => (response.ok ? response.json() as Promise<{ topics?: TopicOption[] }> : null))
@@ -364,7 +368,7 @@ export function MemorySpace({
     return () => {
       cancelled = true;
     };
-  }, [identityMode, sessionId, toolsOpen, worldline]);
+  }, [capability.surface, identityMode, listOpen, sessionId, worldline]);
 
   const presentation = classifyOverviewState({
     loading,
@@ -466,16 +470,16 @@ export function MemorySpace({
   })();
   const effectiveDetails: DetailsOutcome = detailsAligned ? details : { type: 'idle' };
 
-  const surface = readingSurfaceMode({ width, preferList: listOpen, reducedMotion });
   const renderSurface = capability.surface;
   const fallbackList = renderSurface === 'list';
   const listVisible = listOpen || fallbackList;
   const panelVisible = dismissedPanel !== `${scopeKey}|${selectedId}`;
-  const dismissPanel = () => setDismissedPanel(`${scopeKey}|${selectedId}`);
+  const dismissPanel = () => {
+    setDismissedPanel(`${scopeKey}|${selectedId}`);
+    if (width < 900 && listVisible) setNarrowPrefer('list');
+  };
   const inspectorOpen = panelVisible && overviewOpen && selected?.kind === 'continuity_hub';
   const memoOpen = panelVisible && Boolean(card) && overviewOpen;
-  const showSceneMemo = memoOpen && surface === 'scene' && renderSurface === '3d' && camOwnership !== 'user' && (effectiveDetails.type === 'idle' || effectiveDetails.type === 'loading');
-  const showDomMemo = memoOpen && !showSceneMemo;
   const phase = overviewOpen ? 'overview' : 'soul';
   const lockup = soulLockupLines(
     liveProjection?.center.label_primary ?? 'AMADEUS',
@@ -512,7 +516,6 @@ export function MemorySpace({
     }
     if (mode === 'activate') {
       setNarrowPrefer('detail');
-      setToolsOpen(false);
     }
     if (!id) {
       setSelectedId(null);
@@ -586,17 +589,13 @@ export function MemorySpace({
   };
 
   const toggleList = () => {
+    noteMotion('auxiliary-surface');
     if (fallbackList) {
-      setToolsOpen(false);
       setFallbackDetailOpen(false);
       setNarrowPrefer('list');
-      noteMotion('auxiliary-surface');
       return;
     }
-    const restoreList = toolsOpen && listOpen;
-    setToolsOpen(false);
-    noteMotion('auxiliary-surface');
-    if (restoreList || (listOpen && narrowPrefer !== 'list')) {
+    if (listOpen && width < 900 && narrowPrefer !== 'list') {
       setListOpen(true);
       setNarrowPrefer('list');
       return;
@@ -616,8 +615,8 @@ export function MemorySpace({
     setFocusedId(null);
     setExpandedTopicIds([]);
     setActivationKey(null);
-    setToolsOpen(false);
     setListOpen(false);
+    setFiltersOpen(false);
     noteMotion('reselect');
     noteMotion('disclosure');
   };
@@ -633,7 +632,14 @@ export function MemorySpace({
       ?? liveProjection?.nodes.find((node) => node.projection_id === selectedId)?.kind
       ?? null;
 
-    if (fallbackList && !toolsOpen && !hasActiveCriteria(criteria)) {
+    if (width < 900 && listVisible && narrowPrefer !== 'list' && (memoOpen || inspectorOpen || fallbackDetailOpen)) {
+      setFallbackDetailOpen(false);
+      setNarrowPrefer('list');
+      noteMotion('auxiliary-surface');
+      return;
+    }
+
+    if (fallbackList && !hasActiveCriteria(criteria)) {
       if (narrowSheet !== 'list') {
         setFallbackDetailOpen(false);
         setNarrowPrefer('list');
@@ -645,7 +651,7 @@ export function MemorySpace({
     }
 
     const action = nextMemoryUnwind({
-      toolsOpen,
+      toolsOpen: false,
       hasActiveCriteria: hasActiveCriteria(criteria),
       listVisible: Boolean(listOpen && !fallbackList && (width >= 900 || narrowPrefer === 'list')),
       selectedKind: selectedKind === 'fact' || selectedKind === 'experience' || selectedKind === 'topic' || selectedKind === 'continuity_hub'
@@ -660,7 +666,7 @@ export function MemorySpace({
       return;
     }
     if (action === 'close-tools') {
-      setToolsOpen(false);
+      setFiltersOpen(false);
       noteMotion('auxiliary-surface');
       return;
     }
@@ -718,7 +724,8 @@ export function MemorySpace({
       const shortcut = memorySpaceShortcut(event);
       if (shortcut === 'search') {
         event.preventDefault();
-        setToolsOpen(true);
+        setListOpen(true);
+        setNarrowPrefer('list');
         window.requestAnimationFrame(() => searchRef.current?.focus());
         return;
       }
@@ -787,39 +794,48 @@ export function MemorySpace({
     : (focusedId && listIds.includes(focusedId) ? focusedId : (listIds[0] ?? null));
 
   const narrowSheet = (() => {
-    if (toolsOpen) return 'tools';
     if (fallbackList) {
       if (fallbackDetailOpen && inspectorOpen) return 'inspector';
       if (fallbackDetailOpen && memoOpen) return 'reading';
       return 'list';
     }
-    if (listVisible && narrowPrefer === 'list') return 'list';
+    if (width < 900) {
+      if (listVisible && narrowPrefer === 'list') return 'list';
+      if (inspectorOpen) return 'inspector';
+      if (memoOpen) return 'reading';
+      if (listVisible) return 'list';
+      return 'none';
+    }
     if (inspectorOpen) return 'inspector';
     if (memoOpen) return 'reading';
     if (listVisible) return 'list';
     return 'none';
   })();
 
+  const findMounted = Boolean(mode === 'constellation' && listVisible);
   const showList = Boolean(
-    mode === 'constellation'
-    && disclosurePlan
-    && planReady
-    && listVisible
-    && (width >= 900
-      ? narrowSheet !== 'tools' && narrowSheet !== 'inspector'
-      : narrowSheet === 'list'),
+    findMounted
+    && (width >= 900 || narrowSheet === 'list'),
   );
-  const showInspector = Boolean(mode === 'constellation' && inspectorOpen && liveProjection && narrowSheet === 'inspector');
-  const showReading = Boolean(mode === 'constellation' && showDomMemo && card && narrowSheet === 'reading');
-  const showSceneReading = Boolean(mode === 'constellation' && showSceneMemo && card && narrowSheet === 'reading');
-  const sceneReadingTransform = anchor
-    ? (() => {
-      const gap = Math.max(42, anchor.radius + 24);
-      const fitsRight = anchor.x + gap + 320 <= width - 16;
-      const horizontal = fitsRight ? `${gap}px` : `calc(-100% - ${gap}px)`;
-      return `translate3d(${anchor.x}px, ${anchor.y}px, 0) translate(${horizontal}, -50%)`;
-    })()
-    : undefined;
+  const showInspector = Boolean(
+    mode === 'constellation'
+    && inspectorOpen
+    && liveProjection
+    && (width >= 900 || narrowSheet === 'inspector'),
+  );
+  const showReading = Boolean(
+    mode === 'constellation'
+    && memoOpen
+    && card
+    && (width >= 900 || narrowSheet === 'reading'),
+  );
+  const readingResults = planReady
+    ? disclosurePlan?.primaryResults.filter((row) => row.kind === 'fact' || row.kind === 'experience') ?? []
+    : [];
+  const readingIndex = readingResults.findIndex((row) => row.id === selectedId);
+  useLayoutEffect(() => {
+    if (readingPanelRef.current) readingPanelRef.current.scrollTop = 0;
+  }, [selectedId]);
 
   // P2-B (round 4): honest terminal announcement. When the reading surface
   // is visible at resolution time we say "证据已读取"; otherwise we say the
@@ -848,7 +864,7 @@ export function MemorySpace({
     if (lastAnnouncedRef.current === marker) return;
     lastAnnouncedRef.current = marker;
     if (eff.type === 'ok') {
-      setAnnouncement(showReading || showSceneReading ? '证据已读取' : '证据已载入，可在阅读面查看');
+      setAnnouncement(showReading ? '证据已读取' : '证据已载入，可在阅读面查看');
     } else if (eff.type === 'not-found') {
       setAnnouncement(NOT_FOUND_NOTICE);
     } else {
@@ -954,11 +970,15 @@ export function MemorySpace({
     }
     return null;
   })();
+  const viewportHeight = typeof window === 'undefined' ? 800 : window.innerHeight;
+  const narrowFindHeight = viewportHeight <= 680 ? Math.max(0, viewportHeight - 116) : viewportHeight * (filtersOpen ? 0.72 : 0.62);
   const motionInsets = {
     top: width < 900 ? 104 : 64,
-    right: width >= 900 && showList ? 332 : 16,
-    bottom: narrowSheet !== 'none' && width < 900 ? Math.round((typeof window === 'undefined' ? 800 : window.innerHeight) * 0.42) : 16,
-    left: width >= 900 && (showReading || showInspector) ? 400 : 16,
+    right: width >= 900 && (showReading || showInspector) ? 416 : 16,
+    bottom: narrowSheet !== 'none' && width < 900
+      ? Math.round(narrowSheet === 'list' ? narrowFindHeight : viewportHeight * (narrowSheet === 'reading' ? 0.62 : 0.42))
+      : 16,
+    left: width >= 900 && showList ? 336 : 16,
   };
 
   useLayoutEffect(() => {
@@ -1022,7 +1042,8 @@ export function MemorySpace({
       data-reduced-motion={String(reducedMotion)}
       data-narrow-sheet={narrowSheet}
       data-motion-cause={motionCause}
-      data-tools-open={String(toolsOpen)}
+      data-find-open={String(listOpen)}
+      data-tools-open={String(filtersOpen)}
       aria-label="Memory Space"
       onContextMenu={(event) => {
         if (mode !== 'constellation') return;
@@ -1040,7 +1061,7 @@ export function MemorySpace({
           data-testid="memory-back"
           onClick={() => unwind({ closeAtRoot: true })}
         >
-          {!selectedId && !expandedTopicIds.length && !listOpen && !toolsOpen && !hasActiveCriteria(criteria) ? '返回' : '回退'}
+          {!selectedId && !expandedTopicIds.length && !listOpen && !hasActiveCriteria(criteria) ? '返回' : '回退'}
         </button>
         <button
           type="button"
@@ -1048,8 +1069,7 @@ export function MemorySpace({
           data-testid="select-soul"
           onClick={() => handleSelect(liveProjection?.center.projection_id ?? null)}
         >
-          <span>MEMORY</span>
-          <span className="memory-space-soul-mark">SOUL</span>
+          <span className="memory-space-soul-mark">记忆 / SOUL</span>
         </button>
         {mode === 'constellation' && !fallbackList ? (
           <button type="button" className="memory-space-overview" title="保留筛选条件，恢复总览视角" onClick={returnToOverview}>回到总览</button>
@@ -1069,7 +1089,8 @@ export function MemorySpace({
               setMode('constellation');
             }}
           >
-            记忆星图
+            <svg className="memory-mode-symbol" viewBox="0 0 24 24" aria-hidden="true"><path d="m5 17 7-11 7 9M5 17l14-2" /><circle cx="5" cy="17" r="2" /><circle cx="12" cy="6" r="2" /><circle cx="19" cy="15" r="2" /></svg>
+            <span>记忆星图</span>
           </button>
           <button
             type="button"
@@ -1077,151 +1098,34 @@ export function MemorySpace({
             aria-pressed={mode === 'archive'}
             onClick={() => setMode('archive')}
           >
-            记忆档案
+            <svg className="memory-mode-symbol" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v14H5zM5 10h14M5 14h14M10 7.5h4M10 12h4M10 16.5h4" /></svg>
+            <span>记忆档案</span>
           </button>
+          <span className="memory-mode-track" aria-hidden="true">
+            <motion.span className="memory-mode-carriage" initial={false}
+              animate={{ x: mode === 'archive' ? '100%' : '0%' }}
+              transition={reducedMotion ? { duration: 0 } : { type: 'spring', stiffness: 440, damping: 34 }} />
+          </span>
         </div>
         {mode === 'constellation' ? (
-          <>
-            <button
-              type="button"
-              className="memory-space-tools-toggle"
-              aria-expanded={toolsOpen}
-              aria-controls="memory-space-tools"
-              onClick={() => {
-                noteMotion('auxiliary-surface');
-                setToolsOpen((value) => !value);
-              }}
-            >
-              筛选
-            </button>
-            <button type="button" aria-pressed={narrowSheet === 'list'} onClick={toggleList}>
-              索引
-            </button>
-          </>
-        ) : null}
-        <div
-          id="memory-space-tools"
-          className={`memory-space-tools${toolsOpen ? ' is-open' : ''}`}
-          data-testid="memory-space-tools"
-          data-open={String(toolsOpen)}
-          hidden={!toolsOpen}
-        >
-          {liveProjection ? (
-            <span className="memory-space-count" data-testid="memory-shown-eligible">
-              当前呈现 {liveProjection.shown.results} / {liveProjection.eligible.results}
-            </span>
-          ) : null}
-          <label className="memory-space-search">
-            <span className="sr-only">搜索记忆</span>
-            <input
-              ref={searchRef}
-              value={criteria.query}
-              onChange={(event) => changeCriteria({ ...criteria, query: event.target.value })}
-              placeholder="搜索"
-              aria-label="搜索记忆"
-              tabIndex={toolsOpen ? 0 : -1}
-            />
-          </label>
-          <fieldset className="memory-space-kinds" data-testid="memory-kind-filter">
-            <legend className="sr-only">种类</legend>
-            {(['topic', 'fact', 'experience'] as const).map((kind) => (
-              <label key={kind}>
-                <input
-                  type="checkbox"
-                  checked={criteria.kinds.includes(kind)}
-                  tabIndex={toolsOpen ? 0 : -1}
-                  onChange={(event) => {
-                    const next = event.target.checked
-                      ? [...criteria.kinds, kind]
-                      : criteria.kinds.filter((item) => item !== kind);
-                    changeCriteria({ ...criteria, kinds: next });
-                  }}
-                />
-                {kind === 'topic' ? '主题' : kind === 'fact' ? '事实' : '经历'}
-              </label>
-            ))}
-          </fieldset>
-          <label>
-            <span className="sr-only">主题筛选</span>
-            <select
-              aria-label="主题筛选"
-              value={criteria.topicId ?? ''}
-              tabIndex={toolsOpen ? 0 : -1}
-              onChange={(event) => changeCriteria({ ...criteria, topicId: event.target.value || null })}
-            >
-              <option value="">全部主题</option>
-              {topics.map((topic) => (
-                <option key={topic.topic_id} value={topic.topic_id}>{topic.display_label}</option>
-              ))}
-            </select>
-          </label>
-          <label>
-            <input
-              type="checkbox"
-              checked={criteria.pinnedOnly}
-              tabIndex={toolsOpen ? 0 : -1}
-              onChange={(event) => changeCriteria({ ...criteria, pinnedOnly: event.target.checked })}
-            />
-            仅置顶
-          </label>
-          <label>
-            <span className="sr-only">起始时间</span>
-            <input
-              type="datetime-local"
-              aria-label="起始时间"
-              tabIndex={toolsOpen ? 0 : -1}
-              onChange={(event) => changeCriteria({
-                ...criteria,
-                updatedFrom: event.target.value ? new Date(event.target.value).toISOString() : null,
-              })}
-            />
-          </label>
-          <label>
-            <span className="sr-only">结束时间</span>
-            <input
-              type="datetime-local"
-              aria-label="结束时间"
-              tabIndex={toolsOpen ? 0 : -1}
-              onChange={(event) => changeCriteria({
-                ...criteria,
-                updatedTo: event.target.value ? new Date(event.target.value).toISOString() : null,
-              })}
-            />
-          </label>
-          <select
-            aria-label="浏览身份"
-            value={identityMode}
-            tabIndex={toolsOpen ? 0 : -1}
-            onChange={(event) => setIdentityMode(event.target.value as IdentityMode)}
+          <button
+            type="button"
+            className="memory-space-find-toggle"
+            aria-expanded={showList}
+            aria-controls="memory-space-find"
+            aria-pressed={listOpen}
+            data-active={hasActiveCriteria(criteria) ? 'true' : undefined}
+            onClick={toggleList}
+            ref={findToggleRef}
           >
-            <option value="okabe">OKABE</option>
-            <option value="self">USER</option>
-          </select>
-          <select
-            aria-label="浏览世界线"
-            value={worldline}
-            tabIndex={toolsOpen ? 0 : -1}
-            onChange={(event) => setWorldline(event.target.value as Worldline)}
-          >
-            <option value="steins_gate">SG</option>
-            <option value="beta">β</option>
-          </select>
-        </div>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="5.5" /><path d="m14 14 5 5M10 7.5v5M7.5 10h5" /></svg>
+            <span>查找</span>
+          </button>
+        ) : <span className="memory-space-find-slot" aria-hidden="true" />}
       </header>
 
-      {mode === 'constellation' && chips.length ? (
-        <ul className="memory-space-chips" data-testid="memory-criteria-chips">
-          {chips.map((chip: CriteriaChip) => (
-            <li key={chip.id}>
-              <button type="button" onClick={() => changeCriteria(clearChip(criteria, chip))}>
-                {chip.label}
-              </button>
-            </li>
-          ))}
-          <li>
-            <button type="button" onClick={() => changeCriteria(EMPTY_CRITERIA)}>清除筛选</button>
-          </li>
-        </ul>
+      {mode === 'constellation' && jobs?.runtime_mode && jobs.runtime_mode !== 'v11' ? (
+        <p className="memory-runtime-notice memory-runtime-notice-overview" role="status">当前对话尚未使用本页的记忆。星图与档案暂供查看。</p>
       ) : null}
 
       {mode === 'constellation' ? (
@@ -1320,14 +1224,6 @@ export function MemorySpace({
             insets={motionInsets}
             onSelect={handleSelect}
             onUnwind={() => unwind({ closeAtRoot: false })}
-            onOwnershipChange={setCamOwnership}
-            onSelectedAnchor={(next) => {
-              setAnchor((prev) => {
-                if (!next && !prev) return prev;
-                if (next && prev && next.x === prev.x && next.y === prev.y && next.radius === prev.radius) return prev;
-                return next;
-              });
-            }}
             onCreateFail={() => setCapability((current) => applyCreateFailure(current))}
             onContextLost={() => {
               setCapability((current) => {
@@ -1352,56 +1248,175 @@ export function MemorySpace({
             }}
           />
         ) : null}
-        {showSceneReading && card ? (
-          <aside
-            className="memory-reading-scene"
-            data-testid="reading-scene"
-            data-attached="sphere"
-            data-reading-id={selectedId ?? ''}
-            style={sceneReadingTransform ? { transform: sceneReadingTransform } : undefined}
-          >
-            <button type="button" className="memory-panel-close memory-reading-close" aria-label="关闭阅读" onClick={dismissPanel}>×</button>
-            <div className="memory-reading-card-content" key={selectedId ?? 'reading'}>
-              <ReadingBody
-                card={card}
-                details={effectiveDetails}
-                model={readingModel}
-                onRetry={retryDetails}
-                scope={liveProjection?.scope ?? null}
-                recordKind={selectedProjectionNode?.kind === 'fact' || selectedProjectionNode?.kind === 'experience'
-                  ? selectedProjectionNode.kind
-                  : null}
-                recordId={detailsRecordId}
-                onOpenInArchive={openArchiveForRecord}
-              />
-            </div>
-          </aside>
-        ) : null}
       </div>
 
       {mode === 'archive' && archiveModuleRef.current ? (
-        <ArchiveView module={archiveModuleRef.current} scope={scope} width={width} />
+        <ArchiveView module={archiveModuleRef.current} scope={scope} width={width} reducedMotion={reducedMotion} />
       ) : null}
 
-      {showList && disclosurePlan ? (
-        <MemoryResultOutline
-          plan={disclosurePlan}
-          selectedId={selectedId}
-          focusedId={focusedId ?? listRovingId}
-          listRef={listRef}
-          onOwnsFocus={setListOwnsFocus}
-          onSelect={(id) => {
-            handleSelect(id, 'activate');
-            if (fallbackList) {
-              setFallbackDetailOpen(true);
-              setNarrowPrefer('detail');
-            } else {
-              setListOpen(true);
-              setNarrowPrefer('list');
-            }
-          }}
-          onRove={(nextId) => roveList(nextId)}
-        />
+      {findMounted ? (
+        <motion.aside initial={reducedMotion ? false : { opacity: 0, x: -18 }} animate={{ opacity: 1, x: 0 }} transition={{ type: 'spring', stiffness: 270, damping: 29 }}
+          id="memory-space-find"
+          className="memory-space-find"
+          data-testid="memory-space-find"
+          data-filters-open={String(filtersOpen)}
+          hidden={!showList}
+        >
+          <div className="memory-find-heading">
+            <h2>记忆检索</h2>
+            {!fallbackList ? <button type="button" className="memory-panel-close" aria-label="关闭查找" onClick={() => { toggleList(); findToggleRef.current?.focus(); }}>×</button> : null}
+          </div>
+          {liveProjection ? (
+            <span className="memory-space-count" data-testid="memory-shown-eligible">
+              当前呈现 {liveProjection.shown.results} / {liveProjection.eligible.results}
+            </span>
+          ) : null}
+          <label className="memory-space-search">
+            <span className="sr-only">搜索记忆</span>
+            <input
+              ref={searchRef}
+              value={criteria.query}
+              onChange={(event) => changeCriteria({ ...criteria, query: event.target.value })}
+              placeholder="搜索记忆"
+              aria-label="搜索记忆"
+            />
+          </label>
+          {chips.length ? (
+            <ul className="memory-space-chips" data-testid="memory-criteria-chips">
+              {chips.map((chip: CriteriaChip) => (
+                <li key={chip.id}>
+                  <button type="button" onClick={() => changeCriteria(clearChip(criteria, chip))}>
+                    {chip.key === 'updatedFrom' || chip.key === 'updatedTo'
+                      ? `${chip.key === 'updatedFrom' ? '自' : '至'} ${toDatetimeLocalValue(chip.value).replace('T', ' ')}`
+                      : chip.label}
+                    <span aria-hidden="true" className="memory-chip-remove">×</span>
+                  </button>
+                </li>
+              ))}
+              <li>
+                <button type="button" onClick={() => changeCriteria(EMPTY_CRITERIA)}>清除筛选</button>
+              </li>
+            </ul>
+          ) : null}
+          <fieldset className="memory-space-kinds" data-testid="memory-kind-filter">
+            <legend className="sr-only">种类</legend>
+            {(['topic', 'fact', 'experience'] as const).map((kind) => (
+              <label key={kind}>
+                <input
+                  type="checkbox"
+                  checked={criteria.kinds.includes(kind)}
+                  onChange={(event) => {
+                    const next = event.target.checked
+                      ? [...criteria.kinds, kind]
+                      : criteria.kinds.filter((item) => item !== kind);
+                    changeCriteria({ ...criteria, kinds: next });
+                  }}
+                />
+                {kind === 'topic' ? '主题' : kind === 'fact' ? '事实' : '经历'}
+              </label>
+            ))}
+          </fieldset>
+          <details
+            className="memory-space-find-filters"
+            data-testid="memory-space-tools"
+            data-open={String(filtersOpen)}
+            open={filtersOpen}
+            onToggle={(event) => setFiltersOpen(event.currentTarget.open)}
+          >
+            <summary>主题与时间</summary>
+            <div className="memory-space-tools">
+              <label>
+                <span className="sr-only">主题筛选</span>
+                <MemorySelect
+                  aria-label="主题筛选"
+                  value={criteria.topicId ?? ''}
+                  onValueChange={(value) => changeCriteria({ ...criteria, topicId: value || null })}
+                >
+                  <option value="">全部主题</option>
+                  {topics.map((topic) => (
+                    <option key={topic.topic_id} value={topic.topic_id}>{topic.display_label}</option>
+                  ))}
+                </MemorySelect>
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={criteria.pinnedOnly}
+                  onChange={(event) => changeCriteria({ ...criteria, pinnedOnly: event.target.checked })}
+                />
+                仅置顶
+              </label>
+              <label>
+                <span className="memory-field-label">起始时间</span>
+                <input
+                  type="datetime-local"
+                  aria-label="起始时间"
+                  value={toDatetimeLocalValue(criteria.updatedFrom)}
+                  onChange={(event) => changeCriteria({
+                    ...criteria,
+                    updatedFrom: event.target.value ? new Date(event.target.value).toISOString() : null,
+                  })}
+                />
+              </label>
+              <label>
+                <span className="memory-field-label">结束时间</span>
+                <input
+                  type="datetime-local"
+                  aria-label="结束时间"
+                  value={toDatetimeLocalValue(criteria.updatedTo)}
+                  onChange={(event) => changeCriteria({
+                    ...criteria,
+                    updatedTo: event.target.value ? new Date(event.target.value).toISOString() : null,
+                  })}
+                />
+              </label>
+            </div>
+          </details>
+          <div className="memory-space-find-scope" role="group" aria-label="浏览范围">
+            <p className="memory-space-find-scope-label">浏览范围</p>
+            <MemorySelect
+              aria-label="浏览身份"
+              value={identityMode}
+              onValueChange={(value) => setIdentityMode(value as IdentityMode)}
+            >
+              <option value="okabe">OKABE</option>
+              <option value="self">USER</option>
+            </MemorySelect>
+            <MemorySelect
+              aria-label="浏览世界线"
+              value={worldline}
+              onValueChange={(value) => setWorldline(value as Worldline)}
+            >
+              <option value="steins_gate">SG</option>
+              <option value="beta">β</option>
+            </MemorySelect>
+          </div>
+          {disclosurePlan && planReady ? (
+            <MemoryResultOutline
+              reducedMotion={reducedMotion}
+              plan={disclosurePlan}
+              selectedId={selectedId}
+              focusedId={focusedId ?? listRovingId}
+              listRef={listRef}
+              onOwnsFocus={setListOwnsFocus}
+              onSelect={(id) => {
+                handleSelect(id, 'activate');
+                setListOpen(true);
+                if (fallbackList) setFallbackDetailOpen(true);
+                setNarrowPrefer('detail');
+              }}
+              onRove={(nextId) => roveList(nextId)}
+            />
+          ) : (
+            <FindResultsStatus
+              phase={presentation.phase}
+              copy={presentation.copy}
+              showRetry={presentation.showRetry}
+              malformed={Boolean(disclosurePlan && !disclosurePlan.valid)}
+              onRetry={retryProjection}
+            />
+          )}
+        </motion.aside>
       ) : null}
 
       {showInspector && liveProjection ? (
@@ -1475,13 +1490,17 @@ export function MemorySpace({
       ) : null}
 
       {showReading && card ? (
-        <aside
+        <motion.aside initial={reducedMotion ? false : { opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ type: 'spring', stiffness: 270, damping: 29 }}
           className="memory-reading-dom"
           data-testid="reading-dom"
           data-reading-id={selectedId ?? ''}
         >
-          <button type="button" className="memory-panel-close memory-reading-close" aria-label="关闭阅读" onClick={dismissPanel}>×</button>
-          <div className="memory-reading-card-content" key={selectedId ?? 'reading'}>
+          <div className="memory-reading-heading">
+            <span className="memory-reading-caption">{card.kind === '主题' ? '主题概览' : '阅读记忆'}</span>
+            {readingIndex >= 0 ? <span className="memory-reading-position" data-testid="reading-position">{readingIndex + 1} / {readingResults.length}</span> : null}
+            <button type="button" className="memory-panel-close" aria-label="关闭阅读" onClick={dismissPanel}>×</button>
+          </div>
+          <motion.div initial={reducedMotion ? false : { opacity: 0, y: 9, filter: 'blur(3px)' }} animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }} transition={{ duration: reducedMotion ? 0 : 0.3 }} className="memory-reading-card-content" key={selectedId ?? 'reading'} ref={readingPanelRef}>
             <ReadingBody
               card={card}
               details={effectiveDetails}
@@ -1494,10 +1513,64 @@ export function MemorySpace({
               recordId={detailsRecordId}
               onOpenInArchive={openArchiveForRecord}
             />
-          </div>
-        </aside>
+          </motion.div>
+          {readingIndex >= 0 && readingResults.length > 1 ? (
+            <nav className="memory-reading-navigation" aria-label="连续阅读">
+              <button type="button" disabled={readingIndex === 0} onClick={() => handleSelect(readingResults[readingIndex - 1].id, 'activate')}>
+                <span aria-hidden="true">←</span> 上一条
+              </button>
+              <button type="button" disabled={readingIndex === readingResults.length - 1} onClick={() => handleSelect(readingResults[readingIndex + 1].id, 'activate')}>
+                下一条 <span aria-hidden="true">→</span>
+              </button>
+            </nav>
+          ) : null}
+        </motion.aside>
       ) : null}
     </section>
+  );
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
+function toDatetimeLocalValue(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}T${pad2(date.getHours())}:${pad2(date.getMinutes())}`;
+}
+
+function FindResultsStatus({
+  phase,
+  copy,
+  showRetry,
+  malformed,
+  onRetry,
+}: {
+  phase: string;
+  copy: string | null | undefined;
+  showRetry?: boolean;
+  malformed: boolean;
+  onRetry: () => void;
+}) {
+  const alert = malformed || phase === 'unavailable' || phase === 'error';
+  const text = malformed
+    ? '当前投影无效：有结果缺少对应节点，无法生成完整列表。'
+    : phase === 'loading'
+      ? '正在读取记忆投影…'
+      : (copy ?? '正在准备结果…');
+  return (
+    <p
+      className="memory-find-results-state"
+      role={alert ? 'alert' : undefined}
+      data-testid="memory-find-results-state"
+    >
+      {text}
+      {(phase === 'unavailable' || phase === 'error') && showRetry ? (
+        <button type="button" data-testid="memory-find-retry" onClick={onRetry}>重试</button>
+      ) : null}
+    </p>
   );
 }
 
@@ -1519,9 +1592,16 @@ function SourceLines({ lines }: { lines: SourceLineModel[] }) {
         <li key={`${index}-${line.sourceErased ? 'erased' : 'present'}`}>
           {line.sourceErased ? (
             <span data-testid="reading-source-erased">原始消息已删除，仅保留来源记录</span>
-          ) : (
+          ) : line.excerpt ? (
             <>
               <blockquote data-testid="reading-source-excerpt">{line.excerpt}</blockquote>
+              {line.sourceCreatedHuman ? <span>{line.sourceCreatedHuman}</span> : null}
+            </>
+          ) : (
+            <>
+              <p className="memory-reading-source-missing" data-testid="reading-source-excerpt-missing">
+                这条来源记录暂未提供摘录
+              </p>
               {line.sourceCreatedHuman ? <span>{line.sourceCreatedHuman}</span> : null}
             </>
           )}
@@ -1617,12 +1697,13 @@ function EvidenceDetails({
 }) {
   return (
     <div className="memory-reading-evidence" data-testid="reading-evidence">
+      <h3 className="memory-evidence-heading">来源与沿革</h3>
       {model.kind === 'fact' ? (
         <>
+          <SourceLines lines={model.activeSources} />
           {model.revisionSummary ? (
             <p data-testid="reading-revision-summary">{model.revisionSummary}</p>
           ) : null}
-          <SourceLines lines={model.activeSources} />
           {model.versionCount > 1 ? (
             <details data-testid="reading-versions">
               <summary>版本历史（{model.versionCount}）</summary>
@@ -1646,6 +1727,7 @@ function EvidenceDetails({
         </>
       ) : (
         <>
+          <SourceLines lines={model.sources} />
           {model.createdHuman ? (
             <p data-testid="reading-created-human">发生于 {model.createdHuman}</p>
           ) : null}
@@ -1656,18 +1738,32 @@ function EvidenceDetails({
               <p data-testid="reading-expires">{model.expiry.expiresHuman ? `将于 ${model.expiry.expiresHuman} 过期` : ''}</p>
             )
           ) : null}
-          <SourceLines lines={model.sources} />
         </>
       )}
-      <DiagnosticsBlock model={model} scope={scope} />
-      <p data-testid="reading-correction-notice">{model.correctionNotice}</p>
-      <p data-testid="reading-deeplink-notice">{model.deepLinkNotice}</p>
+      <details className="memory-reading-notices">
+        <summary>记录信息与说明</summary>
+        <p data-testid="reading-correction-notice">{model.correctionNotice}</p>
+        <p data-testid="reading-deeplink-notice">{model.deepLinkNotice}</p>
+        <DiagnosticsBlock model={model} scope={scope} />
+      </details>
     </div>
   );
 }
 
-// P1 spec-3: one payload-owned primary text in the success state; the
-// envelope card is an explicitly labeled projection summary everywhere else.
+function ReadingLocator({ card }: { card: NonNullable<ReturnType<typeof readingCardFromNode>> }) {
+  return (
+    <p className="memory-reading-kind" data-testid="reading-kind">
+      {card.kind}
+      {card.provenance.topicLabel ? (
+        <>
+          {' · '}
+          <span data-testid="reading-topic-label">{card.provenance.topicLabel}</span>
+        </>
+      ) : null}
+    </p>
+  );
+}
+
 function ReadingBody({
   card,
   details,
@@ -1687,20 +1783,22 @@ function ReadingBody({
   recordId?: string | null;
   onOpenInArchive?: (kind: 'fact' | 'experience', recordId: string) => void;
 }) {
+  const bodyText = details.type === 'ok' && model ? model.primaryText : card.title;
   if (details.type === 'ok' && model) {
     return (
       <>
-        <p className="memory-reading-kind" data-testid="reading-kind">{card.kind}</p>
-        <h2 data-testid="reading-title">{model.primaryText}</h2>
-        <ReadingProvenance provenance={card.provenance} />
+        <ReadingLocator card={card} />
+        <p className="memory-reading-body" data-testid="reading-title">{bodyText}</p>
         <EvidenceDetails model={model} scope={scope} />
+        <ReadingProvenance provenance={{ ...card.provenance, topicLabel: null }} />
         {onOpenInArchive && recordKind && recordId ? (
           <button
             type="button"
+            className="memory-reading-archive"
             data-testid="open-in-archive"
             onClick={() => onOpenInArchive(recordKind, recordId)}
           >
-            在档案中查看与治理
+            在档案中整理
           </button>
         ) : null}
       </>
@@ -1713,7 +1811,10 @@ function ReadingBody({
           投影摘要（未核验）
         </p>
       ) : null}
-      <ReadingFields card={card} />
+      <ReadingLocator card={card} />
+      <p className="memory-reading-body" data-testid="reading-title">{bodyText}</p>
+      {card.summary ? <p data-testid="reading-summary">{card.summary}</p> : null}
+      <ReadingProvenance provenance={{ ...card.provenance, topicLabel: null }} />
       <ReadingEvidence outcome={details} onRetry={onRetry} />
     </>
   );

@@ -279,8 +279,8 @@ function clampPitch(value: number): number {
   return Math.max(-0.9, Math.min(0.9, value));
 }
 
-function clampZoom(value: number): number {
-  return Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, value));
+function clampZoom(value: number, minimum = ZOOM_MIN): number {
+  return Math.max(minimum, Math.min(ZOOM_MAX, value));
 }
 
 function safeRectOf(viewport: Rect, insets: Insets): Rect {
@@ -1167,7 +1167,12 @@ export function step(state: MotionState, event: MotionEvent): { state: MotionSta
     inner.ambientStartedAt = null;
     inner.camera.yaw += event.dyaw ?? 0;
     inner.camera.pitch = clampPitch(inner.camera.pitch + (event.dpitch ?? 0));
-    if (event.zoomMul) inner.camera.distance = clampZoom(inner.camera.distance * event.zoomMul);
+    if (event.zoomMul) {
+      const focus = inner.presentation.restLayout.get(inner.presentation.selectedId ?? '');
+      // Small records need a closer manual view than automatic framing allows.
+      const minimum = focus?.kind === 'fact' || focus?.kind === 'experience' ? 0.12 : ZOOM_MIN;
+      inner.camera.distance = clampZoom(inner.camera.distance * event.zoomMul, minimum);
+    }
   } else if (event.type === 'activityChanged') {
     bakeAmbient(inner, inner.lastTickMs ?? event.nowMs);
     inner.hovered = event.hovered;

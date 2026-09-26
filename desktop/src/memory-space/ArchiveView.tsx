@@ -1,3 +1,5 @@
+import { MemorySelect } from './MemorySelect';
+import { motion, useReducedMotion } from 'motion/react';
 import { useSyncExternalStore } from 'react';
 
 import type { ArchiveScope } from './archiveApi';
@@ -24,6 +26,7 @@ export type ArchiveViewProps = {
   module: ArchiveModule;
   scope?: ArchiveScope;
   width?: number;
+  reducedMotion?: boolean;
 };
 
 const NARROW_WIDTH = 900;
@@ -45,11 +48,13 @@ function SourceLines({ lines }: { lines: SourceLine[] }) {
         <li key={`${index}-${line.sourceErased ? 'erased' : 'present'}`}>
           {line.sourceErased ? (
             <span>原始消息已删除，仅保留来源记录</span>
-          ) : (
+          ) : line.excerpt ? (
             <>
               <blockquote>{line.excerpt}</blockquote>
               {line.sourceCreatedHuman ? <span>{line.sourceCreatedHuman}</span> : null}
             </>
+          ) : (
+            <><p>这条来源记录暂未提供摘录</p>{line.sourceCreatedHuman ? <span>{line.sourceCreatedHuman}</span> : null}</>
           )}
         </li>
       ))}
@@ -115,8 +120,11 @@ function ExperienceReading({ model }: { model: ExperienceReadingModel }) {
   );
 }
 
-export function ArchiveView({ module, scope, width }: ArchiveViewProps) {
+export function ArchiveView({ module, scope, width, reducedMotion: motionPreference }: ArchiveViewProps) {
+  const systemReducedMotion = useReducedMotion();
+  const reducedMotion = motionPreference ?? systemReducedMotion;
   const state = useArchiveState(module);
+  const readOnly = state.pending.counts?.runtimeMode !== 'v11';
   const viewWidth = width ?? (typeof window === 'undefined' ? 1280 : window.innerWidth);
   const narrow = viewWidth < NARROW_WIDTH;
   // The module owns the exact scope; the prop is a fallback for first paint.
@@ -144,15 +152,27 @@ export function ArchiveView({ module, scope, width }: ArchiveViewProps) {
   })();
 
   const detailOpen = state.selection !== null || state.details.status !== 'idle';
+  const activeList = state.activeKind === 'fact' ? state.facts : state.experiences;
+  const filtered = Boolean(state.filters.query || state.filters.topicId || state.filters.pinnedOnly);
+  const selectedTopicId = (selectedFactRow ? selectedFactRow.topicId : readingModel?.kind === 'fact' ? readingModel.diagnostics.topicIdRaw : null) ?? '';
   const showList = !narrow || !detailOpen;
   const showDetail = !narrow || detailOpen;
 
   return (
-    <section className="archive-view" data-testid="archive-view" aria-label="记忆档案">
+    <motion.section className="archive-view" data-testid="archive-view" aria-label="记忆档案"
+      initial={reducedMotion ? false : { opacity: 0, y: 10, scale: 0.985 }} animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ type: 'spring', stiffness: 240, damping: 28 }}>
       <div className="sr-only" role="status" aria-live="polite" data-testid="archive-announce">
         {state.announcement}
       </div>
 
+      <header className="archive-heading">
+        <h2>记忆档案</h2>
+        {effectiveScope ? <span className="archive-scope-mark">{scopeLabel(effectiveScope)}</span> : null}
+      </header>
+      {readOnly ? <p className="memory-runtime-notice" role="status" data-testid="archive-runtime-notice">
+        {state.pending.counts?.runtimeMode ? '当前对话尚未使用本页的记忆。档案暂时只能查看，不能通过这里纠正或遗忘聊天记忆。' : '暂未确认档案与当前对话的连接状态，当前只能查看。'}
+      </p> : null}
       <div className="archive-toolbar">
         <div className="archive-kind-tabs" role="tablist" aria-label="记录种类">
           <button
@@ -183,17 +203,17 @@ export function ArchiveView({ module, scope, width }: ArchiveViewProps) {
           <input
             data-testid="archive-query"
             value={state.filters.query}
-            placeholder="字面搜索"
+            placeholder="搜索记忆内容"
             aria-label="搜索档案"
             onChange={(event) => module.dispatch({ type: 'set-query', query: event.target.value })}
           />
         </label>
-        <select
+        <MemorySelect
           aria-label="主题筛选"
           data-testid="archive-topic-select"
           value={state.filters.topicId ?? ''}
-          onChange={(event) =>
-            module.dispatch({ type: 'set-topic', topicId: event.target.value || null })
+          onValueChange={(value) =>
+            module.dispatch({ type: 'set-topic', topicId: value || null })
           }
         >
           <option value="">全部主题</option>
@@ -202,7 +222,7 @@ export function ArchiveView({ module, scope, width }: ArchiveViewProps) {
               {topic.displayLabel}（{topic.activeFactCount}）
             </option>
           ))}
-        </select>
+        </MemorySelect>
         {state.topicRename ? (
           <span className="archive-topic-rename">
             <input
@@ -216,7 +236,7 @@ export function ArchiveView({ module, scope, width }: ArchiveViewProps) {
             <button
               type="button"
               data-testid="archive-topic-rename-save"
-              disabled={state.topicRename.saving}
+              disabled={readOnly || state.topicRename.saving}
               onClick={() => module.dispatch({ type: 'rename-topic-save' })}
             >
               保存名称
@@ -232,6 +252,7 @@ export function ArchiveView({ module, scope, width }: ArchiveViewProps) {
           <button
             type="button"
             data-testid="archive-topic-rename"
+            disabled={readOnly}
             onClick={() =>
               module.dispatch({ type: 'rename-topic-start', topicId: state.filters.topicId as string })
             }
@@ -436,14 +457,18 @@ export function ArchiveView({ module, scope, width }: ArchiveViewProps) {
         ) : null}
 
         {showDetail ? (
-          <aside className="archive-detail" data-testid="archive-detail" aria-label="选中记录">
+          <aside className="archive-detail" data-testid="archive-detail" aria-label="选中记录" data-empty={!state.selection && state.details.status === 'idle'}>
             {narrow ? (
               <button type="button" data-testid="archive-back" onClick={() => module.dispatch({ type: 'back' })}>
                 返回列表
               </button>
             ) : null}
             {!state.selection && state.details.status === 'idle' ? (
-              <p className="archive-detail-empty">选择一条记录以阅读与治理。</p>
+              <div className="archive-detail-empty">
+                <span className="archive-empty-caption" aria-hidden="true">记忆 / 读取区</span>
+                <p>{activeList.status === 'loading' ? '正在读取记忆' : activeList.status === 'failed' ? '记忆暂时不可用' : activeList.total === 0 ? filtered ? '没有符合条件的记忆' : '这里还没有记忆' : '选择一条记忆，展开它的来处'}</p>
+                <span>{activeList.status === 'failed' ? '目录读取失败，请稍后重试。' : filtered ? '可以调整搜索内容或筛选范围。' : '事实、经历与来源，会在这里连成线索。'}</span>
+              </div>
             ) : null}
             {state.details.status === 'loading' ? <p>正在读取记录…</p> : null}
             {state.details.status === 'not-found' ? (
@@ -453,11 +478,16 @@ export function ArchiveView({ module, scope, width }: ArchiveViewProps) {
               <p role="alert">记录暂时不可用。</p>
             ) : null}
             {state.details.status === 'ready' && readingModel ? (
-              <>
+              <motion.div className="archive-reading-page" key={`${state.selection?.kind}:${state.selection?.recordId}`}
+                initial={reducedMotion ? false : { opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: reducedMotion ? 0 : 0.3 }}>
                 <p className="archive-detail-kind">
                   {readingModel.kind === 'fact' ? '事实' : '经历'}
                   {effectiveScope ? ` · ${scopeLabel(effectiveScope)}` : ''}
                 </p>
+                {!selectedFactRow && !selectedExperienceRow ? (
+                  <p className="archive-location-note">这条记忆不在当前页，已读取完整记录。</p>
+                ) : null}
                 <h2 data-testid="archive-detail-title">{readingModel.primaryText}</h2>
                 {readingModel.kind === 'fact' ? (
                   <FactReading model={readingModel} />
@@ -470,33 +500,40 @@ export function ArchiveView({ module, scope, width }: ArchiveViewProps) {
                       <button
                         type="button"
                         data-testid="archive-edit-fact"
+                        disabled={readOnly}
                         onClick={() => module.dispatch({ type: 'open-editor' })}
                       >
                         纠正文本
                       </button>
-                      <select
+                      <MemorySelect
                         aria-label="主题归属"
                         data-testid="archive-assign-topic"
-                        value={selectedFactRow?.topicId ?? ''}
-                        onChange={(event) =>
+                        disabled={readOnly}
+                        value={selectedTopicId}
+                        onValueChange={(value) =>
                           module.dispatch({
                             type: 'assign-topic',
-                            topicId: event.target.value || null,
+                            topicId: value || null,
                           })
                         }
                       >
                         <option value="">未归组</option>
+                        {selectedTopicId && !state.topics.items.some((topic) => topic.topicId === selectedTopicId) ? (
+                          <option value={selectedTopicId}>当前主题暂不可见</option>
+                        ) : null}
                         {state.topics.items.map((topic) => (
                           <option key={topic.topicId} value={topic.topicId}>
                             {topic.displayLabel}
                           </option>
                         ))}
-                      </select>
+                      </MemorySelect>
                     </>
                   ) : null}
                   <button
                     type="button"
                     data-testid="archive-toggle-pin"
+                    disabled={readOnly || (state.selection?.kind === 'experience' && !selectedExperienceRow)}
+                    title={state.selection?.kind === 'experience' && !selectedExperienceRow ? '需要在列表中确认这条经历的置顶状态' : undefined}
                     onClick={() => {
                       if (!state.selection) return;
                       module.dispatch({
@@ -506,8 +543,8 @@ export function ArchiveView({ module, scope, width }: ArchiveViewProps) {
                       });
                     }}
                   >
-                    {(state.selection?.kind === 'fact'
-                      ? selectedFactRow?.isPinned
+                    {state.selection?.kind === 'experience' && !selectedExperienceRow ? '置顶状态未知' : (state.selection?.kind === 'fact'
+                      ? selectedFactRow?.isPinned ?? (readingModel.kind === 'fact' && readingModel.isPinned)
                       : selectedExperienceRow?.isPinned)
                       ? '取消置顶'
                       : '置顶'}
@@ -515,12 +552,13 @@ export function ArchiveView({ module, scope, width }: ArchiveViewProps) {
                   <button
                     type="button"
                     data-testid="archive-delete-record"
+                    disabled={readOnly}
                     onClick={() => module.dispatch({ type: 'request-delete' })}
                   >
                     删除
                   </button>
                 </div>
-              </>
+              </motion.div>
             ) : null}
 
             {state.editor ? (
@@ -554,6 +592,7 @@ export function ArchiveView({ module, scope, width }: ArchiveViewProps) {
                     <button
                       type="button"
                       data-testid="archive-save-edit"
+                      disabled={readOnly}
                       onClick={() => module.dispatch({ type: 'save-edit' })}
                     >
                       保存修订
@@ -589,6 +628,7 @@ export function ArchiveView({ module, scope, width }: ArchiveViewProps) {
                     <button
                       type="button"
                       data-testid="archive-delete-confirm-button"
+                      disabled={readOnly}
                       onClick={() => module.dispatch({ type: 'confirm-delete' })}
                     >
                       确认删除
@@ -638,6 +678,7 @@ export function ArchiveView({ module, scope, width }: ArchiveViewProps) {
                   <button
                     type="button"
                     data-testid={`archive-ignore-${item.observationId}`}
+                    disabled={readOnly}
                     onClick={() =>
                       module.dispatch({ type: 'ignore-observation', observationId: item.observationId })
                     }
@@ -660,6 +701,7 @@ export function ArchiveView({ module, scope, width }: ArchiveViewProps) {
                   <button
                     type="button"
                     data-testid={`archive-retry-${job.jobId}`}
+                    disabled={readOnly}
                     onClick={() => module.dispatch({ type: 'retry-job', jobId: job.jobId })}
                   >
                     重试
@@ -678,6 +720,6 @@ export function ArchiveView({ module, scope, width }: ArchiveViewProps) {
       <p className="archive-disclosure" data-testid="archive-disclosure">
         {PROVIDER_DISCLOSURE}
       </p>
-    </section>
+    </motion.section>
   );
 }

@@ -282,6 +282,7 @@ export function ConstellationStage(props: {
     if (!canvas) return undefined;
     let cancelled = false;
     let raf = 0;
+    let resizeObserver: ResizeObserver | undefined;
     const onLost = (event: Event) => {
       event.preventDefault();
       if (cancelled) return;
@@ -462,6 +463,12 @@ export function ConstellationStage(props: {
       const runtime = new OrreryRuntime(canvas);
       runtimeRef.current = runtime;
       runtime.setSize(canvas.clientWidth, canvas.clientHeight);
+      // Layout can settle after switching views or opening a narrow sheet,
+      // without a window resize. Keep the drawing buffer in sync with it.
+      if (typeof ResizeObserver !== 'undefined') {
+        resizeObserver = new ResizeObserver(onWinResize);
+        resizeObserver.observe(canvas);
+      }
       runtime.setWorldline(propsRef.current.worldline);
       runtime.setReducedMotion(propsRef.current.reducedMotion);
       runtime.setDecoration(propsRef.current.decoration ?? 'full');
@@ -486,6 +493,7 @@ export function ConstellationStage(props: {
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('focus', onFocusGained);
       window.removeEventListener('resize', onWinResize);
+      resizeObserver?.disconnect();
       canvas.removeEventListener('webglcontextlost', onLost);
       runtimeRef.current?.dispose();
       runtimeRef.current = null;

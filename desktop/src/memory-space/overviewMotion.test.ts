@@ -801,6 +801,16 @@ describe('overviewMotion planner', () => {
     expect(restored.frame.ownership).toBe('rest');
   });
 
+  it('manual zoom continues toward a selected fact beyond the automatic framing floor', () => {
+    const seed = seedFrom(envelope(), {
+      selectedId: 'fact:1', expandedTopicIds: ['topic:t1'], reducedMotion: true,
+    });
+    const first = step(createOverviewMotion(seed), { type: 'userCamera', source: 'wheel', zoomMul: 0.01 });
+    const pulled = step(first.state, { type: 'userCamera', source: 'wheel', zoomMul: 0.5 });
+    expect(pulled.frame.camera.distance).toBeLessThan(1.15);
+    expect(pulled.frame.camera.distance).toBeGreaterThan(0.08);
+  });
+
   it('Topic focus dollies in when the live node is too small at rest distance', () => {
     const seed = seedFrom(envelope(), {
       viewport: { x: 0, y: 0, width: 1280, height: 800 },
