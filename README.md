@@ -1,72 +1,50 @@
 # Amadeus System
 
-Desktop-first *STEINS;GATE* Amadeus AI companion (Chat Helper form).  
-Japanese character voice + Chinese subtitles; local desktop + FastAPI backend + TTS.
+Amadeus 是面向《命运石之门》爱好者的本地桌面 AI 对话产品：以牧濑红莉栖的人格进行日语对话，显示中文字幕，并让用户查看、纠正和遗忘长期记忆。目标与用户旅程见[中文 PRD](docs/amadeus-product-prd.zh-CN.md)；目前做到哪里见[工程状态](docs/amadeus-rebuild-status.md)。
 
-| Stack | Path |
+当前仓库包含 React/TypeScript 桌面界面、Tauri 壳、Python FastAPI/WebSocket 后端以及 GPT-SoVITS 语音路径。**开发环境能运行，不等于已经有可交付的安装版。** 当前桌面壳尚未随包管理后端；Voice Pack 属于可选能力。
+
+## 从哪里读起
+
+| 想了解 | 文档 |
 |---|---|
-| Desktop UI (primary) | `desktop/` — React + TypeScript + Vite + Tauri |
-| Backend | `backend/` — Python FastAPI + WebSocket |
-| TTS | GPT-SoVITS / Voice Pack path (see product docs) |
-| Chat model (product lean) | DeepSeek-first — see `CONTEXT.md` |
+| 产品目标、首个 MVP 和用户旅程 | [中文 PRD](docs/amadeus-product-prd.zh-CN.md) |
+| 当前实现与下一项工程动作 | [工程状态](docs/amadeus-rebuild-status.md) |
+| 文档和专题入口 | [文档目录](docs/README.md) |
+| 项目协作规则 | [AGENTS.md](AGENTS.md) 与 [Agent 操作目录](docs/agents/README.md) |
+| 产品术语和已接受的形态决策 | [CONTEXT.md](CONTEXT.md) 与 [ADR 决策目录](docs/adr/README.md) |
+| 上下文中断后的接续 | [恢复说明](docs/amadeus-context-recovery.md) |
 
----
+产品方案与工程状态各有归属；历史任务合同和旧 Atlas 不能单独证明当前代码已经具备某项能力。
 
-## Root documents (do not conflate)
+## 本地开发启动
 
-| File | Audience | Answers | Does **not** answer |
-|---|---|---|---|
-| **`README.md`** (this file) | Humans cloning the repo | What the project is; how to run; where to read next | Agent law, persona canon, next engineering task |
-| **`AGENTS.md`** | Coding agents + contributors | Repo law, single-writer, user gates, validation commands, authority list | Product-form vocabulary; live casting roster |
-| **`CONTEXT.md`** | Agents + humans aligning on **product shape** | Chat Helper, Ordinary Fan, Configuration Tax, Vision presets, Three-Column Shell… | Implementation status; how to cast Codex/Grok; persona bible text |
+需要 Python、Node.js。运行 Tauri/WebView2 壳还需要 Rust、MSVC Build Tools 和 WebView2；已配置的本机环境可以复用。以下命令用于开发，不负责安装版的后端生命周期。
 
-**Multi-agent workflow (lifecycle, casting, handoff, Matt adapter):**  
-→ start at [`docs/agents/README.md`](docs/agents/README.md)
+```powershell
+# 终端 1：后端
+Set-Location backend
+python -m venv .venv                    # 仅首次设置
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 
-**Engineering “what next”:**  
-→ [`docs/amadeus-rebuild-status.md`](docs/amadeus-rebuild-status.md)
-
-**After context compaction:**  
-→ [`docs/amadeus-context-recovery.md`](docs/amadeus-context-recovery.md)
-
-**Persona / language / memory product decisions:**  
-→ [`docs/amadeus-product-qa-memory.md`](docs/amadeus-product-qa-memory.md) + Persona Bible under `backend/characters/`
-
-**Hard product-form decisions:**  
-→ [`docs/adr/`](docs/adr/)
-
----
-
-## Quick start (dev)
-
-```bash
-# Backend
-cd backend
-# prefer project venv if present: .\.venv\Scripts\python.exe -m uvicorn ...
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
-
-# Desktop UI (PC product surface)
-cd desktop
+# 终端 2：浏览器开发界面
+Set-Location desktop
+npm ci                                  # 仅首次设置或依赖更新
 npm run dev
+
+# 需要真实桌面壳时，在 desktop/ 中运行
+npm run tauri -- dev
 ```
 
-Legacy/mobile tree under `frontend/` may exist for older paths; **shipping focus is `desktop/`**.
+本地服务使用回环地址；桌面细节见 [desktop/README.md](desktop/README.md)。`frontend/` 保留旧路径，当前桌面产品以 `desktop/` 为主。打包与发布尚需独立产品验证。
 
-Validation commands used by agents are listed in `AGENTS.md`.
+## 目录
 
----
-
-## Layout (high level)
-
-```text
-amadeus_web/
-  README.md          ← you are here (human front door)
-  AGENTS.md          ← agent/contributor law
-  CONTEXT.md         ← product-form glossary
-  docs/agents/       ← multi-agent ops hub
-  docs/              ← status, QA, recovery, atlas, adr…
-  backend/           ← API, persona, TTS queue…
-  desktop/           ← primary client
-  .scratch/          ← roster, tickets, templates (ephemeral)
-  .agents/skills/    ← amadeus-handoff / review / verification / persona-guardian
-```
+| 路径 | 用途 |
+|---|---|
+| `backend/` | API、对话、人格、记忆与语音调度 |
+| `desktop/` | 主要用户界面与 Tauri 壳 |
+| `docs/` | 产品目标、工程状态、设计决策与专题说明 |
+| `.scratch/` | 工作中的任务记录和证据；历史冻结材料不可随意清理 |
+| `.agents/`、`.codex/agents/` | 项目协作工具与角色配置，从属于用户指令和 `AGENTS.md` |
