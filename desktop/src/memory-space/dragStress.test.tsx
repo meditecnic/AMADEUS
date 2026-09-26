@@ -10,6 +10,7 @@ import type { MemoryProjection } from './types';
 // wiring and overviewMotion camera math run for real.
 vi.mock('./orreryRenderer', () => {
   class OrreryRuntime {
+    soulOpening = { open: false, progress: 0, reading: false, setOpen() {}, dolly() {}, orbit() {} };
     supported = true;
     setSize() {}
     setWorldline() {}

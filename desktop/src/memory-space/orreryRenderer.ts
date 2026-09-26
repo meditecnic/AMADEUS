@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { SoulOpeningPrototype } from './SoulOpeningPrototype';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -104,6 +105,7 @@ function lineFromPoints(points: Point3[], color: number, opacity: number, dashed
 }
 
 export class OrreryRuntime {
+  readonly soulOpening = new SoulOpeningPrototype();
   supported: boolean;
   private renderer: THREE.WebGLRenderer | null = null;
   private composer: EffectComposer | null = null;
@@ -111,6 +113,7 @@ export class OrreryRuntime {
   private environmentTarget: THREE.WebGLRenderTarget | null = null;
   private readonly scene = new THREE.Scene();
   private readonly camera = new THREE.PerspectiveCamera(OVERVIEW_FOV_DEG, 1, 0.08, 40);
+  private readonly soulPickCamera = new THREE.PerspectiveCamera();
   private readonly raycaster = new THREE.Raycaster();
   private readonly pointer = new THREE.Vector2();
   private readonly nodeGroup = new THREE.Group();
@@ -217,6 +220,8 @@ export class OrreryRuntime {
 
   setWorldline(worldline: Worldline): void {
     if (this.worldline === worldline) return;
+    this.soulOpening.setOpen(false);
+    this.soulOpening.progress = 0;
     this.worldline = worldline;
     this.palette = worldlinePalette(worldline);
     this.applyPalette();
@@ -337,6 +342,7 @@ export class OrreryRuntime {
 
   render(cam: OrreryCamera): void {
     if (!this.renderer || this.disposed) return;
+    this.soulOpening.restore();
     if (this.liveFrame) this.syncCameraFromFrame(this.liveFrame);
     else {
       const pos = cameraWorld(cam);
@@ -365,6 +371,9 @@ export class OrreryRuntime {
     const hubRadius = hubId && this.liveFrame?.nodes.get(hubId)?.hitRadius;
     const contextualScale = hubRadius ? hubRadius / this.soulRadius : 1;
     this.soulGroup.scale.setScalar(contextualScale);
+    this.soulOpening.update(this.soulGroup, this.camera, cam, [this.nodeGroup, this.pathGroup, this.memoryBodyGroup, this.viscidGroup], this.reducedMotion);
+    this.camera.updateMatrixWorld();
+    this.soulPickCamera.copy(this.camera);
     if (this.composer) this.composer.render();
     else this.renderer.render(this.scene, this.camera);
   }
@@ -390,6 +399,13 @@ export class OrreryRuntime {
       if (id) return id;
     }
     return null;
+  }
+
+  pickSoulCore(clientX: number, clientY: number, rect: DOMRect): boolean {
+    this.pointer.set((clientX - rect.left) / rect.width * 2 - 1, -(clientY - rect.top) / rect.height * 2 + 1);
+    this.raycaster.setFromCamera(this.pointer, this.soulPickCamera);
+    const center = this.soulGroup.getWorldPosition(new THREE.Vector3());
+    return this.raycaster.ray.intersectsSphere(new THREE.Sphere(center, 0.32 * this.soulGroup.scale.x));
   }
 
   project(id: string): { x: number; y: number } | null {

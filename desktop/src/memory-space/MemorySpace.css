@@ -641,5 +641,13 @@
   .memory-space-find, .memory-space-find[data-filters-open="true"] { max-height: max(0px, calc(100vh - 116px)); }
   .memory-space[data-narrow-sheet="list"] .memory-constellation-host { padding-bottom: max(0px, calc(100vh - 104px)); }
 }
+.soul-opening-toggle {
+  margin: 12px 0; padding: 10px 20px; border: 1px solid rgba(130, 190, 210, .35);
+  border-radius: 6px; color: inherit; background: rgba(100, 160, 185, .08); cursor: pointer;
+}
+.soul-opening-hint { font-size: 12px; opacity: .6; }
+.memory-constellation-labels { transition: opacity 1s; }
+.memory-space[data-soul-open="true"] .memory-constellation-labels { opacity: 0; }
+.memory-space[data-reduced-motion="true"] .memory-constellation-labels { transition: none; }
 .memory-runtime-notice { margin: 8px 0 12px; padding: 10px 12px; color: var(--memory-text); background: var(--memory-surface); border-left: 2px solid var(--memory-muted); font-size: 12px; line-height: 1.7; }
 .memory-runtime-notice-overview { position: absolute; z-index: 25; left: 16px; top: 64px; max-width: min(420px, calc(100% - 32px)); }

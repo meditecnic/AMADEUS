@@ -79,6 +79,9 @@ function evidenceIds(plan: OverviewDisclosurePlan): string {
 }
 
 export function ConstellationStage(props: {
+  soulOpen?: boolean;
+  soulReading?: boolean;
+  onSoulRead?: () => void;
   plan: OverviewDisclosurePlan;
   selectedId: string | null;
   reducedMotion: boolean;
@@ -105,6 +108,8 @@ export function ConstellationStage(props: {
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const runtimeRef = useRef<OrreryRuntime | null>(null);
+  useEffect(() => { runtimeRef.current?.soulOpening.setOpen(Boolean(props.soulOpen)); }, [props.soulOpen]);
+  useEffect(() => { if (runtimeRef.current) runtimeRef.current.soulOpening.reading = Boolean(props.soulReading); }, [props.soulReading]);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
   const rightPressRef = useRef<{ x: number; y: number; dragged: boolean } | null>(null);
   const movedRef = useRef(false);
@@ -470,6 +475,8 @@ export function ConstellationStage(props: {
         resizeObserver.observe(canvas);
       }
       runtime.setWorldline(propsRef.current.worldline);
+      runtime.soulOpening.setOpen(Boolean(propsRef.current.soulOpen));
+      runtime.soulOpening.reading = Boolean(propsRef.current.soulReading);
       runtime.setReducedMotion(propsRef.current.reducedMotion);
       runtime.setDecoration(propsRef.current.decoration ?? 'full');
       runtime.setExpanded(true);
@@ -563,6 +570,10 @@ export function ConstellationStage(props: {
       const factor = current.reducedMotion
         ? (event.deltaY > 0 ? 1.12 : 1 / 1.12)
         : (1 + event.deltaY * 0.0012);
+      if (runtimeRef.current?.soulOpening.open || runtimeRef.current?.soulOpening.progress) {
+        runtimeRef.current.soulOpening.dolly(factor);
+        return;
+      }
       const moved = step(motionRef.current, {
         type: 'userCamera', source: 'wheel', zoomMul: factor, nowMs: clockMs(),
       });
@@ -625,6 +636,10 @@ export function ConstellationStage(props: {
           if (!movedRef.current && !isPointerDrag(dx, dy)) return;
           movedRef.current = true;
           dragRef.current = { x: event.clientX, y: event.clientY };
+          if (runtime?.soulOpening.open || runtime?.soulOpening.progress) {
+            runtime.soulOpening.orbit(dx, dy);
+            return;
+          }
           const moved = step(motionRef.current, {
             type: 'userCamera',
             source: 'pointer',
@@ -646,6 +661,11 @@ export function ConstellationStage(props: {
           return;
         }
         const rect = canvas.getBoundingClientRect();
+        if (runtime.soulOpening.open || runtime.soulOpening.progress) {
+          canvas.style.cursor = runtime.pickSoulCore(event.clientX, event.clientY, rect) ? 'pointer' : 'grab';
+          return;
+        }
+        canvas.style.cursor = '';
         const hover = pickAtClient(event.clientX, event.clientY, rect);
         runtime.setHover(hover);
         setHoverId(hover);
@@ -672,6 +692,11 @@ export function ConstellationStage(props: {
         if (!canvas || event.button === 2) return;
         const dragged = movedRef.current;
         const rect = canvas.getBoundingClientRect();
+        if (runtimeRef.current?.soulOpening.open || runtimeRef.current?.soulOpening.progress) {
+          dragRef.current = null; movedRef.current = false;
+          if (!dragged && runtimeRef.current.soulOpening.open && runtimeRef.current.pickSoulCore(event.clientX, event.clientY, rect)) props.onSoulRead?.();
+          return;
+        }
         const hit = pickAtClient(event.clientX, event.clientY, rect);
         dragRef.current = null;
         movedRef.current = false;

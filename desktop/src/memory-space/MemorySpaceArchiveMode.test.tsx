@@ -10,6 +10,7 @@ const rendererHarness = vi.hoisted(() => ({ supported: true }));
 vi.mock('./orreryRenderer', () => {
   class OrreryRuntime {
     supported = rendererHarness.supported;
+    soulOpening = { open: false, progress: 0, reading: false, setOpen() {}, dolly() {}, orbit() {} };
     setSize() {}
     setWorldline() {}
     setReducedMotion() {}
@@ -22,6 +23,7 @@ vi.mock('./orreryRenderer', () => {
     applyFrame() {}
     render() {}
     pick() { return null; }
+    pickSoulCore() { return false; }
     project() { return null; }
     dispose() {}
   }

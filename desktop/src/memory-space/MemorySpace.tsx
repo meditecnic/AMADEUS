@@ -9,6 +9,7 @@ import { MemoryResultOutline } from './MemoryResultOutline';
 import { deriveOverviewPresentation, outlineIds } from './overviewPresentation';
 import { memorySpaceShortcut } from './chrome';
 import { ConstellationStage } from './ConstellationStage';
+import { SoulInteriorPrototype } from './SoulInteriorPrototype';
 import type { PresentationChangeCause } from './overviewMotion';
 import {
   arbitrateMotionDelivery,
@@ -167,6 +168,9 @@ export function MemorySpace({
   const [jobs, setJobs] = useState<JobSummary | null>(null);
   const [topics, setTopics] = useState<TopicOption[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [soulOpen, setSoulOpen] = useState(false);
+  const [soulReading, setSoulReading] = useState(false);
+  useEffect(() => { if (!soulOpen) setSoulReading(false); }, [soulOpen]);
   const [dismissedPanel, setDismissedPanel] = useState<string | null>(null);
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const [listOpen, setListOpen] = useState(false);
@@ -408,6 +412,7 @@ export function MemorySpace({
     [selected, liveProjection],
   );
   const scopeKey = `${browseSessionId}|${worldline}|${identityMode}`;
+  useEffect(() => { setSoulOpen(false); }, [scopeKey, mode]);
 
   // S4-ARCHIVE Gate 2: opening Archive happens once per (mode, scope) pair;
   // deep-link opens mark the pair themselves so a focus open is never
@@ -503,6 +508,7 @@ export function MemorySpace({
   };
 
   const handleSelect = (id: string | null, mode: 'rove' | 'activate' = 'activate') => {
+    if (soulOpen) return;
     if (mode === 'activate') setDismissedPanel(null);
     // P1 spec-1: rove moves focus only. Activation (Enter / Space / click)
     // is the sole owner of selectedId and therefore of details loading.
@@ -611,6 +617,7 @@ export function MemorySpace({
   };
 
   const returnToOverview = () => {
+    setSoulOpen(false);
     setSelectedId(null);
     setFocusedId(null);
     setExpandedTopicIds([]);
@@ -622,6 +629,8 @@ export function MemorySpace({
   };
 
   const unwind = (opts?: { closeAtRoot?: boolean }) => {
+    if (soulOpen && soulReading) { setSoulReading(false); return; }
+    if (soulOpen) { setSoulOpen(false); return; }
     // Semantic Back in Archive mode: editor/confirm → detail → list → close.
     if (mode === 'archive') {
       if (archiveModuleRef.current?.handleBack()) return;
@@ -720,6 +729,7 @@ export function MemorySpace({
         unwind();
         return;
       }
+      if (soulOpen) return;
       if (inField) return;
       const shortcut = memorySpaceShortcut(event);
       if (shortcut === 'search') {
@@ -1032,6 +1042,7 @@ export function MemorySpace({
     <section
       className="memory-space"
       data-testid="memory-space"
+      data-soul-open={String(soulOpen)}
       data-phase={phase}
       data-expanded-topics={expandedTopicIds.join(',')}
       data-selected-id={selectedId ?? ''}
@@ -1170,7 +1181,7 @@ export function MemorySpace({
       {mode === 'constellation' && presentation.phase === 'criteria-empty' ? (
         <p className="memory-space-state" data-testid="memory-criteria-empty">{presentation.copy}</p>
       ) : null}
-      {mode === 'constellation' && truncated && liveProjection && planReady ? (
+      {mode === 'constellation' && !soulOpen && truncated && liveProjection && planReady ? (
         <p className="memory-space-truncation" data-testid="memory-truncation">
           当前呈现 {liveProjection.shown.results} / {liveProjection.eligible.results}，并非全部记忆。
         </p>
@@ -1209,6 +1220,9 @@ export function MemorySpace({
       >
         {liveProjection && disclosurePlan && planReady && renderSurface === '3d' ? (
           <ConstellationStage
+            soulOpen={soulOpen}
+            soulReading={soulReading}
+            onSoulRead={() => setSoulReading(true)}
             key={runtimeGeneration}
             plan={disclosurePlan}
             selectedId={selectedId}
@@ -1419,13 +1433,17 @@ export function MemorySpace({
         </motion.aside>
       ) : null}
 
-      {showInspector && liveProjection ? (
+      {soulOpen ? <SoulInteriorPrototype worldline={worldline} reading={soulReading} onRead={() => setSoulReading(true)} onObserve={() => setSoulReading(false)} onClose={() => setSoulOpen(false)} /> : null}
+
+      {showInspector && liveProjection && !soulOpen ? (
         <aside className="memory-inspector" data-testid="soul-inspector">
           <div className="memory-panel-heading">
             <h2>AMADEUS / SOUL</h2>
             <button type="button" className="memory-panel-close" aria-label="关闭 SOUL 概览" onClick={dismissPanel}>×</button>
           </div>
           <p>SOUL 是当前 Amadeus 记忆连续性的投影中心，不是一条可编辑的记忆。</p>
+          <button type="button" className="soul-opening-toggle" onClick={() => setSoulOpen(true)}>展开核心</button>
+          <button type="button" className="soul-origin-shortcut" onClick={() => { setSoulOpen(true); setSoulReading(true); }}>阅读起点 ↗</button>
           <dl data-testid="inspector-composition">
             <div><dt>稳定事实</dt><dd>{liveProjection.composition.active_facts}</dd></div>
             <div><dt>经历</dt><dd>{liveProjection.composition.active_experiences}</dd></div>

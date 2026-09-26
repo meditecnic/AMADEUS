@@ -9,6 +9,7 @@ const rendererHarness = vi.hoisted(() => ({ supported: true }));
 vi.mock('./orreryRenderer', () => {
   class OrreryRuntime {
     supported = rendererHarness.supported;
+    soulOpening = { open: false, progress: 0, reading: false, setOpen() {}, dolly() {}, orbit() {} };
     setSize() {}
     setWorldline() {}
     setReducedMotion() {}
@@ -21,6 +22,7 @@ vi.mock('./orreryRenderer', () => {
     applyFrame() {}
     render() {}
     pick() { return null; }
+    pickSoulCore() { return false; }
     project() { return null; }
     dispose() {}
   }
@@ -987,6 +989,17 @@ describe('MemorySpace', () => {
     expect(screen.queryByText('SELF MODEL')).toBeNull();
     expect(screen.queryByTestId('reading-scene')).toBeNull();
     expect(screen.queryByTestId('reading-dom')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '展开核心' }));
+    expect(screen.getByTestId('soul-interior')).toHaveAttribute('data-reading', 'false');
+    fireEvent.click(screen.getByRole('button', { name: /了解这个起点/ }));
+    expect(screen.getByTestId('soul-interior')).toHaveAttribute('data-reading', 'true');
+    expect(screen.getByText(/Amadeus 以牧濑红莉栖/)).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.getByTestId('soul-interior')).toHaveAttribute('data-reading', 'false');
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByTestId('soul-interior')).toBeNull();
+    expect(screen.getByTestId('soul-inspector')).toBeInTheDocument();
   });
 
   it('keeps only the latest envelope when two projection fetches overlap', async () => {
