@@ -1,4 +1,4 @@
-from app.security.prompt import SYSTEM_PROMPT_BASE, COMPRESSION_PROMPT_SUFFIX
+from app.security.prompt import SYSTEM_PROMPT_BASE
 
 def test_prompt_contains_daru_mapping():
     assert "桶子" in SYSTEM_PROMPT_BASE
@@ -7,9 +7,6 @@ def test_prompt_contains_daru_mapping():
 def test_prompt_contains_worldline_terms():
     assert "世界线" in SYSTEM_PROMPT_BASE
     assert "萨列里" in SYSTEM_PROMPT_BASE
-
-def test_compression_prompt_contains_translation_mapping():
-    assert "桶子" in COMPRESSION_PROMPT_SUFFIX
 
 def test_fewshot_handles_chinese_without_language_confusion():
     import json

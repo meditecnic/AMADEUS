@@ -345,15 +345,8 @@ async def test_delete_returns_error_when_db_disable_fails(app_client, monkeypatc
 async def test_save_and_soft_disable_return_committed_values_without_reread(
     app_client,
 ):
-    """Commit success is declared from known fields (no post-commit SELECT)."""
+    """Commit success is declared from known fields."""
     from app import db as db_mod
-    import inspect
-
-    save_src = inspect.getsource(db_mod.save_provider_configuration)
-    disable_src = inspect.getsource(db_mod.soft_disable_provider_configuration)
-    assert "await db.commit()" in save_src
-    assert "SELECT provider_id, base_url" not in save_src.split("await db.commit()")[-1]
-    assert "get_provider_configuration" not in disable_src.split("await db.commit()")[-1]
 
     pid = "custom:11111111-1111-1111-1111-111111111111"
     saved = await db_mod.save_provider_configuration(

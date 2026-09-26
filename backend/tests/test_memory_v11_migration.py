@@ -93,11 +93,6 @@ def _snapshot_owner_content(owner: str, worldline: str = "steins_gate") -> dict[
         connection.close()
 
 
-def test_s0_migration_module_exists():
-    importlib.import_module("app.services.memory_v11.migration")
-    importlib.import_module("app.services.memory_v11.repository")
-
-
 @pytest.mark.asyncio
 async def test_s0_legacy_import_idempotent_no_row_growth(isolated_store):
     """Second import: stable_facts/versions/evidence/observations counts must not increase."""

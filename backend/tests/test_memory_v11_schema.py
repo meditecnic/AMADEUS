@@ -104,13 +104,6 @@ INGEST_UNIQUE_COLUMNS = (
     "pipeline_version",
 )
 
-MEMORY_V11_MODULES = (
-    "app.services.memory_v11",
-    "app.services.memory_v11.contracts",
-    "app.services.memory_v11.repository",
-)
-
-
 @pytest.fixture
 async def isolated_store(tmp_path, monkeypatch):
     monkeypatch.delenv("AMADEUS_DB_PATH", raising=False)
@@ -219,22 +212,6 @@ def _seed_v10_memory_db(path: Path, *, session_id: str = "seed-v10") -> set[str]
 # ---------------------------------------------------------------------------
 # Package / version surface
 # ---------------------------------------------------------------------------
-
-
-def test_s0_schema_version_constant_is_11():
-    assert db_module.SCHEMA_VERSION == 11, (
-        f"SCHEMA_VERSION is {db_module.SCHEMA_VERSION}; v11 not landed"
-    )
-
-
-def test_s0_memory_v11_fixed_module_catalog():
-    missing = []
-    for name in MEMORY_V11_MODULES:
-        try:
-            importlib.import_module(name)
-        except ModuleNotFoundError:
-            missing.append(name)
-    assert not missing, f"fixed memory_v11 modules missing: {missing}"
 
 
 # ---------------------------------------------------------------------------

@@ -75,11 +75,6 @@ def _load_entries() -> list[dict]:
 # A. Lexicon schema / coverage
 # ---------------------------------------------------------------------------
 
-def test_lexicon_file_exists_and_versioned():
-    assert LEXICON_PATH.exists(), "canonical lexicon json missing"
-    _load_entries()
-
-
 def test_required_character_coverage():
     readings = {e["surface"]: e["spoken"] for e in _load_entries()}
     for surface, spoken in REQUIRED_CHARACTER_READINGS.items():

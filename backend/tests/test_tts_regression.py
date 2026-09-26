@@ -242,16 +242,10 @@ async def test_synthesize_async_unknown_emotion_falls_to_config(tmp_path, monkey
 
 
 def test_emotion_ref_map_built_9_emotions():
-    """EMOTION_REF_MAP should always contain all 9 emotions, possibly as None."""
-    expected = ("neutral", "tsundere", "embarrassed", "intellectual",
-                "happy", "surprised", "annoyed", "disappointed", "sad")
-    for emotion in expected:
-        assert emotion in EMOTION_REF_MAP
-
-
-def test_emotion_ref_map_count():
-    """EMOTION_REF_MAP should contain exactly 9 emotions."""
-    assert len(EMOTION_REF_MAP) == 9
+    """Missing or extra emotion keys change which reference audio can be selected."""
+    expected = {"neutral", "tsundere", "embarrassed", "intellectual",
+                "happy", "surprised", "annoyed", "disappointed", "sad"}
+    assert set(EMOTION_REF_MAP) == expected
 
 
 def test_embarrassed_reference_prompt_matches_supplied_recording():

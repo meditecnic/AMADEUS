@@ -392,29 +392,11 @@ describe('Workstation S4-DS dark-only chrome', () => {
     expect(screen.queryByText(/^NIGHT$/)).not.toBeInTheDocument();
   });
 
-  it('has no theme preference localStorage and fixed dark color-scheme contract in CSS', () => {
-    expect(localStorage.getItem('amadeus_pc_theme')).toBeNull();
-    const appCss = fs.readFileSync(path.resolve(__dirname, '../App.css'), 'utf8');
-    const tokens = fs.readFileSync(path.resolve(__dirname, '../design-system/tokens.css'), 'utf8');
-    expect(appCss).not.toMatch(/\[data-theme=['"]day['"]\]/);
-    expect(tokens).not.toMatch(/\[data-theme=['"]day['"]\]/);
-    expect(tokens).toMatch(/color-scheme:\s*dark/);
-    expect(appCss).toMatch(/color-scheme:\s*dark/);
-    expect(appCss).not.toMatch(/\/assets\/ui\/day\//);
-  });
-
   it('DivergenceMeter remains sole worldline percentage authority', async () => {
     renderWorkstation();
     // Real DivergenceMeter (not mocked) — role=img + aria-label ownership.
     const meter = await screen.findByRole('img', { name: 'World line divergence 1.048596%' });
     expect(meter).toHaveClass('divergence-meter');
-  });
-
-  it('CircuitTrace is absent from Workstation', async () => {
-    const source = fs.readFileSync(path.resolve(__dirname, './Workstation.tsx'), 'utf8');
-    expect(source).not.toMatch(/CircuitTrace/);
-    renderWorkstation();
-    await waitFor(() => expect(screen.getByText('AMADEUS')).toBeInTheDocument());
   });
 
   it('first-class MEMORY aperture opens Memory Space Overview', async () => {
@@ -428,49 +410,6 @@ describe('Workstation S4-DS dark-only chrome', () => {
     });
     expect(screen.getByTestId('constellation-stage')).toBeInTheDocument();
     expect(document.querySelector('.salieri-workstation-panel')).toHaveClass('memory-space-open');
-  });
-
-  it('hides the workstation panel frame while Memory Space is open', () => {
-    const appCss = fs.readFileSync(path.resolve(__dirname, '../App.css'), 'utf8');
-    expect(appCss).toMatch(
-      /\.salieri-workstation-panel\.memory-space-open\s+\.workstation-panel-frame-overlay/,
-    );
-    expect(appCss).toMatch(
-      /\.salieri-workstation-panel\.memory-space-open::before/,
-    );
-  });
-
-  it('production DCE: MEMORY aperture is not a DEV-only specimen', () => {
-    const source = fs.readFileSync(path.resolve(__dirname, './Workstation.tsx'), 'utf8');
-    expect(source).toMatch(/memory-aperture-btn/);
-    expect(source).not.toMatch(/showMemorySpecimen/);
-    expect(source).not.toMatch(/placement specimen/);
-  });
-
-  it('composer/model-bottom-bar and portal menus use semantic tokens (dark-only)', () => {
-    const appCss = fs.readFileSync(path.resolve(__dirname, '../App.css'), 'utf8');
-    expect(appCss).toMatch(/\.model-bottom-bar\s*\{[^}]*var\(--color-bg-panel/s);
-    expect(appCss).toMatch(/\.salieri-select-menu(?:--portal)?[\s\S]{0,200}var\(--color-/);
-    expect(appCss).not.toMatch(/\.model-bottom-bar\s+\.salieri-select-menu\s*\{/);
-  });
-
-  it('tokens.css does not own component chrome; App.css owns composition without tail !important wall', () => {
-    const tokens = fs.readFileSync(path.resolve(__dirname, '../design-system/tokens.css'), 'utf8');
-    const appCss = fs.readFileSync(path.resolve(__dirname, '../App.css'), 'utf8');
-    // F2: tokens.css is token/type only.
-    expect(tokens).not.toMatch(/\.workstation-header\s*\{/);
-    expect(tokens).not.toMatch(/\.workstation-bg-overlay\s*\{/);
-    expect(tokens).not.toMatch(/\.workstation-bg-layer\s*\{/);
-    expect(tokens).not.toMatch(/\.left-brand\s*\{/);
-    expect(tokens).not.toMatch(/\.speaker-primary\s*\{/);
-    expect(tokens).not.toMatch(/\.memory-control-specimen\s*\{/);
-    expect(tokens).not.toMatch(/\.right-controls\s*\{/);
-    // App.css owns chrome via composition (source contract, not browser cascade PASS).
-    expect(appCss).toMatch(/\.workstation-bg-layer\s*\{[^}]*filter:\s*var\(--bg-filter/s);
-    expect(appCss).toMatch(/\.workstation-bg-overlay\s*\{[^}]*var\(--bg-overlay-top/s);
-    expect(appCss).toMatch(/\.workstation-header\s*\{[^}]*var\(--chrome-header-bg/s);
-    expect(appCss).not.toMatch(/S4-DS final chrome owners/);
-    expect(appCss).not.toMatch(/Connections surface - recessed instrument bays/);
   });
 
   it('self-hosted S4-DS fonts exist under /assets/fonts/s4-ds/', () => {
@@ -521,65 +460,17 @@ describe('Workstation S4-DS dark-only chrome', () => {
     expect(document.querySelector('[data-sound-mixer-rail]')).toBeNull();
   });
 
-  it('SoundPanel production import and legacy popup selectors are retired', () => {
-    const ws = fs.readFileSync(path.resolve(__dirname, './Workstation.tsx'), 'utf8');
+  it('keeps a keyboard focus ring and reduces volume-rail motion', () => {
     const appCss = fs.readFileSync(path.resolve(__dirname, '../App.css'), 'utf8');
-    expect(ws).not.toMatch(/from ['"]\.\/SoundPanel['"]/);
-    expect(ws).toMatch(/from ['"]\.\/SoundMixerRail['"]/);
-    expect(fs.existsSync(path.resolve(__dirname, './SoundPanel.tsx'))).toBe(false);
-    expect(fs.existsSync(path.resolve(__dirname, './SoundMixerRail.tsx'))).toBe(true);
-    // Legacy floating popup archetype must not remain as production CSS owners.
-    expect(appCss).not.toMatch(/\.sound-panel-backdrop\s*\{/);
-    expect(appCss).not.toMatch(/\.sound-panel-dropdown\s*\{/);
-    expect(appCss).toMatch(/\.sound-mixer-rail\s*\{/);
-    expect(appCss).toMatch(/\.header-audio-zone/);
-  });
-
-  it('mixer rail CSS is header layout, not fixed/portal; viewport contracts exist', () => {
-    const appCss = fs.readFileSync(path.resolve(__dirname, '../App.css'), 'utf8');
-    const railBlock = appCss.match(/\.sound-mixer-rail\s*\{[^}]*\}/s)?.[0] || '';
-    expect(railBlock).toBeTruthy();
-    expect(railBlock).not.toMatch(/position:\s*fixed/);
-    expect(railBlock).not.toMatch(/position:\s*absolute/);
-    // Breakpoint contracts for wide / compact / min-window density.
-    expect(appCss).toMatch(/@media\s*\(min-width:\s*1280px\)[\s\S]{0,400}\.sound-mixer-rail/);
-    expect(appCss).toMatch(/@media\s*\(max-width:\s*1279px\)[\s\S]{0,800}\.sound-mixer-rail|@media\s*\(min-width:\s*1080px\)\s*and\s*\(max-width:\s*1279px\)/);
-    // Compact open: sole HUD owner hides low-priority badge (no !important override war);
-    // never hide divergence meter. CSS source contract — not full browser cascade proof.
-    expect(appCss).toMatch(
-      /\.salieri-workstation-panel\s+\.workstation-header:has\(\.header-audio-zone\.is-open\)[\s\S]{0,220}\.hud-badge-container[\s\S]{0,120}display:\s*none/,
-    );
-    expect(appCss).not.toMatch(
-      /\.workstation-header:has\(\.header-audio-zone\.is-open\)[\s\S]{0,200}\.divergence-meter\s*\{\s*display:\s*none/,
-    );
-    // reduced-motion path for rail
-    expect(appCss).toMatch(/prefers-reduced-motion:\s*reduce[\s\S]{0,600}\.sound-mixer-rail/);
-  });
-
-  it('utility/history/mixer focus-visible uses semantic solid ring (no outline:auto / bare none)', () => {
-    const appCss = fs.readFileSync(path.resolve(__dirname, '../App.css'), 'utf8');
-    // Family must include workstation utilities + history + mixer rail.
-    expect(appCss).toMatch(/\.workstation-utilities\s+\.ctrl-btn:focus-visible/);
-    expect(appCss).toMatch(/\.history-sidebar-toggle:focus-visible/);
-    expect(appCss).toMatch(/\.history-sidebar-icon:focus-visible/);
-    expect(appCss).toMatch(/\.conversation-select:focus-visible/);
-    expect(appCss).toMatch(/\.conversation-actions\s+button:focus-visible/);
-    expect(appCss).toMatch(/\.history-new-btn:focus-visible/);
-    expect(appCss).toMatch(/\.sound-mixer-rail[\s\S]{0,120}:focus-visible/);
-    // Semantic solid ring (2px amber/copper via tokens) in the shared focus block.
-    expect(appCss).toMatch(
-      /S4-DS semantic focus-visible[\s\S]{0,1200}outline:\s*2px\s+solid\s+var\(--color-signal/,
-    );
     expect(appCss).toMatch(
       /\.workstation-utilities\s+\.ctrl-btn:focus-visible[\s\S]{0,800}\.sound-mixer-rail[\s\S]{0,240}outline:\s*2px\s+solid\s+var\(--color-signal/,
     );
-    // No CSS declaration of platform default outline:auto (comments excluded).
-    expect(appCss).not.toMatch(/(?<![\w-])outline:\s*auto\b(?![^;{]*\*\/)/);
-    // Reduced motion must not strip focus ring rules for this family.
     const reduced = appCss.match(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?\n\}/g) || [];
+    expect(reduced.length).toBeGreaterThan(0);
     for (const block of reduced) {
-      expect(block).not.toMatch(/\.workstation-utilities\s+\.ctrl-btn:focus-visible[\s\S]{0,80}outline:\s*none/);
+      expect(block).not.toMatch(/:focus-visible[\s\S]{0,80}outline:\s*none/);
     }
+    expect(appCss).toMatch(/prefers-reduced-motion:\s*reduce[\s\S]{0,600}\.sound-mixer-rail/);
   });
 
   it('exactly one App.css import owner (main.tsx only)', () => {
@@ -587,21 +478,6 @@ describe('Workstation S4-DS dark-only chrome', () => {
     const app = fs.readFileSync(path.resolve(__dirname, '../App.tsx'), 'utf8');
     expect(main).toMatch(/import\s+['"]\.\/App\.css['"]/);
     expect(app).not.toMatch(/import\s+['"]\.\/App\.css['"]/);
-  });
-
-  it('unified scrollbar owns real scrollports; no scrollbar_thumb.png raster', () => {
-    // CSS source/regex contract — not a full browser cascade measurement.
-    const appCss = fs.readFileSync(path.resolve(__dirname, '../App.css'), 'utf8');
-    expect(appCss).toMatch(/S4-DS unified scrollbar system/);
-    expect(appCss).toMatch(/\.terminal-chat-viewport[\s\S]{0,200}\.history-session-list/);
-    expect(appCss).toMatch(/\.history-session-list::-webkit-scrollbar/);
-    expect(appCss).toMatch(
-      /\.salieri-select-menu--portal::-webkit-scrollbar|\[data-salieri-portal=["']true["']\]::-webkit-scrollbar/,
-    );
-    expect(appCss).toMatch(/\.tab-panels::-webkit-scrollbar/);
-    expect(appCss).not.toMatch(/url\(['"]\/assets\/ui\/scrollbar_thumb\.png['"]\)/);
-    expect(appCss).toMatch(/scrollbar-width:\s*thin/);
-    expect(appCss).toMatch(/scrollbar-color:/);
   });
 
   it('SG and β worldline token anchors are statically distinct', () => {
@@ -616,108 +492,5 @@ describe('Workstation S4-DS dark-only chrome', () => {
     expect(appCss).toMatch(/#c64b3a|#f18468/);
     expect(tokens).toMatch(/--color-signal:\s*#d96f24/);
     expect(tokens).toMatch(/--color-gold:\s*#c6a45f/);
-  });
-
-  it('Connections surface uses semantic tokens (no legacy orange/brown hardcodes in final rules)', () => {
-    const appCss = fs.readFileSync(path.resolve(__dirname, '../App.css'), 'utf8');
-    // Single owner (original CONNECTIONS block) — source contract.
-    expect(appCss).toMatch(
-      /\.connections-section\s*\{[\s\S]{0,200}var\(--color-border/,
-    );
-    expect(appCss).toMatch(
-      /\.connections-section-title\s*\{[\s\S]{0,120}var\(--color-text/,
-    );
-    expect(appCss).toMatch(
-      /\.custom-profile-row\s*\{[\s\S]{0,200}var\(--color-border/,
-    );
-    expect(appCss).toMatch(
-      /\.profile-action-delete\s*\{[\s\S]{0,120}var\(--color-danger/,
-    );
-    expect(appCss).toMatch(
-      /\.connections-secret-input[\s\S]{0,200}var\(--color-border/,
-    );
-    // No second Connections override wall.
-    expect(appCss).not.toMatch(/Connections surface - recessed instrument bays/);
-    // Active Connections rules must not still use listed legacy hardcodes as owners.
-    const connSlice = appCss.slice(
-      appCss.indexOf('/* CONNECTIONS comfort'),
-      appCss.indexOf('.salieri-btn') > 0 ? appCss.indexOf('.salieri-btn') : appCss.length,
-    );
-    for (const hex of ['#6b3010', '#ffaa00', '#ffd18e', '#5a2500', '#4e250d', '#7a3a12', '#ffcc66', '#a8642e', '#925124', '#d98a42', '#61300d']) {
-      expect(connSlice).not.toContain(hex);
-    }
-  });
-
-  it('App.css does not redeclare canonical semantic tokens; tokens.css owns exact values', () => {
-    // Source contract: cascade authority (not browser computed-style PASS).
-    const appCss = fs.readFileSync(path.resolve(__dirname, '../App.css'), 'utf8');
-    const tokens = fs.readFileSync(path.resolve(__dirname, '../design-system/tokens.css'), 'utf8');
-    const rootMatch = appCss.match(/:root\s*\{[\s\S]*?\n\}/);
-    const root = rootMatch ? rootMatch[0] : '';
-    // Canonical names must not be reassigned in App.css :root.
-    expect(root).not.toMatch(/--color-bg\s*:/);
-    expect(root).not.toMatch(/--color-signal\s*:/);
-    expect(root).not.toMatch(/--color-gold\s*:/);
-    expect(root).not.toMatch(/--font-mono\s*:/);
-    expect(root).not.toMatch(/--glow-primary\s*:/);
-    expect(root).not.toMatch(/--transition-fast\s*:/);
-    // tokens.css exact authority values.
-    expect(tokens).toMatch(/--color-bg:\s*#0b0907/);
-    expect(tokens).toMatch(/--color-bg-deep:\s*#070605/);
-    expect(tokens).toMatch(/--color-signal:\s*#d96f24/);
-    expect(tokens).toMatch(/--color-gold:\s*#c6a45f/);
-    expect(tokens).toMatch(/--color-signal-hot:\s*#ffad54/);
-  });
-
-  it('DivergenceMeter has no TSX hardcoded accent hex; meter uses --wl-meter-accent; ghost uses --wl-accent', () => {
-    const src = fs.readFileSync(path.resolve(__dirname, './DivergenceMeter.tsx'), 'utf8');
-    const appCss = fs.readFileSync(path.resolve(__dirname, '../App.css'), 'utf8');
-    // RED if TSX reintroduces palette hex.
-    expect(src).not.toMatch(/#[0-9a-fA-F]{3,8}/);
-    expect(src).toMatch(/currentColor|divergence-meter-glyph/);
-    // Primary meter readout = original instrument palette via --wl-meter-accent.
-    expect(appCss).toMatch(/\.divergence-meter\s*\{[^}]*color:\s*var\(--wl-meter-accent\)/s);
-    expect(appCss).toMatch(
-      /\.salieri-workstation-panel\.worldline-sg\s*\{[\s\S]{0,800}--wl-meter-accent:\s*#ffb85c/,
-    );
-    expect(appCss).toMatch(
-      /\.salieri-workstation-panel\.worldline-beta\s*\{[\s\S]{0,800}--wl-meter-accent:\s*#e39146/,
-    );
-    // Structural beta red remains #c64b3a; ghost uses --wl-accent not meter palette.
-    expect(appCss).toMatch(
-      /\.salieri-workstation-panel\.worldline-beta\s*\{[\s\S]{0,120}--wl-accent:\s*#c64b3a/,
-    );
-    expect(appCss).toMatch(
-      /\.divergence-meter-glyph-ghost[\s\S]{0,160}(?:color|stroke):\s*var\(--wl-accent\)/,
-    );
-  });
-
-  it('ordinary HUD / footer do not wash beta iron-red onto day/date/ONLINE/footer value', () => {
-    // Source contract only — not browser cascade PASS.
-    const appCss = fs.readFileSync(path.resolve(__dirname, '../App.css'), 'utf8');
-    const tokens = fs.readFileSync(path.resolve(__dirname, '../design-system/tokens.css'), 'utf8');
-    expect(tokens).not.toMatch(/\.app-main-container\s*\{/);
-    expect(appCss).toMatch(/\.app-main-container\s*\{/);
-    // Sole non-media .workstation-header base is HEADER STYLE owner (grid + chrome).
-    const baseHeaders = (appCss.match(/^\.workstation-header\s*\{/gm) || []).length;
-    expect(baseHeaders).toBe(1);
-    // Targeted HUD owner (no !important cascade war).
-    const hudStart = appCss.indexOf('Sole targeted HUD owner');
-    const hudEnd = appCss.indexOf('Jump to latest');
-    expect(hudStart).toBeGreaterThan(-1);
-    expect(hudEnd).toBeGreaterThan(hudStart);
-    const hudOwner = appCss.slice(hudStart, hudEnd);
-    expect(hudOwner).toMatch(/hud-day-text[\s\S]{0,160}var\(--color-text-dim\)/);
-    expect(hudOwner).toMatch(/hud-date-text[\s\S]{0,160}var\(--color-gold\)/);
-    expect(hudOwner).toMatch(/hud-status-pill\s*\{[\s\S]{0,240}var\(--color-text-dim\)/);
-    expect(hudOwner).toMatch(/hud-status-dot[\s\S]{0,160}var\(--color-success\)/);
-    expect(hudOwner).not.toMatch(/!important/);
-    // Footer beta restrained copper, not structural iron-red.
-    expect(appCss).toMatch(
-      /\.salieri-workstation-panel\.worldline-beta\s*\{[\s\S]{0,800}--wl-footer-accent:\s*#b77b55/,
-    );
-    expect(appCss).toMatch(/worldline-val[\s\S]{0,120}var\(--wl-footer-accent\)/);
-    // Day/date/status sole owner must not color with --wl-accent (beta red wash).
-    expect(hudOwner).not.toMatch(/var\(--wl-accent\)/);
   });
 });

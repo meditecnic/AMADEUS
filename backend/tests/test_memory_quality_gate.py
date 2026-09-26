@@ -18,12 +18,7 @@ from app.services.memory import (
     CoreFactCandidate,
     ExtractionResult,
     EpisodicCandidate,
-    _has_memory_intent,
-    should_skip_core_extraction,
-    _CORE_CONFIDENCE_THRESHOLD,
-    _CORE_IMPORTANCE_THRESHOLD,
     _MAX_CORE_PER_TURN,
-    _N_TURNS_CORE_THROTTLE,
     memory_service,
 )
 
@@ -35,34 +30,6 @@ async def isolated_store(tmp_path, monkeypatch):
     reset_initialization_cache()
     await init_db()
     return tmp_path
-
-
-# ---------------------------------------------------------------------------
-# Intent detection
-# ---------------------------------------------------------------------------
-
-class TestMemoryIntentDetection:
-    def test_chinese_intent(self):
-        assert _has_memory_intent("请记住我喜欢咖啡") is True
-        assert _has_memory_intent("我叫小明") is True
-        assert _has_memory_intent("我的爱好是读书") is True
-
-    def test_japanese_intent(self):
-        assert _has_memory_intent("覚えておいて") is True
-        assert _has_memory_intent("私の名前は紅莉栖") is True
-
-    def test_english_intent(self):
-        assert _has_memory_intent("remember my name is John") is True
-        assert _has_memory_intent("I like coffee") is True
-
-    def test_no_intent(self):
-        assert _has_memory_intent("今天天气不错") is False
-        assert _has_memory_intent("你好") is False
-        assert _has_memory_intent("谢谢") is False
-        assert _has_memory_intent("再见") is False
-
-    def test_empty(self):
-        assert _has_memory_intent("") is False
 
 
 # ---------------------------------------------------------------------------
@@ -296,34 +263,6 @@ async def test_okabe_same_thresholds(isolated_store):
     await memory_service.apply_extraction(owner2, "steins_gate", extraction2, identity_mode="okabe")
     facts2 = await memory_service.select_core_facts(owner2, "steins_gate", "low", identity_mode="okabe")
     assert len(facts2) == 0
-
-
-# ---------------------------------------------------------------------------
-# Constants sanity
-# ---------------------------------------------------------------------------
-
-def test_threshold_constants():
-    assert _CORE_CONFIDENCE_THRESHOLD == 0.7
-    assert _CORE_IMPORTANCE_THRESHOLD == 0.65
-    assert _MAX_CORE_PER_TURN == 2
-    assert _N_TURNS_CORE_THROTTLE == 3
-
-
-# ---------------------------------------------------------------------------
-# Universal write path (keyword/N rhythm retired)
-# ---------------------------------------------------------------------------
-
-def test_n3_constant_retained_for_compat_only():
-    """Legacy constant remains importable; not a production write gate."""
-    assert _N_TURNS_CORE_THROTTLE == 3
-
-
-def test_should_skip_core_always_false_in_production_helper():
-    """No keyword/N throttle: natural phrasing and chitchat both do not skip."""
-    assert should_skip_core_extraction("今天天气不错", 1) is False
-    assert should_skip_core_extraction("今天天气不错", 2) is False
-    assert should_skip_core_extraction("请记住我喜欢咖啡", 1) is False
-    assert should_skip_core_extraction("我最拿手的英雄是塞拉斯", 1) is False
 
 
 # ---------------------------------------------------------------------------

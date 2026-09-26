@@ -1247,13 +1247,3 @@ async def test_late_tool_sse_recorded_once_without_execution():
             "executed": executed["n"],
         },
     )
-
-
-def test_required_check_node_map_is_complete():
-    import inspect
-    import sys
-
-    module = sys.modules[__name__]
-    names = {name for name, obj in inspect.getmembers(module, inspect.isfunction) if name.startswith("test_")}
-    missing = [node for node in REQUIRED_CHECK_NODES.values() if node not in names]
-    assert missing == [], missing

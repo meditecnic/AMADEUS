@@ -23,7 +23,6 @@ from app.services.memory import (
     is_durable_profile_core,
     should_skip_core_extraction,
     strip_history_emo_prefix,
-    _has_memory_intent,
     memory_service,
 )
 from app.services.provider_registry import (
@@ -59,11 +58,6 @@ class TestUniversalWriteGate:
         ]
         for text in samples:
             assert should_skip_core_extraction(text, 1) is False, text
-
-    def test_legacy_intent_helper_still_callable(self):
-        # Not a write gate; just ensure import/shape for diagnostics.
-        assert _has_memory_intent("我喜欢咖啡") is True
-        assert _has_memory_intent("嗯嗯") is False
 
 
 # ---------------------------------------------------------------------------

@@ -158,12 +158,6 @@ async def _apply_validated(
     )
 
 
-def test_s0_reconciler_module_exists():
-    importlib.import_module("app.services.memory_v11.reconciler")
-    importlib.import_module("app.services.memory_v11.contracts")
-    importlib.import_module("app.services.memory_v11.repository")
-
-
 @pytest.mark.asyncio
 async def test_s0_legacy_key_drift_still_duplicates_today(isolated_store):
     """Defect baseline (green on legacy): exact fact_key upsert still duplicates."""

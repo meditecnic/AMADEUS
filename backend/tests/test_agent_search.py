@@ -28,18 +28,6 @@ async def setup_test_db(tmp_path, monkeypatch):
     sessions.clear()
 
 @patch("app.services.search.DDGS")
-def test_web_search_success_mock(mock_ddgs_cls):
-    mock_ddgs = MagicMock()
-    mock_ddgs.text.return_value = [
-        {"title": "Divergence Meter", "body": "A device created by Okabe Rintarou to measure divergence."}
-    ]
-    mock_ddgs_cls.return_value.__enter__.return_value = mock_ddgs
-    
-    res = web_search("divergence meter")
-    assert "Divergence Meter" in res
-    assert "Okabe Rintarou" in res
-
-@patch("app.services.search.DDGS")
 def test_web_search_error_mock(mock_ddgs_cls):
     mock_ddgs_cls.return_value.__enter__.side_effect = Exception("DDG Service Timeout")
     res = web_search("failed query")

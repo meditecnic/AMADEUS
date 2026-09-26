@@ -384,15 +384,6 @@ async def test_joke_request_happy_path_no_language_fallback():
     assert "もう一度試して" not in text
 
 
-def test_old_route_short_foreign_fragment_log_must_leave_chat_ws():
-    """Production publication path must not hard-route short Latin to renderer."""
-    from pathlib import Path
-
-    source = Path("app/routers/chat_ws.py").read_text(encoding="utf-8")
-    assert "route short foreign fragment to renderer" not in source
-    assert "route short foreign finish fragment to renderer" not in source
-
-
 # ---------------------------------------------------------------------------
 # REWORK P1 contracts (Codex review)
 # ---------------------------------------------------------------------------

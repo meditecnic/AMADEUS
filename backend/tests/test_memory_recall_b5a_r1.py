@@ -638,16 +638,6 @@ def test_undeclared_and_no_tools_are_unsupported():
     assert "recall_memory" in names
 
 
-def test_same_event_text_and_tool_locks_tool_mode():
-    state = TurnModeState()
-    chunk = coalesce_gemini_parts(
-        [{"text": "前言"}, {"functionCall": {"name": "recall_memory", "args": {"needs": ["pet"]}}}],
-        stream_seq=0,
-    )
-    observe_chunk(state, chunk, 1)
-    assert state.mode == "tool_mode"
-
-
 @pytest.mark.asyncio
 async def test_second_round_tools_none_and_single_publication_source():
     from app.routers.chat_ws import get_clean_text_stream

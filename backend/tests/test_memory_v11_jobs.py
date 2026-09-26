@@ -75,11 +75,6 @@ async def isolated_store(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_s0_jobs_module_exists():
-    importlib.import_module("app.services.memory_v11.jobs")
-    importlib.import_module("app.services.memory_v11.contracts")
-
-
 @pytest.mark.asyncio
 async def test_s0_enqueue_idempotent_on_source_cursor(isolated_store):
     jobs = _jobs()

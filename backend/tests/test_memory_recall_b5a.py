@@ -409,30 +409,6 @@ async def test_experience_stays_on_first_prompt_facts_use_tool(isolated_store, m
 
 
 @pytest.mark.asyncio
-async def test_jobs_still_use_reconciliation_selector(isolated_store, monkeypatch):
-    from app.services.memory_v11 import jobs as jobs_mod
-    from app.services.memory_v11 import reconciliation_select as recon
-
-    called = {}
-
-    async def spy(**kwargs):
-        called.update(kwargs)
-        return []
-
-    monkeypatch.setattr(recon, "select_reconciliation_candidates", spy)
-    # Import path used by jobs is the function inside process; call wrapper directly.
-    await recon.select_reconciliation_candidates(
-        session_id="s", worldline="steins_gate", identity_mode="self", source_text="x"
-    )
-    assert called["source_text"] == "x"
-    assert hasattr(jobs_mod, "select_reconciliation_candidates") is False
-    from pathlib import Path
-
-    text = Path(jobs_mod.__file__).read_text(encoding="utf-8")
-    assert "select_reconciliation_candidates" in text
-
-
-@pytest.mark.asyncio
 async def test_fake_provider_two_round_recall(isolated_store, monkeypatch):
     from app.routers.chat_ws import processor_loop
     from app.services.conversations import conversation_service

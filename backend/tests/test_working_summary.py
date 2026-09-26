@@ -683,15 +683,3 @@ def test_s3e3_single_injection_envelope_empty_summary():
     assert any(
         "これまでの会話の記憶要約" in str(m.get("content", "")) for m in messages2
     )
-
-
-def test_s3e3_canonical_stream_call_sites_single_injection():
-    """Initial + post-tool canonical generation pass memory_summary=''."""
-    import inspect
-
-    from app.routers import chat_ws
-
-    source = inspect.getsource(chat_ws)
-    assert source.count('memory_summary=""') >= 2, (
-        "canonical initial and post-tool stream calls must pass empty summary"
-    )

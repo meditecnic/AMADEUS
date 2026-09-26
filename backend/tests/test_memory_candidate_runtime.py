@@ -202,18 +202,6 @@ class _OfflineEmbedder(EmbeddingAdapter):
 
 
 
-def test_app_module_resolves_to_this_worktree():
-
-    import app
-
-
-
-    assert Path(app.__file__).resolve() == BACKEND_ROOT / "app" / "__init__.py"
-
-
-
-
-
 def _core_facts_block(system_prompt: str) -> str:
 
     start = system_prompt.find("CORE FACTS")

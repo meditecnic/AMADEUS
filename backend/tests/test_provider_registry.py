@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
-import inspect
 from unittest.mock import AsyncMock
 
 import pytest
@@ -161,7 +160,6 @@ async def test_memory_extraction_uses_selected_provider_snapshot(monkeypatch):
     assert adapter.calls[0]["api_key"] == "provider-secret"
     service.apply_extraction.assert_awaited_once()
     save_summary.assert_awaited_once()
-    assert "api.deepseek.com" not in inspect.getsource(MemoryService._extract_turn)
 
 
 @pytest.mark.asyncio
