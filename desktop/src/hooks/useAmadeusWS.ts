@@ -57,6 +57,7 @@ export interface Message {
   role: 'user' | 'assistant';
   content: string;
   translation?: string;
+  translationScope?: 'turn';
   emotion?: 'neutral' | 'tsundere' | 'embarrassed' | 'intellectual' | 'happy' | 'surprised' | 'annoyed' | 'disappointed' | 'sad';
   turnId?: string;
   segments?: Array<{ id: number; ja: string; zh: string; translationError?: string }>;
@@ -208,11 +209,49 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     }
   };
 
+  const ABORT_NOTICE = '这一问中断了，没有收到回复。请再发一次。';
+
+  const surfaceAbortedTurn = () => {
+    setIsThinking(false);
+    setIsSynthesizing(false);
+    setMessages((prev) => {
+      const lastUserIndex = prev.reduce(
+        (last, message, index) => message.role === 'user' ? index : last,
+        -1,
+      );
+      const currentTurnMessages = prev.slice(lastUserIndex + 1);
+      const hasReply = currentTurnMessages.some((message) => (
+        message.role === 'assistant'
+        && !message.systemError
+        && (
+          Boolean(message.content && message.content.trim())
+          || Boolean(message.segments && message.segments.length)
+        )
+      ));
+      const settled = prev.map((message) => (
+        message.streaming ? { ...message, streaming: false } : message
+      ));
+      if (hasReply || currentTurnMessages.some((message) => message.systemError && message.content === ABORT_NOTICE)) {
+        return settled;
+      }
+      return [
+        ...settled,
+        {
+          id: `err_abort_${Date.now()}`,
+          role: 'assistant' as const,
+          content: ABORT_NOTICE,
+          systemError: true,
+        },
+      ];
+    });
+  };
+
   // Start 30s watchdog timer
   const startWatchdog = () => {
     clearWatchdog();
     watchdogTimerRef.current = window.setTimeout(() => {
       console.warn('Watchdog timed out (30s). Closing socket due to silence.');
+      surfaceAbortedTurn();
       setStatus('ERROR');
       if (wsRef.current) {
         wsRef.current.close();
@@ -514,14 +553,14 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             ) break;
             setMessages((prev) => prev.map((message) => {
               if (message.id !== activeAssistantMessageId) return message;
-              const segments = (message.segments || []).map((segment, index) => ({
+              const segments = (message.segments || []).map((segment) => ({
                 ...segment,
-                zh: index === 0 ? (msg.content || '') : '',
                 translationError: undefined,
               }));
               return {
                 ...message,
                 translation: msg.content || '',
+                translationScope: 'turn',
                 segments,
               };
             }));
@@ -716,6 +755,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
 
     ws.onclose = () => {
       if (wsRef.current !== ws) return;
+      const turnWasActive = Boolean(activeTurnIdRef.current);
       stopHeartbeat();
       clearWatchdog();
       wsRef.current = null;
@@ -738,6 +778,8 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
           worldline: pending.worldline,
           code: 'connection_closed',
         });
+      } else if (turnWasActive) {
+        surfaceAbortedTurn();
       } else {
         setMessages((prev) => prev.map((message) =>
           message.streaming ? { ...message, streaming: false } : message

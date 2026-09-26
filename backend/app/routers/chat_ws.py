@@ -1270,6 +1270,51 @@ def _schedule_background_task(session: SessionState, coroutine) -> asyncio.Task:
     task.add_done_callback(session.background_tasks.discard)
     return task
 
+
+# Durable stand-in when a turn saved the user row and then died before the
+# assistant row. History must not stay user-only with no visible outcome.
+_ABORTED_TURN_JA = "この質問は途中で止まった。もう一度送って。"
+_ABORTED_TURN_ZH = "这一问中断了，没有收到回复。请再发一次。"
+
+
+async def _persist_aborted_turn(
+    *,
+    session_id: str,
+    worldline: str,
+    conversation_id: str,
+    turn_id: str,
+    revision: int,
+) -> None:
+    try:
+        await models.save_message(
+            session_id,
+            "assistant",
+            f"[EMO:disappointed] {_ABORTED_TURN_JA}",
+            worldline=worldline,
+            turn_id=turn_id,
+            revision=revision,
+            conversation_id=conversation_id,
+            translation=_ABORTED_TURN_ZH,
+        )
+    except Exception as exc:
+        print(
+            f"[Turn] aborted-turn notice failed ({type(exc).__name__})",
+            flush=True,
+        )
+
+
+def _system_prompt_changes_persona(session: "SessionState", incoming) -> bool:
+    """Blank or identical prompts are not a persona change.
+
+    The desktop settings save always includes the prompt field. An empty
+    value means "unset" (the server already applied the product default at
+    auth) and must not cancel an in-flight turn.
+    """
+    if not isinstance(incoming, str) or not incoming.strip():
+        return False
+    current = session.base_system_prompt or ""
+    return incoming != current
+
 async def processor_loop(
     session: SessionState, 
     user_msg: str, 
@@ -1340,7 +1385,9 @@ async def processor_loop(
     diagnostic_observer = None
     segment_count = 0
     history_translation = ""
+    user_message_id = None
     assistant_message_id = None
+    aborted_turn_written = False
     needs_translation_repair = False
     streaming_splitter = None
     streamed_segments = []
@@ -2016,6 +2063,25 @@ async def processor_loop(
             )
             
     except asyncio.CancelledError:
+        if (
+            not aborted_turn_written
+            and isinstance(user_message_id, int)
+            and user_message_id > 0
+            and assistant_message_id is None
+            and conversation_id
+        ):
+            aborted_turn_written = True
+            notice = asyncio.create_task(_persist_aborted_turn(
+                session_id=session.session_id,
+                worldline=turn_worldline,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                revision=epoch,
+            ))
+            try:
+                await asyncio.shield(notice)
+            except asyncio.CancelledError:
+                pass
         if segment_pipeline is not None:
             await segment_pipeline.cancel(reason=None)
         tts_manager.cancel_pending(session.tts_key)
@@ -2045,6 +2111,20 @@ async def processor_loop(
             "message": f"Server error: {str(e)}",
         }))
     finally:
+        if (
+            not aborted_turn_written
+            and isinstance(user_message_id, int)
+            and user_message_id > 0
+            and assistant_message_id is None
+            and conversation_id
+        ):
+            await _persist_aborted_turn(
+                session_id=session.session_id,
+                worldline=turn_worldline,
+                conversation_id=conversation_id,
+                turn_id=turn_id,
+                revision=epoch,
+            )
         if session.active_segment_pipeline is segment_pipeline:
             session.active_segment_pipeline = None
         session.is_busy = False
@@ -2740,7 +2820,9 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                     # Reserved/overlong names fail closed to "" (client shows the hint).
                     from app.services.prompt_compiler import sanitize_self_name
                     session.self_name = sanitize_self_name(data.get("self_name"))
-                if "system_prompt" in data:
+                if "system_prompt" in data and _system_prompt_changes_persona(
+                    session, data.get("system_prompt")
+                ):
                     base_prompt = data["system_prompt"]
                     session.base_system_prompt = base_prompt
                     session.system_prompt = get_rendered_system_prompt(
@@ -2771,6 +2853,12 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                     session.history_epoch += 1
                     session.current_epoch += 1
                     await cancel_inflight(session)
+                    await send_queue.put((session.current_epoch, {
+                        "type": "error",
+                        "code": "turn_interrupted",
+                        "recoverable": True,
+                        "message": "人设更新中断了进行中的回复。请再发一次。",
+                    }))
                     await send_queue.put((session.current_epoch, {"type": "status", "dsk": "idle", "state": "done"}))
                     
                 if "temperature" in data:

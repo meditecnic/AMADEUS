@@ -15,6 +15,7 @@ from app.services.conversations import (
     IdentityModeImmutableError,
     conversation_service,
 )
+from app.services.model_catalog import ModelUnavailableError
 from app.services.provider_runtime import provider_registry
 
 
@@ -80,13 +81,18 @@ def _not_found(exc: ConversationNotFound) -> HTTPException:
     return HTTPException(status_code=404, detail={"code": "conversation_not_found"})
 
 
-def _provider(provider_id: str):
+def _provider(provider_id: str, model_id: str | None = None):
     try:
-        return provider_registry.snapshot(provider_id)
+        return provider_registry.snapshot(provider_id, model_id)
     except KeyError as exc:
         raise HTTPException(
             status_code=422,
             detail={"code": "unknown_provider"},
+        ) from exc
+    except ModelUnavailableError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "model_unavailable"},
         ) from exc
 
 
@@ -112,7 +118,7 @@ async def list_conversations(
 async def create_conversation(request: ConversationCreate):
     wl = normalize_worldline(request.worldline)
     provider_id = request.provider_id or "deepseek"
-    provider = _provider(provider_id)
+    provider = _provider(provider_id, request.model_id)
     try:
         identity_mode = normalize_identity_mode(request.identity_mode)
     except ValueError as exc:
@@ -125,7 +131,7 @@ async def create_conversation(request: ConversationCreate):
         wl,
         title=request.title,
         provider_id=provider_id,
-        model_id=request.model_id or provider.model_id,
+        model_id=provider.model_id,
         identity_mode=identity_mode,
     )
 
@@ -172,10 +178,9 @@ async def patch_conversation(
         provider_id = str(
             changes.get("provider_id") or current.get("provider_id") or "deepseek"
         )
-        provider = _provider(provider_id)
+        provider = _provider(provider_id, changes.get("model_id"))
         changes["provider_id"] = provider_id
-        if not changes.get("model_id"):
-            changes["model_id"] = provider.model_id
+        changes["model_id"] = provider.model_id
     try:
         return await conversation_service.update(
             conversation_id,

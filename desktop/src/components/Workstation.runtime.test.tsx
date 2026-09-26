@@ -102,6 +102,7 @@ vi.mock('./HistorySidebar', () => ({
   }) => (
     <div data-testid="history-rows">
       {props.conversations.map((row) => <span key={row.id}>{row.title}</span>)}
+      <button type="button" onClick={props.onNew}>新建会话</button>
     </div>
   ),
 }));
@@ -182,6 +183,25 @@ describe('Workstation provider runtime changes', () => {
       }
       throw new Error(`unexpected fetch: ${url}`);
     }));
+  });
+
+  it('shows a visible error when the selected model cannot create a conversation', async () => {
+    const initialFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/conversations' && init?.method === 'POST') {
+        return Promise.resolve({
+          ok: false,
+          status: 422,
+          json: async () => ({ detail: { code: 'model_unavailable' } }),
+        } as Response);
+      }
+      return initialFetch(input, init);
+    }));
+
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: '新建会话' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('当前模型不可用');
   });
 
   it('keeps a real provider/model selection while the workstation is still a draft', async () => {

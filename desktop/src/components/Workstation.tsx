@@ -165,6 +165,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [reasoningEffort, setReasoningEffort] = useState<string | null>(() =>
     localStorage.getItem('amadeus_pc_reasoning_effort'));
   const [audioError, setAudioError] = useState<string | null>(null);
+  const [conversationCreateError, setConversationCreateError] = useState<string | null>(null);
   const [sessionError, setSessionError] = useState<{
     kind: 'session' | 'worldline';
     code: string;
@@ -805,7 +806,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputText.trim()) return;
+    if (!inputText.trim() || conversationBusy) return;
     // Turn text still gates send via isThinking/isSynthesizing. When only leftover
     // voice is playing, stop the existing playback path then start the new Turn.
     if (isPlaying) {
@@ -865,6 +866,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     identityMode: IdentityMode = defaultIdentityMode,
   ): Promise<ConversationSummary | null> => {
     if (conversationBusy) return null;
+    setConversationCreateError(null);
     setConversationBusy(true);
     try {
       const active = conversations.find((row) => row.id === activeConversationId);
@@ -881,7 +883,13 @@ export const Workstation: React.FC<WorkstationProps> = ({
           identity_mode: mode,
         }),
       });
-      if (!response.ok) throw new Error(`conversation create failed: ${response.status}`);
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        const code = body?.detail?.code;
+        throw new Error(code === 'model_unavailable'
+          ? '新建对话失败：当前模型不可用，请重新选择模型。'
+          : `新建对话失败（HTTP ${response.status}），请重试。`);
+      }
       const created = await response.json() as ConversationSummary;
       setConversationBusy(false);
       await selectConversation(created);
@@ -889,6 +897,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       return created;
     } catch (error) {
       console.warn('Conversation creation failed:', error);
+      setConversationCreateError(error instanceof Error ? error.message : '新建对话失败，请重试。');
       setConversationBusy(false);
       return null;
     }
@@ -1194,7 +1203,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
       reconnect();
     } else {
       const configPatch: Parameters<typeof updateConfig>[0] = {
-        systemPrompt: newSettings.systemPrompt,
         enableTts: newSettings.enableTts,
         sovitsUrl: newSettings.sovitsUrl,
         temperature: safeTemperature,
@@ -1202,6 +1210,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
         identityMode: nextIdentityMode,
         selfName: newSettings.selfName,
       };
+      // An unchanged prompt must not ride along. The server treats a real
+      // persona change as a history reset and would drop an in-flight reply.
+      if (newSettings.systemPrompt !== systemPrompt) {
+        configPatch.systemPrompt = newSettings.systemPrompt;
+      }
       if (newSettings.worldline === worldline) {
         configPatch.worldline = newSettings.worldline;
       }
@@ -1444,6 +1457,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                                 streaming={Boolean(msg.streaming)}
                                 fallbackJa={msg.content}
                                 fallbackZh={msg.translation}
+                                translationScope={msg.translationScope}
                               />
                             {msg.streaming && isThinking && operationLabel && (
                               <div className="thinking-indicator-inline" aria-busy={activityBusy}>
@@ -1543,7 +1557,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
               onChange={(e) => setInputText(e.target.value)}
               className="chat-input-field"
               placeholder="输入终端指令或对话内容..."
-              disabled={status !== 'READY' || isThinking || isSynthesizing}
+              disabled={status !== 'READY' || isThinking || isSynthesizing || conversationBusy}
             />
             {isPlaying && (
               <span className="tts-waiting-hint">正在播放语音…</span>
@@ -1564,7 +1578,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             <button
               type="submit"
               className="chat-send-btn"
-              disabled={status !== 'READY' || !inputText.trim() || isThinking || isSynthesizing}
+              disabled={status !== 'READY' || !inputText.trim() || isThinking || isSynthesizing || conversationBusy}
               aria-label="发送"
             >
               <span>SEND</span>
@@ -1619,6 +1633,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
               ? `> Session: ${sessionError.code}`
               : `> Worldline: ${sessionError.code}`}
           </span>
+        </div>
+      )}
+
+      {conversationCreateError && (
+        <div className="audio-error-toast session-error-toast" role="alert">
+          <span className="audio-error-msg">{conversationCreateError}</span>
         </div>
       )}
 

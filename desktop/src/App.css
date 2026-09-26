@@ -772,11 +772,17 @@
   cursor: default;
 }
 
-.bilingual-message.streaming {
-  cursor: pointer;
+.bilingual-segment + .bilingual-segment {
+  margin-top: 14px;
 }
 
-.bilingual-message.streaming .chinese-main::after {
+.translation-scope {
+  margin: 0 0 6px;
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.bilingual-message.streaming .bilingual-segment:last-child .chinese-main::after {
   content: '▌';
   margin-left: 2px;
   color: var(--wl-accent-bright);
@@ -788,7 +794,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .bilingual-message.streaming .chinese-main::after {
+  .bilingual-message.streaming .bilingual-segment:last-child .chinese-main::after {
     display: none;
     animation: none;
   }
@@ -856,7 +862,7 @@
   color: var(--wl-accent-bright);
 }
 
-.bilingual-message.streaming .chinese-main::after {
+.bilingual-message.streaming .bilingual-segment:last-child .chinese-main::after {
   content: '▌';
   color: var(--wl-accent-bright);
 }

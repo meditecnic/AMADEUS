@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from uuid import uuid4
 
 
@@ -73,6 +74,41 @@ def test_conversation_crud_search_pin_and_model_selection(app_client):
         params={"session_id": session_id, "worldline": "steins_gate"},
     )
     assert missing.status_code == 404
+
+
+def test_conversation_uses_explicit_model_when_provider_default_is_unavailable(app_client, monkeypatch):
+    from app.routers import conversations
+    from app.services.model_catalog import model_catalog
+    from app.services.provider_registry import ProviderRegistry
+
+    definition = next(row for row in conversations.provider_registry.list_definitions() if row.id == "deepseek")
+    adapter = conversations.provider_registry.snapshot("deepseek", "deepseek-flash").adapter
+    registry = ProviderRegistry(model_catalog=model_catalog)
+    registry.register(replace(definition, default_model="missing-default-model"), adapter)
+    monkeypatch.setattr(conversations, "provider_registry", registry)
+
+    session_id = _session("selected-model")
+    created = app_client.post(
+        "/api/conversations",
+        json={"session_id": session_id, "provider_id": "deepseek", "model_id": "deepseek-flash"},
+    )
+    assert created.status_code == 201
+    assert created.json()["model_id"] == "deepseek-flash"
+
+    patched = app_client.patch(
+        f"/api/conversations/{created.json()['id']}",
+        params={"session_id": session_id},
+        json={"model_id": "deepseek-flash"},
+    )
+    assert patched.status_code == 200
+    assert patched.json()["model_id"] == "deepseek-flash"
+
+    unavailable = app_client.post(
+        "/api/conversations",
+        json={"session_id": session_id, "provider_id": "deepseek", "model_id": "not-in-catalog"},
+    )
+    assert unavailable.status_code == 422
+    assert unavailable.json()["detail"]["code"] == "model_unavailable"
 
 
 def test_conversation_identity_mode_default_explicit_and_immutable(app_client):

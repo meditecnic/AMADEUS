@@ -366,12 +366,12 @@
   opacity: 0.55;
 }
 
-/* ================= 错误警报横幅 (纯正红配色 #e60000，下移定位) ================= */
+/* 错误提示与密码输入框对齐。 */
 
 .auth-error-banner {
   position: absolute;
-  left: 130px;
-  top: 810px; /* 下移 */
+  left: 275px;
+  top: 810px;
   width: 440px;
   color: #e60000;
   font-family: 'Share Tech Mono', 'Courier New', Courier, monospace;

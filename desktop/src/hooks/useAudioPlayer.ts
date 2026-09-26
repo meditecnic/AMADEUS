@@ -118,12 +118,12 @@ export class AudioPlayerManager {
     const generation = this.currentPlayId;
     const sequence = this.decodeSequence++;
 
-    if (this.ctx.state === 'suspended') {
-      await this.ctx.resume();
-    }
-    if (generation !== this.currentPlayId) return;
-
     try {
+      if (this.ctx.state === 'suspended') {
+        await this.ctx.resume();
+      }
+      if (generation !== this.currentPlayId) return;
+
       const binary = atob(base64Data);
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) {
@@ -137,15 +137,12 @@ export class AudioPlayerManager {
       }
 
       this.decodedQueue.set(sequence, { buffer: audioBuffer, onEnded });
-      this.flushDecodedQueue();
     } catch (err) {
-      console.error('Audio decode failed:', err);
+      if (generation !== this.currentPlayId) return;
       if (this.onDecodeError) this.onDecodeError(err);
-      if (generation === this.currentPlayId) {
-        this.decodedQueue.set(sequence, { buffer: null, onEnded });
-        this.flushDecodedQueue();
-      }
+      this.decodedQueue.set(sequence, { buffer: null, onEnded });
     }
+    this.flushDecodedQueue();
   }
 
   private flushDecodedQueue() {
@@ -163,34 +160,41 @@ export class AudioPlayerManager {
   }
 
   private processQueue() {
-    if (this.audioQueue.length === 0) {
+    if (!this.ctx || !this.analyser) return;
+    while (this.audioQueue.length > 0) {
+      const { buffer, onEnded } = this.audioQueue.shift()!;
+      let source: AudioBufferSourceNode | null = null;
+      try {
+        source = this.ctx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(this.analyser);
+        const playingSource = source;
+        source.onended = () => {
+          if (this.currentSource !== playingSource) return;
+          this.currentSource = null;
+          playingSource.disconnect();
+          try { onEnded?.(); } finally { this.processQueue(); }
+        };
+        source.start(0);
+      } catch (err) {
+        if (source) {
+          source.onended = null;
+          source.disconnect();
+        }
+        this.onDecodeError?.(err);
+        continue;
+      }
+      this.currentSource = source;
       const wasPlaying = this.isPlaying;
-      this.isPlaying = false;
-      if (wasPlaying && this.onPlayStateChange) this.onPlayStateChange(false);
-      if (this.onVolumeCallback) this.onVolumeCallback(0);
+      this.isPlaying = true;
+      if (!wasPlaying) this.onPlayStateChange?.(true);
+      this.startVolumeTracking();
       return;
     }
-
-    if (!this.ctx || !this.analyser) return;
-
     const wasPlaying = this.isPlaying;
-    this.isPlaying = true;
-    if (!wasPlaying && this.onPlayStateChange) this.onPlayStateChange(true);
-    const { buffer, onEnded } = this.audioQueue.shift()!;
-
-    const source = this.ctx.createBufferSource();
-    source.buffer = buffer;
-
-    source.connect(this.analyser);
-    this.currentSource = source;
-
-    source.onended = () => {
-      if (onEnded) onEnded();
-      this.processQueue();
-    };
-
-    source.start(0);
-    this.startVolumeTracking();
+    this.isPlaying = false;
+    if (wasPlaying) this.onPlayStateChange?.(false);
+    this.onVolumeCallback?.(0);
   }
 
   private startVolumeTracking() {
@@ -229,6 +233,7 @@ export class AudioPlayerManager {
       try {
         this.currentSource.stop();
       } catch (e) {}
+      this.currentSource.disconnect();
       this.currentSource = null;
     }
     this.audioQueue = [];

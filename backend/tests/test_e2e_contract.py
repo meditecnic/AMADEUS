@@ -553,6 +553,86 @@ class TestBackendE2EContract:
             assert session_state is not None
             assert len(session_state.history) == 0
 
+    def test_blank_system_prompt_does_not_drop_inflight_reply(self, mock_services):
+        """Desktop settings saves send an empty prompt. That is not a persona change."""
+        mock_ds, _ = mock_services
+        mock_ds.delay = 0.2
+        session_id = "test_blank_prompt_keeps_reply"
+        with self.client.websocket_connect(f"/ws/chat?session_id={session_id}") as websocket:
+            websocket.send_json({
+                "type": "auth",
+                "api_key": "my_key",
+                "client": "desktop",
+                "protocol_version": 2,
+                "conversation_mode": "draft",
+            })
+            websocket.send_json({"type": "chat.send", "content": "新会话首问"})
+            started = websocket.receive_json()
+            assert started["type"] == "turn.started"
+            conversation_id = started["conversation_id"]
+            websocket.send_json({
+                "type": "config_update",
+                "system_prompt": "",
+                "enable_tts": False,
+            })
+            while True:
+                event = websocket.receive_json()
+                if event.get("type") in {"turn.completed", "error"}:
+                    break
+            assert event["type"] == "turn.completed"
+
+        rows = self.client.get(
+            f"/api/conversations/{conversation_id}/messages",
+            params={"session_id": session_id, "worldline": "steins_gate"},
+        ).json()
+        roles = [row["role"] for row in rows]
+        assert roles[0] == "user"
+        assert "assistant" in roles
+        assert any("頼んでない" in row["content"] for row in rows if row["role"] == "assistant")
+        assert not any("途中で止まった" in row["content"] for row in rows)
+
+    def test_cancelled_turn_persists_visible_assistant_notice(self, mock_services):
+        """A turn that saved the user row must not end with silence in history."""
+        mock_ds, _ = mock_services
+
+        async def cancel_after_user_save(*args, **kwargs):
+            raise asyncio.CancelledError
+            yield {"content": "", "tool_calls": None}
+
+        mock_ds.get_chat_stream = cancel_after_user_save
+        session_id = "test_cancel_leaves_notice"
+        with self.client.websocket_connect(f"/ws/chat?session_id={session_id}") as websocket:
+            websocket.send_json({
+                "type": "auth",
+                "api_key": "my_key",
+                "client": "desktop",
+                "protocol_version": 2,
+                "conversation_mode": "draft",
+            })
+            websocket.send_json({"type": "chat.send", "content": "会中断的首问"})
+            started = websocket.receive_json()
+            assert started["type"] == "turn.started"
+            conversation_id = started["conversation_id"]
+            saw_cancelled = False
+            while True:
+                event = websocket.receive_json()
+                if event.get("type") == "turn.cancelled":
+                    saw_cancelled = True
+                    break
+                if event.get("type") == "error":
+                    break
+            assert saw_cancelled
+
+        rows = self.client.get(
+            f"/api/conversations/{conversation_id}/messages",
+            params={"session_id": session_id, "worldline": "steins_gate"},
+        ).json()
+        assert any(row["role"] == "user" for row in rows)
+        assert any(
+            row["role"] == "assistant" and "途中で止まった" in row["content"]
+            for row in rows
+        ), rows
+
     # -----------------------------------------------------------------
     # R2/R3.3: 并发保护（忙碌时发送 chat 拒绝）
     # -----------------------------------------------------------------

@@ -664,6 +664,8 @@ describe('useAmadeusWS v2', () => {
 
     const assistant = result.current.messages.find((message) => message.turnId === 't');
     expect(assistant?.translation).toBe('完整译文。');
+    expect(assistant).toMatchObject({ translationScope: 'turn' });
+    expect(assistant?.segments?.[0].zh).toBe('');
     expect(assistant?.segments?.[0].translationError).toBeUndefined();
     unmount();
   });

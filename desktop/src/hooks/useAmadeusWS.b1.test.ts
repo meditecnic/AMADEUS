@@ -86,14 +86,23 @@ describe('useAmadeusWS B1 liveness + audio degradation', () => {
     unmount();
   });
 
-  it('still closes a dead connection with no liveness at all', () => {
+  it('shows an interrupted turn after an earlier completed reply', () => {
     const { result, unmount } = renderHook(() => useAmadeusWS(params));
     const socket = FakeWebSocket.instances[0];
 
     act(() => socket.onopen?.());
-    act(() => result.current.sendChat('hello'));
+    act(() => result.current.sendChat('first'));
     act(() => {
-      socket.emit({ type: 'turn.started', conversation_id: 'c', turn_id: 't', generation: 1 });
+      socket.emit({ type: 'turn.started', conversation_id: 'c', turn_id: 'earlier', generation: 1 });
+      socket.emit({
+        type: 'segment.ready', conversation_id: 'c', turn_id: 'earlier', generation: 1,
+        segment_id: 0, ja: '前の返事。', zh: '之前的回复。', emotion: 'neutral',
+      });
+      socket.emit({ type: 'turn.completed', conversation_id: 'c', turn_id: 'earlier', generation: 1 });
+    });
+    act(() => result.current.sendChat('second'));
+    act(() => {
+      socket.emit({ type: 'turn.started', conversation_id: 'c', turn_id: 't', generation: 2 });
     });
 
     act(() => {
@@ -101,6 +110,10 @@ describe('useAmadeusWS B1 liveness + audio degradation', () => {
     });
 
     expect(socket.closeCalled).toBe(true);
+    expect(result.current.messages.some((message) => message.content.includes('前の返事'))).toBe(true);
+    expect(result.current.messages.some((message) => (
+      message.systemError && message.content.includes('这一问中断了')
+    ))).toBe(true);
     unmount();
   });
 
