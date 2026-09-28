@@ -10,10 +10,10 @@
   --ws-jp: var(--font-ja);
   --ws-mono: var(--font-mono);
   --ws-display: var(--font-brand);
-  /* Garamond / STSong are local fallbacks until EB Garamond + Noto Serif SC/JP (OFL) are bundled. */
+  /* EB Garamond and Noto Serif SC/JP are bundled via @fontsource (main.tsx); the rest are fallbacks. */
   --ws-serif: 'EB Garamond', 'Garamond', Georgia, serif;
-  --ws-serif-cjk: 'Noto Serif SC', 'Source Han Serif SC', 'STSong', 'SimSun', serif;
-  --ws-serif-jp: 'Noto Serif JP', 'Yu Mincho', 'STSong', serif;
+  --ws-serif-cjk: 'Noto Serif SC', 'Noto Serif JP', 'Source Han Serif SC', 'STSong', serif;
+  --ws-serif-jp: 'Noto Serif JP', 'Noto Serif SC', 'Yu Mincho', serif;
   --nixie: #ffb36b;
   --nixie-glow: 255, 110, 20;
   --ws-ok: #43d68a;
@@ -39,7 +39,7 @@
 /* Narrow windows keep the reading column: the expanded session list floats over it instead of taking grid width. */
 @media (max-width: 1239px) {
   .ws2 { --ws-side: 60px; }
-  .ws2-memory-en, .ws2-wl-tag, .ws2-title { display: none; }
+  .ws2-memory-en { display: none; }
   .ws2-top-right { gap: 12px; }
   .ws2:not(.rail) .ws2-side {
     position: absolute; top: 0; bottom: 0; left: 0; width: 256px; z-index: 8;
@@ -122,22 +122,30 @@
 .ws2-memory-en { font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .2em; color: var(--ws-ink-3); }
 @keyframes ws2-spin { to { transform: rotate(360deg); } }
 
-/* The divergence meter hangs alone above her head, centred on the booth — the room's signature object.
- * Every other header control stops at the booth's edge, so nothing sits over her. */
-.ws2-top-right { margin-right: calc(var(--ws-stage) - 4px); }
-.ws2-meter {
-  position: absolute; top: 50%; right: calc(var(--ws-stage) / 2); transform: translate(50%, -50%);
-  display: flex; flex-direction: column; align-items: center; gap: 4px; pointer-events: none;
+/* Space split: the reading side's header carries only identity (wordmark, date, session title);
+ * the booth band above her head carries the instruments — Memory at the left, the divergence meter with
+ * its link status centred, System and disconnect at the right. Nothing sits on her; the band is empty air. */
+.ws2-top { padding-right: calc(var(--ws-stage) + 16px); }
+.ws2-title { flex: 1; }
+.ws2-top-right {
+  position: absolute; top: 0; right: 0; width: var(--ws-stage); height: 100%; margin: 0; padding: 0 14px 0 18px;
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 10px;
 }
-.ws2-meter .nixie { --w: 17px; --h: 30px; }
-.ws2-wl-tag { font-family: var(--ws-mono); font-size: 8.5px; letter-spacing: .26em; color: var(--ws-ink-3); }
-.ws2-online { display: flex; align-items: center; gap: 6px; font-family: var(--ws-mono); font-size: 10.5px; letter-spacing: .14em; color: var(--ws-bad); white-space: nowrap; }
-.ws2-online-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
+.ws2-top-right > .ws2-memory-btn { justify-self: start; }
+.ws2-booth-mid { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.ws2-booth-end { justify-self: end; display: flex; align-items: center; gap: 6px; }
+.ws2-meter { display: flex; flex-direction: column; align-items: center; gap: 3px; pointer-events: none; }
+.ws2-meter .nixie { --w: 15px; --h: 26px; }
+.ws2-wl-tag { font-family: var(--ws-mono); font-size: 8px; letter-spacing: .3em; color: var(--ws-ink-3); }
+.ws2-online { display: flex; align-items: center; gap: 5px; font-family: var(--ws-mono); font-size: 8.5px; letter-spacing: .2em; color: var(--ws-bad); white-space: nowrap; }
+.ws2-top-right .ws2-memory-en { display: none; }
+@media (max-width: 1239px) { .ws2-top-right .ws2-memory-zh { display: none; } .ws2-memory-btn { padding: 5px; } }
+.ws2-online-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
 .ws2-online.is-online { color: var(--ws-ok); }
 .ws2-online.is-sync { color: #e8b04a; }
 .ws2-online.is-sync .ws2-online-dot { animation: ws2-blink 1s steps(2) infinite; }
 @keyframes ws2-blink { 50% { opacity: .25; } }
-.ws2-sys-btn { height: 30px; padding: 0 14px; border: 1px solid var(--ws-line-2) !important; border-radius: 6px; font-size: 12.5px; letter-spacing: .18em; }
+.ws2-sys-btn { white-space: nowrap; display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 14px; border: 1px solid var(--ws-line-2) !important; border-radius: 6px; font-size: 12.5px; letter-spacing: .18em; }
 .ws2-sys-btn:hover { background: rgba(var(--ws-accent-rgb), .08); }
 
 /* Header carries no sound key: BGM/SFX live in the system menu, her voice lives on the stage (VoiceScope). */
@@ -472,9 +480,7 @@
 .ws2 .ws2-composer textarea.chat-input-field::placeholder { color: var(--ws-ink-3); }
 .ws2 .ws2-composer textarea.chat-input-field:disabled { opacity: .55; }
 .ws2-composer-row { display: flex; align-items: center; gap: 6px; padding: 4px 8px 8px 10px; min-width: 0; }
-.ws2-hint { font-size: 11px; color: var(--ws-ink-3); white-space: nowrap; }
 .ws2 .ws2-composer-row > .ws2-model { margin-right: auto; }
-@container (max-width: 600px) { .ws2-hint { display: none; } }
 .ws2-send {
   flex: none; height: 32px; min-width: 72px; padding: 0 16px; border-radius: 8px; font-size: 13px; letter-spacing: .2em; font-weight: 600;
   color: #06080a !important; background: var(--ws-accent) !important;
@@ -506,6 +512,22 @@
 .ws2 .ws2-model .provider-discovery-status[data-status^='failed'] { color: var(--ws-bad); }
 .ws2 .ws2-model .provider-action-btn, .ws2 .ws2-model .provider-credential-btn { height: 26px; padding: 0 8px; border-radius: 6px; font-size: 12px; color: var(--ws-ink-2); background: none; border: 0; }
 .ws2 .ws2-model .provider-credential-btn { color: var(--ws-accent); box-shadow: inset 0 0 0 1px rgba(var(--ws-accent-rgb), .4); }
+/* Composer row: every control shows its full label on one line — no wrapping, no ellipses.
+ * The "缺少凭据" note is dropped because the 「需要凭据」 action already says it. */
+.ws2 .ws2-model .provider-controls > * { flex: none; white-space: nowrap; }
+.ws2 .ws2-model .salieri-select-trigger { max-width: none; }
+.ws2 .ws2-model .salieri-select-value { overflow: visible; text-overflow: clip; }
+.ws2 .ws2-model .ws2-picker, .ws2 .ws2-model .ws2-picker-trigger { max-width: none; width: auto; overflow: visible; }
+.ws2 .ws2-model .provider-discovery-status[data-status='credential_missing'] { display: none; }
+.ws2 .ws2-model .provider-credential-btn, .ws2 .ws2-model .provider-action-btn { white-space: nowrap; flex: none; }
+/* Narrow reading column: the connection chip steps aside (the model picker lists and switches connections),
+ * so the remaining controls keep their full labels instead of colliding with 发送. */
+@container (max-width: 640px) {
+  .ws2 .ws2-model .provider-select-root { display: none; }
+}
+@container (max-width: 500px) {
+  .ws2 .ws2-model .provider-action-btn { display: none; }
+}
 
 /* ---------- stage ---------- */
 

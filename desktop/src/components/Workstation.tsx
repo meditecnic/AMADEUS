@@ -1567,17 +1567,21 @@ export const Workstation: React.FC<WorkstationProps> = ({
             <span className="ws2-memory-zh" aria-hidden="true">记忆</span>
             <span className="ws2-memory-en" aria-hidden="true">MEMORY</span>
           </button>
-          <div className="ws2-meter">
-            <span className="ws2-wl-tag">{worldline === 'beta' ? 'β WORLDLINE' : 'STEINS;GATE'}</span>
-            <Nixie value={DIVERGENCE[worldline]} size="sm" />
+          <div className="ws2-booth-mid">
+            <div className="ws2-meter">
+              <span className="ws2-wl-tag">{worldline === 'beta' ? 'β WORLDLINE' : 'STEINS;GATE'}</span>
+              <Nixie value={DIVERGENCE[worldline]} size="sm" />
+            </div>
+            <div
+              className={`ws2-online${online ? ' is-online' : ''}${awaitingWorldline ? ' is-sync' : ''}`}
+              role="status"
+              title={connectionLabel}
+              data-status={needsApiKey ? 'SETUP' : awaitingWorldline ? 'SYNC' : sessionRejected ? 'REJECTED' : status}
+            >
+              <span className="ws2-online-dot" aria-hidden="true" />{connectionLabel}
+            </div>
           </div>
-          <div
-            className={`ws2-online${online ? ' is-online' : ''}${awaitingWorldline ? ' is-sync' : ''}`}
-            role="status"
-            data-status={needsApiKey ? 'SETUP' : awaitingWorldline ? 'SYNC' : sessionRejected ? 'REJECTED' : status}
-          >
-            <span className="ws2-online-dot" aria-hidden="true" />{connectionLabel}
-          </div>
+          <div className="ws2-booth-end">
           <button
             type="button"
             ref={systemButtonRef}
@@ -1590,11 +1594,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
             aria-label="系统设置"
             aria-expanded={isSettingsOpen}
           >
-            {isSettingsOpen ? <>返回对话<kbd>Esc</kbd></> : '系统'}
+            {isSettingsOpen ? <>返回<kbd>Esc</kbd></> : '系统'}
           </button>
           <button type="button" className="ws2-icon-btn" onClick={onLogout} title="断开连接" aria-label="断开连接">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>
           </button>
+          </div>
         </div>
       </header>
 
@@ -1810,8 +1815,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                 <button type="button" aria-label="关闭提示" onClick={() => setModelApplyError(null)}>×</button>
               </span>
             )}
-            {/* Stopping her voice lives on the stage scope (■) and on the reply itself; the composer stays for writing. */}
-            <span className="ws2-hint">Enter 发送 · Shift+Enter 换行</span>
+
             <button
               type="submit"
               className="ws2-send"
