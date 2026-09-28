@@ -267,6 +267,17 @@ export const Workstation: React.FC<WorkstationProps> = ({
     } catch {}
     return false;
   });
+  // Shrinking the window below the overlay breakpoint folds the list back into the rail instead of covering the reading column.
+  useEffect(() => {
+    let wide = window.innerWidth >= 1240;
+    const onResize = () => {
+      const nowWide = window.innerWidth >= 1240;
+      if (wide && !nowWide) setIsHistoryCollapsed(true);
+      wide = nowWide;
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   // Persist history collapsed state
   useEffect(() => {
@@ -1851,10 +1862,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
         {sessionError && (
           <div className="audio-error-toast session-error-toast" data-testid="session-error-toast" role="status">
             <span className="audio-error-msg">
-              {sessionError.kind === 'session'
-                ? `> Session: ${sessionError.code}`
-                : `> Worldline: ${sessionError.code}`}
+              {sessionError.kind === 'session' ? '会话同步失败' : '世界线切换失败，已留在原来的世界线'}
             </span>
+            <code className="ws2-toast-code">{sessionError.code}</code>
           </div>
         )}
         {conversationCreateError && (
@@ -1863,14 +1873,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
           </div>
         )}
         {audioError && (
-          <div className="audio-error-toast" data-testid="audio-error-toast">
+          <div className={`audio-error-toast${audioError === 'action_only' || audioError === 'user_disabled' ? ' info' : ''}`} data-testid="audio-error-toast">
             <span className="audio-error-msg">
-              {audioError === 'action_only' && '> TTS skipped (action description)'}
-              {audioError === 'user_disabled' && '> TTS disabled'}
-              {audioError === 'service_error' && '> TTS service unavailable'}
-              {audioError === 'unknown' && '> TTS error'}
-              {![ 'action_only', 'user_disabled', 'service_error', 'unknown' ].includes(audioError) && `> TTS: ${audioError}`}
+              {audioError === 'action_only' && '这句是动作描写，不朗读。'}
+              {audioError === 'user_disabled' && '自动朗读已关闭。'}
+              {(audioError === 'service_error' || audioError === 'service_unavailable') && '语音服务暂时不可用，这一轮只显示文字。'}
+              {audioError === 'unknown' && '语音出了点问题，这一轮只显示文字。'}
+              {!['action_only', 'user_disabled', 'service_error', 'service_unavailable', 'unknown'].includes(audioError) && '语音未能播放，这一轮只显示文字。'}
             </span>
+            {!['action_only', 'user_disabled'].includes(audioError) && <code className="ws2-toast-code">TTS · {audioError}</code>}
           </div>
         )}
       </div>
@@ -1943,7 +1954,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           <div className="ws2-sound-panel">
             <SoundChannel
               name="角色语音"
-              hint="红莉栖的日语语音 · 静音不影响自动朗读设置"
+              hint="红莉栖的日语语音"
               volume={voiceVolume}
               onVolume={handleVoiceVolumeChange}
               enabled={!voiceMuted}

@@ -942,10 +942,10 @@ describe('Workstation UX-ERROR-SURFACE-01 switch vs TTS errors', () => {
     });
 
     await waitFor(() => {
-      expect(getByTestId('session-error-toast')).toHaveTextContent('Session');
+      expect(getByTestId('session-error-toast')).toHaveTextContent('会话同步失败');
       expect(getByTestId('session-error-toast')).toHaveTextContent('conversation_not_found');
     });
-    expect(queryByText(/> TTS:/)).toBeNull();
+    expect(queryByText(/TTS ·/)).toBeNull();
     expect(queryByText(/> TTS /)).toBeNull();
   });
 
@@ -961,10 +961,10 @@ describe('Workstation UX-ERROR-SURFACE-01 switch vs TTS errors', () => {
     });
 
     await waitFor(() => {
-      expect(getByTestId('session-error-toast')).toHaveTextContent('Worldline');
+      expect(getByTestId('session-error-toast')).toHaveTextContent('世界线切换失败');
       expect(getByTestId('session-error-toast')).toHaveTextContent('switch_failed');
     });
-    expect(queryByText(/> TTS:/)).toBeNull();
+    expect(queryByText(/TTS ·/)).toBeNull();
   });
 
   it('still shows TTS prefix for real audio degradation', async () => {
@@ -976,7 +976,7 @@ describe('Workstation UX-ERROR-SURFACE-01 switch vs TTS errors', () => {
     });
 
     await waitFor(() => {
-      expect(getByTestId('audio-error-toast')).toHaveTextContent('> TTS service unavailable');
+      expect(getByTestId('audio-error-toast')).toHaveTextContent('语音服务暂时不可用');
     });
     expect(queryByTestId('session-error-toast')).toBeNull();
   });
@@ -1003,7 +1003,7 @@ describe('Workstation UX-ERROR-SURFACE-01 switch vs TTS errors', () => {
       expect(getByTestId('session-error-toast')).toHaveTextContent('conversation_not_found');
     });
     // Real TTS error remains; switch error did not replace it.
-    expect(getByTestId('audio-error-toast')).toHaveTextContent('> TTS service unavailable');
+    expect(getByTestId('audio-error-toast')).toHaveTextContent('语音服务暂时不可用');
     expect(queryByTestId('session-error-toast')).not.toBeNull();
   });
 });
