@@ -369,9 +369,21 @@
 .ws2 .history-sidebar-footer { padding-top: 10px; border-top: 1px solid var(--ws-line); }
 .ws2 .history-new-btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 34px; border-radius: 8px; border: 1px dashed var(--ws-line-2); background: none; color: var(--ws-ink-2); font-size: 13px; }
 .ws2 .history-new-btn:hover:not(:disabled) { color: var(--ws-ink); border-color: rgba(var(--ws-accent-rgb), .5); background: rgba(var(--ws-accent-rgb), .05); }
-.ws2 .history-sidebar-icons { display: flex; flex-direction: column; align-items: center; gap: 6px; }
-.ws2 .history-sidebar-icon { width: 34px; height: 34px; border-radius: 8px; border: 1px solid var(--ws-line); background: none; color: var(--ws-ink-2); font-size: 12px; }
-.ws2 .history-sidebar-icon.active { color: var(--ws-ink); border-color: rgba(var(--ws-accent-rgb), .55); background: rgba(var(--ws-accent-rgb), .08); }
+/* Collapsed rail = the same worldline spine, nodes only (title on hover / aria-label). */
+.ws2 .grid-history.collapsed { justify-content: flex-start; }
+.ws2 .history-sidebar-icons { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 2px; padding-top: 4px; }
+.ws2 .history-sidebar-icons::before { content: ''; position: absolute; left: 50%; top: 44px; bottom: 0; width: 1px; background: linear-gradient(180deg, var(--ws-line-2), transparent); pointer-events: none; }
+.ws2 .history-sidebar-icon { position: relative; width: 34px; height: 34px; border-radius: 8px; border: 1px solid var(--ws-line); background: none; color: var(--ws-ink-2); font-size: 12px; }
+.ws2 .history-sidebar-icon.add { margin: 0 0 8px; border-style: dashed; }
+.ws2 .history-sidebar-icon:not(.add) { height: 26px; font-size: 0; border: 0; }
+.ws2 .history-sidebar-icon:not(.add)::before {
+  content: ''; position: absolute; left: 50%; top: 50%; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%;
+  background: var(--ws-bg); box-shadow: inset 0 0 0 1px var(--ws-ink-3); transition: box-shadow .2s, background .2s, transform .2s;
+}
+.ws2 .history-sidebar-icon.pinned:not(.add)::before { border-radius: 1px; transform: rotate(45deg); }
+.ws2 .history-sidebar-icon:not(.add):hover::before { box-shadow: inset 0 0 0 1px var(--ws-ink); transform: scale(1.25); }
+.ws2 .history-sidebar-icon.active:not(.add)::before { background: var(--ws-accent); box-shadow: 0 0 0 3px rgba(var(--ws-accent-rgb), .18), 0 0 10px var(--ws-accent); }
+.ws2 .history-sidebar-icon.active { color: var(--ws-ink); }
 .ws2 .history-sidebar-icon:hover { color: var(--ws-ink); }
 
 /* ---------- conversation ---------- */
@@ -493,6 +505,19 @@
   color: transparent; -webkit-text-stroke: 1px rgba(var(--ws-accent-rgb), .2);
   mask-image: linear-gradient(180deg, #000 55%, transparent 96%);
 }
+.ws2-matrix {
+  position: absolute; left: 0; right: 0; top: var(--ws-head); bottom: 0; z-index: 0; pointer-events: none;
+  background-image: radial-gradient(circle, rgba(var(--ws-accent-rgb), .55) .7px, transparent 1.1px);
+  background-size: 12px 12px; opacity: .22;
+  mask-image: radial-gradient(70% 58% at 46% 34%, #000 0%, rgba(0, 0, 0, .5) 45%, transparent 78%);
+  transition: opacity .8s ease;
+}
+.ws2-stage.presence-thinking .ws2-matrix { opacity: .55; animation: ws2-matrix-flow 2.4s linear infinite; }
+.ws2-stage.presence-speaking .ws2-matrix { opacity: .3; animation: ws2-matrix-pulse 1.6s ease-in-out infinite; }
+.ws2-stage.presence-offline .ws2-matrix { opacity: .05; }
+@keyframes ws2-matrix-flow { to { background-position: 0 -48px; } }
+@keyframes ws2-matrix-pulse { 50% { opacity: .18; } }
+@media (prefers-reduced-motion: reduce) { .ws2-stage .ws2-matrix { animation: none !important; } }
 .ws2 .avatar-viewer-container.avatar-stage { position: absolute; inset: 0; z-index: 1; overflow: visible; }
 .ws2 .avatar-stage .avatar-sprite-wrapper {
   position: absolute; left: 8px; bottom: 0; top: auto; right: auto; transform: none; margin: 0;

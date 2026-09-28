@@ -1821,6 +1821,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
       <section className={`ws2-stage presence-${presence}`}>
         <div className="ws2-seam" aria-hidden="true" />
         <div className="ws2-giant-name" lang="ja" aria-hidden="true">牧瀬紅莉栖</div>
+        {/* Amadeus window: a dot-matrix field behind her that stirs while she thinks and pulses while she speaks. */}
+        <div className="ws2-matrix" aria-hidden="true" />
+        
         <AvatarViewer
           variant="stage"
           emotion={emotion}
