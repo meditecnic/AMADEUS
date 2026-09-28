@@ -1795,17 +1795,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
                 <button type="button" aria-label="关闭提示" onClick={() => setModelApplyError(null)}>×</button>
               </span>
             )}
+            {/* Stopping her voice lives on the stage scope (■) and on the reply itself; the composer stays for writing. */}
             <span className="ws2-hint">Enter 发送 · Shift+Enter 换行</span>
-            {isPlaying && (
-              <button
-                type="button"
-                className="ws2-interrupt"
-                onClick={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); handleStopVoice(); }}
-                title="中断当前语音"
-              >
-                停止本句
-              </button>
-            )}
             <button
               type="submit"
               className="ws2-send"
