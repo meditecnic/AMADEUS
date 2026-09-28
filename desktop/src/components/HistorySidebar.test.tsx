@@ -51,10 +51,14 @@ describe('HistorySidebar conversations', () => {
       />
     );
     fireEvent.click(screen.getByText('β 世界线'));
-    fireEvent.click(screen.getByLabelText('取消置顶 β 世界线'));
-    fireEvent.click(screen.getByLabelText('重命名 β 世界线'));
-    fireEvent.click(screen.getByLabelText('删除 β 世界线'));
-    fireEvent.click(screen.getByLabelText('清空 β 世界线'));
+    const menuAction = (label: string) => {
+      fireEvent.click(screen.getByLabelText('会话操作 β 世界线'));
+      fireEvent.click(screen.getByLabelText(label));
+    };
+    menuAction('取消置顶 β 世界线');
+    menuAction('重命名 β 世界线');
+    menuAction('删除 β 世界线');
+    menuAction('清空 β 世界线');
     fireEvent.click(screen.getByText('新建会话'));
 
     expect(onSelect).toHaveBeenCalledWith(conversations[1]);
@@ -64,6 +68,22 @@ describe('HistorySidebar conversations', () => {
     expect(onForget).toHaveBeenCalledWith(conversations[1]);
     expect(onNew).toHaveBeenCalled();
     expect(screen.queryByText('时间机器实验')).not.toBeInTheDocument();
+  });
+
+  it('offers delete for the initial conversation through the same menu', () => {
+    const onDelete = vi.fn();
+    render(
+      <HistorySidebar
+        isCollapsed={false} onToggle={vi.fn()} conversations={conversations}
+        activeId="one" searchQuery="" onSearchChange={vi.fn()}
+        onSelect={vi.fn()} onNew={vi.fn()} onRename={vi.fn()}
+        onTogglePin={vi.fn()} onDelete={onDelete} onForget={vi.fn()}
+      />,
+    );
+    expect(screen.queryByLabelText('删除 时间机器实验')).toBeNull();
+    fireEvent.click(screen.getByLabelText('会话操作 时间机器实验'));
+    fireEvent.click(screen.getByLabelText('删除 时间机器实验'));
+    expect(onDelete).toHaveBeenCalledWith(conversations[0]);
   });
 
   it('shows identity mode badges and has no alternate-mode or in-session switch control', () => {

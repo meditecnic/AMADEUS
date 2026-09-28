@@ -46,13 +46,16 @@ interface AvatarViewerProps {
   isSpeaking: boolean;
   volume: number;
   glitchState: 'none' | 'light' | 'heavy';
+  /** stage: layout and lighting come from the workstation stylesheet (no inline sizing, no glow ring). */
+  variant?: 'legacy' | 'stage';
 }
 
 const AvatarViewer: React.FC<AvatarViewerProps> = ({
   emotion,
   isSpeaking,
   volume,
-  glitchState
+  glitchState,
+  variant = 'legacy',
 }) => {
   const [isBlinking, setIsBlinking] = useState(false);
   const img1Ref = useRef<HTMLImageElement>(null);
@@ -137,8 +140,8 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
 
   return (
     <div
-      className="avatar-viewer-container"
-      style={{
+      className={`avatar-viewer-container${variant === 'stage' ? ' avatar-stage' : ''}`}
+      style={variant === 'stage' ? undefined : {
         height: '100%',
         width: '100%',
         display: 'flex',
@@ -148,19 +151,21 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
         maxHeight: '720px'
       }}
     >
-      <div
-        className={`avatar-glow-ring${isSpeaking ? ' paused' : ''}`}
-        style={{
-          width: '280px',
-          height: '280px',
-          background: 'radial-gradient(circle, rgba(255,108,0,0.14) 0%, rgba(0,0,0,0) 70%)',
-          zIndex: 1
-        }}
-      />
+      {variant !== 'stage' && (
+        <div
+          className={`avatar-glow-ring${isSpeaking ? ' paused' : ''}`}
+          style={{
+            width: '280px',
+            height: '280px',
+            background: 'radial-gradient(circle, rgba(255,108,0,0.14) 0%, rgba(0,0,0,0) 70%)',
+            zIndex: 1
+          }}
+        />
+      )}
 
       <div
         className={`avatar-sprite-wrapper breath-animation ${glitchClass}`}
-        style={{ zIndex: 2 }}
+        style={variant === 'stage' ? undefined : { zIndex: 2 }}
       >
         <img
           src={img1}

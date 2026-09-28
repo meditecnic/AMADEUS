@@ -763,7 +763,7 @@ describe('Workstation UX-PLAYBACK-SEND-01 send while voice plays', () => {
       expect(element).not.toBeNull();
       return element as HTMLInputElement;
     });
-    const send = container.querySelector<HTMLButtonElement>('.chat-send-btn');
+    const send = container.querySelector<HTMLButtonElement>('button[aria-label="发送"]');
     expect(input.disabled).toBe(false);
     expect(send?.disabled).toBe(true); // empty input still blocks send
 
@@ -823,7 +823,7 @@ describe('Workstation UX-PLAYBACK-SEND-01 send while voice plays', () => {
     });
     expect(input.disabled).toBe(true);
     fireEvent.change(input, { target: { value: '被挡住' } });
-    expect(container.querySelector<HTMLButtonElement>('.chat-send-btn')?.disabled).toBe(true);
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="发送"]')?.disabled).toBe(true);
   });
 
   it('keeps send disabled while synthesizing', async () => {
@@ -838,7 +838,7 @@ describe('Workstation UX-PLAYBACK-SEND-01 send while voice plays', () => {
     });
     expect(input.disabled).toBe(true);
     fireEvent.change(input, { target: { value: '合成中' } });
-    expect(container.querySelector<HTMLButtonElement>('.chat-send-btn')?.disabled).toBe(true);
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="发送"]')?.disabled).toBe(true);
   });
 
   it('sends normally without stop when nothing is playing', async () => {

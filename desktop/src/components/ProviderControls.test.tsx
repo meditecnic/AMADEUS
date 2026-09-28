@@ -263,7 +263,7 @@ describe('ProviderControls', () => {
       name: 'DeepSeek V4 Pro（不可用）',
     })).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByRole('option', {
-      name: 'deepseek-next（未验证）',
+      name: 'deepseek-next（人格未评估）',
     })).toHaveAttribute('aria-disabled', 'true');
   });
 
@@ -416,7 +416,7 @@ describe('ProviderControls', () => {
     fireEvent.click(screen.getByRole('button', { name: '模型' }));
     expect(screen.getByRole('option', { name: 'DeepSeek Flash' })).toBeEnabled();
     expect(screen.getByRole('option', { name: 'deepseek-v4-flash（兼容 ID）' })).toBeEnabled();
-    expect(screen.getByRole('option', { name: 'deepseek-next（未验证）' })).toHaveAttribute(
+    expect(screen.getByRole('option', { name: 'deepseek-next（人格未评估）' })).toHaveAttribute(
       'aria-disabled',
       'true',
     );

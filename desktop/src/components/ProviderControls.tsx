@@ -1,5 +1,6 @@
 import React from 'react';
 import { SalieriSelect } from './SalieriSelect';
+import { ModelPicker } from '../workstation/ModelPicker';
 
 export type ModelLifecycle =
   | 'stable'
@@ -78,6 +79,11 @@ interface ProviderControlsProps {
   activeModelId: string;
   models: ModelCatalogEntry[];
   disabled: boolean;
+  /** A running turn keeps its provider and thinking level; the model can still be chosen for the next turn. */
+  lockProvider?: boolean;
+  /** Composer variant: searchable model picker with other connections and「管理连接」. */
+  searchable?: boolean;
+  onManageConnections?: () => void;
   loadingModels: boolean;
   discoveryStatus?: ModelDiscoveryStatus;
   thinkingValue: string | null;
@@ -121,7 +127,8 @@ export function modelLifecycleSuffix(lifecycle: ModelLifecycle): string {
     deprecated: '（已弃用）',
     retired: '（已退役）',
     unavailable: '（不可用）',
-    unverified: '（未验证）',
+    // Catalog persona evaluation, not the connection chat-check.
+    unverified: '（人格未评估）',
   }[lifecycle];
 }
 
@@ -198,6 +205,9 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
   activeModelId,
   models,
   disabled,
+  lockProvider = false,
+  searchable = false,
+  onManageConnections,
   loadingModels,
   discoveryStatus,
   thinkingValue,
@@ -227,7 +237,7 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
         className="provider-select-root"
         triggerClassName="provider-select"
         value={activeProviderId}
-        disabled={disabled || providers.length === 0}
+        disabled={disabled || lockProvider || providers.length === 0}
         options={providers.map((provider) => {
           const disabledProvider = provider.enabled === false;
           return {
@@ -240,21 +250,42 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
         })}
         onChange={onProviderChange}
       />
-      <SalieriSelect
-        aria-label="模型"
-        className="provider-model-select-root"
-        triggerClassName="provider-model-select"
-        value={activeModelId}
-        disabled={disabled || modelOptions.length === 0}
-        options={modelOptions.map((model) => ({
-          value: model.id,
-          label: modelOptionLabel(model),
-          disabled: !model.callable,
-          title: modelOptionTitle(model),
-        }))}
-        title={activeModel ? modelOptionTitle(activeModel) : undefined}
-        onChange={onModelChange}
-      />
+      {searchable ? (
+        <ModelPicker
+          value={activeModelId}
+          disabled={disabled || modelOptions.length === 0}
+          options={modelOptions.map((model) => ({
+            value: model.id,
+            label: modelOptionLabel(model),
+            disabled: !model.callable,
+            title: modelOptionTitle(model),
+          }))}
+          title={activeModel ? modelOptionTitle(activeModel) : undefined}
+          onChange={onModelChange}
+          sourceName={activeProvider?.display_name || activeProviderId}
+          otherSources={lockProvider ? [] : providers
+            .filter((provider) => provider.id !== activeProviderId && provider.enabled !== false)
+            .map((provider) => ({ id: provider.id, name: provider.display_name, model: provider.default_model }))}
+          onSource={onProviderChange}
+          onManage={onManageConnections}
+        />
+      ) : (
+        <SalieriSelect
+          aria-label="模型"
+          className="provider-model-select-root"
+          triggerClassName="provider-model-select"
+          value={activeModelId}
+          disabled={disabled || modelOptions.length === 0}
+          options={modelOptions.map((model) => ({
+            value: model.id,
+            label: modelOptionLabel(model),
+            disabled: !model.callable,
+            title: modelOptionTitle(model),
+          }))}
+          title={activeModel ? modelOptionTitle(activeModel) : undefined}
+          onChange={onModelChange}
+        />
+      )}
       {statusLabel ? (
         <span className="provider-discovery-status" title={statusLabel}>
           {statusLabel}
@@ -292,7 +323,7 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
           className="reasoning-compact"
           triggerClassName="reasoning-compact-trigger"
           value={selectedThinking}
-          disabled={disabled || !activeModel?.callable}
+          disabled={disabled || lockProvider || !activeModel?.callable}
           triggerPrefix={`${thinkingControl.label} · `}
           title={
             thinkingControl.native

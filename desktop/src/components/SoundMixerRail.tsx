@@ -13,6 +13,9 @@ export interface SoundMixerRailProps {
   onEnableSfxChange: (v: boolean) => void;
   onSfxVolumeChange: (v: number) => void;
   onVoiceVolumeChange: (v: number) => void;
+  /** Her voice mute (keeps the level; does not change TTS/autoplay). Omitted = no voice LED. */
+  voiceEnabled?: boolean;
+  onVoiceEnabledChange?: (v: boolean) => void;
   /** id for aria-controls on the Sound trigger */
   panelId?: string;
   /** Sound trigger — Escape restores focus here; outside-click excludes this node */
@@ -36,6 +39,8 @@ export const SoundMixerRail: React.FC<SoundMixerRailProps> = ({
   onEnableSfxChange,
   onSfxVolumeChange,
   onVoiceVolumeChange,
+  voiceEnabled = true,
+  onVoiceEnabledChange,
   panelId = 'sound-mixer-rail',
   triggerRef,
 }) => {
@@ -44,14 +49,16 @@ export const SoundMixerRail: React.FC<SoundMixerRailProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
+      if (event.key !== 'Escape' || event.isComposing) return;
       event.preventDefault();
+      // Innermost layer: one Escape closes only the mixer, not the system menu behind it.
+      event.stopPropagation();
       // Focus trigger first (while still mounted), then close rail.
       triggerRef?.current?.focus();
       onClose();
     };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
   }, [isOpen, onClose, triggerRef]);
 
   useEffect(() => {
@@ -142,12 +149,26 @@ export const SoundMixerRail: React.FC<SoundMixerRailProps> = ({
         </div>
 
         <div className="sound-mixer-channel" data-channel="voice">
-          <span className="sound-mixer-channel-name sound-mixer-channel-name--voice">
-            <span className="sound-mixer-voice-full">VOICE</span>
-            <span className="sound-mixer-voice-compact" aria-hidden="true">
-              VOX
+          {onVoiceEnabledChange ? (
+            <label className="sound-mixer-led-label">
+              <input
+                type="checkbox"
+                className="sound-mixer-led"
+                checked={voiceEnabled}
+                onChange={(e) => onVoiceEnabledChange(e.target.checked)}
+                aria-label="VOICE"
+              />
+              <span className="sound-mixer-led-face" aria-hidden="true" />
+              <span className="sound-mixer-channel-name">VOICE</span>
+            </label>
+          ) : (
+            <span className="sound-mixer-channel-name sound-mixer-channel-name--voice">
+              <span className="sound-mixer-voice-full">VOICE</span>
+              <span className="sound-mixer-voice-compact" aria-hidden="true">
+                VOX
+              </span>
             </span>
-          </span>
+          )}
           <input
             type="range"
             min={0}
@@ -156,6 +177,7 @@ export const SoundMixerRail: React.FC<SoundMixerRailProps> = ({
             onChange={(e) => onVoiceVolumeChange(Number(e.target.value) / 100)}
             className="volume-slider sound-mixer-range"
             style={{ '--val': pct(voiceVolume) } as React.CSSProperties}
+            disabled={!voiceEnabled}
             aria-label="语音 (VOICE)"
           />
           <span className="sound-mixer-pct" aria-hidden="true">

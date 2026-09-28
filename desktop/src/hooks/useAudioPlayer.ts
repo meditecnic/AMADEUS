@@ -60,6 +60,23 @@ export class AudioPlayerManager {
     return true;
   }
 
+  /** Ramp the voice down over `ms`, then resolve; the caller stops playback. Gain is restored for the next turn. */
+  fadeOut(ms = 400): Promise<void> {
+    if (!this.gainNode || !this.ctx || !this.currentSource) return Promise.resolve();
+    const gain = this.gainNode.gain;
+    const now = this.ctx.currentTime;
+    gain.cancelScheduledValues(now);
+    gain.setValueAtTime(gain.value, now);
+    gain.linearRampToValueAtTime(0, now + ms / 1000);
+    return new Promise((resolve) => window.setTimeout(() => {
+      if (this.gainNode && this.ctx) {
+        this.gainNode.gain.cancelScheduledValues(this.ctx.currentTime);
+        this.gainNode.gain.setValueAtTime(this.isMuted ? 0 : this.voiceVolume, this.ctx.currentTime + 0.05);
+      }
+      resolve();
+    }, ms));
+  }
+
   setMuted(muted: boolean) {
     this.isMuted = muted;
     if (this.gainNode && this.ctx) {

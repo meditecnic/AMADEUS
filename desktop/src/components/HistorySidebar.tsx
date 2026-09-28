@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   type IdentityMode,
   normalizeIdentityMode,
@@ -38,6 +38,70 @@ function modeBadgeLabel(mode: IdentityMode | undefined): string {
   return normalizeIdentityMode(mode) === 'self' ? 'SELF' : 'OKABE';
 }
 
+/** One entry per conversation: pin, rename, then the two erasing actions below a divider. */
+function ConversationMenu({ conversation, onRename, onTogglePin, onDelete, onForget }: {
+  conversation: ConversationSummary;
+  onRename: (c: ConversationSummary) => void;
+  onTogglePin: (c: ConversationSummary) => void;
+  onDelete: (c: ConversationSummary) => void;
+  onForget: (c: ConversationSummary) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setOpen(false);
+      triggerRef.current?.focus();
+    };
+    document.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey, true);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey, true);
+    };
+  }, [open]);
+  const run = (action: (c: ConversationSummary) => void) => () => {
+    setOpen(false);
+    action(conversation);
+  };
+  return (
+    <div className="conversation-actions" ref={rootRef}>
+      <button
+        type="button"
+        ref={triggerRef}
+        className="conversation-more"
+        aria-label={`会话操作 ${conversation.title}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+          <circle cx="3.5" cy="8" r="1.2" fill="currentColor" /><circle cx="8" cy="8" r="1.2" fill="currentColor" /><circle cx="12.5" cy="8" r="1.2" fill="currentColor" />
+        </svg>
+      </button>
+      {open && (
+        <div className="conversation-menu" role="menu">
+          <button type="button" role="menuitem" onClick={run(onTogglePin)} aria-label={`${conversation.is_pinned ? '取消置顶' : '置顶'} ${conversation.title}`}>
+            {conversation.is_pinned ? '取消置顶' : '置顶'}
+          </button>
+          <button type="button" role="menuitem" onClick={run(onRename)} aria-label={`重命名 ${conversation.title}`}>重命名</button>
+          <div className="conversation-menu-sep" role="separator" />
+          <button type="button" role="menuitem" onClick={run(onForget)} aria-label={`清空 ${conversation.title}`}>清空聊天记录…</button>
+          <button type="button" role="menuitem" className="danger" onClick={run(onDelete)} aria-label={`删除 ${conversation.title}`}>删除会话…</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export const HistorySidebar: React.FC<HistorySidebarProps> = ({
   isCollapsed,
   onToggle,
@@ -73,20 +137,21 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
 
       {isCollapsed ? (
         <div className="history-sidebar-icons">
+          <button type="button" className="history-sidebar-icon add" onClick={onNew} aria-label="新建会话" disabled={busy}>
+            <span className="history-icon-plus">+</span>
+          </button>
           {visible.slice(0, 8).map((conversation) => (
             <button
               type="button"
               key={conversation.id}
-              className={`history-sidebar-icon ${conversation.id === activeId ? 'active' : ''}`}
+              className={`history-sidebar-icon ${conversation.id === activeId ? 'active' : ''}${conversation.is_pinned ? ' pinned' : ''}`}
               title={conversation.title}
+              aria-label={conversation.title}
               onClick={() => onSelect(conversation)}
             >
-              {conversation.is_pinned ? '★' : conversation.title.slice(0, 1).toUpperCase()}
+              {conversation.title.slice(0, 1).toUpperCase()}
             </button>
           ))}
-          <button type="button" className="history-sidebar-icon add" onClick={onNew} aria-label="新建会话">
-            <span className="history-icon-plus">+</span>
-          </button>
         </div>
       ) : (
         <>
@@ -103,7 +168,7 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
             {visible.length === 0 ? (
               <div className="history-empty-tip">
                 <span>&gt; 暂无会话</span>
-                <p className="history-empty-sub">新建一条世界线内的独立会话。</p>
+                <p className="history-empty-sub">下一次发言会在这条世界线开始新会话。</p>
               </div>
             ) : visible.map((conversation) => (
               <article
@@ -117,7 +182,7 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
                   disabled={busy}
                 >
                   <span className="conversation-title">
-                    {conversation.is_pinned && <span aria-hidden="true">★ </span>}
+                    {conversation.is_pinned && <span className="conversation-pin" aria-label="已置顶">◆ </span>}
                     {conversation.title}
                   </span>
                   <span className="conversation-meta">
@@ -131,16 +196,13 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
                     {(conversation.provider_id || 'deepseek').toUpperCase()} · {conversation.model_id || 'DEFAULT'}
                   </span>
                 </button>
-                <div className="conversation-actions">
-                  <button type="button" onClick={() => onTogglePin(conversation)} aria-label={`${conversation.is_pinned ? '取消置顶' : '置顶'} ${conversation.title}`}>
-                    {conversation.is_pinned ? '☆' : '★'}
-                  </button>
-                  <button type="button" onClick={() => onRename(conversation)} aria-label={`重命名 ${conversation.title}`}>✎</button>
-                  <button type="button" onClick={() => onForget(conversation)} aria-label={`清空 ${conversation.title}`}>⌫</button>
-                  {!conversation.is_default && (
-                    <button type="button" onClick={() => onDelete(conversation)} aria-label={`删除 ${conversation.title}`}>×</button>
-                  )}
-                </div>
+                <ConversationMenu
+                  conversation={conversation}
+                  onRename={onRename}
+                  onTogglePin={onTogglePin}
+                  onDelete={onDelete}
+                  onForget={onForget}
+                />
               </article>
             ))}
           </div>

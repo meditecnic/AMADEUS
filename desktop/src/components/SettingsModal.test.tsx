@@ -659,6 +659,15 @@ describe('SettingsModal self name field (Slice B)', () => {
     expect(onSaveSettings.mock.calls[0][0].selfName).toBe('新名字');
   });
 
+  it('does not send a model change when the default-model field was not edited', async () => {
+    // A stale snapshot used to overwrite the live model and pair a DeepSeek model with a custom connection.
+    const onSaveSettings = vi.fn();
+    render(<SettingsModal {...baseProps} model="some-live-model" onSaveSettings={onSaveSettings} />);
+    fireEvent.click(screen.getByText('保存基本设置'));
+    await waitFor(() => expect(onSaveSettings).toHaveBeenCalled());
+    expect(onSaveSettings.mock.calls[0][0].model).toBe('');
+  });
+
   it('clears the name when the field is emptied', async () => {
     const onSaveSettings = vi.fn();
     render(<SettingsModal {...baseProps} selfName="阿伟" onSaveSettings={onSaveSettings} />);

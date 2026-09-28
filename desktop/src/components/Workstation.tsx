@@ -4,7 +4,6 @@ import {
   useAmadeusWS,
   type Message,
 } from '../hooks/useAmadeusWS';
-import { StatusBar } from './StatusBar';
 import {
   CHAT_TEMPERATURE_DEFAULT,
   CHAT_TEMPERATURE_MAX,
@@ -26,12 +25,17 @@ import { HistorySidebar, type ConversationSummary } from './HistorySidebar';
 import { TtsDebugPanel } from './TtsDebugPanel';
 import AvatarViewer from './AvatarViewer';
 import SpriteAnimator from './SpriteAnimator';
-import { HudBadge } from './HudBadge';
-import { DivergenceMeter } from './DivergenceMeter';
 import { useAudioPlayer, audioPlayer } from '../hooks/useAudioPlayer';
 import { audioService } from '../services/AudioService';
-import { CRTOverlay } from './CRTOverlay';
 import { BilingualMessage } from './BilingualMessage';
+import { Atmosphere } from '../workstation/Atmosphere';
+import { DraftWord } from '../workstation/DraftWord';
+import { DIVERGENCE, Nixie } from '../workstation/Nixie';
+import { SoundChannel, SystemMenu, WorldlinePanel, type MenuSection } from '../workstation/SystemMenu';
+import { ShiftOverlay } from '../workstation/ShiftOverlay';
+import { ConfirmDialog } from '../workstation/ConfirmDialog';
+import { ConnectionCheckPanel, chatCheckMessage, requestChatCheck, type ChatCheckState } from '../workstation/ConnectionCheck';
+import { SendSignal } from '../workstation/SendSignal';
 import { ForgetConversationModal } from './ForgetConversationModal';
 import { MemorySpace } from '../memory-space/MemorySpace';
 import '../memory-space/MemorySpace.css';
@@ -75,6 +79,18 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [sovitsUrl, setSovitsUrl] = useState('http://127.0.0.1:9880');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMemoryOpen, setIsMemoryOpen] = useState(false);
+  const [memoryClosing, setMemoryClosing] = useState(false);
+  const [memoryOrigin, setMemoryOrigin] = useState({ x: 0, y: 0 });
+  const closeMemory = () => {
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (reduce) { setIsMemoryOpen(false); return; }
+    setMemoryClosing(true);
+    window.setTimeout(() => {
+      setIsMemoryOpen(false);
+      setMemoryClosing(false);
+      document.querySelector<HTMLButtonElement>('.ws2 button[aria-label="MEMORY"]')?.focus();
+    }, 280);
+  };
   const [inputText, setInputText] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [webSearchApiKey, setWebSearchApiKey] = useState('');
@@ -98,6 +114,13 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [conversationSearch, setConversationSearch] = useState('');
   const [conversationBusy, setConversationBusy] = useState(false);
   const [forgetTarget, setForgetTarget] = useState<ConversationSummary | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ConversationSummary | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [renameTarget, setRenameTarget] = useState<ConversationSummary | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [renameBusy, setRenameBusy] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
   const transcriptViewportRef = useRef<HTMLDivElement>(null);
   const previousWorldlineRef = useRef(worldline);
   const committedWorldlineRef = useRef(worldline);
@@ -124,6 +147,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
       const v = localStorage.getItem('amadeus_pc_voice_volume');
       return v ? Math.max(0, Math.min(1, parseFloat(v))) : 1.0;
     } catch { return 1.0; }
+  });
+  /** Muting her voice keeps the level for restore and does not touch TTS/autoplay preferences. */
+  const [voiceMuted, setVoiceMuted] = useState(() => {
+    try { return localStorage.getItem('amadeus_pc_voice_muted') === 'true'; } catch { return false; }
   });
   const [temperatureMigrationNotice, setTemperatureMigrationNotice] = useState(() => {
     try {
@@ -172,12 +199,62 @@ export const Workstation: React.FC<WorkstationProps> = ({
   } | null>(null);
   const [isSoundOpen, setIsSoundOpen] = useState(false);
   const soundTriggerRef = useRef<HTMLButtonElement>(null);
+  const [menuSection, setMenuSection] = useState<MenuSection>('worldline');
+  const [pendingModel, setPendingModel] = useState<string | null>(null);
+  const [shiftConfirm, setShiftConfirm] = useState<'steins_gate' | 'beta' | null>(null);
+  const wsRootRef = useRef<HTMLDivElement>(null);
+  const [shift, setShift] = useState<{ from: 'steins_gate' | 'beta'; to: 'steins_gate' | 'beta' } | null>(null);
+  const systemButtonRef = useRef<HTMLButtonElement>(null);
+  const openMenu = useCallback((section?: MenuSection) => {
+    if (section) setMenuSection(section);
+    setIsSoundOpen(false);
+    setIsSettingsOpen(true);
+  }, []);
+  const closeMenu = useCallback(() => setIsSettingsOpen(false), []);
+  // Chat verification results are local and keyed by provider + model + config version.
+  const [chatChecks, setChatChecks] = useState<Record<string, ChatCheckState>>({});
+  const [configVersions, setConfigVersions] = useState<Record<string, number>>({});
+  const configVersionsRef = useRef(configVersions);
+  configVersionsRef.current = configVersions;
+  const checkKey = (providerId: string, modelId: string, version = configVersionsRef.current[providerId] ?? 0) =>
+    `${providerId}::${modelId}::${version}`;
+  const runChatCheck = useCallback(async (providerId: string, modelId: string, version?: number): Promise<ChatCheckState | null> => {
+    if (!providerId || !modelId) return null;
+    const key = checkKey(providerId, modelId, version);
+    setChatChecks((current) => ({ ...current, [key]: { status: 'checking' } }));
+    const result = await requestChatCheck(providerId, modelId);
+    setChatChecks((current) => ({ ...current, [key]: result }));
+    // Only a result for the configuration that is still current may admit anything.
+    return key === checkKey(providerId, modelId) ? result : null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* Chat-selector admission (front-end state, persisted locally).
+   * A newly created connection waits here until its first chat-check passes or the user enables it by hand.
+   * Connections that existed before this rule are not in either list and stay selectable. */
+  const readIds = (key: string): string[] => {
+    try { const raw = JSON.parse(localStorage.getItem(key) || '[]'); return Array.isArray(raw) ? raw.filter((x) => typeof x === 'string') : []; } catch { return []; }
+  };
+  const [pendingProviders, setPendingProviders] = useState<string[]>(() => readIds('amadeus_pc_pending_providers'));
+  const [manualProviders, setManualProviders] = useState<string[]>(() => readIds('amadeus_pc_manual_providers'));
+  useEffect(() => { try { localStorage.setItem('amadeus_pc_pending_providers', JSON.stringify(pendingProviders)); } catch {} }, [pendingProviders]);
+  useEffect(() => { try { localStorage.setItem('amadeus_pc_manual_providers', JSON.stringify(manualProviders)); } catch {} }, [manualProviders]);
+  const [modelApplyError, setModelApplyError] = useState<string | null>(null);
+  /** Address, key or model changes invalidate earlier results for that provider. */
+  const bumpConfigVersion = useCallback((providerId: string) => {
+    const next = (configVersionsRef.current[providerId] ?? 0) + 1;
+    configVersionsRef.current = { ...configVersionsRef.current, [providerId]: next };
+    setConfigVersions(configVersionsRef.current);
+    return next;
+  }, []);
   const [isHistoryCollapsed, setIsHistoryCollapsed] = useState(() => {
+    // Narrow windows open with the rail so the floating list never covers the conversation on arrival.
+    if (typeof window !== 'undefined' && window.innerWidth < 1240) return true;
     try {
       const stored = localStorage.getItem('amadeus_pc_history_collapsed');
       if (stored !== null) return stored === 'true';
     } catch {}
-    return false; // 默认展开，让三列布局立即可见
+    return false;
   });
 
   // Persist history collapsed state
@@ -278,9 +355,25 @@ export const Workstation: React.FC<WorkstationProps> = ({
     } catch {}
   }, [draftProviderId, providers]);
 
+  // No stored model (cleared storage / older bug wrote '') → use the draft connection's default, not the global
+  // 'deepseek-flash' placeholder, which a custom connection's server rejects.
+  const modelWasStoredRef = useRef(Boolean(localStorage.getItem('amadeus_pc_model')));
+  useEffect(() => {
+    if (modelWasStoredRef.current && model.trim()) return;
+    const provider = providers.find((row) => row.id === draftProviderId);
+    if (!provider?.default_model) return;
+    modelWasStoredRef.current = true;
+    if (provider.default_model === model) return;
+    setModel(provider.default_model);
+    try { localStorage.setItem('amadeus_pc_model', provider.default_model); } catch {}
+    window.setTimeout(() => reconnect(), 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model, draftProviderId, providers]);
+
   // WebSocket hook connection management
   const {
     status,
+    sessionState,
     messages,
     isThinking,
     isSynthesizing,
@@ -293,6 +386,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     sendDebugTts,
     updateConfig,
     reconnect,
+    resetToDraft,
     switchConversation,
     switchWorldline,
   } = useAmadeusWS({
@@ -661,8 +755,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const { currentVolume, isPlaying } = useAudioPlayer();
 
   useEffect(() => {
+    // setVoiceVolume persists the level, so mute goes through setMuted to keep the level for restore.
     audioPlayer.setVoiceVolume?.(voiceVolume);
-  }, [voiceVolume]);
+    audioPlayer.setMuted?.(voiceMuted);
+    try { localStorage.setItem('amadeus_pc_voice_muted', String(voiceMuted)); } catch {}
+  }, [voiceVolume, voiceMuted]);
 
   const handleVoiceVolumeChange = useCallback((value: number) => {
     const next = Math.max(0, Math.min(1, value));
@@ -806,7 +903,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputText.trim() || conversationBusy) return;
+    if (!inputText.trim() || conversationBusy || sessionState === 'rejected' || sessionState === 'unknown' || providerGone) return;
     // Turn text still gates send via isThinking/isSynthesizing. When only leftover
     // voice is playing, stop the existing playback path then start the new Turn.
     if (isPlaying) {
@@ -970,6 +1067,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
   };
 
   const changeModel = (modelId: string) => {
+    if (isThinking || isSynthesizing) {
+      // The running turn keeps the model it started with; the choice applies from the next turn.
+      setPendingModel(modelId === (activeConversation?.model_id || model) ? null : modelId);
+      return;
+    }
     if (!modelId || modelId === activeConversation?.model_id) return;
     if (!activeConversation) {
       if (modelId === model) return;
@@ -978,17 +1080,70 @@ export const Workstation: React.FC<WorkstationProps> = ({
       window.setTimeout(reconnect, 0);
       return;
     }
+    const previous = activeConversation.model_id || model;
+    setModelApplyError(null);
     void patchActiveConversationRuntime({ model_id: modelId }).catch((error) => {
       console.warn('Conversation model update failed:', error);
+      setModelApplyError(`没能切换到 ${modelId}，这段对话仍在使用 ${previous}。`);
     });
   };
 
+  /** Put a connection into the chat selector and select it for the draft, as creation used to do unconditionally. */
+  const admitProvider = (providerId: string, modelId: string) => {
+    setPendingProviders((ids) => ids.filter((id) => id !== providerId));
+    setDraftProviderId(providerId);
+    setModel(modelId);
+    try {
+      localStorage.setItem('amadeus_pc_provider', providerId);
+      localStorage.setItem('amadeus_pc_model', modelId);
+    } catch {}
+    reconnect();
+  };
+  const enableProviderManually = (providerId: string, modelId: string) => {
+    setManualProviders((ids) => (ids.includes(providerId) ? ids : [...ids, providerId]));
+    admitProvider(providerId, modelId);
+  };
+
+  // Apply a model chosen mid-turn once the turn has fully finished.
+  useEffect(() => {
+    if (!pendingModel || isThinking || isSynthesizing || conversationBusy) return;
+    const next = pendingModel;
+    setPendingModel(null);
+    changeModel(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingModel, isThinking, isSynthesizing, conversationBusy]);
+
+  // A pending choice belongs to the conversation it was made in; never carry it across conversations or worldlines.
+  const pendingScopeRef = useRef<{ conversation: string | null; worldline: string }>({ conversation: activeConversationId, worldline });
+  useEffect(() => {
+    const previous = pendingScopeRef.current;
+    const movedConversation = previous.conversation !== null && previous.conversation !== activeConversationId;
+    if (movedConversation || previous.worldline !== worldline) setPendingModel(null);
+    pendingScopeRef.current = { conversation: activeConversationId, worldline };
+  }, [activeConversationId, worldline]);
+
   const renameConversation = (conversation: ConversationSummary) => {
-    const title = window.prompt('输入新的会话标题', conversation.title)?.trim();
-    if (!title || title === conversation.title) return;
-    void patchConversation(conversation, { title }).catch((error) => {
+    setRenameError(null);
+    setRenameValue(conversation.title);
+    setRenameTarget(conversation);
+  };
+
+  const confirmRenameConversation = async () => {
+    const conversation = renameTarget;
+    const title = renameValue.trim();
+    if (!conversation || renameBusy) return;
+    if (!title || title === conversation.title) { setRenameTarget(null); return; }
+    setRenameBusy(true);
+    setRenameError(null);
+    try {
+      await patchConversation(conversation, { title });
+      setRenameTarget(null);
+    } catch (error) {
       console.warn('Conversation rename failed:', error);
-    });
+      setRenameError('重命名失败，请重试。');
+    } finally {
+      setRenameBusy(false);
+    }
   };
 
   const toggleConversationPin = (conversation: ConversationSummary) => {
@@ -997,20 +1152,43 @@ export const Workstation: React.FC<WorkstationProps> = ({
     });
   };
 
-  const deleteConversation = async (conversation: ConversationSummary) => {
-    if (!window.confirm(`删除会话“${conversation.title}”？长期记忆默认保留。`)) return;
-    const response = await fetch(
-      `/api/conversations/${encodeURIComponent(conversation.id)}?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`,
-      { method: 'DELETE' },
-    );
-    if (!response.ok) {
-      console.warn(`Conversation deletion failed: ${response.status}`);
-      return;
-    }
-    const rows = await loadConversations();
-    if (conversation.id === activeConversationId) {
-      const fallback = rows.find((row) => row.is_selected) || rows[0];
-      if (fallback) await selectConversation(fallback, true);
+  const deleteConversation = (conversation: ConversationSummary) => {
+    setDeleteError(null);
+    setDeleteTarget(conversation);
+  };
+
+  const confirmDeleteConversation = async () => {
+    const conversation = deleteTarget;
+    if (!conversation || deleteBusy) return;
+    setDeleteBusy(true);
+    setDeleteError(null);
+    const wasActive = conversation.id === activeConversationId;
+    try {
+      if (wasActive && (isThinking || isSynthesizing)) handleCancelTurn();
+      const response = await fetch(
+        `/api/conversations/${encodeURIComponent(conversation.id)}?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`,
+        { method: 'DELETE' },
+      );
+      if (!response.ok) throw new Error(`conversation delete failed: ${response.status}`);
+      setDeleteTarget(null);
+      const rows = await loadConversations();
+      if (wasActive) {
+        // The server already moved the selection to the neighbour; the last deletion leaves an empty draft.
+        const fallback = rows.find((row) => row.is_selected) || rows[0];
+        if (fallback) {
+          await selectConversation(fallback, true);
+        } else {
+          audioPlayer.stopAll();
+          setActiveConversationId(null);
+          resetToDraft?.();
+          window.setTimeout(reconnect, 0);
+        }
+      }
+    } catch (error) {
+      console.warn('Conversation deletion failed:', error);
+      setDeleteError('删除失败，会话仍然保留。请稍后重试。');
+    } finally {
+      setDeleteBusy(false);
     }
   };
 
@@ -1187,7 +1365,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       localStorage.setItem('amadeus_pc_temperature', String(safeTemperature));
       persistIdentityMode(nextIdentityMode);
       persistSelfName(newSettings.selfName);
-      localStorage.setItem('amadeus_pc_model', newSettings.model);
+      if (newSettings.model) localStorage.setItem('amadeus_pc_model', newSettings.model);
       if (newSettings.reasoningEffort) {
         localStorage.setItem('amadeus_pc_reasoning_effort', newSettings.reasoningEffort);
       } else {
@@ -1267,126 +1445,155 @@ export const Workstation: React.FC<WorkstationProps> = ({
     audioPlayer.init();
   };
 
+  /** Visual shift → existing worldline switch path. Leftover voice is stopped first so no audio crosses lines. */
+  const startShift = (to: 'steins_gate' | 'beta') => {
+    if (shift || to === worldline) return;
+    // Leftover voice fades out (well before the commit point of the animation), then stops.
+    if (isPlaying) {
+      const fade = audioPlayer.fadeOut?.(400);
+      if (fade) void fade.then(() => handleStopVoice());
+      else handleStopVoice();
+    }
+    closeMenu();
+    setShift({ from: worldline, to });
+  };
+
+  const now = new Date();
+  const dateLabel = `${now.getMonth() + 1}/${now.getDate()}`;
+  const dayLabel = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'][now.getDay()];
+  // A socket that the server rejected (bad model/credentials) is not online even though it is open.
+  const sessionRejected = sessionState === 'rejected';
+  // ONLINE means the server said session.ready; an open-but-unconfirmed socket is still connecting.
+  // (undefined = test doubles without the field.)
+  const sessionPending = status === 'READY' && sessionState === 'unknown';
+  // The shift animation ends on its own clock; until the server confirms the target line we say so.
+  const awaitingWorldline = conversationBusy && committedWorldlineRef.current !== worldline;
+  const online = status === 'READY' && !needsApiKey && !sessionRejected && !sessionPending && !awaitingWorldline;
+  const connectionLabel = awaitingWorldline ? 'SYNC · 等待目标世界线确认'
+    : online ? 'ONLINE'
+    : needsApiKey ? 'OFFLINE · 待配置'
+      : sessionRejected ? 'OFFLINE · 会话被拒绝'
+        : status === 'CONNECTING' || sessionPending ? 'OFFLINE · 连接中' : 'OFFLINE';
+  const presence = isThinking ? 'thinking' : isPlaying ? 'speaking' : isSynthesizing ? 'voicing' : online ? 'listening' : 'offline';
+  const presenceLabel = { thinking: '思考中', speaking: '说话中', voicing: '准备语音', listening: '聆听中', offline: '未连接' }[presence];
+  const lastAssistantId = [...visibleMessages].reverse().find((msg) => msg.role === 'assistant' && !msg.systemError)?.id;
+  // An old conversation whose connection was removed keeps its history but must be re-pointed by the user.
+  const providerGone = Boolean(activeConversation) && providers.length > 0 && (!activeProvider || activeProvider.enabled === false);
+  const sendBlocked = status !== 'READY' || sessionState === 'rejected' || sessionState === 'unknown' || isThinking || isSynthesizing || conversationBusy || providerGone;
+
   return (
     <div
-      className={`salieri-workstation-panel worldline-${worldline === 'beta' ? 'beta' : 'sg'}${isMemoryOpen ? ' memory-space-open' : ''}`}
+      ref={wsRootRef}
+      className={`ws2${isHistoryCollapsed ? ' rail' : ''}${isSettingsOpen ? ' menu-open' : ''}${isMemoryOpen ? ' memory-space-open' : ''}`}
+      data-wl={worldline === 'beta' ? 'beta' : 'sg'}
       onMouseDown={handleAudioInit}
     >
-      {/* Background layers */}
-      <div
-        className="workstation-bg-layer"
-        style={{
-          backgroundImage: worldline === 'beta'
-            ? 'url(/assets/ui/bg_beta_butterfly.png)'
-            : 'url(/assets/ui/bg_main.png)',
-        }}
+      <Atmosphere worldline={worldline} />
+      <SendSignal
+        rootRef={wsRootRef}
+        userCount={messages.filter((m) => m.role === 'user').length}
+        lastIsUser={messages[messages.length - 1]?.role === 'user'}
       />
-      <div className="workstation-bg-overlay" />
-      <div className="workstation-bg-reflection" />
 
-      {/* Restrained grain only — no full-screen circuit/constellation pattern. */}
-      <div className="workstation-bg-noise" />
+      <header className="ws2-top">
+        <button
+          type="button"
+          className="ws2-icon-btn"
+          onClick={() => setIsHistoryCollapsed((v) => !v)}
+          aria-label={isHistoryCollapsed ? '展开会话列表' : '收起会话列表'}
+          aria-expanded={!isHistoryCollapsed}
+        >
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" fill="none" stroke="currentColor" strokeWidth="1.2" /><path d="M6 2.5v11" stroke="currentColor" strokeWidth="1.2" /></svg>
+        </button>
+        <div className="ws2-wordmark" aria-label="AMADEUS"><DraftWord key={worldline} text="AMADEUS" step={90} /></div>
+        <span className="ws2-date">{dateLabel}<b>({dayLabel})</b></span>
+        <span className="ws2-title">{activeConversation?.title ?? ''}</span>
 
-      {/* Mechanical shell stays above the whole scene, never as a stretched background. */}
-      <div className="workstation-panel-frame-overlay" aria-hidden="true" />
-
-      {/* CRT vignette + chromatic aberration (z-index 50, above content, below modals) */}
-      <CRTOverlay glitchState={glitchState} zIndex={50} />
-
-      <div className="salieri-workstation-inner">
-        {/* Top Header Controls — brand | audio zone | telemetry | utilities */}
-        <div className="workstation-header">
-        <div className="left-brand" aria-label="AMADEUS">
-          <span className="brand-marker" aria-hidden="true" />
-          <div className="brand-lockup">
-            <span className="brand-title">AMADEUS</span>
+        <div className="ws2-top-right">
+          <button
+            type="button"
+            className="ws2-memory-btn"
+            aria-label="MEMORY"
+            title="MEMORY"
+            onClick={(event) => {
+              const r = event.currentTarget.querySelector('svg')?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
+              setMemoryOrigin({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
+              setMemoryClosing(false);
+              setIsMemoryOpen(true);
+            }}
+          >
+            <svg className="ws2-engram" viewBox="0 0 32 32" width="22" height="22" aria-hidden="true">
+              <circle cx="16" cy="16" r="13" fill="none" stroke="currentColor" strokeWidth="1" strokeDasharray="62 20" transform="rotate(-40 16 16)" />
+              <circle cx="16" cy="16" r="8.5" fill="none" stroke="var(--ws-accent)" strokeWidth="1.2" strokeDasharray="36 18" transform="rotate(130 16 16)" />
+              <circle cx="16" cy="16" r="2.2" fill="var(--ws-accent-2)" />
+            </svg>
+            <span className="ws2-memory-zh" aria-hidden="true">记忆</span>
+            <span className="ws2-memory-en" aria-hidden="true">MEMORY</span>
+          </button>
+          <div className="ws2-meter">
+            <span className="ws2-wl-tag">{worldline === 'beta' ? 'β WORLDLINE' : 'STEINS;GATE'}</span>
+            <Nixie value={DIVERGENCE[worldline]} size="sm" />
+          </div>
+          <div
+            className={`ws2-online${online ? ' is-online' : ''}${awaitingWorldline ? ' is-sync' : ''}`}
+            role="status"
+            data-status={needsApiKey ? 'SETUP' : awaitingWorldline ? 'SYNC' : sessionRejected ? 'REJECTED' : status}
+          >
+            <span className="ws2-online-dot" aria-hidden="true" />{connectionLabel}
+          </div>
+          <div className="ws2-sound" data-header-audio-zone="true">
+            <button
+              type="button"
+              ref={soundTriggerRef}
+              className={`ws2-icon-btn${isSoundOpen ? ' is-active' : ''}`}
+              onClick={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); setIsSoundOpen((v) => !v); }}
+              title="音量控制"
+              aria-label="音量控制"
+              aria-expanded={isSoundOpen}
+              {...(isSoundOpen ? { 'aria-controls': 'sound-mixer-rail' } : {})}
+            >
+              <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M3 8h3l4-3v10l-4-3H3z" fill="currentColor" /><path d="M13 7.5a3.5 3.5 0 010 5M15 5.5a6.5 6.5 0 010 9" fill="none" stroke="currentColor" strokeWidth="1.3" /></svg>
+            </button>
+            <SoundMixerRail
+              isOpen={isSoundOpen}
+              onClose={() => setIsSoundOpen(false)}
+              panelId="sound-mixer-rail"
+              triggerRef={soundTriggerRef}
+              enableBgm={enableBgm}
+              bgmVolume={bgmVolume}
+              enableSfx={enableSfx}
+              sfxVolume={sfxVolume}
+              voiceVolume={voiceVolume}
+              onEnableBgmChange={setEnableBgm}
+              onBgmVolumeChange={setBgmVolume}
+              onEnableSfxChange={setEnableSfx}
+              onSfxVolumeChange={setSfxVolume}
+              onVoiceVolumeChange={handleVoiceVolumeChange}
+              voiceEnabled={!voiceMuted}
+              onVoiceEnabledChange={(on) => setVoiceMuted(!on)}
+            />
           </div>
           <button
             type="button"
-            className="memory-aperture-btn"
-            aria-label="MEMORY"
-            title="MEMORY"
-            onClick={() => setIsMemoryOpen(true)}
+            ref={systemButtonRef}
+            className={`ws2-sys-btn${isSettingsOpen ? ' on' : ''}`}
+            onClick={() => {
+              audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume);
+              if (isSettingsOpen) closeMenu(); else openMenu();
+            }}
+            title="系统设置"
+            aria-label="系统设置"
+            aria-expanded={isSettingsOpen}
           >
-            MEMORY
+            {isSettingsOpen ? <>返回对话<kbd>Esc</kbd></> : '系统'}
+          </button>
+          <button type="button" className="ws2-icon-btn" onClick={onLogout} title="断开连接" aria-label="断开连接">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>
           </button>
         </div>
-        <div
-          className={`header-audio-zone${isSoundOpen ? ' is-open' : ''}`}
-          data-header-audio-zone="true"
-        >
-          <SoundMixerRail
-            isOpen={isSoundOpen}
-            onClose={() => setIsSoundOpen(false)}
-            panelId="sound-mixer-rail"
-            triggerRef={soundTriggerRef}
-            enableBgm={enableBgm}
-            bgmVolume={bgmVolume}
-            enableSfx={enableSfx}
-            sfxVolume={sfxVolume}
-            voiceVolume={voiceVolume}
-            onEnableBgmChange={setEnableBgm}
-            onBgmVolumeChange={setBgmVolume}
-            onEnableSfxChange={setEnableSfx}
-            onSfxVolumeChange={setSfxVolume}
-            onVoiceVolumeChange={handleVoiceVolumeChange}
-          />
-        </div>
-        <div className="header-telemetry" aria-label="World line telemetry">
-          <HudBadge worldline={worldline} status={needsApiKey ? 'SETUP' : status} />
-          <DivergenceMeter worldline={worldline} />
-        </div>
-        <div className="right-controls">
-          <div className="workstation-utilities" data-workstation-utilities="true">
-            <button
-              type="button"
-              className="ctrl-btn icon-btn"
-              onClick={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); setIsSettingsOpen(true); }}
-              title="系统设置"
-              aria-label="系统设置"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="3" />
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-              </svg>
-            </button>
-            <div className="sound-control-anchor">
-              <button
-                type="button"
-                ref={soundTriggerRef}
-                className={`ctrl-btn icon-btn ${isSoundOpen ? 'is-active' : ''}`}
-                onClick={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); setIsSoundOpen((v) => !v); }}
-                title="音量控制"
-                aria-label="音量控制"
-                aria-expanded={isSoundOpen}
-                {...(isSoundOpen ? { 'aria-controls': 'sound-mixer-rail' } : {})}
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-                  <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
-                </svg>
-              </button>
-            </div>
-            <button
-              type="button"
-              className="ctrl-btn icon-btn disconnect-btn"
-              onClick={onLogout}
-              title="断开连接"
-              aria-label="断开连接"
-            >
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
-                <polyline points="16 17 21 12 16 7" />
-                <line x1="21" y1="12" x2="9" y2="12" />
-              </svg>
-            </button>
-          </div>
-        </div>
-      </div>
+      </header>
 
-      {/* Main Grid Workspace */}
-      <div className="workstation-grid">
-        {/* Left: History Sidebar */}
+      <nav className="ws2-side" aria-label="会话" inert={isSettingsOpen}>
         <HistorySidebar
           isCollapsed={isHistoryCollapsed}
           onToggle={() => setIsHistoryCollapsed((v) => !v)}
@@ -1402,123 +1609,93 @@ export const Workstation: React.FC<WorkstationProps> = ({
           onForget={setForgetTarget}
           busy={conversationBusy}
         />
+      </nav>
 
-        {/* Center: Dialogue Terminal */}
-        <div className="grid-terminal border-beam">
+      <section className="ws2-talk" inert={isSettingsOpen}>
+        <div className="ws2-transcript-wrap">
           <div
             ref={transcriptViewportRef}
-            className="terminal-chat-viewport"
+            className="terminal-chat-viewport ws2-transcript"
             data-testid="transcript-viewport"
             onScroll={handleTranscriptScroll}
           >
             {visibleMessages.length === 0 ? (
-              <div className="empty-chat-tip">
-                <div className={`amadeus-logo-glitched worldline-logo-${worldline}`} />
-                <p className={`terminal-welcome-msg ${emptyStateKind}`}>
-                  {emptyStateMessage}
-                </p>
+              <div className="ws2-empty">
+                <p className={`ws2-empty-msg ${emptyStateKind}`}>{emptyStateMessage}</p>
                 {needsApiKey && (
-                  <button
-                    type="button"
-                    className="empty-chat-action"
-                    onClick={() => setIsSettingsOpen(true)}
-                  >
-                    OPEN SYSTEM CONFIG
+                  <button type="button" className="ws2-empty-action" onClick={() => openMenu('connections')}>
+                    打开系统设置
                   </button>
                 )}
               </div>
             ) : (
-              <div className="messages-flow">
+              <div className="ws2-lines">
                 {visibleMessages.map((msg) => (
-                  <div key={msg.id} className={`message-card ${msg.role} ${msg.systemError ? 'system-error-card' : ''}`}>
-                    {msg.systemError ? (
+                  msg.systemError ? (
+                    <article key={msg.id} className="ws2-line ws2-line-error">
                       <p className="system-error-content" role="alert">{msg.content}</p>
-                    ) : (
-                      <>
-                        {msg.role === 'user' ? (
-                          <div className="avatar-label speaker-user" data-testid="speaker-user">
-                            {userHudLabel}
-                          </div>
-                        ) : (
-                          <div className="avatar-label speaker-assistant" data-testid="speaker-assistant">
-                            <span className="speaker-primary" data-testid="speaker-assistant-primary">
-                              KURISU
-                            </span>
-                            <span className="speaker-secondary" data-testid="speaker-assistant-secondary">
-                              Amadeus
-                            </span>
-                          </div>
-                        )}
-                        <div className="message-content-box">
-                          {msg.role === 'assistant' ? (
-                            <>
-                              <BilingualMessage
-                                segments={msg.segments || []}
-                                streaming={Boolean(msg.streaming)}
-                                fallbackJa={msg.content}
-                                fallbackZh={msg.translation}
-                                translationScope={msg.translationScope}
-                              />
-                            {msg.streaming && isThinking && operationLabel && (
-                              <div className="thinking-indicator-inline" aria-busy={activityBusy}>
-                                <SpriteAnimator
-                                  spriteSrc={worldline === 'steins_gate' ? '/assets/ui/spinner_sg_20f.png' : '/assets/ui/spinner_beta_20f.png'}
-                                  cols={10}
-                                  rows={2}
-                                  frameWidth={worldline === 'beta' ? 54.5 : 54}
-                                  frameHeight={63}
-                                  frameRowOffsetY={worldline === 'steins_gate' ? 8 : 0}
-                                  frameCount={20}
-                                  fps={15}
-                                  loop={true}
-                                />
-                                <span
-                                  className="thinking-text-glow"
-                                  data-testid="activity-operation-label"
-                                >
-                                  {operationLabel}<span className="thinking-cursor-blink">▌</span>
-                                </span>
-                              </div>
-                            )}
-                            {msg.streaming && isSynthesizing && !isThinking && (
-                              <div className="status-synthesizing-inline">
-                                <span className="speaking-dot animate-ping" />
-                                正在合成语音…
-                              </div>
-                            )}
-                            </>
-                          ) : (
-                            <p
-                              className="japanese-raw"
-                              {...(contentHasJapaneseKana(msg.content) ? { lang: 'ja' as const } : {})}
-                            >
-                              {msg.content}
-                            </p>
-                          )}
+                    </article>
+                  ) : msg.role === 'user' ? (
+                    <article key={msg.id} className="ws2-line ws2-line-user">
+                      <header><span className="ws2-who" data-testid="speaker-user">{userHudLabel}</span></header>
+                      <p
+                        className="ws2-user-text"
+                        {...(contentHasJapaneseKana(msg.content) ? { lang: 'ja' as const } : {})}
+                      >
+                        {msg.content}
+                      </p>
+                    </article>
+                  ) : (
+                    <article key={msg.id} className="ws2-line ws2-line-kurisu">
+                      <header>
+                        <span className="ws2-who" data-testid="speaker-assistant">
+                          <span data-testid="speaker-assistant-primary">KURISU</span>
+                          <span className="ws2-who-sub" data-testid="speaker-assistant-secondary">Amadeus</span>
+                        </span>
+                      </header>
+                      <BilingualMessage
+                        layout="paragraph"
+                        segments={msg.segments || []}
+                        streaming={Boolean(msg.streaming)}
+                        fallbackJa={msg.content}
+                        fallbackZh={msg.translation}
+                        translationScope={msg.translationScope}
+                      />
+                      {msg.streaming && isThinking && operationLabel && (
+                        <div className="ws2-thinking" aria-busy={activityBusy}>
+                          <SpriteAnimator
+                            spriteSrc={worldline === 'steins_gate' ? '/assets/ui/spinner_sg_20f.png' : '/assets/ui/spinner_beta_20f.png'}
+                            cols={10}
+                            rows={2}
+                            frameWidth={worldline === 'beta' ? 54.5 : 54}
+                            frameHeight={63}
+                            frameRowOffsetY={worldline === 'steins_gate' ? 8 : 0}
+                            frameCount={20}
+                            fps={15}
+                            loop={true}
+                          />
+                          <span className="ws2-thinking-label" data-testid="activity-operation-label">{operationLabel}</span>
                         </div>
-                      </>
-                    )}
-                  </div>
+                      )}
+                      {msg.streaming && isSynthesizing && !isThinking && (
+                        <div className="ws2-voicing">正在合成语音…</div>
+                      )}
+                      {msg.id === lastAssistantId && (isThinking || isSynthesizing || isPlaying) && (
+                        <div className="ws2-actions is-latest" role="group" aria-label="Current response controls">
+                          <button type="button" onClick={handleStopVoice} disabled={!isSynthesizing && !isPlaying}>停止本句</button>
+                          <button type="button" onClick={handleCancelTurn}>停止本轮</button>
+                        </div>
+                      )}
+                    </article>
+                  )
                 ))}
-                {(isThinking || isSynthesizing) && (
-                  <div className="voice-control-capsule" role="group" aria-label="Current response controls">
-                    <span className="voice-control-signal">{worldline === 'beta' ? 'β SIGNAL' : 'SG SIGNAL'}</span>
-                    <button type="button" onClick={handleStopVoice} disabled={!isSynthesizing}>
-                      STOP VOICE
-                    </button>
-                    <button type="button" onClick={handleCancelTurn}>
-                      CANCEL TURN
-                    </button>
-                  </div>
-                )}
               </div>
             )}
           </div>
-
           {showJumpToLatest && (
             <button
               type="button"
-              className="jump-to-latest-btn"
+              className="ws2-to-latest"
               data-testid="jump-to-latest"
               aria-label="跳到最新"
               onClick={handleJumpToLatest}
@@ -1529,149 +1706,255 @@ export const Workstation: React.FC<WorkstationProps> = ({
                 }
               }}
             >
-              <svg
-                className="jump-to-latest-chevron"
-                aria-hidden="true"
-                viewBox="0 0 24 24"
-                width="16"
-                height="16"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                {/* Full double-chevron: upper and lower arcs both present */}
-                <path d="M7 7l5 5 5-5" />
-                <path d="M7 13l5 5 5-5" />
-              </svg>
+              回到最新 ↓
             </button>
           )}
+        </div>
 
-          {/* Bottom Chat Input Form */}
-          <form className="terminal-input-bar" onSubmit={handleSend}>
-            <span className="prompt-arrow">&gt;</span>
-            <input
-              type="text"
-              value={inputText}
-              onChange={(e) => setInputText(e.target.value)}
-              className="chat-input-field"
-              placeholder="输入终端指令或对话内容..."
-              disabled={status !== 'READY' || isThinking || isSynthesizing || conversationBusy}
-            />
-            {isPlaying && (
-              <span className="tts-waiting-hint">正在播放语音…</span>
+        {providerGone && (
+          <div className="ws2-provider-gone" role="status">
+            这段对话原来使用的「{activeProvider?.display_name || '接入'}」已被移除。聊天记录仍在；请在下方重新选择模型后继续，不会自动换到其他厂商。
+          </div>
+        )}
+        <form className="ws2-composer" onSubmit={handleSend}>
+          <textarea
+            rows={2}
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                e.preventDefault();
+                e.currentTarget.form?.requestSubmit();
+              }
+            }}
+            className="chat-input-field"
+            placeholder="对红莉栖说点什么……"
+            aria-label="输入消息"
+            disabled={sendBlocked}
+          />
+          <div className="ws2-composer-row">
+            <div className="ws2-model">
+              <ProviderControls
+                providers={providers.filter((row) => (
+                  // Removed and not-yet-admitted connections leave the selector; the current one stays visible as the history source.
+                  (row.enabled !== false && !pendingProviders.includes(row.id)) || row.id === activeProviderId
+                ))}
+                activeProviderId={activeProviderId}
+                activeModelId={activeConversation?.model_id || model}
+                models={availableModels}
+                disabled={conversationBusy}
+                lockProvider={isThinking || isSynthesizing}
+                searchable
+                onManageConnections={() => openMenu('connections')}
+                loadingModels={modelsLoading}
+                discoveryStatus={modelsDiscoveryStatus}
+                thinkingValue={reasoningEffort}
+                onProviderChange={changeProvider}
+                onModelChange={changeModel}
+                onThinkingChange={(value) => {
+                  setReasoningEffort(value);
+                  try {
+                    localStorage.setItem('amadeus_pc_reasoning_effort', value);
+                    localStorage.setItem(
+                      `amadeus_pc_reasoning_effort_${activeProviderId}_${activeModelId}`,
+                      value,
+                    );
+                  } catch {}
+                  updateConfig({ reasoningEffort: value });
+                }}
+                onRefreshModels={() => { void loadProviderModels(activeProviderId, true); }}
+                onConfigureCredential={() => openMenu('connections')}
+              />
+            </div>
+            {(() => {
+              const state = chatChecks[checkKey(activeProviderId, activeModelId)];
+              const label = !state ? '所选模型尚未测试'
+                : state.status === 'checking' ? '正在测试连接…'
+                  : state.status === 'ok' ? '连接测试已通过' : `连接测试未通过：${chatCheckMessage(state.code)}`;
+              return (
+                <button
+                  type="button"
+                  className={`ws2-check-dot ${state?.status ?? 'untested'}`}
+                  title={label}
+                  aria-label={label}
+                  onClick={() => openMenu('connections')}
+                />
+              );
+            })()}
+            {pendingModel && (
+              <span className="ws2-pending" role="status" title="本轮仍使用发起时的模型">下一轮：{pendingModel}</span>
             )}
+            {modelApplyError && (
+              <span className="ws2-apply-error" role="alert">
+                {modelApplyError}
+                <button type="button" aria-label="关闭提示" onClick={() => setModelApplyError(null)}>×</button>
+              </span>
+            )}
+            <span className="ws2-hint">Enter 发送 · Shift+Enter 换行</span>
             {isPlaying && (
               <button
                 type="button"
-                className="interrupt-btn"
-                onClick={() => {
-                  audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume);
-                  handleStopVoice();
-                }}
+                className="ws2-interrupt"
+                onClick={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); handleStopVoice(); }}
                 title="中断当前语音"
               >
-                中断
+                停止本句
               </button>
             )}
             <button
               type="submit"
-              className="chat-send-btn"
-              disabled={status !== 'READY' || !inputText.trim() || isThinking || isSynthesizing || conversationBusy}
+              className="ws2-send"
+              disabled={sendBlocked || !inputText.trim()}
               aria-label="发送"
             >
-              <span>SEND</span>
+              发送
             </button>
-          </form>
-          <div className="model-bottom-bar">
-            <ProviderControls
-              providers={providers}
-              activeProviderId={activeProviderId}
-              activeModelId={activeConversation?.model_id || model}
-              models={availableModels}
-              disabled={conversationBusy || isThinking || isSynthesizing}
-              loadingModels={modelsLoading}
-              discoveryStatus={modelsDiscoveryStatus}
-              thinkingValue={reasoningEffort}
-              onProviderChange={changeProvider}
-              onModelChange={changeModel}
-              onThinkingChange={(value) => {
-                setReasoningEffort(value);
-                try {
-                  localStorage.setItem('amadeus_pc_reasoning_effort', value);
-                  localStorage.setItem(
-                    `amadeus_pc_reasoning_effort_${activeProviderId}_${activeModelId}`,
-                    value,
-                  );
-                } catch {}
-                updateConfig({ reasoningEffort: value });
-              }}
-              onRefreshModels={() => { void loadProviderModels(activeProviderId, true); }}
-              onConfigureCredential={() => setIsSettingsOpen(true)}
-            />
           </div>
-        </div>
+        </form>
+      </section>
 
-        {/* Right: Avatar Viewer Panel */}
-        <div className="grid-avatar-panel">
-          <AvatarViewer
-            emotion={emotion}
-            isSpeaking={isPlaying}
-            volume={currentVolume}
-            glitchState={glitchState}
-          />
-          {/* Thinking spinner is now rendered inside messages-flow */}
-        </div>
-      </div>
+      <section className={`ws2-stage presence-${presence}`}>
+        <div className="ws2-seam" aria-hidden="true" />
+        <div className="ws2-giant-name" lang="ja" aria-hidden="true">牧瀬紅莉栖</div>
+        <AvatarViewer
+          variant="stage"
+          emotion={emotion}
+          isSpeaking={isPlaying}
+          volume={currentVolume}
+          glitchState={glitchState}
+        />
+        <div className="ws2-name-tag"><span>MAKISE KURISU</span><small>AMADEUS SYSTEM</small></div>
+        <div className="ws2-presence" role="status"><i aria-hidden="true" />{presenceLabel}</div>
+        {isSettingsOpen && (() => {
+          const latest = visibleMessages.find((msg) => msg.id === lastAssistantId);
+          const zh = latest
+            ? ((latest.segments || []).map((segment) => segment.zh).join('') || latest.translation || latest.content)
+            : '';
+          return (
+            <div className="ws2-stage-preview">
+              <div className="head"><span className="who">KURISU</span><span className="state"><i aria-hidden="true" />{presenceLabel}</span></div>
+              <p>{isThinking ? '……' : zh || '……'}</p>
+              {(isPlaying || isSynthesizing) && (
+                <button type="button" onClick={handleStopVoice}>■ 停止本句</button>
+              )}
+            </div>
+          );
+        })()}
+      </section>
 
-      {/* Session / worldline lifecycle errors (not TTS). */}
-      {sessionError && (
-        <div className="audio-error-toast session-error-toast" data-testid="session-error-toast" role="status">
-          <span className="audio-error-msg">
-            {sessionError.kind === 'session'
-              ? `> Session: ${sessionError.code}`
-              : `> Worldline: ${sessionError.code}`}
-          </span>
-        </div>
-      )}
-
-      {conversationCreateError && (
-        <div className="audio-error-toast session-error-toast" role="alert">
-          <span className="audio-error-msg">{conversationCreateError}</span>
-        </div>
-      )}
-
-      {/* Audio Error Toast — real TTS/audio degradation only. */}
-      {audioError && (
-        <div className="audio-error-toast" data-testid="audio-error-toast">
-          <span className="audio-error-msg">
-            {audioError === 'action_only' && '> TTS skipped (action description)'}
-            {audioError === 'user_disabled' && '> TTS disabled'}
-            {audioError === 'service_error' && '> TTS service unavailable'}
-            {audioError === 'unknown' && '> TTS error'}
-            {![ 'action_only', 'user_disabled', 'service_error', 'unknown' ].includes(audioError) && `> TTS: ${audioError}`}
-          </span>
-        </div>
-      )}
-
-      {/* Bottom Status Bar */}
-      <StatusBar worldline={worldline} connectionStatus={needsApiKey ? 'SETUP' : status} />
+      <div className="ws2-toasts">
+        {sessionError && (
+          <div className="audio-error-toast session-error-toast" data-testid="session-error-toast" role="status">
+            <span className="audio-error-msg">
+              {sessionError.kind === 'session'
+                ? `> Session: ${sessionError.code}`
+                : `> Worldline: ${sessionError.code}`}
+            </span>
+          </div>
+        )}
+        {conversationCreateError && (
+          <div className="audio-error-toast session-error-toast" role="alert">
+            <span className="audio-error-msg">{conversationCreateError}</span>
+          </div>
+        )}
+        {audioError && (
+          <div className="audio-error-toast" data-testid="audio-error-toast">
+            <span className="audio-error-msg">
+              {audioError === 'action_only' && '> TTS skipped (action description)'}
+              {audioError === 'user_disabled' && '> TTS disabled'}
+              {audioError === 'service_error' && '> TTS service unavailable'}
+              {audioError === 'unknown' && '> TTS error'}
+              {![ 'action_only', 'user_disabled', 'service_error', 'unknown' ].includes(audioError) && `> TTS: ${audioError}`}
+            </span>
+          </div>
+        )}
       </div>
 
       {isMemoryOpen ? (
-        <MemorySpace
-          sessionId={sessionId}
-          chatWorldline={worldline}
-          chatIdentityMode={activeIdentityMode}
-          onClose={() => setIsMemoryOpen(false)}
-        />
+        // Memory opens as an iris from the engram key and closes back into it; Memory itself is unchanged.
+        <div
+          className={`ws2-memory-layer${memoryClosing ? ' closing' : ''}`}
+          style={{ '--mx': `${memoryOrigin.x}px`, '--my': `${memoryOrigin.y}px` } as React.CSSProperties}
+        >
+          <MemorySpace
+            sessionId={sessionId}
+            chatWorldline={worldline}
+            chatIdentityMode={activeIdentityMode}
+            onClose={closeMemory}
+          />
+        </div>
       ) : null}
 
-      {/* Settings Modal overlay */}
+      <SystemMenu
+        open={isSettingsOpen}
+        section={menuSection}
+        onSection={setMenuSection}
+        onClose={closeMenu}
+        returnFocusRef={systemButtonRef}
+      >
+        {menuSection === 'worldline' && (
+          <WorldlinePanel
+            worldline={worldline}
+            busy={Boolean(shift)}
+            generating={isThinking || isSynthesizing}
+            onShift={(to) => {
+              if (isThinking || isSynthesizing) setShiftConfirm(to);
+              else startShift(to);
+            }}
+          />
+        )}
+        {menuSection === 'connections' && (
+          <>
+            <ConnectionCheckPanel
+              providerName={activeProvider?.display_name || activeProviderId}
+              modelId={activeModelId}
+              state={chatChecks[checkKey(activeProviderId, activeModelId)]}
+              manual={manualProviders.includes(activeProviderId)}
+              onCheck={() => { void runChatCheck(activeProviderId, activeModelId); }}
+            />
+            {providers
+              .filter((row) => pendingProviders.includes(row.id) && row.enabled !== false && row.id !== activeProviderId)
+              .map((row) => {
+                const modelId = row.default_model || '';
+                return (
+                  <ConnectionCheckPanel
+                    key={row.id}
+                    providerName={row.display_name}
+                    modelId={modelId}
+                    state={chatChecks[checkKey(row.id, modelId)]}
+                    pending
+                    onCheck={() => {
+                      void runChatCheck(row.id, modelId).then((result) => {
+                        if (result?.status === 'ok') admitProvider(row.id, modelId);
+                      });
+                    }}
+                    onManualEnable={() => enableProviderManually(row.id, modelId)}
+                  />
+                );
+              })}
+          </>
+        )}
+        {menuSection === 'sound' && (
+          <div className="ws2-sound-panel">
+            <SoundChannel
+              name="角色语音"
+              hint="红莉栖的日语语音 · 静音不影响自动朗读设置"
+              volume={voiceVolume}
+              onVolume={handleVoiceVolumeChange}
+              enabled={!voiceMuted}
+              onEnabled={(on) => setVoiceMuted(!on)}
+            />
+            <SoundChannel name="背景音乐" hint="BGM" volume={bgmVolume} onVolume={setBgmVolume} enabled={enableBgm} onEnabled={setEnableBgm} />
+            <SoundChannel name="界面音效" hint="送信 · 菜单 · 提示" volume={sfxVolume} onVolume={setSfxVolume} enabled={enableSfx} onEnabled={setEnableSfx} />
+            <div className="ws2-m-group">语音合成</div>
+          </div>
+        )}
+        <div className="ws2-settings-host" hidden={menuSection === 'worldline'}>
       <SettingsModal
+        variant="embedded"
+        tab={menuSection === 'connections' ? 'connections' : menuSection === 'sound' ? 'voice' : 'basic'}
         isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
+        onClose={closeMenu}
         worldline={worldline}
         sessionId={sessionId}
         apiKey={apiKey}
@@ -1723,16 +2006,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
           });
           if (!response.ok) throw new Error('profile_create_failed');
           const created = await response.json() as { provider_id: string; default_model?: string };
+          // Saved is not usable: hold it out of the chat selector until the check passes or it is enabled by hand.
+          setPendingProviders((ids) => (ids.includes(created.provider_id) ? ids : [...ids, created.provider_id]));
           await loadProviders();
-          setDraftProviderId(created.provider_id);
-          if (created.default_model) setModel(created.default_model);
-          try {
-            localStorage.setItem('amadeus_pc_provider', created.provider_id);
-            if (created.default_model) {
-              localStorage.setItem('amadeus_pc_model', created.default_model);
-            }
-          } catch {}
-          reconnect();
+          if (!created.default_model) return;
+          const result = await runChatCheck(created.provider_id, created.default_model, bumpConfigVersion(created.provider_id));
+          if (result?.status === 'ok') admitProvider(created.provider_id, created.default_model);
         }}
         onDisableCustomProfile={async (providerId) => {
           const response = await fetch(
@@ -1740,14 +2019,88 @@ export const Workstation: React.FC<WorkstationProps> = ({
             { method: 'DELETE' },
           );
           if (!response.ok) throw new Error('profile_disable_failed');
+          setPendingProviders((ids) => ids.filter((id) => id !== providerId));
+          setManualProviders((ids) => ids.filter((id) => id !== providerId));
           // Keep the current selection so the user sees「已停用/不可用」until
           // they explicitly pick another provider — never auto-jump to DeepSeek.
           await loadProviders();
           void loadProviderModels(providerId, true);
         }}
-        onSaveSettings={handleSaveSettings}
+        onSaveSettings={async (settings) => {
+          await handleSaveSettings(settings);
+          if (menuSection !== 'connections') return;
+          // Saving connection details invalidates the old result and verifies the selected model once.
+          const version = bumpConfigVersion(activeProviderId);
+          void runChatCheck(activeProviderId, settings.model || activeModelId, version);
+        }}
         onClearWebSearchCredential={handleClearWebSearchCredential}
       />
+        </div>
+      </SystemMenu>
+
+      {shift && (
+        <ShiftOverlay
+          from={shift.from}
+          to={shift.to}
+          onCommit={() => onWorldlineChange(shift.to)}
+          onDone={() => setShift(null)}
+        />
+      )}
+
+      {shiftConfirm && (
+        <ConfirmDialog
+          title="停止本轮并跃迁？"
+          confirmLabel="停止本轮并跃迁"
+          onConfirm={() => {
+            const to = shiftConfirm;
+            setShiftConfirm(null);
+            handleCancelTurn();
+            startShift(to);
+          }}
+          onCancel={() => setShiftConfirm(null)}
+        >
+          <p>她还在回复。跃迁到{shiftConfirm === 'steins_gate' ? ' STEINS;GATE' : ' β 世界线'}会先停止这一轮；取消则留在当前世界线，回复继续。</p>
+        </ConfirmDialog>
+      )}
+
+      {renameTarget && (
+        <ConfirmDialog
+          title="重命名会话"
+          confirmLabel="保存"
+          focusCancel={false}
+          busy={renameBusy}
+          error={renameError}
+          onConfirm={() => { void confirmRenameConversation(); }}
+          onCancel={() => { setRenameTarget(null); setRenameError(null); }}
+        >
+          <input
+            className="ws2-dialog-input"
+            aria-label="会话标题"
+            autoFocus
+            value={renameValue}
+            maxLength={80}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void confirmRenameConversation(); }
+            }}
+          />
+        </ConfirmDialog>
+      )}
+
+      {deleteTarget && (
+        <ConfirmDialog
+          title="删除这段对话？"
+          confirmLabel="删除会话"
+          danger
+          busy={deleteBusy}
+          error={deleteError}
+          onConfirm={() => { void confirmDeleteConversation(); }}
+          onCancel={() => { setDeleteTarget(null); setDeleteError(null); }}
+        >
+          <p>「{deleteTarget.title}」的聊天记录将被删除，已形成的长期记忆仍会保留。</p>
+          <p className="ws2-dialog-hint">要遗忘记忆，请在 Memory 中管理。</p>
+        </ConfirmDialog>
+      )}
 
       {forgetTarget && (
         <ForgetConversationModal

@@ -286,7 +286,7 @@ describe('Workstation S4-DS dark-only chrome', () => {
     renderWorkstation();
     const raw = await screen.findByText('こんにちは');
     expect(raw.tagName).toBe('P');
-    expect(raw).toHaveClass('japanese-raw');
+    expect(raw).toHaveClass('ws2-user-text');
     expect(raw).toHaveAttribute('lang', 'ja');
   });
 
@@ -318,7 +318,7 @@ describe('Workstation S4-DS dark-only chrome', () => {
     }));
     renderWorkstation();
     const raw = await screen.findByText('我是谁');
-    expect(raw).toHaveClass('japanese-raw');
+    expect(raw).toHaveClass('ws2-user-text');
     expect(raw).not.toHaveAttribute('lang', 'ja');
     expect(raw.getAttribute('lang')).toBeNull();
   });
@@ -392,11 +392,11 @@ describe('Workstation S4-DS dark-only chrome', () => {
     expect(screen.queryByText(/^NIGHT$/)).not.toBeInTheDocument();
   });
 
-  it('DivergenceMeter remains sole worldline percentage authority', async () => {
+  it('nixie meter remains sole worldline percentage authority', async () => {
     renderWorkstation();
-    // Real DivergenceMeter (not mocked) — role=img + aria-label ownership.
     const meter = await screen.findByRole('img', { name: 'World line divergence 1.048596%' });
-    expect(meter).toHaveClass('divergence-meter');
+    expect(meter).toHaveClass('nixie');
+    expect(screen.getAllByRole('img', { name: /World line divergence/ })).toHaveLength(1);
   });
 
   it('first-class MEMORY aperture opens Memory Space Overview', async () => {
@@ -409,7 +409,7 @@ describe('Workstation S4-DS dark-only chrome', () => {
       expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/memory/graph/projection'))).toBe(true);
     });
     expect(screen.getByTestId('constellation-stage')).toBeInTheDocument();
-    expect(document.querySelector('.salieri-workstation-panel')).toHaveClass('memory-space-open');
+    expect(document.querySelector('.ws2')).toHaveClass('memory-space-open');
   });
 
   it('self-hosted S4-DS fonts exist under /assets/fonts/s4-ds/', () => {
@@ -429,7 +429,7 @@ describe('Workstation S4-DS dark-only chrome', () => {
     await waitFor(() => expect(screen.getByText('AMADEUS')).toBeInTheDocument());
     const zone = document.querySelector('[data-header-audio-zone="true"]');
     expect(zone).toBeTruthy();
-    expect(zone?.closest('.workstation-header')).toBeTruthy();
+    expect(zone?.closest('.ws2-top')).toBeTruthy();
 
     const sound = screen.getByRole('button', { name: '音量控制' });
     expect(sound).toHaveAttribute('aria-expanded', 'false');
@@ -445,7 +445,7 @@ describe('Workstation S4-DS dark-only chrome', () => {
     const rail = document.querySelector('[data-sound-mixer-rail="true"]');
     expect(rail).toBeTruthy();
     expect(rail?.closest('[data-header-audio-zone]')).toBeTruthy();
-    expect(rail?.closest('.workstation-header')).toBeTruthy();
+    expect(rail?.closest('.ws2-top')).toBeTruthy();
     expect(rail?.parentElement).not.toBe(document.body);
     expect(document.querySelector('.sound-panel-backdrop')).toBeNull();
     expect(document.querySelector('.sound-panel-dropdown')).toBeNull();

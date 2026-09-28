@@ -67,6 +67,8 @@ export interface Message {
 
 export interface UseAmadeusWSReturn {
   status: WSStatus;
+  /** Optional so existing test doubles keep compiling; undefined is treated as usable. */
+  sessionState?: 'unknown' | 'ready' | 'rejected';
   messages: Message[];
   isThinking: boolean;
   isSynthesizing: boolean;
@@ -80,6 +82,8 @@ export interface UseAmadeusWSReturn {
   sendDebugTts: (emotion: string, text: string) => void;
   updateConfig: (patch: Partial<Omit<UseAmadeusWSParams, 'onAudioChunk'>>) => void;
   reconnect: () => void;
+  /** Optional so existing test doubles keep compiling. */
+  resetToDraft?: () => void;
   switchConversation: (conversationId: string, history: Message[]) => boolean;
   switchWorldline: (worldline: 'steins_gate' | 'beta') => boolean;
   wsRef: React.MutableRefObject<WebSocket | null>;
@@ -114,6 +118,14 @@ export function getOrCreateAmadeusSessionId(): string {
 
 export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   const [status, setStatus] = useState<WSStatus>('CLOSED');
+  /** An open socket is not a usable session: 'unknown' after open, 'ready' only on the server's session.ready
+   *  (sent after auth + lease), 'rejected' when an error frame arrives before that. */
+  const [sessionState, setSessionState] = useState<'unknown' | 'ready' | 'rejected'>('unknown');
+  const sessionStateRef = useRef<'unknown' | 'ready' | 'rejected'>('unknown');
+  const setSessionReady = (ready: boolean) => {
+    sessionStateRef.current = ready ? 'ready' : 'unknown';
+    setSessionState(sessionStateRef.current);
+  };
   const [messages, setMessages] = useState<Message[]>([]);
   const [isThinking, setIsThinking] = useState(false);
   const [isSynthesizing, setIsSynthesizing] = useState(false);
@@ -319,6 +331,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     ws.onopen = () => {
       if (wsRef.current !== ws) return;
       reconnectCountRef.current = 0;
+      setSessionReady(false);
       setStatus('READY');
 
       // Send auth frame immediately as first frame
@@ -351,9 +364,11 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       if (wsRef.current !== ws) return;
       try {
         const msg = JSON.parse(event.data);
+
         
         switch (msg.type) {
           case 'session.ready':
+            setSessionReady(true);
             if (msg.conversation_mode === 'draft') {
               activeConversationIdRef.current = null;
             } else if (msg.conversation_id) {
@@ -722,6 +737,10 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             break;
 
           case 'error':
+            if (sessionStateRef.current === 'unknown') {
+              sessionStateRef.current = 'rejected';
+              setSessionState('rejected');
+            }
             // Error clears watchdog
             clearWatchdog();
             setIsThinking(false);
@@ -755,6 +774,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
 
     ws.onclose = () => {
       if (wsRef.current !== ws) return;
+      setSessionReady(false);
       const turnWasActive = Boolean(activeTurnIdRef.current);
       stopHeartbeat();
       clearWatchdog();
@@ -907,6 +927,16 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     setMessages([]);
   }, []);
 
+  /** Local-only: drop the visible transcript after the selected conversation was deleted.
+   *  The caller reconnects without a conversation id so the server opens an empty draft. */
+  const resetToDraft = useCallback(() => {
+    activeConversationIdRef.current = null;
+    activeTurnIdRef.current = '';
+    messagesRef.current = [];
+    setMessages([]);
+    setEmotion('neutral');
+  }, []);
+
   const switchConversation = useCallback((conversationId: string, history: Message[]) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       paramsRef.current.onConversationSwitchError?.({
@@ -988,6 +1018,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
 
   return {
     status,
+    sessionState,
     messages,
     isThinking,
     isSynthesizing,
@@ -1001,6 +1032,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     sendDebugTts,
     updateConfig,
     reconnect: connect,
+    resetToDraft,
     switchConversation,
     switchWorldline,
     wsRef

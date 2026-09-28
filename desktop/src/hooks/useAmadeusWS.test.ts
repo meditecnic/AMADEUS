@@ -65,6 +65,31 @@ describe('useAmadeusWS v2', () => {
     unmount();
   });
 
+  it('treats a session as ready only after session.ready, and rejected when auth is answered with an error', () => {
+    // An open socket is not proof of a usable session.
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const { result, unmount } = renderHook(() => useAmadeusWS({ ...params, conversationId: null }));
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket.onopen?.());
+    expect(result.current.status).toBe('READY');
+    expect(result.current.sessionState).toBe('unknown');
+    act(() => socket.emit({ type: 'error', code: 'model_unavailable', message: 'model unavailable' }));
+    expect(result.current.sessionState).toBe('rejected');
+    unmount();
+
+    FakeWebSocket.instances = [];
+    const second = renderHook(() => useAmadeusWS({ ...params, conversationId: null }));
+    const socket2 = FakeWebSocket.instances[0];
+    act(() => socket2.onopen?.());
+    act(() => socket2.emit({ type: 'status', notice: null }));
+    expect(second.result.current.sessionState).toBe('unknown');
+    act(() => socket2.emit({ type: 'session.ready', conversation_mode: 'draft', conversation_id: null, worldline: 'steins_gate', generation: 1 }));
+    expect(second.result.current.sessionState).toBe('ready');
+    act(() => socket2.emit({ type: 'error', message: 'later turn failure' }));
+    expect(second.result.current.sessionState).toBe('ready');
+    second.unmount();
+  });
+
   it('forwards backend-catalog control values without a two-value frontend enum', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const { result, unmount } = renderHook(() => useAmadeusWS({

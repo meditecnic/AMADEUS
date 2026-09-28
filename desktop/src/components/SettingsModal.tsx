@@ -155,9 +155,15 @@ export function identityModeNewConversationConfirm(mode: IdentityMode): string {
   );
 }
 
+export type SettingsTab = 'basic' | 'connections' | 'voice';
+
 export interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  /** embedded: render one tab's fields inside the workstation system menu (no overlay, no tab row). */
+  variant?: 'modal' | 'embedded';
+  /** Controlled tab for the embedded variant. */
+  tab?: SettingsTab;
   worldline: 'steins_gate' | 'beta';
   /** Gate 7A: durable session id for the Memory Ledger (read-only wiring). */
   sessionId?: string;
@@ -232,6 +238,8 @@ export interface SettingsModalProps {
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   isOpen,
   onClose,
+  variant = 'modal',
+  tab,
   worldline,
   apiKey,
   credentialConfigured,
@@ -267,8 +275,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onSelectWebSearchProvider,
   onClearWebSearchCredential,
 }) => {
-  type SettingsTab = 'basic' | 'connections' | 'voice';
-  const [activeTab, setActiveTab] = useState<SettingsTab>('basic');
+  const embedded = variant === 'embedded';
+  const [ownTab, setActiveTab] = useState<SettingsTab>('basic');
+  const activeTab: SettingsTab = embedded ? (tab ?? 'basic') : ownTab;
+  const [savedFlash, setSavedFlash] = useState(false);
   const [localWorldline, setLocalWorldline] = useState<'steins_gate' | 'beta'>(worldline);
   const [localApiKey, setLocalApiKey] = useState(apiKey);
   const [localWebSearchApiKey, setLocalWebSearchApiKey] = useState(webSearchApiKey);
@@ -396,7 +406,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setSaveError(null);
     try {
       await onSaveSettings({
-        worldline: localWorldline,
+        // Embedded fields never own the worldline: the menu switches it separately.
+        worldline: embedded ? worldline : localWorldline,
         apiKey: localApiKey,
         webSearchApiKey: localWebSearchApiKey,
         webSearchProvider: localWebSearchProvider,
@@ -411,11 +422,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         identityMode: normalizeIdentityMode(localIdentityMode),
         selfName: selfNameCheck.value,
         baseUrl: localBaseUrl,
-        model: localModel,
+        // Only an edited「默认模型」field is a model change; otherwise a stale snapshot would overwrite
+        // the live selection (seen as a DeepSeek model paired with a custom connection).
+        model: baseUrlConfigurable && localModel.trim() && localModel.trim() !== model ? localModel.trim() : '',
         reasoningEffort: localReasoningEffort,
       });
       setReplacingWebSearchKey(false);
-      onClose();
+      if (embedded) {
+        setSavedFlash(true);
+        window.setTimeout(() => setSavedFlash(false), 1800);
+      } else {
+        onClose();
+      }
     } catch (error) {
       const code = error instanceof Error ? error.message : 'settings_save_failed';
       setSaveError(code);
@@ -456,7 +474,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  return (
+  const chrome = (content: React.ReactNode) => (embedded ? (
+    <div className="settings-embedded" data-testid="settings-embedded">{content}</div>
+  ) : (
     <div className="salieri-modal-overlay">
       <div className="salieri-settings-modal" data-testid="settings-modal-shell">
         {/* Rotating ring is clipped to modal bounds so it cannot expand a scrollport. */}
@@ -481,6 +501,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               VOICE
             </button>
           </nav>
+          {content}
+        </div>
+      </div>
+    </div>
+  ));
+
+  return chrome(
+    <>
           <main className="tab-panels">
             {/* BASIC tab — session defaults only */}
             {activeTab === 'basic' && (
@@ -542,7 +570,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </p>
                 )}
               </div>
-              <div className="setting-field">
+              {!embedded && <div className="setting-field">
                 <label>当前世界线</label>
                 <SalieriSelect
                   aria-label="当前世界线"
@@ -555,7 +583,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     { value: 'beta', label: 'β 世界线 (1.130205%)' },
                   ]}
                 />
-              </div>
+              </div>}
               <div className="setting-field field-full" data-testid="identity-settings">
                 <label>新会话默认身份模式</label>
                 <div className="identity-mode-options" role="radiogroup" aria-label="新会话默认身份模式">
@@ -905,7 +933,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   }
                                 }}
                               >
-                                创建
+                                {profileBusy ? (embedded ? '正在连接…' : '创建中…') : (embedded ? '保存并启用' : '创建')}
                               </button>
                             </div>
                           </div>
@@ -1065,7 +1093,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </p>
           )}
           <div className="modal-footer">
-            <button className="salieri-btn cancel-btn" onClick={onClose}>取消</button>
+            {embedded
+              ? <span className="settings-saved" role="status">{savedFlash ? '已保存' : ''}</span>
+              : <button className="salieri-btn cancel-btn" onClick={onClose}>取消</button>}
             <button className="salieri-btn save-btn" onClick={() => { void handleSave(); }} disabled={isSaving}>
               {isSaving
                 ? '保存中…'
@@ -1076,9 +1106,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     : '保存语音设置'}
             </button>
           </div>
-        </div>
-      </div>
-    </div>
+    </>
   );
 };
 export default SettingsModal;
