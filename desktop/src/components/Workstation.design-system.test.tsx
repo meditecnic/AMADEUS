@@ -424,40 +424,19 @@ describe('Workstation S4-DS dark-only chrome', () => {
     expect(tokens).toMatch(/\/assets\/fonts\/s4-ds\//);
   });
 
-  it('header audio zone hosts mixer rail; no SoundPanel portal/backdrop/dropdown', async () => {
+  it('her voice is adjusted and muted on the stage scope without losing the level', async () => {
     renderWorkstation();
     await waitFor(() => expect(screen.getByText('AMADEUS')).toBeInTheDocument());
-    const zone = document.querySelector('[data-header-audio-zone="true"]');
-    expect(zone).toBeTruthy();
-    expect(zone?.closest('.ws2-top')).toBeTruthy();
-
-    const sound = screen.getByRole('button', { name: '音量控制' });
-    expect(sound).toHaveAttribute('aria-expanded', 'false');
-    // Closed: no dangling aria-controls when rail is unmounted.
-    expect(sound).not.toHaveAttribute('aria-controls');
-    expect(document.querySelector('.sound-panel-backdrop')).toBeNull();
-    expect(document.querySelector('.sound-panel-dropdown')).toBeNull();
-    expect(document.querySelector('[data-sound-mixer-rail]')).toBeNull();
-
-    fireEvent.click(sound);
-    expect(sound).toHaveAttribute('aria-expanded', 'true');
-    expect(sound).toHaveAttribute('aria-controls', 'sound-mixer-rail');
-    const rail = document.querySelector('[data-sound-mixer-rail="true"]');
-    expect(rail).toBeTruthy();
-    expect(rail?.closest('[data-header-audio-zone]')).toBeTruthy();
-    expect(rail?.closest('.ws2-top')).toBeTruthy();
-    expect(rail?.parentElement).not.toBe(document.body);
-    expect(document.querySelector('.sound-panel-backdrop')).toBeNull();
-    expect(document.querySelector('.sound-panel-dropdown')).toBeNull();
-    // Telemetry priority: real DivergenceMeter remains while rail open (not mocked away).
-    expect(
-      screen.getByRole('img', { name: 'World line divergence 1.048596%' }),
-    ).toBeInTheDocument();
-
-    fireEvent.click(sound);
-    expect(sound).toHaveAttribute('aria-expanded', 'false');
-    expect(sound).not.toHaveAttribute('aria-controls');
-    expect(document.querySelector('[data-sound-mixer-rail]')).toBeNull();
+    const scope = screen.getByRole('slider', { name: '角色语音音量' });
+    const start = Number(scope.getAttribute('aria-valuenow'));
+    fireEvent.keyDown(scope, { key: 'ArrowDown' });
+    expect(Number(scope.getAttribute('aria-valuenow'))).toBe(Math.max(0, start - 5));
+    fireEvent.keyDown(scope, { key: 'm' });
+    expect(scope.getAttribute('aria-valuetext')).toMatch(/静音/);
+    // Muting keeps the level for restore.
+    expect(Number(scope.getAttribute('aria-valuenow'))).toBe(Math.max(0, start - 5));
+    fireEvent.keyDown(scope, { key: 'm' });
+    expect(scope.getAttribute('aria-valuetext')).not.toMatch(/静音/);
   });
 
   it('keeps a keyboard focus ring and reduces volume-rail motion', () => {

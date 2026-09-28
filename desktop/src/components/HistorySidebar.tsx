@@ -34,6 +34,16 @@ interface HistorySidebarProps {
   busy?: boolean;
 }
 
+/** Today → 21:04, this year → 9/26, older → 2025/9/26. */
+function shortWhen(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  if (d.toDateString() === now.toDateString()) return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return d.getFullYear() === now.getFullYear() ? `${d.getMonth() + 1}/${d.getDate()}` : `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+}
+
 function modeBadgeLabel(mode: IdentityMode | undefined): string {
   return normalizeIdentityMode(mode) === 'self' ? 'SELF' : 'OKABE';
 }
@@ -193,7 +203,9 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
                       {modeBadgeLabel(conversation.identity_mode)}
                     </span>
                     {' · '}
-                    {(conversation.provider_id || 'deepseek').toUpperCase()} · {conversation.model_id || 'DEFAULT'}
+                    {/* When and with which model — never the raw provider id (custom ids are opaque UUIDs). */}
+                    <time dateTime={conversation.last_active_at}>{shortWhen(conversation.last_active_at)}</time>
+                    {conversation.model_id ? ` · ${conversation.model_id}` : ''}
                   </span>
                 </button>
                 <ConversationMenu

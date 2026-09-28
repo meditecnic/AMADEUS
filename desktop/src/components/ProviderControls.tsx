@@ -287,7 +287,7 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
         />
       )}
       {statusLabel ? (
-        <span className="provider-discovery-status" title={statusLabel}>
+        <span className="provider-discovery-status" data-status={loadingModels ? 'loading' : discoveryStatus} title={statusLabel}>
           {statusLabel}
         </span>
       ) : null}

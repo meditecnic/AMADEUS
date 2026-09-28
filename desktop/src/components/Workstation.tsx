@@ -20,7 +20,6 @@ import {
   type WebSearchProviderInfo,
   type WebSearchSettingsSnapshot,
 } from './SettingsModal';
-import { SoundMixerRail } from './SoundMixerRail';
 import { HistorySidebar, type ConversationSummary } from './HistorySidebar';
 import { TtsDebugPanel } from './TtsDebugPanel';
 import AvatarViewer from './AvatarViewer';
@@ -36,6 +35,8 @@ import { ShiftOverlay } from '../workstation/ShiftOverlay';
 import { ConfirmDialog } from '../workstation/ConfirmDialog';
 import { ConnectionCheckPanel, chatCheckMessage, requestChatCheck, type ChatCheckState } from '../workstation/ConnectionCheck';
 import { SendSignal } from '../workstation/SendSignal';
+import { VoiceScope } from '../workstation/VoiceScope';
+import { BootSequence } from '../workstation/BootSequence';
 import { ForgetConversationModal } from './ForgetConversationModal';
 import { MemorySpace } from '../memory-space/MemorySpace';
 import '../memory-space/MemorySpace.css';
@@ -197,17 +198,27 @@ export const Workstation: React.FC<WorkstationProps> = ({
     kind: 'session' | 'worldline';
     code: string;
   } | null>(null);
-  const [isSoundOpen, setIsSoundOpen] = useState(false);
-  const soundTriggerRef = useRef<HTMLButtonElement>(null);
   const [menuSection, setMenuSection] = useState<MenuSection>('worldline');
   const [pendingModel, setPendingModel] = useState<string | null>(null);
   const [shiftConfirm, setShiftConfirm] = useState<'steins_gate' | 'beta' | null>(null);
   const wsRootRef = useRef<HTMLDivElement>(null);
+  // Title card once per app session (skipped under reduced motion and where matchMedia is unavailable, e.g. tests).
+  const [bootPhase, setBootPhase] = useState<'draft' | 'dock' | 'done'>(() => {
+    try {
+      if (sessionStorage.getItem('amadeus_booted') === '1') return 'done';
+      if (!window.matchMedia || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return 'done';
+      return 'draft';
+    } catch { return 'done'; }
+  });
+  const handleBootDock = useCallback(() => setBootPhase('dock'), []);
+  const handleBootDone = useCallback(() => {
+    try { sessionStorage.setItem('amadeus_booted', '1'); } catch {}
+    setBootPhase('done');
+  }, []);
   const [shift, setShift] = useState<{ from: 'steins_gate' | 'beta'; to: 'steins_gate' | 'beta' } | null>(null);
   const systemButtonRef = useRef<HTMLButtonElement>(null);
   const openMenu = useCallback((section?: MenuSection) => {
     if (section) setMenuSection(section);
-    setIsSoundOpen(false);
     setIsSettingsOpen(true);
   }, []);
   const closeMenu = useCallback(() => setIsSettingsOpen(false), []);
@@ -1484,11 +1495,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
   return (
     <div
       ref={wsRootRef}
-      className={`ws2${isHistoryCollapsed ? ' rail' : ''}${isSettingsOpen ? ' menu-open' : ''}${isMemoryOpen ? ' memory-space-open' : ''}`}
+      className={`ws2${isHistoryCollapsed ? ' rail' : ''}${isSettingsOpen ? ' menu-open' : ''}${isMemoryOpen ? ' memory-space-open' : ''}${bootPhase !== 'done' ? ` boot-${bootPhase}` : ''}`}
       data-wl={worldline === 'beta' ? 'beta' : 'sg'}
       onMouseDown={handleAudioInit}
     >
       <Atmosphere worldline={worldline} />
+      {bootPhase !== 'done' && <BootSequence worldline={worldline} onDock={handleBootDock} onDone={handleBootDone} />}
       <SendSignal
         rootRef={wsRootRef}
         userCount={messages.filter((m) => m.role === 'user').length}
@@ -1541,38 +1553,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
           >
             <span className="ws2-online-dot" aria-hidden="true" />{connectionLabel}
           </div>
-          <div className="ws2-sound" data-header-audio-zone="true">
-            <button
-              type="button"
-              ref={soundTriggerRef}
-              className={`ws2-icon-btn${isSoundOpen ? ' is-active' : ''}`}
-              onClick={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); setIsSoundOpen((v) => !v); }}
-              title="音量控制"
-              aria-label="音量控制"
-              aria-expanded={isSoundOpen}
-              {...(isSoundOpen ? { 'aria-controls': 'sound-mixer-rail' } : {})}
-            >
-              <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden="true"><path d="M3 8h3l4-3v10l-4-3H3z" fill="currentColor" /><path d="M13 7.5a3.5 3.5 0 010 5M15 5.5a6.5 6.5 0 010 9" fill="none" stroke="currentColor" strokeWidth="1.3" /></svg>
-            </button>
-            <SoundMixerRail
-              isOpen={isSoundOpen}
-              onClose={() => setIsSoundOpen(false)}
-              panelId="sound-mixer-rail"
-              triggerRef={soundTriggerRef}
-              enableBgm={enableBgm}
-              bgmVolume={bgmVolume}
-              enableSfx={enableSfx}
-              sfxVolume={sfxVolume}
-              voiceVolume={voiceVolume}
-              onEnableBgmChange={setEnableBgm}
-              onBgmVolumeChange={setBgmVolume}
-              onEnableSfxChange={setEnableSfx}
-              onSfxVolumeChange={setSfxVolume}
-              onVoiceVolumeChange={handleVoiceVolumeChange}
-              voiceEnabled={!voiceMuted}
-              onVoiceEnabledChange={(on) => setVoiceMuted(!on)}
-            />
-          </div>
           <button
             type="button"
             ref={systemButtonRef}
@@ -1620,13 +1600,27 @@ export const Workstation: React.FC<WorkstationProps> = ({
             onScroll={handleTranscriptScroll}
           >
             {visibleMessages.length === 0 ? (
+              // An empty conversation is a fresh observation log, not a terminal prompt.
               <div className="ws2-empty">
-                <p className={`ws2-empty-msg ${emptyStateKind}`}>{emptyStateMessage}</p>
-                {needsApiKey && (
-                  <button type="button" className="ws2-empty-action" onClick={() => openMenu('connections')}>
-                    打开系统设置
-                  </button>
-                )}
+                <div className={`ws2-empty-card ${emptyStateKind}`}>
+                  <small className="ws2-empty-kicker">OBSERVATION LOG · {dateLabel} ({dayLabel})</small>
+                  <h2 className="ws2-empty-head">
+                    {needsApiKey ? '尚未接通' : status === 'READY' ? '新的观测记录' : status === 'CONNECTING' ? '正在接通' : '暂时无法接通'}
+                  </h2>
+                  <p className={`ws2-empty-msg ${emptyStateKind}`}>
+                    {status === 'READY' && !needsApiKey
+                      ? '说第一句话吧。她的日语原文与中文字幕会一并记在这里。'
+                      : emptyStateMessage.replace(/^>\s*/, '')}
+                  </p>
+                  {needsApiKey && (
+                    <button type="button" className="ws2-empty-action" onClick={() => openMenu('connections')}>
+                      打开系统设置
+                    </button>
+                  )}
+                  <div className="ws2-empty-rule" aria-hidden="true">
+                    <i /><span>{worldline === 'beta' ? 'β' : 'STEINS;GATE'} · {DIVERGENCE[worldline]}%</span>
+                  </div>
+                </div>
               </div>
             ) : (
               <div className="ws2-lines">
@@ -1823,8 +1817,19 @@ export const Workstation: React.FC<WorkstationProps> = ({
           volume={currentVolume}
           glitchState={glitchState}
         />
-        <div className="ws2-name-tag"><span>MAKISE KURISU</span><small>AMADEUS SYSTEM</small></div>
-        <div className="ws2-presence" role="status"><i aria-hidden="true" />{presenceLabel}</div>
+        <div className="ws2-plate">
+          <div className="ws2-name-tag"><span>MAKISE KURISU</span><small>AMADEUS SYSTEM</small></div>
+          <VoiceScope
+            level={currentVolume}
+            volume={voiceVolume}
+            muted={voiceMuted}
+            speaking={isPlaying}
+            onVolume={handleVoiceVolumeChange}
+            onToggleMute={() => setVoiceMuted((m) => !m)}
+            onStop={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); handleStopVoice(); }}
+          />
+          <div className="ws2-presence" role="status"><i aria-hidden="true" />{presenceLabel}</div>
+        </div>
         {isSettingsOpen && (() => {
           const latest = visibleMessages.find((msg) => msg.id === lastAssistantId);
           const zh = latest

@@ -74,7 +74,8 @@ export function ModelPicker({
         title={title}
         onClick={() => (open ? close() : setOpen(true))}
       >
-        <span className="name">{current?.label ?? (value || '选择模型')}</span>
+        {/* Trigger shows the bare model id; lifecycle/evaluation notes stay in the list and tooltip. */}
+        <span className="name">{current?.value ?? (value || '选择模型')}</span>
         <span className="caret" aria-hidden="true">▾</span>
       </button>
       {open && (
