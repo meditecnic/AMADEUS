@@ -122,7 +122,14 @@
 .ws2-memory-en { font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .2em; color: var(--ws-ink-3); }
 @keyframes ws2-spin { to { transform: rotate(360deg); } }
 
-.ws2-meter { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; }
+/* The divergence meter hangs alone above her head, centred on the booth — the room's signature object.
+ * Every other header control stops at the booth's edge, so nothing sits over her. */
+.ws2-top-right { margin-right: calc(var(--ws-stage) - 4px); }
+.ws2-meter {
+  position: absolute; top: 50%; right: calc(var(--ws-stage) / 2); transform: translate(50%, -50%);
+  display: flex; flex-direction: column; align-items: center; gap: 4px; pointer-events: none;
+}
+.ws2-meter .nixie { --w: 17px; --h: 30px; }
 .ws2-wl-tag { font-family: var(--ws-mono); font-size: 8.5px; letter-spacing: .26em; color: var(--ws-ink-3); }
 .ws2-online { display: flex; align-items: center; gap: 6px; font-family: var(--ws-mono); font-size: 10.5px; letter-spacing: .14em; color: var(--ws-bad); white-space: nowrap; }
 .ws2-online-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
