@@ -425,6 +425,11 @@
 .ws2 .bilingual-message .s { border-radius: 3px; outline: none; transition: background .15s, color .15s, box-shadow .15s; }
 .ws2 .bilingual-message .s.hot { background: rgba(var(--ws-accent-rgb), .13); color: var(--ws-ink); }
 .ws2 .bilingual-message .chinese-main .s.hot { box-shadow: 0 1px 0 var(--ws-accent); }
+/* The sentence being heard: a quiet underline that travels with her voice, in both languages. */
+.ws2 .bilingual-message .s.speaking { color: var(--ws-ink); background: linear-gradient(0deg, rgba(var(--ws-accent-rgb), .22) 0 2px, transparent 2px) no-repeat; background-size: 100% 100%; }
+.ws2 .bilingual-message .japanese-sub .s.speaking { color: var(--ws-ink); }
+.ws2 .bilingual-message:has(.s.speaking) .s:not(.speaking):not(.hot) { color: var(--ws-ink-2); transition: color .3s; }
+.ws2 .bilingual-message .japanese-sub:has(.s.speaking) .s:not(.speaking):not(.hot) { color: var(--ws-ink-3); }
 .ws2 .translation-pending { font-style: normal; font-size: 12px; letter-spacing: .12em; color: var(--ws-ink-3); animation: ws2-pulse 1.2s ease-in-out infinite; }
 .ws2 .translation-scope { margin: 0 0 6px; font-family: var(--ws-mono); font-size: 10px; letter-spacing: .2em; color: var(--ws-ink-3); }
 .ws2 .translation-degraded { margin: 8px 0 0; font-size: 12px; color: var(--ws-ink-3); }

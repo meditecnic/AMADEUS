@@ -15,6 +15,8 @@ interface BilingualMessageProps {
   translationScope?: 'turn';
   /** paragraph: Chinese reads as one flowing paragraph with the Japanese original below; sentences stay linked. */
   layout?: 'pairs' | 'paragraph';
+  /** Sentence currently heard (paragraph layout): lit in both languages while her voice plays it. */
+  speakingId?: number | null;
 }
 
 export function BilingualMessage({
@@ -24,6 +26,7 @@ export function BilingualMessage({
   fallbackZh = '',
   translationScope,
   layout = 'pairs',
+  speakingId = null,
 }: BilingualMessageProps) {
   const [hot, setHot] = useState<number | null>(null);
   const ordered = [...segments].sort((a, b) => a.id - b.id);
@@ -43,7 +46,7 @@ export function BilingualMessage({
     const linked = rows.length > 1;
     const bind = (id: number) => linked ? {
       tabIndex: 0,
-      className: `s${hot === id ? ' hot' : ''}`,
+      className: `s${hot === id ? ' hot' : ''}${speakingId === id ? ' speaking' : ''}`,
       onMouseEnter: () => setHot(id),
       onMouseLeave: () => setHot(null),
       onFocus: () => setHot(id),

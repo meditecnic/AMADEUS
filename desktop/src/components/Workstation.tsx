@@ -202,6 +202,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [pendingModel, setPendingModel] = useState<string | null>(null);
   const [shiftConfirm, setShiftConfirm] = useState<'steins_gate' | 'beta' | null>(null);
   const wsRootRef = useRef<HTMLDivElement>(null);
+  const speakingQueueRef = useRef<number[]>([]);
+  const [speakingId, setSpeakingId] = useState<number | null>(null);
   // Title card once per app session (skipped under reduced motion and where matchMedia is unavailable, e.g. tests).
   const [bootPhase, setBootPhase] = useState<'draft' | 'dock' | 'done'>(() => {
     try {
@@ -428,8 +430,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
     ) || draftProviderId,
     model,
     reasoningEffort,
-    onAudioChunk: (_sentenceId, base64Data) => {
-      audioPlayer.playBase64(base64Data);
+    onAudioChunk: (sentenceId, base64Data) => {
+      // Chunks play in arrival order; the head of this queue is the sentence being heard.
+      speakingQueueRef.current.push(sentenceId);
+      setSpeakingId(speakingQueueRef.current[0] ?? null);
+      audioPlayer.playBase64(base64Data, () => {
+        speakingQueueRef.current.shift();
+        setSpeakingId(speakingQueueRef.current[0] ?? null);
+      });
     },
     onAudioDegraded: (reason: string) => {
       setAudioError(reason);
@@ -775,6 +783,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
   }, [activeProviderId, loadProviderModels]);
 
   const { currentVolume, isPlaying } = useAudioPlayer();
+  // stopAll() drops queued chunks without their onEnded; after a quiet moment the speaking queue is stale.
+  useEffect(() => {
+    if (isPlaying) return;
+    const t = window.setTimeout(() => { speakingQueueRef.current = []; setSpeakingId(null); }, 800);
+    return () => window.clearTimeout(t);
+  }, [isPlaying]);
 
   useEffect(() => {
     // setVoiceVolume persists the level, so mute goes through setMuted to keep the level for restore.
@@ -1665,6 +1679,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                         fallbackJa={msg.content}
                         fallbackZh={msg.translation}
                         translationScope={msg.translationScope}
+                        speakingId={isPlaying && msg.id === lastAssistantId ? speakingId : null}
                       />
                       {msg.streaming && isThinking && operationLabel && (
                         <div className="ws2-thinking" aria-busy={activityBusy}>
