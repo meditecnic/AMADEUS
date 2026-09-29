@@ -1543,8 +1543,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" fill="none" stroke="currentColor" strokeWidth="1.2" /><path d="M6 2.5v11" stroke="currentColor" strokeWidth="1.2" /></svg>
         </button>
         <div className="ws2-wordmark" aria-label="AMADEUS"><DraftWord key={worldline} text="AMADEUS" step={90} /></div>
-        <span className="ws2-date">{dateLabel}<b>({dayLabel})</b></span>
-        <span className="ws2-title">{activeConversation?.title ?? ''}</span>
+        <span className="ws2-date"><span className="d">{dateLabel}</span><b>{dayLabel}</b></span>
+        <span className="ws2-title">{activeConversation?.title ? <span className="t">{activeConversation.title}</span> : null}</span>
 
         <div className="ws2-top-right">
           <button
@@ -1830,7 +1830,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
       <section className={`ws2-stage presence-${presence}`}>
         <div className="ws2-seam" aria-hidden="true" />
-        <div className="ws2-giant-name" lang="ja" aria-hidden="true">牧瀬紅莉栖</div>
+        <div className="ws2-giant-name" lang="ja" aria-hidden="true">牧瀬<em>紅</em>莉栖</div>
         {/* Amadeus window: a dot-matrix field behind her that stirs while she thinks and pulses while she speaks. */}
         <div className="ws2-matrix" aria-hidden="true" />
         

@@ -52,17 +52,20 @@
   --ws-ink: #e8edf2;
   --ws-ink-2: rgba(232, 237, 242, .6);
   --ws-ink-3: rgba(232, 237, 242, .36);
-  --ws-line: rgba(196, 222, 244, .12);
-  --ws-line-2: rgba(196, 222, 244, .22);
-  --ws-accent: #8fdcff;
-  --ws-accent-2: #ff9cc3;
-  --ws-accent-rgb: 143, 220, 255;
-  --ws-panel: rgba(9, 12, 16, .82);
-  --ws-user-bg: rgba(143, 220, 255, .06);
+  --ws-line: rgba(214, 226, 236, .11);
+  --ws-line-2: rgba(214, 226, 236, .22);
+  /* SG's single signal colour is the red of her necktie: paper-white structure, one red. */
+  --ws-accent: #e8453c;
+  --ws-accent-2: #f2f5f8;
+  --ws-accent-rgb: 232, 69, 60;
+  --ws-slab: #c9302a;
+  --ws-bad: #ff8a4c;
+  --ws-panel: rgba(9, 11, 14, .86);
+  --ws-user-bg: rgba(232, 69, 60, .06);
   --ws-light: radial-gradient(900px 780px at 84% 30%, rgba(186, 222, 255, .13), transparent 62%),
               radial-gradient(520px 420px at 76% 88%, rgba(143, 220, 255, .05), transparent 70%),
               linear-gradient(180deg, #0a0e13 0%, #06080a 100%);
-  --ws-rim: drop-shadow(-10px 0 28px rgba(170, 215, 255, .16)) drop-shadow(0 0 1px rgba(220, 240, 255, .35));
+  --ws-rim: drop-shadow(0 0 1px rgba(240, 244, 248, .4));
 }
 .ws2[data-wl='beta'] {
   --ws-bg: #0b0706;
@@ -76,10 +79,11 @@
   --ws-accent-rgb: 255, 178, 90;
   --ws-panel: rgba(14, 9, 7, .84);
   --ws-user-bg: rgba(255, 178, 90, .07);
+  --ws-slab: #b8561f;
   --ws-light: radial-gradient(860px 620px at 82% 104%, rgba(255, 138, 58, .17), transparent 62%),
               radial-gradient(700px 520px at 12% -10%, rgba(130, 42, 20, .22), transparent 70%),
               linear-gradient(180deg, #0f0a08 0%, #070404 100%);
-  --ws-rim: drop-shadow(-10px 4px 30px rgba(255, 140, 60, .2)) drop-shadow(0 0 1px rgba(255, 210, 160, .35));
+  --ws-rim: drop-shadow(0 0 1px rgba(255, 210, 160, .4));
 }
 
 .ws2 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
@@ -103,20 +107,26 @@
 /* ---------- top bar ---------- */
 
 .ws2-top { grid-column: 1 / -1; grid-row: 1; position: relative; z-index: 6; display: flex; align-items: center; gap: 16px; padding: 0 18px 0 14px; min-width: 0; }
-.ws2-icon-btn { display: inline-grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: 8px; color: var(--ws-ink-2); transition: color .15s, background .15s; }
+.ws2-icon-btn { display: inline-grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: 0; color: var(--ws-ink-2); transition: color .15s, background .15s; }
 .ws2-icon-btn:hover, .ws2-icon-btn.is-active { color: var(--ws-ink); background: rgba(255, 255, 255, .05); }
 .ws2-wordmark { font-family: var(--ws-serif); font-size: 21px; letter-spacing: .22em; white-space: nowrap; line-height: 1; padding-top: 2px; }
 .ws2[data-wl='beta'] .ws2-wordmark .draft { --draft-ink: #ffcf96; }
-.ws2-date {
-  display: inline-flex; align-items: baseline; gap: 5px; height: 22px; padding: 0 11px; border-radius: 11px; flex: none;
-  border: 1px solid var(--ws-line-2); font-family: var(--ws-mono); font-size: 11.5px; line-height: 20px; color: var(--ws-ink); white-space: nowrap;
+/* Calendar as display type (the P3R corner date): big numerals, the weekday on a small tilted blade. */
+.ws2-date { position: relative; display: inline-flex; align-items: flex-end; gap: 6px; flex: none; height: 36px; padding: 0 4px; white-space: nowrap; }
+.ws2-date .d { font-family: var(--ws-serif); font-size: 30px; line-height: .9; letter-spacing: .01em; color: var(--ws-ink); font-variant-numeric: lining-nums; }
+.ws2-date b {
+  align-self: flex-start; margin-top: 1px; padding: 2px 7px 2px 6px; font-family: var(--ws-mono); font-weight: 600; font-size: 9.5px; letter-spacing: .14em; line-height: 1.2;
+  color: var(--ws-blade-ink); background: var(--ws-accent); transform: rotate(-6deg) skewX(-12deg);
 }
-.ws2-date b { font-weight: 400; font-size: 10px; color: var(--ws-ink-2); letter-spacing: .06em; }
-.ws2-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; color: var(--ws-ink-2); padding-left: 16px; border-left: 1px solid var(--ws-line); }
+.ws2[data-wl='sg'] .ws2-date b { color: #fff; }
+.ws2-title { min-width: 0; overflow: hidden; white-space: nowrap; font-family: var(--ws-serif-cjk); font-size: 14px; letter-spacing: .08em; color: var(--ws-ink-2); padding-left: 18px; border-left: 1px solid var(--ws-line); }
+.ws2-title .t { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+.ws2-title .t::before { content: '「'; color: var(--ws-ink-3); }
+.ws2-title .t::after { content: '」'; color: var(--ws-ink-3); }
 .ws2-top-right { margin-left: auto; display: flex; align-items: center; gap: 16px; flex: none; }
 
-.ws2-memory-btn { display: flex; align-items: center; gap: 8px; padding: 5px 12px 5px 7px; border: 1px solid var(--ws-line) !important; border-radius: 999px; transition: border-color .2s, background .2s; }
-.ws2-memory-btn:hover { border-color: var(--ws-line-2) !important; background: rgba(var(--ws-accent-rgb), .06); }
+.ws2-memory-btn { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px 0 6px; border-radius: 0; transition: background .2s, color .2s; }
+.ws2-memory-btn:hover { background: rgba(255, 255, 255, .05); }
 .ws2-engram { color: var(--ws-ink-2); animation: ws2-spin 18s linear infinite; }
 .ws2-memory-zh { font-size: 13px; letter-spacing: .1em; }
 .ws2-memory-en { font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .2em; color: var(--ws-ink-3); }
@@ -145,8 +155,13 @@
 .ws2-online.is-sync { color: #e8b04a; }
 .ws2-online.is-sync .ws2-online-dot { animation: ws2-blink 1s steps(2) infinite; }
 @keyframes ws2-blink { 50% { opacity: .25; } }
-.ws2-sys-btn { white-space: nowrap; display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 14px; border: 1px solid var(--ws-line-2) !important; border-radius: 6px; font-size: 12.5px; letter-spacing: .18em; }
-.ws2-sys-btn:hover { background: rgba(var(--ws-accent-rgb), .08); }
+/* System key: a paper-white blade, the one solid object in the header. */
+.ws2-sys-btn {
+  white-space: nowrap; display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 16px 0 14px;
+  font-family: var(--ws-serif-cjk); font-size: 14px; letter-spacing: .24em; color: var(--ws-blade-ink) !important; background: var(--ws-blade) !important;
+  clip-path: polygon(0 0, 100% 0, calc(100% - 9px) 100%, 0 100%); transition: filter .15s, transform .15s;
+}
+.ws2-sys-btn:hover { filter: brightness(1.12); transform: translateX(-1px); }
 
 /* Header carries no sound key: BGM/SFX live in the system menu, her voice lives on the stage (VoiceScope). */
 
@@ -211,11 +226,11 @@
 .ws2 .history-sidebar-header { display: none; }
 .ws2 .conversation-search-wrap { padding: 0 0 10px; }
 .ws2 .conversation-search {
-  width: 100%; height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--ws-line-2); background: none;
+  width: 100%; height: 32px; padding: 0 4px; border-radius: 0; border: 0; border-bottom: 1px solid var(--ws-line-2); background: none;
   font-size: 12.5px; color: var(--ws-ink); box-shadow: none; font-family: var(--ws-sans);
 }
 .ws2 .conversation-search::placeholder { color: var(--ws-ink-3); }
-.ws2 .conversation-search:focus { border-color: rgba(var(--ws-accent-rgb), .6); outline: none; }
+.ws2 .conversation-search:focus { border-bottom-color: var(--ws-accent); outline: none; }
 /* Sessions hang on one worldline spine: each is a node (observation) on the line, the open one glows. */
 .ws2 .history-session-list { position: relative; flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--ws-line-2) transparent; }
 .ws2 .history-session-list::before { content: ''; position: absolute; left: 11px; top: 6px; bottom: 6px; width: 1px; background: linear-gradient(180deg, var(--ws-line-2), var(--ws-line) 70%, transparent); pointer-events: none; }
@@ -382,7 +397,7 @@
 .ws2-dialog :is(button):disabled { opacity: .5; }
 .ws2 .history-empty-tip { padding: 12px; font-size: 12.5px; color: var(--ws-ink-3); }
 .ws2 .history-sidebar-footer { padding-top: 10px; border-top: 1px solid var(--ws-line); }
-.ws2 .history-new-btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 34px; border-radius: 8px; border: 1px dashed var(--ws-line-2); background: none; color: var(--ws-ink-2); font-size: 13px; }
+.ws2 .history-new-btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 34px; border-radius: 0; border: 1px dashed var(--ws-line-2); background: none; color: var(--ws-ink-2); font-size: 13px; letter-spacing: .12em; }
 .ws2 .history-new-btn:hover:not(:disabled) { color: var(--ws-ink); border-color: rgba(var(--ws-accent-rgb), .5); background: rgba(var(--ws-accent-rgb), .05); }
 /* Collapsed rail = the same worldline spine, nodes only (title on hover / aria-label). */
 .ws2 .grid-history.collapsed { justify-content: flex-start; }
@@ -407,15 +422,28 @@
 .ws2-talk > * { width: 100%; max-width: 720px; }
 .ws2-transcript-wrap { position: relative; flex: 1; min-height: 0; }
 .ws2-transcript {
-  height: 100%; overflow-y: auto; padding: 18px 12px 20px 0; scrollbar-width: thin; scrollbar-color: var(--ws-line-2) transparent; background: none;
+  box-sizing: border-box; height: 100%; overflow-y: auto; padding: 18px 12px 20px 0; scrollbar-width: thin; scrollbar-color: var(--ws-line-2) transparent; background: none;
   /* Lines dissolve under the header instead of being cut by it. */
   mask-image: linear-gradient(180deg, transparent 0, #000 34px, #000 calc(100% - 10px), transparent);
 }
-.ws2-lines { display: flex; flex-direction: column; }
-.ws2-line { margin-bottom: 26px; max-width: 660px; }
-.ws2-line header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 7px; }
+.ws2-lines { display: flex; flex-direction: column; counter-reset: ws2-log; }
+.ws2-line { margin-bottom: 30px; max-width: 660px; }
+.ws2-line header { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
 .ws2-who { display: inline-flex; align-items: baseline; gap: 8px; font-family: var(--ws-display); font-size: 10.5px; letter-spacing: .3em; color: var(--ws-accent); }
 .ws2-who-sub { font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .12em; color: var(--ws-ink-3); }
+/* Her lines are numbered entries of the observation log; the name rides a red blade. */
+.ws2-line-kurisu { counter-increment: ws2-log; }
+.ws2-line-kurisu header::before {
+  content: 'LOG.' counter(ws2-log, decimal-leading-zero); order: 2; font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .16em; color: var(--ws-ink-3);
+}
+.ws2-line-kurisu header::after { content: ''; order: 3; flex: 1; max-width: 120px; height: 1px; background: linear-gradient(90deg, var(--ws-line-2), transparent); }
+.ws2-line-kurisu .ws2-who { order: 1; align-items: center; gap: 0; }
+.ws2-line-kurisu .ws2-who > [data-testid='speaker-assistant-primary'] {
+  padding: 3px 12px 2px 9px; font-weight: 600; font-size: 11px; letter-spacing: .28em; line-height: 1.3; color: #fff; background: var(--ws-accent);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 7px) 100%, 0 100%);
+}
+.ws2[data-wl='beta'] .ws2-line-kurisu .ws2-who > [data-testid='speaker-assistant-primary'] { color: var(--ws-blade-ink); }
+.ws2-line-kurisu .ws2-who-sub { margin-left: 8px; font-family: var(--ws-serif); font-style: italic; font-size: 12px; letter-spacing: .06em; color: var(--ws-ink-3); }
 .ws2-line-user { display: flex; flex-direction: column; align-items: flex-end; margin-left: auto; max-width: 78%; }
 .ws2-line-user .ws2-who { color: var(--ws-ink-3); font-family: var(--ws-sans); letter-spacing: .1em; font-size: 11.5px; }
 /* Your lines are not chat bubbles: right-set text hung from a thin rule, like entries you wrote into the log. */
@@ -428,8 +456,11 @@
 
 .ws2 .bilingual-message { background: none; border: 0; padding: 0; }
 .ws2 .bilingual-message .chinese-main { margin: 0; font-family: var(--ws-read); font-synthesis: none; font-size: 17px; line-height: 1.85; color: var(--ws-ink); letter-spacing: .01em; font-weight: 400; text-shadow: none; }
-.ws2 .bilingual-message .japanese-sub { margin: 10px 0 0; padding-left: 12px; border-left: 1px solid var(--ws-line-2); font-size: 13.5px; line-height: 1.8; color: var(--ws-ink-2); letter-spacing: .02em; }
-.ws2 .bilingual-message .japanese-raw { margin: 0; font-size: 16px; line-height: 1.85; color: var(--ws-ink); }
+/* Her original words are set in Mincho: the Chinese is the reading, the Japanese is the record. */
+.ws2 .bilingual-message .japanese-sub { margin: 12px 0 0; padding-left: 14px; border-left: 1px solid rgba(var(--ws-accent-rgb), .45); font-family: var(--ws-serif-jp); font-size: 14px; line-height: 1.85; color: var(--ws-ink-2); letter-spacing: .03em; }
+.ws2 .bilingual-message .japanese-raw { margin: 0; font-family: var(--ws-serif-jp); font-size: 16px; line-height: 1.85; color: var(--ws-ink); }
+/* tokens.css gives every [lang='ja'] the UI sans; the record keeps Mincho down to each sentence span. */
+.ws2 .bilingual-message :is(.japanese-sub, .japanese-raw) :is([lang='ja'], .s) { font-family: var(--ws-serif-jp); }
 .ws2 .bilingual-message .s { border-radius: 3px; outline: none; transition: background .15s, color .15s, box-shadow .15s; }
 .ws2 .bilingual-message .s.hot { background: rgba(var(--ws-accent-rgb), .13); color: var(--ws-ink); }
 .ws2 .bilingual-message .chinese-main .s.hot { box-shadow: 0 1px 0 var(--ws-accent); }
@@ -447,8 +478,8 @@
 .ws2-thinking-label { font-family: var(--ws-mono); font-size: 11px; letter-spacing: .16em; color: var(--ws-accent); }
 .ws2-voicing { margin-top: 8px; font-size: 12px; letter-spacing: .1em; color: var(--ws-ink-3); }
 .ws2-actions { display: flex; gap: 4px; margin-top: 8px; }
-.ws2-actions button { height: 26px; padding: 0 10px; border-radius: 6px; font-size: 12px; color: var(--ws-ink-2); box-shadow: inset 0 0 0 1px var(--ws-line); }
-.ws2-actions button:hover:not(:disabled) { color: var(--ws-ink); background: rgba(255, 255, 255, .05); }
+.ws2-actions button { height: 26px; padding: 0 10px; border-radius: 0; font-size: 12px; letter-spacing: .08em; color: var(--ws-ink-2); box-shadow: inset 0 0 0 1px var(--ws-line); }
+.ws2-actions button:hover:not(:disabled) { color: var(--ws-ink); background: rgba(255, 255, 255, .05); box-shadow: inset 0 0 0 1px var(--ws-line-2), inset 2px 0 0 var(--ws-accent); }
 .ws2-actions button:disabled { opacity: .4; }
 
 .ws2-empty { display: grid; place-items: center; height: 100%; }
@@ -465,14 +496,29 @@
 
 .ws2-to-latest {
   position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); z-index: 3;
-  height: 30px; padding: 0 14px; border-radius: 999px !important; font-size: 12px; letter-spacing: .08em;
-  background: var(--ws-panel) !important; border: 1px solid var(--ws-line-2) !important; color: var(--ws-ink); backdrop-filter: blur(8px);
+  height: 28px; padding: 0 16px; border-radius: 0 !important; font-size: 12px; letter-spacing: .14em;
+  background: var(--ws-panel) !important; border: 0 !important; box-shadow: inset 0 0 0 1px var(--ws-line-2), inset 3px 0 0 var(--ws-accent);
+  color: var(--ws-ink); backdrop-filter: blur(8px);
 }
 
 /* ---------- composer ---------- */
 
-.ws2-composer { flex: none; border: 1px solid var(--ws-line-2); border-radius: 12px; background: rgba(0, 0, 0, .32); backdrop-filter: blur(10px); transition: border-color .2s, box-shadow .2s; }
-.ws2-composer:focus-within { border-color: rgba(var(--ws-accent-rgb), .5); box-shadow: 0 0 0 3px rgba(var(--ws-accent-rgb), .07); }
+/* Input field as a drafting frame: crop marks at the four corners, a hairline floor that turns red when you write. */
+.ws2-composer {
+  --mark: var(--ws-ink-3);
+  position: relative; flex: none; border: 0; border-radius: 0; background-color: rgba(0, 0, 0, .34);
+  background-image:
+    linear-gradient(var(--mark), var(--mark)), linear-gradient(var(--mark), var(--mark)),
+    linear-gradient(var(--mark), var(--mark)), linear-gradient(var(--mark), var(--mark)),
+    linear-gradient(var(--mark), var(--mark)), linear-gradient(var(--mark), var(--mark)),
+    linear-gradient(var(--mark), var(--mark)), linear-gradient(var(--mark), var(--mark));
+  background-repeat: no-repeat;
+  background-size: 10px 1px, 1px 10px, 10px 1px, 1px 10px, 10px 1px, 1px 10px, 10px 1px, 1px 10px;
+  background-position: 0 0, 0 0, 100% 0, 100% 0, 0 100%, 0 100%, 100% 100%, 100% 100%;
+  box-shadow: inset 0 -1px 0 var(--ws-line-2);
+  transition: box-shadow .2s;
+}
+.ws2-composer:focus-within { --mark: var(--ws-ink-2); box-shadow: inset 0 -1px 0 var(--ws-accent), 0 10px 24px -18px rgba(var(--ws-accent-rgb), .9); }
 .ws2 .ws2-composer textarea.chat-input-field {
   display: block; width: 100%; resize: none; border: 0; outline: none; background: none; box-shadow: none;
   padding: 12px 16px 4px; font-family: var(--ws-sans); font-size: 15px; line-height: 1.6; color: var(--ws-ink);
@@ -482,12 +528,13 @@
 .ws2-composer-row { display: flex; align-items: center; gap: 6px; padding: 4px 8px 8px 10px; min-width: 0; }
 .ws2 .ws2-composer-row > .ws2-model { margin-right: auto; }
 .ws2-send {
-  flex: none; height: 32px; min-width: 72px; padding: 0 16px; border-radius: 8px; font-size: 13px; letter-spacing: .2em; font-weight: 600;
-  color: #06080a !important; background: var(--ws-accent) !important;
-  clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%);
+  flex: none; height: 32px; min-width: 84px; padding: 0 22px 0 18px; border-radius: 0; font-family: var(--ws-serif-cjk); font-size: 14px; letter-spacing: .3em; font-weight: 600;
+  color: #fff !important; background: var(--ws-accent) !important;
+  clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%); transition: filter .15s, transform .15s;
 }
-.ws2-send:hover:not(:disabled) { filter: brightness(1.08); }
-.ws2-send:disabled { opacity: .4; }
+.ws2[data-wl='beta'] .ws2-send { color: var(--ws-blade-ink) !important; }
+.ws2-send:hover:not(:disabled) { filter: brightness(1.1); transform: translateX(2px); }
+.ws2-send:disabled { color: var(--ws-ink-3) !important; background: rgba(255, 255, 255, .07) !important; }
 .ws2-interrupt { flex: none; height: 30px; padding: 0 12px; border-radius: 8px; font-size: 12px; color: var(--ws-ink); box-shadow: inset 0 0 0 1px var(--ws-line-2); }
 
 .ws2 .ws2-model { min-width: 0; margin: 0; padding: 0; border: 0; background: none; }
@@ -534,11 +581,13 @@
 .ws2-stage { grid-column: 3; grid-row: 1 / 3; position: relative; z-index: 1; overflow: hidden; }
 .ws2-seam { position: absolute; left: 0; top: 60px; bottom: 0; width: 1px; background: linear-gradient(180deg, transparent, var(--ws-line-2) 20%, var(--ws-line-2) 80%, transparent); }
 .ws2-giant-name {
-  position: absolute; right: -.18em; top: 64px; z-index: 0; pointer-events: none; white-space: nowrap;
-  writing-mode: vertical-rl; font-family: var(--ws-serif-jp); font-size: clamp(96px, 19vh, 168px); line-height: 1; letter-spacing: .02em;
-  color: transparent; -webkit-text-stroke: 1px rgba(var(--ws-accent-rgb), .2);
-  mask-image: linear-gradient(180deg, #000 55%, transparent 96%);
+  position: absolute; right: 4px; top: 64px; z-index: 0; pointer-events: none; white-space: nowrap;
+  writing-mode: vertical-rl; font-family: var(--ws-serif-jp); font-weight: 600; font-size: clamp(112px, 22vh, 190px); line-height: 1; letter-spacing: -.02em;
+  color: transparent; -webkit-text-stroke: 1px rgba(242, 245, 248, .16);
+  mask-image: linear-gradient(180deg, #000 62%, transparent 98%);
 }
+/* Only 紅 is inked, in the same red as the silhouette behind her. */
+.ws2-giant-name em { font-style: normal; color: var(--ws-slab); -webkit-text-stroke: 0; opacity: .9; }
 .ws2-matrix {
   position: absolute; left: 0; right: 0; top: var(--ws-head); bottom: 0; z-index: 0; pointer-events: none;
   background-image: radial-gradient(circle, rgba(var(--ws-accent-rgb), .55) .7px, transparent 1.1px);
@@ -556,13 +605,14 @@
 .ws2 .avatar-stage .avatar-sprite-wrapper {
   position: absolute; left: 8px; bottom: 0; top: auto; right: auto; transform: none; margin: 0;
   height: min(calc(100% - var(--ws-head)), 930px); width: auto; max-width: none; max-height: none; aspect-ratio: 454 / 810;
-  filter: drop-shadow(-16px -8px 0 rgba(var(--ws-accent-rgb), .16)) var(--ws-rim);
+  /* Atlus-style offset silhouette: a hard, solid copy of her in the signal colour, not a glow. */
+  filter: var(--ws-rim) drop-shadow(-18px -10px 0 var(--ws-slab));
   transform-origin: 50% 100%;
 }
 .ws2 .avatar-stage .avatar-sprite-layer { position: absolute; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; object-fit: contain; object-position: bottom; transition: none; filter: none; }
 .ws2 .avatar-stage .breath-animation { animation: ws2-breathe 5.5s ease-in-out infinite; }
 @keyframes ws2-breathe { 50% { transform: translateY(-2px) scaleY(1.004); } }
-.ws2 .avatar-stage::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 12%; background: linear-gradient(0deg, var(--ws-bg), transparent); pointer-events: none; }
+.ws2 .avatar-stage::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 22%; background: linear-gradient(0deg, var(--ws-bg) 8%, rgba(0, 0, 0, 0)); pointer-events: none; }
 /* Plate: name, her voice (scope) and presence — one instrument in the lower-right corner of the booth. */
 .ws2-plate { position: absolute; right: 18px; bottom: 18px; z-index: 3; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
 .ws2-name-tag { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; text-shadow: 0 1px 2px rgba(0, 0, 0, .9), 0 0 14px rgba(0, 0, 0, .85); }
@@ -591,8 +641,13 @@
 .ws2-scope-stop i { width: 8px; height: 8px; background: var(--ws-accent); box-shadow: 0 0 6px var(--ws-accent); }
 .ws2-scope-stop:hover { background: rgba(var(--ws-accent-rgb), .12); }
 .ws2 .avatar-stage::before { content: ''; position: absolute; right: 0; bottom: 0; width: 70%; height: 34%; z-index: 2; pointer-events: none; background: radial-gradient(120% 100% at 100% 100%, rgba(0, 0, 0, .55), transparent 70%); }
-.ws2-name-tag span { font-family: var(--ws-serif); font-size: 17px; letter-spacing: .26em; color: var(--ws-ink); }
-.ws2-name-tag small { font-family: var(--ws-mono); font-size: 9px; letter-spacing: .3em; color: var(--ws-ink-3); }
+/* Nameplate: a paper blade cut on the diagonal, the system line hanging under it. */
+.ws2-name-tag { text-shadow: none; }
+.ws2-name-tag span {
+  padding: 5px 16px 4px 20px; font-family: var(--ws-serif); font-size: 17px; font-weight: 500; letter-spacing: .22em; line-height: 1.1;
+  color: var(--ws-blade-ink); background: var(--ws-blade); clip-path: polygon(10px 0, 100% 0, 100% 100%, 0 100%);
+}
+.ws2-name-tag small { padding-right: 2px; font-family: var(--ws-mono); font-size: 9px; letter-spacing: .3em; color: var(--ws-ink-2); text-shadow: 0 1px 2px rgba(0, 0, 0, .9); }
 .ws2-presence { display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; letter-spacing: .16em; color: var(--ws-ink-2); }
 .ws2-presence i { width: 5px; height: 5px; border-radius: 50%; background: var(--ws-ink-3); }
 .presence-thinking .ws2-presence i, .presence-voicing .ws2-presence i { background: var(--ws-accent); animation: ws2-pulse 1s ease-in-out infinite; }
@@ -601,14 +656,15 @@
 
 /* ---------- toasts ---------- */
 
-/* Centred on the reading column (not the window), human sentence first, the machine code as a quiet chip. */
+/* Notices live in the header band, flush right against the stage: they may cover the session title for a moment,
+ * never the brand, date or dialogue, and stay visible while the system menu blurs the column. */
 .ws2-toasts {
-  position: absolute; top: 70px; z-index: 20; display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none;
-  left: calc(var(--ws-side) + (100vw - var(--ws-side) - var(--ws-stage)) / 2); transform: translateX(-50%);
+  position: absolute; top: 8px; z-index: 20; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; pointer-events: none;
+  right: calc(var(--ws-stage) + 24px); max-width: calc(100vw - var(--ws-side) - var(--ws-stage) - 300px);
 }
 .ws2 .ws2-toasts .audio-error-toast {
-  position: static; transform: none; margin: 0; pointer-events: auto; display: flex; align-items: center; gap: 12px; max-width: 520px;
-  padding: 9px 14px 9px 16px; border-radius: 0 8px 8px 0; border: 1px solid var(--ws-line); border-left: 2px solid #e8b04a; background: var(--ws-panel); backdrop-filter: blur(12px);
+  position: static; transform: none; margin: 0; pointer-events: auto; display: flex; flex-wrap: wrap; align-items: center; column-gap: 12px; row-gap: 0; max-width: 520px; min-height: 36px;
+  padding: 6px 14px 6px 16px; border-radius: 0; border: 1px solid var(--ws-line); border-left: 3px solid #e8b04a; background: var(--ws-bg); line-height: 1.5;
   font-family: var(--ws-sans); font-size: 12.5px; letter-spacing: .02em; color: var(--ws-ink); box-shadow: 0 10px 30px rgba(0, 0, 0, .35);
   animation: ws2-toast-in .3s cubic-bezier(.2, .7, .2, 1) both;
 }
@@ -625,10 +681,11 @@
 .ws2.menu-open .ws2-talk, .ws2.menu-open .ws2-side { opacity: .06; filter: blur(6px); pointer-events: none; }
 .ws2.menu-open .ws2-title { opacity: .3; }
 .ws2 .avatar-stage .avatar-sprite-wrapper { transition: filter .3s ease; }
-.ws2.menu-open .avatar-stage .avatar-sprite-wrapper { filter: drop-shadow(-16px -8px 0 rgba(var(--ws-accent-rgb), .1)) var(--ws-rim) brightness(.7) saturate(.85); }
+.ws2.menu-open .avatar-stage .avatar-sprite-wrapper { filter: var(--ws-rim) drop-shadow(-18px -10px 0 var(--ws-slab)) brightness(.7) saturate(.85); }
 .ws2.menu-open .ws2-name-tag, .ws2.menu-open .ws2-presence { opacity: 0; }
-.ws2-sys-btn.on { display: inline-flex; align-items: center; gap: 8px; letter-spacing: .12em; border-color: rgba(var(--ws-accent-rgb), .6) !important; background: rgba(var(--ws-accent-rgb), .1); }
-.ws2-sys-btn kbd { font-family: var(--ws-mono); font-size: 9.5px; padding: 1px 5px; border: 1px solid var(--ws-line-2); border-radius: 4px; color: var(--ws-ink-3); }
+.ws2-sys-btn.on { letter-spacing: .12em; color: #fff !important; background: var(--ws-accent) !important; }
+.ws2[data-wl='beta'] .ws2-sys-btn.on { color: var(--ws-blade-ink) !important; }
+.ws2-sys-btn kbd { font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .06em; padding: 1px 5px; border: 1px solid currentColor; opacity: .7; }
 
 .ws2-sysmenu {
   --bus: 44px; --row: 58px; --index: 250px;
