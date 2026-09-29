@@ -1085,7 +1085,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
       reconnect();
       const refreshedProviders = await loadProviders();
       const provider = refreshedProviders.find((row) => row.id === updated.provider_id);
-      if (provider && !provider.configured) setIsSettingsOpen(true);
+      // Keyless connections (local endpoints) are never "configured"; only a missing required key needs the menu.
+      if (provider?.credential_required && !provider.configured) openMenu('connections');
     } finally {
       setConversationBusy(false);
     }
@@ -1103,9 +1104,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         localStorage.setItem('amadeus_pc_model', nextModel);
       } catch {}
       window.setTimeout(reconnect, 0);
-      if (provider?.credential_required && !provider.configured) {
-        setIsSettingsOpen(true);
-      }
+      if (provider?.credential_required && !provider.configured) openMenu('connections');
       return;
     }
     void patchActiveConversationRuntime({ provider_id: providerId }).catch((error) => {
@@ -1822,15 +1821,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
                 />
               );
             })()}
-            {pendingModel && (
-              <span className="ws2-pending" role="status" title="本轮仍使用发起时的模型">下一轮：{pendingModel}</span>
-            )}
-            {modelApplyError && (
-              <span className="ws2-apply-error" role="alert">
-                {modelApplyError}
-                <button type="button" aria-label="关闭提示" onClick={() => setModelApplyError(null)}>×</button>
-              </span>
-            )}
 
             <button
               type="submit"
@@ -1841,6 +1831,19 @@ export const Workstation: React.FC<WorkstationProps> = ({
               发送
             </button>
           </div>
+          {(pendingModel || modelApplyError) && (
+            <div className="ws2-composer-notes">
+              {pendingModel && (
+                <span className="ws2-pending" role="status" title="本轮仍使用发起时的模型">下一轮：{pendingModel}</span>
+              )}
+              {modelApplyError && (
+                <span className="ws2-apply-error" role="alert">
+                  {modelApplyError}
+                  <button type="button" aria-label="关闭提示" onClick={() => setModelApplyError(null)}>×</button>
+                </span>
+              )}
+            </div>
+          )}
         </form>
       </section>
 
