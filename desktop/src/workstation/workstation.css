@@ -623,7 +623,7 @@
 /* Her name as an original chapter card: black Mincho in one evenly set column with its kana reading running beside it,
  * drafting instruments (protractor arc, compass circles, ruler) behind it, an italic Latin line outside.
  * SG takes the chapter card's lavender; β takes 0's copper. All five kanji share one ink. */
-.ws2 { --chap: clamp(70px, calc((100vh - 200px) / 5.6), 124px); }
+.ws2 { --chap: clamp(70px, calc((100vh - 184px) / 5.45), 128px); }
 .ws2[data-wl='sg'] {
   --chap-ink: linear-gradient(180deg, rgba(128, 130, 204, .62) 0%, rgba(176, 179, 232, .72) 55%, rgba(222, 224, 248, .84) 100%);
   --chap-line: rgba(168, 170, 228, .5);
@@ -650,14 +650,15 @@
 }
 @keyframes ws2-chap-wipe { from { clip-path: inset(0 0 100% 0); } to { clip-path: inset(0 0 -10% 0); } }
 .ws2-chapter-kana { display: flex; flex-direction: column; animation: ws2-fade-in .6s ease 1.1s both; opacity: 0; }
-/* Each group spans exactly the kanji it reads (2 and 3 glyph advances), a hairline marking where the reading starts. */
+/* A ruler beside the column: one cell per kanji advance holding that kanji's reading, a tick at each boundary,
+ * the family/given break drawn longer. */
 .ws2-chapter-kana > span {
-  display: flex; flex-direction: column; justify-content: space-evenly; align-items: center; box-sizing: border-box;
-  height: calc(var(--chap) * 1.04 * 2); border-top: 1px solid var(--chap-line);
-  font-family: var(--ws-serif-jp); font-size: 14px; line-height: 1; color: var(--chap-en);
+  position: relative; display: grid; place-items: center; box-sizing: border-box; height: calc(var(--chap) * 1.04); padding-left: 8px;
+  writing-mode: vertical-rl; white-space: nowrap; font-family: var(--ws-serif-jp); font-size: 14px; line-height: 1; letter-spacing: .1em; color: var(--chap-en);
 }
-.ws2-chapter-kana > .giv { height: calc(var(--chap) * 1.04 * 3); }
-.ws2-chapter-kana b { font-weight: 400; }
+.ws2-chapter-kana > span::before { content: ''; position: absolute; top: 0; right: 0; width: 5px; height: 1px; background: var(--chap-line); }
+.ws2-chapter-kana > span::after { content: ''; position: absolute; top: 0; bottom: 0; right: 0; width: 1px; background: linear-gradient(180deg, var(--chap-line), transparent 30%, transparent 70%, var(--chap-line)); opacity: .45; }
+.ws2-chapter-kana > .giv::before { width: 12px; }
 .ws2-chapter-en {
   display: flex; align-items: center; gap: 10px; height: calc(var(--chap) * 2.08); writing-mode: vertical-rl; white-space: nowrap;
   font-family: var(--ws-serif); font-style: italic; color: var(--chap-line);
@@ -695,9 +696,8 @@
 .ws2 .avatar-stage .breath-animation { animation: ws2-breathe 5.5s ease-in-out infinite; }
 @keyframes ws2-breathe { 50% { transform: translateY(-2px) scaleY(1.004); } }
 .ws2 .avatar-stage::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 22%; background: linear-gradient(0deg, var(--ws-bg) 8%, rgba(0, 0, 0, 0)); pointer-events: none; }
-/* Plate: name, her voice (scope) and presence — one instrument in the lower-right corner of the booth. */
+/* Plate: her voice (scope) and presence — one instrument in the lower-right corner of the booth. The chapter card carries her name. */
 .ws2-plate { position: absolute; right: 18px; bottom: 18px; z-index: 3; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
-.ws2-name-tag { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; text-shadow: 0 1px 2px rgba(0, 0, 0, .9), 0 0 14px rgba(0, 0, 0, .85); }
 .ws2-presence { text-shadow: 0 1px 2px rgba(0, 0, 0, .9), 0 0 12px rgba(0, 0, 0, .8); }
 
 .ws2-scope { display: flex; align-items: center; gap: 6px; }
@@ -723,13 +723,6 @@
 .ws2-scope-stop i { width: 8px; height: 8px; background: var(--ws-accent); box-shadow: 0 0 6px var(--ws-accent); }
 .ws2-scope-stop:hover { background: rgba(var(--ws-accent-rgb), .12); }
 .ws2 .avatar-stage::before { content: ''; position: absolute; right: 0; bottom: 0; width: 70%; height: 34%; z-index: 2; pointer-events: none; background: radial-gradient(120% 100% at 100% 100%, rgba(0, 0, 0, .55), transparent 70%); }
-/* Nameplate: the same plate as the System key, the system line hanging under it. */
-.ws2-name-tag { text-shadow: none; }
-.ws2-name-tag span {
-  padding: 5px 16px 4px 20px; font-family: var(--ws-serif); font-size: 17px; font-weight: 500; letter-spacing: .22em; line-height: 1.1;
-  color: var(--ws-blade-ink); background: var(--ws-blade); box-shadow: inset 3px 0 0 var(--ws-tick); clip-path: var(--ws-plate-cut);
-}
-.ws2-name-tag small { padding-right: 2px; font-family: var(--ws-mono); font-size: 9px; letter-spacing: .3em; color: var(--ws-ink-2); text-shadow: 0 1px 2px rgba(0, 0, 0, .9); }
 .ws2-presence { display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; letter-spacing: .16em; color: var(--ws-ink-2); }
 .ws2-presence i { width: 5px; height: 5px; border-radius: 50%; background: var(--ws-ink-3); }
 .presence-thinking .ws2-presence i, .presence-voicing .ws2-presence i { background: var(--ws-accent); animation: ws2-pulse 1s ease-in-out infinite; }
@@ -764,7 +757,7 @@
 .ws2.menu-open .ws2-title { opacity: .3; }
 .ws2 .avatar-stage .avatar-sprite-wrapper { transition: filter .3s ease; }
 .ws2.menu-open .avatar-stage .avatar-sprite-wrapper { filter: var(--ws-rim) drop-shadow(-18px -10px 0 var(--ws-slab)) brightness(.7) saturate(.85); }
-.ws2.menu-open .ws2-name-tag, .ws2.menu-open .ws2-presence { opacity: 0; }
+.ws2.menu-open .ws2-presence { opacity: 0; }
 .ws2-sys-btn.on { letter-spacing: .12em; color: var(--ws-ink) !important; background: transparent !important; box-shadow: inset 0 0 0 1px var(--ws-line-2), inset 3px 0 0 var(--ws-tick); }
 .ws2[data-wl='beta'] .ws2-sys-btn.on { background: rgba(var(--ws-accent-rgb), .14) !important; box-shadow: none; }
 .ws2-sys-btn kbd { font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .06em; padding: 1px 5px; border: 1px solid currentColor; opacity: .7; }

@@ -1863,8 +1863,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           <div className="ws2-chapter-set">
             <div className="ws2-chapter-jp" lang="ja">牧瀬紅莉栖</div>
             <div className="ws2-chapter-kana" lang="ja">
-              <span className="fam">{[...'まきせ'].map((c, i) => <b key={i}>{c}</b>)}</span>
-              <span className="giv">{[...'くりす'].map((c, i) => <b key={i}>{c}</b>)}</span>
+              {['まき', 'せ', 'く', 'り', 'す'].map((reading, i) => <span key={i} className={i === 2 ? 'giv' : undefined}>{reading}</span>)}
             </div>
             <div className="ws2-chapter-en"><i>Amadeus</i></div>
           </div>
@@ -1880,7 +1879,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
           glitchState={glitchState}
         />
         <div className="ws2-plate">
-          <div className="ws2-name-tag"><span>MAKISE KURISU</span><small>AMADEUS SYSTEM</small></div>
           <VoiceScope
             level={currentVolume}
             volume={voiceVolume}
