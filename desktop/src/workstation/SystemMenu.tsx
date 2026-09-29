@@ -137,12 +137,11 @@ function WorldlineDiagram({ worldline, target, onTarget }: { worldline: Worldlin
   );
 }
 
-export function WorldlinePanel({ worldline, busy, generating = false, onShift, onArm }: {
+export function WorldlinePanel({ worldline, busy, onShift, onArm }: {
   worldline: Worldline;
   /** A shift is already running. */
   busy: boolean;
-  /** She is still replying: shifting first asks to stop this turn. */
-  generating?: boolean;
+  /** The caller decides whether an active reply needs a stop-and-shift prompt first. */
   onShift: (to: Worldline) => void;
   /** A different target line was picked. */
   onArm?: () => void;
@@ -177,15 +176,9 @@ export function WorldlinePanel({ worldline, busy, generating = false, onShift, o
       </div>
       <WorldlineDiagram worldline={worldline} target={target} onTarget={pick} />
       <div className="ws2-m-foot">
-        <p className="ws2-m-note">
-          {generating
-            ? '她还在回复。跃迁会先停止本轮；目标线就绪后才算切换完成。'
-            : '两条世界线各自保存会话、草稿与记忆。目标线就绪后才算切换完成。'}
-        </p>
+        <p className="ws2-m-note">两条世界线各自保存会话、草稿与记忆。目标线就绪后才算切换完成。</p>
         <button key={target} type="button" className={`ws2-m-btn${armed ? ' armed' : ''}`} disabled={!armed || busy} onClick={() => onShift(target)}>
-          {target === worldline
-            ? '当前所在'
-            : `${generating ? '停止本轮并跃迁至' : '跃迁至'} ${target === 'steins_gate' ? 'STEINS;GATE' : 'β'}`}
+          {target === worldline ? '当前所在' : `跃迁至 ${target === 'steins_gate' ? 'STEINS;GATE' : 'β'}`}
         </button>
       </div>
     </div>

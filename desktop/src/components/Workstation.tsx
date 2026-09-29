@@ -199,6 +199,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     code: string;
   } | null>(null);
   const [menuSection, setMenuSection] = useState<MenuSection>('worldline');
+  const [shiftConfirm, setShiftConfirm] = useState<'steins_gate' | 'beta' | null>(null);
   const [pendingModel, setPendingModel] = useState<string | null>(null);
   const wsRootRef = useRef<HTMLDivElement>(null);
   const speakingQueueRef = useRef<number[]>([]);
@@ -1960,12 +1961,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
           <WorldlinePanel
             worldline={worldline}
             busy={Boolean(shift)}
-            generating={isThinking || isSynthesizing}
             onArm={() => audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume)}
             onShift={(to) => {
-              // The button already reads "停止本轮并跃迁", so pressing it is the consent: stop generation, let startShift fade her voice.
-              if (isThinking || isSynthesizing) cancelTurn();
-              startShift(to);
+              if (isThinking || isSynthesizing || isPlaying) setShiftConfirm(to);
+              else startShift(to);
             }}
           />
         )}
@@ -2111,6 +2110,23 @@ export const Workstation: React.FC<WorkstationProps> = ({
           onCommit={() => onWorldlineChange(shift.to)}
           onDone={() => setShift(null)}
         />
+      )}
+
+      {shiftConfirm && (
+        <ConfirmDialog
+          title="停止本轮并跃迁？"
+          confirmLabel="停止本轮并跃迁"
+          onConfirm={() => {
+            const to = shiftConfirm;
+            setShiftConfirm(null);
+            // Generation is cancelled outright; her voice is left to startShift, which fades it before stopping.
+            if (isThinking || isSynthesizing) cancelTurn();
+            startShift(to);
+          }}
+          onCancel={() => setShiftConfirm(null)}
+        >
+          <p>她还在回复。跃迁到{shiftConfirm === 'steins_gate' ? ' STEINS;GATE ' : ' β 世界线'}会先停下这一轮回复；取消则留在当前世界线，继续听她说完。</p>
+        </ConfirmDialog>
       )}
 
       {renameTarget && (
