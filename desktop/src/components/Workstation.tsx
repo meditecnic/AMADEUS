@@ -280,6 +280,17 @@ export const Workstation: React.FC<WorkstationProps> = ({
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
+  // Below the breakpoint the open list is a drawer over the reading column: a press outside it (or the header) folds it away.
+  useEffect(() => {
+    if (isHistoryCollapsed) return;
+    const onDown = (event: PointerEvent) => {
+      if (window.innerWidth >= 1240) return;
+      if ((event.target as Element | null)?.closest?.('.ws2-side, .ws2-top, .ws2-dialog-scrim')) return;
+      setIsHistoryCollapsed(true);
+    };
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
+  }, [isHistoryCollapsed]);
 
   // Persist history collapsed state
   useEffect(() => {
@@ -1618,7 +1629,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
           activeId={activeConversationId}
           searchQuery={conversationSearch}
           onSearchChange={setConversationSearch}
-          onSelect={(conversation) => { void selectConversation(conversation); }}
+          onSelect={(conversation) => {
+            if (window.innerWidth < 1240) setIsHistoryCollapsed(true);
+            void selectConversation(conversation);
+          }}
           onNew={() => { void createConversation(defaultIdentityMode); }}
           onRename={renameConversation}
           onTogglePin={toggleConversationPin}
@@ -1837,7 +1851,26 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
       <section className={`ws2-stage presence-${presence}`}>
         <div className="ws2-seam" aria-hidden="true" />
-        <div className="ws2-giant-name" lang="ja" aria-hidden="true">牧瀬<em>紅</em>莉栖</div>
+        {/* Her name set like the original's chapter cards: black Mincho over drafting instruments, redrawn on each shift. */}
+        <div className="ws2-chapter" key={`chapter-${worldline}`} aria-hidden="true">
+          <svg className="ws2-chapter-draft" viewBox="0 0 240 640" preserveAspectRatio="xMaxYMin meet">
+            <path pathLength={1} d="M232 120 A 200 200 0 0 0 52 320" />
+            <path pathLength={1} d="M232 120 V 320 H 52" />
+            <path pathLength={1} d="M232 60 V 612 M222 612 H 240" />
+            {Array.from({ length: 28 }, (_, i) => <path key={i} pathLength={1} d={`M232 ${80 + i * 19} h ${i % 5 === 0 ? -9 : -5}`} className="tick" />)}
+            <circle pathLength={1} cx="96" cy="196" r="17" /><circle pathLength={1} cx="96" cy="196" r="6" />
+            <path pathLength={1} d="M70 196 H 122 M96 170 V 222" />
+            <circle pathLength={1} cx="172" cy="236" r="30" /><circle pathLength={1} cx="172" cy="236" r="24" className="thin" />
+            <path pathLength={1} d="M26 596 L 206 356" />
+            {Array.from({ length: 16 }, (_, i) => <path key={i} pathLength={1} d={`M${38 + i * 10.6} ${580 - i * 14.1} l 4 3`} className="tick" />)}
+            <circle pathLength={1} cx="44" cy="572" r="9" /><path pathLength={1} d="M30 572 H 58 M44 558 V 586" />
+          </svg>
+          <div className="ws2-chapter-set">
+            <div className="ws2-chapter-jp" lang="ja"><span className="fam">牧瀬</span><span className="giv"><em>紅</em>莉栖</span></div>
+            <div className="ws2-chapter-en"><i>Amadeus</i></div>
+            <div className="ws2-chapter-sub">-Makise Kurisu-</div>
+          </div>
+        </div>
         {/* Amadeus window: a dot-matrix field behind her that stirs while she thinks and pulses while she speaks. */}
         <div className="ws2-matrix" aria-hidden="true" />
         
@@ -1933,6 +1966,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             worldline={worldline}
             busy={Boolean(shift)}
             generating={isThinking || isSynthesizing}
+            onArm={() => audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume)}
             onShift={(to) => {
               if (isThinking || isSynthesizing) setShiftConfirm(to);
               else startShift(to);

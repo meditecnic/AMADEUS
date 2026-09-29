@@ -150,10 +150,11 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
           <button type="button" className="history-sidebar-icon add" onClick={onNew} aria-label="新建会话" disabled={busy}>
             <span className="history-icon-plus">+</span>
           </button>
-          {visible.slice(0, 8).map((conversation) => (
+          {visible.slice(0, 8).map((conversation, index) => (
             <button
               type="button"
               key={conversation.id}
+              style={{ '--i': index } as React.CSSProperties}
               className={`history-sidebar-icon ${conversation.id === activeId ? 'active' : ''}${conversation.is_pinned ? ' pinned' : ''}`}
               title={conversation.title}
               aria-label={conversation.title}
@@ -180,9 +181,10 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
                 <span>&gt; 暂无会话</span>
                 <p className="history-empty-sub">下一次发言会在这条世界线开始新会话。</p>
               </div>
-            ) : visible.map((conversation) => (
+            ) : visible.map((conversation, index) => (
               <article
                 key={conversation.id}
+                style={{ '--i': index } as React.CSSProperties}
                 className={`conversation-item ${conversation.id === activeId ? 'active' : ''}`}
               >
                 <button

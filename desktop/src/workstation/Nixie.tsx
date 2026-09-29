@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 
 /* Hand-drawn nixie numerals in a 12×20 box. The anime meter uses 8 tubes and the decimal point owns tube #2. */
 const DIGITS: Record<string, string> = {
@@ -20,9 +20,32 @@ export const DIVERGENCE: Record<'steins_gate' | 'beta', string> = {
   beta: '1.130205',
 };
 
-function Tube({ c, n }: { c: string; n: number }) {
+/** Retuning the meter: every tube spins, then they lock left to right like the anime's reading settling. */
+export function useTunedValue(value: string) {
+  const [state, setState] = useState({ text: value, locked: value.length });
+  const mounted = useRef(false);
+  useEffect(() => {
+    if (!mounted.current) { mounted.current = true; return; }
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      setState({ text: value, locked: value.length });
+      return;
+    }
+    let tick = 0;
+    const id = window.setInterval(() => {
+      tick += 1;
+      const locked = Math.max(0, Math.floor((tick - 3) / 2));
+      const text = value.split('').map((c, i) => (i < locked || c === '.' ? c : String(Math.floor(Math.random() * 10)))).join('');
+      setState({ text, locked });
+      if (locked >= value.length) window.clearInterval(id);
+    }, 42);
+    return () => window.clearInterval(id);
+  }, [value]);
+  return state;
+}
+
+function Tube({ c, n, tuning }: { c: string; n: number; tuning?: boolean }) {
   return (
-    <span className="nixie-tube" style={{ '--n': n } as CSSProperties}>
+    <span className={`nixie-tube${tuning ? ' tuning' : ''}`} style={{ '--n': n } as CSSProperties}>
       <svg viewBox="0 0 12 20" className="nx-ghost" aria-hidden="true">
         {GHOST.map((d, i) => <path key={i} d={d} />)}
         <path d="M6 1.2V18.8M1.4 10H10.6M2.6 3.4 9.4 16.6M9.4 3.4 2.6 16.6" className="nx-star" />
@@ -34,10 +57,16 @@ function Tube({ c, n }: { c: string; n: number }) {
   );
 }
 
-export function Nixie({ value, size = 'md', base = false }: { value: string; size?: 'sm' | 'md' | 'lg' | 'xl'; base?: boolean }) {
+export function Nixie({ value, size = 'md', base = false, locked, label }: {
+  value: string; size?: 'sm' | 'md' | 'lg' | 'xl'; base?: boolean;
+  /** Tubes from this index on are still spinning. */
+  locked?: number;
+  /** Settled reading for assistive tech while the visible digits spin. */
+  label?: string;
+}) {
   return (
-    <div className={`nixie nixie-${size}${base ? ' with-base' : ''}`} role="img" aria-label={`World line divergence ${value}%`}>
-      <div className="nixie-row">{value.split('').map((c, i) => <Tube key={i} c={c} n={i} />)}</div>
+    <div className={`nixie nixie-${size}${base ? ' with-base' : ''}`} role="img" aria-label={`World line divergence ${label ?? value}%`}>
+      <div className="nixie-row">{value.split('').map((c, i) => <Tube key={i} c={c} n={i} tuning={locked !== undefined && i >= locked && c !== '.'} />)}</div>
       {base && <div className="nixie-base"><i /><i /><i /></div>}
     </div>
   );

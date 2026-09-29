@@ -1,6 +1,6 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { DraftWord } from './DraftWord';
-import { DIVERGENCE, Nixie } from './Nixie';
+import { DIVERGENCE, Nixie, useTunedValue } from './Nixie';
 
 export type MenuSection = 'worldline' | 'connections' | 'sound' | 'character';
 type Worldline = 'steins_gate' | 'beta';
@@ -102,6 +102,7 @@ export function SystemMenu({
 function WorldlineDiagram({ worldline, target, onTarget }: { worldline: Worldline; target: Worldline; onTarget: (w: Worldline) => void }) {
   // SG sits outside any attractor field: one clean line. β lives inside a field: a converging bundle.
   const field = [-10, -5, 0, 5, 10];
+  const end = (w: Worldline) => (w === 'steins_gate' ? 'translate(600 36)' : 'translate(600 128)');
   const line = (w: Worldline) => `ws2-wl-line ${w === 'beta' ? 'beta' : 'sg'}${worldline === w ? ' cur' : ''}${target === w ? ' sel' : ''}`;
   return (
     <svg className="ws2-wl-diagram" viewBox="0 0 640 170" role="radiogroup" aria-label="选择世界线">
@@ -110,47 +111,78 @@ function WorldlineDiagram({ worldline, target, onTarget }: { worldline: Worldlin
       <g className={line('beta')} role="radio" aria-checked={target === 'beta'} aria-label="β 世界线" tabIndex={0}
         onClick={() => onTarget('beta')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onTarget('beta'); } }}>
         {field.map((o) => <path key={o} d={`M40 85 C 200 85, 260 ${124 + o}, 600 ${128 + o * 0.35}`} className={o === 0 ? 'main' : 'field'} />)}
+        <path d="M40 85 C 200 85, 260 124, 600 128" className="flow" />
         <path d="M40 85 C 200 85, 260 124, 600 128" className="hit" />
-        <text x="600" y="152" textAnchor="end">β · {DIVERGENCE.beta}%</text>
+        <text x="574" y="152" textAnchor="end">β · {DIVERGENCE.beta}%</text>
       </g>
       <g className={line('steins_gate')} role="radio" aria-checked={target === 'steins_gate'} aria-label="STEINS;GATE 世界线" tabIndex={0}
         onClick={() => onTarget('steins_gate')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onTarget('steins_gate'); } }}>
         <path d="M40 85 C 200 85, 270 40, 600 36" className="main" />
+        <path d="M40 85 C 200 85, 270 40, 600 36" className="flow" />
         <path d="M40 85 C 200 85, 270 40, 600 36" className="hit" />
-        <text x="600" y="24" textAnchor="end">STEINS;GATE · {DIVERGENCE.steins_gate}%</text>
+        <text x="574" y="24" textAnchor="end">STEINS;GATE · {DIVERGENCE.steins_gate}%</text>
       </g>
-      <g className="here" transform={worldline === 'steins_gate' ? 'translate(600 36)' : 'translate(600 128)'}>
+      <g className="here" transform={end(worldline)}>
         <circle r="9" className="ring" /><circle r="3.5" />
       </g>
+      {target !== worldline && (
+        <g key={target} className="aim" transform={end(target)} aria-hidden="true">
+          <g className="aim-lock">
+            <circle r="13" /><path d="M-22 0H-10M10 0H22M0-22V-10M0 10V22" />
+            <path className="brk" d="M-17-9V-17H-9M9-17H17V-9M17 9V17H9M-9 17H-17V9" />
+          </g>
+        </g>
+      )}
     </svg>
   );
 }
 
-export function WorldlinePanel({ worldline, busy, generating = false, onShift }: {
+export function WorldlinePanel({ worldline, busy, generating = false, onShift, onArm }: {
   worldline: Worldline;
   /** A shift is already running. */
   busy: boolean;
   /** She is still replying: shifting first asks to stop this turn. */
   generating?: boolean;
   onShift: (to: Worldline) => void;
+  /** A different target line was picked. */
+  onArm?: () => void;
 }) {
   const [target, setTarget] = useState<Worldline>(worldline);
   useEffect(() => { setTarget(worldline); }, [worldline]);
+  const armed = target !== worldline;
+  const tuned = useTunedValue(DIVERGENCE[target]);
+  const rowRef = useRef<HTMLDivElement>(null);
   const name = (w: Worldline) => (w === 'steins_gate' ? 'STEINS;GATE' : 'β WORLDLINE');
+  const pick = (w: Worldline) => {
+    if (w === target) return;
+    setTarget(w);
+    onArm?.();
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    rowRef.current?.animate([
+      { transform: 'translateX(-3px)', filter: 'drop-shadow(-3px 0 rgba(255,70,110,.75)) drop-shadow(3px 0 rgba(90,220,255,.75))' },
+      { transform: 'translateX(2px)', filter: 'drop-shadow(2px 0 rgba(255,70,110,.5)) drop-shadow(-2px 0 rgba(90,220,255,.5))', offset: .35 },
+      { transform: 'none', filter: 'none' },
+    ], { duration: 240, easing: 'steps(4, end)' });
+  };
   return (
-    <div className="ws2-wl-panel">
+    <div className={`ws2-wl-panel${armed ? ' armed' : ''}`} data-target={target === 'steins_gate' ? 'sg' : 'beta'}>
       <div className="ws2-wl-hero">
-        <Nixie value={DIVERGENCE[worldline]} size="lg" />
-        <div className="meta"><small>CURRENT WORLDLINE</small><b>{name(worldline)}</b></div>
+        <div className="tubes" ref={rowRef}>
+          <Nixie value={tuned.text} locked={tuned.locked} label={DIVERGENCE[target]} size="lg" />
+        </div>
+        <div className="meta">
+          <small>{armed ? 'TARGET WORLDLINE' : 'CURRENT WORLDLINE'}</small><b>{name(target)}</b>
+          {armed && <span className="from">FROM {DIVERGENCE[worldline]}%</span>}
+        </div>
       </div>
-      <WorldlineDiagram worldline={worldline} target={target} onTarget={setTarget} />
+      <WorldlineDiagram worldline={worldline} target={target} onTarget={pick} />
       <div className="ws2-m-foot">
         <p className="ws2-m-note">
           {generating
             ? '她还在回复。跃迁会先停止本轮；目标线就绪后才算切换完成。'
             : '两条世界线各自保存会话、草稿与记忆。目标线就绪后才算切换完成。'}
         </p>
-        <button type="button" className="ws2-m-btn" disabled={target === worldline || busy} onClick={() => onShift(target)}>
+        <button key={target} type="button" className={`ws2-m-btn${armed ? ' armed' : ''}`} disabled={!armed || busy} onClick={() => onShift(target)}>
           {target === worldline
             ? '当前所在'
             : `${generating ? '停止本轮并跃迁至' : '跃迁至'} ${target === 'steins_gate' ? 'STEINS;GATE' : 'β'}`}

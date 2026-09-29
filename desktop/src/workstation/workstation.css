@@ -33,7 +33,7 @@
   color: var(--ws-ink);
   background: var(--ws-bg);
   font-family: var(--ws-sans);
-  transition: grid-template-columns .22s cubic-bezier(.3, .7, .2, 1), background .6s ease, color .6s ease;
+  transition: grid-template-columns .36s cubic-bezier(.2, .8, .2, 1), background .6s ease, color .6s ease;
 }
 .ws2.rail { --ws-side: 60px; }
 /* Narrow windows keep the reading column: the expanded session list floats over it instead of taking grid width. */
@@ -44,8 +44,19 @@
   .ws2:not(.rail) .ws2-side {
     position: absolute; top: 0; bottom: 0; left: 0; width: 256px; z-index: 8;
     background: var(--ws-panel); backdrop-filter: blur(16px); box-shadow: 18px 0 40px rgba(0, 0, 0, .45);
+    animation: ws2-drawer .34s cubic-bezier(.2, .8, .2, 1) both;
+    border-right-color: var(--ws-line-2);
+  }
+  /* Dims the reading column under the drawer so the two layers don't read as one page; clicks still fall through to the outside-close handler. */
+  .ws2:not(.rail)::after {
+    content: ''; position: absolute; top: 60px; right: 0; bottom: 0; left: 256px; z-index: 7; pointer-events: none;
+    background: linear-gradient(90deg, rgba(3, 3, 4, .62), rgba(3, 3, 4, .34) 60%, rgba(3, 3, 4, .22));
+    animation: ws2-scrim-in .3s ease;
   }
 }
+@keyframes ws2-scrim-in { from { opacity: 0; } }
+/* The drawer unrolls from the rail it covers, so the spine at x=30 never moves. */
+@keyframes ws2-drawer { from { clip-path: inset(0 calc(100% - 60px) 0 0); box-shadow: none; } to { clip-path: inset(0 -60px 0 0); } }
 
 /* SG: the original's grey-white drafting UI — graphite, paper white, hairlines; colour is left to her and the art.
  * Cyan and pink appear only as small inlays (the approved Memory key), never as fills. */
@@ -64,7 +75,11 @@
   /* Her afterimage from the neighbouring worldline: a pale, hard offset copy. */
   --ws-slab: rgba(214, 222, 230, .085);
   --ws-slab-ink: rgba(236, 235, 231, .62);
+  /* RE:BOOT inlays: Okabe's coral handset and the title menu's orange selection tag. */
+  --ws-coral: #ff7b68;
+  --ws-tag: #f39a1e;
   --ws-light: radial-gradient(900px 780px at 84% 30%, rgba(214, 222, 230, .1), transparent 62%),
+              radial-gradient(640px 520px at 62% 34%, rgba(96, 104, 214, .075), transparent 68%),
               radial-gradient(520px 420px at 76% 88%, rgba(143, 220, 255, .035), transparent 70%),
               linear-gradient(180deg, #0c0d10 0%, #08090a 100%);
   --ws-rim: drop-shadow(0 0 1px rgba(240, 240, 236, .4));
@@ -101,6 +116,18 @@
 .ws2-atmo { z-index: 0; }
 .ws2-atmo-light { background: var(--ws-light); }
 .ws2-atmo-draft { width: 100%; height: 100%; color: rgba(200, 228, 255, .075); }
+/* The original title's violet blueprint panel, kept to the draft circle so graphite still owns the room. */
+.ws2-atmo-draft .bp { opacity: .2; }
+.ws2-atmo-grid {
+  background-image: linear-gradient(rgba(214, 190, 166, .045) 1px, transparent 1px), linear-gradient(90deg, rgba(214, 190, 166, .045) 1px, transparent 1px);
+  background-size: 32px 32px; background-position: -1px -1px;
+  mask-image: radial-gradient(65% 75% at 72% 48%, #000, transparent 82%);
+}
+.ws2 .ws2-atmo-bin {
+  inset: 92px calc(var(--ws-stage) - 150px) auto auto; white-space: pre;
+  font-family: var(--ws-mono); font-size: 11px; line-height: 1.6; letter-spacing: .14em; color: rgba(233, 138, 79, .085);
+  mask-image: linear-gradient(180deg, transparent, #000 18%, #000 64%, transparent 96%);
+}
 .ws2-atmo-crt { background: repeating-linear-gradient(0deg, rgba(0, 0, 0, .16) 0 1px, transparent 1px 3px), radial-gradient(420px 420px at 80% 44%, rgba(255, 150, 70, .06), transparent 70%); }
 .ws2-atmo-grain {
   opacity: .5;
@@ -121,6 +148,7 @@
   background: linear-gradient(180deg, rgba(236, 235, 231, .1), rgba(236, 235, 231, .04)); box-shadow: inset 0 0 0 1px var(--ws-line-2), inset 0 1px 0 rgba(255, 255, 255, .08);
 }
 .ws2-date-ind { position: absolute; top: 3px; right: 6px; color: var(--ws-ink-3); }
+.ws2[data-wl='sg'] .ws2-date-ind { color: var(--ws-coral); opacity: .8; }
 .ws2-date .d { font-family: var(--ws-mono); font-weight: 300; font-size: 21px; line-height: 1; letter-spacing: .06em; color: var(--ws-ink); font-variant-numeric: tabular-nums; }
 .ws2-date b { font-family: var(--ws-mono); font-weight: 400; font-size: 9.5px; letter-spacing: .12em; color: var(--ws-ink-2); }
 /* β: the same plate on 0's handset — copper-edged, chamfered like its hardware. */
@@ -231,8 +259,18 @@
 /* ---------- sessions column (restyles HistorySidebar) ---------- */
 
 .ws2-side { grid-column: 1; grid-row: 2; position: relative; z-index: 2; min-height: 0; overflow: hidden; border-right: 1px solid var(--ws-line); }
-.ws2 .grid-history { display: flex; flex-direction: column; height: 100%; width: auto; min-width: 0; padding: 6px 12px 16px 16px; background: none; border: 0; box-shadow: none; }
-.ws2 .grid-history.collapsed { padding: 6px 0; align-items: center; }
+/* Both states keep a fixed width and the column clips them, so a width change never reflows titles or slides the rail nodes. */
+.ws2 .grid-history { display: flex; flex-direction: column; height: 100%; width: 256px; box-sizing: border-box; min-width: 0; transition: none; padding: 6px 12px 16px 16px; background: none; border: 0; box-shadow: none; }
+.ws2 .grid-history.collapsed { width: 60px; padding: 6px 0; align-items: center; }
+.ws2 .grid-history:not(.collapsed) > :is(.conversation-search-wrap, .history-sidebar-footer) { animation: ws2-side-in .3s cubic-bezier(.2, .7, .2, 1) .04s backwards; }
+.ws2 .grid-history:not(.collapsed) .history-sidebar-footer { animation-delay: .16s; }
+.ws2 .grid-history:not(.collapsed) .history-session-list::before { transform-origin: top; animation: ws2-spine .42s cubic-bezier(.3, .7, .2, 1) backwards; }
+.ws2 .grid-history:not(.collapsed) .conversation-item::before { animation: ws2-node-in .26s ease-out calc(40ms + min(var(--i, 0), 12) * 24ms) backwards; }
+.ws2 .grid-history:not(.collapsed) :is(.conversation-select, .conversation-actions) { animation: ws2-side-in .32s cubic-bezier(.2, .7, .2, 1) calc(70ms + min(var(--i, 0), 12) * 24ms) backwards; }
+.ws2 .history-sidebar-icon:not(.add) { animation: ws2-node-in .26s ease-out calc(90ms + min(var(--i, 0), 8) * 30ms) backwards; }
+@keyframes ws2-side-in { from { opacity: 0; transform: translateX(-10px); } }
+@keyframes ws2-node-in { from { opacity: 0; transform: scale(.2); } }
+@keyframes ws2-spine { from { transform: scaleY(0); } }
 .ws2 .history-sidebar-header { display: none; }
 .ws2 .conversation-search-wrap { padding: 0 0 10px; }
 .ws2 .conversation-search {
@@ -242,18 +280,21 @@
 .ws2 .conversation-search::placeholder { color: var(--ws-ink-3); }
 .ws2 .conversation-search:focus { border-bottom-color: var(--ws-accent); outline: none; }
 /* Sessions hang on one worldline spine: each is a node (observation) on the line, the open one glows. */
-.ws2 .history-session-list { position: relative; flex: 1; min-height: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--ws-line-2) transparent; }
-.ws2 .history-session-list::before { content: ''; position: absolute; left: 11px; top: 6px; bottom: 6px; width: 1px; background: linear-gradient(180deg, var(--ws-line-2), var(--ws-line) 70%, transparent); pointer-events: none; }
+.ws2 .history-session-list { position: relative; flex: 1; min-height: 0; padding: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--ws-line-2) transparent; }
+.ws2 .history-session-list::before { content: ''; position: absolute; left: 14px; top: 6px; bottom: 6px; width: 1px; background: linear-gradient(180deg, var(--ws-line-2), var(--ws-line) 70%, transparent); pointer-events: none; }
 .ws2 .conversation-item { position: relative; display: flex; align-items: center; gap: 4px; margin: 0; padding: 0 4px 0 0; border: 0; border-radius: 0 8px 8px 0; background: none; transition: background .15s; }
 .ws2 .conversation-item::before {
-  content: ''; position: absolute; left: 8px; top: 15px; width: 7px; height: 7px; border-radius: 50%;
+  content: ''; position: absolute; left: 11px; top: 15px; width: 7px; height: 7px; border-radius: 50%;
   background: var(--ws-bg); box-shadow: inset 0 0 0 1px var(--ws-ink-3); transition: box-shadow .2s, background .2s, transform .2s;
 }
-.ws2 .conversation-item:hover { background: linear-gradient(90deg, transparent 22px, rgba(255, 255, 255, .035) 22px); }
+.ws2 .conversation-item:hover { background: linear-gradient(90deg, transparent 25px, rgba(255, 255, 255, .035) 25px); }
 .ws2 .conversation-item:hover::before { box-shadow: inset 0 0 0 1px var(--ws-ink); }
-.ws2 .conversation-item.active { background: linear-gradient(90deg, transparent 22px, rgba(var(--ws-accent-rgb), .07) 22px); box-shadow: none; }
+.ws2 .conversation-item.active { background: linear-gradient(90deg, transparent 25px, rgba(var(--ws-accent-rgb), .07) 25px); box-shadow: none; }
 .ws2 .conversation-item.active::before { background: var(--ws-accent); box-shadow: 0 0 0 3px rgba(var(--ws-accent-rgb), .18), 0 0 10px var(--ws-accent); transform: scale(1.1); }
-.ws2 .conversation-select { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 6px 8px 30px; text-align: left; background: none; border: 0; }
+/* SG marks the open session like the title menu marks its choice: a small orange square, no glow. */
+.ws2[data-wl='sg'] .conversation-item.active { background: linear-gradient(90deg, transparent 25px, rgba(236, 235, 231, .05) 25px); }
+.ws2[data-wl='sg'] .conversation-item.active::before { border-radius: 0; background: var(--ws-tag); box-shadow: 0 0 0 3px rgba(243, 154, 30, .14); }
+.ws2 .conversation-select { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 6px 8px 33px; text-align: left; background: none; border: 0; }
 .ws2 .conversation-title { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; color: var(--ws-ink-2); }
 .ws2 .conversation-item.active .conversation-title, .ws2 .conversation-item:hover .conversation-title { color: var(--ws-ink); }
 .ws2 .conversation-meta { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .04em; color: var(--ws-ink-3); }
@@ -423,6 +464,7 @@
 .ws2 .history-sidebar-icon.pinned:not(.add)::before { border-radius: 1px; transform: rotate(45deg); }
 .ws2 .history-sidebar-icon:not(.add):hover::before { box-shadow: inset 0 0 0 1px var(--ws-ink); transform: scale(1.25); }
 .ws2 .history-sidebar-icon.active:not(.add)::before { background: var(--ws-accent); box-shadow: 0 0 0 3px rgba(var(--ws-accent-rgb), .18), 0 0 10px var(--ws-accent); }
+.ws2[data-wl='sg'] .history-sidebar-icon.active:not(.add)::before { border-radius: 0; background: var(--ws-tag); box-shadow: 0 0 0 3px rgba(243, 154, 30, .14); }
 .ws2 .history-sidebar-icon.active { color: var(--ws-ink); }
 .ws2 .history-sidebar-icon:hover { color: var(--ws-ink); }
 
@@ -591,14 +633,60 @@
 
 .ws2-stage { grid-column: 3; grid-row: 1 / 3; position: relative; z-index: 1; overflow: hidden; }
 .ws2-seam { position: absolute; left: 0; top: 60px; bottom: 0; width: 1px; background: linear-gradient(180deg, transparent, var(--ws-line-2) 20%, var(--ws-line-2) 80%, transparent); }
-.ws2-giant-name {
-  position: absolute; right: 4px; top: 64px; z-index: 0; pointer-events: none; white-space: nowrap;
-  writing-mode: vertical-rl; font-family: var(--ws-serif-jp); font-weight: 600; font-size: clamp(112px, 22vh, 190px); line-height: 1; letter-spacing: -.02em;
-  color: transparent; -webkit-text-stroke: 1px rgba(242, 245, 248, .16);
-  mask-image: linear-gradient(180deg, #000 62%, transparent 98%);
+/* Her name as an original chapter card: black Mincho, compressed kanji, the given name larger than the family name,
+ * drafting instruments (protractor arc, compass circles, ruler) behind it, an italic Latin line beside it.
+ * SG takes the chapter card's lavender; β takes 0's copper. 紅 is the brightest stroke in both. */
+.ws2 { --chap: clamp(92px, calc((100vh - 196px) / 4.1), 150px); }
+.ws2[data-wl='sg'] {
+  --chap-ink: linear-gradient(180deg, rgba(106, 106, 184, .5) 0%, rgba(156, 159, 219, .56) 55%, rgba(207, 209, 240, .62) 100%);
+  --chap-hi: linear-gradient(180deg, rgba(185, 188, 242, .9) 0%, #fff 100%);
+  --chap-line: rgba(168, 170, 228, .5);
+  --chap-en: rgba(196, 198, 240, .72);
 }
-/* Only 紅 is inked. */
-.ws2-giant-name em { font-style: normal; color: var(--ws-slab-ink); -webkit-text-stroke: 0; opacity: .5; }
+.ws2[data-wl='beta'] {
+  --chap-ink: linear-gradient(180deg, rgba(138, 69, 38, .56) 0%, rgba(194, 112, 63, .56) 55%, rgba(230, 173, 132, .6) 100%);
+  --chap-hi: linear-gradient(180deg, rgba(255, 138, 72, .95) 0%, #ffe2c4 100%);
+  --chap-line: rgba(233, 138, 79, .46);
+  --chap-en: rgba(240, 190, 150, .68);
+}
+.ws2-chapter { position: absolute; right: 0; top: 60px; bottom: 0; width: 64%; z-index: 0; pointer-events: none; }
+.ws2-chapter-draft { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; fill: none; stroke: var(--chap-line); color: var(--chap-line); }
+.ws2-chapter-draft :is(path, circle) { stroke-width: .8; vector-effect: non-scaling-stroke; stroke-dasharray: 1; stroke-dashoffset: 1; animation: ws2-chap-draw 1.3s cubic-bezier(.3, .7, .2, 1) .15s forwards; }
+.ws2-chapter-draft .thin { stroke-width: .5; opacity: .6; }
+.ws2-chapter-draft .tick { animation-delay: .8s; animation-duration: .6s; }
+@keyframes ws2-chap-draw { to { stroke-dashoffset: 0; } }
+/* The card's step, turned vertical: the small compressed family name sits up and inward, the given name drops to the
+ * edge in full size, and the italic line runs down the gap between them the way "Chapter 1 ——" runs into the kana. */
+.ws2-chapter-set { position: absolute; right: 10px; top: 6px; font-size: var(--chap); }
+.ws2-chapter-jp {
+  display: flex; flex-direction: column; align-items: flex-end; white-space: nowrap;
+  font-family: var(--ws-serif-jp); font-weight: 900; line-height: 1;
+  transform: scaleX(.84); transform-origin: right top;
+  animation: ws2-chap-wipe .9s cubic-bezier(.3, .7, .2, 1) .45s both;
+}
+.ws2-chapter-jp :is(.fam, .giv) { writing-mode: vertical-rl; background: var(--chap-ink); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.ws2-chapter-jp .fam { font-size: .56em; letter-spacing: -.03em; margin-right: .5em; }
+.ws2-chapter-jp .giv { letter-spacing: -.07em; margin-top: .02em; }
+.ws2-chapter-jp em { font-style: normal; background: var(--chap-hi); -webkit-background-clip: text; background-clip: text; color: transparent; }
+@keyframes ws2-chap-wipe { from { clip-path: inset(0 0 100% 0); } to { clip-path: inset(0 0 -10% 0); } }
+.ws2-chapter-en {
+  position: absolute; right: 0; top: .04em; width: .235em; height: 1.2em;
+  display: flex; align-items: center; gap: 10px; writing-mode: vertical-rl; white-space: nowrap;
+  font-family: var(--ws-serif); font-style: italic; font-size: inherit; color: var(--chap-line);
+  animation: ws2-fade-in .6s ease 1.1s both; opacity: 0;
+}
+.ws2-chapter-en i { font-size: 22px; letter-spacing: .02em; color: var(--chap-en); }
+.ws2-chapter-en::after { content: ''; flex: 1; block-size: 1px; background: linear-gradient(180deg, currentColor, transparent); }
+.ws2-chapter-sub {
+  position: absolute; top: calc(var(--chap) * 1.3); right: calc(var(--chap) * .84 + 14px); writing-mode: vertical-rl; white-space: nowrap;
+  font-family: var(--ws-serif); font-style: italic; font-size: 13px; letter-spacing: .1em; color: var(--chap-en);
+  animation: ws2-fade-in .6s ease 1.3s both; opacity: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ws2-chapter-draft :is(path, circle), .ws2-chapter-jp, .ws2-chapter-en, .ws2-chapter-sub { animation: none !important; }
+  .ws2-chapter-draft :is(path, circle) { stroke-dashoffset: 0; }
+  .ws2-chapter-en, .ws2-chapter-sub { opacity: 1; }
+}
 .ws2-matrix {
   position: absolute; left: 0; right: 0; top: var(--ws-head); bottom: 0; z-index: 0; pointer-events: none;
   background-image: radial-gradient(circle, rgba(var(--ws-accent-rgb), .55) .7px, transparent 1.1px);
@@ -850,6 +938,39 @@
 .ws2-wl-diagram .here .ring { fill: none; stroke: var(--ws-accent); animation: ws2-ping 2.2s ease-out 1s infinite; }
 @keyframes ws2-ping { from { r: 4; opacity: 1; } to { r: 18; opacity: 0; } }
 @keyframes ws2-fade-in { to { opacity: 1; } }
+
+/* Arming a target: the meter retunes, the target line carries current toward its end, a reticle locks on, the shift key lights in the target's hue. */
+.ws2-wl-panel { --tgt: #e98a4f; --tgt-rgb: 233, 138, 79; }
+.ws2-wl-panel[data-target='sg'] { --tgt: #8fdcff; --tgt-rgb: 143, 220, 255; }
+.ws2-wl-hero .tubes { display: inline-flex; }
+.nixie-tube.tuning .nx-lit { opacity: .55 !important; animation: none !important; filter: drop-shadow(0 0 2px rgba(255, 110, 20, .7)); }
+.nixie-tube.tuning .nx-ghost path { stroke: rgba(255, 196, 150, .16); }
+.ws2-wl-hero .meta small, .ws2-wl-hero .meta b { transition: color .2s; }
+.ws2-wl-panel.armed .ws2-wl-hero .meta small { color: var(--tgt); }
+.ws2-wl-panel.armed .ws2-wl-hero .meta b { color: #fff; text-shadow: 0 0 12px rgba(var(--tgt-rgb), .55); }
+.ws2-wl-hero .meta .from { font-family: var(--ws-mono); font-size: 10px; letter-spacing: .14em; color: var(--ws-ink-3); animation: ws2-from-in .3s ease both; }
+@keyframes ws2-from-in { from { opacity: 0; transform: translateX(-6px); } }
+/* Narrow panels have no room on the nowrap label line; the diagram's lit origin line already says where the shift starts. */
+.ws2-wl-panel { container-type: inline-size; }
+@container (max-width: 420px) { .ws2-wl-hero .meta .from { display: none; } }
+.ws2-wl-line .flow { stroke: var(--tgt); stroke-width: 2; stroke-linecap: round; stroke-dasharray: 3 14; opacity: 0; pointer-events: none; }
+.ws2-wl-line.sel:not(.cur) .flow { opacity: 1; filter: drop-shadow(0 0 3px rgba(var(--tgt-rgb), .9)); animation: ws2-flow .7s linear infinite; }
+.ws2-wl-line.sel:not(.cur) .main { stroke: rgba(var(--tgt-rgb), .7); }
+.ws2-wl-line.sel:not(.cur) text { fill: var(--tgt); }
+@keyframes ws2-flow { to { stroke-dashoffset: -17; } }
+.ws2-wl-diagram .aim { pointer-events: none; }
+.ws2-wl-diagram .aim-lock { fill: none; stroke: var(--tgt); stroke-width: 1.2; animation: ws2-aim .42s cubic-bezier(.2, .9, .25, 1.2) both; }
+.ws2-wl-diagram .aim-lock .brk { stroke-width: 1.6; animation: ws2-aim-spin 6s linear .42s infinite; }
+@keyframes ws2-aim { from { transform: scale(2.6) rotate(-60deg); opacity: 0; } 60% { opacity: 1; } to { transform: none; opacity: 1; } }
+@keyframes ws2-aim-spin { to { transform: rotate(360deg); } }
+.ws2-m-btn { position: relative; overflow: hidden; }
+.ws2-m-btn.armed { background: var(--tgt) !important; box-shadow: 0 0 22px rgba(var(--tgt-rgb), .35); }
+.ws2-m-btn.armed::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(100deg, transparent 30%, rgba(255, 255, 255, .75) 48%, transparent 62%);
+  transform: translateX(-110%); animation: ws2-sheen .55s cubic-bezier(.3, .6, .2, 1) .1s forwards;
+}
+@keyframes ws2-sheen { to { transform: translateX(110%); } }
 
 /* stage preview while the menu is open */
 .ws2-stage-preview {

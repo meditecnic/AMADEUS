@@ -6,8 +6,10 @@ import "./design-system/tokens.css";
 // Noto Serif CSS splits glyphs by unicode-range, so only the characters on screen are fetched.
 import "@fontsource/eb-garamond/latin-400.css";
 import "@fontsource/eb-garamond/latin-500.css";
+import "@fontsource/eb-garamond/latin-400-italic.css";
 import "@fontsource/noto-serif-sc/400.css";
 import "@fontsource/noto-serif-jp/400.css";
+import "@fontsource/noto-serif-jp/900.css";
 import "./App.css";
 import "./workstation/workstation.css";
 
