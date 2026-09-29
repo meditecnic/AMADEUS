@@ -1543,7 +1543,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" fill="none" stroke="currentColor" strokeWidth="1.2" /><path d="M6 2.5v11" stroke="currentColor" strokeWidth="1.2" /></svg>
         </button>
         <div className="ws2-wordmark" aria-label="AMADEUS"><DraftWord key={worldline} text="AMADEUS" step={90} /></div>
-        <span className="ws2-date"><span className="d">{dateLabel}</span><b>{dayLabel}</b></span>
+        <span className="ws2-date">
+          <svg className="ws2-date-ind" viewBox="0 0 30 6" width="30" height="6" aria-hidden="true">
+            <rect x=".5" y=".5" width="7" height="5" fill="none" stroke="currentColor" /><path d="M.5 .5l3.5 2.6L7.5 .5" fill="none" stroke="currentColor" />
+            <rect x="11" y="1" width="7" height="4" fill="none" stroke="currentColor" /><rect x="12.5" y="2.2" width="4" height="1.6" fill="currentColor" /><rect x="18" y="2.2" width="1" height="1.6" fill="currentColor" />
+            <path d="M23 6V4.5M25 6V3M27 6V1.5M29 6V0" stroke="currentColor" />
+          </svg>
+          <span className="d">{dateLabel}</span><b>({dayLabel})</b>
+        </span>
         <span className="ws2-title">{activeConversation?.title ? <span className="t">{activeConversation.title}</span> : null}</span>
 
         <div className="ws2-top-right">

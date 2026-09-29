@@ -47,43 +47,47 @@
   }
 }
 
+/* SG: the original's grey-white drafting UI — graphite, paper white, hairlines; colour is left to her and the art.
+ * Cyan and pink appear only as small inlays (the approved Memory key), never as fills. */
 .ws2[data-wl='sg'] {
-  --ws-bg: #07090c;
-  --ws-ink: #e8edf2;
-  --ws-ink-2: rgba(232, 237, 242, .6);
-  --ws-ink-3: rgba(232, 237, 242, .36);
-  --ws-line: rgba(214, 226, 236, .11);
-  --ws-line-2: rgba(214, 226, 236, .22);
-  /* SG's single signal colour is the red of her necktie: paper-white structure, one red. */
-  --ws-accent: #e8453c;
-  --ws-accent-2: #f2f5f8;
-  --ws-accent-rgb: 232, 69, 60;
-  --ws-slab: #c9302a;
-  --ws-bad: #ff8a4c;
-  --ws-panel: rgba(9, 11, 14, .86);
-  --ws-user-bg: rgba(232, 69, 60, .06);
-  --ws-light: radial-gradient(900px 780px at 84% 30%, rgba(186, 222, 255, .13), transparent 62%),
-              radial-gradient(520px 420px at 76% 88%, rgba(143, 220, 255, .05), transparent 70%),
-              linear-gradient(180deg, #0a0e13 0%, #06080a 100%);
-  --ws-rim: drop-shadow(0 0 1px rgba(240, 244, 248, .4));
+  --ws-bg: #0a0b0d;
+  --ws-ink: #ecebe7;
+  --ws-ink-2: rgba(236, 235, 231, .6);
+  --ws-ink-3: rgba(236, 235, 231, .36);
+  --ws-line: rgba(222, 224, 228, .11);
+  --ws-line-2: rgba(222, 224, 228, .22);
+  --ws-accent: #8fdcff;
+  --ws-accent-2: #ff9cc3;
+  --ws-accent-rgb: 143, 220, 255;
+  --ws-panel: rgba(10, 11, 13, .88);
+  --ws-user-bg: rgba(236, 235, 231, .04);
+  /* Her afterimage from the neighbouring worldline: a pale, hard offset copy. */
+  --ws-slab: rgba(214, 222, 230, .085);
+  --ws-slab-ink: rgba(236, 235, 231, .62);
+  --ws-light: radial-gradient(900px 780px at 84% 30%, rgba(214, 222, 230, .1), transparent 62%),
+              radial-gradient(520px 420px at 76% 88%, rgba(143, 220, 255, .035), transparent 70%),
+              linear-gradient(180deg, #0c0d10 0%, #08090a 100%);
+  --ws-rim: drop-shadow(0 0 1px rgba(240, 240, 236, .4));
 }
+/* β: STEINS;GATE 0's Amadeus — a cold slate window with rust-copper hardware. Body text stays neutral. */
 .ws2[data-wl='beta'] {
-  --ws-bg: #0b0706;
-  --ws-ink: #f2e6d9;
-  --ws-ink-2: rgba(242, 230, 217, .58);
-  --ws-ink-3: rgba(242, 230, 217, .34);
-  --ws-line: rgba(255, 176, 104, .13);
-  --ws-line-2: rgba(255, 176, 104, .24);
-  --ws-accent: #ffb25a;
-  --ws-accent-2: #e2643a;
-  --ws-accent-rgb: 255, 178, 90;
-  --ws-panel: rgba(14, 9, 7, .84);
-  --ws-user-bg: rgba(255, 178, 90, .07);
-  --ws-slab: #b8561f;
-  --ws-light: radial-gradient(860px 620px at 82% 104%, rgba(255, 138, 58, .17), transparent 62%),
-              radial-gradient(700px 520px at 12% -10%, rgba(130, 42, 20, .22), transparent 70%),
-              linear-gradient(180deg, #0f0a08 0%, #070404 100%);
-  --ws-rim: drop-shadow(0 0 1px rgba(255, 210, 160, .4));
+  --ws-bg: #0b0b0c;
+  --ws-ink: #ede6dd;
+  --ws-ink-2: rgba(237, 230, 221, .58);
+  --ws-ink-3: rgba(237, 230, 221, .34);
+  --ws-line: rgba(214, 190, 166, .12);
+  --ws-line-2: rgba(214, 190, 166, .23);
+  --ws-accent: #e98a4f;
+  --ws-accent-2: #c9a063;
+  --ws-accent-rgb: 233, 138, 79;
+  --ws-panel: rgba(12, 12, 13, .88);
+  --ws-user-bg: rgba(233, 138, 79, .06);
+  --ws-slab: rgba(201, 110, 58, .16);
+  --ws-slab-ink: #c9713f;
+  --ws-light: radial-gradient(860px 620px at 82% 104%, rgba(233, 128, 62, .13), transparent 62%),
+              radial-gradient(760px 560px at 10% -12%, rgba(84, 100, 116, .16), transparent 70%),
+              linear-gradient(180deg, #0e0e10 0%, #070707 100%);
+  --ws-rim: drop-shadow(0 0 1px rgba(255, 214, 176, .38));
 }
 
 .ws2 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
@@ -111,14 +115,20 @@
 .ws2-icon-btn:hover, .ws2-icon-btn.is-active { color: var(--ws-ink); background: rgba(255, 255, 255, .05); }
 .ws2-wordmark { font-family: var(--ws-serif); font-size: 21px; letter-spacing: .22em; white-space: nowrap; line-height: 1; padding-top: 2px; }
 .ws2[data-wl='beta'] .ws2-wordmark .draft { --draft-ink: #ffcf96; }
-/* Calendar as display type (the P3R corner date): big numerals, the weekday on a small tilted blade. */
-.ws2-date { position: relative; display: inline-flex; align-items: flex-end; gap: 6px; flex: none; height: 36px; padding: 0 4px; white-space: nowrap; }
-.ws2-date .d { font-family: var(--ws-serif); font-size: 30px; line-height: .9; letter-spacing: .01em; color: var(--ws-ink); font-variant-numeric: lining-nums; }
-.ws2-date b {
-  align-self: flex-start; margin-top: 1px; padding: 2px 7px 2px 6px; font-family: var(--ws-mono); font-weight: 600; font-size: 9.5px; letter-spacing: .14em; line-height: 1.2;
-  color: var(--ws-blade-ink); background: var(--ws-accent); transform: rotate(-6deg) skewX(-12deg);
+/* The original's corner date: a phone LCD plate, "7/28 (WED)", with the handset's tiny mail / battery / signal glyphs. */
+.ws2-date {
+  position: relative; display: inline-flex; align-items: baseline; gap: 5px; flex: none; height: 34px; padding: 9px 12px 0 11px; box-sizing: border-box; white-space: nowrap;
+  background: linear-gradient(180deg, rgba(236, 235, 231, .1), rgba(236, 235, 231, .04)); box-shadow: inset 0 0 0 1px var(--ws-line-2), inset 0 1px 0 rgba(255, 255, 255, .08);
 }
-.ws2[data-wl='sg'] .ws2-date b { color: #fff; }
+.ws2-date-ind { position: absolute; top: 3px; right: 6px; color: var(--ws-ink-3); }
+.ws2-date .d { font-family: var(--ws-mono); font-weight: 300; font-size: 21px; line-height: 1; letter-spacing: .06em; color: var(--ws-ink); font-variant-numeric: tabular-nums; }
+.ws2-date b { font-family: var(--ws-mono); font-weight: 400; font-size: 9.5px; letter-spacing: .12em; color: var(--ws-ink-2); }
+/* β: the same plate on 0's handset — copper-edged, chamfered like its hardware. */
+.ws2[data-wl='beta'] .ws2-date {
+  background: linear-gradient(180deg, rgba(233, 138, 79, .1), rgba(233, 138, 79, .03)); box-shadow: inset 0 0 0 1px rgba(var(--ws-accent-rgb), .34);
+  clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+}
+.ws2[data-wl='beta'] .ws2-date-ind { color: rgba(var(--ws-accent-rgb), .6); }
 .ws2-title { min-width: 0; overflow: hidden; white-space: nowrap; font-family: var(--ws-serif-cjk); font-size: 14px; letter-spacing: .08em; color: var(--ws-ink-2); padding-left: 18px; border-left: 1px solid var(--ws-line); }
 .ws2-title .t { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
 .ws2-title .t::before { content: '「'; color: var(--ws-ink-3); }
@@ -155,13 +165,13 @@
 .ws2-online.is-sync { color: #e8b04a; }
 .ws2-online.is-sync .ws2-online-dot { animation: ws2-blink 1s steps(2) infinite; }
 @keyframes ws2-blink { 50% { opacity: .25; } }
-/* System key: a paper-white blade, the one solid object in the header. */
+/* System key: the title menu's plate — SG an off-white slab with a short cyan tick, β a copper hex plate. */
 .ws2-sys-btn {
-  white-space: nowrap; display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 16px 0 14px;
+  white-space: nowrap; display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 14px 0 16px;
   font-family: var(--ws-serif-cjk); font-size: 14px; letter-spacing: .24em; color: var(--ws-blade-ink) !important; background: var(--ws-blade) !important;
-  clip-path: polygon(0 0, 100% 0, calc(100% - 9px) 100%, 0 100%); transition: filter .15s, transform .15s;
+  box-shadow: inset 3px 0 0 var(--ws-tick); clip-path: var(--ws-plate-cut); transition: filter .15s;
 }
-.ws2-sys-btn:hover { filter: brightness(1.12); transform: translateX(-1px); }
+.ws2-sys-btn:hover { filter: brightness(1.1); }
 
 /* Header carries no sound key: BGM/SFX live in the system menu, her voice lives on the stage (VoiceScope). */
 
@@ -431,19 +441,21 @@
 .ws2-line header { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
 .ws2-who { display: inline-flex; align-items: baseline; gap: 8px; font-family: var(--ws-display); font-size: 10.5px; letter-spacing: .3em; color: var(--ws-accent); }
 .ws2-who-sub { font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .12em; color: var(--ws-ink-3); }
-/* Her lines are numbered entries of the observation log; the name rides a red blade. */
+/* Her lines are numbered entries of the observation log. The name hangs between hairlines like the original's
+ * "—— Mayuri ——" caption; β sets it in 0's copper on a hex plate. */
 .ws2-line-kurisu { counter-increment: ws2-log; }
 .ws2-line-kurisu header::before {
-  content: 'LOG.' counter(ws2-log, decimal-leading-zero); order: 2; font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .16em; color: var(--ws-ink-3);
+  content: 'LOG.' counter(ws2-log, decimal-leading-zero); order: 3; font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .16em; color: var(--ws-ink-3);
 }
-.ws2-line-kurisu header::after { content: ''; order: 3; flex: 1; max-width: 120px; height: 1px; background: linear-gradient(90deg, var(--ws-line-2), transparent); }
-.ws2-line-kurisu .ws2-who { order: 1; align-items: center; gap: 0; }
+.ws2-line-kurisu header::after { content: ''; order: 2; flex: 1; max-width: 260px; height: 1px; background: linear-gradient(90deg, var(--ws-line-2), var(--ws-line) 70%, transparent); }
+.ws2-line-kurisu .ws2-who { order: 1; align-items: center; gap: 0; padding-left: 26px; background: linear-gradient(var(--ws-line-2), var(--ws-line-2)) left center / 18px 1px no-repeat; }
 .ws2-line-kurisu .ws2-who > [data-testid='speaker-assistant-primary'] {
-  padding: 3px 12px 2px 9px; font-weight: 600; font-size: 11px; letter-spacing: .28em; line-height: 1.3; color: #fff; background: var(--ws-accent);
-  clip-path: polygon(0 0, 100% 0, calc(100% - 7px) 100%, 0 100%);
+  font-family: var(--ws-serif); font-weight: 500; font-size: 13.5px; letter-spacing: .3em; line-height: 1.3; color: var(--ws-ink);
 }
-.ws2[data-wl='beta'] .ws2-line-kurisu .ws2-who > [data-testid='speaker-assistant-primary'] { color: var(--ws-blade-ink); }
-.ws2-line-kurisu .ws2-who-sub { margin-left: 8px; font-family: var(--ws-serif); font-style: italic; font-size: 12px; letter-spacing: .06em; color: var(--ws-ink-3); }
+.ws2[data-wl='beta'] .ws2-line-kurisu .ws2-who > [data-testid='speaker-assistant-primary'] {
+  padding: 2px 14px 1px 16px; font-size: 12.5px; color: var(--ws-accent); background: rgba(var(--ws-accent-rgb), .13); clip-path: var(--ws-plate-cut);
+}
+.ws2-line-kurisu .ws2-who-sub { margin-left: 10px; font-family: var(--ws-serif); font-style: italic; font-size: 12px; letter-spacing: .06em; color: var(--ws-ink-3); }
 .ws2-line-user { display: flex; flex-direction: column; align-items: flex-end; margin-left: auto; max-width: 78%; }
 .ws2-line-user .ws2-who { color: var(--ws-ink-3); font-family: var(--ws-sans); letter-spacing: .1em; font-size: 11.5px; }
 /* Your lines are not chat bubbles: right-set text hung from a thin rule, like entries you wrote into the log. */
@@ -457,7 +469,7 @@
 .ws2 .bilingual-message { background: none; border: 0; padding: 0; }
 .ws2 .bilingual-message .chinese-main { margin: 0; font-family: var(--ws-read); font-synthesis: none; font-size: 17px; line-height: 1.85; color: var(--ws-ink); letter-spacing: .01em; font-weight: 400; text-shadow: none; }
 /* Her original words are set in Mincho: the Chinese is the reading, the Japanese is the record. */
-.ws2 .bilingual-message .japanese-sub { margin: 12px 0 0; padding-left: 14px; border-left: 1px solid rgba(var(--ws-accent-rgb), .45); font-family: var(--ws-serif-jp); font-size: 14px; line-height: 1.85; color: var(--ws-ink-2); letter-spacing: .03em; }
+.ws2 .bilingual-message .japanese-sub { margin: 12px 0 0; padding-left: 14px; border-left: 1px solid var(--ws-line-2); font-family: var(--ws-serif-jp); font-size: 14px; line-height: 1.85; color: var(--ws-ink-2); letter-spacing: .03em; }
 .ws2 .bilingual-message .japanese-raw { margin: 0; font-family: var(--ws-serif-jp); font-size: 16px; line-height: 1.85; color: var(--ws-ink); }
 /* tokens.css gives every [lang='ja'] the UI sans; the record keeps Mincho down to each sentence span. */
 .ws2 .bilingual-message :is(.japanese-sub, .japanese-raw) :is([lang='ja'], .s) { font-family: var(--ws-serif-jp); }
@@ -528,13 +540,12 @@
 .ws2-composer-row { display: flex; align-items: center; gap: 6px; padding: 4px 8px 8px 10px; min-width: 0; }
 .ws2 .ws2-composer-row > .ws2-model { margin-right: auto; }
 .ws2-send {
-  flex: none; height: 32px; min-width: 84px; padding: 0 22px 0 18px; border-radius: 0; font-family: var(--ws-serif-cjk); font-size: 14px; letter-spacing: .3em; font-weight: 600;
-  color: #fff !important; background: var(--ws-accent) !important;
-  clip-path: polygon(10px 0, 100% 0, calc(100% - 10px) 100%, 0 100%); transition: filter .15s, transform .15s;
+  flex: none; height: 32px; min-width: 84px; padding: 0 20px 0 22px; border-radius: 0; font-family: var(--ws-serif-cjk); font-size: 14px; letter-spacing: .3em; font-weight: 600;
+  color: var(--ws-blade-ink) !important; background: var(--ws-blade) !important;
+  box-shadow: inset 3px 0 0 var(--ws-tick); clip-path: var(--ws-plate-cut); transition: filter .15s;
 }
-.ws2[data-wl='beta'] .ws2-send { color: var(--ws-blade-ink) !important; }
-.ws2-send:hover:not(:disabled) { filter: brightness(1.1); transform: translateX(2px); }
-.ws2-send:disabled { color: var(--ws-ink-3) !important; background: rgba(255, 255, 255, .07) !important; }
+.ws2-send:hover:not(:disabled) { filter: brightness(1.1); }
+.ws2-send:disabled { color: var(--ws-ink-3) !important; background: rgba(255, 255, 255, .07) !important; box-shadow: none; }
 .ws2-interrupt { flex: none; height: 30px; padding: 0 12px; border-radius: 8px; font-size: 12px; color: var(--ws-ink); box-shadow: inset 0 0 0 1px var(--ws-line-2); }
 
 .ws2 .ws2-model { min-width: 0; margin: 0; padding: 0; border: 0; background: none; }
@@ -586,8 +597,8 @@
   color: transparent; -webkit-text-stroke: 1px rgba(242, 245, 248, .16);
   mask-image: linear-gradient(180deg, #000 62%, transparent 98%);
 }
-/* Only 紅 is inked, in the same red as the silhouette behind her. */
-.ws2-giant-name em { font-style: normal; color: var(--ws-slab); -webkit-text-stroke: 0; opacity: .9; }
+/* Only 紅 is inked. */
+.ws2-giant-name em { font-style: normal; color: var(--ws-slab-ink); -webkit-text-stroke: 0; opacity: .5; }
 .ws2-matrix {
   position: absolute; left: 0; right: 0; top: var(--ws-head); bottom: 0; z-index: 0; pointer-events: none;
   background-image: radial-gradient(circle, rgba(var(--ws-accent-rgb), .55) .7px, transparent 1.1px);
@@ -605,7 +616,7 @@
 .ws2 .avatar-stage .avatar-sprite-wrapper {
   position: absolute; left: 8px; bottom: 0; top: auto; right: auto; transform: none; margin: 0;
   height: min(calc(100% - var(--ws-head)), 930px); width: auto; max-width: none; max-height: none; aspect-ratio: 454 / 810;
-  /* Atlus-style offset silhouette: a hard, solid copy of her in the signal colour, not a glow. */
+  /* A hard offset copy of her, not a glow: the observer's afterimage of the neighbouring line. */
   filter: var(--ws-rim) drop-shadow(-18px -10px 0 var(--ws-slab));
   transform-origin: 50% 100%;
 }
@@ -641,11 +652,11 @@
 .ws2-scope-stop i { width: 8px; height: 8px; background: var(--ws-accent); box-shadow: 0 0 6px var(--ws-accent); }
 .ws2-scope-stop:hover { background: rgba(var(--ws-accent-rgb), .12); }
 .ws2 .avatar-stage::before { content: ''; position: absolute; right: 0; bottom: 0; width: 70%; height: 34%; z-index: 2; pointer-events: none; background: radial-gradient(120% 100% at 100% 100%, rgba(0, 0, 0, .55), transparent 70%); }
-/* Nameplate: a paper blade cut on the diagonal, the system line hanging under it. */
+/* Nameplate: the same plate as the System key, the system line hanging under it. */
 .ws2-name-tag { text-shadow: none; }
 .ws2-name-tag span {
   padding: 5px 16px 4px 20px; font-family: var(--ws-serif); font-size: 17px; font-weight: 500; letter-spacing: .22em; line-height: 1.1;
-  color: var(--ws-blade-ink); background: var(--ws-blade); clip-path: polygon(10px 0, 100% 0, 100% 100%, 0 100%);
+  color: var(--ws-blade-ink); background: var(--ws-blade); box-shadow: inset 3px 0 0 var(--ws-tick); clip-path: var(--ws-plate-cut);
 }
 .ws2-name-tag small { padding-right: 2px; font-family: var(--ws-mono); font-size: 9px; letter-spacing: .3em; color: var(--ws-ink-2); text-shadow: 0 1px 2px rgba(0, 0, 0, .9); }
 .ws2-presence { display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; letter-spacing: .16em; color: var(--ws-ink-2); }
@@ -683,8 +694,8 @@
 .ws2 .avatar-stage .avatar-sprite-wrapper { transition: filter .3s ease; }
 .ws2.menu-open .avatar-stage .avatar-sprite-wrapper { filter: var(--ws-rim) drop-shadow(-18px -10px 0 var(--ws-slab)) brightness(.7) saturate(.85); }
 .ws2.menu-open .ws2-name-tag, .ws2.menu-open .ws2-presence { opacity: 0; }
-.ws2-sys-btn.on { letter-spacing: .12em; color: #fff !important; background: var(--ws-accent) !important; }
-.ws2[data-wl='beta'] .ws2-sys-btn.on { color: var(--ws-blade-ink) !important; }
+.ws2-sys-btn.on { letter-spacing: .12em; color: var(--ws-ink) !important; background: transparent !important; box-shadow: inset 0 0 0 1px var(--ws-line-2), inset 3px 0 0 var(--ws-tick); }
+.ws2[data-wl='beta'] .ws2-sys-btn.on { background: rgba(var(--ws-accent-rgb), .14) !important; box-shadow: none; }
 .ws2-sys-btn kbd { font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .06em; padding: 1px 5px; border: 1px solid currentColor; opacity: .7; }
 
 .ws2-sysmenu {
@@ -725,7 +736,7 @@
 .ws2-sys-item .pad { width: 9px; height: 9px; flex: none; border-radius: 50%; border: 1px solid var(--ws-ink-3); transition: all .15s; }
 .ws2-sys-item .lbl { display: flex; flex-direction: column; margin-left: 14px; line-height: 1.1; isolation: isolate; }
 .ws2-sys-item .zh { position: relative; font-family: var(--ws-serif-cjk); font-size: 24px; letter-spacing: .16em; white-space: nowrap; transition: letter-spacing .2s ease, color .15s; }
-.ws2-sys-item .zh::before { content: ''; position: absolute; z-index: -1; left: -.34em; right: -.5em; top: .02em; bottom: .02em; background: var(--ws-blade); transform: skewX(-16deg) scaleX(0); transform-origin: left; transition: transform .16s cubic-bezier(.3, .7, .2, 1); }
+.ws2-sys-item .zh::before { content: ''; position: absolute; z-index: -1; left: -.4em; right: -.5em; top: .02em; bottom: .02em; background: var(--ws-blade); box-shadow: inset 4px 0 0 var(--ws-tick); clip-path: var(--ws-plate-cut); transform: scaleX(0); transform-origin: left; transition: transform .16s cubic-bezier(.3, .7, .2, 1); }
 .ws2-sys-item .en { font-family: var(--ws-display); font-size: 9.5px; letter-spacing: .36em; color: var(--ws-ink-3); margin-top: 6px; }
 .ws2-sys-item .lead { flex: 1; align-self: center; height: 1px; margin-left: 18px; position: relative; overflow: hidden; opacity: 0; transition: opacity .15s; }
 .ws2-sys-item:hover { color: var(--ws-ink); }
@@ -733,7 +744,7 @@
 .ws2-sys-item:hover .zh { letter-spacing: .2em; }
 .ws2-sys-item.on { color: var(--ws-ink); }
 .ws2-sys-item.on .zh { color: var(--ws-blade-ink); }
-.ws2-sys-item.on .zh::before { transform: skewX(-16deg) scaleX(1); }
+.ws2-sys-item.on .zh::before { transform: scaleX(1); }
 .ws2-sys-item.on .en { color: var(--ws-ink); }
 .ws2-sys-item.on .stub { background: var(--ws-accent); }
 .ws2-sys-item.on .pad { background: var(--ws-accent); border-color: var(--ws-accent); box-shadow: 0 0 0 3px rgba(var(--ws-accent-rgb), .15), 0 0 12px rgba(var(--ws-accent-rgb), .7); }
@@ -743,8 +754,12 @@
 .ws2-sys-item.back { height: 48px; margin-top: 16px; }
 .ws2-sys-item.back .zh { font-size: 14px; letter-spacing: .24em; }
 .ws2-sys-item.back .pad { border-radius: 0; width: 7px; height: 7px; margin: 0 1px; transform: rotate(45deg); }
-.ws2 { --ws-blade: #eef3f7; --ws-blade-ink: #07090c; }
-.ws2[data-wl='beta'] { --ws-blade: #ffb25a; --ws-blade-ink: #140b06; }
+/* Plates: SG is a flat rectangle with a tick (original title menu); β has hex ends (0 / RE:BOOT nameplates). */
+.ws2 { --ws-blade: #e4e3de; --ws-blade-ink: #0a0b0d; --ws-tick: var(--ws-accent); --ws-plate-cut: none; }
+.ws2[data-wl='beta'] {
+  --ws-blade: #d98550; --ws-blade-ink: #140b06; --ws-tick: transparent;
+  --ws-plate-cut: polygon(8px 0, calc(100% - 8px) 0, 100% 50%, calc(100% - 8px) 100%, 8px 100%, 0 50%);
+}
 
 .ws2-trace { position: absolute; color: var(--ws-ink-3); opacity: .6; pointer-events: none; }
 .ws2-trace path { fill: none; stroke: currentColor; stroke-width: 1; stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset .1s; }
