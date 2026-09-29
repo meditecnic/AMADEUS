@@ -67,13 +67,13 @@ export function ConnectionCheckPanel({ providerName, modelId, state, onCheck, di
         <span className={`ws2-lamp ${status === 'ok' ? 'ok' : status === 'failed' ? 'bad' : status === 'checking' ? 'busy' : 'idle'}`} aria-hidden="true" />
         <div className="ws2-m-label">
           <b>
-            {providerName}<span className="ws2-check-model"> · {modelId || '未选择模型'}</span>
+            {providerName}<span className="ws2-check-model">{modelId || '未选择模型'}</span>
             {standing && <span className="ws2-check-standing">{standing}</span>}
           </b>
           <small role="status">
             {status === 'untested' && '所选模型尚未测试'}
             {status === 'checking' && '正在连接…'}
-            {state?.status === 'ok' && `已连接 · ${hhmm(state.at)} 测试通过`}
+            {state?.status === 'ok' && `已连接 · ${hhmm(state.at)} 通过`}
             {state?.status === 'failed' && `未通过 · ${chatCheckMessage(state.code)}`}
           </small>
         </div>

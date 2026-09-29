@@ -846,9 +846,9 @@ describe('SettingsModal UX contracts', () => {
 
     const input = screen.getByTestId('credential-input') as HTMLInputElement;
     expect(input.value).toBe('');
-    expect(input).toHaveAttribute('placeholder', '已连接 · 粘贴新密钥以更换');
-    expect(screen.getByTestId('credential-status')).toHaveTextContent('已连接');
-    expect(screen.getByTestId('credential-badge')).toHaveTextContent('已连接');
+    expect(input).toHaveAttribute('placeholder', '密钥已保存 · 粘贴新密钥以更换');
+    expect(screen.getByTestId('credential-status')).toHaveTextContent('密钥已保存');
+    expect(screen.getByTestId('credential-badge')).toHaveTextContent('已保存');
   });
 
   it('shows saving while the save request is pending and preserves a blank key', async () => {

@@ -664,7 +664,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     className={`credential-badge ${displayCredentialStatus.replace('_', '-')}`}
                     data-testid="credential-badge"
                   >
-                    {displayCredentialStatus === 'configured' && '已连接'}
+                    {displayCredentialStatus === 'configured' && '已保存'}
                     {displayCredentialStatus === 'not_configured' && '未配置'}
                     {displayCredentialStatus === 'checking' && '检查中'}
                     {displayCredentialStatus === 'saving' && '保存中'}
@@ -680,7 +680,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   onChange={(e) => setLocalApiKey(e.target.value)}
                   className="salieri-input connections-secret-input"
                   data-testid="credential-input"
-                  placeholder={displayCredentialStatus === 'configured' ? '已连接 · 粘贴新密钥以更换' : '粘贴 API 密钥（仅本机存储）'}
+                  placeholder={displayCredentialStatus === 'configured' ? '密钥已保存 · 粘贴新密钥以更换' : '粘贴 API 密钥（仅本机存储）'}
                   autoComplete="new-password"
                   spellCheck={false}
                 />
@@ -690,7 +690,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   aria-live="polite"
                 >
                   {displayCredentialStatus === 'checking' && '正在读取凭据状态…'}
-                  {displayCredentialStatus === 'configured' && '已连接 · 不会在界面回显密钥'}
+                  {displayCredentialStatus === 'configured' && '密钥已保存 · 是否可用以上方连接测试为准'}
                   {displayCredentialStatus === 'not_configured' && '尚未配置 · 保存后不会在页面回显密钥'}
                   {displayCredentialStatus === 'saving' && '保存中…'}
                   {displayCredentialStatus === 'error' && '保存失败 · 请检查连接后重试'}
