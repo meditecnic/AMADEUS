@@ -199,7 +199,7 @@ def test_conversation_api_enforces_owner_worldline_and_provider(app_client):
     assert unknown_provider.status_code == 422
 
 
-def test_default_conversation_cannot_be_deleted(app_client):
+def test_deleting_last_default_conversation_stays_empty_after_reconnect(app_client):
     session_id = _session("default-delete")
     listed = app_client.get(
         "/api/conversations",
@@ -213,8 +213,23 @@ def test_default_conversation_cannot_be_deleted(app_client):
         params={"session_id": session_id, "worldline": "steins_gate"},
     )
 
-    assert response.status_code == 409
-    assert response.json()["detail"]["code"] == "default_conversation"
+    assert response.status_code == 204
+    assert app_client.get(
+        "/api/conversations",
+        params={"session_id": session_id, "worldline": "steins_gate"},
+    ).json() == []
+
+    with app_client.websocket_connect(f"/ws/chat?session_id={session_id}") as socket:
+        auth = {"type": "auth", "protocol_version": 2, "worldline": "steins_gate"}
+        socket.send_json(auth)
+        socket.send_json(auth)
+        assert socket.receive_json()["type"] == "session.ready"
+        assert "已完成认证" in socket.receive_json()["message"]
+
+    assert app_client.get(
+        "/api/conversations",
+        params={"session_id": session_id, "worldline": "steins_gate"},
+    ).json() == []
 
 
 def test_conversation_forget_defaults_to_messages_only(app_client):

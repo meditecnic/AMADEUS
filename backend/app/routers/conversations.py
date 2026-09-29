@@ -11,7 +11,6 @@ from app.db import normalize_worldline
 from app.db import normalize_identity_mode
 from app.services.conversations import (
     ConversationNotFound,
-    DefaultConversationError,
     IdentityModeImmutableError,
     conversation_service,
 )
@@ -24,9 +23,7 @@ router = APIRouter(prefix="/api/conversations", tags=["conversations"])
 
 @asynccontextmanager
 async def _erasure_runtime(conversation_id: str, session_id: str, worldline: str, *, deleting: bool = False):
-    record = await conversation_service.require_owned(conversation_id, session_id, worldline)
-    if deleting and record['is_default']:
-        raise DefaultConversationError('default conversation cannot be deleted')
+    await conversation_service.require_owned(conversation_id, session_id, worldline)
     from app.routers.chat_ws import sessions
     from app.services.session_manager import cancel_inflight
     session = sessions.get(session_id)
@@ -46,6 +43,8 @@ async def _erasure_runtime(conversation_id: str, session_id: str, worldline: str
         session.history = []
         session.memory_summary = ''
         yield
+        if deleting and session.worldline == worldline and session.conversation_id == conversation_id:
+            await session.load_from_db()
         if not deleting and session.worldline == worldline and session.conversation_id == conversation_id:
             session.content_epoch = await models.get_conversation_content_epoch(
                 session_id, worldline=worldline, conversation_id=conversation_id,
@@ -110,7 +109,7 @@ async def list_conversations(
     )
     selected = await conversation_service.get_selected(session_id, wl)
     for row in rows:
-        row["is_selected"] = row["id"] == selected["id"]
+        row["is_selected"] = selected is not None and row["id"] == selected["id"]
     return rows
 
 
@@ -206,11 +205,6 @@ async def delete_conversation(
             await conversation_service.delete(conversation_id, session_id, normalize_worldline(worldline))
     except ConversationNotFound as exc:
         raise _not_found(exc) from exc
-    except DefaultConversationError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail={"code": "default_conversation"},
-        ) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

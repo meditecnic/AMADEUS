@@ -197,6 +197,22 @@ async def test_default_conversation_preserves_legacy_session_api(isolated_store)
 
 
 @pytest.mark.asyncio
+async def test_deleting_selected_conversation_selects_its_list_neighbor(isolated_store):
+    session_id = "delete-selected-neighbor"
+    default = await conversation_service.get_selected(session_id, "steins_gate")
+    selected = await conversation_service.create_and_select(session_id, "steins_gate")
+    pinned = await conversation_service.create(session_id, "steins_gate")
+    await conversation_service.update(
+        str(pinned["id"]), session_id, "steins_gate", {"is_pinned": True}
+    )
+
+    await conversation_service.delete(str(selected["id"]), session_id, "steins_gate")
+
+    current = await conversation_service.get_selected(session_id, "steins_gate")
+    assert current["id"] == default["id"]
+
+
+@pytest.mark.asyncio
 async def test_assistant_translation_roundtrips_with_conversation_history(isolated_store):
     conversation = await conversation_service.create("okabe", "steins_gate", title="Bilingual")
     await models.save_message(

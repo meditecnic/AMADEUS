@@ -204,6 +204,9 @@ class SessionState:
         from app.services.conversations import conversation_service
 
         selected = await conversation_service.get_selected(self.session_id, self.worldline)
+        if selected is None:
+            await self.enter_draft()
+            return
         self.conversation_id = str(selected["id"])
         self.conversation_mode = "history"
         self.provider_id = str(selected.get("provider_id") or "deepseek")
@@ -239,8 +242,8 @@ class SessionState:
         from app.services.conversations import conversation_service
 
         selected = await conversation_service.get_selected(self.session_id, self.worldline)
-        self.provider_id = str(selected.get("provider_id") or "deepseek")
-        self.model = str(selected.get("model_id") or self.model)
+        self.provider_id = str((selected or {}).get("provider_id") or self.provider_id)
+        self.model = str((selected or {}).get("model_id") or self.model)
         self.api_key = credential_store.get(self.provider_id)
         self.conversation_id = None
         self.conversation_mode = "draft"
@@ -251,6 +254,7 @@ class SessionState:
         self.identity_acknowledged = False
         self._history = []
         self.memory_summary = ""
+        self.content_epoch = 0
         from app.services.soul_engine import soul_engine
         await soul_engine.restore_emotion(
             self.session_id,

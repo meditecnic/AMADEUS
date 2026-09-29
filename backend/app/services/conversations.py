@@ -23,10 +23,6 @@ class ConversationNotFound(LookupError):
     pass
 
 
-class DefaultConversationError(ValueError):
-    pass
-
-
 class IdentityModeImmutableError(ValueError):
     """identity_mode cannot be changed after conversation creation (Q21)."""
 
@@ -132,6 +128,19 @@ class ConversationService:
                 )
             ).fetchone()
             if row is None:
+                control = await get_db("steins_gate", "control")
+                try:
+                    prior_selection = await (
+                        await control.execute(
+                            """SELECT 1 FROM session_conversation_selections
+                               WHERE session_id=? AND worldline=?""",
+                            (session_id, wl),
+                        )
+                    ).fetchone()
+                finally:
+                    await control.close()
+                if prior_selection is not None:
+                    raise ConversationNotFound("default conversation was removed")
                 conversation_id = default_conversation_id(session_id, wl)
                 await db.execute(
                     """INSERT OR IGNORE INTO conversations(
@@ -211,7 +220,7 @@ class ConversationService:
         query: str | None = None,
     ) -> list[dict[str, object]]:
         wl = normalize_worldline(worldline)
-        await self.get_or_create_default(session_id, wl)
+        await self.get_selected(session_id, wl)
         db = await get_db(wl, "history")
         try:
             where = "session_id=?"
@@ -379,12 +388,28 @@ class ConversationService:
     ) -> None:
         wl = normalize_worldline(worldline)
         record = await self.require_owned(conversation_id, session_id, wl)
-        if record["is_default"]:
-            raise DefaultConversationError("default conversation cannot be deleted")
+        selected = await self.get_selected(session_id, wl)
+        neighbor_id = None
+        if selected is not None and selected["id"] == conversation_id:
+            rows = await self.list_for_session(session_id, wl)
+            ids = [str(row["id"]) for row in rows]
+            if conversation_id in ids:
+                index = ids.index(conversation_id)
+                neighbor_id = (
+                    ids[index + 1] if index + 1 < len(ids)
+                    else ids[index - 1] if index > 0 else None
+                )
         from app.services.conversation_erasure import request_erasure
         await request_erasure(session_id=session_id, identity_mode=str(record['identity_mode']),
                               worldline=wl, conversation_id=conversation_id,
                               action='delete', forget_long_term=False)
+        if neighbor_id is not None:
+            try:
+                await self.select(session_id, wl, neighbor_id)
+                return
+            except ConversationNotFound:
+                pass
+        await self.get_selected(session_id, wl)
 
     async def forget(
         self,
@@ -425,7 +450,7 @@ class ConversationService:
             await db.close()
         return record
 
-    async def get_selected(self, session_id: str, worldline: str) -> dict[str, object]:
+    async def get_selected(self, session_id: str, worldline: str) -> dict[str, object] | None:
         wl = normalize_worldline(worldline)
         db = await get_db("steins_gate", "control")
         try:
@@ -439,10 +464,37 @@ class ConversationService:
         finally:
             await db.close()
         if row is not None:
+            if row["conversation_id"]:
+                try:
+                    return await self.require_owned(row["conversation_id"], session_id, wl)
+                except ConversationNotFound:
+                    pass
+            history = await get_db(wl, "history")
             try:
-                return await self.require_owned(row["conversation_id"], session_id, wl)
-            except ConversationNotFound:
-                pass
+                replacement = await (
+                    await history.execute(
+                        """SELECT * FROM conversations WHERE session_id=?
+                           ORDER BY is_pinned DESC, last_active_at DESC, created_at DESC
+                           LIMIT 1""",
+                        (session_id,),
+                    )
+                ).fetchone()
+            finally:
+                await history.close()
+            if replacement is not None:
+                return await self.select(session_id, wl, str(replacement["id"]))
+            control = await get_db("steins_gate", "control")
+            try:
+                await control.execute(
+                    """UPDATE session_conversation_selections
+                       SET conversation_id='',updated_at_utc=?
+                       WHERE session_id=? AND worldline=?""",
+                    (_utc_now(), session_id, wl),
+                )
+                await control.commit()
+            finally:
+                await control.close()
+            return None
         default = await self.get_or_create_default(session_id, wl)
         return await self.select(session_id, wl, str(default["id"]))
 
