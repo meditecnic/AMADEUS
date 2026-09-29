@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import aclosing
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, SecretStr
 
@@ -14,7 +17,12 @@ from app.db import (
     soft_disable_provider_configuration,
 )
 from app.services.credentials import credential_store
-from app.services.model_catalog import is_user_custom_provider, model_catalog
+from app.services.model_catalog import (
+    ModelUnavailableError,
+    is_user_custom_provider,
+    model_catalog,
+)
+from app.services.provider_adapters import ProviderRequestError
 from app.services.provider_registry import ProviderModelCache, ProviderTask
 from app.services.provider_runtime import (
     configure_custom_provider,
@@ -32,6 +40,10 @@ provider_model_cache = ProviderModelCache()
 
 class CredentialUpdate(BaseModel):
     api_key: SecretStr
+
+
+class ChatCheckRequest(BaseModel):
+    model_id: str = Field(min_length=1, max_length=200)
 
 
 class CustomProviderConfiguration(BaseModel):
@@ -538,3 +550,61 @@ async def test_provider(provider_id: str):
         "ok": True,
         "model_count": len(result.models),
     }
+
+
+@router.post("/{provider_id}/chat-check")
+async def check_selected_model_chat(provider_id: str, request: ChatCheckRequest):
+    model_id = request.model_id.strip()
+    if not model_id:
+        raise HTTPException(status_code=422, detail={"code": "model_id_required"})
+    try:
+        snapshot = provider_registry.snapshot(provider_id, model_id).require(
+            ProviderTask.CHAT
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail={"code": "provider_not_found"}) from exc
+    except ModelUnavailableError as exc:
+        raise HTTPException(status_code=409, detail={"code": "model_unavailable"}) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": "chat_unsupported"}) from exc
+
+    secret = credential_store.get(provider_id)
+    if snapshot.credential_required and not secret:
+        raise HTTPException(status_code=409, detail={"code": "credential_missing"})
+
+    answered = False
+    try:
+        stream = snapshot.adapter.get_chat_stream(
+            active_history=[{"role": "user", "content": "Reply OK."}],
+            api_key=secret,
+            model=model_id,
+            isolated=True,
+            max_output_tokens=512,
+        )
+        async with asyncio.timeout(20):
+            async with aclosing(stream):
+                async for chunk in stream:
+                    if str(chunk.get("content") or "").strip():
+                        answered = True
+                        break
+    except (TimeoutError, httpx.TimeoutException) as exc:
+        raise HTTPException(status_code=504, detail={"code": "chat_check_timeout"}) from exc
+    except ProviderRequestError as exc:
+        if exc.status_code in {401, 403}:
+            raise HTTPException(status_code=401, detail={"code": "credential_rejected"}) from exc
+        raise HTTPException(status_code=502, detail={"code": "provider_unavailable"}) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail={"code": "provider_unavailable"}) from exc
+
+    if not answered:
+        raise HTTPException(status_code=502, detail={"code": "empty_response"})
+    try:
+        current = provider_registry.snapshot(provider_id, model_id)
+        unchanged = current.adapter is snapshot.adapter and credential_store.get(
+            provider_id
+        ) == secret
+    except (KeyError, ModelUnavailableError):
+        unchanged = False
+    if not unchanged:
+        raise HTTPException(status_code=409, detail={"code": "configuration_changed"})
+    return {"provider_id": provider_id, "model_id": model_id, "ok": True}

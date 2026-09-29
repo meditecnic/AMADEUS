@@ -5,6 +5,7 @@ from app import config
 from app.services.llm_interface import LLMInterface, build_stream_messages
 from app.services.model_catalog import model_catalog
 from app.services.persona_bible import persona_bible
+from app.services.provider_adapters import ProviderRequestError
 
 
 class DeepSeekTranslationError(RuntimeError):
@@ -23,6 +24,7 @@ def build_chat_payload(
     tools: Optional[list],
     tool_choice,
     reasoning_effort: Optional[str],
+    max_output_tokens: Optional[int] = None,
 ) -> dict:
     """Build a DeepSeek request; never combine V4 thinking with tools.
 
@@ -38,6 +40,8 @@ def build_chat_payload(
         "stream": True,
         "temperature": temperature if temperature is not None else 0.7,
     }
+    if max_output_tokens is not None:
+        payload["max_tokens"] = max_output_tokens
 
     uses_thinking = model_catalog.uses_native_reasoning("deepseek", model)
     has_tools = tools is not None
@@ -147,6 +151,7 @@ class DeepSeekService(LLMInterface):
         model: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
         isolated: bool = False,
+        max_output_tokens: Optional[int] = None,
     ):
         """
         Assemble messages and yield chunks from DeepSeek Chat Completion API.
@@ -176,6 +181,7 @@ class DeepSeekService(LLMInterface):
             tools=tools,
             tool_choice=tool_choice,
             reasoning_effort=reasoning_effort,
+            max_output_tokens=max_output_tokens,
         )
         
         sys_content = messages[0]["content"] if messages else ""
@@ -190,8 +196,8 @@ class DeepSeekService(LLMInterface):
         async with httpx.AsyncClient(timeout=httpx.Timeout(connect=15.0, read=120.0, write=10.0, pool=5.0)) as client:
             async with client.stream("POST", f"{self.base_url}/chat/completions", json=payload, headers=headers) as response:
                 if response.status_code != 200:
-                    err_content = await response.aread()
-                    raise RuntimeError(f"DeepSeek API error ({response.status_code}): {err_content.decode('utf-8')}")
+                    await response.aread()
+                    raise ProviderRequestError("deepseek", response.status_code)
                 
                 async for line in response.aiter_lines():
                     if not line:

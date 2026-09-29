@@ -72,6 +72,7 @@ class OpenAICompatibleAdapter(LLMInterface):
         model: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
         isolated: bool = False,
+        max_output_tokens: Optional[int] = None,
     ):
         messages = build_stream_messages(
             self._message_builder,
@@ -86,6 +87,8 @@ class OpenAICompatibleAdapter(LLMInterface):
             "stream": True,
             "temperature": temperature,
         }
+        if max_output_tokens is not None:
+            payload["max_tokens"] = max_output_tokens
         if tools is not None:
             payload["tools"] = tools
             if tool_choice is not None:
@@ -345,6 +348,7 @@ class OpenAIResponsesAdapter(LLMInterface):
         model: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
         isolated: bool = False,
+        max_output_tokens: Optional[int] = None,
     ):
         messages = build_stream_messages(
             self._message_builder,
@@ -360,6 +364,8 @@ class OpenAIResponsesAdapter(LLMInterface):
             "input": inputs,
             "stream": True,
         }
+        if max_output_tokens is not None:
+            payload["max_output_tokens"] = max_output_tokens
         converted_tools = self._tools(tools)
         if converted_tools is not None:
             payload["tools"] = converted_tools
@@ -594,6 +600,7 @@ class GeminiAdapter(LLMInterface):
         model: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
         isolated: bool = False,
+        max_output_tokens: Optional[int] = None,
     ):
         messages = build_stream_messages(
             self._message_builder,
@@ -608,6 +615,8 @@ class GeminiAdapter(LLMInterface):
             "contents": contents,
             "generationConfig": {"temperature": temperature},
         }
+        if max_output_tokens is not None:
+            payload["generationConfig"]["maxOutputTokens"] = max_output_tokens
         if reasoning_effort:
             payload["generationConfig"]["thinkingConfig"] = {
                 "thinkingLevel": reasoning_effort

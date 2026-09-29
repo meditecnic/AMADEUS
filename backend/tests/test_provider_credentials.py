@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock
 
+import httpx
+
 from app.services.credentials import InMemoryCredentialStore, scrub_dotenv_key
 
 
@@ -292,3 +294,102 @@ def test_provider_models_require_a_local_credential(
 
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "credential_missing"
+
+
+def test_selected_model_chat_check_uses_bounded_isolated_request(app_client, monkeypatch):
+    from app.routers import providers
+    from app.services.provider_adapters import OpenAICompatibleAdapter
+    from app.services.provider_registry import (
+        ProviderCapabilities,
+        ProviderSnapshot,
+        ProviderTask,
+    )
+
+    requests = []
+
+    def respond(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            text='data: {"choices":[{"delta":{"content":"OK"}}]}\n\ndata: [DONE]\n\n',
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        provider_id="custom",
+        base_url="http://127.0.0.1:1234/v1",
+        default_model="default-model",
+        message_builder=lambda *_args: (_ for _ in ()).throw(
+            AssertionError("persona envelope must not be used")
+        ),
+        credential_required=False,
+        transport=httpx.MockTransport(respond),
+    )
+    snapshot = ProviderSnapshot(
+        provider_id="custom",
+        model_id="selected-model",
+        capabilities=ProviderCapabilities(tasks=frozenset({ProviderTask.CHAT})),
+        adapter=adapter,
+        credential_required=False,
+    )
+    monkeypatch.setattr(
+        providers.provider_registry,
+        "snapshot",
+        lambda provider_id, model_id=None, **_kwargs: snapshot,
+    )
+
+    response = app_client.post(
+        "/api/providers/custom/chat-check", json={"model_id": "selected-model"}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "provider_id": "custom",
+        "model_id": "selected-model",
+        "ok": True,
+    }
+    assert len(requests) == 1
+    assert requests[0]["model"] == "selected-model"
+    assert requests[0]["messages"] == [{"role": "user", "content": "Reply OK."}]
+    assert requests[0]["max_tokens"] == 512
+    assert "tools" not in requests[0]
+
+
+def test_chat_check_does_not_expose_upstream_error_or_secret(app_client, monkeypatch):
+    from app.routers import providers
+    from app.services.provider_adapters import OpenAICompatibleAdapter
+    from app.services.provider_registry import (
+        ProviderCapabilities,
+        ProviderSnapshot,
+        ProviderTask,
+    )
+
+    secret = "sk-private-check-value"
+    providers.credential_store.set("custom", secret)
+    adapter = OpenAICompatibleAdapter(
+        provider_id="custom",
+        base_url="http://127.0.0.1:1234/v1",
+        default_model="selected-model",
+        message_builder=lambda *_args: [],
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(401, text=f"invalid {secret}")
+        ),
+    )
+    snapshot = ProviderSnapshot(
+        provider_id="custom",
+        model_id="selected-model",
+        capabilities=ProviderCapabilities(tasks=frozenset({ProviderTask.CHAT})),
+        adapter=adapter,
+    )
+    monkeypatch.setattr(
+        providers.provider_registry,
+        "snapshot",
+        lambda provider_id, model_id=None, **_kwargs: snapshot,
+    )
+
+    response = app_client.post(
+        "/api/providers/custom/chat-check", json={"model_id": "selected-model"}
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"]["code"] == "credential_rejected"
+    assert secret not in json.dumps(response.json())

@@ -45,6 +45,7 @@ class LLMInterface(ABC):
         model: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
         isolated: bool = False,
+        max_output_tokens: Optional[int] = None,
     ) -> AsyncGenerator[dict, None]:
         """Yield chunks from the LLM chat completion stream."""
         ...
