@@ -32,7 +32,8 @@ const BLOBS = [
 const LOCK_START = 2350;
 const LOCK_STEP = 80;
 const COMMIT_AT = 3050;
-const END_AT = 3750;
+const FLY_AT = 3350;
+const END_AT = 3950;
 
 export function ShiftOverlay({ from, to, onCommit, onDone }: { from: Worldline; to: Worldline; onCommit: () => void; onDone: () => void }) {
   const target = DIVERGENCE[to];
@@ -41,6 +42,21 @@ export function ShiftOverlay({ from, to, onCommit, onDone }: { from: Worldline; 
   const reduce = useRef(typeof window !== 'undefined' && Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches));
   const committed = useRef(false);
   const finished = useRef(false);
+  const root = useRef<HTMLDivElement>(null);
+  const [fly, setFly] = useState(false);
+  // The big meter flies home into the header meter, so the new line is read where it will stay.
+  const startFly = () => {
+    const el = root.current;
+    const src = el?.querySelector<HTMLElement>('.sh-meter .nixie-row');
+    const dst = document.querySelector<HTMLElement>('.ws2-meter .nixie-row');
+    if (!el || !src || !dst) return;
+    const a = src.getBoundingClientRect();
+    const b = dst.getBoundingClientRect();
+    el.style.setProperty('--fx', `${b.left + b.width / 2 - (a.left + a.width / 2)}px`);
+    el.style.setProperty('--fy', `${b.top + b.height / 2 - (a.top + a.height / 2)}px`);
+    el.style.setProperty('--fs', String(b.width / a.width));
+    setFly(true);
+  };
   const commit = () => { if (!committed.current) { committed.current = true; onCommit(); } };
   const end = () => {
     if (finished.current) return;
@@ -58,6 +74,7 @@ export function ShiftOverlay({ from, to, onCommit, onDone }: { from: Worldline; 
       return () => { window.clearTimeout(a); window.clearTimeout(b); };
     }
     const t0 = performance.now();
+    let flying = false;
     const iv = window.setInterval(() => {
       const t = performance.now() - t0;
       if (t < 1000) return;
@@ -65,6 +82,7 @@ export function ShiftOverlay({ from, to, onCommit, onDone }: { from: Worldline; 
       setLocked(n);
       setShown(target.split('').map((c, i) => (i < n || c === '.' ? c : String(Math.floor(Math.random() * 10)))).join(''));
       if (t > COMMIT_AT) commit();
+      if (t > FLY_AT && !flying) { flying = true; startFly(); }
       if (t > END_AT) { window.clearInterval(iv); end(); }
     }, 45);
     const k = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); end(); } };
@@ -75,8 +93,9 @@ export function ShiftOverlay({ from, to, onCommit, onDone }: { from: Worldline; 
   }, []);
 
   return (
-    <div className={`ws2-shift${reduce.current ? ' reduced' : ''}`} onClick={end} role="status" aria-live="polite"
+    <div ref={root} className={`ws2-shift${reduce.current ? ' reduced' : ''}${fly ? ' fly' : ''}`} onClick={end} role="status" aria-live="polite"
       aria-label={`世界线变动：${to === 'steins_gate' ? 'STEINS;GATE' : 'β'}`}>
+      <div className="sh-world">
       <div className="sh-dull" />
       <svg className="sh-tunnel" viewBox="-100 -60 200 120" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
         {Array.from({ length: 9 }, (_, i) => (
@@ -113,12 +132,13 @@ export function ShiftOverlay({ from, to, onCommit, onDone }: { from: Worldline; 
             style={{ '--tx': `${g.x * 2.2}px`, '--ty': `${g.y * 1.6}px`, '--sc': g.s * 0.32, '--rot': `${g.r}deg`, '--d': `${i * 50}ms` } as CSSProperties} />
         ))}
       </svg>
-      <div className="sh-streak" />
+      <div className="sh-streak"><i /></div>
+      <div className="sh-rgb" />
+      </div>
       <div className="sh-meter">
         <Nixie value={shown} size="xl" base />
         <div className="sh-lock">{locked >= 8 ? (to === 'steins_gate' ? 'STEINS;GATE' : 'β WORLDLINE') : 'DIVERGENCE'}</div>
       </div>
-      <div className="sh-rgb" />
       <div className="sh-skip">点击或 Esc 跳过</div>
     </div>
   );
