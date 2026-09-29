@@ -1555,12 +1555,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         </button>
         <div className="ws2-wordmark" aria-label="AMADEUS"><DraftWord key={worldline} text="AMADEUS" step={90} /></div>
         <span className="ws2-date">
-          <svg className="ws2-date-ind" viewBox="0 0 30 6" width="30" height="6" aria-hidden="true">
-            <rect x=".5" y=".5" width="7" height="5" fill="none" stroke="currentColor" /><path d="M.5 .5l3.5 2.6L7.5 .5" fill="none" stroke="currentColor" />
-            <rect x="11" y="1" width="7" height="4" fill="none" stroke="currentColor" /><rect x="12.5" y="2.2" width="4" height="1.6" fill="currentColor" /><rect x="18" y="2.2" width="1" height="1.6" fill="currentColor" />
-            <path d="M23 6V4.5M25 6V3M27 6V1.5M29 6V0" stroke="currentColor" />
-          </svg>
-          <span className="d">{dateLabel}</span><b>({dayLabel})</b>
+          <span className="d">{dateLabel}</span><b>{dayLabel}</b>
         </span>
         <span className="ws2-title">{activeConversation?.title ? <span className="t">{activeConversation.title}</span> : null}</span>
 
@@ -1866,9 +1861,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
             <circle pathLength={1} cx="44" cy="572" r="9" /><path pathLength={1} d="M30 572 H 58 M44 558 V 586" />
           </svg>
           <div className="ws2-chapter-set">
-            <div className="ws2-chapter-jp" lang="ja"><span className="fam">牧瀬</span><span className="giv"><em>紅</em>莉栖</span></div>
+            <div className="ws2-chapter-jp" lang="ja">牧瀬紅莉栖</div>
+            <div className="ws2-chapter-kana" lang="ja">
+              <span className="fam">{[...'まきせ'].map((c, i) => <b key={i}>{c}</b>)}</span>
+              <span className="giv">{[...'くりす'].map((c, i) => <b key={i}>{c}</b>)}</span>
+            </div>
             <div className="ws2-chapter-en"><i>Amadeus</i></div>
-            <div className="ws2-chapter-sub">-Makise Kurisu-</div>
           </div>
         </div>
         {/* Amadeus window: a dot-matrix field behind her that stirs while she thinks and pulses while she speaks. */}

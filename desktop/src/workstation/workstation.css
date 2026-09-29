@@ -75,9 +75,6 @@
   /* Her afterimage from the neighbouring worldline: a pale, hard offset copy. */
   --ws-slab: rgba(214, 222, 230, .085);
   --ws-slab-ink: rgba(236, 235, 231, .62);
-  /* RE:BOOT inlays: Okabe's coral handset and the title menu's orange selection tag. */
-  --ws-coral: #ff7b68;
-  --ws-tag: #f39a1e;
   --ws-light: radial-gradient(900px 780px at 84% 30%, rgba(214, 222, 230, .1), transparent 62%),
               radial-gradient(640px 520px at 62% 34%, rgba(96, 104, 214, .075), transparent 68%),
               radial-gradient(520px 420px at 76% 88%, rgba(143, 220, 255, .035), transparent 70%),
@@ -142,21 +139,15 @@
 .ws2-icon-btn:hover, .ws2-icon-btn.is-active { color: var(--ws-ink); background: rgba(255, 255, 255, .05); }
 .ws2-wordmark { font-family: var(--ws-serif); font-size: 21px; letter-spacing: .22em; white-space: nowrap; line-height: 1; padding-top: 2px; }
 .ws2[data-wl='beta'] .ws2-wordmark .draft { --draft-ink: #ffcf96; }
-/* The original's corner date: a phone LCD plate, "7/28 (WED)", with the handset's tiny mail / battery / signal glyphs. */
-.ws2-date {
-  position: relative; display: inline-flex; align-items: baseline; gap: 5px; flex: none; height: 34px; padding: 9px 12px 0 11px; box-sizing: border-box; white-space: nowrap;
-  background: linear-gradient(180deg, rgba(236, 235, 231, .1), rgba(236, 235, 231, .04)); box-shadow: inset 0 0 0 1px var(--ws-line-2), inset 0 1px 0 rgba(255, 255, 255, .08);
+/* The original's corner date "7/28 (WED)", unboxed: bare numerals after a hairline, the weekday as a small solid tag
+ * cut from the same plate as the system key (SG paper white with a cyan tick, β copper with hex ends). */
+.ws2-date { display: inline-flex; align-items: center; gap: 9px; flex: none; height: 30px; padding-left: 18px; border-left: 1px solid var(--ws-line); white-space: nowrap; }
+.ws2-date .d { font-family: var(--ws-mono); font-weight: 300; font-size: 21px; line-height: 1; letter-spacing: .04em; color: var(--ws-ink); font-variant-numeric: tabular-nums; }
+.ws2-date b {
+  font-family: var(--ws-mono); font-weight: 500; font-size: 9.5px; line-height: 1; letter-spacing: .16em; padding: 4px 5px 3px 7px;
+  color: var(--ws-bg); background: var(--ws-ink); box-shadow: inset 2px 0 0 var(--ws-accent);
 }
-.ws2-date-ind { position: absolute; top: 3px; right: 6px; color: var(--ws-ink-3); }
-.ws2[data-wl='sg'] .ws2-date-ind { color: var(--ws-coral); opacity: .8; }
-.ws2-date .d { font-family: var(--ws-mono); font-weight: 300; font-size: 21px; line-height: 1; letter-spacing: .06em; color: var(--ws-ink); font-variant-numeric: tabular-nums; }
-.ws2-date b { font-family: var(--ws-mono); font-weight: 400; font-size: 9.5px; letter-spacing: .12em; color: var(--ws-ink-2); }
-/* β: the same plate on 0's handset — copper-edged, chamfered like its hardware. */
-.ws2[data-wl='beta'] .ws2-date {
-  background: linear-gradient(180deg, rgba(233, 138, 79, .1), rgba(233, 138, 79, .03)); box-shadow: inset 0 0 0 1px rgba(var(--ws-accent-rgb), .34);
-  clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
-}
-.ws2[data-wl='beta'] .ws2-date-ind { color: rgba(var(--ws-accent-rgb), .6); }
+.ws2[data-wl='beta'] .ws2-date b { padding: 4px 8px 3px; background: var(--ws-accent); box-shadow: none; clip-path: polygon(4px 0, calc(100% - 4px) 0, 100% 50%, calc(100% - 4px) 100%, 4px 100%, 0 50%); }
 .ws2-title { min-width: 0; overflow: hidden; white-space: nowrap; font-family: var(--ws-serif-cjk); font-size: 14px; letter-spacing: .08em; color: var(--ws-ink-2); padding-left: 18px; border-left: 1px solid var(--ws-line); }
 .ws2-title .t { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
 .ws2-title .t::before { content: '「'; color: var(--ws-ink-3); }
@@ -291,9 +282,6 @@
 .ws2 .conversation-item:hover::before { box-shadow: inset 0 0 0 1px var(--ws-ink); }
 .ws2 .conversation-item.active { background: linear-gradient(90deg, transparent 25px, rgba(var(--ws-accent-rgb), .07) 25px); box-shadow: none; }
 .ws2 .conversation-item.active::before { background: var(--ws-accent); box-shadow: 0 0 0 3px rgba(var(--ws-accent-rgb), .18), 0 0 10px var(--ws-accent); transform: scale(1.1); }
-/* SG marks the open session like the title menu marks its choice: a small orange square, no glow. */
-.ws2[data-wl='sg'] .conversation-item.active { background: linear-gradient(90deg, transparent 25px, rgba(236, 235, 231, .05) 25px); }
-.ws2[data-wl='sg'] .conversation-item.active::before { border-radius: 0; background: var(--ws-tag); box-shadow: 0 0 0 3px rgba(243, 154, 30, .14); }
 .ws2 .conversation-select { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 6px 8px 33px; text-align: left; background: none; border: 0; }
 .ws2 .conversation-title { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; color: var(--ws-ink-2); }
 .ws2 .conversation-item.active .conversation-title, .ws2 .conversation-item:hover .conversation-title { color: var(--ws-ink); }
@@ -464,7 +452,6 @@
 .ws2 .history-sidebar-icon.pinned:not(.add)::before { border-radius: 1px; transform: rotate(45deg); }
 .ws2 .history-sidebar-icon:not(.add):hover::before { box-shadow: inset 0 0 0 1px var(--ws-ink); transform: scale(1.25); }
 .ws2 .history-sidebar-icon.active:not(.add)::before { background: var(--ws-accent); box-shadow: 0 0 0 3px rgba(var(--ws-accent-rgb), .18), 0 0 10px var(--ws-accent); }
-.ws2[data-wl='sg'] .history-sidebar-icon.active:not(.add)::before { border-radius: 0; background: var(--ws-tag); box-shadow: 0 0 0 3px rgba(243, 154, 30, .14); }
 .ws2 .history-sidebar-icon.active { color: var(--ws-ink); }
 .ws2 .history-sidebar-icon:hover { color: var(--ws-ink); }
 
@@ -633,19 +620,17 @@
 
 .ws2-stage { grid-column: 3; grid-row: 1 / 3; position: relative; z-index: 1; overflow: hidden; }
 .ws2-seam { position: absolute; left: 0; top: 60px; bottom: 0; width: 1px; background: linear-gradient(180deg, transparent, var(--ws-line-2) 20%, var(--ws-line-2) 80%, transparent); }
-/* Her name as an original chapter card: black Mincho, compressed kanji, the given name larger than the family name,
- * drafting instruments (protractor arc, compass circles, ruler) behind it, an italic Latin line beside it.
- * SG takes the chapter card's lavender; β takes 0's copper. 紅 is the brightest stroke in both. */
-.ws2 { --chap: clamp(92px, calc((100vh - 196px) / 4.1), 150px); }
+/* Her name as an original chapter card: black Mincho in one evenly set column with its kana reading running beside it,
+ * drafting instruments (protractor arc, compass circles, ruler) behind it, an italic Latin line outside.
+ * SG takes the chapter card's lavender; β takes 0's copper. All five kanji share one ink. */
+.ws2 { --chap: clamp(70px, calc((100vh - 200px) / 5.6), 124px); }
 .ws2[data-wl='sg'] {
-  --chap-ink: linear-gradient(180deg, rgba(106, 106, 184, .5) 0%, rgba(156, 159, 219, .56) 55%, rgba(207, 209, 240, .62) 100%);
-  --chap-hi: linear-gradient(180deg, rgba(185, 188, 242, .9) 0%, #fff 100%);
+  --chap-ink: linear-gradient(180deg, rgba(128, 130, 204, .62) 0%, rgba(176, 179, 232, .72) 55%, rgba(222, 224, 248, .84) 100%);
   --chap-line: rgba(168, 170, 228, .5);
   --chap-en: rgba(196, 198, 240, .72);
 }
 .ws2[data-wl='beta'] {
-  --chap-ink: linear-gradient(180deg, rgba(138, 69, 38, .56) 0%, rgba(194, 112, 63, .56) 55%, rgba(230, 173, 132, .6) 100%);
-  --chap-hi: linear-gradient(180deg, rgba(255, 138, 72, .95) 0%, #ffe2c4 100%);
+  --chap-ink: linear-gradient(180deg, rgba(160, 82, 44, .66) 0%, rgba(212, 128, 76, .72) 55%, rgba(242, 190, 150, .84) 100%);
   --chap-line: rgba(233, 138, 79, .46);
   --chap-en: rgba(240, 190, 150, .68);
 }
@@ -655,37 +640,35 @@
 .ws2-chapter-draft .thin { stroke-width: .5; opacity: .6; }
 .ws2-chapter-draft .tick { animation-delay: .8s; animation-duration: .6s; }
 @keyframes ws2-chap-draw { to { stroke-dashoffset: 0; } }
-/* The card's step, turned vertical: the small compressed family name sits up and inward, the given name drops to the
- * edge in full size, and the italic line runs down the gap between them the way "Chapter 1 ——" runs into the kana. */
-.ws2-chapter-set { position: absolute; right: 10px; top: 6px; font-size: var(--chap); }
+/* Right to left: the kanji column at the edge, its reading grouped against 牧瀬 and 紅莉栖, then the Latin line. */
+.ws2-chapter-set { position: absolute; right: 12px; top: 8px; display: flex; flex-direction: row-reverse; align-items: flex-start; gap: 12px; }
 .ws2-chapter-jp {
-  display: flex; flex-direction: column; align-items: flex-end; white-space: nowrap;
-  font-family: var(--ws-serif-jp); font-weight: 900; line-height: 1;
-  transform: scaleX(.84); transform-origin: right top;
+  writing-mode: vertical-rl; white-space: nowrap; font-size: var(--chap); line-height: 1; letter-spacing: .04em;
+  font-family: var(--ws-serif-jp); font-weight: 900;
+  background: var(--chap-ink); -webkit-background-clip: text; background-clip: text; color: transparent;
   animation: ws2-chap-wipe .9s cubic-bezier(.3, .7, .2, 1) .45s both;
 }
-.ws2-chapter-jp :is(.fam, .giv) { writing-mode: vertical-rl; background: var(--chap-ink); -webkit-background-clip: text; background-clip: text; color: transparent; }
-.ws2-chapter-jp .fam { font-size: .56em; letter-spacing: -.03em; margin-right: .5em; }
-.ws2-chapter-jp .giv { letter-spacing: -.07em; margin-top: .02em; }
-.ws2-chapter-jp em { font-style: normal; background: var(--chap-hi); -webkit-background-clip: text; background-clip: text; color: transparent; }
 @keyframes ws2-chap-wipe { from { clip-path: inset(0 0 100% 0); } to { clip-path: inset(0 0 -10% 0); } }
-.ws2-chapter-en {
-  position: absolute; right: 0; top: .04em; width: .235em; height: 1.2em;
-  display: flex; align-items: center; gap: 10px; writing-mode: vertical-rl; white-space: nowrap;
-  font-family: var(--ws-serif); font-style: italic; font-size: inherit; color: var(--chap-line);
-  animation: ws2-fade-in .6s ease 1.1s both; opacity: 0;
+.ws2-chapter-kana { display: flex; flex-direction: column; animation: ws2-fade-in .6s ease 1.1s both; opacity: 0; }
+/* Each group spans exactly the kanji it reads (2 and 3 glyph advances), a hairline marking where the reading starts. */
+.ws2-chapter-kana > span {
+  display: flex; flex-direction: column; justify-content: space-evenly; align-items: center; box-sizing: border-box;
+  height: calc(var(--chap) * 1.04 * 2); border-top: 1px solid var(--chap-line);
+  font-family: var(--ws-serif-jp); font-size: 14px; line-height: 1; color: var(--chap-en);
 }
-.ws2-chapter-en i { font-size: 22px; letter-spacing: .02em; color: var(--chap-en); }
-.ws2-chapter-en::after { content: ''; flex: 1; block-size: 1px; background: linear-gradient(180deg, currentColor, transparent); }
-.ws2-chapter-sub {
-  position: absolute; top: calc(var(--chap) * 1.3); right: calc(var(--chap) * .84 + 14px); writing-mode: vertical-rl; white-space: nowrap;
-  font-family: var(--ws-serif); font-style: italic; font-size: 13px; letter-spacing: .1em; color: var(--chap-en);
+.ws2-chapter-kana > .giv { height: calc(var(--chap) * 1.04 * 3); }
+.ws2-chapter-kana b { font-weight: 400; }
+.ws2-chapter-en {
+  display: flex; align-items: center; gap: 10px; height: calc(var(--chap) * 2.08); writing-mode: vertical-rl; white-space: nowrap;
+  font-family: var(--ws-serif); font-style: italic; color: var(--chap-line);
   animation: ws2-fade-in .6s ease 1.3s both; opacity: 0;
 }
+.ws2-chapter-en i { font-size: 20px; letter-spacing: .02em; color: var(--chap-en); }
+.ws2-chapter-en::after { content: ''; flex: 1; block-size: 1px; background: linear-gradient(180deg, currentColor, transparent); }
 @media (prefers-reduced-motion: reduce) {
-  .ws2-chapter-draft :is(path, circle), .ws2-chapter-jp, .ws2-chapter-en, .ws2-chapter-sub { animation: none !important; }
+  .ws2-chapter-draft :is(path, circle), .ws2-chapter-jp, .ws2-chapter-kana, .ws2-chapter-en { animation: none !important; }
   .ws2-chapter-draft :is(path, circle) { stroke-dashoffset: 0; }
-  .ws2-chapter-en, .ws2-chapter-sub { opacity: 1; }
+  .ws2-chapter-kana, .ws2-chapter-en { opacity: 1; }
 }
 .ws2-matrix {
   position: absolute; left: 0; right: 0; top: var(--ws-head); bottom: 0; z-index: 0; pointer-events: none;
