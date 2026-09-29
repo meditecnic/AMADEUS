@@ -121,7 +121,7 @@
   mask-image: radial-gradient(65% 75% at 72% 48%, #000, transparent 82%);
 }
 .ws2 .ws2-atmo-bin {
-  inset: 92px calc(var(--ws-stage) - 150px) auto auto; white-space: pre;
+  inset: 92px auto auto calc(100% - var(--ws-stage) + 14px); white-space: pre;
   font-family: var(--ws-mono); font-size: 11px; line-height: 1.6; letter-spacing: .14em; color: rgba(233, 138, 79, .085);
   mask-image: linear-gradient(180deg, transparent, #000 18%, #000 64%, transparent 96%);
 }
@@ -640,8 +640,10 @@
 .ws2-chapter-draft .thin { stroke-width: .5; opacity: .6; }
 .ws2-chapter-draft .tick { animation-delay: .8s; animation-duration: .6s; }
 @keyframes ws2-chap-draw { to { stroke-dashoffset: 0; } }
-/* Right to left: the kanji column at the edge, its reading grouped against 牧瀬 and 紅莉栖, then the Latin line. */
-.ws2-chapter-set { position: absolute; right: 12px; top: 8px; display: flex; flex-direction: row-reverse; align-items: flex-start; gap: 12px; }
+/* Right to left: the reading at the edge (vertical ruby's own side), the kanji column, then the Latin line.
+ * The reading must stay right of the kanji — anything further in sits behind her shoulder. */
+.ws2-chapter-set { position: absolute; right: 8px; top: 8px; display: flex; flex-direction: row-reverse; align-items: flex-start; gap: 12px; }
+.ws2-chapter-kana { margin-left: -8px; }
 .ws2-chapter-jp {
   writing-mode: vertical-rl; white-space: nowrap; font-size: var(--chap); line-height: 1; letter-spacing: .04em;
   font-family: var(--ws-serif-jp); font-weight: 900;
@@ -653,11 +655,11 @@
 /* A ruler beside the column: one cell per kanji advance holding that kanji's reading, a tick at each boundary,
  * the family/given break drawn longer. */
 .ws2-chapter-kana > span {
-  position: relative; display: grid; place-items: center; box-sizing: border-box; height: calc(var(--chap) * 1.04); padding-left: 8px;
+  position: relative; display: grid; place-items: center; box-sizing: border-box; height: calc(var(--chap) * 1.04); padding-left: 7px;
   writing-mode: vertical-rl; white-space: nowrap; font-family: var(--ws-serif-jp); font-size: 14px; line-height: 1; letter-spacing: .1em; color: var(--chap-en);
 }
-.ws2-chapter-kana > span::before { content: ''; position: absolute; top: 0; right: 0; width: 5px; height: 1px; background: var(--chap-line); }
-.ws2-chapter-kana > span::after { content: ''; position: absolute; top: 0; bottom: 0; right: 0; width: 1px; background: linear-gradient(180deg, var(--chap-line), transparent 30%, transparent 70%, var(--chap-line)); opacity: .45; }
+.ws2-chapter-kana > span::before { content: ''; position: absolute; top: 0; left: 0; width: 5px; height: 1px; background: var(--chap-line); }
+.ws2-chapter-kana > span::after { content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 1px; background: linear-gradient(180deg, var(--chap-line), transparent 30%, transparent 70%, var(--chap-line)); opacity: .45; }
 .ws2-chapter-kana > .giv::before { width: 12px; }
 .ws2-chapter-en {
   display: flex; align-items: center; gap: 10px; height: calc(var(--chap) * 2.08); writing-mode: vertical-rl; white-space: nowrap;

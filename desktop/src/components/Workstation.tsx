@@ -1861,10 +1861,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
             <circle pathLength={1} cx="44" cy="572" r="9" /><path pathLength={1} d="M30 572 H 58 M44 558 V 586" />
           </svg>
           <div className="ws2-chapter-set">
-            <div className="ws2-chapter-jp" lang="ja">牧瀬紅莉栖</div>
             <div className="ws2-chapter-kana" lang="ja">
               {['まき', 'せ', 'く', 'り', 'す'].map((reading, i) => <span key={i} className={i === 2 ? 'giv' : undefined}>{reading}</span>)}
             </div>
+            <div className="ws2-chapter-jp" lang="ja">牧瀬紅莉栖</div>
             <div className="ws2-chapter-en"><i>Amadeus</i></div>
           </div>
         </div>
