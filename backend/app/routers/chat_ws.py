@@ -40,7 +40,7 @@ from app.domain.segments import (
 )
 
 import copy
-from app.services.tts_queue import TTSServiceError
+from app.services.tts_queue import TTSServiceError, tts_speech_surface
 from app.services.diagnostics import diagnostic_runtime
 from contextlib import aclosing
 from app.security.guard import contains_leak
@@ -1458,10 +1458,16 @@ async def processor_loop(
                         raise TTSServiceError(AudioErrorCode.DISPLAY_ONLY)
                     raise TTSServiceError(prepared.error)
                 try:
+                    speech_kwargs = (
+                        {"quoted_source": user_msg}
+                        if tts_speech_surface(prepared.text, user_msg)[1] == "auto"
+                        else {}
+                    )
                     return await tts_manager.synthesize_async(
                         prepared.text,
                         emotion,
                         sovits_url=session.sovits_url,
+                        **speech_kwargs,
                     )
                 except TTSServiceError as exc:
                     if exc.retryable:

@@ -350,6 +350,30 @@ async def test_http_payload_text_uses_pronunciation_surface_direct_call():
 
 
 @pytest.mark.asyncio
+async def test_quoted_chinese_from_user_uses_one_mixed_language_request():
+    tts = TTSQueueManager()
+    response = MagicMock(status_code=200, content=b"RIFF....WAVE")
+    client = MagicMock()
+    client.post = AsyncMock(return_value=response)
+    tts.client = client
+    ref = {"ref_audio_path": "/fake/neutral.wav", "prompt_text": "参照プロンプト"}
+
+    for spoken, user, quoted in (
+        ("中国語の「早上好」の音写でしょ。", "你说的是早上好的意思", "早上好"),
+        ("その「喵」は余計よ。", "哈哈，猜对了喵", "喵"),
+    ):
+        await tts._async_tts_call(spoken, ref, quoted_source=user)
+        payload = client.post.await_args.kwargs["json"]
+        assert payload["text_lang"] == "auto"
+        assert f"「\u200b{quoted}\u200b」" in payload["text"]
+
+    await tts._async_tts_call("その「了解」は余計よ。", ref, quoted_source="今日は了解した")
+    payload = client.post.await_args.kwargs["json"]
+    assert payload["text_lang"] == "ja"
+    assert "\u200b" not in payload["text"]
+
+
+@pytest.mark.asyncio
 async def test_queue_worker_converts_http_text_but_delivers_canonical_payload():
     """Queue path: sidecar sees spoken surface; client payload keeps canonical text."""
     tts = TTSQueueManager()

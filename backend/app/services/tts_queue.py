@@ -2,6 +2,7 @@
 import io
 import wave
 import struct
+import re
 import httpx
 import asyncio
 from app import config
@@ -82,6 +83,34 @@ V2PRO_GENERATION_PARAMS = {
     "batch_size": 1,
 }
 
+_QUOTED_SPAN_RE = re.compile(r"「[^「」\r\n]{1,32}」|『[^『』\r\n]{1,32}』|“[^“”\r\n]{1,32}”")
+_KANA_RE = re.compile(r"[\u3040-\u30ff]")
+_HAN_RE = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
+
+
+def tts_speech_surface(text: str, quoted_source: str | None = None) -> tuple[str, str]:
+    """Give Chinese words quoted from this turn's user text a speech-only language boundary."""
+    if not quoted_source or _KANA_RE.search(quoted_source) or not _HAN_RE.search(quoted_source):
+        return render_tts_pronunciation_surface(text), "ja"
+
+    parts = []
+    cursor = 0
+    mixed = False
+    for match in _QUOTED_SPAN_RE.finditer(text):
+        quote = match.group()
+        inner = quote[1:-1]
+        if not _HAN_RE.search(inner) or inner.strip() not in quoted_source:
+            continue
+        parts.append(render_tts_pronunciation_surface(text[cursor:match.start()]))
+        # Auto detection needs a boundary to classify a one-character Chinese quote.
+        parts.append(f"{quote[0]}\u200b{inner}\u200b{quote[-1]}")
+        cursor = match.end()
+        mixed = True
+    if not mixed:
+        return render_tts_pronunciation_surface(text), "ja"
+    parts.append(render_tts_pronunciation_surface(text[cursor:]))
+    return "".join(parts), "auto"
+
 
 def _peak_limit_wav(audio_bytes: bytes, threshold: int = 32000, target_peak: int = 30000) -> bytes:
     """对 16-bit PCM WAV 做下行 peak-limit：仅当 peak > threshold 时衰减到 target_peak，不放大。"""
@@ -155,13 +184,17 @@ class TTSQueueManager:
         if self.client and not self.client.is_closed:
             await self.client.aclose()
 
-    async def _async_tts_call(self, text: str, ref_config: dict, sovits_url: str = None) -> bytes:
+    async def _async_tts_call(
+        self, text: str, ref_config: dict, sovits_url: str = None,
+        quoted_source: str | None = None,
+    ) -> bytes:
         """Call the GPT-SoVITS V2Pro JSON contract exactly once."""
+        speech_text, text_lang = tts_speech_surface(text, quoted_source)
         payload = {
             # Pronunciation lexicon applies only to the sidecar-bound target
             # text; callers keep the canonical surface everywhere else.
-            "text": render_tts_pronunciation_surface(text),
-            "text_lang": "ja",
+            "text": speech_text,
+            "text_lang": text_lang,
             "ref_audio_path": ref_config["ref_audio_path"],
             "prompt_text": ref_config["prompt_text"],
             "prompt_lang": "ja",
@@ -226,7 +259,10 @@ class TTSQueueManager:
             diagnostic="sidecar_http_error",
         )
 
-    async def synthesize_async(self, text: str, emotion_tag: str, sovits_url: str = None) -> bytes:
+    async def synthesize_async(
+        self, text: str, emotion_tag: str, sovits_url: str = None,
+        quoted_source: str | None = None,
+    ) -> bytes:
         """
         [DEPRECATED] 保留作为备用接口。
         新调用点请使用 synthesize_and_queue（并行合成 + 有序投递 + 静默兜底）。
@@ -247,7 +283,10 @@ class TTSQueueManager:
         async with self.semaphore:
             try:
                 audio_bytes = await asyncio.wait_for(
-                    self._async_tts_call(prepared.text, ref_config, sovits_url=sovits_url),
+                    self._async_tts_call(
+                        prepared.text, ref_config, sovits_url=sovits_url,
+                        quoted_source=quoted_source,
+                    ),
                     timeout=self.timeout
                 )
                 return audio_bytes
@@ -270,7 +309,10 @@ class TTSQueueManager:
                     diagnostic="unexpected_manager_error",
                 ) from exc
 
-    async def stream_pcm(self, text: str, emotion_tag: str, sovits_url: str = None):
+    async def stream_pcm(
+        self, text: str, emotion_tag: str, sovits_url: str = None,
+        quoted_source: str | None = None,
+    ):
         """Yield (audio_format, pcm_chunk) from GPT-SoVITS streaming_mode=2."""
         from app.services.audio_stream import WavStreamDemuxer
         prepared = prepare_tts_text(text)
@@ -281,10 +323,11 @@ class TTSQueueManager:
         if ref_config is None:
             raise TTSServiceError(f"No valid reference audio configured for emotion '{emotion_tag}'")
         await self.init_client()
+        speech_text, text_lang = tts_speech_surface(prepared.text, quoted_source)
         payload = {
             # Same sidecar-only pronunciation surface as _async_tts_call.
-            "text": render_tts_pronunciation_surface(prepared.text),
-            "text_lang": "ja",
+            "text": speech_text,
+            "text_lang": text_lang,
             "ref_audio_path": ref_config["ref_audio_path"],
             "prompt_text": ref_config["prompt_text"],
             "prompt_lang": "ja",
