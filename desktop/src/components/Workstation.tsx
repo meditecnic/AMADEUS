@@ -200,7 +200,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
   } | null>(null);
   const [menuSection, setMenuSection] = useState<MenuSection>('worldline');
   const [pendingModel, setPendingModel] = useState<string | null>(null);
-  const [shiftConfirm, setShiftConfirm] = useState<'steins_gate' | 'beta' | null>(null);
   const wsRootRef = useRef<HTMLDivElement>(null);
   const speakingQueueRef = useRef<number[]>([]);
   const [speakingId, setSpeakingId] = useState<number | null>(null);
@@ -1964,8 +1963,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
             generating={isThinking || isSynthesizing}
             onArm={() => audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume)}
             onShift={(to) => {
-              if (isThinking || isSynthesizing) setShiftConfirm(to);
-              else startShift(to);
+              // The button already reads "停止本轮并跃迁", so pressing it is the consent: stop generation, let startShift fade her voice.
+              if (isThinking || isSynthesizing) cancelTurn();
+              startShift(to);
             }}
           />
         )}
@@ -2111,22 +2111,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
           onCommit={() => onWorldlineChange(shift.to)}
           onDone={() => setShift(null)}
         />
-      )}
-
-      {shiftConfirm && (
-        <ConfirmDialog
-          title="停止本轮并跃迁？"
-          confirmLabel="停止本轮并跃迁"
-          onConfirm={() => {
-            const to = shiftConfirm;
-            setShiftConfirm(null);
-            handleCancelTurn();
-            startShift(to);
-          }}
-          onCancel={() => setShiftConfirm(null)}
-        >
-          <p>她还在回复。跃迁到{shiftConfirm === 'steins_gate' ? ' STEINS;GATE' : ' β 世界线'}会先停止这一轮；取消则留在当前世界线，回复继续。</p>
-        </ConfirmDialog>
       )}
 
       {renameTarget && (
