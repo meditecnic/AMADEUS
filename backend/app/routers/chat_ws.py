@@ -2600,6 +2600,13 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 authenticated = True
                 await session_coordinator.persist_current(session.session_id, session.worldline, session.revision)
                 await session_coordinator.acquire_lease(session.session_id, session.worldline, websocket)
+                await send_queue.put((session.current_epoch, {
+                    "type": "session.ready",
+                    "conversation_mode": session.conversation_mode,
+                    "conversation_id": session.conversation_id,
+                    "worldline": session.worldline,
+                    "generation": session.current_epoch,
+                }))
                 continue
             
             # Already authenticated, check duplicate auth

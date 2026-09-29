@@ -47,10 +47,12 @@ def _compile(session) -> str:
     return asyncio.run(compile_for_session(session, "こんにちは"))
 
 
-def _barrier(ws):
+def _barrier(ws, expect_ready=False):
     """Frames are processed sequentially; a duplicate auth always answers with
     an error frame, proving every previously sent frame has been applied."""
     ws.send_json({"type": "auth"})
+    if expect_ready:
+        assert ws.receive_json()["type"] == "session.ready"
     reply = ws.receive_json()
     assert reply["type"] == "error"
     assert "认证" in reply["message"]
@@ -60,7 +62,7 @@ def test_auth_stores_normalized_self_name(app_client):
     session_id = "ws-self-name-auth"
     with app_client.websocket_connect(f"/ws/chat?session_id={session_id}") as ws:
         ws.send_json(_auth_frame(self_name="  阿伟  "))
-        _barrier(ws)
+        _barrier(ws, expect_ready=True)
         assert sessions[session_id].self_name == "阿伟"
 
 
@@ -69,7 +71,7 @@ def test_config_update_applies_legal_name(app_client):
     with app_client.websocket_connect(f"/ws/chat?session_id={session_id}") as ws:
         ws.send_json(_auth_frame())
         ws.send_json({"type": "config_update", "self_name": "クリス・マキセ"})
-        _barrier(ws)
+        _barrier(ws, expect_ready=True)
         assert sessions[session_id].self_name == "クリス・マキセ"
 
 
@@ -86,7 +88,7 @@ def test_config_update_dangerous_name_fails_closed(app_client, bad_name):
     session_id = "ws-self-name-reject"
     with app_client.websocket_connect(f"/ws/chat?session_id={session_id}") as ws:
         ws.send_json(_auth_frame())
-        _barrier(ws)
+        _barrier(ws, expect_ready=True)
         assert sessions[session_id].self_name == "阿伟"
         ws.send_json({"type": "config_update", "self_name": bad_name})
         _barrier(ws)
@@ -97,7 +99,7 @@ def test_prompt_injection_follows_identity_mode_on_same_session(app_client):
     session_id = "ws-self-name-compile"
     with app_client.websocket_connect(f"/ws/chat?session_id={session_id}") as ws:
         ws.send_json(_auth_frame())
-        _barrier(ws)
+        _barrier(ws, expect_ready=True)
         session = sessions[session_id]
         assert session.identity_mode == "self"
 

@@ -349,6 +349,7 @@ def test_websocket_auth_accepts_catalog_value_and_drops_unknown_control(
             }
         )
         websocket.send_json({"type": "auth"})
+        assert websocket.receive_json()["type"] == "session.ready"
         assert websocket.receive_json()["type"] == "error"
     assert chat_ws.sessions["q41-openai"].reasoning_effort == "max"
 
@@ -365,6 +366,7 @@ def test_websocket_auth_accepts_catalog_value_and_drops_unknown_control(
             }
         )
         websocket.send_json({"type": "auth"})
+        assert websocket.receive_json()["type"] == "session.ready"
         assert websocket.receive_json()["type"] == "error"
     assert chat_ws.sessions["q41-custom"].reasoning_effort is None
 
@@ -391,6 +393,7 @@ def test_config_update_echoes_normalized_reasoning_effort(app_client, monkeypatc
                 "reasoning_effort": "high",
             }
         )
+        assert websocket.receive_json()["type"] == "session.ready"
         websocket.send_json(
             {
                 "type": "config_update",
@@ -429,6 +432,7 @@ def test_config_update_accepts_catalog_model_and_rejects_unknown(
                 "model": "deepseek-v4-flash",
             }
         )
+        assert websocket.receive_json()["type"] == "session.ready"
         websocket.send_json(
             {
                 "type": "config_update",
@@ -481,6 +485,7 @@ def test_websocket_blocks_model_that_disappeared_before_any_provider_call(
             # Drain auth completion: second auth returns a stable error only after
             # the first auth finished (avoids racing reconcile before auth).
             websocket.send_json({"type": "auth"})
+            assert websocket.receive_json()["type"] == "session.ready"
             auth_done = websocket.receive_json()
             assert auth_done["type"] == "error"
             assert "认证" in auth_done.get("message", "")

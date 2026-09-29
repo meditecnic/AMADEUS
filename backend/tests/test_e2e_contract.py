@@ -154,11 +154,51 @@ class TestBackendE2EContract:
         client = self.client
         with client.websocket_connect("/ws/chat?session_id=test_auth_success") as websocket:
             websocket.send_json({"type": "auth", "api_key": "test_valid_key"})
+            assert websocket.receive_json()["type"] == "session.ready"
             websocket.send_json({"type": "chat", "content": "こんにちは"})
             
             first_response = websocket.receive_json()
             assert first_response["type"] == "status"
             assert first_response["dsk"] == "thinking"
+
+    @pytest.mark.parametrize(
+        ("conversation_mode", "worldline"),
+        [("draft", "steins_gate"), ("history", "beta")],
+    )
+    def test_ws_auth_ready_once_then_duplicate_auth_error(
+        self, mock_services, conversation_mode, worldline
+    ):
+        session_id = f"test_ready_{conversation_mode}_{worldline}"
+        conversation_id = None
+        if conversation_mode == "history":
+            created = self.client.post(
+                "/api/conversations",
+                json={"session_id": session_id, "worldline": worldline},
+            )
+            assert created.status_code == 201
+            conversation_id = created.json()["id"]
+
+        with self.client.websocket_connect(f"/ws/chat?session_id={session_id}") as websocket:
+            websocket.send_json({
+                "type": "auth",
+                "client": "desktop",
+                "protocol_version": 2,
+                "worldline": worldline,
+                "conversation_mode": conversation_mode,
+                "conversation_id": conversation_id,
+            })
+            websocket.send_json({"type": "auth"})
+
+            assert websocket.receive_json() == {
+                "type": "session.ready",
+                "conversation_mode": conversation_mode,
+                "conversation_id": conversation_id,
+                "worldline": worldline,
+                "generation": sessions[session_id].current_epoch,
+            }
+            duplicate = websocket.receive_json()
+            assert duplicate["type"] == "error"
+            assert "已完成认证" in duplicate["message"]
 
     def test_auth_selects_requested_conversation_before_loading_provider(self, mock_services):
         session_id = "test_auth_conversation_selection"
@@ -177,6 +217,7 @@ class TestBackendE2EContract:
                 "worldline": "steins_gate",
                 "conversation_id": conversation_id,
             })
+            assert websocket.receive_json()["type"] == "session.ready"
             websocket.send_json({"type": "chat.send", "content": "selected"})
             response = websocket.receive_json()
             assert response["type"] == "turn.started"
@@ -199,6 +240,7 @@ class TestBackendE2EContract:
                 "conversation_mode": "draft",
                 "conversation_id": previous["id"],
             })
+            assert websocket.receive_json()["type"] == "session.ready"
             websocket.send_json({"type": "chat.send", "content": "new draft"})
             started = websocket.receive_json()
             assert started["type"] == "turn.started"
@@ -225,6 +267,7 @@ class TestBackendE2EContract:
                 "provider_id": "glm",
                 "model": "glm-5.2",
             })
+            assert websocket.receive_json()["type"] == "session.ready"
             websocket.send_json({"type": "auth"})
             assert websocket.receive_json()["type"] == "error"
 
@@ -250,6 +293,7 @@ class TestBackendE2EContract:
                 "worldline": "steins_gate",
                 "conversation_id": first["id"],
             })
+            assert websocket.receive_json()["type"] == "session.ready"
             websocket.send_json({
                 "type": "conversation.switch",
                 "request_id": "switch-1",
@@ -277,6 +321,7 @@ class TestBackendE2EContract:
                 "worldline": "steins_gate",
                 "conversation_id": current["id"],
             })
+            assert websocket.receive_json()["type"] == "session.ready"
             websocket.send_json({
                 "type": "conversation.switch",
                 "request_id": "invalid-1",
@@ -309,6 +354,7 @@ class TestBackendE2EContract:
                 "worldline": "steins_gate",
                 "conversation_mode": "draft",
             })
+            assert websocket.receive_json()["type"] == "session.ready"
             websocket.send_json({"type": "auth"})
             assert websocket.receive_json()["type"] == "error"
             monkeypatch.setattr(
@@ -343,6 +389,7 @@ class TestBackendE2EContract:
                 "protocol_version": 2,
                 "worldline": "steins_gate",
             })
+            assert websocket.receive_json()["type"] == "session.ready"
             monkeypatch.setattr(
                 session_coordinator,
                 "switch",
@@ -372,6 +419,7 @@ class TestBackendE2EContract:
                 "protocol_version": 2,
                 "worldline": "steins_gate",
             })
+            assert websocket.receive_json()["type"] == "session.ready"
             websocket.send_json({
                 "type": "worldline.switch",
                 "request_id": "worldline-1",
@@ -411,6 +459,7 @@ class TestBackendE2EContract:
         client = self.client
         with client.websocket_connect("/ws/chat?session_id=test_dup_auth") as websocket:
             websocket.send_json({"type": "auth", "api_key": "my_key"})
+            assert websocket.receive_json()["type"] == "session.ready"
             
             # 存活期间再次发送 auth
             websocket.send_json({"type": "auth", "api_key": "another_key"})
@@ -567,6 +616,7 @@ class TestBackendE2EContract:
                 "conversation_mode": "draft",
             })
             websocket.send_json({"type": "chat.send", "content": "新会话首问"})
+            assert websocket.receive_json()["type"] == "session.ready"
             started = websocket.receive_json()
             assert started["type"] == "turn.started"
             conversation_id = started["conversation_id"]
@@ -610,6 +660,7 @@ class TestBackendE2EContract:
                 "conversation_mode": "draft",
             })
             websocket.send_json({"type": "chat.send", "content": "会中断的首问"})
+            assert websocket.receive_json()["type"] == "session.ready"
             started = websocket.receive_json()
             assert started["type"] == "turn.started"
             conversation_id = started["conversation_id"]
@@ -711,6 +762,7 @@ class TestBackendE2EContract:
         client = self.client
         with client.websocket_connect("/ws/chat?session_id=test_deprecated_message") as websocket:
             websocket.send_json({"type": "auth", "api_key": "my_key"})
+            assert websocket.receive_json()["type"] == "session.ready"
             
             websocket.send_json({
                 "type": "chat",

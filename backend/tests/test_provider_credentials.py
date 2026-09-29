@@ -121,6 +121,7 @@ def test_websocket_auth_reads_credential_store_without_key_frame(
     ) as websocket:
         websocket.send_json({"type": "auth", "protocol_version": 2})
         websocket.send_json({"type": "auth"})
+        assert websocket.receive_json()["type"] == "session.ready"
         response = websocket.receive_json()
 
     assert response["type"] == "error"
@@ -142,6 +143,7 @@ def test_websocket_key_frame_cannot_override_stored_credential(
     ) as websocket:
         websocket.send_json({"type": "auth", "api_key": "untrusted-frame-secret"})
         websocket.send_json({"type": "auth"})
+        assert websocket.receive_json()["type"] == "session.ready"
         assert websocket.receive_json()["type"] == "error"
 
     assert store.get("deepseek") == "stored-provider-secret"
@@ -174,6 +176,7 @@ def test_custom_local_provider_can_authenticate_without_a_credential(
             "protocol_version": 2,
         })
         websocket.send_json({"type": "auth"})
+        assert websocket.receive_json()["type"] == "session.ready"
         response = websocket.receive_json()
 
     assert response["type"] == "error"
