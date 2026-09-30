@@ -5,6 +5,7 @@ import { ConfirmDialog } from '../workstation/ConfirmDialog';
 interface ForgetConversationModalProps {
   title: string;
   busy: boolean;
+  error?: string | null;
   onClose: () => void;
   onConfirm: (forgetLongTerm: boolean) => void;
 }
@@ -12,6 +13,7 @@ interface ForgetConversationModalProps {
 export const ForgetConversationModal: React.FC<ForgetConversationModalProps> = ({
   title,
   busy,
+  error,
   onClose,
   onConfirm,
 }) => {
@@ -23,6 +25,7 @@ export const ForgetConversationModal: React.FC<ForgetConversationModalProps> = (
       confirmLabel="清空会话内容"
       danger
       busy={busy}
+      error={error}
       onCancel={onClose}
       onConfirm={() => onConfirm(forgetLongTerm)}
     >

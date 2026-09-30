@@ -115,6 +115,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [conversationSearch, setConversationSearch] = useState('');
   const [conversationBusy, setConversationBusy] = useState(false);
   const [forgetTarget, setForgetTarget] = useState<ConversationSummary | null>(null);
+  const [forgetError, setForgetError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ConversationSummary | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -1241,6 +1242,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const forgetConversation = async (forgetLongTerm: boolean) => {
     if (!forgetTarget || conversationBusy) return;
     setConversationBusy(true);
+    setForgetError(null);
     let waitingForSwitchAck = false;
     try {
       const response = await fetch(
@@ -1260,6 +1262,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       await loadConversations();
     } catch (error) {
       console.warn('Conversation forget failed:', error);
+      setForgetError('清空失败，聊天记录仍然保留。请稍后重试。');
     } finally {
       if (!waitingForSwitchAck) setConversationBusy(false);
     }
@@ -1631,7 +1634,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           onRename={renameConversation}
           onTogglePin={toggleConversationPin}
           onDelete={(conversation) => { void deleteConversation(conversation); }}
-          onForget={setForgetTarget}
+          onForget={(conversation) => { setForgetError(null); setForgetTarget(conversation); }}
           busy={conversationBusy}
         />
       </nav>
@@ -2175,7 +2178,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
         <ForgetConversationModal
           title={forgetTarget.title}
           busy={conversationBusy}
-          onClose={() => { if (!conversationBusy) setForgetTarget(null); }}
+          error={forgetError}
+          onClose={() => { if (!conversationBusy) { setForgetTarget(null); setForgetError(null); } }}
           onConfirm={(forgetLongTerm) => { void forgetConversation(forgetLongTerm); }}
         />
       )}
