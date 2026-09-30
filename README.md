@@ -39,6 +39,8 @@ npm run tauri -- dev
 
 本地服务使用回环地址；桌面细节见 [desktop/README.md](desktop/README.md)。`frontend/` 保留旧路径，当前桌面产品以 `desktop/` 为主。打包与发布尚需独立产品验证。
 
+可选原作素材包放在用户数据目录（`AMADEUS_DATA_DIR`）下的 `asset-pack/amadeus-original/`，根目录需含 `manifest.json`。开发时也可在启动后端前设置 `$env:AMADEUS_ASSET_PACK_DIR = '<LOCAL_PATH>'` 指向外部样本；后端通过只读 `/api/asset-pack/…` 提供图片和音频。未安装时使用自制默认画面。主程序不包含该素材包，素材包单独分发并附非官方、非商用和应要求下架的声明。
+
 ## 目录
 
 | 路径 | 用途 |
