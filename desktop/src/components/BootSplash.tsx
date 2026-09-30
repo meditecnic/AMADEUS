@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import './BootSplash.css';
+import { packAsset } from '../assetPack';
 
 interface BootSplashProps {
   onDone: () => void;
@@ -15,10 +16,13 @@ const SHEET_COLUMNS = 5;
  * source artwork and lets the title frame receive its own cinematic hold.
  */
 const BOOT_SEGMENTS = [
-  { src: '/assets/boot/boot_ring_1.png', frameStart: 0, frameCount: 25, fps: 24 },
-  { src: '/assets/boot/boot_ring_2.png', frameStart: 0, frameCount: 25, fps: 24 },
-  { src: '/assets/boot/boot_ring_3.png', frameStart: 5, frameCount: 6, fps: 16 },
+  { src: 'assets/boot/boot_ring_1.png', frameStart: 0, frameCount: 25, fps: 24 },
+  { src: 'assets/boot/boot_ring_2.png', frameStart: 0, frameCount: 25, fps: 24 },
+  { src: 'assets/boot/boot_ring_3.png', frameStart: 5, frameCount: 6, fps: 16 },
 ] as const;
+
+// App only mounts the splash once the pack probe succeeded.
+const sheet = (src: string) => packAsset(src) ?? '';
 
 const TITLE_HOLD_MS = 700;
 const TITLE_TRANSITION_MS = 360;
@@ -60,7 +64,7 @@ export const BootSplash: React.FC<BootSplashProps> = ({ onDone }) => {
       const image = new Image();
       image.onload = markLoaded;
       image.onerror = markLoaded;
-      image.src = segment.src;
+      image.src = sheet(segment.src);
       return image;
     });
 
@@ -171,7 +175,7 @@ export const BootSplash: React.FC<BootSplashProps> = ({ onDone }) => {
             className={`bootsplash-frame-canvas${isTitleTransition ? ' is-transition-ring' : ''}${isTitleFrame ? ' is-title-frame' : ''}`}
             aria-hidden="true"
             style={{
-              backgroundImage: `url(${segment.src})`,
+              backgroundImage: `url(${sheet(segment.src)})`,
               backgroundPosition: `${-column * FRAME_SIZE}px ${-row * FRAME_SIZE}px`,
             }}
           />
@@ -180,7 +184,7 @@ export const BootSplash: React.FC<BootSplashProps> = ({ onDone }) => {
               className="bootsplash-frame-canvas is-title-frame is-transition-title"
               aria-hidden="true"
               style={{
-                backgroundImage: `url(${titleSegment.src})`,
+                backgroundImage: `url(${sheet(titleSegment.src)})`,
                 backgroundPosition: '0 -1536px',
               }}
             />

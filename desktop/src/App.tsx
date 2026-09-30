@@ -3,12 +3,19 @@ import { BootSplash } from './components/BootSplash';
 import { SalieriLogin } from './components/SalieriLogin';
 import { Workstation } from './components/Workstation';
 import LogoTransition from './components/LogoTransition';
+import { hasAssetPack, loadAssetPack } from './assetPack';
 /* App.css is imported once from main.tsx (tokens.css → App.css) — sole cascade owner. */
 
-type AppStep = 'splash' | 'login' | 'transition' | 'workstation';
+type AppStep = 'probe' | 'splash' | 'login' | 'transition' | 'workstation';
 
 function App() {
-  const [step, setStep] = useState<AppStep>('splash');
+  const [step, setStep] = useState<AppStep>('probe');
+  useEffect(() => {
+    let cancelled = false;
+    // The original entrance animation is part of the pack; without it the app opens on login.
+    void loadAssetPack().then((on) => { if (!cancelled) setStep(on ? 'splash' : 'login'); });
+    return () => { cancelled = true; };
+  }, []);
   const [worldline, setWorldline] = useState<'steins_gate' | 'beta'>(() => {
     try {
       const stored = localStorage.getItem('amadeus_pc_worldline');
@@ -31,7 +38,7 @@ function App() {
   };
 
   const handleLoginSuccess = () => {
-    setStep('transition');
+    setStep(hasAssetPack() ? 'transition' : 'workstation');
   };
 
   const handleTransitionDone = () => {

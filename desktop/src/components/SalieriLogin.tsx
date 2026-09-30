@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './SalieriLogin.css';
-import photoLeft from '../assets/photo_left.png';
-import amadeusLogo from '../assets/amadeus_logo.png';
 import { audioService } from '../services/AudioService';
+import { packAsset } from '../assetPack';
 import { audioPlayer } from '../hooks/useAudioPlayer';
 
 interface SalieriLoginProps {
@@ -15,6 +14,8 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
   const [errorMsg, setErrorMsg] = useState('');
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [scale, setScale] = useState(1);
+  const photoLeft = packAsset('login/photo_left.png');
+  const amadeusLogo = packAsset('login/amadeus_logo.png');
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const errTimeoutRef = useRef<number | null>(null);
@@ -189,9 +190,11 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
         style={{ transform: `scale(${scale})` }}
       >
         {/* 左侧写实黑白照片 (已移入等比例缩放的 wrapper 内部，以实现 100% 精确网格线重合与滤色混合) */}
-        <div className="left-photo-viewport">
-          <img src={photoLeft} className="left-photo" alt="System Terminal Background" />
-        </div>
+        {photoLeft && (
+          <div className="left-photo-viewport">
+            <img src={photoLeft} className="left-photo" alt="System Terminal Background" />
+          </div>
+        )}
 
         {/* Canvas 动态二进制数字背景雨 */}
         <canvas ref={canvasRef} className="binary-stream-canvas" />
@@ -200,11 +203,15 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
           <form onSubmit={handleSubmit} className="salieri-login-form">
 
             <div className="amadeus-logo-container">
-              <img
-                src={amadeusLogo}
-                className="amadeus-logo-img"
-                alt="AMADEUS Logo"
-              />
+              {amadeusLogo ? (
+                <img
+                  src={amadeusLogo}
+                  className="amadeus-logo-img"
+                  alt="AMADEUS Logo"
+                />
+              ) : (
+                <span className="amadeus-logo-text">AMADEUS</span>
+              )}
             </div>
 
             <div className="input-field-group user-id-group">

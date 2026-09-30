@@ -24,6 +24,7 @@ import { HistorySidebar, type ConversationSummary } from './HistorySidebar';
 import { TtsDebugPanel } from './TtsDebugPanel';
 import AvatarViewer from './AvatarViewer';
 import SpriteAnimator from './SpriteAnimator';
+import { packAsset } from '../assetPack';
 import { useAudioPlayer, audioPlayer } from '../hooks/useAudioPlayer';
 import { audioService } from '../services/AudioService';
 import { BilingualMessage } from './BilingualMessage';
@@ -1532,6 +1533,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         : status === 'CONNECTING' || sessionPending ? 'OFFLINE · 连接中' : 'OFFLINE';
   const presence = isThinking ? 'thinking' : isPlaying ? 'speaking' : isSynthesizing ? 'voicing' : online ? 'listening' : 'offline';
   const presenceLabel = { thinking: '思考中', speaking: '说话中', voicing: '准备语音', listening: '聆听中', offline: '未连接' }[presence];
+  const thinkingSprite = packAsset(worldline === 'steins_gate' ? 'assets/ui/spinner_sg_20f.png' : 'assets/ui/spinner_beta_20f.png');
   const lastAssistantId = [...visibleMessages].reverse().find((msg) => msg.role === 'assistant' && !msg.systemError)?.id;
   // An old conversation whose connection was removed keeps its history but must be re-pointed by the user.
   const providerGone = Boolean(activeConversation) && providers.length > 0 && (!activeProvider || activeProvider.enabled === false);
@@ -1713,8 +1715,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
                       />
                       {msg.streaming && isThinking && operationLabel && (
                         <div className="ws2-thinking" aria-busy={activityBusy}>
-                          <SpriteAnimator
-                            spriteSrc={worldline === 'steins_gate' ? '/assets/ui/spinner_sg_20f.png' : '/assets/ui/spinner_beta_20f.png'}
+                          {thinkingSprite ? <SpriteAnimator
+                            spriteSrc={thinkingSprite}
                             cols={10}
                             rows={2}
                             frameWidth={worldline === 'beta' ? 54.5 : 54}
@@ -1723,7 +1725,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                             frameCount={20}
                             fps={15}
                             loop={true}
-                          />
+                          /> : <span className="ws2-thinking-ring" aria-hidden="true" />}
                           <span className="ws2-thinking-label" data-testid="activity-operation-label">{operationLabel}</span>
                         </div>
                       )}
