@@ -285,7 +285,8 @@ export const SalieriSelect: React.FC<SalieriSelectProps> = ({
           );
         })}
       </ul>,
-      document.body,
+      // Inside the workstation the menu mounts on its root so it inherits the worldline palette; fixed positioning keeps it unclipped.
+      rootRef.current?.closest<HTMLElement>('.ws2') ?? document.body,
     )
     : null;
 
