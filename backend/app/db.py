@@ -8,7 +8,7 @@ import os
 import shutil
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 
@@ -21,6 +21,7 @@ except ImportError:  # surfaced as a readiness/startup error, never silently ign
 
 Worldline = Literal["steins_gate", "beta"]
 DatabaseKind = Literal["history", "memory", "control"]
+SelectorAdmission = Literal["pending", "admitted", "manual"]
 
 EMBEDDING_MODEL = "intfloat/multilingual-e5-small"
 EMBEDDING_DIMENSION = 384
@@ -600,6 +601,8 @@ CREATE TABLE IF NOT EXISTS provider_configurations (
     default_model TEXT NOT NULL,
     display_name TEXT NOT NULL DEFAULT '',
     enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+    selector_admission TEXT NOT NULL DEFAULT 'admitted'
+        CHECK(selector_admission IN ('pending','admitted','manual')),
     created_at_utc TEXT NOT NULL DEFAULT '',
     updated_at_utc TEXT NOT NULL
 );
@@ -1230,6 +1233,16 @@ def _initialize_vec0(path: str) -> None:
         connection.close()
 
 
+def _ensure_provider_selector_admission(connection: sqlite3.Connection) -> None:
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(provider_configurations)")}
+    if "selector_admission" not in columns:
+        connection.execute(
+            """ALTER TABLE provider_configurations ADD COLUMN
+               selector_admission TEXT NOT NULL DEFAULT 'admitted'
+               CHECK(selector_admission IN ('pending','admitted','manual'))"""
+        )
+
+
 def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str = "steins_gate") -> None:
     db_path = Path(path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1274,6 +1287,8 @@ def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str 
             raise RuntimeError(f"unsupported {kind} schema version at {path}: {current}")
 
         connection.executescript(schema)
+        if kind == "control":
+            _ensure_provider_selector_admission(connection)
         if kind == "memory":
             _ensure_experiences_is_pinned(connection)
             _ensure_memory_ingest_jobs_retryable(connection)
@@ -1343,6 +1358,7 @@ async def init_db() -> None:
 def _provider_configuration_row(row) -> dict[str, object]:
     payload = dict(row)
     payload["enabled"] = bool(int(payload.get("enabled") or 0))
+    payload["configuration_version"] = payload["updated_at_utc"]
     return payload
 
 
@@ -1351,7 +1367,7 @@ async def get_provider_configuration(provider_id: str) -> dict[str, object] | No
     try:
         cur = await db.execute(
             """SELECT provider_id, base_url, default_model, display_name,
-                      enabled, created_at_utc, updated_at_utc
+                      enabled, selector_admission, created_at_utc, updated_at_utc
                FROM provider_configurations
                WHERE provider_id=?""",
             (provider_id,),
@@ -1372,7 +1388,7 @@ async def list_provider_configurations(
         if enabled_only:
             cur = await db.execute(
                 """SELECT provider_id, base_url, default_model, display_name,
-                          enabled, created_at_utc, updated_at_utc
+                          enabled, selector_admission, created_at_utc, updated_at_utc
                    FROM provider_configurations
                    WHERE enabled=1
                    ORDER BY created_at_utc ASC, provider_id ASC"""
@@ -1380,14 +1396,14 @@ async def list_provider_configurations(
         elif include_disabled:
             cur = await db.execute(
                 """SELECT provider_id, base_url, default_model, display_name,
-                          enabled, created_at_utc, updated_at_utc
+                          enabled, selector_admission, created_at_utc, updated_at_utc
                    FROM provider_configurations
                    ORDER BY enabled DESC, created_at_utc ASC, provider_id ASC"""
             )
         else:
             cur = await db.execute(
                 """SELECT provider_id, base_url, default_model, display_name,
-                          enabled, created_at_utc, updated_at_utc
+                          enabled, selector_admission, created_at_utc, updated_at_utc
                    FROM provider_configurations
                    WHERE enabled=1
                    ORDER BY created_at_utc ASC, provider_id ASC"""
@@ -1398,6 +1414,18 @@ async def list_provider_configurations(
         await db.close()
 
 
+def _next_provider_configuration_version(previous: str | None = None) -> str:
+    now = datetime.now(timezone.utc)
+    if previous:
+        try:
+            prior = datetime.fromisoformat(previous).astimezone(timezone.utc)
+        except ValueError:
+            pass
+        else:
+            now = max(now, prior + timedelta(microseconds=1))
+    return now.isoformat()
+
+
 async def save_provider_configuration(
     provider_id: str,
     *,
@@ -1405,24 +1433,27 @@ async def save_provider_configuration(
     default_model: str,
     display_name: str | None = None,
     enabled: bool = True,
+    initial_admission: SelectorAdmission = "admitted",
 ) -> dict[str, object]:
     """Persist a profile row. Success is declared after COMMIT using known values.
 
     A post-commit re-read must never be required to decide whether the write
     landed — that path can mis-classify a committed row as failure.
     """
-    now = datetime.now(timezone.utc).isoformat()
     fallback_name = (
         "OpenAI-compatible" if provider_id == "custom" else provider_id
     )
     name = (display_name or "").strip() or fallback_name
     db = await get_db("steins_gate", "control")
     try:
+        await db.execute("BEGIN IMMEDIATE")
         cur = await db.execute(
-            "SELECT created_at_utc FROM provider_configurations WHERE provider_id=?",
+            "SELECT created_at_utc, updated_at_utc, selector_admission FROM provider_configurations WHERE provider_id=?",
             (provider_id,),
         )
         existing = await cur.fetchone()
+        now = _next_provider_configuration_version(existing["updated_at_utc"] if existing else None)
+        admission = existing["selector_admission"] if existing else initial_admission
         created_at = (
             str(existing["created_at_utc"] or now)
             if existing is not None
@@ -1431,8 +1462,8 @@ async def save_provider_configuration(
         await db.execute(
             """INSERT INTO provider_configurations(
                    provider_id,base_url,default_model,display_name,
-                   enabled,created_at_utc,updated_at_utc
-               ) VALUES(?,?,?,?,?,?,?)
+                   enabled,selector_admission,created_at_utc,updated_at_utc
+               ) VALUES(?,?,?,?,?,?,?,?)
                ON CONFLICT(provider_id) DO UPDATE SET
                    base_url=excluded.base_url,
                    default_model=excluded.default_model,
@@ -1445,6 +1476,7 @@ async def save_provider_configuration(
                 default_model,
                 name,
                 1 if enabled else 0,
+                admission,
                 created_at,
                 now,
             ),
@@ -1456,6 +1488,8 @@ async def save_provider_configuration(
             "default_model": default_model,
             "display_name": name,
             "enabled": bool(enabled),
+            "selector_admission": admission,
+            "configuration_version": now,
             "created_at_utc": created_at,
             "updated_at_utc": now,
         }
@@ -1475,7 +1509,7 @@ async def soft_disable_provider_configuration(
     Return value is built from pre-commit known fields after a successful COMMIT.
     """
     existing = await get_provider_configuration(provider_id)
-    now = datetime.now(timezone.utc).isoformat()
+    now = _next_provider_configuration_version(existing["updated_at_utc"] if existing else None)
     if existing is None:
         if not base_url or not default_model:
             raise ValueError(
@@ -1515,9 +1549,51 @@ async def soft_disable_provider_configuration(
             "default_model": effective_model,
             "display_name": effective_name,
             "enabled": False,
+            "selector_admission": existing["selector_admission"],
+            "configuration_version": now,
             "created_at_utc": created_at,
             "updated_at_utc": now,
         }
+    finally:
+        await db.close()
+
+
+async def update_provider_selector_admission(
+    provider_id: str, admission: SelectorAdmission, expected_configuration_version: str,
+) -> dict[str, object] | None:
+    """仅在配置版本仍匹配且接入未停用时保存准入值。"""
+    db = await get_db("steins_gate", "control")
+    try:
+        cur = await db.execute(
+            """UPDATE provider_configurations SET selector_admission=?
+               WHERE provider_id=? AND enabled=1 AND updated_at_utc=?
+               RETURNING *""",
+            (admission, provider_id, expected_configuration_version),
+        )
+        row = await cur.fetchone()
+        await cur.close()
+        await db.commit()
+        return _provider_configuration_row(row) if row else None
+    finally:
+        await db.close()
+
+
+async def touch_provider_configuration_version(provider_id: str) -> None:
+    """密钥写入前推进配置版本，阻止旧检查结果准入。"""
+    db = await get_db("steins_gate", "control")
+    try:
+        await db.execute("BEGIN IMMEDIATE")
+        cur = await db.execute(
+            "SELECT updated_at_utc FROM provider_configurations WHERE provider_id=?",
+            (provider_id,),
+        )
+        row = await cur.fetchone()
+        if row:
+            await db.execute(
+                "UPDATE provider_configurations SET updated_at_utc=? WHERE provider_id=?",
+                (_next_provider_configuration_version(row["updated_at_utc"]), provider_id),
+            )
+        await db.commit()
     finally:
         await db.close()
 
@@ -1528,6 +1604,7 @@ PROVIDER_CONFIGURATIONS_REQUIRED_COLUMNS = frozenset({
     "default_model",
     "display_name",
     "enabled",
+    "selector_admission",
     "created_at_utc",
     "updated_at_utc",
 })

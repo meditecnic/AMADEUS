@@ -11,10 +11,13 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, SecretStr
 
 from app.db import (
+    SelectorAdmission,
     get_provider_configuration,
     list_provider_configurations,
     save_provider_configuration,
     soft_disable_provider_configuration,
+    touch_provider_configuration_version,
+    update_provider_selector_admission,
 )
 from app.services.credentials import credential_store
 from app.services.model_catalog import (
@@ -62,6 +65,8 @@ class CustomProfileUpdate(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=80)
     base_url: str | None = None
     default_model: str | None = None
+    selector_admission: SelectorAdmission | None = None
+    expected_configuration_version: str | None = Field(default=None, min_length=1)
 
 
 def _definition(provider_id: str):
@@ -111,6 +116,8 @@ def _provider_row(definition) -> dict[str, Any]:
             else None
         ),
         "enabled": True,
+        "selector_admission": "admitted",
+        "configuration_version": None,
     }
 
 
@@ -127,7 +134,9 @@ def _clear_runtime_surfaces(provider_id: str) -> None:
         pass
 
 
-async def _activate_custom_profile(settings: dict[str, str]) -> dict[str, object]:
+async def _activate_custom_profile(
+    settings: dict[str, str], *, initial_admission: SelectorAdmission = "admitted",
+) -> dict[str, object]:
     """Fail-closed two-phase: durable disabled → register runtime → durable enabled.
 
     On any failure after the first durable write, the row remains disabled and
@@ -141,6 +150,7 @@ async def _activate_custom_profile(settings: dict[str, str]) -> dict[str, object
         default_model=settings["default_model"],
         display_name=settings["display_name"],
         enabled=False,
+        initial_admission=initial_admission,
     )
     try:
         configure_custom_provider(
@@ -205,9 +215,16 @@ async def list_providers():
     rows = [_provider_row(definition) for definition in provider_registry.list_definitions()]
     # Surface soft-disabled custom profiles so the UI can mark historical targets.
     known_ids = {row["id"] for row in rows}
+    by_id = {row["id"]: row for row in rows}
     for config in await list_provider_configurations(include_disabled=True):
         provider_id = str(config["provider_id"])
-        if not is_user_custom_provider(provider_id) or provider_id in known_ids:
+        if not is_user_custom_provider(provider_id):
+            continue
+        if provider_id in known_ids:
+            by_id[provider_id].update({
+                "selector_admission": config["selector_admission"],
+                "configuration_version": config["configuration_version"],
+            })
             continue
         if bool(config.get("enabled")):
             continue
@@ -237,9 +254,25 @@ async def list_providers():
                 "credential_required": False,
                 "base_url": str(config.get("base_url") or ""),
                 "enabled": False,
+                "selector_admission": config["selector_admission"],
+                "configuration_version": config["configuration_version"],
             }
         )
     return rows
+
+
+def _custom_profile_response(saved: dict[str, object]) -> dict[str, object]:
+    return {
+        "provider_id": saved["provider_id"],
+        "display_name": saved["display_name"],
+        "base_url": saved["base_url"],
+        "default_model": saved["default_model"],
+        "enabled": bool(saved.get("enabled")),
+        "created_at_utc": saved["created_at_utc"],
+        "selector_admission": saved["selector_admission"],
+        "configuration_version": saved["configuration_version"],
+        "source": "user_config",
+    }
 
 
 @router.post("/custom-profiles")
@@ -258,7 +291,7 @@ async def create_custom_profile(body: CustomProfileCreate):
             detail={"code": "invalid_provider_configuration", "message": str(exc)},
         ) from exc
     try:
-        saved = await _activate_custom_profile(settings)
+        saved = await _activate_custom_profile(settings, initial_admission="pending")
     except Exception as exc:
         code = (
             "provider_register_failed"
@@ -273,15 +306,7 @@ async def create_custom_profile(body: CustomProfileCreate):
             status_code=500,
             detail={"code": code, "message": str(exc)},
         ) from exc
-    return {
-        "provider_id": provider_id,
-        "display_name": saved["display_name"],
-        "base_url": saved["base_url"],
-        "default_model": saved["default_model"],
-        "enabled": bool(saved.get("enabled")),
-        "created_at_utc": saved["created_at_utc"],
-        "source": "user_config",
-    }
+    return _custom_profile_response(saved)
 
 
 @router.patch("/custom-profiles/{provider_id}")
@@ -293,6 +318,27 @@ async def update_custom_profile(provider_id: str, body: CustomProfileUpdate):
         raise HTTPException(status_code=404, detail="custom profile is unavailable")
     if existing is None and provider_id != "custom":
         raise HTTPException(status_code=404, detail="custom profile is unavailable")
+
+    admission_fields = {"selector_admission", "expected_configuration_version"}
+    if body.model_fields_set & admission_fields:
+        if (
+            body.selector_admission is None
+            or body.expected_configuration_version is None
+            or body.model_fields_set - admission_fields
+        ):
+            raise HTTPException(status_code=422, detail={
+                "code": "invalid_provider_configuration",
+                "message": "准入更新须同时提供准入值和期望配置版本，配置字段须单独保存。",
+            })
+        saved = await update_provider_selector_admission(
+            provider_id, body.selector_admission, body.expected_configuration_version,
+        )
+        if saved is None:
+            raise HTTPException(status_code=409, detail={
+                "code": "configuration_changed",
+                "message": "接入配置已变化，请刷新后重新检查。",
+            })
+        return _custom_profile_response(saved)
 
     # Resolve previous values from DB first, then live registry only as fallback.
     try:
@@ -332,15 +378,7 @@ async def update_custom_profile(provider_id: str, body: CustomProfileUpdate):
             status_code=500,
             detail={"code": "provider_register_failed", "message": str(exc)},
         ) from exc
-    return {
-        "provider_id": provider_id,
-        "display_name": saved["display_name"],
-        "base_url": saved["base_url"],
-        "default_model": saved["default_model"],
-        "enabled": bool(saved.get("enabled")),
-        "created_at_utc": saved["created_at_utc"],
-        "source": "user_config",
-    }
+    return _custom_profile_response(saved)
 
 
 @router.delete("/custom-profiles/{provider_id}")
@@ -444,12 +482,16 @@ async def update_custom_provider_configuration(update: CustomProviderConfigurati
         "display_name": saved["display_name"],
         "enabled": bool(saved.get("enabled")),
         "created_at_utc": saved.get("created_at_utc"),
+        "selector_admission": saved["selector_admission"],
+        "configuration_version": saved["configuration_version"],
     }
 
 
 @router.post("/{provider_id}/credentials")
 async def save_provider_credential(provider_id: str, update: CredentialUpdate):
     _definition(provider_id)
+    if is_custom_profile_id(provider_id):
+        await touch_provider_configuration_version(provider_id)
     credential_store.set(provider_id, update.api_key.get_secret_value())
     provider_model_cache.clear(provider_id)
     model_catalog.clear_discovery(provider_id)
@@ -459,6 +501,8 @@ async def save_provider_credential(provider_id: str, update: CredentialUpdate):
 @router.delete("/{provider_id}/credentials")
 async def delete_provider_credential(provider_id: str):
     _definition(provider_id)
+    if is_custom_profile_id(provider_id):
+        await touch_provider_configuration_version(provider_id)
     credential_store.delete(provider_id)
     provider_model_cache.clear(provider_id)
     model_catalog.clear_discovery(provider_id)

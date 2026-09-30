@@ -59,6 +59,8 @@ def test_custom_provider_configuration_is_validated_and_replaces_future_snapshot
             "enabled": bool(kwargs.get("enabled", True)),
             "created_at_utc": "2026-07-30T00:00:00Z",
             "updated_at_utc": "2026-07-30T00:00:00Z",
+            "selector_admission": "admitted",
+            "configuration_version": "2026-07-30T00:00:00Z",
         }
 
     monkeypatch.setattr(providers, "save_provider_configuration", persist)
