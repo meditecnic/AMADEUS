@@ -313,6 +313,27 @@ describe('useAmadeusWS v2', () => {
     unmount();
   });
 
+  it('commits a switch locally when auth was rejected, since the server has no session to switch', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const onWorldlineSwitched = vi.fn();
+    const { result, unmount } = renderHook(() => useAmadeusWS({ ...params, onWorldlineSwitched }));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.onopen?.();
+      socket.emit({ type: 'error', message: '缺失 deepseek API Key。' });
+    });
+    const sentBefore = socket.sent.length;
+
+    let started = false;
+    act(() => { started = result.current.switchWorldline('beta'); });
+
+    expect(started).toBe(true);
+    expect(socket.sent.length).toBe(sentBefore);
+    expect(onWorldlineSwitched).toHaveBeenCalledWith({ worldline: 'beta' });
+    expect(result.current.messages).toEqual([]);
+    unmount();
+  });
+
   it('switches worldline in place, invalidates old output, and waits for ACK', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const { result, unmount } = renderHook(() => useAmadeusWS(params));
