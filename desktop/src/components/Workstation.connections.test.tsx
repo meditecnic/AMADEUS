@@ -6,7 +6,8 @@ import { Workstation } from './Workstation';
 /* Failure modes guarded here (slice 3):
  * 1. A newly created connection whose first chat-check fails must stay out of the chat selector
  *    and must not replace the current selection.
- * 2. A passing check admits and selects it.
+ * 2. A passing check admits and selects it (admission is written to the backend).
+ * 2b. A pass for a configuration that changed meanwhile (409) must not admit or select it.
  * 3. A model chosen mid-turn whose update fails after the turn must say so and keep the old model. */
 
 const hoisted = vi.hoisted(() => ({
@@ -88,8 +89,19 @@ beforeEach(() => {
     const url = String(input);
     if (url === '/api/providers') return json(200, providers);
     if (url === '/api/providers/custom-profiles' && init?.method === 'POST') {
-      providers = [...providers, provider('custom:new', 'New One', 'm1', { source: 'user_config' })];
-      return json(200, { provider_id: 'custom:new', default_model: 'm1', enabled: true });
+      providers = [...providers, provider('custom:new', 'New One', 'm1', {
+        source: 'user_config', selector_admission: 'pending', configuration_version: 'v1',
+      })];
+      return json(200, { provider_id: 'custom:new', default_model: 'm1', enabled: true, selector_admission: 'pending', configuration_version: 'v1' });
+    }
+    if (decodeURIComponent(url) === '/api/providers/custom-profiles/custom:new' && init?.method === 'PATCH') {
+      const body = JSON.parse(String(init.body)) as { selector_admission: string; expected_configuration_version: string };
+      const row = providers.find((p) => p.id === 'custom:new')!;
+      if (body.expected_configuration_version !== (row as { configuration_version?: string }).configuration_version) {
+        return json(409, { detail: { code: 'configuration_changed' } });
+      }
+      providers = providers.map((p) => (p.id === 'custom:new' ? { ...p, selector_admission: body.selector_admission } : p));
+      return json(200, { provider_id: 'custom:new', selector_admission: body.selector_admission });
     }
     if (url.endsWith('/chat-check')) return chatCheck();
     if (url.startsWith('/api/providers/deepseek/models')) {
@@ -138,7 +150,23 @@ describe('Workstation connection admission and next-turn model', () => {
     expect(hoisted.reconnect.mock.calls.length).toBe(reconnectsBefore);
     expect(screen.getByRole('button', { name: '模型供应商' })).toHaveTextContent('DeepSeek');
     expect(providerOptions().some((name) => name.includes('New One'))).toBe(false);
-    expect(JSON.parse(localStorage.getItem('amadeus_pc_pending_providers') || '[]')).toContain('custom:new');
+    expect(providers.find((p) => p.id === 'custom:new')).toMatchObject({ selector_admission: 'pending' });
+  });
+
+  it('does not admit a connection whose configuration changed while its check ran', async () => {
+    chatCheck = () => {
+      // The user saved a new address mid-check; the backend version moved on.
+      providers = providers.map((p) => (p.id === 'custom:new' ? { ...p, configuration_version: 'v2' } : p));
+      return json(200, { ok: true, provider_id: 'custom:new', model_id: 'm1' });
+    };
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: '模型供应商' })).toHaveTextContent('DeepSeek'));
+
+    await createConnection();
+
+    expect(localStorage.getItem('amadeus_pc_provider')).not.toBe('custom:new');
+    expect(providers.find((p) => p.id === 'custom:new')).toMatchObject({ selector_admission: 'pending' });
+    expect(providerOptions().some((name) => name.includes('New One'))).toBe(false);
   });
 
   it('admits and selects a new connection once its chat-check passes', async () => {
@@ -149,7 +177,7 @@ describe('Workstation connection admission and next-turn model', () => {
 
     await waitFor(() => expect(localStorage.getItem('amadeus_pc_provider')).toBe('custom:new'));
     expect(hoisted.reconnect).toHaveBeenCalled();
-    expect(JSON.parse(localStorage.getItem('amadeus_pc_pending_providers') || '[]')).not.toContain('custom:new');
+    expect(providers.find((p) => p.id === 'custom:new')).toMatchObject({ selector_admission: 'admitted' });
     expect(providerOptions().some((name) => name.includes('New One'))).toBe(true);
   });
 

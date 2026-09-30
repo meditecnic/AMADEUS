@@ -71,6 +71,10 @@ export interface ProviderMetadata {
   preferred_model_id?: string | null;
   source?: 'builtin' | 'user_config' | string;
   enabled?: boolean;
+  /** pending = saved but kept out of the chat selector until a check passes or it is enabled by hand. */
+  selector_admission?: 'pending' | 'admitted' | 'manual';
+  /** Custom connections only; admission writes must quote it. */
+  configuration_version?: string | null;
 }
 
 interface ProviderControlsProps {
