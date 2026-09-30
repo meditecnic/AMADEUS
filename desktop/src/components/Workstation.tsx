@@ -1229,18 +1229,13 @@ export const Workstation: React.FC<WorkstationProps> = ({
       );
       if (!response.ok) throw new Error(`conversation delete failed: ${response.status}`);
       setDeleteTarget(null);
-      const rows = await loadConversations();
+      await loadConversations();
       if (wasActive) {
-        // The server already moved the selection to the neighbour; the last deletion leaves an empty draft.
-        const fallback = rows.find((row) => row.is_selected) || rows[0];
-        if (fallback) {
-          await selectConversation(fallback, true);
-        } else {
-          audioPlayer.stopAll();
-          setActiveConversationId(null);
-          resetToDraft?.();
-          window.setTimeout(reconnect, 0);
-        }
+        // Q51: deleting the open conversation returns to a blank draft; never silently open another one.
+        audioPlayer.stopAll();
+        setActiveConversationId(null);
+        resetToDraft?.();
+        window.setTimeout(reconnect, 0);
       }
     } catch (error) {
       console.warn('Conversation deletion failed:', error);
@@ -1322,7 +1317,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       newSettings.baseUrl.trim() &&
       (
         newSettings.baseUrl.trim().replace(/\/+$/, '') !== activeProvider.base_url?.replace(/\/+$/, '') ||
-        newSettings.model !== activeProvider.default_model
+        (newSettings.model && newSettings.model !== activeProvider.default_model)
       )
     ) {
       const endpoint = activeProviderId === 'custom'
@@ -1333,7 +1328,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           base_url: newSettings.baseUrl.trim(),
-          default_model: newSettings.model.trim(),
+          // An untouched model field arrives empty; keep the connection's own default.
+          default_model: newSettings.model.trim() || activeProvider.default_model,
           display_name: activeProvider.display_name,
         }),
       });
@@ -2066,8 +2062,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
         selfName={selfName}
         providerDisplayName={activeProvider?.display_name || activeProviderId}
         providerBaseUrl={activeProvider?.base_url}
+        providerDefaultModel={activeProvider?.default_model}
+        credentialRequired={activeProvider?.credential_required !== false}
         baseUrlConfigurable={Boolean(activeProvider?.base_url_configurable)}
-        model={model}
         modelOptions={availableModels}
         reasoningEffort={reasoningEffort}
         customProfiles={providers
