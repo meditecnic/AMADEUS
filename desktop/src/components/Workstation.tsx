@@ -93,6 +93,17 @@ export const Workstation: React.FC<WorkstationProps> = ({
     }, 280);
   };
   const [inputText, setInputText] = useState('');
+  // Each worldline keeps its own unsent draft; a failed switch rolls the prop back, which restores it too.
+  const draftsByWorldlineRef = useRef<Partial<Record<string, string>>>({});
+  const draftWorldlineRef = useRef(worldline);
+  useEffect(() => {
+    const previous = draftWorldlineRef.current;
+    if (previous === worldline) return;
+    draftsByWorldlineRef.current[previous] = inputText;
+    setInputText(draftsByWorldlineRef.current[worldline] ?? '');
+    draftWorldlineRef.current = worldline;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [worldline]);
   const [apiKey, setApiKey] = useState('');
   const [webSearchApiKey, setWebSearchApiKey] = useState('');
   const [webSearchConfigured, setWebSearchConfigured] = useState(false);

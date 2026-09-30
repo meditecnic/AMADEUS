@@ -439,6 +439,21 @@ describe('Workstation provider runtime changes', () => {
     await waitFor(() => expect(wsSpies.switchWorldline).toHaveBeenCalledWith('beta'));
   });
 
+  it('keeps each worldline’s unsent draft on its own line', async () => {
+    const onWorldlineChange = vi.fn();
+    const { rerender } = render(<Workstation worldline="steins_gate" onWorldlineChange={onWorldlineChange} onLogout={vi.fn()} />,
+    );
+    const box = () => screen.getByLabelText('输入消息') as HTMLTextAreaElement;
+    fireEvent.change(box(), { target: { value: 'SG 草稿' } });
+
+    rerender(<Workstation worldline="beta" onWorldlineChange={onWorldlineChange} onLogout={vi.fn()} />);
+    await waitFor(() => expect(box().value).toBe(''));
+    fireEvent.change(box(), { target: { value: 'β 草稿' } });
+
+    rerender(<Workstation worldline="steins_gate" onWorldlineChange={onWorldlineChange} onLogout={vi.fn()} />);
+    await waitFor(() => expect(box().value).toBe('SG 草稿'));
+  });
+
   it('rolls the parent worldline back after a correlated switch failure without resending', async () => {
     const onWorldlineChange = vi.fn();
     const { rerender } = render(<Workstation worldline="steins_gate" onWorldlineChange={onWorldlineChange} onLogout={vi.fn()} />,
