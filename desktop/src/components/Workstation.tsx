@@ -1229,18 +1229,13 @@ export const Workstation: React.FC<WorkstationProps> = ({
       );
       if (!response.ok) throw new Error(`conversation delete failed: ${response.status}`);
       setDeleteTarget(null);
-      const rows = await loadConversations();
+      await loadConversations();
       if (wasActive) {
-        // The server already moved the selection to the neighbour; the last deletion leaves an empty draft.
-        const fallback = rows.find((row) => row.is_selected) || rows[0];
-        if (fallback) {
-          await selectConversation(fallback, true);
-        } else {
-          audioPlayer.stopAll();
-          setActiveConversationId(null);
-          resetToDraft?.();
-          window.setTimeout(reconnect, 0);
-        }
+        // Q51: deleting the open conversation returns to a blank draft; never silently open another one.
+        audioPlayer.stopAll();
+        setActiveConversationId(null);
+        resetToDraft?.();
+        window.setTimeout(reconnect, 0);
       }
     } catch (error) {
       console.warn('Conversation deletion failed:', error);
