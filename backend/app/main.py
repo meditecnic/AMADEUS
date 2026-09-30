@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, SecretStr
 from typing import Optional
 from app import config
-from app.routers import chat_ws, conversations, history, providers, system_api, voice_ws
+from app.routers import asset_pack, chat_ws, conversations, history, providers, system_api, voice_ws
 from app.services.tts_queue import tts_manager
 from app.services.tts_sidecar import sidecar_supervisor
 from app.services.search import search_service
@@ -124,6 +124,7 @@ app.include_router(system_api.router)
 app.include_router(voice_ws.router)
 app.include_router(providers.router)
 app.include_router(conversations.router)
+app.include_router(asset_pack.router)
 
 from app.security.prompt import SYSTEM_PROMPT_BASE as DEFAULT_SYSTEM_PROMPT
 
