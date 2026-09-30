@@ -1,4 +1,4 @@
-"""BE-语音可靠性 B1: TTS 解耦 + turn liveness (RED-first).
+"""BE-语音可靠性 B1: TTS 解耦 + turn liveness.
 
 Public-event only: tests observe emitted dicts, never private Maps/Tasks.
 """
@@ -20,6 +20,12 @@ async def test_b1_ready_emitted_while_tts_hangs():
     """TTS promise 挂起时, 该段 segment.ready 已经发出."""
     events: list[dict] = []
     tts_gate = asyncio.Event()
+    ready_emitted = asyncio.Event()
+
+    def emit(event):
+        events.append(event)
+        if event["type"] == "segment.ready":
+            ready_emitted.set()
 
     async def translate(text):
         return f"zh:{text}"
@@ -29,19 +35,19 @@ async def test_b1_ready_emitted_while_tts_hangs():
         return b"audio"
 
     pipeline = SegmentPipeline(
-        _identity(), emit=events.append, translate=translate, synthesize=synthesize
+        _identity(), emit=emit, translate=translate, synthesize=synthesize
     )
     await pipeline.start()
     pipeline.submit(Segment(0, "一文目。"))
-    # Give translation (fast) a chance to commit while TTS still hangs.
-    await asyncio.sleep(0.1)
-    ready = [e for e in events if e["type"] == "segment.ready"]
-    assert [e["segment_id"] for e in ready] == [0], f"ready blocked by hanging TTS: {events!r}"
-    assert ready[0]["ja"] == "一文目。"
-    assert ready[0]["zh"] == "zh:一文目。"
-    # Cleanup: unblock then finish.
-    tts_gate.set()
-    await pipeline.finish(segment_count=1)
+    try:
+        await asyncio.wait_for(ready_emitted.wait(), timeout=2)
+        ready = [e for e in events if e["type"] == "segment.ready"]
+        assert [e["segment_id"] for e in ready] == [0], f"ready blocked by hanging TTS: {events!r}"
+        assert ready[0]["ja"] == "一文目。"
+        assert ready[0]["zh"] == "zh:一文目。"
+    finally:
+        tts_gate.set()
+        await pipeline.finish(segment_count=1)
 
 
 @pytest.mark.asyncio
@@ -49,6 +55,12 @@ async def test_b1_later_ready_not_blocked_by_earlier_hanging_tts():
     """segment 1 的 TTS 挂起时, segment 2 的 segment.ready 仍可按序发出."""
     events: list[dict] = []
     gate0 = asyncio.Event()
+    second_ready_emitted = asyncio.Event()
+
+    def emit(event):
+        events.append(event)
+        if event["type"] == "segment.ready" and event["segment_id"] == 1:
+            second_ready_emitted.set()
 
     async def translate(text):
         return f"zh:{text}"
@@ -60,16 +72,18 @@ async def test_b1_later_ready_not_blocked_by_earlier_hanging_tts():
         return b"audio1"
 
     pipeline = SegmentPipeline(
-        _identity(), emit=events.append, translate=translate, synthesize=synthesize
+        _identity(), emit=emit, translate=translate, synthesize=synthesize
     )
     await pipeline.start()
     pipeline.submit(Segment(0, "一文目。"))
     pipeline.submit(Segment(1, "二文目。"))
-    await asyncio.sleep(0.15)
-    ready_ids = [e["segment_id"] for e in events if e["type"] == "segment.ready"]
-    assert ready_ids == [0, 1], f"later ready blocked by earlier TTS: {events!r}"
-    gate0.set()
-    await pipeline.finish(segment_count=2)
+    try:
+        await asyncio.wait_for(second_ready_emitted.wait(), timeout=2)
+        ready_ids = [e["segment_id"] for e in events if e["type"] == "segment.ready"]
+        assert ready_ids == [0, 1], f"later ready blocked by earlier TTS: {events!r}"
+    finally:
+        gate0.set()
+        await pipeline.finish(segment_count=2)
 
 
 @pytest.mark.asyncio
@@ -110,6 +124,12 @@ async def test_b1_heartbeat_proves_liveness_during_active_turn():
     """活跃 turn 持续收到明确 liveness (turn.heartbeat, 存活语义, 无进度冒充)."""
     events: list[dict] = []
     release = asyncio.Event()
+    heartbeats_emitted = asyncio.Event()
+
+    def emit(event):
+        events.append(event)
+        if sum(e["type"] == "turn.heartbeat" for e in events) >= 2:
+            heartbeats_emitted.set()
 
     async def translate(text):
         await release.wait()
@@ -121,24 +141,25 @@ async def test_b1_heartbeat_proves_liveness_during_active_turn():
 
     pipeline = SegmentPipeline(
         _identity(),
-        emit=events.append,
+        emit=emit,
         translate=translate,
         synthesize=synthesize,
         heartbeat_interval=0.02,
     )
     await pipeline.start()
     pipeline.submit(Segment(0, "長い文です。"))
-    await asyncio.sleep(0.12)
-    heartbeats = [e for e in events if e["type"] == "turn.heartbeat"]
-    assert len(heartbeats) >= 2, f"no liveness during active turn: {events!r}"
-    for hb in heartbeats:
-        assert hb["turn_id"] == "turn-b1"
-        assert hb["generation"] == 1
-        # Liveness only: must not impersonate content/progress/completion.
-        assert "ja" not in hb and "zh" not in hb and "data" not in hb
-        assert "segment_id" not in hb and "segment_count" not in hb
-    release.set()
-    await pipeline.finish(segment_count=1)
+    try:
+        await asyncio.wait_for(heartbeats_emitted.wait(), timeout=2)
+        heartbeats = [e for e in events if e["type"] == "turn.heartbeat"]
+        assert len(heartbeats) >= 2, f"no liveness during active turn: {events!r}"
+        for hb in heartbeats:
+            assert hb["turn_id"] == "turn-b1"
+            assert hb["generation"] == 1
+            assert "ja" not in hb and "zh" not in hb and "data" not in hb
+            assert "segment_id" not in hb and "segment_count" not in hb
+    finally:
+        release.set()
+        await pipeline.finish(segment_count=1)
     # Heartbeat stops after terminal.
     terminal_idx = next(i for i, e in enumerate(events) if e["type"] == "turn.completed")
     late_hb = [e for e in events[terminal_idx + 1 :] if e["type"] == "turn.heartbeat"]
