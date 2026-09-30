@@ -555,6 +555,11 @@
   background: var(--ws-panel) !important; border: 0 !important; box-shadow: inset 0 0 0 1px var(--ws-line-2), inset 3px 0 0 var(--ws-accent);
   color: var(--ws-ink); backdrop-filter: blur(8px);
 }
+/* While the pill shows, the bottom band of the reading column fades out so it never reads as a word inside a line. */
+.ws2-transcript-wrap:has(> .ws2-to-latest)::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; height: 58px; pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--ws-bg) 72%);
+}
 
 /* ---------- composer ---------- */
 
