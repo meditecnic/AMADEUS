@@ -226,11 +226,16 @@ async def test_abnormal_disconnect_cleanup(setup_test_db):
     """
     session_id = "disconnect-session"
     ws = MockWebSocket(session_id=session_id)
+    stream_started = asyncio.Event()
+    stream_cancelled = asyncio.Event()
     
-    # Mock deepseek to yield slowly so the task remains active
-    async def mock_slow_chat_stream(self, active_history, memory_summary=None, api_key=None, system_prompt=None, temperature=0.7, tools=None, tool_choice=None):
-        yield {"content": "Initial segment", "tool_calls": None}
-        await asyncio.sleep(5.0) # Long delay
+    async def mock_slow_chat_stream(self, *args, **kwargs):
+        stream_started.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            stream_cancelled.set()
+            raise
         yield {"content": "Final segment", "tool_calls": None}
         
     async def mock_translate(self, text, api_key=None):
@@ -243,34 +248,28 @@ async def test_abnormal_disconnect_cleanup(setup_test_db):
         # Run websocket endpoint task
         endpoint_task = asyncio.create_task(websocket_chat_endpoint(ws))
         
-        # 1. Send auth
-        await ws.recv_queue.put({"type": "auth", "api_key": "test_key"})
-        await asyncio.sleep(0.05) # Give it moment to authenticate and load from db
-        
-        # 2. Send chat content
-        await ws.recv_queue.put({"type": "chat", "content": "Hello"})
-        await asyncio.sleep(0.1) # Wait for processor to spin up
-        
-        session_state = sessions.get(session_id)
-        assert session_state is not None
-        assert session_state.is_busy is True
-        assert session_state.active_task is not None
-        assert not session_state.active_task.done()
-        
-        # 3. Simulate sudden websocket disconnect
-        # We trigger this by closing the ws or cancelling the endpoint task
-        ws.closed = True
-        await ws.recv_queue.put(None) # Causes receive_json to raise WebSocketDisconnect
-        
-        # Await the endpoint task
-        await endpoint_task
-        
-        # Give a microstep for finalizers to finish gathering
-        await asyncio.sleep(0.05)
+        try:
+            await ws.recv_queue.put({"type": "auth", "api_key": "test_key"})
+            ready = await asyncio.wait_for(ws.send_queue.get(), timeout=5)
+            assert ready["type"] == "session.ready"
+
+            await ws.recv_queue.put({"type": "chat", "content": "Hello"})
+            await asyncio.wait_for(stream_started.wait(), timeout=5)
+
+            session_state = sessions.get(session_id)
+            assert session_state is not None
+            assert session_state.is_busy is True
+            assert session_state.active_task is not None
+            assert not session_state.active_task.done()
+        finally:
+            ws.closed = True
+            await ws.recv_queue.put(None)
+            await asyncio.wait_for(endpoint_task, timeout=5)
         
         # Verify tasks are cancelled and cleaned up
         assert session_state.is_busy is False
-        assert session_state.active_task.done() or session_state.active_task is None
+        assert session_state.active_task is None or session_state.active_task.done()
+        assert stream_cancelled.is_set()
         
         # Verify database lock is free (all connections closed)
         db_file = setup_test_db
