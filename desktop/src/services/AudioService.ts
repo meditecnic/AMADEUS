@@ -1,4 +1,5 @@
 import { Howl, Howler } from 'howler';
+import { packAsset } from '../assetPack';
 
 type Worldline = 'steins_gate' | 'beta';
 
@@ -152,8 +153,11 @@ class AudioService {
   }
 
   /** Play an explicitly supplied source in a looping channel. */
-  public playBGM(src: string, volume?: number) {
+  public playBGM(path: string, volume?: number) {
     if (!this.enableBGM) return;
+    // All music is original soundtrack from the optional pack; without it the channel stays silent.
+    const src = packAsset(path);
+    if (!src) return;
     if (volume !== undefined) this.bgmVolume = Math.max(0, Math.min(1, volume));
 
     if (this.currentBGM && (this.currentBGM as any)._amadeusSrc === src) return;
@@ -177,7 +181,8 @@ class AudioService {
     if (!this.enableBGM) return;
     if (volume !== undefined) this.bgmVolume = Math.max(0, Math.min(1, volume));
 
-    const nextPlaylist = WORLDLINE_PLAYLISTS[worldline];
+    const nextPlaylist = WORLDLINE_PLAYLISTS[worldline].map(packAsset).filter((src): src is string => Boolean(src));
+    if (nextPlaylist.length === 0) return;
     const sameWorldline = this.activeWorldline === worldline && this.playlist.length > 0;
     if (sameWorldline && this.currentBGM) return;
 
@@ -190,8 +195,10 @@ class AudioService {
     this.transitionTo(this.playlist[this.playlistIndex], false);
   }
 
-  public playSFX(src: string, volume?: number) {
+  public playSFX(path: string, volume?: number) {
     if (!this.enableSFX || this.isMuted) return;
+    const src = packAsset(path);
+    if (!src) return;
     const vol = volume !== undefined ? volume : this.sfxVolume;
 
     const sfx = new Howl({

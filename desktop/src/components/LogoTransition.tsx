@@ -1,4 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { packAsset } from '../assetPack';
+
+// Mounted only when the pack is present (App skips this step otherwise).
+const logoFrame = (n: number) => packAsset(`assets/images/logo${n}.png`) ?? '';
 
 interface LogoTransitionProps {
   onComplete: () => void;
@@ -13,7 +17,7 @@ const LogoTransition: React.FC<LogoTransitionProps> = ({ onComplete }) => {
   useEffect(() => {
     for (let i = 1; i <= 39; i++) {
       const img = new Image();
-      img.src = `/assets/images/logo${i}.png`;
+      img.src = logoFrame(i);
     }
   }, []);
 
@@ -52,7 +56,7 @@ const LogoTransition: React.FC<LogoTransitionProps> = ({ onComplete }) => {
       }}
     >
       <img
-        src={`/assets/images/logo${frame}.png`}
+        src={logoFrame(frame)}
         alt="Amadeus Logo Animation"
         className="logo-transition-img"
       />

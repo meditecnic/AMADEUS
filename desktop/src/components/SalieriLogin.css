@@ -63,7 +63,9 @@
 .login-content-wrapper {
   width: 1920px;
   height: 1080px;
-  background-image: url('/bg/SG0_IBG006D.png'); /* 纯底图背景 */
+  /* Original CG comes from the optional asset pack; without it the canvas stays near-black. */
+  background-color: #0a0b0d;
+  background-image: var(--pack-login-bg, none);
   background-size: 100% 100%;
   background-position: center;
   background-repeat: no-repeat;
@@ -123,6 +125,15 @@
   mask-position: 150% 150%;
   opacity: 0;
   animation: reveal-logo-diagonal 1.5s cubic-bezier(0.25, 0.8, 0.25, 1) forwards;
+}
+
+.amadeus-logo-text {
+  font-family: 'EB Garamond', Georgia, serif;
+  font-size: 150px;
+  font-weight: 500;
+  letter-spacing: .14em;
+  color: #e8e6e1;
+  text-shadow: 0 0 24px rgba(143, 220, 255, .18);
 }
 
 .amadeus-logo-img {

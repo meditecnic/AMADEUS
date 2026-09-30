@@ -1,4 +1,8 @@
 ﻿import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
+import { hasAssetPack, packAsset } from '../assetPack';
+
+// The portraits are original game art, shipped only in the optional asset pack.
+const art = (path: string) => packAsset(path) ?? '';
 
 const EMOTION_MAP: Record<string, { base: string; blink: string }> = {
   neutral: {
@@ -108,10 +112,10 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
   if (glitchState === 'heavy') glitchClass = 'glitch-heavy';
   else if (glitchState === 'light') glitchClass = 'glitch-light';
 
-  const img1 = `${config.base}1.png`;
-  const img2 = `${config.base}2.png`;
-  const img3 = `${config.base}3.png`;
-  const imgBlink = config.blink;
+  const img1 = art(`${config.base}1.png`);
+  const img2 = art(`${config.base}2.png`);
+  const img3 = art(`${config.base}3.png`);
+  const imgBlink = art(config.blink);
 
   useLayoutEffect(() => {
     let rafId: number | null = null;
@@ -137,6 +141,14 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
     rafId = requestAnimationFrame(apply);
     return () => { if (rafId) cancelAnimationFrame(rafId); };
   }, []);
+
+  if (!hasAssetPack()) {
+    return (
+      <div className={`avatar-viewer-container avatar-absent${variant === 'stage' ? ' avatar-stage' : ''}`} data-testid="avatar-absent">
+        <p>立绘未载入<small>安装原作素材包后显示</small></p>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -173,7 +185,7 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
           className="avatar-sprite-layer"
           ref={img1Ref}
           onError={(e) => {
-            e.currentTarget.src = '/assets/images/kurisu_normal1.png';
+            e.currentTarget.src = art('/assets/images/kurisu_normal1.png');
           }}
         />
 
@@ -183,7 +195,7 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
           className="avatar-sprite-layer"
           ref={img2Ref}
           onError={(e) => {
-            e.currentTarget.src = '/assets/images/kurisu_normal2.png';
+            e.currentTarget.src = art('/assets/images/kurisu_normal2.png');
           }}
         />
 
@@ -193,7 +205,7 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
           className="avatar-sprite-layer"
           ref={img3Ref}
           onError={(e) => {
-            e.currentTarget.src = '/assets/images/kurisu_normal3.png';
+            e.currentTarget.src = art('/assets/images/kurisu_normal3.png');
           }}
         />
 
@@ -203,7 +215,7 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
           className="avatar-sprite-layer"
           ref={imgBlinkRef}
           onError={(e) => {
-            e.currentTarget.src = '/assets/images/kurisu_eyes_closed1.png';
+            e.currentTarget.src = art('/assets/images/kurisu_eyes_closed1.png');
           }}
         />
       </div>

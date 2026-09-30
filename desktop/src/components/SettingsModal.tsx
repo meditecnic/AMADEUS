@@ -4,6 +4,7 @@ import {
   type ModelCatalogEntry,
 } from './ProviderControls';
 import { SalieriSelect } from './SalieriSelect';
+import { packAsset } from '../assetPack';
 
 export type CredentialStatus = 'checking' | 'configured' | 'not_configured' | 'saving' | 'error';
 
@@ -489,7 +490,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {/* Rotating ring is clipped to modal bounds so it cannot expand a scrollport. */}
         <div className="config-ring-clip" aria-hidden="true">
           <div className="config-ring-bg">
-            <img src="/assets/ui/ring_config.png" alt="" />
+            {packAsset('assets/ui/ring_config.png') && <img src={packAsset('assets/ui/ring_config.png') ?? ''} alt="" />}
           </div>
         </div>
         <div className="modal-inner-content" data-testid="settings-modal-inner">

@@ -530,6 +530,8 @@
 @keyframes ws2-pulse { 50% { opacity: .25; } }
 
 .ws2-thinking { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+/* Self-made stand-in for the original thinking ring (asset pack). */
+.ws2-thinking-ring { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid rgba(var(--ws-accent-rgb), .22); border-top-color: var(--ws-accent); animation: ws2-spin .9s linear infinite; }
 .ws2-thinking-label { font-family: var(--ws-mono); font-size: 11px; letter-spacing: .16em; color: var(--ws-accent); }
 .ws2-voicing { margin-top: 8px; font-size: 12px; letter-spacing: .1em; color: var(--ws-ink-3); }
 .ws2-actions { display: flex; gap: 4px; margin-top: 8px; }
@@ -715,6 +717,9 @@
 }
 .ws2 .avatar-stage .avatar-sprite-layer { position: absolute; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; object-fit: contain; object-position: bottom; transition: none; filter: none; }
 .ws2 .avatar-stage .breath-animation { animation: ws2-breathe 5.5s ease-in-out infinite; }
+.ws2 .avatar-absent { display: grid; place-items: center; }
+.ws2 .avatar-absent p { margin: 0; display: grid; gap: 6px; justify-items: center; font-family: var(--ws-serif-cjk); font-size: 14px; letter-spacing: .3em; color: var(--ws-ink-3); }
+.ws2 .avatar-absent small { font-family: var(--ws-sans); font-size: 11px; letter-spacing: .12em; }
 @keyframes ws2-breathe { 50% { transform: translateY(-2px) scaleY(1.004); } }
 .ws2 .avatar-stage::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 22%; background: linear-gradient(0deg, var(--ws-bg) 8%, rgba(0, 0, 0, 0)); pointer-events: none; }
 /* Plate: her voice (scope) and presence — one instrument in the lower-right corner of the booth. The chapter card carries her name. */
@@ -793,7 +798,7 @@
 .ws2-sysmenu.open { visibility: visible; pointer-events: auto; transition: none; }
 .ws2-sysmenu::before {
   content: ''; position: absolute; left: 34%; top: 50%; width: min(620px, 70vh); aspect-ratio: 1; translate: -50% -50%; pointer-events: none;
-  background: url('/assets/ui/ring_config.png') center / contain no-repeat; filter: grayscale(1) brightness(1.8); opacity: 0;
+  background: var(--pack-ring, none) center / contain no-repeat; filter: grayscale(1) brightness(1.8); opacity: 0;
   transition: opacity .4s ease .08s; animation: ws2-spin 80s linear infinite;
 }
 .ws2[data-wl='beta'] .ws2-sysmenu::before { filter: none; }
