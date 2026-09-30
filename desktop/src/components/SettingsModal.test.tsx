@@ -43,7 +43,6 @@ const baseProps = {
   providerDisplayName: 'DeepSeek',
   providerBaseUrl: null,
   baseUrlConfigurable: false,
-  model: 'deepseek-v4-flash',
   modelOptions: [],
   reasoningEffort: 'high' as const,
 };
@@ -74,6 +73,27 @@ describe('clampChatTemperature', () => {
 function openConnectionsTab() {
   fireEvent.click(screen.getByRole('button', { name: 'CONNECTIONS' }));
 }
+
+describe('connection default model', () => {
+  it('shows the connection’s own default model, not the session model, and an untouched field is not a change', async () => {
+    const onSaveSettings = vi.fn().mockResolvedValue(undefined);
+    render(
+      <SettingsModal
+        {...baseProps}
+        providerDisplayName="Local"
+        providerBaseUrl="http://127.0.0.1:1234/v1"
+        providerDefaultModel="local-model"
+        baseUrlConfigurable
+        onSaveSettings={onSaveSettings}
+      />,
+    );
+    openConnectionsTab();
+    expect(screen.getByPlaceholderText('local-model')).toHaveValue('local-model');
+    fireEvent.click(screen.getByRole('button', { name: '保存连接设置' }));
+    await waitFor(() => expect(onSaveSettings).toHaveBeenCalled());
+    expect(onSaveSettings.mock.calls[0][0].model).toBe('');
+  });
+});
 
 describe('SYSTEM CONFIG information architecture', () => {
   it('clips the modal shell so only tab-panels is the scrollport host', () => {
@@ -657,15 +677,6 @@ describe('SettingsModal self name field (Slice B)', () => {
 
     await waitFor(() => expect(onSaveSettings).toHaveBeenCalled());
     expect(onSaveSettings.mock.calls[0][0].selfName).toBe('新名字');
-  });
-
-  it('does not send a model change when the default-model field was not edited', async () => {
-    // A stale snapshot used to overwrite the live model and pair a DeepSeek model with a custom connection.
-    const onSaveSettings = vi.fn();
-    render(<SettingsModal {...baseProps} model="some-live-model" onSaveSettings={onSaveSettings} />);
-    fireEvent.click(screen.getByText('保存基本设置'));
-    await waitFor(() => expect(onSaveSettings).toHaveBeenCalled());
-    expect(onSaveSettings.mock.calls[0][0].model).toBe('');
   });
 
   it('clears the name when the field is emptied', async () => {

@@ -193,8 +193,11 @@ export interface SettingsModalProps {
   selfName?: string;
   providerDisplayName: string;
   providerBaseUrl?: string | null;
+  /** The connection's own default model; the session model may belong to another provider. */
+  providerDefaultModel?: string | null;
+  /** false for local connections that take no key. */
+  credentialRequired?: boolean;
   baseUrlConfigurable: boolean;
-  model: string;
   modelOptions: ModelCatalogEntry[];
   reasoningEffort: string | null;
   /** Enabled OpenAI-compatible connections for multi-profile management. */
@@ -264,8 +267,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   selfName = '',
   providerDisplayName,
   providerBaseUrl,
+  providerDefaultModel,
+  credentialRequired = true,
   baseUrlConfigurable,
-  model,
   modelOptions: _modelOptions,
   reasoningEffort,
   customProfiles = [],
@@ -302,10 +306,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [expandedProfileDetails, setExpandedProfileDetails] = useState<Record<string, boolean>>({});
   /** Optimistic hide after successful delete until parent snapshot catches up. */
   const [removedProfileIds, setRemovedProfileIds] = useState<Record<string, true>>({});
+  /** Row-level failures stay on the row: the page-level alert sits far below a long connection list. */
+  const [profileError, setProfileError] = useState<{ id: string; message: string } | null>(null);
   // Retained for Workstation prop contract; model pick lives on the bottom bar.
   void _modelOptions;
   const [localBaseUrl, setLocalBaseUrl] = useState(providerBaseUrl || '');
-  const [localModel, setLocalModel] = useState(model);
+  const [localModel, setLocalModel] = useState(providerDefaultModel || '');
   const [localReasoningEffort, setLocalReasoningEffort] = useState(
     reasoningEffort,
   );
@@ -380,16 +386,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setLocalSelfName(selfName);
     setSelfNameError(null);
     setLocalBaseUrl(providerBaseUrl || '');
-    setLocalModel(model);
+    setLocalModel(providerDefaultModel || '');
     setLocalReasoningEffort(reasoningEffort);
     setShowCreateProfileForm(false);
     setShowDisabledProfiles(false);
     setExpandedProfileDetails({});
     setRemovedProfileIds({});
+    setProfileError(null);
     setNewProfileName('');
     setNewProfileBaseUrl('http://127.0.0.1:1234/v1');
     setNewProfileModel('local-model');
-  }, [isOpen, worldline, apiKey, webSearchApiKey, webSearchActiveProvider, systemPrompt, enableTts, sovitsUrl, temperature, identityMode, selfName, providerBaseUrl, model, reasoningEffort]);
+  }, [isOpen, worldline, apiKey, webSearchApiKey, webSearchActiveProvider, systemPrompt, enableTts, sovitsUrl, temperature, identityMode, selfName, providerBaseUrl, providerDefaultModel, reasoningEffort]);
 
   if (!isOpen) return null;
 
@@ -424,7 +431,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         baseUrl: localBaseUrl,
         // Only an edited「默认模型」field is a model change; otherwise a stale snapshot would overwrite
         // the live selection (seen as a DeepSeek model paired with a custom connection).
-        model: baseUrlConfigurable && localModel.trim() && localModel.trim() !== model ? localModel.trim() : '',
+        model: baseUrlConfigurable && localModel.trim() && localModel.trim() !== (providerDefaultModel || '') ? localModel.trim() : '',
         reasoningEffort: localReasoningEffort,
       });
       setReplacingWebSearchKey(false);
@@ -644,7 +651,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             >
               <div className="connections-summary" data-testid="connections-summary">
                 <span className="connections-status-chip">
-                  {providerDisplayName} · {displayCredentialStatus === 'configured' ? '密钥已配置' : '密钥未配置'}
+                  {providerDisplayName} · {!credentialRequired ? '无需密钥' : displayCredentialStatus === 'configured' ? '密钥已配置' : '密钥未配置'}
                 </span>
                 <span className="connections-status-chip">
                   搜索 · {activeSearchLabel}
@@ -661,16 +668,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div className="credential-card-header">
                   <label>{providerDisplayName.toUpperCase()} API 密钥</label>
                   <span
-                    className={`credential-badge ${displayCredentialStatus.replace('_', '-')}`}
+                    className={`credential-badge ${credentialRequired ? displayCredentialStatus.replace('_', '-') : 'not-required'}`}
                     data-testid="credential-badge"
                   >
-                    {displayCredentialStatus === 'configured' && '已保存'}
-                    {displayCredentialStatus === 'not_configured' && '未配置'}
-                    {displayCredentialStatus === 'checking' && '检查中'}
-                    {displayCredentialStatus === 'saving' && '保存中'}
-                    {displayCredentialStatus === 'error' && '失败'}
+                    {!credentialRequired && '无需密钥'}
+                    {credentialRequired && displayCredentialStatus === 'configured' && '已保存'}
+                    {credentialRequired && displayCredentialStatus === 'not_configured' && '未配置'}
+                    {credentialRequired && displayCredentialStatus === 'checking' && '检查中'}
+                    {credentialRequired && displayCredentialStatus === 'saving' && '保存中'}
+                    {credentialRequired && displayCredentialStatus === 'error' && '失败'}
                   </span>
                 </div>
+                {!credentialRequired ? (
+                  <p className="setting-field-hint" data-testid="credential-status">
+                    这个接入不需要密钥 · 是否可用以上方连接测试为准
+                  </p>
+                ) : (<>
                 <p className="setting-field-hint">
                   密钥只写不读：空表示不改动；粘贴新密钥后点「保存连接设置」。
                 </p>
@@ -695,6 +708,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   {displayCredentialStatus === 'saving' && '保存中…'}
                   {displayCredentialStatus === 'error' && '保存失败 · 请检查连接后重试'}
                 </p>
+                </>)}
                 {baseUrlConfigurable && (
                   <div className="connections-base-url-fields">
                     <div className="setting-field">
@@ -743,6 +757,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             已停用 · 凭据待清理
                           </small>
                         )}
+                        {profileError?.id === profile.id && (
+                          <p className="settings-save-error profile-row-error" role="alert">{profileError.message}</p>
+                        )}
                         <div className="custom-profile-row-foot">
                           <button
                             type="button"
@@ -771,7 +788,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             aria-label={`删除连接 ${profile.display_name}`}
                             onClick={async () => {
                               setProfileBusy(true);
-                              setSaveError(null);
+                              setProfileError(null);
                               try {
                                 await onDisableCustomProfile(profile.id);
                                 // Drop from the list immediately; clean soft-deletes stay hidden.
@@ -782,10 +799,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   delete next[profile.id];
                                   return next;
                                 });
-                              } catch (error) {
-                                setSaveError(
-                                  error instanceof Error ? error.message : 'profile_disable_failed',
-                                );
+                              } catch {
+                                setProfileError({ id: profile.id, message: '删除失败，这个接入仍然保留。请稍后重试。' });
                               } finally {
                                 setProfileBusy(false);
                               }
@@ -802,15 +817,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             disabled={profileBusy}
                             onClick={async () => {
                               setProfileBusy(true);
-                              setSaveError(null);
+                              setProfileError(null);
                               try {
                                 await onDisableCustomProfile(profile.id);
-                              } catch (error) {
-                                setSaveError(
-                                  error instanceof Error
-                                    ? error.message
-                                    : 'profile_credential_retry_failed',
-                                );
+                              } catch {
+                                setProfileError({ id: profile.id, message: '凭据清理失败，请稍后重试。' });
                               } finally {
                                 setProfileBusy(false);
                               }
@@ -1089,7 +1100,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 ? 'API 密钥保存失败，请检查后端连接后重试。'
                 : saveError === 'provider_config_save_failed'
                   ? '供应商配置保存失败，请检查地址和模型名。'
-                  : '设置保存失败，请稍后重试。'}
+                  : saveError === 'profile_create_failed'
+                    ? '新建接入失败，请检查地址后重试。'
+                    : '设置保存失败，请稍后重试。'}
             </p>
           )}
           <div className="modal-footer">

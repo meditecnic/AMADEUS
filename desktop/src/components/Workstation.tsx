@@ -1322,7 +1322,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       newSettings.baseUrl.trim() &&
       (
         newSettings.baseUrl.trim().replace(/\/+$/, '') !== activeProvider.base_url?.replace(/\/+$/, '') ||
-        newSettings.model !== activeProvider.default_model
+        (newSettings.model && newSettings.model !== activeProvider.default_model)
       )
     ) {
       const endpoint = activeProviderId === 'custom'
@@ -1333,7 +1333,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           base_url: newSettings.baseUrl.trim(),
-          default_model: newSettings.model.trim(),
+          // An untouched model field arrives empty; keep the connection's own default.
+          default_model: newSettings.model.trim() || activeProvider.default_model,
           display_name: activeProvider.display_name,
         }),
       });
@@ -2066,8 +2067,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
         selfName={selfName}
         providerDisplayName={activeProvider?.display_name || activeProviderId}
         providerBaseUrl={activeProvider?.base_url}
+        providerDefaultModel={activeProvider?.default_model}
+        credentialRequired={activeProvider?.credential_required !== false}
         baseUrlConfigurable={Boolean(activeProvider?.base_url_configurable)}
-        model={model}
         modelOptions={availableModels}
         reasoningEffort={reasoningEffort}
         customProfiles={providers
