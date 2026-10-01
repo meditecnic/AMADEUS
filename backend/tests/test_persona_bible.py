@@ -100,9 +100,9 @@ def test_phase1_mb1_snapshot_boundary_in_shared_core_rules():
     beta_cards = [c for c in bible.evidence_cards if c.source_id == "beta-side-ln"]
     assert len(beta_cards) >= 3
     locators = " ".join(c.locator for c in beta_cards)
-    assert "4154" in locators
-    assert "5434" in locators
-    assert "5438" in locators
+    assert "A-EV-012" in locators
+    assert "A-EV-014" in locators
+    assert "A-EV-015" in locators
 
 
 def test_phase1_mb3_provenance_four_classes_in_shared_core():
