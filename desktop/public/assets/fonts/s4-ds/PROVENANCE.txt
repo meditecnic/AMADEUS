@@ -1,0 +1,25 @@
+S4-DS self-hosted fonts
+Acquisition: Google Fonts CSS API (fonts.googleapis.com) with Chrome UA,
+then woff2 binaries from fonts.gstatic.com rewritten to local paths.
+Runtime: no CDN — only /assets/fonts/s4-ds/*.
+
+Families:
+- Oxanium — Latin brand (wght 500/600/700 faces) — https://github.com/googlefonts/oxanium
+- IBM Plex Mono — telemetry mono (400/500) — https://github.com/IBM/plex
+- Noto Sans SC — Chinese UI/body — https://github.com/notofonts/noto-cjk
+- Noto Sans JP — Japanese content (lang=ja) — https://github.com/notofonts/noto-cjk
+
+Subset strategy: official Google unicode-range chunking (not full OTC dumps).
+Glyph coverage follows Google Fonts served ranges for those families/weights.
+This is not a claim of exhaustive CJK ideograph coverage beyond served chunks.
+
+Variable-weight honesty (C-verified WOFF2 metadata):
+- Oxanium binaries include variable axis wght 200–800; CSS faces map 500/600/700.
+- Noto Sans SC binaries include variable axis wght 100–900.
+- Noto Sans JP binaries include variable axis wght 100–900.
+- Shared binaries across weight face declarations are intentional (not a missing-weight defect).
+- IBM Plex Mono ships intended static weight files for 400/500.
+
+Total woff2 bytes: 9860680
+Total woff2 MiB: 9.404
+Hard gate: total woff2 <= 12 MiB.

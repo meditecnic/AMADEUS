@@ -1,0 +1,130 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment variables
+.env
+.env.local
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+
+# Git Worktrees
+.worktrees/
+
+# Auto-generated assets
+desktop/public/assets/sliced/
+
+# Demo screenshots
+实机演示/
+
+# Agent logs remain local; project instruction adapters can be versioned.
+.agents/*
+!.agents/rules/
+.agents/rules/*
+!.agents/rules/amadeus-governance.md
+!.agents/workflows/
+.agents/workflows/*
+!.agents/workflows/amadeus-review.md
+!.agents/workflows/amadeus-handoff.md
+!.agents/skills/
+.agents/skills/*
+!.agents/skills/amadeus-review/
+!.agents/skills/amadeus-handoff/
+!.agents/skills/amadeus-verification/
+!.agents/skills/amadeus-persona-guardian/
+.agents/skills/amadeus-*/**
+!.agents/skills/amadeus-*/SKILL.md
+!.agents/skills/amadeus-*/agents/
+.agents/skills/amadeus-*/agents/*
+!.agents/skills/amadeus-*/agents/openai.yaml
+
+# Local recovery and generated review material
+.trash/
+.tmp/
+生成素材图/
+
+# Local browser and bundler output
+.playwright-cli/
+output/playwright/
+.vite/
+
+# Test-generated speech artifacts
+backend/tests/tts_output/
+backend/tests/diagnose_*.py
+backend/tests/extract_raw_refs.py
+
+# Local source takes used only by voice-diagnostic scripts
+desktop/public/assets/audio/ref/*_raw.wav
+desktop/public/assets/audio/ref/*_original.wav
+desktop/public/assets/audio/ref/*_crop_*.wav
+
+# Backup files
+*.bak
+# Local agent permission state; keep personal overrides out of version control.
+.claude/settings.local.json
+
+# Local Grok Build session / tool cache (not for work-remote)
+.grok/
+
+# Qoder local harness/wiki dumps — only project-atlas may be force-added if needed
+.qoder/*
+!.qoder/project-atlas/
+!.qoder/project-atlas/**
+
+# Local artifacts and separately distributed optional assets
+.scratch/
+.codex/
+.qoder/
+.agents/
+.factory/
+.claude/
+.grok/
+.playwright-mcp/
+.playwright-cli/
+_local-artifacts/
+ui问题/
+docs/
+AGENTS.md
+CONTEXT.md
+node_modules/
+data/
+logs/
+*.log
+*.sqlite
+*.sqlite3
+*.db
+*.ckpt
+*.pth
+*.pt
+*.safetensors
+*.onnx
+asset-pack/
+desktop/public/assets/audio/ref/

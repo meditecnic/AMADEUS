@@ -1,0 +1,214 @@
+{
+  "version": 1,
+  "verified_at": "2026-09-12",
+  "providers": {
+    "deepseek": {
+      "allow_undiscovered_models": false,
+      "models": [
+        {
+          "id": "deepseek-flash",
+          "display_name": "DeepSeek Flash",
+          "lifecycle": "stable",
+          "preferred": true,
+          "disclosed_version": "DeepSeek-V4.1-Flash",
+          "context_window": null,
+          "max_output_tokens": null,
+          "persona_certification": "not_evaluated",
+          "thinking_control": {
+            "kind": "effort",
+            "label": "推理强度",
+            "native": true,
+            "default": "high",
+            "request_mode": "reasoning_effort",
+            "options": [
+              { "value": "high", "label": "HIGH" },
+              { "value": "max", "label": "MAX" }
+            ],
+            "aliases": {
+              "low": "high",
+              "medium": "high",
+              "xhigh": "max"
+            }
+          },
+          "evidence": [
+            "https://www.deepseek.com/en/news/deepseek-v4-1-flash/",
+            "https://api-docs.deepseek.com/news/news260910",
+            "https://api-docs.deepseek.com/",
+            "https://api-docs.deepseek.com/guides/thinking_mode"
+          ]
+        },
+        {
+          "id": "deepseek-v4-flash",
+          "display_name": "deepseek-v4-flash",
+          "lifecycle": "deprecated",
+          "compatibility_of": "deepseek-flash",
+          "compatibility_scope": "official_direct",
+          "disclosed_version": "DeepSeek-V4.1-Flash",
+          "context_window": 1000000,
+          "max_output_tokens": 393216,
+          "persona_certification": "user_validated",
+          "thinking_control": {
+            "kind": "effort",
+            "label": "推理强度",
+            "native": true,
+            "default": "high",
+            "request_mode": "reasoning_effort",
+            "options": [
+              { "value": "high", "label": "HIGH" },
+              { "value": "max", "label": "MAX" }
+            ],
+            "aliases": {
+              "low": "high",
+              "medium": "high",
+              "xhigh": "max"
+            }
+          },
+          "evidence": [
+            "https://www.deepseek.com/en/news/deepseek-v4-1-flash/",
+            "https://api-docs.deepseek.com/news/news260910",
+            "https://api-docs.deepseek.com/guides/thinking_mode",
+            "https://api-docs.deepseek.com/quick_start/pricing"
+          ]
+        },
+        {
+          "id": "deepseek-v4-pro",
+          "display_name": "DeepSeek V4 Pro",
+          "lifecycle": "stable",
+          "context_window": 1000000,
+          "max_output_tokens": 393216,
+          "persona_certification": "not_evaluated",
+          "thinking_control": {
+            "kind": "effort",
+            "label": "推理强度",
+            "native": true,
+            "default": "high",
+            "request_mode": "reasoning_effort",
+            "options": [
+              { "value": "high", "label": "HIGH" },
+              { "value": "max", "label": "MAX" }
+            ],
+            "aliases": {
+              "low": "high",
+              "medium": "high",
+              "xhigh": "max"
+            }
+          },
+          "evidence": [
+            "https://api-docs.deepseek.com/guides/thinking_mode",
+            "https://api-docs.deepseek.com/quick_start/pricing"
+          ]
+        }
+      ]
+    },
+    "glm": {
+      "allow_undiscovered_models": false,
+      "models": [
+        {
+          "id": "glm-5.2",
+          "display_name": "GLM-5.2",
+          "lifecycle": "stable",
+          "context_window": 1000000,
+          "max_output_tokens": 131072,
+          "persona_certification": "not_evaluated",
+          "thinking_control": {
+            "kind": "effort",
+            "label": "推理强度",
+            "native": true,
+            "default": "max",
+            "request_mode": "reasoning_effort",
+            "options": [
+              { "value": "none", "label": "NONE" },
+              { "value": "minimal", "label": "MINIMAL" },
+              { "value": "low", "label": "LOW" },
+              { "value": "medium", "label": "MEDIUM" },
+              { "value": "high", "label": "HIGH" },
+              { "value": "xhigh", "label": "XHIGH" },
+              { "value": "max", "label": "MAX" }
+            ]
+          },
+          "evidence": [
+            "https://docs.bigmodel.cn/cn/guide/capabilities/thinking",
+            "https://docs.bigmodel.cn/cn/guide/models/text/glm-5.2"
+          ]
+        }
+      ]
+    },
+    "openai": {
+      "allow_undiscovered_models": false,
+      "models": [
+        {
+          "id": "gpt-5.6-luna",
+          "display_name": "GPT-5.6 Luna",
+          "lifecycle": "stable",
+          "context_window": 1050000,
+          "max_output_tokens": 128000,
+          "persona_certification": "not_evaluated",
+          "thinking_control": {
+            "kind": "effort",
+            "label": "推理强度",
+            "native": true,
+            "default": "medium",
+            "request_mode": "reasoning_effort",
+            "options": [
+              { "value": "none", "label": "NONE" },
+              { "value": "low", "label": "LOW" },
+              { "value": "medium", "label": "MEDIUM" },
+              { "value": "high", "label": "HIGH" },
+              { "value": "xhigh", "label": "XHIGH" },
+              { "value": "max", "label": "MAX" }
+            ]
+          },
+          "evidence": [
+            "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
+            "https://developers.openai.com/api/docs/guides/latest-model"
+          ]
+        }
+      ]
+    },
+    "gemini": {
+      "allow_undiscovered_models": false,
+      "models": [
+        {
+          "id": "gemini-3.5-flash",
+          "display_name": "Gemini 3.5 Flash",
+          "lifecycle": "stable",
+          "context_window": 1048576,
+          "max_output_tokens": 65536,
+          "persona_certification": "not_evaluated",
+          "thinking_control": {
+            "kind": "level",
+            "label": "思考等级",
+            "native": true,
+            "default": "medium",
+            "request_mode": "gemini_thinking_level",
+            "options": [
+              { "value": "minimal", "label": "MINIMAL" },
+              { "value": "low", "label": "LOW" },
+              { "value": "medium", "label": "MEDIUM" },
+              { "value": "high", "label": "HIGH" }
+            ]
+          },
+          "evidence": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash",
+            "https://ai.google.dev/gemini-api/docs/generate-content/thinking"
+          ]
+        }
+      ]
+    },
+    "custom": {
+      "allow_undiscovered_models": true,
+      "models": [
+        {
+          "id": "local-model",
+          "display_name": "local-model",
+          "lifecycle": "unverified",
+          "context_window": null,
+          "max_output_tokens": null,
+          "persona_certification": "not_evaluated",
+          "thinking_control": null,
+          "evidence": []
+        }
+      ]
+    }
+  }
+}

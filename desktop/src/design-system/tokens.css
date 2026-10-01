@@ -1,0 +1,110 @@
+/* S4-DS canonical dark Amadeus instrument tokens + self-hosted typefaces (no CDN).
+ * Single product visual authority — not a multi-theme switcher.
+ * Font-face chunks: public/assets/fonts/s4-ds/
+ */
+@import url('/assets/fonts/s4-ds/font-faces.generated.css');
+
+:root {
+  --font-brand: 'Oxanium', 'Segoe UI', system-ui, sans-serif;
+  --font-ui: 'Noto Sans SC', 'Noto Sans JP', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --font-ja: 'Noto Sans JP', 'Noto Sans SC', 'Yu Gothic', 'Hiragino Sans', sans-serif;
+  --font-mono: 'IBM Plex Mono', 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
+  --font-display: var(--font-brand);
+  --font-body: var(--font-ui);
+
+  --transition-fast: 150ms ease;
+  --transition-normal: 200ms ease;
+  --transition-slow: 280ms ease;
+
+  /*
+   * S4-DS visual system: warm graphite scientific instrument + oxidized copper signal.
+   * Roles: text = ordinary copy; signal = interactive copper; gold = telemetry only.
+   */
+  --color-bg: #0b0907;
+  --color-bg-deep: #070605;
+  --color-bg-panel: #12100d;
+  --color-bg-panel-light: #1a1510;
+  --color-bg-glass: rgba(14, 12, 10, 0.72);
+  --color-primary: #d96f24;
+  --color-copper: #c25a1e;
+  --color-gold: #c6a45f;
+  --color-amber: #d96f24;
+  --color-text: #e6dccb;
+  --color-text-dim: #a8947a;
+  --color-text-muted: #756553;
+  --color-border: #3d291f;
+  --color-border-light: #65402b;
+  --color-border-active: #d96f24;
+  --color-danger: #c94f3f;
+  --color-danger-dim: #7a2e26;
+  --color-success: #5f8f62;
+  --color-signal: #d96f24;
+  --color-signal-hot: #ffad54;
+  --color-ink: #e6dccb;
+  --color-paper: #12100d;
+  --color-warning: #c6a45f;
+
+  --glow-primary: 0 0 4px rgba(217, 111, 36, 0.26);
+  --glow-gold: 0 0 5px rgba(198, 164, 95, 0.28);
+  --glow-gold-strong: 0 0 7px rgba(198, 164, 95, 0.42);
+  --glow-primary-strong: 0 0 8px rgba(217, 111, 36, 0.38);
+
+  --bg-overlay-top: rgba(5, 4, 3, 0.55);
+  --bg-overlay-bottom: rgba(5, 4, 3, 0.35);
+  --bg-overlay-signal: rgba(217, 111, 36, 0.04);
+  --bg-filter: saturate(0.88) brightness(0.72) contrast(1.05);
+  --chrome-header-bg: rgba(10, 8, 6, 0.94);
+  --chrome-header-sheen: rgba(49, 30, 12, 0.28);
+
+  /* Default worldline = SG (panel class may override) */
+  --wl-accent: #d97a2d;
+  --wl-accent-bright: #ffb35a;
+  --wl-accent-dim: rgba(217, 122, 45, 0.62);
+  --wl-glow: rgba(217, 122, 45, 0.2);
+  --wl-edge: rgba(217, 122, 45, 0.08);
+  --wl-grid-dot: rgba(217, 122, 45, 0.022);
+  --wl-surface-tint: rgba(217, 122, 45, 0.03);
+  --wl-divider: color-mix(in srgb, var(--wl-accent) 42%, var(--color-border));
+  --wl-scroll-thumb: var(--color-border-light);
+  --wl-scroll-thumb-active: var(--wl-accent);
+  --wl-selected-edge: var(--wl-accent);
+  --wl-ambient-edge: rgba(217, 122, 45, 0.1);
+
+  /* Unified scrollbar track (shared by all product scrollports) */
+  --scrollbar-size: 6px;
+  --scrollbar-track: color-mix(in srgb, var(--color-bg-deep) 78%, transparent);
+  --scrollbar-thumb: var(--wl-scroll-thumb);
+  --scrollbar-thumb-hover: var(--wl-scroll-thumb-active);
+
+  color-scheme: dark;
+  background-color: var(--color-bg-deep);
+  color: var(--color-text);
+  font-family: var(--font-ui);
+}
+
+html,
+body {
+  background-color: var(--color-bg-deep);
+  color: var(--color-text);
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  font-family: var(--font-ui);
+}
+
+:lang(ja),
+[lang='ja'] {
+  font-family: var(--font-ja);
+}
+
+/* Application chrome (.app-main-container, speakers, brand, utilities) lives in App.css. */
+
+@media (prefers-reduced-motion: reduce) {
+  body {
+    transition: none;
+  }
+}

@@ -1,0 +1,135 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 设计系统全局变量 */
+:root {
+  --color-amadeus-orange: #ff6c00;
+  --color-amadeus-orange-dim: rgba(255, 108, 0, 0.4);
+  --color-amadeus-orange-glow: rgba(255, 108, 0, 0.85);
+  --color-bg-dark: #0f0a08;
+  --color-bg-darker: #050302;
+  --color-grid-line: rgba(255, 108, 0, 0.07);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--color-bg-darker);
+  color: var(--color-amadeus-orange);
+  font-family: 'Share Tech Mono', 'Courier New', Courier, Monaco, Consolas, monospace;
+  overflow: hidden;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 隐藏滚动条 */
+::-webkit-scrollbar {
+  display: none;
+}
+
+/* CRT 扫描线与荧光抖动层 */
+.crt-screen {
+  position: relative;
+  overflow: hidden;
+}
+
+.crt-screen::after {
+  content: " ";
+  display: block;
+  position: absolute;
+  top: 0; left: 0; bottom: 0; right: 0;
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.35) 50%), 
+              linear-gradient(90deg, rgba(255, 0, 0, 0.05), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.05));
+  background-size: 100% 5px, 6px 100%;
+  z-index: 9999;
+  pointer-events: none;
+}
+
+.crt-flicker {
+  animation: crt-flicker-anim 0.2s infinite;
+}
+
+@keyframes crt-flicker-anim {
+  0% { opacity: 0.985; }
+  50% { opacity: 0.995; }
+  100% { opacity: 0.985; }
+}
+
+/* 网格科技感背景 */
+.grid-background {
+  background-image: linear-gradient(var(--color-grid-line) 1px, transparent 1px),
+                    linear-gradient(90deg, var(--color-grid-line) 1px, transparent 1px);
+  background-size: 20px 20px;
+  background-position: center;
+}
+
+/* 呼吸动画：应用到立绘，实现微微缩放与浮动 */
+.breath-animation {
+  animation: breath-anim 4.5s ease-in-out infinite;
+  transform-origin: bottom center;
+}
+
+@keyframes breath-anim {
+  0%, 100% {
+    transform: scale(1) translateY(0);
+    opacity: 0.96;
+  }
+  50% {
+    transform: scale(1.012) translateY(-2px);
+    opacity: 1;
+  }
+}
+
+/* 剧烈 Glitch 特效类 */
+.glitch-heavy {
+  animation: glitch-skew-heavy 0.4s steps(2) infinite;
+  filter: url(#chromatic-aberration-heavy);
+}
+
+/* 轻微 Glitch 特效类 */
+.glitch-light {
+  animation: glitch-skew-light 0.25s steps(2) infinite;
+  filter: url(#chromatic-aberration-light);
+}
+
+@keyframes glitch-skew-heavy {
+  0% { transform: translate(2px, 0px) skew(-2deg); }
+  20% { transform: translate(-1px, -1px) skew(1deg); }
+  40% { transform: translate(0px, 1px) skew(1deg); }
+  60% { transform: translate(-1px, 1px) skew(-1deg); }
+  80% { transform: translate(1px, -1px) skew(2deg); }
+  100% { transform: translate(-1px, 0px) skew(0deg); }
+}
+
+@keyframes glitch-skew-light {
+  0% { transform: translate(0.5px, 0px) skew(-0.5deg); }
+  50% { transform: translate(-0.5px, 0px) skew(0.5deg); }
+  100% { transform: translate(0.5px, 0px) skew(0deg); }
+}
+
+/* 打字机光标闪烁 */
+.cursor-blink::after {
+  content: "|";
+  animation: cursor-blink-anim 0.8s infinite;
+}
+
+@keyframes cursor-blink-anim {
+  0%, 100% { opacity: 0; }
+  50% { opacity: 1; }
+}
+
+/* 各种框线霓虹发光 */
+.neon-border {
+  border: 1px solid var(--color-amadeus-orange);
+  box-shadow: 0 0 8px var(--color-amadeus-orange-dim),
+              inset 0 0 8px var(--color-amadeus-orange-dim);
+}
+
+.neon-text {
+  text-shadow: 0 0 5px var(--color-amadeus-orange-glow);
+}

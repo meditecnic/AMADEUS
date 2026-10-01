@@ -1,0 +1,440 @@
+.login-screen-container {
+  width: 100vw;
+  height: 100vh;
+  background-color: #030202;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+}
+
+/* 顶层全屏 CRT 扫描线与暗角滤镜 */
+.crt-effects-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  /* 扫描线效果 */
+  background: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0.12) 0px,
+    rgba(0, 0, 0, 0.12) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  /* 边缘暗角 */
+  box-shadow: inset 0 0 120px rgba(0, 0, 0, 0.75);
+  z-index: 10;
+  pointer-events: none;
+  /* 微弱电压亮度闪烁 */
+  animation: crt-flicker 0.15s infinite;
+}
+
+@keyframes crt-flicker {
+  0% { opacity: 0.97; }
+  50% { opacity: 1.0; }
+  100% { opacity: 0.98; }
+}
+
+/* 左侧写实照片视口 (已移入 wrapper 内部，与网格绝对同步缩放) */
+.left-photo-viewport {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 500px; /* 裁剪出的 500px 纯净宽度 */
+  height: 1080px;
+  z-index: 3;
+  pointer-events: none;
+  /* 滤色混合：自动滤除黑色底色，让人影白光像素无缝融入底图网格中 */
+  mix-blend-mode: screen;
+}
+
+.left-photo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: left center;
+  filter: grayscale(100%) contrast(110%) brightness(90%);
+}
+
+/* 1920x1080 比例下的自适应画布 wrapper */
+.login-content-wrapper {
+  width: 1920px;
+  height: 1080px;
+  /* Original CG comes from the optional asset pack; without it the canvas stays near-black. */
+  background-color: #0a0b0d;
+  background-image: var(--pack-login-bg, none);
+  background-size: 100% 100%;
+  background-position: center;
+  background-repeat: no-repeat;
+  position: absolute;
+  transform-origin: center center;
+  z-index: 2;
+  user-select: none;
+}
+
+.salieri-login-form {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+/* 登录表单居中容器（剪影右侧可用区域 500~1920 内居中） */
+.login-form-center {
+  position: absolute;
+  left: 500px;
+  top: 0;
+  width: 1420px;
+  height: 1080px;
+  z-index: 5;
+}
+
+/* Canvas 动态 0/1 金黄色数字雨 */
+.binary-stream-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1920px;
+  height: 1080px;
+  opacity: 0.25;
+  pointer-events: none;
+  z-index: 2;    /* 位于背景图之上，但在 Logo 和表单之下 */
+}
+
+/* ================= 官方大 Logo 定位与尺寸复原 ================= */
+
+.amadeus-logo-container {
+  position: absolute;
+  left: 130px; /* 修正水平居中，与下方输入框组左对齐 */
+  top: 150px;  /* 上移 50px */
+  width: 670px;
+  height: 480px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 4;
+
+  /* 对角线渐变羽化遮罩 */
+  -webkit-mask-image: linear-gradient(135deg, rgba(0,0,0,0) 30%, rgba(0,0,0,1) 70%);
+  mask-image: linear-gradient(135deg, rgba(0,0,0,0) 30%, rgba(0,0,0,1) 70%);
+  -webkit-mask-size: 400% 400%;
+  mask-size: 400% 400%;
+  -webkit-mask-position: 150% 150%;
+  mask-position: 150% 150%;
+  opacity: 0;
+  animation: reveal-logo-diagonal 1.5s cubic-bezier(0.25, 0.8, 0.25, 1) forwards;
+}
+
+.amadeus-logo-text {
+  font-family: 'EB Garamond', Georgia, serif;
+  font-size: 150px;
+  font-weight: 500;
+  letter-spacing: .14em;
+  color: #e8e6e1;
+  text-shadow: 0 0 24px rgba(143, 220, 255, .18);
+}
+
+.amadeus-logo-img {
+  width: 100%;
+  height: auto;
+  transform: translateX(12px); /* 视觉居中重心补偿 */
+  animation: logo-breathe-glow 2.5s ease-in-out infinite 1.5s;
+}
+
+/* 1. 对角线渐变羽化显现 */
+@keyframes reveal-logo-diagonal {
+  0% {
+    -webkit-mask-position: 150% 150%;
+    mask-position: 150% 150%;
+    opacity: 0;
+  }
+  100% {
+    -webkit-mask-position: -50% -50%;
+    mask-position: -50% -50%;
+    opacity: 1;
+  }
+}
+
+/* 2. 贴合不规则划痕边缘的橙色呼吸发光 */
+@keyframes logo-breathe-glow {
+  0%, 100% {
+    filter: drop-shadow(0 0 8px rgba(255, 170, 0, 0.4));
+  }
+  50% {
+    filter: drop-shadow(0 0 20px rgba(255, 170, 0, 0.8));
+  }
+}
+
+/* ================= 输入框组定位 (整体下移，消除重叠并留白) ================= */
+
+.input-field-group {
+  position: absolute;
+  display: flex;
+  flex-direction: row; /* 水平排列，仿照原著 */
+  align-items: center; /* 垂直居中 */
+  z-index: 5;
+}
+
+.user-id-group {
+  left: 130px;
+  top: 650px; /* 整体下移，空出 Logo 尖端 */
+  width: 585px; /* 130px 标签 + 15px 间距 + 440px 输入框 */
+}
+
+.password-group {
+  left: 130px;
+  top: 735px; /* 整体下移 */
+  width: 585px;
+}
+
+
+.field-title {
+  color: #ffaa00;
+  font-family: 'OCR A Extended', 'OCR A', 'OCRA', monospace; /* 使用 OCR A 细体、硬朗锐利字体 */
+  font-size: 19px;
+  font-weight: normal;
+  letter-spacing: 0.5px;
+  width: 130px; /* 加宽以适配 Audiowide 字体 */
+  flex-shrink: 0; /* 禁止 flex 压缩 */
+  text-align: right;
+  margin-right: 15px;
+  text-shadow: 0 0 6px rgba(255, 170, 0, 0.75);
+  box-sizing: border-box;
+}
+
+.user-id-input {
+  width: 440px; /* 锁定输入框物理宽度 */
+  height: 48px;
+  background: linear-gradient(180deg, rgba(3, 2, 2, 0.92) 0%, rgba(5, 3, 2, 0.88) 100%) !important;
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.28) !important; /* 极细灰白半透明边框 */
+  border-radius: 0px !important;
+  outline: none !important;
+  color: #ffaa00;
+  font-family: 'OCR A Extended', 'OCR A', 'OCRA', 'Share Tech Mono', 'Courier New', monospace; /* 输入文字更换为 OCR A */
+  font-size: 24px;
+  font-weight: bold;
+  padding: 0 14px;
+  letter-spacing: 1.5px;
+  caret-color: #ffaa00 !important;
+  text-shadow: 0 0 8px rgba(255, 170, 0, 0.95);
+  box-sizing: border-box;
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.6), 0 0 0 rgba(255, 170, 0, 0);
+  
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.user-id-input:focus, .password-input:focus {
+  border-color: rgba(255, 255, 255, 0.48) !important;
+  box-shadow: inset 0 0 8px rgba(255, 170, 0, 0.15), 0 0 6px rgba(255, 255, 255, 0.2) !important;
+  animation: input-flicker-skew 4s infinite alternate;
+  caret-color: #ffaa00 !important;
+}
+
+@keyframes input-flicker-skew {
+  0%, 93%, 98%, 100% {
+    transform: skewX(0deg);
+    filter: drop-shadow(0 0 0 transparent);
+  }
+  94% {
+    transform: skewX(1deg);
+    filter: drop-shadow(1px 0 0 rgba(255, 0, 0, 0.4)) drop-shadow(-1px 0 0 rgba(0, 0, 255, 0.4));
+  }
+  96% {
+    transform: skewX(-0.5deg);
+    filter: drop-shadow(-1px 0 0 rgba(255, 0, 0, 0.4)) drop-shadow(1px 0 0 rgba(0, 0, 255, 0.4));
+  }
+}
+
+.password-input-wrapper {
+  position: relative;
+  width: 440px; /* 锁定为 440px，确保与 user-id-input 宽度绝对对齐 */
+  height: 48px;
+}
+
+.password-input {
+  width: 100%; /* 填满 wrapper */
+  height: 48px;
+  background: linear-gradient(180deg, rgba(3, 2, 2, 0.92) 0%, rgba(5, 3, 2, 0.88) 100%) !important;
+  backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.28) !important;
+  border-radius: 0px !important;
+  outline: none !important;
+  color: #ffaa00;
+  font-family: 'OCR A Extended', 'OCR A', 'OCRA', 'Share Tech Mono', 'Courier New', monospace;
+  font-size: 24px;
+  font-weight: bold;
+  padding: 0 14px;
+  letter-spacing: 4px; /* 密码框文字间距 */
+  caret-color: #ffaa00 !important;
+  text-shadow: 0 0 8px rgba(255, 170, 0, 0.95);
+  box-sizing: border-box;
+  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.6);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+/* ================= 密码输入框下方常态显示的红色小竖杠 ================= */
+
+
+
+/* ================= 纯 SVG 的圆形提交按钮 (精美科技动效设计) ================= */
+
+.btn-container {
+  position: absolute;
+  left: 735px;
+  top: 719px; /* 上移至 719px，实现与 48px 高度的输入框垂直中线完美对齐 */
+  width: 80px;
+  height: 80px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.decrypt-btn {
+  background: transparent;
+  border: none;
+  width: 80px;
+  height: 80px;
+  cursor: pointer;
+  outline: none;
+  padding: 0;
+  transition: transform 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+.connect-btn-svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* 外圈虚线圆环：开机后匀速旋转并具有微弱发光与玻璃底色质感 */
+.btn-circle-track {
+  fill: rgba(255, 170, 0, 0.02); /* 极其淡薄的背景，带来真空玻璃管底质感 */
+  stroke: rgba(255, 170, 0, 0.28); /* 微微发光的暗橙色 */
+  stroke-width: 2.2;
+  stroke-dasharray: 8 6;
+  transform-origin: 40px 40px;
+  filter: drop-shadow(0 0 2px rgba(255, 170, 0, 0.35));
+  animation: rotate-clockwise 18s linear infinite;
+  transition: stroke 0.3s ease, filter 0.3s ease;
+}
+
+/* 内圈圆环：hover 时完全闭合发光 */
+.btn-circle-glow {
+  fill: none;
+  stroke: #ffaa00;
+  stroke-width: 3;
+  stroke-dasharray: 215;
+  stroke-dashoffset: 215;
+  transition: stroke-dashoffset 0.45s cubic-bezier(0.25, 0.8, 0.25, 1), filter 0.45s ease;
+  transform-origin: 40px 40px;
+  transform: rotate(-90deg);
+  filter: drop-shadow(0 0 4px rgba(255, 170, 0, 0.5));
+}
+
+/* 箭头：hover 时右滑并增粗 */
+.btn-arrow-icon {
+  fill: none;
+  stroke: #ffaa00;
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  filter: drop-shadow(0 0 2px rgba(255, 170, 0, 0.4));
+  transition: transform 0.25s cubic-bezier(0.25, 0.8, 0.25, 1), stroke-width 0.2s ease, filter 0.2s ease;
+  transform-origin: 40px 40px;
+}
+
+/* 按钮整体悬停与点击动效 */
+.decrypt-btn:hover:not(:disabled) {
+  transform: scale(1.06);
+}
+
+.decrypt-btn:hover:not(:disabled) .btn-circle-track {
+  stroke: rgba(255, 170, 0, 0.65);
+  filter: drop-shadow(0 0 6px rgba(255, 170, 0, 0.6));
+}
+
+.decrypt-btn:hover:not(:disabled) .btn-circle-glow {
+  stroke-dashoffset: 0;
+  filter: drop-shadow(0 0 10px rgba(255, 170, 0, 0.95));
+}
+
+.decrypt-btn:hover:not(:disabled) .btn-arrow-icon {
+  transform: translateX(3px);
+  stroke-width: 4.2px;
+  filter: drop-shadow(0 0 6px rgba(255, 170, 0, 0.9));
+}
+
+/* 按钮点击时的凹陷反馈 */
+.decrypt-btn:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.decrypt-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+/* 错误提示与密码输入框对齐。 */
+
+.auth-error-banner {
+  position: absolute;
+  left: 275px;
+  top: 810px;
+  width: 440px;
+  color: #e60000;
+  font-family: 'Share Tech Mono', 'Courier New', Courier, monospace;
+  font-size: 15px;
+  font-weight: bold;
+  letter-spacing: 2px;
+  text-align: center;
+  text-shadow: 0 0 10px rgba(230, 0, 0, 0.95);
+  text-transform: uppercase;
+  background-color: rgba(30, 0, 0, 0.45);
+  border-left: 3px solid #e60000;
+  border-right: 3px solid #e60000;
+  padding: 6px 0;
+  box-sizing: border-box;
+}
+
+.input-error {
+  color: #e60000 !important;
+  border-color: rgba(230, 0, 0, 0.4) !important;
+  text-shadow: 0 0 8px rgba(230, 0, 0, 0.85) !important;
+  caret-color: #ffaa00 !important;
+}
+
+.input-error:focus {
+  border-color: rgba(230, 0, 0, 0.6) !important;
+  box-shadow: inset 0 0 10px rgba(230, 0, 0, 0.25), 0 0 8px rgba(230, 0, 0, 0.35) !important;
+  caret-color: #ffaa00 !important;
+}
+
+/* ================= Keyframes 动画库 ================= */
+
+/* 1. 旋转 */
+@keyframes rotate-clockwise {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* 2. 错误提示闪烁与震颤 */
+.glitch-flicker {
+  animation: error-glitch-flicker-anim 1.2s infinite,
+             error-shake 0.3s ease-in-out;
+}
+
+@keyframes error-glitch-flicker-anim {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; text-shadow: 0 0 14px rgba(230, 0, 0, 1); }
+  98% { opacity: 1; }
+  99% { opacity: 0.15; }
+}
+
+@keyframes error-shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-4px); }
+  40%, 80% { transform: translateX(4px); }
+}
