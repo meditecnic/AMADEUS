@@ -255,16 +255,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* Chat-selector admission (front-end state, persisted locally).
-   * A newly created connection waits here until its first chat-check passes or the user enables it by hand.
-   * Connections that existed before this rule are not in either list and stay selectable. */
-  const readIds = (key: string): string[] => {
-    try { const raw = JSON.parse(localStorage.getItem(key) || '[]'); return Array.isArray(raw) ? raw.filter((x) => typeof x === 'string') : []; } catch { return []; }
-  };
-  const [pendingProviders, setPendingProviders] = useState<string[]>(() => readIds('amadeus_pc_pending_providers'));
-  const [manualProviders, setManualProviders] = useState<string[]>(() => readIds('amadeus_pc_manual_providers'));
-  useEffect(() => { try { localStorage.setItem('amadeus_pc_pending_providers', JSON.stringify(pendingProviders)); } catch {} }, [pendingProviders]);
-  useEffect(() => { try { localStorage.setItem('amadeus_pc_manual_providers', JSON.stringify(manualProviders)); } catch {} }, [manualProviders]);
+  /* Chat-selector admission is stored by the backend (`selector_admission`): a new connection is pending until
+   * its first chat-check passes or the user enables it by hand. */
+  const pendingProviders = providers.filter((row) => row.selector_admission === 'pending').map((row) => row.id);
+  const manualProviders = providers.filter((row) => row.selector_admission === 'manual').map((row) => row.id);
   const [modelApplyError, setModelApplyError] = useState<string | null>(null);
   /** Address, key or model changes invalidate earlier results for that provider. */
   const bumpConfigVersion = useCallback((providerId: string) => {
@@ -384,6 +378,55 @@ export const Workstation: React.FC<WorkstationProps> = ({
     setProviders(rows);
     return rows;
   }, []);
+
+  /** false when the connection changed since `version` was read (409) or the write failed. */
+  const writeAdmission = useCallback(async (
+    providerId: string,
+    admission: 'pending' | 'admitted' | 'manual',
+    version: string | null | undefined,
+  ): Promise<boolean> => {
+    if (!version) return false;
+    try {
+      const response = await fetch(`/api/providers/custom-profiles/${encodeURIComponent(providerId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selector_admission: admission, expected_configuration_version: version }),
+      });
+      return response.ok;
+    } catch {
+      return false;
+    } finally {
+      await loadProviders().catch(() => undefined);
+    }
+  }, [loadProviders]);
+
+  // One-time move of the pre-backend admission lists; the keys are dropped only after every write succeeded.
+  const admissionMigratedRef = useRef(false);
+  useEffect(() => {
+    if (admissionMigratedRef.current || providers.length === 0) return;
+    admissionMigratedRef.current = true;
+    const read = (key: string): string[] => {
+      try { const raw = JSON.parse(localStorage.getItem(key) || '[]'); return Array.isArray(raw) ? raw.filter((x) => typeof x === 'string') : []; } catch { return []; }
+    };
+    const legacy = [
+      ...read('amadeus_pc_pending_providers').map((id) => [id, 'pending'] as const),
+      ...read('amadeus_pc_manual_providers').map((id) => [id, 'manual'] as const),
+    ];
+    if (legacy.length === 0) return;
+    void (async () => {
+      let ok = true;
+      for (const [id, admission] of legacy) {
+        const row = providers.find((p) => p.id === id);
+        if (!row || row.enabled === false || row.selector_admission !== 'admitted') continue;
+        if (!(await writeAdmission(id, admission, row.configuration_version))) ok = false;
+      }
+      if (!ok) return;
+      try {
+        localStorage.removeItem('amadeus_pc_pending_providers');
+        localStorage.removeItem('amadeus_pc_manual_providers');
+      } catch {}
+    })();
+  }, [providers, writeAdmission]);
 
   useEffect(() => {
     if (
@@ -1148,8 +1191,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
   };
 
   /** Put a connection into the chat selector and select it for the draft, as creation used to do unconditionally. */
-  const admitProvider = (providerId: string, modelId: string) => {
-    setPendingProviders((ids) => ids.filter((id) => id !== providerId));
+  const admitProvider = async (
+    providerId: string,
+    modelId: string,
+    version: string | null | undefined,
+    admission: 'admitted' | 'manual' = 'admitted',
+  ) => {
+    // `version` is the one the check started from, so a late pass never admits an edited connection.
+    if (!(await writeAdmission(providerId, admission, version))) return;
     setDraftProviderId(providerId);
     setModel(modelId);
     try {
@@ -1158,9 +1207,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
     } catch {}
     reconnect();
   };
-  const enableProviderManually = (providerId: string, modelId: string) => {
-    setManualProviders((ids) => (ids.includes(providerId) ? ids : [...ids, providerId]));
-    admitProvider(providerId, modelId);
+  const enableProviderManually = (providerId: string, modelId: string, version: string | null | undefined) => {
+    void admitProvider(providerId, modelId, version, 'manual');
   };
 
   // Apply a model chosen mid-turn once the turn has fully finished.
@@ -1996,6 +2044,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
               .filter((row) => pendingProviders.includes(row.id) && row.enabled !== false && row.id !== activeProviderId)
               .map((row) => {
                 const modelId = row.default_model || '';
+                const version = row.configuration_version;
                 return (
                   <ConnectionCheckPanel
                     key={row.id}
@@ -2005,10 +2054,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
                     pending
                     onCheck={() => {
                       void runChatCheck(row.id, modelId).then((result) => {
-                        if (result?.status === 'ok') admitProvider(row.id, modelId);
+                        if (result?.status === 'ok') void admitProvider(row.id, modelId, version);
                       });
                     }}
-                    onManualEnable={() => enableProviderManually(row.id, modelId)}
+                    onManualEnable={() => enableProviderManually(row.id, modelId, version)}
                   />
                 );
               })}
@@ -2086,13 +2135,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
             body: JSON.stringify(input),
           });
           if (!response.ok) throw new Error('profile_create_failed');
-          const created = await response.json() as { provider_id: string; default_model?: string };
-          // Saved is not usable: hold it out of the chat selector until the check passes or it is enabled by hand.
-          setPendingProviders((ids) => (ids.includes(created.provider_id) ? ids : [...ids, created.provider_id]));
+          // The backend creates it as pending; it joins the chat selector once the check passes or it is enabled by hand.
+          const created = await response.json() as { provider_id: string; default_model?: string; configuration_version?: string | null };
           await loadProviders();
           if (!created.default_model) return;
           const result = await runChatCheck(created.provider_id, created.default_model, bumpConfigVersion(created.provider_id));
-          if (result?.status === 'ok') admitProvider(created.provider_id, created.default_model);
+          if (result?.status === 'ok') await admitProvider(created.provider_id, created.default_model, created.configuration_version);
         }}
         onDisableCustomProfile={async (providerId) => {
           const response = await fetch(
@@ -2100,8 +2148,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
             { method: 'DELETE' },
           );
           if (!response.ok) throw new Error('profile_disable_failed');
-          setPendingProviders((ids) => ids.filter((id) => id !== providerId));
-          setManualProviders((ids) => ids.filter((id) => id !== providerId));
           // Keep the current selection so the user sees「已停用/不可用」until
           // they explicitly pick another provider — never auto-jump to DeepSeek.
           await loadProviders();

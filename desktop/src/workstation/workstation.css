@@ -1029,7 +1029,34 @@
 .ws2 .settings-embedded .settings-saved { font-size: 12.5px; letter-spacing: .12em; color: var(--ws-ok); }
 .ws2 .settings-embedded .settings-save-error { margin: 12px 0 0; font-size: 12.5px; color: var(--ws-bad); }
 .ws2 .settings-embedded .salieri-select-trigger { height: 36px; max-width: 520px; padding: 0 12px; border: 0 !important; border-bottom: 1px solid var(--ws-line-2) !important; border-radius: 0; background: rgba(0, 0, 0, .28) !important; color: var(--ws-ink); font-family: var(--ws-sans); font-size: 13px; }
-.ws2 .settings-embedded .temperature-warning, .ws2 .settings-embedded .temperature-migration-notice { font-size: 12px; color: #e8b04a; }
+.ws2 .settings-embedded .temperature-warning, .ws2 .settings-embedded .temperature-migration-notice { font-size: 12px; color: var(--ws-bad); }
+/* Legacy App.css leftovers inside the embedded panels: orange status text, round glowing thumb, orange search cards, spaced placeholders. */
+.ws2 .settings-embedded .credential-status { font-size: 12px; color: var(--ws-ink-3); }
+.ws2 .settings-embedded .credential-status.configured { color: var(--ws-ok); }
+.ws2 .settings-embedded .credential-status.error { color: var(--ws-bad); }
+.ws2 .settings-embedded .salieri-input::placeholder { font-family: var(--ws-sans); letter-spacing: .02em; color: var(--ws-ink-3); }
+.ws2 .settings-embedded input[type='range'] { border: 0; border-radius: 0; box-shadow: none; cursor: pointer; }
+.ws2 .settings-embedded input[type='range']::-webkit-slider-thumb { border: 0; }
+.ws2 .settings-embedded input[type='range']::-webkit-slider-thumb:hover { box-shadow: 0 0 0 4px rgba(var(--ws-accent-rgb), .24); }
+.ws2 .settings-embedded .search-provider-card { display: grid; gap: 4px; width: 100%; max-width: 560px; text-align: left; color: var(--ws-ink-2); cursor: pointer; }
+.ws2 .settings-embedded .search-provider-card:is(:hover, :focus-visible):not(:disabled, .active) { outline: none; box-shadow: inset 2px 0 0 var(--ws-line-2); padding-left: 12px; }
+.ws2 .settings-embedded .search-provider-card.active { box-shadow: inset 2px 0 0 var(--ws-accent); padding-left: 12px; }
+.ws2 .settings-embedded .search-provider-name { font-family: var(--ws-sans); font-size: 14px; font-weight: 500; letter-spacing: .02em; color: var(--ws-ink); }
+.ws2 .settings-embedded .search-provider-docs { font-size: 12px; color: var(--ws-accent); text-decoration: none; }
+.ws2 .settings-embedded .search-provider-docs:hover { text-decoration: underline; }
+.ws2 .settings-embedded .custom-profile-row-head strong { color: var(--ws-ink); }
+.ws2 .settings-embedded .custom-profile-meta-sep { color: var(--ws-ink-3); }
+.ws2 .settings-embedded .connections-web-search-status { color: var(--ws-ink-2); }
+/* Shared select menu (portalled onto .ws2): the system-menu plates instead of the orange legacy list. */
+.ws2 .salieri-select-menu {
+  padding: 6px 6px 6px 8px; border: 1px solid var(--ws-line-2); border-radius: 0; background: var(--ws-panel); backdrop-filter: blur(16px);
+  box-shadow: inset 2px 0 0 var(--ws-accent), 0 18px 40px rgba(0, 0, 0, .5); font-family: var(--ws-sans);
+}
+.ws2 .salieri-select-option { padding: 7px 12px; font-size: 12.5px; letter-spacing: .06em; color: var(--ws-ink-2); background: none; box-shadow: none; }
+.ws2 .salieri-select-option.is-active { color: var(--ws-ink); background: rgba(255, 255, 255, .06); }
+.ws2 .salieri-select-option.is-selected { color: var(--ws-blade-ink); background: var(--ws-blade); box-shadow: inset 3px 0 0 var(--ws-tick); clip-path: var(--ws-plate-cut); }
+.ws2 .salieri-select-option.is-disabled { color: var(--ws-ink-3); }
+.ws2 .salieri-select-check { color: inherit; }
 .ws2-settings-host[hidden] { display: none; }
 
 /* ==========================================================================

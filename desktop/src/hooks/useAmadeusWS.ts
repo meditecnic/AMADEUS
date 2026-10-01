@@ -974,6 +974,17 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       });
       return false;
     }
+    // A rejected auth leaves the socket open with no server session, so a switch frame would never be ACKed.
+    // The next auth frame carries the worldline, so the switch can commit locally.
+    if (sessionStateRef.current === 'rejected') {
+      pendingWorldlineSwitchRef.current = null;
+      activeConversationIdRef.current = null;
+      setMessages([]);
+      messagesRef.current = [];
+      setEmotion('neutral');
+      paramsRef.current.onWorldlineSwitched?.({ worldline });
+      return true;
+    }
     const requestId = createRequestId('worldline-switch');
     clearWatchdog();
     activeTurnIdRef.current = '';
