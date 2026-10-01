@@ -249,6 +249,31 @@ describe('Workstation provider runtime changes', () => {
     expect(localStorage.getItem('amadeus_pc_model')).toBe('deepseek-v4-flash');
   });
 
+  it('repairs a stored model that does not belong to the stored provider', async () => {
+    localStorage.setItem('amadeus_pc_provider', 'custom');
+    localStorage.setItem('amadeus_pc_model', 'deepseek-v4-flash');
+    const initialFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/api/providers') {
+        const rows = await (await initialFetch(input, init)).json();
+        return {
+          ok: true,
+          status: 200,
+          json: async () => rows.map((row: { id: string; default_model: string }) => ({
+            ...row,
+            catalog: [{ id: row.default_model, display_name: row.default_model, callable: true }],
+          })),
+        } as Response;
+      }
+      return initialFetch(input, init);
+    }));
+
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+
+    await waitFor(() => expect(localStorage.getItem('amadeus_pc_model')).toBe('local-model'));
+    expect(localStorage.getItem('amadeus_pc_provider')).toBe('custom');
+  });
+
   it('does not let a late old-provider model response overwrite the active catalog', async () => {
     let resolveDeepSeekModels!: (response: Response) => void;
     const deepSeekModels = new Promise<Response>((resolve) => {

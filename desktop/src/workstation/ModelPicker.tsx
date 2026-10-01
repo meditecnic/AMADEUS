@@ -1,19 +1,20 @@
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 
 export interface PickerOption { value: string; label: string; disabled?: boolean; title?: string }
-export interface PickerSource { id: string; name: string; model?: string }
+export interface PickerSource { id: string; name: string; model?: string; mark?: ReactNode; needsKey?: boolean }
 
 /** Searchable model picker for the composer. Keeps the accessible contract of the old select
  *  (button「模型」→ listbox「模型」→ options named by label) and adds search, the model's source,
  *  a way to jump to another admitted connection and「管理连接」. */
 export function ModelPicker({
-  value, options, onChange, disabled = false, sourceName, otherSources = [], onSource, onManage, title,
+  value, options, onChange, disabled = false, sourceName, sourceMark, otherSources = [], onSource, onManage, title,
 }: {
   value: string;
   options: PickerOption[];
   onChange: (value: string) => void;
   disabled?: boolean;
   sourceName: string;
+  sourceMark?: ReactNode;
   otherSources?: PickerSource[];
   onSource?: (id: string) => void;
   onManage?: () => void;
@@ -88,7 +89,7 @@ export function ModelPicker({
             value={query}
             onChange={(e) => { setQuery(e.target.value); setActive(0); }}
           />
-          <div className="ws2-picker-group">{sourceName}</div>
+          <div className="ws2-picker-group">{sourceMark}{sourceName}</div>
           <ul id={listId} role="listbox" aria-label="模型" className="ws2-picker-list" tabIndex={-1} onKeyDown={onKeyDown}>
             {shown.length === 0 && <li className="ws2-picker-empty" role="presentation">没有匹配的模型</li>}
             {shown.map((option, i) => (
@@ -112,8 +113,10 @@ export function ModelPicker({
               <div className="ws2-picker-group">其他连接</div>
               <div className="ws2-picker-sources">
                 {sources.map((source) => (
-                  <button key={source.id} type="button" onClick={() => { close(); onSource(source.id); }}>
-                    <span>{source.name}</span>{source.model && <small>{source.model}</small>}
+                  <button key={source.id} type="button" className={source.needsKey ? 'needs-key' : undefined} onClick={() => { close(false); onSource(source.id); }}>
+                    {source.mark}
+                    <span>{source.name}</span>
+                    {source.needsKey ? <small>缺密钥 · 去配置</small> : source.model && <small>{source.model}</small>}
                   </button>
                 ))}
               </div>

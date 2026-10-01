@@ -14,6 +14,7 @@ const hoisted = vi.hoisted(() => ({
   reconnect: vi.fn(),
   useAmadeusWS: vi.fn(),
   settingsProps: { current: null as null | Record<string, unknown> },
+  sidebarProps: { current: null as null | Record<string, unknown> },
 }));
 
 vi.mock('../hooks/useAmadeusWS', () => ({
@@ -45,7 +46,9 @@ vi.mock('./SettingsModal', () => ({
   persistSelfName: () => {},
 }));
 vi.mock('./SoundMixerRail', () => ({ SoundMixerRail: () => null }));
-vi.mock('./HistorySidebar', () => ({ HistorySidebar: () => null }));
+vi.mock('./HistorySidebar', () => ({
+  HistorySidebar: (props: Record<string, unknown>) => { hoisted.sidebarProps.current = props; return null; },
+}));
 vi.mock('./TtsDebugPanel', () => ({ TtsDebugPanel: () => null }));
 vi.mock('./AvatarViewer', () => ({ default: () => null }));
 vi.mock('./SpriteAnimator', () => ({ default: () => null }));
@@ -108,6 +111,7 @@ beforeEach(() => {
       return json(200, { catalog: [capability('deepseek-v4-flash'), capability('deepseek-v4-pro')] });
     }
     if (decodeURIComponent(url).startsWith('/api/providers/custom:new/models')) return json(200, { catalog: [capability('m1')] });
+    if (url.startsWith('/api/providers/local/models')) return json(200, { catalog: [capability('l1')] });
     if (url.startsWith('/api/conversations?')) {
       return json(200, [{
         id: 'conversation-one', title: 'One', title_source: 'auto', is_default: false, is_pinned: false,
@@ -115,6 +119,7 @@ beforeEach(() => {
       }]);
     }
     if (url.startsWith('/api/conversations/conversation-one') && init?.method === 'PATCH') return patchResponse();
+    if (url.startsWith('/api/conversations/conversation-one/messages')) return json(200, []);
     if (url === '/api/search/settings') return json(200, { provider: 'tavily', configured: false });
     throw new Error(`unexpected fetch: ${url}`);
   }));
@@ -179,6 +184,98 @@ describe('Workstation connection admission and next-turn model', () => {
     expect(hoisted.reconnect).toHaveBeenCalled();
     expect(providers.find((p) => p.id === 'custom:new')).toMatchObject({ selector_admission: 'admitted' });
     expect(providerOptions().some((name) => name.includes('New One'))).toBe(true);
+  });
+
+  it('remembers the provider together with the model when a conversation switches connection', async () => {
+    providers = [
+      provider('deepseek', 'DeepSeek', 'deepseek-v4-flash'),
+      provider('local', 'Local', 'l1'),
+    ];
+    patchResponse = () => json(200, {
+      id: 'conversation-one', title: 'One', title_source: 'auto', is_default: false, is_pinned: false,
+      provider_id: 'local', model_id: 'l1', last_active_at: '2026-09-28T00:00:00Z',
+    });
+    let params: { onTurnStarted?: (id: string) => void } = {};
+    hoisted.useAmadeusWS.mockImplementation((p: typeof params) => { params = p; return wsState(); });
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: '模型供应商' })).not.toBeDisabled());
+    await act(async () => { params.onTurnStarted?.('conversation-one'); });
+
+    fireEvent.click(screen.getByRole('button', { name: '模型供应商' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Local' }));
+
+    // A restart starts from these two keys; a mismatched pair is rejected by the backend.
+    await waitFor(() => expect(localStorage.getItem('amadeus_pc_model')).toBe('l1'));
+    expect(localStorage.getItem('amadeus_pc_provider')).toBe('local');
+  });
+
+  it('remembers the provider together with the model when opening a conversation', async () => {
+    providers = [
+      provider('deepseek', 'DeepSeek', 'deepseek-v4-flash'),
+      provider('local', 'Local', 'l1'),
+    ];
+    localStorage.setItem('amadeus_pc_provider', 'local');
+    localStorage.setItem('amadeus_pc_model', 'l1');
+    let params: { onConversationSwitched?: (event: { conversationId: string }) => void } = {};
+    hoisted.useAmadeusWS.mockImplementation((p: typeof params) => { params = p; return wsState(); });
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    await waitFor(() => expect((hoisted.sidebarProps.current?.conversations as unknown[] | undefined)?.length).toBe(1));
+
+    const sidebar = hoisted.sidebarProps.current!;
+    await act(async () => {
+      (sidebar.onSelect as (row: unknown) => void)((sidebar.conversations as unknown[])[0]);
+    });
+    await act(async () => { params.onConversationSwitched?.({ conversationId: 'conversation-one' }); });
+
+    // The next draft (new conversation, other worldline, restart) starts from these two keys.
+    expect(localStorage.getItem('amadeus_pc_model')).toBe('deepseek-v4-flash');
+    expect(localStorage.getItem('amadeus_pc_provider')).toBe('deepseek');
+  });
+
+  it('keeps a connection switch when an older conversation list arrives after it', async () => {
+    providers = [
+      provider('deepseek', 'DeepSeek', 'deepseek-v4-flash'),
+      provider('local', 'Local', 'l1'),
+    ];
+    const row = (providerId: string, modelId: string) => ({
+      id: 'conversation-one', title: 'One', title_source: 'auto', is_default: false, is_pinned: false, is_selected: true,
+      provider_id: providerId, model_id: modelId, last_active_at: '2026-09-28T00:00:00Z',
+    });
+    patchResponse = () => json(200, row('local', 'l1'));
+    const baseFetch = globalThis.fetch;
+    let releaseList: (() => void) | null = null;
+    let holdList = false;
+    let patched = false;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (holdList && url.startsWith('/api/conversations?')) {
+        holdList = false;
+        return new Promise<Response>((resolve) => { releaseList = () => resolve(json(200, [row('deepseek', 'deepseek-v4-flash')])); });
+      }
+      // Lists requested after the write see the stored change, as the backend would.
+      if (patched && url.startsWith('/api/conversations?')) return Promise.resolve(json(200, [row('local', 'l1')]));
+      if (init?.method === 'PATCH') patched = true;
+      return baseFetch(input, init);
+    }));
+    let params: { onTurnStarted?: (id: string) => void; onTurnCompleted?: () => void } = {};
+    hoisted.useAmadeusWS.mockImplementation((p: typeof params) => { params = p; return wsState(); });
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: '模型供应商' })).not.toBeDisabled());
+    await act(async () => { params.onTurnStarted?.('conversation-one'); });
+    await waitFor(() => expect(screen.getByRole('button', { name: '模型供应商' })).toHaveTextContent('DeepSeek'));
+    // Let the delayed refresh scheduled by turn start finish, so it cannot supersede the held request below.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
+
+    // The end of the turn starts a list refresh that is still in flight when the user switches.
+    holdList = true;
+    await act(async () => { params.onTurnCompleted?.(); });
+    await waitFor(() => expect(releaseList).not.toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: '模型供应商' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Local' }));
+    await waitFor(() => expect(localStorage.getItem('amadeus_pc_provider')).toBe('local'));
+
+    await act(async () => { releaseList?.(); });
+    expect(screen.getByRole('button', { name: '模型供应商' })).toHaveTextContent('Local');
   });
 
   it('reports a failed next-turn model update and keeps the old model', async () => {

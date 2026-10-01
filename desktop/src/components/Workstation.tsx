@@ -35,6 +35,7 @@ import { SoundChannel, SystemMenu, WorldlinePanel, type MenuSection } from '../w
 import { ShiftOverlay } from '../workstation/ShiftOverlay';
 import { ConfirmDialog } from '../workstation/ConfirmDialog';
 import { ConnectionCheckPanel, chatCheckMessage, requestChatCheck, type ChatCheckState } from '../workstation/ConnectionCheck';
+import { ConnectionList } from '../workstation/ConnectionList';
 import { SendSignal } from '../workstation/SendSignal';
 import { VoiceScope } from '../workstation/VoiceScope';
 import { BootSequence } from '../workstation/BootSequence';
@@ -142,7 +143,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const suppressedWorldlineEffectRef = useRef<'steins_gate' | 'beta' | null>(null);
   const latestWorldlineRef = useRef(worldline);
   const conversationRequestRef = useRef(0);
-  const pendingConversationModelRef = useRef<string | null>(null);
+  const pendingConversationModelRef = useRef<{ model: string; provider: string | null } | null>(null);
 
   const [enableBgm, setEnableBgm] = useState(() => {
     try { return localStorage.getItem('amadeus_pc_enable_bgm') !== 'false'; } catch { return true; }
@@ -237,6 +238,27 @@ export const Workstation: React.FC<WorkstationProps> = ({
     setIsSettingsOpen(true);
   }, []);
   const closeMenu = useCallback(() => setIsSettingsOpen(false), []);
+  /** Lands on the connections page with focus on either the key field or the first usable other connection. */
+  const openConnectionsAt = useCallback((target: 'key' | 'list') => {
+    openMenu('connections');
+    const selector = target === 'key'
+      ? '[data-testid="credential-input"]'
+      : '.ws2-conn-row:not(.is-active):not(:disabled)';
+    // A conversation's provider switch lands asynchronously, so the key field may appear a moment later.
+    let tries = 0;
+    const attempt = () => {
+      const el = document.querySelector<HTMLElement>(selector);
+      if (el) {
+        // Scroll only the menu body: scrolling the clipped `.ws2` root would shift the whole page.
+        el.focus({ preventScroll: true });
+        const body = el.closest<HTMLElement>('.ws2-sys-body');
+        if (body) body.scrollTop += el.getBoundingClientRect().top - body.getBoundingClientRect().top - body.clientHeight / 2;
+      } else if (++tries < 20) {
+        window.setTimeout(attempt, 100);
+      }
+    };
+    window.setTimeout(attempt, 100);
+  }, [openMenu]);
   // Chat verification results are local and keyed by provider + model + config version.
   const [chatChecks, setChatChecks] = useState<Record<string, ChatCheckState>>({});
   const [configVersions, setConfigVersions] = useState<Record<string, number>>({});
@@ -449,9 +471,19 @@ export const Workstation: React.FC<WorkstationProps> = ({
   // No stored model (cleared storage / older bug wrote '') → use the draft connection's default, not the global
   // 'deepseek-flash' placeholder, which a custom connection's server rejects.
   const modelWasStoredRef = useRef(Boolean(localStorage.getItem('amadeus_pc_model')));
+  // Older builds stored only the model when opening a conversation, leaving pairs like (Mock, glm-5.2) that the
+  // server rejects. Checked once against the first provider list; live discovery may legitimately add models
+  // outside the static catalog, so only a model owned by another provider's catalog counts as foreign.
+  const storedPairCheckedRef = useRef(false);
   useEffect(() => {
-    if (modelWasStoredRef.current && model.trim()) return;
     const provider = providers.find((row) => row.id === draftProviderId);
+    let foreignModel = false;
+    if (provider && !storedPairCheckedRef.current) {
+      storedPairCheckedRef.current = true;
+      foreignModel = !provider.catalog?.some((entry) => entry.id === model)
+        && providers.some((row) => row.id !== provider.id && row.catalog?.some((entry) => entry.id === model));
+    }
+    if (modelWasStoredRef.current && model.trim() && !foreignModel) return;
     if (!provider?.default_model) return;
     modelWasStoredRef.current = true;
     if (provider.default_model === model) return;
@@ -528,10 +560,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
         ...row,
         is_selected: row.id === conversationId,
       })));
-      const pendingModel = pendingConversationModelRef.current;
-      if (pendingModel) {
-        setModel(pendingModel);
-        try { localStorage.setItem('amadeus_pc_model', pendingModel); } catch {}
+      const pending = pendingConversationModelRef.current;
+      if (pending) {
+        setModel(pending.model);
+        try { localStorage.setItem('amadeus_pc_model', pending.model); } catch {}
+        // Stored model and provider must move together, or the next draft pairs this model with another provider.
+        if (pending.provider) {
+          setDraftProviderId(pending.provider);
+          try { localStorage.setItem('amadeus_pc_provider', pending.provider); } catch {}
+        }
       }
       pendingConversationModelRef.current = null;
     },
@@ -877,7 +914,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const needsApiKey = credentialChecked && Boolean(activeProvider) && !credentialConfigured;
   const visibleMessages = needsApiKey
     ? messages.filter((message) => !/(API\s*Key|未认证|缺失\s*API)/i.test(message.content))
-    : messages;
+    // After switching away, a "missing key" error about the previous connection no longer describes anything.
+    : messages.filter((message) => {
+      const missing = /缺失\s*(\S+)\s*API\s*Key/i.exec(message.content);
+      return !missing || missing[1] === activeProviderId;
+    });
   const emptyStateKind = needsApiKey ? 'setup' : status.toLowerCase();
   const emptyStateMessage = needsApiKey
     ? `> 请为 ${activeProvider?.display_name || activeProviderId} 配置 API Key 以建立连接。`
@@ -1051,7 +1092,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
           translation: row.role === 'assistant' ? row.translation || '' : undefined,
           streaming: false,
       }));
-      pendingConversationModelRef.current = conversation.model_id || null;
+      pendingConversationModelRef.current = conversation.model_id
+        ? { model: conversation.model_id, provider: conversation.provider_id || null }
+        : null;
       if (!switchConversation(conversation.id, history)) {
         pendingConversationModelRef.current = null;
         setConversationBusy(false);
@@ -1117,6 +1160,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
     );
     if (!response.ok) throw new Error(`conversation update failed: ${response.status}`);
     const updated = await response.json() as ConversationSummary;
+    // A list query sent before this write would land afterwards with the old provider/model.
+    conversationRequestRef.current += 1;
     setConversations((current) => current.map((row) => (
       row.id === updated.id ? { ...row, ...updated } : row
     )));
@@ -1134,6 +1179,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
         setModel(updated.model_id);
         try { localStorage.setItem('amadeus_pc_model', updated.model_id); } catch {}
       }
+      // The remembered model and provider must move together, or the next draft pairs a model with the wrong provider.
+      if (updated.provider_id) {
+        setDraftProviderId(updated.provider_id);
+        try { localStorage.setItem('amadeus_pc_provider', updated.provider_id); } catch {}
+      }
       // Provider/model are authenticated and snapshotted when the socket opens.
       // Reusing a socket that previously failed authentication leaves it in the
       // server's unauthenticated state, so reload the durable conversation on a
@@ -1142,7 +1192,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       const refreshedProviders = await loadProviders();
       const provider = refreshedProviders.find((row) => row.id === updated.provider_id);
       // Keyless connections (local endpoints) are never "configured"; only a missing required key needs the menu.
-      if (provider?.credential_required && !provider.configured) openMenu('connections');
+      if (provider?.credential_required && !provider.configured) openConnectionsAt('key');
     } finally {
       setConversationBusy(false);
     }
@@ -1160,7 +1210,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         localStorage.setItem('amadeus_pc_model', nextModel);
       } catch {}
       window.setTimeout(reconnect, 0);
-      if (provider?.credential_required && !provider.configured) openMenu('connections');
+      if (provider?.credential_required && !provider.configured) openConnectionsAt('key');
       return;
     }
     void patchActiveConversationRuntime({ provider_id: providerId }).catch((error) => {
@@ -1718,9 +1768,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
                       : emptyStateMessage.replace(/^>\s*/, '')}
                   </p>
                   {needsApiKey && (
-                    <button type="button" className="ws2-empty-action" onClick={() => openMenu('connections')}>
-                      打开系统设置
-                    </button>
+                    <div className="ws2-empty-actions">
+                      <button type="button" className="ws2-empty-action" onClick={() => openConnectionsAt('key')}>
+                        填写密钥
+                      </button>
+                      <button type="button" className="ws2-empty-action is-quiet" onClick={() => openConnectionsAt('list')}>
+                        换一个接入
+                      </button>
+                    </div>
                   )}
                   <div className="ws2-empty-rule" aria-hidden="true">
                     <i /><span>{worldline === 'beta' ? 'β' : 'STEINS;GATE'} · {DIVERGENCE[worldline]}%</span>
@@ -1814,6 +1869,13 @@ export const Workstation: React.FC<WorkstationProps> = ({
         {providerGone && (
           <div className="ws2-provider-gone" role="status">
             这段对话原来使用的「{activeProvider?.display_name || '接入'}」已被移除。聊天记录仍在；请在下方重新选择模型后继续，不会自动换到其他厂商。
+          </div>
+        )}
+        {needsApiKey && !providerGone && visibleMessages.length > 0 && (
+          <div className="ws2-key-missing" role="status">
+            <span>「{activeProvider?.display_name || activeProviderId}」还没有密钥，她现在听不到你。</span>
+            <button type="button" onClick={() => openConnectionsAt('key')}>填写密钥</button>
+            <button type="button" onClick={() => openConnectionsAt('list')}>换一个接入</button>
           </div>
         )}
         <form className="ws2-composer" onSubmit={handleSend}>
@@ -2020,6 +2082,18 @@ export const Workstation: React.FC<WorkstationProps> = ({
         onClose={closeMenu}
         returnFocusRef={systemButtonRef}
       >
+        {/* Fixed slots keep the embedded SettingsModal mounted across sections, so unsaved drafts survive. */}
+        <div className={`ws2-conn${menuSection === 'connections' ? ' is-split' : ''}`}>
+        {menuSection === 'connections' && (
+          <ConnectionList
+            providers={providers}
+            activeProviderId={activeProviderId}
+            checkFor={(row) => chatChecks[checkKey(row.id, row.id === activeProviderId ? activeModelId : row.default_model || '')]}
+            locked={isThinking || isSynthesizing || conversationBusy}
+            onSelect={changeProvider}
+          />
+        )}
+        <div className="ws2-conn-detail">
         {menuSection === 'worldline' && (
           <WorldlinePanel
             worldline={worldline}
@@ -2162,6 +2236,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
         }}
         onClearWebSearchCredential={handleClearWebSearchCredential}
       />
+        </div>
+        </div>
         </div>
       </SystemMenu>
 
