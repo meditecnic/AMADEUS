@@ -44,3 +44,15 @@ async def test_vad_missing_sherpa_keeps_rms_fallback(monkeypatch):
     service = SpeechService()
     assert await service.has_speech(b'\0\0' * 16000) is False
     assert await service.has_speech(np.full(16000, 10000, dtype='<i2').tobytes()) is True
+
+
+def test_missing_model_override_does_not_enter_native_loader(tmp_path, monkeypatch):
+    monkeypatch.setenv('SENSEVOICE_MODEL', str(tmp_path/'missing.onnx'))
+
+    def native_loader(**kwargs):
+        pytest.fail('Missing configured files must be rejected before native initialization')
+
+    monkeypatch.setitem(sys.modules, 'sherpa_onnx', SimpleNamespace(
+        OfflineRecognizer=SimpleNamespace(from_sense_voice=native_loader)))
+    with pytest.raises(FileNotFoundError):
+        SpeechService()._load()

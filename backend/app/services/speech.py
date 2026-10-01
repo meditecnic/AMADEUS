@@ -68,6 +68,8 @@ class SpeechService:
             path = Path(override).expanduser() if override else self._cache_dir / 'silero_vad.onnx'
             if not override and not path.is_file():
                 _download(VAD_URL, path)
+            if not path.is_file():
+                raise FileNotFoundError(f'Silero VAD model not found: {path}')
             config = sherpa_onnx.VadModelConfig()
             config.silero_vad.model = str(path)
             config.silero_vad.threshold = threshold
@@ -122,6 +124,9 @@ class SpeechService:
         if self._model is None:
             import sherpa_onnx
             model, tokens = self._model_paths()
+            for path in (model, tokens):
+                if not path.is_file():
+                    raise FileNotFoundError(f'SenseVoice model file not found: {path}')
             self._model = sherpa_onnx.OfflineRecognizer.from_sense_voice(
                 model=str(model), tokens=str(tokens), num_threads=2, use_itn=True, provider='cpu')
         return self._model
