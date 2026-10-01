@@ -149,6 +149,40 @@ class TestBackendE2EContract:
             assert response["type"] == "error"
             assert "未认证" in response["message"]
 
+    @pytest.mark.parametrize("auth_rejected", [False, True])
+    def test_unauthenticated_worldline_switch_is_correlated_without_switching(
+        self, mock_services, isolated_provider_credentials, monkeypatch, auth_rejected
+    ):
+        from app.services.session_manager import session_coordinator
+
+        session_id = f"unauthenticated-switch-{auth_rejected}"
+        switch = AsyncMock()
+        monkeypatch.setattr(session_coordinator, "switch", switch)
+        with self.client.websocket_connect(f"/ws/chat?session_id={session_id}") as websocket:
+            if auth_rejected:
+                isolated_provider_credentials.delete("deepseek")
+                websocket.send_json({
+                    "type": "auth",
+                    "protocol_version": 2,
+                    "worldline": "steins_gate",
+                    "conversation_mode": "draft",
+                })
+                assert websocket.receive_json()["type"] == "error"
+            session = sessions[session_id]
+            before = (session.worldline, session.conversation_id, session.current_epoch)
+            websocket.send_json({
+                "type": "worldline.switch",
+                "request_id": "switch-before-auth",
+                "target_worldline": "beta",
+                "conversation_mode": "draft",
+            })
+            error = websocket.receive_json()
+            assert error["type"] == "worldline.switch_error"
+            assert error["request_id"] == "switch-before-auth"
+            assert error["code"] == "unauthenticated"
+            assert (session.worldline, session.conversation_id, session.current_epoch) == before
+            switch.assert_not_awaited()
+
     def test_ws_successful_auth_handshake(self, mock_services):
         """第一帧发送合法 auth 帧后，连接得以维持，可以正常聊天"""
         client = self.client

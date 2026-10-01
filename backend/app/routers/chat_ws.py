@@ -2456,12 +2456,19 @@ async def websocket_chat_endpoint(websocket: WebSocket):
             # Auth logic
             if not authenticated:
                 if frame_type != "auth":
+                    error_frame = {
+                        "type": "error",
+                        "message": "未认证。请打开设置并配置您的 API Key。",
+                    }
+                    if frame_type == "worldline.switch":
+                        error_frame.update({
+                            "type": "worldline.switch_error",
+                            "request_id": data.get("request_id", ""),
+                            "code": "unauthenticated",
+                        })
                     await send_queue.put((
                         session.current_epoch,
-                        {
-                            "type": "error",
-                            "message": "未认证。请打开设置并配置您的 API Key。",
-                        },
+                        error_frame,
                     ))
                     continue
                 if "worldline" in data:
