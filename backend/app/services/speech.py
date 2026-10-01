@@ -144,7 +144,8 @@ class SpeechService:
             stream.accept_waveform(sample_rate, samples)
             model.decode_stream(stream)
             raw = stream.result.text
-        match = self.EMOTION_PATTERN.search(raw)
+            emotion_tag = getattr(stream.result, 'emotion', '')
+        match = self.EMOTION_PATTERN.search(emotion_tag) or self.EMOTION_PATTERN.search(raw)
         emotion = match.group(1).upper() if match else 'NEUTRAL'
         return re.sub(r'<[^>]+>', '', raw).strip(), emotion, 0.85 if match else 0.5
 

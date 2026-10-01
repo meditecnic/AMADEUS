@@ -15,11 +15,12 @@ def test_readiness_without_sherpa_does_not_download(monkeypatch):
     assert status['error'] == 'sherpa-onnx/SenseVoice is not installed'
 
 
-@pytest.mark.parametrize('raw,expected', [
-    ('今日は晴れです。', ('今日は晴れです。', 'NEUTRAL', 0.5)),
-    ('<|zh|><|HAPPY|><|Speech|>今天很好。', ('今天很好。', 'HAPPY', 0.85)),
+@pytest.mark.parametrize('raw,emotion_tag,expected', [
+    ('今日は晴れです。', '', ('今日は晴れです。', 'NEUTRAL', 0.5)),
+    ('<|zh|><|HAPPY|><|Speech|>今天很好。', '', ('今天很好。', 'HAPPY', 0.85)),
+    ('今天很好。', '<|HAPPY|>', ('今天很好。', 'HAPPY', 0.85)),
 ])
-def test_transcribe_local_onnx_stereo_pcm(tmp_path, monkeypatch, raw, expected):
+def test_transcribe_local_onnx_stereo_pcm(tmp_path, monkeypatch, raw, emotion_tag, expected):
     (tmp_path/'model.int8.onnx').write_bytes(b'local-model')
     (tmp_path/'tokens.txt').write_text('tokens')
     monkeypatch.setenv('SENSEVOICE_MODEL', str(tmp_path))
@@ -28,7 +29,7 @@ def test_transcribe_local_onnx_stereo_pcm(tmp_path, monkeypatch, raw, expected):
     def accept_waveform(rate, samples):
         captured.update(rate=rate, samples=samples)
 
-    stream = SimpleNamespace(accept_waveform=accept_waveform, result=SimpleNamespace(text=raw))
+    stream = SimpleNamespace(accept_waveform=accept_waveform, result=SimpleNamespace(text=raw, emotion=emotion_tag))
     model = SimpleNamespace(create_stream=lambda:stream, decode_stream=lambda s:None)
     monkeypatch.setitem(sys.modules, 'sherpa_onnx', SimpleNamespace(
         OfflineRecognizer=SimpleNamespace(from_sense_voice=lambda **kw:model)))
