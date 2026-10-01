@@ -14,6 +14,8 @@ export interface SalieriSelectOption {
   label: string;
   disabled?: boolean;
   title?: string;
+  /** Decorative mark shown before the label in the list and on the trigger. */
+  icon?: React.ReactNode;
 }
 
 export interface SalieriSelectProps {
@@ -279,6 +281,7 @@ export const SalieriSelect: React.FC<SalieriSelectProps> = ({
               }}
               onClick={() => commit(index)}
             >
+              {option.icon}
               <span className="salieri-select-option-label">{option.label}</span>
               {selected ? <span className="salieri-select-check" aria-hidden>▸</span> : null}
             </li>
@@ -318,6 +321,7 @@ export const SalieriSelect: React.FC<SalieriSelectProps> = ({
         }}
         onKeyDown={onTriggerKeyDown}
       >
+        {selectedIndex >= 0 ? options[selectedIndex].icon : null}
         <span className="salieri-select-value">{triggerText}</span>
         <span className="salieri-select-caret" aria-hidden>▾</span>
       </button>

@@ -1,6 +1,7 @@
 import React from 'react';
 import { SalieriSelect } from './SalieriSelect';
 import { ModelPicker } from '../workstation/ModelPicker';
+import { ProviderMark } from '../workstation/ProviderMark';
 
 export type ModelLifecycle =
   | 'stable'
@@ -250,6 +251,7 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
               ? `${provider.display_name}（已停用/不可用）`
               : provider.display_name,
             disabled: disabledProvider,
+            icon: <ProviderMark provider={provider} />,
           };
         })}
         onChange={onProviderChange}
@@ -267,9 +269,16 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
           title={activeModel ? modelOptionTitle(activeModel) : undefined}
           onChange={onModelChange}
           sourceName={activeProvider?.display_name || activeProviderId}
+          sourceMark={activeProvider ? <ProviderMark provider={activeProvider} /> : undefined}
           otherSources={lockProvider ? [] : providers
             .filter((provider) => provider.id !== activeProviderId && provider.enabled !== false)
-            .map((provider) => ({ id: provider.id, name: provider.display_name, model: provider.default_model }))}
+            .map((provider) => ({
+              id: provider.id,
+              name: provider.display_name,
+              model: provider.default_model,
+              mark: <ProviderMark provider={provider} />,
+              needsKey: provider.credential_required && !provider.configured,
+            }))}
           onSource={onProviderChange}
           onManage={onManageConnections}
         />
