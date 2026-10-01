@@ -22,7 +22,7 @@ DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")
 SOVITS_URL = os.getenv("SOVITS_URL", "http://127.0.0.1:9880").rstrip("/")
 FRONTEND_PORT = int(os.getenv("FRONTEND_PORT", "5173"))
 BACKEND_PORT = int(os.getenv("BACKEND_PORT", "8000"))
-ASSETS_DIR = Path(os.getenv("ASSETS_DIR", "<LOCAL_PATH>"))
+ASSETS_DIR = Path(os.getenv("ASSETS_DIR", str(backend_dir.parent / "frontend" / "public" / "assets")))
 HISTORY_COMPRESS_THRESHOLD = int(os.getenv("HISTORY_COMPRESS_THRESHOLD", "15"))
 
 PROMPTS_DIR = backend_dir / "prompts"
@@ -46,7 +46,7 @@ if not 300 <= VAD_SILENCE_MS <= 2000:
 
 # TTS reference audio paths (overridable via env vars)
 # Optimized 9-emotion mapping using RMS-normalized reference clips.
-DEFAULT_REF_AUDIO_DIR = r"<LOCAL_PATH>"
+DEFAULT_REF_AUDIO_DIR = backend_dir.parent / "desktop" / "public" / "assets" / "audio"
 REF_AUDIO_NEUTRAL = os.getenv("AMADEUS_REF_NEUTRAL", str(Path(DEFAULT_REF_AUDIO_DIR) / "ref" / "ref_neutral.wav"))
 REF_AUDIO_TSUNDERE = os.getenv("AMADEUS_REF_TSUNDERE", str(Path(DEFAULT_REF_AUDIO_DIR) / "ref" / "ref_tsundere.wav"))
 REF_AUDIO_EMBARRASSED = os.getenv("AMADEUS_REF_EMBARRASSED", str(Path(DEFAULT_REF_AUDIO_DIR) / "ref" / "ref_embarrassed.wav"))
