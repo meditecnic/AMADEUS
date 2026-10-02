@@ -499,6 +499,7 @@ async def compress_and_update_history(
                         session_data.worldline != worldline
                         or session_data.revision != revision
                         or getattr(session_data, "conversation_id", None) != conversation_id
+                        or session_data.content_epoch != summary_epoch
                     ):
                         return
                     session_data.memory_summary = summary
@@ -2414,11 +2415,10 @@ async def writer_loop(send_queue: asyncio.Queue, session: SessionState, websocke
 
 @router.websocket("/ws/chat")
 async def websocket_chat_endpoint(websocket: WebSocket):
-    # 1. Handshake Origin Check (CSWSH Defense)
-    # Disabled to allow local network access (e.g. 192.168.x.x) through Vite proxy.
-    # Vite's http-proxy hangs the websocket if we reject it here, causing a 3s timeout.
+    from app.security.local_transport import accept_local_websocket
 
-    await websocket.accept()
+    if not await accept_local_websocket(websocket):
+        return
     
     # 2. Thread-safe retrieval or initialization of session data
     session_id = websocket.query_params.get("session_id", "default")

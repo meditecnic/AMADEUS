@@ -747,7 +747,7 @@ class MemoryService:
         try:
             provider_snapshot.require(ProviderTask.MEMORY)
         except Exception as exc:
-            print(f"[MemoryIngest] skip schedule reason=no_memory_capability err={exc!r}", flush=True)
+            print(f"[MemoryIngest] skip schedule reason=no_memory_capability error_type={type(exc).__name__}", flush=True)
             return
         mode = normalize_identity_mode(identity_mode)
         # Universal auto-profile: never keyword-throttle. Explicit True only skips.
@@ -759,10 +759,11 @@ class MemoryService:
                 {"role": "user", "content": user_text},
                 {"role": "assistant", "content": assistant_text},
             ]
-        preview = (user_text or "").replace("\n", " ")[:48]
+        text = user_text or ''
+        digest = hashlib.sha256(text.encode('utf-8')).hexdigest()[:12]
         print(
             f"[MemoryIngest] schedule mode={mode} window={len(window)} "
-            f"ids={len(source_message_ids)} user={preview!r}",
+            f"ids={len(source_message_ids)} user_length={len(text)} user_sha256={digest}",
             flush=True,
         )
 
@@ -773,7 +774,7 @@ class MemoryService:
                 return
             exc = task.exception()
             if exc is not None:
-                print(f"[MemoryIngest] task FAILED: {exc!r}", flush=True)
+                print(f"[MemoryIngest] task failed error_type={type(exc).__name__}", flush=True)
 
         task = asyncio.create_task(
             self._extract_turn(
@@ -871,22 +872,22 @@ class MemoryService:
                 temperature=0.1,
             )
             print(
-                f"[MemoryIngest] provider ok keys="
-                f"{list(payload.keys()) if isinstance(payload, dict) else type(payload)}",
+                f"[MemoryIngest] provider ok payload_type={type(payload).__name__} "
+                f"field_count={len(payload) if isinstance(payload, dict) else 0}",
                 flush=True,
             )
             try:
                 extraction = parse_extraction_payload(payload)
             except Exception as exc:
                 print(
-                    f"[MemoryIngest] parse FAILED: {exc!r} "
-                    f"keys={list(payload.keys()) if isinstance(payload, dict) else type(payload)}",
+                    f"[MemoryIngest] parse failed error_type={type(exc).__name__} "
+                    f"field_count={len(payload) if isinstance(payload, dict) else 0}",
                     flush=True,
                 )
                 logger.warning(
-                    "memory extraction parse failed: %s payload_keys=%s",
-                    exc,
-                    list(payload.keys()) if isinstance(payload, dict) else type(payload),
+                    "memory extraction parse failed: error_type=%s field_count=%s",
+                    type(exc).__name__,
+                    len(payload) if isinstance(payload, dict) else 0,
                 )
                 raise
             print(
@@ -943,8 +944,8 @@ class MemoryService:
             print("[MemoryIngest] extract cancelled", flush=True)
             raise
         except Exception as exc:
-            print(f"[MemoryIngest] extract FAILED: {exc!r}", flush=True)
-            logger.warning("memory extraction skipped: %s", exc)
+            print(f"[MemoryIngest] extract failed error_type={type(exc).__name__}", flush=True)
+            logger.warning("memory extraction skipped: error_type=%s", type(exc).__name__)
 
     async def close(self) -> None:
         if self._extraction_tasks:
@@ -1590,6 +1591,8 @@ class MemoryService:
                 (int(okabe_fact_id),),
             )
             await db.commit()
+            from app.services.session_manager import clear_working_summaries
+            await clear_working_summaries(session_id, wl, 'okabe')
             return int(okabe_fact_id), True
         except DismissError:
             raise
@@ -1648,6 +1651,9 @@ class MemoryService:
             raise
         finally:
             await db.close()
+        if dismissed:
+            from app.services.session_manager import clear_working_summaries
+            await clear_working_summaries(session_id, wl, 'okabe')
         return {"dismissed": dismissed, "skipped": skipped}
 
     async def delete_local_self_fact(
@@ -1697,6 +1703,7 @@ class MemoryService:
                 )
             except (TypeError, ValueError, json.JSONDecodeError):
                 src_ids = []
+            dismissed_okabe_source = False
             if src_ids:
                 cur = await db.execute(
                     """SELECT * FROM core_facts
@@ -1723,7 +1730,12 @@ class MemoryService:
                             "UPDATE core_facts SET is_dismissed=1 WHERE id=?",
                             (int(okabe_row["id"]),),
                         )
+                        dismissed_okabe_source = True
             await db.commit()
+            from app.services.session_manager import clear_working_summaries
+            await clear_working_summaries(session_id, wl, 'self')
+            if dismissed_okabe_source:
+                await clear_working_summaries(session_id, wl, 'okabe')
             return int(local_fact_id), True
         except MemoryDeleteError:
             raise
@@ -1760,6 +1772,9 @@ class MemoryService:
                 (int(shared_fact_id),),
             )
             await db.commit()
+            from app.services.session_manager import clear_working_summaries
+            for wl in ('steins_gate', 'beta'):
+                await clear_working_summaries(owner_session_id, wl, 'self')
             return int(shared_fact_id), True
         except MemoryDeleteError:
             raise
@@ -2000,7 +2015,7 @@ class MemoryService:
         db = await get_db(normalize_worldline(worldline), "memory")
         try:
             episode = await (await db.execute("SELECT COUNT(*) FROM episodic_memories WHERE session_id=?", (session_id,))).fetchone()
-            facts = await (await db.execute("SELECT COUNT(*) FROM core_facts WHERE session_id=? AND is_current=1", (session_id,))).fetchone()
+            facts = await (await db.execute("SELECT COUNT(*) FROM core_facts WHERE session_id=? AND is_current=1 AND COALESCE(is_dismissed,0)=0", (session_id,))).fetchone()
             return {"session_id": session_id, "worldline": normalize_worldline(worldline), "episodic_count": episode[0], "current_fact_count": facts[0], "embedding": self.embedder.readiness()}
         finally:
             await db.close()
@@ -2022,6 +2037,8 @@ class MemoryService:
             await db.commit()
         finally:
             await db.close()
+        from app.services.session_manager import clear_working_summaries
+        await clear_working_summaries(session_id, wl)
         if episode_ids or core_ids:
             await asyncio.to_thread(self._delete_vectors_sync, wl, episode_ids, core_ids)
 

@@ -20,9 +20,9 @@ if not _DOTENV_DISABLED:
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")
 SOVITS_URL = os.getenv("SOVITS_URL", "http://127.0.0.1:9880").rstrip("/")
-FRONTEND_PORT = int(os.getenv("FRONTEND_PORT", "5173"))
+FRONTEND_PORT = int(os.getenv("FRONTEND_PORT", "1420"))
 BACKEND_PORT = int(os.getenv("BACKEND_PORT", "8000"))
-ASSETS_DIR = Path(os.getenv("ASSETS_DIR", str(backend_dir.parent / "frontend" / "public" / "assets")))
+ASSETS_DIR = Path(os.getenv("ASSETS_DIR", str(backend_dir.parent / "desktop" / "public" / "assets")))
 HISTORY_COMPRESS_THRESHOLD = int(os.getenv("HISTORY_COMPRESS_THRESHOLD", "15"))
 
 PROMPTS_DIR = backend_dir / "prompts"

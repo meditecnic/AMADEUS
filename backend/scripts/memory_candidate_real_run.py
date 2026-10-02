@@ -2159,7 +2159,7 @@ async def _ws_session_b3(
     import websockets
 
     uri = f"ws://127.0.0.1:{backend_port}/ws/chat?session_id={session_id}"
-    ws = await websockets.connect(uri, open_timeout=10)
+    ws = await websockets.connect(uri, origin='http://127.0.0.1:1420', open_timeout=10)
     auth: dict[str, Any] = {
         "type": "auth",
         "conversation_mode": "history" if conversation_id else "draft",

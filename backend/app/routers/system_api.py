@@ -656,13 +656,16 @@ async def delete_memory_fact(
         )
 
     try:
-        return await delete_fact(
+        result = await delete_fact(
             session_id=sid,
             worldline=wl,
             identity_mode=mode,
             fact_id=fact_id,
             expected_version=version,
         )
+        from app.services.session_manager import clear_working_summaries
+        await clear_working_summaries(sid, wl, mode)
+        return result
     except MemoryValidationError as exc:
         raise _memory_error_response(exc) from exc
     except Exception:

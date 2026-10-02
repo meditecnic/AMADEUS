@@ -39,6 +39,12 @@ npm run tauri -- dev
 
 本地服务使用回环地址；桌面细节见 [desktop/README.md](desktop/README.md)。`frontend/` 保留旧路径，当前桌面产品以 `desktop/` 为主。打包与发布尚需独立产品验证。
 
+Windows 默认把 API 密钥存入凭据管理器；非 Windows 默认只存内存，重启后需要重新填写。开发验证可显式设置 `AMADEUS_CREDENTIAL_BACKEND=memory`。
+
+首次使用麦克风会从 sherpa-onnx 的 GitHub `asr-models` 发布下载 SenseVoice int8 包（约 163 MB）及 Silero VAD（约 644 KB），保存到用户数据目录的 `models/speech/`。下载通过固定 SHA-256 校验后才使用；SenseVoice 权重与代码采用不同许可，详见 [第三方说明](THIRD_PARTY_NOTICES.md)。离线模型可用 `SENSEVOICE_MODEL`、`SENSEVOICE_TOKENS` 和 `AMADEUS_VAD_MODEL` 指定。
+
+WS 仅接受本机开发界面和 Tauri 来源；无 Origin 的本机工具需显式设置 `AMADEUS_ALLOW_MISSING_WS_ORIGIN=1`。SoVITS 默认仅允许回环地址，确需远程端点时显式设置 `AMADEUS_ALLOW_REMOTE_SOVITS=1`。这些来源和地址限制不提供本机进程身份认证；本机令牌方案另行接入。
+
 可选原作素材包放在用户数据目录（`AMADEUS_DATA_DIR`）下的 `asset-pack/amadeus-original/`，根目录需含 `manifest.json`。开发时也可在启动后端前设置 `$env:AMADEUS_ASSET_PACK_DIR = '<LOCAL_PATH>'` 指向外部样本；后端通过只读 `/api/asset-pack/…` 提供图片和音频。未安装时使用自制默认画面。主程序不包含该素材包，素材包单独分发并附非官方、非商用和应要求下架的声明。
 
 ## 目录

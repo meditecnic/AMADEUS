@@ -1041,7 +1041,7 @@ async def test_voice_entry_reaches_same_boundary(isolated_store, monkeypatch):
         "app.main.sidecar_supervisor.ensure_available",
         new=AsyncMock(return_value=SimpleNamespace(url=None)),
     ), patch("app.main.sidecar_supervisor.close", new=AsyncMock()):
-        with TestClient(fastapi_app) as client, client.websocket_connect(
+        with TestClient(fastapi_app, base_url="http://localhost", headers={"host": "localhost", "origin": "http://localhost:1420"}) as client, client.websocket_connect(
             f"/ws/voice?session_id={session_id}&worldline=steins_gate"
         ) as ws:
             ws.send_json({"type": "auth"})

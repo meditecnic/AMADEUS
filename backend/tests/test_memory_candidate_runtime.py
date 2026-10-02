@@ -884,8 +884,7 @@ async def _api_client():
 
     transport = ASGITransport(app=_memory_asgi_app())
 
-    async with AsyncClient(transport=transport, base_url="http://b1.local") as client:
-
+    async with AsyncClient(transport=transport, base_url="http://localhost") as client:
         yield client
 
 

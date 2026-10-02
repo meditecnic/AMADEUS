@@ -4,6 +4,8 @@ import os
 import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+from app.security.local_transport import LOCAL_ORIGINS
 from pydantic import BaseModel, SecretStr
 from typing import Optional
 from app import config
@@ -97,17 +99,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Amadeus Backend", version="3.0.0", lifespan=lifespan)
 
-allowed_origins = [
-    "http://localhost",
-    f"http://localhost:{config.FRONTEND_PORT}",
-    "http://127.0.0.1",
-    f"http://127.0.0.1:{config.FRONTEND_PORT}",
-    f"http://127.0.0.1:{config.BACKEND_PORT}",
-    f"http://localhost:{config.BACKEND_PORT}",
-    "http://localhost:1420",
-    "tauri://localhost",
-    "https://tauri.localhost"
-]
+allowed_origins = sorted(LOCAL_ORIGINS)
+
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost'])
 
 app.add_middleware(
     CORSMiddleware,

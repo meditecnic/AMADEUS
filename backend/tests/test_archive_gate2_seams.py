@@ -68,7 +68,7 @@ def isolated_client(tmp_path, monkeypatch, isolated_provider_credentials):
         "app.main.sidecar_supervisor.close",
         new=AsyncMock(),
     ):
-        with TestClient(app) as client:
+        with TestClient(app, base_url="http://localhost", headers={"host": "localhost", "origin": "http://localhost:1420"}) as client:
             yield client
     reset_initialization_cache()
 

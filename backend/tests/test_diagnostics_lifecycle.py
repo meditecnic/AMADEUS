@@ -46,7 +46,7 @@ def test_broken_diagnostics_store_does_not_block_application_startup(
         "app.main.sidecar_supervisor.close",
         new=AsyncMock(),
     ):
-        with TestClient(app) as client:
+        with TestClient(app, base_url="http://localhost", headers={"host": "localhost", "origin": "http://localhost:1420"}) as client:
             response = client.get("/health/dependencies")
     assert response.status_code == 200
     body = response.json()

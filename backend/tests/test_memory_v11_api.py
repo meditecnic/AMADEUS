@@ -94,7 +94,7 @@ def isolated_client(tmp_path, monkeypatch, isolated_provider_credentials):
         "app.main.sidecar_supervisor.close",
         new=AsyncMock(),
     ):
-        with TestClient(app) as client:
+        with TestClient(app, base_url="http://localhost", headers={"host": "localhost", "origin": "http://localhost:1420"}) as client:
             yield client
     reset_initialization_cache()
 
@@ -2091,7 +2091,14 @@ def test_s3d1_scope_missing_worldline_422(isolated_client: TestClient):
 
 
 def test_s3d1_delete_erases_versions_vectors_shell(isolated_client: TestClient):
+    import asyncio
+    from app import models
+
     session_id = _session("s3d1-del-erase")
+    cid = _create_conversation(isolated_client, session_id, 'delete summary')
+    asyncio.run(models.save_message(session_id, 'user', '喜欢茶', conversation_id=cid))
+    asyncio.run(models.save_memory_summary(session_id, '喜欢茶', conversation_id=cid))
+    old_epoch = asyncio.run(models.get_conversation_content_epoch(session_id, conversation_id=cid))
     fact_id = _seed_fact_with_vector(session_id=session_id, display_text="喜欢茶")
     response = isolated_client.delete(
         f"/api/memory/facts/{fact_id}",
@@ -2101,6 +2108,9 @@ def test_s3d1_delete_erases_versions_vectors_shell(isolated_client: TestClient):
     body = response.json()
     assert body["state"] == "deleted"
     assert body["idempotent"] is False
+    assert asyncio.run(models.get_latest_summary(session_id, conversation_id=cid)) == ''
+    assert not asyncio.run(models.save_memory_summary(session_id, '喜欢茶', conversation_id=cid, expected_epoch=old_epoch))
+    assert any(row['content'] == '喜欢茶' for row in asyncio.run(models.get_session_messages(session_id, conversation_id=cid)))
 
     shell = _db_rows(
         """SELECT state, active_version, is_pinned, topic_id, deleted_at

@@ -8,6 +8,7 @@ import threading
 import aiosqlite
 from unittest.mock import patch, AsyncMock
 from fastapi import WebSocketDisconnect
+from starlette.datastructures import Headers
 
 # Ensure backend root is in python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -30,7 +31,7 @@ class MockWebSocket:
         self.send_queue = asyncio.Queue()
         self.accepted = False
         self.closed = False
-        self.headers = {"origin": "http://localhost"}
+        self.headers = Headers({"origin": "http://localhost"})
         self.sent_messages = []
 
     async def accept(self):

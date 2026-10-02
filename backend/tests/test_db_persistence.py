@@ -67,7 +67,7 @@ async def test_history_rest_endpoint(tmp_path, monkeypatch):
     await save_message("s1", "assistant", "REST Test Assistant")
     await save_memory_summary("s1", "REST Summary")
     
-    client = TestClient(main_mod.app)
+    client = TestClient(main_mod.app, base_url="http://localhost", headers={"host": "localhost", "origin": "http://localhost:1420"})
     r = client.get("/api/history/s1")
     assert r.status_code == 200
     data = r.json()

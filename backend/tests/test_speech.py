@@ -7,6 +7,26 @@ import pytest
 from app.services.speech import SpeechService
 
 
+@pytest.mark.parametrize('valid', [False, True])
+def test_download_verifies_digest_before_publishing(tmp_path, monkeypatch, valid):
+    import hashlib
+    import io
+    from app.services import speech
+
+    payload = b'synthetic model bytes'
+    monkeypatch.setattr(speech.urllib.request, 'urlopen', lambda *args, **kwargs: io.BytesIO(payload))
+    monkeypatch.setattr(speech, 'DOWNLOAD_SHA256', {speech.MODEL_URL: hashlib.sha256(payload if valid else b'other').hexdigest()}, raising=False)
+    destination = tmp_path / 'model.tar.bz2'
+    if valid:
+        speech._download(speech.MODEL_URL, destination)
+        assert destination.read_bytes() == payload
+    else:
+        with pytest.raises(ValueError, match='SHA-256'):
+            speech._download(speech.MODEL_URL, destination)
+        assert not destination.exists()
+    assert not destination.with_suffix('.bz2.part').exists()
+
+
 def test_readiness_without_sherpa_does_not_download(monkeypatch):
     monkeypatch.setitem(sys.modules, 'sherpa_onnx', None)
     status = SpeechService().readiness()

@@ -1231,7 +1231,7 @@ async def _ws_session(*, backend_port: int, session_id: str, enable_tts: bool = 
     import websockets
 
     uri = f"ws://127.0.0.1:{backend_port}/ws/chat?session_id={session_id}"
-    ws = await websockets.connect(uri, open_timeout=10)
+    ws = await websockets.connect(uri, origin='http://127.0.0.1:1420', open_timeout=10)
     await ws.send(
         json.dumps(
             {

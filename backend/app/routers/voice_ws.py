@@ -45,7 +45,10 @@ async def _send_voice_payload(websocket: WebSocket, payload: dict) -> None:
 
 @router.websocket("/ws/voice")
 async def websocket_voice_endpoint(websocket: WebSocket):
-    await websocket.accept()
+    from app.security.local_transport import accept_local_websocket
+
+    if not await accept_local_websocket(websocket):
+        return
     session_id = websocket.query_params.get("session_id", "default")
     worldline = normalize_worldline(websocket.query_params.get("worldline", "steins_gate"))
     from app.routers.chat_ws import SessionState, processor_loop, sessions, sessions_creation_lock
@@ -133,7 +136,13 @@ async def websocket_voice_endpoint(websocket: WebSocket):
             if not data:
                 continue
             import json
-            frame = json.loads(data)
+            try:
+                frame = json.loads(data)
+                if not isinstance(frame, dict):
+                    raise ValueError('frame must be an object')
+            except (json.JSONDecodeError, ValueError):
+                await websocket.send_json({'type': 'voice.error', 'code': 'invalid_frame', 'message': 'invalid JSON object'})
+                continue
             kind = frame.get("type")
             if kind == "auth":
                 api_key = credential_store.get(session.provider_id)
@@ -148,8 +157,12 @@ async def websocket_voice_endpoint(websocket: WebSocket):
                 authenticated = True
                 await websocket.send_json({"type": "voice.ready", "worldline": worldline, "vad_silence_ms": config.VAD_SILENCE_MS})
             elif kind == "voice.start":
-                sample_rate = int(frame.get("sample_rate", 16000))
-                channels = int(frame.get("channels", 1))
+                rate = frame.get('sample_rate', 16000)
+                count = frame.get('channels', 1)
+                if type(rate) is not int or rate not in {8000, 16000, 22050, 24000, 44100, 48000} or type(count) is not int or count not in {1, 2}:
+                    await websocket.send_json({'type': 'voice.error', 'code': 'invalid_audio_format', 'message': 'unsupported sample_rate or channels'})
+                    continue
+                sample_rate, channels = rate, count
                 buffer.clear()
                 last_speech_at = None
             elif kind == "voice.commit":

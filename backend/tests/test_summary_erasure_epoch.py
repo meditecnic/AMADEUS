@@ -28,7 +28,8 @@ async def test_processor_rejected_during_erasure_releases_busy_state(isolated_st
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("producer", ["compression", "legacy"])
-async def test_paused_summary_cannot_repopulate_forgotten_conversation(isolated_store, producer):
+@pytest.mark.parametrize("erasure", ["conversation", "memory"])
+async def test_paused_summary_cannot_repopulate_forgotten_conversation(isolated_store, producer, erasure):
     owner = f"summary-epoch-{uuid4()}"
     conv = await conversation_service.create_and_select(owner, "steins_gate", title="epoch")
     cid = str(conv["id"])
@@ -64,7 +65,12 @@ async def test_paused_summary_cannot_repopulate_forgotten_conversation(isolated_
         ))
     try:
         await asyncio.wait_for(started.wait(), 5)
-        await conversation_service.forget(cid, owner, "steins_gate", forget_long_term=False)
+        if erasure == 'conversation':
+            await conversation_service.forget(cid, owner, "steins_gate", forget_long_term=False)
+        else:
+            from app.services.memory import memory_service
+            await memory_service.forget(owner, 'steins_gate')
+            assert session.memory_summary == ''
         # Simulate the UI reload without helping the guard via a revision change.
         session.history = []
         session.memory_summary = ""
