@@ -83,7 +83,9 @@ async def test_s3e3_v1_legacy_unversioned_row_invalidated(isolated_store):
     await _insert_raw_summary(
         session_id, str(conv["id"]), "ユーザーは黒コーヒーが好き"
     )
-    assert await models.get_latest_summary(session_id, worldline="steins_gate") == ""
+    assert await models.get_latest_summary(
+        session_id, worldline="steins_gate", conversation_id=str(conv["id"])
+    ) == ""
 
 
 @pytest.mark.asyncio

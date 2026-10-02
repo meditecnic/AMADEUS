@@ -441,6 +441,8 @@ def test_local_transport_does_not_reach_original_ddgs_or_weather(tmp_path):
     original_request = httpx.request
     original_async = httpx.AsyncClient.send
     original_sync = httpx.Client.send
+    original_post = httpx.AsyncClient.post
+    original_stream = httpx.AsyncClient.stream
     search_mod.DDGS = SentinelDDGS
     httpx.get = sentinel_get  # type: ignore[assignment]
     captures = tmp_path / "captures"
@@ -466,6 +468,8 @@ def test_local_transport_does_not_reach_original_ddgs_or_weather(tmp_path):
         httpx.request = original_request
         httpx.AsyncClient.send = original_async
         httpx.Client.send = original_sync
+        httpx.AsyncClient.post = original_post
+        httpx.AsyncClient.stream = original_stream
     assert ddg_calls == []
     assert get_calls == []
     assert "wttr.in" not in weather_text.lower()

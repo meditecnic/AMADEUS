@@ -144,6 +144,7 @@ async def test_memory_extraction_uses_selected_provider_snapshot(monkeypatch):
     service.apply_extraction = AsyncMock()
     save_summary = AsyncMock()
     monkeypatch.setattr("app.models.save_memory_summary", save_summary)
+    monkeypatch.setattr("app.models.get_conversation_content_epoch", AsyncMock(return_value=0))
 
     await service._extract_turn(
         session_id="okabe",

@@ -34,6 +34,11 @@ from app.services.provider_registry import (
 
 @pytest.fixture
 async def isolated_store(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+    from app.services.memory import EMBEDDING_DIMENSION
+
+    monkeypatch.setattr(memory_service.embedder, "encode_query", AsyncMock(return_value=[0.0] * EMBEDDING_DIMENSION))
+    monkeypatch.setattr(memory_service.embedder, "encode_passage", AsyncMock(return_value=[0.0] * EMBEDDING_DIMENSION))
     monkeypatch.delenv("AMADEUS_DB_PATH", raising=False)
     monkeypatch.setenv("AMADEUS_DATA_DIR", str(tmp_path))
     reset_initialization_cache()

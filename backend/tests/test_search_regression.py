@@ -139,7 +139,9 @@ async def test_post_search_chinese_draft_retries_to_japanese_without_full_recove
 
     visible = "".join(published)
     assert provider.call_count == 2
-    assert any("中国語または英語" in prompt or "自然な日本語" in prompt for prompt in provider.prompts[1:])
+    from app.domain.japanese_response_renderer import JAPANESE_RENDERER_SYSTEM_PROMPT
+
+    assert provider.prompts[1] == JAPANESE_RENDERER_SYSTEM_PROMPT
     assert provider.temperatures[1] == 0.0
     assert "スペイン" in visible
     assert "根据搜索结果" not in visible
