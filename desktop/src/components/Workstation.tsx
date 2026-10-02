@@ -78,7 +78,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
   onLogout,
 }) => {
   const [systemPrompt, setSystemPrompt] = useState('');
-  const [enableTts, setEnableTts] = useState(true);
+  const storedTtsChoice = useRef<string | null>(null);
+  const [enableTts, setEnableTts] = useState(() => {
+    try { storedTtsChoice.current = localStorage.getItem('amadeus_pc_enable_tts'); } catch {}
+    return storedTtsChoice.current !== 'false';
+  });
   const [sovitsUrl, setSovitsUrl] = useState('http://127.0.0.1:9880');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMemoryOpen, setIsMemoryOpen] = useState(false);
@@ -539,6 +543,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
       });
     },
     onAudioDegraded: (reason: string) => {
+      // Read-aloud being off is a known state, not a per-reply event.
+      if (reason === 'user_disabled') return;
       setAudioError(reason);
     },
     onTurnStarted: (conversationId) => {
@@ -637,6 +643,28 @@ export const Workstation: React.FC<WorkstationProps> = ({
       }
     },
   });
+
+  // Without a voice service every reply would raise a TTS toast. Only an untouched default is switched off, and
+  // it is not persisted, so installing the service later brings read-aloud back on the next launch.
+  useEffect(() => {
+    if (storedTtsChoice.current !== null) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await fetch('/health/dependencies');
+        if (!response.ok) return;
+        const body = await response.json() as { dependencies?: { tts?: { ok?: boolean } } };
+        if (cancelled || body.dependencies?.tts?.ok !== false) return;
+        setEnableTts(false);
+        updateConfig({ enableTts: false });
+        setAudioError('tts_absent');
+      } catch {
+        // Health is advisory; the per-turn TTS error path still applies.
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     setActiveConversationId(null);
@@ -1486,6 +1514,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
     setWebSearchApiKey('');
     setApiKey('');
     setSystemPrompt(newSettings.systemPrompt);
+    if (newSettings.enableTts !== enableTts) {
+      storedTtsChoice.current = String(newSettings.enableTts);
+      try { localStorage.setItem('amadeus_pc_enable_tts', String(newSettings.enableTts)); } catch {}
+    }
     setEnableTts(newSettings.enableTts);
     setSovitsUrl(newSettings.sovitsUrl);
     setEnableBgm(newSettings.enableBgm);
@@ -2047,15 +2079,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
           </div>
         )}
         {audioError && (
-          <div className={`audio-error-toast${audioError === 'action_only' || audioError === 'user_disabled' ? ' info' : ''}`} data-testid="audio-error-toast">
+          <div className={`audio-error-toast${['action_only', 'tts_absent'].includes(audioError) ? ' info' : ''}`} data-testid="audio-error-toast">
             <span className="audio-error-msg">
               {audioError === 'action_only' && '这句是动作描写，不朗读。'}
-              {audioError === 'user_disabled' && '自动朗读已关闭。'}
+              {audioError === 'tts_absent' && '未检测到语音服务，自动朗读已关闭，只显示文字。可在「声音」里重新打开。'}
               {(audioError === 'service_error' || audioError === 'service_unavailable') && '语音服务暂时不可用，这一轮只显示文字。'}
               {audioError === 'unknown' && '语音出了点问题，这一轮只显示文字。'}
-              {!['action_only', 'user_disabled', 'service_error', 'service_unavailable', 'unknown'].includes(audioError) && '语音未能播放，这一轮只显示文字。'}
+              {!['action_only', 'tts_absent', 'service_error', 'service_unavailable', 'unknown'].includes(audioError) && '语音未能播放，这一轮只显示文字。'}
             </span>
-            {!['action_only', 'user_disabled'].includes(audioError) && <code className="ws2-toast-code">TTS · {audioError}</code>}
+            {!['action_only', 'tts_absent'].includes(audioError) && <code className="ws2-toast-code">TTS · {audioError}</code>}
           </div>
         )}
       </div>

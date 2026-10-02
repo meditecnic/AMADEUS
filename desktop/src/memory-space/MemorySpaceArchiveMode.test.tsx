@@ -133,7 +133,7 @@ function archiveBody(url: string, deletedRef?: { value: boolean }): Promise<unkn
     return okJson({ topics: [{ topic_id: 't1', display_label: '咖啡', fact_count: 1 }] });
   }
   if (url.startsWith('/api/memory/status?')) {
-    return okJson({ session_id: 's', worldline: 'steins_gate', identity_mode: 'okabe', pending_count: 0, processing_count: 0, failed_count: 0, failed_jobs: [] });
+    return okJson({ session_id: 's', worldline: 'steins_gate', identity_mode: 'okabe', runtime_mode: 'v11', pending_count: 0, processing_count: 0, failed_count: 0, failed_jobs: [] });
   }
   if (url.startsWith('/api/memory/observations?')) {
     return okJson({ observations: [], pagination: { limit: 20, offset: 0, total: 0, has_more: false } });
@@ -239,7 +239,7 @@ describe('Memory Space peer modes', () => {
       expect(screen.getByTestId('memory-graph')).toBeTruthy();
     });
     // Open the LIST outline so constellation rows are DOM-observable.
-    fireEvent.click(screen.getByText('索引'));
+    fireEvent.click(screen.getByRole('button', { name: '查找' }));
     await waitFor(() => {
       expect(screen.getByText('喜欢黑咖啡')).toBeTruthy();
     });
@@ -403,7 +403,7 @@ describe('Memory Space peer modes', () => {
     await waitFor(() => {
       expect(screen.getByTestId('memory-graph')).toBeTruthy();
     });
-    fireEvent.click(screen.getByText('索引'));
+    fireEvent.click(screen.getByRole('button', { name: '查找' }));
     await waitFor(() => {
       expect(screen.getByText('喜欢黑咖啡')).toBeTruthy();
     });
@@ -488,7 +488,7 @@ describe('Memory Space peer modes', () => {
     await waitFor(() => {
       expect(screen.getByTestId('memory-graph')).toBeTruthy();
     });
-    fireEvent.click(screen.getByText('索引'));
+    fireEvent.click(screen.getByRole('button', { name: '查找' }));
     await waitFor(() => {
       expect(screen.getByText('喜欢黑咖啡')).toBeTruthy();
     });
@@ -664,7 +664,7 @@ describe('Memory Space peer modes', () => {
       expect(screen.getByTestId('memory-graph')).toBeTruthy();
     });
     // Constellation LIST first shows the record from the backend projection.
-    fireEvent.click(screen.getByText('索引'));
+    fireEvent.click(screen.getByRole('button', { name: '查找' }));
     await waitFor(() => {
       expect(screen.getByText('喜欢黑咖啡')).toBeTruthy();
     });

@@ -274,6 +274,56 @@ describe('Workstation provider runtime changes', () => {
     expect(localStorage.getItem('amadeus_pc_provider')).toBe('custom');
   });
 
+  const stubTtsHealth = (ttsOk: boolean) => {
+    const initialFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === '/health/dependencies') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ status: 'degraded', dependencies: { tts: { ok: ttsOk } } }),
+        } as Response;
+      }
+      return initialFetch(input, init);
+    }));
+  };
+  const latestEnableTts = () => {
+    const calls = wsSpies.useAmadeusWS.mock.calls;
+    return (calls[calls.length - 1]?.[0] as { enableTts?: boolean }).enableTts;
+  };
+
+  it('turns read-aloud off with a single notice when no voice service is running', async () => {
+    stubTtsHealth(false);
+
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+
+    expect(await screen.findByTestId('audio-error-toast')).toHaveTextContent('未检测到语音服务');
+    expect(latestEnableTts()).toBe(false);
+    expect(localStorage.getItem('amadeus_pc_enable_tts')).toBeNull();
+  });
+
+  it('keeps an explicit read-aloud choice even when no voice service is running', async () => {
+    localStorage.setItem('amadeus_pc_enable_tts', 'true');
+    stubTtsHealth(false);
+
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(latestEnableTts()).toBe(true);
+    expect(screen.queryByTestId('audio-error-toast')).toBeNull();
+  });
+
+  it('does not repeat a notice on every reply while read-aloud is off', async () => {
+    localStorage.setItem('amadeus_pc_enable_tts', 'false');
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    const calls = wsSpies.useAmadeusWS.mock.calls;
+    const params = calls[calls.length - 1]?.[0] as { onAudioDegraded: (reason: string) => void };
+
+    act(() => params.onAudioDegraded('user_disabled'));
+
+    expect(screen.queryByTestId('audio-error-toast')).toBeNull();
+  });
+
   it('does not let a late old-provider model response overwrite the active catalog', async () => {
     let resolveDeepSeekModels!: (response: Response) => void;
     const deepSeekModels = new Promise<Response>((resolve) => {
