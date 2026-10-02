@@ -14,9 +14,7 @@ import pytest
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = BACKEND_ROOT / "scripts" / "memory_candidate_runtime.py"
-PYTHON = Path(r"D:\Amadeus\amadeus_web\backend\.venv\Scripts\python.exe")
-if not PYTHON.is_file():
-    PYTHON = Path(sys.executable)
+PYTHON = Path(sys.executable)
 
 sys.path.insert(0, str(BACKEND_ROOT / "scripts"))
 import memory_candidate_runtime as b2  # noqa: E402
@@ -177,7 +175,7 @@ def test_prepare_start_natural_worker_restart(tmp_path):
         "--run-root",
         str(run_root),
         "--backend-port",
-        "8001",
+        "8010",
         "--frontend-port",
         "1422",
         "--backend-only",
@@ -226,7 +224,7 @@ def test_prepare_start_natural_worker_restart(tmp_path):
         "--run-root",
         str(run_root),
         "--backend-port",
-        "8001",
+        "8010",
         "--backend-only",
         timeout=90,
         check=False,
@@ -244,7 +242,7 @@ def test_prepare_start_natural_worker_restart(tmp_path):
                 "query": "B2RT_SESAME_V2",
             }
         )
-        url = f"http://127.0.0.1:8001/api/memory/facts?{params}"
+        url = f"http://127.0.0.1:8010/api/memory/facts?{params}"
         deadline = time.monotonic() + 15
         body = {}
         while time.monotonic() < deadline:

@@ -52,16 +52,16 @@ async def test_next_provider_prompt_drops_memory_and_working_summary(isolated_st
             await memory_service.dismiss_okabe_fact(owner, 'steins_gate', fact_id)
         else:
             await memory_service.delete_local_self_fact(owner, 'steins_gate', fact_id)
-        assert not await models.save_memory_summary(owner, SECRET, conversation_id=cid, expected_epoch=old_epoch)
-        assert await models.get_latest_summary(owner, conversation_id=cid) == ''
-        assert session.memory_summary == ''
-        assert (await memory_service.status(owner, 'steins_gate'))['current_fact_count'] == 0
         session.append_message({'role': 'user', 'content': 'こんにちは'})
         await chat_ws.processor_loop(session, 'こんにちは', asyncio.Queue(), session.current_epoch, session.history_epoch)
         assert captures
         prompt = captures[0]['system_prompt']
         assert SECRET not in prompt.split('RECENT DIALOGUE')[0]
         assert SECRET not in captures[0].get('memory_summary', '')
+        assert not await models.save_memory_summary(owner, SECRET, conversation_id=cid, expected_epoch=old_epoch)
+        assert await models.get_latest_summary(owner, conversation_id=cid) == ''
+        assert session.memory_summary == ''
+        assert (await memory_service.status(owner, 'steins_gate'))['current_fact_count'] == 0
         assert any(row['content'] == SECRET for row in await models.get_session_messages(owner, conversation_id=cid))
     finally:
         chat_ws.sessions.pop(owner, None)

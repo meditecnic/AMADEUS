@@ -11,9 +11,7 @@ from pathlib import Path
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = BACKEND_ROOT / "scripts" / "memory_candidate_real_run.py"
-PYTHON = Path(r"D:\Amadeus\amadeus_web\backend\.venv\Scripts\python.exe")
-if not PYTHON.is_file():
-    PYTHON = Path(sys.executable)
+PYTHON = Path(sys.executable)
 
 
 def _cli(*argv: str, check: bool = True, timeout: int = 120) -> subprocess.CompletedProcess:
