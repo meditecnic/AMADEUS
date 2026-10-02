@@ -30,6 +30,23 @@ async def cancel_inflight(session: Any) -> int:
     return cancelled
 
 
+async def clear_working_summaries(
+    session_id: str, worldline: str, identity_mode: str | None = None,
+) -> None:
+    from app import models
+    from app.routers.chat_ws import sessions
+
+    wl = normalize_worldline(worldline)
+    epochs = await models.invalidate_memory_summaries(session_id, wl, identity_mode)
+    session = sessions.get(session_id)
+    if session is not None:
+        async with session.lock:
+            cid = getattr(session, 'conversation_id', None)
+            if session.worldline == wl and cid in epochs:
+                session.memory_summary = ''
+                session.content_epoch = epochs[cid]
+
+
 class SessionCoordinator:
     def __init__(self):
         self._leases: dict[tuple[str, str], Any] = {}

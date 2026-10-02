@@ -6,6 +6,7 @@ import re
 import httpx
 import asyncio
 from app import config
+from app.security.local_transport import sovits_tts_url
 from app.domain.segments import (
     AudioErrorCode,
     prepare_tts_text,
@@ -203,7 +204,7 @@ class TTSQueueManager:
         }
 
         base_url = sovits_url or self.sovits_url or "http://localhost:9880"
-        url = base_url.rstrip("/") + "/tts"
+        url = self._tts_url(base_url)
         try:
             response = await self.client.post(url, json=payload)
         except asyncio.CancelledError:
@@ -336,13 +337,23 @@ class TTSQueueManager:
             **V2PRO_GENERATION_PARAMS,
         }
         demuxer = WavStreamDemuxer()
-        url = (sovits_url or self.sovits_url or "http://127.0.0.1:9880").rstrip("/") + "/tts"
+        url = self._tts_url(sovits_url or self.sovits_url or "http://127.0.0.1:9880")
         async with self.semaphore:
             async with self.client.stream("POST", url, json=payload, timeout=self.timeout) as response:
                 response.raise_for_status()
                 async for chunk in response.aiter_bytes():
                     for pcm in demuxer.feed(chunk):
                         yield demuxer.format, pcm
+
+    @staticmethod
+    def _tts_url(value: str) -> str:
+        try:
+            return sovits_tts_url(value)
+        except ValueError as exc:
+            raise TTSServiceError(
+                AudioErrorCode.SERVICE_UNAVAILABLE,
+                diagnostic='sidecar_address_rejected',
+            ) from exc
 
     # ------------------------------------------------------------------
     # OLV 风格序号缓冲队列：并行合成、有序投递、失败静默兜底

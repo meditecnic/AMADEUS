@@ -1442,17 +1442,21 @@ def test_han_only_chinese_never_enters_v1_chunks_history_or_tts(app_client):
 
     with patch("app.routers.chat_ws.deepseek_service", provider), patch(
         "app.routers.chat_ws.tts_manager", tts
-    ):
+    ), patch("app.routers.chat_ws.execute_tool_call", new=AsyncMock()) as search:
         with app_client.websocket_connect(f"/ws/chat?session_id={session_id}") as ws:
             ws.send_json({"type": "auth", "api_key": "test-key"})
-            ws.send_json({"type": "chat", "content": "今天心情怎么样？"})
+            ws.send_json({"type": "chat", "content": "心情如何？"})
             responses = []
             while True:
                 frame = ws.receive_json()
                 responses.append(frame)
-                if frame.get("type") == "status" and frame.get("dsk") == "idle":
+                if frame.get("type") == "error" or (
+                    frame.get("type") == "status" and frame.get("dsk") == "idle"
+                ):
                     break
 
+    assert not any(frame.get("type") == "error" for frame in responses)
+    search.assert_not_awaited()
     assert provider.call_count == 2
     chunks = [frame for frame in responses if frame.get("type") == "text_chunk"]
     visible = "".join(frame.get("content", "") for frame in chunks)

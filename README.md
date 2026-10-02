@@ -62,7 +62,7 @@ npm run dev
 ### 数据放在哪
 
 - 对话和记忆：`%APPDATA%\Amadeus`（可以用环境变量 `AMADEUS_DATA_DIR` 改到别处）
-- API 密钥：Windows 凭据管理器，不写进任何文件
+- API 密钥：Windows 使用凭据管理器；非 Windows 只存内存，重启后需要重新填写
 
 所有服务只监听本机地址。你的对话只会发给你自己配置的那个模型服务。如果开启联网搜索，搜索词还会发给你配置的搜索服务（如 Tavily、Firecrawl）。
 
@@ -75,6 +75,10 @@ npm run dev
 ## 语音
 
 语音是可选功能，本仓库不附带任何声音模型或参考音频。没有语音时，她的话照常以文字显示。
+
+首次使用麦克风时，会从 [sherpa-onnx 的 GitHub 发布](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models)下载 SenseVoice int8 模型包（约 163 MB）和 Silero VAD（约 644 KB），保存在数据目录的 `models/speech/`。下载经固定 SHA-256 校验后才使用。SenseVoice 权重采用 FunASR Model Open Source License v1.1，Silero VAD 为 MIT；更多依赖许可见[第三方说明](THIRD_PARTY_NOTICES.md)。
+
+已有本地模型时，可用 `SENSEVOICE_MODEL` 指定 ONNX 文件或模型目录，`SENSEVOICE_TOKENS` 指定词表，`AMADEUS_VAD_MODEL` 指定 Silero ONNX 文件。
 
 ## 许可
 

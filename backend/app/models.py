@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from app.db import get_db, normalize_worldline
+from app.db import get_db, normalize_identity_mode, normalize_worldline
 from app.services.working_summary import decode_working_summary, encode_working_summary
 
 
@@ -192,6 +192,45 @@ async def get_latest_summary(
         return decode_working_summary(row["summary"]) if row else ""
     finally:
         await db.close()
+
+
+async def invalidate_memory_summaries(
+    session_id: str, worldline: str, identity_mode: str | None = None,
+) -> dict[str, int]:
+    """Clear scoped continuity and advance generations before accepting new work."""
+    wl = normalize_worldline(worldline)
+    mode = normalize_identity_mode(identity_mode) if identity_mode is not None else None
+    db = await get_db(wl, 'history')
+    epochs: dict[str, int] = {}
+    try:
+        await db.execute('BEGIN IMMEDIATE')
+        rows = await (await db.execute(
+            '''SELECT id AS conversation_id FROM conversations
+               WHERE session_id=? AND (? IS NULL OR identity_mode=?)
+               UNION SELECT conversation_id FROM memory_summaries
+               WHERE session_id=? AND ? IS NULL''',
+            (session_id, mode, mode, session_id, mode),
+        )).fetchall()
+        for row in rows:
+            cid = str(row['conversation_id'])
+            await db.execute(
+                '''INSERT INTO conversation_content_epochs(session_id,conversation_id,epoch)
+                   VALUES(?,?,1) ON CONFLICT(session_id,conversation_id)
+                   DO UPDATE SET epoch=epoch+1''', (session_id, cid),
+            )
+            await db.execute('DELETE FROM memory_summaries WHERE session_id=? AND conversation_id=?', (session_id, cid))
+            epoch = await (await db.execute(
+                'SELECT epoch FROM conversation_content_epochs WHERE session_id=? AND conversation_id=?',
+                (session_id, cid),
+            )).fetchone()
+            epochs[cid] = int(epoch['epoch'])
+        await db.commit()
+    except BaseException:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
+    return epochs
 
 
 async def clear_session_data(session_id: str, worldline: str = "steins_gate", include_memories: bool = False):

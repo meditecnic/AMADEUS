@@ -215,8 +215,9 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
             </div>
 
             <div className="input-field-group user-id-group">
-              <label className="field-title">USER ID</label>
+              <label className="field-title" htmlFor="salieri-user">USER ID</label>
               <input
+                id="salieri-user"
                 type="text"
                 className={`user-id-input ${errorMsg.includes('USER ID') ? 'input-error' : ''}`}
                 value={userId}
@@ -228,7 +229,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
             </div>
 
             <div className="input-field-group password-group">
-              <label className="field-title">PASSWORD</label>
+              <label className="field-title" htmlFor="salieri-pwd">PASSWORD</label>
               <div className="password-input-wrapper">
                 <input
                   id="salieri-pwd"

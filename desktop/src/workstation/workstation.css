@@ -64,7 +64,7 @@
   --ws-bg: #0a0b0d;
   --ws-ink: #ecebe7;
   --ws-ink-2: rgba(236, 235, 231, .6);
-  --ws-ink-3: rgba(236, 235, 231, .36);
+  --ws-ink-3: rgba(236, 235, 231, .5);
   --ws-line: rgba(222, 224, 228, .11);
   --ws-line-2: rgba(222, 224, 228, .22);
   --ws-accent: #8fdcff;
@@ -86,7 +86,7 @@
   --ws-bg: #0b0b0c;
   --ws-ink: #ede6dd;
   --ws-ink-2: rgba(237, 230, 221, .58);
-  --ws-ink-3: rgba(237, 230, 221, .34);
+  --ws-ink-3: rgba(237, 230, 221, .52);
   --ws-line: rgba(214, 190, 166, .12);
   --ws-line-2: rgba(214, 190, 166, .23);
   --ws-accent: #e98a4f;

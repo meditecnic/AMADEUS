@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from array import array
 import os
 from pathlib import Path
@@ -18,14 +19,24 @@ from app.db import get_data_root
 MODEL_PACKAGE = 'sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17'
 MODEL_URL = f'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/{MODEL_PACKAGE}.tar.bz2'
 VAD_URL = 'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx'
+DOWNLOAD_SHA256 = {
+    MODEL_URL: '7d1efa2138a65b0b488df37f8b89e3d91a60676e416f515b952358d83dfd347e',
+    VAD_URL: '9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6',
+}
 
 
 def _download(url: str, destination: Path) -> None:
+    expected = DOWNLOAD_SHA256[url]
     destination.parent.mkdir(parents=True, exist_ok=True)
     partial = destination.with_suffix(destination.suffix + '.part')
     try:
+        digest = hashlib.sha256()
         with urllib.request.urlopen(url, timeout=60) as response, partial.open('wb') as output:
-            shutil.copyfileobj(response, output)
+            while chunk := response.read(1024 * 1024):
+                output.write(chunk)
+                digest.update(chunk)
+        if digest.hexdigest() != expected:
+            raise ValueError('speech model SHA-256 mismatch')
         partial.replace(destination)
     finally:
         partial.unlink(missing_ok=True)

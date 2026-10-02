@@ -167,16 +167,12 @@ async def test_tool_calls_integration_flow():
             
     mock_ds = MockDeepSeek()
     
-    mock_ddg = MagicMock()
-    mock_ddg.text.return_value = [
-        {"title": "Weather", "body": "秋葉原の今日の天気は晴れ、気温24度。"}
-    ]
+    search_result = AsyncMock(return_value="秋葉原の今日の天気は晴れ、気温24度。")
     
     send_queue = asyncio.Queue()
     
     with patch("app.routers.chat_ws.deepseek_service", mock_ds), \
-         patch("app.services.search.DDGS", return_value=MagicMock(__enter__=MagicMock(return_value=mock_ddg))), \
-         patch("app.services.search.httpx.get", side_effect=Exception("wttr.in disabled for test")):
+         patch("app.routers.chat_ws.execute_tool_call", search_result):
          
         await processor_loop(session, "今日の秋葉原の天気はどう？", send_queue, 1, 0)
         

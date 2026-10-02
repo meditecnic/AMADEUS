@@ -43,6 +43,10 @@ export default defineConfig(async () => ({
       '/api': {
         target: backendOrigin,
         changeOrigin: true
+      },
+      '/health': {
+        target: backendOrigin,
+        changeOrigin: true
       }
     }
   },
