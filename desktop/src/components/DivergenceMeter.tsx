@@ -7,7 +7,7 @@ interface DivergenceMeterProps {
 
 const VALUES: Record<DivergenceMeterProps['worldline'], string> = {
   steins_gate: '1.048596%',
-  beta: '1.130205%',
+  beta: '1.129848%',
 };
 
 const ADVANCE: Record<string, number> = {
