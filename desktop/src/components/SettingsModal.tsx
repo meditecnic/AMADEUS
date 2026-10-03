@@ -588,7 +588,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   onChange={(next) => setLocalWorldline(next as 'steins_gate' | 'beta')}
                   options={[
                     { value: 'steins_gate', label: 'Steins;Gate (1.048596%)' },
-                    { value: 'beta', label: 'β 世界线 (1.130205%)' },
+                    { value: 'beta', label: 'β 世界线 (1.129848%)' },
                   ]}
                 />
               </div>}
