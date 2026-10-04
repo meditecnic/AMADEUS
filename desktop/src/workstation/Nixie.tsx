@@ -17,7 +17,7 @@ const GHOST = Object.values(DIGITS);
 
 export const DIVERGENCE: Record<'steins_gate' | 'beta', string> = {
   steins_gate: '1.048596',
-  beta: '1.130205',
+  beta: '1.129848',
 };
 
 /** Retuning the meter: every tube spins, then they lock left to right like the anime's reading settling. */

@@ -11,7 +11,7 @@
 | | |
 |---|---|
 | ![SG 世界线的对话](assets/screenshots/sg-chat.png) | ![β 世界线的对话](assets/screenshots/beta-chat.png) |
-| ![世界线跃迁](assets/screenshots/worldline-shift.png) |  |
+| ![世界线跃迁](assets/screenshots/worldline-shift.png) | ![SG 世界线的记忆星图](assets/screenshots/memory-star-map.png) |
 
 *截图未加载原作素材包，舞台位置显示的是占位画面。*
 
