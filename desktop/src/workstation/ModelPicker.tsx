@@ -35,13 +35,14 @@ export function ModelPicker({
   const close = (focusTrigger = true) => {
     setOpen(false);
     setQuery('');
-    if (focusTrigger) triggerRef.current?.focus();
+    if (focusTrigger) triggerRef.current?.focus({ preventScroll: true });
   };
   useEffect(() => {
     if (!open) return;
     const selected = Math.max(0, shown.findIndex((option) => option.value === value));
     setActive(selected);
-    searchRef.current?.focus();
+    // The picker sits inside the clipped `.ws2` root; a plain focus() would scroll that root.
+    searchRef.current?.focus({ preventScroll: true });
     const onDown = (event: MouseEvent) => { if (!rootRef.current?.contains(event.target as Node)) close(false); };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);

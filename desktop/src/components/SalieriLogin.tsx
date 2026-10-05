@@ -12,6 +12,8 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
   const [userId, setUserId] = useState('');
   const [password, setPassword] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+  // Which field the error belongs to; the message text is localized or a raw backend detail.
+  const [errorField, setErrorField] = useState<'user' | 'password' | null>(null);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [scale, setScale] = useState(1);
   const photoLeft = packAsset('login/photo_left.png');
@@ -21,13 +23,15 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
   const errTimeoutRef = useRef<number | null>(null);
 
   // 统一错误设置与 3s 自动清除并复原函数
-  const showAuthError = (msg: string) => {
+  const showAuthError = (msg: string, field: 'user' | 'password') => {
     if (errTimeoutRef.current) {
       window.clearTimeout(errTimeoutRef.current);
     }
     setErrorMsg(msg);
+    setErrorField(field);
     errTimeoutRef.current = window.setTimeout(() => {
       setErrorMsg('');
+      setErrorField(null);
       errTimeoutRef.current = null;
     }, 3000);
   };
@@ -138,15 +142,15 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
     e.preventDefault();
     handleInitAudio();
     if (!userId) {
-      showAuthError('请输入 USER ID');
+      showAuthError('请输入 USER ID', 'user');
       return;
     }
     if (userId !== 'Salieri') {
-      showAuthError('无效的 USER ID');
+      showAuthError('无效的 USER ID', 'user');
       return;
     }
     if (!password) {
-      showAuthError('请输入访问密码');
+      showAuthError('请输入访问密码', 'password');
       return;
     }
 
@@ -156,6 +160,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
       errTimeoutRef.current = null;
     }
     setErrorMsg('');
+    setErrorField(null);
 
     try {
       const response = await fetch('/api/auth/salieri', {
@@ -171,10 +176,10 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
         onLoginSuccess();
       } else {
         const errorData = await response.json().catch(() => ({}));
-        showAuthError(errorData.detail || '访问被拒绝');
+        showAuthError(errorData.detail || '访问被拒绝', 'password');
       }
     } catch (error) {
-      showAuthError('系统连接已断开');
+      showAuthError('系统连接已断开', 'password');
     } finally {
       setIsAuthenticating(false);
     }
@@ -219,7 +224,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
               <input
                 id="salieri-user"
                 type="text"
-                className={`user-id-input ${errorMsg.includes('USER ID') ? 'input-error' : ''}`}
+                className={`user-id-input ${errorField === 'user' ? 'input-error' : ''}`}
                 value={userId}
                 onChange={(e) => setUserId(e.target.value)}
                 disabled={isAuthenticating}
@@ -234,9 +239,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
                 <input
                   id="salieri-pwd"
                   type="password"
-                  className={`password-input ${
-                    errorMsg.includes('ACCESS') || errorMsg.includes('CONNECTION') ? 'input-error' : ''
-                  }`}
+                  className={`password-input ${errorField === 'password' ? 'input-error' : ''}`}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   disabled={isAuthenticating}

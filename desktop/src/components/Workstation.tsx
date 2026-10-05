@@ -95,7 +95,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     window.setTimeout(() => {
       setIsMemoryOpen(false);
       setMemoryClosing(false);
-      document.querySelector<HTMLButtonElement>('.ws2 button[aria-label="MEMORY"]')?.focus();
+      document.querySelector<HTMLButtonElement>('.ws2 button[aria-label="MEMORY"]')?.focus({ preventScroll: true });
     }, 280);
   };
   const [inputText, setInputText] = useState('');
@@ -1675,6 +1675,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
       className={`ws2${isHistoryCollapsed ? ' rail' : ''}${isSettingsOpen ? ' menu-open' : ''}${isMemoryOpen ? ' memory-space-open' : ''}${bootPhase !== 'done' ? ` boot-${bootPhase}` : ''}`}
       data-wl={worldline === 'beta' ? 'beta' : 'sg'}
       onMouseDown={handleAudioInit}
+      // The root is a clipped 100vw x 100vh frame that the user cannot scroll; any programmatic scroll
+      // (focus, scrollIntoView) only pushes the header off-screen, so snap it straight back.
+      onScroll={(e) => {
+        const root = e.currentTarget;
+        if (root.scrollTop || root.scrollLeft) root.scrollTo(0, 0);
+      }}
     >
       <Atmosphere worldline={worldline} />
       {bootPhase !== 'done' && <BootSequence worldline={worldline} onDock={handleBootDock} onDone={handleBootDone} />}
@@ -2312,7 +2318,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
           <input
             className="ws2-dialog-input"
             aria-label="会话标题"
-            autoFocus
             value={renameValue}
             maxLength={80}
             onChange={(e) => setRenameValue(e.target.value)}

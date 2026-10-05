@@ -127,11 +127,13 @@
   animation: reveal-logo-diagonal 1.5s cubic-bezier(0.25, 0.8, 0.25, 1) forwards;
 }
 
+/* Must fit inside the 670px logo box: its reveal mask clips anything wider (150px rendered as "MADEU"). */
 .amadeus-logo-text {
   font-family: 'EB Garamond', Georgia, serif;
-  font-size: 150px;
+  font-size: 104px;
   font-weight: 500;
   letter-spacing: .14em;
+  padding-left: .14em; /* balances the spacing after the last letter so the word stays centred */
   color: #e8e6e1;
   text-shadow: 0 0 24px rgba(143, 220, 255, .18);
 }
