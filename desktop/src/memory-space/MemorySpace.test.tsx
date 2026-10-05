@@ -284,7 +284,7 @@ describe('MemorySpace', () => {
       />,
     );
     expect(screen.getByTestId('memory-loading')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByTestId('memory-graph')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('constellation-stage')).toBeInTheDocument());
     expect(screen.getByTestId('constellation-stage')).toBeInTheDocument();
     expect(screen.getByTestId('memory-space')).toHaveAttribute('data-phase', 'overview');
     expect(screen.getByTestId('soul-lockup')).toHaveTextContent('SOUL');
@@ -972,7 +972,7 @@ describe('MemorySpace', () => {
         onClose={vi.fn()}
       />,
     );
-    await waitFor(() => expect(screen.getByTestId('memory-graph')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('constellation-stage')).toBeInTheDocument());
     expect(screen.getByTestId('memory-space')).toHaveAttribute('data-phase', 'overview');
     fireEvent.click(screen.getByTestId('select-soul'));
     const inspector = screen.getByTestId('soul-inspector');
@@ -1056,7 +1056,7 @@ describe('MemorySpace', () => {
         onClose={vi.fn()}
       />,
     );
-    await waitFor(() => expect(screen.getByTestId('memory-graph')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('constellation-stage')).toBeInTheDocument());
     const canvas = screen.getByTestId('constellation-stage');
     expect(canvas).toHaveAttribute('data-mode', '3d');
     const before = canvas.getAttribute('data-yaw');
@@ -1176,7 +1176,7 @@ describe('MemorySpace', () => {
     render(
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
-    await screen.findByTestId('memory-graph');
+    await screen.findByTestId('constellation-stage');
     fireEvent.click(screen.getByTestId('select-soul'));
     fireEvent.click(screen.getByRole('button', { name: '查找' }));
     const soul = await screen.findByRole('option', { name: '上下文 SOUL' });
@@ -1204,7 +1204,7 @@ describe('MemorySpace', () => {
     render(
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
-    await screen.findByTestId('memory-graph');
+    await screen.findByTestId('constellation-stage');
     fireEvent.click(screen.getByTestId('select-soul'));
     fireEvent.keyDown(window, { key: 'ArrowRight' });
     fireEvent.keyDown(window, { key: 'Enter' });
@@ -1368,7 +1368,7 @@ describe('MemorySpace', () => {
     render(
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
-    await screen.findByTestId('memory-graph');
+    await screen.findByTestId('constellation-stage');
     fireEvent.click(screen.getByTestId('select-soul'));
     fireEvent.click(screen.getByRole('button', { name: '查找' }));
     await waitFor(() => {
@@ -1575,7 +1575,7 @@ describe('MemorySpace', () => {
     render(
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
-    await screen.findByTestId('memory-graph');
+    await screen.findByTestId('constellation-stage');
     fireEvent.click(screen.getByTestId('select-soul'));
     expect(screen.getByTestId('inspector-composition')).toHaveTextContent('9');
     expect(screen.getByTestId('inspector-composition')).toHaveTextContent('2');
@@ -1658,7 +1658,7 @@ describe('MemorySpace', () => {
     render(
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
-    await screen.findByTestId('memory-graph');
+    await screen.findByTestId('memory-malformed');
     fireEvent.click(screen.getByRole('button', { name: '查找' }));
     expect(screen.getByTestId('memory-malformed')).toBeInTheDocument();
     expect(screen.getByTestId('memory-malformed')).toHaveTextContent(/无效|无法生成/);
@@ -1674,7 +1674,7 @@ describe('MemorySpace', () => {
     render(
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
-    await screen.findByTestId('memory-graph');
+    await screen.findByTestId('constellation-stage');
     fireEvent.click(screen.getByTestId('select-soul'));
     fireEvent.keyDown(window, { key: 'ArrowRight' });
     // Arrows rove only; Enter activates the focused node.
@@ -1689,7 +1689,7 @@ describe('MemorySpace', () => {
   it('panel close preserves the selected node and activation reopens it', async () => {
     mockApi((url) => url.includes('/details') ? okJson(factDetailsFixture) : okJson(projection));
     render(<MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />);
-    await screen.findByTestId('memory-graph');
+    await screen.findByTestId('constellation-stage');
     fireEvent.click(screen.getByTestId('select-soul'));
     fireEvent.click(screen.getByRole('button', { name: '关闭 SOUL 概览' }));
     expect(screen.queryByTestId('soul-inspector')).toBeNull();
@@ -1715,7 +1715,7 @@ describe('MemorySpace', () => {
     mockApi(() => okJson(projection));
     const onClose = vi.fn();
     render(<MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={onClose} />);
-    await screen.findByTestId('memory-graph');
+    await screen.findByTestId('constellation-stage');
     fireEvent.click(screen.getByTestId('select-soul'));
     expect(screen.getByTestId('soul-inspector')).toBeInTheDocument();
     fireEvent.contextMenu(screen.getByTestId('constellation-stage'));

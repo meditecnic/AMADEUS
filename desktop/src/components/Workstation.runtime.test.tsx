@@ -390,6 +390,7 @@ describe('Workstation provider runtime changes', () => {
     render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,
     );
     const providerTrigger = await waitFor(() => screen.getByRole('button', { name: '模型供应商' }));
+    await waitFor(() => expect(providerTrigger).toBeEnabled());
     fireEvent.click(providerTrigger);
     fireEvent.click(screen.getByRole('option', { name: 'OpenAI-compatible' }));
 
