@@ -394,12 +394,10 @@ describe('Workstation provider runtime changes', () => {
     fireEvent.click(providerTrigger);
     fireEvent.click(screen.getByRole('option', { name: 'OpenAI-compatible' }));
 
-    await waitFor(() => {
-      fireEvent.click(screen.getByRole('button', { name: '模型' }));
-      expect(screen.getByRole('option', { name: 'custom-model' })).toBeInTheDocument();
-      // Close menu so a later open re-reads options.
-      fireEvent.keyDown(screen.getByRole('listbox', { name: '模型' }), { key: 'Escape' });
-    });
+    fireEvent.click(screen.getByRole('button', { name: '模型' }));
+    expect(await screen.findByRole('option', { name: 'custom-model' })).toBeInTheDocument();
+    // Close menu so a later open re-reads options.
+    fireEvent.keyDown(screen.getByRole('listbox', { name: '模型' }), { key: 'Escape' });
 
     resolveDeepSeekModels({
       ok: true,

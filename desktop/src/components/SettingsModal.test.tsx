@@ -296,6 +296,7 @@ describe('SYSTEM CONFIG information architecture', () => {
     openConnectionsTab();
     fireEvent.click(screen.getByTestId('profile-delete-custom:keep-on-fail'));
     await waitFor(() => expect(onDisable).toHaveBeenCalled());
+    expect(await screen.findByText(/删除失败/)).toBeInTheDocument();
     expect(screen.getByText('Stay Put')).toBeInTheDocument();
     expect(screen.getByTestId('profile-delete-custom:keep-on-fail')).toBeInTheDocument();
   });

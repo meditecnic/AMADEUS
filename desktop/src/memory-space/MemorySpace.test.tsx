@@ -389,11 +389,11 @@ describe('MemorySpace', () => {
     // after the async effect flush window.
     fireEvent.focus(first);
     fireEvent.keyDown(first, { key: 'ArrowDown' });
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await waitFor(() => expect(document.activeElement).toHaveTextContent('后来的记忆'));
     expect(screen.getByTestId('memory-space').getAttribute('data-selected-id')).toBe('');
     expect(calls.filter((url) => url.includes('/details'))).toHaveLength(0);
     fireEvent.keyDown(screen.getByRole('option', { name: /后来的记忆/ }), { key: 'ArrowUp' });
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await waitFor(() => expect(document.activeElement).toBe(first));
     expect(screen.getByTestId('memory-space').getAttribute('data-selected-id')).toBe('');
     expect(calls.filter((url) => url.includes('/details'))).toHaveLength(0);
     // Keyboard-activated selection loads details once, using the canonical
@@ -479,7 +479,7 @@ describe('MemorySpace', () => {
     });
     toggleFindFilters();
     await chooseWorldline('beta');
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await waitFor(() => expect(releaseBeta).toBeTypeOf('function'));
     // Before the new envelope arrives, the stale SG selection must not be
     // requested under the beta scope.
     expect(calls.filter((url) => url.includes('/details') && url.includes('worldline=beta'))).toHaveLength(0);
@@ -594,7 +594,7 @@ describe('MemorySpace', () => {
         onClose={vi.fn()}
       />,
     );
-    await screen.findByTestId('memory-graph');
+    await screen.findByTestId('constellation-stage');
     // Rove across the semantic order without touching selection. The first
     // result sits at order[0]; further arrows move to SOUL / Topic, which
     // must still not trigger evidence requests.
@@ -708,7 +708,7 @@ describe('MemorySpace', () => {
     expect(factCalls()).toBe(1);
     // Deactivate through SOUL, then reactivate the SAME record.
     fireEvent.click(screen.getByTestId('select-soul'));
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await waitFor(() => expect(screen.getByTestId('memory-space')).toHaveAttribute('data-selected-kind', 'continuity_hub'));
     fireEvent.click(screen.getByRole('button', { name: '查找' }));
     activateWithEnter(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
     fireEvent.click(screen.getByRole('button', { name: '查找' }));
@@ -952,7 +952,7 @@ describe('MemorySpace', () => {
     await waitFor(() => {
       expect(screen.getByTestId('reading-title')).toHaveTextContent('喜欢黑咖啡');
     });
-    expect(screen.getByTestId('reading-evidence')).toBeInTheDocument();
+    expect(await screen.findByTestId('reading-evidence')).toBeInTheDocument();
     expect(screen.queryByTestId('reading-projection-summary')).toBeNull();
     expect(attempts).toBe(2);
   });
@@ -1062,10 +1062,6 @@ describe('MemorySpace', () => {
     const before = canvas.getAttribute('data-yaw');
     fireEvent.pointerDown(canvas, { clientX: 20, clientY: 20, buttons: 1 });
     fireEvent.pointerMove(canvas, { clientX: 80, clientY: 24, buttons: 1 });
-    if (canvas.getAttribute('data-ownership') !== 'user') {
-      expect(screen.getByTestId('memory-graph')).toBeInTheDocument();
-      return;
-    }
     expect(canvas.getAttribute('data-yaw')).not.toBe(before);
     const zoomBefore = canvas.getAttribute('data-zoom');
     fireEvent.wheel(canvas, { deltaY: 400 });
@@ -1125,7 +1121,7 @@ describe('MemorySpace', () => {
     render(
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
-    await screen.findByTestId('memory-graph');
+    await screen.findByTestId('constellation-stage');
     fireEvent.click(screen.getByRole('button', { name: '查找' }));
     const first = await screen.findByRole('option', { name: '喜欢黑咖啡' });
     await waitFor(() => expect(document.activeElement).toBe(first));
@@ -1158,7 +1154,7 @@ describe('MemorySpace', () => {
     render(
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
-    await screen.findByTestId('memory-graph');
+    await screen.findByTestId('constellation-stage');
     fireEvent.click(screen.getByRole('button', { name: '查找' }));
     const first = await screen.findByRole('option', { name: '喜欢黑咖啡' });
     await waitFor(() => expect(document.activeElement).toBe(first));
@@ -1292,7 +1288,7 @@ describe('MemorySpace', () => {
     render(
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
-    await screen.findByTestId('memory-graph');
+    await screen.findByTestId('constellation-stage');
     fireEvent.click(screen.getByRole('button', { name: '查找' }));
     await waitFor(() => {
       expect(document.activeElement?.getAttribute('role')).toBe('option');
@@ -1315,7 +1311,7 @@ describe('MemorySpace', () => {
     render(
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
-    await screen.findByTestId('memory-graph');
+    await screen.findByTestId('constellation-stage');
     fireEvent.click(screen.getByRole('button', { name: '查找' }));
     fireEvent.click(screen.getByRole('button', { name: '按主题' }));
     expect(screen.getByTestId('memory-list')).toHaveAttribute('data-browse', 'grouped');
@@ -1348,7 +1344,7 @@ describe('MemorySpace', () => {
     render(
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
-    await screen.findByTestId('memory-graph');
+    await screen.findByTestId('constellation-stage');
     fireEvent.click(screen.getByRole('button', { name: '查找' }));
     await waitFor(() => {
       expect(document.activeElement?.getAttribute('data-outline-id')).toBe('fact:1');
@@ -1388,7 +1384,7 @@ describe('MemorySpace', () => {
     render(
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );
-    await screen.findByTestId('memory-graph');
+    await screen.findByTestId('constellation-stage');
     fireEvent.click(screen.getByRole('button', { name: '查找' }));
     const fact = await screen.findByRole('option', { name: '喜欢黑咖啡' });
     fireEvent.click(fact);
@@ -1641,7 +1637,8 @@ describe('MemorySpace', () => {
     fireEvent.click(await screen.findByRole('option', { name: '喜欢黑咖啡' }));
     toggleFindFilters();
     await chooseWorldline('beta');
-    await waitFor(() => expect(screen.getByTestId('memory-plaque')).toHaveTextContent('β'));
+    await screen.findByRole('option', { name: /β 记忆/ });
+    expect(screen.getByTestId('memory-plaque')).toHaveTextContent('β');
     expect(screen.queryByRole('option', { name: '喜欢黑咖啡' })).toBeNull();
     expect(screen.getByRole('option', { name: /β 记忆/ })).toBeInTheDocument();
     expect(document.querySelector('[data-result-id="fact:1"]')).toBeNull();

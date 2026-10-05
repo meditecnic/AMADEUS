@@ -261,10 +261,12 @@ describe('Workstation connection admission and next-turn model', () => {
     hoisted.useAmadeusWS.mockImplementation((p: typeof params) => { params = p; return wsState(); });
     render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
     await waitFor(() => expect(screen.getByRole('button', { name: '模型供应商' })).not.toBeDisabled());
+    const listCalls = () => vi.mocked(globalThis.fetch).mock.calls.filter(([url]) => String(url).startsWith('/api/conversations?')).length;
+    const listsBeforeTurn = listCalls();
     await act(async () => { params.onTurnStarted?.('conversation-one'); });
     await waitFor(() => expect(screen.getByRole('button', { name: '模型供应商' })).toHaveTextContent('DeepSeek'));
     // Let the delayed refresh scheduled by turn start finish, so it cannot supersede the held request below.
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
+    await waitFor(() => expect(listCalls()).toBeGreaterThan(listsBeforeTurn));
 
     // The end of the turn starts a list refresh that is still in flight when the user switches.
     holdList = true;
@@ -288,10 +290,8 @@ describe('Workstation connection admission and next-turn model', () => {
     // The running turn materialises the conversation.
     await act(async () => { params.onTurnStarted?.('conversation-one'); });
 
-    await waitFor(() => {
-      fireEvent.click(screen.getByRole('button', { name: '模型' }));
-      expect(screen.getByRole('option', { name: 'deepseek-v4-pro' })).toBeInTheDocument();
-    });
+    fireEvent.click(screen.getByRole('button', { name: '模型' }));
+    expect(await screen.findByRole('option', { name: 'deepseek-v4-pro' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('option', { name: 'deepseek-v4-pro' }));
     expect(await screen.findByText('下一轮：deepseek-v4-pro')).toBeInTheDocument();
 
