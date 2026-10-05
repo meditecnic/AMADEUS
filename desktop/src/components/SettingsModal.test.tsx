@@ -261,7 +261,7 @@ describe('SYSTEM CONFIG information architecture', () => {
     fireEvent.click(screen.getByTestId('profile-delete-custom:to-delete'));
     await waitFor(() => expect(onDisable).toHaveBeenCalledWith('custom:to-delete'));
     // Optimistic removal before parent snapshot arrives.
-    expect(screen.queryByText('Remove Me')).toBeNull();
+    await waitFor(() => expect(screen.queryByText('Remove Me')).toBeNull());
 
     rerender(
       <SettingsModal
