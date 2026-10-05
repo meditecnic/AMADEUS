@@ -231,5 +231,3 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
     </aside>
   );
 };
-
-export default HistorySidebar;

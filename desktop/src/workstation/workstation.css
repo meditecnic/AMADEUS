@@ -7,7 +7,6 @@
   --ws-sans: var(--font-ui);
   /* Reading face for Chinese dialogue: lighter and more literary than the UI sans (font-face declared in MemorySpace.css). */
   --ws-read: 'LXGW Neo XiHei', var(--font-ui);
-  --ws-jp: var(--font-ja);
   --ws-mono: var(--font-mono);
   --ws-display: var(--font-brand);
   /* EB Garamond and Noto Serif SC/JP are bundled via @fontsource (main.tsx); the rest are fallbacks. */
@@ -71,10 +70,8 @@
   --ws-accent-2: #ff9cc3;
   --ws-accent-rgb: 143, 220, 255;
   --ws-panel: rgba(10, 11, 13, .88);
-  --ws-user-bg: rgba(236, 235, 231, .04);
   /* Her afterimage from the neighbouring worldline: a pale, hard offset copy. */
   --ws-slab: rgba(214, 222, 230, .085);
-  --ws-slab-ink: rgba(236, 235, 231, .62);
   --ws-light: radial-gradient(900px 780px at 84% 30%, rgba(214, 222, 230, .1), transparent 62%),
               radial-gradient(640px 520px at 62% 34%, rgba(96, 104, 214, .075), transparent 68%),
               radial-gradient(520px 420px at 76% 88%, rgba(143, 220, 255, .035), transparent 70%),
@@ -93,9 +90,7 @@
   --ws-accent-2: #c9a063;
   --ws-accent-rgb: 233, 138, 79;
   --ws-panel: rgba(12, 12, 13, .88);
-  --ws-user-bg: rgba(233, 138, 79, .06);
   --ws-slab: rgba(201, 110, 58, .16);
-  --ws-slab-ink: #c9713f;
   --ws-light: radial-gradient(860px 620px at 82% 104%, rgba(233, 128, 62, .13), transparent 62%),
               radial-gradient(760px 560px at 10% -12%, rgba(84, 100, 116, .16), transparent 70%),
               linear-gradient(180deg, #0e0e10 0%, #070707 100%);

@@ -1,19 +1,5 @@
 /* Local font-face declarations (offline-capable, no CDN) */
-@font-face {
-  font-family: 'Audiowide';
-  src: url('/assets/fonts/Audiowide-Regular.woff2') format('woff2');
-  font-weight: 400;
-  font-style: normal;
-  font-display: swap;
-}
 
-@font-face {
-  font-family: 'Orbitron';
-  src: url('/assets/fonts/Orbitron-Regular.woff2') format('woff2');
-  font-weight: 400 900;
-  font-style: normal;
-  font-display: swap;
-}
 
 @font-face {
   font-family: 'Share Tech Mono';
@@ -3574,7 +3560,6 @@
   --wl-scroll-thumb: var(--color-border-light, #65402b);
   --wl-scroll-thumb-active: #d97a2d;
   --wl-selected-edge: #d97a2d;
-  --wl-ambient-edge: rgba(217, 122, 45, 0.09);
   --wl-accent-bright: #ffb35a;
   --wl-accent-dim: rgba(255, 168, 73, 0.62);
   --wl-glow: rgba(255, 132, 28, 0.2);
@@ -3591,7 +3576,6 @@
   --wl-scroll-thumb: color-mix(in srgb, #c64b3a 35%, #3d291f);
   --wl-scroll-thumb-active: #c64b3a;
   --wl-selected-edge: #c64b3a;
-  --wl-ambient-edge: rgba(150, 40, 34, 0.16);
   --wl-accent-bright: #f18468;
   --wl-accent-dim: rgba(216, 115, 44, 0.66);
   --wl-glow: rgba(170, 54, 24, 0.2);

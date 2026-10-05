@@ -45,7 +45,6 @@ vi.mock('./SettingsModal', () => ({
   loadStoredSelfName: () => '',
   persistSelfName: () => {},
 }));
-vi.mock('./SoundMixerRail', () => ({ SoundMixerRail: () => null }));
 vi.mock('./HistorySidebar', () => ({
   HistorySidebar: (props: Record<string, unknown>) => { hoisted.sidebarProps.current = props; return null; },
 }));

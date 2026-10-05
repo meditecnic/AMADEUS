@@ -2363,4 +2363,3 @@ export const Workstation: React.FC<WorkstationProps> = ({
     </div>
   );
 };
-export default Workstation;

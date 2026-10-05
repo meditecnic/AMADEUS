@@ -360,5 +360,3 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
     </div>
   );
 };
-
-export default ProviderControls;

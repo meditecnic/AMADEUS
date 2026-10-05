@@ -76,15 +76,3 @@ export function nodeWeight(nodeId: string, input: EmphasisInput): number {
   }
   return 0.35;
 }
-
-export function pathInNeighborhood(
-  from: string | undefined,
-  to: string | undefined,
-  focusId: string | null,
-  edges: readonly ProjectionEdge[],
-  nodes: readonly DisplayNode[],
-): boolean {
-  if (!focusId) return false;
-  const hood = neighborhoodIds(focusId, edges, nodes);
-  return Boolean((from && hood.has(from)) || (to && hood.has(to)));
-}

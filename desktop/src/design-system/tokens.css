@@ -10,23 +10,17 @@
   --font-ja: 'Noto Sans JP', 'Noto Sans SC', 'Yu Gothic', 'Hiragino Sans', sans-serif;
   --font-mono: 'IBM Plex Mono', 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
   --font-display: var(--font-brand);
-  --font-body: var(--font-ui);
 
   --transition-fast: 150ms ease;
   --transition-normal: 200ms ease;
-  --transition-slow: 280ms ease;
 
   /*
    * S4-DS visual system: warm graphite scientific instrument + oxidized copper signal.
    * Roles: text = ordinary copy; signal = interactive copper; gold = telemetry only.
    */
-  --color-bg: #0b0907;
   --color-bg-deep: #070605;
   --color-bg-panel: #12100d;
   --color-bg-panel-light: #1a1510;
-  --color-bg-glass: rgba(14, 12, 10, 0.72);
-  --color-primary: #d96f24;
-  --color-copper: #c25a1e;
   --color-gold: #c6a45f;
   --color-amber: #d96f24;
   --color-text: #e6dccb;
@@ -40,14 +34,9 @@
   --color-success: #5f8f62;
   --color-signal: #d96f24;
   --color-signal-hot: #ffad54;
-  --color-ink: #e6dccb;
-  --color-paper: #12100d;
   --color-warning: #c6a45f;
 
   --glow-primary: 0 0 4px rgba(217, 111, 36, 0.26);
-  --glow-gold: 0 0 5px rgba(198, 164, 95, 0.28);
-  --glow-gold-strong: 0 0 7px rgba(198, 164, 95, 0.42);
-  --glow-primary-strong: 0 0 8px rgba(217, 111, 36, 0.38);
 
   --bg-overlay-top: rgba(5, 4, 3, 0.55);
   --bg-overlay-bottom: rgba(5, 4, 3, 0.35);
@@ -68,7 +57,6 @@
   --wl-scroll-thumb: var(--color-border-light);
   --wl-scroll-thumb-active: var(--wl-accent);
   --wl-selected-edge: var(--wl-accent);
-  --wl-ambient-edge: rgba(217, 122, 45, 0.1);
 
   /* Unified scrollbar track (shared by all product scrollports) */
   --scrollbar-size: 6px;

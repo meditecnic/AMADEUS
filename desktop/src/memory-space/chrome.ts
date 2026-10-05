@@ -11,6 +11,3 @@ export function memorySpaceShortcut(event: {
   if (event.key === 'l' || event.key === 'L') return 'list';
   return null;
 }
-
-export const DEFAULT_CHROME = ['return', 'memory-soul', 'plaque'] as const;
-export const OVERFLOW_CHROME = ['search', 'list', 'identity', 'worldline'] as const;

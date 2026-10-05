@@ -77,7 +77,6 @@ vi.mock('../services/AudioService', () => ({
   },
 }));
 
-vi.mock('./StatusBar', () => ({ StatusBar: () => null }));
 vi.mock('./SettingsModal', () => ({
   SettingsModal: () => null,
   CHAT_TEMPERATURE_MIN: 0,
@@ -109,16 +108,12 @@ vi.mock('./SettingsModal', () => ({
     }
   },
 }));
-// SoundMixerRail is real (header audio zone composition is under S4-DS test).
 vi.mock('./HistorySidebar', () => ({
   HistorySidebar: () => <div data-testid="history-sidebar" />,
 }));
 vi.mock('./TtsDebugPanel', () => ({ TtsDebugPanel: () => null }));
 vi.mock('./AvatarViewer', () => ({ default: () => null }));
 vi.mock('./SpriteAnimator', () => ({ default: () => null }));
-vi.mock('./HudBadge', () => ({ HudBadge: () => null }));
-// Real DivergenceMeter is mounted (structure + aria-label ownership; not a mock stub).
-vi.mock('./CRTOverlay', () => ({ CRTOverlay: () => null }));
 vi.mock('./BilingualMessage', () => ({
   BilingualMessage: ({ japanese, chinese }: { japanese?: string; chinese?: string }) => (
     <div>

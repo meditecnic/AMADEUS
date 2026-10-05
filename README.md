@@ -37,7 +37,7 @@ npm run dev
 npm run tauri -- dev
 ```
 
-本地服务使用回环地址；桌面细节见 [desktop/README.md](desktop/README.md)。`frontend/` 保留旧路径，当前桌面产品以 `desktop/` 为主。打包与发布尚需独立产品验证。
+本地服务使用回环地址；桌面细节见 [desktop/README.md](desktop/README.md)。当前桌面产品以 `desktop/` 为主。打包与发布尚需独立产品验证。
 
 Windows 默认把 API 密钥存入凭据管理器；非 Windows 默认只存内存，重启后需要重新填写。开发验证可显式设置 `AMADEUS_CREDENTIAL_BACKEND=memory`。
 

@@ -8,12 +8,10 @@
 .memory-space {
   --memory-bg: #080d12;
   --memory-surface: rgba(13, 21, 29, .92);
-  --memory-surface-raised: rgba(18, 29, 39, .96);
   --memory-text: #e7eef3;
   --memory-muted: #9baab5;
   --memory-faint: #8496a4;
   --memory-ink: 146, 190, 206;
-  --memory-serif: 'LXGW Neo XiHei', sans-serif;
   --memory-ease: cubic-bezier(.22, 1, .36, 1);
   --memory-line: rgba(163, 190, 210, .2);
   --memory-line-strong: rgba(172, 204, 226, .42);
@@ -38,7 +36,6 @@
 .memory-space[data-worldline="beta"] {
   --memory-bg: #100d0a;
   --memory-surface: rgba(25, 19, 13, .93);
-  --memory-surface-raised: rgba(37, 28, 18, .97);
   --memory-text: #f2e8d9;
   --memory-muted: #c1ae96;
   --memory-faint: #ae967a;

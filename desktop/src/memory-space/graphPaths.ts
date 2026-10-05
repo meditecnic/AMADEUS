@@ -10,7 +10,6 @@ export type GraphPath = {
   points: Point3[];
 };
 
-export const SOUL_LOCKUP = ['SOUL'] as const;
 
 export function soulLockupLines(_primary?: string, secondary?: string): readonly [string] {
   const raw = (secondary || 'SOUL').trim().toUpperCase();
@@ -18,9 +17,6 @@ export function soulLockupLines(_primary?: string, secondary?: string): readonly
   return [raw];
 }
 
-export function soulActivation(phase: 'soul' | 'overview'): 'expand' | 'inspect' {
-  return phase === 'soul' ? 'expand' : 'inspect';
-}
 
 export type RevealState = {
   overviewOpen: boolean;
@@ -123,14 +119,6 @@ function cross(a: Point3, b: Point3): Point3 {
   };
 }
 
-function nearestOnPolyline(point: Point3, line: Point3[]): number {
-  let best = Infinity;
-  for (const sample of line) {
-    const d = Math.hypot(point.x - sample.x, point.y - sample.y, point.z - sample.z);
-    if (d < best) best = d;
-  }
-  return best;
-}
 
 function quadratic(a: Point3, c: Point3, b: Point3, steps: number): Point3[] {
   const points: Point3[] = [];
@@ -197,26 +185,8 @@ export function constellationFieldBelt(
   return segments;
 }
 
-export function topicBeltPoints(display: readonly DisplayNode[], samples = 96): Point3[] {
-  return constellationFieldBelt(display, samples).flat();
-}
 
-export function distanceToTopicBelt(point: Point3, display: readonly DisplayNode[]): number {
-  const segments = constellationFieldBelt(display, 128);
-  if (segments.length === 0) return Number.POSITIVE_INFINITY;
-  return Math.min(...segments.map((segment) => nearestOnPolyline(point, segment)));
-}
 
-export function isClosedPlanarRing(segments: Point3[][]): boolean {
-  const points = segments.flat();
-  if (points.length < 8) return false;
-  const first = points[0];
-  const last = points[points.length - 1];
-  const closed = Math.hypot(first.x - last.x, first.y - last.y, first.z - last.z) < 0.08;
-  const ys = points.map((point) => point.y);
-  const yRange = Math.max(...ys) - Math.min(...ys);
-  return closed && yRange < 0.12;
-}
 
 export function hasSpokeWheel(paths: readonly GraphPath[], display: readonly DisplayNode[]): boolean {
   const topics = display.filter((node) => node.kind === 'topic');

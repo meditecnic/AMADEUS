@@ -62,7 +62,6 @@ vi.mock('../services/AudioService', () => ({
   },
 }));
 
-vi.mock('./StatusBar', () => ({ StatusBar: () => null }));
 vi.mock('./SettingsModal', () => ({
   SettingsModal: () => null,
   CHAT_TEMPERATURE_MIN: 0,
@@ -94,7 +93,6 @@ vi.mock('./SettingsModal', () => ({
     }
   },
 }));
-vi.mock('./SoundMixerRail', () => ({ SoundMixerRail: () => null }));
 vi.mock('./HistorySidebar', () => ({
   HistorySidebar: (props: {
     conversations: Array<{ id: string; title: string }>;
@@ -109,9 +107,6 @@ vi.mock('./HistorySidebar', () => ({
 vi.mock('./TtsDebugPanel', () => ({ TtsDebugPanel: () => null }));
 vi.mock('./AvatarViewer', () => ({ default: () => null }));
 vi.mock('./SpriteAnimator', () => ({ default: () => null }));
-vi.mock('./HudBadge', () => ({ HudBadge: () => null }));
-vi.mock('./DivergenceMeter', () => ({ DivergenceMeter: () => null }));
-vi.mock('./CRTOverlay', () => ({ CRTOverlay: () => null }));
 vi.mock('./BilingualMessage', () => ({ BilingualMessage: () => null }));
 vi.mock('./ForgetConversationModal', () => ({ ForgetConversationModal: () => null }));
 

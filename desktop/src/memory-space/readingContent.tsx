@@ -112,14 +112,3 @@ export function ReadingProvenance({ provenance }: { provenance: ReadingCard['pro
     </dl>
   );
 }
-
-export function ReadingFields({ card }: { card: ReadingCard }) {
-  return (
-    <>
-      <p className="memory-reading-kind" data-testid="reading-kind">{card.kind}</p>
-      <h2 data-testid="reading-title">{card.title}</h2>
-      {card.summary ? <p data-testid="reading-summary">{card.summary}</p> : null}
-      <ReadingProvenance provenance={card.provenance} />
-    </>
-  );
-}

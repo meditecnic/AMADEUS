@@ -71,16 +71,6 @@ export function hasActiveCriteria(criteria: CriteriaInput | MemoryProjection['cr
   return Boolean(to);
 }
 
-export function criteriaFromEnvelope(envelope: MemoryProjection): CriteriaInput {
-  return normalizeCriteria({
-    query: envelope.criteria.query ?? '',
-    kinds: envelope.criteria.kinds,
-    topicId: envelope.criteria.topic_id,
-    pinnedOnly: envelope.criteria.pinned_only,
-    updatedFrom: envelope.criteria.updated_from,
-    updatedTo: envelope.criteria.updated_to,
-  });
-}
 
 export type CriteriaChip = {
   id: string;

@@ -194,5 +194,3 @@ export const BootSplash: React.FC<BootSplashProps> = ({ onDone }) => {
     </div>
   );
 };
-
-export default BootSplash;

@@ -43,15 +43,6 @@ export type OrbitRing = {
   rotZ: number;
 };
 
-export function instrumentRings(): OrbitRing[] {
-  return [
-    { radiusX: 2.38, radiusY: 2.18, rotX: 0.18, rotY: 0.04, rotZ: 0.22 },
-    { radiusX: 2.52, radiusY: 1.92, rotX: 0.86, rotY: 0.28, rotZ: -0.38 },
-    { radiusX: 2.48, radiusY: 2.28, rotX: -0.46, rotY: 0.16, rotZ: 1.08 },
-    { radiusX: 2.2, radiusY: 2.42, rotX: 0.32, rotY: -0.42, rotZ: 0.08 },
-    { radiusX: 2.62, radiusY: 2.05, rotX: 1.12, rotY: -0.18, rotZ: 0.55 },
-  ];
-}
 
 function topicScale(node: Extract<ProjectionNode, { kind: 'topic' }>): number {
   return 0.112 + Math.min(0.12, Math.log1p(node.fact_count + node.experience_count) * 0.046);
@@ -268,44 +259,7 @@ export function projectToScreen(
   };
 }
 
-export function pickDisplayNode(
-  nodes: readonly DisplayNode[],
-  screenX: number,
-  screenY: number,
-  width: number,
-  height: number,
-  yaw: number,
-  pitch: number,
-  distance: number,
-  lookAt: Point3,
-): DisplayNode | null {
-  const projected = nodes
-    .map((node) => ({
-      node,
-      screen: projectToScreen(node.position, width, height, yaw, pitch, distance, lookAt),
-    }))
-    .filter((item) => item.screen.depth > 0)
-    .sort((a, b) => a.screen.depth - b.screen.depth);
-  for (const item of projected) {
-    const hit = Math.max(
-      10,
-      item.node.radius * (overviewFocalPx(height) / Math.max(0.35, item.screen.depth)),
-    );
-    const dx = screenX - item.screen.x;
-    const dy = screenY - item.screen.y;
-    if (dx * dx + dy * dy <= hit * hit) return item.node;
-  }
-  return null;
-}
 
-export function focusLookAt(selected: DisplayNode | null): Point3 {
-  if (!selected || selected.kind === 'continuity_hub') return { x: 0, y: 0, z: 0 };
-  return {
-    x: selected.position.x * 0.35,
-    y: selected.position.y * 0.35,
-    z: selected.position.z * 0.35,
-  };
-}
 
 export function readingSurfaceMode(args: {
   width: number;

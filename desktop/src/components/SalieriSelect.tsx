@@ -329,5 +329,3 @@ export const SalieriSelect: React.FC<SalieriSelectProps> = ({
     </div>
   );
 };
-
-export default SalieriSelect;

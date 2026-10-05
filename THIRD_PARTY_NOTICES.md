@@ -5,7 +5,7 @@ Third-party software, models and fonts retain their own licenses. STEINS;GATE ch
 ## Fonts
 
 - `desktop/public/assets/fonts/s4-ds/`: Oxanium, IBM Plex Mono and Noto Sans CJK families use SIL Open Font License 1.1. Copyright and license text are preserved in [OFL.txt](desktop/public/assets/fonts/s4-ds/OFL.txt).
-- The root font files `Audiowide-Regular.woff2`, `Orbitron-Regular.woff2` and `ShareTechMono-Regular.woff2` also use SIL Open Font License 1.1. Upstream copyright and license references: [Audiowide](https://github.com/google/fonts/blob/main/ofl/audiowide/OFL.txt), [Orbitron](https://github.com/google/fonts/blob/main/ofl/orbitron/OFL.txt), [Share Tech Mono](https://github.com/google/fonts/blob/main/ofl/sharetechmono/OFL.txt).
+- The root font file `ShareTechMono-Regular.woff2` also uses SIL Open Font License 1.1. Upstream copyright and license reference: [Share Tech Mono](https://github.com/google/fonts/blob/main/ofl/sharetechmono/OFL.txt).
 - `desktop/public/assets/fonts/memory/LXGWNeoXiHei.ttf` uses IPA Font License 1.0. Its [license](desktop/public/assets/fonts/memory/LICENSE.md) and [provenance](desktop/public/assets/fonts/memory/PROVENANCE.md) are preserved.
 - Fontsource EB Garamond, Noto Serif JP and Noto Serif SC retain the OFL notices supplied in their npm packages.
 
