@@ -351,10 +351,11 @@ describe('createDetailsController', () => {
     const controller = createDetailsController({ load: load as never });
     const seen: string[] = [];
     controller.activate(factRequest(), (outcome) => seen.push(outcome.type));
+    const oldRequest = load.mock.results[0].value;
     controller.activate({ ...factRequest(), scope: betaScope }, (outcome) => seen.push(`beta:${outcome.type}`));
     await vi.waitFor(() => expect(seen).toContain('beta:not-found'));
     release?.({ type: 'ok', payload: factPayload() });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await oldRequest;
     expect(seen.filter((entry) => entry === 'ok')).toHaveLength(0);
   });
 });

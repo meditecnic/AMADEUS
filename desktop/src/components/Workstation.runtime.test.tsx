@@ -303,7 +303,6 @@ describe('Workstation provider runtime changes', () => {
 
     render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(latestEnableTts()).toBe(true);
     expect(screen.queryByTestId('audio-error-toast')).toBeNull();
   });

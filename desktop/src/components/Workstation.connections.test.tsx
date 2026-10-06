@@ -264,7 +264,7 @@ describe('Workstation connection admission and next-turn model', () => {
     const listsBeforeTurn = listCalls();
     await act(async () => { params.onTurnStarted?.('conversation-one'); });
     await waitFor(() => expect(screen.getByRole('button', { name: '模型供应商' })).toHaveTextContent('DeepSeek'));
-    // Let the delayed refresh scheduled by turn start finish, so it cannot supersede the held request below.
+    // 等待 turn start 调度的旧刷新已发起，避免它随后占用下方保留的请求。
     await waitFor(() => expect(listCalls()).toBeGreaterThan(listsBeforeTurn));
 
     // The end of the turn starts a list refresh that is still in flight when the user switches.

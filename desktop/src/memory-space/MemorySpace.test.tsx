@@ -259,7 +259,9 @@ describe('MemorySpace', () => {
       expect(screen.getByTestId('memory-space')).toHaveAttribute('data-surface', 'list');
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    act(() => {
+      runFrame?.(48);
+    });
     expect(screen.getByTestId('memory-space')).toHaveAttribute('data-surface', 'list');
     expect(screen.getByTestId('memory-list')).toBeInTheDocument();
     expect(screen.getAllByRole('option', { name: '喜欢黑咖啡' })).toHaveLength(1);
@@ -456,7 +458,7 @@ describe('MemorySpace', () => {
       if (url.includes('/details')) {
         return okJson(factDetailsFixture);
       }
-      if (url.includes('worldline=beta')) {
+      if (url.includes('/api/memory/graph/projection?') && url.includes('worldline=beta')) {
         return new Promise((resolve) => {
           releaseBeta = resolve;
         });
@@ -483,6 +485,7 @@ describe('MemorySpace', () => {
     // Before the new envelope arrives, the stale SG selection must not be
     // requested under the beta scope.
     expect(calls.filter((url) => url.includes('/details') && url.includes('worldline=beta'))).toHaveLength(0);
+    expect(screen.getByTestId('memory-stale')).toBeInTheDocument();
     releaseBeta?.({
       ok: true,
       json: async () => ({
@@ -496,7 +499,7 @@ describe('MemorySpace', () => {
         shown: { nodes: 1, edges: 0, records: 0, results: 0 },
       }),
     });
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await waitFor(() => expect(screen.queryByTestId('memory-stale')).toBeNull());
     expect(calls.filter((url) => url.includes('/details') && url.includes('worldline=beta'))).toHaveLength(0);
   });
 
@@ -599,12 +602,12 @@ describe('MemorySpace', () => {
     // result sits at order[0]; further arrows move to SOUL / Topic, which
     // must still not trigger evidence requests.
     fireEvent.keyDown(window, { key: 'ArrowRight' });
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await waitFor(() => expect(screen.getByTestId('memory-announce')).toHaveTextContent('事实 喜欢黑咖啡'));
     expect(screen.getByTestId('memory-space').getAttribute('data-selected-id')).toBe('');
     expect(calls.filter((url) => url.includes('/details'))).toHaveLength(0);
     fireEvent.keyDown(window, { key: 'ArrowRight' });
     fireEvent.keyDown(window, { key: 'ArrowDown' });
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    await waitFor(() => expect(screen.getByTestId('memory-announce')).toHaveTextContent('主题 咖啡'));
     expect(screen.getByTestId('memory-space').getAttribute('data-selected-id')).toBe('');
     expect(calls.filter((url) => url.includes('/details'))).toHaveLength(0);
     // Rove back to the fact and activate it with Enter.
@@ -1035,12 +1038,11 @@ describe('MemorySpace', () => {
       json: async () => laterProjection,
     });
     await waitFor(() => expect(screen.getByRole('option', { name: /后来的记忆/ })).toBeInTheDocument());
-    releaseOld?.({
-      ok: true,
-      json: async () => projection,
-    });
-    await new Promise((resolve) => {
-      setTimeout(resolve, 30);
+    await act(async () => {
+      releaseOld?.({
+        ok: true,
+        json: async () => projection,
+      });
     });
     expect(screen.getByRole('option', { name: /后来的记忆/ })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: '喜欢黑咖啡' })).toBeNull();
@@ -1185,9 +1187,6 @@ describe('MemorySpace', () => {
     await waitFor(() => {
       expect(document.activeElement?.getAttribute('data-outline-id')).not.toBe(projection.center.projection_id);
       expect(document.activeElement?.getAttribute('role')).toBe('option');
-    });
-    await new Promise((resolve) => {
-      setTimeout(resolve, 30);
     });
     fireEvent.keyDown(document.activeElement as Element, { key: 'ArrowUp' });
     await waitFor(() => {
