@@ -5,7 +5,6 @@ import {
   deriveOverviewPresentation,
   displayNodesFromPlan,
   REPRESENTATIVE_CHILD_LIMIT,
-  ungroupedNameById,
   visibleOutlineIds,
 } from './overviewPresentation';
 import type { MemoryProjection, ProjectionNode } from './types';
@@ -282,7 +281,7 @@ describe('deriveOverviewPresentation', () => {
     expect(located.primaryResults.map((row) => row.id)).toEqual(projection.result_ids);
   });
 
-  it('gives same-label supporting evidence distinct honest names', () => {
+  it('separates primary results from supporting evidence', () => {
     const projection = envelope({
       nodes: [
         hub(),
@@ -304,13 +303,6 @@ describe('deriveOverviewPresentation', () => {
     const plan = deriveOverviewPresentation(projection, {});
     expect(plan.primaryResults.map((row) => row.id)).toEqual(['fact:1']);
     expect(plan.supportingContext.map((row) => row.id)).toEqual(expect.arrayContaining(['fact:s1', 'fact:s2']));
-    const names = ungroupedNameById(plan);
-    expect(names.get('fact:s1')).not.toBe(names.get('fact:s2'));
-    expect(names.get('fact:s1')).toMatch(/上下文/);
-    expect(names.get('fact:s2')).toMatch(/上下文/);
-    expect(names.get('fact:s1')).toContain('事实');
-    expect(names.get('fact:s1')).not.toMatch(/fact:s/);
-    expect(names.get('fact:s2')).not.toMatch(/fact:s/);
   });
 
   it('distinguishes same-label Facts under one Topic without UUID names', () => {

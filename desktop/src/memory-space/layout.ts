@@ -258,14 +258,3 @@ export function projectToScreen(
     depth,
   };
 }
-
-
-
-export function readingSurfaceMode(args: {
-  width: number;
-  preferList: boolean;
-  reducedMotion: boolean;
-}): 'scene' | 'dom' {
-  if (args.preferList || args.reducedMotion || args.width < 900) return 'dom';
-  return 'scene';
-}

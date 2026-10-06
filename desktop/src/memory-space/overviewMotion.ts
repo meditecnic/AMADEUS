@@ -1312,20 +1312,3 @@ export function pickLiveNode(frame: OverviewFrame, screenX: number, screenY: num
   }
   return best?.id ?? null;
 }
-
-export function projectLivePoint(
-  camera: OverviewFrame['camera'],
-  point: Point3 | ReadonlyPoint3,
-  viewport: Rect,
-): { x: number; y: number } {
-  const screen = projectToScreen(
-    point,
-    viewport.width,
-    viewport.height,
-    camera.yaw,
-    camera.pitch,
-    camera.distance,
-    camera.lookAt,
-  );
-  return { x: screen.x, y: screen.y };
-}

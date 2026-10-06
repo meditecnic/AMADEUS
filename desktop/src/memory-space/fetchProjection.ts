@@ -55,11 +55,3 @@ export async function fetchMemoryProjection(
   const projection = await response.json() as MemoryProjection;
   return { epoch: input.epoch, projection };
 }
-
-export function applyIfCurrent<T>(
-  currentEpoch: number,
-  incomingEpoch: number,
-  value: T,
-): T | undefined {
-  return incomingEpoch === currentEpoch ? value : undefined;
-}

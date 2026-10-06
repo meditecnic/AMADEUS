@@ -6,7 +6,6 @@ import { cameraWorldPosition, layoutProjection, OVERVIEW_FOV_DEG, OVERVIEW_REST_
 import {
   createOverviewMotion,
   pickLiveNode,
-  projectLivePoint,
   screenHitRadiusPx,
   screenVisualRadiusPx,
   step,
@@ -1063,18 +1062,6 @@ describe('overviewMotion planner', () => {
     const radius = screenHitRadiusPx(node!, frame.camera, seed.viewport);
     expect(pickLiveNode(frame, projected!.x + Math.min(6, radius / 4), projected!.y)).toBeTruthy();
     expect(pickLiveNode(frame, 8, 8)).toBeNull();
-  });
-
-  it('27. screen anchors match the live camera helper', () => {
-    const seed = seedFrom(envelope(), {
-      expandedTopicIds: ['topic:t1'],
-      viewport: { x: 0, y: 0, width: 1280, height: 800 },
-    });
-    const { frame } = step(createOverviewMotion(seed), { type: 'tick', nowMs: 0 });
-    const node = frame.nodes.get('topic:t1')!;
-    expect(frame.projected.get('topic:t1')).toEqual(
-      projectLivePoint(frame.camera, node.position, seed.viewport),
-    );
   });
 
   it('nested live geometry stays frozen under attempted mutation', () => {

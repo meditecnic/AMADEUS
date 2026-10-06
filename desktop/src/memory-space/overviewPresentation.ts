@@ -338,7 +338,3 @@ export function accessibleNameById(plan: OverviewDisclosurePlan): Map<string, st
   }
   return names;
 }
-
-export function ungroupedNameById(plan: OverviewDisclosurePlan): Map<string, string> {
-  return accessibleNameById(plan);
-}

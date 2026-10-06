@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { semanticFilaments, soulLockupLines } from './graphPaths';
-import { layoutProjection, readingSurfaceMode, OVERVIEW_REST_CAMERA, overviewFocalPx, projectToScreen } from './layout';
+import { layoutProjection, OVERVIEW_REST_CAMERA, overviewFocalPx, projectToScreen } from './layout';
 import type { MemoryProjection, ProjectionNode } from './types';
 
 function envelope(over: Partial<MemoryProjection> = {}): MemoryProjection {
@@ -309,12 +309,5 @@ describe('constellation layout', () => {
 
   it('keeps a SOUL-only lockup', () => {
     expect(soulLockupLines('AMADEUS', 'SOUL')).toEqual(['SOUL']);
-  });
-
-  it('uses a DOM reading surface for narrow / list / reduced-motion', () => {
-    expect(readingSurfaceMode({ width: 1904, preferList: false, reducedMotion: false })).toBe('scene');
-    expect(readingSurfaceMode({ width: 800, preferList: false, reducedMotion: false })).toBe('dom');
-    expect(readingSurfaceMode({ width: 1904, preferList: true, reducedMotion: false })).toBe('dom');
-    expect(readingSurfaceMode({ width: 1904, preferList: false, reducedMotion: true })).toBe('dom');
   });
 });

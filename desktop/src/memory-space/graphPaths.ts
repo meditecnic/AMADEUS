@@ -25,54 +25,12 @@ export type RevealState = {
   resultIds?: readonly string[];
 };
 
-export function visibleDisplayNodes(
-  display: readonly DisplayNode[],
-  edges: readonly ProjectionEdge[],
-  state: RevealState,
-): DisplayNode[] {
-  if (!state.overviewOpen) return display.filter((node) => node.kind === 'continuity_hub');
-  const expanded = new Set(state.expandedTopicIds ?? []);
-  const hits = new Set((state.query || '').trim() ? (state.resultIds ?? []) : []);
-  return display.filter((node) => {
-    if (node.kind === 'continuity_hub' || node.kind === 'topic') return true;
-    if (hits.has(node.id)) return true;
-    const parent = evidenceParentId(node.id, edges);
-    return Boolean(parent && expanded.has(parent));
-  });
-}
-
 export function openTopicBranch(topicId: string, current: readonly string[] = []): string[] {
   if (current.length === 1 && current[0] === topicId) return [...current];
   return [topicId];
 }
 
 export const SOUL_MARK_LIFT = 0.1;
-
-export function soulMarkOffset(camera: Point3, radius: number): Point3 {
-  const len = Math.hypot(camera.x, camera.y, camera.z);
-  const reach = radius + SOUL_MARK_LIFT;
-  if (len < 0.001) return { x: 0, y: 0, z: reach };
-  const scale = reach / len;
-  return { x: camera.x * scale, y: camera.y * scale, z: camera.z * scale };
-}
-
-export function branchReveal(progress: number, topicPos: Point3, restPos: Point3): Point3 {
-  const t = Math.max(0, Math.min(1, progress));
-  const eased = t * t * (3 - 2 * t);
-  return {
-    x: topicPos.x + (restPos.x - topicPos.x) * eased,
-    y: topicPos.y + (restPos.y - topicPos.y) * eased,
-    z: topicPos.z + (restPos.z - topicPos.z) * eased,
-  };
-}
-
-export function filamentPrefix(points: readonly Point3[], progress: number): Point3[] {
-  if (points.length === 0) return [];
-  const t = Math.max(0, Math.min(1, progress));
-  if (t <= 0) return [points[0]];
-  const last = Math.max(1, Math.ceil((points.length - 1) * t));
-  return points.slice(0, last + 1);
-}
 
 export function evidenceParentId(
   nodeId: string,
@@ -187,17 +145,6 @@ export function constellationFieldBelt(
 
 
 
-
-export function hasSpokeWheel(paths: readonly GraphPath[], display: readonly DisplayNode[]): boolean {
-  const topics = display.filter((node) => node.kind === 'topic');
-  if (topics.length < 2) return false;
-  const spokeTargets = new Set(
-    paths
-      .filter((path) => path.class === 'typed_relation' && path.kind === 'hub_to_anchor')
-      .map((path) => path.to),
-  );
-  return topics.every((topic) => spokeTargets.has(topic.id));
-}
 
 function nearestTopic(point: Point3, display: readonly DisplayNode[]): DisplayNode | null {
   let best: DisplayNode | null = null;

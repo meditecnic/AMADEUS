@@ -9,15 +9,9 @@ import {
 } from './emphasis';
 import {
   evidenceParentId,
-  hasSpokeWheel,
   semanticFilaments,
   openTopicBranch,
   soulLockupLines,
-  soulMarkOffset,
-  SOUL_MARK_LIFT,
-  branchReveal,
-  filamentPrefix,
-  visibleDisplayNodes,
   visibleOverviewPaths,
 } from './graphPaths';
 import { layoutProjection } from './layout';
@@ -142,42 +136,10 @@ describe('R0 overview reconstruction', () => {
     expect(soulLockupLines('  amadeus  ', 'soul')).toEqual(['SOUL']);
   });
 
-  it('default Overview shows SOUL and Topics only; evidence waits for expand', () => {
-    const projection = envelope();
-    const display = layoutProjection(projection);
-    const rest = visibleDisplayNodes(display, projection.edges, {
-      overviewOpen: true,
-      expandedTopicIds: [],
-      query: '',
-      resultIds: projection.result_ids,
-    });
-    expect(rest.map((node) => node.kind).sort()).toEqual([
-      'continuity_hub',
-      'topic',
-      'topic',
-      'topic',
-    ]);
-    expect(rest.some((node) => node.kind === 'fact' || node.kind === 'experience')).toBe(false);
-    const opened = visibleDisplayNodes(display, projection.edges, {
-      overviewOpen: true,
-      expandedTopicIds: ['topic:t1'],
-      query: '',
-    });
-    expect(opened.some((node) => node.id === 'fact:1')).toBe(true);
-    expect(opened.some((node) => node.id === 'exp:1')).toBe(true);
-    expect(opened.some((node) => node.id === 'exp:2')).toBe(false);
-    expect(opened.some((node) => node.id === 'fact:2')).toBe(false);
+  it('keeps one expanded Topic branch', () => {
     expect(openTopicBranch('topic:t1', [])).toEqual(['topic:t1']);
     expect(openTopicBranch('topic:t1', ['topic:t1'])).toEqual(['topic:t1']);
     expect(openTopicBranch('topic:t2', ['topic:t1'])).toEqual(['topic:t2']);
-    const searched = visibleDisplayNodes(display, projection.edges, {
-      overviewOpen: true,
-      expandedTopicIds: [],
-      query: '咖啡',
-      resultIds: ['fact:1'],
-    });
-    expect(searched.some((node) => node.id === 'fact:1')).toBe(true);
-    expect(searched.some((node) => node.id === 'exp:2')).toBe(false);
   });
 
   it('default rest paths keep quiet membership lines and no Topic–Topic belt', () => {
@@ -190,48 +152,6 @@ describe('R0 overview reconstruction', () => {
     expect(spokes).toHaveLength(topics.length);
     expect(spokes.every((path) => path.points.length === 2)).toBe(true);
     expect(paths.some((path) => path.class === 'field_belt')).toBe(false);
-    const syntheticWheel = topics.map((topic) => ({
-      class: 'typed_relation' as const,
-      kind: 'hub_to_anchor' as const,
-      from: 'hub:continuity:s:steins_gate:okabe',
-      to: topic.id,
-      points: [{ x: 0, y: 0, z: 0 }, topic.position],
-    }));
-    expect(hasSpokeWheel(syntheticWheel, display)).toBe(true);
-  });
-
-  it('emits only typed filaments for currently visible nodes, never belt or spokes', () => {
-    const projection = envelope();
-    const display = layoutProjection(projection);
-    const collapsed = visibleDisplayNodes(display, projection.edges, {
-      overviewOpen: true,
-      expandedTopicIds: [],
-    });
-    const rest = visibleOverviewPaths({
-      display: collapsed,
-      edges: projection.edges,
-      query: '',
-      selectedId: 'topic:t1',
-      expanded: true,
-    });
-    expect(rest.every((path) => path.class === 'typed_relation')).toBe(true);
-    expect(rest.some((path) => path.class === 'field_belt')).toBe(false);
-    expect(rest.filter((path) => path.kind === 'hub_to_anchor')).toHaveLength(3);
-    expect(rest.filter((path) => path.kind === 'has_topic')).toHaveLength(0);
-
-    const opened = visibleDisplayNodes(display, projection.edges, {
-      overviewOpen: true,
-      expandedTopicIds: ['topic:t1'],
-    });
-    const focused = visibleOverviewPaths({
-      display: opened,
-      edges: projection.edges,
-      selectedId: 'topic:t1',
-      expanded: true,
-    });
-    expect(focused.some((path) => path.kind === 'has_topic' && path.from === 'fact:1')).toBe(true);
-    expect(focused.filter((path) => path.kind === 'hub_to_anchor')).toHaveLength(3);
-    expect(focused.some((path) => path.kind === 'hub_to_evidence')).toBe(false);
   });
 
   it('places has_topic evidence as satellites and keeps hub_to_evidence off Topics', () => {
@@ -250,13 +170,6 @@ describe('R0 overview reconstruction', () => {
     expect(dist(fact.position, coffee.position)).toBeLessThan(dist(fact.position, research.position));
     expect(dist(lived.position, coffee.position)).toBeLessThan(0.85);
     expect(dist(lived.position, coffee.position)).toBeLessThan(dist(lived.position));
-    const opened = visibleDisplayNodes(display, projection.edges, {
-      overviewOpen: true,
-      expandedTopicIds: ['topic:t1'],
-    });
-    const paths = visibleOverviewPaths({ display: opened, edges: projection.edges, expanded: true });
-    expect(paths.some((path) => path.kind === 'has_topic' && path.to === 'topic:t1')).toBe(true);
-    expect(paths.some((path) => path.to === 'exp:2')).toBe(false);
     expect(unbound).toBeTruthy();
     const topicCount = display.filter((node) => node.kind === 'topic').length;
     expect(topicCount).toBe(3);
@@ -281,7 +194,6 @@ describe('R0 overview reconstruction', () => {
       }),
     );
     expect(seven.filter((node) => node.kind === 'topic')).toHaveLength(7);
-    expect(hasSpokeWheel(restPaths(seven, []), seven)).toBe(false);
   });
 
   it('treats a blank query as rest even when leftover result_ids exist', () => {
@@ -400,30 +312,6 @@ describe('R0 overview reconstruction', () => {
     expect(memorySpaceShortcut({ key: '2' })).toBeNull();
     expect(memorySpaceShortcut({ key: '/', target: { tagName: 'INPUT' } })).toBeNull();
     expect(memorySpaceShortcut({ key: 'a' })).toBeNull();
-  });
-
-  it('parks the SOUL mark on the camera-facing hemisphere and eases branch reveal', () => {
-    const radius = 0.5;
-    const offset = soulMarkOffset({ x: 0, y: 0, z: 5 }, radius);
-    expect(offset.z).toBeCloseTo(radius + SOUL_MARK_LIFT, 5);
-    expect(Math.hypot(offset.x, offset.y, offset.z)).toBeCloseTo(radius + SOUL_MARK_LIFT, 5);
-    expect(Math.abs(offset.x)).toBeLessThan(0.01);
-    const back = soulMarkOffset({ x: -4, y: 0, z: 0 }, radius);
-    expect(back.x).toBeCloseTo(-(radius + SOUL_MARK_LIFT), 5);
-    const topic = { x: 2, y: 0, z: 0 };
-    const rest = { x: 2.4, y: 0.2, z: 0.1 };
-    expect(branchReveal(0, topic, rest)).toEqual(topic);
-    expect(branchReveal(1, topic, rest)).toEqual(rest);
-    const mid = branchReveal(0.5, topic, rest);
-    expect(mid.x).toBeGreaterThan(topic.x);
-    expect(mid.x).toBeLessThan(rest.x);
-    const line = [
-      { x: 0, y: 0, z: 0 },
-      { x: 1, y: 0, z: 0 },
-      { x: 2, y: 0, z: 0 },
-    ];
-    expect(filamentPrefix(line, 0)).toHaveLength(1);
-    expect(filamentPrefix(line, 1)).toHaveLength(3);
   });
 
   it('keeps one quiet membership line per Topic through select and SOUL focus', () => {

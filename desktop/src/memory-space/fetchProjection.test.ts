@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { applyIfCurrent, fetchMemoryProjection } from './fetchProjection';
+import { fetchMemoryProjection } from './fetchProjection';
 
 describe('fetchMemoryProjection', () => {
-  it('calls the live projection entry and discards stale epochs', async () => {
+  it('calls the live projection entry and returns its epoch', async () => {
     const fetcher = vi.fn().mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -28,8 +28,6 @@ describe('fetchMemoryProjection', () => {
     expect(String(fetcher.mock.calls[0][0])).toContain('view=overview');
     expect(String(fetcher.mock.calls[0][0])).toContain('query=');
     expect(result.epoch).toBe(4);
-    expect(applyIfCurrent(4, result.epoch, result.projection)).toBe(result.projection);
-    expect(applyIfCurrent(5, result.epoch, result.projection)).toBeUndefined();
   });
 
   it('forwards kind, topic, pin and time criteria without rematching', async () => {

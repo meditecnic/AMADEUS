@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import { layoutProjection } from './layout';
 import { tickCognitionBody } from './cognitionMaterials';
@@ -7,16 +7,6 @@ import { createOverviewMotion, pickLiveNode, restLayoutFromProjection, step } fr
 import { deriveOverviewPresentation } from './overviewPresentation';
 import { OrreryRuntime } from './orreryRenderer';
 import type { MemoryProjection } from './types';
-
-vi.mock('./graphPaths', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./graphPaths')>();
-  return {
-    ...actual,
-    filamentPrefix: vi.fn(actual.filamentPrefix),
-  };
-});
-
-const { filamentPrefix } = await import('./graphPaths');
 
 const projection: MemoryProjection = {
   scope: { session_id: 's', worldline: 'steins_gate', identity_mode: 'okabe' },
@@ -186,16 +176,6 @@ describe('OrreryRuntime live frame adapter', () => {
     expect(interactive!.x).toBeCloseTo(rendered.x, 5);
     expect(interactive!.y).toBeCloseTo(rendered.y, 5);
   });
-
-  it('25. applyFrame does not use rest filamentPrefix', () => {
-    const runtime = new OrreryRuntime(document.createElement('canvas'));
-    const { frame, display } = frameOf();
-    runtime.applyFrame(frame, display);
-    runtime.applyFrame(frame, display);
-    expect(vi.mocked(filamentPrefix)).not.toHaveBeenCalled();
-    runtime.dispose();
-  });
-
   it('uses hover for the material response while keeping click selection independent', () => {
     const runtime = new OrreryRuntime(document.createElement('canvas'));
     const { frame, display } = frameOf();
