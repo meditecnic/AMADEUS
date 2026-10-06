@@ -198,7 +198,7 @@
   font-size: 19px;
   font-weight: normal;
   letter-spacing: 0.5px;
-  width: 130px; /* 加宽以适配 Audiowide 字体 */
+  width: 130px;
   flex-shrink: 0; /* 禁止 flex 压缩 */
   text-align: right;
   margin-right: 15px;
