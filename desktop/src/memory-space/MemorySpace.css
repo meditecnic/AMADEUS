@@ -226,6 +226,11 @@
 .memory-space-truncation { bottom: 14px; }
 [data-testid="memory-retry-3d"] { bottom: 86px; }
 .memory-space-state button { pointer-events: auto; }
+.memory-space-status-card { position: absolute; top: 50%; left: 50%; z-index: 8; width: min(28rem, calc(100% - 48px)); padding: 24px; transform: translate(-50%, -50%); border: 1px solid var(--memory-line-strong); border-radius: 8px; background: var(--memory-surface); text-align: center; }
+.memory-space-status-card h2 { margin: 0 0 20px; color: var(--memory-text); font-size: 20px; font-weight: 500; }
+.memory-space-status-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
+.memory-space-empty-guide { font-size: 13px; }
+
 
 .memory-inspector, .memory-reading-dom {
   position: absolute;

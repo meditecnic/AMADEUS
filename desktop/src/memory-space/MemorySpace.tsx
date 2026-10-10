@@ -1078,6 +1078,7 @@ export function MemorySpace({
           type="button"
           className="memory-space-mark"
           data-testid="select-soul"
+          disabled={!liveProjection || !disclosurePlan || !planReady}
           onClick={() => handleSelect(liveProjection?.center.projection_id ?? null)}
         >
           <span className="memory-space-soul-mark">记忆 / SOUL</span>
@@ -1160,12 +1161,13 @@ export function MemorySpace({
         <p className="memory-space-state" data-testid="memory-stale">{presentation.copy ?? '同步中'}</p>
       ) : null}
       {mode === 'constellation' && presentation.phase === 'unavailable' ? (
-        <p className="memory-space-state" role="alert" data-testid="memory-unavailable">
-          {presentation.copy}
-          {presentation.showRetry ? (
+        <section className="memory-space-status-card" role="alert" data-testid="memory-unavailable">
+          <h2>记忆存储暂时不可用</h2>
+          <div className="memory-space-status-actions">
             <button type="button" data-testid="memory-retry" onClick={retryProjection}>重试</button>
-          ) : null}
-        </p>
+            <button type="button" onClick={onClose}>返回对话</button>
+          </div>
+        </section>
       ) : null}
       {mode === 'constellation' && presentation.phase === 'error' ? (
         <p className="memory-space-state" role="alert" data-testid="memory-error">
@@ -1176,7 +1178,7 @@ export function MemorySpace({
         </p>
       ) : null}
       {mode === 'constellation' && presentation.phase === 'true-empty' ? (
-        <p className="memory-space-state" data-testid="memory-empty">{presentation.copy}</p>
+        <p className="memory-space-state memory-space-empty-guide" data-testid="memory-empty">这里还没有长期记忆；可以返回对话，或稍后再来查看。</p>
       ) : null}
       {mode === 'constellation' && presentation.phase === 'criteria-empty' ? (
         <p className="memory-space-state" data-testid="memory-criteria-empty">{presentation.copy}</p>
