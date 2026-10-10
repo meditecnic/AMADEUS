@@ -70,7 +70,7 @@ export function BilingualMessage({
           {rows.map(segment => (
             <span key={segment.id} {...bind(segment.id)}>
               {segment.ja}
-              {!streaming && segment.ja?.trim() && !segment.zh?.trim() && (
+              {!streaming && segment.ja?.trim() && !segment.zh?.trim() && !segment.translationError && (
                 <span className="translation-missing" lang="zh-CN">未译</span>
               )}
             </span>
@@ -93,7 +93,7 @@ export function BilingualMessage({
           {segment.zh && <p className="chinese-main">{segment.zh}</p>}
           <p className={segment.zh ? 'japanese-sub' : 'japanese-raw'} lang="ja">
             {segment.ja}
-            {!streaming && segment.ja?.trim() && !segment.zh?.trim() && (
+            {!streaming && segment.ja?.trim() && !segment.zh?.trim() && !segment.translationError && (
               <span className="translation-missing" lang="zh-CN">未译</span>
             )}
           </p>

@@ -214,8 +214,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
                 <img
                   src={amadeusLogo}
                   className="amadeus-logo-img"
-                  alt=""
-                  aria-label="AMADEUS Logo"
+                  alt="AMADEUS Logo"
                   onError={() => setLogoFailed(true)}
                 />
               ) : (

@@ -718,8 +718,6 @@
 .ws2 .avatar-stage .avatar-sprite-layer { position: absolute; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; object-fit: contain; object-position: bottom; transition: none; filter: none; }
 .ws2 .avatar-stage .breath-animation { animation: ws2-breathe 5.5s ease-in-out infinite; }
 .ws2 .avatar-absent { display: grid; place-items: center; }
-.ws2 .avatar-absent p { margin: 0; display: grid; gap: 6px; justify-items: center; font-family: var(--ws-serif-cjk); font-size: 14px; letter-spacing: .3em; color: var(--ws-ink-3); }
-.ws2 .avatar-absent small { font-family: var(--ws-sans); font-size: 11px; letter-spacing: .12em; }
 @keyframes ws2-breathe { 50% { transform: translateY(-2px) scaleY(1.004); } }
 .ws2 .avatar-stage::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 22%; background: linear-gradient(0deg, var(--ws-bg) 8%, rgba(0, 0, 0, 0)); pointer-events: none; }
 /* Plate: her voice (scope) and presence — one instrument in the lower-right corner of the booth. The chapter card carries her name. */
