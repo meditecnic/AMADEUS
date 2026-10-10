@@ -90,6 +90,7 @@ interface ProviderControlsProps {
   searchable?: boolean;
   onManageConnections?: () => void;
   loadingModels: boolean;
+  providersFailed?: boolean;
   discoveryStatus?: ModelDiscoveryStatus;
   thinkingValue: string | null;
   onProviderChange: (providerId: string) => void;
@@ -214,6 +215,7 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
   searchable = false,
   onManageConnections,
   loadingModels,
+  providersFailed = false,
   discoveryStatus,
   thinkingValue,
   onProviderChange,
@@ -256,7 +258,21 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
         })}
         onChange={onProviderChange}
       />
-      {searchable ? (
+      {providersFailed ? (
+        <div className={searchable ? 'ws2-picker' : 'provider-model-select-root'}>
+          <button
+            type="button"
+            className={searchable ? 'ws2-picker-trigger' : 'provider-model-select'}
+            aria-label="模型"
+            aria-description="接入列表加载失败"
+            title="接入列表加载失败"
+            disabled
+          >
+            <span className="name">模型列表未加载</span>
+            <span className="caret" aria-hidden="true">▾</span>
+          </button>
+        </div>
+      ) : searchable ? (
         <ModelPicker
           value={activeModelId}
           disabled={disabled || modelOptions.length === 0}

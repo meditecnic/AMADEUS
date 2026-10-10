@@ -9,6 +9,7 @@ const wsSpies = vi.hoisted(() => ({
   switchConversation: vi.fn(),
   switchWorldline: vi.fn(),
   useAmadeusWS: vi.fn(),
+  realHistory: false,
 }));
 
 const audioSpies = vi.hoisted(() => ({
@@ -93,17 +94,19 @@ vi.mock('./SettingsModal', () => ({
     }
   },
 }));
-vi.mock('./HistorySidebar', () => ({
-  HistorySidebar: (props: {
-    conversations: Array<{ id: string; title: string }>;
-    onNew?: () => void;
-  }) => (
-    <div data-testid="history-rows">
-      {props.conversations.map((row) => <span key={row.id}>{row.title}</span>)}
-      <button type="button" onClick={props.onNew}>新建会话</button>
-    </div>
-  ),
-}));
+vi.mock('./HistorySidebar', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./HistorySidebar')>();
+  return {
+    HistorySidebar: (props: Parameters<typeof actual.HistorySidebar>[0]) => wsSpies.realHistory
+      ? <actual.HistorySidebar {...props} />
+      : (
+        <div data-testid="history-rows">
+          {props.conversations.map((row) => <span key={row.id}>{row.title}</span>)}
+          <button type="button" onClick={props.onNew}>新建会话</button>
+        </div>
+      ),
+  };
+});
 vi.mock('./TtsDebugPanel', () => ({ TtsDebugPanel: () => null }));
 vi.mock('./AvatarViewer', () => ({ default: () => null }));
 vi.mock('./SpriteAnimator', () => ({ default: () => null }));
@@ -128,6 +131,7 @@ describe('Workstation provider runtime changes', () => {
     wsSpies.switchConversation.mockReturnValue(true);
     wsSpies.switchWorldline.mockReturnValue(true);
     wsSpies.useAmadeusWS.mockReset();
+    wsSpies.realHistory = false;
 
     vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -178,6 +182,27 @@ describe('Workstation provider runtime changes', () => {
       }
       throw new Error(`unexpected fetch: ${url}`);
     }));
+  });
+
+  it('shows a conversation list failure and recovers through retry', async () => {
+    wsSpies.realHistory = true;
+    const initialFetch = globalThis.fetch;
+    let listRequests = 0;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith('/api/conversations?') && ++listRequests === 1) {
+        return Promise.resolve({ ok: false, status: 500 } as Response);
+      }
+      return initialFetch(input, init);
+    }));
+
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    fireEvent.click(screen.getAllByRole('button', { name: '展开会话列表' })[0]);
+    expect(await screen.findByText('> 会话列表加载失败')).toBeInTheDocument();
+    expect(screen.queryByText('> 暂无会话')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
+    expect(await screen.findByText('Default Conversation')).toBeInTheDocument();
+    expect(screen.queryByText('> 会话列表加载失败')).not.toBeInTheDocument();
+    expect(listRequests).toBe(2);
   });
 
   it('shows a visible error when the selected model cannot create a conversation', async () => {

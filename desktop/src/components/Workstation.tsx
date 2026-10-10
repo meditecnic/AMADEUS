@@ -122,12 +122,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [credentialChecked, setCredentialChecked] = useState(false);
   const [credentialStatus, setCredentialStatus] = useState<CredentialStatus>('checking');
   const [providers, setProviders] = useState<ProviderMetadata[]>([]);
+  const [providerListFailed, setProviderListFailed] = useState(false);
   const [availableModels, setAvailableModels] = useState<ModelCatalogEntry[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsDiscoveryStatus, setModelsDiscoveryStatus] = useState<ModelDiscoveryStatus>('idle');
   const providerModelsRequestEpochRef = useRef(0);
   const [sessionId] = useState(getOrCreateAmadeusSessionId);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [conversationListFailed, setConversationListFailed] = useState(false);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [conversationSearch, setConversationSearch] = useState('');
   const [conversationBusy, setConversationBusy] = useState(false);
@@ -381,28 +383,43 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const loadConversations = useCallback(async () => {
     const requestId = ++conversationRequestRef.current;
     const requestedWorldline = worldline;
-    const response = await fetch(
-      `/api/conversations?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(requestedWorldline)}`
-    );
-    if (!response.ok) throw new Error(`conversation query failed: ${response.status}`);
-    const rows = await response.json() as ConversationSummary[];
-    if (
-      requestId !== conversationRequestRef.current
-      || requestedWorldline !== latestWorldlineRef.current
-    ) return [];
-    setConversations(rows);
-    return rows;
+    setConversationListFailed(false);
+    try {
+      const response = await fetch(
+        `/api/conversations?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(requestedWorldline)}`
+      );
+      if (!response.ok) throw new Error(`conversation query failed: ${response.status}`);
+      const rows = await response.json() as ConversationSummary[];
+      if (
+        requestId !== conversationRequestRef.current
+        || requestedWorldline !== latestWorldlineRef.current
+      ) return [];
+      setConversations(rows);
+      setConversationListFailed(false);
+      return rows;
+    } catch (error) {
+      if (requestId === conversationRequestRef.current && requestedWorldline === latestWorldlineRef.current) {
+        setConversationListFailed(true);
+      }
+      throw error;
+    }
   }, [sessionId, worldline]);
 
   const providersRequestEpochRef = useRef(0);
   const loadProviders = useCallback(async () => {
     const requestEpoch = ++providersRequestEpochRef.current;
-    const response = await fetch('/api/providers');
-    if (!response.ok) throw new Error(`provider query failed: ${response.status}`);
-    const rows = await response.json() as ProviderMetadata[];
-    if (providersRequestEpochRef.current !== requestEpoch) return rows;
-    setProviders(rows);
-    return rows;
+    try {
+      const response = await fetch('/api/providers');
+      if (!response.ok) throw new Error(`provider query failed: ${response.status}`);
+      const rows = await response.json() as ProviderMetadata[];
+      if (providersRequestEpochRef.current !== requestEpoch) return rows;
+      setProviders(rows);
+      setProviderListFailed(false);
+      return rows;
+    } catch (error) {
+      if (providersRequestEpochRef.current === requestEpoch) setProviderListFailed(true);
+      throw error;
+    }
   }, []);
 
   /** false when the connection changed since `version` was read (409) or the write failed. */
@@ -1781,6 +1798,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
           onDelete={(conversation) => { void deleteConversation(conversation); }}
           onForget={(conversation) => { setForgetError(null); setForgetTarget(conversation); }}
           busy={conversationBusy}
+          loadFailed={conversationListFailed}
+          onRetry={() => { void loadConversations().catch(() => undefined); }}
         />
       </nav>
 
@@ -1947,6 +1966,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                 searchable
                 onManageConnections={() => openMenu('connections')}
                 loadingModels={modelsLoading}
+                providersFailed={providerListFailed}
                 discoveryStatus={modelsDiscoveryStatus}
                 thinkingValue={reasoningEffort}
                 onProviderChange={changeProvider}

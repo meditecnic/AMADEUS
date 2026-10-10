@@ -32,6 +32,8 @@ interface HistorySidebarProps {
   onDelete: (conversation: ConversationSummary) => void;
   onForget: (conversation: ConversationSummary) => void;
   busy?: boolean;
+  loadFailed?: boolean;
+  onRetry?: () => void;
 }
 
 /** Today → 21:04, this year → 9/26, older → 2025/9/26. */
@@ -126,6 +128,8 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
   onDelete,
   onForget,
   busy = false,
+  loadFailed = false,
+  onRetry,
 }) => {
   const visible = conversations.filter((conversation) =>
     conversation.title.toLocaleLowerCase().includes(searchQuery.trim().toLocaleLowerCase())
@@ -176,7 +180,12 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
             />
           </div>
           <div className="history-session-list">
-            {visible.length === 0 ? (
+            {loadFailed ? (
+              <div className="history-empty-tip" role="status">
+                <span>&gt; 会话列表加载失败</span>
+                <button type="button" className="history-retry" onClick={onRetry} disabled={busy}>重试</button>
+              </div>
+            ) : visible.length === 0 ? (
               <div className="history-empty-tip">
                 <span>&gt; 暂无会话</span>
                 <p className="history-empty-sub">下一次发言会在这条世界线开始新会话。</p>
