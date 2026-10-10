@@ -79,6 +79,17 @@ describe('BilingualMessage', () => {
     expect(screen.queryByText('中文第一段。')).not.toBeInTheDocument();
   });
 
+  it('marks only untranslated history rows in both layouts without changing streaming', () => {
+    const mixed = [segments[0], { id: 1, ja: '翻訳なしの行です。', zh: '' }];
+    const { rerender } = render(<BilingualMessage segments={mixed} streaming={false} layout="paragraph" />);
+    expect(screen.getAllByText('未译')).toHaveLength(1);
+    rerender(<BilingualMessage segments={mixed} streaming={false} />);
+    expect(screen.getAllByText('未译')).toHaveLength(1);
+    rerender(<BilingualMessage segments={mixed} streaming layout="paragraph" />);
+    expect(screen.queryByText('未译')).toBeNull();
+    expect(screen.getByText('翻译中')).toBeInTheDocument();
+  });
+
   it('marks assistant raw-Japanese fallback with lang=ja', () => {
     render(
       <BilingualMessage

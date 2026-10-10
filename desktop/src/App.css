@@ -892,6 +892,8 @@
   font: 11px/1.5 var(--font-mono);
 }
 
+.bilingual-message .translation-missing { margin-inline-start: .6em; color: #92989e; font-size: 11px; font-style: normal; white-space: nowrap; }
+
 .translation-degraded {
   margin: 8px 0 0;
   color: var(--wl-accent-dim);

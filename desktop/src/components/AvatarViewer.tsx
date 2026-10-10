@@ -144,9 +144,7 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
 
   if (!hasAssetPack()) {
     return (
-      <div className={`avatar-viewer-container avatar-absent${variant === 'stage' ? ' avatar-stage' : ''}`} data-testid="avatar-absent">
-        <p>立绘未载入<small>安装原作素材包后显示</small></p>
-      </div>
+      <div className={`avatar-viewer-container avatar-absent${variant === 'stage' ? ' avatar-stage' : ''}`} data-testid="avatar-absent" />
     );
   }
 

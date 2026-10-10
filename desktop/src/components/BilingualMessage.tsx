@@ -67,7 +67,14 @@ export function BilingualMessage({
           </p>
         )}
         <p className={anyZh ? 'japanese-sub' : 'japanese-raw'} lang="ja">
-          {rows.map(segment => <span key={segment.id} {...bind(segment.id)}>{segment.ja}</span>)}
+          {rows.map(segment => (
+            <span key={segment.id} {...bind(segment.id)}>
+              {segment.ja}
+              {!streaming && segment.ja?.trim() && !segment.zh?.trim() && (
+                <span className="translation-missing" lang="zh-CN">未译</span>
+              )}
+            </span>
+          ))}
         </p>
         {degraded && (
           <p className="translation-degraded" role="status">
@@ -86,6 +93,9 @@ export function BilingualMessage({
           {segment.zh && <p className="chinese-main">{segment.zh}</p>}
           <p className={segment.zh ? 'japanese-sub' : 'japanese-raw'} lang="ja">
             {segment.ja}
+            {!streaming && segment.ja?.trim() && !segment.zh?.trim() && (
+              <span className="translation-missing" lang="zh-CN">未译</span>
+            )}
           </p>
           {segment.translationError && (
             <p className="translation-degraded" role="status">

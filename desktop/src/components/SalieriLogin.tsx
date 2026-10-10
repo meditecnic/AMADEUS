@@ -16,6 +16,8 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
   const [errorField, setErrorField] = useState<'user' | 'password' | null>(null);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [scale, setScale] = useState(1);
+  const [photoFailed, setPhotoFailed] = useState(false);
+  const [logoFailed, setLogoFailed] = useState(false);
   const photoLeft = packAsset('login/photo_left.png');
   const amadeusLogo = packAsset('login/amadeus_logo.png');
 
@@ -195,9 +197,9 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
         style={{ transform: `scale(${scale})` }}
       >
         {/* 左侧写实黑白照片 (已移入等比例缩放的 wrapper 内部，以实现 100% 精确网格线重合与滤色混合) */}
-        {photoLeft && (
+        {photoLeft && !photoFailed && (
           <div className="left-photo-viewport">
-            <img src={photoLeft} className="left-photo" alt="System Terminal Background" />
+            <img src={photoLeft} className="left-photo" alt="" onError={() => setPhotoFailed(true)} />
           </div>
         )}
 
@@ -208,11 +210,13 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
           <form onSubmit={handleSubmit} className="salieri-login-form">
 
             <div className="amadeus-logo-container">
-              {amadeusLogo ? (
+              {amadeusLogo && !logoFailed ? (
                 <img
                   src={amadeusLogo}
                   className="amadeus-logo-img"
-                  alt="AMADEUS Logo"
+                  alt=""
+                  aria-label="AMADEUS Logo"
+                  onError={() => setLogoFailed(true)}
                 />
               ) : (
                 <span className="amadeus-logo-text">AMADEUS</span>
