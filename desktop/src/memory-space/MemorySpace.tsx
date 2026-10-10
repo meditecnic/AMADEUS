@@ -1178,7 +1178,7 @@ export function MemorySpace({
         </p>
       ) : null}
       {mode === 'constellation' && presentation.phase === 'true-empty' ? (
-        <p className="memory-space-state memory-space-empty-guide" data-testid="memory-empty">这里还没有长期记忆；可以返回对话，或稍后再来查看。</p>
+        <p className="memory-space-state memory-space-empty-guide" data-testid="memory-empty">{presentation.copy}</p>
       ) : null}
       {mode === 'constellation' && presentation.phase === 'criteria-empty' ? (
         <p className="memory-space-state" data-testid="memory-criteria-empty">{presentation.copy}</p>

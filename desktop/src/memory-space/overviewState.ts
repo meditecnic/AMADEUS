@@ -98,7 +98,7 @@ export function classifyOverviewState(input: {
         ? '同步中'
         : hasLongTermMemory(input.envelope.composition)
           ? '当前没有可呈现的记忆。'
-          : '这个范围里还没有可呈现的长期记忆。',
+          : '这里还没有长期记忆；可以返回对话，或稍后再来查看。',
       showRetry: false,
     };
   }
