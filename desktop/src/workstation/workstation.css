@@ -589,7 +589,7 @@
 .ws2 .ws2-composer textarea.chat-input-field:focus-visible { outline: 1.5px solid var(--ws-accent); outline-offset: -2px; }
 .ws2 .ws2-composer textarea.chat-input-field::placeholder { color: var(--ws-ink-3); }
 .ws2 .ws2-composer textarea.chat-input-field:disabled { opacity: .55; }
-.ws2-composer-row { display: flex; align-items: center; gap: 6px; padding: 4px 8px 8px 10px; min-width: 0; }
+.ws2-composer-row { display: flex; align-items: center; gap: 6px; padding: 4px 8px 8px 10px; min-width: 0; height: 44px; }
 .ws2 .ws2-composer-row > .ws2-model { margin-right: auto; }
 .ws2-send {
   flex: none; height: 32px; min-width: 84px; padding: 0 20px 0 22px; border-radius: 0; font-family: var(--ws-serif-cjk); font-size: 14px; letter-spacing: .3em; font-weight: 600;
@@ -630,10 +630,17 @@
 .ws2 .ws2-model .ws2-picker, .ws2 .ws2-model .ws2-picker-trigger { max-width: none; width: auto; overflow: visible; }
 .ws2 .ws2-model .provider-discovery-status[data-status='credential_missing'] { display: none; }
 .ws2 .ws2-model .provider-credential-btn, .ws2 .ws2-model .provider-action-btn { white-space: nowrap; flex: none; }
+.ws2 .ws2-model .provider-list-error { display: inline-flex; align-items: center; gap: 6px; color: var(--ws-ink-3); font-size: 12px; }
+.ws2 .ws2-model .provider-list-retry { height: 26px; padding: 0 6px; border: 1px solid var(--ws-line); background: none; color: var(--ws-ink-2); font: inherit; white-space: nowrap; }
+.ws2 .ws2-model .provider-list-retry:focus-visible { outline: 1px solid var(--ws-accent); outline-offset: 2px; }
+.ws2 .ws2-model .provider-controls:has(.provider-list-error) .ws2-picker { flex: 0 1 auto; }
+.ws2 .ws2-model .provider-controls:has(.provider-list-error) .ws2-picker-trigger { width: 100%; overflow: hidden; }
+.ws2 .ws2-model .provider-controls:has(.provider-list-error) .ws2-picker-trigger .name { overflow: hidden; text-overflow: ellipsis; }
 /* Narrow reading column: the connection chip steps aside (the model picker lists and switches connections),
  * so the remaining controls keep their full labels instead of colliding with 发送. */
 @container (max-width: 640px) {
   .ws2 .ws2-model .provider-select-root { display: none; }
+  .ws2 .ws2-model .provider-list-error-label { display: none; }
 }
 @container (max-width: 500px) {
   .ws2 .ws2-model .provider-action-btn { display: none; }

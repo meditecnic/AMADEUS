@@ -242,13 +242,6 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
   );
 
   return (
-  <>
-    {providersFailed && providersLoaded && (
-      <div className="list-refresh-error" role="status">
-        <span>刷新失败</span>
-        <button type="button" className="history-retry" onClick={onRetryProviders} disabled={disabled}>重试</button>
-      </div>
-    )}
     <div className="provider-controls" aria-label="对话模型配置">
       <SalieriSelect
         aria-label="模型供应商"
@@ -326,6 +319,21 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
           onChange={onModelChange}
         />
       )}
+      {providersFailed && (
+        <div className="provider-list-error" role="status">
+          {providersLoaded && <span className="provider-list-error-label">刷新失败</span>}
+          <button
+            type="button"
+            className="provider-list-retry"
+            aria-label={providersLoaded ? '接入列表刷新失败，重试' : '接入列表加载失败，重试'}
+            title={providersLoaded ? '接入列表刷新失败' : '接入列表加载失败'}
+            onClick={onRetryProviders}
+            disabled={disabled}
+          >
+            重试
+          </button>
+        </div>
+      )}
       {statusLabel ? (
         <span className="provider-discovery-status" data-status={loadingModels ? 'loading' : discoveryStatus} title={statusLabel}>
           {statusLabel}
@@ -385,6 +393,5 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
         </span>
       )}
     </div>
-  </>
   );
 };

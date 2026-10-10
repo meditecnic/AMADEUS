@@ -279,6 +279,39 @@ describe('Workstation connection admission and next-turn model', () => {
     expect(screen.getByRole('button', { name: '模型供应商' })).toHaveTextContent('Local');
   });
 
+  it('keeps a successful model switch when the provider refresh fails', async () => {
+    let patched = false;
+    patchResponse = () => {
+      patched = true;
+      return json(200, {
+        id: 'conversation-one', title: 'One', title_source: 'auto', is_default: false, is_pinned: false,
+        provider_id: 'deepseek', model_id: 'deepseek-v4-pro', last_active_at: '2026-09-28T00:00:00Z',
+      });
+    };
+    const baseFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => (
+      String(input) === '/api/providers' && patched
+        ? Promise.resolve(json(500, {}))
+        : baseFetch(input, init)
+    )));
+    let params: { onConversationSwitched?: (payload: { conversationId: string }) => void } = {};
+    hoisted.useAmadeusWS.mockImplementation((p: typeof params) => { params = p; return wsState(); });
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    await waitFor(() => expect(hoisted.sidebarProps.current?.conversations).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: 'conversation-one' })]),
+    ));
+    await act(async () => { params.onConversationSwitched?.({ conversationId: 'conversation-one' }); });
+    await waitFor(() => expect(screen.getByRole('button', { name: '模型' })).not.toBeDisabled());
+
+    fireEvent.click(screen.getByRole('button', { name: '模型' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'deepseek-v4-pro' }));
+
+    expect(await screen.findByText('刷新失败')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: '模型' })).not.toBeDisabled());
+    expect(screen.queryByText(/没能切换到/)).toBeNull();
+    expect(screen.getByRole('button', { name: '模型' })).toHaveTextContent('deepseek-v4-pro');
+  });
+
   it('reports a failed next-turn model update and keeps the old model', async () => {
     providers = [provider('deepseek', 'DeepSeek', 'deepseek-v4-flash')];
     let thinking = true;

@@ -577,7 +577,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           is_selected: row.id === conversationId,
         })));
         pendingConversationModelRef.current = null;
-        window.setTimeout(() => { void loadConversations(); }, 250);
+        window.setTimeout(() => { void loadConversations().catch(() => undefined); }, 250);
       }
     },
     onConversationSwitched: ({ conversationId }) => {
@@ -629,7 +629,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       setSessionError({ kind: 'worldline', code });
     },
     onTurnCompleted: () => {
-      window.setTimeout(() => { void loadConversations(); }, 250);
+      window.setTimeout(() => { void loadConversations().catch(() => undefined); }, 250);
     },
     onConfigApplied: ({ reasoningEffort: appliedEffort }) => {
       if (appliedEffort === undefined) return;
@@ -1185,7 +1185,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       const created = await response.json() as ConversationSummary;
       setConversationBusy(false);
       await selectConversation(created);
-      window.setTimeout(() => { void loadConversations(); }, 250);
+      window.setTimeout(() => { void loadConversations().catch(() => undefined); }, 250);
       return created;
     } catch (error) {
       console.warn('Conversation creation failed:', error);
@@ -1238,8 +1238,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
       // server's unauthenticated state, so reload the durable conversation on a
       // fresh connection after either runtime setting changes.
       reconnect();
-      const refreshedProviders = await loadProviders();
-      const provider = refreshedProviders.find((row) => row.id === updated.provider_id);
+      await loadProviders().catch(() => undefined);
+      const provider = providers.find((row) => row.id === updated.provider_id);
       // Keyless connections (local endpoints) are never "configured"; only a missing required key needs the menu.
       if (provider?.credential_required && !provider.configured) openConnectionsAt('key');
     } finally {
