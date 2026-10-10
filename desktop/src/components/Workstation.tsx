@@ -123,6 +123,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [credentialStatus, setCredentialStatus] = useState<CredentialStatus>('checking');
   const [providers, setProviders] = useState<ProviderMetadata[]>([]);
   const [providerListFailed, setProviderListFailed] = useState(false);
+  const [providerListLoaded, setProviderListLoaded] = useState(false);
   const [availableModels, setAvailableModels] = useState<ModelCatalogEntry[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsDiscoveryStatus, setModelsDiscoveryStatus] = useState<ModelDiscoveryStatus>('idle');
@@ -130,6 +131,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [sessionId] = useState(getOrCreateAmadeusSessionId);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [conversationListFailed, setConversationListFailed] = useState(false);
+  const [conversationListWorldline, setConversationListWorldline] = useState<typeof worldline | null>(null);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   const [conversationSearch, setConversationSearch] = useState('');
   const [conversationBusy, setConversationBusy] = useState(false);
@@ -395,6 +397,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         || requestedWorldline !== latestWorldlineRef.current
       ) return [];
       setConversations(rows);
+      setConversationListWorldline(requestedWorldline);
       setConversationListFailed(false);
       return rows;
     } catch (error) {
@@ -414,6 +417,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       const rows = await response.json() as ProviderMetadata[];
       if (providersRequestEpochRef.current !== requestEpoch) return rows;
       setProviders(rows);
+      setProviderListLoaded(true);
       setProviderListFailed(false);
       return rows;
     } catch (error) {
@@ -1798,7 +1802,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
           onDelete={(conversation) => { void deleteConversation(conversation); }}
           onForget={(conversation) => { setForgetError(null); setForgetTarget(conversation); }}
           busy={conversationBusy}
-          loadFailed={conversationListFailed}
+          loadFailed={conversationListFailed && conversationListWorldline !== worldline}
+          refreshFailed={conversationListFailed && conversationListWorldline === worldline}
           onRetry={() => { void loadConversations().catch(() => undefined); }}
         />
       </nav>
@@ -1967,6 +1972,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
                 onManageConnections={() => openMenu('connections')}
                 loadingModels={modelsLoading}
                 providersFailed={providerListFailed}
+                providersLoaded={providerListLoaded}
+                onRetryProviders={() => { void loadProviders().catch(() => undefined); }}
                 discoveryStatus={modelsDiscoveryStatus}
                 thinkingValue={reasoningEffort}
                 onProviderChange={changeProvider}

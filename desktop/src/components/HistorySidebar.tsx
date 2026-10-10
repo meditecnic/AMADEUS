@@ -33,6 +33,7 @@ interface HistorySidebarProps {
   onForget: (conversation: ConversationSummary) => void;
   busy?: boolean;
   loadFailed?: boolean;
+  refreshFailed?: boolean;
   onRetry?: () => void;
 }
 
@@ -129,6 +130,7 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
   onForget,
   busy = false,
   loadFailed = false,
+  refreshFailed = false,
   onRetry,
 }) => {
   const visible = conversations.filter((conversation) =>
@@ -180,6 +182,12 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
             />
           </div>
           <div className="history-session-list">
+            {refreshFailed && (
+              <div className="list-refresh-error" role="status">
+                <span>刷新失败</span>
+                <button type="button" className="history-retry" onClick={onRetry} disabled={busy}>重试</button>
+              </div>
+            )}
             {loadFailed ? (
               <div className="history-empty-tip" role="status">
                 <span>&gt; 会话列表加载失败</span>

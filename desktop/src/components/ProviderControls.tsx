@@ -91,6 +91,8 @@ interface ProviderControlsProps {
   onManageConnections?: () => void;
   loadingModels: boolean;
   providersFailed?: boolean;
+  providersLoaded?: boolean;
+  onRetryProviders?: () => void;
   discoveryStatus?: ModelDiscoveryStatus;
   thinkingValue: string | null;
   onProviderChange: (providerId: string) => void;
@@ -216,6 +218,8 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
   onManageConnections,
   loadingModels,
   providersFailed = false,
+  providersLoaded = false,
+  onRetryProviders,
   discoveryStatus,
   thinkingValue,
   onProviderChange,
@@ -238,6 +242,13 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
   );
 
   return (
+  <>
+    {providersFailed && providersLoaded && (
+      <div className="list-refresh-error" role="status">
+        <span>刷新失败</span>
+        <button type="button" className="history-retry" onClick={onRetryProviders} disabled={disabled}>重试</button>
+      </div>
+    )}
     <div className="provider-controls" aria-label="对话模型配置">
       <SalieriSelect
         aria-label="模型供应商"
@@ -258,7 +269,7 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
         })}
         onChange={onProviderChange}
       />
-      {providersFailed ? (
+      {providersFailed && !providersLoaded ? (
         <div className={searchable ? 'ws2-picker' : 'provider-model-select-root'}>
           <button
             type="button"
@@ -374,5 +385,6 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
         </span>
       )}
     </div>
+  </>
   );
 };

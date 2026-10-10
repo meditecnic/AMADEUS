@@ -447,6 +447,8 @@
 .ws2 .history-empty-tip { padding: 12px; font-size: 12.5px; color: var(--ws-ink-3); }
 .ws2 .history-retry { display: block; margin-top: 8px; padding: 4px 8px; font: inherit; color: var(--ws-ink-2); background: transparent; border: 1px solid var(--ws-line); cursor: pointer; }
 .ws2 .history-retry:focus-visible { outline: 1px solid var(--ws-accent); outline-offset: 2px; }
+.ws2 .list-refresh-error { display: flex; align-items: center; gap: 8px; padding: 6px 0; color: var(--ws-ink-3); font-size: 12px; }
+.ws2 .list-refresh-error .history-retry { margin-top: 0; }
 .ws2 .history-sidebar-footer { padding-top: 10px; border-top: 1px solid var(--ws-line); }
 .ws2 .history-new-btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 34px; border-radius: 0; border: 1px dashed var(--ws-line-2); background: none; color: var(--ws-ink-2); font-size: 13px; letter-spacing: .12em; }
 .ws2 .history-new-btn:hover:not(:disabled) { color: var(--ws-ink); border-color: rgba(var(--ws-accent-rgb), .5); background: rgba(var(--ws-accent-rgb), .05); }
