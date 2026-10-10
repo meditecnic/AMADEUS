@@ -589,7 +589,7 @@
 .ws2 .ws2-composer textarea.chat-input-field:focus-visible { outline: 1.5px solid var(--ws-accent); outline-offset: -2px; }
 .ws2 .ws2-composer textarea.chat-input-field::placeholder { color: var(--ws-ink-3); }
 .ws2 .ws2-composer textarea.chat-input-field:disabled { opacity: .55; }
-.ws2-composer-row { display: flex; align-items: center; gap: 6px; padding: 4px 8px 8px 10px; min-width: 0; height: 44px; }
+.ws2-composer-row { display: flex; align-items: center; gap: 6px; padding: 4px 8px 8px 10px; min-width: 0; }
 .ws2 .ws2-composer-row > .ws2-model { margin-right: auto; }
 .ws2-send {
   flex: none; height: 32px; min-width: 84px; padding: 0 20px 0 22px; border-radius: 0; font-family: var(--ws-serif-cjk); font-size: 14px; letter-spacing: .3em; font-weight: 600;

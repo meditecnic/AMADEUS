@@ -1238,8 +1238,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
       // server's unauthenticated state, so reload the durable conversation on a
       // fresh connection after either runtime setting changes.
       reconnect();
-      await loadProviders().catch(() => undefined);
-      const provider = providers.find((row) => row.id === updated.provider_id);
+      const refreshed = await loadProviders().catch(() => null);
+      const provider = (refreshed ?? providers).find((row) => row.id === updated.provider_id);
       // Keyless connections (local endpoints) are never "configured"; only a missing required key needs the menu.
       if (provider?.credential_required && !provider.configured) openConnectionsAt('key');
     } finally {
