@@ -36,7 +36,10 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "resources/backend": "backend/"
+      "resources/backend": "backend/",
+      "../../LICENSE": "licenses/LICENSE",
+      "../../THIRD_PARTY_NOTICES.md": "licenses/THIRD_PARTY_NOTICES.md",
+      "resources/backend/THIRD_PARTY_LICENSES": "licenses/third-party/"
     },
     "windows": {
       "webviewInstallMode": {
