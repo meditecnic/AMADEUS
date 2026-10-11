@@ -37,6 +37,17 @@
     ],
     "resources": {
       "resources/backend": "backend/"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper",
+        "silent": true
+      },
+      "nsis": {
+        "languages": [
+          "SimpChinese"
+        ]
+      }
     }
   }
 }
