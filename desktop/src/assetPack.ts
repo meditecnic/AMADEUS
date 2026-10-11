@@ -1,8 +1,9 @@
+import { apiUrl } from './apiBase';
 /** Original Steins;Gate material (portraits, BGM, SFX, boot animation, login art) is not shipped with
  *  the app. It is an optional pack that the user installs into the data directory; the backend serves
  *  it under /api/asset-pack/. Without it every caller falls back to self-made defaults. */
 
-const PACK_BASE = '/api/asset-pack';
+const PACK_BASE = apiUrl('/api/asset-pack');
 const PROBE_TIMEOUT_MS = 1500;
 
 let available = false;

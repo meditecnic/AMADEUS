@@ -1,3 +1,4 @@
+import { apiUrl } from '../apiBase';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   getOrCreateAmadeusSessionId,
@@ -388,7 +389,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     setConversationListFailed(false);
     try {
       const response = await fetch(
-        `/api/conversations?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(requestedWorldline)}`
+        apiUrl(`/api/conversations?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(requestedWorldline)}`)
       );
       if (!response.ok) throw new Error(`conversation query failed: ${response.status}`);
       const rows = await response.json() as ConversationSummary[];
@@ -412,7 +413,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const loadProviders = useCallback(async () => {
     const requestEpoch = ++providersRequestEpochRef.current;
     try {
-      const response = await fetch('/api/providers');
+      const response = await fetch(apiUrl('/api/providers'));
       if (!response.ok) throw new Error(`provider query failed: ${response.status}`);
       const rows = await response.json() as ProviderMetadata[];
       if (providersRequestEpochRef.current !== requestEpoch) return rows;
@@ -434,7 +435,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   ): Promise<boolean> => {
     if (!version) return false;
     try {
-      const response = await fetch(`/api/providers/custom-profiles/${encodeURIComponent(providerId)}`, {
+      const response = await fetch(apiUrl(`/api/providers/custom-profiles/${encodeURIComponent(providerId)}`), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ selector_admission: admission, expected_configuration_version: version }),
@@ -672,7 +673,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     let cancelled = false;
     void (async () => {
       try {
-        const response = await fetch('/health/dependencies');
+        const response = await fetch(apiUrl('/health/dependencies'));
         if (!response.ok) return;
         const body = await response.json() as { dependencies?: { tts?: { ok?: boolean } } };
         if (cancelled || body.dependencies?.tts?.ok !== false) return;
@@ -726,7 +727,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       } catch {}
       try {
         if (legacyKey.trim()) {
-          const response = await fetch('/api/providers/deepseek/credentials', {
+          const response = await fetch(apiUrl('/api/providers/deepseek/credentials'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ api_key: legacyKey.trim() }),
@@ -773,7 +774,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     const loadWebSearchSettings = async () => {
       setWebSearchCredentialStatus('checking');
       try {
-        const response = await fetch('/api/search/settings');
+        const response = await fetch(apiUrl('/api/search/settings'));
         if (!response.ok) throw new Error(`web search settings query failed: ${response.status}`);
         const settings = await response.json() as WebSearchSettingsSnapshot & { provider?: WebSearchProviderId };
         if (!cancelled) applyWebSearchSettings(settings);
@@ -884,7 +885,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     setModelsLoading(true);
     try {
       const response = await fetch(
-        `/api/providers/${encodeURIComponent(providerId)}/models?refresh=${refresh ? 'true' : 'false'}`
+        apiUrl(`/api/providers/${encodeURIComponent(providerId)}/models?refresh=${refresh ? 'true' : 'false'}`)
       );
       if (providerModelsRequestEpochRef.current !== requestEpoch) return;
       if (response.status === 409) {
@@ -1122,7 +1123,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     try {
       audioPlayer.stopAll();
       const response = await fetch(
-        `/api/conversations/${encodeURIComponent(conversation.id)}/messages?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`
+        apiUrl(`/api/conversations/${encodeURIComponent(conversation.id)}/messages?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`)
       );
       if (!response.ok) throw new Error(`history query failed: ${response.status}`);
       const rows = await response.json() as Array<{
@@ -1163,7 +1164,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     try {
       const active = conversations.find((row) => row.id === activeConversationId);
       const mode = normalizeIdentityMode(identityMode);
-      const response = await fetch('/api/conversations', {
+      const response = await fetch(apiUrl('/api/conversations'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1200,7 +1201,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     patch: Record<string, unknown>,
   ) => {
     const response = await fetch(
-      `/api/conversations/${encodeURIComponent(conversation.id)}?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`,
+      apiUrl(`/api/conversations/${encodeURIComponent(conversation.id)}?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`),
       {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -1372,7 +1373,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     try {
       if (wasActive && (isThinking || isSynthesizing)) handleCancelTurn();
       const response = await fetch(
-        `/api/conversations/${encodeURIComponent(conversation.id)}?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`,
+        apiUrl(`/api/conversations/${encodeURIComponent(conversation.id)}?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`),
         { method: 'DELETE' },
       );
       if (!response.ok) throw new Error(`conversation delete failed: ${response.status}`);
@@ -1400,7 +1401,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     let waitingForSwitchAck = false;
     try {
       const response = await fetch(
-        `/api/conversations/${encodeURIComponent(forgetTarget.id)}/forget?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`,
+        apiUrl(`/api/conversations/${encodeURIComponent(forgetTarget.id)}/forget?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`),
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1471,7 +1472,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       const endpoint = activeProviderId === 'custom'
         ? '/api/providers/custom/configuration'
         : `/api/providers/custom-profiles/${encodeURIComponent(activeProviderId)}`;
-      const response = await fetch(endpoint, {
+      const response = await fetch(apiUrl(endpoint), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1491,7 +1492,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     }
     let credentialChanged = false;
     if (newSettings.apiKey.trim()) {
-      const response = await fetch(`/api/providers/${encodeURIComponent(activeProviderId)}/credentials`, {
+      const response = await fetch(apiUrl(`/api/providers/${encodeURIComponent(activeProviderId)}/credentials`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ api_key: newSettings.apiKey.trim() }),
@@ -1506,7 +1507,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       try { localStorage.removeItem('amadeus_pc_api_key'); } catch {}
     }
     if (newSettings.webSearchApiKey.trim()) {
-      const response = await fetch('/api/search/credential', {
+      const response = await fetch(apiUrl('/api/search/credential'), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1615,7 +1616,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   const handleSelectWebSearchProvider = async (provider: WebSearchProviderId) => {
     setWebSearchCredentialStatus('saving');
-    const response = await fetch('/api/search/settings', {
+    const response = await fetch(apiUrl('/api/search/settings'), {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ active_provider: provider }),
@@ -1631,7 +1632,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const handleClearWebSearchCredential = async (provider: WebSearchProviderId) => {
     setWebSearchCredentialStatus('saving');
     const response = await fetch(
-      `/api/search/credential?provider=${encodeURIComponent(provider)}`,
+      apiUrl(`/api/search/credential?provider=${encodeURIComponent(provider)}`),
       { method: 'DELETE' },
     );
     if (!response.ok) {
@@ -2268,7 +2269,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             configured: Boolean(row.configured),
           }))}
         onCreateCustomProfile={async (input) => {
-          const response = await fetch('/api/providers/custom-profiles', {
+          const response = await fetch(apiUrl('/api/providers/custom-profiles'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(input),
@@ -2283,7 +2284,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         }}
         onDisableCustomProfile={async (providerId) => {
           const response = await fetch(
-            `/api/providers/custom-profiles/${encodeURIComponent(providerId)}`,
+            apiUrl(`/api/providers/custom-profiles/${encodeURIComponent(providerId)}`),
             { method: 'DELETE' },
           );
           if (!response.ok) throw new Error('profile_disable_failed');

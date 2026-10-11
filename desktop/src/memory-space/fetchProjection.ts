@@ -1,3 +1,4 @@
+import { apiUrl } from '../apiBase';
 import { buildProjectionUrl, normalizeCriteria, type CriteriaInput, type ScopeKey } from './criteria';
 import type { MemoryProjection } from './types';
 
@@ -41,7 +42,7 @@ export async function fetchMemoryProjection(
   const criteria = normalizeCriteria(input);
   const url = buildProjectionUrl(input, criteria);
   const init: RequestInit = input.signal ? { signal: input.signal } : {};
-  const response = await fetcher(url, init);
+  const response = await fetcher(apiUrl(url), init);
   if (!response.ok) {
     let code = 'projection_failed';
     try {

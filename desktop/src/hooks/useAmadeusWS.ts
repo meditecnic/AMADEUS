@@ -1,4 +1,5 @@
-﻿import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
+﻿import { wsUrl } from '../apiBase';
+import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 
 export interface UseAmadeusWSParams {
   sessionId?: string;
@@ -321,11 +322,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
 
     const sessionId = paramsRef.current.sessionId || getOrCreateAmadeusSessionId();
 
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    // Tauri/Vite Config Proxy will route /ws to backend ws endpoint
-    const wsUrl = `${wsProtocol}//${window.location.host}/ws/chat?session_id=${sessionId}`;
-
-    const ws = new WebSocket(wsUrl);
+    const ws = new WebSocket(wsUrl(`/ws/chat?session_id=${sessionId}`));
     wsRef.current = ws;
 
     ws.onopen = () => {

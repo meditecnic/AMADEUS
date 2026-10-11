@@ -1,3 +1,4 @@
+import { apiUrl } from '../apiBase';
 import { MemorySelect } from './MemorySelect';
 import { motion } from 'motion/react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -325,7 +326,7 @@ export function MemorySpace({
       setLoading(false);
       setScopeSwitching(false);
     });
-    void fetch(`/api/memory/status?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}&identity_mode=${encodeURIComponent(identityMode)}`)
+    void fetch(apiUrl(`/api/memory/status?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}&identity_mode=${encodeURIComponent(identityMode)}`))
       .then(async (response) => (response.ok ? (response.json() as Promise<unknown>) : null))
       .then((body) => {
         if (cancelled || !body) return;
@@ -360,7 +361,7 @@ export function MemorySpace({
   useEffect(() => {
     if (!listOpen && capability.surface !== 'list') return undefined;
     let cancelled = false;
-    void fetch(`/api/memory/topics?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}&identity_mode=${encodeURIComponent(identityMode)}`)
+    void fetch(apiUrl(`/api/memory/topics?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}&identity_mode=${encodeURIComponent(identityMode)}`))
       .then(async (response) => (response.ok ? response.json() as Promise<{ topics?: TopicOption[] }> : null))
       .then((body) => {
         if (cancelled || !body?.topics) return;

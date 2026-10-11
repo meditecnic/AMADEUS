@@ -1,3 +1,4 @@
+import { apiUrl } from '../apiBase';
 /** Selected-model chat verification (POST /api/providers/{id}/chat-check).
  *  The backend stores nothing; results live here, keyed by provider + model + local config version,
  *  so a late answer for an older configuration can never be shown as the current result. */
@@ -27,7 +28,7 @@ export function chatCheckMessage(code: string): string {
 
 export async function requestChatCheck(providerId: string, modelId: string): Promise<ChatCheckState> {
   try {
-    const response = await fetch(`/api/providers/${encodeURIComponent(providerId)}/chat-check`, {
+    const response = await fetch(apiUrl(`/api/providers/${encodeURIComponent(providerId)}/chat-check`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model_id: modelId }),

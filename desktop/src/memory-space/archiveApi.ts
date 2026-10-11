@@ -1,3 +1,4 @@
+import { apiUrl } from '../apiBase';
 import type { IdentityMode, Worldline } from './types';
 
 // S4-ARCHIVE Gate 2 transport adapters. The existing v11 REST seams are the
@@ -160,7 +161,7 @@ async function execute<T>(
   if (options.signal) requestInit.signal = options.signal;
   let response: Response;
   try {
-    response = await fetcher(url, requestInit);
+    response = await fetcher(apiUrl(url), requestInit);
   } catch {
     return { type: 'transport-error' };
   }

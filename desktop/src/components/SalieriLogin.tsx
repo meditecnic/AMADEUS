@@ -1,3 +1,4 @@
+import { apiUrl } from '../apiBase';
 import React, { useState, useEffect, useRef } from 'react';
 import './SalieriLogin.css';
 import { audioService } from '../services/AudioService';
@@ -165,7 +166,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
     setErrorField(null);
 
     try {
-      const response = await fetch('/api/auth/salieri', {
+      const response = await fetch(apiUrl('/api/auth/salieri'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
