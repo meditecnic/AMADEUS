@@ -1,4 +1,4 @@
-import { apiUrl } from '../apiBase';
+import { apiUrl, isPackagedTauri } from '../apiBase';
 import React, { useState, useEffect, useRef } from 'react';
 import './SalieriLogin.css';
 import { audioService } from '../services/AudioService';
@@ -16,6 +16,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
   // Which field the error belongs to; the message text is localized or a raw backend detail.
   const [errorField, setErrorField] = useState<'user' | 'password' | null>(null);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
+  const [backendStatus, setBackendStatus] = useState<'starting' | 'ready' | 'timeout'>(isPackagedTauri ? 'starting' : 'ready');
   const [scale, setScale] = useState(1);
   const [photoFailed, setPhotoFailed] = useState(false);
   const [logoFailed, setLogoFailed] = useState(false);
@@ -24,6 +25,42 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const errTimeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!isPackagedTauri) return;
+    let stopped = false;
+    let retryTimer: number | undefined;
+    const controller = new AbortController();
+    const deadline = window.setTimeout(() => {
+      stopped = true;
+      controller.abort();
+      setBackendStatus('timeout');
+    }, 30000);
+
+    const checkHealth = async () => {
+      try {
+        const response = await fetch(apiUrl('/health'), { signal: controller.signal });
+        if (stopped) return;
+        if (response.ok) {
+          stopped = true;
+          window.clearTimeout(deadline);
+          setBackendStatus('ready');
+          return;
+        }
+      } catch {
+        // 本地服务启动期间连接可能尚未建立，按间隔重试。
+      }
+      if (!stopped) retryTimer = window.setTimeout(() => { void checkHealth(); }, 1000);
+    };
+
+    void checkHealth();
+    return () => {
+      stopped = true;
+      controller.abort();
+      window.clearTimeout(deadline);
+      window.clearTimeout(retryTimer);
+    };
+  }, []);
 
   // 统一错误设置与 3s 自动清除并复原函数
   const showAuthError = (msg: string, field: 'user' | 'password') => {
@@ -143,6 +180,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (backendStatus !== 'ready') return;
     handleInitAudio();
     if (!userId) {
       showAuthError('请输入 USER ID', 'user');
@@ -257,7 +295,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
               <button
                 type="submit"
                 className="decrypt-btn"
-                disabled={isAuthenticating}
+                disabled={isAuthenticating || backendStatus !== 'ready'}
                 title="CONNECT"
                 aria-label="Decrypt and Connect"
               >
@@ -268,6 +306,12 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
                 </svg>
               </button>
             </div>
+
+            {backendStatus !== 'ready' && (
+              <div className="auth-error-banner backend-status-banner" role="status">
+                {backendStatus === 'starting' ? '正在启动本地服务…' : '本地服务没有启动，请重新打开 Amadeus'}
+              </div>
+            )}
 
             {errorMsg && (
               <div className="auth-error-banner glitch-flicker">

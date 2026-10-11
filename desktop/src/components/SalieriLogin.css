@@ -406,6 +406,15 @@
   box-sizing: border-box;
 }
 
+.backend-status-banner {
+  color: #bbab8a;
+  text-shadow: none;
+  background: none;
+  border: none;
+  font-weight: normal;
+  letter-spacing: 1px;
+}
+
 .input-error {
   color: #e60000 !important;
   border-color: rgba(230, 0, 0, 0.4) !important;
