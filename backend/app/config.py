@@ -1,6 +1,7 @@
 ﻿import os
 from pathlib import Path
 from dotenv import load_dotenv
+from app.db import get_data_root
 
 # Resolve paths
 backend_dir = Path(__file__).resolve().parent.parent
@@ -46,7 +47,7 @@ if not 300 <= VAD_SILENCE_MS <= 2000:
 
 # TTS reference audio paths (overridable via env vars)
 # Optimized 9-emotion mapping using RMS-normalized reference clips.
-DEFAULT_REF_AUDIO_DIR = backend_dir.parent / "desktop" / "public" / "assets" / "audio"
+DEFAULT_REF_AUDIO_DIR = get_data_root() / "voice-pack"
 REF_AUDIO_NEUTRAL = os.getenv("AMADEUS_REF_NEUTRAL", str(Path(DEFAULT_REF_AUDIO_DIR) / "ref" / "ref_neutral.wav"))
 REF_AUDIO_TSUNDERE = os.getenv("AMADEUS_REF_TSUNDERE", str(Path(DEFAULT_REF_AUDIO_DIR) / "ref" / "ref_tsundere.wav"))
 REF_AUDIO_EMBARRASSED = os.getenv("AMADEUS_REF_EMBARRASSED", str(Path(DEFAULT_REF_AUDIO_DIR) / "ref" / "ref_embarrassed.wav"))
