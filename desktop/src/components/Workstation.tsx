@@ -82,7 +82,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const storedTtsChoice = useRef<string | null>(null);
   const [enableTts, setEnableTts] = useState(() => {
     try { storedTtsChoice.current = localStorage.getItem('amadeus_pc_enable_tts'); } catch {}
-    return storedTtsChoice.current !== 'false';
+    return storedTtsChoice.current === 'true';
   });
   const [sovitsUrl, setSovitsUrl] = useState('http://127.0.0.1:9880');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -666,10 +666,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
     },
   });
 
-  // Without a voice service every reply would raise a TTS toast. Only an untouched default is switched off, and
-  // it is not persisted, so installing the service later brings read-aloud back on the next launch.
+  // Check the service when read-aloud is enabled without changing the user's saved choice.
   useEffect(() => {
-    if (storedTtsChoice.current !== null) return;
+    if (!enableTts) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -677,16 +676,13 @@ export const Workstation: React.FC<WorkstationProps> = ({
         if (!response.ok) return;
         const body = await response.json() as { dependencies?: { tts?: { ok?: boolean } } };
         if (cancelled || body.dependencies?.tts?.ok !== false) return;
-        setEnableTts(false);
-        updateConfig({ enableTts: false });
-        setAudioError('tts_absent');
+        setAudioError('service_unavailable');
       } catch {
         // Health is advisory; the per-turn TTS error path still applies.
       }
     })();
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [enableTts]);
 
   useEffect(() => {
     setActiveConversationId(null);

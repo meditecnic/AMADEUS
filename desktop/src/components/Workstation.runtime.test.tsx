@@ -312,19 +312,32 @@ describe('Workstation provider runtime changes', () => {
     return (calls[calls.length - 1]?.[0] as { enableTts?: boolean }).enableTts;
   };
 
-  it('turns read-aloud off with a single notice when no voice service is running', async () => {
-    stubTtsHealth(false);
+  it('defaults new users to read-aloud off even when a voice service is ready', async () => {
+    stubTtsHealth(true);
 
-    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
-
-    expect(await screen.findByTestId('audio-error-toast')).toHaveTextContent('未检测到语音服务');
+    const props = { onWorldlineChange: vi.fn(), onLogout: vi.fn() };
+    const view = render(<Workstation worldline="steins_gate" {...props} />);
+    expect(latestEnableTts()).toBe(false);
+    view.unmount();
+    render(<Workstation worldline="beta" {...props} />);
     expect(latestEnableTts()).toBe(false);
     expect(localStorage.getItem('amadeus_pc_enable_tts')).toBeNull();
   });
 
-  it('keeps an explicit read-aloud choice even when no voice service is running', async () => {
+  it('shows the no-service notice without changing an explicit read-aloud choice', async () => {
     localStorage.setItem('amadeus_pc_enable_tts', 'true');
     stubTtsHealth(false);
+
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+
+    expect(await screen.findByTestId('audio-error-toast')).toHaveTextContent('语音服务暂时不可用');
+    expect(latestEnableTts()).toBe(true);
+    expect(localStorage.getItem('amadeus_pc_enable_tts')).toBe('true');
+  });
+
+  it('keeps an explicit read-aloud choice when a voice service is ready', async () => {
+    localStorage.setItem('amadeus_pc_enable_tts', 'true');
+    stubTtsHealth(true);
 
     render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
 
