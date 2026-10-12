@@ -43,7 +43,7 @@ export function LegacyFactsView({ scope, archive, visible, searchRef, onCloseFin
         {!archive ? <button type="button" className="memory-panel-close" aria-label="关闭查找" onClick={onCloseFind}>×</button> : null}
       </header>
       <p className="memory-runtime-notice" role="status">
-        这些是对话中正在使用的记忆。逐条修改与删除暂不可用；可在会话菜单里遗忘某个会话的记忆。
+        这些是对话中正在使用的记忆，这里只能查看。要遗忘某个会话带来的记忆，请在会话菜单选择「清空聊天记录」并勾选遗忘选项。
       </p>
       <div className="archive-toolbar">
         <label className="memory-space-search">

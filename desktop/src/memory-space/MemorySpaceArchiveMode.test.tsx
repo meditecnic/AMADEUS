@@ -233,7 +233,7 @@ describe('Memory Space peer modes', () => {
     expect(screen.queryByText('只属于 USER 的红茶')).toBeNull();
     expect(screen.queryByText('只属于 USER 的共享档案')).toBeNull();
     expect(screen.queryByRole('button', { name: /纠正|删除|置顶|保存|忽略|重试任务|重命名/ })).toBeNull();
-    expect(screen.getByText('这些是对话中正在使用的记忆。逐条修改与删除暂不可用；可在会话菜单里遗忘某个会话的记忆。')).toBeTruthy();
+    expect(screen.getByText('这些是对话中正在使用的记忆，这里只能查看。要遗忘某个会话带来的记忆，请在会话菜单选择「清空聊天记录」并勾选遗忘选项。')).toBeTruthy();
     fireEvent.click(screen.getByTestId('memory-mode-constellation'));
     fireEvent.click(screen.getByRole('button', { name: '查找' }));
     fireEvent.change(screen.getByRole('textbox', { name: '搜索记忆' }), { target: { value: '晨跑' } });

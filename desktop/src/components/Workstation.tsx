@@ -2363,7 +2363,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           onCancel={() => { setDeleteTarget(null); setDeleteError(null); }}
         >
           <p>「{deleteTarget.title}」的聊天记录将被删除，已形成的长期记忆仍会保留。</p>
-          <p className="ws2-dialog-hint">要遗忘记忆，请在 Memory 中管理。</p>
+          <p className="ws2-dialog-hint">要同时遗忘这个会话的记忆，请改用「清空聊天记录」。</p>
         </ConfirmDialog>
       )}
 
