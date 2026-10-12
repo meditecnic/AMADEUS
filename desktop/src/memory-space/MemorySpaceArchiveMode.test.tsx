@@ -205,6 +205,43 @@ afterEach(() => {
 });
 
 describe('Memory Space peer modes', () => {
+  it('shows legacy chat facts in the archive without write buttons and filters the same facts in Find', async () => {
+    const legacyRequests: string[] = [];
+    mockApi((url) => {
+      if (url.startsWith('/api/memory/status?')) {
+        return okJson({ ...scopeBody, runtime_mode: 'legacy', pending_count: 0, processing_count: 0, failed_count: 0, failed_jobs: [] });
+      }
+      if (url.startsWith('/api/memory/facts?') && !new URL(url, 'http://localhost').searchParams.has('identity_mode')) {
+        legacyRequests.push(url);
+        return okJson({
+          local: [{ id: 1, fact_key: 'drink', fact_value: '只属于 USER 的红茶' }],
+          shared: [{ id: 2, fact_key: 'profile', fact_value: '只属于 USER 的共享档案' }],
+          okabe: [
+            { id: 3, fact_key: 'drink', fact_value: '对话记得我喜欢黑咖啡' },
+            { id: 4, fact_key: 'routine', fact_value: '对话记得我每天晨跑' },
+          ],
+        });
+      }
+      if (url.includes('/api/memory/graph/projection')) return okJson(projection);
+      return archiveBody(url) ?? okJson({});
+    });
+    render(<MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={() => undefined} />);
+    await screen.findByText('当前对话尚未使用本页的记忆。星图与档案暂供查看。');
+    fireEvent.click(screen.getByTestId('memory-mode-archive'));
+    await screen.findByText('对话记得我喜欢黑咖啡');
+    expect(screen.getByText('对话记得我每天晨跑')).toBeTruthy();
+    expect(screen.queryByText('只属于 USER 的红茶')).toBeNull();
+    expect(screen.queryByText('只属于 USER 的共享档案')).toBeNull();
+    expect(screen.queryByRole('button', { name: /纠正|删除|置顶|保存|忽略|重试任务|重命名/ })).toBeNull();
+    expect(screen.getByText('这些是对话中正在使用的记忆。逐条修改与删除暂不可用；可在会话菜单里遗忘某个会话的记忆。')).toBeTruthy();
+    fireEvent.click(screen.getByTestId('memory-mode-constellation'));
+    fireEvent.click(screen.getByRole('button', { name: '查找' }));
+    fireEvent.change(screen.getByRole('textbox', { name: '搜索记忆' }), { target: { value: '晨跑' } });
+    expect(screen.queryByText('对话记得我喜欢黑咖啡')).toBeNull();
+    expect(screen.getByText('对话记得我每天晨跑')).toBeTruthy();
+    expect(legacyRequests).toEqual(['/api/memory/facts?session_id=s&worldline=steins_gate']);
+  });
+
   it('defaults to Constellation and offers the ARCHIVE peer mode toggle', async () => {
     mountMemorySpace();
     await waitFor(() => {

@@ -4,6 +4,7 @@ import { motion } from 'motion/react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { ArchiveView } from './ArchiveView';
+import { LegacyFactsView } from './LegacyFactsView';
 import { parseMemoryStatusBody } from './archiveApi';
 import { createArchiveModule, type ArchiveModule } from './archiveState';
 import { MemoryResultOutline } from './MemoryResultOutline';
@@ -167,6 +168,7 @@ export function MemorySpace({
   const [projection, setProjection] = useState<ReturnType<typeof classifyOverviewState>['envelope']>(null);
   const [previousTruth, setPreviousTruth] = useState<typeof projection>(null);
   const [jobs, setJobs] = useState<JobSummary | null>(null);
+  const legacyFacts = Boolean(jobs?.runtime_mode && jobs.runtime_mode !== 'v11');
   const [topics, setTopics] = useState<TopicOption[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [soulOpen, setSoulOpen] = useState(false);
@@ -421,13 +423,13 @@ export function MemorySpace({
   const scopeKeyRef = useRef(scopeKey);
   scopeKeyRef.current = scopeKey;
   useEffect(() => {
-    if (mode !== 'archive') return;
+    if (mode !== 'archive' || legacyFacts) return;
     if (archiveOpenedRef.current === scopeKey) return;
     // A pending draft defers the scope switch behind the explicit discard
     // confirmation; the module settles it via onScopeChangeSettled.
     if (!archiveModuleRef.current?.open(scope, { restore: true })) return;
     archiveOpenedRef.current = scopeKey;
-  }, [mode, scope, scopeKey]);
+  }, [mode, scope, scopeKey, legacyFacts]);
 
   const openArchiveForRecord = (kind: 'fact' | 'experience', recordId: string) => {
     archiveOpenedRef.current = scopeKey;
@@ -1267,11 +1269,16 @@ export function MemorySpace({
         ) : null}
       </div>
 
-      {mode === 'archive' && archiveModuleRef.current ? (
+      {legacyFacts ? <LegacyFactsView key={scopeKey} scope={scope} archive={mode === 'archive'}
+        visible={mode === 'archive' || showList} searchRef={searchRef}
+        onCloseFind={() => { setListOpen(false); findToggleRef.current?.focus(); }}
+        onIdentity={setIdentityMode} onWorldline={setWorldline} /> : null}
+
+      {mode === 'archive' && !legacyFacts && archiveModuleRef.current ? (
         <ArchiveView module={archiveModuleRef.current} scope={scope} width={width} reducedMotion={reducedMotion} />
       ) : null}
 
-      {findMounted ? (
+      {findMounted && !legacyFacts ? (
         <motion.aside initial={reducedMotion ? false : { opacity: 0, x: -18 }} animate={{ opacity: 1, x: 0 }} transition={{ type: 'spring', stiffness: 270, damping: 29 }}
           id="memory-space-find"
           className="memory-space-find"

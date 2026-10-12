@@ -337,6 +337,11 @@
 .archive-toolbar, .archive-kind-tabs, .archive-topic-rename, .archive-governance, .archive-editor-actions, .archive-pager { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
 .archive-toolbar { padding-bottom: 12px; border-bottom: 1px solid var(--memory-line); }
 .archive-toolbar > :not(.archive-kind-tabs) { min-width: 0; }
+.legacy-facts-view .archive-toolbar { flex-shrink: 0; }
+.legacy-facts-list { min-height: 0; overflow: auto; }
+.legacy-facts-list h3 { color: var(--memory-muted); font-size: 13px; font-weight: 400; }
+.legacy-facts-list ul { margin: 0; padding: 0; list-style: none; }
+.legacy-facts-list li { padding: 16px 8px; border-bottom: 1px solid var(--memory-line); line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
 .archive-search input { width: min(220px, 35vw); }
 .archive-toolbar label { color: var(--memory-muted); font-size: 12px; }
 .archive-kind-tabs button[aria-selected="true"] { border-color: var(--memory-line-strong); background: var(--memory-accent-wash); color: var(--memory-text); }

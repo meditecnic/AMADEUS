@@ -85,6 +85,38 @@ export type ArchiveRequestOptions = {
   signal?: AbortSignal;
 };
 
+export type LegacyFact = { id: string; factKey: string; text: string };
+
+export function fetchLegacyFacts(
+  scope: ArchiveScope,
+  options: ArchiveRequestOptions = {},
+): Promise<ArchiveResult<LegacyFact[]>> {
+  const params = new URLSearchParams({ session_id: scope.sessionId, worldline: scope.worldline });
+  // Omitting identity_mode selects the legacy ledger; each identity has its own array.
+  return execute(`/api/memory/facts?${params}`, undefined, options, (body) => {
+    if (!body || typeof body !== 'object') return null;
+    const ledger = body as Record<string, unknown>;
+    const groups = scope.identityMode === 'okabe' ? ['okabe'] : ['local', 'shared'];
+    const facts: LegacyFact[] = [];
+    const localKeys = new Set<string>();
+    for (const group of groups) {
+      const rows = ledger[group];
+      if (!Array.isArray(rows)) return null;
+      for (const raw of rows) {
+        if (!raw || typeof raw !== 'object') return null;
+        const row = raw as Record<string, unknown>;
+        if (typeof row.id !== 'number' || !Number.isSafeInteger(row.id)
+          || !isString(row.fact_key) || !isString(row.fact_value)) return null;
+        // Match legacy self recall: the current worldline's local value wins.
+        if (group === 'shared' && localKeys.has(row.fact_key)) continue;
+        if (group === 'local') localKeys.add(row.fact_key);
+        facts.push({ id: `${group}:${row.id}`, factKey: row.fact_key, text: row.fact_value });
+      }
+    }
+    return facts;
+  });
+}
+
 function scopeParams(scope: ArchiveScope): URLSearchParams {
   return new URLSearchParams({
     session_id: scope.sessionId,
