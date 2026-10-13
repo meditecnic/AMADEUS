@@ -479,7 +479,8 @@ describe('formatTimeHuman', () => {
     expect(formatTimeHuman('2026-08-14T11:30:00Z', now)).toBe('30 分钟前');
     expect(formatTimeHuman('2026-08-14T07:00:00Z', now)).toBe('5 小时前');
     expect(formatTimeHuman('2026-08-12T12:00:00Z', now)).toBe('2 天前');
-    expect(formatTimeHuman('2026-05-01T00:00:00Z', now)).toContain('2026-05-01');
+    // No offset: parsed as local time, so the expected local string holds in any time zone.
+    expect(formatTimeHuman('2026-05-01T09:05:00', now)).toBe('2026-05-01 09:05');
   });
   it('returns null for unparseable values instead of inventing a time', () => {
     expect(formatTimeHuman('not-a-date', now)).toBeNull();
