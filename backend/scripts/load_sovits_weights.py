@@ -9,7 +9,7 @@ from pathlib import Path
 
 
 DEFAULT_ROOT = Path(
-    r"<LOCAL_PATH>"
+    r"D:\谷歌下载\gpt\GPT-SoVITS-v2pro-20250604\GPT-SoVITS-v2pro-20250604"
 )
 
 

@@ -1,0 +1,162 @@
+{
+  "version": 1,
+  "description": "Canonical STEINS;GATE proper-noun pronunciation lexicon. TTS surface only: entries rewrite the GPT-SoVITS target text and never inject lore, knowledge, or worldline facts. Canonical UI text, translations, history, prompts, diagnostics and client payloads are never changed.",
+  "entries": [
+    {
+      "surface": "牧瀬紅莉栖",
+      "spoken": "マキセクリス",
+      "kind": "character",
+      "evidence": "STEINS;GATE 公式キャラクター紹介の読み仮名（まきせ くりす）"
+    },
+    {
+      "surface": "牧瀬",
+      "spoken": "マキセ",
+      "kind": "alias",
+      "evidence": "牧瀬紅莉栖の公式読みの姓部分"
+    },
+    {
+      "surface": "紅莉栖",
+      "spoken": "クリス",
+      "kind": "alias",
+      "evidence": "牧瀬紅莉栖の公式読みの名部分・作中呼称クリス"
+    },
+    {
+      "surface": "岡部倫太郎",
+      "spoken": "オカベリンタロウ",
+      "kind": "character",
+      "evidence": "STEINS;GATE 公式キャラクター紹介の読み仮名（おかべ りんたろう）"
+    },
+    {
+      "surface": "岡部",
+      "spoken": "オカベ",
+      "kind": "alias",
+      "evidence": "岡部倫太郎の公式読みの姓部分・紅莉栖の常用呼称"
+    },
+    {
+      "surface": "鳳凰院凶真",
+      "spoken": "ホウオウインキョウマ",
+      "kind": "alias",
+      "evidence": "岡部倫太郎の自称・アニメ音声での読み（ほうおういん きょうま）"
+    },
+    {
+      "surface": "鳳凰院",
+      "spoken": "ホウオウイン",
+      "kind": "alias",
+      "evidence": "鳳凰院凶真の読みの姓部分"
+    },
+    {
+      "surface": "凶真",
+      "spoken": "キョウマ",
+      "kind": "alias",
+      "evidence": "鳳凰院凶真の読みの名部分"
+    },
+    {
+      "surface": "椎名まゆり",
+      "spoken": "シイナマユリ",
+      "kind": "character",
+      "evidence": "STEINS;GATE 公式キャラクター紹介の読み仮名（しいな まゆり）"
+    },
+    {
+      "surface": "橋田至",
+      "spoken": "ハシダイタル",
+      "kind": "character",
+      "evidence": "STEINS;GATE 公式キャラクター紹介の読み仮名（はしだ いたる）"
+    },
+    {
+      "surface": "阿万音鈴羽",
+      "spoken": "アマネスズハ",
+      "kind": "character",
+      "evidence": "STEINS;GATE 公式キャラクター紹介の読み仮名（あまね すずは）"
+    },
+    {
+      "surface": "天王寺裕吾",
+      "spoken": "テンノウジユウゴ",
+      "kind": "character",
+      "evidence": "STEINS;GATE 公式キャラクター紹介の読み仮名（てんのうじ ゆうご）"
+    },
+    {
+      "surface": "桐生萌郁",
+      "spoken": "キリュウモエカ",
+      "kind": "character",
+      "evidence": "STEINS;GATE 公式キャラクター紹介の読み仮名（きりゅう もえか）"
+    },
+    {
+      "surface": "漆原るか",
+      "spoken": "ウルシバラルカ",
+      "kind": "character",
+      "evidence": "STEINS;GATE 公式キャラクター紹介の読み仮名（うるしばら るか）"
+    },
+    {
+      "surface": "秋葉留未穂",
+      "spoken": "アキハルミホ",
+      "kind": "character",
+      "evidence": "STEINS;GATE 公式キャラクター紹介の読み仮名（あきは るみほ、通称フェイリス）"
+    },
+    {
+      "surface": "比屋定真帆",
+      "spoken": "ヒヤジョウマホ",
+      "kind": "character",
+      "evidence": "STEINS;GATE 0 公式キャラクター紹介の読み仮名（ひやじょう まほ）"
+    },
+    {
+      "surface": "阿万音由季",
+      "spoken": "アマネユキ",
+      "kind": "character",
+      "evidence": "STEINS;GATE 0 公式キャラクター紹介の読み仮名（あまね ゆき）"
+    },
+    {
+      "surface": "椎名かがり",
+      "spoken": "シイナカガリ",
+      "kind": "character",
+      "evidence": "STEINS;GATE 0 公式キャラクター紹介の読み仮名（しいな かがり）"
+    },
+    {
+      "surface": "Amadeus",
+      "spoken": "アマデウス",
+      "kind": "system",
+      "evidence": "STEINS;GATE 0 作中システム名の読み（アマデウス）"
+    },
+    {
+      "surface": "STEINS;GATE",
+      "spoken": "シュタインズゲート",
+      "kind": "system",
+      "evidence": "作品タイトルの公式読み（シュタインズ・ゲート）"
+    },
+    {
+      "surface": "未来ガジェット研究所",
+      "spoken": "ミライガジェットケンキュウジョ",
+      "kind": "organization",
+      "evidence": "作中組織名・アニメ音声での読み（みらいがじぇっとけんきゅうじょ）"
+    },
+    {
+      "surface": "Dメール",
+      "spoken": "ディーメール",
+      "kind": "system",
+      "evidence": "作中用語・アニメ音声での読み（ディーメール）"
+    },
+    {
+      "surface": "SERN",
+      "spoken": "セルン",
+      "kind": "organization",
+      "evidence": "作中組織名・アニメ音声での読み（セルン）"
+    },
+    {
+      "surface": "@ちゃんねる",
+      "spoken": "アットチャンネル",
+      "kind": "system",
+      "evidence": "作中掲示板名・アニメ音声での読み（アットちゃんねる）"
+    },
+    {
+      "surface": "@ch",
+      "spoken": "アットチャンネル",
+      "kind": "handle",
+      "evidence": "@ちゃんねるの略記（本プロダクト回帰コーパスで頻出）"
+    },
+    {
+      "surface": "栗悟飯とカメハメ波",
+      "spoken": "クリゴハントカメハメハ",
+      "kind": "handle",
+      "evidence": "紅莉栖の@ちゃんねる名義・タスク契約指定の読み"
+    }
+  ]
+}

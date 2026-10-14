@@ -1,6 +1,6 @@
 # Third-party notices
 
-Third-party software, models and fonts retain their own licenses. STEINS;GATE characters, names and original materials are not covered by the license for this project's original source code.
+The root MIT license applies to this project's original source code. Third-party software, models and fonts retain their own licenses. STEINS;GATE characters, names and original materials are not licensed by this project's MIT license.
 
 ## Fonts
 

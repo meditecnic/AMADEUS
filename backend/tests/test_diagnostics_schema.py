@@ -151,7 +151,7 @@ def test_error_summary_is_redacted_and_bounded():
         validate_event(
             _event(
                 status="failed",
-                error_summary="sqlite error at C:/Users/example\\secret.db",
+                error_summary="sqlite error at C:\\Users\\example\\secret.db",
             )
         )
 
