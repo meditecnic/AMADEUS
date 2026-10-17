@@ -454,17 +454,33 @@ describe('Workstation S4-DS dark-only chrome', () => {
     expect(app).not.toMatch(/import\s+['"]\.\/App\.css['"]/);
   });
 
-  it('SG and β worldline token anchors are statically distinct', () => {
-    const appCss = fs.readFileSync(path.resolve(__dirname, '../App.css'), 'utf8');
+  it('SG and β share accent aliases while resolving to their canonical worldline colors', () => {
     const tokens = fs.readFileSync(path.resolve(__dirname, '../design-system/tokens.css'), 'utf8');
-    // Anchors (CSS source). Static distinction also uses --wl-surface-tint / selected-edge.
-    expect(appCss).toMatch(/\.worldline-sg[\s\S]{0,400}--wl-accent:\s*#d97a2d/);
-    expect(appCss).toMatch(/\.worldline-beta[\s\S]{0,400}--wl-accent:\s*#c64b3a/);
-    expect(appCss).toMatch(/--wl-surface-tint/);
-    expect(appCss).toMatch(/--wl-selected-edge/);
-    // β is not a simple dim of SG orange family alone — iron-red family present.
-    expect(appCss).toMatch(/#c64b3a|#f18468/);
-    expect(tokens).toMatch(/--color-signal:\s*#d96f24/);
-    expect(tokens).toMatch(/--color-gold:\s*#c6a45f/);
+    const scale = tokens.match(/:root\s*\{([^}]+)\}/)?.[1] ?? '';
+    const aliases = tokens.match(/:root,\s*\[data-wl\],\s*\[data-worldline\]\s*\{([^}]+)\}/)?.[1] ?? '';
+    const resolve = (worldline: 'sg' | 'steins_gate' | 'beta', alias: string): string => {
+      const attribute = worldline === 'steins_gate' ? 'data-worldline' : 'data-wl';
+      const semantic = tokens.match(new RegExp(`\\[${attribute}='${worldline}'\\][^{]*\\{([^}]+)\\}`))?.[1] ?? '';
+      const roles = new Map([...`${scale}${semantic}${aliases}`.matchAll(/(--[\w-]+):\s*([^;]+);/g)]
+        .map((match) => [match[1], match[2].trim()]));
+      let value = roles.get(alias);
+      const visited = new Set<string>();
+      while (value?.startsWith('var(')) {
+        expect(visited.has(value)).toBe(false);
+        visited.add(value);
+        value = roles.get(value.slice(4, -1));
+      }
+      expect(value).toBeDefined();
+      return value ?? '';
+    };
+    for (const alias of ['--wl-accent', '--ws-accent', '--color-signal']) {
+      expect(resolve('sg', alias)).toBe('#8fdcff');
+      // Memory browses independently of its workstation parent and uses the API's
+      // worldline name; returning from β must reset its own semantic boundary.
+      expect(resolve('steins_gate', alias)).toBe('#8fdcff');
+      expect(resolve('beta', alias)).toBe('#e98a4f');
+    }
+    expect(resolve('sg', '--ws-accent-2')).toBe('#ff9cc3');
+    expect(resolve('beta', '--ws-accent-2')).toBe('#c9a063');
   });
 });

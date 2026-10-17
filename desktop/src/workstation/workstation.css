@@ -25,10 +25,6 @@
   --ws-serif: 'EB Garamond', 'Garamond', Georgia, serif;
   --ws-serif-cjk: 'Noto Serif SC', 'Noto Serif JP', 'Source Han Serif SC', 'STSong', serif;
   --ws-serif-jp: 'Noto Serif JP', 'Noto Serif SC', 'Yu Mincho', serif;
-  --nixie: #ffb36b;
-  --nixie-glow: 255, 110, 20;
-  --ws-ok: #43d68a;
-  --ws-bad: #ff6b5e;
   --ws-side: 256px;
   /* Her head starts below the header band (60px + air), so header instruments never sit on her hair or face. */
   --ws-head: 78px;
@@ -54,7 +50,7 @@
   .ws2-top-right { gap: 12px; }
   .ws2:not(.rail) .ws2-side {
     position: absolute; top: 0; bottom: 0; left: 0; width: 256px; z-index: 8;
-    background: var(--ws-panel); backdrop-filter: blur(16px); box-shadow: 18px 0 40px rgba(0, 0, 0, .45);
+    background: var(--ws-panel); backdrop-filter: blur(16px); box-shadow: 18px 0 40px color-mix(in srgb, var(--shadow-tone) 45%, transparent);
     animation: ws2-drawer .34s cubic-bezier(.2, .8, .2, 1) both;
     border-right-color: var(--ws-line-2);
   }
@@ -71,43 +67,9 @@
 
 /* SG: the original's grey-white drafting UI — graphite, paper white, hairlines; colour is left to her and the art.
  * Cyan and pink appear only as small inlays (the approved Memory key), never as fills. */
-.ws2[data-wl='sg'] {
-  --ws-bg: #0a0b0d;
-  --ws-ink: #ecebe7;
-  --ws-ink-2: rgba(236, 235, 231, .6);
-  --ws-ink-3: rgba(236, 235, 231, .5);
-  --ws-line: rgba(222, 224, 228, .11);
-  --ws-line-2: rgba(222, 224, 228, .22);
-  --ws-accent: #8fdcff;
-  --ws-accent-2: #ff9cc3;
-  --ws-accent-rgb: 143, 220, 255;
-  --ws-panel: rgba(10, 11, 13, .88);
-  /* Her afterimage from the neighbouring worldline: a pale, hard offset copy. */
-  --ws-slab: rgba(214, 222, 230, .085);
-  --ws-light: radial-gradient(900px 780px at 84% 30%, rgba(214, 222, 230, .1), transparent 62%),
-              radial-gradient(640px 520px at 62% 34%, rgba(96, 104, 214, .075), transparent 68%),
-              radial-gradient(520px 420px at 76% 88%, rgba(143, 220, 255, .035), transparent 70%),
-              linear-gradient(180deg, #0c0d10 0%, #08090a 100%);
-  --ws-rim: drop-shadow(0 0 1px rgba(240, 240, 236, .4));
-}
+/* Worldline color roles and their aliases live in design-system/tokens.css. */
 /* β: STEINS;GATE 0's Amadeus — a cold slate window with rust-copper hardware. Body text stays neutral. */
-.ws2[data-wl='beta'] {
-  --ws-bg: #0b0b0c;
-  --ws-ink: #ede6dd;
-  --ws-ink-2: rgba(237, 230, 221, .58);
-  --ws-ink-3: rgba(237, 230, 221, .52);
-  --ws-line: rgba(214, 190, 166, .12);
-  --ws-line-2: rgba(214, 190, 166, .23);
-  --ws-accent: #e98a4f;
-  --ws-accent-2: #c9a063;
-  --ws-accent-rgb: 233, 138, 79;
-  --ws-panel: rgba(12, 12, 13, .88);
-  --ws-slab: rgba(201, 110, 58, .16);
-  --ws-light: radial-gradient(860px 620px at 82% 104%, rgba(233, 128, 62, .13), transparent 62%),
-              radial-gradient(760px 560px at 10% -12%, rgba(84, 100, 116, .16), transparent 70%),
-              linear-gradient(180deg, #0e0e10 0%, #070707 100%);
-  --ws-rim: drop-shadow(0 0 1px rgba(255, 214, 176, .38));
-}
+
 
 .ws2 button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
 .ws2 button:disabled { cursor: default; }
@@ -188,7 +150,7 @@
 @media (max-width: 1239px) { .ws2-top-right .ws2-memory-zh { display: none; } .ws2-memory-btn { padding: 5px; } }
 .ws2-online-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
 .ws2-online.is-online { color: var(--ws-ok); }
-.ws2-online.is-sync { color: #e8b04a; }
+.ws2-online.is-sync { color: var(--ws-warn); }
 .ws2-online.is-sync .ws2-online-dot { animation: ws2-blink 1s steps(2) infinite; }
 @keyframes ws2-blink { 50% { opacity: .25; } }
 /* System key: the title menu's plate — SG an off-white slab with a short cyan tick, β a copper hex plate. */
@@ -234,7 +196,7 @@
     repeating-linear-gradient(-60deg, rgba(255, 255, 255, .03) 0 1px, transparent 1px 4px),
     linear-gradient(90deg, rgba(255, 255, 255, .02), rgba(255, 255, 255, .1) 22%, rgba(255, 255, 255, .02) 40%, rgba(255, 255, 255, 0) 70%, rgba(255, 255, 255, .06)),
     linear-gradient(180deg, rgba(40, 24, 14, .55), rgba(12, 8, 6, .7));
-  box-shadow: inset 0 0 0 1px rgba(255, 235, 210, .13), inset 0 calc(var(--w) * .12) calc(var(--w) * .2) rgba(255, 255, 255, .05);
+  box-shadow: inset 0 0 0 1px rgba(255, 235, 210, .13), inset 0 calc(var(--w) * .12) calc(var(--w) * .2) color-mix(in srgb, var(--highlight-tone) 5%, transparent);
 }
 .nx-ghost, .nx-lit { position: absolute; left: 14%; top: 17%; width: 72%; height: 74%; overflow: visible; }
 .nx-ghost path { fill: none; stroke: rgba(255, 196, 150, .075); stroke-width: .55; stroke-linecap: round; stroke-linejoin: round; }
@@ -247,7 +209,7 @@
 .nixie-base {
   position: relative; height: calc(var(--h) * .34); margin: 0 calc(var(--w) * -.35); border-radius: 3px;
   background: radial-gradient(circle, rgba(255, 255, 255, .09) 0 1px, transparent 1.6px) 0 0 / 7px 7px, linear-gradient(180deg, #1b1b1d, #0a0a0b);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .14), inset 0 -2px 0 rgba(0, 0, 0, .6), 0 10px 30px rgba(0, 0, 0, .5);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--highlight-tone) 14%, transparent), inset 0 -2px 0 color-mix(in srgb, var(--shadow-tone) 60%, transparent), 0 10px 30px color-mix(in srgb, var(--shadow-tone) 50%, transparent);
 }
 .nixie-base i { position: absolute; top: 28%; width: 6px; height: 10px; border-radius: 2px; background: #3a2c20; box-shadow: inset 0 0 0 1px rgba(255, 200, 150, .15); }
 .nixie-base i:nth-child(1) { left: 12%; }
@@ -304,7 +266,7 @@
 .ws2 .conversation-menu {
   position: absolute; top: calc(100% + 4px); right: 0; z-index: 20; min-width: 168px; padding: 6px 6px 6px 8px;
   border: 1px solid var(--ws-line-2); border-radius: 0; background: var(--ws-panel); backdrop-filter: blur(16px);
-  box-shadow: inset 2px 0 0 var(--ws-accent), 0 18px 40px rgba(0, 0, 0, .5); animation: ws2-body-in .14s ease-out;
+  box-shadow: var(--plate-bevel), inset 2px 0 0 var(--ws-accent), 0 18px 40px color-mix(in srgb, var(--shadow-tone) 50%, transparent); animation: ws2-body-in .14s ease-out;
 }
 .ws2 .conversation-menu button {
   display: block; width: 100%; height: 32px; padding: 0 12px; border-radius: 0; text-align: left;
@@ -349,7 +311,7 @@
 .ws2-check-btn.ghost { color: var(--ws-ink-2); box-shadow: inset 0 0 0 1px var(--ws-line); }
 .ws2-apply-error { display: inline-flex; align-items: center; gap: 6px; padding: 2px 4px 2px 9px; border-radius: 999px; border: 1px solid rgba(255, 107, 94, .45); background: var(--ws-bg); font-size: 11px; line-height: 1.5; color: var(--ws-bad); }
 .ws2-apply-error button { width: 18px; height: 18px; border-radius: 50%; font-size: 12px; line-height: 1; color: var(--ws-bad); }
-.ws2-provider-gone { flex: none; padding: 9px 14px; border-left: 2px solid #e8b04a; background: rgba(232, 176, 74, .07); font-size: 12.5px; line-height: 1.7; color: var(--ws-ink); }
+.ws2-provider-gone { flex: none; padding: 9px 14px; border-left: 2px solid var(--ws-warn); background: color-mix(in srgb, var(--ws-warn) 7%, transparent); font-size: 12.5px; line-height: 1.7; color: var(--ws-ink); }
 .ws2-pending { padding: 2px 8px; border-radius: 999px; border: 1px dashed rgba(var(--ws-accent-rgb), .5); background: var(--ws-bg); font-size: 11px; line-height: 1.5; color: var(--ws-accent); overflow-wrap: anywhere; }
 /* Model-state notes hang on the composer's top edge instead of competing with the controls, so a long model id
  * reads in full; long text grows upward, never over the textarea. */
@@ -415,7 +377,7 @@
 .ws2-picker-pop {
   position: absolute; left: 0; bottom: calc(100% + 10px); z-index: 30; width: 320px; max-height: min(420px, 60vh); display: flex; flex-direction: column;
   padding: 8px; border: 1px solid var(--ws-line-2); border-radius: 12px; background: var(--ws-panel); backdrop-filter: blur(18px);
-  box-shadow: 0 -18px 50px rgba(0, 0, 0, .5); animation: ws2-body-in .14s ease-out;
+  box-shadow: var(--plate-bevel), 0 -18px 50px color-mix(in srgb, var(--shadow-tone) 50%, transparent); animation: ws2-body-in .14s ease-out;
 }
 .ws2-picker-search { flex: none; height: 34px; margin-bottom: 6px; padding: 0 10px; border: 0; border-bottom: 1px solid var(--ws-line-2); background: rgba(0, 0, 0, .25); font-size: 13px; color: var(--ws-ink); outline: none; }
 .ws2-picker-search:focus { border-bottom-color: var(--ws-accent); }
@@ -438,9 +400,9 @@
 .ws2-dialog-scrim { position: absolute; inset: 0; z-index: 70; display: grid; place-items: center; background: rgba(0, 0, 0, .5); backdrop-filter: blur(3px); animation: ws2-fade-in .14s ease-out; }
 .ws2-dialog {
   width: min(440px, calc(100% - 48px)); padding: 24px 26px 20px; border: 1px solid var(--ws-line-2); border-radius: 0;
-  background: var(--ws-panel); backdrop-filter: blur(18px); box-shadow: inset 0 2px 0 var(--ws-accent), 0 30px 80px rgba(0, 0, 0, .6); animation: ws2-body-in .18s ease-out;
+  background: var(--ws-panel); backdrop-filter: blur(18px); box-shadow: var(--plate-bevel), inset 0 2px 0 var(--ws-accent), 0 30px 80px color-mix(in srgb, var(--shadow-tone) 60%, transparent); animation: ws2-body-in .18s ease-out;
 }
-.ws2-dialog:has(.ws2-dialog-confirm.danger) { box-shadow: inset 0 2px 0 var(--ws-bad), 0 30px 80px rgba(0, 0, 0, .6); }
+.ws2-dialog:has(.ws2-dialog-confirm.danger) { box-shadow: var(--plate-bevel), inset 0 2px 0 var(--ws-bad), 0 30px 80px color-mix(in srgb, var(--shadow-tone) 60%, transparent); }
 .ws2-dialog h3 { margin: 0 0 12px; font-family: var(--ws-serif-cjk); font-size: 20px; font-weight: 400; letter-spacing: .1em; color: var(--ws-ink); }
 .ws2-dialog-body p { margin: 0 0 6px; font-family: var(--ws-read); font-size: 14px; line-height: 1.75; color: var(--ws-ink-2); }
 .ws2-dialog-body .ws2-dialog-hint { font-size: 12px; color: var(--ws-ink-3); }
@@ -590,7 +552,7 @@
   background-repeat: no-repeat;
   background-size: 10px 1px, 1px 10px, 10px 1px, 1px 10px, 10px 1px, 1px 10px, 10px 1px, 1px 10px;
   background-position: 0 0, 0 0, 100% 0, 100% 0, 0 100%, 0 100%, 100% 100%, 100% 100%;
-  box-shadow: inset 0 -1px 0 var(--ws-line-2);
+  box-shadow: var(--plate-bevel), inset 0 -1px 0 var(--ws-line-2);
   transition: box-shadow .2s;
 }
 /* Focus is drawn once, by the frame and inside it: the crop marks close into a hairline and the floor takes the accent. */
@@ -745,7 +707,7 @@
 .ws2 .avatar-stage::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 22%; background: linear-gradient(0deg, var(--ws-bg) 8%, rgba(0, 0, 0, 0)); pointer-events: none; }
 /* Plate: her voice (scope) and presence — one instrument in the lower-right corner of the booth. The chapter card carries her name. */
 .ws2-plate { position: absolute; right: 18px; bottom: 18px; z-index: 3; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
-.ws2-presence { text-shadow: 0 1px 2px rgba(0, 0, 0, .9), 0 0 12px rgba(0, 0, 0, .8); }
+.ws2-presence { text-shadow: 0 1px 2px color-mix(in srgb, var(--shadow-tone) 90%, transparent), 0 0 12px color-mix(in srgb, var(--shadow-tone) 80%, transparent); }
 
 .ws2-scope { display: flex; align-items: center; gap: 6px; }
 .ws2-scope-body {
@@ -786,8 +748,8 @@
 }
 .ws2 .ws2-toasts .audio-error-toast {
   position: static; transform: none; margin: 0; pointer-events: auto; display: flex; flex-wrap: wrap; align-items: center; column-gap: 12px; row-gap: 0; max-width: 520px; min-height: 36px;
-  padding: 6px 14px 6px 16px; border-radius: 0; border: 1px solid var(--ws-line); border-left: 3px solid #e8b04a; background: var(--ws-bg); line-height: 1.5;
-  font-family: var(--ws-sans); font-size: 12.5px; letter-spacing: .02em; color: var(--ws-ink); box-shadow: 0 10px 30px rgba(0, 0, 0, .35);
+  padding: 6px 14px 6px 16px; border-radius: 0; border: 1px solid var(--ws-line); border-left: 3px solid var(--ws-warn); background: var(--ws-bg); line-height: 1.5;
+  font-family: var(--ws-sans); font-size: 12.5px; letter-spacing: .02em; color: var(--ws-ink); box-shadow: 0 10px 30px color-mix(in srgb, var(--shadow-tone) 35%, transparent);
   animation: ws2-toast-in .3s cubic-bezier(.2, .7, .2, 1) both;
 }
 .ws2 .ws2-toasts .audio-error-toast.info { border-left-color: var(--ws-ink-3); }
@@ -866,9 +828,8 @@
 .ws2-sys-item.back .zh { font-size: 14px; letter-spacing: .24em; }
 .ws2-sys-item.back .pad { border-radius: 0; width: 7px; height: 7px; margin: 0 1px; transform: rotate(45deg); }
 /* Plates: SG is a flat rectangle with a tick (original title menu); β has hex ends (0 / RE:BOOT nameplates). */
-.ws2 { --ws-blade: #e4e3de; --ws-blade-ink: #0a0b0d; --ws-tick: var(--ws-accent); --ws-plate-cut: none; }
+.ws2 { --ws-plate-cut: none; }
 .ws2[data-wl='beta'] {
-  --ws-blade: #d98550; --ws-blade-ink: #140b06; --ws-tick: transparent;
   --ws-plate-cut: polygon(8px 0, calc(100% - 8px) 0, 100% 50%, calc(100% - 8px) 100%, 8px 100%, 0 50%);
 }
 
@@ -963,8 +924,8 @@
 @keyframes ws2-fade-in { to { opacity: 1; } }
 
 /* Arming a target: the meter retunes, the target line carries current toward its end, a reticle locks on, the shift key lights in the target's hue. */
-.ws2-wl-panel { --tgt: #e98a4f; --tgt-rgb: 233, 138, 79; }
-.ws2-wl-panel[data-target='sg'] { --tgt: #8fdcff; --tgt-rgb: 143, 220, 255; }
+.ws2-wl-panel { --tgt: var(--accent-primary); --tgt-rgb: var(--accent-rgb); }
+.ws2-wl-panel[data-target='sg'] { --tgt: var(--accent-primary); --tgt-rgb: var(--accent-rgb); }
 .ws2-wl-hero .tubes { display: inline-flex; }
 .nixie-tube.tuning .nx-lit { opacity: .55 !important; animation: none !important; filter: drop-shadow(0 0 2px rgba(255, 110, 20, .7)); }
 .nixie-tube.tuning .nx-ghost path { stroke: rgba(255, 196, 150, .16); }
@@ -1071,7 +1032,7 @@
 /* Shared select menu (portalled onto .ws2): the system-menu plates instead of the orange legacy list. */
 .ws2 .salieri-select-menu {
   padding: 6px 6px 6px 8px; border: 1px solid var(--ws-line-2); border-radius: 0; background: var(--ws-panel); backdrop-filter: blur(16px);
-  box-shadow: inset 2px 0 0 var(--ws-accent), 0 18px 40px rgba(0, 0, 0, .5); font-family: var(--ws-sans);
+  box-shadow: var(--plate-bevel), inset 2px 0 0 var(--ws-accent), 0 18px 40px color-mix(in srgb, var(--shadow-tone) 50%, transparent); font-family: var(--ws-sans);
 }
 .ws2 .salieri-select-option { padding: 7px 12px; font-size: 12.5px; letter-spacing: .06em; color: var(--ws-ink-2); background: none; box-shadow: none; }
 .ws2 .salieri-select-option.is-active { color: var(--ws-ink); background: rgba(255, 255, 255, .06); }

@@ -127,7 +127,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
     return () => clearInterval(typeTimer); // 在 unmount 时彻底销毁计时器，规避竞争
   }, []);
 
-  // 3. Canvas 动态 0/1 金黄色数字雨 (150ms 刷新)
+  // 3. Canvas rain reads the same semantic ink as the login controls.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -152,7 +152,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
       ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      ctx.fillStyle = 'rgba(255, 170, 0, 0.58)';
+      ctx.fillStyle = getComputedStyle(canvas).color;
       ctx.font = `${fontSize}px monospace`;
 
       for (let i = 0; i < drops.length; i++) {

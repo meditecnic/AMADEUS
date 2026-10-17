@@ -1,104 +1,300 @@
-/* S4-DS canonical dark Amadeus instrument tokens + self-hosted typefaces (no CDN).
- * Single product visual authority — not a multi-theme switcher.
- * Font-face chunks: public/assets/fonts/s4-ds/
+/* Amadeus color sources. Order: raw scale → semantic roles → component aliases.
+ * data-wl / data-worldline change semantic roles only. Motion lives in motion.css.
+ * Physical nixie amber is an identical material in both worldlines (canon §1.5),
+ * never a focus, selection, text-input or other UI accent.
  */
 @import url('/assets/fonts/s4-ds/font-faces.generated.css');
 
+/* 1. Raw scale: immutable swatches, type families and dimensions. */
 :root {
   --font-brand: 'Oxanium', 'Segoe UI', system-ui, sans-serif;
   --font-ui: 'Noto Sans SC', 'Noto Sans JP', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
   --font-ja: 'Noto Sans JP', 'Noto Sans SC', 'Yu Gothic', 'Hiragino Sans', sans-serif;
   --font-mono: 'IBM Plex Mono', 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
   --font-display: var(--font-brand);
+  --scale-black: #000;
+  --scale-white: #fff;
+  --scale-ok: #43d68a;
+  --scale-error: #ff6b5e;
+  --scale-warning: #e8b04a;
+  --scale-danger: #c94f3f;
+  --scale-danger-dim: #7a2e26;
+  --scale-nixie: #ffb36b;
+  --scale-nixie-glow: 255, 110, 20;
+  --scale-sg-surface-1: #121316;
+  --scale-sg-surface-2: #1a1c20;
+  --scale-sg-surface-3: #23262b;
+  --scale-beta-surface-1: #12100d;
+  --scale-beta-surface-2: #1a1510;
+  --scale-beta-surface-3: #292017;
+  --scale-sg-blade: #e4e3de;
+  --scale-beta-blade: #d98550;
+  --scale-beta-blade-ink: #140b06;
+  --scale-space-1: 4px;
+  --scale-space-2: 8px;
+  --scale-space-3: 12px;
+  --scale-space-4: 16px;
+  --scale-space-6: 24px;
+  --scale-type-small: 11px;
+  --scale-type-body: 14px;
+  --scale-type-title: 20px;
+  --scrollbar-size: 6px;
+  --scale-sg-surface-0: #0a0b0d;
+  --scale-sg-ink-primary: #ecebe7;
+  --scale-sg-ink-secondary: rgba(236, 235, 231, .6);
+  --scale-sg-ink-tertiary: rgba(236, 235, 231, .5);
+  --scale-sg-line-primary: rgba(222, 224, 228, .11);
+  --scale-sg-line-strong: rgba(222, 224, 228, .22);
+  --scale-sg-accent-primary: #8fdcff;
+  --scale-sg-accent-secondary: #ff9cc3;
+  --scale-sg-accent-rgb: 143, 220, 255;
+  --scale-sg-surface-panel: rgba(10, 11, 13, .88);
+  --scale-sg-surface-slab: rgba(214, 222, 230, .085);
+  --scale-sg-surface-atmosphere: radial-gradient(900px 780px at 84% 30%, rgba(214, 222, 230, .1), transparent 62%),
+              radial-gradient(640px 520px at 62% 34%, rgba(96, 104, 214, .075), transparent 68%),
+              radial-gradient(520px 420px at 76% 88%, rgba(143, 220, 255, .035), transparent 70%),
+              linear-gradient(180deg, #0c0d10 0%, #08090a 100%);
+  --scale-sg-ink-rim: #f0f0ec;
+  --scale-sg-surface-memory-bg: #080d12;
+  --scale-sg-surface-memory-panel: rgba(13, 21, 29, .92);
+  --scale-sg-ink-memory-primary: #e7eef3;
+  --scale-sg-ink-memory-muted: #9baab5;
+  --scale-sg-ink-memory-faint: #8496a4;
+  --scale-sg-ink-memory-rgb: 146, 190, 206;
+  --scale-sg-line-memory-primary: rgba(163, 190, 210, .2);
+  --scale-sg-line-memory-strong: rgba(172, 204, 226, .42);
+  --scale-sg-accent-memory: #a8c6d9;
+  --scale-sg-accent-memory-wash: rgba(140, 181, 207, .16);
+  --scale-sg-status-memory-danger: #e19b92;
+  --scale-beta-surface-0: #0b0b0c;
+  --scale-beta-ink-primary: #ede6dd;
+  --scale-beta-ink-secondary: rgba(237, 230, 221, .58);
+  --scale-beta-ink-tertiary: rgba(237, 230, 221, .52);
+  --scale-beta-line-primary: rgba(214, 190, 166, .12);
+  --scale-beta-line-strong: rgba(214, 190, 166, .23);
+  --scale-beta-accent-primary: #e98a4f;
+  --scale-beta-accent-secondary: #c9a063;
+  --scale-beta-accent-rgb: 233, 138, 79;
+  --scale-beta-surface-panel: rgba(12, 12, 13, .88);
+  --scale-beta-surface-slab: rgba(201, 110, 58, .16);
+  --scale-beta-surface-atmosphere: radial-gradient(860px 620px at 82% 104%, rgba(233, 128, 62, .13), transparent 62%),
+              radial-gradient(760px 560px at 10% -12%, rgba(84, 100, 116, .16), transparent 70%),
+              linear-gradient(180deg, #0e0e10 0%, #070707 100%);
+  --scale-beta-ink-rim: #ffd6b0;
+  --scale-beta-surface-memory-bg: #100d0a;
+  --scale-beta-surface-memory-panel: rgba(25, 19, 13, .93);
+  --scale-beta-ink-memory-primary: #f2e8d9;
+  --scale-beta-ink-memory-muted: #c1ae96;
+  --scale-beta-ink-memory-faint: #ae967a;
+  --scale-beta-ink-memory-rgb: 201, 160, 104;
+  --scale-beta-line-memory-primary: rgba(211, 171, 113, .22);
+  --scale-beta-line-memory-strong: rgba(224, 184, 121, .47);
+  --scale-beta-accent-memory: #e0b879;
+  --scale-beta-accent-memory-wash: rgba(201, 157, 92, .16);
+  --scale-beta-status-memory-danger: #efae98;
+}
 
+/* 2. Semantic roles: worldline switches declare only this layer. */
+:root,
+[data-wl='sg'],
+[data-worldline='steins_gate'],
+[data-worldline='sg'] {
+  --surface-0: var(--scale-sg-surface-0);
+  --ink-primary: var(--scale-sg-ink-primary);
+  --ink-secondary: var(--scale-sg-ink-secondary);
+  --ink-tertiary: var(--scale-sg-ink-tertiary);
+  --line-primary: var(--scale-sg-line-primary);
+  --line-strong: var(--scale-sg-line-strong);
+  --accent-primary: var(--scale-sg-accent-primary);
+  --accent-secondary: var(--scale-sg-accent-secondary);
+  --accent-rgb: var(--scale-sg-accent-rgb);
+  --surface-panel: var(--scale-sg-surface-panel);
+  --surface-slab: var(--scale-sg-surface-slab);
+  --surface-atmosphere: var(--scale-sg-surface-atmosphere);
+  --ink-rim: var(--scale-sg-ink-rim);
+  --rim-opacity: 40%;
+  --surface-memory-bg: var(--scale-sg-surface-memory-bg);
+  --surface-memory-panel: var(--scale-sg-surface-memory-panel);
+  --ink-memory-primary: var(--scale-sg-ink-memory-primary);
+  --ink-memory-muted: var(--scale-sg-ink-memory-muted);
+  --ink-memory-faint: var(--scale-sg-ink-memory-faint);
+  --ink-memory-rgb: var(--scale-sg-ink-memory-rgb);
+  --line-memory-primary: var(--scale-sg-line-memory-primary);
+  --line-memory-strong: var(--scale-sg-line-memory-strong);
+  --accent-memory: var(--scale-sg-accent-memory);
+  --accent-memory-wash: var(--scale-sg-accent-memory-wash);
+  --status-memory-danger: var(--scale-sg-status-memory-danger);
+  --surface-1: var(--scale-sg-surface-1);
+  --surface-2: var(--scale-sg-surface-2);
+  --surface-3: var(--scale-sg-surface-3);
+  --status-ok: var(--scale-ok);
+  --status-error: var(--scale-error);
+  --status-danger: var(--scale-danger);
+  --status-danger-dim: var(--scale-danger-dim);
+  --status-warning: var(--ink-primary);
+  --selection-blade: var(--scale-sg-blade);
+  --selection-ink: var(--surface-0);
+  --selection-tick: var(--accent-primary);
+  --selection-wash: color-mix(in srgb, var(--accent-primary) 22%, transparent);
+}
+
+[data-wl='beta'],
+[data-worldline='beta'] {
+  --surface-0: var(--scale-beta-surface-0);
+  --ink-primary: var(--scale-beta-ink-primary);
+  --ink-secondary: var(--scale-beta-ink-secondary);
+  --ink-tertiary: var(--scale-beta-ink-tertiary);
+  --line-primary: var(--scale-beta-line-primary);
+  --line-strong: var(--scale-beta-line-strong);
+  --accent-primary: var(--scale-beta-accent-primary);
+  --accent-secondary: var(--scale-beta-accent-secondary);
+  --accent-rgb: var(--scale-beta-accent-rgb);
+  --surface-panel: var(--scale-beta-surface-panel);
+  --surface-slab: var(--scale-beta-surface-slab);
+  --surface-atmosphere: var(--scale-beta-surface-atmosphere);
+  --ink-rim: var(--scale-beta-ink-rim);
+  --rim-opacity: 38%;
+  --surface-memory-bg: var(--scale-beta-surface-memory-bg);
+  --surface-memory-panel: var(--scale-beta-surface-memory-panel);
+  --ink-memory-primary: var(--scale-beta-ink-memory-primary);
+  --ink-memory-muted: var(--scale-beta-ink-memory-muted);
+  --ink-memory-faint: var(--scale-beta-ink-memory-faint);
+  --ink-memory-rgb: var(--scale-beta-ink-memory-rgb);
+  --line-memory-primary: var(--scale-beta-line-memory-primary);
+  --line-memory-strong: var(--scale-beta-line-memory-strong);
+  --accent-memory: var(--scale-beta-accent-memory);
+  --accent-memory-wash: var(--scale-beta-accent-memory-wash);
+  --status-memory-danger: var(--scale-beta-status-memory-danger);
+  --surface-1: var(--scale-beta-surface-1);
+  --surface-2: var(--scale-beta-surface-2);
+  --surface-3: var(--scale-beta-surface-3);
+  --status-ok: var(--scale-ok);
+  --status-error: var(--scale-error);
+  --status-danger: var(--scale-danger);
+  --status-danger-dim: var(--scale-danger-dim);
+  --status-warning: var(--scale-warning);
+  --selection-blade: var(--scale-beta-blade);
+  --selection-ink: var(--scale-beta-blade-ink);
+  --selection-tick: transparent;
+  --selection-wash: color-mix(in srgb, var(--accent-primary) 28%, transparent);
+}
+
+/* 3. Component aliases: rebind at every theme boundary so inherited custom
+ * properties resolve against that boundary's semantic roles, not root's SG.
+ * These formulas are shared by both worldlines; no theme-specific alias sets.
+ */
+:root,
+[data-wl],
+[data-worldline] {
   --transition-fast: var(--dur-compat-150) var(--ease-compat);
   --transition-normal: var(--dur-sg-base) var(--ease-compat);
 
-  /*
-   * S4-DS visual system: warm graphite scientific instrument + oxidized copper signal.
-   * Roles: text = ordinary copy; signal = interactive copper; gold = telemetry only.
-   */
-  --color-bg-deep: #070605;
-  --color-bg-panel: #12100d;
-  --color-bg-panel-light: #1a1510;
-  --color-gold: #c6a45f;
-  --color-amber: #d96f24;
-  --color-text: #e6dccb;
-  --color-text-dim: #a8947a;
-  --color-text-muted: #756553;
-  --color-border: #3d291f;
-  --color-border-light: #65402b;
-  --color-border-active: #d96f24;
-  --color-danger: #c94f3f;
-  --color-danger-dim: #7a2e26;
-  --color-success: #5f8f62;
-  --color-signal: #d96f24;
-  --color-signal-hot: #ffad54;
-  --color-warning: #c6a45f;
+  --shadow-tone: color-mix(in srgb, var(--surface-0) 85%, var(--scale-black));
+  --highlight-tone: var(--scale-white);
+  --highlight-edge: color-mix(in srgb, var(--highlight-tone) 9%, transparent);
+  --plate-bevel: inset 0 0 0 1px var(--highlight-edge);
+  --plate-shadow: 0 8px 28px color-mix(in srgb, var(--shadow-tone) 65%, transparent);
 
-  --glow-primary: 0 0 4px rgba(217, 111, 36, 0.26);
+  --color-bg-deep: var(--surface-0);
+  --color-bg-panel: var(--surface-1);
+  --color-bg-panel-light: var(--surface-2);
+  --color-gold: var(--accent-secondary);
+  --color-amber: var(--accent-primary);
+  --color-text: var(--ink-primary);
+  --color-text-dim: var(--ink-secondary);
+  --color-text-muted: var(--ink-tertiary);
+  --color-border: var(--line-primary);
+  --color-border-light: var(--line-strong);
+  --color-border-active: var(--accent-primary);
+  --color-danger: var(--status-danger);
+  --color-danger-dim: var(--status-danger-dim);
+  --color-success: var(--status-ok);
+  --color-signal: var(--accent-primary);
+  --color-signal-hot: var(--accent-secondary);
+  --color-warning: var(--status-warning);
+  --glow-primary: 0 0 4px color-mix(in srgb, var(--accent-primary) 26%, transparent);
 
-  --bg-overlay-top: rgba(5, 4, 3, 0.55);
-  --bg-overlay-bottom: rgba(5, 4, 3, 0.35);
-  --bg-overlay-signal: rgba(217, 111, 36, 0.04);
-  --bg-filter: saturate(0.88) brightness(0.72) contrast(1.05);
-  --chrome-header-bg: rgba(10, 8, 6, 0.94);
-  --chrome-header-sheen: rgba(49, 30, 12, 0.28);
+  --bg-overlay-top: color-mix(in srgb, var(--surface-0) 55%, transparent);
+  --bg-overlay-bottom: color-mix(in srgb, var(--surface-0) 35%, transparent);
+  --bg-overlay-signal: color-mix(in srgb, var(--accent-primary) 4%, transparent);
+  --bg-filter: saturate(.88) brightness(.72) contrast(1.05);
+  --chrome-header-bg: color-mix(in srgb, var(--surface-0) 94%, transparent);
+  --chrome-header-sheen: color-mix(in srgb, var(--accent-primary) 8%, transparent);
 
-  /* Default worldline = SG (panel class may override) */
-  --wl-accent: #d97a2d;
-  --wl-accent-bright: #ffb35a;
-  --wl-accent-dim: rgba(217, 122, 45, 0.62);
-  --wl-glow: rgba(217, 122, 45, 0.2);
-  --wl-edge: rgba(217, 122, 45, 0.08);
-  --wl-grid-dot: rgba(217, 122, 45, 0.022);
-  --wl-surface-tint: rgba(217, 122, 45, 0.03);
-  --wl-divider: color-mix(in srgb, var(--wl-accent) 42%, var(--color-border));
-  --wl-scroll-thumb: var(--color-border-light);
-  --wl-scroll-thumb-active: var(--wl-accent);
-  --wl-selected-edge: var(--wl-accent);
-
-  /* Unified scrollbar track (shared by all product scrollports) */
-  --scrollbar-size: 6px;
-  --scrollbar-track: color-mix(in srgb, var(--color-bg-deep) 78%, transparent);
+  --wl-primary: var(--accent-primary);
+  --wl-accent: var(--accent-primary);
+  --wl-accent-bright: var(--accent-secondary);
+  --wl-accent-dim: color-mix(in srgb, var(--accent-primary) 62%, transparent);
+  --wl-glow: color-mix(in srgb, var(--accent-primary) 20%, transparent);
+  --wl-edge: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+  --wl-grid-dot: color-mix(in srgb, var(--accent-primary) 2.2%, transparent);
+  --wl-surface-tint: color-mix(in srgb, var(--accent-primary) 3%, transparent);
+  --wl-divider: color-mix(in srgb, var(--accent-primary) 42%, var(--line-primary));
+  --wl-scroll-thumb: var(--line-strong);
+  --wl-scroll-thumb-active: var(--accent-primary);
+  --wl-selected-edge: var(--accent-primary);
+  --scrollbar-track: color-mix(in srgb, var(--surface-0) 78%, transparent);
   --scrollbar-thumb: var(--wl-scroll-thumb);
   --scrollbar-thumb-hover: var(--wl-scroll-thumb-active);
 
+  --nixie: var(--scale-nixie);
+  --nixie-glow: var(--scale-nixie-glow);
+  --ws-ok: var(--status-ok);
+  --ws-bad: var(--status-error);
+  --ws-warn: var(--status-warning);
+  --ws-blade: var(--selection-blade);
+  --ws-blade-ink: var(--selection-ink);
+  --ws-tick: var(--selection-tick);
+  --ws-bg: var(--surface-0);
+  --ws-ink: var(--ink-primary);
+  --ws-ink-2: var(--ink-secondary);
+  --ws-ink-3: var(--ink-tertiary);
+  --ws-line: var(--line-primary);
+  --ws-line-2: var(--line-strong);
+  --ws-accent: var(--accent-primary);
+  --ws-accent-2: var(--accent-secondary);
+  --ws-accent-rgb: var(--accent-rgb);
+  --ws-panel: var(--surface-panel);
+  --ws-slab: var(--surface-slab);
+  --ws-light: var(--surface-atmosphere);
+  --ws-rim: drop-shadow(0 0 1px color-mix(in srgb, var(--ink-rim) var(--rim-opacity), transparent));
+  --memory-bg: var(--surface-memory-bg);
+  --memory-surface: var(--surface-memory-panel);
+  --memory-text: var(--ink-memory-primary);
+  --memory-muted: var(--ink-memory-muted);
+  --memory-faint: var(--ink-memory-faint);
+  --memory-ink: var(--ink-memory-rgb);
+  --memory-line: var(--line-memory-primary);
+  --memory-line-strong: var(--line-memory-strong);
+  --memory-accent: var(--accent-memory);
+  --memory-accent-wash: var(--accent-memory-wash);
+  --memory-danger: var(--status-memory-danger);
+}
+
+:root {
   color-scheme: dark;
-  background-color: var(--color-bg-deep);
-  color: var(--color-text);
+  background-color: var(--surface-0);
+  color: var(--ink-primary);
   font-family: var(--font-ui);
 }
-
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
-
-html,
-body {
-  background-color: var(--color-bg-deep);
-  color: var(--color-text);
+*, *::before, *::after { box-sizing: border-box; }
+html, body {
+  background-color: var(--surface-0);
+  color: var(--ink-primary);
   color-scheme: dark;
 }
-
 body {
   margin: 0;
   padding: 0;
   overflow: hidden;
   font-family: var(--font-ui);
 }
-
-:lang(ja),
-[lang='ja'] {
-  font-family: var(--font-ja);
+:lang(ja), [lang='ja'] { font-family: var(--font-ja); }
+::selection {
+  background: var(--selection-wash);
+  color: var(--ink-primary);
 }
-
-/* Application chrome (.app-main-container, speakers, brand, utilities) lives in App.css. */
-
+input, textarea { caret-color: var(--line-strong); }
 @media (prefers-reduced-motion: reduce) {
-  body {
-    transition: none;
-  }
+  body { transition: none; }
 }
