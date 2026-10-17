@@ -1,0 +1,7 @@
+{
+  "name": "empty",
+  "extends": "streaming",
+  "description": "No sessions or memory facts. Login and draft chat still work.",
+  "conversations": [],
+  "memory": { "facts": [], "topics": [] }
+}

@@ -1,0 +1,5 @@
+{
+  "name": "memory",
+  "extends": "streaming",
+  "description": "Three editable memory facts, one topic, valid v11 status and populated graph projection."
+}

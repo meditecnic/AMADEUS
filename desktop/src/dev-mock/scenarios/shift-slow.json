@@ -1,0 +1,6 @@
+{
+  "name": "shift-slow",
+  "extends": "streaming",
+  "description": "M3 hook: worldline.switch ACK is delayed 6500ms on the same WS, then succeeds.",
+  "shift": { "delayMs": 6500, "fail": false }
+}

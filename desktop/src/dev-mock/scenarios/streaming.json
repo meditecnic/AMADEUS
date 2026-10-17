@@ -1,0 +1,53 @@
+{
+  "name": "streaming",
+  "description": "Default: successful login, worldline-scoped sessions, memory facts and sentence-paced bilingual replies.",
+  "login": {
+    "password": "Gott würfelt nicht",
+    "successStatus": 200,
+    "failureStatus": 401,
+    "failureMessage": "口令不正确，请重试。",
+    "forceFailure": false
+  },
+  "conversations": [
+    {
+      "id": "lab-notes",
+      "worldline": "steins_gate",
+      "title": "实验记录",
+      "identity_mode": "okabe",
+      "messages": [
+        { "role": "user", "content": "今天的实验进展如何？" },
+        { "role": "assistant", "content": "記録は順調よ。", "translation": "记录很顺利。" }
+      ]
+    },
+    {
+      "id": "beta-notes",
+      "worldline": "beta",
+      "title": "观测笔记",
+      "identity_mode": "self",
+      "messages": [
+        { "role": "user", "content": "继续上次的讨论吧。" },
+        { "role": "assistant", "content": "仮説から確認しましょう。", "translation": "从假设开始确认吧。" }
+      ]
+    }
+  ],
+  "dialogue": {
+    "sentences": [
+      { "ja": "接続は安定しているわ。", "zh": "连接很稳定。", "emotion": "neutral", "delayMs": 650 },
+      { "ja": "まず、観測したことを一つずつ記録しましょう。", "zh": "先把观测到的事情逐一记下来吧。", "emotion": "intellectual", "delayMs": 1200 },
+      { "ja": "結論を急がずに、次の結果を待つの。", "zh": "别急着下结论，等下一次结果。", "emotion": "happy", "delayMs": 1200 }
+    ],
+    "completionDelayMs": 300
+  },
+  "memory": {
+    "facts": [
+      { "fact_id": "fact-notes", "display_text": "你习惯在讨论前整理实验记录。", "topic_id": "topic-research", "is_pinned": true },
+      { "fact_id": "fact-reading", "display_text": "你喜欢逐条核对假设与观测结果。", "topic_id": "topic-research", "is_pinned": false },
+      { "fact_id": "fact-coffee", "display_text": "你会在午后休息时阅读科学随笔。", "topic_id": null, "is_pinned": false }
+    ],
+    "topics": [{ "topic_id": "topic-research", "display_label": "实验与观测" }]
+  },
+  "errors": [],
+  "chatError": null,
+  "authError": null,
+  "shift": { "delayMs": 150, "fail": false, "code": "mock_shift_failed", "message": "目标世界线暂时无法确认。" }
+}

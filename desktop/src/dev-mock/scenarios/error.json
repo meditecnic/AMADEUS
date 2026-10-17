@@ -1,0 +1,10 @@
+{
+  "name": "error",
+  "extends": "streaming",
+  "description": "Login succeeds; conversation and memory reads return HTTP 503; sending chat produces a recoverable protocol error.",
+  "errors": [
+    { "method": "GET", "pathPrefix": "/api/conversations", "status": 503, "body": { "detail": { "code": "mock_unavailable" } } },
+    { "method": "GET", "pathPrefix": "/api/memory/", "status": 503, "body": { "detail": { "code": "mock_unavailable" } } }
+  ],
+  "chatError": "实验通道暂时不可用，请稍后重试。"
+}

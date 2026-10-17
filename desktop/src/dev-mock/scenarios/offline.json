@@ -1,0 +1,6 @@
+{
+  "name": "offline",
+  "extends": "streaming",
+  "description": "Login HTTP 200, but WS auth returns an explicit session error for OFFLINE/unavailable UI without external connections.",
+  "authError": "模拟通道离线。"
+}

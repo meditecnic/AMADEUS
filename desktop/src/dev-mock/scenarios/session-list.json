@@ -1,0 +1,5 @@
+{
+  "name": "session-list",
+  "extends": "streaming",
+  "description": "Seeded SG and beta session lists with bilingual history; edits remain in this browser's mock state."
+}

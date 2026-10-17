@@ -1,0 +1,6 @@
+{
+  "name": "login-success",
+  "extends": "streaming",
+  "description": "Correct passphrase -> HTTP 200; wrong passphrase -> HTTP 401.",
+  "login": { "successStatus": 200, "failureStatus": 401 }
+}

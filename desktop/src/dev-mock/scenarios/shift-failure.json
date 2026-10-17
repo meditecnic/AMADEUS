@@ -1,0 +1,6 @@
+{
+  "name": "shift-failure",
+  "extends": "streaming",
+  "description": "M3 hook: worldline.switch receives a correlated worldline.switch_error after 500ms; source worldline is retained.",
+  "shift": { "delayMs": 500, "fail": true }
+}

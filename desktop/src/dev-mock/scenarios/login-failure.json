@@ -1,0 +1,6 @@
+{
+  "name": "login-failure",
+  "extends": "streaming",
+  "description": "Scenario-defined failure: every login, including the correct passphrase, returns HTTP 401.",
+  "login": { "forceFailure": true, "successStatus": 200, "failureStatus": 401, "failureMessage": "验证失败，请检查口令后重试。" }
+}
