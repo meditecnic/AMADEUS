@@ -539,9 +539,10 @@
 .ws2-actions button:hover:not(:disabled) { color: var(--ws-ink); background: rgba(255, 255, 255, .05); box-shadow: inset 0 0 0 1px var(--ws-line-2), inset 2px 0 0 var(--ws-accent); }
 .ws2-actions button:disabled { opacity: .4; }
 
-.ws2-empty { display: grid; place-items: center; height: 100%; }
-.ws2-empty-card { position: relative; display: grid; gap: 14px; width: min(440px, 100%); padding: 26px 0 22px 26px; border-left: 1px solid var(--ws-line-2); text-align: left; animation: ws2-in-up .6s cubic-bezier(.2, .7, .2, 1) both; }
-.ws2-empty-card::before { content: ''; position: absolute; left: -4px; top: 30px; width: 7px; height: 7px; border-radius: 50%; background: var(--ws-accent); box-shadow: 0 0 10px var(--ws-accent); }
+.ws2-empty { display: grid; place-items: safe center; height: 100%; }
+/* The transcript scrolls, so it clips x: the card never outgrows it, and its rule and node share a slot inside the card, with room for the glow. */
+.ws2-empty-card { position: relative; display: grid; gap: 14px; box-sizing: border-box; width: min(477px, 100%); padding: 26px 0 22px 37px; background: linear-gradient(var(--ws-line-2), var(--ws-line-2)) 10px 0 / 1px 100% no-repeat; text-align: left; animation: ws2-in-up .6s cubic-bezier(.2, .7, .2, 1) both; }
+.ws2-empty-card::before { content: ''; position: absolute; left: 7px; top: 30px; width: 7px; height: 7px; border-radius: 50%; background: var(--ws-accent); box-shadow: 0 0 10px var(--ws-accent); }
 .ws2-empty-card:not(.ready)::before { background: var(--ws-ink-3); box-shadow: none; }
 .ws2-empty-card.setup::before, .ws2-empty-card.error::before { background: var(--ws-bad); box-shadow: 0 0 8px var(--ws-bad); }
 .ws2-empty-kicker { font-family: var(--ws-mono); font-size: 10px; letter-spacing: .3em; color: var(--ws-ink-3); }
@@ -580,13 +581,14 @@
   box-shadow: inset 0 -1px 0 var(--ws-line-2);
   transition: box-shadow .2s;
 }
-.ws2-composer:focus-within { --mark: var(--ws-ink-2); box-shadow: inset 0 -1px 0 var(--ws-accent), 0 10px 24px -18px rgba(var(--ws-accent-rgb), .9); }
+/* Focus is drawn once, by the frame and inside it: the crop marks close into a hairline and the floor takes the accent. */
+.ws2-composer:focus-within { --mark: var(--ws-ink-2); box-shadow: inset 0 -1px 0 var(--ws-accent), inset 0 0 0 1px rgba(var(--ws-accent-rgb), .6); }
 .ws2 .ws2-composer textarea.chat-input-field {
-  display: block; width: 100%; resize: none; border: 0; outline: none; background: none; box-shadow: none;
-  padding: 12px 16px 4px; font-family: var(--ws-sans); font-size: 15px; line-height: 1.6; color: var(--ws-ink);
+  display: block; box-sizing: border-box; width: 100%; resize: none; border: 0; outline: none; background: none; box-shadow: none;
+  padding: 12px 16px 4px; font-family: var(--ws-sans); font-size: 15px; line-height: 1.6; color: var(--ws-ink); caret-color: var(--ws-accent);
 }
-/* Same 1.5px ring as other controls, drawn inside: the textarea fills the composer frame edge to edge. */
-.ws2 .ws2-composer textarea.chat-input-field:focus-visible { outline: 1.5px solid var(--ws-accent); outline-offset: -2px; }
+/* The frame carries focus for mouse and keyboard alike, so the textarea draws no ring of its own. */
+.ws2 .ws2-composer textarea.chat-input-field:focus-visible { outline: none; }
 .ws2 .ws2-composer textarea.chat-input-field::placeholder { color: var(--ws-ink-3); }
 .ws2 .ws2-composer textarea.chat-input-field:disabled { opacity: .55; }
 .ws2-composer-row { display: flex; align-items: center; gap: 6px; padding: 4px 8px 8px 10px; min-width: 0; }
