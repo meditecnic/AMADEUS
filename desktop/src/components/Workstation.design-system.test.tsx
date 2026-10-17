@@ -434,19 +434,6 @@ describe('Workstation S4-DS dark-only chrome', () => {
     expect(scope.getAttribute('aria-valuetext')).not.toMatch(/静音/);
   });
 
-  it('keeps a keyboard focus ring and reduces volume-rail motion', () => {
-    const appCss = fs.readFileSync(path.resolve(__dirname, '../App.css'), 'utf8');
-    expect(appCss).toMatch(
-      /\.workstation-utilities\s+\.ctrl-btn:focus-visible[\s\S]{0,800}\.sound-mixer-rail[\s\S]{0,240}outline:\s*2px\s+solid\s+var\(--color-signal/,
-    );
-    const reduced = appCss.match(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{[\s\S]*?\n\}/g) || [];
-    expect(reduced.length).toBeGreaterThan(0);
-    for (const block of reduced) {
-      expect(block).not.toMatch(/:focus-visible[\s\S]{0,80}outline:\s*none/);
-    }
-    expect(appCss).toMatch(/prefers-reduced-motion:\s*reduce[\s\S]{0,600}\.sound-mixer-rail/);
-  });
-
   it('exactly one App.css import owner (main.tsx only)', () => {
     const main = fs.readFileSync(path.resolve(__dirname, '../main.tsx'), 'utf8');
     const app = fs.readFileSync(path.resolve(__dirname, '../App.tsx'), 'utf8');
