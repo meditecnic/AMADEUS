@@ -9,7 +9,7 @@
 | ![SG worldline chat](assets/screenshots/sg-chat.png) | ![β worldline chat](assets/screenshots/beta-chat.png) |
 | ![Worldline shift transition](assets/screenshots/worldline-shift.png) | ![Memory star map](assets/screenshots/memory-star-map.png) |
 
-*Screenshots were taken without the optional asset pack, so the stage shows placeholder art. The worldline-shift frame comes from a transition prototype that is not merged yet; the star map shows test data.*
+*Screenshots were taken without the optional asset pack, so the stage shows placeholder art. The worldline-shift frame comes from a WebGL2 transition prototype that is not merged yet; the star map shows test data.*
 
 ## What it does
 
@@ -49,7 +49,7 @@ One chat turn: the UI sends the user's message over a WebSocket; the backend com
 
 - **Measured recall behaviour.** In a controlled end-to-end run against a real model (`deepseek-flash`), 12 of 12 prompts that needed a stored fact used it, and 4 of 4 control prompts did not call the tool. That result covers that question set and environment only.
 - **Windows installer.** The Tauri shell bundles the backend (PyInstaller, with the embedding model cache) into an NSIS installer, starts it on launch, refuses to start if port 8000 is taken, and shuts it down cleanly on exit. It passed a 10-item acceptance checklist on a clean English Windows Server 2022 VM: install, WebView2 bootstrap, real chat, memory write / recall / forget, restart persistence, and an uninstall that keeps user data. It is not published yet, and the packaging scripts are not part of this repository.
-- **Tests.** 524 frontend tests (Vitest) pass, with 2 known visual assertions marked as expected failures; the suite is checked across several time zones. The backend has its own pytest suite in `backend/tests/`.
+- **Tests.** The frontend suite contains 550 cases across 48 Vitest files, including 2 known visual assertions marked as expected failures. Latest check (2026-10-18): the production build passed; both full Vitest runs reported 547 passes + 2 expected failures + 1 timeout in the existing `dragStress.test.tsx` (5-second limit). M1 browser user testing is still pending; these checks do not establish milestone acceptance. The backend has its own pytest suite in `backend/tests/`.
 
 ## How it was built
 
@@ -63,29 +63,62 @@ Built and maintained by one developer, who owns the product direction, architect
 
 ## Run it (development)
 
-You need **Python 3.11**, **Node.js 22.13+** (20.19+ on 20.x also works), and an API key for a model provider or a local OpenAI-compatible model.
+Choose between the default local mock for frontend work and a real backend for model integration. Both use the browser at http://localhost:1420.
 
-```bash
+```powershell
 git clone https://github.com/meditecnic/AMADEUS.git
 cd AMADEUS
-
-# Terminal 1: backend
-cd backend
-python -m venv .venv
-.venv/Scripts/python -m pip install -r requirements.txt   # Linux/macOS: .venv/bin/python
-.venv/Scripts/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-
-# Terminal 2: UI
-cd desktop
-npm ci
-npm run dev
 ```
 
-Open http://localhost:1420. The login passphrase is `Gott würfelt nicht`. Then open **系统 → 连接** (System → Connections) in the top-right corner, add your API key and save. Once the connection check passes, the conversation can start. The first run downloads the embedding model used by memory, which takes a few minutes.
+### Local mock (default)
+
+You only need **Node.js 22.13+** (20.19+ on 20.x also works). No Python backend, API key, model provider or TTS server is needed.
+
+From the repository root, in PowerShell:
+
+```powershell
+cd desktop
+npm ci
+# Clear a previous real-backend override, if any.
+Remove-Item Env:AMADEUS_DEV_MOCK -ErrorAction SilentlyContinue
+npm run dev -- --port 1420 --strictPort
+```
+
+Open http://localhost:1420/?scenario=streaming. Wait for USER ID to finish typing `Salieri`, then log in with the public local test passphrase **`Gott würfelt nicht`**. Send a message to receive three scripted Japanese/Chinese sentence pairs. Session histories and Memory use synthetic fixtures; edits live in the dev server's memory and reset when it restarts. The browser retains UI preferences and the selected scenario.
+
+The mock handles `/api`, `/ws/chat` (and `/ws`) on the same port 1420 without contacting a backend, provider or TTS server. It is a **development-only** Vite plugin (`apply: 'serve'`); its mock server and selector script are excluded from production builds and are not available in `npm run preview`.
+
+See the [scenario catalog and switching guide](desktop/src/dev-mock/README.md), [scenario JSON files](desktop/src/dev-mock/scenarios/), and [browser evidence walkthrough](desktop/validation/README.md) for login failure, empty, offline, memory and other local checks.
+
+### Real backend
+
+For real conversations, also install **Python 3.11** and use an API key for a model provider or a local OpenAI-compatible model. Stop the mock dev server first.
+
+Terminal 1, from the repository root (PowerShell):
+
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+Terminal 2, from the repository root (PowerShell):
+
+```powershell
+cd desktop
+npm ci
+$env:AMADEUS_DEV_MOCK = "0"
+npm run dev -- --port 1420 --strictPort
+```
+
+`AMADEUS_DEV_MOCK=0` disables the mock and restores Vite's existing `/api`, `/ws` and `/health` proxies to `http://127.0.0.1:8000` (override with `AMADEUS_BACKEND_ORIGIN`). On Linux/macOS, use `.venv/bin/python` for the backend and `AMADEUS_DEV_MOCK=0 npm run dev -- --port 1420 --strictPort` for the UI.
+
+Open http://localhost:1420 and log in with `Gott würfelt nicht`. Then open **系统 → 连接** (System → Connections) in the top-right corner, configure your model connection and save. Once the connection check passes, the conversation can start. The first backend run downloads the embedding model used by memory, which takes a few minutes. Voice remains optional; see [Voice](#voice-optional).
 
 The desktop window comes from the installer build, whose packaging scripts and bundled backend are not in this repository; `npm run tauri -- dev` will not start from this checkout (the shell expects a bundled backend and a free port 8000). For development, use the browser at http://localhost:1420.
 
-**Data location (development mode):** `%APPDATA%\Amadeus` on Windows, `~/.amadeus` elsewhere; override with `AMADEUS_DATA_DIR`. The Windows installer build keeps its data under `%LOCALAPPDATA%\com.amadeus.desktop\data\` instead. API keys are stored in the Windows Credential Manager; on other systems they are kept in memory only.
+**Data location (real backend development):** `%APPDATA%\Amadeus` on Windows, `~/.amadeus` elsewhere; override with `AMADEUS_DATA_DIR`. The Windows installer build keeps its data under `%LOCALAPPDATA%\com.amadeus.desktop\data\` instead. API keys are stored in the Windows Credential Manager; on other systems they are kept in memory only. The local mock does not use these backend data stores.
 
 ## Voice (optional)
 
@@ -133,13 +166,15 @@ STEINS;GATE, STEINS;GATE 0 and their characters, names and original assets belon
 
 ### 运行
 
-命令见上文 [Run it](#run-it-development)：后端 `uvicorn app.main:app`，界面 `npm run dev`，然后打开 http://localhost:1420 。Windows 和 Linux 都能跑。
+开发有两种模式，命令见上文 [Run it](#run-it-development)。Windows 和 Linux 都能跑。
 
-**登录口令**是：`Gott würfelt nicht`。（算是原作的一个小彩蛋吧，后续我也会做些调整）
+**默认本地 mock**：只需 Node.js，不用启动 Python 后端，不需要 API 密钥、真实模型或 TTS。按 [Local mock](#local-mock-default) 执行 `npm ci` 和 `npm run dev -- --port 1420 --strictPort`，打开 http://localhost:1420/?scenario=streaming 。等 USER ID 自动输入完 `Salieri` 后，用公开本地测试口令 `Gott würfelt nicht` 登录；发送任意消息即可看到三组逐句到达的日语和中文字幕。会话和记忆都是测试数据，服务重启后重置。mock 仅用于开发，不进入生产构建，`npm run preview` 也不提供 mock。
 
-进去以后，从右上角的「系统」打开「连接」，填上你的 API 密钥，保存。连接测试通过后，就可以开始说话了。第一次运行会下载记忆功能要用的模型，稍等一会儿。
+其他状态见 [场景目录与切换说明](desktop/src/dev-mock/README.md) 和 [场景 JSON](desktop/src/dev-mock/scenarios/)；双世界线与减少动态的走查见 [浏览器证据指南](desktop/validation/README.md)。
 
-开发模式下，对话和记忆放在 `%APPDATA%\Amadeus`（可以用环境变量 `AMADEUS_DATA_DIR` 改到别处）；安装版放在 `%LOCALAPPDATA%\com.amadeus.desktop\data\`。所有服务只监听本机地址，你的对话只会发给你自己配置的那个模型服务；如果开启联网搜索，搜索词还会发给你配置的搜索服务（Tavily 或 Firecrawl）。
+**真实后端**：按 [Real backend](#real-backend) 先启动 `uvicorn app.main:app`，再在前端终端用 PowerShell 设置 `$env:AMADEUS_DEV_MOCK = "0"`，然后启动 Vite。登录口令仍是 `Gott würfelt nicht`。进去以后，从右上角的「系统」打开「连接」，配置自己的模型连接并保存。连接测试通过后，就可以开始说话了。首次启动后端会下载记忆功能要用的模型；语音是可选项。
+
+真实后端开发模式下，对话和记忆放在 `%APPDATA%\Amadeus`（Windows）或 `~/.amadeus`（其他系统，可以用环境变量 `AMADEUS_DATA_DIR` 改到别处）；安装版放在 `%LOCALAPPDATA%\com.amadeus.desktop\data\`。所有服务只监听本机地址，你的对话只会发给你自己配置的那个模型服务；如果开启联网搜索，搜索词还会发给你配置的搜索服务（Tavily 或 Firecrawl）。本地 mock 不使用这些后端数据目录，也不调用模型或语音服务。
 
 ### 原作素材包
 
@@ -170,7 +205,11 @@ okeydokey，大概就是这些，那么来句帅气的收尾吧：El Psy Kongroo
 - DeepSeek、Zhipu GLM、OpenAI 互換 API（ローカルモデルを含む）に対応
 - 音声合成（GPT-SoVITS）は任意
 
-起動方法は [Run it](#run-it-development) を参照。ログインの合言葉は `Gott würfelt nicht`――神はサイコロを振らない。
+開発時の起動方法は [Run it](#run-it-development) を参照。**標準はローカル mock** で、Node.js だけで動き、Python バックエンド、API キー、実際のモデルや TTS は不要。[Local mock](#local-mock-default) の手順で `npm ci` と `npm run dev -- --port 1420 --strictPort` を実行し、http://localhost:1420/?scenario=streaming を開く。USER ID が `Salieri` と入力されるまで待ち、公開のローカルテスト用合言葉 `Gott würfelt nicht` でログインする。メッセージを送ると、日本語と中国語字幕の組が三つ、順番に届く。会話と記憶はテストデータで、開発サーバーの再起動でリセットされる。mock は開発専用で、製品ビルドには含まれず、`npm run preview` でも利用できない。
+
+利用できる状態は [シナリオ一覧と切り替え方法](desktop/src/dev-mock/README.md) と [JSON ファイル](desktop/src/dev-mock/scenarios/)、確認手順は [ブラウザー検証ガイド](desktop/validation/README.md) を参照。
+
+**実際のバックエンドを使う場合**は [Real backend](#real-backend) に従って Python サーバーを起動し、フロントエンド側の PowerShell で `$env:AMADEUS_DEV_MOCK = "0"` を設定してから Vite を起動する。合言葉は同じ `Gott würfelt nicht`――神はサイコロを振らない。ログイン後、右上の「系统 → 连接」で自分のモデル接続を設定する。初回のバックエンド起動時は記憶用の埋め込みモデルがダウンロードされる。音声は任意。
 
 非公式・非営利のファン作品。原作素材は一切含まない。STEINS;GATE の権利は MAGES. Inc. および各権利者に帰属する。
 
