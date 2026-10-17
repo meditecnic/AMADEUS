@@ -103,6 +103,8 @@
   :root,
   [data-wl],
   [data-worldline] {
+    /* Compress direct consumers, compatibility durations and old aliases. */
+    --dur-sg-base: var(--dur-zero);
     --dur-instant: var(--dur-zero);
     --dur-quick: var(--dur-zero);
     --dur-base: var(--dur-zero);
