@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { DraftWord } from './DraftWord';
 import { DIVERGENCE, Nixie, useTunedValue } from './Nixie';
+import { useReducedMotion } from '../design-system/useReducedMotion';
 
 export type MenuSection = 'worldline' | 'connections' | 'sound' | 'character';
 type Worldline = 'steins_gate' | 'beta';
@@ -147,6 +148,7 @@ export function WorldlinePanel({ worldline, busy, onShift, onArm }: {
   onArm?: () => void;
 }) {
   const [target, setTarget] = useState<Worldline>(worldline);
+  const reducedMotion = useReducedMotion();
   useEffect(() => { setTarget(worldline); }, [worldline]);
   const armed = target !== worldline;
   const tuned = useTunedValue(DIVERGENCE[target]);
@@ -156,7 +158,7 @@ export function WorldlinePanel({ worldline, busy, onShift, onArm }: {
     if (w === target) return;
     setTarget(w);
     onArm?.();
-    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    if (reducedMotion) return;
     rowRef.current?.animate([
       { transform: 'translateX(-3px)', filter: 'drop-shadow(-3px 0 rgba(255,70,110,.75)) drop-shadow(3px 0 rgba(90,220,255,.75))' },
       { transform: 'translateX(2px)', filter: 'drop-shadow(2px 0 rgba(255,70,110,.5)) drop-shadow(-2px 0 rgba(90,220,255,.5))', offset: .35 },

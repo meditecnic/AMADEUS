@@ -1,5 +1,6 @@
 import { apiUrl } from '../apiBase';
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { useReducedMotion } from '../design-system/useReducedMotion';
 import {
   getOrCreateAmadeusSessionId,
   useAmadeusWS,
@@ -78,6 +79,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
   onWorldlineChange,
   onLogout,
 }) => {
+  const reducedMotion = useReducedMotion();
+  const skipBootMotion = useReducedMotion(true);
   const [systemPrompt, setSystemPrompt] = useState('');
   const storedTtsChoice = useRef<string | null>(null);
   const [enableTts, setEnableTts] = useState(() => {
@@ -90,8 +93,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [memoryClosing, setMemoryClosing] = useState(false);
   const [memoryOrigin, setMemoryOrigin] = useState({ x: 0, y: 0 });
   const closeMemory = () => {
-    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    if (reduce) { setIsMemoryOpen(false); return; }
+    if (reducedMotion) { setIsMemoryOpen(false); return; }
     setMemoryClosing(true);
     window.setTimeout(() => {
       setIsMemoryOpen(false);
@@ -231,10 +233,13 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [bootPhase, setBootPhase] = useState<'draft' | 'dock' | 'done'>(() => {
     try {
       if (sessionStorage.getItem('amadeus_booted') === '1') return 'done';
-      if (!window.matchMedia || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return 'done';
+      if (skipBootMotion) return 'done';
       return 'draft';
     } catch { return 'done'; }
   });
+  useEffect(() => {
+    if (skipBootMotion) setBootPhase('done');
+  }, [skipBootMotion]);
   const handleBootDock = useCallback(() => setBootPhase('dock'), []);
   const handleBootDone = useCallback(() => {
     try { sessionStorage.setItem('amadeus_booted', '1'); } catch {}
@@ -995,11 +1000,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const stickToBottomRef = useRef(true);
   const [showJumpToLatest, setShowJumpToLatest] = useState(false);
 
-  const prefersReducedMotion = useCallback(() => (
-    typeof window !== 'undefined'
-    && Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)
-  ), []);
-
   const measureTranscriptScroll = useCallback(() => {
     const viewport = transcriptViewportRef.current;
     if (!viewport) return { nearBottom: true, overflow: false };
@@ -1030,7 +1030,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     if (options?.force ?? true) {
       stickToBottomRef.current = true;
     }
-    const useSmooth = Boolean(options?.smooth) && !prefersReducedMotion();
+    const useSmooth = Boolean(options?.smooth) && !reducedMotion;
     const apply = () => {
       const top = viewport.scrollHeight;
       if (useSmooth && typeof viewport.scrollTo === 'function') {
@@ -1042,7 +1042,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     apply();
     window.requestAnimationFrame?.(apply);
     setShowJumpToLatest(false);
-  }, [prefersReducedMotion]);
+  }, [reducedMotion]);
 
   const handleTranscriptScroll = useCallback(() => {
     const { nearBottom, overflow } = measureTranscriptScroll();

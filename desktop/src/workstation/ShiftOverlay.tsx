@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { DIVERGENCE, Nixie } from './Nixie';
+import { useReducedMotion } from '../design-system/useReducedMotion';
 
 /* Worldline shift, after the RE:BOOT capture: the world goes dull → a tunnel of tube silhouettes → the world turns
  * to paper, meter centred, digits run wild, ink and gears scatter → a light streak → digits lock left to right →
@@ -39,7 +40,7 @@ export function ShiftOverlay({ from, to, onCommit, onDone }: { from: Worldline; 
   const target = DIVERGENCE[to];
   const [shown, setShown] = useState(DIVERGENCE[from]);
   const [locked, setLocked] = useState(0);
-  const reduce = useRef(typeof window !== 'undefined' && Boolean(window.matchMedia?.('(prefers-reduced-motion: reduce)').matches));
+  const reduce = useReducedMotion();
   const committed = useRef(false);
   const finished = useRef(false);
   const root = useRef<HTMLDivElement>(null);
@@ -66,7 +67,9 @@ export function ShiftOverlay({ from, to, onCommit, onDone }: { from: Worldline; 
   };
 
   useEffect(() => {
-    if (reduce.current) {
+    if (finished.current) return;
+    if (reduce) {
+      setFly(false);
       setShown(target);
       setLocked(8);
       const a = window.setTimeout(commit, 150);
@@ -88,12 +91,12 @@ export function ShiftOverlay({ from, to, onCommit, onDone }: { from: Worldline; 
     const k = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); end(); } };
     window.addEventListener('keydown', k, true);
     return () => { window.clearInterval(iv); window.removeEventListener('keydown', k, true); };
-    // Mount-only timeline.
+    // Preference changes replace the active timeline and clean up its timers.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [reduce]);
 
   return (
-    <div ref={root} className={`ws2-shift${reduce.current ? ' reduced' : ''}${fly ? ' fly' : ''}`} onClick={end} role="status" aria-live="polite"
+    <div ref={root} className={`ws2-shift${reduce ? ' reduced' : ''}${fly ? ' fly' : ''}`} onClick={end} role="status" aria-live="polite"
       aria-label={`世界线变动：${to === 'steins_gate' ? 'STEINS;GATE' : 'β'}`}>
       <div className="sh-world">
       <div className="sh-dull" />

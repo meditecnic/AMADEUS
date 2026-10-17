@@ -3,6 +3,18 @@
  * Prototype reference: desktop/output/playwright/prototype-workstation-directions.* (ignored by git).
  */
 
+/* These existing content dimensions include padding/borders outside the box.
+ * Keep their geometry when the global border-box reset is introduced.
+ */
+.ws2-top-right,
+.ws2-sys-body,
+.ws2-sys-item .pad,
+.ws2-m-row,
+.ws2-ruler input[type='range'],
+.ws2 .settings-embedded .salieri-input {
+  box-sizing: content-box;
+}
+
 .ws2 {
   --ws-sans: var(--font-ui);
   /* Reading face for Chinese dialogue: lighter and more literary than the UI sans (font-face declared in MemorySpace.css). */

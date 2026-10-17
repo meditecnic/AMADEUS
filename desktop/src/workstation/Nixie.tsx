@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useReducedMotion } from '../design-system/useReducedMotion';
 
 /* Hand-drawn nixie numerals in a 12×20 box. The anime meter uses 8 tubes and the decimal point owns tube #2. */
 const DIGITS: Record<string, string> = {
@@ -22,11 +23,12 @@ export const DIVERGENCE: Record<'steins_gate' | 'beta', string> = {
 
 /** Retuning the meter: every tube spins, then they lock left to right like the anime's reading settling. */
 export function useTunedValue(value: string) {
+  const reducedMotion = useReducedMotion();
   const [state, setState] = useState({ text: value, locked: value.length });
   const mounted = useRef(false);
   useEffect(() => {
     if (!mounted.current) { mounted.current = true; return; }
-    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+    if (reducedMotion) {
       setState({ text: value, locked: value.length });
       return;
     }
@@ -39,7 +41,7 @@ export function useTunedValue(value: string) {
       if (locked >= value.length) window.clearInterval(id);
     }, 42);
     return () => window.clearInterval(id);
-  }, [value]);
+  }, [value, reducedMotion]);
   return state;
 }
 

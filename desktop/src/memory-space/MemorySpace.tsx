@@ -1,4 +1,5 @@
 import { apiUrl } from '../apiBase';
+import { useReducedMotion } from '../design-system/useReducedMotion';
 import { MemorySelect } from './MemorySelect';
 import { motion } from 'motion/react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -194,10 +195,8 @@ export function MemorySpace({
   const [narrowPrefer, setNarrowPrefer] = useState<'list' | 'detail'>('detail');
   const framesRef = useRef<FrameSample[]>([]);
   const [width, setWidth] = useState(typeof window === 'undefined' ? 1280 : window.innerWidth);
-  const [reducedMotion, setReducedMotion] = useState(() => {
-    if (typeof window === 'undefined' || !window.matchMedia) return false;
-    return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  });
+  const reducedMotion = useReducedMotion();
+  const previousReducedMotion = useRef(reducedMotion);
   const [motionCause, setMotionCause] = useState<PresentationChangeCause>('viewport');
   const [motionCauses, setMotionCauses] = useState<PresentationChangeCause[]>([]);
   const [motionEpoch, setMotionEpoch] = useState(0);
@@ -226,16 +225,12 @@ export function MemorySpace({
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  useEffect(() => {
-    if (!window.matchMedia) return undefined;
-    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
-    const onChange = () => {
+  useLayoutEffect(() => {
+    if (previousReducedMotion.current !== reducedMotion) {
       noteMotion('motion-preference');
-      setReducedMotion(media.matches);
-    };
-    media.addEventListener?.('change', onChange);
-    return () => media.removeEventListener?.('change', onChange);
-  }, []);
+      previousReducedMotion.current = reducedMotion;
+    }
+  }, [reducedMotion]);
 
   useEffect(() => () => {
     controllerRef.current.dispose();

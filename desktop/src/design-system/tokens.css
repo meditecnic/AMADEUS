@@ -11,8 +11,8 @@
   --font-mono: 'IBM Plex Mono', 'Cascadia Mono', 'Consolas', ui-monospace, monospace;
   --font-display: var(--font-brand);
 
-  --transition-fast: 150ms ease;
-  --transition-normal: 200ms ease;
+  --transition-fast: var(--dur-compat-150) var(--ease-compat);
+  --transition-normal: var(--dur-sg-base) var(--ease-compat);
 
   /*
    * S4-DS visual system: warm graphite scientific instrument + oxidized copper signal.
@@ -68,6 +68,12 @@
   background-color: var(--color-bg-deep);
   color: var(--color-text);
   font-family: var(--font-ui);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
 }
 
 html,

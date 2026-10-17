@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import "./design-system/motion.css";
 import "./design-system/tokens.css";
 // Bundled OFL display faces (no CDN): Latin serif for the wordmark and menu, CJK serif for headings and her name.
 // Noto Serif CSS splits glyphs by unicode-range, so only the characters on screen are fetched.

@@ -1,0 +1,114 @@
+/*
+ * Motion constitution. Tunable starting points: library/motion-playbook.md §2.
+ * New motion uses the semantic ladder + --ease-main; β derives from SG × 1.3.
+ * High-frequency paths animate transform/opacity (small, measured filter effects
+ * only). Exit is faster than enter. Instruments may use discrete steps.
+ */
+:root {
+  --dur-sg-instant: 60ms;
+  --dur-sg-quick: 120ms;
+  --dur-sg-base: 200ms;
+  --dur-sg-panel: 320ms;
+  --dur-sg-page: 480ms;
+  --dur-zero: 0ms;
+  --dur-reduced: 0.01ms;
+  --dur-reduced-fade: var(--dur-sg-quick);
+
+  --ease-sg: cubic-bezier(.2, 0, 0, 1);
+  --ease-beta: cubic-bezier(.5, 0, .15, 1.12);
+  --ease-ref-out: cubic-bezier(.165, .84, .44, 1);
+  --ease-ref-snap: cubic-bezier(.32, .72, 0, 1);
+  --ease-ref-overshoot: cubic-bezier(.34, 1.3, .64, 1);
+  --ease-instrument: steps(1);
+  --ease-instrument-two: steps(2, end);
+  --ease-instrument-two-start: steps(2, start);
+
+  /* Exact legacy timing aliases keep this foundation migration visually equal.
+   * They deliberately do not inherit β scaling; migrate each surface to the
+   * semantic ladder when its motion is tuned in the later milestones.
+   */
+  --ease-compat: cubic-bezier(.25, .1, .25, 1);
+  --ease-compat-in-out: cubic-bezier(.42, 0, .58, 1);
+  --ease-compat-out: cubic-bezier(0, 0, .58, 1);
+  --ease-continuous: cubic-bezier(0, 0, 1, 1);
+  --dur-compat-28: calc(var(--dur-sg-base) * .14);
+  --dur-compat-56: calc(var(--dur-sg-base) * .28);
+  --dur-compat-150: calc(var(--dur-sg-base) * .75);
+  --dur-compat-160: calc(var(--dur-sg-base) * .8);
+  --dur-compat-180: calc(var(--dur-sg-base) * .9);
+  --dur-compat-250: calc(var(--dur-sg-base) * 1.25);
+  --dur-compat-300: calc(var(--dur-sg-base) * 1.5);
+  --dur-compat-400: calc(var(--dur-sg-base) * 2);
+  --dur-compat-800: calc(var(--dur-sg-base) * 4);
+  --dur-compat-1000: calc(var(--dur-sg-base) * 5);
+  --dur-compat-1200: calc(var(--dur-sg-base) * 6);
+  --dur-compat-1400: calc(var(--dur-sg-base) * 7);
+  --dur-compat-1500: calc(var(--dur-sg-base) * 7.5);
+  --dur-compat-1800: calc(var(--dur-sg-base) * 9);
+  --dur-compat-3000: calc(var(--dur-sg-base) * 15);
+  --dur-compat-3200: calc(var(--dur-sg-base) * 16);
+  --dur-compat-3800: calc(var(--dur-sg-base) * 19);
+  --dur-compat-4500: calc(var(--dur-sg-base) * 22.5);
+  --dur-compat-5500: calc(var(--dur-sg-base) * 27.5);
+  --dur-compat-5600: calc(var(--dur-sg-base) * 28);
+  --dur-compat-6000: calc(var(--dur-sg-base) * 30);
+  --dur-compat-6200: calc(var(--dur-sg-base) * 31);
+  --dur-compat-7600: calc(var(--dur-sg-base) * 38);
+  --dur-compat-8000: calc(var(--dur-sg-base) * 40);
+  --dur-compat-8400: calc(var(--dur-sg-base) * 42);
+  --dur-compat-12000: calc(var(--dur-sg-base) * 60);
+  --dur-compat-60000: calc(var(--dur-sg-base) * 300);
+}
+
+:root,
+[data-wl='sg'],
+[data-worldline='sg'] {
+  --dur-instant: var(--dur-sg-instant);
+  --dur-quick: var(--dur-sg-quick);
+  --dur-base: var(--dur-sg-base);
+  --dur-panel: var(--dur-sg-panel);
+  --dur-page: var(--dur-sg-page);
+  --ease-main: var(--ease-sg);
+}
+
+[data-wl='beta'],
+[data-worldline='beta'] {
+  --dur-instant: calc(var(--dur-sg-instant) * 1.3);
+  --dur-quick: calc(var(--dur-sg-quick) * 1.3);
+  --dur-base: calc(var(--dur-sg-base) * 1.3);
+  --dur-panel: calc(var(--dur-sg-panel) * 1.3);
+  --dur-page: calc(var(--dur-sg-page) * 1.3);
+  --ease-main: var(--ease-beta);
+}
+
+:root,
+[data-wl],
+[data-worldline] {
+  --ws-dur-1: var(--dur-quick);
+  --ws-dur-2: var(--dur-base);
+  --ws-dur-3: var(--dur-panel);
+  --ws-ease: var(--ease-main);
+}
+
+/* Static is the global fallback; components may explicitly opt into an
+ * opacity-only --dur-reduced-fade. Never add wildcard transitions.
+ */
+@media (prefers-reduced-motion: reduce) {
+  :root,
+  [data-wl],
+  [data-worldline] {
+    --dur-instant: var(--dur-zero);
+    --dur-quick: var(--dur-zero);
+    --dur-base: var(--dur-zero);
+    --dur-panel: var(--dur-zero);
+    --dur-page: var(--dur-zero);
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: var(--dur-reduced) !important;
+    animation-delay: var(--dur-zero) !important;
+    animation-iteration-count: 1 !important;
+  }
+}

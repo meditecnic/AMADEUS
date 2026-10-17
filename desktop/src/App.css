@@ -30,7 +30,7 @@
   overflow: hidden;
   --beam-color-from: rgba(255, 108, 0, 0.6);
   --beam-color-to: rgba(255, 170, 0, 0.05);
-  --beam-duration: 8s;
+  --beam-duration: var(--dur-compat-8000);
   --beam-size: 200px;
 }
 
@@ -45,7 +45,7 @@
     var(--beam-color-to) 10%,
     transparent 20%
   );
-  animation: border-beam-rotate var(--beam-duration) linear infinite;
+  animation: border-beam-rotate var(--beam-duration) var(--ease-continuous) infinite;
   pointer-events: none;
   z-index: 1;
   /* mask creates the border-only effect: visible only at edges */
@@ -120,7 +120,7 @@
 .orange-dot {
   background-color: #ff6c00;
   box-shadow: 0 0 8px #ff6c00;
-  animation: blink-dot-anim 1s infinite alternate;
+  animation: blink-dot-anim var(--dur-compat-1000) infinite alternate var(--ease-compat);
 }
 
 .status-label {
@@ -171,7 +171,7 @@
   letter-spacing: 2px;
   cursor: pointer;
   border-radius: 2px;
-  transition: all 0.25s ease;
+  transition: background-color var(--dur-compat-250) var(--ease-compat), box-shadow var(--dur-compat-250) var(--ease-compat), text-shadow var(--dur-compat-250) var(--ease-compat);
   text-shadow: 0 0 4px rgba(230, 0, 0, 0.4);
 }
 
@@ -244,7 +244,7 @@
   z-index: 100;
   pointer-events: none;
   opacity: 0.62;
-  animation: crt-flicker-workstation 8s infinite;
+  animation: crt-flicker-workstation var(--dur-compat-8000) infinite var(--ease-compat);
 }
 
 @keyframes crt-flicker-workstation {
@@ -392,7 +392,7 @@
   font-weight: bold;
   cursor: pointer;
   letter-spacing: 1px;
-  transition: all var(--transition-normal);
+  transition: border-color var(--transition-normal), color var(--transition-normal), background-color var(--transition-normal), box-shadow var(--transition-normal);
   border-radius: 2px;
   display: flex;
   align-items: center;
@@ -410,7 +410,7 @@
   width: 100%;
   height: 100%;
   background: linear-gradient(90deg, transparent, rgba(255, 170, 0, 0.3), transparent);
-  transition: left 0.25s ease;
+  transition: left var(--dur-compat-250) var(--ease-compat);
   pointer-events: none;
 }
 
@@ -457,7 +457,7 @@
 }
 
 .blink-txt {
-  animation: blink-dot-anim 1.5s infinite alternate;
+  animation: blink-dot-anim var(--dur-compat-1500) infinite alternate var(--ease-compat);
 }
 
 /* CENTER DIALOGUE TERMINAL */
@@ -507,7 +507,7 @@
   opacity: 0.25;
   margin-bottom: 20px;
   filter: drop-shadow(0 0 20px rgba(255, 108, 0, 0.5));
-  animation: empty-logo-breath 3s ease-in-out infinite;
+  animation: empty-logo-breath var(--dur-compat-3000) var(--ease-compat-in-out) infinite;
 }
 
 @keyframes empty-logo-breath {
@@ -519,12 +519,12 @@
   font-size: 14px;
   letter-spacing: 1px;
   animation: none;
-  transition: color 0.25s ease, text-shadow 0.25s ease;
+  transition: color var(--dur-compat-250) var(--ease-compat), text-shadow var(--dur-compat-250) var(--ease-compat);
 }
 
 .salieri-workstation-panel.worldline-beta .amadeus-logo-glitched {
   filter: sepia(0.55) saturate(0.82) hue-rotate(326deg) drop-shadow(0 0 20px rgba(227, 145, 70, 0.44));
-  animation: beta-empty-logo-breath 3.2s ease-in-out infinite;
+  animation: beta-empty-logo-breath var(--dur-compat-3200) var(--ease-compat-in-out) infinite;
   transition: none;
 }
 
@@ -535,7 +535,7 @@
 
 .terminal-welcome-msg.connecting {
   color: #cc8800;
-  animation: blink-dot-anim 1.4s infinite alternate;
+  animation: blink-dot-anim var(--dur-compat-1400) infinite alternate var(--ease-compat);
 }
 
 .terminal-welcome-msg.error {
@@ -557,7 +557,7 @@
   letter-spacing: 1px;
   cursor: pointer;
   pointer-events: auto;
-  transition: color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  transition: color var(--dur-sg-base) var(--ease-compat), border-color var(--dur-sg-base) var(--ease-compat), box-shadow var(--dur-sg-base) var(--ease-compat);
 }
 
 .empty-chat-action:hover,
@@ -578,7 +578,7 @@
   display: flex;
   flex-direction: column;
   max-width: 80%;
-  animation: message-in-fade 0.3s ease;
+  animation: message-in-fade var(--dur-compat-300) var(--ease-compat);
 }
 
 @keyframes message-in-fade {
@@ -669,11 +669,11 @@
   height: 6px;
   background-color: #ff6c00;
   border-radius: 50%;
-  animation: thinking-dot-bounce 1.4s infinite ease-in-out both;
+  animation: thinking-dot-bounce var(--dur-compat-1400) infinite var(--ease-compat-in-out) both;
 }
 
-.loader-dot:nth-child(1) { animation-delay: -0.32s; }
-.loader-dot:nth-child(2) { animation-delay: -0.16s; }
+.loader-dot:nth-child(1) { animation-delay: calc(var(--dur-sg-panel) * -1); }
+.loader-dot:nth-child(2) { animation-delay: calc(var(--dur-compat-160) * -1); }
 
 @keyframes thinking-dot-bounce {
   0%, 80%, 100% { transform: scale(0); }
@@ -772,7 +772,7 @@
   content: '▌';
   margin-left: 2px;
   color: var(--wl-accent-bright);
-  animation: bilingual-cursor 0.8s steps(1) infinite;
+  animation: bilingual-cursor var(--dur-compat-800) var(--ease-instrument) infinite;
 }
 
 @keyframes bilingual-cursor {
@@ -943,7 +943,7 @@
   color: #ff6c00;
   font-size: 20px;
   font-weight: bold;
-  animation: blink-dot-anim 1s infinite alternate;
+  animation: blink-dot-anim var(--dur-compat-1000) infinite alternate var(--ease-compat);
 }
 
 .chat-input-field {
@@ -970,7 +970,7 @@
   font-weight: bold;
   cursor: pointer;
   letter-spacing: 1.5px;
-  transition: all 0.2s ease;
+  transition: background-color var(--dur-sg-base) var(--ease-compat), box-shadow var(--dur-sg-base) var(--ease-compat), border-color var(--dur-sg-base) var(--ease-compat), color var(--dur-sg-base) var(--ease-compat), transform var(--dur-sg-base) var(--ease-compat), filter var(--dur-sg-base) var(--ease-compat), opacity var(--dur-sg-base) var(--ease-compat);
 }
 
 .chat-send-btn:hover:not(:disabled) {
@@ -1003,7 +1003,7 @@
   position: absolute;
   border-radius: 50%;
   z-index: 1;
-  animation: avatar-glow-pulse 3s ease-in-out infinite;
+  animation: avatar-glow-pulse var(--dur-compat-3000) var(--ease-compat-in-out) infinite;
 }
 
 .avatar-glow-ring.paused {
@@ -1022,7 +1022,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: filter 0.15s ease;
+  transition: filter var(--dur-compat-150) var(--ease-compat);
 }
 
 .avatar-sprite-layer {
@@ -1038,7 +1038,7 @@
 
 /* Breath animation */
 .breath-animation {
-  animation: breath-anim 4.5s ease-in-out infinite;
+  animation: breath-anim var(--dur-compat-4500) var(--ease-compat-in-out) infinite;
   transform-origin: bottom center;
 }
 
@@ -1055,7 +1055,7 @@
 
 /* Heavy glitch */
 .glitch-heavy {
-  animation: glitch-skew-heavy 0.4s steps(2) infinite;
+  animation: glitch-skew-heavy var(--dur-compat-400) var(--ease-instrument-two) infinite;
 }
 
 @keyframes glitch-skew-heavy {
@@ -1069,7 +1069,7 @@
 
 /* Light glitch */
 .glitch-light {
-  animation: glitch-skew-light 0.25s steps(2) infinite;
+  animation: glitch-skew-light var(--dur-compat-250) var(--ease-instrument-two) infinite;
 }
 
 @keyframes glitch-skew-light {
@@ -1132,12 +1132,12 @@
 }
 
 .status-val {
-  transition: color 0.25s ease, text-shadow 0.25s ease;
+  transition: color var(--dur-compat-250) var(--ease-compat), text-shadow var(--dur-compat-250) var(--ease-compat);
 }
 
 .status-val.connecting {
   color: #cc8800;
-  animation: blink-dot-anim 1s infinite alternate;
+  animation: blink-dot-anim var(--dur-compat-1000) infinite alternate var(--ease-compat);
 }
 
 .status-val.error {
@@ -1156,7 +1156,7 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  transition: background-color 0.25s ease, box-shadow 0.25s ease;
+  transition: background-color var(--dur-compat-250) var(--ease-compat), box-shadow var(--dur-compat-250) var(--ease-compat);
 }
 
 .status-dot.ready {
@@ -1166,7 +1166,7 @@
 
 .status-dot.connecting {
   background-color: #cc8800;
-  animation: blink-dot-anim 1s infinite alternate;
+  animation: blink-dot-anim var(--dur-compat-1000) infinite alternate var(--ease-compat);
 }
 
 .status-dot.error {
@@ -1229,7 +1229,7 @@
   transform: translate(-50%, -50%);
   pointer-events: none;
   opacity: 0.35;
-  animation: config-ring-spin 60s linear infinite;
+  animation: config-ring-spin var(--dur-compat-60000) var(--ease-continuous) infinite;
   will-change: transform;
 }
 .config-ring-bg img { width: 100%; height: 100%; display: block; }
@@ -1285,7 +1285,7 @@
   font-size: 12px;
   letter-spacing: 2px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: color var(--dur-sg-base) var(--ease-compat), border-color var(--dur-sg-base) var(--ease-compat), background-image var(--dur-sg-base) var(--ease-compat), filter var(--dur-sg-base) var(--ease-compat), box-shadow var(--dur-sg-base) var(--ease-compat);
   text-shadow: 0 0 5px rgba(255, 108, 0, 0.35);
   clip-path: polygon(8px 0, calc(100% - 8px) 0, 100% 8px, 100% calc(100% - 8px), calc(100% - 8px) 100%, 8px 100%, 0 calc(100% - 8px), 0 8px);
 }
@@ -1319,7 +1319,7 @@
   display: none;
   grid-template-columns: 1fr 1fr;
   gap: 16px 20px;
-  animation: tab-panel-in 0.25s ease;
+  animation: tab-panel-in var(--dur-compat-250) var(--ease-compat);
 }
 .tab-panel.active { display: grid; }
 /* CONNECTIONS: single full-width column — never inherit the BASIC dual grid. */
@@ -1408,7 +1408,7 @@
   background: rgba(8, 4, 2, 0.72);
   color: #e0a060;
   cursor: pointer;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+  transition: border-color var(--dur-compat-150) var(--ease-compat), box-shadow var(--dur-compat-150) var(--ease-compat), background var(--dur-compat-150) var(--ease-compat);
 }
 .search-provider-card:hover:not(:disabled),
 .search-provider-card:focus-visible {
@@ -1457,7 +1457,7 @@
   color: #8b3c00;
   font-size: 24px;
   cursor: pointer;
-  transition: color 0.2s ease;
+  transition: color var(--dur-sg-base) var(--ease-compat);
 }
 .close-btn:hover {
   color: #ff6c00;
@@ -1471,7 +1471,7 @@
   font-size: 13px;
   padding: 8px 10px;
   outline: none;
-  transition: all 0.2s ease;
+  transition: border-color var(--dur-sg-base) var(--ease-compat), box-shadow var(--dur-sg-base) var(--ease-compat);
 }
 .salieri-select:focus, .salieri-input:focus, .salieri-textarea:focus {
   border-color: #ffaa00;
@@ -1634,7 +1634,7 @@
   background:
     linear-gradient(135deg, color-mix(in srgb, var(--color-signal) 6%, transparent), transparent 42%),
     color-mix(in srgb, var(--color-bg-panel) 94%, transparent);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color var(--dur-compat-150) var(--ease-compat), box-shadow var(--dur-compat-150) var(--ease-compat);
 }
 .custom-profile-row:hover {
   border-color: var(--color-border-light);
@@ -1740,7 +1740,7 @@
   cursor: pointer;
   padding: 6px 10px;
   border-radius: 2px;
-  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  transition: color var(--dur-compat-150) var(--ease-compat), border-color var(--dur-compat-150) var(--ease-compat), background var(--dur-compat-150) var(--ease-compat);
 }
 .profile-action-delete {
   color: var(--color-danger);
@@ -1946,7 +1946,7 @@
   font-size: 13px;
   cursor: pointer;
   letter-spacing: 1px;
-  transition: all 0.2s ease;
+  transition: background-color var(--dur-sg-base) var(--ease-compat), box-shadow var(--dur-sg-base) var(--ease-compat), color var(--dur-sg-base) var(--ease-compat);
   border-radius: 2px;
 }
 .save-btn {
@@ -1984,7 +1984,7 @@
   border: 2px solid #ffaa00;
   box-shadow: 0 0 6px rgba(255, 108, 0, 0.7);
   cursor: pointer;
-  transition: box-shadow 0.15s ease;
+  transition: box-shadow var(--dur-compat-150) var(--ease-compat);
 }
 .volume-slider::-webkit-slider-thumb:hover, input[type="range"]::-webkit-slider-thumb:hover {
   box-shadow: 0 0 12px rgba(255, 108, 0, 0.9);
@@ -2170,13 +2170,13 @@
   width: 78px;
   box-sizing: border-box;
   margin: 0;
-  transition: color 0.25s ease, text-shadow 0.25s ease;
+  transition: color var(--dur-compat-250) var(--ease-compat), text-shadow var(--dur-compat-250) var(--ease-compat);
 }
 
 .hud-status-pill.status-error {
   color: var(--color-danger);
   text-shadow: none;
-  animation: blink-dot-anim 0.8s infinite alternate;
+  animation: blink-dot-anim var(--dur-compat-800) infinite alternate var(--ease-compat);
 }
 
 .hud-status-pill.status-setup {
@@ -2240,7 +2240,7 @@
   font-size: 11px;
   letter-spacing: 1px;
   white-space: nowrap;
-  animation: blink-dot-anim 1.2s infinite alternate;
+  animation: blink-dot-anim var(--dur-compat-1200) infinite alternate var(--ease-compat);
   user-select: none;
 }
 
@@ -2256,7 +2256,7 @@
   pointer-events: none;
   z-index: 99;
   box-shadow: inset 0 0 92px rgba(148, 34, 12, 0.09);
-  animation: beta-edge-pulse 5.5s ease-in-out infinite alternate;
+  animation: beta-edge-pulse var(--dur-compat-5500) var(--ease-compat-in-out) infinite alternate;
 }
 
 @keyframes beta-edge-pulse {
@@ -2284,7 +2284,7 @@
 .grid-history {
   width: 280px;
   min-width: 48px;
-  transition: width 0.25s ease;
+  transition: width var(--dur-compat-250) var(--ease-compat);
   display: flex;
   flex-direction: column;
   background: rgba(10, 6, 4, 0.85);
@@ -2575,7 +2575,7 @@
   letter-spacing: 1px;
   cursor: pointer;
   border-radius: 2px;
-  transition: all var(--transition-fast);
+  transition: background-color var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast), opacity var(--transition-fast);
 }
 .history-new-btn:hover:not(:disabled) {
   background: rgba(255, 108, 0, 0.12);
@@ -2653,7 +2653,7 @@
   width: 100%;
   height: 100%;
   background: linear-gradient(90deg, transparent, rgba(255, 170, 0, 0.25), transparent);
-  transition: left 0.25s ease;
+  transition: left var(--dur-compat-250) var(--ease-compat);
   pointer-events: none;
 }
 
@@ -2677,9 +2677,8 @@
     transition: none;
   }
   *, *::before, *::after {
-    animation-duration: 0.01ms !important;
+    animation-duration: var(--dur-reduced) !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
   }
 }
 
@@ -2732,7 +2731,7 @@
   mix-blend-mode: normal;
   pointer-events: none;
   z-index: 6;
-  animation: divider-glow-pulse 6s ease-in-out infinite;
+  animation: divider-glow-pulse var(--dur-compat-6000) var(--ease-compat-in-out) infinite;
 }
 
 .salieri-status-bar::before {
@@ -2746,7 +2745,7 @@
   mix-blend-mode: normal;
   pointer-events: none;
   z-index: 6;
-  animation: divider-glow-pulse 6s ease-in-out infinite;
+  animation: divider-glow-pulse var(--dur-compat-6000) var(--ease-compat-in-out) infinite;
 }
 
 .grid-avatar-panel::before {
@@ -2760,7 +2759,7 @@
   mix-blend-mode: normal;
   pointer-events: none;
   z-index: 6;
-  animation: divider-glow-pulse 6s ease-in-out infinite;
+  animation: divider-glow-pulse var(--dur-compat-6000) var(--ease-compat-in-out) infinite;
 }
 
 /* ── 消息卡片角标与Thinking虚拟卡片 ── */
@@ -2780,8 +2779,8 @@
 }
 
 .message-card.assistant.thinking-bubble-active {
-  animation: message-in-fade 0.3s ease;
-  transition: opacity 0.3s ease-out;
+  animation: message-in-fade var(--dur-compat-300) var(--ease-compat);
+  transition: opacity var(--dur-compat-300) var(--ease-compat-out);
 }
 
 .message-card.assistant.thinking-bubble-active.fade-out {
@@ -2812,7 +2811,7 @@
 
 .thinking-cursor-blink {
   margin-left: 2px;
-  animation: thinking-cursor-blink-anim 0.8s steps(2, start) infinite;
+  animation: thinking-cursor-blink-anim var(--dur-compat-800) var(--ease-instrument-two-start) infinite;
 }
 
 /* ── 输入栏装饰底框 ── */
@@ -2870,7 +2869,7 @@
   background-position-x: center;
   background-size: 100% 700%;
   background-repeat: no-repeat;
-  transition: background-position 0.3s ease;
+  transition: background-position var(--dur-compat-300) var(--ease-compat);
   filter: drop-shadow(0 0 5px rgba(255, 170, 0, 0.85));
 }
 
@@ -3183,7 +3182,7 @@
   letter-spacing: 1.4px;
   clip-path: polygon(7px 0, 100% 0, calc(100% - 7px) 100%, 0 100%);
   overflow: hidden;
-  transition: transform 0.16s ease, color 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+  transition: transform var(--dur-compat-160) var(--ease-compat), color var(--dur-compat-160) var(--ease-compat), border-color var(--dur-compat-160) var(--ease-compat), box-shadow var(--dur-compat-160) var(--ease-compat);
 }
 .chat-send-btn span { position: relative; z-index: 2; }
 .chat-send-btn::before {
@@ -3192,7 +3191,7 @@
   inset: 0;
   background: linear-gradient(105deg, transparent 25%, rgba(255, 188, 96, 0.32) 48%, transparent 70%);
   transform: translateX(-120%);
-  transition: transform 0.32s ease;
+  transition: transform var(--dur-sg-panel) var(--ease-compat);
 }
 .chat-send-btn::after {
   content: '›';
@@ -3285,7 +3284,7 @@
   padding: 0 8px;
   border-color: #925124;
   color: #ffd18e;
-  animation: status-pulse 1.8s ease-in-out infinite;
+  animation: status-pulse var(--dur-compat-1800) var(--ease-compat-in-out) infinite;
 }
 .provider-action-btn:disabled,
 .provider-credential-btn:disabled,
@@ -3597,12 +3596,12 @@
 
 .salieri-workstation-panel.worldline-sg::before {
   opacity: 0.56;
-  animation: sg-crt-rest 12s ease-in-out infinite;
+  animation: sg-crt-rest var(--dur-compat-12000) var(--ease-compat-in-out) infinite;
 }
 
 .salieri-workstation-panel.worldline-beta::before {
   opacity: 0.64;
-  animation: beta-crt-rest 7.6s steps(2, end) infinite;
+  animation: beta-crt-rest var(--dur-compat-7600) var(--ease-instrument-two) infinite;
 }
 
 @keyframes sg-crt-rest {
@@ -3623,7 +3622,7 @@
 
 .salieri-workstation-panel.worldline-beta .workstation-bg-reflection {
   opacity: 0.58;
-  animation: beta-reflection-drift 8.4s ease-in-out infinite;
+  animation: beta-reflection-drift var(--dur-compat-8400) var(--ease-compat-in-out) infinite;
 }
 
 .salieri-workstation-panel.worldline-sg .workstation-bg-noise {
@@ -3633,7 +3632,7 @@
 
 .salieri-workstation-panel.worldline-beta .workstation-bg-noise {
   opacity: 0.075;
-  animation: beta-noise-drift 8.4s steps(2, end) infinite;
+  animation: beta-noise-drift var(--dur-compat-8400) var(--ease-instrument-two) infinite;
 }
 
 @keyframes beta-reflection-drift {
@@ -3657,7 +3656,7 @@
 }
 
 .salieri-workstation-panel.worldline-beta .brand-index {
-  animation: beta-index-breathe 6.2s ease-in-out infinite;
+  animation: beta-index-breathe var(--dur-compat-6200) var(--ease-compat-in-out) infinite;
 }
 
 @keyframes beta-index-breathe {
@@ -3693,7 +3692,7 @@
 }
 
 .worldline-beta .hud-worldline-state-dot {
-  animation: beta-state-pulse 3.8s ease-in-out infinite;
+  animation: beta-state-pulse var(--dur-compat-3800) var(--ease-compat-in-out) infinite;
 }
 
 @keyframes beta-state-pulse {
@@ -3729,7 +3728,7 @@
   );
   opacity: 0.12;
   mix-blend-mode: screen;
-  animation: beta-meter-scan 5.6s ease-in-out infinite;
+  animation: beta-meter-scan var(--dur-compat-5600) var(--ease-compat-in-out) infinite;
 }
 
 @keyframes beta-meter-scan {
@@ -3875,7 +3874,7 @@
   color: var(--wl-accent-bright, #ffe1aa);
   box-shadow: 0 0 8px color-mix(in srgb, var(--wl-accent, #ffb85c) 28%, transparent);
   cursor: pointer;
-  transition: border-color 0.18s ease, box-shadow 0.18s ease, color 0.18s ease;
+  transition: border-color var(--dur-compat-180) var(--ease-compat), box-shadow var(--dur-compat-180) var(--ease-compat), color var(--dur-compat-180) var(--ease-compat);
 }
 
 .jump-to-latest-btn:hover,
@@ -3999,7 +3998,7 @@
     );
   color: var(--color-text, #e6dccb);
   transform-origin: right center;
-  animation: sound-mixer-rail-open 200ms ease both;
+  animation: sound-mixer-rail-open var(--dur-sg-base) var(--ease-compat) both;
   box-shadow: inset 0 1px 0 color-mix(in srgb, var(--color-signal, #d96f24) 8%, transparent);
 }
 .sound-mixer-rail-tag {
@@ -4024,11 +4023,11 @@
   gap: 5px;
   min-width: 0;
   flex: 1 1 0;
-  animation: sound-mixer-channel-in 200ms ease both;
+  animation: sound-mixer-channel-in var(--dur-sg-base) var(--ease-compat) both;
 }
-.sound-mixer-channel[data-channel="bgm"] { animation-delay: 0ms; }
-.sound-mixer-channel[data-channel="sfx"] { animation-delay: 28ms; }
-.sound-mixer-channel[data-channel="voice"] { animation-delay: 56ms; }
+.sound-mixer-channel[data-channel="bgm"] { animation-delay: var(--dur-zero); }
+.sound-mixer-channel[data-channel="sfx"] { animation-delay: var(--dur-compat-28); }
+.sound-mixer-channel[data-channel="voice"] { animation-delay: var(--dur-compat-56); }
 .sound-mixer-led-label {
   position: relative;
   display: inline-flex;
@@ -4116,7 +4115,7 @@
   .sound-mixer-rail-tag { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .sound-mixer-rail { animation: sound-mixer-rail-open-reduced 120ms ease both; }
+  .sound-mixer-rail { animation: sound-mixer-rail-open-reduced var(--dur-sg-quick) var(--ease-compat) both; }
   .sound-mixer-channel { animation: none; opacity: 1; transform: none; }
 }
 @keyframes sound-mixer-rail-open-reduced {
