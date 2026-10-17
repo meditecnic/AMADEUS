@@ -101,3 +101,7 @@ message and observe three separate bilingual arrivals → select a history →
 open Memory. Reload with `empty`, `error`, `offline`, `shift-failure` or
 `shift-slow` to reach the corresponding states. Evidence belongs in the
 mission validation directory, never in git.
+
+For the reusable SG/β × normal/reduced-motion capture matrix, screenshot
+destinations, diagnostics, staged motion evidence and milestone gate handoff,
+follow the [browser evidence walkthrough](../../validation/README.md).
