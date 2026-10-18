@@ -1,5 +1,5 @@
 import { apiUrl, isPackagedTauri } from '../apiBase';
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import './SalieriLogin.css';
 import { audioService } from '../services/AudioService';
 import { audioPlayer } from '../hooks/useAudioPlayer';
@@ -33,7 +33,71 @@ function useClock() {
     const id = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(id);
   }, []);
-  return `${now.getFullYear()}.${pad(now.getMonth() + 1)}.${pad(now.getDate())} ${DAYS[now.getDay()]}  ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  return {
+    date: `${now.getFullYear()}.${pad(now.getMonth() + 1)}.${pad(now.getDate())} ${DAYS[now.getDay()]}`,
+    time: `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
+  };
+}
+
+/** Decorative copy set in the sheet's lower right, like a title menu nobody can pick from. */
+const VERSE = [
+  'What is observed is never entirely lost.',
+  'A memory is only a record that learned to wait.',
+  'She does not remember the world \u2014 she remembers you.',
+  'Every conversation ends; the record begins again.',
+];
+
+const CUT = 9;
+/**
+ * A field label's nameplate: a drafted plate with a cut corner, an engraved inner rule and crop marks, printed
+ * slightly off register. Measured to the label so every line lands on a whole pixel. On focus the edge is drawn
+ * first, then the plate is inked in (see .lp-* in the stylesheet).
+ */
+function Plate() {
+  const ref = useRef<SVGSVGElement>(null);
+  const [box, setBox] = useState<{ w: number; h: number } | null>(null);
+  useLayoutEffect(() => {
+    const host = ref.current?.parentElement;
+    if (!host) return;
+    const read = () => {
+      const w = host.offsetWidth;
+      const h = host.offsetHeight;
+      if (w && h) setBox((b) => (b && b.w === w && b.h === h ? b : { w, h }));
+    };
+    read();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(read);
+    ro.observe(host);
+    return () => ro.disconnect();
+  }, []);
+  const w = box?.w ?? 0;
+  const h = box?.h ?? 0;
+  const shape = `M${CUT} 0H${w}V${h}H0V${CUT}Z`;
+  const i = 2.5;
+  const inner = `M${CUT + 1} ${i}H${w - i}V${h - i}H${i}V${CUT + 1}Z`;
+  const o = 3;
+  const l = 6;
+  const marks = [
+    `M${w + o} 0h${l}M${w} ${-o}v${-l}`,
+    `M${w + o} ${h}h${l}M${w} ${h + o}v${l}`,
+    `M${-o} ${h}h${-l}M0 ${h + o}v${l}`,
+    `M${CUT / 2 - 1.8} ${CUT / 2 - 1.8}l-4 -4`,
+  ].join('');
+  return (
+    <svg ref={ref} className="lp" width={w} height={h} aria-hidden="true" focusable="false">
+      {box && (
+        <>
+          <path className="lp-reg r" d={shape} transform="translate(-1 0)" />
+          <path className="lp-reg b" d={shape} transform="translate(1 .5)" />
+          <path className="lp-fill" d={shape} filter="url(#sl-press)" />
+          <path className="lp-inner" d={inner} />
+          <path className="lp-ghost" d={shape} />
+          <path className="lp-edge" d={shape} pathLength={1} />
+          <path className="lp-marks" d={marks} />
+        </>
+      )}
+    </svg>
+  );
 }
 
 /** A ruler under each field: one division per character, the nib at the end of the measurement. */
@@ -392,7 +456,6 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
     sweeping && 'sweeping',
     reduced && 'reduced',
     intro && 'intro',
-    focusField && `focus-${focusField}`,
   ].filter(Boolean).join(' ');
 
   return (
@@ -417,14 +480,16 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
           <div className="zones left">{['A', 'B', 'C', 'D', 'E', 'F'].map((n) => <span key={n}>{n}</span>)}</div>
           <div className="zones right">{['A', 'B', 'C', 'D', 'E', 'F'].map((n) => <span key={n}>{n}</span>)}</div>
         </div>
-        <div className="sl-strip top" aria-hidden="true">
-          <span className="sys"><b>AMADEUS</b> 观测终端 · OBSERVATION TERMINAL</span>
-          <span className="clock">{clock}</span>
+        <div className="sl-tblock" aria-hidden="true">
+          <span className="k">DATE</span><span className="v">{clock.date}</span>
+          <span className="k">TIME</span><span className="v">{clock.time}</span>
         </div>
-        <div className="sl-strip bottom" aria-hidden="true">
-          <span>LOCAL LINK · 记忆仅保存在这台设备上</span>
-          <span className="hint"><kbd>Enter ↵</kbd> 连接</span>
+        <div className="sl-verse" aria-hidden="true">
+          {VERSE.map((line, i) => (
+            <p key={i} style={{ '--n': line.length, '--i': i } as React.CSSProperties}>{line}</p>
+          ))}
         </div>
+        <p className="sl-note" aria-hidden="true">LOCAL LINK · 记忆仅保存在这台设备上</p>
         <div className="sl-vignette" aria-hidden="true" />
       </div>
 
@@ -437,11 +502,11 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
             />
           </span>
         </h1>
-        <div className="sl-dim" aria-hidden="true"><i /><span>SALIERI · ACCESS</span><i /></div>
+        <div className="sl-dim" aria-hidden="true"><i /><i /></div>
 
         <form onSubmit={handleSubmit} className="sl-form salieri-login-form" noValidate>
           <div ref={userRowRef} className={`sl-row user${errorField === 'user' ? ' is-error' : ''}`}>
-            <label className="sl-label" htmlFor="salieri-user"><span>USER ID</span></label>
+            <label className={`sl-label${focusField === 'user' || errorField === 'user' ? ' is-on' : ''}`} htmlFor="salieri-user"><Plate /><span>USER ID</span></label>
             <div className="sl-slot">
               <input
                 ref={userRef}
@@ -463,7 +528,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
           </div>
 
           <div ref={pwdRowRef} className={`sl-row pwd${errorField === 'password' ? ' is-error' : ''}`}>
-            <label className="sl-label" htmlFor="salieri-pwd"><span>PASSWORD</span></label>
+            <label className={`sl-label${focusField === 'password' || errorField === 'password' ? ' is-on' : ''}`} htmlFor="salieri-pwd"><Plate /><span>PASSWORD</span></label>
             <div className="sl-slot">
               <input
                 ref={pwdRef}
@@ -519,6 +584,17 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
           </div>
         </form>
       </div>
+
+      {/* Letterpress: a little ink spread at the edges and paper grain through the ink. */}
+      <svg className="sl-defs" width="0" height="0" aria-hidden="true" focusable="false">
+        <filter id="sl-press" x="-4%" y="-20%" width="108%" height="140%" colorInterpolationFilters="sRGB">
+          <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves={2} seed={7} result="n" />
+          <feDisplacementMap in="SourceGraphic" in2="n" scale={1.3} xChannelSelector="R" yChannelSelector="G" result="d" />
+          <feGaussianBlur in="d" stdDeviation={0.3} result="s" />
+          <feColorMatrix in="n" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0.3 0 0 0 0.74" result="g" />
+          <feComposite in="s" in2="g" operator="in" />
+        </filter>
+      </svg>
 
       <div ref={penRef} className="sl-pen" aria-hidden="true">
         <i className="s1" /><i className="s2" /><i className="s3" /><i className="s4" /><i className="s5" />

@@ -75,6 +75,8 @@
 .bp-arm .trail { stroke: rgba(241, 240, 235, .3); stroke-width: 1.4; }
 .bp-arm .trail.t2 { stroke: rgba(241, 240, 235, .55); }
 @keyframes bp-arm { to { transform: rotate(360deg); } }
+.bp-drift { transform-box: fill-box; transform-origin: 50% 40%; animation: bp-drift 14s ease-in-out infinite alternate; }
+@keyframes bp-drift { 0% { transform: translate(-3px, 2px) rotate(-.5deg); } 50% { transform: translate(2px, -4px) rotate(.2deg); } 100% { transform: translate(4px, 1px) rotate(.6deg); } }
 
 .sl-root.intro .bp-plate .ln { stroke-dasharray: 1; stroke-dashoffset: 1; animation: bp-draw 1.9s cubic-bezier(.45, .05, .2, 1) calc(var(--d, 0ms) + 240ms) forwards; }
 .sl-root.intro .bp-plate :is(.cl, .dash, .tk, text) { animation: sl-fade 1.4s ease .5s backwards; }
@@ -100,13 +102,43 @@
 .sl-frame .zones.left span + span::before { left: 0; }
 .sl-frame .zones.right span + span::before { right: 0; }
 
-.sl-strip { position: absolute; left: 50px; right: 50px; display: flex; justify-content: space-between; align-items: center; font-family: var(--mono); font-size: 11.5px; letter-spacing: .26em; color: var(--ink-3); white-space: nowrap; }
-.sl-strip.top { top: 40px; }
-.sl-strip.bottom { bottom: 38px; }
-.sl-strip .sys b { color: var(--ink); font-weight: 500; letter-spacing: .32em; margin-right: 12px; }
-.sl-strip .clock { color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: pre; }
-.sl-strip kbd { font-family: inherit; font-size: 10.5px; letter-spacing: .1em; padding: 3px 8px; margin-right: 10px; border: 1px solid var(--line-2); color: var(--ink-2); }
-.sl-root.intro .sl-frame, .sl-root.intro .sl-strip { animation: sl-fade .8s ease .15s backwards; }
+.sl-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+/* The clock is the sheet's title block: two ruled rows in the upper right. */
+.sl-tblock {
+  position: absolute; top: 40px; right: 50px;
+  display: grid; grid-template-columns: auto auto;
+  border: 1px solid var(--line-2);
+  font-family: var(--mono); font-size: clamp(10.5px, .56vw, 13px); line-height: 1; letter-spacing: .2em; white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.sl-tblock span { padding: 6px 10px 5px; }
+.sl-tblock .k { color: var(--ink-3); border-right: 1px solid var(--line); padding-right: 9px; }
+.sl-tblock .v { color: var(--ink-2); text-align: right; }
+.sl-tblock span:nth-child(n + 3) { border-top: 1px solid var(--line); }
+
+/* Lower right: four lines set like a title menu. Not a menu: nothing here can be chosen. */
+.sl-verse {
+  position: absolute; right: 50px; bottom: 66px;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 9px;
+  padding-right: 14px; border-right: 1px solid var(--line);
+  font-family: var(--mono); font-size: clamp(11px, .58vw, 14px); line-height: 1.15; letter-spacing: .06em; color: rgba(241, 240, 235, .3);
+  white-space: nowrap;
+}
+.sl-verse p { position: relative; margin: 0; }
+.sl-verse p::after { content: ''; position: absolute; right: -15px; top: 50%; width: 6px; height: 1px; background: var(--line-2); }
+.sl-verse p:first-child { color: rgba(241, 240, 235, .46); }
+
+/* The one line that matters for trust, quietly at the foot of the sheet. */
+.sl-note {
+  position: absolute; left: 50%; bottom: 38px; margin: 0; transform: translateX(-50%);
+  font-family: var(--mono); font-size: clamp(11px, .57vw, 14px); letter-spacing: .24em; color: var(--ink-3); white-space: nowrap;
+}
+
+.sl-root.intro :is(.sl-frame, .sl-tblock, .sl-note) { animation: sl-fade .8s ease .15s backwards; }
+.sl-root.intro .sl-verse { animation: sl-fade .4s ease 1.9s backwards; }
+.sl-root.intro .sl-verse p { animation: sl-type calc(var(--n) * 26ms) steps(var(--n)) calc(2.1s + var(--i) * .62s) backwards; }
+@keyframes sl-type { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
 
 /* ---------- centre: wordmark over the form ---------- */
 .sl-center {
@@ -128,7 +160,7 @@
 .wm-ink { filter: drop-shadow(-1.3px 0 0 var(--fr-r)) drop-shadow(1.3px 0 0 var(--fr-b)); }
 .wm-glyph .o { fill: none; stroke: var(--ink); stroke-width: 1.3px; vector-effect: non-scaling-stroke; opacity: 0; }
 .wm-glyph .f { fill: var(--ink); }
-.wm-tag { font-family: var(--serif); font-style: italic; font-size: 158px; letter-spacing: 6px; fill: var(--rose); opacity: .92; }
+.wm-tag { font-family: 'Noto Serif JP', var(--serif); font-weight: 400; font-size: 150px; letter-spacing: 34px; fill: var(--rose); opacity: .92; }
 .wm-pen { opacity: 0; }
 .wm-pen line { stroke: var(--ink); stroke-width: 1.2; }
 .wm-pen circle { fill: var(--ink); }
@@ -174,7 +206,7 @@
 .wm.is-flying .wm-ink { filter: none; animation: none; }
 
 /* Under the word: a dimension line, the sheet's own measure of it. */
-.sl-dim { display: flex; align-items: center; gap: 14px; width: calc(var(--ww) * .98); margin-top: clamp(14px, 2.4vh, 26px); font-family: var(--mono); font-size: 11px; letter-spacing: .34em; color: var(--ink-3); white-space: nowrap; }
+.sl-dim { display: flex; align-items: center; gap: 0; width: calc(var(--ww) * .98); margin-top: clamp(14px, 2.4vh, 26px); font-family: var(--mono); font-size: 11px; letter-spacing: .34em; color: var(--ink-3); white-space: nowrap; }
 .sl-dim i { flex: 1; height: 9px; position: relative; }
 .sl-dim i::before { content: ''; position: absolute; left: 0; right: 0; top: 4px; height: 1px; background: var(--line-2); }
 .sl-dim i:first-child { border-left: 1px solid var(--line-2); }
@@ -184,7 +216,6 @@
 .sl-dim i:last-child::after { right: 1px; border-left: 7px solid var(--line-2); border-right: 0; }
 .sl-root.intro .sl-dim i:first-child { transform-origin: right; animation: sl-dim .7s var(--ease-out) 1.2s both; }
 .sl-root.intro .sl-dim i:last-child { transform-origin: left; animation: sl-dim .7s var(--ease-out) 1.2s both; }
-.sl-root.intro .sl-dim span { animation: sl-fade .5s ease 1.35s backwards; }
 @keyframes sl-dim { from { transform: scaleX(0); } }
 
 /* ---------- form ---------- */
@@ -200,18 +231,32 @@
   justify-self: end; position: relative; margin-right: 22px; padding: 7px 14px 6px 18px;
   font-family: var(--serif); font-weight: 500; font-size: clamp(16px, 1.08vw, 20px); line-height: 1; letter-spacing: .2em;
   color: var(--ink-2); white-space: nowrap; cursor: default;
-  transition: color .2s ease;
+  --pl: var(--blade);
+  transition: color .16s ease;
 }
-.sl-label span { position: relative; z-index: 1; }
-/* Focus is a paper-white blade with a cut corner, slid in under the label. */
-.sl-label::before {
-  content: ''; position: absolute; inset: 0; background: var(--blade);
-  clip-path: polygon(9px 0, 100% 0, 100% 100%, 0 100%, 0 9px);
-  transform: scaleX(0); transform-origin: right; transition: transform .22s cubic-bezier(.6, 0, .2, 1), background .2s ease;
-}
-.sl-root.focus-user .sl-row.user .sl-label, .sl-root.focus-password .sl-row.pwd .sl-label, .sl-row.is-error .sl-label { color: var(--blade-ink); }
-.sl-root.focus-user .sl-row.user .sl-label::before, .sl-root.focus-password .sl-row.pwd .sl-label::before, .sl-row.is-error .sl-label::before { transform: none; }
-.sl-row.is-error .sl-label::before { background: var(--err); }
+.sl-label span { position: relative; z-index: 1; transition: text-shadow .16s ease; }
+.sl-row.is-error .sl-label { --pl: var(--err); }
+
+/* The nameplate. Resting: only a ghost of its outline. Focused: the edge is drawn round from the cut corner,
+ * then the plate is inked in paper white (red when refused), off register by a pixel, grain showing through. */
+.lp { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.lp path { vector-effect: non-scaling-stroke; }
+.lp-ghost { fill: none; stroke: rgba(241, 240, 235, .1); stroke-width: 1; }
+.lp-edge { fill: none; stroke: var(--pl); stroke-width: 1; stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset .1s ease-in, stroke .2s ease; }
+.lp-fill { fill: var(--pl); opacity: 0; transition: opacity .1s ease, fill .2s ease; }
+.lp-reg { opacity: 0; transition: opacity .1s ease; }
+.lp-reg.r { fill: rgba(255, 46, 96, .5); }
+.lp-reg.b { fill: rgba(70, 150, 255, .42); }
+.lp-inner { fill: none; stroke: rgba(11, 12, 14, .5); stroke-width: .75; opacity: 0; transition: opacity .1s ease; }
+.lp-marks { fill: none; stroke: var(--ink-3); stroke-width: 1; opacity: 0; transition: opacity .1s ease, stroke .2s ease; }
+
+.sl-label.is-on { color: var(--blade-ink); transition: color .14s ease .17s; }
+.sl-label.is-on span { text-shadow: -.6px 0 rgba(255, 46, 96, .34), .6px 0 rgba(70, 150, 255, .3), 0 0 .5px rgba(11, 12, 14, .55); transition-delay: .17s; }
+.sl-label.is-on .lp-edge { stroke-dashoffset: 0; transition: stroke-dashoffset .22s cubic-bezier(.5, 0, .3, 1), stroke .2s ease; }
+.sl-label.is-on .lp-fill { opacity: 1; transition: opacity .18s ease .16s, fill .2s ease; }
+.sl-label.is-on :is(.lp-reg, .lp-inner) { opacity: 1; transition: opacity .18s ease .2s; }
+.sl-label.is-on .lp-marks { opacity: 1; stroke: rgba(241, 240, 235, .5); transition: opacity .2s ease .24s, stroke .2s ease; }
+.sl-row.is-error .sl-label .lp-marks { stroke: rgba(255, 107, 94, .7); }
 
 .sl-slot {
   position: relative; height: clamp(46px, 5.6vh, 56px);
@@ -333,8 +378,10 @@
 .sl-pen i { transform-origin: right; }
 
 @media (max-height: 760px) {
-  .sl-strip.top { top: 30px; }
-  .sl-strip.bottom { bottom: 28px; }
+  .sl-tblock { top: 30px; }
+  .sl-note { bottom: 28px; }
+  .sl-verse { bottom: 54px; gap: 7px; }
+  .sl-verse p:nth-child(2n) { display: none; }
 }
 
 /* Reduced motion: the finished sheet, nothing moving. */

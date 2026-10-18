@@ -53,7 +53,7 @@ export const Wordmark = forwardRef<WordmarkHandle, { className?: string }>(funct
           </g>
         ))}
       </g>
-      <text className="wm-tag" x={WORD_INK.x1} y={-WORD_CAP - 120} textAnchor="end" aria-hidden="true">Observation Terminal</text>
+      <text className="wm-tag" x={WORD_INK.x1 - 34} y={-WORD_CAP - 120} textAnchor="end" aria-hidden="true">アマデウス</text>
       <g className="wm-pen" aria-hidden="true">
         <line x1={0} x2={0} y1={-16000} y2={16000} />
         <circle r={34} cy={0} />
