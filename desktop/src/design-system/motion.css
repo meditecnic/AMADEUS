@@ -98,12 +98,13 @@
   --ws-ease: var(--ease-main);
   /* Login renderer reads the resolved animation-duration; all timing stays here. */
   --login-rain-cycle: calc(var(--dur-page) * 64);
-  --login-signal-cycle: calc(var(--dur-page) * 18);
   --login-type-step: var(--dur-quick);
-  --entry-power-hold: calc(var(--dur-page) * 2);
-  --entry-prewarm-hold: calc(var(--dur-page) * 3);
-  /* Reading dwell is not motion; keep the static frame readable in reduced motion. */
-  --entry-lock-hold: calc(var(--dur-sg-page) * 2);
+  --login-dial-cycle: calc(var(--dur-page) * 3);
+  --login-wordmark-sweep: calc(var(--dur-page) * 1.8);
+  /* The entrance is one continuous timeline: signal draw, gate travel, settle. */
+  --entry-open-delay: calc(var(--dur-page) * 1.4);
+  --entry-open-hold: calc(var(--dur-page) * 2.4);
+  --entry-reveal-hold: calc(var(--dur-page) * 4.4);
 }
 
 /* Static is the global fallback; components may explicitly opt into an
@@ -121,6 +122,10 @@
     --dur-base: var(--dur-zero);
     --dur-panel: var(--dur-zero);
     --dur-page: var(--dur-zero);
+    /* The entrance keeps only its short reveal fade. */
+    --entry-open-delay: var(--dur-zero);
+    --entry-open-hold: var(--dur-zero);
+    --entry-reveal-hold: var(--dur-reduced-fade);
   }
 
   *,

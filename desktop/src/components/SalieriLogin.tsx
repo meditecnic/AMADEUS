@@ -10,6 +10,10 @@ interface SalieriLoginProps {
 
 const USER_ID = 'Salieri';
 
+// Original instrument dial: an iris aperture inside a ticked copper ring.
+const DIAL_TICKS = Array.from({ length: 48 }, (_, index) => index * 7.5);
+const DIAL_BLADES = Array.from({ length: 6 }, (_, index) => index * 60);
+
 export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) => {
   const reducedMotion = useReducedMotion();
   const [userId, setUserId] = useState(USER_ID);
@@ -120,90 +124,119 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
     pressedRef.current = false;
   };
 
+  const signalActive = isAuthenticating || buttonEngaged || glitching;
+
   return (
     <section className="login-screen-container" data-theme="terminal" aria-label="Amadeus 系统接入">
       <div className="login-ambience" aria-hidden="true">
+        <div className="login-grid" />
         <LoginRain reducedMotion={reducedMotion} paused={isTyping || glitching || isAuthenticating || buttonEngaged} />
-        <div className="login-crt-surface" />
-        <div className="login-grid-surface" />
-        <div className="login-screen-edge" />
+        <div className="login-azimuth" />
+        <div className="login-scanlines" />
+        <div className="login-vignette" />
       </div>
+      <div className="login-bezel" aria-hidden="true"><i /><i /><i /><i /></div>
 
-      <div className="login-content-wrapper">
-        <div className="login-form-center">
-          <div className="amadeus-logo-container">
-            <h1 className="amadeus-logo-text">AMADEUS</h1>
-            <span className="login-logo-caption" lang="ja">人工知能システム</span>
-          </div>
+      <div className="login-console">
+        <svg className={`login-dial${signalActive ? ' is-live' : ''}`} viewBox="0 0 120 120" aria-hidden="true">
+          <circle className="dial-plate" cx="60" cy="60" r="52" />
+          <circle className="dial-ring" cx="60" cy="60" r="45" />
+          <g className="dial-ticks">
+            {DIAL_TICKS.map((angle, index) => (
+              <line
+                key={angle}
+                x1="60" y1={index % 4 === 0 ? 8 : 11} x2="60" y2="16"
+                transform={`rotate(${angle} 60 60)`}
+                className={index % 4 === 0 ? 'is-major' : undefined}
+              />
+            ))}
+          </g>
+          <g className="dial-blades">
+            {DIAL_BLADES.map(angle => (
+              <path key={angle} d="M60 60 L60 26 A34 34 0 0 1 89 43 Z" transform={`rotate(${angle + 15} 60 60)`} />
+            ))}
+          </g>
+          <g className="dial-cross">
+            <path d="M20 60H40M80 60H100M60 20V34M60 86V100" />
+            <rect x="57" y="57" width="6" height="6" transform="rotate(45 60 60)" />
+          </g>
+        </svg>
 
-          <form
-            onSubmit={handleSubmit}
-            className="salieri-login-form"
-            aria-busy={isAuthenticating}
-            onCompositionStart={() => { composingRef.current = true; }}
-            onCompositionEnd={() => { composingRef.current = false; }}
-            onKeyDown={event => {
-              if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || composingRef.current)) {
-                event.preventDefault();
-              }
-            }}
-          >
-            <div className="login-fields">
-              <div className={`input-field-group${isTyping ? ' is-typing' : ''}`}>
-                <label className="field-title" htmlFor="salieri-user">USER ID</label>
-                <div className="login-input-shell">
-                  <input
-                    ref={userRef}
-                    id="salieri-user"
-                    name="username"
-                    type="text"
-                    value={userId}
-                    onFocus={() => setTyping(false)}
-                    onChange={event => { setTyping(false); setUserId(event.target.value); clearError(); }}
-                    readOnly={isAuthenticating}
-                    spellCheck={false}
-                    autoComplete="username"
-                    aria-invalid={error?.field === 'user'}
-                    aria-describedby={error?.field === 'user' ? 'login-error' : undefined}
-                  />
-                  {isTyping && (
-                    <span className="login-typewriter" aria-hidden="true">
-                      {[...USER_ID].map((letter, index) => (
-                        <span
-                          key={index}
-                          style={{ '--letter': index } as React.CSSProperties}
-                          onAnimationEnd={index === USER_ID.length - 1 ? () => setTyping(false) : undefined}
-                        >{letter}</span>
-                      ))}
-                    </span>
-                  )}
-                </div>
-              </div>
+        <span className="login-axis" aria-hidden="true" />
+        <div className="login-wordmark">
+          <h1 className="login-wordmark-text">AMADEUS</h1>
+          <span className="login-wordmark-ja" lang="ja">人工知能システム</span>
+        </div>
+        <span className="login-axis login-axis-lower" aria-hidden="true" />
 
-              <div className="input-field-group">
-                <label className="field-title" htmlFor="salieri-pwd">PASSWORD</label>
-                <div className="login-input-shell">
-                  <input
-                    ref={passwordRef}
-                    id="salieri-pwd"
-                    name="password"
-                    type="password"
-                    value={password}
-                    onChange={event => { setPassword(event.target.value); clearError(); }}
-                    readOnly={isAuthenticating}
-                    spellCheck={false}
-                    autoComplete="current-password"
-                    aria-invalid={error?.field === 'password'}
-                    aria-describedby={error?.field === 'password' ? 'login-error' : undefined}
-                  />
-                </div>
-              </div>
+        <form
+          onSubmit={handleSubmit}
+          className="login-terminal-form"
+          aria-busy={isAuthenticating}
+          onCompositionStart={() => { composingRef.current = true; }}
+          onCompositionEnd={() => { composingRef.current = false; }}
+          onKeyDown={event => {
+            if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || composingRef.current)) {
+              event.preventDefault();
+            }
+          }}
+        >
+          <div className="login-plate">
+            <div className="login-plate-head" aria-hidden="true">
+              <span className="login-plate-ticks"><i /><i /><i /><i /></span>
+              <span className="login-plate-title">ACCESS TERMINAL</span>
+              <span className="login-plate-mode">{signalActive ? 'LINK' : 'IDLE'}</span>
             </div>
 
-            <div className="btn-container">
+            <label className="field-title" htmlFor="salieri-user">USER ID</label>
+            <div className={`login-input-shell${isTyping ? ' is-typing' : ''}`}>
+              <input
+                ref={userRef}
+                id="salieri-user"
+                name="username"
+                type="text"
+                value={userId}
+                onFocus={() => setTyping(false)}
+                onChange={event => { setTyping(false); setUserId(event.target.value); clearError(); }}
+                readOnly={isAuthenticating}
+                spellCheck={false}
+                autoComplete="username"
+                aria-invalid={error?.field === 'user'}
+                aria-describedby={error?.field === 'user' ? 'login-error' : undefined}
+              />
+              {isTyping && (
+                <span className="login-typewriter" aria-hidden="true">
+                  {[...USER_ID].map((letter, index) => (
+                    <span
+                      key={index}
+                      style={{ '--letter': index } as React.CSSProperties}
+                      onAnimationEnd={index === USER_ID.length - 1 ? () => setTyping(false) : undefined}
+                    >{letter}</span>
+                  ))}
+                </span>
+              )}
+            </div>
+
+            <label className="field-title" htmlFor="salieri-pwd">PASSWORD</label>
+            <div className="login-input-shell">
+              <input
+                ref={passwordRef}
+                id="salieri-pwd"
+                name="password"
+                type="password"
+                value={password}
+                onChange={event => { setPassword(event.target.value); clearError(); }}
+                readOnly={isAuthenticating}
+                spellCheck={false}
+                autoComplete="current-password"
+                aria-invalid={error?.field === 'password'}
+                aria-describedby={error?.field === 'password' ? 'login-error' : undefined}
+              />
+            </div>
+            <div className="login-knob-slot">
               <button
                 type="submit"
-                className={`decrypt-btn${settling ? ' is-settling' : ''}`}
+                className={`decrypt-btn${settling ? ' is-settling' : ''}${isAuthenticating ? ' is-linking' : ''}`}
                 disabled={isAuthenticating || backendStatus !== 'ready'}
                 title="CONNECT"
                 aria-label="Decrypt and Connect"
@@ -226,30 +259,35 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
                 onBlur={() => { releaseButton(); setButtonEngaged(false); }}
               >
                 <svg viewBox="0 0 80 80" className="connect-btn-svg" aria-hidden="true" onAnimationEnd={() => setSettling(false)}>
-                  <circle cx="40" cy="40" r="33" className="btn-circle-track" />
-                  <circle cx="40" cy="40" r="33" className="btn-circle-closed" />
-                  <path d="M27 40H52M42 30L52 40L42 50" className="btn-arrow-icon" />
+                  <g className="btn-knurl">
+                    {DIAL_TICKS.map((angle, index) => (
+                      <line key={angle} x1="40" y1="9" x2="40" y2="14" transform={`rotate(${angle} 40 40)`} className={index % 4 === 0 ? 'is-major' : undefined} />
+                    ))}
+                  </g>
+                  <circle cx="40" cy="40" r="25" className="btn-circle-track" />
+                  <circle cx="40" cy="40" r="25" className="btn-circle-closed" />
+                  <path d="M30 40H50M43 32.5L51 40L43 47.5" className="btn-arrow-icon" />
                 </svg>
               </button>
             </div>
+          </div>
 
-            <div className="login-feedback">
-              {backendStatus !== 'ready' && (
-                <div className="backend-status-banner" role="status">
-                  {backendStatus === 'starting' ? '正在启动本地服务…' : '本地服务没有启动，请重新打开 Amadeus'}
-                </div>
-              )}
-              {error && (
-                <div
-                  id="login-error"
-                  className={`auth-error-banner${glitching ? ' is-glitching' : ''}`}
-                  role="alert"
-                  onAnimationEnd={() => setGlitching(false)}
-                >{error.message}</div>
-              )}
-            </div>
-          </form>
-        </div>
+          <div className="login-feedback">
+            {backendStatus !== 'ready' && (
+              <div className="backend-status-banner" role="status">
+                {backendStatus === 'starting' ? '正在启动本地服务…' : '本地服务没有启动，请重新打开 Amadeus'}
+              </div>
+            )}
+            {error && (
+              <div
+                id="login-error"
+                className={`auth-error-banner${glitching ? ' is-glitching' : ''}`}
+                role="alert"
+                onAnimationEnd={() => setGlitching(false)}
+              >{error.message}</div>
+            )}
+          </div>
+        </form>
       </div>
 
       <footer className="login-footer">

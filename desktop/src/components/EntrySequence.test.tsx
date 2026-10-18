@@ -2,44 +2,50 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { EntrySequence } from './EntrySequence';
 
+// The timeline length is a tunable token; the component must resolve it by reading
+// the clock element's computed duration instead of hardcoding a number.
+const FULL_TIMELINE = 2750;
+const REDUCED_FADE = 120;
+let clockMs = FULL_TIMELINE;
+
 beforeEach(() => {
+  clockMs = FULL_TIMELINE;
   vi.useFakeTimers();
   vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
   const computedStyle = window.getComputedStyle.bind(window);
   vi.spyOn(window, 'getComputedStyle').mockImplementation((element) =>
     element.classList.contains('entry-clock')
-      ? { transitionDuration: '0.96s' } as CSSStyleDeclaration
+      ? { transitionDuration: `${clockMs}ms` } as CSSStyleDeclaration
       : computedStyle(element));
 });
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-it('visits power-on, prewarm, and a stable reading lock before completing once', () => {
+it('carries the terminal screen itself and completes once when the timeline ends', () => {
   const done = vi.fn();
   const { container } = render(<EntrySequence onComplete={done} />);
   const entry = container.querySelector('.entry-sequence')!;
-  expect(entry).toHaveAttribute('data-stage', 'power-on');
-  act(() => vi.advanceTimersByTime(960));
-  expect(entry).toHaveAttribute('data-stage', 'prewarm');
-  act(() => vi.advanceTimersByTime(960));
-  expect(entry).toHaveAttribute('data-stage', 'lock');
-  expect(screen.getByRole('status')).toHaveTextContent('接入完成');
   expect(entry).toHaveAttribute('data-theme', 'terminal');
   expect(entry).not.toHaveAttribute('data-wl');
-  act(() => vi.advanceTimersByTime(800));
-  expect(entry).toHaveAttribute('data-stage', 'lock');
+  expect(entry).toHaveAttribute('data-motion', 'full');
+  // Both travelling panes carry the same screen; the seam is the connection signal.
+  expect(container.querySelectorAll('.entry-screen')).toHaveLength(2);
+  expect(container.querySelectorAll('.entry-gate')).toHaveLength(2);
+  expect(container.querySelector('.entry-seam')).toBeInTheDocument();
+  expect(screen.getByRole('status')).toHaveTextContent('正在接入工作台');
+  act(() => vi.advanceTimersByTime(FULL_TIMELINE - 1));
   expect(done).not.toHaveBeenCalled();
-  act(() => vi.advanceTimersByTime(160));
+  act(() => vi.advanceTimersByTime(1));
   expect(done).toHaveBeenCalledOnce();
   fireEvent.click(entry);
   expect(done).toHaveBeenCalledOnce();
 });
 
-it.each(['power-on', 'prewarm', 'lock'])('click skips %s exactly once and cancels remaining work', (stage) => {
+it.each([0, 900, FULL_TIMELINE - 100])('skips at %sms by click or Escape exactly once', (offset) => {
   const done = vi.fn();
   const { container } = render(<EntrySequence onComplete={done} />);
-  const offset = ['power-on', 'prewarm', 'lock'].indexOf(stage) * 960;
   act(() => vi.advanceTimersByTime(offset));
   fireEvent.click(screen.getByRole('button', { name: /跳过/ }));
+  fireEvent.keyDown(window, { key: 'Escape', cancelable: true });
   fireEvent.click(container.querySelector('.entry-sequence')!);
   act(() => vi.runAllTimers());
   expect(done).toHaveBeenCalledOnce();
@@ -61,14 +67,18 @@ it('consumes Escape in capture before any workstation listener and cleans up on 
   expect(done).toHaveBeenCalledOnce();
 });
 
-it('renders the unified static lock under reduced motion, with both skip paths available', () => {
+it('reveals statically through the short fade token under reduced motion', () => {
   vi.stubGlobal('matchMedia', () => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+  clockMs = REDUCED_FADE;
   const done = vi.fn();
   const { container } = render(<EntrySequence onComplete={done} />);
-  expect(container.querySelector('.entry-sequence')).toHaveAttribute('data-stage', 'lock');
-  expect(screen.getByRole('status')).toHaveTextContent('接入完成');
-  expect(container.querySelector('.entry-reel')).not.toBeInTheDocument();
-  fireEvent.keyDown(window, { key: 'Escape' });
+  const entry = container.querySelector('.entry-sequence')!;
+  expect(entry).toHaveAttribute('data-motion', 'reduced');
+  act(() => vi.advanceTimersByTime(REDUCED_FADE - 1));
+  expect(done).not.toHaveBeenCalled();
+  act(() => vi.advanceTimersByTime(1));
+  expect(done).toHaveBeenCalledOnce();
+  fireEvent.keyDown(window, { key: 'Escape', cancelable: true });
   fireEvent.click(screen.getByRole('button', { name: /跳过/ }));
   expect(done).toHaveBeenCalledOnce();
 });

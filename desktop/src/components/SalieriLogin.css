@@ -1,286 +1,396 @@
-/* Keep the original logo → credentials composition, with a code-rendered signal backdrop. */
+/* One access terminal: a graphite screen behind a copper-trimmed bezel.
+ * Left: light through the gate. Right: organised signal. Centre: the device —
+ * dial, wordmark, then the labelled input plate with its connect knob. */
 .login-screen-container {
   --login-ink: var(--ink-primary);
   --login-accent: var(--accent-primary);
+  --login-metal: var(--accent-secondary);
   --login-surface: var(--surface-0);
-  --login-hover-peak: 1.04;
-  --login-press-peak: 1.02;
-  --login-label-width: clamp(90px, 8vw, 130px);
-  --login-field-gap: clamp(12px, 1.2vw, 22px);
-  --login-field-width: clamp(280px, 30vw, 580px);
-  --login-button-size: clamp(56px, 4.3vw, 80px);
+  --login-knob-size: clamp(42px, 5.2vh, 58px);
+  --login-knob-col: calc(var(--login-knob-size) + 8px);
+  --login-label-col: clamp(88px, 7.2vw, 128px);
+  --login-field-col: clamp(292px, 22vw, 432px);
+  --login-col-gap: clamp(12px, 1vw, 18px);
+  --login-plate-pad-x: clamp(18px, 1.8vw, 28px);
+  --login-row-height: clamp(40px, 5vh, 52px);
   position: relative;
   isolation: isolate;
-  container-type: inline-size;
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-items: center;
+  place-items: center;
   width: 100%;
   min-height: 100svh;
-  padding: clamp(24px, 3vw, 56px);
+  overflow: hidden;
   color: var(--login-ink);
-  background: var(--login-surface);
+  background:
+    radial-gradient(88% 78% at 13% 58%, color-mix(in srgb, var(--login-accent) 6%, transparent), transparent 62%),
+    linear-gradient(180deg, color-mix(in srgb, var(--login-surface) 84%, var(--scale-black)) 0%, var(--login-surface) 40%, color-mix(in srgb, var(--login-surface) 90%, var(--scale-black)) 100%);
 }
-.login-ambience {
+
+/* ---------- screen material ---------- */
+.login-ambience { position: absolute; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+.login-scanlines {
   position: absolute;
   inset: 0;
-  z-index: -1;
-  overflow: hidden;
-  pointer-events: none;
+  background: repeating-linear-gradient(0deg, transparent 0 2px, color-mix(in srgb, var(--scale-black) 42%, transparent) 2px 3px);
+  opacity: .55;
+  mix-blend-mode: multiply;
 }
-.login-ambience::after {
-  content: '';
+.login-vignette {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--login-surface) 72%, transparent), transparent 22%, transparent 78%, var(--login-surface)),
-    linear-gradient(90deg, transparent 26%, color-mix(in srgb, var(--login-surface) 38%, transparent) 47%, transparent 90%),
-    radial-gradient(ellipse at 50% 44%, transparent 35%, color-mix(in srgb, var(--login-surface) 82%, transparent) 100%);
+    radial-gradient(118% 96% at 50% 46%, transparent 42%, color-mix(in srgb, var(--scale-black) 72%, transparent) 100%),
+    linear-gradient(90deg, color-mix(in srgb, var(--scale-black) 30%, transparent), transparent 26%, transparent 74%, color-mix(in srgb, var(--scale-black) 30%, transparent));
 }
-.login-signal-relief {
+.login-azimuth {
   position: absolute;
-  left: -2%;
-  top: 0;
-  width: 38%;
-  height: 100%;
-  fill: none;
-  opacity: 1;
+  left: 50%;
+  top: 46%;
+  width: clamp(520px, 76vh, 940px);
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 1px dashed color-mix(in srgb, var(--login-ink) 9%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--login-ink) 3%, transparent),
+    inset 0 0 90px color-mix(in srgb, var(--login-ink) 3%, transparent);
+  mask-image: radial-gradient(closest-side, var(--scale-black) 64%, transparent 100%);
 }
-.login-signal-contours { stroke-width: 1; }
-.login-signal-contours path:nth-child(5n) { stroke-width: 1.6; }
-.login-signal-contours path:nth-child(7n) { opacity: .32; }
-.login-signal-axis { stroke: var(--line-strong); stroke-width: .6; opacity: .7; }
-.login-signal-catch { stroke: var(--login-ink); stroke-width: 1.1; opacity: .85; }
-.login-signal-sweep { animation: login-signal-pass var(--login-signal-cycle) var(--ease-continuous) infinite; }
-.login-signal-relief[data-paused='true'] .login-signal-sweep { animation-play-state: paused; }
-.login-material-grain { display: none; position: absolute; inset: 0; opacity: .065; }
-.login-screen-container .login-material-grain { display: block; }
-@keyframes login-signal-pass {
-  0%, 12% { transform: translateY(0); }
-  88%, 100% { transform: translateY(1140px); }
+
+/* ---------- screen grid ---------- */
+.login-grid {
+  position: absolute;
+  inset: 0;
+  background-image:
+    repeating-linear-gradient(90deg, color-mix(in srgb, var(--login-ink) 7%, transparent) 0 1px, transparent 1px 92px),
+    repeating-linear-gradient(0deg, color-mix(in srgb, var(--login-ink) 5%, transparent) 0 1px, transparent 1px 92px);
+  mask-image: radial-gradient(120% 98% at 52% 44%, var(--scale-black) 28%, transparent 78%);
 }
+
+/* ---------- the gate: light through the louvred opening ---------- */
+.login-gate {
+  position: absolute;
+  left: 2.2%;
+  top: 1.5%;
+  width: 31.5%;
+  height: 89%;
+  opacity: .94;
+}
+
+/* ---------- organised signal field ---------- */
 .login-rain {
   position: absolute;
   inset: 0 0 0 auto;
-  width: 82%;
-  height: 100%;
-  color: color-mix(in srgb, var(--login-ink) 75%, var(--login-accent));
+  width: 78%;
+  color: color-mix(in srgb, var(--login-ink) 62%, var(--login-accent));
   font-family: var(--font-mono);
-  opacity: .42;
+  opacity: .5;
   animation-duration: var(--login-rain-cycle);
   mask-image:
-    linear-gradient(180deg, transparent 2%, var(--scale-black) 18%, var(--scale-black) 80%, transparent),
-    linear-gradient(90deg, transparent, var(--scale-black) 30%, var(--scale-black) 85%, transparent);
+    linear-gradient(90deg, transparent 0%, var(--scale-black) 34%, var(--scale-black) 100%),
+    linear-gradient(180deg, transparent 3%, var(--scale-black) 20%, var(--scale-black) 82%, transparent 100%);
   mask-composite: intersect;
 }
-.login-grid-surface {
-  position: absolute;
-  inset: 7% 3%;
-  background-image:
-    linear-gradient(color-mix(in srgb, var(--login-ink) 10%, transparent) 1px, transparent 1px),
-    linear-gradient(90deg, var(--line-primary) 1px, transparent 1px);
-  background-size: 30px 30px;
-  opacity: .34;
-  mask-image: radial-gradient(ellipse at 55% 45%, var(--scale-black) 5%, transparent 76%);
-}
-.login-crt-surface { display: none; }
-.login-screen-container .login-crt-surface {
-  display: block;
-  position: absolute;
-  inset: 0;
-  background: repeating-linear-gradient(0deg, transparent 0 3px, color-mix(in srgb, var(--login-ink) 4%, transparent) 3px 4px);
-  mask-image: linear-gradient(90deg, var(--scale-black), transparent 44%, transparent 76%, var(--scale-black));
-}
-.login-screen-edge {
-  position: absolute;
-  inset: clamp(10px, 1.2vw, 22px);
-  z-index: 1;
-  border: 1px solid var(--line-strong);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--scale-black) 70%, transparent),
-    0 0 0 1px color-mix(in srgb, var(--login-ink) 6%, transparent),
-    0 -2px 0 1px color-mix(in srgb, var(--login-ink) 3%, transparent),
-    inset 0 0 28px 10px var(--login-surface);
-}
-.login-screen-edge::before, .login-screen-edge::after {
+.login-material-grain { position: absolute; inset: 0; opacity: .05; pointer-events: none; }
+
+/* ---------- bezel ---------- */
+.login-bezel { position: absolute; inset: 0; z-index: 4; pointer-events: none; }
+.login-bezel::before {
   content: '';
   position: absolute;
-  width: 22px;
-  height: 1px;
-  background: var(--login-accent);
-  opacity: .6;
+  inset: clamp(9px, 1.3vh, 16px);
+  border: 1px solid color-mix(in srgb, var(--login-ink) 12%, transparent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--login-metal) 14%, transparent),
+    0 0 0 13px color-mix(in srgb, var(--scale-black) 58%, transparent),
+    0 0 0 14px color-mix(in srgb, var(--login-ink) 4%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--scale-black) 72%, transparent),
+    inset 0 0 54px 6px color-mix(in srgb, var(--scale-black) 52%, transparent);
 }
-.login-screen-edge::before { top: -1px; left: 26px; }
-.login-screen-edge::after { right: 26px; bottom: -1px; }
-.login-content-wrapper {
-  grid-column: 1;
-  width: min(100%, calc(var(--login-field-width) + 2 * var(--login-label-width) + 2 * var(--login-field-gap)));
-  min-width: 0;
-  justify-self: center;
-  padding-top: clamp(40px, 7vh, 80px);
-}
-.login-form-center {
-  display: grid;
-  gap: clamp(84px, 13vh, 146px);
-  width: 100%;
-  min-width: 0;
-  container-type: inline-size;
-}
-.amadeus-logo-container {
+.login-bezel i { position: absolute; width: 26px; height: 26px; border-color: var(--login-metal); border-style: solid; opacity: .5; }
+.login-bezel i:nth-child(1) { top: 24px; left: 24px; border-width: 1px 0 0 1px; }
+.login-bezel i:nth-child(2) { top: 24px; right: 24px; border-width: 1px 1px 0 0; }
+.login-bezel i:nth-child(3) { bottom: 24px; left: 24px; border-width: 0 0 1px 1px; }
+.login-bezel i:nth-child(4) { bottom: 24px; right: 24px; border-width: 0 1px 1px 0; }
+
+/* ---------- centred device column ---------- */
+.login-console {
   position: relative;
-  justify-self: center;
-  width: 100%;
+  z-index: 2;
+  display: grid;
+  justify-items: center;
+  row-gap: clamp(10px, 1.5vh, 18px);
+  width: min(94vw, calc(var(--login-knob-col) + var(--login-label-col) + var(--login-field-col) + var(--login-col-gap) * 2 + var(--login-plate-pad-x) * 2));
+  padding-block: clamp(28px, 6vh, 64px);
+}
+.login-dial {
+  width: clamp(74px, 8.6vh, 116px);
+  height: auto;
   overflow: visible;
-  text-align: center;
-  animation: login-wordmark-lock var(--dur-page) var(--ease-sg) both;
+  animation: login-dial-seat var(--dur-page) var(--ease-main) both;
 }
-@keyframes login-wordmark-lock {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: none; }
+@keyframes login-dial-seat { from { opacity: 0; transform: scale(.94); } to { opacity: 1; transform: none; } }
+.dial-plate { fill: color-mix(in srgb, var(--scale-black) 46%, var(--login-surface)); stroke: color-mix(in srgb, var(--login-ink) 12%, transparent); stroke-width: 1; }
+.dial-ring { fill: none; stroke: color-mix(in srgb, var(--login-accent) 40%, transparent); stroke-width: 1; stroke-dasharray: 2 5; }
+.dial-ticks line { stroke: color-mix(in srgb, var(--login-ink) 30%, transparent); stroke-width: 1; }
+.dial-ticks line.is-major { stroke: var(--login-metal); stroke-width: 1.3; }
+.dial-blades { transform-box: view-box; transform-origin: 60px 60px; animation: login-dial-iris calc(var(--dur-page) * 2.4) var(--ease-main) both; }
+@keyframes login-dial-iris { from { transform: rotate(-34deg) scale(.86); opacity: .35; } to { transform: none; opacity: 1; } }
+.dial-blades path { fill: color-mix(in srgb, var(--login-ink) 6%, transparent); stroke: color-mix(in srgb, var(--login-metal) 52%, transparent); stroke-width: .8; }
+.dial-cross path { stroke: color-mix(in srgb, var(--login-ink) 34%, transparent); stroke-width: .8; }
+.dial-cross rect { fill: var(--login-accent); }
+.login-dial.is-live .dial-ticks { transform-box: view-box; transform-origin: 60px 60px; animation: login-dial-scan var(--login-dial-cycle) steps(16) infinite; }
+.login-dial.is-live .dial-cross rect { fill: var(--login-metal); }
+@keyframes login-dial-scan { to { transform: rotate(22.5deg); } }
+.login-axis { width: 1px; height: clamp(18px, 3vh, 36px); background: linear-gradient(180deg, transparent, var(--line-strong) 32%, var(--line-strong) 68%, transparent); }
+.login-axis-lower::after {
+  content: '';
+  display: block;
+  width: 5px;
+  height: 5px;
+  margin: 0 auto;
+  background: var(--login-accent);
+  transform: translateY(-3px) rotate(45deg);
 }
-.amadeus-logo-text {
+
+.login-wordmark { position: relative; text-align: center; }
+.login-wordmark-text {
   width: max-content;
   max-width: 100%;
   margin: 0 auto;
+  font: 400 clamp(50px, 9vh, 108px)/1 'EB Garamond', Georgia, serif;
+  letter-spacing: .13em;
   padding-inline-start: .13em;
   color: var(--login-ink);
-  font: 400 clamp(58px, 6vw, 116px)/1.1 'EB Garamond', Georgia, serif;
-  letter-spacing: .13em;
+  text-shadow: 0 1px 0 color-mix(in srgb, var(--scale-black) 75%, transparent);
 }
-.login-logo-caption {
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .login-wordmark-text {
+    background: linear-gradient(180deg, var(--scale-white) 0%, var(--login-ink) 44%, color-mix(in srgb, var(--login-ink) 66%, var(--scale-black)) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    text-shadow: none;
+  }
+}
+.login-wordmark::after {
+  content: '';
+  position: absolute;
+  inset-inline: 6%;
+  top: 50%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--login-accent), transparent);
+  opacity: 0;
+  animation: login-wordmark-scan var(--login-wordmark-sweep) var(--ease-ref-out) calc(var(--dur-page) * .5) 1 both;
+}
+@keyframes login-wordmark-scan {
+  0% { opacity: 0; transform: translateY(-.42em); }
+  22% { opacity: .5; }
+  80% { opacity: .35; }
+  100% { opacity: 0; transform: translateY(.46em); }
+}
+.login-wordmark-ja {
   display: block;
-  margin-top: 20px;
-  color: var(--ink-secondary);
-  font-size: 11px;
-  line-height: 1.8;
-  letter-spacing: .36em;
-  padding-inline-start: .36em;
+  margin-top: clamp(10px, 1.6vh, 18px);
+  color: var(--login-metal);
+  font-family: var(--font-ja);
+  font-size: clamp(10px, 1.3vh, 12px);
+  line-height: 1.6;
+  letter-spacing: .42em;
+  padding-inline-start: .42em;
+  opacity: .82;
 }
-.salieri-login-form {
+
+/* ---------- input plate ---------- */
+.login-terminal-form { display: grid; width: 100%; }
+.login-plate {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--login-label-width);
-  column-gap: var(--login-field-gap);
-  row-gap: 18px;
-  align-items: end;
-  width: 100%;
-  margin-inline: auto;
+  grid-template-columns:
+    var(--login-label-col)
+    minmax(0, var(--login-field-col))
+    var(--login-knob-col);
+  column-gap: var(--login-col-gap);
+  row-gap: clamp(10px, 1.7vh, 18px);
+  padding: clamp(16px, 2.4vh, 24px) var(--login-plate-pad-x) clamp(18px, 2.8vh, 26px);
+  border: 1px solid color-mix(in srgb, var(--login-ink) 14%, transparent);
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--surface-2) 74%, var(--login-surface)) 0%,
+      color-mix(in srgb, var(--surface-1) 78%, var(--login-surface)) 52%,
+      color-mix(in srgb, var(--login-surface) 94%, var(--scale-black)) 100%);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--scale-white) 7%, transparent),
+    inset 0 -20px 34px color-mix(in srgb, var(--scale-black) 42%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--scale-black) 62%, transparent),
+    0 24px 48px color-mix(in srgb, var(--scale-black) 52%, transparent);
+  animation: login-plate-seat calc(var(--dur-page) * 1.2) var(--ease-main) calc(var(--dur-page) * .3) both;
 }
-.login-fields { display: grid; gap: clamp(10px, 1.5vh, 16px); min-width: 0; }
-.input-field-group {
+@keyframes login-plate-seat { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.login-plate::before, .login-plate::after {
+  content: '';
+  position: absolute;
+  width: 18px;
+  height: 3px;
+  background: var(--login-accent);
+  opacity: .6;
+}
+.login-plate::before { top: -2px; left: var(--login-plate-pad-x); }
+.login-plate::after { bottom: -2px; right: var(--login-plate-pad-x); }
+.login-plate-head {
+  grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: var(--login-label-width) minmax(0, 1fr);
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  gap: var(--login-field-gap);
-  min-width: 0;
+  gap: 12px;
+  padding-bottom: clamp(10px, 1.6vh, 16px);
+  border-bottom: 1px solid color-mix(in srgb, var(--login-ink) 8%, transparent);
+  color: var(--ink-tertiary);
+  font: 400 clamp(9px, 1.15vh, 10px)/1 var(--font-mono);
+  letter-spacing: .26em;
 }
-.login-screen-container .field-title {
-  color: var(--login-accent);
-  font: 400 clamp(12px, 1.05vw, 17px)/1.5 var(--font-mono);
-  text-align: right;
-  letter-spacing: .04em;
+.login-plate-ticks { display: flex; align-items: flex-end; gap: 3px; height: 9px; }
+.login-plate-ticks i { width: 1px; height: 5px; background: color-mix(in srgb, var(--login-ink) 26%, transparent); }
+.login-plate-ticks i:nth-child(2) { height: 9px; }
+.login-plate-ticks i:nth-child(4) { height: 7px; background: color-mix(in srgb, var(--login-metal) 60%, transparent); }
+.login-plate-title { justify-self: center; }
+.login-plate-mode { justify-self: end; color: color-mix(in srgb, var(--login-metal) 80%, transparent); }
+
+.field-title {
+  grid-column: 1;
+  align-self: center;
+  justify-self: end;
+  color: var(--login-metal);
+  font: 400 clamp(11px, 1.5vh, 15px)/1 var(--font-mono);
+  letter-spacing: .14em;
+  text-transform: uppercase;
 }
-.login-input-shell { position: relative; min-width: 0; }
+.login-input-shell { position: relative; grid-column: 2; display: grid; min-width: 0; }
 .login-screen-container input {
   width: 100%;
   min-width: 0;
-  height: clamp(42px, 4.4vh, 50px);
-  padding: 0 14px;
-  border: 1px solid color-mix(in srgb, var(--line-strong) 65%, var(--login-ink) 15%);
-  border-radius: 0;
-  background: color-mix(in srgb, var(--login-surface) 96%, transparent);
-  box-shadow: var(--plate-bevel);
+  height: var(--login-row-height);
+  padding: 0 clamp(12px, 1.1vw, 16px);
+  border: 1px solid color-mix(in srgb, var(--login-metal) 30%, transparent);
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--scale-black) 58%, var(--login-surface)) 0%,
+    color-mix(in srgb, var(--scale-black) 34%, var(--login-surface)) 100%);
+  box-shadow:
+    inset 0 3px 9px color-mix(in srgb, var(--scale-black) 70%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, var(--scale-white) 6%, transparent);
   color: var(--login-ink);
   caret-color: var(--login-accent);
-  font: 400 clamp(16px, 1.35vw, 22px)/1.5 var(--font-mono);
-  letter-spacing: .06em;
+  font: 400 clamp(15px, 1.9vh, 20px)/1.4 var(--font-mono);
+  letter-spacing: .04em;
   transition: border-color var(--dur-quick) var(--ease-main);
 }
-.login-screen-container input:hover { border-color: color-mix(in srgb, var(--login-accent) 50%, var(--line-strong)); }
-.login-screen-container input[aria-invalid='true'] { border-color: var(--status-error); }
+.login-input-shell::after {
+  content: '';
+  position: absolute;
+  inset-inline: 0;
+  bottom: -1px;
+  height: 2px;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--login-accent) 18%, transparent), var(--login-accent) 50%, color-mix(in srgb, var(--login-accent) 18%, transparent));
+  opacity: 0;
+  transform: scaleX(.2);
+  transform-origin: left center;
+  transition: transform var(--dur-base) var(--ease-main), opacity var(--dur-quick) var(--ease-main);
+}
+.login-input-shell:focus-within::after { opacity: 1; transform: none; }
+.login-screen-container input:hover { border-color: color-mix(in srgb, var(--login-metal) 44%, transparent); }
+.login-screen-container input:focus-within { border-color: color-mix(in srgb, var(--login-accent) 68%, transparent); }
+.login-screen-container input[aria-invalid='true'] { border-color: color-mix(in srgb, var(--status-error) 80%, transparent); }
 .login-screen-container :is(input, button, a):focus-visible {
   outline: none;
-  border-radius: 0;
   box-shadow: inset 0 0 0 1px var(--login-surface), inset 0 0 0 2px var(--login-accent);
 }
-.login-screen-container input:read-only { opacity: .65; }
-.is-typing input { color: transparent; }
+.login-input-shell input:focus-visible {
+  box-shadow:
+    inset 0 0 0 1px var(--login-surface),
+    inset 0 0 0 2px var(--login-accent),
+    inset 0 3px 9px color-mix(in srgb, var(--scale-black) 62%, transparent);
+}
+.login-screen-container input:read-only { opacity: .68; }
+.login-input-shell.is-typing input { color: transparent; }
 .login-typewriter {
   position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
-  padding-inline: 15px;
+  padding-inline: clamp(12px, 1.1vw, 16px);
   pointer-events: none;
-  font: 400 clamp(16px, 1.35vw, 22px)/1.5 var(--font-mono);
-  letter-spacing: .06em;
+  font: 400 clamp(15px, 1.9vh, 20px)/1.4 var(--font-mono);
+  letter-spacing: .04em;
 }
 .login-typewriter span {
   animation: login-letter var(--dur-instant) var(--ease-instrument) both;
   animation-delay: calc(var(--login-type-step) * var(--letter));
 }
 @keyframes login-letter { from { opacity: 0; } to { opacity: 1; } }
-.btn-container {
-  display: grid;
-  place-items: center;
-  justify-self: start;
-  align-self: end;
-  margin-bottom: calc((clamp(42px, 4.4vh, 50px) - var(--login-button-size)) / 2);
-}
+
+/* ---------- connect knob ---------- */
+.login-knob-slot { grid-column: 3; display: grid; place-items: center; }
 .decrypt-btn {
   display: grid;
   place-items: center;
-  width: var(--login-button-size);
-  height: var(--login-button-size);
-  padding: 3px;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
+  width: var(--login-knob-size);
+  height: var(--login-knob-size);
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--login-ink) 13%, transparent);
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 30%, color-mix(in srgb, var(--surface-2) 80%, var(--login-surface)), color-mix(in srgb, var(--scale-black) 68%, var(--login-surface)));
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--scale-white) 8%, transparent),
+    inset 0 -3px 8px color-mix(in srgb, var(--scale-black) 60%, transparent),
+    0 6px 14px color-mix(in srgb, var(--scale-black) 52%, transparent);
   color: var(--login-accent);
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+  transition: box-shadow var(--dur-quick) var(--ease-main);
 }
-.connect-btn-svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-  transform-origin: center;
-  transition: transform var(--dur-quick) var(--ease-main), opacity var(--dur-quick) var(--ease-main);
+.connect-btn-svg { display: block; width: 100%; height: 100%; overflow: visible; transform-origin: center; }
+.btn-knurl { transform-box: view-box; transform-origin: 40px 40px; }
+.btn-knurl line { stroke: color-mix(in srgb, var(--login-ink) 26%, transparent); stroke-width: .8; }
+.btn-knurl line.is-major { stroke: color-mix(in srgb, var(--login-metal) 72%, transparent); }
+.btn-circle-track { fill: none; stroke: color-mix(in srgb, var(--login-ink) 13%, transparent); stroke-width: 1; stroke-dasharray: 2 4; }
+.btn-circle-closed { fill: color-mix(in srgb, var(--login-accent) 6%, transparent); stroke: currentColor; stroke-width: 1.2; opacity: .58; transition: opacity var(--dur-quick) var(--ease-main); }
+.btn-arrow-icon { fill: none; stroke: currentColor; stroke-width: 1.7; }
+.decrypt-btn:is(:hover, :focus-visible):not(:disabled) { box-shadow: inset 0 1px 0 color-mix(in srgb, var(--scale-white) 10%, transparent), 0 0 0 1px color-mix(in srgb, var(--login-accent) 34%, transparent), 0 6px 18px color-mix(in srgb, var(--scale-black) 58%, transparent); }
+/* Keyboard focus keeps the canon double line inside the knob. */
+.decrypt-btn:focus-visible:not(:disabled) {
+  box-shadow:
+    inset 0 0 0 1px var(--login-surface),
+    inset 0 0 0 2px var(--login-accent),
+    inset 0 1px 0 color-mix(in srgb, var(--scale-white) 10%, transparent),
+    0 6px 18px color-mix(in srgb, var(--scale-black) 58%, transparent);
 }
-.btn-circle-track { fill: none; stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 3 4; }
-.btn-circle-closed { fill: color-mix(in srgb, var(--login-accent) 5%, transparent); stroke: currentColor; stroke-width: 1.2; opacity: .6; transition: opacity var(--dur-quick) var(--ease-main); }
-.btn-arrow-icon { fill: none; stroke: currentColor; stroke-width: 1.8; }
 .decrypt-btn:is(:hover, :focus-visible):not(:disabled) .btn-circle-closed { opacity: 1; }
-.decrypt-btn:hover:not(:disabled) .connect-btn-svg {
-  transform: scale(1.02);
-  animation: login-connect-hover var(--dur-base) var(--ease-main);
-}
+.decrypt-btn:hover:not(:disabled) .connect-btn-svg { animation: login-connect-hover var(--dur-base) var(--ease-main); }
 @keyframes login-connect-hover {
   0% { transform: scale(1); }
-  40% { transform: scale(var(--login-hover-peak)); animation-timing-function: var(--ease-main); }
-  100% { transform: scale(1.02); }
+  45% { transform: scale(1.045); animation-timing-function: var(--ease-main); }
+  100% { transform: scale(1); }
 }
-.decrypt-btn:active:not(:disabled) .connect-btn-svg {
-  animation: none;
-  transform: scale(.975);
-  transition-duration: var(--dur-instant);
-}
-.decrypt-btn.is-settling:not(:active) .connect-btn-svg {
-  animation: login-connect-release var(--dur-base) var(--ease-main);
-}
+.decrypt-btn:active:not(:disabled) .connect-btn-svg { animation: none; transform: scale(.955); transition: transform var(--dur-instant) var(--ease-main); }
+.decrypt-btn.is-settling:not(:active) .connect-btn-svg { animation: login-connect-release var(--dur-base) var(--ease-main); }
 @keyframes login-connect-release {
-  0% { transform: scale(.975); }
-  40% { transform: scale(var(--login-press-peak)); animation-timing-function: var(--ease-main); }
+  0% { transform: scale(.955); }
+  42% { transform: scale(1.026); animation-timing-function: var(--ease-main); }
   100% { transform: scale(1); }
 }
 .decrypt-btn:disabled { cursor: wait; opacity: .5; }
+.decrypt-btn.is-linking .btn-knurl { animation: login-knurl-scan calc(var(--dur-page) * 1.6) steps(16) infinite; }
+@keyframes login-knurl-scan { to { transform: rotate(180deg); } }
+.decrypt-btn.is-linking .btn-circle-closed { opacity: 1; }
+
+/* ---------- feedback ---------- */
 .login-feedback {
-  grid-column: 1 / -1;
-  min-height: 42px;
-  padding-inline-start: calc(var(--login-label-width) + var(--login-field-gap));
+  min-height: clamp(24px, 3.4vh, 30px);
+  padding-block: 10px 0;
+  padding-inline-start: calc(var(--login-plate-pad-x) + var(--login-label-col) + var(--login-col-gap));
 }
-.auth-error-banner { position: relative; color: var(--status-error); font: 12px/1.8 var(--font-ui); padding-inline-start: 14px; overflow-wrap: anywhere; }
-.auth-error-banner::before { content: ''; position: absolute; width: 4px; height: 4px; top: .75em; left: 0; background: currentColor; }
+.auth-error-banner { position: relative; color: var(--status-error); font: 12px/1.7 var(--font-ui); padding-inline-start: 14px; overflow-wrap: anywhere; }
+.auth-error-banner::before { content: ''; position: absolute; width: 4px; height: 4px; top: .68em; left: 0; background: currentColor; }
 .auth-error-banner.is-glitching { animation: login-error var(--dur-panel) var(--ease-instrument) 1; }
 @keyframes login-error {
   0%, 100% { transform: none; opacity: 1; }
@@ -289,41 +399,53 @@
   54% { transform: translateX(-1px); opacity: .8; }
   70% { transform: none; opacity: 1; }
 }
-.backend-status-banner { color: var(--ink-secondary); font-size: 12px; line-height: 1.8; }
+.backend-status-banner { color: var(--ink-secondary); font-size: 12px; line-height: 1.7; }
+
 .login-footer {
   position: absolute;
-  inset: auto clamp(32px, 3vw, 56px) clamp(28px, 3vh, 42px);
+  inset: auto clamp(30px, 3.2vw, 62px) clamp(22px, 3vh, 34px);
+  z-index: 4;
   display: flex;
   justify-content: space-between;
   gap: 20px;
   color: var(--ink-tertiary);
-  font: 11px/1.6 var(--font-mono);
-  letter-spacing: .16em;
+  font: 400 clamp(9px, 1.2vh, 11px)/1.6 var(--font-mono);
+  letter-spacing: .2em;
 }
-@container (max-width: 800px) {
-  .login-content-wrapper { grid-column: 1 / -1; width: min(90%, 680px); }
-  .login-signal-relief { left: -14%; width: 70%; opacity: .32; }
-  .login-rain { width: 100%; opacity: .24; }
-  .login-form-center { gap: clamp(64px, 12vh, 120px); }
-  .salieri-login-form { width: 100%; }
+
+/* ---------- reference viewports ---------- */
+@media (max-width: 1100px) {
+  .login-screen-container { --login-field-col: clamp(272px, 40vw, 380px); --login-label-col: 92px; }
+  .login-gate { left: 1%; width: 27%; }
 }
-@media (max-width: 480px) {
-  .login-screen-container { --login-label-width: 76px; --login-field-gap: 10px; --login-button-size: 48px; padding-inline: 22px; }
-  .login-content-wrapper { width: 100%; }
-  .amadeus-logo-text { font-size: 13cqi; letter-spacing: .07em; }
-  .salieri-login-form { column-gap: 8px; grid-template-columns: minmax(0, 1fr) var(--login-button-size); }
-  .login-screen-container .field-title { font-size: 11px; }
-  .login-screen-container input { padding-inline: 10px; }
-  .login-typewriter { padding-inline: 11px; }
+@media (max-height: 720px) {
+  .login-console { row-gap: 8px; padding-block: 22px; }
+  .login-plate-head { display: none; }
+  .login-wordmark-text { font-size: clamp(44px, 8vh, 72px); }
+  .login-dial { width: clamp(60px, 7.4vh, 84px); }
+  .login-axis { height: clamp(12px, 2.2vh, 22px); }
+}
+@media (max-width: 640px) {
+  .login-screen-container { --login-label-col: 74px; --login-col-gap: 10px; --login-knob-size: 38px; --login-knob-col: 40px; }
+  /* Narrow screens let the field take the remaining width instead of its clamp. */
+  .login-plate { grid-template-columns: var(--login-label-col) minmax(0, 1fr) var(--login-knob-col); }
+  .login-plate-head { display: none; }
+  .login-feedback { padding-inline-start: calc(var(--login-label-col) + var(--login-col-gap)); }
+  .login-wordmark-text { font-size: clamp(38px, 11vw, 62px); letter-spacing: .09em; padding-inline-start: .09em; }
+  .login-gate { display: none; }
+  .login-rain { width: 100%; opacity: .3; }
 }
 @media (prefers-reduced-motion: reduce) {
   .login-screen-container *, .login-screen-container *::before, .login-screen-container *::after { animation: none !important; }
-  .is-typing input { color: var(--login-ink); }
+  .login-input-shell.is-typing input { color: var(--login-ink); }
   .login-typewriter { display: none; }
-  .login-signal-catch { display: none; }
+  .login-gate, .login-grid { opacity: .9; }
   .login-screen-container input { transition: none; }
+  .login-input-shell::after { transform: none; transition: opacity var(--dur-reduced-fade) var(--ease-main); }
   .login-screen-container .decrypt-btn .connect-btn-svg,
-  .login-screen-container .decrypt-btn:is(:hover, :active, .is-settling) .connect-btn-svg { transform: none; transition: opacity var(--dur-reduced-fade) var(--ease-sg); }
-  .btn-circle-closed { transition: opacity var(--dur-reduced-fade) var(--ease-sg); }
-  .decrypt-btn:active .connect-btn-svg { opacity: .6; }
+  .login-screen-container .decrypt-btn:is(:hover, :active, .is-settling) .connect-btn-svg { transform: none; }
+  .decrypt-btn { transition: opacity var(--dur-reduced-fade) var(--ease-main); }
+  .decrypt-btn:active:not(:disabled) { opacity: .7; }
+  .btn-circle-closed { transition: opacity var(--dur-reduced-fade) var(--ease-main); }
+  .login-dial.is-live .dial-ticks { animation: none; }
 }

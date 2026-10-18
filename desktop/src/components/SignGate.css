@@ -1,0 +1,37 @@
+/* Optical relief shared by the access terminal: a dark structure with one
+ * narrow lit opening. Code-rendered geometry only; no image assets. */
+.sign-gate { display: block; overflow: visible; }
+.sign-gate .gate-slab { fill: color-mix(in srgb, var(--scale-black) 46%, var(--surface-0)); }
+.sign-gate .gate-rules { stroke: color-mix(in srgb, var(--ink-primary) 6%, transparent); stroke-width: 1; fill: none; }
+.sign-gate .gate-door { fill: color-mix(in srgb, var(--scale-black) 84%, var(--surface-0)); }
+.sign-gate .gate-halo { opacity: .9; filter: blur(3px); }
+.sign-gate .gate-shaft { opacity: .92; filter: blur(1.6px); }
+.sign-gate .gate-core { opacity: .46; filter: blur(6px); }
+.sign-gate .gate-spill { opacity: .4; filter: blur(4px); }
+.sign-gate .gate-beam {
+  opacity: .8;
+  animation: sign-gate-beam calc(var(--dur-page) * 7) var(--ease-continuous) infinite;
+}
+.sign-gate .gate-lintel,
+.sign-gate .gate-ledge {
+  fill: color-mix(in srgb, var(--scale-black) 66%, var(--surface-0));
+  stroke: color-mix(in srgb, var(--ink-primary) 5%, transparent);
+  stroke-width: 1;
+}
+.sign-gate .gate-bar {
+  fill: color-mix(in srgb, var(--scale-black) 78%, var(--surface-0));
+  stroke: color-mix(in srgb, var(--accent-secondary) 18%, transparent);
+  stroke-width: 1;
+}
+.sign-gate .gate-edge { fill: none; stroke: color-mix(in srgb, var(--accent-secondary) 22%, transparent); stroke-width: 1; }
+.sign-gate .gate-frame-line { fill: none; stroke: color-mix(in srgb, var(--ink-primary) 8%, transparent); stroke-width: 1; }
+.sign-gate[data-paused] .gate-beam { animation-play-state: paused; }
+@keyframes sign-gate-beam {
+  0%, 6% { transform: translateY(-14%); opacity: 0; }
+  26% { opacity: .78; }
+  74%, 100% { transform: translateY(76%); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Keep the lit opening readable; only the travelling beam is dropped. */
+  .sign-gate .gate-beam { animation: none; opacity: .75; }
+}

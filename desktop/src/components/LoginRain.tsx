@@ -1,19 +1,5 @@
 import { useEffect, useId, useRef } from 'react';
-
-// A folded signal surface, drawn from analytic contours rather than portrait art.
-// Dense contour edges catch the light; the open middle keeps it a signal, not a solid object.
-const SIGNAL_CONTOURS = Array.from({ length: 142 }, (_, row) => {
-  const t = row / 141;
-  const spread = Math.pow(Math.sin(Math.PI * t), .6) * (110 + 40 * Math.sin(t * 9));
-  const center = 268 + 46 * Math.sin(t * 6 - 1) + 18 * Math.cos(t * 17);
-  return Array.from({ length: 81 }, (_, sample) => {
-    const u = sample / 40 - 1;
-    const fold = Math.sin(u * 3.4 + t * 8);
-    const x = center + u * spread + 24 * fold * Math.sin(Math.PI * t);
-    const y = 74 + t * 744 + 32 * Math.sin(u * Math.PI) * Math.sin(t * 7) + fold * 12;
-    return `${sample === 0 ? 'M' : 'L'}${x.toFixed(2)} ${y.toFixed(2)}`;
-  }).join('');
-});
+import { SignGate } from './SignGate';
 
 interface RainColumn {
   x: number;
@@ -43,9 +29,6 @@ export function LoginRain({ reducedMotion, paused }: {
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const elapsedRef = useRef(0);
-  const gradientId = useId();
-  const catchId = useId();
-  const maskId = useId();
   const grainId = useId();
 
   useEffect(() => {
@@ -110,36 +93,7 @@ export function LoginRain({ reducedMotion, paused }: {
 
   return (
     <>
-      <svg className="login-signal-relief" data-paused={paused || reducedMotion} viewBox="0 0 560 900" aria-hidden="true">
-        <defs>
-          <linearGradient id={gradientId} x1="0" y1="0" x2="1" y2=".25">
-            <stop offset="0" stopColor="var(--ink-primary)" stopOpacity=".08" />
-            <stop offset=".28" stopColor="var(--ink-primary)" stopOpacity=".95" />
-            <stop offset=".48" stopColor="var(--ink-primary)" stopOpacity=".14" />
-            <stop offset=".68" stopColor="var(--ink-primary)" stopOpacity=".95" />
-            <stop offset=".9" stopColor="var(--accent-primary)" stopOpacity=".4" />
-            <stop offset="1" stopColor="var(--ink-primary)" stopOpacity=".1" />
-          </linearGradient>
-          <linearGradient id={catchId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor="white" stopOpacity="0" />
-            <stop offset=".5" stopColor="white" stopOpacity="1" />
-            <stop offset="1" stopColor="white" stopOpacity="0" />
-          </linearGradient>
-          <mask id={maskId} maskUnits="userSpaceOnUse" x="0" y="0" width="560" height="900">
-            <rect className="login-signal-sweep" x="0" y="-220" width="560" height="220" fill={`url(#${catchId})`} />
-          </mask>
-        </defs>
-        <g className="login-signal-axis">
-          <path d="M84 76V824M72 194H462M72 706H462M460 76V824" />
-          <path d="M78 76H90M78 824H90M454 76H466M454 824H466M84 450H112M432 450H460" />
-        </g>
-        <g className="login-signal-contours" stroke={`url(#${gradientId})`}>
-          {SIGNAL_CONTOURS.map((path, index) => <path key={index} d={path} />)}
-        </g>
-        <g className="login-signal-catch" mask={`url(#${maskId})`}>
-          {SIGNAL_CONTOURS.map((path, index) => <path key={index} d={path} />)}
-        </g>
-      </svg>
+      <SignGate className="login-gate" paused={paused || reducedMotion} />
       {!reducedMotion && <canvas ref={ref} className="login-rain" aria-hidden="true" />}
       <svg className="login-material-grain" width="100%" height="100%" aria-hidden="true">
         <defs>

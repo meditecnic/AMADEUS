@@ -20,7 +20,7 @@ it('keeps the static signal surface and removes the canvas work in reduced motio
   const raf = vi.fn();
   vi.stubGlobal('requestAnimationFrame', raf);
   const view = render(<LoginRain reducedMotion paused={false} />);
-  expect(view.container.querySelector('.login-signal-relief')).toBeInTheDocument();
+  expect(view.container.querySelector('.login-gate')).toBeInTheDocument();
   expect(view.container.querySelector('canvas')).not.toBeInTheDocument();
   expect(getContext).not.toHaveBeenCalled();
   expect(raf).not.toHaveBeenCalled();

@@ -48,15 +48,17 @@ function App() {
     <main className="app-main-container" data-step={step}>
       {step === 'probe' && <p role="status">正在检查本地资源…</p>}
       {step === 'login' && <SalieriLogin onLoginSuccess={handleLoginSuccess} />}
-      {step === 'entry' && <EntrySequence onComplete={handleEntryDone} />}
-      
-      {step === 'workstation' && (
+
+      {/* The authenticated workstation mounts once and stays the same live
+          instance while the entrance reveals it; entry never remounts it. */}
+      {(step === 'entry' || step === 'workstation') && (
         <Workstation
           worldline={worldline}
           onWorldlineChange={setWorldline}
           onLogout={handleLogout}
         />
       )}
+      {step === 'entry' && <EntrySequence onComplete={handleEntryDone} />}
     </main>
   );
 }

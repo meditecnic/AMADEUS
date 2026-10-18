@@ -85,18 +85,23 @@ milestones change the markup. Do not reuse snapshot refs across navigations.
 2. Wait until fonts are ready and `#salieri-user` has value `Salieri`.
    M1's typewriter takes time, so submitting immediately after navigation can
    produce `无效的 USER ID`. Use a bounded readiness check, not a long sleep.
-   Capture `01-login.png`. Login is worldline-neutral at M1: the two row
-   labels describe the persisted worldline for the ensuing workstation.
+   Capture `01-login.png`. Login now carries one fixed terminal identity
+   (`.login-screen-container[data-theme='terminal']`) under both saved
+   worldlines; only the workstation after the entrance shows the saved one.
 
 3. `browser_fill_form` targets `#salieri-pwd` with the mock passphrase
    `Gott würfelt nicht`, then `browser_click` targets `.decrypt-btn`.
    Verify **POST `/api/auth/salieri` → 200** in network diagnostics.
-   The actual route is not `/api/login`. Wait for `.ws2`, an enabled
-   `textarea[aria-label='输入消息']` and ONLINE status after the entry sequence
-   finishes. Capture `.entry-sequence[data-stage='power-on']`, `prewarm` and
-   `lock` in order. Clicking anywhere or pressing Esc skips directly to the
-   workstation. The sequence uses the login terminal's single visual identity,
-   independent of the saved worldline.
+   The actual route is not `/api/login`. The entrance is one continuous
+   reveal: `.entry-sequence[data-theme='terminal']` holds the terminal screen
+   while `.entry-seam` draws, then the two `.entry-pane` halves travel apart
+   and the already-mounted workstation is uncovered. `data-motion` is `full`
+   or `reduced`; there are no `data-stage` values. Wait for `.ws2`, an enabled
+   `textarea[aria-label='输入消息']` and ONLINE status. Clicking anywhere or
+   pressing Esc skips straight to the workstation. Capture the drawn seam and
+   the opening frames; at real speed the sequence lasts ~3s, so capture with
+   `browser_evaluate` sampling of `.entry-pane`/`.entry-seam` computed styles
+   and/or a temporarily slowed `--dur-page` style injection.
    Capture `02-workstation-empty.png`.
 
 4. Fill `textarea[aria-label='输入消息']` with `记录本次视觉走查`, then click
