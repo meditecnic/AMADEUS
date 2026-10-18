@@ -1,457 +1,396 @@
-.login-screen-container {
-  width: 100vw;
-  height: 100vh;
-  background-color: var(--surface-0);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+/* Salieri login — a drafting sheet.
+ * Black paper ruled in a fine grid, a drive train and a protractor drawn on it, and a pen that drafts the
+ * AMADEUS wordmark: construction lines, outline, then ink. After the password is accepted the same pen crosses
+ * the whole sheet, the workstation is drafted in behind it, and the wordmark docks onto the header's.
+ * One style on both worldlines. Reduced motion: the finished sheet, still, and a short fade on success.
+ */
+
+.sl-root {
+  --ink: #f1f0eb;
+  --ink-2: rgba(241, 240, 235, .66);
+  --ink-3: rgba(241, 240, 235, .38);
+  --line: rgba(241, 240, 235, .13);
+  --line-2: rgba(241, 240, 235, .3);
+  --paper: #0a0b0c;
+  --blade: #e4e3de;
+  --blade-ink: #0b0c0e;
+  --err: #ff6b5e;
+  --err-ink: #ff9a90;
+  --rose: #e7a4b2;
+  --fr-r: rgba(255, 46, 96, .62);
+  --fr-b: rgba(70, 150, 255, .56);
+  --serif: 'EB Garamond', 'Garamond', Georgia, 'Noto Serif SC', serif;
+  --mono: var(--font-mono, 'IBM Plex Mono', ui-monospace, monospace);
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
+  --ww: clamp(500px, min(50vw, 90vh), 1080px);
+  --field: clamp(300px, calc(var(--ww) * .44), 460px);
+
+  position: fixed;
+  inset: 0;
+  z-index: 200;
   overflow: hidden;
-  position: relative;
-}
-
-/* 顶层全屏 CRT 扫描线与暗角滤镜 */
-.crt-effects-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  /* 扫描线效果 */
-  background: repeating-linear-gradient(
-    0deg,
-    rgba(0, 0, 0, 0.12) 0px,
-    rgba(0, 0, 0, 0.12) 1px,
-    transparent 1px,
-    transparent 3px
-  );
-  /* 边缘暗角 */
-  box-shadow: inset 0 0 120px color-mix(in srgb, var(--shadow-tone) 75%, transparent);
-  z-index: 10;
-  pointer-events: none;
-  /* 微弱电压亮度闪烁 */
-  animation: crt-flicker var(--dur-compat-150) infinite;
-}
-
-@keyframes crt-flicker {
-  0% { opacity: 0.97; }
-  50% { opacity: 1.0; }
-  100% { opacity: 0.98; }
-}
-
-/* 左侧写实照片视口 (已移入 wrapper 内部，与网格绝对同步缩放) */
-.left-photo-viewport {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 500px; /* 裁剪出的 500px 纯净宽度 */
-  height: 1080px;
-  z-index: 3;
-  pointer-events: none;
-  /* 滤色混合：自动滤除黑色底色，让人影白光像素无缝融入底图网格中 */
-  mix-blend-mode: screen;
-}
-
-.left-photo {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: left center;
-  filter: grayscale(100%) contrast(110%) brightness(90%);
-}
-
-/* 1920x1080 比例下的自适应画布 wrapper */
-.login-content-wrapper {
-  width: 1920px;
-  height: 1080px;
-  /* Original CG comes from the optional asset pack; without it the canvas stays near-black. */
-  background-color: var(--surface-0);
-  background-image: var(--pack-login-bg, none);
-  background-size: 100% 100%;
-  background-position: center;
-  background-repeat: no-repeat;
-  position: absolute;
-  transform-origin: center center;
-  z-index: 2;
+  color: var(--ink);
+  font-family: var(--font-ui, sans-serif);
+  -webkit-font-smoothing: antialiased;
   user-select: none;
 }
+.sl-root.reduced { transition: opacity .3s ease; }
+.sl-root.reduced.exiting { opacity: 0; pointer-events: none; }
+.sl-root.exiting:not(.reduced) { cursor: pointer; }
 
-.salieri-login-form {
-  position: relative;
-  width: 100%;
-  height: 100%;
+/* ---------- paper ---------- */
+.sl-backdrop { position: absolute; inset: 0; background: var(--paper); }
+.sl-grid {
+  position: absolute; inset: -24px;
+  background:
+    linear-gradient(90deg, rgba(241, 240, 235, .055) 1px, transparent 1px) 0 0 / 80px 80px,
+    linear-gradient(rgba(241, 240, 235, .055) 1px, transparent 1px) 0 0 / 80px 80px,
+    linear-gradient(90deg, rgba(241, 240, 235, .024) 1px, transparent 1px) 0 0 / 16px 16px,
+    linear-gradient(rgba(241, 240, 235, .024) 1px, transparent 1px) 0 0 / 16px 16px;
+  transform: translate3d(calc(var(--px, 0) * -3px), calc(var(--py, 0) * -3px), 0);
+  transition: transform 1.1s var(--ease-out);
+}
+.sl-plate {
+  position: absolute; inset: -28px;
+  transform: translate3d(calc(var(--px, 0) * -12px), calc(var(--py, 0) * -9px), 0);
+  transition: transform 1.1s var(--ease-out);
+}
+.sl-vignette { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse 75% 70% at 50% 46%, transparent 40%, rgba(0, 0, 0, .62) 100%); }
+
+/* ---------- plate ---------- */
+.bp-plate { display: block; width: 100%; height: 100%; fill: none; stroke: rgba(241, 240, 235, .15); stroke-width: 1; overflow: visible; }
+.bp-plate * { vector-effect: non-scaling-stroke; }
+.bp-plate .cl { stroke: rgba(241, 240, 235, .075); stroke-dasharray: 34 7 5 7; }
+.bp-plate .dash { stroke: rgba(241, 240, 235, .11); stroke-dasharray: 2 7; }
+.bp-plate .tk { stroke: rgba(241, 240, 235, .13); }
+.bp-plate .bp-train .ln { stroke: rgba(241, 240, 235, .21); }
+.bp-plate .bp-marks .ln { stroke: rgba(241, 240, 235, .28); }
+.bp-plate text { stroke: none; fill: rgba(241, 240, 235, .3); font-family: var(--mono); font-size: 12px; letter-spacing: .08em; }
+.bp-plate .cap { font-size: 12.5px; letter-spacing: .24em; fill: rgba(241, 240, 235, .34); }
+.bp-gear { transition: transform .46s cubic-bezier(.3, 1.7, .45, 1); }
+.bp-arm { animation: bp-arm 46s linear infinite; }
+.bp-arm .leg { stroke: rgba(241, 240, 235, .34); }
+.bp-arm .tip { fill: var(--ink); stroke: none; opacity: .8; }
+.bp-arm .pivot { stroke: rgba(241, 240, 235, .4); }
+.bp-arm .trail { stroke: rgba(241, 240, 235, .3); stroke-width: 1.4; }
+.bp-arm .trail.t2 { stroke: rgba(241, 240, 235, .55); }
+@keyframes bp-arm { to { transform: rotate(360deg); } }
+/* The probe sits further back than the drive train: fainter lines, hidden edges dashed short. */
+.bp-plate .bp-probe .ln { stroke: rgba(241, 240, 235, .125); }
+.bp-plate .bp-probe .dash { stroke: rgba(241, 240, 235, .07); stroke-dasharray: 3 4; }
+.bp-plate .bp-probe .tk { stroke: rgba(241, 240, 235, .065); }
+.bp-plate .bp-probe .cl { stroke: rgba(241, 240, 235, .065); }
+.bp-plate .bp-probe text { fill: rgba(241, 240, 235, .22); }
+.bp-drift { transform-box: view-box; animation: bp-drift 14s ease-in-out infinite alternate; }
+@keyframes bp-drift { 0% { transform: translate(-3px, 2px) rotate(-.5deg); } 50% { transform: translate(2px, -4px) rotate(.2deg); } 100% { transform: translate(4px, 1px) rotate(.6deg); } }
+
+.sl-root.intro .bp-plate .ln { stroke-dasharray: 1; stroke-dashoffset: 1; animation: bp-draw 1.9s cubic-bezier(.45, .05, .2, 1) calc(var(--d, 0ms) + 240ms) forwards; }
+.sl-root.intro .bp-plate :is(.cl, .dash, .tk, text) { animation: sl-fade 1.4s ease .5s backwards; }
+.sl-root.intro .bp-arm { animation: bp-arm 46s linear infinite, sl-fade 1s ease 1.4s backwards; }
+@keyframes bp-draw { to { stroke-dashoffset: 0; } }
+@keyframes sl-fade { from { opacity: 0; } }
+
+/* ---------- sheet frame: zone markers like a drawing border ---------- */
+.sl-frame { position: absolute; inset: 18px; border: 1px solid var(--line); pointer-events: none; }
+.sl-frame .zones { position: absolute; display: flex; font-family: var(--mono); font-size: 10px; letter-spacing: .1em; color: var(--ink-3); }
+.sl-frame .zones.top, .sl-frame .zones.bottom { left: 0; right: 0; height: 14px; }
+.sl-frame .zones.top { top: 0; }
+.sl-frame .zones.bottom { bottom: 0; }
+.sl-frame .zones.left, .sl-frame .zones.right { top: 0; bottom: 0; width: 14px; flex-direction: column; }
+.sl-frame .zones.left { left: 0; }
+.sl-frame .zones.right { right: 0; }
+.sl-frame .zones span { flex: 1; display: grid; place-items: center; position: relative; opacity: .8; }
+.sl-frame .zones span + span::before { content: ''; position: absolute; background: var(--line-2); }
+.sl-frame .zones:is(.top, .bottom) span + span::before { left: 0; width: 1px; height: 7px; }
+.sl-frame .zones.top span + span::before { top: 0; }
+.sl-frame .zones.bottom span + span::before { bottom: 0; }
+.sl-frame .zones:is(.left, .right) span + span::before { top: 0; height: 1px; width: 7px; }
+.sl-frame .zones.left span + span::before { left: 0; }
+.sl-frame .zones.right span + span::before { right: 0; }
+
+.sl-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+/* The clock is the sheet's title block: two ruled rows in the upper right. */
+.sl-tblock {
+  position: absolute; top: 40px; right: 50px;
+  display: grid; grid-template-columns: auto auto;
+  border: 1px solid var(--line-2);
+  font-family: var(--mono); font-size: clamp(10.5px, .56vw, 13px); line-height: 1; letter-spacing: .2em; white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.sl-tblock span { padding: 6px 10px 5px; }
+.sl-tblock .k { color: var(--ink-3); border-right: 1px solid var(--line); padding-right: 9px; }
+.sl-tblock .v { color: var(--ink-2); text-align: right; }
+.sl-tblock span:nth-child(n + 3) { border-top: 1px solid var(--line); }
+
+/* Lower right: the original's title-screen lines, set like a title menu (an easter egg). Nothing here can be chosen. */
+.sl-verse {
+  position: absolute; right: 50px; bottom: 66px;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
+  padding-right: 14px; border-right: 1px solid var(--line);
+  font-family: var(--mono); font-size: clamp(10px, .54vw, 13px); line-height: 1.15; letter-spacing: .02em; color: rgba(241, 240, 235, .3);
+  white-space: nowrap;
+}
+.sl-verse p { position: relative; margin: 0; }
+.sl-verse p::after { content: ''; position: absolute; right: -15px; top: 50%; width: 6px; height: 1px; background: var(--line-2); }
+.sl-verse p:first-child { color: rgba(241, 240, 235, .46); }
+
+/* The one line that matters for trust, quietly at the foot of the sheet. */
+.sl-note {
+  position: absolute; left: 50%; bottom: 38px; margin: 0; transform: translateX(-50%);
+  font-family: var(--mono); font-size: clamp(11px, .57vw, 14px); letter-spacing: .24em; color: var(--ink-3); white-space: nowrap;
 }
 
-/* 登录表单居中容器（剪影右侧可用区域 500~1920 内居中） */
-.login-form-center {
-  position: absolute;
-  left: 500px;
-  top: 0;
-  width: 1420px;
-  height: 1080px;
-  z-index: 5;
-}
+.sl-root.intro :is(.sl-frame, .sl-tblock, .sl-note) { animation: sl-fade .8s ease .15s backwards; }
+.sl-root.intro .sl-verse { animation: sl-fade .4s ease 1.9s backwards; }
+/* typed out once per visit; runs past the intro, so it is not tied to it */
+.sl-root:not(.reduced) .sl-verse p { animation: sl-type calc(var(--n) * 11ms) steps(var(--n)) calc(2.1s + var(--t)) backwards; }
+@keyframes sl-type { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
 
-/* Canvas 动态 0/1 语义色数字雨 */
-.binary-stream-canvas {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 1920px;
-  height: 1080px;
-  opacity: 0.25;
-  color: color-mix(in srgb, var(--accent-primary) 58%, transparent);
+/* ---------- centre: wordmark over the form ---------- */
+.sl-center {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding-bottom: 3vh;
   pointer-events: none;
-  z-index: 2;    /* 位于背景图之上，但在 Logo 和表单之下 */
+}
+.sl-center > * { pointer-events: auto; }
+.sl-title { margin: 0; font: inherit; line-height: 0; }
+.sl-word { display: block; width: var(--ww); will-change: transform; }
+
+.wm { display: block; width: 100%; height: auto; overflow: visible; }
+.wm line { vector-effect: non-scaling-stroke; }
+.wm-guides line { stroke: var(--ink); stroke-width: 1; }
+.wm-guides .g-base { opacity: .1; }
+.wm-guides .g-cap { opacity: .06; }
+.wm-guides .g-side { opacity: 0; }
+.wm-ink { filter: drop-shadow(-1.3px 0 0 var(--fr-r)) drop-shadow(1.3px 0 0 var(--fr-b)); }
+.wm-glyph .o { fill: none; stroke: var(--ink); stroke-width: 1.3px; vector-effect: non-scaling-stroke; opacity: 0; }
+.wm-glyph .f { fill: var(--ink); }
+.wm-tag { font-family: 'Noto Serif JP', var(--serif); font-weight: 400; font-size: 150px; letter-spacing: 34px; fill: var(--rose); opacity: .92; }
+.wm-pen { opacity: 0; }
+.wm-pen line { stroke: var(--ink); stroke-width: 1.2; }
+.wm-pen circle { fill: var(--ink); }
+
+/* Drafting: the baseline runs in from the sheet's edge, the cap line back from the other side; the pen crosses
+ * and each letter is outlined as it passes, then inked. */
+.wm.is-intro .g-base { transform-box: fill-box; transform-origin: left; animation: wm-guide .95s cubic-bezier(.6, 0, .2, 1) .05s both, wm-guide-rest 1.2s ease 1.8s both; }
+.wm.is-intro .g-cap { transform-box: fill-box; transform-origin: right; animation: wm-guide .95s cubic-bezier(.6, 0, .2, 1) .25s both, wm-guide-rest-cap 1.2s ease 1.9s both; }
+.wm.is-intro .g-side { animation: wm-side .7s ease-out var(--t) both; }
+.wm.is-intro .wm-glyph .o { stroke-dasharray: 1; animation: wm-outline 1.25s cubic-bezier(.4, 0, .2, 1) var(--t) both; }
+.wm.is-intro .wm-glyph .f { animation: wm-fill .42s ease calc(var(--t) + .38s) both; }
+.wm.is-intro .wm-pen { animation: wm-pen var(--pen-dur) linear var(--pen-start) both; }
+.wm.is-intro .wm-tag { animation: wm-tag .7s var(--ease-out) 1.6s both; }
+.wm.is-intro .wm-ink { animation: wm-fringe 1.6s ease .4s both; }
+@keyframes wm-guide { from { transform: scaleX(0); opacity: .75; } to { transform: scaleX(1); opacity: .75; } }
+@keyframes wm-guide-rest { from { opacity: .75; } to { opacity: .1; } }
+@keyframes wm-guide-rest-cap { from { opacity: .75; } to { opacity: .06; } }
+@keyframes wm-side { 0% { opacity: 0; } 12% { opacity: .55; } 100% { opacity: 0; } }
+@keyframes wm-outline { 0% { opacity: 1; stroke-dashoffset: 1; } 45% { stroke-dashoffset: 0; opacity: 1; } 70% { opacity: .9; stroke-dashoffset: 0; } 100% { opacity: 0; stroke-dashoffset: 0; } }
+@keyframes wm-fill { from { opacity: 0; } to { opacity: 1; } }
+@keyframes wm-pen { 0% { opacity: 0; transform: translateX(var(--pen-from)); } 5% { opacity: 1; } 92% { opacity: 1; } 100% { opacity: 0; transform: translateX(var(--pen-to)); } }
+@keyframes wm-tag { from { opacity: 0; transform: translateX(-60px); } }
+@keyframes wm-fringe { from { filter: drop-shadow(-4px 0 0 var(--fr-r)) drop-shadow(4px 0 0 var(--fr-b)); } }
+
+/* Checking: the pen scans the word. Refused: the ink jumps its registration. Accepted: one bright pulse. */
+.wm.is-busy .wm-pen { animation: wm-scan .8s cubic-bezier(.5, 0, .5, 1) infinite alternate; }
+@keyframes wm-scan { 0% { opacity: .7; transform: translateX(-120px); } 100% { opacity: .7; transform: translateX(6260px); } }
+.wm.is-glitch .wm-ink { animation: wm-glitch .36s steps(1) both; }
+@keyframes wm-glitch {
+  0% { transform: translateX(-26px); filter: drop-shadow(-6px 0 0 rgba(255, 60, 70, .9)) drop-shadow(5px 0 0 var(--fr-b)); }
+  22% { transform: translateX(18px); filter: drop-shadow(5px 0 0 rgba(255, 60, 70, .9)) drop-shadow(-4px 0 0 var(--fr-b)); }
+  44% { transform: translateX(-10px); filter: drop-shadow(-3px 0 0 rgba(255, 60, 70, .8)) drop-shadow(3px 0 0 var(--fr-b)); }
+  66% { transform: translateX(4px); }
+  100% { transform: none; }
+}
+.wm.is-ink .wm-ink { animation: wm-inkpulse .7s ease-out both; }
+@keyframes wm-inkpulse {
+  0% { filter: drop-shadow(-1.3px 0 0 var(--fr-r)) drop-shadow(1.3px 0 0 var(--fr-b)); }
+  25% { filter: drop-shadow(-5px 0 0 var(--fr-r)) drop-shadow(5px 0 0 var(--fr-b)) drop-shadow(0 0 18px rgba(255, 255, 255, .55)); }
+  100% { filter: drop-shadow(0 0 0 transparent) drop-shadow(0 0 0 transparent) drop-shadow(0 0 0 transparent); }
+}
+.wm.is-ink :is(.wm-guides, .wm-tag) { opacity: 0; transition: opacity .25s ease; }
+.wm.is-flying .wm-ink { filter: none; animation: none; }
+
+/* Under the word: a dimension line, the sheet's own measure of it. */
+.sl-dim { display: flex; align-items: center; gap: 0; width: calc(var(--ww) * .98); margin-top: clamp(14px, 2.4vh, 26px); font-family: var(--mono); font-size: 11px; letter-spacing: .34em; color: var(--ink-3); white-space: nowrap; }
+.sl-dim i { flex: 1; height: 9px; position: relative; }
+.sl-dim i::before { content: ''; position: absolute; left: 0; right: 0; top: 4px; height: 1px; background: var(--line-2); }
+.sl-dim i:first-child { border-left: 1px solid var(--line-2); }
+.sl-dim i:last-child { border-right: 1px solid var(--line-2); }
+.sl-dim i:first-child::after, .sl-dim i:last-child::after { content: ''; position: absolute; top: 1px; width: 0; height: 0; border: 3.5px solid transparent; }
+.sl-dim i:first-child::after { left: 1px; border-right: 7px solid var(--line-2); border-left: 0; }
+.sl-dim i:last-child::after { right: 1px; border-left: 7px solid var(--line-2); border-right: 0; }
+.sl-root.intro .sl-dim i:first-child { transform-origin: right; animation: sl-dim .7s var(--ease-out) 1.2s both; }
+.sl-root.intro .sl-dim i:last-child { transform-origin: left; animation: sl-dim .7s var(--ease-out) 1.2s both; }
+@keyframes sl-dim { from { transform: scaleX(0); } }
+
+/* ---------- form ---------- */
+.sl-form {
+  display: grid;
+  grid-template-columns: 1fr var(--field) 1fr;
+  row-gap: clamp(14px, 2.2vh, 22px);
+  width: calc(var(--field) + 2 * clamp(150px, 13vw, 210px));
+  margin-top: clamp(30px, 6.2vh, 70px);
+}
+.sl-row { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center; }
+.sl-label {
+  justify-self: end; position: relative; margin-right: 22px; padding: 7px 14px 6px 18px;
+  font-family: var(--serif); font-weight: 500; font-size: clamp(16px, 1.08vw, 20px); line-height: 1; letter-spacing: .2em;
+  color: var(--ink-2); white-space: nowrap; cursor: default;
+  --pl: var(--blade);
+  transition: color .16s ease;
+}
+.sl-label span { position: relative; z-index: 1; transition: text-shadow .16s ease; }
+.sl-row.is-error .sl-label { --pl: var(--err); }
+
+/* The nameplate. Resting: only a ghost of its outline. Focused: the edge is drawn round from the cut corner,
+ * then the plate is inked in paper white (red when refused), off register by a pixel, grain showing through. */
+.lp { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.lp path { vector-effect: non-scaling-stroke; }
+.lp-ghost { fill: none; stroke: rgba(241, 240, 235, .1); stroke-width: 1; }
+.lp-edge { fill: none; stroke: var(--pl); stroke-width: 1; stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset .1s ease-in, stroke .2s ease; }
+.lp-fill { fill: var(--pl); opacity: 0; transition: opacity .1s ease, fill .2s ease; }
+.lp-reg { opacity: 0; transition: opacity .1s ease; }
+.lp-reg.r { fill: rgba(255, 46, 96, .5); }
+.lp-reg.b { fill: rgba(70, 150, 255, .42); }
+.lp-inner { fill: none; stroke: rgba(11, 12, 14, .5); stroke-width: .75; opacity: 0; transition: opacity .1s ease; }
+.lp-marks { fill: none; stroke: var(--ink-3); stroke-width: 1; opacity: 0; transition: opacity .1s ease, stroke .2s ease; }
+
+.sl-label.is-on { color: var(--blade-ink); transition: color .14s ease .17s; }
+.sl-label.is-on span { text-shadow: -.6px 0 rgba(255, 46, 96, .34), .6px 0 rgba(70, 150, 255, .3), 0 0 .5px rgba(11, 12, 14, .55); transition-delay: .17s; }
+.sl-label.is-on .lp-edge { stroke-dashoffset: 0; transition: stroke-dashoffset .22s cubic-bezier(.5, 0, .3, 1), stroke .2s ease; }
+.sl-label.is-on .lp-fill { opacity: 1; transition: opacity .18s ease .16s, fill .2s ease; }
+.sl-label.is-on :is(.lp-reg, .lp-inner) { opacity: 1; transition: opacity .18s ease .2s; }
+.sl-label.is-on .lp-marks { opacity: 1; stroke: rgba(241, 240, 235, .5); transition: opacity .2s ease .24s, stroke .2s ease; }
+.sl-row.is-error .sl-label .lp-marks { stroke: rgba(255, 107, 94, .7); }
+
+.sl-slot {
+  position: relative; height: clamp(46px, 5.6vh, 56px);
+  background: linear-gradient(to top, rgba(241, 240, 235, .045), transparent 75%);
+  border-bottom: 1px solid var(--line-2);
+  transition: border-color .2s ease, background .2s ease;
+}
+/* End ticks of the dimension the field measures. */
+.sl-slot::before, .sl-slot::after { content: ''; position: absolute; bottom: -1px; width: 1px; height: 9px; background: var(--line-2); transition: height .22s var(--ease-out), background .2s ease; }
+.sl-slot::before { left: 0; }
+.sl-slot::after { right: 0; }
+.sl-slot:focus-within { background: linear-gradient(to top, rgba(241, 240, 235, .075), transparent 80%); }
+.sl-slot:focus-within::before, .sl-slot:focus-within::after { height: 15px; background: var(--ink); }
+.sl-ul { position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; background: var(--ink); box-shadow: 0 0 8px rgba(241, 240, 235, .5); transform: scaleX(0); transform-origin: left; transition: transform .32s cubic-bezier(.6, 0, .2, 1); }
+.sl-slot:focus-within .sl-ul { transform: none; }
+.sl-row.is-error .sl-slot { border-bottom-color: var(--err); }
+.sl-row.is-error .sl-slot::before, .sl-row.is-error .sl-slot::after { background: var(--err); }
+.sl-row.is-error .sl-ul { background: var(--err); box-shadow: 0 0 8px rgba(255, 107, 94, .6); }
+
+.sl-input {
+  display: block; width: 100%; height: 100%; padding: 0 64px 0 16px; border: 0; outline: none; background: transparent;
+  font-family: var(--serif); font-weight: 500; font-size: clamp(18px, 1.2vw, 22px); letter-spacing: .05em;
+  color: var(--ink); caret-color: var(--ink); user-select: text;
+}
+.sl-input.password-input { letter-spacing: .16em; }
+.sl-input:disabled { color: var(--ink-2); }
+.sl-input::selection { background: var(--blade); color: var(--blade-ink); }
+
+/* The ruler: one division per character, hanging under the baseline; the nib marks the end. */
+.sl-ruler { position: absolute; left: 16px; bottom: -6px; height: 5px; width: min(calc(var(--n) * 8px), calc(100% - 32px)); pointer-events: none;
+  background: repeating-linear-gradient(90deg, var(--ink-3) 0 1px, transparent 1px 8px); transition: width .18s var(--ease-out); }
+.sl-ruler .fresh { position: absolute; top: 0; left: min(calc((var(--n) - 1) * 8px), calc(100% - 1px)); width: 1px; height: 5px; background: var(--ink); animation: sl-tick .38s cubic-bezier(.3, 1.6, .5, 1) both; }
+@keyframes sl-tick { 0% { height: 0; } 40% { height: 12px; } 100% { height: 5px; opacity: .6; } }
+.sl-ruler .nib { position: absolute; top: 2px; left: 100%; width: 5px; height: 5px; margin-left: -2px; border-radius: 50%; background: var(--ink); opacity: 0; transform: scale(.4); transition: opacity .2s ease, transform .25s var(--ease-out); }
+.sl-slot:focus-within .sl-ruler .nib { opacity: 1; transform: none; }
+.sl-row.is-error .sl-ruler .nib { background: var(--err); }
+
+.sl-caps { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); padding: 3px 6px 2px; font-family: var(--mono); font-size: 10px; letter-spacing: .14em; color: var(--blade-ink); background: var(--blade); clip-path: polygon(4px 0, 100% 0, 100% 100%, 0 100%, 0 4px); }
+
+/* Connect: a dial. Hover turns the bezel a notch, press sets it, checking spins it, accepted fills it. */
+.sl-go {
+  justify-self: start; margin-left: 20px; width: clamp(52px, 3.2vw, 60px); aspect-ratio: 1; padding: 0; border: 0; border-radius: 50%;
+  background: none; color: var(--ink); cursor: pointer; position: relative; outline: none;
+  transition: transform .2s var(--ease-out), opacity .2s ease;
+}
+.sl-go svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.sl-go .halo { fill: none; stroke: var(--line); stroke-width: 1; }
+.sl-go .ticks { stroke: var(--ink-3); stroke-width: 1; transform-origin: 32px 32px; transition: transform .5s cubic-bezier(.3, 1.6, .45, 1), stroke .2s ease; }
+.sl-go .ring { fill: none; stroke: var(--ink-2); stroke-width: 1.2; transition: stroke .2s ease; }
+.sl-go .disc { fill: var(--ink); opacity: 0; transform-origin: 32px 32px; transform: scale(.6); transition: opacity .2s ease, transform .3s var(--ease-out); }
+.sl-go .arrow { fill: none; stroke: var(--ink); stroke-width: 1.5; stroke-linecap: square; transition: transform .25s var(--ease-out), stroke .2s ease; }
+.sl-go .check { fill: none; stroke: var(--blade-ink); stroke-width: 2; stroke-dasharray: 1; stroke-dashoffset: 1; }
+.sl-go:not(:disabled):hover .ticks { transform: rotate(15deg); stroke: var(--ink-2); }
+.sl-go:not(:disabled):hover .ring { stroke: var(--ink); }
+.sl-go:not(:disabled):hover .arrow { transform: translateX(2px); }
+.sl-go:not(:disabled):active { transform: scale(.94); }
+.sl-go:not(:disabled):active .disc { opacity: .14; transform: none; }
+.sl-go:focus-visible .halo { stroke: var(--ink); stroke-dasharray: 3 3; }
+.sl-go:disabled { cursor: default; }
+.sl-go:disabled:not(.is-busy):not(.is-ok) { opacity: .4; }
+.sl-go.is-busy .ticks { animation: sl-dial .9s steps(12) infinite; stroke: var(--ink); }
+.sl-go.is-busy .ring { stroke-dasharray: .22 .78; animation: sl-ring .9s linear infinite; stroke: var(--ink); }
+.sl-go.is-busy .arrow { opacity: .35; }
+@keyframes sl-dial { to { transform: rotate(360deg); } }
+@keyframes sl-ring { to { stroke-dashoffset: -1; } }
+.sl-go.is-ok .disc { opacity: 1; transform: none; }
+.sl-go.is-ok .arrow { opacity: 0; }
+.sl-go.is-ok .check { animation: bp-draw .3s ease .08s forwards; }
+.sl-go.is-ok .ticks { transform: rotate(45deg); stroke: var(--ink); }
+
+.sl-msg-line { grid-column: 2; min-height: 26px; margin-top: 2px; }
+.sl-msg { display: flex; align-items: center; gap: 10px; margin: 0; font-family: var(--serif); font-size: clamp(16px, 1.05vw, 19px); letter-spacing: .08em; color: var(--ink-2); }
+.sl-msg i { flex: none; width: 9px; height: 9px; background: var(--ink-2); clip-path: polygon(3px 0, 100% 0, 100% 100%, 0 100%, 0 3px); }
+.sl-msg.backend-status-banner { font-family: var(--mono); font-size: 12px; letter-spacing: .14em; }
+.sl-msg.backend-status-banner i { animation: sl-blink 1s steps(2) infinite; }
+.sl-msg.is-error { color: var(--err-ink); animation: sl-msg-in .26s var(--ease-out) both; }
+.sl-msg.is-error i { background: var(--err); }
+@keyframes sl-msg-in { from { opacity: 0; transform: translateY(-4px); } }
+@keyframes sl-blink { 50% { opacity: .2; } }
+
+/* Form drafted in after the word: labels slide in, baselines are ruled, the dial is drawn. */
+.sl-root.intro .sl-label { animation: sl-label-in .5s var(--ease-out) backwards; }
+.sl-root.intro .sl-row.user .sl-label { animation-delay: 1.05s; }
+.sl-root.intro .sl-row.pwd .sl-label { animation-delay: 1.14s; }
+.sl-root.intro .sl-slot { animation: sl-rule .62s cubic-bezier(.6, 0, .2, 1) backwards; }
+.sl-root.intro .sl-row.user .sl-slot { animation-delay: .95s; }
+.sl-root.intro .sl-row.pwd .sl-slot { animation-delay: 1.04s; }
+.sl-root.intro .sl-go .ring { stroke-dasharray: 1; animation: sl-ring-draw .8s cubic-bezier(.6, 0, .2, 1) 1.15s backwards; }
+.sl-root.intro .sl-go .ticks { animation: sl-ticks-in .9s cubic-bezier(.3, 1.4, .45, 1) 1.2s backwards; }
+.sl-root.intro .sl-go .halo, .sl-root.intro .sl-go .arrow { animation: sl-fade .5s ease 1.4s backwards; }
+@keyframes sl-label-in { from { opacity: 0; transform: translateX(-12px); } }
+@keyframes sl-rule { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 -20px 0); } }
+@keyframes sl-ring-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes sl-ticks-in { from { transform: rotate(-90deg); opacity: 0; } }
+
+/* ---------- entrance ---------- */
+/* The form folds away into the dial before the pen comes through. */
+.sl-root.exiting:not(.reduced) .sl-label { animation: sl-out-left .26s ease-in forwards; }
+.sl-root.exiting:not(.reduced) .sl-slot { animation: sl-retract .36s cubic-bezier(.6, 0, .4, 1) .04s forwards; }
+.sl-root.exiting:not(.reduced) :is(.sl-msg-line, .sl-dim) { animation: sl-out .2s ease forwards; }
+.sl-root.exiting:not(.reduced) .sl-go { animation: sl-go-out .3s ease-in .3s forwards; }
+@keyframes sl-out-left { to { opacity: 0; transform: translateX(-14px); } }
+@keyframes sl-retract { from { clip-path: inset(-20px 0 -20px 0); } to { clip-path: inset(-20px 0 -20px 100%); } }
+@keyframes sl-out { to { opacity: 0; } }
+@keyframes sl-go-out { to { opacity: 0; transform: scale(.7); } }
+.sl-root.exiting .sl-plate, .sl-root.exiting .sl-grid { transition: none; }
+
+/* The pen: a hairline the height of the window with ink streaks dragged behind it. */
+.sl-pen { position: absolute; top: 0; bottom: 0; left: 0; width: 1px; margin-left: -1px; pointer-events: none; opacity: 0; background: var(--ink); box-shadow: 0 0 10px rgba(255, 255, 255, .7), 0 0 26px rgba(255, 255, 255, .25); }
+.sl-root.sweeping .sl-pen { opacity: 1; }
+.sl-pen i { position: absolute; right: 7px; height: 4px; background: var(--ink); opacity: 0; }
+.sl-root.sweeping .sl-pen i { animation: sl-streak .92s linear both; }
+.sl-pen .s1 { top: 18%; width: 150px; }
+.sl-pen .s2 { top: 41%; width: 70px; height: 6px; animation-delay: .04s !important; }
+.sl-pen .s3 { top: 57%; width: 220px; height: 3px; }
+.sl-pen .s4 { top: 74%; width: 110px; height: 5px; animation-delay: .06s !important; }
+.sl-pen .s5 { top: 88%; width: 46px; }
+@keyframes sl-streak { 0% { opacity: 0; transform: scaleX(.2); } 25% { opacity: .9; transform: scaleX(1); } 70% { opacity: .85; transform: scaleX(1.25); } 100% { opacity: 0; transform: scaleX(.1); } }
+.sl-pen i { transform-origin: right; }
+
+@media (max-height: 760px) {
+  .sl-tblock { top: 30px; }
+  .sl-note { bottom: 28px; }
+  .sl-verse { bottom: 54px; gap: 7px; }
+  .sl-verse p:nth-child(n + 3) { display: none; }
 }
 
-/* ================= 官方大 Logo 定位与尺寸复原 ================= */
-
-.amadeus-logo-container {
-  position: absolute;
-  left: 130px; /* 修正水平居中，与下方输入框组左对齐 */
-  top: 150px;  /* 上移 50px */
-  width: 670px;
-  height: 480px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 4;
-
-  /* 对角线渐变羽化遮罩 */
-  -webkit-mask-image: linear-gradient(135deg, rgba(0,0,0,0) 30%, rgba(0,0,0,1) 70%);
-  mask-image: linear-gradient(135deg, rgba(0,0,0,0) 30%, rgba(0,0,0,1) 70%);
-  -webkit-mask-size: 400% 400%;
-  mask-size: 400% 400%;
-  -webkit-mask-position: 150% 150%;
-  mask-position: 150% 150%;
-  opacity: 0;
-  animation: reveal-logo-diagonal var(--dur-compat-1500) var(--ease-login) forwards;
-}
-
-/* Must fit inside the 670px logo box: its reveal mask clips anything wider (150px rendered as "MADEU"). */
-.amadeus-logo-text {
-  font-family: 'EB Garamond', Georgia, serif;
-  font-size: 104px;
-  font-weight: 500;
-  letter-spacing: .14em;
-  padding-left: .14em; /* balances the spacing after the last letter so the word stays centred */
-  color: var(--ink-primary);
-  text-shadow: 0 0 24px color-mix(in srgb, var(--accent-primary) 18%, transparent);
-}
-
-.amadeus-logo-img {
-  width: 100%;
-  height: auto;
-  transform: translateX(12px); /* 视觉居中重心补偿 */
-  animation: logo-breathe-glow var(--dur-compat-2500) var(--ease-compat-in-out) infinite var(--dur-compat-1500);
-}
-
-/* 1. 对角线渐变羽化显现 */
-@keyframes reveal-logo-diagonal {
-  0% {
-    -webkit-mask-position: 150% 150%;
-    mask-position: 150% 150%;
-    opacity: 0;
-  }
-  100% {
-    -webkit-mask-position: -50% -50%;
-    mask-position: -50% -50%;
-    opacity: 1;
-  }
-}
-
-/* 2. 贴合不规则划痕边缘的主题色呼吸发光 */
-@keyframes logo-breathe-glow {
-  0%, 100% {
-    filter: drop-shadow(0 0 8px color-mix(in srgb, var(--accent-primary) 40%, transparent));
-  }
-  50% {
-    filter: drop-shadow(0 0 20px color-mix(in srgb, var(--accent-primary) 80%, transparent));
-  }
-}
-
-/* ================= 输入框组定位 (整体下移，消除重叠并留白) ================= */
-
-.input-field-group {
-  position: absolute;
-  display: flex;
-  flex-direction: row; /* 水平排列，仿照原著 */
-  align-items: center; /* 垂直居中 */
-  z-index: 5;
-}
-
-.user-id-group {
-  left: 130px;
-  top: 650px; /* 整体下移，空出 Logo 尖端 */
-  width: 585px; /* 130px 标签 + 15px 间距 + 440px 输入框 */
-}
-
-.password-group {
-  left: 130px;
-  top: 735px; /* 整体下移 */
-  width: 585px;
-}
-
-
-.field-title {
-  color: var(--accent-primary);
-  font-family: 'OCR A Extended', 'OCR A', 'OCRA', monospace; /* 使用 OCR A 细体、硬朗锐利字体 */
-  font-size: 19px;
-  font-weight: normal;
-  letter-spacing: 0.5px;
-  width: 130px;
-  flex-shrink: 0; /* 禁止 flex 压缩 */
-  text-align: right;
-  margin-right: 15px;
-  text-shadow: 0 0 6px color-mix(in srgb, var(--accent-primary) 75%, transparent);
-  box-sizing: border-box;
-}
-
-.user-id-input {
-  width: 440px; /* 锁定输入框物理宽度 */
-  height: 48px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-0) 92%, transparent) 0%, color-mix(in srgb, var(--surface-0) 88%, transparent) 100%) !important;
-  backdrop-filter: blur(4px);
-  border: 1px solid rgba(255, 255, 255, 0.28) !important; /* 极细灰白半透明边框 */
-  border-radius: 0px !important;
-  outline: none !important;
-  color: var(--accent-primary);
-  font-family: 'OCR A Extended', 'OCR A', 'OCRA', 'Share Tech Mono', 'Courier New', monospace; /* 输入文字更换为 OCR A */
-  font-size: 24px;
-  font-weight: bold;
-  padding: 0 14px;
-  letter-spacing: 1.5px;
-  caret-color: var(--accent-primary) !important;
-  text-shadow: 0 0 8px color-mix(in srgb, var(--accent-primary) 95%, transparent);
-  box-sizing: border-box;
-  box-shadow: var(--plate-bevel), inset 0 2px 8px color-mix(in srgb, var(--shadow-tone) 60%, transparent), 0 0 0 color-mix(in srgb, var(--accent-primary) 0%, transparent);
-  
-  transition: border-color var(--dur-sg-base) var(--ease-compat), box-shadow var(--dur-sg-base) var(--ease-compat);
-}
-
-.user-id-input:focus, .password-input:focus {
-  border-color: rgba(255, 255, 255, 0.48) !important;
-  box-shadow: inset 0 0 8px color-mix(in srgb, var(--accent-primary) 15%, transparent), 0 0 6px color-mix(in srgb, var(--highlight-tone) 20%, transparent) !important;
-  animation: input-flicker-skew var(--dur-compat-4000) infinite alternate;
-  caret-color: var(--accent-primary) !important;
-}
-
-@keyframes input-flicker-skew {
-  0%, 93%, 98%, 100% {
-    transform: skewX(0deg);
-    filter: drop-shadow(0 0 0 transparent);
-  }
-  94% {
-    transform: skewX(1deg);
-    filter: drop-shadow(1px 0 0 rgba(255, 0, 0, 0.4)) drop-shadow(-1px 0 0 rgba(0, 0, 255, 0.4));
-  }
-  96% {
-    transform: skewX(-0.5deg);
-    filter: drop-shadow(-1px 0 0 rgba(255, 0, 0, 0.4)) drop-shadow(1px 0 0 rgba(0, 0, 255, 0.4));
-  }
-}
-
-.password-input-wrapper {
-  position: relative;
-  width: 440px; /* 锁定为 440px，确保与 user-id-input 宽度绝对对齐 */
-  height: 48px;
-}
-
-.password-input {
-  width: 100%; /* 填满 wrapper */
-  height: 48px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--surface-0) 92%, transparent) 0%, color-mix(in srgb, var(--surface-0) 88%, transparent) 100%) !important;
-  backdrop-filter: blur(4px);
-  border: 1px solid rgba(255, 255, 255, 0.28) !important;
-  border-radius: 0px !important;
-  outline: none !important;
-  color: var(--accent-primary);
-  font-family: 'OCR A Extended', 'OCR A', 'OCRA', 'Share Tech Mono', 'Courier New', monospace;
-  font-size: 24px;
-  font-weight: bold;
-  padding: 0 14px;
-  letter-spacing: 4px; /* 密码框文字间距 */
-  caret-color: var(--accent-primary) !important;
-  text-shadow: 0 0 8px color-mix(in srgb, var(--accent-primary) 95%, transparent);
-  box-sizing: border-box;
-  box-shadow: var(--plate-bevel), inset 0 2px 8px color-mix(in srgb, var(--shadow-tone) 60%, transparent);
-  transition: border-color var(--dur-sg-base) var(--ease-compat), box-shadow var(--dur-sg-base) var(--ease-compat);
-}
-
-/* ================= 密码输入框下方常态显示的红色小竖杠 ================= */
-
-
-
-/* ================= 纯 SVG 的圆形提交按钮 (精美科技动效设计) ================= */
-
-.btn-container {
-  position: absolute;
-  left: 735px;
-  top: 719px; /* 上移至 719px，实现与 48px 高度的输入框垂直中线完美对齐 */
-  width: 80px;
-  height: 80px;
-  z-index: 5;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.decrypt-btn {
-  background: transparent;
-  border: none;
-  width: 80px;
-  height: 80px;
-  cursor: pointer;
-  outline: none;
-  padding: 0;
-  transition: transform var(--dur-sg-base) var(--ease-login);
-}
-
-.decrypt-btn:focus-visible {
-  border-radius: 50%;
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 95%, transparent), 0 0 14px color-mix(in srgb, var(--accent-primary) 55%, transparent);
-}
-
-.connect-btn-svg {
-  width: 100%;
-  height: 100%;
-}
-
-/* 外圈虚线圆环：开机后匀速旋转并具有微弱发光与玻璃底色质感 */
-.btn-circle-track {
-  fill: color-mix(in srgb, var(--accent-primary) 2%, transparent); /* 极其淡薄的背景，带来真空玻璃管底质感 */
-  stroke: color-mix(in srgb, var(--accent-primary) 28%, transparent); /* 低亮度主题描边 */
-  stroke-width: 2.2;
-  stroke-dasharray: 8 6;
-  transform-origin: 40px 40px;
-  filter: drop-shadow(0 0 2px color-mix(in srgb, var(--accent-primary) 35%, transparent));
-  animation: rotate-clockwise var(--dur-compat-18000) var(--ease-continuous) infinite;
-  transition: stroke var(--dur-compat-300) var(--ease-compat), filter var(--dur-compat-300) var(--ease-compat);
-}
-
-/* 内圈圆环：hover 时完全闭合发光 */
-.btn-circle-glow {
-  fill: none;
-  stroke: var(--accent-primary);
-  stroke-width: 3;
-  stroke-dasharray: 215;
-  stroke-dashoffset: 215;
-  transition: stroke-dashoffset var(--dur-compat-450) var(--ease-login), filter var(--dur-compat-450) var(--ease-compat);
-  transform-origin: 40px 40px;
-  transform: rotate(-90deg);
-  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--accent-primary) 50%, transparent));
-}
-
-/* 箭头：hover 时右滑并增粗 */
-.btn-arrow-icon {
-  fill: none;
-  stroke: var(--accent-primary);
-  stroke-width: 3.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  filter: drop-shadow(0 0 2px color-mix(in srgb, var(--accent-primary) 40%, transparent));
-  transition: transform var(--dur-compat-250) var(--ease-login), stroke-width var(--dur-sg-base) var(--ease-compat), filter var(--dur-sg-base) var(--ease-compat);
-  transform-origin: 40px 40px;
-}
-
-/* 按钮整体悬停与点击动效 */
-.decrypt-btn:hover:not(:disabled) {
-  transform: scale(1.06);
-}
-
-.decrypt-btn:hover:not(:disabled) .btn-circle-track {
-  stroke: color-mix(in srgb, var(--accent-primary) 65%, transparent);
-  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent-primary) 60%, transparent));
-}
-
-.decrypt-btn:hover:not(:disabled) .btn-circle-glow {
-  stroke-dashoffset: 0;
-  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--accent-primary) 95%, transparent));
-}
-
-.decrypt-btn:hover:not(:disabled) .btn-arrow-icon {
-  transform: translateX(3px);
-  stroke-width: 4.2px;
-  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--accent-primary) 90%, transparent));
-}
-
-/* 按钮点击时的凹陷反馈 */
-.decrypt-btn:active:not(:disabled) {
-  transform: scale(0.95);
-}
-
-.decrypt-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-/* 错误提示与密码输入框对齐。 */
-
-.auth-error-banner {
-  position: absolute;
-  left: 275px;
-  top: 810px;
-  width: 440px;
-  color: #e60000;
-  font-family: 'Share Tech Mono', 'Courier New', Courier, monospace;
-  font-size: 15px;
-  font-weight: bold;
-  letter-spacing: 2px;
-  text-align: center;
-  text-shadow: 0 0 10px rgba(230, 0, 0, 0.95);
-  text-transform: uppercase;
-  background-color: rgba(30, 0, 0, 0.45);
-  border-left: 3px solid #e60000;
-  border-right: 3px solid #e60000;
-  padding: 6px 0;
-  box-sizing: border-box;
-}
-
-.backend-status-banner {
-  color: var(--ink-secondary);
-  text-shadow: none;
-  background: none;
-  border: none;
-  font-weight: normal;
-  letter-spacing: 1px;
-}
-
-.input-error {
-  color: #e60000 !important;
-  border-color: rgba(230, 0, 0, 0.4) !important;
-  text-shadow: 0 0 8px rgba(230, 0, 0, 0.85) !important;
-  caret-color: var(--accent-primary) !important;
-}
-
-.input-error:focus {
-  border-color: rgba(230, 0, 0, 0.6) !important;
-  box-shadow: inset 0 0 10px rgba(230, 0, 0, 0.25), 0 0 8px rgba(230, 0, 0, 0.35) !important;
-  caret-color: var(--accent-primary) !important;
-}
-
-/* ================= Keyframes 动画库 ================= */
-
-/* 1. 旋转 */
-@keyframes rotate-clockwise {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-/* 2. 错误提示闪烁与震颤 */
-.glitch-flicker {
-  animation: error-glitch-flicker-anim var(--dur-compat-1200) infinite,
-             error-shake var(--dur-compat-300) var(--ease-compat-in-out);
-}
-
-@keyframes error-glitch-flicker-anim {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.7; text-shadow: 0 0 14px rgba(230, 0, 0, 1); }
-  98% { opacity: 1; }
-  99% { opacity: 0.15; }
-}
-
-@keyframes error-shake {
-  0%, 100% { transform: translateX(0); }
-  20%, 60% { transform: translateX(-4px); }
-  40%, 80% { transform: translateX(4px); }
-}
+/* Reduced motion: the finished sheet, nothing moving. */
+.sl-root.reduced *, .sl-root.reduced *::before, .sl-root.reduced *::after { animation: none !important; transition: none !important; }
+.sl-root.reduced .sl-plate, .sl-root.reduced .sl-grid { transform: none; }
