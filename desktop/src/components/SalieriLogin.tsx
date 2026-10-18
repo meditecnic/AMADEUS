@@ -1,30 +1,78 @@
 import { apiUrl, isPackagedTauri } from '../apiBase';
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import './SalieriLogin.css';
 import { audioService } from '../services/AudioService';
-import { packAsset } from '../assetPack';
 import { audioPlayer } from '../hooks/useAudioPlayer';
+import { useReducedMotion } from '../design-system/useReducedMotion';
+import { LightIris, type IrisAttention, type IrisHandle } from './login/LightIris';
+import { Astrolabe } from './login/Astrolabe';
+
+type Worldline = 'steins_gate' | 'beta';
+/** Beats of the entrance the app listens for: the iris opens on the room, the room wakes, the terminal is gone. */
+export type EntranceCue = 'light' | 'run' | 'gone' | 'skip';
 
 interface SalieriLoginProps {
   onLoginSuccess: () => void;
+  worldline?: Worldline;
+  onEntranceCue?: (cue: EntranceCue) => void;
 }
 
-export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) => {
+/** Stage geometry (1920 × 1080 design space). */
+const STAGE_W = 1920;
+const STAGE_H = 1080;
+const LENS_X = 960;
+const LENS_Y = 410;
+
+/** Slashed binary columns, seeded so they never reshuffle between renders. */
+function binaryColumn(seed: number, rows: number, min: number, spread: number) {
+  let s = seed;
+  const bit = () => ((s = (s * 1103515245 + 12345) & 0x7fffffff) >> 16) & 1;
+  return Array.from({ length: rows }, (_, i) => '/' + Array.from({ length: min + ((i * 7 + seed) % spread) }, bit).join(''));
+}
+const BIN_LEFT = binaryColumn(0x51a1, 18, 12, 7);
+const BIN_RIGHT = binaryColumn(0x2f1d, 18, 18, 11);
+
+const DAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+const pad = (n: number) => String(n).padStart(2, '0');
+function useClock() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  return `${now.getFullYear()}.${pad(now.getMonth() + 1)}.${pad(now.getDate())} ${DAYS[now.getDay()]}  ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+}
+
+export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, worldline = 'steins_gate', onEntranceCue }) => {
   const [userId, setUserId] = useState('');
   const [password, setPassword] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   // Which field the error belongs to; the message text is localized or a raw backend detail.
   const [errorField, setErrorField] = useState<'user' | 'password' | null>(null);
+  const [errorSeq, setErrorSeq] = useState(0);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [backendStatus, setBackendStatus] = useState<'starting' | 'ready' | 'timeout'>(isPackagedTauri ? 'starting' : 'ready');
-  const [scale, setScale] = useState(1);
-  const [photoFailed, setPhotoFailed] = useState(false);
-  const [logoFailed, setLogoFailed] = useState(false);
-  const photoLeft = packAsset('login/photo_left.png');
-  const amadeusLogo = packAsset('login/amadeus_logo.png');
+  const [focusField, setFocusField] = useState<'user' | 'password' | null>(null);
+  const [capsLock, setCapsLock] = useState(false);
+  const [exiting, setExiting] = useState(false);
+  const reduced = useReducedMotion();
+  const clock = useClock();
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const lensRef = useRef<IrisHandle>(null);
+  const userRowRef = useRef<HTMLDivElement>(null);
+  const pwdRowRef = useRef<HTMLDivElement>(null);
+  const pwdRef = useRef<HTMLInputElement>(null);
   const errTimeoutRef = useRef<number | null>(null);
+  const succeededRef = useRef(false);
+  const cueRef = useRef(onEntranceCue);
+  cueRef.current = onEntranceCue;
+  const goneRef = useRef(false);
+  const cue = (c: EntranceCue) => {
+    if (goneRef.current) return;
+    if (c === 'gone' || c === 'skip') goneRef.current = true;
+    cueRef.current?.(c);
+  };
 
   useEffect(() => {
     if (!isPackagedTauri) return;
@@ -69,6 +117,16 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
     }
     setErrorMsg(msg);
     setErrorField(field);
+    setErrorSeq((n) => n + 1);
+    lensRef.current?.flinch();
+    const row = field === 'user' ? userRowRef.current : pwdRowRef.current;
+    if (!reduced && typeof row?.animate === 'function') {
+      // A damped refusal: the slot is pushed back and settles, it does not wobble forever.
+      row.animate(
+        [{ transform: 'none' }, { transform: 'translateX(-9px)' }, { transform: 'translateX(7px)' }, { transform: 'translateX(-4px)' }, { transform: 'translateX(2px)' }, { transform: 'none' }],
+        { duration: 420, easing: 'cubic-bezier(.36, .07, .19, .97)' },
+      );
+    }
     errTimeoutRef.current = window.setTimeout(() => {
       setErrorMsg('');
       setErrorField(null);
@@ -85,94 +143,79 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
     };
   }, []);
 
-  // Play login-screen BGM on mount
+  // Login-screen BGM. After a successful login the workstation owns the channel, so leaving must not silence it.
   useEffect(() => {
     audioService.playBGM('/audio/bgm/Messenger main theme.ogg');
     return () => {
-      audioService.stopBGM();
+      if (!succeededRef.current) audioService.stopBGM();
     };
   }, []);
 
-  // 1. 动态计算 1920x1080 比例下的自适应 scale 值
-  useEffect(() => {
+  // 1920 × 1080 stage, scaled to fit; the lens centre is exported in viewport pixels for the entrance.
+  useLayoutEffect(() => {
     const handleResize = () => {
+      const el = rootRef.current;
+      if (!el) return;
       const w = window.innerWidth;
       const h = window.innerHeight;
-      const scaleFactor = Math.min(w / 1920, h / 1080);
-      setScale(scaleFactor);
+      const s = Math.min(w / STAGE_W, h / STAGE_H);
+      const ox = (w - STAGE_W * s) / 2;
+      const oy = (h - STAGE_H * s) / 2;
+      el.style.setProperty('--s', String(s));
+      el.style.setProperty('--ox', `${ox}px`);
+      el.style.setProperty('--oy', `${oy}px`);
+      el.style.setProperty('--cx', `${ox + LENS_X * s}px`);
+      el.style.setProperty('--cy', `${oy + LENS_Y * s}px`);
     };
-    
     handleResize();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // 2. USER ID 打字机自动录入效果 (基于显式局部变量，强力避免 React StrictMode 漏字与双计时器冲突)
+  // USER ID 打字机自动录入（等输入栏升起后开始）；每个字符都让瞳孔轻轻一动。写完后把光标交给密码栏。
   useEffect(() => {
     let index = 0;
     const targetText = 'Salieri';
     let current = '';
-    setUserId(''); // 初始清空
+    let typeTimer: number | undefined;
+    setUserId('');
 
-    const typeTimer = setInterval(() => {
+    const startTimer = window.setTimeout(() => { typeTimer = window.setInterval(() => {
       if (index < targetText.length) {
         current += targetText.charAt(index);
         setUserId(current);
+        lensRef.current?.twitch();
         index++;
       } else {
-        clearInterval(typeTimer);
+        window.clearInterval(typeTimer);
+        const active = document.activeElement;
+        if (!active || active === document.body) pwdRef.current?.focus();
       }
-    }, 50);
+    }, 50); }, reduced ? 0 : 1050);
 
-    return () => clearInterval(typeTimer); // 在 unmount 时彻底销毁计时器，规避竞争
+    return () => { window.clearTimeout(startTimer); window.clearInterval(typeTimer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 3. Canvas rain reads the same semantic ink as the login controls.
+  // Entrance: any deliberate key or click skips straight into the workstation.
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    // 设置 Canvas 绘图分辨率
-    canvas.width = 1920;
-    canvas.height = 1080;
-
-    const fontSize = 14;
-    const columns = Math.floor(canvas.width / fontSize);
-    
-    // 初始化每一列的垂直下落 y 坐标
-    const drops: number[] = [];
-    for (let i = 0; i < columns; i++) {
-      drops[i] = Math.random() * -20;
-    }
-
-    const drawBinaryRain = () => {
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      ctx.fillStyle = getComputedStyle(canvas).color;
-      ctx.font = `${fontSize}px monospace`;
-
-      for (let i = 0; i < drops.length; i++) {
-        const text = Math.random() > 0.5 ? '1' : '0';
-        const x = i * fontSize;
-        const y = drops[i] * fontSize;
-
-        ctx.fillText(text, x, y);
-
-        if (y > canvas.height && Math.random() > 0.975) {
-          drops[i] = 0;
-        }
-
-        drops[i]++;
-      }
+    if (!exiting || reduced) return;
+    const skip = (e: KeyboardEvent) => {
+      if (e.repeat || e.isComposing) return;
+      cue('skip');
     };
+    window.addEventListener('keydown', skip, true);
+    return () => window.removeEventListener('keydown', skip, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exiting, reduced]);
 
-    const rainTimer = setInterval(drawBinaryRain, 50);
-    return () => clearInterval(rainTimer);
-  }, []);
+  // Reduced motion: a short opacity fade only, with a fallback in case transitionend never arrives.
+  useEffect(() => {
+    if (!exiting || !reduced) return;
+    const id = window.setTimeout(() => cue('gone'), 400);
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exiting, reduced]);
 
   const handleInitAudio = () => {
     audioPlayer.init();
@@ -180,7 +223,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (backendStatus !== 'ready') return;
+    if (backendStatus !== 'ready' || exiting) return;
     handleInitAudio();
     if (!userId) {
       showAuthError('请输入 USER ID', 'user');
@@ -203,6 +246,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
     setErrorMsg('');
     setErrorField(null);
 
+    let accepted = false;
     try {
       const response = await fetch(apiUrl('/api/auth/salieri'), {
         method: 'POST',
@@ -213,7 +257,18 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
       });
 
       if (response.ok) {
+        accepted = true;
         audioService.playSFX('/audio/sfx/连接成功，进入页面2.ogg');
+        audioService.stopBGM();
+        succeededRef.current = true;
+        (document.activeElement as HTMLElement | null)?.blur?.();
+        const el = rootRef.current;
+        if (el) {
+          const root = document.documentElement.style;
+          root.setProperty('--amadeus-entry-x', el.style.getPropertyValue('--cx') || '50%');
+          root.setProperty('--amadeus-entry-y', el.style.getPropertyValue('--cy') || '37%');
+        }
+        setExiting(true);
         onLoginSuccess();
       } else {
         const errorData = await response.json().catch(() => ({}));
@@ -222,105 +277,147 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
     } catch (error) {
       showAuthError('系统连接已断开', 'password');
     } finally {
-      setIsAuthenticating(false);
+      if (!accepted) setIsAuthenticating(false);
     }
   };
 
+  const attention: IrisAttention = isAuthenticating ? 'busy' : focusField === 'password' ? 'password' : focusField === 'user' ? 'user' : 'idle';
+  const line = worldline === 'beta' ? 'beta' : 'sg';
+  const busy = isAuthenticating && !exiting;
+
   return (
-    <div className="login-screen-container">
-      {/* 顶层 CRT 扫描线与暗角效果 */}
-      <div className="crt-effects-overlay" />
-
-      <div 
-        className="login-content-wrapper" 
-        style={{ transform: `scale(${scale})` }}
-      >
-        {/* 左侧写实黑白照片 (已移入等比例缩放的 wrapper 内部，以实现 100% 精确网格线重合与滤色混合) */}
-        {photoLeft && !photoFailed && (
-          <div className="left-photo-viewport">
-            <img src={photoLeft} className="left-photo" alt="" onError={() => setPhotoFailed(true)} />
+    <div
+      ref={rootRef}
+      className={`sl-root${exiting ? ' exiting' : ''}${reduced ? ' reduced' : ''}${focusField ? ` focus-${focusField}` : ''}`}
+      data-line={line}
+      onPointerDown={() => { if (exiting && !reduced) cue('skip'); }}
+      onAnimationStart={(e) => { if (e.animationName === 'sl-dilate') cue('light'); }}
+      onAnimationEnd={(e) => {
+        if (e.animationName === 'sl-cue-run') cue('run');
+        else if (e.animationName === 'sl-dolly') cue('gone');
+      }}
+      onTransitionEnd={(e) => {
+        if (exiting && reduced && e.target === e.currentTarget && e.propertyName === 'opacity') cue('gone');
+      }}
+    >
+      <div className="sl-rig">
+        <div className="sl-masked">
+          <div className="sl-room" aria-hidden="true" />
+          <div className="sl-stage sl-stage-back" aria-hidden="true">
+            <div className="sl-grid" />
+            <svg className="sl-axes" viewBox={`0 0 ${STAGE_W} ${STAGE_H}`}>
+              <path d={`M520 ${LENS_Y}H1400M${LENS_X} 112V1010`} className="axis" />
+              {Array.from({ length: 21 }, (_, i) => (
+                <path key={i} d={`M${560 + i * 40} ${LENS_Y - (i % 5 === 0 ? 7 : 3)}v${i % 5 === 0 ? 14 : 6}`} className="tick" />
+              ))}
+              <text x="520" y={LENS_Y - 14} className="lab">A</text>
+              <text x="1400" y={LENS_Y - 14} className="lab end">A′</text>
+              <text x={LENS_X + 12} y="124" className="lab">B</text>
+              <text x={LENS_X + 12} y="1006" className="lab">B′</text>
+              <path d="M136 92h28M150 78v28M1756 1000h28M1770 986v28" className="cross" />
+            </svg>
+            <div className="sl-bin left"><div className="sl-bin-scroll">{[...BIN_LEFT, ...BIN_LEFT].map((r, i) => <span key={i}>{r}</span>)}</div></div>
+            <div className="sl-bin right"><div className="sl-bin-scroll">{[...BIN_RIGHT, ...BIN_RIGHT].map((r, i) => <span key={i}>{r}</span>)}</div><i className="sl-readhead" /></div>
           </div>
-        )}
-
-        {/* Canvas 动态二进制数字背景雨 */}
-        <canvas ref={canvasRef} className="binary-stream-canvas" />
-
-        <div className="login-form-center">
-          <form onSubmit={handleSubmit} className="salieri-login-form">
-
-            <div className="amadeus-logo-container">
-              {amadeusLogo && !logoFailed ? (
-                <img
-                  src={amadeusLogo}
-                  className="amadeus-logo-img"
-                  alt="AMADEUS Logo"
-                  onError={() => setLogoFailed(true)}
-                />
-              ) : (
-                <span className="amadeus-logo-text">AMADEUS</span>
-              )}
+          <div className="sl-chrome" aria-hidden="true">
+            <div className="sl-frame"><i /><i /><i /><i /></div>
+            <div className="sl-strip top">
+              <span className="sys"><b>AMADEUS</b> 观测终端 · OBSERVATION TERMINAL</span>
+              <span className="clock">{clock}</span>
             </div>
-
-            <div className="input-field-group user-id-group">
-              <label className="field-title" htmlFor="salieri-user">USER ID</label>
-              <input
-                id="salieri-user"
-                type="text"
-                className={`user-id-input ${errorField === 'user' ? 'input-error' : ''}`}
-                value={userId}
-                onChange={(e) => setUserId(e.target.value)}
-                disabled={isAuthenticating}
-                spellCheck={false}
-                autoComplete="off"
-              />
+            <div className="sl-strip bottom">
+              <span>LOCAL LINK · 记忆仅保存在这台设备上</span>
+              <span className="hint"><kbd>Enter ↵</kbd> 连接</span>
             </div>
+          </div>
+          <div className="sl-vignette" aria-hidden="true" />
+        </div>
 
-            <div className="input-field-group password-group">
-              <label className="field-title" htmlFor="salieri-pwd">PASSWORD</label>
-              <div className="password-input-wrapper">
+        <LightIris ref={lensRef} driver={rootRef} attention={attention} exiting={exiting && !reduced} reduced={reduced} worldline={worldline} />
+
+        <div className="sl-stage sl-stage-front">
+          <div className="sl-astro-wrap"><Astrolabe worldline={worldline} /></div>
+          <h1 className="sl-word" aria-label="AMADEUS">
+            {'AMADEUS'.split('').map((ch, i) => <span key={i} aria-hidden="true" style={{ '--i': i } as React.CSSProperties}>{ch}</span>)}
+          </h1>
+
+          <form onSubmit={handleSubmit} className="sl-form salieri-login-form" noValidate>
+            <div ref={userRowRef} className={`sl-row user${errorField === 'user' ? ' is-error' : ''}`}>
+              <label className="sl-label" htmlFor="salieri-user">USER ID</label>
+              <div className="sl-slot">
                 <input
-                  id="salieri-pwd"
-                  type="password"
-                  className={`password-input ${errorField === 'password' ? 'input-error' : ''}`}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  id="salieri-user"
+                  type="text"
+                  className="sl-input user-id-input"
+                  value={userId}
+                  onChange={(e) => { setUserId(e.target.value); lensRef.current?.twitch(); }}
+                  onFocus={() => setFocusField('user')}
+                  onBlur={() => setFocusField((f) => (f === 'user' ? null : f))}
                   disabled={isAuthenticating}
                   spellCheck={false}
                   autoComplete="off"
+                  aria-invalid={errorField === 'user' || undefined}
                 />
+                <i className="sl-corners" aria-hidden="true" />
               </div>
             </div>
 
-            <div className="btn-container">
+            <div ref={pwdRowRef} className={`sl-row pwd${errorField === 'password' ? ' is-error' : ''}`}>
+              <label className="sl-label" htmlFor="salieri-pwd">PASSWORD</label>
+              <div className="sl-slot">
+                <input
+                  ref={pwdRef}
+                  id="salieri-pwd"
+                  type="password"
+                  className="sl-input password-input"
+                  value={password}
+                  onChange={(e) => { setPassword(e.target.value); lensRef.current?.twitch(); }}
+                  onFocus={() => setFocusField('password')}
+                  onBlur={() => { setFocusField((f) => (f === 'password' ? null : f)); setCapsLock(false); }}
+                  onKeyDown={(e) => setCapsLock(e.getModifierState?.('CapsLock') ?? false)}
+                  onKeyUp={(e) => setCapsLock(e.getModifierState?.('CapsLock') ?? false)}
+                  disabled={isAuthenticating}
+                  spellCheck={false}
+                  autoComplete="off"
+                  aria-invalid={errorField === 'password' || undefined}
+                />
+                {capsLock && <span className="sl-caps" aria-hidden="true">CAPS</span>}
+                <i className="sl-corners" aria-hidden="true" />
+              </div>
               <button
                 type="submit"
-                className="decrypt-btn"
+                className={`decrypt-btn sl-go${busy ? ' is-busy' : ''}${exiting ? ' is-ok' : ''}`}
                 disabled={isAuthenticating || backendStatus !== 'ready'}
                 title="CONNECT"
                 aria-label="Decrypt and Connect"
               >
-                <svg viewBox="0 0 80 80" width="76" height="76" className="connect-btn-svg">
-                  <circle cx="40" cy="40" r="34" className="btn-circle-track" />
-                  <circle cx="40" cy="40" r="34" className="btn-circle-glow" />
-                  <path d="M 30 40 L 50 40 M 42 32 L 50 40 L 42 48" className="btn-arrow-icon" />
+                <svg viewBox="0 0 64 64" aria-hidden="true">
+                  <circle cx="32" cy="32" r="27.5" className="ring" />
+                  <g className="ticks">
+                    {Array.from({ length: 24 }, (_, i) => <path key={i} d={`M32 .5v${i % 6 === 0 ? 3.6 : 2}`} transform={`rotate(${i * 15} 32 32)`} />)}
+                  </g>
+                  <circle cx="32" cy="32" r="27.5" className="arc" pathLength={1} />
+                  <path d="M24.5 32h14M33 26.5l5.5 5.5-5.5 5.5" className="arrow" />
                 </svg>
               </button>
             </div>
 
-            {backendStatus !== 'ready' && (
-              <div className="auth-error-banner backend-status-banner" role="status">
-                {backendStatus === 'starting' ? '正在启动本地服务…' : '本地服务没有启动，请重新打开 Amadeus'}
-              </div>
-            )}
-
-            {errorMsg && (
-              <div className="auth-error-banner glitch-flicker">
-                {errorMsg}
-              </div>
-            )}
+            <div className="sl-msg-line">
+              {backendStatus !== 'ready' && (
+                <p className="sl-msg backend-status-banner" role="status">
+                  <i aria-hidden="true" />{backendStatus === 'starting' ? '正在启动本地服务…' : '本地服务没有启动，请重新打开 Amadeus'}
+                </p>
+              )}
+              {errorMsg && (
+                <p key={errorSeq} className="sl-msg is-error" role="alert">
+                  <b aria-hidden="true">REJECTED</b>{errorMsg}
+                </p>
+              )}
+            </div>
           </form>
         </div>
       </div>
+      <i className="sl-cue" aria-hidden="true" />
     </div>
   );
 };

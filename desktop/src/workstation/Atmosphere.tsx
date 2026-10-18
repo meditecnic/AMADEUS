@@ -1,3 +1,5 @@
+import type { CSSProperties } from 'react';
+
 /* The SG0 Amadeus screen's backdrop: ragged columns of slashed binary. Seeded so it never reshuffles between renders. */
 const BINARY = (() => {
   let s = 0x2f1d;
@@ -18,13 +20,14 @@ export function Atmosphere({ worldline }: { worldline: 'steins_gate' | 'beta' })
             </pattern>
           </defs>
           <circle className="bp" cx="520" cy="300" r="250" fill="url(#ws2-blueprint)" />
+          {/* pathLength lets the post-login entrance draw the solid strokes; dashed ones only fade in. */}
           <g fill="none" stroke="currentColor">
-            <circle cx="520" cy="300" r="250" strokeWidth=".6" />
-            <circle cx="520" cy="300" r="180" strokeWidth=".6" strokeDasharray="2 6" />
-            <circle cx="520" cy="300" r="96" strokeWidth=".6" />
-            <path d="M520 20v560M240 300h560" strokeWidth=".5" />
-            <path d="M330 110l380 380M710 110L330 490" strokeWidth=".35" strokeDasharray="1 7" />
-            <path d="M560 610h200M560 602v16M760 602v16" strokeWidth=".6" />
+            <circle className="ln" pathLength={1} style={{ '--d': 0 } as CSSProperties} cx="520" cy="300" r="250" strokeWidth=".6" transform="rotate(-90 520 300)" />
+            <circle className="dash" cx="520" cy="300" r="180" strokeWidth=".6" strokeDasharray="2 6" />
+            <circle className="ln" pathLength={1} style={{ '--d': 160 } as CSSProperties} cx="520" cy="300" r="96" strokeWidth=".6" transform="rotate(90 520 300)" />
+            <path className="ln" pathLength={1} style={{ '--d': 80 } as CSSProperties} d="M520 20v560M240 300h560" strokeWidth=".5" />
+            <path className="dash" d="M330 110l380 380M710 110L330 490" strokeWidth=".35" strokeDasharray="1 7" />
+            <path className="ln" pathLength={1} style={{ '--d': 420 } as CSSProperties} d="M560 610h200M560 602v16M760 602v16" strokeWidth=".6" />
           </g>
         </svg>
       ) : (
