@@ -85,9 +85,10 @@ milestones change the markup. Do not reuse snapshot refs across navigations.
 2. Wait until fonts are ready and `#salieri-user` has value `Salieri`.
    M1's typewriter takes time, so submitting immediately after navigation can
    produce `无效的 USER ID`. Use a bounded readiness check, not a long sleep.
-   Capture `01-login.png`. Login is worldline-neutral: the terminal looks the
-   same on both lines; the saved worldline only shows during the entrance
-   (the divergence ring turns to its reading and the iris takes its colour).
+   Capture `01-login.png`. Login is worldline-neutral: the drafting sheet looks
+   the same on both lines; the saved worldline only shows once the workstation
+   is revealed behind the pen. A wrong passphrase must read `密码错误` in the
+   `role="alert"` line and return focus to `#salieri-pwd` with its text selected.
 
 3. `browser_fill_form` targets `#salieri-pwd` with the mock passphrase
    `Gott würfelt nicht`, then `browser_click` targets `.decrypt-btn`.
@@ -95,9 +96,11 @@ milestones change the markup. Do not reuse snapshot refs across navigations.
    The actual route is not `/api/login`. Wait for `.ws2`, an enabled
    `textarea[aria-label='输入消息']`, ONLINE status and the entrance to
    finish: `.sl-root` is removed and `.ws2` loses `data-entrance` and
-   `inert` (about 3 s; any key or click skips; under `reduce` the terminal
-   fades out in 0.3 s with no entrance). The entrance plays once per login —
-   menus, Memory and session switches never replay it.
+   `inert` (about 2.5 s: the pen sweeps the sheet away left to right and the
+   AMADEUS title flies into the header wordmark; any key or click skips; under
+   `reduce` the terminal fades out in 0.3 s with no entrance). Focus then lands
+   in the composer. The entrance plays once per login — menus, Memory and
+   session switches never replay it.
    Capture `02-workstation-empty.png`.
 
 4. Fill `textarea[aria-label='输入消息']` with `记录本次视觉走查`, then click

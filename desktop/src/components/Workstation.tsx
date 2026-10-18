@@ -53,10 +53,11 @@ import {
 
 /**
  * Post-login entrance, driven by the login terminal's timeline:
- * hold (mounted, still, dark) → light (seen through the opening iris, the room's light comes on)
- * → run (the instruments assemble) → done. 'none' skips it (reduced motion, tests, direct mounts).
+ * hold (mounted, still, under the drafting sheet) → draft (the pen sweeps the sheet away and the
+ * instruments are drawn in behind it) → docked (the title wordmark has landed in the header) → done.
+ * 'none' skips it (reduced motion, tests, direct mounts).
  */
-export type EntrancePhase = 'none' | 'hold' | 'light' | 'run' | 'done';
+export type EntrancePhase = 'none' | 'hold' | 'draft' | 'docked' | 'done';
 
 interface WorkstationProps {
   worldline: 'steins_gate' | 'beta';
@@ -90,7 +91,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   onEntranceSettled,
 }) => {
   const reducedMotion = useReducedMotion();
-  const entering = entrance === 'hold' || entrance === 'light' || entrance === 'run';
+  const entering = entrance === 'hold' || entrance === 'draft' || entrance === 'docked';
   const [systemPrompt, setSystemPrompt] = useState('');
   const storedTtsChoice = useRef<string | null>(null);
   const [enableTts, setEnableTts] = useState(() => {
@@ -239,16 +240,24 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const wsRootRef = useRef<HTMLDivElement>(null);
   const speakingQueueRef = useRef<number[]>([]);
   const [speakingId, setSpeakingId] = useState<number | null>(null);
-  // When the entrance lets go, hand the keyboard to the composer unless something already has it.
-  const wasEntering = useRef(entering);
+  // The header wordmark that arrives with the entrance is already inked; a later worldline change redraws it.
+  const inkedLine = useRef<string | null>(entering ? worldline : null);
   useEffect(() => {
-    if (wasEntering.current && !entering) {
-      const active = document.activeElement;
-      const composer = wsRootRef.current?.querySelector<HTMLTextAreaElement>('textarea.chat-input-field');
-      if ((!active || active === document.body) && composer && !composer.disabled) composer.focus({ preventScroll: true });
-    }
-    wasEntering.current = entering;
-  }, [entering]);
+    if (inkedLine.current !== worldline) inkedLine.current = null;
+  }, [worldline]);
+  // Once the login has let go (after the entrance, or at once without one), hand the keyboard to the composer
+  // as soon as it can take input. The session settling can disable it for a moment, so the hand-off holds for a
+  // short while and gives up as soon as the user puts focus anywhere else.
+  const composerHandoffUntil = useRef<number | null>(null);
+  const handComposerFocus = useCallback(() => {
+    if (composerHandoffUntil.current === null) composerHandoffUntil.current = Date.now() + 3000;
+    if (Date.now() > composerHandoffUntil.current) return;
+    const composer = wsRootRef.current?.querySelector<HTMLTextAreaElement>('textarea.chat-input-field');
+    const active = document.activeElement;
+    if (active && active !== document.body && active !== composer) { composerHandoffUntil.current = 0; return; }
+    if (!composer || composer.disabled || active === composer) return;
+    composer.focus({ preventScroll: true });
+  }, []);
   const [shift, setShift] = useState<{ from: 'steins_gate' | 'beta'; to: 'steins_gate' | 'beta' } | null>(null);
   const systemButtonRef = useRef<HTMLButtonElement>(null);
   const openMenu = useCallback((section?: MenuSection) => {
@@ -1690,6 +1699,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
   // An old conversation whose connection was removed keeps its history but must be re-pointed by the user.
   const providerGone = Boolean(activeConversation) && providers.length > 0 && (!activeProvider || activeProvider.enabled === false);
   const sendBlocked = status !== 'READY' || sessionState === 'rejected' || sessionState === 'unknown' || isThinking || isSynthesizing || conversationBusy || providerGone;
+  useEffect(() => {
+    if (!entering) handComposerFocus();
+  }, [entering, sendBlocked, handComposerFocus]);
 
   return (
     <div
@@ -1709,7 +1721,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
       <Atmosphere worldline={worldline} />
       {entering && (
         <>
-          <div className="ws2-ent-scrim" aria-hidden="true" />
           <i
             className="ws2-ent-timer"
             aria-hidden="true"
@@ -1733,7 +1744,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         >
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" fill="none" stroke="currentColor" strokeWidth="1.2" /><path d="M6 2.5v11" stroke="currentColor" strokeWidth="1.2" /></svg>
         </button>
-        <div className="ws2-wordmark" aria-label="AMADEUS"><DraftWord key={worldline} text="AMADEUS" step={90} /></div>
+        <div className="ws2-wordmark" aria-label="AMADEUS"><DraftWord key={worldline} text="AMADEUS" step={90} className={inkedLine.current === worldline ? 'is-inked' : ''} /></div>
         <span className="ws2-date">
           <span className="d">{dateLabel}</span><b>{dayLabel}</b>
         </span>

@@ -51,8 +51,8 @@ function App() {
   };
 
   const handleEntranceCue = useCallback((cue: EntranceCue) => {
-    if (cue === 'light') setEntrance((e) => (e === 'hold' ? 'light' : e));
-    else if (cue === 'run') setEntrance((e) => (e === 'hold' || e === 'light' ? 'run' : e));
+    if (cue === 'draft') setEntrance((e) => (e === 'hold' ? 'draft' : e));
+    else if (cue === 'docked') setEntrance((e) => (e === 'hold' || e === 'draft' ? 'docked' : e));
     else if (cue === 'gone') setLoginOverlay(false);
     else {
       setLoginOverlay(false);
@@ -64,7 +64,7 @@ function App() {
     setEntrance((e) => (e === 'none' ? e : 'done'));
   }, []);
 
-  const entering = entrance === 'hold' || entrance === 'light' || entrance === 'run';
+  const entering = entrance === 'hold' || entrance === 'draft' || entrance === 'docked';
   useEffect(() => {
     if (!entering) return;
     const id = window.setTimeout(() => {

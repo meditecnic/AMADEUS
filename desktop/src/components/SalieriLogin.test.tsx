@@ -75,20 +75,31 @@ it('sends a Unicode password unchanged and hands over to the entrance on success
 
 it('rejects a wrong password with an alert, keeps the user on the terminal and clears after 3s', async () => {
   vi.useFakeTimers();
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, json: async () => ({ detail: '口令不正确，请重试。' }) }));
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401, json: async () => ({ detail: 'Invalid password' }) }));
   const { onLoginSuccess, container } = await renderLogin();
 
   const pwd = screen.getByLabelText('PASSWORD');
   fireEvent.change(pwd, { target: { value: 'amadeus' } });
   await act(async () => { fireEvent.keyDown(pwd, { key: 'Enter' }); fireEvent.submit(pwd.closest('form')!); });
 
-  expect(screen.getByRole('alert')).toHaveTextContent('REJECTED口令不正确，请重试。');
+  expect(screen.getByRole('alert')).toHaveTextContent(/^密码错误$/);
   expect(pwd).toHaveAttribute('aria-invalid', 'true');
   expect(onLoginSuccess).not.toHaveBeenCalled();
   expect(container.querySelector('.sl-root')).not.toHaveClass('exiting');
   expect(screen.getByRole('button', { name: 'Decrypt and Connect' })).toBeEnabled();
   await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});
+
+it('reports other backend refusals by their own detail, not as a wrong password', async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503, json: async () => ({ detail: '本地服务正在维护' }) }));
+  await renderLogin();
+
+  const pwd = screen.getByLabelText('PASSWORD');
+  fireEvent.change(pwd, { target: { value: 'Gott würfelt nicht' } });
+  await act(async () => { fireEvent.submit(pwd.closest('form')!); });
+  expect(screen.getByRole('alert')).toHaveTextContent(/^本地服务正在维护$/);
 });
 
 it('validates USER ID before calling the backend', async () => {
@@ -98,9 +109,12 @@ it('validates USER ID before calling the backend', async () => {
   await renderLogin();
 
   fireEvent.change(screen.getByLabelText('USER ID'), { target: { value: 'Okabe' } });
+  screen.getByLabelText('PASSWORD').focus();
   await act(async () => { fireEvent.submit(screen.getByLabelText('USER ID').closest('form')!); });
   expect(screen.getByRole('alert')).toHaveTextContent('无效的 USER ID');
   expect(fetchMock).not.toHaveBeenCalled();
+  // The keyboard goes back to the field at fault.
+  expect(screen.getByLabelText('USER ID')).toHaveFocus();
 });
 
 it('under reduced motion leaves with a short fade and still reports the terminal gone', async () => {
@@ -114,5 +128,5 @@ it('under reduced motion leaves with a short fade and still reports the terminal
   await act(async () => { fireEvent.submit(screen.getByLabelText('PASSWORD').closest('form')!); });
   await act(async () => { await vi.advanceTimersByTimeAsync(450); });
   expect(onEntranceCue).toHaveBeenCalledWith('gone');
-  expect(onEntranceCue).not.toHaveBeenCalledWith('light');
+  expect(onEntranceCue).not.toHaveBeenCalledWith('draft');
 });

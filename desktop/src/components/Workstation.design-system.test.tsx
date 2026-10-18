@@ -379,9 +379,9 @@ describe('Workstation S4-DS dark-only chrome', () => {
   it('plays the login entrance only when App hands it a phase, and settles exactly once', async () => {
     const onEntranceSettled = vi.fn();
     const props = { worldline: 'steins_gate' as const, onWorldlineChange: vi.fn(), onLogout: vi.fn(), onEntranceSettled };
-    const view = render(<Workstation {...props} entrance="run" />);
+    const view = render(<Workstation {...props} entrance="draft" />);
     const root = view.container.querySelector('.ws2')!;
-    expect(root).toHaveAttribute('data-entrance', 'run');
+    expect(root).toHaveAttribute('data-entrance', 'draft');
     expect(root).toHaveAttribute('inert');
     // jsdom has no AnimationEvent; React may listen under the prefixed name, so send both.
     const timer = view.container.querySelector('.ws2-ent-timer')!;
