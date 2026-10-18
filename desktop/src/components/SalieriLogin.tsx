@@ -1,30 +1,38 @@
+import React, { useEffect, useRef, useState } from 'react';
 import { apiUrl, isPackagedTauri } from '../apiBase';
-import React, { useState, useEffect, useRef } from 'react';
+import { useReducedMotion } from '../design-system/useReducedMotion';
+import { LoginRain } from './LoginRain';
 import './SalieriLogin.css';
-import { audioService } from '../services/AudioService';
-import { packAsset } from '../assetPack';
-import { audioPlayer } from '../hooks/useAudioPlayer';
 
 interface SalieriLoginProps {
   onLoginSuccess: () => void;
 }
 
+const USER_ID = 'Salieri';
+
 export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) => {
-  const [userId, setUserId] = useState('');
+  const reducedMotion = useReducedMotion();
+  const [userId, setUserId] = useState(USER_ID);
   const [password, setPassword] = useState('');
-  const [errorMsg, setErrorMsg] = useState('');
-  // Which field the error belongs to; the message text is localized or a raw backend detail.
-  const [errorField, setErrorField] = useState<'user' | 'password' | null>(null);
+  const [typing, setTyping] = useState(!reducedMotion);
+  const [error, setError] = useState<{ message: string; field: 'user' | 'password' } | null>(null);
+  const [glitching, setGlitching] = useState(false);
+  const [settling, setSettling] = useState(false);
+  const [buttonEngaged, setButtonEngaged] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [backendStatus, setBackendStatus] = useState<'starting' | 'ready' | 'timeout'>(isPackagedTauri ? 'starting' : 'ready');
-  const [scale, setScale] = useState(1);
-  const [photoFailed, setPhotoFailed] = useState(false);
-  const [logoFailed, setLogoFailed] = useState(false);
-  const photoLeft = packAsset('login/photo_left.png');
-  const amadeusLogo = packAsset('login/amadeus_logo.png');
+  const userRef = useRef<HTMLInputElement>(null);
+  const passwordRef = useRef<HTMLInputElement>(null);
+  const requestRef = useRef<AbortController | null>(null);
+  const pressedRef = useRef(false);
+  const composingRef = useRef(false);
+  const isTyping = typing && !reducedMotion;
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const errTimeoutRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (reducedMotion) { setTyping(false); setGlitching(false); setSettling(false); }
+  }, [reducedMotion]);
+
+  useEffect(() => () => requestRef.current?.abort(), []);
 
   useEffect(() => {
     if (!isPackagedTauri) return;
@@ -48,7 +56,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
           return;
         }
       } catch {
-        // 本地服务启动期间连接可能尚未建立，按间隔重试。
+        // The packaged local backend may still be starting.
       }
       if (!stopped) retryTimer = window.setTimeout(() => { void checkHealth(); }, 1000);
     };
@@ -62,265 +70,192 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
     };
   }, []);
 
-  // 统一错误设置与 3s 自动清除并复原函数
-  const showAuthError = (msg: string, field: 'user' | 'password') => {
-    if (errTimeoutRef.current) {
-      window.clearTimeout(errTimeoutRef.current);
-    }
-    setErrorMsg(msg);
-    setErrorField(field);
-    errTimeoutRef.current = window.setTimeout(() => {
-      setErrorMsg('');
-      setErrorField(null);
-      errTimeoutRef.current = null;
-    }, 3000);
+  const clearError = () => { setError(null); setGlitching(false); };
+  const showAuthError = (message: string, field: 'user' | 'password', unstable = false) => {
+    setTyping(false);
+    setError({ message, field });
+    setGlitching(unstable && !reducedMotion);
+    (field === 'user' ? userRef : passwordRef).current?.focus();
   };
 
-  // 卸载组件时清理定时器，防内存泄漏
-  useEffect(() => {
-    return () => {
-      if (errTimeoutRef.current) {
-        window.clearTimeout(errTimeoutRef.current);
-      }
-    };
-  }, []);
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (backendStatus !== 'ready' || requestRef.current || composingRef.current) return;
+    if (!userId) { showAuthError('请输入 USER ID', 'user'); return; }
+    if (userId !== USER_ID) { showAuthError('无效的 USER ID', 'user'); return; }
+    if (!password) { showAuthError('请输入访问密码', 'password'); return; }
 
-  // Play login-screen BGM on mount
-  useEffect(() => {
-    audioService.playBGM('/audio/bgm/Messenger main theme.ogg');
-    return () => {
-      audioService.stopBGM();
-    };
-  }, []);
-
-  // 1. 动态计算 1920x1080 比例下的自适应 scale 值
-  useEffect(() => {
-    const handleResize = () => {
-      const w = window.innerWidth;
-      const h = window.innerHeight;
-      const scaleFactor = Math.min(w / 1920, h / 1080);
-      setScale(scaleFactor);
-    };
-    
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  // 2. USER ID 打字机自动录入效果 (基于显式局部变量，强力避免 React StrictMode 漏字与双计时器冲突)
-  useEffect(() => {
-    let index = 0;
-    const targetText = 'Salieri';
-    let current = '';
-    setUserId(''); // 初始清空
-
-    const typeTimer = setInterval(() => {
-      if (index < targetText.length) {
-        current += targetText.charAt(index);
-        setUserId(current);
-        index++;
-      } else {
-        clearInterval(typeTimer);
-      }
-    }, 50);
-
-    return () => clearInterval(typeTimer); // 在 unmount 时彻底销毁计时器，规避竞争
-  }, []);
-
-  // 3. Canvas rain reads the same semantic ink as the login controls.
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    // 设置 Canvas 绘图分辨率
-    canvas.width = 1920;
-    canvas.height = 1080;
-
-    const fontSize = 14;
-    const columns = Math.floor(canvas.width / fontSize);
-    
-    // 初始化每一列的垂直下落 y 坐标
-    const drops: number[] = [];
-    for (let i = 0; i < columns; i++) {
-      drops[i] = Math.random() * -20;
-    }
-
-    const drawBinaryRain = () => {
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      ctx.fillStyle = getComputedStyle(canvas).color;
-      ctx.font = `${fontSize}px monospace`;
-
-      for (let i = 0; i < drops.length; i++) {
-        const text = Math.random() > 0.5 ? '1' : '0';
-        const x = i * fontSize;
-        const y = drops[i] * fontSize;
-
-        ctx.fillText(text, x, y);
-
-        if (y > canvas.height && Math.random() > 0.975) {
-          drops[i] = 0;
-        }
-
-        drops[i]++;
-      }
-    };
-
-    const rainTimer = setInterval(drawBinaryRain, 50);
-    return () => clearInterval(rainTimer);
-  }, []);
-
-  const handleInitAudio = () => {
-    audioPlayer.init();
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (backendStatus !== 'ready') return;
-    handleInitAudio();
-    if (!userId) {
-      showAuthError('请输入 USER ID', 'user');
-      return;
-    }
-    if (userId !== 'Salieri') {
-      showAuthError('无效的 USER ID', 'user');
-      return;
-    }
-    if (!password) {
-      showAuthError('请输入访问密码', 'password');
-      return;
-    }
-
+    const controller = new AbortController();
+    requestRef.current = controller;
     setIsAuthenticating(true);
-    if (errTimeoutRef.current) {
-      window.clearTimeout(errTimeoutRef.current);
-      errTimeoutRef.current = null;
-    }
-    setErrorMsg('');
-    setErrorField(null);
-
+    clearError();
     try {
       const response = await fetch(apiUrl('/api/auth/salieri'), {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password }),
+        signal: controller.signal,
       });
-
+      if (controller.signal.aborted) return;
       if (response.ok) {
-        audioService.playSFX('/audio/sfx/连接成功，进入页面2.ogg');
         onLoginSuccess();
       } else {
-        const errorData = await response.json().catch(() => ({}));
-        showAuthError(errorData.detail || '访问被拒绝', 'password');
+        const data = await response.json().catch(() => ({}));
+        if (!controller.signal.aborted) {
+          showAuthError(typeof data.detail === 'string' ? data.detail : '访问被拒绝', 'password', true);
+        }
       }
-    } catch (error) {
-      showAuthError('系统连接已断开', 'password');
+    } catch {
+      if (!controller.signal.aborted) showAuthError('系统连接已断开', 'password', true);
     } finally {
-      setIsAuthenticating(false);
+      if (!controller.signal.aborted) {
+        requestRef.current = null;
+        setIsAuthenticating(false);
+      }
     }
   };
 
+  const releaseButton = () => {
+    if (pressedRef.current && !reducedMotion) setSettling(true);
+    pressedRef.current = false;
+  };
+
   return (
-    <div className="login-screen-container">
-      {/* 顶层 CRT 扫描线与暗角效果 */}
-      <div className="crt-effects-overlay" />
+    <section className="login-screen-container" data-theme="terminal" aria-label="Amadeus 系统接入">
+      <div className="login-ambience" aria-hidden="true">
+        <LoginRain reducedMotion={reducedMotion} paused={isTyping || glitching || isAuthenticating || buttonEngaged} />
+        <div className="login-crt-surface" />
+        <div className="login-grid-surface" />
+        <div className="login-screen-edge" />
+      </div>
 
-      <div 
-        className="login-content-wrapper" 
-        style={{ transform: `scale(${scale})` }}
-      >
-        {/* 左侧写实黑白照片 (已移入等比例缩放的 wrapper 内部，以实现 100% 精确网格线重合与滤色混合) */}
-        {photoLeft && !photoFailed && (
-          <div className="left-photo-viewport">
-            <img src={photoLeft} className="left-photo" alt="" onError={() => setPhotoFailed(true)} />
-          </div>
-        )}
-
-        {/* Canvas 动态二进制数字背景雨 */}
-        <canvas ref={canvasRef} className="binary-stream-canvas" />
-
+      <div className="login-content-wrapper">
         <div className="login-form-center">
-          <form onSubmit={handleSubmit} className="salieri-login-form">
+          <div className="amadeus-logo-container">
+            <h1 className="amadeus-logo-text">AMADEUS</h1>
+            <span className="login-logo-caption" lang="ja">人工知能システム</span>
+          </div>
 
-            <div className="amadeus-logo-container">
-              {amadeusLogo && !logoFailed ? (
-                <img
-                  src={amadeusLogo}
-                  className="amadeus-logo-img"
-                  alt="AMADEUS Logo"
-                  onError={() => setLogoFailed(true)}
-                />
-              ) : (
-                <span className="amadeus-logo-text">AMADEUS</span>
-              )}
-            </div>
+          <form
+            onSubmit={handleSubmit}
+            className="salieri-login-form"
+            aria-busy={isAuthenticating}
+            onCompositionStart={() => { composingRef.current = true; }}
+            onCompositionEnd={() => { composingRef.current = false; }}
+            onKeyDown={event => {
+              if (event.key === 'Enter' && (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || composingRef.current)) {
+                event.preventDefault();
+              }
+            }}
+          >
+            <div className="login-fields">
+              <div className={`input-field-group${isTyping ? ' is-typing' : ''}`}>
+                <label className="field-title" htmlFor="salieri-user">USER ID</label>
+                <div className="login-input-shell">
+                  <input
+                    ref={userRef}
+                    id="salieri-user"
+                    name="username"
+                    type="text"
+                    value={userId}
+                    onFocus={() => setTyping(false)}
+                    onChange={event => { setTyping(false); setUserId(event.target.value); clearError(); }}
+                    readOnly={isAuthenticating}
+                    spellCheck={false}
+                    autoComplete="username"
+                    aria-invalid={error?.field === 'user'}
+                    aria-describedby={error?.field === 'user' ? 'login-error' : undefined}
+                  />
+                  {isTyping && (
+                    <span className="login-typewriter" aria-hidden="true">
+                      {[...USER_ID].map((letter, index) => (
+                        <span
+                          key={index}
+                          style={{ '--letter': index } as React.CSSProperties}
+                          onAnimationEnd={index === USER_ID.length - 1 ? () => setTyping(false) : undefined}
+                        >{letter}</span>
+                      ))}
+                    </span>
+                  )}
+                </div>
+              </div>
 
-            <div className="input-field-group user-id-group">
-              <label className="field-title" htmlFor="salieri-user">USER ID</label>
-              <input
-                id="salieri-user"
-                type="text"
-                className={`user-id-input ${errorField === 'user' ? 'input-error' : ''}`}
-                value={userId}
-                onChange={(e) => setUserId(e.target.value)}
-                disabled={isAuthenticating}
-                spellCheck={false}
-                autoComplete="off"
-              />
-            </div>
-
-            <div className="input-field-group password-group">
-              <label className="field-title" htmlFor="salieri-pwd">PASSWORD</label>
-              <div className="password-input-wrapper">
-                <input
-                  id="salieri-pwd"
-                  type="password"
-                  className={`password-input ${errorField === 'password' ? 'input-error' : ''}`}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  disabled={isAuthenticating}
-                  spellCheck={false}
-                  autoComplete="off"
-                />
+              <div className="input-field-group">
+                <label className="field-title" htmlFor="salieri-pwd">PASSWORD</label>
+                <div className="login-input-shell">
+                  <input
+                    ref={passwordRef}
+                    id="salieri-pwd"
+                    name="password"
+                    type="password"
+                    value={password}
+                    onChange={event => { setPassword(event.target.value); clearError(); }}
+                    readOnly={isAuthenticating}
+                    spellCheck={false}
+                    autoComplete="current-password"
+                    aria-invalid={error?.field === 'password'}
+                    aria-describedby={error?.field === 'password' ? 'login-error' : undefined}
+                  />
+                </div>
               </div>
             </div>
 
             <div className="btn-container">
               <button
                 type="submit"
-                className="decrypt-btn"
+                className={`decrypt-btn${settling ? ' is-settling' : ''}`}
                 disabled={isAuthenticating || backendStatus !== 'ready'}
                 title="CONNECT"
                 aria-label="Decrypt and Connect"
+                onPointerEnter={() => setButtonEngaged(true)}
+                onPointerLeave={() => setButtonEngaged(false)}
+                onFocus={() => setButtonEngaged(true)}
+                onPointerDown={event => {
+                  if (event.button !== 0) return;
+                  pressedRef.current = true;
+                  setSettling(false);
+                  event.currentTarget.setPointerCapture?.(event.pointerId);
+                }}
+                onPointerUp={releaseButton}
+                onPointerCancel={releaseButton}
+                onLostPointerCapture={releaseButton}
+                onKeyDown={event => {
+                  if (event.key === ' ' || event.key === 'Enter') { pressedRef.current = true; setSettling(false); }
+                }}
+                onKeyUp={releaseButton}
+                onBlur={() => { releaseButton(); setButtonEngaged(false); }}
               >
-                <svg viewBox="0 0 80 80" width="76" height="76" className="connect-btn-svg">
-                  <circle cx="40" cy="40" r="34" className="btn-circle-track" />
-                  <circle cx="40" cy="40" r="34" className="btn-circle-glow" />
-                  <path d="M 30 40 L 50 40 M 42 32 L 50 40 L 42 48" className="btn-arrow-icon" />
+                <svg viewBox="0 0 80 80" className="connect-btn-svg" aria-hidden="true" onAnimationEnd={() => setSettling(false)}>
+                  <circle cx="40" cy="40" r="33" className="btn-circle-track" />
+                  <circle cx="40" cy="40" r="33" className="btn-circle-closed" />
+                  <path d="M27 40H52M42 30L52 40L42 50" className="btn-arrow-icon" />
                 </svg>
               </button>
             </div>
 
-            {backendStatus !== 'ready' && (
-              <div className="auth-error-banner backend-status-banner" role="status">
-                {backendStatus === 'starting' ? '正在启动本地服务…' : '本地服务没有启动，请重新打开 Amadeus'}
-              </div>
-            )}
-
-            {errorMsg && (
-              <div className="auth-error-banner glitch-flicker">
-                {errorMsg}
-              </div>
-            )}
+            <div className="login-feedback">
+              {backendStatus !== 'ready' && (
+                <div className="backend-status-banner" role="status">
+                  {backendStatus === 'starting' ? '正在启动本地服务…' : '本地服务没有启动，请重新打开 Amadeus'}
+                </div>
+              )}
+              {error && (
+                <div
+                  id="login-error"
+                  className={`auth-error-banner${glitching ? ' is-glitching' : ''}`}
+                  role="alert"
+                  onAnimationEnd={() => setGlitching(false)}
+                >{error.message}</div>
+              )}
+            </div>
           </form>
         </div>
       </div>
-    </div>
+
+      <footer className="login-footer">
+        <span>AMADEUS SYSTEM</span>
+        <span>SYSTEM ACCESS</span>
+      </footer>
+    </section>
   );
 };
