@@ -184,25 +184,6 @@ describe('Workstation provider runtime changes', () => {
     }));
   });
 
-  it('mounts and remounts the room without owning an entry presentation', async () => {
-    vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
-    sessionStorage.clear();
-    try {
-      const first = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
-      expect(first.container.querySelector('.ws2')!.className).not.toMatch(/\bboot-/);
-      expect(first.container.querySelector('.entry-sequence')).not.toBeInTheDocument();
-      await act(async () => {});
-      first.unmount();
-      const second = render(<Workstation worldline="beta" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
-      expect(second.container.querySelector('.ws2')).toHaveAttribute('data-wl', 'beta');
-      expect(second.container.querySelector('.ws2')!.className).not.toMatch(/\bboot-/);
-      expect(screen.getByRole('textbox', { name: '输入消息' })).toBeInTheDocument();
-      await act(async () => {});
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
   it('shows a conversation list failure and recovers through retry', async () => {
     wsSpies.realHistory = true;
     const initialFetch = globalThis.fetch;

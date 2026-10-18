@@ -1,0 +1,126 @@
+.bootsplash-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100vw;
+  height: 100vh;
+  background-color: #050302;
+  overflow: hidden;
+  user-select: none;
+}
+
+.logo-animation-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 600px;
+  height: 520px;
+  overflow: hidden;
+  margin-bottom: 0;
+  transition: transform 1000ms cubic-bezier(.18,.78,.18,1), opacity 1000ms ease, filter 1000ms ease;
+  will-change: transform, opacity;
+}
+
+.bootsplash-frame-window {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+}
+
+.bootsplash-frame-canvas {
+  width: 768px;
+  height: 768px;
+  flex: 0 0 768px;
+  background-repeat: no-repeat;
+  background-size: 3840px auto;
+  transform: scale(0.68);
+  transform-origin: center;
+  filter: drop-shadow(0 0 25px rgba(255, 108, 0, 0.85));
+  animation: logo-pulse 2s infinite ease-in-out;
+}
+
+/* The final title occupies two adjacent cells; 1152px keeps its visible
+   artwork while trimming the transparent tail of the second cell. */
+.bootsplash-frame-canvas.is-title-frame {
+  width: 1152px;
+  flex-basis: 1152px;
+  transform: scale(0.52);
+}
+
+.bootsplash-frame-canvas.is-transition-ring {
+  animation: boot-ring-release 360ms ease-out forwards;
+}
+
+.bootsplash-frame-canvas.is-transition-title {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%) scale(0.52);
+  opacity: 0;
+  animation: boot-title-reveal 360ms ease-out forwards;
+  pointer-events: none;
+}
+
+.logo-animation-wrapper.is-title-frame {
+  width: 640px;
+}
+
+.logo-animation-wrapper.is-final-frame {
+  transform: scale(1.18) translateZ(0);
+  opacity: 0;
+  filter: blur(1.1px);
+}
+
+@keyframes logo-pulse {
+  0%, 100% {
+    filter: drop-shadow(0 0 20px rgba(255, 108, 0, 0.7));
+  }
+  50% {
+    filter: drop-shadow(0 0 35px rgba(255, 108, 0, 0.95));
+  }
+}
+
+@keyframes boot-ring-release {
+  0% {
+    opacity: 1;
+    filter: drop-shadow(0 0 25px rgba(255, 108, 0, 0.85));
+  }
+  100% {
+    opacity: 0;
+    filter: blur(4px) drop-shadow(0 0 8px rgba(255, 108, 0, 0.2));
+  }
+}
+
+@keyframes boot-title-reveal {
+  0% {
+    opacity: 0;
+    filter: blur(6px) drop-shadow(0 0 6px rgba(255, 108, 0, 0.25));
+  }
+  100% {
+    opacity: 1;
+    filter: drop-shadow(0 0 25px rgba(255, 108, 0, 0.85));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bootsplash-frame-canvas {
+    animation: none;
+  }
+
+  .bootsplash-frame-canvas.is-transition-title {
+    opacity: 1;
+  }
+
+  .bootsplash-frame-canvas.is-transition-ring {
+    opacity: 0;
+  }
+
+  .logo-animation-wrapper {
+    transition: none;
+  }
+}

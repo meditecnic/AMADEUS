@@ -40,6 +40,7 @@ import { ConnectionCheckPanel, chatCheckMessage, requestChatCheck, type ChatChec
 import { ConnectionList } from '../workstation/ConnectionList';
 import { SendSignal } from '../workstation/SendSignal';
 import { VoiceScope } from '../workstation/VoiceScope';
+import { BootSequence } from '../workstation/BootSequence';
 import { ForgetConversationModal } from './ForgetConversationModal';
 import { MemorySpace } from '../memory-space/MemorySpace';
 import '../memory-space/MemorySpace.css';
@@ -79,6 +80,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   onLogout,
 }) => {
   const reducedMotion = useReducedMotion();
+  const skipBootMotion = useReducedMotion(true);
   const [systemPrompt, setSystemPrompt] = useState('');
   const storedTtsChoice = useRef<string | null>(null);
   const [enableTts, setEnableTts] = useState(() => {
@@ -227,6 +229,22 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const wsRootRef = useRef<HTMLDivElement>(null);
   const speakingQueueRef = useRef<number[]>([]);
   const [speakingId, setSpeakingId] = useState<number | null>(null);
+  // Title card once per app session (skipped under reduced motion and where matchMedia is unavailable, e.g. tests).
+  const [bootPhase, setBootPhase] = useState<'draft' | 'dock' | 'done'>(() => {
+    try {
+      if (sessionStorage.getItem('amadeus_booted') === '1') return 'done';
+      if (skipBootMotion) return 'done';
+      return 'draft';
+    } catch { return 'done'; }
+  });
+  useEffect(() => {
+    if (skipBootMotion) setBootPhase('done');
+  }, [skipBootMotion]);
+  const handleBootDock = useCallback(() => setBootPhase('dock'), []);
+  const handleBootDone = useCallback(() => {
+    try { sessionStorage.setItem('amadeus_booted', '1'); } catch {}
+    setBootPhase('done');
+  }, []);
   const [shift, setShift] = useState<{ from: 'steins_gate' | 'beta'; to: 'steins_gate' | 'beta' } | null>(null);
   const systemButtonRef = useRef<HTMLButtonElement>(null);
   const openMenu = useCallback((section?: MenuSection) => {
@@ -1672,7 +1690,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   return (
     <div
       ref={wsRootRef}
-      className={`ws2${isHistoryCollapsed ? ' rail' : ''}${isSettingsOpen ? ' menu-open' : ''}${isMemoryOpen ? ' memory-space-open' : ''}`}
+      className={`ws2${isHistoryCollapsed ? ' rail' : ''}${isSettingsOpen ? ' menu-open' : ''}${isMemoryOpen ? ' memory-space-open' : ''}${bootPhase !== 'done' ? ` boot-${bootPhase}` : ''}`}
       data-wl={worldline === 'beta' ? 'beta' : 'sg'}
       onMouseDown={handleAudioInit}
       // The root is a clipped 100vw x 100vh frame that the user cannot scroll; any programmatic scroll
@@ -1683,6 +1701,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       }}
     >
       <Atmosphere worldline={worldline} />
+      {bootPhase !== 'done' && <BootSequence worldline={worldline} onDock={handleBootDock} onDone={handleBootDone} />}
       <SendSignal
         rootRef={wsRootRef}
         userCount={messages.filter((m) => m.role === 'user').length}

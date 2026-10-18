@@ -444,7 +444,7 @@ describe('Workstation S4-DS dark-only chrome', () => {
   it('SG and β share accent aliases while resolving to their canonical worldline colors', () => {
     const tokens = fs.readFileSync(path.resolve(__dirname, '../design-system/tokens.css'), 'utf8');
     const scale = tokens.match(/:root\s*\{([^}]+)\}/)?.[1] ?? '';
-    const aliases = tokens.match(/:root,\s*\[data-wl\],\s*\[data-worldline\][^{]*\{([^}]+)\}/)?.[1] ?? '';
+    const aliases = tokens.match(/:root,\s*\[data-wl\],\s*\[data-worldline\]\s*\{([^}]+)\}/)?.[1] ?? '';
     const resolve = (worldline: 'sg' | 'steins_gate' | 'beta', alias: string): string => {
       const attribute = worldline === 'steins_gate' ? 'data-worldline' : 'data-wl';
       const semantic = tokens.match(new RegExp(`\\[${attribute}='${worldline}'\\][^{]*\\{([^}]+)\\}`))?.[1] ?? '';

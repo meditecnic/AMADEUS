@@ -1,18 +1,19 @@
 import { useEffect, useState } from 'react';
+import { BootSplash } from './components/BootSplash';
 import { SalieriLogin } from './components/SalieriLogin';
 import { Workstation } from './components/Workstation';
-import { EntrySequence } from './components/EntrySequence';
-import { loadAssetPack } from './assetPack';
+import LogoTransition from './components/LogoTransition';
+import { hasAssetPack, loadAssetPack } from './assetPack';
 /* App.css is imported once from main.tsx (tokens.css → App.css) — sole cascade owner. */
 
-type AppStep = 'probe' | 'login' | 'entry' | 'workstation';
+type AppStep = 'probe' | 'splash' | 'login' | 'transition' | 'workstation';
 
 function App() {
   const [step, setStep] = useState<AppStep>('probe');
   useEffect(() => {
     let cancelled = false;
-    const ready = () => { if (!cancelled) setStep('login'); };
-    void loadAssetPack().then(ready, ready);
+    // The original entrance animation is part of the pack; without it the app opens on login.
+    void loadAssetPack().then((on) => { if (!cancelled) setStep(on ? 'splash' : 'login'); });
     return () => { cancelled = true; };
   }, []);
   const [worldline, setWorldline] = useState<'steins_gate' | 'beta'>(() => {
@@ -32,11 +33,15 @@ function App() {
     }
   }, [worldline]);
 
-  const handleLoginSuccess = () => {
-    setStep('entry');
+  const handleSplashDone = () => {
+    setStep('login');
   };
 
-  const handleEntryDone = () => {
+  const handleLoginSuccess = () => {
+    setStep(hasAssetPack() ? 'transition' : 'workstation');
+  };
+
+  const handleTransitionDone = () => {
     setStep('workstation');
   };
 
@@ -45,20 +50,20 @@ function App() {
   };
 
   return (
-    <main className="app-main-container" data-step={step}>
-      {step === 'probe' && <p role="status">正在检查本地资源…</p>}
+    <main className="app-main-container">
+      {step === 'splash' && <BootSplash onDone={handleSplashDone} />}
+      
       {step === 'login' && <SalieriLogin onLoginSuccess={handleLoginSuccess} />}
-
-      {/* The authenticated workstation mounts once and stays the same live
-          instance while the entrance reveals it; entry never remounts it. */}
-      {(step === 'entry' || step === 'workstation') && (
+      
+      {step === 'transition' && <LogoTransition onComplete={handleTransitionDone} />}
+      
+      {step === 'workstation' && (
         <Workstation
           worldline={worldline}
           onWorldlineChange={setWorldline}
           onLogout={handleLogout}
         />
       )}
-      {step === 'entry' && <EntrySequence onComplete={handleEntryDone} />}
     </main>
   );
 }

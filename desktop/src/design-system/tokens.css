@@ -139,9 +139,7 @@
 }
 
 [data-wl='beta'],
-[data-worldline='beta'],
-/* The access terminal has one fixed identity, independent of the saved worldline. */
-[data-theme='terminal'] {
+[data-worldline='beta'] {
   --surface-0: var(--scale-beta-surface-0);
   --ink-primary: var(--scale-beta-ink-primary);
   --ink-secondary: var(--scale-beta-ink-secondary);
@@ -187,8 +185,7 @@
  */
 :root,
 [data-wl],
-[data-worldline],
-[data-theme='terminal'] {
+[data-worldline] {
   --transition-fast: var(--dur-compat-150) var(--ease-compat);
   --transition-normal: var(--dur-sg-base) var(--ease-compat);
 

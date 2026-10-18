@@ -322,7 +322,29 @@
 .ws2-dialog-check input { margin-top: 3px; accent-color: #ff6b5e; }
 .ws2-dialog-check small { display: block; margin-top: 3px; font-size: 11.5px; color: var(--ws-ink-3); }
 
+/* ---------- boot: title card → header ---------- */
+.ws2-boot { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center; background: var(--ws-bg); cursor: pointer; transition: background .55s ease; }
+.ws2-boot.dock { background: transparent; pointer-events: none; }
+.ws2-boot-grid { position: absolute; inset: 0; width: 100%; height: 100%; fill: none; stroke: var(--ws-ink-3); stroke-width: .06; vector-effect: non-scaling-stroke; opacity: .5; }
+.ws2-boot-grid line, .ws2-boot-grid circle { vector-effect: non-scaling-stroke; stroke-width: 1px; stroke-dasharray: 2000; stroke-dashoffset: 2000; animation: ws2-boot-line 1.1s cubic-bezier(.5, 0, .2, 1) forwards; }
+.ws2-boot-grid circle { stroke: rgba(var(--ws-accent-rgb), .35); animation-delay: .25s; }
+@keyframes ws2-boot-line { to { stroke-dashoffset: 0; } }
+.ws2-boot.dock .ws2-boot-grid { opacity: 0; transition: opacity .35s ease; }
+.ws2-boot-word { position: relative; font-family: var(--ws-serif); font-size: clamp(56px, 9vw, 112px); letter-spacing: .22em; line-height: 1; color: var(--ws-ink); transform-origin: 0 0; transition: transform .6s cubic-bezier(.7, 0, .2, 1); will-change: transform; }
+.ws2[data-wl='beta'] .ws2-boot-word .draft { --draft-ink: #ffcf96; }
+.ws2-boot-meta { position: absolute; left: 50%; top: calc(50% + clamp(48px, 7vw, 86px)); transform: translateX(-50%); display: flex; align-items: center; gap: 14px; font-family: var(--ws-mono); font-size: 11px; letter-spacing: .34em; color: var(--ws-ink-3); animation: ws2-body-in .6s ease .8s both; }
+.ws2-boot-meta i { width: 36px; height: 1px; background: var(--ws-accent); box-shadow: 0 0 6px var(--ws-accent); }
+.ws2-boot-meta span:last-child { color: var(--nixie); text-shadow: 0 0 8px rgba(var(--nixie-glow), .6); }
+.ws2-boot.dock .ws2-boot-meta { opacity: 0; transition: opacity .25s ease; }
+/* The room holds still behind the card, then assembles as the word docks. */
+.ws2.boot-draft :is(.ws2-side, .ws2-talk, .ws2-stage, .ws2-top > :not(.ws2-wordmark)), .ws2.boot-draft .ws2-wordmark, .ws2.boot-dock .ws2-wordmark { opacity: 0; }
+.ws2.boot-dock .ws2-side { animation: ws2-in-left .6s cubic-bezier(.2, .7, .2, 1) .1s both; }
+.ws2.boot-dock .ws2-talk { animation: ws2-in-up .6s cubic-bezier(.2, .7, .2, 1) .22s both; }
+.ws2.boot-dock .ws2-stage { animation: ws2-in-stage .9s cubic-bezier(.2, .7, .2, 1) .05s both; }
+.ws2.boot-dock .ws2-top > :not(.ws2-wordmark) { animation: ws2-body-in .5s ease .35s both; }
+@keyframes ws2-in-left { from { opacity: 0; transform: translateX(-24px); } to { opacity: 1; transform: none; } }
 @keyframes ws2-in-up { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@keyframes ws2-in-stage { from { opacity: 0; transform: translateY(26px); filter: brightness(.3); } to { opacity: 1; transform: none; filter: none; } }
 
 /* Memory bridge: an iris opens from the engram key (clip-path, so Memory's fixed layout is untouched). */
 .ws2-memory-layer { position: fixed; inset: 0; z-index: 80; clip-path: circle(150% at var(--mx) var(--my)); animation: ws2-iris-open .46s cubic-bezier(.6, 0, .2, 1) both; }

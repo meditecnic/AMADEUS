@@ -78,8 +78,7 @@
 }
 
 [data-wl='beta'],
-[data-worldline='beta'],
-[data-theme='terminal'] {
+[data-worldline='beta'] {
   --dur-instant: calc(var(--dur-sg-instant) * 1.3);
   --dur-quick: calc(var(--dur-sg-quick) * 1.3);
   --dur-base: calc(var(--dur-sg-base) * 1.3);
@@ -90,21 +89,11 @@
 
 :root,
 [data-wl],
-[data-worldline],
-[data-theme='terminal'] {
+[data-worldline] {
   --ws-dur-1: var(--dur-quick);
   --ws-dur-2: var(--dur-base);
   --ws-dur-3: var(--dur-panel);
   --ws-ease: var(--ease-main);
-  /* Login renderer reads the resolved animation-duration; all timing stays here. */
-  --login-rain-cycle: calc(var(--dur-page) * 64);
-  --login-type-step: var(--dur-quick);
-  --login-dial-cycle: calc(var(--dur-page) * 3);
-  --login-wordmark-sweep: calc(var(--dur-page) * 1.8);
-  /* The entrance is one continuous timeline: signal draw, gate travel, settle. */
-  --entry-open-delay: calc(var(--dur-page) * 1.4);
-  --entry-open-hold: calc(var(--dur-page) * 2.4);
-  --entry-reveal-hold: calc(var(--dur-page) * 4.4);
 }
 
 /* Static is the global fallback; components may explicitly opt into an
@@ -113,8 +102,7 @@
 @media (prefers-reduced-motion: reduce) {
   :root,
   [data-wl],
-  [data-worldline],
-  [data-theme='terminal'] {
+  [data-worldline] {
     /* Compress direct consumers, compatibility durations and old aliases. */
     --dur-sg-base: var(--dur-zero);
     --dur-instant: var(--dur-zero);
@@ -122,10 +110,6 @@
     --dur-base: var(--dur-zero);
     --dur-panel: var(--dur-zero);
     --dur-page: var(--dur-zero);
-    /* The entrance keeps only its short reveal fade. */
-    --entry-open-delay: var(--dur-zero);
-    --entry-open-hold: var(--dur-zero);
-    --entry-reveal-hold: var(--dur-reduced-fade);
   }
 
   *,
