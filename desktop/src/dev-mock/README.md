@@ -76,8 +76,8 @@ Direct REST/WS tooling can pass `?scenario=<name>` or these cookies.
 - The optional `/api/asset-pack/manifest.json` deliberately returns **404**
   (`optional_asset_pack_absent`), keeping the existing original-artwork-free
   fallback. Its single expected resource-load console message is benign.
-  App-owned JS, CSS and fonts must load successfully. A 2xx manifest would
-  incorrectly activate unavailable artwork and retired asset transitions.
+  App-owned JS, CSS and fonts must load successfully. The original code-rendered
+  entry sequence runs after login regardless of manifest availability.
 - Memory experiences/observations start empty. Facts support filter/pagination,
   versioned text corrections, pin/topic presentation, deletion and topic rename.
 - Request/frame payloads are capped at 64 KiB. State is disposable and resets

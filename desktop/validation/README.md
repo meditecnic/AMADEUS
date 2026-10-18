@@ -92,9 +92,11 @@ milestones change the markup. Do not reuse snapshot refs across navigations.
    `Gott würfelt nicht`, then `browser_click` targets `.decrypt-btn`.
    Verify **POST `/api/auth/salieri` → 200** in network diagnostics.
    The actual route is not `/api/login`. Wait for `.ws2`, an enabled
-   `textarea[aria-label='输入消息']`, ONLINE status and the boot overlay to
-   finish. M1 without an asset pack enters the workstation directly;
-   capture the new entry sequence separately once M2 introduces it.
+   `textarea[aria-label='输入消息']` and ONLINE status after the entry sequence
+   finishes. Capture `.entry-sequence[data-stage='power-on']`, `prewarm` and
+   `lock` in order. Clicking anywhere or pressing Esc skips directly to the
+   workstation. The sequence uses the login terminal's single visual identity,
+   independent of the saved worldline.
    Capture `02-workstation-empty.png`.
 
 4. Fill `textarea[aria-label='输入消息']` with `记录本次视觉走查`, then click

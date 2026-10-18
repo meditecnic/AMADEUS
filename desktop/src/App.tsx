@@ -1,19 +1,18 @@
 import { useEffect, useState } from 'react';
-import { BootSplash } from './components/BootSplash';
 import { SalieriLogin } from './components/SalieriLogin';
 import { Workstation } from './components/Workstation';
-import LogoTransition from './components/LogoTransition';
-import { hasAssetPack, loadAssetPack } from './assetPack';
+import { EntrySequence } from './components/EntrySequence';
+import { loadAssetPack } from './assetPack';
 /* App.css is imported once from main.tsx (tokens.css → App.css) — sole cascade owner. */
 
-type AppStep = 'probe' | 'splash' | 'login' | 'transition' | 'workstation';
+type AppStep = 'probe' | 'login' | 'entry' | 'workstation';
 
 function App() {
   const [step, setStep] = useState<AppStep>('probe');
   useEffect(() => {
     let cancelled = false;
-    // The original entrance animation is part of the pack; without it the app opens on login.
-    void loadAssetPack().then((on) => { if (!cancelled) setStep(on ? 'splash' : 'login'); });
+    const ready = () => { if (!cancelled) setStep('login'); };
+    void loadAssetPack().then(ready, ready);
     return () => { cancelled = true; };
   }, []);
   const [worldline, setWorldline] = useState<'steins_gate' | 'beta'>(() => {
@@ -33,15 +32,11 @@ function App() {
     }
   }, [worldline]);
 
-  const handleSplashDone = () => {
-    setStep('login');
-  };
-
   const handleLoginSuccess = () => {
-    setStep(hasAssetPack() ? 'transition' : 'workstation');
+    setStep('entry');
   };
 
-  const handleTransitionDone = () => {
+  const handleEntryDone = () => {
     setStep('workstation');
   };
 
@@ -50,12 +45,10 @@ function App() {
   };
 
   return (
-    <main className="app-main-container">
-      {step === 'splash' && <BootSplash onDone={handleSplashDone} />}
-      
+    <main className="app-main-container" data-step={step}>
+      {step === 'probe' && <p role="status">正在检查本地资源…</p>}
       {step === 'login' && <SalieriLogin onLoginSuccess={handleLoginSuccess} />}
-      
-      {step === 'transition' && <LogoTransition onComplete={handleTransitionDone} />}
+      {step === 'entry' && <EntrySequence onComplete={handleEntryDone} />}
       
       {step === 'workstation' && (
         <Workstation

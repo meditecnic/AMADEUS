@@ -100,6 +100,10 @@
   --login-rain-cycle: calc(var(--dur-page) * 64);
   --login-signal-cycle: calc(var(--dur-page) * 18);
   --login-type-step: var(--dur-quick);
+  --entry-power-hold: calc(var(--dur-page) * 2);
+  --entry-prewarm-hold: calc(var(--dur-page) * 3);
+  /* Reading dwell is not motion; keep the static frame readable in reduced motion. */
+  --entry-lock-hold: calc(var(--dur-sg-page) * 2);
 }
 
 /* Static is the global fallback; components may explicitly opt into an
