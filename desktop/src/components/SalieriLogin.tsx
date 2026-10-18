@@ -39,13 +39,17 @@ function useClock() {
   };
 }
 
-/** Decorative copy set in the sheet's lower right, like a title menu nobody can pick from. */
+/** Lower right, an easter egg: the title-screen lines of the original, quoted as they are. */
 const VERSE = [
-  'What is observed is never entirely lost.',
-  'A memory is only a record that learned to wait.',
-  'She does not remember the world \u2014 she remembers you.',
-  'Every conversation ends; the record begins again.',
+  'The universe has a beginning, but it has no end\u2014Infinite.',
+  'Stars too have a beginning, but are by their own power destroyed\u2014Finite.',
+  'History teaches that those who hold wisdom are often the most foolish.',
+  'The fish in the sea know not the land. If they too hold wisdom, they too will be destroyed.',
+  'It is more ridiculous for man to exceed light speed than for fish to live ashore.',
+  'This may also be called God\'s final warning to those who rebel.',
 ];
+/** Each line is typed out after the one before it (11 ms a character, a short pause between lines). */
+const VERSE_AT = VERSE.map((_, i) => VERSE.slice(0, i).reduce((t, l) => t + l.length * 11 + 90, 0));
 
 const CUT = 9;
 /**
@@ -486,7 +490,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
         </div>
         <div className="sl-verse" aria-hidden="true">
           {VERSE.map((line, i) => (
-            <p key={i} style={{ '--n': line.length, '--i': i } as React.CSSProperties}>{line}</p>
+            <p key={i} style={{ '--n': line.length, '--t': `${VERSE_AT[i]}ms` } as React.CSSProperties}>{line}</p>
           ))}
         </div>
         <p className="sl-note" aria-hidden="true">LOCAL LINK · 记忆仅保存在这台设备上</p>

@@ -1,5 +1,5 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, type CSSProperties } from 'react';
-import { PROBE, PROBE_AT } from './probe';
+import { forwardRef, memo, useEffect, useImperativeHandle, useMemo, useRef, type CSSProperties } from 'react';
+import { PROBE_AT, PROBE_FIXED, PROBE_SPIN, PROBE_YAW0, probeFrame, type ProbeFrame } from './probe';
 
 /**
  * The drafting plate behind the terminal (1920 × 1080 user space, sliced to the window):
@@ -66,33 +66,73 @@ const PLABELS = Array.from({ length: 12 }, (_, i) => i * 30);
 
 const dly = (ms: number) => ({ '--d': `${ms}ms` }) as CSSProperties;
 
-/* A probe, upper left, drawn turned and tilted (see probe.ts). Kept up and left of the wordmark at any size. */
-function Probe() {
-  const P = PROBE;
+/*
+ * A probe, upper left, drawn turned and tilted (see probe.ts). Kept up and left of the wordmark at any size.
+ * It turns slowly about its own axis: the parts that are not solids of revolution are re-projected about 30 times
+ * a second, straight into the paths (no React render per frame). Reduced motion keeps the still drawing.
+ */
+const FRAME_KEYS = ['hidden', 'body', 'marks', 'grille', 'struts', 'booms', 'wings', 'cells', 'strips', 'axis'] as const;
+const SPIN_DELAY = 1600;
+const SPIN_RAMP = 2400;
+
+const Probe = memo(function Probe({ spin }: { spin: boolean }) {
+  const first = useMemo(() => probeFrame(PROBE_YAW0), []);
+  const els = useRef<Partial<Record<keyof ProbeFrame, SVGPathElement | null>>>({});
+
+  useEffect(() => {
+    if (!spin || typeof requestAnimationFrame !== 'function') return;
+    let raf = 0;
+    let t0 = 0;
+    let last = 0;
+    let drawn = 0;
+    let yaw = PROBE_YAW0;
+    const step = (now: number) => {
+      raf = requestAnimationFrame(step);
+      if (!t0) { t0 = last = drawn = now; return; }
+      /* eases in once the sheet has been drawn; a long gap (hidden window) does not jump the turn */
+      const k = Math.min(1, Math.max(0, (now - t0 - SPIN_DELAY) / SPIN_RAMP));
+      yaw += (Math.min(now - last, 100) / 1000) * PROBE_SPIN * k * k * (3 - 2 * k);
+      last = now;
+      if (k === 0 || now - drawn < 33) return;
+      drawn = now;
+      yaw %= 360;
+      const fr = probeFrame(yaw);
+      for (const key of FRAME_KEYS) els.current[key]?.setAttribute('d', fr[key]);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [spin]);
+
+  const at = (key: keyof ProbeFrame) => (el: SVGPathElement | null) => { els.current[key] = el; };
+  const F = PROBE_FIXED;
   return (
     <g className="bp-probe">
-      <path className="cl" d={P.axes} />
-      <g className="bp-drift">
-        <path className="dash" d={P.bodyHidden + P.bandsHidden} />
-        <path className="ln" pathLength={1} style={dly(300)} d={P.bodySeen} />
-        <path className="ln" pathLength={1} style={dly(520)} d={P.bands + P.hatch} />
-        <path className="tk" d={P.grille} />
-        <path className="ln" pathLength={1} style={dly(380)} d={P.mast + P.dish} />
-        <path className="ln" pathLength={1} style={dly(440)} d={P.rim} />
-        <path className="ln" pathLength={1} style={dly(640)} d={P.rimInner} />
-        <path className="ln" pathLength={1} style={dly(700)} d={P.struts + P.feed} />
-        <path className="ln" pathLength={1} style={dly(560)} d={P.nozzle + P.nozzleRim} />
-        <path className="ln" pathLength={1} style={dly(600)} d={P.booms + P.hinges} />
-        <path className="ln" pathLength={1} style={dly(420)} d={P.wings} />
-        <path className="ln" pathLength={1} style={dly(760)} d={P.cells} />
-        <path className="tk" d={P.strips} />
+      <g className="bp-drift" style={{ transformOrigin: `${PROBE_AT.x}px ${PROBE_AT.y}px` }}>
+        <path className="cl" d={F.axis} />
+        <path ref={at('axis')} className="cl" d={first.axis} />
+        <path ref={at('hidden')} className="dash" d={first.hidden} />
+        <path ref={at('body')} className="ln" pathLength={1} style={dly(300)} d={first.body} />
+        <path ref={at('marks')} className="ln" pathLength={1} style={dly(520)} d={first.marks} />
+        <path ref={at('grille')} className="tk" d={first.grille} />
+        <path className="ln" pathLength={1} style={dly(380)} d={F.mast + F.dish} />
+        <path className="ln" pathLength={1} style={dly(440)} d={F.rim} />
+        <path className="ln" pathLength={1} style={dly(640)} d={F.rimInner} />
+        <path ref={at('struts')} className="ln" pathLength={1} style={dly(700)} d={first.struts} />
+        <path className="ln" pathLength={1} style={dly(700)} d={F.feed} />
+        <path className="ln" pathLength={1} style={dly(560)} d={F.nozzle} />
+        <path ref={at('booms')} className="ln" pathLength={1} style={dly(600)} d={first.booms} />
+        <path ref={at('wings')} className="ln" pathLength={1} style={dly(420)} d={first.wings} />
+        <path ref={at('cells')} className="ln" pathLength={1} style={dly(760)} d={first.cells} />
+        <path ref={at('strips')} className="tk" d={first.strips} />
+        {/* the sense of turn */}
+        <path className="dash" d={F.spin} />
+        <path className="ln" pathLength={1} style={dly(900)} d={F.arrow} />
+        <text className="lab" x={F.omega.x} y={F.omega.y}>{`\u03c9 ${PROBE_SPIN}\u00b0/s`}</text>
       </g>
-      <path className="tk" d={P.span.d} />
-      <text className="lab" x={P.span.x} y={P.span.y} textAnchor="middle" dominantBaseline="middle" transform={`rotate(${P.span.angle} ${P.span.x} ${P.span.y})`}>{P.span.value}</text>
-      <text className="cap" x={PROBE_AT.x - 232} y={PROBE_AT.y + 196}>FIG. 3 — PROBE · ISO</text>
+      <text className="cap" x={PROBE_AT.x - 172} y={PROBE_AT.y + 152}>FIG. 3 — PROBE · ISO</text>
     </g>
   );
-}
+});
 
 export const Blueprint = forwardRef<BlueprintHandle, { reduced: boolean; busy: boolean }>(function Blueprint({ reduced, busy }, ref) {
   const gears = useRef<(SVGGElement | null)[]>([]);
@@ -149,7 +189,7 @@ export const Blueprint = forwardRef<BlueprintHandle, { reduced: boolean; busy: b
         ))}
       </g>
 
-      <Probe />
+      <Probe spin={!reduced} />
 
       {/* protractor and the compass that keeps drawing it */}
       <g className="bp-pro" transform={`translate(${PC.x} ${PC.y})`}>
@@ -171,7 +211,7 @@ export const Blueprint = forwardRef<BlueprintHandle, { reduced: boolean; busy: b
           <circle r={5} className="pivot" />
         </g>
       </g>
-      <text className="cap" x={PC.x - 40} y={PC.y - PC.r - 34}>FIG. 1 — R 318 · 2.5° DIV</text>
+      <text className="cap" x={PC.x + 12} y={PC.y - PC.r - 34}>FIG. 1 — R 318 · 2.5° DIV</text>
 
       {/* drive train */}
       <g className="bp-train">

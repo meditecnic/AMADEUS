@@ -81,7 +81,7 @@
 .bp-plate .bp-probe .tk { stroke: rgba(241, 240, 235, .065); }
 .bp-plate .bp-probe .cl { stroke: rgba(241, 240, 235, .065); }
 .bp-plate .bp-probe text { fill: rgba(241, 240, 235, .22); }
-.bp-drift { transform-box: fill-box; transform-origin: 50% 40%; animation: bp-drift 14s ease-in-out infinite alternate; }
+.bp-drift { transform-box: view-box; animation: bp-drift 14s ease-in-out infinite alternate; }
 @keyframes bp-drift { 0% { transform: translate(-3px, 2px) rotate(-.5deg); } 50% { transform: translate(2px, -4px) rotate(.2deg); } 100% { transform: translate(4px, 1px) rotate(.6deg); } }
 
 .sl-root.intro .bp-plate .ln { stroke-dasharray: 1; stroke-dashoffset: 1; animation: bp-draw 1.9s cubic-bezier(.45, .05, .2, 1) calc(var(--d, 0ms) + 240ms) forwards; }
@@ -123,12 +123,12 @@
 .sl-tblock .v { color: var(--ink-2); text-align: right; }
 .sl-tblock span:nth-child(n + 3) { border-top: 1px solid var(--line); }
 
-/* Lower right: four lines set like a title menu. Not a menu: nothing here can be chosen. */
+/* Lower right: the original's title-screen lines, set like a title menu (an easter egg). Nothing here can be chosen. */
 .sl-verse {
   position: absolute; right: 50px; bottom: 66px;
-  display: flex; flex-direction: column; align-items: flex-end; gap: 9px;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
   padding-right: 14px; border-right: 1px solid var(--line);
-  font-family: var(--mono); font-size: clamp(11px, .58vw, 14px); line-height: 1.15; letter-spacing: .06em; color: rgba(241, 240, 235, .3);
+  font-family: var(--mono); font-size: clamp(10px, .54vw, 13px); line-height: 1.15; letter-spacing: .02em; color: rgba(241, 240, 235, .3);
   white-space: nowrap;
 }
 .sl-verse p { position: relative; margin: 0; }
@@ -143,7 +143,8 @@
 
 .sl-root.intro :is(.sl-frame, .sl-tblock, .sl-note) { animation: sl-fade .8s ease .15s backwards; }
 .sl-root.intro .sl-verse { animation: sl-fade .4s ease 1.9s backwards; }
-.sl-root.intro .sl-verse p { animation: sl-type calc(var(--n) * 26ms) steps(var(--n)) calc(2.1s + var(--i) * .62s) backwards; }
+/* typed out once per visit; runs past the intro, so it is not tied to it */
+.sl-root:not(.reduced) .sl-verse p { animation: sl-type calc(var(--n) * 11ms) steps(var(--n)) calc(2.1s + var(--t)) backwards; }
 @keyframes sl-type { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
 
 /* ---------- centre: wordmark over the form ---------- */
@@ -387,7 +388,7 @@
   .sl-tblock { top: 30px; }
   .sl-note { bottom: 28px; }
   .sl-verse { bottom: 54px; gap: 7px; }
-  .sl-verse p:nth-child(2n) { display: none; }
+  .sl-verse p:nth-child(n + 3) { display: none; }
 }
 
 /* Reduced motion: the finished sheet, nothing moving. */
