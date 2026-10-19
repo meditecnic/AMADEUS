@@ -57,10 +57,10 @@ const COMPACT: Geometry = {
 
 const geometry = (size: Size) => (size === 'sm' ? COMPACT : FULL);
 
-/** Shared view box: the row plus, for blueprint sizes, room for construction lines and indices. */
-function viewBox(size: Size) {
+/** Shared view box: the row plus, when the blueprint is drawn, room for construction lines and indices. */
+function viewBox(size: Size, blueprint: boolean) {
   const g = geometry(size);
-  if (size === 'lg' || size === 'xl') return { x: -44, y: -18, w: ROW_W + 88, h: g.h + 52 };
+  if (blueprint) return { x: -44, y: -18, w: ROW_W + 88, h: g.h + 52 };
   return { x: -6, y: 0, w: ROW_W + 12, h: g.h + 4 };
 }
 
@@ -158,7 +158,7 @@ function Glyph({ c, g, ghost }: { c: string; g: Geometry; ghost?: boolean }) {
   );
 }
 
-export function Nixie({ value, size = 'md', label, state, title, ariaLabel, unlit = false }: {
+export function Nixie({ value, size = 'md', label, state, title, ariaLabel, unlit = false, blueprint: drawBlueprint }: {
   value: string;
   size?: Size;
   /** Replaces the default accessible name (e.g. for a labelled preview). */
@@ -171,12 +171,14 @@ export function Nixie({ value, size = 'md', label, state, title, ariaLabel, unli
   state?: TubeState;
   /** Optional caption on the blueprint (lg/xl). */
   title?: string;
+  /** Construction lines, indices and captions; on by default at lg/xl. A labelled panel can leave them off. */
+  blueprint?: boolean;
 }) {
   const g = geometry(size);
-  const vb = viewBox(size);
+  const blueprint = drawBlueprint ?? (size === 'lg' || size === 'xl');
+  const vb = viewBox(size, blueprint);
   const id = useId();
   const text = state?.text ?? value;
-  const blueprint = size === 'lg' || size === 'xl';
   const box = `${vb.x} ${vb.y} ${vb.w} ${vb.h}`;
   return (
     <div className={`nixie nixie-${size}${state?.tuning ? ' is-tuning' : ''}${unlit ? ' is-unlit' : ''}`} role="img"

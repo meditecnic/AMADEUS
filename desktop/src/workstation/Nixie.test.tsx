@@ -31,6 +31,13 @@ describe('divergence meter', () => {
     expect(screen.getByRole('img', { name: '目标预览：未选择目标世界线' })).toHaveClass('is-unlit');
     expect(container.querySelector('.nx-glow')).toBeNull();
     expect(container.querySelector('.nx-blueprint')).toBeNull();
+    // A labelled panel can draw the large meter without its blueprint, in the tighter box.
+    rerender(<Nixie value="1.129848" size="lg" blueprint={false} />);
+    expect(container.querySelector('.nx-blueprint')).toBeNull();
+    expect(container.querySelector('svg')!.getAttribute('viewBox')).not.toBe(box);
+    expect(container.querySelector('svg')!.getAttribute('viewBox')).toBe(
+      (() => { const { container: c } = render(<Nixie value="1.129848" size="md" />); return c.querySelector('svg')!.getAttribute('viewBox'); })(),
+    );
   });
 
   it('retunes with a decelerating scramble that locks left to right and ends steady on the exact reading', () => {

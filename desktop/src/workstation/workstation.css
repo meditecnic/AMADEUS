@@ -943,25 +943,13 @@
 .ws2-ruler.off { opacity: .35; }
 
 /* worldline panel */
-/* Label line above the tubes: "CURRENT WORLDLINE  STEINS;GATE" never wraps beside the eight tubes. */
-.ws2-wl-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px 28px; flex-wrap: wrap; margin-bottom: 4px; }
-.ws2-wl-hero .dial { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
-.ws2-wl-hero .meta { display: flex; align-items: baseline; gap: 14px; white-space: nowrap; }
-/* The preview slot is always there; arming lights it instead of moving anything. */
-.ws2-wl-preview {
-  display: grid; grid-template-columns: auto; justify-items: start; gap: 6px; min-width: 190px;
-  padding: 10px 12px 9px; border: 1px dashed var(--ws-line-2); position: relative;
-  font-family: var(--ws-mono); font-size: 10px; letter-spacing: .14em; color: var(--ws-ink-3);
-  transition: border-color .25s, background-color .25s;
-}
-.ws2-wl-preview small { font-size: 9.5px; letter-spacing: .26em; transition: color .2s; }
-.ws2-wl-preview .to { min-height: 1.3em; white-space: nowrap; }
-.ws2-wl-preview .to b { font-family: var(--ws-display); font-weight: 500; letter-spacing: .24em; color: var(--ws-ink); }
-.ws2-wl-preview .nixie { opacity: .55; transition: opacity .25s; }
-.ws2-wl-preview.on { border-style: solid; border-color: rgba(var(--tgt-rgb), .45); background: rgba(var(--tgt-rgb), .045); }
-.ws2-wl-preview.on small { color: var(--tgt); }
-.ws2-wl-preview.on .nixie { opacity: 1; }
+/* One instrument: the dial reads the line you are on, under a nameplate that spans its tubes. The target
+   preview is not a second meter; it lives on the diagram, at the end of the line you aim for. */
+.ws2-wl-hero { display: flex; justify-content: center; padding: 8px 0 4px; }
+.ws2-wl-hero .dial { display: inline-flex; flex-direction: column; align-items: stretch; gap: 14px; }
+.ws2-wl-hero .meta { display: flex; align-items: baseline; justify-content: space-between; gap: 28px; padding: 0 6px; white-space: nowrap; }
 .ws2-wl-hero .meta small { font-family: var(--ws-mono); font-size: 10px; letter-spacing: .3em; color: var(--ws-ink-3); }
+.ws2-wl-hero .meta small .zh { margin-left: 1.1em; padding-left: 1.1em; border-left: 1px solid var(--ws-line-2); font-family: var(--font-ui); font-size: 11px; letter-spacing: .12em; }
 .ws2-wl-hero .meta b { font-family: var(--ws-display); font-weight: 500; font-size: 15px; letter-spacing: .3em; color: var(--ws-ink); }
 .ws2-sysmenu.open .ws2-wl-hero .dial .nx-lit { animation: ws2-ignite .55s steps(1) calc(.3s + var(--n) * 70ms) both; }
 @keyframes ws2-ignite { 0% { opacity: 0; } 20% { opacity: .7; } 32% { opacity: .08; } 50% { opacity: 1; } 64% { opacity: .35; } 76%, 100% { opacity: 1; } }
@@ -989,7 +977,6 @@
 /* Arming a target: the meter retunes, the target line carries current toward its end, a reticle locks on, the shift key lights in the target's hue. */
 .ws2-wl-panel { --tgt: var(--scale-beta-accent-primary); --tgt-rgb: var(--scale-beta-accent-rgb); }
 .ws2-wl-panel[data-target='sg'] { --tgt: var(--scale-sg-accent-primary); --tgt-rgb: var(--scale-sg-accent-rgb); }
-.ws2-wl-hero .tubes { display: inline-flex; }
 .ws2-wl-panel { container-type: inline-size; }
 .ws2-wl-line .flow { stroke: var(--tgt); stroke-width: 2; stroke-linecap: round; stroke-dasharray: 3 14; opacity: 0; pointer-events: none; }
 .ws2-wl-line.sel:not(.cur) .flow { opacity: 1; filter: drop-shadow(0 0 3px rgba(var(--tgt-rgb), .9)); animation: ws2-flow .7s linear infinite; }
@@ -997,6 +984,17 @@
 .ws2-wl-line.sel:not(.cur) text { fill: var(--tgt); }
 @keyframes ws2-flow { to { stroke-dashoffset: -17; } }
 .ws2-wl-diagram .aim { pointer-events: none; }
+/* The armed target's endpoint carries the preview: its tag and the reading as it tunes in. */
+.ws2-wl-map { margin-top: 12px; }
+.ws2-wl-diagram text .tag { font-size: 10px; letter-spacing: .2em; fill: var(--tgt); }
+.ws2-wl-diagram text .val { font-variant-numeric: tabular-nums; }
+/* Aiming the shift key (hover or focus): current runs faster down the target line and a hop links the two ends. */
+.ws2-wl-diagram .hop { fill: none; stroke: var(--tgt); stroke-width: 1.4; stroke-linecap: round; stroke-dasharray: .045 .05; opacity: 0; transition: opacity .18s ease-out; pointer-events: none; }
+.ws2-wl-panel.aiming .ws2-wl-diagram .hop { opacity: 1; filter: drop-shadow(0 0 3px rgba(var(--tgt-rgb), .8)); animation: ws2-hop .8s linear infinite; }
+@keyframes ws2-hop { to { stroke-dashoffset: -.19; } }
+.ws2-wl-panel.aiming .ws2-wl-line.sel:not(.cur) .flow { animation-duration: .32s; }
+.ws2-wl-panel.aiming .ws2-wl-line.sel:not(.cur) text { filter: drop-shadow(0 0 5px rgba(var(--tgt-rgb), .75)); }
+.ws2-wl-panel.aiming .ws2-wl-diagram .aim-lock > circle { stroke-width: 1.8; filter: drop-shadow(0 0 4px rgba(var(--tgt-rgb), .9)); }
 .ws2-wl-diagram .aim-lock { fill: none; stroke: var(--tgt); stroke-width: 1.2; animation: ws2-aim .42s cubic-bezier(.2, .9, .25, 1.2) both; }
 .ws2-wl-diagram .aim-lock .brk { stroke-width: 1.6; animation: ws2-aim-spin 6s linear .42s infinite; }
 @keyframes ws2-aim { from { transform: scale(2.6) rotate(-60deg); opacity: 0; } 60% { opacity: 1; } to { transform: none; opacity: 1; } }
@@ -1162,5 +1160,6 @@
 @media (prefers-reduced-motion: reduce) {
   .ws2 *, .ws2 *::before, .ws2 *::after { animation: none !important; transition: none !important; }
   .ws2 .ws2-wl-line :is(.main, .field) { stroke-dashoffset: 0; }
+  .ws2 .ws2-wl-panel.aiming .ws2-wl-diagram .hop { animation: none; }
   .ws2 .ws2-wl-diagram .here { opacity: 1; }
 }

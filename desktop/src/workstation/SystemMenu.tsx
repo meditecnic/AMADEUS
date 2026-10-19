@@ -100,11 +100,33 @@ export function SystemMenu({
   );
 }
 
-function WorldlineDiagram({ worldline, target, onTarget }: { worldline: Worldline; target: Worldline; onTarget: (w: Worldline) => void }) {
+function WorldlineDiagram({ worldline, target, reading, onTarget }: {
+  worldline: Worldline;
+  target: Worldline;
+  /** The armed target's reading as it tunes in (the target preview lives on its endpoint). */
+  reading: string;
+  onTarget: (w: Worldline) => void;
+}) {
   // SG sits outside any attractor field: one clean line. β lives inside a field: a converging bundle.
   const field = [-10, -5, 0, 5, 10];
-  const end = (w: Worldline) => (w === 'steins_gate' ? 'translate(600 36)' : 'translate(600 128)');
+  const endY = (w: Worldline) => (w === 'steins_gate' ? 36 : 128);
+  const armed = target !== worldline;
   const line = (w: Worldline) => `ws2-wl-line ${w === 'beta' ? 'beta' : 'sg'}${worldline === w ? ' cur' : ''}${target === w ? ' sel' : ''}`;
+  /** Endpoint caption; on the armed target it carries the tag and the tuning reading. */
+  const caption = (w: Worldline, y: number) => {
+    const aimed = armed && w === target;
+    return (
+      <text x="574" y={y} textAnchor="end">
+        {aimed && <tspan className="tag">TARGET · 目标{'\u2002'}</tspan>}
+        <tspan className="name">{WORLDLINE_NAME[w]}</tspan>
+        <tspan className="val"> · {aimed ? reading : DIVERGENCE[w]}%</tspan>
+      </text>
+    );
+  };
+  // The hop from the line you are on to the armed target, drawn while the shift key is aimed.
+  const from = endY(worldline);
+  const to = endY(target);
+  const hop = `M616 ${from + (from < to ? 12 : -12)} C 636 ${from}, 636 ${to}, 618 ${to + (from < to ? -15 : 15)}`;
   return (
     <svg className="ws2-wl-diagram" viewBox="0 0 640 170" role="radiogroup" aria-label="选择世界线">
       <g className="grid">{Array.from({ length: 9 }, (_, i) => <line key={i} x1={40 + i * 70} x2={40 + i * 70} y1="14" y2="156" />)}</g>
@@ -114,23 +136,26 @@ function WorldlineDiagram({ worldline, target, onTarget }: { worldline: Worldlin
         {field.map((o) => <path key={o} d={`M40 85 C 200 85, 260 ${124 + o}, 600 ${128 + o * 0.35}`} className={o === 0 ? 'main' : 'field'} />)}
         <path d="M40 85 C 200 85, 260 124, 600 128" className="flow" />
         <path d="M40 85 C 200 85, 260 124, 600 128" className="hit" />
-        <text x="574" y="152" textAnchor="end">β · {DIVERGENCE.beta}%</text>
+        {caption('beta', 152)}
       </g>
       <g className={line('steins_gate')} role="radio" aria-checked={target === 'steins_gate'} aria-label="STEINS;GATE 世界线" tabIndex={0}
         onClick={() => onTarget('steins_gate')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onTarget('steins_gate'); } }}>
         <path d="M40 85 C 200 85, 270 40, 600 36" className="main" />
         <path d="M40 85 C 200 85, 270 40, 600 36" className="flow" />
         <path d="M40 85 C 200 85, 270 40, 600 36" className="hit" />
-        <text x="574" y="24" textAnchor="end">STEINS;GATE · {DIVERGENCE.steins_gate}%</text>
+        {caption('steins_gate', 24)}
       </g>
-      <g className="here" transform={end(worldline)}>
+      <g className="here" transform={`translate(600 ${endY(worldline)})`}>
         <circle r="9" className="ring" /><circle r="3.5" />
       </g>
-      {target !== worldline && (
-        <g key={target} className="aim" transform={end(target)} aria-hidden="true">
-          <g className="aim-lock">
-            <circle r="13" /><path d="M-22 0H-10M10 0H22M0-22V-10M0 10V22" />
-            <path className="brk" d="M-17-9V-17H-9M9-17H17V-9M17 9V17H9M-9 17H-17V9" />
+      {armed && (
+        <g key={target} aria-hidden="true">
+          <path className="hop" d={hop} pathLength={1} />
+          <g className="aim" transform={`translate(600 ${endY(target)})`}>
+            <g className="aim-lock">
+              <circle r="13" /><path d="M-22 0H-10M10 0H22M0-22V-10M0 10V22" />
+              <path className="brk" d="M-17-9V-17H-9M9-17H17V-9M17 9V17H9M-9 17H-17V9" />
+            </g>
           </g>
         </g>
       )}
@@ -148,47 +173,43 @@ export function WorldlinePanel({ worldline, busy, onShift, onArm }: {
   onArm?: () => void;
 }) {
   const [target, setTarget] = useState<Worldline>(worldline);
+  const [aiming, setAiming] = useState(false);
   const reducedMotion = useReducedMotion();
   useEffect(() => { setTarget(worldline); }, [worldline]);
   const armed = target !== worldline;
-  // The dial reads the line you are on; the preview tunes to the armed target (and back to idle).
+  // The dial reads the line you are on; the target's endpoint on the diagram tunes to the armed reading.
   const preview = useTunedValue(DIVERGENCE[target], { duration: 820 });
-  const rowRef = useRef<HTMLDivElement>(null);
+  const diagramRef = useRef<HTMLDivElement>(null);
   const name = (w: Worldline) => (w === 'steins_gate' ? 'STEINS;GATE' : 'β WORLDLINE');
   const pick = (w: Worldline) => {
     if (w === target) return;
     setTarget(w);
     onArm?.();
-    if (reducedMotion) return;
-    rowRef.current?.animate([
+    const map = diagramRef.current;
+    if (reducedMotion || typeof map?.animate !== 'function') return;
+    map.animate([
       { transform: 'translateX(-3px)', filter: 'drop-shadow(-3px 0 rgba(255,70,110,.75)) drop-shadow(3px 0 rgba(90,220,255,.75))' },
       { transform: 'translateX(2px)', filter: 'drop-shadow(2px 0 rgba(255,70,110,.5)) drop-shadow(-2px 0 rgba(90,220,255,.5))', offset: .35 },
       { transform: 'none', filter: 'none' },
     ], { duration: 240, easing: 'steps(4, end)' });
   };
+  const aim = (on: boolean) => setAiming(on && armed && !busy);
   return (
-    <div className={`ws2-wl-panel${armed ? ' armed' : ''}`} data-target={target === 'steins_gate' ? 'sg' : 'beta'}>
+    <div className={`ws2-wl-panel${armed ? ' armed' : ''}${aiming && armed && !busy ? ' aiming' : ''}`} data-target={target === 'steins_gate' ? 'sg' : 'beta'}>
       <div className="ws2-wl-hero">
         <div className="dial">
-          <div className="meta"><small>CURRENT WORLDLINE</small><b>{name(worldline)}</b></div>
-          <div className="tubes">
-            <Nixie value={DIVERGENCE[worldline]} size="lg" title={`FIG.1 · ${WORLDLINE_NAME[worldline]}`} />
-          </div>
-        </div>
-        {/* Reserved slot: arming never moves the dial or the diagram. */}
-        <div className={`ws2-wl-preview${armed ? ' on' : ''}`} aria-live="polite">
-          <small>TARGET PREVIEW · 目标预览</small>
-          <div className="tubes" ref={rowRef}>
-            <Nixie value={preview.text} state={preview} size="md" unlit={!armed}
-              ariaLabel={armed ? `目标预览：${name(target)} ${DIVERGENCE[target]}%` : '目标预览：未选择目标世界线'} />
-          </div>
-          <span className="to">{armed ? <>→ <b>{name(target)}</b> · {DIVERGENCE[target]}%</> : '选择目标世界线'}</span>
+          <div className="meta"><small>CURRENT WORLDLINE<span className="zh">当前世界线</span></small><b>{name(worldline)}</b></div>
+          <Nixie value={DIVERGENCE[worldline]} size="lg" blueprint={false} />
         </div>
       </div>
-      <WorldlineDiagram worldline={worldline} target={target} onTarget={pick} />
+      <div className="ws2-wl-map" ref={diagramRef}>
+        <WorldlineDiagram worldline={worldline} target={target} reading={preview.text} onTarget={pick} />
+      </div>
+      <p className="ws2-sr-only" aria-live="polite">{armed ? `目标世界线：${name(target)} · ${DIVERGENCE[target]}%` : ''}</p>
       <div className="ws2-m-foot">
         <p className="ws2-m-note">两条世界线各自保存会话、草稿与记忆。目标线就绪后才算切换完成。</p>
-        <button key={target} type="button" className={`ws2-m-btn${armed ? ' armed' : ''}`} disabled={!armed || busy} onClick={() => onShift(target)}>
+        <button key={target} type="button" className={`ws2-m-btn${armed ? ' armed' : ''}`} disabled={!armed || busy} onClick={() => onShift(target)}
+          onPointerEnter={() => aim(true)} onPointerLeave={() => aim(false)} onFocus={() => aim(true)} onBlur={() => aim(false)}>
           {target === worldline ? '当前所在' : `跃迁至 ${target === 'steins_gate' ? 'STEINS;GATE' : 'β'}`}
         </button>
       </div>
