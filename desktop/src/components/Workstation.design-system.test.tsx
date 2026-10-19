@@ -376,6 +376,36 @@ describe('Workstation S4-DS dark-only chrome', () => {
     });
   });
 
+  it('plays the login entrance only when App hands it a phase, and settles exactly once', async () => {
+    const onEntranceSettled = vi.fn();
+    const props = { worldline: 'steins_gate' as const, onWorldlineChange: vi.fn(), onLogout: vi.fn(), onEntranceSettled };
+    const view = render(<Workstation {...props} entrance="draft" />);
+    const root = view.container.querySelector('.ws2')!;
+    expect(root).toHaveAttribute('data-entrance', 'draft');
+    expect(root).toHaveAttribute('inert');
+    // jsdom has no AnimationEvent; React may listen under the prefixed name, so send both.
+    const timer = view.container.querySelector('.ws2-ent-timer')!;
+    for (const type of ['animationend', 'webkitAnimationEnd']) {
+      const ev = new Event(type, { bubbles: true });
+      Object.defineProperty(ev, 'animationName', { value: 'ws2-ent-timer' });
+      act(() => { timer.dispatchEvent(ev); });
+    }
+    expect(onEntranceSettled).toHaveBeenCalledTimes(1);
+
+    view.rerender(<Workstation {...props} entrance="done" />);
+    expect(root).not.toHaveAttribute('data-entrance');
+    expect(root).not.toHaveAttribute('inert');
+    expect(view.container.querySelector('.ws2-ent-scrim')).toBeNull();
+    expect(sessionStorage.getItem('amadeus_booted')).toBeNull();
+  });
+
+  it('mounts straight into the room when there is no login entrance (menu, Memory, session switches)', async () => {
+    const { container } = renderWorkstation();
+    await waitFor(() => expect(screen.getByText('AMADEUS')).toBeInTheDocument());
+    expect(container.querySelector('[data-entrance]')).toBeNull();
+    expect(container.querySelector('.ws2-ent-scrim, .ws2-ent-timer')).toBeNull();
+  });
+
   it('has no ThemeControl / AUTO DAY NIGHT switch UI', async () => {
     renderWorkstation();
     await waitFor(() => expect(screen.getByText('AMADEUS')).toBeInTheDocument());

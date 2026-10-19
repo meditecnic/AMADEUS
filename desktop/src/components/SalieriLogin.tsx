@@ -1,30 +1,181 @@
 import { apiUrl, isPackagedTauri } from '../apiBase';
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import './SalieriLogin.css';
 import { audioService } from '../services/AudioService';
-import { packAsset } from '../assetPack';
 import { audioPlayer } from '../hooks/useAudioPlayer';
+import { useReducedMotion } from '../design-system/useReducedMotion';
+import { Blueprint, type BlueprintHandle } from './login/Blueprint';
+import { Wordmark, type WordmarkHandle } from './login/Wordmark';
+
+/**
+ * Beats of the entrance the app listens for. draft: the pen starts across the sheet and the workstation is
+ * drafted in behind it. docked: the wordmark has landed on the header's. gone: the terminal has let go.
+ */
+export type EntranceCue = 'draft' | 'docked' | 'gone' | 'skip';
 
 interface SalieriLoginProps {
   onLoginSuccess: () => void;
+  /** Kept for API stability: the terminal is one style on both worldlines. */
+  worldline?: 'steins_gate' | 'beta';
+  onEntranceCue?: (cue: EntranceCue) => void;
 }
 
-export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) => {
+/** Entrance timeline (ms after the server says yes). */
+const T = { sweep: 330, sweepDur: 920, fly: 420, flyDur: 840, fade: 150 };
+/** Header wordmark baseline inside its 1em line box (EB Garamond: ascent 1.007, descent .298, line-height 1). */
+const HEADER_BASELINE = 0.8545;
+
+const DAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+const pad = (n: number) => String(n).padStart(2, '0');
+function useClock() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(id);
+  }, []);
+  return {
+    date: `${now.getFullYear()}.${pad(now.getMonth() + 1)}.${pad(now.getDate())} ${DAYS[now.getDay()]}`,
+    time: `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
+  };
+}
+
+/** Lower right, an easter egg: the title-screen lines of the original, quoted as they are. */
+const VERSE = [
+  'The universe has a beginning, but it has no end\u2014Infinite.',
+  'Stars too have a beginning, but are by their own power destroyed\u2014Finite.',
+  'History teaches that those who hold wisdom are often the most foolish.',
+  'The fish in the sea know not the land. If they too hold wisdom, they too will be destroyed.',
+  'It is more ridiculous for man to exceed light speed than for fish to live ashore.',
+  'This may also be called God\'s final warning to those who rebel.',
+];
+/** Each line is typed out after the one before it (11 ms a character, a short pause between lines). */
+const VERSE_AT = VERSE.map((_, i) => VERSE.slice(0, i).reduce((t, l) => t + l.length * 11 + 90, 0));
+
+const CUT = 9;
+/**
+ * A field label's nameplate: a drafted plate with a cut corner and an engraved inner rule, printed
+ * slightly off register. Measured to the label so every line lands on a whole pixel. On focus the edge is drawn
+ * first, then the plate is inked in (see .lp-* in the stylesheet).
+ */
+function Plate() {
+  const ref = useRef<SVGSVGElement>(null);
+  const [box, setBox] = useState<{ w: number; h: number } | null>(null);
+  useLayoutEffect(() => {
+    const host = ref.current?.parentElement;
+    if (!host) return;
+    const read = () => {
+      const w = host.offsetWidth;
+      const h = host.offsetHeight;
+      if (w && h) setBox((b) => (b && b.w === w && b.h === h ? b : { w, h }));
+    };
+    read();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(read);
+    ro.observe(host);
+    return () => ro.disconnect();
+  }, []);
+  const w = box?.w ?? 0;
+  const h = box?.h ?? 0;
+  const shape = `M${CUT} 0H${w}V${h}H0V${CUT}Z`;
+  const i = 2.5;
+  const inner = `M${CUT + 1} ${i}H${w - i}V${h - i}H${i}V${CUT + 1}Z`;
+  return (
+    <svg ref={ref} className="lp" width={w} height={h} aria-hidden="true" focusable="false">
+      {box && (
+        <>
+          <path className="lp-reg r" d={shape} transform="translate(-1 0)" />
+          <path className="lp-reg b" d={shape} transform="translate(1 .5)" />
+          <path className="lp-fill" d={shape} filter="url(#sl-press)" />
+          <path className="lp-inner" d={inner} />
+          <path className="lp-ghost" d={shape} />
+          <path className="lp-edge" d={shape} pathLength={1} />
+        </>
+      )}
+    </svg>
+  );
+}
+
+/** A ruler under each field: one division per character, the nib at the end of the measurement. */
+function Ruler({ n }: { n: number }) {
+  return (
+    <span className="sl-ruler" aria-hidden="true" style={{ '--n': Math.min(n, 48) } as React.CSSProperties}>
+      {n > 0 && <i key={n} className="fresh" />}
+      <b className="nib" />
+    </span>
+  );
+}
+
+/** The password peek: an eye drawn in two lines. Shut while the password is masked; it opens to show it. */
+const LID_OPEN = 'M3 9Q13 .6 23 9';
+const LID_SHUT = 'M3 9Q13 16.4 23 9';
+function Peek({ open }: { open: boolean }) {
+  return (
+    <svg className="sl-peek-eye" viewBox="0 0 26 18" aria-hidden="true" focusable="false">
+      <path className="low" d="M3 9Q13 16.4 23 9" />
+      <path className="lid" d={open ? LID_OPEN : LID_SHUT} />
+      <path className="lash" d="M8 12.1l-1.1 2.3M13 13v2.6M18 12.1l1.1 2.3" />
+      <circle className="iris" cx="13" cy="9" r="3.9" />
+      <circle className="pupil" cx="13" cy="9" r="1.7" />
+    </svg>
+  );
+}
+
+export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEntranceCue }) => {
   const [userId, setUserId] = useState('');
   const [password, setPassword] = useState('');
+  const [peek, setPeek] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   // Which field the error belongs to; the message text is localized or a raw backend detail.
   const [errorField, setErrorField] = useState<'user' | 'password' | null>(null);
+  const [errorSeq, setErrorSeq] = useState(0);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [backendStatus, setBackendStatus] = useState<'starting' | 'ready' | 'timeout'>(isPackagedTauri ? 'starting' : 'ready');
-  const [scale, setScale] = useState(1);
-  const [photoFailed, setPhotoFailed] = useState(false);
-  const [logoFailed, setLogoFailed] = useState(false);
-  const photoLeft = packAsset('login/photo_left.png');
-  const amadeusLogo = packAsset('login/amadeus_logo.png');
+  const [focusField, setFocusField] = useState<'user' | 'password' | null>(null);
+  const [capsLock, setCapsLock] = useState(false);
+  const [exiting, setExiting] = useState(false);
+  const [sweeping, setSweeping] = useState(false);
+  const [flying, setFlying] = useState(false);
+  const [glitch, setGlitch] = useState(0);
+  const reduced = useReducedMotion();
+  const [intro, setIntro] = useState(() => !reduced);
+  const clock = useClock();
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
+  const wordWrapRef = useRef<HTMLSpanElement>(null);
+  const wordRef = useRef<WordmarkHandle>(null);
+  const penRef = useRef<HTMLDivElement>(null);
+  const plateRef = useRef<BlueprintHandle>(null);
+  const userRowRef = useRef<HTMLDivElement>(null);
+  const pwdRowRef = useRef<HTMLDivElement>(null);
+  const pwdRef = useRef<HTMLInputElement>(null);
+  const userRef = useRef<HTMLInputElement>(null);
+  const refocusRef = useRef<'user' | 'password' | null>(null);
   const errTimeoutRef = useRef<number | null>(null);
+  const succeededRef = useRef(false);
+  const timersRef = useRef<number[]>([]);
+  const animsRef = useRef<Animation[]>([]);
+  const cueRef = useRef(onEntranceCue);
+  cueRef.current = onEntranceCue;
+  const goneRef = useRef(false);
+  const cue = (c: EntranceCue) => {
+    if (goneRef.current) return;
+    if (c === 'gone' || c === 'skip') goneRef.current = true;
+    cueRef.current?.(c);
+  };
+  const later = (fn: () => void, ms: number) => { timersRef.current.push(window.setTimeout(fn, ms)); };
+
+  useEffect(() => () => {
+    timersRef.current.forEach((id) => window.clearTimeout(id));
+    animsRef.current.forEach((a) => a.cancel());
+  }, []);
+
+  // The sheet is drafted once per visit; afterwards every line simply stays put.
+  useEffect(() => {
+    if (!intro) return;
+    const id = window.setTimeout(() => setIntro(false), 3400);
+    return () => window.clearTimeout(id);
+  }, [intro]);
 
   useEffect(() => {
     if (!isPackagedTauri) return;
@@ -69,12 +220,41 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
     }
     setErrorMsg(msg);
     setErrorField(field);
+    setErrorSeq((n) => n + 1);
+    refocusRef.current = field;
+    plateRef.current?.jam();
+    if (!reduced) setGlitch((n) => n + 1);
+    const row = field === 'user' ? userRowRef.current : pwdRowRef.current;
+    if (!reduced && typeof row?.animate === 'function') {
+      // A damped refusal: the row is pushed back and settles, it does not wobble forever.
+      row.animate(
+        [{ transform: 'none' }, { transform: 'translateX(-9px)' }, { transform: 'translateX(7px)' }, { transform: 'translateX(-4px)' }, { transform: 'translateX(2px)' }, { transform: 'none' }],
+        { duration: 420, easing: 'cubic-bezier(.36, .07, .19, .97)' },
+      );
+    }
     errTimeoutRef.current = window.setTimeout(() => {
       setErrorMsg('');
       setErrorField(null);
       errTimeoutRef.current = null;
     }, 3000);
   };
+
+  // A refusal hands the keyboard back to the field at fault (it was disabled while the check ran), ready to retype.
+  useEffect(() => {
+    const field = refocusRef.current;
+    if (!field || isAuthenticating) return;
+    refocusRef.current = null;
+    const input = field === 'user' ? userRef.current : pwdRef.current;
+    if (!input || input.disabled) return;
+    input.focus({ preventScroll: true });
+    input.select();
+  }, [errorSeq, isAuthenticating]);
+
+  useEffect(() => {
+    if (!glitch) return;
+    const id = window.setTimeout(() => setGlitch(0), 380);
+    return () => window.clearTimeout(id);
+  }, [glitch]);
 
   // 卸载组件时清理定时器，防内存泄漏
   useEffect(() => {
@@ -85,94 +265,136 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
     };
   }, []);
 
-  // Play login-screen BGM on mount
+  // Login-screen BGM. After a successful login the workstation owns the channel, so leaving must not silence it.
   useEffect(() => {
     audioService.playBGM('/audio/bgm/Messenger main theme.ogg');
     return () => {
-      audioService.stopBGM();
+      if (!succeededRef.current) audioService.stopBGM();
     };
   }, []);
 
-  // 1. 动态计算 1920x1080 比例下的自适应 scale 值
-  useEffect(() => {
-    const handleResize = () => {
-      const w = window.innerWidth;
-      const h = window.innerHeight;
-      const scaleFactor = Math.min(w / 1920, h / 1080);
-      setScale(scaleFactor);
-    };
-    
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  // 2. USER ID 打字机自动录入效果 (基于显式局部变量，强力避免 React StrictMode 漏字与双计时器冲突)
+  // USER ID 打字机自动录入（等输入栏画出来后开始）；每个字符让齿轮走一齿。写完后把光标交给密码栏。
   useEffect(() => {
     let index = 0;
     const targetText = 'Salieri';
     let current = '';
-    setUserId(''); // 初始清空
+    let typeTimer: number | undefined;
+    setUserId('');
 
-    const typeTimer = setInterval(() => {
+    const startTimer = window.setTimeout(() => { typeTimer = window.setInterval(() => {
       if (index < targetText.length) {
         current += targetText.charAt(index);
         setUserId(current);
+        plateRef.current?.tick();
         index++;
       } else {
-        clearInterval(typeTimer);
+        window.clearInterval(typeTimer);
+        const active = document.activeElement;
+        if (!active || active === document.body) pwdRef.current?.focus();
       }
-    }, 50);
+    }, 50); }, reduced ? 0 : 1050);
 
-    return () => clearInterval(typeTimer); // 在 unmount 时彻底销毁计时器，规避竞争
+    return () => { window.clearTimeout(startTimer); window.clearInterval(typeTimer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 3. Canvas rain reads the same semantic ink as the login controls.
+  // A slight parallax between the paper and the drawings on it.
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    // 设置 Canvas 绘图分辨率
-    canvas.width = 1920;
-    canvas.height = 1080;
-
-    const fontSize = 14;
-    const columns = Math.floor(canvas.width / fontSize);
-    
-    // 初始化每一列的垂直下落 y 坐标
-    const drops: number[] = [];
-    for (let i = 0; i < columns; i++) {
-      drops[i] = Math.random() * -20;
-    }
-
-    const drawBinaryRain = () => {
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.15)';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      ctx.fillStyle = getComputedStyle(canvas).color;
-      ctx.font = `${fontSize}px monospace`;
-
-      for (let i = 0; i < drops.length; i++) {
-        const text = Math.random() > 0.5 ? '1' : '0';
-        const x = i * fontSize;
-        const y = drops[i] * fontSize;
-
-        ctx.fillText(text, x, y);
-
-        if (y > canvas.height && Math.random() > 0.975) {
-          drops[i] = 0;
-        }
-
-        drops[i]++;
-      }
+    const root = rootRef.current;
+    if (!root || reduced) return;
+    let raf = 0;
+    const move = (e: PointerEvent) => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        root.style.setProperty('--px', ((e.clientX / window.innerWidth) * 2 - 1).toFixed(3));
+        root.style.setProperty('--py', ((e.clientY / window.innerHeight) * 2 - 1).toFixed(3));
+      });
     };
+    window.addEventListener('pointermove', move);
+    return () => { window.removeEventListener('pointermove', move); cancelAnimationFrame(raf); };
+  }, [reduced]);
 
-    const rainTimer = setInterval(drawBinaryRain, 50);
-    return () => clearInterval(rainTimer);
-  }, []);
+  // Entrance: any deliberate key or click skips straight into the workstation.
+  useEffect(() => {
+    if (!exiting || reduced) return;
+    const skip = (e: KeyboardEvent) => {
+      if (e.repeat || e.isComposing) return;
+      animsRef.current.forEach((a) => a.cancel());
+      cue('skip');
+    };
+    window.addEventListener('keydown', skip, true);
+    return () => window.removeEventListener('keydown', skip, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exiting, reduced]);
+
+  // Reduced motion: a short opacity fade only, with a fallback in case transitionend never arrives.
+  useEffect(() => {
+    if (!exiting || !reduced) return;
+    const id = window.setTimeout(() => cue('gone'), 400);
+    return () => window.clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [exiting, reduced]);
+
+  /**
+   * The same pen that drafted the wordmark crosses the whole sheet; behind it the workstation is drafted in,
+   * and the wordmark flies up to become the header's own.
+   */
+  const runEntrance = () => {
+    const pen = penRef.current;
+    const backdrop = backdropRef.current;
+    const canAnimate = typeof pen?.animate === 'function' && typeof backdrop?.animate === 'function';
+    later(() => {
+      plateRef.current?.tick(4);
+      if (!canAnimate) { cue('draft'); cue('docked'); cue('gone'); return; }
+      setSweeping(true);
+      const timing: KeyframeAnimationOptions = { duration: T.sweepDur, easing: 'cubic-bezier(.62, 0, .3, 1)', fill: 'forwards' };
+      animsRef.current.push(
+        pen!.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(100vw)' }], timing),
+        backdrop!.animate([{ clipPath: 'inset(0 0 0 0)' }, { clipPath: 'inset(0 0 0 100%)' }], timing),
+      );
+      cue('draft');
+    }, T.sweep);
+
+    later(() => {
+      const wrap = wordWrapRef.current;
+      const from = wordRef.current?.measure();
+      const head = document.querySelector<HTMLElement>('.ws2-wordmark');
+      const firstCh = head?.querySelector<HTMLElement>('.ch') ?? head;
+      const land = () => {
+        cue('docked');
+        if (wrap && typeof wrap.animate === 'function') {
+          const fade = wrap.animate([{ opacity: 1 }, { opacity: 0 }], { duration: T.fade, fill: 'forwards' });
+          animsRef.current.push(fade);
+          fade.onfinish = () => cue('gone');
+        } else cue('gone');
+      };
+      if (!wrap || !from || !firstCh || typeof wrap.animate !== 'function') {
+        later(land, Math.max(0, T.sweep + T.sweepDur - T.fly));
+        return;
+      }
+      const box = wrap.getBoundingClientRect();
+      const ch = firstCh.getBoundingClientRect();
+      const fs = parseFloat(getComputedStyle(head!).fontSize) || 21;
+      const k = fs / 1000 / from.unit;
+      const ox = from.x - box.left;
+      const oy = from.y - box.top;
+      const dx = ch.left - from.x;
+      const dy = ch.top + HEADER_BASELINE * fs - from.y;
+      setFlying(true);
+      wrap.style.transformOrigin = `${ox}px ${oy}px`;
+      const fly = wrap.animate(
+        [
+          { transform: 'none' },
+          { transform: `translate(${dx * 0.12}px, ${dy * 0.04 + 6}px) scale(${1 - (1 - k) * 0.06})`, offset: 0.22 },
+          { transform: `translate(${dx}px, ${dy}px) scale(${k})` },
+        ],
+        { duration: T.flyDur, easing: 'cubic-bezier(.66, 0, .18, 1)', fill: 'forwards' },
+      );
+      animsRef.current.push(fly);
+      fly.onfinish = land;
+    }, T.fly);
+  };
 
   const handleInitAudio = () => {
     audioPlayer.init();
@@ -180,7 +402,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (backendStatus !== 'ready') return;
+    if (backendStatus !== 'ready' || exiting) return;
     handleInitAudio();
     if (!userId) {
       showAuthError('请输入 USER ID', 'user');
@@ -196,6 +418,9 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
     }
 
     setIsAuthenticating(true);
+    setPeek(false);
+    // Once the user has asked, the title is finished: the pen is needed for the check, not the drawing.
+    setIntro(false);
     if (errTimeoutRef.current) {
       window.clearTimeout(errTimeoutRef.current);
       errTimeoutRef.current = null;
@@ -203,6 +428,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
     setErrorMsg('');
     setErrorField(null);
 
+    let accepted = false;
     try {
       const response = await fetch(apiUrl('/api/auth/salieri'), {
         method: 'POST',
@@ -213,8 +439,17 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
       });
 
       if (response.ok) {
+        accepted = true;
         audioService.playSFX('/audio/sfx/连接成功，进入页面2.ogg');
+        audioService.stopBGM();
+        succeededRef.current = true;
+        (document.activeElement as HTMLElement | null)?.blur?.();
+        setIntro(false);
+        setExiting(true);
         onLoginSuccess();
+        if (!reduced) runEntrance();
+      } else if (response.status === 401 || response.status === 403) {
+        showAuthError('密码错误', 'password');
       } else {
         const errorData = await response.json().catch(() => ({}));
         showAuthError(errorData.detail || '访问被拒绝', 'password');
@@ -222,104 +457,179 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess }) =>
     } catch (error) {
       showAuthError('系统连接已断开', 'password');
     } finally {
-      setIsAuthenticating(false);
+      if (!accepted) setIsAuthenticating(false);
     }
   };
 
+  const busy = isAuthenticating && !exiting;
+  const rootClass = [
+    'sl-root',
+    exiting && 'exiting',
+    sweeping && 'sweeping',
+    reduced && 'reduced',
+    intro && 'intro',
+  ].filter(Boolean).join(' ');
+
   return (
-    <div className="login-screen-container">
-      {/* 顶层 CRT 扫描线与暗角效果 */}
-      <div className="crt-effects-overlay" />
+    <div
+      ref={rootRef}
+      className={rootClass}
+      onPointerDown={(e) => {
+        if (!exiting || reduced) return;
+        // The skipping click is spent here: its mousedown must not then pull focus off the composer.
+        e.preventDefault();
+        animsRef.current.forEach((a) => a.cancel());
+        cue('skip');
+      }}
+      onTransitionEnd={(e) => {
+        if (exiting && reduced && e.target === e.currentTarget && e.propertyName === 'opacity') cue('gone');
+      }}
+    >
+      <div ref={backdropRef} className="sl-backdrop">
+        <div className="sl-grid" aria-hidden="true" />
+        <div className="sl-plate"><Blueprint ref={plateRef} reduced={reduced} busy={busy} /></div>
+        <div className="sl-frame" aria-hidden="true">
+          <div className="zones top">{[1, 2, 3, 4, 5, 6, 7, 8].map((n) => <span key={n}>{n}</span>)}</div>
+          <div className="zones bottom">{[1, 2, 3, 4, 5, 6, 7, 8].map((n) => <span key={n}>{n}</span>)}</div>
+          <div className="zones left">{['A', 'B', 'C', 'D', 'E', 'F'].map((n) => <span key={n}>{n}</span>)}</div>
+          <div className="zones right">{['A', 'B', 'C', 'D', 'E', 'F'].map((n) => <span key={n}>{n}</span>)}</div>
+        </div>
+        <div className="sl-tblock" aria-hidden="true">
+          <span className="k">DATE</span><span className="v">{clock.date}</span>
+          <span className="k">TIME</span><span className="v">{clock.time}</span>
+        </div>
+        <div className="sl-verse" aria-hidden="true">
+          {VERSE.map((line, i) => (
+            <p key={i} style={{ '--n': line.length, '--t': `${VERSE_AT[i]}ms` } as React.CSSProperties}>{line}</p>
+          ))}
+        </div>
+        <p className="sl-note" aria-hidden="true">LOCAL LINK · 记忆仅保存在这台设备上</p>
+        <div className="sl-vignette" aria-hidden="true" />
+      </div>
 
-      <div 
-        className="login-content-wrapper" 
-        style={{ transform: `scale(${scale})` }}
-      >
-        {/* 左侧写实黑白照片 (已移入等比例缩放的 wrapper 内部，以实现 100% 精确网格线重合与滤色混合) */}
-        {photoLeft && !photoFailed && (
-          <div className="left-photo-viewport">
-            <img src={photoLeft} className="left-photo" alt="" onError={() => setPhotoFailed(true)} />
-          </div>
-        )}
+      <div className="sl-center">
+        <h1 className="sl-title">
+          <span ref={wordWrapRef} className="sl-word">
+            <Wordmark
+              ref={wordRef}
+              className={[intro && 'is-intro', busy && 'is-busy', glitch && 'is-glitch', exiting && 'is-ink', flying && 'is-flying'].filter(Boolean).join(' ')}
+            />
+          </span>
+        </h1>
+        <div className="sl-dim" aria-hidden="true"><i /><i /></div>
 
-        {/* Canvas 动态二进制数字背景雨 */}
-        <canvas ref={canvasRef} className="binary-stream-canvas" />
-
-        <div className="login-form-center">
-          <form onSubmit={handleSubmit} className="salieri-login-form">
-
-            <div className="amadeus-logo-container">
-              {amadeusLogo && !logoFailed ? (
-                <img
-                  src={amadeusLogo}
-                  className="amadeus-logo-img"
-                  alt="AMADEUS Logo"
-                  onError={() => setLogoFailed(true)}
-                />
-              ) : (
-                <span className="amadeus-logo-text">AMADEUS</span>
-              )}
-            </div>
-
-            <div className="input-field-group user-id-group">
-              <label className="field-title" htmlFor="salieri-user">USER ID</label>
+        <form onSubmit={handleSubmit} className="sl-form salieri-login-form" noValidate>
+          <div ref={userRowRef} className={`sl-row user${errorField === 'user' ? ' is-error' : ''}`}>
+            <label className={`sl-label${focusField === 'user' || errorField === 'user' ? ' is-on' : ''}`} htmlFor="salieri-user"><Plate /><span>USER ID</span></label>
+            <div className="sl-slot">
               <input
+                ref={userRef}
                 id="salieri-user"
                 type="text"
-                className={`user-id-input ${errorField === 'user' ? 'input-error' : ''}`}
+                className="sl-input user-id-input"
                 value={userId}
-                onChange={(e) => setUserId(e.target.value)}
+                onChange={(e) => { setUserId(e.target.value); plateRef.current?.tick(); }}
+                onFocus={() => setFocusField('user')}
+                onBlur={() => setFocusField((f) => (f === 'user' ? null : f))}
                 disabled={isAuthenticating}
                 spellCheck={false}
                 autoComplete="off"
+                aria-invalid={errorField === 'user' || undefined}
               />
+              <i className="sl-ul" aria-hidden="true" />
+              <Ruler n={userId.length} />
             </div>
+          </div>
 
-            <div className="input-field-group password-group">
-              <label className="field-title" htmlFor="salieri-pwd">PASSWORD</label>
-              <div className="password-input-wrapper">
-                <input
-                  id="salieri-pwd"
-                  type="password"
-                  className={`password-input ${errorField === 'password' ? 'input-error' : ''}`}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  disabled={isAuthenticating}
-                  spellCheck={false}
-                  autoComplete="off"
-                />
-              </div>
-            </div>
-
-            <div className="btn-container">
+          <div ref={pwdRowRef} className={`sl-row pwd${errorField === 'password' ? ' is-error' : ''}`}>
+            <label className={`sl-label${focusField === 'password' || errorField === 'password' ? ' is-on' : ''}`} htmlFor="salieri-pwd"><Plate /><span>PASSWORD</span></label>
+            <div className={`sl-slot${capsLock ? ' has-caps' : ''}`}>
+              <input
+                ref={pwdRef}
+                id="salieri-pwd"
+                type={peek ? 'text' : 'password'}
+                className="sl-input password-input"
+                value={password}
+                onChange={(e) => { setPassword(e.target.value); if (!e.target.value) setPeek(false); plateRef.current?.tick(); }}
+                onFocus={() => setFocusField('password')}
+                onBlur={() => { setFocusField((f) => (f === 'password' ? null : f)); setCapsLock(false); }}
+                onKeyDown={(e) => {
+                  setCapsLock(e.getModifierState?.('CapsLock') ?? false);
+                  // Alt+F8 shows or hides the password, as the system's own reveal button does.
+                  if (e.altKey && e.key === 'F8' && password) { e.preventDefault(); setPeek((v) => !v); }
+                }}
+                onKeyUp={(e) => setCapsLock(e.getModifierState?.('CapsLock') ?? false)}
+                disabled={isAuthenticating}
+                spellCheck={false}
+                autoComplete="off"
+                aria-invalid={errorField === 'password' || undefined}
+              />
+              {capsLock && <span className="sl-caps" aria-hidden="true">CAPS</span>}
               <button
-                type="submit"
-                className="decrypt-btn"
-                disabled={isAuthenticating || backendStatus !== 'ready'}
-                title="CONNECT"
-                aria-label="Decrypt and Connect"
+                type="button"
+                className={`sl-peek${password ? ' is-shown' : ''}${peek ? ' is-open' : ''}`}
+                tabIndex={-1}
+                aria-label={peek ? '隐藏密码' : '显示密码'}
+                aria-pressed={peek}
+                aria-hidden={!password || undefined}
+                title={peek ? '隐藏密码（Alt+F8）' : '显示密码（Alt+F8）'}
+                disabled={isAuthenticating || !password}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => { setPeek((v) => !v); pwdRef.current?.focus(); }}
               >
-                <svg viewBox="0 0 80 80" width="76" height="76" className="connect-btn-svg">
-                  <circle cx="40" cy="40" r="34" className="btn-circle-track" />
-                  <circle cx="40" cy="40" r="34" className="btn-circle-glow" />
-                  <path d="M 30 40 L 50 40 M 42 32 L 50 40 L 42 48" className="btn-arrow-icon" />
-                </svg>
+                <Peek open={peek} />
               </button>
+              <i className="sl-ul" aria-hidden="true" />
+              <Ruler n={[...password].length} />
             </div>
+            <button
+              type="submit"
+              className={`decrypt-btn sl-go${busy ? ' is-busy' : ''}${exiting ? ' is-ok' : ''}`}
+              disabled={isAuthenticating || backendStatus !== 'ready'}
+              title="CONNECT"
+              aria-label="Decrypt and Connect"
+            >
+              <svg viewBox="0 0 64 64" aria-hidden="true">
+                <circle cx="32" cy="32" r="30.5" className="halo" />
+                <g className="ticks">
+                  {Array.from({ length: 24 }, (_, i) => <path key={i} d={`M32 4.2v${i % 6 === 0 ? 4.2 : 2.4}`} transform={`rotate(${i * 15} 32 32)`} />)}
+                </g>
+                <circle cx="32" cy="32" r="23" className="ring" pathLength={1} />
+                <circle cx="32" cy="32" r="23" className="disc" />
+                <path d="M23.5 32h16M34 26.5l5.5 5.5-5.5 5.5" className="arrow" />
+                <path d="M24 32.5l5.5 5.5 11-12" className="check" pathLength={1} />
+              </svg>
+            </button>
+          </div>
 
+          <div className="sl-msg-line">
             {backendStatus !== 'ready' && (
-              <div className="auth-error-banner backend-status-banner" role="status">
-                {backendStatus === 'starting' ? '正在启动本地服务…' : '本地服务没有启动，请重新打开 Amadeus'}
-              </div>
+              <p className="sl-msg backend-status-banner" role="status">
+                <i aria-hidden="true" />{backendStatus === 'starting' ? '正在启动本地服务…' : '本地服务没有启动，请重新打开 Amadeus'}
+              </p>
             )}
-
             {errorMsg && (
-              <div className="auth-error-banner glitch-flicker">
-                {errorMsg}
-              </div>
+              <p key={errorSeq} className="sl-msg is-error" role="alert">
+                <i aria-hidden="true" />{errorMsg}
+              </p>
             )}
-          </form>
-        </div>
+          </div>
+        </form>
+      </div>
+
+      {/* Letterpress: a little ink spread at the edges and paper grain through the ink. */}
+      <svg className="sl-defs" width="0" height="0" aria-hidden="true" focusable="false">
+        <filter id="sl-press" x="-4%" y="-20%" width="108%" height="140%" colorInterpolationFilters="sRGB">
+          <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves={2} seed={7} result="n" />
+          <feDisplacementMap in="SourceGraphic" in2="n" scale={1.3} xChannelSelector="R" yChannelSelector="G" result="d" />
+          <feGaussianBlur in="d" stdDeviation={0.3} result="s" />
+          <feColorMatrix in="n" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0.3 0 0 0 0.74" result="g" />
+          <feComposite in="s" in2="g" operator="in" />
+        </filter>
+      </svg>
+
+      <div ref={penRef} className="sl-pen" aria-hidden="true">
+        <i className="s1" /><i className="s2" /><i className="s3" /><i className="s4" /><i className="s5" />
       </div>
     </div>
   );

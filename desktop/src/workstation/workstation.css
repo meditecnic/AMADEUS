@@ -322,29 +322,54 @@
 .ws2-dialog-check input { margin-top: 3px; accent-color: #ff6b5e; }
 .ws2-dialog-check small { display: block; margin-top: 3px; font-size: 11.5px; color: var(--ws-ink-3); }
 
-/* ---------- boot: title card → header ---------- */
-.ws2-boot { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center; background: var(--ws-bg); cursor: pointer; transition: background .55s ease; }
-.ws2-boot.dock { background: transparent; pointer-events: none; }
-.ws2-boot-grid { position: absolute; inset: 0; width: 100%; height: 100%; fill: none; stroke: var(--ws-ink-3); stroke-width: .06; vector-effect: non-scaling-stroke; opacity: .5; }
-.ws2-boot-grid line, .ws2-boot-grid circle { vector-effect: non-scaling-stroke; stroke-width: 1px; stroke-dasharray: 2000; stroke-dashoffset: 2000; animation: ws2-boot-line 1.1s cubic-bezier(.5, 0, .2, 1) forwards; }
-.ws2-boot-grid circle { stroke: rgba(var(--ws-accent-rgb), .35); animation-delay: .25s; }
-@keyframes ws2-boot-line { to { stroke-dashoffset: 0; } }
-.ws2-boot.dock .ws2-boot-grid { opacity: 0; transition: opacity .35s ease; }
-.ws2-boot-word { position: relative; font-family: var(--ws-serif); font-size: clamp(56px, 9vw, 112px); letter-spacing: .22em; line-height: 1; color: var(--ws-ink); transform-origin: 0 0; transition: transform .6s cubic-bezier(.7, 0, .2, 1); will-change: transform; }
-.ws2[data-wl='beta'] .ws2-boot-word .draft { --draft-ink: #ffcf96; }
-.ws2-boot-meta { position: absolute; left: 50%; top: calc(50% + clamp(48px, 7vw, 86px)); transform: translateX(-50%); display: flex; align-items: center; gap: 14px; font-family: var(--ws-mono); font-size: 11px; letter-spacing: .34em; color: var(--ws-ink-3); animation: ws2-body-in .6s ease .8s both; }
-.ws2-boot-meta i { width: 36px; height: 1px; background: var(--ws-accent); box-shadow: 0 0 6px var(--ws-accent); }
-.ws2-boot-meta span:last-child { color: var(--nixie); text-shadow: 0 0 8px rgba(var(--nixie-glow), .6); }
-.ws2-boot.dock .ws2-boot-meta { opacity: 0; transition: opacity .25s ease; }
-/* The room holds still behind the card, then assembles as the word docks. */
-.ws2.boot-draft :is(.ws2-side, .ws2-talk, .ws2-stage, .ws2-top > :not(.ws2-wordmark)), .ws2.boot-draft .ws2-wordmark, .ws2.boot-dock .ws2-wordmark { opacity: 0; }
-.ws2.boot-dock .ws2-side { animation: ws2-in-left .6s cubic-bezier(.2, .7, .2, 1) .1s both; }
-.ws2.boot-dock .ws2-talk { animation: ws2-in-up .6s cubic-bezier(.2, .7, .2, 1) .22s both; }
-.ws2.boot-dock .ws2-stage { animation: ws2-in-stage .9s cubic-bezier(.2, .7, .2, 1) .05s both; }
-.ws2.boot-dock .ws2-top > :not(.ws2-wordmark) { animation: ws2-body-in .5s ease .35s both; }
-@keyframes ws2-in-left { from { opacity: 0; transform: translateX(-24px); } to { opacity: 1; transform: none; } }
-@keyframes ws2-in-up { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
-@keyframes ws2-in-stage { from { opacity: 0; transform: translateY(26px); filter: brightness(.3); } to { opacity: 1; transform: none; filter: none; } }
+/* ---------- entrance: off the drafting sheet ----------
+ * Driven by the login terminal (App relays its cues). hold: mounted and still under the sheet.
+ * draft: the pen sweeps the sheet away left to right and each instrument is drawn in just ahead of it.
+ * docked: the title wordmark has landed in the header. Everything that normally animates on mount waits for draft.
+ */
+.ws2[data-entrance='hold'] *, .ws2[data-entrance='hold'] *::before, .ws2[data-entrance='hold'] *::after { animation-play-state: paused !important; }
+.ws2:is([data-entrance='hold'], [data-entrance='draft']) .ws2-wordmark { opacity: 0; }
+.ws2[data-entrance='docked'] .ws2-wordmark { transition: opacity .12s linear; }
+.ws2-ent-timer { position: absolute; width: 0; height: 0; visibility: hidden; }
+.ws2:is([data-entrance='draft'], [data-entrance='docked']) .ws2-ent-timer { animation: ws2-ent-timer 1.7s linear forwards; }
+@keyframes ws2-ent-timer { to { opacity: 0; } }
+
+/* The wordmark that came off the sheet is already inked; it does not redraw itself on arrival. */
+.draft.is-inked::before, .draft.is-inked::after, .draft.is-inked .ch, .draft.is-inked .ch::after { animation: none; }
+
+/* The drafting behind the room is drawn as the sheet goes. */
+.ws2[data-entrance] .ws2-atmo-light { animation: ws2-fade-in .9s ease .1s both; opacity: 0; }
+.ws2[data-entrance] .ws2-atmo-draft .ln { stroke-dasharray: 1; stroke-dashoffset: 1; animation: ws2-ent-draw 1.3s cubic-bezier(.3, .6, .2, 1) calc(var(--d, 0) * 1ms + 120ms) forwards; }
+.ws2[data-entrance] .ws2-atmo-draft :is(.bp, .dash) { animation: ws2-ent-appear .9s ease .4s backwards; }
+.ws2[data-entrance] .ws2-atmo-grid { animation: ws2-ent-appear .8s ease backwards; }
+.ws2[data-entrance] .ws2-atmo-bin { animation: ws2-ent-type 1.1s steps(14) .3s backwards; }
+.ws2[data-entrance] .ws2-atmo-crt { animation: ws2-ent-appear .5s steps(3) .2s backwards; }
+@keyframes ws2-ent-draw { to { stroke-dashoffset: 0; } }
+@keyframes ws2-ent-appear { from { opacity: 0; } }
+@keyframes ws2-ent-type { from { clip-path: inset(0 0 100% 0); } to { clip-path: inset(0); } }
+
+/* Instruments are drawn in the order the pen reaches them: rail, header left to right, log, seam, stage, plate. */
+.ws2[data-entrance] .ws2-top > * { animation: ws2-ent-drop .44s cubic-bezier(.22, 1, .36, 1) var(--t, .2s) backwards; }
+.ws2[data-entrance] .ws2-top > :nth-child(1) { --t: .1s; }
+.ws2[data-entrance] .ws2-top > :nth-child(3) { --t: .2s; }
+.ws2[data-entrance] .ws2-top > :nth-child(4) { --t: .3s; }
+.ws2[data-entrance] .ws2-top > :nth-child(5) { --t: .44s; }
+.ws2[data-entrance] .ws2-top > :nth-child(6) { --t: .52s; }
+.ws2[data-entrance] .ws2-top > :nth-child(n + 7) { --t: .56s; }
+.ws2[data-entrance] .ws2-top > .ws2-wordmark { animation: none; }
+.ws2[data-entrance] .ws2-meter .nx-lit { animation: ws2-ignite .55s steps(1) calc(420ms + var(--n, 0) * 55ms) both; }
+.ws2[data-entrance] .ws2-side { animation: ws2-ent-side .6s cubic-bezier(.22, 1, .36, 1) .1s backwards; }
+.ws2[data-entrance] .ws2-transcript-wrap { animation: ws2-ent-rise .66s cubic-bezier(.22, 1, .36, 1) .24s backwards; }
+.ws2[data-entrance] .ws2-composer { animation: ws2-ent-rise .66s cubic-bezier(.22, 1, .36, 1) .3s backwards; }
+.ws2[data-entrance] .ws2-seam { transform-origin: top; animation: ws2-ent-seam .8s cubic-bezier(.3, .7, .2, 1) .38s backwards; }
+.ws2[data-entrance] .ws2-matrix { animation: ws2-ent-appear .8s ease .42s backwards; }
+.ws2[data-entrance] .ws2-plate { animation: ws2-ent-rise .5s cubic-bezier(.22, 1, .36, 1) .56s backwards; }
+.ws2[data-entrance] .avatar-stage { animation: ws2-ent-scan .9s cubic-bezier(.3, .7, .2, 1) .42s backwards; }
+@keyframes ws2-ent-drop { from { opacity: 0; transform: translateY(-7px); filter: blur(3px); } }
+@keyframes ws2-ent-side { from { opacity: 0; transform: translateX(-18px); } }
+@keyframes ws2-ent-rise { from { opacity: 0; transform: translateY(16px) scale(.985); filter: blur(4px); } }
+@keyframes ws2-ent-seam { from { transform: scaleY(0); } }
+@keyframes ws2-ent-scan { from { clip-path: inset(0 0 100% 0); filter: brightness(1.8); } 60% { filter: brightness(1.15); } to { clip-path: inset(0); filter: none; } }
 
 /* Memory bridge: an iris opens from the engram key (clip-path, so Memory's fixed layout is untouched). */
 .ws2-memory-layer { position: fixed; inset: 0; z-index: 80; clip-path: circle(150% at var(--mx) var(--my)); animation: ws2-iris-open .46s cubic-bezier(.6, 0, .2, 1) both; }

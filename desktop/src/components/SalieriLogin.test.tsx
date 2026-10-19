@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 
 vi.mock('../services/AudioService', () => ({
@@ -36,4 +36,97 @@ it('keeps packaged login disabled until the local backend health check succeeds'
   expect(screen.queryByRole('status')).not.toBeInTheDocument();
   expect(fetchMock).toHaveBeenCalledTimes(2);
   expect(fetchMock).toHaveBeenLastCalledWith('http://127.0.0.1:8000/health', expect.objectContaining({ signal: expect.any(AbortSignal) }));
+});
+
+async function renderLogin(props: Record<string, unknown> = {}) {
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+  const { SalieriLogin } = await import('./SalieriLogin');
+  const onLoginSuccess = vi.fn();
+  const onEntranceCue = vi.fn();
+  const view = render(<SalieriLogin onLoginSuccess={onLoginSuccess} onEntranceCue={onEntranceCue} {...props} />);
+  // The USER ID types itself in after the form has risen.
+  await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
+  return { ...view, onLoginSuccess, onEntranceCue };
+}
+
+it('sends a Unicode password unchanged and hands over to the entrance on success', async () => {
+  vi.useFakeTimers();
+  const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+  vi.stubGlobal('fetch', fetchMock);
+  const { onLoginSuccess, container } = await renderLogin();
+
+  expect(screen.getByLabelText('USER ID')).toHaveValue('Salieri');
+  const pwd = screen.getByLabelText('PASSWORD');
+  expect(pwd).toHaveFocus();
+  // An IME commits its text only after composition; the field must not submit mid-composition.
+  fireEvent.compositionStart(pwd);
+  fireEvent.change(pwd, { target: { value: 'Gott würfelt nicht · 世界線 🜂' } });
+  fireEvent.compositionEnd(pwd);
+  await act(async () => { fireEvent.submit(pwd.closest('form')!); });
+
+  expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/auth/salieri'), expect.objectContaining({
+    method: 'POST',
+    body: JSON.stringify({ password: 'Gott würfelt nicht · 世界線 🜂' }),
+  }));
+  expect(onLoginSuccess).toHaveBeenCalledTimes(1);
+  expect(container.querySelector('.sl-root')).toHaveClass('exiting');
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});
+
+it('rejects a wrong password with an alert, keeps the user on the terminal and clears after 3s', async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401, json: async () => ({ detail: 'Invalid password' }) }));
+  const { onLoginSuccess, container } = await renderLogin();
+
+  const pwd = screen.getByLabelText('PASSWORD');
+  fireEvent.change(pwd, { target: { value: 'amadeus' } });
+  await act(async () => { fireEvent.keyDown(pwd, { key: 'Enter' }); fireEvent.submit(pwd.closest('form')!); });
+
+  expect(screen.getByRole('alert')).toHaveTextContent(/^密码错误$/);
+  expect(pwd).toHaveAttribute('aria-invalid', 'true');
+  expect(onLoginSuccess).not.toHaveBeenCalled();
+  expect(container.querySelector('.sl-root')).not.toHaveClass('exiting');
+  expect(screen.getByRole('button', { name: 'Decrypt and Connect' })).toBeEnabled();
+  await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});
+
+it('reports other backend refusals by their own detail, not as a wrong password', async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503, json: async () => ({ detail: '本地服务正在维护' }) }));
+  await renderLogin();
+
+  const pwd = screen.getByLabelText('PASSWORD');
+  fireEvent.change(pwd, { target: { value: 'Gott würfelt nicht' } });
+  await act(async () => { fireEvent.submit(pwd.closest('form')!); });
+  expect(screen.getByRole('alert')).toHaveTextContent(/^本地服务正在维护$/);
+});
+
+it('validates USER ID before calling the backend', async () => {
+  vi.useFakeTimers();
+  const fetchMock = vi.fn();
+  vi.stubGlobal('fetch', fetchMock);
+  await renderLogin();
+
+  fireEvent.change(screen.getByLabelText('USER ID'), { target: { value: 'Okabe' } });
+  screen.getByLabelText('PASSWORD').focus();
+  await act(async () => { fireEvent.submit(screen.getByLabelText('USER ID').closest('form')!); });
+  expect(screen.getByRole('alert')).toHaveTextContent('无效的 USER ID');
+  expect(fetchMock).not.toHaveBeenCalled();
+  // The keyboard goes back to the field at fault.
+  expect(screen.getByLabelText('USER ID')).toHaveFocus();
+});
+
+it('under reduced motion leaves with a short fade and still reports the terminal gone', async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal('matchMedia', (q: string) => ({ matches: q.includes('reduce'), media: q, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+  const { onEntranceCue, container } = await renderLogin();
+
+  expect(container.querySelector('.sl-root')).toHaveClass('reduced');
+  fireEvent.change(screen.getByLabelText('PASSWORD'), { target: { value: 'Gott würfelt nicht' } });
+  await act(async () => { fireEvent.submit(screen.getByLabelText('PASSWORD').closest('form')!); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(450); });
+  expect(onEntranceCue).toHaveBeenCalledWith('gone');
+  expect(onEntranceCue).not.toHaveBeenCalledWith('draft');
 });

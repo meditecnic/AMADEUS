@@ -40,7 +40,6 @@ import { ConnectionCheckPanel, chatCheckMessage, requestChatCheck, type ChatChec
 import { ConnectionList } from '../workstation/ConnectionList';
 import { SendSignal } from '../workstation/SendSignal';
 import { VoiceScope } from '../workstation/VoiceScope';
-import { BootSequence } from '../workstation/BootSequence';
 import { ForgetConversationModal } from './ForgetConversationModal';
 import { MemorySpace } from '../memory-space/MemorySpace';
 import '../memory-space/MemorySpace.css';
@@ -52,10 +51,20 @@ import {
   type ProviderMetadata,
 } from './ProviderControls';
 
+/**
+ * Post-login entrance, driven by the login terminal's timeline:
+ * hold (mounted, still, under the drafting sheet) → draft (the pen sweeps the sheet away and the
+ * instruments are drawn in behind it) → docked (the title wordmark has landed in the header) → done.
+ * 'none' skips it (reduced motion, tests, direct mounts).
+ */
+export type EntrancePhase = 'none' | 'hold' | 'draft' | 'docked' | 'done';
+
 interface WorkstationProps {
   worldline: 'steins_gate' | 'beta';
   onWorldlineChange: (wl: 'steins_gate' | 'beta') => void;
   onLogout: () => void;
+  entrance?: EntrancePhase;
+  onEntranceSettled?: () => void;
 }
 
 /**
@@ -78,9 +87,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
   worldline,
   onWorldlineChange,
   onLogout,
+  entrance = 'none',
+  onEntranceSettled,
 }) => {
   const reducedMotion = useReducedMotion();
-  const skipBootMotion = useReducedMotion(true);
+  const entering = entrance === 'hold' || entrance === 'draft' || entrance === 'docked';
   const [systemPrompt, setSystemPrompt] = useState('');
   const storedTtsChoice = useRef<string | null>(null);
   const [enableTts, setEnableTts] = useState(() => {
@@ -229,21 +240,23 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const wsRootRef = useRef<HTMLDivElement>(null);
   const speakingQueueRef = useRef<number[]>([]);
   const [speakingId, setSpeakingId] = useState<number | null>(null);
-  // Title card once per app session (skipped under reduced motion and where matchMedia is unavailable, e.g. tests).
-  const [bootPhase, setBootPhase] = useState<'draft' | 'dock' | 'done'>(() => {
-    try {
-      if (sessionStorage.getItem('amadeus_booted') === '1') return 'done';
-      if (skipBootMotion) return 'done';
-      return 'draft';
-    } catch { return 'done'; }
-  });
+  // The header wordmark that arrives with the entrance is already inked; a later worldline change redraws it.
+  const inkedLine = useRef<string | null>(entering ? worldline : null);
   useEffect(() => {
-    if (skipBootMotion) setBootPhase('done');
-  }, [skipBootMotion]);
-  const handleBootDock = useCallback(() => setBootPhase('dock'), []);
-  const handleBootDone = useCallback(() => {
-    try { sessionStorage.setItem('amadeus_booted', '1'); } catch {}
-    setBootPhase('done');
+    if (inkedLine.current !== worldline) inkedLine.current = null;
+  }, [worldline]);
+  // Once the login has let go (after the entrance, or at once without one), hand the keyboard to the composer
+  // as soon as it can take input. The session settling can disable it for a moment, so the hand-off holds for a
+  // short while and gives up as soon as the user puts focus anywhere else.
+  const composerHandoffUntil = useRef<number | null>(null);
+  const handComposerFocus = useCallback(() => {
+    if (composerHandoffUntil.current === null) composerHandoffUntil.current = Date.now() + 3000;
+    if (Date.now() > composerHandoffUntil.current) return;
+    const composer = wsRootRef.current?.querySelector<HTMLTextAreaElement>('textarea.chat-input-field');
+    const active = document.activeElement;
+    if (active && active !== document.body && active !== composer) { composerHandoffUntil.current = 0; return; }
+    if (!composer || composer.disabled || active === composer) return;
+    composer.focus({ preventScroll: true });
   }, []);
   const [shift, setShift] = useState<{ from: 'steins_gate' | 'beta'; to: 'steins_gate' | 'beta' } | null>(null);
   const systemButtonRef = useRef<HTMLButtonElement>(null);
@@ -1686,12 +1699,17 @@ export const Workstation: React.FC<WorkstationProps> = ({
   // An old conversation whose connection was removed keeps its history but must be re-pointed by the user.
   const providerGone = Boolean(activeConversation) && providers.length > 0 && (!activeProvider || activeProvider.enabled === false);
   const sendBlocked = status !== 'READY' || sessionState === 'rejected' || sessionState === 'unknown' || isThinking || isSynthesizing || conversationBusy || providerGone;
+  useEffect(() => {
+    if (!entering) handComposerFocus();
+  }, [entering, sendBlocked, handComposerFocus]);
 
   return (
     <div
       ref={wsRootRef}
-      className={`ws2${isHistoryCollapsed ? ' rail' : ''}${isSettingsOpen ? ' menu-open' : ''}${isMemoryOpen ? ' memory-space-open' : ''}${bootPhase !== 'done' ? ` boot-${bootPhase}` : ''}`}
+      className={`ws2${isHistoryCollapsed ? ' rail' : ''}${isSettingsOpen ? ' menu-open' : ''}${isMemoryOpen ? ' memory-space-open' : ''}`}
       data-wl={worldline === 'beta' ? 'beta' : 'sg'}
+      data-entrance={entering ? entrance : undefined}
+      inert={entering || undefined}
       onMouseDown={handleAudioInit}
       // The root is a clipped 100vw x 100vh frame that the user cannot scroll; any programmatic scroll
       // (focus, scrollIntoView) only pushes the header off-screen, so snap it straight back.
@@ -1701,7 +1719,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
       }}
     >
       <Atmosphere worldline={worldline} />
-      {bootPhase !== 'done' && <BootSequence worldline={worldline} onDock={handleBootDock} onDone={handleBootDone} />}
+      {entering && (
+        <>
+          <i
+            className="ws2-ent-timer"
+            aria-hidden="true"
+            onAnimationEnd={(e) => { if (e.animationName === 'ws2-ent-timer') onEntranceSettled?.(); }}
+          />
+        </>
+      )}
       <SendSignal
         rootRef={wsRootRef}
         userCount={messages.filter((m) => m.role === 'user').length}
@@ -1718,7 +1744,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         >
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" fill="none" stroke="currentColor" strokeWidth="1.2" /><path d="M6 2.5v11" stroke="currentColor" strokeWidth="1.2" /></svg>
         </button>
-        <div className="ws2-wordmark" aria-label="AMADEUS"><DraftWord key={worldline} text="AMADEUS" step={90} /></div>
+        <div className="ws2-wordmark" aria-label="AMADEUS"><DraftWord key={worldline} text="AMADEUS" step={90} className={inkedLine.current === worldline ? 'is-inked' : ''} /></div>
         <span className="ws2-date">
           <span className="d">{dateLabel}</span><b>{dayLabel}</b>
         </span>
