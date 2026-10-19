@@ -142,8 +142,27 @@
 .ws2-top-right > .ws2-memory-btn { justify-self: start; }
 .ws2-booth-mid { display: flex; flex-direction: column; align-items: center; gap: 2px; }
 .ws2-booth-end { justify-self: end; display: flex; align-items: center; gap: 6px; }
-.ws2-meter { display: flex; flex-direction: column; align-items: center; gap: 3px; pointer-events: none; }
-.ws2-meter .nixie { --w: 15px; --h: 26px; }
+.ws2-meter {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px;
+  margin: -3px -6px; padding: 3px 6px; border: 0; background: none; color: inherit; font: inherit; cursor: pointer;
+}
+.ws2-meter::after { content: ''; position: absolute; inset: 0; border: 1px solid transparent; transition: border-color .2s; pointer-events: none; }
+.ws2-meter:hover::after { border-color: rgba(255, 179, 107, .16); }
+/* Reading plate: hover or keyboard focus names the line and its value, outside the layout. */
+.ws2-meter-tip {
+  position: absolute; top: calc(100% + 21px); left: 50%; z-index: 40; translate: -50% -3px;
+  display: grid; grid-auto-flow: column; align-items: baseline; gap: 10px; padding: 7px 11px 7px 12px;
+  white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity .16s ease, translate .16s ease;
+  background: var(--ws-bg); border: 1px solid rgba(255, 179, 107, .32); box-shadow: inset 2px 0 0 var(--nixie, #ffb36b), 0 8px 24px rgba(0, 0, 0, .35);
+  font-family: var(--ws-mono); font-size: 10px; letter-spacing: .14em; color: var(--ws-ink-2); font-variant-numeric: tabular-nums;
+}
+.ws2-meter-tip::before { content: ''; position: absolute; left: 50%; top: -5px; width: 8px; height: 8px; translate: -50% 0; rotate: 45deg; background: var(--ws-bg); border: solid rgba(255, 179, 107, .32); border-width: 1px 0 0 1px; }
+.ws2-meter-tip b { font-family: var(--ws-display); font-weight: 500; letter-spacing: .24em; color: var(--ws-ink); }
+.ws2-meter-tip span { color: var(--nixie, #ffb36b); }
+.ws2-meter-tip small { font-size: 9px; letter-spacing: .12em; color: var(--ws-ink-3); }
+.ws2-meter:hover .ws2-meter-tip, .ws2-meter:focus-visible .ws2-meter-tip { opacity: 1; translate: -50% 0; transition-delay: .12s; }
+.ws2-meter[aria-expanded='true'] .ws2-meter-tip { opacity: 0; transition-delay: 0s; }
+@media (prefers-reduced-motion: reduce) { .ws2-meter-tip { transition: none; } }
 .ws2-wl-tag { font-family: var(--ws-mono); font-size: 8px; letter-spacing: .3em; color: var(--ws-ink-3); }
 .ws2-online { display: flex; align-items: center; gap: 5px; font-family: var(--ws-mono); font-size: 8.5px; letter-spacing: .2em; color: var(--ws-bad); white-space: nowrap; }
 .ws2-top-right .ws2-memory-en { display: none; }
@@ -181,40 +200,44 @@
 @keyframes ws2-guide-v { 0% { opacity: 0; } 4% { opacity: .9; } 70% { opacity: .6; } 100% { opacity: 0; } }
 
 /* ---------- nixie ---------- */
-
-.ws2 .nixie, .ws2-nixie-host .nixie { display: inline-flex; flex-direction: column; align-items: stretch; }
-.nixie-row { display: flex; align-items: flex-end; gap: calc(var(--w, 14px) * .12); }
-.nixie-sm { --w: 13px; --h: 24px; }
-.nixie-md { --w: 22px; --h: 38px; }
-.nixie-lg { --w: 32px; --h: 56px; }
-.nixie-xl { --w: clamp(44px, 6.2vw, 78px); --h: calc(var(--w) * 1.78); }
-.nixie-tube {
-  position: relative; width: var(--w); height: var(--h); flex: none;
-  border-radius: calc(var(--w) / 2) calc(var(--w) / 2) calc(var(--w) * .1) calc(var(--w) * .1);
-  background:
-    repeating-linear-gradient(60deg, rgba(255, 255, 255, .03) 0 1px, transparent 1px 4px),
-    repeating-linear-gradient(-60deg, rgba(255, 255, 255, .03) 0 1px, transparent 1px 4px),
-    linear-gradient(90deg, rgba(255, 255, 255, .02), rgba(255, 255, 255, .1) 22%, rgba(255, 255, 255, .02) 40%, rgba(255, 255, 255, 0) 70%, rgba(255, 255, 255, .06)),
-    linear-gradient(180deg, rgba(40, 24, 14, .55), rgba(12, 8, 6, .7));
-  box-shadow: inset 0 0 0 1px rgba(255, 235, 210, .13), inset 0 calc(var(--w) * .12) calc(var(--w) * .2) color-mix(in srgb, var(--highlight-tone) 5%, transparent);
+/* One drawing for all three instruments (header, menu dial, shift fallback): amber single-line glass,
+   the engine's cathode outlines, blueprint construction at the larger sizes. Physical amber is the same
+   material on both worldlines. */
+.nixie {
+  --w: 14px; --env: .8px; --body: 1.6px; --wire: .6px; --ghost: .55px; --cons: .5px;
+  position: relative; display: inline-block; flex: none; vertical-align: middle;
+  width: calc(var(--w) * var(--vb-w) / 100); aspect-ratio: var(--vb-w) / var(--vb-h);
+  font-variant-numeric: tabular-nums;
 }
-.nx-ghost, .nx-lit { position: absolute; left: 14%; top: 17%; width: 72%; height: 74%; overflow: visible; }
-.nx-ghost path { fill: none; stroke: rgba(255, 196, 150, .075); stroke-width: .55; stroke-linecap: round; stroke-linejoin: round; }
-.nx-ghost .nx-star { stroke: rgba(255, 196, 150, .05); stroke-width: .35; }
-.nx-lit path { fill: none; stroke: var(--nixie, #ffb36b); stroke-width: .95; stroke-linecap: round; stroke-linejoin: round; }
-.nx-lit circle { fill: var(--nixie, #ffb36b); }
-.nx-lit { filter: drop-shadow(0 0 .6px #fff1dc) drop-shadow(0 0 2px rgba(255, 110, 20, .95)) drop-shadow(0 0 7px rgba(255, 110, 20, .55)); animation: ws2-flicker 7s infinite steps(1); }
-.nixie-tube:nth-child(3n) .nx-lit { animation-delay: -2.3s; }
-@keyframes ws2-flicker { 0%, 100% { opacity: 1; } 42% { opacity: .84; } 43% { opacity: 1; } 71% { opacity: .9; } 72% { opacity: 1; } }
-.nixie-base {
-  position: relative; height: calc(var(--h) * .34); margin: 0 calc(var(--w) * -.35); border-radius: 3px;
-  background: radial-gradient(circle, rgba(255, 255, 255, .09) 0 1px, transparent 1.6px) 0 0 / 7px 7px, linear-gradient(180deg, #1b1b1d, #0a0a0b);
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--highlight-tone) 14%, transparent), inset 0 -2px 0 color-mix(in srgb, var(--shadow-tone) 60%, transparent), 0 10px 30px color-mix(in srgb, var(--shadow-tone) 50%, transparent);
+.nixie > svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.nixie svg path, .nixie svg circle { vector-effect: non-scaling-stroke; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.nixie-sm { --w: 12.5px; --env: .7px; --body: 1.25px; --wire: .5px; --ghost: .45px; }
+.nixie-md { --w: 18px; --env: .8px; --body: 1.55px; --wire: .6px; --ghost: .55px; }
+.nixie-lg { --w: 32px; --env: 1px; --body: 2.1px; --wire: .8px; --ghost: .7px; --cons: .6px; }
+.nixie-xl { --w: clamp(44px, 6vw, 76px); --env: 1.2px; --body: 2.9px; --wire: 1px; --ghost: .9px; --cons: .7px; }
+.nx-glass { stroke: rgba(255, 179, 107, .42); stroke-width: var(--env); }
+.nx-mica { stroke: rgba(255, 179, 107, .26); stroke-width: var(--env); }
+.nx-socket { stroke: rgba(255, 179, 107, .34); stroke-width: var(--env); }
+.nx-plinth { stroke: rgba(255, 179, 107, .3); stroke-width: var(--env); }
+.nx-stack path { stroke: rgba(255, 196, 150, .085); stroke-width: var(--ghost); }
+.nixie.is-tuning .nx-stack path { stroke: rgba(255, 196, 150, .13); }
+.nx-blueprint path { stroke: rgba(255, 210, 170, .15); stroke-width: var(--cons); }
+.nx-blueprint .nx-axis, .nx-blueprint .nx-datum { stroke-dasharray: 2 4; }
+.nx-blueprint text { fill: rgba(255, 210, 170, .34); font-family: var(--ws-mono); font-size: 21px; letter-spacing: .12em; text-anchor: middle; }
+.nx-blueprint .nx-fig { font-size: 22px; letter-spacing: .2em; text-anchor: start; }
+.nx-blueprint .nx-fig.end { text-anchor: end; }
+.nx-glow {
+  filter: drop-shadow(0 0 calc(var(--w) * .025) #fff1dc) drop-shadow(0 0 calc(var(--w) * .09) rgba(var(--nixie-glow, 255, 110, 20), .9))
+    drop-shadow(0 0 calc(var(--w) * .28) rgba(var(--nixie-glow, 255, 110, 20), .42));
 }
-.nixie-base i { position: absolute; top: 28%; width: 6px; height: 10px; border-radius: 2px; background: #3a2c20; box-shadow: inset 0 0 0 1px rgba(255, 200, 150, .15); }
-.nixie-base i:nth-child(1) { left: 12%; }
-.nixie-base i:nth-child(2) { left: 50%; background: #243040; }
-.nixie-base i:nth-child(3) { right: 12%; }
+.nx-body { stroke: var(--nixie, #ffb36b); stroke-width: var(--body); }
+.nx-core { stroke: #fff2da; stroke-width: calc(var(--body) * .4); opacity: .85; }
+.nx-wire { stroke: rgba(255, 170, 100, .42); stroke-width: var(--wire); }
+.nx-dot { fill: var(--nixie, #ffb36b) !important; stroke: #fff2da; stroke-width: calc(var(--body) * .4); }
+.nx-v.tuning .nx-core { opacity: .5; }
+.nx-v.lock { animation: nx-lock .36s ease-out both; }
+@keyframes nx-lock { 0% { opacity: .3; } 30% { opacity: 1; } 52% { opacity: .74; } 100% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .nx-v.lock { animation: none; } }
 
 /* ---------- sessions column (restyles HistorySidebar) ---------- */
 
@@ -921,11 +944,26 @@
 
 /* worldline panel */
 /* Label line above the tubes: "CURRENT WORLDLINE  STEINS;GATE" never wraps beside the eight tubes. */
-.ws2-wl-hero { display: flex; flex-direction: column-reverse; align-items: flex-start; gap: 12px; margin-bottom: 4px; }
+.ws2-wl-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px 28px; flex-wrap: wrap; margin-bottom: 4px; }
+.ws2-wl-hero .dial { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .ws2-wl-hero .meta { display: flex; align-items: baseline; gap: 14px; white-space: nowrap; }
+/* The preview slot is always there; arming lights it instead of moving anything. */
+.ws2-wl-preview {
+  display: grid; grid-template-columns: auto; justify-items: start; gap: 6px; min-width: 190px;
+  padding: 10px 12px 9px; border: 1px dashed var(--ws-line-2); position: relative;
+  font-family: var(--ws-mono); font-size: 10px; letter-spacing: .14em; color: var(--ws-ink-3);
+  transition: border-color .25s, background-color .25s;
+}
+.ws2-wl-preview small { font-size: 9.5px; letter-spacing: .26em; transition: color .2s; }
+.ws2-wl-preview .to { min-height: 1.3em; white-space: nowrap; }
+.ws2-wl-preview .to b { font-family: var(--ws-display); font-weight: 500; letter-spacing: .24em; color: var(--ws-ink); }
+.ws2-wl-preview .nixie { opacity: .55; transition: opacity .25s; }
+.ws2-wl-preview.on { border-style: solid; border-color: rgba(var(--tgt-rgb), .45); background: rgba(var(--tgt-rgb), .045); }
+.ws2-wl-preview.on small { color: var(--tgt); }
+.ws2-wl-preview.on .nixie { opacity: 1; }
 .ws2-wl-hero .meta small { font-family: var(--ws-mono); font-size: 10px; letter-spacing: .3em; color: var(--ws-ink-3); }
 .ws2-wl-hero .meta b { font-family: var(--ws-display); font-weight: 500; font-size: 15px; letter-spacing: .3em; color: var(--ws-ink); }
-.ws2-sysmenu.open .ws2-wl-hero .nx-lit { animation: ws2-ignite .55s steps(1) calc(.3s + var(--n) * 70ms) both, ws2-flicker 7s steps(1) 2s infinite; }
+.ws2-sysmenu.open .ws2-wl-hero .dial .nx-lit { animation: ws2-ignite .55s steps(1) calc(.3s + var(--n) * 70ms) both; }
 @keyframes ws2-ignite { 0% { opacity: 0; } 20% { opacity: .7; } 32% { opacity: .08; } 50% { opacity: 1; } 64% { opacity: .35; } 76%, 100% { opacity: 1; } }
 .ws2-wl-diagram { display: block; width: 100%; height: auto; margin: 8px 0 0; overflow: visible; }
 .ws2-wl-diagram .grid line { stroke: var(--ws-line); stroke-dasharray: 2 5; }
@@ -952,16 +990,7 @@
 .ws2-wl-panel { --tgt: var(--scale-beta-accent-primary); --tgt-rgb: var(--scale-beta-accent-rgb); }
 .ws2-wl-panel[data-target='sg'] { --tgt: var(--scale-sg-accent-primary); --tgt-rgb: var(--scale-sg-accent-rgb); }
 .ws2-wl-hero .tubes { display: inline-flex; }
-.nixie-tube.tuning .nx-lit { opacity: .55 !important; animation: none !important; filter: drop-shadow(0 0 2px rgba(255, 110, 20, .7)); }
-.nixie-tube.tuning .nx-ghost path { stroke: rgba(255, 196, 150, .16); }
-.ws2-wl-hero .meta small, .ws2-wl-hero .meta b { transition: color .2s; }
-.ws2-wl-panel.armed .ws2-wl-hero .meta small { color: var(--tgt); }
-.ws2-wl-panel.armed .ws2-wl-hero .meta b { color: #fff; text-shadow: 0 0 12px rgba(var(--tgt-rgb), .55); }
-.ws2-wl-hero .meta .from { font-family: var(--ws-mono); font-size: 10px; letter-spacing: .14em; color: var(--ws-ink-3); animation: ws2-from-in .3s ease both; }
-@keyframes ws2-from-in { from { opacity: 0; transform: translateX(-6px); } }
-/* Narrow panels have no room on the nowrap label line; the diagram's lit origin line already says where the shift starts. */
 .ws2-wl-panel { container-type: inline-size; }
-@container (max-width: 420px) { .ws2-wl-hero .meta .from { display: none; } }
 .ws2-wl-line .flow { stroke: var(--tgt); stroke-width: 2; stroke-linecap: round; stroke-dasharray: 3 14; opacity: 0; pointer-events: none; }
 .ws2-wl-line.sel:not(.cur) .flow { opacity: 1; filter: drop-shadow(0 0 3px rgba(var(--tgt-rgb), .9)); animation: ws2-flow .7s linear infinite; }
 .ws2-wl-line.sel:not(.cur) .main { stroke: rgba(var(--tgt-rgb), .7); }

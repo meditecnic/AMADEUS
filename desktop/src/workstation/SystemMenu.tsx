@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { DraftWord } from './DraftWord';
-import { DIVERGENCE, Nixie, useTunedValue } from './Nixie';
+import { DIVERGENCE, Nixie, WORLDLINE_NAME, useTunedValue } from './Nixie';
 import { useReducedMotion } from '../design-system/useReducedMotion';
 
 export type MenuSection = 'worldline' | 'connections' | 'sound' | 'character';
@@ -151,7 +151,8 @@ export function WorldlinePanel({ worldline, busy, onShift, onArm }: {
   const reducedMotion = useReducedMotion();
   useEffect(() => { setTarget(worldline); }, [worldline]);
   const armed = target !== worldline;
-  const tuned = useTunedValue(DIVERGENCE[target]);
+  // The dial reads the line you are on; the preview tunes to the armed target (and back to idle).
+  const preview = useTunedValue(DIVERGENCE[target], { duration: 820 });
   const rowRef = useRef<HTMLDivElement>(null);
   const name = (w: Worldline) => (w === 'steins_gate' ? 'STEINS;GATE' : 'β WORLDLINE');
   const pick = (w: Worldline) => {
@@ -168,12 +169,20 @@ export function WorldlinePanel({ worldline, busy, onShift, onArm }: {
   return (
     <div className={`ws2-wl-panel${armed ? ' armed' : ''}`} data-target={target === 'steins_gate' ? 'sg' : 'beta'}>
       <div className="ws2-wl-hero">
-        <div className="tubes" ref={rowRef}>
-          <Nixie value={tuned.text} locked={tuned.locked} label={DIVERGENCE[target]} size="lg" />
+        <div className="dial">
+          <div className="meta"><small>CURRENT WORLDLINE</small><b>{name(worldline)}</b></div>
+          <div className="tubes">
+            <Nixie value={DIVERGENCE[worldline]} size="lg" title={`FIG.1 · ${WORLDLINE_NAME[worldline]}`} />
+          </div>
         </div>
-        <div className="meta">
-          <small>{armed ? 'TARGET WORLDLINE' : 'CURRENT WORLDLINE'}</small><b>{name(target)}</b>
-          {armed && <span className="from">FROM {DIVERGENCE[worldline]}%</span>}
+        {/* Reserved slot: arming never moves the dial or the diagram. */}
+        <div className={`ws2-wl-preview${armed ? ' on' : ''}`} aria-live="polite">
+          <small>TARGET PREVIEW · 目标预览</small>
+          <div className="tubes" ref={rowRef}>
+            <Nixie value={preview.text} state={preview} size="md" unlit={!armed}
+              ariaLabel={armed ? `目标预览：${name(target)} ${DIVERGENCE[target]}%` : '目标预览：未选择目标世界线'} />
+          </div>
+          <span className="to">{armed ? <>→ <b>{name(target)}</b> · {DIVERGENCE[target]}%</> : '选择目标世界线'}</span>
         </div>
       </div>
       <WorldlineDiagram worldline={worldline} target={target} onTarget={pick} />

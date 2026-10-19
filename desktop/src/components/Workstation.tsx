@@ -32,9 +32,10 @@ import { audioService } from '../services/AudioService';
 import { BilingualMessage } from './BilingualMessage';
 import { Atmosphere } from '../workstation/Atmosphere';
 import { DraftWord } from '../workstation/DraftWord';
-import { DIVERGENCE, Nixie } from '../workstation/Nixie';
+import { DIVERGENCE, Nixie, WORLDLINE_NAME, useTunedValue } from '../workstation/Nixie';
 import { SoundChannel, SystemMenu, WorldlinePanel, type MenuSection } from '../workstation/SystemMenu';
 import { WorldlineShift } from '../workstation/WorldlineShift';
+import { scheduleShiftPrewarm } from '../workstation/shiftStage';
 import { ShiftTransaction } from '../workstation/shiftTransaction';
 import { ConfirmDialog } from '../workstation/ConfirmDialog';
 import { ConnectionCheckPanel, chatCheckMessage, requestChatCheck, type ChatCheckState } from '../workstation/ConnectionCheck';
@@ -267,7 +268,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const openMenu = useCallback((section?: MenuSection) => {
     if (section) setMenuSection(section);
     setIsSettingsOpen(true);
+    // The shift stage warms while the menu is read, never inside the click that starts a shift.
+    scheduleShiftPrewarm(0);
   }, []);
+  // ...and once after the entrance, in idle time.
+  useEffect(() => scheduleShiftPrewarm(3000), []);
   const closeMenu = useCallback(() => setIsSettingsOpen(false), []);
   /** Lands on the connections page with focus on either the key field or the first usable other connection. */
   const openConnectionsAt = useCallback((target: 'key' | 'list') => {
@@ -1687,7 +1692,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       if (fade) void fade.then(() => handleStopVoice());
       else handleStopVoice();
     }
-    closeMenu();
+    // The menu closes under the overlay once it is covered (WorldlineShift onCovered).
     const run = new ShiftTransaction(`shift-${crypto.randomUUID()}`, worldline, to, () => {
       if (shiftRef.current !== run) return;
       committedWorldlineRef.current = to;
@@ -1708,6 +1713,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
     setShift(run);
     run.start(switchWorldline);
   };
+
+  // The header meter keeps the source reading while the shift covers it, then tunes in view.
+  const meter = useTunedValue(DIVERGENCE[worldline], { hold: !!shift, duration: 1100 });
 
   const now = new Date();
   const dateLabel = `${now.getMonth() + 1}/${now.getDate()}`;
@@ -1805,10 +1813,22 @@ export const Workstation: React.FC<WorkstationProps> = ({
             <span className="ws2-memory-en" aria-hidden="true">MEMORY</span>
           </button>
           <div className="ws2-booth-mid">
-            <div className="ws2-meter">
-              <span className="ws2-wl-tag">{worldline === 'beta' ? 'β WORLDLINE' : 'STEINS;GATE'}</span>
-              <Nixie value={DIVERGENCE[worldline]} size="sm" />
-            </div>
+            <button
+              type="button"
+              className="ws2-meter"
+              aria-label={`世界线 ${WORLDLINE_NAME[worldline]} · ${DIVERGENCE[worldline]}%`}
+              aria-describedby="ws2-meter-tip"
+              aria-expanded={isSettingsOpen && menuSection === 'worldline'}
+              onClick={() => { if (isSettingsOpen && menuSection === 'worldline') closeMenu(); else openMenu('worldline'); }}
+            >
+              <span className="ws2-wl-tag" aria-hidden="true">{worldline === 'beta' ? 'β WORLDLINE' : 'STEINS;GATE'}</span>
+              <Nixie value={meter.text} state={meter} label={DIVERGENCE[worldline]} size="sm" />
+              <span className="ws2-meter-tip" id="ws2-meter-tip" role="tooltip">
+                <b>{worldline === 'beta' ? 'β WORLDLINE' : 'STEINS;GATE'}</b>
+                <span>{DIVERGENCE[worldline]}%</span>
+                <small>打开世界线面板</small>
+              </span>
+            </button>
             <div
               className={`ws2-online${online ? ' is-online' : ''}${awaitingWorldline ? ' is-sync' : ''}`}
               role="status"
@@ -2365,6 +2385,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       {shift && (
         <WorldlineShift
           transaction={shift}
+          onCovered={closeMenu}
           onDone={() => {
             if (shiftRef.current !== shift) return;
             if (shift.error) setSessionError({ kind: 'worldline', code: shift.error });

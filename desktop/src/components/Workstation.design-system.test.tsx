@@ -424,6 +424,23 @@ describe('Workstation S4-DS dark-only chrome', () => {
     expect(screen.getAllByRole('img', { name: /World line divergence/ })).toHaveLength(1);
   });
 
+  it('header meter is a keyboard-reachable button that names the line and opens the worldline panel', async () => {
+    renderWorkstation();
+    const meter = await screen.findByRole('button', { name: '世界线 STEINS;GATE · 1.048596%' });
+    expect(meter.tagName).toBe('BUTTON');
+    expect(meter).toHaveAttribute('aria-expanded', 'false');
+    expect(meter).toHaveAccessibleDescription(/STEINS;GATE.*1\.048596%/);
+    expect(screen.getByRole('tooltip')).toHaveTextContent('打开世界线面板');
+    meter.focus();
+    expect(meter).toHaveFocus();
+    fireEvent.click(meter);
+    await waitFor(() => expect(meter).toHaveAttribute('aria-expanded', 'true'));
+    expect(await screen.findByText('TARGET PREVIEW · 目标预览')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: '目标预览：未选择目标世界线' })).toHaveClass('is-unlit');
+    fireEvent.click(meter);
+    await waitFor(() => expect(meter).toHaveAttribute('aria-expanded', 'false'));
+  });
+
   it('first-class MEMORY aperture opens Memory Space Overview', async () => {
     renderWorkstation();
     await waitFor(() => expect(screen.getByText('AMADEUS')).toBeInTheDocument());
