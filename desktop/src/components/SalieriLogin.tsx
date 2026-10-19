@@ -53,7 +53,7 @@ const VERSE_AT = VERSE.map((_, i) => VERSE.slice(0, i).reduce((t, l) => t + l.le
 
 const CUT = 9;
 /**
- * A field label's nameplate: a drafted plate with a cut corner, an engraved inner rule and crop marks, printed
+ * A field label's nameplate: a drafted plate with a cut corner and an engraved inner rule, printed
  * slightly off register. Measured to the label so every line lands on a whole pixel. On focus the edge is drawn
  * first, then the plate is inked in (see .lp-* in the stylesheet).
  */
@@ -79,14 +79,6 @@ function Plate() {
   const shape = `M${CUT} 0H${w}V${h}H0V${CUT}Z`;
   const i = 2.5;
   const inner = `M${CUT + 1} ${i}H${w - i}V${h - i}H${i}V${CUT + 1}Z`;
-  const o = 3;
-  const l = 6;
-  const marks = [
-    `M${w + o} 0h${l}M${w} ${-o}v${-l}`,
-    `M${w + o} ${h}h${l}M${w} ${h + o}v${l}`,
-    `M${-o} ${h}h${-l}M0 ${h + o}v${l}`,
-    `M${CUT / 2 - 1.8} ${CUT / 2 - 1.8}l-4 -4`,
-  ].join('');
   return (
     <svg ref={ref} className="lp" width={w} height={h} aria-hidden="true" focusable="false">
       {box && (
@@ -97,7 +89,6 @@ function Plate() {
           <path className="lp-inner" d={inner} />
           <path className="lp-ghost" d={shape} />
           <path className="lp-edge" d={shape} pathLength={1} />
-          <path className="lp-marks" d={marks} />
         </>
       )}
     </svg>
@@ -114,9 +105,25 @@ function Ruler({ n }: { n: number }) {
   );
 }
 
+/** The password peek: an eye drawn in two lines. Shut while the password is masked; it opens to show it. */
+const LID_OPEN = 'M3 9Q13 .6 23 9';
+const LID_SHUT = 'M3 9Q13 16.4 23 9';
+function Peek({ open }: { open: boolean }) {
+  return (
+    <svg className="sl-peek-eye" viewBox="0 0 26 18" aria-hidden="true" focusable="false">
+      <path className="low" d="M3 9Q13 16.4 23 9" />
+      <path className="lid" d={open ? LID_OPEN : LID_SHUT} />
+      <path className="lash" d="M8 12.1l-1.1 2.3M13 13v2.6M18 12.1l1.1 2.3" />
+      <circle className="iris" cx="13" cy="9" r="3.9" />
+      <circle className="pupil" cx="13" cy="9" r="1.7" />
+    </svg>
+  );
+}
+
 export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEntranceCue }) => {
   const [userId, setUserId] = useState('');
   const [password, setPassword] = useState('');
+  const [peek, setPeek] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   // Which field the error belongs to; the message text is localized or a raw backend detail.
   const [errorField, setErrorField] = useState<'user' | 'password' | null>(null);
@@ -411,6 +418,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
     }
 
     setIsAuthenticating(true);
+    setPeek(false);
     // Once the user has asked, the title is finished: the pen is needed for the check, not the drawing.
     setIntro(false);
     if (errTimeoutRef.current) {
@@ -466,8 +474,10 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
     <div
       ref={rootRef}
       className={rootClass}
-      onPointerDown={() => {
+      onPointerDown={(e) => {
         if (!exiting || reduced) return;
+        // The skipping click is spent here: its mousedown must not then pull focus off the composer.
+        e.preventDefault();
         animsRef.current.forEach((a) => a.cancel());
         cue('skip');
       }}
@@ -533,17 +543,21 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
 
           <div ref={pwdRowRef} className={`sl-row pwd${errorField === 'password' ? ' is-error' : ''}`}>
             <label className={`sl-label${focusField === 'password' || errorField === 'password' ? ' is-on' : ''}`} htmlFor="salieri-pwd"><Plate /><span>PASSWORD</span></label>
-            <div className="sl-slot">
+            <div className={`sl-slot${capsLock ? ' has-caps' : ''}`}>
               <input
                 ref={pwdRef}
                 id="salieri-pwd"
-                type="password"
+                type={peek ? 'text' : 'password'}
                 className="sl-input password-input"
                 value={password}
-                onChange={(e) => { setPassword(e.target.value); plateRef.current?.tick(); }}
+                onChange={(e) => { setPassword(e.target.value); if (!e.target.value) setPeek(false); plateRef.current?.tick(); }}
                 onFocus={() => setFocusField('password')}
                 onBlur={() => { setFocusField((f) => (f === 'password' ? null : f)); setCapsLock(false); }}
-                onKeyDown={(e) => setCapsLock(e.getModifierState?.('CapsLock') ?? false)}
+                onKeyDown={(e) => {
+                  setCapsLock(e.getModifierState?.('CapsLock') ?? false);
+                  // Alt+F8 shows or hides the password, as the system's own reveal button does.
+                  if (e.altKey && e.key === 'F8' && password) { e.preventDefault(); setPeek((v) => !v); }
+                }}
                 onKeyUp={(e) => setCapsLock(e.getModifierState?.('CapsLock') ?? false)}
                 disabled={isAuthenticating}
                 spellCheck={false}
@@ -551,6 +565,20 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
                 aria-invalid={errorField === 'password' || undefined}
               />
               {capsLock && <span className="sl-caps" aria-hidden="true">CAPS</span>}
+              <button
+                type="button"
+                className={`sl-peek${password ? ' is-shown' : ''}${peek ? ' is-open' : ''}`}
+                tabIndex={-1}
+                aria-label={peek ? '隐藏密码' : '显示密码'}
+                aria-pressed={peek}
+                aria-hidden={!password || undefined}
+                title={peek ? '隐藏密码（Alt+F8）' : '显示密码（Alt+F8）'}
+                disabled={isAuthenticating || !password}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => { setPeek((v) => !v); pwdRef.current?.focus(); }}
+              >
+                <Peek open={peek} />
+              </button>
               <i className="sl-ul" aria-hidden="true" />
               <Ruler n={[...password].length} />
             </div>
