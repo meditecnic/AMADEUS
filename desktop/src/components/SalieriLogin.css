@@ -286,8 +286,8 @@
   color: var(--ink); caret-color: var(--ink); user-select: text;
 }
 .sl-input.user-id-input { font-size: clamp(21px, 1.42vw, 27px); letter-spacing: .06em; }
-.sl-input.password-input { padding-right: 56px; letter-spacing: .16em; }
-.sl-slot.has-caps .sl-input.password-input { padding-right: 108px; }
+.sl-input.password-input { padding-right: 64px; letter-spacing: .16em; }
+.sl-slot.has-caps .sl-input.password-input { padding-right: 120px; }
 /* the system's own reveal / clear buttons (Edge, WebView2) give way to the peek below */
 .sl-input::-ms-reveal, .sl-input::-ms-clear { display: none; }
 .sl-input:disabled { color: var(--ink-2); }
@@ -302,19 +302,19 @@
 .sl-slot:focus-within .sl-ruler .nib { opacity: 1; transform: none; }
 .sl-row.is-error .sl-ruler .nib { background: var(--err); }
 
-.sl-caps { position: absolute; right: 52px; top: 50%; transform: translateY(-50%); padding: 3px 6px 2px; font-family: var(--mono); font-size: 10px; letter-spacing: .14em; color: var(--blade-ink); background: var(--blade); clip-path: polygon(4px 0, 100% 0, 100% 100%, 0 100%, 0 4px); }
+.sl-caps { position: absolute; right: 60px; top: 50%; transform: translateY(-50%); padding: 3px 6px 2px; font-family: var(--mono); font-size: 10px; letter-spacing: .14em; color: var(--blade-ink); background: var(--blade); clip-path: polygon(4px 0, 100% 0, 100% 100%, 0 100%, 0 4px); }
 
 /* Password peek, at the far end of the field: an eye in two strokes, shut while masked, opened to show. */
 .sl-peek {
-  position: absolute; right: 6px; top: 50%; width: 40px; height: 34px; margin-top: -17px; padding: 0; border: 0; background: none;
+  position: absolute; right: 4px; top: 50%; width: 50px; height: 40px; margin-top: -20px; padding: 0; border: 0; background: none;
   display: grid; place-items: center; color: var(--ink-3); cursor: pointer; outline: none;
   opacity: 0; pointer-events: none; transition: opacity .2s ease, color .16s ease;
 }
 .sl-peek.is-shown { opacity: 1; pointer-events: auto; }
 .sl-peek:hover, .sl-peek.is-open { color: var(--ink); }
 .sl-peek:disabled { cursor: default; }
-.sl-peek::before { content: ''; position: absolute; left: 0; top: 9px; bottom: 9px; width: 1px; background: var(--line-2); }
-.sl-peek-eye { width: 24px; height: 17px; overflow: visible; fill: none; stroke: currentColor; stroke-width: 1.15; stroke-linecap: round; }
+.sl-peek::before { content: ''; position: absolute; left: 0; top: 10px; bottom: 10px; width: 1px; background: var(--line-2); }
+.sl-peek-eye { width: clamp(28px, 1.7vw, 33px); height: auto; aspect-ratio: 26 / 18; overflow: visible; fill: none; stroke: currentColor; stroke-width: 1.05; stroke-linecap: round; }
 .sl-peek-eye .lid { transition: d .24s cubic-bezier(.5, 0, .3, 1); }
 .sl-peek-eye .lash { transition: opacity .14s ease .06s; }
 .sl-peek-eye :is(.iris, .pupil) { transform-origin: 13px 9px; transform: scaleY(0); opacity: 0; transition: transform .2s cubic-bezier(.5, 0, .3, 1), opacity .12s ease; }
