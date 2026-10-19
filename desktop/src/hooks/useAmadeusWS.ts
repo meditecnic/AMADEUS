@@ -36,10 +36,12 @@ export interface UseAmadeusWSParams {
   }) => void;
   onWorldlineSwitched?: (details: {
     worldline: 'steins_gate' | 'beta';
+    requestId?: string;
     generation?: number;
   }) => void;
   onWorldlineSwitchError?: (details: {
     worldline: 'steins_gate' | 'beta';
+    requestId?: string;
     code: string;
     message?: string;
   }) => void;
@@ -86,7 +88,7 @@ export interface UseAmadeusWSReturn {
   /** Optional so existing test doubles keep compiling. */
   resetToDraft?: () => void;
   switchConversation: (conversationId: string, history: Message[]) => boolean;
-  switchWorldline: (worldline: 'steins_gate' | 'beta') => boolean;
+  switchWorldline: (worldline: 'steins_gate' | 'beta', requestId?: string) => boolean;
   wsRef: React.MutableRefObject<WebSocket | null>;
 }
 
@@ -415,6 +417,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
           case 'worldline.switched': {
             const pending = pendingWorldlineSwitchRef.current;
             if (!pending || msg.request_id !== pending.requestId) break;
+            if (msg.worldline !== pending.worldline) break;
             // Discard snapshot: successful switch keeps the target draft empty.
             pendingWorldlineSwitchRef.current = null;
             activeConversationIdRef.current = null;
@@ -424,6 +427,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             setEmotion('neutral');
             paramsRef.current.onWorldlineSwitched?.({
               worldline: pending.worldline,
+              requestId: pending.requestId,
               generation: msg.generation,
             });
             break;
@@ -436,6 +440,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             setMessages(pending.transcriptSnapshot);
             paramsRef.current.onWorldlineSwitchError?.({
               worldline: pending.worldline,
+              requestId: pending.requestId,
               code: msg.code || 'switch_failed',
               message: msg.message,
             });
@@ -963,10 +968,11 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     return true;
   }, []);
 
-  const switchWorldline = useCallback((worldline: 'steins_gate' | 'beta') => {
+  const switchWorldline = useCallback((worldline: 'steins_gate' | 'beta', hostRequestId?: string) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       paramsRef.current.onWorldlineSwitchError?.({
         worldline,
+        requestId: hostRequestId,
         code: 'socket_not_ready',
       });
       return false;
@@ -974,6 +980,10 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     // A rejected auth leaves the socket open with no server session, so a switch frame would never be ACKed.
     // The next auth frame carries the worldline, so the switch can commit locally.
     if (sessionStateRef.current === 'rejected') {
+      if (hostRequestId) {
+        paramsRef.current.onWorldlineSwitchError?.({ worldline, requestId: hostRequestId, code: 'session_rejected' });
+        return false;
+      }
       pendingWorldlineSwitchRef.current = null;
       activeConversationIdRef.current = null;
       setMessages([]);
@@ -982,7 +992,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       paramsRef.current.onWorldlineSwitched?.({ worldline });
       return true;
     }
-    const requestId = createRequestId('worldline-switch');
+    const requestId = hostRequestId || createRequestId('worldline-switch');
     clearWatchdog();
     activeTurnIdRef.current = '';
     activeGenerationRef.current = -1;

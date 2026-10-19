@@ -1,6 +1,6 @@
 {
   "name": "shift-slow",
   "extends": "streaming",
-  "description": "M3 hook: worldline.switch ACK is delayed 6500ms on the same WS, then succeeds.",
-  "shift": { "delayMs": 6500, "fail": false }
+  "description": "M3: worldline.switch ACK is delayed 20000ms, leaving an observable confirmation gate even during shader compilation.",
+  "shift": { "delayMs": 20000, "fail": false }
 }

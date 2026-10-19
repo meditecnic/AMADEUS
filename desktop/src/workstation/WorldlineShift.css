@@ -1,0 +1,67 @@
+.worldline-shift {
+  position: absolute; inset: 0; z-index: 60; overflow: hidden; container-type: size;
+  display: grid; place-content: center; text-align: center;
+  background: var(--ws-bg); color: var(--ws-ink); cursor: pointer;
+  animation: shift-cover 320ms cubic-bezier(.25, .6, .3, 1) both;
+}
+.worldline-shift[data-renderer='webgl2'], .worldline-shift[data-renderer='pending'] { background: #0a0908; }
+.shift-fallback { display: grid; justify-items: center; gap: 22px; }
+/* The stage is sized to its 16:9 picture (as object-fit: contain would show it) on the engine's own surround colour. */
+.shift-canvas {
+  position: absolute; inset: 0; margin: auto; display: block;
+  width: min(100cqw, 100cqh * 16 / 9); height: auto; aspect-ratio: 16 / 9;
+  opacity: 0; transition: opacity .38s ease-out;
+}
+.worldline-shift[data-started][data-renderer='webgl2'] .shift-canvas { opacity: 1; }
+.worldline-shift[data-renderer='css'] .shift-canvas { display: none; }
+.worldline-shift:not([data-renderer='css']) .shift-fallback { visibility: hidden; }
+.shift-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+/* Skip: a short dip to dark hides the cut. */
+.shift-veil { position: absolute; inset: 0; background: #070606; opacity: 0; pointer-events: none; transition: opacity .26s ease-out; }
+.worldline-shift[data-dip='in'] .shift-veil { opacity: 1; transition: opacity .14s ease-in; }
+.shift-fallback small { font: 12px var(--ws-mono); letter-spacing: .2em; color: var(--ws-ink-2); }
+.shift-fallback .shift-target { font: 12px var(--ws-mono); letter-spacing: .12em; color: var(--ws-ink-2); font-variant-numeric: tabular-nums; }
+.shift-boundary { width: min(65vw, 560px); height: 1px; background: linear-gradient(90deg, transparent, var(--ws-accent) 18%, var(--ws-accent) 82%, transparent); }
+/* Captions and the skip hint sit on one line in the lower letterbox of the 16:9 picture
+   (or just inside it when the window is wider than the picture). */
+.worldline-shift { --shift-caption-y: max(6cqh, calc((100cqh - 56.25cqw) / 4 - .7em)); --shift-caption-ink: rgba(255, 210, 170, .78); }
+.shift-status {
+  position: absolute; left: 0; right: 0; bottom: var(--shift-caption-y); margin: 0 auto;
+  width: max-content; max-width: calc(100% - 48px);
+  font: 12px/1.4 var(--ws-mono); letter-spacing: .22em; color: var(--ws-ink-2);
+  transition: opacity .45s ease-out, color .3s;
+}
+/* The GPU show is a subtitle track: silent while it plays, a line only when a wait lasts or the shift fails. */
+.worldline-shift:not([data-renderer='css']) .shift-status {
+  opacity: 0; color: var(--shift-caption-ink);
+  text-shadow: 0 0 2px rgba(0, 0, 0, .9), 0 1px 12px rgba(0, 0, 0, .85);
+}
+.worldline-shift:not([data-renderer='css'])[data-caption] .shift-status { opacity: 1; }
+.worldline-shift[data-state='failed'] .shift-status { color: var(--ws-bad); }
+/* The CSS instrument keeps its caption; it arrives after the picture so the entrance reads as one move. */
+.worldline-shift[data-renderer='css'] .shift-status { animation: shift-ui-in .45s ease-out .42s both; }
+/* Skip: a keycap hint, out of the picture until the pointer or keyboard is used (or it has focus). */
+.shift-skip {
+  position: absolute; right: 24px; bottom: calc(var(--shift-caption-y) - 4px);
+  display: inline-flex; align-items: center; gap: 8px; padding: 4px 6px;
+  border: 0; border-radius: 4px; background: none; cursor: pointer;
+  font: 11px/1.4 var(--ws-mono); letter-spacing: .18em; color: var(--shift-caption-ink);
+  text-shadow: 0 0 2px rgba(0, 0, 0, .9), 0 1px 10px rgba(0, 0, 0, .8);
+  opacity: 0; transition: opacity .6s ease-out;
+}
+.shift-skip kbd {
+  padding: 1px 6px; border: 1px solid rgba(255, 210, 170, .42); border-radius: 3px;
+  font: inherit; letter-spacing: .1em; text-transform: uppercase;
+  box-shadow: 0 0 6px rgba(0, 0, 0, .5);
+}
+.worldline-shift[data-renderer='css'] .shift-skip { color: var(--ws-ink-2); }
+.worldline-shift[data-renderer='css'] .shift-skip kbd { border-color: var(--ws-line-2); }
+.worldline-shift[data-hint] .shift-skip, .shift-skip:focus-visible { opacity: 1; transition-duration: .2s; }
+.shift-skip:focus-visible { outline: 1px solid var(--shift-caption-ink); outline-offset: 2px; }
+.worldline-shift[data-exit] { pointer-events: none; }
+@keyframes shift-cover { from { opacity: 0; } to { opacity: 1; } }
+@keyframes shift-ui-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .worldline-shift, .worldline-shift[data-renderer] .shift-status, .worldline-shift[data-renderer] .shift-skip { animation: none; }
+  .shift-canvas, .shift-veil, .worldline-shift[data-renderer] .shift-status, .worldline-shift[data-renderer] .shift-skip { transition: none; }
+}

@@ -416,6 +416,7 @@ describe('useAmadeusWS v2', () => {
     }))).toEqual(beforeSwitch);
     expect(onWorldlineSwitchError).toHaveBeenCalledWith({
       worldline: 'beta',
+      requestId: request.request_id,
       code: 'switch_failed',
       message: 'target unavailable',
     });
@@ -456,8 +457,48 @@ describe('useAmadeusWS v2', () => {
     expect(result.current.messages).toEqual([]);
     expect(onWorldlineSwitched).toHaveBeenCalledWith({
       worldline: 'beta',
+      requestId: request.request_id,
       generation: 9,
     });
+    unmount();
+  });
+
+  it('uses host correlation and ignores duplicate, wrong-target and stale ACKs on the existing socket', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const onWorldlineSwitched = vi.fn();
+    const onWorldlineSwitchError = vi.fn();
+    const { result, unmount } = renderHook(() => useAmadeusWS({ ...params, onWorldlineSwitched, onWorldlineSwitchError }));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.onopen?.();
+      socket.emit({ type: 'session.ready', worldline: 'steins_gate' });
+      result.current.switchWorldline('beta', 'host-run');
+      socket.emit({ type: 'worldline.switched', request_id: 'old', worldline: 'beta' });
+      socket.emit({ type: 'worldline.switched', request_id: 'host-run', worldline: 'steins_gate' });
+    });
+    expect(onWorldlineSwitched).not.toHaveBeenCalled();
+    act(() => {
+      socket.emit({ type: 'worldline.switched', request_id: 'host-run', worldline: 'beta', generation: 2 });
+      socket.emit({ type: 'worldline.switched', request_id: 'host-run', worldline: 'beta', generation: 2 });
+      socket.emit({ type: 'worldline.switch_error', request_id: 'host-run', code: 'late' });
+    });
+    expect(onWorldlineSwitched).toHaveBeenCalledExactlyOnceWith({ worldline: 'beta', requestId: 'host-run', generation: 2 });
+    expect(onWorldlineSwitchError).not.toHaveBeenCalled();
+    expect(socket.sent.map(s => JSON.parse(s)).filter(s => s.type === 'worldline.switch')).toHaveLength(1);
+    expect(FakeWebSocket.instances).toHaveLength(1);
+    unmount();
+  });
+
+  it('does not manufacture a host success when auth was rejected', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const onWorldlineSwitched = vi.fn();
+    const onWorldlineSwitchError = vi.fn();
+    const { result, unmount } = renderHook(() => useAmadeusWS({ ...params, onWorldlineSwitched, onWorldlineSwitchError }));
+    const socket = FakeWebSocket.instances[0];
+    act(() => { socket.onopen?.(); socket.emit({ type: 'error', code: 'unauthorized' }); });
+    act(() => { expect(result.current.switchWorldline('beta', 'host-run')).toBe(false); });
+    expect(onWorldlineSwitched).not.toHaveBeenCalled();
+    expect(onWorldlineSwitchError).toHaveBeenCalledExactlyOnceWith({ worldline: 'beta', requestId: 'host-run', code: 'session_rejected' });
     unmount();
   });
 

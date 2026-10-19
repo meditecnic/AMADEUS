@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -422,6 +422,54 @@ describe('Workstation S4-DS dark-only chrome', () => {
     const meter = await screen.findByRole('img', { name: 'World line divergence 1.048596%' });
     expect(meter).toHaveClass('nixie');
     expect(screen.getAllByRole('img', { name: /World line divergence/ })).toHaveLength(1);
+  });
+
+  it('header meter is a keyboard-reachable button that names the line and opens the worldline panel', async () => {
+    renderWorkstation();
+    const meter = await screen.findByRole('button', { name: '世界线 STEINS;GATE · 1.048596%' });
+    expect(meter.tagName).toBe('BUTTON');
+    expect(meter).toHaveAttribute('aria-expanded', 'false');
+    expect(meter).toHaveAccessibleDescription(/STEINS;GATE.*1\.048596%/);
+    expect(screen.getByRole('tooltip')).toHaveTextContent('打开世界线面板');
+    meter.focus();
+    expect(meter).toHaveFocus();
+    fireEvent.click(meter);
+    await waitFor(() => expect(meter).toHaveAttribute('aria-expanded', 'true'));
+    expect(await screen.findByText('当前世界线')).toBeInTheDocument();
+    fireEvent.click(meter);
+    await waitFor(() => expect(meter).toHaveAttribute('aria-expanded', 'false'));
+  });
+
+  it('worldline panel: one dial reads the current line; the armed target is tagged on the diagram and aimed by the shift key', async () => {
+    renderWorkstation();
+    fireEvent.click(await screen.findByRole('button', { name: '世界线 STEINS;GATE · 1.048596%' }));
+    await screen.findByText('当前世界线');
+    const panel = document.querySelector('.ws2-wl-panel') as HTMLElement;
+    // No second meter and no blueprint captions crowding the dial.
+    expect(panel.querySelectorAll('.nixie')).toHaveLength(1);
+    expect(panel.querySelector('.nx-blueprint')).toBeNull();
+    expect(screen.queryByText(/TARGET PREVIEW/)).not.toBeInTheDocument();
+    expect(panel.querySelector('.tag')).toBeNull();
+    expect(screen.getByRole('button', { name: '当前所在' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('radio', { name: 'β 世界线' }));
+    await waitFor(() => expect(panel.querySelector('.ws2-wl-line.sel .tag')?.textContent).toMatch(/TARGET · 目标/));
+    await waitFor(() => expect(panel.querySelector('.ws2-wl-line.sel .val')?.textContent).toBe(' · 1.129848%'));
+    expect(panel.querySelector('.ws2-wl-line.cur .tag')).toBeNull();
+    expect(screen.getByText('目标世界线：β WORLDLINE · 1.129848%')).toBeInTheDocument();
+    // The dial still reads the line you are on.
+    expect(within(panel).getByRole('img', { name: 'World line divergence 1.048596%' })).toBeInTheDocument();
+
+    const key = screen.getByRole('button', { name: '跃迁至 β' });
+    fireEvent.pointerEnter(key);
+    expect(panel).toHaveClass('aiming');
+    expect(panel.querySelector('.hop')).toBeTruthy();
+    fireEvent.pointerLeave(key);
+    expect(panel).not.toHaveClass('aiming');
+    fireEvent.focus(key);
+    expect(panel).toHaveClass('aiming');
+    fireEvent.blur(key);
+    expect(panel).not.toHaveClass('aiming');
   });
 
   it('first-class MEMORY aperture opens Memory Space Overview', async () => {

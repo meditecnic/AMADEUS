@@ -4,6 +4,7 @@ import './SalieriLogin.css';
 import { audioService } from '../services/AudioService';
 import { audioPlayer } from '../hooks/useAudioPlayer';
 import { useReducedMotion } from '../design-system/useReducedMotion';
+import { warmWorkstationFonts } from '../workstation/fontWarmup';
 import { Blueprint, type BlueprintHandle } from './login/Blueprint';
 import { Wordmark, type WordmarkHandle } from './login/Wordmark';
 
@@ -256,6 +257,9 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
     return () => window.clearTimeout(id);
   }, [glitch]);
 
+  // While the terminal waits, the workstation's fonts load and decode, so the entrance does not have to.
+  useEffect(() => warmWorkstationFonts(), []);
+
   // 卸载组件时清理定时器，防内存泄漏
   useEffect(() => {
     return () => {
@@ -474,6 +478,9 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
     <div
       ref={rootRef}
       className={rootClass}
+      // The audio context is created on the first key or click, not inside the submit that starts the entrance.
+      onKeyDownCapture={() => { if (!exiting) audioPlayer.init(); }}
+      onPointerDownCapture={() => { if (!exiting) audioPlayer.init(); }}
       onPointerDown={(e) => {
         if (!exiting || reduced) return;
         // The skipping click is spent here: its mousedown must not then pull focus off the composer.

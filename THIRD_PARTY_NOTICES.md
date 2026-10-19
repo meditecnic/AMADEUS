@@ -2,6 +2,10 @@
 
 The root MIT license applies to this project's original source code. Third-party software, models and fonts retain their own licenses. STEINS;GATE characters, names and original materials are not licensed by this project's MIT license.
 
+## Worldline transition runtime
+
+- `desktop/src/worldline-engine/` vendors the procedural WebGL2 runtime from [meditecnic/worldline-transition](https://github.com/meditecnic/worldline-transition), copyright (c) 2026 meditecnic, under MIT. Its original [LICENSE](desktop/src/worldline-engine/LICENSE) and [source/trim notes](desktop/src/worldline-engine/README.vendor.md) are retained. Demo font binaries and recorded media are excluded; the upstream font notices remain in `assets/OFL.txt`.
+
 ## Fonts
 
 - `desktop/public/assets/fonts/s4-ds/`: Oxanium, IBM Plex Mono and Noto Sans CJK families use SIL Open Font License 1.1. Copyright and license text are preserved in [OFL.txt](desktop/public/assets/fonts/s4-ds/OFL.txt).
