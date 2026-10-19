@@ -1,5 +1,5 @@
 import { apiUrl } from '../apiBase';
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { useReducedMotion } from '../design-system/useReducedMotion';
 import {
   getOrCreateAmadeusSessionId,
@@ -34,7 +34,8 @@ import { Atmosphere } from '../workstation/Atmosphere';
 import { DraftWord } from '../workstation/DraftWord';
 import { DIVERGENCE, Nixie } from '../workstation/Nixie';
 import { SoundChannel, SystemMenu, WorldlinePanel, type MenuSection } from '../workstation/SystemMenu';
-import { ShiftOverlay } from '../workstation/ShiftOverlay';
+import { WorldlineShift } from '../workstation/WorldlineShift';
+import { ShiftTransaction } from '../workstation/shiftTransaction';
 import { ConfirmDialog } from '../workstation/ConfirmDialog';
 import { ConnectionCheckPanel, chatCheckMessage, requestChatCheck, type ChatCheckState } from '../workstation/ConnectionCheck';
 import { ConnectionList } from '../workstation/ConnectionList';
@@ -113,10 +114,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
     }, 280);
   };
   const [inputText, setInputText] = useState('');
-  // Each worldline keeps its own unsent draft; a failed switch rolls the prop back, which restores it too.
+  // Publish the matching draft before the target theme can paint.
   const draftsByWorldlineRef = useRef<Partial<Record<string, string>>>({});
   const draftWorldlineRef = useRef(worldline);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const previous = draftWorldlineRef.current;
     if (previous === worldline) return;
     draftsByWorldlineRef.current[previous] = inputText;
@@ -258,7 +259,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
     if (!composer || composer.disabled || active === composer) return;
     composer.focus({ preventScroll: true });
   }, []);
-  const [shift, setShift] = useState<{ from: 'steins_gate' | 'beta'; to: 'steins_gate' | 'beta' } | null>(null);
+  const [shift, setShift] = useState<ShiftTransaction | null>(null);
+  const shiftRef = useRef<ShiftTransaction | null>(null);
+  const shiftSourceMessages = useRef<Message[]>([]);
+  useEffect(() => () => { shiftRef.current?.dispose(); shiftRef.current = null; }, []);
   const systemButtonRef = useRef<HTMLButtonElement>(null);
   const openMenu = useCallback((section?: MenuSection) => {
     if (section) setMenuSection(section);
@@ -624,7 +628,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
       // Do not use the TTS toast channel for session lifecycle failures.
       setSessionError({ kind: 'session', code });
     },
-    onWorldlineSwitched: ({ worldline: switchedWorldline }) => {
+    onWorldlineSwitched: ({ worldline: switchedWorldline, requestId }) => {
+      const run = shiftRef.current;
+      if (run) {
+        if (requestId) run.accept(requestId, switchedWorldline, 'success');
+        return;
+      }
       committedWorldlineRef.current = switchedWorldline;
       pendingWorldlineRollbackRef.current = null;
       setConversationBusy(false);
@@ -635,7 +644,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
         is_selected: false,
       })));
     },
-    onWorldlineSwitchError: ({ code }) => {
+    onWorldlineSwitchError: ({ worldline: targetWorldline, requestId, code }) => {
+      const run = shiftRef.current;
+      if (run) {
+        if (requestId) run.accept(requestId, targetWorldline, 'fail', code);
+        return;
+      }
       const rollback = pendingWorldlineRollbackRef.current
         || committedWorldlineRef.current;
       pendingWorldlineRollbackRef.current = null;
@@ -976,10 +990,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
   // keeping those notices out of the transcript prevents a blank workspace
   // from looking like a failed conversation.
   const needsApiKey = credentialChecked && Boolean(activeProvider) && !credentialConfigured;
+  const presentationMessages = shift && !shift.committed ? shiftSourceMessages.current : messages;
   const visibleMessages = needsApiKey
-    ? messages.filter((message) => !/(API\s*Key|未认证|缺失\s*API)/i.test(message.content))
+    ? presentationMessages.filter((message) => !/(API\s*Key|未认证|缺失\s*API)/i.test(message.content))
     // After switching away, a "missing key" error about the previous connection no longer describes anything.
-    : messages.filter((message) => {
+    : presentationMessages.filter((message) => {
       const missing = /缺失\s*(\S+)\s*API\s*Key/i.exec(message.content);
       return !missing || missing[1] === activeProviderId;
     });
@@ -1663,9 +1678,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
     audioPlayer.init();
   };
 
-  /** Visual shift → existing worldline switch path. Leftover voice is stopped first so no audio crosses lines. */
+  /** Dispatch once now. Only ACK + final lock may publish the outer worldline. */
   const startShift = (to: 'steins_gate' | 'beta') => {
-    if (shift || to === worldline) return;
+    if (shiftRef.current || to === worldline) return;
     // Leftover voice fades out (well before the commit point of the animation), then stops.
     if (isPlaying) {
       const fade = audioPlayer.fadeOut?.(400);
@@ -1673,7 +1688,25 @@ export const Workstation: React.FC<WorkstationProps> = ({
       else handleStopVoice();
     }
     closeMenu();
-    setShift({ from: worldline, to });
+    const run = new ShiftTransaction(`shift-${crypto.randomUUID()}`, worldline, to, () => {
+      if (shiftRef.current !== run) return;
+      committedWorldlineRef.current = to;
+      suppressedWorldlineEffectRef.current = to;
+      pendingWorldlineRollbackRef.current = null;
+      setActiveConversationId(null);
+      // A slow target list fetch must never expose source rows in the new theme.
+      setConversations([]);
+      setConversationListWorldline(null);
+      pendingConversationModelRef.current = null;
+      setConversationBusy(false);
+      onWorldlineChange(to);
+    });
+    shiftSourceMessages.current = messages;
+    shiftRef.current = run;
+    setSessionError(null);
+    setConversationBusy(true);
+    setShift(run);
+    run.start(switchWorldline);
   };
 
   const now = new Date();
@@ -2330,11 +2363,16 @@ export const Workstation: React.FC<WorkstationProps> = ({
       </SystemMenu>
 
       {shift && (
-        <ShiftOverlay
-          from={shift.from}
-          to={shift.to}
-          onCommit={() => onWorldlineChange(shift.to)}
-          onDone={() => setShift(null)}
+        <WorldlineShift
+          transaction={shift}
+          onDone={() => {
+            if (shiftRef.current !== shift) return;
+            if (shift.error) setSessionError({ kind: 'worldline', code: shift.error });
+            shift.dispose();
+            shiftRef.current = null;
+            setConversationBusy(false);
+            setShift(null);
+          }}
         />
       )}
 

@@ -30,7 +30,7 @@ arrays replace the base; `login` and `shift` merge individual fields.
 | `error` | Login 200; conversation/memory GETs 503; chat sends a recoverable error |
 | `offline` | Login 200; WS auth rejected for unavailable-session UI |
 | `shift-failure` | Correlated `worldline.switch_error` after 500ms; source worldline retained |
-| `shift-slow` | Correlated `worldline.switched` delayed 6500ms; same socket remains open |
+| `shift-slow` | Correlated `worldline.switched` delayed 20000ms; observable confirmation gate even with shader warmup, same socket remains open |
 
 Sentence `delayMs` values are waits **after the preceding sentence** (or after
 `turn.started` for the first). `completionDelayMs` follows the final pair.
@@ -105,3 +105,18 @@ mission validation directory, never in git.
 For the reusable SG/β × normal/reduced-motion capture matrix, screenshot
 destinations, diagnostics, staged motion evidence and milestone gate handoff,
 follow the [browser evidence walkthrough](../../validation/README.md).
+
+## Shift preview
+
+Open `http://localhost:1420/?scenario=streaming&force-fallback=1` for the static
+CSS shift path. This capability override is read only in Vite development,
+has no production fault control, and does not alter requests or ACKs.
+`?scenario=shift-slow&force-fallback=1` makes pending click/Esc waiting easy
+to inspect. `shift-failure` retains the source theme/draft; reduced-motion
+also chooses CSS automatically. During WebGL playback the standard browser
+`WEBGL_lose_context` extension can exercise context loss.
+
+The menu's worldline page starts one correlated `worldline.switch` immediately.
+The source UI remains visible underneath until matching target readiness and
+the final digit lock, then publishes once. Both skip controls share the same
+action. CSS, context loss and sustained low fps continue the same transaction.

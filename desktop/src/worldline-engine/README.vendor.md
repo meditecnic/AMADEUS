@@ -62,9 +62,11 @@ Without `outcome`, `scenario` selects the original local mock, useful for
 tests. `harnessSeek` remains a deterministic test hook. Neither is a source
 of production acknowledgements.
 
-This step supplies the runtime interface only. The React transaction host,
-CSS fallback, reduced-motion policy, performance monitoring and exactly-once
-visual publication belong to the next integration step. The controller's
+The React host is `workstation/WorldlineShift.tsx`, with request ownership in
+`ShiftTransaction` and Workstation. A structural render/finish adapter allows
+one controller to continue through GPU loss without replacing its outcome.
+CSS/reduced-motion use a static final lock once the outcome is known.
+The controller's
 original `exit()` returns to standby; production click/Esc should share the
 host's skip action, which calls `skip()` and never invents an outcome.
 
@@ -86,4 +88,4 @@ listeners and frees programs, buffers, textures, targets and vertex arrays.
 Desktop's existing strict `tsc` includes these sources. The focused bundling
 test builds this entry with Vite in memory, including every shader, without
 mounting the demo or creating a graphics context on import. The application
-will consume this entry in Step 2; Step 1 adds no UI or startup side effects.
+consumes this entry in Step 2; importing it creates no graphics context.

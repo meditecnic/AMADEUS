@@ -65,7 +65,7 @@ export interface ControllerSnapshot {
 }
 
 export class Controller {
-  private r: Renderer;
+  private r: Pick<Renderer, 'render' | 'finish'>;
   private ev: ControllerEvents;
   private run: Run | null = null;
   private phase: Phase = 'idle';
@@ -77,7 +77,7 @@ export class Controller {
   /** diagnostics for QA: number of rAF callbacks currently scheduled (0 or 1) */
   ticks = 0;
 
-  constructor(r: Renderer, origin: number[], ev: ControllerEvents) {
+  constructor(r: Pick<Renderer, 'render' | 'finish'>, origin: number[], ev: ControllerEvents) {
     this.r = r;
     this.ev = ev;
     this.idleOrigin = origin;

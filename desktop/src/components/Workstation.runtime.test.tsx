@@ -545,6 +545,42 @@ describe('Workstation provider runtime changes', () => {
     await waitFor(() => expect(wsSpies.switchWorldline).toHaveBeenCalledWith('beta'));
   });
 
+  it('dispatches at shift start, retains source draft, and publishes once without a prop-effect resend', async () => {
+    const context = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+    Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: vi.fn() });
+    const sourceFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => (
+      String(input).includes('worldline=beta')
+        ? new Promise<Response>(() => {})
+        : sourceFetch(input, init)
+    )));
+    const onWorldlineChange = vi.fn();
+    const { rerender, container, unmount } = render(<Workstation worldline="steins_gate" onWorldlineChange={onWorldlineChange} onLogout={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText('Default Conversation')).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('输入消息'), { target: { value: 'source draft' } });
+    fireEvent.click(screen.getByRole('button', { name: '系统设置' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'β 世界线' }));
+    fireEvent.click(screen.getByRole('button', { name: '跃迁至 β' }));
+    expect(wsSpies.switchWorldline).toHaveBeenCalledTimes(1);
+    const [target, requestId] = wsSpies.switchWorldline.mock.calls[0];
+    expect(target).toBe('beta');
+    expect(container.querySelector('.ws2')?.getAttribute('data-wl')).toBe('sg');
+    expect((screen.getByLabelText('输入消息') as HTMLTextAreaElement).value).toBe('source draft');
+    expect(onWorldlineChange).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onWorldlineChange).not.toHaveBeenCalled();
+    const latest = wsSpies.useAmadeusWS.mock.lastCall![0];
+    await act(async () => latest.onWorldlineSwitched({ worldline: 'beta', requestId }));
+    expect(onWorldlineChange).toHaveBeenCalledExactlyOnceWith('beta');
+    rerender(<Workstation worldline="beta" onWorldlineChange={onWorldlineChange} onLogout={vi.fn()} />);
+    expect(wsSpies.switchWorldline).toHaveBeenCalledTimes(1);
+    expect((screen.getByLabelText('输入消息') as HTMLTextAreaElement).value).toBe('');
+    expect(screen.queryByText('Default Conversation')).toBeNull();
+    unmount();
+    context.mockRestore();
+    Reflect.deleteProperty(HTMLElement.prototype, 'animate');
+  });
+
   it('keeps each worldline’s unsent draft on its own line', async () => {
     const onWorldlineChange = vi.fn();
     const { rerender } = render(<Workstation worldline="steins_gate" onWorldlineChange={onWorldlineChange} onLogout={vi.fn()} />,
