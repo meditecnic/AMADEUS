@@ -12,7 +12,14 @@ export const CELL_W = Math.round((GLYPH_W + GLYPH_MARGIN * 2) * GLYPH_PX);
 export const CELL_H = Math.round((GLYPH_H + GLYPH_MARGIN * 2) * GLYPH_PX);
 export const CELLS = 12;
 
-type Pen = CanvasRenderingContext2D;
+type Pen = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+
+/** Raw RGBA bytes of the cathode atlas (see buildGlyphAtlas). */
+export interface GlyphAtlas {
+  data: Uint8Array;
+  width: number;
+  height: number;
+}
 type Op = (string | number)[];
 
 // R3 (R1-01): every digit re-fitted to the lit strokes of the 60 fps source frames (src 11.60 /
@@ -100,12 +107,22 @@ function dotPen(w: number) {
   };
 }
 
+/** A CPU 2D surface: a DOM canvas on the page, an OffscreenCanvas inside a worker. */
+function surface(w: number, h: number): Pen | null {
+  if (typeof document !== 'undefined') {
+    const cv = document.createElement('canvas');
+    cv.width = w;
+    cv.height = h;
+    return cv.getContext('2d', { willReadFrequently: true });
+  }
+  if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(w, h).getContext('2d', { willReadFrequently: true });
+  return null;
+}
+
 function layer(wBody: number, wWire: number, blurPx: number, stackBody = 0, stackWire = 0): Uint8ClampedArray {
-  const cv = document.createElement('canvas');
-  cv.width = CELL_W * CELLS;
-  cv.height = CELL_H;
-  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  const ctx = surface(CELL_W * CELLS, CELL_H);
   if (!ctx) throw new Error('2D canvas unavailable');
+  const cv = ctx.canvas;
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, cv.width, cv.height);
   if (wBody > 0) {
@@ -122,7 +139,7 @@ function layer(wBody: number, wWire: number, blurPx: number, stackBody = 0, stac
  *  R = the yellow core of the glowing cathode (src 11.60: ~4.5-6 px at 1080p on a ~140 px digit,
  *  the support wires ~3 px)   G = wide neon halo   B = the thin metal wire (cell 11: the unlit stack)
  *  A = the soft orange sheath round the core (src: the orange shoulder reaches ~6 px out). */
-export function buildGlyphAtlas(): { data: Uint8Array; width: number; height: number } {
+export function buildGlyphAtlas(): GlyphAtlas {
   const k = GLYPH_PX / 1.5; // blur radii are in atlas pixels
   const core = layer(4.4, 2.6, 0.45 * k);
   const halo = layer(16.0, 9.0, 13.0 * k);
@@ -140,3 +157,54 @@ export function buildGlyphAtlas(): { data: Uint8Array; width: number; height: nu
   }
   return { data: out, width: w, height: h };
 }
+
+let cached: GlyphAtlas | null = null;
+
+/** The atlas is deterministic: rasterize it once per page and share the bytes (a renderer only
+ *  uploads them). Pass bytes produced elsewhere, e.g. by a worker, to seed the cache. */
+export function glyphAtlas(seed?: GlyphAtlas): GlyphAtlas {
+  if (seed && !cached) cached = seed;
+  if (!cached) cached = buildGlyphAtlas();
+  return cached;
+}
+
+export function hasGlyphAtlas(): boolean {
+  return cached !== null;
+}
+
+// ---------------------------------------------------------------- SVG outlines (DOM instruments)
+
+const f2 = (n: number): string => String(Math.round(n * 100) / 100);
+
+function svgOps(ops: Op[]): string {
+  let d = '';
+  for (const op of ops) {
+    const v = op.slice(1) as number[];
+    switch (op[0]) {
+      case 'M': d += `M${f2(v[0])} ${f2(v[1])}`; break;
+      case 'L': d += `L${f2(v[0])} ${f2(v[1])}`; break;
+      case 'Q': d += `Q${f2(v[0])} ${f2(v[1])} ${f2(v[2])} ${f2(v[3])}`; break;
+      case 'A': {
+        // canvas arc(cx, cy, r, a0, a1) clockwise: joins the pen to the start, then sweeps
+        const [cx, cy, r, a0, a1] = v;
+        let sweep = (a1 - a0) % (Math.PI * 2);
+        if (sweep < 0) sweep += Math.PI * 2;
+        const sx = cx + r * Math.cos(a0), sy = cy + r * Math.sin(a0);
+        const ex = cx + r * Math.cos(a1), ey = cy + r * Math.sin(a1);
+        d += `${d ? 'L' : 'M'}${f2(sx)} ${f2(sy)}A${f2(r)} ${f2(r)} 0 ${sweep > Math.PI ? 1 : 0} 1 ${f2(ex)} ${f2(ey)}`;
+        break;
+      }
+      case 'E': {
+        const [cx, cy, rx, ry] = v;
+        d += `M${f2(cx + rx)} ${f2(cy)}A${f2(rx)} ${f2(ry)} 0 1 1 ${f2(cx - rx)} ${f2(cy)}A${f2(rx)} ${f2(ry)} 0 1 1 ${f2(cx + rx)} ${f2(cy)}`;
+        break;
+      }
+    }
+  }
+  return d;
+}
+
+/** The same cathodes as the atlas, as SVG path data in the 72 x 150 design space: the glowing
+ *  body and its support wire for 0-9, and the decimal point's centre. */
+export const CATHODE_SVG: { body: string; wire: string }[] = GLYPHS.map((g) => ({ body: svgOps(g.body), wire: svgOps(g.wire) }));
+export const CATHODE_DOT = { x: 36, y: 136, r: 2 };

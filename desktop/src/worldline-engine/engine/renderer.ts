@@ -1,6 +1,7 @@
-import { createProgram, createTarget, deleteTarget, pickHdrFormat, FULLSCREEN_VS } from './gl';
-import type { GL, Program, Target, TargetFormat } from './gl';
-import { buildGlyphAtlas } from './glyphs';
+import { beginProgram, finishProgram, programSettled, createTarget, deleteTarget, pickHdrFormat, FULLSCREEN_VS } from './gl';
+import type { GL, PendingProgram, Program, Target, TargetFormat } from './gl';
+import { glyphAtlas } from './glyphs';
+import type { GlyphAtlas } from './glyphs';
 import { PARCH_FS, CORRIDOR_FS, SPACE_FS, DARK_FS } from '../shaders/worlds';
 import { GEAR_VS, GEAR_FS } from '../shaders/gear';
 import { READOUT_FS } from '../shaders/readout';
@@ -14,6 +15,29 @@ import { MAX_CABLE_VERTS } from '../show/cables';
 
 const BLOOM_LEVELS = 5;
 const MAX_RIBBON_VERTS = MAX_CABLE_VERTS;
+
+export interface RendererOptions {
+  /** Cathode atlas bytes rasterized ahead of time (otherwise the shared cache, built on demand). */
+  atlas?: GlyphAtlas;
+}
+
+const SOURCES: Record<keyof Programs, [string, string]> = {
+  parch: [FULLSCREEN_VS, PARCH_FS],
+  corridor: [FULLSCREEN_VS, CORRIDOR_FS],
+  space: [FULLSCREEN_VS, SPACE_FS],
+  dark: [FULLSCREEN_VS, DARK_FS],
+  gear: [GEAR_VS, GEAR_FS],
+  readout: [FULLSCREEN_VS, READOUT_FS],
+  smoke: [FULLSCREEN_VS, SMOKE_FS],
+  ribbon: [RIBBON_VS, RIBBON_FS],
+  piece: [PIECE_VS, PIECE_FS],
+  bright: [FULLSCREEN_VS, BRIGHT_FS],
+  down: [FULLSCREEN_VS, DOWN_FS],
+  up: [FULLSCREEN_VS, UP_FS],
+  composite: [FULLSCREEN_VS, COMPOSITE_FS],
+};
+
+const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 interface Programs {
   parch: Program;
@@ -57,8 +81,12 @@ export class Renderer {
   onLost: (() => void) | null = null;
   onRestored: (() => void) | null = null;
 
-  constructor(canvas: HTMLCanvasElement) {
+  private atlasSeed: GlyphAtlas | undefined;
+
+  /** Synchronous setup: compiles every program and uploads the atlas before returning. */
+  constructor(canvas: HTMLCanvasElement, opts: RendererOptions & { deferInit?: boolean } = {}) {
     this.canvas = canvas;
+    this.atlasSeed = opts.atlas;
     const gl = canvas.getContext('webgl2', {
       antialias: false,
       alpha: false,
@@ -72,7 +100,56 @@ export class Renderer {
     this.gl = gl;
     canvas.addEventListener('webglcontextlost', this.handleLost, false);
     canvas.addEventListener('webglcontextrestored', this.handleRestored, false);
-    this.init();
+    if (!opts.deferInit) this.init();
+  }
+
+  /**
+   * Same setup without blocking the page: compiles are issued together and polled with
+   * KHR_parallel_shader_compile where the driver offers it; otherwise each program's (blocking)
+   * status read gets its own task so no single task holds the main thread for the whole set.
+   * The atlas may still be rasterizing elsewhere (atlasPending); it is uploaded last.
+   * Rejects if the context is lost or the signal aborts; the caller disposes.
+   */
+  static async create(
+    canvas: HTMLCanvasElement,
+    opts: RendererOptions & { signal?: AbortSignal; atlasPending?: PromiseLike<GlyphAtlas | undefined> } = {},
+  ): Promise<Renderer> {
+    const r = new Renderer(canvas, { ...opts, deferInit: true });
+    const gl = r.gl;
+    const check = (): void => {
+      if (opts.signal?.aborted) throw new Error('aborted');
+      if (r.lost || gl.isContextLost()) throw new Error('context lost');
+    };
+    const ext = gl.getExtension('KHR_parallel_shader_compile');
+    const hf = pickHdrFormat(gl);
+    r.fmt = hf.fmt;
+    r.hdr = hf.hdr;
+    const pending = {} as Record<keyof Programs, PendingProgram>;
+    for (const k of Object.keys(SOURCES) as (keyof Programs)[]) pending[k] = beginProgram(gl, SOURCES[k][0], SOURCES[k][1], k);
+    const p = {} as Programs;
+    if (ext) {
+      gl.flush();
+      for (;;) {
+        await pause(16);
+        check();
+        if ((Object.values(pending) as PendingProgram[]).every((x) => programSettled(gl, x, ext))) break;
+      }
+    }
+    for (const k of Object.keys(pending) as (keyof Programs)[]) {
+      if (!ext) await pause(0);
+      check();
+      p[k] = finishProgram(gl, pending[k]);
+    }
+    r.p = p;
+    r.initBuffers();
+    if (opts.atlasPending) {
+      const seed = await opts.atlasPending;
+      if (seed) r.atlasSeed = seed;
+    }
+    await pause(0);
+    check();
+    r.uploadAtlas();
+    return r;
   }
 
   private handleLost = (e: Event): void => {
@@ -101,21 +178,18 @@ export class Renderer {
     const hf = pickHdrFormat(gl);
     this.fmt = hf.fmt;
     this.hdr = hf.hdr;
-    this.p = {
-      parch: createProgram(gl, FULLSCREEN_VS, PARCH_FS, 'parch'),
-      corridor: createProgram(gl, FULLSCREEN_VS, CORRIDOR_FS, 'corridor'),
-      space: createProgram(gl, FULLSCREEN_VS, SPACE_FS, 'space'),
-      dark: createProgram(gl, FULLSCREEN_VS, DARK_FS, 'dark'),
-      gear: createProgram(gl, GEAR_VS, GEAR_FS, 'gear'),
-      readout: createProgram(gl, FULLSCREEN_VS, READOUT_FS, 'readout'),
-      smoke: createProgram(gl, FULLSCREEN_VS, SMOKE_FS, 'smoke'),
-      ribbon: createProgram(gl, RIBBON_VS, RIBBON_FS, 'ribbon'),
-      piece: createProgram(gl, PIECE_VS, PIECE_FS, 'piece'),
-      bright: createProgram(gl, FULLSCREEN_VS, BRIGHT_FS, 'bright'),
-      down: createProgram(gl, FULLSCREEN_VS, DOWN_FS, 'down'),
-      up: createProgram(gl, FULLSCREEN_VS, UP_FS, 'up'),
-      composite: createProgram(gl, FULLSCREEN_VS, COMPOSITE_FS, 'composite'),
-    };
+    // issue every compile before the first status read, so they can overlap
+    const pending = {} as Record<keyof Programs, PendingProgram>;
+    for (const k of Object.keys(SOURCES) as (keyof Programs)[]) pending[k] = beginProgram(gl, SOURCES[k][0], SOURCES[k][1], k);
+    const p = {} as Programs;
+    for (const k of Object.keys(pending) as (keyof Programs)[]) p[k] = finishProgram(gl, pending[k]);
+    this.p = p;
+    this.initBuffers();
+    this.uploadAtlas();
+  }
+
+  private initBuffers(): void {
+    const gl = this.gl;
     this.vaoEmpty = gl.createVertexArray()!;
 
     this.quadBuf = gl.createBuffer()!;
@@ -161,8 +235,11 @@ export class Renderer {
       gl.vertexAttribDivisor(1 + i, 1);
     }
     gl.bindVertexArray(null);
+  }
 
-    const at = buildGlyphAtlas();
+  private uploadAtlas(): void {
+    const gl = this.gl;
+    const at = this.atlasSeed ? glyphAtlas(this.atlasSeed) : glyphAtlas();
     this.atlas = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, this.atlas);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
@@ -198,6 +275,25 @@ export class Renderer {
       bw = Math.max(1, bw >> 1);
       bh = Math.max(1, bh >> 1);
     }
+  }
+
+  /** Free the size-dependent targets between shows; programs, buffers and atlas stay resident.
+   *  The next resize() reallocates them. */
+  trim(): void {
+    if (this.lost || this.disposed) return;
+    const gl = this.gl;
+    deleteTarget(gl, this.scene);
+    deleteTarget(gl, this.combo);
+    deleteTarget(gl, this.snap);
+    this.bloom.forEach((t) => deleteTarget(gl, t));
+    this.scene = this.combo = this.snap = null;
+    this.bloom = [];
+    this.w = this.h = 0;
+  }
+
+  /** Push queued commands to the GPU without waiting for them. */
+  flush(): void {
+    if (!this.lost && !this.disposed) this.gl.flush();
   }
 
   get size(): [number, number] {

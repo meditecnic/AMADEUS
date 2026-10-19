@@ -89,3 +89,28 @@ Desktop's existing strict `tsc` includes these sources. The focused bundling
 test builds this entry with Vite in memory, including every shader, without
 mounting the demo or creating a graphics context on import. The application
 consumes this entry in Step 2; importing it creates no graphics context.
+
+## Local changes (M3 · shift latency and shared instrument)
+
+The vendored runtime is otherwise unchanged; these additions keep the GPU setup
+out of the click that starts a shift and let the DOM meters draw the same
+cathodes:
+
+- `Renderer.create(canvas, { signal, atlasPending })`: asynchronous setup. All
+  programs are submitted first and polled through `KHR_parallel_shader_compile`
+  when the driver offers it (otherwise linked one per task), the atlas bytes may
+  arrive from elsewhere and are uploaded last. The synchronous constructor
+  remains (`deferInit` is internal to `create`).
+- `RendererOptions.atlas`, `buildGlyphAtlas()` drawing on a DOM canvas or an
+  `OffscreenCanvas` (worker), and `glyphAtlas(seed?)`/`hasGlyphAtlas()`: the
+  deterministic atlas is rasterized once per page and shared instead of on
+  every renderer.
+- `Renderer.trim()` frees the size-dependent targets between shows (programs,
+  buffers and atlas stay resident); `Renderer.flush()` submits without waiting.
+- `CATHODE_SVG` / `CATHODE_DOT`: the atlas cathode outlines as SVG path data,
+  used by the workstation's DOM divergence meters.
+
+Shot timing, lock sequence, geometry, shaders and the controller are untouched.
+The host-side stage (`workstation/shiftStage.ts`) owns prewarming, leasing and
+disposal.
+

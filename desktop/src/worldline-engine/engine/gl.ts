@@ -7,32 +7,58 @@ export interface Program {
   u: Record<string, WebGLUniformLocation | null>;
 }
 
-function compile(gl: GL, type: number, src: string, label: string): WebGLShader {
+/** A program whose compile and link were issued but not yet queried. */
+export interface PendingProgram {
+  prog: WebGLProgram;
+  vs: WebGLShader;
+  fs: WebGLShader;
+  label: string;
+}
+
+function shader(gl: GL, type: number, src: string, label: string): WebGLShader {
   const sh = gl.createShader(type);
   if (!sh) throw new Error(`createShader failed (${label})`);
   gl.shaderSource(sh, src);
   gl.compileShader(sh);
-  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS) && !gl.isContextLost()) {
-    const log = gl.getShaderInfoLog(sh) ?? '';
-    gl.deleteShader(sh);
-    throw new Error(`Shader compile error (${label}):\n${log}`);
-  }
   return sh;
 }
 
-export function createProgram(gl: GL, vs: string, fs: string, label: string): Program {
-  const v = compile(gl, gl.VERTEX_SHADER, vs, label + '.vs');
-  const f = compile(gl, gl.FRAGMENT_SHADER, fs, label + '.fs');
+/** Issue compile + link without reading any status, so a driver with KHR_parallel_shader_compile
+ *  can do the work off the calling thread. Status queries are what make a compile synchronous. */
+export function beginProgram(gl: GL, vs: string, fs: string, label: string): PendingProgram {
+  const v = shader(gl, gl.VERTEX_SHADER, vs, label + '.vs');
+  const f = shader(gl, gl.FRAGMENT_SHADER, fs, label + '.fs');
   const prog = gl.createProgram();
   if (!prog) throw new Error('createProgram failed');
   gl.attachShader(prog, v);
   gl.attachShader(prog, f);
   gl.linkProgram(prog);
-  gl.deleteShader(v);
-  gl.deleteShader(f);
+  return { prog, vs: v, fs: f, label };
+}
+
+/** Non-blocking readiness check (always true without the extension: the next query just waits). */
+export function programSettled(gl: GL, p: PendingProgram, ext: KHR_parallel_shader_compile | null): boolean {
+  return !ext || gl.getProgramParameter(p.prog, ext.COMPLETION_STATUS_KHR) === true;
+}
+
+/** Read link status (and compile logs on failure) and collect the uniform table. */
+export function finishProgram(gl: GL, p: PendingProgram): Program {
+  const { prog, vs, fs, label } = p;
   if (!gl.getProgramParameter(prog, gl.LINK_STATUS) && !gl.isContextLost()) {
+    for (const [sh, tag] of [[vs, '.vs'], [fs, '.fs']] as const) {
+      if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+        const log = gl.getShaderInfoLog(sh) ?? '';
+        gl.deleteShader(vs);
+        gl.deleteShader(fs);
+        throw new Error(`Shader compile error (${label}${tag}):\n${log}`);
+      }
+    }
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
     throw new Error(`Program link error (${label}):\n${gl.getProgramInfoLog(prog)}`);
   }
+  gl.deleteShader(vs);
+  gl.deleteShader(fs);
   const u: Record<string, WebGLUniformLocation | null> = {};
   const n = gl.getProgramParameter(prog, gl.ACTIVE_UNIFORMS) as number;
   for (let i = 0; i < n; i++) {
@@ -42,6 +68,10 @@ export function createProgram(gl: GL, vs: string, fs: string, label: string): Pr
     u[name] = gl.getUniformLocation(prog, info.name);
   }
   return { prog, u };
+}
+
+export function createProgram(gl: GL, vs: string, fs: string, label: string): Program {
+  return finishProgram(gl, beginProgram(gl, vs, fs, label));
 }
 
 export interface Target {
