@@ -409,7 +409,6 @@
   .sl-tblock { top: 30px; }
   .sl-note { bottom: 28px; }
   .sl-verse { bottom: 54px; gap: 7px; }
-  .sl-verse p:nth-child(n + 3) { display: none; }
 }
 
 /* Reduced motion: the finished sheet, nothing moving. */
