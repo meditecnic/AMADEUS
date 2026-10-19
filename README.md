@@ -9,13 +9,14 @@
 | ![SG worldline chat](assets/screenshots/sg-chat.png) | ![β worldline chat](assets/screenshots/beta-chat.png) |
 | ![Worldline shift transition](assets/screenshots/worldline-shift.png) | ![Memory star map](assets/screenshots/memory-star-map.png) |
 
-*Screenshots were taken without the optional asset pack, so the stage shows placeholder art. The worldline-shift frame comes from a WebGL2 transition prototype that is not merged yet; the star map shows test data.*
+*Screenshots were taken without the optional asset pack, so the stage shows placeholder art. The worldline-shift frame is a historical capture of the WebGL2 prototype whose runtime is now integrated; the star map shows test data.*
 
 ## What it does
 
 - **Japanese conversation with paired Chinese subtitles.** Replies stream sentence by sentence; each Japanese sentence is matched with its translation, and missing translations are marked instead of silently dropped.
 - **Long-term memory that stays local.** Facts from your conversations are stored in SQLite with vector search (sqlite-vec + `multilingual-e5-small`). The model decides when it needs to remember something and calls a `recall_memory` tool; the server scopes the search and returns bounded candidates. You can browse what she remembers and make her forget a conversation.
 - **Two isolated worldlines.** *STEINS;GATE* and *β* each have their own persona, conversations, memory and visual theme; no data is shared between them.
+- **Worldline instruments and transitions (M3).** The header, system-menu dial and WebGL2 transition share the same cathode digits. Open **系统 → 世界线**: the dial shows the current worldline, while the diagram previews the selected target; use the shift button to begin. Softer handoffs preserve conversations and drafts, and click/Esc skips the presentation while still waiting for target confirmation.
 - **Bring your own model.** DeepSeek, Zhipu GLM, or any OpenAI-compatible endpoint, including local models. Optional web search through Tavily or Firecrawl.
 - **Optional voice.** Text-to-speech through a local GPT-SoVITS server; speech recognition with SenseVoice via sherpa-onnx (backend only for now, no microphone UI yet).
 - **Local by design.** Every service binds to loopback, WebSocket connections are origin-checked, and API keys go to the Windows Credential Manager. Conversation text is sent only to the model provider the user configures; if web search is enabled, search queries also go to the chosen search provider (Tavily or Firecrawl).
@@ -49,7 +50,9 @@ One chat turn: the UI sends the user's message over a WebSocket; the backend com
 
 - **Measured recall behaviour.** In a controlled end-to-end run against a real model (`deepseek-flash`), 12 of 12 prompts that needed a stored fact used it, and 4 of 4 control prompts did not call the tool. That result covers that question set and environment only.
 - **Windows installer.** The Tauri shell bundles the backend (PyInstaller, with the embedding model cache) into an NSIS installer, starts it on launch, refuses to start if port 8000 is taken, and shuts it down cleanly on exit. It passed a 10-item acceptance checklist on a clean English Windows Server 2022 VM: install, WebView2 bootstrap, real chat, memory write / recall / forget, restart persistence, and an uninstall that keeps user data. It is not published yet, and the packaging scripts are not part of this repository.
-- **Tests.** The frontend suite contains 550 cases across 48 Vitest files, including 2 known visual assertions marked as expected failures. Latest checks (2026-10-18): the production build passed. Two earlier full Vitest runs each reported 547 passes + 2 expected failures + 1 timeout in the existing `dragStress.test.tsx` (5-second limit). A subsequent full run with `npx vitest run --maxWorkers=2` passed all 48 files: 548 passes + 2 expected failures, with all tests retained and timeouts unchanged. M1 browser user testing is still pending; these checks do not establish milestone acceptance. The backend has its own pytest suite in `backend/tests/`.
+- **Historical checks (2026-10-18).** At that point the frontend suite contained 550 cases across 48 Vitest files, including 2 known visual assertions marked as expected failures, and the production build passed. Two earlier full Vitest runs each reported 547 passes + 2 expected failures + 1 timeout in the existing `dragStress.test.tsx` (5-second limit). A subsequent full run with `npx vitest run --maxWorkers=2` passed all 48 files: 548 passes + 2 expected failures, with all tests retained and timeouts unchanged. M1 browser user testing was still pending at that checkpoint; those checks alone did not establish milestone acceptance. The backend has its own pytest suite in `backend/tests/`.
+- **M3 closeout (2026-10-19).** The cloud delivery reported a passing build and 615 passes + 2 expected failures, with unit and proportionate browser checks. The developer accepted the actual Edge preview at `aecb1f435a7486efdf719c22a4aff7bfc1488b00`; [PR #3](https://github.com/meditecnics/AMADEUS/pull/3) merged it as `891db6cf8ae97a222fc869e3035734d6008e1759`. These are prior delivery and host-acceptance results, not new test runs for this documentation update or a native GPU latency guarantee.
+- **Transition startup.** The MIT-vendored [runtime](desktop/src/worldline-engine/README.vendor.md) prepares its GPU stage asynchronously ahead of a shift. Login preloads workstation fonts, remembers the faces used after entry, and uses that record on the next refresh. Existing audio initialization happens on login interaction before entry; M3 adds no audio features or runtime dependencies. See the [desktop notes](desktop/README.md) for caption and skip-hint behavior.
 
 ## How it was built
 
@@ -58,6 +61,7 @@ Built and maintained by one developer, who owns the product direction, architect
 ## Status
 
 - **Engineering MVP reached.** The Windows installer passed clean-VM acceptance; the developer's own hands-on run is in progress, and there is no public release yet.
+- **M3 accepted and closed.** Worldline instruments, softer transitions and startup preparation are merged. M4 awaits authorization.
 - Developed mainly on Windows; the browser dev mode also runs on Linux.
 - **Planned:** English and Japanese UI. Kurisu keeps speaking Japanese in every mode; in English mode her lines get English subtitles, and in Japanese mode subtitles are turned off.
 
@@ -66,7 +70,7 @@ Built and maintained by one developer, who owns the product direction, architect
 Choose between the default local mock for frontend work and a real backend for model integration. Both use the browser at http://localhost:1420.
 
 ```powershell
-git clone https://github.com/meditecnic/AMADEUS.git
+git clone https://github.com/meditecnics/AMADEUS.git
 cd AMADEUS
 ```
 
@@ -158,11 +162,14 @@ STEINS;GATE, STEINS;GATE 0 and their characters, names and original assets belon
 - 和她用日语多轮对话，中文字幕逐句跟上
 - 长期记忆：她记住了什么随时能查，不想让她记得的可以让她忘掉（记忆星图还在打磨，现在先在档案页里看）
 - 在 SG 和 β 两条世界线之间跃迁，各自保留会话和草稿
+- M3 已接受并合并：右上角、系统菜单与跃迁演出统一阴极数字；「系统 → 世界线」的仪器显示当前线，图中预览目标，再按跃迁按钮。过渡更柔和，点击／Esc 可跳过演出，仍须等待目标确认。GPU 与字体提前异步预热；字体使用记录在下次刷新后用于预加载，既有音频初始化移到入场前，没有新增音频功能。
 - 接入你自己的大模型：DeepSeek、智谱 GLM，或任何兼容 OpenAI 接口的服务（包括本地模型）
 - 可选的联网搜索（Tavily、Firecrawl）
 - 用红莉栖的声音念出她的回答（需要另外跑 GPT-SoVITS，见上文 [Voice](#voice-optional)）
 
-接下来：英文和日文界面。她始终说日语；英文界面下配英文字幕，日文界面下就不再显示字幕了。
+M3 已收尾，M4 等待授权。英文和日文界面仍在计划中；她始终说日语，英文界面下配英文字幕，日文界面下就不再显示字幕了。
+
+正常 GPU 演出不显示状态字幕，但保留读屏状态；等待超过 0.7 秒才显示提示，失败立即显示。提示采用无底框琥珀字幕，失败使用错误色；Esc 提示在活动、键盘聚焦及前 3 次引导时出现。减少动态与降级路径仍保留同一切换事务，跳过不会伪造成功。验证来源和边界见上文 [Engineering notes](#engineering-notes)。
 
 ### 运行
 
@@ -204,6 +211,9 @@ okeydokey，大概就是这些，那么来句帅气的收尾吧：El Psy Kongroo
 - ローカル長期記憶：SQLite + sqlite-vec + multilingual-e5-small。必要なときだけモデルが `recall_memory` ツールで思い出す
 - DeepSeek、Zhipu GLM、OpenAI 互換 API（ローカルモデルを含む）に対応
 - 音声合成（GPT-SoVITS）は任意
+- M3 は実機 Edge プレビューで承認され、統合済み。ヘッダー・システムメニュー・遷移演出の陰極数字を統一。「系统 → 世界线」では計器に現在の世界線、図に選択した移動先を表示し、ボタンで遷移する。クリック／Esc で演出を省略しても、移動先の確認を待つ。
+
+遷移の受け渡しを柔らかくし、GPU を非同期で準備する。ログイン画面ではフォントを先読みし、入場後の使用記録を次回の再読み込みに使う。既存の音声初期化は入場前に移した。通常の GPU 演出中は状態字幕を隠して読み上げ用の状態を保ち、0.7 秒を超える待機や失敗時に表示する。字幕は背景枠のない琥珀色（失敗時はエラー色）。Esc の案内は操作・フォーカス・最初の 3 回の案内時に現れる。検証結果の出典と範囲は [Engineering notes](#engineering-notes) を参照。M3 は完了し、M4 は承認待ち。
 
 開発時の起動方法は [Run it](#run-it-development) を参照。**標準はローカル mock** で、Node.js だけで動き、Python バックエンド、API キー、実際のモデルや TTS は不要。[Local mock](#local-mock-default) の手順で `npm ci` と `npm run dev -- --port 1420 --strictPort` を実行し、http://localhost:1420/?scenario=streaming を開く。USER ID が `Salieri` と入力されるまで待ち、公開のローカルテスト用合言葉 `Gott würfelt nicht` でログインする。メッセージを送ると、日本語と中国語字幕の組が三つ、順番に届く。会話と記憶はテストデータで、開発サーバーの再起動でリセットされる。mock は開発専用で、製品ビルドには含まれず、`npm run preview` でも利用できない。
 
