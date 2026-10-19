@@ -5,7 +5,7 @@ import { DIVERGENCE, WORLDLINE_NAME } from './Nixie';
 import { ShiftOverlay } from './ShiftOverlay';
 import { ShiftTransaction } from './shiftTransaction';
 import { ShiftPerformance } from './shiftPerformance';
-import { acquireShiftStage, prewarmShiftStage, shiftStageAvailable, type ShiftStageLease } from './shiftStage';
+import { acquireShiftStage, prewarmShiftStage, scrubStageCanvas, shiftStageAvailable, type ShiftStageLease } from './shiftStage';
 import './WorldlineShift.css';
 
 /** Presentation timings (ms). None of them gates the transaction: publication follows the real lock. */
@@ -17,7 +17,7 @@ export const SHIFT_TIMING = {
   /** Skip during the GPU show: dip to dark, cut, lift. */
   dipIn: 140,
   dipOut: 260,
-  /** Natural success end: the settled frame holds, then dims and dissolves into the workstation. */
+  /** Natural success end: the settled frame holds, then dissolves into the workstation at full brightness. */
   hold: 260,
   exit: 720,
   /** Skipped success (already dark): straight dissolve. */
@@ -143,22 +143,21 @@ export function WorldlineShift({ transaction, onDone, onCovered }: {
 
     /** Hand back to the workstation without a hard cut. */
     const leave = (failed: boolean, skipped: boolean) => {
-      const finish = (hold: number, duration: number, dim: boolean) => later(() => {
+      // Only the overlay itself fades. The stage canvas is shared by every shift, so nothing is ever animated
+      // on it here: an effect left on it would carry into the next show.
+      const finish = (hold: number, duration: number) => later(() => {
         el.dataset.exit = '';
-        if (duration > 0) {
-          if (dim && stage) fade(stage.canvas, [{ filter: 'brightness(1)' }, { filter: 'brightness(.42)' }], duration * 0.7, 'ease-out');
-          fade(el, [{ opacity: 1 }, { opacity: 0 }], duration, 'cubic-bezier(.45, 0, .4, 1)');
-        }
+        if (duration > 0) fade(el, [{ opacity: 1 }, { opacity: 0 }], duration, 'cubic-bezier(.45, 0, .4, 1)');
         later(() => done.current(), duration);
       }, hold);
-      if (reduced.current) return finish(SHIFT_TIMING.reducedHold, 0, false);
-      if (failed) return finish(SHIFT_TIMING.failHold, SHIFT_TIMING.failExit, false);
-      if (css) return skipped ? finish(200, SHIFT_TIMING.skipExit, false) : finish(SHIFT_TIMING.cssHold, SHIFT_TIMING.cssExit, false);
-      if (!skipped) return finish(SHIFT_TIMING.hold, SHIFT_TIMING.exit, true);
+      if (reduced.current) return finish(SHIFT_TIMING.reducedHold, 0);
+      if (failed) return finish(SHIFT_TIMING.failHold, SHIFT_TIMING.failExit);
+      if (css) return skipped ? finish(200, SHIFT_TIMING.skipExit) : finish(SHIFT_TIMING.cssHold, SHIFT_TIMING.cssExit);
+      if (!skipped) return finish(SHIFT_TIMING.hold, SHIFT_TIMING.exit);
       // Skipped into the result: under the dark veil, then dissolve.
-      if (el.dataset.dip === 'in') return finish(0, SHIFT_TIMING.skipExit, false);
+      if (el.dataset.dip === 'in') return finish(0, SHIFT_TIMING.skipExit);
       el.dataset.dip = 'in';
-      finish(SHIFT_TIMING.dipIn, SHIFT_TIMING.skipExit, false);
+      finish(SHIFT_TIMING.dipIn, SHIFT_TIMING.skipExit);
     };
 
     const begin = (withGPU: boolean, reason?: string) => {
@@ -169,6 +168,8 @@ export function WorldlineShift({ transaction, onDone, onCovered }: {
         gpu = s.renderer;
         css = false;
         el.prepend(s.canvas);
+        // Whatever an earlier show left on the shared canvas does not carry into this one.
+        scrubStageCanvas(s.canvas);
         el.dataset.renderer = 'webgl2';
         delete el.dataset.fallback;
         gpu.onLost = () => useCSS('context-lost');

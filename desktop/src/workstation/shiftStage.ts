@@ -163,6 +163,15 @@ export function scheduleShiftPrewarm(delay: number): () => void {
   return () => window.clearTimeout(timer);
 }
 
+/**
+ * The canvas goes back to its stylesheet look: no script animation or inline style survives a show.
+ * getAnimations() only sees animations on a connected element, so this runs before the canvas is detached.
+ */
+export function scrubStageCanvas(canvas: HTMLCanvasElement): void {
+  canvas.getAnimations?.().forEach(a => a.cancel());
+  canvas.removeAttribute('style');
+}
+
 export function shiftStageReady(): boolean {
   return !!stage && !stage.leased && !stage.renderer.isLost;
 }
@@ -184,6 +193,7 @@ export function acquireShiftStage(): ShiftStageLease | null {
       if (done) return;
       done = true;
       s.leased = false;
+      scrubStageCanvas(s.canvas);
       s.canvas.remove();
       s.renderer.onRestored = null;
       if (s.renderer.isLost) { destroy(s, false); return; }

@@ -146,6 +146,38 @@ describe('worldline shift presentation', () => {
     expect(covered).toHaveBeenCalledOnce();
   });
 
+  it('a natural GPU end dissolves only the overlay; the shared canvas is never animated', async () => {
+    await warmStage();
+    const calls: { target: Element; frames: Keyframe[] }[] = [];
+    Element.prototype.animate = vi.fn(function (this: Element, frames: Keyframe[]) {
+      calls.push({ target: this, frames });
+      return { cancel: vi.fn(), finish: vi.fn(), onfinish: null } as unknown as Animation;
+    }) as unknown as Element['animate'];
+    const { transaction, done, container } = await setup();
+    const el = container.querySelector('.worldline-shift') as HTMLElement;
+    const canvas = graphics.instances[0].canvas;
+    await act(async () => { transaction.accept('request', 'beta', 'success'); });
+    await settle(14000);
+    expect(done).toHaveBeenCalledOnce();
+    expect(calls.some(c => c.target === el && c.frames.some(f => f.opacity === 0))).toBe(true);
+    expect(calls.filter(c => c.target === canvas)).toHaveLength(0);
+    delete (Element.prototype as { animate?: unknown }).animate;
+  });
+
+  it('whatever a show leaves on the shared canvas is cleared before the next one', async () => {
+    await warmStage();
+    const lease = acquireShiftStage()!;
+    document.body.append(lease.canvas);
+    const leftover = { cancel: vi.fn() };
+    Object.assign(lease.canvas, { getAnimations: () => [leftover] });
+    lease.canvas.style.filter = 'brightness(.42)';
+    lease.release();
+    expect(leftover.cancel).toHaveBeenCalledOnce();
+    expect(lease.canvas.getAttribute('style')).toBeNull();
+    expect(lease.canvas.isConnected).toBe(false);
+    expect(acquireShiftStage()?.canvas).toBe(lease.canvas);
+  });
+
   it('commits at final frame lock before engine end, then ignores context loss after publication', async () => {
     await warmStage();
     const { transaction, commit, send, container, done } = await setup();

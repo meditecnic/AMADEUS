@@ -6,15 +6,11 @@
 }
 .worldline-shift[data-renderer='webgl2'], .worldline-shift[data-renderer='pending'] { background: #0a0908; }
 .shift-fallback { display: grid; justify-items: center; gap: 22px; }
-/* The stage is sized to its 16:9 picture so the letterbox edges can be feathered into the surround. */
+/* The stage is sized to its 16:9 picture (as object-fit: contain would show it) on the engine's own surround colour. */
 .shift-canvas {
   position: absolute; inset: 0; margin: auto; display: block;
   width: min(100cqw, 100cqh * 16 / 9); height: auto; aspect-ratio: 16 / 9;
   opacity: 0; transition: opacity .38s ease-out;
-  -webkit-mask-image: linear-gradient(90deg, transparent, #000 2.4%, #000 97.6%, transparent), linear-gradient(transparent, #000 2.4%, #000 97.6%, transparent);
-  -webkit-mask-composite: source-in;
-  mask-image: linear-gradient(90deg, transparent, #000 2.4%, #000 97.6%, transparent), linear-gradient(transparent, #000 2.4%, #000 97.6%, transparent);
-  mask-composite: intersect;
 }
 .worldline-shift[data-started][data-renderer='webgl2'] .shift-canvas { opacity: 1; }
 .worldline-shift[data-renderer='css'] .shift-canvas { display: none; }
