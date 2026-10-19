@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { WorldlineShift, SHIFT_TIMING } from './WorldlineShift';
+import { WorldlineShift, SHIFT_TIMING, SKIP_HINT_INTROS, SKIP_HINT_STORE } from './WorldlineShift';
 import { ShiftTransaction } from './shiftTransaction';
 import { acquireShiftStage, prewarmShiftStage, resetShiftStageForTests, shiftStageReady } from './shiftStage';
 import { StrictMode } from 'react';
@@ -348,5 +348,86 @@ describe('worldline shift presentation', () => {
     await settle(SHIFT_TIMING.reducedHold + 10);
     expect(done).toHaveBeenCalledOnce();
     expect(shiftStageReady()).toBe(true);
+  });
+
+  it('the GPU show runs without captions; a wait at the gate is captioned only once it lasts', async () => {
+    localStorage.setItem(SKIP_HINT_STORE, String(SKIP_HINT_INTROS));
+    await warmStage();
+    const { transaction, container } = await setup();
+    const el = container.querySelector('.worldline-shift') as HTMLElement;
+    await settle(6000);
+    expect(el.dataset.state).toBe('running');
+    expect(el.dataset.caption).toBeUndefined();
+    for (let i = 0; i < 40 && el.dataset.state !== 'waiting'; i++) await settle(16);
+    expect(el.dataset.state).toBe('waiting');
+    // Announced, but not yet drawn over the picture.
+    expect(screen.getByText('SYNC · 等待目标世界线确认')).toBeTruthy();
+    expect(el.dataset.caption).toBeUndefined();
+    await settle(SHIFT_TIMING.captionDelay - 60);
+    expect(el.dataset.caption).toBeUndefined();
+    await settle(80);
+    expect(el.dataset.caption).toBe('');
+    await act(async () => { transaction.accept('request', 'beta', 'success'); });
+    await settle(40);
+    expect(el.dataset.state).not.toBe('waiting');
+    expect(el.dataset.caption).toBeUndefined();
+  });
+
+  it('a short wait at the gate never flashes a caption; a failure is captioned at once', async () => {
+    localStorage.setItem(SKIP_HINT_STORE, String(SKIP_HINT_INTROS));
+    await warmStage();
+    const { transaction, container } = await setup();
+    const el = container.querySelector('.worldline-shift') as HTMLElement;
+    await settle(6400);
+    expect(el.dataset.state).toBe('waiting');
+    await settle(SHIFT_TIMING.captionDelay - 200);
+    await act(async () => { transaction.accept('request', 'beta', 'fail'); });
+    expect(el.dataset.state).toBe('failed');
+    expect(el.dataset.caption).toBe('');
+    expect(screen.getByText(/跃迁失败/)).toBeTruthy();
+  });
+
+  it('the skip hint stays out of the picture until the pointer or the keyboard is used', async () => {
+    localStorage.setItem(SKIP_HINT_STORE, String(SKIP_HINT_INTROS));
+    await warmStage();
+    const { container, commit } = await setup();
+    const el = container.querySelector('.worldline-shift') as HTMLElement;
+    await settle(1500);
+    expect(el.dataset.hint).toBeUndefined();
+    // An overlay appearing under a still cursor is not a reach for it.
+    fireEvent.pointerMove(el, { clientX: 200, clientY: 120 });
+    expect(el.dataset.hint).toBeUndefined();
+    fireEvent.pointerMove(el, { clientX: 214, clientY: 126 });
+    expect(el.dataset.hint).toBe('');
+    await settle(SHIFT_TIMING.hintIdle - 50);
+    fireEvent.pointerMove(el, { clientX: 230, clientY: 130 });
+    await settle(SHIFT_TIMING.hintIdle - 50);
+    expect(el.dataset.hint).toBe('');
+    await settle(80);
+    expect(el.dataset.hint).toBeUndefined();
+    fireEvent.keyDown(window, { key: 'a' });
+    expect(el.dataset.hint).toBe('');
+    expect(el.dataset.dip).toBeUndefined();
+    expect(screen.getByRole('button', { name: /跳过/ }).textContent).toBe('Esc跳过');
+    expect(commit).not.toHaveBeenCalled();
+  });
+
+  it('the first shifts show the skip hint briefly by themselves, later ones do not', async () => {
+    localStorage.removeItem(SKIP_HINT_STORE);
+    const first = await setup('first');
+    const el = first.container.querySelector('.worldline-shift') as HTMLElement;
+    await settle(SHIFT_TIMING.hintIntro - 60);
+    expect(el.dataset.hint).toBeUndefined();
+    await settle(60);
+    expect(el.dataset.hint).toBe('');
+    expect(localStorage.getItem(SKIP_HINT_STORE)).toBe('1');
+    await settle(SHIFT_TIMING.hintIntroShow + 20);
+    expect(el.dataset.hint).toBeUndefined();
+    first.unmount();
+    localStorage.setItem(SKIP_HINT_STORE, String(SKIP_HINT_INTROS));
+    const later = await setup('later');
+    await settle(SHIFT_TIMING.hintIntro + SHIFT_TIMING.hintIntroShow);
+    expect(later.container.querySelector('.worldline-shift')!.hasAttribute('data-hint')).toBe(false);
+    expect(localStorage.getItem(SKIP_HINT_STORE)).toBe(String(SKIP_HINT_INTROS));
   });
 });

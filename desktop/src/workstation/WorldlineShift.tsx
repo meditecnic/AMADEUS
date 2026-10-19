@@ -30,7 +30,24 @@ export const SHIFT_TIMING = {
   failExit: 420,
   /** Reduced motion: a static beat on the result, no dissolve. */
   reducedHold: 400,
+  /** GPU show: the picture speaks for itself; a caption appears only once a wait has lasted this long. */
+  captionDelay: 700,
+  /** The skip hint shows on pointer/key activity and hides after this much idle time. */
+  hintIdle: 2000,
+  /** The first few shifts show the hint briefly by themselves. */
+  hintIntro: 900,
+  hintIntroShow: 1600,
 } as const;
+
+/** How many shifts have shown the skip hint by themselves (the first SKIP_HINT_INTROS do). */
+export const SKIP_HINT_STORE = 'amadeus_pc_shift_skip_hint';
+export const SKIP_HINT_INTROS = 3;
+const hintIntros = () => {
+  try { return Number(localStorage.getItem(SKIP_HINT_STORE)) || 0; } catch { return SKIP_HINT_INTROS; }
+};
+const countHintIntro = () => {
+  try { localStorage.setItem(SKIP_HINT_STORE, String(hintIntros() + 1)); } catch { /* the hint is best effort */ }
+};
 
 const fade = (el: Element, frames: Keyframe[], duration: number, easing: string) => {
   if (typeof el.animate === 'function') el.animate(frames, { duration, easing, fill: 'forwards' });
@@ -79,6 +96,35 @@ export function WorldlineShift({ transaction, onDone, onCovered }: {
     const forceFallback = import.meta.env.DEV && new URLSearchParams(window.location.search).get('force-fallback') === '1';
     const reading = el.querySelector<HTMLElement>('[data-shift-reading]')!;
     const status = el.querySelector<HTMLElement>('[data-shift-status]')!;
+
+    // Captions. The status line always carries the state for assistive tech; over the GPU picture it is
+    // shown only when there is something to say: a wait that has lasted, or a failure.
+    let captionTimer = 0;
+    const caption = (when: 'now' | 'delayed' | 'off') => {
+      if (when === 'delayed') {
+        if (captionTimer || 'caption' in el.dataset) return;
+        captionTimer = window.setTimeout(() => { captionTimer = 0; if (active) el.dataset.caption = ''; }, SHIFT_TIMING.captionDelay);
+        return;
+      }
+      window.clearTimeout(captionTimer);
+      captionTimer = 0;
+      if (when === 'now') el.dataset.caption = ''; else delete el.dataset.caption;
+    };
+    // The skip hint: out of the picture until the user reaches for the pointer or the keyboard.
+    let hintTimer = 0;
+    const hint = (ms: number) => {
+      if (!active || ending) return;
+      el.dataset.hint = '';
+      window.clearTimeout(hintTimer);
+      hintTimer = window.setTimeout(() => { hintTimer = 0; delete el.dataset.hint; }, ms);
+    };
+    let pointer: { x: number; y: number } | null = null;
+    const moved = (event: PointerEvent) => {
+      // The first event only places the pointer: an overlay appearing under a still cursor is not a reach for it.
+      const last = pointer;
+      pointer = { x: event.clientX, y: event.clientY };
+      if (last && Math.abs(event.clientX - last.x) + Math.abs(event.clientY - last.y) >= 3) hint(SHIFT_TIMING.hintIdle);
+    };
 
     const releaseGPU = (keep: boolean) => {
       observer?.disconnect();
@@ -131,6 +177,7 @@ export function WorldlineShift({ transaction, onDone, onCovered }: {
       onChange(snapshot) {
         if (!active) return;
         el.dataset.state = snapshot.waiting ? 'waiting' : snapshot.outcome === 'fail' ? 'failed' : snapshot.phase === 'ended' ? 'settled' : 'running';
+        caption(snapshot.outcome === 'fail' ? 'now' : snapshot.waiting ? 'delayed' : 'off');
         status.textContent = snapshot.waiting ? 'SYNC · 等待目标世界线确认'
           : snapshot.outcome === 'fail' ? '跃迁失败 · 已保留源世界线'
             : snapshot.phase === 'ended' ? '世界线已锁定' : '世界线跃迁中';
@@ -211,6 +258,7 @@ export function WorldlineShift({ transaction, onDone, onCovered }: {
       // Cold start: the overlay is already up and the page stays responsive while the stage
       // compiles; bounded, then the same run continues in CSS.
       el.dataset.boot = 'warming';
+      caption('delayed');
       later(() => begin(false, 'warming'), SHIFT_TIMING.coldWait);
       void prewarmShiftStage({ urgent: true }).then(() => {
         if (!active || started) return;
@@ -245,12 +293,17 @@ export function WorldlineShift({ transaction, onDone, onCovered }: {
     };
     fallback.current = () => useCSS('reduced-motion');
     const key = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return;
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) {
+        hint(SHIFT_TIMING.hintIdle);
+        return;
+      }
       event.preventDefault();
       event.stopImmediatePropagation();
       skip.current();
     };
     window.addEventListener('keydown', key, true);
+    el.addEventListener('pointermove', moved);
+    if (hintIntros() < SKIP_HINT_INTROS) later(() => { countHintIntro(); hint(SHIFT_TIMING.hintIntroShow); }, SHIFT_TIMING.hintIntro);
     el.dataset.renderer = 'pending';
     // StrictMode's discarded setup is cleaned up before this frame, so it never takes the stage.
     raf = requestAnimationFrame(boot);
@@ -262,7 +315,10 @@ export function WorldlineShift({ transaction, onDone, onCovered }: {
       controller.dispose();
       releaseGPU(true);
       timers.forEach(id => window.clearTimeout(id));
+      window.clearTimeout(captionTimer);
+      window.clearTimeout(hintTimer);
       window.removeEventListener('keydown', key, true);
+      el.removeEventListener('pointermove', moved);
       skip.current = () => {};
       fallback.current = () => {};
     };
@@ -277,7 +333,8 @@ export function WorldlineShift({ transaction, onDone, onCovered }: {
       <span className="shift-sr" data-shift-reading aria-hidden="true">{DIVERGENCE[transaction.from]}</span>
       <div className="shift-veil" aria-hidden="true" />
       <p className="shift-status" data-shift-status>SYNC · 等待目标世界线确认</p>
-      <button type="button" className="shift-skip" onClick={event => { event.stopPropagation(); skip.current(); }}>点击或 Esc 跳过</button>
+      <button type="button" className="shift-skip" aria-label="跳过跃迁（Esc 或点击画面）"
+        onClick={event => { event.stopPropagation(); skip.current(); }}><kbd>Esc</kbd>跳过</button>
     </div>
   );
 }
