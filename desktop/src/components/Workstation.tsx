@@ -36,6 +36,7 @@ import { DIVERGENCE, Nixie, WORLDLINE_NAME, useTunedValue } from '../workstation
 import { SoundChannel, SystemMenu, WorldlinePanel, type MenuSection } from '../workstation/SystemMenu';
 import { WorldlineShift } from '../workstation/WorldlineShift';
 import { scheduleShiftPrewarm } from '../workstation/shiftStage';
+import { rememberWorkstationFonts } from '../workstation/fontWarmup';
 import { ShiftTransaction } from '../workstation/shiftTransaction';
 import { ConfirmDialog } from '../workstation/ConfirmDialog';
 import { ConnectionCheckPanel, chatCheckMessage, requestChatCheck, type ChatCheckState } from '../workstation/ConnectionCheck';
@@ -271,8 +272,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
     // The shift stage warms while the menu is read, never inside the click that starts a shift.
     scheduleShiftPrewarm(0);
   }, []);
-  // ...and once after the entrance, in idle time.
-  useEffect(() => scheduleShiftPrewarm(3000), []);
+  // ...and once the entrance has settled, in idle time (never on top of it).
+  useEffect(() => {
+    if (entering) return undefined;
+    const cancelPrewarm = scheduleShiftPrewarm(1500);
+    // The faces this screen used are loaded on the login terminal next time.
+    const fonts = window.setTimeout(rememberWorkstationFonts, 4000);
+    return () => { cancelPrewarm(); window.clearTimeout(fonts); };
+  }, [entering]);
   const closeMenu = useCallback(() => setIsSettingsOpen(false), []);
   /** Lands on the connections page with focus on either the key field or the first usable other connection. */
   const openConnectionsAt = useCallback((target: 'key' | 'list') => {
