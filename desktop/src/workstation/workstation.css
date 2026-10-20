@@ -245,11 +245,12 @@
 /* Both states keep a fixed width and the column clips them, so a width change never reflows titles or slides the rail nodes. */
 .ws2 .grid-history { display: flex; flex-direction: column; height: 100%; width: 256px; box-sizing: border-box; min-width: 0; transition: none; padding: 6px 12px 16px 16px; background: none; border: 0; box-shadow: none; }
 .ws2 .grid-history.collapsed { width: 60px; padding: 6px 0; align-items: center; }
-.ws2 .grid-history:not(.collapsed) > :is(.conversation-search-wrap, .history-sidebar-footer) { animation: ws2-side-in .3s cubic-bezier(.2, .7, .2, 1) .04s backwards; }
-.ws2 .grid-history:not(.collapsed) .history-sidebar-footer { animation-delay: .16s; }
-.ws2 .grid-history:not(.collapsed) .history-session-list::before { transform-origin: top; animation: ws2-spine .42s cubic-bezier(.3, .7, .2, 1) backwards; }
-.ws2 .grid-history:not(.collapsed) .conversation-item::before { animation: ws2-node-in .26s ease-out calc(40ms + min(var(--i, 0), 12) * 24ms) backwards; }
-.ws2 .grid-history:not(.collapsed) :is(.conversation-select, .conversation-actions) { animation: ws2-side-in .32s cubic-bezier(.2, .7, .2, 1) calc(70ms + min(var(--i, 0), 12) * 24ms) backwards; }
+/* Spine first, then nodes and rows in a sibling cascade capped at eight steps, so a long list lands promptly. */
+.ws2 .grid-history:not(.collapsed) > :is(.conversation-search-wrap, .history-sidebar-footer) { animation: ws2-side-in var(--dur-panel) var(--ease-main) calc(var(--dur-instant) * .66) backwards; }
+.ws2 .grid-history:not(.collapsed) .history-sidebar-footer { animation-delay: calc(var(--dur-instant) * 2.66); }
+.ws2 .grid-history:not(.collapsed) .history-session-list::before { transform-origin: top; animation: ws2-spine var(--dur-page) var(--ease-sg) backwards; }
+.ws2 .grid-history:not(.collapsed) .conversation-item::before { animation: ws2-node-in var(--dur-base) var(--ease-main) calc(var(--dur-instant) * (.66 + .5 * min(var(--i, 0), 8))) backwards; }
+.ws2 .grid-history:not(.collapsed) :is(.conversation-select, .conversation-actions) { animation: ws2-side-in var(--dur-base) var(--ease-main) calc(var(--dur-instant) * (1.16 + .5 * min(var(--i, 0), 8))) backwards; }
 .ws2 .history-sidebar-icon:not(.add) { animation: ws2-node-in .26s ease-out calc(90ms + min(var(--i, 0), 8) * 30ms) backwards; }
 @keyframes ws2-side-in { from { opacity: 0; transform: translateX(-10px); } }
 @keyframes ws2-node-in { from { opacity: 0; transform: scale(.2); } }
@@ -425,7 +426,23 @@
 .ws2-picker-pop {
   position: absolute; left: 0; bottom: calc(100% + 10px); z-index: 30; width: 320px; max-height: min(420px, 60vh); display: flex; flex-direction: column;
   padding: 8px; border: 1px solid var(--ws-line-2); border-radius: 0; background: var(--ws-panel); backdrop-filter: blur(18px);
-  box-shadow: var(--plate-bevel), 0 -18px 50px color-mix(in srgb, var(--shadow-tone) 50%, transparent); animation: ws2-body-in calc(var(--dur-sg-base) * .7) var(--ease-compat-out);
+  box-shadow: var(--plate-bevel), 0 -18px 50px color-mix(in srgb, var(--shadow-tone) 50%, transparent);
+  transform-origin: 0 100%; animation: ws2-pick-in var(--dur-base) backwards;
+}
+/* Two stages in one timeline: rise to a small peak, then settle on --ease-main (SG lands clean, β's curve
+ * leaves its restrained end overshoot). Exit is shorter and inert; the choice has already been applied. */
+@keyframes ws2-pick-in {
+  0% { opacity: 0; transform: translateY(4px) scale(.95); animation-timing-function: var(--ease-ref-out); }
+  40% { opacity: 1; transform: translateY(-1px) scale(1.012); animation-timing-function: var(--ease-main); }
+  100% { opacity: 1; transform: none; }
+}
+.ws2-picker-pop.leaving { pointer-events: none; animation: ws2-pick-out var(--dur-quick) var(--ease-sg) forwards; }
+@keyframes ws2-pick-out { to { opacity: 0; transform: translateY(2px) scale(.97); } }
+/* Options follow the panel in a capped sibling cascade (index clamped in ModelPicker), only on opening. */
+.ws2-picker-pop.cascade .ws2-picker-list li { animation: ws2-pick-option var(--dur-quick) var(--ease-main) calc(var(--dur-instant) * (.5 + .4 * var(--i, 0))) backwards; }
+@keyframes ws2-pick-option { from { opacity: 0; transform: translateY(3px); } }
+@media (prefers-reduced-motion: reduce) {
+  .ws2-picker-pop, .ws2-picker-pop.leaving, .ws2-picker-pop.cascade .ws2-picker-list li { animation: none; }
 }
 .ws2-picker-search { flex: none; height: 34px; margin-bottom: 6px; padding: 0 10px; border: 0; border-bottom: 1px solid var(--ws-line-2); background: rgba(0, 0, 0, .25); font-size: 13px; color: var(--ws-ink); outline: none; }
 .ws2-picker-search:focus { border-bottom-color: var(--ws-accent); }
@@ -445,12 +462,28 @@
 .ws2-picker-manage:hover { background: rgba(var(--ws-accent-rgb), .06); }
 
 /* dialogs (rename / delete) */
-.ws2-dialog-scrim { position: absolute; inset: 0; z-index: 70; display: grid; place-items: center; background: rgba(0, 0, 0, .5); backdrop-filter: blur(3px); animation: ws2-fade-in .14s ease-out; }
+.ws2-dialog-scrim { position: absolute; inset: 0; z-index: 70; display: grid; place-items: center; background: rgba(0, 0, 0, .5); backdrop-filter: blur(3px); animation: ws2-scrim-in var(--dur-quick) var(--ease-sg) backwards; }
 .ws2-dialog {
-  width: min(440px, calc(100% - 48px)); padding: 24px 26px 20px; border: 1px solid var(--ws-line-2); border-radius: 0;
-  background: var(--ws-panel); backdrop-filter: blur(18px); box-shadow: var(--plate-bevel), inset 0 2px 0 var(--ws-accent), 0 30px 80px color-mix(in srgb, var(--shadow-tone) 60%, transparent); animation: ws2-body-in .18s ease-out;
+  position: relative; width: min(440px, calc(100% - 48px)); padding: 24px 26px 20px; border: 1px solid var(--ws-line-2); border-radius: 0; outline: none;
+  background: var(--ws-panel); backdrop-filter: blur(18px); box-shadow: var(--plate-bevel), inset 0 2px 0 var(--ws-accent), 0 30px 80px color-mix(in srgb, var(--shadow-tone) 60%, transparent); animation: ws2-dialog-in var(--dur-base) var(--ease-main) backwards;
 }
-.ws2-dialog:has(.ws2-dialog-confirm.danger) { box-shadow: var(--plate-bevel), inset 0 2px 0 var(--ws-bad), 0 30px 80px color-mix(in srgb, var(--shadow-tone) 60%, transparent); }
+@keyframes ws2-dialog-in { from { opacity: 0; transform: translateY(10px) scale(.96); } }
+/* The danger blade is cut in from the left edge once the plate has landed; the double-cut confirm keeps its geometry. */
+.ws2-dialog:has(.ws2-dialog-confirm.danger) { box-shadow: var(--plate-bevel), 0 30px 80px color-mix(in srgb, var(--shadow-tone) 60%, transparent); }
+.ws2-dialog:has(.ws2-dialog-confirm.danger)::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px; background: var(--ws-bad); pointer-events: none;
+  transform-origin: 0 50%; animation: ws2-blade var(--dur-panel) var(--ease-sg) calc(var(--dur-base) * .5) backwards;
+}
+@keyframes ws2-blade { from { transform: scaleX(0); } }
+/* Exit (≈0.6× enter) plays only on the committed, inert ghost. */
+.ws2-dialog-scrim.leaving { pointer-events: none; animation: ws2-fade-out var(--dur-quick) var(--ease-sg) forwards; }
+.ws2-dialog-scrim.leaving .ws2-dialog { animation: ws2-dialog-out var(--dur-quick) var(--ease-sg) forwards; }
+.ws2-dialog-scrim.leaving .ws2-dialog::before { animation: none; }
+@keyframes ws2-dialog-out { to { opacity: 0; transform: scale(.97); } }
+@keyframes ws2-fade-out { to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .ws2-dialog, .ws2-dialog::before, .ws2-dialog-scrim.leaving .ws2-dialog { animation: none; }
+}
 .ws2-dialog h3 { margin: 0 0 12px; font-family: var(--ws-serif-cjk); font-size: 20px; font-weight: 400; letter-spacing: .1em; color: var(--ws-ink); }
 .ws2-dialog-body p { margin: 0 0 6px; font-family: var(--ws-read); font-size: 14px; line-height: 1.75; color: var(--ws-ink-2); }
 .ws2-dialog-body .ws2-dialog-hint { font-size: 12px; color: var(--ws-ink-3); }
@@ -623,10 +656,11 @@
   background-size: 10px 1px, 1px 10px, 10px 1px, 1px 10px, 10px 1px, 1px 10px, 10px 1px, 1px 10px;
   background-position: 0 0, 0 0, 100% 0, 100% 0, 0 100%, 0 100%, 100% 100%, 100% 100%;
   box-shadow: var(--plate-bevel), inset 0 -1px 0 var(--ws-line-2);
-  transition: box-shadow .2s;
+  transition: box-shadow var(--dur-instant) var(--ease-sg);
 }
-/* Focus is drawn once, by the frame and inside it: the crop marks close into a hairline and the floor takes the accent. */
-.ws2-composer:focus-within { --mark: var(--ws-ink-2); box-shadow: inset 0 -1px 0 var(--ws-accent), inset 0 0 0 1px rgba(var(--ws-accent-rgb), .6); }
+/* Focus is drawn once, inside the square frame: a 1px background offset at the edge, then a 1px accent line
+ * (the crop marks close into it). Nothing is drawn outside, so no edge of the column can clip it. */
+.ws2-composer:focus-within { --mark: transparent; box-shadow: inset 0 0 0 1px var(--ws-bg), inset 0 0 0 2px var(--ws-accent); }
 .ws2 .ws2-composer textarea.chat-input-field {
   display: block; box-sizing: border-box; width: 100%; resize: none; border: 0; outline: none; background: none; box-shadow: none;
   padding: 12px 16px 4px; font-family: var(--ws-sans); font-size: 15px; line-height: 1.6; color: var(--ws-ink); caret-color: var(--ws-accent);

@@ -41,6 +41,8 @@ import { scheduleShiftPrewarm } from '../workstation/shiftStage';
 import { rememberWorkstationFonts } from '../workstation/fontWarmup';
 import { ShiftTransaction } from '../workstation/shiftTransaction';
 import { ConfirmDialog } from '../workstation/ConfirmDialog';
+import { sessionDialogFallback } from '../workstation/focusHandoff';
+import { useExitPresence } from '../workstation/useExitPresence';
 import { ConnectionCheckPanel, chatCheckMessage, requestChatCheck, type ChatCheckState } from '../workstation/ConnectionCheck';
 import { ConnectionList } from '../workstation/ConnectionList';
 import { SendSignal } from '../workstation/SendSignal';
@@ -170,6 +172,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deletedRefreshWorldline, setDeletedRefreshWorldline] = useState<string | null>(null);
   const [renameTarget, setRenameTarget] = useState<ConversationSummary | null>(null);
+  // Session dialogs commit first; these only keep a closing dialog on screen for its shorter exit.
+  const deleteDialog = useExitPresence(deleteTarget, reducedMotion);
+  const renameDialog = useExitPresence(renameTarget, reducedMotion);
   const [renameValue, setRenameValue] = useState('');
   const [renameBusy, setRenameBusy] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
@@ -278,6 +283,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const shiftSourceMessages = useRef<Message[]>([]);
   useEffect(() => () => { shiftRef.current?.dispose(); shiftRef.current = null; }, []);
   const systemButtonRef = useRef<HTMLButtonElement>(null);
+  const sideToggleRef = useRef<HTMLButtonElement>(null);
   const openMenu = useCallback((section?: MenuSection) => {
     if (section) setMenuSection(section);
     setIsSettingsOpen(true);
@@ -1406,6 +1412,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
         setActiveConversationId(null);
         resetToDraft?.();
         setDraftReconnectScope(`${sessionId}:${worldline}:draft`);
+        // The blank draft reconnects before it takes input; the keyboard follows to the composer once it can.
+        composerHandoffUntil.current = Date.now() + 3000;
       }
       const refresh = loadConversations();
       const refreshRequest = conversationRequestRef.current;
@@ -1778,6 +1786,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       <header className="ws2-top">
         <button
           type="button"
+          ref={sideToggleRef}
           className="ws2-icon-btn"
           onClick={() => setIsHistoryCollapsed((v) => !v)}
           aria-label={isHistoryCollapsed ? '展开会话列表' : '收起会话列表'}
@@ -1869,7 +1878,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
           searchQuery={conversationSearch}
           onSearchChange={setConversationSearch}
           onSelect={(conversation) => {
-            if (window.innerWidth < 1240) setIsHistoryCollapsed(true);
+            if (window.innerWidth < 1240) {
+              setIsHistoryCollapsed(true);
+              // The drawer's rows leave with it; the keyboard returns to the control that opened it.
+              sideToggleRef.current?.focus({ preventScroll: true });
+            }
             void selectConversation(conversation);
           }}
           onNew={() => { void createConversation(defaultIdentityMode); }}
@@ -2432,11 +2445,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
         </ConfirmDialog>
       )}
 
-      {renameTarget && (
+      {renameDialog.shown && (
         <ConfirmDialog
           title="重命名会话"
           confirmLabel="保存"
           focusCancel={false}
+          leaving={renameDialog.leaving}
+          onExited={renameDialog.done}
+          returnFocus={() => sessionDialogFallback(wsRootRef.current, renameDialog.shown?.id ?? '', activeConversationId === null)}
           busy={renameBusy}
           error={renameError}
           onConfirm={() => { void confirmRenameConversation(); }}
@@ -2455,17 +2471,20 @@ export const Workstation: React.FC<WorkstationProps> = ({
         </ConfirmDialog>
       )}
 
-      {deleteTarget && (
+      {deleteDialog.shown && (
         <ConfirmDialog
           title="删除这段对话？"
           confirmLabel="删除会话"
           danger
+          leaving={deleteDialog.leaving}
+          onExited={deleteDialog.done}
+          returnFocus={() => sessionDialogFallback(wsRootRef.current, deleteDialog.shown?.id ?? '', activeConversationId === null)}
           busy={deleteBusy}
           error={deleteError}
           onConfirm={() => { void confirmDeleteConversation(); }}
           onCancel={() => { setDeleteTarget(null); setDeleteError(null); }}
         >
-          <p>「{deleteTarget.title}」的聊天记录将被删除，已形成的长期记忆仍会保留。</p>
+          <p>「{deleteDialog.shown.title}」的聊天记录将被删除，已形成的长期记忆仍会保留。</p>
           <p className="ws2-dialog-hint">要同时遗忘这个会话的记忆，请改用「清空聊天记录」。</p>
         </ConfirmDialog>
       )}

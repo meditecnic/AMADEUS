@@ -201,6 +201,7 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
             ) : visible.map((conversation, index) => (
               <article
                 key={conversation.id}
+                data-conversation-id={conversation.id}
                 style={{ '--i': index } as React.CSSProperties}
                 className={`conversation-item ${conversation.id === activeId ? 'active' : ''}`}
               >

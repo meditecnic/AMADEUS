@@ -1,4 +1,9 @@
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useReducedMotion } from '../design-system/useReducedMotion';
+import { useExitPresence } from './useExitPresence';
+
+/** Options past this index enter together, so a long catalog finishes its cascade promptly. */
+export const PICKER_CASCADE_CAP = 8;
 
 export interface PickerOption { value: string; label: string; disabled?: boolean; title?: string }
 export interface PickerSource { id: string; name: string; model?: string; mark?: ReactNode; needsKey?: boolean }
@@ -22,6 +27,11 @@ export function ModelPicker({
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
+  // Typing filters in place; only the opening plays the option cascade.
+  const [typed, setTyped] = useState(false);
+  const reducedMotion = useReducedMotion();
+  // Selection and Esc commit at once; the panel only plays a shorter, inert exit after them.
+  const presence = useExitPresence(open ? true : null, reducedMotion);
   const [active, setActive] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -34,8 +44,12 @@ export function ModelPicker({
 
   const close = (focusTrigger = true) => {
     setOpen(false);
-    setQuery('');
     if (focusTrigger) triggerRef.current?.focus({ preventScroll: true });
+  };
+  const openPicker = () => {
+    setQuery('');
+    setTyped(false);
+    setOpen(true);
   };
   useEffect(() => {
     if (!open) return;
@@ -77,28 +91,35 @@ export function ModelPicker({
         aria-controls={open ? listId : undefined}
         disabled={disabled}
         title={title}
-        onClick={() => (open ? close() : setOpen(true))}
+        onClick={() => (open ? close() : openPicker())}
       >
         {/* Trigger shows the bare model id; lifecycle/evaluation notes stay in the list and tooltip. */}
         <span className="name">{current?.value ?? (value || '选择模型')}</span>
         <span className="caret" aria-hidden="true">▾</span>
       </button>
-      {open && (
-        <div className="ws2-picker-pop" onKeyDown={onKeyDown}>
+      {presence.shown && (
+        <div
+          className={`ws2-picker-pop${presence.leaving ? ' leaving' : ''}${typed ? '' : ' cascade'}`}
+          onKeyDown={onKeyDown}
+          inert={presence.leaving}
+          aria-hidden={presence.leaving || undefined}
+          onAnimationEnd={(e) => { if (presence.leaving && e.animationName === 'ws2-pick-out') presence.done(); }}
+        >
           <input
             ref={searchRef}
             className="ws2-picker-search"
             aria-label="搜索模型"
             placeholder="搜索模型或连接"
             value={query}
-            onChange={(e) => { setQuery(e.target.value); setActive(0); }}
+            onChange={(e) => { setQuery(e.target.value); setTyped(true); setActive(0); }}
           />
           <div className="ws2-picker-group">{sourceMark}{sourceName}</div>
-          <ul id={listId} role="listbox" aria-label="模型" className="ws2-picker-list" tabIndex={-1}>
+          <ul id={presence.leaving ? undefined : listId} role="listbox" aria-label="模型" className="ws2-picker-list" tabIndex={-1}>
             {shown.length === 0 && <li className="ws2-picker-empty" role="presentation">没有匹配的模型</li>}
             {shown.map((option, i) => (
               <li
                 key={option.value}
+                style={{ '--i': Math.min(i, PICKER_CASCADE_CAP) } as CSSProperties}
                 role="option"
                 aria-selected={option.value === value}
                 aria-disabled={option.disabled ? 'true' : undefined}
