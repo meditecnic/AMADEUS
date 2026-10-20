@@ -46,7 +46,7 @@ import { useExitPresence } from '../workstation/useExitPresence';
 import { ConnectionCheckPanel, chatCheckMessage, requestChatCheck, type ChatCheckState } from '../workstation/ConnectionCheck';
 import { ConnectionList } from '../workstation/ConnectionList';
 import { SendSignal } from '../workstation/SendSignal';
-import { PresenceIndicator, PRESENCE_LABELS } from '../workstation/PresenceIndicator';
+import { PresenceIndicator, ThinkingMark, PRESENCE_LABELS } from '../workstation/PresenceIndicator';
 import { VoiceScope } from '../workstation/VoiceScope';
 import { ForgetConversationModal } from './ForgetConversationModal';
 import { MemorySpace } from '../memory-space/MemorySpace';
@@ -1987,7 +1987,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
                             frameCount={20}
                             fps={15}
                             loop={true}
-                          /> : <span className="ws2-thinking-ring" aria-hidden="true" />}
+                            autoplay={!reducedMotion}
+                          /> : <ThinkingMark />}
                           <span className="ws2-thinking-label" data-testid="activity-operation-label">{operationLabel}</span>
                         </div>
                       )}

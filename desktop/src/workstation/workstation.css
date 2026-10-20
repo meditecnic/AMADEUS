@@ -125,7 +125,8 @@
 
 .ws2-memory-btn { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px 0 6px; border-radius: 0; transition: background .2s, color .2s; }
 .ws2-memory-btn:hover { background: rgba(255, 255, 255, .05); }
-.ws2-engram { color: var(--ws-ink-2); animation: ws2-spin 18s linear infinite; }
+/* Static mark: the workstation keeps no decorative idle loops. */
+.ws2-engram { color: var(--ws-ink-2); }
 .ws2-memory-zh { font-size: 13px; letter-spacing: .1em; }
 .ws2-memory-en { font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .2em; color: var(--ws-ink-3); }
 @keyframes ws2-spin { to { transform: rotate(360deg); } }
@@ -606,14 +607,32 @@
 @media (prefers-reduced-motion: reduce) {
   .ws2-line.ws2-arrive, .ws2 .bilingual-message .s.arrive { animation: none; }
 }
-.ws2 .translation-pending { font-style: normal; font-size: 12px; letter-spacing: .12em; color: var(--ws-ink-3); animation: ws2-pulse 1.2s ease-in-out infinite; }
+/* Truthful but still: a genuinely late translation is a label, not another moving region beside the arriving sentence. */
+.ws2 .translation-pending { font-style: normal; font-size: 12px; letter-spacing: .12em; color: var(--ws-ink-3); }
 .ws2 .translation-scope { margin: 0 0 6px; font-family: var(--ws-mono); font-size: 10px; letter-spacing: .2em; color: var(--ws-ink-3); }
 .ws2 .translation-degraded { margin: 8px 0 0; font-size: 12px; color: var(--ws-ink-3); }
 @keyframes ws2-pulse { 50% { opacity: .25; } }
 
-.ws2-thinking { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
-/* Self-made stand-in for the original thinking ring (asset pack). */
-.ws2-thinking-ring { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid rgba(var(--ws-accent-rgb), .22); border-top-color: var(--ws-accent); animation: ws2-spin .9s linear infinite; }
+.ws2-thinking { display: flex; align-items: center; gap: 10px; margin-top: 8px; animation: ws2-status-in var(--dur-base) var(--ease-main) backwards; }
+@keyframes ws2-status-in { from { opacity: 0; } }
+/* Self-made stand-in for the asset-pack spinner, loops only while she is actually thinking.
+   SG: three stopwatch ticks stepping, no glow. β: three filament dots breathing on slightly uneven voltage. */
+.ws2-thinking-mark { display: inline-flex; align-items: center; gap: 4px; height: 22px; }
+.ws2-thinking-mark b { display: block; width: 7px; height: 3px; background: var(--ws-accent); opacity: .16; animation: ws2-tick 1.2s steps(1, end) infinite; }
+.ws2-thinking-mark b:nth-child(2) { animation-delay: .4s; }
+.ws2-thinking-mark b:nth-child(3) { animation-delay: .8s; }
+.ws2[data-wl='beta'] .ws2-thinking-mark b { width: 5px; height: 5px; border-radius: 50%; box-shadow: 0 0 6px rgba(var(--ws-accent-rgb), .7); opacity: .38; animation: ws2-filament 2.47s cubic-bezier(.45, 0, .55, 1) infinite; }
+.ws2[data-wl='beta'] .ws2-thinking-mark b:nth-child(2) { animation-duration: 2.61s; animation-delay: .19s; }
+.ws2[data-wl='beta'] .ws2-thinking-mark b:nth-child(3) { animation-duration: 2.38s; animation-delay: .41s; }
+@keyframes ws2-tick { 0% { opacity: 1; } 33.33%, 100% { opacity: .16; } }
+@keyframes ws2-filament {
+  0% { opacity: .38; transform: translateY(0); } 17% { opacity: .86; } 21% { opacity: .74; }
+  44% { opacity: 1; transform: translateY(-1.5px); } 58% { opacity: .9; } 66% { opacity: .97; } 100% { opacity: .38; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ws2-thinking, .ws2-thinking-mark b { animation: none !important; }
+  .ws2-thinking-mark b, .ws2[data-wl='beta'] .ws2-thinking-mark b { opacity: .55; }
+}
 .ws2-thinking-label { font-family: var(--ws-mono); font-size: 11px; letter-spacing: .16em; color: var(--ws-accent); }
 .ws2-voicing { margin-top: 8px; font-size: 12px; letter-spacing: .1em; color: var(--ws-ink-3); }
 .ws2-actions { display: flex; gap: 4px; margin-top: 8px; }
@@ -783,19 +802,35 @@
   .ws2-chapter-draft :is(path, circle) { stroke-dashoffset: 0; }
   .ws2-chapter-kana, .ws2-chapter-en { opacity: 1; }
 }
+/* Stage dot-matrix: still while idle, flows while she thinks, breathes in brightness while she speaks.
+   The field is a static, masked container; only its pattern layer translates (one 12px-periodic sheet,
+   so pausing never snaps) and only the container's opacity pulses, keeping both on the compositor.
+   Entrance uses --dur-panel; leaving any state falls back to the base rule's quicker exit. */
 .ws2-matrix {
-  position: absolute; left: 0; right: 0; top: var(--ws-head); bottom: 0; z-index: 0; pointer-events: none;
-  background-image: radial-gradient(circle, rgba(var(--ws-accent-rgb), .55) .7px, transparent 1.1px);
-  background-size: 12px 12px; opacity: .22;
+  position: absolute; left: 0; right: 0; top: var(--ws-head); bottom: 0; z-index: 0; pointer-events: none; overflow: hidden;
+  opacity: .22;
   mask-image: radial-gradient(70% 58% at 46% 34%, #000 0%, rgba(0, 0, 0, .5) 45%, transparent 78%);
-  transition: opacity .8s ease;
+  transition: opacity var(--dur-quick) var(--ease-sg);
 }
-.ws2-stage.presence-thinking .ws2-matrix { opacity: .55; animation: ws2-matrix-flow 2.4s linear infinite; }
-.ws2-stage.presence-speaking .ws2-matrix { opacity: .3; animation: ws2-matrix-pulse 1.6s ease-in-out infinite; }
+.ws2-matrix::before {
+  content: ''; position: absolute; left: 0; right: 0; top: 0; bottom: -48px;
+  background-image: radial-gradient(circle, rgba(var(--ws-accent-rgb), .55) .7px, transparent 1.1px);
+  background-size: 12px 12px;
+  animation: ws2-matrix-flow 3.2s linear infinite paused;
+}
+.ws2-stage:is(.presence-thinking, .presence-speaking) .ws2-matrix { transition-duration: var(--dur-panel); }
+.ws2-stage.presence-thinking .ws2-matrix { opacity: .5; }
+.ws2-stage.presence-thinking .ws2-matrix::before { animation-play-state: running; }
+.ws2-stage.presence-speaking .ws2-matrix { animation: ws2-matrix-pulse 2.2s cubic-bezier(.42, 0, .58, 1) infinite; }
+.ws2-stage.presence-connecting .ws2-matrix { opacity: .1; }
 .ws2-stage.presence-offline .ws2-matrix { opacity: .05; }
-@keyframes ws2-matrix-flow { to { background-position: 0 -48px; } }
-@keyframes ws2-matrix-pulse { 50% { opacity: .18; } }
-@media (prefers-reduced-motion: reduce) { .ws2-stage .ws2-matrix { animation: none !important; } }
+@keyframes ws2-matrix-flow { to { transform: translateY(-48px); } }
+/* Starts at the idle level so voicing → speaking lights up without a jump. */
+@keyframes ws2-matrix-pulse { 0%, 100% { opacity: .22; } 50% { opacity: .36; } }
+@media (prefers-reduced-motion: reduce) {
+  .ws2-stage .ws2-matrix, .ws2-stage .ws2-matrix::before { animation: none !important; }
+  .ws2-stage.presence-speaking .ws2-matrix { opacity: .3; }
+}
 .ws2 .avatar-viewer-container.avatar-stage { position: absolute; inset: 0; z-index: 1; overflow: visible; }
 .ws2 .avatar-stage .avatar-sprite-wrapper {
   position: absolute; left: 8px; bottom: 0; top: auto; right: auto; transform: none; margin: 0;
@@ -836,11 +871,40 @@
 .ws2-scope-stop i { width: 8px; height: 8px; background: var(--ws-accent); box-shadow: 0 0 6px var(--ws-accent); }
 .ws2-scope-stop:hover { background: rgba(var(--ws-accent-rgb), .12); }
 .ws2 .avatar-stage::before { content: ''; position: absolute; right: 0; bottom: 0; width: 70%; height: 34%; z-index: 2; pointer-events: none; background: radial-gradient(120% 100% at 100% 100%, rgba(0, 0, 0, .55), transparent 70%); }
+/* Presence: the label is business truth and swaps in the same frame; it only gets a short entrance and
+   leaves instantly. The lamp is static for thinking/speaking (the transcript and stage already move);
+   connecting/voicing are the only states where this small instrument carries the one loop.
+   SG: flat lamp, no glow, discrete ticks. β: a filament that warms when lit and keeps a brief afterglow. */
 .ws2-presence { display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; letter-spacing: .16em; color: var(--ws-ink-2); }
-.ws2-presence i { width: 5px; height: 5px; border-radius: 50%; background: var(--ws-ink-3); }
-.presence-thinking .ws2-presence i, .presence-voicing .ws2-presence i { background: var(--ws-accent); animation: ws2-pulse 1s ease-in-out infinite; }
-.presence-speaking .ws2-presence i { background: var(--ws-accent); box-shadow: 0 0 8px var(--ws-accent); }
-.presence-offline .ws2-presence i { background: var(--ws-bad); }
+.ws2-presence-label { animation: ws2-presence-in var(--dur-base) var(--ease-main) backwards; }
+@keyframes ws2-presence-in { from { opacity: .35; } }
+.ws2-presence i { flex: none; width: 5px; height: 5px; border-radius: 50%; background: var(--ws-ink-3); transition: background-color var(--dur-instant) var(--ease-sg); }
+.ws2-presence:is([data-presence='thinking'], [data-presence='speaking'], [data-presence='voicing']) i { background: var(--ws-accent); }
+.ws2-presence[data-presence='connecting'] i { background: transparent; box-shadow: inset 0 0 0 1px var(--ws-accent); }
+.ws2-presence[data-presence='offline'] i { background: var(--ws-bad); }
+.ws2-presence-ticks { display: inline-flex; align-items: center; gap: 3px; }
+.ws2-presence-ticks b { display: block; width: 5px; height: 2px; background: var(--ws-accent); opacity: .16; animation: ws2-tick 1.2s steps(1, end) infinite; }
+.ws2-presence-ticks b:nth-child(2) { animation-delay: .4s; }
+.ws2-presence-ticks b:nth-child(3) { animation-delay: .8s; }
+.ws2-presence[data-presence='voicing'] .ws2-presence-ticks b { animation-duration: 1.8s; }
+.ws2-presence[data-presence='voicing'] .ws2-presence-ticks b:nth-child(2) { animation-delay: .6s; }
+.ws2-presence[data-presence='voicing'] .ws2-presence-ticks b:nth-child(3) { animation-delay: 1.2s; }
+.ws2[data-wl='beta'] .ws2-presence-ticks { display: none; }
+/* β afterglow: the colour drops on --dur-quick, the glow tails off over --dur-base. */
+.ws2[data-wl='beta'] .ws2-presence i { transition: background-color var(--dur-quick) var(--ease-sg), box-shadow var(--dur-base) var(--ease-sg); }
+.ws2[data-wl='beta'] .ws2-presence:is([data-presence='thinking'], [data-presence='speaking'], [data-presence='voicing'], [data-presence='connecting']) i {
+  background: var(--ws-accent); box-shadow: 0 0 7px rgba(var(--ws-accent-rgb), .75);
+  transition: background-color var(--dur-instant) var(--ease-sg), box-shadow var(--dur-instant) var(--ease-sg);
+  animation: ws2-lamp-warm var(--dur-base) var(--ease-sg);
+}
+.ws2[data-wl='beta'] .ws2-presence:is([data-presence='connecting'], [data-presence='voicing']) i { animation: ws2-lamp-warm var(--dur-base) var(--ease-sg), ws2-lamp-breathe 2.5s cubic-bezier(.45, 0, .55, 1) infinite; }
+.ws2[data-wl='beta'] .ws2-presence[data-presence='voicing'] i { animation-duration: var(--dur-base), 2.1s; }
+@keyframes ws2-lamp-warm { from { filter: brightness(1.7); } }
+@keyframes ws2-lamp-breathe { 0%, 100% { opacity: .45; } 23% { opacity: .95; } 27% { opacity: .8; } 52% { opacity: 1; } 61% { opacity: .88; } }
+@media (prefers-reduced-motion: reduce) {
+  .ws2-presence-label, .ws2-presence-ticks b, .ws2 .ws2-presence i { animation: none !important; }
+  .ws2-presence-ticks b { opacity: .55; }
+}
 
 /* ---------- toasts ---------- */
 

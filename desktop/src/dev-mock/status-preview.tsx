@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { PresenceIndicator, PRESENCE_LABELS, type PresenceState } from '../workstation/PresenceIndicator';
+import { PresenceIndicator, PRESENCE_LABELS, ThinkingMark, type PresenceState } from '../workstation/PresenceIndicator';
 import '../design-system/motion.css';
 import '../design-system/tokens.css';
 import '../workstation/workstation.css';
@@ -16,9 +16,14 @@ function StatusPreview() {
         <button type="button" key={value} onClick={() => setState(value)} aria-pressed={state === value}>{PRESENCE_LABELS[value]}</button>)}
       <button type="button" onClick={() => setWorldline(line => line === 'sg' ? 'beta' : 'sg')}>SG / β</button>
     </div>
-    <section className={`presence-${state}`} style={{ marginTop: 32 }}>
-      <PresenceIndicator key={worldline} state={state} />
+    {/* Same stage classes and presenter as Workstation, at a fixed preview size. */}
+    <section className={`ws2-stage presence-${state}`} style={{ marginTop: 32, width: 520, height: 340, ['--ws-head' as string]: '0px' }}>
+      <div className="ws2-matrix" aria-hidden="true" />
+      <div className="ws2-plate">
+        <PresenceIndicator key={worldline} state={state} />
+      </div>
     </section>
+    {state === 'thinking' && <div className="ws2-thinking" style={{ marginTop: 16 }}><ThinkingMark /><span className="ws2-thinking-label">THINKING</span></div>}
   </main>;
 }
 

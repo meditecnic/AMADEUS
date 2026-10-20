@@ -36,8 +36,9 @@ arrays replace the base; `login` and `shift` merge individual fields.
 | `transport-close` | Ready after 400ms, then a real WS close (1012) after 3500ms; repeats after reconnect, independent of turn cancellation |
 
 For the silent status fixture, open `http://localhost:1420/__mock/status`.
-Its controls render the same `PresenceIndicator` used by Workstation, including
-speaking, connecting, thinking and offline, in SG/β. This route and its entry
+Its controls render the same `PresenceIndicator`, stage matrix classes and
+`ThinkingMark` used by Workstation, including speaking, voicing, connecting,
+thinking and offline, in SG/β. This route and its entry
 are dev-only. It neither loads Workstation nor changes playback/network state,
 and proves presentation only, never real TTS/audio playback. The cloud pass can
 extend that shared presenter and keep this fixture as its preview consumer.
