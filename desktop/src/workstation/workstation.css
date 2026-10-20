@@ -496,11 +496,28 @@
 .ws2-talk { grid-column: 2; grid-row: 2; position: relative; z-index: 2; min-height: 0; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 0 clamp(20px, 2.6vw, 40px) 20px; container-type: inline-size; }
 .ws2-talk > * { width: 100%; max-width: 720px; }
 .ws2-transcript-wrap { position: relative; flex: 1; min-height: 0; }
+/* Edge fades are an alpha mask over the real theme surface, never a painted band. Each edge feathers only
+ * while content actually continues past it (seven-stop non-linear ramp), and settles to zero at the ends. */
+@property --ws-fade-top { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --ws-fade-bottom { syntax: '<length>'; inherits: false; initial-value: 0px; }
 .ws2-transcript {
   box-sizing: border-box; height: 100%; overflow-y: auto; padding: 18px 12px 20px 0; scrollbar-width: thin; scrollbar-color: var(--ws-line-2) transparent; background: none;
-  /* Lines dissolve under the header instead of being cut by it. */
-  mask-image: linear-gradient(180deg, transparent 0, #000 34px, #000 calc(100% - 10px), transparent);
+  --ws-fade-top: 0px; --ws-fade-bottom: 0px;
+  mask-image: linear-gradient(180deg,
+    transparent 0, rgb(0 0 0 / .051) calc(var(--ws-fade-top) * .15), rgb(0 0 0 / .149) calc(var(--ws-fade-top) * .3),
+    rgb(0 0 0 / .302) calc(var(--ws-fade-top) * .45), rgb(0 0 0 / .502) calc(var(--ws-fade-top) * .6),
+    rgb(0 0 0 / .702) calc(var(--ws-fade-top) * .75), rgb(0 0 0 / .851) calc(var(--ws-fade-top) * .87), #000 var(--ws-fade-top),
+    #000 calc(100% - var(--ws-fade-bottom)), rgb(0 0 0 / .851) calc(100% - var(--ws-fade-bottom) * .87),
+    rgb(0 0 0 / .702) calc(100% - var(--ws-fade-bottom) * .75), rgb(0 0 0 / .502) calc(100% - var(--ws-fade-bottom) * .6),
+    rgb(0 0 0 / .302) calc(100% - var(--ws-fade-bottom) * .45), rgb(0 0 0 / .149) calc(100% - var(--ws-fade-bottom) * .3),
+    rgb(0 0 0 / .051) calc(100% - var(--ws-fade-bottom) * .15), transparent 100%);
+  transition: --ws-fade-top var(--dur-base) var(--ease-sg), --ws-fade-bottom var(--dur-base) var(--ease-sg);
 }
+/* Lines dissolve under the header once there is history above. */
+.ws2-transcript[data-scroll-overflow='true']:not([data-scroll-start='true']) { --ws-fade-top: 34px; }
+.ws2-transcript[data-scroll-overflow='true']:not([data-scroll-end='true']) { --ws-fade-bottom: 28px; }
+/* While the jump pill shows, the bottom band fades further so the pill never reads as a word inside a line. */
+.ws2-transcript-wrap:has(> .ws2-to-latest) > .ws2-transcript { --ws-fade-bottom: 64px; }
 .ws2-lines { display: flex; flex-direction: column; counter-reset: ws2-log; }
 .ws2-line { margin-bottom: 30px; max-width: 660px; }
 .ws2-line header { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
@@ -546,6 +563,16 @@
 .ws2 .bilingual-message .japanese-sub .s.speaking { color: var(--ws-ink); }
 .ws2 .bilingual-message:has(.s.speaking) .s:not(.speaking):not(.hot) { color: var(--ws-ink-2); transition: color .3s; }
 .ws2 .bilingual-message .japanese-sub:has(.s.speaking) .s:not(.speaking):not(.hot) { color: var(--ws-ink-3); }
+/* Arrival (live only, once): the whole line settles; inline sentences only sharpen in place, Japanese a beat
+ * ahead of the Chinese reading line. No per-sentence travel, no brightness play; themes differ by duration/easing. */
+.ws2-line.ws2-arrive { animation: ws2-line-in var(--dur-panel) var(--ease-main) backwards; }
+@keyframes ws2-line-in { from { opacity: 0; transform: translateY(6px); } }
+.ws2 .bilingual-message .s.arrive { animation: ws2-sentence-in var(--dur-base) var(--ease-sg) backwards; }
+.ws2 .bilingual-message .chinese-main .s.arrive { animation-delay: var(--dur-instant); }
+@keyframes ws2-sentence-in { from { opacity: 0; filter: blur(3px); } }
+@media (prefers-reduced-motion: reduce) {
+  .ws2-line.ws2-arrive, .ws2 .bilingual-message .s.arrive { animation: none; }
+}
 .ws2 .translation-pending { font-style: normal; font-size: 12px; letter-spacing: .12em; color: var(--ws-ink-3); animation: ws2-pulse 1.2s ease-in-out infinite; }
 .ws2 .translation-scope { margin: 0 0 6px; font-family: var(--ws-mono); font-size: 10px; letter-spacing: .2em; color: var(--ws-ink-3); }
 .ws2 .translation-degraded { margin: 8px 0 0; font-size: 12px; color: var(--ws-ink-3); }
@@ -579,11 +606,6 @@
   height: 28px; padding: 0 16px; border-radius: 0 !important; font-size: 12px; letter-spacing: .14em;
   background: var(--ws-panel) !important; border: 0 !important; box-shadow: inset 0 0 0 1px var(--ws-line-2), inset 3px 0 0 var(--ws-accent);
   color: var(--ws-ink); backdrop-filter: blur(8px);
-}
-/* While the pill shows, the bottom band of the reading column fades out so it never reads as a word inside a line. */
-.ws2-transcript-wrap:has(> .ws2-to-latest)::after {
-  content: ''; position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; height: 58px; pointer-events: none;
-  background: linear-gradient(to bottom, transparent, var(--ws-bg) 72%);
 }
 
 /* ---------- composer ---------- */

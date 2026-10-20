@@ -31,6 +31,7 @@ import { packAsset } from '../assetPack';
 import { useAudioPlayer, audioPlayer } from '../hooks/useAudioPlayer';
 import { audioService } from '../services/AudioService';
 import { BilingualMessage } from './BilingualMessage';
+import { sentenceArrivals, useArrivalMemory } from '../workstation/arrivalMemory';
 import { Atmosphere } from '../workstation/Atmosphere';
 import { DraftWord } from '../workstation/DraftWord';
 import { DIVERGENCE, Nixie, WORLDLINE_NAME, useTunedValue } from '../workstation/Nixie';
@@ -1067,6 +1068,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
     paused: Boolean(shift && !shift.committed),
   });
   const { showJumpToLatest, scrollToLatest: scrollTranscriptToLatest } = transcriptScroll;
+  // First-seen live lines/sentences, scoped like the scroll state; history and repairs never replay.
+  const arrival = useArrivalMemory(presentationScope);
 
   useEffect(() => {
     if (status !== 'READY' || sessionState === 'rejected'
@@ -1942,7 +1945,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                       </p>
                     </article>
                   ) : (
-                    <article key={msg.id} className="ws2-line ws2-line-kurisu">
+                    <article key={msg.id} className={`ws2-line ws2-line-kurisu${arrival.arriving(`m:${msg.id}`, Boolean(msg.streaming)) ? ' ws2-arrive' : ''}`}>
                       <header>
                         <span className="ws2-who" data-testid="speaker-assistant">
                           <span data-testid="speaker-assistant-primary">KURISU</span>
@@ -1957,6 +1960,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                         fallbackZh={msg.translation}
                         translationScope={msg.translationScope}
                         speakingId={isPlaying && msg.id === lastAssistantId ? speakingId : null}
+                        arriving={sentenceArrivals(arrival, msg.id, msg.segments, Boolean(msg.streaming))}
                       />
                       {msg.streaming && isThinking && operationLabel && (
                         <div className="ws2-thinking" aria-busy={activityBusy}>
