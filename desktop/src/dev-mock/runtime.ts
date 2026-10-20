@@ -44,6 +44,7 @@ export function createMockRuntime() {
     if (!rows) {
       rows = scenarios[name].conversations.filter(row => row.worldline === worldline).map(row => ({
         ...makeConversation(row.identity_mode), id: row.id, title: row.title,
+        model_id: row.model_id ?? model.id,
         messages: structuredClone(row.messages),
       }));
       scopes.set(key, rows);
@@ -75,9 +76,9 @@ export function createMockRuntime() {
     if (path.startsWith('/api/asset-pack/')) return fail(404, 'optional_asset_pack_absent');
     if (path === '/health') return ok({ ok: true, mode: 'dev-mock' });
     if (path === '/health/dependencies') return ok({ dependencies: { tts: { ok: false } } });
-    if (path === '/api/providers' && method === 'GET') return ok(structuredClone(providers));
+    if (path === '/api/providers' && method === 'GET') return ok(structuredClone(providers.map(provider => ({ ...provider, catalog: scenario.models }))));
     if (/^\/api\/providers\/[^/]+\/models$/.test(path) && method === 'GET') {
-      return ok({ catalog: [model], discovery_status: 'live', id_only: false });
+      return ok({ catalog: scenario.models, discovery_status: 'live', id_only: false });
     }
     if (/^\/api\/providers\/[^/]+\/credentials$/.test(path) && method === 'POST') return ok({ ok: true });
     if (/^\/api\/providers\/[^/]+\/chat-check$/.test(path) && method === 'POST') {
@@ -133,7 +134,7 @@ export function createMockRuntime() {
     return fail(405, 'method_not_allowed');
   }
 
-  function connect(url: URL, send: (frame: Frame) => void, client = 'default', cookies = '') {
+  function connect(url: URL, send: (frame: Frame) => void, client = 'default', cookies = '', closeTransport?: () => void) {
     const name = selectScenario(url, cookies);
     const scenario: Scenario = scenarios[name];
     const session = url.searchParams.get('session_id') || 'default';
@@ -141,15 +142,26 @@ export function createMockRuntime() {
     let conversationId: string | null = null;
     let identityMode = 'okabe';
     let authenticated = false;
+    let authPending = false;
+    let selectedModel = model.id;
     let closed = false;
     let generation = 0;
     let activeTurn: Frame | null = null;
     const timers = new Set<ReturnType<typeof setTimeout>>();
+    const lifecycleTimers = new Set<ReturnType<typeof setTimeout>>();
     const emit = (frame: Frame) => { if (!closed) send(frame); };
     const clearTimers = () => { timers.forEach(clearTimeout); timers.clear(); };
-    const schedule = (delay: number, callback: () => void) => {
-      const timer = setTimeout(() => { timers.delete(timer); if (!closed) callback(); }, delay);
-      timers.add(timer);
+    const schedule = (delay: number, callback: () => void, lifecycle = false) => {
+      const queue = lifecycle ? lifecycleTimers : timers;
+      const timer = setTimeout(() => { queue.delete(timer); if (!closed) callback(); }, delay);
+      queue.add(timer);
+    };
+    const close = () => {
+      closed = true;
+      clearTimers();
+      lifecycleTimers.forEach(clearTimeout);
+      lifecycleTimers.clear();
+      activeTurn = null;
     };
     const currentRows = () => conversations(name, client, session, worldline);
     const cancel = () => {
@@ -162,19 +174,31 @@ export function createMockRuntime() {
       if (closed) return;
       if (frame.type === 'ping') { emit({ type: 'pong' }); return; }
       if (frame.type === 'auth') {
+        if (authPending || authenticated) return;
         if (scenario.authError) { emit({ type: 'error', message: scenario.authError, recoverable: false }); return; }
         worldline = worldlineOf(frame.worldline);
         identityMode = frame.default_identity_mode === 'self' ? 'self' : 'okabe';
         conversationId = typeof frame.conversation_id === 'string' ? frame.conversation_id : null;
+        selectedModel = typeof frame.model === 'string' ? frame.model : model.id;
         if (conversationId && !currentRows().some(row => row.id === conversationId)) {
           emit({ type: 'error', message: '会话不存在。', recoverable: false });
           return;
         }
-        authenticated = true;
-        emit({
-          type: 'session.ready', conversation_mode: conversationId ? 'history' : 'draft',
-          conversation_id: conversationId, worldline, generation: ++generation,
-        });
+        authPending = true;
+        const ready = () => {
+          authPending = false;
+          authenticated = true;
+          emit({
+            type: 'session.ready', conversation_mode: conversationId ? 'history' : 'draft',
+            conversation_id: conversationId, worldline, generation: ++generation,
+          });
+          if (scenario.transport.closeAfterReadyMs !== null) schedule(scenario.transport.closeAfterReadyMs, () => {
+            close();
+            closeTransport?.();
+          }, true);
+        };
+        if (scenario.transport.readyDelayMs) schedule(scenario.transport.readyDelayMs, ready, true);
+        else ready();
         return;
       }
       if (!authenticated) { emit({ type: 'error', message: '请先发送 auth。', recoverable: false }); return; }
@@ -216,6 +240,7 @@ export function createMockRuntime() {
         let conversation = currentRows().find(row => row.id === conversationId);
         if (!conversation) {
           conversation = makeConversation(identityMode);
+          conversation.model_id = selectedModel;
           currentRows().unshift(conversation);
           conversationId = conversation.id;
         }
@@ -240,7 +265,7 @@ export function createMockRuntime() {
       }
       // voice.stop / tts_debug intentionally emit no audio in this silent mock.
     }
-    return { receive, close() { closed = true; clearTimers(); activeTurn = null; } };
+    return { receive, close };
   }
 
   return { rest, connect, dispose() { clients.clear(); } };

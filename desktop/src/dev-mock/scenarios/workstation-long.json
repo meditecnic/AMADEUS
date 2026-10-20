@@ -1,0 +1,5 @@
+{
+  "name": "workstation-long",
+  "extends": "streaming",
+  "description": "Bounded M4 overflow fixture: 16 sessions per worldline, 12 models with long labels, 24 history turns and 30 bilingual segments."
+}

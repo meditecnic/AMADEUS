@@ -8,8 +8,16 @@ import error from './scenarios/error.json';
 import offline from './scenarios/offline.json';
 import shiftFailure from './scenarios/shift-failure.json';
 import shiftSlow from './scenarios/shift-slow.json';
+import workstationLong from './scenarios/workstation-long.json';
+import readyDelay from './scenarios/ready-delay.json';
+import transportClose from './scenarios/transport-close.json';
+import { workstationFixture } from './workstation-fixture';
+import { model } from './fixtures';
 
-export type Scenario = Omit<typeof streaming, 'errors' | 'chatError' | 'authError'> & {
+export type Scenario = Omit<typeof streaming, 'errors' | 'chatError' | 'authError' | 'conversations'> & {
+  conversations: Array<typeof streaming.conversations[number] & { model_id?: string }>;
+  models: typeof model[];
+  transport: { readyDelayMs: number; closeAfterReadyMs: number | null };
   errors: Array<{ method: string; pathPrefix: string; status: number; body: unknown }>;
   chatError: string | null;
   authError: string | null;
@@ -21,11 +29,14 @@ type Override = Omit<Partial<Scenario>, 'login' | 'shift'> & {
 };
 
 export const scenarios: Record<string, Scenario> = Object.fromEntries(
-  [streaming, loginSuccess, loginFailure, sessionList, memory, empty, error, offline, shiftFailure, shiftSlow]
+  [streaming, loginSuccess, loginFailure, sessionList, memory, empty, error, offline, shiftFailure, shiftSlow, workstationLong, readyDelay, transportClose]
     .map((override: Override) => [override.name!, {
       ...streaming, ...override,
       login: { ...streaming.login, ...override.login },
       shift: { ...streaming.shift, ...override.shift },
+      models: [model],
+      transport: { readyDelayMs: 0, closeAfterReadyMs: null, ...override.transport },
+      ...(override.name === 'workstation-long' ? workstationFixture : {}),
     }]),
 );
 

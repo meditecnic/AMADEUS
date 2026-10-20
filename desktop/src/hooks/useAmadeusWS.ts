@@ -47,6 +47,8 @@ export interface UseAmadeusWSParams {
   }) => void;
   onTurnStarted?: (conversationId?: string | null) => void;
   onTurnCompleted?: () => void;
+  /** Decorative cue after this client actually writes chat.send, never on history/ACK. */
+  onLocalSend?: (messageId: string) => void;
   /** Backend-normalized config after config_update (e.g. reasoning_effort aliases). */
   onConfigApplied?: (details: {
     reasoningEffort?: string | null;
@@ -853,6 +855,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       type: 'chat.send',
       content: content.trim()
     }));
+    paramsRef.current.onLocalSend?.(userMsgId);
   }, []);
 
   const stopVoice = useCallback(() => {

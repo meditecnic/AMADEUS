@@ -11,6 +11,20 @@ const scope = '?session_id=test-session&worldline=steins_gate';
 afterEach(() => vi.useRealTimers());
 
 describe('dev mock REST contracts', () => {
+  it('provides bounded long histories and distinct sessions/models without changing the default catalog', () => {
+    const mock = createMockRuntime();
+    const list = mock.rest(url(`/api/conversations${scope}&scenario=workstation-long`), 'GET').body as Array<{ id: string; model_id: string }>;
+    expect(list).toHaveLength(16);
+    expect(new Set(list.map(row => row.model_id)).size).toBe(12);
+    const history = (id: string) => mock.rest(url(`/api/conversations/${id}/messages${scope}&scenario=workstation-long`), 'GET').body as unknown[];
+    expect(history(list[0].id)).toHaveLength(48);
+    expect(history(list[0].id)).not.toEqual(history(list[1].id));
+    const catalog = mock.rest(url('/api/providers/deepseek/models?scenario=workstation-long'), 'GET').body as { catalog: Array<{ id: string }> };
+    expect(catalog.catalog).toHaveLength(12);
+    expect(catalog.catalog.some(row => row.id.length > 60)).toBe(true);
+    expect(mock.rest(url('/api/providers/deepseek/models'), 'GET').body).toMatchObject({ catalog: [expect.any(Object)] });
+  });
+
   it('matches the actual login route, passphrase and catalog-defined HTTP failures', () => {
     const mock = createMockRuntime();
     expect(mock.rest(url('/api/auth/salieri'), 'POST', { password: 'Gott würfelt nicht' }).status).toBe(200);
@@ -72,9 +86,81 @@ describe('dev mock REST contracts', () => {
     expect(server.listenerCount('upgrade')).toBe(0);
     close(); // Cleanup is safe on both closeBundle and HTTP close.
   });
+
+  it('serves the silent preview through the dev plugin and transforms its React entry', async () => {
+    const server = createServer();
+    const use = vi.fn();
+    const transformIndexHtml = vi.fn(async (_path, html) => html);
+    const plugin = devMockPlugin();
+    (plugin.configureServer as (server: unknown) => void)({ httpServer: server, middlewares: { use }, transformIndexHtml });
+    const response = { setHeader: vi.fn(), end: vi.fn() };
+    const next = vi.fn();
+    await use.mock.calls[0][0]({ url: '/__mock/status' }, response, next);
+    expect(transformIndexHtml).toHaveBeenCalledWith('/__mock/status', expect.stringContaining('/src/dev-mock/status-preview.tsx'));
+    expect(response.end).toHaveBeenCalledWith(expect.stringContaining('Silent status preview'));
+    expect(next).not.toHaveBeenCalled();
+    (plugin.closeBundle as () => void)();
+  });
 });
 
 describe('dev mock protocol v2', () => {
+  it('delays ready and releases the lifecycle timer when closed before readiness', () => {
+    vi.useFakeTimers();
+    const mock = createMockRuntime();
+    const send = vi.fn();
+    const socket = mock.connect(url('/ws/chat?scenario=ready-delay'), send);
+    socket.receive({ type: 'auth', worldline: 'steins_gate' });
+    vi.advanceTimersByTime(2499);
+    expect(send).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(send).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ type: 'session.ready' }));
+    socket.close();
+    const early = mock.connect(url('/ws/chat?scenario=ready-delay'), send);
+    early.receive({ type: 'auth', worldline: 'steins_gate' });
+    early.close();
+    vi.runAllTimers();
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('really requests transport closure, independent of turn cancellation, and drops late output', () => {
+    vi.useFakeTimers();
+    const mock = createMockRuntime();
+    const send = vi.fn();
+    const closeTransport = vi.fn();
+    const socket = mock.connect(url('/ws/chat?scenario=transport-close'), send, 'client', '', closeTransport);
+    socket.receive({ type: 'auth', worldline: 'steins_gate' });
+    vi.advanceTimersByTime(400);
+    socket.receive({ type: 'chat.send', content: 'test' });
+    socket.receive({ type: 'turn.cancel' });
+    vi.advanceTimersByTime(3499);
+    expect(closeTransport).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(closeTransport).toHaveBeenCalledTimes(1);
+    const count = send.mock.calls.length;
+    socket.receive({ type: 'ping' });
+    vi.runAllTimers();
+    expect(send).toHaveBeenCalledTimes(count);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('streams the long fixture as sentence pairs and keeps draft model selection in its history', () => {
+    vi.useFakeTimers();
+    const mock = createMockRuntime();
+    const send = vi.fn();
+    const socket = mock.connect(url('/ws/chat?scenario=workstation-long&session_id=test-session'), send);
+    socket.receive({ type: 'auth', worldline: 'steins_gate', model: 'mock-research-03' });
+    socket.receive({ type: 'chat.send', content: 'long test' });
+    vi.runAllTimers();
+    const frames = send.mock.calls.map(([frame]) => frame);
+    expect(frames.filter(frame => frame.type === 'segment.ready')).toHaveLength(30);
+    expect(frames.at(-1).type).toBe('turn.completed');
+    expect(frames.some(frame => frame.type.includes('audio'))).toBe(false);
+    const list = mock.rest(url(`/api/conversations${scope}&scenario=workstation-long`), 'GET').body;
+    expect(list).toEqual(expect.arrayContaining([expect.objectContaining({ id: frames[1].conversation_id, model_id: 'mock-research-03' })]));
+    socket.close();
+  });
+
   it('authenticates a draft, materializes on send, streams paired sentences in order and persists history', () => {
     vi.useFakeTimers();
     const mock = createMockRuntime();

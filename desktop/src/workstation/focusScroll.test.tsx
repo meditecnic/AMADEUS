@@ -29,6 +29,34 @@ function inRoot(children: ReactNode) {
 }
 
 describe('focus never scrolls the .ws2 root', () => {
+  it('handles a listbox arrow once and ignores both IME guards for Enter and Escape', () => {
+    const onChange = vi.fn();
+    render(inRoot(<ModelPicker value="one" options={['one', 'two', 'three'].map(value => ({ value, label: value }))} onChange={onChange} sourceName="Mock" />));
+    fireEvent.click(screen.getByRole('button', { name: '模型' }));
+    const list = screen.getByRole('listbox');
+    fireEvent.keyDown(list, { key: 'ArrowDown' });
+    expect(screen.getByRole('option', { name: 'two' })).toHaveClass('active');
+    for (const guard of [{ isComposing: true }, { keyCode: 229 }]) {
+      fireEvent.keyDown(list, { key: 'Enter', ...guard });
+      fireEvent.keyDown(list, { key: 'Escape', ...guard });
+      expect(screen.getByRole('listbox')).toBeInTheDocument();
+      expect(onChange).not.toHaveBeenCalled();
+    }
+    fireEvent.keyDown(list, { key: 'Enter' });
+    expect(onChange).toHaveBeenCalledExactlyOnceWith('two');
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
+  it('keeps a confirmation open for composition Escape including keyCode 229', () => {
+    const onCancel = vi.fn();
+    render(inRoot(<ConfirmDialog title="确认" confirmLabel="确认" onConfirm={vi.fn()} onCancel={onCancel}>body</ConfirmDialog>));
+    fireEvent.keyDown(window, { key: 'Escape', isComposing: true });
+    fireEvent.keyDown(window, { key: 'Escape', keyCode: 229 });
+    expect(onCancel).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
   it('confirm dialog focuses cancel on open and returns focus on close without scrolling', () => {
     const { rerender } = render(inRoot(<button type="button">更多</button>));
     screen.getByRole('button', { name: '更多' }).focus({ preventScroll: true });

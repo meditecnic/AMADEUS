@@ -39,6 +39,27 @@ const params: UseAmadeusWSParams = {
 
 
 describe('useAmadeusWS v2', () => {
+  it('emits one local-send cue only for an actual outgoing chat frame', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const onLocalSend = vi.fn();
+    const h = renderHook(() => useAmadeusWS({ ...params, onLocalSend }));
+    const socket = FakeWebSocket.instances[0];
+    act(() => socket.onopen?.());
+    act(() => socket.emit({ type: 'session.ready', conversation_id: 'conversation-one', worldline: 'steins_gate', generation: 1 }));
+    act(() => h.result.current.sendChat(' '));
+    expect(onLocalSend).not.toHaveBeenCalled();
+    act(() => h.result.current.sendChat('hello'));
+    expect(onLocalSend).toHaveBeenCalledTimes(1);
+    expect(socket.sent.map(s => JSON.parse(s)).filter(f => f.type === 'chat.send')).toHaveLength(1);
+    expect(h.result.current.messages.filter(m => m.role === 'user')).toHaveLength(1);
+    act(() => socket.emit({ type: 'turn.started', turn_id: 'one', conversation_id: 'conversation-one', generation: 2 }));
+    expect(onLocalSend).toHaveBeenCalledTimes(1);
+    socket.readyState = 3;
+    act(() => h.result.current.sendChat('closed'));
+    expect(onLocalSend).toHaveBeenCalledTimes(1);
+    h.unmount();
+  });
+
   afterEach(() => {
     FakeWebSocket.instances = [];
     vi.unstubAllGlobals();

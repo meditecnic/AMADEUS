@@ -31,6 +31,24 @@ arrays replace the base; `login` and `shift` merge individual fields.
 | `offline` | Login 200; WS auth rejected for unavailable-session UI |
 | `shift-failure` | Correlated `worldline.switch_error` after 500ms; source worldline retained |
 | `shift-slow` | Correlated `worldline.switched` delayed 20000ms; observable confirmation gate even with shader warmup, same socket remains open |
+| `workstation-long` | 16 distinct sessions per worldline, 12 callable models including long IDs/labels, 24 turns in the first history, and a 30-segment bilingual reply (one untranslated segment) |
+| `ready-delay` | Open transport waits 2500ms before `session.ready`; input and empty-state copy reflect pending readiness |
+| `transport-close` | Ready after 400ms, then a real WS close (1012) after 3500ms; repeats after reconnect, independent of turn cancellation |
+
+For the silent status fixture, open `http://localhost:1420/__mock/status`.
+Its controls render the same `PresenceIndicator` used by Workstation, including
+speaking, connecting, thinking and offline, in SG/β. This route and its entry
+are dev-only. It neither loads Workstation nor changes playback/network state,
+and proves presentation only, never real TTS/audio playback. The cloud pass can
+extend that shared presenter and keep this fixture as its preview consumer.
+No production fault switch or audio frame is added.
+
+The long fixture is generated deterministically in `workstation-fixture.ts`.
+It applies only to `workstation-long`; default streaming and M3 shift fixtures
+retain their data/timing. Connection lifecycle timers are separate from turn
+timers; closing a socket clears both, while stopping a turn leaves the scripted
+transport close active. Browser journeys/build/full tests remain the final M4
+integration gate, not a claim from engineering fixture checks.
 
 Sentence `delayMs` values are waits **after the preceding sentence** (or after
 `turn.started` for the first). `completionDelayMs` follows the final pair.

@@ -23,7 +23,7 @@ export function ConfirmDialog({
     const initial = focusCancel ? cancelRef.current : bodyRef.current?.querySelector<HTMLElement>('input, textarea');
     initial?.focus({ preventScroll: true });
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.isComposing) return;
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return;
       event.preventDefault();
       event.stopPropagation();
       if (!busy) onCancel();

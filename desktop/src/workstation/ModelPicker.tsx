@@ -55,7 +55,10 @@ export function ModelPicker({
     if (option.value !== value) onChange(option.value);
   };
   const onKeyDown = (event: React.KeyboardEvent) => {
-    if (event.nativeEvent.isComposing) return;
+    if (event.nativeEvent.isComposing || event.keyCode === 229) {
+      if (event.key === 'Enter' || event.key === 'Escape') event.stopPropagation();
+      return;
+    }
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); }
     else if (event.key === 'ArrowDown') { event.preventDefault(); setActive((i) => Math.min(shown.length - 1, i + 1)); }
     else if (event.key === 'ArrowUp') { event.preventDefault(); setActive((i) => Math.max(0, i - 1)); }
@@ -91,7 +94,7 @@ export function ModelPicker({
             onChange={(e) => { setQuery(e.target.value); setActive(0); }}
           />
           <div className="ws2-picker-group">{sourceMark}{sourceName}</div>
-          <ul id={listId} role="listbox" aria-label="模型" className="ws2-picker-list" tabIndex={-1} onKeyDown={onKeyDown}>
+          <ul id={listId} role="listbox" aria-label="模型" className="ws2-picker-list" tabIndex={-1}>
             {shown.length === 0 && <li className="ws2-picker-empty" role="presentation">没有匹配的模型</li>}
             {shown.map((option, i) => (
               <li

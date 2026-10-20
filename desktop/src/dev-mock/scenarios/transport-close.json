@@ -1,0 +1,6 @@
+{
+  "name": "transport-close",
+  "extends": "streaming",
+  "description": "Ready after 400ms, then actually closes the mock transport 3500ms later; repeats on reconnect.",
+  "transport": { "readyDelayMs": 400, "closeAfterReadyMs": 3500 }
+}
