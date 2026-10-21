@@ -70,6 +70,13 @@ export interface Message {
   systemError?: boolean;
 }
 
+export const RECONNECT_ATTEMPTS = 5;
+export interface ReconnectState {
+  attempt: number;
+  max: number;
+  exhausted: boolean;
+}
+
 export interface UseAmadeusWSReturn {
   status: WSStatus;
   /** Optional so existing test doubles keep compiling; undefined is treated as usable. */
@@ -87,6 +94,10 @@ export interface UseAmadeusWSReturn {
   sendDebugTts: (emotion: string, text: string) => void;
   updateConfig: (patch: Partial<Omit<UseAmadeusWSParams, 'onAudioChunk'>>) => void;
   reconnect: () => void;
+  /** Automatic reconnection after an unexpected close: attempt n of max while it is still trying,
+   *  exhausted once every attempt has failed (only reconnect() starts over). null while connected or idle.
+   *  Optional so existing test doubles keep compiling. */
+  retry?: ReconnectState | null;
   /** Optional so existing test doubles keep compiling. */
   resetToDraft?: () => void;
   switchConversation: (conversationId: string, history: Message[]) => boolean;
@@ -194,6 +205,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   const watchdogTimerRef = useRef<number | null>(null);
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectCountRef = useRef(0);
+  const [retry, setRetry] = useState<ReconnectState | null>(null);
   const voiceStoppedRef = useRef(false);
   /** Legacy v1 per-send degradation flag (text_chunk has no turn identity). */
   const audioDegradedNotifiedRef = useRef(false);
@@ -291,6 +303,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       wsRef.current = null;
     }
     setStatus('CLOSED');
+    setRetry(null);
     setIsThinking(false);
     setIsSynthesizing(false);
     voiceStoppedRef.current = false;
@@ -323,6 +336,11 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   const connect = useCallback(() => {
     disconnect();
     setStatus('CONNECTING');
+    // A scheduled attempt keeps showing which attempt this is; a fresh connect() has a count of 0.
+    if (reconnectCountRef.current > 0) {
+      setRetry({ attempt: reconnectCountRef.current, max: RECONNECT_ATTEMPTS, exhausted: false });
+    }
+    let errored = false;
 
     const sessionId = paramsRef.current.sessionId || getOrCreateAmadeusSessionId();
 
@@ -332,6 +350,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     ws.onopen = () => {
       if (wsRef.current !== ws) return;
       reconnectCountRef.current = 0;
+      setRetry(null);
       setSessionReady(false);
       setStatus('READY');
 
@@ -809,28 +828,40 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
           message.streaming ? { ...message, streaming: false } : message
         ));
       }
-      setStatus('CLOSED');
       setActiveTool(null);
       setActiveNotice(null);
       setIsThinking(false);
       setIsSynthesizing(false);
       voiceStoppedRef.current = false;
 
-      // Attempt automatic reconnection up to 5 times
-      if (reconnectCountRef.current < 5) {
+      // Attempt automatic reconnection up to RECONNECT_ATTEMPTS times (1, 2, 4, 8, 16 s).
+      if (reconnectCountRef.current < RECONNECT_ATTEMPTS) {
         const delay = Math.pow(2, reconnectCountRef.current) * 1000;
         reconnectCountRef.current += 1;
-        console.log(`Connection closed. Reconnecting in ${delay / 1000}s... (Attempt ${reconnectCountRef.current}/5)`);
+        console.log(`Connection closed. Reconnecting in ${delay / 1000}s... (Attempt ${reconnectCountRef.current}/${RECONNECT_ATTEMPTS})`);
+        setStatus('CLOSED');
+        setRetry({ attempt: reconnectCountRef.current, max: RECONNECT_ATTEMPTS, exhausted: false });
         reconnectTimerRef.current = window.setTimeout(connect, delay);
+      } else {
+        // Nothing will retry any more: a socket error stays an error instead of being overwritten by the close.
+        setStatus(errored ? 'ERROR' : 'CLOSED');
+        setRetry({ attempt: reconnectCountRef.current, max: RECONNECT_ATTEMPTS, exhausted: true });
       }
     };
 
     ws.onerror = (err) => {
       if (wsRef.current !== ws) return;
       console.error('WebSocket Error:', err);
-      setStatus('ERROR');
+      // The close that always follows decides the state: retrying, or ERROR once retries are exhausted.
+      errored = true;
     };
   }, [disconnect]);
+
+  /** A deliberate reconnect (user action or a conversation change) starts a fresh set of attempts. */
+  const reconnect = useCallback(() => {
+    reconnectCountRef.current = 0;
+    connect();
+  }, [connect]);
 
   const sendChat = useCallback((content: string) => {
     if (!content.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
@@ -1052,7 +1083,8 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     cancelTurn,
     sendDebugTts,
     updateConfig,
-    reconnect: connect,
+    reconnect,
+    retry,
     resetToDraft,
     switchConversation,
     switchWorldline,
