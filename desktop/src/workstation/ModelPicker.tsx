@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { useReducedMotion } from '../design-system/useReducedMotion';
 import { useExitPresence } from './useExitPresence';
+import { Tip } from './Tip';
 
 /** Options past this index enter together, so a long catalog finishes its cascade promptly. */
 export const PICKER_CASCADE_CAP = 8;
@@ -81,6 +82,7 @@ export function ModelPicker({
 
   return (
     <div className={`ws2-picker${open ? ' open' : ''}`} ref={rootRef}>
+      <Tip label={open ? undefined : title} side="top" align="start">
       <button
         type="button"
         ref={triggerRef}
@@ -89,14 +91,15 @@ export function ModelPicker({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
+        aria-description={title}
         disabled={disabled}
-        title={title}
         onClick={() => (open ? close() : openPicker())}
       >
         {/* Trigger shows the bare model id; lifecycle/evaluation notes stay in the list and tooltip. */}
         <span className="name">{current?.value ?? (value || '选择模型')}</span>
         <span className="caret" aria-hidden="true">▾</span>
       </button>
+      </Tip>
       {presence.shown && (
         <div
           className={`ws2-picker-pop${presence.leaving ? ' leaving' : ''}${typed ? '' : ' cascade'}`}
@@ -117,13 +120,13 @@ export function ModelPicker({
           <ul id={presence.leaving ? undefined : listId} role="listbox" aria-label="模型" className="ws2-picker-list" tabIndex={-1}>
             {shown.length === 0 && <li className="ws2-picker-empty" role="presentation">没有匹配的模型</li>}
             {shown.map((option, i) => (
+              <Tip key={option.value} label={option.title} side="right" align="start">
               <li
-                key={option.value}
                 style={{ '--i': Math.min(i, PICKER_CASCADE_CAP) } as CSSProperties}
                 role="option"
                 aria-selected={option.value === value}
                 aria-disabled={option.disabled ? 'true' : undefined}
-                title={option.title}
+                aria-description={option.title}
                 className={`${i === active ? 'active' : ''}${option.disabled ? ' disabled' : ''}`}
                 onMouseEnter={() => setActive(i)}
                 onClick={() => choose(option)}
@@ -131,6 +134,7 @@ export function ModelPicker({
                 {option.label}
                 {option.value === value && <span className="check" aria-hidden="true" />}
               </li>
+              </Tip>
             ))}
           </ul>
           {sources.length > 0 && onSource && (

@@ -2,6 +2,7 @@ import React from 'react';
 import { SalieriSelect } from './SalieriSelect';
 import { ModelPicker } from '../workstation/ModelPicker';
 import { ProviderMark } from '../workstation/ProviderMark';
+import { Tip } from '../workstation/Tip';
 
 export type ModelLifecycle =
   | 'stable'
@@ -264,17 +265,18 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
       />
       {providersFailed && !providersLoaded ? (
         <div className={searchable ? 'ws2-picker' : 'provider-model-select-root'}>
-          <button
-            type="button"
-            className={searchable ? 'ws2-picker-trigger' : 'provider-model-select'}
-            aria-label="模型"
-            aria-description="接入列表加载失败"
-            title="接入列表加载失败"
-            disabled
-          >
-            <span className="name">模型列表未加载</span>
-            <span className="caret" aria-hidden="true">▾</span>
-          </button>
+          <Tip label="接入列表加载失败" side="top" align="start">
+            <button
+              type="button"
+              className={searchable ? 'ws2-picker-trigger' : 'provider-model-select'}
+              aria-label="模型"
+              aria-description="接入列表加载失败"
+              disabled
+            >
+              <span className="name">模型列表未加载</span>
+              <span className="caret" aria-hidden="true">▾</span>
+            </button>
+          </Tip>
         </div>
       ) : searchable ? (
         <ModelPicker
@@ -322,29 +324,32 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
       {providersFailed && (
         <div className="provider-list-error" role="status">
           {providersLoaded && <span className="provider-list-error-label">刷新失败</span>}
-          <button
-            type="button"
-            className="provider-list-retry"
-            aria-label={providersLoaded ? '接入列表刷新失败，重试' : '接入列表加载失败，重试'}
-            title={providersLoaded ? '接入列表刷新失败' : '接入列表加载失败'}
-            onClick={onRetryProviders}
-            disabled={disabled}
-          >
-            重试
-          </button>
+          <Tip label={providersLoaded ? '接入列表刷新失败' : '接入列表加载失败'} side="top">
+            <button
+              type="button"
+              className="provider-list-retry"
+              aria-label={providersLoaded ? '接入列表刷新失败，重试' : '接入列表加载失败，重试'}
+              onClick={onRetryProviders}
+              disabled={disabled}
+            >
+              重试
+            </button>
+          </Tip>
         </div>
       )}
       {statusLabel ? (
-        <span className="provider-discovery-status" data-status={loadingModels ? 'loading' : discoveryStatus} title={statusLabel}>
-          {statusLabel}
-        </span>
+        <Tip label={statusLabel} side="top" truncated>
+          <span className="provider-discovery-status" data-status={loadingModels ? 'loading' : discoveryStatus}>
+            {statusLabel}
+          </span>
+        </Tip>
       ) : null}
       {activeProvider?.model_discovery && (
+        <Tip label="刷新模型列表" side="top">
         <button
           type="button"
           className="provider-action-btn"
           aria-label="刷新模型列表"
-          title="刷新模型列表"
           disabled={
             disabled
             || loadingModels
@@ -354,6 +359,7 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
         >
           {loadingModels ? '…' : '↻'}
         </button>
+        </Tip>
       )}
       {activeProvider && activeProvider.credential_required && !activeProvider.configured && (
         <button
@@ -385,12 +391,9 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
           onChange={onThinkingChange}
         />
       ) : (
-        <span
-          className="reasoning-unavailable"
-          title="后端模型目录未声明可用的思考控制，因此不会发送猜测参数。"
-        >
-          当前模型未声明思考控制
-        </span>
+        <Tip label="后端模型目录未声明可用的思考控制，因此不会发送猜测参数。" side="top">
+          <span className="reasoning-unavailable">当前模型未声明思考控制</span>
+        </Tip>
       )}
     </div>
   );

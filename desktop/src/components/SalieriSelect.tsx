@@ -8,6 +8,7 @@ import React, {
   useState,
 } from 'react';
 import { createPortal } from 'react-dom';
+import { Tip } from '../workstation/Tip';
 
 export interface SalieriSelectOption {
   value: string;
@@ -258,14 +259,14 @@ export const SalieriSelect: React.FC<SalieriSelectProps> = ({
           const selected = option.value === value;
           const active = index === activeIndex;
           return (
+            <Tip key={option.value} label={option.title} side="right" align="start">
             <li
-              key={option.value}
               id={optionDomId(index)}
               role="option"
               data-salieri-option-index={index}
               aria-selected={selected}
               aria-disabled={option.disabled || undefined}
-              title={option.title}
+              aria-description={option.title}
               className={[
                 'salieri-select-option',
                 selected ? 'is-selected' : '',
@@ -285,6 +286,7 @@ export const SalieriSelect: React.FC<SalieriSelectProps> = ({
               <span className="salieri-select-option-label">{option.label}</span>
               {selected ? <span className="salieri-select-check" aria-hidden>▸</span> : null}
             </li>
+            </Tip>
           );
         })}
       </ul>,
@@ -305,6 +307,7 @@ export const SalieriSelect: React.FC<SalieriSelectProps> = ({
       className={`salieri-select-root ${className}`.trim()}
       data-open={open ? 'true' : 'false'}
     >
+      <Tip label={open ? undefined : title} side="top" align="start">
       <button
         ref={triggerRef}
         type="button"
@@ -313,7 +316,7 @@ export const SalieriSelect: React.FC<SalieriSelectProps> = ({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listboxId : undefined}
-        title={title}
+        aria-description={title}
         disabled={disabled}
         onClick={() => {
           if (open) close(true);
@@ -325,6 +328,7 @@ export const SalieriSelect: React.FC<SalieriSelectProps> = ({
         <span className="salieri-select-value">{triggerText}</span>
         <span className="salieri-select-caret" aria-hidden>▾</span>
       </button>
+      </Tip>
       {menu}
     </div>
   );
