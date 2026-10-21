@@ -45,7 +45,7 @@ describe('HistorySidebar conversations', () => {
     await waitFor(() => expect(focus).toHaveBeenCalledWith({ preventScroll: true }));
   });
 
-  it('filters and routes conversation actions', () => {
+  it('filters and routes conversation actions', async () => {
     const onSearchChange = vi.fn();
     const onSelect = vi.fn();
     const onNew = vi.fn();
@@ -84,7 +84,8 @@ describe('HistorySidebar conversations', () => {
     menuAction('清空 β 世界线');
     fireEvent.click(screen.getByText('新建会话'));
 
-    expect(onSelect).toHaveBeenCalledWith(conversations[1]);
+    // The switch is asked for right after the plate's first frame.
+    await waitFor(() => expect(onSelect).toHaveBeenCalledWith(conversations[1]));
     expect(onTogglePin).toHaveBeenCalledWith(conversations[1]);
     // Rename has no dialog any more; it edits the row in place (covered below).
     expect(onRename).not.toHaveBeenCalled();
@@ -119,6 +120,72 @@ describe('HistorySidebar conversations', () => {
       {...overrides}
     />,
   );
+
+  const sidebar = (overrides: Partial<React.ComponentProps<typeof HistorySidebar>> = {}) => (
+    <HistorySidebar
+      isCollapsed={false} onToggle={vi.fn()} conversations={conversations}
+      activeId="one" searchQuery="" onSearchChange={vi.fn()}
+      onSelect={vi.fn()} onNew={vi.fn()} onRename={vi.fn()}
+      onTogglePin={vi.fn()} onDelete={vi.fn()} onForget={vi.fn()}
+      {...overrides}
+    />
+  );
+  const rowOf = (title: string) => screen.getByText(title).closest('.conversation-item');
+
+  it('moves the selection at the click and asks for the switch after that frame; a switch that fails gives it back', async () => {
+    const onSelect = vi.fn();
+    const { rerender } = render(sidebar({ onSelect }));
+    fireEvent.click(screen.getByText('β 世界线'));
+    expect(rowOf('β 世界线')).toHaveClass('active');
+    expect(rowOf('时间机器实验')).not.toHaveClass('active');
+    expect(onSelect).not.toHaveBeenCalled();
+    await waitFor(() => expect(onSelect).toHaveBeenCalledWith(conversations[1]));
+
+    // While the switch runs, another click waits its turn.
+    rerender(sidebar({ onSelect, busy: true }));
+    fireEvent.click(screen.getByText('时间机器实验'));
+    expect(rowOf('β 世界线')).toHaveClass('active');
+    // It ended without landing: the plate returns to the conversation that is still open.
+    rerender(sidebar({ onSelect, busy: false }));
+    await waitFor(() => expect(rowOf('时间机器实验')).toHaveClass('active'));
+    expect(onSelect).toHaveBeenCalledTimes(1);
+
+    // A switch that lands keeps it where it went.
+    fireEvent.click(screen.getByText('β 世界线'));
+    await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(2));
+    rerender(sidebar({ onSelect, busy: true }));
+    rerender(sidebar({ onSelect, busy: false, activeId: 'two' }));
+    expect(rowOf('β 世界线')).toHaveClass('active');
+    expect(rowOf('时间机器实验')).not.toHaveClass('active');
+  });
+
+  it('marks pinned rows so their timeline node can turn into the same diamond as the title', () => {
+    render(sidebar());
+    expect(rowOf('β 世界线')).toHaveClass('pinned');
+    expect(screen.getByLabelText('已置顶')).toBeInTheDocument();
+    expect(rowOf('时间机器实验')).not.toHaveClass('pinned');
+  });
+
+  it('only Enter saves a rename: clicking elsewhere restores the title and leaves focus where it went', async () => {
+    const onRename = vi.fn().mockResolvedValue(undefined);
+    renderList({ onRename });
+    openMenu(screen.getByLabelText('会话操作 β 世界线'));
+    fireEvent.click(screen.getByLabelText('重命名 β 世界线'));
+    const field = await screen.findByRole('textbox', { name: '会话标题' });
+    fireEvent.change(field, { target: { value: '不会保存' } });
+    // Switching to another window is not leaving the field (jsdom reports no document focus during any blur).
+    act(() => { field.blur(); field.focus(); });
+    expect(screen.getByRole('textbox', { name: '会话标题' })).toHaveValue('不会保存');
+    // A browser keeps document focus while focus moves inside the page.
+    const hasFocus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    const search = screen.getByLabelText('搜索会话');
+    act(() => { search.focus(); });
+    hasFocus.mockRestore();
+    await waitFor(() => expect(screen.queryByRole('textbox', { name: '会话标题' })).toBeNull());
+    expect(onRename).not.toHaveBeenCalled();
+    expect(screen.getByText('β 世界线')).toBeInTheDocument();
+    expect(search).toHaveFocus();
+  });
 
   it('renames in place: the menu opens the title as a field, Enter saves, focus returns to the row', async () => {
     const onRename = vi.fn().mockResolvedValue(undefined);

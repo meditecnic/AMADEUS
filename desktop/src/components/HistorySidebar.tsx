@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as ContextMenu from '@radix-ui/react-context-menu';
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import { Ellipsis, X } from 'lucide-react';
@@ -23,6 +23,23 @@ export interface ConversationSummary {
   identity_mode?: IdentityMode;
   last_active_at: string;
 }
+
+type RowProps = {
+  conversation: ConversationSummary;
+  index: number;
+  active: boolean;
+  editing: boolean;
+  actions: RowActions;
+  onSelect: (conversation: ConversationSummary) => void;
+  onRename: (conversation: ConversationSummary, title: string) => Promise<void> | void;
+  onRenameDone: (refocus: boolean) => void;
+};
+
+const sameRow = (a: ConversationSummary, b: ConversationSummary) => a === b || (
+  a.id === b.id && a.title === b.title && a.title_source === b.title_source && a.is_default === b.is_default
+  && a.is_pinned === b.is_pinned && a.identity_mode === b.identity_mode && a.last_active_at === b.last_active_at
+  && a.model_id === b.model_id && a.provider_id === b.provider_id
+);
 
 interface HistorySidebarProps {
   isCollapsed: boolean;
@@ -143,11 +160,12 @@ function RowContextMenu({ conversation, actions, children }: {
   );
 }
 
-/** Rename in place: Enter or leaving the field saves, Esc restores. A failed save keeps the field open with the error. */
+/** Rename in place: only Enter saves. Esc or clicking elsewhere restores the old title. A failed save keeps the
+ *  field open with the error. `onDone(true)` hands focus back to the row; after a click elsewhere it stays there. */
 function RenameField({ conversation, onCommit, onDone }: {
   conversation: ConversationSummary;
   onCommit: (title: string) => Promise<void> | void;
-  onDone: () => void;
+  onDone: (refocus: boolean) => void;
 }) {
   const ref = useRef<HTMLInputElement>(null);
   const errorId = useId();
@@ -162,13 +180,13 @@ function RenameField({ conversation, onCommit, onDone }: {
   const commit = async () => {
     if (busy || settled.current) return;
     const title = value.trim();
-    if (!title || title === conversation.title) { settled.current = true; onDone(); return; }
+    if (!title || title === conversation.title) { settled.current = true; onDone(true); return; }
     setBusy(true);
     setError(null);
     try {
       await onCommit(title);
       settled.current = true;
-      onDone();
+      onDone(true);
     } catch {
       setBusy(false);
       setError('重命名失败，请重试。');
@@ -194,12 +212,15 @@ function RenameField({ conversation, onCommit, onDone }: {
               return;
             }
             if (event.key === 'Enter') { event.preventDefault(); void commit(); }
-            else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); settled.current = true; onDone(); }
+            else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); settled.current = true; onDone(true); }
           }}
           onBlur={(event) => {
-            // Its own text menu takes focus for a moment; that is not leaving the field.
-            if ((event.relatedTarget as Element | null)?.closest?.('[data-ws2-overlay]')) return;
-            void commit();
+            // Its own text menu takes focus for a moment, and switching windows comes back here: neither is leaving.
+            if ((event.relatedTarget as Element | null)?.closest?.('[data-ws2-overlay]') || !document.hasFocus()) return;
+            // A save already on its way finishes; otherwise clicking elsewhere restores the old title.
+            if (busy || settled.current) return;
+            settled.current = true;
+            onDone(false);
           }}
         />
       </TextFieldMenu>
@@ -209,6 +230,60 @@ function RenameField({ conversation, onCommit, onDone }: {
     </div>
   );
 }
+
+/** One row. Memoised on its own data, so the many renders of a conversation switch leave the list alone. */
+const ConversationRow = memo(function ConversationRow({
+  conversation, index, active, editing, actions, onSelect, onRename, onRenameDone,
+}: RowProps) {
+  return (
+    <RowContextMenu conversation={conversation} actions={actions}>
+      <motion.article
+        layout="position"
+        data-conversation-id={conversation.id}
+        style={{ '--i': index } as React.CSSProperties}
+        className={`conversation-item${active ? ' active' : ''}${conversation.is_pinned ? ' pinned' : ''}${editing ? ' editing' : ''}`}
+      >
+        {/* The selection plate travels between rows instead of repainting in place (see the sidebar's travel effect). */}
+        {active && <span className="conversation-active-plate" aria-hidden="true" />}
+        {editing ? (
+          <RenameField
+            conversation={conversation}
+            onCommit={(title) => onRename(conversation, title)}
+            onDone={onRenameDone}
+          />
+        ) : (
+          <Tip label={conversation.title} side="right" align="start" truncated=".conversation-title">
+            <button
+              type="button"
+              className="conversation-select"
+              onClick={() => onSelect(conversation)}
+            >
+              <span className="conversation-title">
+                {conversation.is_pinned && <span className="conversation-pin" aria-label="已置顶">◆ </span>}
+                {conversation.title}
+              </span>
+              <span className="conversation-meta">
+                <span
+                  className={`identity-mode-badge mode-${normalizeIdentityMode(conversation.identity_mode)}`}
+                  data-testid={`identity-badge-${conversation.id}`}
+                >
+                  {modeBadgeLabel(conversation.identity_mode)}
+                </span>
+                {' · '}
+                {/* When and with which model — never the raw provider id (custom ids are opaque UUIDs). */}
+                <time dateTime={conversation.last_active_at}>{shortWhen(conversation.last_active_at)}</time>
+                {conversation.model_id ? ` · ${conversation.model_id}` : ''}
+              </span>
+            </button>
+          </Tip>
+        )}
+        {!editing && <ConversationMenu conversation={conversation} actions={actions} />}
+      </motion.article>
+    </RowContextMenu>
+  );
+}, (a, b) => a.index === b.index && a.active === b.active && a.editing === b.editing
+  && a.actions === b.actions && a.onSelect === b.onSelect && a.onRename === b.onRename && a.onRenameDone === b.onRenameDone
+  && sameRow(a.conversation, b.conversation));
 
 export const HistorySidebar: React.FC<HistorySidebarProps> = ({
   isCollapsed,
@@ -231,14 +306,20 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
   const visible = conversations.filter((conversation) =>
     conversation.title.toLocaleLowerCase().includes(searchQuery.trim().toLocaleLowerCase())
   );
-  const layoutKey = useId();
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const renameAfterClose = useRef<ConversationSummary | null>(null);
   const lastEdited = useRef<string | null>(null);
-  // A menu asked for rename: start editing only after it has closed, so its focus return cannot steal the field.
-  const actions: RowActions = {
+  const refocusAfterEdit = useRef(false);
+  // The row a click asked for. The plate goes there at once; the transcript follows when the switch lands.
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const shownActiveId = pendingId ?? activeId;
+  const latest = useRef({ onSelect, onRename, onTogglePin, onDelete, onForget, busy, activeId });
+  latest.current = { onSelect, onRename, onTogglePin, onDelete, onForget, busy, activeId };
+  // Stable across renders, so memoised rows stay put while the workstation works through a switch.
+  const actions = useMemo<RowActions>(() => ({
+    // A menu asked for rename: start editing only after it has closed, so its focus return cannot steal the field.
     requestRename: (c) => { renameAfterClose.current = c; },
     flushRename: () => {
       const target = renameAfterClose.current;
@@ -247,17 +328,69 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
       setEditingId(target.id);
       return true;
     },
-    onTogglePin,
-    onDelete,
-    onForget,
-  };
+    onTogglePin: (c) => latest.current.onTogglePin(c),
+    onDelete: (c) => latest.current.onDelete(c),
+    onForget: (c) => latest.current.onForget(c),
+  }), []);
+  // A click lets the plate start moving in the next frame; the switch, whose first workstation render is the heavy
+  // one, is asked for right after that frame has painted.
+  const queuedSelect = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const select = useCallback((conversation: ConversationSummary) => {
+    const { busy: switching, activeId: current, onSelect: request } = latest.current;
+    if (switching || queuedSelect.current) return;
+    if (conversation.id === current) { request(conversation); return; }
+    setPendingId(conversation.id);
+    queuedSelect.current = true;
+    requestAnimationFrame(() => {
+      window.setTimeout(() => {
+        queuedSelect.current = false;
+        if (mounted.current) latest.current.onSelect(conversation);
+      }, 0);
+    });
+  }, []);
+  const rename = useCallback((conversation: ConversationSummary, title: string) => latest.current.onRename(conversation, title), []);
+  const renameDone = useCallback((refocus: boolean) => { refocusAfterEdit.current = refocus; setEditingId(null); }, []);
+  // The plate travels from the row it was on as a compositor animation, so the switch's renders cannot stall it.
+  const plateWasOn = useRef(shownActiveId);
+  useLayoutEffect(() => {
+    const from = plateWasOn.current;
+    plateWasOn.current = shownActiveId;
+    const list = listRef.current;
+    if (!list || !from || !shownActiveId || from === shownActiveId) return;
+    const rows = Array.from(list.querySelectorAll<HTMLElement>('[data-conversation-id]'));
+    const fromRow = rows.find((row) => row.dataset.conversationId === from);
+    const toRow = rows.find((row) => row.dataset.conversationId === shownActiveId);
+    const plate = toRow?.querySelector<HTMLElement>(':scope > .conversation-active-plate');
+    if (!fromRow || !toRow || !plate || typeof plate.animate !== 'function') return;
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    const dy = fromRow.offsetTop - toRow.offsetTop;
+    if (!dy) return;
+    const beta = list.closest('[data-wl]')?.getAttribute('data-wl') === 'beta';
+    plate.animate(
+      [{ transform: `translateY(${dy}px)` }, { transform: 'translateY(0)' }],
+      { duration: beta ? 260 : 200, easing: beta ? 'cubic-bezier(.5, 0, .15, 1.12)' : 'cubic-bezier(.2, 0, 0, 1)' },
+    );
+  }, [shownActiveId]);
+  // The switch landed (activeId moved) or ended without moving (busy dropped): the plate follows the truth again.
+  const wasBusy = useRef(busy);
+  useEffect(() => { setPendingId(null); }, [activeId]);
+  useEffect(() => {
+    if (wasBusy.current && !busy) setPendingId(null);
+    wasBusy.current = busy;
+  }, [busy]);
   useEffect(() => {
     if (editingId) { lastEdited.current = editingId; return; }
     const id = lastEdited.current;
     lastEdited.current = null;
-    if (!id) return;
+    const refocus = refocusAfterEdit.current;
+    refocusAfterEdit.current = false;
+    // Enter / Esc return focus to the row; a click elsewhere keeps it where it went.
+    if (!id || !refocus) return;
     const row = listRef.current?.querySelector<HTMLElement>(`[data-conversation-id="${CSS.escape(id)}"] .conversation-select`);
-    if (row && !row.contains(document.activeElement)) row.focus({ preventScroll: true });
+    const focused = document.activeElement;
+    if (row && (!focused || focused === document.body)) row.focus({ preventScroll: true });
   }, [editingId]);
 
   return (
@@ -286,9 +419,9 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
               <button
                 type="button"
                 style={{ '--i': index } as React.CSSProperties}
-                className={`history-sidebar-icon ${conversation.id === activeId ? 'active' : ''}${conversation.is_pinned ? ' pinned' : ''}`}
+                className={`history-sidebar-icon ${conversation.id === shownActiveId ? 'active' : ''}${conversation.is_pinned ? ' pinned' : ''}`}
                 aria-label={conversation.title}
-                onClick={() => onSelect(conversation)}
+                onClick={() => select(conversation)}
               >
                 {conversation.title.slice(0, 1).toUpperCase()}
               </button>
@@ -343,57 +476,19 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
                 <span>&gt; {searchQuery.trim() ? '没有匹配的会话' : '暂无会话'}</span>
                 {!searchQuery.trim() && <p className="history-empty-sub">下一次发言会在这条世界线开始新会话。</p>}
               </div>
-            ) : visible.map((conversation, index) => {
-              const active = conversation.id === activeId;
-              const editing = conversation.id === editingId;
-              return (
-                <RowContextMenu key={conversation.id} conversation={conversation} actions={actions}>
-                  <motion.article
-                    layout="position"
-                    data-conversation-id={conversation.id}
-                    style={{ '--i': index } as React.CSSProperties}
-                    className={`conversation-item ${active ? 'active' : ''}${editing ? ' editing' : ''}`}
-                  >
-                    {/* The selection plate travels between rows instead of repainting in place. */}
-                    {active && <motion.span layoutId={`${layoutKey}-active`} className="conversation-active-plate" aria-hidden="true" />}
-                    {editing ? (
-                      <RenameField
-                        conversation={conversation}
-                        onCommit={(title) => onRename(conversation, title)}
-                        onDone={() => setEditingId(null)}
-                      />
-                    ) : (
-                      <Tip label={conversation.title} side="right" align="start" truncated=".conversation-title">
-                        <button
-                          type="button"
-                          className="conversation-select"
-                          onClick={() => onSelect(conversation)}
-                          disabled={busy}
-                        >
-                          <span className="conversation-title">
-                            {conversation.is_pinned && <span className="conversation-pin" aria-label="已置顶">◆ </span>}
-                            {conversation.title}
-                          </span>
-                          <span className="conversation-meta">
-                            <span
-                              className={`identity-mode-badge mode-${normalizeIdentityMode(conversation.identity_mode)}`}
-                              data-testid={`identity-badge-${conversation.id}`}
-                            >
-                              {modeBadgeLabel(conversation.identity_mode)}
-                            </span>
-                            {' · '}
-                            {/* When and with which model — never the raw provider id (custom ids are opaque UUIDs). */}
-                            <time dateTime={conversation.last_active_at}>{shortWhen(conversation.last_active_at)}</time>
-                            {conversation.model_id ? ` · ${conversation.model_id}` : ''}
-                          </span>
-                        </button>
-                      </Tip>
-                    )}
-                    {!editing && <ConversationMenu conversation={conversation} actions={actions} />}
-                  </motion.article>
-                </RowContextMenu>
-              );
-            })}
+            ) : visible.map((conversation, index) => (
+                <ConversationRow
+                  key={conversation.id}
+                  conversation={conversation}
+                  index={index}
+                  active={conversation.id === shownActiveId}
+                  editing={conversation.id === editingId}
+                  actions={actions}
+                  onSelect={select}
+                  onRename={rename}
+                  onRenameDone={renameDone}
+                />
+            ))}
           </motion.div>
           <div className="history-sidebar-footer">
             <button type="button" className="history-new-btn" onClick={onNew} disabled={busy}>

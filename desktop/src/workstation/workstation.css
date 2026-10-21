@@ -281,7 +281,8 @@
 }
 .ws2 .conversation-search::placeholder { color: var(--ws-ink-3); }
 .ws2 .conversation-search:focus { border-bottom-color: var(--ws-accent); outline: none; }
-.ws2 .conversation-search:focus-visible { outline: 1.5px solid var(--ws-accent); outline-offset: 2px; }
+/* One focus line, not a frame around a line: the underline thickens to 2px in the accent (no layout shift). */
+.ws2 .conversation-search:focus-visible { outline: none; box-shadow: 0 1px 0 var(--ws-accent); }
 /* Sessions hang on one worldline spine: each is a node (observation) on the line, the open one glows. */
 .ws2 .history-session-list { position: relative; flex: 1; min-height: 0; padding: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--ws-line-2) transparent; }
 .ws2 .history-session-list::before { content: ''; position: absolute; left: 14px; top: 6px; bottom: 6px; width: 1px; background: linear-gradient(180deg, var(--ws-line-2), var(--ws-line) 70%, transparent); pointer-events: none; }
@@ -296,19 +297,26 @@
 .ws2 .conversation-active-plate { position: absolute; top: 0; right: 0; bottom: 0; left: 25px; background: rgba(var(--ws-accent-rgb), .07); pointer-events: none; }
 .ws2 .conversation-item > :not(.conversation-active-plate) { position: relative; }
 .ws2 .conversation-item.active::before { background: var(--ws-accent); box-shadow: 0 0 0 3px rgba(var(--ws-accent-rgb), .18), 0 0 10px var(--ws-accent); transform: scale(1.1); }
+/* A pinned session hangs on the spine as a diamond, the same mark as the ◆ before its title. */
+.ws2 .conversation-item.pinned::before { border-radius: 0; rotate: 45deg; width: 6px; height: 6px; left: 11.5px; top: 15.5px; }
+.ws2 .conversation-item.pinned:not(.active)::before { box-shadow: inset 0 0 0 1px rgba(var(--ws-accent-rgb), .7); }
+.ws2 .conversation-item.pinned:not(.active):is(:hover, [data-state='open'], :has(.conversation-more[data-state='open']))::before { box-shadow: inset 0 0 0 1px var(--ws-accent); }
 .ws2 .conversation-select { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 6px 8px 33px; text-align: left; background: none; border: 0; }
 .ws2 .conversation-title { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; color: var(--ws-ink-2); }
 .ws2 .conversation-item.active .conversation-title, .ws2 .conversation-item:is(:hover, [data-state='open'], :has(.conversation-more[data-state='open'])) .conversation-title { color: var(--ws-ink); }
-/* Rename in place: the title becomes the field, same size and position; Enter saves, Esc restores. */
-.ws2 .conversation-select.is-editing { cursor: text; }
+/* Rename in place: the row opens into a field with room around it (the "…" steps aside); Enter saves,
+   Esc or a click elsewhere restores. One frame marks it — no focus ring on top. */
+.ws2 .conversation-select.is-editing { cursor: text; gap: 6px; padding: 9px 4px 10px 33px; }
 .ws2 .conversation-rename {
-  width: 100%; height: 22px; margin: -2px 0 -1px -5px; padding: 0 4px; border: 0; border-radius: 0;
-  background: rgba(255, 255, 255, .04); box-shadow: inset 0 -1px 0 var(--ws-accent); outline: none;
-  font: inherit; font-size: 13.5px; color: var(--ws-ink);
+  box-sizing: border-box; height: 30px; margin: 0 0 0 -9px; width: calc(100% + 9px); padding: 0 8px; border-radius: 0;
+  border: 1px solid rgba(var(--ws-accent-rgb), .75); background: rgba(255, 255, 255, .045); box-shadow: none; outline: none;
+  font: inherit; font-size: 13.5px; line-height: 28px; color: var(--ws-ink);
 }
+.ws2 .conversation-rename:focus-visible { outline: none; border-color: var(--ws-accent); }
+.ws2 .conversation-select.is-editing > .conversation-meta { margin-left: -9px; font-family: var(--ws-sans); font-size: 11px; letter-spacing: .04em; }
 .ws2 .conversation-rename::selection { background: rgba(var(--ws-accent-rgb), .35); }
 .ws2 .conversation-rename[readonly] { color: var(--ws-ink-2); }
-.ws2 .conversation-rename-error { font-size: 11px; letter-spacing: .04em; color: var(--ws-bad); }
+.ws2 .conversation-rename-error { margin-left: -9px; font-size: 11px; letter-spacing: .04em; color: var(--ws-bad); }
 .ws2 .conversation-meta { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .04em; color: var(--ws-ink-3); }
 .ws2 .identity-mode-badge { color: var(--ws-ink-2); background: none; border: 0; padding: 0; }
 .ws2 .conversation-actions { position: relative; display: flex; gap: 0; opacity: 0; transition: opacity .15s; }
@@ -877,9 +885,9 @@
   position: absolute; left: 8px; bottom: 0; top: auto; right: auto; transform: none; margin: 0;
   height: min(calc(100% - var(--ws-head)), 930px); width: auto; max-width: none; max-height: none; aspect-ratio: 454 / 810;
   /* A hard offset copy of her, not a glow: the observer's afterimage of the neighbouring line. Before it, the
-     line's light (#ws2-rim-*): a thin rim on the lit edge, a soft shade on the far one, a slight cool or warm cast. */
+     line's light (#ws2-rim-*): light wrapping the lit edge, a soft shade on the far one — no outline around her. */
   --ws-portrait-light: url(#ws2-rim-sg);
-  filter: var(--ws-portrait-light) var(--ws-rim) drop-shadow(-18px -10px 0 var(--ws-slab));
+  filter: var(--ws-portrait-light) drop-shadow(-18px -10px 0 var(--ws-slab));
   /* The top of the figure dissolves into the stage instead of ending on a cut line. */
   -webkit-mask-image: linear-gradient(180deg, transparent, #000 6%);
   mask-image: linear-gradient(180deg, transparent, #000 6%);
@@ -980,7 +988,7 @@
 .ws2.menu-open .ws2-title { opacity: .3; }
 .ws2 .avatar-stage .avatar-sprite-wrapper { transition: filter .3s ease; }
 .ws2[data-wl='beta'] .avatar-stage .avatar-sprite-wrapper { --ws-portrait-light: url(#ws2-rim-beta); }
-.ws2.menu-open .avatar-stage .avatar-sprite-wrapper { filter: var(--ws-portrait-light) var(--ws-rim) drop-shadow(-18px -10px 0 var(--ws-slab)) brightness(.7) saturate(.85); }
+.ws2.menu-open .avatar-stage .avatar-sprite-wrapper { filter: var(--ws-portrait-light) drop-shadow(-18px -10px 0 var(--ws-slab)) brightness(.7) saturate(.85); }
 .ws2-rim-defs { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
 .ws2.menu-open .ws2-presence { opacity: 0; }
 .ws2-sys-btn.on { letter-spacing: .12em; color: var(--ws-ink) !important; background: transparent !important; box-shadow: inset 0 0 0 1px var(--ws-line-2), inset 3px 0 0 var(--ws-tick); }

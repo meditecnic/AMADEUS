@@ -2227,42 +2227,70 @@ export const Workstation: React.FC<WorkstationProps> = ({
         </div>
         {/* Amadeus window: a dot-matrix field behind her that stirs while she thinks and pulses while she speaks. */}
         <div className="ws2-matrix" aria-hidden="true" />
-        {/* Light from the screen side: a warm or cool rim on the lit edge and a soft shade on the far one. */}
+        {/* Light from the screen side. On the lit edge (upper right) the figure's own colour is lifted toward the light
+            over a soft band — hair strands and cloth folds keep their grain, dark line work stays dark — with a narrower
+            glint on its brightest strands; cool on SG, warm on β. A soft shade sits on the far edge. No outline. */}
         <svg className="ws2-rim-defs" width="0" height="0" aria-hidden="true" focusable="false">
           <defs>
             <filter id="ws2-rim-sg" x="-4%" y="-2%" width="108%" height="104%" colorInterpolationFilters="sRGB">
               <feColorMatrix in="SourceGraphic" type="matrix" values=".965 0 0 0 0  0 .97 0 0 .004  0 0 .99 0 .014  0 0 0 1 0" result="tone" />
-              <feOffset in="SourceAlpha" dx="10" dy="0" result="sh2" />
-              <feComposite in="SourceAlpha" in2="sh2" operator="out" result="e2" />
-              <feGaussianBlur in="e2" stdDeviation="6" result="e2b" />
-              <feComposite in="e2b" in2="SourceAlpha" operator="in" result="e2c" />
+              <feOffset in="SourceAlpha" dx="10" dy="0" result="farShift" />
+              <feComposite in="SourceAlpha" in2="farShift" operator="out" result="farEdge" />
+              <feGaussianBlur in="farEdge" stdDeviation="6" result="farSoft" />
+              <feComposite in="farSoft" in2="SourceAlpha" operator="in" result="farMask" />
               <feFlood floodColor="rgb(16,20,34)" floodOpacity=".42" />
-              <feComposite in2="e2c" operator="in" result="shade" />
+              <feComposite in2="farMask" operator="in" result="shade" />
               <feBlend in="shade" in2="tone" mode="multiply" result="toned" />
-              <feOffset in="SourceAlpha" dx="-2.5" dy="0" result="sh" />
-              <feComposite in="SourceAlpha" in2="sh" operator="out" result="e1" />
-              <feGaussianBlur in="e1" stdDeviation=".6" result="e1b" />
-              <feComposite in="e1b" in2="SourceAlpha" operator="in" result="e1c" />
-              <feFlood floodColor="rgb(226,238,250)" floodOpacity=".8" />
-              <feComposite in2="e1c" operator="in" result="rim" />
-              <feBlend in="rim" in2="toned" mode="screen" />
+              <feOffset in="SourceAlpha" dx="-16" dy="9" result="litShift" />
+              <feComposite in="SourceAlpha" in2="litShift" operator="out" result="litEdge" />
+              <feGaussianBlur in="litEdge" stdDeviation="9" result="litSoft" />
+              <feComposite in="litSoft" in2="SourceAlpha" operator="in" result="litMask" />
+              <feColorMatrix in="SourceGraphic" type="matrix" values=".858 0 0 0 .039  0 .99 0 0 .045  0 0 1.1 0 .05  0 0 0 0 1" result="bounce" />
+              <feComposite in="bounce" in2="litMask" operator="in" result="wash" />
+              <feBlend in="wash" in2="toned" mode="screen" result="washed" />
+              <feOffset in="SourceAlpha" dx="-3" dy="1.8" result="glintShift" />
+              <feComposite in="SourceAlpha" in2="glintShift" operator="out" result="glintEdge" />
+              <feGaussianBlur in="glintEdge" stdDeviation="1.4" result="glintSoft" />
+              <feComposite in="glintSoft" in2="SourceAlpha" operator="in" result="glintMask" />
+              <feColorMatrix in="SourceGraphic" type="matrix" values=".166 .558 .056 0 0  .191 .644 .065 0 0  .213 .715 .072 0 0  0 0 0 0 1" result="luma" />
+              <feComponentTransfer in="luma" result="sheen">
+                <feFuncR type="gamma" amplitude="1.3" exponent="1.8" />
+                <feFuncG type="gamma" amplitude="1.3" exponent="1.8" />
+                <feFuncB type="gamma" amplitude="1.3" exponent="1.8" />
+              </feComponentTransfer>
+              <feComposite in="sheen" in2="glintMask" operator="in" result="glintRaw" />
+              <feComponentTransfer in="glintRaw" result="glint"><feFuncA type="linear" slope=".8" /></feComponentTransfer>
+              <feBlend in="glint" in2="washed" mode="screen" />
             </filter>
             <filter id="ws2-rim-beta" x="-4%" y="-2%" width="108%" height="104%" colorInterpolationFilters="sRGB">
               <feColorMatrix in="SourceGraphic" type="matrix" values=".99 0 0 0 .012  0 .965 0 0 .004  0 0 .93 0 0  0 0 0 1 0" result="tone" />
-              <feOffset in="SourceAlpha" dx="10" dy="0" result="sh2" />
-              <feComposite in="SourceAlpha" in2="sh2" operator="out" result="e2" />
-              <feGaussianBlur in="e2" stdDeviation="6" result="e2b" />
-              <feComposite in="e2b" in2="SourceAlpha" operator="in" result="e2c" />
+              <feOffset in="SourceAlpha" dx="10" dy="0" result="farShift" />
+              <feComposite in="SourceAlpha" in2="farShift" operator="out" result="farEdge" />
+              <feGaussianBlur in="farEdge" stdDeviation="6" result="farSoft" />
+              <feComposite in="farSoft" in2="SourceAlpha" operator="in" result="farMask" />
               <feFlood floodColor="rgb(34,20,12)" floodOpacity=".46" />
-              <feComposite in2="e2c" operator="in" result="shade" />
+              <feComposite in2="farMask" operator="in" result="shade" />
               <feBlend in="shade" in2="tone" mode="multiply" result="toned" />
-              <feOffset in="SourceAlpha" dx="-2.5" dy="0" result="sh" />
-              <feComposite in="SourceAlpha" in2="sh" operator="out" result="e1" />
-              <feGaussianBlur in="e1" stdDeviation=".6" result="e1b" />
-              <feComposite in="e1b" in2="SourceAlpha" operator="in" result="e1c" />
-              <feFlood floodColor="rgb(255,214,176)" floodOpacity=".78" />
-              <feComposite in2="e1c" operator="in" result="rim" />
-              <feBlend in="rim" in2="toned" mode="screen" />
+              <feOffset in="SourceAlpha" dx="-16" dy="9" result="litShift" />
+              <feComposite in="SourceAlpha" in2="litShift" operator="out" result="litEdge" />
+              <feGaussianBlur in="litEdge" stdDeviation="9" result="litSoft" />
+              <feComposite in="litSoft" in2="SourceAlpha" operator="in" result="litMask" />
+              <feColorMatrix in="SourceGraphic" type="matrix" values="1.1 0 0 0 .05  0 .924 0 0 .042  0 0 .704 0 .032  0 0 0 0 1" result="bounce" />
+              <feComposite in="bounce" in2="litMask" operator="in" result="wash" />
+              <feBlend in="wash" in2="toned" mode="screen" result="washed" />
+              <feOffset in="SourceAlpha" dx="-3" dy="1.8" result="glintShift" />
+              <feComposite in="SourceAlpha" in2="glintShift" operator="out" result="glintEdge" />
+              <feGaussianBlur in="glintEdge" stdDeviation="1.4" result="glintSoft" />
+              <feComposite in="glintSoft" in2="SourceAlpha" operator="in" result="glintMask" />
+              <feColorMatrix in="SourceGraphic" type="matrix" values=".213 .715 .072 0 0  .179 .601 .061 0 0  .136 .458 .046 0 0  0 0 0 0 1" result="luma" />
+              <feComponentTransfer in="luma" result="sheen">
+                <feFuncR type="gamma" amplitude="1.3" exponent="1.8" />
+                <feFuncG type="gamma" amplitude="1.3" exponent="1.8" />
+                <feFuncB type="gamma" amplitude="1.3" exponent="1.8" />
+              </feComponentTransfer>
+              <feComposite in="sheen" in2="glintMask" operator="in" result="glintRaw" />
+              <feComponentTransfer in="glintRaw" result="glint"><feFuncA type="linear" slope=".8" /></feComponentTransfer>
+              <feBlend in="glint" in2="washed" mode="screen" />
             </filter>
           </defs>
         </svg>
