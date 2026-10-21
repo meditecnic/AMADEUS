@@ -429,10 +429,12 @@ describe('Workstation S4-DS dark-only chrome', () => {
     const meter = await screen.findByRole('button', { name: '世界线 STEINS;GATE · 1.048596%' });
     expect(meter.tagName).toBe('BUTTON');
     expect(meter).toHaveAttribute('aria-expanded', 'false');
-    expect(meter).toHaveAccessibleDescription(/STEINS;GATE.*1\.048596%/);
-    expect(screen.getByRole('tooltip')).toHaveTextContent('打开世界线面板');
+    // The reading plate is a Radix tip: keyboard focus opens it and links it as the meter's description.
+    expect(screen.queryByRole('tooltip')).toBeNull();
     meter.focus();
     expect(meter).toHaveFocus();
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('打开世界线面板');
+    expect(meter).toHaveAccessibleDescription(/STEINS;GATE.*1\.048596%/);
     fireEvent.click(meter);
     await waitFor(() => expect(meter).toHaveAttribute('aria-expanded', 'true'));
     expect(await screen.findByText('当前世界线')).toBeInTheDocument();
@@ -510,6 +512,38 @@ describe('Workstation S4-DS dark-only chrome', () => {
     expect(Number(scope.getAttribute('aria-valuenow'))).toBe(Math.max(0, start - 5));
     fireEvent.keyDown(scope, { key: 'm' });
     expect(scope.getAttribute('aria-valuetext')).not.toMatch(/静音/);
+  });
+
+  it('names the reconnect attempt while retrying and offers 重新连接 once the attempts run out', async () => {
+    const socket = (status: string, retry: unknown, messages: unknown[]) => ({
+      status, retry, messages,
+      isThinking: false, isSynthesizing: false, emotion: 'neutral',
+      sendChat: wsSpies.sendChat, stopVoice: vi.fn(), cancelTurn: vi.fn(), sendDebugTts: vi.fn(), updateConfig: vi.fn(),
+      reconnect: wsSpies.reconnect, switchConversation: wsSpies.switchConversation, switchWorldline: wsSpies.switchWorldline,
+      wsRef: { current: null },
+    });
+    const lines = [{ id: 'u-r', role: 'user', content: '还在吗', timestamp: Date.now() }];
+    let state = socket('CLOSED', { attempt: 2, max: 5, exhausted: false }, lines);
+    wsSpies.useAmadeusWS.mockImplementation(() => state);
+    const view = renderWorkstation();
+    expect(await screen.findByText('OFFLINE · 重连 2/5')).toBeInTheDocument();
+    expect(screen.getByText('连接中断，正在自动重连（2/5）。')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '重新连接' })).toBeNull();
+
+    state = socket('ERROR', { attempt: 5, max: 5, exhausted: true }, lines);
+    view.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(await screen.findByText('自动重连没有成功。')).toBeInTheDocument();
+    expect(screen.getByText('OFFLINE · 重连失败')).toBeInTheDocument();
+    const before = wsSpies.reconnect.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: '重新连接' }));
+    expect(wsSpies.reconnect).toHaveBeenCalledTimes(before + 1);
+
+    // With nothing in the log yet, the empty card carries the same state and the same way out.
+    state = socket('ERROR', { attempt: 5, max: 5, exhausted: true }, []);
+    view.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(await screen.findByText('自动重连 5 次都没有接通。请确认后端服务已启动，再重新连接。')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: '暂时无法接通' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '重新连接' })).toBeInTheDocument();
   });
 
   it('exactly one App.css import owner (main.tsx only)', () => {

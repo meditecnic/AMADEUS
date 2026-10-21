@@ -1,12 +1,16 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useReducedMotion } from '../design-system/useReducedMotion';
+import { Tip } from './Tip';
+import { voiceEnvelope, voiceHeard } from './voiceEnvelope';
 
 const POINTS = 56;
+const ZERO = Array(POINTS).fill(0) as number[];
 
 /** Her voice, drawn and controlled in one place: an oscilloscope trace under the name plate.
- *  The trace is her live output level; the bright part of the baseline is the channel volume.
+ *  The trace reads the shared voice envelope (the lips read the same one); the bright part of the baseline is the
+ *  channel volume. While she is quiet, typing leaves a faint blip — she hears the keys.
  *  Wheel / arrows set the volume, click / Enter / M mutes (level kept for restore), ■ stops the sentence. */
-export function VoiceScope({ level, volume, muted, speaking, onVolume, onToggleMute, onStop }: {
-  level: number;
+export function VoiceScope({ volume, muted, speaking, onVolume, onToggleMute, onStop }: {
   volume: number;
   muted: boolean;
   speaking: boolean;
@@ -14,29 +18,41 @@ export function VoiceScope({ level, volume, muted, speaking, onVolume, onToggleM
   onToggleMute: () => void;
   onStop: () => void;
 }) {
-  const levelRef = useRef(level);
-  levelRef.current = level;
-  const [trace, setTrace] = useState<number[]>(() => Array(POINTS).fill(0));
-  const pct = Math.round(volume * 100);
+  const reducedMotion = useReducedMotion();
+  const [trace, setTrace] = useState<number[]>(ZERO);
 
   useEffect(() => {
-    if (!speaking) { setTrace(Array(POINTS).fill(0)); return; }
+    setTrace(ZERO);
     let raf = 0;
+    let running = false;
     let last = 0;
     let phase = 0;
+    let quiet = 0;
     const tick = (t: number) => {
+      const heard = reducedMotion ? 0 : voiceHeard.get();
+      if (!speaking && heard < 0.002 && quiet >= POINTS) { running = false; return; }
       raf = requestAnimationFrame(tick);
       if (t - last < 38) return;
       last = t;
       phase += 1;
       // RMS is small (≈0–0.3); lift it, then give it a carrier so it reads as a waveform rather than a bar.
-      const amp = Math.min(1, levelRef.current * 4.2);
-      const v = amp * Math.sin(phase * 1.9) * (0.7 + 0.3 * Math.random());
+      const amp = speaking ? Math.min(1, voiceEnvelope.get() * 4.2) : 0;
+      const v = amp * Math.sin(phase * 1.9) * (0.7 + 0.3 * Math.random()) + heard * 0.3 * Math.sin(phase * 2.7);
+      quiet = Math.abs(v) < 0.004 ? quiet + 1 : 0;
       setTrace((prev) => [...prev.slice(1), v]);
     };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [speaking]);
+    const start = () => {
+      if (running) return;
+      running = true;
+      quiet = 0;
+      raf = requestAnimationFrame(tick);
+    };
+    if (speaking) start();
+    const stopListening = voiceHeard.on('change', (v) => { if (v > 0.002 && !reducedMotion) start(); });
+    return () => { cancelAnimationFrame(raf); stopListening(); };
+  }, [speaking, reducedMotion]);
+
+  const pct = Math.round(volume * 100);
 
   const w = 132;
   const h = 26;
@@ -47,6 +63,7 @@ export function VoiceScope({ level, volume, muted, speaking, onVolume, onToggleM
 
   return (
     <div className={`ws2-scope${muted ? ' muted' : ''}${speaking ? ' live' : ''}`}>
+      <Tip label="滚轮或方向键调节音量 · 点击静音" side="top" align="end">
       <div
         className="ws2-scope-body"
         role="slider"
@@ -56,7 +73,6 @@ export function VoiceScope({ level, volume, muted, speaking, onVolume, onToggleM
         aria-valuemax={100}
         aria-valuenow={pct}
         aria-valuetext={muted ? `静音（${pct}%）` : `${pct}%`}
-        title="滚轮或方向键调节音量 · 点击静音"
         onClick={onToggleMute}
         onWheel={(e) => { e.preventDefault(); step(e.deltaY < 0 ? 0.05 : -0.05); }}
         onKeyDown={(e) => {
@@ -78,10 +94,13 @@ export function VoiceScope({ level, volume, muted, speaking, onVolume, onToggleM
         </svg>
         <span className="ws2-scope-val" aria-hidden="true">{muted ? 'MUTE' : String(pct).padStart(3, '0')}</span>
       </div>
+      </Tip>
       {speaking && (
-        <button type="button" className="ws2-scope-stop" aria-label="停止本句" title="停止本句" onClick={onStop}>
-          <i aria-hidden="true" />
-        </button>
+        <Tip label="停止本句" side="top">
+          <button type="button" className="ws2-scope-stop" aria-label="停止本句" onClick={onStop}>
+            <i aria-hidden="true" />
+          </button>
+        </Tip>
       )}
     </div>
   );

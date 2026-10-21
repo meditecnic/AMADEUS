@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
+import { voiceLevel } from '../workstation/voiceEnvelope';
 
 const VOICE_VOLUME_STORAGE_KEY = 'amadeus_pc_voice_volume';
 
@@ -272,18 +273,12 @@ export class AudioPlayerManager {
 export const audioPlayer = new AudioPlayerManager();
 
 export const useAudioPlayer = () => {
-  const [currentVolume, setCurrentVolume] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [decodeErrors, setDecodeErrors] = useState(0);
-  const lastVolumeUpdateRef = useRef(0);
 
   useEffect(() => {
-    audioPlayer.setVolumeListener((vol) => {
-      const now = Date.now();
-      if (now - lastVolumeUpdateRef.current < 100) return;
-      lastVolumeUpdateRef.current = now;
-      setCurrentVolume(vol);
-    });
+    // Every frame goes to the shared envelope (no React state, so the workstation does not re-render per level).
+    audioPlayer.setVolumeListener((vol) => voiceLevel.set(vol));
     audioPlayer.setPlayStateListener((playing) => {
       setIsPlaying(playing);
     });
@@ -292,13 +287,13 @@ export const useAudioPlayer = () => {
     });
     return () => {
       audioPlayer.setVolumeListener(() => {});
+      voiceLevel.set(0);
       audioPlayer.setPlayStateListener(() => {});
       audioPlayer.setDecodeErrorListener(() => {});
     };
   }, []);
 
   return {
-    currentVolume,
     isPlaying,
     decodeErrors,
     playAudio: (base64: string, onEnded?: () => void) => audioPlayer.playBase64(base64, onEnded),

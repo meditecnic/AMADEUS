@@ -149,21 +149,31 @@
 }
 .ws2-meter::after { content: ''; position: absolute; inset: 0; border: 1px solid transparent; transition: border-color .2s; pointer-events: none; }
 .ws2-meter:hover::after { border-color: rgba(255, 179, 107, .16); }
+/* Tips (Radix Tooltip) replace the browser's title bubble: one square reading plate, mounted inside .ws2 so it
+   takes the worldline's palette and timing. The meter's tip keeps its own nixie-lit plate (is-meter). */
+.ws2-tip {
+  z-index: 90; max-width: min(320px, calc(100vw - 20px)); padding: 5px 9px 5px 10px; border-radius: 0;
+  background: var(--ws-bg); border: 1px solid var(--ws-line-2);
+  box-shadow: inset 2px 0 0 var(--ws-accent), 0 8px 24px rgba(0, 0, 0, .35);
+  font-family: var(--ws-sans); font-size: 11.5px; line-height: 1.45; letter-spacing: .04em; color: var(--ws-ink);
+  overflow-wrap: anywhere; pointer-events: none; user-select: none;
+  animation: ws2-tip-in var(--dur-quick) var(--ease-main) both;
+}
+.ws2-tip[data-side='top'] { --tip-from: 0 3px; }
+.ws2-tip[data-side='right'] { --tip-from: -3px 0; }
+.ws2-tip[data-side='left'] { --tip-from: 3px 0; }
+@keyframes ws2-tip-in { from { opacity: 0; translate: var(--tip-from, 0 -3px); } }
 /* Reading plate: hover or keyboard focus names the line and its value, outside the layout. */
-.ws2-meter-tip {
-  position: absolute; top: calc(100% + 21px); left: 50%; z-index: 40; translate: -50% -3px;
-  display: grid; grid-auto-flow: column; align-items: baseline; gap: 10px; padding: 7px 11px 7px 12px;
-  white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity .16s ease, translate .16s ease;
-  background: var(--ws-bg); border: 1px solid rgba(255, 179, 107, .32); box-shadow: inset 2px 0 0 var(--nixie, #ffb36b), 0 8px 24px rgba(0, 0, 0, .35);
+.ws2-tip.is-meter {
+  position: relative; display: grid; grid-auto-flow: column; align-items: baseline; gap: 10px; max-width: none; padding: 7px 11px 7px 12px;
+  white-space: nowrap; border-color: rgba(255, 179, 107, .32); box-shadow: inset 2px 0 0 var(--nixie, #ffb36b), 0 8px 24px rgba(0, 0, 0, .35);
   font-family: var(--ws-mono); font-size: 10px; letter-spacing: .14em; color: var(--ws-ink-2); font-variant-numeric: tabular-nums;
 }
-.ws2-meter-tip::before { content: ''; position: absolute; left: 50%; top: -5px; width: 8px; height: 8px; translate: -50% 0; rotate: 45deg; background: var(--ws-bg); border: solid rgba(255, 179, 107, .32); border-width: 1px 0 0 1px; }
-.ws2-meter-tip b { font-family: var(--ws-display); font-weight: 500; letter-spacing: .24em; color: var(--ws-ink); }
-.ws2-meter-tip span { color: var(--nixie, #ffb36b); }
-.ws2-meter-tip small { font-size: 9px; letter-spacing: .12em; color: var(--ws-ink-3); }
-.ws2-meter:hover .ws2-meter-tip, .ws2-meter:focus-visible .ws2-meter-tip { opacity: 1; translate: -50% 0; transition-delay: .12s; }
-.ws2-meter[aria-expanded='true'] .ws2-meter-tip { opacity: 0; transition-delay: 0s; }
-@media (prefers-reduced-motion: reduce) { .ws2-meter-tip { transition: none; } }
+.ws2-tip.is-meter[data-side='bottom']::before { content: ''; position: absolute; left: 50%; top: -5px; width: 8px; height: 8px; translate: -50% 0; rotate: 45deg; background: var(--ws-bg); border: solid rgba(255, 179, 107, .32); border-width: 1px 0 0 1px; }
+.ws2-tip.is-meter b { font-family: var(--ws-display); font-weight: 500; letter-spacing: .24em; color: var(--ws-ink); }
+.ws2-tip.is-meter span { color: var(--nixie, #ffb36b); }
+.ws2-tip.is-meter small { font-size: 9px; letter-spacing: .12em; color: var(--ws-ink-3); }
+@media (prefers-reduced-motion: reduce) { .ws2-tip { animation: none; } }
 .ws2-wl-tag { font-family: var(--ws-mono); font-size: 8px; letter-spacing: .3em; color: var(--ws-ink-3); }
 .ws2-online { display: flex; align-items: center; gap: 5px; font-family: var(--ws-mono); font-size: 8.5px; letter-spacing: .2em; color: var(--ws-bad); white-space: nowrap; }
 .ws2-top-right .ws2-memory-en { display: none; }
@@ -257,7 +267,14 @@
 @keyframes ws2-node-in { from { opacity: 0; transform: scale(.2); } }
 @keyframes ws2-spine { from { transform: scaleY(0); } }
 .ws2 .history-sidebar-header { display: none; }
-.ws2 .conversation-search-wrap { padding: 0 0 10px; }
+.ws2 .conversation-search-wrap { position: relative; padding: 0 0 10px; }
+.ws2 .conversation-search-wrap.has-query .conversation-search { padding-right: 28px; }
+.ws2 .conversation-search-clear {
+  position: absolute; right: 2px; top: 5px; display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0;
+  border: 0; border-radius: 0; background: none; color: var(--ws-ink-3); cursor: pointer;
+}
+.ws2 .conversation-search-clear:hover { color: var(--ws-ink); background: rgba(255, 255, 255, .06); }
+.ws2 .conversation-search-clear:focus-visible { color: var(--ws-ink); outline: 1.5px solid var(--ws-accent); outline-offset: 0; }
 .ws2 .conversation-search {
   width: 100%; height: 32px; padding: 0 4px; border-radius: 0; border: 0; border-bottom: 1px solid var(--ws-line-2); background: none;
   font-size: 12.5px; color: var(--ws-ink); box-shadow: none; font-family: var(--ws-sans);
@@ -273,36 +290,60 @@
   content: ''; position: absolute; left: 11px; top: 15px; width: 7px; height: 7px; border-radius: 50%;
   background: var(--ws-bg); box-shadow: inset 0 0 0 1px var(--ws-ink-3); transition: box-shadow .2s, background .2s, transform .2s;
 }
-.ws2 .conversation-item:hover { background: linear-gradient(90deg, transparent 25px, rgba(255, 255, 255, .035) 25px); }
-.ws2 .conversation-item:hover::before { box-shadow: inset 0 0 0 1px var(--ws-ink); }
-.ws2 .conversation-item.active { background: linear-gradient(90deg, transparent 25px, rgba(var(--ws-accent-rgb), .07) 25px); box-shadow: none; }
+.ws2 .conversation-item:is(:hover, [data-state='open'], :has(.conversation-more[data-state='open'])) { background: linear-gradient(90deg, transparent 25px, rgba(255, 255, 255, .035) 25px); }
+.ws2 .conversation-item:is(:hover, [data-state='open'], :has(.conversation-more[data-state='open']))::before { box-shadow: inset 0 0 0 1px var(--ws-ink); }
+.ws2 .conversation-item.active { background: none; box-shadow: none; }
+.ws2 .conversation-active-plate { position: absolute; top: 0; right: 0; bottom: 0; left: 25px; background: rgba(var(--ws-accent-rgb), .07); pointer-events: none; }
+.ws2 .conversation-item > :not(.conversation-active-plate) { position: relative; }
 .ws2 .conversation-item.active::before { background: var(--ws-accent); box-shadow: 0 0 0 3px rgba(var(--ws-accent-rgb), .18), 0 0 10px var(--ws-accent); transform: scale(1.1); }
 .ws2 .conversation-select { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 6px 8px 33px; text-align: left; background: none; border: 0; }
 .ws2 .conversation-title { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; color: var(--ws-ink-2); }
-.ws2 .conversation-item.active .conversation-title, .ws2 .conversation-item:hover .conversation-title { color: var(--ws-ink); }
+.ws2 .conversation-item.active .conversation-title, .ws2 .conversation-item:is(:hover, [data-state='open'], :has(.conversation-more[data-state='open'])) .conversation-title { color: var(--ws-ink); }
+/* Rename in place: the title becomes the field, same size and position; Enter saves, Esc restores. */
+.ws2 .conversation-select.is-editing { cursor: text; }
+.ws2 .conversation-rename {
+  width: 100%; height: 22px; margin: -2px 0 -1px -5px; padding: 0 4px; border: 0; border-radius: 0;
+  background: rgba(255, 255, 255, .04); box-shadow: inset 0 -1px 0 var(--ws-accent); outline: none;
+  font: inherit; font-size: 13.5px; color: var(--ws-ink);
+}
+.ws2 .conversation-rename::selection { background: rgba(var(--ws-accent-rgb), .35); }
+.ws2 .conversation-rename[readonly] { color: var(--ws-ink-2); }
+.ws2 .conversation-rename-error { font-size: 11px; letter-spacing: .04em; color: var(--ws-bad); }
 .ws2 .conversation-meta { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .04em; color: var(--ws-ink-3); }
 .ws2 .identity-mode-badge { color: var(--ws-ink-2); background: none; border: 0; padding: 0; }
 .ws2 .conversation-actions { position: relative; display: flex; gap: 0; opacity: 0; transition: opacity .15s; }
 .ws2 .conversation-item:hover .conversation-actions, .ws2 .conversation-item:focus-within .conversation-actions,
-.ws2 .conversation-item.active .conversation-actions, .ws2 .conversation-actions:has(.conversation-menu) { opacity: 1; }
+.ws2 .conversation-item.active .conversation-actions, .ws2 .conversation-actions:has([data-state='open']), .ws2 .conversation-item[data-state='open'] .conversation-actions { opacity: 1; }
 .ws2 .conversation-more { display: inline-grid; place-items: center; width: 26px; height: 26px; padding: 0; border-radius: 0; color: var(--ws-ink-3); background: none; border: 0; }
 .ws2 .conversation-more:hover, .ws2 .conversation-more[aria-expanded='true'] { color: var(--ws-ink); background: rgba(255, 255, 255, .06); }
-/* Same plates as the system menu: square panel on a signal line, selection is a blade (SG flat + tick, β hex ends). */
-.ws2 .conversation-menu {
-  position: absolute; top: calc(100% + 4px); right: 0; z-index: 20; min-width: 168px; padding: 6px 6px 6px 8px;
+/* Menus (Radix DropdownMenu / ContextMenu): the same plates as the system menu — square panel on a signal line,
+   the highlighted item is a blade (SG flat + tick, β hex ends). Radix places them; they mount inside .ws2. */
+.ws2 .ws2-menu {
+  z-index: 85; min-width: 168px; padding: 6px 6px 6px 8px; outline: none;
   border: 1px solid var(--ws-line-2); border-radius: 0; background: var(--ws-panel); backdrop-filter: blur(16px);
-  box-shadow: var(--plate-bevel), inset 2px 0 0 var(--ws-accent), 0 18px 40px color-mix(in srgb, var(--shadow-tone) 50%, transparent); animation: ws2-body-in .14s ease-out;
+  box-shadow: var(--plate-bevel), inset 2px 0 0 var(--ws-accent), 0 18px 40px color-mix(in srgb, var(--shadow-tone) 50%, transparent);
+  animation: ws2-body-in var(--dur-quick) var(--ease-main);
 }
-.ws2 .conversation-menu button {
-  display: block; width: 100%; height: 32px; padding: 0 12px; border-radius: 0; text-align: left;
-  font-family: var(--ws-serif-cjk); font-size: 13.5px; letter-spacing: .14em; color: var(--ws-ink-2); background: none; border: 0;
+.ws2 .ws2-menu[data-side='top'] { animation-name: ws2-menu-up; }
+@keyframes ws2-menu-up { from { opacity: 0; transform: translateY(-6px); } }
+/* At the pointer a menu is simply there: no travel, nothing to wait for. */
+.ws2 .ws2-menu.is-pointer, .ws2 .ws2-menu.ws2-menu-text { animation: none; }
+.ws2 .ws2-menu-text { min-width: 150px; }
+.ws2 .ws2-menu-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 18px; height: 32px; padding: 0 12px;
+  border-radius: 0; outline: none; cursor: default; user-select: none;
+  font-family: var(--ws-serif-cjk); font-size: 13.5px; letter-spacing: .14em; color: var(--ws-ink-2);
 }
-.ws2 .conversation-menu button:hover, .ws2 .conversation-menu button:focus-visible {
-  color: var(--ws-blade-ink); background: var(--ws-blade); box-shadow: inset 3px 0 0 var(--ws-tick); clip-path: var(--ws-plate-cut); outline: none;
+.ws2 .ws2-menu-item[data-highlighted] {
+  color: var(--ws-blade-ink); background: var(--ws-blade); box-shadow: inset 3px 0 0 var(--ws-tick); clip-path: var(--ws-plate-cut);
 }
-.ws2 .conversation-menu button.danger { color: var(--ws-bad); }
-.ws2 .conversation-menu button.danger:hover, .ws2 .conversation-menu button.danger:focus-visible { color: #140605; background: var(--ws-bad); box-shadow: none; }
-.ws2 .conversation-menu-sep { height: 1px; margin: 5px 0; background: var(--ws-line); }
+.ws2 .ws2-menu-item[data-disabled] { color: var(--ws-ink-3); opacity: .55; }
+.ws2 .ws2-menu-item.danger { color: var(--ws-bad); }
+.ws2 .ws2-menu-item.danger[data-highlighted] { color: #140605; background: var(--ws-bad); box-shadow: none; }
+.ws2 .ws2-menu-key { font-family: var(--ws-mono); font-size: 10px; letter-spacing: .08em; color: var(--ws-ink-3); }
+.ws2 .ws2-menu-item[data-highlighted] .ws2-menu-key { color: inherit; opacity: .7; }
+.ws2 .ws2-menu-sep { height: 1px; margin: 5px 0; background: var(--ws-line); }
+@media (prefers-reduced-motion: reduce) { .ws2 .ws2-menu { animation: none; } }
 .ws2 .conversation-pin { color: var(--ws-accent); font-size: 9px; vertical-align: 1px; }
 .ws2 .history-sidebar-icon.pinned { border-color: rgba(var(--ws-accent-rgb), .35); }
 .ws2 .history-sidebar-icon.add { border-style: dashed; color: var(--ws-ink-2); }
@@ -835,8 +876,13 @@
 .ws2 .avatar-stage .avatar-sprite-wrapper {
   position: absolute; left: 8px; bottom: 0; top: auto; right: auto; transform: none; margin: 0;
   height: min(calc(100% - var(--ws-head)), 930px); width: auto; max-width: none; max-height: none; aspect-ratio: 454 / 810;
-  /* A hard offset copy of her, not a glow: the observer's afterimage of the neighbouring line. */
-  filter: var(--ws-rim) drop-shadow(-18px -10px 0 var(--ws-slab));
+  /* A hard offset copy of her, not a glow: the observer's afterimage of the neighbouring line. Before it, the
+     line's light (#ws2-rim-*): a thin rim on the lit edge, a soft shade on the far one, a slight cool or warm cast. */
+  --ws-portrait-light: url(#ws2-rim-sg);
+  filter: var(--ws-portrait-light) var(--ws-rim) drop-shadow(-18px -10px 0 var(--ws-slab));
+  /* The top of the figure dissolves into the stage instead of ending on a cut line. */
+  -webkit-mask-image: linear-gradient(180deg, transparent, #000 6%);
+  mask-image: linear-gradient(180deg, transparent, #000 6%);
   transform-origin: 50% 100%;
 }
 .ws2 .avatar-stage .avatar-sprite-layer { position: absolute; inset: 0; width: 100%; height: 100%; max-width: none; max-height: none; object-fit: contain; object-position: bottom; transition: none; filter: none; }
@@ -933,7 +979,9 @@
 .ws2.menu-open .ws2-talk, .ws2.menu-open .ws2-side { opacity: .06; filter: blur(6px); pointer-events: none; }
 .ws2.menu-open .ws2-title { opacity: .3; }
 .ws2 .avatar-stage .avatar-sprite-wrapper { transition: filter .3s ease; }
-.ws2.menu-open .avatar-stage .avatar-sprite-wrapper { filter: var(--ws-rim) drop-shadow(-18px -10px 0 var(--ws-slab)) brightness(.7) saturate(.85); }
+.ws2[data-wl='beta'] .avatar-stage .avatar-sprite-wrapper { --ws-portrait-light: url(#ws2-rim-beta); }
+.ws2.menu-open .avatar-stage .avatar-sprite-wrapper { filter: var(--ws-portrait-light) var(--ws-rim) drop-shadow(-18px -10px 0 var(--ws-slab)) brightness(.7) saturate(.85); }
+.ws2-rim-defs { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
 .ws2.menu-open .ws2-presence { opacity: 0; }
 .ws2-sys-btn.on { letter-spacing: .12em; color: var(--ws-ink) !important; background: transparent !important; box-shadow: inset 0 0 0 1px var(--ws-line-2), inset 3px 0 0 var(--ws-tick); }
 .ws2[data-wl='beta'] .ws2-sys-btn.on { background: rgba(var(--ws-accent-rgb), .14) !important; box-shadow: none; }
@@ -1272,6 +1320,15 @@
   border-left: 2px solid var(--ws-bad); background: rgba(255, 107, 94, .07); font-size: 12.5px; line-height: 1.6; color: var(--ws-ink);
 }
 .ws2-key-missing span { flex: 1 1 220px; }
+/* Reconnecting: the same strip as the missing-key notice, amber while it is still trying, red once it has given up. */
+.ws2-link-state {
+  flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 8px 14px;
+  border-left: 2px solid var(--ws-warn); background: color-mix(in srgb, var(--ws-warn) 7%, transparent); font-size: 12.5px; line-height: 1.6; color: var(--ws-ink);
+}
+.ws2-link-state span { flex: 1 1 220px; }
+.ws2-link-state.is-lost { border-left-color: var(--ws-bad); background: rgba(255, 107, 94, .07); }
+.ws2-link-state button { padding: 3px 10px; font-size: 12px; letter-spacing: .1em; color: var(--ws-ink); background: none; border: 0; box-shadow: inset 0 0 0 1px var(--ws-line-2); border-radius: 0; cursor: pointer; }
+.ws2-link-state button:hover, .ws2-link-state button:focus-visible { background: rgba(255, 255, 255, .07); outline: none; }
 .ws2-key-missing button { padding: 3px 10px; font-size: 12px; letter-spacing: .1em; color: var(--ws-ink); background: none; border: 0; box-shadow: inset 0 0 0 1px var(--ws-line-2); border-radius: 0; cursor: pointer; }
 .ws2-key-missing button:hover, .ws2-key-missing button:focus-visible { background: rgba(255, 255, 255, .07); outline: none; }
 .ws2-empty-actions { display: flex; flex-wrap: wrap; gap: 10px; }
