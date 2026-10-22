@@ -106,3 +106,13 @@ def test_sentinel_configuration_is_never_used(tmp_path, scenario):
     assert _files_under(sentinel) == []
     assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-4000:]
     assert FAKE_KEY not in result.stdout + result.stderr
+
+
+def test_credential_store_is_in_memory_and_windows_store_is_refused():
+    from app.services import credentials
+
+    assert os.environ.get("AMADEUS_CREDENTIAL_BACKEND") == "memory"
+    assert credentials.WINDOWS_CREDENTIAL_STORE_CONSTRUCTED is False
+    assert isinstance(credentials._select_credential_store(), credentials.InMemoryCredentialStore)
+    with pytest.raises(RuntimeError, match="must not construct WindowsCredentialStore"):
+        credentials.WindowsCredentialStore()

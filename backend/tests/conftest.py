@@ -69,6 +69,9 @@ _CLEARED_SECRET_ENV_KEYS = (
     "HUGGING_FACE_HUB_TOKEN",
 )
 _CLEARED_ENV_KEYS = (*_CLEARED_PATH_ENV_KEYS, *_CLEARED_SECRET_ENV_KEYS)
+# Opt-in for tests marked real_credential_store: set to 1 to let them construct
+# the real Windows Credential Manager store. Unset by default.
+_REAL_CREDENTIAL_STORE_OPT_IN = os.environ.get("AMADEUS_TEST_REAL_CREDENTIAL_STORE", "").strip() == "1"
 # Opt-in for tests marked real_embedding: a local, already-populated Hugging
 # Face cache directory to read the model from (offline). Unset by default.
 _REAL_EMBEDDING_HF_HOME = os.environ.get("AMADEUS_TEST_HF_HOME", "").strip()
@@ -95,6 +98,10 @@ _FIXED_ENV = {
     # Never download models during tests.
     "HF_HUB_OFFLINE": "1",
     "TRANSFORMERS_OFFLINE": "1",
+    # app/services/credentials.py picks its process-wide store when it is
+    # imported; "memory" keeps it (and child processes) away from the
+    # Windows Credential Manager. Must be set before any app import.
+    "AMADEUS_CREDENTIAL_BACKEND": "memory",
 }
 _ORIGINAL_ENV = {
     key: os.environ.get(key)
@@ -113,6 +120,11 @@ def pytest_configure(config):
         "markers",
         "real_embedding: needs the real SentenceTransformer embedding model; "
         "skipped unless AMADEUS_TEST_HF_HOME points at a local HF cache that has it",
+    )
+    config.addinivalue_line(
+        "markers",
+        "real_credential_store: may construct the real Windows Credential Manager store; "
+        "skipped unless AMADEUS_TEST_REAL_CREDENTIAL_STORE=1",
     )
 
 
@@ -218,6 +230,42 @@ def offline_embedding_model(request, monkeypatch):
         return self._model
 
     monkeypatch.setattr(EmbeddingAdapter, "_load", _load)
+
+
+@pytest.fixture(autouse=True)
+def forbid_real_credential_store(request, isolated_user_dirs):
+    """Fail any attempt to construct WindowsCredentialStore during a test.
+
+    Covers code that builds the store directly instead of using the
+    process-wide ``credential_store`` (for example
+    scripts/memory_candidate_real_run.py reading the DeepSeek key). Tests
+    marked ``real_credential_store`` are skipped unless
+    AMADEUS_TEST_REAL_CREDENTIAL_STORE=1, and only then may construct it.
+    Uses its own MonkeyPatch so ``monkeypatch.undo()`` cannot lift it.
+    """
+    from app.services import credentials
+
+    if request.node.get_closest_marker("real_credential_store"):
+        if not _REAL_CREDENTIAL_STORE_OPT_IN:
+            pytest.skip("real_credential_store: set AMADEUS_TEST_REAL_CREDENTIAL_STORE=1 to run")
+        yield
+        return
+    assert not credentials.WINDOWS_CREDENTIAL_STORE_CONSTRUCTED, (
+        "app.services.credentials was imported with the Windows Credential Manager store"
+    )
+
+    def _refuse(self, *args, **kwargs):
+        raise RuntimeError(
+            "tests must not construct WindowsCredentialStore; "
+            "mark the test real_credential_store if it really needs it"
+        )
+
+    mp = pytest.MonkeyPatch()
+    try:
+        mp.setattr(credentials.WindowsCredentialStore, "__init__", _refuse)
+        yield
+    finally:
+        mp.undo()
 
 
 @pytest.fixture(autouse=True)
