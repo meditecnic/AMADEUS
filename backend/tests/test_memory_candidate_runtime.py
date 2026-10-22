@@ -29,11 +29,14 @@ from app.db import (
     reset_initialization_cache,
     _resolve_path,
 )
+from app.agent_tools import RECALL_MEMORY_TOOL_NAME, tools_include_recall_memory
+from app.services.deepseek import build_stream_messages
 from app.services.memory import EmbeddingAdapter, memory_service
 from app.services.memory_v11 import candidate as cand
 from app.services.memory_v11 import jobs as jobs_mod
 from app.services.memory_v11.contracts import AUTO_STABLE_CONFIDENCE
 from app.services.memory_v11.repository import create_stable_fact
+from app.services.provider_runtime import deepseek_service
 from test_memory_candidate_builder import (
     BACKEND_ROOT,
     BETA,
@@ -100,12 +103,104 @@ class _OfflineEmbedder(EmbeddingAdapter):
         return _unit_vector(f"query:{text}")
 
 
-def _core_facts_block(system_prompt: str) -> str:
-    start = system_prompt.find("CORE FACTS")
-    assert start >= 0, "system prompt has no CORE FACTS section"
-    rest = system_prompt[start:]
-    end = rest.find("\nEPISODIC MEMORY")
-    return rest if end < 0 else rest[:end]
+MEMORY_CANDIDATE_DATA_ANCHOR = "MEMORY_CANDIDATE_DATA"
+
+
+def _has_core_facts_heading(system_prompt: str) -> bool:
+    """A standalone CORE FACTS section heading (legacy/shadow prompt shape)."""
+    return system_prompt.startswith("CORE FACTS\n") or "\nCORE FACTS\n" in system_prompt
+
+
+def _stable_fact_block(capture: _ProviderCapture) -> str:
+    """Stable-fact records the provider actually received on the last call.
+
+    v11 spec (cf14875): the system prompt never carries a CORE FACTS section;
+    stable facts reach the provider only after ``recall_memory`` as the
+    second-round ``MEMORY CANDIDATES`` / ``MEMORY_CANDIDATE_DATA`` system
+    message. Returns the record texts of the last such block (need labels echo
+    the user query, so they are excluded).
+    """
+    assert not _has_core_facts_heading(capture.last_system_prompt), (
+        "v11 system prompt must not carry a standalone CORE FACTS section"
+    )
+    blocks = [
+        str(message.get("content") or "")
+        for message in capture.last_call["messages"][1:]
+        if message.get("role") == "system"
+        and MEMORY_CANDIDATE_DATA_ANCHOR in str(message.get("content") or "")
+    ]
+    assert blocks, "provider never received a MEMORY CANDIDATES block"
+    data = blocks[-1].split(MEMORY_CANDIDATE_DATA_ANCHOR + "\n", 1)[1].split("\n", 1)[0]
+    records = json.loads(data).get("records") or {}
+    return "\n".join(str(text) for text in records.values())
+
+
+def _last_user_text(active_history) -> str:
+    for message in reversed(list(active_history or [])):
+        if isinstance(message, dict) and message.get("role") == "user":
+            return str(message.get("content") or "")
+    return ""
+
+
+def _install_recall_provider(monkeypatch, capture: _ProviderCapture) -> None:
+    """Fake provider that drives the real v11 two-round recall path.
+
+    Round 1 (tools offered with recall_memory): emit only a recall_memory call
+    whose single need is the current user text, as the MEMORY READ GATE asks.
+    Round 2 (tools closed): the canned Japanese reply. Message assembly reuses
+    the real ``build_stream_messages`` so captures match a real request.
+    """
+    _install_fake_provider(monkeypatch, capture)
+
+    async def fake_get_chat_stream(
+        active_history=None,
+        memory_summary=None,
+        api_key=None,
+        system_prompt=None,
+        temperature=0.7,
+        tools=None,
+        tool_choice=None,
+        model=None,
+        reasoning_effort=None,
+        isolated=False,
+    ):
+        messages = build_stream_messages(
+            deepseek_service.build_persona_messages,
+            active_history,
+            memory_summary,
+            system_prompt,
+            isolated=isolated,
+        )
+        capture.chat_calls.append(
+            {
+                "messages": messages,
+                "system_prompt": system_prompt,
+                "active_history": active_history,
+                "memory_summary": memory_summary,
+                "tools": tools,
+                "model": model,
+            }
+        )
+        if tools_include_recall_memory(tools):
+            need = _last_user_text(active_history)[:160] or "user stable facts"
+            yield {
+                "content": None,
+                "tool_calls": [
+                    {
+                        "index": 0,
+                        "id": f"call-recall-{len(capture.chat_calls)}",
+                        "type": "function",
+                        "function": {
+                            "name": RECALL_MEMORY_TOOL_NAME,
+                            "arguments": json.dumps({"needs": [need]}, ensure_ascii=False),
+                        },
+                    }
+                ],
+            }
+            return
+        yield {"content": capture.reply, "tool_calls": None}
+
+    monkeypatch.setattr(deepseek_service, "get_chat_stream", fake_get_chat_stream)
 
 
 def _memory_asgi_app() -> FastAPI:
@@ -426,7 +521,7 @@ async def candidate_runtime(tmp_path, monkeypatch):
     )
 
     capture = _ProviderCapture(reply=REPLY_JA)
-    _install_fake_provider(monkeypatch, capture)
+    _install_recall_provider(monkeypatch, capture)
     _suppress_auto_title(monkeypatch)
     legacy_calls = _record_legacy_extraction(monkeypatch)
     yield {
@@ -500,8 +595,7 @@ async def test_candidate_new_message_reaches_api_and_next_chat(candidate_runtime
 
     events = await _run_turn(session, "动漫")
     assert _done(events) and not _errors(events), events
-    imported_prompt = capture.last_system_prompt
-    imported_block = _core_facts_block(imported_prompt)
+    imported_block = _stable_fact_block(capture)
     assert IMPORTED_FACT in imported_block
     for forbidden in (OKABE_SENTINEL, OWNER_B_SENTINEL, BETA_SENTINEL):
         assert forbidden not in json.dumps(capture.last_call["messages"], ensure_ascii=False)
@@ -616,7 +710,7 @@ async def test_candidate_new_message_reaches_api_and_next_chat(candidate_runtime
         capture.chat_calls.clear()
         events = await _run_turn(session, f"{SESAME_MARKER} {DELETE_MARKER} 长期偏好")
         assert _done(events) and not _errors(events), events
-        memory_block = _core_facts_block(capture.last_system_prompt)
+        memory_block = _stable_fact_block(capture)
         assert SESAME_MARKER in memory_block, memory_block
         assert DELETE_MARKER in memory_block
         envelope = json.dumps(capture.last_call["messages"], ensure_ascii=False)
@@ -655,7 +749,7 @@ async def test_candidate_new_message_reaches_api_and_next_chat(candidate_runtime
         capture.chat_calls.clear()
         events = await _run_turn(session, f"{REVISED_MARKER} {SESAME_MARKER}")
         assert _done(events) and not _errors(events), events
-        next_block = _core_facts_block(capture.last_system_prompt)
+        next_block = _stable_fact_block(capture)
         assert REVISED_MARKER in next_block
         assert DELETE_MARKER not in next_block
 
@@ -749,7 +843,7 @@ async def test_forget_during_fake_extraction_does_not_write_back(candidate_runti
         await _prepare_conversation(session2, identity_mode="self")
         events = await _run_turn(session2, FORGET_MARKER)
         assert _done(events) and not _errors(events), events
-        assert FORGET_MARKER not in _core_facts_block(capture.last_system_prompt)
+        assert FORGET_MARKER not in _stable_fact_block(capture)
         assert len(completion_calls) == 1
     finally:
         sessions.pop(OWNER, None)
@@ -770,7 +864,7 @@ async def test_isolation_sentinels_and_d30_never_leave_candidate(candidate_runti
     events = await _run_turn(session, "动漫")
     assert _done(events) and not _errors(events), events
     envelope = json.dumps(capture.last_call["messages"], ensure_ascii=False)
-    assert IMPORTED_FACT in _core_facts_block(capture.last_system_prompt)
+    assert IMPORTED_FACT in _stable_fact_block(capture)
     for forbidden in (OKABE_SENTINEL, OWNER_B_SENTINEL, BETA_SENTINEL):
         assert forbidden not in envelope
 
