@@ -63,6 +63,19 @@ describe('BilingualMessage', () => {
     expect(screen.getByText('日本語二。')).toBeInTheDocument();
   });
 
+  it('marks only first-seen live sentences, per language, and never a whole-turn repair', () => {
+    const arriving = { ja: new Set([1]), zh: new Set([0, 1]) };
+    const { container, rerender } = render(<BilingualMessage layout="paragraph" segments={segments} streaming arriving={arriving} />);
+    const zh = container.querySelectorAll('.chinese-main .s');
+    const ja = container.querySelectorAll('.japanese-sub .s');
+    expect([...zh].map(node => node.classList.contains('arrive'))).toEqual([true, true]);
+    expect([...ja].map(node => node.classList.contains('arrive'))).toEqual([false, true]);
+    expect(ja[1].getAttribute('style')).toBeNull();
+
+    rerender(<BilingualMessage layout="paragraph" segments={segments} streaming arriving={arriving} translationScope="turn" fallbackZh="整段。" />);
+    expect(container.querySelectorAll('.arrive')).toHaveLength(0);
+  });
+
   it('marks bilingual assistant Japanese with lang=ja (not class-only inference)', () => {
     render(<BilingualMessage segments={segments} streaming={false} />);
     const ja = screen.getByText('日本語一。');

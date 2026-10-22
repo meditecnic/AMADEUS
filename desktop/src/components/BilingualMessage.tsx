@@ -17,6 +17,8 @@ interface BilingualMessageProps {
   layout?: 'pairs' | 'paragraph';
   /** Sentence currently heard (paragraph layout): lit in both languages while her voice plays it. */
   speakingId?: number | null;
+  /** Paragraph layout: sentences first seen live; presentation only, ignored for whole-turn repairs. */
+  arriving?: { ja: ReadonlySet<number>; zh: ReadonlySet<number> };
 }
 
 export function BilingualMessage({
@@ -27,6 +29,7 @@ export function BilingualMessage({
   translationScope,
   layout = 'pairs',
   speakingId = null,
+  arriving,
 }: BilingualMessageProps) {
   const [hot, setHot] = useState<number | null>(null);
   const ordered = [...segments].sort((a, b) => a.id - b.id);
@@ -44,21 +47,26 @@ export function BilingualMessage({
     const anyZh = rows.some(segment => segment.zh);
     const degraded = rows.some(segment => segment.translationError);
     const linked = rows.length > 1;
-    const bind = (id: number) => linked ? {
-      tabIndex: 0,
-      className: `s${hot === id ? ' hot' : ''}${speakingId === id ? ' speaking' : ''}`,
-      onMouseEnter: () => setHot(id),
-      onMouseLeave: () => setHot(null),
-      onFocus: () => setHot(id),
-      onBlur: () => setHot(null),
-    } : { className: 's' };
+    // A repair is not fresh sentence output, so it never plays an arrival.
+    const arrival = wholeTurn ? undefined : arriving;
+    const bind = (id: number, lang: 'ja' | 'zh') => {
+      const arrive = arrival?.[lang].has(id) ? ' arrive' : '';
+      return linked ? {
+        tabIndex: 0,
+        className: `s${hot === id ? ' hot' : ''}${speakingId === id ? ' speaking' : ''}${arrive}`,
+        onMouseEnter: () => setHot(id),
+        onMouseLeave: () => setHot(null),
+        onFocus: () => setHot(id),
+        onBlur: () => setHot(null),
+      } : { className: `s${arrive}` };
+    };
     return (
       <div className={`bilingual-message paragraph ${streaming ? 'streaming' : 'static'}`}>
         {wholeTurn && <p className="translation-scope">整段译文</p>}
         {anyZh && (
           <p className="chinese-main">
             {rows.map(segment => (
-              <span key={segment.id} {...bind(segment.id)}>
+              <span key={segment.id} {...bind(segment.id, 'zh')}>
                 {segment.zh || (streaming && !segment.translationError
                   ? <em className="translation-pending">翻译中</em>
                   : null)}
@@ -68,7 +76,7 @@ export function BilingualMessage({
         )}
         <p className={anyZh ? 'japanese-sub' : 'japanese-raw'} lang="ja">
           {rows.map(segment => (
-            <span key={segment.id} {...bind(segment.id)}>
+            <span key={segment.id} {...bind(segment.id, 'ja')}>
               {segment.ja}
               {!streaming && segment.ja?.trim() && !segment.zh?.trim() && !segment.translationError && (
                 <span className="translation-missing" lang="zh-CN">未译</span>

@@ -1,6 +1,7 @@
 import { apiUrl } from '../apiBase';
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { useReducedMotion } from '../design-system/useReducedMotion';
+import { useScrollPinning } from '../hooks/useScrollPinning';
 import {
   getOrCreateAmadeusSessionId,
   useAmadeusWS,
@@ -30,6 +31,7 @@ import { packAsset } from '../assetPack';
 import { useAudioPlayer, audioPlayer } from '../hooks/useAudioPlayer';
 import { audioService } from '../services/AudioService';
 import { BilingualMessage } from './BilingualMessage';
+import { sentenceArrivals, useArrivalMemory } from '../workstation/arrivalMemory';
 import { Atmosphere } from '../workstation/Atmosphere';
 import { DraftWord } from '../workstation/DraftWord';
 import { DIVERGENCE, Nixie, WORLDLINE_NAME, useTunedValue } from '../workstation/Nixie';
@@ -39,9 +41,12 @@ import { scheduleShiftPrewarm } from '../workstation/shiftStage';
 import { rememberWorkstationFonts } from '../workstation/fontWarmup';
 import { ShiftTransaction } from '../workstation/shiftTransaction';
 import { ConfirmDialog } from '../workstation/ConfirmDialog';
+import { sessionDialogFallback } from '../workstation/focusHandoff';
+import { useExitPresence } from '../workstation/useExitPresence';
 import { ConnectionCheckPanel, chatCheckMessage, requestChatCheck, type ChatCheckState } from '../workstation/ConnectionCheck';
 import { ConnectionList } from '../workstation/ConnectionList';
 import { SendSignal } from '../workstation/SendSignal';
+import { PresenceIndicator, ThinkingMark, PRESENCE_LABELS } from '../workstation/PresenceIndicator';
 import { VoiceScope } from '../workstation/VoiceScope';
 import { ForgetConversationModal } from './ForgetConversationModal';
 import { MemorySpace } from '../memory-space/MemorySpace';
@@ -150,6 +155,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [conversationListFailed, setConversationListFailed] = useState(false);
   const [conversationListWorldline, setConversationListWorldline] = useState<typeof worldline | null>(null);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const presentationScope = `${sessionId}:${worldline}:${activeConversationId ?? 'draft'}`;
+  const presentationScopeRef = useRef<string | null>(presentationScope);
+  useLayoutEffect(() => {
+    presentationScopeRef.current = presentationScope;
+    return () => { presentationScopeRef.current = null; };
+  }, [presentationScope]);
+  const [localSend, setLocalSend] = useState<{ id: string; scope: string } | null>(null);
+  const [draftReconnectScope, setDraftReconnectScope] = useState<string | null>(null);
   const [conversationSearch, setConversationSearch] = useState('');
   const [conversationBusy, setConversationBusy] = useState(false);
   const [forgetTarget, setForgetTarget] = useState<ConversationSummary | null>(null);
@@ -157,7 +170,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [deleteTarget, setDeleteTarget] = useState<ConversationSummary | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deletedRefreshWorldline, setDeletedRefreshWorldline] = useState<string | null>(null);
   const [renameTarget, setRenameTarget] = useState<ConversationSummary | null>(null);
+  // Session dialogs commit first; these only keep a closing dialog on screen for its shorter exit.
+  const deleteDialog = useExitPresence(deleteTarget, reducedMotion);
+  const renameDialog = useExitPresence(renameTarget, reducedMotion);
   const [renameValue, setRenameValue] = useState('');
   const [renameBusy, setRenameBusy] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
@@ -266,6 +283,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const shiftSourceMessages = useRef<Message[]>([]);
   useEffect(() => () => { shiftRef.current?.dispose(); shiftRef.current = null; }, []);
   const systemButtonRef = useRef<HTMLButtonElement>(null);
+  const sideToggleRef = useRef<HTMLButtonElement>(null);
   const openMenu = useCallback((section?: MenuSection) => {
     if (section) setMenuSection(section);
     setIsSettingsOpen(true);
@@ -434,6 +452,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       setConversations(rows);
       setConversationListWorldline(requestedWorldline);
       setConversationListFailed(false);
+      setDeletedRefreshWorldline(null);
       return rows;
     } catch (error) {
       if (requestId === conversationRequestRef.current && requestedWorldline === latestWorldlineRef.current) {
@@ -606,6 +625,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
     onTurnStarted: (conversationId) => {
       audioPlayer.stopAll();
       if (conversationId) {
+        // Materializing this draft continues the same local send, unlike a history switch.
+        setLocalSend(current => current?.scope === presentationScope
+          ? { ...current, scope: `${sessionId}:${worldline}:${conversationId}` } : current);
         setActiveConversationId(conversationId);
         setConversations((current) => current.map((row) => ({
           ...row,
@@ -674,8 +696,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
       setSessionError({ kind: 'worldline', code });
     },
     onTurnCompleted: () => {
+      setLocalSend(null);
       window.setTimeout(() => { void loadConversations().catch(() => undefined); }, 250);
     },
+    onLocalSend: (id) => setLocalSend({ id, scope: presentationScope }),
     onConfigApplied: ({ reasoningEffort: appliedEffort }) => {
       if (appliedEffort === undefined) return;
       setReasoningEffort(appliedEffort);
@@ -1010,16 +1034,20 @@ export const Workstation: React.FC<WorkstationProps> = ({
       const missing = /缺失\s*(\S+)\s*API\s*Key/i.exec(message.content);
       return !missing || missing[1] === activeProviderId;
     });
-  const emptyStateKind = needsApiKey ? 'setup' : status.toLowerCase();
+  const sessionConnecting = status === 'CONNECTING' || (status === 'READY' && sessionState === 'unknown');
+  const sessionUsable = status === 'READY' && sessionState !== 'unknown' && sessionState !== 'rejected';
+  const emptyStateKind = needsApiKey ? 'setup' : sessionConnecting ? 'connecting' : status.toLowerCase();
   const emptyStateMessage = needsApiKey
     ? `> 请为 ${activeProvider?.display_name || activeProviderId} 配置 API Key 以建立连接。`
-    : status === 'CONNECTING'
-      ? '> 正在建立与 Amadeus 核心的连接，请稍候...'
-      : status === 'CLOSED'
-        ? '> 会话连接已关闭，系统将尝试重新连接。'
-        : status === 'ERROR'
-          ? '> 暂时无法连接，请检查后端服务与 API Key。'
-          : '> Amadeus 系统连接已建立。等待用户输入...';
+    : sessionState === 'rejected'
+      ? '> 会话未被接受，请检查连接与模型。'
+      : sessionConnecting
+        ? '> 正在建立与 Amadeus 核心的连接，请稍候...'
+        : status === 'CLOSED'
+          ? '> 会话连接已关闭，系统将尝试重新连接。'
+          : status === 'ERROR'
+            ? '> 暂时无法连接，请检查后端服务与 API Key。'
+            : '> Amadeus 系统连接已建立。等待用户输入...';
 
   // Q14 single activity surface: known tools override Thinking; unknown tools fall back.
   // Raw activeNotice strings are never used as visible labels.
@@ -1036,78 +1064,36 @@ export const Workstation: React.FC<WorkstationProps> = ({
     }, duration);
   }, []);
 
-  const NEAR_BOTTOM_THRESHOLD_PX = 72;
-  const stickToBottomRef = useRef(true);
-  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const transcriptScroll = useScrollPinning({
+    viewportRef: transcriptViewportRef,
+    scope: presentationScope,
+    content: presentationMessages,
+    messageCount: visibleMessages.length,
+    activity: `${isThinking}:${isSynthesizing}`,
+    reducedMotion,
+    paused: Boolean(shift && !shift.committed),
+  });
+  const { showJumpToLatest, scrollToLatest: scrollTranscriptToLatest } = transcriptScroll;
+  // First-seen live lines/sentences, scoped like the scroll state; history and repairs never replay.
+  const arrival = useArrivalMemory(presentationScope);
 
-  const measureTranscriptScroll = useCallback(() => {
-    const viewport = transcriptViewportRef.current;
-    if (!viewport) return { nearBottom: true, overflow: false };
-    const distance = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
-    return {
-      nearBottom: distance <= NEAR_BOTTOM_THRESHOLD_PX,
-      overflow: viewport.scrollHeight > viewport.clientHeight + 1,
-    };
-  }, []);
-
-  const refreshJumpToLatestVisibility = useCallback((messageCount: number) => {
-    if (messageCount <= 0) {
-      setShowJumpToLatest(false);
-      return;
-    }
-    const { nearBottom, overflow } = measureTranscriptScroll();
-    setShowJumpToLatest(overflow && !nearBottom);
-  }, [measureTranscriptScroll]);
-
-  const scrollTranscriptToLatest = useCallback((options?: {
-    force?: boolean;
-    smooth?: boolean;
-  }) => {
-    const viewport = transcriptViewportRef.current;
-    if (!viewport) return;
-    // force:true (send / thinking / jump) re-enables auto-follow.
-    // force:false only scrolls when the caller already knows we are sticky.
-    if (options?.force ?? true) {
-      stickToBottomRef.current = true;
-    }
-    const useSmooth = Boolean(options?.smooth) && !reducedMotion;
-    const apply = () => {
-      const top = viewport.scrollHeight;
-      if (useSmooth && typeof viewport.scrollTo === 'function') {
-        viewport.scrollTo({ top, behavior: 'smooth' });
-      } else {
-        viewport.scrollTop = top;
-      }
-    };
-    apply();
-    window.requestAnimationFrame?.(apply);
-    setShowJumpToLatest(false);
-  }, [reducedMotion]);
-
-  const handleTranscriptScroll = useCallback(() => {
-    const { nearBottom, overflow } = measureTranscriptScroll();
-    stickToBottomRef.current = nearBottom;
-    setShowJumpToLatest(overflow && !nearBottom && messages.length > 0);
-  }, [measureTranscriptScroll, messages.length]);
-
-  // Conditional auto-follow: only when the user remains near the bottom.
   useEffect(() => {
-    if (!stickToBottomRef.current) {
-      refreshJumpToLatestVisibility(messages.length);
-      return;
-    }
-    scrollTranscriptToLatest({ force: false, smooth: false });
-  }, [messages, isThinking, isSynthesizing, scrollTranscriptToLatest, refreshJumpToLatestVisibility]);
+    if (status !== 'READY' || sessionState === 'rejected'
+      || (!isThinking && !isSynthesizing && !messages.some(message => message.streaming))) setLocalSend(null);
+  }, [status, sessionState, messages, isThinking, isSynthesizing]);
+  useLayoutEffect(() => {
+    setLocalSend(current => current?.scope === presentationScope ? current : null);
+  }, [presentationScope]);
 
-  // Sending / thinking still force-jumps to the latest area (approved send behavior).
+  // Reconnect only after the blank draft's hook params have committed.
   useEffect(() => {
-    if (isThinking) {
-      scrollTranscriptToLatest({ force: true, smooth: false });
-    }
-  }, [isThinking, scrollTranscriptToLatest]);
+    if (!draftReconnectScope) return;
+    if (draftReconnectScope === presentationScope) reconnect();
+    setDraftReconnectScope(null);
+  }, [draftReconnectScope, presentationScope, reconnect]);
 
   const handleJumpToLatest = useCallback(() => {
-    scrollTranscriptToLatest({ force: true, smooth: true });
+    scrollTranscriptToLatest({ smooth: true });
   }, [scrollTranscriptToLatest]);
 
   const prevEmotionRef = useRef(emotion);
@@ -1407,21 +1393,35 @@ export const Workstation: React.FC<WorkstationProps> = ({
     setDeleteError(null);
     const wasActive = conversation.id === activeConversationId;
     try {
-      if (wasActive && (isThinking || isSynthesizing)) handleCancelTurn();
       const response = await fetch(
         apiUrl(`/api/conversations/${encodeURIComponent(conversation.id)}?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`),
         { method: 'DELETE' },
       );
       if (!response.ok) throw new Error(`conversation delete failed: ${response.status}`);
+      if (presentationScopeRef.current !== presentationScope) return;
+      // Commit the acknowledged deletion before optional list reconciliation.
+      conversationRequestRef.current += 1;
+      setConversations(current => current.filter(row => row.id !== conversation.id));
       setDeleteTarget(null);
-      await loadConversations();
       if (wasActive) {
         // Q51: deleting the open conversation returns to a blank draft; never silently open another one.
+        if (isThinking || isSynthesizing || messages.some(message => message.streaming)) cancelTurn();
         audioPlayer.stopAll();
+        transcriptScroll.cancelPending();
+        setLocalSend(null);
         setActiveConversationId(null);
         resetToDraft?.();
-        window.setTimeout(reconnect, 0);
+        setDraftReconnectScope(`${sessionId}:${worldline}:draft`);
+        // The blank draft reconnects before it takes input; the keyboard follows to the composer once it can.
+        composerHandoffUntil.current = Date.now() + 3000;
       }
+      const refresh = loadConversations();
+      const refreshRequest = conversationRequestRef.current;
+      await refresh.catch(error => {
+        // loadConversations exposes its real refresh failure in the sidebar.
+        console.warn('Conversation deleted; list refresh failed:', error);
+        if (latestWorldlineRef.current === worldline && refreshRequest === conversationRequestRef.current) setDeletedRefreshWorldline(worldline);
+      });
     } catch (error) {
       console.warn('Conversation deletion failed:', error);
       setDeleteError('删除失败，会话仍然保留。请稍后重试。');
@@ -1465,6 +1465,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
   };
 
   const handleCancelTurn = () => {
+    setLocalSend(null);
+    transcriptScroll.cancelPending();
     audioPlayer.stopAll();
     cancelTurn();
   };
@@ -1740,8 +1742,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
     : needsApiKey ? 'OFFLINE · 待配置'
       : sessionRejected ? 'OFFLINE · 会话被拒绝'
         : status === 'CONNECTING' || sessionPending ? 'OFFLINE · 连接中' : 'OFFLINE';
-  const presence = isThinking ? 'thinking' : isPlaying ? 'speaking' : isSynthesizing ? 'voicing' : online ? 'listening' : 'offline';
-  const presenceLabel = { thinking: '思考中', speaking: '说话中', voicing: '准备语音', listening: '聆听中', offline: '未连接' }[presence];
+  const presence = isThinking ? 'thinking' : isPlaying ? 'speaking' : isSynthesizing ? 'voicing' : online ? 'listening' : sessionConnecting ? 'connecting' : 'offline';
+  const presenceLabel = PRESENCE_LABELS[presence];
   const thinkingSprite = packAsset(worldline === 'steins_gate' ? 'assets/ui/spinner_sg_20f.png' : 'assets/ui/spinner_beta_20f.png');
   const lastAssistantId = [...visibleMessages].reverse().find((msg) => msg.role === 'assistant' && !msg.systemError)?.id;
   // An old conversation whose connection was removed keeps its history but must be re-pointed by the user.
@@ -1778,13 +1780,13 @@ export const Workstation: React.FC<WorkstationProps> = ({
       )}
       <SendSignal
         rootRef={wsRootRef}
-        userCount={messages.filter((m) => m.role === 'user').length}
-        lastIsUser={messages[messages.length - 1]?.role === 'user'}
+        sendId={localSend?.scope === presentationScope ? localSend.id : null}
       />
 
       <header className="ws2-top">
         <button
           type="button"
+          ref={sideToggleRef}
           className="ws2-icon-btn"
           onClick={() => setIsHistoryCollapsed((v) => !v)}
           aria-label={isHistoryCollapsed ? '展开会话列表' : '收起会话列表'}
@@ -1876,7 +1878,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
           searchQuery={conversationSearch}
           onSearchChange={setConversationSearch}
           onSelect={(conversation) => {
-            if (window.innerWidth < 1240) setIsHistoryCollapsed(true);
+            if (window.innerWidth < 1240) {
+              setIsHistoryCollapsed(true);
+              // The drawer's rows leave with it; the keyboard returns to the control that opened it.
+              sideToggleRef.current?.focus({ preventScroll: true });
+            }
             void selectConversation(conversation);
           }}
           onNew={() => { void createConversation(defaultIdentityMode); }}
@@ -1897,7 +1903,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
             ref={transcriptViewportRef}
             className="terminal-chat-viewport ws2-transcript"
             data-testid="transcript-viewport"
-            onScroll={handleTranscriptScroll}
+            onScroll={transcriptScroll.onScroll}
+            onWheel={transcriptScroll.onUserIntent}
+            onTouchStart={transcriptScroll.onUserIntent}
+            onPointerDown={transcriptScroll.onUserIntent}
+            onKeyDown={transcriptScroll.onKeyDown}
+            data-scroll-overflow={transcriptScroll.overflow}
+            data-scroll-start={transcriptScroll.atStart}
+            data-scroll-end={transcriptScroll.atEnd}
           >
             {visibleMessages.length === 0 ? (
               // An empty conversation is a fresh observation log, not a terminal prompt.
@@ -1905,10 +1918,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
                 <div className={`ws2-empty-card ${emptyStateKind}`}>
                   <small className="ws2-empty-kicker">OBSERVATION LOG · {dateLabel} ({dayLabel})</small>
                   <h2 className="ws2-empty-head">
-                    {needsApiKey ? '尚未接通' : status === 'READY' ? '新的观测记录' : status === 'CONNECTING' ? '正在接通' : '暂时无法接通'}
+                    {needsApiKey ? '尚未接通' : sessionUsable ? '新的观测记录' : sessionConnecting ? '正在接通' : '暂时无法接通'}
                   </h2>
                   <p className={`ws2-empty-msg ${emptyStateKind}`}>
-                    {status === 'READY' && !needsApiKey
+                    {sessionUsable && !needsApiKey
                       ? '说第一句话吧。她的日语原文与中文字幕会一并记在这里。'
                       : emptyStateMessage.replace(/^>\s*/, '')}
                   </p>
@@ -1945,7 +1958,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                       </p>
                     </article>
                   ) : (
-                    <article key={msg.id} className="ws2-line ws2-line-kurisu">
+                    <article key={msg.id} className={`ws2-line ws2-line-kurisu${arrival.arriving(`m:${msg.id}`, Boolean(msg.streaming)) ? ' ws2-arrive' : ''}`}>
                       <header>
                         <span className="ws2-who" data-testid="speaker-assistant">
                           <span data-testid="speaker-assistant-primary">KURISU</span>
@@ -1960,6 +1973,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                         fallbackZh={msg.translation}
                         translationScope={msg.translationScope}
                         speakingId={isPlaying && msg.id === lastAssistantId ? speakingId : null}
+                        arriving={sentenceArrivals(arrival, msg.id, msg.segments, Boolean(msg.streaming))}
                       />
                       {msg.streaming && isThinking && operationLabel && (
                         <div className="ws2-thinking" aria-busy={activityBusy}>
@@ -1973,7 +1987,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
                             frameCount={20}
                             fps={15}
                             loop={true}
-                          /> : <span className="ws2-thinking-ring" aria-hidden="true" />}
+                            autoplay={!reducedMotion}
+                          /> : <ThinkingMark />}
                           <span className="ws2-thinking-label" data-testid="activity-operation-label">{operationLabel}</span>
                         </div>
                       )}
@@ -2029,7 +2044,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+              if (e.nativeEvent.isComposing || e.keyCode === 229) {
+                if (e.key === 'Enter' || e.key === 'Escape') e.stopPropagation();
+                return;
+              }
+              if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 e.currentTarget.form?.requestSubmit();
               }
@@ -2161,7 +2180,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             onToggleMute={() => setVoiceMuted((m) => !m)}
             onStop={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); handleStopVoice(); }}
           />
-          <div className="ws2-presence" role="status"><i aria-hidden="true" />{presenceLabel}</div>
+          <PresenceIndicator state={presence} />
         </div>
         {isSettingsOpen && (() => {
           const latest = visibleMessages.find((msg) => msg.id === lastAssistantId);
@@ -2181,6 +2200,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
       </section>
 
       <div className="ws2-toasts">
+        {deletedRefreshWorldline === worldline && conversationListFailed && (
+          <div className="audio-error-toast session-error-toast" role="status">
+            <span className="audio-error-msg">会话已删除，但列表刷新失败。</span>
+            <button type="button" onClick={() => { void loadConversations().catch(() => undefined); }}>重试刷新</button>
+          </div>
+        )}
         {sessionError && (
           <div className="audio-error-toast session-error-toast" data-testid="session-error-toast" role="status">
             <span className="audio-error-msg">
@@ -2421,11 +2446,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
         </ConfirmDialog>
       )}
 
-      {renameTarget && (
+      {renameDialog.shown && (
         <ConfirmDialog
           title="重命名会话"
           confirmLabel="保存"
           focusCancel={false}
+          leaving={renameDialog.leaving}
+          onExited={renameDialog.done}
+          returnFocus={() => sessionDialogFallback(wsRootRef.current, renameDialog.shown?.id ?? '', activeConversationId === null)}
           busy={renameBusy}
           error={renameError}
           onConfirm={() => { void confirmRenameConversation(); }}
@@ -2438,23 +2466,26 @@ export const Workstation: React.FC<WorkstationProps> = ({
             maxLength={80}
             onChange={(e) => setRenameValue(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void confirmRenameConversation(); }
+              if (e.key === 'Enter' && !(e.nativeEvent.isComposing || e.keyCode === 229)) { e.preventDefault(); void confirmRenameConversation(); }
             }}
           />
         </ConfirmDialog>
       )}
 
-      {deleteTarget && (
+      {deleteDialog.shown && (
         <ConfirmDialog
           title="删除这段对话？"
           confirmLabel="删除会话"
           danger
+          leaving={deleteDialog.leaving}
+          onExited={deleteDialog.done}
+          returnFocus={() => sessionDialogFallback(wsRootRef.current, deleteDialog.shown?.id ?? '', activeConversationId === null)}
           busy={deleteBusy}
           error={deleteError}
           onConfirm={() => { void confirmDeleteConversation(); }}
           onCancel={() => { setDeleteTarget(null); setDeleteError(null); }}
         >
-          <p>「{deleteTarget.title}」的聊天记录将被删除，已形成的长期记忆仍会保留。</p>
+          <p>「{deleteDialog.shown.title}」的聊天记录将被删除，已形成的长期记忆仍会保留。</p>
           <p className="ws2-dialog-hint">要同时遗忘这个会话的记忆，请改用「清空聊天记录」。</p>
         </ConfirmDialog>
       )}

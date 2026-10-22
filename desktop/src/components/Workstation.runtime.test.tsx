@@ -533,6 +533,130 @@ describe('Workstation provider runtime changes', () => {
     ))).toBe(true);
   });
 
+  it('guards composer Enter independently for composing and keyCode 229 while preserving Shift+Enter', async () => {
+    const sendChat = vi.fn();
+    wsSpies.useAmadeusWS.mockReturnValue({
+      status: 'READY', sessionState: 'ready', messages: [], isThinking: false, isSynthesizing: false,
+      emotion: 'neutral', sendChat, stopVoice: vi.fn(), cancelTurn: vi.fn(), updateConfig: vi.fn(),
+      reconnect: wsSpies.reconnect, switchConversation: wsSpies.switchConversation, switchWorldline: wsSpies.switchWorldline,
+    });
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    const input = screen.getByLabelText('输入消息');
+    fireEvent.change(input, { target: { value: '中文草稿' } });
+    for (const guard of [{ isComposing: true }, { keyCode: 229 }, { shiftKey: true }]) {
+      fireEvent.keyDown(input, { key: 'Enter', ...guard });
+      expect(sendChat).not.toHaveBeenCalled();
+      expect(input).toHaveValue('中文草稿');
+    }
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(sendChat).toHaveBeenCalledExactlyOnceWith('中文草稿');
+    expect(input).toHaveValue('');
+  });
+
+  it('keeps the empty-state copy and input pending until session.ready', () => {
+    const state = {
+      status: 'READY', sessionState: 'unknown', messages: [], isThinking: false, isSynthesizing: false,
+      emotion: 'neutral', sendChat: vi.fn(), stopVoice: vi.fn(), cancelTurn: vi.fn(), updateConfig: vi.fn(),
+      reconnect: wsSpies.reconnect, switchConversation: wsSpies.switchConversation, switchWorldline: wsSpies.switchWorldline,
+    };
+    wsSpies.useAmadeusWS.mockImplementation(() => state);
+    const h = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(screen.getByText('正在接通')).toBeInTheDocument();
+    expect(screen.queryByText(/说第一句话/)).toBeNull();
+    expect(screen.getByLabelText('输入消息')).toBeDisabled();
+    state.sessionState = 'ready';
+    h.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(screen.getByText(/说第一句话/)).toBeInTheDocument();
+  });
+
+  it('starts the signal only on local send, keeps draft materialization, and clears on completion or history switch', () => {
+    const state = {
+      status: 'READY', messages: [{ id: 'history-1', role: 'user', content: 'loaded history', streaming: false }],
+      isThinking: false, isSynthesizing: false, emotion: 'neutral',
+      sendChat: vi.fn(), stopVoice: vi.fn(), cancelTurn: vi.fn(), updateConfig: vi.fn(),
+      reconnect: wsSpies.reconnect, switchConversation: wsSpies.switchConversation, switchWorldline: wsSpies.switchWorldline,
+    };
+    wsSpies.useAmadeusWS.mockImplementation(() => state);
+    const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width: 20, height: 20, top: 0, left: 0, right: 20 } as DOMRect);
+    const h = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    const signal = () => h.container.querySelector('.ws2-signal');
+    state.messages = [...state.messages, { id: 'history-2', role: 'user', content: 'another loaded history', streaming: false }];
+    h.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(signal()).toBeNull();
+    state.isThinking = true;
+    act(() => wsSpies.useAmadeusWS.mock.lastCall![0].onLocalSend('local-1'));
+    const first = signal();
+    expect(first).not.toBeNull();
+    act(() => wsSpies.useAmadeusWS.mock.lastCall![0].onTurnStarted('materialized'));
+    expect(signal()).toBe(first);
+    act(() => wsSpies.useAmadeusWS.mock.lastCall![0].onTurnCompleted());
+    expect(signal()).toBeNull();
+    act(() => wsSpies.useAmadeusWS.mock.lastCall![0].onLocalSend('local-2'));
+    expect(signal()).not.toBeNull();
+    act(() => wsSpies.useAmadeusWS.mock.lastCall![0].onConversationSwitched({ conversationId: 'other-history' }));
+    expect(signal()).toBeNull();
+    h.unmount();
+    bounds.mockRestore();
+  });
+
+  it.each(['cancel', 'delete-fails', 'refresh-fails', 'success', 'inactive'] as const)(
+    'keeps deletion truth independent from refresh: %s', async (outcome) => {
+      wsSpies.realHistory = true;
+      const resetToDraft = vi.fn(() => { state.messages = []; });
+      const state = { messages: [{ id: 'old-user', role: 'user', content: 'open transcript' }] };
+      wsSpies.useAmadeusWS.mockImplementation(() => ({
+        status: 'READY', messages: state.messages, isThinking: false, isSynthesizing: false,
+        emotion: 'neutral', sendChat: vi.fn(), stopVoice: vi.fn(), cancelTurn: vi.fn(), updateConfig: vi.fn(),
+        resetToDraft, reconnect: wsSpies.reconnect, switchConversation: wsSpies.switchConversation, switchWorldline: wsSpies.switchWorldline,
+      }));
+      const sourceFetch = globalThis.fetch;
+      let deleted = false;
+      const deleteRequest = vi.fn();
+      vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === 'DELETE') {
+          deleteRequest();
+          deleted = outcome !== 'delete-fails';
+          return Promise.resolve({ ok: deleted, status: deleted ? 200 : 503 } as Response);
+        }
+        if (String(input).startsWith('/api/conversations?') && deleted) {
+          return Promise.resolve({ ok: outcome !== 'refresh-fails', status: outcome === 'refresh-fails' ? 503 : 200, json: async () => [] } as Response);
+        }
+        return sourceFetch(input, init);
+      }));
+      render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+      fireEvent.click(screen.getAllByRole('button', { name: '展开会话列表' })[0]);
+      await screen.findByText('Default Conversation');
+      if (outcome !== 'inactive') {
+        act(() => wsSpies.useAmadeusWS.mock.lastCall![0].onConversationSwitched({ conversationId: 'conversation-one' }));
+      }
+      fireEvent.click(screen.getByRole('button', { name: '会话操作 Default Conversation' }));
+      fireEvent.click(screen.getByRole('menuitem', { name: '删除 Default Conversation' }));
+      fireEvent.click(screen.getByRole('button', { name: outcome === 'cancel' ? '取消' : '删除会话' }));
+      if (outcome === 'cancel') {
+        expect(deleteRequest).not.toHaveBeenCalled();
+      } else {
+        await waitFor(() => expect(deleteRequest).toHaveBeenCalledTimes(1));
+      }
+      if (outcome === 'refresh-fails' || outcome === 'success') {
+        await waitFor(() => expect(resetToDraft).toHaveBeenCalledTimes(1));
+        expect(screen.queryByText('open transcript')).toBeNull();
+        expect(screen.queryByText('Default Conversation')).toBeNull();
+        expect(wsSpies.useAmadeusWS.mock.lastCall![0].conversationId).toBeNull();
+        expect(wsSpies.switchConversation).not.toHaveBeenCalled();
+        if (outcome === 'refresh-fails') {
+          expect(await screen.findByText('刷新失败')).toBeInTheDocument();
+          expect(screen.getByText('会话已删除，但列表刷新失败。')).toBeInTheDocument();
+          fireEvent.click(screen.getAllByRole('button', { name: '收起会话列表' })[0]);
+          expect(screen.getByText('会话已删除，但列表刷新失败。')).toBeInTheDocument();
+        }
+      } else {
+        expect(resetToDraft).not.toHaveBeenCalled();
+        expect(screen.getByText('open transcript')).toBeInTheDocument();
+        if (outcome === 'delete-fails') expect(await screen.findByRole('alert')).toHaveTextContent('会话仍然保留');
+      }
+    },
+  );
+
   it('requests an in-place worldline draft switch when the parent worldline changes', async () => {
     const onWorldlineChange = vi.fn();
     const { rerender } = render(<Workstation worldline="steins_gate" onWorldlineChange={onWorldlineChange} onLogout={vi.fn()} />,
@@ -1301,6 +1425,7 @@ describe('Workstation UX-TRANSCRIPT-FOLLOW-01 conditional stick + jump', () => {
       ...state.messages,
       { id: 'm2', role: 'assistant', content: '二段。', streaming: true, segments: [] },
     ];
+    state.isThinking = true;
     metrics.scrollHeight = 1200;
     rerender(
       <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />,

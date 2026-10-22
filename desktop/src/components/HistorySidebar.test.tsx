@@ -21,6 +21,22 @@ const conversations: ConversationSummary[] = [
 ];
 
 describe('HistorySidebar conversations', () => {
+  it('ignores composition Escape in the menu and restores normal Escape focus without scrolling', () => {
+    render(<HistorySidebar isCollapsed={false} onToggle={vi.fn()} conversations={conversations}
+      activeId="one" searchQuery="" onSearchChange={vi.fn()} onSelect={vi.fn()} onNew={vi.fn()}
+      onRename={vi.fn()} onTogglePin={vi.fn()} onDelete={vi.fn()} onForget={vi.fn()} />);
+    const trigger = screen.getByLabelText('会话操作 时间机器实验');
+    fireEvent.click(trigger);
+    for (const guard of [{ isComposing: true }, { keyCode: 229 }]) {
+      fireEvent.keyDown(window, { key: 'Escape', ...guard });
+      expect(screen.getByRole('menu')).toBeInTheDocument();
+    }
+    const focus = vi.spyOn(trigger, 'focus');
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('menu')).toBeNull();
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
   it('filters and routes conversation actions', () => {
     const onSearchChange = vi.fn();
     const onSelect = vi.fn();

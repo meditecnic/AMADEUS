@@ -47,7 +47,7 @@ export function devMockPlugin(): Plugin {
           const cookies = request.headers.cookie || '';
           const connection = runtime.connect(url, frame => {
             if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(frame));
-          }, readCookie(cookies, 'amadeus_mock_client') || 'default', cookies);
+          }, readCookie(cookies, 'amadeus_mock_client') || 'default', cookies, () => ws.close(1012, 'Mock transport interruption'));
           sockets.set(ws, connection);
           ws.on('message', raw => {
             try {
@@ -77,6 +77,14 @@ export function devMockPlugin(): Plugin {
       server.httpServer.once('close', cleanup);
       server.middlewares.use(async (request, response, next) => {
         const url = new URL(request.url || '/', 'http://localhost');
+        if (url.pathname === '/__mock/status') {
+          try {
+            response.setHeader('Content-Type', 'text/html; charset=utf-8');
+            response.setHeader('Cache-Control', 'no-store');
+            response.end(await server.transformIndexHtml(url.pathname, '<!doctype html><html lang="zh-CN"><head><title>Silent status preview</title></head><body><div id="root"></div><script type="module" src="/src/dev-mock/status-preview.tsx"></script></body></html>'));
+          } catch (error) { next(error as Error); }
+          return;
+        }
         if (!url.pathname.startsWith('/api/') && !url.pathname.startsWith('/health')) return next();
         response.setHeader('Content-Type', 'application/json; charset=utf-8');
         response.setHeader('Cache-Control', 'no-store');

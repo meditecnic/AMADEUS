@@ -68,11 +68,11 @@ function ConversationMenu({ conversation, onRename, onTogglePin, onDelete, onFor
       if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
     };
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.isComposing) return;
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return;
       event.preventDefault();
       event.stopPropagation();
       setOpen(false);
-      triggerRef.current?.focus();
+      triggerRef.current?.focus({ preventScroll: true });
     };
     document.addEventListener('mousedown', onDown);
     window.addEventListener('keydown', onKey, true);
@@ -201,6 +201,7 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
             ) : visible.map((conversation, index) => (
               <article
                 key={conversation.id}
+                data-conversation-id={conversation.id}
                 style={{ '--i': index } as React.CSSProperties}
                 className={`conversation-item ${conversation.id === activeId ? 'active' : ''}`}
               >

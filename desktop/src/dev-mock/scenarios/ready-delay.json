@@ -1,0 +1,6 @@
+{
+  "name": "ready-delay",
+  "extends": "streaming",
+  "description": "An open socket waits 2500ms before session.ready; the composer stays unavailable.",
+  "transport": { "readyDelayMs": 2500, "closeAfterReadyMs": null }
+}
