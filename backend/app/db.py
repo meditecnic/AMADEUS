@@ -692,6 +692,7 @@ def _backfill_history_v2(connection: sqlite3.Connection, worldline: str) -> None
         )
         connection.commit()
     except Exception:
+        # Broad on purpose: roll back on any failure, then re-raise unchanged.
         connection.rollback()
         raise
 
@@ -751,6 +752,7 @@ def _backfill_history_v4(connection: sqlite3.Connection) -> None:
         )
         connection.commit()
     except Exception:
+        # Broad on purpose: roll back on any failure, then re-raise unchanged.
         connection.rollback()
         raise
 
@@ -867,6 +869,7 @@ def _backfill_memory_v5(connection: sqlite3.Connection) -> None:
         )
         connection.commit()
     except Exception:
+        # Broad on purpose: roll back on any failure, then re-raise unchanged.
         connection.rollback()
         raise
 
@@ -954,6 +957,7 @@ def _backfill_memory_v6(connection: sqlite3.Connection) -> None:
         )
         connection.commit()
     except Exception:
+        # Broad on purpose: roll back on any failure, then re-raise unchanged.
         connection.rollback()
         raise
 
@@ -996,6 +1000,7 @@ def _migrate_v6_to_v7(connection: sqlite3.Connection, kind: DatabaseKind) -> Non
             )
             connection.commit()
         except Exception:
+            # Broad on purpose: roll back on any failure, then re-raise unchanged.
             connection.rollback()
             raise
         return
@@ -1025,6 +1030,7 @@ def _migrate_v7_to_v8(connection: sqlite3.Connection, kind: DatabaseKind) -> Non
         )
         connection.commit()
     except Exception:
+        # Broad on purpose: roll back on any failure, then re-raise unchanged.
         connection.rollback()
         raise
 
@@ -1052,6 +1058,7 @@ def _migrate_v8_to_v9(connection: sqlite3.Connection, kind: DatabaseKind) -> Non
         )
         connection.commit()
     except Exception:
+        # Broad on purpose: roll back on any failure, then re-raise unchanged.
         connection.rollback()
         raise
 
@@ -1109,6 +1116,7 @@ def _migrate_v9_to_v10(connection: sqlite3.Connection, kind: DatabaseKind) -> No
         )
         connection.commit()
     except Exception:
+        # Broad on purpose: roll back on any failure, then re-raise unchanged.
         connection.rollback()
         raise
 
@@ -1204,6 +1212,7 @@ def _migrate_v10_to_v11(
         )
         connection.commit()
     except Exception:
+        # Broad on purpose: roll back on any failure, then re-raise unchanged.
         connection.rollback()
         raise
 
@@ -1351,6 +1360,7 @@ async def init_db() -> None:
                 await asyncio.to_thread(_initialize_vec0, _resolve_path(wl, "memory"))
             _migration_state = {"status": "ready", "error": None}
         except Exception as exc:
+            # Broad on purpose: record any init failure for status, then re-raise.
             _migration_state = {"status": "error", "error": str(exc)}
             raise
 

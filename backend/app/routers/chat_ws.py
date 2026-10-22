@@ -3,6 +3,7 @@ import base64
 import json
 import asyncio
 import hashlib
+import logging
 from uuid import uuid4
 from collections.abc import Awaitable, Callable
 import starlette
@@ -46,6 +47,7 @@ from contextlib import aclosing
 from app.security.guard import contains_leak
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 _V2_DELIVERY_TYPES = frozenset(
     {
@@ -155,6 +157,10 @@ class SessionState:
         self.memory_summary = ""
         self.lock = asyncio.Lock()
         self.compressing = False
+        # Audit #11: consecutive history-compression failures and the number
+        # of eligible turns still to skip before the next attempt.
+        self.compression_failures = 0
+        self.compression_skip_turns = 0
         
         self.temperature = 0.0
         self.provider_id = "deepseek"
@@ -392,6 +398,99 @@ async def translate_with_provider(
 
 
 
+# Audit #11: history-compression backoff. A failed compression used to be
+# re-requested on every following turn. After each consecutive failure the
+# next attempt waits BASE * 2**(failures - 1) eligible turns (1, 2, 4, 8, 16,
+# 16, ...). Counted in turns, not seconds: the trigger only runs once per turn.
+_COMPRESSION_BACKOFF_BASE_TURNS = 1
+_COMPRESSION_BACKOFF_MAX_TURNS = 16
+
+
+def _compression_backoff_turns(failures: int) -> int:
+    if failures <= 0:
+        return 0
+    exponent = min(failures - 1, 16)
+    return min(
+        _COMPRESSION_BACKOFF_BASE_TURNS * (2 ** exponent),
+        _COMPRESSION_BACKOFF_MAX_TURNS,
+    )
+
+
+def _record_compression_outcome(session: "SessionState", succeeded: bool) -> None:
+    """Update the backoff state; the caller holds ``session.lock``."""
+    if succeeded:
+        session.compression_failures = 0
+        session.compression_skip_turns = 0
+        return
+    session.compression_failures += 1
+    session.compression_skip_turns = _compression_backoff_turns(
+        session.compression_failures
+    )
+    logger.warning(
+        "[History Compression] Session %s: %d consecutive failure(s); "
+        "next attempt after %d eligible turn(s)",
+        session.session_id,
+        session.compression_failures,
+        session.compression_skip_turns,
+    )
+
+
+def _compression_trigger_messages() -> int:
+    """Smallest in-memory history length that triggers a compression."""
+    return 2 * (config.HISTORY_COMPRESS_THRESHOLD + 1)
+
+
+def _compression_outcome_is_current(
+    session: "SessionState",
+    request_session: "SessionState | None",
+    worldline: str,
+    revision: int,
+    conversation_id: str | None,
+    request_epoch: int | None,
+) -> bool:
+    """True when the session still matches what the request was issued for.
+
+    A compression result that arrives after a conversation/worldline switch,
+    a reconnect (new revision) or an erasure (new content epoch) describes a
+    state that no longer exists, so it must not move the backoff counters.
+    The caller holds ``session.lock``.
+    """
+    return (
+        session is request_session
+        and request_epoch is not None
+        and session.worldline == worldline
+        and session.revision == revision
+        and getattr(session, "conversation_id", None) == conversation_id
+        and session.content_epoch == request_epoch
+    )
+
+
+async def _cap_history_during_compression_backoff(session: "SessionState") -> None:
+    """Keep the prompt window bounded while compression is backing off.
+
+    Once history exceeds twice the trigger length, drop the oldest in-memory
+    rows back to the trigger length with the same front slice a compression
+    applies. Durable history and the stored summary are untouched. Never runs
+    while a compression task is in flight, whose own slice assumes the rows it
+    snapshotted are still at the front.
+    """
+    keep = _compression_trigger_messages()
+    async with session.lock:
+        if session.compressing:
+            return
+        history = session.history
+        if len(history) <= 2 * keep:
+            return
+        dropped = len(history) - keep
+        session.history = history[dropped:]
+    logger.warning(
+        "[History Compression] Session %s: backoff active; dropped %d oldest "
+        "in-memory messages (durable history untouched)",
+        session.session_id,
+        dropped,
+    )
+
+
 async def compress_and_update_history(
     session_id: str,
     current_history: list,
@@ -421,12 +520,21 @@ async def compress_and_update_history(
     
     print(f"[History Compression] Session {session_id}: Compressing {N} messages...")
     new_summary = None
+    # Audit #11: True/False feed the backoff; None (stale snapshot, nothing
+    # promptable) leaves it unchanged.
+    compression_succeeded = None
+    # Session state the request is issued against; recorded before any await
+    # so a late outcome can be checked against it in ``finally``.
+    request_session = None
+    request_epoch = None
     try:
         session_data = sessions.get(session_id)
         if session_data:
             if (session_data.worldline != worldline or session_data.revision != revision
                     or session_data.conversation_id != conversation_id or session_data.erasure_pending):
                 return
+            request_session = session_data
+            request_epoch = session_data.content_epoch
             if not prompt_history:
                 # Durable/API history stays untouched. Only the in-memory prompt
                 # window discards old assistant output that never met the
@@ -476,6 +584,7 @@ async def compress_and_update_history(
             summary_epoch = session_data.content_epoch
             raw = await method(**kwargs)
             success, summary = normalize_generated_working_summary(raw)
+            compression_succeeded = bool(success)
             if not success:
                 # Failure ('' / whitespace / provider error / reserved marker):
                 # no save, no history trim; previous safe runtime summary stays.
@@ -512,19 +621,45 @@ async def compress_and_update_history(
                         f"compression successful ({len(summary)} chars)"
                     )
     except Exception as e:
-        print(f"[History Compression Error] Session {session_id}: {e}")
+        # Broad on purpose: background task; any provider/DB failure must stay
+        # contained here and is counted by the compression backoff (#11).
+        compression_succeeded = False
+        # Type only: provider error text can echo request or chat content.
+        logger.warning(
+            "[History Compression] Session %s: compression failed (%s)",
+            session_id,
+            type(e).__name__,
+        )
     finally:
         session_data = sessions.get(session_id)
         if session_data:
             async with session_data.lock:
                 session_data.compressing = False
+                if compression_succeeded is not None:
+                    if _compression_outcome_is_current(
+                        session_data,
+                        request_session,
+                        worldline,
+                        revision,
+                        conversation_id,
+                        request_epoch,
+                    ):
+                        _record_compression_outcome(session_data, compression_succeeded)
+                    else:
+                        logger.info(
+                            "[History Compression] Session %s: session changed "
+                            "during the request; outcome not counted for backoff",
+                            session_id,
+                        )
 
 async def execute_tool_call(name: str, arguments_str: str) -> str:
     if name == "web_search":
         try:
             args = json.loads(arguments_str)
             query = args.get("query", "")
-        except Exception:
+        except (ValueError, TypeError, AttributeError, RecursionError):
+            # Not a JSON object (bad/odd JSON, non-str input, or nesting too
+            # deep): keep the historical fallback of searching the raw text.
             query = arguments_str
         response = await search_service.search(query)
         if response.failure_code is not None:
@@ -1101,6 +1236,8 @@ async def _render_foreign_speech_to_japanese(
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            # Broad on purpose: provider adapters raise arbitrary types; a
+            # failed render attempt retries, then the caller fails closed.
             print(
                 f"[LanguageRenderer] attempt={renderer_attempt + 1}/2 "
                 f"provider_error={type(exc).__name__} source_sha256={digest}",
@@ -1262,6 +1399,8 @@ async def repair_turn_translation(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        # Broad on purpose: best-effort background repair (provider + DB); the
+        # turn already completed, so any failure only skips the repair.
         print(
             f"[Translation Repair] {type(exc).__name__} for turn {turn_id}",
             flush=True,
@@ -1269,10 +1408,35 @@ async def repair_turn_translation(
         return None
 
 
+def _log_background_task_failure(task: asyncio.Task) -> None:
+    """Done callback: a fire-and-forget task must never fail silently.
+
+    Retrieving the exception here also replaces asyncio's late "Task exception
+    was never retrieved" message. Only the task name and exception type are
+    logged: exception text may echo provider payloads or chat content.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error(
+            "[Background] task %s failed (%s); chat continues",
+            task.get_name(),
+            type(exc).__name__,
+        )
+
+
 def _schedule_background_task(session: SessionState, coroutine) -> asyncio.Task:
-    task = asyncio.create_task(coroutine)
+    """Run turn follow-up work in the background without losing it.
+
+    The event loop keeps only weak references to tasks, so the session holds a
+    strong reference until the task finishes; failures are logged once.
+    """
+    label = getattr(coroutine, "__qualname__", None) or type(coroutine).__name__
+    task = asyncio.create_task(coroutine, name=f"chat-bg:{label}")
     session.background_tasks.add(task)
     task.add_done_callback(session.background_tasks.discard)
+    task.add_done_callback(_log_background_task_failure)
     return task
 
 
@@ -1302,6 +1466,8 @@ async def _persist_aborted_turn(
             translation=_ABORTED_TURN_ZH,
         )
     except Exception as exc:
+        # Broad on purpose: runs while the turn is being cancelled; a DB error
+        # here must not replace the CancelledError being propagated.
         print(
             f"[Turn] aborted-turn notice failed ({type(exc).__name__})",
             flush=True,
@@ -1905,6 +2071,8 @@ async def processor_loop(
                     session.api_key,
                 )
             except Exception as exc:
+                # Broad on purpose: translation is optional for v1 turns; any
+                # provider error degrades to an empty subtitle.
                 print(
                     f"[Translation] unavailable; chat continues ({type(exc).__name__})",
                     flush=True,
@@ -1950,13 +2118,16 @@ async def processor_loop(
                                 model_id=str(model_id),
                             )
                         except Exception as exc:
-                            print(
-                                f"[MemoryV11] enqueue failed (chat continues): {exc!r}",
-                                flush=True,
+                            # Broad on purpose: memory enqueue is best-effort
+                            # background work and must never affect chat.
+                            # Type only: the error text can carry chat content.
+                            logger.warning(
+                                "[MemoryV11] enqueue failed (%s); chat continues",
+                                type(exc).__name__,
                             )
 
                     if isinstance(user_message_id, int) and user_message_id > 0:
-                        asyncio.create_task(_enqueue_memory_v11())
+                        _schedule_background_task(session, _enqueue_memory_v11())
                 else:
                     from app.services.memory import memory_service
 
@@ -2061,17 +2232,24 @@ async def processor_loop(
             )
         
         if len(session.history) // 2 > config.HISTORY_COMPRESS_THRESHOLD and not session.compressing:
-            session.compressing = True
-            asyncio.create_task(
-                compress_and_update_history(
-                    session.session_id,
-                    session.history,
-                    session.worldline,
-                    session.revision,
-                    conversation_id,
-                    turn_provider,
+            if session.compression_skip_turns > 0:
+                # Audit #11: backing off after failed compressions; no request
+                # this turn, but the in-memory window stays bounded.
+                session.compression_skip_turns -= 1
+                await _cap_history_during_compression_backoff(session)
+            else:
+                session.compressing = True
+                _schedule_background_task(
+                    session,
+                    compress_and_update_history(
+                        session.session_id,
+                        session.history,
+                        session.worldline,
+                        session.revision,
+                        conversation_id,
+                        turn_provider,
+                    )
                 )
-            )
             
     except asyncio.CancelledError:
         if (
@@ -2082,7 +2260,9 @@ async def processor_loop(
             and conversation_id
         ):
             aborted_turn_written = True
-            notice = asyncio.create_task(_persist_aborted_turn(
+            # Held by the session: if a second cancel interrupts the shield,
+            # the notice keeps running and must not be garbage-collected.
+            notice = _schedule_background_task(session, _persist_aborted_turn(
                 session_id=session.session_id,
                 worldline=turn_worldline,
                 conversation_id=conversation_id,
@@ -2110,6 +2290,8 @@ async def processor_loop(
             "message": str(e),
         }))
     except Exception as e:
+        # Broad on purpose: turn boundary. Any failure becomes the recoverable
+        # turn_failed frame instead of killing the processor task.
         if segment_pipeline is not None:
             await segment_pipeline.cancel(reason=None)
         if segment_pipeline is not None and diagnostic_observer is not None:
@@ -2308,6 +2490,7 @@ async def _dispatch_tts_sentences(
         await t2
 
     except Exception as e:
+        # Broad on purpose: stop the sender task for any failure, then re-raise.
         t2.cancel()
         await sentence_queue.put(e)
         await asyncio.gather(t2, return_exceptions=True)
@@ -2343,6 +2526,8 @@ async def _dispatch_streaming_voice_tts(session: SessionState, final_text: str, 
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            # Broad on purpose: any TTS stream failure degrades this sentence
+            # only; the turn continues with the next one.
             await send_queue.put((epoch, {"type": "voice.audio_degraded", "sentence_id": sentence_id, "reason": str(exc)}))
         finally:
             session.active_streams.discard(stream)
@@ -2360,6 +2545,7 @@ async def run_tts_pipeline(session: SessionState, text: str, emotion: str, send_
         tts_manager.cancel_pending(session.tts_key)
         raise
     except Exception as e:
+        # Broad on purpose: debug-only pipeline; report any failure to the client.
         print(f"[TTS Debug Error] {e}")
         await send_queue.put((epoch, {"type": "error", "message": f"TTS debug error: {e}"}))
     finally:
@@ -2396,6 +2582,8 @@ async def writer_loop(send_queue: asyncio.Queue, session: SessionState, websocke
                         diagnostic_runtime.release_turn_observer(turn_id, generation)
                     raise
                 except Exception:
+                    # Broad on purpose: record any transport failure for
+                    # diagnostics, then re-raise it unchanged.
                     if observer is not None:
                         observer.delivery(payload, "failed", "transport_failed")
                     if payload_type in _V2_TERMINAL_TYPES and turn_id is not None:
@@ -2411,6 +2599,8 @@ async def writer_loop(send_queue: asyncio.Queue, session: SessionState, websocke
     except WebSocketDisconnect:
         pass
     except Exception as e:
+        # Broad on purpose: the writer ends quietly; the reader's finally
+        # cancels and gathers it on disconnect.
         print(f"[Writer Exception] Session {session.session_id}: {e}")
 
 @router.websocket("/ws/chat")
@@ -2448,6 +2638,9 @@ async def websocket_chat_endpoint(websocket: WebSocket):
             except WebSocketDisconnect:
                 break
             except Exception as e:
+                # Broad on purpose: malformed frames surface as ValueError,
+                # KeyError or RuntimeError depending on the ASGI server; the
+                # reader answers with an error frame and keeps the socket.
                 await send_queue.put((session.current_epoch, {"type": "error", "message": f"数据格式无效: {str(e)}"}))
                 continue
             
@@ -2723,7 +2916,14 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                     session.current_epoch += 1
                     session.revision = session.current_epoch
                     await session.load_from_db()
-                except Exception:
+                except Exception as switch_exc:
+                    # Broad on purpose: any DB/runtime failure must roll back
+                    # and answer conversation.switch_error, never end the reader.
+                    logger.warning(
+                        "[Conversation] switch failed for session %s (%s); rolling back",
+                        session.session_id,
+                        type(switch_exc).__name__,
+                    )
                     for attribute, value in runtime_snapshot.items():
                         setattr(session, attribute, value)
                     try:
@@ -2734,8 +2934,16 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                             session.worldline,
                             str(previous_selected["id"]),
                         )
-                    except Exception:
-                        pass
+                    except Exception as restore_exc:
+                        # Swallowed on purpose: best-effort restore of the
+                        # durable selection; the in-memory runtime is already
+                        # restored and the client gets switch_error below.
+                        logger.warning(
+                            "[Conversation] could not restore previous selection "
+                            "for session %s (%s)",
+                            session.session_id,
+                            type(restore_exc).__name__,
+                        )
                     await send_queue.put((session.current_epoch, {
                         "type": "conversation.switch_error",
                         "request_id": request_id,
@@ -2780,7 +2988,15 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                         target_worldline,
                         websocket,
                     )
-                except Exception:
+                except Exception as switch_exc:
+                    # Broad on purpose: switch() restores its own snapshot on
+                    # failure; any switch/lease error answers
+                    # worldline.switch_error and never ends the reader.
+                    logger.warning(
+                        "[Worldline] switch failed for session %s (%s)",
+                        session.session_id,
+                        type(switch_exc).__name__,
+                    )
                     await send_queue.put((session.current_epoch, {
                         "type": "worldline.switch_error",
                         "request_id": request_id,
@@ -2802,6 +3018,8 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 try:
                     await models.clear_session_data(session.session_id, worldline=session.worldline)
                 except Exception as e:
+                    # Broad on purpose: any storage failure is reported and the
+                    # in-memory history is left untouched.
                     await send_queue.put((session.current_epoch, {"type": "error", "message": f"物理清除历史记录失败: {str(e)}"}))
                     continue
                 
@@ -2990,11 +3208,19 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 await send_queue.put((session.current_epoch, {"type": "error", "message": f"Unknown frame type: {frame_type}"}))
                 
     except Exception as e:
+        # Broad on purpose: connection boundary; the finally below must still
+        # cancel tasks and release the lease.
         print(f"[Reader Exception] Session {session_id}: {e}")
         try:
             await send_queue.put((session.current_epoch, {"type": "error", "message": f"Server error: {str(e)}"}))
-        except Exception:
-            pass
+        except Exception as notify_exc:
+            # Swallowed on purpose: the connection is already failing; not
+            # being able to queue the last error frame must not skip cleanup.
+            logger.warning(
+                "[Reader] could not queue error frame for session %s (%s)",
+                session_id,
+                type(notify_exc).__name__,
+            )
     finally:
         # Cancel running Processor and Writer tasks on disconnect
         tasks_to_gather = [writer_task]

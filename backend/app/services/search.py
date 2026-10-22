@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import time
@@ -20,6 +21,8 @@ except ImportError:  # pragma: no cover - compatibility for an old install
 
 from app.db import get_db
 from app.services.credentials import credential_store
+
+logger = logging.getLogger(__name__)
 
 SearchProviderId = Literal["tavily", "firecrawl"]
 
@@ -130,7 +133,9 @@ class SearchService:
         cred_id = SEARCH_CREDENTIAL_BY_PROVIDER[provider]
         try:
             stored = credential_store.get(cred_id)
-        except Exception:
+        except (OSError, ValueError):
+            # Credential Manager read failures surface as OSError (WinError);
+            # a bad id or undecodable blob as ValueError. Fall back to env.
             stored = None
         return stored or os.getenv(SEARCH_ENV_KEYS[provider], "")
 
@@ -144,7 +149,8 @@ class SearchService:
     def get_active_provider() -> SearchProviderId:
         try:
             stored = credential_store.get(SEARCH_ACTIVE_PROVIDER_ID)
-        except Exception:
+        except (OSError, ValueError):
+            # Same store failure modes as configured_key: use the default order.
             stored = None
         return normalize_search_provider(stored)
 
@@ -259,6 +265,8 @@ class SearchService:
                     )
                 last_reason = response.degraded_reason or response.failure_code
             except Exception as exc:
+                # Broad on purpose: HTTP/JSON/response-shape errors of any type
+                # fail closed to the next provider or a degraded response.
                 last_reason = f"{provider}_error:{type(exc).__name__}"
 
         # No DuckDuckGo (or other free HTML) degradation path — fail closed.
@@ -460,8 +468,14 @@ def _legacy_weather(query: str) -> str:
                     f"{day_description}, {day.get('mintempC','?')}°C ~ {day.get('maxtempC','?')}°C"
                 )
             return "\n".join(lines)
-    except Exception:
-        pass
+    except Exception as exc:
+        # Broad on purpose: best-effort lookup. HTTP/network errors, invalid
+        # URLs, bad JSON, payload-shape errors and outbound transport guards
+        # (which raise RuntimeError) must all fall back to the DDG search.
+        logger.warning(
+            "[Search] legacy weather lookup failed (%s); falling back to DDG",
+            type(exc).__name__,
+        )
     return _legacy_ddg(f"{city} weather")
 
 
@@ -476,6 +490,8 @@ def _legacy_ddg(query: str) -> str:
             for row in results
         )
     except Exception as exc:
+        # Broad on purpose: legacy helper contract returns an error string
+        # for any DDG failure instead of raising.
         return f'Search error: {exc}. No search results found for the query: "{query}".'
 
 
