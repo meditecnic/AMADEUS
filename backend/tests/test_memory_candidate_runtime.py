@@ -111,17 +111,38 @@ def _has_core_facts_heading(system_prompt: str) -> bool:
     return system_prompt.startswith("CORE FACTS\n") or "\nCORE FACTS\n" in system_prompt
 
 
+def _system_text(call: dict) -> str:
+    messages = call.get("messages") or []
+    if messages and isinstance(messages[0], dict) and messages[0].get("role") == "system":
+        return str(messages[0].get("content") or "")
+    return ""
+
+
+def _core_facts_heading_calls(capture: _ProviderCapture) -> list[int]:
+    """Indexes of every captured chat request whose system prompt has CORE FACTS."""
+    return [
+        index
+        for index, call in enumerate(capture.chat_calls)
+        if _has_core_facts_heading(_system_text(call))
+    ]
+
+
 def _stable_fact_block(capture: _ProviderCapture) -> str:
     """Stable-fact records the provider actually received on the last call.
 
     v11 spec (cf14875): the system prompt never carries a CORE FACTS section;
     stable facts reach the provider only after ``recall_memory`` as the
     second-round ``MEMORY CANDIDATES`` / ``MEMORY_CANDIDATE_DATA`` system
-    message. Returns the record texts of the last such block (need labels echo
-    the user query, so they are excluded).
+    message. Every captured request so far (both rounds of every turn) is
+    scanned for a CORE FACTS heading, not just the last one. Returns the record
+    texts of the last block (need labels echo the user query, so they are
+    excluded).
     """
-    assert not _has_core_facts_heading(capture.last_system_prompt), (
-        "v11 system prompt must not carry a standalone CORE FACTS section"
+    capture.last_call  # fails clearly when the provider saw no request
+    headed = _core_facts_heading_calls(capture)
+    assert not headed, (
+        "v11 system prompt must not carry a standalone CORE FACTS section; "
+        f"found in chat requests {headed} of {len(capture.chat_calls)}"
     )
     blocks = [
         str(message.get("content") or "")
