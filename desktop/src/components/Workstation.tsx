@@ -1058,10 +1058,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
       : null;
   const retryCount = retry ? `${retry.attempt}/${retry.max}` : '';
   const sessionUsable = status === 'READY' && sessionState !== 'unknown' && sessionState !== 'rejected';
-  const emptyStateKind = needsApiKey ? 'setup' : sessionConnecting || reconnecting ? 'connecting' : status.toLowerCase();
+  const showSetupStatus = needsApiKey && !reconnectStopped && !reconnecting && !linkLost
+    && !sessionConnecting;
+  const emptyStateKind = showSetupStatus ? 'setup' : sessionConnecting || reconnecting ? 'connecting' : status.toLowerCase();
   const emptyStateMessage = reconnectStopMessage
     ? `> ${reconnectStopMessage}`
-    : needsApiKey
+    : showSetupStatus
     ? `> 请为 ${activeProvider?.display_name || activeProviderId} 配置 API Key 以建立连接。`
     : sessionState === 'rejected'
       ? '> 会话未被接受，请检查连接与模型。'
@@ -1772,11 +1774,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const connectionLabel = reconnectStopped ? 'OFFLINE · 自动重连已停止'
     : awaitingWorldline ? 'SYNC · 等待目标世界线确认'
     : online ? 'ONLINE'
-    : needsApiKey ? 'OFFLINE · 待配置'
-      : sessionRejected ? 'OFFLINE · 会话被拒绝'
-        : reconnecting ? `OFFLINE · 重连 ${retryCount}`
-        : linkLost ? 'OFFLINE · 重连失败'
-        : status === 'CONNECTING' || sessionPending ? 'OFFLINE · 连接中' : 'OFFLINE';
+    : reconnecting ? `OFFLINE · 重连 ${retryCount}`
+    : linkLost ? 'OFFLINE · 重连失败'
+    : showSetupStatus ? 'OFFLINE · 待配置'
+    : sessionRejected ? 'OFFLINE · 会话被拒绝'
+    : status === 'CONNECTING' || sessionPending ? 'OFFLINE · 连接中' : 'OFFLINE';
   const presence = isThinking ? 'thinking' : isPlaying ? 'speaking' : isSynthesizing ? 'voicing' : online ? 'listening' : sessionConnecting || reconnecting ? 'connecting' : 'offline';
   const presenceLabel = PRESENCE_LABELS[presence];
   const thinkingSprite = packAsset(worldline === 'steins_gate' ? 'assets/ui/spinner_sg_20f.png' : 'assets/ui/spinner_beta_20f.png');
@@ -1893,7 +1895,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             <div
               className={`ws2-online${online ? ' is-online' : ''}${awaitingWorldline ? ' is-sync' : ''}`}
               role="status"
-              data-status={needsApiKey ? 'SETUP' : awaitingWorldline ? 'SYNC' : sessionRejected ? 'REJECTED' : status}
+              data-status={showSetupStatus ? 'SETUP' : awaitingWorldline ? 'SYNC' : sessionRejected ? 'REJECTED' : status}
             >
               <span className="ws2-online-dot" aria-hidden="true" />{connectionLabel}
             </div>
@@ -1975,7 +1977,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                 <div className={`ws2-empty-card ${emptyStateKind}`}>
                   <small className="ws2-empty-kicker">OBSERVATION LOG · {dateLabel} ({dayLabel})</small>
                   <h2 className="ws2-empty-head">
-                    {needsApiKey ? '尚未接通' : sessionUsable ? '新的观测记录' : sessionConnecting || reconnecting ? '正在接通' : '暂时无法接通'}
+                    {showSetupStatus ? '尚未接通' : sessionUsable ? '新的观测记录' : sessionConnecting || reconnecting ? '正在接通' : '暂时无法接通'}
                   </h2>
                   <p className={`ws2-empty-msg ${emptyStateKind}`}>
                     {sessionUsable && !needsApiKey
@@ -1992,7 +1994,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                       </button>
                     </div>
                   )}
-                  {(reconnectStopped || (linkLost && !needsApiKey)) && (
+                  {(reconnectStopped || linkLost) && (
                     <div className="ws2-empty-actions">
                       <button type="button" className="ws2-empty-action" onClick={reconnect}>重新连接</button>
                     </div>
@@ -2094,7 +2096,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             这段对话原来使用的「{activeProvider?.display_name || '接入'}」已被移除。聊天记录仍在；请在下方重新选择模型后继续，不会自动换到其他厂商。
           </div>
         )}
-        {(reconnectStopped || ((reconnecting || linkLost) && !needsApiKey)) && visibleMessages.length > 0 && (
+        {(reconnectStopped || reconnecting || linkLost) && visibleMessages.length > 0 && (
           <div className={`ws2-link-state${linkLost || reconnectStopped ? ' is-lost' : ''}`} role="status">
             <span>{reconnectStopMessage ?? (linkLost ? '自动重连没有成功。' : `连接中断，正在自动重连（${retryCount}）。`)}</span>
             {(linkLost || reconnectStopped) && <button type="button" onClick={reconnect}>重新连接</button>}

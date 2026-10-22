@@ -143,13 +143,17 @@ function providerOptions() {
 
 describe('Workstation stopped reconnection', () => {
   it.each([
-    ['forbidden', '后端拒绝了连接，已停止自动重连。', 'steins_gate'],
-    ['replaced', '连接已被另一个窗口接管，已停止自动重连。', 'beta'],
-  ] as const)('shows %s in empty and populated conversations with a manual reconnect action', async (reason, message, worldline) => {
+    ['forbidden', '后端拒绝了连接，已停止自动重连。', 'steins_gate', true],
+    ['replaced', '连接已被另一个窗口接管，已停止自动重连。', 'beta', true],
+    ['forbidden', '后端拒绝了连接，已停止自动重连。', 'steins_gate', false],
+    ['replaced', '连接已被另一个窗口接管，已停止自动重连。', 'beta', false],
+  ] as const)('shows %s in empty and populated conversations: %s (%s, configured=%s)', async (reason, message, worldline, configured) => {
+    providers = [provider('deepseek', 'DeepSeek', 'deepseek-v4-flash', { credential_required: true, configured })];
     let state = wsState({ status: 'CLOSED', sessionState: 'unknown', reconnectStopReason: reason });
     hoisted.useAmadeusWS.mockImplementation(() => state);
     const view = render(<Workstation worldline={worldline} onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
     expect(await screen.findByRole('button', { name: '重新连接' })).toBeInTheDocument();
+    if (!configured) await screen.findByRole('button', { name: '填写密钥' });
     expect(screen.getByText(message)).toBeInTheDocument();
     expect(screen.getByText('OFFLINE · 自动重连已停止')).toBeInTheDocument();
     expect(screen.getByLabelText('输入消息')).toBeDisabled();
@@ -217,6 +221,74 @@ describe('Workstation stopped reconnection', () => {
     expect(screen.getByText('已发送的消息')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '填写密钥' })).toBeEnabled();
     expect(screen.getByRole('button', { name: '重新连接' })).toBeEnabled();
+  });
+});
+
+describe('Workstation missing-key reconnection', () => {
+  it.each([
+    ['steins_gate', false],
+    ['steins_gate', true],
+    ['beta', false],
+    ['beta', true],
+  ] as const)('prioritizes link state and restores setup after recovery (%s, populated=%s)', async (worldline, populated) => {
+    providers = [provider('deepseek', 'DeepSeek', 'deepseek-v4-flash', { credential_required: true, configured: false })];
+    const messages = populated ? [{ id: 'user-one', role: 'user', content: '已发送的消息' }] : [];
+    let state = wsState({
+      status: 'CLOSED', sessionState: 'unknown', retry: { attempt: 2, max: 5, exhausted: false }, messages,
+    });
+    hoisted.useAmadeusWS.mockImplementation(() => state);
+    const view = render(<Workstation worldline={worldline} onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    await screen.findByRole('button', { name: '填写密钥' });
+    expect(screen.getByText('OFFLINE · 重连 2/5')).toBeInTheDocument();
+    expect(view.container.querySelector('.ws2-online')).toHaveAttribute('data-status', 'CLOSED');
+    expect(screen.getByText('连接中断，正在自动重连（2/5）。')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '重新连接' })).toBeNull();
+    expect(screen.queryByText('OFFLINE · 待配置')).toBeNull();
+    expect(screen.getByLabelText('输入消息')).toBeDisabled();
+    if (!populated) expect(screen.getByRole('heading', { name: '正在接通' })).toBeInTheDocument();
+
+    // A transport open without a server session is still the same retry.
+    state = { ...state, status: 'READY' };
+    view.rerender(<Workstation worldline={worldline} onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(screen.getByText('OFFLINE · 重连 2/5')).toBeInTheDocument();
+    expect(view.container.querySelector('.ws2-online')).toHaveAttribute('data-status', 'READY');
+    expect(screen.getByText('连接中断，正在自动重连（2/5）。')).toBeInTheDocument();
+
+    state = wsState({ status: 'ERROR', sessionState: 'unknown', retry: { attempt: 5, max: 5, exhausted: true }, messages });
+    view.rerender(<Workstation worldline={worldline} onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(screen.getByText('OFFLINE · 重连失败')).toBeInTheDocument();
+    expect(view.container.querySelector('.ws2-online')).toHaveAttribute('data-status', 'ERROR');
+    expect(screen.getByText(populated ? '自动重连没有成功。' : '自动重连 5 次都没有接通。请确认后端服务已启动，再重新连接。')).toBeInTheDocument();
+    if (!populated) expect(screen.getByRole('heading', { name: '暂时无法接通' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '重新连接' }));
+    expect(hoisted.reconnect).toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: '填写密钥' })).toBeEnabled();
+
+    state = wsState({ status: 'CONNECTING', sessionState: 'unknown', retry: null, messages });
+    view.rerender(<Workstation worldline={worldline} onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(screen.getByText('OFFLINE · 连接中')).toBeInTheDocument();
+    expect(view.container.querySelector('.ws2-online')).toHaveAttribute('data-status', 'CONNECTING');
+    expect(screen.queryByRole('button', { name: '重新连接' })).toBeNull();
+
+    state = wsState({ status: 'CLOSED', sessionState: 'unknown', retry: null, messages });
+    view.rerender(<Workstation worldline={worldline} onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(screen.getByText('OFFLINE · 待配置')).toBeInTheDocument();
+    expect(view.container.querySelector('.ws2-online')).toHaveAttribute('data-status', 'SETUP');
+    if (!populated) expect(screen.getByRole('heading', { name: '尚未接通' })).toBeInTheDocument();
+
+    state = wsState({
+      status: 'ERROR', sessionState: 'rejected', retry: null, messages: [
+        ...messages, { id: 'auth-error', role: 'assistant', content: 'SYSTEM ERROR: 未认证。请打开设置并配置您的 API Key。', systemError: true },
+      ],
+    });
+    view.rerender(<Workstation worldline={worldline} onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(screen.getByText('OFFLINE · 待配置')).toBeInTheDocument();
+    expect(view.container.querySelector('.ws2-online')).toHaveAttribute('data-status', 'SETUP');
+    expect(screen.queryByText(/正在自动重连|自动重连没有成功|自动重连 5 次/)).toBeNull();
+    expect(view.container.querySelector('.ws2-link-state')).toBeNull();
+    expect(screen.queryByRole('button', { name: '重新连接' })).toBeNull();
+    expect(screen.queryByText(/SYSTEM ERROR/)).toBeNull();
+    if (!populated) expect(screen.getByRole('heading', { name: '尚未接通' })).toBeInTheDocument();
   });
 });
 
