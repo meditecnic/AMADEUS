@@ -462,3 +462,44 @@ async def test_follow_up_tasks_outlive_a_real_disconnect(isolated_store, monkeyp
             await ws.incoming.put(None)
             await asyncio.wait_for(endpoint, 5)
         sessions.pop(session_id, None)
+
+
+# ---------------------------------------------------------------------------
+# Memory enqueue errors are logged by type only (PR #10 review, item 3)
+# ---------------------------------------------------------------------------
+
+PRIVATE_TEXT = "ユーザーの秘密メモ-7f3a"
+
+
+async def test_memory_enqueue_error_is_logged_without_its_message(
+    isolated_store, monkeypatch, caplog, capsys
+):
+    import app.services.memory_v11.jobs as jobs
+
+    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "shadow")
+    _install_fake_provider(monkeypatch)
+    _suppress_auto_title(monkeypatch)
+    attempts: dict[str, asyncio.Task] = {}
+
+    async def failing_enqueue(**kwargs):
+        attempts["task"] = asyncio.current_task()
+        raise RuntimeError(f"queue rejected payload: {PRIVATE_TEXT}")
+
+    monkeypatch.setattr(jobs, "enqueue_memory_job", failing_enqueue)
+
+    session = await _new_session()
+    with caplog.at_level(logging.DEBUG):
+        events = await _run_turn(session, "このすば")
+        await _until(lambda: "task" in attempts)
+        await asyncio.wait_for(attempts["task"], 2)
+        await asyncio.sleep(0)
+
+    assert any(e.get("type") == "status" and e.get("state") == "done" for e in events)
+    assert any(
+        r.getMessage() == "[MemoryV11] enqueue failed (RuntimeError); chat continues"
+        for r in caplog.records
+    )
+    assert PRIVATE_TEXT not in caplog.text
+    captured = capsys.readouterr()
+    assert PRIVATE_TEXT not in captured.out
+    assert PRIVATE_TEXT not in captured.err

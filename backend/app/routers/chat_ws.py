@@ -624,7 +624,12 @@ async def compress_and_update_history(
         # Broad on purpose: background task; any provider/DB failure must stay
         # contained here and is counted by the compression backoff (#11).
         compression_succeeded = False
-        print(f"[History Compression Error] Session {session_id}: {e}")
+        # Type only: provider error text can echo request or chat content.
+        logger.warning(
+            "[History Compression] Session %s: compression failed (%s)",
+            session_id,
+            type(e).__name__,
+        )
     finally:
         session_data = sessions.get(session_id)
         if session_data:
@@ -2115,9 +2120,10 @@ async def processor_loop(
                         except Exception as exc:
                             # Broad on purpose: memory enqueue is best-effort
                             # background work and must never affect chat.
-                            print(
-                                f"[MemoryV11] enqueue failed (chat continues): {exc!r}",
-                                flush=True,
+                            # Type only: the error text can carry chat content.
+                            logger.warning(
+                                "[MemoryV11] enqueue failed (%s); chat continues",
+                                type(exc).__name__,
                             )
 
                     if isinstance(user_message_id, int) and user_message_id > 0:

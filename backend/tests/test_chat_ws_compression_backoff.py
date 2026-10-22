@@ -368,3 +368,29 @@ async def test_late_outcome_after_session_changed_leaves_backoff(
     assert session.compressing is False
     assert len(session.history) == 10, "a late result never trims"
     assert session.memory_summary != GOOD_SUMMARY
+
+
+# ---------------------------------------------------------------------------
+# Compression errors are logged by type only (PR #10 review, item 3)
+# ---------------------------------------------------------------------------
+
+PRIVATE_TEXT = "ユーザーの秘密メモ-7f3a"
+
+
+async def test_compression_error_is_logged_without_its_message(isolated_store, caplog, capsys):
+    session = await _new_session("backoff-redact")
+    session.history = _history(5)
+    adapter = _ScriptedCompressor(RuntimeError(f"upstream echoed: {PRIVATE_TEXT}"))
+
+    with caplog.at_level(logging.DEBUG):
+        await _compress_once(session, adapter)
+
+    assert adapter.calls == 1
+    assert (session.compression_failures, session.compression_skip_turns) == (1, 1)
+    assert any(
+        r.getMessage().endswith("compression failed (RuntimeError)") for r in caplog.records
+    )
+    assert PRIVATE_TEXT not in caplog.text
+    captured = capsys.readouterr()
+    assert PRIVATE_TEXT not in captured.out
+    assert PRIVATE_TEXT not in captured.err
