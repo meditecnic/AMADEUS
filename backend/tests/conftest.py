@@ -67,6 +67,17 @@ _CLEARED_SECRET_ENV_KEYS = (
     "SOVITS_URL",  # app/config.py TTS endpoint (default: 127.0.0.1)
     "HF_TOKEN",  # Hugging Face libraries
     "HUGGING_FACE_HUB_TOKEN",
+    # app/services/provider_runtime.py reads these two while it is imported
+    # and registers the shared "custom" provider with them. An inherited base
+    # URL would end up in the provider registry (and an invalid one makes
+    # normalize_custom_base_url fail at collection).
+    "AMADEUS_CUSTOM_PROVIDER_BASE_URL",
+    # Not a secret: cleared only so the registry's default model is the code
+    # default ("local-model") on every machine.
+    "AMADEUS_CUSTOM_PROVIDER_MODEL",
+    # app/security/local_transport.py security switches.
+    "AMADEUS_ALLOW_REMOTE_SOVITS",  # allows a non-loopback TTS address
+    "AMADEUS_ALLOW_MISSING_WS_ORIGIN",  # accepts WebSockets without Origin
 )
 _CLEARED_ENV_KEYS = (*_CLEARED_PATH_ENV_KEYS, *_CLEARED_SECRET_ENV_KEYS)
 # Opt-in for tests marked real_credential_store: set to 1 to let them construct

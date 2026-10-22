@@ -5,15 +5,17 @@ throwaway copy of the backend, with a real-looking configuration aimed at an
 empty sentinel directory:
 
 * inherited_env: the shell that starts pytest already exports
-  AMADEUS_DB_PATH / AMADEUS_DATA_DIR pointing at the sentinel directory and a
-  fake DEEPSEEK_API_KEY;
+  AMADEUS_DB_PATH / AMADEUS_DATA_DIR pointing at the sentinel directory, a
+  fake DEEPSEEK_API_KEY, a fake custom provider address and model, and the
+  two local_transport security switches turned on;
 * dotenv_file: backend/.env (the file app/config.py loads) contains the same
   values. PYTHON_DOTENV_DISABLED is removed from the child environment, so
   only tests/conftest.py itself can stop the file from being loaded.
 
 The copied tests/conftest.py is the one under test. After the run the
-sentinel directory must still be empty and the fake key must not be visible
-to app code. Without the isolation each scenario wrote 7 files into the
+sentinel directory must still be empty, the fake key must not be visible to
+app code, the custom provider must keep its code defaults and both security
+switches must read as off. Without the isolation each scenario wrote 7 files into the
 sentinel directory (5 SQLite databases, .migration.lock and
 .migration-v11.complete).
 
@@ -32,14 +34,28 @@ import pytest
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 SAMPLE_TESTS = ("test_provider_registry.py",)
 FAKE_KEY = "sk-sentinel-fake-value-not-a-key"
+# Inherited only in the inherited_env scenario. The address does not exist
+# (.invalid is a reserved top-level domain) and is never contacted.
+INHERITED_ONLY_VALUES = {
+    "AMADEUS_CUSTOM_PROVIDER_BASE_URL": "http://sentinel-custom-provider.invalid:9/v1",
+    "AMADEUS_CUSTOM_PROVIDER_MODEL": "sentinel-fake-model",
+    "AMADEUS_ALLOW_REMOTE_SOVITS": "1",
+    "AMADEUS_ALLOW_MISSING_WS_ORIGIN": "1",
+}
 
 PROBE_TEST = '''
 import os
+
+import pytest
+
+INHERITED_ONLY_KEYS = {inherited_only_keys!r}
 
 
 def test_sentinel_configuration_does_not_reach_app_code():
     from app import config
     from app.db import _resolve_path, get_data_root
+    from app.security import local_transport
+    from app.services.provider_runtime import custom_provider_settings
 
     sentinel = os.path.realpath(os.environ["AMADEUS_SENTINEL_DIR"])
     assert config.DEEPSEEK_API_KEY != "{fake_key}"
@@ -47,7 +63,19 @@ def test_sentinel_configuration_does_not_reach_app_code():
     assert os.environ.get("AMADEUS_DB_PATH") is None
     for path in (str(get_data_root()), _resolve_path(), _resolve_path(kind="memory")):
         assert not os.path.realpath(path).startswith(sentinel), path
-'''.format(fake_key=FAKE_KEY)
+
+    for key in INHERITED_ONLY_KEYS:
+        assert os.environ.get(key) is None, key
+    # The shared "custom" provider was registered with the code defaults.
+    custom = custom_provider_settings()
+    assert custom["base_url"] == "http://127.0.0.1:1234/v1"
+    assert custom["default_model"] == "local-model"
+    # Both local_transport security switches read as off.
+    assert not local_transport._enabled("AMADEUS_ALLOW_REMOTE_SOVITS")
+    assert not local_transport._enabled("AMADEUS_ALLOW_MISSING_WS_ORIGIN")
+    with pytest.raises(ValueError, match="loopback"):
+        local_transport.sovits_tts_url("http://sentinel-tts.invalid:9880")
+'''.format(fake_key=FAKE_KEY, inherited_only_keys=sorted(INHERITED_ONLY_VALUES))
 
 
 def _copy_backend(dst: Path) -> None:
@@ -86,8 +114,9 @@ def test_sentinel_configuration_is_never_used(tmp_path, scenario):
     env["AMADEUS_SENTINEL_DIR"] = str(sentinel)
     if scenario == "inherited_env":
         env.update(sentinel_values)
+        env.update(INHERITED_ONLY_VALUES)
     else:
-        for key in sentinel_values:
+        for key in (*sentinel_values, *INHERITED_ONLY_VALUES):
             env.pop(key, None)
         (backend / ".env").write_text(
             "".join(f"{key}={value}\n" for key, value in sentinel_values.items()),
