@@ -49,7 +49,9 @@ class _Rendered:
         "[1, 2]",  # valid JSON, not an object -> AttributeError
         '"plain string"',
         None,  # TypeError
-        "[" * 100_000 + "]" * 100_000,  # RecursionError
+        # Short explicit id: the 200k-char value would otherwise become the
+        # node ID, and PYTEST_CURRENT_TEST overflows Windows' 32767-char limit.
+        pytest.param("[" * 100_000 + "]" * 100_000, id="deep-nesting"),  # RecursionError
     ],
 )
 async def test_tool_call_bad_arguments_still_fall_back_to_raw_text(raw, monkeypatch):
