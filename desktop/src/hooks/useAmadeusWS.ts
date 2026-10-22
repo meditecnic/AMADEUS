@@ -768,6 +768,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             if (sessionStateRef.current === 'unknown') {
               sessionStateRef.current = 'rejected';
               setSessionState('rejected');
+              setRetry(null);
             }
             // Error clears watchdog
             clearWatchdog();
@@ -840,6 +841,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       voiceStoppedRef.current = false;
 
       if (event?.code === 4403 || event?.code === 4409) {
+        reconnectCountRef.current = 0;
         setStatus('CLOSED');
         setRetry(null);
         setReconnectStopReason(event.code === 4403 ? 'forbidden' : 'replaced');

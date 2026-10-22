@@ -1051,9 +1051,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const reconnecting = Boolean(retry && !retry.exhausted);
   const linkLost = Boolean(retry?.exhausted && status !== 'READY');
   const reconnectStopped = Boolean(reconnectStopReason);
-  // 占位文案，待 U 定稿。
   const reconnectStopMessage = reconnectStopReason === 'forbidden'
-    ? '连接被拒绝，已停止自动重连。'
+    ? '后端拒绝了连接，已停止自动重连。'
     : reconnectStopReason === 'replaced'
       ? '连接已被另一个窗口接管，已停止自动重连。'
       : null;
@@ -1983,7 +1982,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                       ? '说第一句话吧。她的日语原文与中文字幕会一并记在这里。'
                       : emptyStateMessage.replace(/^>\s*/, '')}
                   </p>
-                  {needsApiKey && !reconnectStopped && (
+                  {needsApiKey && (
                     <div className="ws2-empty-actions">
                       <button type="button" className="ws2-empty-action" onClick={() => openConnectionsAt('key')}>
                         填写密钥
@@ -2101,7 +2100,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             {(linkLost || reconnectStopped) && <button type="button" onClick={reconnect}>重新连接</button>}
           </div>
         )}
-        {needsApiKey && !providerGone && !reconnectStopped && visibleMessages.length > 0 && (
+        {needsApiKey && !providerGone && visibleMessages.length > 0 && (
           <div className="ws2-key-missing" role="status">
             <span>「{activeProvider?.display_name || activeProviderId}」还没有密钥，她现在听不到你。</span>
             <button type="button" onClick={() => openConnectionsAt('key')}>填写密钥</button>

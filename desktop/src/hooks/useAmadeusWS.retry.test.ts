@@ -88,7 +88,7 @@ describe('useAmadeusWS automatic reconnection', () => {
     h.unmount();
   });
 
-  it('reconnect() starts a fresh set of attempts after giving up', () => {
+  it('manual reconnect recovers through session.ready and an ordinary drop starts at 1/5', () => {
     const h = renderHook(() => useAmadeusWS(params));
     act(() => latest().onopen?.());
     act(() => latest().drop());
@@ -102,6 +102,11 @@ describe('useAmadeusWS automatic reconnection', () => {
 
     act(() => h.result.current.reconnect());
     expect(h.result.current.status).toBe('CONNECTING');
+    expect(h.result.current.retry).toBeNull();
+    act(() => latest().open());
+    act(() => latest().emit({ type: 'session.ready', conversation_mode: 'history', conversation_id: 'conversation-one' }));
+    expect(h.result.current.status).toBe('READY');
+    expect(h.result.current.sessionState).toBe('ready');
     expect(h.result.current.retry).toBeNull();
     act(() => latest().drop());
     expect(h.result.current.retry).toEqual({ attempt: 1, max: RECONNECT_ATTEMPTS, exhausted: false });
@@ -122,7 +127,9 @@ describe('useAmadeusWS automatic reconnection', () => {
   ] as const)('stops automatic reconnection after an open socket closes with %i, but permits manual reconnect', (code, reason) => {
     const h = renderHook(() => useAmadeusWS(params));
     act(() => latest().open());
-    act(() => latest().emit({ type: 'session.ready', conversation_mode: 'history', conversation_id: 'conversation-one' }));
+    if (code === 4409) {
+      act(() => latest().emit({ type: 'session.ready', conversation_mode: 'history', conversation_id: 'conversation-one' }));
+    }
     act(() => latest().drop(code));
 
     expect(h.result.current.status).toBe('CLOSED');
@@ -142,6 +149,83 @@ describe('useAmadeusWS automatic reconnection', () => {
     expect(h.result.current.reconnectStopReason).toBe(reason);
     act(() => vi.advanceTimersByTime(120_000));
     expect(FakeWebSocket.instances).toHaveLength(2);
+    h.unmount();
+  });
+
+  it.each([false, true])('clears retry on a rejected session without closing or resetting the retry budget (recoverable=%s)', (recoverable) => {
+    const h = renderHook(() => useAmadeusWS(params));
+    act(() => latest().open());
+    act(() => latest().drop());
+    act(() => vi.advanceTimersByTime(1000));
+    const socket = latest();
+    act(() => socket.open());
+    expect(h.result.current.retry).toEqual({ attempt: 1, max: 5, exhausted: false });
+
+    act(() => socket.emit({ type: 'error', message: '会话未被接受', recoverable }));
+    expect(h.result.current.sessionState).toBe('rejected');
+    expect(h.result.current.retry).toBeNull();
+    expect(socket.readyState).toBe(FakeWebSocket.OPEN);
+    act(() => vi.advanceTimersByTime(120_000));
+    expect(FakeWebSocket.instances).toHaveLength(2);
+
+    act(() => socket.drop());
+    expect(h.result.current.retry).toEqual({ attempt: 2, max: 5, exhausted: false });
+    h.unmount();
+  });
+
+  it('stops a 4409 close during retry 3/5 with no timers and permits manual recovery', () => {
+    const h = renderHook(() => useAmadeusWS(params));
+    act(() => latest().open());
+    act(() => latest().drop());
+    [1000, 2000, 4000].forEach((delay, index) => {
+      act(() => vi.advanceTimersByTime(delay));
+      act(() => latest().open());
+      expect(h.result.current.retry).toEqual({ attempt: index + 1, max: 5, exhausted: false });
+      act(() => latest().drop(index === 2 ? 4409 : 1006));
+    });
+
+    expect(h.result.current.status).toBe('CLOSED');
+    expect(h.result.current.retry).toBeNull();
+    expect(h.result.current.reconnectStopReason).toBe('replaced');
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => vi.advanceTimersByTime(120_000));
+    expect(FakeWebSocket.instances).toHaveLength(4);
+
+    act(() => h.result.current.reconnect());
+    act(() => latest().open());
+    act(() => latest().emit({ type: 'session.ready', conversation_mode: 'history', conversation_id: 'conversation-one' }));
+    expect(h.result.current.status).toBe('READY');
+    expect(h.result.current.sessionState).toBe('ready');
+    expect(h.result.current.retry).toBeNull();
+    expect(h.result.current.reconnectStopReason).toBeNull();
+    act(() => latest().drop());
+    expect(h.result.current.retry).toEqual({ attempt: 1, max: 5, exhausted: false });
+    h.unmount();
+  });
+
+  it('ends an interrupted turn on eviction and clears watchdog, heartbeat and automatic reconnection', () => {
+    const h = renderHook(() => useAmadeusWS(params));
+    const socket = latest();
+    act(() => socket.open());
+    act(() => socket.emit({ type: 'session.ready', conversation_mode: 'history', conversation_id: 'conversation-one' }));
+    act(() => h.result.current.sendChat('测试问题'));
+    act(() => socket.emit({ type: 'turn.started', turn_id: 'turn-one', generation: 1, conversation_id: 'conversation-one' }));
+    expect(h.result.current.isThinking).toBe(true);
+    expect(vi.getTimerCount()).toBe(2);
+
+    act(() => socket.drop(4409));
+    expect(h.result.current.status).toBe('CLOSED');
+    expect(h.result.current.retry).toBeNull();
+    expect(h.result.current.isThinking).toBe(false);
+    expect(h.result.current.messages.filter((message) => message.systemError)).toEqual([
+      expect.objectContaining({ content: '这一问中断了，没有收到回复。请再发一次。' }),
+    ]);
+    expect(h.result.current.messages.every((message) => !message.streaming)).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+    const sent = socket.sent.length;
+    act(() => vi.advanceTimersByTime(120_000));
+    expect(socket.sent).toHaveLength(sent);
+    expect(FakeWebSocket.instances).toHaveLength(1);
     h.unmount();
   });
 

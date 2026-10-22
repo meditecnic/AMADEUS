@@ -143,7 +143,7 @@ function providerOptions() {
 
 describe('Workstation stopped reconnection', () => {
   it.each([
-    ['forbidden', '连接被拒绝，已停止自动重连。', 'steins_gate'],
+    ['forbidden', '后端拒绝了连接，已停止自动重连。', 'steins_gate'],
     ['replaced', '连接已被另一个窗口接管，已停止自动重连。', 'beta'],
   ] as const)('shows %s in empty and populated conversations with a manual reconnect action', async (reason, message, worldline) => {
     let state = wsState({ status: 'CLOSED', sessionState: 'unknown', reconnectStopReason: reason });
@@ -177,6 +177,46 @@ describe('Workstation stopped reconnection', () => {
     expect(screen.getByText('连接中断，正在自动重连（3/5）。')).toBeInTheDocument();
     expect(screen.getByLabelText('输入消息')).toBeDisabled();
     expect(screen.queryByText('ONLINE')).toBeNull();
+  });
+
+  it('stops showing automatic reconnection when the open session is rejected', async () => {
+    let state = wsState({
+      status: 'CLOSED', sessionState: 'unknown', retry: { attempt: 1, max: 5, exhausted: false },
+      messages: [{ id: 'user-one', role: 'user', content: '已发送的消息' }],
+    });
+    hoisted.useAmadeusWS.mockImplementation(() => state);
+    const view = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(await screen.findByText('连接中断，正在自动重连（1/5）。')).toBeInTheDocument();
+    state = { ...state, status: 'READY' };
+    view.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(screen.getByText('OFFLINE · 重连 1/5')).toBeInTheDocument();
+
+    state = wsState({
+      status: 'ERROR', sessionState: 'rejected', retry: null,
+      messages: [{ id: 'user-one', role: 'user', content: '已发送的消息' }],
+    });
+    view.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(screen.getByText('OFFLINE · 会话被拒绝')).toBeInTheDocument();
+    expect(screen.queryByText(/正在自动重连/)).toBeNull();
+    expect(view.container.querySelector('.ws2-link-state')).toBeNull();
+  });
+
+  it('keeps the missing-key action available in stopped empty and populated conversations', async () => {
+    providers = [provider('deepseek', 'DeepSeek', 'deepseek-v4-flash', { credential_required: true, configured: false })];
+    let state = wsState({ status: 'CLOSED', sessionState: 'unknown', reconnectStopReason: 'forbidden' });
+    hoisted.useAmadeusWS.mockImplementation(() => state);
+    const view = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(await screen.findByRole('button', { name: '填写密钥' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '重新连接' })).toBeEnabled();
+
+    state = wsState({
+      status: 'CLOSED', sessionState: 'unknown', reconnectStopReason: 'forbidden',
+      messages: [{ id: 'user-one', role: 'user', content: '已发送的消息' }],
+    });
+    view.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(screen.getByText('已发送的消息')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '填写密钥' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '重新连接' })).toBeEnabled();
   });
 });
 
