@@ -157,6 +157,10 @@ class SessionState:
         self.memory_summary = ""
         self.lock = asyncio.Lock()
         self.compressing = False
+        # Audit #11: consecutive history-compression failures and the number
+        # of eligible turns still to skip before the next attempt.
+        self.compression_failures = 0
+        self.compression_skip_turns = 0
         
         self.temperature = 0.0
         self.provider_id = "deepseek"
@@ -394,6 +398,74 @@ async def translate_with_provider(
 
 
 
+# Audit #11: history-compression backoff. A failed compression used to be
+# re-requested on every following turn. After each consecutive failure the
+# next attempt waits BASE * 2**(failures - 1) eligible turns (1, 2, 4, 8, 16,
+# 16, ...). Counted in turns, not seconds: the trigger only runs once per turn.
+_COMPRESSION_BACKOFF_BASE_TURNS = 1
+_COMPRESSION_BACKOFF_MAX_TURNS = 16
+
+
+def _compression_backoff_turns(failures: int) -> int:
+    if failures <= 0:
+        return 0
+    exponent = min(failures - 1, 16)
+    return min(
+        _COMPRESSION_BACKOFF_BASE_TURNS * (2 ** exponent),
+        _COMPRESSION_BACKOFF_MAX_TURNS,
+    )
+
+
+def _record_compression_outcome(session: "SessionState", succeeded: bool) -> None:
+    """Update the backoff state; the caller holds ``session.lock``."""
+    if succeeded:
+        session.compression_failures = 0
+        session.compression_skip_turns = 0
+        return
+    session.compression_failures += 1
+    session.compression_skip_turns = _compression_backoff_turns(
+        session.compression_failures
+    )
+    logger.warning(
+        "[History Compression] Session %s: %d consecutive failure(s); "
+        "next attempt after %d eligible turn(s)",
+        session.session_id,
+        session.compression_failures,
+        session.compression_skip_turns,
+    )
+
+
+def _compression_trigger_messages() -> int:
+    """Smallest in-memory history length that triggers a compression."""
+    return 2 * (config.HISTORY_COMPRESS_THRESHOLD + 1)
+
+
+async def _cap_history_during_compression_backoff(session: "SessionState") -> None:
+    """Keep the prompt window bounded while compression is backing off.
+
+    Once history exceeds twice the trigger length, drop the oldest in-memory
+    rows back to the trigger length with the same front slice a compression
+    applies. Durable history and the stored summary are untouched. Never runs
+    while a compression task is in flight, whose own slice assumes the rows it
+    snapshotted are still at the front.
+    """
+    keep = _compression_trigger_messages()
+    async with session.lock:
+        if session.compressing:
+            return
+        history = session.history
+        if len(history) <= 2 * keep:
+            return
+        dropped = len(history) - keep
+        session.history = history[dropped:]
+    logger.warning(
+        "[History Compression] Session %s: backoff active; dropped %d oldest "
+        "in-memory messages (durable history untouched)",
+        session.session_id,
+        dropped,
+    )
+
+
 async def compress_and_update_history(
     session_id: str,
     current_history: list,
@@ -423,6 +495,9 @@ async def compress_and_update_history(
     
     print(f"[History Compression] Session {session_id}: Compressing {N} messages...")
     new_summary = None
+    # Audit #11: True/False feed the backoff; None (stale snapshot, nothing
+    # promptable) leaves it unchanged.
+    compression_succeeded = None
     try:
         session_data = sessions.get(session_id)
         if session_data:
@@ -478,6 +553,7 @@ async def compress_and_update_history(
             summary_epoch = session_data.content_epoch
             raw = await method(**kwargs)
             success, summary = normalize_generated_working_summary(raw)
+            compression_succeeded = bool(success)
             if not success:
                 # Failure ('' / whitespace / provider error / reserved marker):
                 # no save, no history trim; previous safe runtime summary stays.
@@ -514,12 +590,15 @@ async def compress_and_update_history(
                         f"compression successful ({len(summary)} chars)"
                     )
     except Exception as e:
+        compression_succeeded = False
         print(f"[History Compression Error] Session {session_id}: {e}")
     finally:
         session_data = sessions.get(session_id)
         if session_data:
             async with session_data.lock:
                 session_data.compressing = False
+                if compression_succeeded is not None:
+                    _record_compression_outcome(session_data, compression_succeeded)
 
 async def execute_tool_call(name: str, arguments_str: str) -> str:
     if name == "web_search":
@@ -2088,18 +2167,24 @@ async def processor_loop(
             )
         
         if len(session.history) // 2 > config.HISTORY_COMPRESS_THRESHOLD and not session.compressing:
-            session.compressing = True
-            _schedule_background_task(
-                session,
-                compress_and_update_history(
-                    session.session_id,
-                    session.history,
-                    session.worldline,
-                    session.revision,
-                    conversation_id,
-                    turn_provider,
+            if session.compression_skip_turns > 0:
+                # Audit #11: backing off after failed compressions; no request
+                # this turn, but the in-memory window stays bounded.
+                session.compression_skip_turns -= 1
+                await _cap_history_during_compression_backoff(session)
+            else:
+                session.compressing = True
+                _schedule_background_task(
+                    session,
+                    compress_and_update_history(
+                        session.session_id,
+                        session.history,
+                        session.worldline,
+                        session.revision,
+                        conversation_id,
+                        turn_provider,
+                    )
                 )
-            )
             
     except asyncio.CancelledError:
         if (
