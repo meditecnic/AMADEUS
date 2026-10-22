@@ -52,6 +52,23 @@ _CLEARED_PATH_ENV_KEYS = (
     "TRANSFORMERS_CACHE",
     "SENTENCE_TRANSFORMERS_HOME",
 )
+# Secrets and real-network switches read by backend/app and backend/scripts.
+# An inherited value would hand tests a real key or let them reach a real
+# service, so they are cleared exactly like the path variables above (session
+# start and before every test). A test may still set its own fake value with
+# monkeypatch; that takes effect normally.
+_CLEARED_SECRET_ENV_KEYS = (
+    "DEEPSEEK_API_KEY",  # app/config.py
+    "TAVILY_API_KEY",  # app/services/search.py env fallback
+    "FIRECRAWL_API_KEY",  # app/services/search.py env fallback
+    "AMADEUS_B3_PROVIDER_KEY",  # scripts/memory_candidate_real_run.py
+    "AMADEUS_B3_REAL_HTTP",  # scripts/memory_candidate_real_run.py (real HTTP switch)
+    "AMADEUS_B3_BASE_URL",  # scripts/memory_candidate_real_run.py
+    "SOVITS_URL",  # app/config.py TTS endpoint (default: 127.0.0.1)
+    "HF_TOKEN",  # Hugging Face libraries
+    "HUGGING_FACE_HUB_TOKEN",
+)
+_CLEARED_ENV_KEYS = (*_CLEARED_PATH_ENV_KEYS, *_CLEARED_SECRET_ENV_KEYS)
 # Opt-in for tests marked real_embedding: a local, already-populated Hugging
 # Face cache directory to read the model from (offline). Unset by default.
 _REAL_EMBEDDING_HF_HOME = os.environ.get("AMADEUS_TEST_HF_HOME", "").strip()
@@ -81,9 +98,9 @@ _FIXED_ENV = {
 }
 _ORIGINAL_ENV = {
     key: os.environ.get(key)
-    for key in (*_SESSION_ENV, *_FIXED_ENV, *_CLEARED_PATH_ENV_KEYS)
+    for key in (*_SESSION_ENV, *_FIXED_ENV, *_CLEARED_ENV_KEYS)
 }
-for _key in _CLEARED_PATH_ENV_KEYS:
+for _key in _CLEARED_ENV_KEYS:
     os.environ.pop(_key, None)
 for _key in ("AMADEUS_DATA_DIR", "HOME", "APPDATA", "LOCALAPPDATA"):
     Path(_SESSION_ENV[_key]).mkdir(parents=True, exist_ok=True)
@@ -122,7 +139,7 @@ def isolated_user_dirs(tmp_path_factory):
     home_dir = tmp_path_factory.mktemp("home")
     mp = pytest.MonkeyPatch()
     try:
-        for key in _CLEARED_PATH_ENV_KEYS:
+        for key in _CLEARED_ENV_KEYS:
             mp.delenv(key, raising=False)
         for key, value in {**_isolated_env(data_dir, home_dir), **_FIXED_ENV}.items():
             mp.setenv(key, value)
