@@ -18,9 +18,17 @@ from uuid import uuid4
 
 import pytest
 
+from fastapi import WebSocketDisconnect
+from starlette.datastructures import Headers
+
 from app.db import init_db, reset_initialization_cache
 from app.routers import chat_ws
-from app.routers.chat_ws import SessionState, processor_loop
+from app.routers.chat_ws import (
+    SessionState,
+    processor_loop,
+    sessions,
+    websocket_chat_endpoint,
+)
 from app.services.deepseek import build_stream_messages
 from app.services.provider_runtime import deepseek_service
 
@@ -306,3 +314,151 @@ async def test_aborted_turn_notice_is_held_when_the_shield_is_interrupted(
     )
     assert [row["role"] for row in rows] == ["user", "assistant"], rows
     assert chat_ws._ABORTED_TURN_JA in rows[1]["content"]
+
+
+# ---------------------------------------------------------------------------
+# Real disconnect (PR #10 review, item 1): the reader exits, its finally
+# cancels the current turn, and follow-up work is not cancelled with it.
+# ---------------------------------------------------------------------------
+
+
+class _ClientSocket:
+    """Minimal WebSocket double: frames in, frames out; ``None`` disconnects."""
+
+    def __init__(self, session_id: str):
+        self.query_params = {"session_id": session_id}
+        self.headers = Headers({"origin": "http://localhost"})
+        self.incoming: asyncio.Queue = asyncio.Queue()
+        self.outgoing: asyncio.Queue = asyncio.Queue()
+
+    async def accept(self):
+        return None
+
+    async def receive_json(self):
+        frame = await self.incoming.get()
+        if frame is None:
+            raise WebSocketDisconnect()
+        return frame
+
+    async def send_json(self, data):
+        await self.outgoing.put(data)
+
+    async def close(self, code=1000, reason=None):
+        await self.incoming.put(None)
+
+    async def wait_for_frame(self, predicate, timeout: float = 5.0) -> dict:
+        while True:
+            frame = await asyncio.wait_for(self.outgoing.get(), timeout)
+            if predicate(frame):
+                return frame
+
+
+async def test_follow_up_tasks_outlive_a_real_disconnect(isolated_store, monkeypatch):
+    import app.services.memory_v11.jobs as jobs
+    from app import models
+
+    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "shadow")
+    monkeypatch.setattr(chat_ws.config, "HISTORY_COMPRESS_THRESHOLD", 0)
+    _suppress_auto_title(monkeypatch)
+
+    block_stream = {"on": False}
+    blocked_stream_started = asyncio.Event()
+
+    async def scripted_stream(self, *args, **kwargs):
+        if block_stream["on"]:
+            blocked_stream_started.set()
+            await asyncio.Event().wait()  # only the disconnect cancels it
+        yield {"content": REPLY_JA, "tool_calls": None}
+
+    async def fake_translate_to_zh(self, text, api_key=None, model=None):
+        return "中文翻译"
+
+    monkeypatch.setattr(type(deepseek_service), "get_chat_stream", scripted_stream)
+    monkeypatch.setattr(type(deepseek_service), "translate_to_zh", fake_translate_to_zh)
+
+    release_follow_ups = asyncio.Event()
+    release_notice = asyncio.Event()
+    running: dict[str, asyncio.Task] = {}
+    finished: set[str] = set()
+
+    async def gated_enqueue(**kwargs):
+        running["enqueue"] = asyncio.current_task()
+        await release_follow_ups.wait()
+        finished.add("enqueue")
+
+    async def gated_compress(*args, **kwargs):
+        running["compress"] = asyncio.current_task()
+        await release_follow_ups.wait()
+        finished.add("compress")
+
+    original_persist = chat_ws._persist_aborted_turn
+
+    async def gated_persist(**kwargs):
+        running["notice"] = asyncio.current_task()
+        await release_notice.wait()
+        await original_persist(**kwargs)
+        finished.add("notice")
+
+    monkeypatch.setattr(jobs, "enqueue_memory_job", gated_enqueue)
+    monkeypatch.setattr(chat_ws, "compress_and_update_history", gated_compress)
+    monkeypatch.setattr(chat_ws, "_persist_aborted_turn", gated_persist)
+
+    session_id = f"bg-disconnect-{uuid4()}"
+    ws = _ClientSocket(session_id)
+    endpoint = asyncio.create_task(websocket_chat_endpoint(ws))
+    try:
+        await ws.incoming.put(
+            {"type": "auth", "api_key": "test-provider-credential", "enable_tts": False}
+        )
+        await ws.wait_for_frame(lambda f: f.get("type") == "session.ready")
+        session = sessions[session_id]
+
+        # Turn 1 completes and leaves memory enqueue + compression running.
+        await ws.incoming.put({"type": "chat", "content": "一問目"})
+        await ws.wait_for_frame(lambda f: f.get("type") == "status" and f.get("state") == "done")
+        await _until(lambda: {"enqueue", "compress"} <= running.keys())
+
+        # Turn 2 saves its user row, then the client disconnects mid-stream.
+        block_stream["on"] = True
+        await ws.incoming.put({"type": "chat", "content": "二問目"})
+        await asyncio.wait_for(blocked_stream_started.wait(), 5)
+        await ws.incoming.put(None)  # WebSocketDisconnect -> reader exits
+
+        # The reader's finally cancelled the turn; it scheduled the notice.
+        await _until(lambda: "notice" in running)
+        assert not endpoint.done(), "finally is still waiting for the cancelled turn"
+        assert set(running.values()) <= session.background_tasks
+
+        release_notice.set()
+        await asyncio.wait_for(endpoint, 5)  # connection fully torn down
+        await asyncio.sleep(0)
+        assert "notice" in finished
+        assert running["notice"] not in session.background_tasks
+
+        # After the disconnect the session object stays and keeps its tasks.
+        gc.collect()
+        assert sessions.get(session_id) is session
+        for name in ("enqueue", "compress"):
+            assert not running[name].done(), name
+            assert running[name] in session.background_tasks, name
+
+        release_follow_ups.set()
+        await asyncio.wait_for(
+            asyncio.gather(running["enqueue"], running["compress"]), 5
+        )
+        await asyncio.sleep(0)
+        assert {"enqueue", "compress"} <= finished, "both ran to completion"
+        assert not session.background_tasks, "finished tasks are released"
+
+        rows = await models.get_session_messages(
+            session_id, worldline=SG, conversation_id=session.conversation_id
+        )
+        assert [row["role"] for row in rows] == ["user", "assistant", "user", "assistant"], rows
+        assert chat_ws._ABORTED_TURN_JA in rows[-1]["content"]
+    finally:
+        release_notice.set()
+        release_follow_ups.set()
+        if not endpoint.done():
+            await ws.incoming.put(None)
+            await asyncio.wait_for(endpoint, 5)
+        sessions.pop(session_id, None)
