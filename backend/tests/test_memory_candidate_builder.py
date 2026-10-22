@@ -928,20 +928,20 @@ def test_failure_keeps_incomplete_staging_and_publishes_nothing(tmp_path, monkey
     def boom(*args, **kwargs):
         raise RuntimeError("injected transfer failure")
 
-    monkeypatch.setattr(cand, "_transfer_donor_content", boom)
-    with pytest.raises(cand.CandidateBuildError) as excinfo:
-        cand.build_memory_candidate(
-            snapshot_dir=snapshot, preview_path=preview_path, output_dir=output
-        )
-    assert excinfo.value.code == "build_failed"
-    assert not output.exists()
-    stagings = list(tmp_path.glob(".candidate.staging-*"))
-    assert len(stagings) == 1
-    incomplete = json.loads((stagings[0] / "INCOMPLETE.json").read_text(encoding="utf-8"))
-    assert incomplete["code"] == "build_failed"
-    assert "injected transfer failure" in incomplete["message"]
-    assert not list(tmp_path.glob(".candidate.donor-*"))
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        m.setattr(cand, "_transfer_donor_content", boom)
+        with pytest.raises(cand.CandidateBuildError) as excinfo:
+            cand.build_memory_candidate(
+                snapshot_dir=snapshot, preview_path=preview_path, output_dir=output
+            )
+        assert excinfo.value.code == "build_failed"
+        assert not output.exists()
+        stagings = list(tmp_path.glob(".candidate.staging-*"))
+        assert len(stagings) == 1
+        incomplete = json.loads((stagings[0] / "INCOMPLETE.json").read_text(encoding="utf-8"))
+        assert incomplete["code"] == "build_failed"
+        assert "injected transfer failure" in incomplete["message"]
+        assert not list(tmp_path.glob(".candidate.donor-*"))
     # A retry to a fresh output succeeds (staging is per-build).
     output2 = tmp_path / "candidate2"
     assert cand.build_memory_candidate(
