@@ -496,6 +496,7 @@ def _install_external_fakes(
             system_prompt,
             isolated=isolated,
         )
+        recall_round = _offers_recall_memory(tools)
         _append_jsonl(
             chat_log,
             {
@@ -503,8 +504,17 @@ def _install_external_fakes(
                 "model": model,
                 "messages": messages,
                 "system_prompt": system_prompt,
+                "recall_round": recall_round,
             },
         )
+        if recall_round:
+            # v11 (cf14875): stable facts are read through recall_memory, so the
+            # fake model follows the MEMORY READ GATE and calls it first.
+            yield {
+                "content": None,
+                "tool_calls": [recall_tool_call(_last_user_text(active_history))],
+            }
+            return
         yield {"content": REPLY_JA, "tool_calls": None}
 
     async def fake_translate_to_zh(text, api_key=None, model=None):
@@ -1207,13 +1217,88 @@ def cmd_restart(args: argparse.Namespace) -> None:
     cmd_start(args)
 
 
-def _core_facts_block(system_prompt: str) -> str:
-    start = system_prompt.find("CORE FACTS")
-    if start < 0:
+MEMORY_CANDIDATE_DATA_ANCHOR = "MEMORY_CANDIDATE_DATA"
+
+
+def _offers_recall_memory(tools: Any) -> bool:
+    from app.agent_tools import tools_include_recall_memory
+
+    return tools_include_recall_memory(tools)
+
+
+def _last_user_text(active_history: Any) -> str:
+    for message in reversed(list(active_history or [])):
+        if isinstance(message, dict) and message.get("role") == "user":
+            return str(message.get("content") or "")
+    return ""
+
+
+def recall_tool_call(user_text: str, call_id: str = "call-recall-offline") -> dict[str, Any]:
+    """One OpenAI-shape recall_memory call whose single need is the user text."""
+    from app.agent_tools import RECALL_MEMORY_TOOL_NAME
+
+    need = str(user_text or "").strip()[:160] or "user stable facts"
+    return {
+        "index": 0,
+        "id": call_id,
+        "type": "function",
+        "function": {
+            "name": RECALL_MEMORY_TOOL_NAME,
+            "arguments": json.dumps({"needs": [need]}, ensure_ascii=False),
+        },
+    }
+
+
+def has_core_facts_heading(system_prompt: str) -> bool:
+    """Standalone CORE FACTS section heading (legacy/shadow prompt shape only)."""
+    text = str(system_prompt or "")
+    return text.startswith("CORE FACTS\n") or "\nCORE FACTS\n" in text
+
+
+def stable_fact_records_from_messages(messages: Any) -> str:
+    """Stable-fact record texts the provider received in this request.
+
+    v11 spec (cf14875): the system prompt (messages[0]) never carries a CORE
+    FACTS section. Stable facts arrive only after recall_memory, as the
+    second-round MEMORY CANDIDATES system message whose MEMORY_CANDIDATE_DATA
+    JSON holds ``records``. Need labels echo the user query and are excluded.
+    Returns "" when the request carries no candidate block.
+    """
+    blocks = [
+        str(message.get("content") or "")
+        for message in list(messages or [])[1:]
+        if isinstance(message, dict)
+        and message.get("role") == "system"
+        and MEMORY_CANDIDATE_DATA_ANCHOR in str(message.get("content") or "")
+    ]
+    if not blocks:
         return ""
-    rest = system_prompt[start:]
-    end = rest.find("\nEPISODIC MEMORY")
-    return rest if end < 0 else rest[:end]
+    tail = blocks[-1].split(MEMORY_CANDIDATE_DATA_ANCHOR + "\n", 1)
+    if len(tail) != 2:
+        return ""
+    try:
+        payload = json.loads(tail[1].split("\n", 1)[0])
+    except json.JSONDecodeError:
+        return ""
+    records = payload.get("records") if isinstance(payload, dict) else None
+    if not isinstance(records, dict):
+        return ""
+    return "\n".join(str(text) for text in records.values())
+
+
+def _system_prompt_of(capture: dict[str, Any]) -> str:
+    messages = capture.get("messages") or []
+    if messages and isinstance(messages[0], dict):
+        return str(messages[0].get("content") or "")
+    return str(capture.get("system_prompt") or "")
+
+
+def _stable_fact_block(capture: dict[str, Any]) -> str:
+    """Fail if the v11 system prompt has CORE FACTS; else return recall records."""
+    system_prompt = _system_prompt_of(capture)
+    if has_core_facts_heading(system_prompt):
+        _fail("v11_system_prompt_has_core_facts", system_prompt[:800])
+    return stable_fact_records_from_messages(capture.get("messages") or [])
 
 
 def _last_chat_capture(path: Path) -> dict[str, Any]:
@@ -1408,9 +1493,11 @@ def cmd_verify_api(args: argparse.Namespace) -> None:
                 f"{SESAME_MARKER} {DELETE_MARKER} 长期偏好还在吗",
             )
             original_recall = _last_chat_capture(chat_log)
-            original_block = _core_facts_block(str(original_recall.get("system_prompt") or ""))
+            original_block = _stable_fact_block(original_recall)
             if SESAME_MARKER not in original_block:
-                raise AssertionError(f"CORE FACTS missing {SESAME_MARKER}: {original_block[:800]}")
+                raise AssertionError(
+                    f"recall_memory records missing {SESAME_MARKER}: {original_block[:800]}"
+                )
             sesame_id = str(sesame["fact_id"])
             delete_id = str(delete["fact_id"])
             await asyncio.to_thread(
@@ -1476,7 +1563,7 @@ def cmd_verify_api(args: argparse.Namespace) -> None:
     if len(fact_nodes) != 1:
         _fail("projection_mismatch", json.dumps({"sesame": sesame, "projection": projection}, ensure_ascii=False)[:1500])
     captured = _last_chat_capture(chat_log)
-    block = _core_facts_block(str(captured.get("system_prompt") or ""))
+    block = _stable_fact_block(captured)
     if REVISED_MARKER not in block:
         _fail("revised_core_facts_missing", block[:1000] or str(captured)[:1000])
     if DELETE_MARKER in block:
@@ -1493,11 +1580,16 @@ def cmd_verify_api(args: argparse.Namespace) -> None:
         "core_facts_contains_delete": DELETE_MARKER in bundle["original_block"],
         "revised_core_facts": REVISED_MARKER in block,
         "deleted_absent_after_edit": DELETE_MARKER not in block,
+        "v11_system_prompt_has_core_facts_heading": False,
+        "stable_fact_surface": "recall_memory MEMORY_CANDIDATE_DATA (second round)",
         "backend_port": backend_port,
         "how_not_false_positive": {
             "chat": "WS to 127.0.0.1:backend_port, captured adapter messages after real assembly",
             "fact": "API fact_id plus display_text marker, not query echo",
-            "recall": "next-turn captured CORE FACTS contains marker",
+            "recall": (
+                "v11: system prompt has no CORE FACTS heading; next-turn "
+                "recall_memory MEMORY_CANDIDATE_DATA records contain marker"
+            ),
             "worker": "no manual process_due_jobs_once; waited on natural poll",
         },
     }
