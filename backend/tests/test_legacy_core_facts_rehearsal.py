@@ -1231,6 +1231,7 @@ def _run_cli(*argv: str, env_extra: dict[str, str] | None = None):
         [sys.executable, str(SCRIPT), *argv],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         env=env,
         cwd=str(BACKEND_ROOT),
     )
@@ -1323,6 +1324,7 @@ def test_cli_refuses_paths_in_default_home_amadeus_without_appdata(tmp_path):
          "--out", str(tmp_path / "p.json")],
         capture_output=True,
         text=True,
+        encoding="utf-8",
         env=env,
         cwd=str(BACKEND_ROOT),
     )

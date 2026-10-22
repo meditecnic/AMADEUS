@@ -100,6 +100,7 @@ def test_sentinel_configuration_is_never_used(tmp_path, scenario):
         env=env,
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=600,
     )
 

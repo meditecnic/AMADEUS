@@ -102,6 +102,11 @@ _FIXED_ENV = {
     # imported; "memory" keeps it (and child processes) away from the
     # Windows Credential Manager. Must be set before any app import.
     "AMADEUS_CREDENTIAL_BACKEND": "memory",
+    # Python child processes started by tests (CLI scripts, nested pytest)
+    # write stdout/stderr as UTF-8 instead of the locale code page (cp1252
+    # on English Windows cannot encode the Japanese the scripts print). The
+    # parent side reads them with an explicit encoding="utf-8".
+    "PYTHONIOENCODING": "utf-8",
 }
 _ORIGINAL_ENV = {
     key: os.environ.get(key)
