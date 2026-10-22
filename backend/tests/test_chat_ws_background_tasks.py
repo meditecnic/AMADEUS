@@ -117,6 +117,7 @@ async def test_cancelled_or_successful_tasks_are_not_reported(caplog):
 
 def _install_fake_provider(monkeypatch) -> None:
     async def fake_get_chat_stream(
+        self,
         active_history=None,
         memory_summary=None,
         api_key=None,
@@ -137,23 +138,25 @@ def _install_fake_provider(monkeypatch) -> None:
         )
         yield {"content": REPLY_JA, "tool_calls": None}
 
-    async def fake_translate_to_zh(text, api_key=None, model=None):
+    async def fake_translate_to_zh(self, text, api_key=None, model=None):
         return "中文翻译"
 
-    monkeypatch.setattr(deepseek_service, "get_chat_stream", fake_get_chat_stream)
-    monkeypatch.setattr(deepseek_service, "translate_to_zh", fake_translate_to_zh)
+    # Patch the classes, not the shared instances: undoing an instance patch
+    # would leave the original bound method shadowing later class patches.
+    monkeypatch.setattr(type(deepseek_service), "get_chat_stream", fake_get_chat_stream)
+    monkeypatch.setattr(type(deepseek_service), "translate_to_zh", fake_translate_to_zh)
 
 
 def _suppress_auto_title(monkeypatch) -> None:
     from app.services.conversations import conversation_service
 
-    def fake_schedule(*args, **kwargs):
+    def fake_schedule(self, *args, **kwargs):
         async def _noop():
             return None
 
         return asyncio.get_running_loop().create_task(_noop())
 
-    monkeypatch.setattr(conversation_service, "schedule_auto_title", fake_schedule)
+    monkeypatch.setattr(type(conversation_service), "schedule_auto_title", fake_schedule)
 
 
 async def _new_session() -> SessionState:
