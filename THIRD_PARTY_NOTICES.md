@@ -19,6 +19,8 @@ The root MIT license applies to this project's original source code. Third-party
 - [SenseVoice](https://github.com/FunAudioLLM/SenseVoice) source uses MIT; official weights have the separate FunASR Model Open Source License v1.1. The [converted sherpa-onnx package](https://k2-fsa.github.io/sherpa/onnx/sense-voice/pretrained.html) is downloaded separately, and its license reference is retained with the model. Model weights are not bundled in the repository.
 - Silero VAD uses the [upstream MIT license](https://github.com/snakers4/silero-vad/blob/master/LICENSE); its ONNX file is downloaded separately.
 - [multilingual-e5-small](https://huggingface.co/intfloat/multilingual-e5-small) uses MIT and is downloaded separately when enabled.
+- [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) uses MIT. It runs as a separate local server; the repository does not vendor or distribute it.
+- The optional voice model [TTS-KurisuMakise](https://huggingface.co/bysq/TTS-KurisuMakise) is published by bysq and labeled Apache-2.0 by its uploader. This project does not include or download its weights or any reference audio. The model imitates the voice of the STEINS;GATE character Makise Kurisu; rights in the character, the original recordings and the voice actor's performance belong to their respective owners and are not licensed by this project.
 
 ## Installed dependencies
 
