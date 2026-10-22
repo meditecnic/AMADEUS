@@ -1293,23 +1293,41 @@ def _system_prompt_of(capture: dict[str, Any]) -> str:
     return str(capture.get("system_prompt") or "")
 
 
-def _stable_fact_block(capture: dict[str, Any]) -> str:
-    """Fail if the v11 system prompt has CORE FACTS; else return recall records."""
-    system_prompt = _system_prompt_of(capture)
-    if has_core_facts_heading(system_prompt):
-        _fail("v11_system_prompt_has_core_facts", system_prompt[:800])
-    return stable_fact_records_from_messages(capture.get("messages") or [])
+def core_facts_heading_requests(captures: list[dict[str, Any]]) -> list[int]:
+    """Indexes of every captured chat request whose system prompt has CORE FACTS."""
+    return [
+        index
+        for index, capture in enumerate(captures)
+        if has_core_facts_heading(_system_prompt_of(capture))
+    ]
 
 
-def _last_chat_capture(path: Path) -> dict[str, Any]:
-    lines = [
+def _chat_captures(path: Path) -> list[dict[str, Any]]:
+    if not path.is_file():
+        return []
+    return [
         json.loads(line)
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    if not lines:
+
+
+def _stable_fact_block(path: Path) -> str:
+    """Scan every captured chat request; fail on any CORE FACTS heading.
+
+    Returns the recall_memory records of the last captured request.
+    """
+    captures = _chat_captures(path)
+    if not captures:
         raise AssertionError(f"no chat captures in {path}")
-    return lines[-1]
+    headed = core_facts_heading_requests(captures)
+    if headed:
+        _fail(
+            "v11_system_prompt_has_core_facts",
+            f"requests {headed} of {len(captures)}: "
+            + _system_prompt_of(captures[headed[0]])[:800],
+        )
+    return stable_fact_records_from_messages(captures[-1].get("messages") or [])
 
 
 async def _ws_session(*, backend_port: int, session_id: str, enable_tts: bool = False):
@@ -1492,8 +1510,7 @@ def cmd_verify_api(args: argparse.Namespace) -> None:
                 ws,
                 f"{SESAME_MARKER} {DELETE_MARKER} 长期偏好还在吗",
             )
-            original_recall = _last_chat_capture(chat_log)
-            original_block = _stable_fact_block(original_recall)
+            original_block = _stable_fact_block(chat_log)
             if SESAME_MARKER not in original_block:
                 raise AssertionError(
                     f"recall_memory records missing {SESAME_MARKER}: {original_block[:800]}"
@@ -1562,10 +1579,11 @@ def cmd_verify_api(args: argparse.Namespace) -> None:
     ]
     if len(fact_nodes) != 1:
         _fail("projection_mismatch", json.dumps({"sesame": sesame, "projection": projection}, ensure_ascii=False)[:1500])
-    captured = _last_chat_capture(chat_log)
-    block = _stable_fact_block(captured)
+    block = _stable_fact_block(chat_log)
     if REVISED_MARKER not in block:
-        _fail("revised_core_facts_missing", block[:1000] or str(captured)[:1000])
+        _fail("revised_core_facts_missing", block[:1000] or "no recall records")
+    chat_captures = _chat_captures(chat_log)
+    heading_requests = core_facts_heading_requests(chat_captures)
     if DELETE_MARKER in block:
         _fail("deleted_fact_still_in_core_facts", block[:1000])
     report = {
@@ -1580,7 +1598,8 @@ def cmd_verify_api(args: argparse.Namespace) -> None:
         "core_facts_contains_delete": DELETE_MARKER in bundle["original_block"],
         "revised_core_facts": REVISED_MARKER in block,
         "deleted_absent_after_edit": DELETE_MARKER not in block,
-        "v11_system_prompt_has_core_facts_heading": False,
+        "v11_system_prompt_has_core_facts_heading": bool(heading_requests),
+        "chat_requests_scanned": len(chat_captures),
         "stable_fact_surface": "recall_memory MEMORY_CANDIDATE_DATA (second round)",
         "backend_port": backend_port,
         "how_not_false_positive": {
@@ -1593,8 +1612,12 @@ def cmd_verify_api(args: argparse.Namespace) -> None:
             "worker": "no manual process_due_jobs_once; waited on natural poll",
         },
     }
+    if report["v11_system_prompt_has_core_facts_heading"]:
+        report["ok"] = False
     _write_json(paths["captures"] / "verify_api.json", report)
     print(json.dumps(report, ensure_ascii=False, indent=2))
+    if not report["ok"]:
+        raise SystemExit(2)
 
 
 def cmd_fail_start(args: argparse.Namespace) -> None:
