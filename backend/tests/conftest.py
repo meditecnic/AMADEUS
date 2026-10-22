@@ -1,8 +1,78 @@
+import os
+import shutil
+import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+# ---------------------------------------------------------------------------
+# User-directory isolation (audit P0).
+#
+# Some paths are resolved at import time (for example
+# app.config.DEFAULT_REF_AUDIO_DIR and speech_service._cache_dir both call
+# get_data_root() while the module is imported). Test modules import app code
+# during collection, before any fixture runs, so the environment must already
+# point at a throwaway location when this conftest is imported. This module is
+# loaded by pytest before any test module is collected.
+# ---------------------------------------------------------------------------
+_ISOLATED_ENV_KEYS = (
+    "AMADEUS_DATA_DIR",
+    "HOME",
+    "USERPROFILE",  # Path.home() on Windows
+    "APPDATA",  # get_data_root() fallback on Windows
+    "LOCALAPPDATA",
+)
+_ORIGINAL_ENV = {key: os.environ.get(key) for key in _ISOLATED_ENV_KEYS}
+_SESSION_ROOT = Path(tempfile.mkdtemp(prefix="amadeus-tests-"))
+_SESSION_HOME = _SESSION_ROOT / "home"
+_SESSION_ENV = {
+    "AMADEUS_DATA_DIR": str(_SESSION_ROOT / "data"),
+    "HOME": str(_SESSION_HOME),
+    "USERPROFILE": str(_SESSION_HOME),
+    "APPDATA": str(_SESSION_HOME / "AppData" / "Roaming"),
+    "LOCALAPPDATA": str(_SESSION_HOME / "AppData" / "Local"),
+}
+for _value in _SESSION_ENV.values():
+    Path(_value).mkdir(parents=True, exist_ok=True)
+os.environ.update(_SESSION_ENV)
+
+
+def pytest_unconfigure(config):
+    for key, value in _ORIGINAL_ENV.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+    shutil.rmtree(_SESSION_ROOT, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def isolated_user_dirs(tmp_path_factory):
+    """Point the data root and every home-directory variable at fresh temp dirs.
+
+    Defined first so it is set up before any fixture that requests
+    ``monkeypatch`` and torn down after it. It uses its own MonkeyPatch so a
+    test calling ``monkeypatch.undo()`` cannot remove this isolation.
+    """
+    data_dir = tmp_path_factory.mktemp("amadeus-data")
+    home_dir = tmp_path_factory.mktemp("home")
+    env = {
+        "AMADEUS_DATA_DIR": str(data_dir),
+        "HOME": str(home_dir),
+        "USERPROFILE": str(home_dir),
+        "APPDATA": str(home_dir / "AppData" / "Roaming"),
+        "LOCALAPPDATA": str(home_dir / "AppData" / "Local"),
+    }
+    mp = pytest.MonkeyPatch()
+    try:
+        for key, value in env.items():
+            mp.setenv(key, value)
+        yield data_dir
+    finally:
+        mp.undo()
 
 
 @pytest.fixture(autouse=True)

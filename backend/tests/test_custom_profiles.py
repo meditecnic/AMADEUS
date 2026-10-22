@@ -93,14 +93,14 @@ def test_v9_to_v10_rolls_back_columns_and_version_on_mid_migration_failure(tmp_p
             raise sqlite3.OperationalError("injected migration failure")
         return original_column_exists(conn, table, column)
 
-    monkeypatch.setattr(db_module, "_column_exists", flaky_column_exists)
     connection = sqlite3.connect(control)
     try:
-        with pytest.raises(sqlite3.OperationalError, match="injected migration failure"):
-            db_module._migrate_v9_to_v10(connection, "control")
+        with monkeypatch.context() as m:
+            m.setattr(db_module, "_column_exists", flaky_column_exists)
+            with pytest.raises(sqlite3.OperationalError, match="injected migration failure"):
+                db_module._migrate_v9_to_v10(connection, "control")
     finally:
         connection.close()
-        monkeypatch.undo()
 
     connection = sqlite3.connect(control)
     try:
@@ -324,19 +324,19 @@ async def test_delete_returns_error_when_db_disable_fails(app_client, monkeypatc
         },
     ).json()["provider_id"]
 
-    monkeypatch.setattr(
-        "app.routers.providers.soft_disable_provider_configuration",
-        AsyncMock(side_effect=RuntimeError("db locked")),
-    )
     try:
-        response = app_client.delete(f"/api/providers/custom-profiles/{provider_id}")
-        assert response.status_code == 500
-        assert response.json()["detail"]["code"] == "provider_disable_failed"
-        # Must still be callable if DB disable failed (no dangerous half state where
-        # API claims disabled while registry remains).
-        assert provider_registry.snapshot(provider_id, allow_unavailable=True).model_id == "db-fail"
+        with monkeypatch.context() as m:
+            m.setattr(
+                "app.routers.providers.soft_disable_provider_configuration",
+                AsyncMock(side_effect=RuntimeError("db locked")),
+            )
+            response = app_client.delete(f"/api/providers/custom-profiles/{provider_id}")
+            assert response.status_code == 500
+            assert response.json()["detail"]["code"] == "provider_disable_failed"
+            # Must still be callable if DB disable failed (no dangerous half state where
+            # API claims disabled while registry remains).
+            assert provider_registry.snapshot(provider_id, allow_unavailable=True).model_id == "db-fail"
     finally:
-        monkeypatch.undo()
         app_client.delete(f"/api/providers/custom-profiles/{provider_id}")
         provider_registry.unregister(provider_id)
 
@@ -373,33 +373,33 @@ async def test_create_rolls_back_when_register_fails(app_client, monkeypatch):
     def boom(**kwargs):
         raise RuntimeError("adapter boom")
 
-    monkeypatch.setattr(providers_router, "configure_custom_provider", boom)
-    response = app_client.post(
-        "/api/providers/custom-profiles",
-        json={
-            "display_name": "Ghost",
-            "base_url": "http://127.0.0.1:5557/v1",
-            "default_model": "ghost-model",
-        },
-    )
-    assert response.status_code == 500
-    assert response.json()["detail"]["code"] == "provider_register_failed"
-    # No ghost runtime registration.
-    assert all(
-        not (row.id.startswith("custom:") and row.default_model == "ghost-model")
-        for row in provider_registry.list_definitions()
-    )
-    # Durable row must be disabled so restore cannot revive it.
-    rows = await list_provider_configurations(include_disabled=True)
-    ghosts = [r for r in rows if r.get("default_model") == "ghost-model"]
-    assert ghosts
-    assert all(r.get("enabled") is False for r in ghosts)
-    await restore_custom_provider_configuration()
-    assert all(
-        not (row.id.startswith("custom:") and row.default_model == "ghost-model")
-        for row in provider_registry.list_definitions()
-    )
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        m.setattr(providers_router, "configure_custom_provider", boom)
+        response = app_client.post(
+            "/api/providers/custom-profiles",
+            json={
+                "display_name": "Ghost",
+                "base_url": "http://127.0.0.1:5557/v1",
+                "default_model": "ghost-model",
+            },
+        )
+        assert response.status_code == 500
+        assert response.json()["detail"]["code"] == "provider_register_failed"
+        # No ghost runtime registration.
+        assert all(
+            not (row.id.startswith("custom:") and row.default_model == "ghost-model")
+            for row in provider_registry.list_definitions()
+        )
+        # Durable row must be disabled so restore cannot revive it.
+        rows = await list_provider_configurations(include_disabled=True)
+        ghosts = [r for r in rows if r.get("default_model") == "ghost-model"]
+        assert ghosts
+        assert all(r.get("enabled") is False for r in ghosts)
+        await restore_custom_provider_configuration()
+        assert all(
+            not (row.id.startswith("custom:") and row.default_model == "ghost-model")
+            for row in provider_registry.list_definitions()
+        )
 
 
 @pytest.mark.asyncio
@@ -420,35 +420,35 @@ async def test_patch_and_legacy_patch_register_failure_fail_closed(app_client, m
     def boom(**kwargs):
         raise RuntimeError("register failed")
 
-    monkeypatch.setattr(providers_router, "configure_custom_provider", boom)
+    with monkeypatch.context() as m:
+        m.setattr(providers_router, "configure_custom_provider", boom)
 
-    patch_resp = app_client.patch(
-        f"/api/providers/custom-profiles/{provider_id}",
-        json={"default_model": "patch-bad"},
-    )
-    assert patch_resp.status_code == 500
-    row = await get_provider_configuration(provider_id)
-    assert row is not None
-    assert row["enabled"] is False
-    with pytest.raises(KeyError):
-        provider_registry.snapshot(provider_id)
+        patch_resp = app_client.patch(
+            f"/api/providers/custom-profiles/{provider_id}",
+            json={"default_model": "patch-bad"},
+        )
+        assert patch_resp.status_code == 500
+        row = await get_provider_configuration(provider_id)
+        assert row is not None
+        assert row["enabled"] is False
+        with pytest.raises(KeyError):
+            provider_registry.snapshot(provider_id)
 
-    legacy = app_client.patch(
-        "/api/providers/custom/configuration",
-        json={
-            "base_url": "http://127.0.0.1:5559/v1",
-            "default_model": "legacy-bad",
-            "display_name": "Legacy Bad",
-        },
-    )
-    assert legacy.status_code == 500
-    custom_row = await get_provider_configuration("custom")
-    assert custom_row is not None
-    assert custom_row["enabled"] is False
-    with pytest.raises(KeyError):
-        provider_registry.snapshot("custom")
+        legacy = app_client.patch(
+            "/api/providers/custom/configuration",
+            json={
+                "base_url": "http://127.0.0.1:5559/v1",
+                "default_model": "legacy-bad",
+                "display_name": "Legacy Bad",
+            },
+        )
+        assert legacy.status_code == 500
+        custom_row = await get_provider_configuration("custom")
+        assert custom_row is not None
+        assert custom_row["enabled"] is False
+        with pytest.raises(KeyError):
+            provider_registry.snapshot("custom")
 
-    monkeypatch.undo()
     configure_custom_provider(
         provider_id="custom",
         base_url="http://127.0.0.1:1234/v1",
@@ -472,15 +472,15 @@ async def test_clear_runtime_unregisters_even_if_cache_clear_raises(app_client, 
     ).json()["provider_id"]
     assert any(d.id == provider_id for d in provider_registry.list_definitions())
 
-    monkeypatch.setattr(
-        providers_router.provider_model_cache,
-        "clear",
-        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("cache clear boom")),
-    )
-    providers_router._clear_runtime_surfaces(provider_id)
-    with pytest.raises(KeyError):
-        provider_registry.snapshot(provider_id)
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        m.setattr(
+            providers_router.provider_model_cache,
+            "clear",
+            lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("cache clear boom")),
+        )
+        providers_router._clear_runtime_surfaces(provider_id)
+        with pytest.raises(KeyError):
+            provider_registry.snapshot(provider_id)
     app_client.delete(f"/api/providers/custom-profiles/{provider_id}")
 
 

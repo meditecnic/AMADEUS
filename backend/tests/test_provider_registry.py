@@ -130,6 +130,12 @@ async def test_model_cache_uses_24_hour_ttl_and_explicit_refresh():
 
 @pytest.mark.asyncio
 async def test_memory_extraction_uses_selected_provider_snapshot(monkeypatch):
+    from app.db import init_db
+
+    # _extract_turn reads the memory DB (erasure check) before calling the
+    # provider. Create the schema in the isolated data dir instead of relying
+    # on a pre-existing database under the user's home directory.
+    await init_db()
     adapter = FakeAdapter(
         {
             "working_summary": "冈部在检查实验数据。",
