@@ -590,6 +590,8 @@ async def compress_and_update_history(
                         f"compression successful ({len(summary)} chars)"
                     )
     except Exception as e:
+        # Broad on purpose: background task; any provider/DB failure must stay
+        # contained here and is counted by the compression backoff (#11).
         compression_succeeded = False
         print(f"[History Compression Error] Session {session_id}: {e}")
     finally:
@@ -605,7 +607,9 @@ async def execute_tool_call(name: str, arguments_str: str) -> str:
         try:
             args = json.loads(arguments_str)
             query = args.get("query", "")
-        except Exception:
+        except (ValueError, TypeError, AttributeError, RecursionError):
+            # Not a JSON object (bad/odd JSON, non-str input, or nesting too
+            # deep): keep the historical fallback of searching the raw text.
             query = arguments_str
         response = await search_service.search(query)
         if response.failure_code is not None:
@@ -1182,6 +1186,8 @@ async def _render_foreign_speech_to_japanese(
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            # Broad on purpose: provider adapters raise arbitrary types; a
+            # failed render attempt retries, then the caller fails closed.
             print(
                 f"[LanguageRenderer] attempt={renderer_attempt + 1}/2 "
                 f"provider_error={type(exc).__name__} source_sha256={digest}",
@@ -1343,6 +1349,8 @@ async def repair_turn_translation(
     except asyncio.CancelledError:
         raise
     except Exception as exc:
+        # Broad on purpose: best-effort background repair (provider + DB); the
+        # turn already completed, so any failure only skips the repair.
         print(
             f"[Translation Repair] {type(exc).__name__} for turn {turn_id}",
             flush=True,
@@ -1408,6 +1416,8 @@ async def _persist_aborted_turn(
             translation=_ABORTED_TURN_ZH,
         )
     except Exception as exc:
+        # Broad on purpose: runs while the turn is being cancelled; a DB error
+        # here must not replace the CancelledError being propagated.
         print(
             f"[Turn] aborted-turn notice failed ({type(exc).__name__})",
             flush=True,
@@ -2011,6 +2021,8 @@ async def processor_loop(
                     session.api_key,
                 )
             except Exception as exc:
+                # Broad on purpose: translation is optional for v1 turns; any
+                # provider error degrades to an empty subtitle.
                 print(
                     f"[Translation] unavailable; chat continues ({type(exc).__name__})",
                     flush=True,
@@ -2056,6 +2068,8 @@ async def processor_loop(
                                 model_id=str(model_id),
                             )
                         except Exception as exc:
+                            # Broad on purpose: memory enqueue is best-effort
+                            # background work and must never affect chat.
                             print(
                                 f"[MemoryV11] enqueue failed (chat continues): {exc!r}",
                                 flush=True,
@@ -2223,6 +2237,8 @@ async def processor_loop(
             "message": str(e),
         }))
     except Exception as e:
+        # Broad on purpose: turn boundary. Any failure becomes the recoverable
+        # turn_failed frame instead of killing the processor task.
         if segment_pipeline is not None:
             await segment_pipeline.cancel(reason=None)
         if segment_pipeline is not None and diagnostic_observer is not None:
@@ -2421,6 +2437,7 @@ async def _dispatch_tts_sentences(
         await t2
 
     except Exception as e:
+        # Broad on purpose: stop the sender task for any failure, then re-raise.
         t2.cancel()
         await sentence_queue.put(e)
         await asyncio.gather(t2, return_exceptions=True)
@@ -2456,6 +2473,8 @@ async def _dispatch_streaming_voice_tts(session: SessionState, final_text: str, 
         except asyncio.CancelledError:
             raise
         except Exception as exc:
+            # Broad on purpose: any TTS stream failure degrades this sentence
+            # only; the turn continues with the next one.
             await send_queue.put((epoch, {"type": "voice.audio_degraded", "sentence_id": sentence_id, "reason": str(exc)}))
         finally:
             session.active_streams.discard(stream)
@@ -2473,6 +2492,7 @@ async def run_tts_pipeline(session: SessionState, text: str, emotion: str, send_
         tts_manager.cancel_pending(session.tts_key)
         raise
     except Exception as e:
+        # Broad on purpose: debug-only pipeline; report any failure to the client.
         print(f"[TTS Debug Error] {e}")
         await send_queue.put((epoch, {"type": "error", "message": f"TTS debug error: {e}"}))
     finally:
@@ -2509,6 +2529,8 @@ async def writer_loop(send_queue: asyncio.Queue, session: SessionState, websocke
                         diagnostic_runtime.release_turn_observer(turn_id, generation)
                     raise
                 except Exception:
+                    # Broad on purpose: record any transport failure for
+                    # diagnostics, then re-raise it unchanged.
                     if observer is not None:
                         observer.delivery(payload, "failed", "transport_failed")
                     if payload_type in _V2_TERMINAL_TYPES and turn_id is not None:
@@ -2524,6 +2546,8 @@ async def writer_loop(send_queue: asyncio.Queue, session: SessionState, websocke
     except WebSocketDisconnect:
         pass
     except Exception as e:
+        # Broad on purpose: the writer ends quietly; the reader's finally
+        # cancels and gathers it on disconnect.
         print(f"[Writer Exception] Session {session.session_id}: {e}")
 
 @router.websocket("/ws/chat")
@@ -2561,6 +2585,9 @@ async def websocket_chat_endpoint(websocket: WebSocket):
             except WebSocketDisconnect:
                 break
             except Exception as e:
+                # Broad on purpose: malformed frames surface as ValueError,
+                # KeyError or RuntimeError depending on the ASGI server; the
+                # reader answers with an error frame and keeps the socket.
                 await send_queue.put((session.current_epoch, {"type": "error", "message": f"数据格式无效: {str(e)}"}))
                 continue
             
@@ -2836,7 +2863,14 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                     session.current_epoch += 1
                     session.revision = session.current_epoch
                     await session.load_from_db()
-                except Exception:
+                except Exception as switch_exc:
+                    # Broad on purpose: any DB/runtime failure must roll back
+                    # and answer conversation.switch_error, never end the reader.
+                    logger.warning(
+                        "[Conversation] switch failed for session %s (%s); rolling back",
+                        session.session_id,
+                        type(switch_exc).__name__,
+                    )
                     for attribute, value in runtime_snapshot.items():
                         setattr(session, attribute, value)
                     try:
@@ -2847,8 +2881,16 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                             session.worldline,
                             str(previous_selected["id"]),
                         )
-                    except Exception:
-                        pass
+                    except Exception as restore_exc:
+                        # Swallowed on purpose: best-effort restore of the
+                        # durable selection; the in-memory runtime is already
+                        # restored and the client gets switch_error below.
+                        logger.warning(
+                            "[Conversation] could not restore previous selection "
+                            "for session %s (%s)",
+                            session.session_id,
+                            type(restore_exc).__name__,
+                        )
                     await send_queue.put((session.current_epoch, {
                         "type": "conversation.switch_error",
                         "request_id": request_id,
@@ -2893,7 +2935,15 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                         target_worldline,
                         websocket,
                     )
-                except Exception:
+                except Exception as switch_exc:
+                    # Broad on purpose: switch() restores its own snapshot on
+                    # failure; any switch/lease error answers
+                    # worldline.switch_error and never ends the reader.
+                    logger.warning(
+                        "[Worldline] switch failed for session %s (%s)",
+                        session.session_id,
+                        type(switch_exc).__name__,
+                    )
                     await send_queue.put((session.current_epoch, {
                         "type": "worldline.switch_error",
                         "request_id": request_id,
@@ -2915,6 +2965,8 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 try:
                     await models.clear_session_data(session.session_id, worldline=session.worldline)
                 except Exception as e:
+                    # Broad on purpose: any storage failure is reported and the
+                    # in-memory history is left untouched.
                     await send_queue.put((session.current_epoch, {"type": "error", "message": f"物理清除历史记录失败: {str(e)}"}))
                     continue
                 
@@ -3103,11 +3155,19 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 await send_queue.put((session.current_epoch, {"type": "error", "message": f"Unknown frame type: {frame_type}"}))
                 
     except Exception as e:
+        # Broad on purpose: connection boundary; the finally below must still
+        # cancel tasks and release the lease.
         print(f"[Reader Exception] Session {session_id}: {e}")
         try:
             await send_queue.put((session.current_epoch, {"type": "error", "message": f"Server error: {str(e)}"}))
-        except Exception:
-            pass
+        except Exception as notify_exc:
+            # Swallowed on purpose: the connection is already failing; not
+            # being able to queue the last error frame must not skip cleanup.
+            logger.warning(
+                "[Reader] could not queue error frame for session %s (%s)",
+                session_id,
+                type(notify_exc).__name__,
+            )
     finally:
         # Cancel running Processor and Writer tasks on disconnect
         tasks_to_gather = [writer_task]

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
 from app.db import get_db, normalize_worldline
+
+logger = logging.getLogger(__name__)
 
 
 async def cancel_inflight(session: Any) -> int:
@@ -22,8 +25,14 @@ async def cancel_inflight(session: Any) -> int:
         if closer:
             try:
                 await closer()
-            except Exception:
-                pass
+            except Exception as exc:
+                # Swallowed on purpose: provider/TTS stream cleanup can raise
+                # any type (already running, transport errors); cancellation
+                # must still clear the session's busy state below.
+                logger.warning(
+                    "[Session] closing an in-flight stream failed (%s)",
+                    type(exc).__name__,
+                )
     getattr(session, "active_streams", set()).clear()
     session.active_task = None
     session.is_busy = False
@@ -67,8 +76,15 @@ class SessionCoordinator:
                 await old.close(code=4409, reason="session connection replaced")
             except TypeError:  # compatibility with simple test doubles
                 await old.close(code=4409)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Swallowed on purpose: the replaced socket may already be
+                # closing or gone (RuntimeError/OSError/disconnect types vary by
+                # server); the new connection's lease is granted regardless.
+                logger.warning(
+                    "[Session] closing replaced connection for session %s failed (%s)",
+                    session_id,
+                    type(exc).__name__,
+                )
 
     async def release_lease(self, session_id: str, worldline: str, websocket: Any) -> None:
         key = (session_id, normalize_worldline(worldline))
@@ -132,6 +148,8 @@ class SessionCoordinator:
                 await session.load_from_db()
             await self.persist_current(session.session_id, target, session.revision)
         except Exception:
+            # Broad on purpose: restore the runtime snapshot for any failure,
+            # then re-raise it unchanged to the caller.
             for attribute, value in runtime_snapshot.items():
                 setattr(session, attribute, value)
             try:
@@ -140,8 +158,14 @@ class SessionCoordinator:
                     runtime_snapshot["worldline"],
                     session.revision,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                # Swallowed on purpose: the original switch error is re-raised
+                # below and must not be masked by a failed rollback write.
+                logger.warning(
+                    "[Session] worldline rollback persist failed for session %s (%s)",
+                    session.session_id,
+                    type(exc).__name__,
+                )
             raise
         return {"session_id": session.session_id, "worldline": target, "revision": session.revision, "cancelled_tasks": cancelled, "available": True}
 

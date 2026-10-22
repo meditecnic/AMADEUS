@@ -5,12 +5,15 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import re
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable
+
+logger = logging.getLogger(__name__)
 
 
 class AudioErrorCode(StrEnum):
@@ -581,12 +584,26 @@ class _VoiceStopped(RuntimeError):
 
 
 def _consume_heartbeat_task(task: asyncio.Task) -> None:
-    """Swallow a best-effort heartbeat stop so teardown never fails."""
+    """Retrieve a stopped heartbeat's outcome so teardown never fails or warns."""
+    if task.cancelled():
+        return
     try:
-        if not task.cancelled():
-            task.exception()
-    except Exception:
-        pass
+        exc = task.exception()
+    except asyncio.InvalidStateError:
+        # Only a still-pending task raises here; as a done callback this is
+        # unreachable, and teardown must never fail on it.
+        return
+    if exc is not None:
+        logger.debug("[SegmentPipeline] heartbeat stopped with %s", type(exc).__name__)
+
+
+def _log_observer_failure(hook: str, exc: Exception) -> None:
+    """Observers are best-effort side channels: record, never propagate."""
+    logger.warning(
+        "[SegmentPipeline] %s observer failed (%s); pipeline continues",
+        hook,
+        type(exc).__name__,
+    )
 
 
 class IncrementalJapaneseSegmenter:
@@ -833,8 +850,9 @@ class SegmentPipeline:
         if self._turn_observer is not None:
             try:
                 self._turn_observer.turn_started(self.identity)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Broad on purpose: injected observer, arbitrary failure types.
+                _log_observer_failure("turn_started", exc)
         self._start_heartbeat()
 
     def submit(self, segment: Segment) -> None:
@@ -868,8 +886,9 @@ class SegmentPipeline:
         if self._turn_observer is not None:
             try:
                 self._turn_observer.turn_terminal(self.identity, "succeeded")
-            except Exception:
-                pass
+            except Exception as exc:
+                # Broad on purpose: injected observer, arbitrary failure types.
+                _log_observer_failure("turn_terminal", exc)
 
     def _start_heartbeat(self) -> None:
         """Start the turn-scoped liveness loop (proves alive, never progress)."""
@@ -925,8 +944,9 @@ class SegmentPipeline:
             if self._turn_observer is not None and reason is not None:
                 try:
                     self._turn_observer.turn_terminal(self.identity, "cancelled", reason)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    # Broad on purpose: injected observer, arbitrary failure types.
+                    _log_observer_failure("turn_terminal", exc)
 
     async def _process(self, segment: Segment) -> None:
         translation_task = asyncio.create_task(self._translate_safe(segment.text))
@@ -977,6 +997,8 @@ class SegmentPipeline:
             except asyncio.TimeoutError as exc:
                 last_error = exc
             except Exception as exc:
+                # Broad on purpose: the translator is an injected provider
+                # call; every failure is classified, none escapes the segment.
                 last_error = exc
                 if not self._is_retryable_translation_error(exc):
                     break
@@ -1015,6 +1037,8 @@ class SegmentPipeline:
                 if attempt + 1 >= attempts:
                     return None, str(exc) or "transient_error"
             except Exception as exc:
+                # Broad on purpose: any TTS failure becomes an audio_error
+                # reason for this segment; text delivery is unaffected.
                 code = getattr(exc, "code", None)
                 return None, getattr(code, "value", None) or str(exc) or "service_error"
         return None, "service_error"
@@ -1047,8 +1071,9 @@ class SegmentPipeline:
                 if self._turn_observer is not None:
                     try:
                         self._turn_observer.segment_committed(self.identity, current_segment)
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        # Broad on purpose: injected observer, arbitrary failure types.
+                        _log_observer_failure("segment_committed", exc)
                 self._committed_translations.append(current_translation)
                 self._next_text_id += 1
 
@@ -1081,10 +1106,10 @@ class SegmentPipeline:
                             current_audio,
                             observer_error,
                         )
-                    except Exception:
-                        # The observer is a strictly best-effort side channel.
-                        # Its owner is responsible for recording this failure.
-                        pass
+                    except Exception as exc:
+                        # The observer is a strictly best-effort side channel
+                        # (broad on purpose); its owner records details.
+                        _log_observer_failure("tts", exc)
                 if current_audio is not None and not self._voice_stopped:
                     await self._emit(
                         self._event(
