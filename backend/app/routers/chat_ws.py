@@ -440,6 +440,31 @@ def _compression_trigger_messages() -> int:
     return 2 * (config.HISTORY_COMPRESS_THRESHOLD + 1)
 
 
+def _compression_outcome_is_current(
+    session: "SessionState",
+    request_session: "SessionState | None",
+    worldline: str,
+    revision: int,
+    conversation_id: str | None,
+    request_epoch: int | None,
+) -> bool:
+    """True when the session still matches what the request was issued for.
+
+    A compression result that arrives after a conversation/worldline switch,
+    a reconnect (new revision) or an erasure (new content epoch) describes a
+    state that no longer exists, so it must not move the backoff counters.
+    The caller holds ``session.lock``.
+    """
+    return (
+        session is request_session
+        and request_epoch is not None
+        and session.worldline == worldline
+        and session.revision == revision
+        and getattr(session, "conversation_id", None) == conversation_id
+        and session.content_epoch == request_epoch
+    )
+
+
 async def _cap_history_during_compression_backoff(session: "SessionState") -> None:
     """Keep the prompt window bounded while compression is backing off.
 
@@ -498,12 +523,18 @@ async def compress_and_update_history(
     # Audit #11: True/False feed the backoff; None (stale snapshot, nothing
     # promptable) leaves it unchanged.
     compression_succeeded = None
+    # Session state the request is issued against; recorded before any await
+    # so a late outcome can be checked against it in ``finally``.
+    request_session = None
+    request_epoch = None
     try:
         session_data = sessions.get(session_id)
         if session_data:
             if (session_data.worldline != worldline or session_data.revision != revision
                     or session_data.conversation_id != conversation_id or session_data.erasure_pending):
                 return
+            request_session = session_data
+            request_epoch = session_data.content_epoch
             if not prompt_history:
                 # Durable/API history stays untouched. Only the in-memory prompt
                 # window discards old assistant output that never met the
@@ -600,7 +631,21 @@ async def compress_and_update_history(
             async with session_data.lock:
                 session_data.compressing = False
                 if compression_succeeded is not None:
-                    _record_compression_outcome(session_data, compression_succeeded)
+                    if _compression_outcome_is_current(
+                        session_data,
+                        request_session,
+                        worldline,
+                        revision,
+                        conversation_id,
+                        request_epoch,
+                    ):
+                        _record_compression_outcome(session_data, compression_succeeded)
+                    else:
+                        logger.info(
+                            "[History Compression] Session %s: session changed "
+                            "during the request; outcome not counted for backoff",
+                            session_id,
+                        )
 
 async def execute_tool_call(name: str, arguments_str: str) -> str:
     if name == "web_search":

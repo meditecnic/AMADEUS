@@ -305,3 +305,66 @@ async def test_turns_back_off_after_failures_and_resume_after_success(
     # Turn 7 exceeded 2 * trigger (20 > 16) while backing off -> trimmed to 8.
     assert lengths[6] == 8
     assert max(lengths) <= 2 * chat_ws._compression_trigger_messages() + 2
+
+
+# ---------------------------------------------------------------------------
+# Session changed while the request was in flight (PR #10 review, item 2)
+# ---------------------------------------------------------------------------
+
+
+def _switch_worldline(session: SessionState) -> None:
+    session.worldline = "beta"
+
+
+def _reconnect(session: SessionState) -> None:
+    session.revision += 1
+
+
+def _switch_conversation(session: SessionState) -> None:
+    session.conversation_id = f"{session.conversation_id}-other"
+
+
+def _erase_content(session: SessionState) -> None:
+    session.content_epoch += 1
+
+
+class _ChangesSessionMidRequest:
+    """compress_history that changes the session before its result arrives."""
+
+    def __init__(self, session: SessionState, change, outcome: str):
+        self.session = session
+        self.change = change
+        self.outcome = outcome
+        self.calls = 0
+
+    async def compress_history(self, history, old_summary="", **kwargs):
+        self.calls += 1
+        await asyncio.sleep(0)
+        self.change(self.session)
+        if self.outcome == "error":
+            raise RuntimeError("late provider failure")
+        return GOOD_SUMMARY if self.outcome == "success" else ""
+
+
+@pytest.mark.parametrize(
+    "change",
+    [_switch_worldline, _reconnect, _switch_conversation, _erase_content],
+    ids=["worldline", "revision", "conversation", "content_epoch"],
+)
+@pytest.mark.parametrize("outcome", ["empty", "error", "success"])
+async def test_late_outcome_after_session_changed_leaves_backoff(
+    isolated_store, change, outcome
+):
+    session = await _new_session("backoff-late")
+    session.history = _history(5)
+    session.compression_failures, session.compression_skip_turns = 2, 0
+    adapter = _ChangesSessionMidRequest(session, change, outcome)
+
+    await _compress_once(session, adapter)
+
+    assert adapter.calls == 1, "the request was issued against a valid snapshot"
+    # A late failure must not count, a late (rejected) success must not reset.
+    assert (session.compression_failures, session.compression_skip_turns) == (2, 0)
+    assert session.compressing is False
+    assert len(session.history) == 10, "a late result never trims"
+    assert session.memory_summary != GOOD_SUMMARY
