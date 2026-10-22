@@ -2041,57 +2041,53 @@ async def test_s3c1_episodic_replay_idempotent(isolated_store):
 
 
 @pytest.mark.asyncio
-async def test_s3c1_experience_insert_failure_rolls_back_all(isolated_store):
+async def test_s3c1_experience_insert_failure_rolls_back_all(isolated_store, monkeypatch):
     """H: experience INSERT failure rolls back observation + source too."""
     session_id = f"s3c1-txn-{uuid4().hex[:8]}"
     text = "花火大会に行った"
     recon = _reconciler()
-    original = recon.insert_experience
 
     async def boom_insert(*args: Any, **kwargs: Any):
         raise RuntimeError("forced experience insert failure inside txn")
 
-    recon.insert_experience = boom_insert
-    try:
-        with pytest.raises(RuntimeError, match="forced experience insert"):
-            await _apply_validated(
-                session_id=session_id,
-                worldline="steins_gate",
-                identity_mode="self",
-                observations=[
-                    _observation(
-                        ref="o1",
-                        display_text=text,
-                        semantic={
-                            "subject": "user",
-                            "predicate": "attended",
-                            "object": "fireworks",
-                        },
-                        source_message_ids=[7501],
-                        memory_class="episodic",
-                        confidence=0.9,
-                    )
-                ],
-                operations=[
-                    {
-                        "op": "CREATE",
-                        "observation_ref": "o1",
-                        "fact_text": text,
-                        "reason_code": "contextual_event",
-                    }
-                ],
-                source_evidence=[
-                    _source_evidence(
-                        source_message_id=7501,
-                        conversation_id="conv-tx-1",
-                        fingerprint="fp-tx-1",
-                        excerpt=text,
-                    )
-                ],
-                candidate_allowlist=[],
-            )
-    finally:
-        recon.insert_experience = original
+    monkeypatch.setattr(recon, "insert_experience", boom_insert)
+    with pytest.raises(RuntimeError, match="forced experience insert"):
+        await _apply_validated(
+            session_id=session_id,
+            worldline="steins_gate",
+            identity_mode="self",
+            observations=[
+                _observation(
+                    ref="o1",
+                    display_text=text,
+                    semantic={
+                        "subject": "user",
+                        "predicate": "attended",
+                        "object": "fireworks",
+                    },
+                    source_message_ids=[7501],
+                    memory_class="episodic",
+                    confidence=0.9,
+                )
+            ],
+            operations=[
+                {
+                    "op": "CREATE",
+                    "observation_ref": "o1",
+                    "fact_text": text,
+                    "reason_code": "contextual_event",
+                }
+            ],
+            source_evidence=[
+                _source_evidence(
+                    source_message_id=7501,
+                    conversation_id="conv-tx-1",
+                    fingerprint="fp-tx-1",
+                    excerpt=text,
+                )
+            ],
+            candidate_allowlist=[],
+        )
 
     residue = await _session_residue_counts(session_id)
     assert residue == {

@@ -271,8 +271,8 @@ def forbid_real_credential_store(request, isolated_user_dirs):
 @pytest.fixture(autouse=True)
 def isolated_provider_credentials(monkeypatch):
     """Keep tests out of the user's real Windows Credential Manager."""
-    from app.routers import chat_ws, providers, voice_ws
-    from app.services import credentials
+    from app.routers import chat_ws, providers, system_api, voice_ws
+    from app.services import credentials, search
     from app.services.credentials import InMemoryCredentialStore
 
     store = InMemoryCredentialStore()
@@ -281,6 +281,8 @@ def isolated_provider_credentials(monkeypatch):
     monkeypatch.setattr(chat_ws, "credential_store", store)
     monkeypatch.setattr(voice_ws, "credential_store", store)
     monkeypatch.setattr(providers, "credential_store", store)
+    monkeypatch.setattr(system_api, "credential_store", store)
+    monkeypatch.setattr(search, "credential_store", store)
     providers.provider_model_cache.clear()
     return store
 
