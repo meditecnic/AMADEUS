@@ -71,6 +71,8 @@ export interface Message {
 }
 
 export const RECONNECT_ATTEMPTS = 5;
+// A rejected auth can leave a healthy transport open; short-lived sockets must still consume retries.
+const REJECTED_SESSION_STABLE_MS = 30_000;
 export type ReconnectStopReason = 'forbidden' | 'replaced';
 export interface ReconnectState {
   attempt: number;
@@ -346,6 +348,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       setRetry({ attempt: reconnectCountRef.current, max: RECONNECT_ATTEMPTS, exhausted: false });
     }
     let errored = false;
+    let rejectedAt: number | null = null;
 
     const sessionId = paramsRef.current.sessionId || getOrCreateAmadeusSessionId();
 
@@ -391,6 +394,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
         
         switch (msg.type) {
           case 'session.ready':
+            rejectedAt = null;
             reconnectCountRef.current = 0;
             setRetry(null);
             setSessionReady(true);
@@ -766,6 +770,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
 
           case 'error':
             if (sessionStateRef.current === 'unknown') {
+              rejectedAt = Date.now();
               sessionStateRef.current = 'rejected';
               setSessionState('rejected');
               setRetry(null);
@@ -846,6 +851,12 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
         setRetry(null);
         setReconnectStopReason(event.code === 4403 ? 'forbidden' : 'replaced');
         return;
+      }
+
+      // Refund the budget only after a rejected socket stayed open for a stable interval.
+      // Checking on close needs no timer and cannot turn immediate reject/close cycles into endless 1/5 retries.
+      if (rejectedAt !== null && Date.now() - rejectedAt >= REJECTED_SESSION_STABLE_MS) {
+        reconnectCountRef.current = 0;
       }
 
       // Attempt automatic reconnection up to RECONNECT_ATTEMPTS times (1, 2, 4, 8, 16 s).

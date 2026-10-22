@@ -144,7 +144,9 @@ describe('useAmadeusWS automatic reconnection', () => {
     expect(h.result.current.status).toBe('CONNECTING');
     expect(h.result.current.reconnectStopReason).toBeNull();
     act(() => latest().open());
-    // A rejection before session.ready must stop this fresh attempt too.
+    // Even a stable rejected session must honor a later policy close.
+    act(() => latest().emit({ type: 'error', message: '未认证。请打开设置并配置您的 API Key。' }));
+    act(() => vi.advanceTimersByTime(30_000));
     act(() => latest().drop(code));
     expect(h.result.current.reconnectStopReason).toBe(reason);
     act(() => vi.advanceTimersByTime(120_000));
@@ -152,7 +154,7 @@ describe('useAmadeusWS automatic reconnection', () => {
     h.unmount();
   });
 
-  it.each([false, true])('clears retry on a rejected session without closing or resetting the retry budget (recoverable=%s)', (recoverable) => {
+  it.each([false, true])('restores all five retries after a rejected session stays open (recoverable=%s)', (recoverable) => {
     const h = renderHook(() => useAmadeusWS(params));
     act(() => latest().open());
     act(() => latest().drop());
@@ -161,7 +163,7 @@ describe('useAmadeusWS automatic reconnection', () => {
     act(() => socket.open());
     expect(h.result.current.retry).toEqual({ attempt: 1, max: 5, exhausted: false });
 
-    act(() => socket.emit({ type: 'error', message: '会话未被接受', recoverable }));
+    act(() => socket.emit({ type: 'error', message: '未认证。请打开设置并配置您的 API Key。', recoverable }));
     expect(h.result.current.sessionState).toBe('rejected');
     expect(h.result.current.retry).toBeNull();
     expect(socket.readyState).toBe(FakeWebSocket.OPEN);
@@ -169,7 +171,61 @@ describe('useAmadeusWS automatic reconnection', () => {
     expect(FakeWebSocket.instances).toHaveLength(2);
 
     act(() => socket.drop());
-    expect(h.result.current.retry).toEqual({ attempt: 2, max: 5, exhausted: false });
+    [1000, 2000, 4000, 8000, 16000].forEach((delay, index) => {
+      expect(h.result.current.retry).toEqual({ attempt: index + 1, max: 5, exhausted: false });
+      const before = FakeWebSocket.instances.length;
+      act(() => vi.advanceTimersByTime(delay - 1));
+      expect(FakeWebSocket.instances).toHaveLength(before);
+      act(() => vi.advanceTimersByTime(1));
+      expect(FakeWebSocket.instances).toHaveLength(before + 1);
+      fail(latest());
+    });
+    expect(h.result.current.retry).toEqual({ attempt: 5, max: 5, exhausted: true });
+    act(() => vi.advanceTimersByTime(120_000));
+    expect(FakeWebSocket.instances).toHaveLength(7);
+    h.unmount();
+  });
+
+  it.each([1000, 1006])('bounds immediate auth rejection and close cycles with code %i', (code) => {
+    const h = renderHook(() => useAmadeusWS(params));
+    const rejectAndDrop = () => act(() => {
+      latest().open();
+      latest().emit({ type: 'error', message: '未认证。请打开设置并配置您的 API Key。' });
+      latest().drop(code);
+    });
+    rejectAndDrop();
+
+    [1000, 2000, 4000, 8000, 16000].forEach((delay, index) => {
+      expect(h.result.current.retry).toEqual({ attempt: index + 1, max: 5, exhausted: false });
+      act(() => vi.advanceTimersByTime(delay - 1));
+      expect(FakeWebSocket.instances).toHaveLength(index + 1);
+      act(() => vi.advanceTimersByTime(1));
+      expect(FakeWebSocket.instances).toHaveLength(index + 2);
+      rejectAndDrop();
+    });
+    expect(h.result.current.retry).toEqual({ attempt: 5, max: 5, exhausted: true });
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => vi.advanceTimersByTime(120_000));
+    expect(FakeWebSocket.instances).toHaveLength(6);
+    h.unmount();
+  });
+
+  it.each([
+    [29_999, 2],
+    [30_000, 1],
+  ])('only restores a rejected socket budget after a stable interval (%i ms)', (elapsed, nextAttempt) => {
+    const h = renderHook(() => useAmadeusWS(params));
+    act(() => latest().open());
+    act(() => latest().drop());
+    act(() => vi.advanceTimersByTime(1000));
+    act(() => latest().open());
+    act(() => latest().emit({ type: 'error', message: '未认证。请打开设置并配置您的 API Key。' }));
+    act(() => vi.advanceTimersByTime(elapsed));
+    // Repeated rejection frames must not restart the stability interval.
+    act(() => latest().emit({ type: 'error', message: '未认证。请打开设置并配置您的 API Key。' }));
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    act(() => latest().drop());
+    expect(h.result.current.retry).toEqual({ attempt: nextAttempt, max: 5, exhausted: false });
     h.unmount();
   });
 
