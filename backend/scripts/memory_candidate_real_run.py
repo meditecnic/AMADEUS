@@ -856,10 +856,29 @@ def _without_expect_header(request: Any) -> Any:
 
 
 def _core_facts_from_messages(messages: list[Any]) -> str:
-    if not messages:
-        return ""
-    system = str(messages[0].get("content") or "")
-    return b2._core_facts_block(system)
+    """Stable facts the provider received (v11: recall_memory records).
+
+    cf14875: v11 never puts a CORE FACTS section in messages[0]; stable facts
+    arrive in the second round as MEMORY_CANDIDATE_DATA records.
+    """
+    return b2.stable_fact_records_from_messages(messages)
+
+
+def _system_has_core_facts_heading(messages: list[Any]) -> bool:
+    if not messages or not isinstance(messages[0], dict):
+        return False
+    return b2.has_core_facts_heading(str(messages[0].get("content") or ""))
+
+
+def _payload_offers_recall(payload: dict[str, Any]) -> bool:
+    return b2._offers_recall_memory(payload.get("tools"))
+
+
+def _last_user_content(messages: list[Any]) -> str:
+    for message in reversed(list(messages or [])):
+        if isinstance(message, dict) and message.get("role") == "user":
+            return str(message.get("content") or "")
+    return ""
 
 
 def _extract_payload(user_text: str, source_message_id: int) -> dict[str, Any]:
@@ -1006,11 +1025,23 @@ class LocalProviderHandler(BaseHTTPRequestHandler):
             "total_tokens": 24 if kind != "extract" else 36,
         }
         if payload.get("stream"):
+            delta: dict[str, Any] = {"content": b2.REPLY_JA}
+            if _payload_offers_recall(payload):
+                # v11 round 1: follow the MEMORY READ GATE and only call
+                # recall_memory; round 2 (tools closed) gets the text reply.
+                delta = {
+                    "tool_calls": [
+                        b2.recall_tool_call(
+                            _last_user_content(payload.get("messages") or []),
+                            call_id="call-recall-local-mock",
+                        )
+                    ]
+                }
             chunk = {
                 "id": "local-mock",
                 "model": model_id or DEFAULT_REQUEST_ID,
                 "choices": [
-                    {"delta": {"content": b2.REPLY_JA}, "index": 0, "finish_reason": None}
+                    {"delta": delta, "index": 0, "finish_reason": None}
                 ],
             }
             usage_chunk = {
@@ -1213,6 +1244,8 @@ def install_allowlisted_httpx(
                     "model": (payload or {}).get("model"),
                     "max_tokens": (payload or {}).get("max_tokens"),
                     "core_facts": core_facts,
+                    "system_has_core_facts_heading": _system_has_core_facts_heading(messages),
+                    "offers_recall_memory": _payload_offers_recall(payload or {}),
                     "history_roles": [
                         str(item.get("role"))
                         for item in messages
@@ -2224,6 +2257,17 @@ def _mock_rows(paths: dict[str, Path]) -> list[dict[str, Any]]:
     return rows
 
 
+def _core_facts_heading_seen(paths: dict[str, Path]) -> bool:
+    """True if any captured v11 chat request had a CORE FACTS system heading."""
+    log = paths["captures"] / "provider_chat.jsonl"
+    if not log.is_file():
+        return False
+    for line in log.read_text(encoding="utf-8").splitlines():
+        if line.strip() and json.loads(line).get("system_has_core_facts_heading"):
+            return True
+    return False
+
+
 def _last_core_facts(paths: dict[str, Path]) -> str:
     log = paths["captures"] / "provider_chat.jsonl"
     if not log.is_file():
@@ -2547,6 +2591,7 @@ def cmd_verify_local(args: argparse.Namespace) -> None:
         "core_after_edit_has_ocarina_utterance": TURN_EXTRACT in str(bundle.get("core_after_edit") or ""),
         "new_session_history_has_extract_utterance": bundle.get("history_has_extract_utterance"),
         "core_after_forget_has_harmonica": FACT_MARKER_HARMONICA in str(bundle.get("core_after_forget") or ""),
+        "v11_system_prompt_has_core_facts_heading": _core_facts_heading_seen(paths),
         "archive_after_forget_has_harmonica": any(
             FACT_MARKER_HARMONICA in text for text in archive_texts
         ),
@@ -2574,6 +2619,8 @@ def cmd_verify_local(args: argparse.Namespace) -> None:
     if report["new_session_history_has_extract_utterance"]:
         report["ok"] = False
     if report["core_after_forget_has_harmonica"] or report["archive_after_forget_has_harmonica"]:
+        report["ok"] = False
+    if report["v11_system_prompt_has_core_facts_heading"]:
         report["ok"] = False
     if "chat" not in kinds or "extract" not in kinds:
         report["ok"] = False
