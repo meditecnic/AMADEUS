@@ -71,6 +71,7 @@ export interface Message {
 }
 
 export const RECONNECT_ATTEMPTS = 5;
+export type ReconnectStopReason = 'forbidden' | 'replaced';
 export interface ReconnectState {
   attempt: number;
   max: number;
@@ -98,6 +99,8 @@ export interface UseAmadeusWSReturn {
    *  exhausted once every attempt has failed (only reconnect() starts over). null while connected or idle.
    *  Optional so existing test doubles keep compiling. */
   retry?: ReconnectState | null;
+  /** Server refusal or connection replacement stops automatic retry until a deliberate reconnect. */
+  reconnectStopReason?: ReconnectStopReason | null;
   /** Optional so existing test doubles keep compiling. */
   resetToDraft?: () => void;
   switchConversation: (conversationId: string, history: Message[]) => boolean;
@@ -206,6 +209,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   const reconnectTimerRef = useRef<number | null>(null);
   const reconnectCountRef = useRef(0);
   const [retry, setRetry] = useState<ReconnectState | null>(null);
+  const [reconnectStopReason, setReconnectStopReason] = useState<ReconnectStopReason | null>(null);
   const voiceStoppedRef = useRef(false);
   /** Legacy v1 per-send degradation flag (text_chunk has no turn identity). */
   const audioDegradedNotifiedRef = useRef(false);
@@ -304,6 +308,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     }
     setStatus('CLOSED');
     setRetry(null);
+    setReconnectStopReason(null);
     setIsThinking(false);
     setIsSynthesizing(false);
     voiceStoppedRef.current = false;
@@ -349,8 +354,6 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
 
     ws.onopen = () => {
       if (wsRef.current !== ws) return;
-      reconnectCountRef.current = 0;
-      setRetry(null);
       setSessionReady(false);
       setStatus('READY');
 
@@ -388,6 +391,8 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
         
         switch (msg.type) {
           case 'session.ready':
+            reconnectCountRef.current = 0;
+            setRetry(null);
             setSessionReady(true);
             if (msg.conversation_mode === 'draft') {
               activeConversationIdRef.current = null;
@@ -763,6 +768,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             if (sessionStateRef.current === 'unknown') {
               sessionStateRef.current = 'rejected';
               setSessionState('rejected');
+              setRetry(null);
             }
             // Error clears watchdog
             clearWatchdog();
@@ -795,7 +801,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       }
     };
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       if (wsRef.current !== ws) return;
       setSessionReady(false);
       const turnWasActive = Boolean(activeTurnIdRef.current);
@@ -833,6 +839,14 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       setIsThinking(false);
       setIsSynthesizing(false);
       voiceStoppedRef.current = false;
+
+      if (event?.code === 4403 || event?.code === 4409) {
+        reconnectCountRef.current = 0;
+        setStatus('CLOSED');
+        setRetry(null);
+        setReconnectStopReason(event.code === 4403 ? 'forbidden' : 'replaced');
+        return;
+      }
 
       // Attempt automatic reconnection up to RECONNECT_ATTEMPTS times (1, 2, 4, 8, 16 s).
       if (reconnectCountRef.current < RECONNECT_ATTEMPTS) {
@@ -1085,6 +1099,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     updateConfig,
     reconnect,
     retry,
+    reconnectStopReason,
     resetToDraft,
     switchConversation,
     switchWorldline,
