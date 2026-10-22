@@ -3,6 +3,7 @@ import base64
 import json
 import asyncio
 import hashlib
+import logging
 from uuid import uuid4
 from collections.abc import Awaitable, Callable
 import starlette
@@ -46,6 +47,7 @@ from contextlib import aclosing
 from app.security.guard import contains_leak
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 _V2_DELIVERY_TYPES = frozenset(
     {
@@ -1269,10 +1271,35 @@ async def repair_turn_translation(
         return None
 
 
+def _log_background_task_failure(task: asyncio.Task) -> None:
+    """Done callback: a fire-and-forget task must never fail silently.
+
+    Retrieving the exception here also replaces asyncio's late "Task exception
+    was never retrieved" message. Only the task name and exception type are
+    logged: exception text may echo provider payloads or chat content.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error(
+            "[Background] task %s failed (%s); chat continues",
+            task.get_name(),
+            type(exc).__name__,
+        )
+
+
 def _schedule_background_task(session: SessionState, coroutine) -> asyncio.Task:
-    task = asyncio.create_task(coroutine)
+    """Run turn follow-up work in the background without losing it.
+
+    The event loop keeps only weak references to tasks, so the session holds a
+    strong reference until the task finishes; failures are logged once.
+    """
+    label = getattr(coroutine, "__qualname__", None) or type(coroutine).__name__
+    task = asyncio.create_task(coroutine, name=f"chat-bg:{label}")
     session.background_tasks.add(task)
     task.add_done_callback(session.background_tasks.discard)
+    task.add_done_callback(_log_background_task_failure)
     return task
 
 
@@ -1956,7 +1983,7 @@ async def processor_loop(
                             )
 
                     if isinstance(user_message_id, int) and user_message_id > 0:
-                        asyncio.create_task(_enqueue_memory_v11())
+                        _schedule_background_task(session, _enqueue_memory_v11())
                 else:
                     from app.services.memory import memory_service
 
@@ -2062,7 +2089,8 @@ async def processor_loop(
         
         if len(session.history) // 2 > config.HISTORY_COMPRESS_THRESHOLD and not session.compressing:
             session.compressing = True
-            asyncio.create_task(
+            _schedule_background_task(
+                session,
                 compress_and_update_history(
                     session.session_id,
                     session.history,
