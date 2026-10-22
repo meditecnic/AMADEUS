@@ -1302,6 +1302,11 @@ def test_cli_refuses_live_appdata_paths(tmp_path, monkeypatch):
     assert "live_data_path" in result.stderr
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="relies on USERPROFILE controlling Path.home(), which only holds on Windows; "
+    "the project currently supports Windows only",
+)
 def test_cli_refuses_paths_in_default_home_amadeus_without_appdata(tmp_path):
     """APPDATA absent must still cover app's ~/.amadeus fallback root."""
     fake_home = tmp_path / "fakehome"

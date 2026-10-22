@@ -1312,6 +1312,11 @@ def test_cli_refuses_preview_inside_fake_appdata(tmp_path):
     assert not output.exists()
 
 
+@pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="relies on USERPROFILE controlling Path.home(), which only holds on Windows; "
+    "the project currently supports Windows only",
+)
 def test_cli_refuses_preview_inside_fake_home_amadeus_without_appdata(tmp_path):
     snapshot = _make_snapshot(tmp_path)
     preview_ok = _make_preview(snapshot, tmp_path / "inputs")
