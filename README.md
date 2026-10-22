@@ -131,6 +131,8 @@ Without voice, her lines simply appear as text.
 - **Speech synthesis** uses [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) with the voice model [TTS-KurisuMakise](https://huggingface.co/bysq/TTS-KurisuMakise) by bysq (GPT-SoVITS v2pro, Apache-2.0). Weights and reference audio are not included. Put your own reference clips in `voice-pack/ref/` under the data directory (`ref_neutral.wav`, `ref_happy.wav`, `ref_sad.wav` and six more emotions; see `backend/app/config.py`), or point the `AMADEUS_REF_*` variables at them. Start the GPT-SoVITS API locally (default `http://127.0.0.1:9880`, override with `SOVITS_URL`) and set `SOVITS_GPT_WEIGHTS` / `SOVITS_SOVITS_WEIGHTS` to the weight files.
 - **Speech recognition** downloads the SenseVoice int8 model (~163 MB) and Silero VAD (~644 KB) from the [sherpa-onnx releases](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) on first use, verifies fixed SHA-256 hashes, and stores them under `models/speech/` in the data directory. Use `SENSEVOICE_MODEL`, `SENSEVOICE_TOKENS` and `AMADEUS_VAD_MODEL` to point at local copies.
 
+**About the voice.** TTS-KurisuMakise imitates the voice of Makise Kurisu from STEINS;GATE. The character, the original recordings and the voice actor's performance belong to their respective rights holders. The Apache-2.0 label on the model page covers only what its uploader can license; it does not grant any rights to the character, the original recordings or the performance. AMADEUS does not include, download or redistribute the model or any reference audio. Use the voice for personal, non-commercial purposes only, and do not use it to impersonate the voice actor or to make content that looks official. Rights holders who want this reference removed can open a GitHub issue; we will respond promptly.
+
 ## Original asset pack
 
 This repository contains **no** original game assets (character art, CG, logos, BGM). The app runs without them and shows its own placeholder art. If you have an asset pack, put it in `asset-pack/amadeus-original/` under the data directory (with `manifest.json` at its root) and restart the backend. The pack is distributed separately with its own notice.
@@ -189,7 +191,11 @@ M3 已收尾，M4 等待授权。英文和日文界面仍在计划中；她始�
 
 ### 语音
 
-声音模型是 Hugging Face 上 bysq 训练的 [TTS-KurisuMakise](https://huggingface.co/bysq/TTS-KurisuMakise)。本仓库不附带模型权重和参考音频，需要自己下载。（参考音频我本地是有的，但是考虑到版权的问题，总之，这些阻力，我后续开发都会尽量解决）语音识别的后端已经有了（其实前端页面还没做，哈哈）。
+语音合成是可选功能，通过本机的 GPT-SoVITS 服务完成。声音模型是 Hugging Face 上 bysq 训练的 [TTS-KurisuMakise](https://huggingface.co/bysq/TTS-KurisuMakise)。本仓库不附带、不下载、也不转发模型权重和参考音频，需要你自己准备。
+
+这个声音模仿的是《命运石之门》里的牧濑红莉栖。角色、原作录音和声优的表演归各自的权利人所有。模型页上的 Apache-2.0 只覆盖上传者自己能授权的部分，不代表获得了角色、原作录音或表演的授权。请只在个人、非商业场景使用，不要用它冒充声优，也不要制作看起来像官方的内容。权利人如需移除相关内容，请在 GitHub 提 issue，我们会尽快处理。
+
+语音识别的后端已经有了，前端页面还没做。
 
 ### 个人的碎碎念吧
 
@@ -212,6 +218,8 @@ okeydokey，大概就是这些，那么来句帅气的收尾吧：El Psy Kongroo
 - DeepSeek、Zhipu GLM、OpenAI 互換 API（ローカルモデルを含む）に対応
 - 音声合成（GPT-SoVITS）は任意
 - M3 は実機 Edge プレビューで承認され、統合済み。ヘッダー・システムメニュー・遷移演出の陰極数字を統一。「系统 → 世界线」では計器に現在の世界線、図に選択した移動先を表示し、ボタンで遷移する。クリック／Esc で演出を省略しても、移動先の確認を待つ。
+
+この音声は『STEINS;GATE』の牧瀬紅莉栖の声を模倣したものです。キャラクター、原作の録音、声優の実演に関する権利は、それぞれの権利者に帰属します。モデルページの Apache-2.0 は、アップロードした本人が許諾できる範囲にのみ適用され、キャラクター、原作の録音、実演に関する権利の許諾を意味するものではありません。個人かつ非商用の用途に限って使用し、声優へのなりすましや、公式と誤認されるようなコンテンツの制作には使わないでください。権利者の方が関連内容の削除を希望される場合は、GitHub で issue を作成してください。速やかに対応します。
 
 遷移の受け渡しを柔らかくし、GPU を非同期で準備する。ログイン画面ではフォントを先読みし、入場後の使用記録を次回の再読み込みに使う。既存の音声初期化は入場前に移した。通常の GPU 演出中は状態字幕を隠して読み上げ用の状態を保ち、0.7 秒を超える待機や失敗時に表示する。字幕は背景枠のない琥珀色（失敗時はエラー色）。Esc の案内は操作・フォーカス・最初の 3 回の案内時に現れる。検証結果の出典と範囲は [Engineering notes](#engineering-notes) を参照。M3 は完了し、M4 は承認待ち。
 
