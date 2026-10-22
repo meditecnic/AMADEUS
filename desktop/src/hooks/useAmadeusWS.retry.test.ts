@@ -9,12 +9,15 @@ class FakeWebSocket {
   readyState = 0;
   sent: string[] = [];
   onopen: (() => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((event: { code: number }) => void) | null = null;
   onerror: ((event: unknown) => void) | null = null;
   onmessage: ((event: { data: string }) => void) | null = null;
   constructor(public url: string) { FakeWebSocket.instances.push(this); }
   send(payload: string) { this.sent.push(payload); }
   close() { this.readyState = 3; }
+  open() { this.readyState = 1; this.onopen?.(); }
+  emit(data: unknown) { this.onmessage?.({ data: JSON.stringify(data) }); }
+  drop(code = 1006) { this.readyState = 3; this.onclose?.({ code }); }
 }
 
 const params: UseAmadeusWSParams = {
@@ -32,7 +35,7 @@ const params: UseAmadeusWSParams = {
 
 const latest = () => FakeWebSocket.instances[FakeWebSocket.instances.length - 1];
 /** A connection attempt that never opens: the error event, then the close that always follows it. */
-const fail = (socket: FakeWebSocket) => act(() => { socket.onerror?.({}); socket.onclose?.(); });
+const fail = (socket: FakeWebSocket) => act(() => { socket.onerror?.({}); socket.drop(); });
 
 describe('useAmadeusWS automatic reconnection', () => {
   beforeEach(() => {
@@ -55,7 +58,7 @@ describe('useAmadeusWS automatic reconnection', () => {
     expect(h.result.current.status).toBe('READY');
     expect(h.result.current.retry).toBeNull();
 
-    act(() => latest().onclose?.());
+    act(() => latest().drop());
     expect(h.result.current.status).toBe('CLOSED');
     expect(h.result.current.retry).toEqual({ attempt: 1, max: RECONNECT_ATTEMPTS, exhausted: false });
 
@@ -88,11 +91,11 @@ describe('useAmadeusWS automatic reconnection', () => {
   it('reconnect() starts a fresh set of attempts after giving up', () => {
     const h = renderHook(() => useAmadeusWS(params));
     act(() => latest().onopen?.());
-    act(() => latest().onclose?.());
+    act(() => latest().drop());
     for (const delay of [1000, 2000, 4000, 8000, 16000]) {
       act(() => { vi.advanceTimersByTime(delay); });
       // Closed without an error event: once exhausted it reads CLOSED, not ERROR.
-      act(() => latest().onclose?.());
+      act(() => latest().drop());
     }
     expect(h.result.current.status).toBe('CLOSED');
     expect(h.result.current.retry?.exhausted).toBe(true);
@@ -100,12 +103,88 @@ describe('useAmadeusWS automatic reconnection', () => {
     act(() => h.result.current.reconnect());
     expect(h.result.current.status).toBe('CONNECTING');
     expect(h.result.current.retry).toBeNull();
-    act(() => latest().onclose?.());
+    act(() => latest().drop());
     expect(h.result.current.retry).toEqual({ attempt: 1, max: RECONNECT_ATTEMPTS, exhausted: false });
     act(() => { vi.advanceTimersByTime(1000); });
     act(() => latest().onopen?.());
     expect(h.result.current.status).toBe('READY');
+    expect(h.result.current.retry).toMatchObject({ attempt: 1, exhausted: false });
+    act(() => latest().emit({ type: 'session.ready', conversation_mode: 'history', conversation_id: 'conversation-one' }));
     expect(h.result.current.retry).toBeNull();
+    act(() => latest().drop());
+    expect(h.result.current.retry).toMatchObject({ attempt: 1, exhausted: false });
+    h.unmount();
+  });
+
+  it.each([
+    [4403, 'forbidden'],
+    [4409, 'replaced'],
+  ] as const)('stops automatic reconnection after an open socket closes with %i, but permits manual reconnect', (code, reason) => {
+    const h = renderHook(() => useAmadeusWS(params));
+    act(() => latest().open());
+    act(() => latest().emit({ type: 'session.ready', conversation_mode: 'history', conversation_id: 'conversation-one' }));
+    act(() => latest().drop(code));
+
+    expect(h.result.current.status).toBe('CLOSED');
+    expect(h.result.current.sessionState).toBe('unknown');
+    expect(h.result.current.retry).toBeNull();
+    expect(h.result.current.reconnectStopReason).toBe(reason);
+    act(() => vi.advanceTimersByTime(120_000));
+    expect(FakeWebSocket.instances).toHaveLength(1);
+
+    act(() => h.result.current.reconnect());
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(h.result.current.status).toBe('CONNECTING');
+    expect(h.result.current.reconnectStopReason).toBeNull();
+    act(() => latest().open());
+    // A rejection before session.ready must stop this fresh attempt too.
+    act(() => latest().drop(code));
+    expect(h.result.current.reconnectStopReason).toBe(reason);
+    act(() => vi.advanceTimersByTime(120_000));
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    h.unmount();
+  });
+
+  it('keeps the retry budget when sockets open then close before session.ready, stopping at 5/5', () => {
+    const h = renderHook(() => useAmadeusWS(params));
+    act(() => latest().open());
+    act(() => latest().drop());
+
+    [1000, 2000, 4000, 8000, 16000].forEach((delay, index) => {
+      expect(h.result.current.retry).toEqual({ attempt: index + 1, max: 5, exhausted: false });
+      act(() => vi.advanceTimersByTime(delay));
+      expect(FakeWebSocket.instances).toHaveLength(index + 2);
+      act(() => latest().open());
+      expect(h.result.current.sessionState).toBe('unknown');
+      expect(h.result.current.retry).toEqual({ attempt: index + 1, max: 5, exhausted: false });
+      act(() => latest().drop());
+    });
+
+    expect(h.result.current.retry).toEqual({ attempt: 5, max: 5, exhausted: true });
+    act(() => vi.advanceTimersByTime(120_000));
+    expect(FakeWebSocket.instances).toHaveLength(6);
+    h.unmount();
+  });
+
+  it('retries an ordinary drop from a ready session with delays 1, 2, 4, 8, 16 seconds, then stops', () => {
+    const h = renderHook(() => useAmadeusWS(params));
+    act(() => latest().open());
+    act(() => latest().emit({ type: 'session.ready', conversation_mode: 'history', conversation_id: 'conversation-one' }));
+    act(() => latest().drop(1006));
+
+    [1000, 2000, 4000, 8000, 16000].forEach((delay, index) => {
+      expect(h.result.current.retry).toEqual({ attempt: index + 1, max: 5, exhausted: false });
+      act(() => vi.advanceTimersByTime(delay - 1));
+      expect(FakeWebSocket.instances).toHaveLength(index + 1);
+      act(() => vi.advanceTimersByTime(1));
+      expect(FakeWebSocket.instances).toHaveLength(index + 2);
+      fail(latest());
+    });
+
+    expect(h.result.current.retry).toEqual({ attempt: 5, max: 5, exhausted: true });
+    expect(h.result.current.status).toBe('ERROR');
+    act(() => vi.advanceTimersByTime(120_000));
+    expect(FakeWebSocket.instances).toHaveLength(6);
     h.unmount();
   });
 });

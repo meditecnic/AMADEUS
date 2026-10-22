@@ -141,6 +141,45 @@ function providerOptions() {
   return names;
 }
 
+describe('Workstation stopped reconnection', () => {
+  it.each([
+    ['forbidden', '连接被拒绝，已停止自动重连。', 'steins_gate'],
+    ['replaced', '连接已被另一个窗口接管，已停止自动重连。', 'beta'],
+  ] as const)('shows %s in empty and populated conversations with a manual reconnect action', async (reason, message, worldline) => {
+    let state = wsState({ status: 'CLOSED', sessionState: 'unknown', reconnectStopReason: reason });
+    hoisted.useAmadeusWS.mockImplementation(() => state);
+    const view = render(<Workstation worldline={worldline} onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(await screen.findByRole('button', { name: '重新连接' })).toBeInTheDocument();
+    expect(screen.getByText(message)).toBeInTheDocument();
+    expect(screen.getByText('OFFLINE · 自动重连已停止')).toBeInTheDocument();
+    expect(screen.getByLabelText('输入消息')).toBeDisabled();
+    const before = hoisted.reconnect.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: '重新连接' }));
+    expect(hoisted.reconnect).toHaveBeenCalledTimes(before + 1);
+
+    state = wsState({
+      status: 'CLOSED', sessionState: 'unknown', reconnectStopReason: reason,
+      messages: [{ id: 'user-one', role: 'user', content: '已发送的消息' }],
+    });
+    view.rerender(<Workstation worldline={worldline} onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(screen.getByText('已发送的消息')).toBeInTheDocument();
+    expect(view.container.querySelector('.ws2-link-state')).toHaveTextContent(message);
+    expect(screen.queryByText(/系统将尝试重新连接|自动重连没有成功|正在自动重连/)).toBeNull();
+    expect(screen.getByRole('button', { name: '重新连接' })).toBeInTheDocument();
+  });
+
+  it('keeps n/5 visible after transport open while session.ready is pending', async () => {
+    hoisted.useAmadeusWS.mockImplementation(() => wsState({
+      status: 'READY', sessionState: 'unknown', retry: { attempt: 3, max: 5, exhausted: false },
+    }));
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(await screen.findByText('OFFLINE · 重连 3/5')).toBeInTheDocument();
+    expect(screen.getByText('连接中断，正在自动重连（3/5）。')).toBeInTheDocument();
+    expect(screen.getByLabelText('输入消息')).toBeDisabled();
+    expect(screen.queryByText('ONLINE')).toBeNull();
+  });
+});
+
 describe('Workstation connection admission and next-turn model', () => {
   it('keeps a new connection out of the selector when its first chat-check fails', async () => {
     chatCheck = () => json(502, { detail: { code: 'provider_unavailable' } });

@@ -599,6 +599,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     updateConfig,
     reconnect,
     retry,
+    reconnectStopReason,
     resetToDraft,
     switchConversation,
     switchWorldline,
@@ -1047,12 +1048,21 @@ export const Workstation: React.FC<WorkstationProps> = ({
     });
   const sessionConnecting = status === 'CONNECTING' || (status === 'READY' && sessionState === 'unknown');
   // Between automatic attempts the socket is closed but the app is still trying; once they run out only the user can.
-  const reconnecting = Boolean(retry && !retry.exhausted && status !== 'READY');
+  const reconnecting = Boolean(retry && !retry.exhausted);
   const linkLost = Boolean(retry?.exhausted && status !== 'READY');
+  const reconnectStopped = Boolean(reconnectStopReason);
+  // 占位文案，待 U 定稿。
+  const reconnectStopMessage = reconnectStopReason === 'forbidden'
+    ? '连接被拒绝，已停止自动重连。'
+    : reconnectStopReason === 'replaced'
+      ? '连接已被另一个窗口接管，已停止自动重连。'
+      : null;
   const retryCount = retry ? `${retry.attempt}/${retry.max}` : '';
   const sessionUsable = status === 'READY' && sessionState !== 'unknown' && sessionState !== 'rejected';
   const emptyStateKind = needsApiKey ? 'setup' : sessionConnecting || reconnecting ? 'connecting' : status.toLowerCase();
-  const emptyStateMessage = needsApiKey
+  const emptyStateMessage = reconnectStopMessage
+    ? `> ${reconnectStopMessage}`
+    : needsApiKey
     ? `> 请为 ${activeProvider?.display_name || activeProviderId} 配置 API Key 以建立连接。`
     : sessionState === 'rejected'
       ? '> 会话未被接受，请检查连接与模型。'
@@ -1760,7 +1770,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
   // The shift animation ends on its own clock; until the server confirms the target line we say so.
   const awaitingWorldline = conversationBusy && committedWorldlineRef.current !== worldline;
   const online = status === 'READY' && !needsApiKey && !sessionRejected && !sessionPending && !awaitingWorldline;
-  const connectionLabel = awaitingWorldline ? 'SYNC · 等待目标世界线确认'
+  const connectionLabel = reconnectStopped ? 'OFFLINE · 自动重连已停止'
+    : awaitingWorldline ? 'SYNC · 等待目标世界线确认'
     : online ? 'ONLINE'
     : needsApiKey ? 'OFFLINE · 待配置'
       : sessionRejected ? 'OFFLINE · 会话被拒绝'
@@ -1972,7 +1983,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                       ? '说第一句话吧。她的日语原文与中文字幕会一并记在这里。'
                       : emptyStateMessage.replace(/^>\s*/, '')}
                   </p>
-                  {needsApiKey && (
+                  {needsApiKey && !reconnectStopped && (
                     <div className="ws2-empty-actions">
                       <button type="button" className="ws2-empty-action" onClick={() => openConnectionsAt('key')}>
                         填写密钥
@@ -1982,7 +1993,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                       </button>
                     </div>
                   )}
-                  {linkLost && !needsApiKey && (
+                  {(reconnectStopped || (linkLost && !needsApiKey)) && (
                     <div className="ws2-empty-actions">
                       <button type="button" className="ws2-empty-action" onClick={reconnect}>重新连接</button>
                     </div>
@@ -2084,13 +2095,13 @@ export const Workstation: React.FC<WorkstationProps> = ({
             这段对话原来使用的「{activeProvider?.display_name || '接入'}」已被移除。聊天记录仍在；请在下方重新选择模型后继续，不会自动换到其他厂商。
           </div>
         )}
-        {(reconnecting || linkLost) && !needsApiKey && visibleMessages.length > 0 && (
-          <div className={`ws2-link-state${linkLost ? ' is-lost' : ''}`} role="status">
-            <span>{linkLost ? '自动重连没有成功。' : `连接中断，正在自动重连（${retryCount}）。`}</span>
-            {linkLost && <button type="button" onClick={reconnect}>重新连接</button>}
+        {(reconnectStopped || ((reconnecting || linkLost) && !needsApiKey)) && visibleMessages.length > 0 && (
+          <div className={`ws2-link-state${linkLost || reconnectStopped ? ' is-lost' : ''}`} role="status">
+            <span>{reconnectStopMessage ?? (linkLost ? '自动重连没有成功。' : `连接中断，正在自动重连（${retryCount}）。`)}</span>
+            {(linkLost || reconnectStopped) && <button type="button" onClick={reconnect}>重新连接</button>}
           </div>
         )}
-        {needsApiKey && !providerGone && visibleMessages.length > 0 && (
+        {needsApiKey && !providerGone && !reconnectStopped && visibleMessages.length > 0 && (
           <div className="ws2-key-missing" role="status">
             <span>「{activeProvider?.display_name || activeProviderId}」还没有密钥，她现在听不到你。</span>
             <button type="button" onClick={() => openConnectionsAt('key')}>填写密钥</button>
