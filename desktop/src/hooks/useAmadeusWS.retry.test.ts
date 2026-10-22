@@ -145,7 +145,7 @@ describe('useAmadeusWS automatic reconnection', () => {
     expect(h.result.current.reconnectStopReason).toBeNull();
     act(() => latest().open());
     // Even a stable rejected session must honor a later policy close.
-    act(() => latest().emit({ type: 'error', message: '未认证。请打开设置并配置您的 API Key。' }));
+    act(() => latest().emit({ type: 'error', message: '缺失 deepseek API Key。请打开设置保存供应商凭据后重新连接。' }));
     act(() => vi.advanceTimersByTime(30_000));
     act(() => latest().drop(code));
     expect(h.result.current.reconnectStopReason).toBe(reason);
@@ -163,7 +163,7 @@ describe('useAmadeusWS automatic reconnection', () => {
     act(() => socket.open());
     expect(h.result.current.retry).toEqual({ attempt: 1, max: 5, exhausted: false });
 
-    act(() => socket.emit({ type: 'error', message: '未认证。请打开设置并配置您的 API Key。', recoverable }));
+    act(() => socket.emit({ type: 'error', message: '缺失 deepseek API Key。请打开设置保存供应商凭据后重新连接。', recoverable }));
     expect(h.result.current.sessionState).toBe('rejected');
     expect(h.result.current.retry).toBeNull();
     expect(socket.readyState).toBe(FakeWebSocket.OPEN);
@@ -190,7 +190,7 @@ describe('useAmadeusWS automatic reconnection', () => {
     const h = renderHook(() => useAmadeusWS(params));
     const rejectAndDrop = () => act(() => {
       latest().open();
-      latest().emit({ type: 'error', message: '未认证。请打开设置并配置您的 API Key。' });
+      latest().emit({ type: 'error', message: '缺失 deepseek API Key。请打开设置保存供应商凭据后重新连接。' });
       latest().drop(code);
     });
     rejectAndDrop();
@@ -219,7 +219,7 @@ describe('useAmadeusWS automatic reconnection', () => {
     act(() => latest().drop());
     act(() => vi.advanceTimersByTime(1000));
     act(() => latest().open());
-    act(() => latest().emit({ type: 'error', message: '未认证。请打开设置并配置您的 API Key。' }));
+    act(() => latest().emit({ type: 'error', message: '缺失 deepseek API Key。请打开设置保存供应商凭据后重新连接。' }));
     act(() => vi.advanceTimersByTime(elapsed));
     // Repeated rejection frames must not restart the stability interval.
     act(() => latest().emit({ type: 'error', message: '未认证。请打开设置并配置您的 API Key。' }));

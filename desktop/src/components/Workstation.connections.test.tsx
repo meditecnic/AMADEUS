@@ -240,6 +240,7 @@ describe('Workstation missing-key reconnection', () => {
     const view = render(<Workstation worldline={worldline} onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
     await screen.findByRole('button', { name: '填写密钥' });
     expect(screen.getByText('OFFLINE · 重连 2/5')).toBeInTheDocument();
+    expect(view.container.querySelector('.ws2-online')).toHaveAttribute('data-status', 'CLOSED');
     expect(screen.getByText('连接中断，正在自动重连（2/5）。')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '重新连接' })).toBeNull();
     expect(screen.queryByText('OFFLINE · 待配置')).toBeNull();
@@ -250,11 +251,13 @@ describe('Workstation missing-key reconnection', () => {
     state = { ...state, status: 'READY' };
     view.rerender(<Workstation worldline={worldline} onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
     expect(screen.getByText('OFFLINE · 重连 2/5')).toBeInTheDocument();
+    expect(view.container.querySelector('.ws2-online')).toHaveAttribute('data-status', 'READY');
     expect(screen.getByText('连接中断，正在自动重连（2/5）。')).toBeInTheDocument();
 
     state = wsState({ status: 'ERROR', sessionState: 'unknown', retry: { attempt: 5, max: 5, exhausted: true }, messages });
     view.rerender(<Workstation worldline={worldline} onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
     expect(screen.getByText('OFFLINE · 重连失败')).toBeInTheDocument();
+    expect(view.container.querySelector('.ws2-online')).toHaveAttribute('data-status', 'ERROR');
     expect(screen.getByText(populated ? '自动重连没有成功。' : '自动重连 5 次都没有接通。请确认后端服务已启动，再重新连接。')).toBeInTheDocument();
     if (!populated) expect(screen.getByRole('heading', { name: '暂时无法接通' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '重新连接' }));
@@ -264,11 +267,14 @@ describe('Workstation missing-key reconnection', () => {
     state = wsState({ status: 'CONNECTING', sessionState: 'unknown', retry: null, messages });
     view.rerender(<Workstation worldline={worldline} onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
     expect(screen.getByText('OFFLINE · 连接中')).toBeInTheDocument();
+    expect(view.container.querySelector('.ws2-online')).toHaveAttribute('data-status', 'CONNECTING');
     expect(screen.queryByRole('button', { name: '重新连接' })).toBeNull();
 
     state = wsState({ status: 'CLOSED', sessionState: 'unknown', retry: null, messages });
     view.rerender(<Workstation worldline={worldline} onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
-    if (!populated) expect(screen.getByText('会话连接已关闭，系统将尝试重新连接。')).toBeInTheDocument();
+    expect(screen.getByText('OFFLINE · 待配置')).toBeInTheDocument();
+    expect(view.container.querySelector('.ws2-online')).toHaveAttribute('data-status', 'SETUP');
+    if (!populated) expect(screen.getByRole('heading', { name: '尚未接通' })).toBeInTheDocument();
 
     state = wsState({
       status: 'ERROR', sessionState: 'rejected', retry: null, messages: [
@@ -277,6 +283,7 @@ describe('Workstation missing-key reconnection', () => {
     });
     view.rerender(<Workstation worldline={worldline} onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
     expect(screen.getByText('OFFLINE · 待配置')).toBeInTheDocument();
+    expect(view.container.querySelector('.ws2-online')).toHaveAttribute('data-status', 'SETUP');
     expect(screen.queryByText(/正在自动重连|自动重连没有成功|自动重连 5 次/)).toBeNull();
     expect(view.container.querySelector('.ws2-link-state')).toBeNull();
     expect(screen.queryByRole('button', { name: '重新连接' })).toBeNull();

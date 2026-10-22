@@ -1059,7 +1059,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const retryCount = retry ? `${retry.attempt}/${retry.max}` : '';
   const sessionUsable = status === 'READY' && sessionState !== 'unknown' && sessionState !== 'rejected';
   const showSetupStatus = needsApiKey && !reconnectStopped && !reconnecting && !linkLost
-    && !sessionConnecting && status !== 'CLOSED';
+    && !sessionConnecting;
   const emptyStateKind = showSetupStatus ? 'setup' : sessionConnecting || reconnecting ? 'connecting' : status.toLowerCase();
   const emptyStateMessage = reconnectStopMessage
     ? `> ${reconnectStopMessage}`
