@@ -2209,7 +2209,9 @@ async def processor_loop(
             and conversation_id
         ):
             aborted_turn_written = True
-            notice = asyncio.create_task(_persist_aborted_turn(
+            # Held by the session: if a second cancel interrupts the shield,
+            # the notice keeps running and must not be garbage-collected.
+            notice = _schedule_background_task(session, _persist_aborted_turn(
                 session_id=session.session_id,
                 worldline=turn_worldline,
                 conversation_id=conversation_id,

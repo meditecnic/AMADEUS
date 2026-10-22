@@ -4,7 +4,8 @@
 history compression used to be started with a bare ``asyncio.create_task``;
 they now go through ``_schedule_background_task`` so the session holds a
 strong reference until they finish and a failure is logged instead of being
-dropped.
+dropped. The cancelled-turn notice (``_persist_aborted_turn``) uses the same
+helper, so it survives a second cancel that interrupts its shield.
 """
 
 from __future__ import annotations
@@ -244,3 +245,64 @@ async def test_memory_enqueue_and_compression_tasks_are_held_and_failures_logged
     message = records[0].getMessage()
     assert "fake_compress" in message and "RuntimeError" in message
     assert "must not be logged" not in message
+
+
+async def test_aborted_turn_notice_is_held_when_the_shield_is_interrupted(
+    isolated_store, monkeypatch
+):
+    """The cancelled-turn notice survives a second cancel and still persists."""
+    from app import models
+
+    _suppress_auto_title(monkeypatch)
+    stream_started = asyncio.Event()
+
+    async def blocking_get_chat_stream(self, *args, **kwargs):
+        stream_started.set()
+        await asyncio.Event().wait()  # cancelled from outside
+        yield {"content": "", "tool_calls": None}
+
+    monkeypatch.setattr(type(deepseek_service), "get_chat_stream", blocking_get_chat_stream)
+
+    release = asyncio.Event()
+    running: dict[str, asyncio.Task] = {}
+    original_persist = chat_ws._persist_aborted_turn
+
+    async def gated_persist(**kwargs):
+        running["notice"] = asyncio.current_task()
+        await release.wait()
+        await original_persist(**kwargs)
+
+    monkeypatch.setattr(chat_ws, "_persist_aborted_turn", gated_persist)
+
+    session = await _new_session()
+    user_msg = "途中で切れる質問"
+    session.append_message({"role": "user", "content": user_msg, "id": None})
+    processor = asyncio.create_task(
+        processor_loop(
+            session, user_msg, asyncio.Queue(), session.current_epoch, session.history_epoch
+        )
+    )
+    await asyncio.wait_for(stream_started.wait(), 2)
+
+    processor.cancel()  # turn cancelled after the user row was saved
+    await _until(lambda: "notice" in running)
+    processor.cancel()  # interrupts the shield; the notice must keep running
+    with pytest.raises(asyncio.CancelledError):
+        await processor
+
+    gc.collect()
+    notice = running["notice"]
+    assert not notice.done()
+    assert notice in session.background_tasks, "the session must keep the notice alive"
+    assert notice.get_name().startswith("chat-bg:") and "gated_persist" in notice.get_name()
+
+    release.set()
+    await asyncio.wait_for(notice, 2)
+    await asyncio.sleep(0)
+    assert notice not in session.background_tasks, "finished tasks are released"
+
+    rows = await models.get_session_messages(
+        session.session_id, worldline=SG, conversation_id=session.conversation_id
+    )
+    assert [row["role"] for row in rows] == ["user", "assistant"], rows
+    assert chat_ws._ABORTED_TURN_JA in rows[1]["content"]
