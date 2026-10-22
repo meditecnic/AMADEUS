@@ -48,6 +48,12 @@ import { ConnectionList } from '../workstation/ConnectionList';
 import { SendSignal } from '../workstation/SendSignal';
 import { PresenceIndicator, ThinkingMark, PRESENCE_LABELS } from '../workstation/PresenceIndicator';
 import { VoiceScope } from '../workstation/VoiceScope';
+import { OverlayRootContext, Tip, TipProvider } from '../workstation/Tip';
+import { SelectionCopyMenu, TextFieldMenu } from '../workstation/menus';
+import { hearKeystroke } from '../workstation/voiceEnvelope';
+import { wsTransition } from '../workstation/motionTokens';
+import { MotionConfig, animate } from 'motion/react';
+import { LogOut } from 'lucide-react';
 import { ForgetConversationModal } from './ForgetConversationModal';
 import { MemorySpace } from '../memory-space/MemorySpace';
 import '../memory-space/MemorySpace.css';
@@ -171,13 +177,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deletedRefreshWorldline, setDeletedRefreshWorldline] = useState<string | null>(null);
-  const [renameTarget, setRenameTarget] = useState<ConversationSummary | null>(null);
   // Session dialogs commit first; these only keep a closing dialog on screen for its shorter exit.
   const deleteDialog = useExitPresence(deleteTarget, reducedMotion);
-  const renameDialog = useExitPresence(renameTarget, reducedMotion);
-  const [renameValue, setRenameValue] = useState('');
-  const [renameBusy, setRenameBusy] = useState(false);
-  const [renameError, setRenameError] = useState<string | null>(null);
   const transcriptViewportRef = useRef<HTMLDivElement>(null);
   const previousWorldlineRef = useRef(worldline);
   const committedWorldlineRef = useRef(worldline);
@@ -258,6 +259,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [shiftConfirm, setShiftConfirm] = useState<'steins_gate' | 'beta' | null>(null);
   const [pendingModel, setPendingModel] = useState<string | null>(null);
   const wsRootRef = useRef<HTMLDivElement>(null);
+  // Tips and menus portal into the root so they carry the worldline palette (state, so portals re-render once it exists).
+  const [overlayRoot, setOverlayRoot] = useState<HTMLDivElement | null>(null);
+  const setWsRoot = useCallback((el: HTMLDivElement | null) => {
+    wsRootRef.current = el;
+    setOverlayRoot(el);
+  }, []);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  /** Where the sent text sat in the composer, so the new line can rise from there into the transcript. */
+  const sendOriginRef = useRef<{ x: number; y: number } | null>(null);
   const speakingQueueRef = useRef<number[]>([]);
   const [speakingId, setSpeakingId] = useState<number | null>(null);
   // The header wordmark that arrives with the entrance is already inked; a later worldline change redraws it.
@@ -375,7 +385,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     if (isHistoryCollapsed) return;
     const onDown = (event: PointerEvent) => {
       if (window.innerWidth >= 1240) return;
-      if ((event.target as Element | null)?.closest?.('.ws2-side, .ws2-top, .ws2-dialog-scrim')) return;
+      if ((event.target as Element | null)?.closest?.('.ws2-side, .ws2-top, .ws2-dialog-scrim, [data-ws2-overlay]')) return;
       setIsHistoryCollapsed(true);
     };
     document.addEventListener('pointerdown', onDown);
@@ -588,6 +598,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     sendDebugTts,
     updateConfig,
     reconnect,
+    retry,
     resetToDraft,
     switchConversation,
     switchWorldline,
@@ -1000,7 +1011,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     void loadProviderModels(activeProviderId);
   }, [activeProviderId, loadProviderModels]);
 
-  const { currentVolume, isPlaying } = useAudioPlayer();
+  const { isPlaying } = useAudioPlayer();
   // stopAll() drops queued chunks without their onEnded; after a quiet moment the speaking queue is stale.
   useEffect(() => {
     if (isPlaying) return;
@@ -1035,12 +1046,20 @@ export const Workstation: React.FC<WorkstationProps> = ({
       return !missing || missing[1] === activeProviderId;
     });
   const sessionConnecting = status === 'CONNECTING' || (status === 'READY' && sessionState === 'unknown');
+  // Between automatic attempts the socket is closed but the app is still trying; once they run out only the user can.
+  const reconnecting = Boolean(retry && !retry.exhausted && status !== 'READY');
+  const linkLost = Boolean(retry?.exhausted && status !== 'READY');
+  const retryCount = retry ? `${retry.attempt}/${retry.max}` : '';
   const sessionUsable = status === 'READY' && sessionState !== 'unknown' && sessionState !== 'rejected';
-  const emptyStateKind = needsApiKey ? 'setup' : sessionConnecting ? 'connecting' : status.toLowerCase();
+  const emptyStateKind = needsApiKey ? 'setup' : sessionConnecting || reconnecting ? 'connecting' : status.toLowerCase();
   const emptyStateMessage = needsApiKey
     ? `> 请为 ${activeProvider?.display_name || activeProviderId} 配置 API Key 以建立连接。`
     : sessionState === 'rejected'
       ? '> 会话未被接受，请检查连接与模型。'
+      : reconnecting
+        ? `> 连接中断，正在自动重连（${retryCount}）。`
+      : linkLost
+        ? `> 自动重连 ${retry?.max ?? 5} 次都没有接通。请确认后端服务已启动，再重新连接。`
       : sessionConnecting
         ? '> 正在建立与 Amadeus 核心的连接，请稍候...'
         : status === 'CLOSED'
@@ -1076,6 +1095,25 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const { showJumpToLatest, scrollToLatest: scrollTranscriptToLatest } = transcriptScroll;
   // First-seen live lines/sentences, scoped like the scroll state; history and repairs never replay.
   const arrival = useArrivalMemory(presentationScope);
+  // The line just sent rises from where it was typed into its place in the log, so the eye follows it there.
+  const localSendId = localSend?.id;
+  useLayoutEffect(() => {
+    const origin = sendOriginRef.current;
+    if (!origin || !localSendId) return;
+    const text = transcriptViewportRef.current
+      ?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(localSendId)}"] .ws2-user-text`);
+    if (!text) return;
+    sendOriginRef.current = null;
+    // Measure the first line of glyphs, not the block: the user's lines are set flush right.
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    const box = range.getClientRects()[0] ?? text.getBoundingClientRect();
+    const dx = origin.x - box.left;
+    const dy = origin.y - box.top;
+    if (Math.abs(dx) + Math.abs(dy) < 2) return;
+    const rise = animate(text, { x: [dx, 0], y: [dy, 0], opacity: [0.35, 1] }, wsTransition(worldline, 'panel'));
+    return () => rise.complete();
+  }, [localSendId, worldline]);
 
   useEffect(() => {
     if (status !== 'READY' || sessionState === 'rejected'
@@ -1134,6 +1172,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
       if (!created) return;
     }
     audioService.playSFX('/audio/sfx/连接成功，进入页面1.ogg', sfxVolume);
+    const composer = composerRef.current;
+    if (composer && !reducedMotion) {
+      const box = composer.getBoundingClientRect();
+      const cs = window.getComputedStyle(composer);
+      sendOriginRef.current = {
+        x: box.left + (parseFloat(cs.paddingLeft) || 0),
+        y: box.top + (parseFloat(cs.paddingTop) || 0) - composer.scrollTop,
+      };
+    }
     sendChat(inputText.trim());
     scrollTranscriptToLatest();
     setInputText('');
@@ -1350,30 +1397,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
     if (movedConversation || previous.worldline !== worldline) setPendingModel(null);
     pendingScopeRef.current = { conversation: activeConversationId, worldline };
   }, [activeConversationId, worldline]);
-
-  const renameConversation = (conversation: ConversationSummary) => {
-    setRenameError(null);
-    setRenameValue(conversation.title);
-    setRenameTarget(conversation);
-  };
-
-  const confirmRenameConversation = async () => {
-    const conversation = renameTarget;
-    const title = renameValue.trim();
-    if (!conversation || renameBusy) return;
-    if (!title || title === conversation.title) { setRenameTarget(null); return; }
-    setRenameBusy(true);
-    setRenameError(null);
-    try {
-      await patchConversation(conversation, { title });
-      setRenameTarget(null);
-    } catch (error) {
-      console.warn('Conversation rename failed:', error);
-      setRenameError('重命名失败，请重试。');
-    } finally {
-      setRenameBusy(false);
-    }
-  };
 
   const toggleConversationPin = (conversation: ConversationSummary) => {
     void patchConversation(conversation, { is_pinned: !conversation.is_pinned }).catch((error) => {
@@ -1741,8 +1764,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
     : online ? 'ONLINE'
     : needsApiKey ? 'OFFLINE · 待配置'
       : sessionRejected ? 'OFFLINE · 会话被拒绝'
+        : reconnecting ? `OFFLINE · 重连 ${retryCount}`
+        : linkLost ? 'OFFLINE · 重连失败'
         : status === 'CONNECTING' || sessionPending ? 'OFFLINE · 连接中' : 'OFFLINE';
-  const presence = isThinking ? 'thinking' : isPlaying ? 'speaking' : isSynthesizing ? 'voicing' : online ? 'listening' : sessionConnecting ? 'connecting' : 'offline';
+  const presence = isThinking ? 'thinking' : isPlaying ? 'speaking' : isSynthesizing ? 'voicing' : online ? 'listening' : sessionConnecting || reconnecting ? 'connecting' : 'offline';
   const presenceLabel = PRESENCE_LABELS[presence];
   const thinkingSprite = packAsset(worldline === 'steins_gate' ? 'assets/ui/spinner_sg_20f.png' : 'assets/ui/spinner_beta_20f.png');
   const lastAssistantId = [...visibleMessages].reverse().find((msg) => msg.role === 'assistant' && !msg.systemError)?.id;
@@ -1754,13 +1779,23 @@ export const Workstation: React.FC<WorkstationProps> = ({
   }, [entering, sendBlocked, handComposerFocus]);
 
   return (
+    <OverlayRootContext.Provider value={overlayRoot}>
+    <TipProvider>
     <div
-      ref={wsRootRef}
+      ref={setWsRoot}
       className={`ws2${isHistoryCollapsed ? ' rail' : ''}${isSettingsOpen ? ' menu-open' : ''}${isMemoryOpen ? ' memory-space-open' : ''}`}
       data-wl={worldline === 'beta' ? 'beta' : 'sg'}
       data-entrance={entering ? entrance : undefined}
       inert={entering || undefined}
       onMouseDown={handleAudioInit}
+      // A shipped desktop app has no use for the browser's page menu (Back, Reload, Inspect); text fields and the
+      // transcript bring their own menus, and development builds keep the native one for DevTools.
+      onContextMenu={(e) => {
+        if (!import.meta.env.PROD || e.defaultPrevented) return;
+        const target = e.target as HTMLElement | null;
+        if (target?.closest('input, textarea, [contenteditable="true"]')) return;
+        e.preventDefault();
+      }}
       // The root is a clipped 100vw x 100vh frame that the user cannot scroll; any programmatic scroll
       // (focus, scrollIntoView) only pushes the header off-screen, so snap it straight back.
       onScroll={(e) => {
@@ -1805,7 +1840,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
             type="button"
             className="ws2-memory-btn"
             aria-label="MEMORY"
-            title="MEMORY"
             onClick={(event) => {
               const r = event.currentTarget.querySelector('svg')?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
               setMemoryOrigin({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
@@ -1822,32 +1856,40 @@ export const Workstation: React.FC<WorkstationProps> = ({
             <span className="ws2-memory-en" aria-hidden="true">MEMORY</span>
           </button>
           <div className="ws2-booth-mid">
+            <Tip
+              className="is-meter"
+              side="bottom"
+              // Clears the ONLINE line under the meter, as the old plate did.
+              sideOffset={21}
+              label={(
+                <>
+                  <b>{worldline === 'beta' ? 'β WORLDLINE' : 'STEINS;GATE'}</b>
+                  <span>{DIVERGENCE[worldline]}%</span>
+                  <small>打开世界线面板</small>
+                </>
+              )}
+            >
             <button
               type="button"
               className="ws2-meter"
               aria-label={`世界线 ${WORLDLINE_NAME[worldline]} · ${DIVERGENCE[worldline]}%`}
-              aria-describedby="ws2-meter-tip"
               aria-expanded={isSettingsOpen && menuSection === 'worldline'}
               onClick={() => { if (isSettingsOpen && menuSection === 'worldline') closeMenu(); else openMenu('worldline'); }}
             >
               <span className="ws2-wl-tag" aria-hidden="true">{worldline === 'beta' ? 'β WORLDLINE' : 'STEINS;GATE'}</span>
               <Nixie value={meter.text} state={meter} label={DIVERGENCE[worldline]} size="sm" />
-              <span className="ws2-meter-tip" id="ws2-meter-tip" role="tooltip">
-                <b>{worldline === 'beta' ? 'β WORLDLINE' : 'STEINS;GATE'}</b>
-                <span>{DIVERGENCE[worldline]}%</span>
-                <small>打开世界线面板</small>
-              </span>
             </button>
+            </Tip>
             <div
               className={`ws2-online${online ? ' is-online' : ''}${awaitingWorldline ? ' is-sync' : ''}`}
               role="status"
-              title={connectionLabel}
               data-status={needsApiKey ? 'SETUP' : awaitingWorldline ? 'SYNC' : sessionRejected ? 'REJECTED' : status}
             >
               <span className="ws2-online-dot" aria-hidden="true" />{connectionLabel}
             </div>
           </div>
           <div className="ws2-booth-end">
+          <Tip label="系统设置">
           <button
             type="button"
             ref={systemButtonRef}
@@ -1856,20 +1898,23 @@ export const Workstation: React.FC<WorkstationProps> = ({
               audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume);
               if (isSettingsOpen) closeMenu(); else openMenu();
             }}
-            title="系统设置"
             aria-label="系统设置"
             aria-expanded={isSettingsOpen}
           >
             {isSettingsOpen ? <>返回<kbd>Esc</kbd></> : '系统'}
           </button>
-          <button type="button" className="ws2-icon-btn" onClick={onLogout} title="断开连接" aria-label="断开连接">
-            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></svg>
+          </Tip>
+          <Tip label="断开连接">
+          <button type="button" className="ws2-icon-btn" onClick={onLogout} aria-label="断开连接">
+            <LogOut size={16} strokeWidth={1.8} aria-hidden="true" />
           </button>
+          </Tip>
           </div>
         </div>
       </header>
 
       <nav className="ws2-side" aria-label="会话" inert={isSettingsOpen}>
+        <MotionConfig transition={wsTransition(worldline, 'base')} reducedMotion="user">
         <HistorySidebar
           isCollapsed={isHistoryCollapsed}
           onToggle={() => setIsHistoryCollapsed((v) => !v)}
@@ -1886,7 +1931,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             void selectConversation(conversation);
           }}
           onNew={() => { void createConversation(defaultIdentityMode); }}
-          onRename={renameConversation}
+          onRename={async (conversation, title) => { await patchConversation(conversation, { title }); }}
           onTogglePin={toggleConversationPin}
           onDelete={(conversation) => { void deleteConversation(conversation); }}
           onForget={(conversation) => { setForgetError(null); setForgetTarget(conversation); }}
@@ -1895,10 +1940,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
           refreshFailed={conversationListFailed && conversationListWorldline === worldline}
           onRetry={() => { void loadConversations().catch(() => undefined); }}
         />
+        </MotionConfig>
       </nav>
 
       <section className="ws2-talk" inert={isSettingsOpen}>
         <div className="ws2-transcript-wrap">
+          <SelectionCopyMenu>
           <div
             ref={transcriptViewportRef}
             className="terminal-chat-viewport ws2-transcript"
@@ -1918,7 +1965,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                 <div className={`ws2-empty-card ${emptyStateKind}`}>
                   <small className="ws2-empty-kicker">OBSERVATION LOG · {dateLabel} ({dayLabel})</small>
                   <h2 className="ws2-empty-head">
-                    {needsApiKey ? '尚未接通' : sessionUsable ? '新的观测记录' : sessionConnecting ? '正在接通' : '暂时无法接通'}
+                    {needsApiKey ? '尚未接通' : sessionUsable ? '新的观测记录' : sessionConnecting || reconnecting ? '正在接通' : '暂时无法接通'}
                   </h2>
                   <p className={`ws2-empty-msg ${emptyStateKind}`}>
                     {sessionUsable && !needsApiKey
@@ -1935,6 +1982,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
                       </button>
                     </div>
                   )}
+                  {linkLost && !needsApiKey && (
+                    <div className="ws2-empty-actions">
+                      <button type="button" className="ws2-empty-action" onClick={reconnect}>重新连接</button>
+                    </div>
+                  )}
                   <div className="ws2-empty-rule" aria-hidden="true">
                     <i /><span>{worldline === 'beta' ? 'β' : 'STEINS;GATE'} · {DIVERGENCE[worldline]}%</span>
                   </div>
@@ -1948,7 +2000,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                       <p className="system-error-content" role="alert">{msg.content}</p>
                     </article>
                   ) : msg.role === 'user' ? (
-                    <article key={msg.id} className="ws2-line ws2-line-user">
+                    <article key={msg.id} className="ws2-line ws2-line-user" data-message-id={msg.id}>
                       <header><span className="ws2-who" data-testid="speaker-user">{userHudLabel}</span></header>
                       <p
                         className="ws2-user-text"
@@ -2007,6 +2059,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
               </div>
             )}
           </div>
+          </SelectionCopyMenu>
           {showJumpToLatest && (
             <button
               type="button"
@@ -2031,6 +2084,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
             这段对话原来使用的「{activeProvider?.display_name || '接入'}」已被移除。聊天记录仍在；请在下方重新选择模型后继续，不会自动换到其他厂商。
           </div>
         )}
+        {(reconnecting || linkLost) && !needsApiKey && visibleMessages.length > 0 && (
+          <div className={`ws2-link-state${linkLost ? ' is-lost' : ''}`} role="status">
+            <span>{linkLost ? '自动重连没有成功。' : `连接中断，正在自动重连（${retryCount}）。`}</span>
+            {linkLost && <button type="button" onClick={reconnect}>重新连接</button>}
+          </div>
+        )}
         {needsApiKey && !providerGone && visibleMessages.length > 0 && (
           <div className="ws2-key-missing" role="status">
             <span>「{activeProvider?.display_name || activeProviderId}」还没有密钥，她现在听不到你。</span>
@@ -2039,10 +2098,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
           </div>
         )}
         <form className="ws2-composer" onSubmit={handleSend}>
+          <TextFieldMenu fieldRef={composerRef}>
           <textarea
+            ref={composerRef}
             rows={2}
             value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
+            onChange={(e) => { setInputText(e.target.value); hearKeystroke(); }}
             onKeyDown={(e) => {
               if (e.nativeEvent.isComposing || e.keyCode === 229) {
                 if (e.key === 'Enter' || e.key === 'Escape') e.stopPropagation();
@@ -2058,6 +2119,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             aria-label="输入消息"
             disabled={sendBlocked}
           />
+          </TextFieldMenu>
           <div className="ws2-composer-row">
             <div className="ws2-model">
               <ProviderControls
@@ -2101,13 +2163,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
                 : state.status === 'checking' ? '正在测试连接…'
                   : state.status === 'ok' ? '连接测试已通过' : `连接测试未通过：${chatCheckMessage(state.code)}`;
               return (
-                <button
-                  type="button"
-                  className={`ws2-check-dot ${state?.status ?? 'untested'}`}
-                  title={label}
-                  aria-label={label}
-                  onClick={() => openMenu('connections')}
-                />
+                <Tip label={label}>
+                  <button
+                    type="button"
+                    className={`ws2-check-dot ${state?.status ?? 'untested'}`}
+                    aria-label={label}
+                    onClick={() => openMenu('connections')}
+                  />
+                </Tip>
               );
             })()}
 
@@ -2123,7 +2186,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
           {(pendingModel || modelApplyError) && (
             <div className="ws2-composer-notes">
               {pendingModel && (
-                <span className="ws2-pending" role="status" title="本轮仍使用发起时的模型">下一轮：{pendingModel}</span>
+                <Tip label="本轮仍使用发起时的模型">
+                  <span className="ws2-pending" role="status">下一轮：{pendingModel}</span>
+                </Tip>
               )}
               {modelApplyError && (
                 <span className="ws2-apply-error" role="alert">
@@ -2162,17 +2227,82 @@ export const Workstation: React.FC<WorkstationProps> = ({
         </div>
         {/* Amadeus window: a dot-matrix field behind her that stirs while she thinks and pulses while she speaks. */}
         <div className="ws2-matrix" aria-hidden="true" />
-        
+        {/* Light from the screen side. On the lit edge (upper right) the figure's own colour is lifted toward the light
+            over a soft band — hair strands and cloth folds keep their grain, dark line work stays dark — with a narrower
+            glint on its brightest strands; cool on SG, warm on β. A soft shade sits on the far edge. No outline. */}
+        <svg className="ws2-rim-defs" width="0" height="0" aria-hidden="true" focusable="false">
+          <defs>
+            <filter id="ws2-rim-sg" x="-4%" y="-2%" width="108%" height="104%" colorInterpolationFilters="sRGB">
+              <feColorMatrix in="SourceGraphic" type="matrix" values=".965 0 0 0 0  0 .97 0 0 .004  0 0 .99 0 .014  0 0 0 1 0" result="tone" />
+              <feOffset in="SourceAlpha" dx="10" dy="0" result="farShift" />
+              <feComposite in="SourceAlpha" in2="farShift" operator="out" result="farEdge" />
+              <feGaussianBlur in="farEdge" stdDeviation="6" result="farSoft" />
+              <feComposite in="farSoft" in2="SourceAlpha" operator="in" result="farMask" />
+              <feFlood floodColor="rgb(16,20,34)" floodOpacity=".42" />
+              <feComposite in2="farMask" operator="in" result="shade" />
+              <feBlend in="shade" in2="tone" mode="multiply" result="toned" />
+              <feOffset in="SourceAlpha" dx="-16" dy="9" result="litShift" />
+              <feComposite in="SourceAlpha" in2="litShift" operator="out" result="litEdge" />
+              <feGaussianBlur in="litEdge" stdDeviation="9" result="litSoft" />
+              <feComposite in="litSoft" in2="SourceAlpha" operator="in" result="litMask" />
+              <feColorMatrix in="SourceGraphic" type="matrix" values=".858 0 0 0 .039  0 .99 0 0 .045  0 0 1.1 0 .05  0 0 0 0 1" result="bounce" />
+              <feComposite in="bounce" in2="litMask" operator="in" result="wash" />
+              <feBlend in="wash" in2="toned" mode="screen" result="washed" />
+              <feOffset in="SourceAlpha" dx="-3" dy="1.8" result="glintShift" />
+              <feComposite in="SourceAlpha" in2="glintShift" operator="out" result="glintEdge" />
+              <feGaussianBlur in="glintEdge" stdDeviation="1.4" result="glintSoft" />
+              <feComposite in="glintSoft" in2="SourceAlpha" operator="in" result="glintMask" />
+              <feColorMatrix in="SourceGraphic" type="matrix" values=".166 .558 .056 0 0  .191 .644 .065 0 0  .213 .715 .072 0 0  0 0 0 0 1" result="luma" />
+              <feComponentTransfer in="luma" result="sheen">
+                <feFuncR type="gamma" amplitude="1.3" exponent="1.8" />
+                <feFuncG type="gamma" amplitude="1.3" exponent="1.8" />
+                <feFuncB type="gamma" amplitude="1.3" exponent="1.8" />
+              </feComponentTransfer>
+              <feComposite in="sheen" in2="glintMask" operator="in" result="glintRaw" />
+              <feComponentTransfer in="glintRaw" result="glint"><feFuncA type="linear" slope=".8" /></feComponentTransfer>
+              <feBlend in="glint" in2="washed" mode="screen" />
+            </filter>
+            <filter id="ws2-rim-beta" x="-4%" y="-2%" width="108%" height="104%" colorInterpolationFilters="sRGB">
+              <feColorMatrix in="SourceGraphic" type="matrix" values=".99 0 0 0 .012  0 .965 0 0 .004  0 0 .93 0 0  0 0 0 1 0" result="tone" />
+              <feOffset in="SourceAlpha" dx="10" dy="0" result="farShift" />
+              <feComposite in="SourceAlpha" in2="farShift" operator="out" result="farEdge" />
+              <feGaussianBlur in="farEdge" stdDeviation="6" result="farSoft" />
+              <feComposite in="farSoft" in2="SourceAlpha" operator="in" result="farMask" />
+              <feFlood floodColor="rgb(34,20,12)" floodOpacity=".46" />
+              <feComposite in2="farMask" operator="in" result="shade" />
+              <feBlend in="shade" in2="tone" mode="multiply" result="toned" />
+              <feOffset in="SourceAlpha" dx="-16" dy="9" result="litShift" />
+              <feComposite in="SourceAlpha" in2="litShift" operator="out" result="litEdge" />
+              <feGaussianBlur in="litEdge" stdDeviation="9" result="litSoft" />
+              <feComposite in="litSoft" in2="SourceAlpha" operator="in" result="litMask" />
+              <feColorMatrix in="SourceGraphic" type="matrix" values="1.1 0 0 0 .05  0 .924 0 0 .042  0 0 .704 0 .032  0 0 0 0 1" result="bounce" />
+              <feComposite in="bounce" in2="litMask" operator="in" result="wash" />
+              <feBlend in="wash" in2="toned" mode="screen" result="washed" />
+              <feOffset in="SourceAlpha" dx="-3" dy="1.8" result="glintShift" />
+              <feComposite in="SourceAlpha" in2="glintShift" operator="out" result="glintEdge" />
+              <feGaussianBlur in="glintEdge" stdDeviation="1.4" result="glintSoft" />
+              <feComposite in="glintSoft" in2="SourceAlpha" operator="in" result="glintMask" />
+              <feColorMatrix in="SourceGraphic" type="matrix" values=".213 .715 .072 0 0  .179 .601 .061 0 0  .136 .458 .046 0 0  0 0 0 0 1" result="luma" />
+              <feComponentTransfer in="luma" result="sheen">
+                <feFuncR type="gamma" amplitude="1.3" exponent="1.8" />
+                <feFuncG type="gamma" amplitude="1.3" exponent="1.8" />
+                <feFuncB type="gamma" amplitude="1.3" exponent="1.8" />
+              </feComponentTransfer>
+              <feComposite in="sheen" in2="glintMask" operator="in" result="glintRaw" />
+              <feComponentTransfer in="glintRaw" result="glint"><feFuncA type="linear" slope=".8" /></feComponentTransfer>
+              <feBlend in="glint" in2="washed" mode="screen" />
+            </filter>
+          </defs>
+        </svg>
+
         <AvatarViewer
           variant="stage"
           emotion={emotion}
           isSpeaking={isPlaying}
-          volume={currentVolume}
           glitchState={glitchState}
         />
         <div className="ws2-plate">
           <VoiceScope
-            level={currentVolume}
             volume={voiceVolume}
             muted={voiceMuted}
             speaking={isPlaying}
@@ -2446,32 +2576,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
         </ConfirmDialog>
       )}
 
-      {renameDialog.shown && (
-        <ConfirmDialog
-          title="重命名会话"
-          confirmLabel="保存"
-          focusCancel={false}
-          leaving={renameDialog.leaving}
-          onExited={renameDialog.done}
-          returnFocus={() => sessionDialogFallback(wsRootRef.current, renameDialog.shown?.id ?? '', activeConversationId === null)}
-          busy={renameBusy}
-          error={renameError}
-          onConfirm={() => { void confirmRenameConversation(); }}
-          onCancel={() => { setRenameTarget(null); setRenameError(null); }}
-        >
-          <input
-            className="ws2-dialog-input"
-            aria-label="会话标题"
-            value={renameValue}
-            maxLength={80}
-            onChange={(e) => setRenameValue(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !(e.nativeEvent.isComposing || e.keyCode === 229)) { e.preventDefault(); void confirmRenameConversation(); }
-            }}
-          />
-        </ConfirmDialog>
-      )}
-
       {deleteDialog.shown && (
         <ConfirmDialog
           title="删除这段对话？"
@@ -2508,5 +2612,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         />
       )}
     </div>
+    </TipProvider>
+    </OverlayRootContext.Provider>
   );
 };

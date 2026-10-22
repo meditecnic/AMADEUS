@@ -257,7 +257,8 @@ describe('ProviderControls', () => {
     expect(screen.getByRole('button', { name: '推理强度' })).toHaveTextContent(
       '推理强度 · HIGH',
     );
-    expect(screen.getByTitle('供应商原生模型控制。')).toBeInTheDocument();
+    // The note is a workstation tip on hover/focus and stays available to assistive tech as a description.
+    expect(screen.getByRole('button', { name: '推理强度' })).toHaveAttribute('aria-description', '供应商原生模型控制。');
     fireEvent.click(screen.getByRole('button', { name: '模型' }));
     expect(screen.getByRole('option', {
       name: 'DeepSeek V4 Pro（不可用）',
@@ -421,7 +422,7 @@ describe('ProviderControls', () => {
       'true',
     );
     expect(screen.getByRole('option', { name: 'deepseek-v4-flash（兼容 ID）' })).toHaveAttribute(
-      'title',
+      'aria-description',
       expect.stringContaining('请求 ID：deepseek-v4-flash'),
     );
   });

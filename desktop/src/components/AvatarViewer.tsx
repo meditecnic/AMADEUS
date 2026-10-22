@@ -1,5 +1,6 @@
 ﻿import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { hasAssetPack, packAsset } from '../assetPack';
+import { mouthFrame, voiceEnvelope } from '../workstation/voiceEnvelope';
 
 // The portraits are original game art, shipped only in the optional asset pack.
 const art = (path: string) => packAsset(path) ?? '';
@@ -48,7 +49,6 @@ type Emotion = 'neutral' | 'tsundere' | 'embarrassed' | 'intellectual' | 'happy'
 interface AvatarViewerProps {
   emotion: Emotion;
   isSpeaking: boolean;
-  volume: number;
   glitchState: 'none' | 'light' | 'heavy';
   /** stage: layout and lighting come from the workstation stylesheet (no inline sizing, no glow ring). */
   variant?: 'legacy' | 'stage';
@@ -57,7 +57,6 @@ interface AvatarViewerProps {
 const AvatarViewer: React.FC<AvatarViewerProps> = ({
   emotion,
   isSpeaking,
-  volume,
   glitchState,
   variant = 'legacy',
 }) => {
@@ -70,12 +69,10 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
 
   const isSpeakingRef = useRef(isSpeaking);
   const isBlinkingRef = useRef(isBlinking);
-  const volumeRef = useRef(volume);
   useEffect(() => {
     isSpeakingRef.current = isSpeaking;
     isBlinkingRef.current = isBlinking;
-    volumeRef.current = volume;
-  }, [isSpeaking, isBlinking, volume]);
+  }, [isSpeaking, isBlinking]);
 
   useEffect(() => {
     let blinkTimer: number | null = null;
@@ -119,14 +116,15 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
 
   useLayoutEffect(() => {
     let rafId: number | null = null;
-    const apply = () => {
+    // Lips read the same envelope as the voice scope; a frame holds ≥70 ms so syllables read as shapes, not flicker.
+    let mouth: 1 | 2 | 3 = 1;
+    let changedAt = 0;
+    const apply = (now: number) => {
       const speaking = isSpeakingRef.current;
-      const vol = volumeRef.current;
       const blinking = isBlinkingRef.current;
-      let mouthLevel = 1;
-      if (speaking && vol > 0.05) {
-        mouthLevel = vol > 0.25 ? 3 : 2;
-      }
+      const next = speaking ? mouthFrame(voiceEnvelope.get(), mouth) : 1;
+      if (next !== mouth && ((next === 1 && !speaking) || now - changedAt >= 70)) { mouth = next; changedAt = now; }
+      const mouthLevel = mouth;
       const showBlink = blinking && !speaking;
       const o1 = (!showBlink && mouthLevel === 1) ? 1 : 0;
       const o2 = (!showBlink && mouthLevel === 2) ? 1 : 0;

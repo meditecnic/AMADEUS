@@ -1,6 +1,7 @@
 import type { ProviderMetadata } from '../components/ProviderControls';
 import type { ChatCheckState } from './ConnectionCheck';
 import { ProviderMark } from './ProviderMark';
+import { Tip } from './Tip';
 
 export type ConnectionLamp = 'ok' | 'manual' | 'idle' | 'checking' | 'bad' | 'key' | 'pending' | 'off';
 
@@ -49,13 +50,13 @@ export function ConnectionList({ providers, activeProviderId, checkFor, locked, 
           const selectable = !active && !locked && lamp !== 'pending' && lamp !== 'off';
           return (
             <li key={row.id}>
+              <Tip label={!active && locked ? '本轮回复结束后才能换接入' : undefined} side="top" align="start">
               <button
                 type="button"
                 className={`ws2-conn-row${active ? ' is-active' : ''}`}
                 aria-current={active ? 'true' : undefined}
                 aria-label={active ? `${row.display_name}，当前接入，${LAMP_LABEL[lamp]}` : `设为当前接入：${row.display_name}，${LAMP_LABEL[lamp]}`}
                 disabled={!selectable}
-                title={!active && locked ? '本轮回复结束后才能换接入' : undefined}
                 onClick={() => onSelect(row.id)}
               >
                 <ProviderMark provider={row} />
@@ -66,6 +67,7 @@ export function ConnectionList({ providers, activeProviderId, checkFor, locked, 
                 </span>
                 {active ? <span className="ws2-conn-tag">当前</span> : <span className="ws2-conn-use" aria-hidden="true">设为当前</span>}
               </button>
+              </Tip>
             </li>
           );
         })}

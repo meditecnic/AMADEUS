@@ -629,7 +629,8 @@ describe('Workstation provider runtime changes', () => {
       if (outcome !== 'inactive') {
         act(() => wsSpies.useAmadeusWS.mock.lastCall![0].onConversationSwitched({ conversationId: 'conversation-one' }));
       }
-      fireEvent.click(screen.getByRole('button', { name: '会话操作 Default Conversation' }));
+      // Radix DropdownMenu opens on pointer-down or Enter, not on a synthetic click.
+      fireEvent.keyDown(screen.getByRole('button', { name: '会话操作 Default Conversation' }), { key: 'Enter' });
       fireEvent.click(screen.getByRole('menuitem', { name: '删除 Default Conversation' }));
       fireEvent.click(screen.getByRole('button', { name: outcome === 'cancel' ? '取消' : '删除会话' }));
       if (outcome === 'cancel') {
