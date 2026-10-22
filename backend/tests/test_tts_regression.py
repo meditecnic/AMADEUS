@@ -1,6 +1,7 @@
 import pytest
 import json
 import asyncio
+from pathlib import Path
 from unittest.mock import patch, MagicMock, AsyncMock
 from app.domain.segments import AudioErrorCode
 from app.services.tts_queue import TTSQueueManager, TTSServiceError, EMOTION_REF_MAP
@@ -248,8 +249,20 @@ def test_emotion_ref_map_built_9_emotions():
     assert set(EMOTION_REF_MAP) == expected
 
 
-def test_embarrassed_reference_prompt_matches_supplied_recording():
-    entry = EMOTION_REF_MAP["embarrassed"]
+def test_embarrassed_reference_prompt_matches_supplied_recording(tmp_path, monkeypatch):
+    # EMOTION_REF_MAP is built at import from files under the user's data
+    # root, which tests never see. Build the map again against a placeholder
+    # file at the default name (only its existence is checked).
+    from app import config
+    from app.services.tts_queue import _build_emotion_ref_map
+
+    assert Path(config.REF_AUDIO_EMBARRASSED).name == "ref_embarrassed.wav"
+    placeholder = tmp_path / "voice-pack" / "ref" / "ref_embarrassed.wav"
+    placeholder.parent.mkdir(parents=True)
+    placeholder.write_bytes(b"")
+    monkeypatch.setattr(config, "REF_AUDIO_EMBARRASSED", str(placeholder))
+
+    entry = _build_emotion_ref_map()["embarrassed"]
     assert entry["prompt_text"] == "別に確信があって言ったわけじゃない。単に…"
     assert entry["ref_audio_path"].endswith("ref_embarrassed.wav")
 
