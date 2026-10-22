@@ -146,3 +146,42 @@ def test_credential_store_is_in_memory_and_windows_store_is_refused():
     assert isinstance(credentials._select_credential_store(), credentials.InMemoryCredentialStore)
     with pytest.raises(RuntimeError, match="must not construct WindowsCredentialStore"):
         credentials.WindowsCredentialStore()
+
+
+def test_shared_tts_sidecar_stand_in_matches_real_offline_result():
+    """conftest's offline_tts_sidecar returns what the real code returns when
+    nothing listens on 9880 and SOVITS_SIDECAR_COMMAND is unset; supervisors
+    built by tests keep the real methods."""
+    import asyncio
+    from dataclasses import asdict
+
+    from app.services.tts_sidecar import SidecarSupervisor, sidecar_supervisor
+
+    async def unreachable(self, url):
+        return False
+
+    real = SidecarSupervisor()
+    assert "ensure_available" not in vars(real)
+    assert os.environ.get("SOVITS_SIDECAR_COMMAND") is None
+    real._compatible = unreachable.__get__(real)
+    real._occupied = unreachable.__get__(real)
+
+    async def run():
+        real_state = asdict(await real.ensure_available())
+        real.state = SidecarSupervisor().state
+        real_health = await real.health()
+        stand_in_state = asdict(await sidecar_supervisor.ensure_available())
+        sidecar_supervisor.state = SidecarSupervisor().state
+        stand_in_health = await sidecar_supervisor.health()
+        return real_state, real_health, stand_in_state, stand_in_health
+
+    real_state, real_health, stand_in_state, stand_in_health = asyncio.run(run())
+    assert stand_in_state == real_state
+    assert stand_in_health == real_health
+    assert real_health == {
+        "ok": False,
+        "status": "degraded",
+        "url": None,
+        "managed": False,
+        "error": "no compatible GPT-SoVITS endpoint on ports 9880-9890",
+    }

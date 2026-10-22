@@ -176,9 +176,76 @@ def isolated_user_dirs(tmp_path_factory):
         mp.undo()
 
 
+# ---------------------------------------------------------------------------
+# Offline TTS sidecar.
+#
+# app.main's lifespan calls sidecar_supervisor.ensure_available() and
+# /health/dependencies calls sidecar_supervisor.health(), which probes it
+# again while the state is not "ready". The real methods GET
+# http://127.0.0.1:9880/openapi.json (then /) -- a port fixed in
+# app/services/tts_sidecar.py, independent of SOVITS_URL -- so a test that
+# starts the whole app would reach a GPT-SoVITS server running on the same
+# machine. By default the shared sidecar_supervisor instance is given
+# stand-ins that return exactly what the real code returns when nothing
+# listens on 9880 and SOVITS_SIDECAR_COMMAND is unset. A test that needs
+# other behaviour still patches these methods itself. SidecarSupervisor()
+# instances built by a test (tests/test_tts_sidecar.py) are not affected.
+# ---------------------------------------------------------------------------
+_OFFLINE_SIDECAR_ERROR = "no compatible GPT-SoVITS endpoint on ports 9880-9890"
+
+
+@pytest.fixture(autouse=True)
+def offline_tts_sidecar(isolated_user_dirs):
+    """Replace the shared sidecar_supervisor's network-facing methods.
+
+    Instance attributes are set and removed through the instance ``__dict__``
+    (the real methods stay on the class), and the ``monkeypatch`` override
+    below depends on this fixture, so a test's own replacement is undone
+    before this one is.
+    """
+    from app.services.tts_sidecar import SidecarState, sidecar_supervisor
+
+    async def ensure_available():
+        sidecar_supervisor.state = SidecarState("degraded", None, False, _OFFLINE_SIDECAR_ERROR)
+        return sidecar_supervisor.state
+
+    async def health():
+        # Same steps as SidecarSupervisor.health(); a "ready" state is
+        # treated as stopped because nothing is listening.
+        if sidecar_supervisor.state.status == "ready" and sidecar_supervisor.state.url:
+            sidecar_supervisor.state = SidecarState("not_probed", None, False, "sidecar stopped")
+            sidecar_supervisor._weights_ready_url = None
+        if sidecar_supervisor.state.status != "ready":
+            await sidecar_supervisor.ensure_available()
+        state = sidecar_supervisor.state
+        return {"ok": state.status == "ready", "status": state.status, "url": state.url, "managed": state.managed, "error": state.error}
+
+    async def close():
+        return None
+
+    instance_dict = vars(sidecar_supervisor)
+    saved = {name: instance_dict[name] for name in ("state", "_weights_ready_url") if name in instance_dict}
+    replaced = {"ensure_available": ensure_available, "health": health, "close": close}
+    previous = {name: instance_dict[name] for name in replaced if name in instance_dict}
+    instance_dict.update(replaced)
+    try:
+        yield sidecar_supervisor
+    finally:
+        for name in replaced:
+            if name in previous:
+                instance_dict[name] = previous[name]
+            else:
+                instance_dict.pop(name, None)
+        instance_dict.update(saved)
+
+
 @pytest.fixture
-def monkeypatch(isolated_user_dirs):
-    """Built-in ``monkeypatch``, made to depend on ``isolated_user_dirs``."""
+def monkeypatch(isolated_user_dirs, offline_tts_sidecar):
+    """Built-in ``monkeypatch``, made to depend on ``isolated_user_dirs``.
+
+    It also depends on ``offline_tts_sidecar`` so that fixture's stand-ins
+    are installed before, and removed after, anything a test patches.
+    """
     mp = pytest.MonkeyPatch()
     yield mp
     mp.undo()
