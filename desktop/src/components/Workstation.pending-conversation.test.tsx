@@ -341,14 +341,14 @@ it('does not remember a history target when its HTTP history request returns 404
   expect(socket.sent[0]).toMatchObject({ conversation_id: 'old' });
 });
 
-it('self mode waits for new-conversation ready before sending its first line', async () => {
+it.each([false, true])('self mode waits for ready before its first line (socket drops after POST=%s)', async dropAfterPost => {
   localStorage.setItem('amadeus_pc_identity_mode', 'self');
   render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
   await act(async () => latest().open());
   await waitFor(() => expect(screen.getByLabelText('输入消息')).toBeEnabled());
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
   FakeWebSocket.autoReady = false;
-  afterPost = () => latest().drop();
+  if (dropAfterPost) afterPost = () => latest().drop();
   fireEvent.change(screen.getByLabelText('输入消息'), { target: { value: 'self 第一行' } });
   fireEvent.submit(document.querySelector('form.ws2-composer')!);
   await flush(300); await recover();
@@ -375,4 +375,20 @@ it('a committed worldline shift discards an unconfirmed conversation target', as
   expect(latest().sent[0]).not.toHaveProperty('conversation_id');
   act(() => retired({ data: JSON.stringify({ type: 'session.ready', conversation_mode: 'history', conversation_id: 'new', worldline: 'steins_gate' }) }));
   expect(document.querySelector('[data-conversation-id="new"].active')).toBeNull();
+});
+
+it('a failed worldline shift after pending entry reauthenticates the full source context', async () => {
+  const { onWorldlineChange } = await startOld(); FakeWebSocket.autoReady = false;
+  fireEvent.click(newButton()); await flush(300);
+  // The target socket has not opened; the worldline transaction must fail in place.
+  fireEvent.click(screen.getByRole('button', { name: '系统设置' }));
+  fireEvent.click(screen.getByRole('radio', { name: 'β 世界线' }));
+  fireEvent.click(screen.getByRole('button', { name: '跃迁至 β' })); await flush(600);
+  expect(onWorldlineChange).not.toHaveBeenCalled();
+  expect(active()).toBe('old');
+  expect(screen.getByText('旧对话内容')).toBeInTheDocument();
+  act(() => latest().open());
+  expect(latest().sent[0]).toMatchObject({ conversation_id: 'old', worldline: 'steins_gate' });
+  await act(async () => latest().ready());
+  expect(screen.getByLabelText('输入消息')).toBeEnabled();
 });

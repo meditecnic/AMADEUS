@@ -131,6 +131,26 @@ describe('pending conversation auth ownership', () => {
     h.unmount();
   });
 
+  it('ignores a late switch ACK after a newer request replaced it on the same socket', () => {
+    const onConversationSwitched = vi.fn();
+    const h = setup({ onConversationSwitched });
+    onConversationSwitched.mockClear();
+    h.rerender({ ...base, onConversationSwitched, pendingConversation: target(1) });
+    act(() => h.result.current.switchConversation('new', target().history, 1));
+    const first = latest().frames.at(-1)!;
+    const next = { ...target(2), conversationId: 'other' };
+    h.rerender({ ...base, onConversationSwitched, pendingConversation: next });
+    act(() => h.result.current.switchConversation('other', next.history, 2));
+    const second = latest().frames.at(-1)!;
+    act(() => latest().emit({ type: 'conversation.switched', request_id: first.request_id, conversation_id: 'new' }));
+    expect(onConversationSwitched).not.toHaveBeenCalled();
+    expect(h.result.current.messages).toEqual(source);
+    act(() => latest().emit({ type: 'conversation.switched', request_id: second.request_id, conversation_id: 'other' }));
+    expect(onConversationSwitched).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'other', requestEpoch: 2 }));
+    expect(h.result.current.messages).toEqual(source);
+    h.unmount();
+  });
+
   it('reports a missing auth target with its local epoch without changing the source transcript', () => {
     const onConversationSwitchError = vi.fn();
     const h = setup({ onConversationSwitchError }); h.stage();
