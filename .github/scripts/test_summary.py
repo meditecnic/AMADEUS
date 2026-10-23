@@ -8,6 +8,21 @@ import sys
 import xml.etree.ElementTree as ET
 
 
+def shorten(message, limit):
+    """Bound the UTF-8 message size after workflow-command escaping."""
+    if len(escape(message).encode("utf-8")) <= limit:
+        return message
+    prefix = []
+    remaining = limit - 3
+    for char in message:
+        size = len(escape(char).encode("utf-8"))
+        if size > remaining:
+            break
+        prefix.append(char)
+        remaining -= size
+    return "".join(prefix) + "..."
+
+
 def escape(value, *, property_value=False):
     value = str(value).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
     if property_value:
@@ -16,7 +31,17 @@ def escape(value, *, property_value=False):
 
 
 def annotation(level, title, message):
-    return f"::{level} title={escape(title, property_value=True)}::{escape(message)}"
+    message = escape(shorten(message, 60_000))
+    return f"::{level} title={escape(title, property_value=True)}::{message}"
+
+
+def case_list(cases):
+    # Fifty lines of at most 1,000 escaped bytes leave room for newlines and
+    # the omitted-count line within the 60 KB annotation message budget.
+    lines = [shorten(case, 1_000) for case in cases[:50]]
+    if len(cases) > 50:
+        lines.append(f"还有 {len(cases) - 50} 个")
+    return "\n".join(lines)
 
 
 def publish(lines):
@@ -62,6 +87,7 @@ def main():
     parser.add_argument("--label", required=True)
     parser.add_argument("--junit", required=True, type=Path)
     parser.add_argument("--level", choices=("notice", "warning"), default="notice")
+    parser.add_argument("--outcome", choices=("success", "failure", "cancelled", "skipped"))
     args = parser.parse_args()
     # Windows runner Python may otherwise encode redirected stdout as cp1252.
     sys.stdout.reconfigure(encoding="utf-8")
@@ -73,41 +99,55 @@ def main():
         publish([annotation("error", args.label, f"Cannot read JUnit XML {args.junit}: {exc}")])
         return 1
 
-    counts = Counter()
-    failed = []
-    skipped = []
+    severity = {"passed": 0, "skipped": 1, "xfailed": 2, "failed": 3, "errors": 4}
+    results = {}
     parents = {child: parent for parent in root.iter() for child in parent}
     for case in root.iter("testcase"):
-        counts["total"] += 1
+        key = tuple(case.get(attribute, "") for attribute in ("file", "classname", "name"))
         name = test_name(case, parents.get(case, root))
         skip = case.find("skipped")
+        reason = ""
         if case.find("error") is not None:
-            counts["errors"] += 1
-            failed.append(name)
+            status = "errors"
         elif case.find("failure") is not None:
-            counts["failed"] += 1
-            failed.append(name)
+            status = "failed"
         elif skip is not None and skip.get("type") == "pytest.xfail":
-            counts["xfailed"] += 1
+            status = "xfailed"
         elif skip is not None:
-            counts["skipped"] += 1
+            status = "skipped"
             reason = skip.get("message") or (skip.text or "").strip() or "(no reason)"
-            skipped.append(f"{name} — {reason}")
         else:
-            counts["passed"] += 1
+            status = "passed"
+        if key not in results or severity[status] > severity[results[key][0]]:
+            results[key] = (status, name, reason)
+
+    counts = Counter(status for status, _, _ in results.values())
+    counts["total"] = len(results)
+    failed = [name for status, name, _ in results.values() if status in {"failed", "errors"}]
+    skipped = [
+        f"{name} — {reason}"
+        for status, name, reason in results.values()
+        if status == "skipped"
+    ]
 
     summary = " · ".join(
         f"{key} {counts[key]}"
         for key in ("total", "passed", "failed", "errors", "skipped", "xfailed")
     )
     lines = [annotation(args.level, args.label, f"{summary} · time {duration:.3f}s")]
-    for level, title, cases, limit in (
-        ("error", f"{args.label} failed", failed, 20),
-        ("notice", f"{args.label} skipped", skipped, 10),
+    failure_level = "warning" if args.level == "warning" else "error"
+    for level, title, cases in (
+        (failure_level, f"{args.label} failed", failed),
+        ("notice", f"{args.label} skipped", skipped),
     ):
-        lines.extend(annotation(level, title, case) for case in cases[:limit])
-        if len(cases) > limit:
-            lines.append(annotation(level, title, f"还有 {len(cases) - limit} 个"))
+        if cases:
+            lines.append(annotation(level, title, case_list(cases)))
+    if args.outcome == "failure" and counts["failed"] == 0 and counts["errors"] == 0:
+        lines.append(annotation(
+            failure_level,
+            f"{args.label} failed",
+            "测试步骤失败，但 JUnit 里没有失败的用例（可能是未捕获的错误），请看日志",
+        ))
     publish(lines)
     return 0
 

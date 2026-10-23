@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   eol:
@@ -20,6 +20,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: Check repository line endings
         run: |
           git add --renormalize .
@@ -34,6 +36,8 @@ jobs:
         working-directory: desktop
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v6
         with:
           node-version: '22'
@@ -41,10 +45,11 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - run: npm ci
       - run: npm run build
-      - run: npm test -- --maxWorkers=2 --reporter=default --reporter=junit --outputFile.junit="$env:RUNNER_TEMP\junit-frontend.xml"
+      - id: tests
+        run: npm test -- --maxWorkers=2 --reporter=default --reporter=junit --outputFile.junit="$env:RUNNER_TEMP\junit-frontend.xml"
       - name: Summarize test results
-        if: always()
-        run: python ../.github/scripts/test_summary.py --label frontend --junit "$env:RUNNER_TEMP\junit-frontend.xml"
+        if: ${{ !cancelled() }}
+        run: python ../.github/scripts/test_summary.py --label frontend --junit "$env:RUNNER_TEMP\junit-frontend.xml" --outcome "${{ steps.tests.outcome }}"
 
   backend:
     runs-on: windows-latest
@@ -55,6 +60,8 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v6
         with:
           python-version: '3.11'
@@ -67,14 +74,15 @@ jobs:
           chcp
           python -c "import locale, sys; print(locale.getpreferredencoding(False)); print(sys.stdout.encoding)"
           $codePage = (chcp) -replace '.*?([0-9]+)\s*$', '$1'
-          python -c "import locale, sys; print('::notice title=backend env::Python ' + sys.version.split()[0] + ' · chcp ' + sys.argv[1] + ' · preferred encoding ' + locale.getpreferredencoding(False) + ' · stdout encoding ' + str(sys.stdout.encoding))" $codePage
+          python -c "import locale, sys; print('::notice title=backend env::Python ' + sys.version.split()[0] + ' | chcp ' + sys.argv[1] + ' | preferred encoding ' + locale.getpreferredencoding(False) + ' | stdout encoding ' + str(sys.stdout.encoding))" $codePage
       - run: python -m pytest --collect-only -q
       - name: Create pytest temporary parent directory
         run: New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP '测试 临时') -Force | Out-Null
-      - run: python -m pytest -q -rfEsx --basetemp "$env:RUNNER_TEMP\测试 临时\run" --junitxml "$env:RUNNER_TEMP\junit-backend.xml"
+      - id: tests
+        run: python -m pytest -q -rfEsx --basetemp "$env:RUNNER_TEMP\测试 临时\run" --junitxml "$env:RUNNER_TEMP\junit-backend.xml"
       - name: Summarize test results
-        if: always()
-        run: python ../.github/scripts/test_summary.py --label backend --junit "$env:RUNNER_TEMP\junit-backend.xml"
+        if: ${{ !cancelled() }}
+        run: python ../.github/scripts/test_summary.py --label backend --junit "$env:RUNNER_TEMP\junit-backend.xml" --outcome "${{ steps.tests.outcome }}"
 
   backend-py313:
     runs-on: windows-latest
@@ -86,6 +94,8 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
@@ -98,11 +108,12 @@ jobs:
           chcp
           python -c "import locale, sys; print(locale.getpreferredencoding(False)); print(sys.stdout.encoding)"
           $codePage = (chcp) -replace '.*?([0-9]+)\s*$', '$1'
-          python -c "import locale, sys; print('::notice title=backend-py313 env::Python ' + sys.version.split()[0] + ' · chcp ' + sys.argv[1] + ' · preferred encoding ' + locale.getpreferredencoding(False) + ' · stdout encoding ' + str(sys.stdout.encoding))" $codePage
+          python -c "import locale, sys; print('::notice title=backend-py313 env::Python ' + sys.version.split()[0] + ' | chcp ' + sys.argv[1] + ' | preferred encoding ' + locale.getpreferredencoding(False) + ' | stdout encoding ' + str(sys.stdout.encoding))" $codePage
       - run: python -m pytest --collect-only -q
       - name: Create pytest temporary parent directory
         run: New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP '测试 临时') -Force | Out-Null
-      - run: python -m pytest -q -rfEsx --basetemp "$env:RUNNER_TEMP\测试 临时\run" --junitxml "$env:RUNNER_TEMP\junit-backend.xml"
+      - id: tests
+        run: python -m pytest -q -rfEsx --basetemp "$env:RUNNER_TEMP\测试 临时\run" --junitxml "$env:RUNNER_TEMP\junit-backend.xml"
       - name: Summarize test results
-        if: always()
-        run: python ../.github/scripts/test_summary.py --label backend-py313 --junit "$env:RUNNER_TEMP\junit-backend.xml" --level warning
+        if: ${{ !cancelled() }}
+        run: python ../.github/scripts/test_summary.py --label backend-py313 --junit "$env:RUNNER_TEMP\junit-backend.xml" --level warning --outcome "${{ steps.tests.outcome }}"
