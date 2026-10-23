@@ -59,6 +59,7 @@ def isolated_client(tmp_path, monkeypatch, isolated_provider_credentials):
 
     monkeypatch.delenv("AMADEUS_DB_PATH", raising=False)
     monkeypatch.setenv("AMADEUS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     reset_initialization_cache()
     monkeypatch.setattr(memory_service, "embedder", _ArchiveDeterministicEmbedder())
     with patch(
