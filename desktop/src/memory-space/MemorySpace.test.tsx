@@ -121,8 +121,18 @@ async function chooseWorldline(value: string) {
   fireEvent.keyDown(option, { key: 'Enter' });
   await waitFor(() => expect(screen.getByRole('combobox', { name: '浏览世界线' })).toHaveAttribute('data-state', 'closed'));
 }
-function mockApi(impl: (url: string) => Promise<unknown>) {
-  vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => impl(String(input))));
+function mockApi(impl: (url: string) => Promise<unknown>, counts: Record<string, number> = {}) {
+  vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.includes('/api/memory/status')) {
+      const params = new URL(url, 'http://localhost').searchParams;
+      return okJson({
+        session_id: params.get('session_id'), worldline: params.get('worldline'), identity_mode: params.get('identity_mode'),
+        runtime_mode: 'v11', pending_count: 0, processing_count: 0, failed_count: 0, failed_jobs: [], ...counts,
+      });
+    }
+    return impl(url);
+  }));
 }
 
 function okJson(body: unknown) {
@@ -966,7 +976,7 @@ describe('MemorySpace', () => {
         return okJson({ session_id: 's', worldline: 'steins_gate', identity_mode: 'okabe', pending_count: 2, processing_count: 1, failed_count: 3, failed_jobs: [] });
       }
       return okJson(projection);
-    });
+    }, { pending_count: 2, processing_count: 1, failed_count: 3 });
     render(
       <MemorySpace
         sessionId="s"
@@ -1566,7 +1576,7 @@ describe('MemorySpace', () => {
         return okJson({ session_id: 's', worldline: 'steins_gate', identity_mode: 'okabe', pending_count: 0, processing_count: 0, failed_count: 4, failed_jobs: [] });
       }
       return okJson(filtered);
-    });
+    }, { failed_count: 4 });
     render(
       <MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={vi.fn()} />,
     );

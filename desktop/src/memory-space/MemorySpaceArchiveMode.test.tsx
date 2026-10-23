@@ -205,7 +205,7 @@ afterEach(() => {
 });
 
 describe('Memory Space peer modes', () => {
-  it('shows legacy chat facts in the archive without write buttons and filters the same facts in Find', async () => {
+  it('shows deletable legacy chat facts in the archive and filters the same facts in Find', async () => {
     const legacyRequests: string[] = [];
     mockApi((url) => {
       if (url.startsWith('/api/memory/status?')) {
@@ -226,14 +226,15 @@ describe('Memory Space peer modes', () => {
       return archiveBody(url) ?? okJson({});
     });
     render(<MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={() => undefined} />);
-    await screen.findByText('当前对话尚未使用本页的记忆。星图与档案暂供查看。');
+    await screen.findByText('当前对话尚未使用本页的记忆。星图暂供查看。');
     fireEvent.click(screen.getByTestId('memory-mode-archive'));
     await screen.findByText('对话记得我喜欢黑咖啡');
     expect(screen.getByText('对话记得我每天晨跑')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '删除：对话记得我每天晨跑' })).toBeTruthy();
     expect(screen.queryByText('只属于 USER 的红茶')).toBeNull();
     expect(screen.queryByText('只属于 USER 的共享档案')).toBeNull();
-    expect(screen.queryByRole('button', { name: /纠正|删除|置顶|保存|忽略|重试任务|重命名/ })).toBeNull();
-    expect(screen.getByText('这些是对话中正在使用的记忆，这里只能查看。要遗忘某个会话带来的记忆，请在会话菜单选择「清空聊天记录」并勾选遗忘选项。')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /纠正|置顶|保存|忽略|重试任务|重命名/ })).toBeNull();
+    expect(screen.getByText('这些是对话中正在使用的记忆，可以逐条删除。要遗忘某个会话带来的记忆，请在会话菜单选择「清空聊天记录」并勾选遗忘选项。')).toBeTruthy();
     fireEvent.click(screen.getByTestId('memory-mode-constellation'));
     fireEvent.click(screen.getByRole('button', { name: '查找' }));
     fireEvent.change(screen.getByRole('textbox', { name: '搜索记忆' }), { target: { value: '晨跑' } });
@@ -645,6 +646,7 @@ describe('Memory Space peer modes', () => {
           processing_count: 0,
           failed_count: 0,
           failed_jobs: [],
+          runtime_mode: 'v11',
         };
       }
       return null;
@@ -653,7 +655,7 @@ describe('Memory Space peer modes', () => {
       if (url.includes('graph/projection')) return okJson(projection);
       const body = bodyFor(String(url));
       if (body === null) return okJson({});
-      if (released) return okJson(body);
+      if (released || url.startsWith('/api/memory/status?')) return okJson(body);
       return new Promise((resolve) => {
         held.push({ url: String(url), resolve });
       });
@@ -728,5 +730,70 @@ describe('Memory Space peer modes', () => {
     expect(screen.queryByText('喜欢黑咖啡')).toBeNull();
     expect(screen.queryByText('档案里的黑咖啡')).toBeNull();
     expect(screen.queryByTestId('reading-title')).toBeNull();
+  });
+});
+
+describe('Memory Space runtime mode gate', () => {
+  it.each(['legacy', 'shadow'] as const)('keeps v11 Archive and Find unmounted while status is pending, then loads %s', async (runtimeMode) => {
+    let release!: (response: unknown) => void;
+    const v11Reads: string[] = [];
+    mockApi((url) => {
+      if (url.startsWith('/api/memory/status?')) return new Promise((resolve) => { release = resolve; });
+      if (url.startsWith('/api/memory/facts?')) {
+        if (new URL(url, 'http://localhost').searchParams.has('identity_mode')) v11Reads.push(url);
+        else return okJson({ local: [], shared: [], okabe: [{ id: 3, fact_key: 'drink', fact_value: '正在使用的旧版事实' }] });
+      }
+      if (/\/api\/memory\/(experiences|observations)\?/.test(url)) v11Reads.push(url);
+      if (url.includes('graph/projection')) return okJson(projection);
+      return archiveBody(url) ?? okJson({});
+    });
+    render(<MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={() => undefined} />);
+    fireEvent.click(screen.getByTestId('memory-mode-archive'));
+    expect(screen.getByText('正在读取记忆…')).toBeInTheDocument();
+    expect(screen.queryByTestId('archive-facts-total')).toBeNull();
+    fireEvent.click(screen.getByTestId('memory-mode-constellation'));
+    fireEvent.click(screen.getByRole('button', { name: '查找' }));
+    expect(screen.getByText('正在读取记忆…')).toBeInTheDocument();
+    expect(screen.queryByTestId('memory-list')).toBeNull();
+    expect(v11Reads).toEqual([]);
+    await act(async () => { release(await okJson({ ...scopeBody, runtime_mode: runtimeMode,
+      pending_count: 0, processing_count: 0, failed_count: 0, failed_jobs: [] })); });
+    await screen.findByRole('button', { name: '删除：正在使用的旧版事实' });
+    expect(v11Reads).toEqual([]);
+  });
+
+  it.each(['transport', 'http', 'missing-mode', 'unknown-mode', 'malformed', 'wrong-scope'])('keeps v11 unmounted after %s status failure and retries mode detection', async (failure) => {
+    let retry = false;
+    const v11Reads: string[] = [];
+    mockApi((url) => {
+      if (url.startsWith('/api/memory/status?') && !retry) {
+        const body = { ...scopeBody, runtime_mode: 'v11', pending_count: 0, processing_count: 0, failed_count: 0, failed_jobs: [] };
+        if (failure === 'transport') return Promise.reject(new Error('offline'));
+        if (failure === 'http') return Promise.resolve({ ok: false, status: 503, json: async () => ({}) });
+        if (failure === 'missing-mode') return okJson({ ...body, runtime_mode: undefined });
+        if (failure === 'unknown-mode') return okJson({ ...body, runtime_mode: 'future' });
+        if (failure === 'wrong-scope') return okJson({ ...body, identity_mode: 'self' });
+        return okJson({ ...body, failed_jobs: undefined });
+      }
+      if (/\/api\/memory\/facts\?/.test(url) && new URL(url, 'http://localhost').searchParams.has('identity_mode')) v11Reads.push(url);
+      if (/\/api\/memory\/(experiences|observations)\?/.test(url)) v11Reads.push(url);
+      if (url.includes('graph/projection')) return okJson(projection);
+      return archiveBody(url) ?? okJson({});
+    });
+    render(<MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={() => undefined} />);
+    fireEvent.click(screen.getByTestId('memory-mode-archive'));
+    await screen.findByText('记忆暂时无法读取。');
+    expect(screen.queryByTestId('archive-facts-total')).toBeNull();
+    fireEvent.click(screen.getByTestId('memory-mode-constellation'));
+    fireEvent.click(screen.getByRole('button', { name: '查找' }));
+    expect(screen.getByText('记忆暂时无法读取。')).toBeInTheDocument();
+    expect(screen.queryByTestId('memory-list')).toBeNull();
+    expect(v11Reads).toEqual([]);
+    retry = true;
+    fireEvent.click(screen.getByRole('button', { name: '重试', exact: true }));
+    await screen.findByTestId('memory-list');
+    fireEvent.click(screen.getByTestId('memory-mode-archive'));
+    await screen.findByText('档案里的黑咖啡');
+    expect(v11Reads.length).toBeGreaterThan(0);
   });
 });

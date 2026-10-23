@@ -85,7 +85,14 @@ export type ArchiveRequestOptions = {
   signal?: AbortSignal;
 };
 
-export type LegacyFact = { id: string; factKey: string; text: string };
+export type LegacyFact = {
+  id: string;
+  factId: number;
+  source: 'local' | 'shared' | 'okabe';
+  factKey: string;
+  text: string;
+  hasSharedFallback: boolean;
+};
 
 export function fetchLegacyFacts(
   scope: ArchiveScope,
@@ -96,9 +103,10 @@ export function fetchLegacyFacts(
   return execute(`/api/memory/facts?${params}`, undefined, options, (body) => {
     if (!body || typeof body !== 'object') return null;
     const ledger = body as Record<string, unknown>;
-    const groups = scope.identityMode === 'okabe' ? ['okabe'] : ['local', 'shared'];
+    const groups: LegacyFact['source'][] = scope.identityMode === 'okabe' ? ['okabe'] : ['local', 'shared'];
     const facts: LegacyFact[] = [];
     const localKeys = new Set<string>();
+    const sharedKeys = new Set<string>();
     for (const group of groups) {
       const rows = ledger[group];
       if (!Array.isArray(rows)) return null;
@@ -108,13 +116,29 @@ export function fetchLegacyFacts(
         if (typeof row.id !== 'number' || !Number.isSafeInteger(row.id)
           || !isString(row.fact_key) || !isString(row.fact_value)) return null;
         // Match legacy self recall: the current worldline's local value wins.
+        if (group === 'shared') sharedKeys.add(row.fact_key);
         if (group === 'shared' && localKeys.has(row.fact_key)) continue;
         if (group === 'local') localKeys.add(row.fact_key);
-        facts.push({ id: `${group}:${row.id}`, factKey: row.fact_key, text: row.fact_value });
+        facts.push({ id: `${group}:${row.id}`, factId: row.id, source: group,
+          factKey: row.fact_key, text: row.fact_value, hasSharedFallback: false });
       }
+    }
+    for (const fact of facts) {
+      fact.hasSharedFallback = fact.source === 'local' && sharedKeys.has(fact.factKey);
     }
     return facts;
   });
+}
+
+export function deleteLegacyFact(
+  scope: ArchiveScope,
+  fact: LegacyFact,
+  options: ArchiveRequestOptions = {},
+): Promise<ArchiveResult<Record<string, unknown>>> {
+  const params = new URLSearchParams({ session_id: scope.sessionId, worldline: scope.worldline });
+  const path = fact.source === 'shared' ? `shared-facts/${fact.factId}/delete`
+    : `facts/${fact.factId}/${fact.source === 'local' ? 'delete-local' : 'dismiss'}`;
+  return execute(`/api/memory/${path}?${params}`, { method: 'POST' }, options, parseEcho);
 }
 
 function scopeParams(scope: ArchiveScope): URLSearchParams {

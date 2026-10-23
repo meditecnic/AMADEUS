@@ -545,6 +545,19 @@ def _parse_pagination_param(
     return value
 
 
+def _require_v11_memory_write() -> None:
+    from app.services.memory_v11.jobs import memory_mode
+
+    if memory_mode() != "v11":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "v11_memory_read_only",
+                "message": "v11 memory is read-only outside v11 mode",
+            },
+        )
+
+
 @router.patch("/api/memory/facts/{fact_id}")
 async def patch_memory_fact(
     fact_id: str,
@@ -560,6 +573,8 @@ async def patch_memory_fact(
     local so every caller-validation failure returns the stable detail.code
     envelope instead of FastAPI's raw validation array.
     """
+    _require_v11_memory_write()
+
     from app.services.memory_v11.contracts import MemoryValidationError
     from app.services.memory_v11.facts import user_edit_fact
 
@@ -635,6 +650,8 @@ async def delete_memory_fact(
     expected_version is read as a raw string so malformed values map to the
     stable detail.code envelope instead of FastAPI's validation array.
     """
+    _require_v11_memory_write()
+
     from app.services.memory_v11.contracts import MemoryValidationError
     from app.services.memory_v11.facts import delete_fact
 
@@ -720,6 +737,8 @@ async def patch_memory_fact_presentation(
     identity_mode: str | None = Query(None),
 ):
     """v11 presentation (plan §7.3/§8.2): is_pinned + topic_id only, local."""
+    _require_v11_memory_write()
+
     from app.services.memory_v11.contracts import MemoryValidationError
     from app.services.memory_v11.facts import _UNSET, update_fact_presentation
 
@@ -856,6 +875,8 @@ async def patch_memory_topic(
     identity_mode: str | None = Query(None),
 ):
     """v11 topic rename (plan §8.3): display_label only, no merges, local."""
+    _require_v11_memory_write()
+
     from app.services.memory_v11.contracts import MemoryValidationError
     from app.services.memory_v11.topics import rename_topic
 
@@ -990,6 +1011,8 @@ async def patch_memory_experience_presentation(
     frozen to a single boolean so this seam can never grow into an edit
     surface without a new contract.
     """
+    _require_v11_memory_write()
+
     from app.services.memory_v11.contracts import MemoryValidationError
     from app.services.memory_v11.experiences import update_experience_presentation
 
@@ -1044,6 +1067,8 @@ async def delete_memory_experience(
     identity_mode: str | None = Query(None),
 ):
     """v11 experience delete (plan §8.3): real erasure, idempotent repeat."""
+    _require_v11_memory_write()
+
     from app.services.memory_v11.contracts import MemoryValidationError
     from app.services.memory_v11.experiences import delete_experience
 
@@ -1108,6 +1133,8 @@ async def ignore_memory_observation(
     identity_mode: str | None = Query(None),
 ):
     """v11 observation ignore (plan §8.3): candidate → ignored, not promote."""
+    _require_v11_memory_write()
+
     from app.services.memory_v11.contracts import MemoryValidationError
     from app.services.memory_v11.observations import ignore_observation
 

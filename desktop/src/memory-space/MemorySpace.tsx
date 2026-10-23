@@ -6,7 +6,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 
 import { ArchiveView } from './ArchiveView';
 import { LegacyFactsView } from './LegacyFactsView';
-import { parseMemoryStatusBody } from './archiveApi';
+import { fetchMemoryStatus } from './archiveApi';
 import { createArchiveModule, type ArchiveModule } from './archiveState';
 import { MemoryResultOutline } from './MemoryResultOutline';
 import { deriveOverviewPresentation, outlineIds } from './overviewPresentation';
@@ -169,7 +169,8 @@ export function MemorySpace({
   const [projection, setProjection] = useState<ReturnType<typeof classifyOverviewState>['envelope']>(null);
   const [previousTruth, setPreviousTruth] = useState<typeof projection>(null);
   const [jobs, setJobs] = useState<JobSummary | null>(null);
-  const legacyFacts = Boolean(jobs?.runtime_mode && jobs.runtime_mode !== 'v11');
+  const [runtimeRead, setRuntimeRead] = useState<{ scopeKey: string; status: 'loading' | 'ready' | 'failed' } | null>(null);
+  const [runtimeRetry, setRuntimeRetry] = useState(0);
   const [topics, setTopics] = useState<TopicOption[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [soulOpen, setSoulOpen] = useState(false);
@@ -323,33 +324,6 @@ export function MemorySpace({
       setLoading(false);
       setScopeSwitching(false);
     });
-    void fetch(apiUrl(`/api/memory/status?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}&identity_mode=${encodeURIComponent(identityMode)}`))
-      .then(async (response) => (response.ok ? (response.json() as Promise<unknown>) : null))
-      .then((body) => {
-        if (cancelled || !body) return;
-        // Fail-closed (hard invariant 1): the SAME strict shared validator
-        // used by Archive checks the scope echo AND the payload shape
-        // (failed_jobs array, count fields, exact failed-job row contract).
-        // A rejected summary is discarded, never defaulted to zeros.
-        const parsed = parseMemoryStatusBody(body, {
-          sessionId,
-          worldline,
-          identityMode,
-        });
-        if (!parsed) return;
-        setJobs({
-          runtime_mode: parsed.runtimeMode,
-          session_id: sessionId,
-          worldline,
-          identity_mode: identityMode,
-          pending_count: parsed.pendingCount,
-          processing_count: parsed.processingCount,
-          failed_count: parsed.failedCount,
-        });
-      })
-      .catch(() => {
-        /* operational summary is optional */
-      });
     return () => {
       cancelled = true;
     };
@@ -410,6 +384,32 @@ export function MemorySpace({
     [selected, liveProjection],
   );
   const scopeKey = `${browseSessionId}|${worldline}|${identityMode}`;
+  const runtimeState = runtimeRead?.scopeKey === scopeKey ? runtimeRead.status : 'loading';
+  const legacyFacts = runtimeState !== 'ready' || jobs?.runtime_mode !== 'v11';
+  useEffect(() => {
+    const controller = new AbortController();
+    setJobs(null);
+    setRuntimeRead({ scopeKey, status: 'loading' });
+    void fetchMemoryStatus(scope, { signal: controller.signal }).then((result) => {
+      if (controller.signal.aborted) return;
+      if (result.type !== 'ok' || !result.payload.runtimeMode) {
+        setRuntimeRead({ scopeKey, status: 'failed' });
+        return;
+      }
+      const parsed = result.payload;
+      setJobs({
+        runtime_mode: parsed.runtimeMode,
+        session_id: scope.sessionId,
+        worldline: scope.worldline,
+        identity_mode: scope.identityMode,
+        pending_count: parsed.pendingCount,
+        processing_count: parsed.processingCount,
+        failed_count: parsed.failedCount,
+      });
+      setRuntimeRead({ scopeKey, status: 'ready' });
+    });
+    return () => controller.abort();
+  }, [scope, scopeKey, runtimeRetry]);
   useEffect(() => { setSoulOpen(false); }, [scopeKey, mode]);
 
   // S4-ARCHIVE Gate 2: opening Archive happens once per (mode, scope) pair;
@@ -1135,7 +1135,7 @@ export function MemorySpace({
       </header>
 
       {mode === 'constellation' && jobs?.runtime_mode && jobs.runtime_mode !== 'v11' ? (
-        <p className="memory-runtime-notice memory-runtime-notice-overview" role="status">当前对话尚未使用本页的记忆。星图与档案暂供查看。</p>
+        <p className="memory-runtime-notice memory-runtime-notice-overview" role="status">当前对话尚未使用本页的记忆。星图暂供查看。</p>
       ) : null}
 
       {mode === 'constellation' ? (
@@ -1265,6 +1265,7 @@ export function MemorySpace({
       </div>
 
       {legacyFacts ? <LegacyFactsView key={scopeKey} scope={scope} archive={mode === 'archive'}
+        runtimeState={runtimeState} onRetryRuntime={() => setRuntimeRetry((value) => value + 1)}
         visible={mode === 'archive' || showList} searchRef={searchRef}
         onCloseFind={() => { setListOpen(false); findToggleRef.current?.focus(); }}
         onIdentity={setIdentityMode} onWorldline={setWorldline} /> : null}

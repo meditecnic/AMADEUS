@@ -81,7 +81,7 @@ describe('P1-A fast drag stress', () => {
     renderCount = 0;
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
-      if (url.includes('/api/memory/status')) return okJson({ pending_count: 0, processing_count: 0, failed_count: 0 });
+      if (url.includes('/api/memory/status')) return okJson({ ...projection.scope, runtime_mode: 'v11', pending_count: 0, processing_count: 0, failed_count: 0, failed_jobs: [] });
       return okJson(projection);
     }));
     const errors: unknown[] = [];
