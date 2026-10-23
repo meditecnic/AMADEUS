@@ -52,6 +52,37 @@ _CLEARED_PATH_ENV_KEYS = (
     "TRANSFORMERS_CACHE",
     "SENTENCE_TRANSFORMERS_HOME",
 )
+# Secrets and real-network switches read by backend/app and backend/scripts.
+# An inherited value would hand tests a real key or let them reach a real
+# service, so they are cleared exactly like the path variables above (session
+# start and before every test). A test may still set its own fake value with
+# monkeypatch; that takes effect normally.
+_CLEARED_SECRET_ENV_KEYS = (
+    "DEEPSEEK_API_KEY",  # app/config.py
+    "TAVILY_API_KEY",  # app/services/search.py env fallback
+    "FIRECRAWL_API_KEY",  # app/services/search.py env fallback
+    "AMADEUS_B3_PROVIDER_KEY",  # scripts/memory_candidate_real_run.py
+    "AMADEUS_B3_REAL_HTTP",  # scripts/memory_candidate_real_run.py (real HTTP switch)
+    "AMADEUS_B3_BASE_URL",  # scripts/memory_candidate_real_run.py
+    "SOVITS_URL",  # app/config.py TTS endpoint (default: 127.0.0.1)
+    "HF_TOKEN",  # Hugging Face libraries
+    "HUGGING_FACE_HUB_TOKEN",
+    # app/services/provider_runtime.py reads these two while it is imported
+    # and registers the shared "custom" provider with them. An inherited base
+    # URL would end up in the provider registry (and an invalid one makes
+    # normalize_custom_base_url fail at collection).
+    "AMADEUS_CUSTOM_PROVIDER_BASE_URL",
+    # Not a secret: cleared only so the registry's default model is the code
+    # default ("local-model") on every machine.
+    "AMADEUS_CUSTOM_PROVIDER_MODEL",
+    # app/security/local_transport.py security switches.
+    "AMADEUS_ALLOW_REMOTE_SOVITS",  # allows a non-loopback TTS address
+    "AMADEUS_ALLOW_MISSING_WS_ORIGIN",  # accepts WebSockets without Origin
+)
+_CLEARED_ENV_KEYS = (*_CLEARED_PATH_ENV_KEYS, *_CLEARED_SECRET_ENV_KEYS)
+# Opt-in for tests marked real_credential_store: set to 1 to let them construct
+# the real Windows Credential Manager store. Unset by default.
+_REAL_CREDENTIAL_STORE_OPT_IN = os.environ.get("AMADEUS_TEST_REAL_CREDENTIAL_STORE", "").strip() == "1"
 # Opt-in for tests marked real_embedding: a local, already-populated Hugging
 # Face cache directory to read the model from (offline). Unset by default.
 _REAL_EMBEDDING_HF_HOME = os.environ.get("AMADEUS_TEST_HF_HOME", "").strip()
@@ -78,12 +109,21 @@ _FIXED_ENV = {
     # Never download models during tests.
     "HF_HUB_OFFLINE": "1",
     "TRANSFORMERS_OFFLINE": "1",
+    # app/services/credentials.py picks its process-wide store when it is
+    # imported; "memory" keeps it (and child processes) away from the
+    # Windows Credential Manager. Must be set before any app import.
+    "AMADEUS_CREDENTIAL_BACKEND": "memory",
+    # Python child processes started by tests (CLI scripts, nested pytest)
+    # write stdout/stderr as UTF-8 instead of the locale code page (cp1252
+    # on English Windows cannot encode the Japanese the scripts print). The
+    # parent side reads them with an explicit encoding="utf-8".
+    "PYTHONIOENCODING": "utf-8",
 }
 _ORIGINAL_ENV = {
     key: os.environ.get(key)
-    for key in (*_SESSION_ENV, *_FIXED_ENV, *_CLEARED_PATH_ENV_KEYS)
+    for key in (*_SESSION_ENV, *_FIXED_ENV, *_CLEARED_ENV_KEYS)
 }
-for _key in _CLEARED_PATH_ENV_KEYS:
+for _key in _CLEARED_ENV_KEYS:
     os.environ.pop(_key, None)
 for _key in ("AMADEUS_DATA_DIR", "HOME", "APPDATA", "LOCALAPPDATA"):
     Path(_SESSION_ENV[_key]).mkdir(parents=True, exist_ok=True)
@@ -96,6 +136,11 @@ def pytest_configure(config):
         "markers",
         "real_embedding: needs the real SentenceTransformer embedding model; "
         "skipped unless AMADEUS_TEST_HF_HOME points at a local HF cache that has it",
+    )
+    config.addinivalue_line(
+        "markers",
+        "real_credential_store: may construct the real Windows Credential Manager store; "
+        "skipped unless AMADEUS_TEST_REAL_CREDENTIAL_STORE=1",
     )
 
 
@@ -122,7 +167,7 @@ def isolated_user_dirs(tmp_path_factory):
     home_dir = tmp_path_factory.mktemp("home")
     mp = pytest.MonkeyPatch()
     try:
-        for key in _CLEARED_PATH_ENV_KEYS:
+        for key in _CLEARED_ENV_KEYS:
             mp.delenv(key, raising=False)
         for key, value in {**_isolated_env(data_dir, home_dir), **_FIXED_ENV}.items():
             mp.setenv(key, value)
@@ -131,9 +176,76 @@ def isolated_user_dirs(tmp_path_factory):
         mp.undo()
 
 
+# ---------------------------------------------------------------------------
+# Offline TTS sidecar.
+#
+# app.main's lifespan calls sidecar_supervisor.ensure_available() and
+# /health/dependencies calls sidecar_supervisor.health(), which probes it
+# again while the state is not "ready". The real methods GET
+# http://127.0.0.1:9880/openapi.json (then /) -- a port fixed in
+# app/services/tts_sidecar.py, independent of SOVITS_URL -- so a test that
+# starts the whole app would reach a GPT-SoVITS server running on the same
+# machine. By default the shared sidecar_supervisor instance is given
+# stand-ins that return exactly what the real code returns when nothing
+# listens on 9880 and SOVITS_SIDECAR_COMMAND is unset. A test that needs
+# other behaviour still patches these methods itself. SidecarSupervisor()
+# instances built by a test (tests/test_tts_sidecar.py) are not affected.
+# ---------------------------------------------------------------------------
+_OFFLINE_SIDECAR_ERROR = "no compatible GPT-SoVITS endpoint on ports 9880-9890"
+
+
+@pytest.fixture(autouse=True)
+def offline_tts_sidecar(isolated_user_dirs):
+    """Replace the shared sidecar_supervisor's network-facing methods.
+
+    Instance attributes are set and removed through the instance ``__dict__``
+    (the real methods stay on the class), and the ``monkeypatch`` override
+    below depends on this fixture, so a test's own replacement is undone
+    before this one is.
+    """
+    from app.services.tts_sidecar import SidecarState, sidecar_supervisor
+
+    async def ensure_available():
+        sidecar_supervisor.state = SidecarState("degraded", None, False, _OFFLINE_SIDECAR_ERROR)
+        return sidecar_supervisor.state
+
+    async def health():
+        # Same steps as SidecarSupervisor.health(); a "ready" state is
+        # treated as stopped because nothing is listening.
+        if sidecar_supervisor.state.status == "ready" and sidecar_supervisor.state.url:
+            sidecar_supervisor.state = SidecarState("not_probed", None, False, "sidecar stopped")
+            sidecar_supervisor._weights_ready_url = None
+        if sidecar_supervisor.state.status != "ready":
+            await sidecar_supervisor.ensure_available()
+        state = sidecar_supervisor.state
+        return {"ok": state.status == "ready", "status": state.status, "url": state.url, "managed": state.managed, "error": state.error}
+
+    async def close():
+        return None
+
+    instance_dict = vars(sidecar_supervisor)
+    saved = {name: instance_dict[name] for name in ("state", "_weights_ready_url") if name in instance_dict}
+    replaced = {"ensure_available": ensure_available, "health": health, "close": close}
+    previous = {name: instance_dict[name] for name in replaced if name in instance_dict}
+    instance_dict.update(replaced)
+    try:
+        yield sidecar_supervisor
+    finally:
+        for name in replaced:
+            if name in previous:
+                instance_dict[name] = previous[name]
+            else:
+                instance_dict.pop(name, None)
+        instance_dict.update(saved)
+
+
 @pytest.fixture
-def monkeypatch(isolated_user_dirs):
-    """Built-in ``monkeypatch``, made to depend on ``isolated_user_dirs``."""
+def monkeypatch(isolated_user_dirs, offline_tts_sidecar):
+    """Built-in ``monkeypatch``, made to depend on ``isolated_user_dirs``.
+
+    It also depends on ``offline_tts_sidecar`` so that fixture's stand-ins
+    are installed before, and removed after, anything a test patches.
+    """
     mp = pytest.MonkeyPatch()
     yield mp
     mp.undo()
@@ -204,10 +316,46 @@ def offline_embedding_model(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def forbid_real_credential_store(request, isolated_user_dirs):
+    """Fail any attempt to construct WindowsCredentialStore during a test.
+
+    Covers code that builds the store directly instead of using the
+    process-wide ``credential_store`` (for example
+    scripts/memory_candidate_real_run.py reading the DeepSeek key). Tests
+    marked ``real_credential_store`` are skipped unless
+    AMADEUS_TEST_REAL_CREDENTIAL_STORE=1, and only then may construct it.
+    Uses its own MonkeyPatch so ``monkeypatch.undo()`` cannot lift it.
+    """
+    from app.services import credentials
+
+    if request.node.get_closest_marker("real_credential_store"):
+        if not _REAL_CREDENTIAL_STORE_OPT_IN:
+            pytest.skip("real_credential_store: set AMADEUS_TEST_REAL_CREDENTIAL_STORE=1 to run")
+        yield
+        return
+    assert not credentials.WINDOWS_CREDENTIAL_STORE_CONSTRUCTED, (
+        "app.services.credentials was imported with the Windows Credential Manager store"
+    )
+
+    def _refuse(self, *args, **kwargs):
+        raise RuntimeError(
+            "tests must not construct WindowsCredentialStore; "
+            "mark the test real_credential_store if it really needs it"
+        )
+
+    mp = pytest.MonkeyPatch()
+    try:
+        mp.setattr(credentials.WindowsCredentialStore, "__init__", _refuse)
+        yield
+    finally:
+        mp.undo()
+
+
+@pytest.fixture(autouse=True)
 def isolated_provider_credentials(monkeypatch):
     """Keep tests out of the user's real Windows Credential Manager."""
-    from app.routers import chat_ws, providers, voice_ws
-    from app.services import credentials
+    from app.routers import chat_ws, providers, system_api, voice_ws
+    from app.services import credentials, search
     from app.services.credentials import InMemoryCredentialStore
 
     store = InMemoryCredentialStore()
@@ -216,6 +364,8 @@ def isolated_provider_credentials(monkeypatch):
     monkeypatch.setattr(chat_ws, "credential_store", store)
     monkeypatch.setattr(voice_ws, "credential_store", store)
     monkeypatch.setattr(providers, "credential_store", store)
+    monkeypatch.setattr(system_api, "credential_store", store)
+    monkeypatch.setattr(search, "credential_store", store)
     providers.provider_model_cache.clear()
     return store
 

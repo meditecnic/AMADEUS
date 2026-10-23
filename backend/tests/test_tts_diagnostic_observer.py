@@ -28,6 +28,26 @@ class _Runtime:
         self.mapping_fallbacks += 1
 
 
+async def _settle(runtime):
+    """Wait for every scheduled append, then put events in server_seq order.
+
+    The observer hands each event to asyncio.to_thread in its own task. A
+    fixed sleep can return before those worker threads have run (events
+    missing under load), and the threads may append in any order, so the
+    arrival order in runtime.events is not defined. server_seq is the event
+    order (DiagnosticStore.read_events sorts by it), so tests compare that.
+    """
+    current = asyncio.current_task()
+    for _ in range(100):
+        pending = [task for task in asyncio.all_tasks() if task is not current and not task.done()]
+        if not pending:
+            break
+        await asyncio.wait(pending, timeout=0.1)
+    else:
+        raise AssertionError("observer append tasks did not finish")
+    runtime.events.sort(key=lambda event: event["server_seq"])
+
+
 async def _pipeline(observer, *, audio=b"wav", audio_error=None):
     emitted = []
 
@@ -69,7 +89,7 @@ async def test_enabled_observer_emits_exactly_one_terminal_event_without_awaitin
     runtime = _Runtime()
     observer = DiagnosticTurnObserver(runtime)
     await _pipeline(observer)
-    await asyncio.sleep(0.05)
+    await _settle(runtime)
     assert [event["status"] for event in runtime.events] == [
         "started",
         "succeeded",
@@ -92,7 +112,7 @@ async def test_observer_failure_does_not_change_turn_events_or_escape():
     runtime = _Runtime(fail=True)
     observer = DiagnosticTTSObserver(runtime)
     emitted = await _pipeline(observer)
-    await asyncio.sleep(0.05)
+    await _settle(runtime)
     assert [event["type"] for event in emitted] == [
         "turn.started",
         "segment.ready",
@@ -109,7 +129,7 @@ async def test_g02_exists_without_tts_terminal_and_is_joinable_by_segment():
     identity = TurnIdentity("conversation-1", "turn-1", 7)
     observer.turn_started(identity)
     observer.segment_committed(identity, Segment(4, "これはテストです。"))
-    await asyncio.sleep(0.05)
+    await _settle(runtime)
     assert [(event["stage"], event["status"]) for event in runtime.events] == [
         ("generation", "started"),
         ("generation", "succeeded"),
@@ -135,7 +155,7 @@ async def test_d01_uses_shared_turn_sequence_and_never_copies_payload_data():
         },
         "succeeded",
     )
-    await asyncio.sleep(0.05)
+    await _settle(runtime)
     assert [event["server_seq"] for event in runtime.events] == [1, 2]
     assert runtime.events[1]["stage"] == "delivery"
     assert runtime.events[1]["segment_id"] == "4"
@@ -150,7 +170,7 @@ async def test_g01_emits_one_started_and_one_terminal_with_immutable_identity():
     observer.turn_started(identity)
     observer.turn_terminal(identity, "succeeded")
     observer.turn_terminal(identity, "failed", "should_be_ignored")
-    await asyncio.sleep(0.05)
+    await _settle(runtime)
     assert [(event["status"], event["stage"]) for event in runtime.events] == [
         ("started", "generation"),
         ("succeeded", "generation"),
@@ -164,5 +184,5 @@ async def test_g01_preserves_hanging_started_and_does_not_synthesize_timeout():
     runtime = _Runtime()
     observer = DiagnosticTurnObserver(runtime)
     observer.turn_started(TurnIdentity("conversation-1", "turn-1", 7))
-    await asyncio.sleep(0.05)
+    await _settle(runtime)
     assert [event["status"] for event in runtime.events] == ["started"]

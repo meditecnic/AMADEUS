@@ -16,9 +16,39 @@ if not PYTHON.is_file():
     PYTHON = Path(sys.executable)
 
 sys.path.insert(0, str(BACKEND_ROOT / "scripts"))
-os.environ.setdefault("PYTHON_DOTENV_DISABLED", "1")
-os.environ.setdefault("AMADEUS_CREDENTIAL_BACKEND", "memory")
+# PYTHON_DOTENV_DISABLED and AMADEUS_CREDENTIAL_BACKEND=memory are set by
+# tests/conftest.py before any test module is imported.
 import memory_candidate_real_run as b3  # noqa: E402
+
+
+def _restore_at_teardown(monkeypatch, obj, *names: str) -> None:
+    """Have ``monkeypatch`` put ``obj.<name>`` back at teardown.
+
+    Script helpers called by these tests (install_allowlisted_httpx,
+    memory_candidate_runtime._install_external_fakes) replace shared module,
+    class and instance attributes and never undo it. Registering the current
+    values first makes this test's monkeypatch restore them, whoever replaces
+    them later. Instance attributes are tracked through the instance
+    ``__dict__``, so an override of a class-provided method is removed again
+    rather than pinned on the instance.
+    """
+    import types
+
+    for name in names:
+        if isinstance(obj, (type, types.ModuleType)):
+            monkeypatch.setattr(obj, name, getattr(obj, name))
+        else:
+            monkeypatch.setitem(vars(obj), name, getattr(obj, name))
+
+
+def _restore_httpx_at_teardown(monkeypatch) -> None:
+    import httpx
+
+    _restore_at_teardown(monkeypatch, httpx, "get", "request")
+    _restore_at_teardown(monkeypatch, httpx.AsyncClient, "send", "post", "stream")
+    _restore_at_teardown(monkeypatch, httpx.Client, "send")
+    _restore_at_teardown(monkeypatch, httpx.HTTPTransport, "handle_request")
+    _restore_at_teardown(monkeypatch, httpx.AsyncHTTPTransport, "handle_async_request")
 
 
 def _cli(*argv: str, check: bool = True, timeout: int = 60) -> subprocess.CompletedProcess:
@@ -268,7 +298,7 @@ def test_concurrent_http_budget_does_not_overshoot():
     assert len(budget.rejected) == 30
 
 
-def test_complete_json_extract_reaches_local_mock(tmp_path):
+def test_complete_json_extract_reaches_local_mock(tmp_path, monkeypatch):
     import asyncio
 
     import httpx
@@ -282,21 +312,16 @@ def test_complete_json_extract_reaches_local_mock(tmp_path):
         inject="fail_first_extract",
         capture_log=capture / "mock_http.jsonl",
     )
-    original_async = httpx.AsyncClient.send
-    original_sync = httpx.Client.send
-    original_post = httpx.AsyncClient.post
-    original_stream = httpx.AsyncClient.stream
-    original_get = httpx.get
-    original_request = httpx.request
+    _restore_httpx_at_teardown(monkeypatch)
     try:
         b3.install_allowlisted_httpx(
             budget=budget,
             allowed_hosts=b3.allowed_hosts_for(base_url),
             capture_dir=capture,
-            original_async_send=original_async,
-            original_sync_send=original_sync,
+            original_async_send=httpx.AsyncClient.send,
+            original_sync_send=httpx.Client.send,
         )
-        deepseek_service.base_url = base_url
+        monkeypatch.setattr(deepseek_service, "base_url", base_url)
         messages = [
             {"role": "system", "content": "You extract durable user memory from one user utterance.\n" * 20},
             {
@@ -333,12 +358,6 @@ def test_complete_json_extract_reaches_local_mock(tmp_path):
     finally:
         server.shutdown()
         server.server_close()
-        httpx.AsyncClient.send = original_async
-        httpx.Client.send = original_sync
-        httpx.AsyncClient.post = original_post
-        httpx.AsyncClient.stream = original_stream
-        httpx.get = original_get
-        httpx.request = original_request
 
 
 def test_start_real_is_gated_without_authorization():
@@ -418,9 +437,17 @@ def test_usage_fifo_without_ids_and_errors_are_terminal():
     assert budget.snapshot()["usage_unknown"] == 1
 
 
-def test_local_transport_does_not_reach_original_ddgs_or_weather(tmp_path):
+def test_local_transport_does_not_reach_original_ddgs_or_weather(tmp_path, monkeypatch):
     import httpx
+    from app.main import in_memory_settings
+    from app.routers import chat_ws, providers, system_api, voice_ws
+    from app.services import credentials as cred_mod
+    from app.services import provider_runtime as runtime_mod
     from app.services import search as search_mod
+    from app.services.memory import memory_service
+    from app.services.search import search_service
+    from app.services.tts_queue import tts_manager
+    from app.services.tts_sidecar import sidecar_supervisor
 
     import memory_candidate_runtime as b2_runtime
 
@@ -436,40 +463,57 @@ def test_local_transport_does_not_reach_original_ddgs_or_weather(tmp_path):
         get_calls.append(str(url))
         raise RuntimeError("local sentinel: no network performed")
 
-    original_ddgs = search_mod.DDGS
-    original_get = httpx.get
-    original_request = httpx.request
-    original_async = httpx.AsyncClient.send
-    original_sync = httpx.Client.send
-    original_post = httpx.AsyncClient.post
-    original_stream = httpx.AsyncClient.stream
-    search_mod.DDGS = SentinelDDGS
-    httpx.get = sentinel_get  # type: ignore[assignment]
+    # Everything _install_external_fakes, its outbound guards and
+    # install_allowlisted_httpx replace is restored when the test ends.
+    _restore_httpx_at_teardown(monkeypatch)
+    _restore_at_teardown(monkeypatch, search_mod, "DDGS")
+    for mod_name in ("ddgs", "duckduckgo_search"):
+        mod = sys.modules.get(mod_name)
+        if mod is not None and hasattr(mod, "DDGS"):
+            _restore_at_teardown(monkeypatch, mod, "DDGS")
+    for module in (cred_mod, chat_ws, providers, system_api, voice_ws, search_mod):
+        _restore_at_teardown(monkeypatch, module, "credential_store")
+    _restore_at_teardown(monkeypatch, cred_mod.WindowsCredentialStore, "get", "set", "delete")
+    _restore_at_teardown(monkeypatch, memory_service, "embedder")
+    monkeypatch.setitem(in_memory_settings, "enable_tts", in_memory_settings["enable_tts"])
+    _restore_at_teardown(monkeypatch, sidecar_supervisor, "ensure_available")
+    _restore_at_teardown(monkeypatch, search_service, "search")
+    _restore_at_teardown(
+        monkeypatch,
+        tts_manager,
+        *[name for name in ("synthesize_async", "synthesize_and_queue") if hasattr(tts_manager, name)],
+    )
+    for adapter_name in ("openai_adapter", "gemini_adapter"):
+        adapter = getattr(runtime_mod, adapter_name, None)
+        if adapter is not None:
+            _restore_at_teardown(monkeypatch, adapter, "get_chat_stream", "complete_json", "list_models")
+    _restore_at_teardown(
+        monkeypatch,
+        runtime_mod.deepseek_service,
+        "get_chat_stream",
+        "translate_to_zh",
+        "complete_json",
+        "list_models",
+    )
+
+    monkeypatch.setattr(search_mod, "DDGS", SentinelDDGS)
+    monkeypatch.setattr(httpx, "get", sentinel_get)
     captures = tmp_path / "captures"
     captures.mkdir()
-    try:
-        b2_runtime._install_external_fakes(
-            captures,
-            provider_transport="local",
-            provider_credential="synthetic-test-key",
-        )
-        b3.install_allowlisted_httpx(
-            budget=b3.HttpBudget(max_http_attempts=2, max_user_turns=2),
-            allowed_hosts={"127.0.0.1"},
-            capture_dir=captures,
-            original_async_send=httpx.AsyncClient.send,
-            original_sync_send=httpx.Client.send,
-        )
-        search_text = search_mod.web_search("synthetic local search probe")
-        weather_text = search_mod.web_search("东京天气怎么样")
-    finally:
-        search_mod.DDGS = original_ddgs
-        httpx.get = original_get
-        httpx.request = original_request
-        httpx.AsyncClient.send = original_async
-        httpx.Client.send = original_sync
-        httpx.AsyncClient.post = original_post
-        httpx.AsyncClient.stream = original_stream
+    b2_runtime._install_external_fakes(
+        captures,
+        provider_transport="local",
+        provider_credential="synthetic-test-key",
+    )
+    b3.install_allowlisted_httpx(
+        budget=b3.HttpBudget(max_http_attempts=2, max_user_turns=2),
+        allowed_hosts={"127.0.0.1"},
+        capture_dir=captures,
+        original_async_send=httpx.AsyncClient.send,
+        original_sync_send=httpx.Client.send,
+    )
+    search_text = search_mod.web_search("synthetic local search probe")
+    weather_text = search_mod.web_search("东京天气怎么样")
     assert ddg_calls == []
     assert get_calls == []
     assert "wttr.in" not in weather_text.lower()
@@ -721,7 +765,7 @@ def test_classify_verify_real_auth_failure_is_failed():
     assert result["stop"] == "auth_failed"
 
 
-def test_completion_guard_rejects_other_model_before_budget(tmp_path):
+def test_completion_guard_rejects_other_model_before_budget(tmp_path, monkeypatch):
     import httpx
 
     capture = tmp_path / "captures"
@@ -733,19 +777,14 @@ def test_completion_guard_rejects_other_model_before_budget(tmp_path):
         currency_cap_micros=b3.CURRENCY_CAP_MICROS,
     )
     server, base_url = b3.start_local_provider(capture_log=capture / "mock_http.jsonl")
-    original_async = httpx.AsyncClient.send
-    original_sync = httpx.Client.send
-    original_post = httpx.AsyncClient.post
-    original_stream = httpx.AsyncClient.stream
-    original_get = httpx.get
-    original_request = httpx.request
+    _restore_httpx_at_teardown(monkeypatch)
     try:
         installed = b3.install_allowlisted_httpx(
             budget=budget,
             allowed_hosts=b3.allowed_hosts_for(base_url),
             capture_dir=capture,
-            original_async_send=original_async,
-            original_sync_send=original_sync,
+            original_async_send=httpx.AsyncClient.send,
+            original_sync_send=httpx.Client.send,
         )
         before_attempts = budget.http_attempts
         before_reserved = budget.reserved_micros
@@ -795,12 +834,6 @@ def test_completion_guard_rejects_other_model_before_budget(tmp_path):
     finally:
         server.shutdown()
         server.server_close()
-        httpx.AsyncClient.send = original_async
-        httpx.Client.send = original_sync
-        httpx.AsyncClient.post = original_post
-        httpx.AsyncClient.stream = original_stream
-        httpx.get = original_get
-        httpx.request = original_request
 
 
 def _outbound_rows(capture: Path) -> list[dict]:
