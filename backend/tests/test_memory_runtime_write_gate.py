@@ -41,6 +41,8 @@ def _database_snapshot(root):
 def test_v11_write_gate_precedes_scope_body_and_database(
     isolated_client, monkeypatch, tmp_path, runtime_mode, method, path, body,
 ):
+    from app.services.memory_v11 import experiences, facts, observations, topics
+
     owner = "write-gate"
     ids = {
         "fact": _seed_fact(session_id=owner, display_text="original"),
@@ -58,9 +60,20 @@ def test_v11_write_gate_precedes_scope_body_and_database(
         assert _database_snapshot(tmp_path) != before
         return
 
-    blocked_db = AsyncMock(side_effect=AssertionError("read-only request accessed the database"))
+    # Import before patching: lazy route imports must never bind a fake get_db
+    # permanently into a service module, even when a gate assertion fails.
+    blocked = []
     with monkeypatch.context() as guard:
-        guard.setattr("app.db.get_db", blocked_db)
+        for module, names in (
+            (facts, ("user_edit_fact", "delete_fact", "update_fact_presentation")),
+            (topics, ("rename_topic",)),
+            (experiences, ("update_experience_presentation", "delete_experience")),
+            (observations, ("ignore_observation",)),
+        ):
+            for name in (*names, "get_db"):
+                stub = AsyncMock(side_effect=AssertionError(f"read-only request called {module.__name__}.{name}"))
+                guard.setattr(module, name, stub)
+                blocked.append(stub)
         # Valid operations and malformed/missing scope/body both hit the mode gate first.
         responses = [
             isolated_client.request(method, url, params=params, json=body),
@@ -72,7 +85,9 @@ def test_v11_write_gate_precedes_scope_body_and_database(
             "code": "v11_memory_read_only",
             "message": "v11 memory is read-only outside v11 mode",
         }
-    blocked_db.assert_not_awaited()
+    for stub in blocked:
+        stub.assert_not_called()
+        stub.assert_not_awaited()
     assert _database_snapshot(tmp_path) == before
 
 
@@ -168,3 +183,39 @@ def test_missing_legacy_fact_still_returns_404(isolated_client, monkeypatch, run
     response = isolated_client.post(f"/api/memory/{path}", params={"session_id": "missing", "worldline": "beta"})
     assert response.status_code == 404
     assert response.json()["detail"] == "fact_not_found"
+
+
+@pytest.mark.parametrize("runtime_mode", ["legacy", "shadow"])
+@pytest.mark.parametrize("worldline", ["steins_gate", "beta"])
+@pytest.mark.parametrize("source", ["local", "shared", "okabe"])
+def test_legacy_delete_clears_session_summary_and_compiled_prompt(
+    isolated_client, monkeypatch, runtime_mode, worldline, source,
+):
+    from app.routers.chat_ws import SessionState, sessions
+    from app.services.prompt_compiler import compile_for_session
+
+    monkeypatch.setenv("AMADEUS_MEMORY_MODE", runtime_mode)
+    owner, identity, conversations, fact_id = asyncio.run(_seed_legacy(source, worldline))
+    session = SessionState(owner)
+    session.worldline = worldline
+    session.identity_mode = identity
+    session.conversation_id = conversations[worldline]
+    session.base_system_prompt = "You are Amadeus Kurisu."
+    target = "shared fallback" if source == "shared" else f"local {worldline}"
+    session.memory_summary = f"stale summary: {target}"
+    monkeypatch.setitem(sessions, owner, session)
+    before = asyncio.run(compile_for_session(session, "favorite_drink"))
+    assert target in before
+    assert "stale summary" in before
+    if source == "local":
+        assert "shared fallback" not in before
+
+    path = f"shared-facts/{fact_id}/delete" if source == "shared" else f"facts/{fact_id}/{'dismiss' if source == 'okabe' else 'delete-local'}"
+    response = isolated_client.post(f"/api/memory/{path}", params={"session_id": owner, "worldline": worldline})
+    assert response.status_code == 200, response.text
+    assert session.memory_summary == ""
+    after = asyncio.run(compile_for_session(session, "favorite_drink"))
+    assert target not in after
+    assert "stale summary" not in after
+    if source == "local":
+        assert "shared fallback" in after

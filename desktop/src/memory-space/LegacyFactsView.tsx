@@ -31,6 +31,14 @@ export function LegacyFactsView({ scope, archive, visible, searchRef, onCloseFin
   const busyRef = useRef(false);
   const deleteController = useRef<AbortController | null>(null);
   const refreshNotice = useRef('');
+  const refreshNeeded = useRef<string | null>(null);
+  const deleteTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshList = () => {
+    refreshNeeded.current = null;
+    setFacts([]);
+    setStatus('loading');
+    setRetry((value) => value + 1);
+  };
   useEffect(() => {
     setPending(null);
     setDeleteError(null);
@@ -38,7 +46,18 @@ export function LegacyFactsView({ scope, archive, visible, searchRef, onCloseFin
     refreshNotice.current = '';
     busyRef.current = false;
     setDeleting(false);
-    return () => deleteController.current?.abort();
+    if (refreshNeeded.current === scopeKey && visible && runtimeState === 'ready') refreshList();
+    else if (refreshNeeded.current !== scopeKey) refreshNeeded.current = null;
+    return () => {
+      if (deleteController.current) {
+        // Aborting the response cannot undo a delete already committed by the server.
+        refreshNeeded.current = scopeKey;
+        deleteController.current.abort();
+        deleteController.current = null;
+      }
+      if (deleteTimeout.current !== null) clearTimeout(deleteTimeout.current);
+      deleteTimeout.current = null;
+    };
   }, [scopeKey, visible, runtimeState]);
   useEffect(() => {
     const controller = new AbortController();
@@ -54,7 +73,10 @@ export function LegacyFactsView({ scope, archive, visible, searchRef, onCloseFin
           setAnnouncement(refreshNotice.current);
           refreshNotice.current = '';
         }
-      } else setStatus('failed');
+      } else {
+        refreshNotice.current = '';
+        setStatus('failed');
+      }
     });
     return () => controller.abort();
   }, [scope, retry, runtimeState]);
@@ -66,17 +88,28 @@ export function LegacyFactsView({ scope, archive, visible, searchRef, onCloseFin
     setDeleteError(null);
     const controller = new AbortController();
     deleteController.current = controller;
+    deleteTimeout.current = setTimeout(() => {
+      if (deleteController.current !== controller) return;
+      controller.abort();
+      deleteController.current = null;
+      deleteTimeout.current = null;
+      refreshNeeded.current = pending.scopeKey;
+      busyRef.current = false;
+      setDeleting(false);
+      setDeleteError('删除失败，请稍后重试。');
+    }, 15_000);
     const result = await deleteLegacyFact(pending.scope, pending.fact, { signal: controller.signal });
-    if (controller.signal.aborted || pending.scopeKey !== currentScope.current) return;
+    if (controller.signal.aborted || deleteController.current !== controller || pending.scopeKey !== currentScope.current) return;
+    if (deleteTimeout.current !== null) clearTimeout(deleteTimeout.current);
+    deleteTimeout.current = null;
+    deleteController.current = null;
     busyRef.current = false;
     setDeleting(false);
     if (result.type === 'ok' || result.type === 'not-found') {
       setPending(null);
-      setFacts([]);
-      setStatus('loading');
       if (result.type === 'not-found') refreshNotice.current = '这条记忆已经不在了，列表已刷新。';
       else setAnnouncement('已删除。');
-      setRetry((value) => value + 1);
+      refreshList();
     } else setDeleteError('删除失败，请稍后重试。');
   };
 
@@ -135,7 +168,11 @@ export function LegacyFactsView({ scope, archive, visible, searchRef, onCloseFin
     </section>
     {visiblePending ? <ConfirmDialog title="删除这条记忆？" confirmLabel="删除" danger busy={deleting}
       error={deleteError} returnFocus={() => [searchRef.current]}
-      onConfirm={() => { void confirmDelete(); }} onCancel={() => { setPending(null); setDeleteError(null); }}>
+      onConfirm={() => { void confirmDelete(); }} onCancel={() => {
+        setPending(null);
+        setDeleteError(null);
+        if (refreshNeeded.current === scopeKey) refreshList();
+      }}>
       <p>{visiblePending.fact.text}</p>
       <p>{visiblePending.fact.source === 'shared' ? '这条由 SG 与 β 共用。删除后，两条世界线的 USER 对话都不再使用。'
         : `删除后，她在 ${visiblePending.fact.source === 'okabe' ? 'OKABE' : 'USER'} · ${worldlineLabel} 的对话里不再使用这条。`}</p>

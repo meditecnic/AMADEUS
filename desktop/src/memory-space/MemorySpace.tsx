@@ -410,6 +410,27 @@ export function MemorySpace({
     });
     return () => controller.abort();
   }, [scope, scopeKey, runtimeRetry]);
+  // Projection/filter changes refresh counts without changing the resolved runtime
+  // or unmounting Archive (including any unsaved editor state).
+  useEffect(() => {
+    if (runtimeRead?.scopeKey !== scopeKey || runtimeRead.status !== 'ready' || !jobs) return;
+    const controller = new AbortController();
+    const runtimeMode = jobs.runtime_mode;
+    void fetchMemoryStatus(scope, { signal: controller.signal }).then((result) => {
+      if (controller.signal.aborted || result.type !== 'ok' || result.payload.runtimeMode !== runtimeMode) return;
+      const parsed = result.payload;
+      setJobs((current) => current?.session_id === scope.sessionId
+        && current.worldline === scope.worldline && current.identity_mode === scope.identityMode
+        && current.runtime_mode === runtimeMode ? {
+          ...current,
+          pending_count: parsed.pendingCount,
+          processing_count: parsed.processingCount,
+          failed_count: parsed.failedCount,
+        } : current);
+    });
+    return () => controller.abort();
+    // Runtime readiness is checked only when a projection/filter refresh is requested.
+  }, [criteria, projectionRefreshTick, scope, scopeKey]);
   useEffect(() => { setSoulOpen(false); }, [scopeKey, mode]);
 
   // S4-ARCHIVE Gate 2: opening Archive happens once per (mode, scope) pair;

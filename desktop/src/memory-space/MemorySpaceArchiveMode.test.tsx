@@ -796,4 +796,107 @@ describe('Memory Space runtime mode gate', () => {
     await screen.findByText('档案里的黑咖啡');
     expect(v11Reads.length).toBeGreaterThan(0);
   });
+
+  it.each(['ok', 'transport', 'http', 'malformed', 'wrong-scope', 'changed-mode', 'missing-mode', 'unknown-mode'])('soft-refreshes counts on criteria changes and preserves the v11 archive (%s)', async (outcome) => {
+    const statusBody = { ...scopeBody, runtime_mode: 'v11', pending_count: 3, processing_count: 1, failed_count: 2, failed_jobs: [] };
+    let holdNextStatus = false;
+    let release: ((response: unknown) => void) | undefined;
+    let reject: ((error: Error) => void) | undefined;
+    mockApi((url) => {
+      if (url.startsWith('/api/memory/status?')) {
+        if (holdNextStatus) {
+          holdNextStatus = false;
+          return new Promise((resolve, fail) => { release = resolve; reject = fail; });
+        }
+        return okJson(statusBody);
+      }
+      if (url.includes('graph/projection')) {
+        const query = new URL(url, 'http://localhost').searchParams.get('query');
+        return okJson({ ...projection, criteria: { ...projection.criteria, query } });
+      }
+      return archiveBody(url) ?? okJson({});
+    });
+    render(<MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={() => undefined} />);
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByTestId('select-soul'));
+    await waitFor(() => expect(screen.getByTestId('inspector-jobs')).toHaveTextContent('处理中 1 · 失败 2 · 排队 3'));
+    fireEvent.click(screen.getByRole('button', { name: '查找' }));
+    holdNextStatus = true;
+    fireEvent.change(screen.getByRole('textbox', { name: '搜索记忆' }), { target: { value: '咖啡' } });
+    expect(release).toBeTypeOf('function');
+    fireEvent.click(screen.getByTestId('memory-mode-archive'));
+    await screen.findByText('档案里的黑咖啡');
+    const archive = screen.getByTestId('archive-view');
+    fireEvent.click(screen.getByText('档案里的黑咖啡'));
+    await screen.findByTestId('archive-edit-fact');
+    fireEvent.click(screen.getByTestId('archive-edit-fact'));
+    const editor = await screen.findByTestId('archive-editor-input');
+    fireEvent.change(editor, { target: { value: '保留未保存的草稿' } });
+    const updated = { ...statusBody, pending_count: 6, processing_count: 4, failed_count: 5 };
+    await act(async () => {
+      if (outcome === 'transport') reject!(new Error('offline'));
+      else if (outcome === 'http') release!({ ok: false, status: 503, json: async () => ({}) });
+      else release!(await okJson(outcome === 'malformed' ? { ...updated, failed_jobs: undefined }
+        : outcome === 'wrong-scope' ? { ...updated, identity_mode: 'self' }
+        : outcome === 'changed-mode' ? { ...updated, runtime_mode: 'legacy' }
+        : outcome === 'missing-mode' ? { ...updated, runtime_mode: undefined }
+        : outcome === 'unknown-mode' ? { ...updated, runtime_mode: 'v1l' } : updated));
+    });
+    expect(screen.getByTestId('archive-view')).toBe(archive);
+    expect(screen.getByTestId('archive-editor-input')).toBe(editor);
+    expect(editor).toHaveValue('保留未保存的草稿');
+    expect(screen.queryByText('正在读取记忆…')).toBeNull();
+    // Discard only as an explicit user action, after checking that refresh preserved the draft.
+    fireEvent.click(screen.getByTestId('memory-mode-constellation'));
+    fireEvent.click(await screen.findByTestId('archive-discard-confirm-button'));
+    fireEvent.click(screen.getByTestId('select-soul'));
+    await waitFor(() => expect(screen.getByTestId('inspector-jobs')).toHaveTextContent(
+      outcome === 'ok' ? '处理中 4 · 失败 5 · 排队 6' : '处理中 1 · 失败 2 · 排队 3'));
+  });
+
+  it('soft-refreshes counts after an erasure tick without unmounting the v11 archive', async () => {
+    const deleted = { value: false };
+    const held: Array<(response: unknown) => void> = [];
+    const statusBody = { ...scopeBody, runtime_mode: 'v11', pending_count: 3, processing_count: 1, failed_count: 2, failed_jobs: [] };
+    mockApi((url, init) => {
+      if (url.startsWith('/api/memory/facts/1?') && init?.method === 'DELETE') {
+        deleted.value = true;
+        return okJson({ fact_id: '1', deleted: true });
+      }
+      if (url.startsWith('/api/memory/status?')) {
+        return deleted.value ? new Promise((resolve) => { held.push(resolve); }) : okJson(statusBody);
+      }
+      if (url.includes('graph/projection')) return okJson(projection);
+      return archiveBody(url, deleted) ?? okJson({});
+    });
+    render(<MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={() => undefined} />);
+    await screen.findByTestId('memory-graph');
+    fireEvent.click(screen.getByTestId('select-soul'));
+    await waitFor(() => expect(screen.getByTestId('inspector-jobs')).toHaveTextContent('处理中 1 · 失败 2 · 排队 3'));
+    fireEvent.click(screen.getByTestId('memory-mode-archive'));
+    await screen.findByText('档案里的黑咖啡');
+    const archive = screen.getByTestId('archive-view');
+    let removed = false;
+    const observer = new MutationObserver((records) => {
+      if (records.some((record) => Array.from(record.removedNodes).some((node) => node === archive || node.contains(archive)))) removed = true;
+    });
+    observer.observe(archive.parentElement!, { childList: true, subtree: true });
+    try {
+      fireEvent.click(screen.getByText('档案里的黑咖啡'));
+      fireEvent.click(await screen.findByTestId('archive-delete-record'));
+      fireEvent.click(screen.getByTestId('archive-delete-confirm-button'));
+      await waitFor(() => expect(screen.queryByTestId('archive-delete-confirm')).toBeNull());
+      expect(held.length).toBeGreaterThan(0);
+      expect(screen.getByTestId('archive-view')).toBe(archive);
+      expect(screen.queryByText('正在读取记忆…')).toBeNull();
+      await act(async () => {
+        for (const resolve of held) resolve(await okJson({ ...statusBody, pending_count: 6, processing_count: 4, failed_count: 5 }));
+      });
+      expect(screen.getByTestId('archive-view')).toBe(archive);
+      expect(removed).toBe(false);
+    } finally { observer.disconnect(); }
+    fireEvent.click(screen.getByTestId('memory-mode-constellation'));
+    fireEvent.click(screen.getByTestId('select-soul'));
+    await waitFor(() => expect(screen.getByTestId('inspector-jobs')).toHaveTextContent('处理中 4 · 失败 5 · 排队 6'));
+  });
 });

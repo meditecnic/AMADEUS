@@ -30,7 +30,7 @@ async function openDelete(text = row.fact_value) {
   return screen.getByRole('alertdialog', { name: '删除这条记忆？' });
 }
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('legacy memory deletion', () => {
   it.each([
@@ -199,5 +199,103 @@ describe('legacy memory deletion', () => {
     fireEvent.click(screen.getByRole('button', { name: '重试' }));
     await screen.findByRole('button', { name: `删除：${row.fact_value}` });
     expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([true, false])('refreshes after hiding an in-flight delete and ignores its late response (archive=%s)', async (archive) => {
+    let deleted = false;
+    let release!: (response: Response) => void;
+    const fetcher = mockLedger(() => ({ ...emptyLedger(), local: deleted ? [] : [row] }),
+      () => new Promise<Response>((resolve) => { release = resolve; }));
+    const viewProps = { ...props(), archive };
+    const view = render(<LegacyFactsView {...viewProps} />);
+    fireEvent.click(within(await openDelete()).getByRole('button', { name: '删除', exact: true }));
+    const signal = fetcher.mock.calls.find(([, init]) => init?.method === 'POST')![1]!.signal!;
+    view.rerender(<LegacyFactsView {...viewProps} visible={false} />);
+    expect(signal.aborted).toBe(true);
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    deleted = true;
+    await act(async () => { release(json(200, { deleted: true })); });
+    view.rerender(<LegacyFactsView {...viewProps} />);
+    expect(screen.getByText('正在读取记忆…')).toBeInTheDocument();
+    await screen.findByText('这里还没有对话中正在使用的记忆。');
+    expect(screen.queryByText(row.fact_value)).toBeNull();
+    expect(screen.queryByText('已删除。')).toBeNull();
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method !== 'POST')).toHaveLength(2);
+  });
+
+  it('discards the 404 refresh notice if that refresh fails', async () => {
+    let reads = 0;
+    vi.stubGlobal('fetch', vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') return Promise.resolve(json(404, {}));
+      reads += 1;
+      return Promise.resolve(reads === 2 ? json(503, {})
+        : json(200, { ...emptyLedger(), local: reads === 1 ? [row] : [] }));
+    }));
+    render(<LegacyFactsView {...props()} />);
+    fireEvent.click(within(await openDelete()).getByRole('button', { name: '删除', exact: true }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('记忆暂时无法读取。');
+    expect(screen.queryByText('这条记忆已经不在了，列表已刷新。')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '重试' }));
+    await screen.findByText('这里还没有对话中正在使用的记忆。');
+    expect(screen.queryByText('这条记忆已经不在了，列表已刷新。')).toBeNull();
+    expect(reads).toBe(3);
+  });
+
+  it.each(['cancel', 'escape', 'scrim', 'success', '404'])('times out a hung delete and refreshes when closed by %s', async (action) => {
+    let deleted = false;
+    let attempts = 0;
+    let release!: (response: Response) => void;
+    const fetcher = mockLedger(() => ({ ...emptyLedger(), local: deleted ? [] : [row] }), async () => {
+      attempts += 1;
+      if (attempts === 1) return new Promise<Response>((resolve) => { release = resolve; });
+      return json(action === '404' ? 404 : 200, { deleted: true });
+    });
+    render(<LegacyFactsView {...props()} />);
+    const dialog = await openDelete();
+    vi.useFakeTimers();
+    fireEvent.click(within(dialog).getByRole('button', { name: '删除', exact: true }));
+    const signal = fetcher.mock.calls.find(([, init]) => init?.method === 'POST')![1]!.signal!;
+    await act(async () => { await vi.advanceTimersByTimeAsync(14_999); });
+    expect(within(dialog).getByRole('button', { name: '处理中…' })).toBeDisabled();
+    expect(signal.aborted).toBe(false);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(signal.aborted).toBe(true);
+    expect(within(dialog).getByRole('alert')).toHaveTextContent('删除失败，请稍后重试。');
+    expect(within(dialog).getByRole('button', { name: '取消' })).toBeEnabled();
+    expect(within(dialog).getByRole('button', { name: '删除', exact: true })).toBeEnabled();
+    // The server committed, but a late successful response must not close the timed-out dialog.
+    deleted = true;
+    await act(async () => { release(json(200, { deleted: true })); });
+    expect(screen.getByRole('alertdialog')).toBe(dialog);
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method !== 'POST')).toHaveLength(1);
+    await act(async () => {
+      if (action === 'escape') fireEvent.keyDown(window, { key: 'Escape' });
+      else if (action === 'scrim') fireEvent.mouseDown(dialog.closest('.ws2-dialog-scrim')!);
+      else fireEvent.click(within(dialog).getByRole('button', { name: action === 'cancel' ? '取消' : '删除', exact: true }));
+    });
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.getByText('这里还没有对话中正在使用的记忆。')).toBeInTheDocument();
+    expect(screen.queryByText(row.fact_value)).toBeNull();
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method !== 'POST')).toHaveLength(2);
+    expect(attempts).toBe(action === 'success' || action === '404' ? 2 : 1);
+    if (action === '404') expect(screen.getByText('这条记忆已经不在了，列表已刷新。')).toBeInTheDocument();
+  });
+
+  it.each(['hide', 'scope'])('clears the delete timeout when invalidated by %s', async (action) => {
+    let release!: (response: Response) => void;
+    const fetcher = mockLedger(() => ({ ...emptyLedger(), local: [row] }),
+      () => new Promise<Response>((resolve) => { release = resolve; }));
+    const viewProps = props();
+    const view = render(<LegacyFactsView {...viewProps} />);
+    const dialog = await openDelete();
+    vi.useFakeTimers();
+    fireEvent.click(within(dialog).getByRole('button', { name: '删除', exact: true }));
+    view.rerender(<LegacyFactsView {...viewProps} visible={action !== 'hide'}
+      scope={action === 'scope' ? { ...scope, worldline: 'beta' } : scope} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(15_000); release(json(500, {})); });
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(screen.queryByText('删除失败，请稍后重试。')).toBeNull();
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1);
   });
 });
