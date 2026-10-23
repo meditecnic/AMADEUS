@@ -1,9 +1,20 @@
 ﻿import { wsUrl } from '../apiBase';
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 
+/** Client-only selection intent. requestEpoch is never sent over the wire. */
+export interface PendingConversationTarget {
+  conversationId: string;
+  worldline: 'steins_gate' | 'beta';
+  requestEpoch: number;
+  history: Message[];
+  providerId: string;
+  model: string;
+}
+
 export interface UseAmadeusWSParams {
   sessionId?: string;
   conversationId?: string | null;
+  pendingConversation?: PendingConversationTarget | null;
   systemPrompt: string;
   temperature: number;
   worldline: 'steins_gate' | 'beta';
@@ -23,16 +34,19 @@ export interface UseAmadeusWSParams {
     conversationId?: string | null;
     worldline?: 'steins_gate' | 'beta';
     generation?: number;
-  }) => void;
+    requestEpoch?: number;
+  }) => boolean | void;
   onConversationSwitched?: (details: {
     conversationId: string;
     worldline?: 'steins_gate' | 'beta';
     generation?: number;
+    requestEpoch?: number;
   }) => void;
   onConversationSwitchError?: (details: {
     conversationId: string;
     code: string;
     message?: string;
+    requestEpoch?: number;
   }) => void;
   onWorldlineSwitched?: (details: {
     worldline: 'steins_gate' | 'beta';
@@ -105,7 +119,7 @@ export interface UseAmadeusWSReturn {
   reconnectStopReason?: ReconnectStopReason | null;
   /** Optional so existing test doubles keep compiling. */
   resetToDraft?: () => void;
-  switchConversation: (conversationId: string, history: Message[]) => boolean;
+  switchConversation: (conversationId: string, history: Message[], requestEpoch?: number) => boolean;
   switchWorldline: (worldline: 'steins_gate' | 'beta', requestId?: string) => boolean;
   wsRef: React.MutableRefObject<WebSocket | null>;
 }
@@ -168,7 +182,9 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     requestId: string;
     conversationId: string;
     history: Message[];
+    requestEpoch?: number;
   } | null>(null);
+  const confirmedConversationEpochRef = useRef<number | null>(null);
   const pendingWorldlineSwitchRef = useRef<{
     requestId: string;
     worldline: 'steins_gate' | 'beta';
@@ -323,6 +339,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       paramsRef.current.onConversationSwitchError?.({
         conversationId: pendingConversationSwitchRef.current.conversationId,
         code: 'connection_closed',
+        requestEpoch: pendingConversationSwitchRef.current.requestEpoch,
       });
     }
     if (pendingWorldlineSwitchRef.current) {
@@ -354,6 +371,8 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
 
     const ws = new WebSocket(wsUrl(`/ws/chat?session_id=${sessionId}`));
     wsRef.current = ws;
+    // Bind confirmations to this socket's auth, even when the same ID is selected again.
+    let authTarget: PendingConversationTarget | null = null;
 
     ws.onopen = () => {
       if (wsRef.current !== ws) return;
@@ -361,15 +380,17 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       setStatus('READY');
 
       // Send auth frame immediately as first frame
-      const conversationId = paramsRef.current.conversationId || null;
+      authTarget = paramsRef.current.pendingConversation?.worldline === paramsRef.current.worldline
+        ? paramsRef.current.pendingConversation : null;
+      const conversationId = authTarget?.conversationId || paramsRef.current.conversationId || null;
       const authFrame = {
         type: 'auth',
         ...(conversationId
           ? { conversation_id: conversationId, conversation_mode: 'history' as const }
           : { conversation_mode: 'draft' as const }),
         sovits_url: paramsRef.current.sovitsUrl,
-        provider_id: paramsRef.current.providerId || 'deepseek',
-        model: paramsRef.current.model,
+        provider_id: authTarget?.providerId || paramsRef.current.providerId || 'deepseek',
+        model: authTarget?.model || paramsRef.current.model,
         system_prompt: paramsRef.current.systemPrompt,
         enable_tts: paramsRef.current.enableTts,
         temperature: paramsRef.current.temperature,
@@ -393,7 +414,33 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
 
         
         switch (msg.type) {
-          case 'session.ready':
+          case 'session.ready': {
+            const pending = paramsRef.current.pendingConversation;
+            if (pending && (
+              !authTarget || authTarget.requestEpoch !== pending.requestEpoch
+              || authTarget.conversationId !== pending.conversationId
+              || authTarget.worldline !== pending.worldline
+              || msg.conversation_mode !== 'history'
+              || msg.conversation_id !== pending.conversationId
+              || msg.worldline !== pending.worldline
+            )) break;
+            if (authTarget && !pending) break;
+            // The owner can reject a ready arriving between a new user action and its commit.
+            const accepted = paramsRef.current.onSessionReady?.({
+              conversationMode: msg.conversation_mode,
+              conversationId: msg.conversation_id || null,
+              worldline: msg.worldline,
+              generation: msg.generation,
+              requestEpoch: authTarget?.requestEpoch,
+            });
+            if (accepted === false) break;
+            if (pending) {
+              confirmedConversationEpochRef.current = pending.requestEpoch;
+              pendingConversationSwitchRef.current = null;
+              messagesRef.current = pending.history;
+              setMessages(pending.history);
+              setEmotion('neutral');
+            }
             rejectedAt = null;
             reconnectCountRef.current = 0;
             setRetry(null);
@@ -403,13 +450,8 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             } else if (msg.conversation_id) {
               activeConversationIdRef.current = msg.conversation_id;
             }
-            paramsRef.current.onSessionReady?.({
-              conversationMode: msg.conversation_mode,
-              conversationId: msg.conversation_id || null,
-              worldline: msg.worldline,
-              generation: msg.generation,
-            });
             break;
+          }
 
           case 'conversation.switched': {
             const pending = pendingConversationSwitchRef.current;
@@ -419,6 +461,14 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
               msg.conversation_id !== pending.conversationId
             ) break;
             pendingConversationSwitchRef.current = null;
+            if (pending.requestEpoch !== undefined) {
+              // A coordinated selection commits only after fresh auth/session.ready.
+              paramsRef.current.onConversationSwitched?.({
+                conversationId: pending.conversationId, worldline: msg.worldline,
+                generation: msg.generation, requestEpoch: pending.requestEpoch,
+              });
+              break;
+            }
             activeConversationIdRef.current = pending.conversationId;
             if (typeof msg.generation === 'number') {
               activeGenerationRef.current = msg.generation;
@@ -440,6 +490,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
               conversationId: pending.conversationId,
               code: msg.code || 'switch_failed',
               message: msg.message,
+              requestEpoch: pending.requestEpoch,
             });
             break;
           }
@@ -478,6 +529,8 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
           }
 
           case 'turn.started':
+            if (paramsRef.current.pendingConversation
+              && confirmedConversationEpochRef.current !== paramsRef.current.pendingConversation.requestEpoch) break;
             clearWatchdog();
             startWatchdog();
             if (msg.conversation_id) {
@@ -769,6 +822,20 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             break;
 
           case 'error':
+            if (authTarget && sessionStateRef.current !== 'ready') {
+              rejectedAt = Date.now();
+              sessionStateRef.current = 'rejected';
+              setSessionState('rejected');
+              setRetry(null);
+              setStatus('ERROR');
+              paramsRef.current.onConversationSwitchError?.({
+                conversationId: authTarget.conversationId,
+                requestEpoch: authTarget.requestEpoch,
+                code: msg.code || (msg.message === '请求的会话不存在或不属于当前世界线。'
+                  ? 'conversation_not_found' : 'switch_failed'),
+              });
+              break;
+            }
             if (sessionStateRef.current === 'unknown') {
               rejectedAt = Date.now();
               sessionStateRef.current = 'rejected';
@@ -819,6 +886,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
         paramsRef.current.onConversationSwitchError?.({
           conversationId: pendingConversationSwitchRef.current.conversationId,
           code: 'connection_closed',
+          requestEpoch: pendingConversationSwitchRef.current.requestEpoch,
         });
         pendingConversationSwitchRef.current = null;
       }
@@ -889,6 +957,9 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   }, [connect]);
 
   const sendChat = useCallback((content: string) => {
+    const pending = paramsRef.current.pendingConversation;
+    if ((pending && confirmedConversationEpochRef.current !== pending.requestEpoch)
+      || pendingConversationSwitchRef.current?.requestEpoch !== undefined) return;
     if (!content.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
     // Start 30s watchdog wait immediately on sending chat
@@ -998,15 +1069,17 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     setEmotion('neutral');
   }, []);
 
-  const switchConversation = useCallback((conversationId: string, history: Message[]) => {
+  const switchConversation = useCallback((conversationId: string, history: Message[], requestEpoch?: number) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       paramsRef.current.onConversationSwitchError?.({
         conversationId,
         code: 'socket_not_ready',
+        requestEpoch,
       });
       return false;
     }
     const requestId = createRequestId('conversation-switch');
+    if (requestEpoch !== undefined) setSessionReady(false);
     clearWatchdog();
     activeTurnIdRef.current = '';
     activeGenerationRef.current = -1;
@@ -1016,6 +1089,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       requestId,
       conversationId,
       history,
+      requestEpoch,
     };
     setIsThinking(false);
     setIsSynthesizing(false);

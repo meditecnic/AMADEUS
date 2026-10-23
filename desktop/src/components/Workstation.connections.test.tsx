@@ -366,7 +366,10 @@ describe('Workstation connection admission and next-turn model', () => {
     ];
     localStorage.setItem('amadeus_pc_provider', 'local');
     localStorage.setItem('amadeus_pc_model', 'l1');
-    let params: { onConversationSwitched?: (event: { conversationId: string }) => void } = {};
+    let params: {
+      pendingConversation?: { requestEpoch: number };
+      onSessionReady?: (event: { conversationId: string; conversationMode: string; worldline: string; requestEpoch: number }) => void;
+    } = {};
     hoisted.useAmadeusWS.mockImplementation((p: typeof params) => { params = p; return wsState(); });
     render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
     await waitFor(() => expect((hoisted.sidebarProps.current?.conversations as unknown[] | undefined)?.length).toBe(1));
@@ -375,7 +378,10 @@ describe('Workstation connection admission and next-turn model', () => {
     await act(async () => {
       (sidebar.onSelect as (row: unknown) => void)((sidebar.conversations as unknown[])[0]);
     });
-    await act(async () => { params.onConversationSwitched?.({ conversationId: 'conversation-one' }); });
+    await act(async () => { params.onSessionReady?.({
+      conversationId: 'conversation-one', conversationMode: 'history', worldline: 'steins_gate',
+      requestEpoch: params.pendingConversation!.requestEpoch,
+    }); });
 
     // The next draft (new conversation, other worldline, restart) starts from these two keys.
     expect(localStorage.getItem('amadeus_pc_model')).toBe('deepseek-v4-flash');
