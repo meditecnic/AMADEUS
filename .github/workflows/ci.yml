@@ -41,7 +41,10 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
       - run: npm ci
       - run: npm run build
-      - run: npm test -- --maxWorkers=2
+      - run: npm test -- --maxWorkers=2 --reporter=default --reporter=junit --outputFile.junit="$env:RUNNER_TEMP\junit-frontend.xml"
+      - name: Summarize test results
+        if: always()
+        run: python ../.github/scripts/test_summary.py --label frontend --junit "$env:RUNNER_TEMP\junit-frontend.xml"
 
   backend:
     runs-on: windows-latest
@@ -63,10 +66,15 @@ jobs:
           python --version
           chcp
           python -c "import locale, sys; print(locale.getpreferredencoding(False)); print(sys.stdout.encoding)"
+          $codePage = (chcp) -replace '.*?([0-9]+)\s*$', '$1'
+          python -c "import locale, sys; print('::notice title=backend env::Python ' + sys.version.split()[0] + ' · chcp ' + sys.argv[1] + ' · preferred encoding ' + locale.getpreferredencoding(False) + ' · stdout encoding ' + str(sys.stdout.encoding))" $codePage
       - run: python -m pytest --collect-only -q
       - name: Create pytest temporary parent directory
         run: New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP '测试 临时') -Force | Out-Null
-      - run: python -m pytest -q -rfEsx --basetemp "$env:RUNNER_TEMP\测试 临时\run"
+      - run: python -m pytest -q -rfEsx --basetemp "$env:RUNNER_TEMP\测试 临时\run" --junitxml "$env:RUNNER_TEMP\junit-backend.xml"
+      - name: Summarize test results
+        if: always()
+        run: python ../.github/scripts/test_summary.py --label backend --junit "$env:RUNNER_TEMP\junit-backend.xml"
 
   backend-py313:
     runs-on: windows-latest
@@ -89,7 +97,12 @@ jobs:
           python --version
           chcp
           python -c "import locale, sys; print(locale.getpreferredencoding(False)); print(sys.stdout.encoding)"
+          $codePage = (chcp) -replace '.*?([0-9]+)\s*$', '$1'
+          python -c "import locale, sys; print('::notice title=backend-py313 env::Python ' + sys.version.split()[0] + ' · chcp ' + sys.argv[1] + ' · preferred encoding ' + locale.getpreferredencoding(False) + ' · stdout encoding ' + str(sys.stdout.encoding))" $codePage
       - run: python -m pytest --collect-only -q
       - name: Create pytest temporary parent directory
         run: New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP '测试 临时') -Force | Out-Null
-      - run: python -m pytest -q -rfEsx --basetemp "$env:RUNNER_TEMP\测试 临时\run"
+      - run: python -m pytest -q -rfEsx --basetemp "$env:RUNNER_TEMP\测试 临时\run" --junitxml "$env:RUNNER_TEMP\junit-backend.xml"
+      - name: Summarize test results
+        if: always()
+        run: python ../.github/scripts/test_summary.py --label backend-py313 --junit "$env:RUNNER_TEMP\junit-backend.xml" --level warning
