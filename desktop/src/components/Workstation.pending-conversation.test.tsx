@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Workstation } from './Workstation';
 
@@ -90,10 +90,12 @@ let postCount: number;
 let historyCount: number;
 let patchCount: number;
 let deleteCount: number;
+let listQueryCount: number;
 let afterPost: (() => void) | null;
 const missingHistory = new Set<string>();
 
 beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] });
   localStorage.clear(); sessionStorage.clear();
   localStorage.setItem('amadeus_pc_session_id', 'issue46');
   localStorage.setItem('amadeus_pc_model', model);
@@ -102,6 +104,7 @@ beforeEach(() => {
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 });
   FakeWebSocket.instances = []; rows = [oldRow]; httpDown = false; postCount = 0; historyCount = 0; patchCount = 0; deleteCount = 0;
   FakeWebSocket.autoReady = true; FakeWebSocket.autoSwitch = true; afterPost = null; missingHistory.clear();
+  listQueryCount = 0;
   vi.stubGlobal('WebSocket', FakeWebSocket);
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => window.setTimeout(() => cb(performance.now()), 16));
   vi.stubGlobal('cancelAnimationFrame', (id: number) => window.clearTimeout(id));
@@ -120,12 +123,13 @@ beforeEach(() => {
       const id = url.split('/')[3].split('?')[0];
       deleteCount++; rows = rows.filter(r => r.id !== id); return json(null, 204);
     }
-    if (url.startsWith('/api/conversations/old?') && init?.method === 'PATCH') {
+    if (url.startsWith('/api/conversations/') && init?.method === 'PATCH') {
       patchCount++;
+      const id = url.split('/')[3].split('?')[0];
       const patch = JSON.parse(String(init.body));
-      const updated = { ...rows.find(r => r.id === 'old')!, ...patch,
+      const updated = { ...rows.find(r => r.id === id)!, ...patch,
         ...(patch.provider_id === 'local' ? { model_id: 'local-model' } : {}) };
-      rows = rows.map(r => r.id === 'old' ? updated : r);
+      rows = rows.map(r => r.id === id ? updated : r);
       return json(updated);
     }
     if (url === '/api/providers') return json([{ id: 'deepseek', display_name: 'DeepSeek',
@@ -133,10 +137,20 @@ beforeEach(() => {
       configured: true, credential_required: false, model_discovery: true, enabled: true },
       { id: 'local', display_name: 'Local', default_model: 'local-model',
         default_model_capability: { ...cap, id: 'local-model', display_name: 'local-model' },
-        catalog_version: 1, configured: true, credential_required: false, model_discovery: true, enabled: true }]);
+        catalog_version: 1, configured: true, credential_required: false, model_discovery: true, enabled: true },
+      { id: 'missing-key-provider', display_name: 'Missing Key', default_model: model,
+        default_model_capability: cap, catalog_version: 1, configured: false,
+        credential_required: true, model_discovery: true, enabled: true },
+      { id: 'removed', display_name: 'Removed', default_model: 'gone-model',
+        default_model_capability: { ...cap, id: 'gone-model', display_name: 'gone-model', callable: false, lifecycle: 'unavailable' },
+        catalog_version: 1, configured: false, credential_required: false, model_discovery: true, enabled: false }]);
     if (url.startsWith('/api/providers/local/models')) return json({ catalog: [{ ...cap, id: 'local-model', display_name: 'local-model' }] });
+    if (url.startsWith('/api/providers/removed/models')) return json({ catalog: [] });
     if (url.startsWith('/api/providers/deepseek/models')) return json({ catalog: [cap, { ...cap, id: 'deepseek-v4-pro', display_name: 'deepseek-v4-pro' }] });
-    if (url.startsWith('/api/conversations?')) return json(url.includes('worldline=beta') ? [] : rows);
+    if (url.startsWith('/api/conversations?')) {
+      listQueryCount++;
+      return json(url.includes('worldline=beta') ? [] : rows);
+    }
     if (url.includes('/messages?')) {
       historyCount++;
       await new Promise(resolve => setTimeout(resolve, 5));
@@ -155,14 +169,14 @@ async function startOld(drop = true) {
   const onWorldlineChange = vi.fn();
   const view = render(<Workstation worldline="steins_gate" onWorldlineChange={onWorldlineChange} onLogout={vi.fn()} />);
   await act(async () => { FakeWebSocket.instances[0].open(); });
-  await screen.findByText('旧对话', { selector: '.conversation-title' });
+  await flush();
+  expect(screen.getByText('旧对话', { selector: '.conversation-title' })).toBeInTheDocument();
   fireEvent.click(document.querySelector('[data-conversation-id="old"] .conversation-select')!);
+  await flush(100);
   // Works on both sides of the fix: an online ACK used to enter immediately.
-  await waitFor(() => expect(screen.queryByText('旧对话内容') || FakeWebSocket.instances.length > 1).toBeTruthy());
   if (FakeWebSocket.instances.at(-1)!.readyState === 0) await act(async () => { FakeWebSocket.instances.at(-1)!.open(); });
-  await waitFor(() => expect(active()).toBe('old'));
-  expect(await screen.findByText('旧对话内容')).toBeInTheDocument();
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+  expect(active()).toBe('old');
+  expect(screen.getByText('旧对话内容')).toBeInTheDocument();
   if (drop) {
     act(() => FakeWebSocket.instances.at(-1)!.drop());
     expect(screen.getByLabelText('输入消息')).toBeDisabled();
@@ -185,7 +199,7 @@ it('A regression: a successful offline create must become the target after recon
   expect(postCount).toBe(1);
   expect(rows.map(r => r.id)).toEqual(['new', 'old']);
   expect(document.querySelector('[data-conversation-id="new"]')).toBeInTheDocument();
-  expect(active()).toBe('old');
+  expect(active()).toBe('new');
   const socket = await recover();
   const auth = socket.sent.find(f => f.type === 'auth');
   fireEvent.change(screen.getByLabelText('输入消息'), { target: { value: '恢复后下一句' } });
@@ -199,8 +213,8 @@ it('A regression: a successful offline create must become the target after recon
 
 const latest = () => FakeWebSocket.instances.at(-1)!;
 const newButton = () => screen.getByRole('button', { name: /新建会话/ });
-const sourceStillShown = () => {
-  expect(active()).toBe('old');
+const sourceStillShown = (targetId = 'new') => {
+  expect(active()).toBe(targetId);
   expect(screen.getByText('旧对话内容')).toBeInTheDocument();
   expect(screen.getByLabelText('输入消息')).toBeDisabled();
 };
@@ -267,7 +281,7 @@ it('lets a newer history selection supersede a pending target and rejects a reti
   const retired = latest().onmessage!;
   await clickHistory('other');
   act(() => retired({ data: JSON.stringify({ type: 'session.ready', conversation_mode: 'history', conversation_id: 'new', worldline: 'steins_gate' }) }));
-  sourceStillShown();
+  sourceStillShown('other');
   act(() => latest().open());
   expect(latest().sent[0]).toMatchObject({ conversation_id: 'other' });
   await act(async () => latest().ready());
@@ -280,9 +294,9 @@ it('lets a second create replace the first pending request without creating a se
   fireEvent.click(newButton()); await flush(300); await recover();
   const retired = latest().onmessage!;
   fireEvent.click(newButton()); await flush(300);
-  sourceStillShown();
+  sourceStillShown('new-2');
   act(() => retired({ data: JSON.stringify({ type: 'session.ready', conversation_mode: 'history', conversation_id: 'new', worldline: 'steins_gate' }) }));
-  sourceStillShown();
+  sourceStillShown('new-2');
   act(() => latest().open());
   expect(latest().sent[0]).toMatchObject({ conversation_id: 'new-2' });
   await act(async () => latest().ready());
@@ -341,20 +355,22 @@ it('does not remember a history target when its HTTP history request returns 404
   expect(socket.sent[0]).toMatchObject({ conversation_id: 'old' });
 });
 
-it.each([false, true])('self mode waits for ready before its first line (socket drops after POST=%s)', async dropAfterPost => {
+it.each([false, true])('self mode waits for confirmation before its first line (socket drops after POST=%s)', async dropAfterPost => {
   localStorage.setItem('amadeus_pc_identity_mode', 'self');
   render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
   await act(async () => latest().open());
-  await waitFor(() => expect(screen.getByLabelText('输入消息')).toBeEnabled());
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
+  await flush();
+  expect(screen.getByLabelText('输入消息')).toBeEnabled();
   FakeWebSocket.autoReady = false;
   if (dropAfterPost) afterPost = () => latest().drop();
+  else FakeWebSocket.autoSwitch = false;
   fireEvent.change(screen.getByLabelText('输入消息'), { target: { value: 'self 第一行' } });
   fireEvent.submit(document.querySelector('form.ws2-composer')!);
-  await flush(300); await recover();
+  await flush(300);
+  if (dropAfterPost) await recover();
   expect(FakeWebSocket.instances.flatMap(s => s.chats)).toEqual([]);
   expect(screen.getByLabelText('输入消息')).toBeDisabled();
-  await act(async () => latest().ready());
+  await act(async () => { if (dropAfterPost) latest().ready(); else switchAck(); });
   expect(latest().chats).toEqual([{ content: 'self 第一行', conversationId: 'new' }]);
 });
 
@@ -391,4 +407,155 @@ it('a failed worldline shift after pending entry reauthenticates the full source
   expect(latest().sent[0]).toMatchObject({ conversation_id: 'old', worldline: 'steins_gate' });
   await act(async () => latest().ready());
   expect(screen.getByLabelText('输入消息')).toBeEnabled();
+});
+
+const authCount = () => FakeWebSocket.instances.flatMap(s => s.sent).filter(f => f.type === 'auth').length;
+const switchAck = (socket = latest()) => {
+  const req = socket.sent.filter(f => f.type === 'conversation.switch').at(-1)!;
+  socket.emit({ type: 'conversation.switched', request_id: req.request_id,
+    conversation_id: req.conversation_id, worldline: 'steins_gate', generation: 5 });
+};
+function sendLine(content: string) {
+  fireEvent.change(screen.getByLabelText('输入消息'), { target: { value: content } });
+  fireEvent.submit(document.querySelector('form.ws2-composer')!);
+}
+
+it.each(['conversation_switch_failed', 'conversation_not_found', 'socket_not_ready'])(
+  'REWORK M1: live switch_error %s abandons target without reconnect and can send to source', async code => {
+    rows = [newRow, oldRow]; await startOld(false); FakeWebSocket.autoSwitch = false;
+    const socket = latest(); const sockets = FakeWebSocket.instances.length; const auths = authCount();
+    await clickHistory('new');
+    const req = socket.sent.filter(f => f.type === 'conversation.switch').at(-1)!;
+    const queries = listQueryCount;
+    // The backend has already rolled back before emitting switch_error.
+    socket.conversationId = 'old';
+    act(() => socket.emit({ type: 'conversation.switch_error', request_id: req.request_id, code }));
+    await flush(100);
+    expect.soft(FakeWebSocket.instances).toHaveLength(sockets);
+    expect.soft(authCount()).toBe(auths);
+    expect.soft(active()).toBe('old');
+    expect.soft(screen.getByText('旧对话内容')).toBeInTheDocument();
+    expect.soft(screen.getByLabelText('输入消息')).toBeEnabled();
+    expect.soft(document.querySelector('.ws2-online')).toHaveTextContent('ONLINE');
+    expect.soft(document.querySelector('.ws2-presence')).not.toHaveAttribute('data-presence', 'connecting');
+    expect(screen.getByTestId('session-error-toast')).toHaveTextContent(code);
+    expect(listQueryCount).toBe(queries + (code === 'conversation_not_found' ? 1 : 0));
+    sendLine('失败后留在原对话');
+    expect.soft(socket.chats).toEqual([{ content: '失败后留在原对话', conversationId: 'old' }]);
+  },
+);
+
+it.each(['removed', 'unavailable-model', 'missing-key'])(
+  'REWORK M2a: online history with %s opens on ACK without auth and allows a new connection', async kind => {
+    const targetModel = kind === 'missing-key' ? model : 'gone-model';
+    rows = [{ ...newRow, provider_id: kind === 'removed' ? 'removed' : kind === 'missing-key' ? 'missing-key-provider' : 'deepseek', model_id: targetModel }, oldRow];
+    await startOld(false); const socket = latest(); const sockets = FakeWebSocket.instances.length; const auths = authCount();
+    await clickHistory('new');
+    expect.soft(FakeWebSocket.instances).toHaveLength(sockets);
+    expect.soft(authCount()).toBe(auths);
+    expect.soft(active()).toBe('new');
+    expect.soft(screen.queryByText('历史 new')).toBeInTheDocument();
+    expect.soft(screen.getByRole('button', { name: '模型' })).toHaveTextContent(targetModel);
+    expect.soft(screen.getByRole('button', { name: '模型供应商' })).toBeEnabled();
+    // Acknowledge the regression without turning its disabled controls into a test timeout.
+    if (screen.getByRole('button', { name: '模型供应商' }).hasAttribute('disabled')) return;
+    if (kind !== 'missing-key') {
+      if (kind === 'removed') expect(screen.getByRole('button', { name: '模型供应商' })).toHaveTextContent('已停用/不可用');
+      fireEvent.click(screen.getByRole('button', { name: '模型' }));
+      expect(screen.getByRole('option', { name: /gone-model.*不可用/ })).toHaveAttribute('aria-disabled', 'true');
+      fireEvent.keyDown(screen.getByRole('listbox', { name: '模型' }), { key: 'Escape' });
+    }
+    fireEvent.click(screen.getByRole('button', { name: '模型供应商' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Local' })); await flush(100);
+    expect(patchCount).toBe(1);
+    expect(latest()).not.toBe(socket); // Runtime PATCH still deliberately reconnects.
+    await act(async () => latest().open());
+    expect(latest().sent[0]).toMatchObject({ conversation_id: 'new', provider_id: 'local', model: 'local-model' });
+  },
+);
+
+it.each([
+  { name: 'model_unavailable', code: 'model_unavailable', message: '请求的模型当前不可用。' },
+  { name: 'missing_key_without_code', message: '缺失 deepseek API Key。' },
+  { name: 'missing_key_other_source', message: '缺失 deepseek API Key。', source: 'local' },
+  { name: 'nonmatching_not_found_text', message: '请求的会话不存在或不属于当前世界线。 ' },
+])('REWORK M2b: rejected pending auth $name restores source and preserves SYSTEM ERROR', async failure => {
+  rows = [newRow, { ...oldRow, ...(failure.source === 'local' ? { provider_id: 'local', model_id: 'local-model' } : {}) }];
+  await startOld(); FakeWebSocket.autoReady = false;
+  await clickHistory('new'); await recover();
+  const rejected = latest(); const sockets = FakeWebSocket.instances.length;
+  act(() => rejected.emit({ type: 'error', code: failure.code, message: failure.message })); await flush(100);
+  expect.soft(FakeWebSocket.instances).toHaveLength(sockets + 1);
+  if (latest() !== rejected) await act(async () => { latest().open(); latest().ready(); });
+  expect.soft(latest().sent[0]).toMatchObject({ conversation_id: 'old' });
+  expect.soft(active()).toBe('old');
+  expect(screen.getByText('旧对话内容')).toBeInTheDocument();
+  expect.soft(document.querySelector('.system-error-content')?.textContent).toBe(`SYSTEM ERROR: ${failure.message}`);
+  expect.soft(screen.getByLabelText('输入消息')).toBeEnabled();
+  sendLine('认证失败后仍在原对话');
+  expect.soft(latest().chats).toEqual([{ content: '认证失败后仍在原对话', conversationId: 'old' }]);
+});
+
+it.each(['history', 'create'])(
+  'REWORK S1: online %s keeps ONLINE and presence, commits on ACK with one auth', async action => {
+    if (action === 'history') rows = [newRow, oldRow];
+    await startOld(false); FakeWebSocket.autoSwitch = false;
+    const socket = latest(); const sockets = FakeWebSocket.instances.length;
+    const presence = document.querySelector('.ws2-presence')?.getAttribute('data-presence');
+    if (action === 'history') await clickHistory('new');
+    else { fireEvent.click(newButton()); await flush(300); }
+    expect.soft(document.querySelector('.ws2-online')).toHaveTextContent('ONLINE');
+    expect.soft(document.querySelector('.ws2-presence')).toHaveAttribute('data-presence', presence);
+    expect(screen.getByLabelText('输入消息')).toBeDisabled();
+    act(() => switchAck(socket)); await flush();
+    expect.soft(FakeWebSocket.instances).toHaveLength(sockets);
+    expect.soft(authCount()).toBe(1);
+    expect.soft(active()).toBe('new');
+    expect.soft(screen.getByLabelText('输入消息')).toBeEnabled();
+    expect.soft(document.querySelector('.ws2-online')).toHaveTextContent('ONLINE');
+    expect.soft(document.querySelector('.ws2-presence')).toHaveAttribute('data-presence', presence);
+  },
+);
+
+it('REWORK S2: pending highlight stays on target, permits replacement and returns to source on cancel', async () => {
+  rows = [newRow, { ...newRow, id: 'other', title: '另一段' }, oldRow];
+  await startOld(false); FakeWebSocket.autoSwitch = false;
+  await clickHistory('new');
+  expect.soft(active()).toBe('new');
+  expect(screen.getByText('旧对话内容')).toBeInTheDocument();
+  await clickHistory('other'); expect.soft(active()).toBe('other');
+  fireEvent.click(document.querySelector('[data-conversation-id="old"] .conversation-select')!); await flush(100);
+  if (latest().readyState === 0) await act(async () => latest().open());
+  expect(active()).toBe('old');
+  expect(screen.getByText('旧对话内容')).toBeInTheDocument();
+  expect(latest().sent.find(f => f.type === 'auth')).toMatchObject({ conversation_id: 'old' });
+  expect(screen.getByLabelText('输入消息')).toBeEnabled();
+});
+
+it('REWORK S3: repeated create while CONNECTING reuses the attempt and authenticates its latest target', async () => {
+  await startOld(false); act(() => latest().drop()); await flush(1000);
+  const connecting = latest(); const sockets = FakeWebSocket.instances.length;
+  FakeWebSocket.autoReady = false;
+  fireEvent.click(newButton()); await flush(300);
+  expect.soft(FakeWebSocket.instances).toHaveLength(sockets);
+  fireEvent.click(newButton()); await flush(300);
+  expect.soft(FakeWebSocket.instances).toHaveLength(sockets);
+  expect.soft(latest()).toBe(connecting);
+  await act(async () => latest().open());
+  expect(latest().sent[0]).toMatchObject({ conversation_id: 'new-2' });
+  expect(screen.getByLabelText('输入消息')).toBeDisabled();
+  await act(async () => latest().ready());
+  expect(active()).toBe('new-2'); expect(screen.getByLabelText('输入消息')).toBeEnabled();
+});
+
+it('REWORK exact text: missing auth conversation refreshes once and never appends SYSTEM ERROR', async () => {
+  rows = [newRow, oldRow]; await startOld(); FakeWebSocket.autoReady = false;
+  await clickHistory('new'); await recover();
+  const queries = listQueryCount; rows = [oldRow];
+  act(() => latest().emit({ type: 'error', message: '请求的会话不存在或不属于当前世界线。' })); await flush(100);
+  expect(listQueryCount).toBe(queries + 1);
+  expect(document.querySelector('.system-error-content')).toBeNull();
+  await act(async () => { latest().open(); latest().ready(); });
+  expect(latest().sent[0]).toMatchObject({ conversation_id: 'old' });
+  expect(active()).toBe('old'); expect(screen.getByLabelText('输入消息')).toBeEnabled();
 });

@@ -104,7 +104,7 @@ describe('pending conversation auth ownership', () => {
     h.unmount();
   });
 
-  it('does not publish a switch ACK or late source turn before target session.ready', () => {
+  it('drops late source turns and commits an accepted online ACK without another auth', () => {
     const onConversationSwitched = vi.fn();
     const h = setup({ onConversationSwitched });
     h.rerender({ ...base, onConversationSwitched, pendingConversation: target() });
@@ -112,13 +112,14 @@ describe('pending conversation auth ownership', () => {
     const req = latest().frames.at(-1)!;
     act(() => {
       latest().emit({ type: 'turn.started', turn_id: 'late-source', conversation_id: 'old', generation: 3 });
-      latest().emit({ type: 'conversation.switched', request_id: req.request_id, conversation_id: 'new', worldline: 'steins_gate' });
     });
     expect(h.result.current.messages).toEqual(source);
-    expect(h.result.current.sessionState).toBe('unknown');
+    expect(h.result.current.sessionState).toBe('ready');
+    act(() => latest().emit({ type: 'conversation.switched', request_id: req.request_id, conversation_id: 'new', worldline: 'steins_gate' }));
     expect(onConversationSwitched.mock.lastCall?.[0]).toMatchObject({ conversationId: 'new', requestEpoch: 1 });
-    act(() => h.result.current.reconnect()); act(() => latest().open()); act(() => latest().emit(ready));
     expect(h.result.current.messages).toEqual(target().history);
+    expect(Socket.all).toHaveLength(1);
+    expect(latest().frames.filter(f => f.type === 'auth')).toHaveLength(1);
     h.unmount();
   });
 
@@ -147,7 +148,7 @@ describe('pending conversation auth ownership', () => {
     expect(h.result.current.messages).toEqual(source);
     act(() => latest().emit({ type: 'conversation.switched', request_id: second.request_id, conversation_id: 'other' }));
     expect(onConversationSwitched).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'other', requestEpoch: 2 }));
-    expect(h.result.current.messages).toEqual(source);
+    expect(h.result.current.messages).toEqual(next.history);
     h.unmount();
   });
 
@@ -155,9 +156,47 @@ describe('pending conversation auth ownership', () => {
     const onConversationSwitchError = vi.fn();
     const h = setup({ onConversationSwitchError }); h.stage();
     act(() => latest().emit({ type: 'error', message: '请求的会话不存在或不属于当前世界线。' }));
-    expect(onConversationSwitchError).toHaveBeenCalledWith({ conversationId: 'new', requestEpoch: 1, code: 'conversation_not_found' });
+    expect(onConversationSwitchError).toHaveBeenCalledWith({
+      conversationId: 'new', requestEpoch: 1, code: 'conversation_not_found',
+      message: '请求的会话不存在或不属于当前世界线。', phase: 'auth',
+    });
     expect(h.result.current.messages).toEqual(source);
     expect(h.result.current.sessionState).toBe('rejected');
     h.unmount();
   });
+});
+
+it('REWORK owner gate: online ACK preserves ready and can be retried after owner rejection', () => {
+  let accept = true;
+  const onConversationSwitched = vi.fn(() => accept);
+  const h = setup({ onConversationSwitched }); onConversationSwitched.mockClear();
+  accept = false;
+  h.rerender({ ...base, onConversationSwitched, pendingConversation: target() });
+  act(() => h.result.current.switchConversation('new', target().history, 1));
+  const socket = latest(); const req = socket.frames.at(-1)!;
+  expect.soft(h.result.current.sessionState).toBe('ready');
+  const ack = { type: 'conversation.switched', request_id: req.request_id, conversation_id: 'new', worldline: 'steins_gate' };
+  act(() => { socket.emit(ack); h.result.current.sendChat('blocked'); });
+  expect(h.result.current.messages).toEqual(source);
+  expect(socket.frames.filter(f => f.type === 'chat.send')).toEqual([]);
+  accept = true; act(() => socket.emit(ack));
+  expect.soft(onConversationSwitched).toHaveBeenCalledTimes(2);
+  expect.soft(h.result.current.messages).toEqual(target().history);
+  expect.soft(Socket.all).toHaveLength(1);
+  act(() => h.result.current.sendChat('accepted'));
+  expect.soft(socket.frames.at(-1)).toMatchObject({ type: 'chat.send', content: 'accepted' });
+  h.unmount();
+});
+
+it('REWORK epoch gate: an ACK for the same ID from an older intent cannot ask the owner', () => {
+  const onConversationSwitched = vi.fn();
+  const h = setup({ onConversationSwitched }); onConversationSwitched.mockClear();
+  h.rerender({ ...base, onConversationSwitched, pendingConversation: target(1) });
+  act(() => h.result.current.switchConversation('new', target().history, 1));
+  const req = latest().frames.at(-1)!;
+  h.rerender({ ...base, onConversationSwitched, pendingConversation: target(2) });
+  act(() => latest().emit({ type: 'conversation.switched', request_id: req.request_id, conversation_id: 'new', worldline: 'steins_gate' }));
+  expect(onConversationSwitched).not.toHaveBeenCalled();
+  expect(h.result.current.messages).toEqual(source);
+  h.unmount();
 });

@@ -368,7 +368,7 @@ describe('Workstation connection admission and next-turn model', () => {
     localStorage.setItem('amadeus_pc_model', 'l1');
     let params: {
       pendingConversation?: { requestEpoch: number };
-      onSessionReady?: (event: { conversationId: string; conversationMode: string; worldline: string; requestEpoch: number }) => void;
+      onConversationSwitched?: (event: { conversationId: string; worldline: 'steins_gate'; requestEpoch: number }) => void;
     } = {};
     hoisted.useAmadeusWS.mockImplementation((p: typeof params) => { params = p; return wsState(); });
     render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
@@ -378,8 +378,8 @@ describe('Workstation connection admission and next-turn model', () => {
     await act(async () => {
       (sidebar.onSelect as (row: unknown) => void)((sidebar.conversations as unknown[])[0]);
     });
-    await act(async () => { params.onSessionReady?.({
-      conversationId: 'conversation-one', conversationMode: 'history', worldline: 'steins_gate',
+    await act(async () => { params.onConversationSwitched?.({
+      conversationId: 'conversation-one', worldline: 'steins_gate',
       requestEpoch: params.pendingConversation!.requestEpoch,
     }); });
 

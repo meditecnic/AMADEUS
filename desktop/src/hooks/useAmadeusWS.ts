@@ -41,13 +41,15 @@ export interface UseAmadeusWSParams {
     worldline?: 'steins_gate' | 'beta';
     generation?: number;
     requestEpoch?: number;
-  }) => void;
+  }) => boolean | void;
   onConversationSwitchError?: (details: {
     conversationId: string;
     code: string;
     message?: string;
     requestEpoch?: number;
-  }) => void;
+    /** Client-only origin: a live switch failure and an auth rejection need different recovery. */
+    phase?: 'switch' | 'auth';
+  }) => boolean | void;
   onWorldlineSwitched?: (details: {
     worldline: 'steins_gate' | 'beta';
     requestId?: string;
@@ -82,6 +84,8 @@ export interface Message {
   segments?: Array<{ id: number; ja: string; zh: string; translationError?: string }>;
   streaming?: boolean;
   systemError?: boolean;
+  /** Local failed-entry notice: keep it visible after rolling back to another provider. */
+  conversationEntryError?: boolean;
 }
 
 export const RECONNECT_ATTEMPTS = 5;
@@ -460,38 +464,50 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
               msg.request_id !== pending.requestId ||
               msg.conversation_id !== pending.conversationId
             ) break;
-            pendingConversationSwitchRef.current = null;
             if (pending.requestEpoch !== undefined) {
-              // A coordinated selection commits only after fresh auth/session.ready.
-              paramsRef.current.onConversationSwitched?.({
-                conversationId: pending.conversationId, worldline: msg.worldline,
-                generation: msg.generation, requestEpoch: pending.requestEpoch,
-              });
-              break;
+              const intent = paramsRef.current.pendingConversation;
+              // An immediate ACK can precede the target's React commit. The owner ref
+              // validates that window; a newer committed epoch must never reach it.
+              if (intent && (intent.requestEpoch > pending.requestEpoch
+                || (intent.requestEpoch === pending.requestEpoch
+                  && (intent.conversationId !== pending.conversationId
+                    || intent.worldline !== paramsRef.current.worldline)))) break;
+              if (msg.worldline && msg.worldline !== paramsRef.current.worldline) break;
             }
+            // Ask the owner before mutating anything, including the pending request.
+            const accepted = paramsRef.current.onConversationSwitched?.({
+              conversationId: pending.conversationId,
+              worldline: msg.worldline,
+              generation: msg.generation,
+              ...(pending.requestEpoch === undefined ? {} : { requestEpoch: pending.requestEpoch }),
+            });
+            if (accepted === false) break;
+            pendingConversationSwitchRef.current = null;
+            if (pending.requestEpoch !== undefined) confirmedConversationEpochRef.current = pending.requestEpoch;
             activeConversationIdRef.current = pending.conversationId;
             if (typeof msg.generation === 'number') {
               activeGenerationRef.current = msg.generation;
             }
+            messagesRef.current = pending.history;
             setMessages(pending.history);
-            paramsRef.current.onConversationSwitched?.({
-              conversationId: pending.conversationId,
-              worldline: msg.worldline,
-              generation: msg.generation,
-            });
+            setSessionReady(true);
             break;
           }
 
           case 'conversation.switch_error': {
             const pending = pendingConversationSwitchRef.current;
             if (!pending || msg.request_id !== pending.requestId) break;
-            pendingConversationSwitchRef.current = null;
-            paramsRef.current.onConversationSwitchError?.({
+            const accepted = paramsRef.current.onConversationSwitchError?.({
               conversationId: pending.conversationId,
               code: msg.code || 'switch_failed',
               message: msg.message,
               requestEpoch: pending.requestEpoch,
+              ...(pending.requestEpoch === undefined ? {} : { phase: 'switch' as const }),
             });
+            if (accepted === false) break;
+            pendingConversationSwitchRef.current = null;
+            // The server rolled back this live request; the source session is still usable.
+            setSessionReady(true);
             break;
           }
 
@@ -823,17 +839,23 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
 
           case 'error':
             if (authTarget && sessionStateRef.current !== 'ready') {
+              const code = msg.code || (msg.message === '请求的会话不存在或不属于当前世界线。'
+                ? 'conversation_not_found' : 'switch_failed');
+              const accepted = paramsRef.current.onConversationSwitchError?.({
+                conversationId: authTarget.conversationId,
+                requestEpoch: authTarget.requestEpoch,
+                code, message: msg.message, phase: 'auth',
+              });
+              if (accepted === false) break;
               rejectedAt = Date.now();
               sessionStateRef.current = 'rejected';
               setSessionState('rejected');
               setRetry(null);
               setStatus('ERROR');
-              paramsRef.current.onConversationSwitchError?.({
-                conversationId: authTarget.conversationId,
-                requestEpoch: authTarget.requestEpoch,
-                code: msg.code || (msg.message === '请求的会话不存在或不属于当前世界线。'
-                  ? 'conversation_not_found' : 'switch_failed'),
-              });
+              if (code !== 'conversation_not_found') setMessages(prev => [...prev, {
+                id: `err_${Date.now()}`, role: 'assistant',
+                content: `SYSTEM ERROR: ${msg.message}`, systemError: true, conversationEntryError: true,
+              }]);
               break;
             }
             if (sessionStateRef.current === 'unknown') {
@@ -1079,7 +1101,6 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       return false;
     }
     const requestId = createRequestId('conversation-switch');
-    if (requestEpoch !== undefined) setSessionReady(false);
     clearWatchdog();
     activeTurnIdRef.current = '';
     activeGenerationRef.current = -1;
