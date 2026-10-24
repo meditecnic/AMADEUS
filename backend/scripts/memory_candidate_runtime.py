@@ -1312,22 +1312,69 @@ def _chat_captures(path: Path) -> list[dict[str, Any]]:
     ]
 
 
-def _stable_fact_block(path: Path) -> str:
-    """Scan every captured chat request; fail on any CORE FACTS heading.
+def resident_core_fact_lines(system_prompt: str) -> list[str]:
+    """Fact lines of the request's own v11 resident CORE FACTS section.
 
-    Returns the recall_memory records of the last captured request.
+    Dispatch 55: v11 messages[0] carries a resident CORE FACTS section. The
+    request's own section is the last heading (an earlier prompt embedded
+    in IDENTITY, if any, comes first).
+    """
+    text = str(system_prompt or "")
+    marker = "CORE FACTS\n"
+    start = text.rfind("\n\n" + marker)
+    if start >= 0:
+        start += 2
+    elif text.startswith(marker):
+        start = 0
+    else:
+        return []
+    section = text[start + len(marker):].split("\n\n", 1)[0]
+    return [line[2:] for line in section.split("\n") if line.startswith("- ")]
+
+
+def _supplement_records(system_prompt: str) -> list[str]:
+    text = str(system_prompt or "")
+    tail = text[text.rfind("\n\nCURRENT STATE\n") + 1:]
+    records: list[str] = []
+    for chunk in tail.split(MEMORY_CANDIDATE_DATA_ANCHOR + "\n")[1:]:
+        try:
+            payload = json.loads(chunk.split("\n", 1)[0])
+        except json.JSONDecodeError:
+            continue
+        values = payload.get("records") if isinstance(payload, dict) else None
+        if isinstance(values, dict):
+            records.extend(str(value) for value in values.values())
+    return records
+
+
+def _stable_fact_block(path: Path) -> str:
+    """Scan every captured chat request; fail on legacy-shaped CORE FACTS.
+
+    Dispatch 55: v11 carries a resident CORE FACTS section; it must never be
+    the legacy "(none)" form nor a heading without fact lines. Returns the
+    stable facts the last captured request received: resident CORE FACTS
+    lines, the supplement MEMORY CANDIDATES records, and second-round
+    recall_memory records (which exclude already-injected facts).
     """
     captures = _chat_captures(path)
     if not captures:
         raise AssertionError(f"no chat captures in {path}")
-    headed = core_facts_heading_requests(captures)
-    if headed:
-        _fail(
-            "v11_system_prompt_has_core_facts",
-            f"requests {headed} of {len(captures)}: "
-            + _system_prompt_of(captures[headed[0]])[:800],
-        )
-    return stable_fact_records_from_messages(captures[-1].get("messages") or [])
+    for index, capture in enumerate(captures):
+        prompt = _system_prompt_of(capture)
+        if "CORE FACTS\n(none)" in prompt or (
+            has_core_facts_heading(prompt) and not resident_core_fact_lines(prompt)
+        ):
+            _fail(
+                "v11_system_prompt_core_facts_without_facts",
+                f"request {index} of {len(captures)}: " + prompt[:800],
+            )
+    last = captures[-1]
+    prompt = _system_prompt_of(last)
+    texts = resident_core_fact_lines(prompt) + _supplement_records(prompt)
+    second_round = stable_fact_records_from_messages(last.get("messages") or [])
+    if second_round:
+        texts.append(second_round)
+    return "\n".join(texts)
 
 
 async def _ws_session(*, backend_port: int, session_id: str, enable_tts: bool = False):
@@ -1600,19 +1647,22 @@ def cmd_verify_api(args: argparse.Namespace) -> None:
         "deleted_absent_after_edit": DELETE_MARKER not in block,
         "v11_system_prompt_has_core_facts_heading": bool(heading_requests),
         "chat_requests_scanned": len(chat_captures),
-        "stable_fact_surface": "recall_memory MEMORY_CANDIDATE_DATA (second round)",
+        "stable_fact_surface": (
+            "resident CORE FACTS + supplement MEMORY CANDIDATES (messages[0]) "
+            "+ recall_memory MEMORY_CANDIDATE_DATA (second round)"
+        ),
         "backend_port": backend_port,
         "how_not_false_positive": {
             "chat": "WS to 127.0.0.1:backend_port, captured adapter messages after real assembly",
             "fact": "API fact_id plus display_text marker, not query echo",
             "recall": (
-                "v11: system prompt has no CORE FACTS heading; next-turn "
-                "recall_memory MEMORY_CANDIDATE_DATA records contain marker"
+                "v11: marker in the last request's resident CORE FACTS lines, "
+                "supplement records or recall_memory records"
             ),
             "worker": "no manual process_due_jobs_once; waited on natural poll",
         },
     }
-    if report["v11_system_prompt_has_core_facts_heading"]:
+    if not report["v11_system_prompt_has_core_facts_heading"]:
         report["ok"] = False
     _write_json(paths["captures"] / "verify_api.json", report)
     print(json.dumps(report, ensure_ascii=False, indent=2))
