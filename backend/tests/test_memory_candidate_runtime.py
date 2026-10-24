@@ -127,23 +127,61 @@ def _core_facts_heading_calls(capture: _ProviderCapture) -> list[int]:
     ]
 
 
+def _resident_fact_lines(system_prompt: str) -> list[str]:
+    """Fact lines of the v11 resident CORE FACTS section (dispatch 55).
+
+    The harness sessions have no base_system_prompt, so a later turn's
+    IDENTITY section embeds the previous compiled prompt (pre-existing
+    behaviour). The turn's own section is therefore the *last* heading.
+    """
+    marker = "CORE FACTS\n"
+    start = system_prompt.rfind("\n\n" + marker)
+    if start >= 0:
+        start += 2
+    elif system_prompt.startswith(marker):
+        start = 0
+    else:
+        return []
+    section = system_prompt[start + len(marker):].split("\n\n", 1)[0]
+    return [line[2:] for line in section.split("\n") if line.startswith("- ")]
+
+
+def _candidate_records(text: str) -> list[str]:
+    """Record texts of every MEMORY_CANDIDATE_DATA payload inside ``text``."""
+    records: list[str] = []
+    for chunk in text.split(MEMORY_CANDIDATE_DATA_ANCHOR + "\n")[1:]:
+        data = json.loads(chunk.split("\n", 1)[0])
+        records.extend(str(value) for value in (data.get("records") or {}).values())
+    return records
+
+
 def _stable_fact_block(capture: _ProviderCapture) -> str:
     """Stable-fact records the provider actually received on the last call.
 
-    v11 spec (cf14875): the system prompt never carries a CORE FACTS section;
-    stable facts reach the provider only after ``recall_memory`` as the
-    second-round ``MEMORY CANDIDATES`` / ``MEMORY_CANDIDATE_DATA`` system
-    message. Every captured request so far (both rounds of every turn) is
-    scanned for a CORE FACTS heading, not just the last one. Returns the record
-    texts of the last block (need labels echo the user query, so they are
-    excluded).
+    Dispatch 55 (v11 resident profile): stable facts reach the provider as
+    the system prompt's resident CORE FACTS lines, the optional supplement
+    MEMORY CANDIDATES block in the system prompt, and the second-round
+    ``MEMORY CANDIDATES`` / ``MEMORY_CANDIDATE_DATA`` system message after
+    ``recall_memory`` (which excludes already-injected facts). Every captured
+    request is checked for the v11 CORE FACTS shape: never the legacy
+    ``CORE FACTS\n(none)`` form and never a heading without fact lines.
+    Returns the record texts of all three surfaces (need labels echo the
+    user query, so they are excluded).
     """
     capture.last_call  # fails clearly when the provider saw no request
-    headed = _core_facts_heading_calls(capture)
-    assert not headed, (
-        "v11 system prompt must not carry a standalone CORE FACTS section; "
-        f"found in chat requests {headed} of {len(capture.chat_calls)}"
-    )
+    for index in _core_facts_heading_calls(capture):
+        system_prompt = _system_text(capture.chat_calls[index])
+        assert "CORE FACTS\n(none)" not in system_prompt, (
+            f"v11 chat request {index} carries the legacy CORE FACTS (none) form"
+        )
+        assert _resident_fact_lines(system_prompt), (
+            f"v11 chat request {index} has a CORE FACTS heading without facts"
+        )
+    system_prompt = _system_text(capture.last_call)
+    # The supplement follows this turn's CURRENT STATE (last occurrence, see
+    # _resident_fact_lines on the embedded previous prompt).
+    own_tail = system_prompt[system_prompt.rfind("\n\nCURRENT STATE\n") + 1:]
+    texts = _resident_fact_lines(system_prompt) + _candidate_records(own_tail)
     blocks = [
         str(message.get("content") or "")
         for message in capture.last_call["messages"][1:]
@@ -151,9 +189,8 @@ def _stable_fact_block(capture: _ProviderCapture) -> str:
         and MEMORY_CANDIDATE_DATA_ANCHOR in str(message.get("content") or "")
     ]
     assert blocks, "provider never received a MEMORY CANDIDATES block"
-    data = blocks[-1].split(MEMORY_CANDIDATE_DATA_ANCHOR + "\n", 1)[1].split("\n", 1)[0]
-    records = json.loads(data).get("records") or {}
-    return "\n".join(str(text) for text in records.values())
+    texts.extend(_candidate_records(blocks[-1]))
+    return "\n".join(texts)
 
 
 def _last_user_text(active_history) -> str:

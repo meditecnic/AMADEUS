@@ -8,9 +8,10 @@ Layered probes (plan 2026-07-26-gate7a-shared-fact-naturalization.md):
 - L4 isolation: okabe stays blind on both worldlines
 
 Mode: these probes specify the legacy (default) prompt surface. In v11 mode
-(cf14875) the system prompt never carries a CORE FACTS section; stable facts
-arrive only through recall_memory (see test_memory_v11_prompt and
-test_memory_recall_b5a). The module pins legacy mode explicitly.
+(dispatch 55) CORE FACTS is the resident profile built from v11 stable facts,
+with a partial-profile rule and per-turn supplement (see
+test_memory_v11_resident_profile and test_memory_v11_prompt). The module pins
+legacy mode explicitly.
 """
 from __future__ import annotations
 
@@ -25,7 +26,7 @@ from app.services.prompt_compiler import compile_for_session
 
 @pytest.fixture(autouse=True)
 def _legacy_memory_mode(monkeypatch):
-    """CORE FACTS + FACT_USE_CONTRACT is the legacy prompt spec, not v11."""
+    """These probes pin the legacy CORE FACTS + FACT_USE_CONTRACT surface."""
     monkeypatch.setenv("AMADEUS_MEMORY_MODE", "legacy")
 
 

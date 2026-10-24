@@ -98,18 +98,19 @@ async def test_s3a_v11_mode_injects_same_scope_active_facts_only(
         _session_obj(session_id, identity_mode="self"),
         "动漫",
     )
-    assert self_marker not in self_prompt
+    # Dispatch 55: v11 carries a resident same-scope profile every turn.
+    assert self_marker in self_prompt
     assert okabe_marker not in self_prompt
-    assert "\nCORE FACTS\n" not in self_prompt
-    assert "FACT_USE_CONTRACT" not in self_prompt
+    assert "\nCORE FACTS\n" in self_prompt
+    assert "FACT_USE_CONTRACT" in self_prompt
 
     okabe_prompt = await compile_for_session(
         _session_obj(session_id, identity_mode="okabe"),
         "水果",
     )
-    assert okabe_marker not in okabe_prompt
+    assert okabe_marker in okabe_prompt
     assert self_marker not in okabe_prompt
-    assert "\nCORE FACTS\n" not in okabe_prompt
+    assert "\nCORE FACTS\n" in okabe_prompt
 
 
 # ---------------------------------------------------------------------------
@@ -121,11 +122,16 @@ async def test_s3a_v11_mode_injects_same_scope_active_facts_only(
 
 @pytest.mark.asyncio
 async def test_r1_irrelevant_facts_must_not_flood_prompt(isolated_store, monkeypatch):
-    """P02/P03: obviously irrelevant facts must not bulk-enter the prompt."""
+    """P02/P03: irrelevant facts never exceed the resident cap.
+
+    Dispatch 55: the resident profile is query-independent and capped at 32
+    facts; facts left out of it may only return through the supplement,
+    whose bigram admission gate rejects an unrelated message.
+    """
     monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     session_id = f"r1-noise-{uuid4()}"
     markers = []
-    for i in range(10):
+    for i in range(40):
         marker = f"IRR_{i:02d}"
         markers.append(marker)
         await create_stable_fact(
@@ -137,11 +143,12 @@ async def test_r1_irrelevant_facts_must_not_flood_prompt(isolated_store, monkeyp
         )
 
     prompt = await compile_for_session(_session_obj(session_id), "zqx_nebula_9")
-    for marker in markers:
-        assert marker not in prompt, (
-            f"irrelevant fact leaked into prompt ({marker}); no relevance "
-            "threshold/budget is applied, everything under the count cap is injected"
-        )
+    injected = [marker for marker in markers if f"- {marker} " in prompt]
+    assert len(injected) == 32, "resident profile is capped at 32 facts"
+    assert "MEMORY CANDIDATES" not in prompt, (
+        "facts outside the resident cap must not flood in through the "
+        "supplement for an unrelated message"
+    )
 
 
 @pytest.mark.asyncio
@@ -335,13 +342,19 @@ async def test_r5_v11_prompt_injects_both_sections(isolated_store, monkeypatch):
     )
     monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     prompt = await compile_for_session(_session_obj(session_id), "このすば")
-    assert fact_marker not in prompt
+    assert fact_marker in prompt
     assert exp_marker in prompt
-    assert "FACT_USE_CONTRACT" not in prompt
+    assert "FACT_USE_CONTRACT" in prompt
     assert "EXPERIENCE_USE_CONTRACT" in prompt
-    assert "\nCORE FACTS\n" not in prompt
+    assert "\nCORE FACTS\n" in prompt
     assert "EPISODIC MEMORY" in prompt
     assert "WORKING CONTEXT" in prompt
+    # Dispatch 55 C: CORE FACTS precede CURRENT STATE, which precedes episodic.
+    assert (
+        prompt.index("\nCORE FACTS\n")
+        < prompt.index("\nCURRENT STATE\n")
+        < prompt.index("\nEPISODIC MEMORY\n")
+    )
 
 
 @pytest.mark.asyncio
@@ -414,10 +427,10 @@ async def test_r5_experience_retrieval_failure_fail_soft(isolated_store, monkeyp
     monkeypatch.setattr(retrieval_module, "select_experience_candidates", boom)
     monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     prompt = await compile_for_session(_session_obj(session_id), "このすば")
-    assert fact_marker not in prompt, "stable facts now use recall_memory, not first prompt"
+    assert fact_marker in prompt, "resident facts survive an experience failure"
     assert exp_marker not in prompt, "failed experience retrieval must omit experiences"
-    assert "FACT_USE_CONTRACT" not in prompt
-    assert "\nCORE FACTS\n" not in prompt
+    assert "FACT_USE_CONTRACT" in prompt
+    assert "\nCORE FACTS\n" in prompt
 
 @pytest.mark.asyncio
 async def test_r5_final_prompt_experience_whole_item_under_global_pressure(

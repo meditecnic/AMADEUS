@@ -398,8 +398,9 @@ async def test_experience_stays_on_first_prompt_facts_use_tool(isolated_store, m
     monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     prompt = await compile_for_session(session, "喝茶")
     assert "去年只喝茶" in prompt
-    assert "美式咖啡" not in prompt
-    assert "\nCORE FACTS\n" not in prompt
+    # Dispatch 55: the stable fact is resident in CORE FACTS; recall stays usable.
+    assert "- 我每天早上喝美式咖啡，不加糖。" in prompt
+    assert "\nCORE FACTS\n" in prompt
     result = await recall_stable_facts(
         scope=_scope(owner),
         request=RecallRequest(needs=("morning drink",)),
@@ -497,9 +498,11 @@ async def test_fake_provider_two_round_recall(isolated_store, monkeypatch):
     assert calls[0]["tools"]
     assert calls[1]["tools"] is None
     first_prompt = calls[0]["system_prompt"] or ""
-    assert "\nCORE FACTS\n" not in first_prompt
-    assert "小白" not in first_prompt
+    # Dispatch 55: the only fact is resident, so recall_memory excludes it and
+    # the second round does not repeat it as a candidate.
+    assert "\nCORE FACTS\n" in first_prompt
+    assert "- 我养了一只叫小白的猫。" in first_prompt
     second_hist = json.dumps(calls[1]["history"], ensure_ascii=False)
     assert "MEMORY CANDIDATES" in second_hist
-    assert "小白" in second_hist
+    assert "小白" not in second_hist
     assert "fact_id" not in second_hist.split("MEMORY_CANDIDATE_DATA")[-1]

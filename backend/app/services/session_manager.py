@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Iterable
 
 from app.db import get_db, normalize_worldline
 
@@ -37,6 +37,25 @@ async def cancel_inflight(session: Any) -> int:
     session.active_task = None
     session.is_busy = False
     return cancelled
+
+
+def set_turn_injected_fact_ids(session: Any, fact_ids: Iterable[str]) -> tuple[str, ...]:
+    """v11 (dispatch 55 E): stable fact_ids injected into this turn's prompt.
+
+    Turn-scoped and in-memory only; prompt compilation resets it every turn
+    before selecting facts. recall_memory excludes these ids and lookup
+    notices switch wording when it is non-empty.
+    """
+    ids = tuple(dict.fromkeys(str(item) for item in (fact_ids or ()) if str(item or "")))
+    try:
+        session.turn_injected_fact_ids = ids
+    except AttributeError:  # slotted/frozen test doubles
+        pass
+    return ids
+
+
+def turn_injected_fact_ids(session: Any) -> tuple[str, ...]:
+    return tuple(str(item) for item in (getattr(session, "turn_injected_fact_ids", ()) or ()))
 
 
 async def clear_working_summaries(

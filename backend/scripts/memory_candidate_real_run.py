@@ -855,19 +855,77 @@ def _without_expect_header(request: Any) -> Any:
     )
 
 
-def _core_facts_from_messages(messages: list[Any]) -> str:
-    """Stable facts the provider received (v11: recall_memory records).
+_CANDIDATE_DATA_ANCHOR = "MEMORY_CANDIDATE_DATA\n"
 
-    cf14875: v11 never puts a CORE FACTS section in messages[0]; stable facts
-    arrive in the second round as MEMORY_CANDIDATE_DATA records.
+
+def _system_prompt_text(messages: list[Any]) -> str:
+    if not messages or not isinstance(messages[0], dict):
+        return ""
+    if messages[0].get("role") != "system":
+        return ""
+    return str(messages[0].get("content") or "")
+
+
+def _resident_core_fact_lines(system_prompt: str) -> list[str]:
+    """Fact lines of this request's v11 resident CORE FACTS section.
+
+    Dispatch 55: v11 puts a resident CORE FACTS section in messages[0]. The
+    request's own section is the last heading (an embedded earlier prompt
+    in IDENTITY, if any, comes first).
     """
-    return b2.stable_fact_records_from_messages(messages)
+    marker = "CORE FACTS\n"
+    start = system_prompt.rfind("\n\n" + marker)
+    if start >= 0:
+        start += 2
+    elif system_prompt.startswith(marker):
+        start = 0
+    else:
+        return []
+    section = system_prompt[start + len(marker):].split("\n\n", 1)[0]
+    return [line[2:] for line in section.split("\n") if line.startswith("- ")]
+
+
+def _candidate_records_in(text: str) -> list[str]:
+    records: list[str] = []
+    for chunk in str(text or "").split(_CANDIDATE_DATA_ANCHOR)[1:]:
+        try:
+            payload = json.loads(chunk.split("\n", 1)[0])
+        except json.JSONDecodeError:
+            continue
+        values = payload.get("records") if isinstance(payload, dict) else None
+        if isinstance(values, dict):
+            records.extend(str(value) for value in values.values())
+    return records
+
+
+def _core_facts_from_messages(messages: list[Any]) -> str:
+    """Stable facts the provider received in this request (dispatch 55).
+
+    v11 surfaces: resident CORE FACTS lines and the supplement MEMORY
+    CANDIDATES block in messages[0], plus second-round recall_memory
+    MEMORY_CANDIDATE_DATA records (which exclude already-injected facts).
+    """
+    system_prompt = _system_prompt_text(messages)
+    own_tail = system_prompt[system_prompt.rfind("\n\nCURRENT STATE\n") + 1:]
+    texts = _resident_core_fact_lines(system_prompt) + _candidate_records_in(own_tail)
+    second_round = b2.stable_fact_records_from_messages(messages)
+    if second_round:
+        texts.append(second_round)
+    return "\n".join(texts)
 
 
 def _system_has_core_facts_heading(messages: list[Any]) -> bool:
-    if not messages or not isinstance(messages[0], dict):
-        return False
-    return b2.has_core_facts_heading(str(messages[0].get("content") or ""))
+    return b2.has_core_facts_heading(_system_prompt_text(messages))
+
+
+def _system_has_core_facts_none(messages: list[Any]) -> bool:
+    """Legacy empty form; v11 omits the section instead (dispatch 55)."""
+    return "CORE FACTS\n(none)" in _system_prompt_text(messages)
+
+
+def _system_core_facts_heading_without_facts(messages: list[Any]) -> bool:
+    system_prompt = _system_prompt_text(messages)
+    return b2.has_core_facts_heading(system_prompt) and not _resident_core_fact_lines(system_prompt)
 
 
 def _payload_offers_recall(payload: dict[str, Any]) -> bool:
@@ -1245,6 +1303,10 @@ def install_allowlisted_httpx(
                     "max_tokens": (payload or {}).get("max_tokens"),
                     "core_facts": core_facts,
                     "system_has_core_facts_heading": _system_has_core_facts_heading(messages),
+                    "system_has_core_facts_none": _system_has_core_facts_none(messages),
+                    "system_core_facts_heading_without_facts": (
+                        _system_core_facts_heading_without_facts(messages)
+                    ),
                     "offers_recall_memory": _payload_offers_recall(payload or {}),
                     "history_roles": [
                         str(item.get("role"))
@@ -2257,15 +2319,20 @@ def _mock_rows(paths: dict[str, Path]) -> list[dict[str, Any]]:
     return rows
 
 
-def _core_facts_heading_seen(paths: dict[str, Path]) -> bool:
-    """True if any captured v11 chat request had a CORE FACTS system heading."""
+def _chat_log_flag_seen(paths: dict[str, Path], flag: str) -> bool:
+    """True if any captured chat request row has ``flag`` set."""
     log = paths["captures"] / "provider_chat.jsonl"
     if not log.is_file():
         return False
     for line in log.read_text(encoding="utf-8").splitlines():
-        if line.strip() and json.loads(line).get("system_has_core_facts_heading"):
+        if line.strip() and json.loads(line).get(flag):
             return True
     return False
+
+
+def _core_facts_heading_seen(paths: dict[str, Path]) -> bool:
+    """True if any captured v11 chat request had a CORE FACTS system heading."""
+    return _chat_log_flag_seen(paths, "system_has_core_facts_heading")
 
 
 def _last_core_facts(paths: dict[str, Path]) -> str:
@@ -2591,7 +2658,15 @@ def cmd_verify_local(args: argparse.Namespace) -> None:
         "core_after_edit_has_ocarina_utterance": TURN_EXTRACT in str(bundle.get("core_after_edit") or ""),
         "new_session_history_has_extract_utterance": bundle.get("history_has_extract_utterance"),
         "core_after_forget_has_harmonica": FACT_MARKER_HARMONICA in str(bundle.get("core_after_forget") or ""),
+        # Dispatch 55: v11 carries a resident CORE FACTS section (expected
+        # True), never the legacy "(none)" form, never a heading without facts.
         "v11_system_prompt_has_core_facts_heading": _core_facts_heading_seen(paths),
+        "v11_system_prompt_has_core_facts_none": _chat_log_flag_seen(
+            paths, "system_has_core_facts_none"
+        ),
+        "v11_system_prompt_core_facts_heading_without_facts": _chat_log_flag_seen(
+            paths, "system_core_facts_heading_without_facts"
+        ),
         "archive_after_forget_has_harmonica": any(
             FACT_MARKER_HARMONICA in text for text in archive_texts
         ),
@@ -2620,7 +2695,11 @@ def cmd_verify_local(args: argparse.Namespace) -> None:
         report["ok"] = False
     if report["core_after_forget_has_harmonica"] or report["archive_after_forget_has_harmonica"]:
         report["ok"] = False
-    if report["v11_system_prompt_has_core_facts_heading"]:
+    if not report["v11_system_prompt_has_core_facts_heading"]:
+        report["ok"] = False
+    if report["v11_system_prompt_has_core_facts_none"]:
+        report["ok"] = False
+    if report["v11_system_prompt_core_facts_heading_without_facts"]:
         report["ok"] = False
     if "chat" not in kinds or "extract" not in kinds:
         report["ok"] = False

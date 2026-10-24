@@ -248,7 +248,7 @@ async def test_fact_selector_failure_fails_soft_at_compiler_level(
     propagate out of compile_for_session and fail the turn; now Facts are
     omitted, independently usable Experiences stay, legacy is not consulted,
     and the turn prompt still compiles."""
-    import app.services.memory_v11.retrieval as retrieval_module
+    import app.services.memory_v11.recall as recall_module
     from app.services.prompt_compiler import compile_for_session
 
     monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
@@ -281,7 +281,8 @@ async def test_fact_selector_failure_fails_soft_at_compiler_level(
     async def boom(*args, **kwargs):
         raise RuntimeError("forced fact selector failure")
 
-    monkeypatch.setattr(retrieval_module, "select_stable_fact_candidates", boom)
+    # Dispatch 55: the v11 prompt's Fact selector is the resident loader.
+    monkeypatch.setattr(recall_module, "load_resident_fact_candidates", boom)
     session = SimpleNamespace(
         session_id=session_id, worldline=SG, identity_mode="self",
         base_system_prompt="You are Amadeus Kurisu.",
@@ -289,7 +290,7 @@ async def test_fact_selector_failure_fails_soft_at_compiler_level(
         memory_summary="", history=[], self_name="", identity_acknowledged=False,
     )
     prompt = await compile_for_session(session, "このすば")
-    assert fact_marker not in prompt, "v11 first prompt must not pre-inject stable facts"
+    assert fact_marker not in prompt, "a failed Fact selector omits CORE FACTS"
     assert exp_marker in prompt, "independent Experiences must stay available"
     assert legacy_marker not in prompt, "no legacy fallback may run"
     assert "\nCORE FACTS\n" not in prompt
@@ -575,10 +576,10 @@ async def test_v11_mode_delivers_scoped_memory_to_provider(isolated_store, monke
     assert _done(events) and not _errors(events), events
     assert len(capture.chat_calls) == 1, "one provider chat request per turn"
     system_prompt = capture.last_system_prompt
-    assert self_marker not in system_prompt, "v11 first round must not pre-inject facts"
+    assert self_marker in system_prompt, "v11 first round carries the resident profile"
     for forbidden in (okabe_marker, other_owner_marker, beta_marker, legacy_marker, shared_marker):
         assert forbidden not in system_prompt, forbidden
-    assert "\nCORE FACTS\n" not in system_prompt
+    assert "\nCORE FACTS\n" in system_prompt
     tool_blob = json.dumps(capture.last_call.get("tools") or [], ensure_ascii=False)
     assert "recall_memory" in tool_blob
     assert legacy_marker not in json.dumps(capture.last_call["messages"], ensure_ascii=False)
@@ -794,8 +795,8 @@ async def test_migrated_legacy_import_reaches_chat_provider(tmp_path, monkeypatc
 
     assert _done(events) and not _errors(events), events
     system_prompt = capture.last_system_prompt
-    assert "likes_anime: 喜欢看动漫" not in system_prompt
-    assert "\nCORE FACTS\n" not in system_prompt
+    assert "likes_anime: 喜欢看动漫" in system_prompt
+    assert "\nCORE FACTS\n" in system_prompt
     from app.services.memory_v11.recall import MemoryScope, RecallRequest, recall_stable_facts
 
     recalled = await recall_stable_facts(
@@ -865,7 +866,7 @@ async def test_revision_and_deletion_reflected_next_turn(isolated_store, monkeyp
     events = await _run_turn(session, "このすば")
     assert _done(events) and not _errors(events), events
     first_prompt = capture.last_system_prompt
-    assert marker_v1 not in first_prompt and deleted_marker not in first_prompt
+    assert marker_v1 in first_prompt and deleted_marker in first_prompt
     from app.services.memory_v11.recall import MemoryScope, RecallRequest, recall_stable_facts
 
     scope = MemoryScope(session_id=session_id, worldline=SG, identity_mode="self")
@@ -888,7 +889,9 @@ async def test_revision_and_deletion_reflected_next_turn(isolated_store, monkeyp
     events = await _run_turn(session, "このすば")
     assert _done(events) and not _errors(events), events
     next_prompt = capture.last_system_prompt
-    assert marker_v2 not in next_prompt
+    assert marker_v2 in next_prompt, "the revised version reaches the next turn"
+    assert marker_v1 not in next_prompt, "the superseded version leaves the prompt"
+    assert deleted_marker not in next_prompt, "deleted content leaves the prompt"
     later = await recall_stable_facts(
         scope=scope, request=RecallRequest(needs=("好きなアニメ",))
     )
@@ -911,7 +914,7 @@ async def test_fact_selector_failure_turn_survives_with_fresh_prompt(
     previous turn, a failing Fact selector must still yield a fresh, fully
     compiled prompt without the failed Facts and without the stale prompt,
     complete the turn, and recover on the next turn."""
-    import app.services.memory_v11.retrieval as retrieval_module
+    import app.services.memory_v11.recall as recall_module
 
     monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     session_id = f"chat-fail-{uuid4()}"
@@ -940,7 +943,7 @@ async def test_fact_selector_failure_turn_survives_with_fresh_prompt(
 
     with pytest.MonkeyPatch.context() as selector_patch:
         selector_patch.setattr(
-            retrieval_module, "select_stable_fact_candidates", boom
+            recall_module, "load_resident_fact_candidates", boom
         )
         events = await _run_turn(session, "今日の調子はどう？")
 
@@ -950,7 +953,7 @@ async def test_fact_selector_failure_turn_survives_with_fresh_prompt(
     system_prompt = capture.last_system_prompt
     assert stale_marker not in system_prompt, "must not reuse the previous system_prompt"
     assert fact_marker not in system_prompt, "the failed Fact must be omitted"
-    assert "\nCORE FACTS\n" not in system_prompt, "v11 first round omits CORE FACTS"
+    assert "\nCORE FACTS\n" not in system_prompt, "a failed Fact selector omits CORE FACTS"
     # The provider really got the current user message through real history.
     user_texts = [
         str(m.get("content")) for m in capture.last_call["messages"]
@@ -960,7 +963,7 @@ async def test_fact_selector_failure_turn_survives_with_fresh_prompt(
 
     events = await _run_turn(session, "このすば")
     assert _done(events) and not _errors(events), events
-    assert fact_marker not in capture.last_system_prompt
+    assert fact_marker in capture.last_system_prompt, "next turn recovers the resident fact"
     assert "recall_memory" in json.dumps(capture.last_call.get("tools") or [], ensure_ascii=False)
 
 
@@ -986,8 +989,8 @@ async def test_experience_selector_failure_keeps_facts(isolated_store, monkeypat
     await _prepare_conversation(session, identity_mode="self")
     events = await _run_turn(session, "このすば")
     assert _done(events) and not _errors(events), events
-    assert fact_marker not in capture.last_system_prompt
-    assert "\nCORE FACTS\n" not in capture.last_system_prompt
+    assert fact_marker in capture.last_system_prompt
+    assert "\nCORE FACTS\n" in capture.last_system_prompt
 
 
 # ---------------------------------------------------------------------------
@@ -1068,8 +1071,8 @@ async def test_voice_entry_reaches_same_boundary(isolated_store, monkeypatch):
     # The fake-STT text went through the SAME processor: exactly one provider
     # chat request whose freshly compiled prompt carries the voice-scoped fact.
     assert len(capture.chat_calls) == 1
-    assert voice_marker not in capture.last_system_prompt
-    assert "\nCORE FACTS\n" not in capture.last_system_prompt
+    assert voice_marker in capture.last_system_prompt
+    assert "\nCORE FACTS\n" in capture.last_system_prompt
     assert "このすば" in json.dumps(
         capture.last_call["messages"], ensure_ascii=False
     )
