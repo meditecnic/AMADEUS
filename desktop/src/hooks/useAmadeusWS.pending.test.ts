@@ -200,3 +200,23 @@ it('REWORK epoch gate: an ACK for the same ID from an older intent cannot ask th
   expect(h.result.current.messages).toEqual(source);
   h.unmount();
 });
+
+it('REWORK56 S5: sendChat reports false for blocked writes and true only for an outgoing frame', () => {
+  const h = setup(); const socket = latest();
+  act(() => { expect.soft(h.result.current.sendChat(' ')).toBe(false); });
+  h.rerender({ ...base, pendingConversation: target() });
+  act(() => {
+    h.result.current.switchConversation('new', target().history, 1);
+    expect.soft(h.result.current.sendChat('blocked')).toBe(false);
+  });
+  expect(socket.frames.filter(f => f.type === 'chat.send')).toEqual([]);
+  const req = socket.frames.at(-1)!;
+  act(() => socket.emit({ type: 'conversation.switched', request_id: req.request_id,
+    conversation_id: 'new', worldline: 'steins_gate' }));
+  act(() => { expect.soft(h.result.current.sendChat('accepted')).toBe(true); });
+  expect(socket.frames.filter(f => f.type === 'chat.send')).toEqual([{ type: 'chat.send', content: 'accepted' }]);
+  socket.readyState = 3;
+  act(() => { expect.soft(h.result.current.sendChat('closed')).toBe(false); });
+  expect(socket.frames.filter(f => f.type === 'chat.send')).toHaveLength(1);
+  h.unmount();
+});

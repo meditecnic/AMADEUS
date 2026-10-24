@@ -93,6 +93,8 @@ let deleteCount: number;
 let listQueryCount: number;
 let afterPost: (() => void) | null;
 const missingHistory = new Set<string>();
+const failedHistory = new Set<string>();
+const heldHistory = new Map<string, Promise<void>>();
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'] });
@@ -104,6 +106,7 @@ beforeEach(() => {
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 });
   FakeWebSocket.instances = []; rows = [oldRow]; httpDown = false; postCount = 0; historyCount = 0; patchCount = 0; deleteCount = 0;
   FakeWebSocket.autoReady = true; FakeWebSocket.autoSwitch = true; afterPost = null; missingHistory.clear();
+  failedHistory.clear(); heldHistory.clear();
   listQueryCount = 0;
   vi.stubGlobal('WebSocket', FakeWebSocket);
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => window.setTimeout(() => cb(performance.now()), 16));
@@ -155,6 +158,8 @@ beforeEach(() => {
       historyCount++;
       await new Promise(resolve => setTimeout(resolve, 5));
       const id = url.split('/')[3];
+      await heldHistory.get(id);
+      if (failedHistory.has(id)) throw new TypeError('Failed to fetch');
       if (missingHistory.has(id)) return json({}, 404);
       return json([{ role: 'user', content: id === 'old' ? '旧对话内容' : `历史 ${id}` }]);
     }
@@ -502,11 +507,15 @@ it.each(['history', 'create'])(
     await startOld(false); FakeWebSocket.autoSwitch = false;
     const socket = latest(); const sockets = FakeWebSocket.instances.length;
     const presence = document.querySelector('.ws2-presence')?.getAttribute('data-presence');
+    fireEvent.change(screen.getByLabelText('输入消息'), { target: { value: '确认前的草稿' } });
     if (action === 'history') await clickHistory('new');
     else { fireEvent.click(newButton()); await flush(300); }
     expect.soft(document.querySelector('.ws2-online')).toHaveTextContent('ONLINE');
     expect.soft(document.querySelector('.ws2-presence')).toHaveAttribute('data-presence', presence);
     expect(screen.getByLabelText('输入消息')).toBeDisabled();
+    fireEvent.submit(document.querySelector('form.ws2-composer')!);
+    expect(screen.getByLabelText('输入消息')).toHaveValue('确认前的草稿');
+    expect(socket.chats).toEqual([]);
     act(() => switchAck(socket)); await flush();
     expect.soft(FakeWebSocket.instances).toHaveLength(sockets);
     expect.soft(authCount()).toBe(1);
@@ -558,4 +567,79 @@ it('REWORK exact text: missing auth conversation refreshes once and never append
   await act(async () => { latest().open(); latest().ready(); });
   expect(latest().sent[0]).toMatchObject({ conversation_id: 'old' });
   expect(active()).toBe('old'); expect(screen.getByLabelText('输入消息')).toBeEnabled();
+});
+
+it.each(['404', 'network'])(
+  'REWORK56 N1: replacing an unconfirmed switch with a %s history failure retires its socket', async failure => {
+    rows = [newRow, { ...newRow, id: 'other', title: 'Y' }, oldRow];
+    await startOld(false); FakeWebSocket.autoSwitch = false; FakeWebSocket.autoReady = false;
+    const source = latest(); const lateMessage = source.onmessage!;
+    await clickHistory('new');
+    const request = source.sent.find(f => f.type === 'conversation.switch' && f.conversation_id === 'new')!;
+    expect(source.conversationId).toBe('new'); // The server can switch before its ACK arrives.
+    if (failure === '404') missingHistory.add('other'); else failedHistory.add('other');
+    await clickHistory('other');
+    expect.soft(FakeWebSocket.instances).toHaveLength(2);
+    expect.soft(source.readyState).toBe(3);
+    expect.soft(screen.getByLabelText('输入消息')).toBeDisabled();
+    act(() => lateMessage({ data: JSON.stringify({ type: 'conversation.switched',
+      request_id: request.request_id, conversation_id: 'new', worldline: 'steins_gate', generation: 5 }) }));
+    expect(active()).toBe('old');
+    expect(screen.getByText('旧对话内容')).toBeInTheDocument();
+    if (latest() !== source) {
+      await act(async () => latest().open());
+      expect(latest().sent[0]).toMatchObject({ type: 'auth', conversation_id: 'old' });
+      expect(screen.getByLabelText('输入消息')).toBeDisabled();
+      await act(async () => latest().ready());
+    }
+    expect.soft(authCount()).toBe(2);
+    expect(screen.getByLabelText('输入消息')).toBeEnabled();
+    sendLine('迟到确认后仍发往原对话');
+    expect.soft(latest().chats).toEqual([{ content: '迟到确认后仍发往原对话', conversationId: 'old' }]);
+    expect(source.chats).toEqual([]);
+    expect(screen.getByLabelText('输入消息')).toHaveValue('');
+  },
+);
+
+it('REWORK56 N1: replacing an unconfirmed switch enters Y on the replacement socket with two auths', async () => {
+  rows = [newRow, { ...newRow, id: 'other', title: 'Y' }, oldRow];
+  await startOld(false); FakeWebSocket.autoSwitch = false; FakeWebSocket.autoReady = false;
+  const source = latest(); const lateMessage = source.onmessage!;
+  await clickHistory('new');
+  const request = source.sent.find(f => f.type === 'conversation.switch' && f.conversation_id === 'new')!;
+  await clickHistory('other');
+  expect.soft(FakeWebSocket.instances).toHaveLength(2);
+  expect(screen.getByLabelText('输入消息')).toBeDisabled();
+  act(() => lateMessage({ data: JSON.stringify({ type: 'conversation.switched',
+    request_id: request.request_id, conversation_id: 'new', worldline: 'steins_gate' }) }));
+  if (latest() === source) act(() => switchAck(source));
+  else await act(async () => { latest().open(); latest().ready(); });
+  expect.soft(authCount()).toBe(2);
+  expect(latest().sent.find(f => f.type === 'auth')).toMatchObject({ conversation_id: 'other' });
+  expect(active()).toBe('other'); expect(screen.getByText('历史 other')).toBeInTheDocument();
+  sendLine('进入 Y 后发送');
+  expect(latest().chats).toEqual([{ content: '进入 Y 后发送', conversationId: 'other' }]);
+});
+
+it('REWORK56 S5: a rejected send preserves the draft when transport closes before the close event', async () => {
+  await startOld(false); const socket = latest();
+  fireEvent.change(screen.getByLabelText('输入消息'), { target: { value: '尚未发出的草稿' } });
+  socket.readyState = 3; // The hook can observe the closed transport before React sees onclose.
+  fireEvent.submit(document.querySelector('form.ws2-composer')!);
+  expect(socket.chats).toEqual([]);
+  expect(screen.queryByText('尚未发出的草稿', { selector: '.message-content' })).toBeNull();
+  expect(screen.getByLabelText('输入消息')).toHaveValue('尚未发出的草稿');
+});
+
+it('REWORK56 HTTP stage: another history click before dispatch keeps one socket and one auth', async () => {
+  rows = [newRow, { ...newRow, id: 'other', title: 'Y' }, oldRow];
+  await startOld(false); const socket = latest();
+  let release!: () => void;
+  heldHistory.set('new', new Promise<void>(resolve => { release = resolve; }));
+  const switches = socket.sent.filter(f => f.type === 'conversation.switch').length;
+  await clickHistory('new'); await clickHistory('other');
+  expect(socket.sent.filter(f => f.type === 'conversation.switch')).toHaveLength(switches);
+  expect(FakeWebSocket.instances).toHaveLength(1); expect(authCount()).toBe(1);
+  await act(async () => release()); await flush(100);
+  expect(FakeWebSocket.instances).toHaveLength(1); expect(authCount()).toBe(1);
 });

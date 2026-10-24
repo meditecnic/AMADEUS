@@ -534,7 +534,7 @@ describe('Workstation provider runtime changes', () => {
   });
 
   it('guards composer Enter independently for composing and keyCode 229 while preserving Shift+Enter', async () => {
-    const sendChat = vi.fn();
+    const sendChat = vi.fn(() => true);
     wsSpies.useAmadeusWS.mockReturnValue({
       status: 'READY', sessionState: 'ready', messages: [], isThinking: false, isSynthesizing: false,
       emotion: 'neutral', sendChat, stopVoice: vi.fn(), cancelTurn: vi.fn(), updateConfig: vi.fn(),
@@ -1583,7 +1583,7 @@ describe('Workstation UX-TRANSCRIPT-FOLLOW-01 conditional stick + jump', () => {
   });
 
   it('keeps force-scroll on send so thinking area is revealed', async () => {
-    const sendChat = vi.fn();
+    const sendChat = vi.fn(() => true);
     wsSpies.useAmadeusWS.mockImplementation(() => ({
       status: 'READY',
       messages: [{ id: 'old', role: 'assistant', content: '旧消息', streaming: false, segments: [] }],

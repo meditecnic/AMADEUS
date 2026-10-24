@@ -82,7 +82,10 @@ interface WorkstationProps {
   onEntranceSettled?: () => void;
 }
 
-type ConversationEntry = PendingConversationTarget & { conversation: ConversationSummary };
+type ConversationEntry = PendingConversationTarget & {
+  conversation: ConversationSummary;
+  switchDispatched: boolean;
+};
 type ConversationCreateResult = { status: 'failed' } | {
   status: 'created'; conversation: ConversationSummary; requestEpoch: number; entered: Promise<boolean>;
 };
@@ -1295,15 +1298,18 @@ export const Workstation: React.FC<WorkstationProps> = ({
         y: box.top + (parseFloat(cs.paddingTop) || 0) - composer.scrollTop,
       };
     }
-    sendChat(inputText.trim());
+    if (!sendChat(inputText.trim())) return;
     scrollTranscriptToLatest();
     setInputText('');
   };
 
   const beginConversationEntry = () => {
-    const hadTarget = pendingConversationRef.current !== null;
+    const target = pendingConversationRef.current;
     const epoch = abandonConversationEntry(false);
-    if (hadTarget && (status !== 'READY' || sessionState === 'unknown' || sessionState === 'rejected')) {
+    // A dispatched switch may already have changed the server session. Retire that
+    // socket before replacing the intent, even while the next HTTP request is pending.
+    if (target && (target.switchDispatched || status !== 'READY'
+      || sessionState === 'unknown' || sessionState === 'rejected')) {
       setConversationReconnectEpoch(epoch);
     }
     setConversationBusy(true);
@@ -1315,12 +1321,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
     const target: ConversationEntry = {
       conversation, conversationId: conversation.id, worldline, requestEpoch, history,
       providerId: conversation.provider_id || draftProviderId, model: conversation.model_id || model,
+      switchDispatched: false,
     };
     const entered = new Promise<boolean>(resolve => { pendingEntryRef.current = { epoch: requestEpoch, resolve }; });
     pendingConversationRef.current = target;
     setPendingConversation(target);
     audioPlayer.stopAll();
-    if (!switchConversation(conversation.id, history, requestEpoch)) setConversationReconnectEpoch(requestEpoch);
+    target.switchDispatched = switchConversation(conversation.id, history, requestEpoch);
+    if (!target.switchDispatched) setConversationReconnectEpoch(requestEpoch);
     return entered;
   };
 

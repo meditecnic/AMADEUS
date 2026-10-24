@@ -109,7 +109,7 @@ export interface UseAmadeusWSReturn {
   activeNotice: string | null;
   emotion: 'neutral' | 'tsundere' | 'embarrassed' | 'intellectual' | 'happy' | 'surprised' | 'annoyed' | 'disappointed' | 'sad';
   clearHistory: () => void;
-  sendChat: (content: string) => void;
+  sendChat: (content: string) => boolean;
   stopVoice: () => void;
   cancelTurn: () => void;
   sendDebugTts: (emotion: string, text: string) => void;
@@ -981,8 +981,8 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   const sendChat = useCallback((content: string) => {
     const pending = paramsRef.current.pendingConversation;
     if ((pending && confirmedConversationEpochRef.current !== pending.requestEpoch)
-      || pendingConversationSwitchRef.current?.requestEpoch !== undefined) return;
-    if (!content.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+      || pendingConversationSwitchRef.current?.requestEpoch !== undefined) return false;
+    if (!content.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return false;
 
     // Start 30s watchdog wait immediately on sending chat
     startWatchdog();
@@ -1005,6 +1005,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       content: content.trim()
     }));
     paramsRef.current.onLocalSend?.(userMsgId);
+    return true;
   }, []);
 
   const stopVoice = useCallback(() => {
