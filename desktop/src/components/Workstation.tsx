@@ -6,6 +6,7 @@ import {
   getOrCreateAmadeusSessionId,
   useAmadeusWS,
   type Message,
+  type PendingConversationTarget,
 } from '../hooks/useAmadeusWS';
 import {
   CHAT_TEMPERATURE_DEFAULT,
@@ -80,6 +81,14 @@ interface WorkstationProps {
   entrance?: EntrancePhase;
   onEntranceSettled?: () => void;
 }
+
+type ConversationEntry = PendingConversationTarget & {
+  conversation: ConversationSummary;
+  switchDispatched: boolean;
+};
+type ConversationCreateResult = { status: 'failed' } | {
+  status: 'created'; conversation: ConversationSummary; requestEpoch: number; entered: Promise<boolean>;
+};
 
 /**
  * User message language tag: only when content includes real Japanese kana.
@@ -187,6 +196,30 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const latestWorldlineRef = useRef(worldline);
   const conversationRequestRef = useRef(0);
   const pendingConversationModelRef = useRef<{ model: string; provider: string | null } | null>(null);
+  const [pendingConversation, setPendingConversation] = useState<ConversationEntry | null>(null);
+  const pendingConversationRef = useRef<ConversationEntry | null>(null);
+  const conversationEpochRef = useRef(0);
+  const pendingEntryRef = useRef<{ epoch: number; resolve: (entered: boolean) => void } | null>(null);
+  const [conversationReconnectEpoch, setConversationReconnectEpoch] = useState<number | null>(null);
+  const entryInterruptedByShiftRef = useRef(false);
+
+  const abandonConversationEntry = useCallback((reconnectToSource = true) => {
+    const hadTarget = pendingConversationRef.current !== null;
+    const epoch = ++conversationEpochRef.current;
+    pendingEntryRef.current?.resolve(false);
+    pendingEntryRef.current = null;
+    pendingConversationRef.current = null;
+    setPendingConversation(null);
+    setConversationReconnectEpoch(null);
+    pendingConversationModelRef.current = null;
+    setConversationBusy(false);
+    if (hadTarget && reconnectToSource) setConversationReconnectEpoch(epoch);
+    return epoch;
+  }, []);
+  useEffect(() => () => {
+    conversationEpochRef.current += 1;
+    pendingEntryRef.current?.resolve(false);
+  }, []);
 
   const [enableBgm, setEnableBgm] = useState(() => {
     try { return localStorage.getItem('amadeus_pc_enable_bgm') !== 'false'; } catch { return true; }
@@ -582,6 +615,35 @@ export const Workstation: React.FC<WorkstationProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model, draftProviderId, providers]);
 
+  const acceptConversationEntry = ({ conversationId, worldline: confirmedWorldline, requestEpoch }: {
+    conversationId?: string | null; worldline?: 'steins_gate' | 'beta'; requestEpoch?: number;
+  }) => {
+    const target = pendingConversationRef.current;
+    if (!target) return requestEpoch === undefined;
+    if (target.requestEpoch !== requestEpoch || conversationEpochRef.current !== requestEpoch
+      || target.conversationId !== conversationId || target.worldline !== latestWorldlineRef.current
+      || (confirmedWorldline !== undefined && target.worldline !== confirmedWorldline)) return false;
+    setActiveConversationId(target.conversationId);
+    setConversations(current => {
+      const rows = current.some(row => row.id === target.conversationId)
+        ? current : [target.conversation, ...current];
+      return rows.map(row => ({ ...row, is_selected: row.id === target.conversationId }));
+    });
+    setModel(target.model);
+    setDraftProviderId(target.providerId);
+    try {
+      localStorage.setItem('amadeus_pc_model', target.model);
+      localStorage.setItem('amadeus_pc_provider', target.providerId);
+    } catch {}
+    pendingConversationRef.current = null;
+    setPendingConversation(null);
+    setConversationReconnectEpoch(null);
+    setConversationBusy(false);
+    pendingEntryRef.current?.resolve(true);
+    pendingEntryRef.current = null;
+    return true;
+  };
+
   // WebSocket hook connection management
   const {
     status,
@@ -606,6 +668,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   } = useAmadeusWS({
     sessionId,
     conversationId: activeConversationId,
+    pendingConversation,
     systemPrompt,
     temperature,
     worldline,
@@ -649,7 +712,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
         window.setTimeout(() => { void loadConversations().catch(() => undefined); }, 250);
       }
     },
-    onConversationSwitched: ({ conversationId }) => {
+    onSessionReady: ({ conversationId, conversationMode, worldline: readyWorldline, requestEpoch }) => {
+      const target = pendingConversationRef.current;
+      if (target && (target.worldline !== readyWorldline || conversationMode !== 'history')) return false;
+      return acceptConversationEntry({ conversationId, worldline: readyWorldline, requestEpoch });
+    },
+    onConversationSwitched: ({ conversationId, worldline: switchedWorldline, requestEpoch }) => {
+      const target = pendingConversationRef.current;
+      if (target) return acceptConversationEntry({ conversationId, worldline: switchedWorldline, requestEpoch });
+      if (requestEpoch !== undefined) return false;
       setConversationBusy(false);
       setActiveConversationId(conversationId);
       setConversations((current) => current.map((row) => ({
@@ -668,7 +739,27 @@ export const Workstation: React.FC<WorkstationProps> = ({
       }
       pendingConversationModelRef.current = null;
     },
-    onConversationSwitchError: ({ code }) => {
+    onConversationSwitchError: ({ code, requestEpoch, conversationId, phase }) => {
+      const target = pendingConversationRef.current;
+      if (target && target.requestEpoch === requestEpoch && target.conversationId === conversationId
+        && conversationEpochRef.current === requestEpoch) {
+        if (phase === 'switch') {
+          // A live switch_error means the server has already restored the source session.
+          abandonConversationEntry(false);
+        } else if (phase === 'auth') {
+          // A rejected target auth cannot be used; reauthenticate the committed source.
+          abandonConversationEntry();
+        } else if (code === 'socket_not_ready' || code === 'connection_closed') {
+          // Disconnect retires a socket, not the user's selection intent.
+          setConversationReconnectEpoch(requestEpoch);
+        } else {
+          abandonConversationEntry();
+        }
+        if (code === 'conversation_not_found') void loadConversations().catch(() => undefined);
+        setSessionError({ kind: 'session', code });
+        return true;
+      }
+      if (requestEpoch !== undefined) return false;
       pendingConversationModelRef.current = null;
       setConversationBusy(false);
       // Do not use the TTS toast channel for session lifecycle failures.
@@ -765,12 +856,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
   }, [enableTts]);
 
   useEffect(() => {
+    if (pendingConversationRef.current?.worldline !== worldline
+      && pendingConversationRef.current !== null) abandonConversationEntry(false);
     setActiveConversationId(null);
     void loadConversations().catch((error) => {
       console.warn('Conversation synchronization failed:', error);
     });
   }, [loadConversations]);
 
+  // Compatibility only: production SettingsModal is embedded and cannot change the parent worldline directly.
   useEffect(() => {
     if (previousWorldlineRef.current === worldline) return;
     if (suppressedWorldlineEffectRef.current === worldline) {
@@ -1040,9 +1134,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const needsApiKey = credentialChecked && Boolean(activeProvider) && !credentialConfigured;
   const presentationMessages = shift && !shift.committed ? shiftSourceMessages.current : messages;
   const visibleMessages = needsApiKey
-    ? presentationMessages.filter((message) => !/(API\s*Key|未认证|缺失\s*API)/i.test(message.content))
+    ? presentationMessages.filter((message) => message.conversationEntryError || !/(API\s*Key|未认证|缺失\s*API)/i.test(message.content))
     // After switching away, a "missing key" error about the previous connection no longer describes anything.
     : presentationMessages.filter((message) => {
+      if (message.conversationEntryError) return true;
       const missing = /缺失\s*(\S+)\s*API\s*Key/i.exec(message.content);
       return !missing || missing[1] === activeProviderId;
     });
@@ -1141,6 +1236,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
     setDraftReconnectScope(null);
   }, [draftReconnectScope, presentationScope, reconnect]);
 
+  // The hook's layout effect commits the target/runtime params before this reconnect.
+  useEffect(() => {
+    if (conversationReconnectEpoch === null) return;
+    if (conversationReconnectEpoch === conversationEpochRef.current
+      && (!pendingConversation || pendingConversation.worldline === worldline)
+      && status !== 'CONNECTING') reconnect();
+    setConversationReconnectEpoch(null);
+  }, [conversationReconnectEpoch, pendingConversation, reconnect, status, worldline]);
+
   const handleJumpToLatest = useCallback(() => {
     scrollTranscriptToLatest({ smooth: true });
   }, [scrollTranscriptToLatest]);
@@ -1168,7 +1272,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputText.trim() || conversationBusy || sessionState === 'rejected' || sessionState === 'unknown' || providerGone) return;
+    if (!inputText.trim() || conversationBusy || conversationReconnectEpoch !== null
+      || sessionState === 'rejected' || sessionState === 'unknown' || providerGone) return;
     // Turn text still gates send via isThinking/isSynthesizing. When only leftover
     // voice is playing, stop the existing playback path then start the new Turn.
     if (isPlaying) {
@@ -1180,7 +1285,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
     // Okabe default keeps the existing draft path (zero regression for most sessions).
     if (!activeConversationId && normalizeIdentityMode(defaultIdentityMode) === 'self') {
       const created = await createConversation('self');
-      if (!created) return;
+      if (created.status !== 'created' || !(await created.entered)
+        || created.requestEpoch !== conversationEpochRef.current) return;
     }
     audioService.playSFX('/audio/sfx/连接成功，进入页面1.ogg', sfxVolume);
     const composer = composerRef.current;
@@ -1192,14 +1298,48 @@ export const Workstation: React.FC<WorkstationProps> = ({
         y: box.top + (parseFloat(cs.paddingTop) || 0) - composer.scrollTop,
       };
     }
-    sendChat(inputText.trim());
+    if (!sendChat(inputText.trim())) return;
     scrollTranscriptToLatest();
     setInputText('');
   };
 
-  const selectConversation = async (conversation: ConversationSummary, force = false) => {
-    if ((!force && conversation.id === activeConversationId) || conversationBusy) return;
+  const beginConversationEntry = () => {
+    const target = pendingConversationRef.current;
+    const epoch = abandonConversationEntry(false);
+    // A dispatched switch may already have changed the server session. Retire that
+    // socket before replacing the intent, even while the next HTTP request is pending.
+    if (target && (target.switchDispatched || status !== 'READY'
+      || sessionState === 'unknown' || sessionState === 'rejected')) {
+      setConversationReconnectEpoch(epoch);
+    }
     setConversationBusy(true);
+    return epoch;
+  };
+
+  const enterConversation = (conversation: ConversationSummary, history: Message[], requestEpoch: number) => {
+    if (requestEpoch !== conversationEpochRef.current || worldline !== latestWorldlineRef.current) return Promise.resolve(false);
+    const target: ConversationEntry = {
+      conversation, conversationId: conversation.id, worldline, requestEpoch, history,
+      providerId: conversation.provider_id || draftProviderId, model: conversation.model_id || model,
+      switchDispatched: false,
+    };
+    const entered = new Promise<boolean>(resolve => { pendingEntryRef.current = { epoch: requestEpoch, resolve }; });
+    pendingConversationRef.current = target;
+    setPendingConversation(target);
+    audioPlayer.stopAll();
+    target.switchDispatched = switchConversation(conversation.id, history, requestEpoch);
+    if (!target.switchDispatched) setConversationReconnectEpoch(requestEpoch);
+    return entered;
+  };
+
+  const selectConversation = async (conversation: ConversationSummary, force = false) => {
+    if (!force && conversation.id === pendingConversationRef.current?.conversationId) return false;
+    if (!force && conversation.id === activeConversationId) {
+      if (pendingConversationRef.current) abandonConversationEntry();
+      return false;
+    }
+    if (conversationBusy && !pendingConversationRef.current) return false;
+    const epoch = beginConversationEntry();
     try {
       audioPlayer.stopAll();
       const response = await fetch(
@@ -1222,25 +1362,20 @@ export const Workstation: React.FC<WorkstationProps> = ({
           translation: row.role === 'assistant' ? row.translation || '' : undefined,
           streaming: false,
       }));
-      pendingConversationModelRef.current = conversation.model_id
-        ? { model: conversation.model_id, provider: conversation.provider_id || null }
-        : null;
-      if (!switchConversation(conversation.id, history)) {
-        pendingConversationModelRef.current = null;
-        setConversationBusy(false);
-      }
+      return await enterConversation(conversation, history, epoch);
     } catch (error) {
       console.warn('Conversation switch failed:', error);
-      setConversationBusy(false);
+      if (epoch === conversationEpochRef.current) setConversationBusy(false);
+      return false;
     }
   };
 
   const createConversation = async (
     identityMode: IdentityMode = defaultIdentityMode,
-  ): Promise<ConversationSummary | null> => {
-    if (conversationBusy) return null;
+  ): Promise<ConversationCreateResult> => {
+    if (conversationBusy && !pendingConversationRef.current) return { status: 'failed' };
+    const epoch = beginConversationEntry();
     setConversationCreateError(null);
-    setConversationBusy(true);
     try {
       const active = conversations.find((row) => row.id === activeConversationId);
       const mode = normalizeIdentityMode(identityMode);
@@ -1264,15 +1399,16 @@ export const Workstation: React.FC<WorkstationProps> = ({
           : `新建对话失败（HTTP ${response.status}），请重试。`);
       }
       const created = await response.json() as ConversationSummary;
-      setConversationBusy(false);
-      await selectConversation(created);
+      const entered = enterConversation(created, [], epoch);
       window.setTimeout(() => { void loadConversations().catch(() => undefined); }, 250);
-      return created;
+      return { status: 'created', conversation: created, requestEpoch: epoch, entered };
     } catch (error) {
       console.warn('Conversation creation failed:', error);
-      setConversationCreateError(error instanceof Error ? error.message : '新建对话失败，请重试。');
-      setConversationBusy(false);
-      return null;
+      if (epoch === conversationEpochRef.current) {
+        setConversationCreateError(error instanceof Error ? error.message : '新建对话失败，请重试。');
+        setConversationBusy(false);
+      }
+      return { status: 'failed' };
     }
   };
 
@@ -1437,7 +1573,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
       conversationRequestRef.current += 1;
       setConversations(current => current.filter(row => row.id !== conversation.id));
       setDeleteTarget(null);
+      if (pendingConversationRef.current?.conversationId === conversation.id) abandonConversationEntry();
       if (wasActive) {
+        if (pendingConversationRef.current) abandonConversationEntry(false);
         // Q51: deleting the open conversation returns to a blank draft; never silently open another one.
         if (isThinking || isSynthesizing || messages.some(message => message.streaming)) cancelTurn();
         audioPlayer.stopAll();
@@ -1729,6 +1867,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
   /** Dispatch once now. Only ACK + final lock may publish the outer worldline. */
   const startShift = (to: 'steins_gate' | 'beta') => {
     if (shiftRef.current || to === worldline) return;
+    entryInterruptedByShiftRef.current = pendingConversationRef.current !== null;
+    if (entryInterruptedByShiftRef.current) abandonConversationEntry(false);
     // Leftover voice fades out (well before the commit point of the animation), then stops.
     if (isPlaying) {
       const fade = audioPlayer.fadeOut?.(400);
@@ -1785,7 +1925,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const lastAssistantId = [...visibleMessages].reverse().find((msg) => msg.role === 'assistant' && !msg.systemError)?.id;
   // An old conversation whose connection was removed keeps its history but must be re-pointed by the user.
   const providerGone = Boolean(activeConversation) && providers.length > 0 && (!activeProvider || activeProvider.enabled === false);
-  const sendBlocked = status !== 'READY' || sessionState === 'rejected' || sessionState === 'unknown' || isThinking || isSynthesizing || conversationBusy || providerGone;
+  const sendBlocked = status !== 'READY' || sessionState === 'rejected' || sessionState === 'unknown' || isThinking || isSynthesizing || conversationBusy || conversationReconnectEpoch !== null || providerGone;
   useEffect(() => {
     if (!entering) handComposerFocus();
   }, [entering, sendBlocked, handComposerFocus]);
@@ -1931,7 +2071,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           isCollapsed={isHistoryCollapsed}
           onToggle={() => setIsHistoryCollapsed((v) => !v)}
           conversations={conversations}
-          activeId={activeConversationId}
+          activeId={pendingConversation?.conversationId ?? activeConversationId}
           searchQuery={conversationSearch}
           onSearchChange={setConversationSearch}
           onSelect={(conversation) => {
@@ -1947,7 +2087,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           onTogglePin={toggleConversationPin}
           onDelete={(conversation) => { void deleteConversation(conversation); }}
           onForget={(conversation) => { setForgetError(null); setForgetTarget(conversation); }}
-          busy={conversationBusy}
+          busy={conversationBusy && !pendingConversation}
           loadFailed={conversationListFailed && conversationListWorldline !== worldline}
           refreshFailed={conversationListFailed && conversationListWorldline === worldline}
           onRetry={() => { void loadConversations().catch(() => undefined); }}
@@ -2563,6 +2703,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
           onDone={() => {
             if (shiftRef.current !== shift) return;
             if (shift.error) setSessionError({ kind: 'worldline', code: shift.error });
+            if (entryInterruptedByShiftRef.current) {
+              entryInterruptedByShiftRef.current = false;
+              setConversationReconnectEpoch(conversationEpochRef.current);
+            }
             shift.dispose();
             shiftRef.current = null;
             setConversationBusy(false);
