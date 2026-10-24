@@ -4,9 +4,11 @@ Acceptance map (dispatch section 6) is noted per test as [A<n>].
 """
 from __future__ import annotations
 
+import builtins
 import hashlib
 import json
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -731,6 +733,11 @@ class NotLoadedEmbedder(SpyEmbedder):
         raise AssertionError("prompt compilation must never load E5")
 
 
+def _sentence_transformers_imported(monkeypatch) -> None:
+    """Pretend sentence_transformers is already imported (stub module only)."""
+    monkeypatch.setitem(sys.modules, "sentence_transformers", ModuleType("sentence_transformers"))
+
+
 def _deepseek_provider():
     from app.services.provider_runtime import deepseek_service
 
@@ -755,6 +762,7 @@ async def test_forty_facts_profile_and_supplement(isolated_store, monkeypatch):
     from app.services.memory import memory_service
 
     monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
+    _sentence_transformers_imported(monkeypatch)  # readiness() is consulted
     spy = NotLoadedEmbedder(loaded=False)
     monkeypatch.setattr(memory_service, "embedder", spy)
     sid = f"rp-forty-{uuid4()}"
@@ -795,6 +803,7 @@ async def test_supplement_uses_e5_only_when_already_loaded(isolated_store, monke
     from app.services.memory import memory_service
 
     monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
+    _sentence_transformers_imported(monkeypatch)
     spy = NotLoadedEmbedder(loaded=True)
     monkeypatch.setattr(memory_service, "embedder", spy)
     sid = f"rp-e5-{uuid4()}"
@@ -805,6 +814,67 @@ async def test_supplement_uses_e5_only_when_already_loaded(isolated_store, monke
     # Query = normalized user message (NFKC folds the fullwidth "？").
     assert spy.calls == [supplement_need_text(SUPPLEMENT_QUERY)] == ["紅茶はミルクを入れる派?"]
     assert sorted(_supplement_records(prompt)) == sorted([LOW_TEXTS[0], LOW_TEXTS[1]])
+
+
+def test_embedder_loaded_skips_readiness_until_sentence_transformers_imported(monkeypatch):
+    """[A5] dispatch 59: no sentence_transformers in sys.modules -> no readiness()."""
+    from app.services.prompt_compiler import _embedder_loaded
+
+    monkeypatch.delitem(sys.modules, "sentence_transformers", raising=False)
+    loaded = NotLoadedEmbedder(loaded=True)
+    assert _embedder_loaded(loaded) is False
+    assert loaded.readiness_calls == 0
+    assert "sentence_transformers" not in sys.modules
+    monkeypatch.setitem(sys.modules, "sentence_transformers", None)  # import-blocked
+    assert _embedder_loaded(loaded) is False
+    assert loaded.readiness_calls == 0
+    _sentence_transformers_imported(monkeypatch)
+    assert _embedder_loaded(loaded) is True
+    assert _embedder_loaded(NotLoadedEmbedder(loaded=False)) is False
+    assert loaded.readiness_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_prompt_never_imports_sentence_transformers_nor_calls_readiness(isolated_store, monkeypatch):
+    """[A5] dispatch 59: module absent -> bigram-only supplement, no readiness, no import."""
+    from app.services.memory import EmbeddingAdapter, memory_service
+
+    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
+    monkeypatch.delitem(sys.modules, "sentence_transformers", raising=False)
+    attempted: list[str] = []
+    real_import = builtins.__import__
+
+    def guarded_import(name, *args, **kwargs):
+        if name == "sentence_transformers" or name.startswith("sentence_transformers."):
+            attempted.append(name)
+            raise AssertionError("prompt compilation imported sentence_transformers")
+        return real_import(name, *args, **kwargs)
+
+    sid = f"rp-noimport-{uuid4()}"
+    await seed_forty(sid)
+    spy = NotLoadedEmbedder(loaded=True)  # would be used if readiness() were consulted
+    adapter = EmbeddingAdapter()
+    adapter_readiness = {"n": 0}
+
+    def counted_readiness():
+        adapter_readiness["n"] += 1
+        raise AssertionError("readiness() during prompt compilation")
+
+    monkeypatch.setattr(adapter, "readiness", counted_readiness)
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+    try:
+        for embedder in (spy, adapter):
+            monkeypatch.setattr(memory_service, "embedder", embedder)
+            prompt = await compile_for_session(
+                _v11_session(sid), SUPPLEMENT_QUERY, provider=_deepseek_provider()
+            )
+            assert sorted(_supplement_records(prompt)) == sorted([LOW_TEXTS[0], LOW_TEXTS[1]])
+    finally:
+        monkeypatch.setattr(builtins, "__import__", real_import)
+    assert spy.readiness_calls == 0 and spy.calls == []
+    assert adapter_readiness["n"] == 0
+    assert attempted == []
+    assert "sentence_transformers" not in sys.modules
 
 
 @pytest.mark.asyncio

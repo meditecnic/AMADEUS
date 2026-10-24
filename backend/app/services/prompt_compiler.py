@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import re
+import sys
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -741,8 +742,16 @@ def supplement_need_text(user_message: str) -> str:
 
 
 def _embedder_loaded(embedder: Any) -> bool:
-    """True only when the E5 model is already in memory (never loads it)."""
+    """True only when the E5 model is already in memory (never loads it).
+
+    readiness() imports sentence_transformers, and a first import pulls in
+    torch synchronously. If the module is not imported yet the model cannot
+    be loaded either, so return False (bigram-only) without calling
+    readiness() and without importing anything.
+    """
     if embedder is None:
+        return False
+    if sys.modules.get("sentence_transformers") is None:
         return False
     try:
         readiness = embedder.readiness()
