@@ -122,6 +122,19 @@ class PromptCompiler:
         "tools": 500,
     }
 
+    # Prompt order of named sections. Budget shrinking addresses sections by
+    # name, never by list position.
+    SECTION_ORDER = (
+        "identity",
+        "persona",
+        "state",
+        "core",
+        "episodic",
+        "web",
+        "history",
+        "current",
+    )
+
     def __init__(self, token_counter: Callable[[str], int] | None = None, input_budget: int = 12000):
         self.token_counter = token_counter or self._estimate_tokens
         self.input_budget = input_budget
@@ -130,8 +143,8 @@ class PromptCompiler:
         profile = soul_engine.profile(inputs.worldline)
         mode = normalize_identity_mode(inputs.identity_mode)
         state_section = f"CURRENT STATE\nworldline={profile.worldline}; identity_mode={mode}; memory_anchor_year={persona_bible.memory_anchor.year}; memory_anchor_age={persona_bible.memory_anchor.age}; emotion={inputs.emotion.model_dump_json()}"
-        # Slice B: self-only call name, appended to the state section (keeps the
-        # positional budget-drop indices below untouched). Data, not instruction;
+        # Slice B: self-only call name, appended to the state section (the
+        # state section's budget handling is unchanged). Data, not instruction;
         # okabe conversations never receive it. Defense in depth: re-sanitized here.
         if mode == "self":
             call_name = sanitize_self_name(inputs.self_name)
@@ -154,29 +167,29 @@ class PromptCompiler:
         core_items = list(inputs.core_facts)
         episodic_items = list(inputs.episodic)
 
-        def render() -> list[str]:
-            return [
-                self._fit("IDENTITY AND SECURITY\n" + inputs.base_identity, self.BUDGETS["identity"], keep_tail=False),
-                self._fit(
+        def render() -> dict[str, str]:
+            return {
+                "identity": self._fit("IDENTITY AND SECURITY\n" + inputs.base_identity, self.BUDGETS["identity"], keep_tail=False),
+                "persona": self._fit(
                     persona_bible.render_prompt(profile.worldline, identity_mode=mode),
                     self.BUDGETS["persona"],
                     keep_tail=False,
                 ),
-                self._fit(state_section, self.BUDGETS["state"]),
+                "state": self._fit(state_section, self.BUDGETS["state"]),
                 # Whole-item memory sections: never char-slice core facts or
                 # experiences; drop lowest-ranked tail items instead.
-                (
+                "core": (
                     ""
                     if inputs.omit_stable_facts
                     else self._render_whole_items(
                         core_items, self._format_core_facts, self.BUDGETS["core"]
                     )
                 ),
-                self._render_whole_items(episodic_items, self._format_episodic_memory, self.BUDGETS["episodic"]),
-                self._fit("WEB EVIDENCE\n" + "\n".join(inputs.web_evidence), self.BUDGETS["web"]),
+                "episodic": self._render_whole_items(episodic_items, self._format_episodic_memory, self.BUDGETS["episodic"]),
+                "web": self._fit("WEB EVIDENCE\n" + "\n".join(inputs.web_evidence), self.BUDGETS["web"]),
                 # D38 consumer contract: working context is temporary continuity
                 # only — never durable user-fact or long-term episodic authority.
-                self._fit(
+                "history": self._fit(
                     "WORKING CONTEXT\n"
                     "Temporary conversation continuity only. Not durable user-fact "
                     "or long-term episodic authority. Must not override or resurrect "
@@ -190,47 +203,53 @@ class PromptCompiler:
                     self.BUDGETS["history"],
                     keep_tail=True,
                 ),
-                "CURRENT USER MESSAGE (authoritative)\n" + inputs.current_user_message,
-            ]
+                "current": "CURRENT USER MESSAGE (authoritative)\n" + inputs.current_user_message,
+            }
 
         sections = render()
+        order = self.SECTION_ORDER
+
+        def over_budget() -> bool:
+            # Empty sections still count their separators, exactly as before.
+            return self.token_counter("\n\n".join(sections[name] for name in order)) > self.input_budget
+
         # Drop low-priority context first. Identity/security and the current
         # message are never removed. Web evidence and history keep the legacy
         # char-slice degradation; memory sections shrink whole-item only.
-        for index in (6, 5):
-            while self.token_counter("\n\n".join(sections)) > self.input_budget and sections[index]:
-                if len(sections[index]) <= 120:
-                    sections[index] = ""
+        for name in ("history", "web"):
+            while over_budget() and sections[name]:
+                if len(sections[name]) <= 120:
+                    sections[name] = ""
                 else:
-                    sections[index] = sections[index][max(1, len(sections[index]) // 5):]
+                    sections[name] = sections[name][max(1, len(sections[name]) // 5):]
 
         # Whole-item global shrinking: remove one lowest-ranked tail item at a
         # time and re-render the section; empty the section only when no item
         # remains. No string slicing ever touches the memory sections.
-        while self.token_counter("\n\n".join(sections)) > self.input_budget:
+        while over_budget():
             if episodic_items:
                 episodic_items = episodic_items[:-1]
-                sections[4] = self._render_whole_items(
+                sections["episodic"] = self._render_whole_items(
                     episodic_items, self._format_episodic_memory, self.BUDGETS["episodic"]
                 )
                 continue
             if core_items and not inputs.omit_stable_facts:
                 core_items = core_items[:-1]
-                sections[3] = self._render_whole_items(
+                sections["core"] = self._render_whole_items(
                     core_items, self._format_core_facts, self.BUDGETS["core"]
                 )
                 continue
-            if sections[4]:
-                sections[4] = ""
+            if sections["episodic"]:
+                sections["episodic"] = ""
                 continue
-            if sections[3]:
-                sections[3] = ""
+            if sections["core"]:
+                sections["core"] = ""
                 continue
             break
-        for index in (2, 1):
-            while self.token_counter("\n\n".join(sections)) > self.input_budget and len(sections[index]) > 120:
-                sections[index] = sections[index][: max(120, len(sections[index]) * 4 // 5)]
-        return "\n\n".join(section for section in sections if section.strip())
+        for name in ("state", "persona"):
+            while over_budget() and len(sections[name]) > 120:
+                sections[name] = sections[name][: max(120, len(sections[name]) * 4 // 5)]
+        return "\n\n".join(sections[name] for name in order if sections[name].strip())
 
     def _render_whole_items(
         self,
