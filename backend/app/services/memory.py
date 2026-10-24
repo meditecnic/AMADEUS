@@ -736,10 +736,16 @@ class MemoryService:
         recent_messages: list[dict[str, Any]] | None = None,
     ) -> None:
         # Test/demo tokens must never spawn a real background provider request.
-        if not api_key or api_key.lower().startswith("test") or len(api_key) < 8 or not user_text.strip() or not assistant_text.strip():
+        if api_key and api_key.lower().startswith("test"):
+            print("[MemoryIngest] skip schedule reason=test_key", flush=True)
+            return
+        if provider_snapshot.credential_required and (not api_key or len(api_key) < 8):
+            print("[MemoryIngest] skip schedule reason=required_key_missing_or_short", flush=True)
+            return
+        if not user_text.strip() or not assistant_text.strip():
             print(
-                f"[MemoryIngest] skip schedule reason=bad_key_or_empty "
-                f"key_len={len(api_key or '')} user_len={len(user_text or '')} "
+                f"[MemoryIngest] skip schedule reason=empty_turn "
+                f"user_len={len(user_text or '')} "
                 f"asst_len={len(assistant_text or '')}",
                 flush=True,
             )
@@ -783,7 +789,7 @@ class MemoryService:
                 user_text,
                 assistant_text,
                 source_message_ids,
-                api_key,
+                api_key or None,
                 provider_snapshot,
                 conversation_id,
                 mode,
@@ -801,7 +807,7 @@ class MemoryService:
         user_text: str,
         assistant_text: str,
         source_message_ids: list[int],
-        api_key: str,
+        api_key: str | None,
         provider_snapshot: ProviderSnapshot,
         conversation_id: str | None = None,
         identity_mode: str = DEFAULT_IDENTITY_MODE,

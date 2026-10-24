@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -23,6 +24,8 @@ from app.services.memory_v11.contracts import (
 from app.services.memory_v11.privacy import classify_memory_sensitive_text
 
 MemoryCompletionFn = Callable[..., Awaitable[Mapping[str, Any]]]
+
+logger = logging.getLogger(__name__)
 
 _worker_task: asyncio.Task | None = None
 _worker_stop: asyncio.Event | None = None
@@ -634,16 +637,20 @@ async def default_memory_completion(**kwargs: Any) -> Mapping[str, Any]:
     candidates = list(kwargs.get("candidates") or [])
     unresolved = list(kwargs.get("unresolved_observations") or [])
 
-    api_key = credential_store.get(provider_id)
-    if not api_key or str(api_key).lower().startswith("test") or len(str(api_key)) < 8:
-        raise RuntimeError("provider_unavailable: missing or test credential")
-
     try:
         # Honor the job-frozen model selection; capability fail-closed on MEMORY.
         snapshot = provider_registry.snapshot(provider_id, model_id or None)
         snapshot.require(ProviderTask.MEMORY)
     except Exception as exc:
         raise RuntimeError(f"provider_unavailable: {exc}") from exc
+
+    api_key = credential_store.get(provider_id) or None
+    if api_key and api_key.lower().startswith("test"):
+        logger.warning("memory_v11 skip completion reason=test_key")
+        raise RuntimeError("provider_unavailable: test credential")
+    if snapshot.credential_required and (not api_key or len(api_key) < 8):
+        logger.warning("memory_v11 skip completion reason=required_key_missing_or_short")
+        raise RuntimeError("provider_unavailable: missing or short required credential")
 
     messages = [
         {"role": "system", "content": _V11_MEMORY_SYSTEM},
