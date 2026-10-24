@@ -14,7 +14,7 @@ import re
 import time
 import unicodedata
 from dataclasses import dataclass, field
-from typing import Any, Literal, Sequence
+from typing import Any, Iterable, Literal, Sequence
 
 from app.db import get_db, normalize_identity_mode, normalize_worldline
 from app.services.memory_v11.retrieval import (
@@ -51,6 +51,21 @@ MEMORY_CANDIDATE_RULES = (
 RecallStatus = Literal[
     "ok", "empty", "degraded", "unavailable", "invalid", "unsupported"
 ]
+
+# Statuses whose candidate block carries a "lookup failed" notice line.
+NOTICE_STATUSES = frozenset({"invalid", "unavailable", "unsupported"})
+NO_USABLE_FACTS_NOTICE = (
+    "No usable stable facts are available for this turn. "
+    "Do not guess personal facts."
+)
+# v11 resident profile (dispatch 55 E): when this turn's prompt already carries
+# stable facts (CORE FACTS and/or memory candidates), a failed or unsupported
+# lookup must not tell the model that no facts exist.
+INJECTED_FACTS_LOOKUP_UNAVAILABLE_NOTICE = (
+    "Memory lookup is unavailable for this turn. "
+    "Use only the CORE FACTS (and memory candidates) above; "
+    "do not guess other personal facts."
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +125,9 @@ class RecallResult:
     block: str = ""
     diagnostics: dict[str, Any] = field(default_factory=dict)
     ranked_items: list[dict[str, Any]] = field(default_factory=list)
+    # True when this turn's prompt already injected stable facts; selects the
+    # notice wording for invalid/unavailable/unsupported blocks.
+    facts_injected: bool = False
 
 
 def estimate_tokens(text: str) -> int:
@@ -197,6 +215,27 @@ def _semantic_values(payload: Any) -> list[str]:
     return values
 
 
+def _normalize_for_match(text: str) -> str:
+    return unicodedata.normalize("NFKC", text or "").casefold()
+
+
+def _need_bigrams(need_n: str) -> set[str]:
+    """Bigrams of an already-normalized need (skip whitespace-led pairs)."""
+    return {need_n[i : i + 2] for i in range(len(need_n) - 1) if not need_n[i].isspace()}
+
+
+def _display_bigrams(display_n: str) -> set[str]:
+    return {display_n[i : i + 2] for i in range(len(display_n) - 1)}
+
+
+def shared_bigram_count(*, need: str, display: str) -> int:
+    """Distinct need bigrams also present in display (structured_score folding)."""
+    need_n = _normalize_for_match(need)
+    if not need_n:
+        return 0
+    return len(_need_bigrams(need_n) & _display_bigrams(_normalize_for_match(display)))
+
+
 def structured_score(*, need: str, display: str, semantic_json: Any, topic_id: Any) -> float:
     need_n = unicodedata.normalize("NFKC", need).casefold()
     display_n = unicodedata.normalize("NFKC", display or "").casefold()
@@ -209,9 +248,9 @@ def structured_score(*, need: str, display: str, semantic_json: Any, topic_id: A
     if need_terms:
         hits = sum(1 for term in need_terms if term in display_n)
         score += hits / len(need_terms)
-    bigrams = {need_n[i : i + 2] for i in range(len(need_n) - 1) if not need_n[i].isspace()}
+    bigrams = _need_bigrams(need_n)
     if bigrams:
-        disp_bigrams = {display_n[i : i + 2] for i in range(len(display_n) - 1)}
+        disp_bigrams = _display_bigrams(display_n)
         score += 0.6 * (len(bigrams & disp_bigrams) / len(bigrams))
     for value in _semantic_values(semantic_json):
         value_n = unicodedata.normalize("NFKC", value).casefold()
@@ -267,6 +306,70 @@ async def _load_scoped_facts(scope: MemoryScope) -> list[dict[str, Any]]:
     return facts
 
 
+async def load_resident_fact_candidates(scope: MemoryScope) -> list[dict[str, Any]]:
+    """v11 resident-profile candidates with their ranking signals.
+
+    Same scope and lifecycle as ``_load_scoped_facts`` (session_id +
+    identity_mode, state='active', active version still open, non-empty
+    display_text). Adds pin/created/updated timestamps, the active version's
+    change_kind, distinct observation count across *all* versions, and
+    whether any version came from legacy_import. Read-only; never touches
+    embeddings.
+    """
+    wl = normalize_worldline(scope.worldline)
+    mode = normalize_identity_mode(scope.identity_mode)
+    db = await get_db(wl, "memory")
+    try:
+        cur = await db.execute(
+            """SELECT f.fact_id, f.is_pinned, f.created_at, f.updated_at,
+                      v.display_text, v.version_no, v.confidence,
+                      v.semantic_fingerprint, v.change_kind,
+                      (SELECT COUNT(DISTINCT e.observation_id)
+                         FROM stable_fact_evidence e
+                        WHERE e.fact_id = f.fact_id) AS observation_count,
+                      EXISTS(SELECT 1
+                               FROM stable_fact_versions lv
+                              WHERE lv.fact_id = f.fact_id
+                                AND lv.change_kind = 'legacy_import') AS has_legacy_import
+                 FROM stable_facts f
+                 JOIN stable_fact_versions v
+                   ON v.fact_id = f.fact_id
+                  AND v.version_no = f.active_version
+                  AND v.invalid_at IS NULL
+                WHERE f.session_id=? AND f.identity_mode=? AND f.state='active'
+                ORDER BY f.fact_id ASC""",
+            (scope.session_id, mode),
+        )
+        rows = await cur.fetchall()
+    finally:
+        await db.close()
+    facts = []
+    for row in rows:
+        display = str(row["display_text"] or "").strip()
+        if not display:
+            continue
+        observations = int(row["observation_count"] or 0)
+        legacy_import = bool(row["has_legacy_import"])
+        if legacy_import:
+            observations = max(observations, 2)
+        facts.append(
+            {
+                "fact_id": str(row["fact_id"]),
+                "version_no": int(row["version_no"]),
+                "display_text": display,
+                "is_pinned": bool(row["is_pinned"]),
+                "confidence": float(row["confidence"] or 0.0),
+                "semantic_fingerprint": str(row["semantic_fingerprint"] or ""),
+                "change_kind": str(row["change_kind"] or ""),
+                "observation_count": observations,
+                "has_legacy_import": legacy_import,
+                "created_at": str(row["created_at"] or ""),
+                "updated_at": str(row["updated_at"] or ""),
+            }
+        )
+    return facts
+
+
 def _identity_key(item: dict[str, Any]) -> str:
     fingerprint = str(item.get("semantic_fingerprint") or "").strip()
     if fingerprint:
@@ -312,6 +415,7 @@ def _render_block(
     status: RecallStatus,
     groups: Sequence[RecallGroup],
     records: dict[str, str],
+    facts_injected: bool = False,
 ) -> str:
     payload = {
         "status": status,
@@ -327,10 +431,11 @@ def _render_block(
         "records": records,
     }
     data = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    if status in {"invalid", "unavailable", "unsupported"}:
+    if status in NOTICE_STATUSES:
         notice = (
-            "No usable stable facts are available for this turn. "
-            "Do not guess personal facts."
+            INJECTED_FACTS_LOOKUP_UNAVAILABLE_NOTICE
+            if facts_injected
+            else NO_USABLE_FACTS_NOTICE
         )
         return f"{MEMORY_CANDIDATE_RULES}\n{notice}\nMEMORY_CANDIDATE_DATA\n{data}"
     return f"{MEMORY_CANDIDATE_RULES}\nMEMORY_CANDIDATE_DATA\n{data}"
@@ -376,6 +481,9 @@ async def _recall_body(
     snapshot: TurnScopeSnapshot | None,
     live_snapshot: TurnScopeSnapshot | None,
     cancelled: bool,
+    exclude_fact_ids: frozenset[str] = frozenset(),
+    lexical_only: bool = False,
+    min_shared_bigrams: int = 0,
 ) -> RecallResult:
     started = time.perf_counter()
     if cancelled:
@@ -386,11 +494,30 @@ async def _recall_body(
         logger.warning("recall: scoped fact load failed", exc_info=True)
         return RecallResult(status="unavailable", diagnostics={"reason": "db"})
 
-    resolved = _resolve_embedder(embedder)
+    excluded_count = 0
+    if exclude_fact_ids:
+        # Facts already injected this turn are not candidates again; neither
+        # are same-fingerprint duplicates of them (they would repeat a card).
+        excluded_keys = {
+            _identity_key(row) for row in facts if row["fact_id"] in exclude_fact_ids
+        }
+        kept_facts = [
+            row
+            for row in facts
+            if row["fact_id"] not in exclude_fact_ids
+            and _identity_key(row) not in excluded_keys
+        ]
+        excluded_count = len(facts) - len(kept_facts)
+        facts = kept_facts
+
+    # lexical_only: explicit bigram/structured-only switch. Never resolves the
+    # default embedder, never loads embeddings, never calls encode_query, so
+    # it cannot lazy-load the E5 model. Not reported as "degraded".
+    resolved = None if lexical_only else _resolve_embedder(embedder)
     query_vectors: dict[str, list[float] | None] = {}
     compatible: dict[tuple[str, int], list[float]] = {}
     degraded = False
-    if facts:
+    if facts and not lexical_only:
         try:
             embedding_rows = await _load_version_embeddings(
                 worldline=scope.worldline,
@@ -425,8 +552,19 @@ async def _recall_body(
     per_need: list[list[dict[str, Any]]] = []
     generated_counts: list[int] = []
     for need in request.needs:
+        # Admission gate (optional): a fact must share at least N distinct
+        # bigrams with the need. Vector similarity only ranks admitted facts;
+        # it can never admit a fact on its own.
+        pool = facts
+        if min_shared_bigrams > 0:
+            pool = [
+                row
+                for row in facts
+                if shared_bigram_count(need=need, display=row["display_text"])
+                >= min_shared_bigrams
+            ]
         structured_ranked = sorted(
-            facts,
+            pool,
             key=lambda row: (
                 -structured_score(
                     need=need,
@@ -453,7 +591,7 @@ async def _recall_body(
         vector_ranked: list[dict[str, Any]] = []
         if qvec is not None:
             scored = []
-            for row in facts:
+            for row in pool:
                 stored = compatible.get((row["fact_id"], row["version_no"]))
                 if stored is None:
                     continue
@@ -633,6 +771,8 @@ async def _recall_body(
         "empty": status == "empty",
         "degraded": degraded,
         "in_scope_count": len(facts),
+        "excluded_count": excluded_count,
+        "lexical_only": lexical_only,
         "unique_omitted_due_to_token_budget": unique_token_omitted[0],
         "unique_omitted_due_to_capacity": sum(group.omitted_due_to_budget for group in groups),
         "unique_omitted_due_to_lifecycle": sum(group.omitted_due_to_lifecycle for group in groups),
@@ -657,7 +797,19 @@ async def recall_stable_facts(
     live_snapshot: TurnScopeSnapshot | None = None,
     cancelled: bool = False,
     timeout_seconds: float = LOCAL_TIMEOUT_SECONDS,
+    exclude_fact_ids: Iterable[str] = (),
+    lexical_only: bool = False,
+    min_shared_bigrams: int = 0,
 ) -> RecallResult:
+    """Recall same-scope stable facts for labeled needs.
+
+    Optional, default-off knobs (existing callers unchanged):
+    - exclude_fact_ids: fact_ids already injected this turn (and their
+      same-fingerprint duplicates) are never returned.
+    - lexical_only: structured/bigram ranking only; the embedder is never
+      resolved or called (no E5 lazy load).
+    - min_shared_bigrams: admission threshold on distinct shared bigrams.
+    """
     bounds = limits or RecallLimits()
     try:
         return await asyncio.wait_for(
@@ -669,6 +821,9 @@ async def recall_stable_facts(
                 snapshot=snapshot,
                 live_snapshot=live_snapshot,
                 cancelled=cancelled,
+                exclude_fact_ids=frozenset(str(item) for item in exclude_fact_ids or ()),
+                lexical_only=bool(lexical_only),
+                min_shared_bigrams=max(0, int(min_shared_bigrams or 0)),
             ),
             timeout=timeout_seconds,
         )
@@ -689,27 +844,36 @@ async def recall_stable_facts(
         )
 
 
-def invalid_result(reason: str) -> RecallResult:
+def invalid_result(reason: str, *, facts_injected: bool = False) -> RecallResult:
     return RecallResult(
         status="invalid",
-        block=_render_block(status="invalid", groups=(), records={}),
+        block=_render_block(
+            status="invalid", groups=(), records={}, facts_injected=facts_injected
+        ),
         diagnostics={"reason": reason},
+        facts_injected=facts_injected,
     )
 
 
-def unavailable_result(reason: str) -> RecallResult:
+def unavailable_result(reason: str, *, facts_injected: bool = False) -> RecallResult:
     return RecallResult(
         status="unavailable",
-        block=_render_block(status="unavailable", groups=(), records={}),
+        block=_render_block(
+            status="unavailable", groups=(), records={}, facts_injected=facts_injected
+        ),
         diagnostics={"reason": reason},
+        facts_injected=facts_injected,
     )
 
 
-def unsupported_result(reason: str) -> RecallResult:
+def unsupported_result(reason: str, *, facts_injected: bool = False) -> RecallResult:
     return RecallResult(
         status="unsupported",
-        block=_render_block(status="unsupported", groups=(), records={}),
+        block=_render_block(
+            status="unsupported", groups=(), records={}, facts_injected=facts_injected
+        ),
         diagnostics={"reason": reason},
+        facts_injected=facts_injected,
     )
 
 
@@ -744,7 +908,12 @@ def serialize_ranked_result(
             status = status_if_empty
         else:
             status = "empty"
-    block = _render_block(status=status, groups=groups, records=records)
+    block = _render_block(
+        status=status,
+        groups=groups,
+        records=records,
+        facts_injected=bool(previous.facts_injected) if previous else False,
+    )
     previous_diag = dict(previous.diagnostics or {}) if previous else {}
     previous_generated = {
         int(item.get("need_index") or 0): dict(item)
@@ -800,4 +969,5 @@ def serialize_ranked_result(
         block=block,
         diagnostics=diagnostics,
         ranked_items=list(kept_items),
+        facts_injected=bool(previous.facts_injected) if previous else False,
     )
