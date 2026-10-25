@@ -215,8 +215,11 @@ async def test_r3_vector_candidate_participates_with_zero_lexical_overlap(
     assert seeded == 30, "vector evidence must be present for every same-scope fact"
 
     prompt = await _compile_v11(session_id, query_text, monkeypatch)
-    assert target_text not in prompt
-    assert "\nCORE FACTS\n" not in prompt
+    # Dispatch 55: 30 same-scope facts fit the 32-fact resident profile, so
+    # the target is resident; vector participation is checked on recall below.
+    assert f"- {target_text}\n" in prompt
+    assert "\nCORE FACTS\n" in prompt
+    assert "MEMORY CANDIDATES" not in prompt
     from app.services.memory_v11.recall import MemoryScope, RecallRequest, recall_stable_facts
 
     recalled = await recall_stable_facts(
@@ -311,8 +314,16 @@ async def test_r3_incompatible_embedding_model_is_ignored(
     finally:
         await db.close()
 
-    prompt = await _compile_v11(session_id, query_text, monkeypatch)
-    assert target_text not in prompt, (
+    # Dispatch 55: all 30 facts are resident in the prompt now, so the
+    # compatibility gate is asserted on the candidate (recall) surface.
+    from app.services.memory_v11.recall import MemoryScope, RecallRequest, recall_stable_facts
+
+    recalled = await recall_stable_facts(
+        scope=MemoryScope(session_id=session_id, worldline="steins_gate", identity_mode="self"),
+        request=RecallRequest(needs=(query_text,)),
+        embedder=embedder,
+    )
+    assert target_text not in recalled.records.values(), (
         "incompatible embedding model influenced retrieval: target with "
         f"stored model={foreign_model!r} must not score under active "
         f"embedder.model_name={active_model!r}"

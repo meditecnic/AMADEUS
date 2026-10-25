@@ -1749,7 +1749,7 @@ async def processor_loop(
             "tts": "idle"
         }))
         
-        session.system_prompt = await compile_for_session(session, user_msg)
+        session.system_prompt = await compile_for_session(session, user_msg, provider=turn_provider)
         user_message_id = await models.save_message(
             session.session_id,
             "user",
@@ -1778,7 +1778,10 @@ async def processor_loop(
         )
 
         v11_tools = _memory_mode() == "v11"
-        turn_record = TurnExecutionRecord(snapshot=snapshot_from_session(session, turn_provider))
+        turn_record = TurnExecutionRecord(
+            snapshot=snapshot_from_session(session, turn_provider),
+            injected_fact_ids=getattr(session, "turn_injected_fact_ids", ()),
+        )
         session.turn_execution = turn_record
         tools_to_use = AMADEUS_TOOLS
         tool_choice_to_use = "auto"

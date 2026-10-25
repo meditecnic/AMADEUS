@@ -13,10 +13,12 @@ from app.services.memory_v11.recall import (
     MAX_CALL_ARGUMENT_BYTES,
     MAX_JSON_DEPTH,
     MAX_TOOL_CALLS,
+    NOTICE_STATUSES,
     MemoryScope,
     RecallRequest,
     RecallResult,
     TurnScopeSnapshot,
+    _render_block,
     _revalidate,
     invalid_result,
     json_depth,
@@ -54,6 +56,18 @@ class TurnExecutionRecord:
     ranked_ready: bool = False
     tool_plan_status: str = ""
     tool_plan_reason: str = ""
+    # v11 (dispatch 55 E): stable fact_ids already in this turn's prompt
+    # (resident CORE FACTS + supplement). recall_memory excludes them.
+    injected_fact_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        self.injected_fact_ids = tuple(
+            dict.fromkeys(str(item) for item in (self.injected_fact_ids or ()) if str(item or ""))
+        )
+
+    @property
+    def facts_injected(self) -> bool:
+        return bool(self.injected_fact_ids)
 
 
 @dataclass(slots=True)
@@ -128,13 +142,49 @@ def plan_first_round_tools(
     return ToolPlan(status="ok", tools=list(MEMORY_ONLY_TOOLS))
 
 
+def provider_tool_capable(provider: Any) -> bool:
+    """Same TOOL_COMPAT decision as the chat processor's first-round plan."""
+    adapter_kind = type(getattr(provider, "adapter", None) or object).__name__
+    plan = plan_first_round_tools(
+        v11=True,
+        force_search=False,
+        provider_id=str(getattr(provider, "provider_id", "") or ""),
+        adapter_kind=adapter_kind,
+    )
+    return plan.status != "unsupported"
+
+
+def bind_facts_injected(result: RecallResult, facts_injected: bool) -> RecallResult:
+    """Mark a result as belonging to a turn whose prompt already has facts.
+
+    Notice statuses (invalid/unavailable/unsupported) are re-rendered with
+    the injected-facts wording; other blocks are unchanged.
+    """
+    if not facts_injected or result.facts_injected:
+        return result
+    result.facts_injected = True
+    if result.status in NOTICE_STATUSES:
+        result.block = _render_block(
+            status=result.status,
+            groups=result.groups,
+            records=result.records,
+            facts_injected=True,
+        )
+    return result
+
+
+def _record_result(record: TurnExecutionRecord, result: RecallResult) -> RecallResult:
+    result = bind_facts_injected(result, record.facts_injected)
+    record.recall_result = result
+    return result
+
+
 def apply_unsupported_combo(
     record: TurnExecutionRecord,
     *,
     reason: str = "undeclared_combo",
 ) -> RecallResult:
-    result = unsupported_result(reason)
-    record.recall_result = result
+    result = _record_result(record, unsupported_result(reason))
     record.tool_plan_status = "unsupported"
     record.tool_plan_reason = reason
     return result
@@ -226,12 +276,12 @@ async def refresh_candidates_for_send(
 ) -> RecallResult:
     if bool(getattr(session, "erasure_pending", False)) or record.mode_state.cancelled:
         result = unavailable_result("cancelled")
-        record.recall_result = result
+        result = _record_result(record, result)
         return result
     live = live_snapshot(session, provider)
     if live != record.snapshot:
         result = unavailable_result("snapshot_changed")
-        record.recall_result = result
+        result = _record_result(record, result)
         return result
     previous = record.recall_result
     items = list(record.ranked_items or (previous.ranked_items if previous else []))
@@ -242,7 +292,7 @@ async def refresh_candidates_for_send(
         if previous is not None:
             return previous
         result = unavailable_result("no_ranked_items")
-        record.recall_result = result
+        result = _record_result(record, result)
         return result
     scope = MemoryScope(
         session_id=record.snapshot.session_id,
@@ -259,8 +309,7 @@ async def refresh_candidates_for_send(
         live_row = next(row for row in kept if (str(row["fact_id"]), int(row["version_no"])) == key)
         kept_items.append({**item, "display_text": live_row["display_text"]})
     result = serialize_ranked_result(previous=previous, kept_items=kept_items)
-    record.recall_result = result
-    return result
+    return _record_result(record, result)
 
 
 async def execute_recall(
@@ -273,28 +322,28 @@ async def execute_recall(
 ) -> RecallResult:
     if cancelled or record.mode_state.cancelled or bool(getattr(session, "erasure_pending", False)):
         result = unavailable_result("cancelled")
-        record.recall_result = result
+        result = _record_result(record, result)
         return result
     live = live_snapshot(session, provider)
     if live != record.snapshot:
         result = unavailable_result("snapshot_changed")
-        record.recall_result = result
+        result = _record_result(record, result)
         return result
     if record.recall_result is not None and record.ranked_ready:
         return await refresh_candidates_for_send(record, session, provider)
     reason = validate_tool_batch(calls)
     if reason:
         result = invalid_result(reason)
-        record.recall_result = result
+        result = _record_result(record, result)
         return result
     needs, parse_reason = collect_recall_payloads(calls)
     if parse_reason:
         result = invalid_result(parse_reason)
-        record.recall_result = result
+        result = _record_result(record, result)
         return result
     if not needs:
         result = invalid_result("no_needs")
-        record.recall_result = result
+        result = _record_result(record, result)
         return result
     scope = MemoryScope(
         session_id=record.snapshot.session_id,
@@ -307,6 +356,7 @@ async def execute_recall(
         snapshot=record.snapshot,
         live_snapshot=live,
         cancelled=cancelled,
+        exclude_fact_ids=record.injected_fact_ids,
     )
     live_after = live_snapshot(session, provider)
     if cancelled or record.mode_state.cancelled or bool(getattr(session, "erasure_pending", False)):
@@ -316,7 +366,7 @@ async def execute_recall(
     else:
         record.ranked_items = list(result.ranked_items)
         record.ranked_ready = True
-    record.recall_result = result
+    result = _record_result(record, result)
     record.mode_state.executed = True
     return result
 
@@ -333,7 +383,7 @@ async def apply_v11_tool_batch(
     reason = validate_tool_batch(calls)
     if reason:
         result = invalid_result(reason)
-        record.recall_result = result
+        result = _record_result(record, result)
         return ToolBatchOutcome(status="invalid", reason=reason, recall_result=result)
     web_results: list[tuple[str, str]] = []
     web_calls = 0
@@ -429,7 +479,9 @@ def prepare_second_round_payload(
         return sum(compiler._estimate_tokens(str(row.get("content") or "")) for row in messages)
 
     if not compatible:
-        notice = unsupported_result("undeclared_combo")
+        notice = unsupported_result(
+            "undeclared_combo", facts_injected=bool(result.facts_injected)
+        )
         return SecondRoundPayload(
             history=_history_for(notice, None),
             status="unsupported",
@@ -479,15 +531,23 @@ def prepare_second_round_payload(
             status=working.status,
             groups=tuple(groups),
             records=records,
-            block=_render_block(status=working.status, groups=groups, records=records),
+            block=_render_block(
+                status=working.status,
+                groups=groups,
+                records=records,
+                facts_injected=bool(working.facts_injected),
+            ),
             diagnostics=diagnostics,
             ranked_items=kept_ranked,
+            facts_injected=bool(working.facts_injected),
         )
         history = _history_for(working, web_results)
         total = _envelope_tokens(history)
 
     if total > budget:
-        notice = unavailable_result("input_budget")
+        notice = unavailable_result(
+            "input_budget", facts_injected=bool(result.facts_injected)
+        )
         return SecondRoundPayload(
             history=[{"role": "system", "content": notice.block}],
             status="unavailable",
