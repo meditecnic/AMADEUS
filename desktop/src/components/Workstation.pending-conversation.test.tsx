@@ -766,3 +766,126 @@ it('PR16 followup 3a: a failure that arrives after the worldline moved on stays 
   await act(async () => release()); await flush(100);
   expect(openErrorToast()).toBeNull();
 });
+
+async function deleteHistoryConversation(title: string) {
+  fireEvent.keyDown(screen.getByRole('button', { name: `会话操作 ${title}` }), { key: 'Enter' });
+  fireEvent.click(screen.getByRole('menuitem', { name: `删除 ${title}` }));
+  fireEvent.click(screen.getByRole('button', { name: '删除会话' }));
+  await flush(100);
+}
+
+const targetSwitches = () => FakeWebSocket.instances.flatMap(s => s.sent)
+  .filter(f => f.type === 'conversation.switch' && f.conversation_id === 'new');
+
+it.each(['success', 'HTTP 404', 'network'] as const)(
+  'dispatch67 item 1: deleting the current conversation cancels HTTP entry, including late %s', async outcome => {
+    rows = [newRow, oldRow];
+    await startOld(false);
+    let release!: () => void;
+    heldHistory.set('new', new Promise<void>(resolve => { release = resolve; }));
+    if (outcome === 'HTTP 404') missingHistory.add('new');
+    if (outcome === 'network') failedHistory.add('new');
+    await clickHistory('new');
+    expect(active()).toBe('new');
+    expect(newButton()).toBeDisabled();
+
+    await deleteHistoryConversation(oldRow.title);
+    expect(deleteCount).toBe(1);
+    expect(active()).toBeUndefined();
+    expect(newButton()).toBeEnabled(); // Entry busy must fall even while the HTTP request is held.
+    expect(screen.queryByText('旧对话内容')).toBeNull();
+    const draft = latest();
+    await act(async () => draft.open());
+    expect(draft.sent.find(f => f.type === 'auth')).toMatchObject({ conversation_mode: 'draft' });
+    expect(draft.sent.find(f => f.type === 'auth')).not.toHaveProperty('conversation_id');
+
+    await act(async () => release());
+    await flush(100);
+    expect(active()).toBeUndefined();
+    expect(newButton()).toBeEnabled();
+    expect(screen.getByLabelText('输入消息')).toBeEnabled();
+    expect(targetSwitches()).toEqual([]);
+    expect(screen.queryByText('历史 new')).toBeNull();
+    expect(openErrorToast()).toBeNull();
+  },
+);
+
+it('dispatch67 item 1: deleting the current conversation cancels an entry awaiting its switch ACK', async () => {
+  rows = [newRow, oldRow];
+  await startOld(false);
+  FakeWebSocket.autoSwitch = false;
+  const source = latest();
+  const retiredHandler = source.onmessage!;
+  await clickHistory('new');
+  const request = targetSwitches().at(-1)!;
+  expect(request).toBeDefined();
+
+  await deleteHistoryConversation(oldRow.title);
+  expect(deleteCount).toBe(1);
+  expect(active()).toBeUndefined();
+  expect(newButton()).toBeEnabled();
+  expect(screen.queryByText('旧对话内容')).toBeNull();
+  await act(async () => latest().open());
+  expect(latest().sent.find(f => f.type === 'auth')).toMatchObject({ conversation_mode: 'draft' });
+  expect(latest().sent.find(f => f.type === 'auth')).not.toHaveProperty('conversation_id');
+
+  // Deliver an already-queued event even though reconnect detached the retired socket's handler.
+  await act(async () => retiredHandler({ data: JSON.stringify({
+    type: 'conversation.switched', request_id: request.request_id,
+    conversation_id: 'new', worldline: 'steins_gate', generation: 5,
+  }) }));
+  expect(active()).toBeUndefined();
+  expect(newButton()).toBeEnabled();
+  expect(screen.getByLabelText('输入消息')).toBeEnabled();
+  expect(targetSwitches()).toHaveLength(1);
+  expect(screen.queryByText('历史 new')).toBeNull();
+  expect(openErrorToast()).toBeNull();
+});
+
+it('dispatch67 item 1: deleting an unrelated conversation lets the pending HTTP entry finish', async () => {
+  const unrelated = { ...oldRow, id: 'other', title: '无关对话', is_selected: false };
+  rows = [newRow, oldRow, unrelated];
+  await startOld(false);
+  let release!: () => void;
+  heldHistory.set('new', new Promise<void>(resolve => { release = resolve; }));
+  await clickHistory('new');
+  await deleteHistoryConversation(unrelated.title);
+  expect(deleteCount).toBe(1);
+  expect(active()).toBe('new');
+  expect(newButton()).toBeDisabled();
+  expect(screen.getByText('旧对话内容')).toBeInTheDocument();
+
+  await act(async () => release());
+  await flush(100);
+  expect(active()).toBe('new');
+  expect(newButton()).toBeEnabled();
+  expect(targetSwitches()).toHaveLength(1);
+  expect(screen.getByText('历史 new')).toBeInTheDocument();
+  expect(openErrorToast()).toBeNull();
+});
+
+it('dispatch67 item 1: a failed DELETE does not cancel the pending HTTP entry', async () => {
+  rows = [newRow, oldRow];
+  await startOld(false);
+  let release!: () => void;
+  heldHistory.set('new', new Promise<void>(resolve => { release = resolve; }));
+  await clickHistory('new');
+  const baseFetch = globalThis.fetch;
+  vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => (
+    init?.method === 'DELETE' ? Promise.resolve(json({}, 500)) : baseFetch(input, init)
+  )));
+  await deleteHistoryConversation(oldRow.title);
+  expect(screen.getByText('删除失败，会话仍然保留。请稍后重试。')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '取消' }));
+  expect(rows.some(row => row.id === 'old')).toBe(true);
+  expect(newButton()).toBeDisabled();
+  expect(screen.getByText('旧对话内容')).toBeInTheDocument();
+
+  await act(async () => release());
+  await flush(100);
+  expect(active()).toBe('new');
+  expect(newButton()).toBeEnabled();
+  expect(targetSwitches()).toHaveLength(1);
+  expect(screen.getByText('历史 new')).toBeInTheDocument();
+  expect(openErrorToast()).toBeNull();
+});

@@ -1602,7 +1602,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
       setDeleteTarget(null);
       if (pendingConversationRef.current?.conversationId === conversation.id) abandonConversationEntry();
       if (wasActive) {
-        if (pendingConversationRef.current) abandonConversationEntry(false);
+        // Deletion supersedes entry even before its HTTP history request has staged a target.
+        abandonConversationEntry(false);
         // Q51: deleting the open conversation returns to a blank draft; never silently open another one.
         if (isThinking || isSynthesizing || messages.some(message => message.streaming)) cancelTurn();
         audioPlayer.stopAll();
