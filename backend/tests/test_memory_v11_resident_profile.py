@@ -762,7 +762,7 @@ async def test_forty_facts_profile_and_supplement(isolated_store, monkeypatch):
     from app.services.memory import memory_service
 
     monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
-    _sentence_transformers_imported(monkeypatch)  # readiness() is consulted
+    _sentence_transformers_imported(monkeypatch)  # even then readiness() is not consulted
     spy = NotLoadedEmbedder(loaded=False)
     monkeypatch.setattr(memory_service, "embedder", spy)
     sid = f"rp-forty-{uuid4()}"
@@ -782,9 +782,9 @@ async def test_forty_facts_profile_and_supplement(isolated_store, monkeypatch):
     assert RESIDENT_TEA_TEXT not in records and LOW_TEXTS[2] not in records
     assert prompt.index("\n\nCURRENT STATE\n") < prompt.index("\n\nMEMORY CANDIDATES\n")
     assert "\nMEMORY_CANDIDATE_DATA\n" in prompt
-    # E5 not loaded: never encoded, never loaded.
+    # Bigram-only supplement (dispatch 64): never encoded, readiness never consulted.
     assert spy.calls == []
-    assert spy.readiness_calls == 1
+    assert spy.readiness_calls == 0
     # Injected ids = final resident + supplement ids, stored on the session.
     resident_ids = {ids[text] for text in lines}
     expected = resident_ids | {ids[LOW_TEXTS[0]], ids[LOW_TEXTS[1]]}
@@ -798,8 +798,8 @@ async def test_forty_facts_profile_and_supplement(isolated_store, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_supplement_uses_e5_only_when_already_loaded(isolated_store, monkeypatch):
-    """[A5] loaded E5 ranks admitted facts (encode once); gate still applies."""
+async def test_supplement_never_uses_e5_even_when_loaded(isolated_store, monkeypatch):
+    """[A5] dispatch 64: loaded E5 is still never used; bigram gate only."""
     from app.services.memory import memory_service
 
     monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
@@ -809,29 +809,9 @@ async def test_supplement_uses_e5_only_when_already_loaded(isolated_store, monke
     sid = f"rp-e5-{uuid4()}"
     await seed_forty(sid)
     prompt = await compile_for_session(_v11_session(sid), SUPPLEMENT_QUERY, provider=_glm_provider())
-    from app.services.prompt_compiler import supplement_need_text
-
-    # Query = normalized user message (NFKC folds the fullwidth "？").
-    assert spy.calls == [supplement_need_text(SUPPLEMENT_QUERY)] == ["紅茶はミルクを入れる派?"]
+    assert spy.calls == []
+    assert spy.readiness_calls == 0
     assert sorted(_supplement_records(prompt)) == sorted([LOW_TEXTS[0], LOW_TEXTS[1]])
-
-
-def test_embedder_loaded_skips_readiness_until_sentence_transformers_imported(monkeypatch):
-    """[A5] dispatch 59: no sentence_transformers in sys.modules -> no readiness()."""
-    from app.services.prompt_compiler import _embedder_loaded
-
-    monkeypatch.delitem(sys.modules, "sentence_transformers", raising=False)
-    loaded = NotLoadedEmbedder(loaded=True)
-    assert _embedder_loaded(loaded) is False
-    assert loaded.readiness_calls == 0
-    assert "sentence_transformers" not in sys.modules
-    monkeypatch.setitem(sys.modules, "sentence_transformers", None)  # import-blocked
-    assert _embedder_loaded(loaded) is False
-    assert loaded.readiness_calls == 0
-    _sentence_transformers_imported(monkeypatch)
-    assert _embedder_loaded(loaded) is True
-    assert _embedder_loaded(NotLoadedEmbedder(loaded=False)) is False
-    assert loaded.readiness_calls == 1
 
 
 @pytest.mark.asyncio
@@ -878,32 +858,47 @@ async def test_prompt_never_imports_sentence_transformers_nor_calls_readiness(is
 
 
 @pytest.mark.asyncio
-async def test_real_embedding_adapter_is_never_loaded_by_prompt(isolated_store, monkeypatch):
-    """[A5] with the real EmbeddingAdapter (not loaded) nothing loads E5."""
+@pytest.mark.parametrize("loaded", [False, True], ids=["not_loaded", "loaded"])
+async def test_real_embedding_adapter_is_never_loaded_by_prompt(isolated_store, monkeypatch, loaded):
+    """[A5] real EmbeddingAdapter: not loaded -> nothing loads E5;
+    already loaded (dispatch 64) -> still never consulted nor used."""
     from app.services.memory import EmbeddingAdapter, memory_service
 
     monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     adapter = EmbeddingAdapter()
-    loads = {"n": 0}
-    encodes = {"n": 0}
+    sentinel_model = object()
+    if loaded:
+        _sentence_transformers_imported(monkeypatch)
+        adapter._model = sentinel_model
+    calls = {"_load": 0, "readiness": 0, "encode_query": 0, "_encode": 0}
 
     def forbidden_load():
-        loads["n"] += 1
+        calls["_load"] += 1
         raise AssertionError("E5 lazy load during prompt compilation")
 
-    async def forbidden_encode(_text):
-        encodes["n"] += 1
+    def forbidden_readiness():
+        calls["readiness"] += 1
+        raise AssertionError("readiness() during prompt compilation")
+
+    async def forbidden_encode_query(_text):
+        calls["encode_query"] += 1
         raise AssertionError("encode_query during prompt compilation")
 
+    def forbidden_encode(_text):
+        calls["_encode"] += 1
+        raise AssertionError("_encode during prompt compilation")
+
     monkeypatch.setattr(adapter, "_load", forbidden_load)
-    monkeypatch.setattr(adapter, "encode_query", forbidden_encode)
+    monkeypatch.setattr(adapter, "readiness", forbidden_readiness)
+    monkeypatch.setattr(adapter, "encode_query", forbidden_encode_query)
+    monkeypatch.setattr(adapter, "_encode", forbidden_encode)
     monkeypatch.setattr(memory_service, "embedder", adapter)
     sid = f"rp-real-{uuid4()}"
     await seed_forty(sid)
     prompt = await compile_for_session(_v11_session(sid), SUPPLEMENT_QUERY, provider=_glm_provider())
-    assert loads["n"] == 0 and encodes["n"] == 0
-    assert adapter._model is None
-    assert _supplement_records(prompt)
+    assert calls == {"_load": 0, "readiness": 0, "encode_query": 0, "_encode": 0}
+    assert adapter._model is (sentinel_model if loaded else None)
+    assert sorted(_supplement_records(prompt)) == sorted([LOW_TEXTS[0], LOW_TEXTS[1]])
 
 
 @pytest.mark.asyncio

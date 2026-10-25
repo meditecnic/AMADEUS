@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import math
 import re
-import sys
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -741,25 +740,6 @@ def supplement_need_text(user_message: str) -> str:
     return _normalize_need(user_message)[:NEED_MAX_CODEPOINTS].strip()
 
 
-def _embedder_loaded(embedder: Any) -> bool:
-    """True only when the E5 model is already in memory (never loads it).
-
-    readiness() imports sentence_transformers, and a first import pulls in
-    torch synchronously. If the module is not imported yet the model cannot
-    be loaded either, so return False (bigram-only) without calling
-    readiness() and without importing anything.
-    """
-    if embedder is None:
-        return False
-    if sys.modules.get("sentence_transformers") is None:
-        return False
-    try:
-        readiness = embedder.readiness()
-    except Exception:
-        return False
-    return bool(isinstance(readiness, dict) and readiness.get("loaded"))
-
-
 async def _select_v11_memory_supplement(
     *,
     scope: Any,
@@ -769,15 +749,17 @@ async def _select_v11_memory_supplement(
     """Per-turn MEMORY CANDIDATES for facts the resident profile left out.
 
     Reuses recall_stable_facts (same scope/lifecycle/revalidation), excludes
-    resident facts, admits only facts sharing >= 2 distinct bigrams with the
-    message, and uses E5 only when it is already loaded (lexical-only
-    otherwise; the model is never lazy-loaded here). Any failure omits the
-    block with a warning that carries no fact content.
+    resident facts, and admits only facts sharing >= 2 distinct bigrams with
+    the message. Bigram-only (dispatch 64): prompt compilation never uses
+    E5, even when it is already loaded. It never reads
+    memory_service.embedder, never calls readiness() and never calls
+    encode_query, so the prompt does not depend on whether a background job
+    has loaded the model. Any failure omits the block with a warning that
+    carries no fact content.
     """
     need = supplement_need_text(user_message)
     if not need:
         return None
-    from app.services.memory import memory_service
     from app.services.memory_v11.recall import (
         NOTICE_STATUSES,
         RecallLimits,
@@ -785,8 +767,6 @@ async def _select_v11_memory_supplement(
         recall_stable_facts,
     )
 
-    embedder = getattr(memory_service, "embedder", None)
-    use_vectors = _embedder_loaded(embedder)
     try:
         result = await recall_stable_facts(
             scope=scope,
@@ -796,10 +776,10 @@ async def _select_v11_memory_supplement(
                 total_unique_candidates=SUPPLEMENT_MAX_FACTS,
                 token_budget=SUPPLEMENT_TOKEN_BUDGET,
             ),
-            embedder=embedder if use_vectors else None,
+            embedder=None,
             timeout_seconds=SUPPLEMENT_TIMEOUT_SECONDS,
             exclude_fact_ids=exclude_fact_ids,
-            lexical_only=not use_vectors,
+            lexical_only=True,
             min_shared_bigrams=SUPPLEMENT_MIN_SHARED_BIGRAMS,
         )
     except Exception as exc:
