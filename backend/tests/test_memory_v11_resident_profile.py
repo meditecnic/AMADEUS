@@ -4,6 +4,7 @@ Acceptance map (dispatch section 6) is noted per test as [A<n>].
 """
 from __future__ import annotations
 
+import asyncio
 import builtins
 import hashlib
 import json
@@ -941,6 +942,59 @@ async def test_v11_no_facts_no_section_and_ids_reset(isolated_store, monkeypatch
     session.turn_injected_fact_ids = ("stale-id",)
     legacy = await compile_for_session(session, "こんにちは")
     assert "CORE FACTS\n(none)" in legacy
+    assert session.turn_injected_fact_ids == ()
+
+
+@pytest.mark.asyncio
+async def test_v11_compile_failure_resets_injected_ids(isolated_store, monkeypatch):
+    """[A1] dispatch 64: a compile that raises after the reset leaves () behind.
+
+    Only the reset at the top of compile_for_session can clear the stale ids:
+    the final write is never reached because compile_with_report raises.
+    """
+    import app.services.prompt_compiler as prompt_compiler_module
+
+    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
+    sid = f"rp-raise-{uuid4()}"
+    await seed_fact(session_id=sid, text="猫を飼っている")
+    session = _v11_session(sid)
+    session.turn_injected_fact_ids = ("stale-id",)
+
+    def broken(_inputs):
+        raise RuntimeError("compile_with_report failed")
+
+    monkeypatch.setattr(prompt_compiler_module.prompt_compiler, "compile_with_report", broken)
+    with pytest.raises(RuntimeError, match="compile_with_report failed"):
+        await compile_for_session(session, "こんにちは", provider=_deepseek_provider())
+    assert session.turn_injected_fact_ids == ()
+
+
+@pytest.mark.asyncio
+async def test_v11_compile_cancelled_resets_injected_ids(isolated_store, monkeypatch):
+    """[A1] dispatch 64: a compile cancelled after the reset leaves () behind."""
+    from app.services.soul_engine import soul_engine
+
+    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
+    sid = f"rp-cancel-{uuid4()}"
+    await seed_fact(session_id=sid, text="猫を飼っている")
+    session = _v11_session(sid)
+    session.turn_injected_fact_ids = ("stale-id",)
+    entered = asyncio.Event()
+    never_set = asyncio.Event()
+
+    async def hang(*_args, **_kwargs):
+        entered.set()
+        await never_set.wait()
+
+    monkeypatch.setattr(soul_engine, "restore_emotion", hang)
+    task = asyncio.create_task(
+        compile_for_session(session, "こんにちは", provider=_deepseek_provider())
+    )
+    await asyncio.wait_for(entered.wait(), timeout=5)
+    assert not task.done()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
     assert session.turn_injected_fact_ids == ()
 
 
