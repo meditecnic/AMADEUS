@@ -490,8 +490,9 @@ async def _recall_body(
         return RecallResult(status="unavailable", diagnostics={"reason": "cancelled"})
     try:
         facts = await _load_scoped_facts(scope)
-    except Exception:
-        logger.warning("recall: scoped fact load failed", exc_info=True)
+    except Exception as exc:
+        # Type name only: exception text/traceback may carry fact content.
+        logger.warning("recall: scoped fact load failed (%s)", type(exc).__name__)
         return RecallResult(status="unavailable", diagnostics={"reason": "db"})
 
     excluded_count = 0
@@ -835,8 +836,9 @@ async def recall_stable_facts(
         )
     except asyncio.CancelledError:
         raise
-    except Exception:
-        logger.warning("recall: unexpected failure", exc_info=True)
+    except Exception as exc:
+        # Type name only: exception text/traceback may carry fact content.
+        logger.warning("recall: unexpected failure (%s)", type(exc).__name__)
         return RecallResult(
             status="unavailable",
             block=_render_block(status="unavailable", groups=(), records={}),
