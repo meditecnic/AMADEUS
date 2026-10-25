@@ -4,6 +4,8 @@ import os
 
 import httpx
 from fastapi import WebSocket
+from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app import config
 
@@ -14,6 +16,25 @@ LOCAL_ORIGINS = frozenset({
     *(f'http://{host}:{port}' for host in ('localhost', '127.0.0.1')
       for port in (config.FRONTEND_PORT, config.BACKEND_PORT, 1420, 1422, 1424)),
 })
+
+
+class HTTPOriginGuardMiddleware:
+    """Reject browser writes from untrusted origins before any route side effects."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope['type'] == 'http' and scope['method'] in {'POST', 'PUT', 'PATCH', 'DELETE'}:
+            # Read raw headers so duplicate Origin fields cannot be collapsed.
+            origins = [value.decode('latin-1') for name, value in scope['headers']
+                       if name.lower() == b'origin']
+            if origins and (len(origins) != 1 or origins[0] not in LOCAL_ORIGINS):
+                response = JSONResponse({'detail': {'code': 'origin_not_allowed'}}, status_code=403)
+                await response(scope, receive, send)
+                return
+        # Pure ASGI forwarding preserves streaming and non-HTTP scopes unchanged.
+        await self.app(scope, receive, send)
 
 
 def _enabled(name: str) -> bool:

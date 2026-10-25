@@ -5,7 +5,7 @@ import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from app.security.local_transport import LOCAL_ORIGINS
+from app.security.local_transport import HTTPOriginGuardMiddleware, LOCAL_ORIGINS
 from pydantic import BaseModel, SecretStr
 from typing import Optional
 from app import config
@@ -102,6 +102,9 @@ app = FastAPI(title="Amadeus Backend", version="3.0.0", lifespan=lifespan)
 allowed_origins = sorted(LOCAL_ORIGINS)
 
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost'])
+
+# CORS is added last (outermost), preserving preflight and response headers.
+app.add_middleware(HTTPOriginGuardMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
