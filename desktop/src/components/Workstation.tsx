@@ -90,6 +90,8 @@ type ConversationCreateResult = { status: 'failed' } | {
   status: 'created'; conversation: ConversationSummary; requestEpoch: number; entered: Promise<boolean>;
 };
 
+type ConversationEntryOptions = { deferPlaybackStop?: boolean };
+
 /**
  * User message language tag: only when content includes real Japanese kana.
  * Hiragana / Katakana (incl. halfwidth). Han-only CJK (e.g. Chinese) must NOT
@@ -1283,7 +1285,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     // When the settings default is self, pre-create via API so mode is correct.
     // Okabe default keeps the existing draft path (zero regression for most sessions).
     if (!activeConversationId && normalizeIdentityMode(defaultIdentityMode) === 'self') {
-      const created = await createConversation('self');
+      const created = await createConversation('self', { deferPlaybackStop: true });
       if (created.status !== 'created' || !(await created.entered)
         || created.requestEpoch !== conversationEpochRef.current) return;
     }
@@ -1325,7 +1327,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
     return epoch;
   };
 
-  const enterConversation = (conversation: ConversationSummary, history: Message[], requestEpoch: number) => {
+  const enterConversation = (
+    conversation: ConversationSummary, history: Message[], requestEpoch: number,
+    options: ConversationEntryOptions = {},
+  ) => {
     if (requestEpoch !== conversationEpochRef.current || worldline !== latestWorldlineRef.current) return Promise.resolve(false);
     const target: ConversationEntry = {
       conversation, conversationId: conversation.id, worldline, requestEpoch, history,
@@ -1335,7 +1340,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
     const entered = new Promise<boolean>(resolve => { pendingEntryRef.current = { epoch: requestEpoch, resolve }; });
     pendingConversationRef.current = target;
     setPendingConversation(target);
-    audioPlayer.stopAll();
+    // Self first-send preparation leaves playback to handleSend, after confirmation and its send gate.
+    if (!options.deferPlaybackStop) audioPlayer.stopAll();
     target.switchDispatched = switchConversation(conversation.id, history, requestEpoch);
     if (!target.switchDispatched) setConversationReconnectEpoch(requestEpoch);
     return entered;
@@ -1393,6 +1399,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   const createConversation = async (
     identityMode: IdentityMode = defaultIdentityMode,
+    options: ConversationEntryOptions = {},
   ): Promise<ConversationCreateResult> => {
     if (conversationBusy && !pendingConversationRef.current) return { status: 'failed' };
     const epoch = beginConversationEntry();
@@ -1420,7 +1427,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           : `新建对话失败（HTTP ${response.status}），请重试。`);
       }
       const created = await response.json() as ConversationSummary;
-      const entered = enterConversation(created, [], epoch);
+      const entered = enterConversation(created, [], epoch, options);
       window.setTimeout(() => { void loadConversations().catch(() => undefined); }, 250);
       return { status: 'created', conversation: created, requestEpoch: epoch, entered };
     } catch (error) {

@@ -712,18 +712,30 @@ it('PR16 followup 2: self mode decides after the conversation is created, then s
   await flush();
   expect(screen.getByLabelText('输入消息')).toBeEnabled();
   FakeWebSocket.autoReady = false; FakeWebSocket.autoSwitch = false;
+  const socket = latest();
+  const writes = vi.spyOn(socket, 'send');
+  vi.mocked(audioPlayer.stopAll).mockClear();
   vi.mocked(audioService.playSFX).mockClear();
   sendLine('self 第一行');
   await flush(300);
   // The new conversation is not confirmed yet: nothing may have stopped voice or played the cue.
+  expect(audioPlayer.stopAll).not.toHaveBeenCalled();
   expect(FakeWebSocket.instances.flatMap(sentTypes)).not.toContain('voice.stop');
   expect(audioService.playSFX).not.toHaveBeenCalledWith(SEND_CUE, expect.anything());
   await act(async () => { switchAck(); });
   const types = sentTypes(latest());
+  expect(audioPlayer.stopAll).toHaveBeenCalledTimes(1);
   expect(types).toContain('voice.stop');
   expect(types.indexOf('voice.stop')).toBeLessThan(types.indexOf('chat.send'));
   expect(latest().chats).toEqual([{ content: 'self 第一行', conversationId: 'new' }]);
   expect(audioService.playSFX).toHaveBeenCalledWith(SEND_CUE, expect.anything());
+  expect(writes.mock.calls.map(([frame]) => JSON.parse(frame).type))
+    .toEqual(['conversation.switch', 'voice.stop', 'chat.send']);
+  const stopOrder = vi.mocked(audioPlayer.stopAll).mock.invocationCallOrder[0];
+  const cueOrder = vi.mocked(audioService.playSFX).mock.invocationCallOrder[0];
+  expect(stopOrder).toBeLessThan(writes.mock.invocationCallOrder[1]);
+  expect(writes.mock.invocationCallOrder[1]).toBeLessThan(cueOrder);
+  expect(cueOrder).toBeLessThan(writes.mock.invocationCallOrder[2]);
 });
 
 const openErrorToast = () => screen.queryByTestId('conversation-open-error-toast');
@@ -888,4 +900,70 @@ it('dispatch67 item 1: a failed DELETE does not cancel the pending HTTP entry', 
   expect(targetSwitches()).toHaveLength(1);
   expect(screen.getByText('历史 new')).toBeInTheDocument();
   expect(openErrorToast()).toBeNull();
+});
+
+it('dispatch67 item 2: self first-send keeps playback and input when transport closes after confirmation', async () => {
+  localStorage.setItem('amadeus_pc_identity_mode', 'self');
+  playback.playing = true;
+  render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+  await act(async () => latest().open());
+  await flush();
+  FakeWebSocket.autoReady = false; FakeWebSocket.autoSwitch = false;
+  vi.mocked(audioPlayer.stopAll).mockClear();
+  vi.mocked(audioService.playSFX).mockClear();
+  sendLine('self 保留输入');
+  await flush(300);
+  expect(audioPlayer.stopAll).not.toHaveBeenCalled();
+  expect(FakeWebSocket.instances.flatMap(sentTypes)).not.toContain('voice.stop');
+  expect(audioService.playSFX).not.toHaveBeenCalledWith(SEND_CUE, expect.anything());
+
+  await act(async () => {
+    const socket = latest();
+    switchAck(socket);
+    // ACK resolves the entry promise; close before the awaiting send resumes its gate check.
+    socket.readyState = 3;
+  });
+  expect(active()).toBe('new');
+  expect(rows.find(row => row.id === 'new')?.identity_mode).toBe('self');
+  expect(screen.getByLabelText('输入消息')).toHaveValue('self 保留输入');
+  expect(audioPlayer.stopAll).not.toHaveBeenCalled();
+  expect(FakeWebSocket.instances.flatMap(sentTypes)).not.toContain('voice.stop');
+  expect(FakeWebSocket.instances.flatMap(sentTypes)).not.toContain('chat.send');
+  expect(audioService.playSFX).not.toHaveBeenCalledWith(SEND_CUE, expect.anything());
+});
+
+it('dispatch67 item 2: history entry still stops playback when its HTTP response stages the target', async () => {
+  rows = [newRow, oldRow];
+  playback.playing = true;
+  await startOld(false);
+  FakeWebSocket.autoSwitch = false;
+  let release!: () => void;
+  heldHistory.set('new', new Promise<void>(resolve => { release = resolve; }));
+  vi.mocked(audioPlayer.stopAll).mockClear();
+  await clickHistory('new');
+  expect(audioPlayer.stopAll).toHaveBeenCalledTimes(1); // Initial history selection.
+  vi.mocked(audioPlayer.stopAll).mockClear();
+
+  await act(async () => release());
+  await flush(100);
+  expect(audioPlayer.stopAll).toHaveBeenCalledTimes(1); // enterConversation still stops on ordinary entry.
+  expect(active()).toBe('new');
+  expect(targetSwitches()).toHaveLength(1);
+  expect(screen.getByText('旧对话内容')).toBeInTheDocument(); // No ACK yet.
+});
+
+it('dispatch67 item 2: the self new-conversation button still stops playback before confirmation', async () => {
+  localStorage.setItem('amadeus_pc_identity_mode', 'self');
+  playback.playing = true;
+  render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+  await act(async () => latest().open());
+  await flush();
+  FakeWebSocket.autoSwitch = false;
+  vi.mocked(audioPlayer.stopAll).mockClear();
+  fireEvent.click(newButton());
+  await flush(300);
+  expect(audioPlayer.stopAll).toHaveBeenCalledTimes(1);
+  expect(active()).toBe('new');
+  expect(targetSwitches()).toHaveLength(1);
+  expect(screen.getByLabelText('输入消息')).toBeDisabled();
 });
