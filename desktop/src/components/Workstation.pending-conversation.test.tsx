@@ -1,10 +1,13 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { audioPlayer } from '../hooks/useAudioPlayer';
+import { audioService } from '../services/AudioService';
 import { Workstation } from './Workstation';
 
 // Keep the real Workstation, HistorySidebar and useAmadeusWS; replace peripherals only.
+const playback = vi.hoisted(() => ({ playing: false }));
 vi.mock('../hooks/useAudioPlayer', () => ({
-  useAudioPlayer: () => ({ currentVolume: 0, isPlaying: false }),
+  useAudioPlayer: () => ({ currentVolume: 0, isPlaying: playback.playing }),
   audioPlayer: { init: vi.fn(), playBase64: vi.fn(), stopAll: vi.fn() },
 }));
 vi.mock('../services/AudioService', () => ({
@@ -107,7 +110,7 @@ beforeEach(() => {
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 });
   FakeWebSocket.instances = []; rows = [oldRow]; httpDown = false; postCount = 0; historyCount = 0; patchCount = 0; deleteCount = 0;
   FakeWebSocket.autoReady = true; FakeWebSocket.autoSwitch = true; afterPost = null; missingHistory.clear();
-  failedHistory.clear(); heldHistory.clear(); statusHistory.clear();
+  failedHistory.clear(); heldHistory.clear(); statusHistory.clear(); playback.playing = false;
   listQueryCount = 0;
   vi.stubGlobal('WebSocket', FakeWebSocket);
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => window.setTimeout(() => cb(performance.now()), 16));
@@ -670,4 +673,56 @@ it.each(['lands', 'fails'] as const)(
     expect(active()).toBe(outcome === 'lands' ? 'other' : 'old');
   },
 );
+
+const SEND_CUE = '/audio/sfx/连接成功，进入页面1.ogg';
+const sentTypes = (socket: FakeWebSocket) => socket.sent.map(f => f.type);
+
+it('PR16 followup 2: a send that cannot go out neither stops voice nor plays the cue', async () => {
+  playback.playing = true;
+  await startOld(false); const socket = latest();
+  fireEvent.change(screen.getByLabelText('输入消息'), { target: { value: '发不出去' } });
+  socket.readyState = 3; // Closed on the wire before React has seen onclose.
+  vi.mocked(audioPlayer.stopAll).mockClear(); vi.mocked(audioService.playSFX).mockClear();
+  fireEvent.submit(document.querySelector('form.ws2-composer')!);
+  expect(sentTypes(socket)).not.toContain('voice.stop');
+  expect(sentTypes(socket)).not.toContain('chat.send');
+  expect(audioPlayer.stopAll).not.toHaveBeenCalled();
+  expect(audioService.playSFX).not.toHaveBeenCalledWith(SEND_CUE, expect.anything());
+  expect(screen.getByLabelText('输入消息')).toHaveValue('发不出去');
+});
+
+it('PR16 followup 2: a send that goes out still sends voice.stop before chat.send', async () => {
+  playback.playing = true;
+  await startOld(false); const socket = latest();
+  vi.mocked(audioPlayer.stopAll).mockClear(); vi.mocked(audioService.playSFX).mockClear();
+  sendLine('能发出去');
+  const types = sentTypes(socket);
+  expect(types).toContain('voice.stop');
+  expect(types.indexOf('voice.stop')).toBeLessThan(types.indexOf('chat.send'));
+  expect(audioPlayer.stopAll).toHaveBeenCalled();
+  expect(audioService.playSFX).toHaveBeenCalledWith(SEND_CUE, expect.anything());
+  expect(socket.chats).toEqual([{ content: '能发出去', conversationId: 'old' }]);
+});
+
+it('PR16 followup 2: self mode decides after the conversation is created, then stops voice before sending', async () => {
+  localStorage.setItem('amadeus_pc_identity_mode', 'self');
+  playback.playing = true;
+  render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+  await act(async () => latest().open());
+  await flush();
+  expect(screen.getByLabelText('输入消息')).toBeEnabled();
+  FakeWebSocket.autoReady = false; FakeWebSocket.autoSwitch = false;
+  vi.mocked(audioService.playSFX).mockClear();
+  sendLine('self 第一行');
+  await flush(300);
+  // The new conversation is not confirmed yet: nothing may have stopped voice or played the cue.
+  expect(FakeWebSocket.instances.flatMap(sentTypes)).not.toContain('voice.stop');
+  expect(audioService.playSFX).not.toHaveBeenCalledWith(SEND_CUE, expect.anything());
+  await act(async () => { switchAck(); });
+  const types = sentTypes(latest());
+  expect(types).toContain('voice.stop');
+  expect(types.indexOf('voice.stop')).toBeLessThan(types.indexOf('chat.send'));
+  expect(latest().chats).toEqual([{ content: 'self 第一行', conversationId: 'new' }]);
+  expect(audioService.playSFX).toHaveBeenCalledWith(SEND_CUE, expect.anything());
+});
 

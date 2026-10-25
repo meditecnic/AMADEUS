@@ -110,6 +110,8 @@ export interface UseAmadeusWSReturn {
   emotion: 'neutral' | 'tsundere' | 'embarrassed' | 'intellectual' | 'happy' | 'surprised' | 'annoyed' | 'disappointed' | 'sad';
   clearHistory: () => void;
   sendChat: (content: string) => boolean;
+  /** Same gate sendChat uses, without side effects. Optional so existing test doubles keep compiling. */
+  canSendChat?: (content: string) => boolean;
   stopVoice: () => void;
   cancelTurn: () => void;
   sendDebugTts: (emotion: string, text: string) => void;
@@ -978,11 +980,18 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     connect();
   }, [connect]);
 
-  const sendChat = useCallback((content: string) => {
+  /** Side-effect-free send gate shared with sendChat, so callers can decide before stopping voice. */
+  const canSendChat = useCallback((content: string) => {
     const pending = paramsRef.current.pendingConversation;
     if ((pending && confirmedConversationEpochRef.current !== pending.requestEpoch)
       || pendingConversationSwitchRef.current?.requestEpoch !== undefined) return false;
     if (!content.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return false;
+    return true;
+  }, []);
+
+  const sendChat = useCallback((content: string) => {
+    const ws = wsRef.current;
+    if (!canSendChat(content) || !ws) return false;
 
     // Start 30s watchdog wait immediately on sending chat
     startWatchdog();
@@ -1000,13 +1009,13 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     setIsThinking(true);
 
     // Send chat frame
-    wsRef.current.send(JSON.stringify({
+    ws.send(JSON.stringify({
       type: 'chat.send',
       content: content.trim()
     }));
     paramsRef.current.onLocalSend?.(userMsgId);
     return true;
-  }, []);
+  }, [canSendChat]);
 
   const stopVoice = useCallback(() => {
     voiceStoppedRef.current = true;
@@ -1208,6 +1217,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     retry,
     reconnectStopReason,
     resetToDraft,
+    canSendChat,
     switchConversation,
     switchWorldline,
     wsRef

@@ -655,6 +655,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     activeNotice,
     emotion,
     sendChat,
+    canSendChat,
     stopVoice,
     cancelTurn,
     sendDebugTts,
@@ -1274,12 +1275,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
     e.preventDefault();
     if (!inputText.trim() || conversationBusy || conversationReconnectEpoch !== null
       || sessionState === 'rejected' || sessionState === 'unknown' || providerGone) return;
-    // Turn text still gates send via isThinking/isSynthesizing. When only leftover
-    // voice is playing, stop the existing playback path then start the new Turn.
-    if (isPlaying) {
-      audioPlayer.stopAll();
-      stopVoice();
-    }
     // Draft materialize (no conversation_id) always stamps okabe on the backend.
     // When the settings default is self, pre-create via API so mode is correct.
     // Okabe default keeps the existing draft path (zero regression for most sessions).
@@ -1287,6 +1282,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
       const created = await createConversation('self');
       if (created.status !== 'created' || !(await created.entered)
         || created.requestEpoch !== conversationEpochRef.current) return;
+    }
+    // Only a send that is certain to go out may stop voice or play the cue. voice.stop must
+    // still precede chat.send, so the gate is checked first and sendChat runs last.
+    if (canSendChat && !canSendChat(inputText)) return;
+    // Turn text still gates send via isThinking/isSynthesizing. When only leftover
+    // voice is playing, stop the existing playback path then start the new Turn.
+    if (isPlaying) {
+      audioPlayer.stopAll();
+      stopVoice();
     }
     audioService.playSFX('/audio/sfx/连接成功，进入页面1.ogg', sfxVolume);
     const composer = composerRef.current;
