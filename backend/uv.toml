@@ -1,0 +1,6 @@
+# sherpa-onnx 1.13.8's sdist PKG-INFO omits this dependency. Match the
+# published wheel METADATA so universal compilation includes its core package.
+[[dependency-metadata]]
+name = "sherpa-onnx"
+version = "1.13.8"
+requires-dist = ["sherpa-onnx-core==1.13.8"]
