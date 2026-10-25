@@ -257,3 +257,21 @@ it('PR16 followup 2: canSendChat answers like sendChat in every gate and never w
   h.unmount();
 });
 
+it('PR16 followup 4: clearConversationEntryErrors drops only rejected-entry notices', () => {
+  const h = setup();
+  // An ordinary SYSTEM ERROR on the source session, then a rejected target auth.
+  act(() => latest().emit({ type: 'error', message: '普通系统错误', recoverable: true }));
+  h.stage();
+  act(() => latest().emit({ type: 'error', code: 'model_unavailable', message: '目标模型不可用' }));
+  const texts = () => h.result.current.messages.map(m => m.content);
+  expect(texts()).toEqual(['source transcript', 'SYSTEM ERROR: 普通系统错误', 'SYSTEM ERROR: 目标模型不可用']);
+  expect(h.result.current.messages.at(-1)?.conversationEntryError).toBe(true);
+  act(() => h.result.current.clearConversationEntryErrors?.());
+  expect(texts()).toEqual(['source transcript', 'SYSTEM ERROR: 普通系统错误']);
+  expect(h.result.current.messages.some(m => m.systemError && !m.conversationEntryError)).toBe(true);
+  // Nothing flagged left: the transcript identity is untouched.
+  const kept = h.result.current.messages;
+  act(() => h.result.current.clearConversationEntryErrors?.());
+  expect(h.result.current.messages).toBe(kept);
+  h.unmount();
+});

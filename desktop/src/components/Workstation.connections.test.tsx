@@ -555,6 +555,33 @@ describe('PR #16 follow-ups (dispatch 61)', () => {
     await screen.findByText('没能切换到 local，这段对话仍在使用 DeepSeek。');
   });
 
+  it.each(['connection', 'model'] as const)(
+    '4: a successful %s change removes only the rejected-entry notice, before it reconnects', async kind => {
+      const clear = vi.fn();
+      await openConversationOne({ clearConversationEntryErrors: clear });
+      patchResponse = () => json(200, kind === 'connection' ? row('conversation-one', 'local', 'l1')
+        : row('conversation-one', 'deepseek', 'deepseek-v4-pro'));
+      if (kind === 'connection') await chooseProvider('Local');
+      else {
+        fireEvent.click(screen.getByRole('button', { name: '模型' }));
+        fireEvent.click(await screen.findByRole('option', { name: 'deepseek-v4-pro' }));
+      }
+      await waitFor(() => expect(hoisted.reconnect).toHaveBeenCalled());
+      expect(clear).toHaveBeenCalledTimes(1);
+      expect(clear.mock.invocationCallOrder[0]).toBeLessThan(hoisted.reconnect.mock.invocationCallOrder[0]);
+    },
+  );
+
+  it('4: a failed change keeps the notice (nothing is cleared, nothing reconnects)', async () => {
+    const clear = vi.fn();
+    await openConversationOne({ clearConversationEntryErrors: clear });
+    patchResponse = () => json(500, {});
+    await chooseProvider('Local');
+    await screen.findByText(/没能切换到 Local/);
+    expect(clear).not.toHaveBeenCalled();
+    expect(hoisted.reconnect).not.toHaveBeenCalled();
+  });
+
   it('3a: only the newest history request reports; a replaced one stays silent even if it fails later', async () => {
     let releaseSlow!: () => void;
     const slowDone = new Promise<void>((resolve) => { releaseSlow = resolve; });

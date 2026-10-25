@@ -125,6 +125,8 @@ export interface UseAmadeusWSReturn {
   reconnectStopReason?: ReconnectStopReason | null;
   /** Optional so existing test doubles keep compiling. */
   resetToDraft?: () => void;
+  /** Remove failed-entry notices (conversationEntryError) once a runtime change reconnects the source conversation. */
+  clearConversationEntryErrors?: () => void;
   switchConversation: (conversationId: string, history: Message[], requestEpoch?: number) => boolean;
   switchWorldline: (worldline: 'steins_gate' | 'beta', requestId?: string) => boolean;
   wsRef: React.MutableRefObject<WebSocket | null>;
@@ -1101,6 +1103,14 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     setEmotion('neutral');
   }, []);
 
+  /** Drop only the local failed-entry notices; other systemError messages stay. */
+  const clearConversationEntryErrors = useCallback(() => {
+    const kept = messagesRef.current.filter((message) => !message.conversationEntryError);
+    if (kept.length === messagesRef.current.length) return;
+    messagesRef.current = kept;
+    setMessages((prev) => prev.filter((message) => !message.conversationEntryError));
+  }, []);
+
   const switchConversation = useCallback((conversationId: string, history: Message[], requestEpoch?: number) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
       paramsRef.current.onConversationSwitchError?.({
@@ -1217,6 +1227,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     retry,
     reconnectStopReason,
     resetToDraft,
+    clearConversationEntryErrors,
     canSendChat,
     switchConversation,
     switchWorldline,

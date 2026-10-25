@@ -666,6 +666,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     retry,
     reconnectStopReason,
     resetToDraft,
+    clearConversationEntryErrors,
     switchConversation,
     switchWorldline,
   } = useAmadeusWS({
@@ -1474,6 +1475,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
       // Reusing a socket that previously failed authentication leaves it in the
       // server's unauthenticated state, so reload the durable conversation on a
       // fresh connection after either runtime setting changes.
+      // The rejected-entry notice described the old settings and no longer applies.
+      clearConversationEntryErrors?.();
       reconnect();
       const refreshed = await loadProviders().catch(() => null);
       const provider = (refreshed ?? providers).find((row) => row.id === updated.provider_id);
