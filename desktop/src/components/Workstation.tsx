@@ -284,6 +284,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
     localStorage.getItem('amadeus_pc_reasoning_effort'));
   const [audioError, setAudioError] = useState<string | null>(null);
   const [conversationCreateError, setConversationCreateError] = useState<string | null>(null);
+  /** Why opening a history conversation failed: "HTTP <status>" or "network". */
+  const [conversationOpenError, setConversationOpenError] = useState<string | null>(null);
   const [sessionError, setSessionError] = useState<{
     kind: 'session' | 'worldline';
     code: string;
@@ -860,6 +862,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     if (pendingConversationRef.current?.worldline !== worldline
       && pendingConversationRef.current !== null) abandonConversationEntry(false);
     setActiveConversationId(null);
+    setConversationOpenError(null);
     void loadConversations().catch((error) => {
       console.warn('Conversation synchronization failed:', error);
     });
@@ -1316,6 +1319,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       || sessionState === 'unknown' || sessionState === 'rejected')) {
       setConversationReconnectEpoch(epoch);
     }
+    setConversationOpenError(null);
     setConversationBusy(true);
     return epoch;
   };
@@ -1344,12 +1348,17 @@ export const Workstation: React.FC<WorkstationProps> = ({
     }
     if (conversationBusy && !pendingConversationRef.current) return false;
     const epoch = beginConversationEntry();
+    // Stays null for network errors: a thrown fetch has no status code to show.
+    let failedStatus: number | null = null;
     try {
       audioPlayer.stopAll();
       const response = await fetch(
         apiUrl(`/api/conversations/${encodeURIComponent(conversation.id)}/messages?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`)
       );
-      if (!response.ok) throw new Error(`history query failed: ${response.status}`);
+      if (!response.ok) {
+        failedStatus = response.status;
+        throw new Error(`history query failed: ${response.status}`);
+      }
       const rows = await response.json() as Array<{
         role: string;
         content: string;
@@ -1369,7 +1378,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
       return await enterConversation(conversation, history, epoch);
     } catch (error) {
       console.warn('Conversation switch failed:', error);
-      if (epoch === conversationEpochRef.current) setConversationBusy(false);
+      if (epoch === conversationEpochRef.current) {
+        // A request replaced by a newer click stays silent; only the latest one reports,
+        // and not into a worldline the user has already left.
+        if (worldline === latestWorldlineRef.current) {
+          setConversationOpenError(failedStatus === null ? 'network' : `HTTP ${failedStatus}`);
+        }
+        setConversationBusy(false);
+      }
       return false;
     }
   };
@@ -1483,8 +1499,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
       if (provider?.credential_required && !provider.configured) openConnectionsAt('key');
       return;
     }
+    const providerName = (id: string) => providers.find((row) => row.id === id)?.display_name || id;
+    const previous = activeConversation.provider_id || draftProviderId;
+    setModelApplyError(null);
     void patchActiveConversationRuntime({ provider_id: providerId }).catch((error) => {
       console.warn('Conversation provider update failed:', error);
+      setModelApplyError(`没能切换到 ${providerName(providerId)}，这段对话仍在使用 ${providerName(previous)}。`);
     });
   };
 
@@ -1896,6 +1916,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     shiftSourceMessages.current = messages;
     shiftRef.current = run;
     setSessionError(null);
+    setConversationOpenError(null);
     setConversationBusy(true);
     setShift(run);
     run.start(switchWorldline);
@@ -2498,6 +2519,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
               {sessionError.kind === 'session' ? '会话同步失败' : '世界线切换失败，已留在原来的世界线'}
             </span>
             <code className="ws2-toast-code">{sessionError.code}</code>
+          </div>
+        )}
+        {conversationOpenError && (
+          <div className="audio-error-toast session-error-toast" data-testid="conversation-open-error-toast" role="status">
+            <span className="audio-error-msg">没能打开这段对话，请稍后重试。</span>
+            <code className="ws2-toast-code">{conversationOpenError}</code>
           </div>
         )}
         {conversationCreateError && (

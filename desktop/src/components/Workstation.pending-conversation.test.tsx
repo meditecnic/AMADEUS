@@ -726,3 +726,43 @@ it('PR16 followup 2: self mode decides after the conversation is created, then s
   expect(audioService.playSFX).toHaveBeenCalledWith(SEND_CUE, expect.anything());
 });
 
+const openErrorToast = () => screen.queryByTestId('conversation-open-error-toast');
+
+it.each([
+  ['HTTP 404', (id: string) => missingHistory.add(id)],
+  ['HTTP 500', (id: string) => statusHistory.set(id, 500)],
+  ['network', (id: string) => failedHistory.add(id)],
+] as const)('PR16 followup 3a: opening a history conversation fails with %s and says why', async (code, fail) => {
+  rows = [newRow, oldRow]; const { view } = await startOld(false);
+  fail('new');
+  await clickHistory('new');
+  expect(active()).toBe('old');
+  const toast = screen.getByTestId('conversation-open-error-toast');
+  expect(toast).toHaveClass('audio-error-toast', 'session-error-toast');
+  expect(toast).toHaveTextContent('没能打开这段对话，请稍后重试。');
+  expect(toast.querySelector('code.ws2-toast-code')).toHaveTextContent(code);
+  // The next entry starts clean.
+  missingHistory.clear(); statusHistory.clear(); failedHistory.clear();
+  await clickHistory('new');
+  expect(active()).toBe('new');
+  expect(openErrorToast()).toBeNull();
+  // Leaving the worldline also clears it.
+  failedHistory.add('old');
+  await clickHistory('old');
+  expect(openErrorToast()).not.toBeNull();
+  view.rerender(<Workstation worldline="beta" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+  await flush(100);
+  expect(openErrorToast()).toBeNull();
+});
+
+it('PR16 followup 3a: a failure that arrives after the worldline moved on stays silent', async () => {
+  rows = [newRow, oldRow]; const { view } = await startOld(false);
+  let release!: () => void;
+  heldHistory.set('new', new Promise<void>(resolve => { release = resolve; }));
+  statusHistory.set('new', 500);
+  await clickHistory('new');
+  view.rerender(<Workstation worldline="beta" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+  await flush(100);
+  await act(async () => release()); await flush(100);
+  expect(openErrorToast()).toBeNull();
+});
