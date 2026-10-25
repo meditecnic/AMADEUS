@@ -15,6 +15,29 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  backend-lock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Install pinned lock compiler
+        run: python -m pip install uv==0.13.5
+      - name: Check dependency lock
+        env:
+          UV_CUSTOM_COMPILE_COMMAND: 'uv pip compile requirements-dev.txt --universal --python-version 3.11 --generate-hashes -o requirements-dev.lock # uv 0.13.5'
+        run: |
+          uv pip compile requirements-dev.txt --universal --python-version 3.11 --generate-hashes -o requirements-dev.lock
+          git diff --exit-code -- requirements-dev.lock
+
   eol:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -66,8 +89,10 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
-          cache-dependency-path: backend/requirements*.txt
-      - run: python -m pip install -r requirements-dev.txt
+          cache-dependency-path: |
+            backend/requirements*.txt
+            backend/requirements-dev.lock
+      - run: python -m pip install --require-hashes -r requirements-dev.lock
       - name: Print environment information
         run: |
           python --version
@@ -100,8 +125,10 @@ jobs:
         with:
           python-version: '3.13'
           cache: pip
-          cache-dependency-path: backend/requirements*.txt
-      - run: python -m pip install -r requirements-dev.txt
+          cache-dependency-path: |
+            backend/requirements*.txt
+            backend/requirements-dev.lock
+      - run: python -m pip install --require-hashes -r requirements-dev.lock
       - name: Print environment information
         run: |
           python --version
