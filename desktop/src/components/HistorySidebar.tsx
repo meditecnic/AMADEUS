@@ -375,7 +375,12 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
   }, [shownActiveId]);
   // The switch landed (activeId moved) or ended without moving (busy dropped): the plate follows the truth again.
   const wasBusy = useRef(busy);
-  useEffect(() => { setPendingId(null); }, [activeId]);
+  // While a newer request is in flight (busy), the workstation may first fall back to the source conversation to
+  // retire the unconfirmed one. That is not a landing, so the click's plate stays; the busy edge below ends it.
+  useEffect(() => {
+    if (latest.current.busy) return;
+    setPendingId(null);
+  }, [activeId]);
   useEffect(() => {
     if (wasBusy.current && !busy) setPendingId(null);
     wasBusy.current = busy;

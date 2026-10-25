@@ -94,6 +94,7 @@ let listQueryCount: number;
 let afterPost: (() => void) | null;
 const missingHistory = new Set<string>();
 const failedHistory = new Set<string>();
+const statusHistory = new Map<string, number>();
 const heldHistory = new Map<string, Promise<void>>();
 
 beforeEach(() => {
@@ -106,7 +107,7 @@ beforeEach(() => {
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 });
   FakeWebSocket.instances = []; rows = [oldRow]; httpDown = false; postCount = 0; historyCount = 0; patchCount = 0; deleteCount = 0;
   FakeWebSocket.autoReady = true; FakeWebSocket.autoSwitch = true; afterPost = null; missingHistory.clear();
-  failedHistory.clear(); heldHistory.clear();
+  failedHistory.clear(); heldHistory.clear(); statusHistory.clear();
   listQueryCount = 0;
   vi.stubGlobal('WebSocket', FakeWebSocket);
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => window.setTimeout(() => cb(performance.now()), 16));
@@ -161,6 +162,7 @@ beforeEach(() => {
       await heldHistory.get(id);
       if (failedHistory.has(id)) throw new TypeError('Failed to fetch');
       if (missingHistory.has(id)) return json({}, 404);
+      if (statusHistory.has(id)) return json({}, statusHistory.get(id)!);
       return json([{ role: 'user', content: id === 'old' ? '旧对话内容' : `历史 ${id}` }]);
     }
     if (url === '/api/search/settings') return json({ provider: 'tavily', configured: false });
@@ -643,3 +645,29 @@ it('REWORK56 HTTP stage: another history click before dispatch keeps one socket 
   await act(async () => release()); await flush(100);
   expect(FakeWebSocket.instances).toHaveLength(1); expect(authCount()).toBe(1);
 });
+
+/* PR #16 follow-ups (dispatch 61). */
+
+it.each(['lands', 'fails'] as const)(
+  'PR16 followup 1: the sidebar plate stays on Y while Y replaces an unconfirmed X, then Y %s', async outcome => {
+    rows = [newRow, { ...newRow, id: 'other', title: '另一段' }, oldRow];
+    await startOld(false); FakeWebSocket.autoSwitch = false;
+    await clickHistory('new');
+    expect(active()).toBe('new');
+    let release!: () => void;
+    heldHistory.set('other', new Promise<void>(resolve => { release = resolve; }));
+    if (outcome === 'fails') statusHistory.set('other', 500);
+    // Every state the plate passes through, including renders a settled check would miss.
+    const seen: (string | null)[] = [];
+    const watcher = new MutationObserver(() => seen.push(active() ?? null));
+    watcher.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'] });
+    await clickHistory('other');
+    expect(active()).toBe('other');
+    // Until Y's request is answered the plate never leaves Y.
+    expect(seen).not.toContain('old');
+    await act(async () => release()); await flush(100);
+    watcher.disconnect();
+    expect(active()).toBe(outcome === 'lands' ? 'other' : 'old');
+  },
+);
+
