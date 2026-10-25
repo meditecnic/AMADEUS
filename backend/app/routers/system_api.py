@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -23,6 +23,9 @@ from app.services.search import (
     normalize_search_provider,
     search_service,
 )
+
+if TYPE_CHECKING:
+    from app.services.memory_v11.contracts import MemoryValidationError
 
 router = APIRouter()
 
