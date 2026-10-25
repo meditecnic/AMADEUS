@@ -220,3 +220,58 @@ it('REWORK56 S5: sendChat reports false for blocked writes and true only for an 
   expect(socket.frames.filter(f => f.type === 'chat.send')).toHaveLength(1);
   h.unmount();
 });
+
+it('PR16 followup 2: canSendChat answers like sendChat in every gate and never writes anything', () => {
+  const h = setup(); const socket = latest();
+  const probe = (content: string) => {
+    const framesBefore = socket.frames.length;
+    const messagesBefore = h.result.current.messages;
+    let answer: boolean | undefined;
+    act(() => { answer = h.result.current.canSendChat?.(content); });
+    // A gate that sends, stores a message or arms the watchdog would not be a gate.
+    expect(socket.frames).toHaveLength(framesBefore);
+    expect(h.result.current.messages).toBe(messagesBefore);
+    return answer;
+  };
+  const gateOf = (content: string) => {
+    const expected = probe(content);
+    let sent: boolean | undefined;
+    act(() => { sent = h.result.current.sendChat(content); });
+    expect(sent).toBe(expected);
+    return expected;
+  };
+  expect(gateOf(' ')).toBe(false);
+  // An unconfirmed target blocks the gate until its ACK lands.
+  h.rerender({ ...base, pendingConversation: target() });
+  act(() => { h.result.current.switchConversation('new', target().history, 1); });
+  expect(gateOf('blocked')).toBe(false);
+  const req = socket.frames.at(-1)!;
+  act(() => socket.emit({ type: 'conversation.switched', request_id: req.request_id,
+    conversation_id: 'new', worldline: 'steins_gate' }));
+  expect(probe('accepted')).toBe(true);
+  expect(socket.frames.filter(f => f.type === 'chat.send')).toEqual([]);
+  expect(gateOf('accepted')).toBe(true);
+  expect(socket.frames.filter(f => f.type === 'chat.send')).toHaveLength(1);
+  socket.readyState = 3;
+  expect(gateOf('closed')).toBe(false);
+  h.unmount();
+});
+
+it('PR16 followup 4: clearConversationEntryErrors drops only rejected-entry notices', () => {
+  const h = setup();
+  // An ordinary SYSTEM ERROR on the source session, then a rejected target auth.
+  act(() => latest().emit({ type: 'error', message: '普通系统错误', recoverable: true }));
+  h.stage();
+  act(() => latest().emit({ type: 'error', code: 'model_unavailable', message: '目标模型不可用' }));
+  const texts = () => h.result.current.messages.map(m => m.content);
+  expect(texts()).toEqual(['source transcript', 'SYSTEM ERROR: 普通系统错误', 'SYSTEM ERROR: 目标模型不可用']);
+  expect(h.result.current.messages.at(-1)?.conversationEntryError).toBe(true);
+  act(() => h.result.current.clearConversationEntryErrors?.());
+  expect(texts()).toEqual(['source transcript', 'SYSTEM ERROR: 普通系统错误']);
+  expect(h.result.current.messages.some(m => m.systemError && !m.conversationEntryError)).toBe(true);
+  // Nothing flagged left: the transcript identity is untouched.
+  const kept = h.result.current.messages;
+  act(() => h.result.current.clearConversationEntryErrors?.());
+  expect(h.result.current.messages).toBe(kept);
+  h.unmount();
+});

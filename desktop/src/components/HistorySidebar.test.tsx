@@ -159,6 +159,44 @@ describe('HistorySidebar conversations', () => {
     expect(rowOf('时间机器实验')).not.toHaveClass('active');
   });
 
+  it.each(['lands', 'fails'] as const)(
+    'keeps the plate on the new target while it replaces an unconfirmed one, then %s',
+    async (outcome) => {
+      const three: ConversationSummary = { ...conversations[0], id: 'three', title: '第三段' };
+      const list = [...conversations, three];
+      const onSelect = vi.fn();
+      const props = (overrides: Partial<React.ComponentProps<typeof HistorySidebar>>) =>
+        sidebar({ onSelect, conversations: list, ...overrides });
+      const { rerender } = render(props({ activeId: 'one' }));
+
+      // X (β 世界线) is chosen and its entry is under way: the workstation reports it as the active target.
+      fireEvent.click(screen.getByText('β 世界线'));
+      await waitFor(() => expect(onSelect).toHaveBeenCalledWith(conversations[1]));
+      rerender(props({ activeId: 'two', busy: false }));
+      expect(rowOf('β 世界线')).toHaveClass('active');
+
+      // Y is chosen before X is confirmed. The workstation retires X first (activeId falls back to the source,
+      // busy rises in the same commit); the plate must not return to the source in between.
+      fireEvent.click(screen.getByText('第三段'));
+      expect(rowOf('第三段')).toHaveClass('active');
+      await waitFor(() => expect(onSelect).toHaveBeenCalledWith(three));
+      rerender(props({ activeId: 'one', busy: true }));
+      expect(rowOf('第三段')).toHaveClass('active');
+      expect(rowOf('时间机器实验')).not.toHaveClass('active');
+
+      if (outcome === 'lands') {
+        rerender(props({ activeId: 'three', busy: false }));
+        expect(rowOf('第三段')).toHaveClass('active');
+        expect(rowOf('时间机器实验')).not.toHaveClass('active');
+      } else {
+        // Y could not be entered: the plate goes back to the conversation that is still open.
+        rerender(props({ activeId: 'one', busy: false }));
+        await waitFor(() => expect(rowOf('时间机器实验')).toHaveClass('active'));
+        expect(rowOf('第三段')).not.toHaveClass('active');
+      }
+    },
+  );
+
   it('marks pinned rows so their timeline node can turn into the same diamond as the title', () => {
     render(sidebar());
     expect(rowOf('β 世界线')).toHaveClass('pinned');

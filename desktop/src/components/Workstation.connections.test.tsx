@@ -492,3 +492,115 @@ describe('Workstation connection admission and next-turn model', () => {
     expect(screen.getByRole('button', { name: '模型' })).toHaveTextContent('deepseek-v4-flash');
   });
 });
+
+describe('PR #16 follow-ups (dispatch 61)', () => {
+  const row = (id: string, providerId = 'deepseek', modelId = 'deepseek-v4-flash') => ({
+    id, title: id, title_source: 'auto', is_default: false, is_pinned: false, is_selected: true,
+    provider_id: providerId, model_id: modelId, last_active_at: '2026-09-28T00:00:00Z',
+  });
+  type Params = { onTurnStarted?: (id: string) => void };
+
+  async function openConversationOne(extra: Record<string, unknown> = {}) {
+    providers = [provider('deepseek', 'DeepSeek', 'deepseek-v4-flash'), provider('local', 'Local', 'l1')];
+    let params: Params = {};
+    hoisted.useAmadeusWS.mockImplementation((p: Params) => { params = p; return wsState(extra); });
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: '模型供应商' })).not.toBeDisabled());
+    // The running turn materialises the conversation as the active one.
+    await act(async () => { params.onTurnStarted?.('conversation-one'); });
+    await waitFor(() => expect(screen.getByRole('button', { name: '模型供应商' })).toHaveTextContent('DeepSeek'));
+  }
+  const chooseProvider = async (name: string) => {
+    fireEvent.click(screen.getByRole('button', { name: '模型供应商' }));
+    fireEvent.click(await screen.findByRole('option', { name }));
+  };
+
+  it('3b: a failed connection change says so in the apply-error slot, with display names, and can be dismissed', async () => {
+    await openConversationOne();
+    patchResponse = () => json(500, {});
+    await chooseProvider('Local');
+    const note = await screen.findByText('没能切换到 Local，这段对话仍在使用 DeepSeek。');
+    expect(note.closest('.ws2-apply-error')).toHaveAttribute('role', 'alert');
+    expect(hoisted.reconnect).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '关闭提示' }));
+    expect(screen.queryByText(/没能切换到/)).toBeNull();
+  });
+
+  it('3b: model and connection failures share one slot; the later one replaces the earlier', async () => {
+    await openConversationOne();
+    patchResponse = () => json(500, {});
+    fireEvent.click(screen.getByRole('button', { name: '模型' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'deepseek-v4-pro' }));
+    await screen.findByText('没能切换到 deepseek-v4-pro，这段对话仍在使用 deepseek-v4-flash。');
+    await chooseProvider('Local');
+    await screen.findByText('没能切换到 Local，这段对话仍在使用 DeepSeek。');
+    // The later failure replaced the earlier one instead of stacking a second notice.
+    expect(document.querySelectorAll('.ws2-apply-error')).toHaveLength(1);
+    expect(screen.queryByText(/deepseek-v4-pro，这段对话/)).toBeNull();
+  });
+
+  it('3b: falls back to the connection id when the target has no display name', async () => {
+    providers = [provider('deepseek', 'DeepSeek', 'deepseek-v4-flash'), provider('local', '', 'l1')];
+    let params: Params = {};
+    hoisted.useAmadeusWS.mockImplementation((p: Params) => { params = p; return wsState(); });
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: '模型供应商' })).not.toBeDisabled());
+    await act(async () => { params.onTurnStarted?.('conversation-one'); });
+    patchResponse = () => json(500, {});
+    fireEvent.click(screen.getByRole('button', { name: '模型供应商' }));
+    // Its option has no visible name, so pick the one that is not DeepSeek.
+    await screen.findAllByRole('option');
+    const unnamed = screen.getAllByRole('option').find((option) => !option.textContent?.includes('DeepSeek'));
+    fireEvent.click(unnamed!);
+    await screen.findByText('没能切换到 local，这段对话仍在使用 DeepSeek。');
+  });
+
+  it.each(['connection', 'model'] as const)(
+    '4: a successful %s change removes only the rejected-entry notice, before it reconnects', async kind => {
+      const clear = vi.fn();
+      await openConversationOne({ clearConversationEntryErrors: clear });
+      patchResponse = () => json(200, kind === 'connection' ? row('conversation-one', 'local', 'l1')
+        : row('conversation-one', 'deepseek', 'deepseek-v4-pro'));
+      if (kind === 'connection') await chooseProvider('Local');
+      else {
+        fireEvent.click(screen.getByRole('button', { name: '模型' }));
+        fireEvent.click(await screen.findByRole('option', { name: 'deepseek-v4-pro' }));
+      }
+      await waitFor(() => expect(hoisted.reconnect).toHaveBeenCalled());
+      expect(clear).toHaveBeenCalledTimes(1);
+      expect(clear.mock.invocationCallOrder[0]).toBeLessThan(hoisted.reconnect.mock.invocationCallOrder[0]);
+    },
+  );
+
+  it('4: a failed change keeps the notice (nothing is cleared, nothing reconnects)', async () => {
+    const clear = vi.fn();
+    await openConversationOne({ clearConversationEntryErrors: clear });
+    patchResponse = () => json(500, {});
+    await chooseProvider('Local');
+    await screen.findByText(/没能切换到 Local/);
+    expect(clear).not.toHaveBeenCalled();
+    expect(hoisted.reconnect).not.toHaveBeenCalled();
+  });
+
+  it('3a: only the newest history request reports; a replaced one stays silent even if it fails later', async () => {
+    let releaseSlow!: () => void;
+    const slowDone = new Promise<void>((resolve) => { releaseSlow = resolve; });
+    const baseFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith('/api/conversations/slow/messages')) { await slowDone; return json(500, {}); }
+      if (url.startsWith('/api/conversations/fast/messages')) return json(404, {});
+      return baseFetch(input, init);
+    }));
+    hoisted.useAmadeusWS.mockImplementation(() => wsState());
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    await waitFor(() => expect((hoisted.sidebarProps.current?.conversations as unknown[] | undefined)?.length).toBe(1));
+    const onSelect = hoisted.sidebarProps.current!.onSelect as (conversation: unknown) => void;
+    // Both clicks reach the workstation in one tick, so the second replaces the first before it answers.
+    await act(async () => { onSelect(row('slow')); onSelect(row('fast')); });
+    expect(await screen.findByTestId('conversation-open-error-toast')).toHaveTextContent('HTTP 404');
+    await act(async () => { releaseSlow(); });
+    expect(screen.getByTestId('conversation-open-error-toast')).toHaveTextContent('HTTP 404');
+    expect(screen.getByTestId('conversation-open-error-toast')).not.toHaveTextContent('HTTP 500');
+  });
+});

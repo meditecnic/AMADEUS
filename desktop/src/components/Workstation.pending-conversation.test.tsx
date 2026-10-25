@@ -1,10 +1,13 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { audioPlayer } from '../hooks/useAudioPlayer';
+import { audioService } from '../services/AudioService';
 import { Workstation } from './Workstation';
 
 // Keep the real Workstation, HistorySidebar and useAmadeusWS; replace peripherals only.
+const playback = vi.hoisted(() => ({ playing: false }));
 vi.mock('../hooks/useAudioPlayer', () => ({
-  useAudioPlayer: () => ({ currentVolume: 0, isPlaying: false }),
+  useAudioPlayer: () => ({ currentVolume: 0, isPlaying: playback.playing }),
   audioPlayer: { init: vi.fn(), playBase64: vi.fn(), stopAll: vi.fn() },
 }));
 vi.mock('../services/AudioService', () => ({
@@ -94,6 +97,7 @@ let listQueryCount: number;
 let afterPost: (() => void) | null;
 const missingHistory = new Set<string>();
 const failedHistory = new Set<string>();
+const statusHistory = new Map<string, number>();
 const heldHistory = new Map<string, Promise<void>>();
 
 beforeEach(() => {
@@ -106,7 +110,7 @@ beforeEach(() => {
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1440 });
   FakeWebSocket.instances = []; rows = [oldRow]; httpDown = false; postCount = 0; historyCount = 0; patchCount = 0; deleteCount = 0;
   FakeWebSocket.autoReady = true; FakeWebSocket.autoSwitch = true; afterPost = null; missingHistory.clear();
-  failedHistory.clear(); heldHistory.clear();
+  failedHistory.clear(); heldHistory.clear(); statusHistory.clear(); playback.playing = false;
   listQueryCount = 0;
   vi.stubGlobal('WebSocket', FakeWebSocket);
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => window.setTimeout(() => cb(performance.now()), 16));
@@ -161,6 +165,7 @@ beforeEach(() => {
       await heldHistory.get(id);
       if (failedHistory.has(id)) throw new TypeError('Failed to fetch');
       if (missingHistory.has(id)) return json({}, 404);
+      if (statusHistory.has(id)) return json({}, statusHistory.get(id)!);
       return json([{ role: 'user', content: id === 'old' ? '旧对话内容' : `历史 ${id}` }]);
     }
     if (url === '/api/search/settings') return json({ provider: 'tavily', configured: false });
@@ -642,4 +647,323 @@ it('REWORK56 HTTP stage: another history click before dispatch keeps one socket 
   expect(FakeWebSocket.instances).toHaveLength(1); expect(authCount()).toBe(1);
   await act(async () => release()); await flush(100);
   expect(FakeWebSocket.instances).toHaveLength(1); expect(authCount()).toBe(1);
+});
+
+/* PR #16 follow-ups (dispatch 61). */
+
+it.each(['lands', 'fails'] as const)(
+  'PR16 followup 1: the sidebar plate stays on Y while Y replaces an unconfirmed X, then Y %s', async outcome => {
+    rows = [newRow, { ...newRow, id: 'other', title: '另一段' }, oldRow];
+    await startOld(false); FakeWebSocket.autoSwitch = false;
+    await clickHistory('new');
+    expect(active()).toBe('new');
+    let release!: () => void;
+    heldHistory.set('other', new Promise<void>(resolve => { release = resolve; }));
+    if (outcome === 'fails') statusHistory.set('other', 500);
+    // Every state the plate passes through, including renders a settled check would miss.
+    const seen: (string | null)[] = [];
+    const watcher = new MutationObserver(() => seen.push(active() ?? null));
+    watcher.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['class'] });
+    await clickHistory('other');
+    expect(active()).toBe('other');
+    // Until Y's request is answered the plate never leaves Y.
+    expect(seen).not.toContain('old');
+    await act(async () => release()); await flush(100);
+    watcher.disconnect();
+    expect(active()).toBe(outcome === 'lands' ? 'other' : 'old');
+  },
+);
+
+const SEND_CUE = '/audio/sfx/连接成功，进入页面1.ogg';
+const sentTypes = (socket: FakeWebSocket) => socket.sent.map(f => f.type);
+
+it('PR16 followup 2: a send that cannot go out neither stops voice nor plays the cue', async () => {
+  playback.playing = true;
+  await startOld(false); const socket = latest();
+  fireEvent.change(screen.getByLabelText('输入消息'), { target: { value: '发不出去' } });
+  socket.readyState = 3; // Closed on the wire before React has seen onclose.
+  vi.mocked(audioPlayer.stopAll).mockClear(); vi.mocked(audioService.playSFX).mockClear();
+  fireEvent.submit(document.querySelector('form.ws2-composer')!);
+  expect(sentTypes(socket)).not.toContain('voice.stop');
+  expect(sentTypes(socket)).not.toContain('chat.send');
+  expect(audioPlayer.stopAll).not.toHaveBeenCalled();
+  expect(audioService.playSFX).not.toHaveBeenCalledWith(SEND_CUE, expect.anything());
+  expect(screen.getByLabelText('输入消息')).toHaveValue('发不出去');
+});
+
+it('PR16 followup 2: a send that goes out still sends voice.stop before chat.send', async () => {
+  playback.playing = true;
+  await startOld(false); const socket = latest();
+  vi.mocked(audioPlayer.stopAll).mockClear(); vi.mocked(audioService.playSFX).mockClear();
+  sendLine('能发出去');
+  const types = sentTypes(socket);
+  expect(types).toContain('voice.stop');
+  expect(types.indexOf('voice.stop')).toBeLessThan(types.indexOf('chat.send'));
+  expect(audioPlayer.stopAll).toHaveBeenCalled();
+  expect(audioService.playSFX).toHaveBeenCalledWith(SEND_CUE, expect.anything());
+  expect(socket.chats).toEqual([{ content: '能发出去', conversationId: 'old' }]);
+});
+
+it('PR16 followup 2: self mode decides after the conversation is created, then stops voice before sending', async () => {
+  localStorage.setItem('amadeus_pc_identity_mode', 'self');
+  playback.playing = true;
+  render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+  await act(async () => latest().open());
+  await flush();
+  expect(screen.getByLabelText('输入消息')).toBeEnabled();
+  FakeWebSocket.autoReady = false; FakeWebSocket.autoSwitch = false;
+  const socket = latest();
+  const writes = vi.spyOn(socket, 'send');
+  vi.mocked(audioPlayer.stopAll).mockClear();
+  vi.mocked(audioService.playSFX).mockClear();
+  sendLine('self 第一行');
+  await flush(300);
+  // The new conversation is not confirmed yet: nothing may have stopped voice or played the cue.
+  expect(audioPlayer.stopAll).not.toHaveBeenCalled();
+  expect(FakeWebSocket.instances.flatMap(sentTypes)).not.toContain('voice.stop');
+  expect(audioService.playSFX).not.toHaveBeenCalledWith(SEND_CUE, expect.anything());
+  await act(async () => { switchAck(); });
+  const types = sentTypes(latest());
+  expect(audioPlayer.stopAll).toHaveBeenCalledTimes(1);
+  expect(types).toContain('voice.stop');
+  expect(types.indexOf('voice.stop')).toBeLessThan(types.indexOf('chat.send'));
+  expect(latest().chats).toEqual([{ content: 'self 第一行', conversationId: 'new' }]);
+  expect(audioService.playSFX).toHaveBeenCalledWith(SEND_CUE, expect.anything());
+  expect(writes.mock.calls.map(([frame]) => JSON.parse(frame).type))
+    .toEqual(['conversation.switch', 'voice.stop', 'chat.send']);
+  const stopOrder = vi.mocked(audioPlayer.stopAll).mock.invocationCallOrder[0];
+  const cueOrder = vi.mocked(audioService.playSFX).mock.invocationCallOrder[0];
+  expect(stopOrder).toBeLessThan(writes.mock.invocationCallOrder[1]);
+  expect(writes.mock.invocationCallOrder[1]).toBeLessThan(cueOrder);
+  expect(cueOrder).toBeLessThan(writes.mock.invocationCallOrder[2]);
+});
+
+const openErrorToast = () => screen.queryByTestId('conversation-open-error-toast');
+
+it.each([
+  ['HTTP 404', (id: string) => missingHistory.add(id)],
+  ['HTTP 500', (id: string) => statusHistory.set(id, 500)],
+  ['network', (id: string) => failedHistory.add(id)],
+] as const)('PR16 followup 3a: opening a history conversation fails with %s and says why', async (code, fail) => {
+  rows = [newRow, oldRow]; const { view } = await startOld(false);
+  fail('new');
+  await clickHistory('new');
+  expect(active()).toBe('old');
+  const toast = screen.getByTestId('conversation-open-error-toast');
+  expect(toast).toHaveClass('audio-error-toast', 'session-error-toast');
+  expect(toast).toHaveTextContent('没能打开这段对话，请稍后重试。');
+  expect(toast.querySelector('code.ws2-toast-code')).toHaveTextContent(code);
+  // The next entry starts clean.
+  missingHistory.clear(); statusHistory.clear(); failedHistory.clear();
+  await clickHistory('new');
+  expect(active()).toBe('new');
+  expect(openErrorToast()).toBeNull();
+  // Leaving the worldline also clears it.
+  failedHistory.add('old');
+  await clickHistory('old');
+  expect(openErrorToast()).not.toBeNull();
+  view.rerender(<Workstation worldline="beta" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+  await flush(100);
+  expect(openErrorToast()).toBeNull();
+});
+
+it('PR16 followup 3a: a failure that arrives after the worldline moved on stays silent', async () => {
+  rows = [newRow, oldRow]; const { view } = await startOld(false);
+  let release!: () => void;
+  heldHistory.set('new', new Promise<void>(resolve => { release = resolve; }));
+  statusHistory.set('new', 500);
+  await clickHistory('new');
+  view.rerender(<Workstation worldline="beta" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+  await flush(100);
+  await act(async () => release()); await flush(100);
+  expect(openErrorToast()).toBeNull();
+});
+
+async function deleteHistoryConversation(title: string) {
+  fireEvent.keyDown(screen.getByRole('button', { name: `会话操作 ${title}` }), { key: 'Enter' });
+  fireEvent.click(screen.getByRole('menuitem', { name: `删除 ${title}` }));
+  fireEvent.click(screen.getByRole('button', { name: '删除会话' }));
+  await flush(100);
+}
+
+const targetSwitches = () => FakeWebSocket.instances.flatMap(s => s.sent)
+  .filter(f => f.type === 'conversation.switch' && f.conversation_id === 'new');
+
+it.each(['success', 'HTTP 404', 'network'] as const)(
+  'dispatch67 item 1: deleting the current conversation cancels HTTP entry, including late %s', async outcome => {
+    rows = [newRow, oldRow];
+    await startOld(false);
+    let release!: () => void;
+    heldHistory.set('new', new Promise<void>(resolve => { release = resolve; }));
+    if (outcome === 'HTTP 404') missingHistory.add('new');
+    if (outcome === 'network') failedHistory.add('new');
+    await clickHistory('new');
+    expect(active()).toBe('new');
+    expect(newButton()).toBeDisabled();
+
+    await deleteHistoryConversation(oldRow.title);
+    expect(deleteCount).toBe(1);
+    expect(active()).toBeUndefined();
+    expect(newButton()).toBeEnabled(); // Entry busy must fall even while the HTTP request is held.
+    expect(screen.queryByText('旧对话内容')).toBeNull();
+    const draft = latest();
+    await act(async () => draft.open());
+    expect(draft.sent.find(f => f.type === 'auth')).toMatchObject({ conversation_mode: 'draft' });
+    expect(draft.sent.find(f => f.type === 'auth')).not.toHaveProperty('conversation_id');
+
+    await act(async () => release());
+    await flush(100);
+    expect(active()).toBeUndefined();
+    expect(newButton()).toBeEnabled();
+    expect(screen.getByLabelText('输入消息')).toBeEnabled();
+    expect(targetSwitches()).toEqual([]);
+    expect(screen.queryByText('历史 new')).toBeNull();
+    expect(openErrorToast()).toBeNull();
+  },
+);
+
+it('dispatch67 item 1: deleting the current conversation cancels an entry awaiting its switch ACK', async () => {
+  rows = [newRow, oldRow];
+  await startOld(false);
+  FakeWebSocket.autoSwitch = false;
+  const source = latest();
+  const retiredHandler = source.onmessage!;
+  await clickHistory('new');
+  const request = targetSwitches().at(-1)!;
+  expect(request).toBeDefined();
+
+  await deleteHistoryConversation(oldRow.title);
+  expect(deleteCount).toBe(1);
+  expect(active()).toBeUndefined();
+  expect(newButton()).toBeEnabled();
+  expect(screen.queryByText('旧对话内容')).toBeNull();
+  await act(async () => latest().open());
+  expect(latest().sent.find(f => f.type === 'auth')).toMatchObject({ conversation_mode: 'draft' });
+  expect(latest().sent.find(f => f.type === 'auth')).not.toHaveProperty('conversation_id');
+
+  // Deliver an already-queued event even though reconnect detached the retired socket's handler.
+  await act(async () => retiredHandler({ data: JSON.stringify({
+    type: 'conversation.switched', request_id: request.request_id,
+    conversation_id: 'new', worldline: 'steins_gate', generation: 5,
+  }) }));
+  expect(active()).toBeUndefined();
+  expect(newButton()).toBeEnabled();
+  expect(screen.getByLabelText('输入消息')).toBeEnabled();
+  expect(targetSwitches()).toHaveLength(1);
+  expect(screen.queryByText('历史 new')).toBeNull();
+  expect(openErrorToast()).toBeNull();
+});
+
+it('dispatch67 item 1: deleting an unrelated conversation lets the pending HTTP entry finish', async () => {
+  const unrelated = { ...oldRow, id: 'other', title: '无关对话', is_selected: false };
+  rows = [newRow, oldRow, unrelated];
+  await startOld(false);
+  let release!: () => void;
+  heldHistory.set('new', new Promise<void>(resolve => { release = resolve; }));
+  await clickHistory('new');
+  await deleteHistoryConversation(unrelated.title);
+  expect(deleteCount).toBe(1);
+  expect(active()).toBe('new');
+  expect(newButton()).toBeDisabled();
+  expect(screen.getByText('旧对话内容')).toBeInTheDocument();
+
+  await act(async () => release());
+  await flush(100);
+  expect(active()).toBe('new');
+  expect(newButton()).toBeEnabled();
+  expect(targetSwitches()).toHaveLength(1);
+  expect(screen.getByText('历史 new')).toBeInTheDocument();
+  expect(openErrorToast()).toBeNull();
+});
+
+it('dispatch67 item 1: a failed DELETE does not cancel the pending HTTP entry', async () => {
+  rows = [newRow, oldRow];
+  await startOld(false);
+  let release!: () => void;
+  heldHistory.set('new', new Promise<void>(resolve => { release = resolve; }));
+  await clickHistory('new');
+  const baseFetch = globalThis.fetch;
+  vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => (
+    init?.method === 'DELETE' ? Promise.resolve(json({}, 500)) : baseFetch(input, init)
+  )));
+  await deleteHistoryConversation(oldRow.title);
+  expect(screen.getByText('删除失败，会话仍然保留。请稍后重试。')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '取消' }));
+  expect(rows.some(row => row.id === 'old')).toBe(true);
+  expect(newButton()).toBeDisabled();
+  expect(screen.getByText('旧对话内容')).toBeInTheDocument();
+
+  await act(async () => release());
+  await flush(100);
+  expect(active()).toBe('new');
+  expect(newButton()).toBeEnabled();
+  expect(targetSwitches()).toHaveLength(1);
+  expect(screen.getByText('历史 new')).toBeInTheDocument();
+  expect(openErrorToast()).toBeNull();
+});
+
+it('dispatch67 item 2: self first-send keeps playback and input when transport closes after confirmation', async () => {
+  localStorage.setItem('amadeus_pc_identity_mode', 'self');
+  playback.playing = true;
+  render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+  await act(async () => latest().open());
+  await flush();
+  FakeWebSocket.autoReady = false; FakeWebSocket.autoSwitch = false;
+  vi.mocked(audioPlayer.stopAll).mockClear();
+  vi.mocked(audioService.playSFX).mockClear();
+  sendLine('self 保留输入');
+  await flush(300);
+  expect(audioPlayer.stopAll).not.toHaveBeenCalled();
+  expect(FakeWebSocket.instances.flatMap(sentTypes)).not.toContain('voice.stop');
+  expect(audioService.playSFX).not.toHaveBeenCalledWith(SEND_CUE, expect.anything());
+
+  await act(async () => {
+    const socket = latest();
+    switchAck(socket);
+    // ACK resolves the entry promise; close before the awaiting send resumes its gate check.
+    socket.readyState = 3;
+  });
+  expect(active()).toBe('new');
+  expect(rows.find(row => row.id === 'new')?.identity_mode).toBe('self');
+  expect(screen.getByLabelText('输入消息')).toHaveValue('self 保留输入');
+  expect(audioPlayer.stopAll).not.toHaveBeenCalled();
+  expect(FakeWebSocket.instances.flatMap(sentTypes)).not.toContain('voice.stop');
+  expect(FakeWebSocket.instances.flatMap(sentTypes)).not.toContain('chat.send');
+  expect(audioService.playSFX).not.toHaveBeenCalledWith(SEND_CUE, expect.anything());
+});
+
+it('dispatch67 item 2: history entry still stops playback when its HTTP response stages the target', async () => {
+  rows = [newRow, oldRow];
+  playback.playing = true;
+  await startOld(false);
+  FakeWebSocket.autoSwitch = false;
+  let release!: () => void;
+  heldHistory.set('new', new Promise<void>(resolve => { release = resolve; }));
+  vi.mocked(audioPlayer.stopAll).mockClear();
+  await clickHistory('new');
+  expect(audioPlayer.stopAll).toHaveBeenCalledTimes(1); // Initial history selection.
+  vi.mocked(audioPlayer.stopAll).mockClear();
+
+  await act(async () => release());
+  await flush(100);
+  expect(audioPlayer.stopAll).toHaveBeenCalledTimes(1); // enterConversation still stops on ordinary entry.
+  expect(active()).toBe('new');
+  expect(targetSwitches()).toHaveLength(1);
+  expect(screen.getByText('旧对话内容')).toBeInTheDocument(); // No ACK yet.
+});
+
+it('dispatch67 item 2: the self new-conversation button still stops playback before confirmation', async () => {
+  localStorage.setItem('amadeus_pc_identity_mode', 'self');
+  playback.playing = true;
+  render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+  await act(async () => latest().open());
+  await flush();
+  FakeWebSocket.autoSwitch = false;
+  vi.mocked(audioPlayer.stopAll).mockClear();
+  fireEvent.click(newButton());
+  await flush(300);
+  expect(audioPlayer.stopAll).toHaveBeenCalledTimes(1);
+  expect(active()).toBe('new');
+  expect(targetSwitches()).toHaveLength(1);
+  expect(screen.getByLabelText('输入消息')).toBeDisabled();
 });
