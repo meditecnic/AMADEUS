@@ -13,6 +13,7 @@ import hashlib
 import json
 import math
 import os
+import signal
 import socket
 import sqlite3
 import subprocess
@@ -42,6 +43,9 @@ SESAME_MARKER = "B2RT_SESAME"
 DELETE_MARKER = "B2RT_DELETE"
 REVISED_MARKER = "B2RT_SESAME_V2"
 CREATE_NO_WINDOW = 0x08000000
+TERMINATE_TIMEOUT_SECONDS = 8.0
+KILL_TIMEOUT_SECONDS = 2.0
+PROCESS_POLL_INTERVAL_SECONDS = 0.2
 PROVIDER_ENV_KEYS = (
     "DEEPSEEK_API_KEY",
     "OPENAI_API_KEY",
@@ -1175,58 +1179,85 @@ def _pid_running(pid: int) -> bool:
     return True
 
 
-def _terminate_pid(pid: int) -> None:
+def _wait_pid_exit(pid: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while _pid_running(pid):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(PROCESS_POLL_INTERVAL_SECONDS, remaining))
+    return True
+
+
+def _terminate_pid(pid: int) -> str:
+    """Return already_exited, terminated, killed, or still_running."""
     if not _pid_running(pid):
-        return
+        return "already_exited"
     if os.name == "nt":
         subprocess.run(
             ["taskkill", "/PID", str(pid), "/T"],
             capture_output=True,
             check=False,
         )
-        deadline = time.monotonic() + 8
-        while time.monotonic() < deadline and _pid_running(pid):
-            time.sleep(0.2)
-        if _pid_running(pid):
-            subprocess.run(
-                ["taskkill", "/PID", str(pid), "/T", "/F"],
-                capture_output=True,
-                check=False,
-            )
-        return
-    os.kill(pid, 15)
+    else:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return "already_exited"
+        except OSError:
+            return "still_running" if _pid_running(pid) else "already_exited"
+    if _wait_pid_exit(pid, TERMINATE_TIMEOUT_SECONDS):
+        return "terminated"
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True,
+            check=False,
+        )
+    else:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return "terminated"
+        except OSError:
+            return "still_running" if _pid_running(pid) else "terminated"
+    return "killed" if _wait_pid_exit(pid, KILL_TIMEOUT_SECONDS) else "still_running"
 
 
 def cmd_stop(args: argparse.Namespace) -> None:
     run_root = deep_resolve(Path(args.run_root))
     paths = run_paths(run_root)
-    if not paths["pids"].is_file():
+    serve_pid_file = paths["root"] / "serve.pid"
+    if not paths["pids"].is_file() and not serve_pid_file.is_file():
         print(json.dumps({"ok": True, "command": "stop", "note": "no pids file"}))
         return
-    pids = _read_json(paths["pids"])
-    serve_pid_file = paths["root"] / "serve.pid"
+    pids = _read_json(paths["pids"]) if paths["pids"].is_file() else {}
     extra_pid = 0
     if serve_pid_file.is_file():
         try:
             extra_pid = int(serve_pid_file.read_text(encoding="utf-8").strip() or "0")
         except ValueError:
             extra_pid = 0
-    for key in ("frontend_pid", "backend_pid"):
-        pid = int(pids.get(key) or 0)
-        if pid:
-            _terminate_pid(pid)
-    if extra_pid and extra_pid not in {
-        int(pids.get("frontend_pid") or 0),
-        int(pids.get("backend_pid") or 0),
-    }:
-        _terminate_pid(extra_pid)
-    still = {
-        key: int(pids.get(key) or 0)
-        for key in ("frontend_pid", "backend_pid")
-        if _pid_running(int(pids.get(key) or 0))
+    recorded = {key: int(pids.get(key) or 0) for key in ("frontend_pid", "backend_pid")}
+    # Retain historical PIDs without ever signalling them again after a
+    # confirmed stop: the OS may have reused a PID for an unrelated process.
+    stopped_pids = {
+        pid for key, pid in recorded.items()
+        if pids.get(key.removesuffix("_pid") + "_stopped") is True
     }
-    pids["stopped_at"] = _utc_now()
+    targets = {key: pid for key, pid in recorded.items() if pid and pid not in stopped_pids}
+    if extra_pid and extra_pid not in stopped_pids:
+        targets["serve_pid"] = extra_pid
+    outcomes = {pid: _terminate_pid(pid) for pid in dict.fromkeys(targets.values())}
+    still = {key: pid for key, pid in targets.items() if _pid_running(pid)}
+    for key, pid in recorded.items():
+        pids[key.removesuffix("_pid") + "_stopped"] = key not in still
+    pids["stop_attempted_at"] = _utc_now()
+    pids["stop_results"] = {key: outcomes[pid] for key, pid in targets.items()}
     pids["still_running"] = still
+    if not still:
+        pids["stopped_at"] = _utc_now()
+        serve_pid_file.unlink(missing_ok=True)
     _write_json(paths["pids"], pids)
     if still:
         _fail("stop_incomplete", f"still running: {still}")

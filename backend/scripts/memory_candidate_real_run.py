@@ -351,7 +351,8 @@ def _live_run_backend_labels(paths: dict[str, Path]) -> list[str]:
                 pids = loaded
         except Exception:
             pids = {}
-    seen: set[int] = set()
+    stopped_backend = int(pids.get("backend_pid") or 0) if pids.get("backend_stopped") is True else 0
+    seen: set[int] = {stopped_backend} if stopped_backend else set()
     for key in ("backend_pid",):
         pid = int(pids.get(key) or 0)
         if pid and pid not in seen and b2._pid_running(pid):

@@ -128,6 +128,13 @@ def test_ws_processor_local_http_budget_and_product_ops(tmp_path):
     finally:
         _cli("stop", "--run-root", str(run_root), check=False)
 
+    stopped = json.loads((run_root / "pids.json").read_text(encoding="utf-8"))
+    assert stopped["backend_stopped"] is True
+    assert stopped["backend_pid"] > 0  # Historical PID remains available for review.
+    assert stopped["still_running"] == {}
+    assert stopped["stop_results"]["backend_pid"] in {"terminated", "killed", "already_exited"}
+    assert not (run_root / "serve.pid").exists()
+
     consumed = json.loads((run_root / "captures" / "budget.json").read_text(encoding="utf-8"))
     restarted = _cli(
         "start-local",

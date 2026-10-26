@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -154,3 +157,124 @@ def test_pid_running_real_zombie_is_inactive_and_reaps_owned_child(tmp_path, mon
             os.waitpid(pid, 0)
         except ChildProcessError:
             pass
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX signal termination")
+@pytest.mark.parametrize("ignore_term, expected", [(False, "terminated"), (True, "killed")])
+def test_terminate_pid_waits_for_real_process_exit(monkeypatch, ignore_term, expected):
+    program = (
+        "import signal, time; "
+        + ("signal.signal(signal.SIGTERM, signal.SIG_IGN); " if ignore_term else "")
+        + "print('ready', flush=True); time.sleep(60)"
+    )
+    child = subprocess.Popen([sys.executable, "-c", program], stdout=subprocess.PIPE, text=True)
+    try:
+        assert child.stdout.readline().strip() == "ready"
+        monkeypatch.setattr(b2, "TERMINATE_TIMEOUT_SECONDS", 0.1)
+        monkeypatch.setattr(b2, "PROCESS_POLL_INTERVAL_SECONDS", 0.01)
+        assert b2._terminate_pid(child.pid) == expected
+        assert b2._pid_running(child.pid) is False
+        assert b2._terminate_pid(child.pid) == "already_exited"
+    finally:
+        if child.poll() is None:
+            child.kill()
+        child.wait(timeout=5)
+        child.stdout.close()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX signal failure")
+def test_terminate_pid_failed_kill_is_reported(monkeypatch):
+    sent = []
+    monkeypatch.setattr(b2, "_pid_running", lambda pid: True)
+    monkeypatch.setattr(b2, "TERMINATE_TIMEOUT_SECONDS", 0)
+    monkeypatch.setattr(b2, "KILL_TIMEOUT_SECONDS", 0)
+    monkeypatch.setattr(b2.os, "kill", lambda pid, sig: sent.append(sig))
+    assert b2._terminate_pid(321) == "still_running"
+    assert sent == [signal.SIGTERM, signal.SIGKILL]
+
+
+def test_terminate_pid_windows_force_kill_is_confirmed(monkeypatch):
+    # Replace only the script's os reference so pathlib still uses the host OS.
+    monkeypatch.setattr(b2, "os", SimpleNamespace(name="nt"))
+    monkeypatch.setattr(b2, "_pid_running", lambda pid: True)
+    commands = []
+    waits = []
+
+    def wait(pid, timeout):
+        waits.append((pid, timeout))
+        return len(waits) == 2
+
+    monkeypatch.setattr(b2.subprocess, "run", lambda cmd, **kw: commands.append(cmd))
+    monkeypatch.setattr(b2, "_wait_pid_exit", wait)
+    assert b2._terminate_pid(321) == "killed"
+    assert commands == [
+        ["taskkill", "/PID", "321", "/T"],
+        ["taskkill", "/PID", "321", "/T", "/F"],
+    ]
+    assert waits == [(321, 8.0), (321, 2.0)]
+
+
+@pytest.mark.parametrize("unkillable", ["", "backend_pid", "serve_pid"])
+def test_stop_retains_history_and_cleans_only_after_exit(tmp_path, monkeypatch, unkillable):
+    paths = b2.run_paths(tmp_path)
+    b2._write_json(paths["pids"], {"backend_pid": 321, "frontend_pid": 322})
+    serve = tmp_path / "serve.pid"
+    serve.write_text("323", encoding="utf-8")
+    remaining = {"backend_pid": 321, "serve_pid": 323}.get(unkillable)
+    terminated = []
+    monkeypatch.setattr(b2, "_terminate_pid", lambda pid: terminated.append(pid) or (
+        "still_running" if pid == remaining else "terminated"
+    ))
+    monkeypatch.setattr(b2, "_pid_running", lambda pid: pid == remaining)
+    if unkillable:
+        with pytest.raises(SystemExit):
+            b2.cmd_stop(SimpleNamespace(run_root=str(tmp_path)))
+    else:
+        b2.cmd_stop(SimpleNamespace(run_root=str(tmp_path)))
+    saved = b2._read_json(paths["pids"])
+    assert set(terminated) == {321, 322, 323}
+    assert saved["backend_pid"] == 321
+    assert saved["backend_stopped"] is (unkillable != "backend_pid")
+    assert saved["frontend_stopped"] is True
+    assert serve.exists() is bool(unkillable)
+    assert bool(saved["still_running"]) is bool(unkillable)
+    assert ("stopped_at" in saved) is (not unkillable)
+    if unkillable:
+        assert saved["stop_results"][unkillable] == "still_running"
+        with pytest.raises(SystemExit):
+            b3._fail_if_run_active(paths)
+    else:
+        b3._fail_if_run_active(paths)
+
+
+def test_stopped_marker_ignores_reused_pid_but_checks_new_serve_pid(tmp_path, monkeypatch):
+    paths = b2.run_paths(tmp_path)
+    b2._write_json(paths["pids"], {"backend_pid": 321, "backend_stopped": True})
+    serve = tmp_path / "serve.pid"
+    serve.write_text("321", encoding="utf-8")
+    monkeypatch.setattr(b2, "_pid_running", lambda pid: pid > 0)
+
+    def must_not_terminate(pid):
+        pytest.fail(f"historical PID {pid} must not be signalled")
+
+    monkeypatch.setattr(b2, "_terminate_pid", must_not_terminate)
+    assert b3._live_run_backend_labels(paths) == []
+    b3._fail_if_run_active(paths)
+    b2.cmd_stop(SimpleNamespace(run_root=str(tmp_path)))
+    assert not serve.exists()
+    serve.write_text("999", encoding="utf-8")
+    assert b3._live_run_backend_labels(paths) == ["serve.pid=999"]
+    with pytest.raises(SystemExit):
+        b3._fail_if_run_active(paths)
+
+
+def test_stop_handles_serve_pid_without_pids_json(tmp_path, monkeypatch):
+    serve = tmp_path / "serve.pid"
+    serve.write_text("321", encoding="utf-8")
+    terminated = []
+    monkeypatch.setattr(b2, "_terminate_pid", lambda pid: terminated.append(pid) or "terminated")
+    monkeypatch.setattr(b2, "_pid_running", lambda pid: False)
+    b2.cmd_stop(SimpleNamespace(run_root=str(tmp_path)))
+    assert terminated == [321]
+    assert not serve.exists()
+    assert b2._read_json(tmp_path / "pids.json")["stop_results"] == {"serve_pid": "terminated"}
