@@ -187,6 +187,7 @@ class SessionState:
         self.conversation_mode = "history"
         
         self.active_task = None
+        self.active_task_connection_id: str | None = None
         self.is_busy = False
         
         self.current_epoch = 0
@@ -2625,7 +2626,8 @@ async def websocket_chat_endpoint(websocket: WebSocket):
     session.current_epoch += 1
     session.revision = session.current_epoch
     
-    # Connection-level send_queue
+    # Connection-level send_queue and ownership of turns started by this socket.
+    connection_id = str(uuid4())
     send_queue = asyncio.Queue()
     
     # 3. Writer Coroutine: reads send_queue and sends to client
@@ -2813,6 +2815,12 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 authenticated = True
                 await session_coordinator.persist_current(session.session_id, session.worldline, session.revision)
                 await session_coordinator.acquire_lease(session.session_id, session.worldline, websocket)
+                if (
+                    session.active_task is not None
+                    and not session.active_task.done()
+                    and session.active_task_connection_id != connection_id
+                ):
+                    await cancel_inflight(session)
                 await send_queue.put((session.current_epoch, {
                     "type": "session.ready",
                     "conversation_mode": session.conversation_mode,
@@ -3176,6 +3184,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 session.active_task = asyncio.create_task(
                     run_tts_pipeline(session, content, emotion, send_queue, session.current_epoch)
                 )
+                session.active_task_connection_id = connection_id
                 continue
 
             elif frame_type in ("chat", "chat.send"):
@@ -3206,6 +3215,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 session.active_task = asyncio.create_task(
                     processor_loop(session, content, send_queue, session.current_epoch, session.history_epoch)
                 )
+                session.active_task_connection_id = connection_id
                 
             else:
                 await send_queue.put((session.current_epoch, {"type": "error", "message": f"Unknown frame type: {frame_type}"}))
@@ -3228,7 +3238,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
         # Cancel running Processor and Writer tasks on disconnect
         tasks_to_gather = [writer_task]
         writer_task.cancel()
-        if session.active_task:
+        if session.active_task and session.active_task_connection_id == connection_id:
             if not session.active_task.done():
                 session.active_task.cancel()
             tasks_to_gather.append(session.active_task)
