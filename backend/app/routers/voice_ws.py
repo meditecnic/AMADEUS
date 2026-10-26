@@ -5,6 +5,7 @@ import base64
 import io
 import time
 import wave
+from uuid import uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -63,6 +64,7 @@ async def websocket_voice_endpoint(websocket: WebSocket):
     channels = 1
     last_speech_at: float | None = None
     authenticated = False
+    connection_id = str(uuid4())
     send_queue: asyncio.Queue = asyncio.Queue()
 
     async def writer():
@@ -106,6 +108,7 @@ async def websocket_voice_endpoint(websocket: WebSocket):
             session.append_message({"role": "user", "content": text, "id": None})
             session.is_busy = True
             session.active_task = asyncio.create_task(processor_loop(session, text, send_queue, session.current_epoch, session.history_epoch))
+            session.active_task_connection_id = connection_id
 
     async def vad_monitor():
         nonlocal last_speech_at

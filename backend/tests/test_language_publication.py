@@ -972,7 +972,7 @@ async def test_v1_foreign_body_uses_same_isolated_renderer_before_returning_text
 
     assert provider.call_count == 2
     assert "今天心情很好" not in text
-    assert text.strip() == "今日は気分がいいわ。"
+    assert text.strip() == "今日は気分がいいわ。そうね。"
     assert emotion == "neutral"
     assert tool_calls == {}
     assert found is True

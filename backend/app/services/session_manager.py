@@ -35,6 +35,7 @@ async def cancel_inflight(session: Any) -> int:
                 )
     getattr(session, "active_streams", set()).clear()
     session.active_task = None
+    session.active_task_connection_id = None
     session.is_busy = False
     return cancelled
 
