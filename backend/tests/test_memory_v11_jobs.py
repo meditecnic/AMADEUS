@@ -4330,3 +4330,10 @@ async def test_v113_e5_unavailable_preserves_nonembedding_ops(isolated_store, mo
         assert (await (await db.execute("SELECT count(*) FROM experiences WHERE session_id=?", (session,))).fetchone())[0] == 1
     finally:
         await db.close()
+
+
+def test_v113_prompt_preserves_source_language():
+    prompt = _jobs()._V11_MEMORY_SYSTEM
+    assert "display_text and fact_text in the language of the user utterance; do not translate" in prompt
+    assert "mixed-language speech, follow the language of the part supporting that fact" in prompt
+    assert "Do not store a separate Japanese or other normalized-language version" in prompt

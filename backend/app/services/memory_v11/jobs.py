@@ -591,6 +591,9 @@ Rules:
 - Only user_text establishes facts; prefer empty over invention.
 - previous_assistant_text is context only: use it to understand what the user
   answers or refers to. Never remember an assistant claim the user has not confirmed.
+- Write display_text and fact_text in the language of the user utterance; do not translate.
+  For mixed-language speech, follow the language of the part supporting that fact.
+  Do not store a separate Japanese or other normalized-language version.
 - Do not invent conversational-act facts (e.g. 'recommended'); confidence 0..1.
 - Give each observation a relation: new creates a fact, same attaches evidence,
   refines clarifies an existing fact, supersedes replaces it, reject records a
