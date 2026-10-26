@@ -50,6 +50,8 @@ class PreparedTTSText:
 # Per-request budget keeps GPT-SoVITS T2S well below the ~1500 decode ceiling.
 # Segmentation already splits on punctuation; a single spoken unit should not approach this.
 MAX_TTS_SOURCE_CODEPOINTS = 280
+# Bound the raw source too: clean_text_for_tts only removes characters.
+MAX_SEGMENT_SOURCE_CODEPOINTS = MAX_TTS_SOURCE_CODEPOINTS
 
 _NON_SPEECH_RE = re.compile(
     r"[\s。！\uff01？\uff1f!?,.\uff0c\u3001\"'`「」『』()（）\-—_+=\[\]{}<>#~*…]"
@@ -61,6 +63,9 @@ _IGNORABLE_NON_SPEECH_RE = re.compile(
 _KANA_RE = re.compile(r"[\u3040-\u30ff\u31f0-\u31ff]")
 _HAN_RE = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
 _LATIN_RUN_RE = re.compile(r"[A-Za-z]{2,}")
+_MULTIWORD_LATIN_3_RE = re.compile(
+    r"[A-Za-zÀ-ÖØ-öø-ÿ]{2,}(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ]{2,}){2,}"
+)
 _HALFWIDTH_KATA_RE = re.compile(r"[\uff61-\uff9f]")
 # Collapse-only marks for incident soup (not fullwidth JP punctuation （）『』).
 # Former _WEIRD_MARK_RE (U+FF00 block) mis-counted fullwidth parens as weird.
@@ -302,11 +307,22 @@ def _has_dominant_unbounded_latin_prose(text: str) -> bool:
     tokens = _LATIN_RUN_RE.findall(surface)
     if len(tokens) < 3:
         return False
+    # Japanese can list proper names; three space-joined words still carry
+    # the existing prose signal, even when every word uses Title Case.
+    allow_title_case_names = (
+        bool(_KANA_RE.search(surface)) and not _MULTIWORD_LATIN_3_RE.search(surface)
+    )
     ordinary_tokens = [
         token
         for token in tokens
         if token.lower() not in _SAFE_LATIN_TOKENS
         and not (token.isupper() and 2 <= len(token) <= 8)
+        and not (
+            allow_title_case_names
+            and 2 <= len(token) <= 24
+            and token[0].isupper()
+            and token[1:].islower()
+        )
     ]
     if len(ordinary_tokens) < 2:
         return False
@@ -619,6 +635,7 @@ class IncrementalJapaneseSegmenter:
     }
     _CLOSERS = set(_OPEN_TO_CLOSE.values())
     _TERMINATORS = set("。！？!?\n")
+    _LENGTH_TERMINATOR_RE = re.compile(r"[。！？!?\n]|…{2,}|\.{3,}")
 
     def __init__(self) -> None:
         self._pending = ""
@@ -646,6 +663,17 @@ class IncrementalJapaneseSegmenter:
         emitted: list[Segment] = []
         while self._pending:
             boundary = self._find_boundary(self._pending)
+            short_length = len(self._short_candidate[0]) if self._short_candidate else 0
+            forced = len(self._pending) + short_length > MAX_SEGMENT_SOURCE_CODEPOINTS and (
+                boundary is None or boundary + short_length > MAX_SEGMENT_SOURCE_CODEPOINTS
+            )
+            if forced:
+                if self._short_candidate is not None:
+                    short_text, short_emotion = self._short_candidate
+                    self._pending = short_text + self._pending
+                    self._pending_emotions[:0] = [short_emotion] * short_length
+                    self._short_candidate = None
+                boundary = self._find_length_boundary(self._pending)
             if boundary is None:
                 break
             raw = self._pending[:boundary]
@@ -659,7 +687,12 @@ class IncrementalJapaneseSegmenter:
             self._pending = self._pending[boundary:]
             self._pending_emotions = self._pending_emotions[boundary:]
             if text:
-                self._accept_candidate(emitted, text, emotion)
+                if forced:
+                    # Do not let short merging undo the length fallback.
+                    emitted.append(Segment(self._next_id, text, emotion))
+                    self._next_id += 1
+                else:
+                    self._accept_candidate(emitted, text, emotion)
 
         if final:
             raw_tail = self._pending
@@ -703,6 +736,23 @@ class IncrementalJapaneseSegmenter:
             return
         emitted.append(Segment(self._next_id, text, emotion))
         self._next_id += 1
+
+    def _find_length_boundary(self, text: str) -> int:
+        """Last sentence end, then comma/space, then the raw source budget.
+
+        Ignore bracket state only on this over-budget path. _find_boundary
+        starts with an empty stack on the remaining source after every cut.
+        """
+        window = text[:MAX_SEGMENT_SOURCE_CODEPOINTS]
+        sentence_end = None
+        for match in self._LENGTH_TERMINATOR_RE.finditer(window):
+            sentence_end = match.end()
+        if sentence_end is not None:
+            return sentence_end
+        for index in range(len(window) - 1, -1, -1):
+            if window[index] in "、，," or window[index].isspace():
+                return index + 1
+        return len(window)
 
     def _find_boundary(self, text: str) -> int | None:
         stack: list[str] = []
