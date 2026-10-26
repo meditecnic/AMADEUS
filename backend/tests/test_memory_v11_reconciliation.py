@@ -591,7 +591,7 @@ async def test_s0_target_outside_allowlist_fail_closed(isolated_store):
 
 
 @pytest.mark.asyncio
-async def test_s2_second_operation_failure_rolls_back_entire_batch(isolated_store):
+async def test_s2_invalid_second_operation_preserves_successful_siblings(isolated_store):
     """An invalid later operation preserves earlier CREATE/observation writes."""
     from app.db import get_db
 
@@ -1373,7 +1373,7 @@ async def test_s3b2_replay_does_not_reembed(isolated_store, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_s3b2_batch_embedding_failure_is_atomic(isolated_store, monkeypatch):
+async def test_s3b2_embedding_failure_preserves_successfully_embedded_sibling(isolated_store, monkeypatch):
     """H: one encode failure preserves the successfully embedded sibling."""
     embedder = _DeterministicEmbedder(fail_after=1)
     monkeypatch.setattr(memory_service, "embedder", embedder)
@@ -2693,12 +2693,14 @@ async def test_s3d4_d17_target_reused(isolated_store):
     kwargs["operations"].append(
         {"op": "REJECT", "observation_ref": "r2", "fact_text": "解析后", "reason_code": "d18"}
     )
-    await _apply_validated(session_id=session_id, worldline="steins_gate",
-                           identity_mode="self", **kwargs)
+    await _reconciler().apply_validated_memory_operations(session_id=session_id, worldline="steins_gate",
+                           identity_mode="self", processing_receipt={"conversation_id": "conv-d18-8112", "source_message_id": 8112, "pipeline_version": "memory-v11-1"}, **kwargs)
     db = await get_db("steins_gate", "memory")
     try:
         rows = await (await db.execute("SELECT reanalysis_count FROM memory_observations WHERE session_id=?", (session_id,))).fetchall()
         assert sum(int(r[0]) for r in rows) == 1
+        outcomes = await (await db.execute("SELECT operation_index, result_code FROM memory_ingest_operation_results WHERE session_id=? ORDER BY operation_index", (session_id,))).fetchall()
+        assert [tuple(row) for row in outcomes] == [(1, "applied"), (2, "reanalysis_target_reused")]
     finally:
         await db.close()
 
@@ -2723,7 +2725,7 @@ async def test_s3d4_d17b_two_distinct_targets_rejected(isolated_store):
         "evidence_kind": "direct_user", "memory_class": "stable_candidate",
         "confidence": 0.96, "topic_label": None, "expires_at": None,
     }
-    await _apply_validated(
+    await _reconciler().apply_validated_memory_operations(
         session_id=session_id, worldline="steins_gate", identity_mode="self",
         observations=[obs1, obs2],
         operations=[
@@ -2736,11 +2738,14 @@ async def test_s3d4_d17b_two_distinct_targets_rejected(isolated_store):
         ],
         candidate_allowlist=[],
         reanalysis_allowlist=[t1, t2],
+        processing_receipt={"conversation_id": "conv-8123", "source_message_id": 8123, "pipeline_version": "memory-v11-1"},
     )
     db = await get_db("steins_gate", "memory")
     try:
         rows = await (await db.execute("SELECT reanalysis_count FROM memory_observations WHERE session_id=?", (session_id,))).fetchall()
         assert sum(int(r[0]) for r in rows) == 1
+        outcomes = await (await db.execute("SELECT operation_index, result_code FROM memory_ingest_operation_results WHERE session_id=? ORDER BY operation_index", (session_id,))).fetchall()
+        assert [tuple(row) for row in outcomes] == [(1, "applied"), (2, "reanalysis_target_reused")]
     finally:
         await db.close()
 

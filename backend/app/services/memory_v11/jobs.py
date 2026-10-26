@@ -642,8 +642,6 @@ def _candidate_payload_for_completion(rows: list[Mapping[str, Any]]) -> list[dic
     for index, row in enumerate(rows, 1):
         item: dict[str, Any] = {
             "candidate_index": index,
-            "fact_id": str(row["fact_id"]),
-            "version_no": int(row.get("version_no") or row.get("active_version") or 1),
             "display_text": str(row.get("display_text") or ""),
             "is_pinned": bool(row.get("is_pinned")),
         }
@@ -883,7 +881,7 @@ async def process_memory_job(
 
         redacted, blocked = redact_user_text(source["content"])
         if blocked:
-            # Secrets: receipt-only complete, no provider call.
+            # Masking failed: complete without provider calls or Memory receipts/writes.
             return await _transition_owned(
                 job_id=job_id,
                 worldline=wl,
@@ -923,7 +921,7 @@ async def process_memory_job(
             )
             frozen_unresolved = list(unresolved_rows or [])
             unresolved_observations = [
-                {**{k: v for k, v in item.items() if k not in {"source_message_ids"}}, "observation_index": index}
+                {**{k: v for k, v in item.items() if k not in {"source_message_ids", "observation_id"}}, "observation_index": index}
                 for index, item in enumerate(frozen_unresolved, 1)
             ]
             reanalysis_allowlist = [

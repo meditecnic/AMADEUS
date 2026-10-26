@@ -802,7 +802,7 @@ async def test_s3b3_candidates_arrive_before_completion(isolated_store, monkeypa
         session_id=session_id,
         worldline="steins_gate",
         identity_mode="okabe",
-        display_text="喜欢看动漫",
+        display_text="冈部喜欢看动漫",
         semantic_json={"subject": "user", "relation": "likes", "object": "anime"},
     )
 
@@ -826,16 +826,12 @@ async def test_s3b3_candidates_arrive_before_completion(isolated_store, monkeypa
     )
     assert result["state"] == "completed"
     cands = captured["candidates"]
-    ids = {str(c["fact_id"]) for c in cands}
-    assert relevant["fact_id"] in ids
-    assert okabe["fact_id"] not in ids
-    assert all("数学" not in str(c.get("display_text") or "") for c in cands)
-    for c in cands:
-        assert set(c.keys()) >= {"fact_id", "version_no", "display_text", "is_pinned"}
-        assert isinstance(c["version_no"], int) and c["version_no"] >= 1
-    hit = next(c for c in cands if c["fact_id"] == relevant["fact_id"])
-    assert hit["display_text"] == "喜欢看动漫"
-    assert hit["version_no"] == 1
+    assert {c["display_text"] for c in cands} == {"喜欢看动漫"}
+    for index, c in enumerate(cands, 1):
+        assert set(c.keys()) >= {"candidate_index", "display_text", "is_pinned"}
+        assert not ({"fact_id", "version_no"} & c.keys())
+        assert c["candidate_index"] == index
+    assert cands[0]["candidate_index"] == 1
 
 
 @pytest.mark.asyncio
@@ -878,8 +874,8 @@ async def test_s3b3_selected_target_refine_succeeds(isolated_store, monkeypatch)
 
     async def refine_completion(**kwargs: Any) -> dict[str, Any]:
         cands = list(kwargs.get("candidates") or [])
-        assert any(c["fact_id"] == seed["fact_id"] for c in cands)
-        target = next(c for c in cands if c["fact_id"] == seed["fact_id"])
+        assert any(c["display_text"] == text_v1 for c in cands)
+        target = next(c for c in cands if c["display_text"] == text_v1)
         sid = int(kwargs["source_message_id"])
         return {
             "observations": [
@@ -976,8 +972,8 @@ async def test_s3b3_unselected_same_scope_target_rejected(isolated_store, monkey
 
     async def malicious_completion(**kwargs: Any) -> dict[str, Any]:
         cands = list(kwargs.get("candidates") or [])
-        assert all(c["fact_id"] != unselected["fact_id"] for c in cands)
-        assert any(c["fact_id"] == selected["fact_id"] for c in cands)
+        assert all(c["display_text"] != "数学の本を読んでいる" for c in cands)
+        assert any(c["display_text"] == "喜欢看动漫" for c in cands)
         sid = int(kwargs["source_message_id"])
         return {
             "observations": [
@@ -1053,13 +1049,13 @@ async def test_s3b3_cross_identity_target_impossible(isolated_store, monkeypatch
         session_id=session_id,
         worldline="steins_gate",
         identity_mode="okabe",
-        display_text="喜欢看动漫",
+        display_text="冈部喜欢看动漫",
         semantic_json={"subject": "user", "relation": "likes", "object": "anime"},
     )
 
     async def cross_completion(**kwargs: Any) -> dict[str, Any]:
         cands = list(kwargs.get("candidates") or [])
-        assert all(c["fact_id"] != okabe_fact["fact_id"] for c in cands)
+        assert all(c["display_text"] != "冈部喜欢看动漫" for c in cands)
         sid = int(kwargs["source_message_id"])
         return {
             "observations": [
@@ -1277,9 +1273,9 @@ async def test_s3b3_default_provider_payload_includes_candidates(
     user_content = captured_messages[0][1]["content"]
     payload = json.loads(user_content)
     assert "candidates" in payload
-    assert any(c.get("fact_id") == seed["fact_id"] for c in payload["candidates"])
-    cand = next(c for c in payload["candidates"] if c["fact_id"] == seed["fact_id"])
-    assert set(cand.keys()) >= {"fact_id", "version_no", "display_text", "is_pinned"}
+    assert any(c["display_text"] == "喜欢动漫" for c in payload["candidates"])
+    cand = next(c for c in payload["candidates"] if c["display_text"] == "喜欢动漫")
+    assert set(cand.keys()) == {"candidate_index", "display_text", "is_pinned"}
 
 
 @pytest.mark.asyncio
@@ -1440,8 +1436,8 @@ async def test_s3b3_vector_only_candidate_reaches_completion(
         memory_completion=vec_completion,
     )
     assert result["state"] == "completed"
-    ids = {c["fact_id"] for c in captured["candidates"]}
-    assert target["fact_id"] in ids
+    displays = {c["display_text"] for c in captured["candidates"]}
+    assert target_text in displays
 
 
 # ---------------------------------------------------------------------------
@@ -1647,18 +1643,12 @@ async def test_s3d_probe_d18_completion_receives_bounded_unresolved_context(
     )
     unresolved = list(captured["payload"]["unresolved_observations"])
     assert unresolved, "bounded unresolved context must be offered (plan §6.4)"
-    offered_ids = {str(u.get("observation_id")) for u in unresolved}
-    assert obs_offer in offered_ids, (
-        "unresolved candidate (reanalysis_count=0) must be offered for reanalysis"
-    )
-    assert obs_done not in offered_ids, (
-        "observation with reanalysis_count=1 must never be offered again (R08)"
-    )
-    assert obs_okabe not in offered_ids, (
-        "D18 context must stay same-scope; okabe observation leaked in (R05)"
-    )
+    displays = {item["display_text"] for item in unresolved}
+    assert "在看一部动漫" in displays
+    assert "在玩一个游戏" not in displays, "already-reanalysed observation must be excluded"
+    assert "在看科幻小说" not in displays, "other identity must be excluded"
     for item in unresolved:
-        assert set(item.keys()) == {"observation_id", "observation_index", "display_text", "source_excerpt"}, (
+        assert set(item.keys()) == {"observation_index", "display_text", "source_excerpt"}, (
             "payload items must be exactly the minimal D18 shape"
         )
 
@@ -1697,7 +1687,7 @@ async def test_s3d_probe_d18_resolution_updates_existing_observation(
 
     async def resolve_completion(**kwargs: Any) -> dict[str, Any]:
         unresolved = list(kwargs.get("unresolved_observations") or [])
-        assert any(u["observation_id"] == obs_id for u in unresolved)
+        assert any(u["display_text"] == "在看一部动漫" and u["observation_index"] == 1 for u in unresolved)
         sid = int(kwargs["source_message_id"])
         return {
             "observations": [
@@ -1878,8 +1868,7 @@ async def test_s3d4_d3_status_excluded_by_status(isolated_store, status):
         source_message_id=int(mid_current), completion=completion,
     )
     assert result["state"] == "completed"
-    ids = {u["observation_id"] for u in captured["unresolved"]}
-    assert obs_id not in ids, f"{status} observation must be excluded by status"
+    assert captured["unresolved"] == []
 
 
 @pytest.mark.asyncio
@@ -1918,8 +1907,7 @@ async def test_s3d4_d5_other_conversation_excluded(isolated_store):
         source_message_id=int(mid_b), completion=completion,
     )
     assert result["state"] == "completed"
-    ids = {u["observation_id"] for u in captured["unresolved"]}
-    assert obs_id not in ids, "other-conversation candidate must be excluded"
+    assert captured["unresolved"] == []
 
 
 @pytest.mark.asyncio
@@ -1972,8 +1960,7 @@ async def test_s3d4_d6_other_worldline_excluded(isolated_store):
         source_message_id=int(mid), completion=completion,
     )
     assert result["state"] == "completed"
-    ids = {u["observation_id"] for u in captured["unresolved"]}
-    assert obs_id not in ids, "beta candidate must never reach an SG job"
+    assert captured["unresolved"] == []
 
 
 @pytest.mark.asyncio
@@ -2025,7 +2012,9 @@ async def test_s3d4_d7_multisource_one_slot(isolated_store):
     assert result["state"] == "completed"
     unresolved = captured["unresolved"]
     assert len(unresolved) == 1, "one observation must consume exactly one pool slot"
-    assert unresolved[0]["observation_id"] == obs_id
+    assert unresolved[0]["display_text"] == "多源候选"
+    assert unresolved[0]["observation_index"] == 1
+    assert "observation_id" not in unresolved[0]
 
 
 @pytest.mark.asyncio
@@ -2381,7 +2370,7 @@ async def test_s3d4_d19_job_no_target_ordinary_unchanged(isolated_store):
 
 
 @pytest.mark.asyncio
-async def test_s3d4_d26_forged_old_source_rejected_job(isolated_store):
+async def test_s3d4_d26_forged_source_ignored_current_user_source_bound(isolated_store):
     """Ignore forged model source IDs and bind the observation to the current user message."""
     jobs = _jobs()
     session_id = f"s3d4-d26-{uuid4().hex[:8]}"
@@ -2834,7 +2823,7 @@ _S3E2_BLOCKED_SAMPLES = [
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("label, text, fragment", _S3E2_BLOCKED_SAMPLES)
-async def test_s3e2_blocked_job_completes_zero_everything(
+async def test_s3e2_masked_job_calls_provider_without_sensitive_writes(
     isolated_store, monkeypatch, label, text, fragment
 ):
     """Mask each sensitive category, call provider once, and store no sensitive content."""
@@ -4707,3 +4696,15 @@ async def test_rework_completion_failures_keep_legacy_retry_classification(isola
     assert result["next_attempt_at"] is not None
     assert await _receipt_rows(session) == []
     await _session_zero_semantic_rows(session)
+
+
+def test_rework_candidate_view_hides_ids_without_mutating_snapshot():
+    jobs = _jobs()
+    snapshot = [{"fact_id": "private-fact-id", "version_no": 7, "display_text": "喜欢猫", "is_pinned": False}]
+    before = [dict(row) for row in snapshot]
+    assert jobs._candidate_payload_for_completion(snapshot) == [{"candidate_index": 1, "display_text": "喜欢猫", "is_pinned": False}]
+    observations, operations = jobs._translate_completion([_v113_observation("a", "喜欢猫", "same", 1)], [], snapshot, [], 42)
+    assert snapshot == before
+    assert operations[0]["target_fact_id"] == "private-fact-id"
+    assert operations[0]["expected_version"] == 7
+    assert observations[0]["source_message_ids"] == [42]

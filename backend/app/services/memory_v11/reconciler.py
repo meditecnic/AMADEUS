@@ -1,4 +1,4 @@
-"""Memory v11 one-call reconciler (S2 rework: single-connection batch transaction)."""
+"""Memory v11 one-call reconciler: one transaction with per-operation savepoints."""
 
 from __future__ import annotations
 
@@ -629,8 +629,6 @@ async def _apply_operation(db, *, op, obs_map, session, mode, source_by_id, rean
     op_name = str(op.get("op") or "").upper()
     ref = str(op.get("observation_ref") or "")
     obs = obs_map[ref]
-    evidence_kind = str(obs.get("evidence_kind") or "direct_user")
-    memory_class = str(obs.get("memory_class") or "stable_candidate")
     confidence = float(obs.get("confidence") or 0.0)
     fact_text = _op_fact_text(op, obs)
 
@@ -705,7 +703,6 @@ async def _apply_operation(db, *, op, obs_map, session, mode, source_by_id, rean
             )
             return None
 
-        prepared = prepared
         if prepared is None:
             raise MemoryValidationError(
                 "embedding_missing",
@@ -762,7 +759,6 @@ async def _apply_operation(db, *, op, obs_map, session, mode, source_by_id, rean
 
     if op_name == "ATTACH":
         target = str(op.get("target_fact_id"))
-        expected = expected
         active_version = await _get_fact_active_version(
             db, fact_id=target, session_id=session, identity_mode=mode
         )
@@ -795,9 +791,7 @@ async def _apply_operation(db, *, op, obs_map, session, mode, source_by_id, rean
 
     if op_name in {"REFINE", "SUPERSEDE"}:
         target = str(op.get("target_fact_id"))
-        expected = expected
         change_kind = "refine" if op_name == "REFINE" else "supersede"
-        prepared = prepared
         if prepared is None:
             raise MemoryValidationError(
                 "embedding_missing",
@@ -1083,7 +1077,7 @@ async def apply_validated_memory_operations(
                 results[index] = _operation_error_code(exc)
 
         # S3F-1 D28: durable provider_nonempty receipt INSIDE this transaction,
-        # after all semantic operations succeeded and BEFORE the single commit.
+        # after independent operations finish and BEFORE the single commit.
         # If the receipt insert fails, the whole transaction rolls back (no
         # semantic residue, no receipt). provider_nonempty means the validated
         # provider result was processed — it does NOT promise a stable fact
