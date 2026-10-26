@@ -765,6 +765,29 @@ async def default_memory_completion(**kwargs: Any) -> Mapping[str, Any]:
     return payload
 
 
+async def _deleted_source_suppressed(job: Mapping[str, Any], worldline: str) -> bool:
+    from app.services.memory_v11.deleted_sources import record_suppression, source_is_deleted
+    db = await get_db(worldline, "memory")
+    try:
+        await db.execute("BEGIN IMMEDIATE")
+        deleted = await source_is_deleted(
+            db, session_id=job["session_id"], identity_mode=job["identity_mode"],
+            conversation_id=job["conversation_id"], source_message_id=int(job["source_message_id"]),
+        )
+        if deleted:
+            await record_suppression(db, session_id=job["session_id"], identity_mode=job["identity_mode"], cursor={
+                "conversation_id": job["conversation_id"], "source_message_id": int(job["source_message_id"]),
+                "pipeline_version": job["pipeline_version"], "attempt_no": int(job["attempt_count"] or 1),
+            })
+        await db.commit()
+        return deleted
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
+
+
 async def process_memory_job(
     *,
     job_id: str,
@@ -803,6 +826,13 @@ async def process_memory_job(
 
     if job.get("lease_owner") != lease_owner or job["state"] != "processing":
         return (await get_memory_job(job_id, worldline=wl)) or job
+
+    # A user deletion suppresses this entire source window across pipelines.
+    # Check before ordinary receipt replay so the reason is recorded even for
+    # a source which already had a successful original ingest receipt.
+    if await _deleted_source_suppressed(job, wl):
+        return await _transition_owned(job_id=job_id, worldline=wl,
+                                       lease_owner=lease_owner, state="completed")
 
     # P1-B + S3F-1 (D28): durable-receipt precheck for the CURRENT job source
     # cursor (dedicated full-cursor receipt OR current-pipeline legacy

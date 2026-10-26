@@ -1012,6 +1012,26 @@ async def apply_validated_memory_operations(
                                 source_message_ids=list(all_source_ids),
                                 conversation_id=processing_receipt.get('conversation_id') if processing_receipt else None):
             raise MemoryValidationError('source_erased', 'source history has been erased')
+        # Serialize with delete_fact: a deletion committed while the provider
+        # or embedder ran must suppress the pending writes under this lock too.
+        from app.services.memory_v11.deleted_sources import record_suppression, source_is_deleted
+        deleted = False
+        for ev in source_by_id.values():
+            if await source_is_deleted(db, session_id=session, identity_mode=mode,
+                                       conversation_id=str(ev.get("conversation_id") or ""),
+                                       source_message_id=int(ev["source_message_id"])):
+                deleted = True
+                break
+        if deleted:
+            if processing_receipt is not None:
+                await record_suppression(db, session_id=session, identity_mode=mode,
+                                         cursor=processing_receipt)
+            await db.commit()
+            return {
+                "created_facts": [],
+                "active_facts": await list_active_stable_facts(session_id=session, worldline=wl, identity_mode=mode),
+                "session_id": session, "worldline": wl, "identity_mode": mode, "replay": True,
+            }
         if processing_receipt is not None:
             already = await _source_receipt_already_applied(
                 db,

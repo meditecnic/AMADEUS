@@ -16,6 +16,7 @@ No provider-side idempotency mechanism exists in this slice.
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -101,15 +102,17 @@ async def insert_operation_results(db: Any, *, session_id: str, identity_mode: s
         source_message_id INTEGER NOT NULL,
         pipeline_version TEXT NOT NULL,
         attempt_no INTEGER NOT NULL,
+        attempt_id TEXT NOT NULL,
         operation_index INTEGER NOT NULL,
         result_code TEXT NOT NULL,
         PRIMARY KEY(session_id, conversation_id, identity_mode, source_message_id,
-                    pipeline_version, attempt_no, operation_index)
+                    pipeline_version, attempt_id, operation_index)
     )""")
+    attempt_id = str(uuid.uuid4())
     for index, code in enumerate(results, 1):
         await db.execute("""INSERT OR IGNORE INTO memory_ingest_operation_results
-            VALUES(?,?,?,?,?,?,?,?)""", (
+            VALUES(?,?,?,?,?,?,?,?,?)""", (
                 session_id, cursor["conversation_id"], identity_mode,
                 int(cursor["source_message_id"]), cursor["pipeline_version"],
-                int(cursor.get("attempt_no") or 1), index, code,
+                int(cursor.get("attempt_no") or 1), attempt_id, index, code,
             ))

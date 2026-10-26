@@ -4432,3 +4432,71 @@ def test_v113_privacy_multiple_overlapping_secrets():
         assert secret not in masked
     assert "I like cats" in masked
     assert _classify(masked) == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_v113_deleted_source_suppresses_all_pipelines_new_source_relearns(isolated_store):
+    from app.services.memory_v11.facts import delete_fact
+    session = "v113-delete"
+    job, cid, mid = await _enqueue_user_job(session_id=session, user_text="最喜欢青绿色，喜欢茶")
+    async def complete(**kwargs):
+        return {"observations": [_v113_observation("a", "最喜欢青绿色"), _v113_observation("b", "喜欢茶")]}
+    assert (await _jobs().process_memory_job(job_id=job["job_id"], lease_owner="delete", memory_completion=complete))["state"] == "completed"
+    db = await get_db("steins_gate", "memory")
+    try:
+        fact = await (await db.execute("SELECT f.fact_id FROM stable_facts f JOIN stable_fact_versions v ON v.fact_id=f.fact_id WHERE v.display_text='最喜欢青绿色'")).fetchone()
+    finally:
+        await db.close()
+    await delete_fact(session_id=session, worldline="steins_gate", identity_mode="self", fact_id=fact[0], expected_version=1)
+    db = await get_db("steins_gate", "memory")
+    try:
+        await db.execute("UPDATE memory_ingest_jobs SET state='pending', completed_at=NULL, attempt_count=0 WHERE job_id=?", (job["job_id"],))
+        await db.commit()
+    finally:
+        await db.close()
+    async def forbidden(**kwargs):
+        pytest.fail("deleted source must never reach provider, even if it would paraphrase")
+    for pipeline in [job["pipeline_version"], "memory-v11-future"]:
+        retry = await _jobs().enqueue_memory_job(session_id=session, worldline="steins_gate", conversation_id=cid, identity_mode="self", source_message_id=mid, pipeline_version=pipeline, provider_id="fake", model_id="fake")
+        assert (await _jobs().process_memory_job(job_id=retry["job_id"], lease_owner="delete", memory_completion=forbidden))["state"] == "completed"
+    assert [r[2] for r in await _v113_results(session)].count("source_deleted") == 2
+    # New user confirmation of the assistant's paraphrase is a new source window.
+    await models.save_message(session, "assistant", "你最爱的是蓝绿色吗？", worldline="steins_gate", conversation_id=cid)
+    new_mid = await models.save_message(session, "user", "对，就是这个颜色", worldline="steins_gate", conversation_id=cid)
+    new = await _jobs().enqueue_memory_job(session_id=session, worldline="steins_gate", conversation_id=cid, identity_mode="self", source_message_id=new_mid, provider_id="fake", model_id="fake")
+    async def relearn(**kwargs):
+        assert kwargs["previous_assistant_text"] == "你最爱的是蓝绿色吗？"
+        return {"observations": [_v113_observation("a", "最爱蓝绿色")]}
+    assert (await _jobs().process_memory_job(job_id=new["job_id"], lease_owner="new", memory_completion=relearn))["state"] == "completed"
+    db = await get_db("steins_gate", "memory")
+    try:
+        active = await (await db.execute("SELECT v.display_text FROM stable_facts f JOIN stable_fact_versions v ON v.fact_id=f.fact_id AND v.version_no=f.active_version WHERE f.state='active' AND f.session_id=?", (session,))).fetchall()
+        assert {r[0] for r in active} == {"喜欢茶", "最爱蓝绿色"}
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_v113_deletion_during_completion_suppresses_paraphrase(isolated_store):
+    from app.services.memory_v11.facts import delete_fact
+    session = "v113-delete-race"
+    job, cid, mid = await _enqueue_user_job(session_id=session, user_text="最喜欢青绿色")
+    async def initial(**kwargs):
+        return {"observations": [_v113_observation("a", "最喜欢青绿色")]}
+    await _jobs().process_memory_job(job_id=job["job_id"], lease_owner="initial", memory_completion=initial)
+    db = await get_db("steins_gate", "memory")
+    try:
+        fid = (await (await db.execute("SELECT fact_id FROM stable_facts WHERE session_id=?", (session,))).fetchone())[0]
+    finally:
+        await db.close()
+    future = await _jobs().enqueue_memory_job(session_id=session, worldline="steins_gate", conversation_id=cid, identity_mode="self", source_message_id=mid, pipeline_version="future-race", provider_id="fake", model_id="fake")
+    async def during(**kwargs):
+        await delete_fact(session_id=session, worldline="steins_gate", identity_mode="self", fact_id=fid, expected_version=1)
+        return {"observations": [_v113_observation("a", "最爱蓝绿色")]}  # different words/fingerprint
+    assert (await _jobs().process_memory_job(job_id=future["job_id"], lease_owner="race", memory_completion=during))["state"] == "completed"
+    assert [r[2] for r in await _v113_results(session)].count("source_deleted") == 1
+    db = await get_db("steins_gate", "memory")
+    try:
+        assert (await (await db.execute("SELECT count(*) FROM stable_facts WHERE state='active' AND session_id=?", (session,))).fetchone())[0] == 0
+    finally:
+        await db.close()

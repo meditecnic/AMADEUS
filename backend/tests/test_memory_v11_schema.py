@@ -653,13 +653,14 @@ async def test_s0_observation_sources_fk_and_identity_check(isolated_store):
 
 
 @pytest.mark.asyncio
-async def test_s0_tombstones_forbid_content_columns(isolated_store):
+@pytest.mark.parametrize("table", ["memory_tombstones", "memory_deleted_sources"])
+async def test_s0_tombstones_forbid_content_columns(isolated_store, table):
     assert db_module.SCHEMA_VERSION == 11
     connection = _open_memory("steins_gate")
     try:
         cols = {
             row[1]
-            for row in connection.execute("PRAGMA table_info(memory_tombstones)")
+            for row in connection.execute(f"PRAGMA table_info({table})")
         }
     finally:
         connection.close()
@@ -1367,5 +1368,31 @@ async def test_s0f1_receipts_additive_upgrade_on_existing_v11_db(tmp_path, monke
             "SELECT value FROM schema_meta WHERE key='schema_version'"
         ).fetchone()[0]
         assert version == "11"
+    finally:
+        connection.close()
+
+
+@pytest.mark.asyncio
+async def test_v113_deleted_sources_additive_old_db_upgrade(isolated_store):
+    connection = _open_memory("steins_gate")
+    connection.execute("DROP TABLE IF EXISTS memory_deleted_sources")
+    connection.commit()
+    connection.close()
+    reset_initialization_cache()
+    await init_db()
+    connection = _open_memory("steins_gate")
+    try:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(memory_deleted_sources)")}
+        assert columns == {"session_id", "identity_mode", "conversation_id", "source_message_id", "fact_id", "deleted_at"}
+        connection.execute("INSERT INTO memory_deleted_sources VALUES('s','self','c',1,'f','now')")
+        connection.commit()
+    finally:
+        connection.close()
+    reset_initialization_cache()
+    await init_db()
+    connection = _open_memory("steins_gate")
+    try:
+        assert connection.execute("SELECT count(*) FROM memory_deleted_sources").fetchone()[0] == 1
+        assert connection.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()[0] == '11'
     finally:
         connection.close()

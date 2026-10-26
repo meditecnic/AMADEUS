@@ -4209,3 +4209,31 @@ async def test_s3e1_a2_attach_stale_version_no_evidence(isolated_store):
         sql="SELECT COUNT(*) AS n FROM memory_observations WHERE session_id=?",
         params=(session_id,),
     ) == 1, "no observation residue from rejected batch"
+
+
+@pytest.mark.asyncio
+async def test_v113_delete_captures_shared_observation_all_sources(isolated_store):
+    from app.services.memory_v11.facts import delete_fact
+    from app.services.memory_v11.deleted_sources import source_is_deleted
+    session = "v113-delete-shared"
+    observations = [_observation(ref="a", display_text="喜欢猫", semantic={"a": 1}, source_message_ids=[98001, 98002]), _observation(ref="b", display_text="喜欢茶", semantic={"b": 1}, source_message_ids=[98003])]
+    result = await _apply_validated(session_id=session, worldline="steins_gate", identity_mode="self", observations=observations, operations=[{"op": "CREATE", "observation_ref": "a"}, {"op": "CREATE", "observation_ref": "b"}], source_evidence=[_source_evidence(source_message_id=mid, conversation_id="shared-conv", fingerprint=str(mid), excerpt="safe") for mid in [98001, 98002, 98003]], candidate_allowlist=[])
+    a, b = result["created_facts"]
+    db = await get_db("steins_gate", "memory")
+    try:
+        obs_id = (await (await db.execute("SELECT observation_id FROM stable_fact_evidence WHERE fact_id=?", (a["fact_id"],))).fetchone())[0]
+        await db.execute("INSERT INTO stable_fact_evidence VALUES(?,1,?,'supporting')", (b["fact_id"], obs_id))
+        await db.commit()
+    finally:
+        await db.close()
+    await delete_fact(session_id=session, worldline="steins_gate", identity_mode="self", fact_id=a["fact_id"], expected_version=1)
+    db = await get_db("steins_gate", "memory")
+    try:
+        for mid in [98001, 98002]:
+            assert await source_is_deleted(db, session_id=session, identity_mode="self", conversation_id="shared-conv", source_message_id=mid)
+            assert not await source_is_deleted(db, session_id=session, identity_mode="okabe", conversation_id="shared-conv", source_message_id=mid)
+            assert not await source_is_deleted(db, session_id=session, identity_mode="self", conversation_id="other", source_message_id=mid)
+        assert not await source_is_deleted(db, session_id=session, identity_mode="self", conversation_id="shared-conv", source_message_id=98003)
+        assert (await (await db.execute("SELECT display_text FROM memory_observations WHERE observation_id=?", (obs_id,))).fetchone())[0] == "喜欢猫"
+    finally:
+        await db.close()
