@@ -1147,6 +1147,27 @@ def _pid_running(pid: int) -> bool:
             check=False,
         )
         return str(pid) in (result.stdout or "")
+    # Reap exited children when this process owns them. Orphaned backends
+    # cannot be waited for here; Linux procfs still exposes their exit state.
+    try:
+        waited, _ = os.waitpid(pid, os.WNOHANG)
+        if waited == pid:
+            return False
+    except OSError:
+        pass
+    if sys.platform.startswith("linux"):
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+            # comm is parenthesized and may itself contain spaces or ')'.
+            fields = stat.rpartition(")")[2].split()
+            if fields and fields[0] in {"Z", "X"}:
+                try:
+                    os.waitpid(pid, os.WNOHANG)
+                except OSError:
+                    pass
+                return False
+        except (OSError, UnicodeError):
+            pass
     try:
         os.kill(pid, 0)
     except OSError:
