@@ -22,7 +22,7 @@ from app.services.memory_v11.contracts import (
     MemoryJobErrorCode,
     PIPELINE_VERSION,
 )
-from app.services.memory_v11.privacy import classify_memory_sensitive_text
+from app.services.memory_v11.privacy import classify_memory_sensitive_text, sensitive_spans
 
 MemoryCompletionFn = Callable[..., Awaitable[Mapping[str, Any]]]
 
@@ -72,18 +72,36 @@ def _row_to_job(row: Any, *, worldline: str) -> dict[str, Any]:
 
 
 def redact_user_text(text: str) -> tuple[str, bool]:
-    """D30 privacy boundary: whole-message sensitive-text gate.
+    """Mask locally; bool means masking failed and the whole input is blocked.
 
-    Any sensitive class → ("[REDACTED]", True); otherwise (text, False).
-    The blocked string is never sent to the provider: process_memory_job
-    completes the job immediately instead. Raw sensitive fragments are never
-    preserved inside the blocked return value.
+    Sensitive offsets/values stay inside this call. Only masked text may enter
+    completion, source fingerprint or excerpt. Any detector/replacement failure
+    completes the job without provider calls or Memory writes.
     """
     if not text:
         return "", False
-    if classify_memory_sensitive_text(text):
+    try:
+        classes = classify_memory_sensitive_text(text)
+        spans = sensitive_spans(text)
+        if classes and not classes.issubset({category for _, _, category in spans}):
+            return "[REDACTED]", True
+        merged: list[tuple[int, int, str]] = []
+        for start, end, category in spans:
+            if not 0 <= start < end <= len(text):
+                return "[REDACTED]", True
+            if merged and start < merged[-1][1]:
+                left, right, previous_class = merged[-1]
+                merged[-1] = (left, max(right, end), previous_class)
+            else:
+                merged.append((start, end, category))
+        redacted = text
+        for start, end, category in reversed(merged):
+            redacted = redacted[:start] + f"[REDACTED:{category}]" + redacted[end:]
+        if classify_memory_sensitive_text(redacted):
+            return "[REDACTED]", True
+        return redacted, False
+    except Exception:
         return "[REDACTED]", True
-    return text, False
 
 
 _MISSING = object()
@@ -605,6 +623,7 @@ Rules:
   be clarified: set reanalysis_target_observation_index to its 1-based
   observation_index only when user_text directly resolves that old observation.
   Otherwise omit or null. Stable candidates and unresolved targets are separate lists.
+- Never remember [REDACTED:<category>] placeholders or their contents.
 - Never output source_message_ids: the backend supplies the current user source.
 """
 

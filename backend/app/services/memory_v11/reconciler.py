@@ -545,6 +545,12 @@ def _validate_operation(op, obs_map, allow, reanalysis_allow, consumed, used_tar
         )
     if obs_map[ref].get("_ingest_error"):
         raise MemoryValidationError(obs_map[ref]["_ingest_error"])
+    from app.services.memory_v11.privacy import contains_redaction_marker
+    if contains_redaction_marker(json.dumps([
+        obs_map[ref].get("display_text"), op.get("fact_text"),
+        obs_map[ref].get("semantic"), obs_map[ref].get("topic_label"),
+    ], ensure_ascii=False)):
+        raise MemoryValidationError("redacted_content_forbidden")
     if ref in consumed:
         raise MemoryValidationError(
             "observation_multi_consumed",

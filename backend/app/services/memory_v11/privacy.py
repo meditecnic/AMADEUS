@@ -1,9 +1,8 @@
 """Memory v11 D30 privacy boundary: deterministic local sensitive-text classifier.
 
-Pure, deterministic, offline: no network, no model, no DB. Returns ONLY class
-names — never matched raw values, fragments, offsets, or source text. No path
-in this module may include a matched sensitive value in results, logs, or
-exceptions. Enforcement happens in jobs.py only.
+Pure, deterministic, offline: no network, no model, no DB. Public classification
+returns class names only. Internal sensitive_spans returns offsets and classes
+for in-memory masking in jobs.py; never persist or log those offsets or values.
 """
 
 from __future__ import annotations
@@ -127,7 +126,7 @@ _CLAUSE_BOUNDARY_RE = re.compile(r"[，,。.；;！!？?\n]")
 
 def _concrete_value_ok(value: str, *, min_len: int = 4) -> bool:
     v = value.strip()
-    return len(v) >= min_len and re.search(_ALNUM, v) is not None
+    return not contains_redaction_marker(v) and len(v) >= min_len and re.search(_ALNUM, v) is not None
 
 
 def _secret_shaped(value: str) -> bool:
@@ -265,8 +264,8 @@ def _has_precise_home_address(text: str) -> bool:
 def classify_memory_sensitive_text(text: str) -> frozenset[str]:
     """Classify a whole message into sensitive class names (empty = safe).
 
-    Fail-closed at the caller: any returned class blocks the entire message
-    from Memory processing. Returned data contains class names only.
+    The caller masks located spans, then classifies again and fails closed
+    if any sensitive class remains. Returned data contains class names only.
     """
     if not text:
         return frozenset()
@@ -282,3 +281,55 @@ def classify_memory_sensitive_text(text: str) -> frozenset[str]:
         if detector(text):
             out.add(cls)
     return frozenset(out)
+
+
+_REDACTION_MARKER_RE = re.compile(r"\[REDACTED(?::|\])", re.IGNORECASE)
+
+
+def contains_redaction_marker(value: str) -> bool:
+    return _REDACTION_MARKER_RE.search(value or "") is not None
+
+
+def sensitive_spans(text: str) -> list[tuple[int, int, str]]:
+    """Internal, ephemeral (start, end, category); never return raw values.
+
+    Use the classifier's regexes and validators. Credentials end at a clause
+    boundary so adjacent normal facts survive. Addresses mask the residence
+    clause because the precision match alone may omit street names/unit data.
+    """
+    spans: list[tuple[int, int, str]] = []
+    def add_values(patterns, category, validator):
+        for pattern in patterns:
+            for match in pattern.finditer(text):
+                start, end = match.span(1)
+                boundary = _CLAUSE_BOUNDARY_RE.search(text, start, end)
+                if boundary:
+                    end = boundary.start()
+                if validator(text[start:end]):
+                    spans.append((start, end, category))
+    add_values(_PASSWORD_STRONG_RE, PASSWORD, _concrete_value_ok)
+    add_values(_PASSWORD_COPULA_RE, PASSWORD, lambda v: _concrete_value_ok(v) and _secret_shaped(v))
+    add_values(_API_RE[:-1], API_SECRET, lambda v: _concrete_value_ok(v, min_len=8))
+    for match in _API_RE[-1].finditer(text):
+        spans.append((*match.span(), API_SECRET))
+    add_values(_OTP_RE, OTP, _otp_value_ok)
+    for pattern in (_PAN_LABELED_CN, _PAN_LABELED_EN):
+        for match in pattern.finditer(text):
+            spans.append((*match.span(), PAYMENT_CARD))
+    for match in _PAN_RUN_RE.finditer(text):
+        if _luhn_valid(re.sub(r"[\s-]", "", match.group())):
+            spans.append((*match.span(), PAYMENT_CARD))
+    for match in _SSN_RE.finditer(text):
+        spans.append((*match.span(), GOVERNMENT_ID))
+    add_values([_PRC_ID_RE], GOVERNMENT_ID, _prc_id_valid)
+    add_values([_GOV_LABELED_CN_ID, _GOV_LABELED_CN_PASSPORT], GOVERNMENT_ID, lambda v: bool(v))
+    add_values([_GOV_LABELED_EN], GOVERNMENT_ID, _identifier_shaped)
+    for precision, residence in ((_PRECISION_CN_RE, _RES_CN_RE), (_EN_STREET_RE, _RES_EN_RE)):
+        for match in precision.finditer(text):
+            head = _clause_before(text, match.start())
+            cue = residence.search(head)
+            if cue:
+                start = match.start() - len(head) + cue.start()
+                boundary = _CLAUSE_BOUNDARY_RE.search(text, match.end())
+                spans.append((start, boundary.start() if boundary else len(text), PRECISE_HOME_ADDRESS))
+    return sorted(spans)

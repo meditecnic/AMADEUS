@@ -2810,11 +2810,11 @@ def test_s3e2_redact_user_text_surface():
     jobs = _jobs()
     assert jobs.redact_user_text("") == ("", False)
     assert jobs.redact_user_text("我喜欢黑咖啡") == ("我喜欢黑咖啡", False)
-    assert jobs.redact_user_text("password: hunter2") == ("[REDACTED]", True)
+    assert jobs.redact_user_text("password: hunter2") == ("password: [REDACTED:password]", False)
     redacted, blocked = jobs.redact_user_text("验证码是 493821")
-    assert blocked and "493821" not in redacted
+    assert not blocked and "493821" not in redacted and "[REDACTED:otp]" in redacted
     redacted2, blocked2 = jobs.redact_user_text("我的密码是 hunter2")
-    assert blocked2 and "hunter2" not in redacted2
+    assert not blocked2 and "hunter2" not in redacted2 and "[REDACTED:password]" in redacted2
     # old blanket long-digit behavior is removed: non-Luhn long number passes.
     assert jobs.redact_user_text("订单号 2024080512345") == (
         "订单号 2024080512345",
@@ -2837,13 +2837,15 @@ _S3E2_BLOCKED_SAMPLES = [
 async def test_s3e2_blocked_job_completes_zero_everything(
     isolated_store, monkeypatch, label, text, fragment
 ):
-    """Whole-message fail-closed: no selectors, no provider, no Memory writes."""
+    """Mask each sensitive category, call provider once, and store no sensitive content."""
     jobs = _jobs()
     session_id = f"s3e2-{label}-{uuid4().hex[:8]}"
     counts = {"completion": 0, "stable": 0, "unresolved": 0}
 
     async def fake_completion(**kwargs: Any) -> dict[str, Any]:
         counts["completion"] += 1
+        assert fragment not in kwargs["user_text"]
+        assert f"[REDACTED:{label}]" in kwargs["user_text"]
         return {"observations": [], "operations": []}
 
     async def spy_stable(**kwargs: Any) -> list[Any]:
@@ -2872,9 +2874,9 @@ async def test_s3e2_blocked_job_completes_zero_everything(
         memory_completion=fake_completion,
     )
     assert result["state"] == "completed", f"{label}: job must complete"
-    assert counts["completion"] == 0, f"{label}: provider must not run"
-    assert counts["stable"] == 0, f"{label}: stable selector must not run"
-    assert counts["unresolved"] == 0, f"{label}: unresolved selector must not run"
+    assert counts["completion"] == 1, f"{label}: provider receives masked text"
+    assert counts["stable"] == 1, f"{label}: stable selector receives masked text"
+    assert counts["unresolved"] == 1, f"{label}: unresolved selector receives masked text"
 
     db = await get_db("steins_gate", "memory")
     try:
@@ -2956,7 +2958,7 @@ async def test_s3e2_clean_input_reaches_provider_once(
 
 @pytest.mark.asyncio
 async def test_s3e2_blocked_replay_stays_zero(isolated_store, monkeypatch):
-    """Blocked → completed; replay and re-run stay zero provider / zero writes."""
+    """Masked → completed; durable receipt suppresses replay and re-run."""
     jobs = _jobs()
     session_id = f"s3e2-replay-{uuid4().hex[:8]}"
     counts = {"completion": 0}
@@ -2976,7 +2978,7 @@ async def test_s3e2_blocked_replay_stays_zero(isolated_store, monkeypatch):
         memory_completion=fake_completion,
     )
     assert first["state"] == "completed"
-    assert counts["completion"] == 0
+    assert counts["completion"] == 1
 
     again = await jobs.process_memory_job(
         job_id=job["job_id"],
@@ -2984,7 +2986,7 @@ async def test_s3e2_blocked_replay_stays_zero(isolated_store, monkeypatch):
         memory_completion=fake_completion,
     )
     assert again["state"] == "completed"
-    assert counts["completion"] == 0
+    assert counts["completion"] == 1
 
     # crash-before-completed equivalent: force back to pending; classifier
     # re-runs, still blocked, still zero provider / zero semantic writes.
@@ -3006,7 +3008,7 @@ async def test_s3e2_blocked_replay_stays_zero(isolated_store, monkeypatch):
         memory_completion=fake_completion,
     )
     assert rerun["state"] == "completed"
-    assert counts["completion"] == 0
+    assert counts["completion"] == 1
     db2 = await get_db("steins_gate", "memory")
     try:
         row = await (await db2.execute(
@@ -3137,6 +3139,8 @@ async def test_s3e2_rework_blocked_stop_gates_still_zero(
 
     async def fake_completion(**kwargs: Any) -> dict[str, Any]:
         counts["completion"] += 1
+        assert fragment not in kwargs["user_text"]
+        assert f"[REDACTED:{label}]" in kwargs["user_text"]
         return {"observations": [], "operations": []}
 
     async def spy_stable(**kwargs: Any) -> list[Any]:
@@ -3165,9 +3169,9 @@ async def test_s3e2_rework_blocked_stop_gates_still_zero(
         memory_completion=fake_completion,
     )
     assert result["state"] == "completed", f"{label}: job must complete"
-    assert counts["completion"] == 0, f"{label}: provider must not run"
-    assert counts["stable"] == 0, f"{label}: stable selector must not run"
-    assert counts["unresolved"] == 0, f"{label}: unresolved selector must not run"
+    assert counts["completion"] == 1, f"{label}: provider receives masked text"
+    assert counts["stable"] == 1, f"{label}: stable selector receives masked text"
+    assert counts["unresolved"] == 1, f"{label}: unresolved selector receives masked text"
 
     db = await get_db("steins_gate", "memory")
     try:
@@ -3721,6 +3725,7 @@ async def test_s3f1_e7_semantic_failure_certifies_no_receipt(isolated_store):
 async def test_s3f1_e8_privacy_blocked_no_receipt(isolated_store, monkeypatch):
     """E8: S3E-2 privacy-blocked path — provider/selectors zero AND no receipt."""
     jobs = _jobs()
+    monkeypatch.setattr(jobs, "classify_memory_sensitive_text", lambda text: frozenset({"password"}))
     session_id = f"s3f1-e8-{uuid4().hex[:8]}"
     conv = await conversation_service.create(
         session_id, "steins_gate", title="e8", identity_mode="self"
@@ -4337,3 +4342,93 @@ def test_v113_prompt_preserves_source_language():
     assert "display_text and fact_text in the language of the user utterance; do not translate" in prompt
     assert "mixed-language speech, follow the language of the part supporting that fact" in prompt
     assert "Do not store a separate Japanese or other normalized-language version" in prompt
+
+
+@pytest.mark.asyncio
+async def test_v113_mixed_secret_normal_fact(isolated_store, caplog):
+    session = "v113-private-mixed"
+    secret = "privateV113test983"
+    job, _, _ = await _enqueue_user_job(session_id=session, user_text=f"我的密码是{secret}，我喜欢猫")
+    async def complete(**kwargs):
+        assert kwargs["user_text"] == "我的密码是[REDACTED:password]，我喜欢猫"
+        return {"observations": [_v113_observation("safe", "我喜欢猫"), _v113_observation("bad", "[REDACTED:password]")]}
+    result = await _jobs().process_memory_job(job_id=job["job_id"], lease_owner="privacy", memory_completion=complete)
+    assert result["state"] == "completed"
+    assert [r[2] for r in await _v113_results(session)] == ["applied", "redacted_content_forbidden"]
+    db = await get_db("steins_gate", "memory")
+    try:
+        tables = await (await db.execute("SELECT name FROM sqlite_master WHERE type='table' AND sql NOT LIKE '%VIRTUAL%' AND (name LIKE 'memory_%' OR name LIKE 'stable_%' OR name='experiences')")).fetchall()
+        contents = []
+        for table in tables:
+            contents.extend([tuple(row) for row in await (await db.execute(f'SELECT * FROM "{table[0]}"')).fetchall()])
+        dump = repr(contents)
+        assert secret not in dump
+        assert "我喜欢猫" in dump
+        source = await (await db.execute("SELECT excerpt, source_fingerprint FROM memory_observation_sources")).fetchone()
+        assert "[REDACTED:password]" in source[0]
+        assert source[1] == hashlib.sha256(f"{session}:{job['source_message_id']}:我的密码是[REDACTED:password]，我喜欢猫".encode()).hexdigest()
+    finally:
+        await db.close()
+    assert secret not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["remaining", "unlocatable", "detector_error"])
+async def test_v113_privacy_fails_closed(isolated_store, monkeypatch, failure):
+    jobs = _jobs()
+    job, _, _ = await _enqueue_user_job(session_id="v113-privacy-fail-" + failure, user_text="我的密码是hunter2，我喜欢猫")
+    if failure == "remaining":
+        monkeypatch.setattr(jobs, "classify_memory_sensitive_text", lambda text: frozenset({"password"}))
+    elif failure == "unlocatable":
+        monkeypatch.setattr(jobs, "sensitive_spans", lambda text: [])
+    else:
+        def boom(text):
+            raise RuntimeError("private classifier detail")
+        monkeypatch.setattr(jobs, "sensitive_spans", boom)
+    async def forbidden(**kwargs):
+        pytest.fail("failed masking must skip provider")
+    result = await jobs.process_memory_job(job_id=job["job_id"], lease_owner="mask-fail", memory_completion=forbidden)
+    assert result["state"] == "completed"
+    assert await _receipt_rows(job["session_id"]) == []
+    await _session_zero_semantic_rows(job["session_id"])
+
+
+@pytest.mark.parametrize("field", ["display_text", "fact_text", "semantic"])
+@pytest.mark.asyncio
+async def test_v113_placeholder_observation_rejected(isolated_store, field):
+    job, _, _ = await _enqueue_user_job(session_id="v113-placeholder-" + field, user_text="喜欢茶")
+    async def complete(**kwargs):
+        bad = _v113_observation("bad", "无效")
+        bad[field] = {"object": "[REDACTED:password]"} if field == "semantic" else "[REDACTED:password]"
+        return {"observations": [_v113_observation("safe", "喜欢茶"), bad]}
+    result = await _jobs().process_memory_job(job_id=job["job_id"], lease_owner="marker", memory_completion=complete)
+    assert result["state"] == "completed"
+    assert [r[2] for r in await _v113_results(job["session_id"])] == ["applied", "redacted_content_forbidden"]
+
+
+@pytest.mark.asyncio
+async def test_v113_assistant_privacy_failure_drops_context_only(isolated_store, monkeypatch):
+    jobs = _jobs()
+    session = "v113-assistant-secret"
+    conv = await conversation_service.create(session, "steins_gate", identity_mode="self")
+    cid = str(conv["id"])
+    await models.save_message(session, "assistant", "password: hunter2", worldline="steins_gate", conversation_id=cid)
+    mid = await models.save_message(session, "user", "我喜欢茶", worldline="steins_gate", conversation_id=cid)
+    original = jobs.sensitive_spans
+    monkeypatch.setattr(jobs, "sensitive_spans", lambda text: [] if "hunter2" in text else original(text))
+    job = await jobs.enqueue_memory_job(session_id=session, worldline="steins_gate", conversation_id=cid, identity_mode="self", source_message_id=mid, provider_id="fake", model_id="fake")
+    async def complete(**kwargs):
+        assert kwargs["previous_assistant_text"] is None
+        assert kwargs["user_text"] == "我喜欢茶"
+        return {"observations": [_v113_observation("safe", "我喜欢茶")]}
+    result = await jobs.process_memory_job(job_id=job["job_id"], lease_owner="assistant-mask", memory_completion=complete)
+    assert result["state"] == "completed"
+
+
+def test_v113_privacy_multiple_overlapping_secrets():
+    masked, blocked = _jobs().redact_user_text("password: hunter2; my password is another983, API key is sk-abcdefghijklmnopqr, I like cats")
+    assert not blocked
+    for secret in ["hunter2", "another983", "sk-abcdefghijklmnopqr"]:
+        assert secret not in masked
+    assert "I like cats" in masked
+    assert _classify(masked) == frozenset()

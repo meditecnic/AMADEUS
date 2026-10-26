@@ -485,7 +485,7 @@ def _assert_projection_has_worker_fact(
     return node
 
 
-def _assert_d30_job_completed_without_extraction(
+def _assert_d30_job_completed_with_masked_extraction(
     *,
     worker_results: list[dict],
     job_id: str,
@@ -510,8 +510,8 @@ def _assert_d30_job_completed_without_extraction(
     assert str(db_row.get("job_id")) == job_id
     assert int(db_row.get("source_message_id") or 0) == source_message_id
     assert db_row.get("state") == "completed"
-    assert completion_source_ids.count(source_message_id) == 0, (
-        f"memory_completion called for D30 source {source_message_id}: "
+    assert completion_source_ids.count(source_message_id) == 1, (
+        f"expected one masked completion for D30 source {source_message_id}: "
         f"{completion_source_ids}"
     )
 
@@ -948,8 +948,9 @@ async def test_isolation_sentinels_and_d30_never_leave_candidate(candidate_runti
         sid = int(kwargs["source_message_id"])
         completion_source_ids.append(sid)
         text = str(kwargs.get("user_text") or "")
-        if D30_FRAGMENT in text or "password:" in text.lower():
-            raise AssertionError("D30 blocked text reached memory_completion")
+        assert D30_FRAGMENT not in text
+        if sid == d30_source_id:
+            assert "[REDACTED:password]" in text
         return {"observations": [], "operations": []}
 
     results = await jobs_mod.process_due_jobs_once(
@@ -963,7 +964,7 @@ async def test_isolation_sentinels_and_d30_never_leave_candidate(candidate_runti
         identity_mode="self",
         source_message_id=d30_source_id,
     )
-    _assert_d30_job_completed_without_extraction(
+    _assert_d30_job_completed_with_masked_extraction(
         worker_results=results,
         job_id=d30_job_id,
         source_message_id=d30_source_id,
@@ -1044,7 +1045,7 @@ def test_d30_assertion_fails_when_target_job_is_still_pending():
     job_id = "d30-job"
     source_message_id = 9090
     with pytest.raises(AssertionError):
-        _assert_d30_job_completed_without_extraction(
+        _assert_d30_job_completed_with_masked_extraction(
             worker_results=[
                 {
                     "job_id": "ordinary",
