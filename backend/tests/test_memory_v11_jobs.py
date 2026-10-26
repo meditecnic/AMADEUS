@@ -4126,3 +4126,49 @@ async def test_s4_ingest_jobs_retryable_column_default_true(isolated_store):
         assert int(columns["retryable"][4] or 0) == 1, "default must be 1"
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_v113_previous_assistant_context(isolated_store):
+    jobs = _jobs()
+    session = "s-v113-context"
+    conv = await conversation_service.create(session, "steins_gate", identity_mode="self")
+    cid = str(conv["id"])
+    async def save(role, text, conversation=cid):
+        return await models.save_message(session, role, text, worldline="steins_gate", conversation_id=conversation)
+    await save("assistant", "[EMO:happy] " + "前" * 50 + "猫" * 600)
+    mid = await save("user", "对，就是那个")
+    source = await jobs._load_user_source(session_id=session, worldline="steins_gate", conversation_id=cid, source_message_id=mid)
+    assert source["previous_assistant_text"] == "猫" * 600
+    assert "EMO" not in source["previous_assistant_text"]
+    later = await save("user", "下一个")
+    source = await jobs._load_user_source(session_id=session, worldline="steins_gate", conversation_id=cid, source_message_id=later)
+    assert source["previous_assistant_text"] is None
+    other = await conversation_service.create(session, "steins_gate", identity_mode="self")
+    await save("assistant", "不能串会话", str(other["id"]))
+    source = await jobs._load_user_source(session_id=session, worldline="steins_gate", conversation_id=cid, source_message_id=mid)
+    assert source["previous_assistant_text"] == "猫" * 600
+    assert await jobs._load_user_source(session_id=session, worldline="steins_gate", conversation_id=cid, source_message_id=mid - 1) is None
+
+
+@pytest.mark.asyncio
+async def test_v113_assistant_only_claim_not_evidence(isolated_store):
+    jobs = _jobs()
+    session = "s-v113-unconfirmed"
+    conv = await conversation_service.create(session, "steins_gate", identity_mode="self")
+    cid = str(conv["id"])
+    await models.save_message(session, "assistant", "[EMO:neutral] 你住上海吗？", worldline="steins_gate", conversation_id=cid)
+    mid = await models.save_message(session, "user", "换个话题", worldline="steins_gate", conversation_id=cid)
+    job = await jobs.enqueue_memory_job(session_id=session, worldline="steins_gate", conversation_id=cid, identity_mode="self", source_message_id=mid, provider_id="fake", model_id="fake")
+    async def complete(**kwargs):
+        assert kwargs["previous_assistant_text"] == "你住上海吗？"
+        assert kwargs["user_text"] == "换个话题"
+        assert "Never remember an assistant claim the user has not confirmed" in jobs._V11_MEMORY_SYSTEM
+        return {"observations": [], "operations": []}
+    result = await jobs.process_memory_job(job_id=job["job_id"], lease_owner="context", memory_completion=complete)
+    assert result["state"] == "completed"
+    db = await get_db("steins_gate", "memory")
+    try:
+        assert (await (await db.execute("SELECT count(*) FROM stable_facts")).fetchone())[0] == 0
+    finally:
+        await db.close()

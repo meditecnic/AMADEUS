@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Mapping
@@ -26,6 +27,8 @@ from app.services.memory_v11.privacy import classify_memory_sensitive_text
 MemoryCompletionFn = Callable[..., Awaitable[Mapping[str, Any]]]
 
 logger = logging.getLogger(__name__)
+
+PREVIOUS_ASSISTANT_MAX_CHARS = 600
 
 _worker_task: asyncio.Task | None = None
 _worker_stop: asyncio.Event | None = None
@@ -537,7 +540,22 @@ async def _load_user_source(
         row = await cur.fetchone()
         if row is None or str(row["role"]) != "user":
             return None
+        previous = await (
+            await db.execute(
+                """SELECT role, content FROM messages
+                    WHERE session_id=? AND conversation_id=? AND id<?
+                    ORDER BY id DESC LIMIT 1""",
+                (session_id, conversation_id, int(source_message_id)),
+            )
+        ).fetchone()
+        previous_text = None
+        if previous is not None and str(previous["role"]) == "assistant":
+            context = re.sub(r"^\[EMO:[^]\r\n]*\]\s*", "", str(previous["content"] or ""))
+            context, blocked = redact_user_text(context)
+            if not blocked:
+                previous_text = context[-PREVIOUS_ASSISTANT_MAX_CHARS:]
         return {
+            "previous_assistant_text": previous_text,
             "source_message_id": int(row["id"]),
             "role": "user",
             "content": str(row["content"] or ""),
@@ -577,7 +595,9 @@ Return ONE JSON object only:
   ]
 }
 Rules:
-- only user speech establishes facts; prefer empty over invention;
+- Only user_text establishes facts; prefer empty over invention.
+- previous_assistant_text is context only: use it to understand what the user
+  answers or refers to. Never remember an assistant claim the user has not confirmed;
 - do not invent conversational-act facts (e.g. 'recommended'); confidence 0..1.
 - "candidates" lists the ONLY active facts you may reference for ATTACH/REFINE/SUPERSEDE.
 - For ATTACH/REFINE/SUPERSEDE: target_fact_id MUST be a candidates[].fact_id;
@@ -661,6 +681,7 @@ async def default_memory_completion(**kwargs: Any) -> Mapping[str, Any]:
                     "identity_mode": identity_mode,
                     "source_message_id": source_message_id,
                     "user_text": user_text,
+                    "previous_assistant_text": kwargs.get("previous_assistant_text"),
                     "candidates": candidates,
                     "unresolved_observations": unresolved,
                 },
@@ -825,6 +846,7 @@ async def process_memory_job(
                 conversation_id=job["conversation_id"],
                 source_message_id=int(job["source_message_id"]),
                 user_text=redacted,
+                previous_assistant_text=source.get("previous_assistant_text"),
                 provider_id=job["provider_id"],
                 model_id=job["model_id"],
                 pipeline_version=job["pipeline_version"],
