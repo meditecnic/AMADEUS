@@ -901,8 +901,7 @@ async def test_s3b3_selected_target_refine_succeeds(isolated_store, monkeypatch)
                 {
                     "op": "REFINE",
                     "observation_ref": "o1",
-                    "target_fact_id": target["fact_id"],
-                    "expected_version": target["version_no"],
+                    "candidate_index": target["candidate_index"],
                     "fact_text": text_v2,
                     "reason_code": "compatible_refinement",
                 }
@@ -1020,7 +1019,7 @@ async def test_s3b3_unselected_same_scope_target_rejected(isolated_store, monkey
     )
     assert result["state"] != "completed"
     assert result["state"] in {"pending", "failed"}
-    assert result.get("last_error_code") == "validation_failed"
+    assert result.get("last_error_code") == "candidate_index_out_of_range"
     db = await get_db("steins_gate", "memory")
     try:
         cur = await db.execute(
@@ -1659,7 +1658,7 @@ async def test_s3d_probe_d18_completion_receives_bounded_unresolved_context(
         "D18 context must stay same-scope; okabe observation leaked in (R05)"
     )
     for item in unresolved:
-        assert set(item.keys()) == {"observation_id", "display_text", "source_excerpt"}, (
+        assert set(item.keys()) == {"observation_id", "observation_index", "display_text", "source_excerpt"}, (
             "payload items must be exactly the minimal D18 shape"
         )
 
@@ -1704,7 +1703,7 @@ async def test_s3d_probe_d18_resolution_updates_existing_observation(
             "observations": [
                 {
                     "observation_ref": "o1",
-                    "reanalysis_target_observation_id": obs_id,
+                    "reanalysis_target_observation_index": 1,
                     "source_message_ids": [sid],
                     "display_text": "喜欢《为美好的世界献上祝福》",
                     "semantic": {
@@ -2383,7 +2382,7 @@ async def test_s3d4_d19_job_no_target_ordinary_unchanged(isolated_store):
 
 @pytest.mark.asyncio
 async def test_s3d4_d26_forged_old_source_rejected_job(isolated_store):
-    """Completion forging the OLD source id → validation_failed, zero mutation."""
+    """Ignore forged model source IDs and bind the observation to the current user message."""
     jobs = _jobs()
     session_id = f"s3d4-d26-{uuid4().hex[:8]}"
     conv = await conversation_service.create(
@@ -2408,7 +2407,7 @@ async def test_s3d4_d26_forged_old_source_rejected_job(isolated_store):
             "observations": [
                 {
                     "observation_ref": "o1",
-                    "reanalysis_target_observation_id": obs_id,
+                    "reanalysis_target_observation_index": 1,
                     # FORGED: the OLD source id instead of the current one.
                     "source_message_ids": [int(mid_prior)],
                     "display_text": "解析后",
@@ -2430,8 +2429,7 @@ async def test_s3d4_d26_forged_old_source_rejected_job(isolated_store):
         session_id=session_id, conversation_id=conversation_id,
         source_message_id=int(mid_current), completion=forged_completion,
     )
-    assert result["state"] in {"pending", "failed"}
-    assert result.get("last_error_code") == "validation_failed"
+    assert result["state"] == "completed"
     db = await get_db("steins_gate", "memory")
     try:
         row = await (await db.execute(
@@ -2440,7 +2438,13 @@ async def test_s3d4_d26_forged_old_source_rejected_job(isolated_store):
         )).fetchone()
     finally:
         await db.close()
-    assert row["status"] == "candidate" and int(row["reanalysis_count"]) == 0
+    assert row["status"] == "attached" and int(row["reanalysis_count"]) == 1
+    db = await get_db("steins_gate", "memory")
+    try:
+        sources = await (await db.execute("SELECT source_message_id FROM memory_observation_sources WHERE observation_id=?", (obs_id,))).fetchall()
+        assert {int(r[0]) for r in sources} == {int(mid_prior), int(mid_current)}
+    finally:
+        await db.close()
 
 
 @pytest.mark.asyncio
@@ -2478,7 +2482,7 @@ async def test_s3d4_d37_crash_window_retry_no_duplicates(isolated_store, monkeyp
             "observations": [
                 {
                     "observation_ref": "o1",
-                    "reanalysis_target_observation_id": obs_id,
+                    "reanalysis_target_observation_index": 1,
                     "source_message_ids": [sid],
                     "display_text": "喜欢《为美好的世界献上祝福》",
                     "semantic": {"subject": "user", "predicate": "likes_work", "object": "konosuba"},
@@ -3659,7 +3663,7 @@ async def test_s3f1_e6_receipt_insert_failure_rolls_back_semantic_writes(
         source_message_id=int(mid), completion=create_completion,
     )
     assert result["state"] in {"pending", "failed"}
-    assert result.get("last_error_code") == "validation_failed"
+    assert result.get("last_error_code") == "operation_failed"
     assert await _receipt_rows(session_id) == [], "no receipt may survive rollback"
     await _session_zero_semantic_rows(session_id)
 
@@ -3684,7 +3688,7 @@ async def test_s3f1_e7_semantic_failure_certifies_no_receipt(isolated_store):
             "observations": [
                 {
                     "observation_ref": "o1",
-                    "reanalysis_target_observation_id": "ghost-target",
+                    "reanalysis_target_observation_index": 1,
                     "source_message_ids": [sid],
                     "display_text": "解析后",
                     "semantic": {"subject": "user", "predicate": "x", "object": "y"},
@@ -3706,7 +3710,7 @@ async def test_s3f1_e7_semantic_failure_certifies_no_receipt(isolated_store):
         source_message_id=int(mid), completion=forged_completion,
     )
     assert result["state"] in {"pending", "failed"}
-    assert result.get("last_error_code") == "validation_failed"
+    assert result.get("last_error_code") == "reanalysis_index_out_of_range"
     assert await _receipt_rows(session_id) == [], (
         "failed semantic result must never be certified as processed"
     )
@@ -4170,5 +4174,159 @@ async def test_v113_assistant_only_claim_not_evidence(isolated_store):
     db = await get_db("steins_gate", "memory")
     try:
         assert (await (await db.execute("SELECT count(*) FROM stable_facts")).fetchone())[0] == 0
+    finally:
+        await db.close()
+
+
+# v11-3: the provider describes relations; backend binds identity and provenance.
+def _v113_observation(ref, text, relation="new", index=None, **extra):
+    return dict(observation_ref=ref, display_text=text, fact_text=text,
+                semantic={"subject": "user", "predicate": "likes", "object": text},
+                evidence_kind="direct_user", memory_class="stable_candidate",
+                confidence=0.96, relation=relation, candidate_index=index, **extra)
+
+
+async def _v113_results(session):
+    db = await get_db("steins_gate", "memory")
+    try:
+        return [tuple(r) for r in await (await db.execute(
+            "SELECT attempt_no, operation_index, result_code FROM memory_ingest_operation_results WHERE session_id=? ORDER BY attempt_no, operation_index", (session,)
+        )).fetchall()]
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_v113_partial_operations_receipted(isolated_store):
+    session = "v113-partial"
+    job, _, mid = await _enqueue_user_job(session_id=session, user_text="喜欢猫和茶")
+    async def complete(**kwargs):
+        return {"observations": [
+            _v113_observation("a", "喜欢猫", source_message_ids=[999999]),
+            _v113_observation("b", "喜欢咖啡", "same", 999),
+            _v113_observation("c", "喜欢茶"),
+        ]}
+    result = await _jobs().process_memory_job(job_id=job["job_id"], lease_owner="partial", memory_completion=complete)
+    assert result["state"] == "completed"
+    assert await _v113_results(session) == [(1, 1, "applied"), (1, 2, "candidate_index_out_of_range"), (1, 3, "applied")]
+    db = await get_db("steins_gate", "memory")
+    try:
+        assert (await (await db.execute("SELECT count(*) FROM stable_facts WHERE session_id=?", (session,))).fetchone())[0] == 2
+        sources = await (await db.execute("SELECT DISTINCT source_message_id FROM memory_observation_sources")).fetchall()
+        assert [int(r[0]) for r in sources] == [mid]
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_v113_all_invalid_retry_exhaustion(isolated_store):
+    session = "v113-invalid"
+    job, _, _ = await _enqueue_user_job(session_id=session, user_text="无效候选")
+    async def complete(**kwargs):
+        return {"observations": [_v113_observation("a", "无效", "same", 100)]}
+    for attempt in range(1, 4):
+        db = await get_db("steins_gate", "memory")
+        try:
+            await db.execute("UPDATE memory_ingest_jobs SET next_attempt_at=NULL WHERE job_id=?", (job["job_id"],))
+            await db.commit()
+        finally:
+            await db.close()
+        result = await _jobs().process_memory_job(job_id=job["job_id"], lease_owner="invalid", memory_completion=complete)
+        assert result["state"] == ("failed" if attempt == 3 else "pending")
+        assert result["last_error_code"] == "candidate_index_out_of_range"
+    assert len(await _v113_results(session)) == 3
+    assert await _receipt_rows(session) == []
+
+
+@pytest.mark.asyncio
+async def test_v113_retry_uses_current_candidate_snapshot(isolated_store, monkeypatch):
+    from app.services.memory_v11 import reconciliation_select
+    session = "v113-snapshots"
+    a = await create_stable_fact(session_id=session, worldline="steins_gate", identity_mode="self", display_text="旧候选A", semantic_json={"a": 1})
+    b = await create_stable_fact(session_id=session, worldline="steins_gate", identity_mode="self", display_text="新候选B", semantic_json={"b": 1})
+    snapshots = [[a], [b]]
+    async def select(**kwargs):
+        return snapshots.pop(0)
+    monkeypatch.setattr(reconciliation_select, "select_reconciliation_candidates", select)
+    job, _, _ = await _enqueue_user_job(session_id=session, user_text="新说明")
+    count = 0
+    async def complete(**kwargs):
+        nonlocal count
+        count += 1
+        assert kwargs["candidates"][0]["candidate_index"] == 1
+        # Retry after an invalid ordinal, then bind 1 to B, ignoring forged IDs/version.
+        return {"observations": [_v113_observation("a", "新说明", "refines", 100 if count == 1 else 1, source_message_ids=[999])],
+                "operations": [{"op": "REFINE", "observation_ref": "a", "target_fact_id": a["fact_id"], "expected_version": 999}]}
+    first = await _jobs().process_memory_job(job_id=job["job_id"], lease_owner="snap", memory_completion=complete)
+    assert first["state"] == "pending"
+    db = await get_db("steins_gate", "memory")
+    try:
+        await db.execute("UPDATE memory_ingest_jobs SET next_attempt_at=NULL WHERE job_id=?", (job["job_id"],))
+        await db.commit()
+    finally:
+        await db.close()
+    final = await _jobs().process_memory_job(job_id=job["job_id"], lease_owner="snap", memory_completion=complete)
+    assert final["state"] == "completed"
+    db = await get_db("steins_gate", "memory")
+    try:
+        versions = dict(await (await db.execute("SELECT fact_id, active_version FROM stable_facts WHERE session_id=?", (session,))).fetchall())
+        assert versions == {a["fact_id"]: 1, b["fact_id"]: 2}
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["embedding", "apply"])
+async def test_v113_individual_failure_preserves_siblings(isolated_store, monkeypatch, failure):
+    from app.services.memory_v11 import reconciler
+    session = "v113-isolation-" + failure
+    job, _, _ = await _enqueue_user_job(session_id=session, user_text="猫，狗，茶")
+    if failure == "embedding":
+        original = reconciler.prepare_passage_embedding
+        async def prepare(text, **kwargs):
+            if text == "狗":
+                raise RuntimeError("private failure text")
+            return await original(text, **kwargs)
+        monkeypatch.setattr(reconciler, "prepare_passage_embedding", prepare)
+    else:
+        original = reconciler.materialize_observation
+        async def materialize(*args, **kwargs):
+            if kwargs["obs"]["display_text"] == "狗":
+                raise RuntimeError("private failure text")
+            return await original(*args, **kwargs)
+        monkeypatch.setattr(reconciler, "materialize_observation", materialize)
+    async def complete(**kwargs):
+        return {"observations": [_v113_observation(str(i), text, topic_label=text) for i, text in enumerate(["猫", "狗", "茶"])]}
+    result = await _jobs().process_memory_job(job_id=job["job_id"], lease_owner="isolate", memory_completion=complete)
+    assert result["state"] == "completed"
+    assert [r[2] for r in await _v113_results(session)] == ["applied", "operation_failed", "applied"]
+    db = await get_db("steins_gate", "memory")
+    try:
+        for table, column in [("stable_fact_versions", "display_text"), ("memory_observations", "display_text"), ("memory_topics", "display_label")]:
+            assert (await (await db.execute(f"SELECT count(*) FROM {table} WHERE {column}='狗'")).fetchone())[0] == 0
+    finally:
+        await db.close()
+
+
+@pytest.mark.asyncio
+async def test_v113_e5_unavailable_preserves_nonembedding_ops(isolated_store, monkeypatch):
+    from app.services.memory_v11 import reconciler
+    session = "v113-e5-offline"
+    job, _, _ = await _enqueue_user_job(session_id=session, user_text="持久事实和一次经历")
+    async def unavailable(*args, **kwargs):
+        from app.services.memory_v11.contracts import MemoryValidationError
+        raise MemoryValidationError("embedding_failed")
+    monkeypatch.setattr(reconciler, "prepare_passage_embedding", unavailable)
+    async def complete(**kwargs):
+        episodic = _v113_observation("b", "今天散步")
+        episodic["memory_class"] = "episodic"
+        return {"observations": [_v113_observation("a", "稳定事实"), episodic, _v113_observation("c", "无用", "reject")]}
+    result = await _jobs().process_memory_job(job_id=job["job_id"], lease_owner="e5", memory_completion=complete)
+    assert result["state"] == "completed"
+    assert [r[2] for r in await _v113_results(session)] == ["embedding_failed", "applied", "applied"]
+    db = await get_db("steins_gate", "memory")
+    try:
+        assert (await (await db.execute("SELECT count(*) FROM stable_facts WHERE session_id=?", (session,))).fetchone())[0] == 0
+        assert (await (await db.execute("SELECT count(*) FROM experiences WHERE session_id=?", (session,))).fetchone())[0] == 1
     finally:
         await db.close()

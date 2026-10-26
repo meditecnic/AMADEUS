@@ -345,7 +345,9 @@ def _completion_payload(source_message_id: int, marker: str) -> dict[str, Any]:
         "observations": [
             {
                 "observation_ref": "o1",
-                "source_message_ids": [int(source_message_id)],
+                "relation": "new",
+                "candidate_index": None,
+                "reanalysis_target_observation_index": None,
                 "display_text": f"{marker} 长期偏好",
                 "semantic": {
                     "subject": "user",
@@ -356,16 +358,6 @@ def _completion_payload(source_message_id: int, marker: str) -> dict[str, Any]:
                 "memory_class": "stable_candidate",
                 "confidence": confidence,
                 "topic_label": "偏好",
-            }
-        ],
-        "operations": [
-            {
-                "op": "CREATE",
-                "observation_ref": "o1",
-                "target_fact_id": None,
-                "expected_version": None,
-                "fact_text": f"{marker} 长期偏好",
-                "reason_code": "direct_durable_statement",
             }
         ],
     }

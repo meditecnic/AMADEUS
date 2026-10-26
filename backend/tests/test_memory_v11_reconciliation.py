@@ -592,7 +592,7 @@ async def test_s0_target_outside_allowlist_fail_closed(isolated_store):
 
 @pytest.mark.asyncio
 async def test_s2_second_operation_failure_rolls_back_entire_batch(isolated_store):
-    """P1: if a later operation fails, earlier CREATE/observation must not remain."""
+    """An invalid later operation preserves earlier CREATE/observation writes."""
     from app.db import get_db
 
     recon = _reconciler()
@@ -630,23 +630,22 @@ async def test_s2_second_operation_failure_rolls_back_entire_batch(isolated_stor
             "reason_code": "equivalent_evidence",
         },
     ]
-    with pytest.raises(Exception):
-        await recon.apply_validated_memory_operations(
-            session_id=session_id,
-            worldline="steins_gate",
-            identity_mode="self",
-            observations=observations,
-            operations=operations,
-            source_evidence=[
-                _source_evidence(
-                    source_message_id=source_id,
-                    conversation_id="conv-atomic",
-                    fingerprint="fp-atomic",
-                    excerpt="猫和狗",
-                )
-            ],
-            candidate_allowlist=[],  # ATTACH target not allowed → fail after CREATE pre-validate
-        )
+    await recon.apply_validated_memory_operations(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=observations,
+        operations=operations,
+        source_evidence=[
+            _source_evidence(
+                source_message_id=source_id,
+                conversation_id="conv-atomic",
+                fingerprint="fp-atomic",
+                excerpt="猫和狗",
+            )
+        ],
+        candidate_allowlist=[],  # ATTACH target not allowed → fail after CREATE pre-validate
+    )
 
     # Pre-validate rejects before write when allowlist fails; also cover mid-batch:
     # CREATE succeeds validation, second op fails at apply-time expected_version.
@@ -690,61 +689,60 @@ async def test_s2_second_operation_failure_rolls_back_entire_batch(isolated_stor
     fact_id = first["created_facts"][0]["fact_id"]
     before_facts = len(first["active_facts"])
 
-    with pytest.raises(Exception):
-        await recon.apply_validated_memory_operations(
-            session_id=session_id,
-            worldline="steins_gate",
-            identity_mode="self",
-            observations=[
-                _observation(
-                    ref="n1",
-                    display_text="喜欢鸟",
-                    semantic={
-                        "subject": "user",
-                        "predicate": "likes",
-                        "object": {"name": "bird"},
-                    },
-                    source_message_ids=[8002],
-                ),
-                _observation(
-                    ref="n2",
-                    display_text="喜欢鱼细化",
-                    semantic={
-                        "subject": "user",
-                        "predicate": "likes",
-                        "object": {"name": "fish"},
-                    },
-                    source_message_ids=[8002],
-                ),
-            ],
-            operations=[
-                {
-                    "op": "CREATE",
-                    "observation_ref": "n1",
-                    "target_fact_id": None,
-                    "expected_version": None,
-                    "fact_text": "喜欢鸟",
-                    "reason_code": "direct_durable_statement",
+    await recon.apply_validated_memory_operations(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="n1",
+                display_text="喜欢鸟",
+                semantic={
+                    "subject": "user",
+                    "predicate": "likes",
+                    "object": {"name": "bird"},
                 },
-                {
-                    "op": "ATTACH",
-                    "observation_ref": "n2",
-                    "target_fact_id": fact_id,
-                    "expected_version": 99,  # stale → fail after CREATE in same txn
-                    "fact_text": "喜欢鱼",
-                    "reason_code": "equivalent_evidence",
+                source_message_ids=[8002],
+            ),
+            _observation(
+                ref="n2",
+                display_text="喜欢鱼细化",
+                semantic={
+                    "subject": "user",
+                    "predicate": "likes",
+                    "object": {"name": "fish"},
                 },
-            ],
-            source_evidence=[
-                _source_evidence(
-                    source_message_id=8002,
-                    conversation_id="conv-batch2",
-                    fingerprint="fp-batch2",
-                    excerpt="鸟和鱼",
-                )
-            ],
-            candidate_allowlist=[fact_id],
-        )
+                source_message_ids=[8002],
+            ),
+        ],
+        operations=[
+            {
+                "op": "CREATE",
+                "observation_ref": "n1",
+                "target_fact_id": None,
+                "expected_version": None,
+                "fact_text": "喜欢鸟",
+                "reason_code": "direct_durable_statement",
+            },
+            {
+                "op": "ATTACH",
+                "observation_ref": "n2",
+                "target_fact_id": fact_id,
+                "expected_version": 99,  # stale → fail after CREATE in same txn
+                "fact_text": "喜欢鱼",
+                "reason_code": "equivalent_evidence",
+            },
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=8002,
+                conversation_id="conv-batch2",
+                fingerprint="fp-batch2",
+                excerpt="鸟和鱼",
+            )
+        ],
+        candidate_allowlist=[fact_id],
+    )
 
     db = await get_db("steins_gate", "memory")
     try:
@@ -760,12 +758,12 @@ async def test_s2_second_operation_failure_rolls_back_entire_batch(isolated_stor
                 (session_id,),
             )
         ).fetchone()
-        # Only the successful seed CREATE remains; rolled-back batch leaves nothing new.
-        assert int(facts["n"]) == 1
-        assert int(obs["n"]) == 1
+        # The valid CREATE in each batch and the seed remain; invalid ATTACH writes nothing.
+        assert int(facts["n"]) == 3
+        assert int(obs["n"]) == 3
     finally:
         await db.close()
-    assert before_facts == 1
+    assert before_facts == 2
 
 
 # ---------------------------------------------------------------------------
@@ -1376,68 +1374,65 @@ async def test_s3b2_replay_does_not_reembed(isolated_store, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_s3b2_batch_embedding_failure_is_atomic(isolated_store, monkeypatch):
-    """H: multi-CREATE batch — one encode failure leaves no partial writes."""
+    """H: one encode failure preserves the successfully embedded sibling."""
     embedder = _DeterministicEmbedder(fail_after=1)
     monkeypatch.setattr(memory_service, "embedder", embedder)
-    contracts = _contracts()
     session_id = f"s3b2-batch-{uuid4().hex[:8]}"
-    with pytest.raises(contracts.MemoryValidationError) as exc_info:
-        await _apply_validated(
-            session_id=session_id,
-            worldline="steins_gate",
-            identity_mode="self",
-            observations=[
-                _observation(
-                    ref="o1",
-                    display_text="バッチA",
-                    semantic={"subject": "user", "relation": "a", "object": "1"},
-                    source_message_ids=[9701],
-                ),
-                _observation(
-                    ref="o2",
-                    display_text="バッチB",
-                    semantic={"subject": "user", "relation": "b", "object": "2"},
-                    source_message_ids=[9702],
-                ),
-            ],
-            operations=[
-                {
-                    "op": "CREATE",
-                    "observation_ref": "o1",
-                    "fact_text": "バッチA",
-                    "reason_code": "direct_durable_statement",
-                },
-                {
-                    "op": "CREATE",
-                    "observation_ref": "o2",
-                    "fact_text": "バッチB",
-                    "reason_code": "direct_durable_statement",
-                },
-            ],
-            source_evidence=[
-                _source_evidence(
-                    source_message_id=9701,
-                    conversation_id="conv-s3b2-b",
-                    fingerprint="fp-s3b2-b1",
-                    excerpt="バッチA",
-                ),
-                _source_evidence(
-                    source_message_id=9702,
-                    conversation_id="conv-s3b2-b",
-                    fingerprint="fp-s3b2-b2",
-                    excerpt="バッチB",
-                ),
-            ],
-            candidate_allowlist=[],
-        )
-    assert exc_info.value.code == "embedding_failed"
+    await _apply_validated(
+        session_id=session_id,
+        worldline="steins_gate",
+        identity_mode="self",
+        observations=[
+            _observation(
+                ref="o1",
+                display_text="バッチA",
+                semantic={"subject": "user", "relation": "a", "object": "1"},
+                source_message_ids=[9701],
+            ),
+            _observation(
+                ref="o2",
+                display_text="バッチB",
+                semantic={"subject": "user", "relation": "b", "object": "2"},
+                source_message_ids=[9702],
+            ),
+        ],
+        operations=[
+            {
+                "op": "CREATE",
+                "observation_ref": "o1",
+                "fact_text": "バッチA",
+                "reason_code": "direct_durable_statement",
+            },
+            {
+                "op": "CREATE",
+                "observation_ref": "o2",
+                "fact_text": "バッチB",
+                "reason_code": "direct_durable_statement",
+            },
+        ],
+        source_evidence=[
+            _source_evidence(
+                source_message_id=9701,
+                conversation_id="conv-s3b2-b",
+                fingerprint="fp-s3b2-b1",
+                excerpt="バッチA",
+            ),
+            _source_evidence(
+                source_message_id=9702,
+                conversation_id="conv-s3b2-b",
+                fingerprint="fp-s3b2-b2",
+                excerpt="バッチB",
+            ),
+        ],
+        candidate_allowlist=[],
+    )
     residue = await _session_residue_counts(session_id)
     assert residue == {
-        "facts": 0,
-        "versions": 0,
-        "observations": 0,
-        "evidence": 0,
-        "vectors": 0,
+        "facts": 1,
+        "versions": 1,
+        "observations": 1,
+        "evidence": 1,
+        "vectors": 1,
     }
     assert embedder.encode_passage_calls == 2
 
@@ -2686,8 +2681,7 @@ async def test_s3d4_d16_target_not_allowed(isolated_store):
 
 @pytest.mark.asyncio
 async def test_s3d4_d17_target_reused(isolated_store):
-    """Same target referenced by two output observations → fail closed."""
-    contracts = _contracts()
+    """Same target twice: apply the first operation and reject only the second."""
     session_id = f"s3d4-d17-{uuid4().hex[:8]}"
     target_id = await _d18_candidate(session_id, source_message_id=8111)
     kwargs = _d18_resolve_ops(
@@ -2699,16 +2693,19 @@ async def test_s3d4_d17_target_reused(isolated_store):
     kwargs["operations"].append(
         {"op": "REJECT", "observation_ref": "r2", "fact_text": "解析后", "reason_code": "d18"}
     )
-    with pytest.raises(contracts.MemoryValidationError) as exc_info:
-        await _apply_validated(session_id=session_id, worldline="steins_gate",
-                               identity_mode="self", **kwargs)
-    assert exc_info.value.code == "reanalysis_target_reused"
+    await _apply_validated(session_id=session_id, worldline="steins_gate",
+                           identity_mode="self", **kwargs)
+    db = await get_db("steins_gate", "memory")
+    try:
+        rows = await (await db.execute("SELECT reanalysis_count FROM memory_observations WHERE session_id=?", (session_id,))).fetchall()
+        assert sum(int(r[0]) for r in rows) == 1
+    finally:
+        await db.close()
 
 
 @pytest.mark.asyncio
 async def test_s3d4_d17b_two_distinct_targets_rejected(isolated_store):
-    """Two DIFFERENT targets in one message → fail closed (single-target rule)."""
-    contracts = _contracts()
+    """Two targets: apply the first and reject the second under the single-target rule."""
     session_id = f"s3d4-d17b-{uuid4().hex[:8]}"
     t1 = await _d18_candidate(session_id, source_message_id=8121, display_text="候选一")
     t2 = await _d18_candidate(session_id, source_message_id=8122, display_text="候选二")
@@ -2726,22 +2723,26 @@ async def test_s3d4_d17b_two_distinct_targets_rejected(isolated_store):
         "evidence_kind": "direct_user", "memory_class": "stable_candidate",
         "confidence": 0.96, "topic_label": None, "expires_at": None,
     }
-    with pytest.raises(contracts.MemoryValidationError) as exc_info:
-        await _apply_validated(
-            session_id=session_id, worldline="steins_gate", identity_mode="self",
-            observations=[obs1, obs2],
-            operations=[
-                {"op": "CREATE", "observation_ref": "r1", "fact_text": "解析一", "reason_code": "d18"},
-                {"op": "CREATE", "observation_ref": "r2", "fact_text": "解析二", "reason_code": "d18"},
-            ],
-            source_evidence=[
-                _source_evidence(source_message_id=8123, conversation_id="conv-8123",
-                                 fingerprint="fp-8123", excerpt="解析")
-            ],
-            candidate_allowlist=[],
-            reanalysis_allowlist=[t1, t2],
-        )
-    assert exc_info.value.code == "reanalysis_target_reused"
+    await _apply_validated(
+        session_id=session_id, worldline="steins_gate", identity_mode="self",
+        observations=[obs1, obs2],
+        operations=[
+            {"op": "CREATE", "observation_ref": "r1", "fact_text": "解析一", "reason_code": "d18"},
+            {"op": "CREATE", "observation_ref": "r2", "fact_text": "解析二", "reason_code": "d18"},
+        ],
+        source_evidence=[
+            _source_evidence(source_message_id=8123, conversation_id="conv-8123",
+                             fingerprint="fp-8123", excerpt="解析")
+        ],
+        candidate_allowlist=[],
+        reanalysis_allowlist=[t1, t2],
+    )
+    db = await get_db("steins_gate", "memory")
+    try:
+        rows = await (await db.execute("SELECT reanalysis_count FROM memory_observations WHERE session_id=?", (session_id,))).fetchall()
+        assert sum(int(r[0]) for r in rows) == 1
+    finally:
+        await db.close()
 
 
 @pytest.mark.asyncio
