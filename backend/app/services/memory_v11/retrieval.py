@@ -87,8 +87,8 @@ def _resolve_embedder(embedder: QueryEmbedder | None) -> QueryEmbedder | None:
         from app.services.memory import memory_service
 
         return memory_service.embedder
-    except Exception:  # pragma: no cover - defensive import/runtime edge
-        logger.debug("v11 retrieval: embedder unavailable", exc_info=True)
+    except Exception as exc:  # pragma: no cover - defensive import/runtime edge
+        logger.debug("v11 retrieval: embedder unavailable (%s)", type(exc).__name__)
         return None
 
 
@@ -276,10 +276,10 @@ async def select_stable_fact_candidates(
             worldline=wl,
             fact_versions=fact_versions,
         )
-    except Exception:
+    except Exception as exc:
         logger.warning(
-            "v11 retrieval: embedding table read failed; lexical-only degrade",
-            exc_info=True,
+            "v11 retrieval: embedding table read failed; lexical-only degrade (%s)",
+            type(exc).__name__,
         )
         embedding_rows = {}
 
@@ -301,10 +301,10 @@ async def select_stable_fact_candidates(
     if compatible and resolved is not None:
         try:
             query_vector = await resolved.encode_query(query or "")
-        except Exception:
+        except Exception as exc:
             logger.warning(
-                "v11 retrieval: query embedding failed; lexical-only degrade",
-                exc_info=True,
+                "v11 retrieval: query embedding failed; lexical-only degrade (%s)",
+                type(exc).__name__,
             )
             query_vector = None
 

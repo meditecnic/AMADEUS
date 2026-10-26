@@ -4500,3 +4500,34 @@ async def test_v113_deletion_during_completion_suppresses_paraphrase(isolated_st
         assert (await (await db.execute("SELECT count(*) FROM stable_facts WHERE state='active' AND session_id=?", (session,))).fetchone())[0] == 0
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_v113_worker_prints_exception_type_only(monkeypatch, capsys):
+    import asyncio
+    jobs = _jobs()
+    stop = asyncio.Event()
+    async def boom(**kwargs):
+        stop.set()
+        raise RuntimeError("PRIVATE_FACT_EXCEPTION_V113")
+    monkeypatch.setattr(jobs, "process_due_jobs_once", boom)
+    await jobs._worker_loop(stop, "safe")
+    output = capsys.readouterr().out
+    assert "RuntimeError" in output
+    assert "PRIVATE_FACT_EXCEPTION_V113" not in output
+
+
+@pytest.mark.asyncio
+async def test_v113_indexing_error_contains_type_only():
+    from app.services.memory_v11.indexing import prepare_passage_embedding
+    from app.services.memory_v11.contracts import MemoryValidationError
+    class Offline:
+        model_name = "offline"
+        dimensions = 384
+        async def encode_passage(self, text):
+            raise RuntimeError("PRIVATE_FACT_EXCEPTION_V113")
+    with pytest.raises(MemoryValidationError) as raised:
+        await prepare_passage_embedding("safe", embedder=Offline())
+    assert raised.value.code == "embedding_failed"
+    assert "RuntimeError" in str(raised.value)
+    assert "PRIVATE_FACT_EXCEPTION_V113" not in str(raised.value)

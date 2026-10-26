@@ -97,7 +97,7 @@ async def prepare_passage_embedding(
     except Exception as exc:
         raise MemoryValidationError(
             "embedding_failed",
-            f"encode_passage failed: {exc}",
+            f"encode_passage failed: {type(exc).__name__}",
         ) from exc
     if not isinstance(vector, list):
         raise MemoryValidationError(

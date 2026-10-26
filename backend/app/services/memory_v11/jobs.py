@@ -1177,7 +1177,7 @@ async def _worker_loop(stop: asyncio.Event, owner: str) -> None:
                 memory_completion=None,  # resolves to default_memory_completion
             )
         except Exception as exc:
-            print(f"[MemoryV11] worker loop error: {exc!r}", flush=True)
+            print(f"[MemoryV11] worker loop error: {type(exc).__name__}", flush=True)
         try:
             await asyncio.wait_for(stop.wait(), timeout=2.0)
         except asyncio.TimeoutError:
