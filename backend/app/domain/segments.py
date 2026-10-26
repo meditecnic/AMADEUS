@@ -50,6 +50,8 @@ class PreparedTTSText:
 # Per-request budget keeps GPT-SoVITS T2S well below the ~1500 decode ceiling.
 # Segmentation already splits on punctuation; a single spoken unit should not approach this.
 MAX_TTS_SOURCE_CODEPOINTS = 280
+# Bound the raw source too: clean_text_for_tts only removes characters.
+MAX_SEGMENT_SOURCE_CODEPOINTS = MAX_TTS_SOURCE_CODEPOINTS
 
 _NON_SPEECH_RE = re.compile(
     r"[\s。！\uff01？\uff1f!?,.\uff0c\u3001\"'`「」『』()（）\-—_+=\[\]{}<>#~*…]"
@@ -619,6 +621,7 @@ class IncrementalJapaneseSegmenter:
     }
     _CLOSERS = set(_OPEN_TO_CLOSE.values())
     _TERMINATORS = set("。！？!?\n")
+    _LENGTH_TERMINATOR_RE = re.compile(r"[。！？!?\n]|…{2,}|\.{3,}")
 
     def __init__(self) -> None:
         self._pending = ""
@@ -646,6 +649,17 @@ class IncrementalJapaneseSegmenter:
         emitted: list[Segment] = []
         while self._pending:
             boundary = self._find_boundary(self._pending)
+            short_length = len(self._short_candidate[0]) if self._short_candidate else 0
+            forced = len(self._pending) + short_length > MAX_SEGMENT_SOURCE_CODEPOINTS and (
+                boundary is None or boundary + short_length > MAX_SEGMENT_SOURCE_CODEPOINTS
+            )
+            if forced:
+                if self._short_candidate is not None:
+                    short_text, short_emotion = self._short_candidate
+                    self._pending = short_text + self._pending
+                    self._pending_emotions[:0] = [short_emotion] * short_length
+                    self._short_candidate = None
+                boundary = self._find_length_boundary(self._pending)
             if boundary is None:
                 break
             raw = self._pending[:boundary]
@@ -659,7 +673,12 @@ class IncrementalJapaneseSegmenter:
             self._pending = self._pending[boundary:]
             self._pending_emotions = self._pending_emotions[boundary:]
             if text:
-                self._accept_candidate(emitted, text, emotion)
+                if forced:
+                    # Do not let short merging undo the length fallback.
+                    emitted.append(Segment(self._next_id, text, emotion))
+                    self._next_id += 1
+                else:
+                    self._accept_candidate(emitted, text, emotion)
 
         if final:
             raw_tail = self._pending
@@ -703,6 +722,23 @@ class IncrementalJapaneseSegmenter:
             return
         emitted.append(Segment(self._next_id, text, emotion))
         self._next_id += 1
+
+    def _find_length_boundary(self, text: str) -> int:
+        """Last sentence end, then comma/space, then the raw source budget.
+
+        Ignore bracket state only on this over-budget path. _find_boundary
+        starts with an empty stack on the remaining source after every cut.
+        """
+        window = text[:MAX_SEGMENT_SOURCE_CODEPOINTS]
+        sentence_end = None
+        for match in self._LENGTH_TERMINATOR_RE.finditer(window):
+            sentence_end = match.end()
+        if sentence_end is not None:
+            return sentence_end
+        for index in range(len(window) - 1, -1, -1):
+            if window[index] in "、，," or window[index].isspace():
+                return index + 1
+        return len(window)
 
     def _find_boundary(self, text: str) -> int | None:
         stack: list[str] = []
