@@ -11,9 +11,7 @@ import pytest
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = BACKEND_ROOT / "scripts" / "memory_candidate_real_run.py"
-PYTHON = Path(r"D:\Amadeus\amadeus_web\backend\.venv\Scripts\python.exe")
-if not PYTHON.is_file():
-    PYTHON = Path(sys.executable)
+PYTHON = Path(sys.executable)
 
 sys.path.insert(0, str(BACKEND_ROOT / "scripts"))
 # PYTHON_DOTENV_DISABLED and AMADEUS_CREDENTIAL_BACKEND=memory are set by
