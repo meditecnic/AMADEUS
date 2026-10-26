@@ -13,6 +13,7 @@ import hashlib
 import json
 import math
 import os
+import signal
 import socket
 import sqlite3
 import subprocess
@@ -42,6 +43,9 @@ SESAME_MARKER = "B2RT_SESAME"
 DELETE_MARKER = "B2RT_DELETE"
 REVISED_MARKER = "B2RT_SESAME_V2"
 CREATE_NO_WINDOW = 0x08000000
+TERMINATE_TIMEOUT_SECONDS = 8.0
+KILL_TIMEOUT_SECONDS = 2.0
+PROCESS_POLL_INTERVAL_SECONDS = 0.2
 PROVIDER_ENV_KEYS = (
     "DEEPSEEK_API_KEY",
     "OPENAI_API_KEY",
@@ -1147,6 +1151,27 @@ def _pid_running(pid: int) -> bool:
             check=False,
         )
         return str(pid) in (result.stdout or "")
+    # Reap exited children when this process owns them. Orphaned backends
+    # cannot be waited for here; Linux procfs still exposes their exit state.
+    try:
+        waited, _ = os.waitpid(pid, os.WNOHANG)
+        if waited == pid:
+            return False
+    except OSError:
+        pass
+    if sys.platform.startswith("linux"):
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+            # comm is parenthesized and may itself contain spaces or ')'.
+            fields = stat.rpartition(")")[2].split()
+            if fields and fields[0] in {"Z", "X"}:
+                try:
+                    os.waitpid(pid, os.WNOHANG)
+                except OSError:
+                    pass
+                return False
+        except (OSError, UnicodeError):
+            pass
     try:
         os.kill(pid, 0)
     except OSError:
@@ -1154,58 +1179,85 @@ def _pid_running(pid: int) -> bool:
     return True
 
 
-def _terminate_pid(pid: int) -> None:
+def _wait_pid_exit(pid: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while _pid_running(pid):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(PROCESS_POLL_INTERVAL_SECONDS, remaining))
+    return True
+
+
+def _terminate_pid(pid: int) -> str:
+    """Return already_exited, terminated, killed, or still_running."""
     if not _pid_running(pid):
-        return
+        return "already_exited"
     if os.name == "nt":
         subprocess.run(
             ["taskkill", "/PID", str(pid), "/T"],
             capture_output=True,
             check=False,
         )
-        deadline = time.monotonic() + 8
-        while time.monotonic() < deadline and _pid_running(pid):
-            time.sleep(0.2)
-        if _pid_running(pid):
-            subprocess.run(
-                ["taskkill", "/PID", str(pid), "/T", "/F"],
-                capture_output=True,
-                check=False,
-            )
-        return
-    os.kill(pid, 15)
+    else:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return "already_exited"
+        except OSError:
+            return "still_running" if _pid_running(pid) else "already_exited"
+    if _wait_pid_exit(pid, TERMINATE_TIMEOUT_SECONDS):
+        return "terminated"
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True,
+            check=False,
+        )
+    else:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return "terminated"
+        except OSError:
+            return "still_running" if _pid_running(pid) else "terminated"
+    return "killed" if _wait_pid_exit(pid, KILL_TIMEOUT_SECONDS) else "still_running"
 
 
 def cmd_stop(args: argparse.Namespace) -> None:
     run_root = deep_resolve(Path(args.run_root))
     paths = run_paths(run_root)
-    if not paths["pids"].is_file():
+    serve_pid_file = paths["root"] / "serve.pid"
+    if not paths["pids"].is_file() and not serve_pid_file.is_file():
         print(json.dumps({"ok": True, "command": "stop", "note": "no pids file"}))
         return
-    pids = _read_json(paths["pids"])
-    serve_pid_file = paths["root"] / "serve.pid"
+    pids = _read_json(paths["pids"]) if paths["pids"].is_file() else {}
     extra_pid = 0
     if serve_pid_file.is_file():
         try:
             extra_pid = int(serve_pid_file.read_text(encoding="utf-8").strip() or "0")
         except ValueError:
             extra_pid = 0
-    for key in ("frontend_pid", "backend_pid"):
-        pid = int(pids.get(key) or 0)
-        if pid:
-            _terminate_pid(pid)
-    if extra_pid and extra_pid not in {
-        int(pids.get("frontend_pid") or 0),
-        int(pids.get("backend_pid") or 0),
-    }:
-        _terminate_pid(extra_pid)
-    still = {
-        key: int(pids.get(key) or 0)
-        for key in ("frontend_pid", "backend_pid")
-        if _pid_running(int(pids.get(key) or 0))
+    recorded = {key: int(pids.get(key) or 0) for key in ("frontend_pid", "backend_pid")}
+    # Retain historical PIDs without ever signalling them again after a
+    # confirmed stop: the OS may have reused a PID for an unrelated process.
+    stopped_pids = {
+        pid for key, pid in recorded.items()
+        if pids.get(key.removesuffix("_pid") + "_stopped") is True
     }
-    pids["stopped_at"] = _utc_now()
+    targets = {key: pid for key, pid in recorded.items() if pid and pid not in stopped_pids}
+    if extra_pid and extra_pid not in stopped_pids:
+        targets["serve_pid"] = extra_pid
+    outcomes = {pid: _terminate_pid(pid) for pid in dict.fromkeys(targets.values())}
+    still = {key: pid for key, pid in targets.items() if _pid_running(pid)}
+    for key, pid in recorded.items():
+        pids[key.removesuffix("_pid") + "_stopped"] = key not in still
+    pids["stop_attempted_at"] = _utc_now()
+    pids["stop_results"] = {key: outcomes[pid] for key, pid in targets.items()}
     pids["still_running"] = still
+    if not still:
+        pids["stopped_at"] = _utc_now()
+        serve_pid_file.unlink(missing_ok=True)
     _write_json(paths["pids"], pids)
     if still:
         _fail("stop_incomplete", f"still running: {still}")
@@ -1249,10 +1301,44 @@ def recall_tool_call(user_text: str, call_id: str = "call-recall-offline") -> di
     }
 
 
-def has_core_facts_heading(system_prompt: str) -> bool:
-    """Standalone CORE FACTS section heading (legacy/shadow prompt shape only)."""
+def _own_prompt_body(system_prompt: str) -> str:
+    """Exclude the compiler's identity section, including embedded old prompts.
+
+    prompt_compiler always puts the canonical persona after identity. An old
+    compiled prompt can itself contain that heading, so the final persona
+    starts this turn's body. A truncated identity-only prompt has no body.
+    Small standalone section fixtures have no identity and remain supported.
+    """
     text = str(system_prompt or "")
-    return text.startswith("CORE FACTS\n") or "\nCORE FACTS\n" in text
+    if not text.startswith("IDENTITY AND SECURITY\n"):
+        return text
+    marker = "\n\nPERSONA BIBLE v1 (canonical runtime persona)\n"
+    start = text.rfind(marker)
+    return text[start + 2:] if start >= 0 else ""
+
+
+def _own_prompt_section(system_prompt: str, heading: str) -> str | None:
+    """Return a section of this turn, or None when its heading is absent."""
+    for section in _own_prompt_body(system_prompt).split("\n\n"):
+        title, _, content = section.partition("\n")
+        if title == heading:
+            return content
+    return None
+
+
+def _current_state_tail(system_prompt: str) -> str:
+    """Start at this turn's state; never fall back to the whole prompt."""
+    text = _own_prompt_body(system_prompt)
+    marker = "CURRENT STATE\n"
+    if text.startswith(marker):
+        return text[len(marker):]
+    before, found, after = text.partition("\n\n" + marker)
+    return after if found else ""
+
+
+def has_core_facts_heading(system_prompt: str) -> bool:
+    """Whether this turn has its own standalone CORE FACTS heading."""
+    return _own_prompt_section(system_prompt, "CORE FACTS") is not None
 
 
 def stable_fact_records_from_messages(messages: Any) -> str:
@@ -1313,28 +1399,13 @@ def _chat_captures(path: Path) -> list[dict[str, Any]]:
 
 
 def resident_core_fact_lines(system_prompt: str) -> list[str]:
-    """Fact lines of the request's own v11 resident CORE FACTS section.
-
-    Dispatch 55: v11 messages[0] carries a resident CORE FACTS section. The
-    request's own section is the last heading (an earlier prompt embedded
-    in IDENTITY, if any, comes first).
-    """
-    text = str(system_prompt or "")
-    marker = "CORE FACTS\n"
-    start = text.rfind("\n\n" + marker)
-    if start >= 0:
-        start += 2
-    elif text.startswith(marker):
-        start = 0
-    else:
-        return []
-    section = text[start + len(marker):].split("\n\n", 1)[0]
+    """Fact lines of this request's own resident CORE FACTS section."""
+    section = _own_prompt_section(system_prompt, "CORE FACTS") or ""
     return [line[2:] for line in section.split("\n") if line.startswith("- ")]
 
 
 def _supplement_records(system_prompt: str) -> list[str]:
-    text = str(system_prompt or "")
-    tail = text[text.rfind("\n\nCURRENT STATE\n") + 1:]
+    tail = _current_state_tail(system_prompt)
     records: list[str] = []
     for chunk in tail.split(MEMORY_CANDIDATE_DATA_ANCHOR + "\n")[1:]:
         try:
@@ -1361,7 +1432,7 @@ def _stable_fact_block(path: Path) -> str:
         raise AssertionError(f"no chat captures in {path}")
     for index, capture in enumerate(captures):
         prompt = _system_prompt_of(capture)
-        if "CORE FACTS\n(none)" in prompt or (
+        if (_own_prompt_section(prompt, "CORE FACTS") or "").startswith("(none)") or (
             has_core_facts_heading(prompt) and not resident_core_fact_lines(prompt)
         ):
             _fail(

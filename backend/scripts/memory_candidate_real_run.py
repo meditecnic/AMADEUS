@@ -351,7 +351,8 @@ def _live_run_backend_labels(paths: dict[str, Path]) -> list[str]:
                 pids = loaded
         except Exception:
             pids = {}
-    seen: set[int] = set()
+    stopped_backend = int(pids.get("backend_pid") or 0) if pids.get("backend_stopped") is True else 0
+    seen: set[int] = {stopped_backend} if stopped_backend else set()
     for key in ("backend_pid",):
         pid = int(pids.get(key) or 0)
         if pid and pid not in seen and b2._pid_running(pid):
@@ -867,22 +868,8 @@ def _system_prompt_text(messages: list[Any]) -> str:
 
 
 def _resident_core_fact_lines(system_prompt: str) -> list[str]:
-    """Fact lines of this request's v11 resident CORE FACTS section.
-
-    Dispatch 55: v11 puts a resident CORE FACTS section in messages[0]. The
-    request's own section is the last heading (an embedded earlier prompt
-    in IDENTITY, if any, comes first).
-    """
-    marker = "CORE FACTS\n"
-    start = system_prompt.rfind("\n\n" + marker)
-    if start >= 0:
-        start += 2
-    elif system_prompt.startswith(marker):
-        start = 0
-    else:
-        return []
-    section = system_prompt[start + len(marker):].split("\n\n", 1)[0]
-    return [line[2:] for line in section.split("\n") if line.startswith("- ")]
+    """Use the same own-turn section boundaries as the runtime script."""
+    return b2.resident_core_fact_lines(system_prompt)
 
 
 def _candidate_records_in(text: str) -> list[str]:
@@ -906,7 +893,7 @@ def _core_facts_from_messages(messages: list[Any]) -> str:
     MEMORY_CANDIDATE_DATA records (which exclude already-injected facts).
     """
     system_prompt = _system_prompt_text(messages)
-    own_tail = system_prompt[system_prompt.rfind("\n\nCURRENT STATE\n") + 1:]
+    own_tail = b2._current_state_tail(system_prompt)
     texts = _resident_core_fact_lines(system_prompt) + _candidate_records_in(own_tail)
     second_round = b2.stable_fact_records_from_messages(messages)
     if second_round:
@@ -920,7 +907,8 @@ def _system_has_core_facts_heading(messages: list[Any]) -> bool:
 
 def _system_has_core_facts_none(messages: list[Any]) -> bool:
     """Legacy empty form; v11 omits the section instead (dispatch 55)."""
-    return "CORE FACTS\n(none)" in _system_prompt_text(messages)
+    section = b2._own_prompt_section(_system_prompt_text(messages), "CORE FACTS")
+    return (section or "").startswith("(none)")
 
 
 def _system_core_facts_heading_without_facts(messages: list[Any]) -> bool:
