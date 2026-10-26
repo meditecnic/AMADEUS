@@ -633,3 +633,34 @@ async def test_r5_cjk_eligibility_positive_and_negative(isolated_store):
     )
     ja = await _select_experiences(session_id, "秋葉原のこと")
     assert [r["experience_id"] for r in ja] == [ja_pos_id]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("display,query", [
+    ("用户喜欢喝咖啡", "其实我最近不喝咖啡了，改喝茶"),
+    ("用户养了一只叫小黑的猫", "小黑今天生病了"),
+    ("ユーザーはコーヒーが好き", "最近コーヒーをやめて紅茶にした"),
+    ("User likes coffee", "I quit coffee, tea now"),
+])
+async def test_v113_lexical_candidates_without_embedder(isolated_store, monkeypatch, display, query):
+    from app.services.memory_v11.retrieval import _lexical_score, select_stable_fact_candidates
+    class Offline:
+        model_name = "offline"
+        dimensions = 384
+        async def encode_query(self, text):
+            raise RuntimeError("E5 unavailable")
+    monkeypatch.setattr(memory_service, "embedder", Offline())
+    session = "v113-lexical"
+    seed = await create_stable_fact(session_id=session, worldline="steins_gate", identity_mode="self", display_text=display, semantic_json={"user": display})
+    assert _lexical_score(display, query) > 0
+    selected = await select_stable_fact_candidates(session_id=session, worldline="steins_gate", identity_mode="self", query=query)
+    assert seed["fact_id"] in {r["fact_id"] for r in selected}
+
+
+@pytest.mark.parametrize("display,query", [
+    ("用户喜欢喝咖啡", "今天下雨了"),
+    ("User likes coffee", "The train was late"),
+])
+def test_v113_lexical_unrelated_zero(display, query):
+    from app.services.memory_v11.retrieval import _lexical_score
+    assert _lexical_score(display, query) == 0

@@ -55,18 +55,12 @@ def _estimate_tokens(text: str) -> int:
 
 
 def _lexical_score(display_text: str, query: str) -> float:
-    raw = (query or "").strip()
-    terms: set[str] = set()
-    if raw:
-        terms.add(raw.lower())
-        for term in raw.split():
-            if len(term) > 1:
-                terms.add(term.lower())
-    if not terms:
-        return 0.0
-    haystack = (display_text or "").lower()
-    hits = sum(1 for term in terms if term in haystack)
-    return hits / len(terms)
+    """Reuse local word/CJK-bigram scoring, independent of E5 availability."""
+    def clean(text: str) -> str:
+        # Preserve Latin word boundaries while dropping punctuation/whitespace
+        # from the CJK stream consumed by _lexical_relevance.
+        return re.sub(r"[\W_]+", " ", _normalized_text(text)).strip()
+    return _lexical_relevance(clean(display_text), clean(query))
 
 
 def _cosine(left: list[float], right: list[float]) -> float:
