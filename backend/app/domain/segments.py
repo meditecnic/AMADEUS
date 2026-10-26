@@ -63,6 +63,9 @@ _IGNORABLE_NON_SPEECH_RE = re.compile(
 _KANA_RE = re.compile(r"[\u3040-\u30ff\u31f0-\u31ff]")
 _HAN_RE = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
 _LATIN_RUN_RE = re.compile(r"[A-Za-z]{2,}")
+_MULTIWORD_LATIN_3_RE = re.compile(
+    r"[A-Za-zÀ-ÖØ-öø-ÿ]{2,}(?:\s+[A-Za-zÀ-ÖØ-öø-ÿ]{2,}){2,}"
+)
 _HALFWIDTH_KATA_RE = re.compile(r"[\uff61-\uff9f]")
 # Collapse-only marks for incident soup (not fullwidth JP punctuation （）『』).
 # Former _WEIRD_MARK_RE (U+FF00 block) mis-counted fullwidth parens as weird.
@@ -304,11 +307,22 @@ def _has_dominant_unbounded_latin_prose(text: str) -> bool:
     tokens = _LATIN_RUN_RE.findall(surface)
     if len(tokens) < 3:
         return False
+    # Japanese can list proper names; three space-joined words still carry
+    # the existing prose signal, even when every word uses Title Case.
+    allow_title_case_names = (
+        bool(_KANA_RE.search(surface)) and not _MULTIWORD_LATIN_3_RE.search(surface)
+    )
     ordinary_tokens = [
         token
         for token in tokens
         if token.lower() not in _SAFE_LATIN_TOKENS
         and not (token.isupper() and 2 <= len(token) <= 8)
+        and not (
+            allow_title_case_names
+            and 2 <= len(token) <= 24
+            and token[0].isupper()
+            and token[1:].islower()
+        )
     ]
     if len(ordinary_tokens) < 2:
         return False

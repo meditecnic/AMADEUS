@@ -147,11 +147,22 @@ def _has_dominant_unbounded_latin_prose(text: str) -> bool:
     tokens = _LATIN_RUN_RE.findall(surface)
     if len(tokens) < 3:
         return False
+    # Japanese can list proper names; three space-joined words still carry
+    # the existing prose signal, even when every word uses Title Case.
+    allow_title_case_names = (
+        bool(_KANA_RE.search(surface)) and not _MULTIWORD_LATIN_3_RE.search(surface)
+    )
     ordinary = [
         token
         for token in tokens
         if token.lower() not in _SAFE_LATIN_TOKENS
         and not (token.isupper() and 2 <= len(token) <= 8)
+        and not (
+            allow_title_case_names
+            and 2 <= len(token) <= 24
+            and token[0].isupper()
+            and token[1:].islower()
+        )
     ]
     if len(ordinary) < 2:
         return False
