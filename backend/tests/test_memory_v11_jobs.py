@@ -4678,3 +4678,32 @@ def test_rework_nested_cues_do_not_hide_valid_secret(text, category, fragment):
     masked, blocked = _jobs().redact_user_text(text)
     assert fragment not in masked
     assert not blocked
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure,expected_code", [
+    ("value_error", "provider_unavailable"),
+    ("json_error", "provider_unavailable"),
+    ("runtime_error", "provider_unavailable"),
+    ("non_object", "invalid_json"),
+])
+async def test_rework_completion_failures_keep_legacy_retry_classification(isolated_store, failure, expected_code):
+    jobs = _jobs()
+    session = "rework-completion-" + failure
+    job, _, _ = await _enqueue_user_job(session_id=session, user_text="喜欢猫")
+    async def complete(**kwargs):
+        if failure == "value_error":
+            raise ValueError("private completion detail")
+        if failure == "json_error":
+            raise json.JSONDecodeError("private completion detail", "", 0)
+        if failure == "runtime_error":
+            raise RuntimeError("private completion detail")
+        return ["not an object"]
+    result = await jobs.process_memory_job(job_id=job["job_id"], lease_owner="retry-classification", memory_completion=complete)
+    assert result["state"] == "pending"
+    assert result["last_error_code"] == expected_code
+    assert result["retryable"] is True
+    assert result["attempt_count"] == 1
+    assert result["next_attempt_at"] is not None
+    assert await _receipt_rows(session) == []
+    await _session_zero_semantic_rows(session)

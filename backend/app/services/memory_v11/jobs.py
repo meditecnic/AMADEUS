@@ -956,12 +956,6 @@ async def process_memory_job(
                 candidates=candidates,
                 unresolved_observations=unresolved_observations,
             )
-        except ValueError:
-            return await _transition_owned(
-                job_id=job_id, worldline=wl, lease_owner=lease_owner,
-                state="failed_or_retry", error_code=MemoryJobErrorCode.INVALID_JSON.value,
-                permanent=True, attempt_count=int(job["attempt_count"] or 0),
-            )
         except Exception:
             return await _transition_owned(
                 job_id=job_id,
@@ -979,7 +973,7 @@ async def process_memory_job(
                 lease_owner=lease_owner,
                 state="failed_or_retry",
                 error_code=MemoryJobErrorCode.INVALID_JSON.value,
-                permanent=True,
+                permanent=False,
                 attempt_count=int(job["attempt_count"] or 0),
             )
 
