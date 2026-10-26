@@ -715,6 +715,10 @@ async def get_clean_text_stream(
         published_parts: list[str] = []
         published_emotions: list[str] = []
         rejected_language_parts: list[str] = []
+        language_tail_parts: list[str] = []
+        post_language_segments: list[Segment] = []
+        language_span_closed = False
+        rewrite_full_tail = False
         publication_rejected = False
         publication_rejection_reason: str | None = None
         merged_tool_calls = {}
@@ -760,62 +764,54 @@ async def get_clean_text_stream(
                 flush=True,
             )
 
-        async def publish_completed_segments(delta: str, emotion: str) -> None:
-            """Publish complete segments with fail-open UI publication.
-
-            LANG-GATE-PUBLICATION-RETIRE-04: neutral data and Japanese (incl.
-            proper nouns) publish. Only high-confidence foreign *prose* queues
-            the isolated LanguageRenderer. Collapse uses a separate terminal.
-            """
-            from app.domain.language_publication import is_neutral_data_fragment
+        async def _check_publication_segment(segment: Segment, *, finish: bool = False) -> None:
+            """Keep one foreign span isolated while validating the entire tail."""
+            from app.domain.language_publication import _KANA_RE, is_neutral_data_fragment
 
             nonlocal publication_rejected, publication_rejection_reason
+            nonlocal language_span_closed, rewrite_full_tail
+            if publication_rejected and publication_rejection_reason != "language":
+                return
+            if language_tail_parts:
+                language_tail_parts.append(segment.text)
+            if is_ignorable_non_speech_segment(segment.text):
+                if language_tail_parts and not language_span_closed:
+                    rejected_language_parts.append(segment.text)
+                return
+            if contains_leak(segment.text):
+                publication_rejected = True
+                publication_rejection_reason = "leak"
+                return
+            neutral = is_neutral_data_fragment(segment.text)
+            if not neutral and not _is_publishable_japanese(segment.text):
+                if language_span_closed:
+                    # A second foreign span consumes the entire original tail,
+                    # including the Japanese cached between the two spans.
+                    rewrite_full_tail = True
+                if not language_tail_parts:
+                    language_tail_parts.append(segment.text)
+                _mark_unpublishable(segment.text, finish=finish)
+                return
+            if language_tail_parts:
+                if not neutral and _KANA_RE.search(segment.text):
+                    language_span_closed = True
+                if language_span_closed:
+                    post_language_segments.append(segment)
+                else:
+                    # Neutral data, ignored fragments and kana-less short lines
+                    # belong to the first foreign span until Japanese resumes.
+                    rejected_language_parts.append(segment.text)
+                return
+            await _accept_publishable_segment(segment.text, segment.emotion)
+
+        async def publish_completed_segments(delta: str, emotion: str) -> None:
             for segment in publication_segmenter.feed(delta, emotion=emotion):
-                if publication_rejected:
-                    if publication_rejection_reason == "language":
-                        rejected_language_parts.append(segment.text)
-                    continue
-                if is_ignorable_non_speech_segment(segment.text):
-                    continue
-                if contains_leak(segment.text):
-                    publication_rejected = True
-                    publication_rejection_reason = "leak"
-                    print(
-                        f"[Guard] hard-reject leak segment len={len(segment.text)}",
-                        flush=True,
-                    )
-                    continue
-                if is_neutral_data_fragment(segment.text):
-                    await _accept_publishable_segment(segment.text, segment.emotion)
-                    continue
-                if not _is_publishable_japanese(segment.text):
-                    _mark_unpublishable(segment.text)
-                    continue
-                await _accept_publishable_segment(segment.text, segment.emotion)
+                await _check_publication_segment(segment)
 
         async def finish_publication() -> None:
-            from app.domain.language_publication import is_neutral_data_fragment
-
-            nonlocal publication_rejected, publication_rejection_reason
             for segment in publication_segmenter.finish():
-                if publication_rejected:
-                    if publication_rejection_reason == "language":
-                        rejected_language_parts.append(segment.text)
-                    continue
-                if is_ignorable_non_speech_segment(segment.text):
-                    continue
-                if contains_leak(segment.text):
-                    publication_rejected = True
-                    publication_rejection_reason = "leak"
-                    continue
-                if is_neutral_data_fragment(segment.text):
-                    await _accept_publishable_segment(segment.text, segment.emotion)
-                    continue
-                if not _is_publishable_japanese(segment.text):
-                    _mark_unpublishable(segment.text, finish=True)
-                    continue
-                await _accept_publishable_segment(segment.text, segment.emotion)
-        
+                await _check_publication_segment(segment, finish=True)
+
         eff_system_prompt = session.system_prompt or ""
         # Non-Japanese user turns: improve the happy path before the isolated
         # renderer is ever needed (search may already carry the requirement).
@@ -1007,7 +1003,9 @@ async def get_clean_text_stream(
                 if attempt < MAX_ATTEMPTS - 1:
                     continue
             elif rejection_reason == "language":
-                foreign_tail = "".join(rejected_language_parts).strip()
+                foreign_tail = "".join(
+                    language_tail_parts if rewrite_full_tail else rejected_language_parts
+                ).strip()
                 if not foreign_tail:
                     foreign_tail = text_buffer.strip()
                 rendered = await _render_foreign_speech_to_japanese(
@@ -1027,7 +1025,15 @@ async def get_clean_text_stream(
                         callback_result = on_text_delta(rendered, last_emotion)
                         if asyncio.iscoroutine(callback_result):
                             await callback_result
-                    safe_text = "".join(published_parts) + rendered
+                    suffix = [] if rewrite_full_tail else post_language_segments
+                    if on_text_delta is not None:
+                        for segment in suffix:
+                            callback_result = on_text_delta(segment.text, segment.emotion)
+                            if asyncio.iscoroutine(callback_result):
+                                await callback_result
+                    safe_text = "".join(published_parts) + rendered + "".join(
+                        segment.text for segment in suffix
+                    )
                     print(
                         f"[LanguageRenderer] published source_len={len(foreign_tail)} "
                         f"rendered_len={len(rendered)} prefix={len(published_parts)}",
@@ -1612,6 +1618,8 @@ async def processor_loop(
             async def synthesize_segment(text: str, emotion: str) -> bytes:
                 from app.domain.language_publication import is_neutral_data_fragment
 
+                if should_hard_reject_tts_source(text):
+                    raise TTSServiceError(AudioErrorCode.DISPLAY_ONLY)
                 if not session.enable_tts:
                     raise TTSServiceError(AudioErrorCode.USER_DISABLED)
                 prepared = prepare_tts_text(text)
@@ -1661,7 +1669,6 @@ async def processor_loop(
                 await segment_pipeline.stop_voice()
             streaming_splitter = IncrementalJapaneseSegmenter()
 
-            source_collapse = {"active": False}
             # Defer neutral data labels until the next Japanese speech unit so
             # GPT-SoVITS never receives a bare non-Japanese fragment alone.
             pending_neutral_tts: list[str] = []
@@ -1678,15 +1685,11 @@ async def processor_loop(
 
                 Neutral data is deferred and merged into the next Japanese unit
                 when possible; standalone labels submit as DISPLAY_ONLY (ready
-                without audio_error toast). Collapse hard-stops; leaks sanitize.
+                without audio_error toast). TTS rejects stay visible; leaks sanitize.
                 """
                 from app.domain.language_publication import is_neutral_data_fragment
 
-                if source_collapse["active"]:
-                    return
                 for segment in streaming_splitter.feed(delta, emotion=emotion):
-                    if source_collapse["active"]:
-                        return
                     delivered = segment
                     if is_ignorable_non_speech_segment(segment.text):
                         continue
@@ -1698,14 +1701,14 @@ async def processor_loop(
                         )
                         pending_neutral_tts.clear()
                     elif should_hard_reject_tts_source(segment.text):
-                        source_collapse["active"] = True
-                        pending_neutral_tts.clear()
-                        print(
-                            f"[SourceGate] rejected segment before pipeline "
-                            f"(len={len(segment.text)})",
-                            flush=True,
-                        )
-                        return
+                        # Publication already accepted these words. Keep this
+                        # unit visible and let synthesize_segment skip its audio.
+                        while pending_neutral_tts:
+                            label = Segment(
+                                len(streamed_segments), pending_neutral_tts.pop(0), emotion
+                            )
+                            streamed_segments.append(label)
+                            segment_pipeline.submit(label)
                     else:
                         prepared = prepare_tts_text(segment.text)
                         if prepared.error is not None:
@@ -1982,64 +1985,61 @@ async def processor_loop(
         if session.protocol_version >= 2 and segment_pipeline is not None:
             from app.domain.language_publication import is_neutral_data_fragment
 
-            if not source_collapse.get("active"):
-                for segment in streaming_splitter.finish():
-                    delivered = segment
-                    if is_ignorable_non_speech_segment(segment.text):
-                        continue
-                    if contains_leak(segment.text):
-                        delivered = Segment(
-                            segment.id,
-                            "はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。",
-                            "tsundere",
-                        )
-                        pending_neutral_tts.clear()
-                    elif should_hard_reject_tts_source(segment.text):
-                        source_collapse["active"] = True
-                        pending_neutral_tts.clear()
-                        print(
-                            f"[SourceGate] rejected finish segment before pipeline "
-                            f"(len={len(segment.text)})",
-                            flush=True,
-                        )
-                        break
-                    else:
-                        prepared = prepare_tts_text(segment.text)
-                        if prepared.error is not None:
-                            if prepared.error in {
-                                AudioErrorCode.EMPTY_TEXT,
-                                AudioErrorCode.ACTION_ONLY,
-                            }:
-                                continue
-                            if (
-                                prepared.error is AudioErrorCode.INVALID_LANGUAGE
-                                and is_neutral_data_fragment(segment.text)
-                            ):
-                                pending_neutral_tts.append(segment.text)
-                                continue
-                            if (
-                                prepared.error is AudioErrorCode.INVALID_LANGUAGE
-                                and not _is_publishable_japanese(segment.text)
-                            ):
-                                continue
-                        merged = _flush_neutral_prefix(delivered.text)
-                        if merged != delivered.text:
-                            delivered = Segment(
-                                delivered.id, merged, delivered.emotion
-                            )
+            for segment in streaming_splitter.finish():
+                delivered = segment
+                if is_ignorable_non_speech_segment(segment.text):
+                    continue
+                if contains_leak(segment.text):
                     delivered = Segment(
-                        len(streamed_segments),
-                        delivered.text,
-                        delivered.emotion,
+                        segment.id,
+                        "はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。",
+                        "tsundere",
                     )
-                    streamed_segments.append(delivered)
-                    segment_pipeline.submit(delivered)
-                # Trailing labels with no following Japanese: UI-only, silent audio.
-                while pending_neutral_tts and not source_collapse.get("active"):
-                    label = pending_neutral_tts.pop(0)
-                    tail = Segment(len(streamed_segments), label, final_emotion)
-                    streamed_segments.append(tail)
-                    segment_pipeline.submit(tail)
+                    pending_neutral_tts.clear()
+                elif should_hard_reject_tts_source(segment.text):
+                    while pending_neutral_tts:
+                        label = Segment(
+                            len(streamed_segments), pending_neutral_tts.pop(0), final_emotion
+                        )
+                        streamed_segments.append(label)
+                        segment_pipeline.submit(label)
+                else:
+                    prepared = prepare_tts_text(segment.text)
+                    if prepared.error is not None:
+                        if prepared.error in {
+                            AudioErrorCode.EMPTY_TEXT,
+                            AudioErrorCode.ACTION_ONLY,
+                        }:
+                            continue
+                        if (
+                            prepared.error is AudioErrorCode.INVALID_LANGUAGE
+                            and is_neutral_data_fragment(segment.text)
+                        ):
+                            pending_neutral_tts.append(segment.text)
+                            continue
+                        if (
+                            prepared.error is AudioErrorCode.INVALID_LANGUAGE
+                            and not _is_publishable_japanese(segment.text)
+                        ):
+                            continue
+                    merged = _flush_neutral_prefix(delivered.text)
+                    if merged != delivered.text:
+                        delivered = Segment(
+                            delivered.id, merged, delivered.emotion
+                        )
+                delivered = Segment(
+                    len(streamed_segments),
+                    delivered.text,
+                    delivered.emotion,
+                )
+                streamed_segments.append(delivered)
+                segment_pipeline.submit(delivered)
+            # Trailing labels with no following Japanese: UI-only, silent audio.
+            while pending_neutral_tts:
+                label = pending_neutral_tts.pop(0)
+                tail = Segment(len(streamed_segments), label, final_emotion)
+                streamed_segments.append(tail)
+                segment_pipeline.submit(tail)
             # Never leave the user with only an empty assistant shell (e.g. Chinese
             # body rejected without a published fallback, or empty model stream).
             # Never seed recovery from unvalidated final_text (may contain garbage).
