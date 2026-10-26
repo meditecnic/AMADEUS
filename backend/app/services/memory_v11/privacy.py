@@ -8,6 +8,7 @@ for in-memory masking in jobs.py; never persist or log those offsets or values.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from datetime import date
 
 PASSWORD = "password"
@@ -18,6 +19,12 @@ GOVERNMENT_ID = "government_id"
 PRECISE_HOME_ADDRESS = "precise_home_address"
 
 _ALNUM = r"[A-Za-z0-9]"
+_CREDENTIAL_TRAILING_PUNCTUATION = "，,。.；;！!？?"
+_REDACTION_VALUE_RE = re.compile(
+    r"\[REDACTED:(?:password|api_secret|otp|payment_card|government_id|precise_home_address)\]",
+    re.IGNORECASE,
+)
+_REDACTION_TOKEN_RE = re.compile(r"\[REDACTED(?::[a-z_]+)?\]", re.IGNORECASE)
 
 # ---------------------------------------------------------------------------
 # password / authentication secret: strong presentation/ownership tier and a
@@ -126,7 +133,12 @@ _CLAUSE_BOUNDARY_RE = re.compile(r"[，,。.；;！!？?\n]")
 
 def _concrete_value_ok(value: str, *, min_len: int = 4) -> bool:
     v = value.strip()
-    return not contains_redaction_marker(v) and len(v) >= min_len and re.search(_ALNUM, v) is not None
+    # Ignore only a complete generated placeholder (plus sentence punctuation).
+    # Validate all other values as originally written: stripping punctuation
+    # before validation would weaken the shared migration gate for e.g. abc!.
+    if _REDACTION_VALUE_RE.fullmatch(v.rstrip(_CREDENTIAL_TRAILING_PUNCTUATION)):
+        return False
+    return len(v) >= min_len and re.search(_ALNUM, v) is not None
 
 
 def _secret_shaped(value: str) -> bool:
@@ -154,24 +166,68 @@ def _clause_before(text: str, pos: int) -> str:
     return head[matches[-1].end() :]
 
 
+def _iter_matches(pattern: re.Pattern[str], text: str) -> Iterator[re.Match[str]]:
+    """Include cues inside an earlier value, including an invalid first value."""
+    cursor = 0
+    while match := pattern.search(text, cursor):
+        yield match
+        cursor = match.start() + 1
+
+
+def _credential_matches(text: str, category: str | None = None) -> list[tuple[int, int, str]]:
+    """All credential occurrences, validating raw values and masking whole tokens."""
+    spans: list[tuple[int, int, str]] = []
+    groups = (
+        (_PASSWORD_STRONG_RE, PASSWORD, _concrete_value_ok),
+        (_PASSWORD_COPULA_RE, PASSWORD, lambda v: _concrete_value_ok(v) and _secret_shaped(v)),
+        (_API_RE[:-1], API_SECRET, lambda v: _concrete_value_ok(v, min_len=8)),
+    )
+    for patterns, cls, validator in groups:
+        if category is not None and cls != category:
+            continue
+        for pattern in patterns:
+            for match in _iter_matches(pattern, text):
+                start, end = match.span(1)
+                value = text[start:end]
+                # A user-typed marker followed by another credential-shaped token
+                # cannot hide that token behind the placeholder exemption.
+                if _REDACTION_TOKEN_RE.fullmatch(value):
+                    cursor = end
+                    while following := re.match(r"\s+(\S+)", text[cursor:]):
+                        token = following.group(1)
+                        if _REDACTION_TOKEN_RE.fullmatch(token):
+                            cursor += following.end(1)
+                            continue
+                        token_start = cursor + following.start(1)
+                        if any(pattern.match(text, token_start)
+                               for cue_patterns, _, _ in groups for pattern in cue_patterns):
+                            break
+                        # Preserve each original credential tier: strong password
+                        # cues and API cues also accept alphabetic-only values.
+                        if validator(token):
+                            end = cursor + following.end(1)
+                            value = text[start:end]
+                        break
+                if validator(value):
+                    trimmed = value.rstrip(_CREDENTIAL_TRAILING_PUNCTUATION)
+                    spans.append((start, start + len(trimmed), cls))
+    if category in (None, API_SECRET):
+        for match in _iter_matches(_API_RE[-1], text):
+            # Known bare key shapes can be followed by punctuation inside the
+            # same credential value. Keep that suffix inside the masked span.
+            tail = re.match(r"\S*", text[match.end():])
+            end = match.end() + tail.end()
+            value = text[match.start():end].rstrip(_CREDENTIAL_TRAILING_PUNCTUATION)
+            spans.append((match.start(), match.start() + len(value), API_SECRET))
+    return spans
+
+
 def _has_password(text: str) -> bool:
-    for pattern in _PASSWORD_STRONG_RE:
-        m = pattern.search(text)
-        if m and _concrete_value_ok(m.group(1)):
-            return True
-    for pattern in _PASSWORD_COPULA_RE:
-        m = pattern.search(text)
-        if m and _concrete_value_ok(m.group(1)) and _secret_shaped(m.group(1)):
-            return True
-    return False
+    return bool(_credential_matches(text, PASSWORD))
 
 
 def _has_api_secret(text: str) -> bool:
-    for pattern in _API_RE[:-1]:
-        m = pattern.search(text)
-        if m and _concrete_value_ok(m.group(1), min_len=8):
-            return True
-    return _API_RE[-1].search(text) is not None
+    return bool(_credential_matches(text, API_SECRET))
 
 
 def _otp_value_ok(value: str) -> bool:
@@ -184,9 +240,9 @@ def _otp_value_ok(value: str) -> bool:
 
 def _has_otp(text: str) -> bool:
     for pattern in _OTP_RE:
-        m = pattern.search(text)
-        if m and _otp_value_ok(m.group(1)):
-            return True
+        for m in _iter_matches(pattern, text):
+            if _otp_value_ok(m.group(1)):
+                return True
     return False
 
 
@@ -241,9 +297,9 @@ def _has_government_id(text: str) -> bool:
             return True
     if _GOV_LABELED_CN_ID.search(text) or _GOV_LABELED_CN_PASSPORT.search(text):
         return True
-    m = _GOV_LABELED_EN.search(text)
-    if m is not None and _identifier_shaped(m.group(1)):
-        return True
+    for m in _iter_matches(_GOV_LABELED_EN, text):
+        if _identifier_shaped(m.group(1)):
+            return True
     return False
 
 
@@ -290,31 +346,26 @@ def contains_redaction_marker(value: str) -> bool:
     return _REDACTION_MARKER_RE.search(value or "") is not None
 
 
-def sensitive_spans(text: str) -> list[tuple[int, int, str]]:
+def find_memory_sensitive_matches(text: str) -> list[tuple[int, int, str]]:
     """Internal, ephemeral (start, end, category); never return raw values.
 
-    Use the classifier's regexes and validators. Credentials end at a clause
-    boundary so adjacent normal facts survive. Addresses mask the residence
-    clause because the precision match alone may omit street names/unit data.
+    Enumerate every match for coverage verification. Credential values retain
+    interior punctuation; only trailing sentence punctuation is excluded.
+    Addresses still mask the residence clause, including street/unit data.
     """
-    spans: list[tuple[int, int, str]] = []
+    spans = _credential_matches(text)
     def add_values(patterns, category, validator):
         for pattern in patterns:
-            for match in pattern.finditer(text):
+            for match in _iter_matches(pattern, text):
                 start, end = match.span(1)
                 boundary = _CLAUSE_BOUNDARY_RE.search(text, start, end)
                 if boundary:
                     end = boundary.start()
                 if validator(text[start:end]):
                     spans.append((start, end, category))
-    add_values(_PASSWORD_STRONG_RE, PASSWORD, _concrete_value_ok)
-    add_values(_PASSWORD_COPULA_RE, PASSWORD, lambda v: _concrete_value_ok(v) and _secret_shaped(v))
-    add_values(_API_RE[:-1], API_SECRET, lambda v: _concrete_value_ok(v, min_len=8))
-    for match in _API_RE[-1].finditer(text):
-        spans.append((*match.span(), API_SECRET))
     add_values(_OTP_RE, OTP, _otp_value_ok)
     for pattern in (_PAN_LABELED_CN, _PAN_LABELED_EN):
-        for match in pattern.finditer(text):
+        for match in _iter_matches(pattern, text):
             spans.append((*match.span(), PAYMENT_CARD))
     for match in _PAN_RUN_RE.finditer(text):
         if _luhn_valid(re.sub(r"[\s-]", "", match.group())):
@@ -333,3 +384,8 @@ def sensitive_spans(text: str) -> list[tuple[int, int, str]]:
                 boundary = _CLAUSE_BOUNDARY_RE.search(text, match.end())
                 spans.append((start, boundary.start() if boundary else len(text), PRECISE_HOME_ADDRESS))
     return sorted(spans)
+
+
+def sensitive_spans(text: str) -> list[tuple[int, int, str]]:
+    """Build the replacement plan; jobs verifies it against all original matches."""
+    return find_memory_sensitive_matches(text)

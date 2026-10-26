@@ -22,7 +22,11 @@ from app.services.memory_v11.contracts import (
     MemoryJobErrorCode,
     PIPELINE_VERSION,
 )
-from app.services.memory_v11.privacy import classify_memory_sensitive_text, sensitive_spans
+from app.services.memory_v11.privacy import (
+    classify_memory_sensitive_text,
+    find_memory_sensitive_matches,
+    sensitive_spans,
+)
 
 MemoryCompletionFn = Callable[..., Awaitable[Mapping[str, Any]]]
 
@@ -82,7 +86,8 @@ def redact_user_text(text: str) -> tuple[str, bool]:
         return "", False
     try:
         classes = classify_memory_sensitive_text(text)
-        spans = sensitive_spans(text)
+        matches = find_memory_sensitive_matches(text)
+        spans = sorted(sensitive_spans(text))
         if classes and not classes.issubset({category for _, _, category in spans}):
             return "[REDACTED]", True
         merged: list[tuple[int, int, str]] = []
@@ -94,10 +99,13 @@ def redact_user_text(text: str) -> tuple[str, bool]:
                 merged[-1] = (left, max(right, end), previous_class)
             else:
                 merged.append((start, end, category))
+        if any(not any(left <= start and end <= right for left, right, _ in merged)
+               for start, end, _ in matches):
+            return "[REDACTED]", True
         redacted = text
         for start, end, category in reversed(merged):
             redacted = redacted[:start] + f"[REDACTED:{category}]" + redacted[end:]
-        if classify_memory_sensitive_text(redacted):
+        if classify_memory_sensitive_text(redacted) or find_memory_sensitive_matches(redacted):
             return "[REDACTED]", True
         return redacted, False
     except Exception:
