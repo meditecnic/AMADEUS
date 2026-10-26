@@ -1249,10 +1249,44 @@ def recall_tool_call(user_text: str, call_id: str = "call-recall-offline") -> di
     }
 
 
-def has_core_facts_heading(system_prompt: str) -> bool:
-    """Standalone CORE FACTS section heading (legacy/shadow prompt shape only)."""
+def _own_prompt_body(system_prompt: str) -> str:
+    """Exclude the compiler's identity section, including embedded old prompts.
+
+    prompt_compiler always puts the canonical persona after identity. An old
+    compiled prompt can itself contain that heading, so the final persona
+    starts this turn's body. A truncated identity-only prompt has no body.
+    Small standalone section fixtures have no identity and remain supported.
+    """
     text = str(system_prompt or "")
-    return text.startswith("CORE FACTS\n") or "\nCORE FACTS\n" in text
+    if not text.startswith("IDENTITY AND SECURITY\n"):
+        return text
+    marker = "\n\nPERSONA BIBLE v1 (canonical runtime persona)\n"
+    start = text.rfind(marker)
+    return text[start + 2:] if start >= 0 else ""
+
+
+def _own_prompt_section(system_prompt: str, heading: str) -> str | None:
+    """Return a section of this turn, or None when its heading is absent."""
+    for section in _own_prompt_body(system_prompt).split("\n\n"):
+        title, _, content = section.partition("\n")
+        if title == heading:
+            return content
+    return None
+
+
+def _current_state_tail(system_prompt: str) -> str:
+    """Start at this turn's state; never fall back to the whole prompt."""
+    text = _own_prompt_body(system_prompt)
+    marker = "CURRENT STATE\n"
+    if text.startswith(marker):
+        return text[len(marker):]
+    before, found, after = text.partition("\n\n" + marker)
+    return after if found else ""
+
+
+def has_core_facts_heading(system_prompt: str) -> bool:
+    """Whether this turn has its own standalone CORE FACTS heading."""
+    return _own_prompt_section(system_prompt, "CORE FACTS") is not None
 
 
 def stable_fact_records_from_messages(messages: Any) -> str:
@@ -1313,28 +1347,13 @@ def _chat_captures(path: Path) -> list[dict[str, Any]]:
 
 
 def resident_core_fact_lines(system_prompt: str) -> list[str]:
-    """Fact lines of the request's own v11 resident CORE FACTS section.
-
-    Dispatch 55: v11 messages[0] carries a resident CORE FACTS section. The
-    request's own section is the last heading (an earlier prompt embedded
-    in IDENTITY, if any, comes first).
-    """
-    text = str(system_prompt or "")
-    marker = "CORE FACTS\n"
-    start = text.rfind("\n\n" + marker)
-    if start >= 0:
-        start += 2
-    elif text.startswith(marker):
-        start = 0
-    else:
-        return []
-    section = text[start + len(marker):].split("\n\n", 1)[0]
+    """Fact lines of this request's own resident CORE FACTS section."""
+    section = _own_prompt_section(system_prompt, "CORE FACTS") or ""
     return [line[2:] for line in section.split("\n") if line.startswith("- ")]
 
 
 def _supplement_records(system_prompt: str) -> list[str]:
-    text = str(system_prompt or "")
-    tail = text[text.rfind("\n\nCURRENT STATE\n") + 1:]
+    tail = _current_state_tail(system_prompt)
     records: list[str] = []
     for chunk in tail.split(MEMORY_CANDIDATE_DATA_ANCHOR + "\n")[1:]:
         try:
@@ -1361,7 +1380,7 @@ def _stable_fact_block(path: Path) -> str:
         raise AssertionError(f"no chat captures in {path}")
     for index, capture in enumerate(captures):
         prompt = _system_prompt_of(capture)
-        if "CORE FACTS\n(none)" in prompt or (
+        if (_own_prompt_section(prompt, "CORE FACTS") or "").startswith("(none)") or (
             has_core_facts_heading(prompt) and not resident_core_fact_lines(prompt)
         ):
             _fail(
