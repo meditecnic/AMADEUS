@@ -14,8 +14,8 @@
 ## What it does
 
 - **Japanese conversation with paired Chinese subtitles.** Replies stream sentence by sentence; each Japanese sentence is matched with its translation, and missing translations are marked instead of silently dropped.
-- **Long-term memory that stays local.** Facts from your conversations are stored in SQLite with vector search (sqlite-vec + `multilingual-e5-small`). The model decides when it needs to remember something and calls a `recall_memory` tool; the server scopes the search and returns bounded candidates. You can browse what she remembers and make her forget a conversation.
-- **Two isolated worldlines.** *STEINS;GATE* and *β* each have their own persona, conversations, memory and visual theme; no data is shared between them.
+- **Long-term memory that stays local.** Facts and experiences from your conversations are stored in SQLite (with `multilingual-e5-small` embeddings indexed in `sqlite-vec` on write). In the default legacy mode, core facts are injected into the prompt every turn and past episodes are retrieved by SQLite full-text search (FTS) when compiling the prompt; vector search and the `recall_memory` tool (DeepSeek only) belong to the experimental `AMADEUS_MEMORY_MODE=v11` mode and are not used by default. You can list and delete stored facts in the memory archive, optionally erase a conversation's exclusive long-term memories when clearing a chat, and view the star map (preview-only in the default mode).
+- **Two isolated worldlines.** *STEINS;GATE* and *β* each have their own persona, conversations, memory and visual theme. Conversations and memories are stored separately per worldline, except for Self-mode facts explicitly promoted to the shared user profile (`/api/memory/facts/{id}/promote`, stored in `control.sqlite3`), which both worldlines read in Self mode (Okabe mode never reads or writes shared facts).
 - **Worldline instruments and transitions (M3).** The header, system-menu dial and WebGL2 transition share the same cathode digits. Open **系统 → 世界线**: the dial shows the current worldline, while the diagram previews the selected target; use the shift button to begin. Softer handoffs preserve conversations and drafts, and click/Esc skips the presentation while still waiting for target confirmation.
 - **Bring your own model.** DeepSeek, Zhipu GLM, or any OpenAI-compatible endpoint, including local models. Optional web search through Tavily or Firecrawl.
 - **Optional voice.** Text-to-speech through a local GPT-SoVITS server; speech recognition with SenseVoice via sherpa-onnx (backend only for now, no microphone UI yet).
@@ -39,19 +39,19 @@ flowchart LR
   Sovits["GPT-SoVITS (optional)"]
   UI <--> WS
   WS --> Persona --> LLM
-  LLM -- "recall_memory tool call" --> Mem
+  Mem -- "core facts + FTS episodes" --> Persona
   WS --> Tr --> LLM
   WS --> TTS --> Sovits
 ```
 
-One chat turn: the UI sends the user's message over a WebSocket; the backend compiles the persona prompt for the active worldline and streams the model's Japanese reply. If the model calls `recall_memory`, the backend searches only that user's memory for the current worldline and identity, then makes a second model call with tools disabled. Each sentence is published as soon as it is complete; its subtitle and (optional) speech follow on their own ordered tracks, so a slow translation never holds back the text and may arrive after the turn has finished.
+One chat turn: the UI sends the user's message over a WebSocket; in the default memory mode, the backend loads the user's core facts and full-text-matched past episodes for the active worldline and identity, compiles them into the persona prompt, and streams the model's Japanese reply in a single model call (on-demand `recall_memory` tool calls with a second model pass are used only when experimental `AMADEUS_MEMORY_MODE=v11` is enabled with DeepSeek). Each sentence is published as soon as it is complete; its subtitle and (optional) speech follow on their own ordered tracks, so a slow translation never holds back the text and may arrive after the turn has finished.
 
 ## Engineering notes
 
 - **Measured recall behaviour.** In a controlled end-to-end run against a real model (`deepseek-flash`), 12 of 12 prompts that needed a stored fact used it, and 4 of 4 control prompts did not call the tool. That result covers that question set and environment only.
 - **Windows installer.** The Tauri shell bundles the backend (PyInstaller, with the embedding model cache) into an NSIS installer, starts it on launch, refuses to start if port 8000 is taken, and shuts it down cleanly on exit. It passed a 10-item acceptance checklist on a clean English Windows Server 2022 VM: install, WebView2 bootstrap, real chat, memory write / recall / forget, restart persistence, and an uninstall that keeps user data. It is not published yet, and the packaging scripts are not part of this repository.
 - **Historical checks (2026-10-18).** At that point the frontend suite contained 550 cases across 48 Vitest files, including 2 known visual assertions marked as expected failures, and the production build passed. Two earlier full Vitest runs each reported 547 passes + 2 expected failures + 1 timeout in the existing `dragStress.test.tsx` (5-second limit). A subsequent full run with `npx vitest run --maxWorkers=2` passed all 48 files: 548 passes + 2 expected failures, with all tests retained and timeouts unchanged. M1 browser user testing was still pending at that checkpoint; those checks alone did not establish milestone acceptance. The backend has its own pytest suite in `backend/tests/`.
-- **M3 closeout (2026-10-19).** The cloud delivery reported a passing build and 615 passes + 2 expected failures, with unit and proportionate browser checks. The developer accepted the actual Edge preview at `aecb1f435a7486efdf719c22a4aff7bfc1488b00`; [PR #3](https://github.com/meditecnics/AMADEUS/pull/3) merged it as `891db6cf8ae97a222fc869e3035734d6008e1759`. These are prior delivery and host-acceptance results, not new test runs for this documentation update or a native GPU latency guarantee.
+- **M3 closeout (2026-10-19).** The cloud delivery reported a passing build and 615 passes + 2 expected failures, with unit and proportionate browser checks. The developer accepted the actual Edge preview at `3723c6a6d445df102e9525bc6fad82c6fa0164fe`, merged in [`f0c18797f3ce8c178595e72f52671561f9378c23`](https://github.com/meditecnic/AMADEUS/commit/f0c18797f3ce8c178595e72f52671561f9378c23). These are prior delivery and host-acceptance results, not new test runs for this documentation update or a native GPU latency guarantee.
 - **Transition startup.** The MIT-vendored [runtime](desktop/src/worldline-engine/README.vendor.md) prepares its GPU stage asynchronously ahead of a shift. Login preloads workstation fonts, remembers the faces used after entry, and uses that record on the next refresh. Existing audio initialization happens on login interaction before entry; M3 adds no audio features or runtime dependencies. See the [desktop notes](desktop/README.md) for caption and skip-hint behavior.
 
 ## How it was built
@@ -70,7 +70,7 @@ Built and maintained by one developer, who owns the product direction, architect
 Choose between the default local mock for frontend work and a real backend for model integration. Both use the browser at http://localhost:1420.
 
 ```powershell
-git clone https://github.com/meditecnics/AMADEUS.git
+git clone https://github.com/meditecnic/AMADEUS.git
 cd AMADEUS
 ```
 
@@ -98,16 +98,22 @@ See the [scenario catalog and switching guide](desktop/src/dev-mock/README.md), 
 
 For real conversations, also install **Python 3.11** and use an API key for a model provider or a local OpenAI-compatible model. Stop the mock dev server first.
 
-Terminal 1, from the repository root (PowerShell):
+On Windows, install prerequisites before creating the virtual environment:
+
+1. **Microsoft Visual C++ 2015–2022 Redistributable (x64)** ([download page](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist), direct [`vc_redist.x64.exe`](https://aka.ms/vs/17/release/vc_redist.x64.exe)). On a clean system without `vcruntime140_1.dll`, `pip install` and backend startup still succeed, and the failure only surfaces later during the first memory write when importing `torch` raises `WinError 1114` (`c10.dll` initialization failed).
+2. **Python 3.11** ([Python 3.11.9 release page](https://www.python.org/downloads/release/python-3119/), 64-bit Windows installer [`python-3.11.9-amd64.exe`](https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe) — 3.11.9 is the last 3.11 release on python.org that includes Windows binary installers).
+
+Terminal 1, from the repository root (PowerShell — use `py -3.11` so another Python on `PATH` is not picked up silently):
 
 ```powershell
 cd backend
-python -m venv .venv
+py -3.11 --version
+py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Terminal 2, from the repository root (PowerShell):
+Terminal 2, from the repository root (PowerShell — skip `npm ci` if you already ran it in Local mock):
 
 ```powershell
 cd desktop
@@ -116,9 +122,9 @@ $env:AMADEUS_DEV_MOCK = "0"
 npm run dev -- --port 1420 --strictPort
 ```
 
-`AMADEUS_DEV_MOCK=0` disables the mock and restores Vite's existing `/api`, `/ws` and `/health` proxies to `http://127.0.0.1:8000` (override with `AMADEUS_BACKEND_ORIGIN`). On Linux/macOS, use `.venv/bin/python` for the backend and `AMADEUS_DEV_MOCK=0 npm run dev -- --port 1420 --strictPort` for the UI.
+`AMADEUS_DEV_MOCK=0` disables the mock and restores Vite's existing `/api`, `/ws` and `/health` proxies to `http://127.0.0.1:8000` (override with `AMADEUS_BACKEND_ORIGIN`). Do not use `run_dev.bat` in the repository root for real-backend runs: it starts Vite without `AMADEUS_DEV_MOCK=0`, so the UI stays on the local mock. On Linux/macOS, use `python3.11 -m venv .venv` and `.venv/bin/python` for the backend, and `AMADEUS_DEV_MOCK=0 npm run dev -- --port 1420 --strictPort` for the UI.
 
-Open http://localhost:1420 and log in with `Gott würfelt nicht`. Then open **系统 → 连接** (System → Connections) in the top-right corner, configure your model connection and save. Once the connection check passes, the conversation can start. The first backend run downloads the embedding model used by memory, which takes a few minutes. Voice remains optional; see [Voice](#voice-optional).
+Open http://localhost:1420 and log in with `Gott würfelt nicht` (the real backend normalizes case and treats `ü` / `ue` as `u`, so `gott wurfelt nicht` and `Gott wuerfelt nicht` also work here). Then open **系统 → 连接** (System → Connections) in the top-right corner; the `OpenAI-compatible · http://127.0.0.1:1234/v1 · local-model` item already listed there is the built-in default preset for a local OpenAI-compatible server. Configure your model connection and save; once the connection check passes, the conversation can start. The memory embedding model (`intfloat/multilingual-e5-small`, ~470 MB) is downloaded and loaded on the first memory write, not at backend startup. Without a voice pack, `[WARN] TTS reference audio not found ...` lines in the backend log are normal; voice remains optional (see [Voice](#voice-optional)).
 
 The desktop window comes from the installer build, whose packaging scripts and bundled backend are not in this repository; `npm run tauri -- dev` will not start from this checkout (the shell expects a bundled backend and a free port 8000). For development, use the browser at http://localhost:1420.
 
@@ -175,13 +181,13 @@ M3 已收尾，M4 等待授权。英文和日文界面仍在计划中；她始�
 
 ### 运行
 
-开发有两种模式，命令见上文 [Run it](#run-it-development)。Windows 和 Linux 都能跑。
+开发有两种模式，命令见上文 [Run it](#run-it-development)。安装和运行以英文版为准。Windows 和 Linux 都能跑。
 
 **默认本地 mock**：只需 Node.js，不用启动 Python 后端，不需要 API 密钥、真实模型或 TTS。按 [Local mock](#local-mock-default) 执行 `npm ci` 和 `npm run dev -- --port 1420 --strictPort`，打开 http://localhost:1420/?scenario=streaming 。等 USER ID 自动输入完 `Salieri` 后，用公开本地测试口令 `Gott würfelt nicht` 登录；发送任意消息即可看到三组逐句到达的日语和中文字幕。会话和记忆都是测试数据，服务重启后重置。mock 仅用于开发，不进入生产构建，`npm run preview` 也不提供 mock。
 
 其他状态见 [场景目录与切换说明](desktop/src/dev-mock/README.md) 和 [场景 JSON](desktop/src/dev-mock/scenarios/)；双世界线与减少动态的走查见 [浏览器证据指南](desktop/validation/README.md)。
 
-**真实后端**：按 [Real backend](#real-backend) 先启动 `uvicorn app.main:app`，再在前端终端用 PowerShell 设置 `$env:AMADEUS_DEV_MOCK = "0"`，然后启动 Vite。登录口令仍是 `Gott würfelt nicht`。进去以后，从右上角的「系统」打开「连接」，配置自己的模型连接并保存。连接测试通过后，就可以开始说话了。首次启动后端会下载记忆功能要用的模型；语音是可选项。
+**真实后端**：按 [Real backend](#real-backend) 先启动 `uvicorn app.main:app`，再在前端终端用 PowerShell 设置 `$env:AMADEUS_DEV_MOCK = "0"`，然后启动 Vite。登录口令仍是 `Gott würfelt nicht`。进去以后，从右上角的「系统」打开「连接」，配置自己的模型连接并保存。连接测试通过后，就可以开始说话了。第一次写入记忆时会下载记忆功能要用的模型；语音是可选项。
 
 真实后端开发模式下，对话和记忆放在 `%APPDATA%\Amadeus`（Windows）或 `~/.amadeus`（其他系统，可以用环境变量 `AMADEUS_DATA_DIR` 改到别处）；安装版放在 `%LOCALAPPDATA%\com.amadeus.desktop\data\`。所有服务只监听本机地址，你的对话只会发给你自己配置的那个模型服务；如果开启联网搜索，搜索词还会发给你配置的搜索服务（Tavily 或 Firecrawl）。本地 mock 不使用这些后端数据目录，也不调用模型或语音服务。
 
@@ -214,7 +220,7 @@ okeydokey，大概就是这些，那么来句帅气的收尾吧：El Psy Kongroo
 彼女は日本語で答える。交わした言葉の記憶は、機関の目が届かないあなたの PC の中だけに刻まれる。何を覚えているかはいつでも覗けるし、会話ごと忘れさせることもできる。世界線は **STEINS;GATE** と **β** の二つ。会話も記憶も、決して交わらない。（SG 世界線のアマデウスは、オリジナルの紅莉栖が生きている世界で生まれた。本人の話をすると……少し妬くかもしれない）
 
 - 日本語での会話（中国語字幕つき。英語・日本語 UI は開発予定。彼女はどのモードでも日本語で話す――英語モードでは英語字幕、日本語モードでは字幕なし）
-- ローカル長期記憶：SQLite + sqlite-vec + multilingual-e5-small。必要なときだけモデルが `recall_memory` ツールで思い出す
+- ローカル長期記憶：SQLite + sqlite-vec + multilingual-e5-small。標準モードでは毎ターン核となる事実をプロンプトに入れ、過去の出来事は全文検索（FTS）で引く（必要なときだけモデルが `recall_memory` ツールで思い出すのは実験的な `AMADEUS_MEMORY_MODE=v11` のみ）
 - DeepSeek、Zhipu GLM、OpenAI 互換 API（ローカルモデルを含む）に対応
 - 音声合成（GPT-SoVITS）は任意
 - M3 は実機 Edge プレビューで承認され、統合済み。ヘッダー・システムメニュー・遷移演出の陰極数字を統一。「系统 → 世界线」では計器に現在の世界線、図に選択した移動先を表示し、ボタンで遷移する。クリック／Esc で演出を省略しても、移動先の確認を待つ。
@@ -223,11 +229,11 @@ okeydokey，大概就是这些，那么来句帅气的收尾吧：El Psy Kongroo
 
 遷移の受け渡しを柔らかくし、GPU を非同期で準備する。ログイン画面ではフォントを先読みし、入場後の使用記録を次回の再読み込みに使う。既存の音声初期化は入場前に移した。通常の GPU 演出中は状態字幕を隠して読み上げ用の状態を保ち、0.7 秒を超える待機や失敗時に表示する。字幕は背景枠のない琥珀色（失敗時はエラー色）。Esc の案内は操作・フォーカス・最初の 3 回の案内時に現れる。検証結果の出典と範囲は [Engineering notes](#engineering-notes) を参照。M3 は完了し、M4 は承認待ち。
 
-開発時の起動方法は [Run it](#run-it-development) を参照。**標準はローカル mock** で、Node.js だけで動き、Python バックエンド、API キー、実際のモデルや TTS は不要。[Local mock](#local-mock-default) の手順で `npm ci` と `npm run dev -- --port 1420 --strictPort` を実行し、http://localhost:1420/?scenario=streaming を開く。USER ID が `Salieri` と入力されるまで待ち、公開のローカルテスト用合言葉 `Gott würfelt nicht` でログインする。メッセージを送ると、日本語と中国語字幕の組が三つ、順番に届く。会話と記憶はテストデータで、開発サーバーの再起動でリセットされる。mock は開発専用で、製品ビルドには含まれず、`npm run preview` でも利用できない。
+開発時の起動方法は [Run it](#run-it-development) を参照。セットアップと実行手順は英語版を正とする。**標準はローカル mock** で、Node.js だけで動き、Python バックエンド、API キー、実際のモデルや TTS は不要。[Local mock](#local-mock-default) の手順で `npm ci` と `npm run dev -- --port 1420 --strictPort` を実行し、http://localhost:1420/?scenario=streaming を開く。USER ID が `Salieri` と入力されるまで待ち、公開のローカルテスト用合言葉 `Gott würfelt nicht` でログインする。メッセージを送ると、日本語と中国語字幕の組が三つ、順番に届く。会話と記憶はテストデータで、開発サーバーの再起動でリセットされる。mock は開発専用で、製品ビルドには含まれず、`npm run preview` でも利用できない。
 
 利用できる状態は [シナリオ一覧と切り替え方法](desktop/src/dev-mock/README.md) と [JSON ファイル](desktop/src/dev-mock/scenarios/)、確認手順は [ブラウザー検証ガイド](desktop/validation/README.md) を参照。
 
-**実際のバックエンドを使う場合**は [Real backend](#real-backend) に従って Python サーバーを起動し、フロントエンド側の PowerShell で `$env:AMADEUS_DEV_MOCK = "0"` を設定してから Vite を起動する。合言葉は同じ `Gott würfelt nicht`――神はサイコロを振らない。ログイン後、右上の「系统 → 连接」で自分のモデル接続を設定する。初回のバックエンド起動時は記憶用の埋め込みモデルがダウンロードされる。音声は任意。
+**実際のバックエンドを使う場合**は [Real backend](#real-backend) に従って Python サーバーを起動し、フロントエンド側の PowerShell で `$env:AMADEUS_DEV_MOCK = "0"` を設定してから Vite を起動する。合言葉は同じ `Gott würfelt nicht`――神はサイコロを振らない。ログイン後、右上の「系统 → 连接」で自分のモデル接続を設定する。初回の記憶書き込み時に記憶用の埋め込みモデルがダウンロードされる。音声は任意。
 
 非公式・非営利のファン作品。原作素材は一切含まない。STEINS;GATE の権利は MAGES. Inc. および各権利者に帰属する。
 
