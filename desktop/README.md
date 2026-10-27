@@ -10,7 +10,7 @@ Tauri 2 + React 19 + TypeScript + Vite front end. Setup and background are in th
 
 ## M3 worldline behavior
 
-M3 is accepted and merged through [PR #3](https://github.com/meditecnics/AMADEUS/pull/3). Open **系统 → 世界线**: the menu instrument shows the current reading, the diagram endpoint previews the selected target, and the shift button starts the transaction. Header, menu and transition use the same cathode shapes. Click and Esc share the skip action: target readiness and the final digit lock still gate publication; failure retains the source worldline. Reduced-motion and CSS fallback keep that transaction.
+M3 is accepted and merged in [`f0c18797f3ce8c178595e72f52671561f9378c23`](https://github.com/meditecnic/AMADEUS/commit/f0c18797f3ce8c178595e72f52671561f9378c23). Open **系统 → 世界线**: the menu instrument shows the current reading, the diagram endpoint previews the selected target, and the shift button starts the transaction. Header, menu and transition use the same cathode shapes. Click and Esc share the skip action: target readiness and the final digit lock still gate publication; failure retains the source worldline. Reduced-motion and CSS fallback keep that transaction.
 
 The [MIT-vendored runtime](src/worldline-engine/README.vendor.md) prepares the GPU stage asynchronously during idle time after entry or while the menu is open, reuses a healthy stage and provides a bounded cold-start fallback. Softer entry, exit and skip handoffs keep the picture's brightness consistent across repeated shifts. No runtime dependencies were added.
 
