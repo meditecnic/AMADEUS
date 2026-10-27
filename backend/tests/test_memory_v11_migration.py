@@ -1,4 +1,4 @@
-"""MEMORY-V11 S0 red contracts: legacy import, shared purge, consolidation, backup.
+"""MEMORY-V11 S0 red contracts: legacy import, shared origin migration, consolidation, backup.
 
 Fixed import surface only:
   app.services.memory_v11.migration
@@ -93,11 +93,22 @@ def _snapshot_owner_content(owner: str, worldline: str = "steins_gate") -> dict[
         connection.close()
 
 
+def _seed_sources(owner, worldline="steins_gate", ids=(4151, 4152)):
+    conn = sqlite3.connect(db_module._resolve_path(worldline, "history"))
+    try:
+        conn.execute("INSERT INTO conversations(id,session_id,identity_mode,title,created_at,updated_at) VALUES(?,?,'self','migration test','2026-08-01','2026-08-01')", ("conv-" + owner, owner))
+        for mid in ids:
+            conn.execute("INSERT INTO messages(id,session_id,conversation_id,role,content,created_at) VALUES(?,?,?,'user',?,'2026-08-01')", (mid, owner, "conv-" + owner, f"test source {mid}"))
+        conn.commit()
+    finally:
+        conn.close()
+
+
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason='S5 live legacy import is not implemented; offline rehearsal is separate')
 async def test_s0_legacy_import_idempotent_no_row_growth(isolated_store):
     """Second import: stable_facts/versions/evidence/observations counts must not increase."""
     owner = "v11-mig"
+    _seed_sources(owner)
     await memory_service.upsert_core_fact(
         owner,
         "steins_gate",
@@ -136,75 +147,35 @@ async def test_s0_legacy_import_idempotent_no_row_growth(isolated_store):
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason='S5 live shared purge is not implemented; offline rehearsal is separate')
-async def test_s0_shared_row_seeded_then_purged_not_migrated(isolated_store):
-    owner = "v11-shared-purge"
-    # Module surface must exist before content snapshots (v11 tables).
-    mig = _migration()
-
-    control = _control_conn()
-    try:
+async def test_s0_shared_row_migrated_to_origin_without_purge(isolated_store):
+    owner = "v11-shared-origin"
+    _seed_sources(owner, "beta", ids=(1,))
+    with _control_conn() as control:
         control.execute(
             """INSERT INTO shared_user_facts(
-                   owner_session_id,fact_key,fact_value,confidence,importance,
-                   is_current,is_pinned,origin_worldline,origin_conversation_id,
-                   origin_identity_mode,source_message_ids,created_at
-               ) VALUES(?,?,?,?,?,1,0,?,?,?,?,?)""",
-            (
-                owner,
-                "likes_fruit",
-                "喜欢吃水果",
-                0.9,
-                0.8,
-                "steins_gate",
-                "conv-shared-seed",
-                "self",
-                "[1]",
-                "2026-08-01T00:00:00+00:00",
-            ),
+               owner_session_id,fact_key,fact_value,confidence,importance,is_current,is_pinned,
+               origin_worldline,origin_conversation_id,origin_identity_mode,source_message_ids,created_at)
+               VALUES(?,?,?,0.9,0.8,1,0,'beta',?,'self','[1]','2026-08-01')""",
+            (owner, "likes_fruit", "喜欢吃水果", "conv-" + owner),
         )
-        control.commit()
-        before = control.execute(
-            "SELECT COUNT(*) FROM shared_user_facts WHERE owner_session_id=?",
-            (owner,),
-        ).fetchone()[0]
-        assert before == 1
-    finally:
-        control.close()
-
-    before_stable = _snapshot_owner_content(owner)
-    await mig.purge_shared_user_facts(owner_session_id=owner)
-
-    control = _control_conn()
-    try:
-        after = control.execute(
-            "SELECT COUNT(*) FROM shared_user_facts WHERE owner_session_id=?",
-            (owner,),
-        ).fetchone()[0]
-        assert after == 0
-    finally:
-        control.close()
-
-    after_stable = _snapshot_owner_content(owner)
-    for table in CONTENT_TABLES:
-        assert after_stable[table] == before_stable[table], (
-            f"purge migrated into {table}: {before_stable[table]} → {after_stable[table]}"
-        )
-    repo = _repository()
-    rows = await repo.list_active_stable_facts(
-        session_id=owner, worldline="steins_gate", identity_mode="self"
-    )
-    texts = [
-        (r["display_text"] if isinstance(r, dict) else r.display_text) for r in rows
-    ]
-    assert not any("水果" in t for t in texts)
+    mig, repo = _migration(), _repository()
+    await mig.import_shared_user_facts(owner_session_id=owner)
+    beta = await repo.list_active_stable_facts(session_id=owner, worldline="beta", identity_mode="self")
+    assert len(beta) == 1
+    assert "水果" in beta[0]["display_text"]
+    assert not await repo.list_active_stable_facts(session_id=owner, worldline="steins_gate", identity_mode="self")
+    before = _snapshot_owner_content(owner, "beta")
+    await mig.import_shared_user_facts(owner_session_id=owner)
+    assert _snapshot_owner_content(owner, "beta") == before
+    with _control_conn() as control:
+        assert control.execute("SELECT COUNT(*) FROM shared_user_facts WHERE owner_session_id=?", (owner,)).fetchone()[0] == 1
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason='S5 live consolidation is not implemented; offline rehearsal is separate')
 async def test_s0_consolidation_preview_exactly_one_open_proposal(isolated_store):
     """Preview: content tables unchanged; proposal count exactly +1 with open + snapshot."""
     owner = "v11-consol"
+    _seed_sources(owner)
     for key in ("likes_anime", "like_anime"):
         await memory_service.upsert_core_fact(
             owner,
@@ -292,10 +263,10 @@ async def test_s0_backup_creates_openable_non_overwrite_file(isolated_store):
 
 
 @pytest.mark.asyncio
-@pytest.mark.xfail(strict=True, reason='S5 live legacy import is not implemented; offline rehearsal is separate')
 async def test_s0_import_failure_rolls_back_owner_content(isolated_store, monkeypatch):
     """Injected failure: all owner content tables return exactly to before snapshot."""
     owner = "v11-mig-rollback"
+    _seed_sources(owner)
     await memory_service.upsert_core_fact(
         owner,
         "steins_gate",

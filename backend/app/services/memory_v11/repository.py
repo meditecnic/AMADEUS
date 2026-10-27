@@ -514,3 +514,29 @@ async def job_status_summary(
         }
     finally:
         await db.close()
+
+
+async def create_stable_fact_from_legacy(
+    connection, *, source_id, worldline, item, now, prepared,
+    existing_fact_id=None,
+) -> tuple[str, str]:
+    """Migration seam: caller owns the SQLite transaction and prepared vector.
+
+    Shares the rehearsal's exact text, semantic, source and ledger encoding.
+    No commit, separate connection, model call, topic creation or legacy write.
+    """
+    from app.services.memory_v11.migration import _write_imported_fact
+
+    fact_id, observation_id = _write_imported_fact(
+        connection, source_id=source_id, worldline=worldline, item=item, now=now,
+        existing_fact_id=existing_fact_id,
+    )
+    if existing_fact_id is None:
+        if prepared is None:
+            raise MemoryValidationError("embedding_missing")
+        connection.execute(
+            """INSERT INTO stable_fact_version_embeddings
+               (fact_id,version_no,model,dimensions,vector) VALUES(?,1,?,?,?)""",
+            (fact_id, prepared["model"], prepared["dimensions"], prepared["vector"]),
+        )
+    return fact_id, observation_id

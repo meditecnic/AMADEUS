@@ -910,14 +910,14 @@ def test_erasure_and_tombstone_signals(tmp_path):
         "erasure_barrier",
     )
     assert (decisions["k_retain"]["decision"], decisions["k_retain"]["reason"]) == (
-        "defer",
-        "erasure_conflict",
+        "planned",
+        None,
     )
     assert (decisions["k_tomb"]["decision"], decisions["k_tomb"]["reason"]) == (
         "skip",
         "tombstone_source_deleted",
     )
-    assert preview["summary"]["planned"] == 0
+    assert preview["summary"]["planned"] == 1
 
 
 # ---------------------------------------------------------------------------

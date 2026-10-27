@@ -22,8 +22,8 @@ deliberately separate from the live-path helpers above:
   one source snapshot via a minimal manifest; qualified legacy core_facts
   are imported with legacy_import semantics (never direct_user). The target
   is memory-only: it cannot run the full app or replace the live data dir.
-- Full legacy import / consolidation / shared purge on the live store
-  remain S5 — not implemented here.
+- Explicit live migration and deterministic consolidation are implemented below;
+  no automatic startup hook or legacy-table writes are installed.
 """
 
 from __future__ import annotations
@@ -330,6 +330,10 @@ def _read_source_view(source_dir: str | Path) -> dict[str, dict[str, Any]]:
                     if _table_exists(mem, "conversation_erasure_requests")
                     else []
                 )
+                part["deleted_sources"] = (
+                    mem.execute("SELECT * FROM memory_deleted_sources ORDER BY 1,2,3,4,5").fetchall()
+                    if _table_exists(mem, "memory_deleted_sources") else []
+                )
                 part["tombstones"] = (
                     mem.execute(
                         f"SELECT {','.join(_TOMBSTONES_COLUMNS)} "
@@ -367,6 +371,7 @@ def _source_id_from_view(view: dict[str, dict[str, Any]]) -> str:
             "core_facts": _rows_to_digest_lists(part["core_facts"]),
             "erasure_requests": _rows_to_digest_lists(part["erasure_requests"]),
             "tombstones": _rows_to_digest_lists(part["tombstones"]),
+            "deleted_sources": _rows_to_digest_lists(part.get("deleted_sources", [])),
             "conversations": _rows_to_digest_lists(part["conversations"]),
             "messages": _rows_to_digest_lists(part["messages"]),
         }
@@ -461,40 +466,13 @@ def _validate_fact_sources(
     return details, None, None, frozenset(sensitive)
 
 
-def _erasure_decision(
-    row: sqlite3.Row,
-    source_details: list[dict[str, Any]],
-    erasure_requests: list[sqlite3.Row],
-) -> tuple[str | None, str | None]:
-    """Respect conversation_erasure_requests covering the fact's sources.
+def _covering_requests(mid, message, requests):
+    """Ids survive history deletion; conversation matching is delete-only."""
+    return [r for r in requests if
+            mid in (_parse_legacy_source_ids(r["source_message_ids"]) or [])
+            or (message is not None and r["action"] == "delete"
+                and str(message["conversation_id"]) == str(r["conversation_id"]))]
 
-    Mirrors services.conversation_erasure.sources_erased: a request covers a
-    fact when its source_message_ids intersect, or when a delete-action
-    request targets one of the source conversations. An explicit
-    forget_long_term=1 request must never be revived -> skip; delete-history-
-    retain-derived signals are ambiguous for migration -> defer.
-    """
-    if not erasure_requests:
-        return None, None
-    source_id_set = {int(d["message_id"]) for d in source_details}
-    source_convs = {str(d["conversation_id"]) for d in source_details}
-    covering: list[sqlite3.Row] = []
-    for request in erasure_requests:
-        try:
-            request_ids = {int(x) for x in json.loads(request["source_message_ids"])}
-        except (json.JSONDecodeError, TypeError, ValueError):
-            request_ids = set()
-        conversation_hit = (
-            str(request["action"]) == "delete"
-            and str(request["conversation_id"]) in source_convs
-        )
-        if request_ids & source_id_set or conversation_hit:
-            covering.append(request)
-    if not covering:
-        return None, None
-    if any(int(r["forget_long_term"] or 0) == 1 for r in covering):
-        return "skip", "erasure_barrier"
-    return "defer", "erasure_conflict"
 
 
 def _evaluate_fact_row(
@@ -563,23 +541,47 @@ def _evaluate_fact_row(
         return _decide("skip", "source_malformed", f"source_message_ids={raw_sources!r}")
     item["source_message_ids"] = source_ids
 
+    # Resolve durable erasure intent BEFORE requiring surviving history.
+    requests = erasure_requests_by_scope.get((session_id, identity_mode), [])
+    retained = {}
+    for mid in source_ids:
+        covering = _covering_requests(mid, messages.get(mid), requests)
+        if any(int(r["forget_long_term"] or 0) == 1 for r in covering):
+            return _decide("skip", "erasure_barrier")
+        if covering:
+            retained[mid] = sorted(covering, key=lambda r: (r["created_at"], r["request_id"]))[-1]
+    # Validate surviving sources, including their full privacy classification.
+    remaining = [mid for mid in source_ids if mid in messages or mid not in retained]
     source_details, reason, detail, source_sensitive = _validate_fact_sources(
-        row, source_ids, messages, conversations
+        row, remaining, messages, conversations
     )
     if source_details is None:
         return _decide("skip", reason, detail)
+    by_id = {d["message_id"]: d for d in source_details}
+    for mid, request in retained.items():
+        if mid not in by_id:
+            # Domain separation: never pretend an empty string was the original
+            # message. Missing-content hashes cannot identify old content hashes.
+            marker = f"legacy-deleted:{session_id}:{identity_mode}:{mid}:{request['request_id']}"
+            by_id[mid] = dict(message_id=mid, conversation_id=request["conversation_id"],
+                             created_at=request["created_at"],
+                             fingerprint=hashlib.sha256(marker.encode()).hexdigest(),
+                             content_missing=True)
+        by_id[mid].update(source_state="deleted", excerpt=None)
+    source_details = [by_id[mid] for mid in source_ids]
     item["sources"] = source_details
-
-    erasure_decision, erasure_reason = _erasure_decision(
-        row, source_details, erasure_requests_by_scope.get((session_id, identity_mode), [])
-    )
-    if erasure_decision is not None:
-        return _decide(erasure_decision, erasure_reason)
 
     fingerprints = {str(d["fingerprint"]) for d in source_details}
     tombstoned = tombstone_fingerprints_by_scope.get((session_id, identity_mode), set())
     if fingerprints & tombstoned:
         return _decide("skip", "tombstone_source_deleted")
+
+    if any(f"message_id:{mid}" in tombstoned for mid in source_ids):
+        return _decide("skip", "tombstone_source_deleted")
+    if "unverifiable" in tombstoned and any(d.get("content_missing") for d in source_details):
+        # A content hash is irreversible. An unrelated-looking source tombstone
+        # cannot safely be ruled out after the history is gone; require review.
+        return _decide("defer", "tombstone_source_unverifiable")
 
     # D30 hard privacy block on the FULL source message contents. The fact
     # body itself may be ordinary ("来源本身命中而事实正文普通" case) — only the
@@ -594,7 +596,8 @@ def _evaluate_fact_row(
             + ",".join(str(int(d["message_id"])) for d in source_details),
         )
 
-    if all(not str(d["excerpt"] or "").strip() for d in source_details):
+    if all(d.get("source_state", "present") != "deleted"
+           and not str(d["excerpt"] or "").strip() for d in source_details):
         return _decide("defer", "empty_source_content")
 
     return _decide("planned", None)
@@ -629,6 +632,22 @@ def _duplicate_hints(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return hints
 
 
+def _tombstone_scope_fingerprints(part):
+    scopes = defaultdict(set)
+    deleted = defaultdict(set)
+    for row in part.get("deleted_sources", []):
+        deleted[(row["session_id"], row["identity_mode"], row["fact_id"])].add(row["source_message_id"])
+    for row in part["tombstones"]:
+        scope = (row["session_id"], row["identity_mode"])
+        ids = deleted.get((*scope, row["fact_id"]), set())
+        if row["source_fingerprint"]:
+            scopes[scope].add(row["source_fingerprint"])
+            if not ids:
+                scopes[scope].add("unverifiable")
+        scopes[scope].update(f"message_id:{mid}" for mid in ids)
+    return scopes
+
+
 def _evaluate_view(view: dict[str, dict[str, Any]]) -> dict[str, Any]:
     """Classify every legacy core fact row from ONE fixed read view."""
     items: list[dict[str, Any]] = []
@@ -640,12 +659,7 @@ def _evaluate_view(view: dict[str, dict[str, Any]]) -> dict[str, Any]:
         erasure_requests_by_scope: dict[tuple[str, str], list[sqlite3.Row]] = defaultdict(list)
         for r in part["erasure_requests"]:
             erasure_requests_by_scope[(str(r["session_id"]), str(r["identity_mode"]))].append(r)
-        tombstone_fps: dict[tuple[str, str], set[str]] = defaultdict(set)
-        for r in part["tombstones"]:
-            if r["source_fingerprint"] is not None:
-                tombstone_fps[(str(r["session_id"]), str(r["identity_mode"]))].add(
-                    str(r["source_fingerprint"])
-                )
+        tombstone_fps = _tombstone_scope_fingerprints(part)
         for row in part["core_facts"]:
             items.append(
                 _evaluate_fact_row(
@@ -793,6 +807,7 @@ def _write_imported_fact(
     worldline: str,
     item: dict[str, Any],
     now: str,
+    existing_fact_id: str | None = None,
 ) -> tuple[str, str]:
     """Insert observation + stable fact v1 + evidence + idempotency record.
 
@@ -800,7 +815,7 @@ def _write_imported_fact(
     reconciler CREATE shape (minus embeddings — no external calls here) with
     legacy_import semantics.
     """
-    fact_id = str(uuid.uuid4())
+    fact_id = existing_fact_id or str(uuid.uuid4())
     observation_id = str(uuid.uuid4())
     display_text = f"{item['fact_key']}: {item['fact_value']}".strip()
     semantic = {
@@ -842,42 +857,45 @@ def _write_imported_fact(
                    observation_id, source_message_id, conversation_id,
                    source_role, source_fingerprint, source_created_at,
                    source_state, excerpt
-               ) VALUES(?,?,?, 'user', ?, ?, 'present', ?)""",
+               ) VALUES(?,?,?, 'user', ?, ?, ?, ?)""",
             (
                 observation_id,
                 int(source["message_id"]),
                 str(source["conversation_id"]),
                 str(source["fingerprint"]),
                 str(source["created_at"] or now),
+                source.get("source_state", "present"),
                 str(source["excerpt"] or "")[:200] or None,
             ),
         )
-    conn.execute(
-        """INSERT INTO stable_facts(
-               fact_id, session_id, identity_mode, topic_id, state,
-               active_version, is_pinned, created_at, updated_at, deleted_at
-           ) VALUES(?,?,?,NULL,'active',1,?,?,?,NULL)""",
-        (
-            fact_id,
-            item["session_id"],
-            item["identity_mode"],
-            1 if item["is_pinned"] else 0,
-            now,
-            now,
-        ),
-    )
-    conn.execute(
-        """INSERT INTO stable_fact_versions(
-               fact_id, version_no, display_text, semantic_json,
-               semantic_fingerprint, confidence, change_kind,
-               previous_version, valid_from, invalid_at, created_by_job_id
-           ) VALUES(?,1,?,?,?,?, 'legacy_import', NULL, ?, NULL, NULL)""",
-        (fact_id, display_text, semantic_blob, fingerprint, confidence, now),
-    )
+    if existing_fact_id is None:
+        conn.execute(
+            """INSERT INTO stable_facts(
+                   fact_id, session_id, identity_mode, topic_id, state,
+                   active_version, is_pinned, created_at, updated_at, deleted_at
+               ) VALUES(?,?,?,NULL,'active',1,?,?,?,NULL)""",
+            (
+                fact_id,
+                item["session_id"],
+                item["identity_mode"],
+                1 if item["is_pinned"] else 0,
+                now,
+                now,
+            ),
+        )
+        conn.execute(
+            """INSERT INTO stable_fact_versions(
+                   fact_id, version_no, display_text, semantic_json,
+                   semantic_fingerprint, confidence, change_kind,
+                   previous_version, valid_from, invalid_at, created_by_job_id
+               ) VALUES(?,1,?,?,?,?, 'legacy_import', NULL, ?, NULL, NULL)""",
+            (fact_id, display_text, semantic_blob, fingerprint, confidence, now),
+        )
+    version = conn.execute("SELECT active_version FROM stable_facts WHERE fact_id=?", (fact_id,)).fetchone()[0]
     conn.execute(
         """INSERT INTO stable_fact_evidence(fact_id, version_no, observation_id, evidence_role)
-           VALUES(?, 1, ?, 'primary')""",
-        (fact_id, observation_id),
+           VALUES(?, ?, ?, ?)""",
+        (fact_id, version, observation_id, "supporting" if existing_fact_id else "primary"),
     )
     conn.execute(
         """INSERT INTO legacy_core_fact_imports(
@@ -1174,3 +1192,468 @@ def apply_legacy_core_facts(
         },
     )
     return result
+
+
+# ---------------------------------------------------------------------------
+# Explicit live import. The application never calls these on startup.
+# ---------------------------------------------------------------------------
+LIVE_PREVIEW_KIND = "legacy_memory_live_preview/1"
+_LIVE_SOURCE_IDS = {"core": "live/core/1", "shared": "live/shared/1"}
+
+
+def _read_live_view(memory_connections=None):
+    """Fixed read transactions; a stopped app is required for CLI operations.
+
+    During apply, memory reads use the already-held BEGIN IMMEDIATE locks.
+    History/control are read-only and never initialized or migrated here.
+    """
+    view = {}
+    for wl in _WORLDLINE_NAMESPACES:
+        mem = (memory_connections or {}).get(wl)
+        owned = mem is None
+        if owned:
+            mem = _connect_readonly(Path(_resolve_path(wl, "memory")))
+            mem.execute("BEGIN")
+        his = _connect_readonly(Path(_resolve_path(wl, "history")))
+        try:
+            his.execute("BEGIN")
+            part = dict(memory_schema_version=_schema_version(mem),
+                        history_schema_version=_schema_version(his))
+            for key, conn, table, columns in (
+                ("core_facts", mem, "core_facts", _CORE_FACTS_COLUMNS),
+                ("erasure_requests", mem, "conversation_erasure_requests", _ERASURE_REQUESTS_COLUMNS),
+                ("tombstones", mem, "memory_tombstones", _TOMBSTONES_COLUMNS),
+                ("conversations", his, "conversations", _CONVERSATIONS_COLUMNS),
+                ("messages", his, "messages", _MESSAGES_COLUMNS),
+            ):
+                part[key] = conn.execute(
+                    f"SELECT {','.join(columns)} FROM {table} ORDER BY 1"
+                ).fetchall()
+            part["deleted_sources"] = (
+                mem.execute("SELECT * FROM memory_deleted_sources ORDER BY 1,2,3,4,5").fetchall()
+                if _table_exists(mem, "memory_deleted_sources") else []
+            )
+            part["imports"] = (mem.execute("SELECT * FROM legacy_core_fact_imports ORDER BY import_key").fetchall()
+                               if _table_exists(mem, "legacy_core_fact_imports") else [])
+            view[wl] = part
+        finally:
+            his.close()
+            if owned:
+                mem.close()
+    control = _connect_readonly(Path(_resolve_path("steins_gate", "control")))
+    try:
+        control.execute("BEGIN")
+        shared = control.execute("SELECT * FROM shared_user_facts ORDER BY id").fetchall()
+    finally:
+        control.close()
+    return view, shared
+
+
+def _live_source_identity(view, shared):
+    return hashlib.sha256((_source_id_from_view(view) + json.dumps(
+        _rows_to_digest_lists(shared), ensure_ascii=False, separators=(",", ":")
+    )).encode()).hexdigest()
+
+
+def _live_items(view, shared, *, session_id=None, include_core=True, include_shared=True):
+    """Both sources use the rehearsal's one classifier (no parallel rules)."""
+    items = []
+    for wl, part in view.items():
+        rows = []
+        if include_core:
+            rows.extend(("core", r) for r in part["core_facts"]
+                        if session_id is None or r["session_id"] == session_id)
+        if include_shared:
+            for r in shared:
+                if session_id is not None and r["owner_session_id"] != session_id:
+                    continue
+                if normalize_worldline(r["origin_worldline"]) != wl:
+                    continue
+                row = dict(r)
+                row.update(session_id=r["owner_session_id"], identity_mode="self", is_dismissed=0)
+                rows.append(("shared", row))
+        requests = defaultdict(list)
+        tombstones = _tombstone_scope_fingerprints(part)
+        for r in part["erasure_requests"]:
+            requests[(r["session_id"], r["identity_mode"])].append(r)
+        messages = {r["id"]: r for r in part["messages"]}
+        conversations = {r["id"]: r for r in part["conversations"]}
+        for category, row in rows:
+            item = _evaluate_fact_row(wl, row, messages, conversations, requests, tombstones)
+            item["source_category"] = category
+            item["source_id"] = _LIVE_SOURCE_IDS[category]
+            item["import_key"] = _import_key(item["source_id"], wl, item)
+            items.append(item)
+    return items
+
+
+def _slim_live_items(items):
+    return [{k: v for k, v in item.items() if k != "sources"} for item in items]
+
+
+def build_live_migration_preview():
+    """Read-only; the CLI writes the returned report with exclusive creation."""
+    view, shared = _read_live_view()
+    items = _live_items(view, shared)
+    return dict(kind=LIVE_PREVIEW_KIND, source_id=_live_source_identity(view, shared),
+                items=_slim_live_items(items), reconciliation=_reconcile_live(items, preview=True))
+
+
+def _reconcile_live(items, *, preview=False):
+    scopes = {}
+    for item in items:
+        key = (item["worldline"], item["session_id"], item["identity_mode"], item["source_category"])
+        stats = scopes.setdefault(key, dict(total=0, migrated=0, merged_into_local=0,
+                                            skipped={}, deferred={}, unexplained=0))
+        stats["total"] += 1
+        outcome = item.get("outcome", item["decision"] if preview else None)
+        if outcome in ("migrated", "already_imported", "planned"):
+            stats["migrated"] += 1
+        elif outcome == "merged_into_local":
+            stats["merged_into_local"] += 1
+        elif outcome in ("skip", "defer") and item.get("reason"):
+            bucket = stats["skipped" if outcome == "skip" else "deferred"]
+            bucket[item["reason"]] = bucket.get(item["reason"], 0) + 1
+        else:
+            stats["unexplained"] += 1
+    result = []
+    for (wl, session, mode, category), stats in sorted(scopes.items()):
+        accounted = (stats["migrated"] + stats["merged_into_local"]
+                     + sum(stats["skipped"].values()) + sum(stats["deferred"].values()))
+        if stats["unexplained"] or accounted != stats["total"]:
+            raise MigrationRehearsalError("reconciliation_failed")
+        result.append(dict(worldline=wl, session_id=session, identity_mode=mode,
+                           source_category=category, **stats))
+    return result
+
+
+def _value_key(item):
+    return (item["session_id"], item["identity_mode"], item["fact_key"],
+            str(item["fact_value"]).strip().casefold())
+
+
+def _local_import_match(conn, item):
+    """Match the read-only legacy row, so v11 edits/deletes stay authoritative."""
+    rows = conn.execute(
+        """SELECT l.fact_id,l.observation_id,c.fact_key,c.fact_value,f.state
+           FROM legacy_core_fact_imports l
+           JOIN core_facts c ON c.id=l.legacy_row_id AND c.session_id=l.session_id AND c.identity_mode=l.identity_mode
+           JOIN stable_facts f ON f.fact_id=l.fact_id
+           WHERE l.source_id=? AND l.session_id=? AND l.identity_mode=? AND c.fact_key=?
+           ORDER BY l.legacy_row_id""",
+        (_LIVE_SOURCE_IDS["core"], item["session_id"], item["identity_mode"], item["fact_key"]),
+    ).fetchall()
+    for row in rows:
+        if (row["fact_key"] == item["fact_key"]
+                and str(row["fact_value"]).strip().casefold()
+                == str(item["fact_value"]).strip().casefold()):
+            return row
+    return None
+
+
+async def _import_live(*, session_id=None, worldlines=None, include_core=True,
+                       include_shared=True, preview=None):
+    from app.services.memory_v11 import repository
+    from app.services.memory_v11.indexing import prepare_passage_embedding
+
+    selected = set(worldlines or _WORLDLINE_NAMESPACES)
+    view, shared = _read_live_view()
+    source_id = _live_source_identity(view, shared)
+    items = [i for i in _live_items(view, shared, session_id=session_id,
+                                  include_core=include_core, include_shared=include_shared)
+             if i["worldline"] in selected]
+    if preview is not None:
+        if preview.get("kind") != LIVE_PREVIEW_KIND:
+            raise MigrationRehearsalError("invalid_preview")
+        if preview.get("source_id") != source_id:
+            raise MigrationRehearsalError("preview_stale")
+        if preview.get("items") != _slim_live_items(items):
+            raise MigrationRehearsalError("preview_mismatch")
+    # Reject unaccountable decisions before any write (also checked under locks).
+    _reconcile_live(items, preview=True)
+    existing = {r["import_key"] for wl in selected for r in view[wl]["imports"]}
+    prepared = {}
+    for item in items:
+        if item["decision"] == "planned" and item["import_key"] not in existing:
+            prepared[item["import_key"]] = await prepare_passage_embedding(
+                f"{item['fact_key']}: {item['fact_value']}".strip())
+    conns = {}
+    try:
+        # Hold every selected memory lock until all scopes have reconciled.
+        # Exceptions roll back all open DBs. SQLite WAL commits across files
+        # are not crash-atomic; offline backups are the recovery boundary.
+        for wl in sorted(selected):
+            conn = _connect_writable(Path(_resolve_path(wl, "memory")))
+            conns[wl] = conn
+            conn.execute("BEGIN IMMEDIATE")
+        current_view, current_shared = _read_live_view(conns)
+        if _live_source_identity(current_view, current_shared) != source_id:
+            raise MigrationRehearsalError("preview_stale")
+        items = [i for i in _live_items(current_view, current_shared, session_id=session_id,
+                                       include_core=include_core, include_shared=include_shared)
+                 if i["worldline"] in selected]
+        _reconcile_live(items, preview=True)
+        for wl, conn in conns.items():
+            conn.execute(_LEGACY_IMPORTS_TABLE_DDL)
+            conn.execute(_LEGACY_IMPORTS_INDEX_DDL)
+            pending = [i for i in items if i["worldline"] == wl]
+            # Old local rows precede promoted copies, regardless of row id.
+            pending.sort(key=lambda i: (i["source_category"] != "core", i["legacy_row_id"]))
+            new_local_keys = {_value_key(i) for i in pending
+                              if i["source_category"] == "core" and i["decision"] == "planned"}
+            pin_candidates = sorted(
+                [i for i in pending if i["decision"] == "planned" and i["is_pinned"]
+                 and i["import_key"] not in existing
+                 and not (i["source_category"] == "shared" and
+                          (_value_key(i) in new_local_keys or _local_import_match(conn, i)))],
+                key=lambda i: (-i["importance"], -i["confidence"], i["legacy_row_id"], i["source_category"]),
+            )
+            pin_slots = {}
+            for item in pin_candidates:
+                scope = (item["session_id"], item["identity_mode"])
+                if scope not in pin_slots:
+                    used = conn.execute(
+                        "SELECT COUNT(*) FROM stable_facts WHERE session_id=? AND identity_mode=? AND state='active' AND is_pinned=1",
+                        scope,
+                    ).fetchone()[0]
+                    pin_slots[scope] = max(0, MAX_PINNED_FACTS_PER_SCOPE - used)
+                if pin_slots[scope] > 0:
+                    pin_slots[scope] -= 1
+                else:
+                    item.update(is_pinned=False, pin_reason="pin_limit_unpinned")
+            for item in pending:
+                recorded = conn.execute(
+                    "SELECT fact_id,observation_id FROM legacy_core_fact_imports WHERE import_key=?",
+                    (item["import_key"],),
+                ).fetchone()
+                if recorded is not None:
+                    item.update(dict(recorded), outcome="already_imported")
+                    if item["source_category"] == "shared":
+                        local = conn.execute(
+                            "SELECT 1 FROM legacy_core_fact_imports WHERE source_id=? AND fact_id=?",
+                            (_LIVE_SOURCE_IDS["core"], recorded["fact_id"]),
+                        ).fetchone()
+                        if local:
+                            item["outcome"] = "merged_into_local"
+                    continue
+                if item["decision"] != "planned":
+                    item["outcome"] = item["decision"]
+                    continue
+                match = _local_import_match(conn, item) if item["source_category"] == "shared" else None
+                now = _utc_now()
+                if match is not None and match["state"] == "deleted":
+                    # Do not recreate content the user has already deleted.
+                    fact_id, observation_id = match["fact_id"], match["observation_id"]
+                    conn.execute(
+                        "INSERT INTO legacy_core_fact_imports VALUES(?,?,?,?,?,?,?,?,?)",
+                        (item["import_key"], item["source_id"], wl, item["session_id"],
+                         item["identity_mode"], item["legacy_row_id"], fact_id, observation_id, now),
+                    )
+                else:
+                    fact_id, observation_id = await repository.create_stable_fact_from_legacy(
+                        conn, source_id=item["source_id"], worldline=wl, item=item, now=now,
+                        prepared=prepared.get(item["import_key"]),
+                        existing_fact_id=match["fact_id"] if match else None,
+                    )
+                item.update(fact_id=fact_id, observation_id=observation_id,
+                            outcome="merged_into_local" if match else "migrated")
+        reconciliation = _reconcile_live(items)
+        for conn in conns.values():
+            conn.commit()
+        return dict(items=_slim_live_items(items), reconciliation=reconciliation)
+    except BaseException:
+        for conn in conns.values():
+            conn.rollback()
+        raise
+    finally:
+        for conn in conns.values():
+            conn.close()
+
+
+async def import_legacy_core_facts(*, session_id: str, worldline: str):
+    result = await _import_live(session_id=session_id, worldlines=[normalize_worldline(worldline)],
+                                include_shared=False)
+    return [i for i in result["items"] if i.get("fact_id")]
+
+
+async def import_shared_user_facts(*, owner_session_id: str):
+    return await _import_live(session_id=owner_session_id, include_core=False)
+
+
+async def apply_live_migration(*, preview):
+    return await _import_live(preview=preview)
+
+
+# Deterministic, operator-confirmed consolidation; no provider calls.
+def _consolidation_snapshot(conn, session_id, identity_mode):
+    params = (session_id, identity_mode)
+    scope = "SELECT fact_id FROM stable_facts WHERE session_id=? AND identity_mode=?"
+    observations = "SELECT observation_id FROM memory_observations WHERE session_id=? AND identity_mode=?"
+    payload = {}
+    for name, where in (
+        ("stable_facts", "session_id=? AND identity_mode=?"),
+        ("stable_fact_versions", f"fact_id IN ({scope})"),
+        ("stable_fact_evidence", f"fact_id IN ({scope})"),
+        ("stable_fact_version_embeddings", f"fact_id IN ({scope})"),
+        ("memory_observations", "session_id=? AND identity_mode=?"),
+        ("memory_observation_sources", f"observation_id IN ({observations})"),
+    ):
+        rows = conn.execute(f"SELECT * FROM {name} WHERE {where} ORDER BY 1,2,3", params).fetchall()
+        payload[name] = _rows_to_digest_lists(rows)
+    rows = conn.execute(
+        """SELECT f.*,v.display_text,v.semantic_json,v.semantic_fingerprint,v.confidence,v.change_kind,
+           (SELECT COUNT(DISTINCT observation_id) FROM stable_fact_evidence e WHERE e.fact_id=f.fact_id) observation_count,
+           EXISTS(SELECT 1 FROM stable_fact_versions h WHERE h.fact_id=f.fact_id AND h.change_kind='legacy_import') has_legacy_import
+           FROM stable_facts f JOIN stable_fact_versions v ON v.fact_id=f.fact_id AND v.version_no=f.active_version
+           WHERE f.session_id=? AND f.identity_mode=? AND f.state='active' AND v.invalid_at IS NULL
+           ORDER BY f.fact_id""", params,
+    ).fetchall()
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode()).hexdigest(), [dict(r) for r in rows]
+
+
+def _consolidation_groups(rows):
+    from app.services.prompt_compiler import resident_rank_key
+
+    parents = list(range(len(rows)))
+
+    def root(i):
+        while parents[i] != i:
+            parents[i] = parents[parents[i]]
+            i = parents[i]
+        return i
+
+    seen = {}
+    for index, row in enumerate(rows):
+        keys = [("semantic", row["semantic_fingerprint"]),
+                ("display", row["display_text"].strip().casefold())]
+        if row["has_legacy_import"]:
+            value = json.loads(row["semantic_json"]).get("object", {}).get("text")
+            if isinstance(value, str) and value.strip():
+                keys.append(("legacy_value", value.strip().casefold()))
+        for key in keys:
+            if not key[1]:
+                continue
+            if key in seen:
+                parents[root(index)] = root(seen[key])
+            seen[key] = index
+    groups = defaultdict(list)
+    for index, row in enumerate(rows):
+        groups[root(index)].append(row)
+    return [[r["fact_id"] for r in sorted(group, key=resident_rank_key)]
+            for group in groups.values() if len(group) > 1]
+
+
+async def preview_consolidation(*, session_id: str, worldline: str, identity_mode: str):
+    from app.db import normalize_identity_mode
+    from app.services.memory_v11.repository import _require_session_id
+
+    session_id = _require_session_id(session_id)
+    identity_mode = normalize_identity_mode(identity_mode)
+    conn = _connect_writable(Path(_resolve_path(normalize_worldline(worldline), "memory")))
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute(
+            "SELECT * FROM memory_consolidation_proposals WHERE session_id=? AND identity_mode=? AND status='open'",
+            (session_id, identity_mode),
+        ).fetchone()
+        if existing:
+            return dict(existing)
+        snapshot_hash, rows = _consolidation_snapshot(conn, session_id, identity_mode)
+        groups = _consolidation_groups(rows)
+        if not groups:
+            return None
+        proposal_id = str(uuid.uuid4())
+        now = _utc_now()
+        conn.execute(
+            """INSERT INTO memory_consolidation_proposals VALUES(?,?,?,?,?,?,?,?, 'open',?,?)""",
+            (proposal_id, session_id, identity_mode, json.dumps([g[0] for g in groups]),
+             json.dumps([fid for g in groups for fid in g[1:]]), json.dumps(["deterministic_duplicate"]),
+             json.dumps(dict(groups=groups)), snapshot_hash, now, now),
+        )
+        conn.commit()
+        return dict(proposal_id=proposal_id, status="open", snapshot_hash=snapshot_hash, groups=groups)
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+async def _finish_consolidation(*, proposal_id, worldline, apply):
+    conn = _connect_writable(Path(_resolve_path(normalize_worldline(worldline), "memory")))
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        proposal = conn.execute("SELECT * FROM memory_consolidation_proposals WHERE proposal_id=?", (proposal_id,)).fetchone()
+        if proposal is None or proposal["status"] != "open":
+            raise MigrationRehearsalError("proposal_not_open")
+        now = _utc_now()
+        if apply:
+            snapshot_hash, rows = _consolidation_snapshot(conn, proposal["session_id"], proposal["identity_mode"])
+            groups = _consolidation_groups(rows)
+            if (snapshot_hash != proposal["snapshot_hash"]
+                    or groups != json.loads(proposal["preview_json"])["groups"]):
+                raise MigrationRehearsalError("snapshot_stale")
+            for survivor, *duplicates in groups:
+                version = conn.execute("SELECT active_version FROM stable_facts WHERE fact_id=?", (survivor,)).fetchone()[0]
+                for duplicate in duplicates:
+                    # All historical evidence matters to conversation erasure,
+                    # not just evidence attached to the currently active version.
+                    conn.execute(
+                        """INSERT OR IGNORE INTO stable_fact_evidence
+                           SELECT ?,?,observation_id,'supporting' FROM stable_fact_evidence WHERE fact_id=?""",
+                        (survivor, version, duplicate),
+                    )
+                    conn.execute("DELETE FROM stable_fact_evidence WHERE fact_id=?", (duplicate,))
+                    conn.execute("DELETE FROM stable_fact_version_embeddings WHERE fact_id=?", (duplicate,))
+                    # Remove retired content as well: later conversation erasure
+                    # only visits active facts, so archived duplicate versions
+                    # must not survive behind an already-deleted shell.
+                    conn.execute("DELETE FROM stable_fact_versions WHERE fact_id=?", (duplicate,))
+                    if _table_exists(conn, "legacy_core_fact_imports"):
+                        conn.execute("UPDATE legacy_core_fact_imports SET fact_id=? WHERE fact_id=?",
+                                     (survivor, duplicate))
+                    conn.execute(
+                        """UPDATE stable_facts SET state='deleted',active_version=NULL,is_pinned=0,
+                           topic_id=NULL,deleted_at=?,updated_at=? WHERE fact_id=?""", (now, now, duplicate),
+                    )
+                conn.execute("UPDATE stable_facts SET updated_at=? WHERE fact_id=?", (now, survivor))
+        status = "applied" if apply else "cancelled"
+        conn.execute("UPDATE memory_consolidation_proposals SET status=?,updated_at=? WHERE proposal_id=?",
+                     (status, now, proposal_id))
+        conn.commit()
+        return dict(proposal_id=proposal_id, status=status)
+    except BaseException:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+async def apply_consolidation(*, proposal_id: str, worldline: str):
+    return await _finish_consolidation(proposal_id=proposal_id, worldline=worldline, apply=True)
+
+
+async def cancel_consolidation(*, proposal_id: str, worldline: str):
+    return await _finish_consolidation(proposal_id=proposal_id, worldline=worldline, apply=False)
+
+
+def backup_live_migration_databases():
+    """Three SQLite backups, exclusively reserved names; never copy WAL files."""
+    backups = []
+    for wl, kind in (("steins_gate", "memory"), ("beta", "memory"), ("steins_gate", "control")):
+        source_path = Path(_resolve_path(wl, kind))
+        destination_path = source_path.with_name(
+            f"{kind}.{wl}.{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}.{uuid.uuid4().hex}.backup.sqlite3")
+        # Exclusive creation removes even the unlikely concurrent name race.
+        with destination_path.open("xb"):
+            pass
+        source = _connect_readonly(source_path)
+        destination = sqlite3.connect(str(destination_path))
+        try:
+            source.backup(destination)
+            destination.commit()
+        finally:
+            destination.close()
+            source.close()
+        backups.append(str(destination_path))
+    return backups
