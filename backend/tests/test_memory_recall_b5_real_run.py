@@ -784,6 +784,7 @@ async def test_renderer_refusal_never_becomes_completed_fallback(tmp_path, froze
     assert result["status"] == ("not_run_budget" if reason == "budget" else "error"), result
     assert "score" not in result
     assert result["stop_run"] == (reason == "usage")
+    assert result["request_count"] == (2 if reason == "usage" else 1)
     if reason == "usage":
         assert Decimal(result["retained_reserve_cny"]) > 0
 
@@ -884,7 +885,10 @@ def test_worker_proxy_environment_depends_on_transport(tmp_path, frozen, monkeyp
             assert "HTTPS_PROXY" not in env
         else:
             assert env["HTTPS_PROXY"] == "http://proxy.invalid:1234"
-            assert env["NO_PROXY"] == env["no_proxy"] == "example.invalid"
+            assert env["NO_PROXY"] == "example.invalid"
+            for key, value in os.environ.items():
+                if key in ("NO_PROXY", "no_proxy"):
+                    assert env[key] == value
         return SimpleNamespace(returncode=2, stderr=b"", stdout=b"")
 
     monkeypatch.setattr(b5.subprocess, "run", subprocess_run)

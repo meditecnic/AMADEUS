@@ -498,6 +498,7 @@ class Capture:
         self.budget = Budget(directory.parents[1] / "budget.json", plan["cap_cny"]) if plan["transport"] == "real" else None
 
     async def handle(self, request: httpx.Request) -> httpx.Response:
+        self.raise_if_refused()
         try:
             return await self._handle(request)
         except Exception as exc:
