@@ -4817,3 +4817,142 @@ def test_v85_punctuation_in_values_and_short_marker_residuals_do_not_leak(text, 
     assert _classify(text)
     masked, _ = _jobs().redact_user_text(text)
     assert secret not in masked
+
+
+_R2_FULLWIDTH_RESIDUAL_CASES = [
+    ("我的密码是Hello!2024，ｗｏｒｄ９９", "ｗｏｒｄ９９", "password"),
+    ("密码：Hello!2024；ｘｙｚ１２３", "ｘｙｚ１２３", "password"),
+    ("password: Hello!2024、ｘｙｚ９９ 我喜欢猫", "ｘｙｚ９９", "password"),
+    ("sk-abcdefghijklmnop。ｘｙｚ９９", "ｘｙｚ９９", "api_secret"),
+    ("API密钥是abcdefgh，ｉｊｋｌ５６７８", "ｉｊｋｌ５６７８", "api_secret"),
+    ("password: [REDACTED:password]，ｈｕｎｔｅｒ２２", "ｈｕｎｔｅｒ２２", "password"),
+]
+
+
+@pytest.mark.parametrize("text,fragment,category", _R2_FULLWIDTH_RESIDUAL_CASES)
+def test_r2_fullwidth_residual_is_sensitive_and_never_released(text, fragment, category):
+    import unicodedata
+    assert category in _classify(text)
+    masked, blocked = _jobs().redact_user_text(text)
+    assert fragment not in masked
+    assert unicodedata.normalize("NFKC", fragment) not in unicodedata.normalize("NFKC", masked)
+    if blocked:
+        assert masked == "[REDACTED]"
+    else:
+        assert not _classify(masked)
+
+
+@pytest.mark.parametrize("text,fragment,category", [
+    ("password: [REDACTED:password], ｈｕｎｔｅｒ２２", "ｈｕｎｔｅｒ２２", "password"),
+    ("password: ｈｕｎｔｅｒ２２", "ｈｕｎｔｅｒ２２", "password"),
+    ("password: [REDACTED:password] ！ａｂｃ", "！ａｂｃ", "password"),
+    ("api key: [REDACTED:api_secret] ．．．．ａｂｃｄ", "．．．．ａｂｃｄ", "api_secret"),
+    ("API密钥是＄＃ａｂｃｄ１２３４", "＄＃ａｂｃｄ１２３４", "api_secret"),
+    ("password: Pass，＄＃ｗｏｒｄ９９", "＄＃ｗｏｒｄ９９", "password"),
+    ("sk-abcdefghijklmnop。＄＃ｘｙｚ９９", "＄＃ｘｙｚ９９", "api_secret"),
+])
+def test_r2_compatible_values_and_symbol_prefixes_are_fully_masked(text, fragment, category):
+    assert category in _classify(text)
+    masked, _ = _jobs().redact_user_text(text)
+    assert fragment not in masked
+
+
+@pytest.mark.parametrize("value,min_len,expected", [
+    ("ﬀﬀ", 4, False),
+    ("！ﬀﬀ", 4, False),
+    ("ﬀﬀﬀﬀ", 8, False),
+    ("a\u030a!!", 4, True),
+    ("ａ\u030a!!", 4, True),
+    ("！ａｂｃ", 4, True),
+    ("．．．．ａｂｃｄ", 8, True),
+])
+def test_r2_nfkc_evidence_keeps_original_length_and_offsets(value, min_len, expected):
+    privacy = _privacy()
+    assert privacy._concrete_value_ok(value, min_len=min_len) is expected
+    cue = "api key: " if min_len == 8 else "password: "
+    text = cue + value
+    masked, blocked = _jobs().redact_user_text(text)
+    assert not blocked
+    if expected:
+        assert _classify(text)
+        spans = privacy.find_memory_sensitive_matches(text)
+        core = value.rstrip(privacy._CREDENTIAL_TRAILING_PUNCTUATION)
+        assert (len(cue), len(cue) + len(core)) in {(start, end) for start, end, _ in spans}
+        assert masked == cue + ("[REDACTED:api_secret]" if min_len == 8 else "[REDACTED:password]") + value[len(core):]
+    else:
+        assert not _classify(text)
+        assert masked == text
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("我的密码是Hello!2024，我喜欢猫", "我的密码是[REDACTED:password]，我喜欢猫"),
+    ("密码：Hello!2024、猫が好き", "密码：[REDACTED:password]、猫が好き"),
+    ("API密钥是abcdefgh，ｺｰﾋｰが好き", "API密钥是[REDACTED:api_secret]，ｺｰﾋｰが好き"),
+    ("sk-abcdefghijklmnop。猫が好き", "[REDACTED:api_secret]。猫が好き"),
+])
+def test_r2_han_and_kana_are_not_credential_residuals(text, expected):
+    assert _jobs().redact_user_text(text) == (expected, False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text,fragment,blocked,normal", [
+    ("我的密码是Hello!2024，ｗｏｒｄ９９", "ｗｏｒｄ９９", True, None),
+    ("sk-abcdefghijklmnop。ｘｙｚ９９ 我喜欢猫", "ｘｙｚ９９", False, "我喜欢猫"),
+    ("password: [REDACTED:password]，ｈｕｎｔｅｒ２２ I like cats", "ｈｕｎｔｅｒ２２", False, "I like cats"),
+    ("password: [REDACTED:password], ｈｕｎｔｅｒ２２ I like cats", "ｈｕｎｔｅｒ２２", False, "I like cats"),
+])
+async def test_r2_fullwidth_secret_never_reaches_provider_or_memory(isolated_store, caplog, text, fragment, blocked, normal):
+    import unicodedata
+    jobs = _jobs()
+    session = "r2-e2e"
+    conv = await conversation_service.create(session, "steins_gate", identity_mode="self")
+    cid = str(conv["id"])
+    await models.save_message(session, "assistant", "[EMO:neutral] " + text, worldline="steins_gate", conversation_id=cid)
+    mid = await models.save_message(session, "user", text, worldline="steins_gate", conversation_id=cid)
+    job = await jobs.enqueue_memory_job(session_id=session, worldline="steins_gate", conversation_id=cid, identity_mode="self", source_message_id=mid, provider_id="fake", model_id="fake")
+    captured = {}
+    async def complete(**kwargs):
+        captured.update(kwargs)
+        return {"observations": [_v113_observation("normal", normal)] if normal is not None else []}
+    result = await jobs.process_memory_job(job_id=job["job_id"], lease_owner="r2-e2e", memory_completion=complete)
+    assert result["state"] == "completed"
+    db = await get_db("steins_gate", "memory")
+    try:
+        sources = await (await db.execute("SELECT excerpt FROM memory_observation_sources WHERE source_message_id=?", (mid,))).fetchall()
+        if blocked:
+            assert captured == {}
+            assert sources == []
+            assert (await (await db.execute("SELECT count(*) FROM memory_observations WHERE session_id=?", (session,))).fetchone())[0] == 0
+        else:
+            assert captured and len(sources) == 1
+            assert normal in captured["user_text"]
+            for safe in [captured["user_text"], captured["previous_assistant_text"], sources[0][0]]:
+                assert fragment not in safe
+                assert unicodedata.normalize("NFKC", fragment) not in unicodedata.normalize("NFKC", safe)
+            assert (await (await db.execute("SELECT display_text FROM stable_fact_versions")).fetchone())[0] == normal
+    finally:
+        await db.close()
+    assert fragment not in caplog.text
+
+
+@pytest.mark.parametrize("text", [
+    "password is required",
+    "password is ｒｅｑｕｉｒｅｄ",
+    "密码是important",
+    "密码是ｉｍｐｏｒｔａｎｔ",
+])
+def test_r2_generic_compatible_prose_keeps_existing_negative_control(text):
+    assert not _classify(text)
+    assert _jobs().redact_user_text(text) == (text, False)
+
+
+@pytest.mark.parametrize("text", [
+    "password is abcﬀ",
+    "password is a\u030a!!",
+    "password is abc！",
+    "password is ａｂｃ１２３",
+    "密码是ａｂｃ１２３",
+])
+def test_r2_generic_shape_retains_old_ascii_hits_and_real_compatible_secrets(text):
+    assert "password" in _classify(text)
+    assert _jobs().redact_user_text(text)[0] != text

@@ -134,6 +134,21 @@ _PRC_CODES = "10X98765432"
 _CLAUSE_BOUNDARY_RE = re.compile(r"[，,。.；;！!？?\n]")
 
 
+def _has_credential_alnum(value: str) -> bool:
+    """Inspect ASCII-compatible letters/digits without changing source offsets.
+
+    Per-character NFKC also avoids composing a preceding Latin letter with a
+    combining mark. Length and shape checks still use the original value.
+    Han characters and kana do not become ASCII credential evidence.
+    """
+    if re.search(_ALNUM, value) is not None:
+        return True
+    return any(
+        re.search(_ALNUM, unicodedata.normalize("NFKC", ch)) is not None
+        for ch in value
+    )
+
+
 def _concrete_value_ok(value: str, *, min_len: int = 4) -> bool:
     v = value.strip()
     # Ignore only a complete generated placeholder (plus sentence punctuation).
@@ -141,7 +156,7 @@ def _concrete_value_ok(value: str, *, min_len: int = 4) -> bool:
     # before validation would weaken the shared migration gate for e.g. abc!.
     if _REDACTION_VALUE_RE.fullmatch(v.rstrip(_CREDENTIAL_TRAILING_PUNCTUATION)):
         return False
-    return len(v) >= min_len and re.search(_ALNUM, v) is not None
+    return len(v) >= min_len and _has_credential_alnum(v)
 
 
 def _secret_shaped(value: str) -> bool:
@@ -150,6 +165,11 @@ def _secret_shaped(value: str) -> bool:
     Contains a digit OR a non-letter password-like symbol. Pure alphabetic
     words ("required", "important", "weak", "usually") never qualify.
     """
+    # Compatibility-only values were not accepted by the old ASCII gate.
+    # Give them the same generic prose protection as their narrow equivalents,
+    # while preserving every original shape decision for existing ASCII values.
+    if re.search(_ALNUM, value) is None:
+        value = "".join(unicodedata.normalize("NFKC", ch) for ch in value)
     return bool(re.search(r"\d", value)) or bool(
         re.search(r"[^A-Za-z0-9\s]", value)
     )
@@ -188,9 +208,9 @@ def _credential_value_end(text: str, start: int, end: int, validator) -> int:
     if boundary is not None:
         prefix = text[start:boundary.start()]
         if _REDACTION_TOKEN_RE.fullmatch(prefix.rstrip(_CREDENTIAL_TRAILING_PUNCTUATION)):
-            # Preserve any ASCII residual inside the ORIGINAL token, even when
-            # that residual alone is too short to pass a credential validator.
-            return end if re.search(_ALNUM, text[boundary.end():end]) else boundary.start()
+            # Preserve any ASCII-compatible residual inside the ORIGINAL token,
+            # even when it alone is too short to pass a credential validator.
+            return end if _has_credential_alnum(text[boundary.end():end]) else boundary.start()
         if validator(prefix):
             return boundary.start()
     return end
@@ -232,7 +252,7 @@ def _credential_matches(text: str, category: str | None = None) -> list[tuple[in
                                for cue_patterns, _, _ in groups for pattern in cue_patterns):
                             break
                         # Check the original value including the marker prefix;
-                        # ordinary CJK prose has no ASCII credential evidence.
+                        # ordinary CJK prose has no ASCII-compatible credential evidence.
                         candidate = text[start:token_end]
                         if (_concrete_value_ok(token, min_len=8 if cls == API_SECRET else 4)
                                 and validator(candidate)):
@@ -251,9 +271,9 @@ def _credential_matches(text: str, category: str | None = None) -> list[tuple[in
             shortened = _credential_value_end(
                 text, match.start(), end, lambda v: _concrete_value_ok(v, min_len=8),
             )
-            # A bare key has no cue left after replacement. Keep any ASCII
-            # suffix covered instead of relying on a cue-based post-check.
-            if not re.search(_ALNUM, text[shortened:end]):
+            # A bare key has no cue left after replacement. Keep ASCII-compatible
+            # suffixes covered instead of relying on a cue-based post-check.
+            if not _has_credential_alnum(text[shortened:end]):
                 end = shortened
             value = text[match.start():end].rstrip(_CREDENTIAL_TRAILING_PUNCTUATION)
             spans.append((match.start(), match.start() + len(value), API_SECRET))
