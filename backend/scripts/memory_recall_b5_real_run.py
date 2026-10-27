@@ -4,6 +4,7 @@ Run from backend: python scripts/memory_recall_b5_real_run.py --run-dir PATH
 Fake replies are deliberately constant: their scores are plumbing evidence only.
 Each turn runs in a fresh process/data root; no application lifespan or ingest
 worker is started. Evaluator metadata never participates in prompt construction.
+The budget cap covers this run directory only; a new directory starts at zero.
 """
 
 from __future__ import annotations
@@ -17,16 +18,20 @@ import os
 import re
 import socket
 import statistics
+import threading
 import subprocess
 import sys
 import time
 import unicodedata
 import uuid
 from collections import Counter
-from contextlib import contextmanager, nullcontext
+from contextlib import ExitStack, contextmanager, nullcontext
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
+from urllib.parse import urlsplit, urlunsplit
+import urllib.request
 
 import httpx
 import portalocker
@@ -47,18 +52,21 @@ from memory_candidate_real_run import (  # noqa: E402
 )
 
 MAX_OUTPUT_TOKENS = 2000
+MAX_MAIN_ATTEMPTS = 3  # chat_ws.get_clean_text_stream, per first/tool-answer call.
+MAX_RENDER_ATTEMPTS = 2  # _render_foreign_speech_to_japanese, per render call.
 UNKNOWN_PHRASES = (
     "不知道", "不清楚", "不记得", "没有记录", "無法確定", "无法确定",
     "わからない", "分からない", "知らない", "覚えていない", "記録がない",
     "記録はない", "把握していない", "don't know", "do not know", "don't remember",
-    "do not remember", "no record", "not sure",
+    "do not remember", "no record", "not sure", "聞いてない", "聞いていない",
+    "覚えてない", "記憶にない", "不明", "没听说", "没告诉过",
 )
 # An unknown acknowledgement must name the requested subject. Bare uncertainty
 # cannot establish which part of a mixed answer is unknown and needs human review.
 UNKNOWN_SUBJECTS = {
-    "pet": ("宠物", "ペット", "pet", "飼って"),
-    "morning_drink": ("早上", "早晨", "朝", "morning", "飲み物", "饮料"),
-    "dinner_staple": ("晚餐", "晚饭", "夕食", "晩ご飯", "dinner"),
+    "pet": ("宠物", "ペット", "pet", "飼って", "猫", "ねこ", "犬", "狗", "cat", "dog"),
+    "morning_drink": ("早上", "早晨", "朝", "morning", "飲み物", "饮料", "咖啡", "コーヒー", "coffee"),
+    "dinner_staple": ("晚餐", "晚饭", "夕食", "晩ご飯", "dinner", "主食", "米", "ご飯", "パン", "麺"),
 }
 FAKE_ANSWER = "了解したわ。もう少し詳しく教えてくれる？"
 EVALUATOR_FIELDS = (
@@ -69,7 +77,7 @@ DISABLED = [
     "No app lifespan: no ingest worker, extraction, or compression scheduler",
     "get_clean_text_stream entry: no auto-title, subtitle translation/repair, or TTS",
     "Web executor is a local fixed stub; no search provider",
-    "Transport rejects retries and extra rounds; at most first/tool_answer/japanese_rewrite",
+    "Product retries allowed: up to 3 main requests per first/tool_answer call and 2 Japanese render attempts",
 ]
 
 
@@ -81,17 +89,22 @@ class BudgetExceeded(Refused):
     pass
 
 
+class AccountingUncertain(Refused):
+    """Stop the whole run because provider expenditure cannot be bounded safely."""
+
+
 @contextmanager
 def fake_network_guard():
-    """Keep fake workers offline while allowing Windows asyncio's socketpair."""
+    """Deny all network; only socketpair's synchronous local setup may connect."""
     connect = socket.socket.connect
     connect_ex = socket.socket.connect_ex
-    getaddrinfo = socket.getaddrinfo
+    socketpair = socket.socketpair
+    local = threading.local()
     loopback = ("127.0.0.1", "::1", b"127.0.0.1", b"::1")
 
     def check_address(address):
-        # Do not resolve names here: only numeric loopback destinations may pass.
-        if not isinstance(address, tuple) or not address or address[0] not in loopback:
+        if not (getattr(local, "socketpair", False) and isinstance(address, tuple)
+                and address and address[0] in loopback):
             raise Refused("network_forbidden_in_fake")
 
     def offline_connect(sock, address):
@@ -102,20 +115,40 @@ def fake_network_guard():
         check_address(address)
         return connect_ex(sock, address)
 
-    def offline_getaddrinfo(host, *args, **kwargs):
-        if host not in (*loopback, "localhost", b"localhost"):
-            raise Refused("network_forbidden_in_fake")
-        return getaddrinfo(host, *args, **kwargs)
+    def local_socketpair(*args, **kwargs):
+        previous = getattr(local, "socketpair", False)
+        local.socketpair = True
+        try:
+            return socketpair(*args, **kwargs)
+        finally:
+            local.socketpair = previous
 
-    socket.socket.connect = offline_connect
-    socket.socket.connect_ex = offline_connect_ex
-    socket.getaddrinfo = offline_getaddrinfo
-    try:
+    def forbidden(*_args, **_kwargs):
+        raise Refused("network_forbidden_in_fake")
+
+    async def async_forbidden(*_args, **_kwargs):
+        raise Refused("network_forbidden_in_fake")
+
+    from asyncio.selector_events import BaseSelectorEventLoop
+
+    with ExitStack() as stack:
+        for owner, name, replacement in [
+            (socket.socket, "connect", offline_connect),
+            (socket.socket, "connect_ex", offline_connect_ex),
+            (socket, "socketpair", local_socketpair),
+            (socket, "getaddrinfo", forbidden),
+            (BaseSelectorEventLoop, "sock_connect", async_forbidden),
+            (httpx.HTTPTransport, "handle_request", forbidden),
+            (httpx.AsyncHTTPTransport, "handle_async_request", async_forbidden),
+            (urllib.request, "urlopen", forbidden),
+        ]:
+            stack.enter_context(patch.object(owner, name, replacement))
+        if sys.platform == "win32":
+            from asyncio.proactor_events import BaseProactorEventLoop
+            from asyncio.windows_events import IocpProactor
+            stack.enter_context(patch.object(BaseProactorEventLoop, "sock_connect", async_forbidden))
+            stack.enter_context(patch.object(IocpProactor, "connect", forbidden))
         yield
-    finally:
-        socket.socket.connect = connect
-        socket.socket.connect_ex = connect_ex
-        socket.getaddrinfo = getaddrinfo
 
 
 def sha256(path: Path) -> str:
@@ -165,6 +198,20 @@ def append_json(path: Path, value: Any) -> None:
         os.fsync(handle.fileno())
 
 
+def canonical_base_url(base_url: str) -> str:
+    try:
+        parts = urlsplit(base_url)
+        if not official_deepseek_base_url(base_url):
+            raise ValueError
+        normalized = urlunsplit((parts.scheme.lower(), (parts.hostname or "").lower(),
+                                 parts.path.rstrip("/"), parts.query, parts.fragment))
+    except ValueError:
+        raise Refused("unofficial_base_url") from None
+    if normalized != BUILTIN_DEEPSEEK_BASE_URL:
+        raise Refused("unofficial_base_url")
+    return normalized
+
+
 def check_real_gate(transport: str, base_url: str, cap_cny: str | None,
                     environ: dict | None = None) -> None:
     env = os.environ if environ is None else environ
@@ -176,12 +223,7 @@ def check_real_gate(transport: str, base_url: str, cap_cny: str | None,
         raise Refused("real_http_not_authorized")
     if not str(env.get("DEEPSEEK_API_KEY", "")).strip():
         raise Refused("real_credential_missing")
-    try:
-        official = official_deepseek_base_url(base_url)
-    except ValueError:
-        official = False
-    if not official:
-        raise Refused("unofficial_base_url")
+    canonical_base_url(base_url)
     try:
         cap = Decimal(cap_cny or "NaN")
     except Exception:
@@ -203,13 +245,13 @@ def make_plan(qset: dict, digest: str, *, transport="fake", base_url=BUILTIN_DEE
     rows = [
         {"id": f"{mode}-{case['id']}-{repeat}", "mode": mode,
          "case_id": case["id"], "cohort": case["cohort"], "repeat": repeat}
-        for mode in ("legacy", "v11") for case in qset["cases"]
-        for repeat in range(1, case["repeats"] + 1)
+        for case in qset["cases"] for repeat in range(1, case["repeats"] + 1)
+        for mode in ("legacy", "v11")
     ]
     if Counter(row["mode"] for row in rows) != {"legacy": 41, "v11": 41}:
         raise Refused("frozen_execution_count_changed")
     return {"version": 1, "question_sha256": digest, "script_sha256": sha256(SCRIPT),
-            "transport": transport, "base_url": base_url, "cap_cny": cap_cny,
+            "transport": transport, "base_url": canonical_base_url(base_url), "cap_cny": cap_cny,
             "model": model, "max_tokens": MAX_OUTPUT_TOKENS, "e5_snapshot": e5_snapshot,
             "executions": rows, "rules": qset["rules"]}
 
@@ -243,15 +285,15 @@ def normalize(text: str) -> str:
 
 def leakage_violations(payload: dict, qset: dict, allowed_texts=()) -> list[str]:
     raw = json.dumps(payload, ensure_ascii=False)
-    failures = [f"evaluator_field:{key}" for key in EVALUATOR_FIELDS
-                if re.search(r'\b' + key + r'\b', raw)]
     # Display values, actual input/history, and prior model output are legitimate
     # sources; labels accidentally identical to words in those sources are not
     # evaluator leakage. Never whitelist the expected object itself.
     text = raw
     for value in sorted(set(allowed_texts), key=len, reverse=True):
         if value:
-            text = text.replace(value, " ")
+            text = text.replace(json.dumps(value, ensure_ascii=False)[1:-1], " ")
+    failures = [f"evaluator_field:{key}" for key in EVALUATOR_FIELDS
+                if re.search(r'\b' + key + r'\b', text)]
     labels = {row["key"] for row in fact_catalog(qset)}
     labels.update(value for case in qset["cases"]
                   for value in case["expected"].get("must_express_unknown_for", []))
@@ -274,31 +316,47 @@ def scope_violations(payload: dict, qset: dict, case: dict) -> list[str]:
             and row["display_text"] in text]
 
 
-def score(case: dict, answer: str, calls: list[dict], qset: dict) -> dict:
+def score(case: dict, answer: str, calls: list[dict], qset: dict, *, mode="v11") -> dict:
     from app.services.turn_tool_orchestrator import collect_recall_payloads
 
     expected = case["expected"]
     recalls = [c for c in calls if (c.get("function") or {}).get("name") == "recall_memory"]
     needs, error = collect_recall_payloads(recalls)
-    failures = []
+    tool_failures = []
     category = expected["recall_memory"]
     if category == "required" and not recalls:
-        failures.append("recall_required")
+        tool_failures.append("recall_required")
     if category == "forbidden" and recalls:
-        failures.append("recall_forbidden")
+        tool_failures.append("recall_forbidden")
     if error:
-        failures.append("invalid_needs")
+        tool_failures.append("invalid_needs")
     if recalls and expected["exact_need_count"] is not None and len(needs) != expected["exact_need_count"]:
-        failures.append("exact_need_count")
+        tool_failures.append("exact_need_count")
     if len(needs) > expected["max_need_count"]:
-        failures.append("max_need_count")
+        tool_failures.append("max_need_count")
     text = normalize(answer)
-    used = sorted({row["key"] for row in fact_catalog(qset)
-                   if any(normalize(alias) in text for alias in
-                          [row["display_text"], *row.get("aliases", [])] if normalize(alias))})
-    failures.extend(f"missing:{key}" for key in expected["must_use_fact_keys"] if key not in used)
-    failures.extend(f"forbidden:{key}" for key in expected["must_not_use_fact_keys"] if key in used)
-    manual = []
+    sources = [normalize(case["query"]), *(normalize(m["content"]) for m in case["history"])]
+    matches, collisions = {}, {}
+    for row in fact_catalog(qset):
+        aliases = [row["display_text"], *row.get("aliases", [])]
+        matches[row["key"]] = [a for a in aliases if normalize(a) and normalize(a) in text]
+        collisions[row["key"]] = [a for a in aliases if normalize(a) and any(normalize(a) in s for s in sources)]
+    used = sorted(key for key, aliases in matches.items() if aliases)
+    failures, manual, collision_details = [], [], []
+    for rule, keys in (("must_use", expected["must_use_fact_keys"]),
+                       ("must_not", expected["must_not_use_fact_keys"])):
+        for key in keys:
+            matched, shared = matches.get(key, []), collisions.get(key, [])
+            ambiguous = bool(matched and shared and (
+                rule == "must_not" or all(normalize(a) in {normalize(s) for s in shared} for a in matched)))
+            if ambiguous:
+                manual.append(f"{rule}_collision:{key}")
+                collision_details.append({"fact_key": key, "rule": rule,
+                                          "input_aliases": shared, "matched_aliases": matched})
+            elif rule == "must_use" and not matched:
+                failures.append(f"missing:{key}")
+            elif rule == "must_not" and matched:
+                failures.append(f"forbidden:{key}")
     for subject in expected["must_express_unknown_for"]:
         # Restrict uncertainty to the same sentence as its subject. Negation and
         # implied/contradictory unknowns still require manual review.
@@ -308,25 +366,34 @@ def score(case: dict, answer: str, calls: list[dict], qset: dict) -> dict:
                          for sentence in sentences)
         if not recognized:
             manual.append(subject)
-    status = "fail" if failures else "needs_manual" if manual else "pass"
-    return {"status": status, "failures": failures, "needs_manual": manual,
-            "used_fact_keys": used, "recall_called": bool(recalls), "need_count": len(needs),
-            "needs": needs, "diagnostic_only": bool(expected["diagnostic_only"])}
+    answer_status = "fail" if failures else "needs_manual" if manual else "pass"
+    if mode == "legacy":
+        tool_failures = []
+    combined = failures + tool_failures
+    status = "fail" if combined else "needs_manual" if manual else "pass"
+    return {"status": status, "failures": combined, "needs_manual": manual,
+            "answer": {"status": answer_status, "failures": failures, "needs_manual": manual},
+            "tool": {"status": "fail" if tool_failures else "pass", "failures": tool_failures,
+                     "needs_manual": []} if mode == "v11" else None,
+            "alias_collisions": collision_details,
+            "used_fact_keys": used, "recall_called": bool(recalls) if mode == "v11" else None,
+            "need_count": len(needs) if mode == "v11" else None,
+            "needs": needs if mode == "v11" else None, "diagnostic_only": bool(expected["diagnostic_only"])}
 
 
 def usage_cost(usage: dict) -> Decimal:
     def tokens(key):
         value = usage.get(key)
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise Refused("invalid_usage")
+            raise AccountingUncertain("invalid_usage")
         return value
 
     prompt, output = tokens("prompt_tokens"), tokens("completion_tokens")
     hit = usage.get("prompt_cache_hit_tokens", (usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0))
     if isinstance(hit, bool) or not isinstance(hit, int) or not 0 <= hit <= prompt:
-        raise Refused("invalid_cache_usage")
+        raise AccountingUncertain("invalid_cache_usage")
     if "prompt_cache_miss_tokens" in usage and tokens("prompt_cache_miss_tokens") != prompt - hit:
-        raise Refused("invalid_cache_usage")
+        raise AccountingUncertain("invalid_cache_usage")
     return (Decimal(prompt - hit) * Decimal(str(PEAK_INPUT_CNY_PER_MILLION))
             + Decimal(hit) * Decimal(str(PEAK_CACHE_HIT_CNY_PER_MILLION))
             + Decimal(output) * Decimal(str(PEAK_OUTPUT_CNY_PER_MILLION))) / 1_000_000
@@ -363,26 +430,34 @@ class Budget:
     def committed(self) -> Decimal:
         return sum((Decimal(row["charge_cny"]) for row in self.state["attempts"]), Decimal(0))
 
-    def reserve(self, payload: dict, execution_id: str) -> int:
+    def amounts(self, execution_id: str | None = None) -> dict:
+        rows = [r for r in self.state["attempts"] if execution_id is None or r["execution_id"] == execution_id]
+        return {"settled_cny": str(sum((Decimal(r["charge_cny"]) for r in rows if r["status"] == "settled"), Decimal(0))),
+                "retained_reserve_cny": str(sum((Decimal(r["charge_cny"]) for r in rows if r["status"] == "reserved"), Decimal(0)))}
+
+    def reserve(self, payload: dict, execution_id: str, *, kind="first", attempt=1, phase="first") -> int:
         reserve = (Decimal(estimate_input_tokens(payload)) * Decimal(str(PEAK_INPUT_CNY_PER_MILLION))
                    + Decimal(payload["max_tokens"]) * Decimal(str(PEAK_OUTPUT_CNY_PER_MILLION))) / 1_000_000
         if self.committed + reserve > self.cap:
             raise BudgetExceeded("not_run_budget")
         index = len(self.state["attempts"])
         self.state["attempts"].append({"execution_id": execution_id, "charge_cny": str(reserve),
-                                       "reserve_cny": str(reserve), "status": "reserved"})
+                                       "reserve_cny": str(reserve), "status": "reserved",
+                                       "kind": kind, "attempt": attempt, "phase": phase})
         write_json(self.path, self.state)
         return index
 
     def settle(self, index: int, usage: dict | None) -> None:
         if usage is None:
-            raise Refused("usage_missing_reservation_retained")
+            raise AccountingUncertain("usage_missing_reservation_retained")
         cost = usage_cost(usage)
         row = self.state["attempts"][index]
         row.update(charge_cny=str(cost), status="settled", usage=usage)
+        if cost > Decimal(row["reserve_cny"]):
+            self.state["stop_reason"] = "usage_exceeded_reservation_stop"
         write_json(self.path, self.state)
         if cost > Decimal(row["reserve_cny"]):
-            raise Refused("usage_exceeded_reservation_stop")
+            raise AccountingUncertain("usage_exceeded_reservation_stop")
 
 
 def request_kind(payload: dict, phase: str) -> str:
@@ -415,17 +490,52 @@ class Capture:
         self.plan, self.entry, self.qset, self.case, self.directory = plan, entry, qset, case, directory
         self.phase = "first"
         self.requests: list[dict] = []
-        self.kinds: set[str] = set()
+        self.main_attempts = Counter()
+        self.renderer_attempts = Counter()
+        self.refusals: list[Refused] = []
         self.allowed = [case["query"], *(m["content"] for m in case["history"]),
                         *(row["display_text"] for row in fact_catalog(qset))]
         self.budget = Budget(directory.parents[1] / "budget.json", plan["cap_cny"]) if plan["transport"] == "real" else None
 
     async def handle(self, request: httpx.Request) -> httpx.Response:
+        try:
+            return await self._handle(request)
+        except Exception as exc:
+            if self.budget and (Decimal(self.budget.amounts(self.entry["id"])["retained_reserve_cny"])
+                                or self.budget.state.get("stop_reason")) and not isinstance(exc, AccountingUncertain):
+                exc = AccountingUncertain("request_failed_reservation_retained")
+            if isinstance(exc, Refused):
+                self.refusals.append(exc)
+            raise exc from None
+        finally:
+            if self.requests:
+                if self.budget:
+                    for record in self.requests:
+                        row = self.budget.state["attempts"][record["budget_index"]]
+                        record["settled_cny"] = row["charge_cny"] if row["status"] == "settled" else "0"
+                        record["retained_reserve_cny"] = row["charge_cny"] if row["status"] == "reserved" else "0"
+                write_json(self.directory / "requests.json", self.requests)
+
+    def raise_if_refused(self):
+        # The product renderer catches provider errors; never score its fallback
+        # as a successful benchmark answer after our transport refused a request.
+        for kind in (AccountingUncertain, BudgetExceeded, Refused):
+            for exc in self.refusals:
+                if isinstance(exc, kind):
+                    raise exc
+
+    async def _handle(self, request: httpx.Request) -> httpx.Response:
         check_real_gate(self.plan["transport"], self.plan["base_url"], self.plan["cap_cny"])
         payload = json.loads(request.content)
         kind = request_kind(payload, self.phase)
-        if kind in self.kinds or len(self.kinds) >= 3:
-            raise Refused("extra_model_request_blocked")
+        if kind == "japanese_rewrite":
+            attempt = self.renderer_attempts[self.phase] + 1
+            if attempt > MAX_RENDER_ATTEMPTS or not self.main_attempts[self.phase]:
+                raise Refused("extra_model_request_blocked")
+        else:
+            attempt = self.main_attempts[self.phase] + 1
+            if self.phase not in {"first", "tool_answer"} or attempt > MAX_MAIN_ATTEMPTS or self.renderer_attempts[self.phase]:
+                raise Refused("extra_model_request_blocked")
         if request.method != "POST" or str(request.url) != self.plan["base_url"].rstrip("/") + "/chat/completions":
             raise Refused("unexpected_model_destination")
         leaks = leakage_violations(payload, self.qset, self.allowed)
@@ -436,9 +546,18 @@ class Capture:
         payload["stream_options"] = {"include_usage": True}
         # The request below is the intercepted product envelope plus the two
         # explicit billing controls above; captures show exactly what is sent.
-        record = {"kind": kind, "request": payload, "input_estimate_tokens": estimate_input_tokens(payload)}
-        index = self.budget.reserve(payload, self.entry["id"]) if self.budget else None
-        self.kinds.add(kind)
+        record = {"kind": kind, "phase": self.phase, "attempt": attempt, "request": payload,
+                  "input_estimate_tokens": estimate_input_tokens(payload)}
+        index = self.budget.reserve(payload, self.entry["id"], kind=kind, attempt=attempt,
+                                    phase=self.phase) if self.budget else None
+        if kind == "japanese_rewrite":
+            self.renderer_attempts[self.phase] = attempt
+        else:
+            self.main_attempts[self.phase] = attempt
+        record["main_attempt"] = self.main_attempts[self.phase]
+        if self.budget:
+            record["budget_index"] = index
+            record["reserve_cny"] = self.budget.state["attempts"][index]["reserve_cny"]
         self.requests.append(record)
         write_json(self.directory / "requests.json", self.requests)
         start = time.perf_counter()
@@ -467,6 +586,7 @@ class Capture:
         record["elapsed_ms"] = (time.perf_counter() - start) * 1000
         record["response_sse"] = body
         usage = None
+        content_parts, arguments = [], {}
         for line in body.splitlines():
             if line.startswith("data:"):
                 try:
@@ -478,17 +598,25 @@ class Capture:
                 for choice in chunk.get("choices", []):
                     delta = choice.get("delta", {})
                     if delta.get("content"):
-                        self.allowed.append(delta["content"])
+                        content_parts.append(delta["content"])
                     for call in delta.get("tool_calls", []):
-                        arguments = (call.get("function") or {}).get("arguments", "")
-                        self.allowed.append(arguments)
-                        try:
-                            self.allowed.extend(value for value in json.loads(arguments).get("needs", []) if isinstance(value, str))
-                        except (ValueError, AttributeError):
-                            pass
+                        key = call.get("index", call.get("id", 0))
+                        arguments[key] = arguments.get(key, "") + (call.get("function") or {}).get("arguments", "")
+        self.allowed.append("".join(content_parts))
+        for raw in arguments.values():
+            self.allowed.append(raw)
+            try:
+                from app.services.memory_v11.recall import normalize_needs
+                for value in json.loads(raw).get("needs", []):
+                    if isinstance(value, str):
+                        self.allowed.extend([value, *normalize_needs([value]), normalize(value)])
+            except (ValueError, TypeError, AttributeError):
+                pass
         record["usage"] = usage
-        record["cost_cny"] = str(usage_cost(usage)) if usage is not None else None
-        write_json(self.directory / "requests.json", self.requests)
+        if usage is None:
+            raise AccountingUncertain("usage_missing_reservation_retained")
+        record["cost_cny"] = str(usage_cost(usage))
+        record.update(settled_cny=record["cost_cny"], retained_reserve_cny="0")
         if self.budget:
             self.budget.settle(index, usage)
         return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
@@ -589,7 +717,10 @@ async def product_turn(plan: dict, entry: dict, directory: Path) -> dict:
     from app import models
     from app.db import init_db, reset_initialization_cache
     from app.agent_tools import AMADEUS_TOOLS
-    from app.routers.chat_ws import SessionState, get_clean_text_stream, should_force_search, build_web_search_evidence_context
+    from app.routers.chat_ws import (
+        SessionState, get_clean_text_stream, should_force_search,
+        build_web_search_evidence_context, build_tool_result_context,
+    )
     from app.services import prompt_compiler as compiler
     from app.services.conversations import conversation_service
     from app.services.memory import EmbeddingAdapter, memory_service
@@ -675,7 +806,14 @@ async def product_turn(plan: dict, entry: dict, directory: Path) -> dict:
         history = list(session.history)
 
         async def web_stub(_name, _arguments):
+            if _name != "web_search":
+                return f"Error: Tool {_name} not found."
             return case.get("web_stub", {}).get("result", "Local stub: public evidence unavailable.")
+
+        async def clean(**kwargs):
+            response = await get_clean_text_stream(**kwargs)
+            capture.raise_if_refused()
+            return response
 
         # Match the product's v11 direct-search evidence path, with a local stub.
         if force_search:
@@ -686,42 +824,58 @@ async def product_turn(plan: dict, entry: dict, directory: Path) -> dict:
                                        provider_id="deepseek", adapter_kind=type(adapter).__name__).tools
         if entry["mode"] == "legacy" and not force_search:
             tools = list(AMADEUS_TOOLS)
-        answer, _, calls, _ = await get_clean_text_stream(active_history=history, memory_summary="",
+        answer, _, calls, _ = await clean(active_history=history, memory_summary="",
             session=session, tools=tools, tool_choice="auto" if tools else None,
             provider_snapshot=provider, mode_state=turn.mode_state if entry["mode"] == "v11" else None)
         result["calls"] = list(calls.values())
         if calls:
-            if entry["mode"] != "v11":
-                raise Refused("unexpected_legacy_tool")
-            outcome = await apply_v11_tool_batch(record=turn, session=session, provider=provider,
-                calls=result["calls"], web_executor=web_stub)
-            if outcome.recall_result is not None:
-                async def refresh(_attempt):
-                    recalled = await refresh_candidates_for_send(turn, session, provider)
-                    return prepare_second_round_payload(history, recalled,
-                        system_prompt=session.system_prompt).history
-                second_history = await refresh(0)
+            refresh = None
+            if entry["mode"] == "v11":
+                outcome = await apply_v11_tool_batch(record=turn, session=session, provider=provider,
+                    calls=result["calls"], web_executor=web_stub)
+                extra_web = turn.web_results[1:] if force_search else turn.web_results
+                if outcome.recall_result is not None:
+                    payload = prepare_second_round_payload(history, outcome.recall_result,
+                        extra_web or None, system_prompt=session.system_prompt)
+                    if payload.result is not None:
+                        turn.recall_result = payload.result
+                        turn.ranked_items = list(payload.result.ranked_items or [])
+                    second_history = payload.history
+
+                    async def refresh(_attempt):
+                        recalled = await refresh_candidates_for_send(turn, session, provider)
+                        return prepare_second_round_payload(history, recalled, extra_web or None,
+                            system_prompt=session.system_prompt).history
+                elif turn.web_results:
+                    second_history = build_v11_web_evidence_context(history, list(turn.web_results))
+                else:
+                    second_history = build_tool_result_context(history, [])
             else:
-                refresh = None
-                second_history = build_v11_web_evidence_context(history, turn.web_results)
+                tool_results = []
+                for call in result["calls"]:
+                    name = (call.get("function") or {}).get("name")
+                    arguments = (call.get("function") or {}).get("arguments")
+                    tool_results.append((name or "unknown_tool", await web_stub(name, arguments)))
+                second_history = build_tool_result_context(history, tool_results)
             capture.phase = "tool_answer"
-            answer, _, late_calls, _ = await get_clean_text_stream(active_history=second_history,
-                memory_summary="", session=session, provider_snapshot=provider,
-                mode_state=TurnModeState(), before_send=refresh)
-            if late_calls:
-                raise Refused("late_tool_calls")
+            answer, _, _, _ = await clean(active_history=second_history,
+                memory_summary="", session=session, tools=None, tool_choice=None, provider_snapshot=provider,
+                mode_state=TurnModeState() if entry["mode"] == "v11" else None, before_send=refresh)
         result["answer"] = answer
-        result["score"] = score(case, answer, result["calls"], qset)
+        result["score"] = score(case, answer, result["calls"], qset, mode=entry["mode"])
     except Exception as exc:
+        try:
+            capture.raise_if_refused()
+        except Refused as refused:
+            exc = refused
         result.update(status="not_run_budget" if isinstance(exc, BudgetExceeded) else "error",
                       error=str(exc) if isinstance(exc, Refused) else type(exc).__name__,
-                      score={"status": "fail", "failures": ["execution_error"],
-                             "needs_manual": [], "diagnostic_only": case["expected"]["diagnostic_only"]})
+                      stop_run=isinstance(exc, AccountingUncertain))
     finally:
         compiler._select_v11_memory_supplement = original_supplement
     result.update(requests=capture.requests, request_count=len(capture.requests),
-                  elapsed_ms=(time.perf_counter() - started) * 1000,
-                  cost_cny=str(sum((Decimal(r.get("cost_cny") or "0") for r in capture.requests), Decimal(0))) )
+                  elapsed_ms=(time.perf_counter() - started) * 1000)
+    execution_accounting(result, directory.parents[1], plan)
     if sha256(QUESTION_SET) != digest:
         raise Refused("question_set_changed_after_execution")
     return result
@@ -736,6 +890,8 @@ def execute_subprocess(plan: dict, entry: dict, directory: Path) -> dict:
     env = isolation.isolated_environ(run_root=directory, candidate=root, backend_port=18001, frontend_port=18422)
     env.update(AMADEUS_MEMORY_MODE=entry["mode"], HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1",
                HF_HUB_DISABLE_TELEMETRY="1", TOKENIZERS_PARALLELISM="false")
+    if plan["transport"] == "fake":
+        env.update(NO_PROXY="*", no_proxy="*")
     # User-installed packages must remain importable after the child's HOME is
     # isolated. Only package directories are inherited, never user startup files.
     env["PYTHONPATH"] = os.pathsep.join([str(BACKEND), *[
@@ -747,9 +903,14 @@ def execute_subprocess(plan: dict, entry: dict, directory: Path) -> dict:
                 "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
                 "DEEPSEEK_API_KEY", "AMADEUS_B5_REAL_HTTP"}):
                 env[key] = value
-    proc = subprocess.run([sys.executable, str(SCRIPT), "--worker", str(directory)],
-                          cwd=BACKEND, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          timeout=600, check=False)
+    try:
+        proc = subprocess.run([sys.executable, str(SCRIPT), "--worker", str(directory)],
+                              cwd=BACKEND, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              timeout=600, check=False)
+    except subprocess.TimeoutExpired:
+        raise AccountingUncertain("worker_timeout") from None
+    except OSError:
+        raise AccountingUncertain("worker_start_failed") from None
     # Only a final, allowlisted refusal code may escape raw subprocess output.
     if proc.returncode or not (directory / "result.json").is_file():
         failure = "worker_failed_" + str(proc.returncode)
@@ -757,10 +918,29 @@ def execute_subprocess(plan: dict, entry: dict, directory: Path) -> dict:
         code = re.fullmatch(rb"B5 refused: ([a-z0-9_:,]+)", lines[-1]) if lines else None
         if code:
             failure += ":" + code[1].decode("ascii")
-        raise Refused(failure)
-    result = read_json(directory / "result.json")
+        raise AccountingUncertain(failure)
+    try:
+        result = read_json(directory / "result.json")
+        if not isinstance(result, dict) or result.get("id") != entry["id"] or "status" not in result:
+            raise ValueError
+    except (ValueError, OSError):
+        raise AccountingUncertain("worker_result_invalid") from None
     result["execution_wall_ms"] = (time.perf_counter() - started) * 1000
     return result
+
+
+def execution_accounting(row: dict, run_dir: Path, plan: dict) -> None:
+    budget_path = run_dir / "budget.json"
+    if budget_path.exists():
+        budget = Budget(budget_path, plan["cap_cny"])
+        row.update(budget.amounts(row["id"]))
+        if Decimal(row["retained_reserve_cny"]) or budget.state.get("stop_reason"):
+            row["stop_run"] = True
+    else:
+        row["settled_cny"] = str(sum((Decimal(r.get("cost_cny") or "0") for r in row.get("requests", [])), Decimal(0)))
+        row["retained_reserve_cny"] = "0"
+    row["cost_cny"] = str(Decimal(row["settled_cny"]) + Decimal(row["retained_reserve_cny"]))
+    row["actual_cost_cny"] = row["settled_cny"] if plan["transport"] == "real" else "0"
 
 
 def percentile(values: list, p: float) -> float | None:
@@ -772,30 +952,39 @@ def percentile(values: list, p: float) -> float | None:
 
 def summarize(plan: dict, rows: list[dict], qset: dict) -> tuple[dict, str]:
     cases = {c["id"]: c for c in qset["cases"]}
-    def rates(selected):
+    def rates(selected, layer=None):
         # Repeated cases are a unit: all frozen repetitions must pass.
         unique = sorted({r["case_id"] for r in selected})
         eligible = [c for c in unique if not cases[c]["expected"]["diagnostic_only"]]
         counts = Counter()
         for case_id in eligible:
             found = [r for r in selected if r["case_id"] == case_id]
-            if any(r["status"] == "error" or r.get("score", {}).get("status") == "fail" for r in found):
+            scores = [r.get("score", {}).get(layer, r.get("score", {})) if layer else r.get("score", {})
+                      for r in found if r["status"] == "completed"]
+            has_error = any(r["status"] in {"error", "interrupted"} for r in found)
+            has_unrun = (len(found) != cases[case_id]["repeats"] or any(
+                r["status"] not in {"completed", "error", "interrupted"} for r in found))
+            if any(s.get("status") == "fail" for s in scores):
                 counts["failed"] += 1
-            elif any(r["status"] == "interrupted" or r.get("score", {}).get("status") == "needs_manual" for r in found):
+            elif has_error or has_unrun:
+                counts["incomplete"] += 1
+                counts["error"] += int(has_error)
+                counts["not_run"] += int(has_unrun)
+            elif any(s.get("status") != "pass" for s in scores):
                 counts["needs_manual"] += 1
-            elif len(found) != cases[case_id]["repeats"] or any(r["status"] != "completed" for r in found):
-                counts["not_run"] += 1
             else:
                 counts["passed"] += 1
         evaluated = counts["passed"] + counts["failed"]
-        return {**{key: counts[key] for key in ("passed", "failed", "needs_manual", "not_run")},
+        return {**{key: counts[key] for key in ("passed", "failed", "needs_manual", "not_run", "error", "incomplete")},
                 "total": len(eligible), "evaluated": evaluated,
                 "rate": counts["passed"] / evaluated if evaluated else None}
 
     summary = {"transport": plan["transport"], "question_sha256": plan["question_sha256"], "modes": {}}
     lines = ["# B5 read benchmark", "", f"transport: {plan['transport']}",
              f"question_sha256: {plan['question_sha256']}",
-             "Rates = passed/(passed+failed) cases; every repetition must pass. Manual/unrun/diagnostic excluded.",
+             "Rates = passed/(passed+failed) cases; every repetition must pass. Manual/incomplete/diagnostic excluded.",
+             "Only completed executions are scored. Legacy overall is answer-only; v11 overall includes tools.",
+             "Budget cap is per run directory; a new directory starts at zero.",
              "Fake scores validate plumbing only. Fake usage is a UTF-8 byte upper estimate.", ""]
     for mode in ("legacy", "v11"):
         selected = [r for r in rows if r["mode"] == mode]
@@ -803,16 +992,24 @@ def summarize(plan: dict, rows: list[dict], qset: dict) -> tuple[dict, str]:
         durations = [r.get("execution_wall_ms", r.get("elapsed_ms")) for r in selected
                      if "execution_wall_ms" in r or "elapsed_ms" in r]
         model_summary = {"executions": len(selected), "overall": rates(selected),
+            "answer": rates(selected, "answer"),
+            "tool": rates(selected, "tool") if mode == "v11" else None,
             "cohorts": {c: rates([r for r in selected if r["cohort"] == c]) for c in ("regression", "first_look")},
-            "categories": {c: rates([r for r in selected if cases[r["case_id"]]["expected"]["recall_memory"] == c])
-                           for c in ("required", "forbidden", "allowed")},
+            "categories": {c: rates([r for r in selected if cases[r["case_id"]]["expected"]["recall_memory"] == c], "tool")
+                           if mode == "v11" else None for c in ("required", "forbidden", "allowed")},
+            "need_counts": dict(Counter(r.get("score", {}).get("need_count") for r in selected
+                                         if r["status"] == "completed")) if mode == "v11" else None,
             "needs_manual": sum(bool(r.get("score", {}).get("needs_manual")) or r["status"] == "interrupted" for r in selected),
             "statuses": dict(Counter(r["status"] for r in selected)),
+            "error_executions": sum(r["status"] == "error" for r in selected),
+            "error_reasons": dict(Counter(r.get("error", "unknown") for r in selected if r["status"] == "error")),
             "request_kinds": dict(Counter(r["kind"] for r in requests)),
             "request_count_per_execution": dict(Counter(r.get("request_count", 0) for r in selected)),
             "cost_cny": str(sum((Decimal(r.get("cost_cny") or "0") for r in selected), Decimal(0))),
+            "settled_cny": str(sum((Decimal(r.get("settled_cny") or "0") for r in selected), Decimal(0))),
+            "retained_reserve_cny": str(sum((Decimal(r.get("retained_reserve_cny") or "0") for r in selected), Decimal(0))),
             "actual_cost_cny": "0" if plan["transport"] == "fake" else str(sum(
-                (Decimal(r.get("cost_cny") or "0") for r in selected), Decimal(0))),
+                (Decimal(r.get("actual_cost_cny") or "0") for r in selected), Decimal(0))),
             "elapsed_ms_p50": statistics.median(durations) if durations else None,
             "elapsed_ms_p95": percentile(durations, .95),
             "input_tokens_p50": statistics.median(tokens) if (tokens := [r["usage"]["prompt_tokens"] for r in requests if r.get("usage")]) else None,
@@ -820,17 +1017,25 @@ def summarize(plan: dict, rows: list[dict], qset: dict) -> tuple[dict, str]:
             "e5_loaded_executions": sum(r.get("e5", {}).get("loaded", False) for r in selected)}
         summary["modes"][mode] = model_summary
         def rate_text(value):
+            if value is None:
+                return "n/a (legacy has no recall_memory tool)"
             rate = f"{value['rate']:.1%}" if value["rate"] is not None else "n/a"
             return (f"{value['passed']}/{value['evaluated']} ({rate}); "
-                    f"planned={value['total']}, manual={value['needs_manual']}, unrun={value['not_run']}")
+                    f"planned={value['total']}, manual={value['needs_manual']}, "
+                    f"incomplete={value['incomplete']}, error={value['error']}, unrun={value['not_run']}")
         lines.extend([f"## {mode}", f"executions: {len(selected)}; statuses: {model_summary['statuses']}",
                       "overall: " + rate_text(model_summary["overall"]),
+                      "answer: " + rate_text(model_summary["answer"]),
+                      "tool: " + rate_text(model_summary["tool"]),
                       *[f"{key}: {rate_text(value)}" for key, value in model_summary["cohorts"].items()],
                       *[f"expected.{key}: {rate_text(value)}" for key, value in model_summary["categories"].items()],
+                      f"need counts: {model_summary['need_counts'] if mode == 'v11' else 'n/a'}",
                       f"needs_manual executions: {model_summary['needs_manual']}",
+                      f"error executions: {model_summary['error_executions']}; reasons: {model_summary['error_reasons']}",
                       f"requests: {model_summary['request_kinds']}; per execution: {model_summary['request_count_per_execution']}",
                       f"{'synthetic estimated' if plan['transport'] == 'fake' else 'actual'} cost_cny: {model_summary['cost_cny']}",
                       f"actual cost_cny: {model_summary['actual_cost_cny']}",
+                      f"{'synthetic ' if plan['transport'] == 'fake' else ''}settled_cny: {model_summary['settled_cny']}; retained_reserve_cny: {model_summary['retained_reserve_cny']}",
                       f"execution wall_ms P50/P95: {model_summary['elapsed_ms_p50']}/{model_summary['elapsed_ms_p95']}",
                       f"input tokens P50/max: {model_summary['input_tokens_p50']}/{model_summary['input_tokens_max']}",
                       f"E5 loaded executions: {model_summary['e5_loaded_executions']}", ""])
@@ -861,8 +1066,14 @@ def run_suite(run_dir: Path, plan: dict, qset: dict, executor=execute_subprocess
         if len(done) != len(rows) or not done <= {e["id"] for e in plan["executions"]}:
             raise Refused("execution_journal_invalid")
         stop_status = "not_run_budget" if any(r["status"] == "not_run_budget" for r in rows) else None
-        if not stop_status and plan["transport"] == "real" and any(r["status"] in {"error", "interrupted"} for r in rows):
-            stop_status = "not_run_after_error"
+        for row in rows:
+            execution_accounting(row, run_dir, plan)
+        if not stop_status and any(r.get("stop_run") or r["status"] == "interrupted" for r in rows):
+            stop_status = "not_run_after_accounting_error"
+        if (run_dir / "budget.json").exists():
+            budget = Budget(run_dir / "budget.json", plan["cap_cny"])
+            if Decimal(budget.amounts()["retained_reserve_cny"]) or budget.state.get("stop_reason"):
+                stop_status = "not_run_after_accounting_error"
         for entry in plan["executions"]:
             if entry["id"] in done:
                 continue
@@ -872,11 +1083,10 @@ def run_suite(run_dir: Path, plan: dict, qset: dict, executor=execute_subprocess
                 row = read_json(result_file)
             elif (directory / "started.json").exists():
                 # An interrupted paid turn must never be automatically repeated.
-                row = {**entry, "status": "interrupted", "score": {"status": "needs_manual", "needs_manual": ["interrupted"]}}
+                row = {**entry, "status": "interrupted", "stop_run": True}
                 if (directory / "requests.json").exists():
                     row["requests"] = read_json(directory / "requests.json")
-                if plan["transport"] == "real":
-                    stop_status = stop_status or "not_run_after_error"
+                stop_status = "not_run_after_accounting_error"
             elif stop_status:
                 row = {**entry, "status": stop_status, "request_count": 0}
             else:
@@ -885,19 +1095,22 @@ def run_suite(run_dir: Path, plan: dict, qset: dict, executor=execute_subprocess
                 try:
                     row = executor(plan, entry, directory)
                 except Exception as exc:
-                    row = {**entry, "status": "error", "error": str(exc) if isinstance(exc, Refused) else type(exc).__name__}
+                    row = {**entry, "status": "not_run_budget" if isinstance(exc, BudgetExceeded) else "error",
+                           "error": str(exc) if isinstance(exc, Refused) else type(exc).__name__,
+                           "stop_run": isinstance(exc, AccountingUncertain)}
                     if (directory / "requests.json").exists():
                         row["requests"] = read_json(directory / "requests.json")
-                write_json(result_file, row)
+            if row["status"] != "completed":
+                row.pop("score", None)
             row.setdefault("request_count", len(row.get("requests", [])))
-            row.setdefault("cost_cny", str(sum((Decimal(r.get("cost_cny") or "0")
-                                               for r in row.get("requests", [])), Decimal(0))))
+            execution_accounting(row, run_dir, plan)
+            write_json(result_file, row)
             rows.append(row)
             append_json(journal, row)
             if row["status"] == "not_run_budget":
                 stop_status = "not_run_budget"
-            elif row["status"] in {"error", "interrupted"} and plan["transport"] == "real":
-                stop_status = stop_status or "not_run_after_error"
+            elif row.get("stop_run") or row["status"] == "interrupted":
+                stop_status = "not_run_after_accounting_error"
         if sha256(QUESTION_SET) != plan["question_sha256"]:
             raise Refused("question_set_changed_after_run")
         summary, markdown = summarize(plan, rows, qset)
@@ -906,7 +1119,7 @@ def run_suite(run_dir: Path, plan: dict, qset: dict, executor=execute_subprocess
             summary["budget"] = budget.state
             markdown += f"\nBudget committed (including unresolved reserves): {budget.committed} CNY\n"
         write_json(run_dir / "summary.json", summary)
-        (run_dir / "summary.md").write_text(markdown, encoding="utf-8", newline="\n")
+        (run_dir / "summary.md").write_text(redact(markdown), encoding="utf-8", newline="\n")
         return summary
 
 
@@ -935,6 +1148,7 @@ def main(argv=None) -> int:
         qset, digest = load_questions()
         plan = make_plan(qset, digest, transport=args.transport, base_url=args.base_url,
                          cap_cny=args.cap_cny, model=args.model, e5_snapshot=args.e5_snapshot)
+        print("Budget cap covers this run directory only; a new directory starts at zero.", flush=True)
         summary = run_suite(args.run_dir, plan, qset)
         print(json.dumps({"run_dir": str(args.run_dir.resolve()), "transport": args.transport,
                           "statuses": {mode: row["statuses"] for mode, row in summary["modes"].items()}}, ensure_ascii=False))
