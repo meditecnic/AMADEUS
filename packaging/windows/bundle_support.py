@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import ctypes
+from ctypes import wintypes
 import hashlib
 from importlib import metadata
 import json
+import os
 from pathlib import Path
 import sys
 import zipfile
@@ -43,6 +46,7 @@ def collect_inputs(config: dict) -> tuple[list, list, list, list]:
         data, binary, imports = collect_all(
             package, include_py_files=False,
             filter_submodules=lambda name: ".tests" not in name and ".test_" not in name,
+            exclude_datas=["**/*.lib", "include/**", "**/include/**"] if package == "sherpa_onnx" else None,
         )
         datas.extend(data)
         binaries.extend(binary)
@@ -62,6 +66,15 @@ def collect_inputs(config: dict) -> tuple[list, list, list, list]:
 def record_analysis(analysis, config: dict) -> None:
     """Record ownership evidence before pruning duplicate root DLLs."""
     work = Path(config["work"])
+    roots = {
+        "venv": Path(sys.prefix).resolve(), "base_python": Path(sys.base_prefix).resolve(),
+        "windows": Path(os.environ["SystemRoot"]).resolve(),
+    }
+    for destination, source, kind in analysis.binaries:
+        if kind in {"BINARY", "EXTENSION"}:
+            origin = Path(source).resolve(strict=True)
+            if not any(origin.is_relative_to(root) for root in roots.values()):
+                raise RuntimeError(f"Disallowed binary source: {destination} <- {origin}")
     rows = [list(row) for row in (*analysis.scripts, *analysis.pure, *analysis.binaries, *analysis.datas)]
     write_json(work / "analysis.json", rows)
     libraries = defaultdict(list)
@@ -74,12 +87,12 @@ def record_analysis(analysis, config: dict) -> None:
     # These packages configure their own library search directory on import.
     canonical_dirs = ("torch/lib/", "numpy.libs/", "scipy.libs/", "sherpa_onnx/lib/")
     for group in libraries.values():
-        roots = [row for row in group if "/" not in Path(row[0]).as_posix()]
+        root_copies = [row for row in group if "/" not in Path(row[0]).as_posix()]
         packaged = [row for row in group if Path(row[0]).as_posix().startswith(canonical_dirs)]
-        if not roots or not packaged:
+        if not root_copies or not packaged:
             continue
         keep = sorted(packaged, key=lambda row: row[0])[0]
-        for redundant in roots:
+        for redundant in root_copies:
             kept_hash = digest(Path(keep[1]))
             removed_hash = digest(Path(redundant[1]))
             if kept_hash != removed_hash:
@@ -95,6 +108,41 @@ def record_analysis(analysis, config: dict) -> None:
                       if not Path(row[0]).as_posix().startswith("torch/include/")
                       and ".dist-info/licenses/" not in Path(row[0]).as_posix()]
     write_json(work / "dll-deduplication.json", changes)
+    non_venv = []
+    for destination, source, kind in analysis.binaries:
+        origin = Path(source).resolve(strict=True)
+        if kind in {"BINARY", "EXTENSION"} and not origin.is_relative_to(roots["venv"]):
+            non_venv.append({
+                "bundle_path": "_internal/" + Path(destination).as_posix(),
+                "source_path": str(origin), "file_version": file_version(origin), "sha256": digest(origin),
+            })
+    write_json(work / "binary-sources.json", {
+        "allowed_roots": {name: str(path) for name, path in roots.items()},
+        "non_venv_binaries": sorted(non_venv, key=lambda item: item["bundle_path"]),
+    })
+
+
+def file_version(path: Path) -> str | None:
+    version = ctypes.WinDLL("version", use_last_error=True)
+    version.GetFileVersionInfoSizeW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(wintypes.DWORD)]
+    version.GetFileVersionInfoSizeW.restype = wintypes.DWORD
+    version.GetFileVersionInfoW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID]
+    version.GetFileVersionInfoW.restype = wintypes.BOOL
+    version.VerQueryValueW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_void_p), ctypes.POINTER(wintypes.UINT)]
+    version.VerQueryValueW.restype = wintypes.BOOL
+    size = version.GetFileVersionInfoSizeW(str(path), None)
+    if not size:
+        return None
+    buffer = ctypes.create_string_buffer(size)
+    if not version.GetFileVersionInfoW(str(path), 0, size, buffer):
+        raise ctypes.WinError(ctypes.get_last_error())
+    pointer, length = ctypes.c_void_p(), wintypes.UINT()
+    if not version.VerQueryValueW(buffer, "\\", ctypes.byref(pointer), ctypes.byref(length)) or length.value < 52:
+        return None
+    fields = ctypes.cast(pointer, ctypes.POINTER(wintypes.DWORD * 13)).contents
+    if fields[0] != 0xFEEF04BD:
+        raise RuntimeError(f"Invalid version resource: {path}")
+    return ".".join(str(part) for part in (fields[2] >> 16, fields[2] & 65535, fields[3] >> 16, fields[3] & 65535))
 
 
 def license_inventory(dist: Path, rows: list) -> dict:
@@ -178,6 +226,7 @@ def finalize(config: dict) -> None:
                                    "copies": copies, "action": "retained for package-specific loader paths"})
     write_json(work / "duplicate-dll-audit.json", duplicate_dlls)
     payload = {
+        **json.loads((work / "binary-sources.json").read_text(encoding="utf-8")),
         "total_bytes": sum(size for _, size in files),
         "e5_bytes": sum(size for relative, size in files if relative.startswith("_internal/hf_cache/")),
         "largest_20_files": sorted(files, key=lambda item: (-item[1], item[0]))[:20],

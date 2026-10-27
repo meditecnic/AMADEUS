@@ -20,6 +20,7 @@ def configure_environment() -> None:
         if stream is not None:
             stream.reconfigure(encoding="utf-8", errors="backslashreplace")
     os.environ["PYTHON_DOTENV_DISABLED"] = "1"
+    os.environ.pop("AMADEUS_DB_PATH", None)
     if not getattr(sys, "frozen", False):
         raise RuntimeError("use the frozen executable for this entry point")
     root = Path(sys._MEIPASS)
@@ -77,9 +78,11 @@ def watch_stdin(shutdown: threading.Event) -> None:
     kernel.ReadFile.restype = wintypes.BOOL
     handle = kernel.GetStdHandle(-10)
     if kernel.GetFileType(handle) != 3:  # FILE_TYPE_PIPE
+        print("AMADEUS_BACKEND_STDIN is not a pipe; waiting for EOF", file=sys.stderr, flush=True)
         if sys.stdin is not None:
             for _ in sys.stdin:
                 pass
+        print("AMADEUS_BACKEND_STDIN non-pipe EOF; requesting shutdown", file=sys.stderr, flush=True)
         shutdown.set()
         return
     while not shutdown.is_set():
@@ -137,7 +140,7 @@ async def serve(shutdown: threading.Event, port: int) -> int:
         listener.bind(("127.0.0.1", port))
         server = uvicorn.Server(uvicorn.Config(
             app, host="127.0.0.1", port=port, lifespan="on", log_level="info",
-            timeout_graceful_shutdown=5,
+            timeout_graceful_shutdown=3,
         ))
 
         async def request_shutdown() -> None:

@@ -22,6 +22,7 @@ import urllib.request
 USER_TEXT = "这是冻结包的本地验收消息。"
 REPLY = "パッケージの動作を確認しました。"
 CREATE_NO_WINDOW = 0x08000000
+EXPECTED_LISTEN_ADDRESS = "127.0.0.1"
 
 
 def write_json(path: Path, value: object) -> None:
@@ -81,7 +82,7 @@ def free_port() -> int:
             return port
 
 
-def clean_environment(root: Path, port: int, provider_port: int) -> dict[str, str]:
+def clean_environment(root: Path, port: int, provider_port: int, memory_mode: str = "default") -> dict[str, str]:
     system = Path(os.environ["SystemRoot"])
     env = {key: value for key, value in os.environ.items()
            if key.upper() in {"SYSTEMROOT", "WINDIR", "COMSPEC", "SYSTEMDRIVE", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE"}}
@@ -97,8 +98,9 @@ def clean_environment(root: Path, port: int, provider_port: int) -> dict[str, st
         "AMADEUS_CUSTOM_PROVIDER_BASE_URL": f"http://127.0.0.1:{provider_port}/v1",
         "AMADEUS_CUSTOM_PROVIDER_MODEL": "frozen-smoke",
         "SOVITS_URL": f"http://127.0.0.1:{provider_port}/unused-tts",
-        "AMADEUS_MEMORY_MODE": "v11",
     })
+    if memory_mode == "v11":
+        env["AMADEUS_MEMORY_MODE"] = "v11"
     return env
 
 
@@ -185,6 +187,22 @@ def wait_health(process: subprocess.Popen, port: int, tracked: set[int], timeout
     raise TimeoutError("backend did not become healthy")
 
 
+def verify_listeners(pid: int, port: int) -> list[dict]:
+    command = [str(Path(os.environ["SystemRoot"]) / "System32/netstat.exe"), "-ano"]
+    output = subprocess.check_output(command, text=True, errors="replace", creationflags=CREATE_NO_WINDOW)
+    listeners = []
+    for line in output.splitlines():
+        fields = line.split()
+        if (len(fields) == 5 and fields[0].upper() == "TCP"
+                and fields[3] == "LISTENING" and fields[4] == str(pid)):
+            address, number = fields[1].rsplit(":", 1)
+            listeners.append({"address": address.strip("[]"), "port": int(number)})
+    if (not listeners or not any(item["port"] == port for item in listeners)
+            or any(item["address"] != EXPECTED_LISTEN_ADDRESS for item in listeners)):
+        raise AssertionError(f"unexpected TCP listeners for PID {pid}: {listeners}; expected {EXPECTED_LISTEN_ADDRESS}:{port}")
+    return listeners
+
+
 async def chat(port: int, events_path: Path) -> list[dict]:
     import websockets
 
@@ -248,10 +266,10 @@ def verify_unlocked(data: Path) -> list[str]:
     return [path.relative_to(data).as_posix() for path in databases]
 
 
-def run_case(exe: Path, root: Path, provider_port: int, mode: str, timeout: float) -> dict:
+def run_case(exe: Path, root: Path, provider_port: int, mode: str, timeout: float, memory_mode: str) -> dict:
     root.mkdir()
     port = free_port()
-    env = clean_environment(root, port, provider_port)
+    env = clean_environment(root, port, provider_port, memory_mode)
     parent = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"], creationflags=CREATE_NO_WINDOW)
     env["AMADEUS_PARENT_PID"] = str(parent.pid)
     tracked: set[int] = set()
@@ -265,6 +283,8 @@ def run_case(exe: Path, root: Path, provider_port: int, mode: str, timeout: floa
             healthy_seconds = wait_health(process, port, tracked, timeout)
             healthy_seconds = time.monotonic() - started
             print(f"HEALTH {mode} {healthy_seconds:.3f}s port={port}", flush=True)
+            listeners = verify_listeners(process.pid, port)
+            write_json(root / "listeners.json", listeners)
             events = asyncio.run(chat(port, root / "events.json"))
             history = verify_history(root / "data")
             write_json(root / "history.json", history)
@@ -295,7 +315,8 @@ def run_case(exe: Path, root: Path, provider_port: int, mode: str, timeout: floa
         log_text = (root / "backend.log").read_text(encoding="utf-8")
         if "AMADEUS_BACKEND_READY" not in log_text or "Application shutdown complete" not in log_text:
             raise AssertionError("missing ready / graceful shutdown log")
-        result = {"mode": mode, "port": port, "healthy_seconds": round(healthy_seconds, 3),
+        result = {"mode": mode, "port": port, "memory_mode_env": env.get("AMADEUS_MEMORY_MODE"),
+                  "listeners": listeners, "healthy_seconds": round(healthy_seconds, 3),
                   "exit_seconds": round(exit_seconds, 3), "exit_code": process.returncode,
                   "events": [event["type"] for event in events], "history_rows": len(history),
                   "unlocked_databases": databases, "residual_processes": remaining, "path": env["PATH"]}
@@ -323,6 +344,8 @@ def main() -> int:
     parser.add_argument("--exe", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--startup-timeout", type=float, default=180)
+    parser.add_argument("--memory-mode", choices=("default", "v11"), default="default",
+                        help="default leaves AMADEUS_MEMORY_MODE unset")
     args = parser.parse_args()
     if os.name != "nt":
         parser.error("run on Windows")
@@ -330,13 +353,13 @@ def main() -> int:
     args.work_dir.mkdir(parents=True, exist_ok=True)
     root = Path(tempfile.mkdtemp(prefix="frozen-", dir=args.work_dir.resolve()))
     print(f"SMOKE_ROOT {root}", flush=True)
-    result = {"root": str(root), "exe": str(exe), "ok": False}
+    result = {"root": str(root), "exe": str(exe), "memory_mode": args.memory_mode, "ok": False}
     try:
         # The app probes 9880 at startup. Own it before launch to avoid any real TTS.
         with fake_service(root / "sidecar-sentinel.json", 9880, sentinel=True), fake_service(root / "provider.json") as (provider_port, requests):
             check_root = root / "self-check"
             check_root.mkdir()
-            env = clean_environment(check_root, free_port(), provider_port)
+            env = clean_environment(check_root, free_port(), provider_port, args.memory_mode)
             with (check_root / "output.log").open("wb") as output:
                 checked = subprocess.run([str(exe), "--self-check"], cwd=check_root / "cwd", env=env,
                                          stdout=output, stderr=subprocess.STDOUT, timeout=180, creationflags=CREATE_NO_WINDOW)
@@ -345,7 +368,8 @@ def main() -> int:
             if checked.returncode != 0 or "SELF_CHECK " not in check_text:
                 raise AssertionError(f"self-check failed ({checked.returncode})")
             result["self_check_exit_code"] = checked.returncode
-            result["cases"] = [run_case(exe, root / mode, provider_port, mode, args.startup_timeout) for mode in ("parent", "stdin")]
+            result["cases"] = [run_case(exe, root / mode, provider_port, mode, args.startup_timeout, args.memory_mode)
+                               for mode in ("parent", "stdin")]
             if not any(request.get("stream") for request in requests):
                 raise AssertionError("fake provider received no streamed chat")
             if any("tts" in request["path"] for request in requests):
