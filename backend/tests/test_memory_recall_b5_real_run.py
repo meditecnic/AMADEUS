@@ -1,10 +1,12 @@
-"""B5 benchmark contract checks. No real provider or socket is used."""
+"""B5 benchmark contract checks. No real provider or external network is used."""
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import os
+import socket
 import sqlite3
 import sys
 from collections import Counter
@@ -110,6 +112,102 @@ def test_real_gate_positive_has_no_side_effects(tmp_path):
     b5.check_real_gate("real", b5.BUILTIN_DEEPSEEK_BASE_URL, "1",
                        {"AMADEUS_B5_REAL_HTTP": "authorized", "DEEPSEEK_API_KEY": "fake"})
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("family,host", [(socket.AF_INET, "127.0.0.1"), (socket.AF_INET6, "::1")])
+def test_fake_worker_allows_loopback_and_event_loop(tmp_path, monkeypatch, family, host):
+    originals = (socket.socket.connect, socket.socket.connect_ex, socket.getaddrinfo)
+    with socket.socket(family, socket.SOCK_STREAM) as listener:
+        try:
+            listener.bind((host, 0))
+        except OSError:
+            if family == socket.AF_INET6:
+                pytest.skip("IPv6 loopback unavailable")
+            raise
+        listener.listen()
+        listener.settimeout(2)
+        port = listener.getsockname()[1]
+
+        async def probe(_plan, _entry, _directory):
+            await asyncio.sleep(0)
+            left, right = socket.socketpair()
+            with left, right:
+                left.sendall(b"pair")
+                assert right.recv(4) == b"pair"
+            for name in (host, "localhost"):
+                assert socket.getaddrinfo(name, port, family=family, type=socket.SOCK_STREAM)
+            for method in ("connect", "connect_ex"):
+                with socket.socket(family, socket.SOCK_STREAM) as client:
+                    client.settimeout(2)
+                    assert getattr(client, method)((host, port)) in (None, 0)
+                    accepted, _ = listener.accept()
+                    with accepted:
+                        accepted.settimeout(2)
+                        client.sendall(b"loopback")
+                        assert accepted.recv(8) == b"loopback"
+            return {"status": "completed"}
+
+        directory = tmp_path / "executions" / "probe"
+        b5.write_json(tmp_path / "plan.json", {"transport": "fake", "base_url": b5.BUILTIN_DEEPSEEK_BASE_URL,
+                                              "cap_cny": None})
+        b5.write_json(directory / "started.json", {"id": "probe"})
+        monkeypatch.setattr(b5, "product_turn", probe)
+        assert b5.main(["--worker", str(directory)]) == 0
+        assert b5.read_json(directory / "result.json") == {"status": "completed"}
+    assert (socket.socket.connect, socket.socket.connect_ex, socket.getaddrinfo) == originals
+
+
+@pytest.mark.parametrize("host", ["93.184.216.34", "api.deepseek.com"])
+@pytest.mark.parametrize("operation", ["connect", "connect_ex", "getaddrinfo"])
+def test_fake_network_guard_blocks_external_addresses_before_socket_or_dns(monkeypatch, host, operation):
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("external socket or DNS was delegated")
+
+    target = socket if operation == "getaddrinfo" else socket.socket
+    # A broken guard must fail without ever making an actual external request.
+    monkeypatch.setattr(target, operation, unexpected)
+    with b5.fake_network_guard(), socket.socket() as client:
+        with pytest.raises(b5.Refused, match="^network_forbidden_in_fake$"):
+            if operation == "getaddrinfo":
+                socket.getaddrinfo(host, 443)
+            else:
+                getattr(client, operation)((host, 443))
+
+
+@pytest.mark.parametrize("stderr,suffix", [
+    (b"B5 refused: network_forbidden_in_fake\n", ":network_forbidden_in_fake"),
+    (b"private-stderr\r\nB5 refused: request_leakage:field_1,label2\r\n", ":request_leakage:field_1,label2"),
+    (b"B5 refused: code_123", ":code_123"),
+    (b"", ""),
+    (b"B5 refused: \n", ""),
+    (b"B5 refused: UPPERCASE\n", ""),
+    (b"B5 refused: private-stderr\n", ""),
+    (b"B5 refused: token=private-stderr\n", ""),
+    (b"B5 refused: safe code\n", ""),
+    (b"B5 refused: safe\x1b[0m\n", ""),
+    (b"B5 refused: \xff\n", ""),
+    (b" B5 refused: safe\n", ""),
+    (b"B5 refused: safe\nprivate-stderr\n", ""),
+    (b"B5 refused: safe\n\n", ""),
+])
+def test_worker_failure_only_persists_allowlisted_final_stderr_code(tmp_path, frozen, monkeypatch, capsys,
+                                                                  stderr, suffix):
+    qset, digest = frozen
+    plan = b5.make_plan(qset, digest)
+    plan["executions"] = plan["executions"][:1]
+    monkeypatch.setattr(b5.subprocess, "run", lambda *_a, **_k: SimpleNamespace(
+        returncode=2, stdout=b"private-stdout", stderr=stderr))
+    summary = b5.run_suite(tmp_path, plan, qset)
+    assert summary["modes"]["legacy"]["statuses"] == {"error": 1}
+    error = "worker_failed_2" + suffix
+    assert b5.read_json(tmp_path / "executions" / plan["executions"][0]["id"] / "result.json")["error"] == error
+    assert json.loads((tmp_path / "executions.jsonl").read_text(encoding="utf-8"))["error"] == error
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == ""
+    for path in tmp_path.rglob("*"):
+        if path.is_file():
+            assert b"private-stdout" not in path.read_bytes()
+            assert b"private-stderr" not in path.read_bytes()
 
 
 def test_budget_persists_reservations_settles_cache_and_refuses_over_cap(tmp_path):

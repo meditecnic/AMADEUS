@@ -23,6 +23,7 @@ import time
 import unicodedata
 import uuid
 from collections import Counter
+from contextlib import contextmanager, nullcontext
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -78,6 +79,43 @@ class Refused(RuntimeError):
 
 class BudgetExceeded(Refused):
     pass
+
+
+@contextmanager
+def fake_network_guard():
+    """Keep fake workers offline while allowing Windows asyncio's socketpair."""
+    connect = socket.socket.connect
+    connect_ex = socket.socket.connect_ex
+    getaddrinfo = socket.getaddrinfo
+    loopback = ("127.0.0.1", "::1", b"127.0.0.1", b"::1")
+
+    def check_address(address):
+        # Do not resolve names here: only numeric loopback destinations may pass.
+        if not isinstance(address, tuple) or not address or address[0] not in loopback:
+            raise Refused("network_forbidden_in_fake")
+
+    def offline_connect(sock, address):
+        check_address(address)
+        return connect(sock, address)
+
+    def offline_connect_ex(sock, address):
+        check_address(address)
+        return connect_ex(sock, address)
+
+    def offline_getaddrinfo(host, *args, **kwargs):
+        if host not in (*loopback, "localhost", b"localhost"):
+            raise Refused("network_forbidden_in_fake")
+        return getaddrinfo(host, *args, **kwargs)
+
+    socket.socket.connect = offline_connect
+    socket.socket.connect_ex = offline_connect_ex
+    socket.getaddrinfo = offline_getaddrinfo
+    try:
+        yield
+    finally:
+        socket.socket.connect = connect
+        socket.socket.connect_ex = connect_ex
+        socket.getaddrinfo = getaddrinfo
 
 
 def sha256(path: Path) -> str:
@@ -712,9 +750,14 @@ def execute_subprocess(plan: dict, entry: dict, directory: Path) -> dict:
     proc = subprocess.run([sys.executable, str(SCRIPT), "--worker", str(directory)],
                           cwd=BACKEND, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                           timeout=600, check=False)
-    # Raw subprocess stdout/stderr is discarded; errors may contain secrets.
+    # Only a final, allowlisted refusal code may escape raw subprocess output.
     if proc.returncode or not (directory / "result.json").is_file():
-        raise Refused("worker_failed_" + str(proc.returncode))
+        failure = "worker_failed_" + str(proc.returncode)
+        lines = proc.stderr.splitlines()
+        code = re.fullmatch(rb"B5 refused: ([a-z0-9_:,]+)", lines[-1]) if lines else None
+        if code:
+            failure += ":" + code[1].decode("ascii")
+        raise Refused(failure)
     result = read_json(directory / "result.json")
     result["execution_wall_ms"] = (time.perf_counter() - started) * 1000
     return result
@@ -883,13 +926,8 @@ def main(argv=None) -> int:
             plan = read_json(directory.parents[1] / "plan.json")
             entry = read_json(directory / "started.json")
             check_real_gate(plan["transport"], plan["base_url"], plan["cap_cny"])
-            if plan["transport"] == "fake":
-                def offline_connect(*_args, **_kwargs):
-                    raise Refused("network_forbidden_in_fake")
-                socket.socket.connect = offline_connect
-                socket.socket.connect_ex = offline_connect
-                socket.getaddrinfo = offline_connect
-            write_json(directory / "result.json", asyncio.run(product_turn(plan, entry, directory)))
+            with fake_network_guard() if plan["transport"] == "fake" else nullcontext():
+                write_json(directory / "result.json", asyncio.run(product_turn(plan, entry, directory)))
             return 0
         check_real_gate(args.transport, args.base_url, args.cap_cny)
         if args.run_dir is None:
