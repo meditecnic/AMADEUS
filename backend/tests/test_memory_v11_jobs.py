@@ -4337,9 +4337,9 @@ def test_v113_prompt_preserves_source_language():
 async def test_v113_mixed_secret_normal_fact(isolated_store, caplog):
     session = "v113-private-mixed"
     secret = "privateV113test983"
-    job, _, _ = await _enqueue_user_job(session_id=session, user_text=f"我的密码是{secret}， 我喜欢猫")
+    job, _, _ = await _enqueue_user_job(session_id=session, user_text=f"我的密码是{secret}，我喜欢猫")
     async def complete(**kwargs):
-        assert kwargs["user_text"] == "我的密码是[REDACTED:password]， 我喜欢猫"
+        assert kwargs["user_text"] == "我的密码是[REDACTED:password]，我喜欢猫"
         return {"observations": [_v113_observation("safe", "我喜欢猫"), _v113_observation("bad", "[REDACTED:password]")]}
     result = await _jobs().process_memory_job(job_id=job["job_id"], lease_owner="privacy", memory_completion=complete)
     assert result["state"] == "completed"
@@ -4355,7 +4355,7 @@ async def test_v113_mixed_secret_normal_fact(isolated_store, caplog):
         assert "我喜欢猫" in dump
         source = await (await db.execute("SELECT excerpt, source_fingerprint FROM memory_observation_sources")).fetchone()
         assert "[REDACTED:password]" in source[0]
-        assert source[1] == hashlib.sha256(f"{session}:{job['source_message_id']}:我的密码是[REDACTED:password]， 我喜欢猫".encode()).hexdigest()
+        assert source[1] == hashlib.sha256(f"{session}:{job['source_message_id']}:我的密码是[REDACTED:password]，我喜欢猫".encode()).hexdigest()
     finally:
         await db.close()
     assert secret not in caplog.text
@@ -4645,13 +4645,13 @@ def test_rework_marker_cannot_hide_alphabetic_credential(text, secret):
 
 
 @pytest.mark.parametrize("text,expected", [
-    ("password: hunter2. 2024 was a great year", "password: [REDACTED:password]. 2024 was a great year"),
-    ("password: hunter2. Running is my hobby", "password: [REDACTED:password]. Running is my hobby"),
-    ("api_key=abcdefgh; Running2024 is my hobby", "api_key=[REDACTED:api_secret]; Running2024 is my hobby"),
-    ("password: [REDACTED:password]. 2024 was a great year", "password: [REDACTED:password]. 2024 was a great year"),
+    ("password: hunter2. 2024 was a great year", ("[REDACTED]", True)),
+    ("password: hunter2. Running is my hobby", ("[REDACTED]", True)),
+    ("api_key=abcdefgh; Running2024 is my hobby", ("[REDACTED]", True)),
+    ("password: [REDACTED:password]. 2024 was a great year", ("password: [REDACTED:password] was a great year", False)),
 ])
-def test_rework_terminal_punctuation_preserves_next_sentence(text, expected):
-    assert _jobs().redact_user_text(text) == (expected, False)
+def test_rework_terminal_punctuation_keeps_privacy_fail_closed(text, expected):
+    assert _jobs().redact_user_text(text) == expected
 
 
 @pytest.mark.parametrize("text,category,fragment", [
@@ -4700,7 +4700,7 @@ async def test_rework_completion_failures_keep_legacy_retry_classification(isola
 
 def test_rework_candidate_view_hides_ids_without_mutating_snapshot():
     jobs = _jobs()
-    snapshot = [{"fact_id": "private-fact-id", "version_no": 7, "display_text": "喜欢猫", "is_pinned": False}]
+    snapshot = [{"fact_id": "private-fact-id", "version_no": 7, "display_text": "喜欢猫", "is_pinned": False, "topic_id": "private-topic-id"}]
     before = [dict(row) for row in snapshot]
     assert jobs._candidate_payload_for_completion(snapshot) == [{"candidate_index": 1, "display_text": "喜欢猫", "is_pinned": False}]
     observations, operations = jobs._translate_completion([_v113_observation("a", "喜欢猫", "same", 1)], [], snapshot, [], 42)
@@ -4708,3 +4708,112 @@ def test_rework_candidate_view_hides_ids_without_mutating_snapshot():
     assert operations[0]["target_fact_id"] == "private-fact-id"
     assert operations[0]["expected_version"] == 7
     assert observations[0]["source_message_ids"] == [42]
+
+
+# Second PR #4 rework: separators after markers and unspaced CJK prose.
+@pytest.mark.parametrize("prefix,marker,secret,category", [
+    ("my password is ", "[REDACTED:password]", "Qw3rty!9", "password"),
+    ("password: ", "[REDACTED:password]", "Qw3rty!9", "password"),
+    ("api key: ", "[REDACTED:api_secret]", "xy.z12345678", "api_secret"),
+    ("my password is ", "[REDACTED]", "Qw3rty!9", "password"),
+])
+@pytest.mark.parametrize("separator", [",", ";", "，", "；"])
+@pytest.mark.parametrize("layout", ["{marker}{separator} {secret}", "{marker} {separator} {secret}", "{marker}{separator}{secret}"])
+def test_v85_marker_punctuation_cannot_hide_secret(prefix, marker, secret, category, separator, layout):
+    text = prefix + layout.format(marker=marker, separator=separator, secret=secret) + " I like cats"
+    assert category in _classify(text)
+    masked, blocked = _jobs().redact_user_text(text)
+    assert secret not in masked
+    if not blocked:
+        assert "I like cats" in masked
+        assert not _classify(masked)
+
+
+_V85_CJK_CASES = [
+    ("我的密码是Hello!2024，我喜欢猫", "我的密码是[REDACTED:password]，我喜欢猫", "Hello!2024"),
+    ("密码：Hello!2024；我住在北京，喜欢猫", "密码：[REDACTED:password]；我住在北京，喜欢猫", "Hello!2024"),
+    ("API密钥是abcdefgh.ijklmnop，我喜欢茶", "API密钥是[REDACTED:api_secret]，我喜欢茶", "abcdefgh.ijklmnop"),
+    ("密码：Hello!2024、猫が好き", "密码：[REDACTED:password]、猫が好き", "Hello!2024"),
+    ("API密钥是abcdefgh.ijklmnop。お茶が好き", "API密钥是[REDACTED:api_secret]。お茶が好き", "abcdefgh.ijklmnop"),
+    ("sk-abcdefghijklmnop，我喜欢猫", "[REDACTED:api_secret]，我喜欢猫", "sk-abcdefghijklmnop"),
+]
+
+
+@pytest.mark.parametrize("text,expected,secret", _V85_CJK_CASES)
+def test_v85_fullwidth_boundary_preserves_cjk_prose(text, expected, secret):
+    assert _classify(text)
+    masked, blocked = _jobs().redact_user_text(text)
+    assert not blocked
+    assert masked == expected
+    assert secret not in masked
+    assert not _classify(masked)
+
+
+@pytest.mark.parametrize("separator", list("，。；！？、"))
+def test_v85_all_fullwidth_boundaries_preserve_normal_fact(separator):
+    text = "我的密码是Hello!2024" + separator + "我喜欢猫"
+    assert _jobs().redact_user_text(text) == ("我的密码是[REDACTED:password]" + separator + "我喜欢猫", False)
+
+
+@pytest.mark.parametrize("text,fragment", [
+    ("密码：ab，cd1234", "cd1234"),
+    ("API密钥是ab，cdefgh123", "cdefgh123"),
+    ("我的密码是Pass，word99", "word99"),
+    ("password: Pass，word99", "word99"),
+    ("password is Pass，word99", "word99"),
+    ("sk-abcdefghijklmnop，word99", "word99"),
+])
+def test_v85_short_prefix_or_credential_suffix_never_leaks(text, fragment):
+    assert _classify(text)
+    masked, _ = _jobs().redact_user_text(text)
+    assert fragment not in masked
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("separator", [",", ";", "，", "；"])
+async def test_v85_marker_secret_absent_from_completion_context_excerpt(isolated_store, caplog, separator):
+    jobs = _jobs()
+    session = "v85-marker-" + str(ord(separator))
+    text = f"my password is [REDACTED:password]{separator} Qw3rty!9, I like cats"
+    expected = "my password is [REDACTED:password], I like cats"
+    conv = await conversation_service.create(session, "steins_gate", identity_mode="self")
+    cid = str(conv["id"])
+    await models.save_message(session, "assistant", "[EMO:neutral] " + text, worldline="steins_gate", conversation_id=cid)
+    mid = await models.save_message(session, "user", text, worldline="steins_gate", conversation_id=cid)
+    job = await jobs.enqueue_memory_job(session_id=session, worldline="steins_gate", conversation_id=cid, identity_mode="self", source_message_id=mid, provider_id="fake", model_id="fake")
+    captured = {}
+    async def complete(**kwargs):
+        captured.update(kwargs)
+        return {"observations": [_v113_observation("normal", "I like cats")]}
+    result = await jobs.process_memory_job(job_id=job["job_id"], lease_owner="v85-marker", memory_completion=complete)
+    assert result["state"] == "completed"
+    assert captured["user_text"] == expected
+    assert captured["previous_assistant_text"] == expected
+    db = await get_db("steins_gate", "memory")
+    try:
+        excerpt = (await (await db.execute("SELECT excerpt FROM memory_observation_sources WHERE source_message_id=?", (mid,))).fetchone())[0]
+        assert excerpt == expected
+        assert (await (await db.execute("SELECT display_text FROM stable_fact_versions")).fetchone())[0] == "I like cats"
+    finally:
+        await db.close()
+    for value in [captured["user_text"], captured["previous_assistant_text"], excerpt, caplog.text]:
+        assert "Qw3rty!9" not in value
+
+
+@pytest.mark.parametrize("text,secret", [
+    ("password: [REDACTED:password] !!!abc", "!!!abc"),
+    ("api key: [REDACTED:api_secret] ....abcd", "....abcd"),
+    ("my password is [REDACTED:password]; !!!abc", "!!!abc"),
+    ("password: Pass，!!!abc", "!!!abc"),
+    ("API密钥是abcdefgh，....abcd", "....abcd"),
+    ("password: [REDACTED:password]，abc", "abc"),
+    ("api key: [REDACTED:api_secret]，abcd", "abcd"),
+    ("password: [REDACTED]，abc", "abc"),
+    ("password: [REDACTED:password] - Qw3rty!9", "Qw3rty!9"),
+    ("api key: [REDACTED:api_secret] － xy.z12345678", "xy.z12345678"),
+    ("password: [REDACTED:password] , ; !!!abc", "!!!abc"),
+])
+def test_v85_punctuation_in_values_and_short_marker_residuals_do_not_leak(text, secret):
+    assert _classify(text)
+    masked, _ = _jobs().redact_user_text(text)
+    assert secret not in masked

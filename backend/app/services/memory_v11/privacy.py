@@ -8,6 +8,7 @@ for in-memory masking in jobs.py; never persist or log those offsets or values.
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Iterator
 from datetime import date
 
@@ -20,6 +21,8 @@ PRECISE_HOME_ADDRESS = "precise_home_address"
 
 _ALNUM = r"[A-Za-z0-9]"
 _CREDENTIAL_TRAILING_PUNCTUATION = "，,。.；;！!？?"
+_CREDENTIAL_FULLWIDTH_BOUNDARY_RE = re.compile(r"[，。；！？、](?=\S)")
+_CREDENTIAL_CONTINUATION_RE = re.compile(r"[\W_]+?(\S+)")
 _REDACTION_VALUE_RE = re.compile(
     r"\[REDACTED:(?:password|api_secret|otp|payment_card|government_id|precise_home_address)\]",
     re.IGNORECASE,
@@ -174,6 +177,25 @@ def _iter_matches(pattern: re.Pattern[str], text: str) -> Iterator[re.Match[str]
         cursor = match.start() + 1
 
 
+def _credential_value_end(text: str, start: int, end: int, validator) -> int:
+    """Use fullwidth sentence boundaries only for valid credential prefixes.
+
+    A complete marker prefix is parsed separately so its following text can
+    be checked as a continuation, rather than misclassified as one long value.
+    Invalid short prefixes keep the original whole-token fail-closed behavior.
+    """
+    boundary = _CREDENTIAL_FULLWIDTH_BOUNDARY_RE.search(text, start, end)
+    if boundary is not None:
+        prefix = text[start:boundary.start()]
+        if _REDACTION_TOKEN_RE.fullmatch(prefix.rstrip(_CREDENTIAL_TRAILING_PUNCTUATION)):
+            # Preserve any ASCII residual inside the ORIGINAL token, even when
+            # that residual alone is too short to pass a credential validator.
+            return end if re.search(_ALNUM, text[boundary.end():end]) else boundary.start()
+        if validator(prefix):
+            return boundary.start()
+    return end
+
+
 def _credential_matches(text: str, category: str | None = None) -> list[tuple[int, int, str]]:
     """All credential occurrences, validating raw values and masking whole tokens."""
     spans: list[tuple[int, int, str]] = []
@@ -188,25 +210,34 @@ def _credential_matches(text: str, category: str | None = None) -> list[tuple[in
         for pattern in patterns:
             for match in _iter_matches(pattern, text):
                 start, end = match.span(1)
+                end = _credential_value_end(text, start, end, validator)
                 value = text[start:end]
                 # A user-typed marker followed by another credential-shaped token
                 # cannot hide that token behind the placeholder exemption.
-                if _REDACTION_TOKEN_RE.fullmatch(value):
+                if _REDACTION_TOKEN_RE.fullmatch(value.rstrip(_CREDENTIAL_TRAILING_PUNCTUATION)):
                     cursor = end
-                    while following := re.match(r"\s+(\S+)", text[cursor:]):
-                        token = following.group(1)
-                        if _REDACTION_TOKEN_RE.fullmatch(token):
-                            cursor += following.end(1)
+                    while following := _CREDENTIAL_CONTINUATION_RE.match(text, cursor):
+                        token_start = following.start(1)
+                        token_end = _credential_value_end(text, token_start, following.end(1), validator)
+                        token = text[token_start:token_end]
+                        # Skip standalone separator tokens, but keep punctuation
+                        # attached to a value (!!!abc is a valid 6-char secret).
+                        if all(unicodedata.category(ch)[0] in {"P", "S"} for ch in token):
+                            cursor = token_end
                             continue
-                        token_start = cursor + following.start(1)
+                        if _REDACTION_TOKEN_RE.fullmatch(token.rstrip(_CREDENTIAL_TRAILING_PUNCTUATION)):
+                            cursor = token_end
+                            continue
                         if any(pattern.match(text, token_start)
                                for cue_patterns, _, _ in groups for pattern in cue_patterns):
                             break
-                        # Preserve each original credential tier: strong password
-                        # cues and API cues also accept alphabetic-only values.
-                        if validator(token):
-                            end = cursor + following.end(1)
-                            value = text[start:end]
+                        # Check the original value including the marker prefix;
+                        # ordinary CJK prose has no ASCII credential evidence.
+                        candidate = text[start:token_end]
+                        if (_concrete_value_ok(token, min_len=8 if cls == API_SECRET else 4)
+                                and validator(candidate)):
+                            end = token_end
+                            value = candidate
                         break
                 if validator(value):
                     trimmed = value.rstrip(_CREDENTIAL_TRAILING_PUNCTUATION)
@@ -217,6 +248,13 @@ def _credential_matches(text: str, category: str | None = None) -> list[tuple[in
             # same credential value. Keep that suffix inside the masked span.
             tail = re.match(r"\S*", text[match.end():])
             end = match.end() + tail.end()
+            shortened = _credential_value_end(
+                text, match.start(), end, lambda v: _concrete_value_ok(v, min_len=8),
+            )
+            # A bare key has no cue left after replacement. Keep any ASCII
+            # suffix covered instead of relying on a cue-based post-check.
+            if not re.search(_ALNUM, text[shortened:end]):
+                end = shortened
             value = text[match.start():end].rstrip(_CREDENTIAL_TRAILING_PUNCTUATION)
             spans.append((match.start(), match.start() + len(value), API_SECRET))
     return spans

@@ -645,9 +645,6 @@ def _candidate_payload_for_completion(rows: list[Mapping[str, Any]]) -> list[dic
             "display_text": str(row.get("display_text") or ""),
             "is_pinned": bool(row.get("is_pinned")),
         }
-        topic_id = row.get("topic_id")
-        if topic_id:
-            item["topic_id"] = str(topic_id)
         out.append(item)
     return out
 
