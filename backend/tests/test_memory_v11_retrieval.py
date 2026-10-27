@@ -633,3 +633,79 @@ async def test_r5_cjk_eligibility_positive_and_negative(isolated_store):
     )
     ja = await _select_experiences(session_id, "秋葉原のこと")
     assert [r["experience_id"] for r in ja] == [ja_pos_id]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("display,query", [
+    ("用户喜欢喝咖啡", "其实我最近不喝咖啡了，改喝茶"),
+    ("用户养了一只叫小黑的猫", "小黑今天生病了"),
+    ("ユーザーはコーヒーが好き", "最近コーヒーをやめて紅茶にした"),
+    ("User likes coffee", "I quit coffee, tea now"),
+])
+async def test_v113_lexical_candidates_without_embedder(isolated_store, monkeypatch, display, query):
+    from app.services.memory_v11.retrieval import _lexical_score, select_stable_fact_candidates
+    class Offline:
+        model_name = "offline"
+        dimensions = 384
+        async def encode_query(self, text):
+            raise RuntimeError("E5 unavailable")
+    monkeypatch.setattr(memory_service, "embedder", Offline())
+    session = "v113-lexical"
+    seed = await create_stable_fact(session_id=session, worldline="steins_gate", identity_mode="self", display_text=display, semantic_json={"user": display})
+    assert _lexical_score(display, query) > 0
+    selected = await select_stable_fact_candidates(session_id=session, worldline="steins_gate", identity_mode="self", query=query)
+    assert seed["fact_id"] in {r["fact_id"] for r in selected}
+
+
+@pytest.mark.parametrize("display,query", [
+    ("用户喜欢喝咖啡", "今天下雨了"),
+    ("User likes coffee", "The train was late"),
+])
+def test_v113_lexical_unrelated_zero(display, query):
+    from app.services.memory_v11.retrieval import _lexical_score
+    assert _lexical_score(display, query) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["import", "table", "query", "prompt"])
+async def test_v113_retrieval_logs_exception_type_only(isolated_store, monkeypatch, caplog, failure):
+    import builtins
+    import logging
+    from app.services.memory_v11 import retrieval
+    from app.services import prompt_compiler
+    sentinel = "PRIVATE_FACT_EXCEPTION_V113"
+    caplog.set_level(logging.DEBUG, logger="app.services.memory_v11.retrieval")
+    caplog.set_level(logging.DEBUG, logger="app.services.prompt_compiler")
+    async def boom(**kwargs):
+        raise RuntimeError(sentinel)
+    if failure == "import":
+        original = builtins.__import__
+        def guarded(name, *args, **kwargs):
+            if name == "app.services.memory":
+                raise RuntimeError(sentinel)
+            return original(name, *args, **kwargs)
+        with monkeypatch.context() as context:
+            context.setattr(builtins, "__import__", guarded)
+            assert retrieval._resolve_embedder(None) is None
+    elif failure == "prompt":
+        monkeypatch.setattr(retrieval, "select_experience_candidates", boom)
+        assert await prompt_compiler._select_v11_prompt_memories(session_id="safe", worldline="steins_gate", identity_mode="self", user_message="safe") == ([], [])
+    else:
+        async def rows(**kwargs):
+            return [{"fact_id": "f", "version_no": 1, "display_text": "safe", "confidence": 0.9}]
+        monkeypatch.setattr(retrieval, "list_active_stable_facts", rows)
+        if failure == "table":
+            monkeypatch.setattr(retrieval, "_load_version_embeddings", boom)
+        else:
+            async def vectors(**kwargs):
+                return {("f", 1): {"model": "offline", "dimensions": 384, "vector": struct.pack("384f", *([1.0] + [0.0] * 383))}}
+            monkeypatch.setattr(retrieval, "_load_version_embeddings", vectors)
+        class Offline:
+            model_name = "offline"
+            dimensions = 384
+            async def encode_query(self, text):
+                raise RuntimeError(sentinel)
+        await retrieval.select_stable_fact_candidates(session_id="safe", worldline="steins_gate", identity_mode="self", query="safe", embedder=Offline())
+    assert sentinel not in caplog.text
+    assert "RuntimeError" in caplog.text
+    assert all(record.exc_info is None for record in caplog.records)

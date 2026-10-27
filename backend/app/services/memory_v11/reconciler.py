@@ -1,4 +1,4 @@
-"""Memory v11 one-call reconciler (S2 rework: single-connection batch transaction)."""
+"""Memory v11 one-call reconciler: one transaction with per-operation savepoints."""
 
 from __future__ import annotations
 
@@ -44,14 +44,11 @@ def _obs_by_ref(observations: list[dict[str, Any]]) -> dict[str, dict[str, Any]]
     for obs in observations:
         ref = str(obs.get("observation_ref") or "")
         if not ref:
-            raise MemoryValidationError(
-                "missing_observation_ref", "observation_ref required"
-            )
-        if ref in out:
-            raise MemoryValidationError(
-                "duplicate_observation_ref", f"duplicate observation_ref={ref}"
-            )
-        out[ref] = obs
+            out[ref] = {**obs, "_ingest_error": "missing_observation_ref"}
+        elif ref in out:
+            out[ref] = {**obs, "_ingest_error": "duplicate_observation_ref"}
+        else:
+            out[ref] = obs
     return out
 
 
@@ -530,6 +527,353 @@ def _op_fact_text(op: dict[str, Any], obs: dict[str, Any]) -> str:
     return str(op.get("fact_text") or obs.get("display_text") or "").strip()
 
 
+def _operation_error_code(exc: Exception) -> str:
+    return exc.code if isinstance(exc, MemoryValidationError) else "operation_failed"
+
+
+def _validate_operation(op, obs_map, allow, reanalysis_allow, consumed, used_targets, source_by_id):
+    expected = None
+    if op.get("_ingest_error"):
+        raise MemoryValidationError(op["_ingest_error"])
+    op_name = str(op.get("op") or "").upper()
+    if op_name not in ALLOWED_OPS:
+        raise MemoryValidationError("invalid_op", f"op={op_name!r}")
+    ref = str(op.get("observation_ref") or "")
+    if ref not in obs_map:
+        raise MemoryValidationError(
+            "unknown_observation_ref", f"observation_ref={ref}"
+        )
+    if obs_map[ref].get("_ingest_error"):
+        raise MemoryValidationError(obs_map[ref]["_ingest_error"])
+    from app.services.memory_v11.privacy import contains_redaction_marker
+    if contains_redaction_marker(json.dumps([
+        obs_map[ref].get("display_text"), op.get("fact_text"),
+        obs_map[ref].get("semantic"), obs_map[ref].get("topic_label"),
+    ], ensure_ascii=False)):
+        raise MemoryValidationError("redacted_content_forbidden")
+    if ref in consumed:
+        raise MemoryValidationError(
+            "observation_multi_consumed",
+            f"observation_ref={ref} used by multiple ops",
+        )
+    target = op.get("target_fact_id")
+    if op_name in {"ATTACH", "REFINE", "SUPERSEDE"}:
+        if not target:
+            raise MemoryValidationError(
+                "missing_target_fact_id", f"{op_name} requires target_fact_id"
+            )
+        if str(target) not in allow:
+            raise MemoryValidationError(
+                "target_not_in_allowlist",
+                f"target_fact_id={target} not on allowlist",
+            )
+        # S3C-1: episodic observations may only become experiences; they can
+        # never mutate a stable fact, even if target_fact_id happens to exist.
+        obs_memory_class = str(
+            obs_map[ref].get("memory_class") or "stable_candidate"
+        )
+        if obs_memory_class == "episodic":
+            raise MemoryValidationError(
+                "episodic_target_operation_forbidden",
+                f"{op_name} cannot target a stable fact from an episodic "
+                "observation",
+            )
+        # S3E-1 P1-A: every fact-mutating op needs an explicit positive int
+        # snapshot. Key ABSENT / None → missing; bool/non-int/<=0 → invalid.
+        # This closes the hole where an omitted expected_version silently
+        # skipped the version equality check.
+        expected = _require_expected_version(op, op_name)
+        # S3E-1 P1-B: REFINE/SUPERSEDE may only rewrite stable truth backed
+        # by the same evidence authority as an automatic stable CREATE.
+        # reason_code stays provider explanation with zero write authority.
+        if op_name in {"REFINE", "SUPERSEDE"} and not _stable_truth_eligible(
+            obs_map[ref]
+        ):
+            raise MemoryValidationError(
+                "fact_mutation_not_eligible",
+                f"{op_name} requires stable_candidate + direct_user + "
+                f"confidence>={AUTO_STABLE_CONFIDENCE}",
+            )
+    for mid in obs_map[ref].get("source_message_ids") or []:
+        if int(mid) not in source_by_id:
+            raise MemoryValidationError(
+                "unknown_source_message_id",
+                f"source_message_id={mid} not in source_evidence",
+            )
+    # D18: reanalysis target must be frozen, single per message, and
+    # never duplicated across output observations.
+    target_obs_id = obs_map[ref].get("reanalysis_target_observation_id")
+    if target_obs_id is not None and str(target_obs_id).strip() != "":
+        tid = str(target_obs_id).strip()
+        if tid not in reanalysis_allow:
+            raise MemoryValidationError(
+                "reanalysis_target_not_allowed",
+                f"reanalysis_target_observation_id={tid} not on allowlist",
+            )
+        if tid in used_targets:
+            raise MemoryValidationError(
+                "reanalysis_target_reused",
+                f"reanalysis target {tid} used by multiple observations",
+            )
+        if used_targets:
+            raise MemoryValidationError("reanalysis_target_reused", "only one reanalysis target per message")
+
+
+    consumed.add(ref)
+    if target_obs_id is not None and str(target_obs_id).strip():
+        used_targets[str(target_obs_id).strip()] = ref
+    return expected
+
+
+async def _apply_operation(db, *, op, obs_map, session, mode, source_by_id, reanalysis_allow, expected, prepared):
+    op_name = str(op.get("op") or "").upper()
+    ref = str(op.get("observation_ref") or "")
+    obs = obs_map[ref]
+    confidence = float(obs.get("confidence") or 0.0)
+    fact_text = _op_fact_text(op, obs)
+
+    if op_name == "REJECT":
+        await materialize_observation(
+            db,
+            session_id=session,
+            identity_mode=mode,
+            obs=obs,
+            status="rejected",
+            source_by_id=source_by_id,
+            reanalysis_allow=reanalysis_allow,
+        )
+        return None
+
+    if op_name == "CREATE":
+        obs_memory_class = str(obs.get("memory_class") or "stable_candidate")
+        if obs_memory_class == "episodic":
+            # S3C-1: episodic CREATE -> first-class experience only.
+            # No stable_facts / stable_fact_versions / embedding rows.
+            observation_id = await materialize_observation(
+                db,
+                session_id=session,
+                identity_mode=mode,
+                obs=obs,
+                status="attached",
+                source_by_id=source_by_id,
+                reanalysis_allow=reanalysis_allow,
+            )
+            source_ids = [int(m) for m in (obs.get("source_message_ids") or [])]
+            conversation_id = (
+                str(source_by_id[source_ids[0]].get("conversation_id") or "")
+                if source_ids
+                else ""
+            )
+            # Episodic expiry alignment: the Experience must inherit the
+            # EFFECTIVE persisted observation expiry after materialization
+            # (three-state D18 semantics), never the raw model field.
+            exp_row = await (
+                await db.execute(
+                    """SELECT expires_at FROM memory_observations
+                        WHERE observation_id=? AND session_id=? AND identity_mode=?""",
+                    (observation_id, session, mode),
+                )
+            ).fetchone()
+            if exp_row is None:
+                raise MemoryValidationError(
+                    "observation_not_found",
+                    f"observation_id={observation_id} missing after materialization",
+                )
+            await insert_experience(
+                db,
+                session_id=session,
+                conversation_id=conversation_id,
+                identity_mode=mode,
+                observation_id=observation_id,
+                display_text=fact_text,
+                semantic=obs.get("semantic") or {},
+                confidence=confidence,
+                expires_at=exp_row["expires_at"],
+            )
+            return None
+        if not _will_create_stable_fact(obs):
+            await materialize_observation(
+                db,
+                session_id=session,
+                identity_mode=mode,
+                obs=obs,
+                status="candidate",
+                source_by_id=source_by_id,
+                reanalysis_allow=reanalysis_allow,
+            )
+            return None
+
+        if prepared is None:
+            raise MemoryValidationError(
+                "embedding_missing",
+                "CREATE stable fact requires a prepared passage embedding",
+            )
+        # S3D-2: CREATE-only automatic topic materialization. Only a
+        # stable fact's first CREATE may use the model topic_label;
+        # resolution/reuse/create happens inside THIS transaction so a
+        # later failure rolls the topic back with the fact batch.
+        fact_topic_id: str | None = None
+        prepared_label = prepare_topic_label(obs.get("topic_label"))
+        if prepared_label is not None:
+            label_display, label_normalized = prepared_label
+            fact_topic_id = await resolve_or_create_topic(
+                db,
+                session_id=session,
+                identity_mode=mode,
+                display_label=label_display,
+                normalized_label=label_normalized,
+            )
+        created = await _create_fact_on_conn(
+            db,
+            session_id=session,
+            identity_mode=mode,
+            display_text=fact_text,
+            semantic=obs.get("semantic") or {},
+            confidence=confidence,
+            change_kind="create",
+            topic_id=fact_topic_id,
+        )
+        await insert_version_embedding(
+            db,
+            fact_id=created["fact_id"],
+            version_no=int(created["version_no"]),
+            prepared=prepared,
+        )
+        observation_id = await materialize_observation(
+            db,
+            session_id=session,
+            identity_mode=mode,
+            obs=obs,
+            status="attached",
+            source_by_id=source_by_id,
+            reanalysis_allow=reanalysis_allow,
+        )
+        await _link_evidence(
+            db,
+            fact_id=created["fact_id"],
+            version_no=int(created["version_no"]),
+            observation_id=observation_id,
+            role="primary",
+        )
+        return created
+
+    if op_name == "ATTACH":
+        target = str(op.get("target_fact_id"))
+        active_version = await _get_fact_active_version(
+            db, fact_id=target, session_id=session, identity_mode=mode
+        )
+        if active_version is None:
+            raise MemoryValidationError(
+                "fact_not_found", f"target_fact_id={target}"
+            )
+        if expected != active_version:
+            raise MemoryValidationError(
+                "expected_version_mismatch",
+                f"expected={expected} active={active_version}",
+            )
+        observation_id = await materialize_observation(
+            db,
+            session_id=session,
+            identity_mode=mode,
+            obs=obs,
+            status="attached",
+            source_by_id=source_by_id,
+            reanalysis_allow=reanalysis_allow,
+        )
+        await _link_evidence(
+            db,
+            fact_id=target,
+            version_no=active_version,
+            observation_id=observation_id,
+            role="supporting",
+        )
+        return None
+
+    if op_name in {"REFINE", "SUPERSEDE"}:
+        target = str(op.get("target_fact_id"))
+        change_kind = "refine" if op_name == "REFINE" else "supersede"
+        if prepared is None:
+            raise MemoryValidationError(
+                "embedding_missing",
+                f"{op_name} requires a prepared passage embedding",
+            )
+        active_version = await _get_fact_active_version(
+            db, fact_id=target, session_id=session, identity_mode=mode
+        )
+        if active_version is None:
+            raise MemoryValidationError(
+                "fact_not_found", f"target_fact_id={target}"
+            )
+        if expected != active_version:
+            raise MemoryValidationError(
+                "expected_version_mismatch",
+                f"expected={expected} active={active_version}",
+            )
+        now = _utc_now()
+        new_version = active_version + 1
+        semantic_blob, fingerprint = _semantic_blob_and_fp(
+            obs.get("semantic") or {}
+        )
+        await db.execute(
+            """UPDATE stable_fact_versions
+               SET invalid_at=?
+             WHERE fact_id=? AND version_no=? AND invalid_at IS NULL""",
+            (now, target, active_version),
+        )
+        await db.execute(
+            """INSERT INTO stable_fact_versions(
+                   fact_id, version_no, display_text, semantic_json,
+                   semantic_fingerprint, confidence, change_kind,
+                   previous_version, valid_from, invalid_at, created_by_job_id
+               ) VALUES(?,?,?,?,?,?,?,?,?,NULL,NULL)""",
+            (
+                target,
+                new_version,
+                fact_text,
+                semantic_blob,
+                fingerprint,
+                confidence,
+                change_kind,
+                active_version,
+                now,
+            ),
+        )
+        await db.execute(
+            """UPDATE stable_facts
+               SET active_version=?, updated_at=?
+             WHERE fact_id=? AND session_id=? AND identity_mode=?""",
+            (new_version, now, target, session, mode),
+        )
+        # Old vector must not remain indexable; new vector is required.
+        await delete_version_embedding(
+            db, fact_id=target, version_no=active_version
+        )
+        await insert_version_embedding(
+            db,
+            fact_id=target,
+            version_no=new_version,
+            prepared=prepared,
+        )
+        observation_id = await materialize_observation(
+            db,
+            session_id=session,
+            identity_mode=mode,
+            obs=obs,
+            status="attached",
+            source_by_id=source_by_id,
+            reanalysis_allow=reanalysis_allow,
+        )
+        await _link_evidence(
+            db,
+            fact_id=target,
+            version_no=new_version,
+            observation_id=observation_id,
+            role="primary",
+        )
+        return None
+
+
+
 async def apply_validated_memory_operations(
     *,
     session_id: str,
@@ -543,10 +887,10 @@ async def apply_validated_memory_operations(
     reanalysis_allowlist: list[str] | None = None,
     processing_receipt: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Validate then apply all operations in ONE connection / ONE transaction.
+    """Apply independently validated operations with per-operation SAVEPOINTs.
 
     Passage embeddings for CREATE / REFINE / SUPERSEDE are prepared *before*
-    BEGIN IMMEDIATE. Indexing failure aborts the whole batch with no residue.
+    BEGIN IMMEDIATE. Indexing failure rejects only that operation.
     Source replay is idempotent via observation-source receipts.
 
     D18 (S3D-4): ``reanalysis_allowlist`` freezes the offered unresolved
@@ -577,103 +921,21 @@ async def apply_validated_memory_operations(
     created_facts: list[dict[str, Any]] = []
 
     all_source_ids: set[int] = set(source_by_id.keys())
-    for obs in obs_map.values():
-        for mid in obs.get("source_message_ids") or []:
-            all_source_ids.add(int(mid))
 
-    # Pre-validate ops (no writes).
     expected_by_op: dict[int, int] = {}
+    failures: dict[int, Exception] = {}
+    results: list[str] = ["operation_failed"] * len(operations or [])
     for index, op in enumerate(operations or []):
-        op_name = str(op.get("op") or "").upper()
-        if op_name not in ALLOWED_OPS:
-            raise MemoryValidationError("invalid_op", f"op={op_name!r}")
-        ref = str(op.get("observation_ref") or "")
-        if ref not in obs_map:
-            raise MemoryValidationError(
-                "unknown_observation_ref", f"observation_ref={ref}"
+        try:
+            expected_by_op[index] = _validate_operation(
+                op, obs_map, allow, reanalysis_allow, consumed, used_targets, source_by_id,
             )
-        if ref in consumed:
-            raise MemoryValidationError(
-                "observation_multi_consumed",
-                f"observation_ref={ref} used by multiple ops",
-            )
-        consumed.add(ref)
-        target = op.get("target_fact_id")
-        if op_name in {"ATTACH", "REFINE", "SUPERSEDE"}:
-            if not target:
-                raise MemoryValidationError(
-                    "missing_target_fact_id", f"{op_name} requires target_fact_id"
-                )
-            if str(target) not in allow:
-                raise MemoryValidationError(
-                    "target_not_in_allowlist",
-                    f"target_fact_id={target} not on allowlist",
-                )
-            # S3C-1: episodic observations may only become experiences; they can
-            # never mutate a stable fact, even if target_fact_id happens to exist.
-            obs_memory_class = str(
-                obs_map[ref].get("memory_class") or "stable_candidate"
-            )
-            if obs_memory_class == "episodic":
-                raise MemoryValidationError(
-                    "episodic_target_operation_forbidden",
-                    f"{op_name} cannot target a stable fact from an episodic "
-                    "observation",
-                )
-            # S3E-1 P1-A: every fact-mutating op needs an explicit positive int
-            # snapshot. Key ABSENT / None → missing; bool/non-int/<=0 → invalid.
-            # This closes the hole where an omitted expected_version silently
-            # skipped the version equality check.
-            expected_by_op[index] = _require_expected_version(op, op_name)
-            # S3E-1 P1-B: REFINE/SUPERSEDE may only rewrite stable truth backed
-            # by the same evidence authority as an automatic stable CREATE.
-            # reason_code stays provider explanation with zero write authority.
-            if op_name in {"REFINE", "SUPERSEDE"} and not _stable_truth_eligible(
-                obs_map[ref]
-            ):
-                raise MemoryValidationError(
-                    "fact_mutation_not_eligible",
-                    f"{op_name} requires stable_candidate + direct_user + "
-                    f"confidence>={AUTO_STABLE_CONFIDENCE}",
-                )
-        for mid in obs_map[ref].get("source_message_ids") or []:
-            if int(mid) not in source_by_id:
-                raise MemoryValidationError(
-                    "unknown_source_message_id",
-                    f"source_message_id={mid} not in source_evidence",
-                )
-        # D18: reanalysis target must be frozen, single per message, and
-        # never duplicated across output observations.
-        target_obs_id = obs_map[ref].get("reanalysis_target_observation_id")
-        if target_obs_id is not None and str(target_obs_id).strip() != "":
-            tid = str(target_obs_id).strip()
-            if tid not in reanalysis_allow:
-                raise MemoryValidationError(
-                    "reanalysis_target_not_allowed",
-                    f"reanalysis_target_observation_id={tid} not on allowlist",
-                )
-            if tid in used_targets:
-                raise MemoryValidationError(
-                    "reanalysis_target_reused",
-                    f"reanalysis target {tid} used by multiple observations",
-                )
-            used_targets[tid] = ref
-
-    if len(used_targets) > 1:
-        raise MemoryValidationError(
-            "reanalysis_target_reused",
-            "at most one distinct reanalysis target per processed message",
-        )
-    # P0: a targeted observation must be consumed by exactly one operation.
+        except Exception as exc:
+            failures[index] = exc
+            results[index] = _operation_error_code(exc)
     for ref, obs in obs_map.items():
-        target_obs_id = obs.get("reanalysis_target_observation_id")
-        if target_obs_id is not None and str(target_obs_id).strip() != "":
-            if ref not in consumed:
-                raise MemoryValidationError(
-                    "reanalysis_target_unconsumed",
-                    f"observation_ref={ref} targets an observation but has no "
-                    "operation",
-                )
+        if obs.get("reanalysis_target_observation_id") and ref not in consumed and not operations:
+            raise MemoryValidationError("reanalysis_target_unconsumed")
 
     # Short read-only replay precheck: avoid heavyweight encode on pure replays.
     db_pre = await get_db(wl, "memory")
@@ -712,20 +974,27 @@ async def apply_validated_memory_operations(
     # Plan embeddings for ops that open a new fact version (outside write lock).
     prepared_by_op: dict[int, dict[str, Any]] = {}
     for index, op in enumerate(operations or []):
+        if index in failures:
+            continue
         op_name = str(op.get("op") or "").upper()
         ref = str(op.get("observation_ref") or "")
         obs = obs_map[ref]
-        if op_name == "CREATE" and _will_create_stable_fact(obs):
-            prepared_by_op[index] = await prepare_passage_embedding(
-                _op_fact_text(op, obs),
-                embedder=embedder,
-            )
-        elif op_name in {"REFINE", "SUPERSEDE"}:
-            prepared_by_op[index] = await prepare_passage_embedding(
-                _op_fact_text(op, obs),
-                embedder=embedder,
-            )
-        # ATTACH / REJECT / candidate-only CREATE: no embedding.
+        try:
+            if op_name == "CREATE" and _will_create_stable_fact(obs):
+                prepared_by_op[index] = await prepare_passage_embedding(
+                    _op_fact_text(op, obs),
+                    embedder=embedder,
+                )
+            elif op_name in {"REFINE", "SUPERSEDE"}:
+                prepared_by_op[index] = await prepare_passage_embedding(
+                    _op_fact_text(op, obs),
+                    embedder=embedder,
+                )
+            # ATTACH / REJECT / candidate-only CREATE: no embedding.
+
+        except Exception as exc:
+            failures[index] = exc
+            results[index] = _operation_error_code(exc)
 
     db = await get_db(wl, "memory")
     try:
@@ -737,6 +1006,26 @@ async def apply_validated_memory_operations(
                                 source_message_ids=list(all_source_ids),
                                 conversation_id=processing_receipt.get('conversation_id') if processing_receipt else None):
             raise MemoryValidationError('source_erased', 'source history has been erased')
+        # Serialize with delete_fact: a deletion committed while the provider
+        # or embedder ran must suppress the pending writes under this lock too.
+        from app.services.memory_v11.deleted_sources import record_suppression, source_is_deleted
+        deleted = False
+        for ev in source_by_id.values():
+            if await source_is_deleted(db, session_id=session, identity_mode=mode,
+                                       conversation_id=str(ev.get("conversation_id") or ""),
+                                       source_message_id=int(ev["source_message_id"])):
+                deleted = True
+                break
+        if deleted:
+            if processing_receipt is not None:
+                await record_suppression(db, session_id=session, identity_mode=mode,
+                                         cursor=processing_receipt)
+            await db.commit()
+            return {
+                "created_facts": [],
+                "active_facts": await list_active_stable_facts(session_id=session, worldline=wl, identity_mode=mode),
+                "session_id": session, "worldline": wl, "identity_mode": mode, "replay": True,
+            }
         if processing_receipt is not None:
             already = await _source_receipt_already_applied(
                 db,
@@ -768,267 +1057,38 @@ async def apply_validated_memory_operations(
             }
 
         for index, op in enumerate(operations or []):
-            op_name = str(op.get("op") or "").upper()
-            ref = str(op.get("observation_ref") or "")
-            obs = obs_map[ref]
-            evidence_kind = str(obs.get("evidence_kind") or "direct_user")
-            memory_class = str(obs.get("memory_class") or "stable_candidate")
-            confidence = float(obs.get("confidence") or 0.0)
-            fact_text = _op_fact_text(op, obs)
-
-            if op_name == "REJECT":
-                await materialize_observation(
-                    db,
-                    session_id=session,
-                    identity_mode=mode,
-                    obs=obs,
-                    status="rejected",
-                    source_by_id=source_by_id,
-                    reanalysis_allow=reanalysis_allow,
-                )
+            if index in failures:
                 continue
-
-            if op_name == "CREATE":
-                obs_memory_class = str(obs.get("memory_class") or "stable_candidate")
-                if obs_memory_class == "episodic":
-                    # S3C-1: episodic CREATE -> first-class experience only.
-                    # No stable_facts / stable_fact_versions / embedding rows.
-                    observation_id = await materialize_observation(
-                        db,
-                        session_id=session,
-                        identity_mode=mode,
-                        obs=obs,
-                        status="attached",
-                        source_by_id=source_by_id,
-                        reanalysis_allow=reanalysis_allow,
-                    )
-                    source_ids = [int(m) for m in (obs.get("source_message_ids") or [])]
-                    conversation_id = (
-                        str(source_by_id[source_ids[0]].get("conversation_id") or "")
-                        if source_ids
-                        else ""
-                    )
-                    # Episodic expiry alignment: the Experience must inherit the
-                    # EFFECTIVE persisted observation expiry after materialization
-                    # (three-state D18 semantics), never the raw model field.
-                    exp_row = await (
-                        await db.execute(
-                            """SELECT expires_at FROM memory_observations
-                                WHERE observation_id=? AND session_id=? AND identity_mode=?""",
-                            (observation_id, session, mode),
-                        )
-                    ).fetchone()
-                    if exp_row is None:
-                        raise MemoryValidationError(
-                            "observation_not_found",
-                            f"observation_id={observation_id} missing after materialization",
-                        )
-                    await insert_experience(
-                        db,
-                        session_id=session,
-                        conversation_id=conversation_id,
-                        identity_mode=mode,
-                        observation_id=observation_id,
-                        display_text=fact_text,
-                        semantic=obs.get("semantic") or {},
-                        confidence=confidence,
-                        expires_at=exp_row["expires_at"],
-                    )
-                    continue
-                if not _will_create_stable_fact(obs):
-                    await materialize_observation(
-                        db,
-                        session_id=session,
-                        identity_mode=mode,
-                        obs=obs,
-                        status="candidate",
-                        source_by_id=source_by_id,
-                        reanalysis_allow=reanalysis_allow,
-                    )
-                    continue
-
-                prepared = prepared_by_op.get(index)
-                if prepared is None:
-                    raise MemoryValidationError(
-                        "embedding_missing",
-                        "CREATE stable fact requires a prepared passage embedding",
-                    )
-                # S3D-2: CREATE-only automatic topic materialization. Only a
-                # stable fact's first CREATE may use the model topic_label;
-                # resolution/reuse/create happens inside THIS transaction so a
-                # later failure rolls the topic back with the fact batch.
-                fact_topic_id: str | None = None
-                prepared_label = prepare_topic_label(obs.get("topic_label"))
-                if prepared_label is not None:
-                    label_display, label_normalized = prepared_label
-                    fact_topic_id = await resolve_or_create_topic(
-                        db,
-                        session_id=session,
-                        identity_mode=mode,
-                        display_label=label_display,
-                        normalized_label=label_normalized,
-                    )
-                created = await _create_fact_on_conn(
-                    db,
-                    session_id=session,
-                    identity_mode=mode,
-                    display_text=fact_text,
-                    semantic=obs.get("semantic") or {},
-                    confidence=confidence,
-                    change_kind="create",
-                    topic_id=fact_topic_id,
+            await db.execute("SAVEPOINT memory_operation")
+            try:
+                created = await _apply_operation(
+                    db, op=op, obs_map=obs_map, session=session, mode=mode,
+                    source_by_id=source_by_id, reanalysis_allow=reanalysis_allow,
+                    expected=expected_by_op.get(index), prepared=prepared_by_op.get(index),
                 )
-                await insert_version_embedding(
-                    db,
-                    fact_id=created["fact_id"],
-                    version_no=int(created["version_no"]),
-                    prepared=prepared,
-                )
-                observation_id = await materialize_observation(
-                    db,
-                    session_id=session,
-                    identity_mode=mode,
-                    obs=obs,
-                    status="attached",
-                    source_by_id=source_by_id,
-                    reanalysis_allow=reanalysis_allow,
-                )
-                await _link_evidence(
-                    db,
-                    fact_id=created["fact_id"],
-                    version_no=int(created["version_no"]),
-                    observation_id=observation_id,
-                    role="primary",
-                )
-                created_facts.append(created)
-                allow.add(str(created["fact_id"]))
-                continue
-
-            if op_name == "ATTACH":
-                target = str(op.get("target_fact_id"))
-                expected = expected_by_op[index]
-                active_version = await _get_fact_active_version(
-                    db, fact_id=target, session_id=session, identity_mode=mode
-                )
-                if active_version is None:
-                    raise MemoryValidationError(
-                        "fact_not_found", f"target_fact_id={target}"
-                    )
-                if expected != active_version:
-                    raise MemoryValidationError(
-                        "expected_version_mismatch",
-                        f"expected={expected} active={active_version}",
-                    )
-                observation_id = await materialize_observation(
-                    db,
-                    session_id=session,
-                    identity_mode=mode,
-                    obs=obs,
-                    status="attached",
-                    source_by_id=source_by_id,
-                    reanalysis_allow=reanalysis_allow,
-                )
-                await _link_evidence(
-                    db,
-                    fact_id=target,
-                    version_no=active_version,
-                    observation_id=observation_id,
-                    role="supporting",
-                )
-                continue
-
-            if op_name in {"REFINE", "SUPERSEDE"}:
-                target = str(op.get("target_fact_id"))
-                expected = expected_by_op[index]
-                change_kind = "refine" if op_name == "REFINE" else "supersede"
-                prepared = prepared_by_op.get(index)
-                if prepared is None:
-                    raise MemoryValidationError(
-                        "embedding_missing",
-                        f"{op_name} requires a prepared passage embedding",
-                    )
-                active_version = await _get_fact_active_version(
-                    db, fact_id=target, session_id=session, identity_mode=mode
-                )
-                if active_version is None:
-                    raise MemoryValidationError(
-                        "fact_not_found", f"target_fact_id={target}"
-                    )
-                if expected != active_version:
-                    raise MemoryValidationError(
-                        "expected_version_mismatch",
-                        f"expected={expected} active={active_version}",
-                    )
-                now = _utc_now()
-                new_version = active_version + 1
-                semantic_blob, fingerprint = _semantic_blob_and_fp(
-                    obs.get("semantic") or {}
-                )
-                await db.execute(
-                    """UPDATE stable_fact_versions
-                       SET invalid_at=?
-                     WHERE fact_id=? AND version_no=? AND invalid_at IS NULL""",
-                    (now, target, active_version),
-                )
-                await db.execute(
-                    """INSERT INTO stable_fact_versions(
-                           fact_id, version_no, display_text, semantic_json,
-                           semantic_fingerprint, confidence, change_kind,
-                           previous_version, valid_from, invalid_at, created_by_job_id
-                       ) VALUES(?,?,?,?,?,?,?,?,?,NULL,NULL)""",
-                    (
-                        target,
-                        new_version,
-                        fact_text,
-                        semantic_blob,
-                        fingerprint,
-                        confidence,
-                        change_kind,
-                        active_version,
-                        now,
-                    ),
-                )
-                await db.execute(
-                    """UPDATE stable_facts
-                       SET active_version=?, updated_at=?
-                     WHERE fact_id=? AND session_id=? AND identity_mode=?""",
-                    (new_version, now, target, session, mode),
-                )
-                # Old vector must not remain indexable; new vector is required.
-                await delete_version_embedding(
-                    db, fact_id=target, version_no=active_version
-                )
-                await insert_version_embedding(
-                    db,
-                    fact_id=target,
-                    version_no=new_version,
-                    prepared=prepared,
-                )
-                observation_id = await materialize_observation(
-                    db,
-                    session_id=session,
-                    identity_mode=mode,
-                    obs=obs,
-                    status="attached",
-                    source_by_id=source_by_id,
-                    reanalysis_allow=reanalysis_allow,
-                )
-                await _link_evidence(
-                    db,
-                    fact_id=target,
-                    version_no=new_version,
-                    observation_id=observation_id,
-                    role="primary",
-                )
-                continue
+                await db.execute("RELEASE SAVEPOINT memory_operation")
+                if created is not None:
+                    created_facts.append(created)
+                results[index] = "applied"
+            except Exception as exc:
+                await db.execute("ROLLBACK TO SAVEPOINT memory_operation")
+                await db.execute("RELEASE SAVEPOINT memory_operation")
+                failures[index] = exc
+                results[index] = _operation_error_code(exc)
 
         # S3F-1 D28: durable provider_nonempty receipt INSIDE this transaction,
-        # after all semantic operations succeeded and BEFORE the single commit.
+        # after independent operations finish and BEFORE the single commit.
         # If the receipt insert fails, the whole transaction rolls back (no
         # semantic residue, no receipt). provider_nonempty means the validated
         # provider result was processed — it does NOT promise a stable fact
         # necessarily changed.
         if processing_receipt is not None:
+            from app.services.memory_v11.receipts import insert_operation_results
+            await insert_operation_results(
+                db, session_id=session, identity_mode=mode,
+                cursor=processing_receipt, results=results,
+            )
+        if processing_receipt is not None and "applied" in results:
             await insert_ingest_receipt(
                 db,
                 session_id=session,
@@ -1045,6 +1105,10 @@ async def apply_validated_memory_operations(
     finally:
         await db.close()
 
+    if failures and "applied" not in results:
+        # Keep the exact local diagnostic after committing rejection-only results.
+        last = failures[max(failures)]
+        raise last
     active = await list_active_stable_facts(
         session_id=session, worldline=wl, identity_mode=mode
     )

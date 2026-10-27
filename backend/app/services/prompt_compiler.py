@@ -707,8 +707,8 @@ async def _select_v11_prompt_memories(
         # Fail-soft: experience retrieval failure omits experiences only.
         # v11 never degrades to legacy episodic retrieval.
         logger.warning(
-            "v11 prompt: experience retrieval failed; omitting experiences",
-            exc_info=True,
+            "v11 prompt: experience retrieval failed; omitting experiences (%s)",
+            type(__import__("sys").exc_info()[1]).__name__,
         )
     return facts, episodes
 

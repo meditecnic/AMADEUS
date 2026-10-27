@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Mapping
@@ -21,11 +22,17 @@ from app.services.memory_v11.contracts import (
     MemoryJobErrorCode,
     PIPELINE_VERSION,
 )
-from app.services.memory_v11.privacy import classify_memory_sensitive_text
+from app.services.memory_v11.privacy import (
+    classify_memory_sensitive_text,
+    find_memory_sensitive_matches,
+    sensitive_spans,
+)
 
 MemoryCompletionFn = Callable[..., Awaitable[Mapping[str, Any]]]
 
 logger = logging.getLogger(__name__)
+
+PREVIOUS_ASSISTANT_MAX_CHARS = 600
 
 _worker_task: asyncio.Task | None = None
 _worker_stop: asyncio.Event | None = None
@@ -69,18 +76,40 @@ def _row_to_job(row: Any, *, worldline: str) -> dict[str, Any]:
 
 
 def redact_user_text(text: str) -> tuple[str, bool]:
-    """D30 privacy boundary: whole-message sensitive-text gate.
+    """Mask locally; bool means masking failed and the whole input is blocked.
 
-    Any sensitive class → ("[REDACTED]", True); otherwise (text, False).
-    The blocked string is never sent to the provider: process_memory_job
-    completes the job immediately instead. Raw sensitive fragments are never
-    preserved inside the blocked return value.
+    Sensitive offsets/values stay inside this call. Only masked text may enter
+    completion, source fingerprint or excerpt. Any detector/replacement failure
+    completes the job without provider calls or Memory writes.
     """
     if not text:
         return "", False
-    if classify_memory_sensitive_text(text):
+    try:
+        classes = classify_memory_sensitive_text(text)
+        matches = find_memory_sensitive_matches(text)
+        spans = sorted(sensitive_spans(text))
+        if classes and not classes.issubset({category for _, _, category in spans}):
+            return "[REDACTED]", True
+        merged: list[tuple[int, int, str]] = []
+        for start, end, category in spans:
+            if not 0 <= start < end <= len(text):
+                return "[REDACTED]", True
+            if merged and start < merged[-1][1]:
+                left, right, previous_class = merged[-1]
+                merged[-1] = (left, max(right, end), previous_class)
+            else:
+                merged.append((start, end, category))
+        if any(not any(left <= start and end <= right for left, right, _ in merged)
+               for start, end, _ in matches):
+            return "[REDACTED]", True
+        redacted = text
+        for start, end, category in reversed(merged):
+            redacted = redacted[:start] + f"[REDACTED:{category}]" + redacted[end:]
+        if classify_memory_sensitive_text(redacted) or find_memory_sensitive_matches(redacted):
+            return "[REDACTED]", True
+        return redacted, False
+    except Exception:
         return "[REDACTED]", True
-    return text, False
 
 
 _MISSING = object()
@@ -537,7 +566,22 @@ async def _load_user_source(
         row = await cur.fetchone()
         if row is None or str(row["role"]) != "user":
             return None
+        previous = await (
+            await db.execute(
+                """SELECT role, content FROM messages
+                    WHERE session_id=? AND conversation_id=? AND id<?
+                    ORDER BY id DESC LIMIT 1""",
+                (session_id, conversation_id, int(source_message_id)),
+            )
+        ).fetchone()
+        previous_text = None
+        if previous is not None and str(previous["role"]) == "assistant":
+            context = re.sub(r"^\[EMO:[^]\r\n]*\]\s*", "", str(previous["content"] or ""))
+            context, blocked = redact_user_text(context)
+            if not blocked:
+                previous_text = context[-PREVIOUS_ASSISTANT_MAX_CHARS:]
         return {
+            "previous_assistant_text": previous_text,
             "source_message_id": int(row["id"]),
             "role": "user",
             "content": str(row["content"] or ""),
@@ -555,66 +599,105 @@ Return ONE JSON object only:
   "observations": [
     {
       "observation_ref": "o1",
-      "source_message_ids": [<int>],
       "display_text": "...",
+      "fact_text": "...",
       "semantic": {"subject":"user","predicate":"...","object":{},"polarity":"positive","qualifiers":{}},
       "evidence_kind": "direct_user",
       "memory_class": "stable_candidate",
       "confidence": 0.0,
       "topic_label": "...",
-      "expires_at": null
-    }
-  ],
-  "operations": [
-    {
-      "op": "CREATE|ATTACH|REFINE|SUPERSEDE|REJECT",
-      "observation_ref": "o1",
-      "target_fact_id": null,
-      "expected_version": null,
-      "fact_text": "...",
-      "reason_code": "..."
+      "expires_at": null,
+      "relation": "new|same|refines|supersedes|reject",
+      "candidate_index": null,
+      "reanalysis_target_observation_index": null
     }
   ]
 }
 Rules:
-- only user speech establishes facts; prefer empty over invention;
-- do not invent conversational-act facts (e.g. 'recommended'); confidence 0..1.
-- "candidates" lists the ONLY active facts you may reference for ATTACH/REFINE/SUPERSEDE.
-- For ATTACH/REFINE/SUPERSEDE: target_fact_id MUST be a candidates[].fact_id;
-  expected_version MUST be that candidate's version_no.
-- Never invent or guess fact_id values that are not in candidates.
-- If no candidate fits: use CREATE (new fact; backend assigns fact_id) or REJECT.
-- Do not generate server-owned fact_id values for CREATE.
-- memory_class=episodic: CREATE with target_fact_id=null stores an experience;
-  never use ATTACH/REFINE/SUPERSEDE on a stable fact from an episodic observation.
-- "unresolved_observations" are OLD unresolved context, NOT new evidence.
-  Only the CURRENT user message supplies new user evidence in this completion.
-- At most ONE existing unresolved observation may be directly clarified by
-  this message. A returned observation may optionally set
-  "reanalysis_target_observation_id" to an id FROM unresolved_observations —
-  use it ONLY when the current speech directly resolves that old observation;
-  otherwise omit or null. Never invent observation ids.
-- Never copy old source_message_ids from unresolved context into a returned
-  observation; a resolving observation lists only the CURRENT source id.
-- Stable fact candidates and reanalysis targets are separate allowlists.
+- Only user_text establishes facts; prefer empty over invention.
+- previous_assistant_text is context only: use it to understand what the user
+  answers or refers to. Never remember an assistant claim the user has not confirmed.
+- Write display_text and fact_text in the language of the user utterance; do not translate.
+  For mixed-language speech, follow the language of the part supporting that fact.
+  Do not store a separate Japanese or other normalized-language version.
+- Do not invent conversational-act facts (e.g. 'recommended'); confidence 0..1.
+- Give each observation a relation: new creates a fact, same attaches evidence,
+  refines clarifies an existing fact, supersedes replaces it, reject records a
+  rejected observation without establishing a fact.
+- For same/refines/supersedes, candidate_index MUST be the 1-based index from
+  candidates. For new/reject use null. Never output fact IDs or version numbers.
+- memory_class=episodic: only new (experience) or reject; never target a stable fact.
+- unresolved_observations are OLD context, NOT new evidence. At most ONE may
+  be clarified: set reanalysis_target_observation_index to its 1-based
+  observation_index only when user_text directly resolves that old observation.
+  Otherwise omit or null. Stable candidates and unresolved targets are separate lists.
+- Never remember [REDACTED:<category>] placeholders or their contents.
+- Never output source_message_ids: the backend supplies the current user source.
 """
 
 
 def _candidate_payload_for_completion(rows: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """Minimal fields for Memory LLM + frozen allowlist (no internal noise)."""
     out: list[dict[str, Any]] = []
-    for row in rows:
+    for index, row in enumerate(rows, 1):
         item: dict[str, Any] = {
-            "fact_id": str(row["fact_id"]),
-            "version_no": int(row.get("version_no") or row.get("active_version") or 1),
+            "candidate_index": index,
             "display_text": str(row.get("display_text") or ""),
             "is_pinned": bool(row.get("is_pinned")),
         }
-        topic_id = row.get("topic_id")
-        if topic_id:
-            item["topic_id"] = str(topic_id)
         out.append(item)
     return out
+
+
+def _indexed_item(items: list[Mapping[str, Any]], index: Any, code: str) -> Mapping[str, Any]:
+    from app.services.memory_v11.contracts import MemoryValidationError
+    if isinstance(index, bool) or not isinstance(index, int) or not 1 <= index <= len(items):
+        raise MemoryValidationError(code)
+    return items[index - 1]
+
+
+def _translate_completion(observations, operations, candidates, unresolved, source_id):
+    """Bind model ordinals to THIS attempt's private snapshots, never model IDs.
+
+    Legacy CREATE/REJECT operations remain accepted for injected completion
+    callbacks. Targeted legacy operations still require a candidate_index.
+    """
+    from app.services.memory_v11.contracts import MemoryValidationError
+    relations = {"new": "CREATE", "same": "ATTACH", "refines": "REFINE", "supersedes": "SUPERSEDE", "reject": "REJECT"}
+    normalized = []
+    ops = []
+    legacy = {str(op.get("observation_ref") or ""): op for op in operations}
+    for raw in observations:
+        obs = {key: value for key, value in raw.items() if key not in {
+            "source_message_ids", "reanalysis_target_observation_id", "_ingest_error",
+        }}
+        obs["source_message_ids"] = [int(source_id)]
+        old = legacy.get(str(obs.get("observation_ref") or ""), {})
+        relation = obs.get("relation")
+        if relation is None:
+            relation = {v: k for k, v in relations.items()}.get(str(old.get("op") or "").upper())
+        op = {"observation_ref": obs.get("observation_ref"), "fact_text": obs.get("fact_text") or old.get("fact_text"), "op": relations.get(str(relation), "")}
+        try:
+            if not op["op"]:
+                raise MemoryValidationError("invalid_relation")
+            if op["op"] in {"ATTACH", "REFINE", "SUPERSEDE"}:
+                candidate = _indexed_item(candidates, obs.get("candidate_index", old.get("candidate_index")), "candidate_index_out_of_range")
+                op["target_fact_id"] = str(candidate["fact_id"])
+                op["expected_version"] = int(candidate.get("version_no") or candidate.get("active_version") or 1)
+            target_index = obs.get("reanalysis_target_observation_index")
+            if target_index is not None:
+                target = _indexed_item(unresolved, target_index, "reanalysis_index_out_of_range")
+                obs["reanalysis_target_observation_id"] = str(target["observation_id"])
+        except MemoryValidationError as exc:
+            op["_ingest_error"] = exc.code
+        normalized.append(obs)
+        ops.append(op)
+    # Unknown legacy refs must not silently disappear.
+    refs = {str(obs.get("observation_ref") or "") for obs in observations}
+    for old in operations:
+        if str(old.get("observation_ref") or "") not in refs:
+            ops.append({"op": "", "_ingest_error": "unknown_observation_ref"})
+    return normalized, ops
 
 
 async def default_memory_completion(**kwargs: Any) -> Mapping[str, Any]:
@@ -661,6 +744,7 @@ async def default_memory_completion(**kwargs: Any) -> Mapping[str, Any]:
                     "identity_mode": identity_mode,
                     "source_message_id": source_message_id,
                     "user_text": user_text,
+                    "previous_assistant_text": kwargs.get("previous_assistant_text"),
                     "candidates": candidates,
                     "unresolved_observations": unresolved,
                 },
@@ -682,6 +766,29 @@ async def default_memory_completion(**kwargs: Any) -> Mapping[str, Any]:
     if "operations" not in payload:
         payload["operations"] = []
     return payload
+
+
+async def _deleted_source_suppressed(job: Mapping[str, Any], worldline: str) -> bool:
+    from app.services.memory_v11.deleted_sources import record_suppression, source_is_deleted
+    db = await get_db(worldline, "memory")
+    try:
+        await db.execute("BEGIN IMMEDIATE")
+        deleted = await source_is_deleted(
+            db, session_id=job["session_id"], identity_mode=job["identity_mode"],
+            conversation_id=job["conversation_id"], source_message_id=int(job["source_message_id"]),
+        )
+        if deleted:
+            await record_suppression(db, session_id=job["session_id"], identity_mode=job["identity_mode"], cursor={
+                "conversation_id": job["conversation_id"], "source_message_id": int(job["source_message_id"]),
+                "pipeline_version": job["pipeline_version"], "attempt_no": int(job["attempt_count"] or 1),
+            })
+        await db.commit()
+        return deleted
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
 
 
 async def process_memory_job(
@@ -722,6 +829,13 @@ async def process_memory_job(
 
     if job.get("lease_owner") != lease_owner or job["state"] != "processing":
         return (await get_memory_job(job_id, worldline=wl)) or job
+
+    # A user deletion suppresses this entire source window across pipelines.
+    # Check before ordinary receipt replay so the reason is recorded even for
+    # a source which already had a successful original ingest receipt.
+    if await _deleted_source_suppressed(job, wl):
+        return await _transition_owned(job_id=job_id, worldline=wl,
+                                       lease_owner=lease_owner, state="completed")
 
     # P1-B + S3F-1 (D28): durable-receipt precheck for the CURRENT job source
     # cursor (dedicated full-cursor receipt OR current-pipeline legacy
@@ -764,7 +878,7 @@ async def process_memory_job(
 
         redacted, blocked = redact_user_text(source["content"])
         if blocked:
-            # Secrets: receipt-only complete, no provider call.
+            # Masking failed: complete without provider calls or Memory receipts/writes.
             return await _transition_owned(
                 job_id=job_id,
                 worldline=wl,
@@ -790,8 +904,9 @@ async def process_memory_job(
                 identity_mode=job["identity_mode"],
                 source_text=redacted,
             )
-            candidates = _candidate_payload_for_completion(list(selected_rows or []))
-            candidate_allowlist = [str(item["fact_id"]) for item in candidates]
+            frozen_candidates = list(selected_rows or [])
+            candidates = _candidate_payload_for_completion(frozen_candidates)
+            candidate_allowlist = [str(item["fact_id"]) for item in frozen_candidates]
 
             unresolved_rows = await select_unresolved_observations(
                 session_id=job["session_id"],
@@ -801,9 +916,13 @@ async def process_memory_job(
                 current_source_message_id=int(job["source_message_id"]),
                 query=redacted,
             )
-            unresolved_observations = list(unresolved_rows or [])
+            frozen_unresolved = list(unresolved_rows or [])
+            unresolved_observations = [
+                {**{k: v for k, v in item.items() if k not in {"source_message_ids", "observation_id"}}, "observation_index": index}
+                for index, item in enumerate(frozen_unresolved, 1)
+            ]
             reanalysis_allowlist = [
-                str(item["observation_id"]) for item in unresolved_observations
+                str(item["observation_id"]) for item in frozen_unresolved
             ]
         except Exception:
             # Selection failure: never call provider; use existing failed_or_retry path.
@@ -825,6 +944,7 @@ async def process_memory_job(
                 conversation_id=job["conversation_id"],
                 source_message_id=int(job["source_message_id"]),
                 user_text=redacted,
+                previous_assistant_text=source.get("previous_assistant_text"),
                 provider_id=job["provider_id"],
                 model_id=job["model_id"],
                 pipeline_version=job["pipeline_version"],
@@ -875,6 +995,10 @@ async def process_memory_job(
             )
 
         if observations or operations:
+            observations, operations = _translate_completion(
+                observations, operations, frozen_candidates, frozen_unresolved,
+                int(job["source_message_id"]),
+            )
             from app.services.memory_v11.reconciler import (
                 apply_validated_memory_operations,
             )
@@ -913,9 +1037,11 @@ async def process_memory_job(
                         "conversation_id": job["conversation_id"],
                         "source_message_id": int(job["source_message_id"]),
                         "pipeline_version": job["pipeline_version"],
+                        "attempt_no": int(job["attempt_count"] or 1),
                     },
                 )
             except Exception as exc:
+                from app.services.memory_v11.contracts import MemoryValidationError
                 if getattr(exc, 'code', None) == 'source_erased':
                     return await _transition_owned(
                         job_id=job_id, worldline=wl, lease_owner=lease_owner,
@@ -926,7 +1052,7 @@ async def process_memory_job(
                     worldline=wl,
                     lease_owner=lease_owner,
                     state="failed_or_retry",
-                    error_code=MemoryJobErrorCode.VALIDATION_FAILED.value,
+                    error_code=exc.code if isinstance(exc, MemoryValidationError) else "operation_failed",
                     permanent=False,
                     attempt_count=int(job["attempt_count"] or 0),
                 )
@@ -1048,7 +1174,7 @@ async def _worker_loop(stop: asyncio.Event, owner: str) -> None:
                 memory_completion=None,  # resolves to default_memory_completion
             )
         except Exception as exc:
-            print(f"[MemoryV11] worker loop error: {exc!r}", flush=True)
+            print(f"[MemoryV11] worker loop error: {type(exc).__name__}", flush=True)
         try:
             await asyncio.wait_for(stop.wait(), timeout=2.0)
         except asyncio.TimeoutError:

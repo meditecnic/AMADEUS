@@ -265,6 +265,18 @@ async def delete_fact(
                 )
             ).fetchall()
         ]
+        # Capture every establishing source BEFORE evidence is erased. Shared
+        # observations participate too; only identifiers/scope/time survive.
+        await db.execute(
+            """INSERT OR IGNORE INTO memory_deleted_sources(
+                   session_id, identity_mode, conversation_id,
+                   source_message_id, fact_id, deleted_at
+               ) SELECT DISTINCT ?, ?, s.conversation_id, s.source_message_id, ?, ?
+                   FROM stable_fact_evidence e
+                   JOIN memory_observation_sources s ON s.observation_id=e.observation_id
+                  WHERE e.fact_id=?""",
+            (session, mode, fid, now, fid),
+        )
         # 2. Insert non-content tombstone rows (reason="user_delete").
         for fp in semantic_fps:
             await db.execute(

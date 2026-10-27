@@ -55,18 +55,12 @@ def _estimate_tokens(text: str) -> int:
 
 
 def _lexical_score(display_text: str, query: str) -> float:
-    raw = (query or "").strip()
-    terms: set[str] = set()
-    if raw:
-        terms.add(raw.lower())
-        for term in raw.split():
-            if len(term) > 1:
-                terms.add(term.lower())
-    if not terms:
-        return 0.0
-    haystack = (display_text or "").lower()
-    hits = sum(1 for term in terms if term in haystack)
-    return hits / len(terms)
+    """Reuse local word/CJK-bigram scoring, independent of E5 availability."""
+    def clean(text: str) -> str:
+        # Preserve Latin word boundaries while dropping punctuation/whitespace
+        # from the CJK stream consumed by _lexical_relevance.
+        return re.sub(r"[\W_]+", " ", _normalized_text(text)).strip()
+    return _lexical_relevance(clean(display_text), clean(query))
 
 
 def _cosine(left: list[float], right: list[float]) -> float:
@@ -93,8 +87,8 @@ def _resolve_embedder(embedder: QueryEmbedder | None) -> QueryEmbedder | None:
         from app.services.memory import memory_service
 
         return memory_service.embedder
-    except Exception:  # pragma: no cover - defensive import/runtime edge
-        logger.debug("v11 retrieval: embedder unavailable", exc_info=True)
+    except Exception as exc:  # pragma: no cover - defensive import/runtime edge
+        logger.debug("v11 retrieval: embedder unavailable (%s)", type(exc).__name__)
         return None
 
 
@@ -282,10 +276,10 @@ async def select_stable_fact_candidates(
             worldline=wl,
             fact_versions=fact_versions,
         )
-    except Exception:
+    except Exception as exc:
         logger.warning(
-            "v11 retrieval: embedding table read failed; lexical-only degrade",
-            exc_info=True,
+            "v11 retrieval: embedding table read failed; lexical-only degrade (%s)",
+            type(exc).__name__,
         )
         embedding_rows = {}
 
@@ -307,10 +301,10 @@ async def select_stable_fact_candidates(
     if compatible and resolved is not None:
         try:
             query_vector = await resolved.encode_query(query or "")
-        except Exception:
+        except Exception as exc:
             logger.warning(
-                "v11 retrieval: query embedding failed; lexical-only degrade",
-                exc_info=True,
+                "v11 retrieval: query embedding failed; lexical-only degrade (%s)",
+                type(exc).__name__,
             )
             query_vector = None
 

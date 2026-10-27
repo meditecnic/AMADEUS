@@ -1139,6 +1139,19 @@ def _ensure_experiences_is_pinned(connection: sqlite3.Connection) -> None:
     )
 
 
+def _ensure_memory_deleted_sources(connection: sqlite3.Connection) -> None:
+    """Add content-free user-deletion source markers to fresh and existing v11 DBs."""
+    connection.execute("""CREATE TABLE IF NOT EXISTS memory_deleted_sources (
+        session_id TEXT NOT NULL,
+        identity_mode TEXT NOT NULL CHECK(identity_mode IN ('self','okabe')),
+        conversation_id TEXT NOT NULL,
+        source_message_id INTEGER NOT NULL,
+        fact_id TEXT NOT NULL,
+        deleted_at TEXT NOT NULL,
+        PRIMARY KEY(session_id, identity_mode, conversation_id, source_message_id, fact_id)
+    )""")
+
+
 def _ensure_memory_ingest_jobs_retryable(connection: sqlite3.Connection) -> None:
     """S4-ARCHIVE Gate 2: memory_ingest_jobs.retryable NOT NULL DEFAULT 1.
 
@@ -1301,6 +1314,7 @@ def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str 
         if kind == "memory":
             _ensure_experiences_is_pinned(connection)
             _ensure_memory_ingest_jobs_retryable(connection)
+            _ensure_memory_deleted_sources(connection)
         connection.execute(
             "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version',?)",
             (str(SCHEMA_VERSION),),

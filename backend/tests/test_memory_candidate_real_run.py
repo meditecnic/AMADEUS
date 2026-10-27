@@ -350,7 +350,7 @@ def test_complete_json_extract_reaches_local_mock(tmp_path, monkeypatch):
             )
 
         payload = asyncio.run(asyncio.wait_for(_call(), timeout=8))
-        assert payload["operations"][0]["op"] == "CREATE"
+        assert payload["observations"][0]["relation"] == "new"
         kinds = [row["kind"] for row in b3._mock_rows({"captures": capture})]
         assert "extract" in kinds
     finally:

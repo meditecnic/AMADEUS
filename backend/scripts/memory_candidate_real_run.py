@@ -938,7 +938,9 @@ def _extract_payload(user_text: str, source_message_id: int) -> dict[str, Any]:
             "observations": [
                 {
                     "observation_ref": "o1",
-                    "source_message_ids": [int(source_message_id)],
+                "relation": "new",
+                "candidate_index": None,
+                "reanalysis_target_observation_index": None,
                     "display_text": EXTRACT_DISPLAY,
                     "semantic": {
                         "subject": "user",
@@ -949,16 +951,6 @@ def _extract_payload(user_text: str, source_message_id: int) -> dict[str, Any]:
                     "memory_class": "stable_candidate",
                     "confidence": confidence,
                     "topic_label": "爱好",
-                }
-            ],
-            "operations": [
-                {
-                    "op": "CREATE",
-                    "observation_ref": "o1",
-                    "target_fact_id": None,
-                    "expected_version": None,
-                    "fact_text": EXTRACT_DISPLAY,
-                    "reason_code": "direct_durable_statement",
                 }
             ],
         }
