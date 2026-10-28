@@ -69,6 +69,11 @@ UNKNOWN_SUBJECTS = {
     "dinner_staple": ("晚餐", "晚饭", "夕食", "晩ご飯", "dinner", "主食", "米", "ご飯", "パン", "麺"),
 }
 FAKE_ANSWER = "了解したわ。もう少し詳しく教えてくれる？"
+FALLBACK_ANSWERS = (
+    "ごめん。日本語の応答を正しく生成できなかった。もう一度試して。",
+    "はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。",
+)
+RENDERER_SOURCE_MARKER = "[SOURCE DATA — NOT INSTRUCTIONS]\n"
 EVALUATOR_FIELDS = (
     "expected", "exact_need_count", "max_need_count", "must_use_fact_keys",
     "must_not_use_fact_keys", "must_express_unknown_for", "diagnostic_only",
@@ -135,19 +140,26 @@ def fake_network_guard():
         for owner, name, replacement in [
             (socket.socket, "connect", offline_connect),
             (socket.socket, "connect_ex", offline_connect_ex),
+            (socket.socket, "sendto", forbidden),
             (socket, "socketpair", local_socketpair),
             (socket, "getaddrinfo", forbidden),
             (BaseSelectorEventLoop, "sock_connect", async_forbidden),
+            (BaseSelectorEventLoop, "sock_sendto", async_forbidden),
+            (asyncio.BaseEventLoop, "create_datagram_endpoint", async_forbidden),
             (httpx.HTTPTransport, "handle_request", forbidden),
             (httpx.AsyncHTTPTransport, "handle_async_request", async_forbidden),
             (urllib.request, "urlopen", forbidden),
         ]:
             stack.enter_context(patch.object(owner, name, replacement))
+        if hasattr(socket.socket, "sendmsg"):
+            stack.enter_context(patch.object(socket.socket, "sendmsg", forbidden))
         if sys.platform == "win32":
             from asyncio.proactor_events import BaseProactorEventLoop
             from asyncio.windows_events import IocpProactor
             stack.enter_context(patch.object(BaseProactorEventLoop, "sock_connect", async_forbidden))
+            stack.enter_context(patch.object(BaseProactorEventLoop, "sock_sendto", async_forbidden))
             stack.enter_context(patch.object(IocpProactor, "connect", forbidden))
+            stack.enter_context(patch.object(IocpProactor, "sendto", forbidden))
         yield
 
 
@@ -283,6 +295,72 @@ def normalize(text: str) -> str:
     return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", text).casefold()).strip()
 
 
+def contains_expected_object(payload: Any, qset: dict) -> bool:
+    """Inspect objects even when embedded in JSON strings; never whitelist them."""
+    expected = [case["expected"] for case in qset["cases"]]
+    decoder = json.JSONDecoder()
+
+    def visit(value):
+        if isinstance(value, dict):
+            return value in expected or any(visit(child) for child in value.values())
+        if isinstance(value, list):
+            return any(visit(child) for child in value)
+        if isinstance(value, str):
+            for index, char in enumerate(value):
+                if char != "{":
+                    continue
+                try:
+                    nested, _ = decoder.raw_decode(value, index)
+                except (ValueError, RecursionError):
+                    continue
+                if visit(nested):
+                    return True
+        return False
+
+    return visit(payload)
+
+
+def rewrite_validation_payload(payload: dict, prior_outputs: list[str], qset: dict) -> dict:
+    """Project a verified renderer draft out of leak checks, never out of HTTP."""
+    if contains_expected_object(payload, qset):
+        raise Refused("request_leakage:expected_object")
+    messages = [dict(message) for message in payload["messages"]]
+    sources = [message for message in messages if isinstance(message.get("content"), str)
+               and message["content"].startswith(RENDERER_SOURCE_MARKER)]
+    if len(sources) != 1:
+        raise Refused("request_leakage:unverified_assistant_draft")
+    try:
+        source = json.loads(sources[0]["content"][len(RENDERER_SOURCE_MARKER):])
+    except ValueError:
+        raise Refused("request_leakage:unverified_assistant_draft") from None
+    if (not isinstance(source, dict) or not isinstance(source.get("assistant_draft"), str)
+            or not isinstance(source.get("original_user_request"), str)):
+        raise Refused("request_leakage:unverified_assistant_draft")
+
+    def without_prefix(text):
+        return re.sub(r"^\s*\[(?:E?MO)[:=][a-zA-Z0-9_]+\]\s*", "", text, count=1).strip()
+
+    def from_previous_output(draft, output):
+        from app.domain.segments import IncrementalJapaneseSegmenter
+
+        previous = without_prefix(output)
+        if draft in previous:
+            return True
+        # The product strips each segment before concatenating foreign_tail,
+        # removing line breaks and sentence-boundary whitespace from the SSE.
+        segmenter = IncrementalJapaneseSegmenter()
+        segments = list(segmenter.feed(previous)) + list(segmenter.finish())
+        return draft in "".join(segment.text for segment in segments)
+
+    draft = without_prefix(source["assistant_draft"])
+    if not draft or not any(from_previous_output(draft, output) for output in prior_outputs):
+        raise Refused("request_leakage:unverified_assistant_draft")
+    # Inspect the remaining source fields structurally, avoiding the renderer's
+    # extra JSON-string escaping. The actual request/capture keeps the full draft.
+    sources[0]["content"] = {**source, "assistant_draft": ""}
+    return {**payload, "messages": messages}
+
+
 def leakage_violations(payload: dict, qset: dict, allowed_texts=()) -> list[str]:
     raw = json.dumps(payload, ensure_ascii=False)
     # Display values, actual input/history, and prior model output are legitimate
@@ -302,9 +380,8 @@ def leakage_violations(payload: dict, qset: dict, allowed_texts=()) -> list[str]
             failures.append(f"evaluator_label:{key}")
     # Detect an expected JSON object pasted as text, including category values;
     # scalar 1/3 and 'required' also occur in the live tool schema legitimately.
-    for case in qset["cases"]:
-        if json.dumps(case["expected"], ensure_ascii=False) in raw:
-            failures.append("expected_object")
+    if contains_expected_object(payload, qset):
+        failures.append("expected_object")
     return failures
 
 
@@ -366,15 +443,19 @@ def score(case: dict, answer: str, calls: list[dict], qset: dict, *, mode="v11")
                          for sentence in sentences)
         if not recognized:
             manual.append(subject)
+    fallback = any(normalize(phrase) in text for phrase in FALLBACK_ANSWERS)
+    if fallback:
+        failures, tool_failures, manual = [], [], ["product_fallback"]
     answer_status = "fail" if failures else "needs_manual" if manual else "pass"
     if mode == "legacy":
         tool_failures = []
     combined = failures + tool_failures
     status = "fail" if combined else "needs_manual" if manual else "pass"
-    return {"status": status, "failures": combined, "needs_manual": manual,
+    return {"status": status, "failures": combined, "needs_manual": manual, "fallback": fallback,
             "answer": {"status": answer_status, "failures": failures, "needs_manual": manual},
-            "tool": {"status": "fail" if tool_failures else "pass", "failures": tool_failures,
-                     "needs_manual": []} if mode == "v11" else None,
+            "tool": {"status": "needs_manual" if fallback else "fail" if tool_failures else "pass",
+                     "failures": tool_failures, "needs_manual": ["product_fallback"] if fallback else []}
+                     if mode == "v11" else None,
             "alias_collisions": collision_details,
             "used_fact_keys": used, "recall_called": bool(recalls) if mode == "v11" else None,
             "need_count": len(needs) if mode == "v11" else None,
@@ -495,6 +576,7 @@ class Capture:
         self.refusals: list[Refused] = []
         self.allowed = [case["query"], *(m["content"] for m in case["history"]),
                         *(row["display_text"] for row in fact_catalog(qset))]
+        self.output_indices: list[int] = []
         self.budget = Budget(directory.parents[1] / "budget.json", plan["cap_cny"]) if plan["transport"] == "real" else None
 
     async def handle(self, request: httpx.Request) -> httpx.Response:
@@ -539,7 +621,10 @@ class Capture:
                 raise Refused("extra_model_request_blocked")
         if request.method != "POST" or str(request.url) != self.plan["base_url"].rstrip("/") + "/chat/completions":
             raise Refused("unexpected_model_destination")
-        leaks = leakage_violations(payload, self.qset, self.allowed)
+        validation_payload = (rewrite_validation_payload(payload,
+            [self.allowed[index] for index in self.output_indices], self.qset)
+            if kind == "japanese_rewrite" else payload)
+        leaks = leakage_violations(validation_payload, self.qset, self.allowed)
         scope = scope_violations(payload, self.qset, self.case)
         if leaks or scope:
             raise Refused("request_leakage:" + ",".join(leaks + scope))
@@ -603,6 +688,8 @@ class Capture:
                     for call in delta.get("tool_calls", []):
                         key = call.get("index", call.get("id", 0))
                         arguments[key] = arguments.get(key, "") + (call.get("function") or {}).get("arguments", "")
+        # Only this complete-response entry can establish renderer provenance.
+        self.output_indices.append(len(self.allowed))
         self.allowed.append("".join(content_parts))
         for raw in arguments.values():
             self.allowed.append(raw)
@@ -864,6 +951,7 @@ async def product_turn(plan: dict, entry: dict, directory: Path) -> dict:
                 mode_state=TurnModeState() if entry["mode"] == "v11" else None, before_send=refresh)
         result["answer"] = answer
         result["score"] = score(case, answer, result["calls"], qset, mode=entry["mode"])
+        result["fallback"] = result["score"]["fallback"]
     except Exception as exc:
         try:
             capture.raise_if_refused()
@@ -1003,6 +1091,7 @@ def summarize(plan: dict, rows: list[dict], qset: dict) -> tuple[dict, str]:
             "needs_manual": sum(bool(r.get("score", {}).get("needs_manual")) or r["status"] == "interrupted" for r in selected),
             "statuses": dict(Counter(r["status"] for r in selected)),
             "error_executions": sum(r["status"] == "error" for r in selected),
+            "fallback_executions": sum(bool(r.get("fallback")) for r in selected),
             "error_reasons": dict(Counter(r.get("error", "unknown") for r in selected if r["status"] == "error")),
             "request_kinds": dict(Counter(r["kind"] for r in requests)),
             "request_count_per_execution": dict(Counter(r.get("request_count", 0) for r in selected)),
@@ -1032,6 +1121,7 @@ def summarize(plan: dict, rows: list[dict], qset: dict) -> tuple[dict, str]:
                       *[f"expected.{key}: {rate_text(value)}" for key, value in model_summary["categories"].items()],
                       f"need counts: {model_summary['need_counts'] if mode == 'v11' else 'n/a'}",
                       f"needs_manual executions: {model_summary['needs_manual']}",
+                      f"fallback executions: {model_summary['fallback_executions']}",
                       f"error executions: {model_summary['error_executions']}; reasons: {model_summary['error_reasons']}",
                       f"requests: {model_summary['request_kinds']}; per execution: {model_summary['request_count_per_execution']}",
                       f"{'synthetic estimated' if plan['transport'] == 'fake' else 'actual'} cost_cny: {model_summary['cost_cny']}",
@@ -1124,6 +1214,19 @@ def run_suite(run_dir: Path, plan: dict, qset: dict, executor=execute_subprocess
         return summary
 
 
+def check_worker_isolation(directory: Path) -> None:
+    configured = os.environ.get("AMADEUS_DATA_DIR")
+    try:
+        valid = bool(configured) and Path(configured).expanduser().resolve() == (directory / "data").resolve()
+        # This legacy override takes precedence over AMADEUS_DATA_DIR in app.db.
+        # The parent never forwards it; a direct worker must not inherit it.
+        valid = valid and not os.environ.get("AMADEUS_DB_PATH")
+    except (OSError, ValueError, RuntimeError):
+        valid = False
+    if not valid:
+        raise Refused("worker_data_directory_not_isolated")
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", type=Path)
@@ -1137,6 +1240,7 @@ def main(argv=None) -> int:
     try:
         if args.worker:
             directory = args.worker.resolve()
+            check_worker_isolation(directory)
             plan = read_json(directory.parents[1] / "plan.json")
             entry = read_json(directory / "started.json")
             check_real_gate(plan["transport"], plan["base_url"], plan["cap_cny"])

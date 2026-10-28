@@ -8,6 +8,7 @@ import json
 import os
 import socket
 import sqlite3
+import subprocess
 import sys
 import urllib.request
 from collections import Counter
@@ -182,6 +183,7 @@ def test_fake_worker_builds_event_loop_but_blocks_loopback(tmp_path, monkeypatch
         b5.write_json(tmp_path / "plan.json", {"transport": "fake", "base_url": b5.BUILTIN_DEEPSEEK_BASE_URL,
                                               "cap_cny": None})
         b5.write_json(directory / "started.json", {"id": "probe"})
+        monkeypatch.setenv("AMADEUS_DATA_DIR", str(directory / "data"))
         monkeypatch.setattr(b5, "product_turn", probe)
         assert b5.main(["--worker", str(directory)]) == 0
         assert b5.read_json(directory / "result.json") == {"status": "completed"}
@@ -737,7 +739,7 @@ async def test_product_retries_reach_actual_main_and_renderer_limits(tmp_path, f
 
 
 async def test_renderer_requests_above_product_limit_are_refused(tmp_path, frozen):
-    from app.domain.japanese_response_renderer import JAPANESE_RENDERER_SYSTEM_PROMPT
+    from app.domain.japanese_response_renderer import JAPANESE_RENDERER_SYSTEM_PROMPT, build_japanese_renderer_history
 
     plan, entry, directory = prepared_turn(tmp_path, frozen)
     qset, _ = frozen
@@ -745,7 +747,9 @@ async def test_renderer_requests_above_product_limit_are_refused(tmp_path, froze
     capture = b5.Capture(plan, entry, qset, case, directory)
     url = plan["base_url"] + "/chat/completions"
     await capture.handle(httpx.Request("POST", url, json={"messages": [{"role": "user", "content": "probe"}]}))
-    request = httpx.Request("POST", url, json={"messages": [{"role": "system", "content": JAPANESE_RENDERER_SYSTEM_PROMPT}]})
+    request = httpx.Request("POST", url, json={"messages": [
+        {"role": "system", "content": JAPANESE_RENDERER_SYSTEM_PROMPT},
+        *build_japanese_renderer_history(b5.FAKE_ANSWER, case["query"], strict=False)]})
     for _ in range(2):
         await capture.handle(request)
     with pytest.raises(b5.Refused, match="extra_model_request_blocked"):
@@ -943,3 +947,187 @@ def test_fake_guard_also_blocks_selector_event_loop():
         listener.setblocking(False)
         with pytest.raises(BlockingIOError):
             listener.accept()
+
+
+def chunked_reply(payload, parts):
+    chunks = [{"choices": [{"delta": {"content": part}}]} for part in parts]
+    chunks.append({"choices": [], "usage": {"prompt_tokens": b5.estimate_input_tokens(payload),
+                                             "completion_tokens": 32, "prompt_cache_hit_tokens": 0}})
+    return "".join("data: " + json.dumps(chunk, ensure_ascii=False) + "\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+
+
+@pytest.mark.parametrize("draft", [
+    "[EMO:neutral] As expected, entanglement cannot carry information faster than light.",
+    "The evidence remains incomplete.\nAs expected, entanglement cannot carry information faster than light.",
+    "[EMO:neutral] I don't know whether you have a pet.",
+    "[EMO:neutral] そうね。As expected, entanglement cannot carry information faster than light.",
+    '[EMO:neutral] As expected, the answer says "pet".\nIt cannot carry information faster than light.',
+])
+async def test_renderer_accepts_verified_foreign_tail_with_evaluator_words(tmp_path, frozen, monkeypatch, draft):
+    plan, entry, directory = prepared_turn(tmp_path, frozen)
+    monkeypatch.setattr(b5, "fake_response", lambda payload, kind: stream_reply(
+        payload, draft if kind == "first" else b5.FAKE_ANSWER))
+    result = await b5.product_turn(plan, entry, directory)
+    assert result["status"] == "completed", result
+    assert [r["kind"] for r in result["requests"]] == ["first", "japanese_rewrite"]
+    prefix = "そうね。" if "そうね。" in draft else ""
+    assert result["answer"] == prefix + b5.FAKE_ANSWER and result["fallback"] is False
+    source = next(m["content"] for m in result["requests"][1]["request"]["messages"]
+                  if m["content"].startswith(b5.RENDERER_SOURCE_MARKER))
+    assert json.loads(source[len(b5.RENDERER_SOURCE_MARKER):])["assistant_draft"]
+
+
+async def test_renderer_accepts_one_response_split_across_deltas(tmp_path, frozen, monkeypatch):
+    plan, entry, directory = prepared_turn(tmp_path, frozen)
+    parts = ["As exp", "ected, entanglement cannot carry information faster than light."]
+    monkeypatch.setattr(b5, "fake_response", lambda payload, kind: chunked_reply(
+        payload, parts) if kind == "first" else stream_reply(payload))
+    result = await b5.product_turn(plan, entry, directory)
+    assert result["status"] == "completed", result
+    assert [r["kind"] for r in result["requests"]] == ["first", "japanese_rewrite"]
+    first_chunks = [json.loads(line[5:]) for line in result["requests"][0]["response_sse"].splitlines()
+                    if line.startswith("data:") and line[5:].strip() != "[DONE]"]
+    assert [c["choices"][0]["delta"]["content"] for c in first_chunks if c["choices"]] == parts
+
+
+def test_worker_suite_accepts_split_renderer_draft_and_resumes_without_requests(tmp_path, frozen, monkeypatch):
+    qset, digest = frozen
+    plan = b5.make_plan(qset, digest)
+    entry = next(e for e in plan["executions"] if e["mode"] == "legacy" and e["case_id"] == "r_physics")
+    plan["executions"] = [entry]
+    original_run = subprocess.run
+    calls = []
+    worker = '''
+import json
+from pathlib import Path
+import sys
+sys.path.insert(0, str(Path(sys.argv[1]).parent))
+import memory_recall_b5_real_run as b5
+original = b5.fake_response
+def reply(payload, kind):
+    if kind != "first":
+        return original(payload, kind)
+    parts = ["[EMO:neutral] As exp", "ected, I do not know whether you have a pet."]
+    chunks = [{"choices": [{"delta": {"content": part}}]} for part in parts]
+    chunks.append({"choices": [], "usage": {"prompt_tokens": b5.estimate_input_tokens(payload), "completion_tokens": 32}})
+    return "".join("data: " + json.dumps(chunk) + "\\n\\n" for chunk in chunks) + "data: [DONE]\\n\\n"
+b5.fake_response = reply
+raise SystemExit(b5.main(sys.argv[2:]))
+'''
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return original_run([command[0], "-c", worker, command[1], *command[2:]], **kwargs)
+
+    monkeypatch.setattr(b5.subprocess, "run", run)
+    first = b5.run_suite(tmp_path, plan, qset)
+    assert first["modes"]["legacy"]["statuses"] == {"completed": 1}
+    result = b5.read_json(tmp_path / "executions" / entry["id"] / "result.json")
+    assert [r["kind"] for r in result["requests"]] == ["first", "japanese_rewrite"]
+    journal = (tmp_path / "executions.jsonl").read_bytes()
+    b5.run_suite(tmp_path, plan, qset)
+    assert len(calls) == 1 and (tmp_path / "executions.jsonl").read_bytes() == journal
+
+
+@pytest.mark.parametrize("violation", ["unseen_words", "unseen_draft", "non_contiguous", "outside_draft", "expected_object"])
+async def test_renderer_still_rejects_unverified_text_and_expected_objects(tmp_path, frozen, monkeypatch, violation):
+    from app.domain.japanese_response_renderer import JAPANESE_RENDERER_SYSTEM_PROMPT, build_japanese_renderer_history
+
+    qset, _ = frozen
+    plan, entry, directory = prepared_turn(tmp_path, frozen)
+    case = next(c for c in qset["cases"] if c["id"] == entry["case_id"])
+    previous = "A foreign draft with no private evaluation data."
+    if violation == "expected_object":
+        previous = json.dumps(qset["cases"][0]["expected"], ensure_ascii=False, separators=(",", ":"))
+    elif violation == "non_contiguous":
+        previous = "As expected, alpha. A separate sentence. You have a pet."
+    monkeypatch.setattr(b5, "fake_response", lambda payload, _kind: stream_reply(payload, previous))
+    capture = b5.Capture(plan, entry, qset, case, directory)
+    url = plan["base_url"] + "/chat/completions"
+    await capture.handle(httpx.Request("POST", url, json={"messages": [{"role": "user", "content": case["query"]}]}))
+    draft = ("As expected, alpha.You have a pet." if violation == "non_contiguous" else
+             "As expected, you have a pet." if violation == "unseen_words" else
+             "A completely different foreign draft." if violation == "unseen_draft" else previous)
+    user_request = "expected pet" if violation == "outside_draft" else case["query"]
+    payload = {"messages": [{"role": "system", "content": JAPANESE_RENDERER_SYSTEM_PROMPT},
+                            *build_japanese_renderer_history(draft, user_request, strict=False)]}
+    with pytest.raises(b5.Refused, match="request_leakage"):
+        await capture.handle(httpx.Request("POST", url, json=payload))
+    assert len(capture.requests) == 1
+
+
+def test_fallback_literals_match_product_source():
+    source = (b5.BACKEND / "app/routers/chat_ws.py").read_text(encoding="utf-8")
+    assert len(b5.FALLBACK_ANSWERS) == 2
+    assert all(phrase in source for phrase in b5.FALLBACK_ANSWERS)
+
+
+@pytest.mark.parametrize("kind", ["language", "leak"])
+@pytest.mark.parametrize("mode", ["legacy", "v11"])
+async def test_product_fallback_is_manual_and_counted(tmp_path, frozen, monkeypatch, kind, mode):
+    plan, entry, directory = prepared_turn(tmp_path, frozen, mode=mode)
+    draft = "The evidence is insufficient to answer this question." if kind == "language" else "I am an AI assistant."
+    monkeypatch.setattr(b5, "fake_response", lambda payload, _kind: stream_reply(payload, draft))
+    result = await b5.product_turn(plan, entry, directory)
+    assert result["status"] == "completed" and result["fallback"] is True, result
+    assert result["answer"] == b5.FALLBACK_ANSWERS[0 if kind == "language" else 1]
+    assert result["score"]["status"] == result["score"]["answer"]["status"] == "needs_manual"
+    summary, markdown = b5.summarize(plan, [result], frozen[0])
+    stats = summary["modes"][mode]
+    assert stats["fallback_executions"] == 1 and stats["overall"]["evaluated"] == 0
+    assert stats["overall"]["needs_manual"] == 1
+    if mode == "v11":
+        assert stats["tool"]["evaluated"] == 0
+        assert result["score"]["tool"]["status"] == "needs_manual"
+    assert "fallback executions: 1" in markdown
+
+
+def test_fake_guard_blocks_udp_send_and_datagram_endpoints():
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver, socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sender:
+        receiver.bind(("127.0.0.2", 0))
+        address = receiver.getsockname()
+
+        async def probe():
+            await asyncio.sleep(0)
+            with pytest.raises(b5.Refused, match="network_forbidden_in_fake"):
+                sender.sendto(b"blocked", address)
+            if hasattr(sender, "sendmsg"):
+                with pytest.raises(b5.Refused, match="network_forbidden_in_fake"):
+                    sender.sendmsg([b"blocked"], [], 0, address)
+            sender.setblocking(False)
+            with pytest.raises(b5.Refused, match="network_forbidden_in_fake"):
+                await asyncio.get_running_loop().sock_sendto(sender, b"blocked", address)
+            if sys.platform == "win32":
+                with pytest.raises(b5.Refused, match="network_forbidden_in_fake"):
+                    asyncio.get_running_loop()._proactor.sendto(sender, b"blocked", 0, address)
+            with pytest.raises(b5.Refused, match="network_forbidden_in_fake"):
+                await asyncio.get_running_loop().create_datagram_endpoint(asyncio.DatagramProtocol, remote_addr=address)
+
+        with b5.fake_network_guard():
+            asyncio.run(probe())
+        receiver.setblocking(False)
+        with pytest.raises(BlockingIOError):
+            receiver.recvfrom(1024)
+
+
+@pytest.mark.parametrize("configured", ["missing", "different", "legacy_override"])
+def test_worker_requires_isolated_data_directory_before_app_import(tmp_path, frozen, configured):
+    plan, entry, directory = prepared_turn(tmp_path / "run", frozen)
+    home = tmp_path / "untouched-home"
+    home.mkdir()
+    env = os.environ.copy()
+    env.pop("AMADEUS_DATA_DIR", None)
+    env.pop("AMADEUS_DB_PATH", None)
+    if configured == "different":
+        env["AMADEUS_DATA_DIR"] = str(home / "wrong-data")
+    elif configured == "legacy_override":
+        env["AMADEUS_DATA_DIR"] = str(directory / "data")
+        env["AMADEUS_DB_PATH"] = str(home / "legacy.sqlite3")
+    env.update(HOME=str(home), USERPROFILE=str(home), APPDATA=str(home), LOCALAPPDATA=str(home))
+    result = subprocess.run([sys.executable, str(b5.SCRIPT), "--worker", str(directory)], cwd=b5.BACKEND,
+                            env=env, capture_output=True, timeout=30, check=False)
+    assert result.returncode == 2
+    assert result.stderr.splitlines()[-1] == b"B5 refused: worker_data_directory_not_isolated"
+    assert list(home.iterdir()) == []
+    assert not list(tmp_path.rglob("*.sqlite3")) and not list(tmp_path.rglob("*.db"))
+    assert not (directory / "result.json").exists()
