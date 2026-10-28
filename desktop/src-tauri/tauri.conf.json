@@ -37,9 +37,7 @@
     ],
     "resources": {
       "resources/backend": "backend/",
-      "../../LICENSE": "licenses/LICENSE",
-      "../../THIRD_PARTY_NOTICES.md": "licenses/THIRD_PARTY_NOTICES.md",
-      "resources/backend/THIRD_PARTY_LICENSES": "licenses/third-party/"
+      "resources/licenses": "licenses/"
     },
     "windows": {
       "webviewInstallMode": {
@@ -47,6 +45,7 @@
         "silent": true
       },
       "nsis": {
+        "installMode": "currentUser",
         "languages": [
           "SimpChinese"
         ]

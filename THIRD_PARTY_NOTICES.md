@@ -24,7 +24,7 @@ The root MIT license applies to this project's original source code. Third-party
 
 ## Installed dependencies
 
-Python, npm and Cargo dependencies are installed separately. Preserve the licenses and notices from the selected distributions when packaging them.
+Windows installers place the unified inventory in `licenses/manifest.json`. It records distributed components, versions, sources, installed paths and license-file SHA-256 values. `python/` retains the frozen backend's wheel notices and pinned upstream supplements; `cpython/` contains the base interpreter license and native-library supplements; `vc-runtime/` records the selected Build Tools Redist files, versions and applicable Microsoft terms. `rust/` contains notices from Windows runtime crate dependencies, while `npm/`, `frontend/` and `fonts/` cover production frontend packages, vendored code and fonts. `models/` preserves the bundled E5 model card. `copyleft/` contains eSpeak NG's GPLv3 text, speech source locations and hashes, and GCC runtime materials. Missing notice files, version differences and source-verification gaps are listed explicitly in the inventory.
 
 SciPy uses BSD-3-Clause. Its wheels may also bundle OpenBLAS (BSD-3-Clause), libgfortran (GPL-3.0-or-later with GCC Runtime Library Exception 3.1) and libquadmath (LGPL-2.1-or-later), depending on the target platform. Keep the wheel's complete license inventory and notices; the [GCC runtime exception](https://www.gnu.org/licenses/gcc-exception-3.1.html) applies to the relevant runtime component.
 

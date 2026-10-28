@@ -227,6 +227,8 @@ def finalize(config: dict) -> None:
     write_json(work / "duplicate-dll-audit.json", duplicate_dlls)
     payload = {
         **json.loads((work / "binary-sources.json").read_text(encoding="utf-8")),
+        "vc_runtime": json.loads((work / "vc-runtime-audit.json").read_text(encoding="utf-8")),
+        "sherpa_imports": json.loads((work / "sherpa-imports.json").read_text(encoding="utf-8")),
         "total_bytes": sum(size for _, size in files),
         "e5_bytes": sum(size for relative, size in files if relative.startswith("_internal/hf_cache/")),
         "largest_20_files": sorted(files, key=lambda item: (-item[1], item[0]))[:20],

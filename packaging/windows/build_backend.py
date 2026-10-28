@@ -92,12 +92,15 @@ def main() -> int:
     parser.add_argument("--work-dir", type=Path, required=True, help="venv, cache, temp, logs and build output")
     parser.add_argument("--venv", type=Path, help="defaults to WORK_DIR/venv")
     parser.add_argument("--e5-source", type=Path, required=True, help=f"read-only E5 snapshot {E5_REVISION}")
+    parser.add_argument("--vc-redist", type=Path, required=True, help="Build Tools Redist/MSVC/<version>/x64 directory")
     parser.add_argument("--output", type=Path, default=REPO / "desktop/src-tauri/resources/backend")
     parser.add_argument("--prepare-only", action="store_true", help="install dependencies without freezing")
     parser.add_argument("--clean", action="store_true", help="discard PyInstaller analysis caches")
     args = parser.parse_args()
     if os.name != "nt":
         parser.error("build on Windows x64")
+    from vc_runtime import redist_inventory
+    redist = redist_inventory(args.vc_redist)
     started = time.monotonic()
     work = args.work_dir.resolve()
     output = args.output.resolve()
@@ -149,16 +152,20 @@ def main() -> int:
         target.parent.mkdir(parents=True, exist_ok=True)
         if sha256(origin) != expected:
             raise RuntimeError(f"E5 source hash mismatch: {relative}")
-        shutil.copyfile(origin, target)
+        if not target.is_file() or sha256(target) != expected:
+            shutil.copyfile(origin, target)
         if sha256(target) != expected:
             raise RuntimeError(f"E5 copy mismatch: {relative}")
         model_files.append({"path": relative, "sha256": expected, "bytes": target.stat().st_size})
     (model / "refs").mkdir(exist_ok=True)
-    (model / "refs/main").write_text(E5_REVISION, encoding="utf-8")
+    reference = model / "refs/main"
+    if not reference.is_file() or reference.read_text(encoding="utf-8") != E5_REVISION:
+        reference.write_text(E5_REVISION, encoding="utf-8")
     config = {
         "repo": str(REPO), "work": str(work), "packaging": str(HERE),
         "hf_cache": str(cache), "app_files": APP_FILES,
         "build_path": env["PATH"], "venv": str(venv), "base_python": str(base_python),
+        "vc_redist": redist["path"],
         "model": {"id": "intfloat/multilingual-e5-small", "revision": E5_REVISION, "files": model_files},
         "inputs": {p.relative_to(REPO).as_posix(): sha256(p) for p in (
             REPO / "backend/requirements.txt", REPO / "backend/requirements-dev.lock",
@@ -171,6 +178,8 @@ def main() -> int:
     run([str(python), "-m", "PyInstaller", "--noconfirm", *(["--clean"] if args.clean else []),
          "--distpath", str(work / "dist"), "--workpath", str(work / "build"),
          str(HERE / "backend.spec")], env, work, work / "logs/pyinstaller.log")
+    run([str(python), str(HERE / "vc_runtime.py"), str(config_path)],
+        env, work, work / "logs/vc-runtime.log")
     run([str(python), str(HERE / "bundle_support.py"), str(config_path)],
         env, work, work / "logs/inventory.log")
     dist = work / "dist/amadeus-backend"

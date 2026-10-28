@@ -1,4 +1,4 @@
-# Windows 冻结后端
+# Windows 冻结后端与安装包
 
 构建目标为 Windows x64、CPython 3.11、PyInstaller onedir。默认生成
 `desktop/src-tauri/resources/backend/amadeus-backend.exe`，供 Tauri resources 使用。
@@ -10,14 +10,16 @@
 `614241f622f53c4eeff9890bdc4f31cfecc418b3`。来源目录只读，脚本按白名单复制文件，
 `E5_FILES` 固定十个文件的期望 SHA-256，复制前核对来源，复制后再次核对产物。
 任一哈希不符即停止；不下载模型，不复制其他模型或用户缓存。
+哈希已经一致的暂存模型文件直接复用，并继续核对来源及产物。
 
-PowerShell 示例（将三个路径替换为本机路径）：
+PowerShell 示例（将路径替换为本机路径）：
 
 ```powershell
 $buildPython = 'X:/Python311/python.exe'
 $buildWork = 'X:/build-artifacts/backend-build'
 $e5Snapshot = 'X:/models/models--intfloat--multilingual-e5-small/snapshots/614241f622f53c4eeff9890bdc4f31cfecc418b3'
-& $buildPython packaging/windows/build_backend.py --python $buildPython --work-dir $buildWork --e5-source $e5Snapshot
+$vcRedist = 'X:/BuildTools/VC/Redist/MSVC/14.51.36231/x64'
+& $buildPython packaging/windows/build_backend.py --python $buildPython --work-dir $buildWork --e5-source $e5Snapshot --vc-redist $vcRedist
 ```
 
 `--python` 只用于建立专用 venv，默认是调用脚本的 Python。
@@ -53,13 +55,25 @@ E5 使用包内 Hugging Face hub 缓存布局及 `refs/main`，入口强制离�
 重复 DLL 仅处理根目录副本与明确的包内库目录副本：逐对核对 SHA-256，
 相同才移除根目录副本；不同则都保留。清单在 `dll-deduplication.json`。
 最终目录中的同名 DLL 另行逐份计算哈希，写入 `duplicate-dll-audit.json`。
-sklearn 按完整路径预加载的运行库保留包内副本及公共副本；本次构建的
-`msvcp140.dll`、`VCOMP140.DLL` 两组副本哈希均不同。
-根目录的这两份库来自构建机已安装的 VC++ 运行库，版本随构建机变化；
-`vcruntime140*.dll` 也可能来自基础 Python 安装目录。具体来源、版本以本次清单为准，
-固定分发来源由后续发布工程完成。
+sklearn 按完整路径预加载的运行库保留包内副本及公共副本，即使哈希相同也不移除；
+各副本的文件版本与 SHA-256 记录在库存中。
+`--vc-redist` 必填，指定 Build Tools 的 `Redist/MSVC/<版本>/x64`。
+其下必须恰好有一个 `Microsoft.VC14*.CRT` 和一个 `Microsoft.VC14*.OpenMP`，
+实际目录名及文件版本写入清单。当前锁定 wheel 需要至少 14.51 的运行库；
+VS 2026 使用的目录名为 `Microsoft.VC145.*`。
+冻结后把 `_internal/` 根目录的 VC 运行库替换为该目录的 CRT、OpenMP 文件；
+包内库目录的副本保留并单列。保留构建 PATH 顺序以供 PyInstaller 查找基础 Python
+依赖，最终根目录运行库由显式替换和 SHA-256 校验确定。
+所有 PE 文件都核对普通和延迟导入表；导入 VC 运行库的组件，其链接器版本不得高于
+所选 Redist 的主、次版本。缺文件或版本超出时停止，详情见 `vc-runtime-audit.json`。
 排除 `torch/include/`、sherpa 的 `include/` 和 `.lib`；仍分发 sklearn、transformers
-自带的头文件及 sklearn 导入库。sherpa 的 c-api.dll、cxx-api.dll 保留。
+自带的头文件及 sklearn 导入库。锁定的 sherpa 1.13.8 排除
+`sherpa-onnx-c-api.dll`、`sherpa-onnx-cxx-api.dll`：包内其他 PE 不导入它们，
+Python 源码也不在运行时加载它们；`_info.py` 仅为命令行输出编译参数。
+两个 DLL 之间的导入不计为外部引用。这样少分发一份静态编入的 eSpeak NG；
+`_sherpa_onnx.pyd` 中的 eSpeak NG 仍分发 GPLv3 原文及源码说明。
+每次构建重新核对普通/延迟导入及 Python 加载调用，记录排除前后的文件数、总字节
+和源码哈希到 `sherpa-imports.json`；存在外部引用或加载调用时保留两个 DLL。
 dist-info 下的许可树存入经过字节校验的 ZIP，避免深路径。
 
 ## 验收
@@ -87,7 +101,8 @@ $env:PYTHON_DOTENV_DISABLED = '1'
 ```
 
 验收自带 loopback 假 OpenAI 兼容服务，禁用 TTS，使用空闲的非 8000 端口；
-使用 netstat 同时核对后端 PID 的 IPv4/IPv6 TCP 监听，要求只有 `127.0.0.1`。
+使用 Windows `GetExtendedTcpTable` 同时核对后端 PID 的 IPv4/IPv6 TCP 监听，
+要求只有 `127.0.0.1`。
 默认不传 `AMADEUS_MEMORY_MODE`，覆盖产品的 legacy 默认模式；另一轮显式启用 v11。
 检查 `/health`、WebSocket 的 auth → session.ready → chat.send → turn.completed、
 用户及助手历史落库。分别杀掉假父进程和关闭 stdin，要求后端 10 秒内正常退出，
@@ -114,8 +129,8 @@ stdin 不是管道时，stderr 会记录等待 EOF 和请求退出的原因。
 TOC 的来源路径；`bundle-inventory.json` 保存版本、体积、最大文件/目录、去重和许可统计；
 `build-result.json` 保存构建耗时。路径字段含本机构建位置，保持为本地产物。
 `bundle-inventory.json` 的 `allowed_roots` 记录二进制来源范围；`non_venv_binaries`
-逐项记录基础 Python 和 Windows 来源二进制的包内路径、来源、文件版本及 SHA-256。
-没有 PE 文件版本资源时，`file_version` 为 null。此清单供后续运行库及许可分发使用。
+逐项记录基础 Python、Windows 和所选 Redist 来源二进制的包内路径、来源、文件版本及 SHA-256。
+没有 PE 文件版本资源时，`file_version` 为 null。此清单用于运行库来源及许可核对。
 
 `THIRD_PARTY_LICENSES/manifest.json` 通过 TOC 来源文件和各发行包的 RECORD 对应，
 只列实际收集到的发行包，不扫描后直接宣称整个 venv 都被分发。每条记录包含名称、
@@ -123,11 +138,65 @@ TOC 的来源路径；`bundle-inventory.json` 保存版本、体积、最大文�
 许可文件按发行包放入 ZIP。`without_license_files` 显式列出没有 dist-info 许可文件的包。
 模型卡随模型保存，`e5-model.json` 记录模型来源、revision 和文件哈希。
 
+## NSIS 安装包
+
+先安装 VS 2026 Build Tools 的「使用 C++ 的桌面开发」工作负载。构建器通过
+`vswhere` 要求唯一的完整 VS 2026 实例，选择其最高版本的 Redist，核对文件版本
+至少为 14.51。`--vc-redist` 必须指向这个 x64 目录。Node、Rust 和 Python 3.11 x64
+需已可用；工具版本随产物保存。
+
+```powershell
+py -3.11 packaging/windows/build_installer.py --work-dir 'X:/build-artifacts/installer' --e5-source $e5Snapshot --vc-redist $vcRedist --config packaging/windows/p3-test.conf.json
+```
+
+一条命令依次冻结后端、生成统一许可目录、执行完整 `npm ci`、运行 `tauri build`。
+生成许可目录时先在工作目录内安装非 dev npm 依赖，供许可收集使用；随后在
+`desktop/` 执行完整依赖安装供前端构建使用。所有 npm 缓存、venv、临时文件、
+`CARGO_TARGET_DIR`、前端产物和安装包均位于 `--work-dir` 下；`desktop/node_modules`
+是工作区内的构建依赖。
+
+每次构建创建独立的 `WORK_DIR/runs/<UTC时间>/`，保存后端、统一许可目录、前端产物、
+实际传给 Tauri 的 JSON 配置、各阶段日志、冻结证据及安装包。
+`WORK_DIR/installer-result.json` 指向最新成功结果，记录各阶段耗时、工具及链接器路径、
+主程序导入表和链接器版本、安装包大小与 SHA-256。缓存和 Cargo 输出可在同一工作目录复用。
+构建器显式选择该 VS 2026 的 `link.exe`，并启用 `STATIC_VCRUNTIME`；最终仍以主程序
+实际 PE 导入表没有动态 VC 运行库导入为验收条件。
+
+`p3-test.conf.json` 使用 `com.amadeus.desktop.p3test`、`Amadeus P3 Test` 和 `0.1.0`，
+仅通过 `tauri build --config` 覆盖测试标识，不改正式配置。测试数据默认位于
+`%LOCALAPPDATA%/com.amadeus.desktop.p3test/data/`。不传 `--config` 时使用正式标识；
+安装验收应始终传测试配置。安装模式为 `currentUser`，WebView2 保持在线
+`embedBootstrapper`。卸载的「删除应用数据」默认不勾，静默卸载保留用户数据。
+
+`licenses/manifest.json` 统一记录 Python、CPython/native、VC、Windows 目标的 Rust
+运行时依赖、非 dev npm 包、字体、E5 和 GPL/LGPL 材料。Rust 图不遍历 build/dev
+依赖和 proc-macro 依赖链；许可原文来自本机 crate 缓存。Python 许可 ZIP 沿用冻结清单，
+四个缺许可 wheel 的上游原文由 `upstream_materials.json` 固定 URL、ref 和 SHA-256。
+没有许可文件、版本差异、CPython 主许可未覆盖的段落及未确认的源码信息均单列。
+安装后的核对命令会检查所有许可文件、ZIP 成员哈希及组件安装路径：
+
+```powershell
+& 'X:/build-artifacts/installer/backend-build/venv/Scripts/python.exe' packaging/windows/license_bundle.py --verify 'X:/安装 测试'
+```
+
+eSpeak NG、piper-phonemize 的归档地址和预期 SHA-256 从 sherpa v1.13.8 的固定 CMake
+文件读取。源码包保留这些归档、sherpa v1.13.8 源码及许可说明，不解包或执行下载的代码。
+可独立运行以下命令生成源码包；发布者将它与对应版本的安装包一起发布：
+
+```powershell
+py -3.11 packaging/windows/source_materials.py --work-dir 'X:/build-artifacts/installer/materials' --version 0.1.0
+```
+
+统一许可目录和源码包均为生成物，不提交。源码目录默认资源占位为
+`desktop/src-tauri/resources/licenses/`；构建器通过 JSON Merge Patch 将后端和许可
+资源映射到工作目录中的实际生成物。
+
 ## 交付边界
 
-- 验收覆盖本机冻结产物、离线 E5、sherpa 导入、假服务聊天和退出；ASR/VAD 推理、
-  真实 Provider、TTS、素材包、无开发环境的 Windows VM、安装/升级/卸载需另外验收。
-- 当前目录不生成 NSIS，不安装系统软件。VC++ / WebView2 前置检查、eSpeak GPL
-  原文和对应源码获取方式、前端/Rust/native 许可补全及最终许可入安装包由 P3 完成。
+- 冻结验收覆盖本机产物、离线 E5、sherpa 导入、假服务聊天和退出。安装包需要另外完成
+  安装、覆盖安装、卸载及数据保留验收；ASR/VAD 推理、真实 Provider、TTS、素材包、
+  无开发环境的 Windows VM、从旧版本升级和正式标识安装不在本机测试范围内。
+- 构建器不安装系统软件。VC 运行库以 app-local 文件分发，安全更新依赖重新构建发版；
+  干净环境中的 VC / WebView2 验收和 CI 出包由后续发布验收完成。
 - 本地令牌和跨前后端的动态端口发现属于 P4；本入口的端口环境变量不代替该协议。
 - 未签名。最终发布应以待发布产品版本重新构建并重新验收。
