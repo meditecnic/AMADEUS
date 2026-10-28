@@ -63,15 +63,21 @@ sklearn 按完整路径预加载的运行库保留包内副本及公共副本，
 VS 2026 使用的目录名为 `Microsoft.VC145.*`。
 冻结后把根目录和包内私有 VC 运行库全部替换为所选 Redist 文件；私有副本的路径及
 文件名保持，包括 delvewheel 的哈希后缀，匹配来源时去掉该后缀。库存记录替换前
-版本、哈希及替换后哈希。导入方所在目录和 `_internal/` 根目录均缺少的 VC 导入，
-从 Redist 补到根目录；哈希后缀导入也保留其导入名，确保具有明确的根目录回退。
+版本、哈希及替换后哈希。门禁认可导入方目录、`_internal/` 根目录，以及导入方所属包
+的 `<package>.libs`、`<package>/.libs` 加载目录；其他包的同名 DLL 不满足该导入。
+这些位置均缺少时，从 Redist 补到根目录。NumPy 已有私有副本时不再额外补根目录别名。
 `additions` 列出补入文件及导入方。保留构建 PATH 顺序以供 PyInstaller 查找基础 Python
 依赖，最终全部 VC 副本由显式替换和 SHA-256 校验确定。
 所有 PE 文件都核对普通和延迟导入表；导入 VC 运行库的组件，其链接器版本不得高于
-所选 Redist 的主、次版本。每个导入必须能在导入方目录或根目录找到，并核对同名
+所选 Redist 的主、次版本。每个导入必须能在上述加载目录找到，并核对同名
 私有预加载候选副本的版本；组件链接器版本不得高于任何候选副本。缺文件、版本
 超出或副本不匹配 Redist 时停止，详情见 `vc-runtime-audit.json`。`audit_bundle` 是
 只读门禁，便于对已生成的冻结包及故意改坏的副本进行核对。
+`MSVCP140_ATOMIC_WAIT.dll` 是自检模块快照中观察到的运行时加载项，未出现在 PE
+导入表中；因此独立要求根目录必须包含它，冻结时缺少就从 Redist 补齐，门禁缺少
+就报错。库存单列 `required_runtime_loads` 和 `missing_runtime_loads`，不推断加载者。
+后端不使用 pythonwin GUI/MFC 接口，冻结时排除 `pythonwin`、`win32ui`、`win32uiole`，
+避免分发依赖未入包 MFC 的未使用扩展；其余 pywin32 功能仍按分析结果收集。
 排除 `torch/include/`、sherpa 的 `include/` 和 `.lib`；仍分发 sklearn、transformers
 自带的头文件及 sklearn 导入库。锁定的 sherpa 1.13.8 排除
 `sherpa-onnx-c-api.dll`、`sherpa-onnx-cxx-api.dll`：包内其他 PE 不导入它们，
@@ -168,11 +174,14 @@ py -3.11 packaging/windows/build_installer.py --work-dir 'X:/build-artifacts/ins
 构建器显式选择该 VS 2026 的 `link.exe`，并启用 `STATIC_VCRUNTIME`；最终仍以主程序
 实际 PE 导入表没有动态 VC 运行库导入为验收条件。实际编译阶段透传 `-- --locked`。
 
-两个构建脚本共用 `bundle_support.sanitized_build_environment`，清除应用配置、
-Provider API 密钥、HF/Transformers 配置等变量，只打印被删除的变量名。安装构建器
-保留 PATH，供 npm、node、cargo 查找工具；代理变量 HTTP_PROXY、HTTPS_PROXY、
-ALL_PROXY、NO_PROXY 及其大小写形式保留，供 npm、cargo 和源码下载联网。后端冻结
-继续使用只含专用 Python 与 Windows 目录的 PATH；这些处理只作用于子进程。
+两个构建脚本共用 `bundle_support.sanitized_build_environment`，只继承白名单中的
+Windows 系统/用户目录、PATH/PATHEXT、Cargo/Rustup 目录与工具链选择、标准代理和
+CA 信任路径；具体名字见 `BUILD_ENV_NAMES`。未知变量一律删除，包括任意命名的
+API 密钥、访问令牌和应用配置；只打印被删除的变量名。安装构建器保留 PATH，供
+npm、node、cargo 查找工具；HTTP_PROXY、HTTPS_PROXY、ALL_PROXY、NO_PROXY 等代理
+变量及其大小写形式保留，供 npm、cargo 和源码下载联网。代理 URL 如果含用户名和
+口令，也会随这个允许的代理设置传给构建子进程。后端冻结继续使用只含专用 Python
+与 Windows 目录的 PATH；这些处理只作用于子进程，不修改用户的持久环境变量。
 
 Tauri CLI 2.11.3 在 Rust interface 初始化时调用 `rewrite_manifest` 同步 tauri 和
 tauri-build 的 features，并重新序列化 Cargo.toml；CRLF 可能变为 LF。副本对照实验中，
@@ -191,7 +200,9 @@ tauri-build 的 features，并重新序列化 Cargo.toml；CRLF 可能变为 LF�
 依赖和 proc-macro 依赖链；许可原文来自本机 crate 缓存。Python 许可 ZIP 沿用冻结清单，
 缺许可 wheel、crate 和 npm 包的上游原文由 `upstream_materials.json` 固定 URL、ref
 和 SHA-256。crate 提交与 `.cargo_vcs_info.json` 核对；npm 提交按 registry gitHead
-确认。selectors 按源码头声明附官方 MPL-2.0；react-remove-scroll-bar 2.3.8 的对应
+确认。selectors 按源码头声明附官方 MPL-2.0，机器字段 `text_source=generic`、
+`version_correspondence=null`，并列入 coverage_gaps；这份通用文本未宣称来自对应
+提交。react-remove-scroll-bar 2.3.8 的对应
 提交及 tag 无法取得，使用固定的其他提交原文，并在清单明确记录版本对应例外。
 libquadmath 未在二进制中找到符号或字符串，LGPL 原文作为预防保留。
 没有许可文件、版本差异、CPython 主许可未覆盖的段落及未确认的源码信息均单列。

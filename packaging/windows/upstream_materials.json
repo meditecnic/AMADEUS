@@ -152,7 +152,8 @@
     "ref": "MPL-2.0",
     "package_ref": "635e1a19d02960588a00e189bd4bd5bdb150ec3d",
     "verification": "Corresponding commit has no LICENSE file; official MPL-2.0 text follows the source-file header declaration.",
-    "version_correspondence": true,
+    "version_correspondence": null,
+    "text_source": "generic",
     "sha256": "3f3d9e0024b1921b067d6f7f88deb4a60cbe7a78e76c64e3f1d7fc3b779b9d04"
   },
   {

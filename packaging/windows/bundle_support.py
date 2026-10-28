@@ -22,17 +22,23 @@ def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+BUILD_ENV_NAMES = frozenset({
+    "PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "SYSTEMDRIVE", "COMSPEC", "OS",
+    "USERPROFILE", "HOME", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP",
+    "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432", "PROGRAMDATA", "ALLUSERSPROFILE", "PUBLIC",
+    "COMMONPROGRAMFILES", "COMMONPROGRAMFILES(X86)", "COMMONPROGRAMW6432",
+    "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "PROCESSOR_ARCHITEW6432",
+    "CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN",
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "FTP_PROXY",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO",
+    "NODE_EXTRA_CA_CERTS", "PIP_CERT",
+})
+
+
 def sanitized_build_environment() -> dict[str, str]:
-    """Remove application configuration and credentials; retain tool paths and proxies."""
-    env = dict(os.environ)
-    removed = []
-    for key in list(env):
-        upper = key.upper()
-        if (upper.startswith(("AMADEUS_", "SOVITS_", "HF_", "HUGGINGFACE_", "TRANSFORMERS_", "SENTENCE_TRANSFORMERS_"))
-                or upper in {"PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "ASSETS_DIR", "SENSEVOICE_MODEL",
-                             "SENSEVOICE_TOKENS", "DEEPSEEK_API_KEY", "TAVILY_API_KEY", "FIRECRAWL_API_KEY"}):
-            removed.append(key)
-            env.pop(key)
+    """Inherit only Windows/tool paths, proxy settings and public CA trust paths."""
+    env = {key: value for key, value in os.environ.items() if key.upper() in BUILD_ENV_NAMES}
+    removed = [key for key in os.environ if key.upper() not in BUILD_ENV_NAMES]
     print("BUILD_ENV_REMOVED " + json.dumps(sorted(removed)), flush=True)
     return env
 
@@ -74,6 +80,7 @@ def collect_inputs(config: dict) -> tuple[list, list, list, list]:
         "tkinter", "IPython", "notebook", "matplotlib", "pandas", "tensorflow",
         "jax", "flax", "torchaudio", "torchvision", "librosa", "numba", "llvmlite",
         "scipy.tests", "numpy.tests", "sklearn.tests",
+        "pythonwin", "win32ui", "win32uiole",
     ]
     return datas, binaries, sorted(set(hidden)), excludes
 

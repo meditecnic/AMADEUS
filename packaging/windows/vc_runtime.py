@@ -12,6 +12,8 @@ from bundle_support import digest, file_version, write_json
 
 VC_NAME = re.compile(r"(?:vcruntime|msvcp|msvcr|vcomp|concrt|vccorlib)\d+.*\.dll", re.I)
 PE_SUFFIXES = {".exe", ".dll", ".pyd"}
+# Observed during self-check even though no PE import table names this DLL.
+REQUIRED_RUNTIME_LOADS = ("msvcp140_atomic_wait.dll",)
 
 
 def redist_inventory(root: Path) -> dict:
@@ -63,6 +65,17 @@ def redist_name(name: str) -> str:
     return re.sub(r"-[0-9a-f]{8,64}(?=\.dll$)", "", name.lower())
 
 
+def runtime_search_dirs(dist: Path, importer: Path) -> set[Path]:
+    """Include the importer's package library directories used by wheel loaders."""
+    root = dist / "_internal"
+    directories = {importer.parent, root}
+    relative = importer.relative_to(root) if importer.is_relative_to(root) else None
+    if relative and len(relative.parts) > 1:
+        package = relative.parts[0]
+        directories.update({root / (package + ".libs"), root / package / ".libs"})
+    return directories
+
+
 def audit_bundle(dist: Path, redist: dict, report: Path, *, replacements: list | None = None,
                  additions: list | None = None) -> dict:
     root = dist / "_internal"
@@ -97,8 +110,7 @@ def audit_bundle(dist: Path, redist: dict, report: Path, *, replacements: list |
             violations.append(row)
         for name in vc_imports:
             candidates = by_name.get(name, [])
-            # Every import has a local/root fallback; package preloads must also be compatible.
-            if not any((dist / item["bundle_path"]).parent in {path.parent, root} for item in candidates):
+            if not any((dist / item["bundle_path"]).parent in runtime_search_dirs(dist, path) for item in candidates):
                 missing.append({"importer": row["bundle_path"], "dll": name})
             for runtime in candidates:
                 row["runtime_candidates"].append({"dll": name, "path": runtime["bundle_path"], "version": runtime["file_version"]})
@@ -106,14 +118,18 @@ def audit_bundle(dist: Path, redist: dict, report: Path, *, replacements: list |
                 if not version or tuple(pe["linker_version"]) > tuple(map(int, version.split(".")[:2])):
                     runtime_violations.append({"importer": row["bundle_path"], "linker_version": pe["linker_version"],
                                                "runtime": runtime["bundle_path"], "runtime_version": version})
+    missing_runtime_loads = [name for name in REQUIRED_RUNTIME_LOADS
+                             if not any((dist / row["bundle_path"]).parent == root for row in by_name.get(name, []))]
     payload = {"redist": redist, "replacements": replacements or [], "additions": additions or [],
                "runtimes": runtimes, "pe_count": len(paths), "components": components, "violations": violations,
-               "missing_imports": missing, "runtime_violations": runtime_violations, "runtime_mismatches": mismatches}
+               "missing_imports": missing, "runtime_violations": runtime_violations, "runtime_mismatches": mismatches,
+               "required_runtime_loads": list(REQUIRED_RUNTIME_LOADS), "missing_runtime_loads": missing_runtime_loads}
     write_json(report, payload)
     errors = [f"{row['bundle_path']}: linker {row['linker_version']} exceeds Redist {redist['file_version']}" for row in violations]
     errors += [f"{row['importer']}: missing VC import {row['dll']}" for row in missing]
     errors += [f"{row['importer']}: linker {row['linker_version']} exceeds {row['runtime']} version {row['runtime_version']}" for row in runtime_violations]
     errors += [f"VC runtime does not match selected Redist: {row['bundle_path']} ({row['file_version']})" for row in mismatches]
+    errors += [f"Missing required runtime-loaded VC DLL in _internal: {name}" for name in missing_runtime_loads]
     if errors:
         raise RuntimeError("VC bundle audit failed:\n" + "\n".join(errors))
     return payload
@@ -133,6 +149,16 @@ def normalize_and_audit(dist: Path, redist: dict, report: Path) -> dict:
         if digest(path) != source["sha256"]:
             raise RuntimeError(f"VC copy hash mismatch: {path}")
         replacements.append({"bundle_path": path.relative_to(dist).as_posix(), **source, **original})
+    for name in REQUIRED_RUNTIME_LOADS:
+        if any(path.name.lower() == name for path in root.iterdir() if path.is_file()):
+            continue
+        source = redist["files"].get(name)
+        if not source:
+            raise RuntimeError(f"Missing VC Redist file for required runtime load: {name}")
+        target = root / name
+        shutil.copyfile(source["source_path"], target)
+        additions.append({"bundle_path": target.relative_to(dist).as_posix(),
+                          "required_by": "observed runtime load during --self-check", **source})
     while True:
         added = False
         for path in sorted(dist.rglob("*")):
@@ -141,7 +167,8 @@ def normalize_and_audit(dist: Path, redist: dict, report: Path) -> dict:
             for name in pe_details(path)["imports"]:
                 if not VC_NAME.fullmatch(name):
                     continue
-                if any(file.name.lower() == name for directory in {root, path.parent} for file in directory.iterdir() if file.is_file()):
+                if any(file.name.lower() == name for directory in runtime_search_dirs(dist, path) if directory.is_dir()
+                       for file in directory.iterdir() if file.is_file()):
                     continue
                 source = redist["files"].get(redist_name(name))
                 if not source:

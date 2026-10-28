@@ -150,7 +150,10 @@ def upstream_licenses(bundle: Bundle, pins: list[dict], category: str, name: str
     files = [bundle.copy(Path(row["local_path"]), category.split("-")[0] + "/" + name.replace("/", "__") + "-" + version + "/" + row["file"]) for row in selected]
     origins = [{key: value for key, value in row.items() if key != "local_path"} for row in selected]
     for row in selected:
-        if not row.get("version_correspondence", True):
+        if row.get("text_source") == "generic":
+            bundle.gaps.append({"category": "generic-license-text", "name": name,
+                                "package_ref": row["package_ref"], "url": row["url"], "detail": row["verification"]})
+        if row.get("version_correspondence", True) is False:
             bundle.mismatches.append({"name": name, "installed_version": version, "notice_ref": row["ref"], "reason": row["verification"]})
     return files, origins
 
