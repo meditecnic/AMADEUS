@@ -22,6 +22,27 @@ def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+BUILD_ENV_NAMES = frozenset({
+    "PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "SYSTEMDRIVE", "COMSPEC", "OS",
+    "USERPROFILE", "HOME", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP",
+    "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMW6432", "PROGRAMDATA", "ALLUSERSPROFILE", "PUBLIC",
+    "COMMONPROGRAMFILES", "COMMONPROGRAMFILES(X86)", "COMMONPROGRAMW6432",
+    "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE", "PROCESSOR_ARCHITEW6432",
+    "CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN",
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "FTP_PROXY",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "GIT_SSL_CAINFO",
+    "NODE_EXTRA_CA_CERTS", "PIP_CERT",
+})
+
+
+def sanitized_build_environment() -> dict[str, str]:
+    """Inherit only Windows/tool paths, proxy settings and public CA trust paths."""
+    env = {key: value for key, value in os.environ.items() if key.upper() in BUILD_ENV_NAMES}
+    removed = [key for key in os.environ if key.upper() not in BUILD_ENV_NAMES]
+    print("BUILD_ENV_REMOVED " + json.dumps(sorted(removed)), flush=True)
+    return env
+
+
 def collect_inputs(config: dict) -> tuple[list, list, list, list]:
     from PyInstaller.utils.hooks import (
         collect_all, collect_data_files, collect_dynamic_libs, collect_submodules,
@@ -59,6 +80,7 @@ def collect_inputs(config: dict) -> tuple[list, list, list, list]:
         "tkinter", "IPython", "notebook", "matplotlib", "pandas", "tensorflow",
         "jax", "flax", "torchaudio", "torchvision", "librosa", "numba", "llvmlite",
         "scipy.tests", "numpy.tests", "sklearn.tests",
+        "pythonwin", "win32ui", "win32uiole",
     ]
     return datas, binaries, sorted(set(hidden)), excludes
 
@@ -175,7 +197,11 @@ def license_inventory(dist: Path, rows: list) -> dict:
             archive_name = f"{name}-{version}.zip"
             with zipfile.ZipFile(root / archive_name, "w", zipfile.ZIP_DEFLATED) as archive:
                 for relative, origin in sorted(license_files):
-                    archive.write(origin, relative)
+                    info = zipfile.ZipInfo(relative, (1980, 1, 1, 0, 0, 0))
+                    info.compress_type = zipfile.ZIP_DEFLATED
+                    info.create_system = 3
+                    info.external_attr = 0o100644 << 16
+                    archive.writestr(info, origin.read_bytes())
             with zipfile.ZipFile(root / archive_name) as archive:
                 for relative, origin in license_files:
                     if hashlib.sha256(archive.read(relative)).hexdigest() != digest(origin):
@@ -227,6 +253,8 @@ def finalize(config: dict) -> None:
     write_json(work / "duplicate-dll-audit.json", duplicate_dlls)
     payload = {
         **json.loads((work / "binary-sources.json").read_text(encoding="utf-8")),
+        "vc_runtime": json.loads((work / "vc-runtime-audit.json").read_text(encoding="utf-8")),
+        "sherpa_imports": json.loads((work / "sherpa-imports.json").read_text(encoding="utf-8")),
         "total_bytes": sum(size for _, size in files),
         "e5_bytes": sum(size for relative, size in files if relative.startswith("_internal/hf_cache/")),
         "largest_20_files": sorted(files, key=lambda item: (-item[1], item[0]))[:20],

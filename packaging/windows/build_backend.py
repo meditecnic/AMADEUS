@@ -12,6 +12,8 @@ import subprocess
 import sys
 import time
 
+from bundle_support import sanitized_build_environment
+
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 TEST_ONLY = {"pytest", "pytest-asyncio", "pytest-timeout", "ruff", "iniconfig", "pluggy"}
@@ -65,12 +67,7 @@ def run(command: list[str], env: dict[str, str], cwd: Path, log: Path) -> None:
 
 
 def build_environment(work: Path, venv: Path, base_python: Path) -> dict[str, str]:
-    env = dict(os.environ)
-    for key in list(env):
-        if (key.startswith(("AMADEUS_", "SOVITS_", "HF_", "HUGGINGFACE_", "TRANSFORMERS_", "SENTENCE_TRANSFORMERS_"))
-                or key in {"PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "ASSETS_DIR", "SENSEVOICE_MODEL",
-                           "SENSEVOICE_TOKENS", "DEEPSEEK_API_KEY", "TAVILY_API_KEY", "FIRECRAWL_API_KEY"}):
-            env.pop(key)
+    env = sanitized_build_environment()
     system = Path(os.environ["SystemRoot"]).resolve()
     env.update({
         "PATH": os.pathsep.join(str(path) for path in (venv / "Scripts", base_python, system / "System32", system)),
@@ -92,12 +89,15 @@ def main() -> int:
     parser.add_argument("--work-dir", type=Path, required=True, help="venv, cache, temp, logs and build output")
     parser.add_argument("--venv", type=Path, help="defaults to WORK_DIR/venv")
     parser.add_argument("--e5-source", type=Path, required=True, help=f"read-only E5 snapshot {E5_REVISION}")
+    parser.add_argument("--vc-redist", type=Path, required=True, help="Build Tools Redist/MSVC/<version>/x64 directory")
     parser.add_argument("--output", type=Path, default=REPO / "desktop/src-tauri/resources/backend")
     parser.add_argument("--prepare-only", action="store_true", help="install dependencies without freezing")
     parser.add_argument("--clean", action="store_true", help="discard PyInstaller analysis caches")
     args = parser.parse_args()
     if os.name != "nt":
         parser.error("build on Windows x64")
+    from vc_runtime import redist_inventory
+    redist = redist_inventory(args.vc_redist)
     started = time.monotonic()
     work = args.work_dir.resolve()
     output = args.output.resolve()
@@ -121,6 +121,7 @@ def main() -> int:
         (work / name).mkdir(exist_ok=True)
     base_python = Path(subprocess.check_output(
         [str(args.python), "-I", "-c", "import sys; print(sys.base_prefix)"], text=True,
+        env=sanitized_build_environment(),
     ).strip()).resolve(strict=True)
     env = build_environment(work, venv, base_python)
     python = venv / "Scripts/python.exe"
@@ -149,16 +150,20 @@ def main() -> int:
         target.parent.mkdir(parents=True, exist_ok=True)
         if sha256(origin) != expected:
             raise RuntimeError(f"E5 source hash mismatch: {relative}")
-        shutil.copyfile(origin, target)
+        if not target.is_file() or sha256(target) != expected:
+            shutil.copyfile(origin, target)
         if sha256(target) != expected:
             raise RuntimeError(f"E5 copy mismatch: {relative}")
         model_files.append({"path": relative, "sha256": expected, "bytes": target.stat().st_size})
     (model / "refs").mkdir(exist_ok=True)
-    (model / "refs/main").write_text(E5_REVISION, encoding="utf-8")
+    reference = model / "refs/main"
+    if not reference.is_file() or reference.read_text(encoding="utf-8") != E5_REVISION:
+        reference.write_text(E5_REVISION, encoding="utf-8")
     config = {
         "repo": str(REPO), "work": str(work), "packaging": str(HERE),
         "hf_cache": str(cache), "app_files": APP_FILES,
         "build_path": env["PATH"], "venv": str(venv), "base_python": str(base_python),
+        "vc_redist": redist["path"],
         "model": {"id": "intfloat/multilingual-e5-small", "revision": E5_REVISION, "files": model_files},
         "inputs": {p.relative_to(REPO).as_posix(): sha256(p) for p in (
             REPO / "backend/requirements.txt", REPO / "backend/requirements-dev.lock",
@@ -171,13 +176,15 @@ def main() -> int:
     run([str(python), "-m", "PyInstaller", "--noconfirm", *(["--clean"] if args.clean else []),
          "--distpath", str(work / "dist"), "--workpath", str(work / "build"),
          str(HERE / "backend.spec")], env, work, work / "logs/pyinstaller.log")
+    run([str(python), str(HERE / "vc_runtime.py"), str(config_path)],
+        env, work, work / "logs/vc-runtime.log")
     run([str(python), str(HERE / "bundle_support.py"), str(config_path)],
         env, work, work / "logs/inventory.log")
     dist = work / "dist/amadeus-backend"
     shutil.copytree(dist, output)
     write_json(work / "build-result.json", {
         "elapsed_seconds": round(time.monotonic() - started, 3), "output": str(output),
-        "python": subprocess.check_output([str(python), "--version"], text=True).strip(),
+        "python": subprocess.check_output([str(python), "--version"], env=env, text=True).strip(),
         "inputs": config["inputs"],
     })
     print(f"Backend staged at {output}; elapsed={time.monotonic() - started:.3f}s", flush=True)

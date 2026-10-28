@@ -188,15 +188,53 @@ def wait_health(process: subprocess.Popen, port: int, tracked: set[int], timeout
 
 
 def verify_listeners(pid: int, port: int) -> list[dict]:
-    command = [str(Path(os.environ["SystemRoot"]) / "System32/netstat.exe"), "-ano"]
-    output = subprocess.check_output(command, text=True, errors="replace", creationflags=CREATE_NO_WINDOW)
+    """Read IPv4/IPv6 listener ownership without depending on Windows UI language."""
+    class Tcp4Row(ctypes.Structure):
+        _fields_ = [(name, wintypes.DWORD) for name in (
+            "state", "local_address", "local_port", "remote_address", "remote_port", "pid",
+        )]
+
+    class Tcp6Row(ctypes.Structure):
+        _fields_ = [
+            ("local_address", ctypes.c_ubyte * 16), ("local_scope", wintypes.DWORD),
+            ("local_port", wintypes.DWORD), ("remote_address", ctypes.c_ubyte * 16),
+            ("remote_scope", wintypes.DWORD), ("remote_port", wintypes.DWORD),
+            ("state", wintypes.DWORD), ("pid", wintypes.DWORD),
+        ]
+
+    api = ctypes.WinDLL("iphlpapi", use_last_error=True).GetExtendedTcpTable
+    api.argtypes = [wintypes.LPVOID, ctypes.POINTER(wintypes.DWORD), wintypes.BOOL,
+                    wintypes.ULONG, ctypes.c_int, wintypes.ULONG]
+    api.restype = wintypes.DWORD
     listeners = []
-    for line in output.splitlines():
-        fields = line.split()
-        if (len(fields) == 5 and fields[0].upper() == "TCP"
-                and fields[3] == "LISTENING" and fields[4] == str(pid)):
-            address, number = fields[1].rsplit(":", 1)
-            listeners.append({"address": address.strip("[]"), "port": int(number)})
+    for family, row_type in ((socket.AF_INET, Tcp4Row), (socket.AF_INET6, Tcp6Row)):
+        class Table(ctypes.Structure):
+            _fields_ = [("count", wintypes.DWORD), ("rows", row_type * 1)]
+
+        size = wintypes.DWORD()
+        for attempt in range(8):
+            buffer = ctypes.create_string_buffer(size.value) if size.value else None
+            # TCP_TABLE_OWNER_PID_LISTENER = 3, ERROR_INSUFFICIENT_BUFFER = 122.
+            result = api(buffer, ctypes.byref(size), False, family, 3, 0)
+            if result == 122:
+                continue
+            if result:
+                raise ctypes.WinError(result)
+            break
+        else:
+            raise RuntimeError(f"TCP listener table kept growing for address family {family}")
+        count = wintypes.DWORD.from_buffer_copy(buffer).value
+        offset = Table.rows.offset
+        if offset + count * ctypes.sizeof(row_type) > ctypes.sizeof(buffer):
+            raise RuntimeError(f"Truncated TCP listener table for address family {family}")
+        for index in range(count):
+            row = row_type.from_buffer_copy(buffer, offset + index * ctypes.sizeof(row_type))
+            if row.pid != pid:
+                continue
+            address = (row.local_address.to_bytes(4, sys.byteorder) if family == socket.AF_INET
+                       else bytes(row.local_address))
+            listeners.append({"address": socket.inet_ntop(family, address),
+                              "port": socket.ntohs(row.local_port & 0xffff)})
     if (not listeners or not any(item["port"] == port for item in listeners)
             or any(item["address"] != EXPECTED_LISTEN_ADDRESS for item in listeners)):
         raise AssertionError(f"unexpected TCP listeners for PID {pid}: {listeners}; expected {EXPECTED_LISTEN_ADDRESS}:{port}")
