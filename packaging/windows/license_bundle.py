@@ -145,7 +145,17 @@ def cpython_notices(bundle: Bundle, config: dict, pins: list[dict]) -> None:
                    present_in_cpython_license=marker in text)
 
 
-def rust_notices(bundle: Bundle, metadata_path: Path) -> None:
+def upstream_licenses(bundle: Bundle, pins: list[dict], category: str, name: str, version: str) -> tuple[list, list]:
+    selected = [row for row in pins if row["category"] == category and row["name"] == name and row["version"] == version]
+    files = [bundle.copy(Path(row["local_path"]), category.split("-")[0] + "/" + name.replace("/", "__") + "-" + version + "/" + row["file"]) for row in selected]
+    origins = [{key: value for key, value in row.items() if key != "local_path"} for row in selected]
+    for row in selected:
+        if not row.get("version_correspondence", True):
+            bundle.mismatches.append({"name": name, "installed_version": version, "notice_ref": row["ref"], "reason": row["verification"]})
+    return files, origins
+
+
+def rust_notices(bundle: Bundle, metadata_path: Path, pins: list[dict]) -> None:
     cargo = json.loads(metadata_path.read_text(encoding="utf-8"))
     packages = {row["id"]: row for row in cargo["packages"]}
     nodes = {row["id"]: row for row in cargo["resolve"]["nodes"]}
@@ -171,9 +181,15 @@ def rust_notices(bundle: Bundle, metadata_path: Path) -> None:
                 origins.append(explicit)
         files = [bundle.copy(path, f"rust/{package['name']}-{package['version']}/" + path.relative_to(root).as_posix())
                  for path in origins]
+        extra, provenance = upstream_licenses(bundle, pins, "rust-upstream", package["name"], package["version"])
+        for notice in provenance:
+            vcs = json.loads((root / ".cargo_vcs_info.json").read_text(encoding="utf-8"))
+            if notice["package_ref"] != vcs["git"]["sha1"]:
+                raise RuntimeError(f"Crate source commit mismatch: {package['name']}")
+        files.extend(extra)
         bundle.add("rust", package["name"], package["version"],
                    {"registry": package["source"], "url": f"https://crates.io/crates/{package['name']}/{package['version']}",
-                    "checksum": package.get("checksum")}, package["license"], [bundle.main_exe], files)
+                    "checksum": package.get("checksum")}, package["license"], [bundle.main_exe], files, license_sources=provenance)
 
 
 def frontend_notices(bundle: Bundle, node_modules: Path, pins: list[dict]) -> None:
@@ -192,8 +208,10 @@ def frontend_notices(bundle: Bundle, node_modules: Path, pins: list[dict]) -> No
         name = package["name"]
         files = [bundle.copy(path, f"npm/{name.replace('/', '__')}-{row['version']}/" + path.relative_to(root).as_posix())
                  for path in license_files(root)]
+        extra, provenance = upstream_licenses(bundle, pins, "npm-upstream", name, row["version"])
+        files.extend(extra)
         bundle.add("npm", name, row["version"], {"url": row.get("resolved"), "integrity": row.get("integrity")},
-                   row.get("license") or package.get("license"), [bundle.main_exe], files)
+                   row.get("license") or package.get("license"), [bundle.main_exe], files, license_sources=provenance)
     for name, version, source, license, origin in (
         ("Oxanium, IBM Plex Mono, Noto Sans CJK", "vendored", "desktop/public/assets/fonts/s4-ds/PROVENANCE.txt", "OFL-1.1", "desktop/public/assets/fonts/s4-ds/OFL.txt"),
         ("LXGW Neo XiHei", "1.305", "https://github.com/lxgw/LxgwNeoXiHei/releases/tag/v1.305", "IPA Font License 1.0", "desktop/public/assets/fonts/memory/LICENSE.md"),
@@ -219,7 +237,7 @@ def native_notices(bundle: Bundle, config: dict, pins: list[dict], python: dict)
         if runtime["scope"] == "package-local":
             owner = "numpy" if "/numpy.libs/" in runtime["bundle_path"] else "scikit-learn"
             bundle.add("vc-runtime", "Package-local " + runtime["bundle_path"], runtime["file_version"],
-                       python[owner]["source"], "Microsoft Visual Studio redistribution terms", ["backend/" + runtime["bundle_path"]], [file],
+                         {"redist": redist["path"], "original_package": python[owner]["source"]}, "Microsoft Visual Studio redistribution terms", ["backend/" + runtime["bundle_path"]], [file],
                        binary_sha256=runtime["sha256"])
     speech = next(row for row in pins if row["name"] == "eSpeak NG")
     binaries = ["backend/" + path.relative_to(bundle.backend).as_posix() for path in bundle.backend.rglob("*")
@@ -261,8 +279,8 @@ def native_notices(bundle: Bundle, config: dict, pins: list[dict], python: dict)
     quad = next(row for row in pins if row["file"] == "gcc-libquadmath-COPYING.LIB")
     bundle.add("copyleft", "libquadmath review material", "unconfirmed", quad["url"], "LGPL-2.1-or-later", libs,
                [bundle.copy(Path(quad["local_path"]), "copyleft/libquadmath-COPYING.LIB")],
-               source_ref=quad["ref"], verification="No separate DLL or identifying string found; static inclusion/version not established")
-    bundle.gaps.append({"category": "copyleft-provenance", "name": "libquadmath", "detail": "Static inclusion and exact source version require confirmation"})
+                 source_ref=quad["ref"], verification="No libquadmath symbols or strings found in the binaries; LGPL text retained as a precaution")
+    bundle.gaps.append({"category": "copyleft-provenance", "name": "libquadmath", "detail": "No libquadmath symbols or strings found in the binaries; LGPL text retained as a precaution"})
     for row in python.values():
         label = row["license"] or ""
         if re.search(r"\b(?:A?GPL|LGPL)[- v]?\d", label, re.I) and row["name"].lower() != "scipy":
@@ -281,7 +299,7 @@ def generate(config: dict, backend: Path, work: Path, output: Path, cargo: Path,
         bundle.copy(REPO / name, name)
     python = python_notices(bundle, config, pins)
     cpython_notices(bundle, config, pins)
-    rust_notices(bundle, cargo)
+    rust_notices(bundle, cargo, pins)
     frontend_notices(bundle, node_modules, pins)
     native_notices(bundle, config, pins, python)
     model = json.loads((backend / "THIRD_PARTY_LICENSES/e5-model.json").read_text(encoding="utf-8"))
@@ -302,6 +320,10 @@ def generate(config: dict, backend: Path, work: Path, output: Path, cargo: Path,
 def verify(root: Path, license_dir: Path | None = None) -> dict:
     directory = license_dir or root / "licenses"
     manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+    expected = {entry["path"] for entry in manifest["files"]} | {"licenses/manifest.json"}
+    actual = {"licenses/" + path.relative_to(directory).as_posix() for path in directory.rglob("*") if path.is_file()}
+    if actual != expected:
+        raise RuntimeError(f"License file set mismatch: missing={sorted(expected - actual)}, extra={sorted(actual - expected)}")
     checked = 0
     for entry in manifest["files"]:
         path = (directory / Path(entry["path"]).relative_to("licenses")).resolve()

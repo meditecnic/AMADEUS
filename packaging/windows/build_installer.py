@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 
-from bundle_support import digest, write_json
+from bundle_support import digest, sanitized_build_environment, write_json
 from vc_runtime import redist_inventory, VC_NAME
 
 HERE = Path(__file__).resolve().parent
@@ -20,11 +20,11 @@ REPO = HERE.parents[1]
 TARGET = "x86_64-pc-windows-msvc"
 
 
-def visual_studio() -> dict:
+def visual_studio(env: dict[str, str]) -> dict:
     vswhere = Path(os.environ["ProgramFiles(x86)"]) / "Microsoft Visual Studio/Installer/vswhere.exe"
     roots = subprocess.check_output([str(vswhere), "-products", "*", "-version", "[18.0,19.0)",
                                     "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-                                    "-property", "installationPath"], text=True).splitlines()
+                                    "-property", "installationPath"], env=env, text=True).splitlines()
     if len(roots) != 1:
         raise RuntimeError(f"Expected one completed VS 2026 installation, got {roots}")
     root = Path(roots[0]).resolve(strict=True)
@@ -61,10 +61,10 @@ def main() -> int:
     logs.mkdir(parents=True)
     for directory in ("tmp", "npm-cache", "cargo-target", "license-npm"):
         (work / directory).mkdir(exist_ok=True)
-    toolchain = visual_studio()
+    env = sanitized_build_environment()
+    toolchain = visual_studio(env)
     if args.vc_redist.resolve(strict=True) != Path(toolchain["redist"]).resolve():
         raise RuntimeError(f"--vc-redist must select the latest VS 2026 Redist: {toolchain['redist']}")
-    env = dict(os.environ)
     env.update({"TEMP": str(work / "tmp"), "TMP": str(work / "tmp"),
                 "npm_config_cache": str(work / "npm-cache"), "CARGO_TARGET_DIR": str(work / "cargo-target"),
                 "PYTHONDONTWRITEBYTECODE": "1", "PYTHONIOENCODING": "utf-8", "STATIC_VCRUNTIME": "true"})
@@ -140,7 +140,17 @@ def main() -> int:
                        "beforeBuildCommand": subprocess.list2cmdline(["npm", "run", "build", "--", "--outDir", str(frontend)])}}
     merge_path = run / "tauri-build.conf.json"
     write_json(merge_path, merge)
-    execute("tauri-build", [npm, "run", "tauri", "--", "build", "--target", TARGET, "--config", str(merge_path), "--verbose"], REPO / "desktop")
+    manifest_path = REPO / "desktop/src-tauri/Cargo.toml"
+    manifest_before = manifest_path.read_bytes()
+    execute("tauri-build", [npm, "run", "tauri", "--", "build", "--target", TARGET, "--config", str(merge_path), "--verbose", "--", "--locked"], REPO / "desktop")
+    manifest_after = manifest_path.read_bytes()
+    manifest_observation = {"bytes_changed": manifest_before != manifest_after,
+                            "normalized_content_equal": manifest_before.replace(b"\r\n", b"\n") == manifest_after.replace(b"\r\n", b"\n"),
+                            "before_crlf": manifest_before.count(b"\r\n"), "after_crlf": manifest_after.count(b"\r\n")}
+    write_json(run / "cargo-manifest-observation.json", manifest_observation)
+    print("CARGO_MANIFEST_NOTE Tauri CLI 2.11.3 feature synchronization can rewrite CRLF as LF; no manifest restoration or Git commands are run.", flush=True)
+    if not manifest_observation["normalized_content_equal"]:
+        raise RuntimeError(f"Tauri changed Cargo.toml content: {manifest_path}")
     release = work / "cargo-target" / TARGET / "release"
     exe = release / main_exe
     inspect_code = ("import json, sys\nfrom pathlib import Path\n"

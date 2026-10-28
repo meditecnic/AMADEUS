@@ -22,6 +22,21 @@ def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def sanitized_build_environment() -> dict[str, str]:
+    """Remove application configuration and credentials; retain tool paths and proxies."""
+    env = dict(os.environ)
+    removed = []
+    for key in list(env):
+        upper = key.upper()
+        if (upper.startswith(("AMADEUS_", "SOVITS_", "HF_", "HUGGINGFACE_", "TRANSFORMERS_", "SENTENCE_TRANSFORMERS_"))
+                or upper in {"PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "ASSETS_DIR", "SENSEVOICE_MODEL",
+                             "SENSEVOICE_TOKENS", "DEEPSEEK_API_KEY", "TAVILY_API_KEY", "FIRECRAWL_API_KEY"}):
+            removed.append(key)
+            env.pop(key)
+    print("BUILD_ENV_REMOVED " + json.dumps(sorted(removed)), flush=True)
+    return env
+
+
 def collect_inputs(config: dict) -> tuple[list, list, list, list]:
     from PyInstaller.utils.hooks import (
         collect_all, collect_data_files, collect_dynamic_libs, collect_submodules,
@@ -175,7 +190,11 @@ def license_inventory(dist: Path, rows: list) -> dict:
             archive_name = f"{name}-{version}.zip"
             with zipfile.ZipFile(root / archive_name, "w", zipfile.ZIP_DEFLATED) as archive:
                 for relative, origin in sorted(license_files):
-                    archive.write(origin, relative)
+                    info = zipfile.ZipInfo(relative, (1980, 1, 1, 0, 0, 0))
+                    info.compress_type = zipfile.ZIP_DEFLATED
+                    info.create_system = 3
+                    info.external_attr = 0o100644 << 16
+                    archive.writestr(info, origin.read_bytes())
             with zipfile.ZipFile(root / archive_name) as archive:
                 for relative, origin in license_files:
                     if hashlib.sha256(archive.read(relative)).hexdigest() != digest(origin):

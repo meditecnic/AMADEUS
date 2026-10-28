@@ -12,6 +12,8 @@ import subprocess
 import sys
 import time
 
+from bundle_support import sanitized_build_environment
+
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 TEST_ONLY = {"pytest", "pytest-asyncio", "pytest-timeout", "ruff", "iniconfig", "pluggy"}
@@ -65,12 +67,7 @@ def run(command: list[str], env: dict[str, str], cwd: Path, log: Path) -> None:
 
 
 def build_environment(work: Path, venv: Path, base_python: Path) -> dict[str, str]:
-    env = dict(os.environ)
-    for key in list(env):
-        if (key.startswith(("AMADEUS_", "SOVITS_", "HF_", "HUGGINGFACE_", "TRANSFORMERS_", "SENTENCE_TRANSFORMERS_"))
-                or key in {"PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV", "ASSETS_DIR", "SENSEVOICE_MODEL",
-                           "SENSEVOICE_TOKENS", "DEEPSEEK_API_KEY", "TAVILY_API_KEY", "FIRECRAWL_API_KEY"}):
-            env.pop(key)
+    env = sanitized_build_environment()
     system = Path(os.environ["SystemRoot"]).resolve()
     env.update({
         "PATH": os.pathsep.join(str(path) for path in (venv / "Scripts", base_python, system / "System32", system)),
@@ -124,6 +121,7 @@ def main() -> int:
         (work / name).mkdir(exist_ok=True)
     base_python = Path(subprocess.check_output(
         [str(args.python), "-I", "-c", "import sys; print(sys.base_prefix)"], text=True,
+        env=sanitized_build_environment(),
     ).strip()).resolve(strict=True)
     env = build_environment(work, venv, base_python)
     python = venv / "Scripts/python.exe"
@@ -186,7 +184,7 @@ def main() -> int:
     shutil.copytree(dist, output)
     write_json(work / "build-result.json", {
         "elapsed_seconds": round(time.monotonic() - started, 3), "output": str(output),
-        "python": subprocess.check_output([str(python), "--version"], text=True).strip(),
+        "python": subprocess.check_output([str(python), "--version"], env=env, text=True).strip(),
         "inputs": config["inputs"],
     })
     print(f"Backend staged at {output}; elapsed={time.monotonic() - started:.3f}s", flush=True)

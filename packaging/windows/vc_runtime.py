@@ -58,48 +58,101 @@ def pe_details(path: Path) -> dict:
                 "imports": imports}
 
 
-def normalize_and_audit(dist: Path, redist: dict, report: Path) -> dict:
+def redist_name(name: str) -> str:
+    """Remove delvewheel's content-hash suffix while preserving the installed name."""
+    return re.sub(r"-[0-9a-f]{8,64}(?=\.dll$)", "", name.lower())
+
+
+def audit_bundle(dist: Path, redist: dict, report: Path, *, replacements: list | None = None,
+                 additions: list | None = None) -> dict:
     root = dist / "_internal"
-    replacements = []
-    for path in sorted(root.iterdir()):
-        name = path.name.lower()
-        if not path.is_file() or not VC_NAME.fullmatch(name):
-            continue
-        if name not in redist["files"]:
-            raise RuntimeError(f"No matching VC Redist file for bundle runtime: {path}")
-        source = redist["files"][name]
-        shutil.copyfile(source["source_path"], path)
-        replacements.append({"bundle_path": path.relative_to(dist).as_posix(), **source})
-    runtimes, components, violations = [], [], []
-    pe_count = 0
-    ceiling = tuple(int(value) for value in redist["file_version"].split(".")[:2])
-    for path in sorted(dist.rglob("*")):
-        if not path.is_file() or path.suffix.lower() not in PE_SUFFIXES:
+    paths = sorted(path for path in dist.rglob("*") if path.is_file() and path.suffix.lower() in PE_SUFFIXES)
+    details = {path: pe_details(path) for path in paths}
+    runtimes, by_name, mismatches = [], {}, []
+    originals = {row["bundle_path"]: row for row in replacements or []}
+    for path in paths:
+        if not VC_NAME.fullmatch(path.name):
             continue
         relative = path.relative_to(dist).as_posix()
-        details = pe_details(path)
-        pe_count += 1
-        if VC_NAME.fullmatch(path.name):
-            source = redist["files"].get(path.name.lower())
-            row = {"bundle_path": relative, "file_version": file_version(path), "sha256": digest(path),
-                   "scope": "root" if path.parent == root else "package-local",
-                   "source_path": source["source_path"] if path.parent == root and source else None}
-            runtimes.append(row)
-            if path.parent == root and (not source or row["sha256"] != source["sha256"]):
-                raise RuntimeError(f"Root VC runtime does not match the selected Redist: {path}")
-        vc_imports = [name for name in details["imports"] if VC_NAME.fullmatch(name)]
-        if vc_imports:
-            row = {"bundle_path": relative, "linker_version": details["linker_version"], "vc_imports": vc_imports}
-            components.append(row)
-            if tuple(details["linker_version"]) > ceiling:
-                violations.append(row)
-    payload = {"redist": redist, "replacements": replacements, "runtimes": runtimes, "pe_count": pe_count,
-               "components": components, "violations": violations}
+        source = redist["files"].get(redist_name(path.name))
+        row = {"bundle_path": relative, "file_version": file_version(path), "sha256": digest(path),
+               "scope": "root" if path.parent == root else "package-local",
+               "source_path": source["source_path"] if source else None,
+               "original_file_version": originals.get(relative, {}).get("original_file_version"),
+               "original_sha256": originals.get(relative, {}).get("original_sha256")}
+        runtimes.append(row)
+        by_name.setdefault(path.name.lower(), []).append(row)
+        if not source or row["sha256"] != source["sha256"]:
+            mismatches.append(row)
+    components, violations, missing, runtime_violations = [], [], [], []
+    ceiling = tuple(map(int, redist["file_version"].split(".")[:2]))
+    for path, pe in details.items():
+        vc_imports = [name for name in pe["imports"] if VC_NAME.fullmatch(name)]
+        if not vc_imports:
+            continue
+        row = {"bundle_path": path.relative_to(dist).as_posix(), "linker_version": pe["linker_version"],
+               "vc_imports": vc_imports, "runtime_candidates": []}
+        components.append(row)
+        if tuple(pe["linker_version"]) > ceiling:
+            violations.append(row)
+        for name in vc_imports:
+            candidates = by_name.get(name, [])
+            # Every import has a local/root fallback; package preloads must also be compatible.
+            if not any((dist / item["bundle_path"]).parent in {path.parent, root} for item in candidates):
+                missing.append({"importer": row["bundle_path"], "dll": name})
+            for runtime in candidates:
+                row["runtime_candidates"].append({"dll": name, "path": runtime["bundle_path"], "version": runtime["file_version"]})
+                version = runtime["file_version"]
+                if not version or tuple(pe["linker_version"]) > tuple(map(int, version.split(".")[:2])):
+                    runtime_violations.append({"importer": row["bundle_path"], "linker_version": pe["linker_version"],
+                                               "runtime": runtime["bundle_path"], "runtime_version": version})
+    payload = {"redist": redist, "replacements": replacements or [], "additions": additions or [],
+               "runtimes": runtimes, "pe_count": len(paths), "components": components, "violations": violations,
+               "missing_imports": missing, "runtime_violations": runtime_violations, "runtime_mismatches": mismatches}
     write_json(report, payload)
-    if violations:
-        lines = [f"{row['bundle_path']}: linker {'.'.join(map(str, row['linker_version']))}" for row in violations]
-        raise RuntimeError(f"VC toolset exceeds Redist {redist['file_version']}:\n" + "\n".join(lines))
+    errors = [f"{row['bundle_path']}: linker {row['linker_version']} exceeds Redist {redist['file_version']}" for row in violations]
+    errors += [f"{row['importer']}: missing VC import {row['dll']}" for row in missing]
+    errors += [f"{row['importer']}: linker {row['linker_version']} exceeds {row['runtime']} version {row['runtime_version']}" for row in runtime_violations]
+    errors += [f"VC runtime does not match selected Redist: {row['bundle_path']} ({row['file_version']})" for row in mismatches]
+    if errors:
+        raise RuntimeError("VC bundle audit failed:\n" + "\n".join(errors))
     return payload
+
+
+def normalize_and_audit(dist: Path, redist: dict, report: Path) -> dict:
+    root = dist / "_internal"
+    replacements, additions = [], []
+    for path in sorted(dist.rglob("*")):
+        if not path.is_file() or not VC_NAME.fullmatch(path.name):
+            continue
+        source = redist["files"].get(redist_name(path.name))
+        if not source:
+            raise RuntimeError(f"No matching VC Redist file for bundle runtime: {path}")
+        original = {"original_file_version": file_version(path), "original_sha256": digest(path)}
+        shutil.copyfile(source["source_path"], path)
+        if digest(path) != source["sha256"]:
+            raise RuntimeError(f"VC copy hash mismatch: {path}")
+        replacements.append({"bundle_path": path.relative_to(dist).as_posix(), **source, **original})
+    while True:
+        added = False
+        for path in sorted(dist.rglob("*")):
+            if not path.is_file() or path.suffix.lower() not in PE_SUFFIXES:
+                continue
+            for name in pe_details(path)["imports"]:
+                if not VC_NAME.fullmatch(name):
+                    continue
+                if any(file.name.lower() == name for directory in {root, path.parent} for file in directory.iterdir() if file.is_file()):
+                    continue
+                source = redist["files"].get(redist_name(name))
+                if not source:
+                    raise RuntimeError(f"Missing VC Redist file for {path}: {name}")
+                target = root / name
+                shutil.copyfile(source["source_path"], target)
+                additions.append({"bundle_path": target.relative_to(dist).as_posix(), "required_by": path.relative_to(dist).as_posix(), **source})
+                added = True
+        if not added:
+            break
+    return audit_bundle(dist, redist, report, replacements=replacements, additions=additions)
 
 
 def prune_sherpa_c_api(dist: Path, source: Path, report: Path) -> dict:
