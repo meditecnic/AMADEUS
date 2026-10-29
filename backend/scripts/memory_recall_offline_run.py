@@ -48,6 +48,9 @@ def _run_e5_coverage() -> dict:
     sys.path.insert(0, str(BACKEND))
 
     async def _probe() -> dict:
+        tmp = tempfile.TemporaryDirectory(prefix="b5a-e5-")
+        os.environ["AMADEUS_DATA_DIR"] = tmp.name
+        os.environ.pop("AMADEUS_DB_PATH", None)
         from sentence_transformers import SentenceTransformer
 
         from app.db import get_db, init_db, reset_initialization_cache
@@ -68,9 +71,6 @@ def _run_e5_coverage() -> dict:
                     )
                 return self._model
 
-        tmp = tempfile.TemporaryDirectory(prefix="b5a-e5-")
-        os.environ["AMADEUS_DATA_DIR"] = tmp.name
-        os.environ.pop("AMADEUS_DB_PATH", None)
         reset_initialization_cache()
         await init_db()
         embedder = LocalE5()
@@ -329,6 +329,9 @@ def main() -> int:
     run_id = datetime.now(timezone.utc).strftime("b5a-offline-%Y%m%dT%H%M%SZ")
     run_dir = SCRATCH / "runs" / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
+    # Required before _load_required_checks imports test modules and app.config.
+    os.environ["AMADEUS_DATA_DIR"] = str(run_dir / "data")
+    os.environ.pop("AMADEUS_DB_PATH", None)
     pytest_env = os.environ.copy()
     pytest_env.pop("AMADEUS_MEMORY_MODE", None)
     env = {
