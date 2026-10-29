@@ -1,6 +1,7 @@
 """Frozen B5 read-only benchmark; fake by default, explicitly gated paid HTTP.
 
 Run from backend: python scripts/memory_recall_b5_real_run.py --run-dir PATH
+Offline rescoring: python scripts/memory_recall_b5_real_run.py --rescore PATH
 Fake replies are deliberately constant: their scores are plumbing evidence only.
 Each turn runs in a fresh process/data root; no application lifespan or ingest
 worker is started. Evaluator metadata never participates in prompt construction.
@@ -393,6 +394,14 @@ def scope_violations(payload: dict, qset: dict, case: dict) -> list[str]:
             and row["display_text"] in text]
 
 
+def forbidden_context(text: str, aliases: list[str]) -> bool:
+    """Every mention must have an immediate negation, purpose, or simile suffix."""
+    pattern = "|".join(re.escape(alias) for alias in sorted(
+        {normalize(alias) for alias in aliases}, key=len, reverse=True))
+    return all(text[hit.end():hit.end() + 5].startswith(("じゃない", "ではない", "用", "みたい"))
+               for hit in re.finditer(pattern, text))
+
+
 def score(case: dict, answer: str, calls: list[dict], qset: dict, *, mode="v11") -> dict:
     from app.services.turn_tool_orchestrator import collect_recall_payloads
 
@@ -431,9 +440,12 @@ def score(case: dict, answer: str, calls: list[dict], qset: dict, *, mode="v11")
             ambiguous = bool(matched and shared and (
                 rule == "must_not" or all(normalize(a) in {normalize(s) for s in shared} for a in matched)))
             if ambiguous:
-                manual.append(f"{rule}_collision:{key}")
                 collision_details.append({"fact_key": key, "rule": rule,
                                           "input_aliases": shared, "matched_aliases": matched})
+            if rule == "must_not" and matched and forbidden_context(text, matched):
+                manual.append(f"forbidden_context:{key}")
+            elif ambiguous:
+                manual.append(f"{rule}_collision:{key}")
             elif rule == "must_use" and not matched:
                 (manual if fallback else failures).append(f"missing:{key}")
             elif rule == "must_not" and matched:
@@ -1217,6 +1229,30 @@ def run_suite(run_dir: Path, plan: dict, qset: dict, executor=execute_subprocess
         return summary
 
 
+def rescore_run(run_dir: Path) -> dict:
+    """Reevaluate saved replies offline; only write the two rescore summaries."""
+    run_dir = run_dir.resolve()
+    with fake_network_guard():
+        plan = read_json(run_dir / "plan.json")
+        qset, digest = load_questions()
+        cases = {case["id"]: case for case in qset["cases"]}
+        rows = []
+        for entry in plan["executions"]:
+            row = read_json(run_dir / "executions" / entry["id"] / "result.json")
+            if row["status"] == "completed":
+                row["score"] = score(cases[row["case_id"]], row["answer"], row["calls"],
+                                     qset, mode=row["mode"])
+                row["fallback"] = row["score"]["fallback"]
+            rows.append(row)
+        summary, markdown = summarize({**plan, "question_sha256": digest}, rows, qset)
+        summary.update(source_question_sha256=plan["question_sha256"], script_sha256=sha256(SCRIPT))
+        markdown = ("# B5 offline rescore\n\n"
+                    f"source_question_sha256: {plan['question_sha256']}\n\n" + markdown)
+        write_json(run_dir / "rescore-summary.json", summary)
+        (run_dir / "rescore-summary.md").write_text(redact(markdown), encoding="utf-8", newline="\n")
+        return summary
+
+
 def check_worker_isolation(directory: Path) -> None:
     configured = os.environ.get("AMADEUS_DATA_DIR")
     try:
@@ -1233,6 +1269,7 @@ def check_worker_isolation(directory: Path) -> None:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", type=Path)
+    parser.add_argument("--rescore", type=Path, help="rescore saved result.json files offline without changing originals")
     parser.add_argument("--transport", choices=("fake", "real"), default="fake")
     parser.add_argument("--base-url", default=BUILTIN_DEEPSEEK_BASE_URL)
     parser.add_argument("--cap-cny")
@@ -1241,6 +1278,10 @@ def main(argv=None) -> int:
     parser.add_argument("--worker", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     try:
+        if args.rescore:
+            rescore_run(args.rescore)
+            print(f"Offline rescore summaries written to {args.rescore.resolve()}")
+            return 0
         if args.worker:
             directory = args.worker.resolve()
             check_worker_isolation(directory)
