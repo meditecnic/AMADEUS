@@ -111,13 +111,14 @@ def test_fail_start_cases(tmp_path):
     assert busy.returncode == 0, busy.stderr + busy.stdout
 
 
-def test_isolated_import_skips_dotenv_and_windows_store():
+def test_isolated_import_skips_dotenv_and_windows_store(tmp_path):
     code = r"""
 import json, os
 from pathlib import Path
 print("dotenv_disabled", os.environ.get("PYTHON_DOTENV_DISABLED"))
 print("cred_backend", os.environ.get("AMADEUS_CREDENTIAL_BACKEND"))
 from app import config
+from app.db import get_data_root
 from app.services import credentials as cred
 print(json.dumps({
     "windows_store": cred.WINDOWS_CREDENTIAL_STORE_CONSTRUCTED,
@@ -125,6 +126,7 @@ print(json.dumps({
     "deepseek_key_empty": config.DEEPSEEK_API_KEY == "",
     "app_file": str(Path(__import__('app').__file__).resolve()),
     "env_path": str(config.env_path),
+    "data_root": str(get_data_root()),
 }))
 """
     env = os.environ.copy()
@@ -132,7 +134,7 @@ print(json.dumps({
     env["PYTHON_DOTENV_DISABLED"] = "1"
     env["AMADEUS_CREDENTIAL_BACKEND"] = "memory"
     env.pop("DEEPSEEK_API_KEY", None)
-    env.pop("AMADEUS_DATA_DIR", None)
+    env["AMADEUS_DATA_DIR"] = str(tmp_path / "data")
     env.pop("AMADEUS_DB_PATH", None)
     env.pop("PYTEST_CURRENT_TEST", None)
     result = subprocess.run(
@@ -152,6 +154,7 @@ print(json.dumps({
     assert payload["store_class"] == "InMemoryCredentialStore"
     assert payload["deepseek_key_empty"] is True
     assert payload["app_file"] == str(BACKEND_ROOT / "app" / "__init__.py")
+    assert payload["data_root"] == str((tmp_path / "data").resolve())
 
 
 def test_prepare_start_natural_worker_restart(tmp_path):

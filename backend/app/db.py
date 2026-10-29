@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import sqlite3
+import sys
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -62,9 +63,12 @@ def normalize_identity_mode(value: str | None) -> str:
 
 
 def get_data_root() -> Path:
+    """Require an explicit source-run root; only frozen builds use user defaults."""
     override = os.environ.get("AMADEUS_DATA_DIR")
-    if override:
+    if override and override.strip():
         return Path(override).expanduser().resolve()
+    if not getattr(sys, "frozen", False):
+        raise RuntimeError("AMADEUS_DATA_DIR required (non-frozen)")
     appdata = os.environ.get("APPDATA")
     if appdata:
         return (Path(appdata) / "Amadeus").resolve()
@@ -80,6 +84,8 @@ def default_conversation_id(session_id: str, worldline: str) -> str:
 def _resolve_path(worldline: str = "steins_gate", kind: DatabaseKind = "history") -> str:
     """Resolve DB paths; AMADEUS_DB_PATH remains compatible with existing tests."""
     wl = normalize_worldline(worldline)
+    # The legacy DB override must not bypass the source-run isolation guard.
+    root = get_data_root()
     legacy_override = os.environ.get("AMADEUS_DB_PATH")
     if legacy_override:
         base = Path(legacy_override).expanduser().resolve()
@@ -90,7 +96,6 @@ def _resolve_path(worldline: str = "steins_gate", kind: DatabaseKind = "history"
             return str(base.with_name(f"{base.stem}.{suffix}{base.suffix or '.sqlite3'}"))
         return str(base.with_name(f"{base.stem}.{suffix}.{kind}{base.suffix or '.sqlite3'}"))
 
-    root = get_data_root()
     if kind == "control":
         return str(root / "control.sqlite3")
     namespace = "sg" if wl == "steins_gate" else "beta"
@@ -1338,8 +1343,11 @@ def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str 
 def _run_migration_locked() -> None:
     if portalocker is None:
         raise RuntimeError("portalocker is required for safe database migration")
+    # Validate before creating even the migration lock/marker beside an override.
+    root = get_data_root()
     override = os.environ.get("AMADEUS_DB_PATH")
-    root = Path(override).expanduser().resolve().parent if override else get_data_root()
+    if override:
+        root = Path(override).expanduser().resolve().parent
     root.mkdir(parents=True, exist_ok=True)
     lock_path = root / ".migration.lock"
     marker = root / f".migration-v{SCHEMA_VERSION}.complete"
