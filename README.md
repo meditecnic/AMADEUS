@@ -17,7 +17,7 @@
 - **Long-term memory that stays local.** Facts and experiences from your conversations are stored in SQLite (with `multilingual-e5-small` embeddings indexed in `sqlite-vec` on write). In the default legacy mode, core facts are injected into the prompt every turn and past episodes are retrieved by SQLite full-text search (FTS) when compiling the prompt; vector search and the `recall_memory` tool (DeepSeek only) belong to the experimental `AMADEUS_MEMORY_MODE=v11` mode and are not used by default. You can list and delete stored facts in the memory archive, optionally erase a conversation's exclusive long-term memories when clearing a chat, and view the star map (preview-only in the default mode).
 - **Two isolated worldlines.** *STEINS;GATE* and *β* each have their own persona, conversations, memory and visual theme. Conversations and memories are stored separately per worldline, except for Self-mode facts explicitly promoted to the shared user profile (`/api/memory/facts/{id}/promote`, stored in `control.sqlite3`), which both worldlines read in Self mode (Okabe mode never reads or writes shared facts).
 - **Worldline instruments and transitions (M3).** The header, system-menu dial and WebGL2 transition share the same cathode digits. Open **系统 → 世界线**: the dial shows the current worldline, while the diagram previews the selected target; use the shift button to begin. Softer handoffs preserve conversations and drafts, and click/Esc skips the presentation while still waiting for target confirmation.
-- **Bring your own model.** DeepSeek, Zhipu GLM, or any OpenAI-compatible endpoint, including local models. Optional web search through Tavily or Firecrawl.
+- **Bring your own model.** DeepSeek, Zhipu GLM, or any OpenAI-compatible endpoint. Optional web search through Tavily or Firecrawl.
 - **Optional voice.** Text-to-speech through a local GPT-SoVITS server; speech recognition with SenseVoice via sherpa-onnx (backend only for now, no microphone UI yet).
 - **Local by design.** Every service binds to loopback, WebSocket connections are origin-checked, and API keys go to the Windows Credential Manager. Conversation text is sent only to the model provider the user configures; if web search is enabled, search queries also go to the chosen search provider (Tavily or Firecrawl).
 
@@ -96,7 +96,7 @@ See the [scenario catalog and switching guide](desktop/src/dev-mock/README.md), 
 
 ### Real backend
 
-For real conversations, also install **Python 3.11** and use an API key for a model provider or a local OpenAI-compatible model. Stop the mock dev server first.
+For real conversations, also install **Python 3.11** and use an API key for a model provider. Stop the mock dev server first.
 
 On Windows, install prerequisites before creating the virtual environment:
 
@@ -184,7 +184,7 @@ STEINS;GATE, STEINS;GATE 0 and their characters, names and original assets belon
 - 长期记忆：她记住了什么随时能查，不想让她记得的可以让她忘掉（记忆星图还在打磨，现在先在档案页里看）
 - 在 SG 和 β 两条世界线之间跃迁，各自保留会话和草稿
 - M3 已接受并合并：右上角、系统菜单与跃迁演出统一阴极数字；「系统 → 世界线」的仪器显示当前线，图中预览目标，再按跃迁按钮。过渡更柔和，点击／Esc 可跳过演出，仍须等待目标确认。GPU 与字体提前异步预热；字体使用记录在下次刷新后用于预加载，既有音频初始化移到入场前，没有新增音频功能。
-- 接入你自己的大模型：DeepSeek、智谱 GLM，或任何兼容 OpenAI 接口的服务（包括本地模型）
+- 接入你自己的大模型：DeepSeek、智谱 GLM，或任何兼容 OpenAI 接口的服务
 - 可选的联网搜索（Tavily、Firecrawl）
 - 用红莉栖的声音念出她的回答（需要另外跑 GPT-SoVITS，见上文 [Voice](#voice-optional)）
 
