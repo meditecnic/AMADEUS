@@ -1062,12 +1062,64 @@ def test_fallback_literals_match_product_source():
     assert all(phrase in source for phrase in b5.FALLBACK_ANSWERS)
 
 
+@pytest.mark.parametrize("fallback", b5.FALLBACK_ANSWERS)
+def test_product_fallback_without_required_recall_fails(frozen, fallback):
+    qset, _ = frozen
+    case = next(c for c in qset["cases"] if c["id"] == "r_pet_synonym")
+    result = b5.score(case, fallback, [], qset, mode="v11")
+    assert result["fallback"] is True
+    assert result["status"] == result["tool"]["status"] == "fail"
+    assert result["failures"] == result["tool"]["failures"] == ["recall_required"]
+    assert result["answer"]["status"] == "needs_manual"
+    assert "product_fallback" in result["needs_manual"]
+    plan = b5.make_plan(*frozen)
+    rows = [{**e, "status": "completed", "score": result, "fallback": True}
+            for e in plan["executions"] if e["mode"] == "v11" and e["case_id"] == case["id"]]
+    stats = b5.summarize(plan, rows, qset)[0]["modes"]["v11"]
+    assert stats["tool"]["evaluated"] == stats["tool"]["failed"] == 1
+    assert stats["overall"]["evaluated"] == stats["overall"]["failed"] == 1
+    assert stats["fallback_executions"] == 3
+
+
+@pytest.mark.parametrize("fallback", b5.FALLBACK_ANSWERS)
+@pytest.mark.parametrize("mode", ["legacy", "v11"])
+@pytest.mark.parametrize("prefix,failures", [("アメリカーノよ。", ["forbidden:coffee"]), ("了解したわ。", [])])
+def test_product_fallback_preserves_prefix_forbidden_facts(frozen, fallback, mode, prefix, failures):
+    qset, _ = frozen
+    case = next(c for c in qset["cases"] if c["id"] == "r_pet_synonym")
+    result = b5.score(case, prefix + fallback, [call(["one"])], qset, mode=mode)
+    assert result["fallback"] is True
+    assert result["status"] == result["answer"]["status"] == ("fail" if failures else "needs_manual")
+    assert result["failures"] == result["answer"]["failures"] == failures
+    assert result["needs_manual"] == ["missing:cat_pet", "product_fallback"]
+    assert result["used_fact_keys"] == (["coffee"] if failures else [])
+    assert result["tool"] == ({"status": "pass", "failures": [], "needs_manual": []} if mode == "v11" else None)
+
+
+@pytest.mark.parametrize("fallback", b5.FALLBACK_ANSWERS)
+def test_product_fallback_missing_fact_and_unknown_need_manual_review(frozen, fallback):
+    qset, _ = frozen
+    case = next(c for c in qset["cases"] if c["id"] == "f_known_plus_unknown")
+    result = b5.score(case, "了解したわ。" + fallback, [call(["one", "two"])], qset)
+    assert result["status"] == result["answer"]["status"] == "needs_manual"
+    assert result["failures"] == []
+    assert result["needs_manual"] == ["missing:coffee", "dinner_staple", "product_fallback"]
+    assert result["tool"]["status"] == "pass"
+
+
 @pytest.mark.parametrize("kind", ["language", "leak"])
 @pytest.mark.parametrize("mode", ["legacy", "v11"])
-async def test_product_fallback_is_manual_and_counted(tmp_path, frozen, monkeypatch, kind, mode):
-    plan, entry, directory = prepared_turn(tmp_path, frozen, mode=mode)
+@pytest.mark.parametrize("case_id", ["r_physics", "r_pet_generic"])
+async def test_product_fallback_is_manual_and_counted(tmp_path, frozen, monkeypatch, kind, mode, case_id):
+    plan, entry, directory = prepared_turn(tmp_path, frozen, mode=mode, case_id=case_id)
     draft = "The evidence is insufficient to answer this question." if kind == "language" else "I am an AI assistant."
-    monkeypatch.setattr(b5, "fake_response", lambda payload, _kind: stream_reply(payload, draft))
+
+    def reply(payload, request_kind):
+        if mode == "v11" and case_id == "r_pet_generic" and request_kind == "first":
+            return stream_reply(payload, calls=[call(["one"])])
+        return stream_reply(payload, draft)
+
+    monkeypatch.setattr(b5, "fake_response", reply)
     result = await b5.product_turn(plan, entry, directory)
     assert result["status"] == "completed" and result["fallback"] is True, result
     assert result["answer"] == b5.FALLBACK_ANSWERS[0 if kind == "language" else 1]
@@ -1077,8 +1129,9 @@ async def test_product_fallback_is_manual_and_counted(tmp_path, frozen, monkeypa
     assert stats["fallback_executions"] == 1 and stats["overall"]["evaluated"] == 0
     assert stats["overall"]["needs_manual"] == 1
     if mode == "v11":
-        assert stats["tool"]["evaluated"] == 0
-        assert result["score"]["tool"]["status"] == "needs_manual"
+        assert stats["tool"]["evaluated"] == stats["tool"]["passed"] == 1
+        assert result["score"]["tool"] == {"status": "pass", "failures": [], "needs_manual": []}
+        assert result["score"]["recall_called"] == (case_id == "r_pet_generic")
     assert "fallback executions: 1" in markdown
 
 

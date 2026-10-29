@@ -412,6 +412,10 @@ def score(case: dict, answer: str, calls: list[dict], qset: dict, *, mode="v11")
     if len(needs) > expected["max_need_count"]:
         tool_failures.append("max_need_count")
     text = normalize(answer)
+    fallback = any(normalize(phrase) in text for phrase in FALLBACK_ANSWERS)
+    if fallback:
+        for phrase in FALLBACK_ANSWERS:
+            text = text.replace(normalize(phrase), "")
     sources = [normalize(case["query"]), *(normalize(m["content"]) for m in case["history"])]
     matches, collisions = {}, {}
     for row in fact_catalog(qset):
@@ -431,7 +435,7 @@ def score(case: dict, answer: str, calls: list[dict], qset: dict, *, mode="v11")
                 collision_details.append({"fact_key": key, "rule": rule,
                                           "input_aliases": shared, "matched_aliases": matched})
             elif rule == "must_use" and not matched:
-                failures.append(f"missing:{key}")
+                (manual if fallback else failures).append(f"missing:{key}")
             elif rule == "must_not" and matched:
                 failures.append(f"forbidden:{key}")
     for subject in expected["must_express_unknown_for"]:
@@ -443,9 +447,8 @@ def score(case: dict, answer: str, calls: list[dict], qset: dict, *, mode="v11")
                          for sentence in sentences)
         if not recognized:
             manual.append(subject)
-    fallback = any(normalize(phrase) in text for phrase in FALLBACK_ANSWERS)
     if fallback:
-        failures, tool_failures, manual = [], [], ["product_fallback"]
+        manual.append("product_fallback")
     answer_status = "fail" if failures else "needs_manual" if manual else "pass"
     if mode == "legacy":
         tool_failures = []
@@ -453,8 +456,8 @@ def score(case: dict, answer: str, calls: list[dict], qset: dict, *, mode="v11")
     status = "fail" if combined else "needs_manual" if manual else "pass"
     return {"status": status, "failures": combined, "needs_manual": manual, "fallback": fallback,
             "answer": {"status": answer_status, "failures": failures, "needs_manual": manual},
-            "tool": {"status": "needs_manual" if fallback else "fail" if tool_failures else "pass",
-                     "failures": tool_failures, "needs_manual": ["product_fallback"] if fallback else []}
+            "tool": {"status": "fail" if tool_failures else "pass",
+                     "failures": tool_failures, "needs_manual": []}
                      if mode == "v11" else None,
             "alias_collisions": collision_details,
             "used_fact_keys": used, "recall_called": bool(recalls) if mode == "v11" else None,
