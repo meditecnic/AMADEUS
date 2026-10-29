@@ -1,9 +1,11 @@
 """Select credential backends without constructing a real Windows store."""
 
+import os
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
+from dotenv import dotenv_values
 
 from app.services import credentials
 
@@ -49,3 +51,56 @@ def test_credential_store_selection(monkeypatch, backend, platform, frozen, wind
     else:
         assert isinstance(store, credentials.InMemoryCredentialStore)
         windows_factory.assert_not_called()
+
+
+@pytest.mark.parametrize("persistent", [False, True], ids=["memory-restart", "persistent"])
+async def test_lifespan_migrates_dotenv_key(monkeypatch, tmp_path, persistent):
+    from app import config, main
+    from app.services.provider_runtime import deepseek_service
+
+    env_file = tmp_path / ".env"
+    secret = "synthetic-legacy-provider-key"
+    original = (
+        "# synthetic configuration\r\n"
+        f"DEEPSEEK_API_KEY={secret}\r\n"
+        "DEEPSEEK_MODEL=deepseek-chat\r\n"
+    ).encode("utf-8")
+    env_file.write_bytes(original)
+    monkeypatch.setattr(config, "env_path", env_file)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+
+    class StopAfterCredentialMigration(Exception):
+        pass
+
+    # Exercise real startup migration, stopping before database/sidecar startup.
+    monkeypatch.setattr(main, "init_db", AsyncMock(side_effect=StopAfterCredentialMigration))
+
+    for _ in range(1 if persistent else 2):
+        if persistent:
+            values = {}
+            store = Mock(spec=credentials.CredentialStore)
+            store.get.side_effect = values.get
+            store.set.side_effect = values.__setitem__
+        else:
+            store = credentials.InMemoryCredentialStore()
+        monkeypatch.setattr(credentials, "credential_store", store)
+
+        # Reload only this temporary dotenv, as config would on a fresh process.
+        legacy_key = dotenv_values(env_file)["DEEPSEEK_API_KEY"]
+        assert legacy_key == secret
+        monkeypatch.setenv("DEEPSEEK_API_KEY", legacy_key)
+        monkeypatch.setattr(config, "DEEPSEEK_API_KEY", legacy_key)
+        monkeypatch.setattr(deepseek_service, "api_key", legacy_key)
+
+        with pytest.raises(StopAfterCredentialMigration):
+            async with main.lifespan(main.app):
+                pytest.fail("startup should stop immediately after credential migration")
+
+        assert store.get("deepseek") == secret
+        assert "DEEPSEEK_API_KEY" not in os.environ
+        assert config.DEEPSEEK_API_KEY == ""
+        assert deepseek_service.api_key == ""
+        if persistent:
+            assert dotenv_values(env_file) == {"DEEPSEEK_MODEL": "deepseek-chat"}
+        else:
+            assert env_file.read_bytes() == original
