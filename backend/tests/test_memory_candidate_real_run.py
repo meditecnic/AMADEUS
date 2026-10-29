@@ -6,6 +6,8 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -843,5 +845,237 @@ def _outbound_rows(capture: Path) -> list[dict]:
         for line in log.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+
+
+@pytest.mark.parametrize("mode", ["sync", "async", "sync_stream", "async_stream"])
+@pytest.mark.parametrize("status", [200, 401, 403])
+async def test_guard_records_http_status_before_stream_consumption(tmp_path, monkeypatch, mode, status):
+    import httpx
+
+    _restore_httpx_at_teardown(monkeypatch)
+    capture = tmp_path / "captures"
+    capture.mkdir()
+    budget = b3.HttpBudget(path=capture / "budget.json", currency_cap_micros=10_000_000)
+    payload = {"usage": {"prompt_tokens": 10, "completion_tokens": 2}}
+    stream = mode.endswith("stream")
+
+    def respond(request):
+        if stream:
+            return httpx.Response(status, text="data: " + json.dumps(payload) + "\n\ndata: [DONE]\n\n")
+        return httpx.Response(status, json=payload)
+
+    b3.install_allowlisted_httpx(
+        budget=budget, allowed_hosts={"provider.invalid"}, capture_dir=capture,
+        original_async_send=httpx.AsyncClient.send, original_sync_send=httpx.Client.send,
+    )
+    request_payload = {
+        "model": b3.DEFAULT_REQUEST_ID, "stream": stream,
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    def check_record():
+        stored = json.loads((capture / "budget.json").read_text(encoding="utf-8"))
+        attempt = stored["attempts"][0]
+        assert attempt["status_code"] == status
+        assert b3._events_indicate_auth_failure(stored) is (status in {401, 403})
+        if stream:
+            assert attempt["status"] == "occupied"
+            assert attempt["settled_micros"] is None
+            assert stored["reserved_micros"] == b3.RESERVE_MICROS_PER_COMPLETION
+
+    if mode.startswith("async"):
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            request = client.build_request("POST", "https://provider.invalid/chat/completions", json=request_payload)
+            response = await client.send(request, stream=stream)
+            check_record()
+            if stream and status == 200:
+                assert [line async for line in response.aiter_lines()]
+            await response.aclose()
+    else:
+        with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+            request = client.build_request("POST", "https://provider.invalid/chat/completions", json=request_payload)
+            response = client.send(request, stream=stream)
+            check_record()
+            if stream and status == 200:
+                assert list(response.iter_lines())
+            response.close()
+    if status == 200:
+        assert budget.snapshot()["usage_known"] == 1
+        assert budget.snapshot()["settled_micros"] == b3.peak_usage_micros(10, 2)
+
+
+@pytest.mark.parametrize("phase", ["first", "after_edit", "after_forget"])
+@pytest.mark.parametrize("reason", ["budget", "auth", "cancel"])
+def test_classification_ignores_error_message_with_run_records(phase, reason):
+    results = []
+    for message in ["Server error: budget_currency_exhausted API error (401)", "Server error"]:
+        events = {name: _RECORDED_OK_REPLY for name in ("first", "after_edit", "after_forget")}
+        events[phase] = [{"type": "error", "code": "turn_failed", "recoverable": True, "message": message}]
+        records = {"attempts": [], "rejected": []}
+        if reason == "budget":
+            records["rejected"] = [{"reason": "budget_currency_exhausted"}]
+        elif reason == "auth":
+            records["attempts"] = [{"kind": "chat", "status_code": 401}]
+        else:
+            events[phase].insert(0, {"type": "turn.cancelled"})
+        results.append(b3.classify_verify_real_status(
+            auth_failed=b3._events_indicate_auth_failure(records),
+            over_cap=False, official_host_only=True, chat_kind_present=True, promoted=True,
+            first_events=events["first"], after_edit_events=events["after_edit"],
+            after_forget_events=events["after_forget"], turn_records={phase: records},
+        ))
+    assert results[0] == results[1]
+    if reason == "auth":
+        assert results[0] == {"status": "failed", "ok": False, "stop": "auth_failed"}
+    else:
+        assert results[0] == {
+            "status": "partial", "ok": False, "stop": "budget_or_cancel", "incomplete_turn": phase,
+        }
+
+
+def test_budget_reason_comes_from_records_or_code_never_prose():
+    events = [{"type": "error", "code": "turn_failed", "recoverable": True, "message": "Server error"}]
+    budget = b3.HttpBudget(currency_cap_micros=10_000_000)
+    budget.before_http("https://provider.invalid/chat/completions", kind="chat")
+    with pytest.raises(b3.BudgetExhausted):
+        budget.before_http("https://provider.invalid/chat/completions", kind="chat")
+    assert b3.events_indicate_budget_block(events, budget.snapshot()) is True
+    events[0]["message"] = "Server error: budget_currency_exhausted"
+    assert b3.events_indicate_budget_block(events, {"rejected": []}) is False
+    events[0]["code"] = "budget_currency_exhausted"
+    assert b3.events_indicate_budget_block(events) is True
+
+
+async def test_turn_records_exclude_prior_auth_and_budget_failures(tmp_path, monkeypatch):
+    capture = tmp_path / "captures"
+    capture.mkdir()
+    budget = b3.HttpBudget(path=capture / "budget.json")
+    old_id = budget.before_http("https://provider.invalid/chat/completions", kind="chat")
+    budget.record_http_status(old_id, 401)
+    # Fill the bounded rejection history; a new rejection evicts an old row.
+    with budget._locked():
+        budget.rejected = [{"at": str(i), "reason": "budget_currency_exhausted"} for i in range(64)]
+        budget._persist_unlocked()
+
+    async def send(ws, text, *, timeout):
+        attempt_id = budget.before_http("https://provider.invalid/chat/completions", kind="chat")
+        budget.record_http_status(attempt_id, 200)
+        if text == "blocked":
+            with budget._locked():
+                budget.rejected.append({"at": "new", "reason": "budget_currency_exhausted"})
+                budget._persist_unlocked()
+        return [{"type": "error", "message": "Server error"}]
+
+    monkeypatch.setattr(b3, "_send_turn_or_error", send)
+    events, records = await b3._send_turn_with_records(None, "healthy", {"captures": capture}, timeout=1)
+    assert len(records["attempts"]) == 1
+    assert b3._events_indicate_auth_failure(records) is False
+    assert b3.events_indicate_budget_block(events, records) is False
+    events, records = await b3._send_turn_with_records(None, "blocked", {"captures": capture}, timeout=1)
+    assert records["rejected"] == [{"at": "new", "reason": "budget_currency_exhausted"}]
+    assert b3.events_indicate_budget_block(events, records) is True
+
+
+def test_auth_uses_completion_status():
+    for status in (401, 403):
+        assert b3._events_indicate_auth_failure({"attempts": [{"kind": "chat", "status_code": status}]})
+    assert not b3._events_indicate_auth_failure({"attempts": [{"kind": "catalog", "status_code": 401}]})
+    assert not b3._events_indicate_auth_failure({"attempts": [{"kind": "chat", "status_code": 500}]})
+
+
+@pytest.mark.parametrize("late", [False, True])
+@pytest.mark.parametrize("status", [401, 403])
+def test_verify_real_detects_early_and_late_auth_from_records(tmp_path, monkeypatch, late, status):
+    paths = b3.b2.run_paths(tmp_path)
+    paths["captures"].mkdir()
+    b3.b2._write_json(paths["pids"], {
+        "transport": "real", "backend_port": 12345, "candidate": str(paths["candidate"]),
+    })
+    budget = b3.HttpBudget(path=paths["captures"] / "budget.json")
+    attempt_id = None
+
+    async def send(*args, **kwargs):
+        nonlocal attempt_id
+        attempt_id = budget.before_http("https://provider.invalid/chat/completions", kind="extract" if late else "chat")
+        if not late:
+            budget.record_http_status(attempt_id, status)
+        return [{"type": "error", "code": "turn_failed", "recoverable": True, "message": "Server error"}]
+
+    def finish_pending(*args, **kwargs):
+        budget.record_http_status(attempt_id, status)
+        return budget.snapshot()
+
+    wait_fact = Mock(side_effect=AssertionError("no promoted fact"))
+    monkeypatch.setattr(b3, "_ws_session_b3", AsyncMock(return_value=SimpleNamespace(close=AsyncMock())))
+    monkeypatch.setattr(b3, "_send_turn_or_error", send)
+    monkeypatch.setattr(b3, "_wait_budget_and_jobs_idle", finish_pending)
+    monkeypatch.setattr(b3.b2, "_wait_fact", wait_fact)
+    monkeypatch.setattr(b3, "_wait_facts", Mock(return_value={}))
+    monkeypatch.setattr(b3, "_list_conversations", Mock(return_value=[]))
+    monkeypatch.setattr(b3, "_job_rows", Mock(return_value=[]))
+    with pytest.raises(SystemExit) as exc:
+        b3.cmd_verify_real(SimpleNamespace(run_root=str(tmp_path), session_id="owner"))
+    assert exc.value.code == 2
+    report = json.loads((paths["captures"] / "verify_real.json").read_text(encoding="utf-8"))
+    assert report["auth_failed"] is True
+    assert (report["status"], report["stop"]) == ("failed", "auth_failed")
+    assert wait_fact.call_count == int(late)  # early HTTP auth failures still exit immediately
+
+
+@pytest.mark.parametrize("reason", ["late_auth", "budget", "historical_failure"])
+def test_final_turn_classifies_current_records_after_background_idle(tmp_path, monkeypatch, reason):
+    paths = b3.b2.run_paths(tmp_path)
+    paths["captures"].mkdir()
+    b3.b2._write_json(paths["pids"], {
+        "transport": "real", "backend_port": 12345, "candidate": str(paths["candidate"]),
+    })
+    budget = b3.HttpBudget(path=paths["captures"] / "budget.json", currency_cap_micros=10_000_000)
+    if reason == "historical_failure":
+        old_id = budget.before_http("https://provider.invalid/chat/completions", kind="chat")
+        budget.record_http_status(old_id, 401)
+        budget.record_usage({"usage": {"prompt_tokens": 0, "completion_tokens": 0}}, attempt_id=old_id)
+        with budget._locked():
+            budget.rejected.append({"reason": "budget_currency_exhausted"})
+            budget._persist_unlocked()
+    pending = None
+
+    async def send(*args, **kwargs):
+        nonlocal pending
+        pending = budget.before_http("https://provider.invalid/chat/completions", kind="chat")
+        if reason == "budget":
+            with pytest.raises(b3.BudgetExhausted):
+                budget.before_http("https://provider.invalid/chat/completions", kind="chat")
+            return [{"type": "error", "code": "turn_failed", "recoverable": True, "message": "Server error"}]
+        return _RECORDED_OK_REPLY
+
+    def idle(*args, **kwargs):
+        if pending is not None:
+            budget.record_http_status(pending, 401 if reason == "late_auth" else 200)
+        return budget.snapshot()
+
+    monkeypatch.setattr(b3, "_ws_session_b3", AsyncMock(return_value=SimpleNamespace(close=AsyncMock())))
+    monkeypatch.setattr(b3, "_send_turn_or_error", send)
+    monkeypatch.setattr(b3, "_wait_budget_and_jobs_idle", idle)
+    monkeypatch.setattr(b3, "_open_ingest_jobs", Mock(return_value=[]))
+    monkeypatch.setattr(b3, "_sqlite_fact_state", Mock(return_value={"fact": {"state": "active"}}))
+    monkeypatch.setattr(b3, "_sqlite_conversation_messages", Mock(return_value=[]))
+    monkeypatch.setattr(b3, "_wait_facts", Mock(return_value={}))
+    monkeypatch.setattr(b3, "_http_json", Mock(return_value=(200, {})))
+    args = SimpleNamespace(
+        run_root=str(tmp_path), session_id="owner", conversation_id="conversation", fact_id="fact",
+        output_dir=str(tmp_path / "output"),
+    )
+    if reason == "historical_failure":
+        b3.cmd_final_turn(args)
+    else:
+        with pytest.raises(SystemExit):
+            b3.cmd_final_turn(args)
+    report = json.loads((paths["captures"] / "supplement_final_turn.json").read_text(encoding="utf-8"))
+    if reason == "historical_failure":
+        assert report["status"] == "complete"
+        assert report["auth_failed"] is False
+    else:
+        assert report["status"] == "partial"
+        assert report["stop"] == ("auth_failed" if reason == "late_auth" else "budget_or_cancel")
 
 

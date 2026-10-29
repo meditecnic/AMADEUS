@@ -679,6 +679,14 @@ class HttpBudget:
             self.user_turns += 1
             self._persist_unlocked()
 
+    def record_http_status(self, attempt_id: str, status_code: int) -> None:
+        with self._locked():
+            self._reload_unlocked()
+            row = _find_attempt_row(self.attempts, attempt_id)
+            if row is not None:
+                row["status_code"] = status_code
+                self._persist_unlocked()
+
     def record_usage(
         self,
         payload: dict[str, Any] | None,
@@ -1378,6 +1386,7 @@ def install_allowlisted_httpx(
             send_kwargs["follow_redirects"] = False
             stream = bool(send_kwargs.get("stream"))
             response = await original_async_send(self, request, *args, **send_kwargs)
+            budget.record_http_status(attempt_id, response.status_code)
             _reject_redirect(response)
             if stream:
                 return _UsageTrackingResponse(
@@ -1408,6 +1417,7 @@ def install_allowlisted_httpx(
             send_kwargs["follow_redirects"] = False
             stream = bool(send_kwargs.get("stream"))
             response = original_sync_send(self, request, *args, **send_kwargs)
+            budget.record_http_status(attempt_id, response.status_code)
             _reject_redirect(response)
             if stream:
                 return _UsageTrackingResponse(
@@ -2702,9 +2712,13 @@ def events_have_model_reply(events: list[dict[str, Any]] | None) -> bool:
     return False
 
 
-def events_indicate_budget_block(events: list[dict[str, Any]] | None) -> bool:
-    blob = json.dumps(events or [], ensure_ascii=False)
-    if "budget_currency_exhausted" in blob:
+def events_indicate_budget_block(
+    events: list[dict[str, Any]] | None, records: dict[str, Any] | None = None
+) -> bool:
+    if any(
+        row.get("reason") == "budget_currency_exhausted"
+        for row in (records or {}).get("rejected", [])
+    ):
         return True
     return any(
         str(event.get("code") or "") == "budget_currency_exhausted"
@@ -2726,6 +2740,7 @@ def classify_verify_real_status(
     first_events: list[dict[str, Any]] | None,
     after_edit_events: list[dict[str, Any]] | None,
     after_forget_events: list[dict[str, Any]] | None,
+    turn_records: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if auth_failed:
         return {"status": "failed", "ok": False, "stop": "auth_failed"}
@@ -2742,7 +2757,8 @@ def classify_verify_real_status(
         ("after_edit", after_edit_events),
         ("after_forget", after_forget_events),
     ):
-        if events_indicate_budget_block(events) or events_indicate_cancel(events):
+        records = (turn_records or {}).get(name)
+        if events_indicate_budget_block(events, records) or events_indicate_cancel(events):
             return {
                 "status": "partial",
                 "ok": False,
@@ -2759,20 +2775,32 @@ def classify_verify_real_status(
     return {"status": "complete", "ok": True, "stop": None}
 
 
-def _events_indicate_auth_failure(events: list[dict[str, Any]]) -> bool:
-    blob = json.dumps(events, ensure_ascii=False)
-    markers = (
-        "invalid_api_key",
-        "API error (401)",
-        "API error (403)",
-        "status_code=401",
-        "status_code=403",
-        "DeepSeek API error (401)",
-        "DeepSeek API error (403)",
-        "error (401)",
-        "error (403)",
+def _events_indicate_auth_failure(records: dict[str, Any]) -> bool:
+    return any(
+        row.get("kind") in REQUEST_MAX_TOKENS and row.get("status_code") in {401, 403}
+        for row in records.get("attempts", [])
     )
-    return any(marker in blob for marker in markers)
+
+
+def _records_since(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    prior_ids = {row["attempt_id"] for row in before.get("attempts", [])}
+    # Rejections have no attempt id and the persisted list retains its last 64 rows.
+    return {
+        "attempts": [
+            row for row in after.get("attempts", []) if row["attempt_id"] not in prior_ids
+        ],
+        "rejected": [
+            row for row in after.get("rejected", []) if row not in before.get("rejected", [])
+        ],
+    }
+
+
+async def _send_turn_with_records(
+    ws, text: str, paths: dict[str, Path], *, timeout: float
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    before = _read_budget(paths)
+    events = await _send_turn_or_error(ws, text, timeout=timeout)
+    return events, _records_since(before, _read_budget(paths))
 
 
 def _outbound_hosts(paths: dict[str, Path]) -> list[str]:
@@ -2871,10 +2899,12 @@ def cmd_verify_real(args: argparse.Namespace) -> None:
     session_id = args.session_id or "b3-real-owner"
     turn_timeout = 120.0
     fact_timeout = 180.0
+    auth_before = _read_budget(paths)
 
     async def _run() -> dict[str, Any]:
         result: dict[str, Any] = {
             "auth_failed": False,
+            "turn_records": {},
             "promoted": False,
             "fact": None,
             "patch_status": None,
@@ -2882,11 +2912,14 @@ def cmd_verify_real(args: argparse.Namespace) -> None:
         }
         ws = await _ws_session_b3(backend_port=backend_port, session_id=session_id)
         try:
-            first = await _send_turn_or_error(ws, TURN_EXTRACT, timeout=turn_timeout)
+            first, records = await _send_turn_with_records(ws, TURN_EXTRACT, paths, timeout=turn_timeout)
         finally:
             await ws.close()
         result["first_events"] = first[-8:]
-        result["auth_failed"] = _events_indicate_auth_failure(first)
+        result["turn_records"]["first"] = records
+        result["auth_failed"] = _events_indicate_auth_failure(
+            _records_since(auth_before, _read_budget(paths))
+        )
         if result["auth_failed"]:
             return result
         await asyncio.sleep(1.0)
@@ -2953,11 +2986,14 @@ def cmd_verify_real(args: argparse.Namespace) -> None:
             conversation_id=str(after_edit_convo["id"]),
         )
         try:
-            after_edit = await _send_turn_or_error(ws2, TURN_AFTER_EDIT, timeout=turn_timeout)
+            after_edit, records = await _send_turn_with_records(ws2, TURN_AFTER_EDIT, paths, timeout=turn_timeout)
         finally:
             await ws2.close()
         result["after_edit_events"] = after_edit[-6:]
-        result["auth_failed"] = result["auth_failed"] or _events_indicate_auth_failure(after_edit)
+        result["turn_records"]["after_edit"] = records
+        result["auth_failed"] = result["auth_failed"] or _events_indicate_auth_failure(
+            _records_since(auth_before, _read_budget(paths))
+        )
         result["core_after_edit"] = _last_core_facts(paths)
         result["history_has_extract_utterance"] = _history_has_text(paths, TURN_EXTRACT)
         if result["auth_failed"]:
@@ -3001,26 +3037,33 @@ def cmd_verify_real(args: argparse.Namespace) -> None:
             conversation_id=str(after_forget_convo["id"]),
         )
         try:
-            after_forget = await _send_turn_or_error(
-                ws3, TURN_AFTER_FORGET, timeout=turn_timeout
+            after_forget, records = await _send_turn_with_records(
+                ws3, TURN_AFTER_FORGET, paths, timeout=turn_timeout
             )
         finally:
             await ws3.close()
         result["after_forget_events"] = after_forget[-6:]
         result["core_after_forget"] = _last_core_facts(paths)
+        result["turn_records"]["after_forget"] = records
         result["auth_failed"] = result["auth_failed"] or _events_indicate_auth_failure(
-            after_forget
+            _records_since(auth_before, _read_budget(paths))
         )
         return result
 
     bundle = asyncio.run(_run())
+    # Background completions can receive their HTTP status after WS done.
+    budget = _read_budget(paths) if bundle["auth_failed"] else _wait_budget_and_jobs_idle(
+        paths, candidate, timeout=180.0
+    )
+    bundle["auth_failed"] = bundle["auth_failed"] or _events_indicate_auth_failure(
+        _records_since(auth_before, budget)
+    )
     jobs = _job_rows(candidate)
     live_jobs = [
         row
         for row in jobs
         if row.get("last_error_code") != "candidate_build_freeze"
     ]
-    budget = _read_budget(paths)
     outbound = []
     outbound_log = paths["captures"] / "outbound_http.jsonl"
     if outbound_log.is_file():
@@ -3070,6 +3113,7 @@ def cmd_verify_real(args: argparse.Namespace) -> None:
         first_events=list(bundle.get("first_events") or []),
         after_edit_events=list(bundle.get("after_edit_events") or []),
         after_forget_events=list(bundle.get("after_forget_events") or []),
+        turn_records=bundle.get("turn_records"),
     )
     report = {
         "ok": classification["ok"],
@@ -3355,40 +3399,41 @@ def cmd_final_turn(args: argparse.Namespace) -> None:
             },
         )
 
-        async def _run() -> list[dict[str, Any]]:
+        async def _run() -> tuple[list[dict[str, Any]], dict[str, Any]]:
             ws = await _ws_session_b3(
                 backend_port=backend_port,
                 session_id=session_id,
                 conversation_id=conversation_id,
             )
             try:
-                return await _send_turn_or_error(
-                    ws, TURN_AFTER_FORGET, timeout=120.0
+                return await _send_turn_with_records(
+                    ws, TURN_AFTER_FORGET, paths, timeout=120.0
                 )
             finally:
                 await ws.close()
 
-        events = asyncio.run(_run())
+        events, records = asyncio.run(_run())
+        after_idle = _wait_budget_and_jobs_idle(paths, candidate, timeout=180.0)
+        records = _records_since(budget_before, after_idle)
         report["sent"] = True
         report["events"] = events
-        report["auth_failed"] = _events_indicate_auth_failure(events)
+        report["auth_failed"] = _events_indicate_auth_failure(records)
         if (
             report["auth_failed"]
-            or events_indicate_budget_block(events)
+            or events_indicate_budget_block(events, records)
             or events_indicate_cancel(events)
             or not events_have_model_reply(events)
         ):
             report["status"] = "partial"
             if report["auth_failed"]:
                 report["stop"] = "auth_failed"
-            elif events_indicate_budget_block(events) or events_indicate_cancel(events):
+            elif events_indicate_budget_block(events, records) or events_indicate_cancel(events):
                 report["stop"] = "budget_or_cancel"
             else:
                 report["stop"] = "missing_model_reply"
         else:
             report["status"] = "complete"
             report["ok"] = True
-        _wait_budget_and_jobs_idle(paths, candidate, timeout=180.0)
 
     budget_after = _read_budget(paths)
     b2._write_json(output_dir / "budget_after.json", budget_after)
