@@ -19,7 +19,7 @@
 - **Worldline instruments and transitions (M3).** The header, system-menu dial and WebGL2 transition share the same cathode digits. Open **系统 → 世界线**: the dial shows the current worldline, while the diagram previews the selected target; use the shift button to begin. Softer handoffs preserve conversations and drafts, and click/Esc skips the presentation while still waiting for target confirmation.
 - **Bring your own model.** DeepSeek, Zhipu GLM, or any OpenAI-compatible endpoint. Optional web search through Tavily or Firecrawl.
 - **Optional voice.** Text-to-speech through a local GPT-SoVITS server; speech recognition with SenseVoice via sherpa-onnx (backend only for now, no microphone UI yet).
-- **Local by design.** Every service binds to loopback, WebSocket connections are origin-checked, and API keys go to the Windows Credential Manager. Conversation text is sent only to the model provider the user configures; if web search is enabled, search queries also go to the chosen search provider (Tavily or Firecrawl).
+- **Local by design.** Every service binds to loopback, WebSocket connections are origin-checked, and API keys are stored in the Windows Credential Manager in installed builds or in memory by default in source runs. Conversation text is sent only to the model provider the user configures; if web search is enabled, search queries also go to the chosen search provider (Tavily or Firecrawl).
 
 ## Architecture
 
@@ -110,8 +110,8 @@ cd backend
 py -3.11 --version
 py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-# Use a separate development directory; never select your installed app's data.
-$env:AMADEUS_DATA_DIR = Join-Path $env:TEMP 'amadeus-dev-data'
+# Use a separate development directory outside TEMP, which may be cleaned up; never select your installed app's data.
+$env:AMADEUS_DATA_DIR = Join-Path $env:LOCALAPPDATA 'amadeus-dev-data'
 Remove-Item Env:AMADEUS_DB_PATH -ErrorAction SilentlyContinue
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
@@ -141,7 +141,7 @@ Open http://localhost:1420 and log in with `Gott würfelt nicht` (the real backe
 
 The desktop window comes from the installer build; its packaging scripts are in `packaging/windows/`, and the frozen backend is a build artifact excluded from the repository; `npm run tauri -- dev` will not start from this checkout (the shell expects a bundled backend and a free port 8000). For development, use the browser at http://localhost:1420.
 
-**Data location (real backend development):** the explicitly configured `AMADEUS_DATA_DIR`; there is no default for source runs. A frozen backend launched directly retains the `%APPDATA%\Amadeus` default on Windows (`~/.amadeus` without `APPDATA`). The Windows installer shell passes `%LOCALAPPDATA%\com.amadeus.desktop\data\` instead. API keys are stored in the Windows Credential Manager; on other systems they are kept in memory only. The local mock does not use these backend data stores.
+**Data location (real backend development):** the explicitly configured `AMADEUS_DATA_DIR`; there is no default for source runs. A frozen backend launched directly retains the `%APPDATA%\Amadeus` default on Windows (`~/.amadeus` without `APPDATA`). The Windows installer shell passes `%LOCALAPPDATA%\com.amadeus.desktop\data\` instead. Installed Windows builds store API keys in the Windows Credential Manager; source runs keep them only in memory by default, so re-enter them after each restart. To persist keys from a source run on Windows, set `AMADEUS_CREDENTIAL_BACKEND=windows`; this accesses your real Windows credentials. Other systems keep keys in memory only. The local mock does not use these backend data stores.
 
 ## Voice (optional)
 
@@ -202,7 +202,7 @@ M3 已收尾，M4 等待授权。英文和日文界面仍在计划中；她始�
 
 **真实后端**：按 [Real backend](#real-backend) 先启动 `uvicorn app.main:app`，再在前端终端用 PowerShell 设置 `$env:AMADEUS_DEV_MOCK = "0"`，然后启动 Vite。登录口令仍是 `Gott würfelt nicht`。进去以后，从右上角的「系统」打开「连接」，配置自己的模型连接并保存。连接测试通过后，就可以开始说话了。第一次写入记忆时会下载记忆功能要用的模型；语音是可选项。
 
-真实后端开发模式下，必须先显式设置 `AMADEUS_DATA_DIR` 到独立开发目录，并清除 `AMADEUS_DB_PATH`；未设置或为空时拒绝启动，不再默认使用用户目录。单设 `AMADEUS_DB_PATH` 不能绕过检查。安装版仍放在 `%LOCALAPPDATA%\com.amadeus.desktop\data\`；单独运行冻结后端仍默认用 `%APPDATA%\Amadeus`（无 `APPDATA` 时用 `~/.amadeus`）。所有服务只监听本机地址，你的对话只会发给你自己配置的那个模型服务；如果开启联网搜索，搜索词还会发给你配置的搜索服务（Tavily 或 Firecrawl）。本地 mock 不使用这些后端数据目录，也不调用模型或语音服务。
+真实后端开发模式下，必须先显式设置 `AMADEUS_DATA_DIR` 到独立开发目录（Windows：`$env:AMADEUS_DATA_DIR = Join-Path $env:LOCALAPPDATA 'amadeus-dev-data'`，即 `%LOCALAPPDATA%\amadeus-dev-data`，避免被 TEMP 清理），并清除 `AMADEUS_DB_PATH`；未设置或为空时拒绝启动，不再默认使用用户目录。单设 `AMADEUS_DB_PATH` 不能绕过检查。安装版仍放在 `%LOCALAPPDATA%\com.amadeus.desktop\data\`；单独运行冻结后端仍默认用 `%APPDATA%\Amadeus`（无 `APPDATA` 时用 `~/.amadeus`）。Windows 安装版把 API key 存进 Windows 凭据管理器；源码运行默认只存内存，重启后要重新输入。若要在 Windows 源码运行时持久保存 key，设置 `AMADEUS_CREDENTIAL_BACKEND=windows`；这会访问你的真实 Windows 凭据。其他系统只存内存。所有服务只监听本机地址，你的对话只会发给你自己配置的那个模型服务；如果开启联网搜索，搜索词还会发给你配置的搜索服务（Tavily 或 Firecrawl）。本地 mock 不使用这些后端数据目录，也不调用模型或语音服务。
 
 ### 原作素材包
 

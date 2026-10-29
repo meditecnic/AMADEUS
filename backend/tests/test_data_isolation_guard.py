@@ -46,8 +46,9 @@ def _run_python(args, env):
 
 
 def _assert_refused(result, appdata):
-    # Check side effects even when a different exception also exits with code 1.
-    assert list(appdata.rglob("*")) == []
+    # Check the whole synthetic home; fixture-created directories are allowed.
+    home = appdata.parent.parent
+    assert [path for path in home.rglob("*") if path.is_file()] == []
     assert result.returncode == 1, result.stdout + result.stderr
     assert REFUSAL in result.stderr
 

@@ -32,14 +32,14 @@ async def lifespan(app: FastAPI):
     # Startup
     print("--------------------------------------------------")
     print("Amadeus Backend starting...")
-    from app.services.credentials import credential_store, scrub_dotenv_key
+    from app.services.credentials import InMemoryCredentialStore, credential_store, scrub_dotenv_key
     from app.services.provider_runtime import deepseek_service
 
     if "PYTEST_CURRENT_TEST" not in os.environ:
         legacy_key = config.DEEPSEEK_API_KEY.strip()
         if legacy_key and credential_store.get("deepseek") is None:
             credential_store.set("deepseek", legacy_key)
-        if legacy_key:
+        if legacy_key and not isinstance(credential_store, InMemoryCredentialStore):
             scrub_dotenv_key(config.env_path, "DEEPSEEK_API_KEY")
         os.environ.pop("DEEPSEEK_API_KEY", None)
         config.DEEPSEEK_API_KEY = ""
