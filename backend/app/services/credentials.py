@@ -78,7 +78,7 @@ class CredentialStore(Protocol):
 
 
 class InMemoryCredentialStore:
-    """Non-persistent test store; never used as the Windows production backend."""
+    """Non-persistent store for source runs and explicit memory selection."""
 
     def __init__(self) -> None:
         self._values: dict[str, str] = {}
@@ -195,14 +195,14 @@ class WindowsCredentialStore:
 def _select_credential_store() -> CredentialStore:
     """Bind the process-wide store once, at import.
 
-    ``AMADEUS_CREDENTIAL_BACKEND=memory`` selects the non-persistent store
-    before Windows Credential Manager is constructed. Changing DATA_DIR
-    alone does not isolate system credentials.
+    Source runs use memory unless ``AMADEUS_CREDENTIAL_BACKEND=windows``
+    explicitly opts into Windows Credential Manager. Frozen Windows runs
+    keep that persistent default; ``memory`` always selects memory.
     """
     backend = (os.environ.get("AMADEUS_CREDENTIAL_BACKEND") or "").strip().lower()
     if backend in {"memory", "inmemory", "in-memory"}:
         return InMemoryCredentialStore()
-    if sys.platform == "win32":
+    if sys.platform == "win32" and (backend == "windows" or getattr(sys, "frozen", False)):
         return WindowsCredentialStore()
     return InMemoryCredentialStore()
 

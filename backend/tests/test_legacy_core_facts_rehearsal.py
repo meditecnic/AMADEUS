@@ -1378,6 +1378,8 @@ def test_cli_refuses_preview_output_via_junction_into_source(tmp_path):
         ["cmd", "/c", "mklink", "/J", str(link), str(real)],
         capture_output=True,
         text=True,
+        encoding="oem",
+        errors="replace",
     )
     if created.returncode != 0:
         pytest.skip(f"junction creation unavailable: {created.stderr.strip()}")
@@ -1402,6 +1404,8 @@ def test_cli_refuses_source_database_escaping_via_internal_junction(tmp_path):
         ["cmd", "/c", "mklink", "/J", str(link), str(escaped_sg)],
         capture_output=True,
         text=True,
+        encoding="oem",
+        errors="replace",
     )
     if created.returncode != 0:
         pytest.skip(f"junction creation unavailable: {created.stderr.strip()}")
@@ -1429,6 +1433,8 @@ def test_cli_refuses_target_database_escaping_via_internal_junction(tmp_path):
         ],
         capture_output=True,
         text=True,
+        encoding="oem",
+        errors="replace",
     )
     if created.returncode != 0:
         pytest.skip(f"junction creation unavailable: {created.stderr.strip()}")
@@ -1510,6 +1516,8 @@ def test_cli_resolves_live_data_root_before_comparison(tmp_path):
         ["cmd", "/c", "mklink", "/J", str(appdata / "Amadeus"), str(real_live)],
         capture_output=True,
         text=True,
+        encoding="oem",
+        errors="replace",
     )
     if created.returncode != 0:
         pytest.skip(f"junction creation unavailable: {created.stderr.strip()}")
