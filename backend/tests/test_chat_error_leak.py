@@ -22,11 +22,14 @@ def _frames(queue):
     return [queue.get_nowait()[1] for _ in range(queue.qsize())]
 
 
-def _assert_logged(capsys, prefix, error_type="RuntimeError"):
+def _assert_logged(capsys, prefix, error_type="RuntimeError", *, include_text=True):
     output = capsys.readouterr().out
     assert prefix in output
-    assert SECRET in output
     assert error_type in output
+    if include_text:
+        assert SECRET in output
+    else:
+        assert "secret-marker-123" not in output
 
 
 @pytest.mark.parametrize("error", [RuntimeError(SECRET), ValueError(SECRET)])
@@ -97,7 +100,7 @@ async def test_streaming_tts_hides_exception_and_continues(monkeypatch, capsys):
         {"type": "voice.audio_degraded", "sentence_id": 0, "reason": "service_error"},
     ]
     assert not session.active_streams
-    _assert_logged(capsys, "[Voice TTS Error]")
+    _assert_logged(capsys, "[Voice TTS Error]", include_text=False)
 
 
 async def test_malformed_frame_hides_exception_and_reader_survives(monkeypatch, capsys):
@@ -119,7 +122,7 @@ async def test_malformed_frame_hides_exception_and_reader_survives(monkeypatch, 
     chat_ws.sessions.pop(websocket.query_params["session_id"])
     assert queued[0] == {"type": "error", "message": "数据格式无效"}
     assert len(queued) == 2  # the following frame reached the auth check
-    _assert_logged(capsys, "[Invalid Frame]")
+    _assert_logged(capsys, f"[Invalid Frame] Session {websocket.query_params['session_id']}:", include_text=False)
 
 
 async def test_reader_boundary_hides_exception(monkeypatch, capsys):
@@ -156,7 +159,7 @@ def test_clear_history_hides_exception_and_keeps_history(app_client, monkeypatch
         ws.send_json({"type": "clear_history"})
         assert ws.receive_json() == {"type": "error", "message": "物理清除历史记录失败"}
         assert session.history == [{"role": "user", "content": "keep me"}]
-    _assert_logged(capsys, "[Clear History Error]")
+    _assert_logged(capsys, f"[Clear History Error] Session {session_id}:", include_text=False)
 
 
 def test_stt_hides_exception_and_keeps_connection(app_client, monkeypatch, capsys):
@@ -172,4 +175,4 @@ def test_stt_hides_exception_and_keeps_connection(app_client, monkeypatch, capsy
         }
         ws.send_json({"type": "ping"})
         assert ws.receive_json() == {"type": "pong"}
-    _assert_logged(capsys, "[STT Error]")
+    _assert_logged(capsys, "[STT Error]", include_text=False)

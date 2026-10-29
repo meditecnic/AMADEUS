@@ -2533,7 +2533,7 @@ async def _dispatch_streaming_voice_tts(session: SessionState, final_text: str, 
         except Exception as exc:
             # Broad on purpose: any TTS stream failure degrades this sentence
             # only; the turn continues with the next one.
-            print(f"[Voice TTS Error] {exc} ({type(exc).__name__})")
+            print(f"[Voice TTS Error] ({type(exc).__name__})")
             await send_queue.put((epoch, {"type": "voice.audio_degraded", "sentence_id": sentence_id, "reason": "service_error"}))
         finally:
             session.active_streams.discard(stream)
@@ -2648,7 +2648,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 # Broad on purpose: malformed frames surface as ValueError,
                 # KeyError or RuntimeError depending on the ASGI server; the
                 # reader answers with an error frame and keeps the socket.
-                print(f"[Invalid Frame] Session {session.session_id}: {e} ({type(e).__name__})")
+                print(f"[Invalid Frame] Session {session.session_id}: ({type(e).__name__})")
                 await send_queue.put((session.current_epoch, {"type": "error", "message": "数据格式无效"}))
                 continue
             
@@ -3034,7 +3034,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 except Exception as e:
                     # Broad on purpose: any storage failure is reported and the
                     # in-memory history is left untouched.
-                    print(f"[Clear History Error] Session {session.session_id}: {e} ({type(e).__name__})")
+                    print(f"[Clear History Error] Session {session.session_id}: ({type(e).__name__})")
                     await send_queue.put((session.current_epoch, {"type": "error", "message": "物理清除历史记录失败"}))
                     continue
                 

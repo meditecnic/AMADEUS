@@ -1022,7 +1022,7 @@ def test_verify_real_detects_early_and_late_auth_from_records(tmp_path, monkeypa
     assert wait_fact.call_count == int(late)  # early HTTP auth failures still exit immediately
 
 
-@pytest.mark.parametrize("reason", ["late_auth", "budget", "historical_failure"])
+@pytest.mark.parametrize("reason", ["late_auth", "budget", "historical_failure", "background_auth"])
 def test_final_turn_classifies_current_records_after_background_idle(tmp_path, monkeypatch, reason):
     paths = b3.b2.run_paths(tmp_path)
     paths["captures"].mkdir()
@@ -1042,6 +1042,10 @@ def test_final_turn_classifies_current_records_after_background_idle(tmp_path, m
     async def send(*args, **kwargs):
         nonlocal pending
         pending = budget.before_http("https://provider.invalid/chat/completions", kind="chat")
+        if reason == "background_auth":
+            budget.record_http_status(pending, 200)
+            budget.record_usage({"usage": {"prompt_tokens": 10, "completion_tokens": 2}}, attempt_id=pending)
+            pending = budget.before_http("https://provider.invalid/chat/completions", kind="extract")
         if reason == "budget":
             with pytest.raises(b3.BudgetExhausted):
                 budget.before_http("https://provider.invalid/chat/completions", kind="chat")
@@ -1050,7 +1054,7 @@ def test_final_turn_classifies_current_records_after_background_idle(tmp_path, m
 
     def idle(*args, **kwargs):
         if pending is not None:
-            budget.record_http_status(pending, 401 if reason == "late_auth" else 200)
+            budget.record_http_status(pending, 401 if reason in {"late_auth", "background_auth"} else 200)
         return budget.snapshot()
 
     monkeypatch.setattr(b3, "_ws_session_b3", AsyncMock(return_value=SimpleNamespace(close=AsyncMock())))
@@ -1068,14 +1072,21 @@ def test_final_turn_classifies_current_records_after_background_idle(tmp_path, m
     if reason == "historical_failure":
         b3.cmd_final_turn(args)
     else:
-        with pytest.raises(SystemExit):
+        with pytest.raises(SystemExit) as exc:
             b3.cmd_final_turn(args)
+        assert exc.value.code == 2
     report = json.loads((paths["captures"] / "supplement_final_turn.json").read_text(encoding="utf-8"))
     if reason == "historical_failure":
         assert report["status"] == "complete"
         assert report["auth_failed"] is False
     else:
         assert report["status"] == "partial"
-        assert report["stop"] == ("auth_failed" if reason == "late_auth" else "budget_or_cancel")
+        assert report["stop"] == ("auth_failed" if reason in {"late_auth", "background_auth"} else "budget_or_cancel")
+    if reason == "background_auth":
+        assert report["events"] == _RECORDED_OK_REPLY
+        assert report["auth_failed"] is True
+        assert [(row["kind"], row["status_code"]) for row in budget.snapshot()["attempts"]] == [
+            ("chat", 200), ("extract", 401),
+        ]
 
 

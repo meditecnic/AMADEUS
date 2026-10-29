@@ -3399,20 +3399,20 @@ def cmd_final_turn(args: argparse.Namespace) -> None:
             },
         )
 
-        async def _run() -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        async def _run() -> list[dict[str, Any]]:
             ws = await _ws_session_b3(
                 backend_port=backend_port,
                 session_id=session_id,
                 conversation_id=conversation_id,
             )
             try:
-                return await _send_turn_with_records(
-                    ws, TURN_AFTER_FORGET, paths, timeout=120.0
+                return await _send_turn_or_error(
+                    ws, TURN_AFTER_FORGET, timeout=120.0
                 )
             finally:
                 await ws.close()
 
-        events, records = asyncio.run(_run())
+        events = asyncio.run(_run())
         after_idle = _wait_budget_and_jobs_idle(paths, candidate, timeout=180.0)
         records = _records_since(budget_before, after_idle)
         report["sent"] = True
