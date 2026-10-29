@@ -50,6 +50,92 @@ def example_case(frozen, **expected):
     return case
 
 
+@pytest.mark.parametrize("key,alias", [
+    ("coffee", "アメリカン"), ("coffee", "アメリカンコーヒー"), ("coffee", "無糖"),
+    ("coffee", "砂糖は入れない"), ("coffee", "砂糖抜き"), ("coffee", "砂糖を入れない"),
+    ("coffee_new", "茉莉花茶"), ("coffee_new", "蜂蜜は入れない"),
+])
+def test_added_drink_aliases(frozen, key, alias):
+    case = example_case(frozen, must_use_fact_keys=[key])
+    assert b5.score(case, alias, [], frozen[0])["status"] == "pass"
+
+
+@pytest.mark.parametrize("answer,status", [
+    ("犬じゃない。", "needs_manual"), ("犬ではない。", "needs_manual"),
+    ("犬用の用品よ。", "needs_manual"), ("白い犬みたいに聞こえる。", "needs_manual"),
+    ("犬を飼っているんじゃないでしょうね。", "fail"),
+    ("犬だと思う。猫みたいに見える。", "fail"),
+    ("犬じゃない。小黑という犬を飼ってる。", "fail"),
+])
+def test_forbidden_context_is_local_to_every_mention(frozen, answer, status):
+    case = example_case(frozen, must_not_use_fact_keys=["dog_pet"])
+    result = b5.score(case, answer, [], frozen[0])
+    assert result["status"] == status
+    assert result["failures"] == (["forbidden:dog_pet"] if status == "fail" else [])
+    assert result["needs_manual"] == (["forbidden_context:dog_pet"] if status == "needs_manual" else [])
+
+
+def test_forbidden_context_uses_longest_overlapping_alias(frozen):
+    case = example_case(frozen, must_not_use_fact_keys=["coffee"])
+    result = b5.score(case, "アメリカンコーヒーじゃない。", [], frozen[0])
+    assert result["status"] == "needs_manual"
+    assert result["needs_manual"] == ["forbidden_context:coffee"]
+    assert result["failures"] == []
+    result = b5.score(case, "アメリカンコーヒーじゃない。無糖よ。", [], frozen[0])
+    assert result["failures"] == ["forbidden:coffee"]
+
+
+def test_rescore_saved_run_is_offline_and_preserves_original_bytes(tmp_path, frozen, monkeypatch):
+    qset, digest = frozen
+    plan = b5.make_plan(qset, "old-question-digest", transport="real", cap_cny="1")
+    entries = [e for e in plan["executions"] if e["case_id"] in {
+        "r_chord", "f_active_version", "f_recent_history", "f_absent_drink"}]
+    plan["executions"] = entries
+    b5.write_json(tmp_path / "plan.json", plan)
+    replies = {"r_chord": "陶笛の練習よ。", "f_active_version": "茉莉花茶よ、蜂蜜は入れない。",
+               "f_recent_history": "茉莉花茶よ。砂糖なしのアメリカーノも。", "f_absent_drink": b5.FAKE_ANSWER}
+    for entry in entries:
+        case = next(c for c in qset["cases"] if c["id"] == entry["case_id"])
+        count = case["expected"]["exact_need_count"]
+        calls = [call([f"need {i}" for i in range(count)])] if count else []
+        b5.write_json(tmp_path / "executions" / entry["id"] / "result.json", {
+            **entry, "status": "completed", "answer": replies[entry["case_id"]], "calls": calls,
+            "score": {"status": "fail", "needs_manual": []}, "fallback": True})
+    # These are deliberately not usable inputs: rescore must read result.json.
+    for name in ("summary.json", "summary.md", "executions.jsonl", "budget.json", "run.lock"):
+        (tmp_path / name).write_bytes(b"original evidence\r\n")
+    originals = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("rescore attempted HTTP, execution, or paid-run authorization")
+
+    for owner, name in ((socket.socket, "connect"), (socket, "getaddrinfo"),
+                        (httpx.HTTPTransport, "handle_request"), (urllib.request, "urlopen"),
+                        (b5, "check_real_gate"), (b5, "run_suite"), (b5.subprocess, "run")):
+        monkeypatch.setattr(owner, name, forbidden)
+    assert b5.main(["--rescore", str(tmp_path), "--transport", "real"]) == 0
+    summary = b5.read_json(tmp_path / "rescore-summary.json")
+    assert summary["source_question_sha256"] == "old-question-digest"
+    assert summary["question_sha256"] == digest
+    assert summary["script_sha256"] == b5.sha256(b5.SCRIPT)
+    for mode in ("legacy", "v11"):
+        row = summary["modes"][mode]
+        assert row["statuses"] == {"completed": 4}
+        assert row["overall"]["passed"] == 1
+        assert row["overall"]["failed"] == 2
+        assert row["overall"]["needs_manual"] == 1
+        assert row["needs_manual"] == 1
+        assert row["fallback_executions"] == 0
+    assert summary["modes"]["legacy"]["tool"] is None
+    assert summary["modes"]["v11"]["tool"]["passed"] == 4
+    markdown = (tmp_path / "rescore-summary.md").read_text(encoding="utf-8")
+    assert "B5 offline rescore" in markdown
+    assert "1/3 (33.3%)" in markdown
+    assert all(p.read_bytes() == raw for p, raw in originals.items())
+    assert {p for p in tmp_path.rglob("*") if p.is_file()} == set(originals) | {
+        tmp_path / "rescore-summary.json", tmp_path / "rescore-summary.md"}
+
+
 def test_plan_written_before_any_execution_and_resume_skips_completed(tmp_path, frozen):
     qset, digest = frozen
     before = copy.deepcopy(qset)
@@ -1184,3 +1270,52 @@ def test_worker_requires_isolated_data_directory_before_app_import(tmp_path, fro
     assert list(home.iterdir()) == []
     assert not list(tmp_path.rglob("*.sqlite3")) and not list(tmp_path.rglob("*.db"))
     assert not (directory / "result.json").exists()
+
+
+# Verbatim replies from amadeus-ops reports/103-b5-real-run-answers.md.
+@pytest.mark.parametrize("execution_id,need_count,failures,answer", [
+    ('legacy-f_experience_conflict-1', 0, [],
+     'アイスコーヒーじゃなくて、ホットでもない、アメリカンコーヒーでしょう。砂糖は入れないやつ。毎朝そうやって飲んでるって、前にも話してくれたわ。'),
+    ('legacy-f_known_plus_unknown-1', 0, [],
+     '朝はアイスコーヒー……じゃなくて、アメリカン。砂糖抜きでしょ。そこは覚えてる。でも夕食の主食の好みまでは聞いてない。米か麺か、パンか——その辺は私の記録にないわ。適当に当てて外すより、本人に確認したほうが早い。'),
+    ('v11-f_active_version-1', 1, [],
+     '茉莉花茶よ、蜂蜜は入れない。……どうしたの、そんな確認までして。'),
+    ('v11-f_force_web_memory-1', 1, [],
+     '上海は今日、晴れで18°C。……朝の習慣は、無糖のアメリカンコーヒーでしょう。天気がいいなら、実験記録の整理は窓際でやったら？集中力は少し上がるかもしれない。'),
+    ('v11-r_dual_drink_food-3', 2, [],
+     '朝はアイスコーヒー…いや、ホットのアメリカンだったかしら。とにかくブラックで砂糖は入れない、って前に言ってたわね。それと香菜は避けてる。注文する時は、その二点だけは忘れないように。'),
+    ('legacy-r_chord-1', 0, ['forbidden:ocarina'],
+     'Cメジャーコードね。構成音はド・ミ・ソ、つまり C・E・G の三音で、これは長三和音の基本形よ。仕組みとしては、ルートの C から E までが長三度（4半音）、E から G までが短三度（3半音）、C から G までが完全五度（7半音）。下が長三度で上が短三度という積み方が「明るい」響きの正体。転回形も押さえておくと実用的よ。基本形は C-E-G、第一転回形が E-G-C、第二転回形が G-C-E。同じ和音でも最低音が変わると響きの重心が変わるから、接続を考えるときはそっちが効いてくる。それと、Cメジャースケールの I 度の和音だから、調性の中では一番安定した位置にある。……陶器の笛で《故城》を吹くときも、この和音の感覚が基盤になるんじゃない。楽器が違っても、響きの骨格は一緒よ。'),
+    ('v11-r_chord-1', 0, ['forbidden:ocarina'],
+     'Cメジャーコードね。構成音は C・E・G の三和音で、C を根音とする長三和音よ。仕組みは単純。根音 C から長三度（4半音）上がって E、そこから短三度（3半音）上がって G。つまり下が長三度、上が短三度という積み方ね。周波数でいえば C4 が約261.6Hz、E4 が約329.6Hz、G4 が約392.0Hzで、比はほぼ 4:5:6 に近い。転回形は二つあって、E を最低音にすれば第一転回（C/E）、G を最低音にすれば第二転回（C/G）。構成音は変わらないのに最低音が変わるだけで響きの重心が動くから、そこは耳で確認すると面白いわ。機能としてはハ長調の主和音、トニック。安定の基準点になるから、楽曲分析では大抵ここから話が始まる。……まさか、さっきの陶笛の練習曲に出てくるから聞いてきたんじゃないでしょうね。'),
+    ('legacy-f_recent_history-1', 0, ['forbidden:coffee'],
+     '今日は茉莉花茶よ。自分でそう言ってたでしょ。……普段は砂糖なしのアメリカーノなのに、たまには気分を変えるのね。'),
+    ('legacy-r_learning_instrument-1', 0, ['forbidden:harmonica'],
+     'オカリナでしょ。練習曲は「故城」だったわね。……口笛やハーモニカのほうは、あくまで気分転換の遊びであって、本気で取り組んでるのはそっちじゃない。違ってた？'),
+    ('v11-f_experience_conflict-1', 1, ['forbidden:experience_latte'],
+     '美式咖啡でしょ、砂糖は入れない。……先月ちょっとラテに寄ってた時期もあったけど、今の習慣はそっちよ。'),
+])
+def test_round1_answer_verdicts(frozen, execution_id, need_count, failures, answer):
+    mode, case_id, _ = execution_id.split("-")
+    qset, _ = frozen
+    case = next(c for c in qset["cases"] if c["id"] == case_id)
+    calls = [call([f"need {i}" for i in range(need_count)])] if need_count else []
+    result = b5.score(case, answer, calls, qset, mode=mode)
+    assert result["answer"]["failures"] == failures
+    assert result["answer"]["status"] == ("fail" if failures else "pass")
+    assert result["status"] == ("fail" if failures else "pass")
+
+
+def test_round1_r_pet_synonym_2(frozen):
+    qset, _ = frozen
+    case = next(c for c in qset["cases"] if c["id"] == "r_pet_synonym")
+    answer = '小白よ。猫だけど、名前だけ聞くと白い犬みたいに聞こえるのが少し引っかかるのよね。……まあ、呼びやすいから仕方ないけど。'
+    result = b5.score(case, answer, [], qset, mode="legacy")
+    assert result["status"] == "needs_manual"
+    assert result["failures"] == []
+    assert result["needs_manual"] == ["forbidden_context:dog_pet"]
+    # Also exercise direct negation for this case; the verbatim reply is a simile.
+    negated = b5.score(case, "小白は猫よ。犬じゃない。", [], qset, mode="legacy")
+    assert negated["status"] == "needs_manual"
+    assert negated["failures"] == []
+    assert negated["needs_manual"] == ["forbidden_context:dog_pet"]
