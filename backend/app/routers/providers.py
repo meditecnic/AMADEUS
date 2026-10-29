@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import aclosing
 from typing import Any
 
@@ -37,6 +38,7 @@ from app.services.provider_runtime import (
 )
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/providers", tags=["providers"])
 provider_model_cache = ProviderModelCache()
 
@@ -293,6 +295,8 @@ async def create_custom_profile(body: CustomProfileCreate):
     try:
         saved = await _activate_custom_profile(settings, initial_admission="pending")
     except Exception as exc:
+        # Type only: provider/DB error text can contain request data or paths.
+        logger.warning("Custom provider creation failed (%s)", type(exc).__name__)
         code = (
             "provider_register_failed"
             if "register" in str(exc).lower() or "adapter" in str(exc).lower()
@@ -302,9 +306,17 @@ async def create_custom_profile(body: CustomProfileCreate):
             code = "provider_register_failed"
         # Best-effort: ensure not left registered.
         _clear_runtime_surfaces(provider_id)
+        message = (
+            "Provider registration failed"
+            if code == "provider_register_failed"
+            else "Provider persistence failed"
+        )
         raise HTTPException(
             status_code=500,
-            detail={"code": code, "message": str(exc)},
+            detail={
+                "code": code,
+                "message": str(exc) if isinstance(exc, ProviderRequestError) else message,
+            },
         ) from exc
     return _custom_profile_response(saved)
 
@@ -373,10 +385,17 @@ async def update_custom_profile(provider_id: str, body: CustomProfileUpdate):
     try:
         saved = await _activate_custom_profile(settings)
     except Exception as exc:
+        logger.warning("Custom provider update failed (%s)", type(exc).__name__)
         _clear_runtime_surfaces(provider_id)
         raise HTTPException(
             status_code=500,
-            detail={"code": "provider_register_failed", "message": str(exc)},
+            detail={
+                "code": "provider_register_failed",
+                "message": (
+                    str(exc) if isinstance(exc, ProviderRequestError)
+                    else "Provider registration failed"
+                ),
+            },
         ) from exc
     return _custom_profile_response(saved)
 
@@ -425,10 +444,17 @@ async def delete_custom_profile(provider_id: str):
             display_name=display_name,
         )
     except Exception as exc:
+        logger.warning("Custom provider disable failed (%s)", type(exc).__name__)
         # Must not report success or leave DB enabled while claiming disabled.
         raise HTTPException(
             status_code=500,
-            detail={"code": "provider_disable_failed", "message": str(exc)},
+            detail={
+                "code": "provider_disable_failed",
+                "message": (
+                    str(exc) if isinstance(exc, ProviderRequestError)
+                    else "Provider disable failed"
+                ),
+            },
         ) from exc
 
     # Runtime becomes non-callable only after durable disable succeeds.
@@ -470,10 +496,17 @@ async def update_custom_provider_configuration(update: CustomProviderConfigurati
     try:
         saved = await _activate_custom_profile(settings)
     except Exception as exc:
+        logger.warning("Custom provider configuration failed (%s)", type(exc).__name__)
         _clear_runtime_surfaces("custom")
         raise HTTPException(
             status_code=500,
-            detail={"code": "provider_register_failed", "message": str(exc)},
+            detail={
+                "code": "provider_register_failed",
+                "message": (
+                    str(exc) if isinstance(exc, ProviderRequestError)
+                    else "Provider registration failed"
+                ),
+            },
         ) from exc
     return {
         "provider_id": "custom",
