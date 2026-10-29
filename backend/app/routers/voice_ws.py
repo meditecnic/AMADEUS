@@ -90,7 +90,8 @@ async def websocket_voice_endpoint(websocket: WebSocket):
         try:
             text, emotion, confidence = await speech_service.transcribe_pcm(pcm, sample_rate, channels)
         except Exception as exc:
-            await websocket.send_json({"type": "voice.error", "stage": "stt", "message": str(exc), "degraded": True})
+            print(f"[STT Error] ({type(exc).__name__})")
+            await websocket.send_json({"type": "voice.error", "stage": "stt", "message": "Speech recognition failed", "degraded": True})
             return
         if session.erasure_pending or session.history_epoch != transcription_history_epoch:
             await websocket.send_json({'type':'voice.discarded', 'reason':'context_changed'})

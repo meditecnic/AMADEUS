@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable
 import starlette
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app import config
+from app.services.provider_adapters import ProviderRequestError
 from app.services.provider_registry import ProviderSnapshot, ProviderTask
 from app.services.provider_runtime import deepseek_service, provider_registry
 from app.services.model_catalog import ModelUnavailableError, model_catalog
@@ -2300,12 +2301,12 @@ async def processor_loop(
             await segment_pipeline.cancel(reason=None)
         if segment_pipeline is not None and diagnostic_observer is not None:
             diagnostic_observer.turn_error(segment_pipeline.identity, "generation_failed")
-        print(f"[Processor Error] Session {session.session_id}: {e}")
+        print(f"[Processor Error] Session {session.session_id}: {e} ({type(e).__name__})")
         await send_queue.put((epoch, {
             "type": "error",
             "code": "turn_failed",
             "recoverable": True,
-            "message": f"Server error: {str(e)}",
+            "message": f"Server error: {e}" if isinstance(e, ProviderRequestError) else "Server error",
         }))
     finally:
         if (
@@ -2532,7 +2533,8 @@ async def _dispatch_streaming_voice_tts(session: SessionState, final_text: str, 
         except Exception as exc:
             # Broad on purpose: any TTS stream failure degrades this sentence
             # only; the turn continues with the next one.
-            await send_queue.put((epoch, {"type": "voice.audio_degraded", "sentence_id": sentence_id, "reason": str(exc)}))
+            print(f"[Voice TTS Error] ({type(exc).__name__})")
+            await send_queue.put((epoch, {"type": "voice.audio_degraded", "sentence_id": sentence_id, "reason": "service_error"}))
         finally:
             session.active_streams.discard(stream)
     return "".join(delivered)
@@ -2550,8 +2552,8 @@ async def run_tts_pipeline(session: SessionState, text: str, emotion: str, send_
         raise
     except Exception as e:
         # Broad on purpose: debug-only pipeline; report any failure to the client.
-        print(f"[TTS Debug Error] {e}")
-        await send_queue.put((epoch, {"type": "error", "message": f"TTS debug error: {e}"}))
+        print(f"[TTS Debug Error] {e} ({type(e).__name__})")
+        await send_queue.put((epoch, {"type": "error", "message": "TTS debug error"}))
     finally:
         session.is_busy = False
 
@@ -2646,7 +2648,8 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 # Broad on purpose: malformed frames surface as ValueError,
                 # KeyError or RuntimeError depending on the ASGI server; the
                 # reader answers with an error frame and keeps the socket.
-                await send_queue.put((session.current_epoch, {"type": "error", "message": f"数据格式无效: {str(e)}"}))
+                print(f"[Invalid Frame] Session {session.session_id}: ({type(e).__name__})")
+                await send_queue.put((session.current_epoch, {"type": "error", "message": "数据格式无效"}))
                 continue
             
             frame_type = data.get("type")
@@ -3031,7 +3034,8 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 except Exception as e:
                     # Broad on purpose: any storage failure is reported and the
                     # in-memory history is left untouched.
-                    await send_queue.put((session.current_epoch, {"type": "error", "message": f"物理清除历史记录失败: {str(e)}"}))
+                    print(f"[Clear History Error] Session {session.session_id}: ({type(e).__name__})")
+                    await send_queue.put((session.current_epoch, {"type": "error", "message": "物理清除历史记录失败"}))
                     continue
                 
                 session.history = []
@@ -3223,9 +3227,9 @@ async def websocket_chat_endpoint(websocket: WebSocket):
     except Exception as e:
         # Broad on purpose: connection boundary; the finally below must still
         # cancel tasks and release the lease.
-        print(f"[Reader Exception] Session {session_id}: {e}")
+        print(f"[Reader Exception] Session {session_id}: {e} ({type(e).__name__})")
         try:
-            await send_queue.put((session.current_epoch, {"type": "error", "message": f"Server error: {str(e)}"}))
+            await send_queue.put((session.current_epoch, {"type": "error", "message": "Server error"}))
         except Exception as notify_exc:
             # Swallowed on purpose: the connection is already failing; not
             # being able to queue the last error frame must not skip cleanup.
