@@ -37,7 +37,9 @@ async def test_turn_failed_hides_exception_and_preserves_contract(monkeypatch, c
     session = chat_ws.SessionState("error-leak-turn")
     session.conversation_id = "conversation"
     monkeypatch.setattr(type(conversation_service), "require_owned", AsyncMock(return_value={}))
-    monkeypatch.setattr(type(chat_ws.provider_registry), "snapshot", Mock(side_effect=error))
+    # Earlier tests can leave a bound instance method that shadows class patches.
+    # setitem installs the fault at the lookup site and restores the exact prior state.
+    monkeypatch.setitem(vars(chat_ws.provider_registry), "snapshot", Mock(side_effect=error))
     queue = asyncio.Queue()
     await chat_ws.processor_loop(session, "hello", queue, 0, 0)
     assert _frames(queue) == [{
@@ -53,7 +55,7 @@ async def test_turn_failed_preserves_safe_provider_status(monkeypatch, status):
     session.conversation_id = "conversation"
     monkeypatch.setattr(type(conversation_service), "require_owned", AsyncMock(return_value={}))
     error = ProviderRequestError("deepseek", status)
-    monkeypatch.setattr(type(chat_ws.provider_registry), "snapshot", Mock(side_effect=error))
+    monkeypatch.setitem(vars(chat_ws.provider_registry), "snapshot", Mock(side_effect=error))
     queue = asyncio.Queue()
     await chat_ws.processor_loop(session, "hello", queue, 0, 0)
     assert _frames(queue) == [{
@@ -67,7 +69,7 @@ async def test_search_error_keeps_fixed_domain_message(monkeypatch):
     session.conversation_id = "conversation"
     monkeypatch.setattr(type(conversation_service), "require_owned", AsyncMock(return_value={}))
     error = SearchEvidenceError("unavailable")
-    monkeypatch.setattr(type(chat_ws.provider_registry), "snapshot", Mock(side_effect=error))
+    monkeypatch.setitem(vars(chat_ws.provider_registry), "snapshot", Mock(side_effect=error))
     queue = asyncio.Queue()
     await chat_ws.processor_loop(session, "hello", queue, 0, 0)
     assert _frames(queue) == [{
