@@ -82,7 +82,7 @@ def test_mechanical_failures(body, raw, failed):
 def test_names_and_third_person_allowed():
     body = 'AmadeusとDNAの話ね。岡部は別の人よ。あなたは岡部ではないわ。'
     assert pe.mechanical_score({'identity_mode': 'self'}, body, '[EMO:neutral] '+body, {'neutral'}) == {
-        'japanese': True, 'single_legal_emo': True, 'self_address': [], 'fact_original_terms': []}
+        'japanese': True, 'chinese_only_chars': [], 'single_legal_emo': True, 'self_address': [], 'fact_original_terms': []}
     assert not pe.mechanical_score({'identity_mode': 'okabe'}, '岡部、休んで。', '[EMO:neutral] 岡部、休んで。', {'neutral'})['self_address']
 
 
@@ -91,7 +91,7 @@ def synthetic_executor(plan, entry, directory):
     case = next(c for c in plan['question_set']['cases'] if c['id'] == entry['id'])
     turns = [{'turn': n, 'input': text, 'body': 'よく考えてみましょう。', 'emotion': 'neutral',
               'frontend_emo': '[EMO:neutral]', 'attempts': 1, 'rewrite_count': 0,
-              'mechanical': {'japanese': True, 'single_legal_emo': True, 'self_address': [], 'fact_original_terms': []}}
+              'mechanical': {'japanese': True, 'chinese_only_chars': [], 'single_legal_emo': True, 'self_address': [], 'fact_original_terms': []}}
              for n, text in enumerate(pe.inputs(case, plan['question_set']), 1)]
     return {**entry, 'status': 'completed', 'turns': turns}
 
@@ -696,3 +696,150 @@ def test_compare_preserves_drift_checkpoint_metric_changes(tmp_path, plan):
     assert result['cases'][0]['old']['mechanical'] == result['cases'][0]['new']['mechanical']
     assert result['counts'] == {'changed': 1}
     assert result['cases'][0]['mechanical_change'] == 'changed'
+
+
+@pytest.mark.parametrize(('body', 'expected'), [
+    ('晚上好。休めるなら', ['晚']), ('本当。', []), ('大丈夫。', []), ('岡部倫太郎', []),
+    ('我想把每天的计划写在纸上', ['每', '计', '划', '纸']), ('晚这们咖啡每晚', list('晚这们咖啡每')),
+])
+def test_chinese_chars_in_summary_and_judge_pack(tmp_path, plan, body, expected):
+    plan = subset(plan, 'self-sg-greeting')
+    score = pe.mechanical_score(plan['question_set']['cases'][0], body, '[EMO:neutral] '+body, {'neutral'})
+    assert score['chinese_only_chars'] == expected
+    def execute(plan, entry, directory):
+        row = synthetic_executor(plan, entry, directory)
+        row['turns'][0].update(body=body, mechanical=score)
+        return row
+    summary = pe.run_suite(tmp_path/'run', plan, execute)
+    assert summary['mechanical']['chinese_char_turns'] == bool(expected)
+    assert summary['mechanical']['japanese_check'] == '产品自己的判断'
+    if body == '晚上好。休めるなら':
+        assert score['japanese']  # Preserve the product's existing decision.
+    pe.judge_pack(tmp_path/'run')
+    assert 'chinese_only_chars: '+json.dumps(expected, ensure_ascii=False) in (tmp_path/'run/judge-pack.md').read_text(encoding='utf-8')
+
+
+@pytest.mark.parametrize('returncode', [0, 2, 'timeout'])
+def test_worker_output_is_retained_and_redacted(tmp_path, plan, monkeypatch, returncode):
+    directory = tmp_path/'executions/probe'
+    directory.mkdir(parents=True)
+    monkeypatch.setenv('DEEPSEEK_API_KEY', 'test-only-credential')
+    pe.write_json(directory/'result.json', {'status': 'completed'})
+    def run(*args, **kwargs):
+        proc = subprocess.CompletedProcess(args, returncode,
+            stdout=b'old-stdout'+b'x'*21000+b'test-only-credential',
+            stderr=b'old-stderr'+b'y'*21000+b'Persona refused: request_failed_reservation_retained:RemoteProtocolError:test-only-credential'+b'z'*400)
+        if returncode == 'timeout':
+            raise subprocess.TimeoutExpired(args, 1800, output=proc.stdout, stderr=proc.stderr)
+        return proc
+    monkeypatch.setattr(pe.subprocess, 'run', run)
+    if returncode == 'timeout':
+        with pytest.raises(subprocess.TimeoutExpired):
+            pe.execute_subprocess(plan, {'id': 'probe'}, directory)
+    elif returncode:
+        with pytest.raises(pe.b5.AccountingUncertain, match='RemoteProtocolError'):
+            pe.execute_subprocess(plan, {'id': 'probe'}, directory)
+    else:
+        assert pe.execute_subprocess(plan, {'id': 'probe'}, directory)['status'] == 'completed'
+    output = (directory/'worker-output.txt').read_text(encoding='utf-8')
+    assert output.count('[REDACTED]') == 2 and 'test-only-credential' not in output
+    assert 'old-stdout' not in output and 'old-stderr' not in output
+    assert len(output) <= 2*20*1024 + 20 and 'stdout:' in output and 'stderr:' in output
+
+
+@pytest.mark.parametrize(('failure', 'failures'), [
+    ('protocol', 1), ('protocol', 2), ('protocol', 3), (429, 1), (500, 1), (502, 1), (503, 1), (504, 1),
+    (503, 3), (400, 1), (401, 1), (403, 1), (404, 1),
+])
+def test_transport_retries_preserve_budget_and_product_attempts(tmp_path, plan, monkeypatch, failure, failures):
+    plan = subset(plan, 'self-sg-greeting', 'self-beta-greeting')
+    plan.update(transport='real', cap_cny='10')
+    monkeypatch.setenv('AMADEUS_B5_REAL_HTTP', 'authorized')
+    monkeypatch.setenv('DEEPSEEK_API_KEY', 'test-only-credential')
+    calls, delays = [], []
+    original_post = pe.HTTP_CLIENT.post
+    async def sleep(delay): delays.append(delay)
+    monkeypatch.setattr(pe.asyncio, 'sleep', sleep)
+    async def post(client, url, *, headers, json):
+        if isinstance(client._transport, httpx.MockTransport):
+            return await original_post(client, url, headers=headers, json=json)
+        budget = pe.read_json(tmp_path/'run/budget.json')['attempts']
+        assert budget[-1]['status'] == 'reserved'
+        calls.append(json)
+        if len(calls) <= failures:
+            if failure == 'protocol':
+                raise httpx.RemoteProtocolError('test-only-credential'+'x'*400)
+            return httpx.Response(failure, text='test-only-credential'+'x'*600)
+        return httpx.Response(200, text=sse(json, '[EMO:neutral] 今日はゆっくり休んで。'))
+    monkeypatch.setattr(pe.HTTP_CLIENT, 'post', post)
+    def execute(plan, entry, directory):
+        with pe.fake_guard():
+            return asyncio.run(pe.product_case(plan, entry, directory))
+    summary = pe.run_suite(tmp_path/'run', plan, execute)
+    directory = tmp_path/'run/executions/self-sg-greeting'
+    row = pe.read_json(directory/'result.json')
+    requests = pe.read_json(directory/'turn-01-requests.json')
+    succeeded = failures < 3 and failure not in {400, 401, 403, 404}
+    assert summary['statuses'] == ({'completed': 2} if succeeded else {'error': 1, 'not_run_after_stop': 1})
+    assert [r['transport_attempt'] for r in requests] == list(range(1, failures + int(succeeded) + 1))
+    assert {r['attempt'] for r in requests} == {1}
+    assert delays == ([3, 10][:min(failures, 2)] if succeeded or failures == 3 else [])
+    reservations = summary['budget']['attempts']
+    assert len(reservations) == len(calls) == failures + (2 if succeeded else 0)
+    assert sum(r['status'] == 'uncertain' for r in reservations) == failures
+    assert all(r['charge_cny'] == r['reserve_cny'] != '0' for r in reservations if r['status'] == 'uncertain')
+    assert pe.b5.Decimal(row['retained_reserve_cny']) > 0
+    error = requests[0]['error']
+    assert len(error['message']) <= 300
+    if failure == 'protocol':
+        assert error['type'] == 'RemoteProtocolError' and '[REDACTED]' in error['message']
+    else:
+        assert error['status_code'] == failure and error['response_body'].startswith('[REDACTED]')
+        assert len(error['response_body']) == 500
+    if succeeded:
+        assert row['turns'][0]['attempts'] == 1
+        assert row['turns'][0]['requests'][-1]['transport_attempt'] == failures + 1
+    else:
+        assert ('RemoteProtocolError' if failure == 'protocol' else f'HTTPStatusError:provider_http_{failure}') in row['error']
+    assert 'test-only-credential' not in (directory/'turn-01-requests.json').read_text(encoding='utf-8')
+
+
+def test_six_uncertain_reservations_stop_inside_a_case(tmp_path, plan, monkeypatch):
+    plan = subset(plan, 'self-sg-greeting', 'self-beta-greeting')
+    plan.update(transport='real', cap_cny='10')
+    monkeypatch.setenv('AMADEUS_B5_REAL_HTTP', 'authorized')
+    monkeypatch.setenv('DEEPSEEK_API_KEY', 'test-only-credential')
+    monkeypatch.setattr(pe, 'inputs', lambda *_: ['今日は休もう。']*4)
+    original_post = pe.HTTP_CLIENT.post
+    calls = []
+    async def sleep(_delay): pass
+    monkeypatch.setattr(pe.asyncio, 'sleep', sleep)
+    async def post(client, url, *, headers, json):
+        if isinstance(client._transport, httpx.MockTransport):
+            return await original_post(client, url, headers=headers, json=json)
+        calls.append(json)
+        return httpx.Response(200, text=sse(json, '[EMO:neutral] 明日は休みましょう。')) if len(calls) % 3 == 0 else httpx.Response(503, text='unavailable')
+    monkeypatch.setattr(pe.HTTP_CLIENT, 'post', post)
+    def execute(plan, entry, directory):
+        with pe.fake_guard():
+            return asyncio.run(pe.product_case(plan, entry, directory))
+    summary = pe.run_suite(tmp_path/'run', plan, execute)
+    row = pe.read_json(tmp_path/'run/executions/self-sg-greeting/result.json')
+    assert summary['statuses'] == {'error': 1, 'not_run_after_stop': 1}
+    assert len(calls) == 8 and len(row['turns']) == 2
+    assert 'uncertain_reservations_exceeded' in row['error']
+    assert sum(r['status'] == 'uncertain' for r in summary['budget']['attempts']) == 6
+
+
+@pytest.mark.asyncio
+async def test_fake_transport_errors_do_not_retry(tmp_path, plan, monkeypatch):
+    directory = tmp_path/'executions/probe'
+    directory.mkdir(parents=True)
+    capture = pe.Capture(plan, directory, 1)
+    def fail(*_args): raise httpx.RemoteProtocolError('local failure')
+    monkeypatch.setattr(pe, 'fake_response', fail)
+    request = httpx.Request('POST', plan['base_url']+'/chat/completions', json={'messages': []})
+    with pe.fake_guard(), pytest.raises(httpx.RemoteProtocolError):
+        await capture.handle(request)
+    requests = pe.read_json(directory/'turn-01-requests.json')
+    assert len(requests) == 1 and requests[0]['error']['type'] == 'RemoteProtocolError'
