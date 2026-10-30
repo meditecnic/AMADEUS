@@ -26,8 +26,17 @@ def test_wav_demuxer_handles_split_header_once():
     assert demux.feed(b"5678") == [b"5678"]
 
 
-def test_prompt_budget_preserves_identity_and_current_message():
-    compiler = PromptCompiler(input_budget=800)
+def test_prompt_budget_preserves_identity_and_persona():
+    from app.services.persona_bible import persona_bible
+    from app.services.prompt_compiler import render_persona_examples
+
+    persona = persona_bible.render_prompt("steins_gate", identity_mode="okabe")
+    examples = render_persona_examples("okabe")
+    fixed = PromptCompiler._estimate_tokens(
+        "\n\n".join(["IDENTITY AND SECURITY\nIMMUTABLE IDENTITY", persona, examples])
+    )
+    # Persona and examples are never cut; everything else must fit in 800 more.
+    compiler = PromptCompiler(input_budget=fixed + 800)
     facts = [RetrievedMemory(id=i, kind="core", content=("fact " + str(i) + " x" * 80), score=1.0) for i in range(30)]
     prompt = compiler.compile(PromptInputs(
         worldline="steins_gate",
@@ -41,8 +50,10 @@ def test_prompt_budget_preserves_identity_and_current_message():
         current_user_message="CURRENT MESSAGE MUST SURVIVE",
     ))
     assert "IMMUTABLE IDENTITY" in prompt
-    assert "CURRENT MESSAGE MUST SURVIVE" in prompt
-    assert compiler.token_counter(prompt) <= 800
+    assert persona in prompt and examples in prompt
+    # The current message is sent as the last chat message, not in the system prompt.
+    assert "CURRENT MESSAGE MUST SURVIVE" not in prompt
+    assert compiler.token_counter(prompt) <= fixed + 800
 
 
 def test_pcm_speech_energy_detection():

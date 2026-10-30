@@ -521,7 +521,7 @@ def test_no_facts_means_no_section_v11_but_legacy_keeps_none():
 
 
 def test_v11_section_order_core_before_state_supplement_after():
-    """[C] identity, persona, CORE FACTS, CURRENT STATE, supplement, episodic."""
+    """[C] identity, persona, examples, CORE FACTS, CURRENT STATE, supplement, episodic."""
     from app.services.memory import RetrievedMemory
 
     supplement = _fake_supplement([("m1", "s1", "紅茶はアールグレイが好き")], need="紅茶は？")
@@ -532,14 +532,17 @@ def test_v11_section_order_core_before_state_supplement_after():
     order = [
         prompt.index("IDENTITY AND SECURITY\n"),
         prompt.index("PERSONA BIBLE"),
+        prompt.index("\n\nPERSONA EXAMPLES\n"),
         prompt.index("\n\nCORE FACTS\n"),
         prompt.index("\n\nCURRENT STATE\n"),
         prompt.index("\n\nMEMORY CANDIDATES\n"),
         prompt.index("\n\nEPISODIC MEMORY\n"),
         prompt.index("\n\nWORKING CONTEXT\n"),
-        prompt.index("\n\nCURRENT USER MESSAGE (authoritative)\n"),
     ]
     assert order == sorted(order)
+    # The current message travels only as the last chat message.
+    assert "CURRENT USER MESSAGE" not in prompt
+    assert "RECENT DIALOGUE" not in prompt
 
 
 def _fake_supplement(items: list[tuple[str, str, str]], *, need: str) -> MemorySupplement:

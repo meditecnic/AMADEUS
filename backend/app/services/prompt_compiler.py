@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import re
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any, Callable, Iterable, Sequence
 
-from app.db import DEFAULT_IDENTITY_MODE, normalize_identity_mode
+from app import config
+from app.db import DEFAULT_IDENTITY_MODE, IDENTITY_MODES, normalize_identity_mode
+from app.services.llm_interface import TAIL_REMINDER_HEADER
 from app.services.memory import RetrievedMemory
 from app.services.persona_bible import persona_bible
 from app.services.soul_engine import EmotionVector, soul_engine
@@ -141,6 +145,63 @@ def resident_fact_rule(*, complete: bool, tool_capable: bool) -> str:
     )
 
 
+@lru_cache(maxsize=1)
+def _persona_examples() -> dict[str, tuple[tuple[str, str], ...]]:
+    payload = json.loads((config.PROMPTS_DIR / "kurisu_fewshot.json").read_text(encoding="utf-8"))
+    if set(payload) != set(IDENTITY_MODES):
+        raise ValueError(f"persona examples must define exactly {sorted(IDENTITY_MODES)}")
+    return {
+        mode: tuple((str(row["user"]), str(row["assistant"])) for row in rows)
+        for mode, rows in payload.items()
+    }
+
+
+def render_persona_examples(identity_mode: str) -> str:
+    """Tone examples for one identity mode, fenced off from the real dialogue."""
+    lines = [
+        "PERSONA EXAMPLES",
+        "<examples>",
+        "以下は口調だけを示す作例で、実際の会話ではない。ここに出てくる出来事・話題・相手の発言を"
+        "本当の会話履歴や記憶として扱わず、文面をそのまま繰り返さない。",
+    ]
+    for user, assistant in _persona_examples()[normalize_identity_mode(identity_mode)]:
+        lines.extend(["<example>", f"ユーザー: {user}", f"紅莉栖: {assistant}", "</example>"])
+    lines.append("</examples>")
+    return "\n".join(lines)
+
+
+def render_tail_reminder(identity_mode: str | None, self_name: str = "") -> str:
+    """Short Japanese reminder sent after the last user message (never stored)."""
+    if normalize_identity_mode(identity_mode) == "self":
+        call_name = sanitize_self_name(self_name)
+        address = (
+            f"相手はこの製品を使う現実の利用者。呼ぶ時は『{call_name}』。"
+            if call_name
+            else "相手はこの製品を使う現実の利用者。呼ぶ時は『あなた』など中立で丁寧な言い方にする。"
+        ) + "原作の登場人物の名前やあだ名では呼ばない。"
+    else:
+        address = "相手は岡部として扱い、普段は『岡部』か『あんた』と呼ぶ。"
+    allowed = "|".join(persona_bible.emotion_tones)
+    return "\n".join([
+        TAIL_REMINDER_HEADER,
+        "- ユーザー入力の言語に関係なく、表示本文は必ず自然な日本語のみ。"
+        "中国語・英語・ドイツ語などの本文で返事しない。固有名詞以外は日本語で話す。"
+        "中国語字幕は翻訳層が別途生成する。",
+        f"- 返答の先頭に [EMO:{allowed}] のどれか一つだけを置く。",
+        f"- 呼び方：{address}",
+        "- ユーザーについての事実が中国語で書かれていても、話す時は日本語の言い方に直す"
+        "（例：「土豆」→「じゃがいも」）。中国語の語をそのまま本文に混ぜない。",
+    ])
+
+
+# Kanji, kana and full-width punctuation cost about one token per character;
+# everything else is estimated at four characters per token.
+_CJK_TOKEN_RE = re.compile(
+    "[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\u31f0-\u31ff\u3400-\u4dbf"
+    "\u4e00-\u9fff\uf900-\ufaff\uff00-\uffef\U00020000-\U000323af]"
+)
+
+
 def _timestamp(value: Any) -> float | None:
     text = str(value or "").strip()
     if not text:
@@ -240,6 +301,8 @@ class CompiledPrompt:
 class PromptInputs:
     worldline: str
     base_identity: str
+    # Not rendered: the emotion vector, recent history and the current message
+    # are kept for callers; history and the message travel only as messages.
     emotion: EmotionVector
     core_facts: list[RetrievedMemory]
     episodic: list[RetrievedMemory]
@@ -262,7 +325,8 @@ class PromptInputs:
 class PromptCompiler:
     BUDGETS = {
         "identity": 1500,
-        "persona": 1200,
+        "persona": 3200,
+        "examples": 1000,
         "state": 500,
         "core": 1200,
         "episodic": 1600,
@@ -276,12 +340,12 @@ class PromptCompiler:
     SECTION_ORDER = (
         "identity",
         "persona",
+        "examples",
         "state",
         "core",
         "episodic",
         "web",
         "history",
-        "current",
     )
 
     def __init__(self, token_counter: Callable[[str], int] | None = None, input_budget: int = 12000):
@@ -294,13 +358,13 @@ class PromptCompiler:
     V11_SECTION_ORDER = (
         "identity",
         "persona",
+        "examples",
         "core",
         "state",
         "supplement",
         "episodic",
         "web",
         "history",
-        "current",
     )
 
     def compile(self, inputs: PromptInputs) -> str:
@@ -309,7 +373,7 @@ class PromptCompiler:
     def compile_with_report(self, inputs: PromptInputs) -> CompiledPrompt:
         profile = soul_engine.profile(inputs.worldline)
         mode = normalize_identity_mode(inputs.identity_mode)
-        state_section = f"CURRENT STATE\nworldline={profile.worldline}; identity_mode={mode}; memory_anchor_year={persona_bible.memory_anchor.year}; memory_anchor_age={persona_bible.memory_anchor.age}; emotion={inputs.emotion.model_dump_json()}"
+        state_section = f"CURRENT STATE\nworldline={profile.worldline}; identity_mode={mode}; memory_anchor_year={persona_bible.memory_anchor.year}; memory_anchor_age={persona_bible.memory_anchor.age}"
         # Slice B: self-only call name, appended to the state section (the
         # state section's budget handling is unchanged). Data, not instruction;
         # okabe conversations never receive it. Defense in depth: re-sanitized here.
@@ -371,11 +435,10 @@ class PromptCompiler:
         def render() -> dict[str, str]:
             rendered = {
                 "identity": self._fit("IDENTITY AND SECURITY\n" + inputs.base_identity, self.BUDGETS["identity"], keep_tail=False),
-                "persona": self._fit(
-                    persona_bible.render_prompt(profile.worldline, identity_mode=mode),
-                    self.BUDGETS["persona"],
-                    keep_tail=False,
-                ),
+                # Never cut at runtime; tests keep the longest mode x worldline
+                # combination inside BUDGETS["persona"] / ["examples"].
+                "persona": persona_bible.render_prompt(profile.worldline, identity_mode=mode),
+                "examples": render_persona_examples(mode),
                 "state": self._fit(state_section, self.BUDGETS["state"]),
                 # Whole-item memory sections: never char-slice core facts or
                 # experiences; drop lowest-ranked tail items instead.
@@ -389,16 +452,10 @@ class PromptCompiler:
                     "Temporary conversation continuity only. Not durable user-fact "
                     "or long-term episodic authority. Must not override or resurrect "
                     "CORE FACTS / EPISODIC MEMORY.\n"
-                    + inputs.working_summary
-                    + "\nRECENT DIALOGUE\n"
-                    + "\n".join(
-                        f"{row['role']}: {row['content']}"
-                        for row in inputs.recent_history
-                    ),
+                    + inputs.working_summary,
                     self.BUDGETS["history"],
                     keep_tail=True,
                 ),
-                "current": "CURRENT USER MESSAGE (authoritative)\n" + inputs.current_user_message,
             }
             if supplement_result is not None:
                 rendered["supplement"] = self._render_supplement(supplement_result, supplement_items)
@@ -416,8 +473,8 @@ class PromptCompiler:
             # Empty sections still count their separators, exactly as before.
             return self.token_counter("\n\n".join(sections[name] for name in order)) > self.input_budget
 
-        # Drop low-priority context first. Identity/security and the current
-        # message are never removed. Web evidence and history keep the legacy
+        # Drop low-priority context first. Identity/security, persona and
+        # examples are never removed. Web evidence and history keep the legacy
         # char-slice degradation; memory sections shrink whole-item only.
         for name in ("history", "web"):
             while over_budget() and sections[name]:
@@ -458,9 +515,8 @@ class PromptCompiler:
                 sections["core"] = ""
                 continue
             break
-        for name in ("state", "persona"):
-            while over_budget() and len(sections[name]) > 120:
-                sections[name] = sections[name][: max(120, len(sections[name]) * 4 // 5)]
+        while over_budget() and len(sections["state"]) > 120:
+            sections["state"] = sections["state"][: max(120, len(sections["state"]) * 4 // 5)]
         text = "\n\n".join(sections[name] for name in order if sections[name].strip())
         if not v11:
             return CompiledPrompt(text=text)
@@ -626,12 +682,24 @@ class PromptCompiler:
     def _fit(self, text: str, budget: int, keep_tail: bool = True) -> str:
         if self.token_counter(text) <= budget:
             return text
-        chars = max(64, budget * 3)
-        return text[-chars:] if keep_tail else text[:chars]
+
+        def piece(length: int) -> str:
+            return text[len(text) - length:] if keep_tail else text[:length]
+
+        # Longest head/tail within budget; the counter grows with length.
+        low, high = 0, len(text)
+        while low < high:
+            middle = (low + high + 1) // 2
+            if self.token_counter(piece(middle)) <= budget:
+                low = middle
+            else:
+                high = middle - 1
+        return piece(max(low, min(64, len(text))))
 
     @staticmethod
     def _estimate_tokens(text: str) -> int:
-        return max(1, (len(text) + 2) // 3)
+        cjk = len(_CJK_TOKEN_RE.findall(text))
+        return max(1, cjk + (len(text) - cjk + 3) // 4)
 
 prompt_compiler = PromptCompiler()
 

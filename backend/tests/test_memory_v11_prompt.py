@@ -454,10 +454,13 @@ async def test_r5_final_prompt_experience_whole_item_under_global_pressure(
         "token_counter",
         lambda text: int(real_counter(text) * 1.5),
     )
-    monkeypatch.setattr(pc_module.prompt_compiler, "input_budget", 2400)
+    # Persona and examples are never cut, so the budget leaves room for a
+    # few whole experiences, fewer than the episodic section alone allows.
+    monkeypatch.setattr(pc_module.prompt_compiler, "input_budget", 6000)
 
     prompt = await compile_for_session(_session_obj(session_id), "秋葉原")
     survivors = [marker for marker, _ in seeded if marker in prompt]
+    assert 0 < len(survivors) < len(seeded)
     for marker, text in seeded:
         assert marker not in prompt or text in prompt, (
             f"{marker}: experience marker present but content partial/truncated"
@@ -496,10 +499,11 @@ async def test_r5_final_prompt_core_facts_whole_item_under_global_pressure(
         "token_counter",
         lambda text: int(real_counter(text) * 1.5),
     )
-    monkeypatch.setattr(pc_module.prompt_compiler, "input_budget", 2400)
+    monkeypatch.setattr(pc_module.prompt_compiler, "input_budget", 6000)
 
     prompt = await compile_for_session(_session_obj(session_id), "このすば")
     survivors = [marker for marker, _ in seeded if marker in prompt]
+    assert 0 < len(survivors) < len(seeded)
     for marker, text in seeded:
         assert marker not in prompt or text in prompt, (
             f"{marker}: stable fact marker present but content partial/truncated"
