@@ -2055,6 +2055,7 @@ def _start_backend_locked(
         backend_port=backend_port,
         frontend_port=frontend_port,
     )
+    env["AMADEUS_LOCAL_API_TOKEN"] = b2.new_local_api_token(run_root, backend_port)
     env["AMADEUS_B3_TRANSPORT"] = transport
     if transport == "real":
         env["AMADEUS_B3_REAL_HTTP"] = REAL_HTTP_AUTHORIZED_VALUE
@@ -2154,7 +2155,7 @@ def _start_backend_locked(
                 )
                 raise RuntimeError(log_text or f"backend exit {backend.returncode}")
             try:
-                with urllib.request.urlopen(health, timeout=2) as response:
+                with urllib.request.urlopen(b2.local_api_request(health), timeout=2) as response:
                     body = response.read().decode("utf-8", "replace")
                     if response.status == 200 and '"ok"' in body:
                         break
@@ -2205,7 +2206,7 @@ def _http_json(
     timeout: float = 15.0,
 ) -> tuple[int, Any]:
     data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    request = urllib.request.Request(
+    request = b2.local_api_request(
         url,
         data=data,
         method=method,
@@ -2244,7 +2245,8 @@ async def _ws_session_b3(
     import websockets
 
     uri = f"ws://127.0.0.1:{backend_port}/ws/chat?session_id={session_id}"
-    ws = await websockets.connect(uri, origin='http://127.0.0.1:1420', open_timeout=10)
+    ws = await websockets.connect(uri, origin='http://127.0.0.1:1420', open_timeout=10,
+                                  subprotocols=b2.local_api_subprotocols(backend_port))
     auth: dict[str, Any] = {
         "type": "auth",
         "conversation_mode": "history" if conversation_id else "draft",
@@ -2433,6 +2435,7 @@ def cmd_verify_local(args: argparse.Namespace) -> None:
     if pids.get("transport") != "local":
         b2._fail("wrong_transport", "verify-local requires start-local")
     backend_port = int(pids["backend_port"])
+    b2.load_local_api_token(run_root, backend_port)
     candidate = Path(pids["candidate"])
     session_id = args.session_id or "b3-verify-owner"
     chat_log = paths["captures"] / "provider_chat.jsonl"
@@ -2823,6 +2826,7 @@ def cmd_catalog_check(args: argparse.Namespace) -> None:
     if pids.get("transport") != "real":
         b2._fail("wrong_transport", "catalog-check requires start-real")
     backend_port = int(pids["backend_port"])
+    b2.load_local_api_token(run_root, backend_port)
     before = _read_budget(paths)
     status, body = _http_json(
         "GET",
@@ -2895,6 +2899,7 @@ def cmd_verify_real(args: argparse.Namespace) -> None:
     if pids.get("transport") != "real":
         b2._fail("wrong_transport", "verify-real requires start-real")
     backend_port = int(pids["backend_port"])
+    b2.load_local_api_token(run_root, backend_port)
     candidate = Path(pids["candidate"])
     session_id = args.session_id or "b3-real-owner"
     turn_timeout = 120.0
@@ -3302,6 +3307,7 @@ def cmd_final_turn(args: argparse.Namespace) -> None:
     if pids.get("transport") != "real":
         b2._fail("wrong_transport", "final-turn requires start-real")
     backend_port = int(pids["backend_port"])
+    b2.load_local_api_token(run_root, backend_port)
     candidate = Path(pids["candidate"])
     session_id = args.session_id or DEFAULT_REAL_SESSION_ID
     conversation_id = args.conversation_id or AFTER_FORGET_CONVERSATION_ID
@@ -3509,6 +3515,7 @@ def cmd_prove_boundaries(args: argparse.Namespace) -> None:
     paths = b2.run_paths(run_root)
     pids = b2._read_json(paths["pids"])
     backend_port = int(pids["backend_port"])
+    b2.load_local_api_token(run_root, backend_port)
     session_id = args.session_id or "b3-boundary-owner"
     before_budget = _read_budget(paths)
     before_mock = _mock_rows(paths)

@@ -32,9 +32,10 @@ class MockWebSocket:
         self.accepted = False
         self.closed = False
         self.headers = Headers({"origin": "http://localhost"})
+        self.scope = {"subprotocols": []}
         self.sent_messages = []
 
-    async def accept(self):
+    async def accept(self, subprotocol=None):
         self.accepted = True
 
     async def receive_json(self):

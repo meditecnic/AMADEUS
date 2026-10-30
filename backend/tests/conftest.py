@@ -58,6 +58,7 @@ _CLEARED_PATH_ENV_KEYS = (
 # start and before every test). A test may still set its own fake value with
 # monkeypatch; that takes effect normally.
 _CLEARED_SECRET_ENV_KEYS = (
+    "AMADEUS_LOCAL_API_TOKEN",  # optional local transport authentication
     "DEEPSEEK_API_KEY",  # app/config.py
     "TAVILY_API_KEY",  # app/services/search.py env fallback
     "FIRECRAWL_API_KEY",  # app/services/search.py env fallback

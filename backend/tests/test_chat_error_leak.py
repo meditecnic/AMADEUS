@@ -116,7 +116,7 @@ async def test_malformed_frame_hides_exception_and_reader_survives(monkeypatch, 
 
     websocket = SimpleNamespace(
         query_params={"session_id": f"invalid-frame-{uuid4()}"},
-        headers=Headers({"origin": "http://localhost"}), accept=AsyncMock(),
+        headers=Headers({"origin": "http://localhost"}), accept=AsyncMock(), scope={"subprotocols": []},
         receive_json=AsyncMock(side_effect=[RuntimeError(SECRET), {"type": "ping"}, WebSocketDisconnect()]),
     )
     monkeypatch.setattr(chat_ws.asyncio, "Queue", RecordingQueue)
@@ -140,7 +140,7 @@ async def test_reader_boundary_hides_exception(monkeypatch, capsys):
     bad_frame.get.side_effect = RuntimeError(SECRET)
     websocket = SimpleNamespace(
         query_params={"session_id": f"reader-error-{uuid4()}"},
-        headers=Headers({"origin": "http://localhost"}), accept=AsyncMock(),
+        headers=Headers({"origin": "http://localhost"}), accept=AsyncMock(), scope={"subprotocols": []},
         receive_json=AsyncMock(return_value=bad_frame),
     )
     monkeypatch.setattr(chat_ws.asyncio, "Queue", RecordingQueue)

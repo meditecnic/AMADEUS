@@ -1,4 +1,5 @@
 """Local browser origins and opt-in remote sidecar addresses."""
+import hmac
 import ipaddress
 import os
 
@@ -8,6 +9,36 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app import config
+
+
+# Consume the launcher secret before lifespan starts any child processes.
+LOCAL_API_TOKEN = os.environ.pop('AMADEUS_LOCAL_API_TOKEN', '').encode('utf-8')
+LOCAL_WS_PROTOCOL = 'amadeus.local.v1'
+
+
+class LocalAPITokenMiddleware:
+    """Authenticate local HTTP requests before routing or reading the body."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope['type'] == 'http' and LOCAL_API_TOKEN:
+            asset_read = (scope['method'] in {'GET', 'HEAD'}
+                          and scope['path'].startswith('/api/asset-pack/'))
+            if not asset_read:
+                authorization = [value for name, value in scope['headers']
+                                 if name.lower() == b'authorization']
+                if (len(authorization) != 1
+                        or not authorization[0].startswith(b'Bearer ')
+                        or not hmac.compare_digest(authorization[0][7:], LOCAL_API_TOKEN)):
+                    response = JSONResponse(
+                        {'detail': {'code': 'local_auth_required'}}, status_code=401,
+                        headers={'WWW-Authenticate': 'Bearer'},
+                    )
+                    await response(scope, receive, send)
+                    return
+        await self.app(scope, receive, send)
 
 
 LOCAL_ORIGINS = frozenset({
@@ -43,11 +74,18 @@ def _enabled(name: str) -> bool:
 
 async def accept_local_websocket(websocket: WebSocket) -> bool:
     """Complete the proxy handshake, then reject before session side effects."""
-    await websocket.accept()
+    protocols = websocket.scope.get('subprotocols', [])
+    await websocket.accept(subprotocol=LOCAL_WS_PROTOCOL if LOCAL_WS_PROTOCOL in protocols else None)
     origins = websocket.headers.getlist('origin')
     if (len(origins) == 1 and origins[0] in LOCAL_ORIGINS) or (
         not origins and _enabled('AMADEUS_ALLOW_MISSING_WS_ORIGIN')
     ):
+        if LOCAL_API_TOKEN and (LOCAL_WS_PROTOCOL not in protocols or not any(
+            hmac.compare_digest(protocol.encode('utf-8'), b'amadeus.token.' + LOCAL_API_TOKEN)
+            for protocol in protocols
+        )):
+            await websocket.close(code=4401, reason='local auth required')
+            return False
         return True
     await websocket.close(code=4403, reason='origin not allowed')
     return False

@@ -9,6 +9,7 @@ from ctypes import wintypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
+import secrets
 from pathlib import Path
 import socket
 import sqlite3
@@ -17,6 +18,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 
 USER_TEXT = "这是冻结包的本地验收消息。"
@@ -170,7 +172,7 @@ def fake_service(log_path: Path, port: int = 0, *, sentinel: bool = False):
         write_json(log_path, requests)
 
 
-def wait_health(process: subprocess.Popen, port: int, tracked: set[int], timeout: float) -> float:
+def wait_health(process: subprocess.Popen, port: int, tracked: set[int], timeout: float, token: str) -> float:
     started = time.monotonic()
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     while time.monotonic() - started < timeout:
@@ -178,7 +180,9 @@ def wait_health(process: subprocess.Popen, port: int, tracked: set[int], timeout
         if process.poll() is not None:
             raise RuntimeError(f"backend exited before health: {process.returncode}")
         try:
-            with opener.open(f"http://127.0.0.1:{port}/health", timeout=0.5) as response:
+            request = urllib.request.Request(f"http://127.0.0.1:{port}/health",
+                                             headers={"Authorization": f"Bearer {token}"})
+            with opener.open(request, timeout=0.5) as response:
                 if response.status == 200 and json.load(response).get("status") == "ok":
                     return time.monotonic() - started
         except (OSError, ValueError):
@@ -241,7 +245,7 @@ def verify_listeners(pid: int, port: int) -> list[dict]:
     return listeners
 
 
-async def chat(port: int, events_path: Path) -> list[dict]:
+async def chat(port: int, events_path: Path, token: str) -> list[dict]:
     import websockets
 
     events = []
@@ -249,7 +253,10 @@ async def chat(port: int, events_path: Path) -> list[dict]:
         async with websockets.connect(
             f"ws://127.0.0.1:{port}/ws/chat?session_id=frozen-smoke",
             origin="http://127.0.0.1:1420", proxy=None, open_timeout=10,
+            subprotocols=["amadeus.local.v1", f"amadeus.token.{token}"],
         ) as connection:
+            if connection.subprotocol != "amadeus.local.v1":
+                raise AssertionError("missing local API subprotocol")
             await connection.send(json.dumps({
                 "type": "auth", "protocol_version": 2, "client": "desktop",
                 "conversation_mode": "draft", "provider_id": "custom", "model": "frozen-smoke",
@@ -277,6 +284,31 @@ async def chat(port: int, events_path: Path) -> list[dict]:
     finally:
         write_json(events_path, events)
     return events
+
+
+async def verify_missing_token(port: int) -> None:
+    import websockets
+    from websockets.exceptions import ConnectionClosed
+
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    try:
+        with opener.open(f"http://127.0.0.1:{port}/health", timeout=5):
+            raise AssertionError("HTTP without local token was accepted")
+    except urllib.error.HTTPError as exc:
+        if exc.code != 401 or json.load(exc) != {"detail": {"code": "local_auth_required"}}:
+            raise AssertionError("unexpected local API authentication response") from None
+    for endpoint in ("chat", "voice"):
+        async with websockets.connect(
+            f"ws://127.0.0.1:{port}/ws/{endpoint}",
+            origin="http://127.0.0.1:1420", proxy=None, open_timeout=10,
+        ) as connection:
+            try:
+                await connection.recv()
+            except ConnectionClosed as exc:
+                if exc.code != 4401:
+                    raise AssertionError("unexpected local WS authentication close code") from None
+            else:
+                raise AssertionError("WS without local token was accepted")
 
 
 def verify_history(data: Path) -> list[dict]:
@@ -308,6 +340,8 @@ def run_case(exe: Path, root: Path, provider_port: int, mode: str, timeout: floa
     root.mkdir()
     port = free_port()
     env = clean_environment(root, port, provider_port, memory_mode)
+    token = secrets.token_urlsafe(32)
+    env["AMADEUS_LOCAL_API_TOKEN"] = token
     parent = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"], creationflags=CREATE_NO_WINDOW)
     env["AMADEUS_PARENT_PID"] = str(parent.pid)
     tracked: set[int] = set()
@@ -318,12 +352,13 @@ def run_case(exe: Path, root: Path, provider_port: int, mode: str, timeout: floa
             started = time.monotonic()
             process = subprocess.Popen([str(exe)], cwd=root / "cwd", env=env, stdin=subprocess.PIPE,
                                        stdout=log, stderr=subprocess.STDOUT, creationflags=CREATE_NO_WINDOW)
-            healthy_seconds = wait_health(process, port, tracked, timeout)
+            healthy_seconds = wait_health(process, port, tracked, timeout, token)
             healthy_seconds = time.monotonic() - started
             print(f"HEALTH {mode} {healthy_seconds:.3f}s port={port}", flush=True)
             listeners = verify_listeners(process.pid, port)
             write_json(root / "listeners.json", listeners)
-            events = asyncio.run(chat(port, root / "events.json"))
+            asyncio.run(verify_missing_token(port))
+            events = asyncio.run(chat(port, root / "events.json", token))
             history = verify_history(root / "data")
             write_json(root / "history.json", history)
             update_children(process.pid, tracked)
@@ -351,6 +386,8 @@ def run_case(exe: Path, root: Path, provider_port: int, mode: str, timeout: floa
             raise AssertionError(f"residual processes: {sorted(set(remaining + new_backends))}")
         databases = verify_unlocked(root / "data")
         log_text = (root / "backend.log").read_text(encoding="utf-8")
+        if token in log_text:
+            raise AssertionError("local API token leaked into backend log")
         if "AMADEUS_BACKEND_READY" not in log_text or "Application shutdown complete" not in log_text:
             raise AssertionError("missing ready / graceful shutdown log")
         result = {"mode": mode, "port": port, "memory_mode_env": env.get("AMADEUS_MEMORY_MODE"),
