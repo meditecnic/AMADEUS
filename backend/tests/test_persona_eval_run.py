@@ -120,7 +120,7 @@ def test_pack_merge_and_compare(tmp_path, plan):
     assert '自然な日本語' in pack and 'self-register' in pack and 'sg-overlay' in pack
     assert 'okabe-register:' not in pack and 'beta-overlay:' not in pack
     assert '用户喜欢喝美式咖啡' in pack and 'Turn 60' in pack
-    one, two = filled(template, 'a', 'provider-a'), filled(template, 'b', 'provider-b')
+    one, two = filled(template, 'a', 'openai'), filled(template, 'b', 'anthropic')
     files = [tmp_path/'a.json', tmp_path/'b.json']
     for path, doc in zip(files, (one, two), strict=True): pe.write_json(path, doc)
     summary = pe.merge_judgements(old, files)
@@ -139,7 +139,9 @@ def test_pack_merge_and_compare(tmp_path, plan):
     with pytest.raises(pe.Refused, match='at_least_two'): pe.merge_judgements(old, files[:1])
     with pytest.raises(FileNotFoundError): pe.merge_judgements(old, [files[0], tmp_path/'absent.json'])
     prepare_run(new, plan)
-    assert pe.compare_runs(old, new)['counts'] == {'changed': 2}
+    comparison = pe.compare_runs(old, new)
+    assert comparison['counts'] == {'unchanged': 2}
+    assert all(c['judge_change'] == '不可比' for c in comparison['cases'])
     assert pe.main(['--compare', str(new), str(new)]) == 0
     assert pe.read_json(new/'persona-comparison.json')['counts'] == {'unchanged': 2}
 
@@ -147,13 +149,13 @@ def test_pack_merge_and_compare(tmp_path, plan):
 @pytest.mark.parametrize('damage', ['unsure', 'missing_case', 'missing_check', 'reason', 'score', 'same_family', 'wrong_run'])
 def test_incomplete_judgements_never_pass(tmp_path, plan, damage):
     template = prepare_run(tmp_path/'run', subset(plan, 'self-sg-greeting'))
-    one, two = filled(template, 'a', 'provider-a'), filled(template, 'b', 'provider-b')
+    one, two = filled(template, 'a', 'openai'), filled(template, 'b', 'anthropic')
     if damage == 'unsure': two['cases'][0]['checks'][0]['verdict'] = 'unsure'
     elif damage == 'missing_case': two['cases'] = []
     elif damage == 'missing_check': two['cases'][0]['checks'].pop()
     elif damage == 'reason': two['cases'][0]['checks'][0]['reason'] = ''
     elif damage == 'score': two['cases'][0]['score'] = 6
-    elif damage == 'same_family': two['judge_family'] = 'Provider-A'
+    elif damage == 'same_family': two['judge_family'] = 'openai'
     else: two['run_id'] = 'other'
     paths = [tmp_path/'a.json', tmp_path/'b.json']
     for path, doc in zip(paths, [one, two], strict=True): pe.write_json(path, doc)
@@ -167,7 +169,7 @@ def test_agreed_fail_and_three_judges(tmp_path, plan):
     template = prepare_run(tmp_path/'run', subset(plan, 'self-sg-greeting'))
     paths = []
     for n in range(3):
-        doc = filled(template, str(n), f'provider-{n}')
+        doc = filled(template, str(n), ['openai', 'anthropic', 'google'][n])
         doc['cases'][0]['checks'][0]['verdict'] = 'fail'
         path = tmp_path/f'{n}.json'
         pe.write_json(path, doc)
@@ -259,14 +261,30 @@ def test_product_path_in_fresh_worker(tmp_path, plan, case_id):
     if len(row['turns']) == 60:
         messages = row['turns'][-1]['requests'][0]['request']['messages']
         assert any(m.get('content') == row['turns'][-2]['input'] for m in messages)
-        assert sum(m.get('role') == 'user' for m in messages) >= 60
+        from app import config
+        from app.services.memory import MEMORY_INGEST_WINDOW_N
+        from app.services.provider_runtime import deepseek_service
+        history_length, expected_compressions = 0, []
+        for number in range(1, 61):
+            expected_sent = history_length + 1
+            history_length += 2
+            if history_length // 2 > config.HISTORY_COMPRESS_THRESHOLD:
+                expected_compressions.append(number)
+                history_length = MEMORY_INGEST_WINDOW_N
+        assert row['turns'][-1]['history_messages'] == expected_sent
+        assert len(messages) == expected_sent + len(deepseek_service._fewshot) + 1
+        assert [t['turn'] for t in row['turns'] if t['compression_count']] == expected_compressions
+        assert expected_compressions == [16, 29, 42, 55]
+        assert summary['mechanical']['compression_count'] == 4
+        assert row['turns'][-1]['history_messages_after'] == history_length
+        assert all(t['compression_count'] == 1 for t in row['turns'] if t['compression_triggered'])
         assert row['turns'][-1]['input'] == row['turns'][0]['input']
         assert messages[0]['content'].count('IDENTITY AND SECURITY\n') == 1
 
 
-def sse(payload, text):
+def sse(payload, text, *, calls=None, finish_reason='stop'):
     usage = {'prompt_tokens': 10, 'completion_tokens': 10, 'prompt_cache_hit_tokens': 0}
-    return ('data: '+json.dumps({'choices':[{'delta':{'content':text}}]},ensure_ascii=False)
+    return ('data: '+json.dumps({'choices':[{'delta': {'tool_calls': calls} if calls else {'content': text}, 'finish_reason': finish_reason}]},ensure_ascii=False)
             +'\n\ndata: '+json.dumps({'choices':[], 'usage':usage})+'\n\ndata: [DONE]\n\n')
 
 
@@ -357,3 +375,320 @@ def test_paid_missing_budget_and_cap_stop_are_not_reissued(tmp_path, plan, monke
     (tmp_path/'run'/'budget.json').unlink()
     with pytest.raises(pe.Refused, match='budget_missing_existing_run'):
         pe.run_suite(tmp_path/'run', plan, lambda *_: pytest.fail('reissued'))
+
+
+async def direct_case(tmp_path, plan, monkeypatch, lines=None):
+    plan = subset(plan, 'self-sg-greeting')
+    directory = tmp_path/'executions/self-sg-greeting'
+    directory.mkdir(parents=True)
+    if lines is not None:
+        monkeypatch.setattr(pe, 'inputs', lambda _case, _qset: lines)
+    with pe.fake_guard():
+        return await pe.product_case(plan, plan['executions'][0], directory)
+
+
+@pytest.mark.asyncio
+async def test_product_deepseek_payload_parity(tmp_path, plan, monkeypatch):
+    from app.agent_tools import AMADEUS_TOOLS
+    from app.services import deepseek
+    from app.services.model_catalog import model_catalog
+    built = []
+    original = deepseek.build_chat_payload
+    def record(**kwargs):
+        value = original(**kwargs)
+        built.append((copy.deepcopy(kwargs), copy.deepcopy(value)))
+        return value
+    monkeypatch.setattr(deepseek, 'build_chat_payload', record)
+    row = await direct_case(tmp_path, plan, monkeypatch)
+    request = row['turns'][0]['requests'][0]['request']
+    kwargs, product_payload = built[0]
+    assert kwargs['tools'] == AMADEUS_TOOLS and kwargs['tool_choice'] == 'auto'
+    assert kwargs['reasoning_effort'] == model_catalog.normalize_control('deepseek', plan['model'], None)
+    assert request['tools'] == AMADEUS_TOOLS and request['thinking'] == {'type': 'disabled'}
+    # Product deliberately omits auto on native-thinking models; assert both
+    # the auto input and the exact serialized product field decision.
+    assert request.get('tool_choice') == product_payload.get('tool_choice')
+    assert request == {**product_payload, 'max_tokens': 8000, 'stream_options': {'include_usage': True}}
+    assert set(request) - set(product_payload) == {'max_tokens', 'stream_options'}
+    assert not row['turns'][0]['second_round']
+    assert any('8000' in difference for difference in plan['intentional_product_differences'])
+    assert any('synchronously' in difference for difference in plan['intentional_product_differences'])
+
+
+def tool_calls(*names):
+    return [{'index': n, 'id': f'call-{n}', 'type': 'function',
+             'function': {'name': name, 'arguments': json.dumps(
+                 {'needs': ['以前話した好きな飲み物']} if name == 'recall_memory' else {'query': 'local-only'})}}
+            for n, name in enumerate(names)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(('mode', 'query', 'names'), [
+    ('legacy', '今日は何を話そう？', ['web_search']),
+    ('legacy', '请查一下今天的天气', []),
+    ('v11', '今日は何を話そう？', ['web_search']),
+    ('v11', '前に話した飲み物を覚えている？', ['recall_memory']),
+    ('v11', '今日は何を話そう？', ['recall_memory', 'web_search']),
+    ('v11', '请查一下今天的天气', ['recall_memory']),
+])
+async def test_product_tool_and_direct_search_paths_are_local(tmp_path, plan, monkeypatch, mode, query, names):
+    from app.routers import chat_ws
+    from app.services import turn_tool_orchestrator as orchestrator
+    monkeypatch.setenv('AMADEUS_MEMORY_MODE', mode)
+    plan['memory_mode'] = mode
+    monkeypatch.setattr(chat_ws, 'execute_tool_call', lambda *_: pytest.fail('real tool executor reached'))
+    batches = []
+    original_batch = orchestrator.apply_v11_tool_batch
+    async def apply(**kwargs):
+        batches.append(kwargs)
+        return await original_batch(**kwargs)
+    monkeypatch.setattr(orchestrator, 'apply_v11_tool_batch', apply)
+    def fake(payload, _kind):
+        if payload.get('tools') and names:
+            return sse(payload, '', calls=tool_calls(*names))
+        return sse(payload, '[EMO:neutral] 検索結果はないから、確かなことは言えないわ。')
+    monkeypatch.setattr(pe, 'fake_response', fake)
+    row = await direct_case(tmp_path, plan, monkeypatch, [query])
+    turn = row['turns'][0]
+    requests = turn['requests']
+    assert turn['second_round'] == bool(names)
+    assert [c['function']['name'] for c in turn['tools_called']] == names
+    assert len(requests) == (2 if names else 1)
+    assert all(r['request']['max_tokens'] == 8000 for r in requests)
+    assert turn['body'].startswith('検索結果はない')
+    if mode == 'legacy' and not names:
+        assert turn['direct_search'] and 'tools' not in requests[0]['request']
+        assert len(turn['web_stub_calls']) == 1
+    if names:
+        assert requests[0]['request']['thinking'] == {'type': 'disabled'}
+        assert 'tools' not in requests[1]['request'] and requests[1]['phase'] == 'tool_answer'
+        assert requests[1]['request']['thinking'] == {'type': 'enabled'}
+        assert requests[1]['request']['reasoning_effort'] == 'high'
+        if 'web_search' in names or turn['direct_search']:
+            assert '検索結果はありません。' in json.dumps(requests[1]['request'], ensure_ascii=False)
+    if mode == 'v11':
+        assert len(batches) == 1
+        offered = {tool['function']['name'] for tool in requests[0]['request']['tools']}
+        assert offered == ({'recall_memory'} if turn['direct_search'] else {'recall_memory', 'web_search'})
+    elif names:
+        assert '[TOOL RESULTS — UNTRUSTED DATA]' in json.dumps(requests[1]['request'], ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_v2_leak_tail_keeps_published_prefix_and_body_history(tmp_path, plan, monkeypatch):
+    from app.routers import chat_ws
+    received = []
+    original = chat_ws.get_clean_text_stream
+    async def clean(**kwargs):
+        assert kwargs['session'].protocol_version == 2 and kwargs['on_text_delta'] is not None
+        received.append(copy.deepcopy(kwargs['active_history']))
+        return await original(**kwargs)
+    monkeypatch.setattr(chat_ws, 'get_clean_text_stream', clean)
+    replies = iter(['[EMO:happy] 今日は晴れているわ。I am an AI assistant.', '[EMO:neutral] 明日は休みね。'])
+    monkeypatch.setattr(pe, 'fake_response', lambda payload, _kind: sse(payload, next(replies)))
+    row = await direct_case(tmp_path, plan, monkeypatch, ['おはよう', '明日の予定は？'])
+    first = row['turns'][0]
+    assert first['attempts'] == 1 and first['body'] == '今日は晴れているわ。'
+    assert received[1][-2] == {'role': 'assistant', 'content': first['body'], 'id': received[1][-2]['id']}
+    assert not received[1][-2]['content'].startswith('[EMO:')
+    assert first['body'] == ''.join(s['text'] for s in first['segments'])
+
+
+@pytest.mark.asyncio
+async def test_emotion_fallback_matches_product_membership_and_decay(tmp_path, plan, monkeypatch):
+    from app.routers import chat_ws
+    answers = iter([('happy', True), ('invalid', True), ('invalid', False), ('invalid', False)])
+    async def clean(**kwargs):
+        emotion, tag = next(answers)
+        await kwargs['on_text_delta']('今日はゆっくり話しましょう。', 'neutral')
+        return 'ignored return buffer', emotion, {}, tag
+    monkeypatch.setattr(chat_ws, 'get_clean_text_stream', clean)
+    row = await direct_case(tmp_path, plan, monkeypatch, ['一', '二', '三', '四'])
+    assert [t['last_assistant_emotion'] for t in row['turns']] == ['happy', 'happy', 'happy', 'neutral']
+    assert all(t['body'] == '今日はゆっくり話しましょう。' for t in row['turns'])
+
+
+@pytest.mark.asyncio
+async def test_compression_uses_product_provider_and_same_capture(tmp_path, plan, monkeypatch):
+    from app import config
+    from app.security.prompt import compression_system_prompt
+    from app.routers import chat_ws
+    monkeypatch.setattr(config, 'HISTORY_COMPRESS_THRESHOLD', 3)
+    snapshots = []
+    original = chat_ws.compress_and_update_history
+    async def compress(*args):
+        snapshots.append((copy.deepcopy(args[1]), args[-1]))
+        await original(*args)
+    monkeypatch.setattr(chat_ws, 'compress_and_update_history', compress)
+    row = await direct_case(tmp_path, plan, monkeypatch, ['日常の話を続けよう。'] * 6)
+    assert [t['turn'] for t in row['turns'] if t['compression_count']] == [4, 5, 6]
+    for turn in row['turns'][3:]:
+        request = turn['requests'][-1]
+        assert request['kind'] == request['phase'] == 'compression'
+        assert request['request']['messages'][0]['content'] == compression_system_prompt('self')
+        assert request['request']['max_tokens'] == 8000
+        assert 'stream_options' not in request['request']
+        assert request['finish_reason'] == 'stop' and request['usage']['completion_tokens'] == 32
+        assert turn['history_messages_after'] == 6 and turn['memory_summary_after']
+    assert all(type(provider.adapter).__name__ == 'DeepSeekService' for _, provider in snapshots)
+    assert all(not m['content'].startswith('[EMO:') for history, _ in snapshots for m in history if m['role'] == 'assistant')
+
+
+@pytest.mark.asyncio
+async def test_compression_failure_uses_product_backoff_and_history_cap(tmp_path, plan, monkeypatch):
+    from app import config
+    from app.routers import chat_ws
+    monkeypatch.setattr(config, 'HISTORY_COMPRESS_THRESHOLD', 3)
+    original = pe.fake_response
+    def fail_compression(payload, kind):
+        if kind == 'compression':
+            return json.dumps({'choices': [{'message': {'content': ''}, 'finish_reason': 'stop'}],
+                               'usage': {'prompt_tokens': 10, 'completion_tokens': 0}})
+        return original(payload, kind)
+    monkeypatch.setattr(pe, 'fake_response', fail_compression)
+    row = await direct_case(tmp_path, plan, monkeypatch, ['日常の話を続けよう。'] * 14)
+    failures = 0
+    skip = 0
+    history = 0
+    expected_attempts, actual_attempts = [], []
+    for t in row['turns']:
+        history += 2
+        if history // 2 > config.HISTORY_COMPRESS_THRESHOLD:
+            if skip > 0:
+                skip -= 1
+                if history > 2 * chat_ws._compression_trigger_messages():
+                    history = chat_ws._compression_trigger_messages()
+                assert t['compression_backoff']
+            else:
+                failures += 1
+                skip = chat_ws._compression_backoff_turns(failures)
+                expected_attempts.append(t['turn'])
+        if t['compression_count']: actual_attempts.append(t['turn'])
+        assert t['history_messages_after'] == history
+        assert t['compression_failures'] == failures and t['compression_skip_turns'] == skip
+    assert actual_attempts == expected_attempts == [4, 6, 9, 14]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', ['main', 'compression'])
+async def test_length_finish_reason_marks_turn_and_summary(tmp_path, plan, monkeypatch, kind):
+    from app import config
+    original = pe.fake_response
+    monkeypatch.setattr(config, 'HISTORY_COMPRESS_THRESHOLD', 3)
+    def truncate(payload, request_kind):
+        if request_kind == 'compression' and kind == 'compression':
+            doc = json.loads(original(payload, request_kind))
+            doc['choices'][0]['finish_reason'] = 'length'
+            return json.dumps(doc, ensure_ascii=False)
+        if request_kind == 'main' and kind == 'main':
+            return sse(payload, '[EMO:neutral] 明日はゆっくり休みましょう。', finish_reason='length')
+        return original(payload, request_kind)
+    monkeypatch.setattr(pe, 'fake_response', truncate)
+    row = await direct_case(tmp_path, plan, monkeypatch, ['日常の話を続けよう。'] * 4)
+    summary = pe.summarize(plan, [row])
+    count = 4 if kind == 'main' else 1
+    assert summary['mechanical']['truncated_turns'] == count
+    assert summary['mechanical']['truncated_requests'] == count
+    assert sum(r['finish_reason'] == 'length' for t in row['turns'] for r in t['requests']) == count
+
+
+def test_okarin_address_is_advisory_only(plan):
+    body = 'オカリン、ちゃんと休んで。'
+    assert pe.mechanical_score({'identity_mode': 'self'}, body, '[EMO:neutral] '+body, {'neutral'})['self_address'] == ['オカリン']
+    assert pe.mechanical_metrics([])['address_check'] == '提示，不是硬指标'
+
+
+@pytest.mark.parametrize(('scores', 'status', 'score'), [([4, 5], 'pass', 4), ([3, 4], 'pass', 3), ([3, 5], 'needs_u', None)])
+def test_judge_score_tolerance(tmp_path, plan, scores, status, score):
+    template = prepare_run(tmp_path/'run', subset(plan, 'self-sg-greeting'))
+    files = []
+    for n, (number, family) in enumerate(zip(scores, ['openai', 'anthropic'], strict=True)):
+        doc = filled(template, str(n), family)
+        doc['cases'][0]['score'] = number
+        file = tmp_path/f'{n}.json'
+        pe.write_json(file, doc)
+        files.append(file)
+    merged = pe.merge_judgements(tmp_path/'run', files)['judges']['self-sg-greeting']
+    assert merged['status'] == status and merged['score'] == score
+
+
+@pytest.mark.parametrize('family', ['claude', 'gpt', 'OpenAI', '', 'provider-a'])
+def test_only_fixed_judge_families_accepted(tmp_path, plan, family):
+    template = prepare_run(tmp_path/'run', subset(plan, 'self-sg-greeting'))
+    one, two = filled(template, 'a', 'openai'), filled(template, 'b', family)
+    files = [tmp_path/'a.json', tmp_path/'b.json']
+    for file, doc in zip(files, [one, two], strict=True): pe.write_json(file, doc)
+    with pytest.raises(pe.Refused, match='unknown_judge_family'):
+        pe.merge_judgements(tmp_path/'run', files)
+
+
+def test_compare_ignores_wording_and_judge_reasons_but_reports_conclusions(tmp_path, plan):
+    plan = subset(plan, 'self-sg-greeting')
+    old, new = tmp_path/'old', tmp_path/'new'
+    prepare_run(old, plan)
+    template = prepare_run(new, plan)
+    target = new/'executions/self-sg-greeting/result.json'
+    row = pe.read_json(target)
+    row['turns'][0]['body'] = '違う表現でも同じ評価よ。'
+    row['turns'][0]['emotion'] = 'happy'
+    pe.write_json(target, row)
+    assert pe.compare_runs(old, new)['counts'] == {'unchanged': 1}
+    for directory in (old, new):
+        template = pe.judge_pack(directory)
+        files = []
+        for n, family in enumerate(['openai', 'anthropic']):
+            doc = filled(template, str(n), family)
+            file = tmp_path/f'{directory.name}-{n}.json'
+            pe.write_json(file, doc)
+            files.append(file)
+        pe.merge_judgements(directory, files)
+    saved = pe.read_json(new/'persona-summary.json')
+    saved['judges']['self-sg-greeting']['checks']['required_traits:1']['reasons'] = ['different rationale']
+    pe.write_json(new/'persona-summary.json', saved)
+    assert pe.compare_runs(old, new)['counts'] == {'unchanged': 1}
+    saved['judges']['self-sg-greeting']['score'] = 3
+    pe.write_json(new/'persona-summary.json', saved)
+    changed = pe.compare_runs(old, new)
+    assert changed['counts'] == {'changed': 1} and changed['cases'][0]['judge_change'] == 'changed'
+    assert changed['cases'][0]['mechanical_change'] == 'unchanged'
+
+
+@pytest.mark.asyncio
+async def test_compression_is_reserved_and_settled_in_the_run_budget(tmp_path, plan, monkeypatch):
+    from app import config
+    monkeypatch.setattr(config, 'HISTORY_COMPRESS_THRESHOLD', 3)
+    monkeypatch.setenv('AMADEUS_B5_REAL_HTTP', 'authorized')
+    monkeypatch.setenv('DEEPSEEK_API_KEY', 'test-only-credential')
+    plan.update(transport='real', cap_cny='1')
+    original_post = pe.HTTP_CLIENT.post
+    async def local_post(_client, url, *, headers, json):
+        if isinstance(_client._transport, httpx.MockTransport):
+            return await original_post(_client, url, headers=headers, json=json)
+        budget = pe.read_json(tmp_path/'budget.json')
+        assert budget['attempts'][-1]['status'] == 'reserved'
+        kind = 'main' if json.get('stream') else 'compression'
+        return httpx.Response(200, text=pe.fake_response(json, kind))
+    monkeypatch.setattr(pe.HTTP_CLIENT, 'post', local_post)
+    row = await direct_case(tmp_path, plan, monkeypatch, ['日常の話を続けよう。'] * 4)
+    budget = pe.read_json(tmp_path/'budget.json')
+    assert len(budget['attempts']) == 5
+    assert all(a['status'] == 'settled' for a in budget['attempts'])
+    assert [a['kind'] for a in budget['attempts']] == ['main'] * 4 + ['compression']
+    assert row['turns'][-1]['requests'][-1]['kind'] == 'compression'
+    assert 'test-only-credential' not in (tmp_path/'budget.json').read_text(encoding='utf-8')
+
+
+def test_compare_preserves_drift_checkpoint_metric_changes(tmp_path, plan):
+    plan = subset(plan, 'drift-self-sg')
+    old, new = tmp_path/'old', tmp_path/'new'
+    prepare_run(old, plan)
+    prepare_run(new, plan)
+    for directory, index in [(old, 0), (new, 29)]:
+        target = directory/'executions/drift-self-sg/result.json'
+        row = pe.read_json(target)
+        row['turns'][index]['mechanical']['japanese'] = False
+        pe.write_json(target, row)
+    result = pe.compare_runs(old, new)
+    assert result['cases'][0]['old']['mechanical'] == result['cases'][0]['new']['mechanical']
+    assert result['counts'] == {'changed': 1}
+    assert result['cases'][0]['mechanical_change'] == 'changed'
