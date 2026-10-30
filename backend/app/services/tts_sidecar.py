@@ -78,22 +78,27 @@ class SidecarSupervisor:
         command = os.getenv("SOVITS_SIDECAR_COMMAND", "").strip()
         working_directory = os.getenv("SOVITS_SIDECAR_CWD", "").strip() or None
         ports = range(9880, 9891) if command else (9880,)
+        in_cooldown = (
+            self._last_start_failure is not None
+            and monotonic() - self._last_start_failure < self.STARTUP_COOLDOWN_SECONDS
+        )
+        started_process = False
         for port in ports:
             url = f"http://127.0.0.1:{port}"
             if await self._compatible(url):
                 if not await self._load_configured_weights(url):
+                    if started_process:
+                        self._last_start_failure = monotonic()
                     self.state = SidecarState(
                         "degraded", url, False, "configured GPT-SoVITS weights failed to load"
                     )
                     return self.state
                 self.state = SidecarState("ready", url, False, None)
+                self._last_start_failure = None
                 return self.state
             if port == 9880 and await self._occupied(url):
                 continue
-            if not command or (
-                self._last_start_failure is not None
-                and monotonic() - self._last_start_failure < self.STARTUP_COOLDOWN_SECONDS
-            ):
+            if not command or in_cooldown:
                 continue
             env = dict(os.environ, SOVITS_PORT=str(port))
             creationflags = 0x08000000 if os.name == "nt" else 0
@@ -103,6 +108,7 @@ class SidecarSupervisor:
                 cwd=working_directory,
                 creationflags=creationflags,
             )
+            started_process = True
             # Cold CUDA/model initialization can take well over 30 seconds on
             # this V2Pro build. Keep the probe bounded, but allow two minutes
             # before terminating a still-running child.
@@ -113,11 +119,13 @@ class SidecarSupervisor:
                 if await self._compatible(url):
                     if await self._load_configured_weights(url):
                         self.state = SidecarState("ready", url, True, None)
+                        self._last_start_failure = None
                         return self.state
                     break
             if self.process.returncode is None:
                 self.process.terminate()
                 await self.process.wait()
+        if started_process:
             self._last_start_failure = monotonic()
         self.state = SidecarState("degraded", None, False, "no compatible GPT-SoVITS endpoint on ports 9880-9890")
         return self.state

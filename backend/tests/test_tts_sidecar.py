@@ -162,6 +162,23 @@ async def test_concurrent_health_starts_only_one_sidecar(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_failed_port_retries_next_port_in_the_same_call(managed_sidecar):
+    supervisor, process, spawn, clock = managed_sidecar
+    supervisor._last_start_failure = clock.return_value - supervisor.STARTUP_COOLDOWN_SECONDS
+    spawn.side_effect = [MagicMock(returncode=1), process]
+    supervisor._compatible.side_effect = (
+        lambda url: url == "http://127.0.0.1:9881" and spawn.await_count == 2
+    )
+
+    state = await supervisor.ensure_available()
+
+    assert state == SidecarState("ready", "http://127.0.0.1:9881", True, None)
+    assert spawn.await_count == 2
+    assert [call.args[-1] for call in spawn.await_args_list] == ["9880", "9881"]
+    assert supervisor._last_start_failure is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("failure", ["exit", "timeout"])
 async def test_failed_launch_cools_down_but_probes_external_sidecars(managed_sidecar, failure):
     supervisor, process, spawn, clock = managed_sidecar
@@ -174,7 +191,9 @@ async def test_failed_launch_cools_down_but_probes_external_sidecars(managed_sid
         "ok": False, "status": "degraded", "url": None, "managed": False,
         "error": "no compatible GPT-SoVITS endpoint on ports 9880-9890",
     }
-    spawn.assert_awaited_once()
+    assert spawn.await_count == 11
+    assert [call.args[-1] for call in spawn.await_args_list] == [str(port) for port in range(9880, 9891)]
+    assert supervisor._last_start_failure == 100.0
     if failure == "timeout":
         process.terminate.assert_called_once()
         process.wait.assert_awaited_once()
@@ -186,7 +205,8 @@ async def test_failed_launch_cools_down_but_probes_external_sidecars(managed_sid
     results = await asyncio.gather(*(supervisor.health() for _ in range(5)))
 
     assert all(result == failed for result in results)
-    spawn.assert_awaited_once()
+    assert spawn.await_count == 11
+    assert supervisor._last_start_failure == 100.0
     assert supervisor._compatible.await_count == 5 * 11
 
     # Discovery must reach later ports even while managed launches cool down.
@@ -197,7 +217,8 @@ async def test_failed_launch_cools_down_but_probes_external_sidecars(managed_sid
         "ok": True, "status": "ready", "url": "http://127.0.0.1:9884",
         "managed": False, "error": None,
     }
-    spawn.assert_awaited_once()
+    assert spawn.await_count == 11
+    assert supervisor._last_start_failure is None
     supervisor._load_configured_weights.assert_awaited_once_with("http://127.0.0.1:9884")
 
 
@@ -207,15 +228,15 @@ async def test_failed_launch_retries_after_cooldown(managed_sidecar, monkeypatch
     monkeypatch.setattr(supervisor, "STARTUP_COOLDOWN_SECONDS", 2.0)
     process.returncode = 1
     await supervisor.ensure_available()
-    spawn.assert_awaited_once()
+    assert spawn.await_count == 11
 
     clock.return_value += 1.99
     await supervisor.ensure_available()
-    spawn.assert_awaited_once()
+    assert spawn.await_count == 11
 
     clock.return_value = 102.0
     await supervisor.ensure_available()
-    assert spawn.await_count == 2
+    assert spawn.await_count == 22
 
 
 @pytest.mark.asyncio
