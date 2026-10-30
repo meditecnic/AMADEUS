@@ -489,8 +489,8 @@ async def test_v2_leak_tail_keeps_published_prefix_and_body_history(tmp_path, pl
     row = await direct_case(tmp_path, plan, monkeypatch, ['おはよう', '明日の予定は？'])
     first = row['turns'][0]
     assert first['attempts'] == 1 and first['body'] == '今日は晴れているわ。'
-    assert received[1][-2] == {'role': 'assistant', 'content': first['body'], 'id': received[1][-2]['id']}
-    assert not received[1][-2]['content'].startswith('[EMO:')
+    assert received[1][-2] == {'role': 'assistant', 'content': f"[EMO:{first['emotion']}] {first['body']}",
+                               'id': received[1][-2]['id']}
     assert first['body'] == ''.join(s['text'] for s in first['segments'])
 
 
@@ -531,7 +531,7 @@ async def test_compression_uses_product_provider_and_same_capture(tmp_path, plan
         assert request['finish_reason'] == 'stop' and request['usage']['completion_tokens'] == 32
         assert turn['history_messages_after'] == 6 and turn['memory_summary_after']
     assert all(type(provider.adapter).__name__ == 'DeepSeekService' for _, provider in snapshots)
-    assert all(not m['content'].startswith('[EMO:') for history, _ in snapshots for m in history if m['role'] == 'assistant')
+    assert all(m['content'].startswith('[EMO:') for history, _ in snapshots for m in history if m['role'] == 'assistant')
 
 
 @pytest.mark.asyncio

@@ -115,7 +115,6 @@ def make_plan(*, transport='fake', base_url=b5.BUILTIN_DEEPSEEK_BASE_URL,
                 'Add max_tokens=8000 to every request for bounded budget reservations.',
                 'Add stream_options.include_usage=true to streaming requests for accounting.',
                 'Await product compression synchronously; product schedules it in the background.',
-                'Store segment-concatenated body without a synthetic EMO history prefix, as Rework 1 requests.',
                 'Web tools/direct search return a fixed local no-results stub; no real search.',
                 'Collect desktop text only; no subtitle, TTS or background memory extraction.',
             ],
@@ -511,9 +510,8 @@ async def product_turns(plan, entry, directory, case, session, provider):
                     'tools_called': list(calls.values()), 'web_stub_calls': web_calls,
                     'second_round': second_round, 'direct_search': force_search,
                     'requests': capture.requests, 'mechanical': mechanical_score(case, body, raw, allowed)}
-            # Rework 1 explicitly requests storing the segment-concatenated body
-            # without constructing an [EMO:...] prefix in evaluation history.
-            await remember('assistant', body)
+            # Same history_content as chat_ws: EMO prefix plus the segment-concatenated body.
+            await remember('assistant', f'[EMO:{emotion}] {body}' if body.strip() else body)
             if (not session.identity_acknowledged and chat._is_explicit_identity_question(query)
                     and not any(blocker in body for blocker in chat._IDENTITY_ACK_BLOCKERS)
                     and chat._looks_like_complete_identity_briefing(body)):
