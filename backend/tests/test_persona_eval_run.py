@@ -411,6 +411,10 @@ async def test_product_deepseek_payload_parity(tmp_path, plan, monkeypatch):
     assert request == {**product_payload, 'max_tokens': 8000, 'stream_options': {'include_usage': True}}
     assert set(request) - set(product_payload) == {'max_tokens', 'stream_options'}
     assert not row['turns'][0]['second_round']
+    # chat_ws appends the user turn before compiling, so RECENT DIALOGUE ends with it.
+    system = request['messages'][0]['content']
+    dialogue = system.split('RECENT DIALOGUE', 1)[1].split('CURRENT USER MESSAGE', 1)[0]
+    assert dialogue.strip().endswith(row['turns'][0]['input'])
     assert any('8000' in difference for difference in plan['intentional_product_differences'])
     assert any('synchronously' in difference for difference in plan['intentional_product_differences'])
 

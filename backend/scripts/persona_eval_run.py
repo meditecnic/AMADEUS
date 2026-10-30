@@ -116,6 +116,7 @@ def make_plan(*, transport='fake', base_url=b5.BUILTIN_DEEPSEEK_BASE_URL,
                 'Add stream_options.include_usage=true to streaming requests for accounting.',
                 'Await product compression synchronously; product schedules it in the background.',
                 'Web tools/direct search return a fixed local no-results stub; no real search.',
+                'v11 unsupported tool plans are refused; product degrades and continues (not reached with DeepSeek).',
                 'Collect desktop text only; no subtitle, TTS or background memory extraction.',
             ],
             'executions': [{'id': c['id']} for c in qset['cases']]}
@@ -421,8 +422,12 @@ async def product_turns(plan, entry, directory, case, session, provider):
             return response
 
         with capture_transport(capture):
+            # Same order as chat_ws: append to history (3218), compile (1757), then persist (1758).
+            session.append_message({'role': 'user', 'content': query, 'id': None})
             session.system_prompt = await compile_for_session(session, query, provider=provider)
-            await remember('user', query)
+            mid = await models.save_message(session.session_id, 'user', query,
+                worldline=session.worldline, conversation_id=session.conversation_id)
+            session.set_last_message_id('user', int(mid))
             active_history = session.history
             history_messages = len(active_history)
             turn_record = TurnExecutionRecord(snapshot=snapshot_from_session(session, provider),
