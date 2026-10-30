@@ -105,8 +105,9 @@ def test_conversation_switch_restore_failure_is_logged_and_reader_survives(
         assert websocket.receive_json()["type"] == "session.ready"
         # Both the switch and the best-effort restore of the previous
         # selection fail.
-        monkeypatch.setattr(
-            type(conversation_service),
+        # Override any bound instance method left by earlier tests, then restore it exactly.
+        monkeypatch.setitem(
+            vars(conversation_service),
             "select",
             AsyncMock(side_effect=RuntimeError(SECRET_TEXT)),
         )
