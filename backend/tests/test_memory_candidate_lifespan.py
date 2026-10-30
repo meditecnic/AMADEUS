@@ -8,6 +8,9 @@ import sqlite3
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -192,6 +195,9 @@ def test_prepare_start_natural_worker_restart(tmp_path):
         first_token = token_path.read_text(encoding="utf-8")
         if os.name != "nt":
             assert token_path.stat().st_mode & 0o777 == 0o600
+        with pytest.raises(urllib.error.HTTPError) as missing_token:
+            urllib.request.urlopen("http://127.0.0.1:8010/health", timeout=5)
+        assert missing_token.value.code == 401
         verified = _cli(
             "verify-api",
             "--run-root",
@@ -243,9 +249,6 @@ def test_prepare_start_natural_worker_restart(tmp_path):
     )
     assert restarted.returncode == 0, restarted.stderr + restarted.stdout
     try:
-        import urllib.parse
-        import urllib.request
-
         params = urllib.parse.urlencode(
             {
                 "session_id": "b2-pytest-owner",
@@ -257,6 +260,12 @@ def test_prepare_start_natural_worker_restart(tmp_path):
         url = f"http://127.0.0.1:8010/api/memory/facts?{params}"
         second_token = token_path.read_text(encoding="utf-8")
         assert second_token != first_token
+        old_request = urllib.request.Request(
+            "http://127.0.0.1:8010/health", headers={"Authorization": f"Bearer {first_token}"},
+        )
+        with pytest.raises(urllib.error.HTTPError) as old_token:
+            urllib.request.urlopen(old_request, timeout=5)
+        assert old_token.value.code == 401
         request = urllib.request.Request(url, headers={"Authorization": f"Bearer {second_token}"})
         deadline = time.monotonic() + 15
         body = {}

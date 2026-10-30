@@ -7,7 +7,11 @@ import os
 import socket
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
+
+import pytest
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = BACKEND_ROOT / "scripts" / "memory_candidate_real_run.py"
@@ -78,6 +82,9 @@ def test_ws_processor_local_http_budget_and_product_ops(tmp_path):
         token = token_path.read_text(encoding="utf-8")
         if os.name != "nt":
             assert token_path.stat().st_mode & 0o777 == 0o600
+        with pytest.raises(urllib.error.HTTPError) as missing_token:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=5)
+        assert missing_token.value.code == 401
         verified = _cli(
             "verify-local",
             "--run-root",
