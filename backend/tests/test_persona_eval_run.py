@@ -116,7 +116,7 @@ def test_pack_merge_and_compare(tmp_path, plan):
     plan = subset(plan, 'self-sg-cn-coffee', 'drift-self-sg')
     old, new = tmp_path/'old', tmp_path/'new'
     template = prepare_run(old, plan)
-    pack = (old/'judge-pack.md').read_text()
+    pack = (old/'judge-pack.md').read_text(encoding='utf-8')
     assert '自然な日本語' in pack and 'self-register' in pack and 'sg-overlay' in pack
     assert 'okabe-register:' not in pack and 'beta-overlay:' not in pack
     assert '用户喜欢喝美式咖啡' in pack and 'Turn 60' in pack
@@ -135,7 +135,7 @@ def test_pack_merge_and_compare(tmp_path, plan):
     assert summary['judge_metrics'] == {'needs_u': 2}
     assert set(summary['needs_u']) == {c['id'] for c in template['cases']}
     assert summary['judges']['drift-self-sg']['probes']['30']['score'] is None
-    assert '要 U 看' in (old/'persona-summary.md').read_text()
+    assert '要 U 看' in (old/'persona-summary.md').read_text(encoding='utf-8')
     with pytest.raises(pe.Refused, match='at_least_two'): pe.merge_judgements(old, files[:1])
     with pytest.raises(FileNotFoundError): pe.merge_judgements(old, [files[0], tmp_path/'absent.json'])
     prepare_run(new, plan)
@@ -305,7 +305,7 @@ async def test_paid_capture_budget_without_real_network(tmp_path, plan, monkeypa
     state = pe.read_json(tmp_path/'budget.json')
     assert state['attempts'][0]['status'] == 'settled'
     assert state['attempts'][0]['execution_id'] == 'probe'
-    assert 'test-only-credential' not in (directory/'turn-01-requests.json').read_text()
+    assert 'test-only-credential' not in (directory/'turn-01-requests.json').read_text(encoding='utf-8')
     async def no_usage(*_args, **_kwargs): return httpx.Response(200, text='data: [DONE]\n\n')
     capture = pe.Capture(plan, directory, 2)
     monkeypatch.setattr(httpx.AsyncClient, 'post', no_usage)
