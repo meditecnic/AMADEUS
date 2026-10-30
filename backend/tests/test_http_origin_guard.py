@@ -71,6 +71,8 @@ def test_write_rejects_untrusted_origin_before_route(probe, method, headers):
     assert probe.calls == []
     assert response.status_code == 403
     assert response.json() == FORBIDDEN
+    if headers[0][1] not in ALLOWED_ORIGINS:
+        assert 'access-control-allow-origin' not in response.headers
 
 
 @pytest.mark.parametrize('content_type', [

@@ -1,8 +1,9 @@
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.services.tts_sidecar import SidecarSupervisor
+from app.services.tts_sidecar import SidecarState, SidecarSupervisor
 
 
 def test_sidecar_command_expands_the_selected_port():
@@ -101,3 +102,166 @@ async def test_health_reprobes_a_sidecar_that_died_after_ready():
     assert health["ok"] is False
     assert health["error"] == "restart failed"
     assert supervisor._weights_ready_url is None
+
+
+@pytest.fixture
+def managed_sidecar(monkeypatch):
+    monkeypatch.setenv("SOVITS_SIDECAR_COMMAND", "python fake_sidecar.py --port {port}")
+    supervisor = SidecarSupervisor()
+    supervisor._compatible = AsyncMock(return_value=False)
+    supervisor._occupied = AsyncMock(return_value=False)
+    supervisor._load_configured_weights = AsyncMock(return_value=True)
+    process = MagicMock(returncode=None)
+    process.wait = AsyncMock()
+
+    def terminate():
+        process.returncode = -15
+
+    process.terminate.side_effect = terminate
+    spawn = AsyncMock(return_value=process)
+    monkeypatch.setattr("app.services.tts_sidecar.asyncio.create_subprocess_exec", spawn)
+    monkeypatch.setattr("app.services.tts_sidecar.asyncio.sleep", AsyncMock())
+    clock = MagicMock(return_value=100.0)
+    monkeypatch.setattr("app.services.tts_sidecar.monotonic", clock)
+    return supervisor, process, spawn, clock
+
+
+@pytest.mark.asyncio
+async def test_concurrent_health_starts_only_one_sidecar(monkeypatch):
+    # Yield during fake creation so all five requests overlap at the launch.
+    real_sleep = asyncio.sleep
+    with monkeypatch.context() as mp:
+        mp.setenv("SOVITS_SIDECAR_COMMAND", "python fake_sidecar.py --port {port}")
+        supervisor = SidecarSupervisor()
+        running = False
+        process = MagicMock(returncode=None)
+
+        async def launch(*args, **kwargs):
+            nonlocal running
+            await real_sleep(0)
+            running = True
+            return process
+
+        supervisor._compatible = AsyncMock(side_effect=lambda url: running)
+        supervisor._occupied = AsyncMock(return_value=False)
+        supervisor._load_configured_weights = AsyncMock(return_value=True)
+        spawn = AsyncMock(side_effect=launch)
+        mp.setattr("app.services.tts_sidecar.asyncio.create_subprocess_exec", spawn)
+        mp.setattr("app.services.tts_sidecar.asyncio.sleep", AsyncMock())
+
+        results = await asyncio.gather(*(supervisor.health() for _ in range(5)))
+
+    spawn.assert_awaited_once()
+    assert spawn.await_args.args == ("python", "fake_sidecar.py", "--port", "9880")
+    assert supervisor._compatible.await_count == 2
+    supervisor._load_configured_weights.assert_awaited_once_with("http://127.0.0.1:9880")
+    assert all(result == {
+        "ok": True, "status": "ready", "url": "http://127.0.0.1:9880",
+        "managed": True, "error": None,
+    } for result in results)
+
+
+@pytest.mark.asyncio
+async def test_failed_port_retries_next_port_in_the_same_call(managed_sidecar):
+    supervisor, process, spawn, clock = managed_sidecar
+    supervisor._last_start_failure = clock.return_value - supervisor.STARTUP_COOLDOWN_SECONDS
+    spawn.side_effect = [MagicMock(returncode=1), process]
+    supervisor._compatible.side_effect = (
+        lambda url: url == "http://127.0.0.1:9881" and spawn.await_count == 2
+    )
+
+    state = await supervisor.ensure_available()
+
+    assert state == SidecarState("ready", "http://127.0.0.1:9881", True, None)
+    assert spawn.await_count == 2
+    assert [call.args[-1] for call in spawn.await_args_list] == ["9880", "9881"]
+    assert supervisor._last_start_failure is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["exit", "timeout"])
+async def test_failed_launch_cools_down_but_probes_external_sidecars(managed_sidecar, failure):
+    supervisor, process, spawn, clock = managed_sidecar
+    if failure == "exit":
+        process.returncode = 1
+
+    failed = await supervisor.health()
+
+    assert failed == {
+        "ok": False, "status": "degraded", "url": None, "managed": False,
+        "error": "no compatible GPT-SoVITS endpoint on ports 9880-9890",
+    }
+    assert spawn.await_count == 11
+    assert [call.args[-1] for call in spawn.await_args_list] == [str(port) for port in range(9880, 9891)]
+    assert supervisor._last_start_failure == 100.0
+    if failure == "timeout":
+        process.terminate.assert_called_once()
+        process.wait.assert_awaited_once()
+    else:
+        process.terminate.assert_not_called()
+
+    clock.return_value += supervisor.STARTUP_COOLDOWN_SECONDS - 1
+    supervisor._compatible.reset_mock()
+    results = await asyncio.gather(*(supervisor.health() for _ in range(5)))
+
+    assert all(result == failed for result in results)
+    assert spawn.await_count == 11
+    assert supervisor._last_start_failure == 100.0
+    assert supervisor._compatible.await_count == 5 * 11
+
+    # Discovery must reach later ports even while managed launches cool down.
+    supervisor._compatible.side_effect = lambda url: url.endswith(":9884")
+    recovered = await supervisor.health()
+
+    assert recovered == {
+        "ok": True, "status": "ready", "url": "http://127.0.0.1:9884",
+        "managed": False, "error": None,
+    }
+    assert spawn.await_count == 11
+    assert supervisor._last_start_failure is None
+    supervisor._load_configured_weights.assert_awaited_once_with("http://127.0.0.1:9884")
+
+
+@pytest.mark.asyncio
+async def test_failed_launch_retries_after_cooldown(managed_sidecar, monkeypatch):
+    supervisor, process, spawn, clock = managed_sidecar
+    monkeypatch.setattr(supervisor, "STARTUP_COOLDOWN_SECONDS", 2.0)
+    process.returncode = 1
+    await supervisor.ensure_available()
+    assert spawn.await_count == 11
+
+    clock.return_value += 1.99
+    await supervisor.ensure_available()
+    assert spawn.await_count == 11
+
+    clock.return_value = 102.0
+    await supervisor.ensure_available()
+    assert spawn.await_count == 22
+
+
+@pytest.mark.asyncio
+async def test_ready_ensure_available_does_not_reprobe_or_restart(managed_sidecar):
+    supervisor, _, spawn, _ = managed_sidecar
+    ready = SidecarState("ready", "http://127.0.0.1:9880", True, None)
+    supervisor.state = ready
+
+    results = await asyncio.gather(*(supervisor.ensure_available() for _ in range(5)))
+
+    assert all(state is ready for state in results)
+    supervisor._compatible.assert_not_awaited()
+    supervisor._occupied.assert_not_awaited()
+    supervisor._load_configured_weights.assert_not_awaited()
+    spawn.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_no_command_keeps_probing_without_launching(managed_sidecar, monkeypatch):
+    supervisor, _, spawn, _ = managed_sidecar
+    monkeypatch.delenv("SOVITS_SIDECAR_COMMAND")
+    supervisor._last_start_failure = 100.0
+
+    assert (await supervisor.health())["status"] == "degraded"
+    supervisor._compatible.assert_awaited_once_with("http://127.0.0.1:9880")
+    supervisor._compatible.return_value = True
+    assert (await supervisor.health())["ok"] is True
+    spawn.assert_not_awaited()
