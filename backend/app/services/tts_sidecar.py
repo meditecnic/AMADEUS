@@ -4,6 +4,7 @@ import asyncio
 import os
 import shlex
 from dataclasses import dataclass
+from time import monotonic
 
 import httpx
 
@@ -17,10 +18,14 @@ class SidecarState:
 
 
 class SidecarSupervisor:
+    STARTUP_COOLDOWN_SECONDS = 60.0
+
     def __init__(self):
         self.state = SidecarState()
         self.process: asyncio.subprocess.Process | None = None
         self._weights_ready_url: str | None = None
+        self._availability_lock = asyncio.Lock()
+        self._last_start_failure: float | None = None
 
     @staticmethod
     def _command_args(command: str, port: int) -> list[str]:
@@ -64,6 +69,12 @@ class SidecarSupervisor:
         return True
 
     async def ensure_available(self) -> SidecarState:
+        async with self._availability_lock:
+            if self.state.status == "ready":
+                return self.state
+            return await self._ensure_available()
+
+    async def _ensure_available(self) -> SidecarState:
         command = os.getenv("SOVITS_SIDECAR_COMMAND", "").strip()
         working_directory = os.getenv("SOVITS_SIDECAR_CWD", "").strip() or None
         ports = range(9880, 9891) if command else (9880,)
@@ -79,7 +90,10 @@ class SidecarSupervisor:
                 return self.state
             if port == 9880 and await self._occupied(url):
                 continue
-            if not command:
+            if not command or (
+                self._last_start_failure is not None
+                and monotonic() - self._last_start_failure < self.STARTUP_COOLDOWN_SECONDS
+            ):
                 continue
             env = dict(os.environ, SOVITS_PORT=str(port))
             creationflags = 0x08000000 if os.name == "nt" else 0
@@ -104,6 +118,7 @@ class SidecarSupervisor:
             if self.process.returncode is None:
                 self.process.terminate()
                 await self.process.wait()
+            self._last_start_failure = monotonic()
         self.state = SidecarState("degraded", None, False, "no compatible GPT-SoVITS endpoint on ports 9880-9890")
         return self.state
 
