@@ -114,6 +114,7 @@ def make_plan(*, transport='fake', base_url=b5.BUILTIN_DEEPSEEK_BASE_URL,
             'intentional_product_differences': [
                 'Add max_tokens=8000 to every request for bounded budget reservations.',
                 'Add stream_options.include_usage=true to streaming requests for accounting.',
+                'Retry transient transport/provider errors only in evaluation, not the product, to measure persona rather than network quality.',
                 'Await product compression synchronously; product schedules it in the background.',
                 'Web tools/direct search return a fixed local no-results stub; no real search.',
                 'v11 unsupported tool plans are refused; product degrades and continues (not reached with DeepSeek).',
@@ -144,7 +145,10 @@ def mechanical_score(case: dict, body: str, raw_output: str, allowed: set[str]) 
                     address.append(hit.group())
     leaked = sorted({term for fact in case.get('resident_facts', [])
                      for term in fact['original_terms'] if term in body})
+    chinese = [ch for ch in dict.fromkeys(body) if '\u4e00' <= ch <= '\u9fff'
+               and not ch.encode('cp932', errors='ignore')]
     return {'japanese': bool(parts) and all(_is_publishable_japanese(p) for p in parts),
+            'chinese_only_chars': chinese,
             'single_legal_emo': legal_emo, 'self_address': address, 'fact_original_terms': leaked}
 
 
@@ -159,6 +163,16 @@ def fake_response(payload: dict, kind: str) -> str:
     return body if '"finish_reason"' in body else body.replace('data: [DONE]', ending + 'data: [DONE]')
 
 
+class Budget(b5.Budget):
+    def amounts(self, execution_id=None):
+        amounts = super().amounts(execution_id)
+        retained = sum((b5.Decimal(r['charge_cny']) for r in self.state['attempts']
+                        if r['status'] == 'uncertain' and
+                        (execution_id is None or r['execution_id'] == execution_id)), b5.Decimal(0))
+        amounts['retained_reserve_cny'] = str(b5.Decimal(amounts['retained_reserve_cny']) + retained)
+        return amounts
+
+
 class Capture:
     def __init__(self, plan: dict, directory: Path, turn: int):
         self.plan, self.directory, self.turn = plan, directory, turn
@@ -166,7 +180,7 @@ class Capture:
         self.history_messages = 0
         self.requests: list[dict] = []
         self.refusal: Exception | None = None
-        self.budget = b5.Budget(directory.parents[1] / 'budget.json', plan['cap_cny']) if plan['transport'] == 'real' else None
+        self.budget = Budget(directory.parents[1] / 'budget.json', plan['cap_cny']) if plan['transport'] == 'real' else None
 
     def raise_if_refused(self):
         if self.refusal:
@@ -177,8 +191,9 @@ class Capture:
         try:
             return await self._handle(request)
         except Exception as exc:
-            if self.budget and self.budget.amounts()['retained_reserve_cny'] != '0':
-                exc = b5.AccountingUncertain('request_failed_reservation_retained')
+            if self.budget and self.budget.amounts()['retained_reserve_cny'] != '0' and not isinstance(exc, b5.BudgetExceeded):
+                exc = b5.AccountingUncertain(
+                    f'request_failed_reservation_retained:{type(exc).__name__}:{b5.redact(str(exc))[:300]}')
             self.refusal = exc
             raise exc from None
         finally:
@@ -190,7 +205,8 @@ class Capture:
             raise Refused('unexpected_model_destination')
         payload = json.loads(request.content)
         kind = 'compression' if self.phase == 'compression' else b5.request_kind(payload, 'main')
-        attempt = 1 + sum(r['kind'] == kind and r['phase'] == self.phase for r in self.requests)
+        attempt = 1 + sum(r['kind'] == kind and r['phase'] == self.phase and r['transport_attempt'] == 1
+                          for r in self.requests)
         limit = 1 if kind == 'compression' else b5.MAX_RENDER_ATTEMPTS if kind == 'japanese_rewrite' else b5.MAX_MAIN_ATTEMPTS
         if attempt > limit:
             raise Refused('extra_model_request_blocked')
@@ -199,12 +215,36 @@ class Capture:
         payload['max_tokens'] = MAX_OUTPUT_TOKENS
         if payload.get('stream'):
             payload['stream_options'] = {'include_usage': True}
-        row = {'kind': kind, 'phase': self.phase, 'attempt': attempt, 'request': payload, 'usage': None,
-               'history_messages': self.history_messages, 'message_count': len(payload['messages'])}
-        index = self.budget.reserve(payload, self.directory.name, kind=kind, attempt=attempt,
-                                    phase=f'turn-{self.turn}:{self.phase}') if self.budget else None
-        self.requests.append(row)
-        write_json(self.directory / f'turn-{self.turn:02d}-requests.json', self.requests)
+        for transport_attempt in range(1, 4):
+            row = {'kind': kind, 'phase': self.phase, 'attempt': attempt, 'transport_attempt': transport_attempt,
+                   'request': payload, 'usage': None, 'history_messages': self.history_messages,
+                   'message_count': len(payload['messages'])}
+            index = self.budget.reserve(payload, self.directory.name, kind=kind, attempt=attempt,
+                                       phase=f'turn-{self.turn}:{self.phase}') if self.budget else None
+            self.requests.append(row)
+            write_json(self.directory / f'turn-{self.turn:02d}-requests.json', self.requests)
+            try:
+                return await self._send(request, payload, kind, row, index)
+            except Exception as exc:
+                row['error'] = {'type': type(exc).__name__, 'message': b5.redact(str(exc))[:300]}
+                response = getattr(exc, 'response', None)
+                if response is not None:
+                    row['error'].update(status_code=response.status_code,
+                                        response_body=b5.redact(response.text)[:500])
+                if self.budget:
+                    if self.budget.state['attempts'][index]['status'] == 'reserved':
+                        self.budget.state['attempts'][index]['status'] = 'uncertain'
+                        write_json(self.budget.path, self.budget.state)
+                    if sum(r['status'] == 'uncertain' for r in self.budget.state['attempts']) > 5:
+                        raise b5.AccountingUncertain(f'uncertain_reservations_exceeded:{type(exc).__name__}:{exc}') from None
+                write_json(self.directory / f'turn-{self.turn:02d}-requests.json', self.requests)
+                retryable = isinstance(exc, httpx.TransportError) or (
+                    isinstance(exc, httpx.HTTPStatusError) and response.status_code in {429, 500, 502, 503, 504})
+                if self.plan['transport'] != 'real' or not retryable or transport_attempt == 3:
+                    raise
+                await asyncio.sleep((3, 10)[transport_attempt - 1])
+
+    async def _send(self, request, payload, kind, row, index):
         if self.plan['transport'] == 'fake':
             body = fake_response(payload, kind)
         else:
@@ -212,7 +252,8 @@ class Capture:
                 headers = {k: v for k, v in request.headers.items() if k.lower() != 'content-length'}
                 response = await client.post(str(request.url), headers=headers, json=payload)
                 if response.status_code != 200:
-                    raise Refused('provider_http_' + str(response.status_code))
+                    raise httpx.HTTPStatusError('provider_http_' + str(response.status_code),
+                                                request=request, response=response)
                 body = response.text
         content, finish_reasons = [], []
         chunks = [json.loads(body)] if kind == 'compression' else [
@@ -328,7 +369,7 @@ async def finish_compression(session, provider, capture):
             capture.raise_if_refused()
             compressed = True
     return {'compression_triggered': compressed, 'compression_backoff': backed_off,
-            'compression_count': sum(r['kind'] == 'compression' for r in capture.requests),
+            'compression_count': sum(r['kind'] == 'compression' and r['transport_attempt'] == 1 for r in capture.requests),
             'history_messages_after': len(session.history), 'memory_summary_after': session.memory_summary,
             'compression_failures': session.compression_failures, 'compression_skip_turns': session.compression_skip_turns}
 
@@ -509,8 +550,8 @@ async def product_turns(plan, entry, directory, case, session, provider):
             turn = {'turn': number, 'input': query, 'body': body, 'emotion': emotion,
                     'emo_tag_found': tag_found, 'frontend_text': body, 'frontend_emo': f'[EMO:{emotion}]',
                     'segments': desktop.segments, 'raw_output': raw,
-                    'attempts': sum(r['kind'] == 'main' for r in capture.requests),
-                    'rewrite_count': sum(r['kind'] == 'japanese_rewrite' for r in capture.requests),
+                    'attempts': sum(r['kind'] == 'main' and r['transport_attempt'] == 1 for r in capture.requests),
+                    'rewrite_count': sum(r['kind'] == 'japanese_rewrite' and r['transport_attempt'] == 1 for r in capture.requests),
                     'history_messages': history_messages, 'first_round_tool_choice': tool_choice,
                     'tools_called': list(calls.values()), 'web_stub_calls': web_calls,
                     'second_round': second_round, 'direct_search': force_search,
@@ -524,7 +565,7 @@ async def product_turns(plan, entry, directory, case, session, provider):
                     session.session_id, session.worldline, session.conversation_id)
                 session.identity_acknowledged = True
             turn.update(await finish_compression(session, provider, capture))
-            turn['truncated'] = any(r['truncated'] for r in capture.requests)
+            turn['truncated'] = any(r.get('truncated', False) for r in capture.requests)
             turn['last_assistant_emotion'] = session.last_assistant_emotion
             result['turns'].append(turn)
             write_json(directory / 'progress.json', result)
@@ -548,10 +589,22 @@ def execute_subprocess(plan: dict, entry: dict, directory: Path) -> dict:
             if key.upper().endswith('_PROXY') or key in {'SSL_CERT_FILE', 'SSL_CERT_DIR',
                     'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE', 'DEEPSEEK_API_KEY', 'AMADEUS_B5_REAL_HTTP'}:
                 env[key] = value
-    proc = subprocess.run([sys.executable, str(SCRIPT), '--worker', str(directory)], cwd=BACKEND,
-        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800, check=False)
+    proc = None
+    try:
+        proc = subprocess.run([sys.executable, str(SCRIPT), '--worker', str(directory)], cwd=BACKEND,
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=1800, check=False)
+    except subprocess.TimeoutExpired as exc:
+        proc = exc
+        raise
+    finally:
+        if proc is not None:
+            output = '\n'.join(f'{name}:\n' + (getattr(proc, name) or b'')[-20*1024:].decode(errors='replace')
+                               for name in ('stdout', 'stderr'))
+            (directory / 'worker-output.txt').write_text(b5.redact(output), encoding='utf-8', newline='\n')
     if proc.returncode or not (directory / 'result.json').exists():
-        raise b5.AccountingUncertain('worker_failed_' + str(proc.returncode))
+        error = b5.redact(proc.stderr.decode(errors='replace')).rsplit('Persona refused: ', 1)
+        reason = error[1][:500] if len(error) == 2 else error[0][-300:]
+        raise b5.AccountingUncertain(f'worker_failed_{proc.returncode}:{reason}')
     return read_json(directory / 'result.json')
 
 
@@ -565,6 +618,8 @@ def mechanical_metrics(turns: list[dict]) -> dict:
     count = len(turns)
     return {'turns': count,
             'japanese_rate': sum(t['mechanical']['japanese'] for t in turns) / count if count else None,
+            'japanese_check': '产品自己的判断',
+            'chinese_char_turns': sum(bool(t['mechanical'].get('chinese_only_chars')) for t in turns),
             'emo_rate': sum(t['mechanical']['single_legal_emo'] for t in turns) / count if count else None,
             'address_errors': sum(bool(t['mechanical']['self_address']) for t in turns),
             'address_check': '提示，不是硬指标',
@@ -628,7 +683,7 @@ def run_suite(run_dir: Path, plan: dict, executor=execute_subprocess) -> dict:
         if plan['transport'] == 'real':
             if (run_dir / 'executions').exists() and not (run_dir / 'budget.json').exists():
                 raise Refused('budget_missing_existing_run')
-            budget = b5.Budget(run_dir / 'budget.json', plan['cap_cny'])
+            budget = Budget(run_dir / 'budget.json', plan['cap_cny'])
         rows, stop = [], False
         for entry in plan['executions']:
             directory = run_dir / 'executions' / entry['id']
@@ -651,10 +706,11 @@ def run_suite(run_dir: Path, plan: dict, executor=execute_subprocess) -> dict:
                     if (directory / 'progress.json').exists():
                         row['turns'] = read_json(directory / 'progress.json')['turns']
             if budget:
-                budget = b5.Budget(run_dir / 'budget.json', plan['cap_cny'])
+                budget = Budget(run_dir / 'budget.json', plan['cap_cny'])
                 row.update(budget.amounts(entry['id']))
                 stop = stop or budget.committed >= budget.cap or bool(budget.state.get('stop_reason')) or any(
-                    a['status'] == 'reserved' for a in budget.state['attempts'])
+                    a['status'] == 'reserved' for a in budget.state['attempts']) or sum(
+                    a['status'] == 'uncertain' for a in budget.state['attempts']) > 5
             write_json(target, row)
             rows.append(row)
             stop = stop or row.get('stop_run', False)
@@ -707,7 +763,8 @@ def judge_pack(run_dir: Path) -> dict:
             '### Full conversation (verbatim)', ''])
         for turn in row.get('turns', []):
             lines.extend([f"Turn {turn['turn']} — USER:", turn['input'], '',
-                          f"ASSISTANT {turn['frontend_emo']}:", turn['body'], ''])
+                          f"ASSISTANT {turn['frontend_emo']}:", turn['body'], '',
+                          'chinese_only_chars: ' + json.dumps(turn['mechanical'].get('chinese_only_chars', []), ensure_ascii=False), ''])
     write_json(run_dir / 'judge-template.json', template)
     (run_dir / 'judge-pack.md').write_text(b5.redact('\n'.join(lines)), encoding='utf-8', newline='\n')
     return template
