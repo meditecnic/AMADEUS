@@ -1,11 +1,12 @@
 from contextlib import asynccontextmanager
 import asyncio
+import logging
 import os
 import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from app.security.local_transport import HTTPOriginGuardMiddleware, LOCAL_ORIGINS, LocalAPITokenMiddleware
+from app.security.local_transport import HTTPOriginGuardMiddleware, LOCAL_ORIGINS, LocalAPITokenMiddleware, LOCAL_API_TOKEN
 from pydantic import BaseModel, SecretStr
 from typing import Optional
 from app import config
@@ -30,6 +31,10 @@ async def _diagnostics_sweep_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    if not LOCAL_API_TOKEN:
+        logging.getLogger(__name__).warning(
+            "Local HTTP and WebSocket authentication is disabled; use only for development."
+        )
     print("--------------------------------------------------")
     print("Amadeus Backend starting...")
     from app.services.credentials import InMemoryCredentialStore, credential_store, scrub_dotenv_key

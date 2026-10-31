@@ -2,6 +2,7 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, WebSocket } from 'ws';
 import type { Plugin } from 'vite';
+import { MOCK_LOCAL_TOKEN } from './auth';
 import { installScenarioBridge } from './client-bridge';
 import { createMockRuntime, type Frame } from './runtime';
 import { readCookie, scenarios } from './scenarios';
@@ -38,12 +39,19 @@ export function devMockPlugin(): Plugin {
     configureServer(server) {
       if (!server.httpServer) throw new Error('dev-mock requires Vite HTTP server mode');
       const runtime = createMockRuntime();
-      const wss = new WebSocketServer({ noServer: true, maxPayload: 65_536 });
+      const wss = new WebSocketServer({ noServer: true, maxPayload: 65_536,
+        handleProtocols: protocols => protocols.has('amadeus.local.v1') ? 'amadeus.local.v1' : false,
+      });
       const sockets = new Map<WebSocket, ReturnType<typeof runtime.connect>>();
       const upgrade = (request: IncomingMessage, socket: Duplex, head: Buffer) => {
         const url = new URL(request.url || '/', 'http://localhost');
         if (url.pathname !== '/ws' && url.pathname !== '/ws/chat') return;
         wss.handleUpgrade(request, socket, head, ws => {
+          const protocols = (request.headers['sec-websocket-protocol'] || '').split(',').map(value => value.trim());
+          if (!protocols.includes('amadeus.local.v1') || !protocols.includes(`amadeus.token.${MOCK_LOCAL_TOKEN}`)) {
+            ws.close(4401, 'local auth required');
+            return;
+          }
           const cookies = request.headers.cookie || '';
           const connection = runtime.connect(url, frame => {
             if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(frame));
@@ -88,6 +96,11 @@ export function devMockPlugin(): Plugin {
         if (!url.pathname.startsWith('/api/') && !url.pathname.startsWith('/health')) return next();
         response.setHeader('Content-Type', 'application/json; charset=utf-8');
         response.setHeader('Cache-Control', 'no-store');
+        if (request.headers.authorization !== `Bearer ${MOCK_LOCAL_TOKEN}`) {
+          response.statusCode = 401;
+          response.end(JSON.stringify({ detail: { code: 'local_auth_required' } }));
+          return;
+        }
         try {
           const cookies = request.headers.cookie || '';
           const reply = runtime.rest(

@@ -1,4 +1,4 @@
-﻿import { wsUrl } from '../apiBase';
+﻿import { wsUrl, wsProtocols } from '../apiBase';
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 
 /** Client-only selection intent. requestEpoch is never sent over the wire. */
@@ -91,7 +91,7 @@ export interface Message {
 export const RECONNECT_ATTEMPTS = 5;
 // A rejected auth can leave a healthy transport open; short-lived sockets must still consume retries.
 const REJECTED_SESSION_STABLE_MS = 30_000;
-export type ReconnectStopReason = 'forbidden' | 'replaced';
+export type ReconnectStopReason = 'forbidden' | 'unauthorized' | 'replaced';
 export interface ReconnectState {
   attempt: number;
   max: number;
@@ -377,7 +377,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
 
     const sessionId = paramsRef.current.sessionId || getOrCreateAmadeusSessionId();
 
-    const ws = new WebSocket(wsUrl(`/ws/chat?session_id=${sessionId}`));
+    const ws = new WebSocket(wsUrl(`/ws/chat?session_id=${sessionId}`), wsProtocols());
     wsRef.current = ws;
     // Bind confirmations to this socket's auth, even when the same ID is selected again.
     let authTarget: PendingConversationTarget | null = null;
@@ -939,11 +939,11 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       setIsSynthesizing(false);
       voiceStoppedRef.current = false;
 
-      if (event?.code === 4403 || event?.code === 4409) {
+      if (event?.code === 4401 || event?.code === 4403 || event?.code === 4409) {
         reconnectCountRef.current = 0;
         setStatus('CLOSED');
         setRetry(null);
-        setReconnectStopReason(event.code === 4403 ? 'forbidden' : 'replaced');
+        setReconnectStopReason(event.code === 4401 ? 'unauthorized' : event.code === 4403 ? 'forbidden' : 'replaced');
         return;
       }
 
@@ -968,9 +968,9 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       }
     };
 
-    ws.onerror = (err) => {
+    ws.onerror = () => {
       if (wsRef.current !== ws) return;
-      console.error('WebSocket Error:', err);
+      console.error('WebSocket Error');
       // The close that always follows decides the state: retrying, or ERROR once retries are exhausted.
       errored = true;
     };

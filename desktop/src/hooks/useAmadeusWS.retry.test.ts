@@ -122,6 +122,7 @@ describe('useAmadeusWS automatic reconnection', () => {
   });
 
   it.each([
+    [4401, 'unauthorized'],
     [4403, 'forbidden'],
     [4409, 'replaced'],
   ] as const)('stops automatic reconnection after an open socket closes with %i, but permits manual reconnect', (code, reason) => {

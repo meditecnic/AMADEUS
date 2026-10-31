@@ -305,7 +305,7 @@ async def verify_missing_token(port: int) -> None:
             try:
                 await connection.recv()
             except ConnectionClosed as exc:
-                if exc.code != 4401:
+                if exc.rcvd.code != 4401:
                     raise AssertionError("unexpected local WS authentication close code") from None
             else:
                 raise AssertionError("WS without local token was accepted")
@@ -435,6 +435,7 @@ def main() -> int:
             check_root = root / "self-check"
             check_root.mkdir()
             env = clean_environment(check_root, free_port(), provider_port, args.memory_mode)
+            env["AMADEUS_LOCAL_API_TOKEN"] = secrets.token_urlsafe(32)
             with (check_root / "output.log").open("wb") as output:
                 checked = subprocess.run([str(exe), "--self-check"], cwd=check_root / "cwd", env=env,
                                          stdout=output, stderr=subprocess.STDOUT, timeout=180, creationflags=CREATE_NO_WINDOW)

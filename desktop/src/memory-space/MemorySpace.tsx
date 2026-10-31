@@ -1,4 +1,4 @@
-import { apiUrl } from '../apiBase';
+import { apiFetch } from '../apiBase';
 import { useReducedMotion } from '../design-system/useReducedMotion';
 import { MemorySelect } from './MemorySelect';
 import { motion } from 'motion/react';
@@ -332,7 +332,7 @@ export function MemorySpace({
   useEffect(() => {
     if (!listOpen && capability.surface !== 'list') return undefined;
     let cancelled = false;
-    void fetch(apiUrl(`/api/memory/topics?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}&identity_mode=${encodeURIComponent(identityMode)}`))
+    void apiFetch(`/api/memory/topics?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}&identity_mode=${encodeURIComponent(identityMode)}`)
       .then(async (response) => (response.ok ? response.json() as Promise<{ topics?: TopicOption[] }> : null))
       .then((body) => {
         if (cancelled || !body?.topics) return;

@@ -1,4 +1,4 @@
-import { apiUrl } from '../apiBase';
+import { apiFetch } from '../apiBase';
 import type { IdentityMode, MemoryProjection, Worldline } from './types';
 
 // P1R-3 reading / verification seam (contract 45e2ec6).
@@ -243,7 +243,7 @@ export async function fetchDetails(
   const init: RequestInit = options.signal ? { signal: options.signal } : {};
   let response: Response;
   try {
-    response = await fetcher(apiUrl(buildDetailsUrl(request)), init);
+    response = await apiFetch(buildDetailsUrl(request), init, fetcher);
   } catch {
     return { type: 'transport-error' };
   }
