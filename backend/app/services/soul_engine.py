@@ -48,7 +48,6 @@ class CharacterProfile(BaseModel):
     max_speech_delta_per_turn: float = Field(gt=0, le=1)
     baselines: EmotionVector
     half_lives_seconds: HalfLives
-    style_rules: list[str]
 
     @field_validator("schema_version")
     @classmethod

@@ -1,9 +1,8 @@
 """Byte-for-byte v11 prompt snapshots for scopes with no active stable facts.
 
-Generated from the pre-change compiler (main 578d5129) before compile()
-switched from positional section indexes to section names. A v11 scope with
-no active stable facts must keep producing exactly this prompt: no CORE FACTS
-section, no "(none)" placeholder, no supplement block.
+A v11 scope with no active stable facts must keep producing exactly this
+prompt: no CORE FACTS section, no "(none)" placeholder, no supplement block,
+and no current user message (it travels only as a message).
 
 Regenerate only when a change is *meant* to alter these prompts:
     AMADEUS_REGEN_PROMPT_SNAPSHOTS=1 python -m pytest -q tests/test_prompt_snapshot_v11_no_facts.py
@@ -80,13 +79,15 @@ CASES = {
         history=[],
         message="こんにちは",
     ),
+    # history gone; tail experiences dropped whole
     "self_over_budget_episodic_drop": dict(
         _OVER, identity_mode="self", identity_acknowledged=False,
-        message="長い質問" + "あ" * 30000,
+        message="長い質問", input_budget=5000,
     ),
+    # everything droppable gone; state char-sliced; persona and examples whole
     "okabe_over_budget_extreme": dict(
         _OVER, identity_mode="okabe", identity_acknowledged=True,
-        message="とても長い質問" + "い" * 36000,
+        message="とても長い質問", input_budget=3000,
     ),
 }
 
@@ -107,8 +108,7 @@ def _load() -> dict[str, str]:
 
 
 def _check(name: str, prompt: str, message: str) -> None:
-    assert prompt.endswith(message), f"{name}: current message not intact at prompt end"
-    prompt = prompt[: len(prompt) - len(message)]
+    assert message not in prompt, f"{name}: current message leaked into the system prompt"
     if REGEN:
         data = _load()
         data[name] = prompt
@@ -157,6 +157,10 @@ async def test_v11_no_fact_prompt_snapshot(isolated_store, monkeypatch, case_nam
     monkeypatch.setattr(soul_engine, "restore_emotion", fake_emotion)
     monkeypatch.setattr(memory_service, "select_core_facts", legacy_forbidden)
     monkeypatch.setattr(memory_service, "lexical_search", legacy_forbidden)
+    if "input_budget" in case:
+        import app.services.prompt_compiler as pc_module
+
+        monkeypatch.setattr(pc_module.prompt_compiler, "input_budget", case["input_budget"])
 
     session = SimpleNamespace(
         session_id=f"v11-snapshot-{case_name}",

@@ -11,8 +11,9 @@ def test_prompt_contains_worldline_terms():
 def test_fewshot_handles_chinese_without_language_confusion():
     import json
     data = json.load(open("prompts/kurisu_fewshot.json", encoding="utf-8"))
-    user_contents = [m["content"] for m in data if m["role"] == "user"]
-    assistant_contents = [m["content"] for m in data if m["role"] == "assistant"]
+    rows = [row for mode_rows in data.values() for row in mode_rows]
+    user_contents = [row["user"] for row in rows]
+    assistant_contents = [row["assistant"] for row in rows]
     assert len(user_contents) >= 6
     assert all(any("\u4e00" <= char <= "\u9fff" for char in content) for content in user_contents)
     assert all(content.startswith("[EMO:") for content in assistant_contents)

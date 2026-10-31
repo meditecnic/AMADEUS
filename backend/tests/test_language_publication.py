@@ -229,10 +229,8 @@ async def test_kanji_only_identity_line_publishes_without_retry():
     ],
 )
 async def test_any_non_japanese_user_gets_first_pass_japanese_hard_requirement(user_text):
-    from app.routers.chat_ws import (
-        _ANSWER_LANGUAGE_HARD_REQUIREMENT,
-        _NON_JAPANESE_INPUT_FIRST_PASS_JA,
-    )
+    from app.routers.chat_ws import _ANSWER_LANGUAGE_HARD_REQUIREMENT
+    from app.services.prompt_compiler import render_tail_reminder
 
     provider = _SequencedStreamProvider(
         ["[EMO:neutral] こんにちは。何か用？"]
@@ -254,9 +252,13 @@ async def test_any_non_japanese_user_gets_first_pass_japanese_hard_requirement(u
     first_prompt = provider.prompts[0]
     assert "ANSWER LANGUAGE — HARD REQUIREMENT" in first_prompt
     assert "必ず自然な日本語のみ" in first_prompt
-    assert "ユーザー入力の言語に関係なく" in first_prompt
-    assert _NON_JAPANESE_INPUT_FIRST_PASS_JA.strip() in first_prompt
     assert _ANSWER_LANGUAGE_HARD_REQUIREMENT.split("\n")[0] in first_prompt
+    # The first-pass language line now rides in the reminder after the user turn.
+    assert "ユーザー入力の言語に関係なく" not in first_prompt
+    sent = provider.calls[0]["active_history"]
+    assert sent[-2] == {"role": "user", "content": user_text}
+    assert sent[-1] == {"role": "system", "content": render_tail_reminder(session.identity_mode)}
+    assert "ユーザー入力の言語に関係なく、表示本文は必ず自然な日本語のみ" in sent[-1]["content"]
     assert "こんにちは" in text
     assert "生成できなかった" not in text
     assert "崩れた" not in text
@@ -279,8 +281,11 @@ async def test_japanese_user_message_skips_non_japanese_first_pass_hint():
         )
 
     first_prompt = provider.prompts[0]
-    # Pure JA user turns do not need the multilingual first-pass add-on.
+    # Pure JA user turns do not get the evidence-style hard requirement; the
+    # language line lives only in the tail reminder, never in the system prompt.
+    assert "ANSWER LANGUAGE — HARD REQUIREMENT" not in first_prompt
     assert "ユーザー入力の言語に関係なく" not in first_prompt
+    assert "ユーザー入力の言語に関係なく" in provider.calls[0]["active_history"][-1]["content"]
 
 
 @pytest.mark.asyncio
