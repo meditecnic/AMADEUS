@@ -13,11 +13,13 @@ import hashlib
 import json
 import math
 import os
+import secrets
 import signal
 import socket
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
@@ -46,7 +48,9 @@ CREATE_NO_WINDOW = 0x08000000
 TERMINATE_TIMEOUT_SECONDS = 8.0
 KILL_TIMEOUT_SECONDS = 2.0
 PROCESS_POLL_INTERVAL_SECONDS = 0.2
+_LOCAL_API_TOKENS: dict[int, str] = {}
 PROVIDER_ENV_KEYS = (
+    "AMADEUS_LOCAL_API_TOKEN",
     "DEEPSEEK_API_KEY",
     "OPENAI_API_KEY",
     "OPENAI_API_KEY_NEW",
@@ -148,8 +152,49 @@ def run_paths(run_root: Path) -> dict[str, Path]:
         "browser": run_root / "browser",
         "pids": run_root / "pids.json",
         "meta": run_root / "run.json",
+        "local_api_token": run_root / "local-api-token",
         "env_file": run_root / "fake-profile" / "AmadeusIsolated" / ".env",
     }
+
+
+def new_local_api_token(run_root: Path, backend_port: int) -> str:
+    """Share a fresh launch token across CLI commands, outside captures/logs."""
+    path = run_paths(run_root)["local_api_token"]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    token = secrets.token_urlsafe(32)
+    fd, temporary = tempfile.mkstemp(prefix=".local-api-token-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(token)
+        Path(temporary).replace(path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    _LOCAL_API_TOKENS[backend_port] = token
+    return token
+
+
+def load_local_api_token(run_root: Path, backend_port: int) -> None:
+    path = run_paths(run_root)["local_api_token"]
+    _LOCAL_API_TOKENS[backend_port] = path.read_text(encoding="utf-8")
+
+
+def local_api_headers(url: str) -> dict[str, str]:
+    target = urlparse(url)
+    token = (_LOCAL_API_TOKENS.get(target.port or 80)
+             if target.hostname in {"127.0.0.1", "localhost"} else None)
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
+def local_api_subprotocols(backend_port: int) -> list[str]:
+    token = _LOCAL_API_TOKENS.get(backend_port)
+    return ["amadeus.local.v1", f"amadeus.token.{token}"] if token else []
+
+
+def local_api_request(url: str, **kwargs):
+    import urllib.request
+
+    headers = {**kwargs.pop("headers", {}), **local_api_headers(url)}
+    return urllib.request.Request(url, headers=headers, **kwargs)
 
 
 def inspect_published_candidate(
@@ -887,6 +932,8 @@ def _apply_isolated_process_env(
         frontend_port=frontend_port,
         inherited=inherited,
     )
+    if inherited.get("AMADEUS_LOCAL_API_TOKEN"):
+        env["AMADEUS_LOCAL_API_TOKEN"] = inherited["AMADEUS_LOCAL_API_TOKEN"]
     for key in list(os.environ):
         if key not in env:
             os.environ.pop(key, None)
@@ -1039,7 +1086,7 @@ def _wait_http(url: str, *, timeout: float, contain: str | None = None) -> None:
     last = ""
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=2) as response:
+            with urllib.request.urlopen(local_api_request(url), timeout=2) as response:
                 body = response.read().decode("utf-8", "replace")
                 if response.status == 200 and (contain is None or contain in body):
                     return
@@ -1073,6 +1120,7 @@ def cmd_start(args: argparse.Namespace) -> None:
         backend_port=backend_port,
         frontend_port=frontend_port,
     )
+    env["AMADEUS_LOCAL_API_TOKEN"] = new_local_api_token(run_root, backend_port)
     python = args.python or sys.executable
     serve_cmd = [
         python,
@@ -1221,6 +1269,7 @@ def cmd_stop(args: argparse.Namespace) -> None:
     paths = run_paths(run_root)
     serve_pid_file = paths["root"] / "serve.pid"
     if not paths["pids"].is_file() and not serve_pid_file.is_file():
+        paths["local_api_token"].unlink(missing_ok=True)
         print(json.dumps({"ok": True, "command": "stop", "note": "no pids file"}))
         return
     pids = _read_json(paths["pids"]) if paths["pids"].is_file() else {}
@@ -1250,6 +1299,8 @@ def cmd_stop(args: argparse.Namespace) -> None:
     if not still:
         pids["stopped_at"] = _utc_now()
         serve_pid_file.unlink(missing_ok=True)
+        paths["local_api_token"].unlink(missing_ok=True)
+        _LOCAL_API_TOKENS.pop(int(pids.get("backend_port") or 0), None)
     _write_json(paths["pids"], pids)
     if still:
         _fail("stop_incomplete", f"still running: {still}")
@@ -1444,7 +1495,8 @@ async def _ws_session(*, backend_port: int, session_id: str, enable_tts: bool = 
     import websockets
 
     uri = f"ws://127.0.0.1:{backend_port}/ws/chat?session_id={session_id}"
-    ws = await websockets.connect(uri, origin='http://127.0.0.1:1420', open_timeout=10)
+    ws = await websockets.connect(uri, origin='http://127.0.0.1:1420', open_timeout=10,
+                                  subprotocols=local_api_subprotocols(backend_port))
     await ws.send(
         json.dumps(
             {
@@ -1520,7 +1572,7 @@ def _wait_fact(
     last = ""
     while time.monotonic() < deadline:
         try:
-            with urllib.request.urlopen(url, timeout=5) as response:
+            with urllib.request.urlopen(local_api_request(url), timeout=5) as response:
                 body = json.loads(response.read().decode("utf-8"))
             cards = [
                 row
@@ -1556,7 +1608,7 @@ def _patch_fact(backend_port: int, session_id: str, fact_id: str, expected_versi
             "expected_version": int(expected_version),
         }
     ).encode("utf-8")
-    request = urllib.request.Request(
+    request = local_api_request(
         f"http://127.0.0.1:{backend_port}/api/memory/facts/{fact_id}?{params}",
         data=payload,
         method="PATCH",
@@ -1574,7 +1626,7 @@ def _delete_fact(backend_port: int, session_id: str, fact_id: str, expected_vers
     params = urllib.parse.urlencode(
         {**_memory_scope(session_id), "expected_version": str(expected_version)}
     )
-    request = urllib.request.Request(
+    request = local_api_request(
         f"http://127.0.0.1:{backend_port}/api/memory/facts/{fact_id}?{params}",
         method="DELETE",
     )
@@ -1588,6 +1640,7 @@ def cmd_verify_api(args: argparse.Namespace) -> None:
     paths = run_paths(run_root)
     pids = _read_json(paths["pids"])
     backend_port = int(pids["backend_port"])
+    load_local_api_token(run_root, backend_port)
     session_id = args.session_id or f"b2-{uuid.uuid4()}"
     chat_log = paths["captures"] / "provider_chat.jsonl"
     if chat_log.exists():
@@ -1677,7 +1730,7 @@ def cmd_verify_api(args: argparse.Namespace) -> None:
         }
     )
     with urllib.request.urlopen(
-        f"http://127.0.0.1:{backend_port}/api/memory/graph/projection?{proj_params}",
+        local_api_request(f"http://127.0.0.1:{backend_port}/api/memory/graph/projection?{proj_params}"),
         timeout=10,
     ) as response:
         projection = json.loads(response.read().decode("utf-8"))

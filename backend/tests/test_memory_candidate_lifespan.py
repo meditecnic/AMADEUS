@@ -8,6 +8,9 @@ import sqlite3
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -188,6 +191,13 @@ def test_prepare_start_natural_worker_restart(tmp_path):
     if started.returncode != 0:
         pytest.fail(started.stderr + "\n" + started.stdout)
     try:
+        token_path = b2.run_paths(run_root)["local_api_token"]
+        first_token = token_path.read_text(encoding="utf-8")
+        if os.name != "nt":
+            assert token_path.stat().st_mode & 0o777 == 0o600
+        with pytest.raises(urllib.error.HTTPError) as missing_token:
+            urllib.request.urlopen("http://127.0.0.1:8010/health", timeout=5)
+        assert missing_token.value.code == 401
         verified = _cli(
             "verify-api",
             "--run-root",
@@ -207,8 +217,13 @@ def test_prepare_start_natural_worker_restart(tmp_path):
         log = (run_root / "logs" / "backend.log").read_text(encoding="utf-8", errors="replace")
         assert "worker started" in log
         assert "serve_starting" in log
+        assert first_token not in log + started.stdout + started.stderr + verified.stdout + verified.stderr
+        for path in (run_root / "captures").rglob("*"):
+            if path.is_file():
+                assert first_token.encode() not in path.read_bytes()
     finally:
         _cli("stop", "--run-root", str(run_root), check=False)
+    assert not token_path.exists()
 
     if mtime_before is not None:
         assert dotenv.stat().st_mtime == mtime_before
@@ -234,9 +249,6 @@ def test_prepare_start_natural_worker_restart(tmp_path):
     )
     assert restarted.returncode == 0, restarted.stderr + restarted.stdout
     try:
-        import urllib.parse
-        import urllib.request
-
         params = urllib.parse.urlencode(
             {
                 "session_id": "b2-pytest-owner",
@@ -246,10 +258,19 @@ def test_prepare_start_natural_worker_restart(tmp_path):
             }
         )
         url = f"http://127.0.0.1:8010/api/memory/facts?{params}"
+        second_token = token_path.read_text(encoding="utf-8")
+        assert second_token != first_token
+        old_request = urllib.request.Request(
+            "http://127.0.0.1:8010/health", headers={"Authorization": f"Bearer {first_token}"},
+        )
+        with pytest.raises(urllib.error.HTTPError) as old_token:
+            urllib.request.urlopen(old_request, timeout=5)
+        assert old_token.value.code == 401
+        request = urllib.request.Request(url, headers={"Authorization": f"Bearer {second_token}"})
         deadline = time.monotonic() + 15
         body = {}
         while time.monotonic() < deadline:
-            with urllib.request.urlopen(url, timeout=5) as response:
+            with urllib.request.urlopen(request, timeout=5) as response:
                 body = json.loads(response.read().decode("utf-8"))
             if any("B2RT_SESAME_V2" in str(row.get("display_text") or "") for row in body.get("facts") or []):
                 break
@@ -261,6 +282,7 @@ def test_prepare_start_natural_worker_restart(tmp_path):
         assert any(row.get("fact_id") == report["sesame_fact_id"] for row in body.get("facts") or [])
     finally:
         _cli("stop", "--run-root", str(run_root), check=False)
+    assert not token_path.exists()
 
 
 def test_cli_utf8_capture_when_parent_pythonutf8_off():

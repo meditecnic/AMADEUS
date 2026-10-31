@@ -328,10 +328,11 @@ class _ClientSocket:
     def __init__(self, session_id: str):
         self.query_params = {"session_id": session_id}
         self.headers = Headers({"origin": "http://localhost"})
+        self.scope = {"subprotocols": []}
         self.incoming: asyncio.Queue = asyncio.Queue()
         self.outgoing: asyncio.Queue = asyncio.Queue()
 
-    async def accept(self):
+    async def accept(self, subprotocol=None):
         return None
 
     async def receive_json(self):

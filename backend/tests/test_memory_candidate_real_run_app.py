@@ -7,7 +7,11 @@ import os
 import socket
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
+
+import pytest
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = BACKEND_ROOT / "scripts" / "memory_candidate_real_run.py"
@@ -74,6 +78,13 @@ def test_ws_processor_local_http_budget_and_product_ops(tmp_path):
         _cli("stop", "--run-root", str(run_root), check=False)
     assert started.returncode == 0, started.stderr + started.stdout
     try:
+        token_path = run_root / "local-api-token"
+        token = token_path.read_text(encoding="utf-8")
+        if os.name != "nt":
+            assert token_path.stat().st_mode & 0o777 == 0o600
+        with pytest.raises(urllib.error.HTTPError) as missing_token:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=5)
+        assert missing_token.value.code == 401
         verified = _cli(
             "verify-local",
             "--run-root",
@@ -125,8 +136,14 @@ def test_ws_processor_local_http_budget_and_product_ops(tmp_path):
         assert bounds["turn_exhausted"]["chat_did_not_grow"] is True
         assert bounds["http_race"]["mock_delta"] <= 1
         assert bounds["http_exhausted"]["attempts"] == bounds["http_exhausted"]["max_http_attempts"]
+        assert token not in started.stdout + started.stderr + verified.stdout + verified.stderr + proved.stdout + proved.stderr
+        for folder in ("logs", "captures"):
+            for path in (run_root / folder).rglob("*"):
+                if path.is_file():
+                    assert token.encode() not in path.read_bytes()
     finally:
         _cli("stop", "--run-root", str(run_root), check=False)
+    assert not token_path.exists()
 
     stopped = json.loads((run_root / "pids.json").read_text(encoding="utf-8"))
     assert stopped["backend_stopped"] is True

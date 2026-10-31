@@ -986,6 +986,7 @@ def test_auth_uses_completion_status():
 @pytest.mark.parametrize("late", [False, True])
 @pytest.mark.parametrize("status", [401, 403])
 def test_verify_real_detects_early_and_late_auth_from_records(tmp_path, monkeypatch, late, status):
+    b3.b2.new_local_api_token(tmp_path, 12345)
     paths = b3.b2.run_paths(tmp_path)
     paths["captures"].mkdir()
     b3.b2._write_json(paths["pids"], {
@@ -1024,6 +1025,7 @@ def test_verify_real_detects_early_and_late_auth_from_records(tmp_path, monkeypa
 
 @pytest.mark.parametrize("reason", ["late_auth", "budget", "historical_failure", "background_auth"])
 def test_final_turn_classifies_current_records_after_background_idle(tmp_path, monkeypatch, reason):
+    b3.b2.new_local_api_token(tmp_path, 12345)
     paths = b3.b2.run_paths(tmp_path)
     paths["captures"].mkdir()
     b3.b2._write_json(paths["pids"], {
