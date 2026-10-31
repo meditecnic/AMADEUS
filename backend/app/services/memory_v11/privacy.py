@@ -25,6 +25,13 @@ _FULLWIDTH_ASCII_TRANSLATION = {
 } | {0x3000: 0x20}
 _CREDENTIAL_TRAILING_PUNCTUATION = "，,。.；;！!？?"
 _CREDENTIAL_FULLWIDTH_BOUNDARY_RE = re.compile(r"[，。；！？、](?=\S)")
+_HAN_KANA = (
+    r"\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U000323af"
+    r"\u3041-\u309f\u30a1-\u30fa\u30fc-\u30ff\u31f0-\u31ff\uff66-\uff9f"
+)
+_HAN_KANA_RE = re.compile(rf"[{_HAN_KANA}]")
+_CJK_PUNCTUATION = "，。；：！？、（）【】「」『』《》〈〉〔〕［］｛｝‘’“”・．"
+_CJK_PUNCTUATION_RE = re.compile(rf"[{_CJK_PUNCTUATION}]")
 _CREDENTIAL_CONTINUATION_RE = re.compile(r"[\W_]+?(\S+)")
 _REDACTION_VALUE_RE = re.compile(
     r"\[REDACTED:(?:password|api_secret|otp|payment_card|government_id|precise_home_address)\]",
@@ -70,9 +77,11 @@ _API_RE = [
 ]
 _BEARER_RE = [re.compile(r"\bBearer\s+(\S+)", re.IGNORECASE)]
 _URL_PASSWORD_KEYS = {"password", "passwd", "pwd"}
+# A generated marker stays whole even though ] terminates a raw URL value.
 _URL_CREDENTIAL_RE = re.compile(
     r"[?&](token|access_token|refresh_token|id_token|api_key|apikey|client_secret|"
-    r"secret|password|passwd|pwd)=([^&#\s]+)",
+    r"secret|password|passwd|pwd)="
+    rf"""((?:{_REDACTION_VALUE_RE.pattern}|[^&#\s{_HAN_KANA}{_CJK_PUNCTUATION})\]'"])+)""",
     re.IGNORECASE,
 )
 
@@ -223,14 +232,21 @@ def _iter_matches(pattern: re.Pattern[str], text: str) -> Iterator[re.Match[str]
         cursor = match.start() + 1
 
 
-def _credential_value_end(text: str, start: int, end: int, validator) -> int:
-    """Use fullwidth sentence boundaries only for valid credential prefixes.
+def _credential_value_end(text: str, start: int, end: int, validator, *, cjk: bool = False) -> int:
+    """Separate CJK prose while preserving punctuation inside concrete values.
 
     A complete marker prefix is parsed separately so its following text can
     be checked as a continuation, rather than misclassified as one long value.
-    Invalid short prefixes keep the original whole-token fail-closed behavior.
+    CJK cues keep a short prefix plus punctuation only when ASCII-compatible
+    letters/digits follow before the first Han/kana character. English cues
+    retain their original whole-token behavior for invalid short prefixes.
     """
-    boundary = _CREDENTIAL_FULLWIDTH_BOUNDARY_RE.search(text, start, end)
+    # CJK cues stop before unspaced prose. Work on the original text so width
+    # folding and combining characters cannot shift replacement offsets.
+    if cjk and (prose := _HAN_KANA_RE.search(text, start, end)):
+        end = prose.start()
+    boundaries = _CJK_PUNCTUATION_RE if cjk else _CREDENTIAL_FULLWIDTH_BOUNDARY_RE
+    boundary = boundaries.search(text, start, end)
     if boundary is not None:
         prefix = text[start:boundary.start()]
         if _REDACTION_TOKEN_RE.fullmatch(prefix.rstrip(_CREDENTIAL_TRAILING_PUNCTUATION)):
@@ -238,6 +254,8 @@ def _credential_value_end(text: str, start: int, end: int, validator) -> int:
             # even when it alone is too short to pass a credential validator.
             return end if _has_credential_alnum(text[boundary.end():end]) else boundary.start()
         if validator(prefix):
+            return boundary.start()
+        if cjk and re.search(_ALNUM, text[boundary.end():end].translate(_FULLWIDTH_ASCII_TRANSLATION)) is None:
             return boundary.start()
     return end
 
@@ -268,7 +286,8 @@ def _credential_matches(text: str, category: str | None = None) -> list[tuple[in
                 if any(query.start() <= match.start() < query.end() for query in query_matches):
                     continue
                 start, end = match.span(1)
-                end = _credential_value_end(text, start, end, validator)
+                cjk = _HAN_KANA_RE.search(text, match.start(), start) is not None
+                end = _credential_value_end(text, start, end, validator, cjk=cjk)
                 value = text[start:end]
                 # A user-typed marker followed by another credential-shaped token
                 # cannot hide that token behind the placeholder exemption.
@@ -276,7 +295,7 @@ def _credential_matches(text: str, category: str | None = None) -> list[tuple[in
                     cursor = end
                     while following := _CREDENTIAL_CONTINUATION_RE.match(text, cursor):
                         token_start = following.start(1)
-                        token_end = _credential_value_end(text, token_start, following.end(1), validator)
+                        token_end = _credential_value_end(text, token_start, following.end(1), validator, cjk=cjk)
                         token = text[token_start:token_end]
                         # Skip standalone separator tokens, but keep punctuation
                         # attached to a value (!!!abc is a valid 6-char secret).
