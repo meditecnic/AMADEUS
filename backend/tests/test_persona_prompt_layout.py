@@ -247,7 +247,10 @@ def test_tail_reminder_wording_per_identity_mode():
         assert text.startswith(TAIL_REMINDER_HEADER)
         assert "ユーザー入力の言語に関係なく、表示本文は必ず自然な日本語のみ" in text
         assert "[EMO:" in text
-        assert "日本語の言い方に直す" in text
+        assert "日本語の言い方だけで話す。中国語の語句は引用しない・かぎ括弧に入れない・日本語訳と並べて書かない。" in text
+        assert "- 長さは普段の会話なら二〜四文。詳しい説明を求められた時だけ長くしてよいが、要点に絞る。" in text
+        assert "土豆" not in text
+        assert [ch for ch in dict.fromkeys(text) if "\u4e00" <= ch <= "\u9fff" and not _cp932(ch)] == []
     assert "『岡部』" in okabe
     assert "『ミナ』" in named and "『あなた』" in unnamed
     for text in (named, unnamed):
