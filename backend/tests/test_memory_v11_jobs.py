@@ -4956,3 +4956,111 @@ def test_r2_generic_compatible_prose_keeps_existing_negative_control(text):
 def test_r2_generic_shape_retains_old_ascii_hits_and_real_compatible_secrets(text):
     assert "password" in _classify(text)
     assert _jobs().redact_user_text(text)[0] != text
+
+
+# [129] Synthetic credential samples only; no real account data.
+_V129_GAP_CASES = [
+    ("ja-password", "パスワードは hunter22 です", "password", "hunter22"),
+    ("ja-password-colon", "パスワード：hunter22", "password", "hunter22"),
+    ("bearer-header", "Authorization: Bearer abcdefghijklmnop123456", "api_secret", "abcdefghijklmnop123456"),
+    ("url-token", "https://example.com/cb?token=abcdef123456", "api_secret", "abcdef123456"),
+    ("fullwidth-otp", "验证码是１２３４５６", "otp", "１２３４５６"),
+    ("fullwidth-auth-code", "认证码：１２３４５６", "otp", "１２３４５６"),
+    ("fullwidth-card", "卡号 ６２２２ ０２０２ ０２０２ ０２０２ ０２６", "payment_card", "６２２２ ０２０２ ０２０２ ０２０２ ０２６"),
+    ("required-period", "password is required.", None, None),
+    ("incorrect-period", "password is incorrect.", None, None),
+    ("the-required-period", "The password is required.", None, None),
+    ("ja-pin", "暗証番号が1234", "password", "1234"),
+    ("ja-passcode", "パスコード＝abc123", "password", "abc123"),
+    ("ja-otp", "認証コードは A7K92Q", "otp", "A7K92Q"),
+    ("ja-confirm", "確認コード：123456", "otp", "123456"),
+    ("ja-onetime", "ワンタイムパスワードが123456", "otp", "123456"),
+    ("ja-api", "APIキーは abcdef123456", "api_secret", "abcdef123456"),
+    ("ja-access-token", "アクセストークン＝abcdef123456", "api_secret", "abcdef123456"),
+    ("bearer-bare", "Bearer abcdefghijklmnop", "api_secret", "abcdefghijklmnop"),
+    ("bearer-short", "Bearer abcdefghijklmno", None, None),
+    ("url-api-tail", "https://example.com/cb?api_key=abcdefgh&mode=dark#done", "api_secret", "abcdefgh"),
+    ("url-password-tail", "https://example.com/cb?password=abcd&mode=dark#done", "password", "abcd"),
+    ("url-secret", "https://example.com/cb?secret=abcdefgh&mode=dark", "api_secret", "abcdefgh"),
+    ("url-secret-short", "https://example.com/cb?secret=abcdefg&mode=dark", None, None),
+    ("url-known-key", "https://example.com/cb?token=sk-abcdefghijklmnop&mode=dark", "api_secret", "sk-abcdefghijklmnop"),
+    ("fullwidth-otp-alnum", "验证码：Ａ７Ｋ９２Ｑ", "otp", "Ａ７Ｋ９２Ｑ"),
+    ("fullwidth-card-hyphens", "卡号 ４１１１－１１１１－１１１１－１１１１", "payment_card", "４１１１－１１１１－１１１１－１１１１"),
+    ("fullwidth-prc-id", "１１０１０５１９４９１２３１００２Ｘ", "government_id", "１１０１０５１９４９１２３１００２Ｘ"),
+    ("fullwidth-passport", "护照：Ｅ１２３４５６７", "government_id", "Ｅ１２３４５６７"),
+    ("fullwidth-ssn", "１２３－４５－６７８９", "government_id", "１２３－４５－６７８９"),
+    ("fullwidth-space", "ＯＴＰ：　Ａ７Ｋ９２Ｑ", "otp", "Ａ７Ｋ９２Ｑ"),
+    ("required-cjk-period", "password is required。", None, None),
+    ("required-fullwidth-prose", "password is ｒｅｑｕｉｒｅｄ.", None, None),
+    ("strong-prose", "my password is required.", "password", "required"),
+    ("fullwidth-password", "password is ａｂｃ１２３", "password", "ａｂｃ１２３"),
+    ("exclamation", "password is abc！", "password", "abc"),
+    ("combining", "password is a\u030a!!", "password", "a\u030a"),
+    ("double-period", "password is required..", "password", "required"),
+    ("ja-short-password", "パスワード：abc", None, None),
+    ("ja-password-prose", "パスワードはrequired", None, None),
+    ("ja-short-api", "APIキーはabcdefg", None, None),
+    ("ja-otp-prose", "認証コードはrequired", None, None),
+    ("marker-short-ja-api", "password: [REDACTED:password] APIキーはshort", "password", "[REDACTED:password] APIキーはshort"),
+    ("marker-short-bearer", "password: [REDACTED:password] Bearer x", "password", "[REDACTED:password] Bearer"),
+]
+
+
+@pytest.mark.parametrize("case_id,text,category,value", _V129_GAP_CASES, ids=[row[0] for row in _V129_GAP_CASES])
+def test_v129_gap_classification(case_id, text, category, value):
+    assert _classify(text) == (frozenset({category}) if category else frozenset())
+
+
+@pytest.mark.parametrize("case_id,text,category,value", _V129_GAP_CASES, ids=[row[0] for row in _V129_GAP_CASES])
+def test_v129_gap_partial_redaction(case_id, text, category, value):
+    masked, blocked = _jobs().redact_user_text(text)
+    assert blocked is False
+    if category:
+        assert value not in masked
+        assert masked == text.replace(value, f"[REDACTED:{category}]", 1)
+        assert not _classify(masked)
+    else:
+        assert masked == text
+
+
+@pytest.mark.parametrize("text", [text + "." for text in _REWORK_REPRO_NEGATIVES])
+def test_v129_rework_negatives_with_period(text):
+    assert _classify(text) == frozenset()
+    assert _jobs().redact_user_text(text) == (text, False)
+
+
+@pytest.mark.parametrize("cue", ["パスワード", "暗証番号", "パスコード", "認証コード", "確認コード", "ワンタイムパスワード", "APIキー", "アクセストークン"])
+@pytest.mark.parametrize("separator", ["は", "が", "：", ":", "=", "＝"])
+def test_v129_japanese_cues_and_assignments(cue, separator):
+    value = "abc12345"
+    category = "password" if cue in {"パスワード", "暗証番号", "パスコード"} else (
+        "api_secret" if cue in {"APIキー", "アクセストークン"} else "otp"
+    )
+    text = cue + separator + value
+    assert _classify(text) == frozenset({category})
+    assert _jobs().redact_user_text(text) == (cue + separator + f"[REDACTED:{category}]", False)
+
+
+@pytest.mark.parametrize("key", ["token", "access_token", "refresh_token", "id_token", "api_key", "apikey", "client_secret", "secret", "password", "passwd", "pwd"])
+@pytest.mark.parametrize("at_threshold", [False, True])
+def test_v129_url_aliases_and_value_boundaries(key, at_threshold):
+    category = "password" if key in {"password", "passwd", "pwd"} else "api_secret"
+    minimum = 4 if category == "password" else 8
+    value = "a" * (minimum if at_threshold else minimum - 1)
+    text = f"https://example.com/cb?keep=yes&{key}={value}&mode=dark#done"
+    expected = text.replace(value, f"[REDACTED:{category}]") if at_threshold else text
+    assert _classify(text) == (frozenset({category}) if at_threshold else frozenset())
+    assert _jobs().redact_user_text(text) == (expected, False)
+
+
+def test_v129_mixed_secrets_keep_original_offsets_and_url_fields():
+    # Whole-string NFKC would expand the ligature and compose the combining mark.
+    prefix = "ﬀ a\u030a ㍿ "
+    text = prefix + "验证码：Ａ７Ｋ９２Ｑ；https://example.com/cb?token=abcdefgh&token=ijklmnop&pwd=abcd#done"
+    expected = prefix + "验证码：[REDACTED:otp]；https://example.com/cb?token=[REDACTED:api_secret]&token=[REDACTED:api_secret]&pwd=[REDACTED:password]#done"
+    assert _classify(text) == frozenset({"otp", "api_secret", "password"})
+    assert {text[start:end] for start, end, _ in _privacy().sensitive_spans(text)} == {
+        "Ａ７Ｋ９２Ｑ", "abcdefgh", "ijklmnop", "abcd",
+    }
+    assert _jobs().redact_user_text(text) == (expected, False)
+    assert _jobs().redact_user_text(expected) == (expected, False)

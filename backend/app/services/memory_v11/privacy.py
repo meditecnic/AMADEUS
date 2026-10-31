@@ -20,6 +20,9 @@ GOVERNMENT_ID = "government_id"
 PRECISE_HOME_ADDRESS = "precise_home_address"
 
 _ALNUM = r"[A-Za-z0-9]"
+_FULLWIDTH_ASCII_TRANSLATION = {
+    code: code - 0xFEE0 for code in range(0xFF01, 0xFF5F)
+} | {0x3000: 0x20}
 _CREDENTIAL_TRAILING_PUNCTUATION = "，,。.；;！!？?"
 _CREDENTIAL_FULLWIDTH_BOUNDARY_RE = re.compile(r"[，。；！？、](?=\S)")
 _CREDENTIAL_CONTINUATION_RE = re.compile(r"[\W_]+?(\S+)")
@@ -37,15 +40,20 @@ _REDACTION_TOKEN_RE = re.compile(r"\[REDACTED(?::[a-z_]+)?\]", re.IGNORECASE)
 # values (digit or non-letter password-like symbol) — ordinary prose words
 # like "required"/"important"/"weak" must never become secret values.
 # ---------------------------------------------------------------------------
+_PASSWORD_CUE_JA = r"(?:(?<!ワンタイム)パスワード|暗証番号|パスコード)"
 _PASSWORD_STRONG_RE = [
     re.compile(r"(?i)\bmy\s+(?:password|passwd|passphrase|secret)\b\s+(?:is|are)\s+(\S+)"),
     re.compile(r"(?i)\b(?:password|passwd|passphrase|secret)\b\s*[:=：＝]\s*(\S+)"),
     re.compile(r"我的密码(?!学)\s*(?:是|为|等于)\s*(\S+)"),
     re.compile(r"密码(?!学)\s*[:=：＝]\s*(\S+)"),
+    re.compile(rf"{_PASSWORD_CUE_JA}\s*[:=：＝]\s*(\S+)"),
 ]
 _PASSWORD_COPULA_RE = [
     re.compile(r"(?i)\b(?:password|passwd|passphrase|secret)\b\s+(?:is|are)\s+(\S+)"),
+]
+_PASSWORD_COPULA_CJK_RE = [
     re.compile(r"密码(?!学)\s*(?:是|为|等于)\s*(\S+)"),
+    re.compile(rf"{_PASSWORD_CUE_JA}\s*(?:は|が)\s*(\S+)"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -57,8 +65,16 @@ _API_RE = [
     re.compile(rf"{_API_CUE}\s+(?:is|are)\s+(\S+)"),
     re.compile(r"(?:API\s*密钥|访问令牌|密钥)\s*[:=：＝]\s*(\S+)"),
     re.compile(r"(?:API\s*密钥|访问令牌|密钥)\s*(?:是|为|等于)\s*(\S+)"),
+    re.compile(r"(?:APIキー|アクセストークン)\s*(?:[:=：＝]|は|が)\s*(\S+)", re.IGNORECASE),
     re.compile(r"(?<![\w-])(?:sk|pk)-[A-Za-z0-9]{16,}(?![\w-])"),
 ]
+_BEARER_RE = [re.compile(r"\bBearer\s+(\S+)", re.IGNORECASE)]
+_URL_PASSWORD_KEYS = {"password", "passwd", "pwd"}
+_URL_CREDENTIAL_RE = re.compile(
+    r"[?&](token|access_token|refresh_token|id_token|api_key|apikey|client_secret|"
+    r"secret|password|passwd|pwd)=([^&#\s]+)",
+    re.IGNORECASE,
+)
 
 # ---------------------------------------------------------------------------
 # otp / verification code: cue + concrete code value close to the cue.
@@ -72,9 +88,11 @@ _OTP_RE = [
     re.compile(rf"{_OTP_CUE_EN}\s*[:=：＝]\s*({_OTP_VALUE})"),
     re.compile(rf"{_OTP_CUE_EN}\s+(?:is|are|是|为|等于)\s+({_OTP_VALUE})"),
     re.compile(rf"{_OTP_CUE_EN}\s+({_OTP_VALUE})"),
-    re.compile(r"(?:验证码|校验码|动态码)\s*[:=：＝]\s*([A-Za-z0-9]{4,10})"),
-    re.compile(r"(?:验证码|校验码|动态码)\s*(?:是|为|等于)\s*([A-Za-z0-9]{4,10})"),
-    re.compile(r"(?:验证码|校验码|动态码)\s+([A-Za-z0-9]{4,10})"),
+    re.compile(r"(?:验证码|认证码|校验码|动态码)\s*[:=：＝]\s*([A-Za-z0-9]{4,10})"),
+    re.compile(r"(?:验证码|认证码|校验码|动态码)\s*(?:是|为|等于)\s*([A-Za-z0-9]{4,10})"),
+    re.compile(r"(?:验证码|认证码|校验码|动态码)\s+([A-Za-z0-9]{4,10})"),
+    re.compile(rf"(?:認証コード|確認コード|ワンタイムパスワード)\s*(?:[:=：＝]|は|が)\s*({_OTP_VALUE})"),
+    re.compile(rf"(?:認証コード|確認コード|ワンタイムパスワード)\s+({_OTP_VALUE})"),
 ]
 
 # ---------------------------------------------------------------------------
@@ -175,6 +193,14 @@ def _secret_shaped(value: str) -> bool:
     )
 
 
+def _english_copula_value_ok(value: str) -> bool:
+    # One sentence-ending period is not evidence that a prose word is a secret.
+    # Other punctuation (including !/！) and strong ownership cues keep their rules.
+    if value.endswith((".", "。")):
+        value = value[:-1]
+    return _concrete_value_ok(value) and _secret_shaped(value)
+
+
 def _identifier_shaped(value: str) -> bool:
     """EN labeled government IDs need an identifier-shaped value (has digits)."""
     return bool(re.search(r"\d", value))
@@ -219,16 +245,28 @@ def _credential_value_end(text: str, start: int, end: int, validator) -> int:
 def _credential_matches(text: str, category: str | None = None) -> list[tuple[int, int, str]]:
     """All credential occurrences, validating raw values and masking whole tokens."""
     spans: list[tuple[int, int, str]] = []
+    query_matches = list(_URL_CREDENTIAL_RE.finditer(text))
+    for match in query_matches:
+        cls = PASSWORD if match.group(1).lower() in _URL_PASSWORD_KEYS else API_SECRET
+        if category is not None and cls != category:
+            continue
+        if _concrete_value_ok(match.group(2), min_len=4 if cls == PASSWORD else 8):
+            spans.append((*match.span(2), cls))
     groups = (
         (_PASSWORD_STRONG_RE, PASSWORD, _concrete_value_ok),
-        (_PASSWORD_COPULA_RE, PASSWORD, lambda v: _concrete_value_ok(v) and _secret_shaped(v)),
+        (_PASSWORD_COPULA_RE, PASSWORD, _english_copula_value_ok),
+        (_PASSWORD_COPULA_CJK_RE, PASSWORD, lambda v: _concrete_value_ok(v) and _secret_shaped(v)),
         (_API_RE[:-1], API_SECRET, lambda v: _concrete_value_ok(v, min_len=8)),
+        (_BEARER_RE, API_SECRET, lambda v: _concrete_value_ok(v, min_len=16)),
     )
     for patterns, cls, validator in groups:
         if category is not None and cls != category:
             continue
         for pattern in patterns:
             for match in _iter_matches(pattern, text):
+                # Query values have their own category and &/# boundaries.
+                if any(query.start() <= match.start() < query.end() for query in query_matches):
+                    continue
                 start, end = match.span(1)
                 end = _credential_value_end(text, start, end, validator)
                 value = text[start:end]
@@ -248,8 +286,12 @@ def _credential_matches(text: str, category: str | None = None) -> list[tuple[in
                         if _REDACTION_TOKEN_RE.fullmatch(token.rstrip(_CREDENTIAL_TRAILING_PUNCTUATION)):
                             cursor = token_end
                             continue
-                        if any(pattern.match(text, token_start)
-                               for cue_patterns, _, _ in groups for pattern in cue_patterns):
+                        # Yield to a valid value or an already masked one; an
+                        # incomplete cue cannot hide a valid continuation.
+                        if any((cue := pattern.match(text, token_start))
+                               and (cue_validator(cue.group(1)) or _REDACTION_VALUE_RE.fullmatch(
+                                   cue.group(1).rstrip(_CREDENTIAL_TRAILING_PUNCTUATION)))
+                               for cue_patterns, _, cue_validator in groups for pattern in cue_patterns):
                             break
                         # Check the original value including the marker prefix;
                         # ordinary CJK prose has no ASCII-compatible credential evidence.
@@ -264,6 +306,8 @@ def _credential_matches(text: str, category: str | None = None) -> list[tuple[in
                     spans.append((start, start + len(trimmed), cls))
     if category in (None, API_SECRET):
         for match in _iter_matches(_API_RE[-1], text):
+            if any(query.start() <= match.start() < query.end() for query in query_matches):
+                continue
             # Known bare key shapes can be followed by punctuation inside the
             # same credential value. Keep that suffix inside the masked span.
             tail = re.match(r"\S*", text[match.end():])
@@ -383,6 +427,9 @@ def classify_memory_sensitive_text(text: str) -> frozenset[str]:
     """
     if not text:
         return frozenset()
+    # Only width-fold ASCII, one source character per matching character.
+    # Credential parsing keeps raw punctuation and its established shape rules.
+    narrowed = text.translate(_FULLWIDTH_ASCII_TRANSLATION)
     out: set[str] = set()
     for cls, detector in (
         (PASSWORD, _has_password),
@@ -392,7 +439,8 @@ def classify_memory_sensitive_text(text: str) -> frozenset[str]:
         (GOVERNMENT_ID, _has_government_id),
         (PRECISE_HOME_ADDRESS, _has_precise_home_address),
     ):
-        if detector(text):
+        candidate = narrowed if cls in (OTP, PAYMENT_CARD, GOVERNMENT_ID) else text
+        if detector(candidate):
             out.add(cls)
     return frozenset(out)
 
@@ -412,23 +460,25 @@ def find_memory_sensitive_matches(text: str) -> list[tuple[int, int, str]]:
     Addresses still mask the residence clause, including street/unit data.
     """
     spans = _credential_matches(text)
+    # Width folding never changes offsets, so jobs can mask the original text.
+    narrowed = text.translate(_FULLWIDTH_ASCII_TRANSLATION)
     def add_values(patterns, category, validator):
         for pattern in patterns:
-            for match in _iter_matches(pattern, text):
+            for match in _iter_matches(pattern, narrowed):
                 start, end = match.span(1)
-                boundary = _CLAUSE_BOUNDARY_RE.search(text, start, end)
+                boundary = _CLAUSE_BOUNDARY_RE.search(narrowed, start, end)
                 if boundary:
                     end = boundary.start()
-                if validator(text[start:end]):
+                if validator(narrowed[start:end]):
                     spans.append((start, end, category))
     add_values(_OTP_RE, OTP, _otp_value_ok)
     for pattern in (_PAN_LABELED_CN, _PAN_LABELED_EN):
-        for match in _iter_matches(pattern, text):
+        for match in _iter_matches(pattern, narrowed):
             spans.append((*match.span(), PAYMENT_CARD))
-    for match in _PAN_RUN_RE.finditer(text):
+    for match in _PAN_RUN_RE.finditer(narrowed):
         if _luhn_valid(re.sub(r"[\s-]", "", match.group())):
             spans.append((*match.span(), PAYMENT_CARD))
-    for match in _SSN_RE.finditer(text):
+    for match in _SSN_RE.finditer(narrowed):
         spans.append((*match.span(), GOVERNMENT_ID))
     add_values([_PRC_ID_RE], GOVERNMENT_ID, _prc_id_valid)
     add_values([_GOV_LABELED_CN_ID, _GOV_LABELED_CN_PASSPORT], GOVERNMENT_ID, lambda v: bool(v))
