@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { LocalBackendGate } from "./LocalBackendGate";
 import "./design-system/motion.css";
 import "./design-system/tokens.css";
 // Bundled OFL display faces (no CDN): Latin serif for the wordmark and menu, CJK serif for headings and her name.
@@ -16,6 +17,6 @@ import "./workstation/workstation.css";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    <App />
+    <LocalBackendGate><App /></LocalBackendGate>
   </React.StrictMode>,
 );

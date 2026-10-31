@@ -91,11 +91,13 @@ dist-info 下的许可树存入经过字节校验的 ZIP，避免深路径。
 ## 验收
 
 先运行自检（使用新的临时数据目录，凭据后端设为 memory，禁用 dotenv）：
+自检的令牌只要求非空，随便填，不要填真实令牌。
 
 ```powershell
 $env:AMADEUS_DATA_DIR = 'X:/build-artifacts/check-data'
 $env:AMADEUS_CREDENTIAL_BACKEND = 'memory'
 $env:PYTHON_DOTENV_DISABLED = '1'
+$env:AMADEUS_LOCAL_API_TOKEN = 'self-check-only'
 & desktop/src-tauri/resources/backend/amadeus-backend.exe --self-check
 ```
 

@@ -18,8 +18,12 @@ afterEach(() => {
 it('keeps packaged login disabled until the local backend health check succeeds', async () => {
   vi.useFakeTimers();
   vi.stubEnv('DEV', false);
-  vi.stubEnv('VITE_API_BASE', undefined);
-  vi.stubGlobal('__TAURI_INTERNALS__', {});
+  vi.resetModules();
+  vi.stubGlobal('__TAURI_INTERNALS__', { invoke: vi.fn().mockResolvedValue({
+    version: 1, http_origin: 'http://127.0.0.1:8000', ws_origin: 'ws://127.0.0.1:8000', token: 'synthetic-login-token',
+  }) });
+  const { initializeLocalBackend } = await import('../apiBase');
+  await initializeLocalBackend();
   vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
   const fetchMock = vi.fn()
     .mockResolvedValueOnce({ ok: false })
