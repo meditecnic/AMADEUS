@@ -305,7 +305,7 @@ async def verify_missing_token(port: int) -> None:
             try:
                 await connection.recv()
             except ConnectionClosed as exc:
-                if exc.rcvd.code != 4401:
+                if exc.rcvd is None or exc.rcvd.code != 4401:
                     raise AssertionError("unexpected local WS authentication close code") from None
             else:
                 raise AssertionError("WS without local token was accepted")

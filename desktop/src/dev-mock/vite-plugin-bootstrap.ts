@@ -10,11 +10,13 @@ export function localBootstrapPlugin(): Plugin {
       const token = process.env.AMADEUS_DEV_MOCK === '0'
         ? process.env.AMADEUS_DEV_LOCAL_API_TOKEN || '' : MOCK_LOCAL_TOKEN;
       server.middlewares.use((request, response, next) => {
-        if (request.url?.split('?')[0] !== '/__amadeus/bootstrap') return next();
+        const path = request.url?.split('?')[0] || '';
+        if (!/^\/__amadeus\/bootstrap\/?$/i.test(path)) return next();
         response.setHeader('Cache-Control', 'no-store');
         response.setHeader('Content-Type', 'application/json');
         const site = request.headers['sec-fetch-site'];
-        if (request.method !== 'POST' || request.headers['x-amadeus-bootstrap'] !== '1'
+        if (request.url !== '/__amadeus/bootstrap'
+          || request.method !== 'POST' || request.headers['x-amadeus-bootstrap'] !== '1'
           || (site !== undefined && site !== 'same-origin')
           || !/^(127\.0\.0\.1|localhost):[0-9]+$/.test(request.headers.host || '')) {
           response.statusCode = 403;

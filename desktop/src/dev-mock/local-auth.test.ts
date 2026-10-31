@@ -51,6 +51,18 @@ it.each([
   expect(response.headers.get('Access-Control-Allow-Origin')).toBeNull();
 });
 
+it.each(['/__amadeus/bootstrap?x=1', '/__AMADEUS/bootstrap', '/__amadeus/bootstrap/'])(
+  'rejects non-exact bootstrap URL %s without disclosing a credential', async path => {
+    const response = await fetch(`${origin}${path}`, { method: 'POST', headers: {
+      'X-Amadeus-Bootstrap': '1', 'Sec-Fetch-Site': 'same-origin', Origin: origin,
+    } });
+    expect(response.status).toBe(403);
+    expect(await response.text()).not.toContain(MOCK_LOCAL_TOKEN);
+    expect(response.headers.get('Cache-Control')).toBe('no-store');
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBeNull();
+  },
+);
+
 it.each(['same-origin', undefined])('returns a same-origin mock bootstrap without CORS (site=%s)', async site => {
   const response = await fetch(`${origin}/__amadeus/bootstrap`, { method: 'POST', headers: {
     'X-Amadeus-Bootstrap': '1', ...(site ? { 'Sec-Fetch-Site': site } : {}), Origin: origin,
