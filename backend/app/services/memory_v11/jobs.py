@@ -102,12 +102,18 @@ def redact_user_text(text: str) -> tuple[str, bool]:
         if any(not any(left <= start and end <= right for left, right, _ in merged)
                for start, end, _ in matches):
             return "[REDACTED]", True
-        redacted = text
-        for start, end, category in reversed(merged):
-            redacted = redacted[:start] + f"[REDACTED:{category}]" + redacted[end:]
-        if classify_memory_sensitive_text(redacted) or find_memory_sensitive_matches(redacted):
+        parts: list[str] = []
+        cursor = 0
+        for start, end, category in merged:
+            parts.extend((text[cursor:start], f"[REDACTED:{category}]"))
+            cursor = end
+        parts.append(text[cursor:])
+        # Only markers inserted above divide the recheck. User-typed markers
+        # remain inside the original-text segments and retain their checks.
+        if any(classify_memory_sensitive_text(segment) or find_memory_sensitive_matches(segment)
+               for segment in parts[::2]):
             return "[REDACTED]", True
-        return redacted, False
+        return "".join(parts), False
     except Exception:
         return "[REDACTED]", True
 

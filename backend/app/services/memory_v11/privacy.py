@@ -24,7 +24,6 @@ _FULLWIDTH_ASCII_TRANSLATION = {
     code: code - 0xFEE0 for code in range(0xFF01, 0xFF5F)
 } | {0x3000: 0x20}
 _CREDENTIAL_TRAILING_PUNCTUATION = "，,。.；;！!？?"
-_CREDENTIAL_FULLWIDTH_BOUNDARY_RE = re.compile(r"[，。；！？、](?=\S)")
 _HAN_KANA = (
     r"\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\U00020000-\U000323af"
     r"\u3041-\u309f\u30a1-\u30fa\u30fc-\u30ff\u31f0-\u31ff\uff66-\uff9f"
@@ -80,7 +79,7 @@ _URL_PASSWORD_KEYS = {"password", "passwd", "pwd"}
 # A generated marker stays whole even though ] terminates a raw URL value.
 _URL_CREDENTIAL_RE = re.compile(
     r"[?&](token|access_token|refresh_token|id_token|api_key|apikey|client_secret|"
-    r"secret|password|passwd|pwd)="
+    r"""secret|password|passwd|pwd)=[\"'“「]?"""
     rf"""((?:{_REDACTION_VALUE_RE.pattern}|[^&#\s{_HAN_KANA}{_CJK_PUNCTUATION})\]'"])+)""",
     re.IGNORECASE,
 )
@@ -232,30 +231,36 @@ def _iter_matches(pattern: re.Pattern[str], text: str) -> Iterator[re.Match[str]
         cursor = match.start() + 1
 
 
-def _credential_value_end(text: str, start: int, end: int, validator, *, cjk: bool = False) -> int:
+def _credential_value_end(
+    text: str, start: int, end: int, validator, *, cjk: bool = False, stop_prose: bool = True,
+) -> int:
     """Separate CJK prose while preserving punctuation inside concrete values.
 
     A complete marker prefix is parsed separately so its following text can
     be checked as a continuation, rather than misclassified as one long value.
-    CJK cues keep a short prefix plus punctuation only when ASCII-compatible
-    letters/digits follow before the first Han/kana character. English cues
-    retain their original whole-token behavior for invalid short prefixes.
+    Han/kana prose ends values for every cue. CJK cues keep a short prefix
+    plus punctuation when ASCII-compatible letters/digits follow. A suffix
+    with digits or symbols continues even an already valid prefix.
     """
-    # CJK cues stop before unspaced prose. Work on the original text so width
+    # Stop before unspaced prose. Work on the original text so width
     # folding and combining characters cannot shift replacement offsets.
-    if cjk and (prose := _HAN_KANA_RE.search(text, start, end)):
+    prose = _HAN_KANA_RE.search(text, start, end) if stop_prose else None
+    if prose:
         end = prose.start()
-    boundaries = _CJK_PUNCTUATION_RE if cjk else _CREDENTIAL_FULLWIDTH_BOUNDARY_RE
-    boundary = boundaries.search(text, start, end)
-    if boundary is not None:
+    for boundary in _CJK_PUNCTUATION_RE.finditer(text, start, end):
         prefix = text[start:boundary.start()]
         if _REDACTION_TOKEN_RE.fullmatch(prefix.rstrip(_CREDENTIAL_TRAILING_PUNCTUATION)):
             # Preserve any ASCII-compatible residual inside the ORIGINAL token,
             # even when it alone is too short to pass a credential validator.
             return end if _has_credential_alnum(text[boundary.end():end]) else boundary.start()
         if validator(prefix):
+            following_boundary = _CJK_PUNCTUATION_RE.search(text, boundary.end(), end)
+            suffix_end = following_boundary.start() if following_boundary else end
+            suffix = text[boundary.end():suffix_end].translate(_FULLWIDTH_ASCII_TRANSLATION)
+            if suffix.isascii() and _secret_shaped(suffix):
+                continue
             return boundary.start()
-        if cjk and re.search(_ALNUM, text[boundary.end():end].translate(_FULLWIDTH_ASCII_TRANSLATION)) is None:
+        if (cjk or prose) and re.search(_ALNUM, text[boundary.end():end].translate(_FULLWIDTH_ASCII_TRANSLATION)) is None:
             return boundary.start()
     return end
 
@@ -295,7 +300,12 @@ def _credential_matches(text: str, category: str | None = None) -> list[tuple[in
                     cursor = end
                     while following := _CREDENTIAL_CONTINUATION_RE.match(text, cursor):
                         token_start = following.start(1)
-                        token_end = _credential_value_end(text, token_start, following.end(1), validator, cjk=cjk)
+                        # A user-typed marker retains its original continuation
+                        # rules, including incomplete cues such as APIキーはshort.
+                        token_end = _credential_value_end(
+                            text, token_start, following.end(1), validator,
+                            cjk=cjk, stop_prose=cjk,
+                        )
                         token = text[token_start:token_end]
                         # Skip standalone separator tokens, but keep punctuation
                         # attached to a value (!!!abc is a valid 6-char secret).
@@ -441,8 +451,8 @@ def _has_precise_home_address(text: str) -> bool:
 def classify_memory_sensitive_text(text: str) -> frozenset[str]:
     """Classify a whole message into sensitive class names (empty = safe).
 
-    The caller masks located spans, then classifies again and fails closed
-    if any sensitive class remains. Returned data contains class names only.
+    The caller masks located spans, then rechecks untouched segments and fails
+    closed if any sensitive class remains. Returned data contains class names only.
     """
     if not text:
         return frozenset()
