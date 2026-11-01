@@ -66,6 +66,47 @@ def test_version_texts_do_not_label_past_or_present(frozen):
                        for row in [fact,*fact['history']] for word in ('以前','现在','如今'))
 
 
+def test_negative_case_distractors_are_resident(frozen):
+    q,_=frozen
+    positions={f['key']:i for i,f in enumerate(q['facts'])}
+    for case in q['cases']:
+        if case['category'] in {'irrelevant','unknown'}:
+            assert all(positions[key]>=16 for key in case['expected']['must_not_use_fact_keys'])
+    stamps=next(f for f in q['facts'] if f['key']=='b5c_stamps')
+    assert '青色' not in stamps['aliases']
+    assert {'青色の切手','青い切手'} <= set(stamps['aliases'])
+
+
+IRRELEVANT_NATURAL_ANSWERS = {
+    'irrelevant_sky': [
+        '空が青く見えるのは、青色の光が大気中で散乱されやすいからよ。',
+        '太陽の光が大気に入ると、短い波長の光ほど強く散乱するの。それで昼間の空は青く見えるわ。',
+    ],
+    'irrelevant_arithmetic': [
+        '37×25は925よ。37×100を4で割れば、暗算しやすいわ。',
+        '25は100の4分の1よ。3700÷4だから、答えは925ね。',
+    ],
+    'irrelevant_greeting': [
+        'こんにちは。今日はどんな一日だった？',
+        'いいわよ、少し話しましょう。今、何か気になっていることはある？',
+    ],
+    'irrelevant_poem': [
+        'やわらかな春風に、桜の花びらがひとひら舞う。',
+        '若葉が光をほどき、朝の小道に春が満ちてゆく。',
+    ],
+}
+
+
+@pytest.mark.parametrize('mode',['legacy','v11'])
+@pytest.mark.parametrize('case_id,answer',[(key,answer) for key,answers in IRRELEVANT_NATURAL_ANSWERS.items() for answer in answers])
+def test_irrelevant_natural_answers_do_not_trigger_memory(frozen,case_id,answer,mode):
+    q,_=frozen
+    case=next(c for c in q['cases'] if c['id']==case_id)
+    result=b5.score(case,answer,[],q,mode=mode)
+    assert result['status']=='pass',result
+    assert result['used_fact_keys']==[]
+
+
 @pytest.mark.parametrize('key,answer', [
     ('guitar_time','火曜日の19時よ。'), ('album_time','毎月15日だよ。'),
     ('climbing_time','土曜の午前10時ね。'), ('shoe_time','9月3日よ。'),
@@ -189,6 +230,11 @@ def test_full_fake_product_run_and_locations(tmp_path,frozen):
         assert row['resident_fact_count']==(32 if entry['group']=='C' else 24), row
         assert set(row['target_locations'])==set(case['expected']['must_use_fact_keys'])
         assert all(loc for loc in row['target_locations'].values())
+        if entry['group'] in ('A','C') and case['category'] in {'irrelevant','unknown'}:
+            core=next(b5c.section(m['content'],'CORE FACTS') for m in row['requests'][0]['request']['messages']
+                      if m['role']=='system' and b5c.section(m['content'],'CORE FACTS'))
+            catalog={f['key']:f for f in q['facts']}
+            assert all(catalog[key]['display_text'] in core for key in case['expected']['must_not_use_fact_keys'])
         if entry['group']=='A' and case['category']!='change_past':
             assert all('resident' in loc for loc in row['target_locations'].values()),row
         if entry['group']=='C' and case['category'].startswith('outside_'):
@@ -206,14 +252,15 @@ def test_full_fake_product_run_and_locations(tmp_path,frozen):
     assert all(p.read_bytes()==data for p,data in before.items())
 
 
-def saved_runs(tmp_path,q,d,misses=0,manual=False,mismentions=0):
+def saved_runs(tmp_path,q,d,misses=0,manual=False,mismentions=0,mismentions_by_group=None):
     paths=[]
     for run in range(3):
         path=tmp_path/f'run-{run}'
         path.mkdir()
         plan=b5.make_plan(q,d)
         b5.write_json(path/'plan.json',plan)
-        lost=bad=0
+        lost=0
+        bad=Counter()
         for e in plan['executions']:
             c=next(c for c in q['cases'] if c['id']==e['case_id'])
             catalog={f['key']:f for f in b5.fact_catalog(q)}
@@ -222,8 +269,10 @@ def saved_runs(tmp_path,q,d,misses=0,manual=False,mismentions=0):
                 reply='。'.join(q['unknown_subjects'][s][2]+'は知らない' for s in c['expected']['must_express_unknown_for'])
             if e['group']=='C' and c['category'] in b5c.HIT_CATEGORIES and lost<misses:
                 reply='了解したわ'; lost+=1
-            if e['group']=='C' and c['expected']['must_not_use_fact_keys'] and bad<mismentions:
-                reply+='。'+catalog[c['expected']['must_not_use_fact_keys'][0]]['aliases'][2]; bad+=1
+            limit=(mismentions_by_group or {}).get(e['group'],[mismentions if e['group']=='C' else 0]*3)[run]
+            if c['expected']['must_not_use_fact_keys'] and bad[e['group']]<limit:
+                reply+='。'+catalog[c['expected']['must_not_use_fact_keys'][0]]['aliases'][2]
+                bad[e['group']]+=1
             if manual and e['id']=='C-resident_pillow-1':
                 reply=b5.FALLBACK_ANSWERS[0]
             row={**e,'status':'completed','answer':reply,'calls':[]}
@@ -321,3 +370,76 @@ def test_manual_can_reverse_forbidden_and_unknown_judgments(tmp_path,frozen):
     assert result['gate']['status']=='PASS'
     assert result['groups']['C']['mismention_count']['mean']==0
     assert result['manual']==dict(applied=4,changed=4,flipped_pass_fail=3)
+
+
+@pytest.mark.parametrize('c_counts,status',[([2,2,1],'PASS'),([3,2,1],'FAIL')])
+def test_aggregate_fractional_mismention_boundary(tmp_path,frozen,c_counts,status):
+    paths=saved_runs(tmp_path,*frozen,mismentions_by_group={'A':[0,1,1],'C':c_counts})
+    result=b5c.aggregate(paths,tmp_path/'out',None,b5)
+    assert [r['groups']['A']['mismention_count'] for r in result['runs']]==[0,1,1]
+    assert [r['groups']['C']['mismention_count'] for r in result['runs']]==c_counts
+    assert result['gate']['status']==status
+    assert result['gate']['mismention_pass']==(status=='PASS')
+
+
+@pytest.mark.parametrize('failed_runs,investigate',[(1,False),(2,True)])
+def test_aggregate_investigates_unknown_after_manual_review(tmp_path,frozen,failed_runs,investigate):
+    paths=saved_runs(tmp_path,*frozen)
+    manual=tmp_path/'manual.json'
+    b5.write_json(manual,[dict(run=p.name,execution_id='C-unknown_luggage_size-1',rule='unknown',
+                              key='luggage_size',judgment='fail') for p in paths[:failed_runs]])
+    result=b5c.aggregate(paths,tmp_path/'out',manual,b5)
+    assert ('unknown' in result['investigate'])==investigate
+    assert result['gate']['status']=='PASS'
+    assert result['runs'][0]['groups']['A']['unknown']['rate']==1
+    assert result['runs'][0]['groups']['C']['unknown']['rate']==pytest.approx(.8)
+    assert result['runs'][0]['groups']['C']['categories']['unknown']['rate'] is None
+    assert ('unknown' in (tmp_path/'out'/'aggregate.md').read_text())==investigate
+
+
+def replace_saved_result(path,execution_id,**fields):
+    file=path/'executions'/execution_id/'result.json'
+    row=b5.read_json(file)
+    row.update(fields)
+    b5.write_json(file,row)
+
+
+@pytest.mark.parametrize('execution_id,group',[
+    ('B-resident_pillow-1','B'), ('C-unknown_luggage_size-1','C'), ('C-change_past_drink_tea-1','C'),
+])
+@pytest.mark.parametrize('misses,status',[(0,'PASS'),(2,'FAIL')])
+def test_non_gate_manual_pairs_do_not_block_decision(tmp_path,frozen,execution_id,group,misses,status):
+    paths=saved_runs(tmp_path,*frozen,misses=misses)
+    replace_saved_result(paths[0],execution_id,answer=b5.FALLBACK_ANSWERS[0])
+    result=b5c.aggregate(paths,tmp_path/'out',None,b5)
+    assert result['gate']['status']==status
+    metrics=result['runs'][0]['groups'][group]
+    assert metrics['needs_manual']>0
+    assert metrics['gate_needs_manual']==0
+
+
+@pytest.mark.parametrize('execution_id,group,answer',[
+    ('C-unknown_luggage_size-1','C','スーツケースの寸法は知らない。山小屋じゃない。'),
+    ('A-irrelevant_sky-1','A','青い切手じゃない。'),
+])
+def test_must_not_manual_pairs_still_block_in_every_category(tmp_path,frozen,execution_id,group,answer):
+    paths=saved_runs(tmp_path,*frozen)
+    replace_saved_result(paths[0],execution_id,answer=answer)
+    result=b5c.aggregate(paths,tmp_path/'out',None,b5)
+    assert result['gate']['status']=='PENDING'
+    assert result['runs'][0]['groups'][group]['gate_needs_manual']==1
+
+
+@pytest.mark.parametrize('execution_id,group,status',[
+    ('B-resident_pillow-1','B','PASS'), ('C-change_past_drink_tea-1','C','PASS'),
+    ('A-change_past_drink_tea-1','A','PASS'), ('A-resident_pillow-1','A','PENDING'),
+    ('C-unknown_luggage_size-1','C','PENDING'), ('C-irrelevant_sky-1','C','PENDING'),
+])
+def test_pending_only_counts_unfinished_gate_rules(tmp_path,frozen,execution_id,group,status):
+    paths=saved_runs(tmp_path,*frozen)
+    replace_saved_result(paths[0],execution_id,status='not_run_budget')
+    result=b5c.aggregate(paths,tmp_path/'out',None,b5)
+    assert result['gate']['status']==status
+    metrics=result['runs'][0]['groups'][group]
+    assert metrics['incomplete']==1
+    assert metrics['gate_incomplete']==int(status=='PENDING')

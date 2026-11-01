@@ -433,13 +433,11 @@
         "青い切手",
         "ブルーの切手",
         "青色の切手",
-        "青色",
         "青い郵便切手"
       ],
       "alias_languages": [
         "zh",
         "zh",
-        "ja",
         "ja",
         "ja",
         "ja",
@@ -2007,7 +2005,7 @@
         "must_not_use_fact_keys": [
           "b5c_stamps",
           "b5c_pen",
-          "b5c_photo"
+          "b5c_pillow"
         ],
         "must_express_unknown_for": [],
         "diagnostic_only": false
@@ -2029,8 +2027,8 @@
         "must_use_fact_keys": [],
         "must_not_use_fact_keys": [
           "b5c_game",
-          "b5c_coins",
-          "b5c_diary"
+          "b5c_baking",
+          "b5c_socks"
         ],
         "must_express_unknown_for": [],
         "diagnostic_only": false
@@ -2052,7 +2050,7 @@
         "must_use_fact_keys": [],
         "must_not_use_fact_keys": [
           "b5c_drink",
-          "b5c_breakfast",
+          "b5c_sport",
           "b5c_holiday"
         ],
         "must_express_unknown_for": [],
@@ -2074,9 +2072,9 @@
         "max_need_count": 3,
         "must_use_fact_keys": [],
         "must_not_use_fact_keys": [
-          "b5c_plant",
+          "b5c_headphones",
           "b5c_flower",
-          "b5c_bookmark"
+          "b5c_belt"
         ],
         "must_express_unknown_for": [],
         "diagnostic_only": false
