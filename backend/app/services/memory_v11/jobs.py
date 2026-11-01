@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Mapping
 
 from app.db import get_db, normalize_identity_mode, normalize_worldline
+from app.domain.emotion_tags import strip_emotion_tags
 from app.services.memory_v11.contracts import (
     LEASE_SECONDS,
     MAX_AUTO_RETRIES,
@@ -582,7 +583,7 @@ async def _load_user_source(
         ).fetchone()
         previous_text = None
         if previous is not None and str(previous["role"]) == "assistant":
-            context = re.sub(r"^\[EMO:[^]\r\n]*\]\s*", "", str(previous["content"] or ""))
+            context = strip_emotion_tags(str(previous["content"] or "")).lstrip()
             context, blocked = redact_user_text(context)
             if not blocked:
                 previous_text = context[-PREVIOUS_ASSISTANT_MAX_CHARS:]

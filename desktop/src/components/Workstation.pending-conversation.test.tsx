@@ -28,7 +28,7 @@ vi.mock('./SettingsModal', () => ({
 vi.mock('./TtsDebugPanel', () => ({ TtsDebugPanel: () => null }));
 vi.mock('./AvatarViewer', () => ({ default: () => null }));
 vi.mock('./SpriteAnimator', () => ({ default: () => null }));
-vi.mock('./BilingualMessage', () => ({ BilingualMessage: () => null }));
+vi.mock('./BilingualMessage', () => ({ BilingualMessage: ({ fallbackJa }: { fallbackJa: string }) => <span>{fallbackJa}</span> }));
 vi.mock('./ForgetConversationModal', () => ({ ForgetConversationModal: () => null }));
 vi.mock('../memory-space/MemorySpace', () => ({ MemorySpace: () => null }));
 
@@ -95,6 +95,7 @@ let patchCount: number;
 let deleteCount: number;
 let listQueryCount: number;
 let afterPost: (() => void) | null;
+let assistantHistory: string | null = null;
 const missingHistory = new Set<string>();
 const failedHistory = new Set<string>();
 const statusHistory = new Map<string, number>();
@@ -111,7 +112,7 @@ beforeEach(() => {
   FakeWebSocket.instances = []; rows = [oldRow]; httpDown = false; postCount = 0; historyCount = 0; patchCount = 0; deleteCount = 0;
   FakeWebSocket.autoReady = true; FakeWebSocket.autoSwitch = true; afterPost = null; missingHistory.clear();
   failedHistory.clear(); heldHistory.clear(); statusHistory.clear(); playback.playing = false;
-  listQueryCount = 0;
+  listQueryCount = 0; assistantHistory = null;
   vi.stubGlobal('WebSocket', FakeWebSocket);
   vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => window.setTimeout(() => cb(performance.now()), 16));
   vi.stubGlobal('cancelAnimationFrame', (id: number) => window.clearTimeout(id));
@@ -166,7 +167,8 @@ beforeEach(() => {
       if (failedHistory.has(id)) throw new TypeError('Failed to fetch');
       if (missingHistory.has(id)) return json({}, 404);
       if (statusHistory.has(id)) return json({}, statusHistory.get(id)!);
-      return json([{ role: 'user', content: id === 'old' ? '旧对话内容' : `历史 ${id}` }]);
+      return json([{ role: 'user', content: id === 'old' ? '旧对话内容' : `历史 ${id}` },
+        ...(assistantHistory === null ? [] : [{ role: 'assistant', content: assistantHistory }])]);
     }
     if (url === '/api/search/settings') return json({ provider: 'tavily', configured: false });
     throw new Error(`unexpected fetch: ${url}`);
@@ -966,4 +968,17 @@ it('dispatch67 item 2: the self new-conversation button still stops playback bef
   expect(active()).toBe('new');
   expect(targetSwitches()).toHaveLength(1);
   expect(screen.getByLabelText('输入消息')).toBeDisabled();
+});
+
+
+it.each([
+  ['[EMO:happy] それはよかったわね。[EMO:embarrassed]べ、別に。', 'それはよかったわね。べ、別に。'],
+  ['[EMO:happy] それはよかったわね。 [emo:Unknown_123]  次はね。', 'それはよかったわね。 次はね。'],
+  ['[EMO:happy] 前[EMO:sad] [EMO:Unknown]後。', '前 後。'],
+  ['[EMO:happy] 前[EMO:' + 'x'.repeat(24) + ']後。', '前後。'],
+  ['[EMO:happy] そのまま[EMO][注意][EMOJI]ね。', 'そのまま[EMO][注意][EMOJI]ね。'],
+])('cleans emotion tags when displaying stored assistant history: %s', async (raw, expected) => {
+  assistantHistory = raw;
+  await startOld(false);
+  expect(screen.getByText(expected)).toBeInTheDocument();
 });

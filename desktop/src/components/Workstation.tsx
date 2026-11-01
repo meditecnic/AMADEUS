@@ -1383,7 +1383,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
           id: `history_${conversation.id}_${index}`,
           role: row.role as 'user' | 'assistant',
           content: row.role === 'assistant'
-            ? row.content.replace(/^\[EMO:[^\]]+\]\s*/, '')
+            ? row.content.replace(/[ \t]*(?:\[EMO:[^\]\r\n]{1,24}\][ \t]*)+/gi,
+                (tags) => tags.replace(/\[EMO:[^\]\r\n]{1,24}\]/gi, '') ? ' ' : '').trimStart()
             : row.content,
           translation: row.role === 'assistant' ? row.translation || '' : undefined,
           streaming: false,
