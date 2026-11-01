@@ -12,7 +12,7 @@ import subprocess
 import sys
 import time
 
-from bundle_support import digest, sanitized_build_environment, write_json
+from bundle_support import digest, sanitized_build_environment, verify_frontend_assets, write_json
 from vc_runtime import redist_inventory, VC_NAME
 
 HERE = Path(__file__).resolve().parent
@@ -135,8 +135,9 @@ def main() -> int:
     frontend = run / "frontend-dist"
     resources = {key: None for key in config["bundle"]["resources"]}
     resources.update({str(backend): "backend/", str(licenses): "licenses/"})
+    # Avoid parsing a Windows drive as a URL: https://github.com/tauri-apps/tauri/issues/14005
     merge = {**selected, "bundle": {"resources": resources},
-             "build": {"frontendDist": str(frontend),
+             "build": {"frontendDist": "\\\\?\\" + str(frontend.resolve()),
                        "beforeBuildCommand": subprocess.list2cmdline(["npm", "run", "build", "--", "--outDir", str(frontend)])}}
     merge_path = run / "tauri-build.conf.json"
     write_json(merge_path, merge)
@@ -153,6 +154,7 @@ def main() -> int:
         raise RuntimeError(f"Tauri changed Cargo.toml content: {manifest_path}")
     release = work / "cargo-target" / TARGET / "release"
     exe = release / main_exe
+    verify_frontend_assets(exe, frontend)
     inspect_code = ("import json, sys\nfrom pathlib import Path\n"
                     "sys.path.insert(0, sys.argv[1])\nfrom vc_runtime import pe_details\n"
                     "print(json.dumps(pe_details(Path(sys.argv[2]))))\n")
