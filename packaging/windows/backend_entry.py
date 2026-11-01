@@ -136,8 +136,10 @@ async def serve(shutdown: threading.Event, port: int) -> int:
     if shutdown.is_set():
         return 0
     with socket.socket() as listener:
-        listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        if os.name == "nt":
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         listener.bind(("127.0.0.1", port))
+        port = listener.getsockname()[1]
         server = uvicorn.Server(uvicorn.Config(
             app, host="127.0.0.1", port=port, lifespan="on", log_level="info",
             timeout_graceful_shutdown=3,
@@ -155,7 +157,7 @@ async def serve(shutdown: threading.Event, port: int) -> int:
                 await asyncio.sleep(0.05)
             if server.started:
                 print("AMADEUS_BACKEND_READY " + json.dumps({
-                    "port": port, "pid": os.getpid(),
+                    "version": 1, "port": port, "pid": os.getpid(),
                 }), flush=True)
             await serving
             return 0 if server.started else 1
@@ -175,9 +177,9 @@ def main() -> int:
         configure_environment()
         if args.self_check:
             return self_check()
-        port = int(os.environ.get("BACKEND_PORT", "8000"))
-        if not 1 <= port <= 65535:
-            raise ValueError("BACKEND_PORT must be between 1 and 65535")
+        port = int(os.environ.get("BACKEND_PORT", "0"))
+        if not 0 <= port <= 65535:
+            raise ValueError("BACKEND_PORT must be between 0 and 65535")
         parent = os.environ.get("AMADEUS_PARENT_PID", "")
         shutdown = threading.Event()
         if parent:

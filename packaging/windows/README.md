@@ -114,20 +114,23 @@ $env:AMADEUS_LOCAL_API_TOKEN = 'self-check-only'
 & "$buildWork/venv/Scripts/python.exe" packaging/windows/smoke_frozen.py --exe desktop/src-tauri/resources/backend/amadeus-backend.exe --work-dir 'X:/build-artifacts/backend-smoke' --memory-mode v11
 ```
 
-验收自带 loopback 假 OpenAI 兼容服务，禁用 TTS，使用空闲的非 8000 端口；
+验收自带 loopback 假 OpenAI 兼容服务，禁用 TTS，从后端 READY 行读取系统分配的端口；
 使用 Windows `GetExtendedTcpTable` 同时核对后端 PID 的 IPv4/IPv6 TCP 监听，
 要求只有 `127.0.0.1`。
 默认不传 `AMADEUS_MEMORY_MODE`，覆盖产品的 legacy 默认模式；另一轮显式启用 v11。
 检查 `/health`、WebSocket 的 auth → session.ready → chat.send → turn.completed、
 用户及助手历史落库。分别杀掉假父进程和关闭 stdin，要求后端 10 秒内正常退出，
 检查进程残留、SQLite 排他事务以及数据库文件重命名。
+另一个用例独占一个端口并通过 `BACKEND_PORT` 指定它，要求后端非零退出、有 FAILED、无 READY，且没有残留进程。
 结果、事件、后端日志和数据库保留在打印的 `SMOKE_ROOT` 下。
 
 后端启动会探测固定的 9880 端口。因此验收先独占该端口并返回空响应；若已有服务
 占用则验收报错退出，应在该端口空闲的环境中重跑。脚本不调用
 `/health/dependencies`，不连接真实模型服务或 TTS，不读写 Windows 凭据管理器。
 
-入口只监听 `127.0.0.1`；`BACKEND_PORT` 默认 8000，可覆盖用于独立验收。
+入口只监听 `127.0.0.1`；`BACKEND_PORT` 不设或为 `0` 时由系统分配端口，
+设为 1–65535 时只绑定指定端口（被占用就失败，不换端口），其他值报错退出。
+就绪时 stdout 输出一行 `AMADEUS_BACKEND_READY {"version": 1, "port": <实际端口>, "pid": <后端进程 PID>}`，不带令牌。
 `AMADEUS_PARENT_PID` 设置后看护对应进程，stdin EOF 也会请求 uvicorn 正常关闭。
 桌面宿主需要在后端存活期间保持 stdin 管道打开。stdout/stderr 使用 UTF-8。
 入口清除测试兼容变量 `AMADEUS_DB_PATH`，使数据库继续受 `AMADEUS_DATA_DIR` 管理；
