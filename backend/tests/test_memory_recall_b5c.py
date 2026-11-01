@@ -41,6 +41,8 @@ def test_fixture_shape_and_alias_isolation(frozen):
     assert len({f['key'] for f in catalog}) == len(catalog)
     for f in catalog:
         assert all(len(a)>=2 for a in f['aliases'])
+        assert all(b5.normalize(a) not in b5.normalize(c['query'])
+                   for a in f['aliases'] for c in q['cases'])
         assert len(f['aliases']) == len(f['alias_languages'])
         assert Counter(f['alias_languages'])['zh'] >= 2
         assert Counter(f['alias_languages'])['ja'] >= 2
@@ -49,6 +51,41 @@ def test_fixture_shape_and_alias_isolation(frozen):
                 assert not any(a in s for a in f['aliases'] for s in [other['display_text'],*other['aliases']])
     assert Counter(e['group'] for e in b5.make_plan(q,digest)['executions']) == {'A':48,'B':48,'C':48}
     assert Counter(e['mode'] for e in b5.make_plan(*b5.load_questions())['executions']) == {'legacy':41,'v11':41}
+
+
+def test_time_facts_have_arabic_numeric_aliases(frozen):
+    time_facts=[f for f in frozen[0]['facts'] if f.get('time_fact')]
+    assert len(time_facts)==4
+    assert all(any(any('0'<=ch<='9' for ch in alias) for alias in f['aliases']) for f in time_facts)
+
+
+def test_version_texts_do_not_label_past_or_present(frozen):
+    for fact in frozen[0]['facts']:
+        if fact.get('history'):
+            assert all(word not in row['display_text']
+                       for row in [fact,*fact['history']] for word in ('以前','现在','如今'))
+
+
+@pytest.mark.parametrize('key,answer', [
+    ('guitar_time','火曜日の19時よ。'), ('album_time','毎月15日だよ。'),
+    ('climbing_time','土曜の午前10時ね。'), ('shoe_time','9月3日よ。'),
+    ('wallet','紫色の財布よ。'), ('wallet_green','緑色の財布だったわ。'),
+    ('towel','アイボリーよ。'), ('lamp','アンバーよ。'),
+    ('helmet','銀のヘルメットを使うの。'), ('stamps','青色の切手よ。'),
+    ('board','楡のまな板を使ってるわ。'), ('coins','陶製の壺よ。'),
+    ('laundry','粉石鹸を使うのよ。'), ('basket','籐の籠に入れているわ。'),
+    ('bell','銅の鈴ね。'), ('vegetable','蒸したカボチャね。'),
+    ('soup','昆布のスープよ。'), ('coat','トグルボタンよ。'),
+    ('puzzle','港の絵が好きなのよ。'), ('holiday','ログハウスね。'),
+    ('commute','市電を使ってるわ。'),
+])
+def test_common_japanese_answers_are_recognized(frozen,key,answer):
+    q,_=frozen
+    case=copy.deepcopy(q['cases'][0])
+    case['query']='私のこの好みは何だった？'
+    case['expected'].update(must_use_fact_keys=['b5c_'+key],must_not_use_fact_keys=[])
+    result=b5.score(case,answer,[],q)
+    assert result['answer']['status']=='pass',result
 
 
 @pytest.mark.parametrize('case_id', [c['id'] for c in b5.load_questions('b5c')[0]['cases']])
