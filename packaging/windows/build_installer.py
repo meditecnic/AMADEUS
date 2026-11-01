@@ -20,11 +20,18 @@ REPO = HERE.parents[1]
 TARGET = "x86_64-pc-windows-msvc"
 
 
+def select_installer(directory: Path, product_name: str, version: str) -> Path:
+    installer = directory / f"{product_name}_{version}_x64-setup.exe"
+    if not installer.is_file():
+        raise RuntimeError(f"Missing NSIS installer: {installer}")
+    return installer
+
+
 def visual_studio(env: dict[str, str]) -> dict:
     vswhere = Path(os.environ["ProgramFiles(x86)"]) / "Microsoft Visual Studio/Installer/vswhere.exe"
-    roots = subprocess.check_output([str(vswhere), "-products", "*", "-version", "[18.0,19.0)",
+    roots = subprocess.check_output([str(vswhere), "-utf8", "-products", "*", "-version", "[18.0,19.0)",
                                     "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
-                                    "-property", "installationPath"], env=env, text=True).splitlines()
+                                    "-property", "installationPath"], env=env, text=True, encoding="utf-8").splitlines()
     if len(roots) != 1:
         raise RuntimeError(f"Expected one completed VS 2026 installation, got {roots}")
     root = Path(roots[0]).resolve(strict=True)
@@ -158,16 +165,14 @@ def main() -> int:
     inspect_code = ("import json, sys\nfrom pathlib import Path\n"
                     "sys.path.insert(0, sys.argv[1])\nfrom vc_runtime import pe_details\n"
                     "print(json.dumps(pe_details(Path(sys.argv[2]))))\n")
-    details = json.loads(subprocess.check_output([str(python), "-c", inspect_code, str(HERE), str(exe)], env=env, text=True))
+    details = json.loads(subprocess.check_output([str(python), "-c", inspect_code, str(HERE), str(exe)], env=env, text=True, encoding="utf-8"))
     write_json(run / "desktop-pe.json", details)
     dynamic_vc = [name for name in details["imports"] if VC_NAME.fullmatch(name)]
     if dynamic_vc:
         raise RuntimeError(f"Desktop executable imports dynamic VC runtime: {exe}: {dynamic_vc}")
-    installers = list((release / "bundle/nsis").glob("*.exe"))
-    if len(installers) != 1:
-        raise RuntimeError(f"Expected one NSIS installer, got {installers}")
-    output = run / installers[0].name
-    shutil.copyfile(installers[0], output)
+    installer = select_installer(release / "bundle/nsis", selected["productName"], selected["version"])
+    output = run / installer.name
+    shutil.copyfile(installer, output)
     shutil.copyfile(exe, run / main_exe)
     pdb = exe.with_suffix(".pdb")
     linker_records = sorted({value.decode("utf-8") for value in re.findall(
@@ -179,7 +184,7 @@ def main() -> int:
     tools = {}
     for name, command in (("python", [str(args.python), "--version"]), ("node", ["node", "--version"]),
                           ("npm", [npm, "--version"]), ("cargo", ["cargo", "--version"]), ("rustc", ["rustc", "--version"])):
-        tools[name] = subprocess.check_output(command, env=env, text=True).strip()
+        tools[name] = subprocess.check_output(command, env=env, text=True, encoding="utf-8").strip()
     result = {"run": str(run), "installer": str(output), "bytes": output.stat().st_size, "sha256": digest(output),
               "backend": str(backend), "licenses": str(licenses), "main_exe": main_exe, "config": selected,
               "toolchain": toolchain, "desktop_pe": details, "linker_evidence": linker_evidence, "stages": stages, "tools": tools,

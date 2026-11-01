@@ -10,12 +10,26 @@ import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import memory_candidate_real_run as b3  # noqa: E402
 import memory_candidate_runtime as b2  # noqa: E402
+
+
+@pytest.mark.parametrize('helper', [b2._ws_session, b3._ws_session_b3])
+async def test_ws_origin_uses_this_runs_frontend_port(helper, monkeypatch):
+    import websockets
+
+    ws = SimpleNamespace(send=AsyncMock())
+    connect = AsyncMock(return_value=ws)
+    monkeypatch.setattr(websockets, 'connect', connect)
+    assert await helper(backend_port=12345, frontend_port=1425, session_id='origin-test') is ws
+    assert connect.call_args.kwargs['origin'] == 'http://127.0.0.1:1425'
+    assert connect.call_args.args[0] == 'ws://127.0.0.1:12345/ws/chat?session_id=origin-test'
+
 
 PERSONA = "PERSONA BIBLE v1 (canonical runtime persona)\npersona"
 
@@ -134,7 +148,7 @@ def test_pid_running_real_zombie_is_inactive_and_reaps_owned_child(tmp_path, mon
     try:
         stat_path = Path(f"/proc/{pid}/stat")
         deadline = time.monotonic() + 5
-        while stat_path.read_text().rpartition(")")[2].split()[0] != "Z":
+        while stat_path.read_text(encoding="utf-8").rpartition(")")[2].split()[0] != "Z":
             assert time.monotonic() < deadline, "child did not become a zombie"
             time.sleep(0.01)
         os.kill(pid, 0)  # The old liveness probe succeeds for this zombie.
@@ -167,7 +181,7 @@ def test_terminate_pid_waits_for_real_process_exit(monkeypatch, ignore_term, exp
         + ("signal.signal(signal.SIGTERM, signal.SIG_IGN); " if ignore_term else "")
         + "print('ready', flush=True); time.sleep(60)"
     )
-    child = subprocess.Popen([sys.executable, "-c", program], stdout=subprocess.PIPE, text=True)
+    child = subprocess.Popen([sys.executable, "-c", program], stdout=subprocess.PIPE, text=True, encoding="utf-8")
     try:
         assert child.stdout.readline().strip() == "ready"
         monkeypatch.setattr(b2, "TERMINATE_TIMEOUT_SECONDS", 0.1)

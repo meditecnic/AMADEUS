@@ -362,8 +362,6 @@ def isolated_environ(
     env["HOME"] = str(paths["home"])
     env["TEMP"] = str(paths["tmp"])
     env["TMP"] = str(paths["tmp"])
-    env["BACKEND_PORT"] = str(backend_port)
-    env["FRONTEND_PORT"] = str(frontend_port)
     env["AMADEUS_BACKEND_ORIGIN"] = f"http://127.0.0.1:{backend_port}"
     env["AMADEUS_FRONTEND_PORT"] = str(frontend_port)
     env["AMADEUS_B2_RUN_ROOT"] = str(paths["root"])
@@ -1188,6 +1186,8 @@ def _pid_running(pid: int) -> bool:
             ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             check=False,
         )
         return str(pid) in (result.stdout or "")
@@ -1491,11 +1491,11 @@ def _stable_fact_block(path: Path) -> str:
     return "\n".join(texts)
 
 
-async def _ws_session(*, backend_port: int, session_id: str, enable_tts: bool = False):
+async def _ws_session(*, backend_port: int, frontend_port: int, session_id: str, enable_tts: bool = False):
     import websockets
 
     uri = f"ws://127.0.0.1:{backend_port}/ws/chat?session_id={session_id}"
-    ws = await websockets.connect(uri, origin='http://127.0.0.1:1420', open_timeout=10,
+    ws = await websockets.connect(uri, origin=f'http://127.0.0.1:{frontend_port}', open_timeout=10,
                                   subprotocols=local_api_subprotocols(backend_port))
     await ws.send(
         json.dumps(
@@ -1647,7 +1647,7 @@ def cmd_verify_api(args: argparse.Namespace) -> None:
         chat_log.write_text("", encoding="utf-8")
 
     async def _run() -> dict[str, Any]:
-        ws = await _ws_session(backend_port=backend_port, session_id=session_id)
+        ws = await _ws_session(backend_port=backend_port, frontend_port=int(pids["frontend_port"]), session_id=session_id)
         try:
             first = await _ws_send_turn(
                 ws,

@@ -164,7 +164,7 @@ def test_packaged_fixed_port_conflict_fails_without_ready(entry, port_runtime, m
     assert 'synthetic-port-token' not in captured.out + captured.err
 
 
-@pytest.mark.parametrize('value', ['-1', '65536', 'abc'])
+@pytest.mark.parametrize('value', [' 8 ', '+5', '1_0', '-1', '65536', '', 'abc', '8\n'])
 def test_packaged_invalid_port_fails(entry, port_runtime, monkeypatch, capsys, value):
     monkeypatch.setenv('BACKEND_PORT', value)
     assert entry.main() != 0

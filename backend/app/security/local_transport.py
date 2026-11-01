@@ -2,6 +2,7 @@
 import hmac
 import ipaddress
 import os
+import sys
 
 import httpx
 from fastapi import WebSocket
@@ -41,12 +42,13 @@ class LocalAPITokenMiddleware:
         await self.app(scope, receive, send)
 
 
-LOCAL_ORIGINS = frozenset({
-    'http://localhost', 'http://127.0.0.1',
-    'tauri://localhost', 'http://tauri.localhost', 'https://tauri.localhost',
-    *(f'http://{host}:{port}' for host in ('localhost', '127.0.0.1')
-      for port in (config.FRONTEND_PORT, config.BACKEND_PORT, 1420, 1422, 1424)),
-})
+def local_origins(frozen: bool, frontend_port: int) -> frozenset[str]:
+    if frozen:
+        return frozenset({'http://tauri.localhost'})
+    return frozenset(f'http://{host}:{frontend_port}' for host in ('127.0.0.1', 'localhost'))
+
+
+LOCAL_ORIGINS = local_origins(getattr(sys, 'frozen', False), config.FRONTEND_PORT)
 
 
 class HTTPOriginGuardMiddleware:
