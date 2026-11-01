@@ -52,6 +52,8 @@ from memory_candidate_real_run import (  # noqa: E402
     official_deepseek_base_url,
 )
 
+import memory_recall_b5c as b5c  # noqa: E402
+
 MAX_OUTPUT_TOKENS = 2000
 MAX_MAIN_ATTEMPTS = 3  # chat_ws.get_clean_text_stream, per first/tool-answer call.
 MAX_RENDER_ATTEMPTS = 2  # _render_foreign_speech_to_japanese, per render call.
@@ -245,16 +247,32 @@ def check_real_gate(transport: str, base_url: str, cap_cny: str | None,
         raise Refused("cap_required_positive_at_most_10_cny")
 
 
-def load_questions() -> tuple[dict, str]:
-    raw = QUESTION_SET.read_bytes()
+def question_path(name="b5b") -> Path:
+    return QUESTION_SET if name == "b5b" else BACKEND / "tests/fixtures/memory_recall_b5c_question_set.json"
+
+
+def load_questions(name="b5b") -> tuple[dict, str]:
+    raw = question_path(name).read_bytes()
     qset = json.loads(raw)
-    if qset["version"] != "b5a-gate2-qset-v1":
+    if qset["version"] != (b5c.VERSION if name == "b5c" else "b5a-gate2-qset-v1"):
         raise Refused("unknown_question_set_version")
     return qset, hashlib.sha256(raw).hexdigest()
 
 
 def make_plan(qset: dict, digest: str, *, transport="fake", base_url=BUILTIN_DEEPSEEK_BASE_URL,
               cap_cny=None, model="deepseek-flash", e5_snapshot="") -> dict:
+    if qset["version"] == b5c.VERSION:
+        rows = [{"id": f"{group}-{case['id']}-{repeat}", "group": group, "mode": mode,
+                 "case_id": case["id"], "category": case["category"], "cohort": case["cohort"], "repeat": repeat}
+                for case in qset["cases"] for repeat in range(1, case["repeats"] + 1)
+                for group, mode in b5c.GROUPS.items()]
+        if Counter(r["group"] for r in rows) != dict.fromkeys(b5c.GROUPS, 48):
+            raise Refused("frozen_execution_count_changed")
+        return {"version": 1, "question_set": "b5c", "question_version": qset["version"],
+                "question_sha256": digest, "script_sha256": sha256(SCRIPT), "helper_sha256": sha256(Path(b5c.__file__)),
+                "transport": transport, "base_url": canonical_base_url(base_url), "cap_cny": cap_cny,
+                "model": model, "max_tokens": MAX_OUTPUT_TOKENS, "e5_snapshot": e5_snapshot,
+                "executions": rows, "rules": qset["rules"]}
     rows = [
         {"id": f"{mode}-{case['id']}-{repeat}", "mode": mode,
          "case_id": case["id"], "cohort": case["cohort"], "repeat": repeat}
@@ -271,6 +289,8 @@ def make_plan(qset: dict, digest: str, *, transport="fake", base_url=BUILTIN_DEE
 
 def dataset_rows(qset: dict, case: dict) -> tuple[list[dict], list[dict]]:
     """Build seed copies; neither the question set nor its cases are mutated."""
+    if qset["version"] == b5c.VERSION:
+        return b5c.selected_rows(qset, case), []
     variant = qset["dataset_variants"].get(case["dataset"], {})
     removed = set(variant.get("remove", []) + variant.get("replace", []))
     superseded = set(variant.get("supersede", []))
@@ -286,6 +306,8 @@ def dataset_rows(qset: dict, case: dict) -> tuple[list[dict], list[dict]]:
 
 def fact_catalog(qset: dict) -> list[dict]:
     rows = qset["facts"] + qset["scope_sentinels"]
+    if qset["version"] == b5c.VERSION:
+        return rows + [h for f in qset["facts"] for h in f.get("history", [])]
     for variant in qset["dataset_variants"].values():
         rows = rows + variant.get("add", []) + [
             {**row, "display_text": row["text"]} for row in variant.get("experience", [])]
@@ -455,7 +477,7 @@ def score(case: dict, answer: str, calls: list[dict], qset: dict, *, mode="v11")
         # implied/contradictory unknowns still require manual review.
         sentences = re.split(r"[。.!?！？\n]+", text)
         recognized = any(any(normalize(p) in sentence for p in UNKNOWN_PHRASES)
-                         and any(normalize(p) in sentence for p in UNKNOWN_SUBJECTS.get(subject, ()))
+                         and any(normalize(p) in sentence for p in qset.get("unknown_subjects", UNKNOWN_SUBJECTS).get(subject, ()))
                          for sentence in sentences)
         if not recognized:
             manual.append(subject)
@@ -466,7 +488,7 @@ def score(case: dict, answer: str, calls: list[dict], qset: dict, *, mode="v11")
         tool_failures = []
     combined = failures + tool_failures
     status = "fail" if combined else "needs_manual" if manual else "pass"
-    return {"status": status, "failures": combined, "needs_manual": manual, "fallback": fallback,
+    result = {"status": status, "failures": combined, "needs_manual": manual, "fallback": fallback,
             "answer": {"status": answer_status, "failures": failures, "needs_manual": manual},
             "tool": {"status": "fail" if tool_failures else "pass",
                      "failures": tool_failures, "needs_manual": []}
@@ -475,6 +497,9 @@ def score(case: dict, answer: str, calls: list[dict], qset: dict, *, mode="v11")
             "used_fact_keys": used, "recall_called": bool(recalls) if mode == "v11" else None,
             "need_count": len(needs) if mode == "v11" else None,
             "needs": needs if mode == "v11" else None, "diagnostic_only": bool(expected["diagnostic_only"])}
+    if qset["version"] == b5c.VERSION:
+        result["rule_results"] = b5c.rule_results(case, result)
+    return result
 
 
 def usage_cost(usage: dict) -> Decimal:
@@ -725,7 +750,10 @@ class Capture:
         return httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
 
 
-async def seed_store(qset: dict, case: dict, mode: str, embedder: Any) -> None:
+async def seed_store(qset: dict, case: dict, mode: str, embedder: Any, group=None) -> None:
+    if qset["version"] == b5c.VERSION:
+        await b5c.seed_store(qset, case, mode, embedder, group)
+        return
     from app.db import get_db
     from app.services.memory_v11.repository import create_stable_fact
 
@@ -837,7 +865,7 @@ async def product_turn(plan: dict, entry: dict, directory: Path) -> dict:
         snapshot_from_session,
     )
 
-    qset, digest = load_questions()
+    qset, digest = load_questions(plan.get("question_set", "b5b"))
     if digest != plan["question_sha256"]:
         raise Refused("question_set_changed")
     case = next(c for c in qset["cases"] if c["id"] == entry["case_id"])
@@ -865,7 +893,10 @@ async def product_turn(plan: dict, entry: dict, directory: Path) -> dict:
         except Exception as exc:
             e5 = {"loaded": False, "reason": type(exc).__name__}
     memory_service.embedder = embedder
-    await seed_store(qset, case, entry["mode"], embedder)
+    if plan.get("question_set") == "b5c":
+        await seed_store(qset, case, entry["mode"], embedder, entry["group"])
+    else:
+        await seed_store(qset, case, entry["mode"], embedder)
     capture = Capture(plan, entry, qset, case, directory)
     adapter = OpenAICompatibleAdapter(provider_id="deepseek", base_url=plan["base_url"],
         default_model=plan["model"], message_builder=deepseek_service.build_persona_messages,
@@ -980,7 +1011,9 @@ async def product_turn(plan: dict, entry: dict, directory: Path) -> dict:
     result.update(requests=capture.requests, request_count=len(capture.requests),
                   elapsed_ms=(time.perf_counter() - started) * 1000)
     execution_accounting(result, directory.parents[1], plan)
-    if sha256(QUESTION_SET) != digest:
+    if plan.get("question_set") == "b5c":
+        result.update(b5c.locations(case, qset, capture.requests))
+    if sha256(question_path(plan.get("question_set", "b5b"))) != digest:
         raise Refused("question_set_changed_after_execution")
     return result
 
@@ -1055,6 +1088,8 @@ def percentile(values: list, p: float) -> float | None:
 
 
 def summarize(plan: dict, rows: list[dict], qset: dict) -> tuple[dict, str]:
+    if qset["version"] == b5c.VERSION:
+        return b5c.summarize(plan, rows, qset, sys.modules[__name__])
     cases = {c["id"]: c for c in qset["cases"]}
     def rates(selected, layer=None):
         # Repeated cases are a unit: all frozen repetitions must pass.
@@ -1217,7 +1252,7 @@ def run_suite(run_dir: Path, plan: dict, qset: dict, executor=execute_subprocess
                 stop_status = "not_run_budget"
             elif row.get("stop_run") or row["status"] == "interrupted":
                 stop_status = "not_run_after_accounting_error"
-        if sha256(QUESTION_SET) != plan["question_sha256"]:
+        if sha256(question_path(plan.get("question_set", "b5b"))) != plan["question_sha256"]:
             raise Refused("question_set_changed_after_run")
         summary, markdown = summarize(plan, rows, qset)
         if (run_dir / "budget.json").exists():
@@ -1234,7 +1269,7 @@ def rescore_run(run_dir: Path) -> dict:
     run_dir = run_dir.resolve()
     with fake_network_guard():
         plan = read_json(run_dir / "plan.json")
-        qset, digest = load_questions()
+        qset, digest = (load_questions(plan["question_set"]) if "question_set" in plan else load_questions())
         cases = {case["id"]: case for case in qset["cases"]}
         rows = []
         for entry in plan["executions"]:
@@ -1270,6 +1305,10 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", type=Path)
     parser.add_argument("--rescore", type=Path, help="rescore saved result.json files offline without changing originals")
+    parser.add_argument("--question-set", choices=("b5b", "b5c"), default="b5b")
+    parser.add_argument("--aggregate", nargs="+", type=Path, help="aggregate three b5c run directories offline")
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--manual", type=Path, help=b5c.__doc__)
     parser.add_argument("--transport", choices=("fake", "real"), default="fake")
     parser.add_argument("--base-url", default=BUILTIN_DEEPSEEK_BASE_URL)
     parser.add_argument("--cap-cny")
@@ -1278,6 +1317,12 @@ def main(argv=None) -> int:
     parser.add_argument("--worker", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     try:
+        if args.aggregate:
+            if args.output is None:
+                raise Refused("aggregate_output_required")
+            result = b5c.aggregate(args.aggregate, args.output, args.manual, sys.modules[__name__])
+            print(f"Aggregate {result['gate']['status']}: {args.output.resolve()}")
+            return 0
         if args.rescore:
             rescore_run(args.rescore)
             print(f"Offline rescore summaries written to {args.rescore.resolve()}")
@@ -1294,14 +1339,14 @@ def main(argv=None) -> int:
         check_real_gate(args.transport, args.base_url, args.cap_cny)
         if args.run_dir is None:
             raise Refused("run_directory_required")
-        qset, digest = load_questions()
+        qset, digest = load_questions(args.question_set)
         plan = make_plan(qset, digest, transport=args.transport, base_url=args.base_url,
                          cap_cny=args.cap_cny, model=args.model, e5_snapshot=args.e5_snapshot)
         print("Budget cap covers this run directory only; a new directory starts at zero.", flush=True)
         summary = run_suite(args.run_dir, plan, qset)
         print(json.dumps({"run_dir": str(args.run_dir.resolve()), "transport": args.transport,
-                          "statuses": {mode: row["statuses"] for mode, row in summary["modes"].items()}}, ensure_ascii=False))
-        return int(any(row["statuses"].get("error", 0) or row["statuses"].get("interrupted", 0) for row in summary["modes"].values()))
+                          "statuses": {mode: row["statuses"] for mode, row in summary.get("groups", summary.get("modes")).items()}}, ensure_ascii=False))
+        return int(any(row["statuses"].get("error", 0) or row["statuses"].get("interrupted", 0) for row in summary.get("groups", summary.get("modes")).values()))
     except Exception as exc:
         print("B5 refused: " + (str(exc) if isinstance(exc, Refused) else type(exc).__name__), file=sys.stderr)
         return 2
