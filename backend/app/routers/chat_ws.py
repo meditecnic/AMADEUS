@@ -50,6 +50,8 @@ from app.security.guard import contains_leak
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+MAX_USER_MESSAGE_LENGTH = 8000
+
 _V2_DELIVERY_TYPES = frozenset(
     {
         "turn.started",
@@ -3195,6 +3197,15 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                     await send_queue.put((session.current_epoch, {"type": "error", "message": "发送的内容不能为空"}))
                     continue
                     
+                if len(content) > MAX_USER_MESSAGE_LENGTH:
+                    await send_queue.put((session.current_epoch, {
+                        "type": "error",
+                        "code": "message_too_long",
+                        "recoverable": True,
+                        "message": "消息太长了，请分几次发（上限 8000 字）。",
+                    }))
+                    continue
+
                 # Request serialization check
                 if session.is_busy:
                     await send_queue.put((session.current_epoch, {"type": "error", "message": "系统正在处理中，请稍后再试"}))
