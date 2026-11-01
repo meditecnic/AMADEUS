@@ -3,6 +3,7 @@ import pytest_asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 from app.services.search import web_search, INJECTION_PATTERNS
 from app.routers.chat_ws import clean_text_for_tts
+from app.services.llm_interface import TAIL_REMINDER_HEADER
 
 def test_web_search_injection_filtering():
     # Safe queries
@@ -127,8 +128,9 @@ async def test_tool_calls_integration_flow():
         async def get_chat_stream(self, active_history, tools=None, **kwargs):
             self.call_count += 1
             if tools is None:
-                assert active_history[-1]["role"] == "system"
-                assert "WEB SEARCH RESULT" in active_history[-1]["content"]
+                assert active_history[-1]["content"].startswith(TAIL_REMINDER_HEADER)
+                assert active_history[-2]["role"] == "system"
+                assert "WEB SEARCH RESULT" in active_history[-2]["content"]
                 yield {
                     "content": "[EMO:neutral] ネットの気象データによれば、今日の秋葉原は晴れよ。",
                     "tool_calls": None,
@@ -151,11 +153,12 @@ async def test_tool_calls_integration_flow():
                     ]
                 }
             else:
-                assert len(active_history) >= 3
-                assert active_history[-2]["role"] == "assistant"
-                assert active_history[-2]["tool_calls"][0]["id"] == "call_abc123"
-                assert active_history[-1]["role"] == "tool"
-                assert "晴れ" in active_history[-1]["content"]
+                assert len(active_history) >= 4
+                assert active_history[-1]["content"].startswith(TAIL_REMINDER_HEADER)
+                assert active_history[-3]["role"] == "assistant"
+                assert active_history[-3]["tool_calls"][0]["id"] == "call_abc123"
+                assert active_history[-2]["role"] == "tool"
+                assert "晴れ" in active_history[-2]["content"]
                 
                 yield {
                     "content": "[EMO:neutral] ネットの気象データによれば、今日の秋葉原は晴れよ。",

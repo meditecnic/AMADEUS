@@ -4,6 +4,37 @@ from typing import AsyncGenerator, Optional
 
 from app.db import DEFAULT_IDENTITY_MODE
 
+# Header of the per-request reply reminder that chat appends after the last
+# user message. It is never persisted; adapters find it by this header.
+TAIL_REMINDER_HEADER = "【返答前の確認（アプリが毎回付ける注記。ユーザーの発言ではない）】"
+
+
+def is_tail_reminder(message) -> bool:
+    return (
+        isinstance(message, dict)
+        and message.get("role") == "system"
+        and str(message.get("content") or "").startswith(TAIL_REMINDER_HEADER)
+    )
+
+
+def fold_tail_reminder(messages: list[dict]) -> list[dict]:
+    """Move the tail reminder into the last user message.
+
+    For providers that hoist every system message to the front (or may reject
+    a system message after a user turn), the reminder only stays next to the
+    generation point when it travels inside the last user message. Without a
+    user message the list is returned unchanged.
+    """
+    reminders = [str(message.get("content") or "") for message in messages if is_tail_reminder(message)]
+    if not reminders:
+        return messages
+    folded = [dict(message) for message in messages if not is_tail_reminder(message)]
+    for message in reversed(folded):
+        if message.get("role") == "user":
+            message["content"] = "\n\n".join([str(message.get("content") or ""), *reminders])
+            return folded
+    return messages
+
 
 def build_stream_messages(
     message_builder: Callable[..., list[dict]],

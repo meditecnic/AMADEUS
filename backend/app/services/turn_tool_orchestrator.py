@@ -549,7 +549,7 @@ def prepare_second_round_payload(
             "input_budget", facts_injected=bool(result.facts_injected)
         )
         return SecondRoundPayload(
-            history=[{"role": "system", "content": notice.block}],
+            history=_history_for(notice, None),
             status="unavailable",
             reason="input_budget",
             result=notice,

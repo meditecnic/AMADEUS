@@ -72,22 +72,13 @@ class DeepSeekService(LLMInterface):
         self.api_key = ""
         self.model = config.DEEPSEEK_MODEL  # defaults to catalog preferred request ID
         self.base_url = "https://api.deepseek.com"
-        
-        self.fewshot_path = config.PROMPTS_DIR / "kurisu_fewshot.json"
-        
+
         self._system_prompt = self._load_system_prompt()
-        self._fewshot = self._load_fewshot()
 
     def _load_system_prompt(self) -> str:
         from app.security.prompt import SYSTEM_PROMPT_BASE
 
         return SYSTEM_PROMPT_BASE
-
-    def _load_fewshot(self) -> list:
-        if self.fewshot_path.exists():
-            with open(self.fewshot_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        raise FileNotFoundError(f"Few-shot JSON not found at {self.fewshot_path}")
 
     def _load_anchor_clause(self, identity_mode: str = "okabe") -> str:
         # Default okabe for legacy; chat path usually already has full Bible in system_prompt.
@@ -119,7 +110,11 @@ class DeepSeekService(LLMInterface):
         system_prompt: Optional[str] = None,
         identity_mode: str = "okabe",
     ) -> list[dict]:
-        """Build the canonical persona/history envelope shared by all providers."""
+        """Build the canonical persona/history envelope shared by all providers.
+
+        Tone examples live inside the compiled system prompt; the real history
+        follows exactly once.
+        """
         messages = [
             {
                 "role": "system",
@@ -128,7 +123,6 @@ class DeepSeekService(LLMInterface):
                 ),
             }
         ]
-        messages.extend(self._fewshot)
         if memory_summary:
             messages.append(
                 {

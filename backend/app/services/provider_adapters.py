@@ -9,7 +9,7 @@ from typing import Any, Optional
 import httpx
 
 from app.security.prompt import compression_system_prompt
-from app.services.llm_interface import LLMInterface, build_stream_messages
+from app.services.llm_interface import LLMInterface, build_stream_messages, fold_tail_reminder
 
 
 class ProviderRequestError(RuntimeError):
@@ -81,6 +81,11 @@ class OpenAICompatibleAdapter(LLMInterface):
             system_prompt,
             isolated=isolated,
         )
+        if self.provider_id != "deepseek":
+            # DeepSeek's published V4.1 encoding renders a system message after
+            # the user turn in place; other compatible backends may hoist or
+            # reject it, so the reminder rides inside the last user message.
+            messages = fold_tail_reminder(messages)
         payload: dict[str, Any] = {
             "model": model or self.model,
             "messages": messages,
@@ -357,7 +362,8 @@ class OpenAIResponsesAdapter(LLMInterface):
             system_prompt,
             isolated=isolated,
         )
-        instructions, inputs = self._split_instructions(messages)
+        # _split_instructions moves every system message into instructions.
+        instructions, inputs = self._split_instructions(fold_tail_reminder(messages))
         payload: dict[str, Any] = {
             "model": model or self.model,
             "instructions": instructions,
@@ -609,7 +615,8 @@ class GeminiAdapter(LLMInterface):
             system_prompt,
             isolated=isolated,
         )
-        system_instruction, contents = self._contents(messages)
+        # _contents moves every system message into systemInstruction.
+        system_instruction, contents = self._contents(fold_tail_reminder(messages))
         payload: dict[str, Any] = {
             "systemInstruction": system_instruction,
             "contents": contents,

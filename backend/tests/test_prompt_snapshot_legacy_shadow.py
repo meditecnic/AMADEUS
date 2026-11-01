@@ -1,8 +1,8 @@
 """Byte-for-byte prompt snapshots for legacy / shadow memory modes.
 
-Dispatch 55 (v11 resident profile) must leave legacy and shadow prompts
-unchanged. These snapshots were generated from the pre-change compiler
-(main 578d5129b60fd7953e31f136ab0e3f7cd52f8274) and are compared verbatim.
+Legacy and shadow prompts are compared verbatim. The recent dialogue and the
+current user message are not part of the system prompt (they travel only as
+messages), so each case also checks that the current message is absent.
 
 Regenerate only when a change is *meant* to alter legacy/shadow prompts:
     AMADEUS_REGEN_PROMPT_SNAPSHOTS=1 python -m pytest -q tests/test_prompt_snapshot_legacy_shadow.py
@@ -73,8 +73,8 @@ def _history(turns: int, *, body: str = "") -> list[dict[str, str]]:
 
 
 # Session-level cases: compile_for_session with stubbed memory reads. The
-# over-budget message lengths are tuned so each case stops at a different
-# shrink stage of the 12000-token total budget.
+# over-budget cases lower the compiler's total budget so each one stops at a
+# different shrink stage.
 _OVER = dict(
     self_name="",
     facts=_facts(8, body="。" * 120),
@@ -107,22 +107,22 @@ SESSION_CASES = {
     # history sliced by 1/5 steps; all memory kept
     "self_over_budget_history_slice": dict(
         _OVER, identity_mode="self", identity_acknowledged=False,
-        message="長い質問" + "あ" * 24000,
+        message="長い質問", input_budget=7030,
     ),
     # history gone; tail experiences dropped whole
     "self_over_budget_episodic_drop": dict(
         _OVER, identity_mode="self", identity_acknowledged=False,
-        message="長い質問" + "あ" * 28000,
+        message="長い質問", input_budget=6000,
     ),
     # experiences gone; tail core facts dropped whole
     "self_over_budget_core_drop": dict(
         _OVER, identity_mode="self", identity_acknowledged=False,
-        message="長い質問" + "あ" * 30000,
+        message="長い質問", input_budget=4700,
     ),
-    # everything droppable gone; state / persona char-sliced
+    # everything droppable gone; state char-sliced; persona and examples whole
     "okabe_over_budget_extreme": dict(
         _OVER, identity_mode="okabe", identity_acknowledged=True,
-        message="とても長い質問" + "い" * 36000,
+        message="とても長い質問", input_budget=3000,
     ),
 }
 
@@ -141,7 +141,7 @@ _COMPILER_BASE = dict(
 
 COMPILER_CASES = {
     f"compile_budget_{budget}": dict(_COMPILER_BASE, input_budget=budget)
-    for budget in (2500, 2100, 1800, 1500, 1200, 700)
+    for budget in (5300, 5200, 4100, 3650, 3300, 2000)
 }
 COMPILER_CASES["compile_no_facts_no_episodes"] = dict(
     input_budget=12000,
@@ -171,10 +171,7 @@ def _load_snapshots() -> dict[str, str]:
 
 
 def _check(name: str, prompt: str, message: str) -> None:
-    # The current user message is appended verbatim and never shrunk; store
-    # the prompt without it so the fixture stays small, and pin it separately.
-    assert prompt.endswith(message), f"{name}: current message not intact at prompt end"
-    prompt = prompt[: len(prompt) - len(message)]
+    assert message not in prompt, f"{name}: current message leaked into the system prompt"
     if REGEN:
         data = _load_snapshots()
         data[name] = prompt
@@ -245,6 +242,10 @@ async def test_session_prompt_snapshot(isolated_store, monkeypatch, memory_mode,
     case = SESSION_CASES[case_name]
     monkeypatch.setenv("AMADEUS_MEMORY_MODE", memory_mode)
     calls = _install_memory_stubs(monkeypatch, case)
+    if "input_budget" in case:
+        import app.services.prompt_compiler as pc_module
+
+        monkeypatch.setattr(pc_module.prompt_compiler, "input_budget", case["input_budget"])
     prompt = await compile_for_session(_session(case), case["message"])
     # Legacy and shadow both still read through memory_service.select_core_facts.
     assert calls == {"select_core_facts": 1, "lexical_search": 1}

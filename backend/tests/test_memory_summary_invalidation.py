@@ -56,7 +56,8 @@ async def test_next_provider_prompt_drops_memory_and_working_summary(isolated_st
         await chat_ws.processor_loop(session, 'こんにちは', asyncio.Queue(), session.current_epoch, session.history_epoch)
         assert captures
         prompt = captures[0]['system_prompt']
-        assert SECRET not in prompt.split('RECENT DIALOGUE')[0]
+        # History travels only as messages now, so the whole system prompt is clean.
+        assert SECRET not in prompt
         assert SECRET not in captures[0].get('memory_summary', '')
         assert not await models.save_memory_summary(owner, SECRET, conversation_id=cid, expected_epoch=old_epoch)
         assert await models.get_latest_summary(owner, conversation_id=cid) == ''

@@ -459,8 +459,15 @@ async def test_hundred_thousand_char_payload_is_explicit_not_untrimmed():
         message_builder=deepseek_service.build_persona_messages,
     )
     assert payload.status in {"unavailable", "unsupported"}
+    assert payload.status != "ok"
+    # The dialogue travels only as messages, so an over-budget second round keeps
+    # the full history (the first round sent it too) and adds just the notice.
+    assert payload.history[: len(history)] == history
+    assert len(payload.history) == len(history) + 1 and payload.history[-1]["role"] == "system"
     blob = json.dumps(payload.history, ensure_ascii=False)
-    assert len(blob) < 50_000
+    assert blob.count("x" * 100_000) == 1
+    assert "秋葉原は晴れ" not in blob and "猫" not in blob
+    assert len(blob) < 100_000 + 5_000
     messages = build_stream_messages(
         deepseek_service.build_persona_messages,
         payload.history,
@@ -469,8 +476,7 @@ async def test_hundred_thousand_char_payload_is_explicit_not_untrimmed():
         isolated=False,
     )
     total = sum(len(str(row.get("content") or "")) for row in messages)
-    assert total < 80_000
-    assert payload.status != "ok"
+    assert total < 100_000 + len(persona) + 5_000
 
 
 def test_web_injection_stays_inside_json_data():

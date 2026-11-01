@@ -662,20 +662,27 @@ def test_phase2_s3c_build_persona_messages_resolves_default_base_by_mode():
 
 
 def test_fewshot_demonstrates_range_without_teaching_scripted_replies():
-    messages = json.loads(
+    sets = json.loads(
         (config.PROMPTS_DIR / "kurisu_fewshot.json").read_text(encoding="utf-8")
     )
-    assistants = [row["content"] for row in messages if row["role"] == "assistant"]
-    users = [row["content"] for row in messages if row["role"] == "user"]
     allowed = "|".join(PersonaBible.load_default().emotion_tones)
-    observed = {
-        re.match(r"^\[EMO:([^]]+)] ", content).group(1)
-        for content in assistants
-        if re.match(rf"^\[EMO:({allowed})] ", content)
-    }
+    assistants: list[str] = []
+    users: list[str] = []
+    observed: set[str] = set()
+    for rows in sets.values():
+        replies = [row["assistant"] for row in rows]
+        emotions = {
+            re.match(r"^\[EMO:([^]]+)] ", content).group(1)
+            for content in replies
+            if re.match(rf"^\[EMO:({allowed})] ", content)
+        }
+        # Within one identity mode every example shows a different emotion.
+        assert len(emotions) == len(replies)
+        observed |= emotions
+        assistants.extend(replies)
+        users.extend(row["user"] for row in rows)
 
     assert len(assistants) == len(users) >= 6
-    assert len(observed) == len(assistants)
     assert {"neutral", "intellectual", "annoyed", "embarrassed", "sad"} <= observed
     assert any(any("\u4e00" <= char <= "\u9fff" for char in content) for content in users)
     assert any("根拠" in content and "仮説" in content for content in assistants)

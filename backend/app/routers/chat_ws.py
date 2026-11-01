@@ -18,7 +18,7 @@ from app.services.credentials import credential_store
 from app.services.tts_queue import tts_manager
 from app import models
 from app.db import init_db
-from app.services.prompt_compiler import compile_for_session
+from app.services.prompt_compiler import compile_for_session, render_tail_reminder
 from app.services.session_manager import cancel_inflight, session_coordinator
 from app.domain.subtitle_glossary_rewrite import apply_subtitle_glossary_rewrites
 from app.domain.japanese_response_renderer import (
@@ -699,6 +699,14 @@ async def get_clean_text_stream(
     # Buffer UI publication when search/tool evidence is present so a Chinese/English
     # body after a short Japanese opener can still retry without a locked prefix.
     buffer_ui_until_attempt_ok = _history_has_external_evidence(prompt_history)
+    # Request-only: appended per send, never written to session history or the DB.
+    tail_reminder = {
+        "role": "system",
+        "content": render_tail_reminder(
+            getattr(session, "identity_mode", None),
+            getattr(session, "self_name", ""),
+        ),
+    }
     for attempt in range(MAX_ATTEMPTS):
         if before_send is not None:
             replacement = before_send(attempt)
@@ -823,31 +831,20 @@ async def get_clean_text_stream(
             and "ANSWER LANGUAGE — HARD REQUIREMENT" not in eff_system_prompt
             and "表示本文は必ず自然な日本語のみ" not in eff_system_prompt
         ):
-            eff_system_prompt = (
-                eff_system_prompt
-                + "\n"
-                + _ANSWER_LANGUAGE_HARD_REQUIREMENT
-                + _NON_JAPANESE_INPUT_FIRST_PASS_JA
-            )
+            eff_system_prompt = eff_system_prompt + "\n" + _ANSWER_LANGUAGE_HARD_REQUIREMENT
         if attempt > 0:
             retry_instruction = (
                 "\n【直前の出力でAI・アシスタント・言語モデル等の露見語が検出された。"
                 "絶対に紅莉栖としてのみ振る舞い、二度とそのような語を使わないこと。】"
             )
             eff_system_prompt = (session.system_prompt or "") + retry_instruction
-            # Keep non-Japanese-input discipline on leak retries as well.
-            if (
-                _latest_user_message_requires_japanese_reply(prompt_history)
-                and "表示本文は必ず自然な日本語のみ" not in eff_system_prompt
-            ):
-                eff_system_prompt = eff_system_prompt + _NON_JAPANESE_INPUT_FIRST_PASS_JA
-            
+
         # Memory read gate: only when this request actually offers recall_memory,
         # and exactly one copy per send (including leak-retry attempts).
         eff_system_prompt = _with_memory_recall_read_gate(eff_system_prompt, tools)
 
         from datetime import datetime
-        time_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        time_str = datetime.now().strftime("%Y-%m-%d %H:%M")
         time_supplement = f"\n【現在時刻：{time_str}】"
         eff_system_prompt = (eff_system_prompt or "") + time_supplement
 
@@ -858,7 +855,7 @@ async def get_clean_text_stream(
             else session.temperature
         )
         stream_kwargs = {
-            "active_history": prompt_history,
+            "active_history": [*prompt_history, tail_reminder],
             "memory_summary": memory_summary,
             "api_key": session.api_key,
             "system_prompt": eff_system_prompt,
@@ -1275,15 +1272,6 @@ async def _render_foreign_speech_to_japanese(
             flush=True,
         )
     return None
-
-
-# First-pass discipline for any non-Japanese user language.  This improves the
-# happy path; the isolated renderer below remains the actual publication safety net.
-_NON_JAPANESE_INPUT_FIRST_PASS_JA = (
-    "\n【ユーザー入力の言語に関係なく、表示本文は必ず自然な日本語のみ。"
-    "中国語・英語・ドイツ語などの本文で返事しない。固有名詞以外は日本語で話す。"
-    "中国語字幕は翻訳層が別途生成する。】"
-)
 
 
 def _history_has_external_evidence(active_history: list) -> bool:

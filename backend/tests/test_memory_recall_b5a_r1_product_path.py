@@ -607,8 +607,11 @@ async def test_hundred_thousand_chars_rejected_before_adapter_send():
     adapter = _openai_adapter(capture)
     await _through_stream(adapter, tools=None, history=payload.history, session=_session(system_prompt=persona))
     blob = json.dumps(capture.requests, ensure_ascii=False)
-    assert "x" * 1000 not in blob
-    assert len(blob) < 80_000
+    # The history is not trimmed (the first round sent it whole) and not copied
+    # into the system prompt: the 100k turn appears once, with no web or memory.
+    assert blob.count("x" * 100_000) == 1
+    assert "秋葉原は晴れ" not in blob and "猫" not in blob
+    assert len(blob) < 100_000 + len(persona) + 10_000
     _dump(
         "adapter_envelope_100k_rejected",
         {"status": payload.status, "reason": payload.reason, "request_chars": len(blob)},
