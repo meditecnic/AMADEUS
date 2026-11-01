@@ -12,6 +12,7 @@ import sqlite3
 import subprocess
 import sys
 from collections import Counter
+from decimal import Decimal
 from pathlib import Path
 
 import httpx
@@ -197,7 +198,8 @@ def test_requests_match_product_and_second_conversation_is_new(fake_run):
             assert payload['messages'][0] == {'role': 'system', 'content': _V11_MEMORY_SYSTEM if row['mode'] == 'v11' else build_extraction_instruction('self')}
             assert payload['temperature'] == 0.1
             assert payload['response_format'] == {'type': 'json_object'}
-            assert set(payload) == {'messages', 'temperature', 'response_format', 'model'}
+            assert payload['max_tokens'] == 2000
+            assert set(payload) == {'messages', 'temperature', 'response_format', 'model', 'max_tokens'}
             content = json.loads(payload['messages'][1]['content'])
             assert 'old_aliases' not in content and 'new_aliases' not in content
             if row['mode'] == 'v11':
@@ -257,22 +259,39 @@ async def test_capture_budget_stops_without_http(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('content,parse_failed', [('{}', False), (' \n```json\n{}\n```\n', False), ('not JSON', True), ('[]', True)])
-async def test_capture_real_accounting_uses_unchanged_product_body(tmp_path, monkeypatch, content, parse_failed):
+@pytest.mark.parametrize('finish_reason', ['stop', 'length'])
+async def test_capture_adds_only_output_cap_and_reserves_2000_tokens(tmp_path, monkeypatch, content, parse_failed, finish_reason):
     directory = tmp_path / 'executions' / 'legacy-case-1'
     directory.mkdir(parents=True)
-    original = {'model': 'deepseek-flash', 'messages': [], 'temperature': 0.1}
+    original = {'model': 'deepseek-flash', 'messages': [
+        {'role': 'system', 'content': '产品提示词\n逐字保留。'},
+        {'role': 'user', 'content': '最近早上改喝拿铁了。'}], 'temperature': 0.1,
+        'response_format': {'type': 'json_object'}}
     usage = {'prompt_tokens': 100, 'completion_tokens': 10}
     async def post(self, url, **kwargs):
-        assert json.loads(kwargs['content']) == original
-        return httpx.Response(200, json={'choices': [{'message': {'content': content}}], 'usage': usage})
+        assert kwargs['json'] == {**original, 'max_tokens': 2000}
+        assert 'content-length' not in kwargs['headers']
+        return httpx.Response(200, json={'choices': [{'finish_reason': finish_reason, 'message': {'content': content}}], 'usage': usage})
     monkeypatch.setattr(httpx.AsyncClient, 'post', post)
-    capture = probe.Capture({'transport': 'real', 'cap_cny': '5'}, {'id': 'legacy-case-1'}, {}, directory)
-    await capture.handle(httpx.Request('POST', 'https://api.deepseek.com/chat/completions', json=original))
+    capture = probe.Capture({'transport': 'real', 'cap_cny': '0.1'}, {'id': 'legacy-case-1'}, {}, directory)
+    request = httpx.Request('POST', 'https://api.deepseek.com/chat/completions', json=original)
+    if finish_reason == 'length':
+        with pytest.raises(probe.b5.Refused, match='output_truncated'):
+            await capture.handle(request)
+    else:
+        await capture.handle(request)
     budget = probe.b5.read_json(tmp_path / 'budget.json')
     assert budget['attempts'][0]['status'] == 'settled'
     assert budget['attempts'][0]['charge_cny'] == str(probe.b5.usage_cost(usage))
-    assert capture.rows[0]['request'] == original
-    assert capture.rows[0]['json_parse_failed'] == parse_failed
+    payload = capture.rows[0]['request']
+    assert payload == {**original, 'max_tokens': 2000}
+    expected_reserve = (Decimal(probe.b5.estimate_input_tokens(payload)) * 2 + Decimal(2000) * 8) / 1_000_000
+    assert Decimal(budget['attempts'][0]['reserve_cny']) == expected_reserve
+    if finish_reason == 'length':
+        assert capture.error_code == capture.rows[0]['error_code'] == 'output_truncated'
+        assert 'json_parse_failed' not in capture.rows[0]
+    else:
+        assert capture.rows[0]['json_parse_failed'] == parse_failed
 
 
 @pytest.mark.asyncio
@@ -316,7 +335,7 @@ def test_aggregate_cli_manual_and_ten_percentage_point_flag(tmp_path, monkeypatc
     assert aggregate['investigate'] == ['supersede']
     assert aggregate['rates']['v11']['keep']['mean'] == 1
     assert aggregate['runs'][0]['modes']['v11']['categories']['stop']['needs_manual'] == 1
-    assert '要查：supersede' in (output / 'aggregate.md').read_text()
+    assert '要查：supersede' in (output / 'aggregate.md').read_text(encoding='utf-8')
     manual = tmp_path / 'manual.json'
     probe.b5.write_json(manual, [
         {'run_dir': 'run-1', 'execution_id': 'v11-stop-1', 'judgment': 'pass'},
@@ -327,7 +346,7 @@ def test_aggregate_cli_manual_and_ten_percentage_point_flag(tmp_path, monkeypatc
     assert revised['rates']['v11']['stop']['per_run'] == [1, 0, 0]
     assert revised['runs'][0]['modes']['legacy']['categories']['stop']['fail'] == 1
     assert revised['runs'][0]['modes']['legacy']['categories']['stop']['needs_manual'] == 0
-    assert '人工改判：2 条' in (output / 'aggregate.md').read_text()
+    assert '人工改判：2 条' in (output / 'aggregate.md').read_text(encoding='utf-8')
     for path, content in originals.items():
         assert path.read_bytes() == content
 
@@ -388,3 +407,75 @@ async def test_product_failure_and_drop_telemetry(tmp_path, monkeypatch, mode, f
     else:
         assert summary['job_failures'] == 2
         assert all(turn['job']['last_error_code'] == 'validation_failed' for turn in row['rounds'])
+
+
+@pytest.mark.parametrize('mode', ['legacy', 'v11'])
+@pytest.mark.parametrize('truncated_round', [1, 2])
+@pytest.mark.asyncio
+async def test_output_truncated_never_parsed_or_classified(tmp_path, monkeypatch, mode, truncated_round):
+    from app.services.memory import memory_service
+
+    monkeypatch.setenv('AMADEUS_DATA_DIR', str(tmp_path / 'data'))
+    monkeypatch.setattr(memory_service, 'embedder', memory_service.embedder)
+    directory = tmp_path / 'executions' / f'{mode}-cat_name-1'
+    directory.mkdir(parents=True)
+    plan = {'fixture_sha256': probe.b5.sha256(probe.FIXTURE), 'transport': 'fake',
+            'base_url': probe.b5.BUILTIN_DEEPSEEK_BASE_URL, 'model': 'deepseek-flash', 'cap_cny': None}
+    entry = {'id': directory.name, 'case_id': 'cat_name', 'mode': mode, 'category': 'supersede'}
+    original_response, original_loads = httpx.Response, json.loads
+    blocked = []
+    request_count = 0
+
+    def response(status, **kwargs):
+        nonlocal request_count
+        request_count += 1
+        if request_count == truncated_round:
+            choice = kwargs['json']['choices'][0]
+            choice['finish_reason'] = 'length'
+            # Even valid JSON accompanied by length must never establish facts.
+            blocked.append(choice['message']['content'])
+        return original_response(status, **kwargs)
+
+    def loads(value, *args, **kwargs):
+        if isinstance(value, str) and value in blocked:
+            pytest.fail('truncated completion was parsed')
+        return original_loads(value, *args, **kwargs)
+
+    monkeypatch.setattr(probe.httpx, 'Response', response)
+    monkeypatch.setattr(probe.json, 'loads', loads)
+    monkeypatch.setattr(probe, 'classify', lambda *args: pytest.fail('truncated execution was classified'))
+    with probe.b5.fake_network_guard():
+        row = await probe.product_execution(plan, entry, directory)
+    assert row['status'] == 'error'
+    assert row['error_code'] == 'output_truncated'
+    assert row['score'] is None
+    assert row['stop_reason'] is None
+    assert row['request_count'] == len(row['rounds']) == truncated_round
+    assert len(row['rounds'][-1]['records']) == 20 + truncated_round - 1
+    if truncated_round == 2:
+        assert row['rounds'][0]['records'] == row['rounds'][1]['records']
+    captures = probe.b5.read_json(directory / 'requests.json')
+    assert captures[-1]['error_code'] == 'output_truncated'
+    assert 'relations' not in captures[-1] and 'json_parse_failed' not in captures[-1]
+    data = probe.summarize([row])['modes'][mode]
+    assert data['output_truncated'] == 1
+    assert data['statuses'] == {'error': 1}
+    assert data['json_parse_failures'] == 0
+    assert data['categories']['supersede']['eligible'] == 0
+    # Offline aggregation keeps the error visible and excludes it from scores.
+    probe.b5.write_json(tmp_path / 'results.json', [row, result_row(mode, 'supersede', 'pass')])
+    output = tmp_path / 'aggregate'
+    aggregate = probe.aggregate([tmp_path], output)
+    assert aggregate['rates'][mode]['supersede']['mean'] == 1
+    assert aggregate['runs'][0]['modes'][mode]['output_truncated'] == 1
+    assert 'output_truncated=1' in (output / 'aggregate.md').read_text(encoding='utf-8')
+
+
+def test_help_discloses_output_cap(capsys):
+    with pytest.raises(SystemExit) as exc:
+        probe.main(['--help'])
+    assert exc.value.code == 0
+    help_text = ' '.join(capsys.readouterr().out.split())
+    assert 'max_tokens=2000' in help_text
+    assert 'messages and all other fields are unchanged' in help_text
+    assert 'normal memory write replies are far below this limit' in help_text

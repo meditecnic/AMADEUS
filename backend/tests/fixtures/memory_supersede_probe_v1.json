@@ -88,7 +88,7 @@
       "category": "supersede",
       "utterances": [
         "我每天早上都喝美式咖啡。",
-        "如今起床后只饮拿铁。"
+        "最近早上改喝拿铁了。"
       ],
       "old_aliases": [
         "美式咖啡",
@@ -99,9 +99,9 @@
         "奶咖"
       ],
       "old_text": "我每天早上都喝美式咖啡。",
-      "new_text": "我如今起床后只饮拿铁。",
+      "new_text": "我最近早上改喝拿铁了。",
       "legacy_key": "morning_drink",
-      "shared_bigrams": 0
+      "shared_bigrams": 1
     },
     {
       "id": "home_city",

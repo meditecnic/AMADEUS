@@ -5,6 +5,9 @@ Offline: --aggregate RUN... --output PATH [--manual FILE]
 Manual JSON: [{"run_dir": "run-name", "execution_id": "v11-cat_name-1",
                "judgment": "pass"}]. Only needs_manual may be overridden.
 Fake scores verify plumbing and are not model-quality evidence.
+HTTP adds max_tokens=2000 to the product request to enforce a hard output/budget
+limit; messages and all other fields are unchanged. Only replies exceeding 2000
+tokens are affected; normal memory write replies are far below this limit.
 """
 from __future__ import annotations
 
@@ -40,9 +43,7 @@ ASSISTANT = '[EMO:neutral] ふーん、そうなんだ。'
 SCOPE = dict(session_id='probe-owner', worldline='steins_gate', identity_mode='self')
 CATEGORIES = ('supersede', 'keep', 'stop')
 RESULTS = ('pass', 'duplicate', 'missed', 'wrongly_replaced', 'needs_manual', 'setup_failed', 'fail')
-# complete_json sends no max_tokens. Reserve a conservative provider output
-# ceiling without modifying the product HTTP body; actual usage settles it.
-OUTPUT_RESERVE_TOKENS = 384_000
+MAX_OUTPUT_TOKENS = 2000
 
 
 class FakeEmbedder:
@@ -168,32 +169,41 @@ class Capture:
         self.conversation_id = None
         self.rows = []
         self.stop_reason = None
+        self.error_code = None
 
     async def handle(self, request):
         payload = json.loads(request.content)
+        payload['max_tokens'] = MAX_OUTPUT_TOKENS
         row = {'round': self.round_no, 'conversation_id': self.conversation_id, 'request': payload, 'sent': False}
         self.rows.append(row)
         b5.write_json(self.directory / 'requests.json', self.rows)
         if self.plan['transport'] == 'fake':
             row['sent'] = True
             completion = fake_completion(self.case, self.entry['mode'], self.round_no, payload)
-            usage = {'prompt_tokens': max(1, len(request.content) // 3), 'completion_tokens': 150}
-            body = {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(completion, ensure_ascii=False)}}], 'usage': usage}
+            usage = {'prompt_tokens': max(1, len(json.dumps(payload, ensure_ascii=False).encode('utf-8')) // 3), 'completion_tokens': 150}
+            body = {'choices': [{'finish_reason': 'stop', 'message': {'role': 'assistant', 'content': json.dumps(completion, ensure_ascii=False)}}], 'usage': usage}
             response = httpx.Response(200, json=body)
         else:
             try:
                 budget = b5.Budget(self.directory.parents[1] / 'budget.json', self.plan['cap_cny'])
-                reservation = budget.reserve({**payload, 'max_tokens': OUTPUT_RESERVE_TOKENS}, self.entry['id'], kind='memory', phase=str(self.round_no))
+                reservation = budget.reserve(payload, self.entry['id'], kind='memory', phase=str(self.round_no))
                 row['sent'] = True
                 b5.write_json(self.directory / 'requests.json', self.rows)
                 async with httpx.AsyncClient(timeout=60) as client:
-                    response = await client.post(str(request.url), content=request.content, headers=dict(request.headers))
+                    headers = {k: v for k, v in request.headers.items() if k.lower() != 'content-length'}
+                    response = await client.post(str(request.url), json=payload, headers=headers)
                 budget.settle(reservation, response.json().get('usage'))
             except Exception as exc:
                 self.stop_reason = str(exc) if isinstance(exc, b5.Refused) else 'http_or_accounting_failed'
                 raise
             body = response.json()
             usage = body.get('usage') or {}
+        row.update(response=body, usage=usage,
+                   cost_cny=str(b5.usage_cost(usage)) if self.plan['transport'] == 'real' else '0')
+        if any(choice.get('finish_reason') == 'length' for choice in body.get('choices', [])):
+            self.error_code = row['error_code'] = 'output_truncated'
+            b5.write_json(self.directory / 'requests.json', self.rows)
+            raise b5.Refused('output_truncated')
         raw = str((body.get('choices') or [{}])[0].get('message', {}).get('content', '')).strip()
         try:
             cleaned = raw.split('\n', 1)[1].rsplit('```', 1)[0] if raw.startswith('```') else raw
@@ -202,9 +212,7 @@ class Capture:
         except (ValueError, IndexError):
             parsed = {}
             row['json_parse_failed'] = True
-        row.update(response=body, usage=usage,
-                   cost_cny=str(b5.usage_cost(usage)) if self.plan['transport'] == 'real' else '0',
-                   relations=dict(Counter(o.get('relation', 'missing') for o in parsed.get('observations', [])
+        row.update(relations=dict(Counter(o.get('relation', 'missing') for o in parsed.get('observations', [])
                                           if isinstance(o, dict))) if isinstance(parsed, dict) else {})
         b5.write_json(self.directory / 'requests.json', self.rows)
         return response
@@ -296,16 +304,18 @@ async def product_execution(plan, entry, directory):
                        parse_failed='parse failed' in log or any(r.get('json_parse_failed') for r in capture.rows if r['round'] == round_no),
                        extraction_failed='extract failed' in log, dropped_reasons=dropped)
             rounds.append(row)
-            if capture.stop_reason:
+            if capture.stop_reason or capture.error_code:
                 break
     before = rounds[0]['records']
     background_ids = {r['id'] for r in baseline}
     t1 = next((r for r in before if r['id'] not in background_ids and r['active'] and matches(r['text'], case['old_aliases'])), None)
-    result = {**entry, 'transport': plan['transport'], 'status': 'stopped' if capture.stop_reason else 'completed', 'stop_reason': capture.stop_reason,
+    result = {**entry, 'transport': plan['transport'],
+        'status': 'error' if capture.error_code else ('stopped' if capture.stop_reason else 'completed'),
+        'stop_reason': capture.stop_reason, 'error_code': capture.error_code,
         'pid': os.getpid(), 'data_dir': os.environ['AMADEUS_DATA_DIR'], 't1': t1, 'rounds': rounds,
         'embedding': 'fake-384' if plan['transport'] == 'fake' else 'local-e5',
         'provider_injection': 'provider_registry.snapshot + credential_store.get; MEMORY-capable OpenAICompatibleAdapter + MockTransport',
-        'score': classify(case, entry['mode'], before, rounds[-1]['records'], t1),
+        'score': None if capture.error_code else classify(case, entry['mode'], before, rounds[-1]['records'], t1),
         'request_count': sum(r['sent'] for r in capture.rows), 'relations': dict(sum((Counter(r.get('relations', {})) for r in capture.rows), Counter())),
         'usage': {k: sum(r.get('usage', {}).get(k, 0) for r in capture.rows) for k in ('prompt_tokens', 'completion_tokens')},
         'cost_cny': str(sum((Decimal(r.get('cost_cny', '0')) for r in capture.rows), Decimal(0)))}
@@ -335,11 +345,12 @@ def summarize(rows):
         selected = [r for r in rows if r['mode'] == mode]
         categories = {}
         for category in CATEGORIES:
-            counts = Counter(r['score']['status'] for r in selected if r['category'] == category)
+            counts = Counter(r['score']['status'] for r in selected if r['category'] == category and r['score'] is not None)
             eligible = sum(counts.values()) - counts['setup_failed']
             categories[category] = {**{s: counts[s] for s in RESULTS}, 'eligible': eligible,
                 'pass_rate': counts['pass'] / eligible if eligible else None}
         modes[mode] = {'categories': categories, 'statuses': dict(Counter(r['status'] for r in selected)),
+            'output_truncated': sum(r.get('error_code') == 'output_truncated' for r in selected),
             'json_parse_failures': sum(bool(turn['parse_failed']) for r in selected for turn in r['rounds']),
             'job_failures': sum(turn.get('job', {}).get('state') not in {None, 'completed'} for r in selected for turn in r['rounds']),
             'request_count': sum(r['request_count'] for r in selected),
@@ -357,7 +368,7 @@ def summary_markdown(summary):
         for category, counts in data['categories'].items():
             lines.append('| ' + ' | '.join([mode, category, *[str(counts[k]) for k in RESULTS]]) + ' |')
     for mode, data in summary['modes'].items():
-        lines.extend(['', f"{mode}: requests={data['request_count']}, tokens={data['usage']}, cost={data['cost_cny']} CNY; JSON failures={data['json_parse_failures']}, job failures={data['job_failures']}", ''])
+        lines.extend(['', f"{mode}: requests={data['request_count']}, tokens={data['usage']}, cost={data['cost_cny']} CNY; JSON failures={data['json_parse_failures']}, job failures={data['job_failures']}, output_truncated={data['output_truncated']}", ''])
     return '\n'.join(lines) + '\n'
 
 
@@ -391,7 +402,7 @@ def aggregate(run_dirs, output, manual=None):
         for row in rows:
             for decision in overrides:
                 if decision['run_dir'] == run_dir.name and decision['execution_id'] == row['id']:
-                    if row['score']['status'] != 'needs_manual' or decision['judgment'] not in {'pass', 'fail'}:
+                    if (row['score'] or {}).get('status') != 'needs_manual' or decision['judgment'] not in {'pass', 'fail'}:
                         raise b5.Refused('invalid_manual_decision')
                     row['score']['status'] = decision['judgment']
                     applied += 1
@@ -410,7 +421,7 @@ def aggregate(run_dirs, output, manual=None):
         if legacy is not None and v11 is not None and round(legacy - v11, 12) > 0.10:
             investigate.append(category)
     result = {'runs': runs, 'rates': stats, 'investigate': investigate, 'manual_overrides': applied,
-              'note': '只报告，不判门槛；setup_failed 排除，needs_manual 保留在分母并单列。'}
+              'note': '只报告，不判门槛；setup_failed 排除，needs_manual 保留在分母并单列；output_truncated 是执行错误，单列且不进评分。'}
     output.mkdir(parents=True, exist_ok=True)
     b5.write_json(output / 'aggregate.json', result)
     lines = ['# 改口探针多次汇总', '', result['note'], '', f'人工改判：{applied} 条。', '',
