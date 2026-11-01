@@ -41,12 +41,23 @@ async def run_turn(monkeypatch, conversation, chunks, *, protocol=2, client="des
     monkeypatch.setattr(chat_ws, "translate_with_provider", AsyncMock(return_value="中文。"))
     speech = AsyncMock(return_value=b"offline-audio")
     monkeypatch.setattr(chat_ws.tts_manager, "synthesize_async", speech)
+
+    async def queue_speech(session_id, text, emotion, **kwargs):
+        await speech(text, emotion)
+        return await chat_ws.tts_manager.queue_silent(session_id, text, emotion, "offline-test")
+
+    async def stream_speech(text, emotion, **kwargs):
+        await speech(text, emotion)
+        yield None, b"offline-pcm"
+
+    monkeypatch.setattr(chat_ws.tts_manager, "synthesize_and_queue", queue_speech)
+    monkeypatch.setattr(chat_ws.tts_manager, "stream_pcm", stream_speech)
     monkeypatch.setattr(conversation_service, "schedule_auto_title", lambda *a, **k: None)
     monkeypatch.setattr(memory_service, "schedule_turn_extraction", lambda **kwargs: None)
     session = chat_ws.SessionState("emo-test")
     session.client_type = client
     session.protocol_version = protocol
-    session.enable_tts = protocol >= 2
+    session.enable_tts = True
     session.conversation_id = conversation
     session.api_key = "test-key"
     session.append_message({"role": "user", "content": "元気？", "id": None})
@@ -151,22 +162,26 @@ async def test_only_first_tag_sets_emotion(monkeypatch, conversation):
     assert session.last_assistant_emotion == "happy"
 
 
+async def assert_tagged_turn_matches_plain(monkeypatch, conversation, *, protocol=2, client="desktop"):
+    tagged = f"[EMO:happy] {FIRST}  [EMO:sad]  {BODY[len(FIRST):]}"
+    plain = f"[EMO:happy] {FIRST} {BODY[len(FIRST):]}"
+    snapshots = []
+    for raw in (tagged, plain):
+        events, speech, rows, _ = await run_turn(
+            monkeypatch, conversation, [raw], protocol=protocol, client=client,
+        )
+        ui = ([e["ja"] for e in events if e.get("type") == "segment.ready"]
+              if protocol >= 2 else [e["content"] for e in events if e.get("type") == "text_chunk"])
+        tts = [call.args[0] for call in speech.call_args_list]
+        assert ui and tts and rows[-1]["role"] == "assistant"
+        snapshots.append((ui, tts, rows[-1]["content"]))
+    assert snapshots[0] == snapshots[1]
+
+
 async def test_sentence_gap_survives_publication_and_history(monkeypatch, conversation):
-    raw = f"[EMO:happy] {FIRST}  [EMO:sad]  {BODY[len(FIRST):]}"
-    expected = FIRST + " " + BODY[len(FIRST):]
-    events, speech, rows, _ = await run_turn(monkeypatch, conversation, [raw])
-    assert "".join(e["ja"] for e in events if e.get("type") == "segment.ready") == expected
-    assert rows[-1]["content"] == f"[EMO:happy] {expected}"
-    # Speech preflight continues to trim each individual utterance.
-    assert "".join(c.args[0] for c in speech.call_args_list) == BODY
+    await assert_tagged_turn_matches_plain(monkeypatch, conversation)
 
 
 @pytest.mark.parametrize("client", ["desktop", "voice"])
 async def test_v1_sentence_gap(monkeypatch, conversation, client):
-    raw = f"[EMO:happy] {FIRST} [EMO:sad]  {BODY[len(FIRST):]}"
-    expected = FIRST + " " + BODY[len(FIRST):]
-    events, _, rows, _ = await run_turn(
-        monkeypatch, conversation, [raw], protocol=1, client=client,
-    )
-    assert "".join(e["content"] for e in events if e.get("type") == "text_chunk") == expected
-    assert rows[-1]["content"] == f"[EMO:happy] {expected}"
+    await assert_tagged_turn_matches_plain(monkeypatch, conversation, protocol=1, client=client)

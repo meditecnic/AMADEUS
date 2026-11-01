@@ -723,7 +723,7 @@ async def get_clean_text_stream(
         last_emotion = default_emotion if default_emotion in allowed else "neutral"
         text_buffer = ""
         emotion_filter = EmotionTagFilter()
-        publication_segmenter = IncrementalJapaneseSegmenter(preserve_spacing=True)
+        publication_segmenter = IncrementalJapaneseSegmenter()
         published_parts: list[str] = []
         published_emotions: list[str] = []
         rejected_language_parts: list[str] = []
@@ -1657,7 +1657,7 @@ async def processor_loop(
             await segment_pipeline.start()
             if session.voice_stopped_turn_id == turn_id:
                 await segment_pipeline.stop_voice()
-            streaming_splitter = IncrementalJapaneseSegmenter(preserve_spacing=True)
+            streaming_splitter = IncrementalJapaneseSegmenter()
 
             # Defer neutral data labels until the next Japanese speech unit so
             # GPT-SoVITS never receives a bare non-Japanese fragment alone.
@@ -2352,10 +2352,6 @@ async def _dispatch_tts_sentences(
             audio_bytes = payload.get("audio")
             error = payload.get("error")
             text = payload.get("text", "")
-            if sentence_id < len(full_ja_text_parts):
-                original = full_ja_text_parts[sentence_id]
-                if original.strip() == text.strip():
-                    text = original
             emotion = payload.get("emotion", "neutral")
             print(
                 f"[DEBUG] sender_task sentence={sentence_id} emotion='{emotion}' "
@@ -2409,8 +2405,6 @@ async def _dispatch_tts_sentences(
 
         for s in sentences:
             text = s.strip()
-            if full_ja_text_parts and s.startswith((" ", "\t")):
-                text = " " + text
             if not text or not is_meaningful_sentence(text):
                 continue
 
@@ -2502,7 +2496,7 @@ async def _dispatch_streaming_voice_tts(session: SessionState, final_text: str, 
     sentences, _ = extract_sentences_from_buffer(final_text, is_end=True)
     delivered = []
     for sentence_id, text in enumerate(sentences or [final_text]):
-        text = text.rstrip() if delivered else text.strip()
+        text = text.strip()
         if not text:
             continue
         delivered.append(text)
