@@ -44,36 +44,21 @@ def _run_e5_coverage() -> dict:
     import tempfile
 
     os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ["TRANSFORMERS_OFFLINE"] = "1"
     sys.path.insert(0, str(BACKEND))
 
     async def _probe() -> dict:
         tmp = tempfile.TemporaryDirectory(prefix="b5a-e5-")
         os.environ["AMADEUS_DATA_DIR"] = tmp.name
         os.environ.pop("AMADEUS_DB_PATH", None)
-        from sentence_transformers import SentenceTransformer
 
         from app.db import get_db, init_db, reset_initialization_cache
         from app.services.memory import EmbeddingAdapter, memory_service
         from app.services.memory_v11.recall import MemoryScope, RecallRequest, recall_stable_facts
         from app.services.memory_v11.repository import create_stable_fact
 
-        class LocalE5(EmbeddingAdapter):
-            def __init__(self) -> None:
-                super().__init__(model_name="intfloat/multilingual-e5-small", dimensions=384)
-
-            def _load(self):
-                if self._model is None:
-                    self._model = SentenceTransformer(
-                        str(E5_SNAPSHOT),
-                        local_files_only=True,
-                        trust_remote_code=False,
-                    )
-                return self._model
-
         reset_initialization_cache()
         await init_db()
-        embedder = LocalE5()
+        embedder = EmbeddingAdapter(model_dir=E5_SNAPSHOT)
         memory_service.embedder = embedder
         facts = [
             ("coffee", "我每天早上喝美式咖啡，不加糖。"),
@@ -322,7 +307,6 @@ def sha256_file(path: Path) -> str:
 
 def main() -> int:
     os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ["TRANSFORMERS_OFFLINE"] = "1"
     os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
     os.environ["PYTHON_DOTENV_DISABLED"] = "1"
     os.environ["PYTHONUTF8"] = "1"
@@ -385,7 +369,8 @@ def main() -> int:
         json.dumps(negative, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    e5_report = _run_e5_coverage() if E5_SNAPSHOT.is_dir() else {"skipped": True, "reason": "snapshot_missing"}
+    e5_report = (_run_e5_coverage() if (E5_SNAPSHOT / "onnx/model.onnx").is_file()
+                 else {"skipped": True, "reason": "onnx_missing" if E5_SNAPSHOT.is_dir() else "snapshot_missing"})
     (run_dir / "pytest.stdout.txt").write_text(proc.stdout, encoding="utf-8")
     (run_dir / "pytest.stderr.txt").write_text(proc.stderr, encoding="utf-8")
     e5_present = E5_SNAPSHOT.is_dir()

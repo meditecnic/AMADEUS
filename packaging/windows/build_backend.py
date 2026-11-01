@@ -19,15 +19,8 @@ REPO = HERE.parents[1]
 TEST_ONLY = {"pytest", "pytest-asyncio", "pytest-timeout", "ruff", "iniconfig", "pluggy"}
 E5_REVISION = "614241f622f53c4eeff9890bdc4f31cfecc418b3"
 E5_FILES = {
-    "config.json": "69137736cab8b8903a07fe8afaafdda25aac55415a12a55d1bffa9f581abf959",
-    "model.safetensors": "1a55775f53449dac10a2bcbc312469fac40b96d53198c407081a831f81c98477",
-    "modules.json": "c6e29747481e8b5dd2b58401966aeac910de39092f90cda9a704b1545f902b04",
-    "sentence_bert_config.json": "948201d8329907aae938fa62f9ceeed53f5694dacc2b87b9f3b78b37ee986529",
-    "special_tokens_map.json": "d05497f1da52c5e09554c0cd874037a083e1dc1b9cfd48034d1c717f1afc07a7",
-    "tokenizer_config.json": "a1d6bc8734a6f635dc158508bef000f8e2e5a759c7d92f984b2c86e5ff53425b",
+    "onnx/model.onnx": "ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665",
     "tokenizer.json": "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39",
-    "sentencepiece.bpe.model": "cfc8146abe2a0488e9e2a0c56de7952f7c11ab059eca145a0a727afce0db2865",
-    "1_Pooling/config.json": "987f7a67a38fa564c849bb5d277c52ab9088a84368fc0be31a354125aebb12a0",
     "README.md": "0038de97aee16258cecbad7ffda4b4febd6953e747a00e0ddbc8e6ed241e9c1c",
 }
 APP_FILES = (
@@ -77,10 +70,36 @@ def build_environment(work: Path, venv: Path, base_python: Path) -> dict[str, st
         "PYTHONIOENCODING": "utf-8", "PYTHONDONTWRITEBYTECODE": "1",
         "PYTHONNOUSERSITE": "1", "PYTHON_DOTENV_DISABLED": "1",
         "HF_HOME": str(work / "unused-hf-home"), "HF_HUB_OFFLINE": "1",
-        "TRANSFORMERS_OFFLINE": "1", "AMADEUS_CREDENTIAL_BACKEND": "memory",
+        "AMADEUS_CREDENTIAL_BACKEND": "memory",
         "AMADEUS_DATA_DIR": str(work / "analysis-data"),
     })
     return env
+
+
+def stage_e5(source: Path, cache: Path) -> list[dict]:
+    """Copy only pinned model files; verify the source and each staged copy."""
+    model = cache / "models--intfloat--multilingual-e5-small"
+    snapshot = model / "snapshots" / E5_REVISION
+    snapshot.mkdir(parents=True, exist_ok=True)
+    model_files = []
+    for relative, expected in E5_FILES.items():
+        origin = source / relative
+        target = snapshot / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not origin.is_file():
+            raise FileNotFoundError(f"missing E5 file: {relative}")
+        if sha256(origin) != expected:
+            raise RuntimeError(f"E5 source hash mismatch: {relative}")
+        if not target.is_file() or sha256(target) != expected:
+            shutil.copyfile(origin, target)
+        if sha256(target) != expected:
+            raise RuntimeError(f"E5 copy mismatch: {relative}")
+        model_files.append({"path": relative, "sha256": expected, "bytes": target.stat().st_size})
+    (model / "refs").mkdir(exist_ok=True)
+    reference = model / "refs/main"
+    if not reference.is_file() or reference.read_text(encoding="utf-8") != E5_REVISION:
+        reference.write_text(E5_REVISION, encoding="utf-8")
+    return model_files
 
 
 def main() -> int:
@@ -120,7 +139,7 @@ def main() -> int:
     for name in ("tmp", "pip-cache", "pyinstaller-cache", "logs"):
         (work / name).mkdir(exist_ok=True)
     base_python = Path(subprocess.check_output(
-        [str(args.python), "-I", "-c", "import sys; print(sys.base_prefix)"], text=True,
+        [str(args.python), "-I", "-c", "import sys; print(sys.base_prefix)"], text=True, encoding="utf-8",
         env=sanitized_build_environment(),
     ).strip()).resolve(strict=True)
     env = build_environment(work, venv, base_python)
@@ -140,25 +159,7 @@ def main() -> int:
         print(f"Prepared build venv: {python}", flush=True)
         return 0
     cache = work / "model-stage/hf_cache"
-    model = cache / "models--intfloat--multilingual-e5-small"
-    snapshot = model / "snapshots" / E5_REVISION
-    snapshot.mkdir(parents=True, exist_ok=True)
-    model_files = []
-    for relative, expected in E5_FILES.items():
-        origin = source / relative
-        target = snapshot / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if sha256(origin) != expected:
-            raise RuntimeError(f"E5 source hash mismatch: {relative}")
-        if not target.is_file() or sha256(target) != expected:
-            shutil.copyfile(origin, target)
-        if sha256(target) != expected:
-            raise RuntimeError(f"E5 copy mismatch: {relative}")
-        model_files.append({"path": relative, "sha256": expected, "bytes": target.stat().st_size})
-    (model / "refs").mkdir(exist_ok=True)
-    reference = model / "refs/main"
-    if not reference.is_file() or reference.read_text(encoding="utf-8") != E5_REVISION:
-        reference.write_text(E5_REVISION, encoding="utf-8")
+    model_files = stage_e5(source, cache)
     config = {
         "repo": str(REPO), "work": str(work), "packaging": str(HERE),
         "hf_cache": str(cache), "app_files": APP_FILES,
@@ -184,7 +185,7 @@ def main() -> int:
     shutil.copytree(dist, output)
     write_json(work / "build-result.json", {
         "elapsed_seconds": round(time.monotonic() - started, 3), "output": str(output),
-        "python": subprocess.check_output([str(python), "--version"], env=env, text=True).strip(),
+        "python": subprocess.check_output([str(python), "--version"], env=env, text=True, encoding="utf-8").strip(),
         "inputs": config["inputs"],
     })
     print(f"Backend staged at {output}; elapsed={time.monotonic() - started:.3f}s", flush=True)

@@ -12,12 +12,15 @@ from bundle_support import digest, file_version, write_json
 
 VC_NAME = re.compile(r"(?:vcruntime|msvcp|msvcr|vcomp|concrt|vccorlib)\d+.*\.dll", re.I)
 PE_SUFFIXES = {".exe", ".dll", ".pyd"}
-# Observed during self-check even though no PE import table names this DLL.
+# Observed during the earlier Windows self-check without a PE import entry.
+# Keep until a new Windows bundle verifies the runtime loads after the E5 switch.
 REQUIRED_RUNTIME_LOADS = ("msvcp140_atomic_wait.dll",)
 
 
 def redist_inventory(root: Path) -> dict:
     """Require the CRT and OpenMP redistributables from one versioned x64 tree."""
+    # Keep OpenMP pending a Windows runtime audit; static imports alone cannot
+    # rule out dynamic loading by the remaining native dependencies.
     root = root.resolve(strict=True)
     files, directories = {}, {}
     for kind, required in (

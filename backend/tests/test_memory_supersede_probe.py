@@ -251,6 +251,11 @@ def test_real_requires_local_e5(tmp_path):
         probe.load_embedder({'transport': 'real', 'e5_snapshot': str(tmp_path / 'absent')})
 
 
+def test_real_snapshot_requires_onnx(tmp_path):
+    with pytest.raises(probe.b5.Refused, match='onnx_missing'):
+        probe.load_embedder({'transport': 'real', 'e5_snapshot': str(tmp_path)})
+
+
 @pytest.mark.asyncio
 async def test_capture_budget_stops_without_http(tmp_path, monkeypatch):
     directory = tmp_path / 'executions' / 'v11-case-1'

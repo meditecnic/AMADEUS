@@ -882,14 +882,16 @@ async def product_turn(plan: dict, entry: dict, directory: Path) -> dict:
             return {"ok": self._model is not None, "loaded": self._model is not None,
                     "model": self.model_name, "dimensions": 384}
 
-    embedder = LocalE5()
+    embedder = LocalE5(model_dir=plan["e5_snapshot"])
     e5 = {"loaded": False, "reason": "local_snapshot_missing"}
     snapshot = Path(plan["e5_snapshot"])
     if plan["e5_snapshot"] and snapshot.is_dir():
         try:
-            from sentence_transformers import SentenceTransformer
-            embedder._model = SentenceTransformer(str(snapshot), local_files_only=True, trust_remote_code=False)
-            e5 = {"loaded": True, "reason": "local_snapshot_loaded"}
+            if not (snapshot / "onnx/model.onnx").is_file():
+                e5 = {"loaded": False, "reason": "onnx_missing"}
+            else:
+                EmbeddingAdapter._load(embedder)
+                e5 = {"loaded": True, "reason": "local_snapshot_loaded"}
         except Exception as exc:
             e5 = {"loaded": False, "reason": type(exc).__name__}
     memory_service.embedder = embedder

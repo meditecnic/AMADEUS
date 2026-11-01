@@ -57,7 +57,7 @@ def sanitized_build_environment() -> dict[str, str]:
 
 def collect_inputs(config: dict) -> tuple[list, list, list, list]:
     from PyInstaller.utils.hooks import (
-        collect_all, collect_data_files, collect_dynamic_libs, collect_submodules,
+        collect_all, collect_data_files,
     )
 
     repo = Path(config["repo"])
@@ -68,14 +68,9 @@ def collect_inputs(config: dict) -> tuple[list, list, list, list]:
     hidden = [
         "uvicorn.logging", "uvicorn.loops.asyncio", "uvicorn.protocols.http.h11_impl",
         "uvicorn.protocols.websockets.websockets_impl", "uvicorn.lifespan.on",
-        "sentence_transformers.models.Transformer", "sentence_transformers.models.Pooling",
-        "sentence_transformers.models.Normalize", "sherpa_onnx.lib._sherpa_onnx",
+        "sherpa_onnx.lib._sherpa_onnx",
     ]
-    # The tokenizer registry probes metaclip_2's shared aliases before XLM-R.
-    for package in ("transformers.models.bert", "transformers.models.xlm_roberta",
-                    "transformers.models.metaclip_2", "transformers.models.auto"):
-        hidden.extend(collect_submodules(package, filter=lambda name: ".modeling_tf_" not in name and ".modeling_flax_" not in name))
-    for package in ("sqlite_vec", "curl_cffi", "sherpa_onnx", "sentence_transformers", "ddgs"):
+    for package in ("sqlite_vec", "curl_cffi", "sherpa_onnx", "onnxruntime", "tokenizers", "ddgs"):
         data, binary, imports = collect_all(
             package, include_py_files=False,
             filter_submodules=lambda name: ".tests" not in name and ".test_" not in name,
@@ -84,14 +79,11 @@ def collect_inputs(config: dict) -> tuple[list, list, list, list]:
         datas.extend(data)
         binaries.extend(binary)
         hidden.extend(imports)
-    datas.extend(collect_data_files("transformers"))
     datas.extend(collect_data_files("fake_useragent"))
-    binaries.extend(collect_dynamic_libs("torch"))
     excludes = [
         "pytest", "_pytest", "pytest_asyncio", "pytest_timeout", "ruff",
         "tkinter", "IPython", "notebook", "matplotlib", "pandas", "tensorflow",
-        "jax", "flax", "torchaudio", "torchvision", "librosa", "numba", "llvmlite",
-        "scipy.tests", "numpy.tests", "sklearn.tests",
+        "jax", "flax", "librosa", "numba", "llvmlite", "numpy.tests",
         "pythonwin", "win32ui", "win32uiole",
     ]
     return datas, binaries, sorted(set(hidden)), excludes
@@ -119,7 +111,7 @@ def record_analysis(analysis, config: dict) -> None:
     removed = set()
     changes = []
     # These packages configure their own library search directory on import.
-    canonical_dirs = ("torch/lib/", "numpy.libs/", "scipy.libs/", "sherpa_onnx/lib/")
+    canonical_dirs = ("onnxruntime/capi/", "numpy.libs/", "sherpa_onnx/lib/")
     for group in libraries.values():
         root_copies = [row for row in group if "/" not in Path(row[0]).as_posix()]
         packaged = [row for row in group if Path(row[0]).as_posix().startswith(canonical_dirs)]
@@ -139,8 +131,7 @@ def record_analysis(analysis, config: dict) -> None:
             print("DLL_DEDUPE " + json.dumps(change), flush=True)
     analysis.binaries = [row for row in analysis.binaries if row[0] not in removed]
     analysis.datas = [row for row in analysis.datas
-                      if not Path(row[0]).as_posix().startswith("torch/include/")
-                      and ".dist-info/licenses/" not in Path(row[0]).as_posix()]
+                      if ".dist-info/licenses/" not in Path(row[0]).as_posix()]
     write_json(work / "dll-deduplication.json", changes)
     non_venv = []
     for destination, source, kind in analysis.binaries:
@@ -204,6 +195,12 @@ def license_inventory(dist: Path, rows: list) -> dict:
                 origin = Path(distribution.locate_file(file))
                 if origin.is_file():
                     license_files.append((relative.as_posix(), origin))
+        # ORT's wheel keeps these notices inside the package, outside dist-info.
+        if name.lower() == "onnxruntime":
+            for relative in ("onnxruntime/LICENSE", "onnxruntime/ThirdPartyNotices.txt"):
+                origin = Path(distribution.locate_file(relative))
+                if origin.is_file():
+                    license_files.append((relative, origin))
         archive_name = None
         if license_files:
             archive_name = f"{name}-{version}.zip"

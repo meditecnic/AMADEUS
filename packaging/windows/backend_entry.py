@@ -29,12 +29,9 @@ def configure_environment() -> None:
     os.environ["HF_HUB_CACHE"] = str(root / "hf_cache")
     os.environ["HUGGINGFACE_HUB_CACHE"] = str(root / "hf_cache")
     os.environ["HF_HUB_OFFLINE"] = "1"
-    os.environ["TRANSFORMERS_OFFLINE"] = "1"
     os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
     os.environ["HF_HUB_DISABLE_IMPLICIT_TOKEN"] = "1"
     os.environ["AMADEUS_EMBEDDING_MODEL"] = "intfloat/multilingual-e5-small"
-    for key in ("TRANSFORMERS_CACHE", "SENTENCE_TRANSFORMERS_HOME"):
-        os.environ.pop(key, None)
     os.environ.setdefault("ASSETS_DIR", str(root / "desktop/public/assets"))
 
 
@@ -106,16 +103,16 @@ def self_check() -> int:
     import sqlite_vec
     import sqlite3
 
+    # Resolve sherpa's core and ORT DLLs before loading the E5 runtime.
+    from sherpa_onnx.lib import _sherpa_onnx
+    if not hasattr(_sherpa_onnx, "OfflineRecognizer"):
+        raise RuntimeError("sherpa native recognizer is missing")
     vector = asyncio.run(EmbeddingAdapter().encode_query("离线打包检查"))
     if len(vector) != 384 or not all(math.isfinite(value) for value in vector):
         raise RuntimeError("invalid E5 embedding")
     norm = sum(value * value for value in vector) ** 0.5
     if not 0.99 < norm < 1.01:
         raise RuntimeError("E5 embedding is not normalized")
-    # Importing the native extension resolves sherpa's core and ORT DLLs.
-    from sherpa_onnx.lib import _sherpa_onnx
-    if not hasattr(_sherpa_onnx, "OfflineRecognizer"):
-        raise RuntimeError("sherpa native recognizer is missing")
     with sqlite3.connect(":memory:") as connection:
         connection.enable_load_extension(True)
         sqlite_vec.load(connection)

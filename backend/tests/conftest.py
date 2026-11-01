@@ -255,10 +255,9 @@ def monkeypatch(isolated_user_dirs, offline_tts_sidecar):
 # ---------------------------------------------------------------------------
 # Offline embeddings.
 #
-# EmbeddingAdapter lazily loads a SentenceTransformer (E5). Tests must not
-# download it, so by default the model is replaced by a deterministic local
-# stand-in with the same interface (encode(text, normalize_embeddings=True)
-# returning a unit vector of the configured dimension). Prefixes such as
+# EmbeddingAdapter lazily loads E5 through ONNX Runtime. Tests must not
+# download it, so by default loading and encoding use a deterministic local
+# stand-in returning a unit vector of the configured dimension. Prefixes such as
 # "query: " / "passage: " are ignored and the vector is built from hashed
 # character n-grams, so texts sharing words still score as similar. Subclasses
 # that override encode_* (e.g. test_memory_v11_api's stub) are unaffected.
@@ -314,6 +313,11 @@ def offline_embedding_model(request, monkeypatch):
         return self._model
 
     monkeypatch.setattr(EmbeddingAdapter, "_load", _load)
+
+    def _encode(self, text):
+        return self._load().encode(text, normalize_embeddings=True).tolist()
+
+    monkeypatch.setattr(EmbeddingAdapter, "_encode", _encode)
 
 
 @pytest.fixture(autouse=True)
