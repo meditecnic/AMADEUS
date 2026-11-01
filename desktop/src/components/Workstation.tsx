@@ -74,6 +74,9 @@ import {
  */
 export type EntrancePhase = 'none' | 'hold' | 'draft' | 'docked' | 'done';
 
+// Keep in sync with backend chat_ws.MAX_USER_MESSAGE_LENGTH.
+const MAX_USER_MESSAGE_LENGTH = 8000;
+
 interface WorkstationProps {
   worldline: 'steins_gate' | 'beta';
   onWorldlineChange: (wl: 'steins_gate' | 'beta') => void;
@@ -138,6 +141,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     }, 280);
   };
   const [inputText, setInputText] = useState('');
+  const messageTooLong = Array.from(inputText.trim()).length > MAX_USER_MESSAGE_LENGTH;
   // Publish the matching draft before the target theme can paint.
   const draftsByWorldlineRef = useRef<Partial<Record<string, string>>>({});
   const draftWorldlineRef = useRef(worldline);
@@ -1281,7 +1285,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputText.trim() || conversationBusy || conversationReconnectEpoch !== null
+    if (!inputText.trim() || messageTooLong || conversationBusy || conversationReconnectEpoch !== null
       || sessionState === 'rejected' || sessionState === 'unknown' || providerGone) return;
     // Draft materialize (no conversation_id) always stamps okabe on the backend.
     // When the settings default is self, pre-create via API so mode is correct.
@@ -2369,8 +2373,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
               发送
             </button>
           </div>
-          {(pendingModel || modelApplyError) && (
+          {(messageTooLong || pendingModel || modelApplyError) && (
             <div className="ws2-composer-notes">
+              {messageTooLong && (
+                <span className="ws2-apply-error" role="alert">消息太长了，请分几次发（上限 8000 字）。</span>
+              )}
               {pendingModel && (
                 <Tip label="本轮仍使用发起时的模型">
                   <span className="ws2-pending" role="status">下一轮：{pendingModel}</span>

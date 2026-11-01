@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Workstation } from './Workstation';
+import { audioService } from '../services/AudioService';
 
 
 const wsSpies = vi.hoisted(() => ({
@@ -1032,6 +1033,41 @@ describe('Workstation UX-PLAYBACK-SEND-01 send while voice plays', () => {
       }
       throw new Error(`unexpected fetch: ${url}`);
     }));
+  });
+
+  it.each(['click', 'Enter'])('blocks an overlong message on %s without send side effects', async (method) => {
+    audioSpies.isPlaying = true;
+    const { sendChat, stopVoice } = mockReadyChat();
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    const input = screen.getByRole('textbox', { name: '输入消息' });
+    const text = '字'.repeat(8001);
+    fireEvent.change(input, { target: { value: text } });
+    expect(screen.getByRole('alert')).toHaveTextContent('消息太长了，请分几次发（上限 8000 字）。');
+    vi.mocked(audioService.playSFX).mockClear();
+
+    if (method === 'click') fireEvent.click(screen.getByRole('button', { name: '发送', exact: true }));
+    else fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(stopVoice).not.toHaveBeenCalled();
+    expect(audioSpies.stopAll).not.toHaveBeenCalled();
+    expect(audioService.playSFX).not.toHaveBeenCalled();
+    expect(input).toHaveValue(text);
+  });
+
+  it.each(['字', '🙂'])('removes the length warning and sends 8000 %s code points after trimming', async (character) => {
+    const sendChat = vi.fn(() => true);
+    mockReadyChat({ sendChat });
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    const input = screen.getByRole('textbox', { name: '输入消息' });
+    fireEvent.change(input, { target: { value: character.repeat(8001) } });
+    expect(screen.getByRole('alert')).toHaveTextContent('消息太长了，请分几次发（上限 8000 字）。');
+    const text = character.repeat(8000);
+    fireEvent.change(input, { target: { value: `  ${text}\n ` } });
+    expect(screen.queryByText('消息太长了，请分几次发（上限 8000 字）。')).not.toBeInTheDocument();
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' });
+    expect(sendChat).toHaveBeenCalledExactlyOnceWith(text);
+    expect(input).toHaveValue('');
   });
 
   it('keeps input and SEND enabled when only previous voice is still playing', async () => {
