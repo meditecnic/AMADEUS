@@ -230,15 +230,11 @@ def load_embedder(plan):
         raise b5.Refused('local_e5_unavailable')
     from app.services.memory import EmbeddingAdapter
 
-    class LocalE5(EmbeddingAdapter):
-        def _load(self):
-            if self._model is None:
-                raise b5.Refused('local_e5_unavailable')
-            return self._model
+    if not (Path(plan['e5_snapshot']) / 'onnx/model.onnx').is_file():
+        raise b5.Refused('onnx_missing')
     try:
-        from sentence_transformers import SentenceTransformer
-        embedder = LocalE5()
-        embedder._model = SentenceTransformer(plan['e5_snapshot'], local_files_only=True, trust_remote_code=False)
+        embedder = EmbeddingAdapter(model_dir=plan['e5_snapshot'])
+        embedder._load()
         return embedder
     except Exception:
         raise b5.Refused('local_e5_unavailable') from None

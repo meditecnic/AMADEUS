@@ -238,7 +238,7 @@ def native_notices(bundle: Bundle, config: dict, pins: list[dict], python: dict)
                "Microsoft Visual Studio redistribution terms", ["backend/" + row["bundle_path"] for row in audit["runtimes"] if row["scope"] == "root"], [file])
     for runtime in audit["runtimes"]:
         if runtime["scope"] == "package-local":
-            owner = "numpy" if "/numpy.libs/" in runtime["bundle_path"] else "scikit-learn"
+            owner = runtime["bundle_path"].split("/")[1].removesuffix(".libs")
             bundle.add("vc-runtime", "Package-local " + runtime["bundle_path"], runtime["file_version"],
                          {"redist": redist["path"], "original_package": python[owner]["source"]}, "Microsoft Visual Studio redistribution terms", ["backend/" + runtime["bundle_path"]], [file],
                        binary_sha256=runtime["sha256"])
@@ -269,7 +269,7 @@ def native_notices(bundle: Bundle, config: dict, pins: list[dict], python: dict)
     bundle.add("copyleft", "eSpeak NG", speech["version"], {key: speech[key] for key in ("url", "ref")}, "GPL-3.0", binaries,
                [bundle.copy(Path(speech["local_path"]), "copyleft/eSpeak-NG-COPYING"), note, source_note])
     libs = []
-    for owner in ("scipy", "numpy"):
+    for owner in ("numpy",):
         native = [path for path in (bundle.backend / f"_internal/{owner}.libs").glob("*.dll") if "openblas" in path.name.lower()]
         paths = ["backend/" + path.relative_to(bundle.backend).as_posix() for path in native]
         libs.extend(paths)
@@ -286,7 +286,7 @@ def native_notices(bundle: Bundle, config: dict, pins: list[dict], python: dict)
     bundle.gaps.append({"category": "copyleft-provenance", "name": "libquadmath", "detail": "No libquadmath symbols or strings found in the binaries; LGPL text retained as a precaution"})
     for row in python.values():
         label = row["license"] or ""
-        if re.search(r"\b(?:A?GPL|LGPL)[- v]?\d", label, re.I) and row["name"].lower() != "scipy":
+        if re.search(r"\b(?:A?GPL|LGPL)[- v]?\d", label, re.I):
             source = row["source"]
             if row["name"].lower() == "pyinstaller":
                 source = {"distribution": source, "source": f"https://github.com/pyinstaller/pyinstaller/tree/v{row['version']}"}

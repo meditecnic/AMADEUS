@@ -10,6 +10,7 @@ import math
 import re
 import sqlite3
 import struct
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable, Literal
@@ -455,18 +456,46 @@ def reciprocal_rank_fusion(*rankings: Iterable[int], k: int = 60) -> dict[int, f
     return scores
 
 
+E5_REVISION = "614241f622f53c4eeff9890bdc4f31cfecc418b3"
+
+
 class EmbeddingAdapter:
     """Lazy local E5 adapter; no model is loaded during import or ordinary tests."""
 
-    def __init__(self, model_name: str = EMBEDDING_MODEL, dimensions: int = EMBEDDING_DIMENSION):
+    def __init__(self, model_name: str = EMBEDDING_MODEL, dimensions: int = EMBEDDING_DIMENSION,
+                 model_dir: str | Path | None = None):
         self.model_name = model_name
         self.dimensions = dimensions
+        self.model_dir = Path(model_dir) if model_dir is not None else None
         self._model = None
+        self._tokenizer = None
+        self._load_lock = threading.Lock()
+
+    def _model_file(self, filename: str) -> str:
+        source = f"https://huggingface.co/{self.model_name}/resolve/{E5_REVISION}/{filename}"
+        if self.model_dir is not None:
+            path = self.model_dir / filename
+            if not path.is_file():
+                raise FileNotFoundError(f"Missing E5 file: {path}; download from {source}")
+            return str(path)
+        from huggingface_hub import hf_hub_download
+        try:
+            return hf_hub_download(self.model_name, filename, revision=E5_REVISION)
+        except Exception as exc:
+            raise RuntimeError(f"Cannot load E5 file {filename}; download from {source}: {exc}") from exc
 
     def _load(self):
         if self._model is None:
-            from sentence_transformers import SentenceTransformer
-            self._model = SentenceTransformer(self.model_name)
+            with self._load_lock:
+                if self._model is None:
+                    import onnxruntime
+                    from tokenizers import Tokenizer
+
+                    model_path = self._model_file("onnx/model.onnx")
+                    tokenizer = Tokenizer.from_file(self._model_file("tokenizer.json"))
+                    tokenizer.enable_truncation(max_length=512)
+                    self._tokenizer = tokenizer
+                    self._model = onnxruntime.InferenceSession(model_path, providers=["CPUExecutionProvider"])
         return self._model
 
     async def encode_passage(self, text: str) -> list[float]:
@@ -476,14 +505,27 @@ class EmbeddingAdapter:
         return await asyncio.to_thread(self._encode, f"query: {text}")
 
     def _encode(self, text: str) -> list[float]:
-        vector = self._load().encode(text, normalize_embeddings=True).tolist()
+        import numpy as np
+
+        session = self._load()
+        encoded = self._tokenizer.encode(text.strip())
+        inputs = {
+            "input_ids": np.array([encoded.ids], dtype=np.int64),
+            "attention_mask": np.array([encoded.attention_mask], dtype=np.int64),
+            "token_type_ids": np.zeros((1, len(encoded.ids)), dtype=np.int64),
+        }
+        hidden = session.run(["last_hidden_state"], {item.name: inputs[item.name] for item in session.get_inputs()})[0]
+        mask = inputs["attention_mask"][..., None].astype(np.float32)
+        pooled = (hidden * mask).sum(axis=1) / np.maximum(mask.sum(axis=1), 1e-9)
+        vector = (pooled / np.maximum(np.linalg.norm(pooled, axis=1, keepdims=True), 1e-12))[0].tolist()
         if len(vector) != self.dimensions:
             raise RuntimeError(f"embedding dimension mismatch: expected {self.dimensions}, got {len(vector)}")
         return [float(value) for value in vector]
 
     def readiness(self) -> dict[str, object]:
         try:
-            import sentence_transformers  # noqa: F401
+            import onnxruntime  # noqa: F401
+            import tokenizers  # noqa: F401
             import sqlite_vec  # noqa: F401
             compatible = self.model_name == config.EMBEDDING_MODEL and self.dimensions == config.EMBEDDING_DIMENSION == 384
             return {"ok": compatible, "model": self.model_name, "dimensions": self.dimensions, "loaded": self._model is not None}

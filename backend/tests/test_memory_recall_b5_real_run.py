@@ -373,7 +373,7 @@ def test_budget_run_marks_remaining_and_restart_does_not_reset(tmp_path, frozen)
 
     summary = b5.run_suite(tmp_path, plan, qset, execute)
     assert len(seen) == 2
-    rows = [json.loads(s) for s in (tmp_path / "executions.jsonl").read_text().splitlines()]
+    rows = [json.loads(s) for s in (tmp_path / "executions.jsonl").read_text(encoding="utf-8").splitlines()]
     assert Counter(r["status"] for r in rows) == {"completed": 1, "not_run_budget": 81}
     assert summary["budget"]["attempts"][0]["charge_cny"] == "0.0006"
     before = (tmp_path / "budget.json").read_bytes()
@@ -399,7 +399,7 @@ def test_interrupted_turn_never_reissued_and_completed_worker_recovered(tmp_path
 
     b5.run_suite(tmp_path, plan, qset, execute)
     assert seen == []
-    rows = [json.loads(s) for s in (tmp_path / "executions.jsonl").read_text().splitlines()]
+    rows = [json.loads(s) for s in (tmp_path / "executions.jsonl").read_text(encoding="utf-8").splitlines()]
     assert rows[0]["status"] == "interrupted"
     assert rows[1]["status"] == "completed"
     assert Counter(r["status"] for r in rows) == {"interrupted": 1, "completed": 1,
@@ -484,6 +484,20 @@ def test_repetitions_all_required_and_diagnostic_excluded(frozen):
     assert rates["passed"] == 27
     assert rates["needs_manual"] == 1
     assert rates["evaluated"] == 27
+
+
+def test_worker_records_onnx_missing_for_existing_snapshot(tmp_path, frozen):
+    qset, digest = frozen
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    plan = b5.make_plan(qset, digest, e5_snapshot=str(snapshot))
+    entry = plan["executions"][0]
+    directory = tmp_path / "executions" / entry["id"]
+    b5.write_json(tmp_path / "plan.json", plan)
+    b5.write_json(directory / "started.json", entry)
+    result = b5.execute_subprocess(plan, entry, directory)
+    assert result["status"] == "completed", result
+    assert result["e5"] == {"loaded": False, "reason": "onnx_missing"}
 
 
 @pytest.mark.parametrize("mode,case_id,count", [("legacy", "r_pet_synonym", 1), ("v11", "r_pet_synonym", 2),
@@ -720,7 +734,7 @@ def test_run_continues_ordinary_errors_but_stops_uncertain_spend(tmp_path, froze
         return {**entry, "status": "completed", "score": {"status": "pass"}}
 
     b5.run_suite(tmp_path, plan, qset, execute)
-    rows = [json.loads(line) for line in (tmp_path / "executions.jsonl").read_text().splitlines()]
+    rows = [json.loads(line) for line in (tmp_path / "executions.jsonl").read_text(encoding="utf-8").splitlines()]
     assert len(seen) == (1 if uncertain else 82)
     assert rows[0]["status"] == "error" and "score" not in rows[0]
     assert all("score" not in row for row in rows if row["status"] != "completed")
@@ -951,8 +965,8 @@ def test_summary_markdown_is_redacted_before_writing(tmp_path, frozen, monkeypat
     monkeypatch.setattr(b5, "summarize", summarize)
     b5.run_suite(tmp_path, b5.make_plan(*frozen), frozen[0], lambda _p, e, _d: {
         **e, "status": "completed", "score": {"status": "pass"}})
-    assert secret not in (tmp_path / "summary.md").read_text()
-    assert "[REDACTED]" in (tmp_path / "summary.md").read_text()
+    assert secret not in (tmp_path / "summary.md").read_text(encoding="utf-8")
+    assert "[REDACTED]" in (tmp_path / "summary.md").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("url", ["https://API.DEEPSEEK.COM:443/", "https://api.deepseek.com///"])

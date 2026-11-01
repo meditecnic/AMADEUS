@@ -6,13 +6,26 @@
 
 ## 构建
 
-先准备 `intfloat/multilingual-e5-small` 的完整本地 snapshot，固定 revision 为
+先准备 `intfloat/multilingual-e5-small` 的本地 snapshot（必须含 `onnx/model.onnx`），固定 revision 为
 `614241f622f53c4eeff9890bdc4f31cfecc418b3`。来源目录只读，脚本按白名单复制文件，
-`E5_FILES` 固定十个文件的期望 SHA-256，复制前核对来源，复制后再次核对产物。
+`E5_FILES` 只复制以下三个文件，复制前核对来源，复制后再次核对产物：
+
+| 文件 | SHA-256 |
+|---|---|
+| `onnx/model.onnx` | `ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665` |
+| `tokenizer.json` | `0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39` |
+| `README.md`（MIT 模型卡） | `0038de97aee16258cecbad7ffda4b4febd6953e747a00e0ddbc8e6ed241e9c1c` |
+
 任一哈希不符即停止；不下载模型，不复制其他模型或用户缓存。
 哈希已经一致的暂存模型文件直接复用，并继续核对来源及产物。
 
-PowerShell 示例（将路径替换为本机路径）：
+在开发环境用 Hugging Face CLI 取固定快照（命令输出的 snapshot 路径作为 `--e5-source`）：
+
+```powershell
+hf download intfloat/multilingual-e5-small --revision 614241f622f53c4eeff9890bdc4f31cfecc418b3 --include onnx/model.onnx tokenizer.json README.md
+```
+
+PowerShell 构建示例（将路径替换为本机路径）：
 
 ```powershell
 $buildPython = 'X:/Python311/python.exe'
@@ -44,7 +57,7 @@ Windows System32 和 Windows 目录；实际 PATH 写入 `build-config.json`。
 
 安装全部使用 `--only-binary=:all: --require-hashes`，并运行 `pip check`。
 sherpa-onnx 和 sherpa-onnx-core 均使用仓库锁定的官方 1.13.8 wheel。
-不从 sdist 编译，也不装测试工具。Windows torch wheel 的版本沿用仓库锁。
+不从 sdist 编译，也不装测试工具。ONNX Runtime、tokenizers 和 NumPy 使用仓库锁。
 
 `backend.spec` 和 `bundle_support.py` 收集原生库、包数据和延迟导入模块。
 应用数据白名单在 `build_backend.py:APP_FILES`：两份角色 JSON、persona bible、
@@ -55,8 +68,7 @@ E5 使用包内 Hugging Face hub 缓存布局及 `refs/main`，入口强制离�
 重复 DLL 仅处理根目录副本与明确的包内库目录副本：逐对核对 SHA-256，
 相同才移除根目录副本；不同则都保留。清单在 `dll-deduplication.json`。
 最终目录中的同名 DLL 另行逐份计算哈希，写入 `duplicate-dll-audit.json`。
-sklearn 按完整路径预加载的运行库保留包内副本及公共副本，即使哈希相同也不移除；
-各副本的文件版本与 SHA-256 记录在库存中。
+各 DLL 副本的文件版本与 SHA-256 记录在库存中。
 `--vc-redist` 必填，指定 Build Tools 的 `Redist/MSVC/<版本>/x64`。
 其下必须恰好有一个 `Microsoft.VC14*.CRT` 和一个 `Microsoft.VC14*.OpenMP`，
 实际目录名及文件版本写入清单。当前锁定 wheel 需要至少 14.51 的运行库；
@@ -73,20 +85,22 @@ VS 2026 使用的目录名为 `Microsoft.VC145.*`。
 私有预加载候选副本的版本；组件链接器版本不得高于任何候选副本。缺文件、版本
 超出或副本不匹配 Redist 时停止，详情见 `vc-runtime-audit.json`。`audit_bundle` 是
 只读门禁，便于对已生成的冻结包及故意改坏的副本进行核对。
-`MSVCP140_ATOMIC_WAIT.dll` 是自检模块快照中观察到的运行时加载项，未出现在 PE
+`MSVCP140_ATOMIC_WAIT.dll` 是旧版自检模块快照中观察到的运行时加载项，未出现在 PE
 导入表中；因此独立要求根目录必须包含它，冻结时缺少就从 Redist 补齐，门禁缺少
 就报错。库存单列 `required_runtime_loads` 和 `missing_runtime_loads`，不推断加载者。
+更换 E5 运行库后尚待 Windows 动态加载复核，暂时保留该项和 OpenMP 要求；
+新 wheel 的普通/延迟导入表没有这两项，仍不足以排除运行时动态加载。
 后端不使用 pythonwin GUI/MFC 接口，冻结时排除 `pythonwin`、`win32ui`、`win32uiole`，
 避免分发依赖未入包 MFC 的未使用扩展；其余 pywin32 功能仍按分析结果收集。
-排除 `torch/include/`、sherpa 的 `include/` 和 `.lib`；仍分发 sklearn、transformers
-自带的头文件及 sklearn 导入库。锁定的 sherpa 1.13.8 排除
+排除 sherpa 的 `include/` 和 `.lib`。锁定的 sherpa 1.13.8 排除
 `sherpa-onnx-c-api.dll`、`sherpa-onnx-cxx-api.dll`：包内其他 PE 不导入它们，
 Python 源码也不在运行时加载它们；`_info.py` 仅为命令行输出编译参数。
 两个 DLL 之间的导入不计为外部引用。这样少分发一份静态编入的 eSpeak NG；
 `_sherpa_onnx.pyd` 中的 eSpeak NG 仍分发 GPLv3 原文及源码说明。
 每次构建重新核对普通/延迟导入及 Python 加载调用，记录排除前后的文件数、总字节
 和源码哈希到 `sherpa-imports.json`；存在外部引用或加载调用时保留两个 DLL。
-dist-info 下的许可树存入经过字节校验的 ZIP，避免深路径。
+dist-info 下的许可树及 ONNX Runtime 包内的 `LICENSE`、`ThirdPartyNotices.txt`
+存入经过字节校验的 ZIP，避免深路径。tokenizers 沿用固定版本的上游许可补充。
 
 ## 验收
 
@@ -103,8 +117,9 @@ $env:AMADEUS_LOCAL_API_TOKEN = 'self-check-only'
 & desktop/src-tauri/resources/backend/amadeus-backend.exe --self-check
 ```
 
-自检导入 app，离线加载 E5 并编码中文句子，检查 384 维、有限数值和单位范数，
-导入 sherpa 原生扩展，还会实际加载 sqlite_vec 扩展。失败返回非零退出码。
+自检导入 app，先导入 sherpa 原生扩展，再用 ONNX Runtime 离线加载 E5 并编码中文句子，
+检查 384 维、有限数值和单位范数，还会实际加载 sqlite_vec 扩展。失败返回非零退出码。
+两套运行库的双向导入测试在 `backend/tests/test_onnx_runtime_import_order.py`，不需要模型。
 不下载或运行 ASR 模型。
 
 完整冻结验收使用构建 venv 里的 websockets；后端子进程只继承 Windows 系统

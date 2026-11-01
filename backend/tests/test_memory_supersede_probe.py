@@ -156,18 +156,26 @@ def fake_run(tmp_path_factory):
     directory = tmp_path_factory.mktemp('supersede') / 'run'
     env = dict(os.environ, PYTHON_DOTENV_DISABLED='1')
     env.pop('AMADEUS_DB_PATH', None)
-    proc = subprocess.run([sys.executable, str(probe.SCRIPT), '--run-dir', str(directory)],
-                          env=env, capture_output=True, timeout=180)
-    assert proc.returncode == 0, proc.stderr.decode()
-    return directory, probe.b5.read_json(directory / 'results.json')
+    with subprocess.Popen([sys.executable, str(probe.SCRIPT), '--run-dir', str(directory)],
+                          env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as proc:
+        try:
+            _, stderr = proc.communicate(timeout=180)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            raise
+    assert proc.returncode == 0, stderr.decode()
+    return directory, probe.b5.read_json(directory / 'results.json'), proc.pid
 
 
 def test_fake_all_cases_both_modes_isolated_offline(fake_run):
-    directory, rows = fake_run
+    directory, rows, runner_pid = fake_run
     assert len(rows) == 24
     assert Counter(r['mode'] for r in rows) == {'v11': 12, 'legacy': 12}
     assert {r['status'] for r in rows} == {'completed'}
-    assert len({r['pid'] for r in rows}) == len(rows)
+    # Workers run one after another, so Windows may give a later worker the PID
+    # of one that already exited. Isolation means no case ran in the runner
+    # process and each case had its own data directory.
+    assert runner_pid not in {r['pid'] for r in rows}
     assert len({r['data_dir'] for r in rows}) == len(rows)
     assert {r['embedding'] for r in rows} == {'fake-384'}
     assert 'pass' in {r['score']['status'] for r in rows}
@@ -189,7 +197,7 @@ def test_fake_all_cases_both_modes_isolated_offline(fake_run):
 
 
 def test_requests_match_product_and_second_conversation_is_new(fake_run):
-    directory, rows = fake_run
+    directory, rows, _ = fake_run
     cases = {c['id']: c for c in probe.load_fixture()['cases']}
     saw_supersede = False
     for row in rows:
@@ -249,6 +257,11 @@ def test_real_gate_rejects_before_creating_run(tmp_path, monkeypatch, env, cap, 
 def test_real_requires_local_e5(tmp_path):
     with pytest.raises(probe.b5.Refused, match='local_e5_unavailable'):
         probe.load_embedder({'transport': 'real', 'e5_snapshot': str(tmp_path / 'absent')})
+
+
+def test_real_snapshot_requires_onnx(tmp_path):
+    with pytest.raises(probe.b5.Refused, match='onnx_missing'):
+        probe.load_embedder({'transport': 'real', 'e5_snapshot': str(tmp_path)})
 
 
 @pytest.mark.asyncio
