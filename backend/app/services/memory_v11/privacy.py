@@ -236,8 +236,8 @@ def _secret_copula_value_ok(value: str) -> bool:
     # Chinese copulas after "secret" need stronger evidence than password cues.
     narrowed = value.translate(_FULLWIDTH_ASCII_TRANSLATION)
     return (_concrete_value_ok(value)
-            and (len(value) >= 8 or (re.search(r"[A-Za-z]", narrowed) is not None
-                                    and re.search(r"[0-9]", narrowed) is not None)))
+            and re.search(r"[A-Za-z]", narrowed) is not None
+            and re.search(r"[0-9]", narrowed) is not None)
 
 
 def _identifier_shaped(value: str) -> bool:
