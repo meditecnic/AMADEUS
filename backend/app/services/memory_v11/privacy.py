@@ -20,6 +20,8 @@ GOVERNMENT_ID = "government_id"
 PRECISE_HOME_ADDRESS = "precise_home_address"
 
 _ALNUM = r"[A-Za-z0-9]"
+_ASCII_LEFT = r"(?<![A-Za-z0-9])"
+_ASCII_RIGHT = r"(?![A-Za-z0-9])"
 _FULLWIDTH_ASCII_TRANSLATION = {
     code: code - 0xFEE0 for code in range(0xFF01, 0xFF5F)
 } | {0x3000: 0x20}
@@ -47,15 +49,17 @@ _REDACTION_TOKEN_RE = re.compile(r"\[REDACTED(?::[a-z_]+)?\]", re.IGNORECASE)
 # like "required"/"important"/"weak" must never become secret values.
 # ---------------------------------------------------------------------------
 _PASSWORD_CUE_JA = r"(?:(?<!ワンタイム)パスワード|暗証番号|パスコード)"
+_PASSWORD_CUE_EN = rf"{_ASCII_LEFT}(?:password|passwd|passphrase|secret){_ASCII_RIGHT}"
 _PASSWORD_STRONG_RE = [
-    re.compile(r"(?i)\bmy\s+(?:password|passwd|passphrase|secret)\b\s+(?:is|are)\s+(\S+)"),
-    re.compile(r"(?i)\b(?:password|passwd|passphrase|secret)\b\s*[:=：＝]\s*(\S+)"),
+    re.compile(rf"(?i){_ASCII_LEFT}my\s+{_PASSWORD_CUE_EN}\s+(?:is|are)\s+(\S+)"),
+    re.compile(rf"(?i){_PASSWORD_CUE_EN}\s*[:=：＝]\s*(\S+)"),
     re.compile(r"我的密码(?!学)\s*(?:是|为|等于)\s*(\S+)"),
     re.compile(r"密码(?!学)\s*[:=：＝]\s*(\S+)"),
     re.compile(rf"{_PASSWORD_CUE_JA}\s*[:=：＝]\s*(\S+)"),
 ]
 _PASSWORD_COPULA_RE = [
-    re.compile(r"(?i)\b(?:password|passwd|passphrase|secret)\b\s+(?:is|are)\s+(\S+)"),
+    re.compile(rf"(?i){_PASSWORD_CUE_EN}\s+(?:is|are)\s+(\S+)"),
+    re.compile(rf"(?i){_PASSWORD_CUE_EN}\s*(?:是|为|等于)\s*(\S+)"),
 ]
 _PASSWORD_COPULA_CJK_RE = [
     re.compile(r"密码(?!学)\s*(?:是|为|等于)\s*(\S+)"),
@@ -65,16 +69,25 @@ _PASSWORD_COPULA_CJK_RE = [
 # ---------------------------------------------------------------------------
 # api key / access secret: cue + assignment + concrete value, or known shapes.
 # ---------------------------------------------------------------------------
-_API_CUE = r"(?i)\b(?:api[\s_-]?key|access[\s_-]?token|secret[\s_-]?key)\b"
+_API_CUE = rf"(?i){_ASCII_LEFT}(?:api[\s_-]?key|access[\s_-]?token|secret[\s_-]?key){_ASCII_RIGHT}"
 _API_RE = [
     re.compile(rf"{_API_CUE}\s*[:=：＝]\s*(\S+)"),
     re.compile(rf"{_API_CUE}\s+(?:is|are)\s+(\S+)"),
+    re.compile(rf"{_API_CUE}\s*(?:是|为|等于)\s*(\S+)"),
     re.compile(r"(?:API\s*密钥|访问令牌|密钥)\s*[:=：＝]\s*(\S+)"),
     re.compile(r"(?:API\s*密钥|访问令牌|密钥)\s*(?:是|为|等于)\s*(\S+)"),
     re.compile(r"(?:APIキー|アクセストークン)\s*(?:[:=：＝]|は|が)\s*(\S+)", re.IGNORECASE),
-    re.compile(r"(?<![\w-])(?:sk|pk)-[A-Za-z0-9]{16,}(?![\w-])"),
+    re.compile(rf"{_ASCII_LEFT}(?:sk|pk)-[A-Za-z0-9]{{16,}}{_ASCII_RIGHT}"),
 ]
-_BEARER_RE = [re.compile(r"\bBearer\s+(\S+)", re.IGNORECASE)]
+_BEARER_RE = [re.compile(rf"{_ASCII_LEFT}Bearer{_ASCII_RIGHT}\s+(\S+)", re.IGNORECASE)]
+_ASSIGNMENT = rf"(?:[:=：＝]|是|为|等于|is{_ASCII_RIGHT})"
+_PIN_RE = [re.compile(
+    rf"(?i){_ASCII_LEFT}pin{_ASCII_RIGHT}(?:码|碼|\s+code|\s+number)?"
+    rf"\s*{_ASSIGNMENT}\s*([0-9]{{4,12}}){_ASCII_RIGHT}",
+)]
+_TOKEN_RE = [re.compile(
+    rf"(?i){_ASCII_LEFT}token{_ASCII_RIGHT}\s*{_ASSIGNMENT}\s*(\S+)",
+)]
 _URL_PASSWORD_KEYS = {"password", "passwd", "pwd"}
 # A generated marker stays whole even though ] terminates a raw URL value.
 _URL_CREDENTIAL_RE = re.compile(
@@ -88,8 +101,8 @@ _URL_CREDENTIAL_RE = re.compile(
 # otp / verification code: cue + concrete code value close to the cue.
 # ---------------------------------------------------------------------------
 _OTP_CUE_EN = (
-    r"(?i)(?:one[\s-]?time\s+password|verification\s+code|"
-    r"auth(?:entication)?\s+code|security\s+code|\botp\b)"
+    rf"(?i){_ASCII_LEFT}(?:one[\s-]?time\s+password|verification\s+code|"
+    rf"auth(?:entication)?\s+code|security\s+code|otp){_ASCII_RIGHT}"
 )
 _OTP_VALUE = r"[A-Za-z0-9]{4,10}"
 _OTP_RE = [
@@ -248,6 +261,10 @@ def _credential_value_end(
     if prose:
         end = prose.start()
     for boundary in _CJK_PUNCTUATION_RE.finditer(text, start, end):
+        if (boundary.group() in "‘’" and start < boundary.start() < end - 1
+                and re.fullmatch(_ALNUM, text[boundary.start() - 1])
+                and re.fullmatch(_ALNUM, text[boundary.end()])):
+            continue
         prefix = text[start:boundary.start()]
         if _REDACTION_TOKEN_RE.fullmatch(prefix.rstrip(_CREDENTIAL_TRAILING_PUNCTUATION)):
             # Preserve any ASCII-compatible residual inside the ORIGINAL token,
@@ -268,6 +285,9 @@ def _credential_value_end(
 def _credential_matches(text: str, category: str | None = None) -> list[tuple[int, int, str]]:
     """All credential occurrences, validating raw values and masking whole tokens."""
     spans: list[tuple[int, int, str]] = []
+    # Match width-folded cues, but parse values and punctuation in the original.
+    # This one-to-one translation leaves every replacement offset unchanged.
+    narrowed = text.translate(_FULLWIDTH_ASCII_TRANSLATION)
     query_matches = list(_URL_CREDENTIAL_RE.finditer(text))
     for match in query_matches:
         cls = PASSWORD if match.group(1).lower() in _URL_PASSWORD_KEYS else API_SECRET
@@ -279,14 +299,16 @@ def _credential_matches(text: str, category: str | None = None) -> list[tuple[in
         (_PASSWORD_STRONG_RE, PASSWORD, _concrete_value_ok),
         (_PASSWORD_COPULA_RE, PASSWORD, _english_copula_value_ok),
         (_PASSWORD_COPULA_CJK_RE, PASSWORD, lambda v: _concrete_value_ok(v) and _secret_shaped(v)),
+        (_PIN_RE, PASSWORD, lambda v: bool(re.fullmatch(r"[0-9]{4,12}", v.translate(_FULLWIDTH_ASCII_TRANSLATION)))),
         (_API_RE[:-1], API_SECRET, lambda v: _concrete_value_ok(v, min_len=8)),
+        (_TOKEN_RE, API_SECRET, _token_value_ok),
         (_BEARER_RE, API_SECRET, lambda v: _concrete_value_ok(v, min_len=16)),
     )
     for patterns, cls, validator in groups:
         if category is not None and cls != category:
             continue
         for pattern in patterns:
-            for match in _iter_matches(pattern, text):
+            for match in _iter_matches(pattern, narrowed):
                 # Query values have their own category and &/# boundaries.
                 if any(query.start() <= match.start() < query.end() for query in query_matches):
                     continue
@@ -317,9 +339,9 @@ def _credential_matches(text: str, category: str | None = None) -> list[tuple[in
                             continue
                         # Yield to a valid value or an already masked one; an
                         # incomplete cue cannot hide a valid continuation.
-                        if any((cue := pattern.match(text, token_start))
-                               and (cue_validator(cue.group(1)) or _REDACTION_VALUE_RE.fullmatch(
-                                   cue.group(1).rstrip(_CREDENTIAL_TRAILING_PUNCTUATION)))
+                        if any((cue := pattern.match(narrowed, token_start))
+                               and (cue_validator(text[cue.start(1):cue.end(1)]) or _REDACTION_VALUE_RE.fullmatch(
+                                   text[cue.start(1):cue.end(1)].rstrip(_CREDENTIAL_TRAILING_PUNCTUATION)))
                                for cue_patterns, _, cue_validator in groups for pattern in cue_patterns):
                             break
                         # Check the original value including the marker prefix;
@@ -334,7 +356,7 @@ def _credential_matches(text: str, category: str | None = None) -> list[tuple[in
                     trimmed = value.rstrip(_CREDENTIAL_TRAILING_PUNCTUATION)
                     spans.append((start, start + len(trimmed), cls))
     if category in (None, API_SECRET):
-        for match in _iter_matches(_API_RE[-1], text):
+        for match in _iter_matches(_API_RE[-1], narrowed):
             if any(query.start() <= match.start() < query.end() for query in query_matches):
                 continue
             # Known bare key shapes can be followed by punctuation inside the
@@ -351,6 +373,13 @@ def _credential_matches(text: str, category: str | None = None) -> list[tuple[in
             value = text[match.start():end].rstrip(_CREDENTIAL_TRAILING_PUNCTUATION)
             spans.append((match.start(), match.start() + len(value), API_SECRET))
     return spans
+
+
+def _token_value_ok(value: str) -> bool:
+    narrowed = value.translate(_FULLWIDTH_ASCII_TRANSLATION)
+    return (_concrete_value_ok(value, min_len=12)
+            and re.search(r"[A-Za-z]", narrowed) is not None
+            and re.search(r"[0-9]", narrowed) is not None)
 
 
 def _has_password(text: str) -> bool:

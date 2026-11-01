@@ -62,3 +62,98 @@ def test_v134_classification(case_id, text, category, value):
 def test_v134_partial_redaction(case_id, text, category, value):
     expected = text.replace(value, f"[REDACTED:{category}]", 1) if category else text
     assert redact_user_text(text) == (expected, False)
+
+
+# [140] Every dispatch sentence, followed by the stated grammar boundaries.
+# Values are synthetic; expected spans refer to the original, unnormalized text.
+_V140_CASES = [
+    ("1", "我的password: hunter22", "password", "hunter22"),
+    ("2", "我的password是hunter22", "password", "hunter22"),
+    ("3", "wifi的password是hunter22", "password", "hunter22"),
+    ("4", "password是hunter22", "password", "hunter22"),
+    ("5", "ｐａｓｓｗｏｒｄ：ｑｗｅｒｔｙ９９", "password", "ｑｗｅｒｔｙ９９"),
+    ("6", "ＰＡＳＳＷＯＲＤ: hunter22", "password", "hunter22"),
+    ("7-wide", "和ｏｔｐ 123456", "otp", "123456"),
+    ("7", "和otp 123456", "otp", "123456"),
+    ("8-compact", "APIkey是sk-abcdefghijklmnop", "api_secret", "sk-abcdefghijklmnop"),
+    ("8", "api key是abcdefgh12345678", "api_secret", "abcdefgh12345678"),
+    ("9", "PIN是1234", "password", "1234"),
+    ("9-code", "PIN码是1234", "password", "1234"),
+    ("9-owned", "我的pin是1234", "password", "1234"),
+    ("9-colon", "PIN: 1234", "password", "1234"),
+    ("9-wide-colon", "PIN码：123456", "password", "123456"),
+    ("10", "token: abcdef123456", "api_secret", "abcdef123456"),
+    ("10-copula", "token是abcdef123456", "api_secret", "abcdef123456"),
+    ("10-github", "github token: ghp_abcdefgh12345678", "api_secret", "ghp_abcdefgh12345678"),
+    ("11-password", "password: Johnson’sbirthday", "password", "Johnson’sbirthday"),
+    ("11-api", "api_key=abcdefgh1234’xyz", "api_secret", "abcdefgh1234’xyz"),
+]
+
+_V140_PROSE = [
+    "password是什么", "我的password忘了", "password是required的", "密码学很难",
+    "pinyin是什么", "ping是1234ms", "spinning class", "我的PIN忘了", "PIN码是什么",
+    "token是什么意思", "max token: 4096", "token数量是1000000", "token: 128k",
+    "token是gpt4o", "我的secret是我喜欢你", "APIkey是什么", "Johnson’s birthday",
+]
+
+_V140_GRAMMAR = [
+    ("password-cn-is", "password为hunter22", "password", "hunter22"),
+    ("password-cn-equals", "password等于hunter22", "password", "hunter22"),
+    ("api-cn-is", "api_key为abcdefgh12345678", "api_secret", "abcdefgh12345678"),
+    ("api-cn-equals", "api key等于abcdefgh12345678", "api_secret", "abcdefgh12345678"),
+    ("ascii-left", "xpassword: hunter22", None, None),
+    ("ascii-digit-left", "1password: hunter22", None, None),
+    ("ascii-right", "password1: hunter22", None, None),
+    ("api-ascii-left", "xAPIkey是abcdefgh12345678", None, None),
+    ("otp-ascii-left", "xotp 123456", None, None),
+    ("otp-ascii-right", "otp1 123456", None, None),
+    ("kana-cue", "のpassword: hunter22", "password", "hunter22"),
+    ("bare-sk-han", "和sk-abcdefghijklmnop", "api_secret", "sk-abcdefghijklmnop"),
+    ("bare-pk-kana", "のpk-abcdefghijklmnop", "api_secret", "pk-abcdefghijklmnop"),
+    ("bare-ascii-left", "xsk-abcdefghijklmnop", None, None),
+    ("wide-offsets", "ﬀ a\u030a ㍿ ＰＡＳＳＷＯＲＤ：ｈｕｎｔｅｒ２２覚えてね", "password", "ｈｕｎｔｅｒ２２"),
+    ("wide-api", "我的ＡＰＩｋｅｙ是ａｂｃｄｅｆｇｈ１２３４５６７８", "api_secret", "ａｂｃｄｅｆｇｈ１２３４５６７８"),
+    ("wide-otp", "和ｏｔｐ １２３４５６", "otp", "１２３４５６"),
+    ("pin-traditional", "pin碼＝１２３４", "password", "１２３４"),
+    ("pin-code", "pin code is 1234", "password", "1234"),
+    ("pin-number", "PIN number等于123456789012", "password", "123456789012"),
+    ("pin-cn-is", "pin为1234", "password", "1234"),
+    ("pin-equal", "pin=1234", "password", "1234"),
+    ("pin-wide", "ＰＩＮ：１２３４", "password", "１２３４"),
+    ("pin-short", "PIN: 123", None, None),
+    ("pin-long", "PIN: 1234567890123", None, None),
+    ("pin-alphanumeric", "PIN: 1234abcd", None, None),
+    ("pin-no-assignment", "pin 1234", None, None),
+    ("token-is", "token is abcdef123456", "api_secret", "abcdef123456"),
+    ("token-cn-is", "token为abcdef123456", "api_secret", "abcdef123456"),
+    ("token-cn-equals", "token等于abcdef123456", "api_secret", "abcdef123456"),
+    ("token-equal", "token=abcdef123456", "api_secret", "abcdef123456"),
+    ("token-wide", "ｔｏｋｅｎ：ａｂｃｄｅｆ１２３４５６", "api_secret", "ａｂｃｄｅｆ１２３４５６"),
+    ("token-short", "token: abcdef12345", None, None),
+    ("token-letters", "token: abcdefghijkl", None, None),
+    ("token-digits", "token: 123456789012", None, None),
+    ("token-ascii-left", "xtoken: abcdef123456", None, None),
+    ("token-ascii-right", "token1: abcdef123456", None, None),
+    ("curly-left", "password: Johnson‘sbirthday", "password", "Johnson‘sbirthday"),
+    ("curly-leading", "password: ‘hunter22", "password", "‘hunter22"),
+    ("curly-trailing", "password: hunter22’", "password", "hunter22"),
+    ("curly-prose", "password: hunter22’かな", "password", "hunter22"),
+]
+
+
+@pytest.mark.parametrize("case_id,text,category,value", _V140_CASES + _V140_GRAMMAR,
+                         ids=[row[0] for row in _V140_CASES + _V140_GRAMMAR])
+def test_v140_redaction(case_id, text, category, value):
+    assert classify_memory_sensitive_text(text) == (frozenset({category}) if category else frozenset())
+    expected = text.replace(value, f"[REDACTED:{category}]", 1) if category else text
+    assert redact_user_text(text) == (expected, False)
+    assert {text[start:end] for start, end, _ in find_memory_sensitive_matches(text)} == (
+        {value} if category else set()
+    )
+
+
+@pytest.mark.parametrize("text", _V140_PROSE)
+def test_v140_prose_is_preserved(text):
+    assert classify_memory_sensitive_text(text) == frozenset()
+    assert find_memory_sensitive_matches(text) == []
+    assert redact_user_text(text) == (text, False)
