@@ -476,6 +476,15 @@ def test_render_order_pinned_first_then_created_at_then_fact_id():
     ]
 
 
+@pytest.mark.parametrize("complete", [True, False])
+@pytest.mark.parametrize("tool_capable", [True, False])
+def test_rule_naturalizes_chinese_fact_wording(complete, tool_capable):
+    assert (
+        "Some facts are written in Chinese: say each one with the word a Japanese speaker would naturally use, and never copy the Chinese wording, including Chinese compounds that only look like Japanese kanji."
+        in resident_fact_rule(complete=complete, tool_capable=tool_capable)
+    )
+
+
 def test_rule_complete_is_fact_use_contract_verbatim():
     """[A2] complete profile -> FACT_USE_CONTRACT unchanged."""
     compiler = PromptCompiler()

@@ -108,7 +108,7 @@ FACT_USE_CONTRACT = (
     "NEVER claim ignorance of a listed fact and then guess it. "
     "NEVER mention other worldlines, MEMORY settings, databases, sync, or sharing UI as a source. "
     "Facts not listed here are simply unknown \u2014 saying so is fine. "
-    "Do not read fact keys aloud; weave values into in-character speech."
+    "Do not read fact keys aloud; weave values into in-character speech. Some facts are written in Chinese: say each one with the word a Japanese speaker would naturally use, and never copy the Chinese wording, including Chinese compounds that only look like Japanese kanji."
 )
 
 # v11 resident profile (dispatch 55 B): a partial profile replaces exactly
@@ -191,7 +191,7 @@ def render_tail_reminder(identity_mode: str | None, self_name: str = "") -> str:
         f"- 呼び方：{address}",
         "- ユーザーの発言や事実が中国語で書かれていても、日本語の言い方だけで話す。"
         "中国語の語句は引用しない・かぎ括弧に入れない・日本語訳と並べて書かない。",
-        "- 長さは普段の会話なら二〜四文。詳しい説明を求められた時だけ長くしてよいが、要点に絞る。",
+        "- 長さは普段の会話なら一〜四文。聞かれたことに答え、聞かれていない事実で話を埋めない。詳しい説明を求められた時だけ長くしてよいが、要点に絞る。",
     ])
 
 
