@@ -21,6 +21,7 @@ from app.db import init_db
 from app.services.prompt_compiler import compile_for_session, render_tail_reminder
 from app.services.session_manager import cancel_inflight, session_coordinator
 from app.domain.subtitle_glossary_rewrite import apply_subtitle_glossary_rewrites
+from app.domain.emotion_tags import EmotionTagFilter
 from app.domain.japanese_response_renderer import (
     JAPANESE_RENDERER_SYSTEM_PROMPT,
     build_japanese_renderer_history,
@@ -328,7 +329,7 @@ sessions = {}
 sessions_creation_lock = asyncio.Lock()
 
 # Regex patterns
-EMO_TAG_PATTERN = re.compile(r'^\[(?:E?MO)[:=]([a-zA-Z0-9_]+)\]\s*')
+EMO_TAG_PATTERN = re.compile(r'^\[(?:E?MO)[:=]([^\]\r\n]{1,24})\]\s*', re.IGNORECASE)
 # SOFT-02: final language fail may flush goods when enough JP segments exist.
 MOBILE_ALLOWED_EMOTIONS = {"neutral", "tsundere", "embarrassed", "intellectual"}
 DESKTOP_ALLOWED_EMOTIONS = {
@@ -721,7 +722,8 @@ async def get_clean_text_stream(
         allowed = get_session_allowed_emotions(session)
         last_emotion = default_emotion if default_emotion in allowed else "neutral"
         text_buffer = ""
-        publication_segmenter = IncrementalJapaneseSegmenter()
+        emotion_filter = EmotionTagFilter()
+        publication_segmenter = IncrementalJapaneseSegmenter(preserve_spacing=True)
         published_parts: list[str] = []
         published_emotions: list[str] = []
         rejected_language_parts: list[str] = []
@@ -814,7 +816,10 @@ async def get_clean_text_stream(
                 return
             await _accept_publishable_segment(segment.text, segment.emotion)
 
-        async def publish_completed_segments(delta: str, emotion: str) -> None:
+        async def publish_completed_segments(delta: str, emotion: str, *, final: bool = False) -> None:
+            nonlocal text_buffer
+            delta = emotion_filter.feed(delta, final=final)
+            text_buffer += delta
             for segment in publication_segmenter.feed(delta, emotion=emotion):
                 await _check_publication_segment(segment)
 
@@ -908,33 +913,28 @@ async def get_clean_text_stream(
                                 if char == ']':
                                     match = EMO_TAG_PATTERN.match(emo_buffer)
                                     if match:
-                                        emotion = match.group(1)
+                                        emotion = match.group(1).lower()
                                         allowed_emotions_for_log = allowed
                                         last_emotion = emotion if emotion in allowed else "neutral"
                                         print(f"[DEBUG] EMO tag found: '{emotion}' → last_emotion='{last_emotion}' (allowed: {len(allowed_emotions_for_log)} emotions)", flush=True)
                                         emo_tag_found = True
                                     else:
-                                        text_buffer += emo_buffer
                                         delta_text += emo_buffer
                                     emo_buffer = ""
                                     in_emo_tag = False
-                                elif len(emo_buffer) > 20:
-                                    text_buffer += emo_buffer
+                                elif len(emo_buffer) >= 30:
                                     delta_text += emo_buffer
                                     emo_buffer = ""
                                     in_emo_tag = False
                             else:
-                                if char == '[' and not text_buffer.strip():
+                                if char == '[' and not emo_tag_found and not (text_buffer + delta_text).strip():
                                     in_emo_tag = True
                                     emo_buffer = "["
                                 else:
-                                    text_buffer += char
                                     delta_text += char
                         if delta_text:
                             await publish_completed_segments(delta_text, last_emotion)
-            if emo_buffer:
-                text_buffer += emo_buffer
-                await publish_completed_segments(emo_buffer, last_emotion)
+            await publish_completed_segments(emo_buffer, last_emotion, final=True)
             await finish_publication()
         except asyncio.CancelledError:
             raise
@@ -1657,7 +1657,7 @@ async def processor_loop(
             await segment_pipeline.start()
             if session.voice_stopped_turn_id == turn_id:
                 await segment_pipeline.stop_voice()
-            streaming_splitter = IncrementalJapaneseSegmenter()
+            streaming_splitter = IncrementalJapaneseSegmenter(preserve_spacing=True)
 
             # Defer neutral data labels until the next Japanese speech unit so
             # GPT-SoVITS never receives a bare non-Japanese fragment alone.
@@ -2352,6 +2352,10 @@ async def _dispatch_tts_sentences(
             audio_bytes = payload.get("audio")
             error = payload.get("error")
             text = payload.get("text", "")
+            if sentence_id < len(full_ja_text_parts):
+                original = full_ja_text_parts[sentence_id]
+                if original.strip() == text.strip():
+                    text = original
             emotion = payload.get("emotion", "neutral")
             print(
                 f"[DEBUG] sender_task sentence={sentence_id} emotion='{emotion}' "
@@ -2405,6 +2409,8 @@ async def _dispatch_tts_sentences(
 
         for s in sentences:
             text = s.strip()
+            if full_ja_text_parts and s.startswith((" ", "\t")):
+                text = " " + text
             if not text or not is_meaningful_sentence(text):
                 continue
 
@@ -2496,7 +2502,7 @@ async def _dispatch_streaming_voice_tts(session: SessionState, final_text: str, 
     sentences, _ = extract_sentences_from_buffer(final_text, is_end=True)
     delivered = []
     for sentence_id, text in enumerate(sentences or [final_text]):
-        text = text.strip()
+        text = text.rstrip() if delivered else text.strip()
         if not text:
             continue
         delivered.append(text)

@@ -26,6 +26,7 @@ from app.db import (
     normalize_identity_mode,
     normalize_worldline,
 )
+from app.domain.emotion_tags import strip_emotion_tags
 from app.services.provider_registry import ProviderSnapshot, ProviderTask
 
 logger = logging.getLogger(__name__)
@@ -45,7 +46,7 @@ _N_TURNS_CORE_THROTTLE = 3
 # Memory Ingest v2: extraction window size. MUST match chat history compression
 # keep_count (chat_ws.compress_and_update_history). Do not raise one without the other.
 MEMORY_INGEST_WINDOW_N = 6
-_EMO_HISTORY_PREFIX = re.compile(r"^\[(?:E?MO)[:=][a-zA-Z0-9_]+\]\s*")
+_EMO_HISTORY_PREFIX = re.compile(r"^\[(?:E?MO)[:=][a-zA-Z0-9_]{1,24}\]\s*", re.IGNORECASE)
 
 # Legacy keyword list — NOT used to gate core writes anymore.
 # Production relies on extractor + conf/imp + durable-profile filter + cap.
@@ -120,10 +121,10 @@ def is_durable_profile_core(candidate: "CoreFactCandidate") -> bool:
 
 
 def strip_history_emo_prefix(content: str) -> str:
-    """Remove leading [EMO:…] tags from assistant history lines before extraction."""
+    """Remove emotion tags from assistant history before extraction."""
     if not content:
         return ""
-    return _EMO_HISTORY_PREFIX.sub("", str(content), count=1)
+    return strip_emotion_tags(_EMO_HISTORY_PREFIX.sub("", str(content), count=1)).lstrip()
 
 
 def build_extraction_instruction(identity_mode: str) -> str:

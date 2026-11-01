@@ -10,10 +10,10 @@ from __future__ import annotations
 import json
 import re
 
+from app.domain.emotion_tags import strip_emotion_tags
 from app.domain.segments import is_plausible_japanese_tts_source
 
 
-_EMO_PREFIX_RE = re.compile(r"^\s*\[EMO:[A-Za-z_]+\]\s*", re.IGNORECASE)
 _KANA_RE = re.compile(r"[\u3041-\u3096\u30A1-\u30FA\u30FC]")
 _FENCE_OPEN_RE = re.compile(r"^```[^\n]*\n?")
 _MAX_DRAFT_CHARS = 12_000
@@ -85,7 +85,7 @@ def normalize_rendered_japanese(raw: str) -> str:
         text = _FENCE_OPEN_RE.sub("", text, count=1)
         if text.rstrip().endswith("```"):
             text = text.rstrip()[:-3]
-    return _EMO_PREFIX_RE.sub("", text.strip(), count=1).strip()
+    return strip_emotion_tags(text.strip()).strip()
 
 
 def is_valid_rendered_japanese(text: str) -> bool:

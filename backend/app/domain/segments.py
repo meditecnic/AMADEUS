@@ -637,7 +637,8 @@ class IncrementalJapaneseSegmenter:
     _TERMINATORS = set("。！？!?\n")
     _LENGTH_TERMINATOR_RE = re.compile(r"[。！？!?\n]|…{2,}|\.{3,}")
 
-    def __init__(self) -> None:
+    def __init__(self, *, preserve_spacing: bool = False) -> None:
+        self._preserve_spacing = preserve_spacing
         self._pending = ""
         self._pending_emotions: list[str] = []
         self._short_candidate: tuple[str, str] | None = None
@@ -659,6 +660,13 @@ class IncrementalJapaneseSegmenter:
         self._pending_emotions = []
         return segments
 
+    def _speech_text(self, raw: str) -> str:
+        text = raw.strip()
+        if (text and self._preserve_spacing and (self._next_id or self._short_candidate)
+                and raw.startswith((" ", "\t"))):
+            return " " + text
+        return text
+
     def _drain(self, *, final: bool) -> list[Segment]:
         emitted: list[Segment] = []
         while self._pending:
@@ -677,7 +685,7 @@ class IncrementalJapaneseSegmenter:
             if boundary is None:
                 break
             raw = self._pending[:boundary]
-            text = raw.strip()
+            text = self._speech_text(raw)
             leading = len(raw) - len(raw.lstrip())
             emotion = (
                 self._pending_emotions[leading]
@@ -696,7 +704,7 @@ class IncrementalJapaneseSegmenter:
 
         if final:
             raw_tail = self._pending
-            tail = raw_tail.strip()
+            tail = self._speech_text(raw_tail)
             leading = len(raw_tail) - len(raw_tail.lstrip())
             emotion = (
                 self._pending_emotions[leading]
