@@ -1,9 +1,9 @@
-import { apiUrl } from './apiBase';
+import { apiFetch, apiUrl } from './apiBase';
 /** Original Steins;Gate material (portraits, BGM, SFX, boot animation, login art) is not shipped with
  *  the app. It is an optional pack that the user installs into the data directory; the backend serves
  *  it under /api/asset-pack/. Without it every caller falls back to self-made defaults. */
 
-const PACK_BASE = apiUrl('/api/asset-pack');
+const PACK_PATH = '/api/asset-pack';
 const PROBE_TIMEOUT_MS = 1500;
 
 let available = false;
@@ -15,7 +15,7 @@ export function loadAssetPack(): Promise<boolean> {
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
     try {
-      const response = await fetch(`${PACK_BASE}/manifest.json`, { signal: controller.signal });
+      const response = await apiFetch(`${PACK_PATH}/manifest.json`, { signal: controller.signal });
       available = response.ok;
     } catch {
       available = false;
@@ -23,7 +23,7 @@ export function loadAssetPack(): Promise<boolean> {
       window.clearTimeout(timer);
     }
     const root = document.documentElement;
-    const cssUrl = (path: string) => `url("${PACK_BASE}/${path}")`;
+    const cssUrl = (path: string) => `url("${apiUrl(PACK_PATH)}/${path}")`;
     if (available) {
       root.style.setProperty('--pack-login-bg', cssUrl('bg/SG0_IBG006D.png'));
       root.style.setProperty('--pack-ring', cssUrl('assets/ui/ring_config.png'));
@@ -41,5 +41,5 @@ export function hasAssetPack(): boolean {
 /** Pack-relative path (a leading slash is ignored) → URL, or null when no pack is installed. */
 export function packAsset(path: string): string | null {
   if (!available) return null;
-  return `${PACK_BASE}/${path.replace(/^\/+/, '')}`;
+  return `${apiUrl(PACK_PATH)}/${path.replace(/^\/+/, '')}`;
 }

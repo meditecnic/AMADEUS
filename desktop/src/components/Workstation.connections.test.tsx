@@ -143,6 +143,8 @@ function providerOptions() {
 
 describe('Workstation stopped reconnection', () => {
   it.each([
+    ['unauthorized', '本地服务认证失败，已停止自动重连。', 'steins_gate', true],
+    ['unauthorized', '本地服务认证失败，已停止自动重连。', 'beta', false],
     ['forbidden', '后端拒绝了连接，已停止自动重连。', 'steins_gate', true],
     ['replaced', '连接已被另一个窗口接管，已停止自动重连。', 'beta', true],
     ['forbidden', '后端拒绝了连接，已停止自动重连。', 'steins_gate', false],

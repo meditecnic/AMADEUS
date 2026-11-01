@@ -1,4 +1,7 @@
 use std::fs::{self, File};
+use std::io;
+#[cfg(not(windows))]
+use std::io::Read;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -9,6 +12,43 @@ use tauri::{Manager, RunEvent};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
+
+#[derive(Clone, serde::Serialize)]
+struct LocalBackend {
+    version: u8,
+    http_origin: String,
+    ws_origin: String,
+    token: String,
+}
+
+fn generate_local_token() -> io::Result<String> {
+    let mut bytes = [0u8; 32];
+    #[cfg(windows)]
+    unsafe {
+        #[link(name = "bcrypt")]
+        extern "system" {
+            fn BCryptGenRandom(algorithm: isize, buffer: *mut u8, length: u32, flags: u32) -> i32;
+        }
+        // BCRYPT_USE_SYSTEM_PREFERRED_RNG; NTSTATUS success is non-negative.
+        if BCryptGenRandom(0, bytes.as_mut_ptr(), bytes.len() as u32, 0x2) < 0 {
+            return Err(io::Error::new(io::ErrorKind::Other, "local token generation failed"));
+        }
+    }
+    #[cfg(not(windows))]
+    File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+#[tauri::command]
+fn get_local_backend(
+    window: tauri::WebviewWindow,
+    backend: tauri::State<'_, LocalBackend>,
+) -> Result<LocalBackend, &'static str> {
+    if window.label() != "main" {
+        return Err("local backend is only available to the main window");
+    }
+    Ok(backend.inner().clone())
+}
 
 struct BackendProcess(Mutex<Option<Child>>);
 
@@ -30,7 +70,7 @@ impl BackendProcess {
     }
 }
 
-fn start_backend(app: &tauri::AppHandle) -> Result<BackendProcess, Box<dyn std::error::Error>> {
+fn start_backend(app: &tauri::AppHandle, token: &str) -> Result<BackendProcess, Box<dyn std::error::Error>> {
     let data_dir = match std::env::var_os("AMADEUS_DATA_DIR").filter(|value| !value.is_empty()) {
         Some(path) => PathBuf::from(path),
         None => app.path().app_local_data_dir()?.join("data"),
@@ -41,6 +81,7 @@ fn start_backend(app: &tauri::AppHandle) -> Result<BackendProcess, Box<dyn std::
     let mut command = Command::new(backend);
     command
         .env("AMADEUS_DATA_DIR", &data_dir)
+        .env("AMADEUS_LOCAL_API_TOKEN", token)
         .env("AMADEUS_PARENT_PID", std::process::id().to_string())
         .env("BACKEND_PORT", "8000")
         .env("PYTHON_DOTENV_DISABLED", "1")
@@ -76,6 +117,7 @@ pub fn run() {
     }
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![get_local_backend])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 let handle = app.handle().clone();
@@ -87,7 +129,14 @@ pub fn run() {
                     }
                 });
             }
-            app.manage(start_backend(app.handle())?);
+            let token = generate_local_token()?;
+            app.manage(start_backend(app.handle(), &token)?);
+            app.manage(LocalBackend {
+                version: 1,
+                http_origin: "http://127.0.0.1:8000".into(),
+                ws_origin: "ws://127.0.0.1:8000".into(),
+                token,
+            });
             Ok(())
         })
         .build(tauri::generate_context!())

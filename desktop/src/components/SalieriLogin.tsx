@@ -1,4 +1,4 @@
-import { apiUrl, isPackagedTauri } from '../apiBase';
+import { apiFetch, isPackagedTauri } from '../apiBase';
 import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
 import './SalieriLogin.css';
 import { audioService } from '../services/AudioService';
@@ -191,7 +191,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
 
     const checkHealth = async () => {
       try {
-        const response = await fetch(apiUrl('/health'), { signal: controller.signal });
+        const response = await apiFetch('/health', { signal: controller.signal });
         if (stopped) return;
         if (response.ok) {
           stopped = true;
@@ -434,7 +434,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
 
     let accepted = false;
     try {
-      const response = await fetch(apiUrl('/api/auth/salieri'), {
+      const response = await apiFetch('/api/auth/salieri', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

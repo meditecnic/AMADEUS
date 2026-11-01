@@ -22,6 +22,18 @@ def write_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def verify_frontend_assets(exe: Path, frontend: Path) -> None:
+    """Require every frontend file's Tauri asset key in the executable."""
+    # tauri-codegen 2.6.3 strips the dist prefix; tauri-utils 2.9.3 AssetKey
+    # adds a leading slash and uses forward slashes, including on Windows.
+    executable = exe.read_bytes()
+    for path in sorted(frontend.rglob("*")):
+        if path.is_file():
+            key = "/" + path.relative_to(frontend).as_posix()
+            if key.encode("utf-8") not in executable:
+                raise RuntimeError(f"Frontend asset not embedded in {exe}: {key}")
+
+
 BUILD_ENV_NAMES = frozenset({
     "PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "SYSTEMDRIVE", "COMSPEC", "OS",
     "USERPROFILE", "HOME", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP",

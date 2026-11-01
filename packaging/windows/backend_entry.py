@@ -168,6 +168,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--self-check", action="store_true")
     args = parser.parse_args()
+    if not os.environ.get("AMADEUS_LOCAL_API_TOKEN"):
+        print("AMADEUS_LOCAL_API_TOKEN required for the packaged backend", file=sys.stderr, flush=True)
+        return 1
     try:
         configure_environment()
         if args.self_check:

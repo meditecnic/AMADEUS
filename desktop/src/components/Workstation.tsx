@@ -1,4 +1,4 @@
-import { apiUrl } from '../apiBase';
+import { apiFetch } from '../apiBase';
 import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import { useReducedMotion } from '../design-system/useReducedMotion';
 import { useScrollPinning } from '../hooks/useScrollPinning';
@@ -487,8 +487,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
     const requestedWorldline = worldline;
     setConversationListFailed(false);
     try {
-      const response = await fetch(
-        apiUrl(`/api/conversations?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(requestedWorldline)}`)
+      const response = await apiFetch(
+        `/api/conversations?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(requestedWorldline)}`
       );
       if (!response.ok) throw new Error(`conversation query failed: ${response.status}`);
       const rows = await response.json() as ConversationSummary[];
@@ -513,7 +513,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const loadProviders = useCallback(async () => {
     const requestEpoch = ++providersRequestEpochRef.current;
     try {
-      const response = await fetch(apiUrl('/api/providers'));
+      const response = await apiFetch('/api/providers');
       if (!response.ok) throw new Error(`provider query failed: ${response.status}`);
       const rows = await response.json() as ProviderMetadata[];
       if (providersRequestEpochRef.current !== requestEpoch) return rows;
@@ -535,7 +535,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   ): Promise<boolean> => {
     if (!version) return false;
     try {
-      const response = await fetch(apiUrl(`/api/providers/custom-profiles/${encodeURIComponent(providerId)}`), {
+      const response = await apiFetch(`/api/providers/custom-profiles/${encodeURIComponent(providerId)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ selector_admission: admission, expected_configuration_version: version }),
@@ -849,7 +849,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     let cancelled = false;
     void (async () => {
       try {
-        const response = await fetch(apiUrl('/health/dependencies'));
+        const response = await apiFetch('/health/dependencies');
         if (!response.ok) return;
         const body = await response.json() as { dependencies?: { tts?: { ok?: boolean } } };
         if (cancelled || body.dependencies?.tts?.ok !== false) return;
@@ -904,7 +904,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       } catch {}
       try {
         if (legacyKey.trim()) {
-          const response = await fetch(apiUrl('/api/providers/deepseek/credentials'), {
+          const response = await apiFetch('/api/providers/deepseek/credentials', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ api_key: legacyKey.trim() }),
@@ -951,7 +951,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     const loadWebSearchSettings = async () => {
       setWebSearchCredentialStatus('checking');
       try {
-        const response = await fetch(apiUrl('/api/search/settings'));
+        const response = await apiFetch('/api/search/settings');
         if (!response.ok) throw new Error(`web search settings query failed: ${response.status}`);
         const settings = await response.json() as WebSearchSettingsSnapshot & { provider?: WebSearchProviderId };
         if (!cancelled) applyWebSearchSettings(settings);
@@ -1061,8 +1061,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
     }
     setModelsLoading(true);
     try {
-      const response = await fetch(
-        apiUrl(`/api/providers/${encodeURIComponent(providerId)}/models?refresh=${refresh ? 'true' : 'false'}`)
+      const response = await apiFetch(
+        `/api/providers/${encodeURIComponent(providerId)}/models?refresh=${refresh ? 'true' : 'false'}`
       );
       if (providerModelsRequestEpochRef.current !== requestEpoch) return;
       if (response.status === 409) {
@@ -1153,11 +1153,13 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const reconnecting = Boolean(retry && !retry.exhausted);
   const linkLost = Boolean(retry?.exhausted && status !== 'READY');
   const reconnectStopped = Boolean(reconnectStopReason);
-  const reconnectStopMessage = reconnectStopReason === 'forbidden'
-    ? '后端拒绝了连接，已停止自动重连。'
-    : reconnectStopReason === 'replaced'
-      ? '连接已被另一个窗口接管，已停止自动重连。'
-      : null;
+  const reconnectStopMessage = reconnectStopReason === 'unauthorized'
+    ? '本地服务认证失败，已停止自动重连。'
+    : reconnectStopReason === 'forbidden'
+      ? '后端拒绝了连接，已停止自动重连。'
+      : reconnectStopReason === 'replaced'
+        ? '连接已被另一个窗口接管，已停止自动重连。'
+        : null;
   const retryCount = retry ? `${retry.attempt}/${retry.max}` : '';
   const sessionUsable = status === 'READY' && sessionState !== 'unknown' && sessionState !== 'rejected';
   const showSetupStatus = needsApiKey && !reconnectStopped && !reconnecting && !linkLost
@@ -1359,8 +1361,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
     let failedStatus: number | null = null;
     try {
       audioPlayer.stopAll();
-      const response = await fetch(
-        apiUrl(`/api/conversations/${encodeURIComponent(conversation.id)}/messages?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`)
+      const response = await apiFetch(
+        `/api/conversations/${encodeURIComponent(conversation.id)}/messages?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`
       );
       if (!response.ok) {
         failedStatus = response.status;
@@ -1407,7 +1409,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     try {
       const active = conversations.find((row) => row.id === activeConversationId);
       const mode = normalizeIdentityMode(identityMode);
-      const response = await fetch(apiUrl('/api/conversations'), {
+      const response = await apiFetch('/api/conversations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1444,8 +1446,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     conversation: ConversationSummary,
     patch: Record<string, unknown>,
   ) => {
-    const response = await fetch(
-      apiUrl(`/api/conversations/${encodeURIComponent(conversation.id)}?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`),
+    const response = await apiFetch(`/api/conversations/${encodeURIComponent(conversation.id)}?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`,
       {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -1597,8 +1598,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     setDeleteError(null);
     const wasActive = conversation.id === activeConversationId;
     try {
-      const response = await fetch(
-        apiUrl(`/api/conversations/${encodeURIComponent(conversation.id)}?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`),
+      const response = await apiFetch(`/api/conversations/${encodeURIComponent(conversation.id)}?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`,
         { method: 'DELETE' },
       );
       if (!response.ok) throw new Error(`conversation delete failed: ${response.status}`);
@@ -1643,8 +1643,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     setForgetError(null);
     let waitingForSwitchAck = false;
     try {
-      const response = await fetch(
-        apiUrl(`/api/conversations/${encodeURIComponent(forgetTarget.id)}/forget?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`),
+      const response = await apiFetch(`/api/conversations/${encodeURIComponent(forgetTarget.id)}/forget?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1717,7 +1716,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       const endpoint = activeProviderId === 'custom'
         ? '/api/providers/custom/configuration'
         : `/api/providers/custom-profiles/${encodeURIComponent(activeProviderId)}`;
-      const response = await fetch(apiUrl(endpoint), {
+      const response = await apiFetch(endpoint, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1737,7 +1736,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     }
     let credentialChanged = false;
     if (newSettings.apiKey.trim()) {
-      const response = await fetch(apiUrl(`/api/providers/${encodeURIComponent(activeProviderId)}/credentials`), {
+      const response = await apiFetch(`/api/providers/${encodeURIComponent(activeProviderId)}/credentials`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ api_key: newSettings.apiKey.trim() }),
@@ -1752,7 +1751,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       try { localStorage.removeItem('amadeus_pc_api_key'); } catch {}
     }
     if (newSettings.webSearchApiKey.trim()) {
-      const response = await fetch(apiUrl('/api/search/credential'), {
+      const response = await apiFetch('/api/search/credential', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1861,7 +1860,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   const handleSelectWebSearchProvider = async (provider: WebSearchProviderId) => {
     setWebSearchCredentialStatus('saving');
-    const response = await fetch(apiUrl('/api/search/settings'), {
+    const response = await apiFetch('/api/search/settings', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ active_provider: provider }),
@@ -1876,8 +1875,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   const handleClearWebSearchCredential = async (provider: WebSearchProviderId) => {
     setWebSearchCredentialStatus('saving');
-    const response = await fetch(
-      apiUrl(`/api/search/credential?provider=${encodeURIComponent(provider)}`),
+    const response = await apiFetch(`/api/search/credential?provider=${encodeURIComponent(provider)}`,
       { method: 'DELETE' },
     );
     if (!response.ok) {
@@ -2700,7 +2698,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             configured: Boolean(row.configured),
           }))}
         onCreateCustomProfile={async (input) => {
-          const response = await fetch(apiUrl('/api/providers/custom-profiles'), {
+          const response = await apiFetch('/api/providers/custom-profiles', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(input),
@@ -2714,8 +2712,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           if (result?.status === 'ok') await admitProvider(created.provider_id, created.default_model, created.configuration_version);
         }}
         onDisableCustomProfile={async (providerId) => {
-          const response = await fetch(
-            apiUrl(`/api/providers/custom-profiles/${encodeURIComponent(providerId)}`),
+          const response = await apiFetch(`/api/providers/custom-profiles/${encodeURIComponent(providerId)}`,
             { method: 'DELETE' },
           );
           if (!response.ok) throw new Error('profile_disable_failed');
