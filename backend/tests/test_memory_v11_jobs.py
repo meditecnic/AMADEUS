@@ -4645,9 +4645,9 @@ def test_rework_marker_cannot_hide_alphabetic_credential(text, secret):
 
 
 @pytest.mark.parametrize("text,expected", [
-    ("password: hunter2. 2024 was a great year", ("[REDACTED]", True)),
-    ("password: hunter2. Running is my hobby", ("[REDACTED]", True)),
-    ("api_key=abcdefgh; Running2024 is my hobby", ("[REDACTED]", True)),
+    ("password: hunter2. 2024 was a great year", ("password: [REDACTED:password]. 2024 was a great year", False)),
+    ("password: hunter2. Running is my hobby", ("password: [REDACTED:password]. Running is my hobby", False)),
+    ("api_key=abcdefgh; Running2024 is my hobby", ("api_key=[REDACTED:api_secret]; Running2024 is my hobby", False)),
     ("password: [REDACTED:password]. 2024 was a great year", ("password: [REDACTED:password] was a great year", False)),
 ])
 def test_rework_terminal_punctuation_keeps_privacy_fail_closed(text, expected):
@@ -4896,7 +4896,7 @@ def test_r2_han_and_kana_are_not_credential_residuals(text, expected):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("text,fragment,blocked,normal", [
-    ("我的密码是Hello!2024，ｗｏｒｄ９９", "ｗｏｒｄ９９", True, None),
+    ("我的密码是Hello!2024，ｗｏｒｄ９９ 我喜欢猫", "ｗｏｒｄ９９", False, "我喜欢猫"),
     ("sk-abcdefghijklmnop。ｘｙｚ９９ 我喜欢猫", "ｘｙｚ９９", False, "我喜欢猫"),
     ("password: [REDACTED:password]，ｈｕｎｔｅｒ２２ I like cats", "ｈｕｎｔｅｒ２２", False, "I like cats"),
     ("password: [REDACTED:password], ｈｕｎｔｅｒ２２ I like cats", "ｈｕｎｔｅｒ２２", False, "I like cats"),
@@ -4933,6 +4933,7 @@ async def test_r2_fullwidth_secret_never_reaches_provider_or_memory(isolated_sto
     finally:
         await db.close()
     assert fragment not in caplog.text
+    assert unicodedata.normalize("NFKC", fragment) not in unicodedata.normalize("NFKC", caplog.text)
 
 
 @pytest.mark.parametrize("text", [
