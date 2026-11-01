@@ -10,6 +10,7 @@ import math
 import re
 import sqlite3
 import struct
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Iterable, Literal
@@ -468,6 +469,7 @@ class EmbeddingAdapter:
         self.model_dir = Path(model_dir) if model_dir is not None else None
         self._model = None
         self._tokenizer = None
+        self._load_lock = threading.Lock()
 
     def _model_file(self, filename: str) -> str:
         source = f"https://huggingface.co/{self.model_name}/resolve/{E5_REVISION}/{filename}"
@@ -484,14 +486,16 @@ class EmbeddingAdapter:
 
     def _load(self):
         if self._model is None:
-            import onnxruntime
-            from tokenizers import Tokenizer
+            with self._load_lock:
+                if self._model is None:
+                    import onnxruntime
+                    from tokenizers import Tokenizer
 
-            model_path = self._model_file("onnx/model.onnx")
-            tokenizer = Tokenizer.from_file(self._model_file("tokenizer.json"))
-            tokenizer.enable_truncation(max_length=512)
-            self._tokenizer = tokenizer
-            self._model = onnxruntime.InferenceSession(model_path, providers=["CPUExecutionProvider"])
+                    model_path = self._model_file("onnx/model.onnx")
+                    tokenizer = Tokenizer.from_file(self._model_file("tokenizer.json"))
+                    tokenizer.enable_truncation(max_length=512)
+                    self._tokenizer = tokenizer
+                    self._model = onnxruntime.InferenceSession(model_path, providers=["CPUExecutionProvider"])
         return self._model
 
     async def encode_passage(self, text: str) -> list[float]:
@@ -504,7 +508,7 @@ class EmbeddingAdapter:
         import numpy as np
 
         session = self._load()
-        encoded = self._tokenizer.encode(text)
+        encoded = self._tokenizer.encode(text.strip())
         inputs = {
             "input_ids": np.array([encoded.ids], dtype=np.int64),
             "attention_mask": np.array([encoded.attention_mask], dtype=np.int64),

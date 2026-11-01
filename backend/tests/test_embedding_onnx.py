@@ -1,7 +1,10 @@
 """E5 math and lazy loading without downloading model weights."""
 import builtins
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 import sys
+import threading
+import time
 
 import numpy as np
 import pytest
@@ -31,7 +34,8 @@ def fake_runtime(monkeypatch, tmp_path):
 
         def encode(self, text):
             self.texts.append(text)
-            ids = list(range(len(text.split())))[:self.max_length]
+            # Keep two visible positions and one masked position for short inputs.
+            ids = list(range(max(3, len(text.split()))))[:self.max_length]
             return SimpleNamespace(ids=ids, attention_mask=[1] * (len(ids) - 1) + [0])
 
     class Session:
@@ -89,6 +93,53 @@ async def test_query_and_passage_prefixes(fake_runtime):
     await adapter.encode_query("hello world")
     await adapter.encode_passage("hello world")
     assert tokenizer.texts == ["query: hello world", "passage: hello world"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["query", "passage"])
+@pytest.mark.parametrize("body, suffix", [
+    ("first second ", " first second"),
+    ("first second\n", " first second"),
+    ("first second\u3000", " first second"),
+    ("first second\u00a0", " first second"),
+    ("", ""),
+    (" \n\u3000\u00a0", ""),
+    ("  first second  ", "   first second"),
+])
+async def test_whitespace_stripped_from_prefixed_text(fake_runtime, kind, body, suffix):
+    adapter, tokenizer = fake_runtime
+    await getattr(adapter, f"encode_{kind}")(body)
+    assert tokenizer.texts == [f"{kind}:{suffix}"]
+
+
+def test_concurrent_first_encode_loads_once(fake_runtime, monkeypatch):
+    adapter, _ = fake_runtime
+    runtime = sys.modules["onnxruntime"]
+    session_class = runtime.InferenceSession
+    sessions = []
+    barrier = threading.Barrier(8)
+
+    def slow_session(*args, **kwargs):
+        time.sleep(0.05)
+        session = session_class(*args, **kwargs)
+        sessions.append(session)
+        return session
+
+    def encode(_index):
+        barrier.wait(timeout=10)
+        return adapter._encode("passage: first second")
+
+    monkeypatch.setattr(runtime, "InferenceSession", slow_session)
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        vectors = list(executor.map(encode, range(8)))
+
+    assert len(sessions) == 1
+    assert adapter._model is sessions[0]
+    expected = np.zeros(384)
+    expected[:2] = [0.6, 0.8]
+    assert len(vectors) == 8
+    for vector in vectors:
+        np.testing.assert_allclose(vector, expected, atol=1e-7)
 
 
 def test_only_requested_model_inputs_are_supplied(fake_runtime):
