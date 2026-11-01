@@ -4,6 +4,7 @@ Tauri 2 + React 19 + TypeScript + Vite front end. Setup and background are in th
 
 - Development (default local mock): run `npm ci`, then `npm run dev -- --port 1420 --strictPort`, and open http://localhost:1420/?scenario=streaming. No backend, API key, model or TTS server is needed. Clear a previous `AMADEUS_DEV_MOCK=0` override first; see the [scenario guide](src/dev-mock/README.md).
 - Real-backend development: start the backend on `127.0.0.1:8000`, set `AMADEUS_DEV_MOCK=0` before starting Vite, and use the same port 1420. Vite then proxies `/api`, `/ws` and `/health` to the backend (`AMADEUS_BACKEND_ORIGIN` overrides its origin).
+- Alternatively, set a separate `AMADEUS_DATA_DIR` and run `npm run dev:real` to launch the authenticated backend and Vite together. The backend port is selected automatically when `BACKEND_PORT` is unset or `0`; set it to 1–65535 for a fixed port, which must be free.
 - The mock is development-only and is excluded from production builds; `npm run preview` does not provide it.
 - Checks: `npm run test` and `npm run build`.
 - The Tauri shell in `src-tauri/` is set up for the Windows installer build, which bundles the backend through packaging scripts that are not in this repository, so `npm run tauri -- dev` does not start from a plain checkout.

@@ -75,16 +75,7 @@ def update_children(root_pid: int, tracked: set[int]) -> None:
     tracked.update(ancestors - {root_pid})
 
 
-def free_port() -> int:
-    while True:
-        with socket.socket() as listener:
-            listener.bind(("127.0.0.1", 0))
-            port = listener.getsockname()[1]
-        if port != 8000:
-            return port
-
-
-def clean_environment(root: Path, port: int, provider_port: int, memory_mode: str = "default") -> dict[str, str]:
+def clean_environment(root: Path, provider_port: int, memory_mode: str = "default") -> dict[str, str]:
     system = Path(os.environ["SystemRoot"])
     env = {key: value for key, value in os.environ.items()
            if key.upper() in {"SYSTEMROOT", "WINDIR", "COMSPEC", "SYSTEMDRIVE", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE"}}
@@ -96,7 +87,7 @@ def clean_environment(root: Path, port: int, provider_port: int, memory_mode: st
         "APPDATA": str(root / "appdata"), "LOCALAPPDATA": str(root / "localappdata"),
         "TEMP": str(root / "temp"), "TMP": str(root / "temp"),
         "AMADEUS_DATA_DIR": str(root / "data"), "AMADEUS_CREDENTIAL_BACKEND": "memory",
-        "PYTHON_DOTENV_DISABLED": "1", "BACKEND_PORT": str(port),
+        "PYTHON_DOTENV_DISABLED": "1",
         "AMADEUS_CUSTOM_PROVIDER_BASE_URL": f"http://127.0.0.1:{provider_port}/v1",
         "AMADEUS_CUSTOM_PROVIDER_MODEL": "frozen-smoke",
         "SOVITS_URL": f"http://127.0.0.1:{provider_port}/unused-tts",
@@ -170,6 +161,25 @@ def fake_service(log_path: Path, port: int = 0, *, sentinel: bool = False):
         server.server_close()
         thread.join(timeout=2)
         write_json(log_path, requests)
+
+
+def wait_ready(process: subprocess.Popen, log_path: Path, tracked: set[int], timeout: float) -> int:
+    started = time.monotonic()
+    while time.monotonic() - started < timeout:
+        update_children(process.pid, tracked)
+        for line in log_path.read_bytes().splitlines(keepends=True):
+            if not line.endswith(b'\n') or not line.startswith(b'AMADEUS_BACKEND_READY '):
+                continue
+            value = json.loads(line.split(b' ', 1)[1])
+            if (type(value.get('version')) is not int or value['version'] != 1
+                    or type(value.get('pid')) is not int or value['pid'] != process.pid
+                    or type(value.get('port')) is not int or not 1 <= value['port'] <= 65535):
+                raise AssertionError("invalid backend READY version, pid or port")
+            return value['port']
+        if process.poll() is not None:
+            raise RuntimeError(f"backend exited before READY: {process.returncode}")
+        time.sleep(0.05)
+    raise TimeoutError("backend did not publish READY")
 
 
 def wait_health(process: subprocess.Popen, port: int, tracked: set[int], timeout: float, token: str) -> float:
@@ -338,8 +348,7 @@ def verify_unlocked(data: Path) -> list[str]:
 
 def run_case(exe: Path, root: Path, provider_port: int, mode: str, timeout: float, memory_mode: str) -> dict:
     root.mkdir()
-    port = free_port()
-    env = clean_environment(root, port, provider_port, memory_mode)
+    env = clean_environment(root, provider_port, memory_mode)
     token = secrets.token_urlsafe(32)
     env["AMADEUS_LOCAL_API_TOKEN"] = token
     parent = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"], creationflags=CREATE_NO_WINDOW)
@@ -352,7 +361,8 @@ def run_case(exe: Path, root: Path, provider_port: int, mode: str, timeout: floa
             started = time.monotonic()
             process = subprocess.Popen([str(exe)], cwd=root / "cwd", env=env, stdin=subprocess.PIPE,
                                        stdout=log, stderr=subprocess.STDOUT, creationflags=CREATE_NO_WINDOW)
-            healthy_seconds = wait_health(process, port, tracked, timeout, token)
+            port = wait_ready(process, root / "backend.log", tracked, timeout)
+            wait_health(process, port, tracked, max(0, timeout - (time.monotonic() - started)), token)
             healthy_seconds = time.monotonic() - started
             print(f"HEALTH {mode} {healthy_seconds:.3f}s port={port}", flush=True)
             listeners = verify_listeners(process.pid, port)
@@ -414,6 +424,59 @@ def run_case(exe: Path, root: Path, provider_port: int, mode: str, timeout: floa
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW)
 
 
+def run_port_conflict(exe: Path, root: Path, provider_port: int, timeout: float, memory_mode: str) -> dict:
+    root.mkdir()
+    env = clean_environment(root, provider_port, memory_mode)
+    token = secrets.token_urlsafe(32)
+    env["AMADEUS_LOCAL_API_TOKEN"] = token
+    tracked: set[int] = set()
+    process = None
+    before = process_snapshot()
+    try:
+        with socket.socket() as listener, (root / "backend.log").open("wb") as log:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            port = listener.getsockname()[1]
+            env["BACKEND_PORT"] = str(port)
+            started = time.monotonic()
+            process = subprocess.Popen([str(exe)], cwd=root / "cwd", env=env, stdin=subprocess.PIPE,
+                                       stdout=log, stderr=subprocess.STDOUT, creationflags=CREATE_NO_WINDOW)
+            while process.poll() is None and time.monotonic() - started < timeout:
+                update_children(process.pid, tracked)
+                time.sleep(0.05)
+            if process.poll() is None:
+                raise AssertionError("occupied-port startup exceeded timeout")
+            if process.returncode == 0:
+                raise AssertionError("occupied-port startup exited successfully")
+        text = (root / "backend.log").read_text(encoding="utf-8")
+        if "AMADEUS_BACKEND_FAILED" not in text or "AMADEUS_BACKEND_READY" in text:
+            raise AssertionError("occupied-port startup did not fail before READY")
+        if token in text:
+            raise AssertionError("local API token leaked into backend log")
+        after = process_snapshot()
+        remaining = sorted((tracked | {process.pid}) & after.keys())
+        new_backends = [pid for pid, (_, name) in after.items()
+                        if name.lower() == exe.name.lower() and pid not in before]
+        if remaining or new_backends:
+            raise AssertionError(f"residual processes: {sorted(set(remaining + new_backends))}")
+        result = {"mode": "port-conflict", "port": port, "exit_code": process.returncode,
+                  "exit_seconds": round(time.monotonic() - started, 3), "residual_processes": remaining}
+        write_json(root / "result.json", result)
+        print("SMOKE_CASE " + json.dumps(result), flush=True)
+        return result
+    finally:
+        if process is not None:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=5)
+            if process.stdin is not None:
+                process.stdin.close()
+        for pid in tracked & process_snapshot().keys():
+            subprocess.run([str(Path(os.environ["SystemRoot"]) / "System32/taskkill.exe"), "/PID", str(pid), "/T", "/F"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--exe", type=Path, required=True)
@@ -434,7 +497,7 @@ def main() -> int:
         with fake_service(root / "sidecar-sentinel.json", 9880, sentinel=True), fake_service(root / "provider.json") as (provider_port, requests):
             check_root = root / "self-check"
             check_root.mkdir()
-            env = clean_environment(check_root, free_port(), provider_port, args.memory_mode)
+            env = clean_environment(check_root, provider_port, args.memory_mode)
             env["AMADEUS_LOCAL_API_TOKEN"] = secrets.token_urlsafe(32)
             with (check_root / "output.log").open("wb") as output:
                 checked = subprocess.run([str(exe), "--self-check"], cwd=check_root / "cwd", env=env,
@@ -446,6 +509,8 @@ def main() -> int:
             result["self_check_exit_code"] = checked.returncode
             result["cases"] = [run_case(exe, root / mode, provider_port, mode, args.startup_timeout, args.memory_mode)
                                for mode in ("parent", "stdin")]
+            result["cases"].append(run_port_conflict(exe, root / "port-conflict", provider_port,
+                                                     args.startup_timeout, args.memory_mode))
             if not any(request.get("stream") for request in requests):
                 raise AssertionError("fake provider received no streamed chat")
             if any("tts" in request["path"] for request in requests):

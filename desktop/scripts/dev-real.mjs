@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { selectBackendPort } from './backend-port.mjs';
 
 const desktop = fileURLToPath(new URL('../', import.meta.url));
 const backend = path.resolve(desktop, '../backend');
@@ -9,6 +10,15 @@ if (!process.env.AMADEUS_DATA_DIR?.trim()) {
   console.error('Set AMADEUS_DATA_DIR to a separate development directory before running.');
   process.exit(1);
 }
+let port;
+try {
+  port = await selectBackendPort();
+} catch (error) {
+  console.error(error.message);
+  process.exit(1);
+}
+const backendOrigin = `http://127.0.0.1:${port}`;
+console.log(`Amadeus backend: ${backendOrigin}`);
 const token = randomBytes(32).toString('hex');
 const environment = { ...process.env };
 delete environment.AMADEUS_DB_PATH;
@@ -46,7 +56,8 @@ function launch(command, args, cwd, env) {
 }
 process.on('SIGINT', () => stop(130));
 process.on('SIGTERM', () => stop(143));
-launch(python, ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '8000'],
+launch(python, ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', String(port)],
   backend, { ...environment, AMADEUS_LOCAL_API_TOKEN: token });
 launch(process.execPath, [path.join(desktop, 'node_modules/vite/bin/vite.js'), ...process.argv.slice(2)],
-  desktop, { ...environment, AMADEUS_DEV_MOCK: '0', AMADEUS_DEV_LOCAL_API_TOKEN: token });
+  desktop, { ...environment, AMADEUS_DEV_MOCK: '0', AMADEUS_DEV_LOCAL_API_TOKEN: token,
+    AMADEUS_BACKEND_ORIGIN: backendOrigin });
