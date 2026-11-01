@@ -2239,13 +2239,14 @@ def _scope_query(session_id: str) -> str:
 async def _ws_session_b3(
     *,
     backend_port: int,
+    frontend_port: int,
     session_id: str,
     conversation_id: str | None = None,
 ):
     import websockets
 
     uri = f"ws://127.0.0.1:{backend_port}/ws/chat?session_id={session_id}"
-    ws = await websockets.connect(uri, origin='http://127.0.0.1:1420', open_timeout=10,
+    ws = await websockets.connect(uri, origin=f'http://127.0.0.1:{frontend_port}', open_timeout=10,
                                   subprotocols=b2.local_api_subprotocols(backend_port))
     auth: dict[str, Any] = {
         "type": "auth",
@@ -2443,7 +2444,7 @@ def cmd_verify_local(args: argparse.Namespace) -> None:
         chat_log.write_text("", encoding="utf-8")
 
     async def _run() -> dict[str, Any]:
-        ws = await _ws_session_b3(backend_port=backend_port, session_id=session_id)
+        ws = await _ws_session_b3(backend_port=backend_port, frontend_port=int(pids["frontend_port"]), session_id=session_id)
         try:
             first = await b2._ws_send_turn(ws, TURN_EXTRACT, timeout=45.0)
             ja_ok = any(
@@ -2516,6 +2517,7 @@ def cmd_verify_local(args: argparse.Namespace) -> None:
         )
         ws2 = await _ws_session_b3(
             backend_port=backend_port,
+            frontend_port=int(pids["frontend_port"]),
             session_id=session_id,
             conversation_id=str(after_edit_convo["id"]),
         )
@@ -2559,6 +2561,7 @@ def cmd_verify_local(args: argparse.Namespace) -> None:
         )
         ws3 = await _ws_session_b3(
             backend_port=backend_port,
+            frontend_port=int(pids["frontend_port"]),
             session_id=session_id,
             conversation_id=str(after_forget_convo["id"]),
         )
@@ -2915,7 +2918,7 @@ def cmd_verify_real(args: argparse.Namespace) -> None:
             "patch_status": None,
             "forget_status": None,
         }
-        ws = await _ws_session_b3(backend_port=backend_port, session_id=session_id)
+        ws = await _ws_session_b3(backend_port=backend_port, frontend_port=int(pids["frontend_port"]), session_id=session_id)
         try:
             first, records = await _send_turn_with_records(ws, TURN_EXTRACT, paths, timeout=turn_timeout)
         finally:
@@ -2987,6 +2990,7 @@ def cmd_verify_real(args: argparse.Namespace) -> None:
         result["after_edit_conversation_id"] = after_edit_convo.get("id")
         ws2 = await _ws_session_b3(
             backend_port=backend_port,
+            frontend_port=int(pids["frontend_port"]),
             session_id=session_id,
             conversation_id=str(after_edit_convo["id"]),
         )
@@ -3038,6 +3042,7 @@ def cmd_verify_real(args: argparse.Namespace) -> None:
         result["after_forget_conversation_id"] = after_forget_convo.get("id")
         ws3 = await _ws_session_b3(
             backend_port=backend_port,
+            frontend_port=int(pids["frontend_port"]),
             session_id=session_id,
             conversation_id=str(after_forget_convo["id"]),
         )
@@ -3408,6 +3413,7 @@ def cmd_final_turn(args: argparse.Namespace) -> None:
         async def _run() -> list[dict[str, Any]]:
             ws = await _ws_session_b3(
                 backend_port=backend_port,
+                frontend_port=int(pids["frontend_port"]),
                 session_id=session_id,
                 conversation_id=conversation_id,
             )
@@ -3524,7 +3530,7 @@ def cmd_prove_boundaries(args: argparse.Namespace) -> None:
     turn_events: list[dict[str, Any]] = []
 
     async def _extra_turn() -> list[dict[str, Any]]:
-        ws = await _ws_session_b3(backend_port=backend_port, session_id=session_id)
+        ws = await _ws_session_b3(backend_port=backend_port, frontend_port=int(pids["frontend_port"]), session_id=session_id)
         try:
             return await _send_turn_or_error(ws, "预算外的第四轮不应发出模型请求。")
         finally:

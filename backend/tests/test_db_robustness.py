@@ -31,7 +31,7 @@ class MockWebSocket:
         self.send_queue = asyncio.Queue()
         self.accepted = False
         self.closed = False
-        self.headers = Headers({"origin": "http://localhost"})
+        self.headers = Headers({"origin": "http://localhost:1420"})
         self.scope = {"subprotocols": []}
         self.sent_messages = []
 
