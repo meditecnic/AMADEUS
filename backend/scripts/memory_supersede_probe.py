@@ -8,6 +8,7 @@ Fake scores verify plumbing and are not model-quality evidence.
 HTTP adds max_tokens=2000 to the product request to enforce a hard output/budget
 limit; messages and all other fields are unchanged. Only replies exceeding 2000
 tokens are affected; normal memory write replies are far below this limit.
+「要查」表示 v11 比旧版低超过 10 个百分点（严格大于）。
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ import io
 import json
 import math
 import os
+import re
 import statistics
 import subprocess
 import sys
@@ -80,7 +82,10 @@ def classify(case, mode, before, after, t1):
     new = [row for row in after if row['id'] not in prior_ids
            and (mode == 'v11' or row['key'] != t1['key'])]
     new_value = any(row['active'] and matches(row['text'], case['new_aliases']) for row in after)
-    if case['category'] == 'keep':
+    if (changed and case['category'] in {'keep', 'supersede'}
+            and any(row['active'] and matches(row['text'], case['old_aliases']) for row in after)):
+        status = 'needs_manual'
+    elif case['category'] == 'keep':
         status = 'wrongly_replaced' if changed else 'pass'
     elif case['category'] == 'stop':
         status = 'needs_manual' if changed else ('duplicate' if new else 'missed')
@@ -315,7 +320,7 @@ async def product_execution(plan, entry, directory):
         'pid': os.getpid(), 'data_dir': os.environ['AMADEUS_DATA_DIR'], 't1': t1, 'rounds': rounds,
         'embedding': 'fake-384' if plan['transport'] == 'fake' else 'local-e5',
         'provider_injection': 'provider_registry.snapshot + credential_store.get; MEMORY-capable OpenAICompatibleAdapter + MockTransport',
-        'score': None if capture.error_code else classify(case, entry['mode'], before, rounds[-1]['records'], t1),
+        'score': None if capture.error_code or capture.stop_reason else classify(case, entry['mode'], before, rounds[-1]['records'], t1),
         'request_count': sum(r['sent'] for r in capture.rows), 'relations': dict(sum((Counter(r.get('relations', {})) for r in capture.rows), Counter())),
         'usage': {k: sum(r.get('usage', {}).get(k, 0) for r in capture.rows) for k in ('prompt_tokens', 'completion_tokens')},
         'cost_cny': str(sum((Decimal(r.get('cost_cny', '0')) for r in capture.rows), Decimal(0)))}
@@ -332,10 +337,18 @@ def execute_subprocess(plan, entry, directory):
         for name, value in os.environ.items():
             if name.upper().endswith('_PROXY') or name in {'SSL_CERT_FILE', 'SSL_CERT_DIR', 'REQUESTS_CA_BUNDLE', 'CURL_CA_BUNDLE', 'DEEPSEEK_API_KEY', 'AMADEUS_B5_REAL_HTTP'}:
                 env[name] = value
-    proc = subprocess.run([sys.executable, str(SCRIPT), '--worker', str(directory)], env=env, cwd=BACKEND,
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600, check=False)
+    try:
+        proc = subprocess.run([sys.executable, str(SCRIPT), '--worker', str(directory)], env=env, cwd=BACKEND,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600, check=False)
+    except subprocess.TimeoutExpired:
+        raise b5.Refused('worker_timeout_' + entry['id']) from None
     if proc.returncode:
-        raise b5.Refused('worker_failed_' + str(proc.returncode))
+        failure = 'worker_failed_' + str(proc.returncode)
+        lines = proc.stderr.splitlines()
+        code = re.fullmatch(rb'Probe refused: ([A-Za-z0-9_]{1,60})', lines[-1]) if lines else None
+        if code:
+            failure += ':' + code[1].decode('ascii')
+        raise b5.Refused(failure)
     return b5.read_json(directory / 'result.json')
 
 
@@ -350,6 +363,7 @@ def summarize(rows):
             categories[category] = {**{s: counts[s] for s in RESULTS}, 'eligible': eligible,
                 'pass_rate': counts['pass'] / eligible if eligible else None}
         modes[mode] = {'categories': categories, 'statuses': dict(Counter(r['status'] for r in selected)),
+            'stopped': sum(bool(r.get('stop_reason')) for r in selected),
             'output_truncated': sum(r.get('error_code') == 'output_truncated' for r in selected),
             'json_parse_failures': sum(bool(turn['parse_failed']) for r in selected for turn in r['rounds']),
             'job_failures': sum(turn.get('job', {}).get('state') not in {None, 'completed'} for r in selected for turn in r['rounds']),
@@ -368,7 +382,7 @@ def summary_markdown(summary):
         for category, counts in data['categories'].items():
             lines.append('| ' + ' | '.join([mode, category, *[str(counts[k]) for k in RESULTS]]) + ' |')
     for mode, data in summary['modes'].items():
-        lines.extend(['', f"{mode}: requests={data['request_count']}, tokens={data['usage']}, cost={data['cost_cny']} CNY; JSON failures={data['json_parse_failures']}, job failures={data['job_failures']}, output_truncated={data['output_truncated']}", ''])
+        lines.extend(['', f"{mode}: requests={data['request_count']}, tokens={data['usage']}, cost={data['cost_cny']} CNY; JSON failures={data['json_parse_failures']}, job failures={data['job_failures']}, stopped={data['stopped']}, output_truncated={data['output_truncated']}", ''])
     return '\n'.join(lines) + '\n'
 
 
@@ -407,6 +421,8 @@ def aggregate(run_dirs, output, manual=None):
                     row['score']['status'] = decision['judgment']
                     applied += 1
         runs.append({'run_dir': run_dir.name, **summarize(rows)})
+    if applied != len(overrides):
+        raise b5.Refused('manual_target_not_found')
     stats = {}
     investigate = []
     for mode in ('legacy', 'v11'):
@@ -421,16 +437,18 @@ def aggregate(run_dirs, output, manual=None):
         if legacy is not None and v11 is not None and round(legacy - v11, 12) > 0.10:
             investigate.append(category)
     result = {'runs': runs, 'rates': stats, 'investigate': investigate, 'manual_overrides': applied,
-              'note': '只报告，不判门槛；setup_failed 排除，needs_manual 保留在分母并单列；output_truncated 是执行错误，单列且不进评分。'}
+              'note': '只报告，不判门槛；setup_failed 排除，needs_manual 保留在分母并单列；stopped、output_truncated 单列且不进评分。'}
     output.mkdir(parents=True, exist_ok=True)
     b5.write_json(output / 'aggregate.json', result)
     lines = ['# 改口探针多次汇总', '', result['note'], '', f'人工改判：{applied} 条。', '',
-             '| 模式 | 类 | 每次通过率 | 平均 | 最小 | 最大 |', '|---|---|---|---|---|---|']
+             '| 模式 | 类 | 每次通过率 | 每次 needs_manual | 平均 | 最小 | 最大 |', '|---|---|---|---|---|---|---|']
     def pct(rate):
         return 'N/A' if rate is None else f'{rate:.1%}'
     for mode, categories in stats.items():
         for category, rates in categories.items():
-            lines.append('| ' + ' | '.join([mode, category, ', '.join(map(pct, rates['per_run'])),
+            label = 'stop（人工判定前通过率无意义）' if category == 'stop' else category
+            pending = [str(run['modes'][mode]['categories'][category]['needs_manual']) for run in runs]
+            lines.append('| ' + ' | '.join([mode, label, ', '.join(map(pct, rates['per_run'])), ', '.join(pending),
                 *[pct(rates[k]) for k in ('mean', 'min', 'max')]]) + ' |')
     lines.extend(['', '要查：' + ('、'.join(investigate) or '无'), ''])
     for run in runs:

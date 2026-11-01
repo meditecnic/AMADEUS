@@ -81,9 +81,15 @@ CLASSIFICATIONS = [
 
 
 @pytest.mark.parametrize('mode', ['v11', 'legacy'])
-@pytest.mark.parametrize('category,expected', CLASSIFICATIONS)
+@pytest.mark.parametrize('category,expected,replacement_text', [
+    (*case, None) for case in CLASSIFICATIONS
+] + [
+    ('keep', 'needs_manual', '我喜欢旧值，也喜欢新值。'),
+    ('supersede', 'needs_manual', '我喜欢旧值，也喜欢新值。'),
+    ('supersede', 'pass', '我只喜欢新值。'),
+])
 @pytest.mark.asyncio
-async def test_classification_from_database(tmp_path, monkeypatch, mode, category, expected):
+async def test_classification_from_database(tmp_path, monkeypatch, mode, category, expected, replacement_text):
     monkeypatch.setenv('AMADEUS_DATA_DIR', str(tmp_path))
     reset_initialization_cache()
     await init_db()
@@ -101,9 +107,9 @@ async def test_classification_from_database(tmp_path, monkeypatch, mode, categor
             await db.commit()
         before = await probe.snapshot(mode)
         t1 = before[0] if expected != 'setup_failed' else None
-        changed = expected in {'pass', 'needs_manual'} and category == 'supersede' or expected == 'wrongly_replaced' or category == 'stop' and expected == 'needs_manual'
+        changed = expected in {'needs_manual', 'wrongly_replaced'} or category == 'supersede' and expected == 'pass'
         if changed:
-            text = '新值' if expected == 'pass' else '不相关的文字'
+            text = replacement_text or ('新值' if expected == 'pass' else '不相关的文字')
             if mode == 'v11':
                 await db.execute('UPDATE stable_fact_versions SET invalid_at=? WHERE fact_id=?', ('2026-11-01', fid))
                 await db.execute("""INSERT INTO stable_fact_versions(fact_id,version_no,display_text,
@@ -479,3 +485,116 @@ def test_help_discloses_output_cap(capsys):
     assert 'max_tokens=2000' in help_text
     assert 'messages and all other fields are unchanged' in help_text
     assert 'normal memory write replies are far below this limit' in help_text
+    assert '严格大于' in help_text and '10 个百分点' in help_text
+
+
+@pytest.mark.parametrize('mode', ['legacy', 'v11'])
+@pytest.mark.parametrize('category,case_id', [('keep', 'friend_pet'), ('supersede', 'cat_name')])
+@pytest.mark.parametrize('reason,error_type', [
+    ('not_run_budget', probe.b5.BudgetExceeded),
+    ('usage_missing_reservation_retained', probe.b5.AccountingUncertain),
+    ('http_or_accounting_failed', httpx.ConnectError),
+])
+@pytest.mark.asyncio
+async def test_stopped_second_round_not_scored(tmp_path, monkeypatch, mode, category, case_id, reason, error_type):
+    from app.services.memory import memory_service
+
+    monkeypatch.setenv('AMADEUS_DATA_DIR', str(tmp_path / 'data'))
+    monkeypatch.setattr(memory_service, 'embedder', memory_service.embedder)
+    directory = tmp_path / 'executions' / f'{mode}-{case_id}-1'
+    directory.mkdir(parents=True)
+    plan = {'fixture_sha256': probe.b5.sha256(probe.FIXTURE), 'transport': 'fake',
+            'base_url': probe.b5.BUILTIN_DEEPSEEK_BASE_URL, 'model': 'deepseek-flash', 'cap_cny': None}
+    entry = {'id': directory.name, 'case_id': case_id, 'mode': mode, 'category': category}
+    original_handle = probe.Capture.handle
+
+    async def stopped_handle(self, request):
+        if self.round_no == 2:
+            self.stop_reason = reason
+            raise error_type(reason)
+        return await original_handle(self, request)
+
+    monkeypatch.setattr(probe.Capture, 'handle', stopped_handle)
+    monkeypatch.setattr(probe, 'classify', lambda *args: pytest.fail('stopped execution was classified'))
+    with probe.b5.fake_network_guard():
+        row = await probe.product_execution(plan, entry, directory)
+    assert row['status'] == 'stopped' and row['stop_reason'] == reason
+    assert row['error_code'] is None and row['score'] is None
+    assert len(row['rounds']) == 2 and row['t1'] is not None
+    assert row['rounds'][0]['records'] == row['rounds'][1]['records']
+    data = probe.summarize([row])['modes'][mode]
+    assert data['statuses'] == {'stopped': 1}
+    assert data['stopped'] == 1 and data['output_truncated'] == 0
+    assert data['categories'][category]['eligible'] == 0
+    assert all(data['categories'][category][key] == 0 for key in probe.RESULTS)
+    probe.b5.write_json(tmp_path / 'results.json', [row, result_row(mode, category, 'pass')])
+    aggregate = probe.aggregate([tmp_path], tmp_path / 'aggregate')
+    assert aggregate['rates'][mode][category]['mean'] == 1
+    assert aggregate['runs'][0]['modes'][mode]['stopped'] == 1
+    assert 'stopped=1' in (tmp_path / 'aggregate/aggregate.md').read_text(encoding='utf-8')
+
+
+@pytest.mark.parametrize('stderr,reason', [
+    (b'ignored private log\nProbe refused: fixture_changed\n', ':fixture_changed'),
+    (b'Probe refused: Code_123\n', ':Code_123'),
+    (b'Probe refused: ' + b'a' * 60, ':' + 'a' * 60),
+    (b'Probe refused: ' + b'a' * 61, ''),
+    (b'Probe refused: private content', ''),
+    (b'Probe refused: source:details', ''),
+    (b'Probe refused: valid_code\nprivate last line', ''),
+    (b'', ''),
+])
+def test_worker_failure_includes_only_allowlisted_last_line(tmp_path, monkeypatch, stderr, reason):
+    def run(*args, **kwargs):
+        assert kwargs['stderr'] == subprocess.PIPE
+        return subprocess.CompletedProcess(args[0], 2, stdout=b'', stderr=stderr)
+    monkeypatch.setattr(probe.subprocess, 'run', run)
+    with pytest.raises(probe.b5.Refused) as exc:
+        probe.execute_subprocess({'transport': 'fake'}, {'mode': 'v11', 'id': 'v11-cat_name-1'}, tmp_path)
+    assert str(exc.value) == 'worker_failed_2' + reason
+    assert not list(tmp_path.rglob('*.log'))
+
+
+def test_worker_timeout_includes_execution_id_without_output(tmp_path, monkeypatch):
+    def run(command, **kwargs):
+        raise subprocess.TimeoutExpired(command, 600, output=b'private stdout', stderr=b'private stderr')
+    monkeypatch.setattr(probe.subprocess, 'run', run)
+    with pytest.raises(probe.b5.Refused) as exc:
+        probe.execute_subprocess({'transport': 'fake'}, {'mode': 'legacy', 'id': 'legacy-cat_name-1'}, tmp_path)
+    assert str(exc.value) == 'worker_timeout_legacy-cat_name-1'
+    assert not list(tmp_path.rglob('*.log'))
+
+
+@pytest.mark.parametrize('bad_field', ['execution_id', 'run_dir'])
+def test_manual_unknown_target_refuses_even_with_one_valid_entry(tmp_path, bad_field, capsys):
+    run = tmp_path / 'run'
+    rows = [result_row('v11', 'stop', 'needs_manual', n) for n in (1, 2)]
+    probe.b5.write_json(run / 'results.json', rows)
+    original = (run / 'results.json').read_bytes()
+    decisions = [{'run_dir': run.name, 'execution_id': row['id'], 'judgment': 'pass'} for row in rows]
+    decisions[1][bad_field] = 'typo'
+    manual = tmp_path / 'manual.json'
+    probe.b5.write_json(manual, decisions)
+    output = tmp_path / 'aggregate'
+    assert probe.main(['--aggregate', str(run), '--output', str(output), '--manual', str(manual)]) == 2
+    assert 'manual_target_not_found' in capsys.readouterr().err
+    assert (run / 'results.json').read_bytes() == original
+    assert not output.exists()
+
+
+def test_aggregate_table_reports_pending_counts_and_stop_warning(tmp_path):
+    runs = []
+    for i in (1, 2):
+        run = tmp_path / f'run-{i}'
+        runs.append(run)
+        rows = [result_row(mode, category, 'needs_manual', n)
+                for mode in ('legacy', 'v11') for category in probe.CATEGORIES for n in range(i)]
+        probe.b5.write_json(run / 'results.json', rows)
+    output = tmp_path / 'aggregate'
+    probe.aggregate(runs, output)
+    table = (output / 'aggregate.md').read_text(encoding='utf-8').split('## run-1')[0]
+    assert '| 每次 needs_manual |' in table
+    for mode in ('legacy', 'v11'):
+        for category in probe.CATEGORIES:
+            label = 'stop（人工判定前通过率无意义）' if category == 'stop' else category
+            assert f'| {mode} | {label} | 0.0%, 0.0% | 1, 2 |' in table
