@@ -6,7 +6,11 @@ import { devMockPlugin } from "./src/dev-mock/vite-plugin-mock";
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 const backendOrigin = process.env.AMADEUS_BACKEND_ORIGIN || "http://127.0.0.1:8000";
-const frontendPort = Number(process.env.AMADEUS_FRONTEND_PORT || "1420");
+const frontendPortValue = process.env.AMADEUS_FRONTEND_PORT ?? "1420";
+const frontendPort = Number(frontendPortValue);
+if (frontendPortValue.match(/^\d+$/)?.[0] !== frontendPortValue || frontendPort < 1 || frontendPort > 65535) {
+  throw new Error("AMADEUS_FRONTEND_PORT must be an integer between 1 and 65535");
+}
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({

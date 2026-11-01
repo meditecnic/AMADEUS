@@ -9,6 +9,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import socket
 import sys
 import threading
@@ -174,9 +175,10 @@ def main() -> int:
         configure_environment()
         if args.self_check:
             return self_check()
-        port = int(os.environ.get("BACKEND_PORT", "0"))
-        if not 0 <= port <= 65535:
-            raise ValueError("BACKEND_PORT must be between 0 and 65535")
+        value = os.environ.get("BACKEND_PORT", "0")
+        if not re.fullmatch(r"\d+", value, flags=re.ASCII) or not 0 <= int(value) <= 65535:
+            raise ValueError("BACKEND_PORT must be an integer between 0 and 65535")
+        port = int(value)
         parent = os.environ.get("AMADEUS_PARENT_PID", "")
         shutdown = threading.Event()
         if parent:

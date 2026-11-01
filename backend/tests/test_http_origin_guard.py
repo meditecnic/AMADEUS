@@ -11,7 +11,7 @@ from starlette.routing import Route
 
 
 WRITE_METHODS = ('POST', 'PUT', 'PATCH', 'DELETE')
-ALLOWED_ORIGINS = ('http://tauri.localhost', 'http://127.0.0.1:1420')
+ALLOWED_ORIGINS = ('http://localhost:1420', 'http://127.0.0.1:1420')
 FORBIDDEN = {'detail': {'code': 'origin_not_allowed'}}
 
 
@@ -56,13 +56,13 @@ def test_write_allows_local_and_missing_origin(probe, method, origin):
     [('origin', 'https://evil.example')],
     [('origin', 'null')],
     [('origin', '')],
-    [('origin', ' http://tauri.localhost')],
+    [('origin', ' http://localhost:1420')],
     [('origin', 'http://127.0.0.1:1420.evil.example')],
-    [('origin', 'http://tauri.localhost, https://evil.example')],
-    [('origin', 'http://tauri.localhost https://evil.example')],
-    [('origin', 'http://tauri.localhost'), ('origin', 'http://tauri.localhost')],
-    [('origin', 'http://tauri.localhost'), ('origin', 'https://evil.example')],
-    [('origin', 'https://evil.example'), ('origin', 'http://tauri.localhost')],
+    [('origin', 'http://localhost:1420, https://evil.example')],
+    [('origin', 'http://localhost:1420 https://evil.example')],
+    [('origin', 'http://localhost:1420'), ('origin', 'http://localhost:1420')],
+    [('origin', 'http://localhost:1420'), ('origin', 'https://evil.example')],
+    [('origin', 'https://evil.example'), ('origin', 'http://localhost:1420')],
 ], ids=['evil', 'null', 'empty', 'whitespace', 'suffix', 'combined-comma',
         'combined-space', 'duplicate-local', 'local-then-evil', 'evil-then-local'])
 def test_write_rejects_untrusted_origin_before_route(probe, method, headers):

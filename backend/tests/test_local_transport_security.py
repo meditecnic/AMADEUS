@@ -40,7 +40,7 @@ def test_websocket_rejects_untrusted_origin_before_session(endpoint, origin, mon
 
 
 @pytest.mark.parametrize('endpoint', ['chat', 'voice'])
-@pytest.mark.parametrize('origin', ['http://localhost:1420', 'http://127.0.0.1:1422', 'http://localhost:1424', 'tauri://localhost', 'http://tauri.localhost', 'https://tauri.localhost'])
+@pytest.mark.parametrize('origin', ['http://localhost:1420', 'http://127.0.0.1:1420'])
 def test_websocket_accepts_local_origins(endpoint, origin):
     sid = f'origin-allow-{uuid4().hex}'
     with TestClient(app, base_url='http://localhost') as client:

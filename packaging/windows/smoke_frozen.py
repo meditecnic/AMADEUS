@@ -262,7 +262,7 @@ async def chat(port: int, events_path: Path, token: str) -> list[dict]:
     try:
         async with websockets.connect(
             f"ws://127.0.0.1:{port}/ws/chat?session_id=frozen-smoke",
-            origin="http://127.0.0.1:1420", proxy=None, open_timeout=10,
+            origin="http://tauri.localhost", proxy=None, open_timeout=10,
             subprotocols=["amadeus.local.v1", f"amadeus.token.{token}"],
         ) as connection:
             if connection.subprotocol != "amadeus.local.v1":
@@ -310,7 +310,7 @@ async def verify_missing_token(port: int) -> None:
     for endpoint in ("chat", "voice"):
         async with websockets.connect(
             f"ws://127.0.0.1:{port}/ws/{endpoint}",
-            origin="http://127.0.0.1:1420", proxy=None, open_timeout=10,
+            origin="http://tauri.localhost", proxy=None, open_timeout=10,
         ) as connection:
             try:
                 await connection.recv()

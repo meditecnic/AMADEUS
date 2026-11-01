@@ -1,5 +1,6 @@
 ﻿import os
 from pathlib import Path
+import re
 from dotenv import load_dotenv
 from app.db import get_data_root
 
@@ -21,8 +22,10 @@ if not _DOTENV_DISABLED:
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")
 SOVITS_URL = os.getenv("SOVITS_URL", "http://127.0.0.1:9880").rstrip("/")
-FRONTEND_PORT = int(os.getenv("FRONTEND_PORT", "1420"))
-BACKEND_PORT = int(os.getenv("BACKEND_PORT", "8000"))
+_frontend_port = os.getenv("AMADEUS_FRONTEND_PORT", "1420")
+if not re.fullmatch(r"\d+", _frontend_port, flags=re.ASCII) or not 1 <= int(_frontend_port) <= 65535:
+    raise ValueError("AMADEUS_FRONTEND_PORT must be an integer between 1 and 65535")
+FRONTEND_PORT = int(_frontend_port)
 ASSETS_DIR = Path(os.getenv("ASSETS_DIR", str(backend_dir.parent / "desktop" / "public" / "assets")))
 HISTORY_COMPRESS_THRESHOLD = int(os.getenv("HISTORY_COMPRESS_THRESHOLD", "15"))
 

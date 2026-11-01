@@ -104,6 +104,8 @@ dist-info 下的许可树及 ONNX Runtime 包内的 `LICENSE`、`ThirdPartyNotic
 
 ## 验收
 
+关窗后马上再开，可能弹「Amadeus 已经在运行。」，因为上一个实例还没退完。这是正常的，等一两秒再开就行。
+
 先运行自检（使用新的临时数据目录，凭据后端设为 memory，禁用 dotenv）：
 自检的令牌只要求非空，随便填，不要填真实令牌。
 
@@ -145,6 +147,9 @@ $env:AMADEUS_LOCAL_API_TOKEN = 'self-check-only'
 
 入口只监听 `127.0.0.1`；`BACKEND_PORT` 不设或为 `0` 时由系统分配端口，
 设为 1–65535 时只绑定指定端口（被占用就失败，不换端口），其他值报错退出。
+开发和隔离运行的前端端口用 `AMADEUS_FRONTEND_PORT` 设置，默认 1420，只接受 1–65535 的纯数字；
+后端只允许该端口的 `http://127.0.0.1:<端口>` 和 `http://localhost:<端口>` Origin。
+打包后只认 `http://tauri.localhost`，不再接受开发端口的 Origin。
 就绪时 stdout 输出一行 `AMADEUS_BACKEND_READY {"version": 1, "port": <实际端口>, "pid": <后端进程 PID>}`，不带令牌。
 `AMADEUS_PARENT_PID` 设置后看护对应进程，stdin EOF 也会请求 uvicorn 正常关闭。
 桌面宿主需要在后端存活期间保持 stdin 管道打开。stdout/stderr 使用 UTF-8。

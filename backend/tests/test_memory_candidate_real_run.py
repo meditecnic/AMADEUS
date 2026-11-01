@@ -990,7 +990,7 @@ def test_verify_real_detects_early_and_late_auth_from_records(tmp_path, monkeypa
     paths = b3.b2.run_paths(tmp_path)
     paths["captures"].mkdir()
     b3.b2._write_json(paths["pids"], {
-        "transport": "real", "backend_port": 12345, "candidate": str(paths["candidate"]),
+        "transport": "real", "backend_port": 12345, "frontend_port": 1422, "candidate": str(paths["candidate"]),
     })
     budget = b3.HttpBudget(path=paths["captures"] / "budget.json")
     attempt_id = None
@@ -1029,7 +1029,7 @@ def test_final_turn_classifies_current_records_after_background_idle(tmp_path, m
     paths = b3.b2.run_paths(tmp_path)
     paths["captures"].mkdir()
     b3.b2._write_json(paths["pids"], {
-        "transport": "real", "backend_port": 12345, "candidate": str(paths["candidate"]),
+        "transport": "real", "backend_port": 12345, "frontend_port": 1422, "candidate": str(paths["candidate"]),
     })
     budget = b3.HttpBudget(path=paths["captures"] / "budget.json", currency_cap_micros=10_000_000)
     if reason == "historical_failure":
