@@ -394,7 +394,7 @@ def test_aggregate_investigates_unknown_after_manual_review(tmp_path,frozen,fail
     assert result['runs'][0]['groups']['A']['unknown']['rate']==1
     assert result['runs'][0]['groups']['C']['unknown']['rate']==pytest.approx(.8)
     assert result['runs'][0]['groups']['C']['categories']['unknown']['rate'] is None
-    assert ('unknown' in (tmp_path/'out'/'aggregate.md').read_text())==investigate
+    assert ('unknown' in (tmp_path/'out'/'aggregate.md').read_text(encoding='utf-8'))==investigate
 
 
 def replace_saved_result(path,execution_id,**fields):
