@@ -1,0 +1,56 @@
+{
+  "groups": {
+    "app": {
+      "files": 68,
+      "total_lines": 31601,
+      "code_lines": 27555,
+      "symbols": 1095,
+      "zero_coverage": 65,
+      "vulture_hits": 49
+    },
+    "scripts": {
+      "files": 15,
+      "total_lines": 10542,
+      "code_lines": 9425,
+      "symbols": 358,
+      "zero_coverage": 103,
+      "vulture_hits": 0
+    },
+    "tests": {
+      "files": 119,
+      "total_lines": 62202,
+      "code_lines": 52425,
+      "symbols": 0,
+      "zero_coverage": 0,
+      "vulture_hits": 0
+    },
+    "pkg": {
+      "files": 8,
+      "total_lines": 2133,
+      "code_lines": 1941,
+      "symbols": 63,
+      "zero_coverage": 0,
+      "vulture_hits": 0
+    },
+    "pkg_tests": {
+      "files": 3,
+      "total_lines": 114,
+      "code_lines": 96,
+      "symbols": 0,
+      "zero_coverage": 0,
+      "vulture_hits": 0
+    }
+  },
+  "defense_kinds": {
+    "getattr_default": 108,
+    "broad_except": 206,
+    "unused_kwarg": 49,
+    "compat_comment": 57,
+    "compat_identifier": 221,
+    "swallow": 47,
+    "hasattr": 6,
+    "dup_raise": 47
+  },
+  "coverage_loaded": true,
+  "vulture_loaded": true
+}

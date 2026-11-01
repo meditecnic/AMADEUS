@@ -1,0 +1,11 @@
+语言,文件,行数,防御次数,每千行,宽泛except,吞异常,getattr默认,hasattr,重复校验,兼容标记,保护项
+Python,backend/app/security/prompt.py,169,3,17.75,0,0,0,0,0,3,安全链（Origin、Host、令牌）
+Python,packaging/windows/backend_entry.py,201,3,14.93,1,0,1,1,0,0,令牌和端口校验（整文件从严）
+Python,backend/app/services/memory_v11/migration.py,1659,22,13.26,6,1,0,0,0,16,数据库迁移（派单保护项，整文件从严）
+Python,backend/app/services/conversation_erasure.py,246,3,12.2,1,0,0,0,0,2,删除传播的校验
+Python,backend/app/security/local_transport.py,114,1,8.77,0,0,1,0,0,0,安全链（Origin、Host、令牌）
+Python,backend/app/services/memory_v11/privacy.py,557,4,7.18,0,0,0,0,0,4,打码
+Python,backend/app/services/credentials.py,213,1,4.69,0,0,1,0,0,0,凭据存取
+Python,backend/app/security/guard.py,21,0,0.0,0,0,0,0,0,0,安全链（Origin、Host、令牌）
+Python,packaging/windows/license_bundle.py,377,0,0.0,0,0,0,0,0,0,许可核对
+Python,packaging/windows/source_materials.py,103,0,0.0,0,0,0,0,0,0,构建来源检查（下载与哈希核对）

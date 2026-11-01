@@ -1,0 +1,66 @@
+file,qualname,start,end,status,label,evidence
+backend/app/routers/system_api.py,forget_memory,,,旧版,等 v11 切默认后删,读过代码；直调 MemoryService.forget；唯一调用方 system_api.py:233；无模式门控
+backend/app/routers/system_api.py,memory_status,177,183,旧版分支,等 v11 切默认后删,只删 identity_mode 为空时的分支；行 181 直调 memory_service.status（grep 核过）；177–183 取自探索子代理，未逐行核
+backend/app/routers/system_api.py,memory_facts_ledger,296,302,旧版分支,等 v11 切默认后删,只删 identity_mode 为空时的旧账本分支（list_memory_facts_for_ledger）；函数本身保留（v11 分支在 254–295）
+backend/app/routers/system_api.py,promote_memory_fact,,,旧版,等 v11 切默认后删,读过代码；直调 promote_local_self_fact；Gate 7A 旧账本操作
+backend/app/routers/system_api.py,reclassify_okabe_fact,,,旧版,等 v11 切默认后删,读过代码；直调 reclassify_okabe_fact_to_self；Gate 7B 旧账本操作
+backend/app/routers/system_api.py,dismiss_okabe_fact,,,旧版,等 v11 切默认后删,读过代码；直调 dismiss_okabe_fact；M3 软删旧账本
+backend/app/routers/system_api.py,dismiss_okabe_facts_batch,,,旧版,等 v11 切默认后删,读过代码；直调 dismiss_okabe_facts_bulk
+backend/app/routers/system_api.py,delete_local_memory_fact,,,旧版,等 v11 切默认后删,读过代码；直调 delete_local_self_fact
+backend/app/routers/system_api.py,delete_shared_memory_fact,,,旧版,等 v11 切默认后删,读过代码；直调 delete_shared_fact；派单 v11-6 点名的旧版删除接口
+backend/app/routers/system_api.py,_require_v11_memory_write,,,共用,不动,v11 写门控；派单共用项
+backend/app/services/memory_v11/jobs.py,memory_mode,,,共用,不动,v11 门控入口；返回 AMADEUS_MEMORY_MODE（默认 legacy）；派单点名必须保留
+backend/app/services/prompt_compiler.py,@enclosing,928,940,旧版分支,等 v11 切默认后删,只删 else 分支（非 v11 时的 select_core_facts 与 lexical_search）；读过代码
+backend/app/routers/chat_ws.py,@enclosing,2126,2147,旧版分支,等 v11 切默认后删,只删 else 分支（非 shadow 与 v11 时调 schedule_turn_extraction）；2148 行起的分支后续未读，范围待核
+backend/app/services/memory.py,MemoryService.list_memory_facts_for_ledger,,,旧版,等 v11 切默认后删,唯一调用方 system_api.py:302（旧账本分支）
+backend/app/services/memory.py,MemoryService.promote_local_self_fact,,,旧版,等 v11 切默认后删,唯一调用方 system_api.py:318
+backend/app/services/memory.py,MemoryService.reclassify_okabe_fact_to_self,,,旧版,等 v11 切默认后删,唯一调用方 system_api.py:340
+backend/app/services/memory.py,MemoryService.dismiss_okabe_fact,,,旧版,等 v11 切默认后删,唯一调用方 system_api.py:361
+backend/app/services/memory.py,MemoryService.dismiss_okabe_facts_bulk,,,旧版,等 v11 切默认后删,唯一调用方 system_api.py:382
+backend/app/services/memory.py,MemoryService.delete_local_self_fact,,,旧版,等 v11 切默认后删,唯一调用方 system_api.py:403
+backend/app/services/memory.py,MemoryService.delete_shared_fact,,,旧版,等 v11 切默认后删,唯一调用方 system_api.py:419
+backend/app/services/memory.py,MemoryService.forget,,,旧版,等 v11 切默认后删,唯一 app 调用方 system_api.py:233；conversations.py:238 调的是 conversation_service.forget，不同对象
+backend/app/services/memory.py,MemoryService.status,,,旧版,等 v11 切默认后删,唯一 app 调用方 system_api.py:181（grep memory_service.status 核过）；名字通用，grep 只按对象名匹配
+backend/app/services/memory.py,MemoryService.select_core_facts,,,旧版（读取）,等 v11 切默认后删,唯一 app 调用方 prompt_compiler.py:929（else 分支）
+backend/app/services/memory.py,MemoryService.lexical_search,,,旧版（读取）,等 v11 切默认后删,唯一 app 调用方 prompt_compiler.py:935（else 分支）
+backend/app/services/memory.py,MemoryService.schedule_turn_extraction,,,旧版（抽取入口）,等 v11 切默认后删,唯一 app 调用方 chat_ws.py:2141（else 分支）
+backend/app/services/memory.py,MemoryService._extract_turn,,,旧版（抽取）,等 v11 切默认后删,调用方 schedule_turn_extraction（:787）
+backend/app/services/memory.py,MemoryService.apply_extraction,,,旧版（抽取）,等 v11 切默认后删,调用方 _extract_turn（:926）
+backend/app/services/memory.py,MemoryService.add_episode,,,旧版（抽取写入）,等 v11 切默认后删,调用方 apply_extraction（:631）
+backend/app/services/memory.py,MemoryService.upsert_core_fact,,,旧版（抽取写入）,等 v11 切默认后删,调用方 apply_extraction（:682）
+backend/app/services/memory.py,MemoryService._current_core_value,,,旧版（抽取写入）,等 v11 切默认后删,调用方 upsert_core_fact（:679）
+backend/app/services/memory.py,MemoryService._evaluate_promotion_evidence,,,旧版（辅助）,等 v11 切默认后删,调用方 ledger（:1285）与 promote（:1403），都是旧版方法
+backend/app/services/memory.py,MemoryService._validate_reclassify_evidence,,,旧版（辅助）,等 v11 切默认后删,唯一调用方 reclassify（:1476）
+backend/app/services/memory.py,MemoryService._reclassify_row_matches,,,旧版（辅助）,等 v11 切默认后删,唯一调用方 reclassify（:1512）
+backend/app/services/memory.py,MemoryService._strict_parse_source_ids,,,旧版（辅助）,等 v11 切默认后删,调用方都是旧版方法（:1339、1343、1805、1877）
+backend/app/services/memory.py,MemoryService.hybrid_search,,,旧版（读取，app 内无调用）,等 v11 切默认后删,app 内无调用；vulture 报；覆盖率为 0，按派单归「等 v11」（不提前删）
+backend/app/services/memory.py,_has_memory_intent,,,旧版（抽取辅助，app 内无调用）,等 v11 切默认后删,app 内无调用；vulture 报
+backend/app/services/memory.py,should_skip_core_extraction,,,旧版（抽取辅助，app 内无调用）,等 v11 切默认后删,app 内无调用；vulture 报；测试有引用
+backend/app/services/memory.py,is_durable_profile_core,,,旧版（抽取辅助）,等 v11 切默认后删,调用方 apply_extraction（:671）
+backend/app/services/memory.py,strip_history_emo_prefix,,,旧版（抽取辅助）,等 v11 切默认后删,调用方 _extract_turn（:840）
+backend/app/services/memory.py,build_extraction_instruction,,,旧版（抽取辅助）,等 v11 切默认后删,调用方 _extract_turn（:823）
+backend/app/services/memory.py,parse_extraction_payload,,,旧版（抽取辅助）,等 v11 切默认后删,调用方 _extract_turn（:887）
+backend/app/services/memory.py,SharedFactPromotionError,,,旧版（错误类）,等 v11 切默认后删,只被旧版路由（system_api 321）和旧版方法引用
+backend/app/services/memory.py,ReclassifyError,,,旧版（错误类）,等 v11 切默认后删,只被旧版路由（system_api 343）和旧版方法引用
+backend/app/services/memory.py,DismissError,,,旧版（错误类）,等 v11 切默认后删,只被旧版路由（system_api 364、385）和旧版方法引用
+backend/app/services/memory.py,MemoryDeleteError,,,旧版（错误类）,等 v11 切默认后删,只被旧版路由（system_api 406、422）和旧版方法引用
+backend/app/services/memory.py,EmbeddingAdapter,,,共用,不动,派单点名的共用项；system_api 的 readiness 诊断在用
+backend/app/services/memory.py,RetrievedMemory,,,共用,不动,prompt_compiler 的 v11 路径也在用（:763）
+backend/app/services/memory.py,MemoryService._verify_shared_provenance,,,待定,待定,被 promote（旧版）和 upsert_shared_user_fact（app 内无调用）调用；未核 v11 是否共用
+backend/app/services/memory.py,MemoryService._write_shared_fact_current,,,待定,待定,被 promote（旧版）和 upsert_shared_user_fact（app 内无调用）调用；未核 v11 是否共用
+backend/app/services/memory.py,MemoryService.upsert_shared_user_fact,,,待定,待定,app 内无调用方；vulture 报；测试有引用；覆盖率待核
+backend/app/services/memory.py,MemoryService._current_shared_fact_rows,,,待定,待定,调用方 ledger 与 select_core_facts（都是旧版读路径）；未核 v11 是否共用
+backend/app/services/memory.py,MemoryService._fts_search,,,待定,待定,调用方 lexical_search（旧版）与其它两处；未核
+backend/app/services/memory.py,MemoryService._try_index,,,待定,待定,索引相关；v11 可能共用；未核
+backend/app/services/memory.py,MemoryService._index_sync,,,待定,待定,索引相关；v11 可能共用；未核
+backend/app/services/memory.py,MemoryService._vector_search_sync,,,待定,待定,向量检索；未核 v11 是否共用
+backend/app/services/memory.py,MemoryService._delete_vectors_sync,,,待定,待定,向量删除；未核 v11 是否共用
+backend/app/services/memory.py,reciprocal_rank_fusion,,,待定,待定,唯一 app 调用方 hybrid_search（app 内无调用）；测试有引用
+backend/app/services/memory.py,CoreFactCandidate,,,待定,待定,数据模型；旧版抽取与 v11 是否共用未核
+backend/app/services/memory.py,HorizonFactCandidate,,,待定,待定,数据模型；旧版抽取与 v11 是否共用未核
+backend/app/services/memory.py,EpisodicCandidate,,,待定,待定,数据模型；旧版抽取与 v11 是否共用未核
+backend/app/services/memory.py,ExtractionResult,,,待定,待定,抽取结果模型；未核 v11 是否共用
+desktop/src/memory-space/archiveApi.ts,deleteLegacyFact,,,旧版（前端调用）,等 v11 切默认后删,读过（探索子代理）；调用旧版删除端点；派单 v11-6 说前端随之作废；行号取自 fe_facts 的导出表
+desktop/src/memory-space/LegacyFactsView.tsx,,,,待定,待定,文件名含 Legacy；是否只服务旧版账本未核；有 LegacyFactsView.test.tsx
+backend/tests/test_prompt_snapshot_legacy_shadow.py,,,,待定,待定,只按文件名判断（legacy 与 shadow）；未读内容，不能判定只测旧版
+backend/tests/test_legacy_memory_live_migration.py,,,,待定,待定,只按文件名判断；未读内容

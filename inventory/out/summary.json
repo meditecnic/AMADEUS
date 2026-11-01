@@ -1,0 +1,80 @@
+{
+  "category_totals": [
+    {
+      "类别": "产品代码",
+      "文件数": 194,
+      "总行数": 69708,
+      "代码行（近似）": 61271
+    },
+    {
+      "类别": "待定（脚本）",
+      "文件数": 7,
+      "总行数": 2833,
+      "代码行（近似）": 2452
+    },
+    {
+      "类别": "未纳入四类",
+      "文件数": 5,
+      "总行数": 3999,
+      "代码行（近似）": 3912
+    },
+    {
+      "类别": "测试",
+      "文件数": 199,
+      "总行数": 83860,
+      "代码行（近似）": 72245
+    },
+    {
+      "类别": "评测/实验脚本",
+      "文件数": 18,
+      "总行数": 8553,
+      "代码行（近似）": 7767
+    }
+  ],
+  "candidate_totals": [
+    {
+      "label": "不动",
+      "rows": 31,
+      "lines": 1210
+    },
+    {
+      "label": "待定",
+      "rows": 200,
+      "lines": 13055
+    },
+    {
+      "label": "现在就能删",
+      "rows": 15,
+      "lines": 121
+    },
+    {
+      "label": "等 v11 切默认后删",
+      "rows": 44,
+      "lines": 1660
+    },
+    {
+      "label": "要瘦身",
+      "rows": 135,
+      "lines": 11785
+    },
+    {
+      "label": "锁死实现",
+      "rows": 57,
+      "lines": 17854
+    }
+  ],
+  "not_counted_code_files": [
+    ".github/scripts/test_summary.py",
+    "desktop/public/assets/fonts/s4-ds/font-faces.generated.css",
+    "desktop/src-tauri/build.rs",
+    "desktop/vite.config.ts",
+    "desktop/vitest.config.ts"
+  ],
+  "dead_rows": 15,
+  "be_threshold_per_kloc": 27.47,
+  "fe_threshold_per_kloc": 49.11,
+  "legacy_rows": 65,
+  "knip_issues": 36,
+  "css_classes": 826,
+  "css_not_found": 32
+}

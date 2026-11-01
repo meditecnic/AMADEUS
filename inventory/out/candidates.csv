@@ -1,0 +1,483 @@
+类别,文件,起止行,符号名,行数,来源,建议标签,理由
+产品代码,backend/app/domain/context.py,20-22,TurnContext.task_key,3,vulture+coverage0+refs0,现在就能删,vulture 报未用；覆盖率 0；app 内无引用（名字统计）；不在保护项
+产品代码,backend/app/domain/context.py,9-22,TurnContext,14,vulture+coverage0+refs0,现在就能删,vulture 报未用；覆盖率 0；app 内无引用（名字统计）；不在保护项
+产品代码,backend/app/services/diagnostics.py,1002-1005,DiagnosticRuntime.create_tts_observer,4,vulture+coverage0+refs0,现在就能删,vulture 报未用；覆盖率 0；app 内无引用（名字统计）；不在保护项
+产品代码,backend/app/services/diagnostics.py,978-979,DiagnosticRuntime.set_observing,2,vulture+coverage0+refs0,现在就能删,vulture 报未用；覆盖率 0；app 内无引用（名字统计）；不在保护项
+产品代码,backend/app/services/memory.py,325-326,ExtractionResult.contextual_episodes,2,vulture+coverage0+refs0,现在就能删,vulture 报未用；覆盖率 0；app 内无引用（名字统计）；不在保护项
+产品代码,backend/app/services/prompt_compiler.py,718-723,_stable_fact_prompt_id,6,vulture+coverage0+refs0,现在就能删,vulture 报未用；覆盖率 0；app 内无引用（名字统计）；不在保护项
+产品代码,backend/app/services/search.py,142-146,SearchService.configured_tavily_key,5,vulture+coverage0+refs0,现在就能删,vulture 报未用；覆盖率 0；app 内无引用（名字统计）；不在保护项
+产品代码,backend/app/services/search.py,315-316,SearchService._consume_tavily_credit,2,vulture+coverage0+refs0,现在就能删,vulture 报未用；覆盖率 0；app 内无引用（名字统计）；不在保护项
+产品代码,backend/app/services/turn_events.py,119-135,merge_tool_calls,17,vulture+coverage0+refs0,现在就能删,vulture 报未用；覆盖率 0；app 内无引用（名字统计）；不在保护项
+产品代码,backend/app/services/turn_tool_orchestrator.py,121-123,joint_memory_web_supported,3,vulture+coverage0+refs0,现在就能删,vulture 报未用；覆盖率 0；app 内无引用（名字统计）；不在保护项
+产品代码,backend/app/services/turn_tool_orchestrator.py,569-574,block_has_forbidden_fields,6,vulture+coverage0+refs0,现在就能删,vulture 报未用；覆盖率 0；app 内无引用（名字统计）；不在保护项
+产品代码,desktop/src/memory-space/graphPaths.ts,110-144,constellationFieldBelt,35,knip-exports+coverage,现在就能删,knip 报未用导出（exports）；导出覆盖率 0%
+产品代码,desktop/src/worldline-engine/show/geom.ts,42-44,tubeCenterX,3,knip-exports+coverage,现在就能删,knip 报未用导出（exports）；导出覆盖率 0%
+产品代码,desktop/src/worldline-engine/show/geom.ts,60-72,projectView,13,knip-exports+coverage,现在就能删,knip 报未用导出（exports）；导出覆盖率 0%
+产品代码,desktop/src/worldline-engine/show/timeline.ts,1168-1173,scenarioDuration,6,knip-exports+coverage,现在就能删,knip 报未用导出（exports）；导出覆盖率 0%
+旧版记忆,backend/app/routers/chat_ws.py,2126-2147,processor_loop（分支）,22,legacy-manual,等 v11 切默认后删,只删 else 分支（非 shadow 与 v11 时调 schedule_turn_extraction）；2148 行起的分支后续未读，范围待核
+旧版记忆,backend/app/routers/system_api.py,177-183,memory_status（分支）,7,legacy-manual,等 v11 切默认后删,只删 identity_mode 为空时的分支；行 181 直调 memory_service.status（grep 核过）；177–183 取自探索子代理，未逐行核
+旧版记忆,backend/app/routers/system_api.py,229-234,forget_memory,6,legacy-manual,等 v11 切默认后删,读过代码；直调 MemoryService.forget；唯一调用方 system_api.py:233；无模式门控
+旧版记忆,backend/app/routers/system_api.py,296-302,memory_facts_ledger（分支）,7,legacy-manual,等 v11 切默认后删,只删 identity_mode 为空时的旧账本分支（list_memory_facts_for_ledger）；函数本身保留（v11 分支在 254–295）
+旧版记忆,backend/app/routers/system_api.py,305-324,promote_memory_fact,20,legacy-manual,等 v11 切默认后删,读过代码；直调 promote_local_self_fact；Gate 7A 旧账本操作
+旧版记忆,backend/app/routers/system_api.py,327-346,reclassify_okabe_fact,20,legacy-manual,等 v11 切默认后删,读过代码；直调 reclassify_okabe_fact_to_self；Gate 7B 旧账本操作
+旧版记忆,backend/app/routers/system_api.py,349-367,dismiss_okabe_fact,19,legacy-manual,等 v11 切默认后删,读过代码；直调 dismiss_okabe_fact；M3 软删旧账本
+旧版记忆,backend/app/routers/system_api.py,370-388,dismiss_okabe_facts_batch,19,legacy-manual,等 v11 切默认后删,读过代码；直调 dismiss_okabe_facts_bulk
+旧版记忆,backend/app/routers/system_api.py,391-409,delete_local_memory_fact,19,legacy-manual,等 v11 切默认后删,读过代码；直调 delete_local_self_fact
+旧版记忆,backend/app/routers/system_api.py,412-425,delete_shared_memory_fact,14,legacy-manual,等 v11 切默认后删,读过代码；直调 delete_shared_fact；派单 v11-6 点名的旧版删除接口
+旧版记忆,backend/app/services/memory.py,105-120,is_durable_profile_core,16,legacy-manual,等 v11 切默认后删,调用方 apply_extraction（:671）
+旧版记忆,backend/app/services/memory.py,1176-1236,MemoryService._evaluate_promotion_evidence,61,legacy-manual,等 v11 切默认后删,调用方 ledger（:1285）与 promote（:1403），都是旧版方法
+旧版记忆,backend/app/services/memory.py,123-127,strip_history_emo_prefix,5,legacy-manual,等 v11 切默认后删,调用方 _extract_turn（:840）
+旧版记忆,backend/app/services/memory.py,1238-1366,MemoryService.list_memory_facts_for_ledger,129,legacy-manual,等 v11 切默认后删,唯一调用方 system_api.py:302（旧账本分支）
+旧版记忆,backend/app/services/memory.py,130-172,build_extraction_instruction,43,legacy-manual,等 v11 切默认后删,调用方 _extract_turn（:823）
+旧版记忆,backend/app/services/memory.py,1368-1430,MemoryService.promote_local_self_fact,63,legacy-manual,等 v11 切默认后删,唯一调用方 system_api.py:318
+旧版记忆,backend/app/services/memory.py,1432-1562,MemoryService.reclassify_okabe_fact_to_self,131,legacy-manual,等 v11 切默认后删,唯一调用方 system_api.py:340
+旧版记忆,backend/app/services/memory.py,1564-1610,MemoryService.dismiss_okabe_fact,47,legacy-manual,等 v11 切默认后删,唯一调用方 system_api.py:361
+旧版记忆,backend/app/services/memory.py,1612-1664,MemoryService.dismiss_okabe_facts_bulk,53,legacy-manual,等 v11 切默认后删,唯一调用方 system_api.py:382
+旧版记忆,backend/app/services/memory.py,1666-1753,MemoryService.delete_local_self_fact,88,legacy-manual,等 v11 切默认后删,唯一调用方 system_api.py:403
+旧版记忆,backend/app/services/memory.py,1755-1792,MemoryService.delete_shared_fact,38,legacy-manual,等 v11 切默认后删,唯一调用方 system_api.py:419
+旧版记忆,backend/app/services/memory.py,1794-1842,MemoryService._validate_reclassify_evidence,49,legacy-manual,等 v11 切默认后删,唯一调用方 reclassify（:1476）
+旧版记忆,backend/app/services/memory.py,1844-1867,MemoryService._strict_parse_source_ids,24,legacy-manual,等 v11 切默认后删,调用方都是旧版方法（:1339、1343、1805、1877）
+旧版记忆,backend/app/services/memory.py,1869-1887,MemoryService._reclassify_row_matches,19,legacy-manual,等 v11 切默认后删,唯一调用方 reclassify（:1512）
+旧版记忆,backend/app/services/memory.py,1889-1961,MemoryService.select_core_facts,73,legacy-manual,等 v11 切默认后删,唯一 app 调用方 prompt_compiler.py:929（else 分支）
+旧版记忆,backend/app/services/memory.py,1963-2000,MemoryService.hybrid_search,38,vulture+coverage0+refs0,等 v11 切默认后删,vulture 报未用；覆盖率 0；app 内无引用（名字统计）；不在保护项；属旧版记忆：旧版（读取，app 内无调用）；按派单归「等 v11」
+旧版记忆,backend/app/services/memory.py,2002-2018,MemoryService.lexical_search,17,legacy-manual,等 v11 切默认后删,唯一 app 调用方 prompt_compiler.py:935（else 分支）
+旧版记忆,backend/app/services/memory.py,2020-2028,MemoryService.status,9,legacy-manual,等 v11 切默认后删,唯一 app 调用方 system_api.py:181（grep memory_service.status 核过）；名字通用，grep 只按对象名匹配
+旧版记忆,backend/app/services/memory.py,2030-2050,MemoryService.forget,21,legacy-manual,等 v11 切默认后删,唯一 app 调用方 system_api.py:233；conversations.py:238 调的是 conversation_service.forget，不同对象
+旧版记忆,backend/app/services/memory.py,329-363,parse_extraction_payload,35,legacy-manual,等 v11 切默认后删,调用方 _extract_turn（:887）
+旧版记忆,backend/app/services/memory.py,384-399,SharedFactPromotionError,16,legacy-manual,等 v11 切默认后删,只被旧版路由（system_api 321）和旧版方法引用
+旧版记忆,backend/app/services/memory.py,402-417,ReclassifyError,16,legacy-manual,等 v11 切默认后删,只被旧版路由（system_api 343）和旧版方法引用
+旧版记忆,backend/app/services/memory.py,420-432,DismissError,13,legacy-manual,等 v11 切默认后删,只被旧版路由（system_api 364、385）和旧版方法引用
+旧版记忆,backend/app/services/memory.py,435-447,MemoryDeleteError,13,legacy-manual,等 v11 切默认后删,只被旧版路由（system_api 406、422）和旧版方法引用
+旧版记忆,backend/app/services/memory.py,499-535,MemoryService.add_episode,37,legacy-manual,等 v11 切默认后删,调用方 apply_extraction（:631）
+旧版记忆,backend/app/services/memory.py,537-594,MemoryService.upsert_core_fact,58,legacy-manual,等 v11 切默认后删,调用方 apply_extraction（:682）
+旧版记忆,backend/app/services/memory.py,596-700,MemoryService.apply_extraction,105,legacy-manual,等 v11 切默认后删,调用方 _extract_turn（:926）
+旧版记忆,backend/app/services/memory.py,702-721,MemoryService._current_core_value,20,legacy-manual,等 v11 切默认后删,调用方 upsert_core_fact（:679）
+旧版记忆,backend/app/services/memory.py,723-802,MemoryService.schedule_turn_extraction,80,legacy-manual,等 v11 切默认后删,唯一 app 调用方 chat_ws.py:2141（else 分支）
+旧版记忆,backend/app/services/memory.py,804-955,MemoryService._extract_turn,152,legacy-manual,等 v11 切默认后删,调用方 schedule_turn_extraction（:787）
+旧版记忆,backend/app/services/memory.py,86-91,_has_memory_intent,6,vulture+coverage0+refs0,等 v11 切默认后删,vulture 报未用；覆盖率 0；app 内无引用（名字统计）；不在保护项；属旧版记忆：旧版（抽取辅助，app 内无调用）；按派单归「等 v11」
+旧版记忆,backend/app/services/memory.py,94-102,should_skip_core_extraction,9,legacy-manual,等 v11 切默认后删,app 内无调用；vulture 报；测试有引用
+旧版记忆,backend/app/services/prompt_compiler.py,928-940,compile_for_session（分支）,13,legacy-manual,等 v11 切默认后删,只删 else 分支（非 v11 时的 select_core_facts 与 lexical_search）；读过代码
+旧版记忆,desktop/src/memory-space/archiveApi.ts,133-142,deleteLegacyFact,10,legacy-manual,等 v11 切默认后删,读过（探索子代理）；调用旧版删除端点；派单 v11-6 说前端随之作废；行号取自 fe_facts 的导出表
+产品代码,backend/app/routers/chat_ws.py,1175-1276,_render_foreign_speech_to_japanese,102,dup+swallow>=5,要瘦身,防御项：broad_except 1、swallow 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/routers/chat_ws.py,1352-1406,repair_turn_translation,55,dup+swallow>=5,要瘦身,防御项：broad_except 1、swallow 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/routers/chat_ws.py,1427-1438,_schedule_background_task,12,dup+swallow>=5,要瘦身,防御项：getattr_default 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/routers/chat_ws.py,1447-1472,_persist_aborted_turn,26,dup+swallow>=5,要瘦身,防御项：broad_except 1、swallow 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/routers/chat_ws.py,1487-2318,processor_loop,832,dup+swallow>=5,要瘦身,防御项：broad_except 3、swallow 1、getattr_default 11、compat_comment 4；所在文件判定为dup+swallow>=5
+产品代码,backend/app/routers/chat_ws.py,2321-2494,_dispatch_tts_sentences,174,dup+swallow>=5,要瘦身,防御项：broad_except 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/routers/chat_ws.py,249-274,SessionState.enter_draft,26,dup+swallow>=5,要瘦身,防御项：getattr_default 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/routers/chat_ws.py,2497-2530,_dispatch_streaming_voice_tts,34,dup+swallow>=5,要瘦身,防御项：broad_except 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/routers/chat_ws.py,2533-2548,run_tts_pipeline,16,dup+swallow>=5,要瘦身,防御项：broad_except 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/routers/chat_ws.py,2551-2600,writer_loop,50,dup+swallow>=5,要瘦身,防御项：broad_except 2、swallow 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/routers/chat_ws.py,2602-3250,websocket_chat_endpoint,649,dup+swallow>=5,要瘦身,防御项：broad_except 7、swallow 2、compat_identifier 2；所在文件判定为dup+swallow>=5
+产品代码,backend/app/routers/chat_ws.py,448-470,_compression_outcome_is_current,23,dup+swallow>=5,要瘦身,防御项：getattr_default 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/routers/chat_ws.py,499-658,compress_and_update_history,160,dup+swallow>=5,要瘦身,防御项：broad_except 1、getattr_default 2；所在文件判定为dup+swallow>=5
+产品代码,backend/app/routers/chat_ws.py,660-674,execute_tool_call,15,dup+swallow>=5,要瘦身,防御项：compat_comment 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/routers/chat_ws.py,676-1073,get_clean_text_stream,398,dup+swallow>=5,要瘦身,防御项：getattr_default 2、compat_identifier 12、compat_comment 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/routers/providers.py,126-136,_clear_runtime_surfaces,11,defense-density,要瘦身,防御项：broad_except 2、swallow 2；所在文件判定为defense-density
+产品代码,backend/app/routers/providers.py,139-212,_activate_custom_profile,74,defense-density,要瘦身,防御项：broad_except 6、swallow 2；所在文件判定为defense-density
+产品代码,backend/app/routers/providers.py,280-321,create_custom_profile,42,defense-density,要瘦身,防御项：broad_except 1；所在文件判定为defense-density
+产品代码,backend/app/routers/providers.py,324-400,update_custom_profile,77,defense-density,要瘦身,防御项：broad_except 1、compat_comment 1；所在文件判定为defense-density
+产品代码,backend/app/routers/providers.py,403-478,delete_custom_profile,76,defense-density,要瘦身,防御项：broad_except 3、compat_comment 1；所在文件判定为defense-density
+产品代码,backend/app/routers/providers.py,481-520,update_custom_provider_configuration,40,defense-density,要瘦身,防御项：broad_except 1；所在文件判定为defense-density
+产品代码,backend/app/routers/providers.py,545-589,_discover_models,45,defense-density,要瘦身,防御项：broad_except 1、getattr_default 1；所在文件判定为defense-density
+产品代码,backend/app/routers/providers.py,632-687,check_selected_model_chat,56,defense-density,要瘦身,防御项：broad_except 1；所在文件判定为defense-density
+产品代码,backend/app/routers/system_api.py,1003-1062,patch_memory_experience_presentation,60,defense-density,要瘦身,防御项：broad_except 2、dup_raise 2；所在文件判定为defense-density
+产品代码,backend/app/routers/system_api.py,1065-1096,delete_memory_experience,32,defense-density,要瘦身,防御项：broad_except 1；所在文件判定为defense-density
+产品代码,backend/app/routers/system_api.py,1099-1128,list_memory_observations,30,defense-density,要瘦身,防御项：broad_except 1；所在文件判定为defense-density
+产品代码,backend/app/routers/system_api.py,1131-1162,ignore_memory_observation,32,defense-density,要瘦身,防御项：broad_except 1；所在文件判定为defense-density
+产品代码,backend/app/routers/system_api.py,145-183,memory_status,39,defense-density,要瘦身,防御项：compat_identifier 4；所在文件判定为defense-density
+产品代码,backend/app/routers/system_api.py,237-302,memory_facts_ledger,66,defense-density,要瘦身,防御项：compat_identifier 4；所在文件判定为defense-density
+产品代码,backend/app/routers/system_api.py,564-640,patch_memory_fact,77,defense-density,要瘦身,防御项：broad_except 2、dup_raise 2；所在文件判定为defense-density
+产品代码,backend/app/routers/system_api.py,643-698,delete_memory_fact,56,defense-density,要瘦身,防御项：broad_except 1；所在文件判定为defense-density
+产品代码,backend/app/routers/system_api.py,701-731,memory_fact_details,31,defense-density,要瘦身,防御项：broad_except 1；所在文件判定为defense-density
+产品代码,backend/app/routers/system_api.py,734-807,patch_memory_fact_presentation,74,defense-density,要瘦身,防御项：broad_except 2、dup_raise 2；所在文件判定为defense-density
+产品代码,backend/app/routers/system_api.py,810-839,memory_graph_projection,30,defense-density,要瘦身,防御项：broad_except 1；所在文件判定为defense-density
+产品代码,backend/app/routers/system_api.py,842-869,list_memory_topics,28,defense-density,要瘦身,防御项：broad_except 1；所在文件判定为defense-density
+产品代码,backend/app/routers/system_api.py,872-924,patch_memory_topic,53,defense-density,要瘦身,防御项：broad_except 2、dup_raise 2；所在文件判定为defense-density
+产品代码,backend/app/routers/system_api.py,927-968,list_memory_experiences,42,defense-density,要瘦身,防御项：broad_except 1；所在文件判定为defense-density
+产品代码,backend/app/routers/system_api.py,971-1000,memory_experience_details,30,defense-density,要瘦身,防御项：broad_except 1；所在文件判定为defense-density
+产品代码,backend/app/services/diagnostics.py,1024-1045,DiagnosticRuntime.public_health,22,defense-density,要瘦身,防御项：broad_except 1、compat_identifier 6；所在文件判定为defense-density
+产品代码,backend/app/services/diagnostics.py,1051-1054,DiagnosticTTSObserver.__init__,4,defense-density,要瘦身,防御项：compat_identifier 1；所在文件判定为defense-density
+产品代码,backend/app/services/diagnostics.py,1056-1074,DiagnosticTTSObserver.__call__,19,defense-density,要瘦身,防御项：broad_except 1、compat_identifier 4；所在文件判定为defense-density
+产品代码,backend/app/services/diagnostics.py,1080-1084,DiagnosticTTSObserver._consume_task,5,defense-density,要瘦身,防御项：broad_except 1；所在文件判定为defense-density
+产品代码,backend/app/services/diagnostics.py,1095-1112,DiagnosticTurnObserver.turn_started,18,defense-density,要瘦身,防御项：broad_except 1；所在文件判定为defense-density
+产品代码,backend/app/services/diagnostics.py,1114-1143,DiagnosticTurnObserver.turn_terminal,30,defense-density,要瘦身,防御项：broad_except 1；所在文件判定为defense-density
+产品代码,backend/app/services/diagnostics.py,1145-1159,DiagnosticTurnObserver.segment_committed,15,defense-density,要瘦身,防御项：broad_except 1；所在文件判定为defense-density
+产品代码,backend/app/services/diagnostics.py,1165-1185,DiagnosticTurnObserver.delivery,21,defense-density,要瘦身,防御项：broad_except 1；所在文件判定为defense-density
+产品代码,backend/app/services/diagnostics.py,162-208,build_tts_terminal_event,47,defense-density,要瘦身,防御项：compat_identifier 4；所在文件判定为defense-density
+产品代码,backend/app/services/diagnostics.py,921-930,DiagnosticRuntime.__init__,10,defense-density,要瘦身,防御项：compat_identifier 5；所在文件判定为defense-density
+产品代码,backend/app/services/diagnostics.py,932-938,DiagnosticRuntime._degrade,7,defense-density,要瘦身,防御项：compat_identifier 4；所在文件判定为defense-density
+产品代码,backend/app/services/diagnostics.py,940-965,DiagnosticRuntime.start,26,defense-density,要瘦身,防御项：broad_except 3、compat_identifier 3；所在文件判定为defense-density
+产品代码,backend/app/services/diagnostics.py,967-976,DiagnosticRuntime.sweep_best_effort,10,defense-density,要瘦身,防御项：broad_except 2；所在文件判定为defense-density
+产品代码,backend/app/services/diagnostics.py,981-988,DiagnosticRuntime.append_event,8,defense-density,要瘦身,防御项：broad_except 1；所在文件判定为defense-density
+产品代码,backend/app/services/diagnostics.py,990-997,DiagnosticRuntime.record_observer_failure,8,defense-density,要瘦身,防御项：broad_except 1；所在文件判定为defense-density
+产品代码,backend/app/services/diagnostics.py,999-1000,DiagnosticRuntime.record_mapping_fallback,2,defense-density,要瘦身,防御项：compat_identifier 2；所在文件判定为defense-density
+产品代码,backend/app/services/memory_v11/experiences.py,203-281,experience_details,79,dup+swallow>=5,要瘦身,防御项：dup_raise 2；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/memory_v11/experiences.py,296-409,delete_experience,114,dup+swallow>=5,要瘦身,防御项：broad_except 1、dup_raise 2；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/memory_v11/experiences.py,412-469,update_experience_presentation,58,dup+swallow>=5,要瘦身,防御项：broad_except 1、dup_raise 2；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/memory_v11/experiences.py,87-91,_require_session_id,5,dup+swallow>=5,要瘦身,防御项：dup_raise 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/memory_v11/facts.py,184-366,delete_fact,183,dup+swallow>=5,要瘦身,防御项：broad_except 1、dup_raise 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/memory_v11/facts.py,369-479,fact_details,111,dup+swallow>=5,要瘦身,防御项：dup_raise 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/memory_v11/facts.py,37-41,_require_session_id,5,dup+swallow>=5,要瘦身,防御项：dup_raise 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/memory_v11/facts.py,482-579,update_fact_presentation,98,dup+swallow>=5,要瘦身,防御项：broad_except 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/memory_v11/facts.py,67-181,user_edit_fact,115,dup+swallow>=5,要瘦身,防御项：broad_except 1、dup_raise 2；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/memory_v11/jobs.py,1174-1188,_worker_loop,15,dup+swallow>=5,要瘦身,防御项：broad_except 1、swallow 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/memory_v11/jobs.py,178-245,enqueue_memory_job,68,dup+swallow>=5,要瘦身,防御项：broad_except 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/memory_v11/jobs.py,274-324,claim_memory_job,51,dup+swallow>=5,要瘦身,防御项：broad_except 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/memory_v11/jobs.py,327-410,_transition_owned,84,dup+swallow>=5,要瘦身,防御项：broad_except 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/memory_v11/jobs.py,447-502,retry_memory_job,56,dup+swallow>=5,要瘦身,防御项：broad_except 1、dup_raise 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/memory_v11/jobs.py,666-707,_translate_completion,42,dup+swallow>=5,要瘦身,防御项：compat_identifier 2、compat_comment 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/memory_v11/jobs.py,710-775,default_memory_completion,66,dup+swallow>=5,要瘦身,防御项：broad_except 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/memory_v11/jobs.py,778-798,_deleted_source_suppressed,21,dup+swallow>=5,要瘦身,防御项：broad_except 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/memory_v11/jobs.py,801-1121,process_memory_job,321,dup+swallow>=5,要瘦身,防御项：broad_except 4、swallow 2、getattr_default 1、dup_raise 1、compat_comment 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/memory_v11/topics.py,133-182,list_topics,50,defense-density,要瘦身,防御项：dup_raise 1；所在文件判定为defense-density
+产品代码,backend/app/services/memory_v11/topics.py,185-342,rename_topic,158,defense-density,要瘦身,防御项：broad_except 1、dup_raise 1、compat_identifier 10；所在文件判定为defense-density
+产品代码,backend/app/services/model_catalog.py,126-176,ModelCatalog._validate_and_index,51,defense-density,要瘦身,防御项：compat_identifier 2；所在文件判定为defense-density
+产品代码,backend/app/services/model_catalog.py,238-308,ModelCatalog._parse_model,71,defense-density,要瘦身,防御项：compat_identifier 12；所在文件判定为defense-density
+产品代码,backend/app/services/model_catalog.py,335-348,ModelCatalog._live_positive_int,14,defense-density,要瘦身,防御项：compat_identifier 2；所在文件判定为defense-density
+产品代码,backend/app/services/model_catalog.py,370-408,ModelCatalog._public_row,39,defense-density,要瘦身,防御项：compat_identifier 4；所在文件判定为defense-density
+产品代码,backend/app/services/model_catalog.py,410-442,ModelCatalog._public_known,33,defense-density,要瘦身,防御项：compat_identifier 4；所在文件判定为defense-density
+产品代码,backend/app/services/model_catalog.py,70-84,CatalogModel,15,defense-density,要瘦身,防御项：compat_identifier 2；所在文件判定为defense-density
+产品代码,backend/app/services/provider_adapters.py,142-167,OpenAICompatibleAdapter._complete_text,26,dup+swallow>=5,要瘦身,防御项：dup_raise 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/provider_adapters.py,206-231,OpenAICompatibleAdapter.compress_history,26,dup+swallow>=5,要瘦身,防御项：compat_identifier 2；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/provider_adapters.py,233-250,OpenAICompatibleAdapter.list_models,18,dup+swallow>=5,要瘦身,防御项：dup_raise 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/provider_adapters.py,24-250,OpenAICompatibleAdapter,227,dup+swallow>=5,要瘦身,防御项：compat_identifier 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/provider_adapters.py,259-276,_compression_messages,18,dup+swallow>=5,要瘦身,防御项：compat_identifier 2；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/provider_adapters.py,456-480,OpenAIResponsesAdapter._complete_text,25,dup+swallow>=5,要瘦身,防御项：dup_raise 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/provider_adapters.py,505-517,OpenAIResponsesAdapter.compress_history,13,dup+swallow>=5,要瘦身,防御项：compat_identifier 2；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/provider_adapters.py,519-534,OpenAIResponsesAdapter.list_models,16,dup+swallow>=5,要瘦身,防御项：dup_raise 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/provider_adapters.py,63-140,OpenAICompatibleAdapter.get_chat_stream,78,dup+swallow>=5,要瘦身,防御项：compat_comment 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/provider_adapters.py,670-694,GeminiAdapter._complete_text,25,dup+swallow>=5,要瘦身,防御项：dup_raise 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/provider_adapters.py,710-722,GeminiAdapter.compress_history,13,dup+swallow>=5,要瘦身,防御项：compat_identifier 2；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/provider_adapters.py,724-746,GeminiAdapter.list_models,23,dup+swallow>=5,要瘦身,防御项：dup_raise 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/provider_runtime.py,120-150,_register_compatible,31,defense-density,要瘦身,防御项：compat_identifier 3；所在文件判定为defense-density
+产品代码,backend/app/services/provider_runtime.py,216-249,configure_custom_provider,34,defense-density,要瘦身,防御项：compat_identifier 2；所在文件判定为defense-density
+产品代码,backend/app/services/provider_runtime.py,273-305,restore_custom_provider_configuration,33,defense-density,要瘦身,防御项：compat_comment 1；所在文件判定为defense-density
+产品代码,backend/app/services/provider_runtime.py,61-80,_compatible_capabilities,20,defense-density,要瘦身,防御项：compat_identifier 1；所在文件判定为defense-density
+产品代码,backend/app/services/search.py,119-420,SearchService,302,defense-density,要瘦身,防御项：compat_comment 1；所在文件判定为defense-density
+产品代码,backend/app/services/search.py,175-200,SearchService.settings_snapshot,26,defense-density,要瘦身,防御项：compat_comment 1；所在文件判定为defense-density
+产品代码,backend/app/services/search.py,218-281,SearchService.search,64,defense-density,要瘦身,防御项：broad_except 1；所在文件判定为defense-density
+产品代码,backend/app/services/search.py,445-479,_legacy_weather,35,defense-density,要瘦身,防御项：broad_except 1、swallow 1、compat_identifier 2；所在文件判定为defense-density
+产品代码,backend/app/services/search.py,482-495,_legacy_ddg,14,defense-density,要瘦身,防御项：broad_except 1、swallow 1、compat_identifier 1、compat_comment 1；所在文件判定为defense-density
+产品代码,backend/app/services/session_manager.py,136-190,SessionCoordinator.switch,55,defense-density,要瘦身,防御项：broad_except 2、swallow 1、getattr_default 11；所在文件判定为defense-density
+产品代码,backend/app/services/session_manager.py,15-40,cancel_inflight,26,defense-density,要瘦身,防御项：broad_except 1、swallow 1、getattr_default 4；所在文件判定为defense-density
+产品代码,backend/app/services/session_manager.py,58-59,turn_injected_fact_ids,2,defense-density,要瘦身,防御项：getattr_default 1；所在文件判定为defense-density
+产品代码,backend/app/services/session_manager.py,62-76,clear_working_summaries,15,defense-density,要瘦身,防御项：getattr_default 1；所在文件判定为defense-density
+产品代码,backend/app/services/session_manager.py,84-107,SessionCoordinator.acquire_lease,24,defense-density,要瘦身,防御项：broad_except 1、swallow 1、compat_identifier 3、compat_comment 1；所在文件判定为defense-density
+产品代码,backend/app/services/tts_sidecar.py,133-140,SidecarSupervisor._compatible,8,defense-density,要瘦身,防御项：broad_except 1、swallow 1、compat_identifier 1；所在文件判定为defense-density
+产品代码,backend/app/services/tts_sidecar.py,142-150,SidecarSupervisor._occupied,9,defense-density,要瘦身,防御项：broad_except 1、swallow 1；所在文件判定为defense-density
+产品代码,backend/app/services/tts_sidecar.py,152-165,SidecarSupervisor.health,14,defense-density,要瘦身,防御项：compat_identifier 1；所在文件判定为defense-density
+产品代码,backend/app/services/tts_sidecar.py,43-69,SidecarSupervisor._load_configured_weights,27,defense-density,要瘦身,防御项：broad_except 1、swallow 1；所在文件判定为defense-density
+产品代码,backend/app/services/tts_sidecar.py,77-131,SidecarSupervisor._ensure_available,55,defense-density,要瘦身,防御项：compat_identifier 2；所在文件判定为defense-density
+产品代码,backend/app/services/turn_tool_orchestrator.py,104-114,snapshot_from_session,11,defense-density,要瘦身,防御项：getattr_default 9；所在文件判定为defense-density
+产品代码,backend/app/services/turn_tool_orchestrator.py,126-142,plan_first_round_tools,17,defense-density,要瘦身,防御项：compat_identifier 1；所在文件判定为defense-density
+产品代码,backend/app/services/turn_tool_orchestrator.py,145-154,provider_tool_capable,10,defense-density,要瘦身,防御项：getattr_default 2；所在文件判定为defense-density
+产品代码,backend/app/services/turn_tool_orchestrator.py,250-269,collect_recall_payloads,20,defense-density,要瘦身,防御项：getattr_default 1；所在文件判定为defense-density
+产品代码,backend/app/services/turn_tool_orchestrator.py,272-312,refresh_candidates_for_send,41,defense-density,要瘦身,防御项：getattr_default 1；所在文件判定为defense-density
+产品代码,backend/app/services/turn_tool_orchestrator.py,315-371,execute_recall,57,defense-density,要瘦身,防御项：getattr_default 2；所在文件判定为defense-density
+产品代码,backend/app/services/turn_tool_orchestrator.py,439-557,prepare_second_round_payload,119,defense-density,要瘦身,防御项：compat_identifier 2；所在文件判定为defense-density
+产品代码,desktop/src/components/SettingsModal.tsx,128-136,loadStoredSelfName,9,fe-catch>=5,要瘦身,防御项：catch_no_throw 1；所在文件判定为fe-catch>=5
+产品代码,desktop/src/components/SettingsModal.tsx,138-148,persistSelfName,11,fe-catch>=5,要瘦身,防御项：empty_catch 1、catch_no_throw 1；所在文件判定为fe-catch>=5
+产品代码,desktop/src/components/SettingsModal.tsx,242-1125,SettingsModal,884,fe-catch>=5,要瘦身,防御项：catch_no_throw 6；所在文件判定为fe-catch>=5
+产品代码,desktop/src/components/SettingsModal.tsx,52-58,loadStoredIdentityMode,7,fe-catch>=5,要瘦身,防御项：catch_no_throw 1；所在文件判定为fe-catch>=5
+产品代码,desktop/src/components/SettingsModal.tsx,60-66,persistIdentityMode,7,fe-catch>=5,要瘦身,防御项：empty_catch 1、catch_no_throw 1；所在文件判定为fe-catch>=5
+产品代码,desktop/src/components/Workstation.tsx,114-2821,Workstation,2708,fe-defense-density,要瘦身,防御项：empty_catch 27、catch_no_throw 47；所在文件判定为fe-defense-density
+产品代码,desktop/src/hooks/useAudioPlayer.ts,19-271,AudioPlayerManager,253,fe-catch>=5,要瘦身,防御项：empty_catch 2、catch_no_throw 5、as_any 1；所在文件判定为fe-catch>=5
+产品代码,desktop/src/hooks/useAudioPlayer.ts,8-17,readPersistedVoiceVolume,10,fe-catch>=5,要瘦身,防御项：catch_no_throw 1；所在文件判定为fe-catch>=5
+产品代码,desktop/src/memory-space/fetchProjection.ts,38-58,fetchMemoryProjection,21,fe-defense-density,要瘦身,防御项：empty_catch 1、catch_no_throw 1；所在文件判定为fe-defense-density
+产品代码,desktop/src/memory-space/projectionController.ts,33-94,createProjectionController,62,fe-defense-density,要瘦身,防御项：catch_no_throw 1；所在文件判定为fe-defense-density
+产品代码,desktop/src/workstation/ConnectionCheck.tsx,29-47,requestChatCheck,19,fe-defense-density,要瘦身,防御项：catch_no_throw 1；所在文件判定为fe-defense-density
+产品代码,desktop/src/workstation/WorldlineShift.tsx,45-47,hintIntros,3,fe-catch>=5,要瘦身,防御项：catch_no_throw 1；所在文件判定为fe-catch>=5
+产品代码,desktop/src/workstation/WorldlineShift.tsx,48-50,countHintIntro,3,fe-catch>=5,要瘦身,防御项：empty_catch 1、catch_no_throw 1；所在文件判定为fe-catch>=5
+产品代码,desktop/src/workstation/WorldlineShift.tsx,56-340,WorldlineShift,285,fe-catch>=5,要瘦身,防御项：catch_no_throw 3；所在文件判定为fe-catch>=5
+产品代码,desktop/src/workstation/glyphAtlas.worker.ts,6-13,<顶层语句>,8,fe-defense-density,要瘦身,防御项：catch_no_throw 1；所在文件判定为fe-defense-density
+产品代码,desktop/src/workstation/shiftStage.ts,103-142,warm,40,fe-defense-density,要瘦身,防御项：catch_no_throw 1；所在文件判定为fe-defense-density
+产品代码,desktop/src/workstation/shiftStage.ts,56-85,atlasFromWorker,30,fe-defense-density,要瘦身,防御项：catch_no_throw 1；所在文件判定为fe-defense-density
+产品代码,backend/app/db.py,1019-1040,_migrate_v7_to_v8,22,protected,不动,保护项：数据库迁移（派单保护项）；防御项：broad_except 1；所在文件未达要瘦身阈值
+产品代码,backend/app/db.py,1043-1068,_migrate_v8_to_v9,26,protected,不动,保护项：数据库迁移（派单保护项）；防御项：broad_except 1；所在文件未达要瘦身阈值
+产品代码,backend/app/db.py,1071-1126,_migrate_v9_to_v10,56,protected,不动,保护项：数据库迁移（派单保护项）；防御项：broad_except 1、compat_identifier 2；所在文件未达要瘦身阈值
+产品代码,backend/app/db.py,1204-1235,_migrate_v10_to_v11,32,protected,不动,保护项：数据库迁移（派单保护项）；防御项：broad_except 1；所在文件未达要瘦身阈值
+产品代码,backend/app/db.py,1343-1369,_run_migration_locked,27,protected,不动,保护项：数据库迁移（派单保护项）；防御项：compat_identifier 3；所在文件未达要瘦身阈值
+产品代码,backend/app/db.py,982-1016,_migrate_v6_to_v7,35,protected,不动,保护项：数据库迁移（派单保护项）；防御项：broad_except 1；所在文件未达要瘦身阈值
+产品代码,backend/app/services/conversation_erasure.py,175-201,_finish_erasure,27,protected,不动,保护项：删除传播的校验；防御项：compat_identifier 2；所在文件未达要瘦身阈值
+产品代码,backend/app/services/conversation_erasure.py,91-172,_erase_v11,82,protected,不动,保护项：删除传播的校验；防御项：broad_except 1；所在文件未达要瘦身阈值
+产品代码,backend/app/services/credentials.py,195-207,_select_credential_store,13,protected,不动,保护项：凭据存取；防御项：getattr_default 1；所在文件未达要瘦身阈值
+产品代码,backend/app/services/memory_v11/jobs.py,79-119,redact_user_text,41,protected,不动,保护项：打码调用处；防御项：broad_except 1、swallow 1；所在文件判定为dup+swallow>=5
+产品代码,backend/app/services/memory_v11/migration.py,1031-1194,apply_legacy_core_facts,164,protected,不动,保护项：数据库迁移（派单保护项，整文件从严）；防御项：broad_except 2、compat_identifier 1；所在文件未达要瘦身阈值
+产品代码,backend/app/services/memory_v11/migration.py,1354-1470,_import_live,117,protected,不动,保护项：数据库迁移（派单保护项，整文件从严）；防御项：broad_except 1、compat_identifier 3；所在文件未达要瘦身阈值
+产品代码,backend/app/services/memory_v11/migration.py,1473-1476,import_legacy_core_facts,4,protected,不动,保护项：数据库迁移（派单保护项，整文件从严）；防御项：compat_identifier 1；所在文件未达要瘦身阈值
+产品代码,backend/app/services/memory_v11/migration.py,1546-1579,preview_consolidation,34,protected,不动,保护项：数据库迁移（派单保护项，整文件从严）；防御项：broad_except 1；所在文件未达要瘦身阈值
+产品代码,backend/app/services/memory_v11/migration.py,1582-1629,_finish_consolidation,48,protected,不动,保护项：数据库迁移（派单保护项，整文件从严）；防御项：broad_except 1；所在文件未达要瘦身阈值
+产品代码,backend/app/services/memory_v11/migration.py,387-410,_parse_legacy_source_ids,24,protected,不动,保护项：数据库迁移（派单保护项，整文件从严）；防御项：compat_identifier 1；所在文件未达要瘦身阈值
+产品代码,backend/app/services/memory_v11/migration.py,469-474,_covering_requests,6,protected,不动,保护项：数据库迁移（派单保护项，整文件从严）；防御项：compat_identifier 1；所在文件未达要瘦身阈值
+产品代码,backend/app/services/memory_v11/migration.py,478-603,_evaluate_fact_row,126,protected,不动,保护项：数据库迁移（派单保护项，整文件从严）；防御项：compat_identifier 1；所在文件未达要瘦身阈值
+产品代码,backend/app/services/memory_v11/migration.py,703-705,evaluate_legacy_core_facts,3,protected,不动,保护项：数据库迁移（派单保护项，整文件从严）
+产品代码,backend/app/services/memory_v11/migration.py,748-779,build_legacy_core_facts_preview,32,protected,不动,保护项：数据库迁移（派单保护项，整文件从严）；防御项：compat_identifier 1；所在文件未达要瘦身阈值
+产品代码,backend/app/services/memory_v11/migration.py,926-943,_init_target_memory_db,18,protected,不动,保护项：数据库迁移（派单保护项，整文件从严）；防御项：broad_except 1、swallow 1、compat_identifier 2；所在文件未达要瘦身阈值
+产品代码,backend/app/services/memory_v11/privacy.py,201-214,_secret_shaped,14,protected,不动,保护项：打码；防御项：compat_comment 1；所在文件未达要瘦身阈值
+产品代码,backend/app/services/memory_v11/privacy.py,247-282,_credential_value_end,36,protected,不动,保护项：打码；防御项：compat_comment 1；所在文件未达要瘦身阈值
+产品代码,backend/app/services/memory_v11/privacy.py,285-375,_credential_matches,91,protected,不动,保护项：打码；防御项：compat_comment 2；所在文件未达要瘦身阈值
+产品代码,packaging/windows/backend_entry.py,103-130,self_check,28,protected,不动,保护项：令牌和端口校验（整文件从严）；防御项：hasattr 1；所在文件未达要瘦身阈值
+产品代码,packaging/windows/backend_entry.py,170-197,main,28,protected,不动,保护项：令牌和端口校验（整文件从严）；防御项：broad_except 1；所在文件未达要瘦身阈值
+产品代码,packaging/windows/backend_entry.py,19-39,configure_environment,21,protected,不动,保护项：令牌和端口校验（整文件从严）；防御项：getattr_default 1；所在文件未达要瘦身阈值
+旧版记忆,backend/app/routers/system_api.py,551-561,_require_v11_memory_write,11,legacy-manual,不动,v11 写门控；派单共用项
+旧版记忆,backend/app/services/memory.py,374-381,RetrievedMemory,8,legacy-manual,不动,prompt_compiler 的 v11 路径也在用（:763）
+旧版记忆,backend/app/services/memory.py,458-491,EmbeddingAdapter,34,legacy-manual,不动,派单点名的共用项；system_api 的 readiness 诊断在用
+旧版记忆,backend/app/services/memory_v11/jobs.py,1214-1215,memory_mode,2,legacy-manual,不动,v11 门控入口；返回 AMADEUS_MEMORY_MODE（默认 legacy）；派单点名必须保留
+测试,backend/tests/test_chat_error_leak.py,,,180,lockin-density,锁死实现,锁死实现写法 2 次，11.11/千行（阈值 10）
+测试,backend/tests/test_chat_message_length.py,,,74,lockin-density,锁死实现,锁死实现写法 2 次，27.03/千行（阈值 10）
+测试,backend/tests/test_chat_reconnect_ownership.py,,,214,lockin-density,锁死实现,锁死实现写法 3 次，14.02/千行（阈值 10）
+测试,backend/tests/test_data_isolation_guard.py,,,215,lockin-density,锁死实现,锁死实现写法 3 次，13.95/千行（阈值 10）
+测试,backend/tests/test_diagnostics_lifecycle.py,,,81,lockin-density,锁死实现,锁死实现写法 2 次，24.69/千行（阈值 10）
+测试,backend/tests/test_local_api_token.py,,,292,lockin-density,锁死实现,锁死实现写法 4 次，13.7/千行（阈值 10）
+测试,backend/tests/test_local_transport_security.py,,,95,lockin-density,锁死实现,锁死实现写法 1 次，10.53/千行（阈值 10）
+测试,backend/tests/test_memory_candidate_boundaries.py,,,117,lockin-density,锁死实现,锁死实现写法 5 次，42.74/千行（阈值 10）
+测试,backend/tests/test_memory_candidate_real_run.py,,,1094,lockin-density,锁死实现,锁死实现写法 23 次，21.02/千行（阈值 10）
+测试,backend/tests/test_memory_candidate_runtime.py,,,1114,lockin-density,锁死实现,锁死实现写法 14 次，12.57/千行（阈值 10）
+测试,backend/tests/test_memory_candidate_script_regressions.py,,,294,lockin-density,锁死实现,锁死实现写法 38 次，129.25/千行（阈值 10）
+测试,backend/tests/test_memory_conversation_erasure.py,,,185,lockin-density,锁死实现,锁死实现写法 8 次，43.24/千行（阈值 10）
+测试,backend/tests/test_memory_credential_free_extraction.py,,,164,lockin-density,锁死实现,锁死实现写法 4 次，24.39/千行（阈值 10）
+测试,backend/tests/test_memory_recall_b5a_r1_product_path.py,,,1252,lockin-density,锁死实现,锁死实现写法 15 次，11.98/千行（阈值 10）
+测试,backend/tests/test_memory_runtime_write_gate.py,,,221,lockin-density,锁死实现,锁死实现写法 5 次，22.62/千行（阈值 10）
+测试,backend/tests/test_memory_summary_invalidation.py,,,85,lockin-density,锁死实现,锁死实现写法 2 次，23.53/千行（阈值 10）
+测试,backend/tests/test_memory_v11_recall_logging.py,,,132,lockin-density,锁死实现,锁死实现写法 6 次，45.45/千行（阈值 10）
+测试,backend/tests/test_memory_v11_resident_turn.py,,,509,lockin-density,锁死实现,锁死实现写法 18 次，35.36/千行（阈值 10）
+测试,backend/tests/test_packaged_local_token.py,,,174,lockin-density,锁死实现,锁死实现写法 4 次，22.99/千行（阈值 10）
+测试,backend/tests/test_provider_http_errors.py,,,108,lockin-density,锁死实现,锁死实现写法 2 次，18.52/千行（阈值 10）
+测试,backend/tests/test_provider_registry.py,,,194,lockin-density,锁死实现,锁死实现写法 2 次，10.31/千行（阈值 10）
+测试,backend/tests/test_search_credentials.py,,,193,lockin-density,锁死实现,锁死实现写法 4 次，20.73/千行（阈值 10）
+测试,backend/tests/test_segment_latin_names.py,,,62,lockin-density,锁死实现,锁死实现写法 6 次，96.77/千行（阈值 10）
+测试,backend/tests/test_speech.py,,,79,lockin-density,锁死实现,锁死实现写法 1 次，12.66/千行（阈值 10）
+测试,backend/tests/test_summary_erasure_epoch.py,,,89,lockin-density,锁死实现,锁死实现写法 3 次，33.71/千行（阈值 10）
+测试,backend/tests/test_tts_sidecar.py,,,267,lockin-density,锁死实现,锁死实现写法 14 次，52.43/千行（阈值 10）
+测试,desktop/src/LocalBackendGate.test.tsx,,,40,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 1 次，25.0/千行（阈值 10）
+测试,desktop/src/apiBase.test.ts,,,88,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 6 次，68.18/千行（阈值 10）
+测试,desktop/src/components/ForgetConversationModal.test.tsx,,,34,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 2 次，58.82/千行（阈值 10）
+测试,desktop/src/components/HistorySidebar.test.tsx,,,343,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 26 次，75.8/千行（阈值 10）
+测试,desktop/src/components/ProviderControls.test.tsx,,,461,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 5 次，10.85/千行（阈值 10）
+测试,desktop/src/components/SalieriLogin.test.tsx,,,136,lockin-density,锁死实现,vi.mock 内部模块 3 次，调用断言 8 次，80.88/千行（阈值 10）
+测试,desktop/src/components/SalieriSelect.test.tsx,,,190,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 6 次，31.58/千行（阈值 10）
+测试,desktop/src/components/SettingsModal.test.tsx,,,1005,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 22 次，21.89/千行（阈值 10）
+测试,desktop/src/components/Workstation.connections.test.tsx,,,608,lockin-density,锁死实现,vi.mock 内部模块 11 次，调用断言 8 次，31.25/千行（阈值 10）
+测试,desktop/src/components/Workstation.design-system.test.tsx,,,585,lockin-density,锁死实现,vi.mock 内部模块 10 次，调用断言 2 次，20.51/千行（阈值 10）
+测试,desktop/src/components/Workstation.pending-conversation.test.tsx,,,984,lockin-density,锁死实现,vi.mock 内部模块 9 次，调用断言 17 次，26.42/千行（阈值 10）
+测试,desktop/src/components/Workstation.runtime.test.tsx,,,1838,lockin-density,锁死实现,vi.mock 内部模块 10 次，调用断言 30 次，21.76/千行（阈值 10）
+测试,desktop/src/design-system/useReducedMotion.test.tsx,,,97,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 8 次，82.47/千行（阈值 10）
+测试,desktop/src/dev-mock/runtime.test.ts,,,235,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 8 次，34.04/千行（阈值 10）
+测试,desktop/src/hooks/useAmadeusWS.auth.test.ts,,,48,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 1 次，20.83/千行（阈值 10）
+测试,desktop/src/hooks/useAmadeusWS.b1.test.ts,,,282,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 7 次，24.82/千行（阈值 10）
+测试,desktop/src/hooks/useAmadeusWS.pending.test.ts,,,277,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 5 次，18.05/千行（阈值 10）
+测试,desktop/src/hooks/useAmadeusWS.test.ts,,,884,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 25 次，28.28/千行（阈值 10）
+测试,desktop/src/hooks/useAudioPlayer.test.ts,,,159,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 4 次，25.16/千行（阈值 10）
+测试,desktop/src/memory-space/ConstellationStage.test.tsx,,,400,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 4 次，10.0/千行（阈值 10）
+测试,desktop/src/memory-space/MemorySelect.test.tsx,,,31,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 4 次，129.03/千行（阈值 10）
+测试,desktop/src/memory-space/filaments.test.ts,,,32,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 1 次，31.25/千行（阈值 10）
+测试,desktop/src/memory-space/readingDetails.test.ts,,,488,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 14 次，28.69/千行（阈值 10）
+测试,desktop/src/services/AudioService.test.ts,,,80,lockin-density,锁死实现,vi.mock 内部模块 1 次，调用断言 2 次，37.5/千行（阈值 10）
+测试,desktop/src/test/worldline-controller.test.ts,,,192,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 7 次，36.46/千行（阈值 10）
+测试,desktop/src/workstation/ConfirmDialog.focus.test.tsx,,,123,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 2 次，16.26/千行（阈值 10）
+测试,desktop/src/workstation/ConnectionList.test.tsx,,,33,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 2 次，60.61/千行（阈值 10）
+测试,desktop/src/workstation/WorldlineShift.test.tsx,,,433,lockin-density,锁死实现,vi.mock 内部模块 1 次，调用断言 22 次，53.12/千行（阈值 10）
+测试,desktop/src/workstation/focusScroll.test.tsx,,,106,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 3 次，28.3/千行（阈值 10）
+测试,desktop/src/workstation/fontWarmup.test.ts,,,80,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 6 次，75.0/千行（阈值 10）
+测试,desktop/src/workstation/shiftTransaction.test.ts,,,78,lockin-density,锁死实现,vi.mock 内部模块 0 次，调用断言 8 次，102.56/千行（阈值 10）
+产品代码,backend/app/db.py,1695-1697,reset_initialization_cache,3,vulture,待定,vulture 报未用，但覆盖率为「执行过」，规则套不上
+产品代码,backend/app/domain/subtitle_glossary_prompt.py,64-66,build_translation_glossary_block,3,vulture,待定,vulture 报未用，但覆盖率为「执行过」，规则套不上
+产品代码,backend/app/services/diagnostics.py,427-482,DiagnosticEventLedger,56,vulture,待定,vulture 报未用，但覆盖率为「有执行」，规则套不上
+产品代码,backend/app/services/diagnostics.py,456-472,DiagnosticEventLedger.incomplete_attempts,17,vulture,待定,vulture 报未用，但覆盖率为「执行过」，规则套不上
+产品代码,backend/app/services/diagnostics.py,474-482,DiagnosticEventLedger.segment_summary,9,vulture,待定,vulture 报未用，但覆盖率为「执行过」，规则套不上
+产品代码,backend/app/services/diagnostics.py,612-614,DiagnosticStore.journal_mode,3,vulture,待定,vulture 报未用，但覆盖率为「执行过」，规则套不上
+产品代码,backend/app/services/diagnostics.py,797-813,DiagnosticStore.read_events,17,vulture,待定,vulture 报未用，但覆盖率为「执行过」，规则套不上
+产品代码,backend/app/services/diagnostics.py,838-852,DiagnosticStore.enable_verbose,15,vulture,待定,vulture 报未用，但覆盖率为「执行过」，规则套不上
+产品代码,backend/app/services/diagnostics.py,854-874,DiagnosticStore.capture_verbose,21,vulture,待定,vulture 报未用，但覆盖率为「执行过」，规则套不上
+产品代码,backend/app/services/diagnostics.py,876-883,DiagnosticStore.read_verbose,8,vulture,待定,vulture 报未用，但覆盖率为「执行过」，规则套不上
+产品代码,backend/app/services/diagnostics.py,885-889,DiagnosticStore.has_foreign_keys,5,vulture,待定,vulture 报未用，但覆盖率为「执行过」，规则套不上
+产品代码,backend/app/services/diagnostics.py,891-908,DiagnosticStore.clear_all,18,vulture,待定,vulture 报未用，但覆盖率为「执行过」，规则套不上
+产品代码,backend/app/services/memory.py,322-323,ExtractionResult.durable_cores,2,vulture,待定,vulture 报未用，但覆盖率为「执行过」，规则套不上
+产品代码,backend/app/services/memory_v11/candidate.py,846-1099,build_memory_candidate,254,vulture,待定,vulture 报未用，但覆盖率为「执行过」，规则套不上
+产品代码,backend/app/services/memory_v11/jobs.py,413-445,mark_memory_job_failed,33,vulture,待定,vulture 报未用，但覆盖率为「执行过」，规则套不上
+产品代码,backend/app/services/memory_v11/recall.py,102-105,RecallCandidate,4,vulture,待定,vulture 报未用，但覆盖率为「无方法」，规则套不上
+产品代码,backend/app/services/memory_v11/repository.py,237-281,validate_active_version_invariants,45,vulture,待定,vulture 报未用，但覆盖率为「执行过」，规则套不上
+产品代码,backend/app/services/model_catalog.py,102-104,ModelCatalog.from_mapping,3,vulture,待定,vulture 报未用，但覆盖率为「执行过」，规则套不上
+产品代码,backend/app/services/persona_bible.py,124-128,PersonaBible.romance_allowed,5,vulture,待定,vulture 报未用，但覆盖率为「执行过」，规则套不上
+产品代码,backend/app/services/provider_registry.py,73-84,ProviderSnapshot.filter_parameters,12,vulture,待定,vulture 报未用，但覆盖率为「执行过」，规则套不上
+产品代码,backend/app/services/provider_runtime.py,173-187,custom_provider_settings,15,vulture,待定,vulture 报未用，但覆盖率为「执行过」，规则套不上
+产品代码,backend/app/services/search.py,498-506,web_search,9,vulture,待定,vulture 报未用，但覆盖率为「执行过」，规则套不上
+产品代码,backend/app/services/turn_tool_orchestrator.py,199-211,first_round_tools,13,vulture,待定,vulture 报未用，但覆盖率为「执行过」，规则套不上
+产品代码,backend/app/services/turn_tool_orchestrator.py,560-566,build_memory_candidate_context,7,vulture,待定,vulture 报未用，但覆盖率为「执行过」，规则套不上
+产品代码,desktop/src/App.css,,blink-txt,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/App.css,,ctrl-btn,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/App.css,,custom-profile-disabled,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/App.css,,field-title,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/App.css,,icon-btn,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/App.css,,is-muted,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/App.css,,mode-self,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/App.css,,not-configured,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/App.css,,salieri-select,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/App.css,,salieri-textarea,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/App.css,,slider-value,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/App.css,,system-error-card,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/components/BilingualMessage.tsx,3-8,BilingualSegment,6,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 2 处同名引用（desktop/src/components/BilingualMessage.tsx:11、desktop/src/components/BilingualMessage.tsx:44），需人工核
+产品代码,desktop/src/components/ForgetConversationModal.tsx,50-50,default,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 216 处同名引用（.github/scripts/test_summary.py:72、.github/scripts/test_summary.py:89），需人工核
+产品代码,desktop/src/components/ProviderControls.tsx,132-142,modelLifecycleSuffix,11,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 1 处同名引用（desktop/src/components/ProviderControls.tsx:145），需人工核
+产品代码,desktop/src/components/ProviderControls.tsx,15-18,ModelThinkingOption,4,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 1 处同名引用（desktop/src/components/ProviderControls.tsx:26），需人工核
+产品代码,desktop/src/components/ProviderControls.tsx,153-164,modelOptionTitle,12,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 4 处同名引用（desktop/src/components/ProviderControls.tsx:289、desktop/src/components/ProviderControls.tsx:291），需人工核
+产品代码,desktop/src/components/ProviderControls.tsx,166-185,discoveryStatusLabel,20,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 1 处同名引用（desktop/src/components/ProviderControls.tsx:241），需人工核
+产品代码,desktop/src/components/ProviderControls.tsx,7-13,ModelLifecycle,7,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 2 处同名引用（desktop/src/components/ProviderControls.tsx:45、desktop/src/components/ProviderControls.tsx:132），需人工核
+产品代码,desktop/src/components/SalieriSelect.tsx,13-20,SalieriSelectOption,8,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 2 处同名引用（desktop/src/components/SalieriSelect.tsx:24、desktop/src/components/SalieriSelect.tsx:45），需人工核
+产品代码,desktop/src/components/SettingsModal.tsx,1126-1126,default,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 216 处同名引用（.github/scripts/test_summary.py:72、.github/scripts/test_summary.py:89），需人工核
+产品代码,desktop/src/components/SettingsModal.tsx,159-159,SettingsTab,1,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 3 处同名引用（desktop/src/components/SettingsModal.tsx:167、desktop/src/components/SettingsModal.tsx:284），需人工核
+产品代码,desktop/src/components/Workstation.tsx,103-105,contentHasJapaneseKana,3,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 1 处同名引用（desktop/src/components/Workstation.tsx:2198），需人工核
+产品代码,desktop/src/components/login/wordmarkGlyphs.ts,30-30,WORD_BOX,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖
+产品代码,desktop/src/components/login/wordmarkGlyphs.ts,8-8,WORD_TRACK,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖
+产品代码,desktop/src/hooks/useAmadeusWS.ts,74-74,WSStatus,1,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 2 处同名引用（desktop/src/hooks/useAmadeusWS.ts:102、desktop/src/hooks/useAmadeusWS.ts:163），需人工核
+产品代码,desktop/src/hooks/useAmadeusWS.ts,94-94,ReconnectStopReason,1,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 2 处同名引用（desktop/src/hooks/useAmadeusWS.ts:125、desktop/src/hooks/useAmadeusWS.ts:238），需人工核
+产品代码,desktop/src/hooks/useAmadeusWS.ts,95-99,ReconnectState,5,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 2 处同名引用（desktop/src/hooks/useAmadeusWS.ts:123、desktop/src/hooks/useAmadeusWS.ts:237），需人工核
+产品代码,desktop/src/memory-space/LegacyFactsView.tsx,,,184,legacy-manual,待定,文件名含 Legacy；是否只服务旧版账本未核；有 LegacyFactsView.test.tsx
+产品代码,desktop/src/memory-space/MemorySpace.css,,memory-reading-close,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/memory-space/MemorySpace.css,,memory-soul-lockup-amadeus,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/memory-space/MemorySpace.css,,soul-opening-hint,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/memory-space/archiveApi.ts,34-34,ArchivePagination,1,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 2 处同名引用（desktop/src/memory-space/archiveApi.ts:36、desktop/src/memory-space/archiveApi.ts:37），需人工核
+产品代码,desktop/src/memory-space/archiveApi.ts,369-398,parseMemoryStatusBody,30,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/archiveApi.ts:401），需人工核
+产品代码,desktop/src/memory-space/archiveState.ts,105-109,ArchiveFilters,5,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 2 处同名引用（desktop/src/memory-space/archiveState.ts:114、desktop/src/memory-space/archiveState.ts:227），需人工核
+产品代码,desktop/src/memory-space/archiveState.ts,156-159,ArchiveOpenOptions,4,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 3 处同名引用（desktop/src/memory-space/archiveState.ts:165、desktop/src/memory-space/archiveState.ts:268），需人工核
+产品代码,desktop/src/memory-space/archiveState.ts,177-177,PAGE_SIZE,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 2 处同名引用（desktop/src/memory-space/archiveState.ts:310、desktop/src/memory-space/archiveState.ts:349），需人工核
+产品代码,desktop/src/memory-space/archiveState.ts,40-40,ArchiveListStatus,1,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 4 处同名引用（desktop/src/memory-space/archiveState.ts:43、desktop/src/memory-space/archiveState.ts:52），需人工核
+产品代码,desktop/src/memory-space/archiveState.ts,42-49,FactListState,8,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 2 处同名引用（desktop/src/memory-space/archiveState.ts:115、desktop/src/memory-space/archiveState.ts:191），需人工核
+产品代码,desktop/src/memory-space/archiveState.ts,51-58,ExperienceListState,8,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 2 处同名引用（desktop/src/memory-space/archiveState.ts:116、desktop/src/memory-space/archiveState.ts:195），需人工核
+产品代码,desktop/src/memory-space/archiveState.ts,60-60,ArchiveSelection,1,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 3 处同名引用（desktop/src/memory-space/archiveState.ts:118、desktop/src/memory-space/archiveState.ts:229），需人工核
+产品代码,desktop/src/memory-space/archiveState.ts,62-66,ArchiveDetailsState,5,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/archiveState.ts:119），需人工核
+产品代码,desktop/src/memory-space/archiveState.ts,68-74,ArchiveEditorState,7,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/archiveState.ts:120），需人工核
+产品代码,desktop/src/memory-space/archiveState.ts,76-84,ArchiveDeleteFlow,9,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/archiveState.ts:121），需人工核
+产品代码,desktop/src/memory-space/archiveState.ts,86-86,ArchiveTopicRename,1,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/archiveState.ts:122），需人工核
+产品代码,desktop/src/memory-space/archiveState.ts,91-91,ArchiveDiscardAction,1,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/archiveState.ts:92），需人工核
+产品代码,desktop/src/memory-space/archiveState.ts,92-92,ArchiveDiscardConfirm,1,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/archiveState.ts:123），需人工核
+产品代码,desktop/src/memory-space/archiveState.ts,94-103,ArchivePendingState,10,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/archiveState.ts:124），需人工核
+产品代码,desktop/src/memory-space/criteria.ts,108-123,buildProjectionSearchParams,16,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/criteria.ts:126），需人工核
+产品代码,desktop/src/memory-space/criteria.ts,27-27,KIND_OPTIONS,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/criteria.ts:38），需人工核
+产品代码,desktop/src/memory-space/criteria.ts,37-46,normalizeKinds,10,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/criteria.ts:52），需人工核
+产品代码,desktop/src/memory-space/emphasis.ts,14-16,isRestQuery,3,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 2 处同名引用（desktop/src/memory-space/emphasis.ts:19、desktop/src/memory-space/emphasis.ts:29），需人工核
+产品代码,desktop/src/memory-space/graphPaths.ts,21-26,RevealState,6,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定
+产品代码,desktop/src/memory-space/graphPaths.ts,3-3,PathClass,1,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/graphPaths.ts:6），需人工核
+产品代码,desktop/src/memory-space/graphPaths.ts,33-33,SOUL_MARK_LIFT,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖
+产品代码,desktop/src/memory-space/graphPaths.ts,92-94,azimuthOf,3,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 0%；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/graphPaths.ts:117），需人工核
+产品代码,desktop/src/memory-space/layout.ts,13-16,nodeLabel,4,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 6 处同名引用（desktop/src/memory-space/layout.ts:120、desktop/src/memory-space/layout.ts:130），需人工核
+产品代码,desktop/src/memory-space/layout.ts,187-195,worldFromOrbitPose,9,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/layout.ts:216），需人工核
+产品代码,desktop/src/memory-space/layout.ts,197-209,orbitPoseFromWorld,13,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/layout.ts:212），需人工核
+产品代码,desktop/src/memory-space/layout.ts,38-44,OrbitRing,7,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定
+产品代码,desktop/src/memory-space/layout.ts,4-11,hash01,8,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 2 处同名引用（desktop/src/memory-space/layout.ts:71、desktop/src/memory-space/layout.ts:72），需人工核
+产品代码,desktop/src/memory-space/layout.ts,51-68,placeOnSphere,18,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 2 处同名引用（desktop/src/memory-space/layout.ts:35、desktop/src/memory-space/layout.ts:88），需人工核
+产品代码,desktop/src/memory-space/memoryUnwind.ts,1-1,MemoryUnwindKind,1,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/memoryUnwind.ts:7），需人工核
+产品代码,desktop/src/memory-space/motionCause.ts,4-13,MOTION_CAUSE_RANK,10,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/motionCause.ts:20），需人工核
+产品代码,desktop/src/memory-space/overviewMotion.ts,31-38,DeepReadonly,8,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/overviewMotion.ts:59），需人工核
+产品代码,desktop/src/memory-space/overviewMotion.ts,41-41,Insets,1,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 2 处同名引用（desktop/src/memory-space/overviewMotion.ts:73、desktop/src/memory-space/overviewMotion.ts:286），需人工核
+产品代码,desktop/src/memory-space/overviewMotion.ts,44-50,LiveNode,7,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 16 处同名引用（desktop/src/memory-space/overviewMotion.ts:67、desktop/src/memory-space/overviewMotion.ts:117），需人工核
+产品代码,desktop/src/memory-space/overviewMotion.ts,52-57,LiveEdge,6,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 4 处同名引用（desktop/src/memory-space/overviewMotion.ts:118、desktop/src/memory-space/overviewMotion.ts:129），需人工核
+产品代码,desktop/src/memory-space/overviewMotion.ts,59-59,ReadonlyOverviewDisclosurePlan,1,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/overviewMotion.ts:63），需人工核
+产品代码,desktop/src/memory-space/overviewPresentation.ts,25-33,TopicGroup,9,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 2 处同名引用（desktop/src/memory-space/overviewPresentation.ts:48、desktop/src/memory-space/overviewPresentation.ts:160），需人工核
+产品代码,desktop/src/memory-space/overviewState.ts,28-32,classifyEmpty,5,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/overviewState.ts:89），需人工核
+产品代码,desktop/src/memory-space/overviewState.ts,9-16,OverviewPhase,8,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/overviewState.ts:19），需人工核
+产品代码,desktop/src/memory-space/projectionController.ts,96-96,ProjectionController,1,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定
+产品代码,desktop/src/memory-space/readingContent.tsx,9-9,ReadingKind,1,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 2 处同名引用（desktop/src/memory-space/readingContent.tsx:17、desktop/src/memory-space/readingContent.tsx:29），需人工核
+产品代码,desktop/src/memory-space/readingDetails.ts,15-15,DetailsRecordKind,1,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/readingDetails.ts:19），需人工核
+产品代码,desktop/src/memory-space/readingDetails.ts,35-43,FactProvenanceRow,9,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 2 处同名引用（desktop/src/memory-space/readingDetails.ts:55、desktop/src/memory-space/readingDetails.ts:144），需人工核
+产品代码,desktop/src/memory-space/readingDetails.ts,419-427,topicAttributionFromTopics,9,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/readingDetails.ts:487），需人工核
+产品代码,desktop/src/memory-space/readingDetails.ts,498-507,HistoryVersion,10,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 2 处同名引用（desktop/src/memory-space/readingDetails.ts:436、desktop/src/memory-space/readingDetails.ts:517），需人工核
+产品代码,desktop/src/memory-space/readingDetails.ts,555-557,changeKindHuman,3,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 5 处同名引用（desktop/src/memory-space/ArchiveView.tsx:76、desktop/src/memory-space/MemorySpace.tsx:1758），需人工核
+产品代码,desktop/src/memory-space/readingDetails.ts,58-64,ExperienceProvenanceRow,7,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 2 处同名引用（desktop/src/memory-space/readingDetails.ts:78、desktop/src/memory-space/readingDetails.ts:196），需人工核
+产品代码,desktop/src/memory-space/readingDetails.ts,9-13,DetailsScope,5,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/readingDetails.ts:18），需人工核
+产品代码,desktop/src/memory-space/readingDetails.ts,98-98,DEEP_LINK_NOTICE,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 2 处同名引用（desktop/src/memory-space/readingDetails.ts:464、desktop/src/memory-space/readingDetails.ts:628），需人工核
+产品代码,desktop/src/memory-space/renderCapability.ts,139-139,FRAME_BUFFER_LIMIT,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/renderCapability.ts:157），需人工核
+产品代码,desktop/src/memory-space/renderCapability.ts,3-7,CapabilityReason,5,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 1 处同名引用（desktop/src/memory-space/renderCapability.ts:13），需人工核
+产品代码,desktop/src/workstation/ConnectionList.tsx,19-27,connectionLamp,9,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 1 处同名引用（desktop/src/workstation/ConnectionList.tsx:48），需人工核
+产品代码,desktop/src/workstation/ModelPicker.tsx,7-7,PICKER_CASCADE_CAP,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 1 处同名引用（desktop/src/workstation/ModelPicker.tsx:125），需人工核
+产品代码,desktop/src/workstation/ProviderMark.tsx,70-88,providerVendor,19,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 1 处同名引用（desktop/src/workstation/ProviderMark.tsx:91），需人工核
+产品代码,desktop/src/workstation/SystemMenu.tsx,9-14,MENU_SECTIONS,6,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 8 处同名引用（desktop/src/workstation/SystemMenu.tsx:38、desktop/src/workstation/SystemMenu.tsx:55），需人工核
+产品代码,desktop/src/workstation/menus.tsx,6-6,shortcut,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 10 处同名引用（desktop/src/memory-space/MemorySpace.tsx:753、desktop/src/memory-space/MemorySpace.tsx:754），需人工核
+产品代码,desktop/src/workstation/workstation.css,,is-bad,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/workstation/workstation.css,,is-checking,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/workstation/workstation.css,,is-key,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/workstation/workstation.css,,is-manual,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/workstation/workstation.css,,is-off,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/workstation/workstation.css,,nixie-lg,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/workstation/workstation.css,,nixie-md,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/workstation/workstation.css,,nixie-sm,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/workstation/workstation.css,,nixie-xl,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/workstation/workstation.css,,presence-connecting,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/workstation/workstation.css,,presence-offline,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/workstation/workstation.css,,presence-speaking,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/workstation/workstation.css,,presence-thinking,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/workstation/workstation.css,,ws2-check-failed,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/workstation/workstation.css,,ws2-check-ok,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/workstation/workstation.css,,ws2-dialog-input,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/workstation/workstation.css,,ws2-interrupt,0,css-literal,待定,CSS 类名字面搜不到；可能是拼出来的类名（误报），选择器行号未取
+产品代码,desktop/src/worldline-engine/engine/gl.ts,73-75,createProgram,3,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 0%；但非测试文件仍有 2 处同名引用（desktop/src/worldline-engine/engine/gl.ts:31、desktop/src/worldline-engine/engine/gl.ts:32），需人工核
+产品代码,desktop/src/worldline-engine/engine/glyphs.ts,10-10,GLYPH_PX,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 5 处同名引用（desktop/src/worldline-engine/engine/glyphs.ts:11、desktop/src/worldline-engine/engine/glyphs.ts:12），需人工核
+产品代码,desktop/src/worldline-engine/engine/glyphs.ts,11-11,CELL_W,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 3 处同名引用（desktop/src/worldline-engine/engine/glyphs.ts:80、desktop/src/worldline-engine/engine/glyphs.ts:123），需人工核
+产品代码,desktop/src/worldline-engine/engine/glyphs.ts,12-12,CELL_H,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 2 处同名引用（desktop/src/worldline-engine/engine/glyphs.ts:123、desktop/src/worldline-engine/engine/glyphs.ts:150），需人工核
+产品代码,desktop/src/worldline-engine/show/cable-keys.ts,7-7,CABLE_N,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖
+产品代码,desktop/src/worldline-engine/show/frame.ts,101-106,SmokeState,6,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 1 处同名引用（desktop/src/worldline-engine/show/frame.ts:206），需人工核
+产品代码,desktop/src/worldline-engine/show/frame.ts,108-111,GearState,4,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 1 处同名引用（desktop/src/worldline-engine/show/frame.ts:204），需人工核
+产品代码,desktop/src/worldline-engine/show/frame.ts,6-6,Bg,1,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 1 处同名引用（desktop/src/worldline-engine/show/frame.ts:199），需人工核
+产品代码,desktop/src/worldline-engine/show/frame.ts,62-73,SpaceState,12,knip-types+coverage,待定,knip 报未用导出（types）；导出覆盖率 无语句；类型或无运行时语句，覆盖率不能判定；但非测试文件仍有 1 处同名引用（desktop/src/worldline-engine/show/frame.ts:202），需人工核
+产品代码,desktop/src/worldline-engine/show/geom.ts,11-11,TUBE_HW,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 10 处同名引用（desktop/src/worldline-engine/shaders/readout.ts:66、desktop/src/worldline-engine/shaders/readout.ts:136），需人工核
+产品代码,desktop/src/worldline-engine/show/geom.ts,12-12,TUBE_Y0,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 1 处同名引用（desktop/src/worldline-engine/show/geom.ts:78），需人工核
+产品代码,desktop/src/worldline-engine/show/geom.ts,13-13,PCB_TOP,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 1 处同名引用（desktop/src/worldline-engine/show/geom.ts:79），需人工核
+产品代码,desktop/src/worldline-engine/show/geom.ts,14-14,SOCK_Y0,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 4 处同名引用（desktop/src/worldline-engine/shaders/readout.ts:72、desktop/src/worldline-engine/shaders/readout.ts:393），需人工核
+产品代码,desktop/src/worldline-engine/show/geom.ts,16-16,SOCK_Y1,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 7 处同名引用（desktop/src/worldline-engine/shaders/readout.ts:66、desktop/src/worldline-engine/shaders/readout.ts:72），需人工核
+产品代码,desktop/src/worldline-engine/show/geom.ts,18-18,SOCK_HW,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 5 处同名引用（desktop/src/worldline-engine/shaders/readout.ts:72、desktop/src/worldline-engine/shaders/readout.ts:137），需人工核
+产品代码,desktop/src/worldline-engine/show/geom.ts,19-19,GLASS_Y0,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 3 处同名引用（desktop/src/worldline-engine/shaders/worlds.ts:523、desktop/src/worldline-engine/shaders/worlds.ts:908），需人工核
+产品代码,desktop/src/worldline-engine/show/geom.ts,20-20,TUBE_YD,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 9 处同名引用（desktop/src/worldline-engine/shaders/readout.ts:222、desktop/src/worldline-engine/shaders/readout.ts:334），需人工核
+产品代码,desktop/src/worldline-engine/show/geom.ts,23-23,DOME_DY,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 3 处同名引用（desktop/src/worldline-engine/show/geom.ts:21、desktop/src/worldline-engine/show/geom.ts:97），需人工核
+产品代码,desktop/src/worldline-engine/show/geom.ts,24-24,DOME_B,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 5 处同名引用（desktop/src/worldline-engine/show/geom.ts:22、desktop/src/worldline-engine/show/geom.ts:96），需人工核
+产品代码,desktop/src/worldline-engine/show/geom.ts,25-25,DIGIT_CY,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 10 处同名引用（desktop/src/worldline-engine/shaders/readout.ts:157、desktop/src/worldline-engine/shaders/readout.ts:232），需人工核
+产品代码,desktop/src/worldline-engine/show/geom.ts,26-26,DIGIT_H,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 4 处同名引用（desktop/src/worldline-engine/shaders/readout.ts:93、desktop/src/worldline-engine/shaders/readout.ts:101），需人工核
+产品代码,desktop/src/worldline-engine/show/geom.ts,30-30,DIGIT_DX,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 5 处同名引用（desktop/src/worldline-engine/shaders/readout.ts:156、desktop/src/worldline-engine/shaders/readout.ts:157），需人工核
+产品代码,desktop/src/worldline-engine/show/geom.ts,32-32,PLINTH_C,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 12 处同名引用（desktop/src/worldline-engine/shaders/fx.ts:33、desktop/src/worldline-engine/shaders/fx.ts:49），需人工核
+产品代码,desktop/src/worldline-engine/show/geom.ts,33-33,PLINTH_H,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 14 处同名引用（desktop/src/worldline-engine/shaders/fx.ts:33、desktop/src/worldline-engine/shaders/fx.ts:49），需人工核
+产品代码,desktop/src/worldline-engine/show/geom.ts,34-34,PLINTH_R,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 3 处同名引用（desktop/src/worldline-engine/shaders/readout.ts:537、desktop/src/worldline-engine/shaders/readout.ts:562），需人工核
+产品代码,desktop/src/worldline-engine/show/geom.ts,37-37,STACK,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖
+产品代码,desktop/src/worldline-engine/show/geom.ts,40-40,SCALE_PIVOT,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 2 处同名引用（desktop/src/worldline-engine/show/geom.ts:46、desktop/src/worldline-engine/show/geom.ts:48），需人工核
+产品代码,desktop/src/worldline-engine/show/geom.ts,5-5,ANCHOR,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 7 处同名引用（backend/app/services/persona_bible.py:243、backend/app/services/persona_bible.py:265），需人工核
+产品代码,desktop/src/worldline-engine/show/geom.ts,6-6,RO_SCALE,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖
+产品代码,desktop/src/worldline-engine/show/geom.ts,8-8,TUBES,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 2 处同名引用（desktop/src/worldline-engine/show/geom.ts:43、desktop/src/worldline-engine/show/geom.ts:75），需人工核
+产品代码,desktop/src/worldline-engine/show/geom.ts,9-9,PITCH,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 25 处同名引用（desktop/src/components/login/probe.ts:11、desktop/src/components/login/probe.ts:19），需人工核
+产品代码,desktop/src/worldline-engine/show/math.ts,10-10,easeInCubic,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖
+产品代码,desktop/src/worldline-engine/show/math.ts,11-11,easeOutExpo,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 1 处同名引用（desktop/src/worldline-engine/shaders/common.ts:34），需人工核
+产品代码,desktop/src/worldline-engine/show/math.ts,12-12,easeInQuad,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖
+产品代码,desktop/src/worldline-engine/show/math.ts,13-13,easeOutQuad,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖
+产品代码,desktop/src/worldline-engine/show/timeline.ts,1109-1109,RM,1,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 7 处同名引用（desktop/src/worldline-engine/show/timeline.ts:1117、desktop/src/worldline-engine/show/timeline.ts:1119），需人工核
+产品代码,desktop/src/worldline-engine/show/timeline.ts,933-943,shotWait,11,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 1 处同名引用（desktop/src/worldline-engine/show/timeline.ts:1090），需人工核
+产品代码,desktop/src/worldline-engine/show/timeline.ts,945-975,shotFail,31,knip-exports+coverage,待定,knip 报未用导出（exports）；导出覆盖率 有覆盖；但非测试文件仍有 1 处同名引用（desktop/src/worldline-engine/show/timeline.ts:1091），需人工核
+待定（脚本）,backend/scripts/_smoke_tts_preflight.py,,,49,script-file+coverage,待定,TTS 预检，是否只给实跑用未核；1/1 个函数或类覆盖率为 0；是否只为旧版服务未核，由总调度定
+待定（脚本）,backend/scripts/build_memory_candidate.py,,,211,script-file+coverage,待定,记忆候选构建，用途未核；3/5 个函数或类覆盖率为 0；是否只为旧版服务未核，由总调度定
+待定（脚本）,backend/scripts/legacy_memory_migrate.py,,,99,script-file+coverage,待定,旧版记忆迁移工具，U 的数据可能仍要用，待定；0/3 个函数或类覆盖率为 0；是否只为旧版服务未核，由总调度定
+待定（脚本）,backend/scripts/load_sovits_weights.py,,,79,script-file+coverage,待定,TTS 权重加载，实跑还是产品未核；5/5 个函数或类覆盖率为 0；是否只为旧版服务未核，由总调度定
+待定（脚本）,backend/scripts/memory_candidate_runtime.py,,,1919,script-file+coverage,待定,运行时模块，是否被产品导入未核；35/70 个函数或类覆盖率为 0；是否只为旧版服务未核，由总调度定
+待定（脚本）,backend/scripts/purge_mistaken_demo_seed.py,,,178,script-file+coverage,待定,清理误加的 demo 数据，属开发维护还是评测未定；3/3 个函数或类覆盖率为 0；是否只为旧版服务未核，由总调度定
+待定（脚本）,backend/scripts/seed_memory_demo.py,,,298,script-file+coverage,待定,demo 数据种子，属开发日常还是评测未定；8/8 个函数或类覆盖率为 0；是否只为旧版服务未核，由总调度定
+旧版记忆,backend/app/services/memory.py,1060-1125,MemoryService._write_shared_fact_current,66,legacy-manual,待定,被 promote（旧版）和 upsert_shared_user_fact（app 内无调用）调用；未核 v11 是否共用
+旧版记忆,backend/app/services/memory.py,1127-1157,MemoryService.upsert_shared_user_fact,31,legacy-manual,待定,app 内无调用方；vulture 报；测试有引用；覆盖率待核
+旧版记忆,backend/app/services/memory.py,1159-1168,MemoryService._current_shared_fact_rows,10,legacy-manual,待定,调用方 ledger 与 select_core_facts（都是旧版读路径）；未核 v11 是否共用
+旧版记忆,backend/app/services/memory.py,175-180,EpisodicCandidate,6,legacy-manual,待定,数据模型；旧版抽取与 v11 是否共用未核
+旧版记忆,backend/app/services/memory.py,183-190,CoreFactCandidate,8,legacy-manual,待定,数据模型；旧版抽取与 v11 是否共用未核
+旧版记忆,backend/app/services/memory.py,193-277,HorizonFactCandidate,85,legacy-manual,待定,数据模型；旧版抽取与 v11 是否共用未核
+旧版记忆,backend/app/services/memory.py,2125-2154,MemoryService._fts_search,30,legacy-manual,待定,调用方 lexical_search（旧版）与其它两处；未核
+旧版记忆,backend/app/services/memory.py,2156-2161,MemoryService._try_index,6,legacy-manual,待定,索引相关；v11 可能共用；未核
+旧版记忆,backend/app/services/memory.py,2163-2182,MemoryService._index_sync,20,legacy-manual,待定,索引相关；v11 可能共用；未核
+旧版记忆,backend/app/services/memory.py,2184-2211,MemoryService._vector_search_sync,28,legacy-manual,待定,向量检索；未核 v11 是否共用
+旧版记忆,backend/app/services/memory.py,2213-2231,MemoryService._delete_vectors_sync,19,legacy-manual,待定,向量删除；未核 v11 是否共用
+旧版记忆,backend/app/services/memory.py,280-326,ExtractionResult,47,legacy-manual,待定,抽取结果模型；未核 v11 是否共用
+旧版记忆,backend/app/services/memory.py,450-455,reciprocal_rank_fusion,6,legacy-manual,待定,唯一 app 调用方 hybrid_search（app 内无调用）；测试有引用
+旧版记忆,backend/app/services/memory.py,970-1040,MemoryService._verify_shared_provenance,71,legacy-manual,待定,被 promote（旧版）和 upsert_shared_user_fact（app 内无调用）调用；未核 v11 是否共用
+测试,backend/tests/test_legacy_memory_live_migration.py,,,486,legacy-manual,待定,只按文件名判断；未读内容
+测试,backend/tests/test_prompt_snapshot_legacy_shadow.py,,,283,legacy-manual,待定,只按文件名判断（legacy 与 shadow）；未读内容，不能判定只测旧版
+评测/实验脚本,backend/scripts/_path_guards.py,,,59,script-file+coverage,待定,评测脚本共用的路径守卫；1/5 个函数或类覆盖率为 0；是否只为旧版服务未核，由总调度定
+评测/实验脚本,backend/scripts/legacy_core_facts_rehearsal.py,,,345,script-file+coverage,待定,迁移预演（rehearsal）；6/10 个函数或类覆盖率为 0；是否只为旧版服务未核，由总调度定
+评测/实验脚本,backend/scripts/memory_candidate_real_run.py,,,3736,script-file+coverage,待定,实跑（real_run）；35/123 个函数或类覆盖率为 0；是否只为旧版服务未核，由总调度定
+评测/实验脚本,backend/scripts/memory_recall_b5_real_run.py,,,1356,script-file+coverage,待定,实跑（real_run）；0/48 个函数或类覆盖率为 0；是否只为旧版服务未核，由总调度定
+评测/实验脚本,backend/scripts/memory_recall_b5c.py,,,296,script-file+coverage,待定,召回评测（按文件名判断）；0/9 个函数或类覆盖率为 0；是否只为旧版服务未核，由总调度定
+评测/实验脚本,backend/scripts/memory_recall_offline_run.py,,,467,script-file+coverage,待定,离线评测（offline_run）；5/9 个函数或类覆盖率为 0；是否只为旧版服务未核，由总调度定
+评测/实验脚本,backend/scripts/memory_supersede_probe.py,,,511,script-file+coverage,待定,探针（probe）；1/20 个函数或类覆盖率为 0；是否只为旧版服务未核，由总调度定
+评测/实验脚本,backend/scripts/persona_eval_run.py,,,939,script-file+coverage,待定,人格评测（eval_run）；0/39 个函数或类覆盖率为 0；是否只为旧版服务未核，由总调度定
+评测/实验脚本,desktop/src/dev-mock/status-preview.tsx,,,30,knip-file+coverage,待定,knip 报未用文件；覆盖率 0%；但非测试文件里有 1 处文件名引用（desktop/src/dev-mock/vite-plugin-mock.ts:92），knip 只看 import，需人工核

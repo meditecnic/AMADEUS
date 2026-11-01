@@ -1,0 +1,742 @@
+file,line,kind,symbol,detail
+backend/app/db.py,36,compat_comment,<module>,# v11: Memory observation–fact pipeline (additive tables; legacy core_facts retained).
+backend/app/db.py,70,getattr_default,get_data_root,frozen|外部
+backend/app/db.py,87,compat_comment,_resolve_path,# The legacy DB override must not bypass the source-run isolation guard.
+backend/app/db.py,89,compat_identifier,_resolve_path,legacy_override
+backend/app/db.py,90,compat_identifier,_resolve_path,legacy_override
+backend/app/db.py,91,compat_identifier,_resolve_path,legacy_override
+backend/app/db.py,111,broad_except,get_db,BaseException
+backend/app/db.py,115,getattr_default,get_db,_thread|外部
+backend/app/db.py,125,broad_except,get_db,BaseException
+backend/app/db.py,699,broad_except,_backfill_history_v2,Exception
+backend/app/db.py,759,broad_except,_backfill_history_v4,Exception
+backend/app/db.py,876,broad_except,_backfill_memory_v5,Exception
+backend/app/db.py,964,broad_except,_backfill_memory_v6,Exception
+backend/app/db.py,1007,broad_except,_migrate_v6_to_v7,Exception
+backend/app/db.py,1037,broad_except,_migrate_v7_to_v8,Exception
+backend/app/db.py,1065,broad_except,_migrate_v8_to_v9,Exception
+backend/app/db.py,1101,compat_identifier,_migrate_v9_to_v10,fallback_name
+backend/app/db.py,1113,compat_identifier,_migrate_v9_to_v10,fallback_name
+backend/app/db.py,1123,broad_except,_migrate_v9_to_v10,Exception
+backend/app/db.py,1232,broad_except,_migrate_v10_to_v11,Exception
+backend/app/db.py,1356,compat_identifier,_run_migration_locked,legacy
+backend/app/db.py,1357,compat_identifier,_run_migration_locked,legacy
+backend/app/db.py,1359,compat_identifier,_run_migration_locked,legacy
+backend/app/db.py,1384,broad_except,init_db,Exception
+backend/app/db.py,1413,unused_kwarg,list_provider_configurations,enabled_only
+backend/app/db.py,1475,compat_identifier,save_provider_configuration,fallback_name
+backend/app/db.py,1478,compat_identifier,save_provider_configuration,fallback_name
+backend/app/domain/segments.py,691,compat_comment,IncrementalJapaneseSegmenter._drain,# Do not let short merging undo the length fallback.
+backend/app/domain/segments.py,903,broad_except,SegmentPipeline.start,Exception
+backend/app/domain/segments.py,939,broad_except,SegmentPipeline.complete,Exception
+backend/app/domain/segments.py,997,broad_except,SegmentPipeline.cancel,Exception
+backend/app/domain/segments.py,1049,broad_except,SegmentPipeline._translate_safe,Exception
+backend/app/domain/segments.py,1067,getattr_default,SegmentPipeline._is_retryable_translation_error,status_code|本仓类属性
+backend/app/domain/segments.py,1089,broad_except,SegmentPipeline._synthesize_safe,Exception
+backend/app/domain/segments.py,1092,getattr_default,SegmentPipeline._synthesize_safe,code|本仓类属性
+backend/app/domain/segments.py,1093,getattr_default,SegmentPipeline._synthesize_safe,value|外部
+backend/app/domain/segments.py,1124,broad_except,SegmentPipeline._submit_text,Exception
+backend/app/domain/segments.py,1159,broad_except,SegmentPipeline._submit_audio,Exception
+backend/app/domain/subtitle_glossary_rewrite.py,120,broad_except,apply_subtitle_glossary_rewrites,Exception
+backend/app/domain/subtitle_glossary_rewrite.py,120,swallow,apply_subtitle_glossary_rewrites,吞异常（无重新抛出）
+backend/app/main.py,44,compat_identifier,lifespan,legacy_key
+backend/app/main.py,45,compat_identifier,lifespan,legacy_key
+backend/app/main.py,46,compat_identifier,lifespan,legacy_key
+backend/app/main.py,47,compat_identifier,lifespan,legacy_key
+backend/app/models.py,228,broad_except,invalidate_memory_summaries,BaseException
+backend/app/models.py,236,unused_kwarg,clear_session_data,include_memories
+backend/app/routers/chat_ws.py,127,compat_comment,<module>,# Fallback/recovery lines never count as a successful identity briefing.
+backend/app/routers/chat_ws.py,263,getattr_default,SessionState.enter_draft,default_identity_mode|本仓类属性
+backend/app/routers/chat_ws.py,300,unused_kwarg,SessionState.recent_messages,n
+backend/app/routers/chat_ws.py,468,getattr_default,_compression_outcome_is_current,conversation_id|本仓类属性
+backend/app/routers/chat_ws.py,551,getattr_default,compress_and_update_history,conversation_id|本仓类属性
+backend/app/routers/chat_ws.py,615,getattr_default,compress_and_update_history,conversation_id|本仓类属性
+backend/app/routers/chat_ws.py,628,broad_except,compress_and_update_history,Exception
+backend/app/routers/chat_ws.py,667,compat_comment,execute_tool_call,# deep): keep the historical fallback of searching the raw text.
+backend/app/routers/chat_ws.py,709,getattr_default,get_clean_text_stream,identity_mode|本仓类属性
+backend/app/routers/chat_ws.py,710,getattr_default,get_clean_text_stream,self_name|本仓类属性
+backend/app/routers/chat_ws.py,1002,compat_comment,get_clean_text_stream,# Collapse: bounded retry then safe fallback — never LanguageRenderer.
+backend/app/routers/chat_ws.py,1047,compat_identifier,get_clean_text_stream,fallback
+backend/app/routers/chat_ws.py,1048,compat_identifier,get_clean_text_stream,fallback_emotion
+backend/app/routers/chat_ws.py,1051,compat_identifier,get_clean_text_stream,fallback
+backend/app/routers/chat_ws.py,1052,compat_identifier,get_clean_text_stream,fallback_emotion
+backend/app/routers/chat_ws.py,1054,compat_identifier,get_clean_text_stream,fallback
+backend/app/routers/chat_ws.py,1054,compat_identifier,get_clean_text_stream,fallback_emotion
+backend/app/routers/chat_ws.py,1057,compat_identifier,get_clean_text_stream,returned_fallback
+backend/app/routers/chat_ws.py,1057,compat_identifier,get_clean_text_stream,fallback
+backend/app/routers/chat_ws.py,1059,compat_identifier,get_clean_text_stream,returned_fallback
+backend/app/routers/chat_ws.py,1059,compat_identifier,get_clean_text_stream,fallback
+backend/app/routers/chat_ws.py,1060,compat_identifier,get_clean_text_stream,returned_fallback
+backend/app/routers/chat_ws.py,1060,compat_identifier,get_clean_text_stream,fallback_emotion
+backend/app/routers/chat_ws.py,1245,broad_except,_render_foreign_speech_to_japanese,Exception
+backend/app/routers/chat_ws.py,1245,swallow,_render_foreign_speech_to_japanese,吞异常（无重新抛出）
+backend/app/routers/chat_ws.py,1399,broad_except,repair_turn_translation,Exception
+backend/app/routers/chat_ws.py,1399,swallow,repair_turn_translation,吞异常（无重新抛出）
+backend/app/routers/chat_ws.py,1433,getattr_default,_schedule_background_task,__qualname__|外部
+backend/app/routers/chat_ws.py,1466,broad_except,_persist_aborted_turn,Exception
+backend/app/routers/chat_ws.py,1466,swallow,_persist_aborted_turn,吞异常（无重新抛出）
+backend/app/routers/chat_ws.py,1511,getattr_default,processor_loop,default_identity_mode|本仓类属性
+backend/app/routers/chat_ws.py,1512,getattr_default,processor_loop,identity_mode|本仓类属性
+backend/app/routers/chat_ws.py,1545,getattr_default,processor_loop,identity_mode|本仓类属性
+backend/app/routers/chat_ws.py,1778,getattr_default,processor_loop,turn_injected_fact_ids|外部
+backend/app/routers/chat_ws.py,1790,getattr_default,processor_loop,adapter|本仓类属性
+backend/app/routers/chat_ws.py,1794,getattr_default,processor_loop,provider_id|本仓类属性
+backend/app/routers/chat_ws.py,1901,getattr_default,processor_loop,erasure_pending|本仓类属性
+backend/app/routers/chat_ws.py,1963,compat_comment,processor_loop,"# Persist detected emotion for next turn fallback, with decay to neutral"
+backend/app/routers/chat_ws.py,2036,compat_comment,processor_loop,"# body rejected without a published fallback, or empty model stream)."
+backend/app/routers/chat_ws.py,2068,broad_except,processor_loop,Exception
+backend/app/routers/chat_ws.py,2096,compat_comment,processor_loop,# MEMORY-V11: default legacy Quiet Ingest. Explicit shadow/v11
+backend/app/routers/chat_ws.py,2104,getattr_default,processor_loop._enqueue_memory_v11,provider_id|本仓类属性
+backend/app/routers/chat_ws.py,2105,getattr_default,processor_loop._enqueue_memory_v11,model_id|本仓类属性
+backend/app/routers/chat_ws.py,2110,getattr_default,processor_loop._enqueue_memory_v11,identity_mode|本仓类属性
+backend/app/routers/chat_ws.py,2115,broad_except,processor_loop._enqueue_memory_v11,Exception
+backend/app/routers/chat_ws.py,2115,swallow,processor_loop._enqueue_memory_v11,吞异常（无重新抛出）
+backend/app/routers/chat_ws.py,2150,getattr_default,processor_loop,identity_mode|本仓类属性
+backend/app/routers/chat_ws.py,2163,compat_comment,processor_loop,# the flag. Recovery/leak fallbacks never count; one-way.
+backend/app/routers/chat_ws.py,2287,broad_except,processor_loop,Exception
+backend/app/routers/chat_ws.py,2487,broad_except,_dispatch_tts_sentences,Exception
+backend/app/routers/chat_ws.py,2523,broad_except,_dispatch_streaming_voice_tts,Exception
+backend/app/routers/chat_ws.py,2543,broad_except,run_tts_pipeline,Exception
+backend/app/routers/chat_ws.py,2580,broad_except,writer_loop,Exception
+backend/app/routers/chat_ws.py,2597,broad_except,writer_loop,Exception
+backend/app/routers/chat_ws.py,2597,swallow,writer_loop,吞异常（无重新抛出）
+backend/app/routers/chat_ws.py,2637,broad_except,websocket_chat_endpoint,Exception
+backend/app/routers/chat_ws.py,2923,broad_except,websocket_chat_endpoint,Exception
+backend/app/routers/chat_ws.py,2941,broad_except,websocket_chat_endpoint,Exception
+backend/app/routers/chat_ws.py,2941,swallow,websocket_chat_endpoint,吞异常（无重新抛出）
+backend/app/routers/chat_ws.py,2995,broad_except,websocket_chat_endpoint,Exception
+backend/app/routers/chat_ws.py,3024,broad_except,websocket_chat_endpoint,Exception
+backend/app/routers/chat_ws.py,3085,compat_identifier,websocket_chat_endpoint,old_wl
+backend/app/routers/chat_ws.py,3086,compat_identifier,websocket_chat_endpoint,old_wl
+backend/app/routers/chat_ws.py,3226,broad_except,websocket_chat_endpoint,Exception
+backend/app/routers/chat_ws.py,3232,broad_except,websocket_chat_endpoint,Exception
+backend/app/routers/chat_ws.py,3232,swallow,websocket_chat_endpoint,吞异常（无重新抛出）
+backend/app/routers/conversations.py,33,getattr_default,_erasure_runtime,erasure_pending|本仓类属性
+backend/app/routers/providers.py,131,broad_except,_clear_runtime_surfaces,Exception
+backend/app/routers/providers.py,131,swallow,_clear_runtime_surfaces,吞异常（无重新抛出）
+backend/app/routers/providers.py,135,broad_except,_clear_runtime_surfaces,Exception
+backend/app/routers/providers.py,135,swallow,_clear_runtime_surfaces,吞异常（无重新抛出）
+backend/app/routers/providers.py,164,broad_except,_activate_custom_profile,Exception
+backend/app/routers/providers.py,173,broad_except,_activate_custom_profile,Exception
+backend/app/routers/providers.py,188,broad_except,_activate_custom_profile,Exception
+backend/app/routers/providers.py,197,broad_except,_activate_custom_profile,Exception
+backend/app/routers/providers.py,206,broad_except,_activate_custom_profile,Exception
+backend/app/routers/providers.py,206,swallow,_activate_custom_profile,吞异常（无重新抛出）
+backend/app/routers/providers.py,210,broad_except,_activate_custom_profile,Exception
+backend/app/routers/providers.py,210,swallow,_activate_custom_profile,吞异常（无重新抛出）
+backend/app/routers/providers.py,297,broad_except,create_custom_profile,Exception
+backend/app/routers/providers.py,355,compat_comment,update_custom_profile,"# Resolve previous values from DB first, then live registry only as fallback."
+backend/app/routers/providers.py,387,broad_except,update_custom_profile,Exception
+backend/app/routers/providers.py,413,compat_comment,delete_custom_profile,# Resolve defaults for stub insert when legacy custom has no DB row yet.
+backend/app/routers/providers.py,446,broad_except,delete_custom_profile,Exception
+backend/app/routers/providers.py,467,broad_except,delete_custom_profile,Exception
+backend/app/routers/providers.py,471,broad_except,delete_custom_profile,Exception
+backend/app/routers/providers.py,498,broad_except,update_custom_provider_configuration,Exception
+backend/app/routers/providers.py,561,getattr_default,_discover_models,list_models|本仓类属性
+backend/app/routers/providers.py,579,broad_except,_discover_models,Exception
+backend/app/routers/providers.py,673,broad_except,check_selected_model_chat,Exception
+backend/app/routers/system_api.py,177,compat_identifier,memory_status,legacy_session_id
+backend/app/routers/system_api.py,178,compat_identifier,memory_status,legacy_worldline
+backend/app/routers/system_api.py,180,compat_identifier,memory_status,legacy_worldline
+backend/app/routers/system_api.py,181,compat_identifier,memory_status,legacy_session_id
+backend/app/routers/system_api.py,296,compat_identifier,memory_facts_ledger,legacy_session_id
+backend/app/routers/system_api.py,297,compat_identifier,memory_facts_ledger,legacy_worldline
+backend/app/routers/system_api.py,299,compat_identifier,memory_facts_ledger,legacy_worldline
+backend/app/routers/system_api.py,302,compat_identifier,memory_facts_ledger,legacy_session_id
+backend/app/routers/system_api.py,589,broad_except,patch_memory_fact,Exception
+backend/app/routers/system_api.py,593,dup_raise,patch_memory_fact,同结构 if-raise 共 4 处
+backend/app/routers/system_api.py,598,dup_raise,patch_memory_fact,同结构 if-raise 共 4 处
+backend/app/routers/system_api.py,633,broad_except,patch_memory_fact,Exception
+backend/app/routers/system_api.py,691,broad_except,delete_memory_fact,Exception
+backend/app/routers/system_api.py,724,broad_except,memory_fact_details,Exception
+backend/app/routers/system_api.py,753,broad_except,patch_memory_fact_presentation,Exception
+backend/app/routers/system_api.py,757,dup_raise,patch_memory_fact_presentation,同结构 if-raise 共 4 处
+backend/app/routers/system_api.py,762,dup_raise,patch_memory_fact_presentation,同结构 if-raise 共 4 处
+backend/app/routers/system_api.py,799,broad_except,patch_memory_fact_presentation,Exception
+backend/app/routers/system_api.py,835,broad_except,memory_graph_projection,Exception
+backend/app/routers/system_api.py,862,broad_except,list_memory_topics,Exception
+backend/app/routers/system_api.py,891,broad_except,patch_memory_topic,Exception
+backend/app/routers/system_api.py,895,dup_raise,patch_memory_topic,同结构 if-raise 共 4 处
+backend/app/routers/system_api.py,900,dup_raise,patch_memory_topic,同结构 if-raise 共 4 处
+backend/app/routers/system_api.py,917,broad_except,patch_memory_topic,Exception
+backend/app/routers/system_api.py,961,broad_except,list_memory_experiences,Exception
+backend/app/routers/system_api.py,993,broad_except,memory_experience_details,Exception
+backend/app/routers/system_api.py,1027,broad_except,patch_memory_experience_presentation,Exception
+backend/app/routers/system_api.py,1031,dup_raise,patch_memory_experience_presentation,同结构 if-raise 共 4 处
+backend/app/routers/system_api.py,1036,dup_raise,patch_memory_experience_presentation,同结构 if-raise 共 4 处
+backend/app/routers/system_api.py,1055,broad_except,patch_memory_experience_presentation,Exception
+backend/app/routers/system_api.py,1089,broad_except,delete_memory_experience,Exception
+backend/app/routers/system_api.py,1121,broad_except,list_memory_observations,Exception
+backend/app/routers/system_api.py,1155,broad_except,ignore_memory_observation,Exception
+backend/app/routers/voice_ws.py,92,broad_except,websocket_voice_endpoint.commit,Exception
+backend/app/routers/voice_ws.py,104,getattr_default,websocket_voice_endpoint.commit,identity_mode|本仓类属性
+backend/app/security/local_transport.py,51,getattr_default,<module>,frozen|外部
+backend/app/security/prompt.py,54,compat_comment,<module>,# Legacy module constant = okabe default (backward compatible for importers / equality).
+backend/app/security/prompt.py,87,compat_comment,<module>,# Compatibility names now expose canonical Bible data instead of maintaining a
+backend/app/security/prompt.py,151,compat_comment,<module>,# Legacy constant = okabe default (existing deepseek / adapter imports).
+backend/app/services/conversation_erasure.py,167,broad_except,_erase_v11,BaseException
+backend/app/services/conversation_erasure.py,190,compat_identifier,_finish_erasure,legacy
+backend/app/services/conversation_erasure.py,193,compat_identifier,_finish_erasure,legacy
+backend/app/services/conversations.py,113,broad_except,ConversationService.create_and_select,Exception
+backend/app/services/conversations.py,116,broad_except,ConversationService.create_and_select,Exception
+backend/app/services/conversations.py,116,swallow,ConversationService.create_and_select,吞异常（无重新抛出）
+backend/app/services/conversations.py,369,broad_except,ConversationService.schedule_auto_title.finished,Exception
+backend/app/services/conversations.py,369,swallow,ConversationService.schedule_auto_title.finished,吞异常（无重新抛出）
+backend/app/services/credentials.py,205,getattr_default,_select_credential_store,frozen|外部
+backend/app/services/deepseek.py,84,compat_comment,DeepSeekService._load_anchor_clause,# Default okabe for legacy; chat path usually already has full Bible in system_prompt.
+backend/app/services/deepseek.py,87,unused_kwarg,DeepSeekService.get_anchored_system_prompt,base_prompt
+backend/app/services/deepseek.py,221,compat_identifier,DeepSeekService.compress_history,old_summary
+backend/app/services/deepseek.py,244,compat_identifier,DeepSeekService.compress_history,old_summary
+backend/app/services/deepseek.py,267,broad_except,DeepSeekService.compress_history,Exception
+backend/app/services/deepseek.py,267,swallow,DeepSeekService.compress_history,吞异常（无重新抛出）
+backend/app/services/deepseek.py,310,broad_except,DeepSeekService.translate_to_zh,Exception
+backend/app/services/diagnostics.py,174,compat_identifier,build_tts_terminal_event,fallback
+backend/app/services/diagnostics.py,185,compat_identifier,build_tts_terminal_event,fallback
+backend/app/services/diagnostics.py,187,compat_identifier,build_tts_terminal_event,fallback
+backend/app/services/diagnostics.py,208,compat_identifier,build_tts_terminal_event,fallback
+backend/app/services/diagnostics.py,924,compat_identifier,DiagnosticRuntime.__init__,_fallback_state
+backend/app/services/diagnostics.py,925,compat_identifier,DiagnosticRuntime.__init__,_fallback_failures
+backend/app/services/diagnostics.py,926,compat_identifier,DiagnosticRuntime.__init__,_fallback_last_failure_time
+backend/app/services/diagnostics.py,927,compat_identifier,DiagnosticRuntime.__init__,_fallback_last_error_category
+backend/app/services/diagnostics.py,929,compat_identifier,DiagnosticRuntime.__init__,mapping_fallbacks
+backend/app/services/diagnostics.py,933,compat_identifier,DiagnosticRuntime._degrade,_fallback_state
+backend/app/services/diagnostics.py,934,compat_identifier,DiagnosticRuntime._degrade,_fallback_failures
+backend/app/services/diagnostics.py,935,compat_identifier,DiagnosticRuntime._degrade,_fallback_last_failure_time
+backend/app/services/diagnostics.py,936,compat_identifier,DiagnosticRuntime._degrade,_fallback_last_error_category
+backend/app/services/diagnostics.py,942,compat_identifier,DiagnosticRuntime.start,_fallback_state
+backend/app/services/diagnostics.py,951,broad_except,DiagnosticRuntime.start,Exception
+backend/app/services/diagnostics.py,954,compat_identifier,DiagnosticRuntime.start,_fallback_state
+backend/app/services/diagnostics.py,956,broad_except,DiagnosticRuntime.start,Exception
+backend/app/services/diagnostics.py,961,compat_identifier,DiagnosticRuntime.start,_fallback_state
+backend/app/services/diagnostics.py,963,broad_except,DiagnosticRuntime.start,Exception
+backend/app/services/diagnostics.py,972,broad_except,DiagnosticRuntime.sweep_best_effort,Exception
+backend/app/services/diagnostics.py,975,broad_except,DiagnosticRuntime.sweep_best_effort,Exception
+backend/app/services/diagnostics.py,986,broad_except,DiagnosticRuntime.append_event,Exception
+backend/app/services/diagnostics.py,996,broad_except,DiagnosticRuntime.record_observer_failure,Exception
+backend/app/services/diagnostics.py,999,compat_identifier,DiagnosticRuntime.record_mapping_fallback,record_mapping_fallback
+backend/app/services/diagnostics.py,1000,compat_identifier,DiagnosticRuntime.record_mapping_fallback,mapping_fallbacks
+backend/app/services/diagnostics.py,1031,compat_identifier,DiagnosticRuntime.public_health,mapping_fallbacks
+backend/app/services/diagnostics.py,1036,broad_except,DiagnosticRuntime.public_health,Exception
+backend/app/services/diagnostics.py,1039,compat_identifier,DiagnosticRuntime.public_health,_fallback_state
+backend/app/services/diagnostics.py,1041,compat_identifier,DiagnosticRuntime.public_health,mapping_fallbacks
+backend/app/services/diagnostics.py,1042,compat_identifier,DiagnosticRuntime.public_health,_fallback_failures
+backend/app/services/diagnostics.py,1043,compat_identifier,DiagnosticRuntime.public_health,_fallback_last_failure_time
+backend/app/services/diagnostics.py,1044,compat_identifier,DiagnosticRuntime.public_health,_fallback_last_error_category
+backend/app/services/diagnostics.py,1054,compat_identifier,DiagnosticTTSObserver.__init__,fallback_count
+backend/app/services/diagnostics.py,1061,compat_identifier,DiagnosticTTSObserver.__call__,fallback
+backend/app/services/diagnostics.py,1069,compat_identifier,DiagnosticTTSObserver.__call__,fallback
+backend/app/services/diagnostics.py,1070,compat_identifier,DiagnosticTTSObserver.__call__,fallback_count
+backend/app/services/diagnostics.py,1071,compat_identifier,DiagnosticTTSObserver.__call__,record_mapping_fallback
+backend/app/services/diagnostics.py,1073,broad_except,DiagnosticTTSObserver.__call__,Exception
+backend/app/services/diagnostics.py,1083,broad_except,DiagnosticTTSObserver._consume_task,BaseException
+backend/app/services/diagnostics.py,1111,broad_except,DiagnosticTurnObserver.turn_started,Exception
+backend/app/services/diagnostics.py,1142,broad_except,DiagnosticTurnObserver.turn_terminal,Exception
+backend/app/services/diagnostics.py,1158,broad_except,DiagnosticTurnObserver.segment_committed,Exception
+backend/app/services/diagnostics.py,1184,broad_except,DiagnosticTurnObserver.delivery,Exception
+backend/app/services/llm_interface.py,89,compat_identifier,LLMInterface.compress_history,old_summary
+backend/app/services/memory.py,43,compat_comment,<module>,# Deprecated as a production write gate (AUTO-PROFILE universal path).
+backend/app/services/memory.py,44,compat_comment,<module>,# Kept for test/back-compat imports only; chat_ws no longer throttles on N.
+backend/app/services/memory.py,51,compat_comment,<module>,# Legacy keyword list — NOT used to gate core writes anymore.
+backend/app/services/memory.py,287,compat_comment,ExtractionResult,# Legacy dual-array shape (tests / old models); normalized into facts when facts empty.
+backend/app/services/memory.py,292,compat_identifier,ExtractionResult._legacy_arrays_to_facts,_legacy_arrays_to_facts
+backend/app/services/memory.py,345,broad_except,parse_extraction_payload,Exception
+backend/app/services/memory.py,345,swallow,parse_extraction_payload,吞异常（无重新抛出）
+backend/app/services/memory.py,355,broad_except,parse_extraction_payload,Exception
+backend/app/services/memory.py,356,compat_comment,parse_extraction_payload,# Last resort: drop facts and try legacy arrays only
+backend/app/services/memory.py,357,compat_identifier,parse_extraction_payload,data_legacy
+backend/app/services/memory.py,363,compat_identifier,parse_extraction_payload,data_legacy
+backend/app/services/memory.py,450,unused_kwarg,reciprocal_rank_fusion,k
+backend/app/services/memory.py,488,compat_identifier,EmbeddingAdapter.readiness,compatible
+backend/app/services/memory.py,489,compat_identifier,EmbeddingAdapter.readiness,compatible
+backend/app/services/memory.py,588,broad_except,MemoryService.upsert_core_fact,Exception
+backend/app/services/memory.py,635,broad_except,MemoryService.apply_extraction,Exception
+backend/app/services/memory.py,723,unused_kwarg,MemoryService.schedule_turn_extraction,turns_since_last_core
+backend/app/services/memory.py,735,compat_comment,MemoryService.schedule_turn_extraction,# unused (compat); not a write gate
+backend/app/services/memory.py,756,broad_except,MemoryService.schedule_turn_extraction,Exception
+backend/app/services/memory.py,756,swallow,MemoryService.schedule_turn_extraction,吞异常（无重新抛出）
+backend/app/services/memory.py,888,broad_except,MemoryService._extract_turn,Exception
+backend/app/services/memory.py,953,broad_except,MemoryService._extract_turn,Exception
+backend/app/services/memory.py,953,swallow,MemoryService._extract_turn,吞异常（无重新抛出）
+backend/app/services/memory.py,1046,compat_identifier,MemoryService._shared_row_matches,old_ids
+backend/app/services/memory.py,1057,compat_identifier,MemoryService._shared_row_matches,old_ids
+backend/app/services/memory.py,1121,broad_except,MemoryService._write_shared_fact_current,Exception
+backend/app/services/memory.py,1553,broad_except,MemoryService.reclassify_okabe_fact_to_self,Exception
+backend/app/services/memory.py,1606,broad_except,MemoryService.dismiss_okabe_fact,Exception
+backend/app/services/memory.py,1656,broad_except,MemoryService.dismiss_okabe_facts_bulk,Exception
+backend/app/services/memory.py,1749,broad_except,MemoryService.delete_local_self_fact,Exception
+backend/app/services/memory.py,1788,broad_except,MemoryService.delete_shared_fact,Exception
+backend/app/services/memory.py,1877,compat_identifier,MemoryService._reclassify_row_matches,old_ids
+backend/app/services/memory.py,1878,compat_identifier,MemoryService._reclassify_row_matches,old_ids
+backend/app/services/memory.py,1886,compat_identifier,MemoryService._reclassify_row_matches,old_ids
+backend/app/services/memory.py,1963,unused_kwarg,MemoryService.hybrid_search,top_k
+backend/app/services/memory.py,2002,unused_kwarg,MemoryService.lexical_search,top_k
+backend/app/services/memory_v11/candidate.py,309,unused_kwarg,_is_index_family_table,historical
+backend/app/services/memory_v11/candidate.py,315,unused_kwarg,_is_known_table,historical
+backend/app/services/memory_v11/candidate.py,601,broad_except,_freeze_jobs,Exception
+backend/app/services/memory_v11/candidate.py,619,broad_except,_clear_v11_content,Exception
+backend/app/services/memory_v11/candidate.py,654,compat_identifier,_transfer_donor_content,_LEGACY_IMPORTS_TABLE_DDL
+backend/app/services/memory_v11/candidate.py,655,compat_identifier,_transfer_donor_content,_LEGACY_IMPORTS_INDEX_DDL
+backend/app/services/memory_v11/candidate.py,667,broad_except,_transfer_donor_content,Exception
+backend/app/services/memory_v11/candidate.py,783,compat_comment,_validate_candidate,# Legacy FTS still usable end-to-end.
+backend/app/services/memory_v11/candidate.py,937,compat_identifier,build_memory_candidate,apply_legacy_core_facts
+backend/app/services/memory_v11/candidate.py,1080,broad_except,build_memory_candidate,Exception
+backend/app/services/memory_v11/contracts.py,23,compat_comment,<module>,# produces few atomic claims (legacy extraction already frames facts[] as 0..8);
+backend/app/services/memory_v11/experiences.py,89,dup_raise,_require_session_id,同结构 if-raise 共 6 处
+backend/app/services/memory_v11/experiences.py,215,dup_raise,experience_details,同结构 if-raise 共 3 处
+backend/app/services/memory_v11/experiences.py,232,dup_raise,experience_details,同结构 if-raise 共 3 处
+backend/app/services/memory_v11/experiences.py,323,dup_raise,delete_experience,同结构 if-raise 共 3 处
+backend/app/services/memory_v11/experiences.py,337,dup_raise,delete_experience,同结构 if-raise 共 3 处
+backend/app/services/memory_v11/experiences.py,395,broad_except,delete_experience,Exception
+backend/app/services/memory_v11/experiences.py,432,dup_raise,update_experience_presentation,同结构 if-raise 共 3 处
+backend/app/services/memory_v11/experiences.py,448,dup_raise,update_experience_presentation,同结构 if-raise 共 3 处
+backend/app/services/memory_v11/experiences.py,459,broad_except,update_experience_presentation,Exception
+backend/app/services/memory_v11/facts.py,39,dup_raise,_require_session_id,同结构 if-raise 共 6 处
+backend/app/services/memory_v11/facts.py,89,dup_raise,user_edit_fact,同结构 if-raise 共 3 处
+backend/app/services/memory_v11/facts.py,122,dup_raise,user_edit_fact,同结构 if-raise 共 3 处
+backend/app/services/memory_v11/facts.py,168,broad_except,user_edit_fact,Exception
+backend/app/services/memory_v11/facts.py,219,dup_raise,delete_fact,同结构 if-raise 共 3 处
+backend/app/services/memory_v11/facts.py,352,broad_except,delete_fact,Exception
+backend/app/services/memory_v11/facts.py,400,dup_raise,fact_details,同结构 if-raise 共 3 处
+backend/app/services/memory_v11/facts.py,568,broad_except,update_fact_presentation,Exception
+backend/app/services/memory_v11/indexing.py,75,getattr_default,prepare_passage_embedding,model_name|本仓类属性
+backend/app/services/memory_v11/indexing.py,76,getattr_default,prepare_passage_embedding,dimensions|本仓类属性
+backend/app/services/memory_v11/indexing.py,97,broad_except,prepare_passage_embedding,Exception
+backend/app/services/memory_v11/jobs.py,50,unused_kwarg,_iso,dt
+backend/app/services/memory_v11/jobs.py,118,broad_except,redact_user_text,Exception
+backend/app/services/memory_v11/jobs.py,118,swallow,redact_user_text,吞异常（无重新抛出）
+backend/app/services/memory_v11/jobs.py,241,broad_except,enqueue_memory_job,Exception
+backend/app/services/memory_v11/jobs.py,274,unused_kwarg,claim_memory_job,lease_seconds
+backend/app/services/memory_v11/jobs.py,320,broad_except,claim_memory_job,Exception
+backend/app/services/memory_v11/jobs.py,406,broad_except,_transition_owned,Exception
+backend/app/services/memory_v11/jobs.py,423,dup_raise,mark_memory_job_failed,同结构 if-raise 共 3 处
+backend/app/services/memory_v11/jobs.py,456,dup_raise,retry_memory_job,同结构 if-raise 共 3 处
+backend/app/services/memory_v11/jobs.py,498,broad_except,retry_memory_job,Exception
+backend/app/services/memory_v11/jobs.py,676,compat_identifier,_translate_completion,legacy
+backend/app/services/memory_v11/jobs.py,682,compat_identifier,_translate_completion,legacy
+backend/app/services/memory_v11/jobs.py,702,compat_comment,_translate_completion,# Unknown legacy refs must not silently disappear.
+backend/app/services/memory_v11/jobs.py,734,broad_except,default_memory_completion,Exception
+backend/app/services/memory_v11/jobs.py,794,broad_except,_deleted_source_suppressed,Exception
+backend/app/services/memory_v11/jobs.py,814,dup_raise,process_memory_job,同结构 if-raise 共 3 处
+backend/app/services/memory_v11/jobs.py,848,compat_comment,process_memory_job,# cursor (dedicated full-cursor receipt OR current-pipeline legacy
+backend/app/services/memory_v11/jobs.py,934,broad_except,process_memory_job,Exception
+backend/app/services/memory_v11/jobs.py,934,swallow,process_memory_job,吞异常（无重新抛出）
+backend/app/services/memory_v11/jobs.py,961,broad_except,process_memory_job,Exception
+backend/app/services/memory_v11/jobs.py,961,swallow,process_memory_job,吞异常（无重新抛出）
+backend/app/services/memory_v11/jobs.py,1050,broad_except,process_memory_job,Exception
+backend/app/services/memory_v11/jobs.py,1052,getattr_default,process_memory_job,code|本仓类属性
+backend/app/services/memory_v11/jobs.py,1099,broad_except,process_memory_job,Exception
+backend/app/services/memory_v11/jobs.py,1183,broad_except,_worker_loop,Exception
+backend/app/services/memory_v11/jobs.py,1183,swallow,_worker_loop,吞异常（无重新抛出）
+backend/app/services/memory_v11/migration.py,126,compat_comment,<module>,# Offline legacy core-fact migration rehearsal (explicit-path preview/apply).
+backend/app/services/memory_v11/migration.py,129,compat_comment,<module>,"# which legacy core_facts qualify, and an apply that imports the qualified"
+backend/app/services/memory_v11/migration.py,152,compat_identifier,<module>,_LEGACY_IMPORTS_TABLE_DDL
+backend/app/services/memory_v11/migration.py,166,compat_identifier,<module>,_LEGACY_IMPORTS_INDEX_DDL
+backend/app/services/memory_v11/migration.py,387,compat_identifier,_parse_legacy_source_ids,_parse_legacy_source_ids
+backend/app/services/memory_v11/migration.py,472,compat_identifier,_covering_requests,_parse_legacy_source_ids
+backend/app/services/memory_v11/migration.py,539,compat_identifier,_evaluate_fact_row,_parse_legacy_source_ids
+backend/app/services/memory_v11/migration.py,703,compat_identifier,evaluate_legacy_core_facts,evaluate_legacy_core_facts
+backend/app/services/memory_v11/migration.py,748,compat_identifier,build_legacy_core_facts_preview,build_legacy_core_facts_preview
+backend/app/services/memory_v11/migration.py,933,compat_identifier,_init_target_memory_db,_LEGACY_IMPORTS_TABLE_DDL
+backend/app/services/memory_v11/migration.py,934,compat_identifier,_init_target_memory_db,_LEGACY_IMPORTS_INDEX_DDL
+backend/app/services/memory_v11/migration.py,940,broad_except,_init_target_memory_db,Exception
+backend/app/services/memory_v11/migration.py,940,swallow,_init_target_memory_db,吞异常（无重新抛出）
+backend/app/services/memory_v11/migration.py,1031,compat_identifier,apply_legacy_core_facts,apply_legacy_core_facts
+backend/app/services/memory_v11/migration.py,1161,broad_except,apply_legacy_core_facts,Exception
+backend/app/services/memory_v11/migration.py,1164,broad_except,apply_legacy_core_facts,Exception
+backend/app/services/memory_v11/migration.py,1204,unused_kwarg,_read_live_view,memory_connections
+backend/app/services/memory_v11/migration.py,1397,compat_identifier,_import_live,_LEGACY_IMPORTS_TABLE_DDL
+backend/app/services/memory_v11/migration.py,1398,compat_identifier,_import_live,_LEGACY_IMPORTS_INDEX_DDL
+backend/app/services/memory_v11/migration.py,1453,compat_identifier,_import_live,create_stable_fact_from_legacy
+backend/app/services/memory_v11/migration.py,1464,broad_except,_import_live,BaseException
+backend/app/services/memory_v11/migration.py,1473,compat_identifier,import_legacy_core_facts,import_legacy_core_facts
+backend/app/services/memory_v11/migration.py,1575,broad_except,preview_consolidation,BaseException
+backend/app/services/memory_v11/migration.py,1625,broad_except,_finish_consolidation,BaseException
+backend/app/services/memory_v11/observations.py,23,dup_raise,_require_session_id,同结构 if-raise 共 6 处
+backend/app/services/memory_v11/observations.py,186,broad_except,ignore_observation,Exception
+backend/app/services/memory_v11/privacy.py,207,compat_comment,_secret_shaped,# Compatibility-only values were not accepted by the old ASCII gate.
+backend/app/services/memory_v11/privacy.py,270,compat_comment,_credential_value_end,"# Preserve any ASCII-compatible residual inside the ORIGINAL token,"
+backend/app/services/memory_v11/privacy.py,285,unused_kwarg,_credential_matches,category
+backend/app/services/memory_v11/privacy.py,348,compat_comment,_credential_matches,# ordinary CJK prose has no ASCII-compatible credential evidence.
+backend/app/services/memory_v11/privacy.py,369,compat_comment,_credential_matches,# A bare key has no cue left after replacement. Keep ASCII-compatible
+backend/app/services/memory_v11/projection.py,60,getattr_default,<module>,SQLITE_CANTOPEN|外部
+backend/app/services/memory_v11/projection.py,61,getattr_default,<module>,SQLITE_BUSY|外部
+backend/app/services/memory_v11/projection.py,62,getattr_default,<module>,SQLITE_LOCKED|外部
+backend/app/services/memory_v11/projection.py,63,getattr_default,<module>,SQLITE_IOERR|外部
+backend/app/services/memory_v11/projection.py,84,getattr_default,_is_unavailable_store_error,sqlite_errorcode|外部
+backend/app/services/memory_v11/projection.py,87,getattr_default,_is_unavailable_store_error,sqlite_errorname|外部
+backend/app/services/memory_v11/projection.py,317,broad_except,project_overview,BaseException
+backend/app/services/memory_v11/projection.py,367,broad_except,project_overview,BaseException
+backend/app/services/memory_v11/projection.py,370,broad_except,project_overview,Exception
+backend/app/services/memory_v11/projection.py,370,swallow,project_overview,吞异常（无重新抛出）
+backend/app/services/memory_v11/projection.py,375,broad_except,project_overview,BaseException
+backend/app/services/memory_v11/recall.py,22,compat_identifier,<module>,_compatible_vector
+backend/app/services/memory_v11/recall.py,137,unused_kwarg,json_depth,current
+backend/app/services/memory_v11/recall.py,352,compat_identifier,load_resident_fact_candidates,legacy_import
+backend/app/services/memory_v11/recall.py,353,compat_identifier,load_resident_fact_candidates,legacy_import
+backend/app/services/memory_v11/recall.py,365,compat_identifier,load_resident_fact_candidates,legacy_import
+backend/app/services/memory_v11/recall.py,493,broad_except,_recall_body,Exception
+backend/app/services/memory_v11/recall.py,493,swallow,_recall_body,吞异常（无重新抛出）
+backend/app/services/memory_v11/recall.py,519,compat_identifier,_recall_body,compatible
+backend/app/services/memory_v11/recall.py,527,broad_except,_recall_body,Exception
+backend/app/services/memory_v11/recall.py,534,compat_identifier,_recall_body,_compatible_vector
+backend/app/services/memory_v11/recall.py,541,compat_identifier,_recall_body,compatible
+backend/app/services/memory_v11/recall.py,542,compat_identifier,_recall_body,compatible
+backend/app/services/memory_v11/recall.py,547,broad_except,_recall_body,Exception
+backend/app/services/memory_v11/recall.py,596,compat_identifier,_recall_body,compatible
+backend/app/services/memory_v11/recall.py,839,broad_except,recall_stable_facts,Exception
+backend/app/services/memory_v11/recall.py,839,swallow,recall_stable_facts,吞异常（无重新抛出）
+backend/app/services/memory_v11/recall.py,882,unused_kwarg,serialize_ranked_result,status_if_empty
+backend/app/services/memory_v11/reconciler.py,431,dup_raise,_create_fact_on_conn,同结构 if-raise 共 3 处
+backend/app/services/memory_v11/reconciler.py,933,broad_except,apply_validated_memory_operations,Exception
+backend/app/services/memory_v11/reconciler.py,995,broad_except,apply_validated_memory_operations,Exception
+backend/app/services/memory_v11/reconciler.py,1073,broad_except,apply_validated_memory_operations,Exception
+backend/app/services/memory_v11/reconciler.py,1102,broad_except,apply_validated_memory_operations,Exception
+backend/app/services/memory_v11/repository.py,48,dup_raise,_require_session_id,同结构 if-raise 共 6 处
+backend/app/services/memory_v11/repository.py,76,dup_raise,create_stable_fact,同结构 if-raise 共 3 处
+backend/app/services/memory_v11/repository.py,154,broad_except,create_stable_fact,Exception
+backend/app/services/memory_v11/repository.py,227,broad_except,set_active_version,Exception
+backend/app/services/memory_v11/repository.py,519,compat_identifier,create_stable_fact_from_legacy,create_stable_fact_from_legacy
+backend/app/services/memory_v11/retrieval.py,34,compat_comment,<module>,# Pin priority contribution (same scale as legacy v11 pin boost).
+backend/app/services/memory_v11/retrieval.py,90,broad_except,_resolve_embedder,Exception
+backend/app/services/memory_v11/retrieval.py,90,swallow,_resolve_embedder,吞异常（无重新抛出）
+backend/app/services/memory_v11/retrieval.py,95,compat_identifier,_compatible_vector,_compatible_vector
+backend/app/services/memory_v11/retrieval.py,279,broad_except,select_stable_fact_candidates,Exception
+backend/app/services/memory_v11/retrieval.py,286,compat_comment,select_stable_fact_candidates,# Compatible vectors only: exact model_name match + dimensions + well-formed BLOB.
+backend/app/services/memory_v11/retrieval.py,288,compat_identifier,select_stable_fact_candidates,compatible
+backend/app/services/memory_v11/retrieval.py,291,compat_identifier,select_stable_fact_candidates,_compatible_vector
+backend/app/services/memory_v11/retrieval.py,298,compat_identifier,select_stable_fact_candidates,compatible
+backend/app/services/memory_v11/retrieval.py,301,compat_identifier,select_stable_fact_candidates,compatible
+backend/app/services/memory_v11/retrieval.py,304,broad_except,select_stable_fact_candidates,Exception
+backend/app/services/memory_v11/retrieval.py,322,compat_identifier,select_stable_fact_candidates,compatible
+backend/app/services/memory_v11/topics.py,143,dup_raise,list_topics,同结构 if-raise 共 6 处
+backend/app/services/memory_v11/topics.py,204,dup_raise,rename_topic,同结构 if-raise 共 6 处
+backend/app/services/memory_v11/topics.py,233,compat_identifier,rename_topic,old_norm
+backend/app/services/memory_v11/topics.py,236,compat_identifier,rename_topic,old_norm
+backend/app/services/memory_v11/topics.py,248,compat_identifier,rename_topic,old_norm
+backend/app/services/memory_v11/topics.py,292,compat_identifier,rename_topic,other_old_label
+backend/app/services/memory_v11/topics.py,297,compat_identifier,rename_topic,old_norm
+backend/app/services/memory_v11/topics.py,300,compat_identifier,rename_topic,other_old_label
+backend/app/services/memory_v11/topics.py,305,compat_identifier,rename_topic,other_old_alias
+backend/app/services/memory_v11/topics.py,310,compat_identifier,rename_topic,old_norm
+backend/app/services/memory_v11/topics.py,313,compat_identifier,rename_topic,other_old_alias
+backend/app/services/memory_v11/topics.py,328,compat_identifier,rename_topic,old_norm
+backend/app/services/memory_v11/topics.py,331,broad_except,rename_topic,Exception
+backend/app/services/model_catalog.py,28,compat_identifier,<module>,_COMPATIBILITY_SCOPES
+backend/app/services/model_catalog.py,82,compat_identifier,CatalogModel,compatibility_of
+backend/app/services/model_catalog.py,83,compat_identifier,CatalogModel,compatibility_scope
+backend/app/services/model_catalog.py,165,compat_identifier,ModelCatalog._validate_and_index,compatibility_of
+backend/app/services/model_catalog.py,167,compat_identifier,ModelCatalog._validate_and_index,compatibility_of
+backend/app/services/model_catalog.py,275,compat_identifier,ModelCatalog._parse_model,compatibility_of
+backend/app/services/model_catalog.py,276,compat_identifier,ModelCatalog._parse_model,compatibility_scope
+backend/app/services/model_catalog.py,277,compat_identifier,ModelCatalog._parse_model,compatibility_of
+backend/app/services/model_catalog.py,277,compat_identifier,ModelCatalog._parse_model,compatibility_scope
+backend/app/services/model_catalog.py,281,compat_identifier,ModelCatalog._parse_model,compatibility_of
+backend/app/services/model_catalog.py,282,compat_identifier,ModelCatalog._parse_model,compatibility_of
+backend/app/services/model_catalog.py,283,compat_identifier,ModelCatalog._parse_model,compatibility_scope
+backend/app/services/model_catalog.py,283,compat_identifier,ModelCatalog._parse_model,_COMPATIBILITY_SCOPES
+backend/app/services/model_catalog.py,285,compat_identifier,ModelCatalog._parse_model,compatibility_of
+backend/app/services/model_catalog.py,286,compat_identifier,ModelCatalog._parse_model,compatibility_scope
+backend/app/services/model_catalog.py,305,compat_identifier,ModelCatalog._parse_model,compatibility_of
+backend/app/services/model_catalog.py,306,compat_identifier,ModelCatalog._parse_model,compatibility_scope
+backend/app/services/model_catalog.py,339,compat_identifier,ModelCatalog._live_positive_int,fallback
+backend/app/services/model_catalog.py,348,compat_identifier,ModelCatalog._live_positive_int,fallback
+backend/app/services/model_catalog.py,386,compat_identifier,ModelCatalog._public_row,compatibility_of
+backend/app/services/model_catalog.py,387,compat_identifier,ModelCatalog._public_row,compatibility_scope
+backend/app/services/model_catalog.py,405,compat_identifier,ModelCatalog._public_row,compatibility_of
+backend/app/services/model_catalog.py,406,compat_identifier,ModelCatalog._public_row,compatibility_scope
+backend/app/services/model_catalog.py,439,compat_identifier,ModelCatalog._public_known,compatibility_of
+backend/app/services/model_catalog.py,439,compat_identifier,ModelCatalog._public_known,compatibility_of
+backend/app/services/model_catalog.py,440,compat_identifier,ModelCatalog._public_known,compatibility_scope
+backend/app/services/model_catalog.py,440,compat_identifier,ModelCatalog._public_known,compatibility_scope
+backend/app/services/model_catalog.py,505,unused_kwarg,ModelCatalog.reconcile,discovered_metadata
+backend/app/services/prompt_compiler.py,98,compat_comment,<module>,# GATE7A-NAT usage contract for CORE FACTS. Legacy/shadow render it verbatim;
+backend/app/services/prompt_compiler.py,314,compat_comment,PromptInputs,# Q20-A / Q21: from conversation record only; default okabe for legacy callers.
+backend/app/services/prompt_compiler.py,321,compat_comment,PromptInputs,# possibly empty) and the optional per-turn supplement. None = legacy.
+backend/app/services/prompt_compiler.py,352,unused_kwarg,PromptCompiler.__init__,token_counter
+backend/app/services/prompt_compiler.py,478,compat_comment,PromptCompiler.compile_with_report,# examples are never removed. Web evidence and history keep the legacy
+backend/app/services/prompt_compiler.py,710,getattr_default,_session_identity_mode,identity_mode|本仓类属性
+backend/app/services/prompt_compiler.py,715,getattr_default,_session_self_name,self_name|本仓类属性
+backend/app/services/prompt_compiler.py,775,broad_except,_select_v11_prompt_memories,Exception
+backend/app/services/prompt_compiler.py,775,swallow,_select_v11_prompt_memories,吞异常（无重新抛出）
+backend/app/services/prompt_compiler.py,777,compat_comment,_select_v11_prompt_memories,# v11 never degrades to legacy episodic retrieval.
+backend/app/services/prompt_compiler.py,795,broad_except,_select_v11_resident_profile,Exception
+backend/app/services/prompt_compiler.py,796,compat_comment,_select_v11_resident_profile,# Fail-soft: no CORE FACTS this turn; never fall back to legacy.
+backend/app/services/prompt_compiler.py,854,broad_except,_select_v11_memory_supplement,Exception
+backend/app/services/prompt_compiler.py,854,swallow,_select_v11_memory_supplement,吞异常（无重新抛出）
+backend/app/services/prompt_compiler.py,899,compat_comment,compile_for_session,# legacy + shadow keep Quiet Ingest retrieval so shadow writes never leak.
+backend/app/services/prompt_compiler.py,953,getattr_default,compile_for_session,identity_acknowledged|本仓类属性
+backend/app/services/provider_adapters.py,24,compat_identifier,OpenAICompatibleAdapter,OpenAICompatibleAdapter
+backend/app/services/provider_adapters.py,86,compat_comment,OpenAICompatibleAdapter.get_chat_stream,# the user turn in place; other compatible backends may hoist or
+backend/app/services/provider_adapters.py,164,dup_raise,OpenAICompatibleAdapter._complete_text,同结构 if-raise 共 6 处
+backend/app/services/provider_adapters.py,210,compat_identifier,OpenAICompatibleAdapter.compress_history,old_summary
+backend/app/services/provider_adapters.py,219,compat_identifier,OpenAICompatibleAdapter.compress_history,old_summary
+backend/app/services/provider_adapters.py,242,dup_raise,OpenAICompatibleAdapter.list_models,同结构 if-raise 共 6 处
+backend/app/services/provider_adapters.py,260,compat_identifier,_compression_messages,old_summary
+backend/app/services/provider_adapters.py,267,compat_identifier,_compression_messages,old_summary
+backend/app/services/provider_adapters.py,478,dup_raise,OpenAIResponsesAdapter._complete_text,同结构 if-raise 共 6 处
+backend/app/services/provider_adapters.py,509,compat_identifier,OpenAIResponsesAdapter.compress_history,old_summary
+backend/app/services/provider_adapters.py,514,compat_identifier,OpenAIResponsesAdapter.compress_history,old_summary
+backend/app/services/provider_adapters.py,528,dup_raise,OpenAIResponsesAdapter.list_models,同结构 if-raise 共 6 处
+backend/app/services/provider_adapters.py,692,dup_raise,GeminiAdapter._complete_text,同结构 if-raise 共 6 处
+backend/app/services/provider_adapters.py,714,compat_identifier,GeminiAdapter.compress_history,old_summary
+backend/app/services/provider_adapters.py,719,compat_identifier,GeminiAdapter.compress_history,old_summary
+backend/app/services/provider_adapters.py,733,dup_raise,GeminiAdapter.list_models,同结构 if-raise 共 6 处
+backend/app/services/provider_registry.py,105,unused_kwarg,ProviderModelCache.__init__,ttl_seconds
+backend/app/services/provider_runtime.py,14,compat_identifier,<module>,OpenAICompatibleAdapter
+backend/app/services/provider_runtime.py,61,compat_identifier,_compatible_capabilities,_compatible_capabilities
+backend/app/services/provider_runtime.py,120,compat_identifier,_register_compatible,_register_compatible
+backend/app/services/provider_runtime.py,130,compat_identifier,_register_compatible,OpenAICompatibleAdapter
+backend/app/services/provider_runtime.py,143,compat_identifier,_register_compatible,_compatible_capabilities
+backend/app/services/provider_runtime.py,153,compat_identifier,<module>,_register_compatible
+backend/app/services/provider_runtime.py,160,compat_identifier,<module>,_register_compatible
+backend/app/services/provider_runtime.py,230,compat_identifier,configure_custom_provider,OpenAICompatibleAdapter
+backend/app/services/provider_runtime.py,241,compat_identifier,configure_custom_provider,_compatible_capabilities
+backend/app/services/provider_runtime.py,303,compat_comment,restore_custom_provider_configuration,# Compatibility: only when no persisted `custom` row exists at all.
+backend/app/services/search.py,17,compat_comment,<module>,# Legacy sync web_search() helper only; chat path never uses DDG.
+backend/app/services/search.py,19,compat_comment,<module>,# pragma: no cover - compatibility for an old install
+backend/app/services/search.py,30,compat_comment,<module>,# Legacy single-key id remains the Tavily slot so existing installs keep working.
+backend/app/services/search.py,198,compat_comment,SearchService.settings_snapshot,# Back-compat fields for older desktop clients.
+backend/app/services/search.py,267,broad_except,SearchService.search,Exception
+backend/app/services/search.py,314,compat_comment,SearchService,# Backward-compatible name used by older tests.
+backend/app/services/search.py,445,compat_identifier,_legacy_weather,_legacy_weather
+backend/app/services/search.py,471,broad_except,_legacy_weather,Exception
+backend/app/services/search.py,471,swallow,_legacy_weather,吞异常（无重新抛出）
+backend/app/services/search.py,479,compat_identifier,_legacy_weather,_legacy_ddg
+backend/app/services/search.py,482,compat_identifier,_legacy_ddg,_legacy_ddg
+backend/app/services/search.py,492,broad_except,_legacy_ddg,Exception
+backend/app/services/search.py,492,swallow,_legacy_ddg,吞异常（无重新抛出）
+backend/app/services/search.py,493,compat_comment,_legacy_ddg,# Broad on purpose: legacy helper contract returns an error string
+backend/app/services/search.py,505,compat_identifier,web_search,_legacy_weather
+backend/app/services/search.py,506,compat_identifier,web_search,_legacy_ddg
+backend/app/services/session_manager.py,17,getattr_default,cancel_inflight,active_task|本仓类属性
+backend/app/services/session_manager.py,22,getattr_default,cancel_inflight,active_streams|本仓类属性
+backend/app/services/session_manager.py,24,getattr_default,cancel_inflight,aclose|外部
+backend/app/services/session_manager.py,28,broad_except,cancel_inflight,Exception
+backend/app/services/session_manager.py,28,swallow,cancel_inflight,吞异常（无重新抛出）
+backend/app/services/session_manager.py,36,getattr_default,cancel_inflight,active_streams|本仓类属性
+backend/app/services/session_manager.py,59,getattr_default,turn_injected_fact_ids,turn_injected_fact_ids|外部
+backend/app/services/session_manager.py,73,getattr_default,clear_working_summaries,conversation_id|本仓类属性
+backend/app/services/session_manager.py,86,compat_identifier,SessionCoordinator.acquire_lease,old_connections
+backend/app/services/session_manager.py,92,compat_identifier,SessionCoordinator.acquire_lease,old_connections
+backend/app/services/session_manager.py,94,compat_identifier,SessionCoordinator.acquire_lease,old_connections
+backend/app/services/session_manager.py,97,compat_comment,SessionCoordinator.acquire_lease,# compatibility with simple test doubles
+backend/app/services/session_manager.py,99,broad_except,SessionCoordinator.acquire_lease,Exception
+backend/app/services/session_manager.py,99,swallow,SessionCoordinator.acquire_lease,吞异常（无重新抛出）
+backend/app/services/session_manager.py,146,getattr_default,SessionCoordinator.switch,conversation_id|本仓类属性
+backend/app/services/session_manager.py,147,getattr_default,SessionCoordinator.switch,conversation_mode|本仓类属性
+backend/app/services/session_manager.py,149,getattr_default,SessionCoordinator.switch,memory_summary|本仓类属性
+backend/app/services/session_manager.py,150,getattr_default,SessionCoordinator.switch,provider_id|本仓类属性
+backend/app/services/session_manager.py,151,getattr_default,SessionCoordinator.switch,model|本仓类属性
+backend/app/services/session_manager.py,152,getattr_default,SessionCoordinator.switch,api_key|本仓类属性
+backend/app/services/session_manager.py,153,getattr_default,SessionCoordinator.switch,identity_mode|本仓类属性
+backend/app/services/session_manager.py,154,getattr_default,SessionCoordinator.switch,last_assistant_emotion|本仓类属性
+backend/app/services/session_manager.py,155,getattr_default,SessionCoordinator.switch,consecutive_no_emo_tags|本仓类属性
+backend/app/services/session_manager.py,158,getattr_default,SessionCoordinator.switch,revision|本仓类属性
+backend/app/services/session_manager.py,158,getattr_default,SessionCoordinator.switch,current_epoch|本仓类属性
+backend/app/services/session_manager.py,170,broad_except,SessionCoordinator.switch,Exception
+backend/app/services/session_manager.py,181,broad_except,SessionCoordinator.switch,Exception
+backend/app/services/session_manager.py,181,swallow,SessionCoordinator.switch,吞异常（无重新抛出）
+backend/app/services/soul_engine.py,88,unused_kwarg,SoulEngine.__init__,characters_dir
+backend/app/services/soul_engine.py,229,broad_except,SoulEngine.readiness,Exception
+backend/app/services/soul_engine.py,229,swallow,SoulEngine.readiness,吞异常（无重新抛出）
+backend/app/services/speech.py,56,unused_kwarg,SpeechService.pcm_has_speech,threshold
+backend/app/services/speech.py,64,unused_kwarg,SpeechService.has_speech,threshold
+backend/app/services/speech.py,158,getattr_default,SpeechService._transcribe_sync,emotion|本仓类属性
+backend/app/services/tts_queue.py,116,unused_kwarg,_peak_limit_wav,threshold
+backend/app/services/tts_queue.py,116,unused_kwarg,_peak_limit_wav,target_peak
+backend/app/services/tts_queue.py,152,broad_except,_peak_limit_wav,Exception
+backend/app/services/tts_queue.py,152,swallow,_peak_limit_wav,吞异常（无重新抛出）
+backend/app/services/tts_queue.py,163,compat_comment,TTSQueueManager.__init__,# Kept for backward compatibility
+backend/app/services/tts_queue.py,229,getattr_default,TTSQueueManager._async_tts_call,text|本仓类属性
+backend/app/services/tts_queue.py,306,broad_except,TTSQueueManager.synthesize_async,Exception
+backend/app/services/tts_queue.py,407,broad_except,TTSQueueManager._ordered_dispatch,Exception
+backend/app/services/tts_queue.py,407,swallow,TTSQueueManager._ordered_dispatch,吞异常（无重新抛出）
+backend/app/services/tts_queue.py,453,broad_except,TTSQueueManager._synthesize_worker,Exception
+backend/app/services/tts_sidecar.py,66,broad_except,SidecarSupervisor._load_configured_weights,Exception
+backend/app/services/tts_sidecar.py,66,swallow,SidecarSupervisor._load_configured_weights,吞异常（无重新抛出）
+backend/app/services/tts_sidecar.py,88,compat_identifier,SidecarSupervisor._ensure_available,_compatible
+backend/app/services/tts_sidecar.py,119,compat_identifier,SidecarSupervisor._ensure_available,_compatible
+backend/app/services/tts_sidecar.py,133,compat_identifier,SidecarSupervisor._compatible,_compatible
+backend/app/services/tts_sidecar.py,139,broad_except,SidecarSupervisor._compatible,Exception
+backend/app/services/tts_sidecar.py,139,swallow,SidecarSupervisor._compatible,吞异常（无重新抛出）
+backend/app/services/tts_sidecar.py,149,broad_except,SidecarSupervisor._occupied,Exception
+backend/app/services/tts_sidecar.py,149,swallow,SidecarSupervisor._occupied,吞异常（无重新抛出）
+backend/app/services/tts_sidecar.py,159,compat_identifier,SidecarSupervisor.health,_compatible
+backend/app/services/turn_events.py,119,unused_kwarg,merge_tool_calls,assembler
+backend/app/services/turn_tool_orchestrator.py,98,compat_identifier,<module>,TOOL_COMPAT
+backend/app/services/turn_tool_orchestrator.py,107,getattr_default,snapshot_from_session,worldline|本仓类属性
+backend/app/services/turn_tool_orchestrator.py,108,getattr_default,snapshot_from_session,conversation_id|本仓类属性
+backend/app/services/turn_tool_orchestrator.py,109,getattr_default,snapshot_from_session,identity_mode|本仓类属性
+backend/app/services/turn_tool_orchestrator.py,110,getattr_default,snapshot_from_session,revision|本仓类属性
+backend/app/services/turn_tool_orchestrator.py,111,getattr_default,snapshot_from_session,content_epoch|本仓类属性
+backend/app/services/turn_tool_orchestrator.py,112,getattr_default,snapshot_from_session,provider_id|本仓类属性
+backend/app/services/turn_tool_orchestrator.py,112,getattr_default,snapshot_from_session,provider_id|本仓类属性
+backend/app/services/turn_tool_orchestrator.py,113,getattr_default,snapshot_from_session,model_id|本仓类属性
+backend/app/services/turn_tool_orchestrator.py,113,getattr_default,snapshot_from_session,model|本仓类属性
+backend/app/services/turn_tool_orchestrator.py,135,compat_identifier,plan_first_round_tools,TOOL_COMPAT
+backend/app/services/turn_tool_orchestrator.py,147,getattr_default,provider_tool_capable,adapter|本仓类属性
+backend/app/services/turn_tool_orchestrator.py,151,getattr_default,provider_tool_capable,provider_id|本仓类属性
+backend/app/services/turn_tool_orchestrator.py,261,getattr_default,collect_recall_payloads,args|外部
+backend/app/services/turn_tool_orchestrator.py,277,getattr_default,refresh_candidates_for_send,erasure_pending|本仓类属性
+backend/app/services/turn_tool_orchestrator.py,323,getattr_default,execute_recall,erasure_pending|本仓类属性
+backend/app/services/turn_tool_orchestrator.py,362,getattr_default,execute_recall,erasure_pending|本仓类属性
+backend/app/services/turn_tool_orchestrator.py,445,compat_identifier,prepare_second_round_payload,compatible
+backend/app/services/turn_tool_orchestrator.py,481,compat_identifier,prepare_second_round_payload,compatible
+backend/scripts/_path_guards.py,28,compat_comment,live_data_roots,# app.db.get_data_root() fallback when APPDATA is absent.
+backend/scripts/_path_guards.py,46,unused_kwarg,containing_live_root,roots
+backend/scripts/build_memory_candidate.py,186,unused_kwarg,main,argv
+backend/scripts/legacy_core_facts_rehearsal.py,259,compat_identifier,_run_preview,build_legacy_core_facts_preview
+backend/scripts/legacy_core_facts_rehearsal.py,261,compat_identifier,_run_preview,build_legacy_core_facts_preview
+backend/scripts/legacy_core_facts_rehearsal.py,305,compat_identifier,_run_apply,apply_legacy_core_facts
+backend/scripts/legacy_core_facts_rehearsal.py,316,compat_identifier,_run_apply,apply_legacy_core_facts
+backend/scripts/legacy_core_facts_rehearsal.py,324,unused_kwarg,main,argv
+backend/scripts/legacy_memory_migrate.py,66,unused_kwarg,main,argv
+backend/scripts/legacy_memory_migrate.py,92,broad_except,main,Exception
+backend/scripts/legacy_memory_migrate.py,92,swallow,main,吞异常（无重新抛出）
+backend/scripts/legacy_memory_migrate.py,94,getattr_default,main,code|本仓类属性
+backend/scripts/legacy_memory_migrate.py,98,dup_raise,<module>,同结构 if-raise 共 6 处
+backend/scripts/load_sovits_weights.py,41,compat_identifier,wait_until_compatible,wait_until_compatible
+backend/scripts/load_sovits_weights.py,50,broad_except,wait_until_compatible,Exception
+backend/scripts/load_sovits_weights.py,70,compat_identifier,main,wait_until_compatible
+backend/scripts/memory_candidate_real_run.py,278,compat_identifier,_reject_incompatible_budget,_reject_incompatible_budget
+backend/scripts/memory_candidate_real_run.py,352,broad_except,_live_run_backend_labels,Exception
+backend/scripts/memory_candidate_real_run.py,476,compat_identifier,HttpBudget._from_file_unlocked,_reject_incompatible_budget
+backend/scripts/memory_candidate_real_run.py,538,compat_identifier,HttpBudget._reload_unlocked,_reject_incompatible_budget
+backend/scripts/memory_candidate_real_run.py,760,unused_kwarg,load_credential_from_env,environ
+backend/scripts/memory_candidate_real_run.py,809,getattr_default,_request_payload,content|本仓类属性
+backend/scripts/memory_candidate_real_run.py,1212,broad_except,_UsageTrackingResponse.aiter_lines,Exception
+backend/scripts/memory_candidate_real_run.py,1223,broad_except,_UsageTrackingResponse.iter_lines,Exception
+backend/scripts/memory_candidate_real_run.py,1339,getattr_default,install_allowlisted_httpx._reject_redirect,status_code|本仓类属性
+backend/scripts/memory_candidate_real_run.py,1342,getattr_default,install_allowlisted_httpx._reject_redirect,headers|外部
+backend/scripts/memory_candidate_real_run.py,1397,broad_except,install_allowlisted_httpx.guarded_async_send,Exception
+backend/scripts/memory_candidate_real_run.py,1406,broad_except,install_allowlisted_httpx.guarded_async_send,Exception
+backend/scripts/memory_candidate_real_run.py,1428,broad_except,install_allowlisted_httpx.guarded_sync_send,Exception
+backend/scripts/memory_candidate_real_run.py,1437,broad_except,install_allowlisted_httpx.guarded_sync_send,Exception
+backend/scripts/memory_candidate_real_run.py,1540,getattr_default,cmd_print_plan,output|外部
+backend/scripts/memory_candidate_real_run.py,1607,dup_raise,cmd_budget_probe,同结构 if-raise 共 6 处
+backend/scripts/memory_candidate_real_run.py,1824,dup_raise,cmd_money_probe,同结构 if-raise 共 6 处
+backend/scripts/memory_candidate_real_run.py,1853,broad_except,_read_windows_deepseek_credential,Exception
+backend/scripts/memory_candidate_real_run.py,1853,swallow,_read_windows_deepseek_credential,吞异常（无重新抛出）
+backend/scripts/memory_candidate_real_run.py,1873,getattr_default,_currency_cap_micros_from_args,currency_cap_cny|外部
+backend/scripts/memory_candidate_real_run.py,1885,getattr_default,cmd_local_serve,transport|外部
+backend/scripts/memory_candidate_real_run.py,1897,getattr_default,cmd_local_serve,inject|本仓类属性
+backend/scripts/memory_candidate_real_run.py,1900,getattr_default,cmd_local_serve,max_http_attempts|本仓类属性
+backend/scripts/memory_candidate_real_run.py,1901,getattr_default,cmd_local_serve,max_user_turns|本仓类属性
+backend/scripts/memory_candidate_real_run.py,2029,broad_except,_start_backend,Exception
+backend/scripts/memory_candidate_real_run.py,2029,swallow,_start_backend,吞异常（无重新抛出）
+backend/scripts/memory_candidate_real_run.py,2050,getattr_default,_start_backend_locked,backend_only|外部
+backend/scripts/memory_candidate_real_run.py,2084,getattr_default,_start_backend_locked,max_http_attempts|本仓类属性
+backend/scripts/memory_candidate_real_run.py,2086,getattr_default,_start_backend_locked,max_user_turns|本仓类属性
+backend/scripts/memory_candidate_real_run.py,2092,getattr_default,_start_backend_locked,inject|本仓类属性
+backend/scripts/memory_candidate_real_run.py,2101,getattr_default,_start_backend_locked,backend_only|外部
+backend/scripts/memory_candidate_real_run.py,2139,getattr_default,_start_backend_locked,backend_only|外部
+backend/scripts/memory_candidate_real_run.py,2163,broad_except,_start_backend_locked,Exception
+backend/scripts/memory_candidate_real_run.py,2170,broad_except,_start_backend_locked,Exception
+backend/scripts/memory_candidate_real_run.py,2658,compat_comment,cmd_verify_local,"# True), never the legacy ""(none)"" form, never a heading without facts."
+backend/scripts/memory_candidate_real_run.py,2706,dup_raise,cmd_verify_local,同结构 if-raise 共 6 处
+backend/scripts/memory_candidate_real_run.py,2894,dup_raise,cmd_catalog_check,同结构 if-raise 共 6 处
+backend/scripts/memory_candidate_real_run.py,3628,dup_raise,cmd_prove_boundaries,同结构 if-raise 共 6 处
+backend/scripts/memory_candidate_real_run.py,3725,unused_kwarg,main,argv
+backend/scripts/memory_candidate_runtime.py,84,unused_kwarg,_fail,exit_code
+backend/scripts/memory_candidate_runtime.py,94,getattr_default,_configure_utf8_stdio,reconfigure|外部
+backend/scripts/memory_candidate_runtime.py,120,unused_kwarg,production_live_roots,environ
+backend/scripts/memory_candidate_runtime.py,473,hasattr,_install_external_fakes,WindowsCredentialStore|外部
+backend/scripts/memory_candidate_runtime.py,516,hasattr,_install_external_fakes,synthesize_and_queue|本仓类属性
+backend/scripts/memory_candidate_runtime.py,609,getattr_default,_install_external_fakes,?|外部
+backend/scripts/memory_candidate_runtime.py,623,compat_comment,_install_external_fakes,"# Open only the selected model HTTP transport. Legacy search, weather"
+backend/scripts/memory_candidate_runtime.py,624,compat_comment,_install_external_fakes,"# fallback, and other provider adapters stay fake/blocked."
+backend/scripts/memory_candidate_runtime.py,674,getattr_default,_install_outbound_guards,handle_request|外部
+backend/scripts/memory_candidate_runtime.py,675,getattr_default,_install_outbound_guards,handle_async_request|外部
+backend/scripts/memory_candidate_runtime.py,752,hasattr,_install_outbound_guards,DDGS|外部
+backend/scripts/memory_candidate_runtime.py,797,broad_except,_probe_outbound_exits._try,Exception
+backend/scripts/memory_candidate_runtime.py,860,getattr_default,_probe_outbound_exits,encoding|外部
+backend/scripts/memory_candidate_runtime.py,1054,getattr_default,cmd_encoding_probe,encoding|外部
+backend/scripts/memory_candidate_runtime.py,1092,broad_except,_wait_http,Exception
+backend/scripts/memory_candidate_runtime.py,1113,getattr_default,cmd_start,backend_only|外部
+backend/scripts/memory_candidate_runtime.py,1141,getattr_default,cmd_start,backend_only|外部
+backend/scripts/memory_candidate_runtime.py,1168,getattr_default,cmd_start,backend_only|外部
+backend/scripts/memory_candidate_runtime.py,1585,broad_except,_wait_fact,Exception
+backend/scripts/memory_candidate_runtime.py,1785,dup_raise,cmd_verify_api,同结构 if-raise 共 6 处
+backend/scripts/memory_candidate_runtime.py,1815,getattr_default,cmd_fail_start,code|本仓类属性
+backend/scripts/memory_candidate_runtime.py,1911,unused_kwarg,main,argv
+backend/scripts/memory_recall_b5_real_run.py,75,compat_identifier,<module>,FALLBACK_ANSWERS
+backend/scripts/memory_recall_b5_real_run.py,114,getattr_default,fake_network_guard.check_address,socketpair|外部
+backend/scripts/memory_recall_b5_real_run.py,127,getattr_default,fake_network_guard.local_socketpair,socketpair|外部
+backend/scripts/memory_recall_b5_real_run.py,157,hasattr,fake_network_guard,sendmsg|外部
+backend/scripts/memory_recall_b5_real_run.py,230,unused_kwarg,check_real_gate,environ
+backend/scripts/memory_recall_b5_real_run.py,244,broad_except,check_real_gate,Exception
+backend/scripts/memory_recall_b5_real_run.py,387,unused_kwarg,leakage_violations,allowed_texts
+backend/scripts/memory_recall_b5_real_run.py,446,compat_identifier,score,fallback
+backend/scripts/memory_recall_b5_real_run.py,446,compat_identifier,score,FALLBACK_ANSWERS
+backend/scripts/memory_recall_b5_real_run.py,447,compat_identifier,score,fallback
+backend/scripts/memory_recall_b5_real_run.py,448,compat_identifier,score,FALLBACK_ANSWERS
+backend/scripts/memory_recall_b5_real_run.py,472,compat_identifier,score,fallback
+backend/scripts/memory_recall_b5_real_run.py,484,compat_identifier,score,fallback
+backend/scripts/memory_recall_b5_real_run.py,491,compat_identifier,score,fallback
+backend/scripts/memory_recall_b5_real_run.py,626,broad_except,Capture.handle,Exception
+backend/scripts/memory_recall_b5_real_run.py,643,compat_comment,Capture.raise_if_refused,# The product renderer catches provider errors; never score its fallback
+backend/scripts/memory_recall_b5_real_run.py,753,unused_kwarg,seed_store,group
+backend/scripts/memory_recall_b5_real_run.py,785,compat_identifier,seed_store,old_version
+backend/scripts/memory_recall_b5_real_run.py,791,compat_identifier,seed_store,old_version
+backend/scripts/memory_recall_b5_real_run.py,792,compat_identifier,seed_store,old_version
+backend/scripts/memory_recall_b5_real_run.py,792,compat_identifier,seed_store,old_version
+backend/scripts/memory_recall_b5_real_run.py,792,compat_identifier,seed_store,old_version
+backend/scripts/memory_recall_b5_real_run.py,858,compat_identifier,product_turn,OpenAICompatibleAdapter
+backend/scripts/memory_recall_b5_real_run.py,893,broad_except,product_turn,Exception
+backend/scripts/memory_recall_b5_real_run.py,901,compat_identifier,product_turn,OpenAICompatibleAdapter
+backend/scripts/memory_recall_b5_real_run.py,939,getattr_default,product_turn,turn_injected_fact_ids|外部
+backend/scripts/memory_recall_b5_real_run.py,1001,broad_except,product_turn,Exception
+backend/scripts/memory_recall_b5_real_run.py,1094,unused_kwarg,summarize.rates,layer
+backend/scripts/memory_recall_b5_real_run.py,1186,unused_kwarg,run_suite,executor
+backend/scripts/memory_recall_b5_real_run.py,1238,broad_except,run_suite,Exception
+backend/scripts/memory_recall_b5_real_run.py,1295,compat_comment,check_worker_isolation,# This legacy override takes precedence over AMADEUS_DATA_DIR in app.db.
+backend/scripts/memory_recall_b5_real_run.py,1304,unused_kwarg,main,argv
+backend/scripts/memory_recall_b5_real_run.py,1350,broad_except,main,Exception
+backend/scripts/memory_recall_b5_real_run.py,1350,swallow,main,吞异常（无重新抛出）
+backend/scripts/memory_recall_b5_real_run.py,1355,dup_raise,<module>,同结构 if-raise 共 6 处
+backend/scripts/memory_recall_b5c.py,22,unused_kwarg,selected_rows,group
+backend/scripts/memory_recall_b5c.py,40,unused_kwarg,seed_store,group
+backend/scripts/memory_recall_b5c.py,172,unused_kwarg,summarize.pairs,category
+backend/scripts/memory_recall_offline_run.py,466,dup_raise,<module>,同结构 if-raise 共 6 处
+backend/scripts/memory_supersede_probe.py,201,broad_except,Capture.handle,Exception
+backend/scripts/memory_supersede_probe.py,243,broad_except,load_embedder,Exception
+backend/scripts/memory_supersede_probe.py,254,compat_identifier,product_execution,OpenAICompatibleAdapter
+backend/scripts/memory_supersede_probe.py,269,compat_identifier,product_execution,OpenAICompatibleAdapter
+backend/scripts/memory_supersede_probe.py,436,compat_identifier,aggregate,legacy
+backend/scripts/memory_supersede_probe.py,437,compat_identifier,aggregate,legacy
+backend/scripts/memory_supersede_probe.py,437,compat_identifier,aggregate,legacy
+backend/scripts/memory_supersede_probe.py,470,unused_kwarg,main,argv
+backend/scripts/memory_supersede_probe.py,505,broad_except,main,Exception
+backend/scripts/memory_supersede_probe.py,505,swallow,main,吞异常（无重新抛出）
+backend/scripts/memory_supersede_probe.py,510,dup_raise,<module>,同结构 if-raise 共 6 处
+backend/scripts/persona_eval_run.py,60,hasattr,fake_guard,?|外部
+backend/scripts/persona_eval_run.py,193,broad_except,Capture.handle,Exception
+backend/scripts/persona_eval_run.py,228,broad_except,Capture._handle,Exception
+backend/scripts/persona_eval_run.py,230,getattr_default,Capture._handle,response|外部
+backend/scripts/persona_eval_run.py,475,getattr_default,product_turns,turn_injected_fact_ids|外部
+backend/scripts/persona_eval_run.py,506,getattr_default,product_turns,erasure_pending|本仓类属性
+backend/scripts/persona_eval_run.py,634,unused_kwarg,summarize,judgements
+backend/scripts/persona_eval_run.py,669,unused_kwarg,run_suite,executor
+backend/scripts/persona_eval_run.py,702,broad_except,run_suite,Exception
+backend/scripts/persona_eval_run.py,853,compat_identifier,compare_runs,old_dir
+backend/scripts/persona_eval_run.py,854,compat_identifier,compare_runs,old_plan
+backend/scripts/persona_eval_run.py,854,compat_identifier,compare_runs,old_rows
+backend/scripts/persona_eval_run.py,854,compat_identifier,compare_runs,old_dir
+backend/scripts/persona_eval_run.py,866,compat_identifier,compare_runs,old_rows
+backend/scripts/persona_eval_run.py,866,compat_identifier,compare_runs,old_dir
+backend/scripts/persona_eval_run.py,895,unused_kwarg,main,argv
+backend/scripts/persona_eval_run.py,933,broad_except,main,Exception
+backend/scripts/persona_eval_run.py,933,swallow,main,吞异常（无重新抛出）
+backend/scripts/persona_eval_run.py,938,dup_raise,<module>,同结构 if-raise 共 6 处
+backend/scripts/purge_mistaken_demo_seed.py,152,broad_except,purge_worldline,Exception
+backend/scripts/seed_memory_demo.py,153,broad_except,_collect_ids,Exception
+backend/scripts/seed_memory_demo.py,153,swallow,_collect_ids,吞异常（无重新抛出）
+backend/scripts/seed_memory_demo.py,215,broad_except,seed_scope,Exception
+backend/scripts/seed_memory_demo.py,297,dup_raise,<module>,同结构 if-raise 共 6 处
+packaging/windows/backend_entry.py,25,getattr_default,configure_environment,frozen|外部
+packaging/windows/backend_entry.py,118,hasattr,self_check,OfflineRecognizer|外部
+packaging/windows/backend_entry.py,193,broad_except,main,Exception
+packaging/windows/license_bundle.py,323,unused_kwarg,verify,license_dir
+packaging/windows/smoke_frozen.py,78,unused_kwarg,clean_environment,memory_mode
+packaging/windows/smoke_frozen.py,521,broad_except,main,Exception
+packaging/windows/vc_runtime.py,58,getattr_default,pe_details,?|外部

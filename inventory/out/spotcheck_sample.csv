@@ -1,0 +1,11 @@
+类别,文件,起止行,符号名,行数,来源,建议标签,理由
+产品代码,backend/app/services/search.py,142-146,SearchService.configured_tavily_key,5,vulture+coverage0+refs0,现在就能删,vulture 报未用；覆盖率 0；app 内无引用（名字统计）；不在保护项
+产品代码,backend/app/services/diagnostics.py,1002-1005,DiagnosticRuntime.create_tts_observer,4,vulture+coverage0+refs0,现在就能删,vulture 报未用；覆盖率 0；app 内无引用（名字统计）；不在保护项
+产品代码,backend/app/services/turn_tool_orchestrator.py,569-574,block_has_forbidden_fields,6,vulture+coverage0+refs0,现在就能删,vulture 报未用；覆盖率 0；app 内无引用（名字统计）；不在保护项
+产品代码,backend/app/services/search.py,315-316,SearchService._consume_tavily_credit,2,vulture+coverage0+refs0,现在就能删,vulture 报未用；覆盖率 0；app 内无引用（名字统计）；不在保护项
+产品代码,backend/app/services/diagnostics.py,978-979,DiagnosticRuntime.set_observing,2,vulture+coverage0+refs0,现在就能删,vulture 报未用；覆盖率 0；app 内无引用（名字统计）；不在保护项
+产品代码,backend/app/services/turn_events.py,119-135,merge_tool_calls,17,vulture+coverage0+refs0,现在就能删,vulture 报未用；覆盖率 0；app 内无引用（名字统计）；不在保护项
+产品代码,desktop/src/worldline-engine/show/geom.ts,42-44,tubeCenterX,3,knip-exports+coverage,现在就能删,knip 报未用导出（exports）；导出覆盖率 0%
+产品代码,backend/app/services/turn_tool_orchestrator.py,121-123,joint_memory_web_supported,3,vulture+coverage0+refs0,现在就能删,vulture 报未用；覆盖率 0；app 内无引用（名字统计）；不在保护项
+产品代码,backend/app/domain/context.py,20-22,TurnContext.task_key,3,vulture+coverage0+refs0,现在就能删,vulture 报未用；覆盖率 0；app 内无引用（名字统计）；不在保护项
+产品代码,backend/app/services/prompt_compiler.py,718-723,_stable_fact_prompt_id,6,vulture+coverage0+refs0,现在就能删,vulture 报未用；覆盖率 0；app 内无引用（名字统计）；不在保护项

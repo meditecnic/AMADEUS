@@ -1,0 +1,16 @@
+语言,文件,行数,次数,每千行
+Python,backend/tests/test_memory_candidate_script_regressions.py,294,38,129.25
+TypeScript,desktop/src/memory-space/MemorySelect.test.tsx,31,4,129.03
+TypeScript,desktop/src/workstation/shiftTransaction.test.ts,78,8,102.56
+Python,backend/tests/test_segment_latin_names.py,62,6,96.77
+TypeScript,desktop/src/design-system/useReducedMotion.test.tsx,97,8,82.47
+TypeScript,desktop/src/components/SalieriLogin.test.tsx,136,11,80.88
+TypeScript,desktop/src/components/HistorySidebar.test.tsx,343,26,75.8
+TypeScript,desktop/src/workstation/fontWarmup.test.ts,80,6,75.0
+TypeScript,desktop/src/apiBase.test.ts,88,6,68.18
+TypeScript,desktop/src/workstation/ConnectionList.test.tsx,33,2,60.61
+TypeScript,desktop/src/components/ForgetConversationModal.test.tsx,34,2,58.82
+TypeScript,desktop/src/workstation/WorldlineShift.test.tsx,433,23,53.12
+Python,backend/tests/test_tts_sidecar.py,267,14,52.43
+Python,backend/tests/test_memory_v11_recall_logging.py,132,6,45.45
+Python,backend/tests/test_memory_conversation_erasure.py,185,8,43.24
