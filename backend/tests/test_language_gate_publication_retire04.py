@@ -98,6 +98,27 @@ def test_ambiguous_han_only_japanese_fail_open():
         assert not should_route_to_language_renderer(line), line
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("晚上好。", False),
+        ("早上好", True),
+        ("咖啡", False),
+        ("晚饭吃了吗", False),
+        ("今日は晚ご飯を食べた。", True),
+        ("今日は晴れ。", True),
+        ("東京", True),
+        ("了解。", True),
+        ("本当。", True),
+        ("好き。", True),
+        ("这是什么？", False),
+        ("你好。", False),
+    ],
+)
+def test_publication_gate_chinese_glyphs_preserve_japanese_frame(text, expected):
+    assert is_ui_publishable_segment(text) is expected
+
+
 @pytest.mark.asyncio
 async def test_matcha_project_name_reply_no_renderer_one_completion():
     """Incident: V11-TEST-MATCHA must publish as-is with zero LanguageRenderer."""
