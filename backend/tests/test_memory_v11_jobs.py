@@ -4333,6 +4333,15 @@ def test_v113_prompt_preserves_source_language():
     assert "Do not store a separate Japanese or other normalized-language version" in prompt
 
 
+def test_v113_prompt_preserves_additive_facts():
+    prompt = _jobs()._V11_MEMORY_SYSTEM
+    assert "Use supersedes only when user_text says an existing fact no longer holds" in prompt
+    assert "Adding another preference, possession or habit" in prompt
+    assert "(also/too/as well, 也/还/另外/同时, も) is new; leave the existing fact unchanged." in prompt
+    assert "refines only adds detail without removing existing content" in prompt
+    assert 'an initial "其实" or "actually" alone does not imply correction.' in prompt
+
+
 @pytest.mark.asyncio
 async def test_v113_mixed_secret_normal_fact(isolated_store, caplog):
     session = "v113-private-mixed"
