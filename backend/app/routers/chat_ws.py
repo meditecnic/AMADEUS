@@ -1421,6 +1421,52 @@ def _schedule_background_task(session: SessionState, coroutine) -> asyncio.Task:
     return task
 
 
+async def close_chat_sessions() -> None:
+    """Drain turn writes before service shutdown, within the desktop exit budget."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 1.5
+    current_sessions = list(sessions.values())
+    active = {session.active_task for session in current_sessions
+              if session.active_task is not None and not session.active_task.done()}
+    for task in active:
+        task.cancel()
+    if active:
+        await asyncio.wait(active, timeout=0.25)
+
+    background = {task for session in current_sessions
+                  for task in session.background_tasks if not task.done()}
+    if background:
+        await asyncio.wait(background, timeout=min(1.0, max(0.0, deadline - loop.time())))
+    pending = {task for task in active | background if not task.done()}
+    for task in pending:
+        task.cancel()
+
+    async def close_stream(stream):
+        try:
+            await stream.aclose()
+        except Exception as exc:
+            logger.warning("[Shutdown] stream close failed (%s)", type(exc).__name__)
+
+    closing = set()
+    for session in current_sessions:
+        for stream in list(session.active_streams):
+            closing.add(asyncio.create_task(close_stream(stream)))
+        session.active_streams.clear()
+    waiting = pending | closing
+    if waiting:
+        done, remaining = await asyncio.wait(
+            waiting, timeout=max(0.0, deadline - loop.time()),
+        )
+        for task in done:
+            if not task.cancelled():
+                task.exception()
+        for task in remaining:
+            # Asyncio cannot force a task that suppresses cancellation to finish.
+            # Do not let its cleanup hold up the process shutdown indefinitely.
+            task.cancel()
+            task.add_done_callback(_log_background_task_failure)
+
+
 # Durable stand-in when a turn saved the user row and then died before the
 # assistant row. History must not stay user-only with no visible outcome.
 _ABORTED_TURN_JA = "この質問は途中で止まった。もう一度送って。"
