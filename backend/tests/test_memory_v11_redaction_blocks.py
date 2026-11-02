@@ -197,6 +197,13 @@ _V160_GRAMMAR = [
     ("otp-equals", "和otp等于123456", "otp", "123456"),
     ("pin-ja-ga", "私のPINが1234", "password", "1234"),
     ("pin-spaced-traditional", "PIN 碼: 2048", "password", "2048"),
+    ("otp-year", "OTP是2024年的", None, None),
+    ("otp-count", "otp是2048个", None, None),
+    ("otp-times", "otp为1234次", None, None),
+    ("otp-long-year", "otp是20245年", None, None),
+    ("otp-mb", "otp是4096 MB", None, None),
+    ("otp-compact", "otp是483921", "otp", "483921"),
+    ("otp-english", "OTP is 483921", "otp", "483921"),
 ]
 
 

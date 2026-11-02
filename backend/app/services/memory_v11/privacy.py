@@ -117,7 +117,10 @@ _OTP_CUE_EN = (
 _OTP_VALUE = r"[A-Za-z0-9]{4,10}"
 _OTP_RE = [
     re.compile(rf"{_OTP_CUE_EN}\s*[:=：＝]\s*({_OTP_VALUE})"),
-    re.compile(rf"{_OTP_CUE_EN}(?:\s+(?:is|are)\s+|\s*(?:是|为|等于)\s*)({_OTP_VALUE})"),
+    re.compile(
+        rf"{_OTP_CUE_EN}(?:\s+(?:is|are)\s+|\s*(?:是|为|等于)\s*)({_OTP_VALUE}){_ASCII_RIGHT}"
+        rf"(?!\s*(?:[KMGT]?B{_ASCII_RIGHT}|[年个次]))",
+    ),
     re.compile(rf"{_OTP_CUE_EN}\s+({_OTP_VALUE})"),
     re.compile(r"(?:验证码|认证码|校验码|动态码)\s*[:=：＝]\s*([A-Za-z0-9]{4,10})"),
     re.compile(r"(?:验证码|认证码|校验码|动态码)\s*(?:是|为|等于)\s*([A-Za-z0-9]{4,10})"),
