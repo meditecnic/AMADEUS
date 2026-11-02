@@ -1401,7 +1401,7 @@ def _schedule_background_task(session: SessionState, coroutine) -> asyncio.Task:
 async def close_chat_sessions() -> None:
     """Drain turn writes before service shutdown, within the desktop exit budget."""
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + 1.5
+    deadline = loop.time() + 1.0
     current_sessions = list(sessions.values())
     active = {session.active_task for session in current_sessions
               if session.active_task is not None and not session.active_task.done()}
@@ -1413,7 +1413,7 @@ async def close_chat_sessions() -> None:
     background = {task for session in current_sessions
                   for task in session.background_tasks if not task.done()}
     if background:
-        await asyncio.wait(background, timeout=min(1.0, max(0.0, deadline - loop.time())))
+        await asyncio.wait(background, timeout=max(0.0, deadline - loop.time()))
     pending = {task for task in active | background if not task.done()}
     for task in pending:
         task.cancel()
