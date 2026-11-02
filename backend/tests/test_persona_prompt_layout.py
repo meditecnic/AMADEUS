@@ -292,7 +292,6 @@ def _inputs(identity_mode: str, worldline: str, **overrides) -> PromptInputs:
         worldline=worldline,
         base_identity=resolve_system_prompt_base(SYSTEM_PROMPT_BASE, identity_mode),
         emotion=soul_engine.profile(worldline).baselines,
-        core_facts=[],
         episodic=[],
         web_evidence=["ウェブ" * 2000],
         working_summary="要約" * 3000,

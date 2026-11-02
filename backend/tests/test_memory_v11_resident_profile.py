@@ -364,7 +364,6 @@ def _inputs(resident: ResidentProfile | None, *, supplement=None, episodic=(), m
         worldline="steins_gate",
         base_identity="You are Amadeus Kurisu.",
         emotion=EMOTION,
-        core_facts=[],
         episodic=list(episodic),
         web_evidence=[],
         working_summary="",
@@ -517,16 +516,15 @@ def test_rule_partial_replaces_only_the_unknown_sentence(tool_capable, expected_
     assert expected_rule.startswith(before) and expected_rule.endswith(after)
 
 
-def test_no_facts_means_no_section_v11_but_legacy_keeps_none():
-    """[A1] v11 with zero facts: no CORE FACTS and no "(none)"; legacy unchanged."""
+def test_no_facts_means_no_section():
+    """[A1] zero facts, or no profile at all: no CORE FACTS and no "(none)"."""
     compiler = PromptCompiler()
     empty = compiler.select_resident_profile([], tool_capable=True)
     v11_prompt = compiler.compile(_inputs(empty))
     # (The persona bible itself mentions "CORE FACTS" in prose.)
     assert "CORE FACTS\n" not in v11_prompt and "(none)" not in v11_prompt
     assert "FACT_USE_CONTRACT" not in v11_prompt
-    legacy_prompt = compiler.compile(_inputs(None))
-    assert "\n\nCORE FACTS\n(none)\n\n" in legacy_prompt
+    assert compiler.compile(_inputs(None)) == v11_prompt
 
 
 def test_v11_section_order_core_before_state_supplement_after():

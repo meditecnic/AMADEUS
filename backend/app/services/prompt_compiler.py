@@ -305,7 +305,6 @@ class PromptInputs:
     # Not rendered: the emotion vector, recent history and the current message
     # are kept for callers; history and the message travel only as messages.
     emotion: EmotionVector
-    core_facts: list[RetrievedMemory]
     episodic: list[RetrievedMemory]
     web_evidence: list[str]
     working_summary: str
@@ -317,8 +316,8 @@ class PromptInputs:
     self_name: str = ""
     # IDENTITY-ACK-01: this conversation already got one full identity briefing.
     identity_acknowledged: bool = False
-    # v11 (dispatch 55): resident stable-fact profile (always set for v11,
-    # possibly empty) and the optional per-turn supplement. None = legacy.
+    # v11 (dispatch 55): resident stable-fact profile and the optional per-turn
+    # supplement. None renders exactly like an empty profile (no CORE FACTS).
     resident_profile: ResidentProfile | None = None
     memory_supplement: MemorySupplement | None = None
 
@@ -336,26 +335,15 @@ class PromptCompiler:
         "tools": 500,
     }
 
-    # Prompt order of named sections. Budget shrinking addresses sections by
-    # name, never by list position.
-    SECTION_ORDER = (
-        "identity",
-        "persona",
-        "examples",
-        "state",
-        "core",
-        "episodic",
-        "web",
-        "history",
-    )
-
     def __init__(self, token_counter: Callable[[str], int] | None = None, input_budget: int = 12000):
         self.token_counter = token_counter or self._estimate_tokens
         self.input_budget = input_budget
 
-    # v11 order (dispatch 55 C): CORE FACTS sit right after the persona, the
-    # supplement right after CURRENT STATE. "supplement" is present only
-    # when this turn has one, so separator counting is unchanged otherwise.
+    # Prompt order of named sections (dispatch 55 C): CORE FACTS sit right
+    # after the persona, the supplement right after CURRENT STATE. "supplement"
+    # is present only when this turn has one, so separator counting is
+    # unchanged otherwise. Budget shrinking addresses sections by name, never
+    # by list position.
     V11_SECTION_ORDER = (
         "identity",
         "persona",
@@ -396,24 +384,20 @@ class PromptCompiler:
                 "\u666e\u901a\u306e\u4f1a\u8a71\u3084\u8efd\u3044\u8aa4\u89e3\u3067\u306f\u3001\u8a18\u61b6\u7531\u6765AI\u30fb\u975e\u751f\u8eab\u3068\u3044\u3046\u8aac\u660e\u3092\u6700\u521d\u304b\u3089\u7e70\u308a\u8fd4\u3055\u306a\u3044\u3002"
                 "\u305f\u3060\u3057\u300e\u8ab0\uff1f\u300f\u300eAI\u306a\u306e\uff1f\u300f\u300e\u81ea\u5df1\u7d39\u4ecb\u300f\u306a\u3069\u660e\u78ba\u306b\u554f\u308f\u308c\u305f\u6642\u306f\u3001\u5f93\u6765\u3069\u304a\u308a\u5b8c\u5168\u306b\u7b54\u3048\u308b\u3002"
             )
-        v11 = inputs.resident_profile is not None
-        core_items = [] if v11 else list(inputs.core_facts)
         episodic_items = list(inputs.episodic)
         resident = inputs.resident_profile
-        candidate_count = resident.candidate_count if resident is not None else 0
-        tool_capable = bool(resident.tool_capable) if resident is not None else False
-        resident_items = (
-            self._fit_resident(
-                list(resident.facts),
-                candidate_count=candidate_count,
-                tool_capable=tool_capable,
-            )
-            if resident is not None
-            else []
+        if resident is None:
+            resident = ResidentProfile(facts=[], candidate_count=0)
+        candidate_count = resident.candidate_count
+        tool_capable = bool(resident.tool_capable)
+        resident_items = self._fit_resident(
+            list(resident.facts),
+            candidate_count=candidate_count,
+            tool_capable=tool_capable,
         )
         supplement_result = (
             inputs.memory_supplement.result
-            if v11 and inputs.memory_supplement is not None
+            if inputs.memory_supplement is not None
             else None
         )
         supplement_items = (
@@ -423,14 +407,10 @@ class PromptCompiler:
         )
 
         def render_core() -> str:
-            if v11:
-                return self._format_resident_profile(
-                    resident_items,
-                    complete=len(resident_items) >= candidate_count,
-                    tool_capable=tool_capable,
-                )
-            return self._render_whole_items(
-                core_items, self._format_core_facts, self.BUDGETS["core"]
+            return self._format_resident_profile(
+                resident_items,
+                complete=len(resident_items) >= candidate_count,
+                tool_capable=tool_capable,
             )
 
         def render() -> dict[str, str]:
@@ -463,9 +443,7 @@ class PromptCompiler:
             return rendered
 
         sections = render()
-        if not v11:
-            order = self.SECTION_ORDER
-        elif supplement_result is not None:
+        if supplement_result is not None:
             order = self.V11_SECTION_ORDER
         else:
             order = tuple(name for name in self.V11_SECTION_ORDER if name != "supplement")
@@ -499,15 +477,9 @@ class PromptCompiler:
                     episodic_items, self._format_episodic_memory, self.BUDGETS["episodic"]
                 )
                 continue
-            if v11 and resident_items:
+            if resident_items:
                 resident_items = resident_items[:-1]
                 sections["core"] = render_core()
-                continue
-            if core_items:
-                core_items = core_items[:-1]
-                sections["core"] = self._render_whole_items(
-                    core_items, self._format_core_facts, self.BUDGETS["core"]
-                )
                 continue
             if sections["episodic"]:
                 sections["episodic"] = ""
@@ -519,8 +491,6 @@ class PromptCompiler:
         while over_budget() and len(sections["state"]) > 120:
             sections["state"] = sections["state"][: max(120, len(sections["state"]) * 4 // 5)]
         text = "\n\n".join(sections[name] for name in order if sections[name].strip())
-        if not v11:
-            return CompiledPrompt(text=text)
         resident_ids = (
             tuple(str(row["fact_id"]) for row in resident_items)
             if sections["core"].strip()
@@ -644,20 +614,6 @@ class PromptCompiler:
             remaining = remaining[:-1]
 
     @staticmethod
-    def _format_core_facts(facts: list[RetrievedMemory]) -> str:
-        """CORE FACTS with a short usage contract (GATE7A-NAT).
-
-        The stable ASCII anchor keeps tests copy-independent. The contract
-        constrains HOW facts are used (natural familiarity; no deny-then-guess
-        on listed items; no storage/worldline mechanism talk) and never adds
-        persona lore. Empty fact lists skip the contract to save budget.
-        """
-        if not facts:
-            return "CORE FACTS\n(none)"
-        lines = "\n".join(f"- {item.content}" for item in facts)
-        return f"CORE FACTS\n{FACT_USE_CONTRACT}\n{lines}"
-
-    @staticmethod
     def _format_episodic_memory(items: list[RetrievedMemory]) -> str:
         """EPISODIC MEMORY with a compact natural-use contract (S3C-2).
 
@@ -730,18 +686,15 @@ async def _select_v11_prompt_memories(
     identity_mode: str,
     user_message: str,
     limit: int = 24,
-) -> tuple[list[RetrievedMemory], list[RetrievedMemory]]:
-    """v11 prompt experiences (the returned fact list is always empty).
+) -> list[RetrievedMemory]:
+    """v11 prompt experiences.
 
-    Experiences still fail-soft independently (D52). v11 stable facts come
-    from the resident profile + supplement (dispatch 55), never from this
-    helper, so the legacy "CORE FACTS (none)" form cannot appear in v11.
+    Experiences fail-soft independently (D52). v11 stable facts come from the
+    resident profile + supplement (dispatch 55), never from this helper.
     Cancellation still propagates from experience retrieval.
     """
     del limit
     from app.services.memory_v11.retrieval import select_experience_candidates
-
-    facts: list[RetrievedMemory] = []
 
     episodes: list[RetrievedMemory] = []
     try:
@@ -771,7 +724,7 @@ async def _select_v11_prompt_memories(
             "v11 prompt: experience retrieval failed; omitting experiences (%s)",
             type(__import__("sys").exc_info()[1]).__name__,
         )
-    return facts, episodes
+    return episodes
 
 
 async def _select_v11_resident_profile(
@@ -889,7 +842,7 @@ async def compile_for_session(session, user_message: str, provider: Any = None) 
         identity_mode=mode,
     )
     supplement: MemorySupplement | None = None
-    facts, episodes = await _select_v11_prompt_memories(
+    episodes = await _select_v11_prompt_memories(
         session_id=session.session_id,
         worldline=session.worldline,
         identity_mode=mode,
@@ -914,7 +867,6 @@ async def compile_for_session(session, user_message: str, provider: Any = None) 
         worldline=session.worldline,
         base_identity=base_identity or "You are Amadeus Kurisu.",
         emotion=emotion,
-        core_facts=facts,
         episodic=episodes,
         web_evidence=[],
         working_summary=session.memory_summary,

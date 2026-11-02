@@ -886,7 +886,7 @@ async def test_apply_batch_true_empty_is_generation_empty(monkeypatch):
 @pytest.mark.asyncio
 async def test_processor_no_tools_adapter_is_explicit_unsupported():
     plan = plan_first_round_tools(
-        v11=True, force_search=False, provider_id="deepseek", adapter_kind="NoToolsAdapter"
+        force_search=False, provider_id="deepseek", adapter_kind="NoToolsAdapter"
     )
     assert plan.status == "unsupported"
     assert plan.tools is None

@@ -26,7 +26,6 @@ def _inputs(identity_mode: str, self_name: str = "") -> PromptInputs:
         worldline="steins_gate",
         base_identity="SECURITY BOUNDARY",
         emotion=soul_engine.profile("steins_gate").baselines,
-        core_facts=[],
         episodic=[],
         web_evidence=[],
         working_summary="",
