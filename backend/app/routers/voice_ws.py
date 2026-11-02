@@ -58,7 +58,7 @@ async def websocket_voice_endpoint(websocket: WebSocket):
     session.worldline = worldline
     session.client_type = "voice"
     await session.load_from_db()
-    await session_coordinator.acquire_lease(session_id, worldline, websocket)
+    await session_coordinator.acquire_lease(session_id, worldline, websocket, kind="voice")
     buffer = bytearray()
     sample_rate = 16000
     channels = 1
@@ -157,7 +157,7 @@ async def websocket_voice_endpoint(websocket: WebSocket):
                 if provider_snapshot.credential_required and not api_key:
                     await websocket.send_json({"type": "voice.error", "message": "API key required"})
                     continue
-                session.api_key = api_key or ""
+                session._set_provider_credentials(session.provider_id, api_key or "")
                 authenticated = True
                 await websocket.send_json({"type": "voice.ready", "worldline": worldline, "vad_silence_ms": config.VAD_SILENCE_MS})
             elif kind == "voice.start":
@@ -183,4 +183,4 @@ async def websocket_voice_endpoint(websocket: WebSocket):
         writer_task.cancel()
         monitor_task.cancel()
         await asyncio.gather(writer_task, monitor_task, return_exceptions=True)
-        await session_coordinator.release_lease(session_id, worldline, websocket)
+        await session_coordinator.release_lease(session_id, worldline, websocket, kind="voice")

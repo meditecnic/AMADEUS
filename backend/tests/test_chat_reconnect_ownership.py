@@ -212,3 +212,52 @@ async def test_cancel_inflight_clears_task_and_connection_owner():
     assert session.active_task is None
     assert session.active_task_connection_id is None
     assert session.is_busy is False
+
+
+@pytest.mark.timeout(15)
+def test_auth_cancel_reloads_history_and_summary_without_resetting_runtime(app_client, monkeypatch):
+    provider = GatedProvider()
+    monkeypatch.setattr(chat_ws, 'deepseek_service', provider)
+    # Isolate the auth cancellation path from the lease's socket-close cleanup.
+    monkeypatch.setattr(chat_ws.session_coordinator, 'acquire_lease', AsyncMock())
+    session_id = f'auth-history-{uuid4()}'
+    with ExitStack() as sockets:
+        a = sockets.enter_context(app_client.websocket_connect(f'/ws/chat?session_id={session_id}'))
+        auth(a)
+        a.send_json({'type': 'chat.send', 'content': '一問目'})
+        assert provider.started[0].wait(3)
+        session = chat_ws.sessions[session_id]
+        original_notice = chat_ws._persist_aborted_turn
+
+        async def notice_with_summary(**kwargs):
+            await original_notice(**kwargs)
+            await chat_ws.models.save_memory_summary(
+                session_id, '中断後の要約', worldline=session.worldline,
+                conversation_id=session.conversation_id,
+            )
+
+        monkeypatch.setattr(chat_ws, '_persist_aborted_turn', notice_with_summary)
+        b = sockets.enter_context(app_client.websocket_connect(f'/ws/chat?session_id={session_id}'))
+        load = chat_ws.SessionState.load_from_db
+        load_calls = 0
+
+        async def load_once(self):
+            nonlocal load_calls
+            load_calls += 1
+            await load(self)
+            # These runtime auth settings must survive the history-only refresh.
+            self.identity_mode = 'self'
+            self.provider_id = 'deepseek'
+            self.api_key = 'test-provider-credential'
+
+        monkeypatch.setattr(chat_ws.SessionState, 'load_from_db', load_once)
+        auth(b)
+        assert load_calls == 1, "auth cancellation must refresh history without reloading runtime settings"
+        database = rows(app_client, session_id)
+        assert [row['role'] for row in session.history] == [row['role'] for row in database]
+        assert [row['role'] for row in session.history] == ['user', 'assistant']
+        assert chat_ws._ABORTED_TURN_JA in session.history[-1]['content']
+        assert session.memory_summary == '中断後の要約'
+        assert (session.identity_mode, session.provider_id, session.api_key) == (
+            'self', 'deepseek', 'test-provider-credential',
+        )
