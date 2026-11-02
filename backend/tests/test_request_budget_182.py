@@ -67,7 +67,9 @@ async def test_processor_request_budget(isolated_store, monkeypatch, caplog, kin
     if kind == "refresh":
         # Fill the closed-tools envelope up to the budget. A leak retry adds
         # its own system instruction and must re-budget Memory as well.
-        effective = SYSTEM + datetime.now().strftime("\n【現在時刻：%Y-%m-%d %H:%M】")
+        # Same shape as the product: strftime gets only the ASCII part (Windows
+        # encodes the format with the locale codec).
+        effective = SYSTEM + f"\n【現在時刻：{datetime.now().strftime('%Y-%m-%d %H:%M')}】"
         tail = {"role": "system", "content": render_tail_reminder(
             session.identity_mode, getattr(session, "self_name", ""),
         )}
