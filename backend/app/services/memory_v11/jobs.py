@@ -630,6 +630,9 @@ Rules:
 - Give each observation a relation: new creates a fact, same attaches evidence,
   refines clarifies an existing fact, supersedes replaces it, reject records a
   rejected observation without establishing a fact.
+- Use supersedes only when user_text says an existing fact no longer holds (changed, stopped, corrected).
+  Adding another preference, possession or habit (also/too/as well, 也/还/另外/同时, も) is new; leave the existing fact unchanged.
+  refines only adds detail without removing existing content; an initial "其实" or "actually" alone does not imply correction.
 - For same/refines/supersedes, candidate_index MUST be the 1-based index from
   candidates. For new/reject use null. Never output fact IDs or version numbers.
 - memory_class=episodic: only new (experience) or reject; never target a stable fact.
