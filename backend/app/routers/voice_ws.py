@@ -157,7 +157,7 @@ async def websocket_voice_endpoint(websocket: WebSocket):
                 if provider_snapshot.credential_required and not api_key:
                     await websocket.send_json({"type": "voice.error", "message": "API key required"})
                     continue
-                session.api_key = api_key or ""
+                session._set_provider_credentials(session.provider_id, api_key or "")
                 authenticated = True
                 await websocket.send_json({"type": "voice.ready", "worldline": worldline, "vad_silence_ms": config.VAD_SILENCE_MS})
             elif kind == "voice.start":
