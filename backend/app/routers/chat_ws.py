@@ -2606,6 +2606,8 @@ async def websocket_chat_endpoint(websocket: WebSocket):
         while True:
             try:
                 data = await websocket.receive_json()
+                if not isinstance(data, dict):
+                    raise ValueError("frame must be an object")
             except WebSocketDisconnect:
                 break
             except Exception as e:
