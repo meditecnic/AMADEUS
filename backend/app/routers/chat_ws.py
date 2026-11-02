@@ -8,6 +8,7 @@ from uuid import uuid4
 from collections.abc import Awaitable, Callable
 import starlette
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
 from app import config
 from app.services.provider_adapters import ProviderRequestError
 from app.services.provider_registry import ProviderSnapshot, ProviderTask
@@ -2535,9 +2536,16 @@ async def websocket_chat_endpoint(websocket: WebSocket):
             except WebSocketDisconnect:
                 break
             except Exception as e:
-                # Broad on purpose: malformed frames surface as ValueError,
-                # KeyError or RuntimeError depending on the ASGI server; the
-                # reader answers with an error frame and keeps the socket.
+                if (
+                    getattr(websocket, "client_state", None) == WebSocketState.DISCONNECTED
+                    or getattr(websocket, "application_state", None) == WebSocketState.DISCONNECTED
+                    or (
+                        isinstance(e, RuntimeError)
+                        and 'Cannot call "receive" once a disconnect message has been received.' in str(e)
+                    )
+                ):
+                    break
+                # Malformed JSON/frames remain recoverable on a connected socket.
                 print(f"[Invalid Frame] Session {session.session_id}: ({type(e).__name__})")
                 await send_queue.put((session.current_epoch, {"type": "error", "message": "数据格式无效"}))
                 continue
