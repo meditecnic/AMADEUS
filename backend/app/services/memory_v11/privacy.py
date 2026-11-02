@@ -59,7 +59,10 @@ _PASSWORD_STRONG_RE = [
 ]
 _PASSWORD_COPULA_RE = [
     re.compile(rf"(?i){_PASSWORD_CUE_EN}\s+(?:is|are)\s+(\S+)"),
-    re.compile(rf"(?i){_PASSWORD_CUE_EN}\s*(?:是|为|等于)\s*(\S+)"),
+    re.compile(rf"(?i){_ASCII_LEFT}(?:password|passwd|passphrase){_ASCII_RIGHT}\s*(?:是|为|等于)\s*(\S+)"),
+]
+_SECRET_COPULA_RE = [
+    re.compile(rf"(?i){_ASCII_LEFT}secret{_ASCII_RIGHT}\s*(?:是|为|等于)\s*(\S+)"),
 ]
 _PASSWORD_COPULA_CJK_RE = [
     re.compile(r"密码(?!学)\s*(?:是|为|等于)\s*(\S+)"),
@@ -82,12 +85,19 @@ _API_RE = [
 _BEARER_RE = [re.compile(rf"{_ASCII_LEFT}Bearer{_ASCII_RIGHT}\s+(\S+)", re.IGNORECASE)]
 _ASSIGNMENT = rf"(?:[:=：＝]|是|为|等于|is{_ASCII_RIGHT})"
 _PIN_RE = [re.compile(
-    rf"(?i){_ASCII_LEFT}pin{_ASCII_RIGHT}(?:码|碼|\s+code|\s+number)?"
-    rf"\s*{_ASSIGNMENT}\s*([0-9]{{4,12}}){_ASCII_RIGHT}",
+    rf"(?i){_ASCII_LEFT}pin{_ASCII_RIGHT}(?:\s*[码碼]|\s+code|_code|\s+number)?"
+    rf"\s*(?:{_ASSIGNMENT}|は|が)\s*([0-9]{{4,12}}){_ASCII_RIGHT}"
+    rf"(?!\s*(?:[KMGT]?B{_ASCII_RIGHT}|[年个次]))",
 )]
 _TOKEN_RE = [re.compile(
     rf"(?i){_ASCII_LEFT}token{_ASCII_RIGHT}\s*{_ASSIGNMENT}\s*(\S+)",
 )]
+_TOKEN_PROSE_RE = re.compile(
+    r"(?:gpt|claude)-[A-Za-z0-9._-]+"
+    r"|v?\d+(?:\.\d+)+(?:[-+][A-Za-z0-9.-]+)?"
+    r"|\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2})?(?:Z|[+-]\d{2}:\d{2})?)?",
+    re.IGNORECASE,
+)
 _URL_PASSWORD_KEYS = {"password", "passwd", "pwd"}
 # A generated marker stays whole even though ] terminates a raw URL value.
 _URL_CREDENTIAL_RE = re.compile(
@@ -107,7 +117,10 @@ _OTP_CUE_EN = (
 _OTP_VALUE = r"[A-Za-z0-9]{4,10}"
 _OTP_RE = [
     re.compile(rf"{_OTP_CUE_EN}\s*[:=：＝]\s*({_OTP_VALUE})"),
-    re.compile(rf"{_OTP_CUE_EN}\s+(?:is|are|是|为|等于)\s+({_OTP_VALUE})"),
+    re.compile(
+        rf"{_OTP_CUE_EN}(?:\s+(?:is|are)\s+|\s*(?:是|为|等于)\s*)({_OTP_VALUE}){_ASCII_RIGHT}"
+        rf"(?!\s*(?:[KMGT]?B{_ASCII_RIGHT}|[年个次]))",
+    ),
     re.compile(rf"{_OTP_CUE_EN}\s+({_OTP_VALUE})"),
     re.compile(r"(?:验证码|认证码|校验码|动态码)\s*[:=：＝]\s*([A-Za-z0-9]{4,10})"),
     re.compile(r"(?:验证码|认证码|校验码|动态码)\s*(?:是|为|等于)\s*([A-Za-z0-9]{4,10})"),
@@ -222,6 +235,14 @@ def _english_copula_value_ok(value: str) -> bool:
     return _concrete_value_ok(value) and _secret_shaped(value)
 
 
+def _secret_copula_value_ok(value: str) -> bool:
+    # Chinese copulas after "secret" need stronger evidence than password cues.
+    narrowed = value.translate(_FULLWIDTH_ASCII_TRANSLATION)
+    return (_concrete_value_ok(value)
+            and re.search(r"[A-Za-z]", narrowed) is not None
+            and re.search(r"[0-9]", narrowed) is not None)
+
+
 def _identifier_shaped(value: str) -> bool:
     """EN labeled government IDs need an identifier-shaped value (has digits)."""
     return bool(re.search(r"\d", value))
@@ -298,6 +319,7 @@ def _credential_matches(text: str, category: str | None = None) -> list[tuple[in
     groups = (
         (_PASSWORD_STRONG_RE, PASSWORD, _concrete_value_ok),
         (_PASSWORD_COPULA_RE, PASSWORD, _english_copula_value_ok),
+        (_SECRET_COPULA_RE, PASSWORD, _secret_copula_value_ok),
         (_PASSWORD_COPULA_CJK_RE, PASSWORD, lambda v: _concrete_value_ok(v) and _secret_shaped(v)),
         (_PIN_RE, PASSWORD, lambda v: bool(re.fullmatch(r"[0-9]{4,12}", v.translate(_FULLWIDTH_ASCII_TRANSLATION)))),
         (_API_RE[:-1], API_SECRET, lambda v: _concrete_value_ok(v, min_len=8)),
@@ -378,6 +400,7 @@ def _credential_matches(text: str, category: str | None = None) -> list[tuple[in
 def _token_value_ok(value: str) -> bool:
     narrowed = value.translate(_FULLWIDTH_ASCII_TRANSLATION)
     return (_concrete_value_ok(value, min_len=12)
+            and not _TOKEN_PROSE_RE.fullmatch(narrowed.rstrip(_CREDENTIAL_TRAILING_PUNCTUATION))
             and re.search(r"[A-Za-z]", narrowed) is not None
             and re.search(r"[0-9]", narrowed) is not None)
 

@@ -157,3 +157,62 @@ def test_v140_prose_is_preserved(text):
     assert classify_memory_sensitive_text(text) == frozenset()
     assert find_memory_sensitive_matches(text) == []
     assert redact_user_text(text) == (text, False)
+
+
+# [160] Dispatch rows first, then the same rules with alternate spellings.
+_V160_CASES = [
+    ("1", "token: gpt-4o-mini-2024", None, None),
+    ("2", "token: claude-3-5-sonnet-20241022", None, None),
+    ("3", "我们的secret是2024年的计划", None, None),
+    ("4", "PIN: 2048 MB", None, None),
+    ("5", "PIN是2048年", None, None),
+    ("6", "和otp是123456", "otp", "123456"),
+    ("7", "私のPINは1234", "password", "1234"),
+    ("8", "pin_code=1234", "password", "1234"),
+    ("9", "PIN 码: 2048", "password", "2048"),
+    ("keep-token", "token: sk-abcDEF1234567890xyz", "api_secret", "sk-abcDEF1234567890xyz"),
+    ("keep-secret", "我的secret是Xk92-pq7Lm", "password", "Xk92-pq7Lm"),
+    ("keep-short-secret", "secret是abc", None, None),
+    ("keep-pin", "我的PIN是1234", "password", "1234"),
+    ("keep-db-password", "db_password=hunter22abc", "password", "hunter22abc"),
+    ("keep-csrf-token", "csrf_token=abcDEF123456", "api_secret", "abcDEF123456"),
+]
+
+_V160_GRAMMAR = [
+    ("token-version", "token: v1.2.3-beta.4567", None, None),
+    ("token-date", "token: 2024-12-31T00:00", None, None),
+    ("secret-year-for", "secret为2024年的计划", None, None),
+    ("secret-short-digits", "secret等于1234", None, None),
+    ("secret-mixed", "secret是ab12", "password", "ab12"),
+    ("secret-long-letters", "secret是abcdefgh", None, None),
+    ("secret-long-digits", "secret是12345678", None, None),
+    ("secret-party", "我们的secret是surprise party", None, None),
+    ("secret-birthday", "secret是birthday", None, None),
+    ("secret-christmas", "secret是Christmas2024", "password", "Christmas2024"),
+    ("password-unchanged", "password是2024年的计划", "password", "2024"),
+    ("pin-gb", "PIN: 2048 GB", None, None),
+    ("pin-count", "PIN是2048个", None, None),
+    ("pin-times", "PIN为2048次", None, None),
+    ("otp-for", "和otp为123456", "otp", "123456"),
+    ("otp-equals", "和otp等于123456", "otp", "123456"),
+    ("pin-ja-ga", "私のPINが1234", "password", "1234"),
+    ("pin-spaced-traditional", "PIN 碼: 2048", "password", "2048"),
+    ("otp-year", "OTP是2024年的", None, None),
+    ("otp-count", "otp是2048个", None, None),
+    ("otp-times", "otp为1234次", None, None),
+    ("otp-long-year", "otp是20245年", None, None),
+    ("otp-mb", "otp是4096 MB", None, None),
+    ("otp-compact", "otp是483921", "otp", "483921"),
+    ("otp-english", "OTP is 483921", "otp", "483921"),
+]
+
+
+@pytest.mark.parametrize("case_id,text,category,value", _V160_CASES + _V160_GRAMMAR,
+                         ids=[row[0] for row in _V160_CASES + _V160_GRAMMAR])
+def test_v160_redaction(case_id, text, category, value):
+    expected = text.replace(value, f"[REDACTED:{category}]", 1) if category else text
+    assert redact_user_text(text) == (expected, False)
+    assert classify_memory_sensitive_text(text) == (frozenset({category}) if category else frozenset())
+    assert {text[start:end] for start, end, _ in find_memory_sensitive_matches(text)} == (
+        {value} if category else set()
+    )
