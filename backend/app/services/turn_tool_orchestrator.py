@@ -120,13 +120,10 @@ def live_snapshot(session: Any, provider: Any) -> TurnScopeSnapshot:
 
 def plan_first_round_tools(
     *,
-    v11: bool,
     force_search: bool,
     provider_id: str,
     adapter_kind: str | None = None,
 ) -> ToolPlan:
-    if not v11:
-        return ToolPlan(status="ok", tools=None)
     support = TOOL_COMPAT.get((str(provider_id or ""), str(adapter_kind or "")))
     if support is None:
         return ToolPlan(status="unsupported", tools=None, reason="undeclared_combo")
@@ -141,7 +138,6 @@ def provider_tool_capable(provider: Any) -> bool:
     """Same TOOL_COMPAT decision as the chat processor's first-round plan."""
     adapter_kind = type(getattr(provider, "adapter", None) or object).__name__
     plan = plan_first_round_tools(
-        v11=True,
         force_search=False,
         provider_id=str(getattr(provider, "provider_id", "") or ""),
         adapter_kind=adapter_kind,
@@ -193,13 +189,11 @@ def unsupported_failsoft_history(active_history: list, result: RecallResult) -> 
 
 def first_round_tools(
     *,
-    v11: bool,
     force_search: bool,
     provider_id: str,
     adapter_kind: str | None = None,
 ) -> list | None:
     return plan_first_round_tools(
-        v11=v11,
         force_search=force_search,
         provider_id=provider_id,
         adapter_kind=adapter_kind,

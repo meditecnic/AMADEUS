@@ -5,8 +5,7 @@ import struct
 import pytest
 
 from app.services.audio_stream import WavStreamDemuxer
-from app.services.memory import RetrievedMemory
-from app.services.prompt_compiler import PromptCompiler, PromptInputs
+from app.services.prompt_compiler import PromptCompiler, PromptInputs, ResidentProfile
 from app.services.soul_engine import soul_engine
 from app.services.speech import SpeechService
 
@@ -37,12 +36,12 @@ def test_prompt_budget_preserves_identity_and_persona():
     )
     # Persona and examples are never cut; everything else must fit in 800 more.
     compiler = PromptCompiler(input_budget=fixed + 800)
-    facts = [RetrievedMemory(id=i, kind="core", content=("fact " + str(i) + " x" * 80), score=1.0) for i in range(30)]
+    facts = [{"fact_id": f"fact-{i}", "display_text": "fact " + str(i) + " x" * 80} for i in range(30)]
     prompt = compiler.compile(PromptInputs(
         worldline="steins_gate",
         base_identity="IMMUTABLE IDENTITY",
         emotion=soul_engine.profile("steins_gate").baselines,
-        core_facts=facts,
+        resident_profile=ResidentProfile(facts=facts, candidate_count=len(facts)),
         episodic=[],
         web_evidence=[],
         working_summary="summary " * 500,

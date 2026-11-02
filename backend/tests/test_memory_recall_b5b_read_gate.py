@@ -21,7 +21,6 @@ import httpx
 import pytest
 
 from app.agent_tools import (
-    AMADEUS_TOOLS,
     MEMORY_RECALL_DECISION_RULE,
     RECALL_MEMORY_TOOL,
     RECALL_MEMORY_TOOL_NAME,
@@ -350,7 +349,6 @@ async def _capture_first_round_request() -> dict:
     from app.services.turn_tool_orchestrator import plan_first_round_tools
 
     plan = plan_first_round_tools(
-        v11=True,
         force_search=False,
         provider_id="deepseek",
         adapter_kind="OpenAICompatibleAdapter",
@@ -362,18 +360,10 @@ async def _capture_first_round_request() -> dict:
     return capture.requests[0]
 
 
-async def _capture_web_only_request() -> dict:
-    capture = _CaptureTransport([_sse_text("[EMO:neutral] 了解したわ。")])
-    await _through_stream(_openai_adapter(capture), session=_session(), tools=list(AMADEUS_TOOLS))
-    assert capture.requests
-    return capture.requests[0]
-
-
 def _plan_first_round_tools():
     from app.services.turn_tool_orchestrator import plan_first_round_tools
 
     return plan_first_round_tools(
-        v11=True,
         force_search=False,
         provider_id="deepseek",
         adapter_kind="OpenAICompatibleAdapter",
@@ -429,31 +419,6 @@ async def test_language_leak_retry_keeps_one_rule_copy_per_request():
         assert _envelope_violations(request, expect_read_gate=True) == [], index
         assert _rule_copies_in_request(request) == 1, index
     assert session.system_prompt == "PERSONA PROBE"
-
-
-@pytest.mark.asyncio
-async def test_legacy_web_only_request_never_carries_read_gate_rule():
-    from app.services.turn_tool_orchestrator import plan_first_round_tools
-
-    legacy_plan = plan_first_round_tools(
-        v11=False,
-        force_search=False,
-        provider_id="deepseek",
-        adapter_kind="OpenAICompatibleAdapter",
-    )
-    assert legacy_plan.status == "ok"
-    assert legacy_plan.tools is None
-    request = await _capture_web_only_request()
-    assert _envelope_violations(request, expect_read_gate=False) == []
-    assert _rule_copies_in_request(request) == 0
-    assert not tools_include_recall_memory(request.get("tools"))
-    assert [tool["function"]["name"] for tool in request["tools"]] == ["web_search"]
-    capture_dir = os.environ.get("B5B_CAPTURE_DIR")
-    if capture_dir:
-        Path(capture_dir).mkdir(parents=True, exist_ok=True)
-        (Path(capture_dir) / "web-only-envelope.json").write_text(
-            json.dumps(request, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
 
 
 async def _drive_processor_loop(

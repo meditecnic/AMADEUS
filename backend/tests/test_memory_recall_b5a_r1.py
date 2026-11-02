@@ -627,17 +627,17 @@ async def test_true_empty_is_generation_empty(monkeypatch):
 def test_undeclared_and_no_tools_are_unsupported():
     from app.services.turn_tool_orchestrator import plan_first_round_tools
 
-    plan = plan_first_round_tools(v11=True, force_search=False, provider_id="unknown-vendor", adapter_kind="NoToolsAdapter")
+    plan = plan_first_round_tools(force_search=False, provider_id="unknown-vendor", adapter_kind="NoToolsAdapter")
     assert plan.status == "unsupported"
     assert plan.tools is None
     silent = plan_first_round_tools(
-        v11=True, force_search=False, provider_id="deepseek", adapter_kind="NoToolsAdapter"
+        force_search=False, provider_id="deepseek", adapter_kind="NoToolsAdapter"
     )
     assert silent.status == "unsupported"
     assert silent.tools is None
-    missing_kind = plan_first_round_tools(v11=True, force_search=False, provider_id="deepseek")
+    missing_kind = plan_first_round_tools(force_search=False, provider_id="deepseek")
     assert missing_kind.status == "unsupported"
-    deepseek = plan_first_round_tools(v11=True, force_search=False, provider_id="deepseek", adapter_kind="OpenAICompatibleAdapter")
+    deepseek = plan_first_round_tools(force_search=False, provider_id="deepseek", adapter_kind="OpenAICompatibleAdapter")
     assert deepseek.status == "ok"
     names = [row["function"]["name"] for row in deepseek.tools]
     assert "recall_memory" in names

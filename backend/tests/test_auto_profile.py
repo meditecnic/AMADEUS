@@ -1,4 +1,4 @@
-"""Memory ingest window contract and the chat session recent-message window."""
+"""Memory ingest window contract and the chat session message-id backfill."""
 from __future__ import annotations
 
 import pytest
@@ -26,7 +26,7 @@ def test_ingest_window_constant_matches_contract():
 
 
 @pytest.mark.asyncio
-async def test_session_recent_messages_window_and_id(isolated_store):
+async def test_session_set_last_message_id_backfills_newest_row(isolated_store):
     from app.routers.chat_ws import SessionState
 
     session = SessionState("sess-window")
@@ -34,9 +34,7 @@ async def test_session_recent_messages_window_and_id(isolated_store):
     session.append_message({"role": "assistant", "content": "a1", "id": 2})
     session.append_message({"role": "user", "content": "塞拉斯"})
     session.set_last_message_id("user", 3)
-    window = session.recent_messages()
-    assert len(window) == 3
-    assert window[-1]["id"] == 3
-    assert window[-1]["content"] == "塞拉斯"
-    with pytest.raises(ValueError):
-        session.recent_messages(MEMORY_INGEST_WINDOW_N + 1)
+    history = session.history
+    assert len(history) == 3
+    assert history[-1]["id"] == 3
+    assert history[-1]["content"] == "塞拉斯"

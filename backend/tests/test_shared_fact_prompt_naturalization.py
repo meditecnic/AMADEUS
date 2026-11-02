@@ -3,7 +3,7 @@
 L3 expression: FACT_USE_CONTRACT instructs natural familiarity, forbids
 deny-then-guess and any worldline/DB/MEMORY mechanism talk.
 
-These probes feed facts straight into PromptCompiler. The v11 resident profile
+These probes feed a resident profile straight into PromptCompiler. The profile
 built from stable facts (partial-profile rule, per-turn supplement) is covered
 by test_memory_v11_resident_profile and test_memory_v11_prompt.
 """
@@ -12,8 +12,12 @@ from __future__ import annotations
 import pytest
 
 from app.db import init_db, reset_initialization_cache
-from app.services.memory import RetrievedMemory
-from app.services.prompt_compiler import PromptCompiler, PromptInputs, compile_for_session
+from app.services.prompt_compiler import (
+    PromptCompiler,
+    PromptInputs,
+    ResidentProfile,
+    compile_for_session,
+)
 from app.services.soul_engine import EmotionVector
 
 
@@ -47,16 +51,19 @@ def _compile_with_facts(facts: dict[str, str], message: str) -> str:
             trust=0.5, attachment=0.5, irritation=0.1,
             anxiety=0.1, jealousy=0.1, volatility=0.2,
         ),
-        core_facts=[
-            RetrievedMemory(id=index + 1, kind="core", content=f"{key}: {value}", score=1.0)
-            for index, (key, value) in enumerate(facts.items())
-        ],
         episodic=[],
         web_evidence=[],
         working_summary="",
         recent_history=[],
         current_user_message=message,
         identity_mode="self",
+        resident_profile=ResidentProfile(
+            facts=[
+                {"fact_id": f"nat-{index}", "display_text": f"{key}: {value}"}
+                for index, (key, value) in enumerate(facts.items())
+            ],
+            candidate_count=len(facts),
+        ),
     ))
 
 
@@ -105,42 +112,3 @@ async def test_empty_core_facts_do_not_carry_contract(isolated_store):
     )
     # No facts → no contract (budget is not wasted on an unused instruction).
     assert "FACT_USE_CONTRACT" not in prompt
-
-
-@pytest.mark.asyncio
-async def test_contract_and_facts_survive_core_budget_fit(isolated_store):
-    """Review ISSUE-2/3: contract head + facts must both survive _fit; the
-    core section keeps its head (contract) and trims tail facts, never the
-    other way around."""
-    from app.services.memory import RetrievedMemory
-    from app.services.prompt_compiler import PromptCompiler, PromptInputs
-    from app.services.soul_engine import EmotionVector
-
-    facts = [
-        RetrievedMemory(
-            id=index + 1,
-            kind="core",
-            content=f"fact_{index}: value-{index}-" + "x" * 120,
-            score=1.0 - index * 0.01,
-        )
-        for index in range(24)
-    ]
-    compiled = PromptCompiler().compile(PromptInputs(
-        worldline="beta",
-        base_identity="You are Amadeus Kurisu.",
-        emotion=EmotionVector(
-            trust=0.5, attachment=0.5, irritation=0.1,
-            anxiety=0.1, jealousy=0.1, volatility=0.2,
-        ),
-        core_facts=facts,
-        episodic=[],
-        web_evidence=[],
-        working_summary="",
-        recent_history=[],
-        current_user_message="事実について",
-        identity_mode="self",
-    ))
-    # The contract anchor must survive even when the fact list overflows the
-    # core budget; the highest-scored facts stay, tail facts get trimmed.
-    assert "FACT_USE_CONTRACT" in compiled
-    assert "fact_0:" in compiled
