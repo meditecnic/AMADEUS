@@ -308,6 +308,8 @@ async def test_capture_adds_only_output_cap_and_reserves_2000_tokens(tmp_path, m
     assert Decimal(budget['attempts'][0]['reserve_cny']) == expected_reserve
     if finish_reason == 'length':
         assert capture.error_code == capture.rows[0]['error_code'] == 'output_truncated'
+        assert capture.rows[0]['error_type'] == 'Refused'
+        assert capture.rows[0]['error_detail'] == 'output_truncated'
         assert 'json_parse_failed' not in capture.rows[0]
     else:
         assert capture.rows[0]['json_parse_failed'] == parse_failed
@@ -467,6 +469,7 @@ async def test_output_truncated_never_parsed_or_classified(tmp_path, monkeypatch
         row = await probe.product_execution(plan, entry, directory)
     assert row['status'] == 'error'
     assert row['error_code'] == 'output_truncated'
+    assert row['error_type'] == 'Refused' and row['error_detail'] == 'output_truncated'
     assert row['score'] is None
     assert row['stop_reason'] is None
     assert row['request_count'] == len(row['rounds']) == truncated_round
@@ -611,3 +614,101 @@ def test_aggregate_table_reports_pending_counts_and_stop_warning(tmp_path):
         for category in probe.CATEGORIES:
             label = 'stop（人工判定前通过率无意义）' if category == 'stop' else category
             assert f'| {mode} | {label} | 0.0%, 0.0% | 1, 2 |' in table
+
+
+@pytest.fixture
+def probe_paid_mock(monkeypatch):
+    from app.services.memory import memory_service
+
+    monkeypatch.setattr(memory_service, 'embedder', memory_service.embedder)
+    original = httpx.AsyncClient
+    waits = []
+
+    async def sleep(seconds):
+        waits.append(seconds)
+
+    def install(handler):
+        def client(*args, **kwargs):
+            kwargs.setdefault('transport', httpx.MockTransport(handler))
+            return original(*args, **kwargs)
+        monkeypatch.setattr(httpx, 'AsyncClient', client)
+
+    monkeypatch.setattr(probe.b5.asyncio, 'sleep', sleep)
+    return install, waits
+
+
+@pytest.mark.parametrize('failures', [0, 1, 3])
+def test_probe_transport_retry_results_budget_and_continuation(tmp_path, monkeypatch, probe_paid_mock, failures):
+    install, waits = probe_paid_mock
+    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-placeholder')
+    monkeypatch.setattr(probe, 'load_embedder', lambda plan: probe.FakeEmbedder())
+    plan = probe.make_plan(argparse.Namespace(transport='real', base_url=probe.b5.BUILTIN_DEEPSEEK_BASE_URL,
+                                             cap_cny='1', e5_snapshot='', repeats=1))
+    plan['executions'] = plan['executions'][:5]
+    active, sent = [], []
+    cases = {c['id']: c for c in probe.load_fixture()['cases']}
+
+    def provider(request):
+        execution = active[-1]
+        payload = json.loads(request.content)
+        sent.append(payload)
+        execution['attempts'] += 1
+        if len(active) <= failures or (failures == 0 and len(sent) == 1):
+            raise httpx.ReadTimeout('sk-' + 'x' * 30 + ' Bearer hidden-token')
+        execution['successes'] += 1
+        completion = probe.fake_completion(cases[execution['entry']['case_id']], execution['entry']['mode'],
+                                           execution['successes'], payload)
+        return httpx.Response(200, json={'choices': [{'finish_reason': 'stop', 'message': {
+            'content': json.dumps(completion, ensure_ascii=False)}}],
+            'usage': {'prompt_tokens': 100, 'completion_tokens': 10}})
+
+    install(provider)
+
+    def execute(plan, entry, directory):
+        active.append(dict(entry=entry, attempts=0, successes=0))
+        monkeypatch.setenv('AMADEUS_DATA_DIR', str(directory / 'data'))
+        result = asyncio.run(probe.product_execution(plan, entry, directory))
+        probe.b5.write_json(directory / 'result.json', result)
+        return result
+
+    monkeypatch.setattr(probe, 'execute_subprocess', execute)
+    directory = tmp_path / 'run'
+    with probe.b5.fake_network_guard():
+        rows = probe.run_suite(directory, plan)
+    assert [r['status'] for r in rows] == (['completed'] * 5 if failures == 0 else
+        ['error'] * failures + (['completed'] * 4 if failures == 1 else []))
+    first = rows[0]
+    assert first['error_type'] == 'ReadTimeout' and not first['stop_reason']
+    assert 'sk-' not in first['error_detail'] and 'hidden-token' not in first['error_detail']
+    requests = probe.b5.read_json(directory / 'executions' / first['id'] / 'requests.json')
+    assert len(requests) == (3 if failures == 0 else 2)
+    assert requests[0]['error_type'] == 'ReadTimeout'
+    assert requests[0]['request'] == requests[1]['request']
+    budget = probe.b5.Budget(directory / 'budget.json', '1')
+    charges = [a for a in budget.state['attempts'] if a['execution_id'] == first['id']]
+    expected = sum((Decimal(a['reserve_cny']) for a in charges if a['status'] == 'reserved'), Decimal(0))
+    assert expected > 0 and Decimal(first['retained_reserve_cny']) == expected
+    assert Decimal(first['cost_cny']) == expected + Decimal(first['settled_cny'])
+    assert waits == [5] * max(1, failures)
+    assert len(active) == (3 if failures == 3 else 5)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status,count', [(429, 2), (503, 2), (400, 1)])
+async def test_probe_retries_only_429_and_server_errors(tmp_path, probe_paid_mock, status, count):
+    install, waits = probe_paid_mock
+    seen = []
+
+    def provider(request):
+        seen.append(request)
+        return httpx.Response(status)
+
+    install(provider)
+    directory = tmp_path / 'executions' / 'probe'
+    directory.mkdir(parents=True)
+    capture = probe.Capture({'transport': 'real', 'cap_cny': '1'}, {'id': 'probe'}, {}, directory)
+    with probe.b5.fake_network_guard(), pytest.raises((probe.b5.Refused, httpx.HTTPStatusError)):
+        await capture.handle(httpx.Request('POST', 'https://api.deepseek.com/chat/completions', json={'messages': []}))
+    assert len(seen) == count and waits == ([5] if count == 2 else [])
+    rows = probe.b5.read_json(directory / 'requests.json')
+    assert len(rows) == count and all(r['error_type'] == str(status) for r in rows)

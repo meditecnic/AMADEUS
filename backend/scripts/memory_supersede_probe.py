@@ -175,14 +175,17 @@ class Capture:
         self.rows = []
         self.stop_reason = None
         self.error_code = None
+        self.failure = None
 
     async def handle(self, request):
+        if self.failure:
+            raise self.failure
         payload = json.loads(request.content)
         payload['max_tokens'] = MAX_OUTPUT_TOKENS
         row = {'round': self.round_no, 'conversation_id': self.conversation_id, 'request': payload, 'sent': False}
-        self.rows.append(row)
-        b5.write_json(self.directory / 'requests.json', self.rows)
         if self.plan['transport'] == 'fake':
+            self.rows.append(row)
+            b5.write_json(self.directory / 'requests.json', self.rows)
             row['sent'] = True
             completion = fake_completion(self.case, self.entry['mode'], self.round_no, payload)
             usage = {'prompt_tokens': max(1, len(json.dumps(payload, ensure_ascii=False).encode('utf-8')) // 3), 'completion_tokens': 150}
@@ -191,15 +194,32 @@ class Capture:
         else:
             try:
                 budget = b5.Budget(self.directory.parents[1] / 'budget.json', self.plan['cap_cny'])
-                reservation = budget.reserve(payload, self.entry['id'], kind='memory', phase=str(self.round_no))
-                row['sent'] = True
-                b5.write_json(self.directory / 'requests.json', self.rows)
-                async with httpx.AsyncClient(timeout=60) as client:
-                    headers = {k: v for k, v in request.headers.items() if k.lower() != 'content-length'}
-                    response = await client.post(str(request.url), json=payload, headers=headers)
+                async def send(attempt_row):
+                    attempt_row['sent'] = True
+                    b5.write_json(self.directory / 'requests.json', self.rows)
+                    async with httpx.AsyncClient(timeout=60) as client:
+                        headers = {k: v for k, v in request.headers.items() if k.lower() != 'content-length'}
+                        response = await client.post(str(request.url), json=payload, headers=headers)
+                    if response.status_code != 200:
+                        raise httpx.HTTPStatusError('provider_http_' + str(response.status_code),
+                                                    request=request, response=response)
+                    return response
+
+                response, reservation, row = await b5.request_with_retry(budget, payload, self.entry['id'],
+                    self.rows, self.directory / 'requests.json', {**row, 'kind': 'memory', 'phase': str(self.round_no)}, send)
                 budget.settle(reservation, response.json().get('usage'))
+                row.update(settled_cny=budget.state['attempts'][reservation]['charge_cny'], retained_reserve_cny='0')
             except Exception as exc:
-                self.stop_reason = str(exc) if isinstance(exc, b5.Refused) else 'http_or_accounting_failed'
+                if not self.rows:
+                    self.rows.append(row)
+                if 'error_type' not in self.rows[-1]:
+                    self.rows[-1].update(b5.error_fields(exc))
+                b5.write_json(self.directory / 'requests.json', self.rows)
+                self.failure = exc
+                if isinstance(exc, b5.TransportFailed):
+                    self.error_code = 'network_retries_exhausted'
+                else:
+                    self.stop_reason = str(exc) if isinstance(exc, b5.Refused) else 'http_or_accounting_failed'
                 raise
             body = response.json()
             usage = body.get('usage') or {}
@@ -207,8 +227,10 @@ class Capture:
                    cost_cny=str(b5.usage_cost(usage)) if self.plan['transport'] == 'real' else '0')
         if any(choice.get('finish_reason') == 'length' for choice in body.get('choices', [])):
             self.error_code = row['error_code'] = 'output_truncated'
+            exc = b5.Refused('output_truncated')
+            row.update(b5.error_fields(exc))
             b5.write_json(self.directory / 'requests.json', self.rows)
-            raise b5.Refused('output_truncated')
+            raise exc
         raw = str((body.get('choices') or [{}])[0].get('message', {}).get('content', '')).strip()
         try:
             cleaned = raw.split('\n', 1)[1].rsplit('```', 1)[0] if raw.startswith('```') else raw
@@ -320,6 +342,9 @@ async def product_execution(plan, entry, directory):
         'request_count': sum(r['sent'] for r in capture.rows), 'relations': dict(sum((Counter(r.get('relations', {})) for r in capture.rows), Counter())),
         'usage': {k: sum(r.get('usage', {}).get(k, 0) for r in capture.rows) for k in ('prompt_tokens', 'completion_tokens')},
         'cost_cny': str(sum((Decimal(r.get('cost_cny', '0')) for r in capture.rows), Decimal(0)))}
+    result.update(b5.last_request_error(capture.rows))
+    if plan['transport'] == 'real':
+        b5.execution_accounting(result, directory.parents[1], plan)
     return result
 
 
@@ -395,7 +420,7 @@ def run_suite(run_dir, plan):
             result = execute_subprocess(plan, entry, directory)
             rows.append(result)
             b5.write_json(run_dir / 'results.json', rows)
-            if result.get('stop_reason'):
+            if result.get('stop_reason') or sum(r['status'] == 'error' for r in rows) >= 3:
                 break
     summary = summarize(rows)
     b5.write_json(run_dir / 'summary.json', summary)

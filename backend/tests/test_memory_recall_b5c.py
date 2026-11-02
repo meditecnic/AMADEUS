@@ -443,3 +443,49 @@ def test_pending_only_counts_unfinished_gate_rules(tmp_path,frozen,execution_id,
     metrics=result['runs'][0]['groups'][group]
     assert metrics['incomplete']==1
     assert metrics['gate_incomplete']==int(status=='PENDING')
+
+
+
+def test_aggregate_cli_excludes_all_groups_and_repeats_of_error_question(tmp_path, frozen):
+    paths = saved_runs(tmp_path, *frozen)
+    target = 'resident_pillow'
+    replace_saved_result(paths[0], 'C-' + target + '-1', status='error', error_type='ReadTimeout')
+    replace_saved_result(paths[0], 'A-' + target + '-1', answer='了解したわ')
+    originals = {p: p.read_bytes() for path in paths for p in path.rglob('*.json')}
+    output = tmp_path / 'out'
+    with b5.fake_network_guard():
+        assert b5.main(['--aggregate', *map(str, paths), '--output', str(output)]) == 0
+    result = b5.read_json(output / 'aggregate.json')
+    repeats = next(c['repeats'] for c in frozen[0]['cases'] if c['id'] == target)
+    assert result['excluded_questions'] == 1
+    assert result['excluded_executions'] == 3 * repeats
+    assert result['exclusions'] == [
+        dict(run=paths[0].name, case_ids=[target], excluded_questions=1, excluded_executions=3 * repeats),
+        *[dict(run=p.name, case_ids=[], excluded_questions=0, excluded_executions=0) for p in paths[1:]],
+    ]
+    for group in 'ABC':
+        assert result['runs'][0]['groups'][group]['executions'] == 48 - repeats
+        assert result['runs'][0]['groups'][group]['incomplete'] == 0
+        assert result['runs'][1]['groups'][group]['executions'] == 48
+    assert result['groups']['A']['hit']['mean'] == result['groups']['C']['hit']['mean'] == 1
+    assert result['gate']['status'] == 'PASS'
+    markdown = (output / 'aggregate.md').read_text(encoding='utf-8')
+    assert '成对剔除题数: 1' in markdown and f'{paths[0].name}: {target}' in markdown
+    assert all(p.read_bytes() == content for p, content in originals.items())
+
+
+@pytest.mark.parametrize('status', ['interrupted', 'not_run_budget', 'not_run_after_accounting_error', 'stopped'])
+def test_aggregate_cli_rejects_stopped_run_even_outside_gate(tmp_path, frozen, status):
+    paths = saved_runs(tmp_path, *frozen)
+    replace_saved_result(paths[0], 'B-resident_pillow-1', status=status)
+    with pytest.raises(b5.Refused, match='aggregate_requires_complete_runs'):
+        b5.aggregate(paths, tmp_path / 'out')
+
+
+def test_aggregate_rejects_third_error_even_at_end_of_run(tmp_path, frozen):
+    paths = saved_runs(tmp_path, *frozen)
+    entries = b5.read_json(paths[0] / 'plan.json')['executions'][-3:]
+    for e in entries:
+        replace_saved_result(paths[0], e['id'], status='error')
+    with pytest.raises(b5.Refused, match='aggregate_requires_complete_runs'):
+        b5.aggregate(paths, tmp_path / 'out')
