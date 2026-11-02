@@ -719,7 +719,7 @@ def test_chinese_chars_in_summary_and_judge_pack(tmp_path, plan, body, expected)
     assert summary['mechanical']['chinese_char_turns'] == bool(expected)
     assert summary['mechanical']['japanese_check'] == '产品自己的判断'
     if body == '晚上好。休めるなら':
-        assert score['japanese']  # Preserve the product's existing decision.
+        assert not score['japanese']  # The Chinese greeting is gated as its own segment.
     pe.judge_pack(tmp_path/'run')
     assert 'chinese_only_chars: '+json.dumps(expected, ensure_ascii=False) in (tmp_path/'run/judge-pack.md').read_text(encoding='utf-8')
 
