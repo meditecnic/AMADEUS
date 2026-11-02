@@ -239,8 +239,11 @@ def test_auth_cancel_reloads_history_and_summary_without_resetting_runtime(app_c
         monkeypatch.setattr(chat_ws, '_persist_aborted_turn', notice_with_summary)
         b = sockets.enter_context(app_client.websocket_connect(f'/ws/chat?session_id={session_id}'))
         load = chat_ws.SessionState.load_from_db
+        load_calls = 0
 
         async def load_once(self):
+            nonlocal load_calls
+            load_calls += 1
             await load(self)
             # These runtime auth settings must survive the history-only refresh.
             self.identity_mode = 'self'
@@ -249,6 +252,7 @@ def test_auth_cancel_reloads_history_and_summary_without_resetting_runtime(app_c
 
         monkeypatch.setattr(chat_ws.SessionState, 'load_from_db', load_once)
         auth(b)
+        assert load_calls == 1, "auth cancellation must refresh history without reloading runtime settings"
         database = rows(app_client, session_id)
         assert [row['role'] for row in session.history] == [row['role'] for row in database]
         assert [row['role'] for row in session.history] == ['user', 'assistant']
