@@ -19,6 +19,9 @@ async def cancel_inflight(session: Any) -> int:
         task.cancel()
         cancelled += 1
         await asyncio.gather(task, return_exceptions=True)
+    current_task = getattr(session, "active_task", None)
+    if current_task is not None and current_task is not task:
+        return cancelled
     streams = list(getattr(session, "active_streams", set()))
     for stream in streams:
         closer = getattr(stream, "aclose", None)
