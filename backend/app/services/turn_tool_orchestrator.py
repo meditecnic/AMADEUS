@@ -118,11 +118,6 @@ def live_snapshot(session: Any, provider: Any) -> TurnScopeSnapshot:
     return snapshot_from_session(session, provider)
 
 
-def joint_memory_web_supported(provider_id: str) -> bool:
-    """Only the DeepSeek OpenAI-compatible path has existing tool fixtures."""
-    return str(provider_id or "") == "deepseek"
-
-
 def plan_first_round_tools(
     *,
     v11: bool,
@@ -564,11 +559,3 @@ def build_memory_candidate_context(
     web_results: list[tuple[str, str]] | None = None,
 ) -> list:
     return prepare_second_round_payload(active_history, result, web_results).history
-
-
-def block_has_forbidden_fields(block: str) -> bool:
-    lowered = block.lower()
-    forbidden = ("fact_id", "session_id", "worldline", "identity_mode", "score", "cosine")
-    data_start = block.find("MEMORY_CANDIDATE_DATA")
-    haystack = block[data_start:] if data_start >= 0 else block
-    return any(token in haystack.lower() for token in forbidden) or "fact_id" in lowered and "MEMORY_CANDIDATE_DATA" in block

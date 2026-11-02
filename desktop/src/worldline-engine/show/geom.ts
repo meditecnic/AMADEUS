@@ -39,10 +39,6 @@ export const STACK = 11; // atlas cell with every cathode overlaid
 /** The original zooms the instrument about the centre of the case top. */
 export const SCALE_PIVOT: [number, number] = [0, -0.072];
 
-export function tubeCenterX(i: number): number {
-  return (i - (TUBES - 1) / 2) * PITCH;
-}
-
 /** Offset that keeps SCALE_PIVOT fixed on screen at a given scale (plus an extra shift). */
 export function pivotOff(scale: number, dx = 0, dy = 0): [number, number] {
   return [SCALE_PIVOT[0] * (1 - scale) + dx, SCALE_PIVOT[1] * (1 - scale) + dy];
@@ -55,20 +51,6 @@ export function roScreen(p: [number, number], ro: [number, number, number, numbe
   const x = p[0] * ro[0];
   const y = p[1] * ro[0];
   return [ANCHOR[0] + ro[1] + c * x - s * y, ANCHOR[1] + ro[2] + s * x + c * y];
-}
-
-export function projectView(x: number, y: number, view: [number, number, number]): [number, number] {
-  if (view[2] <= 0) return [x, y];
-  const Dz = 1 / view[2];
-  const cy = Math.cos(view[0]);
-  const sy = Math.sin(view[0]);
-  const cp = Math.cos(view[1]);
-  const sp = Math.sin(view[1]);
-  const X = cy * x + sy * sp * y;
-  const Y = cp * y;
-  const Z = Dz - sy * x + cy * sp * y;
-  const k = Dz / Math.max(Z, 1e-3);
-  return [X * k, Y * k];
 }
 
 export const GEOM_DEFINES = `

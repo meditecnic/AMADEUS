@@ -975,9 +975,6 @@ class DiagnosticRuntime:
             except Exception:
                 self._degrade("write_failed")
 
-    def set_observing(self, enabled: bool) -> None:
-        self.observing = bool(enabled)
-
     def append_event(self, event: Mapping[str, Any]) -> bool:
         if not self.observing or self._store is None:
             return False
@@ -998,11 +995,6 @@ class DiagnosticRuntime:
 
     def record_mapping_fallback(self) -> None:
         self.mapping_fallbacks += 1
-
-    def create_tts_observer(self) -> "DiagnosticTTSObserver | None":
-        if not self.observing:
-            return None
-        return DiagnosticTTSObserver(self)
 
     def create_turn_observer(self, identity=None) -> "DiagnosticTurnObserver | None":
         if not self.observing:

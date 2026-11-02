@@ -715,14 +715,6 @@ def _session_self_name(session) -> str:
     return sanitize_self_name(getattr(session, "self_name", ""))
 
 
-def _stable_fact_prompt_id(fact_id: str) -> int:
-    """Map UUID fact_id to a stable positive int for RetrievedMemory.id."""
-    import hashlib
-
-    digest = hashlib.sha256(fact_id.encode("utf-8")).digest()
-    return int.from_bytes(digest[:4], "big") % 2_147_483_647 or 1
-
-
 def _experience_prompt_id(experience_id: str) -> int:
     """Map UUID experience_id to a stable positive int (never expose raw UUIDs)."""
     import hashlib
