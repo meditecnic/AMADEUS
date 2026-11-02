@@ -116,25 +116,6 @@ def _neutral_prefix(text: str) -> bool:
     return False
 
 
-def merge_tool_calls(
-    existing: dict[str, dict[str, Any]],
-    incoming: list[dict[str, Any]] | None,
-    *,
-    seq: int,
-    assembler: ToolCallAssembler | None = None,
-) -> dict[str, dict[str, Any]]:
-    box = assembler or ToolCallAssembler()
-    if assembler is None:
-        box.calls = existing
-        for key in existing:
-            box.aliases[str(key)] = str(key)
-    box.ingest(incoming, seq=seq)
-    if existing is not box.calls:
-        existing.clear()
-        existing.update(box.calls)
-    return box.calls
-
-
 def observe_chunk(state: TurnModeState, chunk: dict[str, Any], seq: int) -> ProviderTurnEvent:
     content = chunk.get("content") or ""
     if content is None:

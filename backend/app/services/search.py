@@ -140,12 +140,6 @@ class SearchService:
         return stored or os.getenv(SEARCH_ENV_KEYS[provider], "")
 
     @staticmethod
-    def configured_tavily_key() -> str:
-        """Backward-compatible alias for tests and older call sites."""
-
-        return SearchService.configured_key("tavily")
-
-    @staticmethod
     def get_active_provider() -> SearchProviderId:
         try:
             stored = credential_store.get(SEARCH_ACTIVE_PROVIDER_ID)
@@ -310,10 +304,6 @@ class SearchService:
                 await db.close()
             self._calls.append(now)
             return True, None
-
-    # Backward-compatible name used by older tests.
-    async def _consume_tavily_credit(self) -> tuple[bool, str | None]:
-        return await self._consume_search_credit()
 
     async def _tavily(self, query: str, api_key: str) -> SearchResponse:
         assert self._client is not None

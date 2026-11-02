@@ -1165,13 +1165,6 @@ export function mapWallTime(wall: number, scenario: Scenario): Mapped {
   return { showT, waitT: at - T.GATE, outcome: out, resultT: T.GATE, ended: showT >= showEnd(out) };
 }
 
-export function scenarioDuration(scenario: Scenario, reduced = false): number {
-  const at = MOCK_DELAY[scenario];
-  const out = MOCK_OUTCOME[scenario];
-  if (reduced) return reducedEnd(out, at);
-  return Math.max(at, T.GATE) - T.GATE + showEnd(out);
-}
-
 // keep tree-shaken helpers referenced for future shots
 void lerp;
 void easeOutCubic;

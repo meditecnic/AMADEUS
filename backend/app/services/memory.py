@@ -323,9 +323,6 @@ class ExtractionResult(BaseModel):
     def durable_cores(self) -> list[CoreFactCandidate]:
         return [f.as_core() for f in self.facts if f.horizon == "durable"]
 
-    def contextual_episodes(self) -> list[EpisodicCandidate]:
-        return [f.as_episode() for f in self.facts if f.horizon == "contextual"]
-
 
 def parse_extraction_payload(payload: object) -> ExtractionResult:
     """Parse provider JSON with per-fact soft failure (never abort the whole batch)."""

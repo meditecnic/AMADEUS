@@ -69,14 +69,6 @@ function normalize(p: Point3): Point3 {
   return len < 0.001 ? { x: 0, y: 1, z: 0 } : scale(p, 1 / len);
 }
 
-function cross(a: Point3, b: Point3): Point3 {
-  return {
-    x: a.y * b.z - a.z * b.y,
-    y: a.z * b.x - a.x * b.z,
-    z: a.x * b.y - a.y * b.x,
-  };
-}
-
 
 function quadratic(a: Point3, c: Point3, b: Point3, steps: number): Point3[] {
   const points: Point3[] = [];
@@ -91,56 +83,6 @@ function quadratic(a: Point3, c: Point3, b: Point3, steps: number): Point3[] {
 
 export function azimuthOf(point: Point3): number {
   return Math.atan2(point.z, point.x);
-}
-
-function outOfPlaneControl(a: Point3, b: Point3, index: number): Point3 {
-  const mid = scale(add(a, b), 0.5);
-  const chord = sub(b, a);
-  let normal = cross(chord, mid);
-  if (length(normal) < 0.001) normal = cross(chord, { x: 0, y: 1, z: 0 });
-  if (length(normal) < 0.001) normal = { x: 0, y: 1, z: 0 };
-  normal = normalize(normal);
-  const sign = index % 2 === 0 ? 1 : -1;
-  const lift = 0.48 + (index % 3) * 0.14;
-  const outward = 0.16 + (index % 2) * 0.14;
-  const radial = length(mid) < 0.001 ? { x: 0, y: 0, z: 1 } : normalize(mid);
-  return add(add(mid, scale(normal, sign * lift)), scale(radial, outward));
-}
-
-export function constellationFieldBelt(
-  display: readonly DisplayNode[],
-  samples = 96,
-): Point3[][] {
-  const topics = display
-    .filter((node) => node.kind === 'topic')
-    .slice()
-    .sort((a, b) => azimuthOf(a.position) - azimuthOf(b.position));
-  if (topics.length === 0) return [];
-  if (topics.length === 1) {
-    const p = topics[0].position;
-    const radial = normalize(p);
-    let tangent = normalize(cross(radial, { x: 0, y: 1, z: 0 }));
-    if (length(tangent) < 0.2) tangent = normalize(cross(radial, { x: 1, y: 0, z: 0 }));
-    const binormal = normalize(cross(radial, tangent));
-    const arc: Point3[] = [];
-    const span = 0.62;
-    const steps = Math.max(12, Math.floor(samples / 4));
-    for (let i = 0; i <= steps; i += 1) {
-      const t = -span + (2 * span * i) / steps;
-      arc.push(
-        add(add(p, scale(tangent, t)), scale(binormal, Math.sin(t * 1.4) * 0.22)),
-      );
-    }
-    return [arc];
-  }
-  const segments: Point3[][] = [];
-  const steps = Math.max(10, Math.floor(samples / topics.length));
-  for (let i = 0; i < topics.length - 1; i += 1) {
-    const a = topics[i].position;
-    const b = topics[i + 1].position;
-    segments.push(quadratic(a, outOfPlaneControl(a, b, i), b, steps));
-  }
-  return segments;
 }
 
 
