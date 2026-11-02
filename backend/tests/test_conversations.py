@@ -67,12 +67,6 @@ async def test_phase2_p3_turn_resyncs_stale_identity_mode_from_conversation(isol
     with patch(
         "app.services.soul_engine.soul_engine.restore_emotion",
         new=AsyncMock(return_value=emotion),
-    ), patch(
-        "app.services.memory.memory_service.select_core_facts",
-        new=AsyncMock(return_value=[]),
-    ), patch(
-        "app.services.memory.memory_service.lexical_search",
-        new=AsyncMock(return_value=[]),
     ):
         prompt = await compile_for_session(session, "こんにちは")
 
@@ -89,12 +83,6 @@ async def test_phase2_p3_turn_resyncs_stale_identity_mode_from_conversation(isol
     with patch(
         "app.services.soul_engine.soul_engine.restore_emotion",
         new=AsyncMock(return_value=emotion),
-    ), patch(
-        "app.services.memory.memory_service.select_core_facts",
-        new=AsyncMock(return_value=[]),
-    ), patch(
-        "app.services.memory.memory_service.lexical_search",
-        new=AsyncMock(return_value=[]),
     ):
         self_prompt = await compile_for_session(session, "こんにちは")
     assert "相手は岡部ではなく" in self_prompt
@@ -123,12 +111,6 @@ async def test_phase2_s3_session_identity_mode_feeds_compile(isolated_store):
     with patch(
         "app.services.soul_engine.soul_engine.restore_emotion",
         new=AsyncMock(return_value=emotion),
-    ), patch(
-        "app.services.memory.memory_service.select_core_facts",
-        new=AsyncMock(return_value=[]),
-    ), patch(
-        "app.services.memory.memory_service.lexical_search",
-        new=AsyncMock(return_value=[]),
     ):
         self_prompt = await compile_for_session(session, "こんにちは")
 
@@ -149,12 +131,6 @@ async def test_phase2_s3_session_identity_mode_feeds_compile(isolated_store):
     with patch(
         "app.services.soul_engine.soul_engine.restore_emotion",
         new=AsyncMock(return_value=emotion),
-    ), patch(
-        "app.services.memory.memory_service.select_core_facts",
-        new=AsyncMock(return_value=[]),
-    ), patch(
-        "app.services.memory.memory_service.lexical_search",
-        new=AsyncMock(return_value=[]),
     ):
         okabe_prompt = await compile_for_session(okabe_session, "こんにちは")
 
@@ -171,12 +147,6 @@ async def test_phase2_s3_session_identity_mode_feeds_compile(isolated_store):
     with patch(
         "app.services.soul_engine.soul_engine.restore_emotion",
         new=AsyncMock(return_value=emotion),
-    ), patch(
-        "app.services.memory.memory_service.select_core_facts",
-        new=AsyncMock(return_value=[]),
-    ), patch(
-        "app.services.memory.memory_service.lexical_search",
-        new=AsyncMock(return_value=[]),
     ):
         legacy_prompt = await compile_for_session(bare, "hi")
     assert "相手を岡部として扱い" in legacy_prompt

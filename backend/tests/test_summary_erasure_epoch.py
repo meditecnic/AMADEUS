@@ -7,8 +7,6 @@ import pytest
 from app import models
 from app.routers.chat_ws import SessionState, compress_and_update_history, sessions
 from app.services.conversations import conversation_service
-from app.services.memory import MemoryService
-from app.services.provider_registry import ProviderCapabilities, ProviderSnapshot, ProviderTask
 from test_working_summary import isolated_store, _HISTORY, _compress_snapshot, _raw_summary_rows
 
 
@@ -27,9 +25,7 @@ async def test_processor_rejected_during_erasure_releases_busy_state(isolated_st
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("producer", ["compression", "legacy"])
-@pytest.mark.parametrize("erasure", ["conversation", "memory"])
-async def test_paused_summary_cannot_repopulate_forgotten_conversation(isolated_store, producer, erasure):
+async def test_paused_summary_cannot_repopulate_forgotten_conversation(isolated_store):
     owner = f"summary-epoch-{uuid4()}"
     conv = await conversation_service.create_and_select(owner, "steins_gate", title="epoch")
     cid = str(conv["id"])
@@ -41,36 +37,18 @@ async def test_paused_summary_cannot_repopulate_forgotten_conversation(isolated_
             await release.wait()
             return "候補の確認待ち"
 
-        async def complete_json(self, **kwargs):
-            started.set()
-            await release.wait()
-            return {"working_summary": "候補の確認待ち", "facts": []}
-
     session = SessionState(owner)
     session.conversation_id = cid
     session.history = list(_HISTORY)
     sessions[owner] = session
     adapter = Adapter()
-    if producer == "compression":
-        task = asyncio.create_task(compress_and_update_history(
-            owner, session.history, conversation_id=cid,
-            revision=session.revision, provider_snapshot=_compress_snapshot(adapter),
-        ))
-    else:
-        snapshot = ProviderSnapshot("test", "test", ProviderCapabilities(
-            tasks=frozenset({ProviderTask.MEMORY})), adapter)
-        task = asyncio.create_task(MemoryService()._extract_turn(
-            owner, "steins_gate", "test", "test", [], "", snapshot,
-            conversation_id=cid,
-        ))
+    task = asyncio.create_task(compress_and_update_history(
+        owner, session.history, conversation_id=cid,
+        revision=session.revision, provider_snapshot=_compress_snapshot(adapter),
+    ))
     try:
         await asyncio.wait_for(started.wait(), 5)
-        if erasure == 'conversation':
-            await conversation_service.forget(cid, owner, "steins_gate", forget_long_term=False)
-        else:
-            from app.services.memory import memory_service
-            await memory_service.forget(owner, 'steins_gate')
-            assert session.memory_summary == ''
+        await conversation_service.forget(cid, owner, "steins_gate", forget_long_term=False)
         # Simulate the UI reload without helping the guard via a revision change.
         session.history = []
         session.memory_summary = ""

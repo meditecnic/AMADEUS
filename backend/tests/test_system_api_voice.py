@@ -30,8 +30,11 @@ def test_worldline_memory_and_dependency_apis(tmp_path, monkeypatch):
         assert switched.json()["worldline"] == "beta"
         current = client.get("/api/worldline/current", params={"session_id": "okabe"}).json()
         assert current["worldline"] == "beta"
-        memory = client.get("/api/memory/status", params={"session_id": "okabe", "worldline": "beta"}).json()
-        assert memory["episodic_count"] == 0
+        memory = client.get(
+            "/api/memory/status",
+            params={"session_id": "okabe", "worldline": "beta", "identity_mode": "okabe"},
+        ).json()
+        assert memory["pending_count"] == 0
         dependencies = client.get("/health/dependencies").json()
         expected_status = (
             "ready" if dependencies["dependencies"]["tts"].get("ok") else "degraded"

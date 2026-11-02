@@ -114,14 +114,6 @@ def test_erasure_resumes_after_history_failure_without_resurrecting_memory(isola
     assert client.get(f'/api/memory/facts/{new_fact}/details',params=_facts_scope(owner)).status_code == 200
 
 
-@pytest.mark.parametrize('runtime_mode', ['legacy','shadow','v11'])
-def test_status_reports_actual_chat_runtime_mode(isolated_client, monkeypatch, runtime_mode):
-    monkeypatch.setenv('AMADEUS_MEMORY_MODE', runtime_mode)
-    response = isolated_client.get('/api/memory/status',params=_facts_scope('mode-owner'))
-    assert response.status_code == 200
-    assert response.json()['runtime_mode'] == runtime_mode
-
-
 def test_rest_forget_invalidates_matching_live_conversation(isolated_client):
     from app.routers.chat_ws import SessionState, sessions
     client, owner = isolated_client, 'live-forget-owner'

@@ -48,7 +48,6 @@ from app.services.turn_tool_orchestrator import (
 async def isolated_store(tmp_path, monkeypatch):
     monkeypatch.delenv("AMADEUS_DB_PATH", raising=False)
     monkeypatch.setenv("AMADEUS_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     reset_initialization_cache()
     await init_db()
     return tmp_path
@@ -395,7 +394,6 @@ async def test_experience_stays_on_first_prompt_facts_use_tool(isolated_store, m
         self_name="",
         identity_acknowledged=False,
     )
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     prompt = await compile_for_session(session, "喝茶")
     assert "去年只喝茶" in prompt
     # Dispatch 55: the stable fact is resident in CORE FACTS; recall stays usable.
@@ -417,7 +415,6 @@ async def test_fake_provider_two_round_recall(isolated_store, monkeypatch):
 
     owner = f"round-{uuid4()}"
     await _seed(owner, "cat", "我养了一只叫小白的猫。")
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     monkeypatch.setattr(memory_service, "embedder", _StubEmbedder())
 
     calls: list[dict] = []

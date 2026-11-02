@@ -567,14 +567,6 @@ export function createArchiveModule(deps?: {
 
   function dispatch(intent: ArchiveIntent) {
     if (!state.scope) return;
-    if (state.pending.counts?.runtimeMode !== 'v11' && [
-      'open-editor', 'save-edit', 'reapply-draft', 'assign-topic', 'toggle-pin',
-      'request-delete', 'confirm-delete', 'rename-topic-start', 'rename-topic-save',
-      'ignore-observation', 'retry-job',
-    ].includes(intent.type)) {
-      commit({ announcement: '尚未确认档案与当前对话使用同一套记忆，暂时只能查看。' });
-      return;
-    }
     const guardEpoch = epoch;
     switch (intent.type) {
       case 'set-kind':

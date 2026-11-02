@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import os
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -1192,7 +1191,7 @@ async def _worker_loop(stop: asyncio.Event, owner: str) -> None:
 
 
 async def start_background_worker(*, owner: str | None = None) -> None:
-    """Start in-process poller when shadow/v11 is explicitly enabled."""
+    """Start the in-process memory job poller."""
     global _worker_task, _worker_stop
     if _worker_task is not None and not _worker_task.done():
         return
@@ -1212,7 +1211,3 @@ async def stop_background_worker() -> None:
             _worker_task.cancel()
     _worker_task = None
     _worker_stop = None
-
-
-def memory_mode() -> str:
-    return (os.environ.get("AMADEUS_MEMORY_MODE") or "legacy").strip().lower()

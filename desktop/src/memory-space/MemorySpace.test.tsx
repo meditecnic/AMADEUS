@@ -128,7 +128,7 @@ function mockApi(impl: (url: string) => Promise<unknown>, counts: Record<string,
       const params = new URL(url, 'http://localhost').searchParams;
       return okJson({
         session_id: params.get('session_id'), worldline: params.get('worldline'), identity_mode: params.get('identity_mode'),
-        runtime_mode: 'v11', pending_count: 0, processing_count: 0, failed_count: 0, failed_jobs: [], ...counts,
+        pending_count: 0, processing_count: 0, failed_count: 0, failed_jobs: [], ...counts,
       });
     }
     return impl(url);

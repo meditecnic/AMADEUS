@@ -6,13 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from app.db import normalize_identity_mode, normalize_worldline, validate_schema
-from app.services.memory import (
-    DismissError,
-    MemoryDeleteError,
-    SharedFactPromotionError,
-    ReclassifyError,
-    memory_service,
-)
+from app.services.memory import memory_service
 from app.services.session_manager import session_coordinator
 from app.services.soul_engine import soul_engine
 from app.services.diagnostics import diagnostic_runtime
@@ -36,18 +30,6 @@ class SwitchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     session_id: str = "default"
     worldline: str
-
-
-class ForgetRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    session_id: str = "default"
-    worldline: str = "steins_gate"
-    scope: str = "all"
-
-
-class DismissBatchRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    ids: list[int] = Field(default_factory=list, max_length=100)
 
 
 class SearchCredentialUpdate(BaseModel):
@@ -144,41 +126,27 @@ async def current_worldline(session_id: str = Query("default")):
 
 @router.get("/api/memory/status")
 async def memory_status(
-    session_id: str | None = Query(None),
+    session_id: str = Query(...),
+    identity_mode: str = Query(...),
     worldline: str | None = Query(None),
-    identity_mode: str | None = Query(None),
 ):
-    """Memory status.
+    """v11 scoped job aggregates (S3a)."""
+    session_id = _require_session_id(session_id)
+    wl, mode = _validate_memory_scope(worldline, identity_mode)
+    from app.services.memory_v11.contracts import MemoryValidationError
+    from app.services.memory_v11.repository import job_status_summary
 
-    With explicit ``identity_mode`` → v11 scoped job aggregates (S3a).
-    Without → legacy Quiet Ingest counts (existing Ledger clients).
-    """
-    if identity_mode is not None:
-        session_id = _require_session_id(session_id)
-        wl, mode = _validate_memory_scope(worldline, identity_mode)
-        from app.services.memory_v11.contracts import MemoryValidationError
-        from app.services.memory_v11.repository import job_status_summary
-        from app.services.memory_v11.jobs import memory_mode
-
-        try:
-            summary = await job_status_summary(
-                session_id=session_id,
-                worldline=wl,
-                identity_mode=mode,
-            )
-            return {**summary, 'runtime_mode': memory_mode()}
-        except MemoryValidationError as exc:
-            raise HTTPException(
-                status_code=422,
-                detail={"code": exc.code, "message": str(exc)},
-            ) from exc
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-    legacy_session_id = "default" if session_id is None else session_id
-    legacy_worldline = "steins_gate" if worldline is None else worldline
     try:
-        wl = normalize_worldline(legacy_worldline)
-        return await memory_service.status(legacy_session_id, wl)
+        return await job_status_summary(
+            session_id=session_id,
+            worldline=wl,
+            identity_mode=mode,
+        )
+    except MemoryValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -226,203 +194,59 @@ async def retry_memory_job_endpoint(
     }
 
 
-@router.post("/api/memory/forget")
-async def forget_memory(request: ForgetRequest):
-    if request.scope not in {"all", "episodic", "core", "emotion"}:
-        raise HTTPException(status_code=422, detail="scope must be all, episodic, core, or emotion")
-    await memory_service.forget(request.session_id, normalize_worldline(request.worldline), request.scope)
-    return {"status": "forgotten", "scope": request.scope, "worldline": normalize_worldline(request.worldline)}
-
-
 @router.get("/api/memory/facts")
 async def memory_facts_ledger(
-    session_id: str | None = Query(None),
+    session_id: str = Query(...),
+    identity_mode: str = Query(...),
     worldline: str | None = Query(None),
-    identity_mode: str | None = Query(None),
     query: str | None = Query(None),
     topic_id: str | None = Query(None),
     pinned_only: bool = Query(False),
     limit: str | None = Query(None),
     offset: str | None = Query(None),
 ):
-    """Memory facts list.
+    """v11 scoped active stable facts (S3a) with bounded offset pagination (S3F-2B)."""
+    session_id = _require_session_id(session_id)
+    wl, mode = _validate_memory_scope(worldline, identity_mode)
+    from app.services.memory_v11.contracts import MemoryValidationError
+    from app.services.memory_v11.repository import list_active_stable_facts_page
 
-    With explicit ``identity_mode`` → v11 scoped active stable facts (S3a) with
-    bounded offset pagination (S3F-2B).
-    Without → legacy Gate 7A Ledger (local/shared/okabe) for existing UI.
-    """
-    if identity_mode is not None:
-        session_id = _require_session_id(session_id)
-        wl, mode = _validate_memory_scope(worldline, identity_mode)
-        from app.services.memory_v11.contracts import MemoryValidationError
-        from app.services.memory_v11.repository import list_active_stable_facts_page
-
-        try:
-            lim = _parse_pagination_param("limit", limit, 20, 1, 100)
-            off = _parse_pagination_param("offset", offset, 0, 0, None)
-            page = await list_active_stable_facts_page(
-                session_id=session_id,
-                worldline=wl,
-                identity_mode=mode,
-                query=query,
-                topic_id=topic_id,
-                pinned_only=pinned_only,
-                limit=lim,
-                offset=off,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        except MemoryValidationError as exc:
-            raise HTTPException(
-                status_code=422,
-                detail={"code": exc.code, "message": str(exc)},
-            ) from exc
-        facts = list(page["facts"])
-        total = int(page["total"])
-        return {
-            "facts": facts,
-            "scope": {
-                "session_id": session_id,
-                "worldline": wl,
-                "identity_mode": mode,
-            },
-            "pagination": {
-                "limit": lim,
-                "offset": off,
-                "total": total,
-                "has_more": off + len(facts) < total,
-            },
-        }
-    legacy_session_id = "default" if session_id is None else session_id
-    legacy_worldline = "steins_gate" if worldline is None else worldline
     try:
-        wl = normalize_worldline(legacy_worldline)
+        lim = _parse_pagination_param("limit", limit, 20, 1, 100)
+        off = _parse_pagination_param("offset", offset, 0, 0, None)
+        page = await list_active_stable_facts_page(
+            session_id=session_id,
+            worldline=wl,
+            identity_mode=mode,
+            query=query,
+            topic_id=topic_id,
+            pinned_only=pinned_only,
+            limit=lim,
+            offset=off,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return await memory_service.list_memory_facts_for_ledger(legacy_session_id, wl)
-
-
-@router.post("/api/memory/facts/{local_fact_id}/promote")
-async def promote_memory_fact(
-    local_fact_id: int,
-    session_id: str = Query("default"),
-    worldline: str = Query("steins_gate"),
-):
-    """Gate 7A explicit promotion. No request body is accepted: the server
-    re-reads and re-verifies everything from the persistent stores."""
-    try:
-        wl = normalize_worldline(worldline)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    try:
-        shared_id, changed = await memory_service.promote_local_self_fact(
-            session_id, wl, local_fact_id
-        )
-    except SharedFactPromotionError as exc:
-        status = 404 if exc.code == "fact_not_found" else 409
-        raise HTTPException(status_code=status, detail=exc.code) from exc
-    return {"id": shared_id, "scope": "shared", "changed": changed}
-
-
-@router.post("/api/memory/facts/{okabe_fact_id}/reclassify")
-async def reclassify_okabe_fact(
-    okabe_fact_id: int,
-    session_id: str = Query("default"),
-    worldline: str = Query("steins_gate"),
-    confirmed: bool = Query(False),
-):
-    """Gate 7B explicit reclassify: okabe → self local. Copy semantics."""
-    try:
-        wl = normalize_worldline(worldline)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    try:
-        self_fact_id, changed = await memory_service.reclassify_okabe_fact_to_self(
-            session_id, wl, okabe_fact_id, confirmed=confirmed
-        )
-    except ReclassifyError as exc:
-        status = 404 if exc.code == "fact_not_found" else 409
-        raise HTTPException(status_code=status, detail=exc.code) from exc
-    return {"id": self_fact_id, "scope": "self", "changed": changed}
-
-
-@router.post("/api/memory/facts/{okabe_fact_id}/dismiss")
-async def dismiss_okabe_fact(
-    okabe_fact_id: int,
-    session_id: str = Query("default"),
-    worldline: str = Query("steins_gate"),
-):
-    """M3 soft-dismiss: hide okabe candidate from ledger and prompt; keep audit row."""
-    try:
-        wl = normalize_worldline(worldline)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    try:
-        fact_id, changed = await memory_service.dismiss_okabe_fact(
-            session_id, wl, okabe_fact_id
-        )
-    except DismissError as exc:
-        status = 404 if exc.code == "fact_not_found" else 409
-        raise HTTPException(status_code=status, detail=exc.code) from exc
-    return {"id": fact_id, "scope": "okabe", "changed": changed, "dismissed": True}
-
-
-@router.post("/api/memory/facts/dismiss-batch")
-async def dismiss_okabe_facts_batch(
-    body: DismissBatchRequest,
-    session_id: str = Query("default"),
-    worldline: str = Query("steins_gate"),
-):
-    """M3 bulk soft-dismiss. Body: {\"ids\": [1,2,3]}."""
-    try:
-        wl = normalize_worldline(worldline)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    try:
-        result = await memory_service.dismiss_okabe_facts_bulk(
-            session_id, wl, list(body.ids)
-        )
-    except DismissError as exc:
-        status = 404 if exc.code == "fact_not_found" else 409
-        raise HTTPException(status_code=status, detail=exc.code) from exc
-    return result
-
-
-@router.post("/api/memory/facts/{local_fact_id}/delete-local")
-async def delete_local_memory_fact(
-    local_fact_id: int,
-    session_id: str = Query("default"),
-    worldline: str = Query("steins_gate"),
-):
-    """Soft-delete one self-local established fact. Does not touch shared."""
-    try:
-        wl = normalize_worldline(worldline)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    try:
-        fact_id, changed = await memory_service.delete_local_self_fact(
-            session_id, wl, local_fact_id
-        )
-    except MemoryDeleteError as exc:
-        status = 404 if exc.code == "fact_not_found" else 409
-        raise HTTPException(status_code=status, detail=exc.code) from exc
-    return {"id": fact_id, "scope": "local", "changed": changed, "deleted": True}
-
-
-@router.post("/api/memory/shared-facts/{shared_fact_id}/delete")
-async def delete_shared_memory_fact(
-    shared_fact_id: int,
-    session_id: str = Query("default"),
-):
-    """Soft-delete one shared profile fact. Does not touch worldline-local copies."""
-    try:
-        fact_id, changed = await memory_service.delete_shared_fact(
-            session_id, shared_fact_id
-        )
-    except MemoryDeleteError as exc:
-        status = 404 if exc.code == "fact_not_found" else 409
-        raise HTTPException(status_code=status, detail=exc.code) from exc
-    return {"id": fact_id, "scope": "shared", "changed": changed, "deleted": True}
+    except MemoryValidationError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    facts = list(page["facts"])
+    total = int(page["total"])
+    return {
+        "facts": facts,
+        "scope": {
+            "session_id": session_id,
+            "worldline": wl,
+            "identity_mode": mode,
+        },
+        "pagination": {
+            "limit": lim,
+            "offset": off,
+            "total": total,
+            "has_more": off + len(facts) < total,
+        },
+    }
 
 
 # Caller-input validation codes (everything else is server/indexing side and
@@ -548,19 +372,6 @@ def _parse_pagination_param(
     return value
 
 
-def _require_v11_memory_write() -> None:
-    from app.services.memory_v11.jobs import memory_mode
-
-    if memory_mode() != "v11":
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "v11_memory_read_only",
-                "message": "v11 memory is read-only outside v11 mode",
-            },
-        )
-
-
 @router.patch("/api/memory/facts/{fact_id}")
 async def patch_memory_fact(
     fact_id: str,
@@ -576,8 +387,6 @@ async def patch_memory_fact(
     local so every caller-validation failure returns the stable detail.code
     envelope instead of FastAPI's raw validation array.
     """
-    _require_v11_memory_write()
-
     from app.services.memory_v11.contracts import MemoryValidationError
     from app.services.memory_v11.facts import user_edit_fact
 
@@ -653,8 +462,6 @@ async def delete_memory_fact(
     expected_version is read as a raw string so malformed values map to the
     stable detail.code envelope instead of FastAPI's validation array.
     """
-    _require_v11_memory_write()
-
     from app.services.memory_v11.contracts import MemoryValidationError
     from app.services.memory_v11.facts import delete_fact
 
@@ -740,8 +547,6 @@ async def patch_memory_fact_presentation(
     identity_mode: str | None = Query(None),
 ):
     """v11 presentation (plan §7.3/§8.2): is_pinned + topic_id only, local."""
-    _require_v11_memory_write()
-
     from app.services.memory_v11.contracts import MemoryValidationError
     from app.services.memory_v11.facts import _UNSET, update_fact_presentation
 
@@ -878,8 +683,6 @@ async def patch_memory_topic(
     identity_mode: str | None = Query(None),
 ):
     """v11 topic rename (plan §8.3): display_label only, no merges, local."""
-    _require_v11_memory_write()
-
     from app.services.memory_v11.contracts import MemoryValidationError
     from app.services.memory_v11.topics import rename_topic
 
@@ -1014,8 +817,6 @@ async def patch_memory_experience_presentation(
     frozen to a single boolean so this seam can never grow into an edit
     surface without a new contract.
     """
-    _require_v11_memory_write()
-
     from app.services.memory_v11.contracts import MemoryValidationError
     from app.services.memory_v11.experiences import update_experience_presentation
 
@@ -1070,8 +871,6 @@ async def delete_memory_experience(
     identity_mode: str | None = Query(None),
 ):
     """v11 experience delete (plan §8.3): real erasure, idempotent repeat."""
-    _require_v11_memory_write()
-
     from app.services.memory_v11.contracts import MemoryValidationError
     from app.services.memory_v11.experiences import delete_experience
 
@@ -1136,8 +935,6 @@ async def ignore_memory_observation(
     identity_mode: str | None = Query(None),
 ):
     """v11 observation ignore (plan §8.3): candidate → ignored, not promote."""
-    _require_v11_memory_write()
-
     from app.services.memory_v11.contracts import MemoryValidationError
     from app.services.memory_v11.observations import ignore_observation
 

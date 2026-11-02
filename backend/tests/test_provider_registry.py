@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -12,7 +11,6 @@ from app.services.provider_registry import (
     ProviderRegistry,
     ProviderTask,
 )
-from app.services.memory import MemoryService
 from app.routers.chat_ws import SessionState, get_clean_text_stream
 
 
@@ -126,47 +124,6 @@ async def test_model_cache_uses_24_hour_ttl_and_explicit_refresh():
     assert expired.cache_hit is False
     assert refreshed.cache_hit is False
     assert len(calls) == 3
-
-
-@pytest.mark.asyncio
-async def test_memory_extraction_uses_selected_provider_snapshot(monkeypatch):
-    from app.db import init_db
-
-    # _extract_turn reads the memory DB (erasure check) before calling the
-    # provider. Create the schema in the isolated data dir instead of relying
-    # on a pre-existing database under the user's home directory.
-    await init_db()
-    adapter = FakeAdapter(
-        {
-            "working_summary": "冈部在检查实验数据。",
-            "episodic": [],
-            "core_facts": [],
-        }
-    )
-    registry = ProviderRegistry()
-    registry.register(_definition(), adapter)
-    snapshot = registry.snapshot("fake", "memory-model")
-    service = MemoryService()
-    service.apply_extraction = AsyncMock()
-    save_summary = AsyncMock()
-    monkeypatch.setattr("app.models.save_memory_summary", save_summary)
-    monkeypatch.setattr("app.models.get_conversation_content_epoch", AsyncMock(return_value=0))
-
-    await service._extract_turn(
-        session_id="okabe",
-        worldline="steins_gate",
-        conversation_id="conversation-1",
-        user_text="记住实验编号是42。",
-        assistant_text="了解。",
-        source_message_ids=[10, 11],
-        api_key="provider-secret",
-        provider_snapshot=snapshot,
-    )
-
-    assert adapter.calls[0]["model"] == "memory-model"
-    assert adapter.calls[0]["api_key"] == "provider-secret"
-    service.apply_extraction.assert_awaited_once()
-    save_summary.assert_awaited_once()
 
 
 @pytest.mark.asyncio

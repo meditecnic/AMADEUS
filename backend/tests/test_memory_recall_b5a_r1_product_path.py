@@ -57,8 +57,6 @@ REQUIRED_CHECK_NODES = {
     "compat_no_tools_unsupported": "test_processor_no_tools_adapter_is_explicit_unsupported",
     "second_round_tools_none_single_source": "test_processor_second_round_tools_none_and_single_publication",
     "processor_unsupported_combo": "test_processor_unsupported_combo_is_observable",
-    "runner_short_name_impostor": "test_runner_rejects_short_name_impostor",
-    "runner_duplicate_required_testcase": "test_runner_rejects_duplicate_required_testcase",
     "stats_shared_ref_token_budget": "test_apply_batch_shared_ref_token_omit_counts_unique_facts_once",
     "late_tool_recorded_once": "test_late_tool_sse_recorded_once_without_execution",
 }
@@ -77,7 +75,6 @@ def _dump(name: str, payload) -> None:
 async def isolated_store(tmp_path, monkeypatch):
     monkeypatch.delenv("AMADEUS_DB_PATH", raising=False)
     monkeypatch.setenv("AMADEUS_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     reset_initialization_cache()
     await init_db()
     return tmp_path
@@ -955,17 +952,6 @@ async def test_processor_second_round_tools_none_and_single_publication():
     )
 
 
-def _load_offline_runner():
-    import importlib.util
-
-    path = Path(__file__).resolve().parents[1] / "scripts" / "memory_recall_offline_run.py"
-    spec = importlib.util.spec_from_file_location("b5a_offline_run_r2", path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec and spec.loader
-    spec.loader.exec_module(module)
-    return module
-
-
 @pytest.mark.asyncio
 async def test_processor_unsupported_combo_is_observable(isolated_store, monkeypatch):
     import app.services.memory_v11.recall as recall_mod
@@ -975,7 +961,6 @@ async def test_processor_unsupported_combo_is_observable(isolated_store, monkeyp
     from app.services.provider_runtime import deepseek_service
 
     owner = f"unsup-{uuid4()}"
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     db_loads = {"n": 0}
     web_hits = {"n": 0}
     original_load = recall_mod._load_scoped_facts
@@ -1073,42 +1058,6 @@ async def test_processor_unsupported_combo_is_observable(isolated_store, monkeyp
             "web_hits": web_hits["n"],
         },
     )
-
-
-def test_runner_rejects_short_name_impostor(tmp_path):
-    runner = _load_offline_runner()
-    required = {
-        "stream_openai_compatible_fragments": (
-            "tests/test_memory_recall_b5a_r1_product_path.py::"
-            "test_openai_compatible_sse_fragments_merge_one_call"
-        )
-    }
-    path = tmp_path / "impostor.xml"
-    runner._write_probe_suite(path, required, "short-name-impostor", "stream_openai_compatible_fragments")
-    evaluated = runner.evaluate_required_nodes(path, required)
-    assert evaluated["gate_ok"] is False
-    row = evaluated["required_checks"]["stream_openai_compatible_fragments"]
-    assert row["status"] == "missing"
-    assert row["count"] == 0
-    _dump("runner_short_name_impostor", evaluated)
-
-
-def test_runner_rejects_duplicate_required_testcase(tmp_path):
-    runner = _load_offline_runner()
-    required = {
-        "stream_openai_responses_call_id_item_id": (
-            "tests/test_memory_recall_b5a_r1_product_path.py::"
-            "test_openai_responses_sse_call_id_ne_item_id"
-        )
-    }
-    path = tmp_path / "duplicate.xml"
-    runner._write_probe_suite(path, required, "duplicate-failed-then-passed", "stream_openai_responses_call_id_item_id")
-    evaluated = runner.evaluate_required_nodes(path, required)
-    assert evaluated["gate_ok"] is False
-    row = evaluated["required_checks"]["stream_openai_responses_call_id_item_id"]
-    assert row["status"] == "duplicate"
-    assert row["count"] == 2
-    _dump("runner_duplicate_required_testcase", evaluated)
 
 
 @pytest.mark.asyncio

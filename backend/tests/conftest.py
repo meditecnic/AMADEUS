@@ -46,7 +46,6 @@ _CLEARED_PATH_ENV_KEYS = (
     "SOVITS_SOVITS_WEIGHTS",  # app/services/tts_sidecar.py
     "SOVITS_SIDECAR_COMMAND",  # app/services/tts_sidecar.py (launches a process)
     "SOVITS_SIDECAR_CWD",  # app/services/tts_sidecar.py
-    "AMADEUS_B3_CREDENTIAL_FILE",  # scripts/memory_candidate_real_run.py
     # Model caches: never read or fill the user's Hugging Face cache.
     "HF_HUB_CACHE",
     "TRANSFORMERS_CACHE",
@@ -62,9 +61,6 @@ _CLEARED_SECRET_ENV_KEYS = (
     "DEEPSEEK_API_KEY",  # app/config.py
     "TAVILY_API_KEY",  # app/services/search.py env fallback
     "FIRECRAWL_API_KEY",  # app/services/search.py env fallback
-    "AMADEUS_B3_PROVIDER_KEY",  # scripts/memory_candidate_real_run.py
-    "AMADEUS_B3_REAL_HTTP",  # scripts/memory_candidate_real_run.py (real HTTP switch)
-    "AMADEUS_B3_BASE_URL",  # scripts/memory_candidate_real_run.py
     "SOVITS_URL",  # app/config.py TTS endpoint (default: 127.0.0.1)
     "HF_TOKEN",  # Hugging Face libraries
     "HUGGING_FACE_HUB_TOKEN",
@@ -325,10 +321,9 @@ def forbid_real_credential_store(request, isolated_user_dirs):
     """Fail any attempt to construct WindowsCredentialStore during a test.
 
     Covers code that builds the store directly instead of using the
-    process-wide ``credential_store`` (for example
-    scripts/memory_candidate_real_run.py reading the DeepSeek key). Tests
-    marked ``real_credential_store`` are skipped unless
-    AMADEUS_TEST_REAL_CREDENTIAL_STORE=1, and only then may construct it.
+    process-wide ``credential_store``. Tests marked ``real_credential_store``
+    are skipped unless AMADEUS_TEST_REAL_CREDENTIAL_STORE=1, and only then may
+    construct it.
     Uses its own MonkeyPatch so ``monkeypatch.undo()`` cannot lift it.
     """
     from app.services import credentials
