@@ -450,12 +450,12 @@ async def test_fake_provider_two_round_recall(isolated_store, monkeypatch):
             return
         yield {"content": "[EMO:neutral] 小白の猫だよ。", "tool_calls": None}
 
-    monkeypatch.setattr(deepseek_service, "get_chat_stream", fake_stream)
+    monkeypatch.setattr(type(deepseek_service), "get_chat_stream", staticmethod(fake_stream))
 
     async def fake_translate(text, api_key=None, model=None):
         return "中文"
 
-    monkeypatch.setattr(deepseek_service, "translate_to_zh", fake_translate)
+    monkeypatch.setattr(type(deepseek_service), "translate_to_zh", staticmethod(fake_translate))
 
     def fake_title(*args, **kwargs):
         async def _noop():
@@ -463,7 +463,7 @@ async def test_fake_provider_two_round_recall(isolated_store, monkeypatch):
 
         return asyncio.get_running_loop().create_task(_noop())
 
-    monkeypatch.setattr(conversation_service, "schedule_auto_title", fake_title)
+    monkeypatch.setattr(type(conversation_service), "schedule_auto_title", staticmethod(fake_title))
 
     from app.routers.chat_ws import SessionState
 

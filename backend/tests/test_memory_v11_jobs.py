@@ -591,7 +591,7 @@ async def test_s2_default_worker_path_uses_selected_model_and_writes(
             adapter=adapter,
         )
 
-    monkeypatch.setattr(provider_registry, "snapshot", fake_snapshot)
+    monkeypatch.setattr(type(provider_registry), "snapshot", staticmethod(fake_snapshot))
 
     results = await jobs.process_due_jobs_once(
         lease_owner="worker-default",
@@ -1247,7 +1247,7 @@ async def test_s3b3_default_provider_payload_includes_candidates(
             adapter=adapter,
         )
 
-    monkeypatch.setattr(provider_registry, "snapshot", fake_snapshot)
+    monkeypatch.setattr(type(provider_registry), "snapshot", staticmethod(fake_snapshot))
 
     job, _, _ = await _enqueue_user_job(
         session_id=session_id,

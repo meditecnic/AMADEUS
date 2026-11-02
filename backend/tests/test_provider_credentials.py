@@ -213,7 +213,7 @@ def test_provider_models_are_cached_and_refreshable(app_client, monkeypatch):
 
     providers.provider_model_cache.clear("deepseek")
     discover = AsyncMock(return_value=["deepseek-reasoner", "deepseek-chat"])
-    monkeypatch.setattr(deepseek_service, "list_models", discover)
+    monkeypatch.setattr(type(deepseek_service), "list_models", staticmethod(discover))
 
     try:
         first = app_client.get("/api/providers/deepseek/models")
@@ -247,7 +247,7 @@ def test_refresh_failure_keeps_last_discovery_cache(app_client, monkeypatch):
             RuntimeError("upstream-timeout"),
         ]
     )
-    monkeypatch.setattr(deepseek_service, "list_models", discover)
+    monkeypatch.setattr(type(deepseek_service), "list_models", staticmethod(discover))
     try:
         first = app_client.get("/api/providers/deepseek/models?refresh=true")
         failed = app_client.get("/api/providers/deepseek/models?refresh=true")
@@ -273,9 +273,9 @@ def test_provider_test_is_secret_free_and_normalizes_upstream_errors(
     providers.provider_model_cache.clear("deepseek")
     secret = "secret-that-must-not-escape"
     monkeypatch.setattr(
-        deepseek_service,
+        type(deepseek_service),
         "list_models",
-        AsyncMock(side_effect=RuntimeError(secret)),
+        staticmethod(AsyncMock(side_effect=RuntimeError(secret))),
     )
 
     response = app_client.post("/api/providers/deepseek/test")
@@ -334,9 +334,9 @@ def test_selected_model_chat_check_uses_bounded_isolated_request(app_client, mon
         credential_required=False,
     )
     monkeypatch.setattr(
-        providers.provider_registry,
+        type(providers.provider_registry),
         "snapshot",
-        lambda provider_id, model_id=None, **_kwargs: snapshot,
+        staticmethod(lambda provider_id, model_id=None, **_kwargs: snapshot),
     )
 
     response = app_client.post(
@@ -383,9 +383,9 @@ def test_chat_check_does_not_expose_upstream_error_or_secret(app_client, monkeyp
         adapter=adapter,
     )
     monkeypatch.setattr(
-        providers.provider_registry,
+        type(providers.provider_registry),
         "snapshot",
-        lambda provider_id, model_id=None, **_kwargs: snapshot,
+        staticmethod(lambda provider_id, model_id=None, **_kwargs: snapshot),
     )
 
     response = app_client.post(

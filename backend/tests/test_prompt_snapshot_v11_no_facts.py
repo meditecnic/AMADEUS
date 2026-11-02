@@ -149,7 +149,7 @@ async def test_v11_no_fact_prompt_snapshot(isolated_store, monkeypatch, case_nam
         return EMOTION
 
     monkeypatch.setattr(retrieval_module, "select_experience_candidates", fake_experiences)
-    monkeypatch.setattr(soul_engine, "restore_emotion", fake_emotion)
+    monkeypatch.setattr(type(soul_engine), "restore_emotion", staticmethod(fake_emotion))
     if "input_budget" in case:
         import app.services.prompt_compiler as pc_module
 

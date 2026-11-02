@@ -69,7 +69,7 @@ async def test_diagnostics_sweep_loop_runs_immediately_then_waits_one_day(monkey
     from app.services.diagnostics import diagnostic_runtime
 
     calls = []
-    monkeypatch.setattr(diagnostic_runtime, "sweep_best_effort", lambda: calls.append("sweep"))
+    monkeypatch.setattr(type(diagnostic_runtime), "sweep_best_effort", staticmethod(lambda: calls.append("sweep")))
 
     async def stop_after_first_interval(seconds):
         assert seconds == 24 * 60 * 60

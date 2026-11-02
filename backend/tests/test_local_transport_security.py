@@ -18,10 +18,10 @@ def isolated_transport_app(tmp_path, monkeypatch):
     monkeypatch.delenv('AMADEUS_DB_PATH', raising=False)
     monkeypatch.setenv('AMADEUS_DATA_DIR', str(tmp_path))
     reset_initialization_cache()
-    monkeypatch.setattr('app.main.sidecar_supervisor.ensure_available', AsyncMock(return_value=SimpleNamespace(url=None)))
-    monkeypatch.setattr('app.main.sidecar_supervisor.close', AsyncMock())
-    monkeypatch.setattr('app.main.search_service.start', AsyncMock())
-    monkeypatch.setattr('app.main.search_service.close', AsyncMock())
+    monkeypatch.setattr('app.services.tts_sidecar.SidecarSupervisor.ensure_available', staticmethod(AsyncMock(return_value=SimpleNamespace(url=None))))
+    monkeypatch.setattr('app.services.tts_sidecar.SidecarSupervisor.close', staticmethod(AsyncMock()))
+    monkeypatch.setattr('app.services.search.SearchService.start', staticmethod(AsyncMock()))
+    monkeypatch.setattr('app.services.search.SearchService.close', staticmethod(AsyncMock()))
 
 
 @pytest.mark.parametrize('endpoint', ['chat', 'voice'])

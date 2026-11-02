@@ -998,14 +998,14 @@ async def test_processor_unsupported_combo_is_observable(isolated_store, monkeyp
         credential_required=False,
     )
     monkeypatch.setattr(
-        "app.routers.chat_ws.provider_registry.snapshot",
-        lambda *_a, **_k: snapshot,
+        'app.services.provider_registry.ProviderRegistry.snapshot',
+        staticmethod(lambda *_a, **_k: snapshot),
     )
 
     async def _async_cn(*_a, **_k):
         return "中文"
 
-    monkeypatch.setattr(deepseek_service, "translate_to_zh", _async_cn)
+    monkeypatch.setattr(type(deepseek_service), "translate_to_zh", staticmethod(_async_cn))
 
     def fake_title(*args, **kwargs):
         async def _noop():
@@ -1013,7 +1013,7 @@ async def test_processor_unsupported_combo_is_observable(isolated_store, monkeyp
 
         return asyncio.get_running_loop().create_task(_noop())
 
-    monkeypatch.setattr(conversation_service, "schedule_auto_title", fake_title)
+    monkeypatch.setattr(type(conversation_service), "schedule_auto_title", staticmethod(fake_title))
     session = SessionState(owner)
     session.worldline = "steins_gate"
     session.enable_tts = False

@@ -479,7 +479,7 @@ async def _drive_processor_loop(
         return "中文"
 
     monkeypatch.setattr(adapter, "translate_to_zh", _zh)
-    monkeypatch.setattr(deepseek_service, "translate_to_zh", _zh)
+    monkeypatch.setattr(type(deepseek_service), "translate_to_zh", staticmethod(_zh))
     snapshot = ProviderSnapshot(
         provider_id=provider_id,
         model_id=f"{provider_id}-probe",
@@ -490,7 +490,7 @@ async def _drive_processor_loop(
         credential_required=False,
     )
     monkeypatch.setattr(
-        "app.routers.chat_ws.provider_registry.snapshot", lambda *_a, **_k: snapshot
+        'app.services.provider_registry.ProviderRegistry.snapshot', staticmethod(lambda *_a, **_k: snapshot)
     )
 
     def fake_title(*_args, **_kwargs):
@@ -499,7 +499,7 @@ async def _drive_processor_loop(
 
         return asyncio.get_running_loop().create_task(_noop())
 
-    monkeypatch.setattr(conversation_service, "schedule_auto_title", fake_title)
+    monkeypatch.setattr(type(conversation_service), "schedule_auto_title", staticmethod(fake_title))
 
     session = SessionState(owner)
     session.worldline = "steins_gate"

@@ -157,7 +157,7 @@ class TestBackendE2EContract:
 
         session_id = f"unauthenticated-switch-{auth_rejected}"
         switch = AsyncMock()
-        monkeypatch.setattr(session_coordinator, "switch", switch)
+        monkeypatch.setattr(type(session_coordinator), "switch", staticmethod(switch))
         with self.client.websocket_connect(f"/ws/chat?session_id={session_id}") as websocket:
             if auth_rejected:
                 isolated_provider_credentials.delete("deepseek")
@@ -392,9 +392,9 @@ class TestBackendE2EContract:
             websocket.send_json({"type": "auth"})
             assert websocket.receive_json()["type"] == "error"
             monkeypatch.setattr(
-                conversation_service,
+                type(conversation_service),
                 "select",
-                AsyncMock(side_effect=RuntimeError("private database details")),
+                staticmethod(AsyncMock(side_effect=RuntimeError("private database details"))),
             )
             websocket.send_json({
                 "type": "conversation.switch",
@@ -425,9 +425,9 @@ class TestBackendE2EContract:
             })
             assert websocket.receive_json()["type"] == "session.ready"
             monkeypatch.setattr(
-                session_coordinator,
+                type(session_coordinator),
                 "switch",
-                AsyncMock(side_effect=RuntimeError("private switch details")),
+                staticmethod(AsyncMock(side_effect=RuntimeError("private switch details"))),
             )
             websocket.send_json({
                 "type": "worldline.switch",

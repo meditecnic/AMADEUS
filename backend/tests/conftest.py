@@ -395,4 +395,4 @@ def app_client(isolated_provider_credentials, tmp_path, monkeypatch):
 @pytest.fixture(autouse=True)
 def isolated_speech_detector(monkeypatch):
     """Endpoint tests use synthetic speech detection without model downloads."""
-    monkeypatch.setattr("app.services.speech.speech_service.has_speech", AsyncMock(return_value=True))
+    monkeypatch.setattr('app.services.speech.SpeechService.has_speech', staticmethod(AsyncMock(return_value=True)))
