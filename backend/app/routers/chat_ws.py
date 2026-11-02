@@ -297,31 +297,6 @@ class SessionState:
                 msg["id"] = int(message_id)
                 return
 
-    def recent_messages(self, n: int | None = None) -> list:
-        """Shallow window for memory ingest — no full-history deepcopy.
-
-        ``n`` must not exceed MEMORY_INGEST_WINDOW_N (aligned with compression keep).
-        """
-        from app.services.memory import MEMORY_INGEST_WINDOW_N
-
-        limit = MEMORY_INGEST_WINDOW_N if n is None else int(n)
-        if limit > MEMORY_INGEST_WINDOW_N:
-            raise ValueError(
-                f"recent_messages n={limit} exceeds MEMORY_INGEST_WINDOW_N="
-                f"{MEMORY_INGEST_WINDOW_N} (must stay ≤ history compression keep)"
-            )
-        if limit <= 0:
-            return []
-        tail = self._history[-limit:]
-        return [
-            {
-                "role": item.get("role"),
-                "content": item.get("content"),
-                "id": item.get("id"),
-            }
-            for item in tail
-        ]
-
     @property
     def tts_key(self) -> str:
         return f"{self.session_id}:{self.worldline}:{self.conversation_id or 'default'}:{self.revision}"
@@ -1779,7 +1754,6 @@ async def processor_loop(
         force_now = should_force_search(user_msg)
         adapter_kind = type(getattr(turn_provider, "adapter", None) or object).__name__
         tool_plan = plan_first_round_tools(
-            v11=True,
             force_search=force_now,
             provider_id=str(getattr(turn_provider, "provider_id", "") or ""),
             adapter_kind=adapter_kind,

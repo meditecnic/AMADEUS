@@ -688,7 +688,7 @@ async def test_v113_retrieval_logs_exception_type_only(isolated_store, monkeypat
             assert retrieval._resolve_embedder(None) is None
     elif failure == "prompt":
         monkeypatch.setattr(retrieval, "select_experience_candidates", boom)
-        assert await prompt_compiler._select_v11_prompt_memories(session_id="safe", worldline="steins_gate", identity_mode="self", user_message="safe") == ([], [])
+        assert await prompt_compiler._select_v11_prompt_memories(session_id="safe", worldline="steins_gate", identity_mode="self", user_message="safe") == []
     else:
         async def rows(**kwargs):
             return [{"fact_id": "f", "version_no": 1, "display_text": "safe", "confidence": 0.9}]

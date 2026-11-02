@@ -180,12 +180,12 @@ def test_tool_status_uses_actual_name():
 
 def test_first_round_tools_force_search_is_memory_only():
     tools = first_round_tools(
-        v11=True, force_search=True, provider_id="deepseek", adapter_kind="DeepSeekService"
+        force_search=True, provider_id="deepseek", adapter_kind="DeepSeekService"
     )
     names = [item["function"]["name"] for item in tools]
     assert names == ["recall_memory"]
     joint = first_round_tools(
-        v11=True, force_search=False, provider_id="deepseek", adapter_kind="DeepSeekService"
+        force_search=False, provider_id="deepseek", adapter_kind="DeepSeekService"
     )
     assert {item["function"]["name"] for item in joint} == {"recall_memory", "web_search"}
 

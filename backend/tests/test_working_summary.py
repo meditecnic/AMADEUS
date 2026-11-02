@@ -642,7 +642,6 @@ def test_s3e3_consumer_authority_header():
             worldline="steins_gate",
             base_identity="SECURITY BOUNDARY",
             emotion=soul_engine.profile("steins_gate").baselines,
-            core_facts=[],
             episodic=[],
             web_evidence=[],
             working_summary="比較中、候補Bの確認待ち",
