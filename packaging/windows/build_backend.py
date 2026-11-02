@@ -17,6 +17,7 @@ from bundle_support import sanitized_build_environment
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 TEST_ONLY = {"pytest", "pytest-asyncio", "pytest-timeout", "ruff", "iniconfig", "pluggy"}
+EMBEDDING_CACHE_MODEL = "models--jinaai--jina-embeddings-v5-text-nano-retrieval"
 EMBEDDING_REVISION = "ac5d898c8d382b17167c33e5c8af644a3519b47d"
 EMBEDDING_FILES = {
     "onnx/model.onnx": "ad8244eea593ae8488cfd821a7d573aa51a350bc817702d6da99f3bccab24f49",
@@ -77,10 +78,71 @@ def build_environment(work: Path, venv: Path, base_python: Path) -> dict[str, st
     return env
 
 
+def embedding_snapshot(cache: Path) -> Path:
+    return cache / EMBEDDING_CACHE_MODEL / "snapshots" / EMBEDDING_REVISION
+
+
+def _embedding_cache_paths() -> tuple[set[Path], set[Path]]:
+    snapshot = embedding_snapshot(Path("."))
+    files = {snapshot / name for name in EMBEDDING_FILES} | {Path(EMBEDDING_CACHE_MODEL) / "refs/main"}
+    directories = {parent for path in files for parent in path.parents if parent != Path(".")}
+    return files, directories
+
+
+def _clean_embedding_cache(cache: Path) -> None:
+    """Prune only the staging cache, preserving pinned files for reuse."""
+    if cache.is_symlink():
+        raise RuntimeError(f"staged embedding cache must not be a symlink: {cache}")
+    cache.mkdir(parents=True, exist_ok=True)
+    files, directories = _embedding_cache_paths()
+
+    def clean(directory: Path) -> None:
+        for path in sorted(directory.iterdir()):
+            relative = path.relative_to(cache)
+            allowed = relative in (directories if path.is_dir() else files)
+            if path.is_symlink() or not path.resolve().is_relative_to(cache.resolve()) or not allowed:
+                if path.is_dir() and not path.is_symlink():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
+                print(f"Removed staged embedding entry: {path}", flush=True)
+            elif path.is_dir():
+                clean(path)
+
+    clean(cache)
+
+
+def validate_embedding_cache(cache: Path) -> None:
+    """Reject extra/missing frozen model entries and verify pinned bytes."""
+    files, directories = _embedding_cache_paths()
+    expected = files | directories
+    entries = {path.relative_to(cache): path for path in cache.rglob("*")}
+    extra, missing = entries.keys() - expected, expected - entries.keys()
+    if extra or missing:
+        raise RuntimeError(f"embedding cache layout mismatch: extra={sorted(map(str, extra))}, missing={sorted(map(str, missing))}")
+    for relative, path in entries.items():
+        if path.is_symlink() or path.is_dir() != (relative in directories):
+            raise RuntimeError(f"embedding cache entry type mismatch: {relative}")
+    snapshot = embedding_snapshot(cache)
+    for name, expected_hash in EMBEDDING_FILES.items():
+        if sha256(snapshot / name) != expected_hash:
+            raise RuntimeError(f"embedding cache hash mismatch: {snapshot / name}")
+    if (cache / EMBEDDING_CACHE_MODEL / "refs/main").read_text(encoding="utf-8") != EMBEDDING_REVISION:
+        raise RuntimeError("embedding cache revision mismatch: refs/main")
+
+
+def embedding_model_card(cache: Path) -> Path:
+    card = embedding_snapshot(cache) / "README.md"
+    if not card.is_file() or sha256(card) != EMBEDDING_FILES["README.md"]:
+        raise RuntimeError(f"embedding model card missing or hash mismatch: {card}")
+    return card
+
+
 def stage_embedding(source: Path, cache: Path) -> list[dict]:
     """Copy only pinned model files; verify the source and each staged copy."""
-    model = cache / "models--jinaai--jina-embeddings-v5-text-nano-retrieval"
-    snapshot = model / "snapshots" / EMBEDDING_REVISION
+    _clean_embedding_cache(cache)
+    model = cache / EMBEDDING_CACHE_MODEL
+    snapshot = embedding_snapshot(cache)
     snapshot.mkdir(parents=True, exist_ok=True)
     model_files = []
     for relative, expected in EMBEDDING_FILES.items():
@@ -182,11 +244,12 @@ def main() -> int:
     run([str(python), "-m", "PyInstaller", "--noconfirm", *(["--clean"] if args.clean else []),
          "--distpath", str(work / "dist"), "--workpath", str(work / "build"),
          str(HERE / "backend.spec")], env, work, work / "logs/pyinstaller.log")
+    dist = work / "dist/amadeus-backend"
+    validate_embedding_cache(dist / "_internal/hf_cache")
     run([str(python), str(HERE / "vc_runtime.py"), str(config_path)],
         env, work, work / "logs/vc-runtime.log")
     run([str(python), str(HERE / "bundle_support.py"), str(config_path)],
         env, work, work / "logs/inventory.log")
-    dist = work / "dist/amadeus-backend"
     shutil.copytree(dist, output)
     write_json(work / "build-result.json", {
         "elapsed_seconds": round(time.monotonic() - started, 3), "output": str(output),
