@@ -124,7 +124,6 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
   const systemReducedMotion = useReducedMotion();
   const reducedMotion = motionPreference ?? systemReducedMotion;
   const state = useArchiveState(module);
-  const readOnly = state.pending.counts?.runtimeMode !== 'v11';
   const viewWidth = width ?? (typeof window === 'undefined' ? 1280 : window.innerWidth);
   const narrow = viewWidth < NARROW_WIDTH;
   // The module owns the exact scope; the prop is a fallback for first paint.
@@ -170,9 +169,6 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
         <h2>记忆档案</h2>
         {effectiveScope ? <span className="archive-scope-mark">{scopeLabel(effectiveScope)}</span> : null}
       </header>
-      {readOnly ? <p className="memory-runtime-notice" role="status" data-testid="archive-runtime-notice">
-        {state.pending.counts?.runtimeMode ? '当前对话尚未使用本页的记忆。档案暂时只能查看，不能通过这里纠正或遗忘聊天记忆。' : '暂未确认档案与当前对话的连接状态，当前只能查看。'}
-      </p> : null}
       <div className="archive-toolbar">
         <div className="archive-kind-tabs" role="tablist" aria-label="记录种类">
           <button
@@ -236,7 +232,7 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
             <button
               type="button"
               data-testid="archive-topic-rename-save"
-              disabled={readOnly || state.topicRename.saving}
+              disabled={state.topicRename.saving}
               onClick={() => module.dispatch({ type: 'rename-topic-save' })}
             >
               保存名称
@@ -252,7 +248,6 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
           <button
             type="button"
             data-testid="archive-topic-rename"
-            disabled={readOnly}
             onClick={() =>
               module.dispatch({ type: 'rename-topic-start', topicId: state.filters.topicId as string })
             }
@@ -500,7 +495,6 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
                       <button
                         type="button"
                         data-testid="archive-edit-fact"
-                        disabled={readOnly}
                         onClick={() => module.dispatch({ type: 'open-editor' })}
                       >
                         纠正文本
@@ -508,7 +502,6 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
                       <MemorySelect
                         aria-label="主题归属"
                         data-testid="archive-assign-topic"
-                        disabled={readOnly}
                         value={selectedTopicId}
                         onValueChange={(value) =>
                           module.dispatch({
@@ -532,7 +525,7 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
                   <button
                     type="button"
                     data-testid="archive-toggle-pin"
-                    disabled={readOnly || (state.selection?.kind === 'experience' && !selectedExperienceRow)}
+                    disabled={state.selection?.kind === 'experience' && !selectedExperienceRow}
                     title={state.selection?.kind === 'experience' && !selectedExperienceRow ? '需要在列表中确认这条经历的置顶状态' : undefined}
                     onClick={() => {
                       if (!state.selection) return;
@@ -552,7 +545,6 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
                   <button
                     type="button"
                     data-testid="archive-delete-record"
-                    disabled={readOnly}
                     onClick={() => module.dispatch({ type: 'request-delete' })}
                   >
                     删除
@@ -592,7 +584,6 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
                     <button
                       type="button"
                       data-testid="archive-save-edit"
-                      disabled={readOnly}
                       onClick={() => module.dispatch({ type: 'save-edit' })}
                     >
                       保存修订
@@ -628,7 +619,6 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
                     <button
                       type="button"
                       data-testid="archive-delete-confirm-button"
-                      disabled={readOnly}
                       onClick={() => module.dispatch({ type: 'confirm-delete' })}
                     >
                       确认删除
@@ -678,7 +668,6 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
                   <button
                     type="button"
                     data-testid={`archive-ignore-${item.observationId}`}
-                    disabled={readOnly}
                     onClick={() =>
                       module.dispatch({ type: 'ignore-observation', observationId: item.observationId })
                     }
@@ -701,7 +690,6 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
                   <button
                     type="button"
                     data-testid={`archive-retry-${job.jobId}`}
-                    disabled={readOnly}
                     onClick={() => module.dispatch({ type: 'retry-job', jobId: job.jobId })}
                   >
                     重试

@@ -14,7 +14,7 @@ import pytest
 
 from app import db as db_module
 from app.db import init_db, reset_initialization_cache
-from app.services.memory import CoreFactCandidate, memory_service
+from tests.legacy_memory_rows import insert_legacy_core_fact
 
 
 CONTENT_TABLES = (
@@ -109,16 +109,14 @@ async def test_s0_legacy_import_idempotent_no_row_growth(isolated_store):
     """Second import: stable_facts/versions/evidence/observations counts must not increase."""
     owner = "v11-mig"
     _seed_sources(owner)
-    await memory_service.upsert_core_fact(
+    await insert_legacy_core_fact(
         owner,
         "steins_gate",
-        CoreFactCandidate(
-            fact_key="likes_anime",
-            fact_value="喜欢看动漫",
-            confidence=0.9,
-            importance=0.85,
-            source_message_ids=[4151],
-        ),
+        "likes_anime",
+        "喜欢看动漫",
+        confidence=0.9,
+        importance=0.85,
+        source_message_ids=[4151],
         identity_mode="self",
     )
     mig = _migration()
@@ -177,16 +175,14 @@ async def test_s0_consolidation_preview_exactly_one_open_proposal(isolated_store
     owner = "v11-consol"
     _seed_sources(owner)
     for key in ("likes_anime", "like_anime"):
-        await memory_service.upsert_core_fact(
+        await insert_legacy_core_fact(
             owner,
             "steins_gate",
-            CoreFactCandidate(
-                fact_key=key,
-                fact_value="喜欢看动漫",
-                confidence=0.9,
-                importance=0.85,
-                source_message_ids=[4151],
-            ),
+            key,
+            "喜欢看动漫",
+            confidence=0.9,
+            importance=0.85,
+            source_message_ids=[4151],
             identity_mode="self",
         )
     mig = _migration()
@@ -267,28 +263,24 @@ async def test_s0_import_failure_rolls_back_owner_content(isolated_store, monkey
     """Injected failure: all owner content tables return exactly to before snapshot."""
     owner = "v11-mig-rollback"
     _seed_sources(owner)
-    await memory_service.upsert_core_fact(
+    await insert_legacy_core_fact(
         owner,
         "steins_gate",
-        CoreFactCandidate(
-            fact_key="likes_anime",
-            fact_value="喜欢看动漫",
-            confidence=0.9,
-            importance=0.85,
-            source_message_ids=[4151],
-        ),
+        "likes_anime",
+        "喜欢看动漫",
+        confidence=0.9,
+        importance=0.85,
+        source_message_ids=[4151],
         identity_mode="self",
     )
-    await memory_service.upsert_core_fact(
+    await insert_legacy_core_fact(
         owner,
         "steins_gate",
-        CoreFactCandidate(
-            fact_key="likes_coffee",
-            fact_value="喜欢咖啡",
-            confidence=0.9,
-            importance=0.85,
-            source_message_ids=[4152],
-        ),
+        "likes_coffee",
+        "喜欢咖啡",
+        confidence=0.9,
+        importance=0.85,
+        source_message_ids=[4152],
         identity_mode="self",
     )
 

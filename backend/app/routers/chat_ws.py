@@ -1756,8 +1756,7 @@ async def processor_loop(
         )
         session.set_last_message_id("user", int(user_message_id))
         
-        from app.agent_tools import AMADEUS_TOOLS, RECALL_MEMORY_TOOL_NAME
-        from app.services.memory_v11.jobs import memory_mode as _memory_mode
+        from app.agent_tools import RECALL_MEMORY_TOOL_NAME
         from app.services.turn_events import TurnModeState
         from app.services.turn_tool_orchestrator import (
             TurnExecutionRecord,
@@ -1772,87 +1771,57 @@ async def processor_loop(
             unsupported_failsoft_history,
         )
 
-        v11_tools = _memory_mode() == "v11"
         turn_record = TurnExecutionRecord(
             snapshot=snapshot_from_session(session, turn_provider),
             injected_fact_ids=getattr(session, "turn_injected_fact_ids", ()),
         )
         session.turn_execution = turn_record
-        tools_to_use = AMADEUS_TOOLS
-        tool_choice_to_use = "auto"
-        force_direct_search = (
-            should_force_search(user_msg)
-            and turn_provider.provider_id == "deepseek"
-            and not v11_tools
+        force_now = should_force_search(user_msg)
+        adapter_kind = type(getattr(turn_provider, "adapter", None) or object).__name__
+        tool_plan = plan_first_round_tools(
+            v11=True,
+            force_search=force_now,
+            provider_id=str(getattr(turn_provider, "provider_id", "") or ""),
+            adapter_kind=adapter_kind,
         )
-        if v11_tools:
-            force_now = should_force_search(user_msg)
-            adapter_kind = type(getattr(turn_provider, "adapter", None) or object).__name__
-            tool_plan = plan_first_round_tools(
-                v11=True,
-                force_search=force_now,
-                provider_id=str(getattr(turn_provider, "provider_id", "") or ""),
-                adapter_kind=adapter_kind,
+        turn_record.tool_plan_status = tool_plan.status
+        turn_record.tool_plan_reason = tool_plan.reason
+        if tool_plan.status == "unsupported":
+            tools_to_use = None
+            tool_choice_to_use = None
+            notice = apply_unsupported_combo(
+                turn_record, reason=tool_plan.reason or "undeclared_combo"
             )
-            turn_record.tool_plan_status = tool_plan.status
-            turn_record.tool_plan_reason = tool_plan.reason
-            if tool_plan.status == "unsupported":
-                tools_to_use = None
-                tool_choice_to_use = None
-                notice = apply_unsupported_combo(
-                    turn_record, reason=tool_plan.reason or "undeclared_combo"
-                )
-                active_history = unsupported_failsoft_history(active_history, notice)
-                await send_queue.put((epoch, {
-                    "type": "status",
-                    "dsk": "thinking",
-                    "state": "thinking",
-                    "tts": "idle",
-                    "notice": "Amadeus memory tools unsupported for this provider.",
-                    "reason": notice.diagnostics.get("reason") or "undeclared_combo",
-                }))
-            else:
-                tools_to_use = tool_plan.tools
-                tool_choice_to_use = "auto"
-            if force_now and tool_plan.status != "unsupported":
-                web_status = tool_status_payload("web_search")
-                await send_queue.put((epoch, {
-                    "type": "status",
-                    "dsk": "thinking",
-                    "state": "thinking",
-                    "tts": "idle",
-                    **web_status,
-                }))
-                search_result = await execute_tool_call(
-                    "web_search",
-                    json.dumps({"query": user_msg}, ensure_ascii=False),
-                )
-                turn_record.web_results.append(("web_search", search_result))
-                active_history = build_v11_web_evidence_context(
-                    active_history,
-                    [("web_search", search_result)],
-                )
-        elif force_direct_search:
+            active_history = unsupported_failsoft_history(active_history, notice)
             await send_queue.put((epoch, {
                 "type": "status",
                 "dsk": "thinking",
                 "state": "thinking",
                 "tts": "idle",
-                "notice": "Amadeus web_search tool invoking...",
-                "tool": "web_search",
+                "notice": "Amadeus memory tools unsupported for this provider.",
+                "reason": notice.diagnostics.get("reason") or "undeclared_combo",
+            }))
+        else:
+            tools_to_use = tool_plan.tools
+            tool_choice_to_use = "auto"
+        if force_now and tool_plan.status != "unsupported":
+            web_status = tool_status_payload("web_search")
+            await send_queue.put((epoch, {
+                "type": "status",
+                "dsk": "thinking",
+                "state": "thinking",
+                "tts": "idle",
+                **web_status,
             }))
             search_result = await execute_tool_call(
                 "web_search",
                 json.dumps({"query": user_msg}, ensure_ascii=False),
             )
-            active_history = build_web_search_evidence_context(
+            turn_record.web_results.append(("web_search", search_result))
+            active_history = build_v11_web_evidence_context(
                 active_history,
-                search_result,
+                [("web_search", search_result)],
             )
-            tools_to_use = None
-            tool_choice_to_use = None
-        elif should_force_search(user_msg):
-            tool_choice_to_use = {"type": "function", "function": {"name": "web_search"}}
         
         final_text, final_emotion, merged_tool_calls, emo_tag_found = await get_clean_text_stream(
             active_history=active_history,
@@ -1863,7 +1832,7 @@ async def processor_loop(
             default_emotion=session.last_assistant_emotion,
             on_text_delta=submit_text_delta if session.protocol_version >= 2 else None,
             provider_snapshot=turn_provider,
-            mode_state=turn_record.mode_state if v11_tools else None,
+            mode_state=turn_record.mode_state,
         )
         print(f"[DEBUG] processor_loop: final_emotion='{final_emotion}' has_tool_call={bool(merged_tool_calls)} emo_tag_found={emo_tag_found}", flush=True)
         
@@ -1885,65 +1854,53 @@ async def processor_loop(
                     **status,
                 }))
 
-            recall_result = None
-            extra_web = None
-            if v11_tools:
-                calls = list(merged_tool_calls.values())
-                turn_record.raw_calls = calls
-                if turn_record.mode_state.late_tool_calls:
-                    turn_record.late_tool_call = True
-                outcome = await apply_v11_tool_batch(
-                    record=turn_record,
-                    session=session,
-                    provider=turn_provider,
-                    calls=calls,
-                    web_executor=execute_tool_call,
-                    cancelled=bool(getattr(session, "erasure_pending", False)),
+            calls = list(merged_tool_calls.values())
+            turn_record.raw_calls = calls
+            if turn_record.mode_state.late_tool_calls:
+                turn_record.late_tool_call = True
+            outcome = await apply_v11_tool_batch(
+                record=turn_record,
+                session=session,
+                provider=turn_provider,
+                calls=calls,
+                web_executor=execute_tool_call,
+                cancelled=bool(getattr(session, "erasure_pending", False)),
+            )
+            recall_result = outcome.recall_result
+            extra_web = (
+                turn_record.web_results[1:]
+                if should_force_search(user_msg)
+                else turn_record.web_results
+            )
+            if recall_result is not None:
+                payload = prepare_second_round_payload(
+                    active_history,
+                    recall_result,
+                    extra_web or None,
+                    system_prompt=session.system_prompt,
                 )
-                recall_result = outcome.recall_result
-                extra_web = (
-                    turn_record.web_results[1:]
-                    if should_force_search(user_msg)
-                    else turn_record.web_results
+                if payload.result is not None:
+                    turn_record.recall_result = payload.result
+                    turn_record.ranked_items = list(payload.result.ranked_items or [])
+                tool_context = payload.history
+            elif turn_record.web_results:
+                tool_context = build_v11_web_evidence_context(
+                    active_history,
+                    list(turn_record.web_results),
                 )
-                if recall_result is not None:
-                    payload = prepare_second_round_payload(
-                        active_history,
-                        recall_result,
-                        extra_web or None,
-                        system_prompt=session.system_prompt,
-                    )
-                    if payload.result is not None:
-                        turn_record.recall_result = payload.result
-                        turn_record.ranked_items = list(payload.result.ranked_items or [])
-                    tool_context = payload.history
-                elif turn_record.web_results:
-                    tool_context = build_v11_web_evidence_context(
-                        active_history,
-                        list(turn_record.web_results),
-                    )
-                else:
-                    tool_context = build_tool_result_context(active_history, [])
             else:
-                tool_results = []
-                for tc in merged_tool_calls.values():
-                    name = tc.get("function", {}).get("name")
-                    args = tc.get("function", {}).get("arguments")
-                    result = await execute_tool_call(name, args)
-                    tool_results.append((name or "unknown_tool", result))
-                tool_context = build_tool_result_context(active_history, tool_results)
+                tool_context = build_tool_result_context(active_history, [])
             
             async def _refresh_candidate_history(_attempt: int):
-                if not v11_tools or recall_result is None:
+                if recall_result is None:
                     return None
                 refreshed = await refresh_candidates_for_send(
                     turn_record, session, turn_provider
                 )
-                extra = extra_web if v11_tools else None
                 return prepare_second_round_payload(
                     active_history,
                     refreshed,
-                    extra or None,
+                    extra_web or None,
                     system_prompt=session.system_prompt,
                 ).history
 
@@ -1956,8 +1913,8 @@ async def processor_loop(
                 default_emotion=session.last_assistant_emotion,
                 on_text_delta=submit_text_delta if session.protocol_version >= 2 else None,
                 provider_snapshot=turn_provider,
-                mode_state=TurnModeState() if v11_tools else None,
-                before_send=_refresh_candidate_history if v11_tools and recall_result is not None else None,
+                mode_state=TurnModeState(),
+                before_send=_refresh_candidate_history if recall_result is not None else None,
             )
             
         # Persist detected emotion for next turn fallback, with decay to neutral
@@ -2093,64 +2050,33 @@ async def processor_loop(
                         "id": int(assistant_message_id),
                     }
                 )
-                # MEMORY-V11: default legacy Quiet Ingest. Explicit shadow/v11
-                # enables durable enqueue (worker started at app lifespan).
-                from app.services.memory_v11.jobs import memory_mode
-                if memory_mode() in {"shadow", "v11"}:
-                    from app.services.memory_v11.jobs import enqueue_memory_job
+                # MEMORY-V11: durable enqueue; the worker starts at app lifespan.
+                from app.services.memory_v11.jobs import enqueue_memory_job
 
-                    async def _enqueue_memory_v11() -> None:
-                        try:
-                            provider_id = getattr(turn_provider, "provider_id", None) or "deepseek"
-                            model_id = getattr(turn_provider, "model_id", None) or ""
-                            await enqueue_memory_job(
-                                session_id=session.session_id,
-                                worldline=session.worldline,
-                                conversation_id=conversation_id,
-                                identity_mode=getattr(session, "identity_mode", "okabe"),
-                                source_message_id=int(user_message_id),
-                                provider_id=str(provider_id),
-                                model_id=str(model_id),
-                            )
-                        except Exception as exc:
-                            # Broad on purpose: memory enqueue is best-effort
-                            # background work and must never affect chat.
-                            # Type only: the error text can carry chat content.
-                            logger.warning(
-                                "[MemoryV11] enqueue failed (%s); chat continues",
-                                type(exc).__name__,
-                            )
+                async def _enqueue_memory_v11() -> None:
+                    try:
+                        provider_id = getattr(turn_provider, "provider_id", None) or "deepseek"
+                        model_id = getattr(turn_provider, "model_id", None) or ""
+                        await enqueue_memory_job(
+                            session_id=session.session_id,
+                            worldline=session.worldline,
+                            conversation_id=conversation_id,
+                            identity_mode=getattr(session, "identity_mode", "okabe"),
+                            source_message_id=int(user_message_id),
+                            provider_id=str(provider_id),
+                            model_id=str(model_id),
+                        )
+                    except Exception as exc:
+                        # Broad on purpose: memory enqueue is best-effort
+                        # background work and must never affect chat.
+                        # Type only: the error text can carry chat content.
+                        logger.warning(
+                            "[MemoryV11] enqueue failed (%s); chat continues",
+                            type(exc).__name__,
+                        )
 
-                    if isinstance(user_message_id, int) and user_message_id > 0:
-                        _schedule_background_task(session, _enqueue_memory_v11())
-                else:
-                    from app.services.memory import memory_service
-
-                    # Memory Ingest v2: recent window + allowed source ids (no keyword gate).
-                    window = _language_safe_prompt_history(session.recent_messages())
-                    allowed_ids = [
-                        int(item["id"])
-                        for item in window
-                        if isinstance(item.get("id"), int)
-                        and not isinstance(item.get("id"), bool)
-                        and int(item["id"]) > 0
-                    ]
-                    for mid in (user_message_id, assistant_message_id):
-                        if isinstance(mid, int) and mid > 0 and mid not in allowed_ids:
-                            allowed_ids.append(int(mid))
-                    memory_service.schedule_turn_extraction(
-                        session_id=session.session_id,
-                        worldline=session.worldline,
-                        conversation_id=conversation_id,
-                        user_text=user_msg,
-                        assistant_text=history_content,
-                        source_message_ids=allowed_ids,
-                        api_key=session.api_key,
-                        provider_snapshot=turn_provider,
-                        identity_mode=getattr(session, "identity_mode", "okabe"),
-                        skip_core=False,
-                        recent_messages=window,
-                    )
+                if isinstance(user_message_id, int) and user_message_id > 0:
+                    _schedule_background_task(session, _enqueue_memory_v11())
             else:
                 session.append_message({"role": "assistant", "content": history_content, "id": None})
 

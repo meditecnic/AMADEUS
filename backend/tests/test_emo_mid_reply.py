@@ -1,8 +1,6 @@
 """[150] Exercise publication, speech, persistence and extraction boundaries offline."""
 
 import asyncio
-import json
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -13,7 +11,6 @@ from app.domain.emotion_tags import EmotionTagFilter, strip_emotion_tags
 from app.domain.japanese_response_renderer import normalize_rendered_japanese
 from app.routers import chat_ws
 from app.services.conversations import conversation_service
-from app.services.memory import memory_service
 from app.services.memory_v11.jobs import _load_user_source
 
 BODY = "それはよかったわね。べ、別に心配してたわけじゃないけど。"
@@ -53,7 +50,7 @@ async def run_turn(monkeypatch, conversation, chunks, *, protocol=2, client="des
     monkeypatch.setattr(chat_ws.tts_manager, "synthesize_and_queue", queue_speech)
     monkeypatch.setattr(chat_ws.tts_manager, "stream_pcm", stream_speech)
     monkeypatch.setattr(conversation_service, "schedule_auto_title", lambda *a, **k: None)
-    monkeypatch.setattr(memory_service, "schedule_turn_extraction", lambda **kwargs: None)
+    monkeypatch.setattr("app.services.memory_v11.jobs.enqueue_memory_job", AsyncMock())
     session = chat_ws.SessionState("emo-test")
     session.client_type = client
     session.protocol_version = protocol
@@ -100,19 +97,6 @@ async def test_every_tag_split(monkeypatch, conversation, split):
 
 def test_renderer_output():
     assert normalize_rendered_japanese(RAW) == BODY
-
-
-async def test_legacy_extraction_context(monkeypatch, conversation):
-    complete = AsyncMock(return_value={"facts": [], "working_summary": "NO_WORKING_CONTEXT"})
-    snapshot = SimpleNamespace(
-        require=lambda task: None, adapter=SimpleNamespace(complete_json=complete), model_id="fake",
-    )
-    await memory_service._extract_turn(
-        "emo-test", "steins_gate", "元気？", RAW, [], None, snapshot,
-        conversation_id=conversation,
-    )
-    payload = json.loads(complete.call_args.kwargs["messages"][-1]["content"])
-    assert payload["messages"][-1]["content"] == BODY
 
 
 async def test_v11_extraction_context(conversation):

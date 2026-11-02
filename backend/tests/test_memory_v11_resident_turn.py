@@ -1,15 +1,13 @@
 """Dispatch 55: turn-level wiring of the v11 resident profile.
 
 recall_memory exclusion of injected facts, the injected-facts lookup notice,
-processor-level first-round prompts (DeepSeek tool path / GLM non-tool path)
-and the real_run CORE FACTS checks. Acceptance map: [A<n>] = dispatch 6.<n>.
+processor-level first-round prompts (DeepSeek tool path / GLM non-tool path).
+Acceptance map: [A<n>] = dispatch 6.<n>.
 """
 from __future__ import annotations
 
 import asyncio
 import json
-import sys
-from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -49,10 +47,6 @@ from tests.test_memory_v11_resident_profile import (
     seed_fact,
     seed_forty,
 )
-
-BACKEND_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(BACKEND_ROOT / "scripts"))
-import memory_candidate_real_run as b3  # noqa: E402
 
 PROVIDER = SimpleNamespace(provider_id="deepseek", model_id="m")
 
@@ -235,7 +229,6 @@ async def test_execute_recall_excludes_injected_fact_ids(isolated_store, monkeyp
     """[A6] record.injected_fact_ids reach recall_stable_facts and are excluded."""
     from app.services.memory import memory_service
 
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     monkeypatch.setattr(memory_service, "embedder", _stub_embedder_not_loaded())
     sid = f"turn-excl-{uuid4()}"
     injected = await seed_fact(session_id=sid, text="紅茶はダージリンが一番")
@@ -320,7 +313,16 @@ async def _processor_session(owner: str, *, provider_id: str, model: str):
 
 
 def _candidate_records(text: str) -> list[str]:
-    return b3._candidate_records_in(text)
+    records: list[str] = []
+    for chunk in str(text or "").split("MEMORY_CANDIDATE_DATA\n")[1:]:
+        try:
+            payload = json.loads(chunk.split("\n", 1)[0])
+        except json.JSONDecodeError:
+            continue
+        values = payload.get("records") if isinstance(payload, dict) else None
+        if isinstance(values, dict):
+            records.extend(str(value) for value in values.values())
+    return records
 
 
 @pytest.mark.asyncio
@@ -330,7 +332,6 @@ async def test_processor_deepseek_first_round_profile_and_recall_exclusion(isola
     from app.services.memory import memory_service
     from app.services.provider_runtime import deepseek_service
 
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     monkeypatch.setattr(memory_service, "embedder", _stub_embedder_not_loaded())
     owner = f"turn-ds-{uuid4()}"
     ids = await seed_forty(owner)
@@ -404,7 +405,6 @@ async def test_processor_glm_non_tool_profile_and_notice(isolated_store, monkeyp
     from app.services.provider_registry import ProviderCapabilities, ProviderSnapshot, ProviderTask
     from app.services.provider_runtime import deepseek_service
 
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     monkeypatch.setattr(memory_service, "embedder", _stub_embedder_not_loaded())
     owner = f"turn-glm-{uuid4()}"
     if with_facts:
@@ -452,58 +452,3 @@ async def test_processor_glm_non_tool_profile_and_notice(isolated_store, monkeyp
         assert record.injected_fact_ids == ()
         assert NO_USABLE_FACTS_NOTICE in blob
         assert INJECTED_FACTS_LOOKUP_UNAVAILABLE_NOTICE not in blob
-
-
-# ---------------------------------------------------------------------------
-# [A9] memory_candidate_real_run.py CORE FACTS checks on real compiled prompts
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_real_run_core_fact_checks_on_compiled_prompts(isolated_store, monkeypatch):  # noqa: F811
-    """[A9] heading / (none) / heading-without-facts / surfaced fact texts."""
-    from app.services.memory import memory_service
-    from app.services.prompt_compiler import compile_for_session
-    from tests.test_memory_v11_resident_profile import _deepseek_provider
-
-    monkeypatch.setattr(memory_service, "embedder", _stub_embedder_not_loaded())
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
-    sid = f"turn-b3-{uuid4()}"
-    await seed_forty(sid)
-    v11_prompt = await compile_for_session(_v11_session(sid), SUPPLEMENT_QUERY, provider=_deepseek_provider())
-    second_round = {
-        "role": "system",
-        "content": 'MEMORY CANDIDATES\nrules\nMEMORY_CANDIDATE_DATA\n{"status":"ok","needs":[],"records":{"m1":"SECOND_ROUND_FACT"}}',
-    }
-    messages = [{"role": "system", "content": v11_prompt}, {"role": "user", "content": SUPPLEMENT_QUERY}, second_round]
-    assert b3._system_has_core_facts_heading(messages) is True
-    assert b3._system_has_core_facts_none(messages) is False
-    assert b3._system_core_facts_heading_without_facts(messages) is False
-    surfaced = b3._core_facts_from_messages(messages).split("\n")
-    assert surfaced[:32] == _fact_lines(v11_prompt)
-    assert sorted(surfaced[32:34]) == sorted(LOW_TEXTS[:2])  # supplement
-    assert surfaced[34:] == ["SECOND_ROUND_FACT"]
-
-    empty_prompt = await compile_for_session(_v11_session(f"turn-b3-empty-{uuid4()}"), "hi", provider=_deepseek_provider())
-    empty = [{"role": "system", "content": empty_prompt}]
-    assert b3._system_has_core_facts_heading(empty) is False
-    assert b3._system_has_core_facts_none(empty) is False
-    assert b3._system_core_facts_heading_without_facts(empty) is False
-    assert b3._core_facts_from_messages(empty) == ""
-
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "legacy")
-    legacy_prompt = await compile_for_session(_v11_session(f"turn-b3-legacy-{uuid4()}"), "hi")
-    legacy = [{"role": "system", "content": legacy_prompt}]
-    assert b3._system_has_core_facts_none(legacy) is True
-    assert b3._system_core_facts_heading_without_facts(legacy) is True
-
-
-def test_real_run_reads_only_the_requests_own_core_facts_section():
-    """[A9] an earlier prompt embedded in IDENTITY does not leak into the check."""
-    old = "IDENTITY\nCORE FACTS\nrule\n- OLD_FACT\n\nCURRENT STATE\nold"
-    new_prompt = f"{old}\n\nPERSONA\np\n\nCORE FACTS\nrule\n- NEW_FACT\n\nCURRENT STATE\nnow"
-    messages = [{"role": "system", "content": new_prompt}]
-    assert b3._resident_core_fact_lines(new_prompt) == ["NEW_FACT"]
-    assert b3._core_facts_from_messages(messages) == "NEW_FACT"
-    headed_empty = [{"role": "system", "content": "PERSONA\np\n\nCORE FACTS\nrule\n\nCURRENT STATE\nnow"}]
-    assert b3._system_core_facts_heading_without_facts(headed_empty) is True

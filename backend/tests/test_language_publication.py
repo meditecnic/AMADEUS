@@ -1,7 +1,9 @@
+import re
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app.domain.emotion_tags import strip_emotion_tags
 from app.routers.chat_ws import (
     SessionState,
     _is_publishable_japanese,
@@ -14,6 +16,8 @@ from app.services.provider_registry import (
     ProviderSnapshot,
     ProviderTask,
 )
+
+_EMO_HISTORY_PREFIX = re.compile(r"^\[(?:E?MO)[:=][a-zA-Z0-9_]{1,24}\]\s*", re.IGNORECASE)
 
 
 class _SequencedStreamProvider:
@@ -1296,7 +1300,6 @@ def test_code_switch_v2_ws_natural_mix_publishes_once_without_failure_copy(app_c
 def test_han_only_chinese_never_enters_v2_ready_history_or_tts(app_client):
     """Live incident shape is rendered before every externally visible surface."""
     import uuid
-    from app.services.memory import strip_history_emo_prefix
 
     expected = "短い話を一つだけしてあげるわ。"
 
@@ -1350,7 +1353,9 @@ def test_han_only_chinese_never_enters_v2_ready_history_or_tts(app_client):
     ]
     assert assistant_messages
     persisted_raw = assistant_messages[-1]["content"]
-    persisted_body = strip_history_emo_prefix(persisted_raw).strip()
+    persisted_body = strip_emotion_tags(
+        _EMO_HISTORY_PREFIX.sub("", str(persisted_raw), count=1)
+    ).lstrip().strip()
     assert ready_ja == tts.texts == [persisted_body] == [expected]
     assert "笑话" not in persisted_raw
     assert "你让我" not in persisted_raw

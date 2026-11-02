@@ -73,7 +73,7 @@ function viewResponder(deletedRef: { value: boolean }) {
           session_id: SCOPE.sessionId,
           worldline: SCOPE.worldline,
           identity_mode: SCOPE.identityMode,
-          runtime_mode: 'v11', pending_count: 0,
+          pending_count: 0,
           processing_count: 0,
           failed_count: 2,
           failed_jobs: [
@@ -210,26 +210,6 @@ afterEach(() => {
 });
 
 describe('ArchiveView list and reading', () => {
-  it('explains a disconnected runtime and disables record mutations while preserving reading', async () => {
-    const base = viewResponder({ value: false });
-    stubFetch((url, init) => {
-      const response = base(url, init);
-      if (response && url.startsWith('/api/memory/status?')) {
-        response.body = { ...(response.body as object), runtime_mode: 'legacy' };
-      }
-      return response;
-    });
-    const module = createArchiveModule();
-    await act(async () => { module.open(SCOPE, { focus: { kind: 'fact', recordId: 'f1' } }); });
-    render(<ArchiveView module={module} />);
-    await screen.findByTestId('archive-detail-title');
-    expect(screen.getByTestId('archive-runtime-notice')).toHaveTextContent('当前对话尚未使用本页的记忆');
-    expect(screen.getByTestId('archive-edit-fact')).toBeDisabled();
-    expect(screen.getByTestId('archive-delete-record')).toBeDisabled();
-    expect(screen.getByTestId('archive-toggle-pin')).toBeDisabled();
-    expect(screen.getByTestId('archive-detail-title')).toHaveTextContent('喜欢黑咖啡');
-    module.dispose();
-  });
   it('keeps correction and delete confirmation usable for a record outside the current page', async () => {
     const respond = viewResponder({ value: false });
     stubFetch((url, init) => url.startsWith('/api/memory/facts?') ? {

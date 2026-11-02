@@ -14,8 +14,8 @@
 ## What it does
 
 - **Japanese conversation with paired Chinese subtitles.** Replies stream sentence by sentence; each Japanese sentence is matched with its translation, and missing translations are marked instead of silently dropped.
-- **Long-term memory that stays local.** Facts and experiences from your conversations are stored in SQLite (with `multilingual-e5-small` embeddings indexed in `sqlite-vec` on write). In the default legacy mode, core facts are injected into the prompt every turn and past episodes are retrieved by SQLite full-text search (FTS) when compiling the prompt; vector search and the `recall_memory` tool (DeepSeek only) belong to the experimental `AMADEUS_MEMORY_MODE=v11` mode and are not used by default. You can list and delete stored facts in the memory archive, optionally erase a conversation's exclusive long-term memories when clearing a chat, and view the star map (preview-only in the default mode).
-- **Two isolated worldlines.** *STEINS;GATE* and *β* each have their own persona, conversations, memory and visual theme. Conversations and memories are stored separately per worldline, except for Self-mode facts explicitly promoted to the shared user profile (`/api/memory/facts/{id}/promote`, stored in `control.sqlite3`), which both worldlines read in Self mode (Okabe mode never reads or writes shared facts).
+- **Long-term memory that stays local.** Facts and experiences from your conversations are stored in SQLite (with `multilingual-e5-small` embeddings indexed in `sqlite-vec` on write). Facts are split into resident facts, which go into the prompt every turn, and on-demand facts: the model fetches them with the `recall_memory` tool (DeepSeek only) when a turn needs them, and facts that match the current message are added to that turn's prompt. Related past experiences are also added when the prompt is compiled. In the memory archive you can view, correct and delete stored facts and view and delete experiences; you can also optionally erase a conversation's exclusive long-term memories when clearing a chat, and browse memories on the star map.
+- **Two isolated worldlines.** *STEINS;GATE* and *β* each have their own persona, conversations, memory and visual theme. Conversations and memories are stored separately per worldline.
 - **Worldline instruments and transitions (M3).** The header, system-menu dial and WebGL2 transition share the same cathode digits. Open **系统 → 世界线**: the dial shows the current worldline, while the diagram previews the selected target; use the shift button to begin. Softer handoffs preserve conversations and drafts, and click/Esc skips the presentation while still waiting for target confirmation.
 - **Bring your own model.** DeepSeek, Zhipu GLM, or any OpenAI-compatible endpoint. Optional web search through Tavily or Firecrawl.
 - **Optional voice.** Text-to-speech through a local GPT-SoVITS server; speech recognition with SenseVoice via sherpa-onnx (backend only for now, no microphone UI yet).
@@ -39,12 +39,12 @@ flowchart LR
   Sovits["GPT-SoVITS (optional)"]
   UI <--> WS
   WS --> Persona --> LLM
-  Mem -- "core facts + FTS episodes" --> Persona
+  Mem -- "resident facts + experiences" --> Persona
   WS --> Tr --> LLM
   WS --> TTS --> Sovits
 ```
 
-One chat turn: the UI sends the user's message over a WebSocket; in the default memory mode, the backend loads the user's core facts and full-text-matched past episodes for the active worldline and identity, compiles them into the persona prompt, and streams the model's Japanese reply in a single model call (on-demand `recall_memory` tool calls with a second model pass are used only when experimental `AMADEUS_MEMORY_MODE=v11` is enabled with DeepSeek). Each sentence is published as soon as it is complete; its subtitle and (optional) speech follow on their own ordered tracks, so a slow translation never holds back the text and may arrive after the turn has finished.
+One chat turn: the UI sends the user's message over a WebSocket; the backend loads the resident facts and related past experiences for the active worldline and identity, compiles them into the persona prompt, and streams the model's Japanese reply. With DeepSeek, the model can call `recall_memory` to fetch on-demand facts, which adds a second model pass. Each sentence is published as soon as it is complete; its subtitle and (optional) speech follow on their own ordered tracks, so a slow translation never holds back the text and may arrive after the turn has finished.
 
 ## Engineering notes
 
@@ -248,7 +248,7 @@ okeydokey，大概就是这些，那么来句帅气的收尾吧：El Psy Kongroo
 彼女は日本語で答える。交わした言葉の記憶は、機関の目が届かないあなたの PC の中だけに刻まれる。何を覚えているかはいつでも覗けるし、会話ごと忘れさせることもできる。世界線は **STEINS;GATE** と **β** の二つ。会話も記憶も、決して交わらない。（SG 世界線のアマデウスは、オリジナルの紅莉栖が生きている世界で生まれた。本人の話をすると……少し妬くかもしれない）
 
 - 日本語での会話（中国語字幕つき。英語・日本語 UI は開発予定。彼女はどのモードでも日本語で話す――英語モードでは英語字幕、日本語モードでは字幕なし）
-- ローカル長期記憶：SQLite + sqlite-vec + multilingual-e5-small。標準モードでは毎ターン核となる事実をプロンプトに入れ、過去の出来事は全文検索（FTS）で引く（必要なときだけモデルが `recall_memory` ツールで思い出すのは実験的な `AMADEUS_MEMORY_MODE=v11` のみ）
+- ローカル長期記憶：SQLite + sqlite-vec + multilingual-e5-small。事実は常駐と必要時の二種類。常駐の事実は毎ターンプロンプトに入り、それ以外は必要なときだけモデルが `recall_memory` ツール（DeepSeek のみ）で思い出す。記憶アーカイブで閲覧・修正・削除できる
 - DeepSeek、Zhipu GLM、OpenAI 互換 API（ローカルモデルを含む）に対応
 - 音声合成（GPT-SoVITS）は任意
 - M3 は実機 Edge プレビューで承認され、統合済み。ヘッダー・システムメニュー・遷移演出の陰極数字を統一。「系统 → 世界线」では計器に現在の世界線、図に選択した移動先を表示し、ボタンで遷移する。クリック／Esc で演出を省略しても、移動先の確認を待つ。

@@ -1,7 +1,7 @@
 """Entry-level integration tests for the v11 chat memory path (2026-09-09).
 
 Task memory-chat-glm-20260909: drive the REAL chat chain —
-SessionState → chat_ws.processor_loop → compile_for_session → v11/legacy
+SessionState → chat_ws.processor_loop → compile_for_session → v11
 selectors → get_clean_text_stream → provider adapter — with a controllable
 fake provider that reuses the real adapter's message assembly
 (``build_stream_messages`` + ``build_persona_messages``) and captures the
@@ -13,9 +13,8 @@ prompt": the compiler runs for real, selectors run against synthetic DBs,
 and assertions are made on the captured provider boundary.
 
 Covered:
-- legacy/shadow/v11 modes deliver the right Memory to the provider boundary;
-  shadow never leaks v11 rows; v11 never merges legacy/shared/other scopes;
-  no second legacy Memory extraction runs while v11 owns the turn;
+- v11 delivers the right Memory to the provider boundary and never merges
+  legacy/shared/other scopes;
 - a small synthetic rehearsal target produced by the real offline migration
   tool feeds one legacy_import fact into the provider input through the chat
   entry; conflicting markers of other owner/identity/worldline never appear;
@@ -54,6 +53,7 @@ from app.services.deepseek import build_stream_messages
 from app.services.memory_v11 import migration as mig
 from app.services.memory_v11.repository import create_stable_fact
 from app.services.provider_runtime import deepseek_service
+from tests.legacy_memory_rows import insert_legacy_core_fact
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 SG = "steins_gate"
@@ -163,19 +163,6 @@ def _suppress_auto_title(monkeypatch) -> None:
     monkeypatch.setattr(conversation_service, "schedule_auto_title", fake_schedule)
 
 
-def _record_legacy_extraction(monkeypatch) -> list:
-    """Record legacy Quiet Ingest scheduling instead of running extraction."""
-    from app.services.memory import memory_service
-
-    calls: list = []
-
-    def fake_schedule(*args, **kwargs):
-        calls.append({"args": args, "kwargs": kwargs})
-
-    monkeypatch.setattr(memory_service, "schedule_turn_extraction", fake_schedule)
-    return calls
-
-
 def _make_session(session_id: str, *, identity_mode: str = "self"):
     from app.routers.chat_ws import SessionState
 
@@ -251,7 +238,6 @@ async def test_fact_selector_failure_fails_soft_at_compiler_level(
     import app.services.memory_v11.recall as recall_module
     from app.services.prompt_compiler import compile_for_session
 
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     session_id = f"chat-fix-{uuid4()}"
     fact_marker = f"FACT_SEL_FAIL_{uuid4().hex[:8]}"
     legacy_marker = f"LEGACY_SEL_FAIL_{uuid4().hex[:8]}"
@@ -303,7 +289,6 @@ async def test_fact_selector_cancellation_still_propagates(isolated_store, monke
     import app.services.memory_v11.retrieval as retrieval_module
     from app.services.prompt_compiler import compile_for_session
 
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     session_id = f"chat-cancel-{uuid4()}"
 
     async def cancelled(*args, **kwargs):
@@ -329,7 +314,6 @@ async def test_processor_cancelled_while_fact_selector_waits_never_reaches_provi
     from app.routers.chat_ws import processor_loop
     from app.services.session_manager import cancel_inflight
 
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     started = asyncio.Event()
     selector_cancelled = asyncio.Event()
 
@@ -389,7 +373,6 @@ async def test_forget_route_cancels_matching_processor_before_reply(
     from app.routers.chat_ws import processor_loop, sessions
     from app.routers.conversations import ConversationForget, forget_conversation
 
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     started = asyncio.Event()
     selector_cancelled = asyncio.Event()
 
@@ -506,7 +489,7 @@ async def _seed_experience(*, session_id: str, display_text: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2. Entry level: three modes at the provider boundary.
+# 2. Entry level: v11 at the provider boundary.
 # ---------------------------------------------------------------------------
 
 
@@ -519,22 +502,17 @@ async def _seed_v11_fact(session_id: str, marker: str, *, identity_mode: str = "
 
 
 async def _seed_legacy_fact(session_id: str, marker: str) -> None:
-    from app.services.memory import CoreFactCandidate, memory_service
-
-    await memory_service.upsert_core_fact(
+    await insert_legacy_core_fact(
         session_id, SG,
-        CoreFactCandidate(
-            fact_key=f"legacy_{marker[:12]}",
-            fact_value=f"{marker} 旧版の好きなアニメ",
-            confidence=0.9, importance=0.85, source_message_ids=[12345],
-        ),
+        f"legacy_{marker[:12]}",
+        f"{marker} 旧版の好きなアニメ",
+        confidence=0.9, importance=0.85, source_message_ids=[12345],
         identity_mode="self",
     )
 
 
 @pytest.mark.asyncio
 async def test_v11_mode_delivers_scoped_memory_to_provider(isolated_store, monkeypatch):
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     session_id = f"chat-v11-{uuid4()}"
     self_marker = f"V11_SELF_{uuid4().hex[:8]}"
     okabe_marker = f"V11_OKABE_{uuid4().hex[:8]}"
@@ -567,7 +545,6 @@ async def test_v11_mode_delivers_scoped_memory_to_provider(isolated_store, monke
     capture = _ProviderCapture()
     _install_fake_provider(monkeypatch, capture)
     _suppress_auto_title(monkeypatch)
-    legacy_calls = _record_legacy_extraction(monkeypatch)
 
     session = _make_session(session_id)
     await _prepare_conversation(session, identity_mode="self")
@@ -590,8 +567,6 @@ async def test_v11_mode_delivers_scoped_memory_to_provider(isolated_store, monke
         if "これまでの会話の記憶要約" in str(m.get("content") or "")
     ]
     assert not summary_messages
-    # v11 owns the turn: exactly one chat call and no legacy extraction run.
-    assert legacy_calls == []
     assert await _wait_for_v11_job(session_id)
 
 
@@ -612,57 +587,6 @@ async def _wait_for_v11_job(session_id: str, timeout: float = 3.0) -> bool:
             return True
         await asyncio.sleep(0.05)
     return False
-
-
-@pytest.mark.asyncio
-async def test_legacy_mode_delivers_legacy_memory_only(isolated_store, monkeypatch):
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "legacy")
-    session_id = f"chat-legacy-{uuid4()}"
-    v11_marker = f"V11_ONLY_LEG_{uuid4().hex[:8]}"
-    legacy_marker = f"LEGACY_REAL_{uuid4().hex[:8]}"
-    await _seed_v11_fact(session_id, v11_marker)
-    await _seed_legacy_fact(session_id, legacy_marker)
-
-    capture = _ProviderCapture()
-    _install_fake_provider(monkeypatch, capture)
-    _suppress_auto_title(monkeypatch)
-    legacy_calls = _record_legacy_extraction(monkeypatch)
-
-    session = _make_session(session_id)
-    await _prepare_conversation(session, identity_mode="self")
-    events = await _run_turn(session, "このすば")
-
-    assert _done(events) and not _errors(events), events
-    system_prompt = capture.last_system_prompt
-    assert legacy_marker in system_prompt, "legacy core fact must reach the provider"
-    assert v11_marker not in system_prompt, "legacy mode must not read v11 rows"
-    # Legacy Quiet Ingest owns extraction: scheduled once, and this turn made
-    # exactly one provider chat request (no second Memory LLM call).
-    assert len(legacy_calls) == 1
-    assert len(capture.chat_calls) == 1
-
-
-@pytest.mark.asyncio
-async def test_shadow_mode_reads_legacy_and_hides_v11(isolated_store, monkeypatch):
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "shadow")
-    session_id = f"chat-shadow-{uuid4()}"
-    v11_marker = f"V11_ONLY_SHD_{uuid4().hex[:8]}"
-    legacy_marker = f"LEGACY_SHD_{uuid4().hex[:8]}"
-    await _seed_v11_fact(session_id, v11_marker)
-    await _seed_legacy_fact(session_id, legacy_marker)
-
-    capture = _ProviderCapture()
-    _install_fake_provider(monkeypatch, capture)
-    _suppress_auto_title(monkeypatch)
-
-    session = _make_session(session_id)
-    await _prepare_conversation(session, identity_mode="self")
-    events = await _run_turn(session, "このすば")
-
-    assert _done(events) and not _errors(events), events
-    system_prompt = capture.last_system_prompt
-    assert legacy_marker in system_prompt
-    assert v11_marker not in system_prompt, "shadow writes must never leak to the prompt"
 
 
 # ---------------------------------------------------------------------------
@@ -780,7 +704,6 @@ async def test_migrated_legacy_import_reaches_chat_provider(tmp_path, monkeypatc
 
     # The rehearsal target layout matches the app data layout; init the rest.
     monkeypatch.setenv("AMADEUS_DATA_DIR", str(target))
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     monkeypatch.delenv("AMADEUS_DB_PATH", raising=False)
     reset_initialization_cache()
     await init_db()
@@ -831,7 +754,6 @@ async def test_migrated_legacy_import_reaches_chat_provider(tmp_path, monkeypatc
 async def test_revision_and_deletion_reflected_next_turn(isolated_store, monkeypatch):
     from app.services.memory_v11.facts import delete_fact, user_edit_fact
 
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     session_id = f"chat-rev-{uuid4()}"
     marker_v1 = f"REV_OLD_{uuid4().hex[:8]}"
     marker_v2 = f"REV_NEW_{uuid4().hex[:8]}"
@@ -916,7 +838,6 @@ async def test_fact_selector_failure_turn_survives_with_fresh_prompt(
     complete the turn, and recover on the next turn."""
     import app.services.memory_v11.recall as recall_module
 
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     session_id = f"chat-fail-{uuid4()}"
     fact_marker = f"FAIL_FACT_{uuid4().hex[:8]}"
     stale_marker = f"STALE_PROMPT_{uuid4().hex[:8]}"
@@ -972,7 +893,6 @@ async def test_experience_selector_failure_keeps_facts(isolated_store, monkeypat
     """Existing experience fail-soft semantics stay intact at the entry level."""
     import app.services.memory_v11.retrieval as retrieval_module
 
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     session_id = f"chat-expfail-{uuid4()}"
     fact_marker = f"EXPFAIL_FACT_{uuid4().hex[:8]}"
     await _seed_v11_fact(session_id, fact_marker)
@@ -1008,8 +928,6 @@ async def test_voice_entry_reaches_same_boundary(isolated_store, monkeypatch):
     # The voice endpoint loads the selected (default okabe) conversation and
     # the processor re-syncs identity from it, so the fact lives in okabe scope.
     await _seed_v11_fact(session_id, voice_marker, identity_mode="okabe")
-
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
 
     async def fake_transcribe_pcm(pcm, sample_rate, channels):
         return "このすば", "neutral", 0.99
@@ -1087,11 +1005,9 @@ async def test_v2_user_disabled_tts_emits_user_disabled_not_unbound(
 
     assert "AudioErrorCode" not in processor_loop.__code__.co_varnames
 
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     capture = _ProviderCapture()
     _install_fake_provider(monkeypatch, capture)
     _suppress_auto_title(monkeypatch)
-    _record_legacy_extraction(monkeypatch)
 
     session = _make_session(f"v2-tts-bind-{uuid4()}")
     session.protocol_version = 2

@@ -138,11 +138,9 @@ def _check(name: str, prompt: str, message: str) -> None:
 @pytest.mark.parametrize("case_name", sorted(CASES))
 async def test_v11_no_fact_prompt_snapshot(isolated_store, monkeypatch, case_name):
     import app.services.memory_v11.retrieval as retrieval_module
-    from app.services.memory import memory_service
     from app.services.soul_engine import soul_engine
 
     case = CASES[case_name]
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
 
     async def fake_experiences(**kwargs):
         return [dict(row) for row in case["experiences"]]
@@ -150,13 +148,8 @@ async def test_v11_no_fact_prompt_snapshot(isolated_store, monkeypatch, case_nam
     async def fake_emotion(*args, **kwargs):
         return EMOTION
 
-    async def legacy_forbidden(*args, **kwargs):
-        raise AssertionError("v11 must not read legacy memory")
-
     monkeypatch.setattr(retrieval_module, "select_experience_candidates", fake_experiences)
     monkeypatch.setattr(soul_engine, "restore_emotion", fake_emotion)
-    monkeypatch.setattr(memory_service, "select_core_facts", legacy_forbidden)
-    monkeypatch.setattr(memory_service, "lexical_search", legacy_forbidden)
     if "input_budget" in case:
         import app.services.prompt_compiler as pc_module
 

@@ -1,33 +1,20 @@
-"""GATE7A-NAT-01: shared facts must reach the self prompt as usable CORE FACTS.
+"""GATE7A-NAT-01: CORE FACTS usage contract (FACT_USE_CONTRACT).
 
-Layered probes (plan 2026-07-26-gate7a-shared-fact-naturalization.md):
-- L1 retrieval: select_core_facts(β, self, CJK query) contains the shared fact
-- L2 compile: compile_for_session output contains the fact text
-- L3 expression: FACT_USE_CONTRACT instructs natural familiarity, forbids
-  deny-then-guess and any worldline/DB/MEMORY mechanism talk
-- L4 isolation: okabe stays blind on both worldlines
+L3 expression: FACT_USE_CONTRACT instructs natural familiarity, forbids
+deny-then-guess and any worldline/DB/MEMORY mechanism talk.
 
-Mode: these probes specify the legacy (default) prompt surface. In v11 mode
-(dispatch 55) CORE FACTS is the resident profile built from v11 stable facts,
-with a partial-profile rule and per-turn supplement (see
-test_memory_v11_resident_profile and test_memory_v11_prompt). The module pins
-legacy mode explicitly.
+These probes feed facts straight into PromptCompiler. The v11 resident profile
+built from stable facts (partial-profile rule, per-turn supplement) is covered
+by test_memory_v11_resident_profile and test_memory_v11_prompt.
 """
 from __future__ import annotations
 
 import pytest
 
 from app.db import init_db, reset_initialization_cache
-from app import models
-from app.services.conversations import conversation_service
-from app.services.memory import CoreFactCandidate, memory_service
-from app.services.prompt_compiler import compile_for_session
-
-
-@pytest.fixture(autouse=True)
-def _legacy_memory_mode(monkeypatch):
-    """These probes pin the legacy CORE FACTS + FACT_USE_CONTRACT surface."""
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "legacy")
+from app.services.memory import RetrievedMemory
+from app.services.prompt_compiler import PromptCompiler, PromptInputs, compile_for_session
+from app.services.soul_engine import EmotionVector
 
 
 @pytest.fixture
@@ -52,126 +39,33 @@ class _FakeSession:
         self.identity_acknowledged = False
 
 
-async def _seed_and_promote(
-    owner: str,
-    worldline: str,
-    *,
-    key: str = "favorite_food",
-    value: str = "炸鸡",
-) -> int:
-    """Real self conversation + user message + local fact + promote (Gate 7A)."""
-    conversation = await conversation_service.create(
-        owner, worldline, identity_mode="self"
-    )
-    conversation_id = str(conversation["id"])
-    message_id = await models.save_message(
-        owner, "user", f"私は{value}が好き。", worldline=worldline,
-        conversation_id=conversation_id,
-    )
-    fact_id = await memory_service.upsert_core_fact(
-        owner,
-        worldline,
-        CoreFactCandidate(
-            fact_key=key,
-            fact_value=value,
-            confidence=0.9,
-            importance=0.8,
-            source_message_ids=[message_id],
+def _compile_with_facts(facts: dict[str, str], message: str) -> str:
+    return PromptCompiler().compile(PromptInputs(
+        worldline="beta",
+        base_identity="You are Amadeus Kurisu.",
+        emotion=EmotionVector(
+            trust=0.5, attachment=0.5, irritation=0.1,
+            anxiety=0.1, jealousy=0.1, volatility=0.2,
         ),
+        core_facts=[
+            RetrievedMemory(id=index + 1, kind="core", content=f"{key}: {value}", score=1.0)
+            for index, (key, value) in enumerate(facts.items())
+        ],
+        episodic=[],
+        web_evidence=[],
+        working_summary="",
+        recent_history=[],
+        current_user_message=message,
         identity_mode="self",
-    )
-    shared_id, _ = await memory_service.promote_local_self_fact(
-        owner, worldline, fact_id
-    )
-    return shared_id
-
-
-# ---------------------------------------------------------------------------
-# Task 1 probes: L1 retrieval / L2 compile / L4 isolation
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_promoted_fact_in_beta_select_core_facts(isolated_store):
-    owner = "nat-food-1"
-    await _seed_and_promote(owner, "steins_gate")
-    # CJK user question — matches the live acceptance phrasing (no spaces).
-    rows = await memory_service.select_core_facts(
-        owner, "beta", "我喜欢吃什么", identity_mode="self"
-    )
-    blob = "\n".join(item.content for item in rows)
-    assert "炸鸡" in blob
-
-
-@pytest.mark.asyncio
-async def test_promoted_fact_in_beta_compiled_prompt(isolated_store):
-    owner = "nat-food-2"
-    await _seed_and_promote(owner, "steins_gate")
-    prompt = await compile_for_session(
-        _FakeSession(owner, "beta", "self"), "我喜欢吃什么？"
-    )
-    assert "炸鸡" in prompt
-    assert "CORE FACTS" in prompt
-    # Implementation trivia must never become speech fuel for the model.
-    assert "shared_user_facts" not in prompt
-    assert "origin_worldline" not in prompt
-
-
-@pytest.mark.asyncio
-async def test_okabe_beta_still_blind_to_shared(isolated_store):
-    owner = "nat-food-3"
-    await _seed_and_promote(owner, "steins_gate")
-    rows = await memory_service.select_core_facts(
-        owner, "beta", "我喜欢吃什么", identity_mode="okabe"
-    )
-    assert all("炸鸡" not in item.content for item in rows)
-    prompt = await compile_for_session(
-        _FakeSession(owner, "beta", "okabe"), "我喜欢吃什么？"
-    )
-    assert "炸鸡" not in prompt
-
-
-# ---------------------------------------------------------------------------
-# Task 2: retrieval hardening — CJK query with zero lexical overlap must not
-# let unrelated high-importance local noise evict the shared profile.
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-async def test_cjk_query_keeps_promoted_food_among_many_facts(isolated_store):
-    owner = "nat-food-noise"
-    await _seed_and_promote(owner, "steins_gate")
-    # 30 unrelated high-importance local self facts on β. upsert_core_fact
-    # does not verify source provenance, so synthetic ids are legal here
-    # (only shared writes / promotion verify evidence).
-    for i in range(30):
-        await memory_service.upsert_core_fact(
-            owner, "beta",
-            CoreFactCandidate(
-                fact_key=f"noise_{i}",
-                fact_value=f"noise-value-{i}",
-                confidence=0.99,
-                importance=0.99,
-                source_message_ids=[1000 + i],
-                is_pinned=False,
-            ),
-            identity_mode="self",
-        )
-    rows = await memory_service.select_core_facts(
-        owner, "beta", "我喜欢吃什么", identity_mode="self", limit=24
-    )
-    assert any("炸鸡" in item.content for item in rows)
+    ))
 
 
 # ---------------------------------------------------------------------------
 # Task 3: CORE FACTS usage contract (L3 expression layer)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.asyncio
-async def test_core_facts_section_has_naturalization_contract(isolated_store):
-    owner = "nat-contract"
-    await _seed_and_promote(owner, "steins_gate")
-    prompt = await compile_for_session(
-        _FakeSession(owner, "beta", "self"), "我喜欢吃什么？"
-    )
+def test_core_facts_section_has_naturalization_contract():
+    prompt = _compile_with_facts({"favorite_food": "炸鸡"}, "我喜欢吃什么？")
     assert "炸鸡" in prompt
     assert "CORE FACTS" in prompt
     # Stable ASCII anchor — tests never depend on brittle JP/EN copy.
@@ -180,17 +74,13 @@ async def test_core_facts_section_has_naturalization_contract(isolated_store):
     assert prompt.index("FACT_USE_CONTRACT") < prompt.index("炸鸡")
 
 
-@pytest.mark.asyncio
-async def test_contract_instructs_selective_answer_not_full_recital(isolated_store):
+def test_contract_instructs_selective_answer_not_full_recital():
     """Live-feedback fix: asked one preference, Amadeus must answer that one and
     not recite every shared fact at once. All facts still reach the prompt (so
     any single one can be answered) — the contract governs selectivity."""
-    owner = "nat-selective"
-    await _seed_and_promote(owner, "steins_gate", key="favorite_food", value="炸鸡")
-    await _seed_and_promote(owner, "steins_gate", key="favorite_drink", value="雪碧")
-    await _seed_and_promote(owner, "steins_gate", key="hobby", value="実況サッカー")
-    prompt = await compile_for_session(
-        _FakeSession(owner, "beta", "self"), "我喜欢吃什么？"
+    prompt = _compile_with_facts(
+        {"favorite_food": "炸鸡", "favorite_drink": "雪碧", "hobby": "実況サッカー"},
+        "我喜欢吃什么？",
     )
     # Every fact is still available in context (needed to answer any single one).
     for value in ("炸鸡", "雪碧", "実況サッカー"):
@@ -254,40 +144,3 @@ async def test_contract_and_facts_survive_core_budget_fit(isolated_store):
     # core budget; the highest-scored facts stay, tail facts get trimmed.
     assert "FACT_USE_CONTRACT" in compiled
     assert "fact_0:" in compiled
-
-
-# ---------------------------------------------------------------------------
-# Task 5: worldline × identity matrix and multi-fact coexistence
-# ---------------------------------------------------------------------------
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("worldline", "identity_mode", "visible"),
-    [
-        ("beta", "self", True),
-        ("steins_gate", "self", True),
-        ("beta", "okabe", False),
-        ("steins_gate", "okabe", False),
-    ],
-)
-async def test_shared_fact_prompt_visibility_matrix(
-    isolated_store, worldline, identity_mode, visible
-):
-    owner = f"nat-matrix-{worldline}-{identity_mode}"
-    await _seed_and_promote(owner, "steins_gate")
-    prompt = await compile_for_session(
-        _FakeSession(owner, worldline, identity_mode), "我喜欢吃什么？"
-    )
-    assert ("炸鸡" in prompt) is visible
-
-
-@pytest.mark.asyncio
-async def test_second_promoted_fact_does_not_evict_the_first(isolated_store):
-    owner = "nat-two-facts"
-    await _seed_and_promote(owner, "steins_gate", key="favorite_food", value="炸鸡")
-    await _seed_and_promote(owner, "steins_gate", key="favorite_drink", value="雪碧")
-    prompt = await compile_for_session(
-        _FakeSession(owner, "beta", "self"), "我喜欢吃什么、喝什么？"
-    )
-    assert "炸鸡" in prompt
-    assert "雪碧" in prompt

@@ -95,8 +95,8 @@ def sanitize_self_name(value) -> str:
     return name
 
 
-# GATE7A-NAT usage contract for CORE FACTS. Legacy/shadow render it verbatim;
-# a complete v11 resident profile renders it verbatim too.
+# GATE7A-NAT usage contract for CORE FACTS. Rendered verbatim without a
+# resident profile and for a complete v11 resident profile.
 FACT_USE_CONTRACT = (
     "FACT_USE_CONTRACT: Listed items are known stable user-profile facts for this identity. "
     "When the user asks about a listed fact, answer from knowledge with natural familiarity "
@@ -869,11 +869,12 @@ async def compile_for_session(session, user_message: str, provider: Any = None) 
     table as plan_first_round_tools). The fact_ids injected into the final
     prompt are stored on the session for this turn's recall exclusion.
     """
+    from app.db import normalize_worldline
     from app.security.prompt import resolve_system_prompt_base
-    from app.services.memory import memory_service
-    from app.services.memory_v11.jobs import memory_mode
+    from app.services.memory_v11.recall import MemoryScope
     from app.services.session_manager import set_turn_injected_fact_ids
     from app.services.soul_engine import soul_engine
+    from app.services.turn_tool_orchestrator import provider_tool_capable
 
     # Reset first: a failed/cancelled compile never leaves a previous turn's ids.
     set_turn_injected_fact_ids(session, ())
@@ -887,48 +888,27 @@ async def compile_for_session(session, user_message: str, provider: Any = None) 
         session.worldline,
         identity_mode=mode,
     )
-    # S3a prompt gate: only AMADEUS_MEMORY_MODE=v11 reads v11 stable facts.
-    # legacy + shadow keep Quiet Ingest retrieval so shadow writes never leak.
-    resident: ResidentProfile | None = None
     supplement: MemorySupplement | None = None
-    if memory_mode() == "v11":
-        from app.db import normalize_worldline
-        from app.services.memory_v11.recall import MemoryScope
-        from app.services.turn_tool_orchestrator import provider_tool_capable
-
-        facts, episodes = await _select_v11_prompt_memories(
-            session_id=session.session_id,
-            worldline=session.worldline,
-            identity_mode=mode,
-            user_message=user_message,
-        )
-        scope = MemoryScope(
-            session_id=str(session.session_id),
-            worldline=normalize_worldline(session.worldline),
-            identity_mode=mode,  # type: ignore[arg-type]
-        )
-        resident = await _select_v11_resident_profile(
+    facts, episodes = await _select_v11_prompt_memories(
+        session_id=session.session_id,
+        worldline=session.worldline,
+        identity_mode=mode,
+        user_message=user_message,
+    )
+    scope = MemoryScope(
+        session_id=str(session.session_id),
+        worldline=normalize_worldline(session.worldline),
+        identity_mode=mode,  # type: ignore[arg-type]
+    )
+    resident = await _select_v11_resident_profile(
+        scope=scope,
+        tool_capable=provider_tool_capable(provider),
+    )
+    if not resident.complete:
+        supplement = await _select_v11_memory_supplement(
             scope=scope,
-            tool_capable=provider_tool_capable(provider),
-        )
-        if not resident.complete:
-            supplement = await _select_v11_memory_supplement(
-                scope=scope,
-                user_message=user_message,
-                exclude_fact_ids=[str(row["fact_id"]) for row in resident.facts],
-            )
-    else:
-        facts = await memory_service.select_core_facts(
-            session.session_id,
-            session.worldline,
-            user_message,
-            identity_mode=mode,
-        )
-        episodes = await memory_service.lexical_search(
-            session.session_id,
-            session.worldline,
-            user_message,
-            identity_mode=mode,
+            user_message=user_message,
+            exclude_fact_ids=[str(row["fact_id"]) for row in resident.facts],
         )
     compiled = prompt_compiler.compile_with_report(PromptInputs(
         worldline=session.worldline,

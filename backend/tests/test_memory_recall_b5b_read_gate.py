@@ -217,7 +217,6 @@ async def isolated_store(tmp_path, monkeypatch):
 
     monkeypatch.delenv("AMADEUS_DB_PATH", raising=False)
     monkeypatch.setenv("AMADEUS_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     reset_initialization_cache()
     await init_db()
     return tmp_path
@@ -476,7 +475,6 @@ async def _drive_processor_loop(
 
     owner = f"b5b-{uuid4()}"
     counters = {"memory_loads": 0, "web_calls": 0}
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     monkeypatch.setattr(memory_service, "embedder", _StubEmbedder())
     if recalled_fact is not None:
         await create_stable_fact(

@@ -7,7 +7,6 @@ S3a (must pass):
   - no manual POST create-fact endpoint
 
 Deferred (still red / xfail until later slices):
-  - S6 legacy route removal
   - S4 conversation delete_derived_memory saga
 """
 from __future__ import annotations
@@ -85,7 +84,6 @@ def isolated_client(tmp_path, monkeypatch, isolated_provider_credentials):
 
     monkeypatch.delenv("AMADEUS_DB_PATH", raising=False)
     monkeypatch.setenv("AMADEUS_DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     reset_initialization_cache()
     monkeypatch.setattr(memory_service, "embedder", _ApiDeterministicEmbedder())
     with patch(
@@ -446,27 +444,13 @@ def test_s3a_job_retry_scope_and_idempotence(isolated_client: TestClient):
     assert missing.status_code == 404, missing.text
 
 
-def test_s3a_legacy_facts_path_without_identity_mode(isolated_client: TestClient):
-    """Omitting identity_mode keeps the legacy Ledger shape for existing UI."""
-    session_id = _session("s3a-legacy-shape")
-    response = isolated_client.get(
-        "/api/memory/facts",
-        params={"session_id": session_id, "worldline": "steins_gate"},
-    )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    # Legacy Gate 7A shape uses local/shared (and often okabe).
-    assert "local" in body or "shared" in body, body
-
-
 def test_s3f2c_explicit_scope_required_legacy_defaults_preserved(
     isolated_client: TestClient,
 ):
-    """Shared status/facts routes distinguish explicit v11 scope from legacy calls."""
+    """Shared status/facts routes reject an incomplete or invalid v11 scope."""
     routes = ("/api/memory/status", "/api/memory/facts")
     valid_session = _session("s3f2c-scope")
     cases = (
-        ({"worldline": "steins_gate", "identity_mode": "self"}, "empty_session_id"),
         (
             {"session_id": "", "worldline": "steins_gate", "identity_mode": "self"},
             "empty_session_id",
@@ -515,28 +499,12 @@ def test_s3f2c_explicit_scope_required_legacy_defaults_preserved(
             assert response.status_code == 422, (route, params, response.text)
             assert response.json()["detail"]["code"] == expected_code, (route, params)
 
-    legacy_status = isolated_client.get("/api/memory/status")
-    assert legacy_status.status_code == 200, legacy_status.text
-    status_body = legacy_status.json()
-    assert status_body["session_id"] == "default"
-    assert status_body["worldline"] == "steins_gate"
-    assert "episodic_count" in status_body
-    assert "pending_count" not in status_body
-
-    legacy_facts = isolated_client.get("/api/memory/facts")
-    assert legacy_facts.status_code == 200, legacy_facts.text
-    facts_body = legacy_facts.json()
-    assert "local" in facts_body or "shared" in facts_body, facts_body
-    assert "facts" not in facts_body
-    assert "pagination" not in facts_body
-
 
 # ---------------------------------------------------------------------------
 # Deferred contracts — not S3a stop-gate
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(strict=True, reason="S6: legacy product routes removed at cutover")
 def test_s0_legacy_product_routes_must_exit(client: TestClient):
     """D05/D09/D57: promote/reclassify/dismiss/shared-delete leave the route table."""
     registered = _registered_routes(client)
@@ -4432,16 +4400,3 @@ def test_s3f2b_okabe_isolation_paginated(isolated_client: TestClient):
     assert "self 独有事实" not in [
         f["display_text"] for f in okabe_resp.json()["facts"]
     ]
-
-
-def test_s3f2b_legacy_path_no_pagination_key(isolated_client: TestClient):
-    session_id = _session("s3f2b-legacy")
-    response = isolated_client.get(
-        "/api/memory/facts",
-        params={"session_id": session_id, "worldline": "steins_gate"},
-    )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert "local" in body or "shared" in body, body
-    assert "pagination" not in body, "legacy ledger must not gain a pagination key"
-    assert "facts" not in body, "legacy ledger keeps its own shape"

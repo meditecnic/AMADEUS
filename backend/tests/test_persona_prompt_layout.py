@@ -16,7 +16,6 @@ from app.security.prompt import SYSTEM_PROMPT_BASE, resolve_system_prompt_base
 from app.services import deepseek
 from app.services.conversations import conversation_service
 from app.services.llm_interface import TAIL_REMINDER_HEADER
-from app.services.memory import memory_service
 from app.services.memory_v11.recall import unavailable_result
 from app.services.persona_bible import persona_bible
 from app.services.prompt_compiler import (
@@ -114,14 +113,6 @@ def _session(identity_mode: str = "self", self_name: str = "ミナ") -> chat_ws.
     return session
 
 
-def _no_legacy_memory(monkeypatch) -> None:
-    async def empty(*_args, **_kwargs):
-        return []
-
-    monkeypatch.setattr(memory_service, "select_core_facts", empty)
-    monkeypatch.setattr(memory_service, "lexical_search", empty)
-
-
 async def _send(session, provider, active_history=None) -> None:
     snapshot = SimpleNamespace(adapter=provider, model_id="layout-model", temperature=None, reasoning_effort=None)
     await chat_ws.get_clean_text_stream(
@@ -137,13 +128,10 @@ def _texts(payload: dict) -> list[str]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("memory_mode", ["legacy", "v11"])
 @pytest.mark.parametrize("adapter", ADAPTERS)
 async def test_history_and_current_message_are_sent_exactly_once(
-    isolated_store, monkeypatch, memory_mode, adapter
+    isolated_store, monkeypatch, adapter
 ):
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", memory_mode)
-    _no_legacy_memory(monkeypatch)
     captured: list[dict] = []
     session = _session()
     session.system_prompt = await compile_for_session(session, CURRENT)
@@ -159,7 +147,6 @@ async def test_history_and_current_message_are_sent_exactly_once(
 
 @pytest.mark.asyncio
 async def test_second_round_with_tool_evidence_sends_history_once(isolated_store, monkeypatch):
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     captured: list[dict] = []
     session = _session()
     session.system_prompt = await compile_for_session(session, CURRENT)
@@ -182,8 +169,6 @@ async def test_second_round_with_tool_evidence_sends_history_once(isolated_store
 @pytest.mark.asyncio
 @pytest.mark.parametrize("adapter", ADAPTERS)
 async def test_tail_reminder_follows_last_user_message(isolated_store, monkeypatch, adapter):
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "legacy")
-    _no_legacy_memory(monkeypatch)
     captured: list[dict] = []
     session = _session()
     before = session.history
@@ -204,8 +189,6 @@ async def test_tail_reminder_follows_last_user_message(isolated_store, monkeypat
 
 @pytest.mark.asyncio
 async def test_tail_reminder_is_never_stored(isolated_store, monkeypatch):
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "legacy")
-    _no_legacy_memory(monkeypatch)
     owner = uuid4().hex
     conversation = await conversation_service.create_and_select(owner, "steins_gate", identity_mode="self")
     session = _session()
@@ -289,8 +272,6 @@ def test_examples_are_japanese_and_split_by_identity_mode():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("identity_mode", ["self", "okabe"])
 async def test_examples_live_in_system_prompt_not_as_messages(isolated_store, monkeypatch, identity_mode):
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "legacy")
-    _no_legacy_memory(monkeypatch)
     captured: list[dict] = []
     session = _session(identity_mode, self_name="")
     session.system_prompt = await compile_for_session(session, CURRENT)
@@ -324,11 +305,10 @@ def _inputs(identity_mode: str, worldline: str, **overrides) -> PromptInputs:
     return PromptInputs(**values)
 
 
-@pytest.mark.parametrize("memory_mode", ["legacy", "v11"])
-def test_current_state_has_no_emotion_vector(memory_mode):
+def test_current_state_has_no_emotion_vector():
     from app.services.prompt_compiler import ResidentProfile
 
-    resident = ResidentProfile(facts=[], candidate_count=0) if memory_mode == "v11" else None
+    resident = ResidentProfile(facts=[], candidate_count=0)
     prompt = PromptCompiler().compile(_inputs("self", "steins_gate", resident_profile=resident))
     state = prompt.split("\n\nCURRENT STATE\n", 1)[1].split("\n\n", 1)[0]
     assert "identity_mode=self" in state
@@ -411,7 +391,6 @@ def _long_history() -> list[dict]:
 async def test_second_round_over_budget_keeps_history_and_current_turn(
     isolated_store, monkeypatch, adapter, with_web
 ):
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     captured: list[dict] = []
     session = _session()
     history = _long_history()

@@ -133,7 +133,7 @@ function archiveBody(url: string, deletedRef?: { value: boolean }): Promise<unkn
     return okJson({ topics: [{ topic_id: 't1', display_label: '咖啡', fact_count: 1 }] });
   }
   if (url.startsWith('/api/memory/status?')) {
-    return okJson({ session_id: 's', worldline: 'steins_gate', identity_mode: 'okabe', runtime_mode: 'v11', pending_count: 0, processing_count: 0, failed_count: 0, failed_jobs: [] });
+    return okJson({ session_id: 's', worldline: 'steins_gate', identity_mode: 'okabe', pending_count: 0, processing_count: 0, failed_count: 0, failed_jobs: [] });
   }
   if (url.startsWith('/api/memory/observations?')) {
     return okJson({ observations: [], pagination: { limit: 20, offset: 0, total: 0, has_more: false } });
@@ -205,44 +205,6 @@ afterEach(() => {
 });
 
 describe('Memory Space peer modes', () => {
-  it('shows deletable legacy chat facts in the archive and filters the same facts in Find', async () => {
-    const legacyRequests: string[] = [];
-    mockApi((url) => {
-      if (url.startsWith('/api/memory/status?')) {
-        return okJson({ ...scopeBody, runtime_mode: 'legacy', pending_count: 0, processing_count: 0, failed_count: 0, failed_jobs: [] });
-      }
-      if (url.startsWith('/api/memory/facts?') && !new URL(url, 'http://localhost').searchParams.has('identity_mode')) {
-        legacyRequests.push(url);
-        return okJson({
-          local: [{ id: 1, fact_key: 'drink', fact_value: '只属于 USER 的红茶' }],
-          shared: [{ id: 2, fact_key: 'profile', fact_value: '只属于 USER 的共享档案' }],
-          okabe: [
-            { id: 3, fact_key: 'drink', fact_value: '对话记得我喜欢黑咖啡' },
-            { id: 4, fact_key: 'routine', fact_value: '对话记得我每天晨跑' },
-          ],
-        });
-      }
-      if (url.includes('/api/memory/graph/projection')) return okJson(projection);
-      return archiveBody(url) ?? okJson({});
-    });
-    render(<MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={() => undefined} />);
-    await screen.findByText('当前对话尚未使用本页的记忆。星图暂供查看。');
-    fireEvent.click(screen.getByTestId('memory-mode-archive'));
-    await screen.findByText('对话记得我喜欢黑咖啡');
-    expect(screen.getByText('对话记得我每天晨跑')).toBeTruthy();
-    expect(screen.getByRole('button', { name: '删除：对话记得我每天晨跑' })).toBeTruthy();
-    expect(screen.queryByText('只属于 USER 的红茶')).toBeNull();
-    expect(screen.queryByText('只属于 USER 的共享档案')).toBeNull();
-    expect(screen.queryByRole('button', { name: /纠正|置顶|保存|忽略|重试任务|重命名/ })).toBeNull();
-    expect(screen.getByText('这些是对话中正在使用的记忆，可以逐条删除。要遗忘某个会话带来的记忆，请在会话菜单选择「清空聊天记录」并勾选遗忘选项。')).toBeTruthy();
-    fireEvent.click(screen.getByTestId('memory-mode-constellation'));
-    fireEvent.click(screen.getByRole('button', { name: '查找' }));
-    fireEvent.change(screen.getByRole('textbox', { name: '搜索记忆' }), { target: { value: '晨跑' } });
-    expect(screen.queryByText('对话记得我喜欢黑咖啡')).toBeNull();
-    expect(screen.getByText('对话记得我每天晨跑')).toBeTruthy();
-    expect(legacyRequests).toEqual(['/api/memory/facts?session_id=s&worldline=steins_gate']);
-  });
-
   it('defaults to Constellation and offers the ARCHIVE peer mode toggle', async () => {
     mountMemorySpace();
     await waitFor(() => {
@@ -646,7 +608,6 @@ describe('Memory Space peer modes', () => {
           processing_count: 0,
           failed_count: 0,
           failed_jobs: [],
-          runtime_mode: 'v11',
         };
       }
       return null;
@@ -733,72 +694,29 @@ describe('Memory Space peer modes', () => {
   });
 });
 
-describe('Memory Space runtime mode gate', () => {
-  it.each(['legacy', 'shadow'] as const)('keeps v11 Archive and Find unmounted while status is pending, then loads %s', async (runtimeMode) => {
-    let release!: (response: unknown) => void;
-    const v11Reads: string[] = [];
+describe('Memory Space status counts', () => {
+  it.each(['transport', 'http', 'malformed', 'wrong-scope'])('mounts the archive and Find even after a %s status failure', async (failure) => {
     mockApi((url) => {
-      if (url.startsWith('/api/memory/status?')) return new Promise((resolve) => { release = resolve; });
-      if (url.startsWith('/api/memory/facts?')) {
-        if (new URL(url, 'http://localhost').searchParams.has('identity_mode')) v11Reads.push(url);
-        else return okJson({ local: [], shared: [], okabe: [{ id: 3, fact_key: 'drink', fact_value: '正在使用的旧版事实' }] });
-      }
-      if (/\/api\/memory\/(experiences|observations)\?/.test(url)) v11Reads.push(url);
-      if (url.includes('graph/projection')) return okJson(projection);
-      return archiveBody(url) ?? okJson({});
-    });
-    render(<MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={() => undefined} />);
-    fireEvent.click(screen.getByTestId('memory-mode-archive'));
-    expect(screen.getByText('正在读取记忆…')).toBeInTheDocument();
-    expect(screen.queryByTestId('archive-facts-total')).toBeNull();
-    fireEvent.click(screen.getByTestId('memory-mode-constellation'));
-    fireEvent.click(screen.getByRole('button', { name: '查找' }));
-    expect(screen.getByText('正在读取记忆…')).toBeInTheDocument();
-    expect(screen.queryByTestId('memory-list')).toBeNull();
-    expect(v11Reads).toEqual([]);
-    await act(async () => { release(await okJson({ ...scopeBody, runtime_mode: runtimeMode,
-      pending_count: 0, processing_count: 0, failed_count: 0, failed_jobs: [] })); });
-    await screen.findByRole('button', { name: '删除：正在使用的旧版事实' });
-    expect(v11Reads).toEqual([]);
-  });
-
-  it.each(['transport', 'http', 'missing-mode', 'unknown-mode', 'malformed', 'wrong-scope'])('keeps v11 unmounted after %s status failure and retries mode detection', async (failure) => {
-    let retry = false;
-    const v11Reads: string[] = [];
-    mockApi((url) => {
-      if (url.startsWith('/api/memory/status?') && !retry) {
-        const body = { ...scopeBody, runtime_mode: 'v11', pending_count: 0, processing_count: 0, failed_count: 0, failed_jobs: [] };
+      if (url.startsWith('/api/memory/status?')) {
+        const body = { ...scopeBody, pending_count: 0, processing_count: 0, failed_count: 0, failed_jobs: [] };
         if (failure === 'transport') return Promise.reject(new Error('offline'));
         if (failure === 'http') return Promise.resolve({ ok: false, status: 503, json: async () => ({}) });
-        if (failure === 'missing-mode') return okJson({ ...body, runtime_mode: undefined });
-        if (failure === 'unknown-mode') return okJson({ ...body, runtime_mode: 'future' });
         if (failure === 'wrong-scope') return okJson({ ...body, identity_mode: 'self' });
         return okJson({ ...body, failed_jobs: undefined });
       }
-      if (/\/api\/memory\/facts\?/.test(url) && new URL(url, 'http://localhost').searchParams.has('identity_mode')) v11Reads.push(url);
-      if (/\/api\/memory\/(experiences|observations)\?/.test(url)) v11Reads.push(url);
       if (url.includes('graph/projection')) return okJson(projection);
       return archiveBody(url) ?? okJson({});
     });
     render(<MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={() => undefined} />);
     fireEvent.click(screen.getByTestId('memory-mode-archive'));
-    await screen.findByText('记忆暂时无法读取。');
-    expect(screen.queryByTestId('archive-facts-total')).toBeNull();
+    await screen.findByText('档案里的黑咖啡');
     fireEvent.click(screen.getByTestId('memory-mode-constellation'));
     fireEvent.click(screen.getByRole('button', { name: '查找' }));
-    expect(screen.getByText('记忆暂时无法读取。')).toBeInTheDocument();
-    expect(screen.queryByTestId('memory-list')).toBeNull();
-    expect(v11Reads).toEqual([]);
-    retry = true;
-    fireEvent.click(screen.getByRole('button', { name: '重试', exact: true }));
     await screen.findByTestId('memory-list');
-    fireEvent.click(screen.getByTestId('memory-mode-archive'));
-    await screen.findByText('档案里的黑咖啡');
-    expect(v11Reads.length).toBeGreaterThan(0);
   });
 
-  it.each(['ok', 'transport', 'http', 'malformed', 'wrong-scope', 'changed-mode', 'missing-mode', 'unknown-mode'])('soft-refreshes counts on criteria changes and preserves the v11 archive (%s)', async (outcome) => {
-    const statusBody = { ...scopeBody, runtime_mode: 'v11', pending_count: 3, processing_count: 1, failed_count: 2, failed_jobs: [] };
+  it.each(['ok', 'transport', 'http', 'malformed', 'wrong-scope'])('soft-refreshes counts on criteria changes and preserves the v11 archive (%s)', async (outcome) => {
+    const statusBody = { ...scopeBody, pending_count: 3, processing_count: 1, failed_count: 2, failed_jobs: [] };
     let holdNextStatus = false;
     let release: ((response: unknown) => void) | undefined;
     let reject: ((error: Error) => void) | undefined;
@@ -837,10 +755,7 @@ describe('Memory Space runtime mode gate', () => {
       if (outcome === 'transport') reject!(new Error('offline'));
       else if (outcome === 'http') release!({ ok: false, status: 503, json: async () => ({}) });
       else release!(await okJson(outcome === 'malformed' ? { ...updated, failed_jobs: undefined }
-        : outcome === 'wrong-scope' ? { ...updated, identity_mode: 'self' }
-        : outcome === 'changed-mode' ? { ...updated, runtime_mode: 'legacy' }
-        : outcome === 'missing-mode' ? { ...updated, runtime_mode: undefined }
-        : outcome === 'unknown-mode' ? { ...updated, runtime_mode: 'v1l' } : updated));
+        : outcome === 'wrong-scope' ? { ...updated, identity_mode: 'self' } : updated));
     });
     expect(screen.getByTestId('archive-view')).toBe(archive);
     expect(screen.getByTestId('archive-editor-input')).toBe(editor);
@@ -857,7 +772,7 @@ describe('Memory Space runtime mode gate', () => {
   it('soft-refreshes counts after an erasure tick without unmounting the v11 archive', async () => {
     const deleted = { value: false };
     const held: Array<(response: unknown) => void> = [];
-    const statusBody = { ...scopeBody, runtime_mode: 'v11', pending_count: 3, processing_count: 1, failed_count: 2, failed_jobs: [] };
+    const statusBody = { ...scopeBody, pending_count: 3, processing_count: 1, failed_count: 2, failed_jobs: [] };
     mockApi((url, init) => {
       if (url.startsWith('/api/memory/facts/1?') && init?.method === 'DELETE') {
         deleted.value = true;

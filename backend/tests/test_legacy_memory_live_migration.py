@@ -87,9 +87,7 @@ def old_hashes():
     return result
 
 
-@pytest.mark.parametrize("memory_mode", ["legacy", "shadow", "v11"])
-async def test_locations_and_old_tables_unchanged(store, monkeypatch, memory_mode):
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", memory_mode)
+async def test_locations_and_old_tables_unchanged(store):
     for wl in (SG, "beta"):
         for mid, mode in ((1, "self"), (2, "okabe")):
             source(mid, wl=wl, mode=mode)

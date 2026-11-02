@@ -108,7 +108,6 @@ async def test_compile_for_session_scoped_load_failure_logs_no_content(
     so CORE FACTS still carries 32 facts; MEMORY CANDIDATES is omitted and
     no log record from any logger carries the marker.
     """
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     sid = f"log-e2e-{uuid4()}"
     await seed_forty(sid)
     load_calls = {"n": 0}

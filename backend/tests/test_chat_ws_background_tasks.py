@@ -211,7 +211,6 @@ async def test_memory_enqueue_and_compression_tasks_are_held_and_failures_logged
 ):
     import app.services.memory_v11.jobs as jobs
 
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "shadow")
     monkeypatch.setattr(chat_ws.config, "HISTORY_COMPRESS_THRESHOLD", 0)
     _install_fake_provider(monkeypatch)
     _suppress_auto_title(monkeypatch)
@@ -358,7 +357,6 @@ async def test_follow_up_tasks_outlive_a_real_disconnect(isolated_store, monkeyp
     import app.services.memory_v11.jobs as jobs
     from app import models
 
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "shadow")
     monkeypatch.setattr(chat_ws.config, "HISTORY_COMPRESS_THRESHOLD", 0)
     _suppress_auto_title(monkeypatch)
 
@@ -477,7 +475,6 @@ async def test_memory_enqueue_error_is_logged_without_its_message(
 ):
     import app.services.memory_v11.jobs as jobs
 
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "shadow")
     _install_fake_provider(monkeypatch)
     _suppress_auto_title(monkeypatch)
     attempts: dict[str, asyncio.Task] = {}

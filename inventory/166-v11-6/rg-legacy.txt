@@ -1,0 +1,466 @@
+backend/scripts/build_memory_candidate.py:178:        help="standalone preview JSON from legacy_core_facts_rehearsal.py (hardlinks refused)"
+backend/scripts/legacy_memory_migrate.py:2:"""Explicit, offline migration of legacy facts. Close Amadeus before running."""
+backend/scripts/legacy_memory_migrate.py:19:    parser = argparse.ArgumentParser(description="Migrate legacy facts offline. Close Amadeus before running (先关闭 Amadeus).")
+backend/scripts/legacy_core_facts_rehearsal.py:1:"""Offline rehearsal CLI for the legacy core-fact migration (preview / apply).
+backend/scripts/legacy_core_facts_rehearsal.py:5:  python scripts/legacy_core_facts_rehearsal.py preview \
+backend/scripts/legacy_core_facts_rehearsal.py:8:  python scripts/legacy_core_facts_rehearsal.py apply \
+backend/scripts/legacy_core_facts_rehearsal.py:65:        prog="legacy_core_facts_rehearsal",
+backend/scripts/legacy_core_facts_rehearsal.py:67:            "Offline, copy-only rehearsal for migrating legacy core facts "
+backend/scripts/legacy_core_facts_rehearsal.py:259:    from app.services.memory_v11.migration import build_legacy_core_facts_preview
+backend/scripts/legacy_core_facts_rehearsal.py:261:    report = build_legacy_core_facts_preview(args.source)
+backend/scripts/legacy_core_facts_rehearsal.py:305:    from app.services.memory_v11.migration import apply_legacy_core_facts
+backend/scripts/legacy_core_facts_rehearsal.py:316:    result = apply_legacy_core_facts(
+backend/tests/test_memory_v11_schema.py:277:        for kind in ("CREATE", "REFINE", "SUPERSEDE", "USER_EDIT", "LEGACY_IMPORT"):
+backend/tests/test_memory_v11_schema.py:677:async def test_s0_v10_to_v11_migration_preserves_legacy_core_and_adds_tables(
+backend/tests/test_memory_v11_schema.py:705:            legacy = connection.execute(
+backend/tests/test_memory_v11_schema.py:709:            assert legacy == 1, f"{worldline} lost legacy core_facts"
+backend/tests/test_memory_v11_schema.py:851:# The legacy episodic_memories shape does NOT satisfy this contract.
+backend/tests/test_memory_v11_schema.py:1073:    path: Path, *, session_id: str = "v11-legacy"
+backend/tests/test_memory_v11_schema.py:1106:            ("fact-v11-legacy-1", session_id, "self", now, now),
+backend/tests/test_memory_v11_schema.py:1115:                "fact-v11-legacy-1",
+backend/tests/test_memory_v11_schema.py:1117:                "legacy v11 fact",
+backend/tests/test_memory_v11_schema.py:1118:                '{"subject":"user","object":"legacy"}',
+backend/tests/test_memory_v11_schema.py:1119:                "fp-legacy-v11",
+backend/tests/test_memory_v11_schema.py:1121:                "legacy_import",
+backend/tests/test_memory_v11_schema.py:1147:    _seed_v11_memory_db_without_experiences(path, session_id="v11-legacy")
+backend/tests/test_memory_v11_schema.py:1161:            "SELECT COUNT(*) FROM stable_facts WHERE session_id='v11-legacy'"
+backend/tests/test_memory_v11_schema.py:1165:            "SELECT COUNT(*) FROM stable_fact_versions WHERE fact_id='fact-v11-legacy-1'"
+backend/tests/test_memory_v11_schema.py:1182:            "SELECT COUNT(*) FROM stable_facts WHERE session_id='v11-legacy'"
+backend/tests/test_memory_v11_chat_entry.py:17:  legacy/shared/other scopes;
+backend/tests/test_memory_v11_chat_entry.py:19:  tool feeds one legacy_import fact into the provider input through the chat
+backend/tests/test_memory_v11_chat_entry.py:56:from tests.legacy_memory_rows import insert_legacy_core_fact
+backend/tests/test_memory_v11_chat_entry.py:236:    omitted, independently usable Experiences stay, legacy is not consulted,
+backend/tests/test_memory_v11_chat_entry.py:243:    legacy_marker = f"LEGACY_SEL_FAIL_{uuid4().hex[:8]}"
+backend/tests/test_memory_v11_chat_entry.py:258:            (session_id, f"{legacy_marker} 旧版记录"),
+backend/tests/test_memory_v11_chat_entry.py:281:    assert legacy_marker not in prompt, "no legacy fallback may run"
+backend/tests/test_memory_v11_chat_entry.py:504:async def _seed_legacy_fact(session_id: str, marker: str) -> None:
+backend/tests/test_memory_v11_chat_entry.py:505:    await insert_legacy_core_fact(
+backend/tests/test_memory_v11_chat_entry.py:507:        f"legacy_{marker[:12]}",
+backend/tests/test_memory_v11_chat_entry.py:521:    legacy_marker = f"LEGACY_MIX_{uuid4().hex[:8]}"
+backend/tests/test_memory_v11_chat_entry.py:528:    await _seed_legacy_fact(session_id, legacy_marker)
+backend/tests/test_memory_v11_chat_entry.py:557:    for forbidden in (okabe_marker, other_owner_marker, beta_marker, legacy_marker, shared_marker):
+backend/tests/test_memory_v11_chat_entry.py:562:    assert legacy_marker not in json.dumps(capture.last_call["messages"], ensure_ascii=False)
+backend/tests/test_memory_v11_chat_entry.py:604:    """Synthetic snapshot: one planned legacy fact for ownerA/self in SG,
+backend/tests/test_memory_v11_chat_entry.py:685:async def test_migrated_legacy_import_reaches_chat_provider(tmp_path, monkeypatch):
+backend/tests/test_memory_v11_chat_entry.py:690:    legacy_import fact must reach the provider boundary for its owner while
+backend/tests/test_memory_v11_chat_entry.py:695:    preview = mig.build_legacy_core_facts_preview(src)
+backend/tests/test_memory_v11_chat_entry.py:700:    result = mig.apply_legacy_core_facts(
+backend/tests/test_memory_v11_chat_entry.py:733:    # The import really is a legacy_import row in the target DB.
+backend/tests/test_memory_v11_chat_entry.py:745:    assert row is not None and row["change_kind"] == "legacy_import"
+backend/tests/test_memory_recall_b5b_read_gate.py:435:async def test_legacy_web_only_request_never_carries_read_gate_rule():
+backend/tests/test_memory_recall_b5b_read_gate.py:438:    legacy_plan = plan_first_round_tools(
+backend/tests/test_memory_recall_b5b_read_gate.py:444:    assert legacy_plan.status == "ok"
+backend/tests/test_memory_recall_b5b_read_gate.py:445:    assert legacy_plan.tools is None
+backend/tests/test_diagnostics_storage.py:75:                1,'legacy','legacy-turn','segment-1','tts',
+backend/tests/test_diagnostics_storage.py:89:        legacy = connection.execute(
+backend/tests/test_diagnostics_storage.py:91:            "FROM diagnostic_events WHERE event_id='legacy'"
+backend/tests/test_diagnostics_storage.py:95:    assert legacy == (1, "legacy", None, None, None, None)
+backend/tests/test_tts_regression.py:271:async def test_legacy_dispatch_merges_short_fragment_without_duplicating_history(
+backend/tests/test_tts_regression.py:304:        tts_key = "legacy-short-fragment"
+backend/tests/test_worldline_architecture.py:12:from tests.legacy_memory_rows import insert_legacy_episode
+backend/tests/test_worldline_architecture.py:28:    await insert_legacy_episode("okabe", "steins_gate", "SG promise", confidence=.9, importance=.8, source_message_ids=[1])
+backend/tests/test_worldline_architecture.py:29:    await insert_legacy_episode("okabe", "beta", "Beta event", confidence=.9, importance=.8, source_message_ids=[1])
+backend/tests/test_legacy_core_facts_rehearsal.py:1:"""Synthetic-data tests for the offline legacy core-fact migration rehearsal.
+backend/tests/test_legacy_core_facts_rehearsal.py:24:  (demo v11 facts, legacy episodes, experiences, shared facts, other
+backend/tests/test_legacy_core_facts_rehearsal.py:46:from scripts import legacy_core_facts_rehearsal as rehearsal_cli
+backend/tests/test_legacy_core_facts_rehearsal.py:49:SCRIPT = BACKEND_ROOT / "scripts" / "legacy_core_facts_rehearsal.py"
+backend/tests/test_legacy_core_facts_rehearsal.py:235:    return mig.build_legacy_core_facts_preview(src)
+backend/tests/test_legacy_core_facts_rehearsal.py:239:    return mig.apply_legacy_core_facts(
+backend/tests/test_legacy_core_facts_rehearsal.py:257:    # Legacy core facts
+backend/tests/test_legacy_core_facts_rehearsal.py:308:        assert version["change_kind"] == "legacy_import"
+backend/tests/test_legacy_core_facts_rehearsal.py:315:        assert observation["evidence_kind"] == "legacy_import"
+backend/tests/test_legacy_core_facts_rehearsal.py:331:            "SELECT * FROM legacy_core_fact_imports WHERE fact_id=?", (fact["fact_id"],)
+backend/tests/test_legacy_core_facts_rehearsal.py:335:        assert import_record["legacy_row_id"] == 1
+backend/tests/test_legacy_core_facts_rehearsal.py:336:        # Legacy table is NOT wholesale-copied into the target.
+backend/tests/test_legacy_core_facts_rehearsal.py:451:                "legacy_core_fact_imports",
+backend/tests/test_legacy_core_facts_rehearsal.py:492:    assert sorted(hint["legacy_row_ids"]) == [1, 4]
+backend/tests/test_legacy_core_facts_rehearsal.py:557:    by_legacy = {f["legacy_row_id"]: f for f in result["imported_facts"]}
+backend/tests/test_legacy_core_facts_rehearsal.py:558:    assert len(by_legacy) == 2
+backend/tests/test_legacy_core_facts_rehearsal.py:563:        fact_id=by_legacy[1]["fact_id"], expected_version=1,
+backend/tests/test_legacy_core_facts_rehearsal.py:567:        fact_id=by_legacy[2]["fact_id"], display_text="likes_coffee: 特别喜欢喝咖啡",
+backend/tests/test_legacy_core_facts_rehearsal.py:580:            "SELECT * FROM stable_facts WHERE fact_id=?", (by_legacy[1]["fact_id"],)
+backend/tests/test_legacy_core_facts_rehearsal.py:586:                (by_legacy[1]["fact_id"],),
+backend/tests/test_legacy_core_facts_rehearsal.py:591:            "SELECT * FROM stable_facts WHERE fact_id=?", (by_legacy[2]["fact_id"],)
+backend/tests/test_legacy_core_facts_rehearsal.py:598:                (by_legacy[2]["fact_id"],),
+backend/tests/test_legacy_core_facts_rehearsal.py:604:            conn.execute("SELECT COUNT(*) FROM legacy_core_fact_imports").fetchone()[0] == 2
+backend/tests/test_legacy_core_facts_rehearsal.py:668:            "legacy_core_fact_imports",
+backend/tests/test_legacy_core_facts_rehearsal.py:677:            conn.execute("SELECT COUNT(*) FROM legacy_core_fact_imports").fetchone()[0]
+backend/tests/test_legacy_core_facts_rehearsal.py:693:            conn.execute("SELECT COUNT(*) FROM legacy_core_fact_imports").fetchone()[0]
+backend/tests/test_legacy_core_facts_rehearsal.py:736:            "legacy_row_id": 999,
+backend/tests/test_legacy_core_facts_rehearsal.py:891:               ) VALUES('t1','ownerA','self','legacy-999',?,NULL,
+backend/tests/test_legacy_core_facts_rehearsal.py:960:    by_row = {i["legacy_row_id"]: i for i in preview["items"]}
+backend/tests/test_legacy_core_facts_rehearsal.py:1080:    # v11 demo fact + legacy episode + v11 experience + shared fact in source.
+backend/tests/test_legacy_core_facts_rehearsal.py:1102:                        'legacy_import','episodic',0.9,'attached',
+backend/tests/test_legacy_core_facts_rehearsal.py:1207:    # Disapproved legacy records never entered the target at all.
+backend/tests/test_legacy_core_facts_rehearsal.py:1540:    monkeypatch.setattr(mig, "build_legacy_core_facts_preview", race_output_into_place)
+backend/tests/test_identity_acknowledged.py:4:- new conversation / draft / legacy backfill -> identity_acknowledged = False
+backend/tests/test_data_isolation_guard.py:97:    env["AMADEUS_DB_PATH"] = str(appdata / "Amadeus" / "legacy.sqlite3")
+backend/tests/test_data_isolation_guard.py:133:def test_explicit_directory_keeps_legacy_database_precedence(child_environment, tmp_path):
+backend/tests/test_data_isolation_guard.py:136:    legacy = tmp_path / "legacy" / "test.sqlite3"
+backend/tests/test_data_isolation_guard.py:137:    env.update(AMADEUS_DATA_DIR=str(data), AMADEUS_DB_PATH=str(legacy))
+backend/tests/test_data_isolation_guard.py:146:    assert json.loads(result.stdout) == [str(data.resolve()), str(legacy.resolve())]
+backend/tests/test_data_isolation_guard.py:147:    assert legacy.is_file()
+backend/tests/test_data_isolation_guard.py:148:    assert (legacy.parent / ".migration-v11.complete").is_file()
+backend/tests/test_data_isolation_guard.py:171:    from tests.test_legacy_core_facts_rehearsal import _base_source
+backend/tests/test_data_isolation_guard.py:177:        "scripts/legacy_core_facts_rehearsal.py", "preview", "--source", str(source),
+backend/tests/test_data_isolation_guard.py:184:        "scripts/legacy_core_facts_rehearsal.py", "apply", "--source", str(source),
+backend/tests/test_memory_v11_jobs.py:6:No fallback to legacy app.services.memory.
+backend/tests/test_memory_v11_jobs.py:3527:async def test_s3f1_e5_legacy_observation_receipt_current_pipeline_only(
+backend/tests/test_memory_v11_jobs.py:3530:    """E5: current-pipeline legacy observation proof suppresses; future pipeline does not."""
+backend/tests/test_memory_v11_jobs.py:3578:        "current-pipeline legacy observation receipt must suppress replay"
+backend/tests/test_memory_v11_jobs.py:3597:        "legacy observation receipt must NOT suppress a future pipeline"
+backend/tests/test_memory_v11_jobs.py:4670:async def test_rework_completion_failures_keep_legacy_retry_classification(isolated_store, failure, expected_code):
+backend/tests/test_memory_v11_prompt.py:318:async def test_r5_v11_no_legacy_episodic_leak(isolated_store, monkeypatch):
+backend/tests/test_memory_v11_prompt.py:319:    """I: v11 never reads legacy episodic_memories."""
+backend/tests/test_memory_v11_prompt.py:320:    session_id = f"r5-legacy-{uuid4()}"
+backend/tests/test_memory_v11_prompt.py:321:    legacy_marker = f"LEGACY_ONLY_{uuid4().hex[:8]}"
+backend/tests/test_memory_v11_prompt.py:330:            (session_id, legacy_marker, "2026-08-01T00:00:00+00:00"),
+backend/tests/test_memory_v11_prompt.py:340:    assert legacy_marker not in prompt
+backend/tests/test_conversations.py:140:    # Legacy / missing field → okabe (never infer from nicknames etc.)
+backend/tests/test_conversations.py:141:    bare = SessionState("s3-legacy")
+backend/tests/test_conversations.py:151:        legacy_prompt = await compile_for_session(bare, "hi")
+backend/tests/test_conversations.py:152:    assert "相手を岡部として扱い" in legacy_prompt
+backend/tests/test_conversations.py:156:async def test_default_conversation_preserves_legacy_session_api(isolated_store):
+backend/tests/test_conversations.py:498:                ('okabe','user','legacy one'),
+backend/tests/test_conversations.py:499:                ('okabe','assistant','legacy two'),
+backend/tests/test_conversations.py:500:                ('darling','user','legacy other');
+backend/tests/test_conversations.py:502:                ('okabe','legacy summary');
+backend/tests/test_conversations.py:546:    # v7 (IDENTITY-ACK-01): legacy rows backfill to "never explained".
+backend/tests/test_conversations.py:649:    """P2-S6: legacy core/episodic rows → okabe; failed migration does not advance version."""
+backend/tests/test_conversations.py:681:            ) VALUES ('legacy','promise',0.9,0.8,'[1]','2026-07-16T00:00:00+00:00');
+backend/tests/test_conversations.py:685:            ) VALUES ('legacy','drink','coffee',0.9,0.8,1,0,'[1]','2026-07-16T00:00:00+00:00');
+backend/tests/test_conversations.py:693:            "SELECT identity_mode FROM core_facts WHERE session_id='legacy'"
+backend/tests/test_conversations.py:696:            "SELECT identity_mode FROM episodic_memories WHERE session_id='legacy'"
+backend/tests/test_conversations.py:758:    """P2-S5: legacy emotion_states rows → okabe; failed migration does not advance version."""
+backend/tests/test_conversations.py:780:                ('legacy',0.8,0.7,0.1,0.1,0.1,0.2,'2026-07-16T00:00:00+00:00');
+backend/tests/test_conversations.py:790:        assert row == ("legacy", "okabe", 0.8)
+backend/tests/test_e2e_contract.py:862:    def test_v2_chat_uses_turn_and_segment_events_without_legacy_chunks(self, mock_services):
+backend/tests/legacy_memory_rows.py:1:"""Write rows straight into the legacy memory tables.
+backend/tests/legacy_memory_rows.py:3:The legacy extraction/write path is gone, but the tables and any rows already
+backend/tests/legacy_memory_rows.py:20:async def insert_legacy_core_fact(
+backend/tests/legacy_memory_rows.py:65:async def insert_legacy_episode(
+backend/tests/legacy_memory_rows.py:93:async def insert_legacy_shared_fact(
+backend/tests/test_custom_profiles.py:245:async def test_legacy_custom_delete_stays_unregistered_and_survives_restore(
+backend/tests/test_custom_profiles.py:406:async def test_patch_and_legacy_patch_register_failure_fail_closed(app_client, monkeypatch):
+backend/tests/test_custom_profiles.py:437:        legacy = app_client.patch(
+backend/tests/test_custom_profiles.py:441:                "default_model": "legacy-bad",
+backend/tests/test_custom_profiles.py:442:                "display_name": "Legacy Bad",
+backend/tests/test_custom_profiles.py:445:        assert legacy.status_code == 500
+backend/tests/test_custom_profiles.py:488:async def test_legacy_custom_configuration_still_works(app_client, monkeypatch):
+backend/tests/test_memory_v11_migration.py:1:"""MEMORY-V11 S0 red contracts: legacy import, shared origin migration, consolidation, backup.
+backend/tests/test_memory_v11_migration.py:17:from tests.legacy_memory_rows import insert_legacy_core_fact
+backend/tests/test_memory_v11_migration.py:108:async def test_s0_legacy_import_idempotent_no_row_growth(isolated_store):
+backend/tests/test_memory_v11_migration.py:112:    await insert_legacy_core_fact(
+backend/tests/test_memory_v11_migration.py:123:    first = await mig.import_legacy_core_facts(session_id=owner, worldline="steins_gate")
+backend/tests/test_memory_v11_migration.py:127:    second = await mig.import_legacy_core_facts(session_id=owner, worldline="steins_gate")
+backend/tests/test_memory_v11_migration.py:178:        await insert_legacy_core_fact(
+backend/tests/test_memory_v11_migration.py:189:    await mig.import_legacy_core_facts(session_id=owner, worldline="steins_gate")
+backend/tests/test_memory_v11_migration.py:266:    await insert_legacy_core_fact(
+backend/tests/test_memory_v11_migration.py:276:    await insert_legacy_core_fact(
+backend/tests/test_memory_v11_migration.py:291:    original_create = getattr(repo, "create_stable_fact_from_legacy", None)
+backend/tests/test_memory_v11_migration.py:293:        "repository.create_stable_fact_from_legacy missing — required for rollback proof"
+backend/tests/test_memory_v11_migration.py:304:    monkeypatch.setattr(repo, "create_stable_fact_from_legacy", _boom)
+backend/tests/test_memory_v11_migration.py:306:    if hasattr(mig, "create_stable_fact_from_legacy"):
+backend/tests/test_memory_v11_migration.py:307:        monkeypatch.setattr(mig, "create_stable_fact_from_legacy", _boom)
+backend/tests/test_memory_v11_migration.py:309:        monkeypatch.setattr(mig.repository, "create_stable_fact_from_legacy", _boom)
+backend/tests/test_memory_v11_migration.py:312:        await mig.import_legacy_core_facts(session_id=owner, worldline="steins_gate")
+backend/tests/test_provider_http_errors.py:11:@pytest.fixture(params=["create", "update", "disable", "legacy"])
+backend/tests/test_provider_http_errors.py:29:        "legacy": ("PATCH", "/custom/configuration"),
+backend/tests/test_provider_http_errors.py:80:        "legacy": "provider_register_failed",
+backend/tests/test_chat_core_exception_handling.py:315:# search: credential reads narrowed; legacy weather fallback kept broad + logged
+backend/tests/test_chat_core_exception_handling.py:350:def test_legacy_weather_failures_are_logged_and_fall_back_to_ddg(failure, monkeypatch, caplog):
+backend/tests/test_chat_core_exception_handling.py:363:    monkeypatch.setattr(search_module, "_legacy_ddg", lambda query: f"ddg:{query}")
+backend/tests/test_chat_core_exception_handling.py:367:        "legacy weather lookup failed" in m for m in _messages(caplog, "app.services.search")
+backend/tests/test_model_catalog.py:286:def test_models_endpoint_keeps_legacy_ids_and_adds_reconciled_catalog(
+desktop/src/components/ProviderControls.test.tsx:272:    expect(resolveThinkingValue(openAiModel.thinking_control, 'legacy-x', 'high')).toBe(
+desktop/src/components/SettingsModal.test.tsx:753:  it('renders the sampling control with range 0–1.2, endpoints, and no legacy 2.0 max', () => {
+desktop/src/components/SettingsModal.test.tsx:785:  it('clamps a legacy temperature prop above 1.2 when opening the control', () => {
+desktop/src/components/SettingsModal.test.tsx:792:  it('shows the one-shot migration notice when legacy storage was clamped', () => {
+desktop/src/design-system/useReducedMotion.test.tsx:6:function mockPreference(initial: boolean, legacy = false) {
+desktop/src/design-system/useReducedMotion.test.tsx:12:    ...(legacy
+desktop/src/design-system/useReducedMotion.test.tsx:72:  it('supports older WebViews with the legacy listener API', () => {
+desktop/src/design-system/motion.css:26:  /* Exact legacy timing aliases keep this foundation migration visually equal.
+desktop/src/hooks/useAmadeusWS.ts:240:  /** Legacy v1 per-send degradation flag (text_chunk has no turn identity). */
+desktop/src/hooks/useAmadeusWS.ts:1000:    // Legacy v1 per-send flag only. The v2 slot is bound to the accepted
+desktop/src/components/Workstation.tsx:563:    const legacy = [
+desktop/src/components/Workstation.tsx:567:    if (legacy.length === 0) return;
+desktop/src/components/Workstation.tsx:570:      for (const [id, admission] of legacy) {
+desktop/src/components/Workstation.tsx:905:      let legacyKey = '';
+desktop/src/components/Workstation.tsx:907:        legacyKey = localStorage.getItem('amadeus_pc_api_key') || '';
+desktop/src/components/Workstation.tsx:910:        if (legacyKey.trim()) {
+desktop/src/components/Workstation.tsx:914:            body: JSON.stringify({ api_key: legacyKey.trim() }),
+desktop/src/components/Workstation.tsx:937:    const legacyProvider = (settings as WebSearchSettingsSnapshot & { provider?: WebSearchProviderId }).provider;
+desktop/src/components/Workstation.tsx:938:    const active = (settings.active_provider || legacyProvider || 'tavily') as WebSearchProviderId;
+desktop/src/components/SettingsModal.tsx:188:  /** One-shot notice after migrating a legacy localStorage value > max (1.2) */
+desktop/src/workstation/workstation.css:2: * Loaded after App.css (main.tsx) so equal-specificity legacy rules lose.
+desktop/src/workstation/workstation.css:1243:/* Legacy App.css leftovers inside the embedded panels: orange status text, round glowing thumb, orange search cards, spaced placeholders. */
+desktop/src/workstation/workstation.css:1260:/* Shared select menu (portalled onto .ws2): the system-menu plates instead of the orange legacy list. */
+desktop/src/components/AvatarViewer.tsx:54:  variant?: 'legacy' | 'stage';
+desktop/src/components/AvatarViewer.tsx:61:  variant = 'legacy',
+desktop/src/hooks/useAmadeusWS.b1.test.ts:232:  it('keeps per-send degradation behavior for legacy v1 text_chunk', () => {
+desktop/src/components/SpriteAnimator.tsx:17:   * Some legacy sprite sheets were exported with inconsistent transparent
+desktop/src/memory-space/readingDetails.ts:552:  legacy_import: '历史导入',
+backend/tests/test_provider_credentials.py:190:def test_scrub_dotenv_key_removes_only_legacy_secret(tmp_path):
+backend/tests/test_persona_bible.py:302:        # Default / legacy omit → okabe (backward compatible)
+backend/tests/test_persona_bible.py:333:    # Default anchor remains okabe for legacy callers
+backend/tests/test_persona_bible.py:341:    # Legacy constant is okabe default
+backend/tests/test_persona_bible.py:496:def test_legacy_emotion_guide_name_points_to_bible_data():
+backend/tests/test_persona_bible.py:623:    # Frozen internal default remains okabe constant (legacy semantics).
+backend/tests/test_memory_v11_resident_profile.py:279:    """[A7] distinct observations across versions; legacy_import counts >= 2."""
+backend/tests/test_memory_v11_resident_profile.py:289:    legacy = await seed_fact(
+backend/tests/test_memory_v11_resident_profile.py:290:        session_id=sid, text="出身は大阪", prior_kinds=("legacy_import",), change_kind="user_edit"
+backend/tests/test_memory_v11_resident_profile.py:292:    legacy_many = await seed_fact(
+backend/tests/test_memory_v11_resident_profile.py:295:        change_kind="legacy_import",
+backend/tests/test_memory_v11_resident_profile.py:303:    assert set(rows) == {multi, legacy, legacy_many}
+backend/tests/test_memory_v11_resident_profile.py:305:    assert rows[legacy]["observation_count"] == 2  # no evidence, legacy floor
+backend/tests/test_memory_v11_resident_profile.py:306:    assert rows[legacy]["change_kind"] == "user_edit"
+backend/tests/test_memory_v11_resident_profile.py:307:    assert rows[legacy_many]["observation_count"] == 3
+backend/tests/test_memory_v11_resident_profile.py:354:        "has_legacy_import": False,
+backend/tests/test_memory_v11_resident_profile.py:399:        _row("f-legacy", observation_count=0, has_legacy_import=True, confidence=0.1),
+backend/tests/test_memory_v11_resident_profile.py:411:        "f-legacy",  # legacy_import counts as >= 2 observations
+backend/tests/test_memory_v11_resident_profile.py:520:def test_no_facts_means_no_section_v11_but_legacy_keeps_none():
+backend/tests/test_memory_v11_resident_profile.py:521:    """[A1] v11 with zero facts: no CORE FACTS and no "(none)"; legacy unchanged."""
+backend/tests/test_memory_v11_resident_profile.py:528:    legacy_prompt = compiler.compile(_inputs(None))
+backend/tests/test_memory_v11_resident_profile.py:529:    assert "\n\nCORE FACTS\n(none)\n\n" in legacy_prompt
+backend/tests/test_memory_v11_default.py:35:async def test_turn_enqueues_v11_job_without_legacy_extraction(isolated_store, monkeypatch):
+backend/tests/test_memory_v11_default.py:127:def test_removed_legacy_routes_are_gone(app_client, path):
+backend/app/routers/providers.py:413:    # Resolve defaults for stub insert when legacy custom has no DB row yet.
+backend/app/routers/providers.py:483:    """Legacy singleton path — still writes the `custom` row."""
+backend/tests/test_working_summary.py:77:async def test_s3e3_v1_legacy_unversioned_row_invalidated(isolated_store):
+backend/tests/test_working_summary.py:78:    """V1: direct legacy unversioned insert → get_latest_summary == ''."""
+backend/tests/test_working_summary.py:264:# Session legacy invalidation (section 29).
+backend/tests/test_working_summary.py:269:async def test_s3e3_session_load_legacy_invalidation(isolated_store):
+backend/tests/test_working_summary.py:367:    ), "old legacy row must not resurrect"
+backend/tests/test_working_summary.py:621:def test_s3e3_legacy_old_summary_never_reaches_compressor():
+backend/tests/test_working_summary.py:622:    """Decoded legacy unversioned summary is '' → compressor never sees it."""
+backend/tests/test_legacy_memory_live_migration.py:15:from scripts import legacy_memory_migrate as cli
+backend/tests/test_legacy_memory_live_migration.py:146:    await mig.import_legacy_core_facts(session_id="owner", worldline=SG)
+backend/tests/test_legacy_memory_live_migration.py:181:    rows = await mig.import_legacy_core_facts(session_id="owner", worldline=SG)
+backend/tests/test_legacy_memory_live_migration.py:185:    rerun = await mig.import_legacy_core_facts(session_id="owner", worldline=SG)
+backend/tests/test_legacy_memory_live_migration.py:242:            assert not mig._table_exists(conn, "legacy_core_fact_imports")
+backend/tests/test_legacy_memory_live_migration.py:257:        await mig.import_legacy_core_facts(session_id="owner", worldline=SG)
+backend/tests/test_legacy_memory_live_migration.py:274:        await mig.import_legacy_core_facts(session_id="owner", worldline=SG)
+backend/tests/test_legacy_memory_live_migration.py:285:        await mig.import_legacy_core_facts(session_id="owner", worldline=SG)
+backend/tests/test_legacy_memory_live_migration.py:293:    return await mig.import_legacy_core_facts(session_id="owner", worldline=SG)
+backend/tests/test_legacy_memory_live_migration.py:305:    rerun = await mig.import_legacy_core_facts(session_id="owner", worldline=SG)
+backend/tests/test_legacy_memory_live_migration.py:370:    original = repo.create_stable_fact_from_legacy
+backend/tests/test_legacy_memory_live_migration.py:381:    monkeypatch.setattr(repo, "create_stable_fact_from_legacy", check_backups)
+backend/tests/test_legacy_memory_live_migration.py:407:    rows = await mig.import_legacy_core_facts(session_id="owner", worldline=SG)
+backend/tests/test_legacy_memory_live_migration.py:408:    assert {r["legacy_row_id"] for r in rows if r["is_pinned"]} == {1, 2, 3, 4, 5, 6, 9, 10}
+backend/tests/test_legacy_memory_live_migration.py:449:    rows = await mig.import_legacy_core_facts(session_id="owner", worldline=SG)
+backend/tests/test_legacy_memory_live_migration.py:466:    await mig.import_legacy_core_facts(session_id="owner", worldline=SG)
+backend/app/main.py:44:        legacy_key = config.DEEPSEEK_API_KEY.strip()
+backend/app/main.py:45:        if legacy_key and credential_store.get("deepseek") is None:
+backend/app/main.py:46:            credential_store.set("deepseek", legacy_key)
+backend/app/main.py:47:        if legacy_key and not isinstance(credential_store, InMemoryCredentialStore):
+backend/tests/test_memory_v11_api.py:56:LEGACY_ROUTE_TEMPLATES = (
+backend/tests/test_memory_v11_api.py:68:    # Legacy compatibility tests can create/delete conversations too. Never
+backend/tests/test_memory_v11_api.py:447:def test_s3f2c_explicit_scope_required_legacy_defaults_preserved(
+backend/tests/test_memory_v11_api.py:508:def test_s0_legacy_product_routes_must_exit(client: TestClient):
+backend/tests/test_memory_v11_api.py:513:        for method, path in LEGACY_ROUTE_TEMPLATES
+backend/tests/test_memory_v11_api.py:517:        f"legacy Memory product routes still registered: {still_registered}"
+backend/tests/test_memory_v11_reconciliation.py:8:No fallback to legacy memory.service. apply path must go through validated
+backend/tests/test_memory_v11_reconciliation.py:2774:async def test_s3d4_d20_legacy_caller_without_allowlist(isolated_store):
+backend/app/db.py:36:# v11: Memory observation–fact pipeline (additive tables; legacy core_facts retained).
+backend/app/db.py:87:    # The legacy DB override must not bypass the source-run isolation guard.
+backend/app/db.py:89:    legacy_override = os.environ.get("AMADEUS_DB_PATH")
+backend/app/db.py:90:    if legacy_override:
+backend/app/db.py:91:        base = Path(legacy_override).expanduser().resolve()
+backend/app/db.py:336:        evidence_kind IN ('direct_user','inferred_user','contextual_user','legacy_import')
+backend/app/db.py:421:        change_kind IN ('create','refine','supersede','user_edit','legacy_import')
+backend/app/db.py:658:    """Backfill legacy rows atomically; schema DDL is intentionally separate."""
+backend/app/db.py:985:    Additive column; legacy rows backfill to 0 (never explained yet). The flag
+backend/app/db.py:1211:    - memory: non-overwrite backup, then transactional DDL (legacy core_facts retained).
+backend/app/db.py:1356:            legacy = root / "amadeus.db"
+backend/app/db.py:1357:            if not override and legacy.exists():
+backend/app/db.py:1359:                shutil.copy2(legacy, root / f"amadeus.legacy.{stamp}.db")
+backend/app/services/model_catalog.py:37:    """Legacy `custom` plus multi-profile ids `custom:<uuid>`."""
+backend/app/services/conversation_erasure.py:190:        legacy = await memory_service.forget_exclusive_sources(
+backend/app/services/conversation_erasure.py:193:        counts = {key: counts[key] + legacy[key] for key in counts}
+backend/app/services/soul_engine.py:117:        Default identity_mode=okabe keeps legacy callers on the okabe lane (U-M2).
+backend/app/services/persona_bible.py:230:        Default identity_mode=okabe keeps legacy single-arg callers valid until S3.
+backend/app/services/memory.py:1:"""Shared memory embedding adapter and legacy-table erasure.
+backend/app/services/memory.py:5:that still removes rows from the legacy memory tables.
+backend/app/security/prompt.py:54:# Legacy module constant = okabe default (backward compatible for importers / equality).
+backend/app/security/prompt.py:151:# Legacy constant = okabe default (existing deepseek / adapter imports).
+backend/app/services/working_summary.py:10:- the fail-closed decoder (legacy unversioned or unknown markers → "").
+backend/app/services/working_summary.py:46:    Legacy unversioned text / unknown/future marker / None / malformed → "".
+backend/app/services/search.py:17:    # Legacy sync web_search() helper only; chat path never uses DDG.
+backend/app/services/search.py:30:# Legacy single-key id remains the Tavily slot so existing installs keep working.
+backend/app/services/search.py:435:def _legacy_weather(query: str) -> str:
+backend/app/services/search.py:466:            "[Search] legacy weather lookup failed (%s); falling back to DDG",
+backend/app/services/search.py:469:    return _legacy_ddg(f"{city} weather")
+backend/app/services/search.py:472:def _legacy_ddg(query: str) -> str:
+backend/app/services/search.py:483:        # Broad on purpose: legacy helper contract returns an error string
+backend/app/services/search.py:489:    """Legacy synchronous API retained for scripts/tests; chat uses SearchService."""
+backend/app/services/search.py:495:        return _legacy_weather(query)
+backend/app/services/search.py:496:    return _legacy_ddg(query)
+backend/app/services/prompt_compiler.py:221:    if row.get("has_legacy_import"):
+backend/app/services/prompt_compiler.py:314:    # Q20-A / Q21: from conversation record only; default okabe for legacy callers.
+backend/app/services/prompt_compiler.py:321:    # possibly empty) and the optional per-turn supplement. None = legacy.
+backend/app/services/prompt_compiler.py:478:        # examples are never removed. Web evidence and history keep the legacy
+backend/app/services/prompt_compiler.py:738:    helper, so the legacy "CORE FACTS (none)" form cannot appear in v11.
+backend/app/services/prompt_compiler.py:769:        # v11 never degrades to legacy episodic retrieval.
+backend/app/services/prompt_compiler.py:788:        # Fail-soft: no CORE FACTS this turn; never fall back to legacy.
+backend/app/services/deepseek.py:84:        # Default okabe for legacy; chat path usually already has full Bible in system_prompt.
+backend/tests/test_credential_store_selection.py:62:    secret = "synthetic-legacy-provider-key"
+backend/tests/test_credential_store_selection.py:89:        legacy_key = dotenv_values(env_file)["DEEPSEEK_API_KEY"]
+backend/tests/test_credential_store_selection.py:90:        assert legacy_key == secret
+backend/tests/test_credential_store_selection.py:91:        monkeypatch.setenv("DEEPSEEK_API_KEY", legacy_key)
+backend/tests/test_credential_store_selection.py:92:        monkeypatch.setattr(config, "DEEPSEEK_API_KEY", legacy_key)
+backend/tests/test_credential_store_selection.py:93:        monkeypatch.setattr(deepseek_service, "api_key", legacy_key)
+backend/app/services/provider_runtime.py:259:    """Bootstrap-only: register legacy custom when no persisted custom row exists."""
+backend/tests/test_language_publication.py:1441:    """Legacy protocol must not bypass the shared per-segment language gate."""
+backend/tests/test_memory_candidate_builder.py:6:1. legacy states/vectors/FTS, history sequences (incl. high-water > max id)
+backend/tests/test_memory_candidate_builder.py:223:        # Legacy core facts: planned + dismissed + not-current (+ other owner).
+backend/tests/test_memory_candidate_builder.py:257:        # Legacy episodic + FTS + embeddings + emotion.
+backend/tests/test_memory_candidate_builder.py:261:            "'ako-note-legacy-marker を整理した記録',0.9,0.7,'[101]',?)",
+backend/tests/test_memory_candidate_builder.py:300:            "'t1',?,?, 'legacy-1','fp-old',NULL,'user_delete',?)",
+backend/tests/test_memory_candidate_builder.py:397:            conn.execute(mig._LEGACY_IMPORTS_TABLE_DDL)
+backend/tests/test_memory_candidate_builder.py:398:            conn.execute(mig._LEGACY_IMPORTS_INDEX_DDL)
+backend/tests/test_memory_candidate_builder.py:400:                "INSERT INTO legacy_core_fact_imports(import_key,source_id,worldline,"
+backend/tests/test_memory_candidate_builder.py:401:                "session_id,identity_mode,legacy_row_id,fact_id,observation_id,imported_at)"
+backend/tests/test_memory_candidate_builder.py:411:    # vec0 tables (legacy index family) when sqlite_vec is available.
+backend/tests/test_memory_candidate_builder.py:448:    preview = mig.build_legacy_core_facts_preview(snapshot)
+backend/tests/test_memory_candidate_builder.py:501:    """Non-virtual (shadow) tables of the FTS/vec0 legacy index family."""
+backend/tests/test_memory_candidate_builder.py:559:def test_candidate_build_preserves_legacy_and_rebuilds_v11(tmp_path):
+backend/tests/test_memory_candidate_builder.py:579:    # --- legacy preserved verbatim (memory) --------------------------------
+backend/tests/test_memory_candidate_builder.py:592:    # FTS still usable and matching the legacy content.
+backend/tests/test_memory_candidate_builder.py:644:    # Demo marker is gone from every v11 content table; imports are legacy_import.
+backend/tests/test_memory_candidate_builder.py:661:        assert kinds == {"legacy_import"}
+backend/tests/test_memory_candidate_builder.py:664:            str(r[0]) for r in conn.execute("SELECT import_key FROM legacy_core_fact_imports")
+backend/tests/test_memory_candidate_builder.py:706:    assert manifest["legacy_ledger"]["source_rows"] == 1
+backend/tests/test_memory_candidate_builder.py:707:    assert manifest["legacy_ledger"]["candidate_rows"] == 3
+backend/tests/test_memory_candidate_builder.py:970:            "legacy_core_fact_imports",
+README.md:117:`AMADEUS_PYTHON` can select a Python executable; the default is `backend/.venv/Scripts/python.exe` on Windows and `backend/.venv/bin/python` on Linux/macOS. On Linux/macOS, set `AMADEUS_DATA_DIR` to a separate development directory, unset `AMADEUS_DB_PATH`, then run `npm run dev:real` from `desktop/`. The launcher refuses an empty data directory and clears the legacy database override. It automatically selects a backend port by default (`BACKEND_PORT` unset or `0`); set `BACKEND_PORT` to 1–65535 to require a fixed port. An occupied fixed port fails startup. `run_dev.bat` now runs the same launcher.
+README.md:153:Source runs (including scripts) refuse data-directory resolution without a nonempty `AMADEUS_DATA_DIR`: `RuntimeError: AMADEUS_DATA_DIR required (non-frozen)` (exit 1). `AMADEUS_DB_PATH` still takes precedence for database files when a data directory is set; setting it alone does not bypass this check. `run_dev.bat` and `npm run dev:real` clear that legacy override and check the data directory before starting either process; set `AMADEUS_DATA_DIR` before invoking it. A direct `uvicorn --reload` invocation can leave its parent watcher running after the backend child refuses to start. The offline snapshot builder and rehearsal CLIs keep their explicit-path isolation and do not require this variable.
+backend/app/services/memory_v11/reconciler.py:121:    """S3F-1 D28: dedicated full-cursor receipt OR legacy observation proof.
+backend/app/services/memory_v11/reconciler.py:123:    The legacy observation-source fallback (rows created before the receipt
+backend/app/services/memory_v11/reconciler.py:126:    pipeline must never be suppressed by a legacy receipt. No backfill.
+backend/app/services/memory_v11/reconciler.py:902:      consult the dedicated full-cursor receipt OR the current-pipeline legacy
+backend/app/services/memory_v11/contracts.py:23:# produces few atomic claims (legacy extraction already frames facts[] as 0..8);
+backend/app/services/memory_v11/contracts.py:33:    {"create", "refine", "supersede", "user_edit", "legacy_import"}
+backend/app/services/memory_v11/repository.py:519:async def create_stable_fact_from_legacy(
+backend/app/services/memory_v11/repository.py:526:    No commit, separate connection, model call, topic creation or legacy write.
+backend/app/services/memory_v11/__init__.py:4:Jobs, reconciler, and legacy import land in later slices.
+backend/tests/test_shared_user_facts.py:132:async def test_legacy_v7_stores_migrate_to_v8_preserving_data(tmp_path, monkeypatch):
+backend/tests/test_shared_user_facts.py:136:    # Legacy v7 control: real v7 tables (no shared_user_facts) + live data.
+backend/tests/test_shared_user_facts.py:151:            VALUES ('legacy-user','beta',3,'2026-07-20T00:00:00+00:00');
+backend/tests/test_shared_user_facts.py:158:    # Legacy v7 history/memory: v7 and v8 share the same DDL; only meta advances.
+backend/tests/test_shared_user_facts.py:168:            "INSERT INTO conversations(id,session_id,title,is_default) VALUES('c-1','legacy-user','t',1)"
+backend/tests/test_shared_user_facts.py:171:            "INSERT INTO messages(session_id,conversation_id,role,content) VALUES('legacy-user','c-1','user','古いメッセージ')"
+backend/tests/test_shared_user_facts.py:188:               ) VALUES('legacy-user','self','hobby','読書',0.9,0.6,1,0,'[1]','2026-07-20T00:00:00+00:00')"""
+backend/tests/test_shared_user_facts.py:215:            "SELECT worldline,revision FROM session_worldlines WHERE session_id='legacy-user'"
+backend/tests/test_shared_user_facts.py:237:    """Regression: the legacy AMADEUS_DB_PATH override rule stays untouched."""
+backend/app/services/memory_v11/recall.py:316:    whether any version came from legacy_import. Read-only; never touches
+backend/app/services/memory_v11/recall.py:333:                                AND lv.change_kind = 'legacy_import') AS has_legacy_import
+backend/app/services/memory_v11/recall.py:352:        legacy_import = bool(row["has_legacy_import"])
+backend/app/services/memory_v11/recall.py:353:        if legacy_import:
+backend/app/services/memory_v11/recall.py:365:                "has_legacy_import": legacy_import,
+backend/app/services/memory_v11/jobs.py:515:    Dedicated full-cursor receipt (S3F-1) OR legacy observation-source proof
+backend/app/services/memory_v11/jobs.py:668:    Legacy CREATE/REJECT operations remain accepted for injected completion
+backend/app/services/memory_v11/jobs.py:669:    callbacks. Targeted legacy operations still require a candidate_index.
+backend/app/services/memory_v11/jobs.py:675:    legacy = {str(op.get("observation_ref") or ""): op for op in operations}
+backend/app/services/memory_v11/jobs.py:681:        old = legacy.get(str(obs.get("observation_ref") or ""), {})
+backend/app/services/memory_v11/jobs.py:701:    # Unknown legacy refs must not silently disappear.
+backend/app/services/memory_v11/jobs.py:847:    # cursor (dedicated full-cursor receipt OR current-pipeline legacy
+backend/app/services/memory_v11/retrieval.py:4:embeddings, does not merge legacy/shared rows, and never crosses
+backend/app/services/memory_v11/retrieval.py:34:# Pin priority contribution (same scale as legacy v11 pin boost).
+backend/app/services/memory_v11/candidate.py:8:    preview.json   (from scripts/legacy_core_facts_rehearsal.py preview)
+backend/app/services/memory_v11/candidate.py:13:- memory keeps schema_meta, ALL legacy content (core/episodic tables,
+backend/app/services/memory_v11/candidate.py:22:  legacy_core_fact_imports ledger is not carried over (it stays in the
+backend/app/services/memory_v11/candidate.py:93:    "legacy_core_fact_imports",
+backend/app/services/memory_v11/candidate.py:102:    "legacy_core_fact_imports",
+backend/app/services/memory_v11/candidate.py:114:        "legacy_core_fact_imports",
+backend/app/services/memory_v11/candidate.py:276:    Unfamiliar legacy schemas fail closed instead of being silently accepted.
+backend/app/services/memory_v11/candidate.py:324:    """Row counts for the legacy FTS/vec0 index family (shadow tables).
+backend/app/services/memory_v11/candidate.py:499:            report["table_counts"][f"{wl}:legacy_ledger_rows"] = (
+backend/app/services/memory_v11/candidate.py:502:                        "SELECT COUNT(*) FROM legacy_core_fact_imports"
+backend/app/services/memory_v11/candidate.py:505:                if _table_exists(memory, "legacy_core_fact_imports")
+backend/app/services/memory_v11/candidate.py:537:    """Whole-DB SQLite backup: preserves legacy + FTS/vec0 internal structure."""
+backend/app/services/memory_v11/candidate.py:653:                    if table == "legacy_core_fact_imports":
+backend/app/services/memory_v11/candidate.py:654:                        target.execute(mig._LEGACY_IMPORTS_TABLE_DDL)
+backend/app/services/memory_v11/candidate.py:655:                        target.execute(mig._LEGACY_IMPORTS_INDEX_DDL)
+backend/app/services/memory_v11/candidate.py:716:                _fail("memory_legacy_preserved", f"{wl}: {preserved}")
+backend/app/services/memory_v11/candidate.py:754:                        "legacy_core_fact_imports",
+backend/app/services/memory_v11/candidate.py:773:                    if kinds - {"legacy_import"}:
+backend/app/services/memory_v11/candidate.py:783:            # Legacy FTS still usable end-to-end.
+backend/app/services/memory_v11/candidate.py:789:                _fail("legacy_fts_usable", f"{wl}: fts={fts_ok} episodic={episodic}")
+backend/app/services/memory_v11/candidate.py:798:    checks["legacy_memory_preserved"] = True
+backend/app/services/memory_v11/candidate.py:799:    checks["legacy_fts_usable"] = True
+backend/app/services/memory_v11/candidate.py:800:    checks["legacy_index_family_preserved"] = True
+backend/app/services/memory_v11/candidate.py:857:    - history/control/legacy/jobs/receipts/erasure metadata preserved as
+backend/app/services/memory_v11/candidate.py:899:            "preview payload is not a legacy core-facts preview of the expected tool version",
+backend/app/services/memory_v11/candidate.py:937:            donor_result = mig.apply_legacy_core_facts(
+backend/app/services/memory_v11/candidate.py:1012:                            "legacy_row_id": item.get("legacy_row_id"),
+backend/app/services/memory_v11/candidate.py:1023:                    "memory_legacy": "preserved verbatim: core_facts, episodic_memories, "
+backend/app/services/memory_v11/candidate.py:1033:                    "legacy_core_fact_imports": "old ledger not carried over; kept "
+backend/app/services/memory_v11/candidate.py:1045:                "legacy_ledger": {
+backend/app/services/memory_v11/candidate.py:1047:                        "steins_gate:legacy_ledger_rows", 0
+backend/app/services/memory_v11/candidate.py:1050:                        "beta:legacy_ledger_rows", 0
+backend/app/services/memory_v11/migration.py:3:S1 backup primitives (live-path, worldline-scoped) plus the offline legacy
+backend/app/services/memory_v11/migration.py:22:  one source snapshot via a minimal manifest; qualified legacy core_facts
+backend/app/services/memory_v11/migration.py:23:  are imported with legacy_import semantics (never direct_user). The target
+backend/app/services/memory_v11/migration.py:26:  no automatic startup hook or legacy-table writes are installed.
+backend/app/services/memory_v11/migration.py:126:# Offline legacy core-fact migration rehearsal (explicit-path preview/apply).
+backend/app/services/memory_v11/migration.py:129:# which legacy core_facts qualify, and an apply that imports the qualified
+backend/app/services/memory_v11/migration.py:143:MIGRATION_TOOL_VERSION: Final[str] = "legacy-core-facts-rehearsal/1"
+backend/app/services/memory_v11/migration.py:144:PREVIEW_KIND: Final[str] = "legacy_core_facts_preview"
+backend/app/services/memory_v11/migration.py:145:TARGET_KIND: Final[str] = "legacy_core_facts_rehearsal_target"
+backend/app/services/memory_v11/migration.py:152:_LEGACY_IMPORTS_TABLE_DDL = """
+backend/app/services/memory_v11/migration.py:153:CREATE TABLE IF NOT EXISTS legacy_core_fact_imports (
+backend/app/services/memory_v11/migration.py:159:    legacy_row_id INTEGER NOT NULL,
+backend/app/services/memory_v11/migration.py:166:_LEGACY_IMPORTS_INDEX_DDL = (
+backend/app/services/memory_v11/migration.py:167:    "CREATE INDEX IF NOT EXISTS idx_legacy_core_fact_imports_scope "
+backend/app/services/memory_v11/migration.py:168:    "ON legacy_core_fact_imports(session_id, identity_mode, legacy_row_id)"
+backend/app/services/memory_v11/migration.py:387:def _parse_legacy_source_ids(raw: Any) -> list[int] | None:
+backend/app/services/memory_v11/migration.py:388:    """Strict parse of legacy source_message_ids JSON.
+backend/app/services/memory_v11/migration.py:391:    value is unusable (missing/empty/malformed). Legacy rows always store
+backend/app/services/memory_v11/migration.py:472:            mid in (_parse_legacy_source_ids(r["source_message_ids"]) or [])
+backend/app/services/memory_v11/migration.py:492:        "legacy_row_id": int(row["id"]),
+backend/app/services/memory_v11/migration.py:539:    source_ids = _parse_legacy_source_ids(raw_sources)
+backend/app/services/memory_v11/migration.py:565:            marker = f"legacy-deleted:{session_id}:{identity_mode}:{mid}:{request['request_id']}"
+backend/app/services/memory_v11/migration.py:618:        groups[key].append(int(item["legacy_row_id"]))
+backend/app/services/memory_v11/migration.py:628:                    "legacy_row_ids": sorted(row_ids),
+backend/app/services/memory_v11/migration.py:652:    """Classify every legacy core fact row from ONE fixed read view."""
+backend/app/services/memory_v11/migration.py:703:def evaluate_legacy_core_facts(source_dir: str | Path) -> dict[str, Any]:
+backend/app/services/memory_v11/migration.py:704:    """Read-only classification of every legacy core fact row (one fixed view)."""
+backend/app/services/memory_v11/migration.py:748:def build_legacy_core_facts_preview(source_dir: str | Path) -> dict[str, Any]:
+backend/app/services/memory_v11/migration.py:798:        f"{int(item['legacy_row_id'])}"
+backend/app/services/memory_v11/migration.py:816:    legacy_import semantics.
+backend/app/services/memory_v11/migration.py:825:        "qualifiers": {"source": "legacy_core_fact_import"},
+backend/app/services/memory_v11/migration.py:846:            "legacy_import",
+backend/app/services/memory_v11/migration.py:891:               ) VALUES(?,1,?,?,?,?, 'legacy_import', NULL, ?, NULL, NULL)""",
+backend/app/services/memory_v11/migration.py:901:        """INSERT INTO legacy_core_fact_imports(
+backend/app/services/memory_v11/migration.py:903:               legacy_row_id, fact_id, observation_id, imported_at
+backend/app/services/memory_v11/migration.py:911:            int(item["legacy_row_id"]),
+backend/app/services/memory_v11/migration.py:933:        conn.execute(_LEGACY_IMPORTS_TABLE_DDL)
+backend/app/services/memory_v11/migration.py:934:        conn.execute(_LEGACY_IMPORTS_INDEX_DDL)
+backend/app/services/memory_v11/migration.py:1031:def apply_legacy_core_facts(
+backend/app/services/memory_v11/migration.py:1037:    """Import the preview's planned legacy core facts into the rehearsal target.
+backend/app/services/memory_v11/migration.py:1067:            "preview payload is not a legacy core-facts preview of this tool version",
+backend/app/services/memory_v11/migration.py:1090:            "legacy_row_id": item.get("legacy_row_id"),
+backend/app/services/memory_v11/migration.py:1140:                        "SELECT 1 FROM legacy_core_fact_imports WHERE import_key=?",
+backend/app/services/memory_v11/migration.py:1152:                            "legacy_row_id": int(item["legacy_row_id"]),
+backend/app/services/memory_v11/migration.py:1200:LIVE_PREVIEW_KIND = "legacy_memory_live_preview/1"
+backend/app/services/memory_v11/migration.py:1236:            part["imports"] = (mem.execute("SELECT * FROM legacy_core_fact_imports ORDER BY import_key").fetchall()
+backend/app/services/memory_v11/migration.py:1237:                               if _table_exists(mem, "legacy_core_fact_imports") else [])
+backend/app/services/memory_v11/migration.py:1336:    """Match the read-only legacy row, so v11 edits/deletes stay authoritative."""
+backend/app/services/memory_v11/migration.py:1339:           FROM legacy_core_fact_imports l
+backend/app/services/memory_v11/migration.py:1340:           JOIN core_facts c ON c.id=l.legacy_row_id AND c.session_id=l.session_id AND c.identity_mode=l.identity_mode
+backend/app/services/memory_v11/migration.py:1343:           ORDER BY l.legacy_row_id""",
+backend/app/services/memory_v11/migration.py:1397:            conn.execute(_LEGACY_IMPORTS_TABLE_DDL)
+backend/app/services/memory_v11/migration.py:1398:            conn.execute(_LEGACY_IMPORTS_INDEX_DDL)
+backend/app/services/memory_v11/migration.py:1401:            pending.sort(key=lambda i: (i["source_category"] != "core", i["legacy_row_id"]))
+backend/app/services/memory_v11/migration.py:1409:                key=lambda i: (-i["importance"], -i["confidence"], i["legacy_row_id"], i["source_category"]),
+backend/app/services/memory_v11/migration.py:1426:                    "SELECT fact_id,observation_id FROM legacy_core_fact_imports WHERE import_key=?",
+backend/app/services/memory_v11/migration.py:1433:                            "SELECT 1 FROM legacy_core_fact_imports WHERE source_id=? AND fact_id=?",
+backend/app/services/memory_v11/migration.py:1448:                        "INSERT INTO legacy_core_fact_imports VALUES(?,?,?,?,?,?,?,?,?)",
+backend/app/services/memory_v11/migration.py:1450:                         item["identity_mode"], item["legacy_row_id"], fact_id, observation_id, now),
+backend/app/services/memory_v11/migration.py:1453:                    fact_id, observation_id = await repository.create_stable_fact_from_legacy(
+backend/app/services/memory_v11/migration.py:1473:async def import_legacy_core_facts(*, session_id: str, worldline: str):
+backend/app/services/memory_v11/migration.py:1506:           EXISTS(SELECT 1 FROM stable_fact_versions h WHERE h.fact_id=f.fact_id AND h.change_kind='legacy_import') has_legacy_import
+backend/app/services/memory_v11/migration.py:1529:        if row["has_legacy_import"]:
+backend/app/services/memory_v11/migration.py:1532:                keys.append(("legacy_value", value.strip().casefold()))
+backend/app/services/memory_v11/migration.py:1612:                    if _table_exists(conn, "legacy_core_fact_imports"):
+backend/app/services/memory_v11/migration.py:1613:                        conn.execute("UPDATE legacy_core_fact_imports SET fact_id=? WHERE fact_id=?",

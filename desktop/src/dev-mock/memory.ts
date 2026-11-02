@@ -177,14 +177,9 @@ export function handleMemory(
   method = method.toUpperCase();
   if (method === 'GET') {
     if (path === '/status') return success({
-      ...scope, runtime_mode: 'v11', pending_count: 0, processing_count: 0, failed_count: 0, failed_jobs: [],
+      ...scope, pending_count: 0, processing_count: 0, failed_count: 0, failed_jobs: [],
     });
     if (path === '/facts') {
-      if (!params.has('identity_mode')) {
-        const ledger = (identity: string) => store.scope(JSON.stringify([scope.session_id, scope.worldline, identity])).facts
-          .map((fact, index) => ({ id: index + 1, fact_key: fact.fact_id, fact_value: fact.display_text }));
-        return success({ local: ledger('self'), shared: [], okabe: ledger('okabe') });
-      }
       const facts = matchingFacts(data, criteriaFor(params));
       const page = pagination(params, facts.length);
       return success({ scope, facts: facts.slice(page.offset, page.offset + page.limit).map(factRow), pagination: page });

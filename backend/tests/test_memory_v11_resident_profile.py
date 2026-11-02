@@ -774,7 +774,6 @@ async def test_forty_facts_profile_and_supplement(isolated_store, monkeypatch):
     """[A1][A2][A5][A6][A7] 40 facts / 2 pinned: 32 resident + gated supplement."""
     from app.services.memory import memory_service
 
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     _sentence_transformers_imported(monkeypatch)  # even then readiness() is not consulted
     spy = NotLoadedEmbedder(loaded=False)
     monkeypatch.setattr(memory_service, "embedder", spy)
@@ -815,7 +814,6 @@ async def test_supplement_never_uses_e5_even_when_loaded(isolated_store, monkeyp
     """[A5] dispatch 64: loaded E5 is still never used; bigram gate only."""
     from app.services.memory import memory_service
 
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     _sentence_transformers_imported(monkeypatch)
     spy = NotLoadedEmbedder(loaded=True)
     monkeypatch.setattr(memory_service, "embedder", spy)
@@ -832,7 +830,6 @@ async def test_prompt_never_imports_sentence_transformers_nor_calls_readiness(is
     """[A5] dispatch 59: module absent -> bigram-only supplement, no readiness, no import."""
     from app.services.memory import EmbeddingAdapter, memory_service
 
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     monkeypatch.delitem(sys.modules, "sentence_transformers", raising=False)
     attempted: list[str] = []
     real_import = builtins.__import__
@@ -877,7 +874,6 @@ async def test_real_embedding_adapter_is_never_loaded_by_prompt(isolated_store, 
     already loaded (dispatch 64) -> still never consulted nor used."""
     from app.services.memory import EmbeddingAdapter, memory_service
 
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     adapter = EmbeddingAdapter()
     sentinel_model = object()
     if loaded:
@@ -919,7 +915,6 @@ async def test_complete_profile_skips_supplement(isolated_store, monkeypatch):
     """[D] every candidate resident -> complete rule, no supplement call."""
     import app.services.memory_v11.recall as recall_module
 
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     sid = f"rp-complete-{uuid4()}"
     await seed_fact(session_id=sid, text="紅茶はアールグレイが好き")
     calls = {"n": 0}
@@ -940,7 +935,6 @@ async def test_complete_profile_skips_supplement(isolated_store, monkeypatch):
 @pytest.mark.asyncio
 async def test_v11_no_facts_no_section_and_ids_reset(isolated_store, monkeypatch):
     """[A1] no facts -> no CORE FACTS / (none); ids reset every turn."""
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     sid = f"rp-empty-{uuid4()}"
     session = _v11_session(sid)
     session.turn_injected_fact_ids = ("stale-id",)
@@ -950,11 +944,6 @@ async def test_v11_no_facts_no_section_and_ids_reset(isolated_store, monkeypatch
         assert "(none)" not in prompt
         assert "MEMORY CANDIDATES" not in prompt
         assert session.turn_injected_fact_ids == ()
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "legacy")
-    session.turn_injected_fact_ids = ("stale-id",)
-    legacy = await compile_for_session(session, "こんにちは")
-    assert "CORE FACTS\n(none)" in legacy
-    assert session.turn_injected_fact_ids == ()
 
 
 @pytest.mark.asyncio
@@ -966,7 +955,6 @@ async def test_v11_compile_failure_resets_injected_ids(isolated_store, monkeypat
     """
     import app.services.prompt_compiler as prompt_compiler_module
 
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     sid = f"rp-raise-{uuid4()}"
     await seed_fact(session_id=sid, text="猫を飼っている")
     session = _v11_session(sid)
@@ -986,7 +974,6 @@ async def test_v11_compile_cancelled_resets_injected_ids(isolated_store, monkeyp
     """[A1] dispatch 64: a compile cancelled after the reset leaves () behind."""
     from app.services.soul_engine import soul_engine
 
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     sid = f"rp-cancel-{uuid4()}"
     await seed_fact(session_id=sid, text="猫を飼っている")
     session = _v11_session(sid)
@@ -1018,7 +1005,6 @@ async def test_supplement_failure_omits_block_and_logs_without_content(
     """[D] supplement failure: block omitted, resident kept, warning w/o facts."""
     import app.services.memory_v11.recall as recall_module
 
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     sid = f"rp-fail-{uuid4()}"
     await seed_forty(sid)
 
