@@ -73,8 +73,20 @@ _SAFE_LATIN_TOKENS = frozenset({
 })
 
 
+def _is_chinese_only_han(ch: str) -> bool:
+    if ch in _CHINESE_ONLY_HAN:
+        return True
+    if not _HAN_RE.fullmatch(ch):
+        return False
+    try:
+        ch.encode("cp932")
+    except UnicodeEncodeError:
+        return True
+    return False
+
+
 def _looks_like_chinese_wording(text: str) -> bool:
-    if any(ch in _CHINESE_ONLY_HAN for ch in text):
+    if any(_is_chinese_only_han(ch) for ch in text):
         return True
     return any(word in text for word in _CHINESE_ONLY_WORDS)
 
@@ -194,7 +206,7 @@ def is_neutral_data_fragment(text: str) -> bool:
     # Unquoted Chinese/Japanese prose markers → not a bare data tag.
     if _looks_like_chinese_wording(core) or any(w in core for w in _CHINESE_ONLY_WORDS):
         return False
-    if any(ch in _CHINESE_ONLY_HAN for ch in core):
+    if any(_is_chinese_only_han(ch) for ch in core):
         return False
 
     kana_n = len(_KANA_RE.findall(core))
@@ -269,7 +281,7 @@ def is_high_confidence_foreign_prose(text: str) -> bool:
     kana_n = len(_KANA_RE.findall(surface))
     han_n = len(_HAN_RE.findall(surface))
     chinese_word_hits = sum(1 for word in _CHINESE_ONLY_WORDS if word in surface)
-    chinese_han_hits = sum(1 for ch in surface if ch in _CHINESE_ONLY_HAN)
+    chinese_han_hits = sum(1 for ch in surface if _is_chinese_only_han(ch))
     foreign_letters = _count_foreign_non_cjk_letters(surface)
 
     # Solid Japanese frame: recover only when foreign body remains *outside* embeds.
