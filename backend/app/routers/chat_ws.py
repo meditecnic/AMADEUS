@@ -236,6 +236,15 @@ class SessionState:
         self.content_epoch = await models.get_conversation_content_epoch(
             self.session_id, worldline=self.worldline, conversation_id=self.conversation_id,
         )
+        await self.reload_history()
+        from app.services.soul_engine import soul_engine
+        await soul_engine.restore_emotion(
+            self.session_id,
+            self.worldline,
+            identity_mode=self.identity_mode,
+        )
+
+    async def reload_history(self):
         self._history = await models.get_recent_messages(
             self.session_id,
             limit=6,
@@ -246,12 +255,6 @@ class SessionState:
             self.session_id,
             worldline=self.worldline,
             conversation_id=self.conversation_id,
-        )
-        from app.services.soul_engine import soul_engine
-        await soul_engine.restore_emotion(
-            self.session_id,
-            self.worldline,
-            identity_mode=self.identity_mode,
         )
 
     async def enter_draft(self):
@@ -2777,7 +2780,8 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                     and not session.active_task.done()
                     and session.active_task_connection_id != connection_id
                 ):
-                    await cancel_inflight(session)
+                    if await cancel_inflight(session):
+                        await session.reload_history()
                 await send_queue.put((session.current_epoch, {
                     "type": "session.ready",
                     "conversation_mode": session.conversation_mode,
