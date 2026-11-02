@@ -58,7 +58,7 @@ async def websocket_voice_endpoint(websocket: WebSocket):
     session.worldline = worldline
     session.client_type = "voice"
     await session.load_from_db()
-    await session_coordinator.acquire_lease(session_id, worldline, websocket)
+    await session_coordinator.acquire_lease(session_id, worldline, websocket, kind="voice")
     buffer = bytearray()
     sample_rate = 16000
     channels = 1
@@ -183,4 +183,4 @@ async def websocket_voice_endpoint(websocket: WebSocket):
         writer_task.cancel()
         monitor_task.cancel()
         await asyncio.gather(writer_task, monitor_task, return_exceptions=True)
-        await session_coordinator.release_lease(session_id, worldline, websocket)
+        await session_coordinator.release_lease(session_id, worldline, websocket, kind="voice")
