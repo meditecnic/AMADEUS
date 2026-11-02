@@ -210,6 +210,13 @@ class SessionState:
         # M2: core extraction rhythm counter
         self.turns_since_last_core = 0
 
+    def _set_provider_credentials(self, provider_id: str, api_key: str | None) -> None:
+        if (self.provider_id, self.api_key or "") != (provider_id, api_key or ""):
+            self.compression_failures = 0
+            self.compression_skip_turns = 0
+        self.provider_id = provider_id
+        self.api_key = api_key
+
     async def load_from_db(self):
         await init_db()
         from app.db import normalize_identity_mode
@@ -221,11 +228,11 @@ class SessionState:
             return
         self.conversation_id = str(selected["id"])
         self.conversation_mode = "history"
-        self.provider_id = str(selected.get("provider_id") or "deepseek")
+        provider_id = str(selected.get("provider_id") or "deepseek")
+        self._set_provider_credentials(provider_id, credential_store.get(provider_id))
         self.model = str(selected.get("model_id") or self.model)
         self.identity_mode = normalize_identity_mode(selected.get("identity_mode"))
         self.identity_acknowledged = bool(selected.get("identity_acknowledged") or 0)
-        self.api_key = credential_store.get(self.provider_id)
         self.content_epoch = await models.get_conversation_content_epoch(
             self.session_id, worldline=self.worldline, conversation_id=self.conversation_id,
         )
@@ -254,9 +261,9 @@ class SessionState:
         from app.services.conversations import conversation_service
 
         selected = await conversation_service.get_selected(self.session_id, self.worldline)
-        self.provider_id = str((selected or {}).get("provider_id") or self.provider_id)
+        provider_id = str((selected or {}).get("provider_id") or self.provider_id)
+        self._set_provider_credentials(provider_id, credential_store.get(provider_id))
         self.model = str((selected or {}).get("model_id") or self.model)
-        self.api_key = credential_store.get(self.provider_id)
         self.conversation_id = None
         self.conversation_mode = "draft"
         # Draft materialize will stamp this mode (client settings default; never infer).
@@ -2637,7 +2644,10 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                             },
                         ))
                         continue
-                    session.provider_id = draft_provider.provider_id
+                    session._set_provider_credentials(
+                        draft_provider.provider_id,
+                        credential_store.get(draft_provider.provider_id),
+                    )
                     session.model = draft_provider.model_id
                 else:
                     await session.load_from_db()
@@ -2682,7 +2692,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                     ))
                     continue
                 # Store credentials in session
-                session.api_key = api_key or ""
+                session._set_provider_credentials(session.provider_id, api_key or "")
                 if "sovits_url" in data:
                     session.sovits_url = data["sovits_url"]
                 
