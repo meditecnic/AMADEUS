@@ -558,7 +558,8 @@ def test_missing_paid_budget_cannot_restart_at_zero(tmp_path, frozen):
 
 def test_redaction_handles_quoted_and_unicode_secret(tmp_path, monkeypatch):
     secret = 'fake-"密钥\\value'
-    monkeypatch.setenv("DEEPSEEK_API_KEY", secret)
+    # POSIX ASCII environments cannot export Unicode; redact only needs a mapping.
+    monkeypatch.setattr(b5.os, "environ", {**os.environ, "DEEPSEEK_API_KEY": secret})
     b5.write_json(tmp_path / "redacted.json", {"reply": "echo " + secret})
     assert b5.read_json(tmp_path / "redacted.json") == {"reply": "echo [REDACTED]"}
     for ascii_only in (True, False):
@@ -1333,3 +1334,136 @@ def test_round1_r_pet_synonym_2(frozen):
     assert negated["status"] == "needs_manual"
     assert negated["failures"] == []
     assert negated["needs_manual"] == ["forbidden_context:dog_pet"]
+
+
+@pytest.fixture
+def paid_mock(monkeypatch):
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "offline-placeholder")
+    monkeypatch.setenv("AMADEUS_B5_REAL_HTTP", "authorized")
+    original = httpx.AsyncClient
+    waits = []
+
+    async def sleep(seconds):
+        waits.append(seconds)
+
+    def install(handler):
+        def client(*args, **kwargs):
+            kwargs.setdefault("transport", httpx.MockTransport(handler))
+            return original(*args, **kwargs)
+        monkeypatch.setattr(httpx, "AsyncClient", client)
+
+    monkeypatch.setattr(b5.asyncio, "sleep", sleep)
+    return install, waits
+
+
+async def test_transport_retry_completes_and_charges_failed_reserve(tmp_path, frozen, paid_mock):
+    install, waits = paid_mock
+    seen = []
+    detail = "sk-" + "x" * 30 + " Bearer hidden-token " + "断" * 400
+
+    def provider(request):
+        seen.append(json.loads(request.content))
+        if len(seen) == 1:
+            raise httpx.ReadTimeout(detail)
+        return httpx.Response(200, text=stream_reply(seen[-1]))
+
+    install(provider)
+    plan, entry, directory = prepared_turn(tmp_path, frozen, transport="real", cap_cny="1")
+    with b5.fake_network_guard():
+        result = await b5.product_turn(plan, entry, directory)
+    b5.write_json(directory / "result.json", result)
+    assert result["status"] == "completed" and not result.get("stop_run")
+    assert waits == [5] and seen[0] == seen[1]
+    rows = b5.read_json(directory / "requests.json")
+    assert len(rows) == 2 and rows[0]["error_type"] == "ReadTimeout"
+    assert len(rows[0]["error_detail"]) == 300
+    assert "sk-" not in rows[0]["error_detail"] and "hidden-token" not in rows[0]["error_detail"]
+    assert rows[0]["error_detail"].startswith("[REDACTED] Bearer [REDACTED]")
+    assert result["error_detail"] == rows[0]["error_detail"]
+    budget = b5.Budget(tmp_path / "budget.json", "1")
+    failed, succeeded = budget.state["attempts"]
+    assert failed["status"] == "reserved" and failed["charge_cny"] == failed["reserve_cny"]
+    assert succeeded["status"] == "settled"
+    assert Decimal(result["retained_reserve_cny"]) == Decimal(failed["reserve_cny"]) > 0
+    assert Decimal(result["cost_cny"]) == budget.committed == Decimal(failed["reserve_cny"]) + Decimal(succeeded["charge_cny"])
+    assert not budget.uncertain()
+
+
+@pytest.mark.parametrize("failure,count,error_type", [
+    (httpx.ReadTimeout("timeout"), 2, "ReadTimeout"),
+    (httpx.RemoteProtocolError("disconnected"), 2, "RemoteProtocolError"),
+    (429, 2, "429"), (503, 2, "503"), (400, 1, "400"),
+    (b5.Refused("refused"), 1, "Refused"), ("missing_usage", 1, "AccountingUncertain"),
+])
+async def test_only_network_failures_retry(tmp_path, frozen, paid_mock, failure, count, error_type):
+    install, waits = paid_mock
+    seen = []
+
+    def provider(request):
+        seen.append(request)
+        if isinstance(failure, Exception):
+            raise failure
+        if isinstance(failure, int):
+            return httpx.Response(failure)
+        return httpx.Response(200, text=stream_reply(json.loads(request.content), usage=False))
+
+    install(provider)
+    plan, entry, directory = prepared_turn(tmp_path, frozen, transport="real", cap_cny="1")
+    capture = b5.Capture(plan, entry, frozen[0], frozen[0]["cases"][0], directory)
+    with b5.fake_network_guard(), pytest.raises(b5.Refused):
+        await capture.handle(httpx.Request("POST", plan["base_url"] + "/chat/completions", json={"messages": []}))
+    assert len(seen) == count and waits == ([5] if count == 2 else [])
+    rows = b5.read_json(directory / "requests.json")
+    assert all(r["error_type"] == error_type for r in rows)
+    assert all(Decimal(r["retained_reserve_cny"]) > 0 for r in rows)
+
+
+async def test_transport_retry_still_checks_cap_including_retained_reserve(tmp_path, frozen, paid_mock):
+    install, waits = paid_mock
+    seen = []
+
+    def provider(request):
+        seen.append(request)
+        raise httpx.ReadTimeout("timeout")
+
+    install(provider)
+    plan, entry, directory = prepared_turn(tmp_path, frozen, transport="real", cap_cny="0.025")
+    capture = b5.Capture(plan, entry, frozen[0], frozen[0]["cases"][0], directory)
+    with b5.fake_network_guard(), pytest.raises(b5.BudgetExceeded):
+        await capture.handle(httpx.Request("POST", plan["base_url"] + "/chat/completions", json={"messages": []}))
+    assert len(seen) == 1 and waits == [5]
+    assert Decimal(capture.budget.amounts()["retained_reserve_cny"]) > 0
+    assert len(capture.budget.state["attempts"]) == 1
+
+
+@pytest.mark.parametrize("failures", [1, 3])
+def test_transport_errors_continue_until_third_execution_and_resume(tmp_path, frozen, paid_mock, monkeypatch, failures):
+    install, waits = paid_mock
+    qset, digest = frozen
+    plan = b5.make_plan(qset, digest, transport="real", cap_cny="1")
+    plan["executions"] = plan["executions"][:5]
+    active, sent = [], []
+
+    def provider(request):
+        sent.append(active[-1])
+        if active[-1] <= failures:
+            raise httpx.ReadTimeout("timeout")
+        return httpx.Response(200, text=stream_reply(json.loads(request.content)))
+
+    install(provider)
+
+    def executor(plan, entry, directory):
+        active.append(len(active) + 1)
+        monkeypatch.setenv("AMADEUS_DATA_DIR", str(directory / "data"))
+        return asyncio.run(b5.product_turn(plan, entry, directory))
+
+    with b5.fake_network_guard():
+        b5.run_suite(tmp_path, plan, qset, executor)
+        original_count = len(sent)
+        b5.run_suite(tmp_path, plan, qset, executor)
+    assert len(sent) == original_count
+    rows = [b5.read_json(tmp_path / "executions" / e["id"] / "result.json") for e in plan["executions"]]
+    assert [r["status"] for r in rows] == ["error"] * failures + (
+        ["completed"] * 4 if failures == 1 else ["not_run_after_accounting_error"] * 2)
+    assert all(r["error_type"] == "ReadTimeout" and not r.get("stop_run") for r in rows[:failures])
+    assert waits == [5] * failures

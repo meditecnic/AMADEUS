@@ -29,6 +29,7 @@ from collections import Counter
 from contextlib import ExitStack, contextmanager, nullcontext
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 from urllib.parse import urlsplit, urlunsplit
@@ -99,6 +100,57 @@ class BudgetExceeded(Refused):
 
 class AccountingUncertain(Refused):
     """Stop the whole run because provider expenditure cannot be bounded safely."""
+
+
+class TransportFailed(Refused):
+    """Both transport attempts failed; the retained reserves bound expenditure."""
+
+
+def error_fields(exc: Exception) -> dict:
+    detail = str(redact(str(exc)))
+    detail = re.sub(r"sk-[A-Za-z0-9_-]{8,}", "[REDACTED]", detail)
+    detail = re.sub(r"Bearer\s+[^\s\"'<>]+", "Bearer [REDACTED]", detail, flags=re.I)
+    return {"error_type": str(exc.response.status_code) if isinstance(exc, httpx.HTTPStatusError)
+            else type(exc).__name__, "error_detail": detail[:300]}
+
+
+def network_error(exc: Exception) -> bool:
+    return isinstance(exc, httpx.TransportError) or (
+        isinstance(exc, httpx.HTTPStatusError) and
+        (exc.response.status_code == 429 or 500 <= exc.response.status_code <= 599))
+
+
+def last_request_error(records: list[dict]) -> dict:
+    return next(({key: row[key] for key in ("error_type", "error_detail")}
+                 for row in reversed(records) if "error_type" in row), {})
+
+
+async def request_with_retry(budget, payload, execution_id, records, path, record, send):
+    for transport_attempt in (1, 2):
+        index = budget.reserve(payload, execution_id, kind=record.get("kind", "memory"),
+                               attempt=record.get("attempt", 1), phase=record.get("phase", "memory"))
+        row = {**record, "transport_attempt": transport_attempt, "budget_index": index,
+               "reserve_cny": budget.state["attempts"][index]["reserve_cny"]}
+        records.append(row)
+        write_json(path, records)
+        try:
+            return await send(row), index, row
+        except Exception as exc:
+            row.update(error_fields(exc))
+            if not network_error(exc):
+                raise
+            # Keep the full reserve charged, including connection failures and
+            # HTTP rejections. This annotation only permits the next execution.
+            budget.state["attempts"][index]["network_error"] = True
+            write_json(budget.path, budget.state)
+            if transport_attempt == 2:
+                raise TransportFailed("network_retries_exhausted") from None
+        finally:
+            charge = budget.state["attempts"][index]
+            row.update(settled_cny=charge["charge_cny"] if charge["status"] == "settled" else "0",
+                       retained_reserve_cny=charge["charge_cny"] if charge["status"] == "reserved" else "0")
+            write_json(path, records)
+        await asyncio.sleep(5)
 
 
 @contextmanager
@@ -551,6 +603,12 @@ class Budget:
     def committed(self) -> Decimal:
         return sum((Decimal(row["charge_cny"]) for row in self.state["attempts"]), Decimal(0))
 
+    def uncertain(self, execution_id: str | None = None) -> bool:
+        return bool(self.state.get("stop_reason")) or any(
+            row["status"] == "reserved" and not row.get("network_error")
+            for row in self.state["attempts"]
+            if execution_id is None or row["execution_id"] == execution_id)
+
     def amounts(self, execution_id: str | None = None) -> dict:
         rows = [r for r in self.state["attempts"] if execution_id is None or r["execution_id"] == execution_id]
         return {"settled_cny": str(sum((Decimal(r["charge_cny"]) for r in rows if r["status"] == "settled"), Decimal(0))),
@@ -624,8 +682,11 @@ class Capture:
         try:
             return await self._handle(request)
         except Exception as exc:
-            if self.budget and (Decimal(self.budget.amounts(self.entry["id"])["retained_reserve_cny"])
-                                or self.budget.state.get("stop_reason")) and not isinstance(exc, AccountingUncertain):
+            if self.plan["transport"] == "real" and self.requests:
+                record = self.requests[-1]
+                if "error_type" not in record:
+                    record.update(error_fields(exc))
+            if self.budget and self.budget.uncertain(self.entry["id"]) and not isinstance(exc, AccountingUncertain):
                 exc = AccountingUncertain("request_failed_reservation_retained")
             if isinstance(exc, Refused):
                 self.refusals.append(exc)
@@ -674,41 +735,44 @@ class Capture:
         # explicit billing controls above; captures show exactly what is sent.
         record = {"kind": kind, "phase": self.phase, "attempt": attempt, "request": payload,
                   "input_estimate_tokens": estimate_input_tokens(payload)}
-        index = self.budget.reserve(payload, self.entry["id"], kind=kind, attempt=attempt,
-                                    phase=self.phase) if self.budget else None
         if kind == "japanese_rewrite":
             self.renderer_attempts[self.phase] = attempt
         else:
             self.main_attempts[self.phase] = attempt
         record["main_attempt"] = self.main_attempts[self.phase]
-        if self.budget:
-            record["budget_index"] = index
-            record["reserve_cny"] = self.budget.state["attempts"][index]["reserve_cny"]
-        self.requests.append(record)
-        write_json(self.directory / "requests.json", self.requests)
         start = time.perf_counter()
         if self.plan["transport"] == "fake":
+            if self.budget:
+                index = self.budget.reserve(payload, self.entry["id"], kind=kind, attempt=attempt, phase=self.phase)
+                record.update(budget_index=index, reserve_cny=self.budget.state["attempts"][index]["reserve_cny"])
+            self.requests.append(record)
+            write_json(self.directory / "requests.json", self.requests)
             body = fake_response(payload, kind)
             record["first_token_ms"] = (time.perf_counter() - start) * 1000
         else:
-            chunks = []
-            # The nested client is the sole network boundary. Preserve inherited
-            # proxy and CA trust; no redirects or transport retries.
-            async with httpx.AsyncClient(timeout=120, follow_redirects=False) as client:
-                headers = {key: value for key, value in request.headers.items() if key.lower() != "content-length"}
-                async with client.stream("POST", str(request.url), headers=headers, json=payload) as response:
-                    if response.status_code != 200:
-                        raise Refused("provider_http_" + str(response.status_code))
-                    async for line in response.aiter_lines():
-                        if "first_token_ms" not in record and line.startswith("data:"):
-                            try:
-                                delta = json.loads(line[5:].strip()).get("choices", [{}])[0].get("delta", {})
-                            except (ValueError, IndexError):
-                                delta = {}
-                            if delta.get("content") or delta.get("tool_calls"):
-                                record["first_token_ms"] = (time.perf_counter() - start) * 1000
-                        chunks.append(line)
-            body = "\n".join(chunks) + "\n"
+            async def send(attempt_record):
+                chunks = []
+                # The nested client is the sole network boundary. Preserve
+                # inherited proxy and CA trust; retry only in our budgeted loop.
+                async with httpx.AsyncClient(timeout=120, follow_redirects=False) as client:
+                    headers = {key: value for key, value in request.headers.items() if key.lower() != "content-length"}
+                    async with client.stream("POST", str(request.url), headers=headers, json=payload) as response:
+                        if response.status_code != 200:
+                            raise httpx.HTTPStatusError("provider_http_" + str(response.status_code),
+                                                        request=request, response=response)
+                        async for line in response.aiter_lines():
+                            if "first_token_ms" not in attempt_record and line.startswith("data:"):
+                                try:
+                                    delta = json.loads(line[5:].strip()).get("choices", [{}])[0].get("delta", {})
+                                except (ValueError, IndexError):
+                                    delta = {}
+                                if delta.get("content") or delta.get("tool_calls"):
+                                    attempt_record["first_token_ms"] = (time.perf_counter() - start) * 1000
+                            chunks.append(line)
+                return "\n".join(chunks) + "\n"
+
+            body, index, record = await request_with_retry(self.budget, payload, self.entry["id"],
+                self.requests, self.directory / "requests.json", record, send)
         record["elapsed_ms"] = (time.perf_counter() - start) * 1000
         record["response_sse"] = body
         usage = None
@@ -1010,6 +1074,7 @@ async def product_turn(plan: dict, entry: dict, directory: Path) -> dict:
                       stop_run=isinstance(exc, AccountingUncertain))
     finally:
         compiler._select_v11_memory_supplement = original_supplement
+    result.update(last_request_error(capture.requests))
     result.update(requests=capture.requests, request_count=len(capture.requests),
                   elapsed_ms=(time.perf_counter() - started) * 1000)
     execution_accounting(result, directory.parents[1], plan)
@@ -1073,7 +1138,7 @@ def execution_accounting(row: dict, run_dir: Path, plan: dict) -> None:
     if budget_path.exists():
         budget = Budget(budget_path, plan["cap_cny"])
         row.update(budget.amounts(row["id"]))
-        if Decimal(row["retained_reserve_cny"]) or budget.state.get("stop_reason"):
+        if budget.uncertain(row["id"]):
             row["stop_run"] = True
     else:
         row["settled_cny"] = str(sum((Decimal(r.get("cost_cny") or "0") for r in row.get("requests", [])), Decimal(0)))
@@ -1211,11 +1276,12 @@ def run_suite(run_dir: Path, plan: dict, qset: dict, executor=execute_subprocess
         stop_status = "not_run_budget" if any(r["status"] == "not_run_budget" for r in rows) else None
         for row in rows:
             execution_accounting(row, run_dir, plan)
-        if not stop_status and any(r.get("stop_run") or r["status"] == "interrupted" for r in rows):
+        if not stop_status and (sum(r["status"] == "error" for r in rows) >= 3 or
+                                any(r.get("stop_run") or r["status"] == "interrupted" for r in rows)):
             stop_status = "not_run_after_accounting_error"
         if (run_dir / "budget.json").exists():
             budget = Budget(run_dir / "budget.json", plan["cap_cny"])
-            if Decimal(budget.amounts()["retained_reserve_cny"]) or budget.state.get("stop_reason"):
+            if budget.uncertain():
                 stop_status = "not_run_after_accounting_error"
         for entry in plan["executions"]:
             if entry["id"] in done:
@@ -1252,7 +1318,8 @@ def run_suite(run_dir: Path, plan: dict, qset: dict, executor=execute_subprocess
             append_json(journal, row)
             if row["status"] == "not_run_budget":
                 stop_status = "not_run_budget"
-            elif row.get("stop_run") or row["status"] == "interrupted":
+            elif (row.get("stop_run") or row["status"] == "interrupted" or
+                  sum(r["status"] == "error" for r in rows) >= 3):
                 stop_status = "not_run_after_accounting_error"
         if sha256(question_path(plan.get("question_set", "b5b"))) != plan["question_sha256"]:
             raise Refused("question_set_changed_after_run")
@@ -1264,6 +1331,45 @@ def run_suite(run_dir: Path, plan: dict, qset: dict, executor=execute_subprocess
         write_json(run_dir / "summary.json", summary)
         (run_dir / "summary.md").write_text(redact(markdown), encoding="utf-8", newline="\n")
         return summary
+
+
+def aggregate(run_dirs: list[Path], output: Path, manual_path: Path | None = None) -> dict:
+    # Supply filtered plans to the existing scorer; source evidence stays intact.
+    plans, exclusions = {}, []
+    for directory in run_dirs:
+        directory = directory.resolve()
+        plan_path = directory / "plan.json"
+        plan = read_json(plan_path)
+        if plan.get("question_set") != "b5c":
+            raise Refused("aggregate_requires_b5c")
+        rows = [read_json(directory / "executions" / e["id"] / "result.json") for e in plan["executions"]]
+        if any(r["status"] not in {"completed", "error"} or r.get("stop_run") for r in rows) or sum(
+                r["status"] == "error" for r in rows) >= 3:
+            raise Refused("aggregate_requires_complete_runs")
+        excluded = {r["case_id"] for r in rows if r["status"] == "error"}
+        entries = [e for e in plan["executions"] if e["case_id"] not in excluded]
+        exclusions.append({"run": directory.name, "case_ids": sorted(excluded),
+                           "excluded_questions": len(excluded),
+                           "excluded_executions": len(plan["executions"]) - len(entries)})
+        plans[plan_path] = {**plan, "executions": entries}
+
+    def filtered_read(path):
+        return plans[path] if path in plans else read_json(path)
+
+    runtime = SimpleNamespace(read_json=filtered_read, Refused=Refused, fake_network_guard=fake_network_guard,
+                              load_questions=load_questions, score=score, percentile=percentile, write_json=write_json)
+    result = b5c.aggregate(run_dirs, output, manual_path, runtime)
+    result.update(exclusions=exclusions,
+                  excluded_questions=sum(e["excluded_questions"] for e in exclusions),
+                  excluded_executions=sum(e["excluded_executions"] for e in exclusions))
+    for summary, excluded in zip(result["runs"], exclusions):
+        summary.update({k: v for k, v in excluded.items() if k != "run"})
+    write_json(output / "aggregate.json", result)
+    path = output / "aggregate.md"
+    detail = [f"\n成对剔除题数: {result['excluded_questions']}; 执行数: {result['excluded_executions']}"]
+    detail.extend(f"- {e['run']}: {', '.join(e['case_ids']) or '无'}" for e in exclusions)
+    path.write_text(path.read_text(encoding="utf-8") + "\n".join(detail) + "\n", encoding="utf-8")
+    return result
 
 
 def rescore_run(run_dir: Path) -> dict:
@@ -1322,7 +1428,7 @@ def main(argv=None) -> int:
         if args.aggregate:
             if args.output is None:
                 raise Refused("aggregate_output_required")
-            result = b5c.aggregate(args.aggregate, args.output, args.manual, sys.modules[__name__])
+            result = aggregate(args.aggregate, args.output, args.manual)
             print(f"Aggregate {result['gate']['status']}: {args.output.resolve()}")
             return 0
         if args.rescore:
