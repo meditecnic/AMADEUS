@@ -27,6 +27,7 @@ if not re.fullmatch(r"\d+", _frontend_port, flags=re.ASCII) or not 1 <= int(_fro
     raise ValueError("AMADEUS_FRONTEND_PORT must be an integer between 1 and 65535")
 FRONTEND_PORT = int(_frontend_port)
 ASSETS_DIR = Path(os.getenv("ASSETS_DIR", str(backend_dir.parent / "desktop" / "public" / "assets")))
+REQUEST_INPUT_BUDGET = int(os.getenv("REQUEST_INPUT_BUDGET", "32000"))
 HISTORY_COMPRESS_THRESHOLD = int(os.getenv("HISTORY_COMPRESS_THRESHOLD", "15"))
 
 PROMPTS_DIR = backend_dir / "prompts"
