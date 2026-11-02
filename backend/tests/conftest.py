@@ -251,10 +251,10 @@ def monkeypatch(isolated_user_dirs, offline_tts_sidecar):
 # ---------------------------------------------------------------------------
 # Offline embeddings.
 #
-# EmbeddingAdapter lazily loads E5 through ONNX Runtime. Tests must not
+# EmbeddingAdapter lazily loads jina through ONNX Runtime. Tests must not
 # download it, so by default loading and encoding use a deterministic local
 # stand-in returning a unit vector of the configured dimension. Prefixes such as
-# "query: " / "passage: " are ignored and the vector is built from hashed
+# "Query: " / "Document: " are ignored and the vector is built from hashed
 # character n-grams, so texts sharing words still score as similar. Subclasses
 # that override encode_* (e.g. test_memory_v11_api's stub) are unaffected.
 # Tests that need the real model use @pytest.mark.real_embedding.
@@ -270,7 +270,7 @@ class _DeterministicEmbeddingModel:
 
     def encode(self, text, normalize_embeddings=True, **_kwargs):
         body = str(text)
-        for prefix in ("query: ", "passage: "):
+        for prefix in ("Query: ", "Document: "):
             if body.startswith(prefix):
                 body = body[len(prefix):]
                 break

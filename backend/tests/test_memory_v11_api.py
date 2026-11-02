@@ -25,7 +25,7 @@ from app.services.memory import EmbeddingAdapter
 
 def _unit_vector(seed: str) -> list[float]:
     values: list[float] = []
-    for block in range(12):
+    for block in range(24):
         digest = hashlib.sha256(f"{seed}:{block}".encode("utf-8")).digest()
         values.extend(int(byte) - 127.5 for byte in digest)
     norm = sum(v * v for v in values) ** 0.5
@@ -35,8 +35,8 @@ def _unit_vector(seed: str) -> list[float]:
 class _ApiDeterministicEmbedder(EmbeddingAdapter):
     """Offline EmbeddingAdapter stub — no SentenceTransformer / network."""
 
-    def __init__(self, *, model_name: str = "test-deterministic-384", fail_always: bool = False):
-        super().__init__(model_name=model_name, dimensions=384)
+    def __init__(self, *, model_name: str = "test-deterministic-768", fail_always: bool = False):
+        super().__init__(model_name=model_name, dimensions=768)
         self.fail_always = fail_always
         self.encode_passage_calls = 0
         self.encode_query_calls = 0

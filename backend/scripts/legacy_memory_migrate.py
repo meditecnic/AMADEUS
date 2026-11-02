@@ -71,7 +71,7 @@ def main(argv=None):
     root = args.data_dir.expanduser().resolve()
     if not root.is_dir():
         parser.error("--data-dir must be an existing directory")
-    # Set offline mode before importing application/model modules. E5 may only
+    # Set offline mode before importing application/model modules. The embedding model may only
     # read the existing local cache; no model or provider downloads are allowed.
     os.environ["AMADEUS_DATA_DIR"] = str(root)
     os.environ["HF_HUB_OFFLINE"] = "1"

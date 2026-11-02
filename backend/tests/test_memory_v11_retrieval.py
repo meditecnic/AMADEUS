@@ -56,9 +56,9 @@ def _session_obj(session_id: str, *, identity_mode: str = "self") -> SimpleNames
 
 
 def _unit_vector(seed: str) -> list[float]:
-    """Deterministic 384-dim unit vector from a seed string (no randomness)."""
+    """Deterministic 768-dim unit vector from a seed string (no randomness)."""
     values: list[float] = []
-    for block in range(12):
+    for block in range(24):
         digest = hashlib.sha256(f"{seed}:{block}".encode("utf-8")).digest()
         values.extend(int(byte) - 127.5 for byte in digest)
     norm = math.sqrt(sum(value * value for value in values))
@@ -70,7 +70,7 @@ def _cosine(left: list[float], right: list[float]) -> float:
 
 
 # Must match seeded stable_fact_version_embeddings.model for vector scoring.
-_TEST_EMBED_MODEL = "test-deterministic-384"
+_TEST_EMBED_MODEL = "test-deterministic-768"
 
 
 class _DeterministicEmbedder(EmbeddingAdapter):
@@ -81,7 +81,7 @@ class _DeterministicEmbedder(EmbeddingAdapter):
     """
 
     def __init__(self, vocabulary: dict[str, str], *, model_name: str = _TEST_EMBED_MODEL):
-        super().__init__(model_name=model_name, dimensions=384)
+        super().__init__(model_name=model_name, dimensions=768)
         self._vocabulary = dict(vocabulary)
 
     async def encode_passage(self, text: str) -> list[float]:
@@ -202,8 +202,8 @@ async def test_r3_vector_candidate_participates_with_zero_lexical_overlap(
                     fact_id,
                     1,
                     _TEST_EMBED_MODEL,
-                    384,
-                    struct.pack(f"{384}f", *vector),
+                    768,
+                    struct.pack(f"{768}f", *vector),
                 ),
             )
         await db.commit()
@@ -305,8 +305,8 @@ async def test_r3_incompatible_embedding_model_is_ignored(
                 target["fact_id"],
                 1,
                 foreign_model,
-                384,
-                struct.pack(f"{384}f", *target_vector),
+                768,
+                struct.pack(f"{768}f", *target_vector),
             ),
         )
         await db.commit()
@@ -645,7 +645,7 @@ async def test_v113_lexical_candidates_without_embedder(isolated_store, monkeypa
     from app.services.memory_v11.retrieval import _lexical_score, select_stable_fact_candidates
     class Offline:
         model_name = "offline"
-        dimensions = 384
+        dimensions = 768
         async def encode_query(self, text):
             raise RuntimeError("E5 unavailable")
     monkeypatch.setattr(memory_service, "embedder", Offline())
@@ -697,11 +697,11 @@ async def test_v113_retrieval_logs_exception_type_only(isolated_store, monkeypat
             monkeypatch.setattr(retrieval, "_load_version_embeddings", boom)
         else:
             async def vectors(**kwargs):
-                return {("f", 1): {"model": "offline", "dimensions": 384, "vector": struct.pack("384f", *([1.0] + [0.0] * 383))}}
+                return {("f", 1): {"model": "offline", "dimensions": 768, "vector": struct.pack("768f", *([1.0] + [0.0] * 767))}}
             monkeypatch.setattr(retrieval, "_load_version_embeddings", vectors)
         class Offline:
             model_name = "offline"
-            dimensions = 384
+            dimensions = 768
             async def encode_query(self, text):
                 raise RuntimeError(sentinel)
         await retrieval.select_stable_fact_candidates(session_id="safe", worldline="steins_gate", identity_mode="self", query="safe", embedder=Offline())

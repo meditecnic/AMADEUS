@@ -53,7 +53,7 @@ def visual_studio(env: dict[str, str]) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work-dir", type=Path, required=True)
-    parser.add_argument("--e5-source", type=Path, required=True)
+    parser.add_argument("--embedding-source", type=Path, required=True)
     parser.add_argument("--vc-redist", type=Path, required=True)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--config", type=Path, help="JSON overrides for test identifier, productName and version")
@@ -107,7 +107,7 @@ def main() -> int:
     backend = run / "backend"
     build_work = work / "backend-build"
     execute("freeze", [str(args.python), str(HERE / "build_backend.py"), "--python", str(args.python),
-                       "--work-dir", str(build_work), "--e5-source", str(args.e5_source.resolve()),
+                       "--work-dir", str(build_work), "--embedding-source", str(args.embedding_source.resolve()),
                        "--vc-redist", toolchain["redist"], "--output", str(backend)])
     evidence = run / "backend-evidence"
     evidence.mkdir()

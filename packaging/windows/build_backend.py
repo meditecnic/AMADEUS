@@ -17,11 +17,13 @@ from bundle_support import sanitized_build_environment
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 TEST_ONLY = {"pytest", "pytest-asyncio", "pytest-timeout", "ruff", "iniconfig", "pluggy"}
-E5_REVISION = "614241f622f53c4eeff9890bdc4f31cfecc418b3"
-E5_FILES = {
-    "onnx/model.onnx": "ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665",
-    "tokenizer.json": "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39",
-    "README.md": "0038de97aee16258cecbad7ffda4b4febd6953e747a00e0ddbc8e6ed241e9c1c",
+EMBEDDING_REVISION = "ac5d898c8d382b17167c33e5c8af644a3519b47d"
+EMBEDDING_FILES = {
+    "onnx/model.onnx": None,
+    "onnx/model.onnx_data": None,  # Known SHA-256 prefix: 7eeca7c5e63a9047
+    "tokenizer.json": None,
+    "README.md": None,
+    "LICENSE": None,
 }
 APP_FILES = (
     "characters/amadeus_sg.json", "characters/amadeus_beta.json",
@@ -76,29 +78,31 @@ def build_environment(work: Path, venv: Path, base_python: Path) -> dict[str, st
     return env
 
 
-def stage_e5(source: Path, cache: Path) -> list[dict]:
+def stage_embedding(source: Path, cache: Path) -> list[dict]:
     """Copy only pinned model files; verify the source and each staged copy."""
-    model = cache / "models--intfloat--multilingual-e5-small"
-    snapshot = model / "snapshots" / E5_REVISION
+    model = cache / "models--jinaai--jina-embeddings-v5-text-nano-retrieval"
+    snapshot = model / "snapshots" / EMBEDDING_REVISION
     snapshot.mkdir(parents=True, exist_ok=True)
     model_files = []
-    for relative, expected in E5_FILES.items():
+    for relative, expected in EMBEDDING_FILES.items():
+        if expected is None:
+            raise RuntimeError(f"embedding SHA-256 not yet verified: {relative}; complete EMBEDDING_FILES before packaging")
         origin = source / relative
         target = snapshot / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         if not origin.is_file():
-            raise FileNotFoundError(f"missing E5 file: {relative}")
+            raise FileNotFoundError(f"missing embedding file: {relative}")
         if sha256(origin) != expected:
-            raise RuntimeError(f"E5 source hash mismatch: {relative}")
+            raise RuntimeError(f"embedding source hash mismatch: {relative}")
         if not target.is_file() or sha256(target) != expected:
             shutil.copyfile(origin, target)
         if sha256(target) != expected:
-            raise RuntimeError(f"E5 copy mismatch: {relative}")
+            raise RuntimeError(f"embedding copy mismatch: {relative}")
         model_files.append({"path": relative, "sha256": expected, "bytes": target.stat().st_size})
     (model / "refs").mkdir(exist_ok=True)
     reference = model / "refs/main"
-    if not reference.is_file() or reference.read_text(encoding="utf-8") != E5_REVISION:
-        reference.write_text(E5_REVISION, encoding="utf-8")
+    if not reference.is_file() or reference.read_text(encoding="utf-8") != EMBEDDING_REVISION:
+        reference.write_text(EMBEDDING_REVISION, encoding="utf-8")
     return model_files
 
 
@@ -107,7 +111,7 @@ def main() -> int:
     parser.add_argument("--python", type=Path, default=Path(sys.executable), help="CPython 3.11 x64 used to create the venv")
     parser.add_argument("--work-dir", type=Path, required=True, help="venv, cache, temp, logs and build output")
     parser.add_argument("--venv", type=Path, help="defaults to WORK_DIR/venv")
-    parser.add_argument("--e5-source", type=Path, required=True, help=f"read-only E5 snapshot {E5_REVISION}")
+    parser.add_argument("--embedding-source", type=Path, required=True, help=f"read-only embedding snapshot {EMBEDDING_REVISION}")
     parser.add_argument("--vc-redist", type=Path, required=True, help="Build Tools Redist/MSVC/<version>/x64 directory")
     parser.add_argument("--output", type=Path, default=REPO / "desktop/src-tauri/resources/backend")
     parser.add_argument("--prepare-only", action="store_true", help="install dependencies without freezing")
@@ -127,14 +131,16 @@ def main() -> int:
         parser.error("--output already exists; preserve it and choose a fresh directory")
     if output.is_relative_to(work) or work.is_relative_to(output):
         parser.error("--output and --work-dir must not contain each other")
-    source = args.e5_source.resolve(strict=True)
-    if source.name != E5_REVISION:
-        parser.error(f"--e5-source must be the pinned snapshot directory {E5_REVISION}")
-    for relative, expected in E5_FILES.items():
+    source = args.embedding_source.resolve(strict=True)
+    if source.name != EMBEDDING_REVISION:
+        parser.error(f"--embedding-source must be the pinned snapshot directory {EMBEDDING_REVISION}")
+    for relative, expected in EMBEDDING_FILES.items():
+        if expected is None:
+            raise RuntimeError(f"embedding SHA-256 not yet verified: {relative}; complete EMBEDDING_FILES before packaging")
         if not (source / relative).is_file():
-            parser.error(f"missing E5 file: {relative}")
+            parser.error(f"missing embedding file: {relative}")
         if sha256(source / relative) != expected:
-            raise RuntimeError(f"E5 source hash mismatch: {relative}")
+            raise RuntimeError(f"embedding source hash mismatch: {relative}")
     work.mkdir(parents=True, exist_ok=True)
     for name in ("tmp", "pip-cache", "pyinstaller-cache", "logs"):
         (work / name).mkdir(exist_ok=True)
@@ -159,13 +165,13 @@ def main() -> int:
         print(f"Prepared build venv: {python}", flush=True)
         return 0
     cache = work / "model-stage/hf_cache"
-    model_files = stage_e5(source, cache)
+    model_files = stage_embedding(source, cache)
     config = {
         "repo": str(REPO), "work": str(work), "packaging": str(HERE),
         "hf_cache": str(cache), "app_files": APP_FILES,
         "build_path": env["PATH"], "venv": str(venv), "base_python": str(base_python),
         "vc_redist": redist["path"],
-        "model": {"id": "intfloat/multilingual-e5-small", "revision": E5_REVISION, "files": model_files},
+        "model": {"id": "jinaai/jina-embeddings-v5-text-nano-retrieval", "revision": EMBEDDING_REVISION, "files": model_files},
         "inputs": {p.relative_to(REPO).as_posix(): sha256(p) for p in (
             REPO / "backend/requirements.txt", REPO / "backend/requirements-dev.lock",
             HERE / "requirements-build.txt", HERE / "backend.spec", *sorted(HERE.glob("*.py")),

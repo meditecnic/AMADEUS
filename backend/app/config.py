@@ -33,8 +33,8 @@ PROMPTS_DIR = backend_dir / "prompts"
 CHARACTERS_DIR = backend_dir / "characters"
 
 # Memory and prompt compiler invariants
-EMBEDDING_MODEL = os.getenv("AMADEUS_EMBEDDING_MODEL", "intfloat/multilingual-e5-small")
-EMBEDDING_DIMENSION = int(os.getenv("AMADEUS_EMBEDDING_DIMENSION", "384"))
+EMBEDDING_MODEL = "jinaai/jina-embeddings-v5-text-nano-retrieval"
+EMBEDDING_DIMENSION = 768
 PROMPT_INPUT_BUDGET = int(os.getenv("AMADEUS_PROMPT_INPUT_BUDGET", "12000"))
 PROMPT_OUTPUT_RESERVE = int(os.getenv("AMADEUS_PROMPT_OUTPUT_RESERVE", "2000"))
 

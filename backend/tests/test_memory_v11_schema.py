@@ -221,7 +221,7 @@ def _seed_v10_memory_db(path: Path, *, session_id: str = "seed-v10") -> set[str]
 
 @pytest.mark.asyncio
 async def test_s0_v11_tables_on_both_worldlines(isolated_store):
-    assert db_module.SCHEMA_VERSION == 11
+    assert db_module.SCHEMA_VERSION == 12
     for worldline in ("steins_gate", "beta"):
         connection = _open_memory(worldline)
         try:
@@ -234,7 +234,7 @@ async def test_s0_v11_tables_on_both_worldlines(isolated_store):
 
 @pytest.mark.asyncio
 async def test_s0_ingest_jobs_unique_five_columns_via_pragma(isolated_store):
-    assert db_module.SCHEMA_VERSION == 11
+    assert db_module.SCHEMA_VERSION == 12
     connection = _open_memory("steins_gate")
     try:
         unique_sets = _unique_index_column_sets(connection, "memory_ingest_jobs")
@@ -254,7 +254,7 @@ async def test_s0_ingest_jobs_unique_five_columns_via_pragma(isolated_store):
 @pytest.mark.asyncio
 async def test_s0_stable_fact_versions_fk_and_check_ddl(isolated_store):
     """DDL-level FK/CHECK for stable facts and versions."""
-    assert db_module.SCHEMA_VERSION == 11
+    assert db_module.SCHEMA_VERSION == 12
     connection = _open_memory("steins_gate")
     try:
         fks = _foreign_keys(connection, "stable_fact_versions")
@@ -286,7 +286,7 @@ async def test_s0_active_version_rejects_mismatch_and_dual_open(isolated_store):
 
     Empty-DB validate() alone does not prove the invariant.
     """
-    assert db_module.SCHEMA_VERSION == 11
+    assert db_module.SCHEMA_VERSION == 12
     contracts = importlib.import_module("app.services.memory_v11.contracts")
     repo = importlib.import_module("app.services.memory_v11.repository")
     error_type = getattr(contracts, "MemoryValidationError", None) or getattr(
@@ -400,7 +400,7 @@ def _insert_topic(
 @pytest.mark.asyncio
 async def test_s1_topic_same_scope_attach_succeeds(isolated_store):
     """Same (session_id, identity_mode) topic may attach to a new stable fact."""
-    assert db_module.SCHEMA_VERSION == 11
+    assert db_module.SCHEMA_VERSION == 12
     repo = importlib.import_module("app.services.memory_v11.repository")
     connection = _open_memory("steins_gate")
     try:
@@ -429,7 +429,7 @@ async def test_s1_topic_same_scope_attach_succeeds(isolated_store):
 @pytest.mark.asyncio
 async def test_s1_topic_cross_session_rejected_repo_and_sql_no_residue(isolated_store):
     """Cross-session topic attach fails at repository and direct SQL; zero fact/version rows."""
-    assert db_module.SCHEMA_VERSION == 11
+    assert db_module.SCHEMA_VERSION == 12
     contracts = importlib.import_module("app.services.memory_v11.contracts")
     repo = importlib.import_module("app.services.memory_v11.repository")
     connection = _open_memory("steins_gate")
@@ -497,7 +497,7 @@ async def test_s1_topic_cross_session_rejected_repo_and_sql_no_residue(isolated_
 @pytest.mark.asyncio
 async def test_s1_topic_cross_identity_rejected_repo_and_sql_no_residue(isolated_store):
     """Cross-identity (self vs okabe) topic attach fails; no residual fact/version."""
-    assert db_module.SCHEMA_VERSION == 11
+    assert db_module.SCHEMA_VERSION == 12
     contracts = importlib.import_module("app.services.memory_v11.contracts")
     repo = importlib.import_module("app.services.memory_v11.repository")
     connection = _open_memory("steins_gate")
@@ -559,7 +559,7 @@ async def test_s1_topic_cross_identity_rejected_repo_and_sql_no_residue(isolated
 @pytest.mark.asyncio
 async def test_s1_empty_session_id_rejected_zero_write(isolated_store):
     """Empty session_id fails closed with stable code and no fact/version rows."""
-    assert db_module.SCHEMA_VERSION == 11
+    assert db_module.SCHEMA_VERSION == 12
     contracts = importlib.import_module("app.services.memory_v11.contracts")
     repo = importlib.import_module("app.services.memory_v11.repository")
     connection = _open_memory("steins_gate")
@@ -595,7 +595,7 @@ async def test_s1_empty_session_id_rejected_zero_write(isolated_store):
 @pytest.mark.asyncio
 async def test_s1_topic_alias_composite_fk_rejects_cross_scope(isolated_store):
     """memory_topic_aliases composite FK blocks alias rows for another session/identity."""
-    assert db_module.SCHEMA_VERSION == 11
+    assert db_module.SCHEMA_VERSION == 12
     connection = _open_memory("steins_gate")
     try:
         _insert_topic(
@@ -634,7 +634,7 @@ async def test_s1_topic_alias_composite_fk_rejects_cross_scope(isolated_store):
 
 @pytest.mark.asyncio
 async def test_s0_observation_sources_fk_and_identity_check(isolated_store):
-    assert db_module.SCHEMA_VERSION == 11
+    assert db_module.SCHEMA_VERSION == 12
     connection = _open_memory("steins_gate")
     try:
         fks = _foreign_keys(connection, "memory_observation_sources")
@@ -655,7 +655,7 @@ async def test_s0_observation_sources_fk_and_identity_check(isolated_store):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("table", ["memory_tombstones", "memory_deleted_sources"])
 async def test_s0_tombstones_forbid_content_columns(isolated_store, table):
-    assert db_module.SCHEMA_VERSION == 11
+    assert db_module.SCHEMA_VERSION == 12
     connection = _open_memory("steins_gate")
     try:
         cols = {
@@ -692,7 +692,7 @@ async def test_s0_v10_to_v11_migration_preserves_legacy_core_and_adds_tables(
         finally:
             conn.close()
 
-    assert db_module.SCHEMA_VERSION == 11, "S1 must set SCHEMA_VERSION=11 before migration runs"
+    assert db_module.SCHEMA_VERSION == 12, "S1 must set SCHEMA_VERSION=11 before migration runs"
     await init_db()
 
     for worldline in ("steins_gate", "beta"):
@@ -701,7 +701,7 @@ async def test_s0_v10_to_v11_migration_preserves_legacy_core_and_adds_tables(
             version = connection.execute(
                 "SELECT value FROM schema_meta WHERE key='schema_version'"
             ).fetchone()[0]
-            assert version == "11", f"{worldline} still at schema {version}"
+            assert version == "12", f"{worldline} still at schema {version}"
             legacy = connection.execute(
                 "SELECT COUNT(*) FROM core_facts WHERE session_id=?",
                 (f"seed-{worldline}",),
@@ -726,7 +726,7 @@ async def test_s0_migration_injected_failure_leaves_no_v11_debris(
     target = Path(db_module._resolve_path("steins_gate", "memory"))
     tables_before = _seed_v10_memory_db(target)
 
-    assert db_module.SCHEMA_VERSION == 11
+    assert db_module.SCHEMA_VERSION == 12
 
     migrate_fn_names = ("_migrate_v10_to_v11", "migrate_memory_v10_to_v11")
     original = None
@@ -780,7 +780,7 @@ async def test_s0_migration_rerun_is_idempotent(tmp_path, monkeypatch):
 
     target = Path(db_module._resolve_path("steins_gate", "memory"))
     _seed_v10_memory_db(target, session_id="idem-seed")
-    assert db_module.SCHEMA_VERSION == 11
+    assert db_module.SCHEMA_VERSION == 12
 
     await init_db()
     connection = _open_memory("steins_gate")
@@ -806,7 +806,7 @@ async def test_s0_migration_rerun_is_idempotent(tmp_path, monkeypatch):
     finally:
         connection.close()
 
-    assert version == "11"
+    assert version == "12"
     assert tables_first == tables_second
     assert core_first == core_second == 1
 
@@ -827,7 +827,7 @@ async def test_s0_dual_worldline_sequential_migration(tmp_path, monkeypatch):
         finally:
             conn.close()
 
-    assert db_module.SCHEMA_VERSION == 11
+    assert db_module.SCHEMA_VERSION == 12
     await init_db()
 
     for worldline in ("steins_gate", "beta"):
@@ -836,7 +836,7 @@ async def test_s0_dual_worldline_sequential_migration(tmp_path, monkeypatch):
             version = connection.execute(
                 "SELECT value FROM schema_meta WHERE key='schema_version'"
             ).fetchone()[0]
-            assert version == "11"
+            assert version == "12"
             count = connection.execute(
                 "SELECT COUNT(*) FROM core_facts WHERE session_id=?",
                 (f"dual-{worldline}",),
@@ -1156,7 +1156,7 @@ async def test_r4_v11_additive_upgrade_on_existing_v11_db(tmp_path, monkeypatch)
         version = connection.execute(
             "SELECT value FROM schema_meta WHERE key='schema_version'"
         ).fetchone()[0]
-        assert version == "11"
+        assert version == "12"
         count = connection.execute(
             "SELECT COUNT(*) FROM stable_facts WHERE session_id='v11-legacy'"
         ).fetchone()[0]
@@ -1177,7 +1177,7 @@ async def test_r4_v11_additive_upgrade_on_existing_v11_db(tmp_path, monkeypatch)
         version = connection.execute(
             "SELECT value FROM schema_meta WHERE key='schema_version'"
         ).fetchone()[0]
-        assert version == "11"
+        assert version == "12"
         count = connection.execute(
             "SELECT COUNT(*) FROM stable_facts WHERE session_id='v11-legacy'"
         ).fetchone()[0]
@@ -1350,7 +1350,7 @@ async def test_s0f1_receipts_additive_upgrade_on_existing_v11_db(tmp_path, monke
         version = connection.execute(
             "SELECT value FROM schema_meta WHERE key='schema_version'"
         ).fetchone()[0]
-        assert version == "11", "additive receipt table must not bump the version"
+        assert version == "12", "receipt setup preserves the current schema version"
         count = connection.execute(
             "SELECT COUNT(*) FROM stable_facts WHERE session_id='v11-no-receipts'"
         ).fetchone()[0]
@@ -1367,7 +1367,7 @@ async def test_s0f1_receipts_additive_upgrade_on_existing_v11_db(tmp_path, monke
         version = connection.execute(
             "SELECT value FROM schema_meta WHERE key='schema_version'"
         ).fetchone()[0]
-        assert version == "11"
+        assert version == "12"
     finally:
         connection.close()
 
@@ -1393,6 +1393,6 @@ async def test_v113_deleted_sources_additive_old_db_upgrade(isolated_store):
     connection = _open_memory("steins_gate")
     try:
         assert connection.execute("SELECT count(*) FROM memory_deleted_sources").fetchone()[0] == 1
-        assert connection.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()[0] == '11'
+        assert connection.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()[0] == '12'
     finally:
         connection.close()

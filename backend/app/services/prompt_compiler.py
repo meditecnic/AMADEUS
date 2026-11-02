@@ -812,7 +812,7 @@ async def _select_v11_memory_supplement(
     Reuses recall_stable_facts (same scope/lifecycle/revalidation), excludes
     resident facts, and admits only facts sharing >= 2 distinct bigrams with
     the message. Bigram-only (dispatch 64): prompt compilation never uses
-    E5, even when it is already loaded. It never reads
+    embedding model, even when it is already loaded. It never reads
     memory_service.embedder, never calls readiness() and never calls
     encode_query, so the prompt does not depend on whether a background job
     has loaded the model. Any failure omits the block with a warning that

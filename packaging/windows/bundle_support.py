@@ -237,9 +237,12 @@ def finalize(config: dict) -> None:
     # A model card preserves the bundled model's license and pinned source information.
     model_notice = {
         **config["model"],
-        "source": "https://huggingface.co/intfloat/multilingual-e5-small/tree/" + config["model"]["revision"],
+        "license": "CC-BY-NC-4.0",
+        "license_url": "https://creativecommons.org/licenses/by-nc/4.0/",
+        "attribution": "Jina AI, jina-embeddings-v5-text-nano-retrieval; model files redistributed unmodified.",
+        "source": "https://huggingface.co/jinaai/jina-embeddings-v5-text-nano-retrieval/tree/" + config["model"]["revision"],
     }
-    write_json(dist / "THIRD_PARTY_LICENSES/e5-model.json", model_notice)
+    write_json(dist / "THIRD_PARTY_LICENSES/embedding-model.json", model_notice)
     files = [(path.relative_to(dist).as_posix(), path.stat().st_size)
              for path in dist.rglob("*") if path.is_file()]
     directories = defaultdict(int)
@@ -265,7 +268,7 @@ def finalize(config: dict) -> None:
         "vc_runtime": json.loads((work / "vc-runtime-audit.json").read_text(encoding="utf-8")),
         "sherpa_imports": json.loads((work / "sherpa-imports.json").read_text(encoding="utf-8")),
         "total_bytes": sum(size for _, size in files),
-        "e5_bytes": sum(size for relative, size in files if relative.startswith("_internal/hf_cache/")),
+        "embedding_bytes": sum(size for relative, size in files if relative.startswith("_internal/hf_cache/")),
         "largest_20_files": sorted(files, key=lambda item: (-item[1], item[0]))[:20],
         "largest_20_directories": sorted(directories.items(), key=lambda item: (-item[1], item[0]))[:20],
         "deduplicated_bytes": sum(item["bytes"] for item in dedupe), "dll_deduplication": dedupe,

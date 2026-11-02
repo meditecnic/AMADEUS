@@ -1,4 +1,4 @@
-"""Live migration integration tests use isolated SQLite and the fake E5 fixture."""
+"""Live migration integration tests use isolated SQLite and the fake embedding fixture."""
 from __future__ import annotations
 
 import hashlib

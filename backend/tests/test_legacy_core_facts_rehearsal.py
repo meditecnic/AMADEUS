@@ -529,11 +529,11 @@ def use_data_dir(monkeypatch):
 
 
 class _StubEmbedder:
-    model_name = "intfloat/multilingual-e5-small"
-    dimensions = 384
+    model_name = "jinaai/jina-embeddings-v5-text-nano-retrieval"
+    dimensions = 768
 
     async def encode_passage(self, text: str) -> list[float]:
-        return [0.0] * 384
+        return [0.0] * 768
 
 
 async def test_deleted_and_revised_facts_are_not_revived(tmp_path, use_data_dir):

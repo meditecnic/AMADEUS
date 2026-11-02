@@ -210,14 +210,14 @@ def _openai_adapter(capture: _CaptureTransport) -> OpenAICompatibleAdapter:
 
 
 class _StubEmbedder:
-    model_name = "test-deterministic-384"
-    dimensions = 384
+    model_name = "test-deterministic-768"
+    dimensions = 768
 
     async def encode_passage(self, _text: str):
-        return [0.0] * 384
+        return [0.0] * 768
 
     async def encode_query(self, _text: str):
-        return [0.0] * 384
+        return [0.0] * 768
 
 
 def _call(name: str, arguments) -> dict:
