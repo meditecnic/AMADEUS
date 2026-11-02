@@ -5,7 +5,6 @@ import { motion } from 'motion/react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { ArchiveView } from './ArchiveView';
-import { LegacyFactsView } from './LegacyFactsView';
 import { fetchMemoryStatus } from './archiveApi';
 import { createArchiveModule, type ArchiveModule } from './archiveState';
 import { MemoryResultOutline } from './MemoryResultOutline';
@@ -77,7 +76,6 @@ export type MemorySpaceProps = {
 export type MemorySpaceMode = 'constellation' | 'archive';
 
 type JobSummary = {
-  runtime_mode?: 'legacy' | 'shadow' | 'v11';
   // The v11 status payload echoes the exact scope as top-level fields; the
   // direct /api/memory/status read is fail-closed against this echo.
   session_id?: string;
@@ -170,7 +168,6 @@ export function MemorySpace({
   const [previousTruth, setPreviousTruth] = useState<typeof projection>(null);
   const [jobs, setJobs] = useState<JobSummary | null>(null);
   const [runtimeRead, setRuntimeRead] = useState<{ scopeKey: string; status: 'loading' | 'ready' | 'failed' } | null>(null);
-  const [runtimeRetry, setRuntimeRetry] = useState(0);
   const [topics, setTopics] = useState<TopicOption[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [soulOpen, setSoulOpen] = useState(false);
@@ -384,21 +381,18 @@ export function MemorySpace({
     [selected, liveProjection],
   );
   const scopeKey = `${browseSessionId}|${worldline}|${identityMode}`;
-  const runtimeState = runtimeRead?.scopeKey === scopeKey ? runtimeRead.status : 'loading';
-  const legacyFacts = runtimeState !== 'ready' || jobs?.runtime_mode !== 'v11';
   useEffect(() => {
     const controller = new AbortController();
     setJobs(null);
     setRuntimeRead({ scopeKey, status: 'loading' });
     void fetchMemoryStatus(scope, { signal: controller.signal }).then((result) => {
       if (controller.signal.aborted) return;
-      if (result.type !== 'ok' || !result.payload.runtimeMode) {
+      if (result.type !== 'ok') {
         setRuntimeRead({ scopeKey, status: 'failed' });
         return;
       }
       const parsed = result.payload;
       setJobs({
-        runtime_mode: parsed.runtimeMode,
         session_id: scope.sessionId,
         worldline: scope.worldline,
         identity_mode: scope.identityMode,
@@ -409,19 +403,17 @@ export function MemorySpace({
       setRuntimeRead({ scopeKey, status: 'ready' });
     });
     return () => controller.abort();
-  }, [scope, scopeKey, runtimeRetry]);
-  // Projection/filter changes refresh counts without changing the resolved runtime
-  // or unmounting Archive (including any unsaved editor state).
+  }, [scope, scopeKey]);
+  // Projection/filter changes refresh counts without unmounting Archive
+  // (including any unsaved editor state).
   useEffect(() => {
     if (runtimeRead?.scopeKey !== scopeKey || runtimeRead.status !== 'ready' || !jobs) return;
     const controller = new AbortController();
-    const runtimeMode = jobs.runtime_mode;
     void fetchMemoryStatus(scope, { signal: controller.signal }).then((result) => {
-      if (controller.signal.aborted || result.type !== 'ok' || result.payload.runtimeMode !== runtimeMode) return;
+      if (controller.signal.aborted || result.type !== 'ok') return;
       const parsed = result.payload;
       setJobs((current) => current?.session_id === scope.sessionId
-        && current.worldline === scope.worldline && current.identity_mode === scope.identityMode
-        && current.runtime_mode === runtimeMode ? {
+        && current.worldline === scope.worldline && current.identity_mode === scope.identityMode ? {
           ...current,
           pending_count: parsed.pendingCount,
           processing_count: parsed.processingCount,
@@ -429,7 +421,7 @@ export function MemorySpace({
         } : current);
     });
     return () => controller.abort();
-    // Runtime readiness is checked only when a projection/filter refresh is requested.
+    // Status readiness is checked only when a projection/filter refresh is requested.
   }, [criteria, projectionRefreshTick, scope, scopeKey]);
   useEffect(() => { setSoulOpen(false); }, [scopeKey, mode]);
 
@@ -439,13 +431,13 @@ export function MemorySpace({
   const scopeKeyRef = useRef(scopeKey);
   scopeKeyRef.current = scopeKey;
   useEffect(() => {
-    if (mode !== 'archive' || legacyFacts) return;
+    if (mode !== 'archive') return;
     if (archiveOpenedRef.current === scopeKey) return;
     // A pending draft defers the scope switch behind the explicit discard
     // confirmation; the module settles it via onScopeChangeSettled.
     if (!archiveModuleRef.current?.open(scope, { restore: true })) return;
     archiveOpenedRef.current = scopeKey;
-  }, [mode, scope, scopeKey, legacyFacts]);
+  }, [mode, scope, scopeKey]);
 
   const openArchiveForRecord = (kind: 'fact' | 'experience', recordId: string) => {
     archiveOpenedRef.current = scopeKey;
@@ -1155,10 +1147,6 @@ export function MemorySpace({
         ) : <span className="memory-space-find-slot" aria-hidden="true" />}
       </header>
 
-      {mode === 'constellation' && jobs?.runtime_mode && jobs.runtime_mode !== 'v11' ? (
-        <p className="memory-runtime-notice memory-runtime-notice-overview" role="status">当前对话尚未使用本页的记忆。星图暂供查看。</p>
-      ) : null}
-
       {mode === 'constellation' ? (
         <p className="memory-soul-lockup is-mirror" data-testid="soul-lockup">
           <span className="memory-soul-lockup-soul">{lockup[0]}</span>
@@ -1285,17 +1273,11 @@ export function MemorySpace({
         ) : null}
       </div>
 
-      {legacyFacts ? <LegacyFactsView key={scopeKey} scope={scope} archive={mode === 'archive'}
-        runtimeState={runtimeState} onRetryRuntime={() => setRuntimeRetry((value) => value + 1)}
-        visible={mode === 'archive' || showList} searchRef={searchRef}
-        onCloseFind={() => { setListOpen(false); findToggleRef.current?.focus(); }}
-        onIdentity={setIdentityMode} onWorldline={setWorldline} /> : null}
-
-      {mode === 'archive' && !legacyFacts && archiveModuleRef.current ? (
+      {mode === 'archive' && archiveModuleRef.current ? (
         <ArchiveView module={archiveModuleRef.current} scope={scope} width={width} reducedMotion={reducedMotion} />
       ) : null}
 
-      {findMounted && !legacyFacts ? (
+      {findMounted ? (
         <motion.aside initial={reducedMotion ? false : { opacity: 0, x: -18 }} animate={{ opacity: 1, x: 0 }} transition={{ type: 'spring', stiffness: 270, damping: 29 }}
           id="memory-space-find"
           className="memory-space-find"

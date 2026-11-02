@@ -234,15 +234,6 @@ async def test_s0_process_job_one_llm_call_via_fake_provider(isolated_store):
     assert state == "completed", f"expected job completed, got {state!r}"
 
 
-def test_memory_mode_defaults_to_legacy_until_cutover(monkeypatch):
-    from app.services.memory_v11.jobs import memory_mode
-    monkeypatch.delenv('AMADEUS_MEMORY_MODE', raising=False)
-    assert memory_mode() == 'legacy'
-    for mode in ('shadow', 'v11'):
-        monkeypatch.setenv('AMADEUS_MEMORY_MODE', mode)
-        assert memory_mode() == mode
-
-
 @pytest.mark.asyncio
 async def test_s2_stale_worker_cannot_complete_foreign_lease(isolated_store):
     """P1: worker-B must not process/complete a job held by worker-A."""

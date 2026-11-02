@@ -54,7 +54,6 @@ from test_memory_v11_chat_entry import (
     _install_fake_provider,
     _make_session,
     _prepare_conversation,
-    _record_legacy_extraction,
     _run_turn,
     _suppress_auto_title,
 )
@@ -316,7 +315,6 @@ def _completion_payload(source_message_id: int, marker: str) -> dict:
 def _bind_candidate(monkeypatch, candidate: Path, embedder: _OfflineEmbedder) -> None:
     monkeypatch.delenv("AMADEUS_DB_PATH", raising=False)
     monkeypatch.setenv("AMADEUS_DATA_DIR", str(candidate))
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     reset_initialization_cache()
     monkeypatch.setattr(memory_service, "embedder", embedder)
     monkeypatch.setattr(
@@ -581,12 +579,10 @@ async def candidate_runtime(tmp_path, monkeypatch):
     capture = _ProviderCapture(reply=REPLY_JA)
     _install_recall_provider(monkeypatch, capture)
     _suppress_auto_title(monkeypatch)
-    legacy_calls = _record_legacy_extraction(monkeypatch)
     yield {
         "candidate": candidate,
         "capture": capture,
         "embedder": embedder,
-        "legacy_calls": legacy_calls,
         "receipts_before": _receipt_count(candidate),
     }
     reset_initialization_cache()
@@ -657,7 +653,6 @@ async def test_candidate_new_message_reaches_api_and_next_chat(candidate_runtime
     assert IMPORTED_FACT in imported_block
     for forbidden in (OKABE_SENTINEL, OWNER_B_SENTINEL, BETA_SENTINEL):
         assert forbidden not in json.dumps(capture.last_call["messages"], ensure_ascii=False)
-    assert candidate_runtime["legacy_calls"] == []
 
     sesame_text = f"我长期喜欢黑芝麻汤圆，这是稳定偏好。标记 {SESAME_MARKER}。"
     delete_text = f"另外我还长期收集胶片相机。标记 {DELETE_MARKER}。"

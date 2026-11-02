@@ -36,44 +36,10 @@ def _session_obj(session_id: str, *, identity_mode: str = "self") -> SimpleNames
 
 
 @pytest.mark.asyncio
-async def test_s3a_shadow_mode_does_not_inject_v11_facts(isolated_store, monkeypatch):
-    """P01: shadow writes stay off the prompt; retrieval remains legacy."""
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "shadow")
-    session_id = f"prompt-shadow-{uuid4()}"
-    secret_marker = f"V11_ONLY_SHADOW_{uuid4().hex[:8]}"
-    await create_stable_fact(
-        session_id=session_id,
-        worldline="steins_gate",
-        identity_mode="self",
-        display_text=secret_marker,
-        semantic_json={"subject": "user", "relation": "marker", "object": "shadow"},
-    )
-    prompt = await compile_for_session(_session_obj(session_id), "你好")
-    assert secret_marker not in prompt
-
-
-@pytest.mark.asyncio
-async def test_s3a_legacy_mode_does_not_inject_v11_facts(isolated_store, monkeypatch):
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "legacy")
-    session_id = f"prompt-legacy-{uuid4()}"
-    marker = f"V11_ONLY_LEGACY_{uuid4().hex[:8]}"
-    await create_stable_fact(
-        session_id=session_id,
-        worldline="steins_gate",
-        identity_mode="self",
-        display_text=marker,
-        semantic_json={"subject": "user", "relation": "marker", "object": "legacy"},
-    )
-    prompt = await compile_for_session(_session_obj(session_id), "你好")
-    assert marker not in prompt
-
-
-@pytest.mark.asyncio
 async def test_s3a_v11_mode_injects_same_scope_active_facts_only(
     isolated_store, monkeypatch
 ):
     """P02: v11 mode injects only active same-scope stable facts."""
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     session_id = f"prompt-v11-{uuid4()}"
     self_marker = f"SELF_ANIME_{uuid4().hex[:8]}"
     okabe_marker = f"OKABE_FRUIT_{uuid4().hex[:8]}"
@@ -128,7 +94,6 @@ async def test_r1_irrelevant_facts_must_not_flood_prompt(isolated_store, monkeyp
     facts; facts left out of it may only return through the supplement,
     whose bigram admission gate rejects an unrelated message.
     """
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     session_id = f"r1-noise-{uuid4()}"
     markers = []
     for i in range(40):
@@ -161,7 +126,6 @@ async def test_r1_budget_selects_whole_facts_not_char_slices(
     budget must drop whole facts; a char slice leaves truncated fragments in
     the prompt. Red while PromptCompiler._fit truncates mid-fact.
     """
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     session_id = f"r1-budget-{uuid4()}"
     texts = []
     for i in range(30):
@@ -201,7 +165,6 @@ async def test_r2_semantic_fingerprint_dedupe_before_injection(
     likes_anime / like_anime drift) must inject at most one card. Red while
     the prompt surface injects every active row without fingerprint dedupe.
     """
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     session_id = f"r2-fp-{uuid4()}"
     marker_a = f"KONO_A_{uuid4().hex[:8]}"
     marker_b = f"KONO_B_{uuid4().hex[:8]}"
@@ -318,11 +281,6 @@ async def _seed_prompt_experience(
         await db.close()
 
 
-def _compile_with_mode(session_id: str, message: str, mode: str, monkeypatch) -> str:
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", mode)
-    return compile_for_session(_session_obj(session_id), message)
-
-
 @pytest.mark.asyncio
 async def test_r5_v11_prompt_injects_both_sections(isolated_store, monkeypatch):
     """H: v11 prompt shows stable fact + experience in separate sections."""
@@ -340,7 +298,6 @@ async def test_r5_v11_prompt_injects_both_sections(isolated_store, monkeypatch):
         session_id=session_id,
         display_text=f"{exp_marker} このすばのイベントに行った",
     )
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     prompt = await compile_for_session(_session_obj(session_id), "このすば")
     assert fact_marker in prompt
     assert exp_marker in prompt
@@ -379,26 +336,9 @@ async def test_r5_v11_no_legacy_episodic_leak(isolated_store, monkeypatch):
         session_id=session_id,
         display_text=f"{v11_marker} このすばのイベントに行った",
     )
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     prompt = await compile_for_session(_session_obj(session_id), "このすば")
     assert legacy_marker not in prompt
     assert v11_marker in prompt
-
-
-@pytest.mark.asyncio
-async def test_r5_shadow_and_legacy_gates_no_v11_experience_leak(
-    isolated_store, monkeypatch
-):
-    """J: shadow/legacy modes never inject v11 experiences."""
-    session_id = f"r5-gate-{uuid4()}"
-    v11_marker = f"V11_ONLY_{uuid4().hex[:8]}"
-    await _seed_prompt_experience(
-        session_id=session_id,
-        display_text=f"{v11_marker} このすばのイベントに行った",
-    )
-    for mode in ("shadow", "legacy"):
-        prompt = await _compile_with_mode(session_id, "このすば", mode, monkeypatch)
-        assert v11_marker not in prompt, f"{mode} must not leak v11 experiences"
 
 
 @pytest.mark.asyncio
@@ -425,7 +365,6 @@ async def test_r5_experience_retrieval_failure_fail_soft(isolated_store, monkeyp
         raise RuntimeError("forced experience selector failure")
 
     monkeypatch.setattr(retrieval_module, "select_experience_candidates", boom)
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     prompt = await compile_for_session(_session_obj(session_id), "このすば")
     assert fact_marker in prompt, "resident facts survive an experience failure"
     assert exp_marker not in prompt, "failed experience retrieval must omit experiences"
@@ -440,7 +379,6 @@ async def test_r5_final_prompt_experience_whole_item_under_global_pressure(
     from app.services import prompt_compiler as pc_module
 
     session_id = f"r5-final-exp-{uuid4()}"
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     seeded = []
     for i in range(15):
         marker = f"EXP_END_{i:02d}"
@@ -479,7 +417,6 @@ async def test_r5_final_prompt_core_facts_whole_item_under_global_pressure(
     from app.services import prompt_compiler as pc_module
 
     session_id = f"r5-final-fact-{uuid4()}"
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     seeded = []
     for i in range(12):
         marker = f"FACT_END_{i:02d}"
@@ -522,7 +459,6 @@ async def test_r5_final_prompt_core_facts_whole_item_under_global_pressure(
 @pytest.mark.asyncio
 async def test_s3e3_working_context_consumer_authority(isolated_store, monkeypatch):
     """WORKING CONTEXT carries a temporary/non-authoritative boundary."""
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     session_id = f"s3e3-wc-{uuid4()}"
     session = _session_obj(session_id)
     session.memory_summary = "比較中、候補Bの確認待ち"
@@ -539,7 +475,6 @@ async def test_s3e3_working_context_consumer_authority(isolated_store, monkeypat
 async def test_s3e3_working_context_empty_still_renders_boundary(
     isolated_store, monkeypatch
 ):
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     session_id = f"s3e3-wc-empty-{uuid4()}"
     session = _session_obj(session_id)
     prompt = await compile_for_session(session, "こんにちは")

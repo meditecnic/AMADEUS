@@ -75,7 +75,7 @@ def update_children(root_pid: int, tracked: set[int]) -> None:
     tracked.update(ancestors - {root_pid})
 
 
-def clean_environment(root: Path, provider_port: int, memory_mode: str = "default") -> dict[str, str]:
+def clean_environment(root: Path, provider_port: int) -> dict[str, str]:
     system = Path(os.environ["SystemRoot"])
     env = {key: value for key, value in os.environ.items()
            if key.upper() in {"SYSTEMROOT", "WINDIR", "COMSPEC", "SYSTEMDRIVE", "NUMBER_OF_PROCESSORS", "PROCESSOR_ARCHITECTURE"}}
@@ -92,8 +92,6 @@ def clean_environment(root: Path, provider_port: int, memory_mode: str = "defaul
         "AMADEUS_CUSTOM_PROVIDER_MODEL": "frozen-smoke",
         "SOVITS_URL": f"http://127.0.0.1:{provider_port}/unused-tts",
     })
-    if memory_mode == "v11":
-        env["AMADEUS_MEMORY_MODE"] = "v11"
     return env
 
 
@@ -346,9 +344,9 @@ def verify_unlocked(data: Path) -> list[str]:
     return [path.relative_to(data).as_posix() for path in databases]
 
 
-def run_case(exe: Path, root: Path, provider_port: int, mode: str, timeout: float, memory_mode: str) -> dict:
+def run_case(exe: Path, root: Path, provider_port: int, mode: str, timeout: float) -> dict:
     root.mkdir()
-    env = clean_environment(root, provider_port, memory_mode)
+    env = clean_environment(root, provider_port)
     token = secrets.token_urlsafe(32)
     env["AMADEUS_LOCAL_API_TOKEN"] = token
     parent = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"], creationflags=CREATE_NO_WINDOW)
@@ -400,8 +398,7 @@ def run_case(exe: Path, root: Path, provider_port: int, mode: str, timeout: floa
             raise AssertionError("local API token leaked into backend log")
         if "AMADEUS_BACKEND_READY" not in log_text or "Application shutdown complete" not in log_text:
             raise AssertionError("missing ready / graceful shutdown log")
-        result = {"mode": mode, "port": port, "memory_mode_env": env.get("AMADEUS_MEMORY_MODE"),
-                  "listeners": listeners, "healthy_seconds": round(healthy_seconds, 3),
+        result = {"mode": mode, "port": port, "listeners": listeners, "healthy_seconds": round(healthy_seconds, 3),
                   "exit_seconds": round(exit_seconds, 3), "exit_code": process.returncode,
                   "events": [event["type"] for event in events], "history_rows": len(history),
                   "unlocked_databases": databases, "residual_processes": remaining, "path": env["PATH"]}
@@ -424,9 +421,9 @@ def run_case(exe: Path, root: Path, provider_port: int, mode: str, timeout: floa
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW)
 
 
-def run_port_conflict(exe: Path, root: Path, provider_port: int, timeout: float, memory_mode: str) -> dict:
+def run_port_conflict(exe: Path, root: Path, provider_port: int, timeout: float) -> dict:
     root.mkdir()
-    env = clean_environment(root, provider_port, memory_mode)
+    env = clean_environment(root, provider_port)
     token = secrets.token_urlsafe(32)
     env["AMADEUS_LOCAL_API_TOKEN"] = token
     tracked: set[int] = set()
@@ -482,8 +479,6 @@ def main() -> int:
     parser.add_argument("--exe", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--startup-timeout", type=float, default=180)
-    parser.add_argument("--memory-mode", choices=("default", "v11"), default="default",
-                        help="default leaves AMADEUS_MEMORY_MODE unset")
     args = parser.parse_args()
     if os.name != "nt":
         parser.error("run on Windows")
@@ -491,13 +486,13 @@ def main() -> int:
     args.work_dir.mkdir(parents=True, exist_ok=True)
     root = Path(tempfile.mkdtemp(prefix="frozen-", dir=args.work_dir.resolve()))
     print(f"SMOKE_ROOT {root}", flush=True)
-    result = {"root": str(root), "exe": str(exe), "memory_mode": args.memory_mode, "ok": False}
+    result = {"root": str(root), "exe": str(exe), "ok": False}
     try:
         # The app probes 9880 at startup. Own it before launch to avoid any real TTS.
         with fake_service(root / "sidecar-sentinel.json", 9880, sentinel=True), fake_service(root / "provider.json") as (provider_port, requests):
             check_root = root / "self-check"
             check_root.mkdir()
-            env = clean_environment(check_root, provider_port, args.memory_mode)
+            env = clean_environment(check_root, provider_port)
             env["AMADEUS_LOCAL_API_TOKEN"] = secrets.token_urlsafe(32)
             with (check_root / "output.log").open("wb") as output:
                 checked = subprocess.run([str(exe), "--self-check"], cwd=check_root / "cwd", env=env,
@@ -507,10 +502,10 @@ def main() -> int:
             if checked.returncode != 0 or "SELF_CHECK " not in check_text:
                 raise AssertionError(f"self-check failed ({checked.returncode})")
             result["self_check_exit_code"] = checked.returncode
-            result["cases"] = [run_case(exe, root / mode, provider_port, mode, args.startup_timeout, args.memory_mode)
+            result["cases"] = [run_case(exe, root / mode, provider_port, mode, args.startup_timeout)
                                for mode in ("parent", "stdin")]
             result["cases"].append(run_port_conflict(exe, root / "port-conflict", provider_port,
-                                                     args.startup_timeout, args.memory_mode))
+                                                     args.startup_timeout))
             if not any(request.get("stream") for request in requests):
                 raise AssertionError("fake provider received no streamed chat")
             if any("tts" in request["path"] for request in requests):

@@ -20,7 +20,7 @@ from uuid import uuid4
 import pytest
 
 from app.db import get_db, init_db, reset_initialization_cache
-from app.services.memory import CoreFactCandidate, EmbeddingAdapter, memory_service
+from app.services.memory import EmbeddingAdapter, memory_service
 
 
 def _reconciler():
@@ -156,41 +156,6 @@ async def _apply_validated(
         candidate_allowlist=candidate_allowlist,
         reanalysis_allowlist=reanalysis_allowlist,
     )
-
-
-@pytest.mark.asyncio
-async def test_s0_legacy_key_drift_still_duplicates_today(isolated_store):
-    """Defect baseline (green on legacy): exact fact_key upsert still duplicates."""
-    owner = "v11-key-drift"
-    await memory_service.upsert_core_fact(
-        owner,
-        "steins_gate",
-        CoreFactCandidate(
-            fact_key="likes_anime",
-            fact_value="喜欢看动漫",
-            confidence=0.95,
-            importance=0.9,
-            source_message_ids=[4151],
-        ),
-        identity_mode="self",
-    )
-    await memory_service.upsert_core_fact(
-        owner,
-        "steins_gate",
-        CoreFactCandidate(
-            fact_key="like_anime",
-            fact_value="喜欢看动漫",
-            confidence=0.95,
-            importance=0.9,
-            source_message_ids=[4151],
-        ),
-        identity_mode="self",
-    )
-    facts = await memory_service.select_core_facts(
-        owner, "steins_gate", query="动漫", limit=24, identity_mode="self"
-    )
-    anime_rows = [f for f in facts if "喜欢看动漫" in f.content]
-    assert len(anime_rows) >= 2
 
 
 @pytest.mark.asyncio

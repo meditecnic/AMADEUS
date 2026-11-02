@@ -187,29 +187,3 @@ def test_offline_rehearsal_without_data_directory(child_environment, tmp_path):
     assert list(appdata.rglob("*")) == []
     assert result.returncode == 0, result.stdout + result.stderr
     assert json.loads(result.stdout)["ok"] is True
-
-
-def test_offline_runner_isolates_before_importing_checks(child_environment, tmp_path):
-    env, appdata = child_environment
-    # Stop at the first application-importing callback: no nested pytest or E5.
-    code = """
-import runpy
-import sys
-from pathlib import Path
-from types import SimpleNamespace
-namespace = runpy.run_path("scripts/memory_recall_offline_run.py")
-scope = namespace["main"].__globals__
-scope["SCRATCH"] = Path(sys.argv[1])
-scope["subprocess"].run = lambda *a, **kw: SimpleNamespace(returncode=0, stdout="", stderr="")
-def checks():
-    from app.db import get_data_root
-    root = get_data_root()
-    assert root.is_relative_to(Path(sys.argv[1]))
-    assert root.name == "data"
-    raise SystemExit(0)
-scope["_load_required_checks"] = checks
-namespace["main"]()
-"""
-    result = _run_python(["-c", code, str(tmp_path / "runner")], env)
-    assert result.returncode == 0, result.stderr
-    assert list(appdata.rglob("*")) == []

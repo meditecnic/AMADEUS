@@ -128,13 +128,11 @@ $env:AMADEUS_LOCAL_API_TOKEN = 'self-check-only'
 
 ```powershell
 & "$buildWork/venv/Scripts/python.exe" packaging/windows/smoke_frozen.py --exe desktop/src-tauri/resources/backend/amadeus-backend.exe --work-dir 'X:/build-artifacts/backend-smoke'
-& "$buildWork/venv/Scripts/python.exe" packaging/windows/smoke_frozen.py --exe desktop/src-tauri/resources/backend/amadeus-backend.exe --work-dir 'X:/build-artifacts/backend-smoke' --memory-mode v11
 ```
 
 验收自带 loopback 假 OpenAI 兼容服务，禁用 TTS，从后端 READY 行读取系统分配的端口；
 使用 Windows `GetExtendedTcpTable` 同时核对后端 PID 的 IPv4/IPv6 TCP 监听，
 要求只有 `127.0.0.1`。
-默认不传 `AMADEUS_MEMORY_MODE`，覆盖产品的 legacy 默认模式；另一轮显式启用 v11。
 检查 `/health`、WebSocket 的 auth → session.ready → chat.send → turn.completed、
 用户及助手历史落库。分别杀掉假父进程和关闭 stdin，要求后端 10 秒内正常退出，
 检查进程残留、SQLite 排他事务以及数据库文件重命名。

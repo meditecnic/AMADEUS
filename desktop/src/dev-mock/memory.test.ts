@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createMemoryStore, handleMemory, type MemorySeed } from './memory';
-import { fetchFactsPage, fetchLegacyFacts, fetchMemoryStatus, fetchTopics } from '../memory-space/archiveApi';
+import { fetchFactsPage, fetchMemoryStatus, fetchTopics } from '../memory-space/archiveApi';
 import { fetchDetails } from '../memory-space/readingDetails';
 import type { MemoryProjection } from '../memory-space/types';
 
@@ -31,7 +31,7 @@ describe('in-memory memory REST handler', () => {
   it('echoes exact scopes in frontend-compatible browse and status payloads', async () => {
     const { fetcher } = harness();
     expect(await fetchMemoryStatus(scope, { fetcher })).toEqual({
-      type: 'ok', payload: { runtimeMode: 'v11', pendingCount: 0, processingCount: 0, failedCount: 0, failedJobs: [] },
+      type: 'ok', payload: { pendingCount: 0, processingCount: 0, failedCount: 0, failedJobs: [] },
     });
     const facts = await fetchFactsPage(scope, { limit: 20, offset: 0 }, { fetcher });
     expect(facts).toMatchObject({ type: 'ok', payload: { total: 3, hasMore: false, rows: [
@@ -120,21 +120,15 @@ describe('in-memory memory REST handler', () => {
     expect(call('facts').body).toMatchObject({ pagination: { total: 2 } });
   });
 
-  it('provides empty browse, legacy groups, JSON actions and unknown route errors', async () => {
-    const { call, store, fetcher } = harness({ facts: [], topics: [] });
+  it('provides empty browse, JSON actions and unknown route errors', () => {
+    const { call, store } = harness({ facts: [], topics: [] });
     expect(call('experiences').body).toMatchObject({ experiences: [], pagination: { total: 0, has_more: false } });
     expect(call('observations').body).toMatchObject({ observations: [] });
     expect(call('topics').body).toMatchObject({ topics: [] });
     expect(call('graph/projection').body).toMatchObject({ empty: true, result_ids: [], nodes: [{ kind: 'continuity_hub' }] });
-    expect(call('facts', 'GET', {}, 'session_id=session+one&worldline=beta').body).toMatchObject({ local: [], shared: [], okabe: [] });
-    expect(await fetchLegacyFacts(scope, { fetcher })).toEqual({ type: 'ok', payload: [] });
     expect(call('observations/o/ignore', 'POST').body).toMatchObject({ ok: true });
     expect(call('jobs/j/retry', 'POST').body).toMatchObject({ ok: true });
     expect(call('unknown')).toMatchObject({ status: 404, body: { detail: { code: expect.any(String) } } });
     expect(handleMemory(new URL('http://mock/api/other'), 'GET', {}, store)).toBeUndefined();
-    const populated = harness();
-    expect(await fetchLegacyFacts(scope, { fetcher: populated.fetcher })).toMatchObject({
-      type: 'ok', payload: [{ text: 'Coffee at the lab' }, { text: 'Coffee at home' }, { text: 'Tea at the lab' }],
-    });
   });
 });

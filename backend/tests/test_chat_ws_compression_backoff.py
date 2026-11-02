@@ -240,7 +240,6 @@ def _install_fake_chat(monkeypatch) -> None:
 
     import app.services.memory_v11.jobs as jobs
 
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "shadow")
     monkeypatch.setattr(jobs, "enqueue_memory_job", no_enqueue)
     monkeypatch.setattr(type(conversation_service), "schedule_auto_title", no_auto_title)
     # Patch the classes, not the shared instances: undoing an instance patch

@@ -92,7 +92,6 @@ class _DeterministicEmbedder(EmbeddingAdapter):
 
 
 async def _compile_v11(session_id: str, user_message: str, monkeypatch) -> str:
-    monkeypatch.setenv("AMADEUS_MEMORY_MODE", "v11")
     return await compile_for_session(_session_obj(session_id), user_message)
 
 
