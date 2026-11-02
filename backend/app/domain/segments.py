@@ -674,6 +674,9 @@ class IncrementalJapaneseSegmenter:
                     self._pending_emotions[:0] = [short_emotion] * short_length
                     self._short_candidate = None
                 boundary = self._find_length_boundary(self._pending)
+                if prepare_tts_text(self._pending[:boundary].strip()).error is AudioErrorCode.TOO_SHORT:
+                    # Include the following source in this forced slice, within its cap.
+                    boundary = min(len(self._pending), MAX_SEGMENT_SOURCE_CODEPOINTS)
             if boundary is None:
                 break
             raw = self._pending[:boundary]
