@@ -1948,7 +1948,7 @@ async def processor_loop(
                     active_history,
                     refreshed,
                     extra_web or None,
-                    system_prompt=_request_system_prompt(session, active_history, None, 0),
+                    system_prompt=_request_system_prompt(session, active_history, None, _attempt),
                     message_builder=second_round_builder,
                 ).history
 

@@ -1,6 +1,7 @@
 """Offline request captures for dispatch 182; no model or TTS calls."""
 
 import asyncio
+from datetime import datetime
 from copy import deepcopy
 from unittest.mock import AsyncMock
 
@@ -9,7 +10,7 @@ import pytest
 from app.routers import chat_ws
 from app.services.llm_interface import TAIL_REMINDER_HEADER, build_stream_messages
 from app.services.memory_v11.recall import RecallGroup, RecallResult, _render_block
-from app.services.prompt_compiler import PromptCompiler
+from app.services.prompt_compiler import PromptCompiler, render_tail_reminder
 from app.services.turn_tool_orchestrator import (
     MEMORY_SECOND_TURN_NOTE,
     ToolBatchOutcome,
@@ -63,6 +64,16 @@ async def test_processor_request_budget(isolated_store, monkeypatch, caplog, kin
     monkeypatch.setattr(chat_ws.config, "HISTORY_COMPRESS_THRESHOLD", 1000)
     monkeypatch.setattr("app.services.memory_v11.jobs.enqueue_memory_job", AsyncMock())
     recalled = memory()
+    if kind == "refresh":
+        # Fill the closed-tools envelope up to the budget. A leak retry adds
+        # its own system instruction and must re-budget Memory as well.
+        effective = SYSTEM + datetime.now().strftime("\n【現在時刻：%Y-%m-%d %H:%M】")
+        tail = {"role": "system", "content": render_tail_reminder(
+            session.identity_mode, getattr(session, "self_name", ""),
+        )}
+        empty_memory = {"role": "system", "content": memory(0).block + "\n" + MEMORY_SECOND_TURN_NOTE}
+        base = tokens(envelope([original[-1], empty_memory, tail], effective))
+        recalled = memory((BUDGET - base) // 2)
     monkeypatch.setattr(orchestrator, "apply_v11_tool_batch", AsyncMock(return_value=ToolBatchOutcome(
         status="ok", recall_result=recalled if kind in {"recall", "refresh"} else None,
     )))
@@ -116,7 +127,10 @@ async def test_processor_request_budget(isolated_store, monkeypatch, caplog, kin
     if kind in {"forced", "web_second"}:
         assert {"role": "system", "content": web_evidence_system_message(WEB)} in captures[-1]
     if kind in {"recall", "refresh"}:
-        assert {"role": "system", "content": recalled.block + "\n" + MEMORY_SECOND_TURN_NOTE} in captures[-1]
+        assert {"role": "system", "content": recalled.block + "\n" + MEMORY_SECOND_TURN_NOTE} in captures[1]
+    if kind == "refresh":
+        assert len(captures) == 3
+        assert recalled.block not in "".join(row["content"] for row in captures[-1])
 
 
 def test_memory_yields_only_after_all_old_history():
