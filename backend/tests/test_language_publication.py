@@ -367,7 +367,7 @@ def test_tech_acronyms_in_japanese_are_publishable():
 @pytest.mark.asyncio
 async def test_search_turn_buffers_chinese_body_and_renders_it_to_japanese():
     """With web evidence, Chinese after a JP opener is rendered before publication."""
-    from app.routers.chat_ws import build_web_search_evidence_context
+    from app.services.turn_tool_orchestrator import build_v11_web_evidence_context
 
     provider = _SequencedStreamProvider(
         [
@@ -378,9 +378,9 @@ async def test_search_turn_buffers_chinese_body_and_renders_it_to_japanese():
     session = SessionState("search-buffer-renderer")
     session.api_key = "test-key"
     session.system_prompt = "日本語で答えること。"
-    history = build_web_search_evidence_context(
+    history = build_v11_web_evidence_context(
         [{"role": "user", "content": "请你web search一下尼古喵喵这部动画作品"}],
-        "[source: tavily]\nNo clear match for that title.",
+        [("web_search", "[source: tavily]\nNo clear match for that title.")],
     )
     published: list[str] = []
 
@@ -404,7 +404,7 @@ async def test_search_turn_buffers_chinese_body_and_renders_it_to_japanese():
 @pytest.mark.asyncio
 async def test_renderer_failure_never_silently_drops_a_buffered_foreign_tail():
     """A failed render must fail the buffered turn, not publish a partial answer."""
-    from app.routers.chat_ws import build_web_search_evidence_context
+    from app.services.turn_tool_orchestrator import build_v11_web_evidence_context
 
     # Two complete JP sentences + a pure-Chinese tail (hard-reject).
     mixed = (
@@ -416,9 +416,9 @@ async def test_renderer_failure_never_silently_drops_a_buffered_foreign_tail():
     session = SessionState("renderer-failure-no-partial-publish")
     session.api_key = "test-key"
     session.system_prompt = "日本語で答えること。"
-    history = build_web_search_evidence_context(
+    history = build_v11_web_evidence_context(
         [{"role": "user", "content": "请你web search一下冷门作品"}],
-        "[source: tavily]\nNo clear match.",
+        [("web_search", "[source: tavily]\nNo clear match.")],
     )
     published: list[str] = []
 
@@ -447,16 +447,16 @@ async def test_renderer_failure_never_silently_drops_a_buffered_foreign_tail():
 @pytest.mark.asyncio
 async def test_soft02_single_good_segment_still_full_recovers_on_evidence_turn():
     """SOFT-02 threshold is ≥2: one short JP opener + Chinese body still recovers."""
-    from app.routers.chat_ws import build_web_search_evidence_context
+    from app.services.turn_tool_orchestrator import build_v11_web_evidence_context
 
     mixed = "[EMO:neutral] 調べたわ。根据搜索结果，这部动画没有明确信息。"
     provider = _SequencedStreamProvider([mixed, mixed, mixed])
     session = SessionState("soft02-single-segment-recover")
     session.api_key = "test-key"
     session.system_prompt = "日本語で答えること。"
-    history = build_web_search_evidence_context(
+    history = build_v11_web_evidence_context(
         [{"role": "user", "content": "web search 一下"}],
-        "[source: firecrawl]\nNo match.",
+        [("web_search", "[source: firecrawl]\nNo match.")],
     )
     published: list[str] = []
 
@@ -479,7 +479,7 @@ async def test_soft02_single_good_segment_still_full_recovers_on_evidence_turn()
 @pytest.mark.asyncio
 async def test_soft02_leak_after_good_jp_does_not_majority_publish():
     """Leak is not language failure — persona recovery wins over majority flush."""
-    from app.routers.chat_ws import build_web_search_evidence_context
+    from app.services.turn_tool_orchestrator import build_v11_web_evidence_context
 
     mixed = (
         "[EMO:neutral] 調べてみたわ。"
@@ -490,9 +490,9 @@ async def test_soft02_leak_after_good_jp_does_not_majority_publish():
     session = SessionState("soft02-leak-no-majority")
     session.api_key = "test-key"
     session.system_prompt = "日本語で答えること。"
-    history = build_web_search_evidence_context(
+    history = build_v11_web_evidence_context(
         [{"role": "user", "content": "search something"}],
-        "[source: tavily]\nSome evidence.",
+        [("web_search", "[source: tavily]\nSome evidence.")],
     )
     published: list[str] = []
 

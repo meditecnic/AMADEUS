@@ -264,7 +264,7 @@ async def test_acquire_lease_logs_failed_close_of_replaced_connection(caplog):
     await coordinator.acquire_lease("lease-session", "steins_gate", old)
     with caplog.at_level(logging.WARNING, logger="app.services.session_manager"):
         await coordinator.acquire_lease("lease-session", "beta", new)
-    assert coordinator._leases == {("lease-session", "beta"): new}
+    assert coordinator._leases == {("lease-session", "chat", "beta"): new}
     assert any(
         "closing replaced connection for session lease-session failed (RuntimeError)" in m
         for m in _messages(caplog, "app.services.session_manager")

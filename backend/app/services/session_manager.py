@@ -19,6 +19,9 @@ async def cancel_inflight(session: Any) -> int:
         task.cancel()
         cancelled += 1
         await asyncio.gather(task, return_exceptions=True)
+    current_task = getattr(session, "active_task", None)
+    if current_task is not None and current_task is not task:
+        return cancelled
     streams = list(getattr(session, "active_streams", set()))
     for stream in streams:
         closer = getattr(stream, "aclose", None)
@@ -78,15 +81,15 @@ async def clear_working_summaries(
 
 class SessionCoordinator:
     def __init__(self):
-        self._leases: dict[tuple[str, str], Any] = {}
+        self._leases: dict[tuple[str, str, str], Any] = {}
         self._lock = asyncio.Lock()
 
-    async def acquire_lease(self, session_id: str, worldline: str, websocket: Any) -> None:
-        key = (session_id, normalize_worldline(worldline))
+    async def acquire_lease(self, session_id: str, worldline: str, websocket: Any, kind: str = "chat") -> None:
+        key = (session_id, kind, normalize_worldline(worldline))
         old_connections = []
         async with self._lock:
             for existing_key, connection in list(self._leases.items()):
-                if existing_key[0] == session_id and existing_key != key:
+                if existing_key[:2] == (session_id, kind):
                     self._leases.pop(existing_key, None)
                     if connection is not websocket:
                         old_connections.append(connection)
@@ -106,8 +109,8 @@ class SessionCoordinator:
                     type(exc).__name__,
                 )
 
-    async def release_lease(self, session_id: str, worldline: str, websocket: Any) -> None:
-        key = (session_id, normalize_worldline(worldline))
+    async def release_lease(self, session_id: str, worldline: str, websocket: Any, kind: str = "chat") -> None:
+        key = (session_id, kind, normalize_worldline(worldline))
         async with self._lock:
             if self._leases.get(key) is websocket:
                 self._leases.pop(key, None)

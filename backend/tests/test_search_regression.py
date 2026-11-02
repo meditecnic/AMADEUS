@@ -1,3 +1,4 @@
+from app.services.turn_tool_orchestrator import build_v11_web_evidence_context
 import pytest
 import json
 import asyncio
@@ -13,7 +14,6 @@ from app.services.search import (
 from app.routers import chat_ws as _chat_ws_mod
 from app.routers.chat_ws import (
     build_tool_result_context,
-    build_web_search_evidence_context,
     execute_tool_call,
     get_clean_text_stream,
     SessionState,
@@ -67,13 +67,13 @@ def test_should_force_search_detects_explicit_web_search_phrase():
 
 def test_web_search_evidence_context_requires_japanese_answer_body():
     history = [{"role": "user", "content": "请你web search一下今年的世界杯冠军"}]
-    injected = build_web_search_evidence_context(
+    injected = build_v11_web_evidence_context(
         history,
-        "[source: tavily]\nSpain won the 2026 FIFA World Cup.",
+        [("web_search", "[source: tavily]\nSpain won the 2026 FIFA World Cup.")],
     )
     assert len(injected) == 2
     content = injected[-1]["content"]
-    assert "WEB SEARCH RESULT" in content
+    assert "WEB EVIDENCE" in content
     assert "Spain won" in content
     assert "ANSWER LANGUAGE — HARD REQUIREMENT" in content
     assert "自然な日本語" in content
@@ -123,9 +123,9 @@ async def test_post_search_chinese_draft_retries_to_japanese_without_full_recove
     session.api_key = "test-key"
     session.system_prompt = "日本語で答えること。"
     session.temperature = 0.4
-    history = build_web_search_evidence_context(
+    history = build_v11_web_evidence_context(
         [{"role": "user", "content": "请你web search一下今年的世界杯冠军是哪个国家队"}],
-        "[source: tavily]\nSpain won the 2026 FIFA World Cup.",
+        [("web_search", "[source: tavily]\nSpain won the 2026 FIFA World Cup.")],
     )
     published: list[str] = []
 

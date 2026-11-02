@@ -437,7 +437,7 @@ class TestBackendE2EContract:
             })
             error = websocket.receive_json()
 
-            assert (session_id, "steins_gate") in session_coordinator._leases
+            assert (session_id, "chat", "steins_gate") in session_coordinator._leases
 
         assert error["type"] == "worldline.switch_error"
         assert error["request_id"] == "worldline-runtime-failure"

@@ -84,6 +84,7 @@ async def lifespan(app: FastAPI):
     yield
     
     # Shutdown
+    await chat_ws.close_chat_sessions()
     print("Amadeus Backend shutting down, cleaning resources...")
     diagnostics_sweep.cancel()
     await stop_background_worker()
