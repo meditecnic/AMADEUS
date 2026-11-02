@@ -1283,7 +1283,7 @@ def _embedding_metadata(connection: sqlite3.Connection) -> tuple[str | None, str
 
 
 def _migrate_v11_embeddings(connection: sqlite3.Connection) -> bool:
-    """One startup transaction: all versions, table CHECK and metadata together.
+    """One startup transaction: existing index rows, CHECK and metadata together.
 
     A missing/broken model rolls back to the complete old index. Retrieval
     ignores its incompatible vectors; initialization caches this attempt for
@@ -1297,7 +1297,11 @@ def _migrate_v11_embeddings(connection: sqlite3.Connection) -> bool:
     try:
         prepared = []
         for fact_id, version_no, text in connection.execute(
-            "SELECT fact_id,version_no,display_text FROM stable_fact_versions ORDER BY fact_id,version_no"
+            """SELECT e.fact_id,e.version_no,v.display_text
+               FROM stable_fact_version_embeddings e
+               JOIN stable_fact_versions v
+                 ON v.fact_id=e.fact_id AND v.version_no=e.version_no
+               ORDER BY e.fact_id,e.version_no"""
         ).fetchall():
             try:
                 vector = asyncio.run(embedder.encode_passage(text))
@@ -1306,6 +1310,7 @@ def _migrate_v11_embeddings(connection: sqlite3.Connection) -> bool:
                 connection.rollback()
                 logging.getLogger(__name__).warning(
                     "Embedding upgrade deferred (%s); using lexical retrieval", type(exc).__name__,
+                    exc_info=True,
                 )
                 return False
             prepared.append((fact_id, version_no, EMBEDDING_MODEL, EMBEDDING_DIMENSION, blob))

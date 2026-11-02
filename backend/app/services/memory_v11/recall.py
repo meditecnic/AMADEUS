@@ -513,7 +513,7 @@ async def _recall_body(
 
     # lexical_only: explicit bigram/structured-only switch. Never resolves the
     # default embedder, never loads embeddings, never calls encode_query, so
-    # it cannot lazy-load the embedding model model. Not reported as "degraded".
+    # it cannot lazy-load the embedding model. Not reported as "degraded".
     resolved = None if lexical_only else _resolve_embedder(embedder)
     query_vectors: dict[str, list[float] | None] = {}
     compatible: dict[tuple[str, int], list[float]] = {}

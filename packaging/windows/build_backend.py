@@ -19,11 +19,10 @@ REPO = HERE.parents[1]
 TEST_ONLY = {"pytest", "pytest-asyncio", "pytest-timeout", "ruff", "iniconfig", "pluggy"}
 EMBEDDING_REVISION = "ac5d898c8d382b17167c33e5c8af644a3519b47d"
 EMBEDDING_FILES = {
-    "onnx/model.onnx": None,
-    "onnx/model.onnx_data": None,  # Known SHA-256 prefix: 7eeca7c5e63a9047
-    "tokenizer.json": None,
-    "README.md": None,
-    "LICENSE": None,
+    "onnx/model.onnx": "ad8244eea593ae8488cfd821a7d573aa51a350bc817702d6da99f3bccab24f49",
+    "onnx/model.onnx_data": "7eeca7c5e63a9047991df400cdd57c3cf05fabc0168700a4ecee42d1eba8093d",
+    "tokenizer.json": "98d4a1d32152d6cedf85b5e88f3b205106dca1fe72aaab34e0ac13c238421069",
+    "README.md": "9f2433969e7962fffd5cd2bfef18bb319032dc973090d5449628d9bb4d219381",
 }
 APP_FILES = (
     "characters/amadeus_sg.json", "characters/amadeus_beta.json",

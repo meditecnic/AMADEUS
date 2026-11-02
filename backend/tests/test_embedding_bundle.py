@@ -19,8 +19,11 @@ def builder(monkeypatch):
 
 def test_whitelist_hashes_and_runtime_revision(builder):
     assert builder.EMBEDDING_REVISION == EMBEDDING_REVISION
-    assert set(builder.EMBEDDING_FILES) == {
-        "onnx/model.onnx", "onnx/model.onnx_data", "tokenizer.json", "README.md", "LICENSE",
+    assert builder.EMBEDDING_FILES == {
+        "onnx/model.onnx": "ad8244eea593ae8488cfd821a7d573aa51a350bc817702d6da99f3bccab24f49",
+        "onnx/model.onnx_data": "7eeca7c5e63a9047991df400cdd57c3cf05fabc0168700a4ecee42d1eba8093d",
+        "tokenizer.json": "98d4a1d32152d6cedf85b5e88f3b205106dca1fe72aaab34e0ac13c238421069",
+        "README.md": "9f2433969e7962fffd5cd2bfef18bb319032dc973090d5449628d9bb4d219381",
     }
 
 

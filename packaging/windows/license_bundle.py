@@ -309,7 +309,6 @@ def generate(config: dict, backend: Path, work: Path, output: Path, cargo: Path,
     card = next((backend / "_internal/hf_cache").rglob("README.md"))
     bundle.add("model", model["id"], model["revision"], model["source"], "CC-BY-NC-4.0", ["backend/_internal/hf_cache"],
                [bundle.copy(card, "models/jina-embeddings-v5-text-nano-retrieval-README.md"),
-                bundle.copy(card.with_name("LICENSE"), "models/jina-embeddings-v5-text-nano-retrieval-LICENSE"),
                 bundle.text("models/jina-ATTRIBUTION.txt", model["attribution"] + "\n" + model["source"] + "\n" + model["license_url"] + "\n")])
     files = [{"path": "licenses/" + path.relative_to(output).as_posix(), "sha256": digest(path)}
              for path in sorted(output.rglob("*")) if path.is_file()]

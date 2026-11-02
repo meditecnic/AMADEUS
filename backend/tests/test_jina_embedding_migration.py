@@ -50,8 +50,9 @@ def seed_legacy_embedding_db(path: Path):
                 db.execute("""INSERT INTO stable_fact_versions(fact_id,version_no,display_text,semantic_json,semantic_fingerprint,
                            confidence,change_kind,valid_from,invalid_at) VALUES(?,?,?,'{}',?,0.9,'create','t',?)""",
                            (fact_id, version, f'用户喜欢咖啡 {fact_id}{version}', f'{fact_id}{version}', 't' if fact_id == 'a' and version == 1 else None))
-                db.execute("INSERT INTO stable_fact_version_embeddings VALUES(?,?,'intfloat/multilingual-e5-small',384,?)",
-                           (fact_id, version, struct.pack('384f', *([1.0] + [0.0] * 383))))
+                if fact_id != 'a' or version != 1:
+                    db.execute("INSERT INTO stable_fact_version_embeddings VALUES(?,?,'intfloat/multilingual-e5-small',384,?)",
+                               (fact_id, version, struct.pack('384f', *([1.0] + [0.0] * 383))))
         db.execute("""INSERT INTO memory_observations(observation_id,session_id,identity_mode,display_text,evidence_kind,
                    memory_class,status,created_at,updated_at) VALUES('obs','session','self','咖啡经历','direct_user','episodic','attached','t','t')""")
         db.execute("""INSERT INTO experiences(experience_id,session_id,conversation_id,identity_mode,observation_id,display_text,
@@ -88,14 +89,18 @@ def fake_embedder(monkeypatch, *, fail_at=None):
     return texts
 
 
-def assert_upgraded(path):
+def embedding_keys(path):
+    with connect(path) as db:
+        return db.execute('SELECT fact_id,version_no FROM stable_fact_version_embeddings ORDER BY fact_id,version_no').fetchall()
+
+
+def assert_upgraded(path, original_keys):
     with connect(path) as db:
         meta = dict(db.execute('SELECT * FROM schema_meta'))
         assert meta == {'schema_version': '12', 'embedding_model': storage.EMBEDDING_MODEL, 'embedding_dimension': '768'}
-        versions = db.execute('SELECT fact_id,version_no,display_text FROM stable_fact_versions ORDER BY fact_id,version_no').fetchall()
         rows = db.execute('SELECT fact_id,version_no,model,dimensions,vector FROM stable_fact_version_embeddings ORDER BY fact_id,version_no').fetchall()
-        assert [(r[0], r[1]) for r in rows] == [(v[0], v[1]) for v in versions]
-        assert len(rows) == 4
+        assert [(r[0], r[1]) for r in rows] == original_keys
+        assert len(rows) == 3
         for n, row in enumerate(rows, 1):
             assert row[2:4] == (storage.EMBEDDING_MODEL, 768)
             assert struct.unpack('768f', row[4]) == (float(n),) + (0.0,) * 767
@@ -104,27 +109,33 @@ def assert_upgraded(path):
             db.execute('UPDATE stable_fact_version_embeddings SET dimensions=384')
 
 
-def test_every_version_reindexed_other_tables_unchanged_and_idempotent(legacy_db, monkeypatch):
+def test_existing_index_rows_reindexed_other_tables_unchanged_and_idempotent(legacy_db, monkeypatch):
     unchanged = snapshot(legacy_db, exclude=('schema_meta', 'stable_fact_version_embeddings'))
+    original_keys = embedding_keys(legacy_db)
+    assert original_keys == [('a', 2), ('b', 1), ('c', 1)]
     texts = fake_embedder(monkeypatch)
     assert storage._initialize_sync(str(legacy_db), storage.MEMORY_SCHEMA, 'memory')
-    assert texts == ['用户喜欢咖啡 a1', '用户喜欢咖啡 a2', '用户喜欢咖啡 b1', '用户喜欢咖啡 c1']
-    assert_upgraded(legacy_db)
+    assert texts == ['用户喜欢咖啡 a2', '用户喜欢咖啡 b1', '用户喜欢咖啡 c1']
+    assert_upgraded(legacy_db, original_keys)
     assert snapshot(legacy_db, exclude=('schema_meta', 'stable_fact_version_embeddings')) == unchanged
     after = snapshot(legacy_db)
     assert storage._initialize_sync(str(legacy_db), storage.MEMORY_SCHEMA, 'memory')
-    assert len(texts) == 4
+    assert len(texts) == 3
     assert snapshot(legacy_db) == after
 
 
-def test_model_failure_rolls_back_everything_then_next_start_completes(legacy_db, monkeypatch):
+def test_model_failure_rolls_back_everything_then_next_start_completes(legacy_db, monkeypatch, caplog):
     before = snapshot(legacy_db)
+    original_keys = embedding_keys(legacy_db)
     fake_embedder(monkeypatch, fail_at=3)
     assert not storage._initialize_sync(str(legacy_db), storage.MEMORY_SCHEMA, 'memory')
     assert snapshot(legacy_db) == before
+    warning = next(record for record in caplog.records if record.name == 'app.db' and record.exc_info)
+    assert warning.exc_info[0] is RuntimeError
+    assert 'synthetic model failure' in caplog.text
     fake_embedder(monkeypatch)
     assert storage._initialize_sync(str(legacy_db), storage.MEMORY_SCHEMA, 'memory')
-    assert_upgraded(legacy_db)
+    assert_upgraded(legacy_db, original_keys)
 
 
 @pytest.mark.parametrize('model,dimension', [('unknown', '384'), ('intfloat/multilingual-e5-small', '768'), (storage.EMBEDDING_MODEL, '123')])

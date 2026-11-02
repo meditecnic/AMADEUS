@@ -8,18 +8,17 @@
 
 先准备 `jinaai/jina-embeddings-v5-text-nano-retrieval` 的本地 snapshot（必须含 `onnx/model.onnx`），固定 revision 为
 `ac5d898c8d382b17167c33e5c8af644a3519b47d`。来源目录只读，脚本按白名单复制文件，
-`EMBEDDING_FILES` 只复制以下五个文件，复制前核对来源，复制后再次核对产物：
+`EMBEDDING_FILES` 只复制以下四个文件，复制前核对来源，复制后再次核对产物：
 
 | 文件 | SHA-256 |
 |---|---|
-| `onnx/model.onnx` | 待审查人补完整 SHA-256（当前环境 HF API 403） |
-| `onnx/model.onnx_data` | 待补完整 SHA-256；已知前缀 `7eeca7c5e63a9047` |
-| `tokenizer.json` | 待补完整 SHA-256 |
-| `README.md`（CC BY-NC 4.0 模型卡） | 待补完整 SHA-256 |
-| `LICENSE` | 待核文件名并补完整 SHA-256 |
+| `onnx/model.onnx` | `ad8244eea593ae8488cfd821a7d573aa51a350bc817702d6da99f3bccab24f49` |
+| `onnx/model.onnx_data` | `7eeca7c5e63a9047991df400cdd57c3cf05fabc0168700a4ecee42d1eba8093d` |
+| `tokenizer.json` | `98d4a1d32152d6cedf85b5e88f3b205106dca1fe72aaab34e0ac13c238421069` |
+| `README.md`（含 CC BY-NC 4.0 许可声明的模型卡） | `9f2433969e7962fffd5cd2bfef18bb319032dc973090d5449628d9bb4d219381` |
 
-模型由 Jina AI 提供，fp32、768 维；CC BY-NC 4.0（非商业使用）。随包保留模型卡、许可和署名。
-当前 `EMBEDDING_FILES` 的 `None` 是待补项；脚本在补齐完整哈希前拒绝打包。
+模型由 Jina AI 提供，fp32、768 维；CC BY-NC 4.0（非商业使用）。随包保留模型卡（含许可声明）和署名；
+许可全文见 [CC BY-NC 4.0 法律文本](https://creativecommons.org/licenses/by-nc/4.0/legalcode)。固定 commit 没有单独的许可文件，不下载或随包附带 CC 法律文本。
 
 任一哈希不符即停止；不下载模型，不复制其他模型或用户缓存。
 哈希已经一致的暂存模型文件直接复用，并继续核对来源及产物。
@@ -27,7 +26,7 @@
 在开发环境用 Hugging Face CLI 取固定快照（命令输出的 snapshot 路径作为 `--embedding-source`）：
 
 ```powershell
-hf download jinaai/jina-embeddings-v5-text-nano-retrieval --revision ac5d898c8d382b17167c33e5c8af644a3519b47d --include onnx/model.onnx onnx/model.onnx_data tokenizer.json README.md LICENSE
+hf download jinaai/jina-embeddings-v5-text-nano-retrieval --revision ac5d898c8d382b17167c33e5c8af644a3519b47d --include onnx/model.onnx onnx/model.onnx_data tokenizer.json README.md
 ```
 
 PowerShell 构建示例（将路径替换为本机路径）：
