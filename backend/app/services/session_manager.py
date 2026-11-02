@@ -86,7 +86,7 @@ class SessionCoordinator:
         old_connections = []
         async with self._lock:
             for existing_key, connection in list(self._leases.items()):
-                if existing_key[0] == session_id and existing_key != key:
+                if existing_key[0] == session_id:
                     self._leases.pop(existing_key, None)
                     if connection is not websocket:
                         old_connections.append(connection)
