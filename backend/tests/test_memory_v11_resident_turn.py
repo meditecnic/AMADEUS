@@ -289,7 +289,7 @@ def _patch_turn_side_effects(monkeypatch, translate_targets) -> None:
 
         return asyncio.get_running_loop().create_task(_noop())
 
-    monkeypatch.setattr(conversation_service, "schedule_auto_title", fake_title)
+    monkeypatch.setattr(type(conversation_service), "schedule_auto_title", staticmethod(fake_title))
 
 
 async def _processor_session(owner: str, *, provider_id: str, model: str):
@@ -354,7 +354,7 @@ async def test_processor_deepseek_first_round_profile_and_recall_exclusion(isola
             return
         yield {"content": "[EMO:neutral] ミルクは入れないのよ。", "tool_calls": None}
 
-    monkeypatch.setattr(deepseek_service, "get_chat_stream", fake_stream)
+    monkeypatch.setattr(type(deepseek_service), "get_chat_stream", staticmethod(fake_stream))
     _patch_turn_side_effects(monkeypatch, [deepseek_service])
     session = await _processor_session(owner, provider_id="deepseek", model="deepseek-v4-flash")
     session.append_message({"role": "user", "content": SUPPLEMENT_QUERY, "id": None})
@@ -425,7 +425,7 @@ async def test_processor_glm_non_tool_profile_and_notice(isolated_store, monkeyp
         adapter=adapter,
         credential_required=False,
     )
-    monkeypatch.setattr("app.routers.chat_ws.provider_registry.snapshot", lambda *_a, **_k: snapshot)
+    monkeypatch.setattr('app.services.provider_registry.ProviderRegistry.snapshot', staticmethod(lambda *_a, **_k: snapshot))
     _patch_turn_side_effects(monkeypatch, [adapter, deepseek_service])
     session = await _processor_session(owner, provider_id="glm", model="glm-probe")
     session.append_message({"role": "user", "content": SUPPLEMENT_QUERY, "id": None})

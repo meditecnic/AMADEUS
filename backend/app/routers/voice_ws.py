@@ -8,6 +8,7 @@ import wave
 from uuid import uuid4
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from starlette.websockets import WebSocketState
 
 from app import config
 from app.db import normalize_worldline
@@ -123,6 +124,8 @@ async def websocket_voice_endpoint(websocket: WebSocket):
     try:
         while True:
             message = await websocket.receive()
+            if websocket.application_state == WebSocketState.DISCONNECTED:
+                break
             if message.get("type") == "websocket.disconnect":
                 break
             if message.get("bytes") is not None:

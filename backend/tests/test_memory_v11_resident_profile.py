@@ -961,7 +961,7 @@ async def test_v11_compile_failure_resets_injected_ids(isolated_store, monkeypat
     def broken(_inputs):
         raise RuntimeError("compile_with_report failed")
 
-    monkeypatch.setattr(prompt_compiler_module.prompt_compiler, "compile_with_report", broken)
+    monkeypatch.setattr(type(prompt_compiler_module.prompt_compiler), "compile_with_report", staticmethod(broken))
     with pytest.raises(RuntimeError, match="compile_with_report failed"):
         await compile_for_session(session, "こんにちは", provider=_deepseek_provider())
     assert session.turn_injected_fact_ids == ()
@@ -983,7 +983,7 @@ async def test_v11_compile_cancelled_resets_injected_ids(isolated_store, monkeyp
         entered.set()
         await never_set.wait()
 
-    monkeypatch.setattr(soul_engine, "restore_emotion", hang)
+    monkeypatch.setattr(type(soul_engine), "restore_emotion", staticmethod(hang))
     task = asyncio.create_task(
         compile_for_session(session, "こんにちは", provider=_deepseek_provider())
     )

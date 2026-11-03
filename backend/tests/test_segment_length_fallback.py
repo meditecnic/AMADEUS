@@ -106,12 +106,15 @@ def test_held_short_fragment_cannot_make_next_segment_overlong():
     assert splitter.feed("て。", "embarrassed") == []
     source = "あ" * MAX_TTS_SOURCE_CODEPOINTS
     streamed = splitter.feed(source, "neutral")
-    assert streamed == [Segment(0, "て。", "embarrassed")]
+    assert streamed == [Segment(0, "て。" + source[:-2], "embarrassed")]
     parts = streamed + splitter.finish()
     assert parts == [
-        Segment(0, "て。", "embarrassed"),
-        Segment(1, source, "neutral"),
+        Segment(0, "て。" + source[:-2], "embarrassed"),
+        Segment(1, source[-2:], "neutral"),
     ]
+    assert "".join(part.text for part in parts) == "て。" + source
+    assert all(len(part.text) <= MAX_TTS_SOURCE_CODEPOINTS for part in parts)
+    assert all(prepare_tts_text(part.text).error is not AudioErrorCode.TOO_SHORT for part in parts)
     assert all(
         prepare_tts_text(part.text).error is not AudioErrorCode.TEXT_TOO_LONG
         for part in parts

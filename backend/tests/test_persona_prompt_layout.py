@@ -387,7 +387,7 @@ def _long_history() -> list[dict]:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("with_web", [False, True])
 @pytest.mark.parametrize("adapter", ["deepseek_service", "compatible_custom"])
-async def test_second_round_over_budget_keeps_history_and_current_turn(
+async def test_second_round_request_budget_keeps_history_and_current_turn(
     isolated_store, monkeypatch, adapter, with_web
 ):
     captured: list[dict] = []
@@ -402,11 +402,11 @@ async def test_second_round_over_budget_keeps_history_and_current_turn(
         system_prompt=session.system_prompt,
     )
 
-    assert payload.reason == "input_budget"
+    assert payload.reason == ""
     assert payload.history[: len(history)] == history
-    assert len(payload.history) == len(history) + 1
+    assert len(payload.history) == len(history) + 1 + int(with_web)
     assert payload.history[-1]["role"] == "system"
-    assert "WEB BODY 温度" not in json.dumps(payload.history, ensure_ascii=False)
+    assert ("WEB BODY 温度" in json.dumps(payload.history, ensure_ascii=False)) == with_web
     assert sum(row["content"].count(CURRENT) for row in payload.history) == 1
 
     await _send(session, _provider(adapter, captured, monkeypatch), payload.history)
@@ -416,7 +416,7 @@ async def test_second_round_over_budget_keeps_history_and_current_turn(
     reminder = render_tail_reminder("self", "ミナ")
     if adapter == "deepseek_service":
         assert sent[-1] == ("system", reminder)
-        assert sent[-3] == ("user", CURRENT)
+        assert sent[-3 - int(with_web)] == ("user", CURRENT)
     else:
         assert (f"{CURRENT}\n\n{reminder}") in [text for role, text in sent if role == "user"]
         assert sent[-1][0] == "system" and TAIL_REMINDER_HEADER not in sent[-1][1]

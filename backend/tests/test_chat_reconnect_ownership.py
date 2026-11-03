@@ -219,7 +219,7 @@ def test_auth_cancel_reloads_history_and_summary_without_resetting_runtime(app_c
     provider = GatedProvider()
     monkeypatch.setattr(chat_ws, 'deepseek_service', provider)
     # Isolate the auth cancellation path from the lease's socket-close cleanup.
-    monkeypatch.setattr(chat_ws.session_coordinator, 'acquire_lease', AsyncMock())
+    monkeypatch.setattr(type(chat_ws.session_coordinator), 'acquire_lease', staticmethod(AsyncMock()))
     session_id = f'auth-history-{uuid4()}'
     with ExitStack() as sockets:
         a = sockets.enter_context(app_client.websocket_connect(f'/ws/chat?session_id={session_id}'))

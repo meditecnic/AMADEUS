@@ -459,13 +459,12 @@ async def test_hundred_thousand_char_payload_is_explicit_not_untrimmed():
     )
     assert payload.status in {"unavailable", "unsupported"}
     assert payload.status != "ok"
-    # The dialogue travels only as messages, so an over-budget second round keeps
-    # the full history (the first round sent it too) and adds just the notice.
+    # An oversized current turn and its web evidence stay intact; Memory yields.
     assert payload.history[: len(history)] == history
-    assert len(payload.history) == len(history) + 1 and payload.history[-1]["role"] == "system"
+    assert len(payload.history) == len(history) + 2 and payload.history[-1]["role"] == "system"
     blob = json.dumps(payload.history, ensure_ascii=False)
     assert blob.count("x" * 100_000) == 1
-    assert "秋葉原は晴れ" not in blob and "猫" not in blob
+    assert "秋葉原は晴れ" in blob and "猫" not in blob
     assert len(blob) < 100_000 + 5_000
     messages = build_stream_messages(
         deepseek_service.build_persona_messages,
@@ -746,13 +745,13 @@ async def test_v11_web_only_second_round_json_escapes_web(isolated_store, monkey
     async def fake_web(_name, _args):
         return malicious
 
-    monkeypatch.setattr(deepseek_service, "get_chat_stream", fake_stream)
+    monkeypatch.setattr(type(deepseek_service), "get_chat_stream", staticmethod(fake_stream))
     monkeypatch.setattr("app.routers.chat_ws.execute_tool_call", fake_web)
 
     async def fake_translate(text, api_key=None, model=None):
         return "中文"
 
-    monkeypatch.setattr(deepseek_service, "translate_to_zh", fake_translate)
+    monkeypatch.setattr(type(deepseek_service), "translate_to_zh", staticmethod(fake_translate))
 
     def fake_title(*args, **kwargs):
         async def _noop():
@@ -760,7 +759,7 @@ async def test_v11_web_only_second_round_json_escapes_web(isolated_store, monkey
 
         return asyncio.get_running_loop().create_task(_noop())
 
-    monkeypatch.setattr(conversation_service, "schedule_auto_title", fake_title)
+    monkeypatch.setattr(type(conversation_service), "schedule_auto_title", staticmethod(fake_title))
     from app.routers.chat_ws import SessionState
 
     session = SessionState(owner)
@@ -803,13 +802,13 @@ async def test_v11_force_search_first_round_json_web(isolated_store, monkeypatch
     async def fake_web(_name, _args):
         return malicious
 
-    monkeypatch.setattr(deepseek_service, "get_chat_stream", fake_stream)
+    monkeypatch.setattr(type(deepseek_service), "get_chat_stream", staticmethod(fake_stream))
     monkeypatch.setattr("app.routers.chat_ws.execute_tool_call", fake_web)
 
     async def _async_cn(*_a, **_k):
         return "中文"
 
-    monkeypatch.setattr(deepseek_service, "translate_to_zh", _async_cn)
+    monkeypatch.setattr(type(deepseek_service), "translate_to_zh", staticmethod(_async_cn))
 
     def fake_title(*args, **kwargs):
         async def _noop():
@@ -817,7 +816,7 @@ async def test_v11_force_search_first_round_json_web(isolated_store, monkeypatch
 
         return asyncio.get_running_loop().create_task(_noop())
 
-    monkeypatch.setattr(conversation_service, "schedule_auto_title", fake_title)
+    monkeypatch.setattr(type(conversation_service), "schedule_auto_title", staticmethod(fake_title))
     from app.routers.chat_ws import SessionState
 
     session = SessionState(owner)

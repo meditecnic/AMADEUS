@@ -1688,7 +1688,7 @@ def test_s3d1_edit_zero_provider_calls(isolated_client: TestClient, monkeypatch)
     def boom(*args, **kwargs):
         raise AssertionError("provider must not be called during user edit")
 
-    monkeypatch.setattr(pr_mod.provider_registry, "snapshot", boom)
+    monkeypatch.setattr(type(pr_mod.provider_registry), "snapshot", staticmethod(boom))
     monkeypatch.setattr(cred_mod.credential_store, "get", boom)
 
     session_id = _session("s3d1-edit-noprov")
@@ -2508,7 +2508,7 @@ def test_s3d1_details_zero_provider_calls(isolated_client: TestClient, monkeypat
     def boom(*args, **kwargs):
         raise AssertionError("provider must not be called during details")
 
-    monkeypatch.setattr(pr_mod.provider_registry, "snapshot", boom)
+    monkeypatch.setattr(type(pr_mod.provider_registry), "snapshot", staticmethod(boom))
     monkeypatch.setattr(cred_mod.credential_store, "get", boom)
 
     session_id = _session("s3d1-details-noprov")
@@ -3005,7 +3005,7 @@ def test_s3d2_presentation_and_topics_zero_provider(
     def boom(*args, **kwargs):
         raise AssertionError("provider must not be called")
 
-    monkeypatch.setattr(pr_mod.provider_registry, "snapshot", boom)
+    monkeypatch.setattr(type(pr_mod.provider_registry), "snapshot", staticmethod(boom))
     monkeypatch.setattr(cred_mod.credential_store, "get", boom)
 
     session_id = _session("s3d2-noprov")
@@ -4019,7 +4019,7 @@ def test_s3d3_zero_provider_all_five_routes(
     def boom(*args, **kwargs):
         raise AssertionError("provider must not be called")
 
-    monkeypatch.setattr(pr_mod.provider_registry, "snapshot", boom)
+    monkeypatch.setattr(type(pr_mod.provider_registry), "snapshot", staticmethod(boom))
     monkeypatch.setattr(cred_mod.credential_store, "get", boom)
 
     session_id = _session("s3d3-noprov")

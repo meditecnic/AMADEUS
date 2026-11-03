@@ -301,7 +301,7 @@ def test_models_endpoint_keeps_legacy_ids_and_adds_reconciled_catalog(
             {"id": "deepseek-next", "owned_by": "deepseek"},
         ]
 
-    monkeypatch.setattr(deepseek_service, "list_models", discover)
+    monkeypatch.setattr(type(deepseek_service), "list_models", staticmethod(discover))
     try:
         response = app_client.get("/api/providers/deepseek/models?refresh=true")
 

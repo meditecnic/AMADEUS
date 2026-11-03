@@ -181,7 +181,7 @@ def test_models_endpoint_keeps_saved_alias_and_exposes_preferred_id(
     async def discover(*, api_key=None):
         return json.loads(FIXTURE.read_text(encoding="utf-8"))["data"]
 
-    monkeypatch.setattr(deepseek_service, "list_models", discover)
+    monkeypatch.setattr(type(deepseek_service), "list_models", staticmethod(discover))
     try:
         response = app_client.get("/api/providers/deepseek/models?refresh=true")
         assert response.status_code == 200
