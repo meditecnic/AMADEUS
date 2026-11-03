@@ -270,13 +270,22 @@ def test_chart_validation_envelope(client, field, value, code):
 
 @pytest.mark.parametrize("kind", ["memory", "history"])
 @pytest.mark.parametrize("failure", ["open", "read"])
-def test_chart_unavailable_store_is_503(client, monkeypatch, kind, failure):
+def test_chart_unavailable_store_is_503(client, monkeypatch, tmp_path, kind, failure):
     import aiosqlite
+
+    from app.services.memory_v11 import chart
 
     path = Path(_resolve_path("steins_gate", kind))
     if failure == "open":
-        path.unlink()
+        # Windows cannot delete a store the app still holds open, so point the
+        # chart at a directory instead: SQLite cannot open it as a database.
+        path = tmp_path / f"blocked-{kind}"
         path.mkdir()
+        resolve = chart._resolve_path
+        monkeypatch.setattr(
+            chart, "_resolve_path",
+            lambda worldline, store: str(path) if store == kind else resolve(worldline, store),
+        )
     else:
         connect = aiosqlite.connect
 
