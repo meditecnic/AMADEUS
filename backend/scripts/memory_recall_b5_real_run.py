@@ -40,11 +40,11 @@ import portalocker
 
 SCRIPT = Path(__file__).resolve()
 BACKEND = SCRIPT.parents[1]
-QUESTION_SET = BACKEND / "tests/fixtures/memory_recall_b5b_question_set.json"
+QUESTION_SET = BACKEND / "tests/fixtures/memory_recall_b5c_question_set.json"
 sys.path.insert(0, str(SCRIPT.parent))
 sys.path.insert(0, str(BACKEND))
-import memory_candidate_runtime as isolation  # noqa: E402
-from memory_candidate_real_run import (  # noqa: E402
+import _real_run_common as isolation  # noqa: E402
+from _real_run_common import (  # noqa: E402
     BUILTIN_DEEPSEEK_BASE_URL,
     CURRENCY_CAP_CNY,
     PEAK_CACHE_HIT_CNY_PER_MILLION,
@@ -299,71 +299,39 @@ def check_real_gate(transport: str, base_url: str, cap_cny: str | None,
         raise Refused("cap_required_positive_at_most_10_cny")
 
 
-def question_path(name="b5b") -> Path:
-    return QUESTION_SET if name == "b5b" else BACKEND / "tests/fixtures/memory_recall_b5c_question_set.json"
+def question_path(name="b5c") -> Path:
+    return QUESTION_SET
 
 
-def load_questions(name="b5b") -> tuple[dict, str]:
+def load_questions(name="b5c") -> tuple[dict, str]:
     raw = question_path(name).read_bytes()
     qset = json.loads(raw)
-    if qset["version"] != (b5c.VERSION if name == "b5c" else "b5a-gate2-qset-v1"):
+    if qset["version"] != b5c.VERSION:
         raise Refused("unknown_question_set_version")
     return qset, hashlib.sha256(raw).hexdigest()
 
 
 def make_plan(qset: dict, digest: str, *, transport="fake", base_url=BUILTIN_DEEPSEEK_BASE_URL,
               cap_cny=None, model="deepseek-flash", e5_snapshot="") -> dict:
-    if qset["version"] == b5c.VERSION:
-        rows = [{"id": f"{group}-{case['id']}-{repeat}", "group": group, "mode": mode,
-                 "case_id": case["id"], "category": case["category"], "cohort": case["cohort"], "repeat": repeat}
-                for case in qset["cases"] for repeat in range(1, case["repeats"] + 1)
-                for group, mode in b5c.GROUPS.items()]
-        if Counter(r["group"] for r in rows) != dict.fromkeys(b5c.GROUPS, 48):
-            raise Refused("frozen_execution_count_changed")
-        return {"version": 1, "question_set": "b5c", "question_version": qset["version"],
-                "question_sha256": digest, "script_sha256": sha256(SCRIPT), "helper_sha256": sha256(Path(b5c.__file__)),
-                "transport": transport, "base_url": canonical_base_url(base_url), "cap_cny": cap_cny,
-                "model": model, "max_tokens": MAX_OUTPUT_TOKENS, "e5_snapshot": e5_snapshot,
-                "executions": rows, "rules": qset["rules"]}
-    rows = [
-        {"id": f"{mode}-{case['id']}-{repeat}", "mode": mode,
-         "case_id": case["id"], "cohort": case["cohort"], "repeat": repeat}
-        for case in qset["cases"] for repeat in range(1, case["repeats"] + 1)
-        for mode in ("legacy", "v11")
-    ]
-    if Counter(row["mode"] for row in rows) != {"legacy": 41, "v11": 41}:
+    rows = [{"id": f"{group}-{case['id']}-{repeat}", "group": group, "mode": mode,
+             "case_id": case["id"], "category": case["category"], "cohort": case["cohort"], "repeat": repeat}
+            for case in qset["cases"] for repeat in range(1, case["repeats"] + 1)
+            for group, mode in b5c.GROUPS.items()]
+    if Counter(r["group"] for r in rows) != dict.fromkeys(b5c.GROUPS, 48):
         raise Refused("frozen_execution_count_changed")
-    return {"version": 1, "question_sha256": digest, "script_sha256": sha256(SCRIPT),
+    return {"version": 1, "question_set": "b5c", "question_version": qset["version"],
+            "question_sha256": digest, "script_sha256": sha256(SCRIPT), "helper_sha256": sha256(Path(b5c.__file__)),
             "transport": transport, "base_url": canonical_base_url(base_url), "cap_cny": cap_cny,
             "model": model, "max_tokens": MAX_OUTPUT_TOKENS, "e5_snapshot": e5_snapshot,
             "executions": rows, "rules": qset["rules"]}
 
 
 def dataset_rows(qset: dict, case: dict) -> tuple[list[dict], list[dict]]:
-    """Build seed copies; neither the question set nor its cases are mutated."""
-    if qset["version"] == b5c.VERSION:
-        return b5c.selected_rows(qset, case), []
-    variant = qset["dataset_variants"].get(case["dataset"], {})
-    removed = set(variant.get("remove", []) + variant.get("replace", []))
-    superseded = set(variant.get("supersede", []))
-    rows = []
-    for row in qset["facts"] + qset["scope_sentinels"]:
-        if row["key"] not in removed:
-            rows.append({**row, "state": "superseded" if row["key"] in superseded
-                         else row.get("state", "active")})
-    rows.extend({**row, "scope": case["scope"], "state": "active"}
-                for row in variant.get("add", []))
-    return rows, [dict(row) for row in variant.get("experience", [])]
+    return b5c.selected_rows(qset, case), []
 
 
 def fact_catalog(qset: dict) -> list[dict]:
-    rows = qset["facts"] + qset["scope_sentinels"]
-    if qset["version"] == b5c.VERSION:
-        return rows + [h for f in qset["facts"] for h in f.get("history", [])]
-    for variant in qset["dataset_variants"].values():
-        rows = rows + variant.get("add", []) + [
-            {**row, "display_text": row["text"]} for row in variant.get("experience", [])]
-    return rows
+    return qset["facts"] + qset["scope_sentinels"] + [h for f in qset["facts"] for h in f.get("history", [])]
 
 
 def normalize(text: str) -> str:
@@ -536,8 +504,6 @@ def score(case: dict, answer: str, calls: list[dict], qset: dict, *, mode="v11")
     if fallback:
         manual.append("product_fallback")
     answer_status = "fail" if failures else "needs_manual" if manual else "pass"
-    if mode == "legacy":
-        tool_failures = []
     combined = failures + tool_failures
     status = "fail" if combined else "needs_manual" if manual else "pass"
     result = {"status": status, "failures": combined, "needs_manual": manual, "fallback": fallback,
@@ -549,8 +515,7 @@ def score(case: dict, answer: str, calls: list[dict], qset: dict, *, mode="v11")
             "used_fact_keys": used, "recall_called": bool(recalls) if mode == "v11" else None,
             "need_count": len(needs) if mode == "v11" else None,
             "needs": needs if mode == "v11" else None, "diagnostic_only": bool(expected["diagnostic_only"])}
-    if qset["version"] == b5c.VERSION:
-        result["rule_results"] = b5c.rule_results(case, result)
+    result["rule_results"] = b5c.rule_results(case, result)
     return result
 
 
@@ -815,106 +780,16 @@ class Capture:
 
 
 async def seed_store(qset: dict, case: dict, mode: str, embedder: Any, group=None) -> None:
-    if qset["version"] == b5c.VERSION:
-        await b5c.seed_store(qset, case, mode, embedder, group)
-        return
-    from app.db import get_db
-    from app.services.memory_v11.repository import create_stable_fact
-
-    rows, experiences = dataset_rows(qset, case)
-    # The frozen drink sentinel and replacement describe one fact's history.
-    # v11 has no 'superseded' fact state: keep past values as closed versions of
-    # the live drink, with exactly one open version and a valid active pointer.
-    drink_chain = [row for key in ("superseded_tea", "coffee", "coffee_new")
-                   for row in rows if row["key"] == key]
-    drink_current = next((row for row in reversed(drink_chain) if row["state"] == "active"), None)
-    histories = [row for row in drink_chain if row is not drink_current]
-    if mode == "v11" and histories:
-        if drink_current is None:
-            raise Refused("superseded_seed_without_successor")
-        rows = [row for row in rows if row not in histories]
-    for number, row in enumerate(rows):
-        owner, worldline, identity = row["scope"].split("/")
-        if mode == "v11":
-            saved = await create_stable_fact(session_id=owner, worldline=worldline, identity_mode=identity,
-                                            display_text=row["display_text"],
-                                            semantic_json={"subject": "user", "predicate": "note", "object": str(number)})
-            db = await get_db(worldline, "memory")
-            try:
-                version = len(histories) + 1 if row is drink_current else 1
-                if version > 1:
-                    await db.execute("""UPDATE stable_fact_versions SET version_no=?,previous_version=?,
-                        change_kind='supersede' WHERE fact_id=? AND version_no=1""",
-                                     (version, version - 1, saved["fact_id"]))
-                    for old_version, old in enumerate(histories, 1):
-                        text = old["display_text"]
-                        semantic = json.dumps({"subject": "user", "predicate": "note", "object": text}, ensure_ascii=False)
-                        await db.execute("""INSERT INTO stable_fact_versions(fact_id,version_no,display_text,
-                            semantic_json,semantic_fingerprint,confidence,change_kind,previous_version,
-                            valid_from,invalid_at) VALUES(?,?,?,?,?,0.9,?,?,?,?)""",
-                            (saved["fact_id"], old_version, text, semantic, hashlib.sha256(semantic.encode()).hexdigest(),
-                             "create" if old_version == 1 else "supersede", old_version - 1 if old_version > 1 else None,
-                             f"2026-01-{old_version:02d}T00:00:00Z", f"2026-01-{old_version + 1:02d}T00:00:00Z"))
-                    await db.execute("UPDATE stable_facts SET active_version=? WHERE fact_id=?", (version, saved["fact_id"]))
-                if row["state"] != "active":
-                    if row["state"] != "deleted":
-                        raise Refused("unsupported_superseded_seed")
-                    await db.execute("UPDATE stable_facts SET state='deleted',active_version=NULL,deleted_at=? WHERE fact_id=?",
-                                     ("2026-01-01T00:00:00Z", saved["fact_id"]))
-                    await db.execute("UPDATE stable_fact_versions SET invalid_at='2026-01-01T00:00:00Z' WHERE fact_id=?", (saved["fact_id"],))
-                elif embedder._model is not None:
-                    from app.services.memory_v11.indexing import insert_version_embedding, prepare_passage_embedding
-                    prepared = await prepare_passage_embedding(row["display_text"], embedder=embedder)
-                    await insert_version_embedding(db, fact_id=saved["fact_id"], version_no=version, prepared=prepared)
-                await db.commit()
-            finally:
-                await db.close()
-        else:
-            db = await get_db(worldline, "memory")
-            try:
-                # Opaque seed key prevents evaluator fact labels reaching prompts.
-                await db.execute("""INSERT INTO core_facts(session_id,identity_mode,fact_key,fact_value,
-                    confidence,importance,is_current,source_message_ids,created_at)
-                    VALUES(?,?,?,?,0.9,0.5,?,'[]','2026-10-01T00:00:00+00:00')""",
-                                 (owner, identity, f"entry-{number:03d}", row["display_text"], int(row["state"] == "active")))
-                await db.commit()
-            finally:
-                await db.close()
-    for experience in experiences:
-        owner, worldline, identity = case["scope"].split("/")
-        db = await get_db(worldline, "memory")
-        try:
-            if mode == "legacy":
-                await db.execute("""INSERT INTO episodic_memories(session_id,identity_mode,content,
-                    confidence,importance,source_message_ids,created_at) VALUES(?,?,?,0.9,0.5,'[]',?)""",
-                                 (owner, identity, experience["text"], "2026-10-01T00:00:00+00:00"))
-            else:
-                from app.services.memory_v11.experiences import insert_experience
-                observation = str(uuid.uuid4())
-                await db.execute("""INSERT INTO memory_observations(observation_id,session_id,identity_mode,
-                    display_text,evidence_kind,memory_class,status,created_at,updated_at)
-                    VALUES(?,?,?,?,'direct_user','episodic','attached',?,?)""",
-                                 (observation, owner, identity, experience["text"], "2026-10-01", "2026-10-01"))
-                await insert_experience(db, session_id=owner, conversation_id="seed-experience",
-                                        identity_mode=identity, observation_id=observation,
-                                        display_text=experience["text"], semantic={"event": "past"}, confidence=0.9)
-            await db.commit()
-        finally:
-            await db.close()
-    if mode == "v11":
-        from app.services.memory_v11.repository import validate_active_version_invariants
-        for worldline in {row["scope"].split("/")[1] for row in rows}:
-            await validate_active_version_invariants(worldline=worldline)
+    await b5c.seed_store(qset, case, mode, embedder, group)
 
 
 async def product_turn(plan: dict, entry: dict, directory: Path) -> dict:
     # Environment isolation happens in the parent before any app import here.
     from app import models
     from app.db import init_db, reset_initialization_cache
-    from app.agent_tools import AMADEUS_TOOLS
     from app.routers.chat_ws import (
         SessionState, get_clean_text_stream, should_force_search,
-        build_web_search_evidence_context, build_tool_result_context,
+        build_tool_result_context,
     )
     from app.services import prompt_compiler as compiler
     from app.services.conversations import conversation_service
@@ -929,7 +804,7 @@ async def product_turn(plan: dict, entry: dict, directory: Path) -> dict:
         snapshot_from_session,
     )
 
-    qset, digest = load_questions(plan.get("question_set", "b5b"))
+    qset, digest = load_questions(plan.get("question_set", "b5c"))
     if digest != plan["question_sha256"]:
         raise Refused("question_set_changed")
     case = next(c for c in qset["cases"] if c["id"] == entry["case_id"])
@@ -959,10 +834,7 @@ async def product_turn(plan: dict, entry: dict, directory: Path) -> dict:
         except Exception as exc:
             e5 = {"loaded": False, "reason": type(exc).__name__}
     memory_service.embedder = embedder
-    if plan.get("question_set") == "b5c":
-        await seed_store(qset, case, entry["mode"], embedder, entry["group"])
-    else:
-        await seed_store(qset, case, entry["mode"], embedder)
+    await seed_store(qset, case, entry["mode"], embedder, entry["group"])
     capture = Capture(plan, entry, qset, case, directory)
     adapter = OpenAICompatibleAdapter(provider_id="deepseek", base_url=plan["base_url"],
         default_model=plan["model"], message_builder=deepseek_service.build_persona_messages,
@@ -1018,49 +890,38 @@ async def product_turn(plan: dict, entry: dict, directory: Path) -> dict:
         # Match the product's v11 direct-search evidence path, with a local stub.
         if force_search:
             turn.web_results.append(("web_search", await web_stub("web_search", "{}")))
-            history = (build_v11_web_evidence_context(history, turn.web_results) if entry["mode"] == "v11"
-                       else build_web_search_evidence_context(history, turn.web_results[0][1]))
+            history = build_v11_web_evidence_context(history, turn.web_results)
         tools = plan_first_round_tools(v11=entry["mode"] == "v11", force_search=force_search,
                                        provider_id="deepseek", adapter_kind=type(adapter).__name__).tools
-        if entry["mode"] == "legacy" and not force_search:
-            tools = list(AMADEUS_TOOLS)
         answer, _, calls, _ = await clean(active_history=history, memory_summary="",
             session=session, tools=tools, tool_choice="auto" if tools else None,
-            provider_snapshot=provider, mode_state=turn.mode_state if entry["mode"] == "v11" else None)
+            provider_snapshot=provider, mode_state=turn.mode_state)
         result["calls"] = list(calls.values())
         if calls:
             refresh = None
-            if entry["mode"] == "v11":
-                outcome = await apply_v11_tool_batch(record=turn, session=session, provider=provider,
-                    calls=result["calls"], web_executor=web_stub)
-                extra_web = turn.web_results[1:] if force_search else turn.web_results
-                if outcome.recall_result is not None:
-                    payload = prepare_second_round_payload(history, outcome.recall_result,
-                        extra_web or None, system_prompt=session.system_prompt)
-                    if payload.result is not None:
-                        turn.recall_result = payload.result
-                        turn.ranked_items = list(payload.result.ranked_items or [])
-                    second_history = payload.history
+            outcome = await apply_v11_tool_batch(record=turn, session=session, provider=provider,
+                calls=result["calls"], web_executor=web_stub)
+            extra_web = turn.web_results[1:] if force_search else turn.web_results
+            if outcome.recall_result is not None:
+                payload = prepare_second_round_payload(history, outcome.recall_result,
+                    extra_web or None, system_prompt=session.system_prompt)
+                if payload.result is not None:
+                    turn.recall_result = payload.result
+                    turn.ranked_items = list(payload.result.ranked_items or [])
+                second_history = payload.history
 
-                    async def refresh(_attempt):
-                        recalled = await refresh_candidates_for_send(turn, session, provider)
-                        return prepare_second_round_payload(history, recalled, extra_web or None,
-                            system_prompt=session.system_prompt).history
-                elif turn.web_results:
-                    second_history = build_v11_web_evidence_context(history, list(turn.web_results))
-                else:
-                    second_history = build_tool_result_context(history, [])
+                async def refresh(_attempt):
+                    recalled = await refresh_candidates_for_send(turn, session, provider)
+                    return prepare_second_round_payload(history, recalled, extra_web or None,
+                        system_prompt=session.system_prompt).history
+            elif turn.web_results:
+                second_history = build_v11_web_evidence_context(history, list(turn.web_results))
             else:
-                tool_results = []
-                for call in result["calls"]:
-                    name = (call.get("function") or {}).get("name")
-                    arguments = (call.get("function") or {}).get("arguments")
-                    tool_results.append((name or "unknown_tool", await web_stub(name, arguments)))
-                second_history = build_tool_result_context(history, tool_results)
+                second_history = build_tool_result_context(history, [])
             capture.phase = "tool_answer"
             answer, _, _, _ = await clean(active_history=second_history,
                 memory_summary="", session=session, tools=None, tool_choice=None, provider_snapshot=provider,
-                mode_state=TurnModeState() if entry["mode"] == "v11" else None, before_send=refresh)
+                mode_state=TurnModeState(), before_send=refresh)
         result["answer"] = answer
         result["score"] = score(case, answer, result["calls"], qset, mode=entry["mode"])
         result["fallback"] = result["score"]["fallback"]
@@ -1080,7 +941,7 @@ async def product_turn(plan: dict, entry: dict, directory: Path) -> dict:
     execution_accounting(result, directory.parents[1], plan)
     if plan.get("question_set") == "b5c":
         result.update(b5c.locations(case, qset, capture.requests))
-    if sha256(question_path(plan.get("question_set", "b5b"))) != digest:
+    if sha256(question_path(plan.get("question_set", "b5c"))) != digest:
         raise Refused("question_set_changed_after_execution")
     return result
 
@@ -1155,99 +1016,7 @@ def percentile(values: list, p: float) -> float | None:
 
 
 def summarize(plan: dict, rows: list[dict], qset: dict) -> tuple[dict, str]:
-    if qset["version"] == b5c.VERSION:
-        return b5c.summarize(plan, rows, qset, sys.modules[__name__])
-    cases = {c["id"]: c for c in qset["cases"]}
-    def rates(selected, layer=None):
-        # Repeated cases are a unit: all frozen repetitions must pass.
-        unique = sorted({r["case_id"] for r in selected})
-        eligible = [c for c in unique if not cases[c]["expected"]["diagnostic_only"]]
-        counts = Counter()
-        for case_id in eligible:
-            found = [r for r in selected if r["case_id"] == case_id]
-            scores = [r.get("score", {}).get(layer, r.get("score", {})) if layer else r.get("score", {})
-                      for r in found if r["status"] == "completed"]
-            has_error = any(r["status"] in {"error", "interrupted"} for r in found)
-            has_unrun = (len(found) != cases[case_id]["repeats"] or any(
-                r["status"] not in {"completed", "error", "interrupted"} for r in found))
-            if any(s.get("status") == "fail" for s in scores):
-                counts["failed"] += 1
-            elif has_error or has_unrun:
-                counts["incomplete"] += 1
-                counts["error"] += int(has_error)
-                counts["not_run"] += int(has_unrun)
-            elif any(s.get("status") != "pass" for s in scores):
-                counts["needs_manual"] += 1
-            else:
-                counts["passed"] += 1
-        evaluated = counts["passed"] + counts["failed"]
-        return {**{key: counts[key] for key in ("passed", "failed", "needs_manual", "not_run", "error", "incomplete")},
-                "total": len(eligible), "evaluated": evaluated,
-                "rate": counts["passed"] / evaluated if evaluated else None}
-
-    summary = {"transport": plan["transport"], "question_sha256": plan["question_sha256"], "modes": {}}
-    lines = ["# B5 read benchmark", "", f"transport: {plan['transport']}",
-             f"question_sha256: {plan['question_sha256']}",
-             "Rates = passed/(passed+failed) cases; every repetition must pass. Manual/incomplete/diagnostic excluded.",
-             "Only completed executions are scored. Legacy overall is answer-only; v11 overall includes tools.",
-             "Budget cap is per run directory; a new directory starts at zero.",
-             "Fake scores validate plumbing only. Fake usage is a UTF-8 byte upper estimate.", ""]
-    for mode in ("legacy", "v11"):
-        selected = [r for r in rows if r["mode"] == mode]
-        requests = [request for r in selected for request in r.get("requests", [])]
-        durations = [r.get("execution_wall_ms", r.get("elapsed_ms")) for r in selected
-                     if "execution_wall_ms" in r or "elapsed_ms" in r]
-        model_summary = {"executions": len(selected), "overall": rates(selected),
-            "answer": rates(selected, "answer"),
-            "tool": rates(selected, "tool") if mode == "v11" else None,
-            "cohorts": {c: rates([r for r in selected if r["cohort"] == c]) for c in ("regression", "first_look")},
-            "categories": {c: rates([r for r in selected if cases[r["case_id"]]["expected"]["recall_memory"] == c], "tool")
-                           if mode == "v11" else None for c in ("required", "forbidden", "allowed")},
-            "need_counts": dict(Counter(r.get("score", {}).get("need_count") for r in selected
-                                         if r["status"] == "completed")) if mode == "v11" else None,
-            "needs_manual": sum(bool(r.get("score", {}).get("needs_manual")) or r["status"] == "interrupted" for r in selected),
-            "statuses": dict(Counter(r["status"] for r in selected)),
-            "error_executions": sum(r["status"] == "error" for r in selected),
-            "fallback_executions": sum(bool(r.get("fallback")) for r in selected),
-            "error_reasons": dict(Counter(r.get("error", "unknown") for r in selected if r["status"] == "error")),
-            "request_kinds": dict(Counter(r["kind"] for r in requests)),
-            "request_count_per_execution": dict(Counter(r.get("request_count", 0) for r in selected)),
-            "cost_cny": str(sum((Decimal(r.get("cost_cny") or "0") for r in selected), Decimal(0))),
-            "settled_cny": str(sum((Decimal(r.get("settled_cny") or "0") for r in selected), Decimal(0))),
-            "retained_reserve_cny": str(sum((Decimal(r.get("retained_reserve_cny") or "0") for r in selected), Decimal(0))),
-            "actual_cost_cny": "0" if plan["transport"] == "fake" else str(sum(
-                (Decimal(r.get("actual_cost_cny") or "0") for r in selected), Decimal(0))),
-            "elapsed_ms_p50": statistics.median(durations) if durations else None,
-            "elapsed_ms_p95": percentile(durations, .95),
-            "input_tokens_p50": statistics.median(tokens) if (tokens := [r["usage"]["prompt_tokens"] for r in requests if r.get("usage")]) else None,
-            "input_tokens_max": max((r["usage"]["prompt_tokens"] for r in requests if r.get("usage")), default=None),
-            "e5_loaded_executions": sum(r.get("e5", {}).get("loaded", False) for r in selected)}
-        summary["modes"][mode] = model_summary
-        def rate_text(value):
-            if value is None:
-                return "n/a (legacy has no recall_memory tool)"
-            rate = f"{value['rate']:.1%}" if value["rate"] is not None else "n/a"
-            return (f"{value['passed']}/{value['evaluated']} ({rate}); "
-                    f"planned={value['total']}, manual={value['needs_manual']}, "
-                    f"incomplete={value['incomplete']}, error={value['error']}, unrun={value['not_run']}")
-        lines.extend([f"## {mode}", f"executions: {len(selected)}; statuses: {model_summary['statuses']}",
-                      "overall: " + rate_text(model_summary["overall"]),
-                      "answer: " + rate_text(model_summary["answer"]),
-                      "tool: " + rate_text(model_summary["tool"]),
-                      *[f"{key}: {rate_text(value)}" for key, value in model_summary["cohorts"].items()],
-                      *[f"expected.{key}: {rate_text(value)}" for key, value in model_summary["categories"].items()],
-                      f"need counts: {model_summary['need_counts'] if mode == 'v11' else 'n/a'}",
-                      f"needs_manual executions: {model_summary['needs_manual']}",
-                      f"fallback executions: {model_summary['fallback_executions']}",
-                      f"error executions: {model_summary['error_executions']}; reasons: {model_summary['error_reasons']}",
-                      f"requests: {model_summary['request_kinds']}; per execution: {model_summary['request_count_per_execution']}",
-                      f"{'synthetic estimated' if plan['transport'] == 'fake' else 'actual'} cost_cny: {model_summary['cost_cny']}",
-                      f"actual cost_cny: {model_summary['actual_cost_cny']}",
-                      f"{'synthetic ' if plan['transport'] == 'fake' else ''}settled_cny: {model_summary['settled_cny']}; retained_reserve_cny: {model_summary['retained_reserve_cny']}",
-                      f"execution wall_ms P50/P95: {model_summary['elapsed_ms_p50']}/{model_summary['elapsed_ms_p95']}",
-                      f"input tokens P50/max: {model_summary['input_tokens_p50']}/{model_summary['input_tokens_max']}",
-                      f"E5 loaded executions: {model_summary['e5_loaded_executions']}", ""])
-    return summary, "\n".join(lines)
+    return b5c.summarize(plan, rows, qset, sys.modules[__name__])
 
 
 def run_suite(run_dir: Path, plan: dict, qset: dict, executor=execute_subprocess) -> dict:
@@ -1321,7 +1090,7 @@ def run_suite(run_dir: Path, plan: dict, qset: dict, executor=execute_subprocess
             elif (row.get("stop_run") or row["status"] == "interrupted" or
                   sum(r["status"] == "error" for r in rows) >= 3):
                 stop_status = "not_run_after_accounting_error"
-        if sha256(question_path(plan.get("question_set", "b5b"))) != plan["question_sha256"]:
+        if sha256(question_path(plan.get("question_set", "b5c"))) != plan["question_sha256"]:
             raise Refused("question_set_changed_after_run")
         summary, markdown = summarize(plan, rows, qset)
         if (run_dir / "budget.json").exists():
@@ -1334,6 +1103,8 @@ def run_suite(run_dir: Path, plan: dict, qset: dict, executor=execute_subprocess
 
 
 def aggregate(run_dirs: list[Path], output: Path, manual_path: Path | None = None) -> dict:
+    if not 1 <= len(run_dirs) <= 3:
+        raise Refused("aggregate_requires_one_to_three_runs")
     # Supply filtered plans to the existing scorer; source evidence stays intact.
     plans, exclusions = {}, []
     for directory in run_dirs:
@@ -1413,8 +1184,8 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", type=Path)
     parser.add_argument("--rescore", type=Path, help="rescore saved result.json files offline without changing originals")
-    parser.add_argument("--question-set", choices=("b5b", "b5c"), default="b5b")
-    parser.add_argument("--aggregate", nargs="+", type=Path, help="aggregate three b5c run directories offline")
+    parser.add_argument("--question-set", choices=("b5c",), default="b5c")
+    parser.add_argument("--aggregate", nargs="+", type=Path, help="aggregate 1-3 b5c run directories offline")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--manual", type=Path, help=b5c.__doc__)
     parser.add_argument("--transport", choices=("fake", "real"), default="fake")
@@ -1428,8 +1199,8 @@ def main(argv=None) -> int:
         if args.aggregate:
             if args.output is None:
                 raise Refused("aggregate_output_required")
-            result = aggregate(args.aggregate, args.output, args.manual)
-            print(f"Aggregate {result['gate']['status']}: {args.output.resolve()}")
+            aggregate(args.aggregate, args.output, args.manual)
+            print(f"Aggregate written: {args.output.resolve()}")
             return 0
         if args.rescore:
             rescore_run(args.rescore)

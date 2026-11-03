@@ -15,22 +15,12 @@ from decimal import Decimal
 from pathlib import Path
 
 VERSION = 'b5c-round2-qset-v1'
-GROUPS = {'A': 'legacy', 'B': 'legacy', 'C': 'v11'}
+GROUPS = {'C': 'v11'}
 HIT_CATEGORIES = {'resident', 'outside_lexical', 'outside_paraphrase', 'change_current', 'time'}
 
 
 def selected_rows(qset, case, group=None):
-    facts = qset['facts']
-    if group == 'A':
-        required = set(case['expected']['must_use_fact_keys'] + case['expected']['must_not_use_fact_keys'])
-        keep = {f['key'] for f in facts
-                if required.intersection([f['key'], *(h['key'] for h in f.get('history', []))])}
-        for row in reversed(facts):
-            if len(keep) >= 24:
-                break
-            keep.add(row['key'])
-        facts = [f for f in facts if f['key'] in keep]
-    return [{**f, 'state': f.get('state', 'active')} for f in facts + qset['scope_sentinels']]
+    return [{**f, 'state': f.get('state', 'active')} for f in qset['facts'] + qset['scope_sentinels']]
 
 
 def seed_time(index):
@@ -48,20 +38,6 @@ async def seed_store(qset, case, mode, embedder, group=None):
         timestamp = seed_time(index)
         owner, worldline, identity = row['scope'].split('/')
         history = row.get('history', [])
-        if mode == 'legacy':
-            db = await get_db(worldline, 'memory')
-            try:
-                for version, value in enumerate([*history, row]):
-                    await db.execute('''INSERT INTO core_facts(session_id,identity_mode,fact_key,
-                        fact_value,confidence,importance,is_current,source_message_ids,created_at)
-                        VALUES(?,?,?,?,0.9,0.5,?,'[]',?)''',
-                        (owner, identity, f'entry-{index:03d}-v{version}', value['display_text'],
-                         int(value is row and row['state'] == 'active'),
-                         timestamp if value is row else seed_time(index - len(history) + version - 1)))
-                await db.commit()
-            finally:
-                await db.close()
-            continue
         saved = await create_stable_fact(session_id=owner, worldline=worldline, identity_mode=identity,
             display_text=row['display_text'], semantic_json={'subject': 'user', 'predicate': 'note', 'object': str(index)})
         fact_id = saved['fact_id']
@@ -92,9 +68,8 @@ async def seed_store(qset, case, mode, embedder, group=None):
             await db.commit()
         finally:
             await db.close()
-    if mode == 'v11':
-        for worldline in {row['scope'].split('/')[1] for row in rows}:
-            await validate_active_version_invariants(worldline=worldline)
+    for worldline in {row['scope'].split('/')[1] for row in rows}:
+        await validate_active_version_invariants(worldline=worldline)
 
 
 def rule_results(case, scored):
@@ -159,10 +134,6 @@ def rate(pairs):
 
 def summarize(plan, rows, qset, runtime):
     cases = {c['id']: c for c in qset['cases']}
-    gate_pairs = {key: {('must_not', fact) for fact in case['expected']['must_not_use_fact_keys']} |
-                  ({('must_use', fact) for fact in case['expected']['must_use_fact_keys']}
-                   if case['category'] in HIT_CATEGORIES else set())
-                  for key, case in cases.items()}
     summary = {'transport': plan['transport'], 'question_set': 'b5c', 'question_sha256': plan['question_sha256'], 'groups': {}}
     lines = ['# B5c 第二轮', '', 'Fake 仅验证链路；token 为 UTF-8 字节上界估算，不能据此判断模型效果。',
              '命中按事实对计，待人工不计入命中分母；误提按执行计，待人工不计误提。', '']
@@ -189,11 +160,6 @@ def summarize(plan, rows, qset, runtime):
             mismention_rate=mismentions/len(selected) if selected else None,
             needs_manual=sum(p['status'] == 'needs_manual' for p in pairs(rules=('must_use','must_not','unknown'))),
             incomplete=len(selected)-len(completed), request_count=len(requests),
-            gate_needs_manual=sum(p['status'] == 'needs_manual' and
-                                  (p['rule'], p['key']) in gate_pairs[r['case_id']]
-                                  for r in completed for p in r['score']['rule_results']) if group in ('A','C') else 0,
-            gate_incomplete=sum(r['status'] != 'completed' and bool(gate_pairs[r['case_id']])
-                                for r in selected) if group in ('A','C') else 0,
             input_tokens=sum(tokens), input_tokens_p50=statistics.median(tokens) if tokens else None,
             input_tokens_max=max(tokens, default=None), elapsed_ms_p50=statistics.median(durations) if durations else None,
             elapsed_ms_p95=runtime.percentile(durations, .95),
@@ -205,7 +171,6 @@ def summarize(plan, rows, qset, runtime):
         summary['groups'][group] = metrics
         lines += [f'## {group} ({mode})', f"executions: {len(selected)}; statuses: {metrics['statuses']}",
                   f"命中: {metrics['hit']}", f"误提: {mismentions}/{len(selected)} ({metrics['mismention_rate']}); 待人工: {metrics['needs_manual']}",
-                  f"门槛待人工: {metrics['gate_needs_manual']}; 门槛未完成: {metrics['gate_incomplete']}",
                   f"以前值: {metrics['change_past']}; 不知道: {metrics['unknown']}",
                   *[f'{c}: {m}' for c,m in metrics['categories'].items()],
                   f"requests: {len(requests)}; input tokens total/P50/max: {sum(tokens)}/{metrics['input_tokens_p50']}/{metrics['input_tokens_max']}",
@@ -218,6 +183,8 @@ def summarize(plan, rows, qset, runtime):
 
 
 def aggregate(run_dirs, output, manual_path, runtime):
+    if not 1 <= len(run_dirs) <= 3:
+        raise runtime.Refused('aggregate_requires_one_to_three_runs')
     judgments = runtime.read_json(manual_path) if manual_path else []
     overrides = {}
     for item in judgments:
@@ -262,30 +229,19 @@ def aggregate(run_dirs, output, manual_path, runtime):
         return {'mean': statistics.mean(values) if values else None, 'min': min(values, default=None), 'max': max(values, default=None)}
     groups = {g: {metric: stats([s['groups'][g][metric]['rate'] if metric == 'hit' else s['groups'][g][metric] for s in summaries])
                   for metric in ('hit','mismention_count','mismention_rate')} for g in GROUPS}
-    a, c = groups['A'], groups['C']
-    pending = len(summaries) != 3 or any(s['groups'][g]['gate_needs_manual'] or
-                                       s['groups'][g]['gate_incomplete'] or s['groups'][g]['hit']['rate'] is None
-                                       for s in summaries for g in ('A','C'))
-    hit_pass = (c['hit']['mean'] >= a['hit']['mean'] - .05 - 1e-12) if a['hit']['mean'] is not None and c['hit']['mean'] is not None else None
-    mismention_pass = (sum(s['groups']['C']['mismention_count'] for s in summaries) <=
-                       sum(s['groups']['A']['mismention_count'] for s in summaries) + len(summaries))
-    investigate = []
-    for category in sorted(HIT_CATEGORIES | {'change_past','unknown'}):
-        rates = {g: stats([s['groups'][g]['unknown']['rate'] if category == 'unknown' else
-                           s['groups'][g]['categories'][category]['rate'] for s in summaries])['mean'] for g in ('A','C')}
-        if rates['A'] is not None and rates['C'] is not None and rates['A'] - rates['C'] > .10 + 1e-12:
-            investigate.append(category)
+    for group in GROUPS:
+        for metric in ['unknown', *sorted(summaries[0]['groups'][group]['categories'])]:
+            groups[group][metric] = stats([
+                (run['groups'][group]['unknown'] if metric == 'unknown' else
+                 run['groups'][group]['categories'][metric])['rate'] for run in summaries])
     result = dict(runs=summaries, groups=groups,
-                  gate={'status': 'PENDING' if pending else 'PASS' if hit_pass and mismention_pass else 'FAIL',
-                        'hit_pass': hit_pass, 'mismention_pass': mismention_pass}, investigate=investigate,
                   manual={'applied': len(used), 'changed': changed, 'flipped_pass_fail': flipped})
-    lines = ['# B5c 三次汇总', '', f"门槛: **{result['gate']['status']}**", f'命中条件: {hit_pass}; 误提条件: {mismention_pass}',
-             f'人工: {result["manual"]}', f'要查: {investigate or "无"}',
-             'PENDING 只检查 A/C 的五类 must_use 和全部 must_not；其他待人工、未完成仍单独报告。', '',
-             '|运行|组|命中率|误提次数|待人工|未完成|门槛待人工|门槛未完成|', '|---|---|---:|---:|---:|---:|---:|---:|']
+    lines = ['# B5c 多次汇总', '', f'人工: {result["manual"]}',
+             '只报告数字；命中、误提、类别和 unknown 的分母规则与归档一致。', '',
+             '|运行|组|命中率|误提次数|待人工|未完成|', '|---|---|---:|---:|---:|---:|']
     for s in summaries:
         for g, m in s['groups'].items():
-            lines.append(f"|{s['run']}|{g}|{m['hit']['rate']}|{m['mismention_count']}|{m['needs_manual']}|{m['incomplete']}|{m['gate_needs_manual']}|{m['gate_incomplete']}|")
+            lines.append(f"|{s['run']}|{g}|{m['hit']['rate']}|{m['mismention_count']}|{m['needs_manual']}|{m['incomplete']}|")
     lines += ['', '|组|指标|平均|最小|最大|', '|---|---|---:|---:|---:|']
     for g, metrics in groups.items():
         for metric, v in metrics.items():

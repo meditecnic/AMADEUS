@@ -8,7 +8,6 @@ Fake scores verify plumbing and are not model-quality evidence.
 HTTP adds max_tokens=2000 to the product request to enforce a hard output/budget
 limit; messages and all other fields are unchanged. Only replies exceeding 2000
 tokens are affected; normal memory write replies are far below this limit.
-「要查」表示 v11 比旧版低超过 10 个百分点（严格大于）。
 """
 from __future__ import annotations
 
@@ -70,17 +69,13 @@ def matches(text, aliases):
 
 
 def classify(case, mode, before, after, t1):
-    """Snapshots contain stable fact IDs/active versions or legacy row IDs/keys."""
+    """Snapshots contain stable fact IDs and active versions."""
     if t1 is None:
         return {'status': 'setup_failed', 't1_changed': None, 'new_records': []}
     current = next((row for row in after if row['id'] == t1['id']), None)
-    if mode == 'v11':
-        changed = current is None or not current['active'] or current['version'] != t1['version']
-    else:
-        changed = current is not None and not current['active']
+    changed = current is None or not current['active'] or current['version'] != t1['version']
     prior_ids = {row['id'] for row in before}
-    new = [row for row in after if row['id'] not in prior_ids
-           and (mode == 'v11' or row['key'] != t1['key'])]
+    new = [row for row in after if row['id'] not in prior_ids]
     new_value = any(row['active'] and matches(row['text'], case['new_aliases']) for row in after)
     if (changed and case['category'] in {'keep', 'supersede'}
             and any(row['active'] and matches(row['text'], case['old_aliases']) for row in after)):
@@ -101,19 +96,15 @@ async def snapshot(mode):
     from app.db import get_db
     db = await get_db(SCOPE['worldline'], 'memory')
     try:
-        if mode == 'v11':
-            sql = """SELECT f.fact_id AS id, f.active_version AS version,
-                     f.state, v.display_text AS text
-                     FROM stable_facts f LEFT JOIN stable_fact_versions v
-                     ON f.fact_id=v.fact_id AND f.active_version=v.version_no
-                     WHERE f.session_id=? AND f.identity_mode=? ORDER BY f.fact_id"""
-        else:
-            sql = """SELECT id, fact_key AS key, fact_value AS text, is_current
-                     FROM core_facts WHERE session_id=? AND identity_mode=? ORDER BY id"""
+        sql = """SELECT f.fact_id AS id, f.active_version AS version,
+                 f.state, v.display_text AS text
+                 FROM stable_facts f LEFT JOIN stable_fact_versions v
+                 ON f.fact_id=v.fact_id AND f.active_version=v.version_no
+                 WHERE f.session_id=? AND f.identity_mode=? ORDER BY f.fact_id"""
         rows = [dict(row) for row in await (await db.execute(
             sql, (SCOPE['session_id'], SCOPE['identity_mode']))).fetchall()]
         for row in rows:
-            row['active'] = row.pop('state', None) == 'active' if mode == 'v11' else bool(row.pop('is_current'))
+            row['active'] = row.pop('state', None) == 'active'
         return rows
     finally:
         await db.close()
@@ -124,18 +115,12 @@ async def seed_backgrounds(mode, fixture, embedder):
     from app.services.memory_v11.repository import create_stable_fact
     from app.services.memory_v11.indexing import insert_version_embedding, prepare_passage_embedding
     for row in fixture['background_facts']:
-        if mode == 'v11':
-            saved = await create_stable_fact(**SCOPE, display_text=row['text'],
-                semantic_json={'subject': 'user', 'predicate': row['fact_key'], 'object': {'text': row['text']}})
-            prepared = await prepare_passage_embedding(row['text'], embedder=embedder)
+        saved = await create_stable_fact(**SCOPE, display_text=row['text'],
+            semantic_json={'subject': 'user', 'predicate': row['fact_key'], 'object': {'text': row['text']}})
+        prepared = await prepare_passage_embedding(row['text'], embedder=embedder)
         db = await get_db(SCOPE['worldline'], 'memory')
         try:
-            if mode == 'v11':
-                await insert_version_embedding(db, fact_id=saved['fact_id'], version_no=1, prepared=prepared)
-            else:
-                await db.execute("""INSERT INTO core_facts(session_id,identity_mode,fact_key,fact_value,
-                    confidence,importance,source_message_ids,created_at) VALUES(?,?,?,?,0.96,0.8,'[]',?)""",
-                    (SCOPE['session_id'], SCOPE['identity_mode'], row['fact_key'], row['text'], '2026-01-01T00:00:00Z'))
+            await insert_version_embedding(db, fact_id=saved['fact_id'], version_no=1, prepared=prepared)
             await db.commit()
         finally:
             await db.close()
@@ -144,27 +129,19 @@ async def seed_backgrounds(mode, fixture, embedder):
 def fake_completion(case, mode, round_no, payload):
     source = json.loads(payload['messages'][1]['content'])
     text = case['old_text'] if round_no == 1 else case['new_text']
-    if mode == 'v11':
-        target = next((c['candidate_index'] for c in source['candidates']
-                       if matches(c['display_text'], case['old_aliases'])), None)
-        relation = 'new'
-        if round_no == 2:
-            if case['id'] in {'friend_pet', 'hypothetical'}:
-                return {'observations': []}
-            if target and case['category'] in {'supersede', 'stop'}:
-                relation = 'supersedes'
-        return {'observations': [{'observation_ref': 'o1', 'display_text': text, 'fact_text': text,
-            'semantic': {'subject': 'user', 'predicate': case['legacy_key'], 'object': {'text': text}},
-            'evidence_kind': 'direct_user', 'memory_class': 'stable_candidate', 'confidence': 0.96,
-            'relation': relation, 'candidate_index': target if relation == 'supersedes' else None}]}
-    if round_no == 2 and case['id'] in {'friend_pet', 'hypothetical', 'one_off'}:
-        return {'facts': []}
-    key = case['legacy_key']
-    # Deliberate independent-key failure in the fake; not a quality prediction.
-    if round_no == 2 and case['id'] in {'home_city', 'add_drink'}:
-        key += '_additional'
-    return {'facts': [{'horizon': 'durable', 'fact_key': key, 'fact_value': text,
-        'confidence': 0.96, 'importance': 0.8, 'source_message_ids': source['source_message_ids']}]}
+    target = next((c['candidate_index'] for c in source['candidates']
+                   if matches(c['display_text'], case['old_aliases'])), None)
+    relation = 'new'
+    if round_no == 2:
+        if case['id'] in {'friend_pet', 'hypothetical'}:
+            return {'observations': []}
+        if target and case['category'] in {'supersede', 'stop'}:
+            relation = 'supersedes'
+    return {'observations': [{'observation_ref': 'o1', 'display_text': text, 'fact_text': text,
+        'semantic': {'subject': 'user', 'predicate': 'preference', 'object': {'text': text}},
+        'evidence_kind': 'direct_user', 'memory_class': 'stable_candidate', 'confidence': 0.96,
+        'relation': relation, 'candidate_index': target if relation == 'supersedes' else None}]}
+
 
 
 class Capture:
@@ -306,15 +283,10 @@ async def product_execution(plan, entry, directory):
             row = {'conversation_id': conversation_id, 'source_message_ids': [m['id'] for m in messages]}
             output = io.StringIO()
             with contextlib.redirect_stdout(output):
-                if entry['mode'] == 'v11':
-                    job = await jobs.enqueue_memory_job(**SCOPE, conversation_id=conversation_id,
-                        source_message_id=messages[0]['id'], provider_id='deepseek', model_id=plan['model'])
-                    job = await jobs.process_memory_job(job_id=job['job_id'], worldline=SCOPE['worldline'])
-                    row['job'] = {k: job.get(k) for k in ('job_id', 'state', 'last_error_code')}
-                else:
-                    await memory_service._extract_turn(**SCOPE, user_text=user_text, assistant_text=ASSISTANT,
-                        source_message_ids=row['source_message_ids'], api_key=key, provider_snapshot=provider,
-                        conversation_id=conversation_id, skip_core=False, recent_messages=messages)
+                job = await jobs.enqueue_memory_job(**SCOPE, conversation_id=conversation_id,
+                    source_message_id=messages[0]['id'], provider_id='deepseek', model_id=plan['model'])
+                job = await jobs.process_memory_job(job_id=job['job_id'], worldline=SCOPE['worldline'])
+                row['job'] = {k: job.get(k) for k in ('job_id', 'state', 'last_error_code')}
             log = output.getvalue()
             dropped = []
             for line in log.splitlines():
@@ -375,7 +347,7 @@ def execute_subprocess(plan, entry, directory):
 
 def summarize(rows):
     modes = {}
-    for mode in ('legacy', 'v11'):
+    for mode in ('v11',):
         selected = [r for r in rows if r['mode'] == mode]
         categories = {}
         for category in CATEGORIES:
@@ -429,6 +401,8 @@ def run_suite(run_dir, plan):
 
 
 def aggregate(run_dirs, output, manual=None):
+    if not 1 <= len(run_dirs) <= 3:
+        raise b5.Refused('aggregate_requires_one_to_three_runs')
     overrides = b5.read_json(manual) if manual else []
     applied = 0
     runs = []
@@ -445,19 +419,14 @@ def aggregate(run_dirs, output, manual=None):
     if applied != len(overrides):
         raise b5.Refused('manual_target_not_found')
     stats = {}
-    investigate = []
-    for mode in ('legacy', 'v11'):
+    for mode in ('v11',):
         stats[mode] = {}
         for category in CATEGORIES:
             rates = [run['modes'][mode]['categories'][category]['pass_rate'] for run in runs]
             valid = [rate for rate in rates if rate is not None]
             stats[mode][category] = {'per_run': rates, 'mean': statistics.mean(valid) if valid else None,
                 'min': min(valid) if valid else None, 'max': max(valid) if valid else None}
-    for category in CATEGORIES:
-        legacy, v11 = stats['legacy'][category]['mean'], stats['v11'][category]['mean']
-        if legacy is not None and v11 is not None and round(legacy - v11, 12) > 0.10:
-            investigate.append(category)
-    result = {'runs': runs, 'rates': stats, 'investigate': investigate, 'manual_overrides': applied,
+    result = {'runs': runs, 'rates': stats, 'manual_overrides': applied,
               'note': '只报告，不判门槛；setup_failed 排除，needs_manual 保留在分母并单列；stopped、output_truncated 单列且不进评分。'}
     output.mkdir(parents=True, exist_ok=True)
     b5.write_json(output / 'aggregate.json', result)
@@ -471,7 +440,6 @@ def aggregate(run_dirs, output, manual=None):
             pending = [str(run['modes'][mode]['categories'][category]['needs_manual']) for run in runs]
             lines.append('| ' + ' | '.join([mode, label, ', '.join(map(pct, rates['per_run'])), ', '.join(pending),
                 *[pct(rates[k]) for k in ('mean', 'min', 'max')]]) + ' |')
-    lines.extend(['', '要查：' + ('、'.join(investigate) or '无'), ''])
     for run in runs:
         lines.extend([f"## {run['run_dir']}", '', summary_markdown(run).replace('# 写入侧改口探针', '### 分类计数', 1)])
     (output / 'aggregate.md').write_text('\n'.join(lines), encoding='utf-8')
@@ -485,7 +453,7 @@ def make_plan(args):
         'model': 'deepseek-flash', 'e5_snapshot': args.e5_snapshot,
         'executions': [{'id': f"{mode}-{case['id']}-{repeat}", 'mode': mode, 'case_id': case['id'],
                         'category': case['category'], 'repeat': repeat}
-                       for repeat in range(1, args.repeats + 1) for case in fixture['cases'] for mode in ('legacy', 'v11')]}
+                       for repeat in range(1, args.repeats + 1) for case in fixture['cases'] for mode in ('v11',)]}
 
 
 def main(argv=None):
