@@ -70,6 +70,7 @@ _V2_DELIVERY_TYPES = frozenset(
         "segment.audio_error",
         "turn.translation_repaired",
         "turn.completed",
+        "memory.referenced",
         "turn.cancelled",
     }
 )
@@ -962,7 +963,13 @@ async def get_clean_text_stream(
             raise
         finally:
             session.active_streams.discard(stream_gen)
-            
+
+        if before_send is not None and record is not None and record.recall_result is not None:
+            sent = record.recall_result
+            record.sent_recall_fact_ids = tuple(dict.fromkeys(record.sent_recall_fact_ids + tuple(
+                str(item["fact_id"]) for item in sent.ranked_items
+                if item.get("fact_id") and item.get("ref") in sent.records
+            )))
         if merged_tool_calls:
             return "", "neutral", merged_tool_calls, False
             
@@ -1596,6 +1603,7 @@ async def processor_loop(
     needs_translation_repair = False
     streaming_splitter = None
     streamed_segments = []
+    referenced_items = []
     turn_provider = None
 
     active_history = session.history
@@ -1638,6 +1646,11 @@ async def processor_loop(
                 payload = dict(event)
                 if isinstance(payload.get("data"), bytes):
                     payload["data"] = base64.b64encode(payload["data"]).decode("utf-8")
+                if payload.get("type") == "turn.completed" and referenced_items:
+                    await send_queue.put((epoch, {
+                        "type": "memory.referenced", "items": referenced_items,
+                        **{key: payload[key] for key in ("conversation_id", "turn_id", "generation")},
+                    }))
                 await send_queue.put((epoch, payload))
 
             async def translate_segment(text: str) -> str:
@@ -1780,7 +1793,9 @@ async def processor_loop(
             "tts": "idle"
         }))
         
+        session.turn_compiled_prompt = None
         session.system_prompt = await compile_for_session(session, user_msg, provider=turn_provider)
+        compiled_prompt = session.turn_compiled_prompt
         user_message_id = await models.save_message(
             session.session_id,
             "user",
@@ -1944,13 +1959,15 @@ async def processor_loop(
                 refreshed = await refresh_candidates_for_send(
                     turn_record, session, turn_provider
                 )
-                return prepare_second_round_payload(
+                refreshed_payload = prepare_second_round_payload(
                     active_history,
                     refreshed,
                     extra_web or None,
                     system_prompt=_request_system_prompt(session, active_history, None, _attempt),
                     message_builder=second_round_builder,
-                ).history
+                )
+                turn_record.recall_result = refreshed_payload.result
+                return refreshed_payload.history
 
             final_text, final_emotion, _, emo_tag_found = await get_clean_text_stream(
                 active_history=tool_context,
@@ -2175,6 +2192,15 @@ async def processor_loop(
         }))
 
         if segment_pipeline is not None:
+            if (assistant_message_id is not None and full_ja_text.strip()
+                    and session.current_epoch == epoch
+                    and session.history_epoch == start_history_epoch
+                    and session.conversation_id == conversation_id):
+                from app.services.memory_v11.events import referenced_items_for_turn
+                referenced_items = await referenced_items_for_turn(
+                    (session.session_id, turn_worldline, turn_record.snapshot.identity_mode),
+                    compiled_prompt, turn_record.sent_recall_fact_ids,
+                )
             await segment_pipeline.complete(segment_count=segment_count)
 
         if (

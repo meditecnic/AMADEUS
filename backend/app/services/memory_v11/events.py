@@ -102,3 +102,30 @@ async def _deliver_recorded(scope, job, changes):
                 logger.warning("Memory subscriber failed (%s)", type(exc).__name__)
     except Exception as exc:
         logger.warning("Memory notification failed (%s)", type(exc).__name__)
+
+
+async def referenced_items_for_turn(scope, compiled, recall_ids):
+    """Admit only budgeted sources, excluding residents across every source."""
+    residents = set(getattr(compiled, "resident_fact_ids", ()))
+    seen = {("fact", fact_id) for fact_id in residents}
+    items = []
+    for kind, via, ids in (
+        ("fact", "supplement", getattr(compiled, "supplement_fact_ids", ())),
+        ("experience", "episodic", getattr(compiled, "experience_ids", ())),
+        ("fact", "recall", recall_ids),
+    ):
+        for memory_id in ids:
+            if (kind, memory_id) not in seen:
+                seen.add((kind, memory_id))
+                items.append({"kind": kind, "id": memory_id, "via": via})
+    if not items:
+        return []
+    try:
+        db = await get_db(scope[1], "memory")
+        try:
+            return await describe_items(db, scope, items[:32])
+        finally:
+            await db.close()
+    except Exception as exc:
+        logger.warning("Memory reference unavailable (%s)", type(exc).__name__)
+        return []
