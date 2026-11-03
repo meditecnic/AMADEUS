@@ -1933,7 +1933,7 @@ async def processor_loop(
             elif turn_record.web_results:
                 tool_context = build_v11_web_evidence_context(
                     active_history,
-                    list(turn_record.web_results),
+                    list(extra_web),
                 )
             else:
                 tool_context = build_tool_result_context(active_history, [])
