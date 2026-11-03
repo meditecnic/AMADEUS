@@ -146,6 +146,15 @@ describe('useAmadeusWS memory markers', () => {
     unmount();
   });
 
+  it.each([7.5, 0, -1, '7', null])('drops memory.recorded whose source_message_id is %j', (source) => {
+    const { result, socket, unmount } = setup();
+    act(() => socket.emit(recorded({ source_message_id: source })));
+    expect(user(result.current.messages)?.memoryRecorded).toBeUndefined();
+    act(() => socket.emit(recorded({ source_message_id: 7 })));
+    expect(user(result.current.messages)?.memoryRecorded?.map((c) => c.id)).toEqual(['f1']);
+    unmount();
+  });
+
   it('merges several memory.recorded frames of one turn by id, the later one winning', () => {
     const { result, socket, unmount } = setup();
     act(() => socket.emit(recorded({ changes: [change('f1'), change('f2')] })));

@@ -58,7 +58,7 @@ export function parseMemoryReferenced(frame: unknown): ParsedReferenced | null {
 export function parseMemoryRecorded(frame: unknown): ParsedRecorded | null {
   if (!isRecord(frame)) return null;
   const { conversation_id: conversationId, turn_id: turnId, source_message_id: source, changes } = frame;
-  if (!isText(conversationId) || !isText(turnId) || typeof source !== 'number' || !Number.isFinite(source)) return null;
+  if (!isText(conversationId) || !isText(turnId) || !Number.isSafeInteger(source) || (source as number) <= 0) return null;
   if (!Array.isArray(changes) || changes.length === 0) return null;
   const rows: MemoryChange[] = [];
   for (const row of changes) {
