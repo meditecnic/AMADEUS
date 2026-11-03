@@ -1,0 +1,17 @@
+{
+  "name": "memory-loading",
+  "extends": "streaming",
+  "description": "Normal library, but GET /api/memory/chart is held for ten minutes so the reading state stays on screen.",
+  "memory": {
+    "preset": "normal",
+    "facts": [],
+    "topics": []
+  },
+  "delays": [
+    {
+      "method": "GET",
+      "pathPrefix": "/api/memory/chart",
+      "ms": 600000
+    }
+  ]
+}

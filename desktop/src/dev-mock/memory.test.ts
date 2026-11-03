@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createMemoryStore, handleMemory, type MemorySeed } from './memory';
 import { fetchFactsPage, fetchMemoryStatus, fetchTopics } from '../memory-space/archiveApi';
 import { fetchDetails } from '../memory-space/readingDetails';
-import type { MemoryProjection } from '../memory-space/types';
+import type { MemoryChart, MemoryProjection } from '../memory-space/types';
 
 const seed: MemorySeed = {
   topics: [{ topic_id: 'lab', display_label: 'Lab' }],
@@ -130,5 +130,35 @@ describe('in-memory memory REST handler', () => {
     expect(call('jobs/j/retry', 'POST').body).toMatchObject({ ok: true });
     expect(call('unknown')).toMatchObject({ status: 404, body: { detail: { code: expect.any(String) } } });
     expect(handleMemory(new URL('http://mock/api/other'), 'GET', {}, store)).toBeUndefined();
+  });
+
+  it('serves the dated chart for presets, consistent with archive rows and details', () => {
+    const { call } = harness({ facts: [], topics: [], preset: 'normal' });
+    const chart = call('chart').body as MemoryChart;
+    expect(chart.scope).toEqual({ session_id: 'session one', worldline: 'beta', identity_mode: 'self' });
+    expect(chart.facts.length + chart.experiences.length).toBeGreaterThanOrEqual(20);
+    expect(chart.counts).toEqual({ facts: chart.facts.length, experiences: chart.experiences.length, topics: chart.topics.length });
+    expect(chart.origin_at).toBeTruthy();
+    const created = chart.facts.map(fact => fact.created_at);
+    expect(created).toEqual([...created].sort());
+    const revised = chart.facts.find(fact => fact.version_count > 1)!;
+    const details = call(`facts/${revised.id}/details`).body as { versions: unknown[]; provenance: Array<{ excerpt: string }> };
+    expect(details.versions).toHaveLength(revised.version_count);
+    expect(details.provenance).toHaveLength(revised.evidence_count);
+    expect((call('experiences').body as { experiences: unknown[] }).experiences).toHaveLength(chart.experiences.length);
+    const sg = call('chart', 'GET', {}, 'session_id=session+one&worldline=steins_gate&identity_mode=self').body as MemoryChart;
+    expect(sg.facts.map(fact => fact.label)).not.toEqual(chart.facts.map(fact => fact.label));
+  });
+
+  it('builds the large and new-user libraries and an empty chart', () => {
+    const large = harness({ facts: [], topics: [], preset: 'large' }).call('chart').body as MemoryChart;
+    expect(large.facts.length + large.experiences.length).toBe(300);
+    expect(large.topics).toHaveLength(12);
+    const months = (Date.parse(large.facts[large.facts.length - 1].created_at) - Date.parse(large.origin_at!)) / 2_629_800_000;
+    expect(months).toBeGreaterThan(13);
+    expect(large.facts.filter(fact => fact.resident)).toHaveLength(32);
+    const fresh = harness({ facts: [], topics: [], preset: 'new' }).call('chart').body as MemoryChart;
+    expect(fresh).toMatchObject({ topics: [], experiences: [], counts: { facts: 3 } });
+    expect(harness({ facts: [], topics: [] }).call('chart').body).toMatchObject({ origin_at: null, facts: [], counts: { facts: 0 } });
   });
 });

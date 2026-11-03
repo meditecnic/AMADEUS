@@ -1,0 +1,22 @@
+{
+  "name": "memory-error",
+  "extends": "streaming",
+  "description": "Normal library; GET /api/memory/chart returns HTTP 500.",
+  "memory": {
+    "preset": "normal",
+    "facts": [],
+    "topics": []
+  },
+  "errors": [
+    {
+      "method": "GET",
+      "pathPrefix": "/api/memory/chart",
+      "status": 500,
+      "body": {
+        "detail": {
+          "code": "memory_operation_failed"
+        }
+      }
+    }
+  ]
+}

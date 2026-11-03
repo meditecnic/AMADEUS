@@ -1,5 +1,10 @@
 {
   "name": "memory",
   "extends": "streaming",
-  "description": "Three editable memory facts, one topic, valid v11 status and populated graph projection."
+  "description": "Dated sample library (SG and β each about 25 records over three months), v11 status, archive/details and the memory chart.",
+  "memory": {
+    "preset": "normal",
+    "facts": [],
+    "topics": []
+  }
 }

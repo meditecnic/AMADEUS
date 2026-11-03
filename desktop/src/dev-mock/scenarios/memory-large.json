@@ -1,0 +1,10 @@
+{
+  "name": "memory-large",
+  "extends": "streaming",
+  "description": "Large library: 300 records, 12 topics over 14 months.",
+  "memory": {
+    "preset": "large",
+    "facts": [],
+    "topics": []
+  }
+}

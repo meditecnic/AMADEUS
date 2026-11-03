@@ -107,6 +107,7 @@ export function devMockPlugin(): Plugin {
             url, request.method || 'GET', await readBody(request),
             readCookie(cookies, 'amadeus_mock_client') || 'default', cookies,
           );
+          if (reply.delayMs) await new Promise(resolve => setTimeout(resolve, reply.delayMs));
           response.statusCode = reply.status;
           response.end(JSON.stringify(reply.body));
         } catch (error) {
