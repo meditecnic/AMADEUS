@@ -1,4 +1,16 @@
-"""Ephemeral, scoped memory notifications; delivery is never replayed."""
+"""Ephemeral, scoped memory notifications; delivery is never replayed.
+
+memory.recorded carries conversation_id, turn_id, source_message_id and changes
+({kind: fact|experience, id, change: create|refine|supersede, label, created_at}),
+and is published once after a non-replay job completes with changes, only to v2
+connections currently in that conversation and session/worldline/identity scope.
+
+memory.referenced carries conversation_id, turn_id, generation and items
+({kind: fact|experience, id, via: supplement|episodic|recall, label, created_at}),
+and is queued once after reply publication immediately before turn.completed,
+only for uncancelled v2 turns with nonempty, nonresident, deduplicated items
+in supplement/episodic/recall order, capped at 32 after request budgeting.
+"""
 from __future__ import annotations
 
 import asyncio
