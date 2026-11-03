@@ -51,6 +51,19 @@ describe('chart coordinates', () => {
     expect(after.topics.slice(0, 2).map((t) => t.phi)).toEqual(before.topics.map((t) => t.phi));
   });
 
+  it('orders records written in the same millisecond by their real time, so the earlier star never moves', () => {
+    const base = chart();
+    const old = { ...base.facts[0], id: 'z-existing', created_at: '2026-09-01T12:00:00.000100+00:00', updated_at: '2026-09-01T12:00:00.000100+00:00' };
+    const before = buildChartModel({ ...base, facts: [...base.facts, old] }, { today: TODAY, lastOpen: null });
+    const after = buildChartModel({
+      ...base,
+      facts: [...base.facts, old, { ...old, id: 'a-new-0', created_at: '2026-09-01T12:00:00.000900+00:00' }],
+    }, { today: TODAY, lastOpen: null });
+    expect(positions(after).get('z-existing')).toEqual(positions(before).get('z-existing'));
+    expect(after.byId.get('z-existing')!.no).toBeLessThan(after.byId.get('a-new-0')!.no);
+    const zulu = buildChartModel({ ...base, facts: [...base.facts, { ...old, created_at: '2026-09-01T12:00:00.000100Z' }] }, { today: TODAY, lastOpen: null });
+    expect(positions(zulu)).toEqual(positions(before));
+  });
   it('puts later records further out, with SOUL at the first conversation', () => {
     const model = buildChartModel(chart(), { today: TODAY, lastOpen: null });
     const ordered = [...model.stars].sort((p, q) => p.createdAt - q.createdAt);

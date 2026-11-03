@@ -6,6 +6,7 @@
 //        conversation), so each day covers the same area.
 // phi:   bearing in degrees; topics take golden-angle bearings in the order they
 //        were created, their records scatter a little either side.
+import { parseMicros, parseMs } from './chartTime';
 import type { MemoryChart } from './types';
 
 export const DAY_MS = 86_400_000;
@@ -110,18 +111,26 @@ function makeRoom(star: ChartStar, placed: ChartStar[]): void {
 
 export function buildChartModel(chart: MemoryChart, options: { today: number; lastOpen: number | null }): ChartModel {
   const today = options.today;
-  const firstRecord = [...chart.facts, ...chart.experiences].map((row) => Date.parse(row.created_at)).sort((a, b) => a - b)[0];
-  const origin = chart.origin_at ? Date.parse(chart.origin_at) : firstRecord ?? null;
+  const firstRecord = [...chart.facts, ...chart.experiences].map((row) => parseMs(row.created_at)).sort((a, b) => a - b)[0];
+  const origin = chart.origin_at ? parseMs(chart.origin_at) : firstRecord ?? null;
   const thetaToday = origin === null ? EMPTY_TODAY : thetaAt(origin, today);
   const minFit = 9 + 6.2 * Math.sqrt(MIN_SPAN_DAYS);
   const thetaFit = Math.max(thetaToday, minFit);
   const theta = (at: number) => (origin === null ? 9 : thetaAt(origin, at));
 
+  // True write order, to the microsecond: two records in the same millisecond must not
+  // swap by id, or a later one would push an earlier star aside. Only exact ties use id.
+  const micros = new Map<string, number>();
+  const at = (text: string) => {
+    let us = micros.get(text);
+    if (us === undefined) { us = parseMicros(text) ?? 0; micros.set(text, us); }
+    return us;
+  };
   const byCreated = <T extends { created_at: string; id: string }>(a: T, b: T) =>
-    Date.parse(a.created_at) - Date.parse(b.created_at) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    at(a.created_at) - at(b.created_at) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   const topics: TopicArm[] = [...chart.topics].sort(byCreated).map((topic, index) => ({
     id: topic.id, label: topic.label, index, phi: norm(-28 + index * GOLDEN),
-    createdAt: Date.parse(topic.created_at), starIds: [],
+    createdAt: parseMs(topic.created_at), starIds: [],
   }));
   const topicById = new Map(topics.map((topic) => [topic.id, topic]));
 
@@ -132,7 +141,7 @@ export function buildChartModel(chart: MemoryChart, options: { today: number; la
 
   const stars: ChartStar[] = [];
   rows.forEach(({ row, fragment }, i) => {
-    const createdAt = Date.parse(row.created_at);
+    const createdAt = parseMs(row.created_at);
     const th = theta(createdAt);
     const fact = fragment ? null : chart.facts.find((f) => f.id === row.id)!;
     const topic = fact?.topic_id ? topicById.get(fact.topic_id) ?? null : null;
@@ -156,9 +165,9 @@ export function buildChartModel(chart: MemoryChart, options: { today: number; la
     const evidenceCount = fact?.evidence_count ?? 1;
     const star: ChartStar = {
       id: row.id, kind, no: i + 1, topicId: topic?.id ?? null, label: row.label,
-      createdAt, updatedAt: Date.parse(row.updated_at),
+      createdAt, updatedAt: parseMs(row.updated_at),
       expiresAt: fragment && (row as { expires_at: string | null }).expires_at
-        ? Date.parse((row as { expires_at: string }).expires_at) : null,
+        ? parseMs((row as { expires_at: string }).expires_at) : null,
       theta: th, phi: norm(phi), radius: starRadius(kind, evidenceCount), pinned: row.is_pinned,
       isNew: options.lastOpen !== null && createdAt > options.lastOpen,
       evidenceCount, versionCount: fact?.version_count ?? 1,

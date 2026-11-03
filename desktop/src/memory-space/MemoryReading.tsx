@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, type ReactNode } from 'react';
 
 import { plateGeometry, platePoint, zoneOf, type ChartModel, type ChartStar } from './chartCoordinates';
 import { hm, md, recordNo, ymd } from './chartFormat';
+import { parseMs } from './chartTime';
 import type { ChartSelection } from './MemoryPlate';
 import { NOT_FOUND_NOTICE, type DetailsOutcome } from './readingDetails';
 import type { MemoryChart } from './types';
@@ -177,7 +178,7 @@ export function MemoryReading(props: MemoryReadingProps) {
       </>
     );
   } else {
-    const changed = [...chart.facts, ...chart.experiences].map((row) => Date.parse(row.updated_at)).sort((a, b) => b - a)[0];
+    const changed = [...chart.facts, ...chart.experiences].map((row) => parseMs(row.updated_at)).sort((a, b) => b - a)[0];
     content = (
       <>
         <p className="r-kick" data-testid="reading-kick">SOUL</p>
