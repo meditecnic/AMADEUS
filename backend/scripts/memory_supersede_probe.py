@@ -39,7 +39,6 @@ sys.path.insert(0, str(BACKEND))
 import memory_recall_b5_real_run as b5  # noqa: E402
 
 FIXTURE = BACKEND / 'tests/fixtures/memory_supersede_probe_v1.json'
-DEFAULT_E5 = str(Path.home() / '.cache/huggingface/hub/models--intfloat--multilingual-e5-small/snapshots/614241f622f53c4eeff9890bdc4f31cfecc418b3')
 ASSISTANT = '[EMO:neutral] ふーん、そうなんだ。'
 SCOPE = dict(session_id='probe-owner', worldline='steins_gate', identity_mode='self')
 CATEGORIES = ('supersede', 'keep', 'stop')
@@ -47,17 +46,7 @@ RESULTS = ('pass', 'duplicate', 'missed', 'wrongly_replaced', 'needs_manual', 's
 MAX_OUTPUT_TOKENS = 2000
 
 
-class FakeEmbedder:
-    model_name = 'probe-fake-384'
-    dimensions = 384
-
-    async def encode_passage(self, text):
-        values = [byte - 127.5 for i in range(12)
-                  for byte in hashlib.sha256(f'{text}:{i}'.encode()).digest()]
-        norm = math.sqrt(sum(v * v for v in values))
-        return [v / norm for v in values]
-
-    encode_query = encode_passage
+FakeEmbedder = b5.FakeEmbedder
 
 
 def load_fixture():
@@ -222,21 +211,7 @@ class Capture:
         return response
 
 
-def load_embedder(plan):
-    if plan['transport'] == 'fake':
-        return FakeEmbedder()
-    if not Path(plan['e5_snapshot']).is_dir():
-        raise b5.Refused('local_e5_unavailable')
-    from app.services.memory import EmbeddingAdapter
-
-    if not (Path(plan['e5_snapshot']) / 'onnx/model.onnx').is_file():
-        raise b5.Refused('onnx_missing')
-    try:
-        embedder = EmbeddingAdapter(model_dir=plan['e5_snapshot'])
-        embedder._load()
-        return embedder
-    except Exception:
-        raise b5.Refused('local_e5_unavailable') from None
+load_embedder = b5.load_embedder
 
 
 async def product_execution(plan, entry, directory):
@@ -256,7 +231,7 @@ async def product_execution(plan, entry, directory):
     case = next(c for c in fixture['cases'] if c['id'] == entry['case_id'])
     reset_initialization_cache()
     await init_db()
-    embedder = load_embedder(plan)
+    embedder, embedding = load_embedder(plan)
     memory_service.embedder = embedder
     await seed_backgrounds(entry['mode'], fixture, embedder)
     baseline = await snapshot(entry['mode'])
@@ -308,7 +283,7 @@ async def product_execution(plan, entry, directory):
         'status': 'error' if capture.error_code else ('stopped' if capture.stop_reason else 'completed'),
         'stop_reason': capture.stop_reason, 'error_code': capture.error_code,
         'pid': os.getpid(), 'data_dir': os.environ['AMADEUS_DATA_DIR'], 't1': t1, 'rounds': rounds,
-        'embedding': 'fake-384' if plan['transport'] == 'fake' else 'local-e5',
+        'embedding': embedding,
         'provider_injection': 'provider_registry.snapshot + credential_store.get; MEMORY-capable OpenAICompatibleAdapter + MockTransport',
         'score': None if capture.error_code or capture.stop_reason else classify(case, entry['mode'], before, rounds[-1]['records'], t1),
         'request_count': sum(r['sent'] for r in capture.rows), 'relations': dict(sum((Counter(r.get('relations', {})) for r in capture.rows), Counter())),
@@ -448,9 +423,12 @@ def aggregate(run_dirs, output, manual=None):
 
 def make_plan(args):
     fixture = load_fixture()
+    model_dir = str(Path(args.model_dir).expanduser().resolve())
+    files = b5.embedding_files(model_dir)
+    b5.check_embedding_files(args.transport, files)
     return {'version': fixture['version'], 'fixture_sha256': b5.sha256(FIXTURE), 'script_sha256': b5.sha256(SCRIPT),
         'transport': args.transport, 'base_url': b5.canonical_base_url(args.base_url), 'cap_cny': args.cap_cny,
-        'model': 'deepseek-flash', 'e5_snapshot': args.e5_snapshot,
+        'model': 'deepseek-flash', 'model_dir': model_dir, 'embedding_files': files,
         'executions': [{'id': f"{mode}-{case['id']}-{repeat}", 'mode': mode, 'case_id': case['id'],
                         'category': case['category'], 'repeat': repeat}
                        for repeat in range(1, args.repeats + 1) for case in fixture['cases'] for mode in ('v11',)]}
@@ -462,7 +440,7 @@ def main(argv=None):
     parser.add_argument('--transport', choices=('fake', 'real'), default='fake')
     parser.add_argument('--base-url', default=b5.BUILTIN_DEEPSEEK_BASE_URL)
     parser.add_argument('--cap-cny')
-    parser.add_argument('--e5-snapshot', default=DEFAULT_E5)
+    parser.add_argument('--model-dir', default=str(b5.default_model_dir()))
     parser.add_argument('--repeats', type=int, default=1)
     parser.add_argument('--aggregate', type=Path, nargs='+')
     parser.add_argument('--output', type=Path)

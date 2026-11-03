@@ -299,6 +299,72 @@ def check_real_gate(transport: str, base_url: str, cap_cny: str | None,
         raise Refused("cap_required_positive_at_most_10_cny")
 
 
+# Pinned packaging manifest, checked against build_backend.py by AST in tests.
+EMBEDDING_FILES = {
+    "onnx/model.onnx": "ad8244eea593ae8488cfd821a7d573aa51a350bc817702d6da99f3bccab24f49",
+    "onnx/model.onnx_data": "7eeca7c5e63a9047991df400cdd57c3cf05fabc0168700a4ecee42d1eba8093d",
+    "tokenizer.json": "98d4a1d32152d6cedf85b5e88f3b205106dca1fe72aaab34e0ac13c238421069",
+    "README.md": "9f2433969e7962fffd5cd2bfef18bb319032dc973090d5449628d9bb4d219381",
+}
+
+
+def default_model_dir() -> Path:
+    from app.services.memory import EMBEDDING_REVISION
+    return (Path.home() / ".cache/huggingface/hub/models--jinaai--jina-embeddings-v5-text-nano-retrieval"
+            / "snapshots" / EMBEDDING_REVISION)
+
+
+def embedding_files(model_dir) -> dict:
+    directory = Path(model_dir)
+    # Parent only: hash the three inference files once per run, never per worker.
+    return {name: sha256(directory / name) if (directory / name).is_file() else None
+            for name in EMBEDDING_FILES if name != "README.md"}
+
+
+def check_embedding_files(transport, files):
+    if transport == "real" and files != {k: v for k, v in EMBEDDING_FILES.items() if k != "README.md"}:
+        raise Refused("embedding_files_mismatch")
+
+
+class FakeEmbedder:
+    dimensions = 768
+    _model = True  # Enables seed indexing; metadata still reports no real model loaded.
+
+    def __init__(self):
+        from app.services.memory import EmbeddingAdapter
+        self.model_name = EmbeddingAdapter().model_name
+
+    async def encode_passage(self, text):
+        values = [byte - 127.5 for i in range(24)
+                  for byte in hashlib.sha256(f'{text}:{i}'.encode('utf-8')).digest()]
+        norm = math.sqrt(sum(v * v for v in values))
+        return [v / norm for v in values]
+
+    encode_query = encode_passage
+
+    def readiness(self):
+        return {"ok": True, "loaded": False, "model": self.model_name, "dimensions": self.dimensions}
+
+
+def load_embedder(plan):
+    from app.services.memory import EMBEDDING_REVISION, EmbeddingAdapter
+    check_embedding_files(plan['transport'], plan['embedding_files'])
+    directory = Path(plan['model_dir'])
+    if plan['transport'] == 'fake' and not directory.is_dir():
+        embedder, loaded, reason = FakeEmbedder(), False, 'fake-768'
+    else:
+        try:
+            embedder = EmbeddingAdapter(model_dir=directory)
+            embedder._load()
+            if embedder._model is None:
+                raise RuntimeError('not_loaded')
+        except Exception:
+            raise Refused('local_embedding_unavailable') from None
+        loaded, reason = True, 'local_snapshot_loaded'
+    return embedder, dict(loaded=loaded, reason=reason, model=embedder.model_name,
+                          revision=EMBEDDING_REVISION, dimensions=embedder.dimensions)
+
+
 def question_path(name="b5c") -> Path:
     return QUESTION_SET
 
@@ -312,7 +378,10 @@ def load_questions(name="b5c") -> tuple[dict, str]:
 
 
 def make_plan(qset: dict, digest: str, *, transport="fake", base_url=BUILTIN_DEEPSEEK_BASE_URL,
-              cap_cny=None, model="deepseek-flash", e5_snapshot="") -> dict:
+              cap_cny=None, model="deepseek-flash", model_dir="") -> dict:
+    model_dir = str(Path(model_dir).expanduser().resolve()) if model_dir else str(default_model_dir())
+    files = embedding_files(model_dir)
+    check_embedding_files(transport, files)
     rows = [{"id": f"{group}-{case['id']}-{repeat}", "group": group, "mode": mode,
              "case_id": case["id"], "category": case["category"], "cohort": case["cohort"], "repeat": repeat}
             for case in qset["cases"] for repeat in range(1, case["repeats"] + 1)
@@ -322,7 +391,7 @@ def make_plan(qset: dict, digest: str, *, transport="fake", base_url=BUILTIN_DEE
     return {"version": 1, "question_set": "b5c", "question_version": qset["version"],
             "question_sha256": digest, "script_sha256": sha256(SCRIPT), "helper_sha256": sha256(Path(b5c.__file__)),
             "transport": transport, "base_url": canonical_base_url(base_url), "cap_cny": cap_cny,
-            "model": model, "max_tokens": MAX_OUTPUT_TOKENS, "e5_snapshot": e5_snapshot,
+            "model": model, "max_tokens": MAX_OUTPUT_TOKENS, "model_dir": model_dir, "embedding_files": files,
             "executions": rows, "rules": qset["rules"]}
 
 
@@ -793,7 +862,7 @@ async def product_turn(plan: dict, entry: dict, directory: Path) -> dict:
     )
     from app.services import prompt_compiler as compiler
     from app.services.conversations import conversation_service
-    from app.services.memory import EmbeddingAdapter, memory_service
+    from app.services.memory import memory_service
     from app.services.provider_adapters import OpenAICompatibleAdapter
     from app.services.provider_registry import ProviderCapabilities, ProviderSnapshot, ProviderTask
     from app.services.provider_runtime import deepseek_service
@@ -811,28 +880,7 @@ async def product_turn(plan: dict, entry: dict, directory: Path) -> dict:
     reset_initialization_cache()
     await init_db()
 
-    class LocalE5(EmbeddingAdapter):
-        def _load(self):
-            if self._model is None:
-                raise RuntimeError("local_e5_unavailable")
-            return self._model
-
-        def readiness(self):
-            return {"ok": self._model is not None, "loaded": self._model is not None,
-                    "model": self.model_name, "dimensions": 384}
-
-    embedder = LocalE5(model_dir=plan["e5_snapshot"])
-    e5 = {"loaded": False, "reason": "local_snapshot_missing"}
-    snapshot = Path(plan["e5_snapshot"])
-    if plan["e5_snapshot"] and snapshot.is_dir():
-        try:
-            if not (snapshot / "onnx/model.onnx").is_file():
-                e5 = {"loaded": False, "reason": "onnx_missing"}
-            else:
-                EmbeddingAdapter._load(embedder)
-                e5 = {"loaded": True, "reason": "local_snapshot_loaded"}
-        except Exception as exc:
-            e5 = {"loaded": False, "reason": type(exc).__name__}
+    embedder, embedding = load_embedder(plan)
     memory_service.embedder = embedder
     await seed_store(qset, case, entry["mode"], embedder, entry["group"])
     capture = Capture(plan, entry, qset, case, directory)
@@ -866,7 +914,7 @@ async def product_turn(plan: dict, entry: dict, directory: Path) -> dict:
 
     compiler._select_v11_memory_supplement = timed_supplement
     started = time.perf_counter()
-    result = {**entry, "status": "completed", "calls": [], "e5": e5, "disabled": DISABLED}
+    result = {**entry, "status": "completed", "calls": [], "embedding": embedding, "disabled": DISABLED}
     try:
         session.system_prompt = await compiler.compile_for_session(session, case["query"], provider=provider)
         result.update(core_facts="CORE FACTS" in session.system_prompt,
@@ -1192,7 +1240,7 @@ def main(argv=None) -> int:
     parser.add_argument("--base-url", default=BUILTIN_DEEPSEEK_BASE_URL)
     parser.add_argument("--cap-cny")
     parser.add_argument("--model", default="deepseek-flash")
-    parser.add_argument("--e5-snapshot", default=str(Path.home() / ".cache/huggingface/hub/models--intfloat--multilingual-e5-small/snapshots/614241f622f53c4eeff9890bdc4f31cfecc418b3"))
+    parser.add_argument("--model-dir", default=str(default_model_dir()))
     parser.add_argument("--worker", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     try:
@@ -1220,7 +1268,7 @@ def main(argv=None) -> int:
             raise Refused("run_directory_required")
         qset, digest = load_questions(args.question_set)
         plan = make_plan(qset, digest, transport=args.transport, base_url=args.base_url,
-                         cap_cny=args.cap_cny, model=args.model, e5_snapshot=args.e5_snapshot)
+                         cap_cny=args.cap_cny, model=args.model, model_dir=args.model_dir)
         print("Budget cap covers this run directory only; a new directory starts at zero.", flush=True)
         summary = run_suite(args.run_dir, plan, qset)
         print(json.dumps({"run_dir": str(args.run_dir.resolve()), "transport": args.transport,
