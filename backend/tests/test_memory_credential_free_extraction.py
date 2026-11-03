@@ -37,7 +37,7 @@ def provider(request, monkeypatch):
     try:
         snapshot = provider_registry.snapshot(provider_id)
         completion = AsyncMock(return_value={"facts": [], "observations": [], "operations": []})
-        monkeypatch.setattr(snapshot.adapter, "complete_json", completion)
+        monkeypatch.setattr(type(snapshot.adapter), "complete_json", staticmethod(completion))
         yield snapshot, completion
     finally:
         if provider_id == _PROFILE_ID:
@@ -79,7 +79,7 @@ async def test_memory_capability_still_required(provider, isolated_provider_cred
     snapshot, completion = provider
     snapshot = replace(snapshot, capabilities=ProviderCapabilities(tasks=frozenset({ProviderTask.CHAT})))
     isolated_provider_credentials.set(snapshot.provider_id, "12345678")
-    monkeypatch.setattr(provider_registry, "snapshot", lambda *args: snapshot)
+    monkeypatch.setattr(type(provider_registry), "snapshot", staticmethod(lambda *args: snapshot))
     with pytest.raises(RuntimeError, match="provider_unavailable"):
         await default_memory_completion(provider_id=snapshot.provider_id)
     completion.assert_not_called()
@@ -94,7 +94,7 @@ async def test_skip_reasons_do_not_expose_credentials(
 ):
     snapshot = provider_registry.snapshot("deepseek")
     completion = AsyncMock()
-    monkeypatch.setattr(snapshot.adapter, "complete_json", completion)
+    monkeypatch.setattr(type(snapshot.adapter), "complete_json", staticmethod(completion))
     isolated_provider_credentials.delete("deepseek")
     if api_key is not None:
         isolated_provider_credentials.set("deepseek", api_key)

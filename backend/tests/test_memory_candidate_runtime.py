@@ -257,7 +257,7 @@ def _install_recall_provider(monkeypatch, capture: _ProviderCapture) -> None:
             return
         yield {"content": capture.reply, "tool_calls": None}
 
-    monkeypatch.setattr(deepseek_service, "get_chat_stream", fake_get_chat_stream)
+    monkeypatch.setattr(type(deepseek_service), "get_chat_stream", staticmethod(fake_get_chat_stream))
 
 
 def _memory_asgi_app() -> FastAPI:
@@ -325,9 +325,9 @@ def _bind_candidate(monkeypatch, candidate: Path, embedder: _OfflineEmbedder) ->
     )
     from app.services.tts_queue import tts_manager
 
-    monkeypatch.setattr(tts_manager, "synthesize_async", _fail_external("tts.synthesize_async"))
+    monkeypatch.setattr(type(tts_manager), "synthesize_async", staticmethod(_fail_external("tts.synthesize_async")))
     monkeypatch.setattr(
-        tts_manager, "synthesize_and_queue", _fail_external("tts.synthesize_and_queue")
+        type(tts_manager), "synthesize_and_queue", staticmethod(_fail_external("tts.synthesize_and_queue"))
     )
 
 

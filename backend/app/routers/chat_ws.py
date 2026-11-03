@@ -23,6 +23,10 @@ from app.services.prompt_compiler import compile_for_session, render_tail_remind
 from app.services.session_manager import cancel_inflight, session_coordinator
 from app.services.turn_tool_orchestrator import (
     WEB_EVIDENCE_MARKER,
+    provider_message_builder,
+    request_envelope_tokens,
+    split_current_turn,
+    trim_request_history,
     _ANSWER_LANGUAGE_HARD_REQUIREMENT,
 )
 from app.domain.subtitle_glossary_rewrite import apply_subtitle_glossary_rewrites
@@ -663,6 +667,35 @@ async def execute_tool_call(name: str, arguments_str: str) -> str:
     else:
         return f"Error: Tool {name} not found."
 
+def _request_system_prompt(session, prompt_history, tools, attempt):
+    eff_system_prompt = session.system_prompt or ""
+    # Non-Japanese user turns: improve the happy path before the isolated
+    # renderer is ever needed (search may already carry the requirement).
+    if (
+        attempt == 0
+        and _latest_user_message_requires_japanese_reply(prompt_history)
+        and "ANSWER LANGUAGE — HARD REQUIREMENT" not in eff_system_prompt
+        and "表示本文は必ず自然な日本語のみ" not in eff_system_prompt
+    ):
+        eff_system_prompt = eff_system_prompt + "\n" + _ANSWER_LANGUAGE_HARD_REQUIREMENT
+    if attempt > 0:
+        retry_instruction = (
+            "\n【直前の出力でAI・アシスタント・言語モデル等の露見語が検出された。"
+            "絶対に紅莉栖としてのみ振る舞い、二度とそのような語を使わないこと。】"
+        )
+        eff_system_prompt = (session.system_prompt or "") + retry_instruction
+
+    # Memory read gate: only when this request actually offers recall_memory,
+    # and exactly one copy per send (including leak-retry attempts).
+    eff_system_prompt = _with_memory_recall_read_gate(eff_system_prompt, tools)
+
+    from datetime import datetime
+    time_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    time_supplement = f"\n【現在時刻：{time_str}】"
+    eff_system_prompt = (eff_system_prompt or "") + time_supplement
+    return eff_system_prompt
+
+
 async def get_clean_text_stream(
     active_history: list,
     memory_summary: str,
@@ -681,6 +714,7 @@ async def get_clean_text_stream(
     """
     MAX_ATTEMPTS = 3  # Leak recovery keeps the historical three-attempt budget.
     rejection_reason: str | None = None
+    budget_source_history = active_history
     prompt_history = _language_safe_prompt_history(active_history)
     filtered_history_count = len(active_history or []) - len(prompt_history)
     if filtered_history_count:
@@ -706,6 +740,7 @@ async def get_clean_text_stream(
             if asyncio.iscoroutine(replacement):
                 replacement = await replacement
             if replacement is not None:
+                budget_source_history = replacement
                 prompt_history = _language_safe_prompt_history(replacement)
                 buffer_ui_until_attempt_ok = _history_has_external_evidence(prompt_history)
         emo_buffer = ""
@@ -819,31 +854,26 @@ async def get_clean_text_stream(
             for segment in publication_segmenter.finish():
                 await _check_publication_segment(segment, finish=True)
 
-        eff_system_prompt = session.system_prompt or ""
-        # Non-Japanese user turns: improve the happy path before the isolated
-        # renderer is ever needed (search may already carry the requirement).
-        if (
-            attempt == 0
-            and _latest_user_message_requires_japanese_reply(prompt_history)
-            and "ANSWER LANGUAGE — HARD REQUIREMENT" not in eff_system_prompt
-            and "表示本文は必ず自然な日本語のみ" not in eff_system_prompt
-        ):
-            eff_system_prompt = eff_system_prompt + "\n" + _ANSWER_LANGUAGE_HARD_REQUIREMENT
-        if attempt > 0:
-            retry_instruction = (
-                "\n【直前の出力でAI・アシスタント・言語モデル等の露見語が検出された。"
-                "絶対に紅莉栖としてのみ振る舞い、二度とそのような語を使わないこと。】"
-            )
-            eff_system_prompt = (session.system_prompt or "") + retry_instruction
-
-        # Memory read gate: only when this request actually offers recall_memory,
-        # and exactly one copy per send (including leak-retry attempts).
-        eff_system_prompt = _with_memory_recall_read_gate(eff_system_prompt, tools)
-
-        from datetime import datetime
-        time_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        time_supplement = f"\n【現在時刻：{time_str}】"
-        eff_system_prompt = (eff_system_prompt or "") + time_supplement
+        eff_system_prompt = _request_system_prompt(session, prompt_history, tools, attempt)
+        provider = provider_snapshot.adapter if provider_snapshot is not None else deepseek_service
+        builder = provider_message_builder(provider)
+        old, current = split_current_turn(prompt_history)
+        bounded, dropped = trim_request_history(
+            old, [*current, tail_reminder], eff_system_prompt, memory_summary,
+            builder, config.REQUEST_INPUT_BUDGET,
+        )
+        record = getattr(session, "turn_execution", None)
+        if record is not None:
+            stored_old, _ = split_current_turn(session.history)
+            source_old, _ = split_current_turn(budget_source_history)
+            dropped += max(0, len(stored_old) - len(source_old))
+            record.dropped_history_messages = max(record.dropped_history_messages, dropped)
+        total = request_envelope_tokens(bounded, eff_system_prompt, memory_summary, builder)
+        logger.info("[RequestBudget] session=%s dropped=%d tokens=%d budget=%d",
+                    session.session_id, dropped, total, config.REQUEST_INPUT_BUDGET)
+        if total > config.REQUEST_INPUT_BUDGET:
+            logger.warning("[RequestBudget] session=%s tokens=%d budget=%d current content exceeds budget",
+                           session.session_id, total, config.REQUEST_INPUT_BUDGET)
 
         import inspect
         base_temperature = (
@@ -852,7 +882,7 @@ async def get_clean_text_stream(
             else session.temperature
         )
         stream_kwargs = {
-            "active_history": [*prompt_history, tail_reminder],
+            "active_history": bounded,
             "memory_summary": memory_summary,
             "api_key": session.api_key,
             "system_prompt": eff_system_prompt,
@@ -1777,6 +1807,14 @@ async def processor_loop(
             unsupported_failsoft_history,
         )
 
+        request_builder = provider_message_builder(turn_provider.adapter)
+
+        def second_round_builder(history, summary, system):
+            tail = {"role": "system", "content": render_tail_reminder(
+                session.identity_mode, getattr(session, "self_name", ""),
+            )}
+            return request_builder([*history, tail], summary, system)
+
         turn_record = TurnExecutionRecord(
             snapshot=snapshot_from_session(session, turn_provider),
             injected_fact_ids=getattr(session, "turn_injected_fact_ids", ()),
@@ -1882,7 +1920,11 @@ async def processor_loop(
                     active_history,
                     recall_result,
                     extra_web or None,
-                    system_prompt=session.system_prompt,
+                    system_prompt=_request_system_prompt(session, active_history, None, 0),
+                    message_builder=second_round_builder,
+                )
+                turn_record.dropped_history_messages = max(
+                    turn_record.dropped_history_messages, payload.dropped_history_messages,
                 )
                 if payload.result is not None:
                     turn_record.recall_result = payload.result
@@ -1891,7 +1933,7 @@ async def processor_loop(
             elif turn_record.web_results:
                 tool_context = build_v11_web_evidence_context(
                     active_history,
-                    list(turn_record.web_results),
+                    list(extra_web),
                 )
             else:
                 tool_context = build_tool_result_context(active_history, [])
@@ -1906,7 +1948,8 @@ async def processor_loop(
                     active_history,
                     refreshed,
                     extra_web or None,
-                    system_prompt=session.system_prompt,
+                    system_prompt=_request_system_prompt(session, active_history, None, _attempt),
+                    message_builder=second_round_builder,
                 ).history
 
             final_text, final_emotion, _, emo_tag_found = await get_clean_text_stream(
@@ -2563,6 +2606,8 @@ async def websocket_chat_endpoint(websocket: WebSocket):
         while True:
             try:
                 data = await websocket.receive_json()
+                if not isinstance(data, dict):
+                    raise ValueError("frame must be an object")
             except WebSocketDisconnect:
                 break
             except Exception as e:

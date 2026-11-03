@@ -153,14 +153,17 @@ def test_http_rejection_prevents_database_network_and_process_effects(token_clie
 
     assert token_client.portal.call(count_conversations) == 0
     create = AsyncMock(wraps=conversation_service.create)
-    monkeypatch.setattr(conversation_service, 'create', create)
+    monkeypatch.setattr(type(conversation_service), 'create', staticmethod(create))
     outbound = AsyncMock(return_value=httpx.Response(
         200, json={'data': [{'id': 'deepseek-flash'}, {'id': 'deepseek-v4-flash'}]},
         request=httpx.Request('GET', 'https://provider.example/models'),
     ))
     monkeypatch.setattr(httpx.AsyncClient, 'send', outbound)
+    from app.services.tts_sidecar import sidecar_supervisor
+
     sidecar = AsyncMock()
-    monkeypatch.setattr('app.main.sidecar_supervisor.ensure_available', sidecar)
+    monkeypatch.setattr(sidecar_supervisor, 'ensure_available', sidecar)
+    assert sidecar_supervisor.ensure_available is sidecar
     spawn = MagicMock(side_effect=AssertionError('unauthorized request spawned process'))
     monkeypatch.setattr(subprocess, 'Popen', spawn)
     params = {'session_id': owner}
@@ -202,7 +205,7 @@ def test_ws_requires_token_before_session_or_database(token_client, local_token,
         mp.setattr('app.routers.chat_ws.SessionState', session)
         mp.setattr('app.db.get_db', db)
         mp.setattr('app.models.get_db', db)
-        mp.setattr('app.routers.voice_ws.session_coordinator.acquire_lease', lease)
+        mp.setattr('app.services.session_manager.SessionCoordinator.acquire_lease', staticmethod(lease))
         with token_client.websocket_connect(f'/ws/{endpoint}?session_id={sid}', subprotocols=protocols) as ws:
             with pytest.raises(WebSocketDisconnect) as rejected:
                 ws.receive_json()

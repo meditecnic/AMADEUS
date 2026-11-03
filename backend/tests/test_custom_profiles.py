@@ -474,9 +474,9 @@ async def test_clear_runtime_unregisters_even_if_cache_clear_raises(app_client, 
 
     with monkeypatch.context() as m:
         m.setattr(
-            providers_router.provider_model_cache,
+            type(providers_router.provider_model_cache),
             "clear",
-            lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("cache clear boom")),
+            staticmethod(lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("cache clear boom"))),
         )
         providers_router._clear_runtime_surfaces(provider_id)
         with pytest.raises(KeyError):

@@ -37,7 +37,7 @@ async def run_turn(monkeypatch, conversation, chunks, *, protocol=2, client="des
     monkeypatch.setattr(type(chat_ws.deepseek_service), "get_chat_stream", stream)
     monkeypatch.setattr(chat_ws, "translate_with_provider", AsyncMock(return_value="中文。"))
     speech = AsyncMock(return_value=b"offline-audio")
-    monkeypatch.setattr(chat_ws.tts_manager, "synthesize_async", speech)
+    monkeypatch.setattr(type(chat_ws.tts_manager), "synthesize_async", staticmethod(speech))
 
     async def queue_speech(session_id, text, emotion, **kwargs):
         await speech(text, emotion)
@@ -47,9 +47,9 @@ async def run_turn(monkeypatch, conversation, chunks, *, protocol=2, client="des
         await speech(text, emotion)
         yield None, b"offline-pcm"
 
-    monkeypatch.setattr(chat_ws.tts_manager, "synthesize_and_queue", queue_speech)
-    monkeypatch.setattr(chat_ws.tts_manager, "stream_pcm", stream_speech)
-    monkeypatch.setattr(conversation_service, "schedule_auto_title", lambda *a, **k: None)
+    monkeypatch.setattr(type(chat_ws.tts_manager), "synthesize_and_queue", staticmethod(queue_speech))
+    monkeypatch.setattr(type(chat_ws.tts_manager), "stream_pcm", staticmethod(stream_speech))
+    monkeypatch.setattr(type(conversation_service), "schedule_auto_title", staticmethod(lambda *a, **k: None))
     monkeypatch.setattr("app.services.memory_v11.jobs.enqueue_memory_job", AsyncMock())
     session = chat_ws.SessionState("emo-test")
     session.client_type = client

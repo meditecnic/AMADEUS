@@ -136,7 +136,7 @@ async def test_reader_boundary_hides_exception(monkeypatch, capsys):
             queued.append(item[1])
             await super().put(item)
 
-    bad_frame = Mock()
+    bad_frame = Mock(spec=dict)
     bad_frame.get.side_effect = RuntimeError(SECRET)
     websocket = SimpleNamespace(
         query_params={"session_id": f"reader-error-{uuid4()}"},

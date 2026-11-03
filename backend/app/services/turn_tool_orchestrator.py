@@ -6,6 +6,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
+from app import config
 from app.agent_tools import MEMORY_ONLY_TOOLS, MEMORY_WEB_TOOLS, RECALL_MEMORY_TOOL_NAME
 from app.db import normalize_identity_mode, normalize_worldline
 from app.services.memory_v11.recall import (
@@ -70,6 +71,7 @@ class TurnExecutionRecord:
     mode_state: TurnModeState = field(default_factory=TurnModeState)
     recall_result: RecallResult | None = None
     web_results: list[tuple[str, str]] = field(default_factory=list)
+    dropped_history_messages: int = 0
     late_tool_call: bool = False
     raw_calls: list[dict[str, Any]] = field(default_factory=list)
     ranked_items: list[dict[str, Any]] = field(default_factory=list)
@@ -110,6 +112,7 @@ class ToolBatchOutcome:
 @dataclass(slots=True)
 class SecondRoundPayload:
     history: list
+    dropped_history_messages: int = field(default=0, kw_only=True)
     status: str
     reason: str = ""
     result: RecallResult | None = None
@@ -445,6 +448,87 @@ def build_v11_web_evidence_context(
     return history
 
 
+def provider_message_builder(adapter: Any) -> Any:
+    from app.services.provider_runtime import deepseek_service
+
+    return (getattr(adapter, "_message_builder", None)
+            or getattr(adapter, "build_persona_messages", None)
+            or deepseek_service.build_persona_messages)
+
+
+def request_envelope_tokens(history, system_prompt, memory_summary, message_builder) -> int:
+    from app.services.llm_interface import build_stream_messages
+    from app.services.prompt_compiler import PromptCompiler
+
+    messages = build_stream_messages(
+        message_builder, history, memory_summary, system_prompt or "", isolated=False,
+    )
+    return sum(PromptCompiler._estimate_tokens(str(row.get("content") or "")) for row in messages)
+
+
+def split_current_turn(history: list) -> tuple[list, list]:
+    """Protect the latest user message and every request-only addition after it."""
+    current = next((i for i in range(len(history) - 1, -1, -1)
+                    if history[i].get("role") == "user"), 0)
+    return history[:current], history[current:]
+
+
+def trim_request_history(
+    old_history: list, turn_messages: list, system_prompt: str | None,
+    memory_summary: str, message_builder: Any, budget: int,
+) -> tuple[list, int]:
+    """Drop whole oldest messages from a send-only copy, before any Memory cuts."""
+    from app.services.prompt_compiler import PromptCompiler
+
+    complete = list(old_history) + list(turn_messages)
+    envelope = []
+
+    def observe_builder(history, summary, system):
+        nonlocal envelope
+        envelope = message_builder(history, summary, system)
+        return envelope
+
+    total = request_envelope_tokens(complete, system_prompt, memory_summary, observe_builder)
+    if total <= budget or not old_history:
+        return complete, 0
+
+    # Subtraction is exact only for unchanged history rows after a stable prefix.
+    prefix_length = len(envelope) - len(complete)
+    if prefix_length >= 0 and envelope[prefix_length:] == complete:
+        prefix = envelope[:prefix_length]
+        cut = previous = 0
+        while cut < len(old_history):
+            previous = cut
+            total -= PromptCompiler._estimate_tokens(str(old_history[cut].get("content") or ""))
+            cut += 1
+            while cut < len(old_history) and old_history[cut].get("role") == "assistant":
+                total -= PromptCompiler._estimate_tokens(str(old_history[cut].get("content") or ""))
+                cut += 1
+            if total <= budget:
+                break
+
+        candidate = list(old_history[cut:]) + list(turn_messages)
+        actual = request_envelope_tokens(candidate, system_prompt, memory_summary, observe_builder)
+        candidate_matches = envelope == prefix + candidate
+        preceding = list(old_history[previous:]) + list(turn_messages)
+        before = request_envelope_tokens(preceding, system_prompt, memory_summary, observe_builder)
+        # If even mandatory content exceeds the budget, the old loop drops all.
+        no_fit = cut == len(old_history) and actual == total
+        if (candidate_matches and envelope == prefix + preceding
+                and (actual <= budget or no_fit) and before > budget):
+            return candidate, cut
+
+    # Filtering/rewriting builders retain the original full-envelope algorithm.
+    kept = list(old_history)
+    while kept and request_envelope_tokens(
+        kept + turn_messages, system_prompt, memory_summary, message_builder,
+    ) > budget:
+        kept.pop(0)
+        while kept and kept[0].get("role") == "assistant":
+            kept.pop(0)
+    return kept + list(turn_messages), len(old_history) - len(kept)
+
+
 def prepare_second_round_payload(
     active_history: list,
     result: RecallResult,
@@ -456,13 +540,10 @@ def prepare_second_round_payload(
     memory_summary: str = "",
     message_builder: Any | None = None,
 ) -> SecondRoundPayload:
-    from app.services.llm_interface import build_stream_messages
-    from app.services.prompt_compiler import PromptCompiler
     from app.services.provider_runtime import deepseek_service
     from app.services.memory_v11.recall import _render_block
 
-    compiler = PromptCompiler()
-    budget = compiler.input_budget if input_budget is None else input_budget
+    budget = config.REQUEST_INPUT_BUDGET if input_budget is None else input_budget
     builder = message_builder or deepseek_service.build_persona_messages
 
     def _history_for(mem: RecallResult, rows: list[tuple[str, str]] | None) -> list:
@@ -478,21 +559,22 @@ def prepare_second_round_payload(
         return history
 
     def _envelope_tokens(hist: list) -> int:
-        messages = build_stream_messages(
-            builder,
-            hist,
-            memory_summary,
-            system_prompt or "",
-            isolated=False,
-        )
-        return sum(compiler._estimate_tokens(str(row.get("content") or "")) for row in messages)
+        return request_envelope_tokens(hist, system_prompt, memory_summary, builder)
+
+    old, current = split_current_turn(active_history)
+    initial = _history_for(result, web_results)[len(active_history):]
+    trimmed, dropped = trim_request_history(
+        old, current + initial, system_prompt, memory_summary, builder, budget,
+    )
+    active_history = trimmed[:-len(initial)]
 
     if not compatible:
         notice = unsupported_result(
             "undeclared_combo", facts_injected=bool(result.facts_injected)
         )
         return SecondRoundPayload(
-            history=_history_for(notice, None),
+            history=_history_for(notice, web_results),
+            dropped_history_messages=dropped,
             status="unsupported",
             reason="undeclared_combo",
             result=notice,
@@ -502,7 +584,8 @@ def prepare_second_round_payload(
     history = _history_for(working, web_results)
     total = _envelope_tokens(history)
     if total <= budget:
-        return SecondRoundPayload(history=history, status=working.status, result=working)
+        return SecondRoundPayload(history=history, status=working.status, result=working,
+                                  dropped_history_messages=dropped)
 
     records = dict(working.records)
     groups = list(working.groups)
@@ -558,12 +641,14 @@ def prepare_second_round_payload(
             "input_budget", facts_injected=bool(result.facts_injected)
         )
         return SecondRoundPayload(
-            history=_history_for(notice, None),
+            history=_history_for(notice, web_results),
+            dropped_history_messages=dropped,
             status="unavailable",
             reason="input_budget",
             result=notice,
         )
-    return SecondRoundPayload(history=history, status=working.status, result=working)
+    return SecondRoundPayload(history=history, status=working.status, result=working,
+                                  dropped_history_messages=dropped)
 
 
 def build_memory_candidate_context(

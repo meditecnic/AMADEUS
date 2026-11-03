@@ -604,10 +604,9 @@ async def test_hundred_thousand_chars_rejected_before_adapter_send():
     adapter = _openai_adapter(capture)
     await _through_stream(adapter, tools=None, history=payload.history, session=_session(system_prompt=persona))
     blob = json.dumps(capture.requests, ensure_ascii=False)
-    # The history is not trimmed (the first round sent it whole) and not copied
-    # into the system prompt: the 100k turn appears once, with no web or memory.
+    # Current-turn content appears once, with complete web evidence and a Memory notice.
     assert blob.count("x" * 100_000) == 1
-    assert "秋葉原は晴れ" not in blob and "猫" not in blob
+    assert "秋葉原は晴れ" in blob and "猫" not in blob
     assert len(blob) < 100_000 + len(persona) + 10_000
     _dump(
         "adapter_envelope_100k_rejected",
@@ -999,14 +998,14 @@ async def test_processor_unsupported_combo_is_observable(isolated_store, monkeyp
         credential_required=False,
     )
     monkeypatch.setattr(
-        "app.routers.chat_ws.provider_registry.snapshot",
-        lambda *_a, **_k: snapshot,
+        'app.services.provider_registry.ProviderRegistry.snapshot',
+        staticmethod(lambda *_a, **_k: snapshot),
     )
 
     async def _async_cn(*_a, **_k):
         return "中文"
 
-    monkeypatch.setattr(deepseek_service, "translate_to_zh", _async_cn)
+    monkeypatch.setattr(type(deepseek_service), "translate_to_zh", staticmethod(_async_cn))
 
     def fake_title(*args, **kwargs):
         async def _noop():
@@ -1014,7 +1013,7 @@ async def test_processor_unsupported_combo_is_observable(isolated_store, monkeyp
 
         return asyncio.get_running_loop().create_task(_noop())
 
-    monkeypatch.setattr(conversation_service, "schedule_auto_title", fake_title)
+    monkeypatch.setattr(type(conversation_service), "schedule_auto_title", staticmethod(fake_title))
     session = SessionState(owner)
     session.worldline = "steins_gate"
     session.enable_tts = False

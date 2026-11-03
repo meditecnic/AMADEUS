@@ -146,8 +146,8 @@ def _install_fake_provider(monkeypatch, capture: _ProviderCapture) -> None:
         capture.translations.append(text)
         return "中文翻译"
 
-    monkeypatch.setattr(deepseek_service, "get_chat_stream", fake_get_chat_stream)
-    monkeypatch.setattr(deepseek_service, "translate_to_zh", fake_translate_to_zh)
+    monkeypatch.setattr(type(deepseek_service), "get_chat_stream", staticmethod(fake_get_chat_stream))
+    monkeypatch.setattr(type(deepseek_service), "translate_to_zh", staticmethod(fake_translate_to_zh))
 
 
 def _suppress_auto_title(monkeypatch) -> None:
@@ -160,7 +160,7 @@ def _suppress_auto_title(monkeypatch) -> None:
 
         return asyncio.get_running_loop().create_task(_noop())
 
-    monkeypatch.setattr(conversation_service, "schedule_auto_title", fake_schedule)
+    monkeypatch.setattr(type(conversation_service), "schedule_auto_title", staticmethod(fake_schedule))
 
 
 def _make_session(session_id: str, *, identity_mode: str = "self"):
@@ -935,8 +935,8 @@ async def test_voice_entry_reaches_same_boundary(isolated_store, monkeypatch):
     async def fake_has_speech(chunk, sample_rate, threshold):
         return True
 
-    monkeypatch.setattr(speech_service, "transcribe_pcm", fake_transcribe_pcm)
-    monkeypatch.setattr(speech_service, "has_speech", fake_has_speech)
+    monkeypatch.setattr(type(speech_service), "transcribe_pcm", staticmethod(fake_transcribe_pcm))
+    monkeypatch.setattr(type(speech_service), "has_speech", staticmethod(fake_has_speech))
 
     capture = _ProviderCapture()
     _install_fake_provider(monkeypatch, capture)

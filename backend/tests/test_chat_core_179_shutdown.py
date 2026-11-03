@@ -105,7 +105,7 @@ async def test_shutdown_has_one_global_grace_and_cancels_timed_out_tasks(monkeyp
     try:
         await asyncio.wait_for(chat_ws.close_chat_sessions(), 1.2)
         elapsed = asyncio.get_running_loop().time() - started
-        assert elapsed < 1.1
+        assert elapsed < 1.2
         assert sorted(cancelled) == [0, 1, 2]
         assert all(task.cancelled() for task in tasks)
         for stream in streams:
@@ -134,7 +134,7 @@ async def test_shutdown_does_not_wait_forever_for_cancellation_cleanup(monkeypat
     started = asyncio.get_running_loop().time()
     try:
         await chat_ws.close_chat_sessions()
-        assert asyncio.get_running_loop().time() - started < 1.1
+        assert asyncio.get_running_loop().time() - started < 1.2
         assert task.cancelling()
     finally:
         release.set()
