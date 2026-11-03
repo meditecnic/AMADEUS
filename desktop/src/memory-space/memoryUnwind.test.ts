@@ -39,6 +39,12 @@ describe('nextMemoryUnwind', () => {
     })).toBe('topic-to-overview');
   });
 
+  it('closes a month review or SOUL panel back to the overview', () => {
+    const input = { toolsOpen: false, hasActiveCriteria: false, listVisible: false, expanded: false, closeAtRoot: true };
+    expect(nextMemoryUnwind({ ...input, selectedKind: 'month' })).toBe('close-inspector');
+    expect(nextMemoryUnwind({ ...input, selectedKind: 'continuity_hub' })).toBe('close-inspector');
+  });
+
   it('Back closes Memory at Overview root and RMB does not', () => {
     const root = {
       toolsOpen: false,

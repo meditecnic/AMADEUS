@@ -130,15 +130,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMemoryOpen, setIsMemoryOpen] = useState(false);
   const [memoryClosing, setMemoryClosing] = useState(false);
-  const [memoryOrigin, setMemoryOrigin] = useState({ x: 0, y: 0 });
   const closeMemory = () => {
-    if (reducedMotion) { setIsMemoryOpen(false); return; }
-    setMemoryClosing(true);
-    window.setTimeout(() => {
+    const done = () => {
       setIsMemoryOpen(false);
       setMemoryClosing(false);
       document.querySelector<HTMLButtonElement>('.ws2 button[aria-label="MEMORY"]')?.focus({ preventScroll: true });
-    }, 280);
+    };
+    if (reducedMotion) { done(); return; }
+    setMemoryClosing(true);
+    window.setTimeout(done, 150);
   };
   const [inputText, setInputText] = useState('');
   const messageTooLong = Array.from(inputText.trim()).length > MAX_USER_MESSAGE_LENGTH;
@@ -2029,12 +2029,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
         <div className="ws2-top-right">
           <button
             type="button"
-            className="ws2-memory-btn"
+            className={`ws2-memory-btn${isMemoryOpen ? ' is-on' : ''}`}
             aria-label="MEMORY"
-            onClick={(event) => {
-              const r = event.currentTarget.querySelector('svg')?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
-              setMemoryOrigin({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
-              setMemoryClosing(false);
+            aria-pressed={isMemoryOpen}
+            title={isMemoryOpen ? '回到对话（Esc）' : undefined}
+            onClick={() => {
+              if (isMemoryOpen) { if (!memoryClosing) closeMemory(); return; }
               setIsMemoryOpen(true);
             }}
           >
@@ -2045,6 +2045,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             </svg>
             <span className="ws2-memory-zh" aria-hidden="true">记忆</span>
             <span className="ws2-memory-en" aria-hidden="true">MEMORY</span>
+            {isMemoryOpen ? <span className="ws2-memory-esc" aria-hidden="true">ESC</span> : null}
           </button>
           <div className="ws2-booth-mid">
             <Tip
@@ -2564,11 +2565,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
       </div>
 
       {isMemoryOpen ? (
-        // Memory opens as an iris from the engram key and closes back into it; Memory itself is unchanged.
-        <div
-          className={`ws2-memory-layer${memoryClosing ? ' closing' : ''}`}
-          style={{ '--mx': `${memoryOrigin.x}px`, '--my': `${memoryOrigin.y}px` } as React.CSSProperties}
-        >
+        // The sheet sits below the header, which stays; closing only fades the sheet.
+        <div className={`ws2-memory-layer${memoryClosing ? ' closing' : ''}`}>
           <MemorySpace
             sessionId={sessionId}
             chatWorldline={worldline}

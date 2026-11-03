@@ -182,6 +182,22 @@ function defaultFetch(input: RequestInfo | URL) {
       json: async () => ({ pending_count: 0, processing_count: 0, failed_count: 0 }),
     } as Response);
   }
+  if (url.includes('/api/memory/chart')) {
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        scope: { session_id: 'session-ds', worldline: 'steins_gate', identity_mode: 'okabe' },
+        generated_at: '2026-08-14T00:00:00Z',
+        origin_at: null,
+        topics: [],
+        facts: [],
+        experiences: [],
+        counts: { facts: 0, experiences: 0, topics: 0 },
+        truncated: false,
+      }),
+    } as Response);
+  }
   if (url.includes('/api/memory/graph/projection')) {
     return Promise.resolve({
       ok: true,
@@ -474,17 +490,24 @@ describe('Workstation S4-DS dark-only chrome', () => {
     expect(panel).not.toHaveClass('aiming');
   });
 
-  it('first-class MEMORY aperture opens Memory Space Overview', async () => {
+  it('the MEMORY key lays the memory sheet below the header and closes it again', async () => {
     renderWorkstation();
     await waitFor(() => expect(screen.getByText('AMADEUS')).toBeInTheDocument());
     const aperture = await screen.findByRole('button', { name: /^MEMORY$/i });
     fireEvent.click(aperture);
     expect(await screen.findByTestId('memory-space')).toBeInTheDocument();
     await waitFor(() => {
-      expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/memory/graph/projection'))).toBe(true);
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/memory/chart'))).toBe(true);
     });
-    expect(screen.getByTestId('constellation-stage')).toBeInTheDocument();
+    expect(await screen.findByTestId('memory-plate')).toBeInTheDocument();
     expect(document.querySelector('.ws2')).toHaveClass('memory-space-open');
+    expect(document.querySelector('.ws2-top')).toBeInTheDocument();
+    expect(aperture).toHaveAttribute('aria-pressed', 'true');
+    expect(aperture).toHaveAttribute('title', '回到对话（Esc）');
+    expect(aperture).toHaveTextContent('ESC');
+    fireEvent.click(aperture);
+    await waitFor(() => expect(screen.queryByTestId('memory-space')).toBeNull());
+    expect(aperture).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('self-hosted S4-DS fonts exist under /assets/fonts/s4-ds/', () => {
