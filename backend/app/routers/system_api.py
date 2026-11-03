@@ -233,6 +233,12 @@ async def memory_facts_ledger(
         ) from exc
     facts = list(page["facts"])
     total = int(page["total"])
+    from app.services.memory_v11.recall import MemoryScope
+    from app.services.memory_v11.resident import load_resident_fact_ids
+
+    resident_ids = await load_resident_fact_ids(MemoryScope(session_id, wl, mode))
+    for fact in facts:
+        fact["resident"] = str(fact["fact_id"]) in resident_ids
     return {
         "facts": facts,
         "scope": {

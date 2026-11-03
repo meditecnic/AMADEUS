@@ -166,7 +166,7 @@ def test_chart_fields_lifecycle_scope_and_order(client):
     assert {n["fact_id"] for n in response.json()["nodes"] if n["kind"] == "fact"} == {f"f-{i}" for i in range(6)}
 
 
-@pytest.mark.parametrize("surface", ["chart"])
+@pytest.mark.parametrize("surface", ["chart", "facts"])
 def test_resident_matches_chat_global_selection(client, surface):
     from app.services.memory_v11.recall import MemoryScope, load_resident_fact_candidates
     from app.services.prompt_compiler import prompt_compiler
@@ -193,7 +193,7 @@ def test_resident_matches_chat_global_selection(client, surface):
     assert actual == {str(c["fact_id"]): c["fact_id"] in expected for c in candidates}
 
 
-@pytest.mark.parametrize("surface", ["chart"])
+@pytest.mark.parametrize("surface", ["chart", "facts"])
 def test_resident_uses_token_budget_even_for_pinned(client, surface):
     from app.services.memory_v11.recall import MemoryScope, load_resident_fact_candidates
     from app.services.prompt_compiler import prompt_compiler
