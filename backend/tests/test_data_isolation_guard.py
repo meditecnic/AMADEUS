@@ -12,7 +12,7 @@ import pytest
 
 
 BACKEND = Path(__file__).resolve().parents[1]
-REFUSAL = "AMADEUS_DATA_DIR required (non-frozen)"
+REFUSAL = "AMADEUS_DATA_DIR required"
 
 
 @pytest.fixture
@@ -99,16 +99,51 @@ def test_database_override_requires_data_directory(child_environment, operation)
     _assert_refused(result, appdata)
 
 
-@pytest.mark.parametrize("location", ["appdata", "home", "override"])
-def test_frozen_data_root_remains_compatible(child_environment, tmp_path, location):
+@pytest.mark.parametrize("configured", [None, "", " \t"])
+@pytest.mark.parametrize("has_appdata", [True, False])
+def test_frozen_data_root_requires_explicit_directory(child_environment, configured, has_appdata):
     env, appdata = child_environment
-    expected = appdata / "Amadeus"
-    if location == "home":
+    if configured is not None:
+        env["AMADEUS_DATA_DIR"] = configured
+    if not has_appdata:
         env.pop("APPDATA")
-        expected = Path(env["HOME"]) / ".amadeus"
-    elif location == "override":
-        expected = tmp_path / "explicit-data"
-        env["AMADEUS_DATA_DIR"] = str(expected)
+    home = Path(env["HOME"])
+    before = set(home.rglob("*"))
+    result = _run_python(["-c", "import sys; sys.frozen = True; "
+                          "from app.db import get_data_root; get_data_root()"], env)
+    _assert_refused(result, appdata)
+    assert set(home.rglob("*")) == before
+
+
+@pytest.mark.parametrize("args", [[], ["--self-check"]], ids=["service", "self-check"])
+@pytest.mark.parametrize("configured", [None, "", " \t"])
+def test_packaged_entry_requires_data_directory(child_environment, configured, args):
+    env, appdata = child_environment
+    env["AMADEUS_LOCAL_API_TOKEN"] = "synthetic-data-guard"
+    if configured is not None:
+        env["AMADEUS_DATA_DIR"] = configured
+    home = Path(env["HOME"])
+    before = set(home.rglob("*"))
+    entry = BACKEND.parent / "packaging/windows/backend_entry.py"
+    code = ("import runpy, sys; sys.frozen = True; "
+            f"sys._MEIPASS = {str(home)!r}; sys.argv = {[str(entry), *args]!r}; "
+            f"namespace = runpy.run_path({str(entry)!r})\n"
+            "def forbid_configuration():\n"
+            "    raise AssertionError('must refuse before configuration or app imports')\n"
+            "namespace['main'].__globals__['configure_environment'] = forbid_configuration\n"
+            "sys.exit(namespace['main']())")
+    result = _run_python(["-c", code], env)
+    _assert_refused(result, appdata)
+    assert result.stdout == ""
+    assert len(result.stderr.splitlines()) == 1
+    assert "Traceback" not in result.stderr
+    assert set(home.rglob("*")) == before
+
+
+def test_frozen_explicit_data_root_remains_compatible(child_environment, tmp_path):
+    env, appdata = child_environment
+    expected = tmp_path / "explicit-data"
+    env["AMADEUS_DATA_DIR"] = str(expected)
     code = """
 import asyncio
 import sys
@@ -126,8 +161,7 @@ print(db.get_data_root())
     assert result.returncode == 0, result.stderr
     assert Path(result.stdout.strip()) == expected.resolve()
     assert (expected / "control.sqlite3").is_file()
-    if location != "appdata":
-        assert list(appdata.rglob("*")) == []
+    assert list(appdata.rglob("*")) == []
 
 
 def test_explicit_directory_keeps_legacy_database_precedence(child_environment, tmp_path):
