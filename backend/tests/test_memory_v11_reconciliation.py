@@ -37,7 +37,7 @@ def _repository():
 
 def _unit_vector(seed: str) -> list[float]:
     values: list[float] = []
-    for block in range(12):
+    for block in range(24):
         digest = hashlib.sha256(f"{seed}:{block}".encode("utf-8")).digest()
         values.extend(int(byte) - 127.5 for byte in digest)
     norm = math.sqrt(sum(v * v for v in values))
@@ -50,11 +50,11 @@ class _DeterministicEmbedder(EmbeddingAdapter):
     def __init__(
         self,
         *,
-        model_name: str = "test-deterministic-384",
+        model_name: str = "test-deterministic-768",
         fail_after: int | None = None,
         fail_always: bool = False,
     ):
-        super().__init__(model_name=model_name, dimensions=384)
+        super().__init__(model_name=model_name, dimensions=768)
         self.encode_passage_calls = 0
         self.fail_after = fail_after
         self.fail_always = fail_always
@@ -870,8 +870,8 @@ async def test_s3b2_create_writes_matching_embedding(isolated_store, monkeypatch
     row = await _embedding_row(fact_id, 1)
     assert row is not None, "CREATE must write stable_fact_version_embeddings(v1)"
     assert row["model"] == embedder.model_name
-    assert row["dimensions"] == 384
-    expected = struct.pack(f"{384}f", *_unit_vector(f"passage:{text}"))
+    assert row["dimensions"] == 768
+    expected = struct.pack(f"{768}f", *_unit_vector(f"passage:{text}"))
     assert row["vector"] == expected
     assert embedder.encode_passage_calls == 1
 
@@ -955,7 +955,7 @@ async def test_s3b2_refine_replaces_vector(isolated_store, monkeypatch):
     row_v2 = await _embedding_row(fact_id, 2)
     assert row_v2 is not None
     assert row_v2["vector"] == struct.pack(
-        f"{384}f", *_unit_vector(f"passage:{text_v2}")
+        f"{768}f", *_unit_vector(f"passage:{text_v2}")
     )
     db = await get_db("steins_gate", "memory")
     try:
@@ -1406,7 +1406,7 @@ class _NonFiniteEmbedder(EmbeddingAdapter):
     """Returns a full-dim vector with one non-finite component (offline)."""
 
     def __init__(self, bad_value: float):
-        super().__init__(model_name="test-deterministic-384", dimensions=384)
+        super().__init__(model_name="test-deterministic-768", dimensions=768)
         self.bad_value = float(bad_value)
         self.encode_passage_calls = 0
 

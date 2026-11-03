@@ -101,7 +101,7 @@ def _make_snapshot(
         try:
             conn.executescript(schema)
             conn.execute(
-                "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version','11')"
+                "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version','12')"
             )
             conn.commit()
         finally:
@@ -570,9 +570,9 @@ def test_candidate_build_preserves_legacy_and_rebuilds_v11(tmp_path):
     paths = _db_paths(output)
     assert all(path.is_file() for path in paths.values())
     assert (output / "manifest.json").is_file()
-    marker = output / ".migration-v11.complete"
+    marker = output / ".migration-v12.complete"
     assert marker.is_file()
-    assert json.loads(marker.read_text(encoding="utf-8"))["schema_version"] == 11
+    assert json.loads(marker.read_text(encoding="utf-8"))["schema_version"] == 12
     # Source untouched.
     assert _snapshot_state(snapshot) == before
 

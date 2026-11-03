@@ -55,7 +55,7 @@ def _estimate_tokens(text: str) -> int:
 
 
 def _lexical_score(display_text: str, query: str) -> float:
-    """Reuse local word/CJK-bigram scoring, independent of E5 availability."""
+    """Reuse local word/CJK-bigram scoring, independent of embedding model availability."""
     def clean(text: str) -> str:
         # Preserve Latin word boundaries while dropping punctuation/whitespace
         # from the CJK stream consumed by _lexical_relevance.

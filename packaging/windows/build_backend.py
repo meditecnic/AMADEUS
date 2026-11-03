@@ -17,11 +17,13 @@ from bundle_support import sanitized_build_environment
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 TEST_ONLY = {"pytest", "pytest-asyncio", "pytest-timeout", "ruff", "iniconfig", "pluggy"}
-E5_REVISION = "614241f622f53c4eeff9890bdc4f31cfecc418b3"
-E5_FILES = {
-    "onnx/model.onnx": "ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665",
-    "tokenizer.json": "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39",
-    "README.md": "0038de97aee16258cecbad7ffda4b4febd6953e747a00e0ddbc8e6ed241e9c1c",
+EMBEDDING_CACHE_MODEL = "models--jinaai--jina-embeddings-v5-text-nano-retrieval"
+EMBEDDING_REVISION = "ac5d898c8d382b17167c33e5c8af644a3519b47d"
+EMBEDDING_FILES = {
+    "onnx/model.onnx": "ad8244eea593ae8488cfd821a7d573aa51a350bc817702d6da99f3bccab24f49",
+    "onnx/model.onnx_data": "7eeca7c5e63a9047991df400cdd57c3cf05fabc0168700a4ecee42d1eba8093d",
+    "tokenizer.json": "98d4a1d32152d6cedf85b5e88f3b205106dca1fe72aaab34e0ac13c238421069",
+    "README.md": "9f2433969e7962fffd5cd2bfef18bb319032dc973090d5449628d9bb4d219381",
 }
 APP_FILES = (
     "characters/amadeus_sg.json", "characters/amadeus_beta.json",
@@ -76,29 +78,92 @@ def build_environment(work: Path, venv: Path, base_python: Path) -> dict[str, st
     return env
 
 
-def stage_e5(source: Path, cache: Path) -> list[dict]:
+def embedding_snapshot(cache: Path) -> Path:
+    return cache / EMBEDDING_CACHE_MODEL / "snapshots" / EMBEDDING_REVISION
+
+
+def _embedding_cache_paths() -> tuple[set[Path], set[Path]]:
+    snapshot = embedding_snapshot(Path("."))
+    files = {snapshot / name for name in EMBEDDING_FILES} | {Path(EMBEDDING_CACHE_MODEL) / "refs/main"}
+    directories = {parent for path in files for parent in path.parents if parent != Path(".")}
+    return files, directories
+
+
+def _clean_embedding_cache(cache: Path) -> None:
+    """Prune only the staging cache, preserving pinned files for reuse."""
+    if cache.is_symlink():
+        raise RuntimeError(f"staged embedding cache must not be a symlink: {cache}")
+    cache.mkdir(parents=True, exist_ok=True)
+    files, directories = _embedding_cache_paths()
+
+    def clean(directory: Path) -> None:
+        for path in sorted(directory.iterdir()):
+            relative = path.relative_to(cache)
+            allowed = relative in (directories if path.is_dir() else files)
+            if path.is_symlink() or not path.resolve().is_relative_to(cache.resolve()) or not allowed:
+                if path.is_dir() and not path.is_symlink():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink()
+                print(f"Removed staged embedding entry: {path}", flush=True)
+            elif path.is_dir():
+                clean(path)
+
+    clean(cache)
+
+
+def validate_embedding_cache(cache: Path) -> None:
+    """Reject extra/missing frozen model entries and verify pinned bytes."""
+    files, directories = _embedding_cache_paths()
+    expected = files | directories
+    entries = {path.relative_to(cache): path for path in cache.rglob("*")}
+    extra, missing = entries.keys() - expected, expected - entries.keys()
+    if extra or missing:
+        raise RuntimeError(f"embedding cache layout mismatch: extra={sorted(map(str, extra))}, missing={sorted(map(str, missing))}")
+    for relative, path in entries.items():
+        if path.is_symlink() or path.is_dir() != (relative in directories):
+            raise RuntimeError(f"embedding cache entry type mismatch: {relative}")
+    snapshot = embedding_snapshot(cache)
+    for name, expected_hash in EMBEDDING_FILES.items():
+        if sha256(snapshot / name) != expected_hash:
+            raise RuntimeError(f"embedding cache hash mismatch: {snapshot / name}")
+    if (cache / EMBEDDING_CACHE_MODEL / "refs/main").read_text(encoding="utf-8") != EMBEDDING_REVISION:
+        raise RuntimeError("embedding cache revision mismatch: refs/main")
+
+
+def embedding_model_card(cache: Path) -> Path:
+    card = embedding_snapshot(cache) / "README.md"
+    if not card.is_file() or sha256(card) != EMBEDDING_FILES["README.md"]:
+        raise RuntimeError(f"embedding model card missing or hash mismatch: {card}")
+    return card
+
+
+def stage_embedding(source: Path, cache: Path) -> list[dict]:
     """Copy only pinned model files; verify the source and each staged copy."""
-    model = cache / "models--intfloat--multilingual-e5-small"
-    snapshot = model / "snapshots" / E5_REVISION
+    _clean_embedding_cache(cache)
+    model = cache / EMBEDDING_CACHE_MODEL
+    snapshot = embedding_snapshot(cache)
     snapshot.mkdir(parents=True, exist_ok=True)
     model_files = []
-    for relative, expected in E5_FILES.items():
+    for relative, expected in EMBEDDING_FILES.items():
+        if expected is None:
+            raise RuntimeError(f"embedding SHA-256 not yet verified: {relative}; complete EMBEDDING_FILES before packaging")
         origin = source / relative
         target = snapshot / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         if not origin.is_file():
-            raise FileNotFoundError(f"missing E5 file: {relative}")
+            raise FileNotFoundError(f"missing embedding file: {relative}")
         if sha256(origin) != expected:
-            raise RuntimeError(f"E5 source hash mismatch: {relative}")
+            raise RuntimeError(f"embedding source hash mismatch: {relative}")
         if not target.is_file() or sha256(target) != expected:
             shutil.copyfile(origin, target)
         if sha256(target) != expected:
-            raise RuntimeError(f"E5 copy mismatch: {relative}")
+            raise RuntimeError(f"embedding copy mismatch: {relative}")
         model_files.append({"path": relative, "sha256": expected, "bytes": target.stat().st_size})
     (model / "refs").mkdir(exist_ok=True)
     reference = model / "refs/main"
-    if not reference.is_file() or reference.read_text(encoding="utf-8") != E5_REVISION:
-        reference.write_text(E5_REVISION, encoding="utf-8")
+    if not reference.is_file() or reference.read_text(encoding="utf-8") != EMBEDDING_REVISION:
+        reference.write_text(EMBEDDING_REVISION, encoding="utf-8")
     return model_files
 
 
@@ -107,7 +172,7 @@ def main() -> int:
     parser.add_argument("--python", type=Path, default=Path(sys.executable), help="CPython 3.11 x64 used to create the venv")
     parser.add_argument("--work-dir", type=Path, required=True, help="venv, cache, temp, logs and build output")
     parser.add_argument("--venv", type=Path, help="defaults to WORK_DIR/venv")
-    parser.add_argument("--e5-source", type=Path, required=True, help=f"read-only E5 snapshot {E5_REVISION}")
+    parser.add_argument("--embedding-source", type=Path, required=True, help=f"read-only embedding snapshot {EMBEDDING_REVISION}")
     parser.add_argument("--vc-redist", type=Path, required=True, help="Build Tools Redist/MSVC/<version>/x64 directory")
     parser.add_argument("--output", type=Path, default=REPO / "desktop/src-tauri/resources/backend")
     parser.add_argument("--prepare-only", action="store_true", help="install dependencies without freezing")
@@ -127,14 +192,16 @@ def main() -> int:
         parser.error("--output already exists; preserve it and choose a fresh directory")
     if output.is_relative_to(work) or work.is_relative_to(output):
         parser.error("--output and --work-dir must not contain each other")
-    source = args.e5_source.resolve(strict=True)
-    if source.name != E5_REVISION:
-        parser.error(f"--e5-source must be the pinned snapshot directory {E5_REVISION}")
-    for relative, expected in E5_FILES.items():
+    source = args.embedding_source.resolve(strict=True)
+    if source.name != EMBEDDING_REVISION:
+        parser.error(f"--embedding-source must be the pinned snapshot directory {EMBEDDING_REVISION}")
+    for relative, expected in EMBEDDING_FILES.items():
+        if expected is None:
+            raise RuntimeError(f"embedding SHA-256 not yet verified: {relative}; complete EMBEDDING_FILES before packaging")
         if not (source / relative).is_file():
-            parser.error(f"missing E5 file: {relative}")
+            parser.error(f"missing embedding file: {relative}")
         if sha256(source / relative) != expected:
-            raise RuntimeError(f"E5 source hash mismatch: {relative}")
+            raise RuntimeError(f"embedding source hash mismatch: {relative}")
     work.mkdir(parents=True, exist_ok=True)
     for name in ("tmp", "pip-cache", "pyinstaller-cache", "logs"):
         (work / name).mkdir(exist_ok=True)
@@ -159,13 +226,13 @@ def main() -> int:
         print(f"Prepared build venv: {python}", flush=True)
         return 0
     cache = work / "model-stage/hf_cache"
-    model_files = stage_e5(source, cache)
+    model_files = stage_embedding(source, cache)
     config = {
         "repo": str(REPO), "work": str(work), "packaging": str(HERE),
         "hf_cache": str(cache), "app_files": APP_FILES,
         "build_path": env["PATH"], "venv": str(venv), "base_python": str(base_python),
         "vc_redist": redist["path"],
-        "model": {"id": "intfloat/multilingual-e5-small", "revision": E5_REVISION, "files": model_files},
+        "model": {"id": "jinaai/jina-embeddings-v5-text-nano-retrieval", "revision": EMBEDDING_REVISION, "files": model_files},
         "inputs": {p.relative_to(REPO).as_posix(): sha256(p) for p in (
             REPO / "backend/requirements.txt", REPO / "backend/requirements-dev.lock",
             HERE / "requirements-build.txt", HERE / "backend.spec", *sorted(HERE.glob("*.py")),
@@ -177,11 +244,12 @@ def main() -> int:
     run([str(python), "-m", "PyInstaller", "--noconfirm", *(["--clean"] if args.clean else []),
          "--distpath", str(work / "dist"), "--workpath", str(work / "build"),
          str(HERE / "backend.spec")], env, work, work / "logs/pyinstaller.log")
+    dist = work / "dist/amadeus-backend"
+    validate_embedding_cache(dist / "_internal/hf_cache")
     run([str(python), str(HERE / "vc_runtime.py"), str(config_path)],
         env, work, work / "logs/vc-runtime.log")
     run([str(python), str(HERE / "bundle_support.py"), str(config_path)],
         env, work, work / "logs/inventory.log")
-    dist = work / "dist/amadeus-backend"
     shutil.copytree(dist, output)
     write_json(work / "build-result.json", {
         "elapsed_seconds": round(time.monotonic() - started, 3), "output": str(output),

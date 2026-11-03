@@ -13,6 +13,7 @@ import sqlite3
 import sys
 import zipfile
 
+from build_backend import embedding_model_card
 from bundle_support import digest, write_json
 from source_materials import notices
 
@@ -305,10 +306,11 @@ def generate(config: dict, backend: Path, work: Path, output: Path, cargo: Path,
     rust_notices(bundle, cargo, pins)
     frontend_notices(bundle, node_modules, pins)
     native_notices(bundle, config, pins, python)
-    model = json.loads((backend / "THIRD_PARTY_LICENSES/e5-model.json").read_text(encoding="utf-8"))
-    card = next((backend / "_internal/hf_cache").rglob("README.md"))
-    bundle.add("model", model["id"], model["revision"], model["source"], "MIT", ["backend/_internal/hf_cache"],
-               [bundle.copy(card, "models/multilingual-e5-small-README.md")])
+    model = json.loads((backend / "THIRD_PARTY_LICENSES/embedding-model.json").read_text(encoding="utf-8"))
+    card = embedding_model_card(backend / "_internal/hf_cache")
+    bundle.add("model", model["id"], model["revision"], model["source"], "CC-BY-NC-4.0", ["backend/_internal/hf_cache"],
+               [bundle.copy(card, "models/jina-embeddings-v5-text-nano-retrieval-README.md"),
+                bundle.text("models/jina-ATTRIBUTION.txt", model["attribution"] + "\n" + model["source"] + "\n" + model["license_url"] + "\n")])
     files = [{"path": "licenses/" + path.relative_to(output).as_posix(), "sha256": digest(path)}
              for path in sorted(output.rglob("*")) if path.is_file()]
     result = {"schema_version": 1, "components": bundle.components, "files": files,

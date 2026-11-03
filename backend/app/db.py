@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import shutil
 import sqlite3
-import sys
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -24,8 +24,8 @@ Worldline = Literal["steins_gate", "beta"]
 DatabaseKind = Literal["history", "memory", "control"]
 SelectorAdmission = Literal["pending", "admitted", "manual"]
 
-EMBEDDING_MODEL = "intfloat/multilingual-e5-small"
-EMBEDDING_DIMENSION = 384
+EMBEDDING_MODEL = "jinaai/jina-embeddings-v5-text-nano-retrieval"
+EMBEDDING_DIMENSION = 768
 # v4: conversations.identity_mode (okabe|self); existing rows backfilled to okabe.
 # v5: emotion_states keyed by (session_id, identity_mode); existing rows → okabe (U-M2).
 # v6: core_facts / episodic_memories scoped by identity_mode; existing rows → okabe (U-M3).
@@ -34,7 +34,8 @@ EMBEDDING_DIMENSION = 384
 # v9: core_facts.is_dismissed (M3 soft-hide pending okabe candidates; audit retained).
 # v10: provider_configurations multi-profile fields (display_name/enabled/created_at).
 # v11: Memory observation–fact pipeline (additive tables; legacy core_facts retained).
-SCHEMA_VERSION = 11
+# v12: jina 768-dimension stable-fact version embeddings. Legacy tables unchanged.
+SCHEMA_VERSION = 12
 
 DEFAULT_IDENTITY_MODE = "okabe"
 IDENTITY_MODES = frozenset({"okabe", "self"})
@@ -63,16 +64,11 @@ def normalize_identity_mode(value: str | None) -> str:
 
 
 def get_data_root() -> Path:
-    """Require an explicit source-run root; only frozen builds use user defaults."""
+    """Require an explicit data root for source and frozen runs alike."""
     override = os.environ.get("AMADEUS_DATA_DIR")
     if override and override.strip():
         return Path(override).expanduser().resolve()
-    if not getattr(sys, "frozen", False):
-        raise RuntimeError("AMADEUS_DATA_DIR required (non-frozen)")
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        return (Path(appdata) / "Amadeus").resolve()
-    return (Path.home() / ".amadeus").resolve()
+    raise RuntimeError("AMADEUS_DATA_DIR required; set it to an explicit data directory")
 
 
 def default_conversation_id(session_id: str, worldline: str) -> str:
@@ -473,7 +469,7 @@ CREATE TABLE IF NOT EXISTS stable_fact_version_embeddings (
     fact_id TEXT NOT NULL,
     version_no INTEGER NOT NULL,
     model TEXT NOT NULL,
-    dimensions INTEGER NOT NULL CHECK(dimensions=384),
+    dimensions INTEGER NOT NULL CHECK(dimensions=768),
     vector BLOB NOT NULL,
     PRIMARY KEY(fact_id, version_no),
     FOREIGN KEY(fact_id, version_no)
@@ -1270,7 +1266,76 @@ def _ensure_provider_selector_admission(connection: sqlite3.Connection) -> None:
         )
 
 
-def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str = "steins_gate") -> None:
+_LEGACY_EMBEDDING = ("intfloat/multilingual-e5-small", "384")
+
+
+def _embedding_metadata(connection: sqlite3.Connection) -> tuple[str | None, str | None]:
+    values = dict(connection.execute(
+        "SELECT key,value FROM schema_meta WHERE key IN ('embedding_model','embedding_dimension')"
+    ))
+    return values.get("embedding_model"), values.get("embedding_dimension")
+
+
+def _migrate_v11_embeddings(connection: sqlite3.Connection) -> bool:
+    """One startup transaction: existing index rows, CHECK and metadata together.
+
+    A missing/broken model rolls back to the complete old index. Retrieval
+    ignores its incompatible vectors; initialization caches this attempt for
+    this process, and the next startup retries the whole transaction.
+    """
+    from app.services.memory import EmbeddingAdapter
+    from app.services.memory_v11.indexing import pack_float32_vector
+
+    embedder = EmbeddingAdapter()
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        prepared = []
+        for fact_id, version_no, text in connection.execute(
+            """SELECT e.fact_id,e.version_no,v.display_text
+               FROM stable_fact_version_embeddings e
+               JOIN stable_fact_versions v
+                 ON v.fact_id=e.fact_id AND v.version_no=e.version_no
+               ORDER BY e.fact_id,e.version_no"""
+        ).fetchall():
+            try:
+                vector = asyncio.run(embedder.encode_passage(text))
+                blob = pack_float32_vector(vector, dimensions=EMBEDDING_DIMENSION)
+            except Exception as exc:
+                connection.rollback()
+                logging.getLogger(__name__).warning(
+                    "Embedding upgrade deferred (%s); using lexical retrieval", type(exc).__name__,
+                    exc_info=True,
+                )
+                return False
+            prepared.append((fact_id, version_no, EMBEDDING_MODEL, EMBEDDING_DIMENSION, blob))
+        # No executescript: it would commit the surrounding transaction.
+        connection.execute("""CREATE TABLE stable_fact_version_embeddings_new (
+            fact_id TEXT NOT NULL,
+            version_no INTEGER NOT NULL,
+            model TEXT NOT NULL,
+            dimensions INTEGER NOT NULL CHECK(dimensions=768),
+            vector BLOB NOT NULL,
+            PRIMARY KEY(fact_id, version_no),
+            FOREIGN KEY(fact_id, version_no) REFERENCES stable_fact_versions(fact_id, version_no)
+        )""")
+        connection.executemany(
+            "INSERT INTO stable_fact_version_embeddings_new VALUES(?,?,?,?,?)", prepared
+        )
+        connection.execute("DROP TABLE stable_fact_version_embeddings")
+        connection.execute("ALTER TABLE stable_fact_version_embeddings_new RENAME TO stable_fact_version_embeddings")
+        connection.executemany(
+            "INSERT OR REPLACE INTO schema_meta(key,value) VALUES(?,?)",
+            (("embedding_model", EMBEDDING_MODEL), ("embedding_dimension", str(EMBEDDING_DIMENSION)),
+             ("schema_version", str(SCHEMA_VERSION))),
+        )
+        connection.commit()
+        return True
+    except BaseException:
+        connection.rollback()
+        raise
+
+
+def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str = "steins_gate") -> bool:
     db_path = Path(path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path, timeout=30.0)
@@ -1310,6 +1375,22 @@ def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str 
         if current == 10:
             _migrate_v10_to_v11(connection, kind, worldline)
             current = 11
+        if kind == "memory" and current is not None:
+            model, dimension = _embedding_metadata(connection)
+            legacy = (model, dimension) == _LEGACY_EMBEDDING
+            if not legacy:
+                if model is not None and model != EMBEDDING_MODEL:
+                    raise RuntimeError(f"embedding model mismatch at {path}: {model}")
+                if dimension is not None and dimension != str(EMBEDDING_DIMENSION):
+                    raise RuntimeError(f"embedding dimension mismatch at {path}: {dimension}")
+            table = connection.execute(
+                "SELECT sql FROM sqlite_master WHERE name='stable_fact_version_embeddings'"
+            ).fetchone()
+            if legacy or (current == 11 and table and "dimensions=384" in table[0]):
+                if not _migrate_v11_embeddings(connection):
+                    return False
+        if current == 11:
+            current = 12
         if current not in (None, SCHEMA_VERSION):
             raise RuntimeError(f"unsupported {kind} schema version at {path}: {current}")
 
@@ -1338,6 +1419,7 @@ def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str 
         connection.close()
     if kind == "memory":
         _initialize_vec0(path)
+    return True
 
 
 def _run_migration_locked() -> None:
@@ -1358,13 +1440,19 @@ def _run_migration_locked() -> None:
                 stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
                 shutil.copy2(legacy, root / f"amadeus.legacy.{stamp}.db")
             _initialize_sync(_resolve_path("steins_gate", "control"), CONTROL_SCHEMA, "control", "steins_gate")
+            embeddings_ready = True
             for worldline in ("steins_gate", "beta"):
                 _initialize_sync(_resolve_path(worldline, "history"), HISTORY_SCHEMA, "history", worldline)
-                _initialize_sync(_resolve_path(worldline, "memory"), MEMORY_SCHEMA, "memory", worldline)
-            marker.write_text(json.dumps({"schema_version": SCHEMA_VERSION, "completed_at_utc": datetime.now(timezone.utc).isoformat()}), encoding="utf-8")
-            with marker.open("r+b") as handle:
-                handle.flush()
-                os.fsync(handle.fileno())
+                memory_path = _resolve_path(worldline, "memory")
+                if not _initialize_sync(memory_path, MEMORY_SCHEMA, "memory", worldline):
+                    # Do not repeat a failed model load again in this startup.
+                    _initialized_paths.add(memory_path)
+                    embeddings_ready = False
+            if embeddings_ready:
+                marker.write_text(json.dumps({"schema_version": SCHEMA_VERSION, "completed_at_utc": datetime.now(timezone.utc).isoformat()}), encoding="utf-8")
+                with marker.open("r+b") as handle:
+                    handle.flush()
+                    os.fsync(handle.fileno())
         lock_file.flush()
         os.fsync(lock_file.fileno())
 
@@ -1654,7 +1742,12 @@ async def validate_schema() -> dict[str, object]:
                 if kind == "memory":
                     cur = await db.execute("SELECT value FROM schema_meta WHERE key='embedding_dimension'")
                     dim = await cur.fetchone()
-                    ok = ok and bool(dim and int(dim[0]) == EMBEDDING_DIMENSION)
+                    if row and int(row[0]) == 11 and dim and dim[0] == "384":
+                        cur = await db.execute("SELECT value FROM schema_meta WHERE key='embedding_model'")
+                        model = await cur.fetchone()
+                        ok = bool(model and model[0] == _LEGACY_EMBEDDING[0])
+                    else:
+                        ok = ok and bool(dim and int(dim[0]) == EMBEDDING_DIMENSION)
                 result["databases"][f"{wl}:{kind}"] = ok  # type: ignore[index]
                 result["ok"] = bool(result["ok"] and ok)
             finally:

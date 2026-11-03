@@ -55,7 +55,7 @@ async def isolated_store(tmp_path, monkeypatch):
 
 def _unit_vector(seed: str) -> list[float]:
     values: list[float] = []
-    for block in range(12):
+    for block in range(24):
         digest = hashlib.sha256(f"{seed}:{block}".encode("utf-8")).digest()
         values.extend(int(byte) - 127.5 for byte in digest)
     norm = math.sqrt(sum(v * v for v in values))
@@ -64,7 +64,7 @@ def _unit_vector(seed: str) -> list[float]:
 
 class _StubEmbedder(EmbeddingAdapter):
     def __init__(self, vocabulary: dict[str, str] | None = None):
-        super().__init__(model_name="test-deterministic-384", dimensions=384)
+        super().__init__(model_name="test-deterministic-768", dimensions=768)
         self._vocabulary = dict(vocabulary or {})
         self.query_calls = 0
 
@@ -100,8 +100,8 @@ async def _seed(session_id: str, key: str, text: str, *, identity_mode: str = "s
                 fact["fact_id"],
                 int(fact.get("version_no") or 1),
                 embedder.model_name,
-                384,
-                struct.pack(f"{384}f", *vector),
+                768,
+                struct.pack(f"{768}f", *vector),
             ),
         )
         await db.commit()

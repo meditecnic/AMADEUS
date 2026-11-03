@@ -31,7 +31,7 @@ from app.services.memory import EmbeddingAdapter
 
 def _unit_vector(seed: str) -> list[float]:
     values: list[float] = []
-    for block in range(12):
+    for block in range(24):
         digest = hashlib.sha256(f"{seed}:{block}".encode("utf-8")).digest()
         values.extend(int(byte) - 127.5 for byte in digest)
     norm = sum(v * v for v in values) ** 0.5
@@ -42,7 +42,7 @@ class _ArchiveDeterministicEmbedder(EmbeddingAdapter):
     """Offline EmbeddingAdapter stub — never loads a real model in tests."""
 
     def __init__(self) -> None:
-        super().__init__(model_name="test-archive-384", dimensions=384)
+        super().__init__(model_name="test-archive-768", dimensions=768)
 
     async def encode_passage(self, text: str) -> list[float]:
         return _unit_vector(f"passage:{text}")

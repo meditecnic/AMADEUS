@@ -34,7 +34,7 @@ def _contracts():
 
 def _unit_vector(seed: str) -> list[float]:
     values: list[float] = []
-    for block in range(12):
+    for block in range(24):
         digest = hashlib.sha256(f"{seed}:{block}".encode("utf-8")).digest()
         values.extend(int(byte) - 127.5 for byte in digest)
     norm = math.sqrt(sum(v * v for v in values))
@@ -48,9 +48,9 @@ class _DeterministicEmbedder(EmbeddingAdapter):
         self,
         vocabulary: dict[str, str] | None = None,
         *,
-        model_name: str = "test-deterministic-384",
+        model_name: str = "test-deterministic-768",
     ):
-        super().__init__(model_name=model_name, dimensions=384)
+        super().__init__(model_name=model_name, dimensions=768)
         self._vocabulary = dict(vocabulary or {})
         self.encode_passage_calls = 0
         self.encode_query_calls = 0
@@ -855,8 +855,8 @@ async def test_s3b3_selected_target_refine_succeeds(isolated_store, monkeypatch)
                 seed["fact_id"],
                 1,
                 embedder.model_name,
-                384,
-                struct.pack(f"{384}f", *vec_v1),
+                768,
+                struct.pack(f"{768}f", *vec_v1),
             ),
         )
         await db.commit()
@@ -906,7 +906,7 @@ async def test_s3b3_selected_target_refine_succeeds(isolated_store, monkeypatch)
         memory_completion=refine_completion,
     )
     assert result["state"] == "completed"
-    expected_v2 = struct.pack(f"{384}f", *(await embedder.encode_passage(text_v2)))
+    expected_v2 = struct.pack(f"{768}f", *(await embedder.encode_passage(text_v2)))
     db = await get_db("steins_gate", "memory")
     try:
         cur = await db.execute(
@@ -935,7 +935,7 @@ async def test_s3b3_selected_target_refine_succeeds(isolated_store, monkeypatch)
         emb = await cur.fetchone()
         assert emb is not None
         assert emb["model"] == embedder.model_name
-        assert int(emb["dimensions"]) == 384
+        assert int(emb["dimensions"]) == 768
         assert bytes(emb["vector"]) == expected_v2
     finally:
         await db.close()
@@ -1402,8 +1402,8 @@ async def test_s3b3_vector_only_candidate_reaches_completion(
                     row["fact_id"],
                     1,
                     embedder.model_name,
-                    384,
-                    struct.pack(f"{384}f", *vector),
+                    768,
+                    struct.pack(f"{768}f", *vector),
                 ),
             )
         await db.commit()
@@ -4512,7 +4512,7 @@ async def test_v113_indexing_error_contains_type_only():
     from app.services.memory_v11.contracts import MemoryValidationError
     class Offline:
         model_name = "offline"
-        dimensions = 384
+        dimensions = 768
         async def encode_passage(self, text):
             raise RuntimeError("PRIVATE_FACT_EXCEPTION_V113")
     with pytest.raises(MemoryValidationError) as raised:

@@ -6,23 +6,28 @@
 
 ## 构建
 
-先准备 `intfloat/multilingual-e5-small` 的本地 snapshot（必须含 `onnx/model.onnx`），固定 revision 为
-`614241f622f53c4eeff9890bdc4f31cfecc418b3`。来源目录只读，脚本按白名单复制文件，
-`E5_FILES` 只复制以下三个文件，复制前核对来源，复制后再次核对产物：
+先准备 `jinaai/jina-embeddings-v5-text-nano-retrieval` 的本地 snapshot（必须含 `onnx/model.onnx`），固定 revision 为
+`ac5d898c8d382b17167c33e5c8af644a3519b47d`。来源目录只读，脚本按白名单复制文件，
+`EMBEDDING_FILES` 只复制以下四个文件，复制前核对来源，复制后再次核对产物：
 
 | 文件 | SHA-256 |
 |---|---|
-| `onnx/model.onnx` | `ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665` |
-| `tokenizer.json` | `0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39` |
-| `README.md`（MIT 模型卡） | `0038de97aee16258cecbad7ffda4b4febd6953e747a00e0ddbc8e6ed241e9c1c` |
+| `onnx/model.onnx` | `ad8244eea593ae8488cfd821a7d573aa51a350bc817702d6da99f3bccab24f49` |
+| `onnx/model.onnx_data` | `7eeca7c5e63a9047991df400cdd57c3cf05fabc0168700a4ecee42d1eba8093d` |
+| `tokenizer.json` | `98d4a1d32152d6cedf85b5e88f3b205106dca1fe72aaab34e0ac13c238421069` |
+| `README.md`（含 CC BY-NC 4.0 许可声明的模型卡） | `9f2433969e7962fffd5cd2bfef18bb319032dc973090d5449628d9bb4d219381` |
+
+模型由 Jina AI 提供，fp32、768 维；CC BY-NC 4.0（非商业使用）。随包保留模型卡（含许可声明）和署名；
+许可全文见 [CC BY-NC 4.0 法律文本](https://creativecommons.org/licenses/by-nc/4.0/legalcode)。固定 commit 没有单独的许可文件，不下载或随包附带 CC 法律文本。
 
 任一哈希不符即停止；不下载模型，不复制其他模型或用户缓存。
 哈希已经一致的暂存模型文件直接复用，并继续核对来源及产物。
+复用旧构建目录也安全：暂存时会清掉别的模型、旧 snapshot 和非白名单内容，冻结后再次核对目录、文件和哈希。
 
-在开发环境用 Hugging Face CLI 取固定快照（命令输出的 snapshot 路径作为 `--e5-source`）：
+在开发环境用 Hugging Face CLI 取固定快照（命令输出的 snapshot 路径作为 `--embedding-source`）：
 
 ```powershell
-hf download intfloat/multilingual-e5-small --revision 614241f622f53c4eeff9890bdc4f31cfecc418b3 --include onnx/model.onnx tokenizer.json README.md
+hf download jinaai/jina-embeddings-v5-text-nano-retrieval --revision ac5d898c8d382b17167c33e5c8af644a3519b47d --include onnx/model.onnx onnx/model.onnx_data tokenizer.json README.md
 ```
 
 PowerShell 构建示例（将路径替换为本机路径）：
@@ -30,9 +35,9 @@ PowerShell 构建示例（将路径替换为本机路径）：
 ```powershell
 $buildPython = 'X:/Python311/python.exe'
 $buildWork = 'X:/build-artifacts/backend-build'
-$e5Snapshot = 'X:/models/models--intfloat--multilingual-e5-small/snapshots/614241f622f53c4eeff9890bdc4f31cfecc418b3'
+$embeddingSnapshot = 'X:/models/models--jinaai--jina-embeddings-v5-text-nano-retrieval/snapshots/ac5d898c8d382b17167c33e5c8af644a3519b47d'
 $vcRedist = 'X:/BuildTools/VC/Redist/MSVC/14.51.36231/x64'
-& $buildPython packaging/windows/build_backend.py --python $buildPython --work-dir $buildWork --e5-source $e5Snapshot --vc-redist $vcRedist
+& $buildPython packaging/windows/build_backend.py --python $buildPython --work-dir $buildWork --embedding-source $embeddingSnapshot --vc-redist $vcRedist
 ```
 
 `--python` 只用于建立专用 venv，默认是调用脚本的 Python。
@@ -62,8 +67,8 @@ sherpa-onnx 和 sherpa-onnx-core 均使用仓库锁定的官方 1.13.8 wheel。
 `backend.spec` 和 `bundle_support.py` 收集原生库、包数据和延迟导入模块。
 应用数据白名单在 `build_backend.py:APP_FILES`：两份角色 JSON、persona bible、
 模型能力清单、发音词典和 few-shot JSON；不整棵复制 backend 或前端资源。
-E5 使用包内 Hugging Face hub 缓存布局及 `refs/main`，入口强制离线，
-不复制到用户目录。tokenizer 和模型文件的白名单在 `E5_FILES`。
+jina 使用包内 Hugging Face hub 缓存布局及 `refs/main`，入口强制离线，
+不复制到用户目录。tokenizer 和模型文件的白名单在 `EMBEDDING_FILES`。
 
 重复 DLL 仅处理根目录副本与明确的包内库目录副本：逐对核对 SHA-256，
 相同才移除根目录副本；不同则都保留。清单在 `dll-deduplication.json`。
@@ -88,7 +93,7 @@ VS 2026 使用的目录名为 `Microsoft.VC145.*`。
 `MSVCP140_ATOMIC_WAIT.dll` 是旧版自检模块快照中观察到的运行时加载项，未出现在 PE
 导入表中；因此独立要求根目录必须包含它，冻结时缺少就从 Redist 补齐，门禁缺少
 就报错。库存单列 `required_runtime_loads` 和 `missing_runtime_loads`，不推断加载者。
-更换 E5 运行库后尚待 Windows 动态加载复核，暂时保留该项和 OpenMP 要求；
+此前更换 E5 运行库后尚待 Windows 动态加载复核，暂时保留该项和 OpenMP 要求；
 新 wheel 的普通/延迟导入表没有这两项，仍不足以排除运行时动态加载。
 后端不使用 pythonwin GUI/MFC 接口，冻结时排除 `pythonwin`、`win32ui`、`win32uiole`，
 避免分发依赖未入包 MFC 的未使用扩展；其余 pywin32 功能仍按分析结果收集。
@@ -117,8 +122,8 @@ $env:AMADEUS_LOCAL_API_TOKEN = 'self-check-only'
 & desktop/src-tauri/resources/backend/amadeus-backend.exe --self-check
 ```
 
-自检导入 app，先导入 sherpa 原生扩展，再用 ONNX Runtime 离线加载 E5 并编码中文句子，
-检查 384 维、有限数值和单位范数，还会实际加载 sqlite_vec 扩展。失败返回非零退出码。
+自检导入 app，先导入 sherpa 原生扩展，再用 ONNX Runtime 离线加载 jina 并编码中文句子，
+检查 768 维、有限数值和单位范数，还会实际加载 sqlite_vec 扩展。失败返回非零退出码。
 两套运行库的双向导入测试在 `backend/tests/test_onnx_runtime_import_order.py`，不需要模型。
 不下载或运行 ASR 模型。
 
@@ -151,6 +156,12 @@ $env:AMADEUS_LOCAL_API_TOKEN = 'self-check-only'
 就绪时 stdout 输出一行 `AMADEUS_BACKEND_READY {"version": 1, "port": <实际端口>, "pid": <后端进程 PID>}`，不带令牌。
 `AMADEUS_PARENT_PID` 设置后看护对应进程，stdin EOF 也会请求 uvicorn 正常关闭。
 桌面宿主需要在后端存活期间保持 stdin 管道打开。stdout/stderr 使用 UTF-8。
+安装版的数据默认放在 `%LOCALAPPDATA%\com.amadeus.desktop\data`，可设置用户环境变量
+`AMADEUS_DATA_DIR` 后重启应用以更换位置。NSIS 卸载默认保留数据；勾选删除应用数据时会删除
+默认标识对应的数据目录。源码运行和后端可执行文件单独运行都必须显式设置非空的
+`AMADEUS_DATA_DIR`；服务和 `--self-check` 缺少它时只向 stderr 输出一行说明并非零退出，
+不创建数据目录。上面的自检命令和 `smoke_frozen.py` 已设置隔离目录。
+
 入口清除测试兼容变量 `AMADEUS_DB_PATH`，使数据库继续受 `AMADEUS_DATA_DIR` 管理；
 语音、素材相关用户配置（`SOVITS_SIDECAR_COMMAND`、`AMADEUS_ASSET_PACK_DIR`、
 `SENSEVOICE_*`、`AMADEUS_VAD_MODEL`、`AMADEUS_REF_*`）继续继承。
@@ -171,7 +182,7 @@ TOC 的来源路径；`bundle-inventory.json` 保存版本、体积、最大文�
 只列实际收集到的发行包，不扫描后直接宣称整个 venv 都被分发。每条记录包含名称、
 版本、License / License-Expression / License-File 字段、许可文件路径和 SHA-256；
 许可文件按发行包放入 ZIP。`without_license_files` 显式列出没有 dist-info 许可文件的包。
-模型卡随模型保存，`e5-model.json` 记录模型来源、revision 和文件哈希。
+模型卡随模型保存，`embedding-model.json` 记录模型来源、revision 和文件哈希。
 
 ## NSIS 安装包
 
@@ -181,7 +192,7 @@ TOC 的来源路径；`bundle-inventory.json` 保存版本、体积、最大文�
 需已可用；工具版本随产物保存。
 
 ```powershell
-py -3.11 packaging/windows/build_installer.py --work-dir 'X:/build-artifacts/installer' --e5-source $e5Snapshot --vc-redist $vcRedist --config packaging/windows/p3-test.conf.json
+py -3.11 packaging/windows/build_installer.py --work-dir 'X:/build-artifacts/installer' --embedding-source $embeddingSnapshot --vc-redist $vcRedist --config packaging/windows/p3-test.conf.json
 ```
 
 一条命令依次冻结后端、生成统一许可目录、执行完整 `npm ci`、运行 `tauri build`。
@@ -219,7 +230,7 @@ tauri-build 的 features，并重新序列化 Cargo.toml；CRLF 可能变为 LF�
 `embedBootstrapper`。卸载的「删除应用数据」默认不勾，静默卸载保留用户数据。
 
 `licenses/manifest.json` 统一记录 Python、CPython/native、VC、Windows 目标的 Rust
-运行时依赖、非 dev npm 包、字体、E5 和 GPL/LGPL 材料。Rust 图不遍历 build/dev
+运行时依赖、非 dev npm 包、字体、jina 和 GPL/LGPL 材料。Rust 图不遍历 build/dev
 依赖和 proc-macro 依赖链；许可原文来自本机 crate 缓存。Python 许可 ZIP 沿用冻结清单，
 缺许可 wheel、crate 和 npm 包的上游原文由 `upstream_materials.json` 固定 URL、ref
 和 SHA-256。crate 提交与 `.cargo_vcs_info.json` 核对；npm 提交按 registry gitHead
@@ -256,7 +267,7 @@ py -3.11 packaging/windows/source_materials.py --work-dir 'X:/build-artifacts/in
 
 ## 交付边界
 
-- 冻结验收覆盖本机产物、离线 E5、sherpa 导入、假服务聊天和退出。安装包需要另外完成
+- 冻结验收须覆盖本机产物、离线 jina、sherpa 导入、假服务聊天和退出。安装包需要另外完成
   安装、覆盖安装、卸载及数据保留验收；ASR/VAD 推理、真实 Provider、TTS、素材包、
   无开发环境的 Windows VM、从旧版本升级和正式标识安装不在本机测试范围内。
 - 构建器不安装系统软件。VC 运行库以 app-local 文件分发，安全更新依赖重新构建发版；

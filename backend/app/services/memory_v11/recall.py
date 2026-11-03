@@ -306,7 +306,9 @@ async def _load_scoped_facts(scope: MemoryScope) -> list[dict[str, Any]]:
     return facts
 
 
-async def load_resident_fact_candidates(scope: MemoryScope) -> list[dict[str, Any]]:
+async def load_resident_fact_candidates(
+    scope: MemoryScope, *, db: Any | None = None
+) -> list[dict[str, Any]]:
     """v11 resident-profile candidates with their ranking signals.
 
     Same scope and lifecycle as ``_load_scoped_facts`` (session_id +
@@ -314,11 +316,13 @@ async def load_resident_fact_candidates(scope: MemoryScope) -> list[dict[str, An
     display_text). Adds pin/created/updated timestamps, the active version's
     change_kind, distinct observation count across *all* versions, and
     whether any version came from legacy_import. Read-only; never touches
-    embeddings.
+    embeddings. An optional caller-owned connection keeps a chart snapshot atomic.
     """
     wl = normalize_worldline(scope.worldline)
     mode = normalize_identity_mode(scope.identity_mode)
-    db = await get_db(wl, "memory")
+    owns_connection = db is None
+    if db is None:
+        db = await get_db(wl, "memory")
     try:
         cur = await db.execute(
             """SELECT f.fact_id, f.is_pinned, f.created_at, f.updated_at,
@@ -342,7 +346,8 @@ async def load_resident_fact_candidates(scope: MemoryScope) -> list[dict[str, An
         )
         rows = await cur.fetchall()
     finally:
-        await db.close()
+        if owns_connection:
+            await db.close()
     facts = []
     for row in rows:
         display = str(row["display_text"] or "").strip()
@@ -513,7 +518,7 @@ async def _recall_body(
 
     # lexical_only: explicit bigram/structured-only switch. Never resolves the
     # default embedder, never loads embeddings, never calls encode_query, so
-    # it cannot lazy-load the E5 model. Not reported as "degraded".
+    # it cannot lazy-load the embedding model. Not reported as "degraded".
     resolved = None if lexical_only else _resolve_embedder(embedder)
     query_vectors: dict[str, list[float] | None] = {}
     compatible: dict[tuple[str, int], list[float]] = {}
@@ -808,7 +813,7 @@ async def recall_stable_facts(
     - exclude_fact_ids: fact_ids already injected this turn (and their
       same-fingerprint duplicates) are never returned.
     - lexical_only: structured/bigram ranking only; the embedder is never
-      resolved or called (no E5 lazy load).
+      resolved or called (no embedding model lazy load).
     - min_shared_bigrams: admission threshold on distinct shared bigrams.
     """
     bounds = limits or RecallLimits()

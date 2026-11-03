@@ -48,10 +48,11 @@ Linux; Linux results do not establish Windows acceptance.
   game materials. See README sections on optional voice and the asset pack.
 - Before importing backend `app` outside pytest, set `AMADEUS_DATA_DIR` to a
   fresh temporary directory and leave `AMADEUS_DB_PATH` unset (it overrides the
-  data directory). Paths are resolved during import. Otherwise development
-  code can write to real user data under `%APPDATA%\Amadeus` on Windows
-  (`~/.amadeus` elsewhere). `backend/tests/conftest.py` sets up isolation before
-  pytest collection; keep that isolation intact.
+  data directory). Paths are resolved during import. Source and frozen runs refuse
+  to start without a nonempty `AMADEUS_DATA_DIR`; they have no fallback user
+  directory. Never point development code at installed user data.
+  `backend/tests/conftest.py` sets up isolation before pytest collection; keep
+  that isolation intact.
 - Unless the task explicitly requests it, preserve cross-module interfaces:
   WebSocket messages and close codes, audio interfaces, memory APIs, model
   service interfaces, `prompt_compiler`, ports and startup tokens.
