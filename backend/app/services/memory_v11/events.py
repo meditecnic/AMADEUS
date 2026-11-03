@@ -16,8 +16,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+from datetime import datetime, timezone
 
 from app.db import get_db
+from app.services.memory_v11.projection import _is_expired
 
 logger = logging.getLogger(__name__)
 _subscribers: dict[tuple[str, str, str], set[Callable]] = {}
@@ -40,6 +42,8 @@ def subscribe(scope: tuple[str, str, str], receive: Callable) -> Callable:
 
 async def describe_items(db, scope, items):
     """Read chart labels and original creation times on the caller's connection."""
+    # Admission follows projection.load_visible_memory_rows and chart.build_chart.
+    now = datetime.now(timezone.utc)
     result = []
     for item in items:
         if item["kind"] == "fact":
@@ -47,13 +51,19 @@ async def describe_items(db, scope, items):
                      JOIN stable_fact_versions v ON v.fact_id=f.fact_id
                        AND v.version_no=f.active_version
                      WHERE f.fact_id=? AND f.session_id=? AND f.identity_mode=?
-                       AND f.state='active' AND v.invalid_at IS NULL"""
+                       AND f.state='active' AND v.invalid_at IS NULL
+                       AND NOT EXISTS (
+                           SELECT 1 FROM memory_tombstones t WHERE t.fact_id=f.fact_id
+                             AND t.session_id=f.session_id AND t.identity_mode=f.identity_mode
+                       )"""
         else:
-            sql = """SELECT display_text, created_at FROM experiences
+            sql = """SELECT display_text, created_at, status, expires_at FROM experiences
                      WHERE experience_id=? AND session_id=? AND identity_mode=?
                        AND status='active'"""
         row = await (await db.execute(sql, (item["id"], scope[0], scope[2]))).fetchone()
-        if row is not None:
+        if row is not None and not (
+            item["kind"] == "experience" and _is_expired(row["status"], row["expires_at"], now)
+        ):
             result.append({**item, "label": row["display_text"], "created_at": row["created_at"]})
     return result
 

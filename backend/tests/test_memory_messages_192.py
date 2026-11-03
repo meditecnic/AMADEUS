@@ -419,3 +419,63 @@ async def test_retry_keeps_refreshed_candidates_separate_from_sent_budget(isolat
     assert len(refreshed) == 2 and len(sent) == 3
     assert session.turn_execution.recall_result is refreshed[-1]
     assert session.turn_execution.sent_recall_fact_ids == ("first", "recovered")
+
+
+@pytest.mark.parametrize("expires_at,status", [("2000-01-01T00:00:00+00:00", "active"), (None, "expired")])
+async def test_notifications_share_chart_tombstone_and_expiry_admission(isolated_store, expires_at, status):
+    from app.services.memory_v11.chart import build_chart
+    from app.services.memory_v11.recall import MemoryScope
+    from app.services.memory_v11.repository import create_stable_fact
+    from app.services.prompt_compiler import CompiledPrompt
+
+    job = await make_job()
+    completed = await jobs.process_memory_job(job_id=job["job_id"], memory_completion=create_completion)
+    owner = job["session_id"]
+    scope = (owner, "steins_gate", "self")
+    control = await create_stable_fact(session_id=owner, worldline="steins_gate", identity_mode="self",
+                                       display_text="仍然可见的认知", semantic_json={})
+    db = await get_db("steins_gate", "memory")
+    try:
+        fact = await (await db.execute(
+            "SELECT fact_id FROM stable_facts WHERE session_id=? AND fact_id!=?", (owner, control["fact_id"]))).fetchone()
+        exp = await (await db.execute("SELECT experience_id FROM experiences WHERE session_id=?", (owner,))).fetchone()
+        await db.executemany(
+            """INSERT INTO memory_tombstones(tombstone_id, session_id, identity_mode, fact_id, deleted_at)
+               VALUES(?,?,?,?,?)""", [
+                (str(uuid4()), owner, "self", fact["fact_id"], "2026-11-03T00:00:00+00:00"),
+                # A tombstone from another identity must not hide the control.
+                (str(uuid4()), owner, "okabe", control["fact_id"], "2026-11-03T00:00:00+00:00"),
+            ])
+        await db.execute("UPDATE experiences SET expires_at=?, status=? WHERE experience_id=?",
+                         (expires_at, status, exp["experience_id"]))
+        await db.commit()
+    finally:
+        await db.close()
+    chart = await build_chart(MemoryScope(session_id=owner, worldline="steins_gate", identity_mode="self"))
+    assert [f["id"] for f in chart["facts"]] == [control["fact_id"]]
+    assert chart["experiences"] == []
+    compiled = CompiledPrompt("SYSTEM", supplement_fact_ids=(fact["fact_id"], control["fact_id"]),
+                               experience_ids=(exp["experience_id"],))
+    references = await events.referenced_items_for_turn(scope, compiled, ())
+    assert [i["id"] for i in references] == [control["fact_id"]]
+    assert references[0]["label"] == chart["facts"][0]["label"]
+    changes = [{"kind": "fact", "id": fact["fact_id"], "change": "create"},
+               {"kind": "experience", "id": exp["experience_id"], "change": "create"},
+               {"kind": "fact", "id": control["fact_id"], "change": "create"}]
+    received = []
+    off = events.subscribe(scope, received.append)
+    try:
+        events.publish_recorded(completed, {"changes": changes})
+        await drain()
+        assert len(received) == 1
+        assert [c["id"] for c in received[0]["changes"]] == [control["fact_id"]]
+        assert received[0]["changes"][0]["label"] == chart["facts"][0]["label"]
+        received.clear()
+        events.publish_recorded(completed, {"changes": changes[:2]})
+        await drain()
+        assert received == []
+        hidden_only = CompiledPrompt("SYSTEM", supplement_fact_ids=(fact["fact_id"],),
+                                     experience_ids=(exp["experience_id"],))
+        assert await events.referenced_items_for_turn(scope, hidden_only, ()) == []
+    finally:
+        off()
