@@ -60,7 +60,8 @@ def test_dependency_health_is_degraded_when_tts_is_explicitly_unavailable(
             "error": "no endpoint",
         }
 
-    monkeypatch.setattr(type(sidecar_supervisor), "health", staticmethod(unavailable_tts))
+    monkeypatch.setattr(sidecar_supervisor, "health", unavailable_tts)
+    assert sidecar_supervisor.health is unavailable_tts
     with TestClient(app, base_url="http://localhost", headers={"host": "localhost", "origin": "http://localhost:1420"}) as client:
         dependencies = client.get("/health/dependencies").json()
 

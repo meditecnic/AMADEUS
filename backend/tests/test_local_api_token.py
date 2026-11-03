@@ -159,8 +159,11 @@ def test_http_rejection_prevents_database_network_and_process_effects(token_clie
         request=httpx.Request('GET', 'https://provider.example/models'),
     ))
     monkeypatch.setattr(httpx.AsyncClient, 'send', outbound)
+    from app.services.tts_sidecar import sidecar_supervisor
+
     sidecar = AsyncMock()
-    monkeypatch.setattr('app.services.tts_sidecar.SidecarSupervisor.ensure_available', staticmethod(sidecar))
+    monkeypatch.setattr(sidecar_supervisor, 'ensure_available', sidecar)
+    assert sidecar_supervisor.ensure_available is sidecar
     spawn = MagicMock(side_effect=AssertionError('unauthorized request spawned process'))
     monkeypatch.setattr(subprocess, 'Popen', spawn)
     params = {'session_id': owner}

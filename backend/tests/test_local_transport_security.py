@@ -8,6 +8,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from app.main import app
 from app.routers.chat_ws import sessions
+from app.services.tts_sidecar import sidecar_supervisor
 from app.services.tts_queue import TTSQueueManager, TTSServiceError
 
 
@@ -18,8 +19,12 @@ def isolated_transport_app(tmp_path, monkeypatch):
     monkeypatch.delenv('AMADEUS_DB_PATH', raising=False)
     monkeypatch.setenv('AMADEUS_DATA_DIR', str(tmp_path))
     reset_initialization_cache()
-    monkeypatch.setattr('app.services.tts_sidecar.SidecarSupervisor.ensure_available', staticmethod(AsyncMock(return_value=SimpleNamespace(url=None))))
-    monkeypatch.setattr('app.services.tts_sidecar.SidecarSupervisor.close', staticmethod(AsyncMock()))
+    ensure_sidecar = AsyncMock(return_value=SimpleNamespace(url=None))
+    monkeypatch.setattr(sidecar_supervisor, 'ensure_available', ensure_sidecar)
+    assert sidecar_supervisor.ensure_available is ensure_sidecar
+    close_sidecar = AsyncMock()
+    monkeypatch.setattr(sidecar_supervisor, 'close', close_sidecar)
+    assert sidecar_supervisor.close is close_sidecar
     monkeypatch.setattr('app.services.search.SearchService.start', staticmethod(AsyncMock()))
     monkeypatch.setattr('app.services.search.SearchService.close', staticmethod(AsyncMock()))
 
