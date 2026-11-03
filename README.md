@@ -28,7 +28,7 @@ flowchart LR
   subgraph Desktop["Desktop app (Tauri 2)"]
     UI["React 19 + TypeScript UI"]
   end
-  subgraph Backend["Python backend (FastAPI, 127.0.0.1:8000)"]
+  subgraph Backend["Python backend (FastAPI, loopback, system-assigned port)"]
     WS["/ws/chat streaming"]
     Persona["Persona + prompt compiler"]
     Mem["Memory: SQLite + jina"]
@@ -60,10 +60,14 @@ Built and maintained by one developer, who owns the product direction, architect
 
 ## Status
 
-- **Engineering MVP reached.** The Windows installer passed clean-VM acceptance; the developer's own hands-on run is in progress, and there is no public release yet.
+- **v0.1.0 is being prepared.** There is no public release yet.
 - **M3 accepted and closed.** Worldline instruments, softer transitions and startup preparation are merged. M4 awaits authorization.
-- Developed mainly on Windows; the browser dev mode also runs on Linux.
+- The desktop app supports **Windows 10/11 x64 only**; the browser dev mode also runs on Linux.
 - **Planned:** English and Japanese UI. Kurisu keeps speaking Japanese in every mode; in English mode her lines get English subtitles, and in Japanese mode subtitles are turned off.
+
+## Installation
+
+Once v0.1.0 is published, download the Windows installer from [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases). The installer is unsigned, so Windows SmartScreen will warn; choose **More info → Run anyway** to continue. If WebView2 is missing, the installer downloads and installs it, which requires an internet connection. Voice is optional.
 
 ## Run it (development)
 
@@ -183,7 +187,7 @@ This repository contains **no** original game assets (character art, CG, logos, 
 
 ## License
 
-The code in this repository is released under the [MIT License](LICENSE). Provider icons on the connections page come from [Lobe Icons](https://github.com/lobehub/lobe-icons) (MIT); provider names and marks belong to their owners. See [third-party notices](THIRD_PARTY_NOTICES.md) for dependency licenses.
+The code in this repository is released under the [MIT License](LICENSE). Provider icons on the connections page come from [Lobe Icons](https://github.com/lobehub/lobe-icons) (MIT); provider names and marks belong to their owners. The installer bundles the Jina AI embedding model under CC BY-NC 4.0, so the installer as a whole is for **non-commercial use only**. Speech components include eSpeak NG (GPLv3); the corresponding source package, `amadeus-0.1.0-speech-sources.zip`, will accompany each version on GitHub Releases. See [third-party notices](THIRD_PARTY_NOTICES.md) for details.
 
 STEINS;GATE, STEINS;GATE 0 and their characters, names and original assets belong to MAGES. Inc. and the respective rights holders. This repository does not include those assets and the project is not used for any commercial purpose. If a rights holder asks, we will act on it promptly.
 
@@ -201,7 +205,7 @@ STEINS;GATE, STEINS;GATE 0 and their characters, names and original assets belon
 
 从 6 月中旬起已经开发了大约四个月。
 
-**新界面的 Windows 安装包已经打出来了**，在一台干净的英文 Windows Server 2022 虚拟机上，10 项验收全部通过：安装、自动装 WebView2、真实对话、记忆的写入/召回/遗忘、重启后还记得、卸载时保留数据。我自己再完整体验一轮，就放出来。（打包脚本在 `packaging/windows/`，冻结后端是构建产物，不进仓库。）
+**新界面的 Windows 安装包已经打出来了**，在一台干净的英文 Windows Server 2022 虚拟机上，10 项验收全部通过：安装、自动装 WebView2、真实对话、记忆的写入/召回/遗忘、重启后还记得、卸载时保留数据。v0.1.0 正在准备，还没有公开发布。（打包脚本在 `packaging/windows/`，冻结后端是构建产物，不进仓库。）
 
 已经能用的：
 
@@ -217,9 +221,15 @@ M3 已收尾，M4 等待授权。英文和日文界面仍在计划中；她始�
 
 正常 GPU 演出不显示状态字幕，但保留读屏状态；等待超过 0.7 秒才显示提示，失败立即显示。提示采用无底框琥珀字幕，失败使用错误色；Esc 提示在活动、键盘聚焦及前 3 次引导时出现。减少动态与降级路径仍保留同一切换事务，跳过不会伪造成功。验证来源和边界见上文 [Engineering notes](#engineering-notes)。
 
+### 安装
+
+桌面版只支持 **Windows 10/11 x64**。v0.1.0 发布后可从 [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases) 下载安装包；安装包未签名，SmartScreen 提示时点「更多信息 → 仍要运行」。缺少 WebView2 时安装程序会联网安装；语音可选。后端只监听本机回环，端口由系统分配。
+
+代码使用 MIT 许可；安装包带 CC BY-NC 4.0 的 jina 嵌入模型，因此安装包整体仅限非商业使用。语音组件含 eSpeak NG（GPLv3），对应源码包 `amadeus-0.1.0-speech-sources.zip` 随每个版本在 Releases 发布，见 [第三方说明](THIRD_PARTY_NOTICES.md)。
+
 ### 运行
 
-开发有两种模式，命令见上文 [Run it](#run-it-development)。安装和运行以英文版为准。Windows 和 Linux 都能跑。
+开发有两种模式，命令见上文 [Run it](#run-it-development)。安装和运行以英文版为准。浏览器开发模式在 Linux 上也能跑。
 
 **默认本地 mock**：只需 Node.js，不用启动 Python 后端，不需要 API 密钥、真实模型或 TTS。按 [Local mock](#local-mock-default) 执行 `npm ci` 和 `npm run dev -- --port 1420 --strictPort`，打开 http://localhost:1420/?scenario=streaming 。等 USER ID 自动输入完 `Salieri` 后，用公开本地测试口令 `Gott würfelt nicht` 登录；发送任意消息即可看到三组逐句到达的日语和中文字幕。会话和记忆都是测试数据，服务重启后重置。mock 仅用于开发，不进入生产构建，`npm run preview` 也不提供 mock。
 
@@ -266,6 +276,10 @@ okeydokey，大概就是这些，那么来句帅气的收尾吧：El Psy Kongroo
 この音声は『STEINS;GATE』の牧瀬紅莉栖の声を模倣したものです。キャラクター、原作の録音、声優の実演に関する権利は、それぞれの権利者に帰属します。モデルページの Apache-2.0 は、アップロードした本人が許諾できる範囲にのみ適用され、キャラクター、原作の録音、実演に関する権利の許諾を意味するものではありません。個人かつ非商用の用途に限って使用し、声優へのなりすましや、公式と誤認されるようなコンテンツの制作には使わないでください。権利者の方が関連内容の削除を希望される場合は、GitHub で issue を作成してください。速やかに対応します。
 
 遷移の受け渡しを柔らかくし、GPU を非同期で準備する。ログイン画面ではフォントを先読みし、入場後の使用記録を次回の再読み込みに使う。既存の音声初期化は入場前に移した。通常の GPU 演出中は状態字幕を隠して読み上げ用の状態を保ち、0.7 秒を超える待機や失敗時に表示する。字幕は背景枠のない琥珀色（失敗時はエラー色）。Esc の案内は操作・フォーカス・最初の 3 回の案内時に現れる。検証結果の出典と範囲は [Engineering notes](#engineering-notes) を参照。M3 は完了し、M4 は承認待ち。
+
+デスクトップ版は **Windows 10/11 x64 のみ**に対応し、v0.1.0 は公開準備中で、まだ公開リリースはない。公開後は [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases) からインストーラーを入手できる。署名がないため SmartScreen の警告が出るので、「詳細情報 → 実行」を選ぶ。WebView2 がなければインストーラーがネット経由で導入する。音声は任意。バックエンドはループバックのみで待ち受け、ポートはシステムが割り当てる。ブラウザーでの開発モードは Linux でも動く。
+
+コードは MIT。インストーラーには CC BY-NC 4.0 の jina 埋め込みモデルが含まれるため、インストーラー全体は非商用利用に限る。音声コンポーネントには eSpeak NG（GPLv3）が含まれ、対応するソース `amadeus-0.1.0-speech-sources.zip` は各バージョンと一緒に Releases で公開する。詳細は [第三者ライセンス](THIRD_PARTY_NOTICES.md) を参照。
 
 開発時の起動方法は [Run it](#run-it-development) を参照。セットアップと実行手順は英語版を正とする。**標準はローカル mock** で、Node.js だけで動き、Python バックエンド、API キー、実際のモデルや TTS は不要。[Local mock](#local-mock-default) の手順で `npm ci` と `npm run dev -- --port 1420 --strictPort` を実行し、http://localhost:1420/?scenario=streaming を開く。USER ID が `Salieri` と入力されるまで待ち、公開のローカルテスト用合言葉 `Gott würfelt nicht` でログインする。メッセージを送ると、日本語と中国語字幕の組が三つ、順番に届く。会話と記憶はテストデータで、開発サーバーの再起動でリセットされる。mock は開発専用で、製品ビルドには含まれず、`npm run preview` でも利用できない。
 
