@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 
 import { useReducedMotion } from '../design-system/useReducedMotion';
 import { ArchiveView } from './ArchiveView';
@@ -18,7 +18,11 @@ export type MemorySpaceProps = {
   chatWorldline: Worldline;
   chatIdentityMode: IdentityMode;
   onClose: () => void;
+  /** Lets the header's memory key leave through the same unsaved-draft guard as Esc. */
+  controlRef?: RefObject<MemorySpaceControl | null>;
 };
+
+export type MemorySpaceControl = { requestClose: () => void };
 
 export type MemorySpaceMode = 'chart' | 'archive';
 
@@ -61,7 +65,7 @@ function ScopeName({ worldline, identityMode }: { worldline: Worldline; identity
 
 const noopSubscribe = () => () => undefined;
 
-export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClose }: MemorySpaceProps) {
+export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClose, controlRef }: MemorySpaceProps) {
   const reducedMotion = useReducedMotion();
   const [worldline, setWorldline] = useState<Worldline>(chatWorldline);
   const [identityMode, setIdentityMode] = useState<IdentityMode>(chatIdentityMode);
@@ -93,6 +97,8 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
   const archiveRef = useRef<ArchiveModule | null>(null);
   const selectionRef = useRef(selection);
   selectionRef.current = selection;
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
 
   const handleErased = useCallback((_kind: 'fact' | 'experience', recordId: string) => {
     setErased((current) => new Set(current).add(recordId));
@@ -107,6 +113,7 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
       detailsCache: detailsCacheRef.current,
       onRecordErased: handleErased,
       onExitArchive: () => setMode('chart'),
+      onCloseMemory: () => onCloseRef.current(),
       onScopeChangeSettled: () => { archiveOpenedRef.current = scopeKeyRef.current; },
     });
   }
@@ -231,11 +238,23 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
     setSelection(next);
   };
 
+  // Every way out of the memory space (header key, Esc, back button, state cards)
+  // passes the archive's unsaved-draft and save-in-flight guard.
+  const requestClose = () => {
+    setScopeMenu(false);
+    if (archive.handleCloseRequest()) onCloseRef.current();
+  };
+  useLayoutEffect(() => {
+    if (!controlRef) return undefined;
+    controlRef.current = { requestClose };
+    return () => { controlRef.current = null; };
+  });
+
   const unwind = (closeAtRoot: boolean) => {
     if (scopeMenu) { setScopeMenu(false); return; }
     if (mode === 'archive') {
       if (archive.handleBack()) return;
-      if (closeAtRoot) onClose();
+      if (closeAtRoot) requestClose();
       return;
     }
     const kind: MemoryUnwindKind = selection?.kind === 'star'
@@ -247,7 +266,7 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
     if (action === 'evidence-to-topic') { if (focusTopic) select({ kind: 'topic', id: focusTopic }); else overview(); }
     else if (action === 'topic-to-overview' || action === 'collapse-branch') overview();
     else if (action === 'close-inspector') setSelection(null);
-    else if (action === 'close-memory') onClose();
+    else if (action === 'close-memory') requestClose();
   };
 
   const openArchiveRecord = (kind: 'fact' | 'experience', recordId: string) => {
@@ -419,7 +438,7 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
                 <h2>记忆存储暂时不可用</h2>
                 <div className="acts">
                   <button type="button" className="m-btn solid" data-testid="memory-retry" onClick={retry}>重试</button>
-                  <button type="button" className="m-btn" onClick={onClose}>返回对话</button>
+                  <button type="button" className="m-btn" onClick={requestClose}>返回对话</button>
                 </div>
               </section>
             ) : null}

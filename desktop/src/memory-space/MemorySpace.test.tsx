@@ -1,9 +1,10 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { createRef, type RefObject } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createMemoryStore, handleMemory } from '../dev-mock/memory';
 import { ymd } from './chartFormat';
-import { MemorySpace } from './MemorySpace';
+import { MemorySpace, type MemorySpaceControl } from './MemorySpace';
 import type { MemoryChart } from './types';
 
 vi.mock('../design-system/useReducedMotion', () => ({ useReducedMotion: () => true }));
@@ -228,6 +229,37 @@ describe('MemorySpace with the archive', () => {
     expect(screen.getByTestId('memory-tab-chart')).toHaveAttribute('aria-selected', 'true');
   });
 
+  it('the header key leaves through the same draft guard: asks, keeps the draft on cancel, closes only after discard', async () => {
+    serve('normal');
+    const control = createRef<MemorySpaceControl>() as RefObject<MemorySpaceControl | null>;
+    const onClose = vi.fn();
+    render(<MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={onClose} controlRef={control} />);
+    await plateReady();
+    fireEvent.click(screen.getByTestId('memory-tab-archive'));
+    fireEvent.click((await screen.findAllByText('小黑三岁了。'))[0]);
+    fireEvent.click(await screen.findByTestId('archive-edit-fact'));
+    fireEvent.change(await screen.findByTestId('archive-editor-input'), { target: { value: '未保存的草稿文本' } });
+    act(() => control.current!.requestClose());
+    expect(await screen.findByTestId('archive-discard-confirm')).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('archive-discard-continue'));
+    expect(screen.queryByTestId('archive-discard-confirm')).toBeNull();
+    expect(screen.getByTestId('archive-editor-input')).toHaveValue('未保存的草稿文本');
+    expect(onClose).not.toHaveBeenCalled();
+    act(() => control.current!.requestClose());
+    fireEvent.click(await screen.findByTestId('archive-discard-confirm-button'));
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('the header key closes at once when nothing is unsaved', async () => {
+    serve('normal');
+    const control = createRef<MemorySpaceControl>() as RefObject<MemorySpaceControl | null>;
+    const onClose = vi.fn();
+    render(<MemorySpace sessionId="s" chatWorldline="steins_gate" chatIdentityMode="okabe" onClose={onClose} controlRef={control} />);
+    await plateReady();
+    act(() => control.current!.requestClose());
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
   it('a record deleted in the archive is gone from the chart and its reading closes', async () => {
     serve('normal');
     mount();

@@ -56,7 +56,7 @@ import { wsTransition } from '../workstation/motionTokens';
 import { MotionConfig, animate } from 'motion/react';
 import { LogOut } from 'lucide-react';
 import { ForgetConversationModal } from './ForgetConversationModal';
-import { MemorySpace } from '../memory-space/MemorySpace';
+import { MemorySpace, type MemorySpaceControl } from '../memory-space/MemorySpace';
 import '../memory-space/MemorySpace.css';
 import {
   ProviderControls,
@@ -130,6 +130,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMemoryOpen, setIsMemoryOpen] = useState(false);
   const [memoryClosing, setMemoryClosing] = useState(false);
+  const memoryControlRef = useRef<MemorySpaceControl | null>(null);
   const closeMemory = () => {
     const done = () => {
       setIsMemoryOpen(false);
@@ -2034,7 +2035,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
             aria-pressed={isMemoryOpen}
             title={isMemoryOpen ? '回到对话（Esc）' : undefined}
             onClick={() => {
-              if (isMemoryOpen) { if (!memoryClosing) closeMemory(); return; }
+              if (isMemoryOpen) {
+                if (!memoryClosing) (memoryControlRef.current?.requestClose ?? closeMemory)();
+                return;
+              }
               setIsMemoryOpen(true);
             }}
           >
@@ -2572,6 +2576,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             chatWorldline={worldline}
             chatIdentityMode={activeIdentityMode}
             onClose={closeMemory}
+            controlRef={memoryControlRef}
           />
         </div>
       ) : null}
