@@ -675,8 +675,11 @@ class IncrementalJapaneseSegmenter:
                     self._short_candidate = None
                 boundary = self._find_length_boundary(self._pending)
                 if prepare_tts_text(self._pending[:boundary].strip()).error is AudioErrorCode.TOO_SHORT:
-                    # Include the following source in this forced slice, within its cap.
-                    boundary = min(len(self._pending), MAX_SEGMENT_SOURCE_CODEPOINTS)
+                    limit = min(len(self._pending), MAX_SEGMENT_SOURCE_CODEPOINTS)
+                    boundary = next((i + 1 for i in range(limit - 1, boundary - 1, -1)
+                                     if self._pending[i] in "、，," or self._pending[i].isspace()), limit)
+                    if prepare_tts_text(self._pending[:boundary].strip()).error is AudioErrorCode.TOO_SHORT:
+                        boundary = limit
             if boundary is None:
                 break
             raw = self._pending[:boundary]
