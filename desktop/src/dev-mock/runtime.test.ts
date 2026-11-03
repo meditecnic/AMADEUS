@@ -241,6 +241,20 @@ describe('dev mock protocol v2', () => {
       expect(changes('记住这个，其实是拿铁')).toEqual(['f17:create', 'e3:create', 'f07:supersede']);
     });
 
+    it('uses the ids of the worldline the socket authenticated into', () => {
+      vi.useFakeTimers();
+      const mock = createMockRuntime();
+      const frames: Record<string, unknown>[] = [];
+      const socket = mock.connect(url('/ws/chat?session_id=marks'), frame => frames.push(frame));
+      socket.receive({ type: 'auth', worldline: 'beta', conversation_mode: 'draft' });
+      socket.receive({ type: 'chat.send', content: '记住这个，其实不是' });
+      vi.runAllTimers();
+      const ids = (type: string, key: string) => (frames.find(frame => frame.type === type) as Record<string, Array<{ id: string }>>)[key].map(row => row.id);
+      expect(ids('memory.referenced', 'items')).toEqual(['g01', 'x3', 'g09', 'mock-gone-1']);
+      expect(ids('memory.recorded', 'changes')).toEqual(['g18', 'x4', 'g09']);
+      socket.close();
+    });
+
     it('only references for a plain mention, and sends neither for other turns', () => {
       const mention = run('小黑睡着了');
       expect(mention.types).toContain('memory.referenced');

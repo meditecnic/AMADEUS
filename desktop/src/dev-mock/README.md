@@ -95,9 +95,10 @@ Direct REST/WS tooling can pass `?scenario=<name>` or these cookies.
   `ping` gets `pong`. No audio frames are generated.
 - Memory marks: some turns also get `memory.referenced` (just before
   `turn.completed`) and `memory.recorded` (1.5 s after it), with ids from the
-  sg `memory` chart plus one id the chart does not have (`mock-gone-1`). Keyed on
-  what the user writes: `记住` → referenced + two creates (`f17`, `e3`);
-  `其实` → referenced + a supersede of `f07`; both words → both groups;
+  `memory` chart of the turn's worldline plus one id the chart does not have
+  (`mock-gone-1`). Keyed on what the user writes: `记住` → referenced + two
+  creates (SG `f17`, `e3`; β `g18`, `x4`); `其实` → referenced + a supersede
+  (SG `f07`; β `g09`); both words → both groups;
   `小黑`, `猫`, `咖啡` or `参照` → referenced only; anything else → neither.
   The chart side needs `?scenario=memory`; other scenarios have different plates.
 - Provider/model fixtures are callable locally. Credential endpoints discard

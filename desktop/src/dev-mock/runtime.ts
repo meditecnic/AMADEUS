@@ -267,7 +267,7 @@ export function createMockRuntime() {
             emit({ type: 'segment.ready', ...turn, segment_id: segmentId, ja: sentence.ja, zh: sentence.zh, emotion: sentence.emotion });
           });
         });
-        const memory = mockMemoryForTurn(frame.content);
+        const memory = mockMemoryForTurn(frame.content, worldline);
         schedule(elapsed + scenario.dialogue.completionDelayMs, () => {
           if (memory.referenced) emit({ type: 'memory.referenced', ...turn, items: memory.referenced });
           emit({ type: 'turn.completed', ...turn });
