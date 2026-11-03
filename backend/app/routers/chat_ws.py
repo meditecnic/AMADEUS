@@ -2532,6 +2532,11 @@ async def writer_loop(send_queue: asyncio.Queue, session: SessionState, websocke
             
             # Unpack msg
             msg_epoch, payload = msg
+            if (isinstance(payload, dict) and payload.get("type") == "memory.recorded"
+                    and (session.protocol_version < 2
+                         or payload.get("conversation_id") != session.conversation_id)):
+                send_queue.task_done()
+                continue
             if msg_epoch == session.current_epoch:
                 observer = None
                 payload_type = payload.get("type") if isinstance(payload, dict) else None
@@ -2600,6 +2605,24 @@ async def websocket_chat_endpoint(websocket: WebSocket):
     writer_task = asyncio.create_task(writer_loop(send_queue, session, websocket))
     
     authenticated = False
+    memory_unsubscribe = None
+
+    def subscribe_memory():
+        nonlocal memory_unsubscribe
+        if memory_unsubscribe is not None:
+            memory_unsubscribe()
+            memory_unsubscribe = None
+        if session.protocol_version >= 2:
+            from app.services.memory_v11.events import subscribe
+            scope = (session.session_id, session.worldline, session.identity_mode)
+
+            def receive(payload):
+                if (not writer_task.done()
+                        and scope == (session.session_id, session.worldline, session.identity_mode)
+                        and payload["conversation_id"] == session.conversation_id):
+                    send_queue.put_nowait((session.current_epoch, payload))
+
+            memory_unsubscribe = subscribe(scope, receive)
     
     try:
         # 4. Reader Coroutine (Main Loop): reads WebSocket frames and routes
@@ -2792,6 +2815,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 )
                     
                 authenticated = True
+                subscribe_memory()
                 await session_coordinator.persist_current(session.session_id, session.worldline, session.revision)
                 await session_coordinator.acquire_lease(session.session_id, session.worldline, websocket)
                 if (
@@ -2942,6 +2966,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                         "message": "会话切换失败，当前会话已保留。",
                     }))
                     continue
+                subscribe_memory()
                 await send_queue.put((session.current_epoch, {
                     "type": "conversation.switched",
                     "request_id": request_id,
@@ -2995,6 +3020,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                         "message": "世界线切换失败，当前世界线已保留。",
                     }))
                     continue
+                subscribe_memory()
                 await send_queue.put((session.current_epoch, {
                     "type": "worldline.switched",
                     "request_id": request_id,
@@ -3125,6 +3151,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                         "type": "config_applied",
                         "reasoning_effort": session.reasoning_effort,
                     }))
+                subscribe_memory()
                 continue
                 
             elif frame_type == "interrupt-signal":
@@ -3225,6 +3252,8 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 type(notify_exc).__name__,
             )
     finally:
+        if memory_unsubscribe is not None:
+            memory_unsubscribe()
         # Cancel running Processor and Writer tasks on disconnect
         tasks_to_gather = [writer_task]
         writer_task.cancel()

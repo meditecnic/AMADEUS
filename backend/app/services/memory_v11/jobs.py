@@ -1003,6 +1003,7 @@ async def process_memory_job(
                 attempt_count=int(job["attempt_count"] or 0),
             )
 
+        applied = {}
         if observations or operations:
             observations, operations = _translate_completion(
                 observations, operations, frozen_candidates, frozen_unresolved,
@@ -1033,7 +1034,7 @@ async def process_memory_job(
                 # S3F-1 D28: the reconciler receives the live-job receipt cursor
                 # and inserts a provider_nonempty receipt inside its own atomic
                 # semantic transaction (after semantic writes, before commit).
-                await apply_validated_memory_operations(
+                applied = await apply_validated_memory_operations(
                     session_id=job["session_id"],
                     worldline=wl,
                     identity_mode=job["identity_mode"],
@@ -1112,12 +1113,15 @@ async def process_memory_job(
             finally:
                 await db.close()
 
-        return await _transition_owned(
+        completed = await _transition_owned(
             job_id=job_id,
             worldline=wl,
             lease_owner=lease_owner,
             state="completed",
         )
+        from app.services.memory_v11.events import publish_recorded
+        publish_recorded(completed, applied or {})
+        return completed
     except LeaseLostError:
         current = await get_memory_job(job_id, worldline=wl)
         return current or job
