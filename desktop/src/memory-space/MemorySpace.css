@@ -125,9 +125,9 @@
 .archive-view :where(select option) { background: #101921; color: var(--memory-text); }
 .memory-space[data-worldline="beta"] .archive-view :where(select option) { background: #1a120c; }
 .archive-view ::selection { background: var(--memory-accent-wash); color: var(--memory-text); }
-.memory-space :where(.memory-space-find, .memory-result-outline, .memory-reading-dom, .memory-inspector, .archive-view, .memory-reading-card-content) { scrollbar-color: var(--memory-faint) transparent; scrollbar-width: thin; }
-.memory-space :where(.memory-space-find, .memory-result-outline, .memory-reading-dom, .memory-inspector, .archive-view, .memory-reading-card-content)::-webkit-scrollbar { width: 8px; height: 8px; }
-.memory-space :where(.memory-space-find, .memory-result-outline, .memory-reading-dom, .memory-inspector, .archive-view, .memory-reading-card-content)::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: var(--memory-faint); background-clip: padding-box; }
+.memory-space :where(.archive-view) { scrollbar-color: var(--memory-faint) transparent; scrollbar-width: thin; }
+.memory-space :where(.archive-view)::-webkit-scrollbar { width: 8px; height: 8px; }
+.memory-space :where(.archive-view)::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: var(--memory-faint); background-clip: padding-box; }
 .archive-reading dl { margin: 0; }
 .archive-reading dl > div { display: grid; grid-template-columns: 6em minmax(0, 1fr); gap: 8px; padding: 5px 0; border-bottom: 1px solid rgba(163, 190, 210, .1); }
 .archive-reading dt { color: var(--memory-faint); font-size: 11px; }
@@ -221,9 +221,9 @@
 .archive-detail :where(input, select, textarea) { background: rgba(var(--memory-ink), .07); color: var(--memory-text); }
 .archive-disclosure { font-size: 10px; }
 @keyframes memory-record-read { from { opacity: .35; clip-path: inset(0 0 5% 0); } to { opacity: 1; clip-path: inset(0); } }
-.memory-space[data-reduced-motion="true"] :is(.memory-space-find, .memory-reading-dom, .archive-view, .archive-reading-page) { animation: none; }
+.memory-space[data-reduced-motion="true"] :is(.archive-view, .archive-reading-page) { animation: none; }
 .archive-reading-page, .archive-view { animation: none; }
-.memory-space[data-worldline="beta"] :is(.memory-space-find,.memory-reading-dom,.archive-view) { background: radial-gradient(ellipse at 0 0, var(--memory-glow), transparent 55%), var(--memory-surface); }
+.memory-space[data-worldline="beta"] :is(.archive-view) { background: radial-gradient(ellipse at 0 0, var(--memory-glow), transparent 55%), var(--memory-surface); }
 .archive-sources li { background: rgba(var(--memory-ink),.035); padding: 12px 14px; border-left-color: rgba(var(--memory-ink),.45); }
 .archive-view { background: radial-gradient(ellipse at 55% 0,rgba(var(--memory-ink),.055),transparent 60%),var(--memory-surface); }
 .archive-detail { background: linear-gradient(140deg,rgba(var(--memory-ink),.07),rgba(var(--memory-ink),.015)); border: 1px solid rgba(var(--memory-ink),.2); border-top-color: rgba(var(--memory-ink),.45); border-radius: 4px; box-shadow: 0 10px 26px color-mix(in srgb, var(--shadow-tone) 10%, transparent); }
@@ -248,9 +248,8 @@
 .memory-select-option[data-state="checked"]::before { content: ''; position: absolute; left: 2px; top: 9px; bottom: 9px; width: 2px; background: var(--memory-accent); box-shadow: 0 0 6px rgba(var(--memory-ink),.5); }
 .memory-select-check { position: absolute; right: 10px; font-size: 11px; }
 .memory-select-scroll { text-align: center; height: 18px; color: var(--memory-faint); }
-.memory-space-find-scope .memory-select-trigger { min-height: 29px; gap: 6px; }
 @keyframes memory-select-in { from { opacity: 0; transform: translateY(-4px) scale(.97); } to { opacity: 1; transform: none; } }
-@media (prefers-reduced-motion: reduce) { .memory-select-popup { animation: none !important; } .memory-select-chevron, .memory-mode-symbol, .memory-space-find-toggle svg { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .memory-select-popup { animation: none !important; } .memory-select-chevron { transition: none; } }
 @media (max-width: 900px) {
   .archive-heading h2 { font-size: 23px; }
   .archive-view { overflow: auto; }

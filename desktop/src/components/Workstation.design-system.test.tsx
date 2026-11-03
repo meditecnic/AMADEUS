@@ -198,45 +198,6 @@ function defaultFetch(input: RequestInfo | URL) {
       }),
     } as Response);
   }
-  if (url.includes('/api/memory/graph/projection')) {
-    return Promise.resolve({
-      ok: true,
-      status: 200,
-      json: async () => ({
-        scope: { session_id: 'session-ds', worldline: 'steins_gate', identity_mode: 'okabe' },
-        view: 'overview',
-        projection_version: 'memory-projection-v1',
-        generated_at: '2026-08-14T00:00:00Z',
-        criteria: { query: null, kinds: [], topic_id: null, pinned_only: false, updated_from: null, updated_to: null },
-        center: {
-          kind: 'continuity_hub',
-          projection_id: 'hub:continuity:session-ds:steins_gate:okabe',
-          label_primary: 'AMADEUS',
-          label_secondary: 'SOUL',
-        },
-        composition: {
-          active_facts: 0,
-          active_experiences: 0,
-          eligible_topics: 0,
-          latest_memory_change_at: null,
-          person_anchors_supported: false,
-        },
-        budgets: { nodes: 64, edges: 128, hard_max_nodes: 160, hard_max_edges: 320 },
-        eligible: { nodes: 1, edges: 0, records: 0, results: 0 },
-        shown: { nodes: 1, edges: 0, records: 0, results: 0 },
-        truncated: { nodes: false, edges: false, records: false, results: false },
-        empty: true,
-        result_ids: [],
-        nodes: [{
-          kind: 'continuity_hub',
-          projection_id: 'hub:continuity:session-ds:steins_gate:okabe',
-          label_primary: 'AMADEUS',
-          label_secondary: 'SOUL',
-        }],
-        edges: [],
-      }),
-    } as Response);
-  }
   if (url.includes('/api/memory')) {
     throw new Error(`memory API must not be called in S4-DS: ${url}`);
   }

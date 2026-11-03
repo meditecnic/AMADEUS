@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createMemoryStore, handleMemory, type MemorySeed } from './memory';
 import { fetchFactsPage, fetchMemoryStatus, fetchTopics } from '../memory-space/archiveApi';
 import { fetchDetails } from '../memory-space/readingDetails';
-import type { MemoryChart, MemoryProjection } from '../memory-space/types';
+import type { MemoryChart } from '../memory-space/types';
 
 const seed: MemorySeed = {
   topics: [{ topic_id: 'lab', display_label: 'Lab' }],
@@ -70,34 +70,6 @@ describe('in-memory memory REST handler', () => {
     });
   });
 
-  it('returns a complete projection with valid graph references and exact criteria', () => {
-    const { call } = harness();
-    const p = call('graph/projection?query=lab&kind=fact&kind=topic&topic_id=lab&pinned_only=true&updated_from=2020-01-01&updated_to=2099-01-01').body as MemoryProjection;
-    expect(p.scope).toEqual({ session_id: 'session one', worldline: 'beta', identity_mode: 'self' });
-    expect(p.criteria).toEqual({ query: 'lab', kinds: ['fact', 'topic'], topic_id: 'lab', pinned_only: true, updated_from: '2020-01-01', updated_to: '2099-01-01' });
-    expect(p).toMatchObject({
-      view: 'overview', projection_version: expect.any(String), generated_at: expect.any(String),
-      center: { kind: 'continuity_hub', label_primary: expect.any(String), label_secondary: expect.any(String) },
-      composition: { active_facts: 3, active_experiences: 0, eligible_topics: 1, latest_memory_change_at: expect.any(String), person_anchors_supported: false },
-      budgets: { nodes: expect.any(Number), edges: expect.any(Number), hard_max_nodes: expect.any(Number), hard_max_edges: expect.any(Number) },
-      eligible: { nodes: 4, edges: 3, records: 2, results: 3 },
-      shown: { nodes: 4, edges: 3, records: 2, results: 3 },
-      truncated: { nodes: false, edges: false, records: false, results: false }, empty: false,
-    });
-    expect(p.result_ids).toEqual(['topic:lab', 'fact:a', 'fact:c']);
-    expect(p.nodes).toContainEqual({ kind: 'fact', projection_id: 'fact:a', fact_id: 'a', label: 'Coffee at the lab', is_pinned: true, updated_at: expect.any(String), topic_id: 'lab' });
-    const ids = new Set(p.nodes.map(n => n.projection_id));
-    expect(ids.has(p.center.projection_id)).toBe(true);
-    for (const edge of p.edges) {
-      expect(ids.has(edge.from) && ids.has(edge.to)).toBe(true);
-      expect(['hub_to_anchor', 'has_topic', 'hub_to_evidence']).toContain(edge.kind);
-    }
-    const expired = call('graph/projection?updated_to=2000-01-01').body as MemoryProjection;
-    expect(expired.result_ids).toEqual([]);
-    expect(expired.empty).toBe(true);
-    expect((call('graph/projection?kind=experience').body as MemoryProjection).result_ids).toEqual([]);
-  });
-
   it('tracks versions, rejects stale corrections/deletions, and persists presentation and topics', async () => {
     const { call, fetcher } = harness();
     expect(call('facts/a', 'PATCH', { display_text: 'Updated', expected_version: 99 }).status).toBe(409);
@@ -125,7 +97,7 @@ describe('in-memory memory REST handler', () => {
     expect(call('experiences').body).toMatchObject({ experiences: [], pagination: { total: 0, has_more: false } });
     expect(call('observations').body).toMatchObject({ observations: [] });
     expect(call('topics').body).toMatchObject({ topics: [] });
-    expect(call('graph/projection').body).toMatchObject({ empty: true, result_ids: [], nodes: [{ kind: 'continuity_hub' }] });
+    expect(call('graph/projection')).toMatchObject({ status: 404 });
     expect(call('observations/o/ignore', 'POST').body).toMatchObject({ ok: true });
     expect(call('jobs/j/retry', 'POST').body).toMatchObject({ ok: true });
     expect(call('unknown')).toMatchObject({ status: 404, body: { detail: { code: expect.any(String) } } });

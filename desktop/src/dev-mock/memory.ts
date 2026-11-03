@@ -1,6 +1,6 @@
 import { chartPreset, type ChartPreset, type Said } from './chartFixtures';
 import type { FactProvenanceRow, FactVersionRow } from '../memory-space/readingDetails';
-import type { MemoryChart, MemoryProjection, ProjectionEdge, ProjectionNode } from '../memory-space/types';
+import type { MemoryChart } from '../memory-space/types';
 
 export type MemorySeed = {
   facts: Array<{ fact_id: string; display_text: string; topic_id: string | null; is_pinned: boolean }>;
@@ -125,11 +125,14 @@ function experienceRow({ said: _said, ...row }: Experience) {
   return { ...row, status: 'active', is_expired: false, conversation_id: 'mock-conversation-1' };
 }
 
-function criteriaFor(params: URLSearchParams): MemoryProjection['criteria'] {
+type Criteria = {
+  query: string | null; topic_id: string | null; pinned_only: boolean; updated_from: string | null; updated_to: string | null;
+};
+
+function criteriaFor(params: URLSearchParams): Criteria {
   const text = (key: string) => params.get(key)?.trim() || null;
   return {
     query: text('query'),
-    kinds: [...new Set(params.getAll('kind').filter(kind => ['fact', 'topic', 'experience'].includes(kind)))].sort(),
     topic_id: text('topic_id'),
     pinned_only: params.get('pinned_only') === 'true',
     updated_from: text('updated_from'),
@@ -137,7 +140,7 @@ function criteriaFor(params: URLSearchParams): MemoryProjection['criteria'] {
   };
 }
 
-function matchingFacts(data: ScopeData, criteria: MemoryProjection['criteria']): Fact[] {
+function matchingFacts(data: ScopeData, criteria: Criteria): Fact[] {
   const query = criteria.query?.toLocaleLowerCase();
   const from = criteria.updated_from ? Date.parse(criteria.updated_from) : null;
   const to = criteria.updated_to ? Date.parse(criteria.updated_to) : null;
@@ -186,69 +189,6 @@ function chart(scope: MemoryChart['scope'], data: ScopeData): MemoryChart {
   };
 }
 
-function projection(
-  params: URLSearchParams,
-  scope: MemoryProjection['scope'],
-  data: ScopeData,
-): MemoryProjection {
-  const criteria = criteriaFor(params);
-  const matches = matchingFacts(data, criteria);
-  const includes = (kind: string) => !criteria.kinds.length || criteria.kinds.includes(kind);
-  const topics = data.topics.filter(topic => matches.some(fact => fact.topic_id === topic.topic_id));
-  const center: MemoryProjection['center'] = {
-    kind: 'continuity_hub', projection_id: 'hub:continuity',
-    label_primary: 'Memory', label_secondary: `${scope.worldline} · ${scope.identity_mode}`,
-  };
-  const resultNodes: ProjectionNode[] = [
-    ...(includes('topic') ? topics.map(topic => ({
-      kind: 'topic' as const, projection_id: `topic:${topic.topic_id}`,
-      topic_id: topic.topic_id, label: topic.display_label,
-      fact_count: matches.filter(fact => fact.topic_id === topic.topic_id).length,
-      experience_count: 0,
-    })) : []),
-    ...(includes('fact') ? matches.map(fact => ({
-      kind: 'fact' as const, projection_id: `fact:${fact.fact_id}`,
-      fact_id: fact.fact_id, label: fact.display_text, is_pinned: fact.is_pinned,
-      updated_at: fact.updated_at, topic_id: fact.topic_id,
-    })) : []),
-  ];
-  const allNodes = [center, ...resultNodes];
-  const topicIds = new Set(resultNodes.filter(node => node.kind === 'topic').map(node => node.projection_id));
-  const allEdges: ProjectionEdge[] = resultNodes.map(node => {
-    if (node.kind === 'fact' && node.topic_id && topicIds.has(`topic:${node.topic_id}`)) {
-      return { kind: 'has_topic', from: node.projection_id, to: `topic:${node.topic_id}` };
-    }
-    return {
-      kind: node.kind === 'topic' ? 'hub_to_anchor' : 'hub_to_evidence',
-      from: center.projection_id, to: node.projection_id,
-    };
-  });
-  const nodes = allNodes.slice(0, 200);
-  const ids = new Set(nodes.map(node => node.projection_id));
-  const edges = allEdges.filter(edge => ids.has(edge.from) && ids.has(edge.to)).slice(0, 400);
-  const records = (list: ProjectionNode[]) => list.filter(node => node.kind === 'fact' || node.kind === 'experience').length;
-  const shownResults = nodes.filter(node => node.kind !== 'continuity_hub');
-  return {
-    scope, view: 'overview', projection_version: 'dev-mock-v1', generated_at: FIXED_TIME,
-    criteria, center,
-    composition: {
-      active_facts: data.facts.length, active_experiences: 0,
-      eligible_topics: data.topics.filter(topic => data.facts.some(fact => fact.topic_id === topic.topic_id)).length,
-      latest_memory_change_at: data.facts.length ? FIXED_TIME : null,
-      person_anchors_supported: false,
-    },
-    budgets: { nodes: 200, edges: 400, hard_max_nodes: 200, hard_max_edges: 400 },
-    eligible: { nodes: allNodes.length, edges: allEdges.length, records: records(allNodes), results: resultNodes.length },
-    shown: { nodes: nodes.length, edges: edges.length, records: records(nodes), results: shownResults.length },
-    truncated: {
-      nodes: nodes.length < allNodes.length, edges: edges.length < allEdges.length,
-      records: records(nodes) < records(allNodes), results: shownResults.length < resultNodes.length,
-    },
-    empty: resultNodes.length === 0,
-    result_ids: shownResults.map(node => node.projection_id), nodes, edges,
-  };
-}
-
 export function handleMemory(
   url: URL,
   method: string,
@@ -290,9 +230,6 @@ export function handleMemory(
     });
     // Scope strings are echoed verbatim; the casts must not normalize incoming strings.
     if (path === '/chart') return success(chart(scope as MemoryChart['scope'], data));
-    if (path === '/graph/projection') {
-      return success(projection(params, scope as MemoryProjection['scope'], data));
-    }
   }
 
   const factMatch = path.match(/^\/facts\/([^/]+)(?:\/(details|presentation))?$/);
