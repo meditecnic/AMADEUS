@@ -1,8 +1,10 @@
+import { mockMemoryForTurn } from './chatMemory';
 import { fixedTime, model, providers, searchSettings } from './fixtures';
 import { createMemoryStore, handleMemory } from './memory';
 import { scenarios, selectScenario, type Scenario } from './scenarios';
 
 export type Frame = Record<string, unknown>;
+const RECORDED_DELAY_MS = 1500;
 type Reply = { status: number; body: unknown; delayMs?: number };
 type HistoryMessage = { role: string; content: string; translation?: string };
 type Conversation = {
@@ -265,10 +267,21 @@ export function createMockRuntime() {
             emit({ type: 'segment.ready', ...turn, segment_id: segmentId, ja: sentence.ja, zh: sentence.zh, emotion: sentence.emotion });
           });
         });
+        const memory = mockMemoryForTurn(frame.content);
         schedule(elapsed + scenario.dialogue.completionDelayMs, () => {
+          if (memory.referenced) emit({ type: 'memory.referenced', ...turn, items: memory.referenced });
           emit({ type: 'turn.completed', ...turn });
           activeTurn = null;
         });
+        // Ingestion runs after the reply, like the real job; a cancel or switch before it fires drops it.
+        if (memory.recorded) {
+          schedule(elapsed + scenario.dialogue.completionDelayMs + RECORDED_DELAY_MS, () => {
+            emit({
+              type: 'memory.recorded', conversation_id: turn.conversation_id, turn_id: turn.turn_id,
+              source_message_id: counter, changes: memory.recorded,
+            });
+          });
+        }
       }
       // voice.stop / tts_debug intentionally emit no audio in this silent mock.
     }
