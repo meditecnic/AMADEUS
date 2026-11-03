@@ -612,6 +612,31 @@ async def patch_memory_fact_presentation(
     return result
 
 
+@router.get("/api/memory/chart")
+async def memory_chart(
+    session_id: str | None = Query(None),
+    worldline: str | None = Query(None),
+    identity_mode: str | None = Query(None),
+):
+    from app.services.memory_v11.chart import ChartError, build_chart
+    from app.services.memory_v11.recall import MemoryScope
+
+    sid = _require_session_id(session_id)
+    wl, mode = _validate_memory_scope(worldline, identity_mode)
+    try:
+        return await build_chart(MemoryScope(sid, wl, mode))
+    except ChartError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": exc.code, "message": str(exc)},
+        ) from exc
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "chart_failed", "message": "chart failed"},
+        ) from None
+
+
 @router.get("/api/memory/graph/projection")
 async def memory_graph_projection(request: Request):
     """Canonical Constellation Overview projection (S4-MEMORY-SPINE / G61)."""

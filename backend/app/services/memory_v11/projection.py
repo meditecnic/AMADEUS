@@ -304,6 +304,54 @@ def _topics_are_primary(criteria: dict[str, Any]) -> bool:
     return criteria["query"] is not None
 
 
+async def load_visible_memory_rows(db, session_id: str, identity_mode: str):
+    """Shared projection/chart admission; caller owns the read transaction."""
+    fact_rows = await (
+        await db.execute(
+            """SELECT f.fact_id, f.topic_id, f.is_pinned, f.created_at, f.updated_at,
+                      v.display_text
+                 FROM stable_facts f
+                 JOIN stable_fact_versions v
+                   ON v.fact_id = f.fact_id
+                  AND v.version_no = f.active_version
+                  AND v.invalid_at IS NULL
+                WHERE f.session_id=? AND f.identity_mode=? AND f.state='active'
+                  AND NOT EXISTS (
+                        SELECT 1 FROM memory_tombstones t
+                         WHERE t.fact_id = f.fact_id
+                           AND t.session_id = f.session_id
+                           AND t.identity_mode = f.identity_mode
+                  )""",
+            (session_id, identity_mode),
+        )
+    ).fetchall()
+    exp_columns = {
+        str(row[1])
+        for row in await (await db.execute("PRAGMA table_info(experiences)")).fetchall()
+    }
+    pin_sql = "e.is_pinned" if "is_pinned" in exp_columns else "0 AS is_pinned"
+    exp_rows = await (
+        await db.execute(
+            f"""SELECT e.experience_id, e.conversation_id, e.display_text,
+                       e.status, e.expires_at, e.created_at, e.updated_at,
+                       {pin_sql}
+                  FROM experiences e
+                 WHERE e.session_id=? AND e.identity_mode=?
+                   AND e.status='active'""",
+            (session_id, identity_mode),
+        )
+    ).fetchall()
+    topic_rows = await (
+        await db.execute(
+            """SELECT topic_id, display_label, created_at
+                 FROM memory_topics
+                WHERE session_id=? AND identity_mode=?""",
+            (session_id, identity_mode),
+        )
+    ).fetchall()
+    return fact_rows, exp_rows, topic_rows
+
+
 async def project_overview(criteria: dict[str, Any]) -> dict[str, Any]:
     session_id = criteria["session_id"]
     worldline = criteria["worldline"]
@@ -321,49 +369,9 @@ async def project_overview(criteria: dict[str, Any]) -> dict[str, Any]:
         try:
             await db.execute("BEGIN")
             try:
-                fact_rows = await (
-                    await db.execute(
-                        """SELECT f.fact_id, f.topic_id, f.is_pinned, f.updated_at,
-                                  v.display_text
-                             FROM stable_facts f
-                             JOIN stable_fact_versions v
-                               ON v.fact_id = f.fact_id
-                              AND v.version_no = f.active_version
-                              AND v.invalid_at IS NULL
-                            WHERE f.session_id=? AND f.identity_mode=? AND f.state='active'
-                              AND NOT EXISTS (
-                                    SELECT 1 FROM memory_tombstones t
-                                     WHERE t.fact_id = f.fact_id
-                                       AND t.session_id = f.session_id
-                                       AND t.identity_mode = f.identity_mode
-                              )""",
-                        (session_id, identity_mode),
-                    )
-                ).fetchall()
-                exp_columns = {
-                    str(row[1])
-                    for row in await (await db.execute("PRAGMA table_info(experiences)")).fetchall()
-                }
-                pin_sql = "e.is_pinned" if "is_pinned" in exp_columns else "0 AS is_pinned"
-                exp_rows = await (
-                    await db.execute(
-                        f"""SELECT e.experience_id, e.conversation_id, e.display_text,
-                                   e.status, e.expires_at, e.created_at, e.updated_at,
-                                   {pin_sql}
-                              FROM experiences e
-                             WHERE e.session_id=? AND e.identity_mode=?
-                               AND e.status='active'""",
-                        (session_id, identity_mode),
-                    )
-                ).fetchall()
-                topic_rows = await (
-                    await db.execute(
-                        """SELECT topic_id, display_label
-                             FROM memory_topics
-                            WHERE session_id=? AND identity_mode=?""",
-                        (session_id, identity_mode),
-                    )
-                ).fetchall()
+                fact_rows, exp_rows, topic_rows = await load_visible_memory_rows(
+                    db, session_id, identity_mode
+                )
             except BaseException:
                 try:
                     await db.execute("ROLLBACK")
