@@ -1,0 +1,22 @@
+{
+  "name": "memory-unavailable",
+  "extends": "streaming",
+  "description": "Normal library; GET /api/memory/chart returns HTTP 503 (memory storage unavailable).",
+  "memory": {
+    "preset": "normal",
+    "facts": [],
+    "topics": []
+  },
+  "errors": [
+    {
+      "method": "GET",
+      "pathPrefix": "/api/memory/chart",
+      "status": 503,
+      "body": {
+        "detail": {
+          "code": "memory_unavailable"
+        }
+      }
+    }
+  ]
+}

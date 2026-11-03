@@ -327,7 +327,7 @@ describe('ArchiveView deletion closure', () => {
     });
     fireEvent.click(screen.getByTestId('archive-delete-record'));
     const dialog = screen.getByTestId('archive-delete-confirm');
-    expect(dialog.textContent).toContain('事实');
+    expect(dialog.textContent).toContain('认知');
     expect(dialog.textContent).toContain('喜欢黑咖啡');
     expect(dialog.textContent).toContain('OKABE');
     // No conversation-wide derivative erasure choice exists.

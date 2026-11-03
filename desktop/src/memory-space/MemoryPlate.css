@@ -1,0 +1,74 @@
+/* SVG plate (DIRECTION sections 4 and 6). Colours come from the sheet's --m-* roles. */
+.memory-plate { position: absolute; inset: 0; }
+.memory-plate .plate { position: absolute; inset: 0; overflow: visible; user-select: none; }
+.memory-plate .plate * { vector-effect: non-scaling-stroke; }
+.p-ring { fill: none; stroke: rgba(var(--m-ink-rgb), .16); stroke-width: 1; stroke-dasharray: 5 6; }
+.memory-space[data-worldline="beta"] .p-ring { stroke-dasharray: 1 4; stroke: rgba(var(--m-ink-rgb), .26); }
+.p-today { fill: none; stroke: rgba(var(--m-acc-rgb), .42); stroke-width: 1; }
+.p-ruler { fill: none; stroke: rgba(var(--m-ink-rgb), .12); stroke-dasharray: 34 7 5 7; }
+.p-ring, .p-today, .p-ruler, .p-line, .p-tail, .p-reticle, .p-new, .p-young, .p-todaylab, .p-hover { pointer-events: none; }
+.p-ringlab { font: 10px/1 var(--font-mono); fill: var(--m-ink3); letter-spacing: .12em; cursor: pointer;
+  paint-order: stroke; stroke: var(--m-paper); stroke-width: 6px; stroke-linejoin: round; }
+.p-ringlab:hover, .p-ringlab.on { fill: var(--m-ink); }
+.p-ringlab.on { fill: var(--m-acc); }
+.p-todaylab { font: 10px/1 var(--font-mono); fill: rgba(var(--m-acc-rgb), .85); letter-spacing: .14em;
+  paint-order: stroke; stroke: var(--m-paper); stroke-width: 6px; stroke-linejoin: round; }
+.p-line { fill: none; stroke: rgba(var(--m-ink-rgb), .34); stroke-width: 1; transition: opacity var(--m-d3) var(--m-ease); }
+.p-star { cursor: pointer; transition: opacity var(--m-d2) var(--m-ease); }
+.p-star .dot { fill: var(--m-ink); }
+.p-star .halo { fill: none; stroke: rgba(var(--m-ink-rgb), .5); }
+/* The dashed ring below is the star's focus mark; the sheet-wide box outline would double it. */
+.memory-space .p-stars .p-star:focus-visible { outline: none; }
+.p-star .hit { fill: transparent; }
+.p-star .focus { fill: none; stroke: var(--m-acc); stroke-width: 1.2; stroke-dasharray: 3 2; opacity: 0; pointer-events: none; }
+.p-star:focus-visible .focus { opacity: 1; }
+.p-star.is-loose .dot { fill: rgba(var(--m-ink-rgb), .78); }
+.p-star.is-fragment .dot { fill: var(--m-paper); stroke: var(--m-ink); stroke-width: 1.2; }
+.p-tail { stroke: rgba(var(--m-ink-rgb), .5); stroke-width: 1; fill: none; }
+.p-topic { cursor: pointer; outline: none; }
+.p-tlab { font: 13px/1 var(--m-f-disp); letter-spacing: .32em; fill: rgba(var(--m-ink-rgb), .72);
+  paint-order: stroke; stroke: var(--m-paper); stroke-width: 5px; stroke-linejoin: round; transition: fill var(--m-d1) var(--m-ease); }
+.p-topic:hover .p-tlab, .p-topic.on .p-tlab, .p-topic:focus-visible .p-tlab { fill: var(--m-ink); }
+.p-tcnt { font: 10px/1 var(--font-mono); fill: var(--m-ink3); letter-spacing: .1em; }
+.p-soul { cursor: pointer; outline: none; }
+.p-soul .shell { fill: var(--m-paper); stroke: rgba(var(--m-ink-rgb), .62); stroke-width: 1; }
+.p-soul .cut { fill: none; stroke: rgba(var(--m-ink-rgb), .45); stroke-width: 1; }
+.p-soul .core { fill: var(--m-her); }
+.p-soul .lab { font: 9px/1 var(--font-mono); letter-spacing: .3em; fill: var(--m-ink3); }
+.p-soul:hover .shell, .p-soul:focus-visible .shell, .p-soul[aria-pressed="true"] .shell { stroke: var(--m-ink); }
+.p-soul[data-state="loading"] { opacity: .5; cursor: default; }
+.p-soul[data-state="loading"] :is(.cut, .core) { display: none; }
+.p-soul[data-state="muted"] { opacity: .3; cursor: default; }
+.dim .p-star:not(.lit), .dim .p-line:not(.lit), .dim .p-topic:not(.on) { opacity: .2; }
+.p-reticle circle, .p-reticle path { fill: none; stroke: var(--m-acc); stroke-width: 1.2; }
+.p-reticle .r2 { stroke-dasharray: 2 3; opacity: .7; }
+.p-new path { stroke: var(--m-her); stroke-width: 1; fill: none; }
+.p-new text { font: 10px/1 var(--font-ui); fill: var(--m-her); letter-spacing: .1em; }
+.p-slab { font: 12.5px/1 var(--m-f-body); fill: var(--m-ink2); paint-order: stroke; stroke: var(--m-paper); stroke-width: 5px; stroke-linejoin: round; }
+.p-slab-m { font: 10px/1 var(--font-mono); fill: var(--m-ink3); letter-spacing: .08em; paint-order: stroke; stroke: var(--m-paper); stroke-width: 5px; }
+.p-slead { stroke: var(--m-line2); fill: none; }
+.p-hover rect { fill: var(--m-paper); stroke: var(--m-line2); }
+.p-hover text { font: 12.5px/1 var(--m-f-body); fill: var(--m-ink); }
+.p-hover .m { font: 10px/1 var(--font-mono); fill: var(--m-ink3); letter-spacing: .08em; }
+
+/* Entrance: the pen rules the month rings outward, then inks the stars in order. */
+.is-entering :is(.p-ring, .p-today, .p-new path) { stroke-dasharray: 1; stroke-dashoffset: 1; animation: m-pen 420ms var(--m-ease) forwards; }
+.is-entering .p-star { animation: m-ink 260ms var(--m-ease) backwards; }
+.is-entering .p-line { animation: m-ink var(--m-d3) var(--m-ease) backwards; }
+.is-entering .p-new { animation: m-ink 1ms backwards; }
+.is-entering .p-new path { animation-delay: inherit; }
+.is-entering .p-new text { animation: m-ink var(--m-d3) var(--m-ease) 300ms backwards; animation-delay: inherit; }
+@keyframes m-pen { to { stroke-dashoffset: 0; } }
+@keyframes m-ink { from { opacity: 0; } }
+
+.p-legend { position: absolute; left: 44px; bottom: 40px; z-index: 2; display: flex; flex-direction: column; gap: 2px;
+  font: 11px/1.7 var(--font-ui); color: var(--m-ink3); pointer-events: none; }
+.p-legend .lrow { display: flex; align-items: center; gap: 16px; }
+.p-legend i { display: inline-block; vertical-align: middle; margin-right: 6px; }
+.p-legend .fig { margin: 8px 0 0; font: 10.5px/1 var(--font-mono); letter-spacing: .22em; }
+.p-legend .note { margin: 6px 0 0; font-size: 11.5px; color: var(--m-ink2); }
+.lg-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--m-ink); }
+.lg-exp { width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--m-ink); }
+.lg-inf { width: 4px; height: 4px; border-radius: 50%; background: var(--m-ink2); }
+.lg-line { width: 18px; height: 1px; background: rgba(var(--m-ink-rgb), .5); }
+.lg-new { width: 9px; height: 9px; border: 1px solid var(--m-her); transform: rotate(45deg) scale(.7); }

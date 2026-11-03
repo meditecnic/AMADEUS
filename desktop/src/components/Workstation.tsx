@@ -56,7 +56,7 @@ import { wsTransition } from '../workstation/motionTokens';
 import { MotionConfig, animate } from 'motion/react';
 import { LogOut } from 'lucide-react';
 import { ForgetConversationModal } from './ForgetConversationModal';
-import { MemorySpace } from '../memory-space/MemorySpace';
+import { MemorySpace, type MemorySpaceControl } from '../memory-space/MemorySpace';
 import '../memory-space/MemorySpace.css';
 import {
   ProviderControls,
@@ -130,15 +130,16 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isMemoryOpen, setIsMemoryOpen] = useState(false);
   const [memoryClosing, setMemoryClosing] = useState(false);
-  const [memoryOrigin, setMemoryOrigin] = useState({ x: 0, y: 0 });
+  const memoryControlRef = useRef<MemorySpaceControl | null>(null);
   const closeMemory = () => {
-    if (reducedMotion) { setIsMemoryOpen(false); return; }
-    setMemoryClosing(true);
-    window.setTimeout(() => {
+    const done = () => {
       setIsMemoryOpen(false);
       setMemoryClosing(false);
       document.querySelector<HTMLButtonElement>('.ws2 button[aria-label="MEMORY"]')?.focus({ preventScroll: true });
-    }, 280);
+    };
+    if (reducedMotion) { done(); return; }
+    setMemoryClosing(true);
+    window.setTimeout(done, 150);
   };
   const [inputText, setInputText] = useState('');
   const messageTooLong = Array.from(inputText.trim()).length > MAX_USER_MESSAGE_LENGTH;
@@ -2029,12 +2030,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
         <div className="ws2-top-right">
           <button
             type="button"
-            className="ws2-memory-btn"
+            className={`ws2-memory-btn${isMemoryOpen ? ' is-on' : ''}`}
             aria-label="MEMORY"
-            onClick={(event) => {
-              const r = event.currentTarget.querySelector('svg')?.getBoundingClientRect() ?? event.currentTarget.getBoundingClientRect();
-              setMemoryOrigin({ x: r.left + r.width / 2, y: r.top + r.height / 2 });
-              setMemoryClosing(false);
+            aria-pressed={isMemoryOpen}
+            title={isMemoryOpen ? '回到对话（Esc）' : undefined}
+            onClick={() => {
+              if (isMemoryOpen) {
+                if (!memoryClosing) (memoryControlRef.current?.requestClose ?? closeMemory)();
+                return;
+              }
               setIsMemoryOpen(true);
             }}
           >
@@ -2045,6 +2049,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             </svg>
             <span className="ws2-memory-zh" aria-hidden="true">记忆</span>
             <span className="ws2-memory-en" aria-hidden="true">MEMORY</span>
+            {isMemoryOpen ? <span className="ws2-memory-esc" aria-hidden="true">ESC</span> : null}
           </button>
           <div className="ws2-booth-mid">
             <Tip
@@ -2104,7 +2109,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         </div>
       </header>
 
-      <nav className="ws2-side" aria-label="会话" inert={isSettingsOpen}>
+      <nav className="ws2-side" aria-label="会话" inert={isSettingsOpen || isMemoryOpen}>
         <MotionConfig transition={wsTransition(worldline, 'base')} reducedMotion="user">
         <HistorySidebar
           isCollapsed={isHistoryCollapsed}
@@ -2134,7 +2139,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         </MotionConfig>
       </nav>
 
-      <section className="ws2-talk" inert={isSettingsOpen}>
+      <section className="ws2-talk" inert={isSettingsOpen || isMemoryOpen}>
         <div className="ws2-transcript-wrap">
           <SelectionCopyMenu>
           <div
@@ -2395,7 +2400,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         </form>
       </section>
 
-      <section className={`ws2-stage presence-${presence}`}>
+      <section className={`ws2-stage presence-${presence}`} inert={isMemoryOpen || undefined}>
         <div className="ws2-seam" aria-hidden="true" />
         {/* Her name set like the original's chapter cards: black Mincho over drafting instruments, redrawn on each shift. */}
         <div className="ws2-chapter" key={`chapter-${worldline}`} aria-hidden="true">
@@ -2564,16 +2569,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
       </div>
 
       {isMemoryOpen ? (
-        // Memory opens as an iris from the engram key and closes back into it; Memory itself is unchanged.
-        <div
-          className={`ws2-memory-layer${memoryClosing ? ' closing' : ''}`}
-          style={{ '--mx': `${memoryOrigin.x}px`, '--my': `${memoryOrigin.y}px` } as React.CSSProperties}
-        >
+        // The sheet sits below the header, which stays; closing only fades the sheet.
+        <div className={`ws2-memory-layer${memoryClosing ? ' closing' : ''}`}>
           <MemorySpace
             sessionId={sessionId}
             chatWorldline={worldline}
             chatIdentityMode={activeIdentityMode}
             onClose={closeMemory}
+            controlRef={memoryControlRef}
           />
         </div>
       ) : null}

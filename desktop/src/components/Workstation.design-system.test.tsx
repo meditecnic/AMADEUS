@@ -182,42 +182,19 @@ function defaultFetch(input: RequestInfo | URL) {
       json: async () => ({ pending_count: 0, processing_count: 0, failed_count: 0 }),
     } as Response);
   }
-  if (url.includes('/api/memory/graph/projection')) {
+  if (url.includes('/api/memory/chart')) {
     return Promise.resolve({
       ok: true,
       status: 200,
       json: async () => ({
         scope: { session_id: 'session-ds', worldline: 'steins_gate', identity_mode: 'okabe' },
-        view: 'overview',
-        projection_version: 'memory-projection-v1',
         generated_at: '2026-08-14T00:00:00Z',
-        criteria: { query: null, kinds: [], topic_id: null, pinned_only: false, updated_from: null, updated_to: null },
-        center: {
-          kind: 'continuity_hub',
-          projection_id: 'hub:continuity:session-ds:steins_gate:okabe',
-          label_primary: 'AMADEUS',
-          label_secondary: 'SOUL',
-        },
-        composition: {
-          active_facts: 0,
-          active_experiences: 0,
-          eligible_topics: 0,
-          latest_memory_change_at: null,
-          person_anchors_supported: false,
-        },
-        budgets: { nodes: 64, edges: 128, hard_max_nodes: 160, hard_max_edges: 320 },
-        eligible: { nodes: 1, edges: 0, records: 0, results: 0 },
-        shown: { nodes: 1, edges: 0, records: 0, results: 0 },
-        truncated: { nodes: false, edges: false, records: false, results: false },
-        empty: true,
-        result_ids: [],
-        nodes: [{
-          kind: 'continuity_hub',
-          projection_id: 'hub:continuity:session-ds:steins_gate:okabe',
-          label_primary: 'AMADEUS',
-          label_secondary: 'SOUL',
-        }],
-        edges: [],
+        origin_at: null,
+        topics: [],
+        facts: [],
+        experiences: [],
+        counts: { facts: 0, experiences: 0, topics: 0 },
+        truncated: false,
       }),
     } as Response);
   }
@@ -474,17 +451,28 @@ describe('Workstation S4-DS dark-only chrome', () => {
     expect(panel).not.toHaveClass('aiming');
   });
 
-  it('first-class MEMORY aperture opens Memory Space Overview', async () => {
+  it('the MEMORY key lays the memory sheet below the header and closes it again', async () => {
     renderWorkstation();
     await waitFor(() => expect(screen.getByText('AMADEUS')).toBeInTheDocument());
     const aperture = await screen.findByRole('button', { name: /^MEMORY$/i });
     fireEvent.click(aperture);
     expect(await screen.findByTestId('memory-space')).toBeInTheDocument();
     await waitFor(() => {
-      expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/memory/graph/projection'))).toBe(true);
+      expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/memory/chart'))).toBe(true);
     });
-    expect(screen.getByTestId('constellation-stage')).toBeInTheDocument();
+    expect(await screen.findByTestId('memory-plate')).toBeInTheDocument();
     expect(document.querySelector('.ws2')).toHaveClass('memory-space-open');
+    expect(document.querySelector('.ws2-top')).toBeInTheDocument();
+    expect(aperture).toHaveAttribute('aria-pressed', 'true');
+    expect(aperture).toHaveAttribute('title', '回到对话（Esc）');
+    expect(aperture).toHaveTextContent('ESC');
+    expect(document.activeElement).toBe(screen.getByTestId('memory-space'));
+    for (const covered of ['.ws2-side', '.ws2-talk', '.ws2-stage']) expect(document.querySelector(covered)).toHaveAttribute('inert');
+    fireEvent.click(aperture);
+    await waitFor(() => expect(screen.queryByTestId('memory-space')).toBeNull());
+    expect(aperture).toHaveAttribute('aria-pressed', 'false');
+    expect(document.activeElement).toBe(aperture);
+    for (const covered of ['.ws2-side', '.ws2-talk', '.ws2-stage']) expect(document.querySelector(covered)).not.toHaveAttribute('inert');
   });
 
   it('self-hosted S4-DS fonts exist under /assets/fonts/s4-ds/', () => {

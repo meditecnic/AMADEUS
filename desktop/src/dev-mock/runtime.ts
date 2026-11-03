@@ -3,7 +3,7 @@ import { createMemoryStore, handleMemory } from './memory';
 import { scenarios, selectScenario, type Scenario } from './scenarios';
 
 export type Frame = Record<string, unknown>;
-type Reply = { status: number; body: unknown };
+type Reply = { status: number; body: unknown; delayMs?: number };
 type HistoryMessage = { role: string; content: string; translation?: string };
 type Conversation = {
   id: string; title: string; title_source: string; is_default: boolean; is_pinned: boolean;
@@ -61,6 +61,13 @@ export function createMockRuntime() {
   }
 
   function rest(url: URL, method: string, body: Frame = {}, client = 'default', cookies = ''): Reply {
+    const reply = respond(url, method, body, client, cookies);
+    const path = decodeURIComponent(url.pathname);
+    const delay = scenarios[selectScenario(url, cookies)].delays.find(item => item.method === method && path.startsWith(item.pathPrefix));
+    return delay ? { ...reply, delayMs: delay.ms } : reply;
+  }
+
+  function respond(url: URL, method: string, body: Frame, client: string, cookies: string): Reply {
     const name = selectScenario(url, cookies);
     const scenario = scenarios[name];
     const path = decodeURIComponent(url.pathname);

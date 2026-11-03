@@ -47,6 +47,7 @@
     "topics": [{ "topic_id": "topic-research", "display_label": "实验与观测" }]
   },
   "errors": [],
+  "delays": [],
   "chatError": null,
   "authError": null,
   "shift": { "delayMs": 150, "fail": false, "code": "mock_shift_failed", "message": "目标世界线暂时无法确认。" }

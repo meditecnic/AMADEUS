@@ -1,4 +1,4 @@
-export type MemoryUnwindKind = 'fact' | 'experience' | 'topic' | 'continuity_hub' | null;
+export type MemoryUnwindKind = 'fact' | 'experience' | 'topic' | 'continuity_hub' | 'month' | null;
 
 export type MemoryUnwindInput = {
   toolsOpen: boolean;
@@ -23,7 +23,7 @@ export type MemoryUnwindAction =
 export function nextMemoryUnwind(input: MemoryUnwindInput): MemoryUnwindAction {
   if (input.toolsOpen) return 'close-tools';
   if (input.listVisible) return 'close-list';
-  if (input.selectedKind === 'continuity_hub') return 'close-inspector';
+  if (input.selectedKind === 'continuity_hub' || input.selectedKind === 'month') return 'close-inspector';
   if (input.selectedKind === 'fact' || input.selectedKind === 'experience') return 'evidence-to-topic';
   if (input.selectedKind === 'topic') return 'topic-to-overview';
   if (input.expanded) return 'collapse-branch';

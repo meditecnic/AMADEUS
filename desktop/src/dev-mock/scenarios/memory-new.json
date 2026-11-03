@@ -1,0 +1,10 @@
+{
+  "name": "memory-new",
+  "extends": "streaming",
+  "description": "New user: three cognitions recorded in the last week, no topics.",
+  "memory": {
+    "preset": "new",
+    "facts": [],
+    "topics": []
+  }
+}

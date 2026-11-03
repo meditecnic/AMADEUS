@@ -445,14 +445,16 @@
 @keyframes ws2-ent-seam { from { transform: scaleY(0); } }
 @keyframes ws2-ent-scan { from { clip-path: inset(0 0 100% 0); filter: brightness(1.8); } 60% { filter: brightness(1.15); } to { clip-path: inset(0); filter: none; } }
 
-/* Memory bridge: an iris opens from the engram key (clip-path, so Memory's fixed layout is untouched). */
-.ws2-memory-layer { position: fixed; inset: 0; z-index: 80; clip-path: circle(150% at var(--mx) var(--my)); animation: ws2-iris-open .46s cubic-bezier(.6, 0, .2, 1) both; }
-.ws2-memory-layer.closing { animation: ws2-iris-close .28s cubic-bezier(.5, 0, .9, .4) both; pointer-events: none; }
-@keyframes ws2-iris-open { from { clip-path: circle(0 at var(--mx) var(--my)); } to { clip-path: circle(150% at var(--mx) var(--my)); } }
-@keyframes ws2-iris-close { from { clip-path: circle(150% at var(--mx) var(--my)); } to { clip-path: circle(0 at var(--mx) var(--my)); } }
-.ws2.memory-space-open .ws2-engram { filter: drop-shadow(0 0 10px var(--ws-accent)); }
+/* Memory sheet: laid below the 60px header, which stays; the memory key reads as pressed while it is open. */
+.ws2-memory-layer { position: fixed; top: 60px; right: 0; bottom: 0; left: 0; z-index: 80; animation: ws2-sheet-in .2s linear both; }
+.ws2-memory-layer.closing { animation: ws2-sheet-out .15s linear both; pointer-events: none; }
+@keyframes ws2-sheet-in { from { opacity: 0; } }
+@keyframes ws2-sheet-out { to { opacity: 0; } }
+.ws2-memory-btn.is-on { position: relative; color: var(--ws-ink); }
+.ws2-memory-btn.is-on::after { content: ''; position: absolute; left: 10px; right: 10px; bottom: -14px; height: 1px; background: var(--ws-accent); }
+.ws2-memory-esc { margin-left: 4px; padding: 3px 4px; border: 1px solid var(--ws-line-2); font: 10px/1 var(--ws-mono); color: var(--ws-ink-3); }
 @media (prefers-reduced-motion: reduce) {
-  .ws2-memory-layer, .ws2-memory-layer.closing { animation: none; clip-path: none; }
+  .ws2-memory-layer, .ws2-memory-layer.closing { animation: none; }
 }
 
 /* send signal: send key → seam → her */

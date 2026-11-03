@@ -14,11 +14,21 @@ import transportClose from './scenarios/transport-close.json';
 import { workstationFixture } from './workstation-fixture';
 import { model } from './fixtures';
 
-export type Scenario = Omit<typeof streaming, 'errors' | 'chatError' | 'authError' | 'conversations'> & {
+import memoryNew from './scenarios/memory-new.json';
+import memoryLarge from './scenarios/memory-large.json';
+import memoryLoading from './scenarios/memory-loading.json';
+import memoryUnavailable from './scenarios/memory-unavailable.json';
+import memoryError from './scenarios/memory-error.json';
+import type { MemorySeed } from './memory';
+
+export type Scenario = Omit<typeof streaming, 'errors' | 'delays' | 'chatError' | 'authError' | 'conversations' | 'memory'> & {
   conversations: Array<typeof streaming.conversations[number] & { model_id?: string }>;
   models: typeof model[];
   transport: { readyDelayMs: number; closeAfterReadyMs: number | null };
+  memory: MemorySeed;
   errors: Array<{ method: string; pathPrefix: string; status: number; body: unknown }>;
+  /** Holds matching REST replies back, e.g. to show a reading state. */
+  delays: Array<{ method: string; pathPrefix: string; ms: number }>;
   chatError: string | null;
   authError: string | null;
 };
@@ -29,7 +39,8 @@ type Override = Omit<Partial<Scenario>, 'login' | 'shift'> & {
 };
 
 export const scenarios: Record<string, Scenario> = Object.fromEntries(
-  [streaming, loginSuccess, loginFailure, sessionList, memory, empty, error, offline, shiftFailure, shiftSlow, workstationLong, readyDelay, transportClose]
+  [streaming, loginSuccess, loginFailure, sessionList, memory, memoryNew, memoryLarge, memoryLoading, memoryUnavailable,
+    memoryError, empty, error, offline, shiftFailure, shiftSlow, workstationLong, readyDelay, transportClose]
     .map((override: Override) => [override.name!, {
       ...streaming, ...override,
       login: { ...streaming.login, ...override.login },

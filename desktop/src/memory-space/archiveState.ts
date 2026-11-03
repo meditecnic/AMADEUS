@@ -88,7 +88,7 @@ export type ArchiveTopicRename = { topicId: string; draft: string; saving: boole
 // §4.14: closing/switching with unsaved Fact edits requires an explicit
 // discard choice. This product state (never window.confirm) names the
 // original action that will run only after the user discards.
-export type ArchiveDiscardAction = 'back' | 'exit-archive' | 'scope-switch';
+export type ArchiveDiscardAction = 'back' | 'exit-archive' | 'scope-switch' | 'close-memory';
 export type ArchiveDiscardConfirm = { action: ArchiveDiscardAction } | null;
 
 export type ArchivePendingState = {
@@ -169,6 +169,9 @@ export type ArchiveModule = {
   /** Peer-mode exit request. Returns true when the caller may switch away
    *  immediately; false when a discard confirmation was opened instead. */
   handleExitRequest(): boolean;
+  /** Request to close the whole memory space. Same guard as handleExitRequest;
+   *  a confirmed discard then calls onCloseMemory. */
+  handleCloseRequest(): boolean;
   subscribe(listener: () => void): () => void;
   snapshot(): ArchiveState;
   dispose(): void;
@@ -239,6 +242,8 @@ export function createArchiveModule(deps?: {
   onRecordErased?: (kind: ArchiveRecordKind, recordId: string) => void;
   /** Notified when a confirmed discard completes an exit-archive action. */
   onExitArchive?: () => void;
+  /** Notified when a confirmed discard completes a close of the memory space. */
+  onCloseMemory?: () => void;
   /** Notified when a confirmed discard completes a deferred scope switch. */
   onScopeChangeSettled?: () => void;
 }): ArchiveModule {
@@ -705,6 +710,10 @@ export function createArchiveModule(deps?: {
           deps?.onExitArchive?.();
           return;
         }
+        if (action === 'close-memory') {
+          deps?.onCloseMemory?.();
+          return;
+        }
         if (action === 'scope-switch') {
           const deferred = pendingScopeChange;
           pendingScopeChange = null;
@@ -1039,18 +1048,26 @@ export function createArchiveModule(deps?: {
     return false;
   }
 
-  function handleExitRequest(): boolean {
-    // Fail-closed: no peer-mode exit while a save is in flight.
+  function guardLeave(action: 'exit-archive' | 'close-memory'): boolean {
+    // Fail-closed: no exit while a save is in flight.
     if (state.editor?.status === 'saving') {
       commit({ announcement: SAVING_NOTICE }, { persist: false });
       return false;
     }
-    // Peer-mode switch with an unsaved draft demands an explicit choice.
+    // Leaving with an unsaved draft demands an explicit choice.
     if (state.editor) {
-      commit({ discardConfirm: { action: 'exit-archive' } }, { persist: false });
+      commit({ discardConfirm: { action } }, { persist: false });
       return false;
     }
     return true;
+  }
+
+  function handleExitRequest(): boolean {
+    return guardLeave('exit-archive');
+  }
+
+  function handleCloseRequest(): boolean {
+    return guardLeave('close-memory');
   }
 
   return {
@@ -1058,6 +1075,7 @@ export function createArchiveModule(deps?: {
     dispatch,
     handleBack,
     handleExitRequest,
+    handleCloseRequest,
     subscribe(listener: () => void) {
       listeners.add(listener);
       return () => {

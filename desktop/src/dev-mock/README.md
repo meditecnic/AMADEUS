@@ -25,7 +25,11 @@ arrays replace the base; `login` and `shift` merge individual fields.
 | `login-success` | Explicit login success 200 / failure 401 |
 | `login-failure` | Forced login failure 401 with a retry message |
 | `session-list` | Seeded SG and β histories; create, rename, pin, forget and delete |
-| `memory` | Three facts, one topic, v11 status, archive/details and graph |
+| `memory` | Dated sample library for SG and β (about 25 records each over three months), archive/details and `/api/memory/chart` |
+| `memory-new` | New user: three cognitions from the last week, no topics |
+| `memory-large` | 300 records, 12 topics over 14 months |
+| `memory-loading` | Normal library; `/api/memory/chart` is held for ten minutes |
+| `memory-unavailable` / `memory-error` | Normal library; `/api/memory/chart` returns 503 / 500 |
 | `empty` | Empty session list, facts, topics and graph; sending from draft still works |
 | `error` | Login 200; conversation/memory GETs 503; chat sends a recoverable error |
 | `offline` | Login 200; WS auth rejected for unavailable-session UI |
@@ -97,7 +101,8 @@ Direct REST/WS tooling can pass `?scenario=<name>` or these cookies.
   fallback. Its single expected resource-load console message is benign.
   App-owned JS, CSS and fonts must load successfully. A 2xx manifest would
   incorrectly activate unavailable artwork and retired asset transitions.
-- Memory experiences/observations start empty. Facts support filter/pagination,
+- Observations start empty; experiences exist only in the dated presets.
+  The chart presets' sentences and dates are invented samples. Facts support filter/pagination,
   versioned text corrections, pin/topic presentation, deletion and topic rename.
 - Request/frame payloads are capped at 64 KiB. State is disposable and resets
   when the dev server restarts. This is a verification fixture, not a backend.

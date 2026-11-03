@@ -1057,6 +1057,30 @@ describe('archive deep module: semantic back, restore and deep links', () => {
     module.dispose();
   });
 
+  it('closing the memory space with a draft demands explicit discard, then closes', async () => {
+    const onCloseMemory = vi.fn();
+    const onExitArchive = vi.fn();
+    const { fetcher } = scriptedFetcher(defaultResponder(SCOPE_A));
+    const module = createArchiveModule({ fetcher, onCloseMemory, onExitArchive });
+    module.open(SCOPE_A);
+    await flush();
+    expect(module.handleCloseRequest()).toBe(true);
+    module.dispatch({ type: 'select', kind: 'fact', recordId: 'f1' });
+    await flush();
+    module.dispatch({ type: 'open-editor' });
+    module.dispatch({ type: 'edit-input', text: '未保存草稿' });
+    expect(module.handleCloseRequest()).toBe(false);
+    expect(module.snapshot().discardConfirm?.action).toBe('close-memory');
+    module.dispatch({ type: 'cancel-discard' });
+    expect(module.snapshot().editor?.draft).toBe('未保存草稿');
+    expect(onCloseMemory).not.toHaveBeenCalled();
+    module.handleCloseRequest();
+    module.dispatch({ type: 'confirm-discard' });
+    expect(module.snapshot().editor).toBeNull();
+    expect(onCloseMemory).toHaveBeenCalledTimes(1);
+    expect(onExitArchive).not.toHaveBeenCalled();
+    module.dispose();
+  });
   it('mode-switch exit with a draft demands explicit discard, then executes the exit', async () => {
     const onExitArchive = vi.fn();
     const { fetcher } = scriptedFetcher(defaultResponder(SCOPE_A));
