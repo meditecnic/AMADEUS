@@ -6,6 +6,16 @@ import { ymd } from './chartFormat';
 import { MemoryPlate, layoutLabels, type MemoryPlateProps } from './MemoryPlate';
 import type { MemoryChart } from './types';
 
+const starLayer = vi.hoisted(() => ({ renders: 0 }));
+vi.mock('./PlateStars', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./PlateStars')>();
+  const { createElement, memo } = await import('react');
+  const inner = (actual.PlateStars as unknown as { type: (props: import('./PlateStars').PlateStarsProps) => JSX.Element }).type;
+  return {
+    ...actual,
+    PlateStars: memo((props: import('./PlateStars').PlateStarsProps) => { starLayer.renders += 1; return createElement(inner, props); }),
+  };
+});
 const TODAY = Date.parse('2026-11-02T14:10:00Z');
 function chartFor(preset: string, worldline = 'steins_gate'): MemoryChart {
   const store = createMemoryStore({ facts: [], topics: [], preset });
@@ -143,4 +153,17 @@ describe('MemoryPlate', () => {
     expect(document.activeElement).toBe(first);
     fireEvent.keyDown(first, { key: ' ' });
     expect(props.onSelect).toHaveBeenLastCalledWith({ kind: 'star', id: normal.stars[0].id });
+  });
+
+  it('redraws only the hover layer, not the stars, while the pointer sweeps a 300-record plate', () => {
+    const large = buildChartModel(chartFor('large'), { today: TODAY, lastOpen: null });
+    const { container } = plate({ model: large });
+    const before = starLayer.renders;
+    const stars = [...container.querySelectorAll('[data-hit="star"]')].slice(0, 30);
+    for (const el of stars) {
+      fireEvent.pointerEnter(el);
+      expect(screen.getByTestId('plate-hover')).toBeInTheDocument();
+      fireEvent.pointerLeave(el);
+    }
+    expect(starLayer.renders).toBe(before);
   });});
