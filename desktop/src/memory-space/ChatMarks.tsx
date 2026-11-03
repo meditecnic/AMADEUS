@@ -1,4 +1,4 @@
-import { useId, useState, type KeyboardEvent } from 'react';
+import { useId, useRef, useState, type KeyboardEvent } from 'react';
 
 import { md } from './chartFormat';
 import { parseMs } from './chartTime';
@@ -52,15 +52,19 @@ const KIND_NAME = { fact: '认知', experience: '片段' } as const;
 export function ReferencedMarks({ messageId, refs, onOpen }: { messageId: string; refs: MemoryRefs; onOpen: OpenHandler }) {
   const [open, setOpen] = useState(false);
   const listId = useId();
+  const toggleRef = useRef<HTMLButtonElement>(null);
   const count = refs.items.length;
   const onKeyDown = (event: KeyboardEvent) => {
     if (event.key !== 'Escape' || !open) return;
     event.stopPropagation();
     setOpen(false);
+    // The list takes the focused link with it; the button that opened it is where the keyboard belongs.
+    toggleRef.current?.focus({ preventScroll: true });
   };
   return (
     <div className="ws2-mm-row ws2-mm-refs" data-testid="memory-marks-referenced" onKeyDown={onKeyDown}>
       <button
+        ref={toggleRef}
         type="button"
         className="ws2-mm ws2-mm-ref"
         data-testid="memory-mark-refs"

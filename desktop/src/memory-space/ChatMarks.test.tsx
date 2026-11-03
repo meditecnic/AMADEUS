@@ -80,6 +80,20 @@ describe('ReferencedMarks', () => {
     expect(screen.queryByTestId('memory-refs-list')).toBeNull();
   });
 
+  it('Esc from the link at the bottom of the list collapses it, returns focus to the button, and stays inside', () => {
+    const outer = vi.fn();
+    render(<div onKeyDown={outer}><ReferencedMarks messageId="a1" refs={refs} onOpen={vi.fn()} /></div>);
+    const toggle = screen.getByTestId('memory-mark-refs');
+    fireEvent.click(toggle);
+    const link = screen.getByTestId('memory-refs-open');
+    link.focus();
+    expect(document.activeElement).toBe(link);
+    fireEvent.keyDown(link, { key: 'Escape' });
+    expect(screen.queryByTestId('memory-refs-list')).toBeNull();
+    expect(document.activeElement).toBe(toggle);
+    expect(outer).not.toHaveBeenCalled();
+  });
+
   it('opens the plate with nothing selected, every referenced id marked, and the hint time', () => {
     const onOpen = vi.fn();
     render(<ReferencedMarks messageId="a1" refs={refs} onOpen={onOpen} />);
