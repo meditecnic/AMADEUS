@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { buildChartUrl, createChartController, fetchMemoryChart, parseChart, type ChartScope } from './fetchChart';
+import { parseMicros, parseMs } from './chartTime';
 import type { MemoryChart } from './types';
 
 const scope: ChartScope = { sessionId: 's 1', worldline: 'beta', identityMode: 'okabe' };
@@ -50,5 +51,72 @@ describe('memory chart read', () => {
     releases.forEach((release) => release());
     expect(await first).toEqual({ type: 'stale' });
     expect(await second).toEqual({ type: 'ok', chart });
+  });
+});
+
+describe('memory chart field checks', () => {
+  const drop = <T extends object>(row: T, key: string) => {
+    const copy = { ...row } as Record<string, unknown>;
+    delete copy[key];
+    return copy;
+  };
+  const withFact = (fact: unknown) => ({ ...chart, facts: [fact] });
+  const withTopic = (topic: unknown) => ({ ...chart, topics: [topic] });
+  const withExperience = (experience: unknown) => ({ ...chart, experiences: [experience] });
+
+  it('rejects any missing field', () => {
+    for (const key of Object.keys(chart)) expect(parseChart(drop(chart, key), scope), key).toBeNull();
+    for (const key of Object.keys(chart.facts[0])) expect(parseChart(withFact(drop(chart.facts[0], key)), scope), `fact.${key}`).toBeNull();
+    for (const key of Object.keys(chart.topics[0])) expect(parseChart(withTopic(drop(chart.topics[0], key)), scope), `topic.${key}`).toBeNull();
+    for (const key of Object.keys(chart.experiences[0])) {
+      expect(parseChart(withExperience(drop(chart.experiences[0], key)), scope), `experience.${key}`).toBeNull();
+    }
+    for (const key of Object.keys(chart.counts)) expect(parseChart({ ...chart, counts: drop(chart.counts, key) }, scope), `counts.${key}`).toBeNull();
+  });
+
+  it('rejects a field of the wrong type', () => {
+    expect(parseChart({ ...chart, truncated: 'yes' }, scope)).toBeNull();
+    expect(parseChart({ ...chart, truncated: 0 }, scope)).toBeNull();
+    expect(parseChart(withTopic({ ...chart.topics[0], fact_count: 1.5 }), scope)).toBeNull();
+    expect(parseChart(withTopic({ ...chart.topics[0], fact_count: '1' }), scope)).toBeNull();
+    expect(parseChart(withFact({ ...chart.facts[0], resident: 1 }), scope)).toBeNull();
+    expect(parseChart(withFact({ ...chart.facts[0], topic_id: 7 }), scope)).toBeNull();
+    expect(parseChart(withFact({ ...chart.facts[0], version_count: -1 }), scope)).toBeNull();
+    expect(parseChart(withExperience({ ...chart.experiences[0], is_pinned: 'false' }), scope)).toBeNull();
+    expect(parseChart({ ...chart, counts: { ...chart.counts, topics: null } }, scope)).toBeNull();
+    expect(parseChart({ ...chart, scope: { ...chart.scope, worldline: 'alpha' } }, scope)).toBeNull();
+    expect(parseChart({ ...chart, facts: {} }, scope)).toBeNull();
+  });
+
+  it('rejects a broken time anywhere', () => {
+    expect(parseChart(withFact({ ...chart.facts[0], updated_at: 'bad' }), scope)).toBeNull();
+    expect(parseChart(withFact({ ...chart.facts[0], created_at: '2026-02-30T00:00:00Z' }), scope)).toBeNull();
+    expect(parseChart({ ...chart, generated_at: 'now' }, scope)).toBeNull();
+    expect(parseChart({ ...chart, origin_at: '' }, scope)).toBeNull();
+    expect(parseChart(withTopic({ ...chart.topics[0], created_at: null }), scope)).toBeNull();
+    expect(parseChart(withExperience({ ...chart.experiences[0], expires_at: 'soon' }), scope)).toBeNull();
+    expect(parseChart(withExperience({ ...chart.experiences[0], updated_at: '2026-10-01T25:00:00Z' }), scope)).toBeNull();
+  });
+
+  it('accepts Z and +00:00 times, microseconds, and null only where the backend allows it', () => {
+    const mixed = {
+      ...chart,
+      generated_at: '2026-11-02T10:00:00+00:00',
+      origin_at: null,
+      facts: [{ ...chart.facts[0], created_at: '2026-09-01T12:00:00.000100+00:00', updated_at: '2026-09-02T00:00:00Z', topic_id: null }],
+      experiences: [{ ...chart.experiences[0], expires_at: '2999-01-01T00:00:00.5Z' }],
+    };
+    expect(parseChart(mixed, scope)).toEqual(mixed);
+  });
+});
+
+describe('chart times', () => {
+  it('keeps microseconds and reads Z, +00:00, offsets and naive times as the backend does', () => {
+    expect(parseMicros('2026-09-01T12:00:00.000900+00:00')! - parseMicros('2026-09-01T12:00:00.000100Z')!).toBe(800);
+    expect(parseMicros('2026-09-01T20:00:00+08:00')).toBe(parseMicros('2026-09-01T12:00:00Z'));
+    expect(parseMicros('2026-09-01 12:00:00')).toBe(parseMicros('2026-09-01T12:00:00Z'));
+    expect(parseMs('2026-09-01T12:00:00.123456Z')).toBe(Date.parse('2026-09-01T12:00:00.123Z'));
+    expect(parseMicros('2026-09-01')).toBeNull();
+    expect(Number.isNaN(parseMs('bad'))).toBe(true);
   });
 });

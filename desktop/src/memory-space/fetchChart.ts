@@ -1,4 +1,5 @@
 import { apiFetch } from '../apiBase';
+import { parseMicros } from './chartTime';
 import type { IdentityMode, MemoryChart, Worldline } from './types';
 
 export type ChartScope = { sessionId: string; worldline: Worldline; identityMode: IdentityMode };
@@ -20,35 +21,48 @@ export function buildChartUrl(scope: ChartScope): string {
 }
 
 const isText = (value: unknown): value is string => typeof value === 'string';
-const isTime = (value: unknown) => isText(value) && !Number.isNaN(Date.parse(value));
+const isTime = (value: unknown) => parseMicros(value) !== null;
+const isTimeOrNull = (value: unknown) => value === null || isTime(value);
+const isTextOrNull = (value: unknown) => value === null || isText(value);
 const isCount = (value: unknown) => typeof value === 'number' && Number.isInteger(value) && value >= 0;
+const isBool = (value: unknown) => typeof value === 'boolean';
+const WORLDLINES: readonly unknown[] = ['steins_gate', 'beta'];
+const MODES: readonly unknown[] = ['self', 'okabe'];
 
-function validRecord(row: unknown, kind: 'fact' | 'experience'): boolean {
-  if (!row || typeof row !== 'object') return false;
-  const r = row as Record<string, unknown>;
-  if (!isText(r.id) || !isText(r.label) || !isTime(r.created_at) || typeof r.is_pinned !== 'boolean') return false;
-  if (kind === 'experience') return r.expires_at === null || isTime(r.expires_at);
-  return (r.topic_id === null || isText(r.topic_id))
-    && isCount(r.evidence_count) && isCount(r.version_count) && typeof r.resident === 'boolean';
+type Shape = Record<string, (value: unknown) => boolean>;
+const TOPIC: Shape = { id: isText, label: isText, created_at: isTime, fact_count: isCount };
+const FACT: Shape = {
+  id: isText, label: isText, topic_id: isTextOrNull, created_at: isTime, updated_at: isTime,
+  is_pinned: isBool, evidence_count: isCount, version_count: isCount, resident: isBool,
+};
+const EXPERIENCE: Shape = {
+  id: isText, label: isText, created_at: isTime, updated_at: isTime, is_pinned: isBool, expires_at: isTimeOrNull,
+};
+const COUNTS: Shape = { facts: isCount, experiences: isCount, topics: isCount };
+
+// Every field must be present with its backend type; "in" keeps a missing nullable
+// field from passing as null.
+function fits(value: unknown, shape: Shape): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return Object.entries(shape).every(([key, check]) => key in row && check(row[key]));
 }
+const allFit = (value: unknown, shape: Shape) => Array.isArray(value) && value.every((row) => fits(row, shape));
 
-// Fail closed: a payload for another scope or with malformed rows never reaches the plate.
+// Fail closed: a payload for another scope or with any malformed field never reaches the plate.
 export function parseChart(body: unknown, scope: ChartScope): MemoryChart | null {
   if (!body || typeof body !== 'object') return null;
-  const chart = body as MemoryChart;
-  const echo = chart.scope;
-  if (!echo || echo.session_id !== scope.sessionId || echo.worldline !== scope.worldline
+  const chart = body as Record<string, unknown>;
+  const echo = chart.scope as Record<string, unknown> | null | undefined;
+  if (!echo || typeof echo !== 'object' || !isText(echo.session_id) || !WORLDLINES.includes(echo.worldline)
+    || !MODES.includes(echo.identity_mode)) return null;
+  if (echo.session_id !== scope.sessionId || echo.worldline !== scope.worldline
     || echo.identity_mode !== scope.identityMode) return null;
-  if (!(chart.origin_at === null || isTime(chart.origin_at))) return null;
-  if (!Array.isArray(chart.topics) || !Array.isArray(chart.facts) || !Array.isArray(chart.experiences)) return null;
-  if (!chart.topics.every((t) => t && isText(t.id) && isText(t.label) && isTime(t.created_at))) return null;
-  if (!chart.facts.every((row) => validRecord(row, 'fact'))) return null;
-  if (!chart.experiences.every((row) => validRecord(row, 'experience'))) return null;
-  const counts = chart.counts;
-  if (!counts || !isCount(counts.facts) || !isCount(counts.experiences) || !isCount(counts.topics)) return null;
-  return { ...chart, truncated: chart.truncated === true };
+  if (!isTime(chart.generated_at) || !('origin_at' in chart) || !isTimeOrNull(chart.origin_at)) return null;
+  if (!allFit(chart.topics, TOPIC) || !allFit(chart.facts, FACT) || !allFit(chart.experiences, EXPERIENCE)) return null;
+  if (!fits(chart.counts, COUNTS) || !isBool(chart.truncated)) return null;
+  return body as MemoryChart;
 }
-
 export async function fetchMemoryChart(
   scope: ChartScope,
   options: { signal?: AbortSignal; fetcher?: typeof fetch } = {},
