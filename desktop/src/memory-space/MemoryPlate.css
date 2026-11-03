@@ -17,7 +17,10 @@
 .p-star { cursor: pointer; transition: opacity var(--m-d2) var(--m-ease); }
 .p-star .dot { fill: var(--m-ink); }
 .p-star .halo { fill: none; stroke: rgba(var(--m-ink-rgb), .5); }
+.p-star { outline: none; }
 .p-star .hit { fill: transparent; }
+.p-star .focus { fill: none; stroke: var(--m-acc); stroke-width: 1.2; stroke-dasharray: 3 2; opacity: 0; pointer-events: none; }
+.p-star:focus-visible .focus { opacity: 1; }
 .p-star.is-loose .dot { fill: rgba(var(--m-ink-rgb), .78); }
 .p-star.is-fragment .dot { fill: var(--m-paper); stroke: var(--m-ink); stroke-width: 1.2; }
 .p-tail { stroke: rgba(var(--m-ink-rgb), .5); stroke-width: 1; fill: none; }

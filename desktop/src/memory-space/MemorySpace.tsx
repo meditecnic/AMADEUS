@@ -128,6 +128,9 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
     archiveOpenedRef.current = null;
   }, []);
 
+  // Opening moves focus off the header onto the sheet; closing hands it back to the memory key.
+  useEffect(() => { sheetRef.current?.focus({ preventScroll: true }); }, []);
+
   useLayoutEffect(() => {
     const measure = () => {
       const el = sheetRef.current;
@@ -334,6 +337,7 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
       data-state={status}
       data-reduced-motion={String(reducedMotion)}
       aria-label="Memory Space"
+      tabIndex={-1}
       onContextMenu={(event) => {
         if (mode !== 'chart') return;
         const target = event.target as HTMLElement;

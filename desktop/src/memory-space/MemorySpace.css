@@ -24,6 +24,7 @@
   --m-acc: #e98a4f; --m-acc-rgb: 233, 138, 79; --m-her: #c9a063;
   --m-d1: 156ms; --m-d2: 260ms; --m-d3: 416ms; --m-ease: cubic-bezier(.5, 0, .15, 1.12);
 }
+.memory-space:focus { outline: none; }
 .memory-space *, .memory-space *::before, .memory-space *::after { box-sizing: border-box; }
 .memory-space [hidden] { display: none !important; }
 .memory-space :where(button) { padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }

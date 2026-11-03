@@ -2109,7 +2109,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         </div>
       </header>
 
-      <nav className="ws2-side" aria-label="会话" inert={isSettingsOpen}>
+      <nav className="ws2-side" aria-label="会话" inert={isSettingsOpen || isMemoryOpen}>
         <MotionConfig transition={wsTransition(worldline, 'base')} reducedMotion="user">
         <HistorySidebar
           isCollapsed={isHistoryCollapsed}
@@ -2139,7 +2139,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         </MotionConfig>
       </nav>
 
-      <section className="ws2-talk" inert={isSettingsOpen}>
+      <section className="ws2-talk" inert={isSettingsOpen || isMemoryOpen}>
         <div className="ws2-transcript-wrap">
           <SelectionCopyMenu>
           <div
@@ -2400,7 +2400,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         </form>
       </section>
 
-      <section className={`ws2-stage presence-${presence}`}>
+      <section className={`ws2-stage presence-${presence}`} inert={isMemoryOpen || undefined}>
         <div className="ws2-seam" aria-hidden="true" />
         {/* Her name set like the original's chapter cards: black Mincho over drafting instruments, redrawn on each shift. */}
         <div className="ws2-chapter" key={`chapter-${worldline}`} aria-hidden="true">

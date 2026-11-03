@@ -105,10 +105,17 @@ const activate = (run: () => void) => (event: KeyboardEvent) => {
   if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); run(); }
 };
 
+const KIND_NAME = { fact: '认知', loose: '认知（未归组）', fragment: '片段' } as const;
+export const starName = (s: ChartStar) => `${KIND_NAME[s.kind]}：${s.label}，${ymd(s.createdAt)} 记下${s.pinned ? '，置顶' : ''}`;
+const STEP: Record<string, number> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+
 export function MemoryPlate(props: MemoryPlateProps) {
   const { model, width, height, selection, focusTopic, reducedMotion } = props;
   const g = plateGeometry(width, height);
   const [hoverId, setHoverId] = useState<string | null>(null);
+  // Roving focus: the stars are one Tab stop; arrow keys walk them in No. order.
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
   const [view, setView] = useState<PlateView>(HOME);
   const viewRef = useRef<PlateView>(HOME);
   const [playing, setPlaying] = useState(false);
@@ -160,6 +167,37 @@ export function MemoryPlate(props: MemoryPlateProps) {
   const dimmed = (s: ChartStar) => Boolean(focusTopic && s.topicId !== focusTopic);
   const ready = props.soul === 'ready' && Boolean(model);
   const selectedStar = selection?.kind === 'star' ? model?.byId.get(selection.id) ?? null : null;
+  const rovingId = activeId && model?.byId.has(activeId) ? activeId : model?.stars[0]?.id ?? null;
+  const starEl = (id: string) => svgRef.current?.querySelector<SVGGElement>(`[data-hit="star"][data-id="${CSS.escape(id)}"]`) ?? null;
+  useEffect(() => { if (selectedStar) setActiveId(selectedStar.id); }, [selectedStar]);
+  // When the reading of a star closes and focus was lost with it, it returns to that star.
+  const lastStarRef = useRef<string | null>(null);
+  useEffect(() => {
+    const previous = lastStarRef.current;
+    lastStarRef.current = selectedStar?.id ?? null;
+    if (!previous || previous === selectedStar?.id) return;
+    const active = document.activeElement;
+    if (!active || active === document.body || !active.isConnected) starEl(previous)?.focus({ preventScroll: true });
+  });
+  const onStarKey = (event: KeyboardEvent) => {
+    const id = (event.target as Element).closest('[data-hit="star"]')?.getAttribute('data-id');
+    if (!model || !id) return;
+    const index = model.stars.findIndex((star) => star.id === id);
+    let next = -1;
+    if (event.key in STEP) next = Math.min(model.stars.length - 1, Math.max(0, index + STEP[event.key]));
+    else if (event.key === 'Home') next = 0;
+    else if (event.key === 'End') next = model.stars.length - 1;
+    else if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      event.stopPropagation();
+      props.onSelect({ kind: 'star', id });
+      return;
+    } else return;
+    event.preventDefault();
+    const target = model.stars[next];
+    setActiveId(target.id);
+    starEl(target.id)?.focus({ preventScroll: true });
+  };
   const hovered = hoverId && hoverId !== selectedStar?.id ? model?.byId.get(hoverId) ?? null : null;
   const transform = `translate(${g.cx + view.x} ${g.cy + view.y}) scale(${view.s}) translate(${-g.cx} ${-g.cy})`;
   const soulAt = { x: g.cx + view.x, y: g.cy + view.y };
@@ -169,6 +207,7 @@ export function MemoryPlate(props: MemoryPlateProps) {
   return (
     <div className="memory-plate" data-testid="memory-plate">
       <svg
+        ref={svgRef}
         className={`plate${playing ? ' is-entering' : ''}`}
         width={width}
         height={height}
@@ -197,6 +236,7 @@ export function MemoryPlate(props: MemoryPlateProps) {
             <path key={topic.id} className={`p-line${topic.id === focusTopic ? ' lit' : ''}`} style={delay(900)}
               d={topic.starIds.map((id, i) => `${i ? 'L' : 'M'}${pos.get(id)!.x.toFixed(1)} ${pos.get(id)!.y.toFixed(1)}`).join('')} />
           ))}
+          <g className="p-stars" role="group" aria-label="记忆星点（方向键切换，Enter 打开）" onKeyDown={onStarKey}>
           {order.map((s) => {
             const p = pos.get(s.id)!;
             const toward = Math.hypot(g.cx - p.x, g.cy - p.y) || 1;
@@ -204,6 +244,9 @@ export function MemoryPlate(props: MemoryPlateProps) {
             const uy = (g.cy - p.y) / toward;
             return (
               <g key={s.id} data-hit="star" data-id={s.id} data-kind={s.kind}
+                role="button" tabIndex={s.id === rovingId ? 0 : -1} aria-label={starName(s)}
+                aria-pressed={s.id === selectedStar?.id}
+                onFocus={() => setActiveId(s.id)}
                 className={`p-star is-${s.kind}${s.topicId && s.topicId === focusTopic ? ' lit' : ''}`}
                 transform={`translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})`} style={delay(starDelay(s))}
                 onClick={(event) => { event.stopPropagation(); props.onSelect({ kind: 'star', id: s.id }); }}
@@ -212,9 +255,11 @@ export function MemoryPlate(props: MemoryPlateProps) {
                 {s.pinned ? <circle className="halo" r={s.radius + 3.4} /> : null}
                 <circle className="dot" r={s.radius} />
                 <circle className="hit" r={9} />
+                <circle className="focus" r={s.radius + 6} />
               </g>
             );
           })}
+          </g>
           {labels?.months.map((m) => (
             <text key={m.key} data-hit="month" className={`p-ringlab${selection?.kind === 'month' && selection.key === m.key ? ' on' : ''}`}
               x={m.x} y={m.y + 3.5} textAnchor="middle" role="button" tabIndex={0} aria-label={`${m.key.replace('-', ' 年 ')} 月`}

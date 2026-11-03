@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryStore, handleMemory } from '../dev-mock/memory';
 import { buildChartModel } from './chartCoordinates';
+import { ymd } from './chartFormat';
 import { MemoryPlate, layoutLabels, type MemoryPlateProps } from './MemoryPlate';
 import type { MemoryChart } from './types';
 
@@ -118,4 +119,28 @@ describe('MemoryPlate', () => {
       expect(a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h, `${i}/${j}`).toBe(false);
     }
   });
-});
+
+  it('makes the stars one Tab stop with names, walked in No. order by the arrow keys', () => {
+    const { container, props } = plate();
+    const stars = [...container.querySelectorAll<SVGGElement>('[data-hit="star"]')];
+    expect(stars.filter((el) => el.getAttribute('tabindex') === '0')).toHaveLength(1);
+    const first = container.querySelector<SVGGElement>(`[data-id="${normal.stars[0].id}"]`)!;
+    expect(first).toHaveAttribute('tabindex', '0');
+    expect(first).toHaveAttribute('role', 'button');
+    const fragment = normal.stars.find((s) => s.kind === 'fragment')!;
+    expect(container.querySelector(`[data-id="${fragment.id}"]`)).toHaveAccessibleName(`片段：${fragment.label}，${ymd(fragment.createdAt)} 记下${fragment.pinned ? '，置顶' : ''}`);
+    act(() => first.focus());
+    fireEvent.keyDown(first, { key: 'ArrowRight' });
+    const second = container.querySelector(`[data-id="${normal.stars[1].id}"]`)!;
+    expect(document.activeElement).toBe(second);
+    expect(second).toHaveAttribute('tabindex', '0');
+    expect(first).toHaveAttribute('tabindex', '-1');
+    fireEvent.keyDown(second, { key: 'End' });
+    expect(document.activeElement).toBe(container.querySelector(`[data-id="${normal.stars[normal.stars.length - 1].id}"]`));
+    fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(container.querySelector(`[data-id="${normal.stars[normal.stars.length - 1].id}"]`));
+    fireEvent.keyDown(document.activeElement!, { key: 'Home' });
+    expect(document.activeElement).toBe(first);
+    fireEvent.keyDown(first, { key: ' ' });
+    expect(props.onSelect).toHaveBeenLastCalledWith({ kind: 'star', id: normal.stars[0].id });
+  });});

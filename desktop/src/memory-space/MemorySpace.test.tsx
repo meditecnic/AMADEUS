@@ -128,6 +128,41 @@ describe('MemorySpace sheet', () => {
     await waitFor(() => expect(within(screen.getByTestId('archive-view')).getAllByText('小黑三岁了。').length).toBeGreaterThan(0));
   });
 
+  it('opens with focus on the sheet; Tab reaches the stars once, arrows walk them, Enter reads, Esc returns focus to the star', async () => {
+    serve('normal');
+    mount();
+    await plateReady();
+    expect(document.activeElement).toBe(screen.getByTestId('memory-space'));
+    const tabStops = [...screen.getByTestId('memory-plate').querySelectorAll<SVGElement>('[tabindex="0"]')];
+    const starStops = tabStops.filter((el) => el.getAttribute('data-hit') === 'star');
+    expect(starStops).toHaveLength(1);
+    act(() => starStops[0].focus());
+    fireEvent.keyDown(starStops[0], { key: 'ArrowRight' });
+    const star = document.activeElement as SVGElement;
+    expect(star.getAttribute('data-hit')).toBe('star');
+    expect(star).not.toBe(starStops[0]);
+    fireEvent.keyDown(star, { key: 'Enter' });
+    expect(await screen.findByTestId('reading-dom')).toBeInTheDocument();
+    expect(screen.getByTestId('plate-reticle')).toBeInTheDocument();
+    fireEvent.keyDown(star, { key: 'Escape' });
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByTestId('reading-dom')).toBeNull());
+    expect(document.activeElement).toBe(star);
+  });
+
+  it('returns focus to the star when its reading closes from inside the reading', async () => {
+    serve('normal');
+    mount();
+    await plateReady();
+    const star = document.querySelector<SVGElement>('[data-id="e1"]')!;
+    act(() => star.focus());
+    fireEvent.keyDown(star, { key: 'Enter' });
+    const close = await screen.findByRole('button', { name: '关闭阅读' });
+    act(() => close.focus());
+    fireEvent.click(close);
+    await waitFor(() => expect(screen.queryByTestId('reading-dom')).toBeNull());
+    expect(document.activeElement).toBe(star);
+  });
   it('browses another scope from the SCOPE row without touching the conversation', async () => {
     serve('normal');
     mount();

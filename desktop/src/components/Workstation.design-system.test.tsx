@@ -505,9 +505,13 @@ describe('Workstation S4-DS dark-only chrome', () => {
     expect(aperture).toHaveAttribute('aria-pressed', 'true');
     expect(aperture).toHaveAttribute('title', '回到对话（Esc）');
     expect(aperture).toHaveTextContent('ESC');
+    expect(document.activeElement).toBe(screen.getByTestId('memory-space'));
+    for (const covered of ['.ws2-side', '.ws2-talk', '.ws2-stage']) expect(document.querySelector(covered)).toHaveAttribute('inert');
     fireEvent.click(aperture);
     await waitFor(() => expect(screen.queryByTestId('memory-space')).toBeNull());
     expect(aperture).toHaveAttribute('aria-pressed', 'false');
+    expect(document.activeElement).toBe(aperture);
+    for (const covered of ['.ws2-side', '.ws2-talk', '.ws2-stage']) expect(document.querySelector(covered)).not.toHaveAttribute('inert');
   });
 
   it('self-hosted S4-DS fonts exist under /assets/fonts/s4-ds/', () => {
