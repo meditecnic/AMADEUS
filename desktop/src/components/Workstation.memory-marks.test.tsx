@@ -89,6 +89,17 @@ describe('Workstation chat memory marks', () => {
     await waitFor(() => expect(document.activeElement).toBe(screen.getByTestId('memory-mark-refs')));
   });
 
+  it('when the mark that opened the space is gone, focus goes to the header memory key', async () => {
+    mount();
+    fireEvent.click(screen.getByTestId('memory-mark-created'));
+    expect(screen.getByTestId('memory-stub')).toBeInTheDocument();
+    wsState.messages = [];
+    fireEvent.click(screen.getByText('stub-close'));
+    await waitFor(() => expect(screen.queryByTestId('memory-stub')).toBeNull());
+    expect(screen.queryByTestId('memory-mark-created')).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'MEMORY' })));
+  });
+
   it('the header memory key opens without a link and still gets focus back', async () => {
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'MEMORY' }));

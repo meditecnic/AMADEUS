@@ -155,6 +155,27 @@ describe('useAmadeusWS memory markers', () => {
     unmount();
   });
 
+  it('hangs a late memory.recorded of the previous turn on its own user line while the next turn streams', () => {
+    const { result, socket, unmount } = setup();
+    act(() => socket.emit({ type: 'turn.completed', conversation_id: 'c', turn_id: 't1', generation: 1 }));
+    act(() => { result.current.sendChat('第二句'); });
+    act(() => {
+      socket.emit({ type: 'turn.started', conversation_id: 'c', turn_id: 't2', generation: 2 });
+      socket.emit({
+        type: 'segment.ready', conversation_id: 'c', turn_id: 't2', generation: 2,
+        segment_id: 0, ja: 'ええ。', zh: '嗯。', emotion: 'neutral',
+      });
+    });
+    expect(result.current.messages.at(-1)?.streaming).toBe(true);
+    act(() => socket.emit(recorded({ turn_id: 't1' })));
+    const users = result.current.messages.filter((m) => m.role === 'user');
+    expect(users).toHaveLength(2);
+    expect(users[0].memoryRecorded?.map((c) => c.id)).toEqual(['f1']);
+    expect(users[1].memoryRecorded).toBeUndefined();
+    expect(result.current.messages.filter((m) => m.role === 'assistant').every((m) => m.memoryRecorded === undefined)).toBe(true);
+    unmount();
+  });
+
   it('merges several memory.recorded frames of one turn by id, the later one winning', () => {
     const { result, socket, unmount } = setup();
     act(() => socket.emit(recorded({ changes: [change('f1'), change('f2')] })));
