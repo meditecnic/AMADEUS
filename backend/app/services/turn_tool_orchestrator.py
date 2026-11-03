@@ -478,6 +478,47 @@ def trim_request_history(
     memory_summary: str, message_builder: Any, budget: int,
 ) -> tuple[list, int]:
     """Drop whole oldest messages from a send-only copy, before any Memory cuts."""
+    from app.services.prompt_compiler import PromptCompiler
+
+    complete = list(old_history) + list(turn_messages)
+    envelope = []
+
+    def observe_builder(history, summary, system):
+        nonlocal envelope
+        envelope = message_builder(history, summary, system)
+        return envelope
+
+    total = request_envelope_tokens(complete, system_prompt, memory_summary, observe_builder)
+    if total <= budget or not old_history:
+        return complete, 0
+
+    # Subtraction is exact only for unchanged history rows after a stable prefix.
+    prefix_length = len(envelope) - len(complete)
+    if prefix_length >= 0 and envelope[prefix_length:] == complete:
+        prefix = envelope[:prefix_length]
+        cut = previous = 0
+        while cut < len(old_history):
+            previous = cut
+            total -= PromptCompiler._estimate_tokens(str(old_history[cut].get("content") or ""))
+            cut += 1
+            while cut < len(old_history) and old_history[cut].get("role") == "assistant":
+                total -= PromptCompiler._estimate_tokens(str(old_history[cut].get("content") or ""))
+                cut += 1
+            if total <= budget:
+                break
+
+        candidate = list(old_history[cut:]) + list(turn_messages)
+        actual = request_envelope_tokens(candidate, system_prompt, memory_summary, observe_builder)
+        candidate_matches = envelope == prefix + candidate
+        preceding = list(old_history[previous:]) + list(turn_messages)
+        before = request_envelope_tokens(preceding, system_prompt, memory_summary, observe_builder)
+        # If even mandatory content exceeds the budget, the old loop drops all.
+        no_fit = cut == len(old_history) and actual == total
+        if (candidate_matches and envelope == prefix + preceding
+                and (actual <= budget or no_fit) and before > budget):
+            return candidate, cut
+
+    # Filtering/rewriting builders retain the original full-envelope algorithm.
     kept = list(old_history)
     while kept and request_envelope_tokens(
         kept + turn_messages, system_prompt, memory_summary, message_builder,
