@@ -170,6 +170,9 @@ def main() -> int:
     if not os.environ.get("AMADEUS_LOCAL_API_TOKEN"):
         print("AMADEUS_LOCAL_API_TOKEN required for the packaged backend", file=sys.stderr, flush=True)
         return 1
+    if not os.environ.get("AMADEUS_DATA_DIR", "").strip():
+        print("AMADEUS_DATA_DIR required; set it to an explicit data directory", file=sys.stderr, flush=True)
+        return 1
     try:
         configure_environment()
         if args.self_check:
