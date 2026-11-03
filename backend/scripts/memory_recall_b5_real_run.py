@@ -858,9 +858,10 @@ async def product_turn(plan: dict, entry: dict, directory: Path) -> dict:
     from app.db import init_db, reset_initialization_cache
     from app.routers.chat_ws import (
         SessionState, get_clean_text_stream, should_force_search,
-        build_tool_result_context,
+        build_tool_result_context, _request_system_prompt,
     )
     from app.services import prompt_compiler as compiler
+    from app.services.prompt_compiler import render_tail_reminder
     from app.services.conversations import conversation_service
     from app.services.memory import memory_service
     from app.services.provider_adapters import OpenAICompatibleAdapter
@@ -870,7 +871,7 @@ async def product_turn(plan: dict, entry: dict, directory: Path) -> dict:
     from app.services.turn_tool_orchestrator import (
         TurnExecutionRecord, apply_v11_tool_batch, build_v11_web_evidence_context,
         plan_first_round_tools, prepare_second_round_payload, refresh_candidates_for_send,
-        snapshot_from_session,
+        snapshot_from_session, provider_message_builder,
     )
 
     qset, digest = load_questions(plan.get("question_set", "b5c"))
@@ -898,10 +899,11 @@ async def product_turn(plan: dict, entry: dict, directory: Path) -> dict:
     selected = await conversation_service.create_and_select(owner, worldline, provider_id="deepseek",
         model_id=plan["model"], identity_mode=identity)
     session.conversation_id = str(selected["id"])
-    for message in [*case["history"], {"role": "user", "content": case["query"]}]:
+    for message in case["history"]:
         mid = await models.save_message(owner, message["role"], message["content"], worldline=worldline,
                                         conversation_id=session.conversation_id)
         session.append_message({**message, "id": mid})
+    session.append_message({"role": "user", "content": case["query"], "id": None})
     supplement_ms = []
     original_supplement = compiler._select_v11_memory_supplement
 
@@ -917,12 +919,28 @@ async def product_turn(plan: dict, entry: dict, directory: Path) -> dict:
     result = {**entry, "status": "completed", "calls": [], "embedding": embedding, "disabled": DISABLED}
     try:
         session.system_prompt = await compiler.compile_for_session(session, case["query"], provider=provider)
+        mid = await models.save_message(owner, "user", case["query"], worldline=worldline,
+                                        conversation_id=session.conversation_id)
+        session.set_last_message_id("user", int(mid))
         result.update(core_facts="CORE FACTS" in session.system_prompt,
                       memory_supplement="MEMORY CANDIDATES" in session.system_prompt,
                       supplement_ms=sum(supplement_ms), supplement_calls=len(supplement_ms))
-        force_search = should_force_search(case["query"])
+        request_builder = provider_message_builder(provider.adapter)
+
+        def second_round_builder(history, summary, system):
+            tail = {"role": "system", "content": render_tail_reminder(
+                session.identity_mode, getattr(session, "self_name", ""))}
+            return request_builder([*history, tail], summary, system)
+
         turn = TurnExecutionRecord(snapshot=snapshot_from_session(session, provider),
                                    injected_fact_ids=getattr(session, "turn_injected_fact_ids", ()))
+        session.turn_execution = turn
+        force_search = should_force_search(case["query"])
+        tool_plan = plan_first_round_tools(force_search=force_search,
+            provider_id=provider.provider_id, adapter_kind=type(provider.adapter).__name__)
+        turn.tool_plan_status, turn.tool_plan_reason = tool_plan.status, tool_plan.reason
+        if tool_plan.status == "unsupported":
+            raise Refused("unsupported_tool_plan")
         history = list(session.history)
 
         async def web_stub(_name, _arguments):
@@ -939,20 +957,24 @@ async def product_turn(plan: dict, entry: dict, directory: Path) -> dict:
         if force_search:
             turn.web_results.append(("web_search", await web_stub("web_search", "{}")))
             history = build_v11_web_evidence_context(history, turn.web_results)
-        tools = plan_first_round_tools(v11=entry["mode"] == "v11", force_search=force_search,
-                                       provider_id="deepseek", adapter_kind=type(adapter).__name__).tools
+        tools = tool_plan.tools
         answer, _, calls, _ = await clean(active_history=history, memory_summary="",
             session=session, tools=tools, tool_choice="auto" if tools else None,
-            provider_snapshot=provider, mode_state=turn.mode_state)
+            provider_snapshot=provider, mode_state=turn.mode_state, default_emotion=session.last_assistant_emotion)
         result["calls"] = list(calls.values())
         if calls:
             refresh = None
+            turn.raw_calls = result["calls"]
+            if turn.mode_state.late_tool_calls:
+                turn.late_tool_call = True
             outcome = await apply_v11_tool_batch(record=turn, session=session, provider=provider,
-                calls=result["calls"], web_executor=web_stub)
+                calls=result["calls"], web_executor=web_stub, cancelled=bool(getattr(session, "erasure_pending", False)))
             extra_web = turn.web_results[1:] if force_search else turn.web_results
             if outcome.recall_result is not None:
                 payload = prepare_second_round_payload(history, outcome.recall_result,
-                    extra_web or None, system_prompt=session.system_prompt)
+                    extra_web or None, system_prompt=_request_system_prompt(session, history, None, 0),
+                    message_builder=second_round_builder)
+                turn.dropped_history_messages = max(turn.dropped_history_messages, payload.dropped_history_messages)
                 if payload.result is not None:
                     turn.recall_result = payload.result
                     turn.ranked_items = list(payload.result.ranked_items or [])
@@ -961,15 +983,16 @@ async def product_turn(plan: dict, entry: dict, directory: Path) -> dict:
                 async def refresh(_attempt):
                     recalled = await refresh_candidates_for_send(turn, session, provider)
                     return prepare_second_round_payload(history, recalled, extra_web or None,
-                        system_prompt=session.system_prompt).history
+                        system_prompt=_request_system_prompt(session, history, None, _attempt),
+                        message_builder=second_round_builder).history
             elif turn.web_results:
-                second_history = build_v11_web_evidence_context(history, list(turn.web_results))
+                second_history = build_v11_web_evidence_context(history, list(extra_web))
             else:
                 second_history = build_tool_result_context(history, [])
             capture.phase = "tool_answer"
             answer, _, _, _ = await clean(active_history=second_history,
                 memory_summary="", session=session, tools=None, tool_choice=None, provider_snapshot=provider,
-                mode_state=TurnModeState(), before_send=refresh)
+                mode_state=TurnModeState(), before_send=refresh, default_emotion=session.last_assistant_emotion)
         result["answer"] = answer
         result["score"] = score(case, answer, result["calls"], qset, mode=entry["mode"])
         result["fallback"] = result["score"]["fallback"]
@@ -1240,7 +1263,7 @@ def main(argv=None) -> int:
     parser.add_argument("--base-url", default=BUILTIN_DEEPSEEK_BASE_URL)
     parser.add_argument("--cap-cny")
     parser.add_argument("--model", default="deepseek-flash")
-    parser.add_argument("--model-dir", default=str(default_model_dir()))
+    parser.add_argument("--model-dir")
     parser.add_argument("--worker", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     try:

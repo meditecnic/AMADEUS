@@ -378,3 +378,45 @@ def test_transport_errors_continue_until_third_execution_and_resume(tmp_path, fr
         ["completed"] * 4 if failures == 1 else ["not_run_after_accounting_error"] * 2)
     assert all(r["error_type"] == "ReadTimeout" and not r.get("stop_run") for r in rows[:failures])
     assert waits == [5] * failures
+
+
+@pytest.mark.parametrize('forced_search', [False, True])
+async def test_current_product_request_budget_and_second_round(tmp_path, frozen, monkeypatch, forced_search):
+    from app import config
+    from app.routers import chat_ws
+    from app.services import turn_tool_orchestrator as orch
+
+    plan, entry, directory = prepared_turn(tmp_path, frozen, case_id='outside_paraphrase_board')
+    budgets, second, order = [], [], []
+    trim, prepare = chat_ws.trim_request_history, orch.prepare_second_round_payload
+    split, envelope = chat_ws.split_current_turn, chat_ws.request_envelope_tokens
+
+    def tracked_split(*args, **kwargs):
+        order.append('split')
+        return split(*args, **kwargs)
+
+    def tracked_trim(*args, **kwargs):
+        order.append('trim')
+        budgets.append(args[-1])
+        return trim(*args, **kwargs)
+
+    def tracked_envelope(*args, **kwargs):
+        order.append('envelope')
+        return envelope(*args, **kwargs)
+
+    def tracked_prepare(*args, **kwargs):
+        second.append(kwargs)
+        return prepare(*args, **kwargs)
+
+    monkeypatch.setattr(chat_ws, 'should_force_search', lambda query: forced_search)
+    monkeypatch.setattr(chat_ws, 'split_current_turn', tracked_split)
+    monkeypatch.setattr(chat_ws, 'trim_request_history', tracked_trim)
+    monkeypatch.setattr(chat_ws, 'request_envelope_tokens', tracked_envelope)
+    monkeypatch.setattr(orch, 'prepare_second_round_payload', tracked_prepare)
+    with b5.fake_network_guard():
+        row = await b5.product_turn(plan, entry, directory)
+    assert row['status'] == 'completed', row
+    assert budgets and all(budget == config.REQUEST_INPUT_BUDGET for budget in budgets)
+    assert order[:2] == ['split', 'trim'] and order.index('envelope') > order.index('trim')
+    assert second and all(callable(kwargs['message_builder']) for kwargs in second)
+    assert row['request_count'] == 2 and row['calls'][0]['function']['name'] == 'recall_memory'

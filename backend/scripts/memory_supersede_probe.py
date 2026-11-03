@@ -423,7 +423,7 @@ def aggregate(run_dirs, output, manual=None):
 
 def make_plan(args):
     fixture = load_fixture()
-    model_dir = str(Path(args.model_dir).expanduser().resolve())
+    model_dir = str(Path(args.model_dir).expanduser().resolve()) if args.model_dir else str(b5.default_model_dir())
     files = b5.embedding_files(model_dir)
     b5.check_embedding_files(args.transport, files)
     return {'version': fixture['version'], 'fixture_sha256': b5.sha256(FIXTURE), 'script_sha256': b5.sha256(SCRIPT),
@@ -440,7 +440,7 @@ def main(argv=None):
     parser.add_argument('--transport', choices=('fake', 'real'), default='fake')
     parser.add_argument('--base-url', default=b5.BUILTIN_DEEPSEEK_BASE_URL)
     parser.add_argument('--cap-cny')
-    parser.add_argument('--model-dir', default=str(b5.default_model_dir()))
+    parser.add_argument('--model-dir')
     parser.add_argument('--repeats', type=int, default=1)
     parser.add_argument('--aggregate', type=Path, nargs='+')
     parser.add_argument('--output', type=Path)
