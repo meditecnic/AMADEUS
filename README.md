@@ -150,7 +150,7 @@ unset AMADEUS_DB_PATH
 .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Source runs (including scripts) refuse data-directory resolution without a nonempty `AMADEUS_DATA_DIR`: `RuntimeError: AMADEUS_DATA_DIR required (non-frozen)` (exit 1). `AMADEUS_DB_PATH` still takes precedence for database files when a data directory is set; setting it alone does not bypass this check. `run_dev.bat` and `npm run dev:real` clear that legacy override and check the data directory before starting either process; set `AMADEUS_DATA_DIR` before invoking it. A direct `uvicorn --reload` invocation can leave its parent watcher running after the backend child refuses to start. The offline snapshot builder and rehearsal CLIs keep their explicit-path isolation and do not require this variable.
+Source runs (including scripts) refuse data-directory resolution without a nonempty `AMADEUS_DATA_DIR`: `RuntimeError: AMADEUS_DATA_DIR required; set it to an explicit data directory` (exit 1). `AMADEUS_DB_PATH` still takes precedence for database files when a data directory is set; setting it alone does not bypass this check. `run_dev.bat` and `npm run dev:real` clear that legacy override and check the data directory before starting either process; set `AMADEUS_DATA_DIR` before invoking it. A direct `uvicorn --reload` invocation can leave its parent watcher running after the backend child refuses to start. The offline snapshot builder and rehearsal CLIs keep their explicit-path isolation and do not require this variable.
 
 Open http://localhost:1420 and log in with `Gott würfelt nicht` (the real backend normalizes case and treats `ü` / `ue` as `u`, so `gott wurfelt nicht` and `Gott wuerfelt nicht` also work here). Then open **系统 → 连接** (System → Connections) in the top-right corner; the `OpenAI-compatible · http://127.0.0.1:1234/v1 · local-model` item already listed there is the built-in default preset for a local OpenAI-compatible server. Configure your model connection and save; once the connection check passes, the conversation can start. The memory embedding model (`jinaai/jina-embeddings-v5-text-nano-retrieval`, fp32, 768 dimensions, ~866 MB, CC BY-NC 4.0 by Jina AI; revision `ac5d898c8d382b17167c33e5c8af644a3519b47d`) is downloaded and loaded on first use; existing E5 indexes are rebuilt at startup (a failed load keeps chat available with lexical retrieval). Without a voice pack, `[WARN] TTS reference audio not found ...` lines in the backend log are normal; voice remains optional (see [Voice](#voice-optional)).
 
@@ -162,7 +162,11 @@ hf download jinaai/jina-embeddings-v5-text-nano-retrieval --revision ac5d898c8d3
 
 The desktop window comes from the installer build; its packaging scripts are in `packaging/windows/`, and the frozen backend is a build artifact excluded from the repository; `npm run tauri -- dev` will not start from this checkout (the shell expects a bundled backend). For development, use the browser at http://localhost:1420.
 
-**Data location (real backend development):** the explicitly configured `AMADEUS_DATA_DIR`; there is no default for source runs. A frozen backend launched directly retains the `%APPDATA%\Amadeus` default on Windows (`~/.amadeus` without `APPDATA`). The Windows installer shell passes `%LOCALAPPDATA%\com.amadeus.desktop\data\` instead. Installed Windows builds store API keys in the Windows Credential Manager; source runs keep them only in memory by default, so re-enter them after each restart. To persist keys from a source run on Windows, set `AMADEUS_CREDENTIAL_BACKEND=windows`; this accesses your real Windows credentials. Other systems keep keys in memory only. The local mock does not use these backend data stores.
+### Data location
+
+The Windows installer stores data in `%LOCALAPPDATA%\com.amadeus.desktop\data`. Uninstalling keeps data by default; selecting the uninstaller's option to delete app data removes this default directory. To use another location, set the user environment variable `AMADEUS_DATA_DIR` and restart the app. Source runs must set a nonempty `AMADEUS_DATA_DIR` to a separate development directory. The backend executable also refuses to start on its own without this variable; it has no fallback data directory.
+
+Installed Windows builds store API keys in the Windows Credential Manager; source runs keep them only in memory by default, so re-enter them after each restart. To persist keys from a source run on Windows, set `AMADEUS_CREDENTIAL_BACKEND=windows`; this accesses your real Windows credentials. Other systems keep keys in memory only. The local mock does not use these backend data stores.
 
 ## Voice (optional)
 
@@ -223,7 +227,7 @@ M3 已收尾，M4 等待授权。英文和日文界面仍在计划中；她始�
 
 **真实后端**：按 [Real backend](#real-backend) 安装依赖并设置独立的 `AMADEUS_DATA_DIR` 后，在 `desktop/` 执行 `npm run dev:real`，一条命令启动带本地 API 认证的后端和 Vite；`run_dev.bat` 也调用这个启动器。手动两个终端、不带令牌的开发方式仍保留为备选，后端会记录未认证的 WARNING。登录口令仍是 `Gott würfelt nicht`。进去以后，从右上角的「系统」打开「连接」，配置自己的模型连接并保存。连接测试通过后，就可以开始说话了。第一次写入记忆时会下载记忆功能要用的模型；语音是可选项。
 
-真实后端开发模式下，必须先显式设置 `AMADEUS_DATA_DIR` 到独立开发目录（Windows：`$env:AMADEUS_DATA_DIR = Join-Path $env:LOCALAPPDATA 'amadeus-dev-data'`，即 `%LOCALAPPDATA%\amadeus-dev-data`，避免被 TEMP 清理），并清除 `AMADEUS_DB_PATH`；未设置或为空时拒绝启动，不再默认使用用户目录。单设 `AMADEUS_DB_PATH` 不能绕过检查。安装版仍放在 `%LOCALAPPDATA%\com.amadeus.desktop\data\`；单独运行冻结后端仍默认用 `%APPDATA%\Amadeus`（无 `APPDATA` 时用 `~/.amadeus`）。Windows 安装版把 API key 存进 Windows 凭据管理器；源码运行默认只存内存，重启后要重新输入。若要在 Windows 源码运行时持久保存 key，设置 `AMADEUS_CREDENTIAL_BACKEND=windows`；这会访问你的真实 Windows 凭据。其他系统只存内存。所有服务只监听本机地址，你的对话只会发给你自己配置的那个模型服务；如果开启联网搜索，搜索词还会发给你配置的搜索服务（Tavily 或 Firecrawl）。本地 mock 不使用这些后端数据目录，也不调用模型或语音服务。
+真实后端开发模式下，必须先显式设置 `AMADEUS_DATA_DIR` 到独立开发目录（Windows：`$env:AMADEUS_DATA_DIR = Join-Path $env:LOCALAPPDATA 'amadeus-dev-data'`，即 `%LOCALAPPDATA%\amadeus-dev-data`，避免被 TEMP 清理），并清除 `AMADEUS_DB_PATH`；未设置或为空时拒绝启动，不再默认使用用户目录。单设 `AMADEUS_DB_PATH` 不能绕过检查。安装版数据放在 `%LOCALAPPDATA%\com.amadeus.desktop\data`，卸载默认保留，勾选删除应用数据时会删除此目录；高级用法可设置用户环境变量 `AMADEUS_DATA_DIR` 后重启应用以更换位置。单独运行后端可执行文件也必须设置非空的 `AMADEUS_DATA_DIR`，否则拒绝启动。Windows 安装版把 API key 存进 Windows 凭据管理器；源码运行默认只存内存，重启后要重新输入。若要在 Windows 源码运行时持久保存 key，设置 `AMADEUS_CREDENTIAL_BACKEND=windows`；这会访问你的真实 Windows 凭据。其他系统只存内存。所有服务只监听本机地址，你的对话只会发给你自己配置的那个模型服务；如果开启联网搜索，搜索词还会发给你配置的搜索服务（Tavily 或 Firecrawl）。本地 mock 不使用这些后端数据目录，也不调用模型或语音服务。
 
 ### 原作素材包
 
@@ -268,6 +272,8 @@ okeydokey，大概就是这些，那么来句帅气的收尾吧：El Psy Kongroo
 利用できる状態は [シナリオ一覧と切り替え方法](desktop/src/dev-mock/README.md) と [JSON ファイル](desktop/src/dev-mock/scenarios/)、確認手順は [ブラウザー検証ガイド](desktop/validation/README.md) を参照。
 
 **実際のバックエンドを使う場合**は [Real backend](#real-backend) に従って Python サーバーを起動し、フロントエンド側の PowerShell で `$env:AMADEUS_DEV_MOCK = "0"` を設定してから Vite を起動する。合言葉は同じ `Gott würfelt nicht`――神はサイコロを振らない。ログイン後、右上の「系统 → 连接」で自分のモデル接続を設定する。初回の記憶書き込み時に記憶用の埋め込みモデルがダウンロードされる。音声は任意。
+
+インストール版のデータは `%LOCALAPPDATA%\com.amadeus.desktop\data` に保存され、アンインストール時は標準で保持される（アプリデータ削除を選ぶとこのディレクトリも削除される）。保存先はユーザー環境変数 `AMADEUS_DATA_DIR` を設定してアプリを再起動すると変更でき、ソース実行とバックエンド実行ファイルの単独起動ではこの変数が空または未設定なら起動を拒否する。
 
 非公式・非営利のファン作品。原作素材は一切含まない。STEINS;GATE の権利は MAGES. Inc. および各権利者に帰属する。
 
