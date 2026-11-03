@@ -82,18 +82,51 @@ function gapsBetween(phis: number[]): Gap[] {
   }).sort((a, b) => b.width - a.width || a.mid - b.mid);
 }
 
-function planeDistance(a: { theta: number; phi: number }, b: { theta: number; phi: number }): number {
-  return Math.hypot(
-    Math.sin(rad(a.phi)) * a.theta - Math.sin(rad(b.phi)) * b.theta,
-    Math.cos(rad(a.phi)) * a.theta - Math.cos(rad(b.phi)) * b.theta,
-  );
+// Placed stars bucketed by plane position, cells MIN_SEPARATION wide. A clearance only
+// changes a decision while it is below MIN_SEPARATION, and every star that close lies
+// in the 3x3 cells around the probe, so looking there alone gives the same result as
+// comparing with every star, bit for bit: x = sin(phi) * theta, y = cos(phi) * theta and
+// hypot(dx, dy) are the same floats a pairwise comparison would compute.
+type Placed = { x: number; y: number };
+const cellOf = (v: number) => Math.floor(v / MIN_SEPARATION);
+const cellKey = (cx: number, cy: number) => (cx + 4096) * 8192 + (cy + 4096);
+class PlacedGrid {
+  private cells = new Map<number, Placed[]>();
+  add(star: ChartStar) {
+    const p = { x: Math.sin(rad(star.phi)) * star.theta, y: Math.cos(rad(star.phi)) * star.theta };
+    const key = cellKey(cellOf(p.x), cellOf(p.y));
+    const list = this.cells.get(key);
+    if (list) list.push(p); else this.cells.set(key, [p]);
+  }
+  /** Distance to the nearest placed star when it is below MIN_SEPARATION; otherwise some value at or above it. */
+  clearance(theta: number, phi: number): number {
+    const x = Math.sin(rad(phi)) * theta;
+    const y = Math.cos(rad(phi)) * theta;
+    let min = Infinity;
+    const x1 = cellOf(x + MIN_SEPARATION);
+    const y0 = cellOf(y - MIN_SEPARATION);
+    const y1 = cellOf(y + MIN_SEPARATION);
+    for (let cx = cellOf(x - MIN_SEPARATION); cx <= x1; cx += 1) {
+      for (let cy = y0; cy <= y1; cy += 1) {
+        const list = this.cells.get(cellKey(cx, cy));
+        if (!list) continue;
+        for (const other of list) {
+          const dx = x - other.x;
+          const dy = y - other.y;
+          if (dx >= MIN_SEPARATION || dx <= -MIN_SEPARATION || dy >= MIN_SEPARATION || dy <= -MIN_SEPARATION) continue;
+          const d = Math.hypot(dx, dy);
+          if (d < min) min = d;
+        }
+      }
+    }
+    return min;
+  }
 }
 
 // Only the newer star gives way, and only around its ring: its date never moves, and
 // nothing written earlier is disturbed by what comes later.
-function makeRoom(star: ChartStar, placed: ChartStar[]): void {
-  const clearance = (phi: number) => placed.reduce(
-    (min, other) => Math.min(min, planeDistance({ theta: star.theta, phi }, other)), Infinity);
+function makeRoom(star: ChartStar, placed: PlacedGrid): void {
+  const clearance = (phi: number) => placed.clearance(star.theta, phi);
   if (clearance(star.phi) >= MIN_SEPARATION) return;
   const step = Math.min(6, (MIN_SEPARATION / 3 / Math.max(star.theta, 5)) * 57.3);
   const first = hash01(`${star.id}:side`) < 0.5 ? -1 : 1;
@@ -135,15 +168,15 @@ export function buildChartModel(chart: MemoryChart, options: { today: number; la
   const topicById = new Map(topics.map((topic) => [topic.id, topic]));
 
   const rows = [
-    ...chart.facts.map((row) => ({ row, fragment: false })),
-    ...chart.experiences.map((row) => ({ row, fragment: true })),
+    ...chart.facts.map((row) => ({ row, fact: row as MemoryChart['facts'][number] | null, fragment: false })),
+    ...chart.experiences.map((row) => ({ row, fact: null, fragment: true })),
   ].sort((a, b) => byCreated(a.row, b.row));
 
   const stars: ChartStar[] = [];
-  rows.forEach(({ row, fragment }, i) => {
+  const placed = new PlacedGrid();
+  rows.forEach(({ row, fact, fragment }, i) => {
     const createdAt = parseMs(row.created_at);
     const th = theta(createdAt);
-    const fact = fragment ? null : chart.facts.find((f) => f.id === row.id)!;
     const topic = fact?.topic_id ? topicById.get(fact.topic_id) ?? null : null;
     const kind: StarKind = fragment ? 'fragment' : topic ? 'fact' : 'loose';
     let phi: number;
@@ -172,7 +205,8 @@ export function buildChartModel(chart: MemoryChart, options: { today: number; la
       isNew: options.lastOpen !== null && createdAt > options.lastOpen,
       evidenceCount, versionCount: fact?.version_count ?? 1,
     };
-    makeRoom(star, stars);
+    makeRoom(star, placed);
+    placed.add(star);
     stars.push(star);
     topic?.starIds.push(star.id);
   });
