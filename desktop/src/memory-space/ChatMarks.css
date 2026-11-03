@@ -1,0 +1,22 @@
+/* Marks under the transcript lines. Colours come from the workstation variables, so both worldlines follow. */
+.ws2-mm-row { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 4px 14px; margin-top: 8px; }
+.ws2-line-user .ws2-mm-row { justify-content: flex-end; }
+.ws2-mm-refs { flex-direction: column; align-items: flex-start; gap: 6px; }
+.ws2 .ws2-mm {
+  display: inline-flex; align-items: center; gap: 7px; min-height: 22px; padding: 0 2px; border: 0; border-radius: 0; background: none;
+  font-family: var(--ws-sans); font-size: 12px; letter-spacing: .06em; color: var(--ws-ink-3); cursor: pointer; transition: color .15s;
+}
+.ws2 .ws2-mm i { width: 6px; height: 6px; flex: none; background: var(--ws-accent-2); }
+.ws2 .ws2-mm-ref i { background: var(--ws-accent); }
+.ws2 .ws2-mm:hover { color: var(--ws-ink); }
+.ws2-mm-list { min-width: 280px; max-width: 520px; border: 1px solid var(--ws-line-2); background: rgba(0, 0, 0, .28); }
+.ws2-mm-list ul { margin: 0; padding: 4px 0; list-style: none; }
+.ws2-mm-list li { display: flex; align-items: baseline; gap: 10px; padding: 4px 12px; font-size: 12.5px; line-height: 1.5; color: var(--ws-ink-2); }
+.ws2-mm-list .kind { flex: none; font-size: 10.5px; letter-spacing: .14em; color: var(--ws-ink-3); }
+.ws2-mm-list .label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.ws2-mm-list .date { flex: none; font-family: var(--ws-mono); font-size: 10.5px; letter-spacing: .08em; color: var(--ws-ink-3); font-variant-numeric: tabular-nums; }
+.ws2 .ws2-mm-open {
+  display: block; width: 100%; padding: 7px 12px; border: 0; border-top: 1px solid var(--ws-line); border-radius: 0; background: none;
+  font-family: var(--ws-sans); font-size: 12px; letter-spacing: .06em; text-align: left; color: var(--ws-accent); cursor: pointer;
+}
+.ws2 .ws2-mm-open:hover { background: rgba(var(--ws-accent-rgb), .08); }
