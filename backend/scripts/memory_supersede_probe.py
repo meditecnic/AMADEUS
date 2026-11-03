@@ -15,10 +15,8 @@ import argparse
 import ast
 import asyncio
 import contextlib
-import hashlib
 import io
 import json
-import math
 import os
 import re
 import statistics

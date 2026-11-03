@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-
 import copy
 
 import json
@@ -12,21 +11,17 @@ import os
 
 import socket
 
-import sqlite3
 
 import subprocess
 
 import sys
 
-import urllib.request
 
-from collections import Counter
 
 from decimal import Decimal
 
 from pathlib import Path
 
-from types import SimpleNamespace
 
 import httpx
 
@@ -41,12 +36,15 @@ def frozen():
     return b5.load_questions()
 
 @pytest.fixture(autouse=True)
-def restore_product_embedder(monkeypatch):
+def restore_product_embedder(monkeypatch, tmp_path):
     # Direct product_turn tests replace the process-wide embedder, just as a
     # worker does. Restore it before another test uses the shared service.
     from app.services.memory import memory_service
 
     monkeypatch.setattr(memory_service, "embedder", memory_service.embedder)
+    original = b5.load_embedder
+    monkeypatch.setattr(b5, "load_embedder", lambda plan: original(
+        {**plan, "transport": "fake", "model_dir": str(tmp_path / 'no-model')}))
 
 def call(needs):
     return {"id": "test-call", "type": "function", "function": {
@@ -141,7 +139,7 @@ def test_budget_persists_reservations_settles_cache_and_refuses_over_cap(tmp_pat
     with pytest.raises(b5.Refused, match="configuration_changed"):
         b5.Budget(path, "2")
 
-@pytest.mark.parametrize("leaked", ["must_use_fact_keys", "cat_pet", "must_express_unknown_for", "dinner_staple"])
+@pytest.mark.parametrize("leaked", ["must_use_fact_keys", "b5c_board", "must_express_unknown_for", "shoe_size"])
 async def test_leaked_evaluator_content_blocked_before_transport(tmp_path, frozen, leaked):
     qset, digest = frozen
     plan = b5.make_plan(qset, digest)
@@ -177,7 +175,8 @@ def test_redaction_handles_quoted_and_unicode_secret(tmp_path, monkeypatch):
 
 def prepared_turn(tmp_path, frozen, *, mode="v11", case_id="irrelevant_arithmetic", transport="fake", cap_cny=None):
     qset, digest = frozen
-    plan = b5.make_plan(qset, digest, transport=transport, cap_cny=cap_cny)
+    plan = b5.make_plan(qset, digest, cap_cny=cap_cny)
+    plan["transport"] = transport
     entry = next(e for e in plan["executions"] if e["mode"] == mode and e["case_id"] == case_id)
     directory = tmp_path / "executions" / entry["id"]
     b5.write_json(tmp_path / "plan.json", plan)
@@ -351,7 +350,8 @@ async def test_transport_retry_still_checks_cap_including_retained_reserve(tmp_p
 def test_transport_errors_continue_until_third_execution_and_resume(tmp_path, frozen, paid_mock, monkeypatch, failures):
     install, waits = paid_mock
     qset, digest = frozen
-    plan = b5.make_plan(qset, digest, transport="real", cap_cny="1")
+    plan = b5.make_plan(qset, digest, cap_cny="1")
+    plan["transport"] = "real"
     plan["executions"] = plan["executions"][:5]
     active, sent = [], []
 

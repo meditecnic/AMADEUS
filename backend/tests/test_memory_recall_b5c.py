@@ -2,7 +2,6 @@
 
 import copy
 
-import json
 
 import sys
 
@@ -170,3 +169,39 @@ def test_fixture_sha256_matches_archive_blob():
     path = Path(__file__).parent / 'fixtures/memory_recall_b5c_question_set.json'
     raw = path.read_bytes().replace(b'\r\n', b'\n')  # Git's CRLF checkout conversion only.
     assert hashlib.sha256(raw).hexdigest() == '7709f978be0ce76976b5039633e64fa495ebc74120a4d4175d2375ad44a3efcb'
+
+
+@pytest.mark.parametrize('count', [1, 2, 3])
+def test_aggregate_numbers_manual_and_rescore_preserve_sources(tmp_path, frozen, count):
+    paths = saved_runs(tmp_path, *frozen, misses=2, manual=True)[:count]
+    before = {p: p.read_bytes() for d in paths for p in d.rglob('*') if p.is_file()}
+    pending = b5.aggregate(paths, tmp_path / 'out')
+    assert set(pending['groups']) == {'C'} and 'gate' not in pending and 'investigate' not in pending
+    assert pending['runs'][0]['groups']['C']['needs_manual'] > 0
+    manual = tmp_path / 'manual.json'
+    b5.write_json(manual, [dict(run=p.name, execution_id='C-resident_pillow-1', rule='must_use',
+                               key='b5c_pillow', judgment='pass') for p in paths])
+    result = b5.aggregate(paths, tmp_path / 'manual-out', manual)
+    assert result['manual']['applied'] == result['manual']['changed'] == count
+    assert result['groups']['C']['hit']['mean'] == pytest.approx(33/34)
+    assert result['groups']['C']['unknown']['mean'] == 1
+    assert result['groups']['C']['mismention_count']['mean'] == 0
+    rescored = b5.rescore_run(paths[0])
+    assert rescored['groups'] == pending['runs'][0]['groups']
+    assert all(p.read_bytes() == data for p, data in before.items())
+
+
+def test_aggregate_error_exclusions_and_count_guard(tmp_path, frozen):
+    paths = saved_runs(tmp_path, *frozen)
+    directory = paths[0] / 'executions'
+    entry = next(e for e in b5.read_json(paths[0]/'plan.json')['executions'] if e['repeat'] == 2)
+    b5.write_json(directory / entry['id'] / 'result.json', {**entry, 'status': 'error'})
+    result = b5.aggregate(paths[:1], tmp_path / 'out')
+    assert result['excluded_questions'] == 1 and result['excluded_executions'] == 2
+    for dirs in ([], paths + paths[:1]):
+        with pytest.raises(b5.Refused, match='one_to_three'):
+            b5.aggregate(dirs, tmp_path / 'refused')
+    broken = copy.deepcopy(frozen[0])
+    broken['cases'].pop()
+    with pytest.raises(b5.Refused, match='frozen_execution_count_changed'):
+        b5.make_plan(broken, frozen[1])

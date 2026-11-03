@@ -6,11 +6,9 @@ import argparse
 
 import asyncio
 
-import copy
 
 import json
 
-import math
 
 import os
 
@@ -36,11 +34,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 
 import memory_supersede_probe as probe
 
-from app.db import get_db, init_db, reset_initialization_cache
 
-from app.services.memory import build_extraction_instruction
 
-from app.services.memory_v11.jobs import _V11_MEMORY_SYSTEM
 
 from app.services.memory_v11.recall import shared_bigram_count
 
@@ -109,7 +104,7 @@ def test_fake_all_cases_isolated_offline(fake_run):
     row = next(r for r in rows if r['id'] == 'v11-cat_name-1')
     db_path = Path(row['data_dir']) / 'worldlines/sg/memory.sqlite3'
     with sqlite3.connect(db_path) as db:
-        assert db.execute('SELECT COUNT(*) FROM stable_fact_version_embeddings').fetchone()[0] >= 21
+        assert db.execute('SELECT COUNT(*) FROM stable_fact_version_embeddings WHERE dimensions=768 AND length(vector)=3072').fetchone()[0] >= 21
         assert db.execute('SELECT COUNT(*) FROM stable_fact_versions WHERE fact_id=?', (row['t1']['id'],)).fetchone()[0] == 2
 
 @pytest.mark.asyncio
@@ -208,3 +203,96 @@ def test_fixture_sha256_matches_archive_blob():
     path = Path(__file__).parent / 'fixtures/memory_supersede_probe_v1.json'
     raw = path.read_bytes().replace(b'\r\n', b'\n')  # Git's CRLF checkout conversion only.
     assert hashlib.sha256(raw).hexdigest() == '9cac054046ddd7a7166deecaded1fe410f502d0cf82562b036ba71b9aa682aa9'
+
+
+@pytest.mark.parametrize('failures', [0, 1, 3])
+def test_probe_transport_retry_results_budget_and_continuation(tmp_path, monkeypatch, probe_paid_mock, failures):
+    install, waits = probe_paid_mock
+    monkeypatch.setenv('DEEPSEEK_API_KEY', 'offline-placeholder')
+    monkeypatch.setattr(probe, 'load_embedder', lambda plan: (probe.FakeEmbedder(), {'loaded': False, 'reason': 'fake-768'}))
+    plan = probe.make_plan(argparse.Namespace(transport='fake', base_url=probe.b5.BUILTIN_DEEPSEEK_BASE_URL,
+                                             cap_cny='1', model_dir=str(tmp_path / 'missing'), repeats=1))
+    plan['transport'] = 'real'
+    plan['executions'] = plan['executions'][:5]
+    active, sent = [], []
+    cases = {c['id']: c for c in probe.load_fixture()['cases']}
+
+    def provider(request):
+        execution = active[-1]
+        payload = json.loads(request.content)
+        sent.append(payload)
+        execution['attempts'] += 1
+        if len(active) <= failures or (failures == 0 and len(sent) == 1):
+            raise httpx.ReadTimeout('sk-' + 'x' * 30 + ' Bearer hidden-token')
+        execution['successes'] += 1
+        completion = probe.fake_completion(cases[execution['entry']['case_id']], execution['entry']['mode'],
+                                           execution['successes'], payload)
+        return httpx.Response(200, json={'choices': [{'finish_reason': 'stop', 'message': {
+            'content': json.dumps(completion, ensure_ascii=False)}}],
+            'usage': {'prompt_tokens': 100, 'completion_tokens': 10}})
+
+    install(provider)
+
+    def execute(plan, entry, directory):
+        active.append(dict(entry=entry, attempts=0, successes=0))
+        monkeypatch.setenv('AMADEUS_DATA_DIR', str(directory / 'data'))
+        result = asyncio.run(probe.product_execution(plan, entry, directory))
+        probe.b5.write_json(directory / 'result.json', result)
+        return result
+
+    monkeypatch.setattr(probe, 'execute_subprocess', execute)
+    directory = tmp_path / 'run'
+    with probe.b5.fake_network_guard():
+        rows = probe.run_suite(directory, plan)
+    assert [r['status'] for r in rows] == (['completed'] * 5 if failures == 0 else
+        ['error'] * failures + (['completed'] * 4 if failures == 1 else []))
+    first = rows[0]
+    assert first['error_type'] == 'ReadTimeout' and not first['stop_reason']
+    assert 'sk-' not in first['error_detail'] and 'hidden-token' not in first['error_detail']
+    requests = probe.b5.read_json(directory / 'executions' / first['id'] / 'requests.json')
+    assert len(requests) == (3 if failures == 0 else 2)
+    assert requests[0]['error_type'] == 'ReadTimeout'
+    assert requests[0]['request'] == requests[1]['request']
+    budget = probe.b5.Budget(directory / 'budget.json', '1')
+    charges = [a for a in budget.state['attempts'] if a['execution_id'] == first['id']]
+    expected = sum((Decimal(a['reserve_cny']) for a in charges if a['status'] == 'reserved'), Decimal(0))
+    assert expected > 0 and Decimal(first['retained_reserve_cny']) == expected
+    assert Decimal(first['cost_cny']) == expected + Decimal(first['settled_cny'])
+    assert waits == [5] * max(1, failures)
+    assert len(active) == (3 if failures == 3 else 5)
+
+
+@pytest.mark.parametrize('category,changed,new_value,expected', [
+    ('keep', False, False, 'pass'), ('keep', True, True, 'wrongly_replaced'),
+    ('supersede', True, True, 'pass'), ('supersede', False, True, 'duplicate'),
+    ('supersede', False, False, 'missed'), ('stop', True, False, 'needs_manual'),
+    ('stop', False, False, 'missed')])
+def test_v11_classification_tracks_ids_and_versions(category, changed, new_value, expected):
+    case = dict(category=category, old_aliases=['旧值'], new_aliases=['新值'])
+    old = dict(id='fact', version=1, active=True, text='旧值')
+    after = [dict(old, active=not changed)]
+    if new_value:
+        after.append(dict(id='new', version=1, active=True, text='新值'))
+    assert probe.classify(case, 'v11', [old], after, old)['status'] == expected
+    assert probe.classify(case, 'v11', [], after, None)['status'] == 'setup_failed'
+
+
+@pytest.mark.parametrize('count', [1, 2, 3])
+def test_probe_aggregate_manual_counts_and_no_comparison_gate(tmp_path, fake_run, count):
+    source, rows, _ = fake_run
+    paths = []
+    for i in range(count):
+        path = tmp_path / str(i)
+        probe.b5.write_json(path/'results.json', rows)
+        paths.append(path)
+    before = {p: p.read_bytes() for d in paths for p in d.rglob('*') if p.is_file()}
+    pending = next(row for row in rows if row['score']['status'] == 'needs_manual')
+    manual = tmp_path/'manual.json'
+    probe.b5.write_json(manual, [dict(run_dir=p.name, execution_id=pending['id'], judgment='pass') for p in paths])
+    result = probe.aggregate(paths, tmp_path/'out', manual)
+    assert set(result['rates']) == {'v11'} and 'investigate' not in result
+    assert result['manual_overrides'] == count
+    assert result['rates']['v11']['stop']['mean'] == .5
+    assert all(p.read_bytes() == data for p, data in before.items())
+    with pytest.raises(probe.b5.Refused, match='one_to_three'):
+        probe.aggregate(paths*4, tmp_path/'refused')
