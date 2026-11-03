@@ -98,4 +98,14 @@ describe('MemoryReading', () => {
     expect(facts).toHaveTextContent(`认知${chart.counts.facts}片段${chart.counts.experiences}主题${chart.counts.topics}最近变更`);
     expect(screen.queryByText(/诊断|节点|预算|展开核心|阅读起点/)).toBeNull();
   });
+
+  it('counts a topic as new in the month it was created, not the month of its first record', () => {
+    const later = { ...chart, topics: chart.topics.map((t) => (t.id === 't4' ? { ...t, created_at: '2026-10-20T12:00:00Z' } : t)) };
+    const moved = buildChartModel(later, { today: Date.parse('2026-11-02T14:10:00Z'), lastOpen: null });
+    reading({ chart: later, model: moved, selection: { kind: 'month', key: '2026-09' } });
+    expect(screen.getByTestId('reading-month-summary')).not.toHaveTextContent('家里的猫');
+    cleanup();
+    reading({ chart: later, model: moved, selection: { kind: 'month', key: '2026-10' } });
+    expect(screen.getByTestId('reading-month-summary')).toHaveTextContent('家里的猫');
+  });
 });

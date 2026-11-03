@@ -165,7 +165,7 @@ export function MemoryReading(props: MemoryReadingProps) {
     const [y, m] = selection.key.split('-').map(Number);
     const inMonth = (at: number) => { const d = new Date(at); return d.getFullYear() === y && d.getMonth() + 1 === m; };
     const stars = model.stars.filter((s) => inMonth(s.createdAt));
-    const fresh = model.topics.filter((t) => t.starIds.length && inMonth(model.byId.get(t.starIds[0])!.createdAt));
+    const fresh = model.topics.filter((t) => t.starIds.length && inMonth(t.createdAt));
     content = (
       <>
         <p className="r-kick" data-testid="reading-kick">{y}.{String(m).padStart(2, '0')}</p>
