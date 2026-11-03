@@ -1,5 +1,13 @@
 ﻿import { wsUrl, wsProtocols } from '../apiBase';
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
+import {
+  attachRecorded,
+  attachReferences,
+  parseMemoryRecorded,
+  parseMemoryReferenced,
+  type MemoryChange,
+  type MemoryRefs,
+} from '../memory-space/chatMarkers';
 
 /** Client-only selection intent. requestEpoch is never sent over the wire. */
 export interface PendingConversationTarget {
@@ -86,6 +94,10 @@ export interface Message {
   systemError?: boolean;
   /** Local failed-entry notice: keep it visible after rolling back to another provider. */
   conversationEntryError?: boolean;
+  /** memory.referenced for this assistant turn. In memory only: history reloads do not bring it back. */
+  memoryRefs?: MemoryRefs;
+  /** memory.recorded from this user line, merged by record id. In memory only. */
+  memoryRecorded?: MemoryChange[];
 }
 
 export const RECONNECT_ATTEMPTS = 5;
@@ -685,6 +697,28 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
               };
             }));
             break;
+
+          case 'memory.referenced': {
+            const parsed = parseMemoryReferenced(msg);
+            if (
+              !parsed
+              || parsed.conversationId !== activeConversationIdRef.current
+              || parsed.turnId !== activeTurnIdRef.current
+              || parsed.generation !== activeGenerationRef.current
+            ) break;
+            const refs: MemoryRefs = { items: parsed.items, at: Date.now() };
+            setMessages((prev) => attachReferences(prev, parsed.turnId, refs));
+            break;
+          }
+
+          case 'memory.recorded': {
+            // Arrives seconds after turn.completed, so only the conversation is checked here;
+            // a turn id that is no longer on screen finds no line and is dropped.
+            const parsed = parseMemoryRecorded(msg);
+            if (!parsed || parsed.conversationId !== activeConversationIdRef.current) break;
+            setMessages((prev) => attachRecorded(prev, parsed.turnId, parsed.changes));
+            break;
+          }
 
           case 'turn.completed':
             if (
