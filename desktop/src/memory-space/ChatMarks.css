@@ -9,7 +9,7 @@
 .ws2 .ws2-mm i { width: 6px; height: 6px; flex: none; background: var(--ws-accent-2); }
 .ws2 .ws2-mm-ref i { background: var(--ws-accent); }
 .ws2 .ws2-mm:hover { color: var(--ws-ink); }
-.ws2-mm-list { min-width: 280px; max-width: 520px; border: 1px solid var(--ws-line-2); background: rgba(0, 0, 0, .28); }
+.ws2-mm-list { min-width: 280px; max-width: 520px; border: 1px solid var(--ws-line-2); background: var(--ws-panel); }
 .ws2-mm-list ul { margin: 0; padding: 4px 0; list-style: none; }
 .ws2-mm-list li { display: flex; align-items: baseline; gap: 10px; padding: 4px 12px; font-size: 12.5px; line-height: 1.5; color: var(--ws-ink-2); }
 .ws2-mm-list .kind { flex: none; font-size: 10.5px; letter-spacing: .14em; color: var(--ws-ink-3); }
