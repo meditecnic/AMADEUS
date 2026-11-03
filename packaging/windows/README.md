@@ -156,6 +156,12 @@ $env:AMADEUS_LOCAL_API_TOKEN = 'self-check-only'
 就绪时 stdout 输出一行 `AMADEUS_BACKEND_READY {"version": 1, "port": <实际端口>, "pid": <后端进程 PID>}`，不带令牌。
 `AMADEUS_PARENT_PID` 设置后看护对应进程，stdin EOF 也会请求 uvicorn 正常关闭。
 桌面宿主需要在后端存活期间保持 stdin 管道打开。stdout/stderr 使用 UTF-8。
+安装版的数据默认放在 `%LOCALAPPDATA%\com.amadeus.desktop\data`，可设置用户环境变量
+`AMADEUS_DATA_DIR` 后重启应用以更换位置。NSIS 卸载默认保留数据；勾选删除应用数据时会删除
+默认标识对应的数据目录。源码运行和后端可执行文件单独运行都必须显式设置非空的
+`AMADEUS_DATA_DIR`；服务和 `--self-check` 缺少它时只向 stderr 输出一行说明并非零退出，
+不创建数据目录。上面的自检命令和 `smoke_frozen.py` 已设置隔离目录。
+
 入口清除测试兼容变量 `AMADEUS_DB_PATH`，使数据库继续受 `AMADEUS_DATA_DIR` 管理；
 语音、素材相关用户配置（`SOVITS_SIDECAR_COMMAND`、`AMADEUS_ASSET_PACK_DIR`、
 `SENSEVOICE_*`、`AMADEUS_VAD_MODEL`、`AMADEUS_REF_*`）继续继承。

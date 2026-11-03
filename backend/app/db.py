@@ -8,7 +8,6 @@ import logging
 import os
 import shutil
 import sqlite3
-import sys
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -65,16 +64,11 @@ def normalize_identity_mode(value: str | None) -> str:
 
 
 def get_data_root() -> Path:
-    """Require an explicit source-run root; only frozen builds use user defaults."""
+    """Require an explicit data root for source and frozen runs alike."""
     override = os.environ.get("AMADEUS_DATA_DIR")
     if override and override.strip():
         return Path(override).expanduser().resolve()
-    if not getattr(sys, "frozen", False):
-        raise RuntimeError("AMADEUS_DATA_DIR required (non-frozen)")
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        return (Path(appdata) / "Amadeus").resolve()
-    return (Path.home() / ".amadeus").resolve()
+    raise RuntimeError("AMADEUS_DATA_DIR required; set it to an explicit data directory")
 
 
 def default_conversation_id(session_id: str, worldline: str) -> str:
