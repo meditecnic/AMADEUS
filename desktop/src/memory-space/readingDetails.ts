@@ -1,5 +1,5 @@
 import { apiFetch } from '../apiBase';
-import type { IdentityMode, MemoryProjection, Worldline } from './types';
+import type { IdentityMode, Worldline } from './types';
 
 // P1R-3 reading / verification seam (contract 45e2ec6).
 // Field authority (§5.2): this module renders ONLY payload-owned content
@@ -394,23 +394,6 @@ export type TopicAttribution =
   | { kind: 'ungrouped' }
   | { kind: 'unavailable-in-projection'; topicId: string };
 
-export type FactRef = { projectionId: string; topicId: string | null };
-
-export function topicAttributionForFact(fact: FactRef, envelope: MemoryProjection): TopicAttribution {
-  if (fact.topicId === null) return { kind: 'ungrouped' };
-  const target = `topic:${fact.topicId}`;
-  const hasEdge = envelope.edges.some(
-    (edge) => edge.kind === 'has_topic' && edge.from === fact.projectionId && edge.to === target,
-  );
-  const topicNode = envelope.nodes.find(
-    (node) => node.kind === 'topic' && node.topic_id === fact.topicId,
-  );
-  if (hasEdge && topicNode && topicNode.kind === 'topic') {
-    return { kind: 'grouped', label: topicNode.label };
-  }
-  return { kind: 'unavailable-in-projection', topicId: fact.topicId };
-}
-
 // S4-ARCHIVE Gate 2: Archive reads the Topics seam directly (hard invariant 2
 // — never the bounded projection). Attribution is label-owned by the backend
 // topics list; an unknown topic id stays honestly unavailable.
@@ -598,17 +581,6 @@ function uniqueStrings(values: Array<string | null | undefined>): string[] {
     if (value) seen.add(value);
   }
   return [...seen];
-}
-
-export function deriveFactReading(
-  payload: FactDetailsPayload,
-  envelope: MemoryProjection,
-  fact: FactRef,
-): FactReadingModel {
-  return {
-    ...factReadingCore(payload),
-    topicAttribution: topicAttributionForFact(fact, envelope),
-  };
 }
 
 export function deriveExperienceReading(payload: ExperienceDetailsPayload): ExperienceReadingModel {

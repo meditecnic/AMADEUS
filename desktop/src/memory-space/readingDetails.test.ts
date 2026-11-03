@@ -5,15 +5,14 @@ import {
   CORRECTION_NOTICE,
   createDetailsController,
   deriveExperienceReading,
-  deriveFactReading,
+  deriveFactReadingArchive,
   fetchDetails,
   formatTimeHuman,
-  topicAttributionForFact,
+  topicAttributionFromTopics,
   type DetailsRequest,
   type ExperienceDetailsPayload,
   type FactDetailsPayload,
 } from './readingDetails';
-import type { MemoryProjection } from './types';
 
 const scope = { sessionId: 's', worldline: 'steins_gate' as const, identityMode: 'okabe' as const };
 const betaScope = { sessionId: 's', worldline: 'beta' as const, identityMode: 'okabe' as const };
@@ -100,32 +99,7 @@ function experiencePayload(overrides: Partial<ExperienceDetailsPayload> = {}): E
   };
 }
 
-function envelope(): MemoryProjection {
-  return {
-    scope: { session_id: 's', worldline: 'steins_gate', identity_mode: 'okabe' },
-    view: 'overview',
-    projection_version: 'memory-projection-v1',
-    generated_at: '2026-08-14T00:00:00Z',
-    criteria: { query: null, kinds: [], topic_id: null, pinned_only: false, updated_from: null, updated_to: null },
-    center: { kind: 'continuity_hub', projection_id: 'hub', label_primary: 'AMADEUS', label_secondary: 'SOUL' },
-    composition: { active_facts: 1, active_experiences: 0, eligible_topics: 1, latest_memory_change_at: null, person_anchors_supported: false },
-    budgets: { nodes: 64, edges: 128, hard_max_nodes: 160, hard_max_edges: 320 },
-    eligible: { nodes: 3, edges: 2, records: 1, results: 1 },
-    shown: { nodes: 3, edges: 2, records: 1, results: 1 },
-    truncated: { nodes: false, edges: false, records: false, results: false },
-    empty: false,
-    result_ids: ['fact:f1'],
-    nodes: [
-      { kind: 'continuity_hub', projection_id: 'hub', label_primary: 'AMADEUS', label_secondary: 'SOUL' },
-      { kind: 'topic', projection_id: 'topic:t1', topic_id: 't1', label: '咖啡', fact_count: 1, experience_count: 0 },
-      { kind: 'fact', projection_id: 'fact:f1', fact_id: 'f1', label: '喜欢黑咖啡', is_pinned: false, updated_at: '2026-08-14T00:00:00Z', topic_id: 't1' },
-    ],
-    edges: [
-      { kind: 'hub_to_anchor', from: 'hub', to: 'topic:t1' },
-      { kind: 'has_topic', from: 'fact:f1', to: 'topic:t1' },
-    ],
-  };
-}
+const TOPICS = [{ topicId: 't1', displayLabel: '咖啡' }];
 
 function okResponse(body: unknown) {
   return { ok: true, status: 200, json: async () => body } as unknown as Response;
@@ -360,26 +334,23 @@ describe('createDetailsController', () => {
   });
 });
 
-describe('topicAttributionForFact', () => {
-  it('uses the canonical envelope Topic label when the has_topic edge is present', () => {
-    const attribution = topicAttributionForFact({ projectionId: 'fact:f1', topicId: 't1' }, envelope());
-    expect(attribution).toEqual({ kind: 'grouped', label: '咖啡' });
+describe('topicAttributionFromTopics', () => {
+  it('uses the backend Topic label when the topic is listed', () => {
+    expect(topicAttributionFromTopics('t1', TOPICS)).toEqual({ kind: 'grouped', label: '咖啡' });
   });
 
   it('says ungrouped only when topic_id is null', () => {
-    const attribution = topicAttributionForFact({ projectionId: 'fact:f1', topicId: null }, envelope());
-    expect(attribution).toEqual({ kind: 'ungrouped' });
+    expect(topicAttributionFromTopics(null, TOPICS)).toEqual({ kind: 'ungrouped' });
   });
 
-  it('marks out-of-envelope topic ids honestly instead of calling them ungrouped', () => {
-    const attribution = topicAttributionForFact({ projectionId: 'fact:f1', topicId: 't-missing' }, envelope());
-    expect(attribution).toEqual({ kind: 'unavailable-in-projection', topicId: 't-missing' });
+  it('marks unknown topic ids honestly instead of calling them ungrouped', () => {
+    expect(topicAttributionFromTopics('t-missing', TOPICS)).toEqual({ kind: 'unavailable-in-projection', topicId: 't-missing' });
   });
 });
 
-describe('deriveFactReading', () => {
+describe('deriveFactReadingArchive', () => {
   it('renders active content once and groups provenance by version', () => {
-    const model = deriveFactReading(factPayload(), envelope(), { projectionId: 'fact:f1', topicId: 't1' });
+    const model = deriveFactReadingArchive(factPayload(), TOPICS);
     expect(model.primaryText).toBe('喜欢黑咖啡');
     expect(model.topicAttribution).toEqual({ kind: 'grouped', label: '咖啡' });
     expect(model.versionCount).toBe(2);
@@ -409,7 +380,7 @@ describe('deriveFactReading', () => {
         },
       ],
     });
-    const model = deriveFactReading(payload, envelope(), { projectionId: 'fact:f1', topicId: 't1' });
+    const model = deriveFactReadingArchive(payload, TOPICS);
     expect(model.activeSources[0].sourceErased).toBe(true);
     expect(model.activeSources[0].excerpt).toBeNull();
     const flat = JSON.stringify(model);
@@ -420,14 +391,14 @@ describe('deriveFactReading', () => {
   it('never surfaces confidence anywhere, diagnostics included', () => {
     // The frozen backend payload carries confidence; the reading model must drop it.
     const payload = { ...factPayload(), versions: factPayload().versions.map((version) => ({ ...version, confidence: 0.9 })) };
-    const model = deriveFactReading(payload as unknown as FactDetailsPayload, envelope(), { projectionId: 'fact:f1', topicId: 't1' });
+    const model = deriveFactReadingArchive(payload as unknown as FactDetailsPayload, TOPICS);
     const flat = JSON.stringify(model);
     expect(flat).not.toContain('confidence');
     expect(flat).not.toContain('0.9');
   });
 
   it('keeps raw identifiers only in diagnostics and ships the read-only correction notice', () => {
-    const model = deriveFactReading(factPayload(), envelope(), { projectionId: 'fact:f1', topicId: 't1' });
+    const model = deriveFactReadingArchive(factPayload(), TOPICS);
     expect(model.diagnostics.factId).toBe('f1');
     expect(model.diagnostics.observationIds).toEqual(['o1', 'o2']);
     expect(model.diagnostics.sourceMessageIds).toEqual([11, 42]);

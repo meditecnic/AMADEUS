@@ -180,7 +180,7 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
             aria-controls="archive-panel-fact"
             onClick={() => module.dispatch({ type: 'set-kind', kind: 'fact' })}
           >
-            事实（{state.facts.total}）
+            认知（{state.facts.total}）
           </button>
           <button
             type="button"
@@ -191,7 +191,7 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
             aria-controls="archive-panel-experience"
             onClick={() => module.dispatch({ type: 'set-kind', kind: 'experience' })}
           >
-            经历（{state.experiences.total}）
+            片段（{state.experiences.total}）
           </button>
         </div>
         <label className="archive-search">
@@ -307,13 +307,13 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
               role="tabpanel"
               id="archive-panel-fact"
               aria-labelledby="archive-tab-fact"
-              aria-label="事实档案"
+              aria-label="认知档案"
               data-testid="archive-facts-section"
             >
-              <h3>事实</h3>
-              {state.facts.status === 'loading' ? <p>正在读取事实…</p> : null}
+              <h3>认知</h3>
+              {state.facts.status === 'loading' ? <p>正在读取认知…</p> : null}
               {state.facts.status === 'failed' ? (
-                <p role="alert">事实列表暂时不可用。</p>
+                <p role="alert">认知列表暂时不可用。</p>
               ) : null}
               <ul>
                 {state.facts.rows.map((row) => (
@@ -331,7 +331,7 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
                         module.dispatch({ type: 'select', kind: 'fact', recordId: row.factId })
                       }
                     >
-                      <span className="archive-row-kind">事实</span>
+                      <span className="archive-row-kind">认知</span>
                       <span className="archive-row-text">{row.displayText}</span>
                       {row.isPinned ? <span className="archive-row-marker">置顶</span> : null}
                       {row.updatedAt ? (
@@ -342,7 +342,7 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
                 ))}
               </ul>
               {state.facts.status === 'ready' && !state.facts.rows.length ? (
-                <p data-testid="archive-facts-empty">此范围内没有可显示的事实。</p>
+                <p data-testid="archive-facts-empty">此范围内没有可显示的认知。</p>
               ) : null}
               <div className="archive-pager">
                 <span data-testid="archive-facts-total">共 {state.facts.total} 条</span>
@@ -377,13 +377,13 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
               role="tabpanel"
               id="archive-panel-experience"
               aria-labelledby="archive-tab-experience"
-              aria-label="经历档案"
+              aria-label="片段档案"
               data-testid="archive-experiences-section"
             >
-              <h3>经历</h3>
-              {state.experiences.status === 'loading' ? <p>正在读取经历…</p> : null}
+              <h3>片段</h3>
+              {state.experiences.status === 'loading' ? <p>正在读取片段…</p> : null}
               {state.experiences.status === 'failed' ? (
-                <p role="alert">经历列表暂时不可用。</p>
+                <p role="alert">片段列表暂时不可用。</p>
               ) : null}
               <ul>
                 {state.experiences.rows.map((row) => (
@@ -406,7 +406,7 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
                         })
                       }
                     >
-                      <span className="archive-row-kind">经历</span>
+                      <span className="archive-row-kind">片段</span>
                       <span className="archive-row-text">{row.displayText}</span>
                       {row.isPinned ? <span className="archive-row-marker">置顶</span> : null}
                       {row.isExpired ? <span className="archive-row-marker">已过期</span> : null}
@@ -415,7 +415,7 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
                 ))}
               </ul>
               {state.experiences.status === 'ready' && !state.experiences.rows.length ? (
-                <p data-testid="archive-experiences-empty">此范围内没有可显示的经历。</p>
+                <p data-testid="archive-experiences-empty">此范围内没有可显示的片段。</p>
               ) : null}
               <div className="archive-pager">
                 <span data-testid="archive-experiences-total">共 {state.experiences.total} 条</span>
@@ -462,7 +462,7 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
               <div className="archive-detail-empty">
                 <span className="archive-empty-caption" aria-hidden="true">记忆 / 读取区</span>
                 <p>{activeList.status === 'loading' ? '正在读取记忆' : activeList.status === 'failed' ? '记忆暂时不可用' : activeList.total === 0 ? filtered ? '没有符合条件的记忆' : '这里还没有记忆' : '选择一条记忆，展开它的来处'}</p>
-                <span>{activeList.status === 'failed' ? '目录读取失败，请稍后重试。' : filtered ? '可以调整搜索内容或筛选范围。' : '事实、经历与来源，会在这里连成线索。'}</span>
+                <span>{activeList.status === 'failed' ? '目录读取失败，请稍后重试。' : filtered ? '可以调整搜索内容或筛选范围。' : '认知、片段与来源，会在这里连成线索。'}</span>
               </div>
             ) : null}
             {state.details.status === 'loading' ? <p>正在读取记录…</p> : null}
@@ -477,7 +477,7 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
                 initial={reducedMotion ? false : { opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: reducedMotion ? 0 : 0.3 }}>
                 <p className="archive-detail-kind">
-                  {readingModel.kind === 'fact' ? '事实' : '经历'}
+                  {readingModel.kind === 'fact' ? '认知' : '片段'}
                   {effectiveScope ? ` · ${scopeLabel(effectiveScope)}` : ''}
                 </p>
                 {!selectedFactRow && !selectedExperienceRow ? (
@@ -526,7 +526,7 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
                     type="button"
                     data-testid="archive-toggle-pin"
                     disabled={state.selection?.kind === 'experience' && !selectedExperienceRow}
-                    title={state.selection?.kind === 'experience' && !selectedExperienceRow ? '需要在列表中确认这条经历的置顶状态' : undefined}
+                    title={state.selection?.kind === 'experience' && !selectedExperienceRow ? '需要在列表中确认这条片段的置顶状态' : undefined}
                     onClick={() => {
                       if (!state.selection) return;
                       module.dispatch({
@@ -611,7 +611,7 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
                 {state.deleteFlow.status === 'confirming' ? (
                   <>
                     <p>
-                      确认删除这条{state.deleteFlow.kind === 'fact' ? '事实' : '经历'}？
+                      确认删除这条{state.deleteFlow.kind === 'fact' ? '认知' : '片段'}？
                     </p>
                     <p>「{state.deleteFlow.summary}」</p>
                     <p>范围：{state.deleteFlow.scopeLabel}</p>

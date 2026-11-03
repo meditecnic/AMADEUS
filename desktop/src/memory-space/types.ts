@@ -111,14 +111,3 @@ export type MemoryProjection = {
   nodes: ProjectionNode[];
   edges: ProjectionEdge[];
 };
-
-export type Point3 = { x: number; y: number; z: number };
-
-export type DisplayNode = {
-  id: string;
-  kind: ProjectionNode['kind'];
-  label: string;
-  radius: number;
-  position: Point3;
-  node: ProjectionNode;
-};

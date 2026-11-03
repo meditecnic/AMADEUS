@@ -1,544 +1,197 @@
 # Memory Space Design System
 
-> Status: **DRAFT / production direction, not visual acceptance**
-> Updated: 2026-08-28
-> Scope: `desktop/src/memory-space/` Constellation, Index, reading surfaces,
-> Archive, and their SG / β visual states.
+> Status: **production direction, not visual acceptance**
+> Updated: 2026-11-03
+> Scope: `desktop/src/memory-space/`: the chart (light cone and its plate),
+> Archive, reading surfaces, and their SG / β states.
 
-This file translates the accepted Memory visual direction into production design
-rules. It is not permission to copy prototype code, change backend semantics, or
-claim the visual gate passed.
+This file is the short production summary of the Memory direction. **Details are
+owned by `amadeus-ops/handoff/memory-space-step1-20261102/DIRECTION.md`** (round
+two, sections 13–21, override round one where they conflict) and its locked copy
+table `COPY-TABLE.md`. When this file and DIRECTION disagree, DIRECTION wins and
+this file is the one to fix.
 
 ## 0. Authority and reading order
 
-Read these sources in order before changing Memory UI:
-
-1. Product semantics, scope, privacy, projection, and Archive governance remain
-   owned by the frozen Memory contracts and backend schemas.
-2. `docs/adr/0008-soul-is-identity-formation.md` owns the post-contract identity
-   model: record taxonomy and SOUL identity formation are orthogonal.
-3. The latest user decisions recorded in
-   `docs/superpowers/plans/memory-v11-frontend-visual-grill.md` own the visual
-   direction when an older visual technique conflicts.
+1. Product semantics, scope, privacy and Archive governance stay owned by the
+   frozen Memory contracts and backend schemas. Nothing here renames an API.
+2. `docs/adr/0008-soul-is-identity-formation.md` owns the identity model: record
+   taxonomy and SOUL identity formation are orthogonal.
+3. `DIRECTION.md` (above) owns layout, encoding, states, motion and copy.
 4. `docs/amadeus-ui-design-system.md` owns Workstation chrome, global tokens,
-   fonts, focus language, and single-dark-product identity.
-5. This file owns Memory-specific composition, material roles, hierarchy,
-   motion character, and visual acceptance gates.
-6. The throwaway `agent/memory-visual-prototype` branch is evidence of the design
-   discussion. Its code and exact geometry are not production specifications.
+   fonts and focus language.
+5. This file owns the Memory-specific summary and the acceptance gates.
 
-Explicitly superseded visual techniques include the retired 2D star-map clone,
-blank-left-click return, fixed SOUL-target camera framing, and perpetual absolute
-stillness. This does not reopen API, projection, admission, privacy, or lifecycle
-contracts.
+The WebGL glass orrery (`ConstellationStage`, `orreryRenderer`, overview motion,
+cognition materials, filaments) is retired and deleted. Its "3D unavailable, switched
+to the full list" fallback is gone with it. `three` stays as a dependency for the
+light cone; `renderCapability.ts` stays as the base for the fallback rules.
 
 ## 1. Product thesis
 
-Memory has three complementary jobs:
+> Everything she remembers hangs below "today", forming a light cone: the lower,
+> the earlier; the apex is the day of your first conversation. Seen from straight
+> above, it is the plate.
 
-- **Constellation** gives orientation, serendipity, atmosphere, and a felt sense
-  of one coherent memory body.
-- **Index** is the fast, semantic, keyboard-complete route for daily location.
-- **Archive** is the complete reading, verification, correction, and governance
-  workspace.
-- **SOUL** expresses how Amadeus continuity is formed from Origin authority,
-  autobiographical Experience, and supported self-understanding. It is not a
-  second record taxonomy.
+- **Chart (星图)** answers "she remembers me" and "how she remembers". Every star
+  opens its source first (your own words and the date), then what she wrote down.
+- **Archive (档案)** is where you see, find and change things. Every star links to
+  its Archive row; every row links back to its place on the chart.
+- **SOUL** is her continuity: the centre of the plate, the apex of the cone. It is
+  never a camera target and never connected to stars by lines.
 
-Constellation must never become the only usable route. Index must never look like
-a degraded fallback. Archive must never look like a generic administration
-dashboard.
+The chart has two renderings of **one** coordinate system:
 
-The first five seconds of Constellation should read as:
+| Rendering | Role |
+|---|---|
+| Light cone (WebGL 3D, `three`) | Main line. Plate on top is today; memories hang below at their dates |
+| Plate (SVG/DOM) | The cone seen from straight above, and the fallback when 3D cannot run (DIRECTION §16) |
 
-> one Amadeus memory body, with SOUL as continuity and Topics as regions of
-> attention—not a solar system, node editor, atom diagram, or particle demo.
+Switching between them interpolates the same points; selection, focused topic and
+the reading surface do not move. The plate is not a lesser view: it carries every
+meaning except look-back (回看), which only the cone has.
 
-Atmosphere calibration:
+## 2. Shell
 
-| Axis | Target | Meaning |
-|---|---:|---|
-| Density | 5 / 10 | Quiet Overview; denser only after deliberate focus |
-| Variance | 6 / 10 | Asymmetric and composed, never random or chaotic |
-| Motion | 5 / 10 | Cinematic recall, restrained ambient life |
-| Instrumentality | 4 / 10 | Precise enough to trust, not a cockpit HUD |
-| Emotional warmth | 5 / 10 | Amadeus memory, not a sterile graph database |
+- The Workstation header stays. The 记忆 key shows a pressed state (accent hairline
+  below, small `ESC` beside it). The three-column area is replaced by a sheet under
+  the header; the Workstation stays mounted so the conversation is untouched.
+- Sheet: frame with zone numbers on all four edges (1–8 / A–F, same as login);
+  top left 回到对话 / 回退, tabs 星图 CHART｜档案 INDEX, breadcrumbs (总览 / 主题 /
+  No.xxx); top right title block `PLATE`, `SCOPE`, `SINCE`, `STARS` (认知 + 片段),
+  `DATE`, all from real readings. SCOPE switches what you are browsing, never the
+  conversation.
+- Leave: `Esc` and right-click unwind one layer (record → topic/month → overview →
+  back to the conversation); 回到对话; or press 记忆 again. Leaving only fades the
+  sheet (≤150ms). No iris mask over the header.
+- `/` jumps to the Archive search.
+- States: loading, empty (no memory), new user (a few facts, each labelled, no
+  invented topics), unavailable, error, truncated. Copy is in COPY-TABLE.
 
-## 2. Chosen visual grammar
-
-The production direction is **A-led A+C**, with only the useful behavioural idea
-from B:
-
-- **A / optical body is dominant.** It owns Overview, visual hierarchy, SOUL,
-  spatial Topics, and the calm full-scene silhouette.
-- **C / strata supplies depth after focus.** Layers become visible only when a
-  Topic or record is recalled. They must not turn Overview into concentric-ring
-  wallpaper.
-- **B / living field survives as behaviour, not required form.** Sparse particles,
-  material depth, or light may breathe or condense toward attention when they
-  improve comfort. No particle field is mandatory. Large membranes, organic
-  lobes, green tissue, cell walls, organ silhouettes, and biological wetness are
-  banned.
-
-The throwaway D prototype validates only this relationship. Its card geometry,
-spacing, typography, fake data, and CSS effects are not approved.
-
-### 2.1 Progressive Memory Body
-
-Overview is a coherent porous body. Not every database row is a permanent sphere.
-
-1. **Overview:** SOUL, visible Topics, bounded representative matter, and sparse
-   truthful continuity structure.
-2. **Topic focus:** the selected Topic condenses into the visual weight; its
-   governed representative cognition and fragments become readable.
-3. **Record focus:** the selected cognition or fragment becomes the immediate
-   focal body; Topic remains softened local context and SOUL remains distant
-   continuity context.
-4. **Unwind:** record → Topic → Overview. Right-click, Back, and Escape share the
-   semantic stack while respecting transient Index/tools/Inspector layers.
-
-This is progressive disclosure, not frontend rematching. It must consume the
-canonical projection and its typed edges.
-
-### 2.2 Vocabulary
+## 3. Vocabulary
 
 | Domain | Product label | Rule |
 |---|---|---|
-| Topic | 主题 | Stable grouping and spatial region |
-| Fact | 认知 | A durable proposition; not called “事实” in ordinary UI |
-| Experience | 片段 | A situated memory fragment; not called “经历” in ordinary UI |
-| LIST | 索引 | Daily semantic navigation; never “兼容视图” |
-| Observation | 观测 | Candidate/governance item in Archive |
+| Topic | 主题 | Stable bearing on the chart |
+| Fact | 认知 | Not called “事实” in user-facing UI |
+| Experience | 片段 | Not called “经历” in user-facing UI |
+| Ungrouped fact | 未归组 | Never given an invented topic |
+| Observation | 观测 / 待处理 | Archive only |
 
-Backend/API/type names remain unchanged. Product labels do not authorize schema
-renames.
+Backend, API and type names keep their names (`fact`, `experience`).
 
-## 3. Composition
+## 4. Coordinates
 
-### 3.1 Constellation Overview
+Implemented once in `chartCoordinates.ts` (pure functions, shared by the plate and
+the cone). Positions depend only on dates, ids and topic order, so the same memory
+is always in the same place.
 
-- Full-bleed scene inside the Memory shell; no giant enclosing card.
-- The memory body occupies roughly 62–72% of the viewport short edge, with
-  meaningful dark space inside and around it.
-- SOUL is recognisable and centreable, but the overall composition may be
-  optically offset. Mathematical centring is not required.
-- Topics occupy a shallow 3D shell with perceptible near/mid/far depth. They do
-  not form a flat equatorial disk or evenly spaced wheel.
-- Overview shows no permanent reading rail. Chrome remains quiet until intent.
-- Only semantic lines are drawn. Decorative field curves cannot resemble edges,
-  arrows, ownership, causality, or typed relationships.
-- Ungrouped evidence is not hung beside SOUL as an invented peer and is not given
-  a fabricated Topic. It remains reachable through Index and Archive.
+| Quantity | Rule |
+|---|---|
+| Origin | SOUL; the first conversation in this scope (`origin_at`, else the earliest record) |
+| θ, distance from SOUL | `θ = 9 + 6.2 × √(days since origin)`: each day covers the same area. On the cone, θ is also the height |
+| Plate scale | `max(θ_today, θ at 42 days)` maps to 96% of the plate radius; a young chart is drawn at six weeks |
+| φ, bearing | Topics in creation order: `φ = −28° + index × 137.508°`; adding a topic never moves older ones. Records scatter ±26px around their topic (at most ±24°) by id hash |
+| Spacing | A star closer than 4.6 θ to an earlier one moves only around its ring; its date never moves and earlier stars never move |
+| Ungrouped facts, fragments | In the widest three gaps between topics that existed when they were written |
+| Lines | Only within one topic, in the order written. No lines between topics or to SOUL |
+| Size | Fact `1.9 + 0.55 × min(4, times you mentioned it)` px; ungrouped 2.2; fragment hollow 3.4; pinned adds a ring at r + 3.4 |
+| New | Written after this device's last open of this scope: pen cross plus `新 · MM/DD` in her colour |
+| Month rings | One per month start; labels along the time ruler in the widest empty wedge; the ring too close to today is skipped |
+| Zone | The frame cell (A–F × 1–8) a star falls in on the overview; shown in the reading surface |
 
-Thumbnail gate: at 64px, the still must read as **SOUL inside one memory body with
-several islands**, never **sun with orbiting planets**.
+## 5. Materials
 
-### 3.2 Topic focus
+Geometry, layout and copy are identical across worldlines; only materials change.
 
-- The selected Topic becomes the visual weight, not necessarily screen centre.
-- Camera motion uses an interruptible arc and dolly around the selected pivot.
-  A pure screen-space truck with unchanged angle is a failure.
-- The Topic must grow into a legible apparent-size band; centring a tiny sphere is
-  not sufficient.
-- SOUL remains visible as softened distant context unless truthful safe-area
-  composition makes that impossible.
-- C-style strata appear around or through the selected Topic to communicate
-  recursive depth. Use at most 2–4 meaningful layers; do not display decorative
-  rings with no semantic reading.
-- Representative cognition and fragments condense from the current live geometry.
-  Edges, hit regions, anchors, and visible nodes share that geometry.
-
-### 3.3 Record focus
-
-- The selected cognition or fragment is the first visual read.
-- Its parent Topic remains visible but cannot occlude it or dominate apparent size.
-- SOUL is background continuity, not the camera target.
-- Background matter recedes through softness, frequency, depth, and contrast. It
-  must not collapse to black.
-- The selected object remains pickable at its visible boundary after motion
-  settles. Click geometry follows projected visual size and depth.
-
-### 3.4 Reading surface
-
-Wide 3D uses one calm scene-related reading surface beside the focal composition.
-It is spatially related but remains readable and accessible DOM—not a WebGL text
-mesh and not a fixed dashboard sidebar.
-
-- Chinese verified content is primary.
-- Topic/record title appears once.
-- One concise summary or current evidence layer appears before diagnostics.
-- Version, source, human time, expiry, and verification state follow P1R-3 rules.
-- Raw identifiers and ISO timestamps remain folded in diagnostics.
-- Switching between records reuses one stable container. Content transitions in
-  approximately 320–420ms with no mount/unmount jump, size snap, or double card.
-- On narrow layouts, the reading surface becomes the single active DOM pane; it
-  never overlaps the Index or forces unreadable 3D behind it.
-
-## 4. SOUL identity formation
-
-SOUL represents continuity being formed, not an empty logo ball, three databases
-inside a sphere, or a fabricated model of Amadeus's inner life.
-
-### 4.1 Closed form
-
-- Form: one sealed optical body with a restrained visible core and incomplete
-  structural cuts. No large text pasted on the sphere.
-- The closed body may imply latent depth but must not display three labelled
-  chambers, equal rings, or decorative strata that look like available content.
-- No decorative latitude/longitude wires, meaningless spokes, or white equator
-  labels.
-- Hover affects SOUL only. It must not brighten every Topic.
-- The same identity silhouette survives SG and β; material history changes, not
-  topology or semantics.
-
-### 4.2 Opening choreography
-
-- Opening is one progressive reveal. The shell separates in weighted plates,
-  fragments, or bounded particles while preserving a legible core and a clear
-  reverse path. It is not an explosion and does not scatter semantic objects.
-- The camera and shell motion remain interruptible. Back, Escape, or right-click
-  reverse from current live geometry rather than replaying a canned close.
-- Reduced motion reaches the same open composition immediately or through a short
-  opacity/contrast transition; no plate flight or particle travel remains.
-- Visual choreography may be prototyped before backend work, but production must
-  not merge semantic labels or identity content until the corresponding read
-  model exists.
-
-### 4.3 Semantic formation
-
-The concepts are not three peer tabs:
-
-| Meaning | Visual role | Data rule |
+| | STEINS;GATE | β |
 |---|---|---|
-| Origin / 起源 | Stable central core | Reviewed authority summaries; never ordinary Memory nodes |
-| Lived / 亲历 | Qualifying Experience fragments or trajectories gathering around the core | Reuses the canonical Experience and provenance; never a second store or node kind |
-| Reflection / 自我理解 | A supported structure emerging from Origin and autobiographical evidence | Versioned and recomputable; absent until governed evidence exists |
+| Paper / ink | `#0a0b0d` / `#ecebe7` | `#0b0b0c` / `#ede6dd` |
+| Ground | Fine grid (80px / 16px, as login) | 16px dot grid plus faint grid |
+| Month rings | Dashed 5/6 | Dotted 1/4 |
+| Accent (selection, today) | `#8fdcff` | `#e98a4f` |
+| Her colour (SOUL core, new) | `#ff9cc3` | `#c9a063` |
+| Motion | 120 / 200 / 320ms, `cubic-bezier(.2,0,0,1)` | 156 / 260 / 416ms, `cubic-bezier(.5,0,.15,1.12)` |
 
-- Product navigation does not expose an `ORIGIN / LIVED / SELF MODEL` layer
-  selector. The open composition unfolds from core to evidence to synthesis.
-- Missing capability remains absent, not an empty labelled plate, disabled tab,
-  fake percentage, or decorative sphere.
-- Origin authoring categories do not require five visible cards.
-- Reflection is not scattered through Overview as ordinary Fact-like nodes. Its
-  supporting records remain navigable through Constellation, Index, and Archive.
+No orange on the SG sheet (the header nixie readout is existing Workstation chrome).
+SG has no glow. Light-cone line work, hidden lines and β glow follow DIRECTION §15.6.
 
-## 5. Material and color roles
+Fonts: only shipped self-hosted families (`--font-ui`, `--font-brand`,
+`--font-mono`, `--font-ja`). No CDN fonts.
 
-Workstation chrome continues to use the canonical global tokens from
-`desktop/src/design-system/tokens.css`. Memory scene materials are local rendering
-roles; they do not retokenize the rest of the application.
+## 6. Reading surface
 
-### 5.1 Shared foundation
+One DOM panel on the right (about 372px), beside the plate, never over it. For a
+record: number · kind · topic · zone; your words and date first (corrected facts
+show the words that caused the revision); 你还提过 N 次 folded; 她记成; a readings
+table; 在档案中打开 ↗. No edit or delete on the chart. Topic, month and SOUL have
+their own readings (DIRECTION §2 Q2). Switching content reuses the container.
 
-| Role | Anchor | Use |
-|---|---:|---|
-| Memory void | `#040607` | Deep scene background; never pure black |
-| Optical body | `#071118` | SOUL and selected-body shadow |
-| Primary scene text | `#dce7eb` | Labels and readable scene copy |
-| Secondary scene text | `rgba(196,214,221,.58)` | Metadata with practical contrast |
-| Quiet structure | `rgba(174,207,219,.12)` | Non-interactive shell and layer edges |
-| Hidden structure | `rgba(174,207,219,.05)` | Depth cues only; never essential meaning |
+## 7. Archive
 
-### 5.2 SG Memory scene
+Archive is the index of the plate, not a dashboard. It currently keeps its
+list/detail layout inside the sheet frame; the redesign (DIRECTION Q3) is a separate
+task. Until then:
 
-SG is controlled, coherent, and optical:
+- Rows use dividers and space, not cards; raw ids and ISO timestamps stay folded.
+- Governance actions live in the selected record, never on the chart.
+- Loading, empty, filtered-empty, partial failure and delete sync stay honest.
 
-| Role | Anchor | Use |
-|---|---:|---|
-| SG matter | `#0b202a` | Cool blue-black volume |
-| SG refracted surface | `#214b5d` | Low-opacity glass depth |
-| SG scene signal | `#a9cfdd` | Selected sphere, semantic beam, live core |
-| SG bright point | `#dceef4` | Rare specular/focal peak |
+## 8. Motion
 
-Pale blue is a Memory material signal, not a global blue UI accent. DOM controls,
-focus rings, warnings, and Workstation telemetry continue to use canonical global
-tokens. No electric cyan, blue filter, or neon cyberpunk wash.
+- At most two areas move at once: the chart, and the reading surface.
+- No permanent blinking, particles, breathing or pulses. SOUL does not spin.
+- Plate entrance: paper first (≤200ms), the pen draws month rings outward
+  (≤900ms), stars appear in the order written, then new stars one by one.
+- Light-cone entrance, camera, inertia, idle turn and look-back: DIRECTION §15.4–15.7.
+- Reduced motion: the plate appears directly (≤120ms opacity); no drawing, no
+  camera moves; new marks are static. Reduced motion also selects the plate by
+  default (DIRECTION §16.1).
 
-### 5.3 β Memory scene
+## 9. Interaction
 
-β uses the same geometry with a worn physical history:
+- Hover previews (label, number, date); it never selects or fetches.
+- Click a star: reticle and reading. Click a topic label: other topics drop to 20%,
+  the view eases toward that topic. Click a month label: that month's review. Click
+  SOUL: continuity summary.
+- Blank left-click does nothing. Right-click unwinds one layer.
+- Keyboard: stars, topics, months and SOUL are focusable with Enter/Space. The full
+  keyboard route is still the Archive; 3D never carries accessibility alone.
 
-| Role | Anchor | Use |
-|---|---:|---|
-| β matter | `#1a100b` | Warm graphite body |
-| β oxidised surface | `#5d3322` | Sparse roughness and layer edge |
-| β scene signal | `#bd784c` | Selected semantic matter |
-| β bright point | `#e5b17e` | Rare focal peak |
+## 10. Accessibility
 
-β is not orange SG and not a full rust-red wash. Static screenshots must remain
-distinguishable through surface response, roughness, edge continuity, and sparse
-signal—not only animation or a global hue filter.
+- Every star, label and reading is DOM/SVG with an accessible name.
+- Focus, selection, error and worldline never rely on colour alone.
+- The chart is never the only route to a record.
+- Live regions announce loading, unavailable and navigation outcomes without
+  claiming hidden causes.
 
-### 5.4 Signal restraint
-
-- One scene accent per worldline.
-- Glow represents active matter or semantic signal, never every border.
-- Bloom is optional, low, and shed before semantic content.
-- Hover raises one node one level. It does not light all Topics or crush the
-  background.
-- Error red is reserved for actual error/destructive state and is paired with
-  text.
-
-## 6. Typography
-
-Use only shipped self-hosted families:
-
-- **Chinese UI and reading:** `var(--font-ui)` / Noto Sans SC.
-- **Structural Latin marks:** `var(--font-brand)` / Oxanium, sparingly.
-- **Time, counts, raw IDs, diagnostics:** `var(--font-mono)` / IBM Plex Mono.
-- **Japanese content:** `var(--font-ja)` with `lang="ja"`.
-
-No runtime font CDN. No Inter. No generic serif display face. Prototype use of
-Georgia is explicitly non-production.
-
-| Role | Size guidance | Treatment |
-|---|---:|---|
-| Memory mode title | 15–18px | UI/brand, controlled tracking |
-| Topic focal title | `clamp(24px, 2.5vw, 38px)` | Chinese UI, regular/medium weight |
-| Reading title | 20–28px | Chinese UI, no duplicate eyebrow title |
-| Reading body | 14–15px | 1.65–1.8 line height, max 65ch |
-| Topic label | 11–13px | Chinese first; at most seven visible |
-| Telemetry/meta | 8–10px | Mono; never essential copy at low contrast |
-
-Uppercase English is limited to short structural marks such as `MEMORY`, `SOUL`,
-and `TOPIC`. Player-facing explanations and actions remain Chinese.
-
-## 7. Archive visual system
-
-Archive is an editorial observation record, not a dashboard and not a 2D
-Constellation.
-
-### 7.1 Wide layout
-
-- Stable index/detail relationship without one giant outer box.
-- Index width targets 34–40%; detail owns the remaining reading width.
-- Rows use dividers and negative space rather than individual rounded cards.
-- Default row hierarchy: title → Topic → human time → lifecycle state.
-- Raw IDs, diagnostics, source IDs, and ISO timestamps stay folded.
-- Search, kind tabs, Topic filter, and pinned filter remain visible and calm.
-- Governance actions live in the selected record context, not on every row.
-- Pending observations form a compact verification queue, not KPI cards.
-
-### 7.2 Narrow layout
-
-- One pane at a time: index or detail.
-- Back returns to the same filters, scroll position, and focused row.
-- Kind tabs are true single panels.
-- No horizontal scrolling and no content hidden beneath truncation/tool overlays.
-- Unsaved drafts require explicit discard; saving blocks conflicting navigation
-  with honest feedback.
-
-### 7.3 Archive states
-
-- Loading skeletons match real row/detail geometry; no generic spinner.
-- Empty copy distinguishes truly empty scope from filters with no match.
-- Partial pending failure does not masquerade as empty.
-- 404/inaccessible copy does not infer deleted, missing, or cross-scope cause.
-- Delete sync suppresses stale readable content until the backend projection is
-  authoritative again.
-
-## 8. Index and recovery
-
-Index is the deterministic semantic navigator and the recovery surface when 3D is
-unavailable. The retired 2D star-map imitation does not return.
-
-- Closed by default in wide Constellation; invoked deliberately.
-- Full keyboard path with roving focus separated from activation.
-- Roving alone does not select or request details.
-- Enter/Space/click activates the canonical record.
-- Directional and screen-reader order is deterministic and independent of camera.
-- The Index can reach every eligible record even when no 3D scene exists.
-- WebGL failure, sticky capability fallback, or user preference opens Index with
-  selection and scope preserved; it does not render an inferior fake galaxy.
-
-## 9. Motion and interaction
-
-Motion communicates recall depth. It must feel weighted, interruptible, and calm.
-
-### 9.1 Timing hierarchy
-
-| Motion | Initial tuning band | Rule |
-|---|---:|---|
-| Hover/focus feedback | 140–200ms | Immediate; no camera movement |
-| Reading-content exchange | 320–420ms | Stable container, opacity/short depth only |
-| Topic/record recall | 420–650ms | Arc + dolly; distance-aware |
-| Unwind | 360–560ms | Reverses from current live pose |
-| Archive navigation | 180–280ms | No spatial flight |
-| Ambient life | 12–20s period | Low amplitude, bounded, pausable |
-
-These are tuning bands, not excuses to queue transitions. New intent cancels old
-motion and starts from current live geometry.
-
-### 9.2 Ambient life
-
-- Begin only after roughly four seconds of true idle Overview.
-- Use bounded, recoverable precession or yaw oscillation; never cumulative
-  `yaw += k`.
-- Pause immediately for hover, selection, drag, wheel, hidden document, blur, or
-  reduced motion.
-- Resume from the current pose after a new idle delay. Never snap to a canonical
-  rest camera.
-- Ambient particle life is sparse and subordinate to semantic matter.
-
-### 9.3 Pointer and keyboard
-
-- Visible sphere geometry and pick geometry agree at every depth and zoom.
-- Blank left-click is a no-op. It never collapses Topic or returns to SOUL.
-- Right-click unwinds one semantic layer and suppresses the context menu unless it
-  was a right-button drag.
-- Left drag owns manual orbit and cancels system motion immediately.
-- Hover is preview only: no semantic selection, no details request, no camera.
-- Direction keys rove; Enter/Space/click activate.
-- Re-selecting the active node may deliberately rebuild comfortable framing.
-
-### 9.4 Reduced motion
-
-Under `prefers-reduced-motion: reduce`:
-
-- No ambient drift, inertia, camera flight, particle travel, pulse loop, or layer
-  rotation.
-- Resolve the same final semantic composition immediately.
-- Permit at most a short ≤120ms opacity/contrast transition.
-- Do not force Index solely because motion is reduced.
-
-Animate `transform` and `opacity` only on hot paths. Never animate layout size,
-canvas host dimensions, or DOM anchors every frame.
-
-## 10. Responsive and safe-area rules
-
-- Desktop-first, full viewport, no document scrolling.
-- Validate at 1904×1080, 1366×768, 1080-wide Tauri, and a compact approximately
-  504px layout simulation.
-- Selected matter and the active reading/auxiliary surface share the measured
-  safe area during system framing.
-- Manual user orbit is not clamped to fight the user; the auxiliary surface stays
-  viewport-stable.
-- At narrow width, one semantic pane owns vertical scrolling.
-- Minimum interactive target is 40px desktop and 44px compact/touch-like layout.
-- Essential Chinese body text never drops below 14px in reading surfaces.
-
-Safe areas come from real host and pane geometry. No hard-coded `64px`, `42vh`,
-or window-only approximation may become production authority.
-
-## 11. Accessibility
-
-- 3D is enhancement, never an access gate.
-- Constellation exposes one coherent composite keyboard experience; Index remains
-  the complete semantic route.
-- All icon-only controls have accessible names and visible focus.
-- Focus, selection, error, lifecycle, and worldline never rely on colour alone.
-- Essential text uses practical contrast; dim text is decoration or metadata only.
-- Reading and Archive headings preserve a logical document outline.
-- Live announcements describe loading, success, unavailable, and navigation
-  outcomes without claiming hidden causes.
-- Screen-reader users receive the same selected record, scope, reading payload,
-  and back-stack as pointer users.
-
-## 12. Explicit bans
+## 11. Explicit bans
 
 Never ship:
 
-- a generic starfield with unrelated floating balls;
-- a sun-and-planets, atom, wagon-wheel, or flat Saturn-disk silhouette;
-- decorative lines whose meaning cannot be stated;
-- every Topic glowing when only one node is hovered;
-- universal orange spheres or colour-only kind encoding;
-- fixed right-side dashboard cards covering the graph;
-- giant rounded SaaS cards, glassmorphism panels, or pill-button walls;
-- sci-fi HUD filler, fake percentages, fake performance metrics, or debug chrome;
-- biological membranes, organ lobes, tissue-green surfaces, or wet cell imagery;
-- concentric-ring wallpaper visible at all times;
-- three equal SOUL chambers, a permanent identity-layer tab bar, or placeholder
-  Origin/Lived/Reflection content;
-- self-understanding rendered as ordinary Fact-like nodes without its governed
-  support and lifecycle;
-- raw UUIDs/ISO timestamps in the default reading layer;
-- all-node label clouds or English-first product copy;
-- bloom used to hide weak composition;
-- a production copy of the throwaway D prototype;
-- visual completion claims based only on tests, build, or screenshots from fixtures.
+- a glass sphere, neon rim light, or sun-and-planets silhouette;
+- lines whose meaning cannot be stated, including topic-to-SOUL spokes;
+- every topic lighting up when one is hovered;
+- colour-only kind encoding;
+- invented topics for ungrouped facts, or an empty chart for a new user;
+- edit or delete controls on the chart;
+- achievements, completion meters, fake percentages or sci-fi HUD filler;
+- raw UUIDs or ISO timestamps in the default reading layer;
+- English-first product copy;
+- copies of original game UI or materials.
 
-## 13. Production quality gates
+## 12. Acceptance gates
 
-A visual slice is not accepted until all applicable gates pass:
-
-1. **Five-second read:** an uninstructed user can identify SOUL, Topics, selected
-   matter, and the available next action.
-2. **Thumbnail read:** Overview survives at 64px without becoming sun-and-planets.
-3. **Hierarchy:** selected record wins over Topic; Topic wins over background;
-   SOUL remains continuity without retaking attention.
-4. **Interaction feel:** Topic/record selection, rapid switching, unwind, hover,
-   picking, and reading-content exchange receive real user review.
-5. **Truthful density:** populated/empty/truncated/error/loading/expired/versioned
-   states use governed data or explicitly labelled fixtures.
-6. **Worldlines:** SG and β are distinguishable in static wide and narrow captures
-   while remaining one product.
-7. **Accessibility:** keyboard, Index, visible focus, announcements, and reduced
-   motion are verified in runtime.
-8. **Runtime parity:** Chromium and Tauri/WebView2 cover the critical visual path.
-9. **Performance:** hidden/blur throttling cannot trigger false fallback; active
-   motion remains responsive at production budgets.
-10. **User visual gate:** only explicit user acceptance closes the slice. “方向不错”
-    or “骨架可用” is not acceptance.
-
-Minimum capture board:
-
-| Surface | Required states |
-|---|---|
-| Constellation SG | Overview, Topic focus, cognition focus, fragment focus |
-| Constellation β | Overview, Topic focus, record focus |
-| Index | populated, search, truncated, empty, capability recovery |
-| Archive | list, detail, edit/conflict, delete sync, pending/retry |
-| Layout | wide, 1366×768, 1080-wide, compact single-pane |
-| Motion | normal, reduced, hidden→visible recovery |
-
-## 14. Implementation discipline
-
-- Work one visual slice at a time. Do not perform a global CSS rewrite while
-  changing one Memory state.
-- Reuse global tokens and shipped fonts before adding local roles.
-- Memory-specific scene roles use a single owner; do not scatter literal colours
-  across React components and renderer modules.
-- 3D renderer, DOM labels, reading surface, and picking consume the same live frame
-  and measured safe area.
-- Visual-only changes need before/after captures at the same scope, viewport, and
-  worldline.
-- Interaction changes remain RED-first. Pure material tuning does not require a
-  test for every pixel.
-- Build and automated tests prove integrity, not beauty.
-- Prototype branches remain primary-source evidence; losing variants do not enter
-  production.
-- Do not stage, commit, push, or update completion ledgers without explicit
-  authorization.
-
-## 15. Recommended production slice order
-
-### Existing truthful surfaces
-
-1. **Scene substrate:** Memory-local material roles, background depth, closed SOUL
-   form, and clean Overview silhouette.
-2. **Progressive body:** Topic hierarchy, representative matter, labels, truthful
-   semantic lines, hover, and picking.
-3. **Recall composition:** A-led arc/dolly, C-style focused strata, occlusion, and
-   stable reading exchange.
-4. **Index and Archive visual pass:** capability recovery, keyboard flow,
-   compact/narrow panes, editorial hierarchy, and governance states.
-5. **Worldline and acceptance pass:** SG/β static distinction, micro-motion,
-   real-data density, Chromium/WebView2 captures, and explicit user review.
-
-### Capability-gated SOUL formation
-
-6. **Opening choreography prototype:** throwaway shell-separation/core-reveal
-   study with no fake Origin, Lived, or Reflection records.
-7. **Origin vertical slice:** reviewed Origin read model plus the first production
-   SOUL opening. Missing authority fails closed.
-8. **Autobiographical qualification:** subject/participant authority first, then
-   existing Experience may appear as 亲历 without duplication.
-9. **Reflection:** governed synthesis, challenge, and supersession only after real
-   autobiographical evidence exists. Add no default Overview node kind.
-
-Person identity resolution remains Archive-first. A 3D Person Anchor is a later
-value hypothesis, not a prerequisite for SOUL formation.
-
-Each slice must leave the product usable. “We will make it beautiful later” is not
-an acceptance strategy after this document exists.
+1. Five-second read: SOUL, topics, the selected star and the next action are clear.
+2. Thumbnail read at 64px: a drawn plate, not sun-and-planets.
+3. Every mark can be explained by section 4.
+4. SG and β are distinguishable in static captures and stay one product.
+5. Populated, new, empty, loading, unavailable, error and truncated states use
+   fixtures or governed data, labelled as such.
+6. Keyboard, Archive route, focus, announcements and reduced motion are checked in
+   runtime.
+7. The plate matches the reference mockup (`mockup/amadeus-memory-r2-cone.html`,
+   plate fallback) on the same sample data; differences are written down.
+8. Only explicit user acceptance closes a visual slice. Tests, builds and fixture
+   screenshots prove integrity, not beauty.
