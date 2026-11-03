@@ -948,14 +948,14 @@ async def test_send_time_delete_drops_fact_and_keeps_other(isolated_store, monke
     from app.services.turn_tool_orchestrator import refresh_candidates_for_send
 
     class Stub:
-        model_name = "test-deterministic-384"
-        dimensions = 384
+        model_name = "test-deterministic-768"
+        dimensions = 768
 
         async def encode_passage(self, text: str):
-            return [0.0] * 384
+            return [0.0] * 768
 
         async def encode_query(self, text: str):
-            return [0.0] * 384
+            return [0.0] * 768
 
     monkeypatch.setattr(memory_service, "embedder", Stub())
     owner = f"del-{uuid4()}"
@@ -1027,14 +1027,14 @@ async def test_send_time_version_change_drops_old_version(isolated_store, monkey
         semantic_json={"subject": "user", "predicate": "drinks", "object": "coffee"},
     )
     class Stub:
-        model_name = "test-deterministic-384"
-        dimensions = 384
+        model_name = "test-deterministic-768"
+        dimensions = 768
 
         async def encode_passage(self, text: str):
-            return [0.0] * 384
+            return [0.0] * 768
 
         async def encode_query(self, text: str):
-            return [0.0] * 384
+            return [0.0] * 768
 
     monkeypatch.setattr(memory_service, "embedder", Stub())
     session = _session(session_id=owner)

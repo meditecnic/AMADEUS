@@ -513,7 +513,7 @@ async def _recall_body(
 
     # lexical_only: explicit bigram/structured-only switch. Never resolves the
     # default embedder, never loads embeddings, never calls encode_query, so
-    # it cannot lazy-load the E5 model. Not reported as "degraded".
+    # it cannot lazy-load the embedding model. Not reported as "degraded".
     resolved = None if lexical_only else _resolve_embedder(embedder)
     query_vectors: dict[str, list[float] | None] = {}
     compatible: dict[tuple[str, int], list[float]] = {}
@@ -808,7 +808,7 @@ async def recall_stable_facts(
     - exclude_fact_ids: fact_ids already injected this turn (and their
       same-fingerprint duplicates) are never returned.
     - lexical_only: structured/bigram ranking only; the embedder is never
-      resolved or called (no E5 lazy load).
+      resolved or called (no embedding model lazy load).
     - min_shared_bigrams: admission threshold on distinct shared bigrams.
     """
     bounds = limits or RecallLimits()

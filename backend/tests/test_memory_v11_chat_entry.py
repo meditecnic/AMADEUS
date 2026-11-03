@@ -215,11 +215,11 @@ def _done(events: list[dict]) -> bool:
 
 
 class _StubEmbedder:
-    model_name = "intfloat/multilingual-e5-small"
-    dimensions = 384
+    model_name = "jinaai/jina-embeddings-v5-text-nano-retrieval"
+    dimensions = 768
 
     async def encode_passage(self, text: str) -> list[float]:
-        return [0.0] * 384
+        return [0.0] * 768
 
 
 # ---------------------------------------------------------------------------
@@ -1027,3 +1027,51 @@ async def test_v2_user_disabled_tts_emits_user_disabled_not_unbound(
         assert "free variable" not in reason
         assert "UnboundLocal" not in reason
         assert reason == AudioErrorCode.USER_DISABLED.value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["missing", "corrupt"])
+async def test_jina_upgrade_unavailable_keeps_chat_and_lexical_recall(tmp_path, monkeypatch, failure):
+    from app import db as storage
+    from app.services.memory import EmbeddingAdapter, memory_service
+    from app.services.memory_v11.recall import MemoryScope, RecallRequest, recall_stable_facts
+    from tests.test_jina_embedding_migration import seed_legacy_embedding_db, snapshot
+
+    monkeypatch.setenv("AMADEUS_DATA_DIR", str(tmp_path))
+    reset_initialization_cache()
+    path = Path(storage._resolve_path(SG, "memory"))
+    seed_legacy_embedding_db(path)
+    before = snapshot(path)
+    adapter = EmbeddingAdapter()
+
+    def broken_load(self):
+        if failure == "missing":
+            raise FileNotFoundError("missing synthetic weights")
+        raise RuntimeError("invalid synthetic ONNX bytes")
+
+    monkeypatch.setattr(EmbeddingAdapter, "_load", broken_load)
+    monkeypatch.setattr(memory_service, "embedder", adapter)
+    await init_db()
+    assert snapshot(path) == before
+    assert (await storage.validate_schema())["ok"], "pending embedding upgrade must not gate chat readiness"
+    result = await recall_stable_facts(
+        scope=MemoryScope(session_id="session", worldline=SG, identity_mode="self"),
+        request=RecallRequest(needs=("用户喜欢咖啡",)),
+    )
+    assert result.status == "degraded"
+    assert result.records and "咖啡" in result.block
+    lexical = await recall_stable_facts(
+        scope=MemoryScope(session_id="session", worldline=SG, identity_mode="self"),
+        request=RecallRequest(needs=("用户喜欢咖啡",)), lexical_only=True,
+    )
+    assert result.records == lexical.records
+    assert result.ranked_items == lexical.ranked_items
+
+    capture = _ProviderCapture()
+    _install_fake_provider(monkeypatch, capture)
+    _suppress_auto_title(monkeypatch)
+    session = _make_session("session")
+    await _prepare_conversation(session)
+    events = await _run_turn(session, "用户喜欢咖啡吗")
+    assert _done(events) and not _errors(events), events
+    assert len(capture.chat_calls) == 1

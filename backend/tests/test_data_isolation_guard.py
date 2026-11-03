@@ -145,7 +145,7 @@ print(json.dumps([str(db.get_data_root()), db._resolve_path()]))
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == [str(data.resolve()), str(legacy.resolve())]
     assert legacy.is_file()
-    assert (legacy.parent / ".migration-v11.complete").is_file()
+    assert (legacy.parent / ".migration-v12.complete").is_file()
     assert not (data / "control.sqlite3").exists()
     assert list(appdata.rglob("*")) == []
 

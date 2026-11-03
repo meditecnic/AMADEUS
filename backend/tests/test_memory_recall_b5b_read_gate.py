@@ -257,14 +257,14 @@ def _provider(**overrides):
 
 
 class _StubEmbedder:
-    model_name = "test-deterministic-384"
-    dimensions = 384
+    model_name = "test-deterministic-768"
+    dimensions = 768
 
     async def encode_passage(self, _text: str):
-        return [0.01] * 384
+        return [0.01] * 768
 
     async def encode_query(self, _text: str):
-        return [0.01] * 384
+        return [0.01] * 768
 
 
 def _sse_text(text: str) -> str:

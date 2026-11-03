@@ -1,0 +1,2528 @@
+{
+ "version": "embedding-bench-hard-v1",
+ "note": "Dispatch 157. 120 facts in 20 groups (3 zh + 3 ja each), 80 memory queries (4 combos x 20, one target fact each, must_not = the other 5 facts of the group), 20 no-memory queries. structured_score_vs_target is the product's structured_score(need, target display) and paraphrase means it equals 0.",
+ "facts": [
+  {
+   "key": "g01_zh_thermos",
+   "group": "g01",
+   "lang": "zh",
+   "display_text": "我的保温杯是钛合金的，轻得很。"
+  },
+  {
+   "key": "g01_zh_spice_jar",
+   "group": "g01",
+   "lang": "zh",
+   "display_text": "家里的调料罐全是玻璃的，配软木塞。"
+  },
+  {
+   "key": "g01_zh_clay_pot",
+   "group": "g01",
+   "lang": "zh",
+   "display_text": "我煲汤用的锅是紫砂的，用了好多年。"
+  },
+  {
+   "key": "g01_ja_bento",
+   "group": "g01",
+   "lang": "ja",
+   "display_text": "お弁当箱はステンレスのを使ってる。"
+  },
+  {
+   "key": "g01_ja_kyusu",
+   "group": "g01",
+   "lang": "ja",
+   "display_text": "急須は南部鉄器で、手放せなくなった。"
+  },
+  {
+   "key": "g01_ja_miso",
+   "group": "g01",
+   "lang": "ja",
+   "display_text": "味噌は琺瑯の保存容器に入れてるよ。"
+  },
+  {
+   "key": "g02_zh_violin",
+   "group": "g02",
+   "lang": "zh",
+   "display_text": "我的小提琴是外公传下来的，琴身有些旧了。"
+  },
+  {
+   "key": "g02_zh_keyboard",
+   "group": "g02",
+   "lang": "zh",
+   "display_text": "这台电子琴是大学时用奖学金买的。"
+  },
+  {
+   "key": "g02_zh_harmonica",
+   "group": "g02",
+   "lang": "zh",
+   "display_text": "口琴是旅行时在维也纳的小店淘到的。"
+  },
+  {
+   "key": "g02_ja_piano",
+   "group": "g02",
+   "lang": "ja",
+   "display_text": "うちのピアノは中古で、近所の人から譲ってもらった。"
+  },
+  {
+   "key": "g02_ja_ukulele",
+   "group": "g02",
+   "lang": "ja",
+   "display_text": "ウクレレはハワイ旅行のお土産に買ったんだ。"
+  },
+  {
+   "key": "g02_ja_cajon",
+   "group": "g02",
+   "lang": "ja",
+   "display_text": "カホンは友達の手作りで、誕生日にもらった。"
+  },
+  {
+   "key": "g03_zh_cat",
+   "group": "g03",
+   "lang": "zh",
+   "display_text": "我养的橘猫叫麦芽，今年五岁了。"
+  },
+  {
+   "key": "g03_zh_goldfish",
+   "group": "g03",
+   "lang": "zh",
+   "display_text": "缸里的三条金鱼叫豆沙、年糕、汤圆。"
+  },
+  {
+   "key": "g03_zh_parrot",
+   "group": "g03",
+   "lang": "zh",
+   "display_text": "阳台上那只鹦鹉叫阿福，会说你好。"
+  },
+  {
+   "key": "g03_ja_dog",
+   "group": "g03",
+   "lang": "ja",
+   "display_text": "実家の柴犬の名前は「きなこ」だよ。"
+  },
+  {
+   "key": "g03_ja_hamster",
+   "group": "g03",
+   "lang": "ja",
+   "display_text": "ハムスターはジャンガリアンで、名前は「もち」。"
+  },
+  {
+   "key": "g03_ja_rabbit",
+   "group": "g03",
+   "lang": "ja",
+   "display_text": "うさぎの名前は「だいふく」にした。"
+  },
+  {
+   "key": "g04_zh_phone_case",
+   "group": "g04",
+   "lang": "zh",
+   "display_text": "我的手机壳是透明的，里面夹着一张小卡片。"
+  },
+  {
+   "key": "g04_zh_keyboard",
+   "group": "g04",
+   "lang": "zh",
+   "display_text": "办公桌上的机械键盘是奶白色的。"
+  },
+  {
+   "key": "g04_zh_powerbank",
+   "group": "g04",
+   "lang": "zh",
+   "display_text": "充电宝买的是墨绿色，很好认。"
+  },
+  {
+   "key": "g04_ja_tablet",
+   "group": "g04",
+   "lang": "ja",
+   "display_text": "タブレットのカバーは深いネイビーにしてる。"
+  },
+  {
+   "key": "g04_ja_mouse",
+   "group": "g04",
+   "lang": "ja",
+   "display_text": "マウスは白じゃなくて、ピンクのを選んだ。"
+  },
+  {
+   "key": "g04_ja_watch",
+   "group": "g04",
+   "lang": "ja",
+   "display_text": "スマートウォッチのバンドは黒のシリコン製です。"
+  },
+  {
+   "key": "g05_zh_grandma",
+   "group": "g05",
+   "lang": "zh",
+   "display_text": "奶奶一直住在苏州的老房子里。"
+  },
+  {
+   "key": "g05_zh_brother",
+   "group": "g05",
+   "lang": "zh",
+   "display_text": "我哥哥去年起在深圳工作和生活。"
+  },
+  {
+   "key": "g05_zh_uncle",
+   "group": "g05",
+   "lang": "zh",
+   "display_text": "舅舅一家搬到了成都，靠近天府广场。"
+  },
+  {
+   "key": "g05_ja_aunt",
+   "group": "g05",
+   "lang": "ja",
+   "display_text": "叔母さんは札幌に住んでて、冬の雪かきが大変らしい。"
+  },
+  {
+   "key": "g05_ja_cousin",
+   "group": "g05",
+   "lang": "ja",
+   "display_text": "いとこは大学進学で福岡に引っ越した。"
+  },
+  {
+   "key": "g05_ja_younger_brother",
+   "group": "g05",
+   "lang": "ja",
+   "display_text": "弟は今、ドイツのミュンヘンに留学してる。"
+  },
+  {
+   "key": "g06_zh_bedroom",
+   "group": "g06",
+   "lang": "zh",
+   "display_text": "卧室的墙刷成了淡淡的豆沙绿。"
+  },
+  {
+   "key": "g06_zh_study",
+   "group": "g06",
+   "lang": "zh",
+   "display_text": "书房有一面墙是深蓝色的，我很喜欢。"
+  },
+  {
+   "key": "g06_zh_bathroom",
+   "group": "g06",
+   "lang": "zh",
+   "display_text": "浴室贴的瓷砖是白底配灰色花纹。"
+  },
+  {
+   "key": "g06_ja_entrance",
+   "group": "g06",
+   "lang": "ja",
+   "display_text": "玄関の壁は明るいクリーム色にした。"
+  },
+  {
+   "key": "g06_ja_kitchen",
+   "group": "g06",
+   "lang": "ja",
+   "display_text": "キッチンの壁紙はレモンイエローで元気が出る。"
+  },
+  {
+   "key": "g06_ja_balcony",
+   "group": "g06",
+   "lang": "ja",
+   "display_text": "ベランダの壁は薄いグレーに塗ってる。"
+  },
+  {
+   "key": "g07_zh_running",
+   "group": "g07",
+   "lang": "zh",
+   "display_text": "我晚上跑步都在河边的绿道上。"
+  },
+  {
+   "key": "g07_zh_swimming",
+   "group": "g07",
+   "lang": "zh",
+   "display_text": "游泳在小区旁边的社区泳馆。"
+  },
+  {
+   "key": "g07_zh_skateboard",
+   "group": "g07",
+   "lang": "zh",
+   "display_text": "玩滑板去的是市中心广场的空地。"
+  },
+  {
+   "key": "g07_ja_badminton",
+   "group": "g07",
+   "lang": "ja",
+   "display_text": "バドミントンは会社の近くの体育館でやってる。"
+  },
+  {
+   "key": "g07_ja_yoga",
+   "group": "g07",
+   "lang": "ja",
+   "display_text": "ヨガは家のリビングでオンラインレッスンを見ながら。"
+  },
+  {
+   "key": "g07_ja_cycling",
+   "group": "g07",
+   "lang": "ja",
+   "display_text": "自転車で走るのは、湖の周りのコースが多い。"
+  },
+  {
+   "key": "g08_zh_aming",
+   "group": "g08",
+   "lang": "zh",
+   "display_text": "大学同学阿明现在是自由摄影师。"
+  },
+  {
+   "key": "g08_zh_zhou",
+   "group": "g08",
+   "lang": "zh",
+   "display_text": "邻居小周在医院做护士，常常上夜班。"
+  },
+  {
+   "key": "g08_zh_zhao",
+   "group": "g08",
+   "lang": "zh",
+   "display_text": "老赵在一家出版社当编辑。"
+  },
+  {
+   "key": "g08_ja_sato",
+   "group": "g08",
+   "lang": "ja",
+   "display_text": "高校の同級生の佐藤は消防士になった。"
+  },
+  {
+   "key": "g08_ja_tanaka",
+   "group": "g08",
+   "lang": "ja",
+   "display_text": "隣の田中さんは小学校の先生をしている。"
+  },
+  {
+   "key": "g08_ja_misaki",
+   "group": "g08",
+   "lang": "ja",
+   "display_text": "親友の美咲はフリーランスの翻訳者だよ。"
+  },
+  {
+   "key": "g09_zh_manga",
+   "group": "g09",
+   "lang": "zh",
+   "display_text": "漫画都放在床头柜下面那一层。"
+  },
+  {
+   "key": "g09_zh_cookbook",
+   "group": "g09",
+   "lang": "zh",
+   "display_text": "菜谱收在厨房的吊柜里，方便翻。"
+  },
+  {
+   "key": "g09_zh_dictionary",
+   "group": "g09",
+   "lang": "zh",
+   "display_text": "词典摆在书桌右手边最顺手的位置。"
+  },
+  {
+   "key": "g09_ja_magazine",
+   "group": "g09",
+   "lang": "ja",
+   "display_text": "雑誌は玄関の棚にまとめて置いてある。"
+  },
+  {
+   "key": "g09_ja_picture_book",
+   "group": "g09",
+   "lang": "ja",
+   "display_text": "絵本はリビングの低い本棚に並べてるよ。"
+  },
+  {
+   "key": "g09_ja_textbook",
+   "group": "g09",
+   "lang": "ja",
+   "display_text": "参考書は全部クローゼットの箱に入れた。"
+  },
+  {
+   "key": "g10_zh_chen",
+   "group": "g10",
+   "lang": "zh",
+   "display_text": "同事小陈的生日是三月十二号。"
+  },
+  {
+   "key": "g10_zh_wang",
+   "group": "g10",
+   "lang": "zh",
+   "display_text": "王姐的生日在十月，正好赶上国庆。"
+  },
+  {
+   "key": "g10_zh_intern",
+   "group": "g10",
+   "lang": "zh",
+   "display_text": "实习生小李是十二月底出生的。"
+  },
+  {
+   "key": "g10_ja_yamamoto",
+   "group": "g10",
+   "lang": "ja",
+   "display_text": "同僚の山本さんの誕生日は六月八日。"
+  },
+  {
+   "key": "g10_ja_suzuki",
+   "group": "g10",
+   "lang": "ja",
+   "display_text": "鈴木課長は九月生まれで、毎年ケーキを配る。"
+  },
+  {
+   "key": "g10_ja_kenta",
+   "group": "g10",
+   "lang": "ja",
+   "display_text": "後輩の健太の誕生日は元旦だよ。"
+  },
+  {
+   "key": "g11_zh_bookkeeping",
+   "group": "g11",
+   "lang": "zh",
+   "display_text": "记账用手机里的专门记账软件，每天睡前补一笔。"
+  },
+  {
+   "key": "g11_zh_read_later",
+   "group": "g11",
+   "lang": "zh",
+   "display_text": "想以后读的文章，我都存进稍后读应用。"
+  },
+  {
+   "key": "g11_zh_navigation",
+   "group": "g11",
+   "lang": "zh",
+   "display_text": "骑车导航我只用地图软件的离线模式。"
+  },
+  {
+   "key": "g11_ja_schedule",
+   "group": "g11",
+   "lang": "ja",
+   "display_text": "予定管理はカレンダーアプリで、家族と共有してる。"
+  },
+  {
+   "key": "g11_ja_password",
+   "group": "g11",
+   "lang": "ja",
+   "display_text": "パスワードはパスワード管理アプリにまとめてる。"
+  },
+  {
+   "key": "g11_ja_translate",
+   "group": "g11",
+   "lang": "ja",
+   "display_text": "英文の読解は、ブラウザの翻訳機能に頼りがち。"
+  },
+  {
+   "key": "g12_zh_kyoto",
+   "group": "g12",
+   "lang": "zh",
+   "display_text": "去京都那次，我买了一盒八桥当伴手礼。"
+  },
+  {
+   "key": "g12_zh_chengdu",
+   "group": "g12",
+   "lang": "zh",
+   "display_text": "从成都带回来的是熊猫造型的冰箱贴。"
+  },
+  {
+   "key": "g12_zh_xiamen",
+   "group": "g12",
+   "lang": "zh",
+   "display_text": "厦门的伴手礼我选了花生酥和一包茶叶。"
+  },
+  {
+   "key": "g12_ja_taipei",
+   "group": "g12",
+   "lang": "ja",
+   "display_text": "台北ではパイナップルケーキをお土産にした。"
+  },
+  {
+   "key": "g12_ja_okinawa",
+   "group": "g12",
+   "lang": "ja",
+   "display_text": "沖縄のお土産はシーサーの置物と紅芋タルト。"
+  },
+  {
+   "key": "g12_ja_seoul",
+   "group": "g12",
+   "lang": "ja",
+   "display_text": "ソウルで買ったのは、海苔とハンドクリームだったな。"
+  },
+  {
+   "key": "g13_zh_hotpot",
+   "group": "g13",
+   "lang": "zh",
+   "display_text": "吃火锅我只点微辣，再辣胃受不了。"
+  },
+  {
+   "key": "g13_zh_soymilk",
+   "group": "g13",
+   "lang": "zh",
+   "display_text": "豆浆我喝无糖的，加糖会觉得腻。"
+  },
+  {
+   "key": "g13_zh_fried_egg",
+   "group": "g13",
+   "lang": "zh",
+   "display_text": "鸡蛋要煎到蛋黄半流心才好吃。"
+  },
+  {
+   "key": "g13_ja_curry",
+   "group": "g13",
+   "lang": "ja",
+   "display_text": "カレーは中辛が一番ちょうどいい。"
+  },
+  {
+   "key": "g13_ja_ramen",
+   "group": "g13",
+   "lang": "ja",
+   "display_text": "ラーメンの麺は硬めで、味は濃いめ。"
+  },
+  {
+   "key": "g13_ja_black_tea",
+   "group": "g13",
+   "lang": "ja",
+   "display_text": "紅茶に砂糖は入れないで、レモンだけ。"
+  },
+  {
+   "key": "g14_zh_spring",
+   "group": "g14",
+   "lang": "zh",
+   "display_text": "春天我一般会去公园看樱花。"
+  },
+  {
+   "key": "g14_zh_summer",
+   "group": "g14",
+   "lang": "zh",
+   "display_text": "夏天晚上喜欢去江边吹风、吃烧烤。"
+  },
+  {
+   "key": "g14_zh_winter",
+   "group": "g14",
+   "lang": "zh",
+   "display_text": "冬天周末会窝在家里炖锅、追剧。"
+  },
+  {
+   "key": "g14_ja_rainy",
+   "group": "g14",
+   "lang": "ja",
+   "display_text": "梅雨の時期は家で映画を見て過ごすことが多い。"
+  },
+  {
+   "key": "g14_ja_newyear",
+   "group": "g14",
+   "lang": "ja",
+   "display_text": "お正月は毎年、実家に帰って餅つきを手伝う。"
+  },
+  {
+   "key": "g14_ja_autumn",
+   "group": "g14",
+   "lang": "ja",
+   "display_text": "秋になると、紅葉を見に近くの山へ行く。"
+  },
+  {
+   "key": "g15_zh_fridge",
+   "group": "g15",
+   "lang": "zh",
+   "display_text": "冰箱是五年前搬家时买的。"
+  },
+  {
+   "key": "g15_zh_washer",
+   "group": "g15",
+   "lang": "zh",
+   "display_text": "洗衣机用了快九年，该换了。"
+  },
+  {
+   "key": "g15_zh_aircon",
+   "group": "g15",
+   "lang": "zh",
+   "display_text": "客厅的空调是去年夏天新装的。"
+  },
+  {
+   "key": "g15_ja_vacuum",
+   "group": "g15",
+   "lang": "ja",
+   "display_text": "掃除機は三年前にコードレスに買い替えた。"
+  },
+  {
+   "key": "g15_ja_ricecooker",
+   "group": "g15",
+   "lang": "ja",
+   "display_text": "炊飯器は結婚祝いでもらったから、もう十年選手。"
+  },
+  {
+   "key": "g15_ja_microwave",
+   "group": "g15",
+   "lang": "ja",
+   "display_text": "電子レンジは先月壊れて、買ったばかりだよ。"
+  },
+  {
+   "key": "g16_zh_bakery",
+   "group": "g16",
+   "lang": "zh",
+   "display_text": "常去的面包店在地铁站B口旁边。"
+  },
+  {
+   "key": "g16_zh_pharmacy",
+   "group": "g16",
+   "lang": "zh",
+   "display_text": "买药一般去小区南门的那家药店。"
+  },
+  {
+   "key": "g16_zh_stationery",
+   "group": "g16",
+   "lang": "zh",
+   "display_text": "文具店开在学校后门，老板很热情。"
+  },
+  {
+   "key": "g16_ja_bookstore",
+   "group": "g16",
+   "lang": "ja",
+   "display_text": "よく行く本屋は駅ビルの三階にある。"
+  },
+  {
+   "key": "g16_ja_laundry",
+   "group": "g16",
+   "lang": "ja",
+   "display_text": "クリーニング屋は商店街の入口のところ。"
+  },
+  {
+   "key": "g16_ja_salon",
+   "group": "g16",
+   "lang": "ja",
+   "display_text": "美容院は川沿いの小さなビルの二階だよ。"
+  },
+  {
+   "key": "g17_zh_english",
+   "group": "g17",
+   "lang": "zh",
+   "display_text": "英语日常交流没问题，但写长邮件还吃力。"
+  },
+  {
+   "key": "g17_zh_swim",
+   "group": "g17",
+   "lang": "zh",
+   "display_text": "游泳我只会蛙泳，换气总是乱。"
+  },
+  {
+   "key": "g17_zh_cooking",
+   "group": "g17",
+   "lang": "zh",
+   "display_text": "厨艺嘛，也就是能把面条煮熟的水平。"
+  },
+  {
+   "key": "g17_ja_chinese",
+   "group": "g17",
+   "lang": "ja",
+   "display_text": "中国語は挨拶と数字くらいしか分からない。"
+  },
+  {
+   "key": "g17_ja_driving",
+   "group": "g17",
+   "lang": "ja",
+   "display_text": "運転は免許は持ってるけど、ほぼペーパードライバー。"
+  },
+  {
+   "key": "g17_ja_coding",
+   "group": "g17",
+   "lang": "ja",
+   "display_text": "プログラミングは独学でPythonが少し書ける程度。"
+  },
+  {
+   "key": "g18_zh_postcards",
+   "group": "g18",
+   "lang": "zh",
+   "display_text": "明信片我攒了两百多张，装了四个盒子。"
+  },
+  {
+   "key": "g18_zh_keychains",
+   "group": "g18",
+   "lang": "zh",
+   "display_text": "钥匙扣收藏有三十几个，挂满了一面板。"
+  },
+  {
+   "key": "g18_zh_vinyl",
+   "group": "g18",
+   "lang": "zh",
+   "display_text": "黑胶唱片我现在有十二张。"
+  },
+  {
+   "key": "g18_ja_badges",
+   "group": "g18",
+   "lang": "ja",
+   "display_text": "缶バッジは五十個くらい集めたかな。"
+  },
+  {
+   "key": "g18_ja_figures",
+   "group": "g18",
+   "lang": "ja",
+   "display_text": "フィギュアは全部で八体、棚に飾ってる。"
+  },
+  {
+   "key": "g18_ja_watches",
+   "group": "g18",
+   "lang": "ja",
+   "display_text": "腕時計は四つ持ってる。"
+  },
+  {
+   "key": "g19_zh_scifi",
+   "group": "g19",
+   "lang": "zh",
+   "display_text": "科幻片里我最爱的是《星际穿越》。"
+  },
+  {
+   "key": "g19_zh_mystery",
+   "group": "g19",
+   "lang": "zh",
+   "display_text": "悬疑小说里最喜欢东野圭吾的《白夜行》。"
+  },
+  {
+   "key": "g19_zh_folk",
+   "group": "g19",
+   "lang": "zh",
+   "display_text": "民谣歌手里我最常听的是陈绮贞。"
+  },
+  {
+   "key": "g19_ja_anime",
+   "group": "g19",
+   "lang": "ja",
+   "display_text": "アニメで一番好きなのは『千と千尋の神隠し』。"
+  },
+  {
+   "key": "g19_ja_jazz",
+   "group": "g19",
+   "lang": "ja",
+   "display_text": "ジャズならビル・エヴァンスのアルバムをよく聴く。"
+  },
+  {
+   "key": "g19_ja_horror",
+   "group": "g19",
+   "lang": "ja",
+   "display_text": "ホラーはあまり得意じゃないけど『リング』だけは観た。"
+  },
+  {
+   "key": "g20_zh_pollen",
+   "group": "g20",
+   "lang": "zh",
+   "display_text": "每年春天我会对柏树花粉过敏，鼻子特别难受。"
+  },
+  {
+   "key": "g20_zh_knee",
+   "group": "g20",
+   "lang": "zh",
+   "display_text": "左膝有旧伤，不能长时间爬楼梯。"
+  },
+  {
+   "key": "g20_zh_eyesight",
+   "group": "g20",
+   "lang": "zh",
+   "display_text": "我近视三百度，散光有一点。"
+  },
+  {
+   "key": "g20_ja_dust",
+   "group": "g20",
+   "lang": "ja",
+   "display_text": "ハウスダストに弱くて、掃除をサボるとくしゃみが出る。"
+  },
+  {
+   "key": "g20_ja_lowbp",
+   "group": "g20",
+   "lang": "ja",
+   "display_text": "朝は低血圧で、起きてしばらくはぼんやりしてる。"
+  },
+  {
+   "key": "g20_ja_shoulder",
+   "group": "g20",
+   "lang": "ja",
+   "display_text": "肩こりがひどくて、月に一度マッサージに通ってる。"
+  }
+ ],
+ "cases": [
+  {
+   "id": "g01_zh-zh",
+   "category": "memory",
+   "combo": "zh-zh",
+   "group": "g01",
+   "query_lang": "zh",
+   "query": "我的保温杯是什么材料的？",
+   "must_use_fact_keys": [
+    "g01_zh_thermos"
+   ],
+   "must_not_use_fact_keys": [
+    "g01_ja_bento",
+    "g01_ja_kyusu",
+    "g01_ja_miso",
+    "g01_zh_clay_pot",
+    "g01_zh_spice_jar"
+   ],
+   "structured_score_vs_target": 0.272727,
+   "paraphrase": false
+  },
+  {
+   "id": "g01_ja-ja",
+   "category": "memory",
+   "combo": "ja-ja",
+   "group": "g01",
+   "query_lang": "ja",
+   "query": "お弁当箱って何でできてたっけ？",
+   "must_use_fact_keys": [
+    "g01_ja_bento"
+   ],
+   "must_not_use_fact_keys": [
+    "g01_ja_kyusu",
+    "g01_ja_miso",
+    "g01_zh_clay_pot",
+    "g01_zh_spice_jar",
+    "g01_zh_thermos"
+   ],
+   "structured_score_vs_target": 0.171429,
+   "paraphrase": false
+  },
+  {
+   "id": "g01_zh-ja",
+   "category": "memory",
+   "combo": "zh-ja",
+   "group": "g01",
+   "query_lang": "zh",
+   "query": "我泡茶用的那个日式小壶，是什么材质来着？",
+   "must_use_fact_keys": [
+    "g01_ja_kyusu"
+   ],
+   "must_not_use_fact_keys": [
+    "g01_ja_bento",
+    "g01_ja_miso",
+    "g01_zh_clay_pot",
+    "g01_zh_spice_jar",
+    "g01_zh_thermos"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g01_ja-zh",
+   "category": "memory",
+   "combo": "ja-zh",
+   "group": "g01",
+   "query_lang": "ja",
+   "query": "うちの調味料入れって、どんな素材だったかな？",
+   "must_use_fact_keys": [
+    "g01_zh_spice_jar"
+   ],
+   "must_not_use_fact_keys": [
+    "g01_ja_bento",
+    "g01_ja_kyusu",
+    "g01_ja_miso",
+    "g01_zh_clay_pot",
+    "g01_zh_thermos"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g02_zh-zh",
+   "category": "memory",
+   "combo": "zh-zh",
+   "group": "g02",
+   "query_lang": "zh",
+   "query": "我平时练手指的那个带键的乐器，当初怎么到手的？",
+   "must_use_fact_keys": [
+    "g02_zh_keyboard"
+   ],
+   "must_not_use_fact_keys": [
+    "g02_ja_cajon",
+    "g02_ja_piano",
+    "g02_ja_ukulele",
+    "g02_zh_harmonica",
+    "g02_zh_violin"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g02_ja-ja",
+   "category": "memory",
+   "combo": "ja-ja",
+   "group": "g02",
+   "query_lang": "ja",
+   "query": "弦が四本の小さい楽器は、どうやって手に入れたっけ？",
+   "must_use_fact_keys": [
+    "g02_ja_ukulele"
+   ],
+   "must_not_use_fact_keys": [
+    "g02_ja_cajon",
+    "g02_ja_piano",
+    "g02_zh_harmonica",
+    "g02_zh_keyboard",
+    "g02_zh_violin"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g02_zh-ja",
+   "category": "memory",
+   "combo": "zh-ja",
+   "group": "g02",
+   "query_lang": "zh",
+   "query": "家里那台钢琴是怎么来的？",
+   "must_use_fact_keys": [
+    "g02_ja_piano"
+   ],
+   "must_not_use_fact_keys": [
+    "g02_ja_cajon",
+    "g02_ja_ukulele",
+    "g02_zh_harmonica",
+    "g02_zh_keyboard",
+    "g02_zh_violin"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g02_ja-zh",
+   "category": "memory",
+   "combo": "ja-zh",
+   "group": "g02",
+   "query_lang": "ja",
+   "query": "バイオリンって、誰かのお下がりだったっけ？",
+   "must_use_fact_keys": [
+    "g02_zh_violin"
+   ],
+   "must_not_use_fact_keys": [
+    "g02_ja_cajon",
+    "g02_ja_piano",
+    "g02_ja_ukulele",
+    "g02_zh_harmonica",
+    "g02_zh_keyboard"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g03_zh-zh",
+   "category": "memory",
+   "combo": "zh-zh",
+   "group": "g03",
+   "query_lang": "zh",
+   "query": "窗边笼子里能学舌的鸟，叫什么来着？",
+   "must_use_fact_keys": [
+    "g03_zh_parrot"
+   ],
+   "must_not_use_fact_keys": [
+    "g03_ja_dog",
+    "g03_ja_hamster",
+    "g03_ja_rabbit",
+    "g03_zh_cat",
+    "g03_zh_goldfish"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g03_ja-ja",
+   "category": "memory",
+   "combo": "ja-ja",
+   "group": "g03",
+   "query_lang": "ja",
+   "query": "実家で飼ってる犬の名前、何だっけ？",
+   "must_use_fact_keys": [
+    "g03_ja_dog"
+   ],
+   "must_not_use_fact_keys": [
+    "g03_ja_hamster",
+    "g03_ja_rabbit",
+    "g03_zh_cat",
+    "g03_zh_goldfish",
+    "g03_zh_parrot"
+   ],
+   "structured_score_vs_target": 0.15,
+   "paraphrase": false
+  },
+  {
+   "id": "g03_zh-ja",
+   "category": "memory",
+   "combo": "zh-ja",
+   "group": "g03",
+   "query_lang": "zh",
+   "query": "我养的那只长耳朵的小动物叫什么？",
+   "must_use_fact_keys": [
+    "g03_ja_rabbit"
+   ],
+   "must_not_use_fact_keys": [
+    "g03_ja_dog",
+    "g03_ja_hamster",
+    "g03_zh_cat",
+    "g03_zh_goldfish",
+    "g03_zh_parrot"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g03_ja-zh",
+   "category": "memory",
+   "combo": "ja-zh",
+   "group": "g03",
+   "query_lang": "ja",
+   "query": "金魚の名前、全部は覚えてないんだけど何だっけ？",
+   "must_use_fact_keys": [
+    "g03_zh_goldfish"
+   ],
+   "must_not_use_fact_keys": [
+    "g03_ja_dog",
+    "g03_ja_hamster",
+    "g03_ja_rabbit",
+    "g03_zh_cat",
+    "g03_zh_parrot"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g04_zh-zh",
+   "category": "memory",
+   "combo": "zh-zh",
+   "group": "g04",
+   "query_lang": "zh",
+   "query": "那个随身带着给手机续命的东西，是什么颜色？",
+   "must_use_fact_keys": [
+    "g04_zh_powerbank"
+   ],
+   "must_not_use_fact_keys": [
+    "g04_ja_mouse",
+    "g04_ja_tablet",
+    "g04_ja_watch",
+    "g04_zh_keyboard",
+    "g04_zh_phone_case"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g04_ja-ja",
+   "category": "memory",
+   "combo": "ja-ja",
+   "group": "g04",
+   "query_lang": "ja",
+   "query": "タブレットのカバー、何色にしたんだっけ？",
+   "must_use_fact_keys": [
+    "g04_ja_tablet"
+   ],
+   "must_not_use_fact_keys": [
+    "g04_ja_mouse",
+    "g04_ja_watch",
+    "g04_zh_keyboard",
+    "g04_zh_phone_case",
+    "g04_zh_powerbank"
+   ],
+   "structured_score_vs_target": 0.284211,
+   "paraphrase": false
+  },
+  {
+   "id": "g04_zh-ja",
+   "category": "memory",
+   "combo": "zh-ja",
+   "group": "g04",
+   "query_lang": "zh",
+   "query": "我买的那个控制光标的小设备，选了什么颜色？",
+   "must_use_fact_keys": [
+    "g04_ja_mouse"
+   ],
+   "must_not_use_fact_keys": [
+    "g04_ja_tablet",
+    "g04_ja_watch",
+    "g04_zh_keyboard",
+    "g04_zh_phone_case",
+    "g04_zh_powerbank"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g04_ja-zh",
+   "category": "memory",
+   "combo": "ja-zh",
+   "group": "g04",
+   "query_lang": "ja",
+   "query": "仕事机のキーボードって、何色だったっけ？",
+   "must_use_fact_keys": [
+    "g04_zh_keyboard"
+   ],
+   "must_not_use_fact_keys": [
+    "g04_ja_mouse",
+    "g04_ja_tablet",
+    "g04_ja_watch",
+    "g04_zh_phone_case",
+    "g04_zh_powerbank"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g05_zh-zh",
+   "category": "memory",
+   "combo": "zh-zh",
+   "group": "g05",
+   "query_lang": "zh",
+   "query": "我哥哥现在在哪个城市工作？",
+   "must_use_fact_keys": [
+    "g05_zh_brother"
+   ],
+   "must_not_use_fact_keys": [
+    "g05_ja_aunt",
+    "g05_ja_cousin",
+    "g05_ja_younger_brother",
+    "g05_zh_grandma",
+    "g05_zh_uncle"
+   ],
+   "structured_score_vs_target": 0.15,
+   "paraphrase": false
+  },
+  {
+   "id": "g05_ja-ja",
+   "category": "memory",
+   "combo": "ja-ja",
+   "group": "g05",
+   "query_lang": "ja",
+   "query": "海外で勉強中の身内って、どこの国にいるんだっけ？",
+   "must_use_fact_keys": [
+    "g05_ja_younger_brother"
+   ],
+   "must_not_use_fact_keys": [
+    "g05_ja_aunt",
+    "g05_ja_cousin",
+    "g05_zh_brother",
+    "g05_zh_grandma",
+    "g05_zh_uncle"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g05_zh-ja",
+   "category": "memory",
+   "combo": "zh-ja",
+   "group": "g05",
+   "query_lang": "zh",
+   "query": "我的堂表亲上了大学搬到了哪里？",
+   "must_use_fact_keys": [
+    "g05_ja_cousin"
+   ],
+   "must_not_use_fact_keys": [
+    "g05_ja_aunt",
+    "g05_ja_younger_brother",
+    "g05_zh_brother",
+    "g05_zh_grandma",
+    "g05_zh_uncle"
+   ],
+   "structured_score_vs_target": 0.042857,
+   "paraphrase": false
+  },
+  {
+   "id": "g05_ja-zh",
+   "category": "memory",
+   "combo": "ja-zh",
+   "group": "g05",
+   "query_lang": "ja",
+   "query": "祖母ってどこの街に住んでるんだっけ？",
+   "must_use_fact_keys": [
+    "g05_zh_grandma"
+   ],
+   "must_not_use_fact_keys": [
+    "g05_ja_aunt",
+    "g05_ja_cousin",
+    "g05_ja_younger_brother",
+    "g05_zh_brother",
+    "g05_zh_uncle"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g06_zh-zh",
+   "category": "memory",
+   "combo": "zh-zh",
+   "group": "g06",
+   "query_lang": "zh",
+   "query": "睡觉的那间屋，四面是什么色？",
+   "must_use_fact_keys": [
+    "g06_zh_bedroom"
+   ],
+   "must_not_use_fact_keys": [
+    "g06_ja_balcony",
+    "g06_ja_entrance",
+    "g06_ja_kitchen",
+    "g06_zh_bathroom",
+    "g06_zh_study"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g06_ja-ja",
+   "category": "memory",
+   "combo": "ja-ja",
+   "group": "g06",
+   "query_lang": "ja",
+   "query": "台所の壁紙は何色にしたっけ？",
+   "must_use_fact_keys": [
+    "g06_ja_kitchen"
+   ],
+   "must_not_use_fact_keys": [
+    "g06_ja_balcony",
+    "g06_ja_entrance",
+    "g06_zh_bathroom",
+    "g06_zh_bedroom",
+    "g06_zh_study"
+   ],
+   "structured_score_vs_target": 0.138462,
+   "paraphrase": false
+  },
+  {
+   "id": "g06_zh-ja",
+   "category": "memory",
+   "combo": "zh-ja",
+   "group": "g06",
+   "query_lang": "zh",
+   "query": "进门那个小过道的墙是什么颜色？",
+   "must_use_fact_keys": [
+    "g06_ja_entrance"
+   ],
+   "must_not_use_fact_keys": [
+    "g06_ja_balcony",
+    "g06_ja_kitchen",
+    "g06_zh_bathroom",
+    "g06_zh_bedroom",
+    "g06_zh_study"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g06_ja-zh",
+   "category": "memory",
+   "combo": "ja-zh",
+   "group": "g06",
+   "query_lang": "ja",
+   "query": "勉強する部屋の壁は何色だったかな？",
+   "must_use_fact_keys": [
+    "g06_zh_study"
+   ],
+   "must_not_use_fact_keys": [
+    "g06_ja_balcony",
+    "g06_ja_entrance",
+    "g06_ja_kitchen",
+    "g06_zh_bathroom",
+    "g06_zh_bedroom"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g07_zh-zh",
+   "category": "memory",
+   "combo": "zh-zh",
+   "group": "g07",
+   "query_lang": "zh",
+   "query": "下水锻炼一般去哪里？",
+   "must_use_fact_keys": [
+    "g07_zh_swimming"
+   ],
+   "must_not_use_fact_keys": [
+    "g07_ja_badminton",
+    "g07_ja_cycling",
+    "g07_ja_yoga",
+    "g07_zh_running",
+    "g07_zh_skateboard"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g07_ja-ja",
+   "category": "memory",
+   "combo": "ja-ja",
+   "group": "g07",
+   "query_lang": "ja",
+   "query": "ペダルをこぐ時、いつも向かう場所ってどこ？",
+   "must_use_fact_keys": [
+    "g07_ja_cycling"
+   ],
+   "must_not_use_fact_keys": [
+    "g07_ja_badminton",
+    "g07_ja_yoga",
+    "g07_zh_running",
+    "g07_zh_skateboard",
+    "g07_zh_swimming"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g07_zh-ja",
+   "category": "memory",
+   "combo": "zh-ja",
+   "group": "g07",
+   "query_lang": "zh",
+   "query": "我做瑜伽是在哪里做的？",
+   "must_use_fact_keys": [
+    "g07_ja_yoga"
+   ],
+   "must_not_use_fact_keys": [
+    "g07_ja_badminton",
+    "g07_ja_cycling",
+    "g07_zh_running",
+    "g07_zh_skateboard",
+    "g07_zh_swimming"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g07_ja-zh",
+   "category": "memory",
+   "combo": "ja-zh",
+   "group": "g07",
+   "query_lang": "ja",
+   "query": "ランニングはどこでしてるって言ってたっけ？",
+   "must_use_fact_keys": [
+    "g07_zh_running"
+   ],
+   "must_not_use_fact_keys": [
+    "g07_ja_badminton",
+    "g07_ja_cycling",
+    "g07_ja_yoga",
+    "g07_zh_skateboard",
+    "g07_zh_swimming"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g08_zh-zh",
+   "category": "memory",
+   "combo": "zh-zh",
+   "group": "g08",
+   "query_lang": "zh",
+   "query": "住在隔壁的那位是干什么的？",
+   "must_use_fact_keys": [
+    "g08_zh_zhou"
+   ],
+   "must_not_use_fact_keys": [
+    "g08_ja_misaki",
+    "g08_ja_sato",
+    "g08_ja_tanaka",
+    "g08_zh_aming",
+    "g08_zh_zhao"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g08_ja-ja",
+   "category": "memory",
+   "combo": "ja-ja",
+   "group": "g08",
+   "query_lang": "ja",
+   "query": "高校の同級生は結局何の仕事に就いたんだっけ？",
+   "must_use_fact_keys": [
+    "g08_ja_sato"
+   ],
+   "must_not_use_fact_keys": [
+    "g08_ja_misaki",
+    "g08_ja_tanaka",
+    "g08_zh_aming",
+    "g08_zh_zhao",
+    "g08_zh_zhou"
+   ],
+   "structured_score_vs_target": 0.142857,
+   "paraphrase": false
+  },
+  {
+   "id": "g08_zh-ja",
+   "category": "memory",
+   "combo": "zh-ja",
+   "group": "g08",
+   "query_lang": "zh",
+   "query": "我最好的那个朋友现在做什么工作来着？",
+   "must_use_fact_keys": [
+    "g08_ja_misaki"
+   ],
+   "must_not_use_fact_keys": [
+    "g08_ja_sato",
+    "g08_ja_tanaka",
+    "g08_zh_aming",
+    "g08_zh_zhao",
+    "g08_zh_zhou"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g08_ja-zh",
+   "category": "memory",
+   "combo": "ja-zh",
+   "group": "g08",
+   "query_lang": "ja",
+   "query": "大学の同級生の阿明さんって、今何してるんだっけ？",
+   "must_use_fact_keys": [
+    "g08_zh_aming"
+   ],
+   "must_not_use_fact_keys": [
+    "g08_ja_misaki",
+    "g08_ja_sato",
+    "g08_ja_tanaka",
+    "g08_zh_zhao",
+    "g08_zh_zhou"
+   ],
+   "structured_score_vs_target": 0.052174,
+   "paraphrase": false
+  },
+  {
+   "id": "g09_zh-zh",
+   "category": "memory",
+   "combo": "zh-zh",
+   "group": "g09",
+   "query_lang": "zh",
+   "query": "菜谱放在哪儿来着？",
+   "must_use_fact_keys": [
+    "g09_zh_cookbook"
+   ],
+   "must_not_use_fact_keys": [
+    "g09_ja_magazine",
+    "g09_ja_picture_book",
+    "g09_ja_textbook",
+    "g09_zh_dictionary",
+    "g09_zh_manga"
+   ],
+   "structured_score_vs_target": 0.075,
+   "paraphrase": false
+  },
+  {
+   "id": "g09_ja-ja",
+   "category": "memory",
+   "combo": "ja-ja",
+   "group": "g09",
+   "query_lang": "ja",
+   "query": "子ども向けの読み物って、うちのどの辺にあったっけ？",
+   "must_use_fact_keys": [
+    "g09_ja_picture_book"
+   ],
+   "must_not_use_fact_keys": [
+    "g09_ja_magazine",
+    "g09_ja_textbook",
+    "g09_zh_cookbook",
+    "g09_zh_dictionary",
+    "g09_zh_manga"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g09_zh-ja",
+   "category": "memory",
+   "combo": "zh-ja",
+   "group": "g09",
+   "query_lang": "zh",
+   "query": "我的学习用书都收在哪里了？",
+   "must_use_fact_keys": [
+    "g09_ja_textbook"
+   ],
+   "must_not_use_fact_keys": [
+    "g09_ja_magazine",
+    "g09_ja_picture_book",
+    "g09_zh_cookbook",
+    "g09_zh_dictionary",
+    "g09_zh_manga"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g09_ja-zh",
+   "category": "memory",
+   "combo": "ja-zh",
+   "group": "g09",
+   "query_lang": "ja",
+   "query": "マンガはどのあたりにしまってたっけ？",
+   "must_use_fact_keys": [
+    "g09_zh_manga"
+   ],
+   "must_not_use_fact_keys": [
+    "g09_ja_magazine",
+    "g09_ja_picture_book",
+    "g09_ja_textbook",
+    "g09_zh_cookbook",
+    "g09_zh_dictionary"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g10_zh-zh",
+   "category": "memory",
+   "combo": "zh-zh",
+   "group": "g10",
+   "query_lang": "zh",
+   "query": "那个刚来的新人哪天过生日？",
+   "must_use_fact_keys": [
+    "g10_zh_intern"
+   ],
+   "must_not_use_fact_keys": [
+    "g10_ja_kenta",
+    "g10_ja_suzuki",
+    "g10_ja_yamamoto",
+    "g10_zh_chen",
+    "g10_zh_wang"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g10_ja-ja",
+   "category": "memory",
+   "combo": "ja-ja",
+   "group": "g10",
+   "query_lang": "ja",
+   "query": "うちの上司の誕生日って、いつ頃だっけ？",
+   "must_use_fact_keys": [
+    "g10_ja_suzuki"
+   ],
+   "must_not_use_fact_keys": [
+    "g10_ja_kenta",
+    "g10_ja_yamamoto",
+    "g10_zh_chen",
+    "g10_zh_intern",
+    "g10_zh_wang"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g10_zh-ja",
+   "category": "memory",
+   "combo": "zh-ja",
+   "group": "g10",
+   "query_lang": "zh",
+   "query": "同事山本的生日是几号？",
+   "must_use_fact_keys": [
+    "g10_ja_yamamoto"
+   ],
+   "must_not_use_fact_keys": [
+    "g10_ja_kenta",
+    "g10_ja_suzuki",
+    "g10_zh_chen",
+    "g10_zh_intern",
+    "g10_zh_wang"
+   ],
+   "structured_score_vs_target": 0.12,
+   "paraphrase": false
+  },
+  {
+   "id": "g10_ja-zh",
+   "category": "memory",
+   "combo": "ja-zh",
+   "group": "g10",
+   "query_lang": "ja",
+   "query": "あの面倒見のいい先輩の誕生日はいつ？",
+   "must_use_fact_keys": [
+    "g10_zh_wang"
+   ],
+   "must_not_use_fact_keys": [
+    "g10_ja_kenta",
+    "g10_ja_suzuki",
+    "g10_ja_yamamoto",
+    "g10_zh_chen",
+    "g10_zh_intern"
+   ],
+   "structured_score_vs_target": 0.035294,
+   "paraphrase": false
+  },
+  {
+   "id": "g11_zh-zh",
+   "category": "memory",
+   "combo": "zh-zh",
+   "group": "g11",
+   "query_lang": "zh",
+   "query": "钱花在哪儿了，我一般靠什么工具理清？",
+   "must_use_fact_keys": [
+    "g11_zh_bookkeeping"
+   ],
+   "must_not_use_fact_keys": [
+    "g11_ja_password",
+    "g11_ja_schedule",
+    "g11_ja_translate",
+    "g11_zh_navigation",
+    "g11_zh_read_later"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g11_ja-ja",
+   "category": "memory",
+   "combo": "ja-ja",
+   "group": "g11",
+   "query_lang": "ja",
+   "query": "外国語のサイトを開いたとき、どうやって理解してたっけ？",
+   "must_use_fact_keys": [
+    "g11_ja_translate"
+   ],
+   "must_not_use_fact_keys": [
+    "g11_ja_password",
+    "g11_ja_schedule",
+    "g11_zh_bookkeeping",
+    "g11_zh_navigation",
+    "g11_zh_read_later"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g11_zh-ja",
+   "category": "memory",
+   "combo": "zh-ja",
+   "group": "g11",
+   "query_lang": "zh",
+   "query": "我的各种登录口令是用什么存的？",
+   "must_use_fact_keys": [
+    "g11_ja_password"
+   ],
+   "must_not_use_fact_keys": [
+    "g11_ja_schedule",
+    "g11_ja_translate",
+    "g11_zh_bookkeeping",
+    "g11_zh_navigation",
+    "g11_zh_read_later"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g11_ja-zh",
+   "category": "memory",
+   "combo": "ja-zh",
+   "group": "g11",
+   "query_lang": "ja",
+   "query": "後で読みたい記事って、どこに保存してたっけ？",
+   "must_use_fact_keys": [
+    "g11_zh_read_later"
+   ],
+   "must_not_use_fact_keys": [
+    "g11_ja_password",
+    "g11_ja_schedule",
+    "g11_ja_translate",
+    "g11_zh_bookkeeping",
+    "g11_zh_navigation"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g12_zh-zh",
+   "category": "memory",
+   "combo": "zh-zh",
+   "group": "g12",
+   "query_lang": "zh",
+   "query": "去京都买的伴手礼是什么来着？",
+   "must_use_fact_keys": [
+    "g12_zh_kyoto"
+   ],
+   "must_not_use_fact_keys": [
+    "g12_ja_okinawa",
+    "g12_ja_seoul",
+    "g12_ja_taipei",
+    "g12_zh_chengdu",
+    "g12_zh_xiamen"
+   ],
+   "structured_score_vs_target": 0.184615,
+   "paraphrase": false
+  },
+  {
+   "id": "g12_ja-ja",
+   "category": "memory",
+   "combo": "ja-ja",
+   "group": "g12",
+   "query_lang": "ja",
+   "query": "那覇に行ったとき、何を買って帰ったっけ？",
+   "must_use_fact_keys": [
+    "g12_ja_okinawa"
+   ],
+   "must_not_use_fact_keys": [
+    "g12_ja_seoul",
+    "g12_ja_taipei",
+    "g12_zh_chengdu",
+    "g12_zh_kyoto",
+    "g12_zh_xiamen"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g12_zh-ja",
+   "category": "memory",
+   "combo": "zh-ja",
+   "group": "g12",
+   "query_lang": "zh",
+   "query": "去台北那趟，带回来给大家的是什么？",
+   "must_use_fact_keys": [
+    "g12_ja_taipei"
+   ],
+   "must_not_use_fact_keys": [
+    "g12_ja_okinawa",
+    "g12_ja_seoul",
+    "g12_zh_chengdu",
+    "g12_zh_kyoto",
+    "g12_zh_xiamen"
+   ],
+   "structured_score_vs_target": 0.0375,
+   "paraphrase": false
+  },
+  {
+   "id": "g12_ja-zh",
+   "category": "memory",
+   "combo": "ja-zh",
+   "group": "g12",
+   "query_lang": "ja",
+   "query": "成都のお土産、何にしたんだっけ？",
+   "must_use_fact_keys": [
+    "g12_zh_chengdu"
+   ],
+   "must_not_use_fact_keys": [
+    "g12_ja_okinawa",
+    "g12_ja_seoul",
+    "g12_ja_taipei",
+    "g12_zh_kyoto",
+    "g12_zh_xiamen"
+   ],
+   "structured_score_vs_target": 0.04,
+   "paraphrase": false
+  },
+  {
+   "id": "g13_zh-zh",
+   "category": "memory",
+   "combo": "zh-zh",
+   "group": "g13",
+   "query_lang": "zh",
+   "query": "早上喝的那杯植物奶，我要甜的还是不甜的？",
+   "must_use_fact_keys": [
+    "g13_zh_soymilk"
+   ],
+   "must_not_use_fact_keys": [
+    "g13_ja_black_tea",
+    "g13_ja_curry",
+    "g13_ja_ramen",
+    "g13_zh_fried_egg",
+    "g13_zh_hotpot"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g13_ja-ja",
+   "category": "memory",
+   "combo": "ja-ja",
+   "group": "g13",
+   "query_lang": "ja",
+   "query": "ラーメン屋で注文するとき、いつもどう頼んでるっけ？",
+   "must_use_fact_keys": [
+    "g13_ja_ramen"
+   ],
+   "must_not_use_fact_keys": [
+    "g13_ja_black_tea",
+    "g13_ja_curry",
+    "g13_zh_fried_egg",
+    "g13_zh_hotpot",
+    "g13_zh_soymilk"
+   ],
+   "structured_score_vs_target": 0.075,
+   "paraphrase": false
+  },
+  {
+   "id": "g13_zh-ja",
+   "category": "memory",
+   "combo": "zh-ja",
+   "group": "g13",
+   "query_lang": "zh",
+   "query": "吃咖喱我要选几辣？",
+   "must_use_fact_keys": [
+    "g13_ja_curry"
+   ],
+   "must_not_use_fact_keys": [
+    "g13_ja_black_tea",
+    "g13_ja_ramen",
+    "g13_zh_fried_egg",
+    "g13_zh_hotpot",
+    "g13_zh_soymilk"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g13_ja-zh",
+   "category": "memory",
+   "combo": "ja-zh",
+   "group": "g13",
+   "query_lang": "ja",
+   "query": "鍋料理を食べに行くとき、辛さはどのくらいにしてる？",
+   "must_use_fact_keys": [
+    "g13_zh_hotpot"
+   ],
+   "must_not_use_fact_keys": [
+    "g13_ja_black_tea",
+    "g13_ja_curry",
+    "g13_ja_ramen",
+    "g13_zh_fried_egg",
+    "g13_zh_soymilk"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g14_zh-zh",
+   "category": "memory",
+   "combo": "zh-zh",
+   "group": "g14",
+   "query_lang": "zh",
+   "query": "最冷的那几个月，休息日我怎么过？",
+   "must_use_fact_keys": [
+    "g14_zh_winter"
+   ],
+   "must_not_use_fact_keys": [
+    "g14_ja_autumn",
+    "g14_ja_newyear",
+    "g14_ja_rainy",
+    "g14_zh_spring",
+    "g14_zh_summer"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g14_ja-ja",
+   "category": "memory",
+   "combo": "ja-ja",
+   "group": "g14",
+   "query_lang": "ja",
+   "query": "気温が下がった頃は、いつも何をしに出かけてたっけ？",
+   "must_use_fact_keys": [
+    "g14_ja_autumn"
+   ],
+   "must_not_use_fact_keys": [
+    "g14_ja_newyear",
+    "g14_ja_rainy",
+    "g14_zh_spring",
+    "g14_zh_summer",
+    "g14_zh_winter"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g14_zh-ja",
+   "category": "memory",
+   "combo": "zh-ja",
+   "group": "g14",
+   "query_lang": "zh",
+   "query": "过年的时候我会回老家做什么？",
+   "must_use_fact_keys": [
+    "g14_ja_newyear"
+   ],
+   "must_not_use_fact_keys": [
+    "g14_ja_autumn",
+    "g14_ja_rainy",
+    "g14_zh_spring",
+    "g14_zh_summer",
+    "g14_zh_winter"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g14_ja-zh",
+   "category": "memory",
+   "combo": "ja-zh",
+   "group": "g14",
+   "query_lang": "ja",
+   "query": "春になると決まってどこに行くんだっけ？",
+   "must_use_fact_keys": [
+    "g14_zh_spring"
+   ],
+   "must_not_use_fact_keys": [
+    "g14_ja_autumn",
+    "g14_ja_newyear",
+    "g14_ja_rainy",
+    "g14_zh_summer",
+    "g14_zh_winter"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g15_zh-zh",
+   "category": "memory",
+   "combo": "zh-zh",
+   "group": "g15",
+   "query_lang": "zh",
+   "query": "每次把脏T恤和袜子塞进去转一圈的电器，到底服役多久了？",
+   "must_use_fact_keys": [
+    "g15_zh_washer"
+   ],
+   "must_not_use_fact_keys": [
+    "g15_ja_microwave",
+    "g15_ja_ricecooker",
+    "g15_ja_vacuum",
+    "g15_zh_aircon",
+    "g15_zh_fridge"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g15_ja-ja",
+   "category": "memory",
+   "combo": "ja-ja",
+   "group": "g15",
+   "query_lang": "ja",
+   "query": "ごはんを作る家電って、今何年目だっけ？",
+   "must_use_fact_keys": [
+    "g15_ja_ricecooker"
+   ],
+   "must_not_use_fact_keys": [
+    "g15_ja_microwave",
+    "g15_ja_vacuum",
+    "g15_zh_aircon",
+    "g15_zh_fridge",
+    "g15_zh_washer"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g15_zh-ja",
+   "category": "memory",
+   "combo": "zh-ja",
+   "group": "g15",
+   "query_lang": "zh",
+   "query": "微波炉是什么时候买的？",
+   "must_use_fact_keys": [
+    "g15_ja_microwave"
+   ],
+   "must_not_use_fact_keys": [
+    "g15_ja_ricecooker",
+    "g15_ja_vacuum",
+    "g15_zh_aircon",
+    "g15_zh_fridge",
+    "g15_zh_washer"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g15_ja-zh",
+   "category": "memory",
+   "combo": "ja-zh",
+   "group": "g15",
+   "query_lang": "ja",
+   "query": "エアコンって、いつ頃付けたんだっけ？",
+   "must_use_fact_keys": [
+    "g15_zh_aircon"
+   ],
+   "must_not_use_fact_keys": [
+    "g15_ja_microwave",
+    "g15_ja_ricecooker",
+    "g15_ja_vacuum",
+    "g15_zh_fridge",
+    "g15_zh_washer"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g16_zh-zh",
+   "category": "memory",
+   "combo": "zh-zh",
+   "group": "g16",
+   "query_lang": "zh",
+   "query": "常去的面包店在哪儿来着？",
+   "must_use_fact_keys": [
+    "g16_zh_bakery"
+   ],
+   "must_not_use_fact_keys": [
+    "g16_ja_bookstore",
+    "g16_ja_laundry",
+    "g16_ja_salon",
+    "g16_zh_pharmacy",
+    "g16_zh_stationery"
+   ],
+   "structured_score_vs_target": 0.327273,
+   "paraphrase": false
+  },
+  {
+   "id": "g16_ja-ja",
+   "category": "memory",
+   "combo": "ja-ja",
+   "group": "g16",
+   "query_lang": "ja",
+   "query": "新刊を探すなら、どの建物に入ればいいんだっけ？",
+   "must_use_fact_keys": [
+    "g16_ja_bookstore"
+   ],
+   "must_not_use_fact_keys": [
+    "g16_ja_laundry",
+    "g16_ja_salon",
+    "g16_zh_bakery",
+    "g16_zh_pharmacy",
+    "g16_zh_stationery"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g16_zh-ja",
+   "category": "memory",
+   "combo": "zh-ja",
+   "group": "g16",
+   "query_lang": "zh",
+   "query": "我剪头发去的那家店在什么位置？",
+   "must_use_fact_keys": [
+    "g16_ja_salon"
+   ],
+   "must_not_use_fact_keys": [
+    "g16_ja_bookstore",
+    "g16_ja_laundry",
+    "g16_zh_bakery",
+    "g16_zh_pharmacy",
+    "g16_zh_stationery"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g16_ja-zh",
+   "category": "memory",
+   "combo": "ja-zh",
+   "group": "g16",
+   "query_lang": "ja",
+   "query": "薬を買うのは、いつもどこの店だっけ？",
+   "must_use_fact_keys": [
+    "g16_zh_pharmacy"
+   ],
+   "must_not_use_fact_keys": [
+    "g16_ja_bookstore",
+    "g16_ja_laundry",
+    "g16_ja_salon",
+    "g16_zh_bakery",
+    "g16_zh_stationery"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g17_zh-zh",
+   "category": "memory",
+   "combo": "zh-zh",
+   "group": "g17",
+   "query_lang": "zh",
+   "query": "我在灶台边上算什么段位？",
+   "must_use_fact_keys": [
+    "g17_zh_cooking"
+   ],
+   "must_not_use_fact_keys": [
+    "g17_ja_chinese",
+    "g17_ja_coding",
+    "g17_ja_driving",
+    "g17_zh_english",
+    "g17_zh_swim"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g17_ja-ja",
+   "category": "memory",
+   "combo": "ja-ja",
+   "group": "g17",
+   "query_lang": "ja",
+   "query": "ソースコードの腕前って、どのくらいなんだっけ？",
+   "must_use_fact_keys": [
+    "g17_ja_coding"
+   ],
+   "must_not_use_fact_keys": [
+    "g17_ja_chinese",
+    "g17_ja_driving",
+    "g17_zh_cooking",
+    "g17_zh_english",
+    "g17_zh_swim"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g17_zh-ja",
+   "category": "memory",
+   "combo": "zh-ja",
+   "group": "g17",
+   "query_lang": "zh",
+   "query": "我开车的熟练程度是怎样的？",
+   "must_use_fact_keys": [
+    "g17_ja_driving"
+   ],
+   "must_not_use_fact_keys": [
+    "g17_ja_chinese",
+    "g17_ja_coding",
+    "g17_zh_cooking",
+    "g17_zh_english",
+    "g17_zh_swim"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g17_ja-zh",
+   "category": "memory",
+   "combo": "ja-zh",
+   "group": "g17",
+   "query_lang": "ja",
+   "query": "英語はどのくらい話せるんだっけ？",
+   "must_use_fact_keys": [
+    "g17_zh_english"
+   ],
+   "must_not_use_fact_keys": [
+    "g17_ja_chinese",
+    "g17_ja_coding",
+    "g17_ja_driving",
+    "g17_zh_cooking",
+    "g17_zh_swim"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g18_zh-zh",
+   "category": "memory",
+   "combo": "zh-zh",
+   "group": "g18",
+   "query_lang": "zh",
+   "query": "出游时寄回家的那些风景小卡，现在有多少？",
+   "must_use_fact_keys": [
+    "g18_zh_postcards"
+   ],
+   "must_not_use_fact_keys": [
+    "g18_ja_badges",
+    "g18_ja_figures",
+    "g18_ja_watches",
+    "g18_zh_keychains",
+    "g18_zh_vinyl"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g18_ja-ja",
+   "category": "memory",
+   "combo": "ja-ja",
+   "group": "g18",
+   "query_lang": "ja",
+   "query": "缶バッジって今いくつあるんだっけ？",
+   "must_use_fact_keys": [
+    "g18_ja_badges"
+   ],
+   "must_not_use_fact_keys": [
+    "g18_ja_figures",
+    "g18_ja_watches",
+    "g18_zh_keychains",
+    "g18_zh_postcards",
+    "g18_zh_vinyl"
+   ],
+   "structured_score_vs_target": 0.1125,
+   "paraphrase": false
+  },
+  {
+   "id": "g18_zh-ja",
+   "category": "memory",
+   "combo": "zh-ja",
+   "group": "g18",
+   "query_lang": "zh",
+   "query": "我的手办现在一共多少个？",
+   "must_use_fact_keys": [
+    "g18_ja_figures"
+   ],
+   "must_not_use_fact_keys": [
+    "g18_ja_badges",
+    "g18_ja_watches",
+    "g18_zh_keychains",
+    "g18_zh_postcards",
+    "g18_zh_vinyl"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g18_ja-zh",
+   "category": "memory",
+   "combo": "ja-zh",
+   "group": "g18",
+   "query_lang": "ja",
+   "query": "レコードって今何枚持ってたっけ？",
+   "must_use_fact_keys": [
+    "g18_zh_vinyl"
+   ],
+   "must_not_use_fact_keys": [
+    "g18_ja_badges",
+    "g18_ja_figures",
+    "g18_ja_watches",
+    "g18_zh_keychains",
+    "g18_zh_postcards"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g19_zh-zh",
+   "category": "memory",
+   "combo": "zh-zh",
+   "group": "g19",
+   "query_lang": "zh",
+   "query": "我爱放的那类吉他弹唱，主唱是谁？",
+   "must_use_fact_keys": [
+    "g19_zh_folk"
+   ],
+   "must_not_use_fact_keys": [
+    "g19_ja_anime",
+    "g19_ja_horror",
+    "g19_ja_jazz",
+    "g19_zh_mystery",
+    "g19_zh_scifi"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g19_ja-ja",
+   "category": "memory",
+   "combo": "ja-ja",
+   "group": "g19",
+   "query_lang": "ja",
+   "query": "ジャズのアルバムで、よく聴くのは誰のだっけ？",
+   "must_use_fact_keys": [
+    "g19_ja_jazz"
+   ],
+   "must_not_use_fact_keys": [
+    "g19_ja_anime",
+    "g19_ja_horror",
+    "g19_zh_folk",
+    "g19_zh_mystery",
+    "g19_zh_scifi"
+   ],
+   "structured_score_vs_target": 0.257143,
+   "paraphrase": false
+  },
+  {
+   "id": "g19_zh-ja",
+   "category": "memory",
+   "combo": "zh-ja",
+   "group": "g19",
+   "query_lang": "zh",
+   "query": "动画片里我最喜欢哪一部？",
+   "must_use_fact_keys": [
+    "g19_ja_anime"
+   ],
+   "must_not_use_fact_keys": [
+    "g19_ja_horror",
+    "g19_ja_jazz",
+    "g19_zh_folk",
+    "g19_zh_mystery",
+    "g19_zh_scifi"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g19_ja-zh",
+   "category": "memory",
+   "combo": "ja-zh",
+   "group": "g19",
+   "query_lang": "ja",
+   "query": "SF映画の中で一番好きなのはどれだっけ？",
+   "must_use_fact_keys": [
+    "g19_zh_scifi"
+   ],
+   "must_not_use_fact_keys": [
+    "g19_ja_anime",
+    "g19_ja_horror",
+    "g19_ja_jazz",
+    "g19_zh_folk",
+    "g19_zh_mystery"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g20_zh-zh",
+   "category": "memory",
+   "combo": "zh-zh",
+   "group": "g20",
+   "query_lang": "zh",
+   "query": "我的腿脚有什么不方便的地方？",
+   "must_use_fact_keys": [
+    "g20_zh_knee"
+   ],
+   "must_not_use_fact_keys": [
+    "g20_ja_dust",
+    "g20_ja_lowbp",
+    "g20_ja_shoulder",
+    "g20_zh_eyesight",
+    "g20_zh_pollen"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g20_ja-ja",
+   "category": "memory",
+   "combo": "ja-ja",
+   "group": "g20",
+   "query_lang": "ja",
+   "query": "目覚めてすぐって、私どうなるんだっけ？",
+   "must_use_fact_keys": [
+    "g20_ja_lowbp"
+   ],
+   "must_not_use_fact_keys": [
+    "g20_ja_dust",
+    "g20_ja_shoulder",
+    "g20_zh_eyesight",
+    "g20_zh_knee",
+    "g20_zh_pollen"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g20_zh-ja",
+   "category": "memory",
+   "combo": "zh-ja",
+   "group": "g20",
+   "query_lang": "zh",
+   "query": "我肩颈的状况怎么样，要不要定期去调理？",
+   "must_use_fact_keys": [
+    "g20_ja_shoulder"
+   ],
+   "must_not_use_fact_keys": [
+    "g20_ja_dust",
+    "g20_ja_lowbp",
+    "g20_zh_eyesight",
+    "g20_zh_knee",
+    "g20_zh_pollen"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "g20_ja-zh",
+   "category": "memory",
+   "combo": "ja-zh",
+   "group": "g20",
+   "query_lang": "ja",
+   "query": "私の目、どのくらい悪かったっけ？",
+   "must_use_fact_keys": [
+    "g20_zh_eyesight"
+   ],
+   "must_not_use_fact_keys": [
+    "g20_ja_dust",
+    "g20_ja_lowbp",
+    "g20_ja_shoulder",
+    "g20_zh_knee",
+    "g20_zh_pollen"
+   ],
+   "structured_score_vs_target": 0.0,
+   "paraphrase": true
+  },
+  {
+   "id": "nomem_missing_01",
+   "category": "no_memory_in_domain",
+   "combo": null,
+   "group": "g01",
+   "query_lang": "zh",
+   "query": "我的水壶是什么材质的？",
+   "must_use_fact_keys": [],
+   "must_not_use_fact_keys": []
+  },
+  {
+   "id": "nomem_missing_02",
+   "category": "no_memory_in_domain",
+   "combo": null,
+   "group": "g03",
+   "query_lang": "zh",
+   "query": "我家养的乌龟叫什么名字？",
+   "must_use_fact_keys": [],
+   "must_not_use_fact_keys": []
+  },
+  {
+   "id": "nomem_missing_03",
+   "category": "no_memory_in_domain",
+   "combo": null,
+   "group": "g06",
+   "query_lang": "zh",
+   "query": "客厅的墙是什么颜色？",
+   "must_use_fact_keys": [],
+   "must_not_use_fact_keys": []
+  },
+  {
+   "id": "nomem_missing_04",
+   "category": "no_memory_in_domain",
+   "combo": null,
+   "group": "g09",
+   "query_lang": "zh",
+   "query": "我的乐谱放在哪里？",
+   "must_use_fact_keys": [],
+   "must_not_use_fact_keys": []
+  },
+  {
+   "id": "nomem_missing_05",
+   "category": "no_memory_in_domain",
+   "combo": null,
+   "group": "g15",
+   "query_lang": "zh",
+   "query": "我的电视是哪一年买的？",
+   "must_use_fact_keys": [],
+   "must_not_use_fact_keys": []
+  },
+  {
+   "id": "nomem_missing_06",
+   "category": "no_memory_in_domain",
+   "combo": null,
+   "group": "g19",
+   "query_lang": "zh",
+   "query": "爱情片里我最喜欢哪部？",
+   "must_use_fact_keys": [],
+   "must_not_use_fact_keys": []
+  },
+  {
+   "id": "nomem_missing_07",
+   "category": "no_memory_in_domain",
+   "combo": null,
+   "group": "g02",
+   "query_lang": "ja",
+   "query": "ギターはどこで手に入れたんだっけ？",
+   "must_use_fact_keys": [],
+   "must_not_use_fact_keys": []
+  },
+  {
+   "id": "nomem_missing_08",
+   "category": "no_memory_in_domain",
+   "combo": null,
+   "group": "g12",
+   "query_lang": "ja",
+   "query": "福岡のお土産は何にしたっけ？",
+   "must_use_fact_keys": [],
+   "must_not_use_fact_keys": []
+  },
+  {
+   "id": "nomem_missing_09",
+   "category": "no_memory_in_domain",
+   "combo": null,
+   "group": "g13",
+   "query_lang": "ja",
+   "query": "うどんのつゆは濃いめ？薄め？",
+   "must_use_fact_keys": [],
+   "must_not_use_fact_keys": []
+  },
+  {
+   "id": "nomem_missing_10",
+   "category": "no_memory_in_domain",
+   "combo": null,
+   "group": "g17",
+   "query_lang": "ja",
+   "query": "スキーはどのくらい滑れるんだっけ？",
+   "must_use_fact_keys": [],
+   "must_not_use_fact_keys": []
+  },
+  {
+   "id": "nomem_missing_11",
+   "category": "no_memory_in_domain",
+   "combo": null,
+   "group": "g18",
+   "query_lang": "ja",
+   "query": "スニーカーって何足持ってたっけ？",
+   "must_use_fact_keys": [],
+   "must_not_use_fact_keys": []
+  },
+  {
+   "id": "nomem_missing_12",
+   "category": "no_memory_in_domain",
+   "combo": null,
+   "group": "g20",
+   "query_lang": "ja",
+   "query": "歯の治療って今どうなってるんだっけ？",
+   "must_use_fact_keys": [],
+   "must_not_use_fact_keys": []
+  },
+  {
+   "id": "nomem_unrelated_01",
+   "category": "no_memory_unrelated",
+   "combo": null,
+   "group": null,
+   "query_lang": "zh",
+   "query": "明天会下雨吗？",
+   "must_use_fact_keys": [],
+   "must_not_use_fact_keys": []
+  },
+  {
+   "id": "nomem_unrelated_02",
+   "category": "no_memory_unrelated",
+   "combo": null,
+   "group": null,
+   "query_lang": "zh",
+   "query": "光速是多少？",
+   "must_use_fact_keys": [],
+   "must_not_use_fact_keys": []
+  },
+  {
+   "id": "nomem_unrelated_03",
+   "category": "no_memory_unrelated",
+   "combo": null,
+   "group": null,
+   "query_lang": "zh",
+   "query": "你今天心情怎么样？",
+   "must_use_fact_keys": [],
+   "must_not_use_fact_keys": []
+  },
+  {
+   "id": "nomem_unrelated_04",
+   "category": "no_memory_unrelated",
+   "combo": null,
+   "group": null,
+   "query_lang": "zh",
+   "query": "给我讲个笑话吧。",
+   "must_use_fact_keys": [],
+   "must_not_use_fact_keys": []
+  },
+  {
+   "id": "nomem_unrelated_05",
+   "category": "no_memory_unrelated",
+   "combo": null,
+   "group": null,
+   "query_lang": "ja",
+   "query": "富士山の高さって何メートルだっけ？",
+   "must_use_fact_keys": [],
+   "must_not_use_fact_keys": []
+  },
+  {
+   "id": "nomem_unrelated_06",
+   "category": "no_memory_unrelated",
+   "combo": null,
+   "group": null,
+   "query_lang": "ja",
+   "query": "最近よく眠れなくてさ、どう思う？",
+   "must_use_fact_keys": [],
+   "must_not_use_fact_keys": []
+  },
+  {
+   "id": "nomem_unrelated_07",
+   "category": "no_memory_unrelated",
+   "combo": null,
+   "group": null,
+   "query_lang": "ja",
+   "query": "今日は何を話そうか？",
+   "must_use_fact_keys": [],
+   "must_not_use_fact_keys": []
+  },
+  {
+   "id": "nomem_unrelated_08",
+   "category": "no_memory_unrelated",
+   "combo": null,
+   "group": null,
+   "query_lang": "ja",
+   "query": "東京タワーって何年にできたの？",
+   "must_use_fact_keys": [],
+   "must_not_use_fact_keys": []
+  }
+ ]
+}

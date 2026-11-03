@@ -78,7 +78,7 @@ SCOPE = {
 
 def _unit_vector(seed: str) -> list[float]:
     values: list[float] = []
-    for block in range(12):
+    for block in range(24):
         digest = hashlib.sha256(f"{seed}:{block}".encode("utf-8")).digest()
         values.extend(int(byte) - 127.5 for byte in digest)
     norm = math.sqrt(sum(v * v for v in values)) or 1.0
@@ -89,7 +89,7 @@ class _OfflineEmbedder(EmbeddingAdapter):
     """Fixed fake embedding — lexical retrieval is what this file proves."""
 
     def __init__(self) -> None:
-        super().__init__(model_name="b1-offline-deterministic-384", dimensions=384)
+        super().__init__(model_name="b1-offline-deterministic-768", dimensions=768)
         self.encode_passage_calls = 0
         self.encode_query_calls = 0
 
