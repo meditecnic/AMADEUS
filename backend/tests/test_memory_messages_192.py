@@ -332,3 +332,90 @@ async def test_processor_reference_publication_and_actual_second_request(isolate
         assert len(captures) == 2
         assert "茶" * 5000 not in str(captures[1]["active_history"])
         assert recalled not in session.turn_execution.sent_recall_fact_ids
+
+
+async def test_retry_keeps_refreshed_candidates_separate_from_sent_budget(isolated_store, monkeypatch):
+    from unittest.mock import AsyncMock
+    from app.services import turn_tool_orchestrator as orchestrator
+    from app.services.prompt_compiler import render_tail_reminder
+    from test_chat_ws_background_tasks import _new_session, _suppress_auto_title
+    from test_memory_v11_resident_profile import _fake_supplement
+
+    session = await _new_session()
+    session.protocol_version = 2
+    current = "我之前说过哪些偏好？"
+    session.history = [{"role": "user", "content": current}]
+    session.system_prompt = "SYSTEM"
+    initial = _fake_supplement([
+        ("m1", "first", "短い"), ("m2", "recovered", "短い"), ("m3", "never-sent", "短い")], need="好み").result
+    live_text = {"first": "猫", "recovered": "茶" * 1000, "never-sent": "旅行" * 10000}
+    two = _fake_supplement([(ref, fid, live_text[fid]) for ref, fid in [
+        ("m1", "first"), ("m2", "recovered")]], need="好み").result
+    builder = orchestrator.provider_message_builder(chat_ws.deepseek_service)
+
+    def second_builder(history, summary, system):
+        tail = {"role": "system", "content": render_tail_reminder(session.identity_mode, "")}
+        return builder([*history, tail], summary, system)
+
+    # Fit two live records under the shorter leak-retry prompt, but not under
+    # attempt 0's additional Japanese-answer requirement. The third fits neither.
+    short_system = chat_ws._request_system_prompt(session, session.history, None, 1)
+    fitting = orchestrator.prepare_second_round_payload(
+        session.history, two, input_budget=100000, system_prompt=short_system,
+        message_builder=second_builder)
+    budget = orchestrator.request_envelope_tokens(fitting.history, short_system, "", second_builder)
+    monkeypatch.setattr(chat_ws.config, "REQUEST_INPUT_BUDGET", budget)
+    monkeypatch.setattr(chat_ws, "compile_for_session", AsyncMock(return_value="SYSTEM"))
+    monkeypatch.setattr(chat_ws, "translate_with_provider", AsyncMock(return_value="翻译"))
+    monkeypatch.setattr(jobs, "enqueue_memory_job", AsyncMock())
+    _suppress_auto_title(monkeypatch)
+
+    async def tool_batch(*, record, **kwargs):
+        record.recall_result = initial
+        record.ranked_items = list(initial.ranked_items)
+        return orchestrator.ToolBatchOutcome(status="ok", recall_result=initial)
+
+    async def revalidate(scope, items, snapshot, live):
+        return [{**item, "display_text": live_text[item["fact_id"]]} for item in items]
+
+    monkeypatch.setattr(orchestrator, "apply_v11_tool_batch", tool_batch)
+    monkeypatch.setattr(orchestrator, "_revalidate", revalidate)
+    refresh = orchestrator.refresh_candidates_for_send
+    refreshed = []
+
+    async def tracked_refresh(record, session, provider):
+        if refreshed:
+            assert record.recall_result is refreshed[-1], "retry candidate pool was overwritten by budgeting"
+            assert set(record.recall_result.records) == {"m1", "m2", "m3"}
+        result = await refresh(record, session, provider)
+        refreshed.append(result)
+        return result
+
+    monkeypatch.setattr(orchestrator, "refresh_candidates_for_send", tracked_refresh)
+    sent = []
+
+    async def capture(self, **kwargs):
+        sent.append(kwargs)
+        record = session.turn_execution
+        if len(sent) == 1:
+            yield {"content": None, "tool_calls": [{"index": 0, "id": "retry192", "type": "function",
+                   "function": {"name": "recall_memory", "arguments": '{"needs":["好み"]}'}}]}
+        elif len(sent) == 2:
+            assert set(record.sent_recall_result.records) == {"m1"}
+            assert record.sent_recall_fact_ids == ()
+            assert "茶" * 1000 not in str(kwargs["active_history"])
+            yield {"content": "私はAIアシスタントです。", "tool_calls": None}
+        else:
+            assert record.sent_recall_fact_ids == ("first",)
+            assert set(record.sent_recall_result.records) == {"m1", "m2"}
+            assert "茶" * 1000 in str(kwargs["active_history"])
+            assert "旅行" * 10000 not in str(kwargs["active_history"])
+            yield {"content": "そうね、覚えているわ。", "tool_calls": None}
+
+    monkeypatch.setattr(type(chat_ws.deepseek_service), "get_chat_stream", capture)
+    await chat_ws.processor_loop(session, current, asyncio.Queue(), session.current_epoch, session.history_epoch)
+    if session.background_tasks:
+        await asyncio.gather(*session.background_tasks, return_exceptions=True)
+    assert len(refreshed) == 2 and len(sent) == 3
+    assert session.turn_execution.recall_result is refreshed[-1]
+    assert session.turn_execution.sent_recall_fact_ids == ("first", "recovered")

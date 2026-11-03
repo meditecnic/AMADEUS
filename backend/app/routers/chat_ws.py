@@ -964,8 +964,8 @@ async def get_clean_text_stream(
         finally:
             session.active_streams.discard(stream_gen)
 
-        if before_send is not None and record is not None and record.recall_result is not None:
-            sent = record.recall_result
+        if before_send is not None and record is not None and record.sent_recall_result is not None:
+            sent = record.sent_recall_result
             record.sent_recall_fact_ids = tuple(dict.fromkeys(record.sent_recall_fact_ids + tuple(
                 str(item["fact_id"]) for item in sent.ranked_items
                 if item.get("fact_id") and item.get("ref") in sent.records
@@ -1966,7 +1966,7 @@ async def processor_loop(
                     system_prompt=_request_system_prompt(session, active_history, None, _attempt),
                     message_builder=second_round_builder,
                 )
-                turn_record.recall_result = refreshed_payload.result
+                turn_record.sent_recall_result = refreshed_payload.result
                 return refreshed_payload.history
 
             final_text, final_emotion, _, emo_tag_found = await get_clean_text_stream(
