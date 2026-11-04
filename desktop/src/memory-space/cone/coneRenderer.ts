@@ -10,6 +10,7 @@ import {
 import type { ChartModel } from '../chartCoordinates';
 import { annotSegments, buildLayers, chartKindOf, groupIndexOf, monthTheta, packSegs, starInstances, type ChartKind, type Packed, type StarInstances } from './coneBuild';
 import { cellSegments, drawnStarIds, pickAt, type Hit } from './coneHit';
+import { entranceAt, entranceLength, worldRevealEnd } from './coneEntrance';
 import { ConeLabelLayer, layoutConeLabels } from './coneLabels';
 import {
   DIST_MAX, DIST_MIN, EL_MAX, EL_MIN, PLATE_POSE, POSE_KEYS, Spring, clamp, coneFrame, easeInOut, easeOut, homePose, lerp, nearestAngle, placeCamera, projector, rad,
@@ -69,6 +70,8 @@ export type ConeHandle = {
   toPlate: (done: () => void) => void;
   /** The way back; `done` once the camera is home. */
   fromPlate: (done: () => void) => void;
+  /** Sit flat on the disc without moving, ready for `fromPlate`. */
+  holdPlate: () => void;
   /** Dev only: hold the main thread this long on every drawn frame. */
   setSlow: (ms: number) => void;
   kick: () => void;
@@ -577,9 +580,9 @@ class ConeScene implements ConeHandle {
     const frame = this.frame;
     if (!frame) return;
     const k = this.theme.k;
-    const world = this.layersReveal();
+    const fresh = this.model ? this.model.stars.filter((star) => star.isNew).length : 0;
     const target = homePose(frame, rad(24));
-    this.entranceAnim = { t0: performance.now(), k, dur: Math.max(2600, 1500 + world * 1000 + 100), target };
+    this.entranceAnim = { t0: performance.now(), k, dur: entranceLength(worldRevealEnd(fresh)), target };
     this.transition = null;
     for (const key of POSE_KEYS) this.sp[key].vel = 0;
     this.setTargets(PLATE_POSE, true);
@@ -589,36 +592,14 @@ class ConeScene implements ConeHandle {
     this.cb.onEntering(true);
   }
 
-  /** How far the world layer's reveal runs (the "new" crosses come last). */
-  private layersReveal(): number {
-    const model = this.model;
-    if (!model) return 1.7;
-    const fresh = model.stars.filter((star) => star.isNew).length;
-    if (!fresh) return 1.1;
-    const step = Math.min(0.42, 2.4 / fresh);
-    return 1.2 + (fresh - 1) * step + step * 0.98 + 0.05;
-  }
-
   private stepEntrance(now: number) {
     const e = this.entranceAnim!;
     const t = (now - e.t0) / e.k;
-    const span = (a: number, b: number) => clamp((t - a) / (b - a), 0, 1);
-    const flat = easeInOut(span(650, 1900));
-    const target = e.target;
-    this.sp.flat.snap(1 - flat);
-    this.sp.el.snap(lerp(PLATE_POSE.el, target.el, flat));
-    this.sp.yaw.snap(lerp(0, target.yaw, easeInOut(span(650, 2100))));
-    this.sp.fov.snap(lerp(PLATE_POSE.fov, target.fov, easeOut(span(700, 1900))));
-    this.sp.dist.snap(lerp(1, target.dist, flat));
-    this.sp.ty.snap(lerp(0, target.ty, flat));
-    this.reveal = {
-      struct: span(0, 900) + span(900, 1700),
-      stars: span(150, 1100) * 1.05,
-      world: (t - 1500) / 1000,
-      rim: span(600, 1500),
-    };
+    const shot = entranceAt(t, e.target);
+    for (const key of POSE_KEYS) this.sp[key].snap(shot.pose[key]);
+    this.reveal = { struct: shot.struct, stars: shot.stars, world: shot.world, rim: shot.rim };
     this.applyReveal();
-    this.svg.style.opacity = String(span(1700, 2200));
+    this.svg.style.opacity = String(shot.labels);
     if (t >= e.dur) {
       this.entranceAnim = null;
       this.reveal = { struct: 2, stars: 2, world: 2, rim: 2 };
@@ -652,6 +633,13 @@ class ConeScene implements ConeHandle {
     if (this.view.reducedMotion) { this.setTargets(to, true); this.aim(true); done(); return; }
     this.transition = { t0: performance.now(), dur: 1100 * this.theme.k, from: this.pose(), to, done: () => { this.aim(false); done(); } };
     this.dirty = true;
+  }
+
+  holdPlate() {
+    this.transition = null;
+    this.mode_ = 'plate';
+    for (const key of POSE_KEYS) this.sp[key].vel = 0;
+    this.setTargets({ ...PLATE_POSE, yaw: 0 }, true);
   }
 
   private stepTransition(now: number) {
@@ -726,6 +714,7 @@ class ConeScene implements ConeHandle {
       if (!d.moved) {
         const p = this.local(event);
         const hit = this.pick(p.x, p.y);
+        this.setHover(null, p);
         if (hit?.kind === 'star') this.cb.onSelect({ kind: 'star', id: hit.id });
         else if (hit?.kind === 'cell') this.cb.onSelect({ kind: 'cell', key: hit.key });
         else if (hit?.kind === 'soul') this.cb.onSelect({ kind: 'soul' });

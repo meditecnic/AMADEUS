@@ -205,7 +205,7 @@ export function buildLayers(model: ChartModel, frame: ConeFrame, theme: ConeThem
 
   if (hasChart && normal) {
     const live = model.topics.filter((topic) => topic.starIds.length);
-    const stagger = Math.min(0.07, 0.6 / Math.max(1, live.length));
+    const stagger = Math.min(0.07, 0.33 / Math.max(1, live.length));
     live.forEach((topic, order) => {
       const g = index.get(topic.id)!;
       const stars = topic.starIds.map((id) => model.byId.get(id)!);
