@@ -286,12 +286,17 @@ class MemorySupplement:
     result: Any  # memory_v11.recall.RecallResult with records
 
 
+class _PromptExperience(RetrievedMemory):
+    experience_id: str
+
+
 @dataclass(frozen=True, slots=True)
 class CompiledPrompt:
     text: str
     resident_fact_ids: tuple[str, ...] = ()
     supplement_fact_ids: tuple[str, ...] = ()
     resident_complete: bool = True
+    experience_ids: tuple[str, ...] = ()
 
     @property
     def injected_fact_ids(self) -> tuple[str, ...]:
@@ -501,8 +506,17 @@ class PromptCompiler:
             if sections.get("supplement", "").strip()
             else ()
         )
+        # Reproduce section fitting after global shrinking without changing text.
+        while episodic_items and (
+            not sections["episodic"].strip()
+            or self.token_counter(self._format_episodic_memory(episodic_items)) > self.BUDGETS["episodic"]
+        ):
+            episodic_items = episodic_items[:-1]
+        experience_ids = tuple(item.experience_id for item in episodic_items
+                               if isinstance(item, _PromptExperience))
         return CompiledPrompt(
             text=text,
+            experience_ids=experience_ids,
             resident_fact_ids=resident_ids,
             supplement_fact_ids=supplement_ids,
             resident_complete=len(resident_items) >= candidate_count,
@@ -705,7 +719,8 @@ async def _select_v11_prompt_memories(
             query=user_message,
         )
         episodes = [
-            RetrievedMemory(
+            _PromptExperience(
+                experience_id=str(row["experience_id"]),
                 id=_experience_prompt_id(str(row["experience_id"])),
                 kind="episodic",
                 content=str(row.get("display_text") or ""),
@@ -831,6 +846,7 @@ async def compile_for_session(session, user_message: str, provider: Any = None) 
 
     # Reset first: a failed/cancelled compile never leaves a previous turn's ids.
     set_turn_injected_fact_ids(session, ())
+    session.turn_compiled_prompt = None
     mode = _session_identity_mode(session)
     # Re-resolve product default base by mode so auth-frozen okabe base cannot
     # stick on a self conversation (custom client bases stay untouched).
@@ -878,5 +894,6 @@ async def compile_for_session(session, user_message: str, provider: Any = None) 
         resident_profile=resident,
         memory_supplement=supplement,
     ))
+    session.turn_compiled_prompt = compiled
     set_turn_injected_fact_ids(session, compiled.injected_fact_ids)
     return compiled.text

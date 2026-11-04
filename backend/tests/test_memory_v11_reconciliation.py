@@ -206,6 +206,7 @@ async def test_s0_v11_key_drift_attaches_with_allowlist_and_evidence(isolated_st
         if isinstance(create_result, dict)
         else create_result.created_facts
     )
+    assert create_result["changes"] == [{"kind": "fact", "id": created[0]["fact_id"], "change": "create"}]
     assert created, "CREATE must return created_facts"
     first = created[0]
     fact_id = first["fact_id"] if isinstance(first, dict) else first.fact_id
@@ -230,7 +231,7 @@ async def test_s0_v11_key_drift_attaches_with_allowlist_and_evidence(isolated_st
             "polarity": "positive",
             "qualifiers": {},
         },
-        source_message_ids=[source_id],
+        source_message_ids=[source_id + 1],
     )
     attach_result = await _apply_validated(
         session_id="v11-r02",
@@ -249,7 +250,7 @@ async def test_s0_v11_key_drift_attaches_with_allowlist_and_evidence(isolated_st
         ],
         source_evidence=[
             _source_evidence(
-                source_message_id=source_id,
+                source_message_id=source_id + 1,
                 conversation_id=conv,
                 fingerprint=fp,
                 excerpt="我喜欢看动漫",
@@ -257,6 +258,7 @@ async def test_s0_v11_key_drift_attaches_with_allowlist_and_evidence(isolated_st
         ],
         candidate_allowlist=[fact_id],
     )
+    assert attach_result["changes"] == [{"kind": "fact", "id": fact_id, "change": "attach"}]
     active = (
         attach_result["active_facts"]
         if isinstance(attach_result, dict)
@@ -918,7 +920,7 @@ async def test_s3b2_refine_replaces_vector(isolated_store, monkeypatch):
 
     text_v2 = "好きな飲み物は紅茶"
     calls_before = embedder.encode_passage_calls
-    await _apply_validated(
+    changed = await _apply_validated(
         session_id=session_id,
         worldline="steins_gate",
         identity_mode="self",
@@ -950,6 +952,7 @@ async def test_s3b2_refine_replaces_vector(isolated_store, monkeypatch):
         ],
         candidate_allowlist=[fact_id],
     )
+    assert changed["changes"] == [{"kind": "fact", "id": fact_id, "change": "refine"}]
     assert embedder.encode_passage_calls == calls_before + 1
     assert await _embedding_row(fact_id, 1) is None, "old v1 vector must be deleted"
     row_v2 = await _embedding_row(fact_id, 2)
@@ -1015,7 +1018,7 @@ async def test_s3b2_supersede_replaces_vector(isolated_store, monkeypatch):
     )
     fact_id = create["created_facts"][0]["fact_id"]
     text_v2 = "犬が好き"
-    await _apply_validated(
+    changed = await _apply_validated(
         session_id=session_id,
         worldline="steins_gate",
         identity_mode="self",
@@ -1047,6 +1050,7 @@ async def test_s3b2_supersede_replaces_vector(isolated_store, monkeypatch):
         ],
         candidate_allowlist=[fact_id],
     )
+    assert changed["changes"] == [{"kind": "fact", "id": fact_id, "change": "supersede"}]
     assert await _embedding_row(fact_id, 1) is None
     assert await _embedding_row(fact_id, 2) is not None
     db = await get_db("steins_gate", "memory")
@@ -1332,6 +1336,7 @@ async def test_s3b2_replay_does_not_reembed(isolated_store, monkeypatch):
     calls_after_first = embedder.encode_passage_calls
     assert calls_after_first == 1
     second = await _apply_validated(**kwargs)
+    assert second["changes"] == []
     assert second.get("replay") is True
     assert embedder.encode_passage_calls == calls_after_first
     assert await _count_embeddings(first["created_facts"][0]["fact_id"]) == 1
@@ -1728,6 +1733,7 @@ async def test_s3c1_episodic_create_stores_experience_only(isolated_store):
     exps = await _experience_rows(session_id=session_id)
     assert len(exps) == 1, "episodic CREATE must store exactly one experience"
     exp = exps[0]
+    assert result["changes"] == [{"kind": "experience", "id": exp["experience_id"], "change": "create"}]
     assert exp["conversation_id"] == "conv-ep-1"
     assert exp["identity_mode"] == "self"
     assert exp["status"] == "active"
@@ -1994,6 +2000,7 @@ async def test_s3c1_episodic_replay_idempotent(isolated_store):
     first = await _apply_validated(**kwargs)
     assert first.get("replay") is False
     second = await _apply_validated(**kwargs)
+    assert second["changes"] == []
     assert second.get("replay") is True
     assert len(await _experience_rows(session_id=session_id)) == 1
     assert await _attached_observation_count(session_id) == 1
@@ -4207,3 +4214,41 @@ async def test_v113_delete_captures_shared_observation_all_sources(isolated_stor
         assert (await (await db.execute("SELECT display_text FROM memory_observations WHERE observation_id=?", (obs_id,))).fetchone())[0] == "喜欢猫"
     finally:
         await db.close()
+
+
+@pytest.mark.asyncio
+async def test_192_changes_follow_committed_operation_order(isolated_store, monkeypatch):
+    real_create = _reconciler()._create_fact_on_conn
+
+    async def fail_after_write(db, **kwargs):
+        result = await real_create(db, **kwargs)
+        if kwargs["display_text"] == "fail":
+            raise RuntimeError("savepoint failure")
+        return result
+
+    monkeypatch.setattr(_reconciler(), "_create_fact_on_conn", fail_after_write)
+    names = ["first", "fail", "reject", "candidate", "last"]
+    observations = [
+        _observation(ref=name, display_text=name,
+                     semantic={"subject": "user", "relation": "likes", "object": name},
+                     source_message_ids=[99192],
+                     memory_class="stable_candidate",
+                     confidence=0.1 if name == "candidate" else 0.94)
+        for name in names
+    ]
+    result = await _apply_validated(
+        session_id="changes-192", worldline="steins_gate", identity_mode="self",
+        observations=observations,
+        operations=[{"op": "REJECT" if name == "reject" else "CREATE",
+                     "observation_ref": name, "fact_text": name,
+                     "target_fact_id": None, "expected_version": None,
+                     "reason_code": "direct_durable_statement"} for name in names],
+        source_evidence=[_source_evidence(source_message_id=99192, conversation_id="c",
+                                         fingerprint="fp192", excerpt="offline")],
+        candidate_allowlist=[],
+    )
+    assert [f["display_text"] for f in result["created_facts"]] == ["first", "last"]
+    assert result["changes"] == [
+        {"kind": "fact", "id": f["fact_id"], "change": "create"}
+        for f in result["created_facts"]
+    ]

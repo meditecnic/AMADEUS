@@ -679,7 +679,7 @@ async def _apply_operation(db, *, op, obs_map, session, mode, source_by_id, rean
                     "observation_not_found",
                     f"observation_id={observation_id} missing after materialization",
                 )
-            await insert_experience(
+            experience = await insert_experience(
                 db,
                 session_id=session,
                 conversation_id=conversation_id,
@@ -690,7 +690,7 @@ async def _apply_operation(db, *, op, obs_map, session, mode, source_by_id, rean
                 confidence=confidence,
                 expires_at=exp_row["expires_at"],
             )
-            return None
+            return experience
         if not _will_create_stable_fact(obs):
             await materialize_observation(
                 db,
@@ -787,7 +787,7 @@ async def _apply_operation(db, *, op, obs_map, session, mode, source_by_id, rean
             observation_id=observation_id,
             role="supporting",
         )
-        return None
+        return {"fact_id": target}
 
     if op_name in {"REFINE", "SUPERSEDE"}:
         target = str(op.get("target_fact_id"))
@@ -870,7 +870,7 @@ async def _apply_operation(db, *, op, obs_map, session, mode, source_by_id, rean
             observation_id=observation_id,
             role="primary",
         )
-        return None
+        return {"fact_id": target}
 
 
 
@@ -919,6 +919,7 @@ async def apply_validated_memory_operations(
     consumed: set[str] = set()
     used_targets: dict[str, str] = {}
     created_facts: list[dict[str, Any]] = []
+    changes: list[dict[str, str]] = []
 
     all_source_ids: set[int] = set(source_by_id.keys())
 
@@ -962,6 +963,7 @@ async def apply_validated_memory_operations(
             )
             return {
                 "created_facts": [],
+                "changes": [],
                 "active_facts": active,
                 "session_id": session,
                 "worldline": wl,
@@ -1023,6 +1025,7 @@ async def apply_validated_memory_operations(
             await db.commit()
             return {
                 "created_facts": [],
+                "changes": [],
                 "active_facts": await list_active_stable_facts(session_id=session, worldline=wl, identity_mode=mode),
                 "session_id": session, "worldline": wl, "identity_mode": mode, "replay": True,
             }
@@ -1049,6 +1052,7 @@ async def apply_validated_memory_operations(
             )
             return {
                 "created_facts": [],
+                "changes": [],
                 "active_facts": active,
                 "session_id": session,
                 "worldline": wl,
@@ -1068,7 +1072,11 @@ async def apply_validated_memory_operations(
                 )
                 await db.execute("RELEASE SAVEPOINT memory_operation")
                 if created is not None:
-                    created_facts.append(created)
+                    kind = "experience" if "experience_id" in created else "fact"
+                    changes.append({"kind": kind, "id": created[f"{kind}_id"],
+                                    "change": str(op["op"]).lower()})
+                    if kind == "fact" and str(op["op"]).upper() == "CREATE":
+                        created_facts.append(created)
                 results[index] = "applied"
             except Exception as exc:
                 await db.execute("ROLLBACK TO SAVEPOINT memory_operation")
@@ -1114,6 +1122,7 @@ async def apply_validated_memory_operations(
     )
     return {
         "created_facts": created_facts,
+        "changes": changes,
         "active_facts": active,
         "session_id": session,
         "worldline": wl,

@@ -70,6 +70,7 @@ _V2_DELIVERY_TYPES = frozenset(
         "segment.audio_error",
         "turn.translation_repaired",
         "turn.completed",
+        "memory.referenced",
         "turn.cancelled",
     }
 )
@@ -962,7 +963,13 @@ async def get_clean_text_stream(
             raise
         finally:
             session.active_streams.discard(stream_gen)
-            
+
+        if before_send is not None and record is not None and record.sent_recall_result is not None:
+            sent = record.sent_recall_result
+            record.sent_recall_fact_ids = tuple(dict.fromkeys(record.sent_recall_fact_ids + tuple(
+                str(item["fact_id"]) for item in sent.ranked_items
+                if item.get("fact_id") and item.get("ref") in sent.records
+            )))
         if merged_tool_calls:
             return "", "neutral", merged_tool_calls, False
             
@@ -1596,6 +1603,7 @@ async def processor_loop(
     needs_translation_repair = False
     streaming_splitter = None
     streamed_segments = []
+    referenced_items = []
     turn_provider = None
 
     active_history = session.history
@@ -1638,6 +1646,11 @@ async def processor_loop(
                 payload = dict(event)
                 if isinstance(payload.get("data"), bytes):
                     payload["data"] = base64.b64encode(payload["data"]).decode("utf-8")
+                if payload.get("type") == "turn.completed" and referenced_items:
+                    await send_queue.put((epoch, {
+                        "type": "memory.referenced", "items": referenced_items,
+                        **{key: payload[key] for key in ("conversation_id", "turn_id", "generation")},
+                    }))
                 await send_queue.put((epoch, payload))
 
             async def translate_segment(text: str) -> str:
@@ -1780,7 +1793,9 @@ async def processor_loop(
             "tts": "idle"
         }))
         
+        session.turn_compiled_prompt = None
         session.system_prompt = await compile_for_session(session, user_msg, provider=turn_provider)
+        compiled_prompt = session.turn_compiled_prompt
         user_message_id = await models.save_message(
             session.session_id,
             "user",
@@ -1944,13 +1959,15 @@ async def processor_loop(
                 refreshed = await refresh_candidates_for_send(
                     turn_record, session, turn_provider
                 )
-                return prepare_second_round_payload(
+                refreshed_payload = prepare_second_round_payload(
                     active_history,
                     refreshed,
                     extra_web or None,
                     system_prompt=_request_system_prompt(session, active_history, None, _attempt),
                     message_builder=second_round_builder,
-                ).history
+                )
+                turn_record.sent_recall_result = refreshed_payload.result
+                return refreshed_payload.history
 
             final_text, final_emotion, _, emo_tag_found = await get_clean_text_stream(
                 active_history=tool_context,
@@ -2175,6 +2192,15 @@ async def processor_loop(
         }))
 
         if segment_pipeline is not None:
+            if (assistant_message_id is not None and full_ja_text.strip()
+                    and session.current_epoch == epoch
+                    and session.history_epoch == start_history_epoch
+                    and session.conversation_id == conversation_id):
+                from app.services.memory_v11.events import referenced_items_for_turn
+                referenced_items = await referenced_items_for_turn(
+                    (session.session_id, turn_worldline, turn_record.snapshot.identity_mode),
+                    compiled_prompt, turn_record.sent_recall_fact_ids,
+                )
             await segment_pipeline.complete(segment_count=segment_count)
 
         if (
@@ -2532,6 +2558,11 @@ async def writer_loop(send_queue: asyncio.Queue, session: SessionState, websocke
             
             # Unpack msg
             msg_epoch, payload = msg
+            if (isinstance(payload, dict) and payload.get("type") == "memory.recorded"
+                    and (session.protocol_version < 2
+                         or payload.get("conversation_id") != session.conversation_id)):
+                send_queue.task_done()
+                continue
             if msg_epoch == session.current_epoch:
                 observer = None
                 payload_type = payload.get("type") if isinstance(payload, dict) else None
@@ -2600,6 +2631,24 @@ async def websocket_chat_endpoint(websocket: WebSocket):
     writer_task = asyncio.create_task(writer_loop(send_queue, session, websocket))
     
     authenticated = False
+    memory_unsubscribe = None
+
+    def subscribe_memory():
+        nonlocal memory_unsubscribe
+        if memory_unsubscribe is not None:
+            memory_unsubscribe()
+            memory_unsubscribe = None
+        if session.protocol_version >= 2:
+            from app.services.memory_v11.events import subscribe
+            scope = (session.session_id, session.worldline, session.identity_mode)
+
+            def receive(payload):
+                if (not writer_task.done()
+                        and scope == (session.session_id, session.worldline, session.identity_mode)
+                        and payload["conversation_id"] == session.conversation_id):
+                    send_queue.put_nowait((session.current_epoch, payload))
+
+            memory_unsubscribe = subscribe(scope, receive)
     
     try:
         # 4. Reader Coroutine (Main Loop): reads WebSocket frames and routes
@@ -2792,6 +2841,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 )
                     
                 authenticated = True
+                subscribe_memory()
                 await session_coordinator.persist_current(session.session_id, session.worldline, session.revision)
                 await session_coordinator.acquire_lease(session.session_id, session.worldline, websocket)
                 if (
@@ -2942,6 +2992,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                         "message": "会话切换失败，当前会话已保留。",
                     }))
                     continue
+                subscribe_memory()
                 await send_queue.put((session.current_epoch, {
                     "type": "conversation.switched",
                     "request_id": request_id,
@@ -2995,6 +3046,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                         "message": "世界线切换失败，当前世界线已保留。",
                     }))
                     continue
+                subscribe_memory()
                 await send_queue.put((session.current_epoch, {
                     "type": "worldline.switched",
                     "request_id": request_id,
@@ -3125,6 +3177,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                         "type": "config_applied",
                         "reasoning_effort": session.reasoning_effort,
                     }))
+                subscribe_memory()
                 continue
                 
             elif frame_type == "interrupt-signal":
@@ -3225,6 +3278,8 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 type(notify_exc).__name__,
             )
     finally:
+        if memory_unsubscribe is not None:
+            memory_unsubscribe()
         # Cancel running Processor and Writer tasks on disconnect
         tasks_to_gather = [writer_task]
         writer_task.cancel()

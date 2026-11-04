@@ -81,6 +81,8 @@ class TurnExecutionRecord:
     # v11 (dispatch 55 E): stable fact_ids already in this turn's prompt
     # (resident CORE FACTS + supplement). recall_memory excludes them.
     injected_fact_ids: tuple[str, ...] = ()
+    sent_recall_fact_ids: tuple[str, ...] = ()
+    sent_recall_result: RecallResult | None = None
 
     def __post_init__(self) -> None:
         self.injected_fact_ids = tuple(
