@@ -17,6 +17,12 @@ export const MIN_SEPARATION = 4.6;
 const GOLDEN = 137.508;
 const NEAR_TODAY = 2.2;
 const EMPTY_TODAY = 18;
+/** A scope with this many records (cognitions plus fragments) is drawn collapsed. */
+export const COLLAPSE_AT = 150;
+/** A collapsed scope goes back to full stars only once it falls below this: the gap stops it flickering at the line. */
+export const EXPAND_BELOW = 130;
+export const LOOSE_GROUP = '@loose';
+export const FRAGMENT_GROUP = '@fragment';
 
 export type StarKind = 'fact' | 'loose' | 'fragment';
 export type ChartStar = {
@@ -35,9 +41,41 @@ export type ChartStar = {
   isNew: boolean;
   evidenceCount: number;
   versionCount: number;
+  /** Topic id, or LOOSE_GROUP / FRAGMENT_GROUP. */
+  group: string;
+  /** `${group}|${YYYY-MM}` */
+  cellKey: string;
+  resident: boolean;
+  /** Drawn as a star even when the chart is collapsed: resident or new since the last visit. */
+  single: boolean;
 };
 export type TopicArm = { id: string; label: string; index: number; phi: number; createdAt: number; starIds: string[] };
-export type MonthRing = { key: string; year: number; month: number; theta: number; nearToday: boolean };
+export type RingKind = 'month' | 'quarter' | 'year';
+export type MonthRing = {
+  key: string; year: number; month: number; theta: number; nearToday: boolean;
+  kind: RingKind;
+  /** More than twelve months back. */
+  old: boolean;
+};
+/** One calendar month on the time axis; cells always follow months, whatever rings are drawn. */
+export type MonthBand = { key: string; start: number; end: number; theta0: number; theta1: number; starIds: string[] };
+export type ChartCell = {
+  key: string;
+  groupId: string;
+  band: MonthBand;
+  /** Every record of the cell, in the order they were written down. */
+  starIds: string[];
+  /** The ones drawn as ticks when collapsed (no single stars), same order. */
+  collapsedIds: string[];
+  /** Theta of the middle record and the circular mean of the bearings. */
+  theta: number;
+  phi: number;
+};
+export type ChartGroup = {
+  id: string; label: string; phi: number; isTopic: boolean; starIds: string[];
+  /** By month. */
+  cells: ChartCell[];
+};
 export type ChartModel = {
   origin: number | null;
   today: number;
@@ -47,6 +85,11 @@ export type ChartModel = {
   stars: ChartStar[];
   byId: Map<string, ChartStar>;
   rings: MonthRing[];
+  collapsed: boolean;
+  bands: MonthBand[];
+  /** Topics in the order they were made, then LOOSE_GROUP and FRAGMENT_GROUP. */
+  groups: ChartGroup[];
+  cells: Map<string, ChartCell>;
   /** Bearing of the widest empty wedge; the time ruler and month labels run along it. */
   scalePhi: number;
 };
@@ -142,7 +185,11 @@ function makeRoom(star: ChartStar, placed: PlacedGrid): void {
   star.phi = norm(best.phi);
 }
 
-export function buildChartModel(chart: MemoryChart, options: { today: number; lastOpen: number | null }): ChartModel {
+/** `wasCollapsed` is the state the caller drew last time for this scope; it only matters between EXPAND_BELOW and COLLAPSE_AT. */
+export function buildChartModel(
+  chart: MemoryChart,
+  options: { today: number; lastOpen: number | null; wasCollapsed?: boolean },
+): ChartModel {
   const today = options.today;
   const firstRecord = [...chart.facts, ...chart.experiences].map((row) => parseMs(row.created_at)).sort((a, b) => a - b)[0];
   const origin = chart.origin_at ? parseMs(chart.origin_at) : firstRecord ?? null;
@@ -204,30 +251,97 @@ export function buildChartModel(chart: MemoryChart, options: { today: number; la
       theta: th, phi: norm(phi), radius: starRadius(kind, evidenceCount), pinned: row.is_pinned,
       isNew: options.lastOpen !== null && createdAt > options.lastOpen,
       evidenceCount, versionCount: fact?.version_count ?? 1,
+      group: topic ? topic.id : fragment ? FRAGMENT_GROUP : LOOSE_GROUP, cellKey: '',
+      resident: fact?.resident ?? false, single: false,
     };
+    star.single = star.resident || star.isNew;
     makeRoom(star, placed);
     placed.add(star);
     stars.push(star);
     topic?.starIds.push(star.id);
   });
 
+  const collapsed = stars.length >= COLLAPSE_AT || (Boolean(options.wasCollapsed) && stars.length >= EXPAND_BELOW);
+
+  // The time axis. Bands are always one month each; rings are drawn every month for the last
+  // twelve, and further back only as quarters and years, so an old chart is not a fog of rings.
+  // A chart that is not collapsed keeps all its month rings as it always had.
   const rings: MonthRing[] = [];
+  const bands: MonthBand[] = [];
   if (origin !== null) {
-    const start = new Date(origin);
-    for (let y = start.getFullYear(), m = start.getMonth() + 1; ; m += 1) {
+    const todayDate = new Date(today);
+    const cut = new Date(todayDate.getFullYear(), todayDate.getMonth() - 12, 1).getTime();
+    const first = new Date(origin);
+    const edges = [{ t: origin, th: theta(origin), y: first.getFullYear(), m: first.getMonth() + 1 }];
+    for (let y = first.getFullYear(), m = first.getMonth() + 1; ; m += 1) {
       if (m > 11) { y += 1; m = 0; }
-      const first = new Date(y, m, 1).getTime();
-      if (first > today) break;
-      const th = theta(first);
-      rings.push({ key: `${y}-${String(m + 1).padStart(2, '0')}`, year: y, month: m + 1, theta: th, nearToday: thetaToday - th < NEAR_TODAY });
+      const at = new Date(y, m, 1).getTime();
+      if (at > today) break;
+      const th = theta(at);
+      edges.push({ t: at, th, y, m: m + 1 });
+      const kind: RingKind = m === 0 ? 'year' : m % 3 === 0 ? 'quarter' : 'month';
+      const old = at < cut;
+      if (collapsed && old && kind === 'month') continue;
+      rings.push({
+        key: `${y}-${String(m + 1).padStart(2, '0')}`, year: y, month: m + 1, theta: th,
+        nearToday: thetaToday - th < NEAR_TODAY, kind, old,
+      });
+    }
+    edges.push({ t: today, th: thetaToday, y: 0, m: 0 });
+    for (let i = 0; i + 1 < edges.length; i += 1) {
+      const a = edges[i];
+      bands.push({
+        key: `${a.y}-${String(a.m).padStart(2, '0')}`, start: a.t, end: edges[i + 1].t,
+        theta0: a.th, theta1: edges[i + 1].th, starIds: [],
+      });
     }
   }
+
   const armed = topics.filter((topic) => topic.starIds.length);
-  const widest = gapsBetween(armed.map((t) => t.phi))[0];
+  const gaps = gapsBetween(armed.map((t) => t.phi));
+  const groups: ChartGroup[] = [
+    ...topics.map((topic) => ({
+      id: topic.id, label: topic.label, phi: topic.phi, isTopic: true, starIds: topic.starIds, cells: [] as ChartCell[],
+    })),
+    { id: LOOSE_GROUP, label: '未归组', phi: gaps.length > 1 ? gaps[1].mid : 150, isTopic: false,
+      starIds: [] as string[], cells: [] as ChartCell[] },
+    { id: FRAGMENT_GROUP, label: '片段', phi: gaps.length > 2 ? gaps[2].mid : 210, isTopic: false,
+      starIds: [] as string[], cells: [] as ChartCell[] },
+  ];
+  const groupById = new Map(groups.map((group) => [group.id, group]));
+
+  // One pass over the stars in the order they were written: each lands in the month it was written in.
+  const cells = new Map<string, ChartCell>();
+  let bi = 0;
+  for (const star of stars) {
+    const group = groupById.get(star.group)!;
+    if (!group.isTopic) group.starIds.push(star.id);
+    if (!bands.length) continue;
+    while (bi + 1 < bands.length && star.createdAt >= bands[bi + 1].start) bi += 1;
+    const band = bands[bi];
+    band.starIds.push(star.id);
+    star.cellKey = `${group.id}|${band.key}`;
+    let cell = cells.get(star.cellKey);
+    if (!cell) {
+      cell = { key: star.cellKey, groupId: group.id, band, starIds: [], collapsedIds: [], theta: 0, phi: 0 };
+      cells.set(star.cellKey, cell);
+      group.cells.push(cell);
+    }
+    cell.starIds.push(star.id);
+    if (!star.single) cell.collapsedIds.push(star.id);
+  }
+  const byId = new Map(stars.map((star) => [star.id, star]));
+  for (const cell of cells.values()) {
+    cell.theta = byId.get(cell.starIds[Math.floor(cell.starIds.length / 2)])!.theta;
+    let sin = 0;
+    let cos = 0;
+    for (const id of cell.starIds) { const p = rad(byId.get(id)!.phi); sin += Math.sin(p); cos += Math.cos(p); }
+    cell.phi = norm((Math.atan2(sin, cos) * 180) / Math.PI);
+  }
+  const widest = gaps[0];
   return {
-    origin, today, thetaToday, thetaFit, topics, stars,
-    byId: new Map(stars.map((star) => [star.id, star])),
-    rings, scalePhi: widest ? widest.mid : 205,
+    origin, today, thetaToday, thetaFit, topics, stars, byId,
+    rings, collapsed, bands, groups, cells, scalePhi: widest ? widest.mid : 205,
   };
 }
 

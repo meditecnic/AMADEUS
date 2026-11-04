@@ -186,10 +186,14 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
       experiences: ready.chart.experiences.filter((row) => !erased.has(row.id)),
     };
   }, [ready, erased]);
-  const model = useMemo(
-    () => (chart && ready ? buildChartModel(chart, { today: ready.today, lastOpen }) : null),
-    [chart, ready, lastOpen],
-  );
+  // Between 130 and 150 records the chart keeps whatever it was drawn as last time.
+  const collapsedRef = useRef(new Map<string, boolean>());
+  const model = useMemo(() => {
+    if (!chart || !ready) return null;
+    const built = buildChartModel(chart, { today: ready.today, lastOpen, wasCollapsed: collapsedRef.current.get(ready.scopeKey) });
+    collapsedRef.current.set(ready.scopeKey, built.collapsed);
+    return built;
+  }, [chart, ready, lastOpen]);
 
   useEffect(() => {
     if (ready && !entering) writeLastOpen(ready.scopeKey, Date.now());
