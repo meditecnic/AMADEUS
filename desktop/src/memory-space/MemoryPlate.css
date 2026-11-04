@@ -6,7 +6,7 @@
 .memory-space[data-worldline="beta"] .p-ring { stroke-dasharray: 1 4; stroke: rgba(var(--m-ink-rgb), .26); }
 .p-today { fill: none; stroke: rgba(var(--m-acc-rgb), .42); stroke-width: 1; }
 .p-ruler { fill: none; stroke: rgba(var(--m-ink-rgb), .12); stroke-dasharray: 34 7 5 7; }
-.p-ring, .p-today, .p-ruler, .p-line, .p-tail, .p-reticle, .p-new, .p-young, .p-todaylab, .p-hover { pointer-events: none; }
+.p-ring, .p-today, .p-ruler, .p-line, .p-tail, .p-reticle, .p-ref, .p-new, .p-young, .p-todaylab, .p-hover { pointer-events: none; }
 .p-ringlab { font: 10px/1 var(--font-mono); fill: var(--m-ink3); letter-spacing: .12em; cursor: pointer;
   paint-order: stroke; stroke: var(--m-paper); stroke-width: 6px; stroke-linejoin: round; }
 .p-ringlab:hover, .p-ringlab.on { fill: var(--m-ink); }
@@ -42,6 +42,8 @@
 .dim .p-star:not(.lit), .dim .p-line:not(.lit), .dim .p-topic:not(.on) { opacity: .2; }
 .p-reticle circle, .p-reticle path { fill: none; stroke: var(--m-acc); stroke-width: 1.2; }
 .p-reticle .r2 { stroke-dasharray: 2 3; opacity: .7; }
+.p-ref circle { fill: none; stroke: var(--m-acc); stroke-width: 1.2; stroke-dasharray: 3 3; }
+.p-ref text { font: 9px/1 var(--font-ui); fill: var(--m-acc); letter-spacing: .1em; }
 .p-new path { stroke: var(--m-her); stroke-width: 1; fill: none; }
 .p-new text { font: 10px/1 var(--font-ui); fill: var(--m-her); letter-spacing: .1em; }
 .p-slab { font: 12.5px/1 var(--m-f-body); fill: var(--m-ink2); paint-order: stroke; stroke: var(--m-paper); stroke-width: 5px; stroke-linejoin: round; }

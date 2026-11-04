@@ -189,6 +189,97 @@ describe('dev mock protocol v2', () => {
     socket.close();
   });
 
+  describe('memory marks', () => {
+    const run = (content: string, session = 'marks') => {
+      vi.useFakeTimers();
+      const mock = createMockRuntime();
+      const frames: Record<string, unknown>[] = [];
+      const socket = mock.connect(url(`/ws/chat?session_id=${session}`), frame => frames.push(frame));
+      socket.receive({ type: 'auth', worldline: 'steins_gate', conversation_mode: 'draft' });
+      socket.receive({ type: 'chat.send', content });
+      vi.runAllTimers();
+      return { frames, socket, types: frames.map(frame => frame.type) };
+    };
+
+    it('sends memory.referenced right before turn.completed and memory.recorded 1.5 s after it', () => {
+      vi.useFakeTimers();
+      const mock = createMockRuntime();
+      const frames: Record<string, unknown>[] = [];
+      const socket = mock.connect(url('/ws/chat?session_id=marks'), frame => frames.push(frame));
+      socket.receive({ type: 'auth', worldline: 'steins_gate', conversation_mode: 'draft' });
+      socket.receive({ type: 'chat.send', content: '记住我最近在写分享，其实我改喝拿铁了' });
+      const turn = frames[1];
+      const sentences = scenarios.streaming.dialogue.sentences;
+      const done = sentences.reduce((sum, sentence) => sum + sentence.delayMs, 0) + scenarios.streaming.dialogue.completionDelayMs;
+      vi.advanceTimersByTime(done);
+      expect(frames.slice(-2).map(frame => frame.type)).toEqual(['memory.referenced', 'turn.completed']);
+      expect(frames.at(-2)).toMatchObject({ conversation_id: turn.conversation_id, turn_id: turn.turn_id, generation: turn.generation });
+      vi.advanceTimersByTime(1499);
+      expect(frames.at(-1)?.type).toBe('turn.completed');
+      vi.advanceTimersByTime(1);
+      expect(frames.at(-1)).toMatchObject({ type: 'memory.recorded', conversation_id: turn.conversation_id, turn_id: turn.turn_id });
+      socket.close();
+    });
+
+    it('referenced items use chart ids plus one id the chart does not have', () => {
+      const { frames, socket } = run('小黑今天很乖');
+      const referenced = frames.find(frame => frame.type === 'memory.referenced') as { items: Array<{ id: string; via: string }> };
+      expect(referenced.items.map(item => item.id)).toEqual(['f12', 'e1', 'f07', 'mock-gone-1']);
+      expect(new Set(referenced.items.map(item => item.via))).toEqual(new Set(['supplement', 'episodic', 'recall']));
+      socket.close();
+    });
+
+    it('记住 records creates, 其实 records a supersede, both words record both', () => {
+      const changes = (content: string) => {
+        const { frames, socket } = run(content);
+        socket.close();
+        return (frames.find(frame => frame.type === 'memory.recorded') as { changes: Array<{ id: string; change: string }> } | undefined)
+          ?.changes.map(change => `${change.id}:${change.change}`);
+      };
+      expect(changes('记住我在写分享')).toEqual(['f17:create', 'e3:create']);
+      expect(changes('其实我改喝茶了')).toEqual(['f07:supersede']);
+      expect(changes('记住这个，其实是拿铁')).toEqual(['f17:create', 'e3:create', 'f07:supersede']);
+    });
+
+    it('uses the ids of the worldline the socket authenticated into', () => {
+      vi.useFakeTimers();
+      const mock = createMockRuntime();
+      const frames: Record<string, unknown>[] = [];
+      const socket = mock.connect(url('/ws/chat?session_id=marks'), frame => frames.push(frame));
+      socket.receive({ type: 'auth', worldline: 'beta', conversation_mode: 'draft' });
+      socket.receive({ type: 'chat.send', content: '记住这个，其实不是' });
+      vi.runAllTimers();
+      const ids = (type: string, key: string) => (frames.find(frame => frame.type === type) as Record<string, Array<{ id: string }>>)[key].map(row => row.id);
+      expect(ids('memory.referenced', 'items')).toEqual(['g01', 'x3', 'g09', 'mock-gone-1']);
+      expect(ids('memory.recorded', 'changes')).toEqual(['g18', 'x4', 'g09']);
+      socket.close();
+    });
+
+    it('only references for a plain mention, and sends neither for other turns', () => {
+      const mention = run('小黑睡着了');
+      expect(mention.types).toContain('memory.referenced');
+      expect(mention.types).not.toContain('memory.recorded');
+      mention.socket.close();
+      const plain = run('今天天气不错');
+      expect(plain.types.filter(type => String(type).startsWith('memory.'))).toEqual([]);
+      plain.socket.close();
+    });
+
+    it('drops the pending memory.recorded when the turn is cancelled before it fires', () => {
+      vi.useFakeTimers();
+      const mock = createMockRuntime();
+      const frames: Record<string, unknown>[] = [];
+      const socket = mock.connect(url('/ws/chat?session_id=marks'), frame => frames.push(frame));
+      socket.receive({ type: 'auth', worldline: 'steins_gate', conversation_mode: 'draft' });
+      socket.receive({ type: 'chat.send', content: '记住这件事' });
+      socket.receive({ type: 'turn.cancel' });
+      vi.runAllTimers();
+      expect(frames.map(frame => frame.type)).not.toContain('memory.recorded');
+      expect(vi.getTimerCount()).toBe(0);
+      socket.close();
+    });
+  });
+
   it('correlates delayed/failed shifts and cancels pending stream timers without reconnecting', () => {
     vi.useFakeTimers();
     const mock = createMockRuntime();

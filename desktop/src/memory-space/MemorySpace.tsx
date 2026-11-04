@@ -4,7 +4,7 @@ import { useReducedMotion } from '../design-system/useReducedMotion';
 import { ArchiveView } from './ArchiveView';
 import { createArchiveModule, type ArchiveModule } from './archiveState';
 import { buildChartModel, plateGeometry, platePoint } from './chartCoordinates';
-import { recordNo, ymd } from './chartFormat';
+import { hm, recordNo, ymd } from './chartFormat';
 import { memorySpaceShortcut } from './chrome';
 import { chartScopeKey, createChartController, type ChartError, type ChartScope } from './fetchChart';
 import { MemoryPlate, type ChartSelection } from './MemoryPlate';
@@ -13,6 +13,14 @@ import { nextMemoryUnwind, type MemoryUnwindKind } from './memoryUnwind';
 import { createDetailsController, type DetailsCache, type DetailsOutcome, type DetailsRequest } from './readingDetails';
 import type { IdentityMode, MemoryChart, Worldline } from './types';
 
+/** Opens the space on a chat mark: select the first of `select` that is on the plate, draw `mark` with the
+ *  dashed "this turn" reticle, and (when `hintAt` is set) show the "referenced n · HH:MM" hint. Applies to the chat's own scope only. */
+export type MemoryLink = {
+  select: readonly string[];
+  mark: readonly string[];
+  hintAt: number | null;
+};
+
 export type MemorySpaceProps = {
   sessionId: string;
   chatWorldline: Worldline;
@@ -20,6 +28,7 @@ export type MemorySpaceProps = {
   onClose: () => void;
   /** Lets the header's memory key leave through the same unsaved-draft guard as Esc. */
   controlRef?: RefObject<MemorySpaceControl | null>;
+  link?: MemoryLink | null;
 };
 
 export type MemorySpaceControl = { requestClose: () => void };
@@ -65,7 +74,7 @@ function ScopeName({ worldline, identityMode }: { worldline: Worldline; identity
 
 const noopSubscribe = () => () => undefined;
 
-export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClose, controlRef }: MemorySpaceProps) {
+export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClose, controlRef, link }: MemorySpaceProps) {
   const reducedMotion = useReducedMotion();
   const [worldline, setWorldline] = useState<Worldline>(chatWorldline);
   const [identityMode, setIdentityMode] = useState<IdentityMode>(chatIdentityMode);
@@ -73,6 +82,11 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
   const scopeKey = chartScopeKey(scope);
   const scopeKeyRef = useRef(scopeKey);
   scopeKeyRef.current = scopeKey;
+
+  const linkScopeRef = useRef(scopeKey);
+  const pendingSelectRef = useRef<readonly string[]>(link?.select ?? []);
+  const [marks, setMarks] = useState<readonly string[]>(() => link?.mark ?? []);
+  const [hintAt, setHintAt] = useState<number | null>(() => link?.hintAt ?? null);
 
   const [mode, setMode] = useState<MemorySpaceMode>('chart');
   const [load, setLoad] = useState<ChartLoad>({ status: 'loading', scopeKey });
@@ -188,6 +202,16 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
     setScopeMenu(false);
     detailsControllerRef.current.invalidate();
   }, [scopeKey]);
+
+  // A chat mark's record opens like a clicked star once the plate has it; one that is gone opens nothing.
+  useEffect(() => {
+    if (!model || !pendingSelectRef.current.length || scopeKey !== linkScopeRef.current) return;
+    const id = pendingSelectRef.current.find((candidate) => model.byId.has(candidate));
+    pendingSelectRef.current = [];
+    if (id) select({ kind: 'star', id });
+    // select only reads state through setters and the model.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model, scopeKey]);
 
   // Selections that point at records no longer on the plate fall back to the overview.
   useEffect(() => {
@@ -326,6 +350,10 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
   const totalRecords = chart ? chart.counts.facts + chart.counts.experiences : 0;
   const footnote = chart?.truncated || shownRecords < totalRecords ? `星图只画了其中 ${shownRecords} / ${totalRecords} 条；完整的在档案里。` : null;
   const today = ready?.today ?? Date.now();
+  const linked = scopeKey === linkScopeRef.current;
+  const markedOnPlate = useMemo(() => (linked && model ? marks.filter((id) => model.byId.has(id)) : []), [linked, model, marks]);
+  const showHint = hintAt !== null && linked && mode === 'chart' && Boolean(model);
+  const clearMarks = () => { setMarks([]); setHintAt(null); };
 
   return (
     <section
@@ -430,10 +458,17 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
               reducedMotion={reducedMotion}
               entering={entering}
               footnote={footnote}
+              marks={markedOnPlate}
               onEntered={() => setEntering(false)}
               onSelect={select}
               onOverview={overview}
             />
+            {showHint && hintAt !== null ? (
+              <p className="m-ref-hint" data-testid="memory-ref-hint">
+                <span>{markedOnPlate.length ? `这一轮参照了 ${markedOnPlate.length} 条 · ${hm(hintAt)}` : '这一轮参照的记忆已不在星图上'}</span>
+                <button type="button" data-testid="memory-ref-clear" onClick={clearMarks}>清除</button>
+              </p>
+            ) : null}
             {message ? (
               <p className="m-state" data-testid={`memory-${status}`} style={{ top: Math.round(message.top), width: g.cx * 2 }}>{message.text}</p>
             ) : null}
