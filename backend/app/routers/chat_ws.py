@@ -10,7 +10,7 @@ import starlette
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
 from app import config
-from app.services.provider_adapters import ProviderRequestError
+from app.services.provider_adapters import ProviderRequestError, ProviderStallError
 from app.services.provider_registry import ProviderSnapshot, ProviderTask
 from app.services.provider_runtime import deepseek_service, provider_registry
 from app.services.model_catalog import ModelUnavailableError, model_catalog
@@ -61,6 +61,11 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 MAX_USER_MESSAGE_LENGTH = 8000
+# Normal turns finish far sooner; one provider read already allows 120 seconds.
+TURN_TIMEOUT_SECONDS = 300.0
+_UPSTREAM_TIMEOUT_MESSAGE = (
+    "上游模型太久没有响应，这一轮已停止。可以稍后再试，或在设置里换一个模型。"
+)
 
 _V2_DELIVERY_TYPES = frozenset(
     {
@@ -1247,7 +1252,7 @@ async def _render_foreign_speech_to_japanese(
                     content = chunk.get("content")
                     if content:
                         raw_parts.append(str(content))
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, ProviderStallError):
             raise
         except Exception as exc:
             # Broad on purpose: provider adapters raise arbitrary types; a
@@ -1351,39 +1356,42 @@ async def repair_turn_translation(
     send_queue: asyncio.Queue,
     translate: Callable[[str], Awaitable[str]],
     timeout: float = 15.0,
+    deadline: float | None = None,
 ) -> str | None:
     """Retry a failed bilingual turn once and reject stale UI delivery."""
     try:
-        repaired = await asyncio.wait_for(translate(text), timeout=timeout)
-        repaired = repaired.strip() if repaired else ""
-        if not repaired:
-            return None
-        updated = await models.update_message_translation(
-            message_id,
-            session.session_id,
-            conversation_id,
-            repaired,
-            worldline=worldline,
-        )
-        if not updated:
-            return None
-        if (
-            session.current_epoch == generation
-            and session.conversation_id == conversation_id
-        ):
-            await send_queue.put(
-                (
-                    generation,
-                    {
-                        "type": "turn.translation_repaired",
-                        "conversation_id": conversation_id,
-                        "turn_id": turn_id,
-                        "generation": generation,
-                        "content": repaired,
-                    },
-                )
+        # This existing post-completion repair shares the original turn budget.
+        async with asyncio.timeout_at(deadline):
+            repaired = await asyncio.wait_for(translate(text), timeout=timeout)
+            repaired = repaired.strip() if repaired else ""
+            if not repaired:
+                return None
+            updated = await models.update_message_translation(
+                message_id,
+                session.session_id,
+                conversation_id,
+                repaired,
+                worldline=worldline,
             )
-        return repaired
+            if not updated:
+                return None
+            if (
+                session.current_epoch == generation
+                and session.conversation_id == conversation_id
+            ):
+                await send_queue.put(
+                    (
+                        generation,
+                        {
+                            "type": "turn.translation_repaired",
+                            "conversation_id": conversation_id,
+                            "turn_id": turn_id,
+                            "generation": generation,
+                            "content": repaired,
+                        },
+                    )
+                )
+            return repaired
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -1597,6 +1605,21 @@ async def processor_loop(
     streaming_splitter = None
     streamed_segments = []
     turn_provider = None
+    turn_loop = asyncio.get_running_loop()
+    processor_task = asyncio.current_task()
+    deadline_handle = None
+    turn_deadline = None
+    deadline_expired = False
+
+    def expire_turn() -> None:
+        nonlocal deadline_expired
+        deadline_expired = True
+        processor_task.cancel()
+
+    def start_turn_deadline() -> None:
+        nonlocal deadline_handle, turn_deadline
+        turn_deadline = turn_loop.time() + TURN_TIMEOUT_SECONDS
+        deadline_handle = turn_loop.call_at(turn_deadline, expire_turn)
 
     active_history = session.history
 
@@ -1639,6 +1662,8 @@ async def processor_loop(
                 if isinstance(payload.get("data"), bytes):
                     payload["data"] = base64.b64encode(payload["data"]).decode("utf-8")
                 await send_queue.put((epoch, payload))
+                if payload["type"] == "turn.started":
+                    start_turn_deadline()
 
             async def translate_segment(text: str) -> str:
                 return await translate_with_provider(turn_provider, text, session.api_key)
@@ -1773,6 +1798,8 @@ async def processor_loop(
                     streamed_segments.append(delivered)
                     segment_pipeline.submit(delivered)
 
+        if session.protocol_version < 2:
+            start_turn_deadline()
         await send_queue.put((epoch, {
             "type": "status",
             "dsk": "thinking",
@@ -2174,6 +2201,9 @@ async def processor_loop(
             "tts": "idle"
         }))
 
+        # Final text and its required attachments have now been published.
+        if deadline_handle is not None:
+            deadline_handle.cancel()
         if segment_pipeline is not None:
             await segment_pipeline.complete(segment_count=segment_count)
 
@@ -2197,6 +2227,7 @@ async def processor_loop(
                     generation=epoch,
                     send_queue=send_queue,
                     translate=translate_whole_turn,
+                    deadline=turn_deadline,
                 ),
             )
         
@@ -2220,7 +2251,15 @@ async def processor_loop(
                     )
                 )
             
-    except asyncio.CancelledError:
+    except (asyncio.CancelledError, ProviderStallError) as exc:
+        upstream_timeout = deadline_expired or isinstance(exc, ProviderStallError)
+        if deadline_handle is not None:
+            deadline_handle.cancel()
+        if deadline_expired:
+            processor_task.uncancel()
+        if segment_pipeline is not None:
+            await segment_pipeline.cancel(reason=None)
+        tts_manager.cancel_pending(session.tts_key)
         if (
             not aborted_turn_written
             and isinstance(user_message_id, int)
@@ -2242,10 +2281,14 @@ async def processor_loop(
                 await asyncio.shield(notice)
             except asyncio.CancelledError:
                 pass
-        if segment_pipeline is not None:
-            await segment_pipeline.cancel(reason=None)
-        tts_manager.cancel_pending(session.tts_key)
-        raise
+        if not upstream_timeout:
+            raise
+        await send_queue.put((epoch, {
+            "type": "error",
+            "code": "upstream_timeout",
+            "recoverable": True,
+            "message": _UPSTREAM_TIMEOUT_MESSAGE,
+        }))
     except SearchEvidenceError as e:
         if segment_pipeline is not None:
             await segment_pipeline.cancel(reason=None)
@@ -2273,6 +2316,8 @@ async def processor_loop(
             "message": f"Server error: {e}" if isinstance(e, ProviderRequestError) else "Server error",
         }))
     finally:
+        if deadline_handle is not None:
+            deadline_handle.cancel()
         if (
             not aborted_turn_written
             and isinstance(user_message_id, int)
