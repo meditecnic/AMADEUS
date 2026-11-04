@@ -123,4 +123,43 @@ describe('MemorySpace with a collapsed chart', () => {
     fireEvent.click(await screen.findByTestId('open-month-in-archive'));
     expect(await screen.findByTestId('archive-within')).toHaveTextContent(`只看：${labelled!.band.key.replace('-', '.')} · ${labelled!.band.starIds.length} 条`);
   });
+
+  // Archive keeps its filters between visits; a month or cell from an earlier visit must not follow
+  // the user to another topic or record.
+  async function archiveOfCellThenChart() {
+    const { model } = serve('huge');
+    mount();
+    await ready();
+    const cell = busiest(model);
+    fireEvent.click(document.querySelector(`.p-ribbon-hit[data-group="${cell.groupId}"]`)!, pointOnCell(model, cell.key));
+    fireEvent.click(await screen.findByTestId('open-cell-in-archive'));
+    await screen.findByTestId('archive-within');
+    fireEvent.click(screen.getByTestId('memory-tab-chart'));
+    await ready();
+    return { model, cell };
+  }
+
+  it('opens another topic in the archive without the earlier cell filter', async () => {
+    const { model, cell } = await archiveOfCellThenChart();
+    const other = model.groups.find((t) => t.isTopic && t.id !== cell.groupId && t.starIds.length > 50)!;
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${other.label}，${other.starIds.length} 条`) }));
+    fireEvent.click(await screen.findByTestId('open-topic-in-archive'));
+    await waitFor(() => expect(screen.getByTestId('archive-view')).toBeInTheDocument());
+    expect(screen.queryByTestId('archive-within')).toBeNull();
+    expect(screen.getByTestId('archive-topic-select')).toHaveValue(other.id);
+    await waitFor(() => expect(screen.getByTestId('archive-tab-fact')).toHaveTextContent(`认知（${other.starIds.length}）`));
+  });
+
+  it('opens a record of another topic in the archive, found and without the earlier cell filter', async () => {
+    const { model, cell } = await archiveOfCellThenChart();
+    const other = model.groups.find((t) => t.isTopic && t.id !== cell.groupId && t.starIds.length > 50)!;
+    const star = model.byId.get(other.starIds[0])!;
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${other.label}，${other.starIds.length} 条`) }));
+    fireEvent.click(document.querySelector(`.p-star[data-id="${star.id}"]`)!);
+    fireEvent.click(await screen.findByTestId('open-in-archive'));
+    await screen.findByTestId('archive-view');
+    expect(screen.queryByTestId('archive-within')).toBeNull();
+    await waitFor(() => expect(screen.getByTestId('archive-tab-fact')).toHaveTextContent(`认知（${model.stars.filter((s) => s.kind !== 'fragment').length}）`));
+    expect(screen.queryByTestId('archive-focus-fallback')).toBeNull();
+  });
 });

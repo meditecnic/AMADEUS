@@ -318,7 +318,8 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
   const openArchiveTopic = (topicId: string) => {
     archiveOpenedRef.current = scopeKey;
     setMode('archive');
-    if (archive.open(scope, { restore: true })) archive.dispatch({ type: 'set-topic', topicId });
+    // A month or cell the archive was last showing belongs to another visit; it would empty this topic.
+    if (archive.open(scope, { restore: true })) archive.dispatch({ type: 'set-within', within: null, topicId });
   };
   const openArchiveWithin = (ids: readonly string[], label: string, topicId: string | null) => {
     archiveOpenedRef.current = scopeKey;
