@@ -5,7 +5,7 @@ from app import config
 from app.services.llm_interface import LLMInterface, build_stream_messages
 from app.services.model_catalog import model_catalog
 from app.services.persona_bible import persona_bible
-from app.services.provider_adapters import ProviderRequestError
+from app.services.provider_adapters import ProviderRequestError, iter_provider_lines
 
 
 class DeepSeekTranslationError(RuntimeError):
@@ -193,7 +193,7 @@ class DeepSeekService(LLMInterface):
                     await response.aread()
                     raise ProviderRequestError("deepseek", response.status_code)
                 
-                async for line in response.aiter_lines():
+                async for line in iter_provider_lines(response):
                     if not line:
                         continue
                     if line.startswith("data: "):
