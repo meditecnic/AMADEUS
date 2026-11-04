@@ -40,6 +40,11 @@
 .p-tlab { font: 13px/1 var(--m-f-disp); letter-spacing: .32em; fill: rgba(var(--m-ink-rgb), .72);
   paint-order: stroke; stroke: var(--m-paper); stroke-width: 5px; stroke-linejoin: round; transition: fill var(--m-d1) var(--m-ease); }
 .p-topic:hover .p-tlab, .p-topic.on .p-tlab, .p-topic:focus-visible .p-tlab { fill: var(--m-ink); }
+.p-topic.is-dot .hit { fill: transparent; }
+.p-tdot { fill: rgba(var(--m-ink-rgb), .6); }
+.p-topic.is-dot:hover .p-tdot, .p-topic.is-dot.on .p-tdot, .p-topic.is-dot:focus-visible .p-tdot { fill: var(--m-ink); }
+.p-dotlab { display: none; letter-spacing: .12em; }
+.p-topic.is-dot:hover .p-dotlab, .p-topic.is-dot:focus-visible .p-dotlab { display: inline; }
 .p-tcnt { font: 10px/1 var(--font-mono); fill: var(--m-ink3); letter-spacing: .1em; }
 .p-soul { cursor: pointer; outline: none; }
 .p-soul .shell { fill: var(--m-paper); stroke: rgba(var(--m-ink-rgb), .62); stroke-width: 1; }

@@ -122,8 +122,9 @@ describe('MemoryPlate', () => {
   it('keeps topic names and month labels of a 300-record library apart', () => {
     const large = buildChartModel(chartFor('large'), { today: TODAY, lastOpen: null });
     const { topics, months, today } = layoutLabels(large, 1440, 832);
-    const boxes = [today.box, ...months.map((m) => m.box), ...topics.map((t) => t.box)];
-    expect(topics).toHaveLength(12);
+    const boxes = [today.box, ...months.map((m) => m.box), ...topics.filter((t) => !t.dot).map((t) => t.box)];
+    // 300 records are drawn collapsed: the 12 topics plus the ungrouped and fragment groups get names.
+    expect(topics).toHaveLength(14);
     for (let i = 0; i < boxes.length; i += 1) for (let j = i + 1; j < boxes.length; j += 1) {
       const [a, b] = [boxes[i], boxes[j]];
       expect(a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h, `${i}/${j}`).toBe(false);

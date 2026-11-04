@@ -28,18 +28,95 @@ const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 
 
 export type LabelLayout = {
   months: Array<{ key: string; text: string; x: number; y: number; box: Box }>;
-  topics: Array<{ id: string; text: string; count: number; x: number; y: number; right: boolean; box: Box }>;
+  /** `dot`: the name did not fit anywhere near its ribbon, so it is a small dot outside the disc that names itself on hover. */
+  topics: Array<{ id: string; text: string; count: number; x: number; y: number; right: boolean; box: Box; dot?: boolean }>;
   today: { x: number; y: number; box: Box };
+  /** Collapsed plates write one note per group, on its newest new record, when there is room. */
+  news: Array<{ id: string; text: string; x: number; y: number; right: boolean; box: Box }>;
 };
+
+const MONTH_RANK = { year: 0, quarter: 1, month: 2 } as const;
+const NAME_SHIFTS = [0, 2.5, -2.5, 5, -5, 7.5, -7.5];
+const MONTH_GAP_PX = 13;
+
+// A collapsed plate has too many names and numbers for the first-come rule above. Each kind is placed in
+// order of importance and the first that would touch something already down gives way or goes.
+function layoutCollapsed(model: ChartModel, g: ReturnType<typeof plateGeometry>, at: (theta: number, phi: number) => Point, focus: string | null): LabelLayout {
+  const placed: Box[] = [];
+  const free = (box: Box) => !placed.some((other) => overlaps(box, other));
+  const radial = (theta: number) => at(theta, 0).y - g.cy;
+
+  const todayPoint = at(model.thetaToday + 3.2, model.scalePhi);
+  const today = { ...todayPoint, box: { x: todayPoint.x - 36, y: todayPoint.y - 8, w: 72, h: 14 } };
+  placed.push(today.box);
+
+  // Years first, then quarters, then months, the newer first; one needs 13 px of ruler to itself.
+  const seats = [radial(model.thetaToday + 3.2)];
+  const months: LabelLayout['months'] = [];
+  const ranked = model.rings.filter((ring) => !ring.nearToday)
+    .sort((a, b) => MONTH_RANK[a.kind] - MONTH_RANK[b.kind] || b.theta - a.theta);
+  for (const ring of ranked) {
+    const r = radial(ring.theta);
+    if (seats.some((seat) => Math.abs(seat - r) < MONTH_GAP_PX)) continue;
+    const text = ring.month === 1 ? `${ring.year}.01` : String(ring.month).padStart(2, '0');
+    const w = text.length * 7.4 + 6;
+    const p = at(ring.theta, model.scalePhi);
+    const box = { x: p.x - w / 2, y: p.y - 7, w, h: 13 };
+    if (!free(box)) continue;
+    seats.push(r);
+    placed.push(box);
+    months.push({ key: ring.key, text, x: p.x, y: p.y, box });
+  }
+  months.sort((a, b) => a.key.localeCompare(b.key));
+
+  const order = [...model.groups].filter((group) => group.starIds.length).sort((a, b) =>
+    Number(b.id === focus) - Number(a.id === focus)
+    || Number(b.isTopic) - Number(a.isTopic)
+    || (a.isTopic ? b.starIds.length - a.starIds.length : 0));
+  const topics: LabelLayout['topics'] = order.map((group) => {
+    const w = group.label.length * TOPIC_CHAR + String(group.starIds.length).length * 7 + 6;
+    const box = (shift: number): Box => {
+      const p = at(model.thetaToday + 4.2, group.phi + shift);
+      return p.x >= g.cx ? { x: p.x, y: p.y - 10, w, h: 16 } : { x: p.x - w, y: p.y - 10, w, h: 16 };
+    };
+    const shift = NAME_SHIFTS.find((candidate) => free(box(candidate)));
+    if (shift === undefined) {
+      const p = at(model.thetaToday + 2.4, group.phi);
+      return { id: group.id, text: group.label, count: group.starIds.length, x: p.x, y: p.y, right: p.x >= g.cx, dot: true, box: { x: p.x - 2.6, y: p.y - 2.6, w: 5.2, h: 5.2 } };
+    }
+    const p = at(model.thetaToday + 4.2, group.phi + shift);
+    placed.push(box(shift));
+    return { id: group.id, text: group.label, count: group.starIds.length, x: p.x, y: p.y, right: p.x >= g.cx, box: box(shift) };
+  });
+
+  const news: LabelLayout['news'] = [];
+  const fresh = new Map<string, ChartStar[]>();
+  for (const star of model.stars) if (star.isNew) fresh.set(star.group, [...(fresh.get(star.group) ?? []), star]);
+  for (const list of fresh.values()) {
+    const newest = list.reduce((a, b) => (b.createdAt > a.createdAt ? b : a));
+    const text = list.length > 1 ? `新 ${list.length} · ${md(newest.createdAt)}` : `新 · ${md(newest.createdAt)}`;
+    const p = at(newest.theta, newest.phi);
+    const w = text.length * 8.6;
+    for (const right of [true, false]) {
+      const box = { x: right ? p.x + 10 : p.x - 10 - w, y: p.y + 8, w, h: 12 };
+      if (!free(box)) continue;
+      placed.push(box);
+      news.push({ id: newest.id, text, x: p.x, y: p.y, right, box });
+      break;
+    }
+  }
+  return { months, topics, today, news };
+}
 
 // Labels that would collide slide around their own ring (the same rule the stars
 // follow), so a month label never leaves its month and a topic name stays at its arm.
-export function layoutLabels(model: ChartModel, width: number, height: number): LabelLayout {
+export function layoutLabels(model: ChartModel, width: number, height: number, focus: string | null = null): LabelLayout {
   const g = plateGeometry(width, height);
   const at = (theta: number, phi: number): Point => {
     const p = platePoint(theta, phi, g.radius, model.thetaFit);
     return { x: g.cx + p.x, y: g.cy + p.y };
   };
+  if (model.collapsed) return layoutCollapsed(model, g, at, focus);
   const placed: Box[] = [];
   const settle = (offsets: number[], make: (offset: number) => Box) => {
     for (const offset of offsets) {
@@ -75,7 +152,7 @@ export function layoutLabels(model: ChartModel, width: number, height: number): 
     const p = at(last.theta + 4.2, topic.phi + offset);
     return { id: topic.id, text: topic.label, count: topic.starIds.length, x: p.x, y: p.y, right: p.x >= g.cx, box: box(offset) };
   });
-  return { months, topics, today };
+  return { months, topics, today, news: [] };
 }
 
 function focusView(model: ChartModel, groupId: string | null, width: number, height: number): PlateView {
@@ -136,7 +213,7 @@ export function MemoryPlate(props: MemoryPlateProps) {
     const p = platePoint(theta, phi, g.radius, model?.thetaFit ?? 49);
     return { x: g.cx + p.x, y: g.cy + p.y };
   };
-  const labels = useMemo(() => (model ? layoutLabels(model, width, height) : null), [model, width, height]);
+  const labels = useMemo(() => (model ? layoutLabels(model, width, height, model.collapsed ? focusTopic : null) : null), [model, width, height, focusTopic]);
   const pos = useMemo(() => new Map((model?.stars ?? []).map((s) => {
     const p = platePoint(s.theta, s.phi, g.radius, model!.thetaFit);
     return [s.id, { x: g.cx + p.x, y: g.cy + p.y }] as const;
@@ -315,12 +392,22 @@ export function MemoryPlate(props: MemoryPlateProps) {
           ) : null}
           {labels?.topics.map((t) => (
             <g key={t.id} data-hit="topic" role="button" tabIndex={0} aria-label={`${t.text}，${t.count} 条`}
-              className={`p-topic${t.id === focusTopic ? ' on' : ''}`}
+              className={`p-topic${t.id === focusTopic ? ' on' : ''}${t.dot ? ' is-dot' : ''}`}
               onClick={(event) => { event.stopPropagation(); props.onSelect({ kind: 'topic', id: t.id }); }}
               onKeyDown={activate(() => props.onSelect({ kind: 'topic', id: t.id }))}>
-              <text className="p-tlab" x={t.x} y={t.y + 4} textAnchor={t.right ? 'start' : 'end'}>{t.text}</text>
-              <text className="p-tcnt" x={t.right ? t.x + t.text.length * TOPIC_CHAR + 4 : t.x - t.text.length * TOPIC_CHAR - 10}
-                y={t.y + 4} textAnchor={t.right ? 'start' : 'end'}>{t.count}</text>
+              {t.dot ? (
+                <>
+                  <circle className="p-tdot" cx={t.x} cy={t.y} r={2.6} />
+                  <circle className="hit" cx={t.x} cy={t.y} r={9} />
+                  <text className="p-tlab p-dotlab" x={t.x + (t.right ? 9 : -9)} y={t.y + 4} textAnchor={t.right ? 'start' : 'end'}>{t.text} {t.count}</text>
+                </>
+              ) : (
+                <>
+                  <text className="p-tlab" x={t.x} y={t.y + 4} textAnchor={t.right ? 'start' : 'end'}>{t.text}</text>
+                  <text className="p-tcnt" x={t.right ? t.x + t.text.length * TOPIC_CHAR + 4 : t.x - t.text.length * TOPIC_CHAR - 10}
+                    y={t.y + 4} textAnchor={t.right ? 'start' : 'end'}>{t.count}</text>
+                </>
+              )}
             </g>
           ))}
           {young ? model!.stars.map((s) => {
@@ -339,11 +426,13 @@ export function MemoryPlate(props: MemoryPlateProps) {
           }) : null}
           {fresh.map((s, i) => {
             const p = pos.get(s.id)!;
+            const note = collapsed ? labels?.news.find((n) => n.id === s.id) : undefined;
             return (
               <g key={`new-${s.id}`} className="p-new" data-new-id={s.id} transform={`translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})`}
                 style={{ ...delay(1150 + i * 520), opacity: dimmed(s) ? 0.2 : undefined }}>
                 <path d="M0 -11v5M0 6v5M-11 0h5M6 0h5" pathLength={playing ? 1 : undefined} />
-                <text x={10} y={17}>新 · {md(s.createdAt)}</text>
+                {collapsed ? (note ? <text x={note.right ? 10 : -10} y={17} textAnchor={note.right ? 'start' : 'end'}>{note.text}</text> : null)
+                  : <text x={10} y={17}>新 · {md(s.createdAt)}</text>}
               </g>
             );
           })}

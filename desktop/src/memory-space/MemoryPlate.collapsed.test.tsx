@@ -1,8 +1,9 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryStore, handleMemory } from '../dev-mock/memory';
+import { md } from './chartFormat';
 import { buildChartModel, plateGeometry, platePoint, type ChartModel } from './chartCoordinates';
-import { MemoryPlate, type MemoryPlateProps } from './MemoryPlate';
+import { MemoryPlate, layoutLabels, type MemoryPlateProps } from './MemoryPlate';
 import type { MemoryChart } from './types';
 
 const TODAY = Date.parse('2026-11-04T04:00:00Z');
@@ -238,5 +239,115 @@ describe('collapsed plate (step 3)', () => {
       rerender(<MemoryPlate {...props} reducedMotion={false} focusTopic={mid.topics[1].id} framedTopic={mid.topics[1].id} />);
       expect(screen.queryByTestId('plate-unfurl')).toBeNull();
     });
+  });
+});
+
+const clash = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) =>
+  a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+describe('collapsed plate (step 4): text grading', () => {
+  const huge = modelFor('huge', Date.parse('2026-10-28T00:00:00Z'));
+  const labels = layoutLabels(huge, 1440, 832);
+  const namedBoxes = labels.topics.filter((t) => !t.dot).map((t) => t.box);
+
+  it('puts a name or a dot on every group, and nothing it draws touches anything else', () => {
+    expect(labels.topics).toHaveLength(huge.groups.filter((t) => t.starIds.length).length);
+    expect(namedBoxes.length).toBeGreaterThan(20);
+    const boxes = [labels.today.box, ...labels.months.map((m) => m.box), ...namedBoxes, ...labels.news.map((n) => n.box)];
+    for (let i = 0; i < boxes.length; i += 1) for (let j = i + 1; j < boxes.length; j += 1) expect(clash(boxes[i], boxes[j]), `${i}/${j}`).toBe(false);
+  });
+
+  it('places names focus first, then by count, then ungrouped and fragments; all outside the today ring', () => {
+    const g = plateGeometry(1440, 832);
+    const todayR = platePoint(huge.thetaToday, 0, g.radius, huge.thetaFit).y;
+    for (const t of labels.topics) expect(Math.hypot(t.x - g.cx, t.y - g.cy)).toBeGreaterThan(todayR);
+    const loose = huge.groups[huge.groups.length - 2];
+    const focused = layoutLabels(huge, 1440, 832, loose.id);
+    expect(focused.topics[0].id).toBe(loose.id);
+    expect(focused.topics[0].dot).toBeUndefined();
+    const counts = labels.topics.filter((t) => huge.groups.find((x) => x.id === t.id)!.isTopic).map((t) => t.count);
+    expect(counts).toEqual([...counts].sort((a, b) => b - a));
+    expect(labels.topics.slice(-2).map((t) => t.id)).toEqual(['@loose', '@fragment']);
+  });
+
+  it('slides a name along the circle 2.5, 5 or 7.5 degrees before it gives up and becomes a dot', () => {
+    const crowded = layoutLabels(huge, 1440, 832);
+    const g = plateGeometry(1440, 832);
+    const bearing = (t: { x: number; y: number }) => (Math.atan2(t.x - g.cx, t.y - g.cy) * 180) / Math.PI;
+    const shifted = crowded.topics.filter((t) => {
+      if (t.dot) return false;
+      const group = huge.groups.find((x) => x.id === t.id)!;
+      return Math.abs(((bearing(t) - group.phi + 540) % 360) - 180) > 0.5;
+    });
+    expect(shifted.length).toBeGreaterThan(0);
+    for (const t of shifted) {
+      const group = huge.groups.find((x) => x.id === t.id)!;
+      const d = Math.abs(((bearing(t) - group.phi + 540) % 360) - 180);
+      expect([2.5, 5, 7.5].some((step) => Math.abs(d - step) < 0.01), `${t.text} moved ${d}`).toBe(true);
+    }
+  });
+
+  it('draws a dot of radius 2.6 that names itself on hover and opens its group on click', () => {
+    const wide = modelFor('huge');
+    const longName = '很长很长很长很长很长的名字';
+    const dense = {
+      ...wide, groups: wide.groups.map((t) => (t.isTopic ? { ...t, label: longName } : t)),
+    } as ChartModel;
+    const { container, props } = plate({ model: dense });
+    const dots = [...container.querySelectorAll('.p-topic.is-dot')];
+    expect(dots.length).toBeGreaterThan(0);
+    const dot = dots[0];
+    expect(dot.querySelector('.p-tdot')).toHaveAttribute('r', '2.6');
+    expect(dot.querySelector('.p-dotlab')).toHaveTextContent(/\d+$/);
+    expect(dot.getAttribute('aria-label')).toMatch(/，\d+ 条$/);
+    fireEvent.click(dot);
+    const id = (props.onSelect as ReturnType<typeof vi.fn>).mock.calls[0][0].id as string;
+    expect(dense.groups.find((t) => t.id === id)!.label).toBe(dot.querySelector('.p-dotlab')!.textContent!.replace(/ \d+$/, ''));
+    fireEvent.keyDown(dot, { key: 'Enter' });
+    expect(props.onSelect).toHaveBeenCalledTimes(2);
+  });
+
+  it('writes the month numbers by year, then quarter, then month, newest first, 13 px of ruler apart', () => {
+    const g = plateGeometry(1440, 832);
+    const radial = (key: string) => platePoint(huge.rings.find((r) => r.key === key)!.theta, 0, g.radius, huge.thetaFit).y;
+    const keys = labels.months.map((m) => m.key);
+    expect(keys.length).toBeGreaterThanOrEqual(5);
+    expect(keys.length).toBeLessThanOrEqual(12);
+    expect(labels.months.filter((m) => m.text.includes('.')).map((m) => m.text)).toEqual(['2025.01', '2026.01']);
+    const radii = keys.map(radial).sort((a, b) => a - b);
+    radii.slice(1).forEach((r, i) => expect(r - radii[i]).toBeGreaterThanOrEqual(13));
+    const todayR = platePoint(huge.thetaToday + 3.2, 0, g.radius, huge.thetaFit).y;
+    for (const r of radii) expect(Math.abs(todayR - r)).toBeGreaterThanOrEqual(13);
+    // Old months are quarter rings only, so a quarter always wins over a month where they meet.
+    expect(labels.months.some((m) => /^(04|07|10)$/.test(m.text))).toBe(true);
+  });
+
+  it('writes one note per group on its newest new record, "新 3 · 11/01", and only the cross when there is no room', () => {
+    const groupsWithNew = new Set(huge.stars.filter((s) => s.isNew).map((s) => s.group));
+    expect(labels.news.length).toBeGreaterThan(0);
+    expect(labels.news.length).toBeLessThanOrEqual(groupsWithNew.size);
+    for (const note of labels.news) {
+      const star = huge.byId.get(note.id)!;
+      const all = huge.stars.filter((s) => s.isNew && s.group === star.group);
+      const newest = all.reduce((a, b) => (b.createdAt > a.createdAt ? b : a));
+      expect(star.id).toBe(newest.id);
+      expect(note.text).toBe(all.length > 1 ? `新 ${all.length} · ${md(newest.createdAt)}` : `新 · ${md(newest.createdAt)}`);
+    }
+    const { container } = plate({ model: huge });
+    const crosses = container.querySelectorAll('.p-new');
+    expect(crosses).toHaveLength(huge.stars.filter((s) => s.isNew).length);
+    expect([...crosses].filter((el) => el.querySelector('text'))).toHaveLength(labels.news.length);
+    expect(container.querySelectorAll('.p-new text').length).toBeLessThan(crosses.length);
+  });
+
+  it('leaves a plate under the line with every new record labelled as before', () => {
+    const mid = modelFor('mid', Date.parse('2026-10-20T00:00:00Z'));
+    expect(mid.collapsed).toBe(false);
+    const { container } = plate({ model: mid });
+    const fresh = mid.stars.filter((s) => s.isNew);
+    expect(fresh.length).toBeGreaterThan(1);
+    expect(container.querySelectorAll('.p-new text')).toHaveLength(fresh.length);
+    expect(container.querySelectorAll('.p-topic.is-dot')).toHaveLength(0);
+    expect(layoutLabels(mid, 1440, 832).news).toEqual([]);
   });
 });
