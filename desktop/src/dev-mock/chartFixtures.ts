@@ -163,8 +163,58 @@ function largeLibrary(): ChartPreset {
   };
 }
 
+const MORE_TOPICS = ['摄影', '跑步', '植物', '咖啡豆', '电影', '游戏', '旅行', '家人', '健身', '购物',
+  '财务', '学习', '代码', '写作', '厨房', '手作', '城市', '节日'];
+
+// A library of `count` records over `days` days ending at `end`, dated denser toward the end, with
+// `topics` topics opened over the first 90% of the span. Fixed seed, so every screenshot draws the same plate.
+function bigLibrary(options: { seed: number; count: number; topics: string[]; end: number; days: number }): ChartPreset {
+  let seed = options.seed;
+  const random = () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const span = options.days;
+  const origin = options.end - span * 86_400_000;
+  const topicDay = options.topics.map((_, i) => Math.round((i / options.topics.length) * span * 0.9 + random() * 6));
+  const days = Array.from({ length: options.count }, () => Math.floor(span * Math.sqrt(random()))).sort((a, b) => a - b);
+  const facts: PresetFact[] = [];
+  const experiences: PresetExperience[] = [];
+  days.forEach((day, i) => {
+    const n = String(i + 1).padStart(4, '0');
+    if (i % 8 === 7) {
+      const at = stamp(origin, day, random);
+      experiences.push({ id: `bx${n}`, text: `样例片段 ${n}：那天发生的一件小事。`, said: [[`样例原话 ${n}。`, at]],
+        expires: random() < 0.2 ? null : stamp(origin, day + 30, random), pin: random() < 0.05 });
+      return;
+    }
+    const open = topicDay.filter((d) => d <= day).length;
+    // Early topics grow big and late ones stay small, like a real library.
+    const topic = random() < 0.1 || open === 0 ? null : Math.floor(open * random() ** 1.7);
+    const said: Said[] = Array.from({ length: 1 + Math.floor(random() * random() * 5) }, (_, k) =>
+      [`样例原话 ${n}-${k + 1}。`, stamp(origin, Math.min(span, day + k * 9), random)]);
+    const label = topic === null ? '未归组' : options.topics[topic];
+    facts.push({ id: `bf${n}`, topic: topic === null ? null : `bt${topic + 1}`, text: `${label}的样例认知 ${n}。`,
+      pin: random() < 0.05, said });
+  });
+  return {
+    origin: stamp(origin, 0, () => 0),
+    topics: options.topics.map((label, i) => ({ id: `bt${i + 1}`, label })),
+    facts,
+    experiences,
+  };
+}
+
 export function chartPreset(name: string, worldline: string): ChartPreset {
   if (name === 'new') return newUser;
   if (name === 'large') return largeLibrary();
+  // 2000 records, 30 topics, two years: the collapsed plate at full load.
+  if (name === 'huge') {
+    return bigLibrary({ seed: 200, count: 2000, topics: [...LARGE_TOPICS, ...MORE_TOPICS], end: Date.UTC(2026, 10, 3, 10), days: 728 });
+  }
+  // 140 records: just under the collapse line, so it still draws every star.
+  if (name === 'mid') return bigLibrary({ seed: 140, count: 140, topics: LARGE_TOPICS.slice(0, 8), end: Date.UTC(2026, 10, 3, 10), days: 270 });
   return worldline === 'beta' ? betaNormal : sgNormal;
 }

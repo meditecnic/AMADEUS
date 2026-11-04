@@ -16,6 +16,8 @@ import { model } from './fixtures';
 
 import memoryNew from './scenarios/memory-new.json';
 import memoryLarge from './scenarios/memory-large.json';
+import memoryHuge from './scenarios/memory-huge.json';
+import memoryMid from './scenarios/memory-mid.json';
 import memoryLoading from './scenarios/memory-loading.json';
 import memoryUnavailable from './scenarios/memory-unavailable.json';
 import memoryError from './scenarios/memory-error.json';
@@ -39,7 +41,7 @@ type Override = Omit<Partial<Scenario>, 'login' | 'shift'> & {
 };
 
 export const scenarios: Record<string, Scenario> = Object.fromEntries(
-  [streaming, loginSuccess, loginFailure, sessionList, memory, memoryNew, memoryLarge, memoryLoading, memoryUnavailable,
+  [streaming, loginSuccess, loginFailure, sessionList, memory, memoryNew, memoryLarge, memoryHuge, memoryMid, memoryLoading, memoryUnavailable,
     memoryError, empty, error, offline, shiftFailure, shiftSlow, workstationLong, readyDelay, transportClose]
     .map((override: Override) => [override.name!, {
       ...streaming, ...override,

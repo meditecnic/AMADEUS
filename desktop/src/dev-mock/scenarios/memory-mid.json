@@ -1,0 +1,10 @@
+{
+  "name": "memory-mid",
+  "extends": "streaming",
+  "description": "140 records, 8 topics over nine months: just under the collapse line, so every star is drawn.",
+  "memory": {
+    "preset": "mid",
+    "facts": [],
+    "topics": []
+  }
+}
