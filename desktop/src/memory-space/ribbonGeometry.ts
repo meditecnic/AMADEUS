@@ -59,10 +59,21 @@ export function groupSpine(group: ChartGroup, project: Project): string {
   return d;
 }
 
-/** The cell of a group whose month the pointer is in, given its distance from SOUL in theta units. */
+/**
+ * The cell of a group whose month the pointer is in, given its distance from SOUL in theta units.
+ * The month that really holds the point wins; the slack only catches a point just outside a ribbon,
+ * and then the nearest month. Neighbouring slacks overlap, so a short month must not lose to the one before it.
+ */
 export function cellAtTheta(group: ChartGroup, theta: number): ChartCell | null {
-  return group.cells.find((cell) => cell.collapsedIds.length
-    && theta >= cell.band.theta0 - CELL_SLACK && theta <= cell.band.theta1 + CELL_SLACK) ?? null;
+  let nearest: ChartCell | null = null;
+  let gap = CELL_SLACK;
+  for (const cell of group.cells) {
+    if (!cell.collapsedIds.length) continue;
+    if (theta >= cell.band.theta0 && theta < cell.band.theta1) return cell;
+    const away = theta < cell.band.theta0 ? cell.band.theta0 - theta : theta - cell.band.theta1;
+    if (away <= gap) { gap = away; nearest = cell; }
+  }
+  return nearest;
 }
 
 /** Outline of a cell as a dashed fan: its month between two rings, over the bearings its records sit at. */
