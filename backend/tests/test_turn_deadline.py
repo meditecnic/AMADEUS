@@ -309,3 +309,37 @@ def test_disconnect_during_slow_pipeline_cancel_persists_abort(
     assert chat_ws._ABORTED_TURN_JA in str(history.json())
     assert session.is_busy is False
     assert session.active_segment_pipeline is None
+
+
+@pytest.mark.timeout(5)
+def test_deadline_stops_before_saving_completed_reply(app_client, fake_providers, monkeypatch):
+    save_message = chat_ws.models.save_message
+    saved_replies = []
+
+    async def slow_save(session_id, role, content, **kwargs):
+        if role == "assistant" and chat_ws._ABORTED_TURN_JA not in content:
+            # Longer than the entire turn budget, after pipeline.finish().
+            await asyncio.sleep(0.4)
+            saved_replies.append(content)
+        return await save_message(session_id, role, content, **kwargs)
+
+    monkeypatch.setattr(chat_ws, "TURN_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(chat_ws.models, "save_message", slow_save)
+    session_id = str(uuid4())
+    with app_client.websocket_connect(f"/ws/chat?session_id={session_id}") as ws:
+        authenticate(ws)
+        ws.send_json({"type": "chat", "content": "おはよう"})
+        frames = receive_turn(ws)
+        assert [f["ja"] for f in frames if f["type"] == "segment.ready"] == [REPLY]
+        assert frames[-1]["type"] == "turn.completed"
+        assert not any(f["type"] == "turn.cancelled" or f.get("code") == "upstream_timeout"
+                       for f in frames)
+        session = chat_ws.sessions[session_id]
+        history = app_client.get(
+            f"/api/conversations/{session.conversation_id}/messages",
+            params={"session_id": session_id},
+        )
+        assert history.status_code == 200
+        assert saved_replies == [f"[EMO:neutral] {REPLY}"]
+        assert REPLY in str(history.json())
+        assert chat_ws._ABORTED_TURN_JA not in str(history.json())

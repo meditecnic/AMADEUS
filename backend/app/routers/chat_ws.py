@@ -2123,6 +2123,9 @@ async def processor_loop(
                 )
                 history_translation = ""
         
+        # Final text and its required attachments have now been published.
+        if deadline_handle is not None:
+            deadline_handle.cancel()
         if session.history_epoch == start_history_epoch and session.conversation_id == conversation_id:
             if full_ja_text.strip():
                 assistant_message_id = await models.save_message(
@@ -2218,9 +2221,6 @@ async def processor_loop(
             "tts": "idle"
         }))
 
-        # Final text and its required attachments have now been published.
-        if deadline_handle is not None:
-            deadline_handle.cancel()
         if segment_pipeline is not None:
             if (assistant_message_id is not None and full_ja_text.strip()
                     and session.current_epoch == epoch
