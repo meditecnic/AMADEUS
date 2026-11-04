@@ -56,7 +56,8 @@ import { wsTransition } from '../workstation/motionTokens';
 import { MotionConfig, animate } from 'motion/react';
 import { LogOut } from 'lucide-react';
 import { ForgetConversationModal } from './ForgetConversationModal';
-import { MemorySpace, type MemorySpaceControl } from '../memory-space/MemorySpace';
+import { MemorySpace, type MemoryLink, type MemorySpaceControl } from '../memory-space/MemorySpace';
+import { RecordedMarks, ReferencedMarks, type MemoryOpenRequest } from '../memory-space/ChatMarks';
 import '../memory-space/MemorySpace.css';
 import {
   ProviderControls,
@@ -131,11 +132,28 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [isMemoryOpen, setIsMemoryOpen] = useState(false);
   const [memoryClosing, setMemoryClosing] = useState(false);
   const memoryControlRef = useRef<MemorySpaceControl | null>(null);
+  const [memoryLink, setMemoryLink] = useState<MemoryLink | null>(null);
+  // The chat mark that opened the memory space gets focus back once the transcript is no longer inert.
+  const memoryOriginRef = useRef<string | null>(null);
+  const openMemoryFromMark = (request: MemoryOpenRequest) => {
+    memoryOriginRef.current = request.origin;
+    setMemoryLink({ select: request.select, mark: request.mark, hintAt: request.hintAt });
+    setIsMemoryOpen(true);
+  };
+  useEffect(() => {
+    if (isMemoryOpen || !memoryOriginRef.current) return;
+    const origin = memoryOriginRef.current;
+    memoryOriginRef.current = null;
+    const mark = document.querySelector<HTMLElement>(`[data-memory-mark="${CSS.escape(origin)}"]`);
+    (mark ?? document.querySelector<HTMLElement>('.ws2 button[aria-label="MEMORY"]'))?.focus({ preventScroll: true });
+  }, [isMemoryOpen]);
   const closeMemory = () => {
     const done = () => {
       setIsMemoryOpen(false);
       setMemoryClosing(false);
-      document.querySelector<HTMLButtonElement>('.ws2 button[aria-label="MEMORY"]')?.focus({ preventScroll: true });
+      if (!memoryOriginRef.current) {
+        document.querySelector<HTMLButtonElement>('.ws2 button[aria-label="MEMORY"]')?.focus({ preventScroll: true });
+      }
     };
     if (reducedMotion) { done(); return; }
     setMemoryClosing(true);
@@ -2039,6 +2057,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
                 if (!memoryClosing) (memoryControlRef.current?.requestClose ?? closeMemory)();
                 return;
               }
+              memoryOriginRef.current = null;
+              setMemoryLink(null);
               setIsMemoryOpen(true);
             }}
           >
@@ -2204,6 +2224,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                       >
                         {msg.content}
                       </p>
+                      <RecordedMarks messageId={msg.id} changes={msg.memoryRecorded} onOpen={openMemoryFromMark} />
                     </article>
                   ) : (
                     <article key={msg.id} className={`ws2-line ws2-line-kurisu${arrival.arriving(`m:${msg.id}`, Boolean(msg.streaming)) ? ' ws2-arrive' : ''}`}>
@@ -2223,6 +2244,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
                         speakingId={isPlaying && msg.id === lastAssistantId ? speakingId : null}
                         arriving={sentenceArrivals(arrival, msg.id, msg.segments, Boolean(msg.streaming))}
                       />
+                      {!msg.streaming && msg.memoryRefs ? (
+                        <ReferencedMarks messageId={msg.id} refs={msg.memoryRefs} onOpen={openMemoryFromMark} />
+                      ) : null}
                       {msg.streaming && isThinking && operationLabel && (
                         <div className="ws2-thinking" aria-busy={activityBusy}>
                           {thinkingSprite ? <SpriteAnimator
@@ -2577,6 +2601,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             chatIdentityMode={activeIdentityMode}
             onClose={closeMemory}
             controlRef={memoryControlRef}
+            link={memoryLink}
           />
         </div>
       ) : null}

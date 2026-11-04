@@ -98,6 +98,8 @@ export type MemoryPlateProps = {
   reducedMotion: boolean;
   entering: boolean;
   footnote?: string | null;
+  /** Records drawn with the dashed "this turn" reticle; ids not on the plate are skipped. */
+  marks?: readonly string[];
   onEntered: () => void;
   onSelect: (selection: ChartSelection) => void;
   onOverview: () => void;
@@ -259,6 +261,16 @@ export function MemoryPlate(props: MemoryPlateProps) {
                 style={{ ...delay(1150 + i * 520), opacity: dimmed(s) ? 0.2 : undefined }}>
                 <path d="M0 -11v5M0 6v5M-11 0h5M6 0h5" pathLength={playing ? 1 : undefined} />
                 <text x={10} y={17}>新 · {md(s.createdAt)}</text>
+              </g>
+            );
+          })}
+          {(props.marks ?? []).map((id) => {
+            const p = id === selectedStar?.id ? undefined : pos.get(id);
+            if (!p) return null;
+            return (
+              <g key={`ref-${id}`} className="p-ref" data-testid="plate-ref" data-ref-id={id} transform={`translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})`}>
+                <circle r={10} />
+                <text x={-16} y={3} textAnchor="end">本轮参照</text>
               </g>
             );
           })}
