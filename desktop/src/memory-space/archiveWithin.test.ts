@@ -114,4 +114,42 @@ describe('archive: only one month or cell of the chart', () => {
     expect(module.snapshot().facts.status).toBe('failed');
     module.dispose();
   });
+
+  it('clearing the filter leaves the search words and "仅置顶" as the user set them', async () => {
+    const { fetcher, chart } = served();
+    const module = createArchiveModule({ fetcher });
+    module.open(SCOPE);
+    await flush();
+    const ids = chart.facts.slice(0, 40).map((row) => row.id);
+    module.dispatch({ type: 'set-within', within: { label: '2026.09', ids } });
+    await flush();
+    await flush();
+    module.dispatch({ type: 'set-query', query: '认知' });
+    module.dispatch({ type: 'set-pinned-only', pinnedOnly: true });
+    await flush();
+    await flush();
+    module.dispatch({ type: 'set-within', within: null });
+    await flush();
+    await flush();
+    const state = module.snapshot();
+    expect(state.filters).toMatchObject({ query: '认知', pinnedOnly: true, within: null });
+    expect(state.facts.rows.every((row) => row.isPinned)).toBe(true);
+    expect(state.facts.total).toBe(chart.facts.filter((row) => row.is_pinned).length);
+    module.dispose();
+  });
+
+  it('putting a filter on still starts from no search words and not "仅置顶"', async () => {
+    const { fetcher, chart } = served();
+    const module = createArchiveModule({ fetcher });
+    module.open(SCOPE);
+    await flush();
+    module.dispatch({ type: 'set-query', query: '认知' });
+    module.dispatch({ type: 'set-pinned-only', pinnedOnly: true });
+    await flush();
+    module.dispatch({ type: 'set-within', within: { label: 'x', ids: [chart.facts[0].id] } });
+    await flush();
+    await flush();
+    expect(module.snapshot().filters).toMatchObject({ query: '', pinnedOnly: false });
+    module.dispose();
+  });
 });

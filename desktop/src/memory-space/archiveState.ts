@@ -623,9 +623,12 @@ export function createArchiveModule(deps?: {
         return;
       case 'set-within':
         // The chart sends the archive to one month or cell: leftover search words would hide it.
+        // Clearing the filter leaves the other filters as the user set them.
         commit({
           filters: {
-            query: '', pinnedOnly: false, topicId: intent.topicId === undefined ? state.filters.topicId : intent.topicId,
+            query: intent.within ? '' : state.filters.query,
+            pinnedOnly: intent.within ? false : state.filters.pinnedOnly,
+            topicId: intent.topicId === undefined ? state.filters.topicId : intent.topicId,
             within: intent.within,
           },
           facts: { ...state.facts, offset: 0 },
