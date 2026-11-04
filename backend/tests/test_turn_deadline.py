@@ -1,4 +1,7 @@
 import asyncio
+import threading
+from concurrent.futures import CancelledError as FutureCancelledError
+from contextlib import suppress
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
@@ -259,3 +262,50 @@ def test_guard_retries_share_one_deadline(app_client, fake_providers, monkeypatc
         ws.send_json({"type": "chat", "content": "おはよう"})
         assert receive_turn(ws)[-1] == TIMEOUT_ERROR
     assert len(calls) == 2
+
+
+@pytest.mark.timeout(5)
+def test_disconnect_during_slow_pipeline_cancel_persists_abort(
+    app_client, fake_providers, monkeypatch,
+):
+    translation_started = threading.Event()
+    translation_cancelled = threading.Event()
+
+    async def streaming_reply(**kwargs):
+        yield {"content": f"[EMO:neutral] {REPLY}次の文章です。", "tool_calls": None}
+        await asyncio.Event().wait()
+
+    async def slow_cancel_translation(text, **kwargs):
+        translation_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            translation_cancelled.set()
+            await asyncio.sleep(0.8)
+            raise
+
+    monkeypatch.setitem(vars(chat_ws.deepseek_service), "get_chat_stream", streaming_reply)
+    monkeypatch.setitem(vars(chat_ws.deepseek_service), "translate_to_zh", slow_cancel_translation)
+    session_id = str(uuid4())
+    # Starlette may propagate its cancelled WebSocket scope on context exit.
+    with suppress(FutureCancelledError), app_client.websocket_connect(f"/ws/chat?session_id={session_id}") as ws:
+        authenticate(ws)
+        ws.send_json({"type": "chat", "content": "おはよう"})
+        assert translation_started.wait(2)
+        session = chat_ws.sessions[session_id]
+        # TestClient's cancelled anyio scope keeps cancelling teardown awaits.
+        # The notice must already be held and shielded before pipeline cleanup.
+
+    async def drain_notices():
+        await asyncio.gather(*session.background_tasks)
+
+    app_client.portal.call(drain_notices)
+    assert translation_cancelled.is_set()
+    history = app_client.get(
+        f"/api/conversations/{session.conversation_id}/messages",
+        params={"session_id": session_id},
+    )
+    assert history.status_code == 200
+    assert chat_ws._ABORTED_TURN_JA in str(history.json())
+    assert session.is_busy is False
+    assert session.active_segment_pipeline is None

@@ -2283,9 +2283,6 @@ async def processor_loop(
             deadline_handle.cancel()
         if deadline_expired:
             processor_task.uncancel()
-        if segment_pipeline is not None:
-            await segment_pipeline.cancel(reason=None)
-        tts_manager.cancel_pending(session.tts_key)
         if (
             not aborted_turn_written
             and isinstance(user_message_id, int)
@@ -2307,6 +2304,9 @@ async def processor_loop(
                 await asyncio.shield(notice)
             except asyncio.CancelledError:
                 pass
+        if segment_pipeline is not None:
+            await segment_pipeline.cancel(reason=None)
+        tts_manager.cancel_pending(session.tts_key)
         if not upstream_timeout:
             raise
         await send_queue.put((epoch, {
