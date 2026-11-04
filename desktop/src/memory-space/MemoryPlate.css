@@ -24,6 +24,13 @@
 .p-star:focus-visible .focus { opacity: 1; }
 .p-star.is-loose .dot { fill: rgba(var(--m-ink-rgb), .78); }
 .p-star.is-fragment .dot { fill: var(--m-paper); stroke: var(--m-ink); stroke-width: 1.2; }
+/* Collapsed plate: one tick per remembered record, grouped into a ribbon per topic. */
+.p-ribbon { fill: none; stroke: rgba(var(--m-ink-rgb), .66); stroke-width: 1; pointer-events: none; }
+.p-ribbon.is-loose { stroke: rgba(var(--m-ink-rgb), .34); }
+.p-ribbon.is-fragment { stroke-dasharray: 1.5 2.5; }
+.p-ribbon-hit { fill: none; stroke: transparent; stroke-width: 16; stroke-linecap: butt; cursor: pointer; }
+.dim .p-ribbon { opacity: .2; }
+.is-entering .p-ribbon { animation: m-ink var(--m-d3) var(--m-ease) backwards; }
 .p-tail { stroke: rgba(var(--m-ink-rgb), .5); stroke-width: 1; fill: none; }
 .p-topic { cursor: pointer; outline: none; }
 .p-tlab { font: 13px/1 var(--m-f-disp); letter-spacing: .32em; fill: rgba(var(--m-ink-rgb), .72);
@@ -73,4 +80,5 @@
 .lg-exp { width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--m-ink); }
 .lg-inf { width: 4px; height: 4px; border-radius: 50%; background: var(--m-ink2); }
 .lg-line { width: 18px; height: 1px; background: rgba(var(--m-ink-rgb), .5); }
+.lg-tick { width: 12px; height: 8px; background: repeating-linear-gradient(90deg, rgba(var(--m-ink-rgb), .7) 0 1px, transparent 1px 3px); }
 .lg-new { width: 9px; height: 9px; border: 1px solid var(--m-her); transform: rotate(45deg) scale(.7); }

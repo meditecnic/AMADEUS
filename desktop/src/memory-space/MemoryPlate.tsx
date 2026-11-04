@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 
-import { plateGeometry, platePoint, type ChartModel, type ChartStar } from './chartCoordinates';
+import { FRAGMENT_GROUP, plateGeometry, platePoint, type ChartModel, type ChartStar } from './chartCoordinates';
 import { md, recordNo, ymd } from './chartFormat';
+import { groupSpine, groupTicks, ticksPath } from './plateRibbons';
+import { PlateRibbons, type Ribbon } from './PlateRibbons';
 import { PlateStars } from './PlateStars';
 import './MemoryPlate.css';
 
@@ -149,8 +151,28 @@ export function MemoryPlate(props: MemoryPlateProps) {
     return () => cancelAnimationFrame(frame);
   }, [model, props.framedTopic, width, height, reducedMotion]);
 
-  const order = useMemo(() => [...(model?.stars ?? [])].sort((a, b) => a.theta - b.theta), [model]);
+  const collapsed = Boolean(model?.collapsed);
+  const marked = props.marks;
+  // A collapsed plate draws as stars only what she carries every turn, what is new, the open group,
+  // this turn's references and the selection; the rest are ticks on the ribbons.
+  const selectedStarId = selection?.kind === 'star' ? selection.id : null;
+  const shown = useMemo(() => {
+    if (!model) return NO_STARS;
+    if (!model.collapsed) return model.stars;
+    const keep = new Set(marked);
+    return model.stars.filter((s) => s.single || s.group === focusTopic || keep.has(s.id) || s.id === selectedStarId);
+  }, [model, focusTopic, marked, selectedStarId]);
+  const order = useMemo(() => [...shown].sort((a, b) => a.theta - b.theta), [shown]);
   const fresh = order.filter((s) => s.isNew);
+  const ribbons = useMemo<Ribbon[]>(() => {
+    if (!model?.collapsed) return [];
+    return model.groups.filter((group) => group.cells.some((cell) => cell.collapsedIds.length)).map((group) => ({
+      id: group.id, kind: group.isTopic ? 'topic' : group.id === FRAGMENT_GROUP ? 'fragment' : 'loose',
+      d: ticksPath(groupTicks(group, at)), spine: groupSpine(group, at),
+    }));
+    // at only reads the plate geometry.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model, g.cx, g.cy, g.radius]);
   const stagger = Math.min(22, 1400 / Math.max(1, order.length));
   const entranceMs = Math.max(260 + order.length * stagger + 900, 1150 + fresh.length * 520) + 300;
   useLayoutEffect(() => {
@@ -162,10 +184,11 @@ export function MemoryPlate(props: MemoryPlateProps) {
   }, [props.entering, model, reducedMotion, entranceMs]);
 
   const delay = (ms: number) => (playing ? { animationDelay: `${Math.round(ms)}ms` } : undefined);
-  const dimmed = (s: ChartStar) => Boolean(focusTopic && s.topicId !== focusTopic);
+  const groupOf = (s: ChartStar) => (collapsed ? s.group : s.topicId);
+  const dimmed = (s: ChartStar) => Boolean(focusTopic && groupOf(s) !== focusTopic);
   const ready = props.soul === 'ready' && Boolean(model);
   const selectedStar = selection?.kind === 'star' ? model?.byId.get(selection.id) ?? null : null;
-  const rovingId = activeId && model?.byId.has(activeId) ? activeId : model?.stars[0]?.id ?? null;
+  const rovingId = activeId && shown.some((s) => s.id === activeId) ? activeId : shown[0]?.id ?? null;
   const starEl = (id: string) => svgRef.current?.querySelector<SVGGElement>(`[data-hit="star"][data-id="${CSS.escape(id)}"]`) ?? null;
   useEffect(() => { if (selectedStar) setActiveId(selectedStar.id); }, [selectedStar]);
   // When the reading of a star closes and focus was lost with it, it returns to that star.
@@ -184,7 +207,7 @@ export function MemoryPlate(props: MemoryPlateProps) {
   const transform = `translate(${g.cx + view.x} ${g.cy + view.y}) scale(${view.s}) translate(${-g.cx} ${-g.cy})`;
   const soulAt = { x: g.cx + view.x, y: g.cy + view.y };
   const young = Boolean(model && model.stars.length && model.stars.length <= 6);
-  const armed = model?.topics.filter((t) => t.starIds.length) ?? [];
+  const armed = model?.topics.filter((t) => t.starIds.length && (!collapsed || t.id === focusTopic)) ?? [];
 
   return (
     <div className="memory-plate" data-testid="memory-plate">
@@ -218,7 +241,8 @@ export function MemoryPlate(props: MemoryPlateProps) {
             <path key={topic.id} className={`p-line${topic.id === focusTopic ? ' lit' : ''}`} style={delay(900)}
               d={topic.starIds.map((id, i) => `${i ? 'L' : 'M'}${pos.get(id)!.x.toFixed(1)} ${pos.get(id)!.y.toFixed(1)}`).join('')} />
           ))}
-          <PlateStars stars={model?.stars ?? NO_STARS} order={order} pos={pos} cx={g.cx} cy={g.cy} focusTopic={focusTopic}
+          {collapsed ? <PlateRibbons ribbons={ribbons} openId={focusTopic} playing={playing} delayMs={900} onPickGroup={(id) => props.onSelect({ kind: 'topic', id })} /> : null}
+          <PlateStars stars={shown} order={order} pos={pos} cx={g.cx} cy={g.cy} focusTopic={focusTopic} collapsed={collapsed}
             selectedId={selectedStar?.id ?? null} rovingId={rovingId} playing={playing} stagger={stagger}
             onSelectStar={selectStar} onHover={setHoverId} onActive={setActiveId} />
           {labels?.months.map((m) => (
@@ -313,12 +337,13 @@ export function MemoryPlate(props: MemoryPlateProps) {
             <span><i className="lg-dot" />认知</span>
             <span><i className="lg-exp" />片段（会淡去）</span>
             <span><i className="lg-inf" />未归组</span>
+            {collapsed ? <span><i className="lg-tick" />收起的记忆，一根线一条</span> : null}
           </div>
           <div className="lrow">
             <span><i className="lg-line" />同一主题，按记下的先后相连</span>
             <span><i className="lg-new" />上次来过以后新记下的</span>
           </div>
-          <p className="fig">FIG. 1 — 自 {ymd(model.origin!)} 起 · 每圈一个月 · 越往外越近</p>
+          <p className="fig">FIG. 1 — 自 {ymd(model.origin!)} 起 · {collapsed ? '每圈一个月，一年以前每圈一季' : '每圈一个月'} · 越往外越近</p>
           {props.footnote ? <p className="note" data-testid="plate-footnote">{props.footnote}</p> : null}
         </div>
       ) : null}
