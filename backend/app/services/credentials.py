@@ -1,4 +1,4 @@
-"""Write-only provider credential storage backed by Windows Credential Manager."""
+"""Provider credentials: Windows frozen installs default to Credential Manager; source runs default to memory (AMADEUS_CREDENTIAL_BACKEND=windows opts in on Windows; memory/inmemory/in-memory selects memory)."""
 
 from __future__ import annotations
 
