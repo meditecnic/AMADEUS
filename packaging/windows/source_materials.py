@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 from pathlib import Path
 import re
+import ssl
 import tempfile
+import time
+import urllib.error
 import urllib.request
 import zipfile
 
@@ -28,25 +32,32 @@ def download(url: str, target: Path, expected: str, *, max_bytes: int = MAX_SOUR
     else:
         print(f"DOWNLOAD {url}", flush=True)
         request = urllib.request.Request(url, headers={"User-Agent": "Amadeus-packaging/0.1.0"})
-        temporary = None
-        try:
-            with urllib.request.urlopen(request, timeout=120) as response:
-                if int(response.headers.get("Content-Length", "0")) > max_bytes:
-                    raise RuntimeError(f"Source size limit exceeded ({max_bytes} bytes): {url}")
-                with tempfile.NamedTemporaryFile(dir=target.parent, prefix=target.name + ".", suffix=".part", delete=False) as output:
-                    temporary = Path(output.name)
-                    size = 0
-                    while chunk := response.read(1024 * 1024):
-                        size += len(chunk)
-                        if size > max_bytes:
-                            raise RuntimeError(f"Source size limit exceeded ({max_bytes} bytes): {url}")
-                        output.write(chunk)
-            if digest(temporary) != expected:
-                raise RuntimeError(f"Source hash mismatch: {url}; expected {expected}, got {digest(temporary)}")
-            temporary.replace(target)
-        finally:
-            if temporary is not None:
-                temporary.unlink(missing_ok=True)
+        for attempt in range(4):
+            temporary = None
+            try:
+                with urllib.request.urlopen(request, timeout=120) as response:
+                    if int(response.headers.get("Content-Length", "0")) > max_bytes:
+                        raise RuntimeError(f"Source size limit exceeded ({max_bytes} bytes): {url}")
+                    with tempfile.NamedTemporaryFile(dir=target.parent, prefix=target.name + ".", suffix=".part", delete=False) as output:
+                        temporary = Path(output.name)
+                        size = 0
+                        while chunk := response.read(1024 * 1024):
+                            size += len(chunk)
+                            if size > max_bytes:
+                                raise RuntimeError(f"Source size limit exceeded ({max_bytes} bytes): {url}")
+                            output.write(chunk)
+                if digest(temporary) != expected:
+                    raise RuntimeError(f"Source hash mismatch: {url}; expected {expected}, got {digest(temporary)}")
+                temporary.replace(target)
+                break
+            except (urllib.error.URLError, ssl.SSLError, ConnectionError, TimeoutError, http.client.IncompleteRead) as error:
+                if attempt == 3 or (isinstance(error, urllib.error.HTTPError) and 400 <= error.code < 500):
+                    raise
+                print(f"DOWNLOAD_RETRY {url} attempt={attempt + 1} error={type(error).__name__}", flush=True)
+            finally:
+                if temporary is not None:
+                    temporary.unlink(missing_ok=True)
+            time.sleep(2 ** (attempt + 1))
     actual = digest(target)
     return {"url": url, "file": target.name, "sha256": actual, "bytes": target.stat().st_size}
 
