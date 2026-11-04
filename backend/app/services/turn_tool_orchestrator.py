@@ -30,6 +30,7 @@ from app.services.memory_v11.recall import (
     unsupported_result,
 )
 from app.services.turn_events import TurnModeState
+from app.services.provider_registry import ProviderSnapshot
 
 
 # After web search / tool evidence, models often mirror Chinese user input or
@@ -475,6 +476,21 @@ def split_current_turn(history: list) -> tuple[list, list]:
     return history[:current], history[current:]
 
 
+def effective_request_budget(
+    provider_snapshot: ProviderSnapshot | None = None,
+    request_max_output_tokens: int | None = None,
+) -> tuple[int, str]:
+    window = provider_snapshot.context_window if provider_snapshot is not None else None
+    if type(window) is not int or window <= 0:
+        return config.REQUEST_INPUT_BUDGET, "config"
+    reserve = request_max_output_tokens
+    if reserve is None:
+        reserve = provider_snapshot.max_output_tokens
+    if reserve is None:
+        reserve = min(4096, window // 4)
+    return max(2048, min(config.REQUEST_INPUT_BUDGET, window - reserve - 1024)), "context_window"
+
+
 def trim_request_history(
     old_history: list, turn_messages: list, system_prompt: str | None,
     memory_summary: str, message_builder: Any, budget: int,
@@ -545,7 +561,7 @@ def prepare_second_round_payload(
     from app.services.provider_runtime import deepseek_service
     from app.services.memory_v11.recall import _render_block
 
-    budget = config.REQUEST_INPUT_BUDGET if input_budget is None else input_budget
+    budget = effective_request_budget()[0] if input_budget is None else input_budget
     builder = message_builder or deepseek_service.build_persona_messages
 
     def _history_for(mem: RecallResult, rows: list[tuple[str, str]] | None) -> list:

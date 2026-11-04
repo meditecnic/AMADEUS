@@ -23,6 +23,7 @@ from app.services.prompt_compiler import compile_for_session, render_tail_remind
 from app.services.session_manager import cancel_inflight, session_coordinator
 from app.services.turn_tool_orchestrator import (
     WEB_EVIDENCE_MARKER,
+    effective_request_budget,
     provider_message_builder,
     request_envelope_tokens,
     split_current_turn,
@@ -865,10 +866,11 @@ async def get_clean_text_stream(
         eff_system_prompt = _request_system_prompt(session, prompt_history, tools, attempt)
         provider = provider_snapshot.adapter if provider_snapshot is not None else deepseek_service
         builder = provider_message_builder(provider)
+        budget, budget_source = effective_request_budget(provider_snapshot)
         old, current = split_current_turn(prompt_history)
         bounded, dropped = trim_request_history(
             old, [*current, tail_reminder], eff_system_prompt, memory_summary,
-            builder, config.REQUEST_INPUT_BUDGET,
+            builder, budget,
         )
         record = getattr(session, "turn_execution", None)
         if record is not None:
@@ -877,11 +879,11 @@ async def get_clean_text_stream(
             dropped += max(0, len(stored_old) - len(source_old))
             record.dropped_history_messages = max(record.dropped_history_messages, dropped)
         total = request_envelope_tokens(bounded, eff_system_prompt, memory_summary, builder)
-        logger.info("[RequestBudget] session=%s dropped=%d tokens=%d budget=%d",
-                    session.session_id, dropped, total, config.REQUEST_INPUT_BUDGET)
-        if total > config.REQUEST_INPUT_BUDGET:
-            logger.warning("[RequestBudget] session=%s tokens=%d budget=%d current content exceeds budget",
-                           session.session_id, total, config.REQUEST_INPUT_BUDGET)
+        logger.info("[RequestBudget] session=%s dropped=%d tokens=%d budget=%d source=%s",
+                    session.session_id, dropped, total, budget, budget_source)
+        if total > budget:
+            logger.warning("[RequestBudget] session=%s tokens=%d budget=%d source=%s current content exceeds budget",
+                           session.session_id, total, budget, budget_source)
 
         import inspect
         base_temperature = (
@@ -1854,6 +1856,7 @@ async def processor_loop(
         )
 
         request_builder = provider_message_builder(turn_provider.adapter)
+        turn_input_budget, _ = effective_request_budget(turn_provider)
 
         def second_round_builder(history, summary, system):
             tail = {"role": "system", "content": render_tail_reminder(
@@ -1968,6 +1971,7 @@ async def processor_loop(
                     extra_web or None,
                     system_prompt=_request_system_prompt(session, active_history, None, 0),
                     message_builder=second_round_builder,
+                    input_budget=turn_input_budget,
                 )
                 turn_record.dropped_history_messages = max(
                     turn_record.dropped_history_messages, payload.dropped_history_messages,
@@ -1996,6 +2000,7 @@ async def processor_loop(
                     extra_web or None,
                     system_prompt=_request_system_prompt(session, active_history, None, _attempt),
                     message_builder=second_round_builder,
+                    input_budget=turn_input_budget,
                 )
                 turn_record.sent_recall_result = refreshed_payload.result
                 return refreshed_payload.history

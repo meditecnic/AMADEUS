@@ -114,7 +114,8 @@ def _session(identity_mode: str = "self", self_name: str = "ミナ") -> chat_ws.
 
 
 async def _send(session, provider, active_history=None) -> None:
-    snapshot = SimpleNamespace(adapter=provider, model_id="layout-model", temperature=None, reasoning_effort=None)
+    snapshot = SimpleNamespace(adapter=provider, model_id="layout-model", temperature=None, reasoning_effort=None,
+                               context_window=None, max_output_tokens=None)
     await chat_ws.get_clean_text_stream(
         active_history=session.history if active_history is None else active_history,
         memory_summary="",
