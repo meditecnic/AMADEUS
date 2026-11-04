@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from typing import Any, Optional
 
 import httpx
@@ -19,6 +20,32 @@ class ProviderRequestError(RuntimeError):
         super().__init__(f"{provider_id} request failed with status {status_code}")
         self.provider_id = provider_id
         self.status_code = status_code
+
+
+# SSE comments keep HTTP reads alive, but do not advance a model request.
+PROVIDER_STALL_TIMEOUT_SECONDS = 120.0
+
+
+class ProviderStallError(RuntimeError):
+    """A streaming provider sent no data lines within the progress budget."""
+
+
+async def iter_provider_lines(response: httpx.Response) -> AsyncIterator[str]:
+    """Keep adapter parsing intact while bounding waits between SSE data lines."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + PROVIDER_STALL_TIMEOUT_SECONDS
+    lines = response.aiter_lines()
+    while True:
+        try:
+            async with asyncio.timeout_at(deadline):
+                line = await anext(lines)
+        except StopAsyncIteration:
+            return
+        except TimeoutError as exc:
+            raise ProviderStallError("upstream stream made no progress") from exc
+        if line.startswith("data:") and line[5:].strip():
+            deadline = loop.time() + PROVIDER_STALL_TIMEOUT_SECONDS
+        yield line
 
 
 class OpenAICompatibleAdapter(LLMInterface):
@@ -118,7 +145,7 @@ class OpenAICompatibleAdapter(LLMInterface):
                 if response.status_code != 200:
                     await response.aread()
                     raise ProviderRequestError(self.provider_id, response.status_code)
-                async for line in response.aiter_lines():
+                async for line in iter_provider_lines(response):
                     if not line.startswith("data:"):
                         continue
                     data = line[5:].strip()
@@ -390,7 +417,7 @@ class OpenAIResponsesAdapter(LLMInterface):
                 if response.status_code != 200:
                     await response.aread()
                     raise ProviderRequestError(self.provider_id, response.status_code)
-                async for line in response.aiter_lines():
+                async for line in iter_provider_lines(response):
                     if not line.startswith("data:"):
                         continue
                     raw = line[5:].strip()
@@ -643,7 +670,7 @@ class GeminiAdapter(LLMInterface):
                     await response.aread()
                     raise ProviderRequestError(self.provider_id, response.status_code)
                 event_seq = 0
-                async for line in response.aiter_lines():
+                async for line in iter_provider_lines(response):
                     if not line.startswith("data:"):
                         continue
                     try:
