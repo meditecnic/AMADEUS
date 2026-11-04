@@ -149,6 +149,42 @@ describe('cells and bands', () => {
   });
 });
 
+describe('records older than the chart start', () => {
+  // origin_at is the first message still there; a record can predate it once that conversation is deleted.
+  function withEarlier() {
+    const base = library(200);
+    // Two, so that the later one shows the position rather than the start itself (the earliest record sits at SOUL).
+    const row = (id: string, at: string) => ({
+      id, label: id, topic_id: 't0', created_at: at, updated_at: at,
+      is_pinned: false, evidence_count: 1, version_count: 1, resident: false,
+    });
+    const facts = [...base.facts, row('first', '2024-12-20T10:00:00Z'), row('early', '2024-12-28T10:00:00Z')];
+    return { ...base, origin_at: '2025-01-05T09:00:00Z', facts, counts: { ...base.counts, facts: facts.length } };
+  }
+
+  it('dates it in its own month and puts it past SOUL, not on the first month', () => {
+    const model = build(withEarlier());
+    const star = model.byId.get('early')!;
+    expect(star.cellKey).toBe('t0|2024-12');
+    expect(model.cells.get('t0|2024-12')!.starIds).toContain('early');
+    expect(star.theta).toBeGreaterThan(9);
+    expect(model.bands[0].key).toBe('2024-12');
+    expect(model.bands.map((b) => b.key)).toContain('2025-01');
+    expect(model.byId.get('first')!.theta).toBe(9);
+    expect(model.byId.get('first')!.cellKey).toBe('t0|2024-12');
+    expect(model.origin).toBe(Date.parse('2024-12-20T10:00:00Z'));
+    expect(model.cells.get('t0|2025-01')?.starIds ?? []).not.toContain('early');
+  });
+
+  it('changes nothing when every record is at or after origin_at', () => {
+    const base = library(200);
+    const same = build({ ...base, origin_at: base.origin_at });
+    expect(same.origin).toBe(Date.parse(base.origin_at!));
+    expect(same.bands[0].key).toBe('2025-02');
+    expect(same.stars.every((s) => s.theta >= 9)).toBe(true);
+  });
+});
+
 describe('modelling cost', () => {
   it('builds a 2000-record, 30-topic library in linear time', () => {
     const chart = library(2000, { topics: 30, resident: (i) => i % 60 === 0 });

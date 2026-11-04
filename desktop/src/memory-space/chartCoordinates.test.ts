@@ -98,7 +98,12 @@ describe('chart coordinates', () => {
   });
 
   it('draws a young chart at six weeks of scale and month rings from the first month', () => {
-    const young = buildChartModel(chart({ origin_at: day(70) }), { today: TODAY, lastOpen: null });
+    // The chart starts at origin_at, so nothing in it may be older (records older than that move the start).
+    const fresh = chart().facts[0];
+    const young = buildChartModel(chart({
+      origin_at: day(70), topics: [], facts: [{ ...fresh, id: 'y', topic_id: null, created_at: day(71), updated_at: day(71) }],
+      experiences: [], counts: { facts: 1, experiences: 0, topics: 0 },
+    }), { today: TODAY, lastOpen: null });
     expect(young.thetaFit).toBeCloseTo(9 + 6.2 * Math.sqrt(MIN_SPAN_DAYS));
     const model = buildChartModel(chart(), { today: TODAY, lastOpen: null });
     expect(model.rings.map((r) => r.key)).toEqual(['2026-09', '2026-10', '2026-11']);

@@ -192,7 +192,9 @@ export function buildChartModel(
 ): ChartModel {
   const today = options.today;
   const firstRecord = [...chart.facts, ...chart.experiences].map((row) => parseMs(row.created_at)).sort((a, b) => a - b)[0];
-  const origin = chart.origin_at ? parseMs(chart.origin_at) : firstRecord ?? null;
+  // origin_at is the first message of the scope; after its oldest conversation is deleted, records can
+  // be older than it. The chart starts at whichever is earlier, so no record is dated before the start.
+  const origin = chart.origin_at ? Math.min(parseMs(chart.origin_at), firstRecord ?? Infinity) : firstRecord ?? null;
   const thetaToday = origin === null ? EMPTY_TODAY : thetaAt(origin, today);
   const minFit = 9 + 6.2 * Math.sqrt(MIN_SPAN_DAYS);
   const thetaFit = Math.max(thetaToday, minFit);
