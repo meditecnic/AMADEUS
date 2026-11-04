@@ -65,7 +65,8 @@ def _session(**overrides):
 
 
 def _provider(**overrides):
-    base = dict(provider_id="deepseek", model_id="probe-model", temperature=0.7, reasoning_effort=None)
+    base = dict(provider_id="deepseek", model_id="probe-model", temperature=0.7, reasoning_effort=None,
+                context_window=None, max_output_tokens=None)
     base.update(overrides)
     return SimpleNamespace(**base)
 

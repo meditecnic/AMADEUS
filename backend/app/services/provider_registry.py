@@ -64,6 +64,8 @@ class ProviderSnapshot:
     base_url_configurable: bool = False
     temperature: float | None = None
     reasoning_effort: str | None = None
+    context_window: int | None = None
+    max_output_tokens: int | None = None
 
     def require(self, task: ProviderTask) -> "ProviderSnapshot":
         if task not in self.capabilities.tasks:
@@ -243,6 +245,10 @@ class ProviderRegistry:
         selected_model = model_id or definition.default_model
         if self._model_catalog is not None and not allow_unavailable:
             self._model_catalog.ensure_callable(definition.id, selected_model)
+        model = (
+            self._model_catalog.public_model(definition.id, selected_model)
+            if self._model_catalog is not None else {}
+        )
         return ProviderSnapshot(
             provider_id=definition.id,
             model_id=selected_model,
@@ -250,4 +256,6 @@ class ProviderRegistry:
             adapter=adapter,
             credential_required=definition.credential_required,
             base_url_configurable=definition.base_url_configurable,
+            context_window=model.get("context_window"),
+            max_output_tokens=model.get("max_output_tokens"),
         )
