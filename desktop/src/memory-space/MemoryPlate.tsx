@@ -3,7 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { FRAGMENT_GROUP, plateGeometry, platePoint, type ChartModel, type ChartStar } from './chartCoordinates';
 import { md, recordNo, ymd } from './chartFormat';
 import { CELL_PREFIX, cellName, navColumns, nextStar, nextStop, parseStop, stopId, type Stop } from './plateNav';
-import { cellAtTheta, cellFanPath, groupSpine, groupTicks, ticksPath, type TickSegment } from './plateRibbons';
+import { cellAtTheta, cellFanPath, groupSpine, groupTicks, ticksPath, type TickSegment } from './ribbonGeometry';
 import { PlateRibbons, PlateUnfurl, type Ribbon } from './PlateRibbons';
 import { PlateStars } from './PlateStars';
 import './MemoryPlate.css';

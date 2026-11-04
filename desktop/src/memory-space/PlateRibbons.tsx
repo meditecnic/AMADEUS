@@ -1,6 +1,6 @@
 import { memo, useLayoutEffect, useRef } from 'react';
 
-import type { TickSegment } from './plateRibbons';
+import type { TickSegment } from './ribbonGeometry';
 
 export type Ribbon = { id: string; kind: 'topic' | 'loose' | 'fragment'; d: string; spine: string };
 
