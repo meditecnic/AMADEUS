@@ -2,13 +2,15 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createMemoryStore, handleMemory } from '../dev-mock/memory';
+import { buildChartModel } from './chartCoordinates';
 import { hm } from './chartFormat';
 import { MemorySpace, type MemoryLink } from './MemorySpace';
+import type { MemoryChart } from './types';
 
 vi.mock('../design-system/useReducedMotion', () => ({ useReducedMotion: () => true }));
 
-function serve() {
-  const store = createMemoryStore({ facts: [], topics: [], preset: 'normal' });
+function serve(preset = 'normal') {
+  const store = createMemoryStore({ facts: [], topics: [], preset });
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input), 'http://mock');
     const method = init?.method ?? 'GET';
@@ -107,5 +109,54 @@ describe('MemorySpace opened from a chat mark', () => {
     fireEvent.click(screen.getByRole('option', { name: /OKABE · β/ }));
     await waitFor(() => expect(refIds()).toEqual([]));
     expect(screen.queryByTestId('memory-ref-hint')).toBeNull();
+  });
+});
+
+describe('MemorySpace opened on a record that a collapsed plate draws as a tick', () => {
+  const chartOf = () => handleMemory(new URL('http://mock/api/memory/chart?session_id=s&worldline=steins_gate&identity_mode=okabe'), 'GET', {},
+    createMemoryStore({ facts: [], topics: [], preset: 'huge' }))!.body as MemoryChart;
+
+  it('opens its group first, then selects it', async () => {
+    serve('huge');
+    const model = buildChartModel(chartOf(), { today: Date.now(), lastOpen: null });
+    const target = model.stars.find((s) => !s.single && s.kind === 'fact' && s.topicId && model.byId.get(s.id)!.group === s.topicId)!;
+    const group = model.groups.find((t) => t.id === target.group)!;
+    expect(model.collapsed).toBe(true);
+    mount({ select: [target.id], mark: [], hintAt: null });
+    expect(await screen.findByTestId('reading-her')).toBeInTheDocument();
+    expect(screen.getByTestId('plate-reticle')).toBeInTheDocument();
+    const stars = [...document.querySelectorAll('.p-star')].map((el) => el.getAttribute('data-id'));
+    expect(stars).toContain(target.id);
+    for (const id of group.starIds) expect(stars).toContain(id);
+    expect(document.querySelector(`.p-ribbon[data-group="${group.id}"]`)).toBeNull();
+    expect(screen.getByTestId('memory-crumbs')).toHaveTextContent(new RegExp(`^总览/${group.label}/No\\.\\d{3}$`));
+    expect(document.querySelector('.p-root')).toHaveClass('dim');
+  });
+
+  it('does the same for an ungrouped record, whose group is not a topic', async () => {
+    serve('huge');
+    const model = buildChartModel(chartOf(), { today: Date.now(), lastOpen: null });
+    const target = model.stars.find((s) => !s.single && s.kind === 'loose')!;
+    mount({ select: [target.id], mark: [], hintAt: null });
+    expect(await screen.findByTestId('reading-her')).toBeInTheDocument();
+    expect(document.querySelectorAll('.p-star.lit').length).toBe(model.groups.find((t) => t.id === '@loose')!.starIds.length);
+    expect(screen.getByTestId('memory-crumbs')).toHaveTextContent(/^总览\/未归组\/No\.\d{3}$/);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.getByTestId('reading-dom')).toHaveTextContent('未归组');
+    expect(screen.queryByTestId('open-topic-in-archive')).toBeNull();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByTestId('reading-dom')).toBeNull();
+    expect(document.querySelector('.p-root')).not.toHaveClass('dim');
+    expect(document.querySelector('.p-ribbon[data-group="@loose"]')).not.toBeNull();
+  });
+
+  it('marks a referenced tick on the plate without opening anything', async () => {
+    serve('huge');
+    const model = buildChartModel(chartOf(), { today: Date.now(), lastOpen: null });
+    const target = model.stars.find((s) => !s.single && s.topicId)!;
+    mount({ select: [], mark: [target.id], hintAt: Date.now() });
+    await waitFor(() => expect(refIds()).toEqual([target.id]));
+    expect(document.querySelector(`.p-star[data-id="${target.id}"]`)).not.toBeNull();
+    expect(document.querySelector('.p-root')).not.toHaveClass('dim');
   });
 });

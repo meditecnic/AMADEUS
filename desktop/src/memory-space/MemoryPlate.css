@@ -6,7 +6,7 @@
 .memory-space[data-worldline="beta"] .p-ring { stroke-dasharray: 1 4; stroke: rgba(var(--m-ink-rgb), .26); }
 .p-today { fill: none; stroke: rgba(var(--m-acc-rgb), .42); stroke-width: 1; }
 .p-ruler { fill: none; stroke: rgba(var(--m-ink-rgb), .12); stroke-dasharray: 34 7 5 7; }
-.p-ring, .p-today, .p-ruler, .p-line, .p-tail, .p-reticle, .p-ref, .p-new, .p-young, .p-todaylab, .p-hover { pointer-events: none; }
+.p-ring, .p-today, .p-ruler, .p-line, .p-unfurl, .p-tail, .p-reticle, .p-ref, .p-new, .p-young, .p-todaylab, .p-hover { pointer-events: none; }
 .p-ringlab { font: 10px/1 var(--font-mono); fill: var(--m-ink3); letter-spacing: .12em; cursor: pointer;
   paint-order: stroke; stroke: var(--m-paper); stroke-width: 6px; stroke-linejoin: round; }
 .p-ringlab:hover, .p-ringlab.on { fill: var(--m-ink); }
@@ -24,11 +24,30 @@
 .p-star:focus-visible .focus { opacity: 1; }
 .p-star.is-loose .dot { fill: rgba(var(--m-ink-rgb), .78); }
 .p-star.is-fragment .dot { fill: var(--m-paper); stroke: var(--m-ink); stroke-width: 1.2; }
+/* Collapsed plate: one tick per remembered record, grouped into a ribbon per topic. */
+.p-ribbon { fill: none; stroke: rgba(var(--m-ink-rgb), .66); stroke-width: 1; pointer-events: none; }
+.p-ribbon.is-loose { stroke: rgba(var(--m-ink-rgb), .34); }
+.p-ribbon.is-fragment { stroke-dasharray: 1.5 2.5; }
+.p-ribbon-hit { fill: none; stroke: transparent; stroke-width: 16; stroke-linecap: butt; cursor: pointer; }
+.dim .p-ribbon { opacity: .2; }
+.dim .p-unfurl { opacity: 1; }
+.dim .p-star.lit.out { opacity: .22; }
+.p-cellcursor { outline: none; }
+.p-cellcursor path { fill: none; stroke: var(--m-acc); stroke-width: 1.2; stroke-dasharray: 3 2; opacity: 0; pointer-events: none; }
+.p-cellcursor:focus-visible path { opacity: 1; }
+.p-cellbox { fill: rgba(var(--m-acc-rgb), .06); stroke: var(--m-acc); stroke-width: 1.2; stroke-dasharray: 4 3; pointer-events: none; }
+.is-unfurling .p-star.lit { animation: m-ink var(--unfurl-ms, 420ms) var(--m-ease) backwards; }
+.is-entering .p-ribbon { animation: m-ink var(--m-d3) var(--m-ease) backwards; }
 .p-tail { stroke: rgba(var(--m-ink-rgb), .5); stroke-width: 1; fill: none; }
 .p-topic { cursor: pointer; outline: none; }
 .p-tlab { font: 13px/1 var(--m-f-disp); letter-spacing: .32em; fill: rgba(var(--m-ink-rgb), .72);
   paint-order: stroke; stroke: var(--m-paper); stroke-width: 5px; stroke-linejoin: round; transition: fill var(--m-d1) var(--m-ease); }
 .p-topic:hover .p-tlab, .p-topic.on .p-tlab, .p-topic:focus-visible .p-tlab { fill: var(--m-ink); }
+.p-topic.is-dot .hit { fill: transparent; }
+.p-tdot { fill: rgba(var(--m-ink-rgb), .6); }
+.p-topic.is-dot:hover .p-tdot, .p-topic.is-dot.on .p-tdot, .p-topic.is-dot:focus-visible .p-tdot { fill: var(--m-ink); }
+.p-dotlab { display: none; letter-spacing: .12em; }
+.p-topic.is-dot:hover .p-dotlab, .p-topic.is-dot:focus-visible .p-dotlab { display: inline; }
 .p-tcnt { font: 10px/1 var(--font-mono); fill: var(--m-ink3); letter-spacing: .1em; }
 .p-soul { cursor: pointer; outline: none; }
 .p-soul .shell { fill: var(--m-paper); stroke: rgba(var(--m-ink-rgb), .62); stroke-width: 1; }
@@ -73,4 +92,5 @@
 .lg-exp { width: 7px; height: 7px; border-radius: 50%; border: 1px solid var(--m-ink); }
 .lg-inf { width: 4px; height: 4px; border-radius: 50%; background: var(--m-ink2); }
 .lg-line { width: 18px; height: 1px; background: rgba(var(--m-ink-rgb), .5); }
+.lg-tick { width: 12px; height: 8px; background: repeating-linear-gradient(90deg, rgba(var(--m-ink-rgb), .7) 0 1px, transparent 1px 3px); }
 .lg-new { width: 9px; height: 9px; border: 1px solid var(--m-her); transform: rotate(45deg) scale(.7); }

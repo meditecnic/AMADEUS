@@ -43,3 +43,10 @@
 .r-list button { display: grid; grid-template-columns: 1fr auto; gap: 12px; width: 100%; padding: 9px 0; text-align: left; font: 13.5px/1.5 var(--m-f-body); color: var(--m-ink2); }
 .r-list button:hover { color: var(--m-ink); }
 .r-list time { font: 10.5px/1.9 var(--font-mono); color: var(--m-ink3); }
+.r-rest { margin: 8px 0 0; font: 11px/1.6 var(--font-mono); letter-spacing: .06em; color: var(--m-ink3); }
+.r-months { margin-top: 16px; }
+.r-months .k { margin: 0 0 8px; font: 10.5px/1 var(--font-ui); letter-spacing: .3em; color: var(--m-ink3); }
+.r-months .bars { display: flex; align-items: flex-end; gap: 2px; height: 34px; border-bottom: 1px solid var(--m-line2); }
+.r-months .bars i { flex: 1 1 0; min-width: 2px; max-width: 14px; background: rgba(var(--m-ink-rgb), .55); }
+.r-months .bars i[data-count="0"] { background: transparent; }
+.r-months .range { display: flex; justify-content: space-between; margin: 5px 0 0; font: 10px/1 var(--font-mono); letter-spacing: .06em; color: var(--m-ink3); }

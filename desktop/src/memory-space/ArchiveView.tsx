@@ -152,7 +152,7 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
 
   const detailOpen = state.selection !== null || state.details.status !== 'idle';
   const activeList = state.activeKind === 'fact' ? state.facts : state.experiences;
-  const filtered = Boolean(state.filters.query || state.filters.topicId || state.filters.pinnedOnly);
+  const filtered = Boolean(state.filters.query || state.filters.topicId || state.filters.pinnedOnly || state.filters.within);
   const selectedTopicId = (selectedFactRow ? selectedFactRow.topicId : readingModel?.kind === 'fact' ? readingModel.diagnostics.topicIdRaw : null) ?? '';
   const showList = !narrow || !detailOpen;
   const showDetail = !narrow || detailOpen;
@@ -267,6 +267,13 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
           仅置顶
         </label>
       </div>
+
+      {state.filters.within ? (
+        <p className="archive-within" data-testid="archive-within">
+          <span>只看：{state.filters.within.label} · {state.filters.within.ids.length} 条</span>
+          <button type="button" data-testid="archive-within-clear" onClick={() => module.dispatch({ type: 'set-within', within: null })}>清除</button>
+        </p>
+      ) : null}
 
       {state.focusFallback ? (
         <p className="archive-fallback" role="status" data-testid="archive-focus-fallback">

@@ -1,0 +1,10 @@
+{
+  "name": "memory-huge",
+  "extends": "streaming",
+  "description": "Huge library: 2000 records, 30 topics over two years (the collapsed plate at full load).",
+  "memory": {
+    "preset": "huge",
+    "facts": [],
+    "topics": []
+  }
+}

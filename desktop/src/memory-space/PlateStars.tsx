@@ -16,23 +16,30 @@ export type PlateStarsProps = {
   cx: number;
   cy: number;
   focusTopic: string | null;
+  /** A collapsed plate focuses a group (a topic, or the ungrouped / fragment group) rather than a topic. */
+  collapsed?: boolean;
   selectedId: string | null;
+  /** A selected cell: the open group's stars from other months fade. */
+  cellKey?: string | null;
   rovingId: string | null;
   playing: boolean;
   stagger: number;
   onSelectStar: (id: string) => void;
   onHover: (id: string | null) => void;
   onActive: (id: string) => void;
+  /** The caller walks the arrow keys (a collapsed plate also stops on cells); only Enter and Space stay here. */
+  externalNav?: boolean;
 };
 
 // The static star layer. Its props do not change while the pointer sweeps the plate,
 // so hovering redraws only the hover note, not every star.
 export const PlateStars = memo(function PlateStars(props: PlateStarsProps) {
-  const { stars, order, pos, cx, cy, focusTopic, selectedId, rovingId, playing, stagger } = props;
+  const { stars, order, pos, cx, cy, focusTopic, collapsed, selectedId, cellKey, rovingId, playing, stagger } = props;
   const layerRef = useRef<SVGGElement | null>(null);
   const onKey = (event: KeyboardEvent) => {
     const id = (event.target as Element).closest('[data-hit="star"]')?.getAttribute('data-id');
     if (!id) return;
+    if (props.externalNav && (event.key in STEP || event.key === 'Home' || event.key === 'End')) return;
     const index = stars.findIndex((star) => star.id === id);
     let next = -1;
     if (event.key in STEP) next = Math.min(stars.length - 1, Math.max(0, index + STEP[event.key]));
@@ -61,7 +68,7 @@ export const PlateStars = memo(function PlateStars(props: PlateStarsProps) {
             role="button" tabIndex={s.id === rovingId ? 0 : -1} aria-label={starName(s)}
             aria-pressed={s.id === selectedId}
             onFocus={() => props.onActive(s.id)}
-            className={`p-star is-${s.kind}${s.topicId && s.topicId === focusTopic ? ' lit' : ''}`}
+            className={`p-star is-${s.kind}${focusTopic && (collapsed ? s.group : s.topicId) === focusTopic ? ' lit' : ''}${cellKey && s.cellKey !== cellKey ? ' out' : ''}`}
             transform={`translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})`}
             style={playing ? { animationDelay: `${Math.round(260 + i * stagger + (s.isNew ? 900 : 0))}ms` } : undefined}
             onClick={(event) => { event.stopPropagation(); props.onSelectStar(s.id); }}

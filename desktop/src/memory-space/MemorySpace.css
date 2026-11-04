@@ -171,6 +171,7 @@
 .archive-pager span { margin-right: auto; }
 .archive-detail { min-width: 0; padding: 2px 0 0 18px; border-left: 1px solid var(--memory-line); }
 .archive-body.is-narrow .archive-detail { padding-left: 0; border-left: 0; }
+.archive-within { display: flex; align-items: center; gap: 10px; margin: 0; color: var(--memory-muted); font-size: 12px; }
 .archive-detail-empty, .archive-fallback { margin: 0; color: var(--memory-muted); }
 .archive-reading { margin-top: 10px; color: var(--memory-muted); }
 .archive-reading > *:first-child { margin-top: 0; }

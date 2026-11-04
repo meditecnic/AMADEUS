@@ -122,6 +122,29 @@ describe('in-memory memory REST handler', () => {
     expect(sg.facts.map(fact => fact.label)).not.toEqual(chart.facts.map(fact => fact.label));
   });
 
+  it('builds the 2000-record library: 30 topics over two years, pinned, resident and fragment records', () => {
+    const huge = harness({ facts: [], topics: [], preset: 'huge' }).call('chart').body as MemoryChart;
+    expect(huge.facts.length + huge.experiences.length).toBe(2000);
+    expect(huge.truncated).toBe(false);
+    expect(huge.topics).toHaveLength(30);
+    expect(huge.experiences).toHaveLength(250);
+    expect(huge.facts.filter(fact => fact.resident)).toHaveLength(32);
+    expect(huge.facts.filter(fact => fact.is_pinned).length).toBeGreaterThan(60);
+    expect(huge.facts.filter(fact => fact.topic_id === null).length).toBeGreaterThan(100);
+    const years = (Date.parse(huge.facts[huge.facts.length - 1].created_at) - Date.parse(huge.origin_at!)) / 31_557_600_000;
+    expect(years).toBeGreaterThan(1.8);
+    const again = harness({ facts: [], topics: [], preset: 'huge' }).call('chart').body as MemoryChart;
+    expect(again.facts.map(fact => fact.id)).toEqual(huge.facts.map(fact => fact.id));
+    expect(again.facts.map(fact => fact.created_at)).toEqual(huge.facts.map(fact => fact.created_at));
+  });
+
+  it('builds a 140-record library, under the collapse line', () => {
+    const mid = harness({ facts: [], topics: [], preset: 'mid' }).call('chart').body as MemoryChart;
+    expect(mid.facts.length + mid.experiences.length).toBe(140);
+    expect(mid.topics).toHaveLength(8);
+    expect(mid.facts.filter(fact => fact.resident)).toHaveLength(32);
+  });
+
   it('builds the large and new-user libraries and an empty chart', () => {
     const large = harness({ facts: [], topics: [], preset: 'large' }).call('chart').body as MemoryChart;
     expect(large.facts.length + large.experiences.length).toBe(300);
