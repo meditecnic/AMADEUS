@@ -27,6 +27,8 @@ export type PlateStarsProps = {
   onSelectStar: (id: string) => void;
   onHover: (id: string | null) => void;
   onActive: (id: string) => void;
+  /** The caller walks the arrow keys (a collapsed plate also stops on cells); only Enter and Space stay here. */
+  externalNav?: boolean;
 };
 
 // The static star layer. Its props do not change while the pointer sweeps the plate,
@@ -37,6 +39,7 @@ export const PlateStars = memo(function PlateStars(props: PlateStarsProps) {
   const onKey = (event: KeyboardEvent) => {
     const id = (event.target as Element).closest('[data-hit="star"]')?.getAttribute('data-id');
     if (!id) return;
+    if (props.externalNav && (event.key in STEP || event.key === 'Home' || event.key === 'End')) return;
     const index = stars.findIndex((star) => star.id === id);
     let next = -1;
     if (event.key in STEP) next = Math.min(stars.length - 1, Math.max(0, index + STEP[event.key]));

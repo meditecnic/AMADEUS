@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 
 import { FRAGMENT_GROUP, plateGeometry, platePoint, type ChartModel, type ChartStar } from './chartCoordinates';
 import { md, recordNo, ymd } from './chartFormat';
+import { CELL_PREFIX, cellName, navColumns, nextStar, nextStop, parseStop, stopId, type Stop } from './plateNav';
 import { cellAtTheta, cellFanPath, groupSpine, groupTicks, ticksPath, type TickSegment } from './plateRibbons';
 import { PlateRibbons, PlateUnfurl, type Ribbon } from './PlateRibbons';
 import { PlateStars } from './PlateStars';
@@ -320,7 +321,57 @@ export function MemoryPlate(props: MemoryPlateProps) {
   const dimmed = (s: ChartStar) => Boolean(focusTopic && groupOf(s) !== focusTopic);
   const ready = props.soul === 'ready' && Boolean(model);
   const selectedStar = selection?.kind === 'star' ? model?.byId.get(selection.id) ?? null : null;
-  const rovingId = activeId && shown.some((s) => s.id === activeId) ? activeId : shown[0]?.id ?? null;
+  // A collapsed plate with nothing open walks its cells as well as its stars; an open group is a plain row of stars.
+  const shownIds = useMemo(() => new Set(shown.map((s) => s.id)), [shown]);
+  const columns = useMemo(() => (model?.collapsed && !focusTopic ? navColumns(model, shownIds, null) : []), [model, shownIds, focusTopic]);
+  const walking: Stop | null = (() => {
+    if (!columns.length) return null;
+    const asked = activeId ? parseStop(activeId) : null;
+    if (asked && columns.some((c) => c.stops.some((stop) => stopId(stop) === stopId(asked)))) return asked;
+    return columns[0].stops[0];
+  })();
+  const cursorCell = walking?.kind === 'cell' ? model?.cells.get(walking.key) ?? null : null;
+  const rovingId = columns.length
+    ? (walking?.kind === 'star' ? walking.id : null)
+    : activeId && shown.some((s) => s.id === activeId) ? activeId : shown[0]?.id ?? null;
+  const cursorFan = useMemo(() => {
+    if (!model || !cursorCell) return null;
+    return cellFanPath(cursorCell, cursorCell.starIds.map((id) => model.byId.get(id)!.phi), at);
+    // at only reads the plate geometry.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model, cursorCell, g.cx, g.cy, g.radius]);
+  const cursorRef = useRef<SVGGElement | null>(null);
+  const focusNext = useRef(false);
+  useLayoutEffect(() => {
+    if (!focusNext.current) return;
+    focusNext.current = false;
+    const asked = activeId ? parseStop(activeId) : null;
+    if (asked?.kind === 'cell') cursorRef.current?.focus({ preventScroll: true });
+    else if (asked) svgRef.current?.querySelector<SVGGElement>(`[data-hit="star"][data-id="${CSS.escape(asked.id)}"]`)?.focus({ preventScroll: true });
+  });
+  const onNavKey = (event: KeyboardEvent) => {
+    if (!model?.collapsed) return;
+    const hit = (event.target as Element).closest('[data-hit="star"], [data-hit="cell"]');
+    if (!hit) return;
+    const current: Stop = hit.getAttribute('data-hit') === 'cell'
+      ? { kind: 'cell', key: hit.getAttribute('data-cell')! } : { kind: 'star', id: hit.getAttribute('data-id')! };
+    if ((event.key === 'Enter' || event.key === ' ') && current.kind === 'cell') {
+      event.preventDefault();
+      event.stopPropagation();
+      props.onSelect({ kind: 'cell', key: current.key });
+      return;
+    }
+    let next: Stop | null = null;
+    if (focusTopic) {
+      const id = nextStar(shown, current.kind === 'star' ? current.id : null, event.key);
+      next = id ? { kind: 'star', id } : null;
+    } else next = nextStop(model, columns, current, event.key);
+    if (!next) return;
+    event.preventDefault();
+    event.stopPropagation();
+    focusNext.current = true;
+    setActiveId(stopId(next));
+  };
   const starEl = (id: string) => svgRef.current?.querySelector<SVGGElement>(`[data-hit="star"][data-id="${CSS.escape(id)}"]`) ?? null;
   useEffect(() => { if (selectedStar) setActiveId(selectedStar.id); }, [selectedStar]);
   // When the reading of a star closes and focus was lost with it, it returns to that star.
@@ -378,9 +429,17 @@ export function MemoryPlate(props: MemoryPlateProps) {
             onMove={onBandMove} onLeave={() => setBandHover(null)} onPick={onBandClick} /> : null}
           {unfurlTicks && unfurl ? <PlateUnfurl ticks={unfurlTicks} pos={pos} dir={unfurl.dir} ms={unfurl.ms} onDone={doneUnfurl} /> : null}
           {cellFan ? <path className="p-cellbox" data-testid="plate-cellbox" d={cellFan} /> : null}
+          <g onKeyDown={collapsed ? onNavKey : undefined}>
           <PlateStars stars={shown} order={order} pos={pos} cx={g.cx} cy={g.cy} focusTopic={focusTopic} collapsed={collapsed}
             selectedId={selectedStar?.id ?? null} cellKey={selectedCell?.key ?? null} rovingId={rovingId} playing={playing} stagger={stagger}
-            onSelectStar={selectStar} onHover={setHoverId} onActive={setActiveId} />
+            onSelectStar={selectStar} onHover={setHoverId} onActive={setActiveId} externalNav={collapsed} />
+            {cursorCell && cursorFan ? (
+              <g ref={cursorRef} className="p-cellcursor" data-hit="cell" data-cell={cursorCell.key} data-testid="plate-cell-cursor"
+                role="button" tabIndex={0} aria-label={cellName(model!, cursorCell)} onFocus={() => setActiveId(`${CELL_PREFIX}${cursorCell.key}`)}>
+                <path d={cursorFan} />
+              </g>
+            ) : null}
+          </g>
           {labels?.months.map((m) => (
             <text key={m.key} data-hit="month" className={`p-ringlab${selection?.kind === 'month' && selection.key === m.key ? ' on' : ''}`}
               x={m.x} y={m.y + 3.5} textAnchor="middle" role="button" tabIndex={0} aria-label={`${m.key.replace('-', ' 年 ')} 月`}

@@ -32,6 +32,9 @@
 .dim .p-ribbon { opacity: .2; }
 .dim .p-unfurl { opacity: 1; }
 .dim .p-star.lit.out { opacity: .22; }
+.p-cellcursor { outline: none; }
+.p-cellcursor path { fill: none; stroke: var(--m-acc); stroke-width: 1.2; stroke-dasharray: 3 2; opacity: 0; pointer-events: none; }
+.p-cellcursor:focus-visible path { opacity: 1; }
 .p-cellbox { fill: rgba(var(--m-acc-rgb), .06); stroke: var(--m-acc); stroke-width: 1.2; stroke-dasharray: 4 3; pointer-events: none; }
 .is-unfurling .p-star.lit { animation: m-ink var(--unfurl-ms, 420ms) var(--m-ease) backwards; }
 .is-entering .p-ribbon { animation: m-ink var(--m-d3) var(--m-ease) backwards; }

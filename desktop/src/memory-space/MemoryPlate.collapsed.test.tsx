@@ -351,3 +351,91 @@ describe('collapsed plate (step 4): text grading', () => {
     expect(layoutLabels(mid, 1440, 832).news).toEqual([]);
   });
 });
+
+describe('collapsed plate (step 6): keyboard', () => {
+  const huge = modelFor('huge');
+  const tabStops = (container: HTMLElement) => [...container.querySelectorAll('[data-hit="star"], [data-hit="cell"]')].filter((el) => el.getAttribute('tabindex') === '0');
+
+  it('is one Tab stop: a cell with a name that says where it is, how many and that it is collapsed', () => {
+    const { container } = plate({ model: huge });
+    const stops = tabStops(container);
+    expect(stops).toHaveLength(1);
+    const cursor = screen.getByTestId('plate-cell-cursor');
+    expect(stops[0]).toBe(cursor);
+    expect(cursor).toHaveAccessibleName(/^.+，20\d\d 年 \d{1,2} 月，\d+ 条，收起$/);
+    expect(cursor).toHaveAttribute('role', 'button');
+    expect(container.querySelectorAll('[data-hit="star"][tabindex="-1"]').length).toBe(container.querySelectorAll('.p-star').length);
+  });
+
+  it('walks cells and stars with the arrows: down a group, across groups, and Enter opens the cell', () => {
+    const { container, props } = plate({ model: huge });
+    const cursor = () => screen.getByTestId('plate-cell-cursor');
+    act(() => cursor().focus());
+    const first = cursor().getAttribute('data-cell')!;
+    fireEvent.keyDown(cursor(), { key: 'ArrowDown' });
+    const second = document.activeElement as Element;
+    const groupOfFirst = first.split('|')[0];
+    const groupOfSecond = second.getAttribute('data-cell')?.split('|')[0] ?? huge.byId.get(second.getAttribute('data-id')!)!.group;
+    expect(groupOfSecond).toBe(groupOfFirst);
+    expect(second.getAttribute('data-cell') ?? second.getAttribute('data-id')).not.toBe(first);
+    expect(tabStops(container)).toEqual([second]);
+    fireEvent.keyDown(second, { key: 'ArrowRight' });
+    const across = document.activeElement as Element;
+    const groupAcross = across.getAttribute('data-cell')?.split('|')[0] ?? huge.byId.get(across.getAttribute('data-id')!)!.group;
+    expect(groupAcross).not.toBe(groupOfFirst);
+    fireEvent.keyDown(across, { key: 'ArrowLeft' });
+    const back = document.activeElement as Element;
+    const groupBack = back.getAttribute('data-cell')?.split('|')[0] ?? huge.byId.get(back.getAttribute('data-id')!)!.group;
+    expect(groupBack).toBe(groupOfFirst);
+    expect(tabStops(container)).toHaveLength(1);
+    fireEvent.keyDown(document.activeElement!, { key: 'End' });
+    const last = document.activeElement as Element;
+    expect(last.hasAttribute('data-cell') || last.hasAttribute('data-id')).toBe(true);
+    fireEvent.keyDown(document.activeElement!, { key: 'Home' });
+    expect(document.activeElement!.getAttribute('data-cell')).toBe(first);
+    fireEvent.keyDown(document.activeElement!, { key: 'Enter' });
+    expect(props.onSelect).toHaveBeenLastCalledWith({ kind: 'cell', key: first });
+  });
+
+  it('Enter on the cell under the cursor selects exactly that cell', () => {
+    const { props } = plate({ model: huge });
+    const cursor = screen.getByTestId('plate-cell-cursor');
+    act(() => cursor.focus());
+    fireEvent.keyDown(cursor, { key: 'Enter' });
+    expect(props.onSelect).toHaveBeenLastCalledWith({ kind: 'cell', key: cursor.getAttribute('data-cell') });
+    fireEvent.keyDown(cursor, { key: ' ' });
+    expect(props.onSelect).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps Enter on a single star opening that star', () => {
+    const { container, props } = plate({ model: huge });
+    const star = huge.stars.find((s) => s.single)!;
+    const el = container.querySelector(`[data-id="${star.id}"]`)!;
+    act(() => (el as SVGGElement).focus());
+    fireEvent.keyDown(el, { key: 'Enter' });
+    expect(props.onSelect).toHaveBeenLastCalledWith({ kind: 'star', id: star.id });
+  });
+
+  it('with a group open the arrows walk its stars again, and the cursor is gone', () => {
+    const topic = huge.groups.find((t) => t.isTopic && t.starIds.length > 20)!;
+    const { container } = plate({ model: huge, focusTopic: topic.id, framedTopic: topic.id });
+    expect(screen.queryByTestId('plate-cell-cursor')).toBeNull();
+    const stops = tabStops(container);
+    expect(stops).toHaveLength(1);
+    const shown = [...container.querySelectorAll<SVGGElement>('[data-hit="star"]')];
+    const start = shown[0];
+    act(() => start.focus());
+    fireEvent.keyDown(start, { key: 'ArrowRight' });
+    expect(document.activeElement).toBe(shown[1]);
+    fireEvent.keyDown(shown[1], { key: 'End' });
+    expect(document.activeElement).toBe(shown[shown.length - 1]);
+    fireEvent.keyDown(document.activeElement!, { key: 'Home' });
+    expect(document.activeElement).toBe(shown[0]);
+  });
+
+  it('shows the dashed outline of the cell only while the cursor has focus', () => {
+    plate({ model: huge });
+    const cursor = screen.getByTestId('plate-cell-cursor');
+    expect(cursor.querySelector('path')!.getAttribute('d')).toMatch(/^M.*Z$/);
+  });
+});
