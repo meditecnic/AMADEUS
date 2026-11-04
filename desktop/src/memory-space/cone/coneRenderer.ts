@@ -700,6 +700,7 @@ class ConeScene implements ConeHandle {
         this.dirty = true;
         return;
       }
+      this.lastInput = performance.now();
       if (locked()) return;
       const hit = this.pick(p.x, p.y);
       el.style.cursor = hit ? 'pointer' : 'grab';
