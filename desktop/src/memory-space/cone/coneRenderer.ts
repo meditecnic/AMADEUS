@@ -80,9 +80,6 @@ export type ConeHandle = {
 
 export type ConeCreation = { ok: true; handle: ConeHandle } | { ok: false; reason: 'nogl'; error: string };
 
-const SOFTWARE = /swiftshader|llvmpipe|softpipe|microsoft basic render/i;
-export const isSoftwareRenderer = (name: string) => SOFTWARE.test(name);
-
 type Size = { w: number; h: number; cx: number; cy: number; R: number };
 type Tween = { t0: number; k: number; from: number; to: number; dur: number };
 type Transition = { t0: number; dur: number; from: Pose; to: Pose; done: () => void };
@@ -142,7 +139,6 @@ class ConeScene implements ConeHandle {
   private gpu: string;
 
   private theme: ConeTheme = CONE_THEMES.steins_gate;
-  private worldline: ConeWorldline = 'steins_gate';
   private model: ChartModel | null = null;
   private frame: ConeFrame | null = null;
   private kind: ChartKind = 'empty';
@@ -192,7 +188,6 @@ class ConeScene implements ConeHandle {
   private hoverKey: string | null = null;
   private segCache: ReturnType<typeof cellSegments> | null = null;
   private drawnCache: string[] | null = null;
-  private lastLabelKey = '';
   private readonly onLost: (event: Event) => void;
   private readonly cleanup: Array<() => void> = [];
 
@@ -381,7 +376,6 @@ class ConeScene implements ConeHandle {
   // ---- state from outside -------------------------------------------------------------------------------
 
   setWorldline(worldline: ConeWorldline) {
-    this.worldline = worldline;
     this.theme = CONE_THEMES[worldline];
     this.renderer.setClearColor(new Color(this.theme.paper), 0);
     if (this.model) this.build();
