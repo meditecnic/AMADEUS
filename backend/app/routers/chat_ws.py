@@ -568,6 +568,8 @@ async def compress_and_update_history(
                     registered.model_id,
                     registered.capabilities,
                     deepseek_service if registered.provider_id == "deepseek" else registered.adapter,
+                    context_window=registered.context_window,
+                    max_output_tokens=registered.max_output_tokens,
                 )
             provider_snapshot.require(ProviderTask.COMPRESSION)
             method = provider_snapshot.adapter.compress_history
@@ -1656,6 +1658,8 @@ async def processor_loop(
             ),
             credential_required=registered_provider.credential_required,
             base_url_configurable=registered_provider.base_url_configurable,
+            context_window=registered_provider.context_window,
+            max_output_tokens=registered_provider.max_output_tokens,
             temperature=session.temperature,
             reasoning_effort=model_catalog.normalize_control(
                 registered_provider.provider_id,
