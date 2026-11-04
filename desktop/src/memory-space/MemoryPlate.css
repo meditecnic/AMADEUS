@@ -6,7 +6,7 @@
 .memory-space[data-worldline="beta"] .p-ring { stroke-dasharray: 1 4; stroke: rgba(var(--m-ink-rgb), .26); }
 .p-today { fill: none; stroke: rgba(var(--m-acc-rgb), .42); stroke-width: 1; }
 .p-ruler { fill: none; stroke: rgba(var(--m-ink-rgb), .12); stroke-dasharray: 34 7 5 7; }
-.p-ring, .p-today, .p-ruler, .p-line, .p-tail, .p-reticle, .p-ref, .p-new, .p-young, .p-todaylab, .p-hover { pointer-events: none; }
+.p-ring, .p-today, .p-ruler, .p-line, .p-unfurl, .p-tail, .p-reticle, .p-ref, .p-new, .p-young, .p-todaylab, .p-hover { pointer-events: none; }
 .p-ringlab { font: 10px/1 var(--font-mono); fill: var(--m-ink3); letter-spacing: .12em; cursor: pointer;
   paint-order: stroke; stroke: var(--m-paper); stroke-width: 6px; stroke-linejoin: round; }
 .p-ringlab:hover, .p-ringlab.on { fill: var(--m-ink); }
@@ -30,6 +30,10 @@
 .p-ribbon.is-fragment { stroke-dasharray: 1.5 2.5; }
 .p-ribbon-hit { fill: none; stroke: transparent; stroke-width: 16; stroke-linecap: butt; cursor: pointer; }
 .dim .p-ribbon { opacity: .2; }
+.dim .p-unfurl { opacity: 1; }
+.dim .p-star.lit.out { opacity: .22; }
+.p-cellbox { fill: rgba(var(--m-acc-rgb), .06); stroke: var(--m-acc); stroke-width: 1.2; stroke-dasharray: 4 3; pointer-events: none; }
+.is-unfurling .p-star.lit { animation: m-ink var(--unfurl-ms, 420ms) var(--m-ease) backwards; }
 .is-entering .p-ribbon { animation: m-ink var(--m-d3) var(--m-ease) backwards; }
 .p-tail { stroke: rgba(var(--m-ink-rgb), .5); stroke-width: 1; fill: none; }
 .p-topic { cursor: pointer; outline: none; }

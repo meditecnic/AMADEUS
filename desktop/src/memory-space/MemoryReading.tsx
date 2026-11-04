@@ -149,7 +149,7 @@ export function MemoryReading(props: MemoryReadingProps) {
     content = <StarReading star={star} model={model} details={props.details} zone={zoneOfStar(model, star, props.width, props.height)}
       onRetry={props.onRetryDetails} onOpenArchive={props.onOpenArchive} />;
   } else if (selection.kind === 'topic') {
-    const topic = model.topics.find((t) => t.id === selection.id);
+    const topic = model.groups.find((t) => t.id === selection.id);
     if (!topic || !topic.starIds.length) return null;
     const stars = topic.starIds.map((id) => model.byId.get(id)!);
     content = (
@@ -158,7 +158,22 @@ export function MemoryReading(props: MemoryReadingProps) {
         <p className="r-title">{topic.label}</p>
         <p className="r-sub">{stars.length} 条 · {md(stars[0].createdAt)} 起 · 最近 {md(stars[stars.length - 1].createdAt)}</p>
         <StarList stars={stars} onSelect={props.onSelect} />
-        <button type="button" className="r-open" data-testid="open-topic-in-archive" onClick={() => props.onOpenArchiveTopic(topic.id)}>在档案中查看这个主题 ↗</button>
+        {topic.isTopic ? (
+          <button type="button" className="r-open" data-testid="open-topic-in-archive" onClick={() => props.onOpenArchiveTopic(topic.id)}>在档案中查看这个主题 ↗</button>
+        ) : null}
+      </>
+    );
+  } else if (selection.kind === 'cell') {
+    const cell = model.cells.get(selection.key);
+    if (!cell) return null;
+    const group = model.groups.find((t) => t.id === cell.groupId)!;
+    const stars = cell.starIds.map((id) => model.byId.get(id)!).reverse();
+    content = (
+      <>
+        <p className="r-kick" data-testid="reading-kick">格子 · <b>{zoneOfStar(model, model.byId.get(cell.starIds[0])!, props.width, props.height)}</b></p>
+        <p className="r-title">{group.label} · {cell.band.key.replace('-', '.')}</p>
+        <p className="r-sub">{cell.starIds.length} 条</p>
+        <StarList stars={stars} onSelect={props.onSelect} />
       </>
     );
   } else if (selection.kind === 'month') {

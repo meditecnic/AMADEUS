@@ -19,6 +19,8 @@ export type PlateStarsProps = {
   /** A collapsed plate focuses a group (a topic, or the ungrouped / fragment group) rather than a topic. */
   collapsed?: boolean;
   selectedId: string | null;
+  /** A selected cell: the open group's stars from other months fade. */
+  cellKey?: string | null;
   rovingId: string | null;
   playing: boolean;
   stagger: number;
@@ -30,7 +32,7 @@ export type PlateStarsProps = {
 // The static star layer. Its props do not change while the pointer sweeps the plate,
 // so hovering redraws only the hover note, not every star.
 export const PlateStars = memo(function PlateStars(props: PlateStarsProps) {
-  const { stars, order, pos, cx, cy, focusTopic, collapsed, selectedId, rovingId, playing, stagger } = props;
+  const { stars, order, pos, cx, cy, focusTopic, collapsed, selectedId, cellKey, rovingId, playing, stagger } = props;
   const layerRef = useRef<SVGGElement | null>(null);
   const onKey = (event: KeyboardEvent) => {
     const id = (event.target as Element).closest('[data-hit="star"]')?.getAttribute('data-id');
@@ -63,7 +65,7 @@ export const PlateStars = memo(function PlateStars(props: PlateStarsProps) {
             role="button" tabIndex={s.id === rovingId ? 0 : -1} aria-label={starName(s)}
             aria-pressed={s.id === selectedId}
             onFocus={() => props.onActive(s.id)}
-            className={`p-star is-${s.kind}${focusTopic && (collapsed ? s.group : s.topicId) === focusTopic ? ' lit' : ''}`}
+            className={`p-star is-${s.kind}${focusTopic && (collapsed ? s.group : s.topicId) === focusTopic ? ' lit' : ''}${cellKey && s.cellKey !== cellKey ? ' out' : ''}`}
             transform={`translate(${p.x.toFixed(1)} ${p.y.toFixed(1)})`}
             style={playing ? { animationDelay: `${Math.round(260 + i * stagger + (s.isNew ? 900 : 0))}ms` } : undefined}
             onClick={(event) => { event.stopPropagation(); props.onSelectStar(s.id); }}

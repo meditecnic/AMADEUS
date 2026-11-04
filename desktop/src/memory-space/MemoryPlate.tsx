@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 
 import { FRAGMENT_GROUP, plateGeometry, platePoint, type ChartModel, type ChartStar } from './chartCoordinates';
 import { md, recordNo, ymd } from './chartFormat';
-import { groupSpine, groupTicks, ticksPath } from './plateRibbons';
-import { PlateRibbons, type Ribbon } from './PlateRibbons';
+import { cellAtTheta, cellFanPath, groupSpine, groupTicks, ticksPath, type TickSegment } from './plateRibbons';
+import { PlateRibbons, PlateUnfurl, type Ribbon } from './PlateRibbons';
 import { PlateStars } from './PlateStars';
 import './MemoryPlate.css';
 
@@ -12,7 +12,8 @@ export type ChartSelection =
   | { kind: 'star'; id: string }
   | { kind: 'topic'; id: string }
   | { kind: 'soul' }
-  | { kind: 'month'; key: string };
+  | { kind: 'month'; key: string }
+  | { kind: 'cell'; key: string };
 export type PlateView = { s: number; x: number; y: number };
 type Point = { x: number; y: number };
 type Box = { x: number; y: number; w: number; h: number };
@@ -77,16 +78,18 @@ export function layoutLabels(model: ChartModel, width: number, height: number): 
   return { months, topics, today };
 }
 
-function focusView(model: ChartModel, topicId: string | null, width: number, height: number): PlateView {
-  const topic = topicId ? model.topics.find((t) => t.id === topicId) : null;
-  if (!topic || !topic.starIds.length) return HOME;
+function focusView(model: ChartModel, groupId: string | null, width: number, height: number): PlateView {
+  const group = groupId ? model.groups.find((t) => t.id === groupId) : null;
+  if (!group || !group.starIds.length) return HOME;
   const g = plateGeometry(width, height);
-  const pts = topic.starIds.map((id) => { const s = model.byId.get(id)!; return platePoint(s.theta, s.phi, g.radius, model.thetaFit); });
+  const pts = group.starIds.map((id) => { const s = model.byId.get(id)!; return platePoint(s.theta, s.phi, g.radius, model.thetaFit); });
   const mx = pts.reduce((a, p) => a + p.x, 0) / pts.length;
   const my = pts.reduce((a, p) => a + p.y, 0) / pts.length;
-  const s = 1.1;
+  // A collapsed plate keeps its groups on the rim: moving them 60% toward the middle pushes the plate out of the frame.
+  const s = model.collapsed ? 1.06 : 1.1;
+  const k = model.collapsed ? 0.3 : 0.6;
   // Bring the arm a little toward the middle; never recentre on it or on SOUL.
-  return { s, x: (-20 - mx * s) * 0.6, y: -my * s * 0.6 };
+  return { s, x: (-20 - mx * s) * k, y: -my * s * k };
 }
 
 export type MemoryPlateProps = {
@@ -99,6 +102,8 @@ export type MemoryPlateProps = {
   framedTopic: string | null;
   reducedMotion: boolean;
   entering: boolean;
+  /** β eases 1.3 times slower. */
+  worldline?: 'steins_gate' | 'beta';
   footnote?: string | null;
   /** Records drawn with the dashed "this turn" reticle; ids not on the plate are skipped. */
   marks?: readonly string[];
@@ -121,6 +126,9 @@ export function MemoryPlate(props: MemoryPlateProps) {
   const [view, setView] = useState<PlateView>(HOME);
   const viewRef = useRef<PlateView>(HOME);
   const [playing, setPlaying] = useState(false);
+  // A collapsed group opens by drawing its ticks back into their stars (420 ms), and closes the other way (260 ms).
+  const [unfurl, setUnfurl] = useState<{ group: string; dir: 'out' | 'in'; ms: number } | null>(null);
+  const [bandHover, setBandHover] = useState<{ x: number; y: number; cellKey: string; groupId: string } | null>(null);
   const onEntered = useRef(props.onEntered);
   onEntered.current = props.onEntered;
 
@@ -183,6 +191,53 @@ export function MemoryPlate(props: MemoryPlateProps) {
     return () => window.clearTimeout(timer);
   }, [props.entering, model, reducedMotion, entranceMs]);
 
+  const prevFocus = useRef<string | null>(focusTopic);
+  useEffect(() => {
+    const before = prevFocus.current;
+    prevFocus.current = focusTopic;
+    if (!model?.collapsed || reducedMotion || before === focusTopic) { setUnfurl(null); return; }
+    const slow = props.worldline === 'beta' ? 1.3 : 1;
+    if (focusTopic) setUnfurl({ group: focusTopic, dir: 'out', ms: 420 * slow });
+    else if (before) setUnfurl({ group: before, dir: 'in', ms: 260 * slow });
+    // Only a change of the open group starts a motion.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusTopic]);
+  const unfurlGroup = unfurl ? model?.groups.find((group) => group.id === unfurl.group) ?? null : null;
+  const unfurlTicks = useMemo<TickSegment[] | null>(
+    () => (unfurlGroup ? groupTicks(unfurlGroup, at) : null),
+    // at only reads the plate geometry.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [unfurlGroup, g.cx, g.cy, g.radius],
+  );
+  const doneUnfurl = useCallback(() => setUnfurl(null), []);
+
+  const cellAtEvent = (groupId: string, event: { clientX: number; clientY: number }) => {
+    const group = model?.groups.find((t) => t.id === groupId);
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!model || !group || !rect) return null;
+    const v = viewRef.current;
+    const x = (event.clientX - rect.left - g.cx - v.x) / v.s;
+    const y = (event.clientY - rect.top - g.cy - v.y) / v.s;
+    const perTheta = platePoint(1, 0, g.radius, model.thetaFit).y;
+    return { cell: cellAtTheta(group, Math.hypot(x, y) / perTheta), at: { x: event.clientX - rect.left, y: event.clientY - rect.top } };
+  };
+  const onBandMove = (groupId: string, event: { clientX: number; clientY: number }) => {
+    const hit = cellAtEvent(groupId, event);
+    setBandHover(hit?.cell ? { ...hit.at, cellKey: hit.cell.key, groupId } : null);
+  };
+  const onBandClick = (groupId: string, event: { clientX: number; clientY: number }) => {
+    const cell = cellAtEvent(groupId, event)?.cell;
+    setBandHover(null);
+    props.onSelect(cell ? { kind: 'cell', key: cell.key } : { kind: 'topic', id: groupId });
+  };
+  const selectedCell = selection?.kind === 'cell' ? model?.cells.get(selection.key) ?? null : null;
+  const cellFan = useMemo(() => {
+    if (!model || !selectedCell) return null;
+    return cellFanPath(selectedCell, selectedCell.starIds.map((id) => model.byId.get(id)!.phi), at);
+    // at only reads the plate geometry.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [model, selectedCell, g.cx, g.cy, g.radius]);
+
   const delay = (ms: number) => (playing ? { animationDelay: `${Math.round(ms)}ms` } : undefined);
   const groupOf = (s: ChartStar) => (collapsed ? s.group : s.topicId);
   const dimmed = (s: ChartStar) => Boolean(focusTopic && groupOf(s) !== focusTopic);
@@ -213,7 +268,8 @@ export function MemoryPlate(props: MemoryPlateProps) {
     <div className="memory-plate" data-testid="memory-plate">
       <svg
         ref={svgRef}
-        className={`plate${playing ? ' is-entering' : ''}`}
+        className={`plate${playing ? ' is-entering' : ''}${unfurl?.dir === 'out' ? ' is-unfurling' : ''}`}
+        style={unfurl ? ({ '--unfurl-ms': `${Math.round(unfurl.ms)}ms` } as CSSProperties) : undefined}
         width={width}
         height={height}
         role="group"
@@ -241,9 +297,12 @@ export function MemoryPlate(props: MemoryPlateProps) {
             <path key={topic.id} className={`p-line${topic.id === focusTopic ? ' lit' : ''}`} style={delay(900)}
               d={topic.starIds.map((id, i) => `${i ? 'L' : 'M'}${pos.get(id)!.x.toFixed(1)} ${pos.get(id)!.y.toFixed(1)}`).join('')} />
           ))}
-          {collapsed ? <PlateRibbons ribbons={ribbons} openId={focusTopic} playing={playing} delayMs={900} onPickGroup={(id) => props.onSelect({ kind: 'topic', id })} /> : null}
+          {collapsed ? <PlateRibbons ribbons={ribbons} openId={focusTopic ?? unfurl?.group ?? null} playing={playing} delayMs={900}
+            onMove={onBandMove} onLeave={() => setBandHover(null)} onPick={onBandClick} /> : null}
+          {unfurlTicks && unfurl ? <PlateUnfurl ticks={unfurlTicks} pos={pos} dir={unfurl.dir} ms={unfurl.ms} onDone={doneUnfurl} /> : null}
+          {cellFan ? <path className="p-cellbox" data-testid="plate-cellbox" d={cellFan} /> : null}
           <PlateStars stars={shown} order={order} pos={pos} cx={g.cx} cy={g.cy} focusTopic={focusTopic} collapsed={collapsed}
-            selectedId={selectedStar?.id ?? null} rovingId={rovingId} playing={playing} stagger={stagger}
+            selectedId={selectedStar?.id ?? null} cellKey={selectedCell?.key ?? null} rovingId={rovingId} playing={playing} stagger={stagger}
             onSelectStar={selectStar} onHover={setHoverId} onActive={setActiveId} />
           {labels?.months.map((m) => (
             <text key={m.key} data-hit="month" className={`p-ringlab${selection?.kind === 'month' && selection.key === m.key ? ' on' : ''}`}
@@ -318,6 +377,17 @@ export function MemoryPlate(props: MemoryPlateProps) {
             );
           })() : null}
         </g>
+        {bandHover && model ? (() => {
+          const cell = model.cells.get(bandHover.cellKey)!;
+          const label = `${model.groups.find((t) => t.id === bandHover.groupId)!.label} · ${cell.band.key.replace('-', '.')} · ${cell.starIds.length} 条`;
+          return (
+            <g className="p-hover" data-testid="plate-band-hover" transform={`translate(${bandHover.x + 14} ${bandHover.y - 30})`}>
+              <rect width={Math.max(label.length * 12.4, 80) + 20} height={40} />
+              <text x={10} y={17}>{label}</text>
+              <text className="m" x={10} y={32}>点一下展开</text>
+            </g>
+          );
+        })() : null}
         {/* SOUL sits outside the scaled group: focusing a topic never makes it bigger. */}
         <g className="p-soul" data-hit="soul" data-testid="plate-soul" data-state={props.soul}
           transform={`translate(${soulAt.x} ${soulAt.y})`}

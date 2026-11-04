@@ -221,7 +221,8 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
   useEffect(() => {
     if (!model || !selection) return;
     if (selection.kind === 'star' && !model.byId.has(selection.id)) setSelection(null);
-    if (selection.kind === 'topic' && !model.topics.some((t) => t.id === selection.id && t.starIds.length)) setSelection(null);
+    if (selection.kind === 'topic' && !model.groups.some((t) => t.id === selection.id && t.starIds.length)) setSelection(null);
+    if (selection.kind === 'cell' && !model.cells.has(selection.key)) setSelection(null);
   }, [model, selection]);
 
   const selectedStar = selection?.kind === 'star' ? model?.byId.get(selection.id) ?? null : null;
@@ -263,8 +264,16 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
     setScopeMenu(false);
     if (!next) { overview(); return; }
     if (next.kind === 'topic') { setFocusTopic(next.id); setFramedTopic(next.id); }
-    // A record never moves the plate; it only lights its own topic.
-    else if (next.kind === 'star') { const star = model?.byId.get(next.id); if (star?.topicId) setFocusTopic(star.topicId); }
+    else if (next.kind === 'cell') {
+      const cell = model?.cells.get(next.key);
+      if (cell) { setFocusTopic(cell.groupId); setFramedTopic(cell.groupId); }
+    }
+    // A record never moves the plate; it only lights its own topic, or on a collapsed plate opens its group.
+    else if (next.kind === 'star') {
+      const star = model?.byId.get(next.id);
+      const group = model?.collapsed ? star?.group : star?.topicId;
+      if (group) setFocusTopic(group);
+    }
     else { setFocusTopic(null); setFramedTopic(null); }
     setSelection(next);
   };
@@ -290,6 +299,7 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
     }
     const kind: MemoryUnwindKind = selection?.kind === 'star'
       ? (selectedStar?.kind === 'fragment' ? 'experience' : 'fact')
+      : selection?.kind === 'cell' ? 'fact'
       : selection?.kind === 'topic' ? 'topic' : selection?.kind === 'soul' ? 'continuity_hub' : selection?.kind === 'month' ? 'month' : null;
     const action = nextMemoryUnwind({
       toolsOpen: false, hasActiveCriteria: false, listVisible: false, selectedKind: kind, expanded: Boolean(focusTopic), closeAtRoot,
@@ -332,11 +342,12 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
 
   const crumbs: Array<{ key: string; label: string; onClick?: () => void }> = [];
   if (mode === 'chart' && model) {
-    const topic = focusTopic ? model.topics.find((t) => t.id === focusTopic) : null;
+    const topic = focusTopic ? model.groups.find((t) => t.id === focusTopic) : null;
     if (topic) crumbs.push({ key: 'topic', label: topic.label, onClick: () => select({ kind: 'topic', id: topic.id }) });
     if (selectedStar) crumbs.push({ key: 'star', label: recordNo(selectedStar.no) });
     if (selection?.kind === 'soul') crumbs.push({ key: 'soul', label: 'SOUL' });
     if (selection?.kind === 'month') crumbs.push({ key: 'month', label: selection.key.replace('-', '.') });
+    if (selection?.kind === 'cell') crumbs.push({ key: 'cell', label: selection.key.split('|')[1].replace('-', '.') });
   }
   const deeper = mode === 'chart' ? crumbs.length > 0 : Boolean(archiveState.selection || archiveState.editor || archiveState.deleteFlow);
 
@@ -461,6 +472,7 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
               framedTopic={framedTopic}
               reducedMotion={reducedMotion}
               entering={entering}
+              worldline={worldline}
               footnote={footnote}
               marks={markedOnPlate}
               onEntered={() => setEntering(false)}
