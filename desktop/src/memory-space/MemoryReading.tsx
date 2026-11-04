@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
 
-import { plateGeometry, platePoint, zoneOf, type ChartModel, type ChartStar } from './chartCoordinates';
+import { plateGeometry, platePoint, zoneOf, type ChartGroup, type ChartModel, type ChartStar } from './chartCoordinates';
 import { hm, md, recordNo, ymd } from './chartFormat';
 import { parseMs } from './chartTime';
 import type { ChartSelection } from './MemoryPlate';
@@ -107,17 +107,49 @@ function StarReading(props: {
   );
 }
 
+/** The most a list shows; the rest are one line of "还有 N 条" and the archive. */
+export const LIST_MAX = 12;
+
+/** `stars` newest first. */
 function StarList({ stars, onSelect }: { stars: ChartStar[]; onSelect: (selection: ChartSelection) => void }) {
   return (
-    <ul className="r-list">
-      {stars.map((s) => (
-        <li key={s.id}>
-          <button type="button" onClick={() => onSelect({ kind: 'star', id: s.id })}>
-            <span>{s.label}</span><time>{md(s.createdAt)}</time>
-          </button>
-        </li>
-      ))}
-    </ul>
+    <>
+      <ul className="r-list" data-testid="reading-list">
+        {stars.slice(0, LIST_MAX).map((s) => (
+          <li key={s.id}>
+            <button type="button" onClick={() => onSelect({ kind: 'star', id: s.id })}>
+              <span>{s.label}</span><time>{md(s.createdAt)}</time>
+            </button>
+          </li>
+        ))}
+      </ul>
+      {stars.length > LIST_MAX ? <p className="r-rest" data-testid="reading-rest">还有 {stars.length - LIST_MAX} 条</p> : null}
+    </>
+  );
+}
+
+const monthLabel = (key: string) => key.replace('-', '.');
+
+// How many a month, from the group's first month to its last: a bar a month, tallest = the busiest.
+function MonthBars({ model, group }: { model: ChartModel; group: ChartGroup }) {
+  if (!group.cells.length) return null;
+  const first = model.bands.findIndex((band) => band.key === group.cells[0].band.key);
+  const last = model.bands.findIndex((band) => band.key === group.cells[group.cells.length - 1].band.key);
+  const bands = model.bands.slice(first, last + 1);
+  const counts = bands.map((band) => model.cells.get(`${group.id}|${band.key}`)?.starIds.length ?? 0);
+  const most = Math.max(...counts);
+  return (
+    <div className="r-months" data-testid="reading-months" role="img"
+      aria-label={`每月几条：${monthLabel(bands[0].key)} 到 ${monthLabel(bands[bands.length - 1].key)}，最多 ${most} 条`}>
+      <p className="k">每月几条</p>
+      <div className="bars">
+        {bands.map((band, i) => (
+          <i key={band.key} title={`${monthLabel(band.key)} · ${counts[i]} 条`} data-count={counts[i]}
+            style={{ height: `${counts[i] ? Math.max(8, Math.round((counts[i] / most) * 100)) : 0}%` }} />
+        ))}
+      </div>
+      <p className="range"><span>{monthLabel(bands[0].key)}</span><span>{monthLabel(bands[bands.length - 1].key)}</span></p>
+    </div>
   );
 }
 
@@ -133,6 +165,8 @@ export type MemoryReadingProps = {
   onRetryDetails: () => void;
   onOpenArchive: (kind: 'fact' | 'experience', id: string) => void;
   onOpenArchiveTopic: (topicId: string) => void;
+  /** A month or a cell: the archive shows only these records, named `label` in its filter bar. */
+  onOpenArchiveWithin: (ids: readonly string[], label: string, topicId: string | null) => void;
 };
 
 export function MemoryReading(props: MemoryReadingProps) {
@@ -157,7 +191,8 @@ export function MemoryReading(props: MemoryReadingProps) {
         <p className="r-kick" data-testid="reading-kick">主题 · <b>{zoneOfStar(model, stars[0], props.width, props.height)}</b></p>
         <p className="r-title">{topic.label}</p>
         <p className="r-sub">{stars.length} 条 · {md(stars[0].createdAt)} 起 · 最近 {md(stars[stars.length - 1].createdAt)}</p>
-        <StarList stars={stars} onSelect={props.onSelect} />
+        <MonthBars model={model} group={topic} />
+        <StarList stars={[...stars].reverse()} onSelect={props.onSelect} />
         {topic.isTopic ? (
           <button type="button" className="r-open" data-testid="open-topic-in-archive" onClick={() => props.onOpenArchiveTopic(topic.id)}>在档案中查看这个主题 ↗</button>
         ) : null}
@@ -168,12 +203,21 @@ export function MemoryReading(props: MemoryReadingProps) {
     if (!cell) return null;
     const group = model.groups.find((t) => t.id === cell.groupId)!;
     const stars = cell.starIds.map((id) => model.byId.get(id)!).reverse();
+    const g = plateGeometry(props.width, props.height);
+    const at = platePoint(cell.theta, cell.phi, g.radius, model.thetaFit);
+    const zone = zoneOf(g.cx + at.x, g.cy + at.y, props.width, props.height);
+    const label = `${group.label} · ${monthLabel(cell.band.key)}`;
+    const n = stars.length;
     content = (
       <>
-        <p className="r-kick" data-testid="reading-kick">格子 · <b>{zoneOfStar(model, model.byId.get(cell.starIds[0])!, props.width, props.height)}</b></p>
-        <p className="r-title">{group.label} · {cell.band.key.replace('-', '.')}</p>
-        <p className="r-sub">{cell.starIds.length} 条</p>
+        <p className="r-kick" data-testid="reading-kick">格子</p>
+        <p className="r-title" data-testid="reading-cell-title">{label} · {zone}</p>
+        <p className="r-sub">{n} 条 · {md(stars[n - 1].createdAt)} 起 · 最近 {md(stars[0].createdAt)}</p>
         <StarList stars={stars} onSelect={props.onSelect} />
+        <button type="button" className="r-open" data-testid="open-cell-in-archive"
+          onClick={() => props.onOpenArchiveWithin(cell.starIds, label, group.isTopic ? group.id : null)}>
+          {n <= LIST_MAX ? `在档案中看这 ${n} 条 ↗` : `在档案中看这一格的全部 ${n} 条 ↗`}
+        </button>
       </>
     );
   } else if (selection.kind === 'month') {
@@ -189,7 +233,11 @@ export function MemoryReading(props: MemoryReadingProps) {
           新记 {stars.filter((s) => s.kind !== 'fragment').length} 件事 · 片段 {stars.filter((s) => s.kind === 'fragment').length} · 新主题 {fresh.length}
           {fresh.length ? `（${fresh.map((t) => t.label).join('、')}）` : ''}
         </p>
-        <StarList stars={stars} onSelect={props.onSelect} />
+        <StarList stars={[...stars].reverse()} onSelect={props.onSelect} />
+        {stars.length > LIST_MAX ? (
+          <button type="button" className="r-open" data-testid="open-month-in-archive"
+            onClick={() => props.onOpenArchiveWithin(stars.map((s) => s.id), `${y}.${String(m).padStart(2, '0')}`, null)}>在档案中看这个月 ↗</button>
+        ) : null}
       </>
     );
   } else {

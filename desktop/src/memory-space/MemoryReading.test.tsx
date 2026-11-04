@@ -23,7 +23,7 @@ function ok(kind: 'fact' | 'experience', id: string): DetailsOutcome {
 function reading(overrides: Partial<MemoryReadingProps>) {
   const props: MemoryReadingProps = {
     selection: null, model, chart, details: { type: 'idle' }, width: 1440, height: 840,
-    onSelect: vi.fn(), onClose: vi.fn(), onRetryDetails: vi.fn(), onOpenArchive: vi.fn(), onOpenArchiveTopic: vi.fn(), ...overrides,
+    onSelect: vi.fn(), onClose: vi.fn(), onRetryDetails: vi.fn(), onOpenArchive: vi.fn(), onOpenArchiveTopic: vi.fn(), onOpenArchiveWithin: vi.fn(), ...overrides,
   };
   render(<MemoryReading {...props} />);
   return props;

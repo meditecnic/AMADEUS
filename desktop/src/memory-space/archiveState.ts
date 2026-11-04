@@ -12,6 +12,7 @@ import {
   retryFailedJob,
   updateExperiencePresentation,
   updateFactPresentation,
+  type ArchiveResult,
   type ArchiveScope,
   type ExperienceBrowseRow,
   type FactBrowseRow,
@@ -102,10 +103,14 @@ export type ArchivePendingState = {
   statusFailed: boolean;
 };
 
+/** A month or a cell of the star chart: the archive lists only these records, named by `label` in the filter bar. */
+export type ArchiveWithin = { label: string; ids: readonly string[] };
+
 export type ArchiveFilters = {
   query: string;
   topicId: string | null;
   pinnedOnly: boolean;
+  within?: ArchiveWithin | null;
 };
 
 export type ArchiveState = {
@@ -130,6 +135,7 @@ export type ArchiveIntent =
   | { type: 'set-kind'; kind: ArchiveRecordKind }
   | { type: 'set-query'; query: string }
   | { type: 'set-topic'; topicId: string | null }
+  | { type: 'set-within'; within: ArchiveWithin | null; topicId?: string | null }
   | { type: 'set-pinned-only'; pinnedOnly: boolean }
   | { type: 'page'; kind: ArchiveRecordKind; offset: number }
   | { type: 'select'; kind: ArchiveRecordKind; recordId: string }
@@ -178,6 +184,8 @@ export type ArchiveModule = {
 };
 
 export const PAGE_SIZE = 20;
+/** The backend serves at most this many rows a page; a month or cell filter walks the pages and keeps its own records. */
+const WITHIN_PAGE = 100;
 
 const FOCUS_FALLBACK_NOTICE = '无法在此范围内找到该记录，已返回档案列表。';
 
@@ -189,6 +197,27 @@ export function scopeLabel(scope: ArchiveScope): string {
   const identity = scope.identityMode === 'self' ? 'USER' : 'OKABE';
   const line = scope.worldline === 'steins_gate' ? 'SG' : 'β';
   return `${identity} · ${line}`;
+}
+
+/** One archive page of a within-filtered list: walks the backend's pages, keeps the records that are in `within`. */
+async function withinPage<Row>(
+  fetchPage: (offset: number) => Promise<ArchiveResult<{ rows: Row[]; hasMore: boolean }>>,
+  idOf: (row: Row) => string,
+  within: ArchiveWithin,
+  offset: number,
+): Promise<ArchiveResult<{ rows: Row[]; total: number; hasMore: boolean }>> {
+  const wanted = new Set(within.ids);
+  const kept: Row[] = [];
+  for (let at = 0; ; at += WITHIN_PAGE) {
+    const result = await fetchPage(at);
+    if (result.type !== 'ok') return result;
+    for (const row of result.payload.rows) if (wanted.has(idOf(row))) kept.push(row);
+    if (!result.payload.hasMore || kept.length >= wanted.size) break;
+  }
+  return {
+    type: 'ok',
+    payload: { rows: kept.slice(offset, offset + PAGE_SIZE), total: kept.length, hasMore: offset + PAGE_SIZE < kept.length },
+  };
 }
 
 function initialFacts(): FactListState {
@@ -306,17 +335,18 @@ export function createArchiveModule(deps?: {
     const offset = state.facts.offset;
     const mySeq = ++factsSeq;
     commit({ facts: { ...state.facts, status: 'loading', errorCode: null } }, { persist: false });
-    const result = await fetchFactsPage(
-      scope,
-      {
-        query: state.filters.query || undefined,
-        topicId: state.filters.topicId,
-        pinnedOnly: state.filters.pinnedOnly,
-        limit: PAGE_SIZE,
-        offset,
-      },
-      { fetcher, signal: inflight?.signal },
-    );
+    const within = state.filters.within;
+    const query = {
+      query: state.filters.query || undefined,
+      topicId: state.filters.topicId,
+      pinnedOnly: state.filters.pinnedOnly,
+    };
+    const result = within
+      ? await withinPage(
+        (at) => fetchFactsPage(scope, { ...query, limit: WITHIN_PAGE, offset: at }, { fetcher, signal: inflight?.signal }),
+        (row) => row.factId, within, offset,
+      )
+      : await fetchFactsPage(scope, { ...query, limit: PAGE_SIZE, offset }, { fetcher, signal: inflight?.signal });
     if (disposed || mySeq !== factsSeq || scopeKey(scope) !== scopeKey(state.scope)) return;
     if (result.type === 'ok') {
       commit({
@@ -346,16 +376,14 @@ export function createArchiveModule(deps?: {
     const offset = state.experiences.offset;
     const mySeq = ++experiencesSeq;
     commit({ experiences: { ...state.experiences, status: 'loading', errorCode: null } }, { persist: false });
-    const result = await fetchExperiencesPage(
-      scope,
-      {
-        query: state.filters.query || undefined,
-        pinnedOnly: state.filters.pinnedOnly,
-        limit: PAGE_SIZE,
-        offset,
-      },
-      { fetcher, signal: inflight?.signal },
-    );
+    const within = state.filters.within;
+    const query = { query: state.filters.query || undefined, pinnedOnly: state.filters.pinnedOnly };
+    const result = within
+      ? await withinPage(
+        (at) => fetchExperiencesPage(scope, { ...query, limit: WITHIN_PAGE, offset: at }, { fetcher, signal: inflight?.signal }),
+        (row) => row.experienceId, within, offset,
+      )
+      : await fetchExperiencesPage(scope, { ...query, limit: PAGE_SIZE, offset }, { fetcher, signal: inflight?.signal });
     if (disposed || mySeq !== experiencesSeq || scopeKey(scope) !== scopeKey(state.scope)) return;
     if (result.type === 'ok') {
       commit({
@@ -592,6 +620,19 @@ export function createArchiveModule(deps?: {
           facts: { ...state.facts, offset: 0 },
         });
         void loadFacts();
+        return;
+      case 'set-within':
+        // The chart sends the archive to one month or cell: leftover search words would hide it.
+        commit({
+          filters: {
+            query: '', pinnedOnly: false, topicId: intent.topicId === undefined ? state.filters.topicId : intent.topicId,
+            within: intent.within,
+          },
+          facts: { ...state.facts, offset: 0 },
+          experiences: { ...state.experiences, offset: 0 },
+        });
+        void loadFacts();
+        void loadExperiences();
         return;
       case 'set-pinned-only':
         commit({

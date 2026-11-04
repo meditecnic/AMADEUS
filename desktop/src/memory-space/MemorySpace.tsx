@@ -320,6 +320,11 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
     setMode('archive');
     if (archive.open(scope, { restore: true })) archive.dispatch({ type: 'set-topic', topicId });
   };
+  const openArchiveWithin = (ids: readonly string[], label: string, topicId: string | null) => {
+    archiveOpenedRef.current = scopeKey;
+    setMode('archive');
+    if (archive.open(scope, { restore: true })) archive.dispatch({ type: 'set-within', within: { label, ids }, topicId });
+  };
   const showChart = () => {
     if (mode === 'archive' && !archive.handleExitRequest()) return;
     setMode('chart');
@@ -517,6 +522,7 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
                 onRetryDetails={retryDetails}
                 onOpenArchive={openArchiveRecord}
                 onOpenArchiveTopic={openArchiveTopic}
+                onOpenArchiveWithin={openArchiveWithin}
               />
             ) : null}
           </div>
