@@ -27,11 +27,14 @@ def verify_frontend_assets(exe: Path, frontend: Path) -> None:
     # tauri-codegen 2.6.3 strips the dist prefix; tauri-utils 2.9.3 AssetKey
     # adds a leading slash and uses forward slashes, including on Windows.
     executable = exe.read_bytes()
+    count = 0
     for path in sorted(frontend.rglob("*")):
         if path.is_file():
             key = "/" + path.relative_to(frontend).as_posix()
             if key.encode("utf-8") not in executable:
                 raise RuntimeError(f"Frontend asset not embedded in {exe}: {key}")
+            count += 1
+    print("FRONTEND_EMBEDDED " + json.dumps({"files": count}), flush=True)
 
 
 BUILD_ENV_NAMES = frozenset({

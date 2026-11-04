@@ -3,6 +3,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from bundle_support import verify_frontend_assets
@@ -29,7 +30,9 @@ class FrontendAssetTests(unittest.TestCase):
 
     def test_all_asset_keys_are_embedded(self):
         self.write_exe(self.keys)
-        verify_frontend_assets(self.exe, self.frontend)
+        with patch("builtins.print") as output:
+            verify_frontend_assets(self.exe, self.frontend)
+        output.assert_called_once_with('FRONTEND_EMBEDDED {"files": 5}', flush=True)
 
     def test_missing_asset_key_stops_the_build(self):
         for missing in self.keys:
