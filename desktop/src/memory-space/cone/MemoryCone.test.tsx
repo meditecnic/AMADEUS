@@ -1,5 +1,5 @@
 import { act, cleanup, render, screen } from '@testing-library/react';
-import { createRef, StrictMode } from 'react';
+import { createRef, StrictMode, useEffect, useRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { plateGeometry } from '../chartCoordinates';
@@ -11,6 +11,8 @@ import type { ConeCallbacks } from './coneRenderer';
 const h = vi.hoisted(() => ({
   made: [] as Array<{ cb: ConeCallbacks; handle: Record<string, ReturnType<typeof vi.fn>> }>,
   fail: false,
+  /** `fromPlate` waits for the test to finish it. */
+  hold: false,
 }));
 
 vi.mock('./coneRenderer', () => ({
@@ -18,7 +20,7 @@ vi.mock('./coneRenderer', () => ({
     if (h.fail) return { ok: false, reason: 'nogl', error: 'x' };
     const handle = {
       setModel: vi.fn(), setWorldline: vi.fn(), setView: vi.fn(), resize: vi.fn(), setTier: vi.fn(), entrance: vi.fn(), holdPlate: vi.fn(),
-      toPlate: vi.fn((done: () => void) => done()), fromPlate: vi.fn((done: () => void) => done()), setSlow: vi.fn(), dispose: vi.fn(),
+      toPlate: vi.fn((done: () => void) => done()), fromPlate: vi.fn((done: () => void) => { if (!h.hold) done(); }), setSlow: vi.fn(), dispose: vi.fn(),
     };
     h.made.push({ cb, handle });
     return { ok: true, handle };
@@ -33,7 +35,7 @@ const props = (over: Partial<MemoryConeProps> = {}): MemoryConeProps => ({
 });
 const latest = () => h.made[h.made.length - 1];
 
-beforeEach(() => { h.made.length = 0; h.fail = false; });
+beforeEach(() => { h.made.length = 0; h.fail = false; h.hold = false; });
 afterEach(() => cleanup());
 
 describe('MemoryCone', () => {
@@ -61,6 +63,26 @@ describe('MemoryCone', () => {
     render(<StrictMode><MemoryCone {...props()} /></StrictMode>);
     expect(latest().handle.setModel).toHaveBeenCalledTimes(1);
     expect(latest().handle.entrance).toHaveBeenCalledTimes(1);
+  });
+
+  it('carries a rise asked for in the mounting commit over to the renderer that replaces the first (StrictMode)', () => {
+    h.hold = true;
+    const done = vi.fn();
+    function Page() {
+      const cone = useRef<ConeControls | null>(null);
+      const asked = useRef(false);
+      // the page is already mounted when it asks in the real app, so its own effect must not be replayed here
+      useEffect(() => { if (asked.current) return; asked.current = true; cone.current?.fromPlate(done); }, []);
+      return <MemoryCone ref={cone} {...props({ entering: false, startFlat: true })} />;
+    }
+    render(<StrictMode><Page /></StrictMode>);
+    const newest = latest().handle;
+    expect(h.made.length).toBeGreaterThanOrEqual(2);
+    expect(newest.holdPlate).toHaveBeenCalledTimes(1);
+    expect(newest.fromPlate).toHaveBeenCalledTimes(1);
+    expect(done).not.toHaveBeenCalled();
+    act(() => { (newest.fromPlate.mock.calls[0][0] as () => void)(); });
+    expect(done).toHaveBeenCalledTimes(1);
   });
 
   it('tells the page when the entrance is over', () => {

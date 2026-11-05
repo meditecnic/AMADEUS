@@ -60,9 +60,17 @@ export const MemoryCone = forwardRef<ConeControls, MemoryConeProps>(function Mem
   const modelRef = useRef<ChartModel | null>(null);
   const entranceStarted = useRef(false);
 
+  // A rise asked for while a renderer was about to be replaced (StrictMode's replay) goes on with the new one.
+  const rising = useRef<(() => void) | null>(null);
+
   useImperativeHandle(ref, () => ({
     toPlate: (done) => { if (handleRef.current) handleRef.current.toPlate(done); else done(); },
-    fromPlate: (done) => { if (handleRef.current) handleRef.current.fromPlate(done); else done(); },
+    fromPlate: (done) => {
+      if (!handleRef.current) { done(); return; }
+      const finish = () => { rising.current = null; done(); };
+      rising.current = finish;
+      handleRef.current.fromPlate(finish);
+    },
   }), []);
 
   useEffect(() => {
@@ -110,8 +118,10 @@ export const MemoryCone = forwardRef<ConeControls, MemoryConeProps>(function Mem
       modelRef.current = model;
       handle.setModel(model, size);
       handle.setView({ selection: props.selection, focusTopic: props.focusTopic, marks: props.marks ?? [], reducedMotion: props.reducedMotion });
-      if (model && props.startFlat) handle.holdPlate();
-      else if (model && props.entering && !entranceStarted.current) {
+      if (model && props.startFlat) {
+        handle.holdPlate();
+        if (rising.current) handle.fromPlate(rising.current);
+      } else if (model && props.entering && !entranceStarted.current) {
         entranceStarted.current = true;
         if (props.reducedMotion) props.onEntered();
         else handle.entrance();
