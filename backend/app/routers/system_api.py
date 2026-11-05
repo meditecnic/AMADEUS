@@ -202,12 +202,16 @@ async def memory_facts_ledger(
     query: str | None = Query(None),
     topic_id: str | None = Query(None),
     pinned_only: bool = Query(False),
+    created_from: str | None = Query(None),
+    created_to: str | None = Query(None),
     limit: str | None = Query(None),
     offset: str | None = Query(None),
 ):
     """v11 scoped active stable facts (S3a) with bounded offset pagination (S3F-2B)."""
     session_id = _require_session_id(session_id)
     wl, mode = _validate_memory_scope(worldline, identity_mode)
+    created_from = _parse_created_time("created_from", created_from)
+    created_to = _parse_created_time("created_to", created_to)
     from app.services.memory_v11.contracts import MemoryValidationError
     from app.services.memory_v11.repository import list_active_stable_facts_page
 
@@ -221,6 +225,8 @@ async def memory_facts_ledger(
             query=query,
             topic_id=topic_id,
             pinned_only=pinned_only,
+            created_from=created_from,
+            created_to=created_to,
             limit=lim,
             offset=off,
         )
@@ -236,11 +242,16 @@ async def memory_facts_ledger(
     from app.services.memory_v11.recall import MemoryScope
     from app.services.memory_v11.resident import load_resident_fact_ids
 
+    from app.services.prompt_compiler import RESIDENT_MAX_FACTS, prompt_compiler
+
     resident_ids = await load_resident_fact_ids(MemoryScope(session_id, wl, mode))
     for fact in facts:
         fact["resident"] = str(fact["fact_id"]) in resident_ids
     return {
         "facts": facts,
+        "resident_count": len(resident_ids),
+        "resident_limit": RESIDENT_MAX_FACTS,
+        "resident_token_limit": prompt_compiler.BUDGETS["core"],
         "scope": {
             "session_id": session_id,
             "worldline": wl,
@@ -355,6 +366,17 @@ def _require_session_id(session_id: str | None) -> str:
 
 def _body_error(code: str, message: str) -> HTTPException:
     return HTTPException(status_code=422, detail={"code": code, "message": message})
+
+
+def _parse_created_time(name: str, raw: str | None):
+    from app.services.memory_v11.projection import ProjectionError, _parse_rfc3339
+
+    if raw is None:
+        return None
+    try:
+        return _parse_rfc3339(raw, name)
+    except ProjectionError as exc:
+        raise _body_error(exc.code, str(exc)) from exc
 
 
 def _parse_pagination_param(
@@ -765,6 +787,8 @@ async def list_memory_experiences(
     identity_mode: str | None = Query(None),
     query: str | None = Query(None),
     pinned_only: bool = Query(False),
+    created_from: str | None = Query(None),
+    created_to: str | None = Query(None),
     limit: str | None = Query(None),
     offset: str | None = Query(None),
 ):
@@ -777,6 +801,8 @@ async def list_memory_experiences(
     from app.services.memory_v11.experiences import list_experiences
 
     wl, mode = _validate_memory_scope(worldline, identity_mode)
+    created_from = _parse_created_time("created_from", created_from)
+    created_to = _parse_created_time("created_to", created_to)
     sid = _require_session_id(session_id)
     lim = _parse_pagination_param("limit", limit, 20, 1, 100)
     off = _parse_pagination_param("offset", offset, 0, 0, None)
@@ -787,6 +813,8 @@ async def list_memory_experiences(
             identity_mode=mode,
             query=query,
             pinned_only=pinned_only,
+            created_from=created_from,
+            created_to=created_to,
             limit=lim,
             offset=off,
         )

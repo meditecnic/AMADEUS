@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+from app.services.memory_v11.browse import apply_created_time_filters
 from app.db import get_db, normalize_identity_mode, normalize_worldline
 from app.services.memory_v11.contracts import (
     CHANGE_KINDS,
@@ -361,6 +362,8 @@ async def list_active_stable_facts_page(
     query: str | None = None,
     topic_id: str | None = None,
     pinned_only: bool = False,
+    created_from: datetime | None = None,
+    created_to: datetime | None = None,
     limit: int,
     offset: int,
 ) -> dict[str, Any]:
@@ -397,10 +400,14 @@ async def list_active_stable_facts_page(
         )
         clauses.append("v.display_text LIKE ? ESCAPE '\\'")
         params.append(f"%{escaped}%")
-    where = " AND ".join(clauses)
 
     db = await get_db(wl, "memory")
     try:
+        await apply_created_time_filters(
+            db, clauses, params, column="f.created_at",
+            created_from=created_from, created_to=created_to,
+        )
+        where = " AND ".join(clauses)
         cur = await db.execute(
             f"""SELECT COUNT(*) AS n
                   FROM stable_facts f
@@ -414,7 +421,7 @@ async def list_active_stable_facts_page(
         total = int((await cur.fetchone())["n"])
         cur = await db.execute(
             f"""SELECT f.fact_id, f.active_version, f.is_pinned, f.topic_id,
-                      f.updated_at,
+                      f.created_at, f.updated_at,
                       v.display_text, v.version_no, v.confidence,
                       v.semantic_fingerprint
                  FROM stable_facts f
@@ -440,6 +447,7 @@ async def list_active_stable_facts_page(
                 # browse row carries the fact's own updated_at; ordering and
                 # admission are unchanged.
                 "updated_at": row["updated_at"],
+                "created_at": row["created_at"],
                 "confidence": row["confidence"],
                 "semantic_fingerprint": row["semantic_fingerprint"],
             }
