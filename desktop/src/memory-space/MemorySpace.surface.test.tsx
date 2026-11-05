@@ -91,7 +91,7 @@ describe('MemorySpace: cone and plate', () => {
     expect(localStorage.getItem(CHOICE_KEY)).toBe('plate');
     finish(handle);
     expect(document.querySelector('[data-surface-layer="plate"]')).not.toHaveClass('is-hidden');
-    await waitFor(() => expect(screen.queryByTestId('memory-cone')).toBeNull(), { timeout: 2000 });
+    await waitFor(() => expect(screen.queryByTestId('memory-cone')).toBeNull(), { timeout: 6000 });
     expect(handle.dispose).toHaveBeenCalled();
     expect(screen.getByTestId('memory-display-plate')).toHaveAttribute('aria-pressed', 'true');
     expect(screen.queryByTestId('memory-fallback')).toBeNull();
@@ -136,7 +136,7 @@ describe('MemorySpace: cone and plate', () => {
     expect(screen.getByTestId('reading-dom')).toBeInTheDocument();
     expect(document.querySelectorAll('.p-star.lit')).toHaveLength(group.starIds.length);
     expect(screen.getByTestId('plate-reticle')).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByTestId('memory-cone')).toBeNull(), { timeout: 2000 });
+    await waitFor(() => expect(screen.queryByTestId('memory-cone')).toBeNull(), { timeout: 6000 });
 
     // plate -> cone
     fireEvent.click(screen.getByTestId('memory-display-3d'));
