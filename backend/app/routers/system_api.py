@@ -236,11 +236,16 @@ async def memory_facts_ledger(
     from app.services.memory_v11.recall import MemoryScope
     from app.services.memory_v11.resident import load_resident_fact_ids
 
+    from app.services.prompt_compiler import RESIDENT_MAX_FACTS, prompt_compiler
+
     resident_ids = await load_resident_fact_ids(MemoryScope(session_id, wl, mode))
     for fact in facts:
         fact["resident"] = str(fact["fact_id"]) in resident_ids
     return {
         "facts": facts,
+        "resident_count": len(resident_ids),
+        "resident_limit": RESIDENT_MAX_FACTS,
+        "resident_token_limit": prompt_compiler.BUDGETS["core"],
         "scope": {
             "session_id": session_id,
             "worldline": wl,

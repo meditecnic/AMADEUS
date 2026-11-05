@@ -325,3 +325,25 @@ def test_chart_opens_each_store_readonly_in_one_transaction(client, monkeypatch)
         assert "mode=ro" in path and kwargs["uri"] is True
         assert statements.count("BEGIN") == statements.count("COMMIT") == 1
         assert all(sql.lstrip().split()[0].upper() in {"SELECT", "PRAGMA", "BEGIN", "COMMIT"} for sql in statements)
+
+
+def test_facts_created_and_resident_match_chart(client):
+    with _memory() as db:
+        for index in range(40):
+            _fact(db, f"f-{index:02}", created=FIRST if index % 2 else LATER,
+                  versions=2, pinned=index == 39, text=f"F{index}")
+        _fact(db, "other-scope", mode="okabe")
+    chart = {f["id"]: f for f in _chart(client)["facts"]}
+    body = client.get("/api/memory/facts", params=SCOPE | {"limit": 100}).json()
+    assert len(body["facts"]) == len(chart) == 40
+    for fact in body["facts"]:
+        expected = chart[fact["fact_id"]]
+        assert fact["created_at"] == expected["created_at"]
+        assert fact["resident"] is expected["resident"]
+    assert body["resident_count"] == sum(f["resident"] for f in chart.values()) == 32
+    assert body["resident_limit"] == 32
+    assert body["resident_token_limit"] == 1200
+    filtered = client.get("/api/memory/facts", params=SCOPE | {"query": "F32", "limit": 1}).json()
+    assert filtered["resident_count"] == 32
+    empty = client.get("/api/memory/facts", params=SCOPE | {"session_id": "empty"}).json()
+    assert empty["resident_count"] == 0
