@@ -20,6 +20,7 @@ class NoDataDirectoryTests(unittest.TestCase):
             self.assertEqual([call.args[0][1:] for call in run.call_args_list], [[], ["--self-check"]])
             for call in run.call_args_list:
                 self.assertNotIn("AMADEUS_DATA_DIR", call.kwargs["env"])
+                self.assertTrue(call.kwargs["env"].get("AMADEUS_LOCAL_API_TOKEN"))
 
     def test_rejects_wrong_exit_message_or_filesystem_writes(self):
         for code, stderr, write in ((0, "AMADEUS_DATA_DIR required", False), (1, "other error", False),

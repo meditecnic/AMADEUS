@@ -15,6 +15,9 @@ def check(exe: Path, work: Path) -> None:
             "HOME": "user", "USERPROFILE": "user", "APPDATA": "roaming", "LOCALAPPDATA": "local",
             "TEMP": "tmp", "TMP": "tmp",
         }.items()})
+        # The packaged entry checks the startup token before the data directory; give it one so
+        # the data-directory gate is the check that refuses to start.
+        env["AMADEUS_LOCAL_API_TOKEN"] = "no-data-dir-check-only"
         before = set(root.rglob("*"))
         result = subprocess.run([str(exe.resolve()), *arguments], cwd=root, env=env,
                                 input="", capture_output=True, text=True, encoding="utf-8", timeout=30)
