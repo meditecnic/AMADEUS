@@ -15,7 +15,7 @@ import zipfile
 
 from build_backend import embedding_model_card
 from bundle_support import digest, write_json
-from source_materials import notices
+from source_materials import application_version, notices
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
@@ -228,7 +228,7 @@ def frontend_notices(bundle: Bundle, node_modules: Path, pins: list[dict]) -> No
                [bundle.main_exe], [bundle.copy(Path(font["local_path"]), "fonts/ShareTechMono-OFL.txt")])
 
 
-def native_notices(bundle: Bundle, config: dict, pins: list[dict], python: dict) -> None:
+def native_notices(bundle: Bundle, config: dict, pins: list[dict], python: dict, version: str) -> None:
     audit = json.loads((Path(config["work"]) / "vc-runtime-audit.json").read_text(encoding="utf-8"))
     redist = audit["redist"]
     text = json.dumps({"redist": redist, "distributed_files": audit["runtimes"],
@@ -256,16 +256,16 @@ def native_notices(bundle: Bundle, config: dict, pins: list[dict], python: dict)
     note = bundle.text("copyleft/SPEECH-SOURCE.json", json.dumps({
         "binary_files_containing_espeak_ng": binaries,
         "sherpa_source": "https://github.com/k2-fsa/sherpa-onnx/tree/v1.13.8", "dependencies": source_rows,
-        "source_package": "amadeus-0.1.0-speech-sources.zip",
-        "download_command": "py -3.11 packaging/windows/source_materials.py --work-dir <artifact-directory>",
+        "source_package": f"amadeus-{version}-speech-sources.zip",
+        "download_command": f"py -3.11 packaging/windows/source_materials.py --work-dir <artifact-directory> --version {version}",
     }, indent=2))
     description = "# Speech component source\n\neSpeak NG revision: `" + speech["version"] + "`.\n\nContained in:\n"
     description += "".join(f"- `{path}`\n" for path in binaries)
     description += "\nSherpa source: https://github.com/k2-fsa/sherpa-onnx/tree/v1.13.8\n\nBuild dependency archives:\n"
     for source in source_rows:
         description += f"\n- {source['url']}\n  SHA-256: `{source['sha256']}`\n  Declared by: {source['cmake_url']}\n"
-    description += ("\nDownload and verify these sources with `packaging/windows/source_materials.py --work-dir <artifact-directory>`. "
-                    "Publish the resulting `amadeus-0.1.0-speech-sources.zip` alongside this application version.\n")
+    description += (f"\nDownload and verify these sources with `packaging/windows/source_materials.py --work-dir <artifact-directory> --version {version}`. "
+                    f"Publish the resulting `amadeus-{version}-speech-sources.zip` alongside this application version.\n")
     source_note = bundle.text("copyleft/SPEECH-SOURCE.md", description)
     bundle.add("copyleft", "eSpeak NG", speech["version"], {key: speech[key] for key in ("url", "ref")}, "GPL-3.0", binaries,
                [bundle.copy(Path(speech["local_path"]), "copyleft/eSpeak-NG-COPYING"), note, source_note])
@@ -294,7 +294,8 @@ def native_notices(bundle: Bundle, config: dict, pins: list[dict], python: dict)
             bundle.add("copyleft", row["name"], row["version"], source, row["license"], row["installed_paths"], row["license_files"])
 
 
-def generate(config: dict, backend: Path, work: Path, output: Path, cargo: Path, node_modules: Path, main_exe: str) -> dict:
+def generate(config: dict, backend: Path, work: Path, output: Path, cargo: Path, node_modules: Path, main_exe: str,
+             version: str | None = None) -> dict:
     if output.exists():
         raise RuntimeError(f"License output already exists: {output}")
     bundle = Bundle(output, backend, main_exe)
@@ -305,7 +306,7 @@ def generate(config: dict, backend: Path, work: Path, output: Path, cargo: Path,
     cpython_notices(bundle, config, pins)
     rust_notices(bundle, cargo, pins)
     frontend_notices(bundle, node_modules, pins)
-    native_notices(bundle, config, pins, python)
+    native_notices(bundle, config, pins, python, version or application_version())
     model = json.loads((backend / "THIRD_PARTY_LICENSES/embedding-model.json").read_text(encoding="utf-8"))
     card = embedding_model_card(backend / "_internal/hf_cache")
     bundle.add("model", model["id"], model["revision"], model["source"], "CC-BY-NC-4.0", ["backend/_internal/hf_cache"],
@@ -366,6 +367,7 @@ if __name__ == "__main__":
     parser.add_argument("--cargo-metadata", type=Path)
     parser.add_argument("--node-modules", type=Path)
     parser.add_argument("--main-exe", default="desktop.exe")
+    parser.add_argument("--version", default=application_version())
     args = parser.parse_args()
     if args.verify:
         verify(args.verify.resolve())
@@ -375,5 +377,5 @@ if __name__ == "__main__":
                 parser.error(f"--{name.replace('_', '-')} is required when generating")
         config = json.loads(args.build_config.read_text(encoding="utf-8"))
         result = generate(config, args.backend.resolve(), args.work_dir.resolve(), args.output.resolve(),
-                          args.cargo_metadata.resolve(), args.node_modules.resolve(), args.main_exe)
+                          args.cargo_metadata.resolve(), args.node_modules.resolve(), args.main_exe, args.version)
         verify(args.output.resolve().parent, args.output.resolve())

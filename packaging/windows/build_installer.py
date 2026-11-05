@@ -142,7 +142,7 @@ def main() -> int:
     execute("licenses", [str(python), str(HERE / "license_bundle.py"), "--build-config", str(build_work / "build-config.json"),
                          "--backend", str(backend), "--work-dir", str(work / "materials"), "--output", str(licenses),
                          "--cargo-metadata", str(cargo_metadata), "--node-modules", str(work / "license-npm/node_modules"),
-                         "--main-exe", main_exe])
+                         "--main-exe", main_exe, "--version", selected["version"]])
     execute("source-materials", [str(python), str(HERE / "source_materials.py"), "--work-dir", str(work / "materials"),
                                  "--version", selected["version"]])
     execute("npm-ci", [npm, "ci", "--no-audit", "--no-fund"], REPO / "desktop")

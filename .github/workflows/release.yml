@@ -68,6 +68,10 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ github.event_name != 'pull_request' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         run: python packaging/windows/build_installer.py --work-dir $env:BUILD_WORK --embedding-source "$env:RUNNER_TEMP/jina-snapshot" --vc-redist $env:VC_REDIST
+      - name: Frozen service and self-check refuse missing data directory
+        run: |
+          $result = Get-Content "$env:BUILD_WORK/installer-result.json" -Raw | ConvertFrom-Json
+          python packaging/windows/check_no_data_dir.py --exe "$($result.backend)/amadeus-backend.exe" --work-dir "$env:RUNNER_TEMP/release-no-data-dir"
       - name: Frozen backend self-check and smoke
         run: |
           $result = Get-Content "$env:BUILD_WORK/installer-result.json" -Raw | ConvertFrom-Json
@@ -85,6 +89,29 @@ jobs:
           name: amadeus-windows-x64-${{ steps.version.outputs.version }}
           path: ${{ env.RELEASE_DIR }}/*
           if-no-files-found: error
+      - name: Summarize DLL exclusion and license download retries
+        if: always()
+        run: |
+          if (-not $env:BUILD_WORK -or -not (Test-Path $env:BUILD_WORK)) {
+            'Build has not run; license download retry status is unavailable.' >> $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
+          $retries = @(Get-ChildItem $env:BUILD_WORK -Recurse -Filter *.log -ErrorAction SilentlyContinue | Select-String 'DOWNLOAD_RETRY')
+          "License/source DOWNLOAD_RETRY lines: $($retries.Count) (see build logs)." >> $env:GITHUB_STEP_SUMMARY
+          $auditPath = "$env:BUILD_WORK/backend-build/onnxruntime-imports.json"
+          if (Test-Path $auditPath) {
+            $audit = Get-Content $auditPath -Raw | ConvertFrom-Json
+            "ORT pruning: $($audit.before.bytes) -> $($audit.after.bytes) bytes; $(@($audit.removed).Count) files removed." >> $env:GITHUB_STEP_SUMMARY
+          }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: windows-packaging-evidence
+          path: |
+            ${{ runner.temp }}/amadeus-build/installer-result.json
+            ${{ runner.temp }}/amadeus-build/backend-build/*.json
+            ${{ runner.temp }}/amadeus-build/runs/**/logs/*.log
+          if-no-files-found: ignore
       - name: Create draft Release for tag pushes
         if: github.event_name == 'push' && github.ref_type == 'tag'
         env:

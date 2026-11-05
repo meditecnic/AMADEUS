@@ -104,6 +104,10 @@ Python 源码也不在运行时加载它们；`_info.py` 仅为命令行输出�
 `_sherpa_onnx.pyd` 中的 eSpeak NG 仍分发 GPLv3 原文及源码说明。
 每次构建重新核对普通/延迟导入及 Python 加载调用，记录排除前后的文件数、总字节
 和源码哈希到 `sherpa-imports.json`；存在外部引用或加载调用时保留两个 DLL。
+同样核对并排除未被引用的 `onnxruntime/capi/onnxruntime.dll`，证据写入
+`onnxruntime-imports.json` 和库存。锁定 Windows wheel 的三个 Python 文件中已有的
+MSVC、NVIDIA 和 Linux 扩展加载调用按逐文件 SHA-256 复核；源码变化、新增加载调用
+或出现该 DLL 的名称引用时保留，不靠版本号猜测。
 dist-info 下的许可树及 ONNX Runtime 包内的 `LICENSE`、`ThirdPartyNotices.txt`
 存入经过字节校验的 ZIP，避免深路径。tokenizers 沿用固定版本的上游许可补充。
 
@@ -223,7 +227,7 @@ tauri-build 的 features，并重新序列化 Cargo.toml；CRLF 可能变为 LF�
 这一步；构建结束打印 `CARGO_MANIFEST_NOTE`，记录字节变化及规范化后内容是否相同。
 脚本不恢复清单、不运行 git checkout；内容若发生实质变化则报错。
 
-`p3-test.conf.json` 使用 `com.amadeus.desktop.p3test`、`Amadeus P3 Test` 和 `0.1.0`，
+`p3-test.conf.json` 使用 `com.amadeus.desktop.p3test`、`Amadeus P3 Test`，版本跟随正式配置，
 仅通过 `tauri build --config` 覆盖测试标识，不改正式配置。测试数据默认位于
 `%LOCALAPPDATA%/com.amadeus.desktop.p3test/data/`。不传 `--config` 时使用正式标识；
 安装验收应始终传测试配置。安装模式为 `currentUser`，WebView2 保持在线
@@ -258,7 +262,7 @@ Sherpa v1.13.8 归档固定 SHA-256 为
 可独立运行以下命令生成源码包；发布者将它与对应版本的安装包一起发布：
 
 ```powershell
-py -3.11 packaging/windows/source_materials.py --work-dir 'X:/build-artifacts/installer/materials' --version 0.1.0
+py -3.11 packaging/windows/source_materials.py --work-dir 'X:/build-artifacts/installer/materials'
 ```
 
 统一许可目录和源码包均为生成物，不提交。源码目录默认资源占位为
