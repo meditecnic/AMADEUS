@@ -310,6 +310,16 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
     return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [surface, reducedMotion]);
 
+  // The chart subtree is gone while the archive is open, and a switch under way dies with it (its callbacks never come).
+  // Settle on the surface that was asked for, so coming back shows it without the rest of the animation.
+  useEffect(() => {
+    if (mode === 'chart') return;
+    setPlateOpaque(true);
+    setConeFlat(false);
+    setPlateMounted(surface === 'plate');
+    setConeMounted(surface === '3d');
+  }, [mode, surface]);
+
   useEffect(() => {
     if (!rising || surface !== '3d') return;
     const cone = coneRef.current;

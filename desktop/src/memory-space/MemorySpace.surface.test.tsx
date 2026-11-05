@@ -148,6 +148,46 @@ describe('MemorySpace: cone and plate', () => {
     expect(view()).toMatchObject({ selection: { kind: 'star', id: star.id }, focusTopic: group.id });
   });
 
+  it('leaving for the archive in the middle of cone -> plate comes back to the plate, with no cone left over', async () => {
+    serve('memory');
+    mount();
+    await coneReady();
+    fireEvent.click(screen.getByTestId('memory-display-plate'));
+    expect(lastCone().handle.toPlate).toHaveBeenCalledTimes(1);
+    // the flattening is still under way: its callback is never called
+    fireEvent.click(screen.getByTestId('memory-tab-archive'));
+    await waitFor(() => expect(screen.queryByTestId('memory-cone')).toBeNull());
+    fireEvent.click(screen.getByTestId('memory-tab-chart'));
+    await waitFor(() => expect(document.querySelector('.memory-plate')).not.toBeNull());
+    expect(document.querySelector('[data-surface-layer="plate"]')).not.toHaveClass('is-hidden');
+    expect(screen.queryByTestId('memory-cone')).toBeNull();
+    expect(screen.getByTestId('memory-display-plate')).toHaveAttribute('aria-pressed', 'true');
+    expect(h.created).toHaveLength(1);
+  });
+
+  it('leaving for the archive in the middle of plate -> cone comes back to a cone that is not held flat', async () => {
+    localStorage.setItem(CHOICE_KEY, 'plate');
+    serve('memory');
+    mount();
+    await waitFor(() => expect(document.querySelector('.memory-plate')).not.toBeNull());
+    fireEvent.click(screen.getByTestId('memory-display-3d'));
+    await screen.findByTestId('memory-cone');
+    await waitFor(() => expect(lastCone().handle.fromPlate).toHaveBeenCalledTimes(1));
+    // the rise is still under way: its callback is never called
+    fireEvent.click(screen.getByTestId('memory-tab-archive'));
+    await waitFor(() => expect(screen.queryByTestId('memory-cone')).toBeNull());
+    const before = h.created.length;
+    fireEvent.click(screen.getByTestId('memory-tab-chart'));
+    await screen.findByTestId('memory-cone');
+    await waitFor(() => expect(h.created.length).toBe(before + 1));
+    const { handle } = lastCone();
+    await waitFor(() => expect(handle.setModel).toHaveBeenCalled());
+    expect(handle.holdPlate).not.toHaveBeenCalled();
+    expect(handle.fromPlate).not.toHaveBeenCalled();
+    expect(document.querySelector('.memory-plate')).toBeNull();
+    expect(screen.getByTestId('memory-display-3d')).toHaveAttribute('aria-pressed', 'true');
+  });
+
   it('reads SOUL from the tip on the cone and from the middle on the plate', async () => {
     serve('memory');
     mount();
