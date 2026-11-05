@@ -40,6 +40,8 @@ jobs:
           node-version: '22'
       - id: version
         name: Validate release inputs
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ github.event_name != 'pull_request' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
         run: python packaging/windows/release_artifacts.py check >> $env:GITHUB_OUTPUT
       - name: Prepare build tools
         run: |
@@ -62,6 +64,9 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           ruff check --config backend/ruff.toml packaging/windows
       - name: Build with existing installer builder
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ github.event_name != 'pull_request' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         run: python packaging/windows/build_installer.py --work-dir $env:BUILD_WORK --embedding-source "$env:RUNNER_TEMP/jina-snapshot" --vc-redist $env:VC_REDIST
       - name: Frozen backend self-check and smoke
         run: |
@@ -87,4 +92,4 @@ jobs:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
           $files = Get-ChildItem $env:RELEASE_DIR -File | ForEach-Object { $_.FullName }
-          gh release create $env:RELEASE_TAG @files --repo $env:GITHUB_REPOSITORY --verify-tag --draft --title "Amadeus $env:RELEASE_VERSION" --notes-file .github/release-template.md
+          gh release create $env:RELEASE_TAG @files --repo $env:GITHUB_REPOSITORY --verify-tag --draft --title "Amadeus $env:RELEASE_VERSION" --notes-file "$env:BUILD_WORK/release-notes.md"

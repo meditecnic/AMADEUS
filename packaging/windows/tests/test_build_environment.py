@@ -9,9 +9,19 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from bundle_support import sanitized_build_environment
+from build_installer import tauri_signing_environment
 
 
 class BuildEnvironmentTests(unittest.TestCase):
+    def test_only_tauri_receives_updater_signing_credentials(self):
+        parent = {"PATH": "synthetic-path", "TAURI_SIGNING_PRIVATE_KEY": "synthetic-private-key",
+                  "TAURI_SIGNING_PRIVATE_KEY_PASSWORD": "synthetic-password", "UNRELATED_API_KEY": "synthetic"}
+        with patch.dict(os.environ, parent, clear=True):
+            ordinary = sanitized_build_environment()
+            tauri = tauri_signing_environment(ordinary)
+        self.assertEqual(ordinary, {"PATH": "synthetic-path"})
+        self.assertEqual(tauri, {key: value for key, value in parent.items() if key != "UNRELATED_API_KEY"})
+
     def test_child_keeps_tools_and_proxy_but_receives_no_unapproved_configuration(self):
         needed = {"SYSTEMROOT", "WINDIR", "SYSTEMDRIVE", "COMSPEC", "PATH", "PATHEXT",
                   "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP"}

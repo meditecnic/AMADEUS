@@ -20,6 +20,12 @@ REPO = HERE.parents[1]
 TARGET = "x86_64-pc-windows-msvc"
 
 
+def tauri_signing_environment(environment: dict[str, str]) -> dict[str, str]:
+    return {**environment, **{name: os.environ[name] for name in (
+        "TAURI_SIGNING_PRIVATE_KEY", "TAURI_SIGNING_PRIVATE_KEY_PASSWORD",
+    ) if name in os.environ}}
+
+
 def select_installer(directory: Path, product_name: str, version: str) -> Path:
     installer = directory / f"{product_name}_{version}_x64-setup.exe"
     if not installer.is_file():
@@ -84,12 +90,13 @@ def main() -> int:
             env[key.upper()] = value
     env["CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER"] = toolchain["linker"]
     stages = []
-    def execute(name: str, command: list[str], cwd: Path = REPO, output: Path | None = None) -> None:
+    def execute(name: str, command: list[str], cwd: Path = REPO, output: Path | None = None,
+                environment: dict[str, str] | None = None) -> None:
         print("STAGE " + name + ": " + subprocess.list2cmdline(command), flush=True)
         tick = time.monotonic()
         log = logs / (name + ".log")
         with (output or log).open("w", encoding="utf-8") as stream:
-            result = subprocess.run(command, cwd=cwd, env=env, stdout=stream,
+            result = subprocess.run(command, cwd=cwd, env=env if environment is None else environment, stdout=stream,
                                     stderr=subprocess.PIPE if output else subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
         if output:
             log.write_text(result.stderr or "", encoding="utf-8")
@@ -143,14 +150,16 @@ def main() -> int:
     resources = {key: None for key in config["bundle"]["resources"]}
     resources.update({str(backend): "backend/", str(licenses): "licenses/"})
     # Avoid parsing a Windows drive as a URL: https://github.com/tauri-apps/tauri/issues/14005
-    merge = {**selected, "bundle": {"resources": resources},
+    signing = bool(os.environ.get("TAURI_SIGNING_PRIVATE_KEY"))
+    merge = {**selected, "bundle": {"resources": resources, "createUpdaterArtifacts": signing},
              "build": {"frontendDist": "\\\\?\\" + str(frontend.resolve()),
                        "beforeBuildCommand": subprocess.list2cmdline(["npm", "run", "build", "--", "--outDir", str(frontend)])}}
     merge_path = run / "tauri-build.conf.json"
     write_json(merge_path, merge)
     manifest_path = REPO / "desktop/src-tauri/Cargo.toml"
     manifest_before = manifest_path.read_bytes()
-    execute("tauri-build", [npm, "run", "tauri", "--", "build", "--target", TARGET, "--config", str(merge_path), "--verbose", "--", "--locked"], REPO / "desktop")
+    execute("tauri-build", [npm, "run", "tauri", "--", "build", "--target", TARGET, "--config", str(merge_path), "--verbose", "--", "--locked"],
+            REPO / "desktop", environment=tauri_signing_environment(env))
     manifest_after = manifest_path.read_bytes()
     manifest_observation = {"bytes_changed": manifest_before != manifest_after,
                             "normalized_content_equal": manifest_before.replace(b"\r\n", b"\n") == manifest_after.replace(b"\r\n", b"\n"),
@@ -173,6 +182,9 @@ def main() -> int:
     installer = select_installer(release / "bundle/nsis", selected["productName"], selected["version"])
     output = run / installer.name
     shutil.copyfile(installer, output)
+    signature = Path(str(output) + ".sig") if signing else None
+    if signature:
+        shutil.copyfile(Path(str(installer) + ".sig"), signature)
     shutil.copyfile(exe, run / main_exe)
     pdb = exe.with_suffix(".pdb")
     linker_records = sorted({value.decode("utf-8") for value in re.findall(
@@ -185,7 +197,8 @@ def main() -> int:
     for name, command in (("python", [str(args.python), "--version"]), ("node", ["node", "--version"]),
                           ("npm", [npm, "--version"]), ("cargo", ["cargo", "--version"]), ("rustc", ["rustc", "--version"])):
         tools[name] = subprocess.check_output(command, env=env, text=True, encoding="utf-8").strip()
-    result = {"run": str(run), "installer": str(output), "bytes": output.stat().st_size, "sha256": digest(output),
+    result = {"run": str(run), "installer": str(output), "updater_signature": str(signature) if signature else None,
+              "bytes": output.stat().st_size, "sha256": digest(output),
               "backend": str(backend), "licenses": str(licenses), "main_exe": main_exe, "config": selected,
               "toolchain": toolchain, "desktop_pe": details, "linker_evidence": linker_evidence, "stages": stages, "tools": tools,
               "elapsed_seconds": round(time.monotonic() - started, 3)}

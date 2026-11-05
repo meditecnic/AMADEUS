@@ -25,6 +25,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": [
       "nsis"
     ],
@@ -50,6 +51,12 @@
           "SimpChinese"
         ]
       }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": ["https://github.com/meditecnic/AMADEUS/releases/latest/download/latest.json"],
+      "pubkey": "REPLACE_WITH_TAURI_UPDATER_PUBLIC_KEY"
     }
   }
 }
