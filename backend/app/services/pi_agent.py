@@ -128,6 +128,9 @@ class PiSupervisor:
                     "AMADEUS_PI_API_KEY": api_key or "amadeus-local-no-key",
                     "TMPDIR": str(run_dir / "tmp"), "TEMP": str(run_dir / "tmp"),
                     "TMP": str(run_dir / "tmp"),
+                    "JITI_FS_CACHE": str(run_dir / "cache"),
+                    "NODE_COMPILE_CACHE": str(run_dir / "node-cache"),
+                    "XDG_CACHE_HOME": str(run_dir / "cache"),
                 })
                 args = [
                     config.PI_AGENT_EXECUTABLE, "--mode", "rpc", "--offline",
@@ -140,11 +143,16 @@ class PiSupervisor:
                 ]
                 try:
                     async with asyncio.timeout(timeout):
-                        self.process = await asyncio.create_subprocess_exec(
+                        startup = asyncio.create_task(asyncio.create_subprocess_exec(
                             *args, cwd=str(cwd), env=env, stdin=asyncio.subprocess.PIPE,
                             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                             limit=MAX_RECORD_BYTES, creationflags=0x08000000 if os.name == "nt" else 0,
-                        )
+                        ))
+                        try:
+                            self.process = await asyncio.shield(startup)
+                        except asyncio.CancelledError:
+                            self.process = await startup
+                            raise
                         self._stderr_task = asyncio.create_task(self._discard(self.process.stderr))
                         await self._send({"type": "get_state", "id": "startup"})
                         await self._response("startup")
@@ -156,32 +164,35 @@ class PiSupervisor:
                         if accepted.get("disposition") == "handled":
                             raise PiAgentError("pi did not start an agent task")
                         text = ""
+                        failed = False
                         while True:
                             event = self._events.popleft() if self._events else await self._read()
                             kind = event.get("type")
                             if kind == "tool_execution_start":
-                                path = str((event.get("args") or {}).get("path", "."))[:512]
+                                path = str((event.get("args") or {}).get("path", "."))
                                 if self._key:
                                     path = path.replace(self._key, "[redacted]")
-                                logger.info("pi tool=%s path=%s", event.get("toolName"), json.dumps(path))
+                                tool = str(event.get("toolName", ""))
+                                if self._key:
+                                    tool = tool.replace(self._key, "[redacted]")
+                                logger.info("pi tool=%s path=%s", json.dumps(tool[:64]), json.dumps(path[:512]))
                             elif kind == "message_end":
                                 message = event.get("message") or {}
                                 if message.get("role") == "assistant":
-                                    if message.get("stopReason") in {"error", "aborted"}:
-                                        raise PiAgentError("pi provider failed or the task was aborted")
+                                    failed = message.get("stopReason") in {"error", "aborted"}
                                     text = "".join(
                                         part.get("text", "") for part in message.get("content", [])
                                         if part.get("type") == "text"
                                     )
                             elif kind == "agent_settled":
-                                if event.get("aborted"):
-                                    raise PiAgentError("pi task was aborted")
+                                if event.get("aborted") or failed:
+                                    raise PiAgentError("pi provider failed or the task was aborted")
                                 break
                         await self._send({"type": "get_session_stats", "id": "stats"})
                         stats = await self._response("stats")
                         tokens = stats.get("tokens") or {}
-                        logger.info("pi elapsed_seconds=%.3f input_tokens=%d output_tokens=%d",
-                                    monotonic() - started, int(tokens.get("input", 0)), int(tokens.get("output", 0)))
+                        logger.info("pi input_tokens=%d output_tokens=%d",
+                                    int(tokens.get("input", 0)), int(tokens.get("output", 0)))
                         completed = True
                         if self._key:
                             text = text.replace(self._key, "[redacted]")
@@ -194,4 +205,5 @@ class PiSupervisor:
         except (OSError, ValueError, TypeError, KeyError, AssertionError):
             raise PiAgentError("pi could not complete the task") from None
         finally:
+            logger.info("pi elapsed_seconds=%.3f completed=%s", monotonic() - started, completed)
             self._key = ""
