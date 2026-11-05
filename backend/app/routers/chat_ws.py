@@ -1896,6 +1896,12 @@ async def processor_loop(
         else:
             tools_to_use = tool_plan.tools
             tool_choice_to_use = "auto"
+        if config.PI_AGENT_ENABLED:
+            from app.services.pi_delegation import offer_tools
+
+            tools_to_use = offer_tools(tools_to_use, turn_provider)
+            if tools_to_use:
+                tool_choice_to_use = "auto"
         if force_now and tool_plan.status != "unsupported":
             web_status = tool_status_payload("web_search")
             await send_queue.put((epoch, {
@@ -1934,6 +1940,8 @@ async def processor_loop(
                 call_names.append(str((tc.get("function") or {}).get("name") or "unknown_tool"))
             shown = []
             for name in call_names:
+                if config.PI_AGENT_ENABLED and name == "delegate_task":
+                    continue
                 if name in shown:
                     continue
                 shown.append(name)
@@ -1959,6 +1967,15 @@ async def processor_loop(
                 cancelled=bool(getattr(session, "erasure_pending", False)),
             )
             recall_result = outcome.recall_result
+            delegation_results = []
+            if config.PI_AGENT_ENABLED:
+                from app.services.pi_delegation import execute_delegations
+
+                delegation_results = await execute_delegations(
+                    calls, turn_provider, turn_api_key,
+                    cancelled=bool(getattr(session, "erasure_pending", False))
+                    or turn_record.mode_state.cancelled,
+                )
             extra_web = (
                 turn_record.web_results[1:]
                 if should_force_search(user_msg)
@@ -1987,6 +2004,8 @@ async def processor_loop(
                 )
             else:
                 tool_context = build_tool_result_context(active_history, [])
+            if delegation_results:
+                tool_context = build_tool_result_context(tool_context, delegation_results)
             
             async def _refresh_candidate_history(_attempt: int):
                 if recall_result is None:
@@ -2003,6 +2022,8 @@ async def processor_loop(
                     input_budget=turn_input_budget,
                 )
                 turn_record.sent_recall_result = refreshed_payload.result
+                if delegation_results:
+                    return build_tool_result_context(refreshed_payload.history, delegation_results)
                 return refreshed_payload.history
 
             final_text, final_emotion, _, emo_tag_found = await get_clean_text_stream(
