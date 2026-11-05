@@ -1,5 +1,5 @@
 import { act, cleanup, render, screen } from '@testing-library/react';
-import { createRef } from 'react';
+import { createRef, StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { plateGeometry } from '../chartCoordinates';
@@ -47,6 +47,20 @@ describe('MemoryCone', () => {
     expect(latest().handle.resize).toHaveBeenCalledWith(expect.objectContaining({ w: 1200, h: 800 }));
     expect(latest().handle.entrance).toHaveBeenCalledTimes(1);
     expect(latest().handle.setModel).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives the model to the renderer a replayed mount builds, not only to the first one (StrictMode)', () => {
+    render(<StrictMode><MemoryCone {...props({ entering: false })} /></StrictMode>);
+    expect(h.made.length).toBeGreaterThanOrEqual(2);
+    expect(h.made[0].handle.dispose).toHaveBeenCalled();
+    expect(latest().handle.setModel).toHaveBeenCalledWith(model, { w: 1440, h: 840, cx: g.cx, cy: g.cy, R: g.radius });
+    expect(latest().handle.setView).toHaveBeenCalled();
+  });
+
+  it('plays the entrance on the replayed renderer too', () => {
+    render(<StrictMode><MemoryCone {...props()} /></StrictMode>);
+    expect(latest().handle.setModel).toHaveBeenCalledTimes(1);
+    expect(latest().handle.entrance).toHaveBeenCalledTimes(1);
   });
 
   it('tells the page when the entrance is over', () => {

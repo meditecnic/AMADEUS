@@ -90,6 +90,9 @@ export const MemoryCone = forwardRef<ConeControls, MemoryConeProps>(function Mem
       if (import.meta.env.DEV) delete (window as unknown as { __amadeusCone?: ConeHandle }).__amadeusCone;
       created.handle.dispose();
       handleRef.current = null;
+      // The next renderer starts with no model; StrictMode replays this effect with the same refs.
+      modelRef.current = null;
+      entranceStarted.current = false;
     };
   }, []);
 
