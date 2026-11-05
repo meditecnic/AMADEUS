@@ -1,0 +1,46 @@
+/* The light cone (DIRECTION 15). Colours come from the sheet's --m-* roles, as the plate's do. */
+.memory-cone { position: absolute; inset: 0; }
+.memory-cone .c3-host { position: absolute; inset: 0; }
+.c3-wrap { position: absolute; inset: 0; cursor: grab; touch-action: none; user-select: none; }
+.c3-wrap.dragging { cursor: grabbing; }
+.c3-canvas { position: absolute; left: 0; top: 0; display: block; }
+.c3-labels { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.c3-labels text { fill: var(--m-ink3); paint-order: stroke; stroke: var(--m-paper); stroke-linejoin: round; stroke-width: 5px; }
+.c3-labels [role="button"], .c3-labels .c3-tmark { pointer-events: auto; cursor: pointer; outline: none; }
+.c3-today { font: 10px/1 var(--font-mono); letter-spacing: .14em; fill: rgba(var(--m-acc-rgb), .85) !important; }
+.c3-soul { font: 9px/1 var(--font-mono); letter-spacing: .3em; }
+.c3-soul:hover, .c3-soul.on, .c3-soul:focus-visible { fill: var(--m-her) !important; }
+.c3-mlab { font: 10px/1 var(--font-mono); letter-spacing: .12em; transition: opacity var(--m-d1) var(--m-ease); }
+.c3-mlab:hover, .c3-mlab:focus-visible { fill: var(--m-ink) !important; }
+.c3-mlab.on { fill: var(--m-acc) !important; }
+.c3-tlab .n { font: 13px/1 var(--m-f-disp); letter-spacing: .32em; fill: rgba(var(--m-ink-rgb), .72); stroke-width: 5px; transition: fill var(--m-d1) var(--m-ease); }
+.c3-tlab.pseudo .n { letter-spacing: .2em; fill: rgba(var(--m-ink-rgb), .5); }
+.c3-tlab .c { font: 10px/1 var(--font-mono); letter-spacing: .1em; }
+.c3-tlab:hover .n, .c3-tlab.on .n, .c3-tlab:focus-visible .n { fill: var(--m-ink); }
+.c3-tlab.on .n { fill: var(--m-acc); }
+.c3-tmark circle { fill: rgba(var(--m-ink-rgb), .6); stroke: none; }
+.c3-tmark circle.hit { fill: transparent; }
+.c3-tmark text { display: none; font: 11px/1 var(--m-f-disp); letter-spacing: .12em; fill: var(--m-ink); }
+.c3-tmark:hover text, .c3-tmark:focus-visible text { display: inline; }
+.c3-tmark:hover circle:not(.hit), .c3-tmark:focus-visible circle:not(.hit) { fill: var(--m-ink); }
+.c3-new { font: 10px/1 var(--font-mono); fill: var(--m-her) !important; letter-spacing: .06em; }
+.c3-tip { position: absolute; left: 0; top: 0; z-index: 4; min-width: 80px; max-width: 280px; padding: 6px 10px 7px; pointer-events: none;
+  border: 1px solid var(--m-line2); background: var(--m-paper); color: var(--m-ink); font: 13px/1.35 var(--m-f-body); }
+.c3-tip p { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.c3-tip .m { font: 10px/1.5 var(--font-mono); color: var(--m-ink3); letter-spacing: .06em; }
+.memory-space[data-reduced-motion="true"] .c3-labels text { transition: none; }
+
+/* Switching between the cone and the plate: the plate fades over the settled cone (0.24 s). */
+.m-layer { position: absolute; inset: 0; transition: opacity .24s var(--m-ease); }
+.m-layer.is-hidden { opacity: 0; pointer-events: none; }
+.memory-space[data-reduced-motion="true"] .m-layer { transition: none; }
+
+.m-display { display: inline-flex; margin-left: 14px; border: 1px solid var(--m-line2); }
+.m-display button { padding: 4px 11px 5px; font: 11px/1 var(--m-f-body); letter-spacing: .14em; color: var(--m-ink2); }
+.m-display button[aria-pressed="true"] { background: rgba(var(--m-ink-rgb), .12); color: var(--m-ink); }
+.m-display button + button { border-left: 1px solid var(--m-line2); }
+
+.m-fallback { position: absolute; left: 44px; top: 124px; z-index: 5; display: flex; align-items: center; gap: 14px; margin: 0; padding: 7px 12px 8px;
+  border: 1px solid var(--m-line2); background: var(--m-paper); color: var(--m-ink2); font: 12px/1.4 var(--m-f-body); }
+.m-fallback button { padding: 3px 9px 4px; border: 1px solid var(--m-acc); color: var(--m-acc); font: 11px/1 var(--m-f-body); letter-spacing: .1em; }
+.m-fallback button:hover { background: rgba(var(--m-acc-rgb), .12); }

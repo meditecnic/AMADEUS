@@ -160,6 +160,8 @@ export type MemoryReadingProps = {
   details: DetailsOutcome;
   width: number;
   height: number;
+  /** The cone reads SOUL from the tip up; the plate from the centre out. */
+  surface?: 'plate' | '3d';
   onSelect: (selection: ChartSelection) => void;
   onClose: () => void;
   onRetryDetails: () => void;
@@ -246,7 +248,9 @@ export function MemoryReading(props: MemoryReadingProps) {
       <>
         <p className="r-kick" data-testid="reading-kick">SOUL</p>
         <p className="r-title soul">SOUL</p>
-        <p className="r-note">SOUL 是她的连续性，不是一条记忆。从中心往外，是你们第一次对话以来的每一个月。</p>
+        <p className="r-note" data-testid="soul-note">{props.surface === '3d'
+          ? 'SOUL 是她的连续性，不是一条记忆。从锥尖往上，是你们第一次对话以来的每一个月。'
+          : 'SOUL 是她的连续性，不是一条记忆。从中心往外，是你们第一次对话以来的每一个月。'}</p>
         <dl className="r-facts" data-testid="soul-facts">
           <dt>起点</dt><dd>{model.origin !== null ? `${ymd(model.origin)}　第一次对话` : '--'}</dd>
           <dt>认知</dt><dd>{chart.counts.facts}</dd>

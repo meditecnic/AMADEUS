@@ -6,12 +6,18 @@ import { createArchiveModule, type ArchiveModule } from './archiveState';
 import { buildChartModel, plateGeometry, platePoint } from './chartCoordinates';
 import { hm, recordNo, ymd } from './chartFormat';
 import { memorySpaceShortcut } from './chrome';
+import { MemoryCone, type ConeControls } from './cone/MemoryCone';
+import { clearSlow, machineKey, readChoice, readSlowUntil, writeChoice, writeSlow } from './displayPrefs';
 import { chartScopeKey, createChartController, type ChartError, type ChartScope } from './fetchChart';
 import { MemoryPlate, type ChartSelection } from './MemoryPlate';
 import { MemoryReading } from './MemoryReading';
 import { nextMemoryUnwind, type MemoryUnwindKind } from './memoryUnwind';
 import { createDetailsController, type DetailsCache, type DetailsOutcome, type DetailsRequest } from './readingDetails';
+import {
+  applyContextLoss, applyCreateFailure, applyRetry3d, applySlow, applyUserChoice, decideSurface, type CapabilityState, type Surface,
+} from './renderCapability';
 import type { IdentityMode, MemoryChart, Worldline } from './types';
+import { probeWebGL } from './webglProbe';
 
 /** Opens the space on a chat mark: select the first of `select` that is on the plate, draw `mark` with the
  *  dashed "this turn" reticle, and (when `hintAt` is set) show the "referenced n · HH:MM" hint. Applies to the chat's own scope only. */
@@ -97,6 +103,24 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
   const [focusTopic, setFocusTopic] = useState<string | null>(null);
   const [framedTopic, setFramedTopic] = useState<string | null>(null);
   const [entering, setEntering] = useState(true);
+  // 3D cone or SVG plate (DIRECTION 16.1): decided once per visit, then only the user, a lost context or the frame timer change it.
+  const [capability, setCapability] = useState<CapabilityState>(() => {
+    const probe = probeWebGL();
+    const now = Date.now();
+    return decideSurface({ choice: readChoice(), probe, reducedMotion, slowUntil: readSlowUntil(machineKey(probe.renderer), now), now });
+  });
+  const capabilityRef = useRef(capability);
+  capabilityRef.current = capability;
+  const surface: Surface = capability.surface;
+  const [coneMounted, setConeMounted] = useState(surface === '3d');
+  const [plateMounted, setPlateMounted] = useState(surface === 'plate');
+  // The plate is fully opaque unless the cone is rising out from under it.
+  const [plateOpaque, setPlateOpaque] = useState(true);
+  const [coneFlat, setConeFlat] = useState(false);
+  const [rising, setRising] = useState(0);
+  const [coneKey, setConeKey] = useState(0);
+  const coneRef = useRef<ConeControls | null>(null);
+  const prevSurface = useRef<Surface>(surface);
   const [details, setDetails] = useState<DetailsOutcome>({ type: 'idle' });
   const [scopeMenu, setScopeMenu] = useState(false);
   const [searchTick, setSearchTick] = useState(0);
@@ -259,6 +283,80 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
     return () => window.cancelAnimationFrame(frame);
   }, [searchTick]);
 
+  // Switching surfaces moves only the picture: selection, focus, the open group and the reading stay as they are.
+  useEffect(() => {
+    const before = prevSurface.current;
+    prevSurface.current = surface;
+    if (before === surface) return undefined;
+    const timers: number[] = [];
+    if (surface === 'plate') {
+      // Cone up and over, flattened onto the disc (0.82 s), then the plate fades in over it (0.24 s).
+      setPlateMounted(true);
+      const finish = () => {
+        setPlateOpaque(true);
+        timers.push(window.setTimeout(() => setConeMounted(false), reducedMotion ? 0 : 260));
+      };
+      if (reducedMotion || !coneRef.current) { finish(); setConeMounted(false); }
+      else {
+        setPlateOpaque(false);
+        coneRef.current.toPlate(finish);
+      }
+    } else {
+      // The reverse (1.1 s): the cone is made flat under the plate, the plate fades out and the cone rises.
+      setConeFlat(true);
+      setConeMounted(true);
+      setRising((n) => n + 1);
+    }
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [surface, reducedMotion]);
+
+  // The chart subtree is gone while the archive is open, and a switch under way dies with it (its callbacks never come).
+  // Settle on the surface that was asked for, so coming back shows it without the rest of the animation.
+  useEffect(() => {
+    if (mode === 'chart') return;
+    setPlateOpaque(true);
+    setConeFlat(false);
+    setPlateMounted(surface === 'plate');
+    setConeMounted(surface === '3d');
+  }, [mode, surface]);
+
+  useEffect(() => {
+    if (!rising || surface !== '3d') return;
+    const cone = coneRef.current;
+    if (!cone) return;
+    setPlateOpaque(false);
+    cone.fromPlate(() => {
+      setConeFlat(false);
+      setPlateOpaque(true);
+      // A cone that failed to build falls back to the plate while this runs; the plate must stay then.
+      if (capabilityRef.current.surface === '3d') setPlateMounted(false);
+    });
+    // One rise per switch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rising]);
+
+  const choose = (next: Surface) => {
+    writeChoice(next);
+    if (next === '3d') clearSlow(machineKey(probeWebGL().renderer));
+    setCapability(applyUserChoice(next));
+  };
+  const onConeUnavailable = useCallback(() => setCapability((current) => applyCreateFailure(current)), []);
+  const onConeLost = useCallback(() => {
+    const next = applyContextLoss(capabilityRef.current);
+    setCapability(next);
+    if (next.surface === '3d') setConeKey((key) => key + 1);
+  }, []);
+  const onConeSlow = useCallback(() => {
+    writeSlow(machineKey(probeWebGL().renderer), Date.now());
+    setCapability((current) => applySlow(current));
+  }, []);
+  const noticeAction = () => {
+    const kind = capability.notice?.kind;
+    // A cone that never got its context may still be on screen for a moment; the key gives the retry a fresh one.
+    if (kind === 'create-fail' || kind === 'context-loss') { setCapability(applyRetry3d()); setConeKey((key) => key + 1); return; }
+    choose('3d');
+  };
+
   const overview = () => { setSelection(null); setFocusTopic(null); setFramedTopic(null); };
   const select = (next: ChartSelection) => {
     setScopeMenu(false);
@@ -363,9 +461,11 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
         : model.stars.length <= 6 && !model.topics.some((t) => t.starIds.length) ? 'new' : 'normal';
   const g = plateGeometry(size.width, size.height);
   const ringY = (theta: number) => (model ? platePoint(theta, 0, g.radius, model.thetaFit).y : 0);
-  const message = status === 'loading' ? { text: '正在读取记忆…', top: g.cy + 52 }
-    : status === 'empty' && model ? { text: '这里还没有长期记忆；可以返回对话，或稍后再来查看。', top: g.cy + ringY(model.thetaToday) + 26 }
-      : status === 'new' && model ? { text: `已经记下 ${model.stars.length} 件事。记得多了以后，会连成主题。`, top: g.cy + ringY(model.thetaToday) + 30 }
+  // On the cone the disc is drawn in perspective, so these notes sit low in the sheet instead of under a plate ring.
+  const lowNote = size.height - 150;
+  const message = status === 'loading' ? { text: '正在读取记忆…', top: surface === '3d' ? lowNote : g.cy + 52 }
+    : status === 'empty' && model ? { text: '这里还没有长期记忆；可以返回对话，或稍后再来查看。', top: surface === '3d' ? lowNote : g.cy + ringY(model.thetaToday) + 26 }
+      : status === 'new' && model ? { text: `已经记下 ${model.stars.length} 件事。记得多了以后，会连成主题。`, top: surface === '3d' ? lowNote : g.cy + ringY(model.thetaToday) + 30 }
         : null;
   const shownRecords = chart ? chart.facts.length + chart.experiences.length : 0;
   const totalRecords = chart ? chart.counts.facts + chart.counts.experiences : 0;
@@ -415,6 +515,12 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
           <button type="button" role="tab" aria-selected={mode === 'chart'} data-testid="memory-tab-chart" onClick={showChart}>星图 <small>CHART</small></button>
           <button type="button" role="tab" aria-selected={mode === 'archive'} data-testid="memory-tab-archive" onClick={() => { setScopeMenu(false); setMode('archive'); }}>档案 <small>INDEX</small></button>
         </div>
+        {mode === 'chart' ? (
+          <div className="m-display" role="group" aria-label="星图的显示方式" data-testid="memory-display">
+            <button type="button" aria-pressed={surface === '3d'} data-testid="memory-display-3d" onClick={() => choose('3d')}>立体</button>
+            <button type="button" aria-pressed={surface === 'plate'} data-testid="memory-display-plate" onClick={() => choose('plate')}>图版</button>
+          </div>
+        ) : null}
         {crumbs.length ? (
           <div className="m-crumbs" data-testid="memory-crumbs">
             <button type="button" onClick={overview}>总览</button>
@@ -468,23 +574,59 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
           ) : null}
 
           <div className="m-chart" data-testid="memory-graph">
-            <MemoryPlate
-              model={model}
-              soul={status === 'loading' ? 'loading' : status === 'unavailable' || status === 'error' ? 'muted' : 'ready'}
-              width={size.width}
-              height={size.height}
-              selection={selection}
-              focusTopic={focusTopic}
-              framedTopic={framedTopic}
-              reducedMotion={reducedMotion}
-              entering={entering}
-              worldline={worldline}
-              footnote={footnote}
-              marks={markedOnPlate}
-              onEntered={() => setEntering(false)}
-              onSelect={select}
-              onOverview={overview}
-            />
+            {coneMounted ? (
+              <MemoryCone
+                key={coneKey}
+                ref={coneRef}
+                model={model}
+                width={size.width}
+                height={size.height}
+                selection={selection}
+                focusTopic={focusTopic}
+                reducedMotion={reducedMotion}
+                entering={entering}
+                startFlat={coneFlat}
+                timed={capability.reason === 'healthy'}
+                worldline={worldline}
+                footnote={footnote}
+                marks={markedOnPlate}
+                onEntered={() => setEntering(false)}
+                onSelect={select}
+                onOverview={overview}
+                onUnavailable={onConeUnavailable}
+                onContextLost={onConeLost}
+                onSlow={onConeSlow}
+              />
+            ) : null}
+            {plateMounted ? (
+              <div className={`m-layer${plateOpaque ? '' : ' is-hidden'}`} data-surface-layer="plate">
+                <MemoryPlate
+                  model={model}
+                  soul={status === 'loading' ? 'loading' : status === 'unavailable' || status === 'error' ? 'muted' : 'ready'}
+                  width={size.width}
+                  height={size.height}
+                  selection={selection}
+                  focusTopic={focusTopic}
+                  framedTopic={framedTopic}
+                  reducedMotion={reducedMotion}
+                  entering={entering}
+                  worldline={worldline}
+                  footnote={footnote}
+                  marks={markedOnPlate}
+                  onEntered={() => setEntering(false)}
+                  onSelect={select}
+                  onOverview={overview}
+                />
+              </div>
+            ) : null}
+            {capability.notice ? (
+              <p className="m-fallback" role="status" data-testid="memory-fallback" data-reason={capability.notice.kind}>
+                <span>{capability.notice.text}</span>
+                {capability.notice.action ? (
+                  <button type="button" data-testid="memory-fallback-action" onClick={noticeAction}>{capability.notice.action}</button>
+                ) : null}
+              </p>
+            ) : null}
             {showHint && hintAt !== null ? (
               <p className="m-ref-hint" data-testid="memory-ref-hint">
                 <span>{markedOnPlate.length ? `这一轮参照了 ${markedOnPlate.length} 条 · ${hm(hintAt)}` : '这一轮参照的记忆已不在星图上'}</span>
@@ -518,6 +660,7 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
                 details={shownDetails}
                 width={size.width}
                 height={size.height}
+                surface={surface}
                 onSelect={select}
                 onClose={() => unwind(false)}
                 onRetryDetails={retryDetails}
