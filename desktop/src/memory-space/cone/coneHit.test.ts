@@ -76,7 +76,7 @@ describe('which records can be hit', () => {
 });
 
 describe('picking', () => {
-  const segs = [{ key: 'a|2026-01', group: 'a', ax: 100, ay: 100, bx: 200, by: 100 }];
+  const segs = [{ key: 'a|2026-01', group: 'a', ax: 100, ay: 100, bx: 200, by: 100, ex0: 90, ey0: 100, ex1: 210, ey1: 100 }];
   it('takes the nearest star within reach, before a ribbon', () => {
     const stars = [{ id: 's1', x: 150, y: 104 }, { id: 's2', x: 156, y: 106 }];
     expect(pickAt(150, 100, { stars, cells: segs, soul: null })).toEqual({ kind: 'star', id: 's1' });
@@ -87,6 +87,27 @@ describe('picking', () => {
     expect(pickAt(150, 100 + CELL_REACH + 1, { stars: [], cells: segs, soul: null })).toBeNull();
     expect(pickAt(400, 400, { stars: [], cells: segs, soul: { x: 400 + SOUL_REACH - 1, y: 400 } })).toEqual({ kind: 'soul' });
     expect(pickAt(400, 400, { stars: [], cells: segs, soul: { x: 400 + SOUL_REACH + 1, y: 400 } })).toBeNull();
+  });
+  it('takes the month the pointer is in before the nearest ribbon (a short month beside a whole one)', () => {
+    // 10 px per theta unit along x: months [0, 10] and [10, 10.5]; the short one is inset 0.1, the whole one 1.1
+    const month1 = { key: 'a|1', group: 'a', ax: 11, ay: 50, bx: 89, by: 50, ex0: 0, ey0: 50, ex1: 100, ey1: 50 };
+    const month2 = { key: 'a|2', group: 'a', ax: 101, ay: 50, bx: 104, by: 50, ex0: 100, ey0: 50, ex1: 105, ey1: 50 };
+    const cells = [month1, month2];
+    expect(pickAt(99.9, 50, { stars: [], cells, soul: null })).toEqual({ kind: 'cell', key: 'a|1', group: 'a' });
+    expect(pickAt(95, 53, { stars: [], cells, soul: null })).toEqual({ kind: 'cell', key: 'a|1', group: 'a' });
+    expect(pickAt(100.1, 50, { stars: [], cells, soul: null })).toEqual({ kind: 'cell', key: 'a|2', group: 'a' });
+    expect(pickAt(103, 50, { stars: [], cells, soul: null })).toEqual({ kind: 'cell', key: 'a|2', group: 'a' });
+  });
+  it('still catches a point just outside every month, by the nearest ribbon', () => {
+    const only = { key: 'a|1', group: 'a', ax: 102, ay: 50, bx: 198, by: 50, ex0: 100, ey0: 50, ex1: 200, ey1: 50 };
+    const hit = { kind: 'cell', key: 'a|1', group: 'a' };
+    expect(pickAt(95, 50, { stars: [], cells: [only], soul: null })).toEqual(hit);
+    expect(pickAt(205, 50, { stars: [], cells: [only], soul: null })).toEqual(hit);
+    expect(pickAt(85, 50, { stars: [], cells: [only], soul: null })).toBeNull();
+    expect(pickAt(150, 50 + CELL_REACH + 1, { stars: [], cells: [only], soul: null })).toBeNull();
+    // 205 lies in the gap between two months: the nearer ribbon end (198 is 7 px away, 211 is 6 px) wins
+    const next = { key: 'a|2', group: 'a', ax: 211, ay: 50, bx: 289, by: 50, ex0: 210, ey0: 50, ex1: 300, ey1: 50 };
+    expect(pickAt(205, 50, { stars: [], cells: [only, next], soul: null })).toEqual({ kind: 'cell', key: 'a|2', group: 'a' });
   });
   it('measures the distance to a segment, not to its line', () => {
     expect(segmentDistance(50, 100, segs[0])).toBe(50);

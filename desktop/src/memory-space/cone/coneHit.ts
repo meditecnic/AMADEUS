@@ -22,7 +22,10 @@ export function drawnStarIds(model: Pick<ChartModel, 'stars' | 'collapsed' | 'by
     .map((star) => star.id);
 }
 
-export type CellSegment = { key: string; group: string; ax: number; ay: number; bx: number; by: number };
+/** `a`–`b` is the drawn ribbon (inset from the month); `e0`–`e1` is the whole month, edge to edge, on the same line. */
+export type CellSegment = {
+  key: string; group: string; ax: number; ay: number; bx: number; by: number; ex0: number; ey0: number; ex1: number; ey1: number;
+};
 
 /** Each cell's ribbon centre line on screen. The open group's ribbons have turned into stars and are left out. */
 export function cellSegments(
@@ -37,7 +40,9 @@ export function cellSegments(
       const [lo, hi] = bandSpan(cell.band);
       const a = project(frame.pos(lo, group.phi));
       const b = project(frame.pos(hi, group.phi));
-      out.push({ key: cell.key, group: group.id, ax: a.x, ay: a.y, bx: b.x, by: b.y });
+      const e0 = project(frame.pos(cell.band.theta0, group.phi));
+      const e1 = project(frame.pos(cell.band.theta1, group.phi));
+      out.push({ key: cell.key, group: group.id, ax: a.x, ay: a.y, bx: b.x, by: b.y, ex0: e0.x, ey0: e0.y, ex1: e1.x, ey1: e1.y });
     }
   }
   return out;
@@ -74,11 +79,25 @@ export function pickAt(x: number, y: number, input: PickInput): Hit | null {
     if (d < best) { best = d; star = s.id; }
   }
   if (star !== null) return { kind: 'star', id: star };
+  // As on the plate: the month the pointer is in comes first; the nearest ribbon only catches a point beside every month.
   let cell: CellSegment | null = null;
   best = CELL_REACH;
   for (const seg of input.cells) {
-    const d = segmentDistance(x, y, seg);
+    const dx = seg.ex1 - seg.ex0;
+    const dy = seg.ey1 - seg.ey0;
+    const len2 = dx * dx + dy * dy;
+    if (!len2) continue;
+    const along = ((x - seg.ex0) * dx + (y - seg.ey0) * dy) / len2;
+    if (along < 0 || along >= 1) continue;
+    const d = Math.abs((x - seg.ex0) * dy - (y - seg.ey0) * dx) / Math.sqrt(len2);
     if (d < best) { best = d; cell = seg; }
+  }
+  if (!cell) {
+    best = CELL_REACH;
+    for (const seg of input.cells) {
+      const d = segmentDistance(x, y, seg);
+      if (d < best) { best = d; cell = seg; }
+    }
   }
   if (cell) return { kind: 'cell', key: cell.key, group: cell.group };
   if (input.soul && Math.hypot(input.soul.x - x, input.soul.y - y) < SOUL_REACH) return { kind: 'soul' };
