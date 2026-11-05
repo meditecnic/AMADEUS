@@ -64,3 +64,7 @@ REF_AUDIO_SAD = os.getenv("AMADEUS_REF_SAD", str(Path(DEFAULT_REF_AUDIO_DIR) / "
 
 # TTS timeout (seconds)
 TTS_TIMEOUT = float(os.getenv("AMADEUS_TTS_TIMEOUT", "60.0"))
+
+# Developer-only pi spike. The standalone executable is supplied separately.
+PI_AGENT_ENABLED = os.getenv("AMADEUS_PI_AGENT_ENABLED", "0") == "1"
+PI_AGENT_EXECUTABLE = os.getenv("AMADEUS_PI_AGENT_EXECUTABLE", "")
