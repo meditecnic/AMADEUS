@@ -27,7 +27,7 @@
 在开发环境用 Hugging Face CLI 取固定快照（命令输出的 snapshot 路径作为 `--embedding-source`）：
 
 ```powershell
-hf download jinaai/jina-embeddings-v5-text-nano-retrieval --revision ac5d898c8d382b17167c33e5c8af644a3519b47d --include onnx/model.onnx onnx/model.onnx_data tokenizer.json README.md
+hf download jinaai/jina-embeddings-v5-text-nano-retrieval onnx/model.onnx onnx/model.onnx_data tokenizer.json README.md --revision ac5d898c8d382b17167c33e5c8af644a3519b47d
 ```
 
 PowerShell 构建示例（将路径替换为本机路径）：

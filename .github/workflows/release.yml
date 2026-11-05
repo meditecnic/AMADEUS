@@ -54,10 +54,12 @@ jobs:
           python -c "import sys; sys.path.insert(0, 'packaging/windows'); from build_installer import visual_studio; from bundle_support import sanitized_build_environment; print(visual_studio(sanitized_build_environment())['redist'])" | Select-Object -Last 1 | ForEach-Object { "VC_REDIST=$_" >> $env:GITHUB_ENV }
       - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
-          path: ${{ runner.temp }}/jina-snapshot
+          path: ${{ runner.temp }}/jina-snapshot/${{ env.JINA_REVISION }}
           key: jina-${{ runner.os }}-${{ env.JINA_REVISION }}
       - name: Download pinned Jina snapshot
-        run: hf download jinaai/jina-embeddings-v5-text-nano-retrieval --revision $env:JINA_REVISION --include onnx/model.onnx onnx/model.onnx_data tokenizer.json README.md --local-dir "$env:RUNNER_TEMP/jina-snapshot"
+        # The builder requires the snapshot directory to be named after the pinned revision.
+        # Filenames are positional: `--include a b c` would take only the first as a pattern.
+        run: hf download jinaai/jina-embeddings-v5-text-nano-retrieval onnx/model.onnx onnx/model.onnx_data tokenizer.json README.md --revision $env:JINA_REVISION --local-dir "$env:RUNNER_TEMP/jina-snapshot/$env:JINA_REVISION"
       - name: Packaging tests and lint
         run: |
           python -m pytest -q packaging/windows/tests
@@ -67,7 +69,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ github.event_name != 'pull_request' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
-        run: python packaging/windows/build_installer.py --work-dir $env:BUILD_WORK --embedding-source "$env:RUNNER_TEMP/jina-snapshot" --vc-redist $env:VC_REDIST
+        run: python packaging/windows/build_installer.py --work-dir $env:BUILD_WORK --embedding-source "$env:RUNNER_TEMP/jina-snapshot/$env:JINA_REVISION" --vc-redist $env:VC_REDIST
       - name: Frozen service and self-check refuse missing data directory
         run: |
           $result = Get-Content "$env:BUILD_WORK/installer-result.json" -Raw | ConvertFrom-Json
