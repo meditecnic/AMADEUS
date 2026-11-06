@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 import asyncio
 import logging
 import os
+import threading
 import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,13 +11,13 @@ from app.security.local_transport import HTTPOriginGuardMiddleware, LOCAL_ORIGIN
 from pydantic import BaseModel, SecretStr
 from typing import Optional
 from app import config
-from app.routers import asset_pack, chat_ws, conversations, history, providers, system_api, voice_ws
+from app.routers import asset_pack, auth, chat_ws, conversations, data, history, providers, system_api, voice_ws
 from app.services.tts_queue import tts_manager
 from app.services.tts_sidecar import sidecar_supervisor
 from app.services.search import search_service
 from app.services.soul_engine import soul_engine
 from app.services.diagnostics import diagnostic_runtime
-from app.db import init_db
+from app.security.data_availability import DataAvailabilityMiddleware
 
 
 DIAGNOSTICS_SWEEP_INTERVAL_SECONDS = 24 * 60 * 60
@@ -49,7 +50,13 @@ async def lifespan(app: FastAPI):
         os.environ.pop("DEEPSEEK_API_KEY", None)
         config.DEEPSEEK_API_KEY = ""
         deepseek_service.api_key = ""
-    await init_db()
+    from app.services.data_startup import initialize
+    from app.services.backups import weekly_backup_if_due
+    data_ready, had_databases = await initialize()
+    if not data_ready:
+        logging.getLogger(__name__).error("Data unavailable; recovery API remains available")
+        yield
+        return
     from app.services.conversation_erasure import resume_erasures
     for worldline in ('steins_gate', 'beta'):
         await resume_erasures(worldline=worldline)
@@ -81,10 +88,15 @@ async def lifespan(app: FastAPI):
     print("--------------------------------------------------")
 
     diagnostics_sweep = asyncio.create_task(_diagnostics_sweep_loop())
+    weekly_backup_stop = threading.Event()
+    weekly_backup = asyncio.create_task(asyncio.to_thread(weekly_backup_if_due, weekly_backup_stop)) if had_databases else None
     yield
     
     # Shutdown
+    weekly_backup_stop.set()
     await chat_ws.close_chat_sessions()
+    if weekly_backup is not None:
+        await weekly_backup
     print("Amadeus Backend shutting down, cleaning resources...")
     diagnostics_sweep.cancel()
     await stop_background_worker()
@@ -101,6 +113,7 @@ app = FastAPI(title="Amadeus Backend", version="3.0.0", lifespan=lifespan)
 
 allowed_origins = sorted(LOCAL_ORIGINS)
 
+app.add_middleware(DataAvailabilityMiddleware)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost'])
 
 # CORS is added last (outermost), preserving preflight and response headers.
@@ -116,6 +129,8 @@ app.add_middleware(
 )
 
 # Include WebSocket router
+app.include_router(auth.router)
+app.include_router(data.router)
 app.include_router(chat_ws.router)
 app.include_router(history.router)
 app.include_router(system_api.router)
@@ -158,19 +173,6 @@ async def update_settings(settings: SettingsUpdate):
         credential_store.set("deepseek", secret.get_secret_value())
     in_memory_settings.update(update_data)
     return {"status": "success"}
-
-class SalieriAuth(BaseModel):
-    password: str
-
-def normalize_password(p: str) -> str:
-    return p.lower().replace("ü", "u").replace("ue", "u").strip()
-
-@app.post("/api/auth/salieri")
-async def auth_salieri(auth: SalieriAuth):
-    if normalize_password(auth.password) == "gott wurfelt nicht":
-        return {"status": "success"}
-    from fastapi import HTTPException
-    raise HTTPException(status_code=401, detail="Invalid password")
 
 @app.get("/health")
 async def health_check():

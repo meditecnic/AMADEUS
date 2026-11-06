@@ -194,6 +194,7 @@ fn start_backend(
     let mut command = Command::new(backend);
     command
         .env("AMADEUS_DATA_DIR", &data_dir)
+        .env("AMADEUS_APP_VERSION", app.package_info().version.to_string())
         .env("AMADEUS_LOCAL_API_TOKEN", &token)
         .env("AMADEUS_PARENT_PID", std::process::id().to_string())
         .env("BACKEND_PORT", "0")
