@@ -174,6 +174,12 @@ impl BackendProcess {
     }
 }
 
+// Logs and the instance lock share one root, including isolated DATA_DIR runs.
+fn backend_runtime_dir(data_override: Option<&Path>, default_root: &Path) -> PathBuf {
+    data_override.filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or(default_root).to_path_buf()
+}
+
 fn backend_data_dir(app: &tauri::AppHandle) -> tauri::Result<PathBuf> {
     if let Some(path) = std::env::var_os("AMADEUS_DATA_DIR").filter(|value| !value.is_empty()) {
         return Ok(PathBuf::from(path));
@@ -224,11 +230,11 @@ async fn restart_app(window: tauri::WebviewWindow, app: tauri::AppHandle) -> Res
 fn start_backend(
     app: &tauri::AppHandle,
     data_dir: &Path,
+    logs: &Path,
     token: String,
     startup: Arc<BackendStartup>,
 ) -> Result<Arc<BackendProcess>, Box<dyn std::error::Error>> {
-    // Keep desktop-owned log handles and the instance lock out of movable data.
-    let logs = app.path().app_local_data_dir()?.join("logs");
+    let logs = logs.to_path_buf();
     fs::create_dir_all(&logs)?;
     let stdout_log = File::create(logs.join("backend-stdout.log"))?;
     let backend = app.path().resource_dir()?.join("backend/amadeus-backend.exe");
@@ -305,7 +311,9 @@ pub fn run() {
         .setup(|app| {
             let startup = Arc::new(BackendStartup::default());
             app.manage(Arc::clone(&startup));
-            let logs = app.path().app_local_data_dir()?.join("logs");
+            let data_override = std::env::var_os("AMADEUS_DATA_DIR").map(PathBuf::from);
+            let runtime_dir = backend_runtime_dir(data_override.as_deref(), &app.path().app_local_data_dir()?);
+            let logs = runtime_dir.join("logs");
             let data_dir = match backend_data_dir(app.handle()) {
                 Ok(path) => path,
                 Err(error) => {
@@ -313,12 +321,7 @@ pub fn run() {
                     return Ok(());
                 }
             };
-            let lock_dir = if std::env::var_os("AMADEUS_DATA_DIR").filter(|v| !v.is_empty()).is_some() {
-                data_dir.clone()
-            } else {
-                app.path().app_local_data_dir()?
-            };
-            match acquire_instance_lock(&lock_dir) {
+            match acquire_instance_lock(&runtime_dir) {
                 Ok(lock) => { app.manage(lock); }
                 Err(error) => {
                     if cfg!(windows) && error.raw_os_error() == Some(32) {
@@ -341,7 +344,7 @@ pub fn run() {
             }
             let result = generate_local_token()
                 .map_err(Into::into)
-                .and_then(|token| start_backend(app.handle(), &data_dir, token, Arc::clone(&startup)));
+                .and_then(|token| start_backend(app.handle(), &data_dir, &logs, token, Arc::clone(&startup)));
             match result {
                 Ok(backend) => { app.manage(backend); }
                 Err(error) => fail_backend_startup(&startup, &logs,
@@ -363,6 +366,29 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_paths_follow_explicit_data_directories() {
+        let default = Path::new("default-app-root");
+        let first = backend_runtime_dir(Some(Path::new("isolated-a/data")), default);
+        let second = backend_runtime_dir(Some(Path::new("isolated-b/data")), default);
+        assert_eq!(first.join("logs/backend-stdout.log"), Path::new("isolated-a/data/logs/backend-stdout.log"));
+        assert_eq!(first.join("logs/backend-stderr.log"), Path::new("isolated-a/data/logs/backend-stderr.log"));
+        assert_eq!(first.join("logs/backend-startup.log"), Path::new("isolated-a/data/logs/backend-startup.log"));
+        assert_eq!(first.join("desktop.lock"), Path::new("isolated-a/data/desktop.lock"));
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn runtime_paths_stay_at_default_root_without_override() {
+        let default = Path::new("default-app-root");
+        for value in [None, Some(Path::new(""))] {
+            let root = backend_runtime_dir(value, default);
+            assert_eq!(root.join("logs"), default.join("logs"));
+            assert_eq!(root.join("desktop.lock"), default.join("desktop.lock"));
+            assert!(!root.join("logs").starts_with(default.join("data")));
+        }
+    }
 
     #[test]
     fn missing_or_invalid_location_never_creates_empty_data() {
