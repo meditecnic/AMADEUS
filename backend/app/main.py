@@ -16,7 +16,7 @@ from app.services.tts_sidecar import sidecar_supervisor
 from app.services.search import search_service
 from app.services.soul_engine import soul_engine
 from app.services.diagnostics import diagnostic_runtime
-from app.db import init_db
+from app.security.data_availability import DataAvailabilityMiddleware
 
 
 DIAGNOSTICS_SWEEP_INTERVAL_SECONDS = 24 * 60 * 60
@@ -49,10 +49,13 @@ async def lifespan(app: FastAPI):
         os.environ.pop("DEEPSEEK_API_KEY", None)
         config.DEEPSEEK_API_KEY = ""
         deepseek_service.api_key = ""
-    from app.services.backups import apply_pending_restore, existing_databases, weekly_backup_if_due
-    await asyncio.to_thread(apply_pending_restore)
-    had_databases = bool(await asyncio.to_thread(existing_databases))
-    await init_db()
+    from app.services.data_startup import initialize
+    from app.services.backups import weekly_backup_if_due
+    data_ready, had_databases = await initialize()
+    if not data_ready:
+        logging.getLogger(__name__).error("Data unavailable; recovery API remains available")
+        yield
+        return
     from app.services.conversation_erasure import resume_erasures
     for worldline in ('steins_gate', 'beta'):
         await resume_erasures(worldline=worldline)
@@ -107,6 +110,7 @@ app = FastAPI(title="Amadeus Backend", version="3.0.0", lifespan=lifespan)
 
 allowed_origins = sorted(LOCAL_ORIGINS)
 
+app.add_middleware(DataAvailabilityMiddleware)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost'])
 
 # CORS is added last (outermost), preserving preflight and response headers.

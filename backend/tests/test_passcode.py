@@ -59,3 +59,23 @@ async def test_backoff_and_atomic_failure(tmp_path, monkeypatch):
         await passcode.change('test-only-phrase', 'next-test-only-phrase')
     assert passcode.passcode_path().read_bytes() == old
     assert not list(passcode.passcode_path().parent.glob('.tmp-*'))
+
+
+def test_unreadable_file_does_not_lock_out(app_client):
+    passcode.passcode_path().mkdir(parents=True)
+    assert app_client.get('/api/auth/state').json()['passcode_error']
+    assert app_client.post('/api/auth/login', json={}).status_code == 200
+
+
+@pytest.mark.parametrize('method,path,body', [
+    ('get', '/api/auth/state', None),
+    ('post', '/api/auth/login', {}),
+    ('put', '/api/auth/passcode', {'new': None}),
+])
+def test_new_auth_routes_require_local_token(app_client, monkeypatch, method, path, body):
+    from app.security import local_transport
+
+    monkeypatch.setattr(local_transport, 'LOCAL_API_TOKEN', b'test-local-token')
+    assert app_client.request(method, path, json=body).status_code == 401
+    assert app_client.request(method, path, json=body,
+        headers={'authorization': 'Bearer test-local-token'}).status_code == 200

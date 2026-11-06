@@ -73,7 +73,7 @@ async def test_lifespan_migrates_dotenv_key(monkeypatch, tmp_path, persistent):
         pass
 
     # Exercise real startup migration, stopping before database/sidecar startup.
-    monkeypatch.setattr(main, "init_db", AsyncMock(side_effect=StopAfterCredentialMigration))
+    monkeypatch.setattr("app.services.data_startup.initialize", AsyncMock(side_effect=StopAfterCredentialMigration))
 
     for _ in range(1 if persistent else 2):
         if persistent:

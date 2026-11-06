@@ -157,6 +157,27 @@ def test_interrupted_restore_rolls_back_on_restart(data_root):
     assert path.read_bytes() == original
 
 
+def test_cleanup_failure_does_not_undo_committed_restore(data_root, monkeypatch):
+    path = make_database(data_root)
+    selected = backups.create_backup()
+    with closing(sqlite3.connect(path)) as connection:
+        connection.execute("UPDATE sample SET value='after'")
+        connection.commit()
+    backups.schedule_restore(selected['id'])
+    unlink = Path.unlink
+
+    def fail_old_cleanup(self, *args, **kwargs):
+        if 'originals' in self.parts:
+            raise PermissionError('injected cleanup sharing violation')
+        return unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'unlink', fail_old_cleanup)
+    assert backups.apply_pending_restore() is None
+    assert value_at(path) == 'before'
+    assert not (data_root / 'restore-request.json').exists()
+    assert json.loads((data_root / 'restore-result.json').read_text(encoding='utf-8'))['status'] == 'ok'
+
+
 @pytest.mark.parametrize('backup_id', ['..', '../control.sqlite3', 'anything', '20261106T000000000000Z-manual/..'])
 def test_invalid_ids(data_root, backup_id):
     for function in [backups.load_manifest, backups.schedule_restore, backups.delete_backup]:

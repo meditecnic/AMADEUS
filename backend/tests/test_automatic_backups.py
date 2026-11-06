@@ -75,3 +75,12 @@ def test_diagnostic_schema_upgrade_is_backed_up(data_root):
         connection.commit()
     backups.backup_before_upgrade()
     assert backups.list_backups()[0]['reason'] == 'pre-upgrade'
+
+
+def test_bad_automatic_manifest_does_not_disable_weekly(data_root):
+    make_database(data_root)
+    selected = backups.create_backup('weekly')
+    (data_root / 'backups' / selected['id'] / 'manifest.json').write_text('{', encoding='utf-8')
+    backups.weekly_backup_if_due()
+    assert len(backups.list_backups()) == 2
+    assert any(item['can_restore'] for item in backups.list_backups())

@@ -2685,6 +2685,11 @@ async def websocket_chat_endpoint(websocket: WebSocket):
 
     if not await accept_local_websocket(websocket):
         return
+    from app.services.data_startup import available
+    if not available():
+        await websocket.send_json({"type": "error", "message": "Server error"})
+        await websocket.close()
+        return
     
     # 2. Thread-safe retrieval or initialization of session data
     session_id = websocket.query_params.get("session_id", "default")

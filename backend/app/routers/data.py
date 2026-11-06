@@ -16,6 +16,13 @@ async def _call(function, *args):
         raise HTTPException(500, detail={"code": "data_io_failed", "message": str(exc)}) from exc
 
 
+@router.get("/status")
+async def data_status():
+    from app.services.data_startup import current_status
+
+    return {**current_status(), "backups": await _call(backups.list_backups)}
+
+
 @router.get("/backups")
 async def get_backups():
     return await _call(backups.list_backups)

@@ -90,8 +90,9 @@ def load_manifest(backup_id: str, *, verify: bool = True) -> dict:
     if not directory.is_dir():
         raise BackupError("backup_not_found", "Backup does not exist", 404)
     try:
-        manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
-        if manifest["format"] != 1 or manifest["id"] != backup_id or not manifest["files"]:
+        manifest = json.loads(_local(directory, "manifest.json").read_text(encoding="utf-8"))
+        if (manifest["format"] != 1 or manifest["id"] != backup_id
+                or not (manifest["files"] or manifest.get("unreadable"))):
             raise ValueError("unsupported or empty manifest")
         seen = set()
         for item in manifest["files"]:
@@ -104,7 +105,7 @@ def load_manifest(backup_id: str, *, verify: bool = True) -> dict:
                 raise ValueError("backup uses a newer database schema")
             if verify and (path.stat().st_size != item["size"] or _hash(path) != item["sha256"]):
                 raise ValueError(f"checksum mismatch: {relative}")
-        if manifest.get("unreadable"):
+        if verify and manifest.get("unreadable"):
             raise ValueError("snapshot contains unreadable databases; originals retained for rollback")
         return manifest
     except (OSError, ValueError, KeyError, TypeError) as exc:
@@ -189,15 +190,19 @@ def create_backup(reason: str = "manual", *, salvage: bool = False) -> dict:
         request = _root() / "restore-request.json"
         protected = set()
         if request.exists():
-            protected.add(json.loads(request.read_text(encoding="utf-8"))["id"])
+            pending = json.loads(request.read_text(encoding="utf-8"))
+            protected.update({pending["id"], pending.get("rollback_id", "")})
         _prune(reason, protected)
         return manifest
 
 
 def schedule_restore(backup_id: str) -> dict:
     with _lock:
+        request_path = _root() / "restore-request.json"
+        if request_path.exists() and json.loads(request_path.read_text(encoding="utf-8")).get("phase") == "applying":
+            raise BackupError("restore_pending", "An interrupted rollback must finish first", 409)
         load_manifest(backup_id)
-        atomic_json(_root() / "restore-request.json", {"id": backup_id, "phase": "pending"})
+        atomic_json(request_path, {"id": backup_id, "phase": "pending"})
         return {"restart_required": True}
 
 
@@ -205,8 +210,10 @@ def delete_backup(backup_id: str) -> dict:
     with _lock:
         directory = _directory(backup_id)
         request = _root() / "restore-request.json"
-        if request.exists() and backup_id == json.loads(request.read_text(encoding="utf-8"))["id"]:
-            raise BackupError("restore_pending", "This backup is scheduled for restore", 409)
+        if request.exists():
+            pending = json.loads(request.read_text(encoding="utf-8"))
+            if backup_id in {pending["id"], pending.get("rollback_id")}:
+                raise BackupError("restore_pending", "This backup is scheduled for restore or rollback", 409)
         if not directory.is_dir():
             raise BackupError("backup_not_found", "Backup does not exist", 404)
         shutil.rmtree(directory)
@@ -255,9 +262,19 @@ def apply_pending_restore() -> str | None:
             # Old migration markers must never suppress initialization of restored data.
             for marker in _root().glob(".migration-v*.complete"):
                 marker.unlink()
-            request_path.unlink()
-            shutil.rmtree(rollback_dir)
             atomic_json(_root() / "restore-result.json", {"status": "ok", "detail": None})
+            request_path.unlink()
+            # Keep unreadable originals for possible manual salvage after recovery.
+            # Once committed, cleanup failure must never start a partial rollback.
+            try:
+                for relative in request["originals"]:
+                    if not any(relative == name or relative in {name + "-wal", name + "-shm"}
+                               for name in rollback["unreadable"]):
+                        _local(rollback_dir, relative).unlink(missing_ok=True)
+                if not rollback["unreadable"]:
+                    shutil.rmtree(rollback_dir)
+            except OSError:
+                logging.getLogger(__name__).warning("Restored successfully; old file cleanup deferred")
             return None
         except Exception as exc:
             detail = str(exc)
@@ -313,8 +330,11 @@ def weekly_backup_if_due() -> None:
         dates = []
         for path in base.iterdir() if base.exists() else []:
             if ID_PATTERN.fullmatch(path.name) and not path.name.endswith("-manual"):
-                manifest = load_manifest(path.name, verify=False)
-                dates.append(datetime.fromisoformat(manifest["created_at"]))
+                try:
+                    manifest = load_manifest(path.name, verify=False)
+                    dates.append(datetime.fromisoformat(manifest["created_at"]))
+                except (BackupError, ValueError, KeyError, TypeError):
+                    continue
         if not dates or (datetime.now(timezone.utc) - max(dates)).total_seconds() >= 7 * 86400:
             create_backup("weekly")
     except Exception as exc:
