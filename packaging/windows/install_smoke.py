@@ -418,10 +418,21 @@ def exercise(installer: Path, root: Path, timeout: float, result: dict, provider
             require(not any(is_update_url(item["url"]) for item in cdp.requests), "Startup contacted updater URL")
             require(not ({"chat", "chat.send", "voice.start"} & set(cdp.sent_types)), "Unexpected chat/voice request")
             result["console_errors"] = 0
+            # Detach DevTools first so an attached client cannot keep the WebView2 browser process alive.
+            cdp.ws.close()
             started = time.monotonic()
             require(close_windows(primary.pid), "No visible primary window; interactive desktop unavailable")
-            wait_until(lambda: not ((tracked | {p.pid for p in launches}) & process_snapshot().keys()), 10,
-                       "WM_CLOSE left desktop/backend/WebView2 descendants after 10 seconds", tick)
+            try:
+                wait_until(lambda: not ((tracked | {p.pid for p in launches}) & process_snapshot().keys()), 10,
+                           "WM_CLOSE left desktop/backend/WebView2 descendants after 10 seconds", tick)
+            except RuntimeError:
+                snapshot = process_snapshot()
+                residual = sorted(f"{pid}:{snapshot[pid][1]}" for pid in
+                                  (tracked | {p.pid for p in launches}) & snapshot.keys())
+                print("RESIDUAL_PROCESSES " + json.dumps({
+                    "processes": residual, "desktop_exit_code": primary.poll(),
+                    "seconds": round(time.monotonic() - started, 3)}), flush=True)
+                raise
             result["close_seconds"] = round(time.monotonic() - started, 3)
             result["desktop_exit_code"] = primary.wait(timeout=1)
             require(primary.returncode == 0, f"Desktop exited {primary.returncode} after WM_CLOSE")
