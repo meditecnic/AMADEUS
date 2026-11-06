@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import ctypes
 from ctypes import wintypes
 import ipaddress
@@ -22,6 +23,7 @@ from bundle_support import digest, sanitized_build_environment
 
 IDENTIFIER = "com.amadeus.desktop"
 AUDIT_GUID = "{0CCE9226-69AE-11D9-BED3-505054503030}"  # Filtering Platform Connection
+WEBVIEW2_POLICY = r"SOFTWARE\Policies\Microsoft\Edge\WebView2\AdditionalBrowserArguments"
 
 
 def require(condition: object, message: str) -> None:
@@ -78,6 +80,31 @@ def registration() -> dict | None:
                 except FileNotFoundError:
                     continue
     return None
+
+
+@contextlib.contextmanager
+def webview2_debug_policy(exe_name: str, arguments: str):
+    """Open the CDP port through HKLM policy for the duration of the launch.
+
+    WebView2 Runtime 150+ ignores WEBVIEW2_* variables and HKCU policy in elevated hosts, and hosted
+    runners run elevated; HKLM policy still applies (MicrosoftEdge/WebView2Feedback#5640, #5645).
+    """
+    import winreg
+
+    access = winreg.KEY_QUERY_VALUE | winreg.KEY_SET_VALUE
+    with winreg.CreateKeyEx(winreg.HKEY_LOCAL_MACHINE, WEBVIEW2_POLICY, 0, access) as key:
+        try:
+            previous = winreg.QueryValueEx(key, exe_name)
+        except FileNotFoundError:
+            previous = None
+        winreg.SetValueEx(key, exe_name, 0, winreg.REG_SZ, arguments)
+        try:
+            yield
+        finally:
+            if previous is None:
+                winreg.DeleteValue(key, exe_name)
+            else:
+                winreg.SetValueEx(key, exe_name, 0, previous[1], previous[0])
 
 
 def shortcuts(exe: Path) -> list[Path]:
@@ -227,6 +254,14 @@ def cdp_diagnostics(primary: subprocess.Popen, port: int, log_path: Path) -> Non
         print(f"CDP_DIAG_DESKTOP_LOG unavailable: {type(exc).__name__}", flush=True)
 
 
+def settled(cdp: CDP, expression: str):
+    """Evaluate while a navigation may still be replacing the execution context."""
+    try:
+        return cdp.evaluate(expression)
+    except RuntimeError:
+        return None
+
+
 def connect_cdp(port: int, timeout: float) -> CDP:
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -304,7 +339,8 @@ def exercise(installer: Path, root: Path, timeout: float, result: dict, provider
     launches = []
     cdp = None
     try:
-        with (root / "desktop.log").open("wb") as log:
+        with webview2_debug_policy(exe.name, f"--remote-debugging-port={port}"), \
+                (root / "desktop.log").open("wb") as log:
             started = time.monotonic()
             primary = subprocess.Popen([str(exe)], env=env, stdout=log, stderr=subprocess.STDOUT)
             launches.append(primary)
@@ -317,11 +353,15 @@ def exercise(installer: Path, root: Path, timeout: float, result: dict, provider
                 raise
             for domain in ("Network", "Log", "Runtime", "Page"):
                 cdp.call(domain + ".enable")
-            # WebView2 pauses before the first script, so initial login requests/errors are observed.
+            # Elevated hosts also ignore WEBVIEW2_WAIT_FOR_SCRIPT_DEBUGGER, so reload with every domain
+            # enabled to observe startup requests and console errors from the first one.
             cdp.call("Runtime.runIfWaitingForDebugger")
-            wait_until(lambda: cdp.evaluate("document.querySelector('#salieri-user')?.value === 'Salieri' && "
+            cdp.evaluate("window.__amadeusSmokeBeforeReload = true")
+            cdp.call("Page.reload", {"ignoreCache": True})
+            wait_until(lambda: settled(cdp, "!window.__amadeusSmokeBeforeReload && "
+                       "document.querySelector('#salieri-user')?.value === 'Salieri' && "
                        "document.querySelector('button[type=submit]')?.disabled === false"), timeout,
-                       "Login page not ready: check backend logs and WebView2 runtime", tick)
+                       "Login page not ready after reload: check backend logs and WebView2 runtime", tick)
             result["login_page_seconds"] = round(time.monotonic() - started, 3)
             cdp.screenshot(root / "login.png")
             print("INSTALL_STEP login page captured", flush=True)

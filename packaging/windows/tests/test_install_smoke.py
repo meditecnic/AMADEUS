@@ -194,6 +194,33 @@ class NetworkAuditTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "calibration"):
                     smoke.audit_finish(10, PureWindowsPath(r"C:\Apps\Amadeus"), 4567, path)
 
+    def test_webview2_debug_policy_is_set_for_launch_and_restored(self):
+        values = {}
+
+        @contextlib.contextmanager
+        def create_key(hive, path, reserved, access):
+            self.assertEqual((hive, path), ("HKLM", smoke.WEBVIEW2_POLICY))
+            yield "key"
+
+        def query(key, name):
+            if name not in values:
+                raise FileNotFoundError(name)
+            return values[name]
+
+        fake = SimpleNamespace(
+            HKEY_LOCAL_MACHINE="HKLM", KEY_QUERY_VALUE=1, KEY_SET_VALUE=2, REG_SZ=1, CreateKeyEx=create_key,
+            QueryValueEx=query, SetValueEx=lambda key, name, _, kind, value: values.__setitem__(name, (value, kind)),
+            DeleteValue=lambda key, name: values.pop(name))
+        with patch.dict(sys.modules, {"winreg": fake}):
+            with smoke.webview2_debug_policy("desktop.exe", "--remote-debugging-port=4567"):
+                self.assertEqual(values, {"desktop.exe": ("--remote-debugging-port=4567", 1)})
+            self.assertEqual(values, {})
+            values["desktop.exe"] = ("--keep", 1)
+            with self.assertRaises(RuntimeError):
+                with smoke.webview2_debug_policy("desktop.exe", "--remote-debugging-port=4567"):
+                    raise RuntimeError("launch failed")
+            self.assertEqual(values, {"desktop.exe": ("--keep", 1)})
+
     @unittest.skipUnless(os.name == "nt", "Win32 APIs require Windows")
     def test_native_snapshot_and_window_enumeration(self):
         self.assertIn(os.getpid(), smoke.process_snapshot())
