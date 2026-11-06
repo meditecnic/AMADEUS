@@ -3,6 +3,7 @@ from contextlib import closing
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -20,6 +21,7 @@ REASONS = {"manual", "pre-upgrade", "weekly", "pre-restore"}
 ID_PATTERN = re.compile(r"[0-9]{8}T[0-9]{12}Z-(manual|pre-upgrade|weekly|pre-restore)")
 CONFIG_FILES = {"auth/passcode.json"}
 _lock = threading.RLock()
+upgrade_backup_id: str | None = None
 
 
 class BackupError(RuntimeError):
@@ -281,3 +283,39 @@ def apply_pending_restore() -> str | None:
                 detail += f"; rollback incomplete: {rollback_error}; retry on next startup"
             atomic_json(_root() / "restore-result.json", {"status": "restore_failed", "detail": detail})
             return detail
+
+
+def existing_databases() -> list[Path]:
+    return [_local(_root(), name) for name in sorted(database_files()) if _local(_root(), name).exists()]
+
+
+def backup_before_upgrade() -> None:
+    """Called inside the migration lock, before any initialization writes."""
+    global upgrade_backup_id
+    upgrade_backup_id = None
+    from app.services.diagnostics import DIAGNOSTIC_STORAGE_VERSION
+
+    needs_upgrade = False
+    for path in existing_databases():
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as connection:
+            version = _schema(connection)
+        target = DIAGNOSTIC_STORAGE_VERSION if path.name == "diagnostics.sqlite3" else db.SCHEMA_VERSION
+        if version is None or version < target:
+            needs_upgrade = True
+    if needs_upgrade:
+        upgrade_backup_id = create_backup("pre-upgrade")["id"]
+
+
+def weekly_backup_if_due() -> None:
+    """Best effort background work; callers skip this on a fresh installation."""
+    try:
+        base = _root() / "backups"
+        dates = []
+        for path in base.iterdir() if base.exists() else []:
+            if ID_PATTERN.fullmatch(path.name) and not path.name.endswith("-manual"):
+                manifest = load_manifest(path.name, verify=False)
+                dates.append(datetime.fromisoformat(manifest["created_at"]))
+        if not dates or (datetime.now(timezone.utc) - max(dates)).total_seconds() >= 7 * 86400:
+            create_backup("weekly")
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Weekly backup failed: %s", exc)

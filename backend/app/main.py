@@ -49,8 +49,9 @@ async def lifespan(app: FastAPI):
         os.environ.pop("DEEPSEEK_API_KEY", None)
         config.DEEPSEEK_API_KEY = ""
         deepseek_service.api_key = ""
-    from app.services.backups import apply_pending_restore
+    from app.services.backups import apply_pending_restore, existing_databases, weekly_backup_if_due
     await asyncio.to_thread(apply_pending_restore)
+    had_databases = bool(await asyncio.to_thread(existing_databases))
     await init_db()
     from app.services.conversation_erasure import resume_erasures
     for worldline in ('steins_gate', 'beta'):
@@ -83,10 +84,13 @@ async def lifespan(app: FastAPI):
     print("--------------------------------------------------")
 
     diagnostics_sweep = asyncio.create_task(_diagnostics_sweep_loop())
+    weekly_backup = asyncio.create_task(asyncio.to_thread(weekly_backup_if_due)) if had_databases else None
     yield
     
     # Shutdown
     await chat_ws.close_chat_sessions()
+    if weekly_backup is not None:
+        await weekly_backup
     print("Amadeus Backend shutting down, cleaning resources...")
     diagnostics_sweep.cancel()
     await stop_background_worker()

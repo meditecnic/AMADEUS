@@ -1434,6 +1434,8 @@ def _run_migration_locked() -> None:
     lock_path = root / ".migration.lock"
     marker = root / f".migration-v{SCHEMA_VERSION}.complete"
     with portalocker.Lock(str(lock_path), mode="a+", timeout=30, flags=portalocker.LOCK_EX | portalocker.LOCK_NB) as lock_file:
+        from app.services.backups import backup_before_upgrade
+        backup_before_upgrade()
         if not marker.exists():
             legacy = root / "amadeus.db"
             if not override and legacy.exists():
