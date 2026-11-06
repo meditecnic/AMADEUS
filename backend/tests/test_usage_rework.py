@@ -71,3 +71,66 @@ def test_parser_exception_clears_partial_counts_and_is_sticky():
     usage.observe({'usage': {'prompt_tokens': 20, 'completion_tokens': 3, 'prompt_tokens_details': 'bad'}})
     usage.observe({'usage': {'prompt_tokens': 30, 'completion_tokens': 4}})
     assert usage.input is usage.output is usage.cached is None
+
+
+class InterruptedStream(httpx.AsyncByteStream):
+    def __init__(self, first):
+        self.first = first
+
+    async def __aiter__(self):
+        if self.first:
+            yield self.first
+        raise httpx.ReadError('synthetic interrupted body')
+
+
+@pytest.mark.parametrize('kind', ['compatible', 'responses', 'gemini', 'deepseek'])
+@pytest.mark.parametrize('method', ['stream', 'json', 'translation', 'compression'])
+@pytest.mark.parametrize('failure', ['401', 'connect'])
+@pytest.mark.asyncio
+async def test_rejected_or_unconnected_requests_are_not_unreported(kind, method, failure, usage_store, monkeypatch):
+    def handler(request):
+        if failure == '401':
+            return httpx.Response(401, json={'error': 'rejected'})
+        raise httpx.ConnectError('synthetic connect failure', request=request)
+    adapter = adapter_for(kind, handler, monkeypatch)
+    # DeepSeek's existing compression intentionally returns '' on upstream error;
+    # the other entry points keep their existing exception contracts.
+    if kind == 'deepseek' and method == 'compression':
+        assert await adapter.compress_history([], api_key='test-key') == ''
+    else:
+        with pytest.raises(Exception):
+            if method == 'stream':
+                _ = [chunk async for chunk in adapter.get_chat_stream([], api_key='test-key')]
+            elif method == 'json':
+                await adapter.complete_json([], api_key='test-key')
+            elif method == 'translation':
+                await adapter.translate_to_zh('hello', api_key='test-key')
+            else:
+                await adapter.compress_history([], api_key='test-key')
+    assert rows(usage_store) == []
+
+
+@pytest.mark.parametrize('kind', ['compatible', 'responses', 'gemini', 'deepseek'])
+@pytest.mark.parametrize('has_body', [False, True])
+@pytest.mark.asyncio
+async def test_stream_body_start_controls_truncated_call_accounting(kind, has_body, usage_store, monkeypatch):
+    first = ('data: '+json.dumps(stream_event(kind))+'\n\n').encode('utf-8') if has_body else b''
+    adapter = adapter_for(kind, lambda req: httpx.Response(200, stream=InterruptedStream(first)), monkeypatch)
+    chunks = []
+    with pytest.raises(httpx.ReadError):
+        async for chunk in adapter.get_chat_stream([], api_key='test-key'):
+            chunks.append(chunk)
+    if has_body:
+        assert chunks[0]['content'] == 'reply'
+        record, = rows(usage_store)
+        assert record['reported'] == 0 and record['input_tokens'] is None
+    else:
+        assert rows(usage_store) == []
+
+
+@pytest.mark.parametrize('kind', ['compatible', 'responses', 'gemini', 'deepseek'])
+@pytest.mark.asyncio
+async def test_empty_200_stream_does_not_create_a_call(kind, usage_store, monkeypatch):
+    adapter = adapter_for(kind, lambda req: httpx.Response(200, content=b''), monkeypatch)
+    assert [chunk async for chunk in adapter.get_chat_stream([], api_key='test-key')] == []
+    assert rows(usage_store) == []

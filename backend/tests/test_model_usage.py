@@ -132,12 +132,14 @@ async def test_request_cancellation_is_unreported_and_contexts_are_isolated(usag
     async def call(wl, cid):
         accounting.set_chat_context(wl, cid)
         with accounting.usage_scope(source='memory'):
-            async with accounting.usage_call('provider', 'model'):
+            async with accounting.usage_call('provider', 'model') as usage:
+                usage.started = True
                 await asyncio.sleep(0)
     await asyncio.gather(call('beta', 'b'), call('sg', 's'))
     assert {(r['worldline'], r['conversation_id'], r['source']) for r in rows(usage_store)} == {('beta', 'b', 'memory'), ('steins_gate', 's', 'memory')}
     with pytest.raises(asyncio.CancelledError):
-        async with accounting.usage_call('provider', 'model'):
+        async with accounting.usage_call('provider', 'model') as usage:
+            usage.started = True
             raise asyncio.CancelledError
     # shielded save may finish after cancellation; a thread barrier is unnecessary
     # here because the cancellation was raised inside the body, before finalization.

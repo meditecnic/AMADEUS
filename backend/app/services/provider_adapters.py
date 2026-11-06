@@ -153,6 +153,7 @@ class OpenAICompatibleAdapter(LLMInterface):
                     await response.aread()
                     raise ProviderRequestError(self.provider_id, response.status_code)
                 async for line in iter_provider_lines(response):
+                    usage.started = True
                     if not line.startswith("data:"):
                         continue
                     data = line[5:].strip()
@@ -196,6 +197,7 @@ class OpenAICompatibleAdapter(LLMInterface):
                 headers=self._headers(api_key),
                 json=payload,
             )
+            usage.started = response.status_code == 200
             usage.observe(response.json() if response.status_code == 200 else {})
         if response.status_code != 200:
             raise ProviderRequestError(self.provider_id, response.status_code)
@@ -427,6 +429,7 @@ class OpenAIResponsesAdapter(LLMInterface):
                     await response.aread()
                     raise ProviderRequestError(self.provider_id, response.status_code)
                 async for line in iter_provider_lines(response):
+                    usage.started = True
                     if not line.startswith("data:"):
                         continue
                     raw = line[5:].strip()
@@ -512,6 +515,7 @@ class OpenAIResponsesAdapter(LLMInterface):
                 headers=self._headers(api_key),
                 json=payload,
             )
+            usage.started = response.status_code == 200
             usage.observe(response.json() if response.status_code == 200 else {})
         if response.status_code != 200:
             raise ProviderRequestError(self.provider_id, response.status_code)
@@ -682,6 +686,7 @@ class GeminiAdapter(LLMInterface):
                     raise ProviderRequestError(self.provider_id, response.status_code)
                 event_seq = 0
                 async for line in iter_provider_lines(response):
+                    usage.started = True
                     if not line.startswith("data:"):
                         continue
                     try:
@@ -728,6 +733,7 @@ class GeminiAdapter(LLMInterface):
                     "generationConfig": config,
                 },
             )
+            usage.started = response.status_code == 200
             usage.observe(response.json() if response.status_code == 200 else {})
         if response.status_code != 200:
             raise ProviderRequestError(self.provider_id, response.status_code)

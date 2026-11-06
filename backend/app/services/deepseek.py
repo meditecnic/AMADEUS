@@ -195,6 +195,7 @@ class DeepSeekService(LLMInterface):
                     raise ProviderRequestError("deepseek", response.status_code)
                 
                 async for line in iter_provider_lines(response):
+                    usage.started = True
                     if not line:
                         continue
                     if line.startswith("data: "):
@@ -263,6 +264,7 @@ class DeepSeekService(LLMInterface):
         async with usage_call("deepseek", model or self.model) as usage, httpx.AsyncClient(timeout=20.0) as client:
             try:
                 response = await client.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)
+                usage.started = response.status_code == 200
                 response.raise_for_status()
                 result = response.json()
                 usage.observe(result)
@@ -301,6 +303,7 @@ class DeepSeekService(LLMInterface):
         async with usage_call("deepseek", model or self.model) as usage, httpx.AsyncClient(timeout=15.0) as client:
             try:
                 response = await client.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)
+                usage.started = response.status_code == 200
                 response.raise_for_status()
                 result = response.json()
                 usage.observe(result)
@@ -341,6 +344,7 @@ class DeepSeekService(LLMInterface):
                 headers=headers,
                 json=payload,
             )
+            usage.started = response.status_code == 200
             response.raise_for_status()
             result = response.json()
             usage.observe(result)

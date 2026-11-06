@@ -45,6 +45,7 @@ class Usage:
         self.time = datetime.now(timezone.utc).isoformat()
         self.input = self.output = self.cached = None
         self.invalid = False
+        self.started = False
 
     def observe(self, payload):
         if self.invalid:
@@ -100,5 +101,7 @@ async def usage_call(provider_id: str, model_id: str):
     try:
         yield usage
     finally:
-        # Also retain unreported attempts on cancellation/transport/parse failure.
-        await asyncio.shield(asyncio.to_thread(usage.save))
+        # Rejected/unconnected requests are not billable. After a successful
+        # response starts, retain the attempt even on cancellation or truncation.
+        if usage.started:
+            await asyncio.shield(asyncio.to_thread(usage.save))
