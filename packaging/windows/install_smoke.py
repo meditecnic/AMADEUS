@@ -199,6 +199,34 @@ class CDP:
         path.write_bytes(base64.b64decode(self.call("Page.captureScreenshot", {"format": "png"})["data"]))
 
 
+def cdp_diagnostics(primary: subprocess.Popen, port: int, log_path: Path) -> None:
+    """Print why CDP never answered; the evidence artifact is not always reachable."""
+    snapshot = process_snapshot()
+    tree = {primary.pid}
+    for _ in range(4):
+        tree |= {pid for pid, (parent, _) in snapshot.items() if parent in tree}
+    names = sorted(f"{pid}:{snapshot[pid][1]}" for pid in tree if pid in snapshot)
+    session = wintypes.DWORD()
+    ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(session))
+    print("CDP_DIAG " + json.dumps({
+        "desktop_exit_code": primary.poll(), "debug_port": port, "process_tree": names,
+        "smoke_session_id": session.value,
+    }), flush=True)
+    try:
+        listeners = powershell(
+            "ConvertTo-Json -Compress -InputObject @(Get-NetTCPConnection -State Listen | "
+            f"Where-Object {{ @({','.join(str(pid) for pid in tree)}) -contains $_.OwningProcess -or $_.LocalPort -eq {port} }} | "
+            "ForEach-Object { @{port=$_.LocalPort; address=$_.LocalAddress; pid=$_.OwningProcess} })")
+        print("CDP_DIAG_LISTENERS " + json.dumps(listeners), flush=True)
+    except (subprocess.SubprocessError, ValueError, OSError) as exc:
+        print(f"CDP_DIAG_LISTENERS unavailable: {type(exc).__name__}", flush=True)
+    try:
+        tail = log_path.read_bytes()[-3000:].decode("utf-8", "replace")
+        print("CDP_DIAG_DESKTOP_LOG_TAIL\n" + tail, flush=True)
+    except OSError as exc:
+        print(f"CDP_DIAG_DESKTOP_LOG unavailable: {type(exc).__name__}", flush=True)
+
+
 def connect_cdp(port: int, timeout: float) -> CDP:
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -281,7 +309,12 @@ def exercise(installer: Path, root: Path, timeout: float, result: dict, provider
             primary = subprocess.Popen([str(exe)], env=env, stdout=log, stderr=subprocess.STDOUT)
             launches.append(primary)
             tick = lambda: [update_children(p.pid, tracked) for p in launches]
-            cdp = connect_cdp(port, timeout)
+            try:
+                cdp = connect_cdp(port, timeout)
+            except RuntimeError:
+                log.flush()
+                cdp_diagnostics(primary, port, root / "desktop.log")
+                raise
             for domain in ("Network", "Log", "Runtime", "Page"):
                 cdp.call(domain + ".enable")
             # WebView2 pauses before the first script, so initial login requests/errors are observed.
