@@ -16,6 +16,14 @@ import threading
 import traceback
 
 
+def lifecycle_log(message: str, *, file=None) -> None:
+    # The desktop may already be gone, leaving either output pipe without a reader.
+    try:
+        print(message, file=file, flush=True)
+    except (OSError, ValueError):
+        pass
+
+
 def configure_environment() -> None:
     for stream in (sys.stdout, sys.stderr):
         if stream is not None:
@@ -75,12 +83,12 @@ def watch_stdin(shutdown: threading.Event) -> None:
     kernel.ReadFile.restype = wintypes.BOOL
     handle = kernel.GetStdHandle(-10)
     if kernel.GetFileType(handle) != 3:  # FILE_TYPE_PIPE
-        print("AMADEUS_BACKEND_STDIN is not a pipe; waiting for EOF", file=sys.stderr, flush=True)
+        lifecycle_log("AMADEUS_BACKEND_STDIN is not a pipe; waiting for EOF", file=sys.stderr)
         if sys.stdin is not None:
             for _ in sys.stdin:
                 pass
-        print("AMADEUS_BACKEND_STDIN non-pipe EOF; requesting shutdown", file=sys.stderr, flush=True)
         shutdown.set()
+        lifecycle_log("AMADEUS_BACKEND_STDIN non-pipe EOF; requesting shutdown", file=sys.stderr)
         return
     while not shutdown.is_set():
         available = wintypes.DWORD()
@@ -144,8 +152,8 @@ async def serve(shutdown: threading.Event, port: int) -> int:
 
         async def request_shutdown() -> None:
             await asyncio.to_thread(shutdown.wait)
-            print("AMADEUS_BACKEND_SHUTDOWN requested", flush=True)
             server.should_exit = True
+            lifecycle_log("AMADEUS_BACKEND_SHUTDOWN requested")
 
         watcher = asyncio.create_task(request_shutdown())
         serving = asyncio.create_task(server.serve(sockets=[listener]))
@@ -153,9 +161,9 @@ async def serve(shutdown: threading.Event, port: int) -> int:
             while not server.started and not serving.done():
                 await asyncio.sleep(0.05)
             if server.started:
-                print("AMADEUS_BACKEND_READY " + json.dumps({
+                lifecycle_log("AMADEUS_BACKEND_READY " + json.dumps({
                     "version": 1, "port": port, "pid": os.getpid(),
-                }), flush=True)
+                }))
             await serving
             return 0 if server.started else 1
         finally:
@@ -190,9 +198,12 @@ def main() -> int:
         threading.Thread(target=watch_stdin, args=(shutdown,), daemon=True).start()
         return asyncio.run(serve(shutdown, port))
     except Exception as error:
-        print(f"AMADEUS_BACKEND_FAILED {type(error).__name__}: {error}", flush=True)
+        lifecycle_log(f"AMADEUS_BACKEND_FAILED {type(error).__name__}: {error}")
         if args.self_check:
-            traceback.print_exc()
+            try:
+                traceback.print_exc()
+            except (OSError, ValueError):
+                pass
         return 1
 
 
