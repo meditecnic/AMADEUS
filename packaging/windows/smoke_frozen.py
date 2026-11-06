@@ -64,12 +64,46 @@ def process_snapshot() -> dict[int, tuple[int, str]]:
     return processes
 
 
-def update_children(root_pid: int, tracked: set[int]) -> None:
-    processes = process_snapshot()
+def process_creation_time(pid: int) -> int | None:
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+    kernel.GetProcessTimes.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return None
+    try:
+        times = [wintypes.FILETIME() for _ in range(4)]
+        if not kernel.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+            return None
+        return (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+    finally:
+        kernel.CloseHandle(handle)
+
+
+def update_children(root_pid: int, tracked: set[int], processes=None, created=None) -> None:
+    processes = process_snapshot() if processes is None else processes
+    created = process_creation_time if created is None else created
+    times: dict[int, int | None] = {}
+
+    def born(pid: int) -> int | None:
+        if pid not in times:
+            times[pid] = created(pid)
+        return times[pid]
+
+    def is_child(pid: int, parent: int) -> bool:
+        # Windows keeps a dead parent's PID in th32ParentProcessID and reuses PIDs, so a process
+        # started long before ours (e.g. wininit.exe) can name our PID as its parent.
+        child_time, parent_time = born(pid), born(parent)
+        return child_time is not None and parent_time is not None and child_time >= parent_time
+
     ancestors = tracked | {root_pid}
     while True:
-        children = {pid for pid, (parent, _) in processes.items() if parent in ancestors}
-        if children <= ancestors:
+        children = {pid for pid, (parent, _) in processes.items()
+                    if parent in ancestors and pid not in ancestors and is_child(pid, parent)}
+        if not children:
             break
         ancestors |= children
     tracked.update(ancestors - {root_pid})
