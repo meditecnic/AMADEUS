@@ -134,6 +134,7 @@
       ]
     },
     "openai": {
+      "stream_usage": true,
       "allow_undiscovered_models": false,
       "models": [
         {

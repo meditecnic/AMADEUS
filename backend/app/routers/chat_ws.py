@@ -397,7 +397,10 @@ async def translate_with_provider(
     # Q87 (P-NORM-1): normalize Chinese subtitle after successful translation,
     # before WS emit and persistence. Pass original Japanese `text` as source
     # so R07 can gate on アトラクタフィールド (R01–R06 ignore source).
-    raw = await method(**kwargs)
+    from app.services.model_usage import usage_scope
+
+    with usage_scope(source="translation"):
+        raw = await method(**kwargs)
     if not raw:
         return raw
     return apply_subtitle_glossary_rewrites(raw, source=text)
@@ -590,7 +593,10 @@ async def compress_and_update_history(
             )
 
             summary_epoch = session_data.content_epoch
-            raw = await method(**kwargs)
+            from app.services.model_usage import usage_scope
+
+            with usage_scope(source="compression", worldline=worldline, conversation_id=conversation_id):
+                raw = await method(**kwargs)
             success, summary = normalize_generated_working_summary(raw)
             compression_succeeded = bool(success)
             if not success:
@@ -1601,6 +1607,9 @@ async def processor_loop(
             )
     conversation_id = session.conversation_id
     turn_worldline = session.worldline
+    from app.services.model_usage import set_chat_context
+
+    set_chat_context(turn_worldline, conversation_id)
     turn_api_key = session.api_key
     # Pipeline resources are owned by the outer try/finally below. Fail-closed
     # model_unavailable returns early *inside* that try so is_busy / pipeline

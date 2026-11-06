@@ -4,6 +4,7 @@ from typing import Optional
 from app import config
 from app.services.llm_interface import LLMInterface, build_stream_messages
 from app.services.model_catalog import model_catalog
+from app.services.model_usage import usage_call
 from app.services.persona_bible import persona_bible
 from app.services.provider_adapters import ProviderRequestError, iter_provider_lines
 
@@ -187,7 +188,7 @@ class DeepSeekService(LLMInterface):
             flush=True,
         )
         
-        async with httpx.AsyncClient(timeout=httpx.Timeout(connect=15.0, read=120.0, write=10.0, pool=5.0)) as client:
+        async with usage_call("deepseek", model or self.model) as usage, httpx.AsyncClient(timeout=httpx.Timeout(connect=15.0, read=120.0, write=10.0, pool=5.0)) as client:
             async with client.stream("POST", f"{self.base_url}/chat/completions", json=payload, headers=headers) as response:
                 if response.status_code != 200:
                     await response.aread()
@@ -202,6 +203,7 @@ class DeepSeekService(LLMInterface):
                             break
                         try:
                             chunk_data = json.loads(data_str)
+                            usage.observe(chunk_data)
                             if "choices" in chunk_data and len(chunk_data["choices"]) > 0:
                                 delta = chunk_data["choices"][0].get("delta", {})
                                 content = delta.get("content")
@@ -258,11 +260,12 @@ class DeepSeekService(LLMInterface):
             "temperature": 0.3
         }
         
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with usage_call("deepseek", model or self.model) as usage, httpx.AsyncClient(timeout=20.0) as client:
             try:
                 response = await client.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)
                 response.raise_for_status()
                 result = response.json()
+                usage.observe(result)
                 return result["choices"][0]["message"]["content"].strip()
             except Exception as e:
                 print(f"[DeepSeek] Failed to compress history: {e}")
@@ -295,11 +298,12 @@ class DeepSeekService(LLMInterface):
             "temperature": 0.3
         }
         
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with usage_call("deepseek", model or self.model) as usage, httpx.AsyncClient(timeout=15.0) as client:
             try:
                 response = await client.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)
                 response.raise_for_status()
                 result = response.json()
+                usage.observe(result)
                 return result["choices"][0]["message"]["content"].strip()
             except (httpx.TimeoutException, httpx.NetworkError) as e:
                 print(f"[DeepSeek] Translation failed: {e}", flush=True)
@@ -331,14 +335,16 @@ class DeepSeekService(LLMInterface):
             "Authorization": f"Bearer {effective_api_key}",
             "Content-Type": "application/json",
         }
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with usage_call("deepseek", model or self.model) as usage, httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 f"{self.base_url}/chat/completions",
                 headers=headers,
                 json=payload,
             )
             response.raise_for_status()
-            raw = response.json()["choices"][0]["message"]["content"].strip()
+            result = response.json()
+            usage.observe(result)
+            raw = result["choices"][0]["message"]["content"].strip()
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
         result = json.loads(raw)

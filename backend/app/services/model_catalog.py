@@ -524,6 +524,10 @@ class ModelCatalog:
         self._discovered_metadata[provider_id] = metadata
         return self.list_provider(provider_id)
 
+    def supports_stream_usage(self, provider_id: str) -> bool:
+        provider = self._manifest["providers"].get(provider_id, {})
+        return not is_user_custom_provider(provider_id) and provider.get("stream_usage") is True
+
     def preferred_id(self, provider_id: str) -> str | None:
         for model_id in self._providers.get(provider_id, ()):
             if self._models[(provider_id, model_id)].preferred:
