@@ -421,17 +421,27 @@ def exercise(installer: Path, root: Path, timeout: float, result: dict, provider
             # Detach DevTools first so an attached client cannot keep the WebView2 browser process alive.
             cdp.ws.close()
             started = time.monotonic()
+            desktop_exit: dict = {}
+
+            def closed() -> bool:
+                if "seconds" not in desktop_exit and primary.poll() is not None:
+                    desktop_exit["seconds"] = round(time.monotonic() - started, 3)
+                return not ((tracked | {p.pid for p in launches}) & process_snapshot().keys())
+
             require(close_windows(primary.pid), "No visible primary window; interactive desktop unavailable")
             try:
-                wait_until(lambda: not ((tracked | {p.pid for p in launches}) & process_snapshot().keys()), 10,
-                           "WM_CLOSE left desktop/backend/WebView2 descendants after 10 seconds", tick)
+                wait_until(closed, 10, "WM_CLOSE left desktop/backend/WebView2 descendants after 10 seconds", tick)
             except RuntimeError:
                 snapshot = process_snapshot()
                 residual = sorted(f"{pid}:{snapshot[pid][1]}" for pid in
                                   (tracked | {p.pid for p in launches}) & snapshot.keys())
                 print("RESIDUAL_PROCESSES " + json.dumps({
                     "processes": residual, "desktop_exit_code": primary.poll(),
+                    "desktop_exit_seconds": desktop_exit.get("seconds"),
                     "seconds": round(time.monotonic() - started, 3)}), flush=True)
+                log.flush()
+                print("RESIDUAL_DESKTOP_LOG_TAIL\n" + safe_text(
+                    (root / "desktop.log").read_bytes()[-2000:].decode("utf-8", "replace")), flush=True)
                 for name in ("backend-stdout.log", "backend-stderr.log"):
                     try:
                         tail = (data / "logs" / name).read_bytes()[-2000:].decode("utf-8", "replace")
