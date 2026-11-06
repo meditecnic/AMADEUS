@@ -8,6 +8,24 @@ from app import db
 from app.services.model_catalog import model_catalog
 
 
+def _price_at(price: dict | None, time_utc: str) -> dict | None:
+    if price is None or not price.get("schedule"):
+        return price
+    try:
+        instant = datetime.fromisoformat(time_utc)
+    except (TypeError, ValueError):
+        return None
+    if instant.tzinfo is None:
+        return None
+    instant = instant.astimezone(timezone.utc)
+    minute = instant.hour * 60 + instant.minute
+    schedule = price["schedule"]
+    peak = instant.weekday() in schedule["weekdays"] and any(
+        start <= minute < end for start, end in schedule["utc_windows"]
+    )
+    return {**price, **schedule["peak" if peak else "off_peak"]}
+
+
 def usage_report(period: str, session_id: str | None, tz: int, *, now=None) -> dict:
     clauses, params = [], []
     if period == "session":
@@ -42,7 +60,7 @@ def usage_report(period: str, session_id: str | None, tz: int, *, now=None) -> d
             for name in ("input_tokens", "output_tokens", "cached_tokens"):
                 if row[name] is not None:
                     group[name] = (group[name] or 0) + row[name]
-            price = group["pricing"]
+            price = _price_at(group["pricing"], row["time_utc"])
             limit = price.get("max_input_tokens") if price else None
             if not price or not row["reported"] or (limit is not None and row["input_tokens"] >= limit):
                 group["unestimated_calls"] += 1

@@ -239,15 +239,40 @@ class ModelCatalog:
         )
 
     @staticmethod
-    def _parse_pricing(raw: Any) -> dict | None:
-        if raw is None:
-            return None
+    def _validate_pricing_rates(raw: Any) -> None:
         if not isinstance(raw, dict):
-            raise ValueError("pricing must be an object")
+            raise ValueError("pricing rates must be an object")
         for name in ("input", "output", "cached_input"):
             value = raw.get(name)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
                 raise ValueError("pricing rates must be finite nonnegative numbers")
+
+    @classmethod
+    def _parse_pricing(cls, raw: Any) -> dict | None:
+        if raw is None:
+            return None
+        if not isinstance(raw, dict):
+            raise ValueError("pricing must be an object")
+        cls._validate_pricing_rates(raw)
+        schedule = raw.get("schedule")
+        if schedule is not None:
+            if not isinstance(schedule, dict):
+                raise ValueError("pricing schedule must be an object")
+            weekdays = schedule.get("weekdays")
+            if not isinstance(weekdays, list) or not weekdays or any(
+                type(day) is not int or not 0 <= day <= 6 for day in weekdays
+            ):
+                raise ValueError("pricing weekdays must be Monday=0 through Sunday=6")
+            windows = schedule.get("utc_windows")
+            if not isinstance(windows, list) or not windows or any(
+                not isinstance(window, list) or len(window) != 2
+                or any(type(minute) is not int for minute in window)
+                or not 0 <= window[0] < window[1] <= 1440
+                for window in windows
+            ):
+                raise ValueError("pricing UTC windows must be half-open minute intervals")
+            for period in ("peak", "off_peak"):
+                cls._validate_pricing_rates(schedule.get(period))
         currency = raw.get("currency")
         if not isinstance(currency, str) or len(currency) != 3 or not currency.isalpha() or not currency.isupper():
             raise ValueError("pricing currency must be an ISO currency code")

@@ -134,3 +134,59 @@ async def test_empty_200_stream_does_not_create_a_call(kind, usage_store, monkey
     adapter = adapter_for(kind, lambda req: httpx.Response(200, content=b''), monkeypatch)
     assert [chunk async for chunk in adapter.get_chat_stream([], api_key='test-key')] == []
     assert rows(usage_store) == []
+
+
+@pytest.mark.parametrize('model,peak_cost', [('deepseek-flash', 1.3824), ('deepseek-v4-flash', 1.3824),
+                                            ('deepseek-v4-pro', 4.7696)])
+@pytest.mark.parametrize('timestamp,peak', [
+    ('2026-11-02T00:59:00+00:00', False), ('2026-11-02T01:00:00+00:00', True),
+    ('2026-11-02T03:59:59+00:00', True), ('2026-11-02T04:00:00+00:00', False),
+    ('2026-11-02T05:59:59+00:00', False), ('2026-11-02T06:00:00+00:00', True),
+    ('2026-11-02T09:59:59+00:00', True), ('2026-11-02T10:00:00+00:00', False),
+    ('2026-11-06T01:00:00+00:00', True), ('2026-11-07T01:00:00+00:00', False),
+    ('2026-11-08T06:00:00+00:00', False), ('2026-11-02T05:00:00+04:00', True),
+])
+def test_deepseek_schedule_uses_each_call_time(timestamp, peak, model, peak_cost, usage_store):
+    from contextlib import closing
+    import sqlite3
+    from app.services.usage_report import usage_report
+    with closing(sqlite3.connect(usage_store)) as conn:
+        conn.execute('''INSERT INTO model_usage
+            (time_utc,category,source,provider_id,model_id,input_tokens,output_tokens,cached_tokens,reported)
+            VALUES(?,'chat','chat','deepseek',?,1000000,1000000,400000,1)''', (timestamp, model))
+        conn.commit()
+    result = usage_report('all', None, 0)
+    group, = result['groups']
+    assert group['estimated_cost'] == pytest.approx(peak_cost if peak else peak_cost/2)
+    assert result['totals_by_currency']['USD'] == group['estimated_cost']
+    assert group['input_tokens'] == 1000000 and group['cached_tokens'] == 400000
+    assert result['estimate'] is True
+
+
+def test_mixed_peak_off_peak_calls_aggregate_in_one_group(usage_store):
+    from contextlib import closing
+    import sqlite3
+    from app.services.usage_report import usage_report
+    with closing(sqlite3.connect(usage_store)) as conn:
+        conn.executemany('''INSERT INTO model_usage
+            (time_utc,category,source,provider_id,model_id,input_tokens,output_tokens,cached_tokens,reported)
+            VALUES(?,'chat','chat','deepseek','deepseek-flash',1000000,1000000,400000,1)''',
+            [('2026-11-02T01:00:00+00:00',), ('2026-11-02T04:00:00+00:00',)])
+        conn.commit()
+    group, = usage_report('all', None, 0)['groups']
+    assert group['calls'] == 2 and group['estimated_cost'] == pytest.approx(2.0736)
+    assert 'holidays' in group['pricing']['note'] and 'overestimate' in group['pricing']['note']
+
+
+@pytest.mark.parametrize('patch', [
+    {'weekdays': [True]}, {'weekdays': [7]}, {'weekdays': []},
+    {'utc_windows': [[60, 60]]}, {'utc_windows': [[240, 60]]}, {'utc_windows': [[0, 1441]]},
+    {'utc_windows': [['01:00', '04:00']]}, {'utc_windows': []},
+    {'peak': {'input': -1, 'output': 1, 'cached_input': 0}}, {'off_peak': None},
+])
+def test_invalid_price_schedules_are_rejected(patch):
+    from app.services.model_catalog import ModelCatalog, model_catalog
+    price = model_catalog.pricing_for('deepseek', 'deepseek-flash')
+    price['schedule'].update(patch)
+    with pytest.raises(ValueError):
+        ModelCatalog._parse_pricing(price)
