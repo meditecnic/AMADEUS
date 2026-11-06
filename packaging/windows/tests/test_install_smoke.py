@@ -32,6 +32,40 @@ class InstallSmokeLogicTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Refusing existing user data"):
                 smoke.check_clean(local)
 
+    def test_default_logs_use_identity_root_and_preserve_redacted_evidence(self):
+        with tempfile.TemporaryDirectory() as temp:
+            data = smoke.check_clean(Path(temp))
+            logs = smoke.installed_backend_logs(data)
+            self.assertEqual(logs, Path(temp) / smoke.IDENTIFIER / "logs")
+            data.mkdir(parents=True)
+            logs.mkdir()
+            evidence = Path(temp) / "evidence"
+            evidence.mkdir()
+            payloads = {
+                "backend-stdout.log": 'AMADEUS_BACKEND_READY {"pid":42,"port":1234}\n',
+                "backend-stderr.log": "Bearer " + "x" * 43,
+                "backend-startup.log": "data_location_missing: selected-directory",
+            }
+            for name, payload in payloads.items():
+                (logs / name).write_text(payload, encoding="utf-8")
+            smoke.save_backend_logs(logs, evidence)
+            self.assertEqual({p.name for p in evidence.iterdir()}, set(payloads))
+            self.assertEqual((evidence / "backend-stdout.log").read_text(encoding="utf-8"),
+                             payloads["backend-stdout.log"])
+            self.assertEqual((evidence / "backend-startup.log").read_text(encoding="utf-8"),
+                             payloads["backend-startup.log"])
+            self.assertNotIn("x" * 43, (evidence / "backend-stderr.log").read_text(encoding="utf-8"))
+            self.assertEqual(smoke.installed_backend_logs(data), logs)
+
+    def test_any_desktop_log_inside_default_data_fails_gate(self):
+        for name in ("backend-stdout.log", "backend-stderr.log", "backend-startup.log"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temp:
+                data = smoke.check_clean(Path(temp))
+                (data / "logs").mkdir(parents=True)
+                (data / "logs" / name).write_text("misplaced", encoding="utf-8")
+                with self.assertRaisesRegex(RuntimeError, "Desktop logs found inside movable data"):
+                    smoke.installed_backend_logs(data)
+
     def test_nsis_quoted_install_location_is_resolved(self):
         winreg = MagicMock()
         winreg.QueryInfoKey.return_value = (1, 0, 0)

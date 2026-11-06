@@ -53,6 +53,18 @@ def check_clean(local: Path) -> Path:
     return root / "data"
 
 
+def installed_backend_logs(data: Path) -> Path:
+    desktop_logs = ("backend-stdout.log", "backend-stderr.log", "backend-startup.log")
+    misplaced = [name for name in desktop_logs if (data / "logs" / name).exists()]
+    require(not misplaced, f"Desktop logs found inside movable data: {', '.join(misplaced)}")
+    return data.parent / "logs"
+
+
+def save_backend_logs(logs: Path, evidence: Path) -> None:
+    for path in logs.glob("backend-*.log"):
+        (evidence / path.name).write_text(safe_text(path.read_text(encoding="utf-8", errors="replace")), encoding="utf-8")
+
+
 def powershell(script: str) -> object:
     output = subprocess.check_output(
         ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
@@ -309,6 +321,7 @@ def backend_pids() -> set[int]:
 
 def exercise(installer: Path, root: Path, timeout: float, result: dict, provider_port: int) -> None:
     data = check_clean(Path(os.environ["LOCALAPPDATA"]))
+    logs = installed_backend_logs(data)
     print("INSTALL_STEP clean user-data root", flush=True)
     require(registration() is None and not backend_pids(), "Existing installation/backend; use a clean runner")
     env = sanitized_build_environment()  # Removes inherited AMADEUS_*, signing keys and provider credentials.
@@ -396,7 +409,8 @@ def exercise(installer: Path, root: Path, timeout: float, result: dict, provider
             require(data.is_dir(), "Default LOCALAPPDATA data directory was not created")
             backends = backend_pids()
             require(len(backends) == 1 and backends <= tracked, "Expected one installed backend child")
-            stdout = (data / "logs/backend-stdout.log").read_text(encoding="utf-8")
+            installed_backend_logs(data)
+            stdout = (logs / "backend-stdout.log").read_text(encoding="utf-8")
             ready = [json.loads(line.split(" ", 1)[1]) for line in stdout.splitlines()
                      if line.startswith("AMADEUS_BACKEND_READY ")]
             require(len(ready) == 1 and ready[0]["pid"] in backends, "Installed backend READY missing or wrong PID")
@@ -444,7 +458,7 @@ def exercise(installer: Path, root: Path, timeout: float, result: dict, provider
                     (root / "desktop.log").read_bytes()[-2000:].decode("utf-8", "replace")), flush=True)
                 for name in ("backend-stdout.log", "backend-stderr.log"):
                     try:
-                        tail = (data / "logs" / name).read_bytes()[-2000:].decode("utf-8", "replace")
+                        tail = (logs / name).read_bytes()[-2000:].decode("utf-8", "replace")
                         print(f"RESIDUAL_LOG_TAIL {name}\n" + safe_text(tail), flush=True)
                     except OSError as exc:
                         print(f"RESIDUAL_LOG_TAIL {name} unavailable: {type(exc).__name__}", flush=True)
@@ -473,8 +487,9 @@ def exercise(installer: Path, root: Path, timeout: float, result: dict, provider
         for pid in (tracked | {p.pid for p in launches}) & process_snapshot().keys():
             subprocess.run(["taskkill.exe", "/PID", str(pid), "/T", "/F"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
-        for path in (data / "logs").glob("backend-*.log"):
-            (root / path.name).write_text(safe_text(path.read_text(encoding="utf-8", errors="replace")), encoding="utf-8")
+        save_backend_logs(logs, root)
+    installed_backend_logs(data)
+    result["desktop_logs_outside_data"] = True
     retained = {p.relative_to(data).as_posix(): digest(p) for p in data.rglob("*") if p.is_file()}
     require(retained, "Default data directory was empty before uninstall")
     result["uninstall"] = command_step([str(install / "uninstall.exe"), "/S"], "uninstall", root, env)
