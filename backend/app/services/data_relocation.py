@@ -1,17 +1,20 @@
 """Process-local admission barrier: drain admitted work before copying data."""
 import asyncio
 import contextvars
+from dataclasses import dataclass
 import json
 
 import anyio
 
 from starlette.responses import JSONResponse
+from starlette.types import Send
 
 from app import db
 
 _root = None
 _event = None
 _tasks = {}
+_sockets = {}
 _thread_work = set()
 pause_background = None
 resume_background = None
@@ -21,6 +24,7 @@ def reset():
     global _root, _event
     _root, _event = str(db.get_data_root()), asyncio.Event()
     _tasks.clear()
+    _sockets.clear()
 
 
 def relocating():
@@ -53,7 +57,26 @@ async def run_in_thread(function, *args):
     return work.result()
 
 
+@dataclass
+class _WebSocketConnection:
+    send: Send
+    error_type: str
+    closed: bool = False
+
+    async def close_for_relocation(self):
+        if not self.closed:
+            self.closed = True
+            await self.send({'type': 'websocket.send', 'text': json.dumps({
+                'type': self.error_type, 'message': 'Server error'})})
+            await self.send({'type': 'websocket.close', 'code': 1000})
+
+
 async def drain(request_task):
+    for connection in list(_sockets.values()):
+        try:
+            await connection.close_for_relocation()
+        except (OSError, RuntimeError, anyio.ClosedResourceError, anyio.BrokenResourceError):
+            pass  # The peer disconnected while the close handshake was being sent.
     current = request_task
     # A server task can outlive the ASGI call (e.g. Starlette's WebSocket scope).
     pending = [finished for task, finished in _tasks.items() if task is not current]
@@ -91,46 +114,24 @@ class RelocationMiddleware:
         if scope['type'] == 'http' and relocating():
             await JSONResponse({'detail': {'code': 'data_relocating'}}, status_code=503)(scope, receive, send)
             return
-        # Save this event: aborted relocation must not re-open an already drained socket.
-        event = _event
-        closed = False
-        accepted = False
+        connection = (_WebSocketConnection(send, 'error' if scope['path'] == '/ws/chat' else 'voice.error')
+                      if scope['type'] == 'websocket' else None)
 
         async def ws_send(message):
-            nonlocal accepted, closed
-            if not closed:
+            if not connection.closed:
+                if message['type'] == 'websocket.close':
+                    connection.closed = True
                 await send(message)
-                accepted |= message['type'] == 'websocket.accept'
-                closed |= message['type'] == 'websocket.close'
+                if message['type'] == 'websocket.accept':
+                    _sockets[task] = connection
 
-        async def ws_receive():
-            nonlocal closed
-            if event is None or not accepted:
-                return await receive()
-            # Receive in the caller task; only the relocation observer runs alongside it.
-            async with anyio.create_task_group() as waiters:
-                async def stop_on_relocation():
-                    await event.wait()
-                    waiters.cancel_scope.cancel()
-
-                waiters.start_soon(stop_on_relocation)
-                message = await receive()
-                waiters.cancel_scope.cancel()
-            if event.is_set():
-                if not closed:
-                    kind = 'error' if scope['path'] == '/ws/chat' else 'voice.error'
-                    await send({'type': 'websocket.send', 'text': json.dumps({'type': kind, 'message': 'Server error'})})
-                    await send({'type': 'websocket.close', 'code': 1000})
-                    closed = True
-                return {'type': 'websocket.disconnect', 'code': 1000}
-            return message
         task = asyncio.current_task()
         finished = asyncio.get_running_loop().create_future()
         _tasks[task] = finished
         try:
-            await self.app(scope, ws_receive if scope['type'] == 'websocket' else receive,
-                           ws_send if scope['type'] == 'websocket' else send)
+            await self.app(scope, receive, ws_send if connection is not None else send)
         finally:
             _tasks.pop(task, None)
+            _sockets.pop(task, None)
             if not finished.done():
                 finished.set_result(None)

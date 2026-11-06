@@ -235,8 +235,11 @@ async def test_barrier_drains_http_and_idle_websocket(data_root, relocation_stat
     gate = RelocationMiddleware(http_app)
     async def unused():
         await asyncio.Future()
+    incoming = asyncio.Queue()
     async def send(message):
         sent.append(message)
+        if message['type'] == 'websocket.close':
+            await incoming.put({'type': 'websocket.disconnect', 'code': 1000})
     request = asyncio.create_task(gate({'type': 'http'}, unused, send))
     await admitted.wait()
     relocation_state.begin()
@@ -250,31 +253,41 @@ async def test_barrier_drains_http_and_idle_websocket(data_root, relocation_stat
     relocation_state.abort()
     sent.clear()
     admitted.clear()
+    receive_callback = incoming.get
     async def ws_app(scope, receive, send):
         await send({'type': 'websocket.accept'})
         admitted.set()
+        assert receive is receive_callback
         assert (await receive())['type'] == 'websocket.disconnect'
-    socket = asyncio.create_task(RelocationMiddleware(ws_app)({'type': 'websocket', 'path': '/ws/chat'}, unused, send))
+    socket = asyncio.create_task(RelocationMiddleware(ws_app)({'type': 'websocket', 'path': '/ws/chat'}, receive_callback, send))
     await admitted.wait()
     relocation_state.begin()
     await asyncio.wait_for(relocation_state.drain(asyncio.current_task()), 2)
     await socket
     assert json.loads(sent[1]['text']) == {'type': 'error', 'message': 'Server error'}
     assert sent[2] == {'type': 'websocket.close', 'code': 1000}
+    assert not relocation_state._sockets
 
 
+@pytest.mark.timeout(10)
 def test_successful_move_stays_blocked_until_restart(data_root, managed, tmp_path_factory, monkeypatch, relocation_state):
     from app.routers import chat_ws
-    from test_backups import value_at
+    from concurrent.futures import ThreadPoolExecutor
 
     monkeypatch.setattr(chat_ws, 'sessions', {})
     target = tmp_path_factory.mktemp('success') / 'new'
     with TestClient(app, base_url='http://localhost') as client:
         with client.websocket_connect('/ws/chat', headers={'origin': 'http://localhost:1420', 'host': 'localhost'}) as existing:
-            response = client.post('/api/data/location/move', json={'path': str(target)})
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                moving = pool.submit(client.post, '/api/data/location/move', json={'path': str(target)})
+                try:
+                    assert existing.receive_json() == {'type': 'error', 'message': 'Server error'}
+                    assert existing.receive()['code'] == 1000
+                    assert not moving.done(), 'move must wait for the client close acknowledgement'
+                finally:
+                    existing.close()
+                response = moving.result(timeout=3)
             assert response.status_code == 200, response.text
-            assert existing.receive_json() == {'type': 'error', 'message': 'Server error'}
-            assert existing.receive()['code'] == 1000
         assert response.json() == {'restart_required': True, 'path': str(target)}
         for method, path in [('get', '/api/settings'), ('get', '/api/data/backups'),
                              ('post', '/api/data/backups'), ('get', '/health')]:
