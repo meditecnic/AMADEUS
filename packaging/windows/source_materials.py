@@ -21,6 +21,10 @@ MAX_SOURCE_BYTES = 64 * 1024 * 1024  # Largest pinned source archive is about 18
 MAX_NOTICE_BYTES = 2 * 1024 * 1024
 
 
+def application_version() -> str:
+    return json.loads((HERE.parents[1] / "desktop/src-tauri/tauri.conf.json").read_text(encoding="utf-8"))["version"]
+
+
 def download(url: str, target: Path, expected: str, *, max_bytes: int = MAX_SOURCE_BYTES) -> dict:
     if not re.fullmatch(r"[0-9a-f]{64}", expected):
         raise ValueError("A pinned SHA-256 is required before downloading")
@@ -31,7 +35,7 @@ def download(url: str, target: Path, expected: str, *, max_bytes: int = MAX_SOUR
             raise RuntimeError(f"Invalid cached source (size/hash); removed: {target}")
     else:
         print(f"DOWNLOAD {url}", flush=True)
-        request = urllib.request.Request(url, headers={"User-Agent": "Amadeus-packaging/0.1.0"})
+        request = urllib.request.Request(url, headers={"User-Agent": "Amadeus-packaging"})
         for attempt in range(4):
             temporary = None
             try:
@@ -108,7 +112,7 @@ def build_sources(work: Path, version: str) -> dict:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--work-dir", type=Path, required=True)
-    parser.add_argument("--version", default="0.1.0")
+    parser.add_argument("--version", default=application_version())
     args = parser.parse_args()
     args.work_dir.resolve().mkdir(parents=True, exist_ok=True)
     build_sources(args.work_dir.resolve(), args.version)

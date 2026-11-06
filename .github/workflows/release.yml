@@ -1,0 +1,124 @@
+name: Windows release
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - 'packaging/**'
+      - 'desktop/src-tauri/**'
+      - 'desktop/package*.json'
+      - 'backend/requirements*'
+      - '.github/workflows/release.yml'
+      - '.github/release-template.md'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-2025-vs2026
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+      JINA_REVISION: ac5d898c8d382b17167c33e5c8af644a3519b47d
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.11'
+          architecture: x64
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+      - id: version
+        name: Validate release inputs
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ github.event_name != 'pull_request' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+        run: python packaging/windows/release_artifacts.py check >> $env:GITHUB_OUTPUT
+      - name: Prepare build tools
+        run: |
+          "BUILD_WORK=$env:RUNNER_TEMP/amadeus-build" >> $env:GITHUB_ENV
+          "RELEASE_DIR=$env:RUNNER_TEMP/amadeus-release" >> $env:GITHUB_ENV
+          python -m pip install huggingface_hub==2.4.0 pytest==9.2.0 ruff==0.17.2 pefile==2024.8.26
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          rustup show active-toolchain
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python -c "import sys; sys.path.insert(0, 'packaging/windows'); from build_installer import visual_studio; from bundle_support import sanitized_build_environment; print(visual_studio(sanitized_build_environment())['redist'])" | Select-Object -Last 1 | ForEach-Object { "VC_REDIST=$_" >> $env:GITHUB_ENV }
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ${{ runner.temp }}/jina-snapshot/${{ env.JINA_REVISION }}
+          key: jina-${{ runner.os }}-${{ env.JINA_REVISION }}
+      - name: Download pinned Jina snapshot
+        # The builder requires the snapshot directory to be named after the pinned revision.
+        # Filenames are positional: `--include a b c` would take only the first as a pattern.
+        run: hf download jinaai/jina-embeddings-v5-text-nano-retrieval onnx/model.onnx onnx/model.onnx_data tokenizer.json README.md --revision $env:JINA_REVISION --local-dir "$env:RUNNER_TEMP/jina-snapshot/$env:JINA_REVISION"
+      - name: Packaging tests and lint
+        run: |
+          python -m pytest -q packaging/windows/tests
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          ruff check --config backend/ruff.toml packaging/windows
+      - name: Build with existing installer builder
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ github.event_name != 'pull_request' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ github.event_name != 'pull_request' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+        run: python packaging/windows/build_installer.py --work-dir $env:BUILD_WORK --embedding-source "$env:RUNNER_TEMP/jina-snapshot/$env:JINA_REVISION" --vc-redist $env:VC_REDIST
+      - name: Frozen service and self-check refuse missing data directory
+        run: |
+          $result = Get-Content "$env:BUILD_WORK/installer-result.json" -Raw | ConvertFrom-Json
+          python packaging/windows/check_no_data_dir.py --exe "$($result.backend)/amadeus-backend.exe" --work-dir "$env:RUNNER_TEMP/release-no-data-dir"
+      - name: Frozen backend self-check and smoke
+        run: |
+          $result = Get-Content "$env:BUILD_WORK/installer-result.json" -Raw | ConvertFrom-Json
+          $env:AMADEUS_DATA_DIR = "$env:RUNNER_TEMP/release-self-check-data"
+          $env:AMADEUS_CREDENTIAL_BACKEND = 'memory'
+          $env:PYTHON_DOTENV_DISABLED = '1'
+          $env:AMADEUS_LOCAL_API_TOKEN = 'ci-self-check-only'
+          & "$($result.backend)/amadeus-backend.exe" --self-check
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          & "$env:BUILD_WORK/backend-build/venv/Scripts/python.exe" packaging/windows/smoke_frozen.py --exe "$($result.backend)/amadeus-backend.exe" --work-dir "$env:RUNNER_TEMP/release-smoke"
+      - name: Collect release files and checksums
+        run: python packaging/windows/release_artifacts.py collect --work-dir $env:BUILD_WORK --output $env:RELEASE_DIR
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: amadeus-windows-x64-${{ steps.version.outputs.version }}
+          path: ${{ env.RELEASE_DIR }}/*
+          if-no-files-found: error
+      - name: Summarize DLL exclusion and license download retries
+        if: always()
+        run: |
+          if (-not $env:BUILD_WORK -or -not (Test-Path $env:BUILD_WORK)) {
+            'Build has not run; license download retry status is unavailable.' >> $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
+          $retries = @(Get-ChildItem $env:BUILD_WORK -Recurse -Filter *.log -ErrorAction SilentlyContinue | Select-String 'DOWNLOAD_RETRY')
+          "License/source DOWNLOAD_RETRY lines: $($retries.Count) (see build logs)." >> $env:GITHUB_STEP_SUMMARY
+          $auditPath = "$env:BUILD_WORK/backend-build/onnxruntime-imports.json"
+          if (Test-Path $auditPath) {
+            $audit = Get-Content $auditPath -Raw | ConvertFrom-Json
+            "ORT pruning: $($audit.before.bytes) -> $($audit.after.bytes) bytes; $(@($audit.removed).Count) files removed." >> $env:GITHUB_STEP_SUMMARY
+          }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: windows-packaging-evidence
+          path: |
+            ${{ runner.temp }}/amadeus-build/installer-result.json
+            ${{ runner.temp }}/amadeus-build/backend-build/*.json
+            ${{ runner.temp }}/amadeus-build/runs/**/logs/*.log
+          if-no-files-found: ignore
+      - name: Create draft Release for tag pushes
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $files = Get-ChildItem $env:RELEASE_DIR -File | ForEach-Object { $_.FullName }
+          gh release create $env:RELEASE_TAG @files --repo $env:GITHUB_REPOSITORY --verify-tag --draft --title "Amadeus $env:RELEASE_VERSION" --notes-file "$env:BUILD_WORK/release-notes.md"

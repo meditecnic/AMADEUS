@@ -185,8 +185,8 @@ def normalize_and_audit(dist: Path, redist: dict, report: Path) -> dict:
     return audit_bundle(dist, redist, report, replacements=replacements, additions=additions)
 
 
-def prune_sherpa_c_api(dist: Path, source: Path, report: Path) -> dict:
-    candidates = {"sherpa-onnx-c-api.dll", "sherpa-onnx-cxx-api.dll"}
+def prune_unused_dlls(dist: Path, source: Path, report: Path, candidates: set[str],
+                      reviewed_loaders: dict[str, str] | None = None) -> dict:
     files = sorted(path for path in dist.rglob("*") if path.is_file())
     before = {"files": len(files), "bytes": sum(path.stat().st_size for path in files)}
     imports, references = [], []
@@ -195,7 +195,7 @@ def prune_sherpa_c_api(dist: Path, source: Path, report: Path) -> dict:
             continue
         details = pe_details(path)
         row = {"bundle_path": path.relative_to(dist).as_posix(), **details}
-        if "sherpa_onnx" in path.parts:
+        if source.name in path.parts:
             imports.append(row)
         if path.name.lower() not in candidates and candidates.intersection(details["imports"]):
             references.append(row)
@@ -207,9 +207,11 @@ def prune_sherpa_c_api(dist: Path, source: Path, report: Path) -> dict:
                    if re.search(r"(?:CDLL|WinDLL|LoadLibrary\w*|load_library)$", ast.unparse(node.func))]
         row = {"path": path.relative_to(source).as_posix(), "sha256": digest(path), "loader_calls": loaders,
                "name_references": [line for line, text in enumerate(content.splitlines(), 1)
-                                   if "sherpa-onnx-c-api" in text or "sherpa-onnx-cxx-api" in text]}
+                                   if any((name if reviewed_loaders is not None else name.removesuffix(".dll"))
+                                          in text.lower() for name in candidates)]}
         python_sources.append(row)
-        if loaders:
+        reviewed = (reviewed_loaders or {}).get(row["path"]) == row["sha256"]
+        if (reviewed_loaders is not None and row["name_references"]) or (loaders and not reviewed):
             loader_calls.append(row)
     removed = []
     if not references and not loader_calls:
@@ -226,6 +228,23 @@ def prune_sherpa_c_api(dist: Path, source: Path, report: Path) -> dict:
     return payload
 
 
+def prune_sherpa_c_api(dist: Path, source: Path, report: Path) -> dict:
+    return prune_unused_dlls(dist, source, report, {"sherpa-onnx-c-api.dll", "sherpa-onnx-cxx-api.dll"})
+
+
+def prune_onnxruntime_dll(dist: Path, source: Path, report: Path) -> dict:
+    # Reviewed loader-bearing files from the locked 1.31.1 cp311 win_amd64 wheel:
+    # __init__ loads MSVC and enumerated NVIDIA DLLs; collect_build_info loads
+    # Linux libcudart only. Longformer loads a literal Linux .so extension.
+    # Any byte change or other loader retains the DLL.
+    reviewed = {
+        "__init__.py": "862db3fa268fbc397345d1c1cfffa7ec758bcb5332e90c08ddb0eb6a94d99558",
+        "capi/onnxruntime_collect_build_info.py": "b03f19d92d794074afb8ed63eed82a24a78e44351ab70cd49b3bc2f148fd7003",
+        "transformers/models/longformer/convert_to_onnx.py": "499c0bb11858a4fedd8b6f3df74dd1efaf1e48ad334599519e24961000a65fff",
+    }
+    return prune_unused_dlls(dist, source, report, {"onnxruntime.dll"}, reviewed)
+
+
 if __name__ == "__main__":
     import sys
 
@@ -234,6 +253,7 @@ if __name__ == "__main__":
     dist = work / "dist/amadeus-backend"
     redist = redist_inventory(Path(config["vc_redist"]))
     prune_sherpa_c_api(dist, Path(config["venv"]) / "Lib/site-packages/sherpa_onnx", work / "sherpa-imports.json")
+    prune_onnxruntime_dll(dist, Path(config["venv"]) / "Lib/site-packages/onnxruntime", work / "onnxruntime-imports.json")
     audit = normalize_and_audit(dist, redist, work / "vc-runtime-audit.json")
     sources_path = work / "binary-sources.json"
     sources = json.loads(sources_path.read_text(encoding="utf-8"))
