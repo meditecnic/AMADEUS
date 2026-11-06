@@ -44,8 +44,20 @@ class Usage:
         self.context = _context.get()
         self.time = datetime.now(timezone.utc).isoformat()
         self.input = self.output = self.cached = None
+        self.invalid = False
 
     def observe(self, payload):
+        if self.invalid:
+            return
+        try:
+            self._observe(payload)
+        except Exception:
+            # Provider accounting metadata is untrusted. A malformed report must
+            # never interrupt the reply or leave partially parsed token counts.
+            self.input = self.output = self.cached = None
+            self.invalid = True
+
+    def _observe(self, payload):
         if not isinstance(payload, dict):
             return
         usage = payload.get("usage") or payload.get("usageMetadata")
