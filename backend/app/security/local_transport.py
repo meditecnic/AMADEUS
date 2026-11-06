@@ -88,6 +88,12 @@ async def accept_local_websocket(websocket: WebSocket) -> bool:
         )):
             await websocket.close(code=4401, reason='local auth required')
             return False
+        from app.services.data_relocation import relocating
+        if relocating():
+            kind = 'error' if websocket.url.path == '/ws/chat' else 'voice.error'
+            await websocket.send_json({'type': kind, 'message': 'Server error'})
+            await websocket.close()
+            return False
         return True
     await websocket.close(code=4403, reason='origin not allowed')
     return False
