@@ -16,7 +16,6 @@ import time
 from app import db
 from app.security.passcode import atomic_json
 
-APP_VERSION = "0.1.0"  # Desktop release version (tauri.conf.json).
 REASONS = {"manual", "pre-upgrade", "weekly", "pre-restore"}
 ID_PATTERN = re.compile(r"[0-9]{8}T[0-9]{12}Z-(manual|pre-upgrade|weekly|pre-restore)")
 CONFIG_FILES = {"auth/passcode.json"}
@@ -161,7 +160,8 @@ def create_backup(reason: str = "manual", *, salvage: bool = False) -> dict:
         backup_id = now.strftime("%Y%m%dT%H%M%S%fZ") + "-" + reason
         staging = Path(tempfile.mkdtemp(prefix=".tmp-", dir=base))
         manifest = {"format": 1, "id": backup_id, "created_at": now.isoformat(),
-                    "app_version": APP_VERSION, "reason": reason, "files": [], "unreadable": []}
+                    "app_version": os.environ.get("AMADEUS_APP_VERSION") or "dev",
+                    "reason": reason, "files": [], "unreadable": []}
         try:
             for relative in files:
                 source, target = _local(root, relative), staging / relative

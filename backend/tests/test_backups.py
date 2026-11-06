@@ -36,6 +36,18 @@ def value_at(path):
         return connection.execute('SELECT value FROM sample').fetchone()[0]
 
 
+@pytest.mark.parametrize('version', [None, '0.1.1', '0.2.0-rc.1'])
+def test_manifest_uses_launcher_version_or_dev(data_root, monkeypatch, version):
+    make_database(data_root)
+    if version is None:
+        monkeypatch.delenv('AMADEUS_APP_VERSION', raising=False)
+    else:
+        monkeypatch.setenv('AMADEUS_APP_VERSION', version)
+    manifest = backups.create_backup()
+    assert manifest['app_version'] == (version or 'dev')
+    assert backups.list_backups()[0]['app_version'] == (version or 'dev')
+
+
 def test_snapshot_includes_wal_and_only_product_data(data_root):
     path = make_database(data_root)
     config = data_root / 'auth/passcode.json'
