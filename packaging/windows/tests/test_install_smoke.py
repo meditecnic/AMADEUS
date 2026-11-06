@@ -39,6 +39,16 @@ class InstallSmokeLogicTests(unittest.TestCase):
         with patch.dict(sys.modules, {"winreg": winreg}):
             self.assertEqual(smoke.registration(), {"location": r"C:\Apps\Amadeus"})
 
+    def test_registration_skips_keys_deleted_while_polling(self):
+        winreg = MagicMock()
+        winreg.QueryInfoKey.return_value = (3, 0, 0)
+        winreg.EnumKey.side_effect = ["Gone", OSError(259, "No more data"), "Amadeus"]
+        key = MagicMock()
+        winreg.OpenKey.side_effect = [MagicMock(), FileNotFoundError(2, "missing"), key]
+        winreg.QueryValueEx.side_effect = [("Amadeus", 1), ('"C:\\Apps\\Amadeus"', 1)]
+        with patch.dict(sys.modules, {"winreg": winreg}):
+            self.assertEqual(smoke.registration(), {"location": r"C:\Apps\Amadeus"})
+
     def test_logs_strip_auth_headers_and_url_queries(self):
         token = "a" * 43
         self.assertNotIn(token, smoke.safe_text("Bearer " + token))

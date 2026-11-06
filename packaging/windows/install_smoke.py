@@ -72,7 +72,12 @@ def registration() -> dict | None:
         return None  # A clean profile may not have the Uninstall key until something installs.
     with parent_key as parent:
         for index in range(winreg.QueryInfoKey(parent)[0]):
-            with winreg.OpenKey(parent, winreg.EnumKey(parent, index)) as key:
+            # The uninstaller deletes keys while this polls, so a key can vanish after it is counted.
+            try:
+                key = winreg.OpenKey(parent, winreg.EnumKey(parent, index))
+            except OSError:
+                continue
+            with key:
                 try:
                     if winreg.QueryValueEx(key, "DisplayName")[0] == "Amadeus":
                         # Tauri's NSIS template stores this value with enclosing quotes.
