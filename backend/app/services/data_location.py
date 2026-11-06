@@ -17,7 +17,7 @@ def location_file() -> Path | None:
 
 def read_location() -> dict:
     path = location_file()
-    if path is None or not path.exists():
+    if path is None or (not path.exists() and not path.is_symlink()):
         return {}
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -261,3 +261,22 @@ def copy_and_switch(raw: str) -> dict:
         if isinstance(exc, BackupError):
             raise
         raise BackupError("move_failed", f"Move failed; original data retained: {exc}") from exc
+
+
+def validate_startup() -> None:
+    """Fail before any backend writer if desktop-selected data became unavailable."""
+    try:
+        record = read_location()
+    except BackupError as exc:
+        raise RuntimeError(f"data_location_missing: {location_file()}: {exc}") from exc
+    if not record:
+        return
+    path = Path(record["path"])
+    try:
+        if path.resolve() != db.get_data_root() or not path.is_dir():
+            raise ValueError("Selected directory is missing or differs from backend data root")
+        marker = json.loads((path / MARKER).read_text(encoding="utf-8"))
+        if marker["format"] != 1:
+            raise ValueError("Unsupported data marker")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise RuntimeError(f"data_location_missing: {path}: {exc}") from exc

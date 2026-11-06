@@ -306,3 +306,29 @@ def test_backup_in_progress_refuses_move(data_root, managed, tmp_path_factory, m
         finally:
             release.set()
             thread.join()
+
+
+@pytest.mark.parametrize('kind', ['missing', 'no_marker', 'bad_marker', 'broken_file'])
+def test_startup_invalid_location_never_creates_empty_data(data_root, managed, monkeypatch, kind):
+    selected = data_root / 'moved'
+    monkeypatch.setenv('AMADEUS_DATA_DIR', str(selected))
+    managed.write_text(json.dumps({'path': str(selected)}), encoding='utf-8')
+    if kind in {'no_marker', 'bad_marker'}:
+        selected.mkdir()
+    if kind == 'bad_marker':
+        (selected / location.MARKER).write_text('{broken', encoding='utf-8')
+    if kind == 'broken_file':
+        managed.write_text('{broken', encoding='utf-8')
+    with pytest.raises(RuntimeError, match='data_location_missing'):
+        with TestClient(app, base_url='http://localhost'):
+            pass
+    assert not (selected / 'control.sqlite3').exists()
+    assert not (selected / 'backups').exists()
+    if kind in {'missing', 'broken_file'}:
+        assert not selected.exists()
+
+
+def test_valid_selected_location_allows_startup(data_root, managed):
+    managed.write_text(json.dumps({'path': str(data_root)}), encoding='utf-8')
+    (data_root / location.MARKER).write_text('{"format":1}', encoding='utf-8')
+    location.validate_startup()

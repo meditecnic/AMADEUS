@@ -39,6 +39,8 @@ async def _diagnostics_sweep_loop(stop: asyncio.Event | None = None) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    from app.services.data_location import validate_startup
+    validate_startup()
     from app.services import data_relocation
     data_relocation.reset()
     data_relocation.pause_background = data_relocation.resume_background = None
