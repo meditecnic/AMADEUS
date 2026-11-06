@@ -1,6 +1,9 @@
 """Process-local admission barrier: drain admitted work before copying data."""
 import asyncio
+import contextvars
 import json
+
+import anyio
 
 from starlette.responses import JSONResponse
 
@@ -8,7 +11,8 @@ from app import db
 
 _root = None
 _event = None
-_tasks = set()
+_tasks = {}
+_thread_work = set()
 pause_background = None
 resume_background = None
 
@@ -33,9 +37,26 @@ def abort():
     _event.clear()
 
 
+async def run_in_thread(function, *args):
+    """Keep the executor future until work finishes, even if its caller cancels."""
+    work = asyncio.get_running_loop().run_in_executor(None, contextvars.copy_context().run, function, *args)
+    _thread_work.add(work)
+
+    def finished(done):
+        _thread_work.discard(done)
+        if not done.cancelled():
+            done.exception()
+
+    work.add_done_callback(finished)
+    # Cancelling asyncio.wait cancels only its waiter, not the actual executor work.
+    await asyncio.wait({work})
+    return work.result()
+
+
 async def drain(request_task):
     current = request_task
-    pending = [task for task in _tasks if task is not current and not task.done()]
+    # A server task can outlive the ASGI call (e.g. Starlette's WebSocket scope).
+    pending = [finished for task, finished in _tasks.items() if task is not current]
     if pending:
         await asyncio.gather(*pending, return_exceptions=True)
     from app.routers.chat_ws import sessions
@@ -56,6 +77,8 @@ async def drain(request_task):
         await pause_background()
     from app.services.diagnostics import diagnostic_runtime
     await diagnostic_runtime.drain_pending()
+    while _thread_work:
+        await asyncio.gather(*_thread_work, return_exceptions=True)
 
 
 class RelocationMiddleware:
@@ -84,29 +107,30 @@ class RelocationMiddleware:
             nonlocal closed
             if event is None or not accepted:
                 return await receive()
-            incoming = asyncio.create_task(receive())
-            stop = asyncio.create_task(event.wait())
-            try:
-                await asyncio.wait({incoming, stop}, return_when=asyncio.FIRST_COMPLETED)
-                if event.is_set():
-                    if not closed:
-                        kind = 'error' if scope['path'] == '/ws/chat' else 'voice.error'
-                        await send({'type': 'websocket.send', 'text': json.dumps({'type': kind, 'message': 'Server error'})})
-                        await send({'type': 'websocket.close', 'code': 1000})
-                        closed = True
-                    return {'type': 'websocket.disconnect', 'code': 1000}
-                return incoming.result()
-            finally:
-                for waiter in (incoming, stop):
-                    if not waiter.done():
-                        waiter.cancel()
-                await asyncio.gather(incoming, stop, return_exceptions=True)
-        task = asyncio.create_task(self.app(scope, ws_receive if scope['type'] == 'websocket' else receive,
-                                            ws_send if scope['type'] == 'websocket' else send))
-        _tasks.add(task)
-        def finished(done):
-            _tasks.discard(done)
-            if not done.cancelled():
-                done.exception()
-        task.add_done_callback(finished)
-        await asyncio.shield(task)
+            # Receive in the caller task; only the relocation observer runs alongside it.
+            async with anyio.create_task_group() as waiters:
+                async def stop_on_relocation():
+                    await event.wait()
+                    waiters.cancel_scope.cancel()
+
+                waiters.start_soon(stop_on_relocation)
+                message = await receive()
+                waiters.cancel_scope.cancel()
+            if event.is_set():
+                if not closed:
+                    kind = 'error' if scope['path'] == '/ws/chat' else 'voice.error'
+                    await send({'type': 'websocket.send', 'text': json.dumps({'type': kind, 'message': 'Server error'})})
+                    await send({'type': 'websocket.close', 'code': 1000})
+                    closed = True
+                return {'type': 'websocket.disconnect', 'code': 1000}
+            return message
+        task = asyncio.current_task()
+        finished = asyncio.get_running_loop().create_future()
+        _tasks[task] = finished
+        try:
+            await self.app(scope, ws_receive if scope['type'] == 'websocket' else receive,
+                           ws_send if scope['type'] == 'websocket' else send)
+        finally:
+            _tasks.pop(task, None)
+            if not finished.done():
+                finished.set_result(None)

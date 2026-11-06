@@ -419,15 +419,19 @@ def test_delete_requires_healthy_current_data(data_root, managed, tmp_path_facto
     assert old.exists()
 
 
-async def test_cancelled_admitted_http_still_drains(data_root, relocation_state):
+async def test_cancelled_admitted_http_preserves_cancellation(data_root, relocation_state):
     import asyncio
     from app.services.data_relocation import RelocationMiddleware
 
-    started, release, wrote = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    started, cleaned = asyncio.Event(), asyncio.Event()
+    handlers = []
     async def handler(scope, receive, send):
+        handlers.append(asyncio.current_task())
         started.set()
-        await release.wait()
-        wrote.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaned.set()
     async def unused(*args):
         pass
     caller = asyncio.create_task(RelocationMiddleware(handler)({'type': 'http'}, unused, unused))
@@ -435,13 +439,9 @@ async def test_cancelled_admitted_http_still_drains(data_root, relocation_state)
     caller.cancel()
     with pytest.raises(asyncio.CancelledError):
         await caller
-    relocation_state.begin()
-    drain = asyncio.create_task(relocation_state.drain(asyncio.current_task()))
-    await asyncio.sleep(0)
-    assert not drain.done() and not wrote.is_set()
-    release.set()
-    await asyncio.wait_for(drain, 2)
-    assert wrote.is_set()
+    assert cleaned.is_set()
+    assert handlers == [caller]
+    assert caller not in relocation_state._tasks
 
 
 async def test_cancelled_speech_awaits_actual_thread(data_root):
@@ -466,3 +466,81 @@ async def test_cancelled_speech_awaits_actual_thread(data_root):
     release.set()
     await asyncio.wait_for(drain, 2)
     assert done.is_set()
+
+
+@pytest.mark.timeout(8)
+async def test_move_waits_for_cancelled_requests_sqlite_thread(data_root, managed, tmp_path_factory, monkeypatch, relocation_state):
+    import asyncio
+    from contextlib import closing
+    import sqlite3
+    import threading
+    import httpx
+    from app.routers import chat_ws
+    from app.routers.data import _call
+    from test_backups import make_database, value_at
+
+    monkeypatch.setattr(chat_ws, 'sessions', {})
+    database = make_database(data_root)
+    target = tmp_path_factory.mktemp('cancelled-write') / 'new'
+    write_started, release_write, write_finished = threading.Event(), threading.Event(), threading.Event()
+    copy_started = threading.Event()
+    request_cancelled = asyncio.Event()
+    move = None
+
+    def write_database():
+        with closing(sqlite3.connect(database)) as connection:
+            connection.execute("UPDATE sample SET value='written after client cancellation'")
+            write_started.set()
+            assert release_write.wait(4), 'test did not release the SQLite writer'
+            connection.commit()
+        write_finished.set()
+
+    async def handler(scope, receive, send):
+        try:
+            await _call(write_database)
+        except asyncio.CancelledError:
+            request_cancelled.set()
+            raise
+
+    async def unused(*args):
+        pass
+
+    copy = location.copy_and_switch
+    def checked_copy(path):
+        assert write_finished.is_set(), 'copy started while cancelled request was still writing'
+        assert value_at(database) == 'written after client cancellation'
+        copy_started.set()
+        return copy(path)
+    monkeypatch.setattr(location, 'copy_and_switch', checked_copy)
+    request = asyncio.create_task(relocation_state.RelocationMiddleware(handler)({'type': 'http'}, unused, unused))
+    try:
+        assert await asyncio.to_thread(write_started.wait, 2)
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+        assert request_cancelled.is_set() and not write_finished.is_set()
+        assert not relocation_state._tasks and relocation_state._thread_work
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url='http://localhost') as client:
+            move = asyncio.create_task(client.post('/api/data/location/move', json={'path': str(target)}))
+            async def entered_relocation():
+                while not relocation_state.relocating():
+                    await asyncio.sleep(0)
+            await asyncio.wait_for(entered_relocation(), 2)
+            # Wait until the barrier has reached its tracked executor work.
+            await asyncio.sleep(0.03)
+            assert not move.done() and not copy_started.is_set()
+            release_write.set()
+            response = await asyncio.wait_for(move, 3)
+        assert response.status_code == 200, response.text
+        assert copy_started.is_set()
+        assert value_at(target / 'control.sqlite3') == 'written after client cancellation'
+        assert not relocation_state._thread_work
+    finally:
+        release_write.set()
+        if not request.done():
+            request.cancel()
+        await asyncio.gather(request, return_exceptions=True)
+        if move is not None:
+            await asyncio.gather(move, return_exceptions=True)
+        if relocation_state._thread_work:
+            await asyncio.gather(*relocation_state._thread_work, return_exceptions=True)
