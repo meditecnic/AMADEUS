@@ -228,6 +228,12 @@ jobs:
             echo 'UPDATE_SIGNATURE_FAILED: expected exactly one Windows installer' >&2
             exit 1
           fi
+          for required in "${installers[0]}.sig" release-files/latest.json; do
+            if [[ ! -f "$required" ]]; then
+              echo "UPDATE_SIGNATURE_FAILED: signed tag/dispatch artifact missing $required" >&2
+              exit 1
+            fi
+          done
           python packaging/windows/verify_update_signature.py \
             --installer "${installers[0]}" --signature "${installers[0]}.sig" \
             --config desktop/src-tauri/tauri.conf.json --latest release-files/latest.json

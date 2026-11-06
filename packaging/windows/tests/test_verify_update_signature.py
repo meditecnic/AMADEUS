@@ -123,6 +123,21 @@ class UpdateSignatureTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "trusted comment global signature"):
             self.verify()
 
+    def test_missing_required_metadata_is_a_cli_failure(self):
+        for missing in (self.signature, self.latest):
+            with self.subTest(missing=missing.name):
+                saved = missing.read_bytes()
+                missing.unlink()
+                self.addCleanup(missing.write_bytes, saved)
+                args = ["verify", "--installer", str(self.installer), "--signature", str(self.signature),
+                        "--config", str(self.config), "--latest", str(self.latest)]
+                output, errors = io.StringIO(), io.StringIO()
+                with patch.object(sys, "argv", args), contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+                    self.assertEqual(main(), 1)
+                self.assertEqual(output.getvalue(), "")
+                self.assertIn(missing.name, errors.getvalue())
+                missing.write_bytes(saved)
+
     def test_cli_success_one_json_line_and_failure_exit(self):
         args = ["verify", "--installer", str(self.installer), "--signature", str(self.signature),
                 "--config", str(self.config), "--latest", str(self.latest)]
