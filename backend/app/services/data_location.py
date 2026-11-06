@@ -81,3 +81,104 @@ def disk_usage() -> dict:
             category = prefixes.get(parts[0], "other")
         categories[category] += size
     return {"categories": categories, "total_bytes": sum(categories.values())}
+
+
+def _volume(path: Path) -> tuple[int | None, str | None]:
+    if os.name != "nt":
+        return None, None
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.GetVolumePathNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+    kernel.GetDriveTypeW.argtypes = [wintypes.LPCWSTR]
+    kernel.GetVolumeInformationW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD,
+                                           ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.DWORD),
+                                           ctypes.POINTER(wintypes.DWORD), wintypes.LPWSTR, wintypes.DWORD]
+    volume, filesystem = ctypes.create_unicode_buffer(32768), ctypes.create_unicode_buffer(256)
+    if not kernel.GetVolumePathNameW(str(path), volume, len(volume)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    if not kernel.GetVolumeInformationW(volume.value, None, 0, None, None, None, filesystem, len(filesystem)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return kernel.GetDriveTypeW(volume.value), filesystem.value
+
+
+def _sync_roots() -> list[Path]:
+    roots = [Path(value) for key in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial")
+             if (value := os.environ.get(key))]
+    for key in ("APPDATA", "LOCALAPPDATA"):
+        if not os.environ.get(key):
+            continue
+        try:
+            info = json.loads((Path(os.environ[key]) / "Dropbox/info.json").read_text(encoding="utf-8"))
+            roots.extend(Path(account["path"]) for account in info.values()
+                         if isinstance(account, dict) and isinstance(account.get("path"), str))
+        except (OSError, ValueError, TypeError, AttributeError):
+            pass
+    return roots
+
+
+def check_target(raw: str) -> dict:
+    import math
+    import shutil
+    import sys
+    import tempfile
+
+    result = {"ok": False, "errors": [], "warnings": [],
+              "needed_bytes": math.ceil(disk_usage()["total_bytes"] * 1.2), "free_bytes": 0}
+
+    def error(code, message):
+        result["errors"].append({"code": code, "message": message})
+
+    path = Path(raw)
+    if not raw.strip() or not path.is_absolute():
+        error("path_not_absolute", "Choose an absolute directory path")
+        return result
+    created = []
+    try:
+        target, current = path.resolve(), db.get_data_root()
+        if target.is_relative_to(current) or current.is_relative_to(target):
+            error("path_overlap", "Current and target directories must not contain each other")
+        protected = [Path(sys.executable).parent] if getattr(sys, "frozen", False) else [Path(__file__).resolve().parents[3]]
+        protected.extend(Path(v) for key in ("SystemRoot", "WINDIR", "ProgramFiles", "ProgramFiles(x86)",
+                                             "ProgramW6432", "AMADEUS_INSTALL_DIR") if (v := os.environ.get(key)))
+        if target == target.parent or any(target.is_relative_to(p.resolve()) for p in protected):
+            error("system_directory", "System and application installation directories cannot hold user data")
+        if any(p.exists() and is_link(p) for p in (path, *path.parents)):
+            error("path_link", "Target path must not traverse symbolic links or junctions")
+        if target.exists() and (not target.is_dir() or any(target.iterdir())):
+            error("target_not_empty", "Target must be an empty directory or a new directory")
+        if result["errors"]:
+            return result
+        cursor = target
+        while not cursor.exists():
+            created.append(cursor)
+            cursor = cursor.parent
+        target.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryFile(dir=target) as probe:
+            probe.write(b"amadeus-write-check")
+            probe.flush()
+            os.fsync(probe.fileno())
+        result["free_bytes"] = shutil.disk_usage(target).free
+        if result["free_bytes"] < result["needed_bytes"]:
+            error("insufficient_space", "Target needs 1.2 times the current data size")
+        drive, filesystem = _volume(target)
+        if filesystem and filesystem.upper() == "FAT32":
+            error("filesystem_fat32", "FAT32 cannot store model files larger than 4 GB")
+        warnings = result["warnings"]
+        if any(target.is_relative_to(root.resolve()) for root in _sync_roots()):
+            warnings.append({"code": "sync_directory", "message": "Sync software can corrupt SQLite databases"})
+        if raw.startswith(("\\\\", "//")) or drive == 4:
+            warnings.append({"code": "network_drive", "message": "Network drives can corrupt SQLite databases"})
+        if drive == 2:
+            warnings.append({"code": "removable_drive", "message": "Removing this drive makes your data unavailable"})
+    except (OSError, ValueError, RuntimeError) as exc:
+        error("path_unwritable", f"Cannot prepare target directory: {exc}")
+    finally:
+        for directory in created:  # leaf first; never remove pre-existing directories
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+        result["ok"] = not result["errors"]
+    return result

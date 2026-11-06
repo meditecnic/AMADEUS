@@ -15,3 +15,16 @@ async def get_location():
 @router.get("/disk")
 async def get_disk():
     return await _call(data_location.disk_usage)
+
+
+from pydantic import BaseModel, ConfigDict
+
+
+class LocationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str
+
+
+@router.post("/location/check")
+async def check_location(request: LocationRequest):
+    return await _call(data_location.check_target, request.path)
