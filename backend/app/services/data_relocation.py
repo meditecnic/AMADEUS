@@ -49,12 +49,9 @@ async def drain(request_task):
     from app.services.conversations import conversation_service
     if conversation_service._title_tasks:
         await asyncio.gather(*conversation_service._title_tasks, return_exceptions=True)
-    # Voice disconnect cancels its VAD task, but its speech thread must finish too.
+    # Voice disconnect cancels its VAD task; retain and drain its actual threads.
     from app.services.speech import speech_service
-    def drain_speech():
-        with speech_service._lock:
-            pass
-    await asyncio.to_thread(drain_speech)
+    await speech_service.drain_pending()
     if pause_background is not None:
         await pause_background()
     from app.services.diagnostics import diagnostic_runtime
@@ -71,8 +68,6 @@ class RelocationMiddleware:
         if scope['type'] == 'http' and relocating():
             await JSONResponse({'detail': {'code': 'data_relocating'}}, status_code=503)(scope, receive, send)
             return
-        task = asyncio.current_task()
-        _tasks.add(task)
         # Save this event: aborted relocation must not re-open an already drained socket.
         event = _event
         closed = False
@@ -83,7 +78,7 @@ class RelocationMiddleware:
             if not closed:
                 await send(message)
                 accepted |= message['type'] == 'websocket.accept'
-                closed |= message['type'] == 'websocket.close' 
+                closed |= message['type'] == 'websocket.close'
 
         async def ws_receive():
             nonlocal closed
@@ -106,8 +101,12 @@ class RelocationMiddleware:
                     if not waiter.done():
                         waiter.cancel()
                 await asyncio.gather(incoming, stop, return_exceptions=True)
-        try:
-            await self.app(scope, ws_receive if scope['type'] == 'websocket' else receive,
-                           ws_send if scope['type'] == 'websocket' else send)
-        finally:
-            _tasks.discard(task)
+        task = asyncio.create_task(self.app(scope, ws_receive if scope['type'] == 'websocket' else receive,
+                                            ws_send if scope['type'] == 'websocket' else send))
+        _tasks.add(task)
+        def finished(done):
+            _tasks.discard(done)
+            if not done.cancelled():
+                done.exception()
+        task.add_done_callback(finished)
+        await asyncio.shield(task)

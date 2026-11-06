@@ -1,5 +1,7 @@
 """Data-directory APIs; transport authentication is shared with all local APIs."""
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, Request
+
+from pydantic import BaseModel, ConfigDict, StrictBool
 
 from app.routers.data import _call
 from app.services import data_location
@@ -17,9 +19,6 @@ async def get_disk():
     return await _call(data_location.disk_usage)
 
 
-from pydantic import BaseModel, ConfigDict
-
-
 class LocationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     path: str
@@ -31,13 +30,12 @@ async def check_location(request: LocationRequest):
 
 
 class MoveRequest(LocationRequest):
-    acknowledge_warnings: bool = False
+    acknowledge_warnings: StrictBool = False
 
 
 @router.post("/location/move")
 async def move_location(request: MoveRequest):
     import asyncio
-    from fastapi import HTTPException
     from app import db
     from app.routers.chat_ws import sessions
     from app.services import backups, data_relocation, data_startup
@@ -78,3 +76,10 @@ async def move_location(request: MoveRequest):
             raise
     # A disconnected requester must not reopen admission while the copy thread runs.
     return await asyncio.shield(relocate())
+
+
+@router.delete("/location/previous")
+async def delete_previous(request: Request):
+    if request.query_params or await request.body():
+        raise HTTPException(422, detail={"code": "invalid_delete_request"})
+    return await _call(data_location.delete_previous)

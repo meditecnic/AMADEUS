@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import threading
 
 from app import db
 from app.services.backups import BackupError
@@ -219,11 +220,12 @@ def copy_and_switch(raw: str) -> dict:
             original, copied = source / relative, staging / relative
             copied.parent.mkdir(parents=True, exist_ok=True)
             if name in databases:
-                snapshot = staging / ".sqlite-snapshot"
+                fd, snapshot_name = tempfile.mkstemp(prefix=".sqlite-snapshot-", dir=copied.parent)
+                os.close(fd)
+                snapshot = Path(snapshot_name)
                 backups._snapshot(original, snapshot)
                 expected = backups._hash(snapshot)
-                shutil.copyfile(snapshot, copied)
-                snapshot.unlink()
+                os.replace(snapshot, copied)
             else:
                 expected = backups._hash(original)
                 shutil.copy2(original, copied)
@@ -280,3 +282,55 @@ def validate_startup() -> None:
             raise ValueError("Unsupported data marker")
     except (OSError, ValueError, KeyError, TypeError) as exc:
         raise RuntimeError(f"data_location_missing: {path}: {exc}") from exc
+
+
+_previous_lock = threading.Lock()
+
+
+def delete_previous() -> dict:
+    import shutil
+    from app.security.passcode import atomic_json
+    from app.services import data_startup
+
+    with _previous_lock:
+        if not data_startup.available() or data_startup.current_status()["status"] != "ok":
+            raise BackupError("data_unavailable", "Current data must be healthy before deleting old data", 409)
+        file, record = location_file(), read_location()
+        if file is None:
+            raise BackupError("location_not_movable", "Desktop-managed location required", 409)
+        previous = record.get("previous_path")
+        if previous is None:
+            raise BackupError("previous_not_found", "No previous data directory is recorded", 404)
+        current, old = db.get_data_root(), Path(previous)
+        resolved = old.resolve()
+        if (Path(record["path"]).resolve() != current or resolved == resolved.parent
+                or resolved.is_relative_to(current) or current.is_relative_to(resolved)
+                or any(p.exists() and is_link(p) for p in (old, *old.parents))):
+            raise BackupError("previous_path_unsafe", "Recorded previous directory is not safe to delete", 409)
+        if not old.is_dir():
+            raise BackupError("previous_not_found", "Previous directory does not exist; record retained", 404)
+        recognized = (old / "control.sqlite3").is_file() and not is_link(old / "control.sqlite3")
+        marker = old / MARKER
+        if marker.is_file() and not is_link(marker):
+            try:
+                recognized |= json.loads(marker.read_text(encoding="utf-8"))["format"] == 1
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+        if not recognized:
+            raise BackupError("previous_unrecognized", "Previous directory is not recognized as AMADEUS data", 409)
+        try:
+            if not (current / "control.sqlite3").is_file():
+                raise ValueError("Current control database is missing")
+            data_startup.check_databases()
+        except Exception as exc:
+            raise BackupError("data_unavailable", f"Current data check failed: {exc}", 409) from exc
+        try:
+            shutil.rmtree(old)
+        except OSError as exc:
+            raise BackupError("previous_delete_failed", f"Old data deletion may be partial; record retained: {exc}") from exc
+        record["previous_path"] = None
+        try:
+            atomic_json(file, record)
+        except OSError as exc:
+            raise BackupError("previous_record_failed", f"Old data deleted, but could not clear its record: {exc}") from exc
+        return {"status": "success"}

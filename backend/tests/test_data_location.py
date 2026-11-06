@@ -270,8 +270,11 @@ def test_successful_move_stays_blocked_until_restart(data_root, managed, tmp_pat
     monkeypatch.setattr(chat_ws, 'sessions', {})
     target = tmp_path_factory.mktemp('success') / 'new'
     with TestClient(app, base_url='http://localhost') as client:
-        response = client.post('/api/data/location/move', json={'path': str(target)})
-        assert response.status_code == 200, response.text
+        with client.websocket_connect('/ws/chat', headers={'origin': 'http://localhost:1420', 'host': 'localhost'}) as existing:
+            response = client.post('/api/data/location/move', json={'path': str(target)})
+            assert response.status_code == 200, response.text
+            assert existing.receive_json() == {'type': 'error', 'message': 'Server error'}
+            assert existing.receive()['code'] == 1000
         assert response.json() == {'restart_required': True, 'path': str(target)}
         for method, path in [('get', '/api/settings'), ('get', '/api/data/backups'),
                              ('post', '/api/data/backups'), ('get', '/health')]:
@@ -332,3 +335,134 @@ def test_valid_selected_location_allows_startup(data_root, managed):
     managed.write_text(json.dumps({'path': str(data_root)}), encoding='utf-8')
     (data_root / location.MARKER).write_text('{"format":1}', encoding='utf-8')
     location.validate_startup()
+
+
+def previous_record(managed, current, previous):
+    managed.write_text(json.dumps({'path': str(current), 'previous_path': str(previous), 'moved_at': 'test'}), encoding='utf-8')
+
+
+def test_delete_previous_default_and_reject_arbitrary_path(data_root, managed, tmp_path_factory):
+    from test_backups import make_database
+
+    old = tmp_path_factory.mktemp('old-default') / 'data'
+    make_database(old)
+    arbitrary = tmp_path_factory.mktemp('not-recorded')
+    (arbitrary / 'keep').write_bytes(b'keep')
+    # Start at the default location; install a pointer only after startup.
+    with TestClient(app, base_url='http://localhost') as client:
+        previous_record(managed, data_root, old)
+        response = client.request('DELETE', '/api/data/location/previous', json={'path': str(arbitrary)})
+        assert response.status_code == 422
+        assert client.delete('/api/data/location/previous', params={'path': str(arbitrary)}).status_code == 422
+        assert old.is_dir()
+        assert client.delete('/api/data/location/previous').json() == {'status': 'success'}
+    assert not old.exists()
+    assert (arbitrary / 'keep').read_bytes() == b'keep'
+    assert (data_root / 'control.sqlite3').is_file()
+    assert json.loads(managed.read_text(encoding='utf-8'))['previous_path'] is None
+
+
+@pytest.mark.parametrize('kind,expected', [('current', 'previous_path_unsafe'), ('parent', 'previous_path_unsafe'),
+                                         ('unknown', 'previous_unrecognized'), ('missing', 'previous_not_found')])
+def test_delete_previous_refuses_unsafe_paths(data_root, managed, tmp_path_factory, kind, expected):
+    from app.services.backups import BackupError
+    from test_backups import make_database
+
+    make_database(data_root)
+    unknown = tmp_path_factory.mktemp('unknown')
+    old = {'current': data_root, 'parent': data_root.parent, 'unknown': unknown, 'missing': unknown / 'missing'}[kind]
+    previous_record(managed, data_root, old)
+    with pytest.raises(BackupError) as failure:
+        location.delete_previous()
+    assert failure.value.code == expected
+    assert (data_root / 'control.sqlite3').is_file()
+    assert json.loads(managed.read_text(encoding='utf-8'))['previous_path'] == str(old)
+
+
+def test_partial_delete_failure_keeps_record_and_current(data_root, managed, tmp_path_factory, monkeypatch):
+    from app.services.backups import BackupError
+    from test_backups import make_database, value_at
+    import shutil
+
+    make_database(data_root)
+    old = tmp_path_factory.mktemp('old-partial')
+    (old / location.MARKER).write_text('{"format":1}', encoding='utf-8')
+    disposable = old / 'removed-first'
+    disposable.write_bytes(b'x')
+    previous_record(managed, data_root, old)
+    def fail(path):
+        assert path == old
+        disposable.unlink()
+        raise PermissionError('injected locked old file')
+    monkeypatch.setattr(shutil, 'rmtree', fail)
+    with pytest.raises(BackupError) as failure:
+        location.delete_previous()
+    assert failure.value.code == 'previous_delete_failed'
+    assert json.loads(managed.read_text(encoding='utf-8'))['previous_path'] == str(old)
+    assert value_at(data_root / 'control.sqlite3') == 'before'
+    assert not disposable.exists() and old.exists()
+
+
+def test_delete_requires_healthy_current_data(data_root, managed, tmp_path_factory, monkeypatch):
+    from app.services import data_startup
+    from app.services.backups import BackupError
+    from test_backups import make_database
+
+    make_database(data_root)
+    old = tmp_path_factory.mktemp('old-healthy')
+    make_database(old)
+    previous_record(managed, data_root, old)
+    monkeypatch.setattr(data_startup, 'available', lambda: False)
+    with pytest.raises(BackupError) as failure:
+        location.delete_previous()
+    assert failure.value.code == 'data_unavailable'
+    assert old.exists()
+
+
+async def test_cancelled_admitted_http_still_drains(data_root, relocation_state):
+    import asyncio
+    from app.services.data_relocation import RelocationMiddleware
+
+    started, release, wrote = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    async def handler(scope, receive, send):
+        started.set()
+        await release.wait()
+        wrote.set()
+    async def unused(*args):
+        pass
+    caller = asyncio.create_task(RelocationMiddleware(handler)({'type': 'http'}, unused, unused))
+    await started.wait()
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    relocation_state.begin()
+    drain = asyncio.create_task(relocation_state.drain(asyncio.current_task()))
+    await asyncio.sleep(0)
+    assert not drain.done() and not wrote.is_set()
+    release.set()
+    await asyncio.wait_for(drain, 2)
+    assert wrote.is_set()
+
+
+async def test_cancelled_speech_awaits_actual_thread(data_root):
+    import asyncio
+    import threading
+    from app.services.speech import SpeechService
+
+    service = SpeechService()
+    started, release, done = threading.Event(), threading.Event(), threading.Event()
+    def operation():
+        started.set()
+        release.wait(3)
+        done.set()
+    caller = asyncio.create_task(service._run(operation))
+    assert await asyncio.to_thread(started.wait, 2)
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    drain = asyncio.create_task(service.drain_pending())
+    await asyncio.sleep(0)
+    assert not drain.done() and not done.is_set()
+    release.set()
+    await asyncio.wait_for(drain, 2)
+    assert done.is_set()
