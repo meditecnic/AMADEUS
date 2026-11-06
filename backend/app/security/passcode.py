@@ -95,6 +95,8 @@ async def login(value: str | None, *, legacy: bool = False) -> dict:
 
 
 async def change(current: str | None, new: str | None) -> dict:
+    if new is not None and not new.strip():
+        raise HTTPException(422, detail={"code": "empty_passcode"})
     async with _lock:
         record, _ = await asyncio.to_thread(read_passcode)
         await _verify(record, current)

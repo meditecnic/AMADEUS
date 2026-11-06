@@ -79,3 +79,24 @@ def test_new_auth_routes_require_local_token(app_client, monkeypatch, method, pa
     assert app_client.request(method, path, json=body).status_code == 401
     assert app_client.request(method, path, json=body,
         headers={'authorization': 'Bearer test-local-token'}).status_code == 200
+
+
+@pytest.mark.parametrize('value', ['', '   ', '\t\r\n', '\u3000', '\u00a0'])
+def test_empty_passcode_is_rejected_without_creating_file(app_client, value):
+    response = app_client.put('/api/auth/passcode', json={'new': value})
+    assert response.status_code == 422
+    assert response.json()['detail']['code'] == 'empty_passcode'
+    assert not passcode.passcode_path().exists()
+
+
+def test_empty_replacement_keeps_existing_passcode_and_null_disables(app_client):
+    value = '  test-only-phrase  '
+    assert app_client.put('/api/auth/passcode', json={'new': value}).status_code == 200
+    original = passcode.passcode_path().read_bytes()
+    response = app_client.put('/api/auth/passcode', json={'current': value, 'new': ' \t'})
+    assert response.status_code == 422
+    assert passcode.passcode_path().read_bytes() == original
+    assert app_client.post('/api/auth/login', json={'passcode': value}).status_code == 200
+    assert app_client.post('/api/auth/login', json={'passcode': value.strip()}).status_code == 401
+    assert app_client.put('/api/auth/passcode', json={'current': value, 'new': None}).status_code == 200
+    assert not passcode.passcode_path().exists()
