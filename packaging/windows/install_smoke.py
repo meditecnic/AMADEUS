@@ -432,6 +432,19 @@ def exercise(installer: Path, root: Path, timeout: float, result: dict, provider
                 print("RESIDUAL_PROCESSES " + json.dumps({
                     "processes": residual, "desktop_exit_code": primary.poll(),
                     "seconds": round(time.monotonic() - started, 3)}), flush=True)
+                for name in ("backend-stdout.log", "backend-stderr.log"):
+                    try:
+                        tail = (data / "logs" / name).read_bytes()[-2000:].decode("utf-8", "replace")
+                        print(f"RESIDUAL_LOG_TAIL {name}\n" + safe_text(tail), flush=True)
+                    except OSError as exc:
+                        print(f"RESIDUAL_LOG_TAIL {name} unavailable: {type(exc).__name__}", flush=True)
+                # Tells a slow shutdown (exits later on its own) from a missed stop (never exits).
+                late = time.monotonic() + 30
+                while time.monotonic() < late and (tracked | {p.pid for p in launches}) & process_snapshot().keys():
+                    time.sleep(0.25)
+                remaining = (tracked | {p.pid for p in launches}) & process_snapshot().keys()
+                print("RESIDUAL_AFTER " + json.dumps({"remaining": sorted(remaining),
+                      "seconds": round(time.monotonic() - started, 3)}), flush=True)
                 raise
             result["close_seconds"] = round(time.monotonic() - started, 3)
             result["desktop_exit_code"] = primary.wait(timeout=1)
