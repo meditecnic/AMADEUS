@@ -10,7 +10,7 @@ from app.security.local_transport import HTTPOriginGuardMiddleware, LOCAL_ORIGIN
 from pydantic import BaseModel, SecretStr
 from typing import Optional
 from app import config
-from app.routers import asset_pack, chat_ws, conversations, history, providers, system_api, voice_ws
+from app.routers import asset_pack, auth, chat_ws, conversations, history, providers, system_api, voice_ws
 from app.services.tts_queue import tts_manager
 from app.services.tts_sidecar import sidecar_supervisor
 from app.services.search import search_service
@@ -116,6 +116,7 @@ app.add_middleware(
 )
 
 # Include WebSocket router
+app.include_router(auth.router)
 app.include_router(chat_ws.router)
 app.include_router(history.router)
 app.include_router(system_api.router)
@@ -158,19 +159,6 @@ async def update_settings(settings: SettingsUpdate):
         credential_store.set("deepseek", secret.get_secret_value())
     in_memory_settings.update(update_data)
     return {"status": "success"}
-
-class SalieriAuth(BaseModel):
-    password: str
-
-def normalize_password(p: str) -> str:
-    return p.lower().replace("ü", "u").replace("ue", "u").strip()
-
-@app.post("/api/auth/salieri")
-async def auth_salieri(auth: SalieriAuth):
-    if normalize_password(auth.password) == "gott wurfelt nicht":
-        return {"status": "success"}
-    from fastapi import HTTPException
-    raise HTTPException(status_code=401, detail="Invalid password")
 
 @app.get("/health")
 async def health_check():
