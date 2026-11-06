@@ -372,12 +372,25 @@ def exercise(installer: Path, root: Path, timeout: float, result: dict, provider
                        "document.querySelector('button[aria-label=\"模型供应商\"]')?.disabled === false"),
                        timeout, "Login did not reveal the workstation provider selector", tick)
             cdp.evaluate("document.querySelector('button[aria-label=\"模型供应商\"]').click()")
-            option = "[...document.querySelectorAll('[role=option]')].find(e => e.textContent.trim() === 'OpenAI-compatible')"
-            wait_until(lambda: cdp.evaluate(f"Boolean({option})"), 10, "Local keyless provider option missing", tick)
+            # Match the label span: options also render a provider mark ("O" initial) and a selected check.
+            labels = ("[...document.querySelectorAll('[role=option] .salieri-select-option-label')]"
+                      ".map(e => e.textContent.trim())")
+            option = ("[...document.querySelectorAll('[role=option]')].find(e => "
+                      "e.querySelector('.salieri-select-option-label')?.textContent.trim() === 'OpenAI-compatible')")
+            try:
+                wait_until(lambda: cdp.evaluate(f"Boolean({option})"), 10, "Local keyless provider option missing", tick)
+            except RuntimeError:
+                print("PROVIDER_OPTIONS " + json.dumps(cdp.evaluate(labels), ensure_ascii=True), flush=True)
+                raise
             cdp.evaluate(f"({option}).click()")
-            wait_until(lambda: cdp.evaluate("document.querySelector('.ws2-online')?.textContent.trim() === 'ONLINE' && "
-                       "!document.querySelector('.salieri-login-form')"), timeout,
-                       "Real form login did not reach ONLINE", tick)
+            try:
+                wait_until(lambda: cdp.evaluate("document.querySelector('.ws2-online')?.textContent.trim() === 'ONLINE' && "
+                           "!document.querySelector('.salieri-login-form')"), timeout,
+                           "Real form login did not reach ONLINE", tick)
+            except RuntimeError:
+                print("CONNECTION_STATUS " + json.dumps(cdp.evaluate(
+                    "document.querySelector('.ws2-online')?.textContent.trim() ?? null"), ensure_ascii=True), flush=True)
+                raise
             cdp.screenshot(root / "online.png")
             print("INSTALL_STEP real login and keyless local provider reached ONLINE", flush=True)
             require(data.is_dir(), "Default LOCALAPPDATA data directory was not created")
