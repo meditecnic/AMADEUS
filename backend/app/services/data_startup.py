@@ -33,6 +33,7 @@ async def initialize() -> tuple[bool, bool]:
     global _root_key, _state, _available
     _root_key, _available = str(db.get_data_root()), False
     _state = {"status": "ok", "detail": None}
+    await asyncio.to_thread(backups.cleanup_staging)
     await asyncio.to_thread(backups.apply_pending_restore)
     result_path = db.get_data_root() / "restore-result.json"
     if result_path.exists():

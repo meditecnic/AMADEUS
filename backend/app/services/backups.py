@@ -322,6 +322,14 @@ def existing_databases() -> list[Path]:
     return [_local(_root(), name) for name in sorted(database_files()) if _local(_root(), name).exists()]
 
 
+def cleanup_staging() -> None:
+    """Discard unpublished snapshots left by a terminated process, before DB use."""
+    with _lock:
+        for path in _local(_root(), "backups").glob(".tmp-*"):
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+
+
 def backup_before_upgrade() -> None:
     """Called inside the migration lock, before any initialization writes."""
     global upgrade_backup_id

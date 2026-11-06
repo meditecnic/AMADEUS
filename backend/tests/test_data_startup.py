@@ -25,6 +25,41 @@ async def test_good_databases(data_root):
     assert backups.list_backups() == []
 
 
+async def test_startup_removes_only_staging_before_restore_or_open(data_root, monkeypatch):
+    make_database(data_root)
+    selected = backups.create_backup()
+    base = data_root / 'backups'
+    for name in ['.tmp-interrupted-one', '.tmp-interrupted-two']:
+        partial = base / name / 'worldlines/sg'
+        partial.mkdir(parents=True)
+        (partial / 'history.sqlite3').write_bytes(b'interrupted snapshot')
+    unrelated = base / 'unrelated'
+    unrelated.mkdir()
+    (unrelated / 'keep.txt').write_text('keep', encoding='utf-8')
+    (base / '.tmp-file').write_text('not a directory', encoding='utf-8')
+    restore = backups.apply_pending_restore
+    check = data_startup.check_databases
+
+    def assert_clean():
+        assert not any(path.is_dir() for path in base.glob('.tmp-*'))
+
+    def restore_after_cleanup():
+        assert_clean()
+        return restore()
+
+    def check_after_cleanup():
+        assert_clean()
+        return check()
+
+    monkeypatch.setattr(backups, 'apply_pending_restore', restore_after_cleanup)
+    monkeypatch.setattr(data_startup, 'check_databases', check_after_cleanup)
+    assert await data_startup.initialize() == (True, True)
+    assert_clean()
+    assert backups.load_manifest(selected['id'])['id'] == selected['id']
+    assert (unrelated / 'keep.txt').read_text(encoding='utf-8') == 'keep'
+    assert (base / '.tmp-file').is_file()
+
+
 def test_corruption_keeps_recovery_api_and_existing_ws_error(data_root, monkeypatch):
     from app.security import local_transport
 
