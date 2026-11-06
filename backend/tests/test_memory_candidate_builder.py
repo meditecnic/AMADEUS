@@ -37,7 +37,7 @@ from pathlib import Path
 
 import pytest
 
-from app.db import CONTROL_SCHEMA, HISTORY_SCHEMA, MEMORY_SCHEMA
+from app.db import CONTROL_SCHEMA, HISTORY_SCHEMA, MEMORY_SCHEMA, SCHEMA_VERSION
 from app.services.memory_v11 import candidate as cand
 from app.services.memory_v11 import migration as mig
 
@@ -101,7 +101,8 @@ def _make_snapshot(
         try:
             conn.executescript(schema)
             conn.execute(
-                "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version','12')"
+                "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version',?)",
+                (str(SCHEMA_VERSION),),
             )
             conn.commit()
         finally:
@@ -110,6 +111,9 @@ def _make_snapshot(
     # --- control -----------------------------------------------------------
     conn = _open(paths["control"])
     try:
+        conn.execute("""INSERT INTO model_usage
+            (time_utc,worldline,conversation_id,category,source,provider_id,model_id,input_tokens,output_tokens,reported)
+            VALUES(?,'steins_gate','conv-a-self','background','memory','custom','offline-test',111,22,1)""", (NOW,))
         conn.execute(
             "INSERT INTO session_worldlines(session_id,worldline,revision,updated_at_utc)"
             " VALUES('ownerA','steins_gate',1,?)",
@@ -570,9 +574,9 @@ def test_candidate_build_preserves_legacy_and_rebuilds_v11(tmp_path):
     paths = _db_paths(output)
     assert all(path.is_file() for path in paths.values())
     assert (output / "manifest.json").is_file()
-    marker = output / ".migration-v12.complete"
+    marker = output / f".migration-v{SCHEMA_VERSION}.complete"
     assert marker.is_file()
-    assert json.loads(marker.read_text(encoding="utf-8"))["schema_version"] == 12
+    assert json.loads(marker.read_text(encoding="utf-8"))["schema_version"] == SCHEMA_VERSION
     # Source untouched.
     assert _snapshot_state(snapshot) == before
 
@@ -622,6 +626,7 @@ def test_candidate_build_preserves_legacy_and_rebuilds_v11(tmp_path):
         "search_usage",
         "provider_configurations",
         "shared_user_facts",
+        "model_usage",
     ):
         assert _row_tuples(paths["control"], table) == _row_tuples(
             _db_paths(snapshot)["control"], table

@@ -1,6 +1,8 @@
 import asyncio
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
 import sqlite3
 from typing import Literal
 
@@ -63,3 +65,29 @@ async def get_usage(
         return await asyncio.to_thread(usage_report, range, session_id, tz)
     except (sqlite3.Error, OSError):
         raise HTTPException(500, detail={"code": "usage_unavailable"}) from None
+
+
+@router.get("/export")
+async def export_data(
+    kind: Literal["conversations", "memory"],
+    format: Literal["md", "json"] = "json",
+    worldline: Literal["sg", "beta", "all"] = "all",
+    conversation_id: str | None = None,
+):
+    from app.services.data_export import PreparedExport
+
+    if kind == "memory" and (format != "json" or conversation_id is not None):
+        raise HTTPException(422, detail={"code": "invalid_export_scope"})
+    if conversation_id is not None and not conversation_id.strip():
+        raise HTTPException(422, detail={"code": "invalid_conversation_id"})
+    export = PreparedExport(kind, format, worldline, conversation_id)
+    try:
+        await _call(export.prepare)
+    except LookupError:
+        raise HTTPException(404, detail={"code": "conversation_not_found"}) from None
+    except sqlite3.Error:
+        raise HTTPException(500, detail={"code": "export_unavailable"}) from None
+    return StreamingResponse(export.stream(), media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{export.filename}"',
+                 "Cache-Control": "no-store"},
+        background=BackgroundTask(export.close))

@@ -97,7 +97,7 @@ def embedding_keys(path):
 def assert_upgraded(path, original_keys):
     with connect(path) as db:
         meta = dict(db.execute('SELECT * FROM schema_meta'))
-        assert meta == {'schema_version': '12', 'embedding_model': storage.EMBEDDING_MODEL, 'embedding_dimension': '768'}
+        assert meta == {'schema_version': str(storage.SCHEMA_VERSION), 'embedding_model': storage.EMBEDDING_MODEL, 'embedding_dimension': '768'}
         rows = db.execute('SELECT fact_id,version_no,model,dimensions,vector FROM stable_fact_version_embeddings ORDER BY fact_id,version_no').fetchall()
         assert [(r[0], r[1]) for r in rows] == original_keys
         assert len(rows) == 3
