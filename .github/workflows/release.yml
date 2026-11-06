@@ -70,7 +70,8 @@ jobs:
         # Filenames are positional: `--include a b c` would take only the first as a pattern.
         run: hf download jinaai/jina-embeddings-v5-text-nano-retrieval onnx/model.onnx onnx/model.onnx_data tokenizer.json README.md --revision $env:JINA_REVISION --local-dir "$env:RUNNER_TEMP/jina-snapshot/$env:JINA_REVISION"
       - name: Install locked update signature verifier
-        run: python -m pip install --require-hashes --only-binary=:all: -r packaging/windows/requirements-verify.lock
+        run: >-
+          python -m pip install --require-hashes --only-binary=:all: -r packaging/windows/requirements-verify.lock
       - name: Packaging tests and lint
         run: |
           python -m pytest -q packaging/windows/tests
@@ -215,7 +216,8 @@ jobs:
           python-version: '3.11'
       - name: Install locked update signature verifier
         if: github.event_name != 'pull_request'
-        run: python -m pip install --require-hashes --only-binary=:all: -r packaging/windows/requirements-verify.lock
+        run: >-
+          python -m pip install --require-hashes --only-binary=:all: -r packaging/windows/requirements-verify.lock
       - name: Verify update signature before creating a Release
         if: github.event_name != 'pull_request'
         shell: bash
