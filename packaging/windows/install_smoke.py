@@ -64,7 +64,11 @@ def registration() -> dict | None:
     import winreg
 
     key_name = r"Software\Microsoft\Windows\CurrentVersion\Uninstall"
-    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_name) as parent:
+    try:
+        parent_key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_name)
+    except FileNotFoundError:
+        return None  # A clean profile may not have the Uninstall key until something installs.
+    with parent_key as parent:
         for index in range(winreg.QueryInfoKey(parent)[0]):
             with winreg.OpenKey(parent, winreg.EnumKey(parent, index)) as key:
                 try:
