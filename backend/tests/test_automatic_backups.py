@@ -2,6 +2,7 @@ from contextlib import closing
 from datetime import datetime, timedelta, timezone
 import json
 import sqlite3
+import threading
 
 import pytest
 
@@ -84,3 +85,14 @@ def test_bad_automatic_manifest_does_not_disable_weekly(data_root):
     backups.weekly_backup_if_due()
     assert len(backups.list_backups()) == 2
     assert any(item['can_restore'] for item in backups.list_backups())
+
+
+def test_stopped_weekly_does_not_affect_manual_backup(data_root):
+    make_database(data_root)
+    stop = threading.Event()
+    stop.set()
+    backups.weekly_backup_if_due(stop)
+    assert backups.list_backups() == []
+    manifest = backups.create_backup()
+    assert manifest['reason'] == 'manual'
+    assert backups.list_backups()[0]['can_restore']

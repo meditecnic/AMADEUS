@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 import asyncio
 import logging
 import os
+import threading
 import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -87,10 +88,12 @@ async def lifespan(app: FastAPI):
     print("--------------------------------------------------")
 
     diagnostics_sweep = asyncio.create_task(_diagnostics_sweep_loop())
-    weekly_backup = asyncio.create_task(asyncio.to_thread(weekly_backup_if_due)) if had_databases else None
+    weekly_backup_stop = threading.Event()
+    weekly_backup = asyncio.create_task(asyncio.to_thread(weekly_backup_if_due, weekly_backup_stop)) if had_databases else None
     yield
     
     # Shutdown
+    weekly_backup_stop.set()
     await chat_ws.close_chat_sessions()
     if weekly_backup is not None:
         await weekly_backup

@@ -58,9 +58,21 @@ def _directory(backup_id: str) -> Path:
     return _local(_root(), f"backups/{backup_id}")
 
 
-def _hash(path: Path) -> str:
+def _check_stop(stop: threading.Event | None) -> None:
+    if stop is not None and stop.is_set():
+        raise BackupError("backup_stopped", "Weekly backup stopped during shutdown", 409)
+
+
+def _hash(path: Path, stop: threading.Event | None = None) -> str:
     with path.open("rb") as handle:
-        return hashlib.file_digest(handle, "sha256").hexdigest()
+        if stop is None:
+            return hashlib.file_digest(handle, "sha256").hexdigest()
+        digest = hashlib.sha256()
+        while chunk := handle.read(1024 * 1024):
+            _check_stop(stop)
+            digest.update(chunk)
+        _check_stop(stop)
+        return digest.hexdigest()
 
 
 def _schema(connection: sqlite3.Connection) -> int | None:
@@ -70,10 +82,11 @@ def _schema(connection: sqlite3.Connection) -> int | None:
     return connection.execute("PRAGMA user_version").fetchone()[0]
 
 
-def _snapshot(source: Path, target: Path) -> int | None:
+def _snapshot(source: Path, target: Path, stop: threading.Event | None = None) -> int | None:
     started = time.monotonic()
 
     def progress(*_):
+        _check_stop(stop)
         if time.monotonic() - started > 30:
             raise BackupError("backup_busy", "Database remained busy for 30 seconds; retry later", 409)
 
@@ -141,8 +154,9 @@ def _prune(reason: str, protected: set[str]) -> None:
             shutil.rmtree(path)
 
 
-def create_backup(reason: str = "manual", *, salvage: bool = False) -> dict:
+def create_backup(reason: str = "manual", *, salvage: bool = False, stop: threading.Event | None = None) -> dict:
     with _lock:
+        _check_stop(stop)
         if reason not in REASONS:
             raise ValueError("unsupported backup reason")
         root = _root()
@@ -164,12 +178,13 @@ def create_backup(reason: str = "manual", *, salvage: bool = False) -> dict:
                     "reason": reason, "files": [], "unreadable": []}
         try:
             for relative in files:
+                _check_stop(stop)
                 source, target = _local(root, relative), staging / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 version = None
                 if relative in database_files():
                     try:
-                        version = _snapshot(source, target)
+                        version = _snapshot(source, target, stop)
                     except sqlite3.DatabaseError:
                         if not salvage:
                             raise
@@ -179,8 +194,9 @@ def create_backup(reason: str = "manual", *, salvage: bool = False) -> dict:
                 else:
                     shutil.copyfile(source, target)
                 manifest["files"].append({"path": relative, "schema_version": version,
-                                          "size": target.stat().st_size, "sha256": _hash(target)})
+                                          "size": target.stat().st_size, "sha256": _hash(target, stop)})
             atomic_json(staging / "manifest.json", manifest)
+            _check_stop(stop)
             os.replace(staging, base / backup_id)
         except Exception as exc:
             shutil.rmtree(staging)
@@ -323,9 +339,10 @@ def backup_before_upgrade() -> None:
         upgrade_backup_id = create_backup("pre-upgrade")["id"]
 
 
-def weekly_backup_if_due() -> None:
+def weekly_backup_if_due(stop: threading.Event | None = None) -> None:
     """Best effort background work; callers skip this on a fresh installation."""
     try:
+        _check_stop(stop)
         base = _root() / "backups"
         dates = []
         for path in base.iterdir() if base.exists() else []:
@@ -336,6 +353,9 @@ def weekly_backup_if_due() -> None:
                 except (BackupError, ValueError, KeyError, TypeError):
                     continue
         if not dates or (datetime.now(timezone.utc) - max(dates)).total_seconds() >= 7 * 86400:
-            create_backup("weekly")
+            create_backup("weekly", stop=stop)
+    except BackupError as exc:
+        if exc.code != "backup_stopped":
+            logging.getLogger(__name__).warning("Weekly backup failed: %s", exc)
     except Exception as exc:
         logging.getLogger(__name__).warning("Weekly backup failed: %s", exc)

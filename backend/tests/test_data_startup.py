@@ -4,6 +4,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -121,7 +122,7 @@ def test_weekly_backup_does_not_block_startup(data_root, monkeypatch):
     make_database(data_root)
     started, release = threading.Event(), threading.Event()
 
-    def delayed_backup():
+    def delayed_backup(stop):
         started.set()
         assert release.wait(timeout=5)
 
@@ -135,6 +136,40 @@ def test_weekly_backup_does_not_block_startup(data_root, monkeypatch):
             release.set()
     finally:
         release.set()
+
+
+def test_shutdown_stops_sqlite_backup_and_removes_staging(data_root, monkeypatch):
+    import app.main as main
+
+    make_database(data_root)
+    started = threading.Event()
+    connect = sqlite3.connect
+
+    class SlowBackupConnection(sqlite3.Connection):
+        def backup(self, target, *, progress, **kwargs):
+            def slow_progress(*args):
+                started.set()
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline:
+                    progress(*args)
+                    time.sleep(0.01)
+                progress(*args)
+
+            return super().backup(target, progress=slow_progress, **kwargs)
+
+    def slow_connect(*args, **kwargs):
+        return connect(*args, factory=SlowBackupConnection, **kwargs)
+
+    monkeypatch.setattr(sqlite3, 'connect', slow_connect)
+    monkeypatch.setattr(main.sidecar_supervisor, 'ensure_available', AsyncMock(return_value=SimpleNamespace(url=None)))
+    monkeypatch.setattr(main.sidecar_supervisor, 'close', AsyncMock())
+    with TestClient(app, base_url='http://localhost') as client:
+        assert started.wait(timeout=2)
+        assert list((data_root / 'backups').glob('.tmp-*'))
+        assert client.get('/health').status_code == 200
+        shutdown_started = time.monotonic()
+    assert time.monotonic() - shutdown_started < 2
+    assert list((data_root / 'backups').iterdir()) == []
 
 
 def test_upgrade_backup_failure_has_nonzero_process_exit(data_root):
