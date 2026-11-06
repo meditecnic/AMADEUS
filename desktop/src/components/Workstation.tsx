@@ -27,13 +27,11 @@ import {
 import { HistorySidebar, type ConversationSummary } from './HistorySidebar';
 import { TtsDebugPanel } from './TtsDebugPanel';
 import AvatarViewer from './AvatarViewer';
-import SpriteAnimator from './SpriteAnimator';
-import { packAsset } from '../assetPack';
+import { hasAssetPack } from '../assetPack';
 import { useAudioPlayer, audioPlayer } from '../hooks/useAudioPlayer';
 import { audioService } from '../services/AudioService';
 import { BilingualMessage } from './BilingualMessage';
 import { sentenceArrivals, useArrivalMemory } from '../workstation/arrivalMemory';
-import { Atmosphere } from '../workstation/Atmosphere';
 import { DraftWord } from '../workstation/DraftWord';
 import { DIVERGENCE, Nixie, WORLDLINE_NAME, useTunedValue } from '../workstation/Nixie';
 import { SoundChannel, SystemMenu, WorldlinePanel, type MenuSection } from '../workstation/SystemMenu';
@@ -46,8 +44,12 @@ import { sessionDialogFallback } from '../workstation/focusHandoff';
 import { useExitPresence } from '../workstation/useExitPresence';
 import { ConnectionCheckPanel, chatCheckMessage, requestChatCheck, type ChatCheckState } from '../workstation/ConnectionCheck';
 import { ConnectionList } from '../workstation/ConnectionList';
-import { SendSignal } from '../workstation/SendSignal';
-import { PresenceIndicator, ThinkingMark, PRESENCE_LABELS } from '../workstation/PresenceIndicator';
+import { PhosphorCore, type CoreState } from '../hotwire/PhosphorCore';
+import { HotWires, type WireHeat, type WireRoute } from '../hotwire/HotWires';
+import { GiantWord } from '../hotwire/GiantWord';
+import { COPY } from '../hotwire/copy.zh-CN';
+import { toneOf } from '../hotwire/tone';
+import { PresenceIndicator, PRESENCE_LABELS } from '../workstation/PresenceIndicator';
 import { VoiceScope } from '../workstation/VoiceScope';
 import { OverlayRootContext, Tip, TipProvider } from '../workstation/Tip';
 import { SelectionCopyMenu, TextFieldMenu } from '../workstation/menus';
@@ -1979,7 +1981,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
     : status === 'CONNECTING' || sessionPending ? 'OFFLINE · 连接中' : 'OFFLINE';
   const presence = isThinking ? 'thinking' : isPlaying ? 'speaking' : isSynthesizing ? 'voicing' : online ? 'listening' : sessionConnecting || reconnecting ? 'connecting' : 'offline';
   const presenceLabel = PRESENCE_LABELS[presence];
-  const thinkingSprite = packAsset(worldline === 'steins_gate' ? 'assets/ui/spinner_sg_20f.png' : 'assets/ui/spinner_beta_20f.png');
   const lastAssistantId = [...visibleMessages].reverse().find((msg) => msg.role === 'assistant' && !msg.systemError)?.id;
   // An old conversation whose connection was removed keeps its history but must be re-pointed by the user.
   const providerGone = Boolean(activeConversation) && providers.length > 0 && (!activeProvider || activeProvider.enabled === false);
@@ -1988,6 +1989,58 @@ export const Workstation: React.FC<WorkstationProps> = ({
     if (!entering) handComposerFocus();
   }, [entering, sendBlocked, handComposerFocus]);
 
+  // HOT WIRE presentation (design/references.md §2.5–2.7). Derived only from real transport state.
+  const tone = toneOf(worldline);
+  const packOn = hasAssetPack();
+  const streamingMsg = visibleMessages.find((msg) => msg.role === 'assistant' && msg.streaming);
+  const streamedSentences = streamingMsg?.segments?.length ?? 0;
+  const coreState: CoreState = isThinking && streamedSentences === 0 ? 'thinking'
+    : streamingMsg || isThinking ? 'replying'
+    : isPlaying ? 'speaking'
+    : online ? 'listening'
+    : sessionConnecting || reconnecting ? 'connecting' : 'offline';
+  const wireHeat: WireHeat = coreState === 'thinking' ? 'thinking'
+    : coreState === 'replying' || coreState === 'speaking' ? 'replying'
+    : coreState === 'offline' ? 'offline' : 'idle';
+  const [hwPulse, setHwPulse] = useState<{ key: string; route: WireRoute } | null>(null);
+  const [replyBeat, setReplyBeat] = useState(0);
+  const [cutIn, setCutIn] = useState(0);
+  const sentSendRef = useRef<string | null>(null);
+  const sendingNow = localSend?.scope === presentationScope ? localSend.id : null;
+  useEffect(() => {
+    if (!sendingNow || sentSendRef.current === sendingNow) return;
+    sentSendRef.current = sendingNow;
+    setHwPulse({ key: `send:${sendingNow}`, route: 'send' });
+  }, [sendingNow]);
+  const lastSentenceRef = useRef(0);
+  useEffect(() => {
+    if (streamedSentences > lastSentenceRef.current) {
+      if (lastSentenceRef.current === 0) setCutIn((n) => n + 1);
+      setReplyBeat((n) => n + 1);
+      setHwPulse({ key: `reply:${streamingMsg?.id}:${streamedSentences}`, route: 'reply' });
+    }
+    lastSentenceRef.current = streamedSentences;
+  }, [streamedSentences, streamingMsg?.id]);
+  // The giant 思考 lands when she starts thinking and burns away once her first sentence is out.
+  const [thinkWord, setThinkWord] = useState<'on' | 'burn' | null>(null);
+  useEffect(() => {
+    if (coreState === 'thinking') { setThinkWord('on'); return; }
+    setThinkWord((w) => (w === 'on' ? 'burn' : w));
+    const id = window.setTimeout(() => setThinkWord((w) => (w === 'burn' ? null : w)), reducedMotion ? 0 : 420);
+    return () => window.clearTimeout(id);
+  }, [coreState, reducedMotion]);
+  const [clock, setClock] = useState(() => new Date());
+  useEffect(() => {
+    const id = window.setInterval(() => setClock(new Date()), 15000);
+    return () => window.clearInterval(id);
+  }, []);
+  const clockLabel = `${String(clock.getHours()).padStart(2, '0')}:${String(clock.getMinutes()).padStart(2, '0')}`;
+  const stageState = {
+    listening: [COPY.ws.listening, COPY.ws.listeningZh], thinking: [COPY.ws.processing, COPY.ws.processingZh],
+    replying: [COPY.ws.reply, COPY.ws.replyZh], speaking: [COPY.ws.speaking, COPY.ws.speakingZh],
+    connecting: [COPY.ws.connecting, COPY.ws.connectingZh], offline: [COPY.ws.offline, COPY.ws.offlineZh],
+  }[coreState];
+
   return (
     <OverlayRootContext.Provider value={overlayRoot}>
     <TipProvider>
@@ -1995,6 +2048,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
       ref={setWsRoot}
       className={`ws2${isHistoryCollapsed ? ' rail' : ''}${isSettingsOpen ? ' menu-open' : ''}${isMemoryOpen ? ' memory-space-open' : ''}`}
       data-wl={worldline === 'beta' ? 'beta' : 'sg'}
+      data-pack={packOn ? 'on' : 'off'}
+      data-core={coreState}
       data-entrance={entering ? entrance : undefined}
       inert={entering || undefined}
       onMouseDown={handleAudioInit}
@@ -2013,7 +2068,20 @@ export const Workstation: React.FC<WorkstationProps> = ({
         if (root.scrollTop || root.scrollLeft) root.scrollTo(0, 0);
       }}
     >
-      <Atmosphere worldline={worldline} />
+      <div className="hw-backdrop" aria-hidden="true">
+        <i className="hw-backdrop-grid" />
+        <svg className="hw-backdrop-draft" viewBox="0 0 1440 900" preserveAspectRatio="xMaxYMid slice">
+          <circle cx="1130" cy="430" r="360" />
+          <circle cx="1130" cy="430" r="290" className="thin" />
+          <circle cx="1130" cy="430" r="150" className="thin" />
+          <path d="M1130 20 V880 M700 430 H1440" className="thin" />
+          <path d="M560 900 A 640 640 0 0 1 1300 70" />
+          <circle cx="300" cy="140" r="64" className="thin" />
+          <path d="M236 140 H364 M300 76 V204" className="thin" />
+        </svg>
+        <i className="hw-backdrop-grain" />
+        <i className="hw-backdrop-vignette" />
+      </div>
       {entering && (
         <>
           <i
@@ -2023,12 +2091,16 @@ export const Workstation: React.FC<WorkstationProps> = ({
           />
         </>
       )}
-      <SendSignal
+      <HotWires
         rootRef={wsRootRef}
-        sendId={localSend?.scope === presentationScope ? localSend.id : null}
+        pulse={hwPulse}
+        heat={wireHeat}
+        sending={Boolean(sendingNow)}
+        reduced={reducedMotion}
+        layoutKey={`${isHistoryCollapsed}-${packOn}-${worldline}`}
       />
 
-      <header className="ws2-top">
+      <header className="ws2-top" data-hw="header">
         <button
           type="button"
           ref={sideToggleRef}
@@ -2041,7 +2113,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         </button>
         <div className="ws2-wordmark" aria-label="AMADEUS"><DraftWord key={worldline} text="AMADEUS" step={90} className={inkedLine.current === worldline ? 'is-inked' : ''} /></div>
         <span className="ws2-date">
-          <span className="d">{dateLabel}</span><b>{dayLabel}</b>
+          <span className="d">{dateLabel}</span><b>{dayLabel}</b><span className="hw-clock">{clockLabel}</span>
         </span>
         <span className="ws2-title">{activeConversation?.title ? <span className="t">{activeConversation.title}</span> : null}</span>
 
@@ -2088,6 +2160,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             <button
               type="button"
               className="ws2-meter"
+              data-hw="meter"
               aria-label={`世界线 ${WORLDLINE_NAME[worldline]} · ${DIVERGENCE[worldline]}%`}
               aria-expanded={isSettingsOpen && menuSection === 'worldline'}
               onClick={() => { if (isSettingsOpen && menuSection === 'worldline') closeMenu(); else openMenu('worldline'); }}
@@ -2160,7 +2233,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
       </nav>
 
       <section className="ws2-talk" inert={isSettingsOpen || isMemoryOpen}>
-        <div className="ws2-transcript-wrap">
+        {thinkWord ? (
+          <GiantWord text={COPY.ws.thinking} lang="ja" outline className={`hw-think is-${thinkWord}`} />
+        ) : null}
+        <div className="ws2-transcript-wrap" data-hw="transcript">
           <SelectionCopyMenu>
           <div
             ref={transcriptViewportRef}
@@ -2227,7 +2303,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                       <RecordedMarks messageId={msg.id} changes={msg.memoryRecorded} onOpen={openMemoryFromMark} />
                     </article>
                   ) : (
-                    <article key={msg.id} className={`ws2-line ws2-line-kurisu${arrival.arriving(`m:${msg.id}`, Boolean(msg.streaming)) ? ' ws2-arrive' : ''}`}>
+                    <article key={msg.id} className={`ws2-line ws2-line-kurisu${msg.id === lastAssistantId ? ' is-latest' : ''}${arrival.arriving(`m:${msg.id}`, Boolean(msg.streaming)) ? ' ws2-arrive' : ''}`}>
                       <header>
                         <span className="ws2-who" data-testid="speaker-assistant">
                           <span data-testid="speaker-assistant-primary">KURISU</span>
@@ -2249,18 +2325,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                       ) : null}
                       {msg.streaming && isThinking && operationLabel && (
                         <div className="ws2-thinking" aria-busy={activityBusy}>
-                          {thinkingSprite ? <SpriteAnimator
-                            spriteSrc={thinkingSprite}
-                            cols={10}
-                            rows={2}
-                            frameWidth={worldline === 'beta' ? 54.5 : 54}
-                            frameHeight={63}
-                            frameRowOffsetY={worldline === 'steins_gate' ? 8 : 0}
-                            frameCount={20}
-                            fps={15}
-                            loop={true}
-                            autoplay={!reducedMotion}
-                          /> : <ThinkingMark />}
+                          <i className="hw-think-cursor" aria-hidden="true" />
                           <span className="ws2-thinking-label" data-testid="activity-operation-label">{operationLabel}</span>
                         </div>
                       )}
@@ -2317,7 +2382,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
             <button type="button" onClick={() => openConnectionsAt('list')}>换一个接入</button>
           </div>
         )}
-        <form className="ws2-composer" onSubmit={handleSend}>
+        <form className="ws2-composer" data-hw="composer" onSubmit={handleSend}>
+          <div className="hw-composer-head" aria-hidden="true">
+            <b>{COPY.ws.transmit}</b><span>{COPY.ws.transmitZh}</span>
+            <em className="hw-count"><span>{String(Math.min(inputText.length, 9999)).padStart(4, '0')}</span>{COPY.ws.count}</em>
+          </div>
           <TextFieldMenu fieldRef={composerRef}>
           <textarea
             ref={composerRef}
@@ -2400,7 +2469,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
               disabled={sendBlocked || !inputText.trim()}
               aria-label="发送"
             >
-              发送
+              <svg viewBox="0 0 40 40" aria-hidden="true" focusable="false"><circle cx="20" cy="20" r="17" /><path d="M12 20h15M21 13.5l6.5 6.5-6.5 6.5" /></svg>
             </button>
           </div>
           {(messageTooLong || pendingModel || modelApplyError) && (
@@ -2424,7 +2493,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         </form>
       </section>
 
-      <section className={`ws2-stage presence-${presence}`} inert={isMemoryOpen || undefined}>
+      <section className={`ws2-stage presence-${presence}`} data-hw="stage" inert={isMemoryOpen || undefined}>
         <div className="ws2-seam" aria-hidden="true" />
         {/* Her name set like the original's chapter cards: black Mincho over drafting instruments, redrawn on each shift. */}
         <div className="ws2-chapter" key={`chapter-${worldline}`} aria-hidden="true">
@@ -2518,12 +2587,34 @@ export const Workstation: React.FC<WorkstationProps> = ({
           </defs>
         </svg>
 
-        <AvatarViewer
-          variant="stage"
-          emotion={emotion}
-          isSpeaking={isPlaying}
-          glitchState={glitchState}
-        />
+        {packOn ? (
+          <>
+            <div className="hw-slab" aria-hidden="true"><i /></div>
+            <AvatarViewer
+              variant="stage"
+              emotion={emotion}
+              isSpeaking={isPlaying}
+              glitchState={glitchState}
+            />
+            {cutIn > 0 && !reducedMotion ? (
+              <div className="hw-cutin" key={cutIn} aria-hidden="true"><b>KURISU</b><span>AMADEUS</span></div>
+            ) : null}
+            <div className="hw-core is-scope" data-hw="core">
+              <PhosphorCore state={coreState} tone={tone} beat={replyBeat} mode="scope" emotion={emotion} reduced={reducedMotion} />
+            </div>
+          </>
+        ) : (
+          <div className="hw-core" data-hw="core">
+            <PhosphorCore state={coreState} tone={tone} beat={replyBeat} emotion={emotion} reduced={reducedMotion} />
+          </div>
+        )}
+        <div className="hw-stage-state" aria-hidden="true">
+          <i aria-hidden="true" />
+          <b>{stageState[0]}</b>
+          <span>{stageState[1]}</span>
+          <em>{isPlaying || isSynthesizing ? COPY.ws.voice : COPY.ws.textOnly}</em>
+        </div>
+        <div className="hw-her-en" aria-hidden="true">{COPY.ws.herName}</div>
         <div className="ws2-plate">
           <VoiceScope
             volume={voiceVolume}

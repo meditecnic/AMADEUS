@@ -76,6 +76,14 @@ export function createMockRuntime() {
     const scriptedError = scenario.errors.find(error => error.method === method && path.startsWith(error.pathPrefix));
     if (scriptedError) return ok(scriptedError.body, scriptedError.status);
 
+    // [210] passcode login. No passcode by default; `login.passcodeSet` makes the scenario's password the passcode.
+    if (path === '/api/auth/state' && method === 'GET') return ok({ passcode_set: Boolean(scenario.login.passcodeSet) });
+    if (path === '/api/auth/login' && method === 'POST') {
+      const value = typeof body.passcode === 'string' ? body.passcode : null;
+      const egg = value !== null && value.normalize('NFKD').replace(/\p{M}/gu, '').trim().toLowerCase().replace(/\s+/g, ' ') === 'gott wurfelt nicht';
+      const accepted = !scenario.login.forceFailure && (!scenario.login.passcodeSet || value === scenario.login.password);
+      return accepted ? ok({ status: 'success', easter_egg: egg }) : ok({ detail: { code: 'invalid_passcode' } }, 401);
+    }
     if (path === '/api/auth/salieri' && method === 'POST') {
       const accepted = body.password === scenario.login.password && !scenario.login.forceFailure;
       return accepted ? ok({ ok: true }, scenario.login.successStatus)

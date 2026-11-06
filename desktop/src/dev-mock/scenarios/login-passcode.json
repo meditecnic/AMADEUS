@@ -1,0 +1,6 @@
+{
+  "name": "login-passcode",
+  "extends": "streaming",
+  "description": "A passcode is set; the scenario password (Gott würfelt nicht) is the passcode.",
+  "login": { "passcodeSet": true }
+}

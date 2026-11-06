@@ -11,7 +11,7 @@ The root MIT license applies to this project's original source code. Third-party
 - `desktop/public/assets/fonts/s4-ds/`: Oxanium, IBM Plex Mono and Noto Sans CJK families use SIL Open Font License 1.1. Copyright and license text are preserved in [OFL.txt](desktop/public/assets/fonts/s4-ds/OFL.txt).
 - The root font file `ShareTechMono-Regular.woff2` also uses SIL Open Font License 1.1. Upstream copyright and license reference: [Share Tech Mono](https://github.com/google/fonts/blob/main/ofl/sharetechmono/OFL.txt).
 - `desktop/public/assets/fonts/memory/LXGWNeoXiHei.ttf` uses IPA Font License 1.0. Its [license](desktop/public/assets/fonts/memory/LICENSE.md) and [provenance](desktop/public/assets/fonts/memory/PROVENANCE.md) are preserved.
-- Fontsource EB Garamond, Noto Serif JP and Noto Serif SC retain the OFL notices supplied in their npm packages.
+- Fontsource EB Garamond, Barlow Condensed, Noto Serif JP and Noto Serif SC retain the OFL notices supplied in their npm packages.
 
 ## Speech and memory models
 

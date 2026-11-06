@@ -11,6 +11,8 @@ import shiftSlow from './scenarios/shift-slow.json';
 import workstationLong from './scenarios/workstation-long.json';
 import readyDelay from './scenarios/ready-delay.json';
 import transportClose from './scenarios/transport-close.json';
+import slice from './scenarios/slice.json';
+import loginPasscode from './scenarios/login-passcode.json';
 import { workstationFixture } from './workstation-fixture';
 import { model } from './fixtures';
 
@@ -42,7 +44,7 @@ type Override = Omit<Partial<Scenario>, 'login' | 'shift'> & {
 
 export const scenarios: Record<string, Scenario> = Object.fromEntries(
   [streaming, loginSuccess, loginFailure, sessionList, memory, memoryNew, memoryLarge, memoryHuge, memoryMid, memoryLoading, memoryUnavailable,
-    memoryError, empty, error, offline, shiftFailure, shiftSlow, workstationLong, readyDelay, transportClose]
+    memoryError, empty, error, offline, shiftFailure, shiftSlow, workstationLong, readyDelay, transportClose, slice, loginPasscode]
     .map((override: Override) => [override.name!, {
       ...streaming, ...override,
       login: { ...streaming.login, ...override.login },

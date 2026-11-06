@@ -580,7 +580,7 @@ describe('Workstation provider runtime changes', () => {
     wsSpies.useAmadeusWS.mockImplementation(() => state);
     const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width: 20, height: 20, top: 0, left: 0, right: 20 } as DOMRect);
     const h = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
-    const signal = () => h.container.querySelector('.ws2-signal');
+    const signal = () => h.container.querySelector('.hw-wires .hw-wire.is-send.is-carrying');
     state.messages = [...state.messages, { id: 'history-2', role: 'user', content: 'another loaded history', streaming: false }];
     h.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
     expect(signal()).toBeNull();

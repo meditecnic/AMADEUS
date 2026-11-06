@@ -12,6 +12,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@fontsource/barlow-condensed": "5.3.0",
     "@fontsource/eb-garamond": "5.3.0",
     "@fontsource/noto-serif-jp": "5.2.7",
     "@fontsource/noto-serif-sc": "5.3.0",
