@@ -26,11 +26,11 @@ def _price_at(price: dict | None, time_utc: str) -> dict | None:
     return {**price, **schedule["peak" if peak else "off_peak"]}
 
 
-def usage_report(period: str, session_id: str | None, tz: int, *, now=None) -> dict:
+def usage_report(period: str, conversation_id: str | None, tz: int, *, now=None) -> dict:
     clauses, params = [], []
-    if period == "session":
+    if period == "conversation":
         clauses.append("conversation_id=?")
-        params.append(session_id)
+        params.append(conversation_id)
     elif period == "month":
         local = (now or datetime.now(timezone.utc)).astimezone(timezone(timedelta(minutes=tz)))
         start = local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)

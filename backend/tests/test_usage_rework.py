@@ -190,3 +190,30 @@ def test_invalid_price_schedules_are_rejected(patch):
     price['schedule'].update(patch)
     with pytest.raises(ValueError):
         ModelCatalog._parse_pricing(price)
+
+
+def test_conversation_usage_api_filters_durable_id_and_removes_old_names(app_client):
+    from contextlib import closing
+    import sqlite3
+    from app import db
+    with closing(sqlite3.connect(db._resolve_path('sg', 'control'))) as conn:
+        conn.executemany('''INSERT INTO model_usage
+            (time_utc,conversation_id,category,source,provider_id,model_id,input_tokens,output_tokens,reported)
+            VALUES('2026-11-02T01:00:00+00:00',?,'chat','chat','custom','model',?,10,1)''',
+            [('conversation-a', 100), ('conversation-b', 200)])
+        conn.commit()
+    response = app_client.get('/api/data/usage?range=conversation&conversation_id=conversation-a')
+    assert response.status_code == 200
+    result = response.json()
+    assert result['range'] == 'conversation' and result['estimate'] is True
+    group, = result['groups']
+    assert group['calls'] == 1 and group['input_tokens'] == 100
+    for query in ['range=conversation', 'range=conversation&conversation_id=',
+                  'range=conversation&session_id=conversation-a']:
+        response = app_client.get('/api/data/usage?'+query)
+        assert response.status_code == 422 and response.json() == {'detail': {'code': 'conversation_id_required'}}
+    assert app_client.get('/api/data/usage?range=session&session_id=conversation-a').status_code == 422
+    schema = app_client.get('/openapi.json').json()['paths']['/api/data/usage']['get']
+    params = {param['name']: param for param in schema['parameters']}
+    assert 'conversation_id' in params and 'session_id' not in params
+    assert params['range']['schema']['enum'] == ['month', 'conversation', 'all']

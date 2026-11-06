@@ -53,16 +53,16 @@ async def delete_backup(backup_id: str):
 
 @router.get("/usage")
 async def get_usage(
-    range: Literal["month", "session", "all"] = "month",
-    session_id: str | None = None,
+    range: Literal["month", "conversation", "all"] = "month",
+    conversation_id: str | None = None,
     tz: int = Query(0, ge=-840, le=840),
 ):
     from app.services.usage_report import usage_report
 
-    if range == "session" and not (session_id or "").strip():
-        raise HTTPException(422, detail={"code": "session_id_required"})
+    if range == "conversation" and not (conversation_id or "").strip():
+        raise HTTPException(422, detail={"code": "conversation_id_required"})
     try:
-        return await asyncio.to_thread(usage_report, range, session_id, tz)
+        return await asyncio.to_thread(usage_report, range, conversation_id, tz)
     except (sqlite3.Error, OSError):
         raise HTTPException(500, detail={"code": "usage_unavailable"}) from None
 

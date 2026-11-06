@@ -178,7 +178,7 @@ def test_usage_migration_rolls_back_on_ddl_failure():
         assert not conn.execute("SELECT name FROM sqlite_master WHERE name='model_usage'").fetchone()
 
 
-def test_usage_currency_nulls_session_and_local_month(usage_store, monkeypatch):
+def test_usage_currency_nulls_conversation_and_local_month(usage_store, monkeypatch):
     from datetime import datetime, timezone
     from app.services import usage_report as report
     prices = {'usd': dict(input=2, output=10, cached_input=0.5, currency='USD'),
@@ -203,7 +203,7 @@ def test_usage_currency_nulls_session_and_local_month(usage_store, monkeypatch):
     by_model = {g['model_id']: g for g in result['groups']}
     assert by_model['usd']['calls'] == 2 and by_model['usd']['input_tokens'] == 1000000
     assert by_model['unknown']['estimated_cost'] is None and by_model['unknown']['input_tokens'] is None
-    assert sum(g['calls'] for g in report.usage_report('session', 'c1', 0)['groups']) == 4
+    assert sum(g['calls'] for g in report.usage_report('conversation', 'c1', 0)['groups']) == 4
     assert sum(g['calls'] for g in report.usage_report('all', None, 0)['groups']) == 5
 
 
@@ -239,6 +239,6 @@ def test_usage_api_validation_and_empty_totals(app_client):
     response = app_client.get('/api/data/usage?range=all')
     assert response.status_code == 200
     assert response.json() == dict(estimate=True, range='all', tz=0, groups=[], totals_by_currency={}, unreported_calls=0, unpriced_models=[])
-    assert app_client.get('/api/data/usage?range=session').json() == {'detail': {'code': 'session_id_required'}}
+    assert app_client.get('/api/data/usage?range=conversation').json() == {'detail': {'code': 'conversation_id_required'}}
     for query in ['range=invalid', 'tz=841', 'tz=abc']:
         assert app_client.get('/api/data/usage?'+query).status_code == 422
