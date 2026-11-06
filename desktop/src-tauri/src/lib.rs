@@ -154,22 +154,72 @@ fn acquire_instance_lock(data_dir: &Path) -> io::Result<InstanceLock> {
     Ok(InstanceLock { _file: file })
 }
 
-struct BackendProcess(Mutex<Option<Child>>);
+#[cfg(windows)]
+fn create_backend_job() -> io::Result<std::os::windows::io::OwnedHandle> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::System::JobObjects::{
+        CreateJobObjectW, SetInformationJobObject, JobObjectExtendedLimitInformation,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    // An unnamed, non-inheritable handle belongs only to this desktop process.
+    let raw = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    if raw.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: CreateJobObjectW returned a new valid handle; OwnedHandle closes it.
+    let job = unsafe { OwnedHandle::from_raw_handle(raw) };
+    let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    let configured = unsafe {
+        SetInformationJobObject(job.as_raw_handle(), JobObjectExtendedLimitInformation,
+            (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+            std::mem::size_of_val(&limits) as u32)
+    };
+    if configured == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(job)
+}
+
+#[cfg(windows)]
+fn assign_backend_job(job: &std::os::windows::io::OwnedHandle, child: &Child) -> io::Result<()> {
+    use std::os::windows::io::AsRawHandle;
+    // SAFETY: Both borrowed handles remain valid throughout the call.
+    if unsafe { windows_sys::Win32::System::JobObjects::AssignProcessToJobObject(
+        job.as_raw_handle(), child.as_raw_handle()) } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+struct BackendProcess {
+    child: Mutex<Option<Child>>,
+    #[cfg(windows)]
+    _job: std::os::windows::io::OwnedHandle,
+}
 
 impl BackendProcess {
     fn stop(&self) {
-        if let Some(mut child) = self.0.lock().expect("backend process lock poisoned").take() {
+        // Hold the lock through shutdown: concurrent event/startup callbacks wait
+        // for this stop to finish, then see None instead of stopping twice.
+        let mut slot = self.child.lock().expect("backend process lock poisoned");
+        if let Some(mut child) = slot.take() {
+            let _ = writeln!(io::stderr(), "AMADEUS_DESKTOP_BACKEND_STOP begin");
             // Closing the private pipe asks the backend to run its normal shutdown.
             drop(child.stdin.take());
             let deadline = Instant::now() + Duration::from_secs(5);
             while Instant::now() < deadline {
                 if matches!(child.try_wait(), Ok(Some(_))) {
-                    return;
+                    break;
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
-            let _ = child.kill();
-            let _ = child.wait();
+            if !matches!(child.try_wait(), Ok(Some(_))) {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+            let _ = writeln!(io::stderr(), "AMADEUS_DESKTOP_BACKEND_STOP end");
         }
     }
 }
@@ -204,11 +254,24 @@ fn start_backend(
         .stderr(File::create(logs.join("backend-stderr.log"))?);
     #[cfg(windows)]
     command.creation_flags(0x0800_0000);
+    #[cfg(windows)]
+    let job = create_backend_job()?;
     let mut child = command.spawn()?;
+    #[cfg(windows)]
+    if let Err(error) = assign_backend_job(&job, &child) {
+        // Never leave an uncontained backend running after a setup failure.
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(error.into());
+    }
     let started = Instant::now();
     let pid = child.id();
     let stdout = child.stdout.take().expect("stdout was configured as a pipe");
-    let backend = Arc::new(BackendProcess(Mutex::new(Some(child))));
+    let backend = Arc::new(BackendProcess {
+        child: Mutex::new(Some(child)),
+        #[cfg(windows)]
+        _job: job,
+    });
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || read_backend_stdout(stdout, stdout_log, pid, sender));
     let process = Arc::clone(&backend);
@@ -279,6 +342,9 @@ pub fn run() {
                 let handle = app.handle().clone();
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::Destroyed = event {
+                        if let Some(backend) = handle.try_state::<Arc<BackendProcess>>() {
+                            backend.stop();
+                        }
                         if handle.webview_windows().is_empty() {
                             handle.exit(0);
                         }
@@ -300,7 +366,7 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building Amadeus")
         .run(|app, event| {
-            if let RunEvent::Exit = event {
+            if matches!(event, RunEvent::ExitRequested { .. } | RunEvent::Exit) {
                 if let Some(backend) = app.try_state::<Arc<BackendProcess>>() {
                     backend.stop();
                 }
@@ -311,6 +377,53 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    fn lifetime_probe() -> (Child, std::os::windows::io::OwnedHandle) {
+        let job = create_backend_job().unwrap();
+        let mut child = Command::new("cmd.exe").args(["/C", "more >NUL"])
+            .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null())
+            .creation_flags(0x0800_0000).spawn().unwrap();
+        if let Err(error) = assign_backend_job(&job, &child) {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("assign probe to job: {error}");
+        }
+        (child, job)
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn closing_job_terminates_a_child_with_stdin_still_open() {
+        let (mut child, job) = lifetime_probe();
+        assert!(child.try_wait().unwrap().is_none());
+        drop(job);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline && child.try_wait().unwrap().is_none() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let exited = child.try_wait().unwrap().is_some();
+        if !exited {
+            let _ = child.kill();
+        }
+        let _ = child.wait();
+        assert!(exited, "closing the job left the child alive");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn concurrent_stops_close_stdin_and_finish_only_once() {
+        let (child, job) = lifetime_probe();
+        let backend = Arc::new(BackendProcess { child: Mutex::new(Some(child)), _job: job });
+        let other = Arc::clone(&backend);
+        let started = Instant::now();
+        let stopping = std::thread::spawn(move || other.stop());
+        backend.stop();
+        stopping.join().unwrap();
+        backend.stop();
+        assert!(backend.child.lock().unwrap().is_none());
+        assert!(started.elapsed() < Duration::from_secs(4), "stdin EOF did not stop the probe");
+    }
 
     #[test]
     fn ready_parser_checks_version_pid_and_port() {
