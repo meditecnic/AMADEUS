@@ -5,6 +5,8 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 import json
+import math
+from datetime import date
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -82,6 +84,7 @@ class CatalogModel:
     compatibility_of: str | None = None
     compatibility_scope: str | None = None
     preferred: bool = False
+    pricing: dict[str, Any] | None = None
 
 
 class ModelCatalog:
@@ -235,6 +238,52 @@ class ModelCatalog:
             aliases=tuple(aliases_raw.items()),
         )
 
+    @staticmethod
+    def _validate_pricing_rates(raw: Any) -> None:
+        if not isinstance(raw, dict):
+            raise ValueError("pricing rates must be an object")
+        for name in ("input", "output", "cached_input"):
+            value = raw.get(name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+                raise ValueError("pricing rates must be finite nonnegative numbers")
+
+    @classmethod
+    def _parse_pricing(cls, raw: Any) -> dict | None:
+        if raw is None:
+            return None
+        if not isinstance(raw, dict):
+            raise ValueError("pricing must be an object")
+        cls._validate_pricing_rates(raw)
+        schedule = raw.get("schedule")
+        if schedule is not None:
+            if not isinstance(schedule, dict):
+                raise ValueError("pricing schedule must be an object")
+            weekdays = schedule.get("weekdays")
+            if not isinstance(weekdays, list) or not weekdays or any(
+                type(day) is not int or not 0 <= day <= 6 for day in weekdays
+            ):
+                raise ValueError("pricing weekdays must be Monday=0 through Sunday=6")
+            windows = schedule.get("utc_windows")
+            if not isinstance(windows, list) or not windows or any(
+                not isinstance(window, list) or len(window) != 2
+                or any(type(minute) is not int for minute in window)
+                or not 0 <= window[0] < window[1] <= 1440
+                for window in windows
+            ):
+                raise ValueError("pricing UTC windows must be half-open minute intervals")
+            for period in ("peak", "off_peak"):
+                cls._validate_pricing_rates(schedule.get(period))
+        currency = raw.get("currency")
+        if not isinstance(currency, str) or len(currency) != 3 or not currency.isalpha() or not currency.isupper():
+            raise ValueError("pricing currency must be an ISO currency code")
+        date.fromisoformat(raw.get("as_of", ""))
+        if not isinstance(raw.get("source"), str) or not raw["source"].startswith("https://"):
+            raise ValueError("pricing source must be an HTTPS URL")
+        limit = raw.get("max_input_tokens")
+        if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0):
+            raise ValueError("pricing max_input_tokens must be positive")
+        return deepcopy(raw)
+
     @classmethod
     def _parse_model(cls, provider_id: str, raw: Any) -> CatalogModel:
         if not isinstance(raw, dict):
@@ -305,6 +354,7 @@ class ModelCatalog:
             compatibility_of=alias_of,
             compatibility_scope=alias_scope,
             preferred=preferred,
+            pricing=cls._parse_pricing(raw.get("pricing")),
         )
 
     def clear_discovery(self, provider_id: str | None = None) -> None:
@@ -410,7 +460,7 @@ class ModelCatalog:
     def _public_known(self, model: CatalogModel) -> dict[str, Any]:
         lifecycle = self._effective_lifecycle(model)
         live = self._live_metadata(model.provider_id, model.id)
-        return self._public_row(
+        return dict(self._public_row(
             provider_id=model.provider_id,
             model_id=model.id,
             display_name=model.display_name,
@@ -439,7 +489,7 @@ class ModelCatalog:
             compatibility_of=model.compatibility_of,
             compatibility_scope=model.compatibility_scope,
             preferred=model.preferred,
-        )
+        ), pricing=deepcopy(model.pricing))
 
     def _public_unknown(
         self,
@@ -523,6 +573,14 @@ class ModelCatalog:
                 metadata[model_id] = dict(raw)
         self._discovered_metadata[provider_id] = metadata
         return self.list_provider(provider_id)
+
+    def pricing_for(self, provider_id: str, model_id: str) -> dict | None:
+        model = self._models.get((provider_id, model_id))
+        return deepcopy(model.pricing) if model is not None else None
+
+    def supports_stream_usage(self, provider_id: str) -> bool:
+        provider = self._manifest["providers"].get(provider_id, {})
+        return not is_user_custom_provider(provider_id) and provider.get("stream_usage") is True
 
     def preferred_id(self, provider_id: str) -> str | None:
         for model_id in self._providers.get(provider_id, ()):

@@ -225,6 +225,8 @@ async def test_deepseek_runtime_payload_equals_envelope_messages():
     posts = {"n": 0, "payloads": []}
 
     class FakeResponse:
+        status_code = 200
+
         def raise_for_status(self):
             return None
 

@@ -10,6 +10,7 @@ from typing import Any, Optional
 import httpx
 
 from app.security.prompt import compression_system_prompt
+from app.services.model_usage import usage_call
 from app.services.llm_interface import LLMInterface, build_stream_messages, fold_tail_reminder
 
 
@@ -119,6 +120,12 @@ class OpenAICompatibleAdapter(LLMInterface):
             "stream": True,
             "temperature": temperature,
         }
+        from app.services.model_catalog import model_catalog
+
+        # Custom compatible endpoints may reject stream_options; do not risk the
+        # conversation just to collect usage. Missing metadata stays null.
+        if model_catalog.supports_stream_usage(self.provider_id):
+            payload["stream_options"] = {"include_usage": True}
         if max_output_tokens is not None:
             payload["max_tokens"] = max_output_tokens
         if tools is not None:
@@ -135,7 +142,7 @@ class OpenAICompatibleAdapter(LLMInterface):
             }
             payload["reasoning_effort"] = reasoning_effort
 
-        async with self._client() as client:
+        async with usage_call(self.provider_id, model or self.model) as usage, self._client() as client:
             async with client.stream(
                 "POST",
                 f"{self.base_url}/chat/completions",
@@ -146,6 +153,7 @@ class OpenAICompatibleAdapter(LLMInterface):
                     await response.aread()
                     raise ProviderRequestError(self.provider_id, response.status_code)
                 async for line in iter_provider_lines(response):
+                    usage.started = True
                     if not line.startswith("data:"):
                         continue
                     data = line[5:].strip()
@@ -157,6 +165,7 @@ class OpenAICompatibleAdapter(LLMInterface):
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
+                    usage.observe(chunk)
                     choices = chunk.get("choices", [])
                     if not choices:
                         continue
@@ -182,12 +191,14 @@ class OpenAICompatibleAdapter(LLMInterface):
         }
         if response_format is not None:
             payload["response_format"] = response_format
-        async with self._client(read_timeout=30.0) as client:
+        async with usage_call(self.provider_id, model or self.model) as usage, self._client(read_timeout=30.0) as client:
             response = await client.post(
                 f"{self.base_url}/chat/completions",
                 headers=self._headers(api_key),
                 json=payload,
             )
+            usage.started = response.status_code == 200
+            usage.observe(response.json() if response.status_code == 200 else {})
         if response.status_code != 200:
             raise ProviderRequestError(self.provider_id, response.status_code)
         data = response.json()
@@ -407,7 +418,7 @@ class OpenAIResponsesAdapter(LLMInterface):
         if reasoning_effort:
             payload["reasoning"] = {"effort": reasoning_effort}
 
-        async with self._client() as client:
+        async with usage_call(self.provider_id, model or self.model) as usage, self._client() as client:
             async with client.stream(
                 "POST",
                 f"{self.base_url}/responses",
@@ -418,6 +429,7 @@ class OpenAIResponsesAdapter(LLMInterface):
                     await response.aread()
                     raise ProviderRequestError(self.provider_id, response.status_code)
                 async for line in iter_provider_lines(response):
+                    usage.started = True
                     if not line.startswith("data:"):
                         continue
                     raw = line[5:].strip()
@@ -427,6 +439,7 @@ class OpenAIResponsesAdapter(LLMInterface):
                         event = json.loads(raw)
                     except json.JSONDecodeError:
                         continue
+                    usage.observe(event.get("response", {}))
                     event_type = event.get("type")
                     if event_type == "response.output_text.delta" and event.get("delta"):
                         yield {"content": event["delta"], "tool_calls": None}
@@ -496,12 +509,14 @@ class OpenAIResponsesAdapter(LLMInterface):
         }
         if json_mode:
             payload["text"] = {"format": {"type": "json_object"}}
-        async with self._client(30.0) as client:
+        async with usage_call(self.provider_id, model or self.model) as usage, self._client(30.0) as client:
             response = await client.post(
                 f"{self.base_url}/responses",
                 headers=self._headers(api_key),
                 json=payload,
             )
+            usage.started = response.status_code == 200
+            usage.observe(response.json() if response.status_code == 200 else {})
         if response.status_code != 200:
             raise ProviderRequestError(self.provider_id, response.status_code)
         return self._output_text(response.json())
@@ -658,7 +673,7 @@ class GeminiAdapter(LLMInterface):
         converted_tools = self._tools(tools)
         if converted_tools is not None:
             payload["tools"] = converted_tools
-        async with self._client() as client:
+        async with usage_call(self.provider_id, model or self.model) as usage, self._client() as client:
             async with client.stream(
                 "POST",
                 f"{self.base_url}/models/{model or self.model}:streamGenerateContent",
@@ -671,12 +686,14 @@ class GeminiAdapter(LLMInterface):
                     raise ProviderRequestError(self.provider_id, response.status_code)
                 event_seq = 0
                 async for line in iter_provider_lines(response):
+                    usage.started = True
                     if not line.startswith("data:"):
                         continue
                     try:
                         event = json.loads(line[5:].strip())
                     except json.JSONDecodeError:
                         continue
+                    usage.observe(event)
                     candidates = event.get("candidates", [])
                     if not candidates:
                         continue
@@ -706,7 +723,7 @@ class GeminiAdapter(LLMInterface):
         config: dict[str, Any] = {"temperature": 0.2}
         if json_mode:
             config["responseMimeType"] = "application/json"
-        async with self._client(30.0) as client:
+        async with usage_call(self.provider_id, model or self.model) as usage, self._client(30.0) as client:
             response = await client.post(
                 f"{self.base_url}/models/{model or self.model}:generateContent",
                 headers=self._headers(api_key),
@@ -716,6 +733,8 @@ class GeminiAdapter(LLMInterface):
                     "generationConfig": config,
                 },
             )
+            usage.started = response.status_code == 200
+            usage.observe(response.json() if response.status_code == 200 else {})
         if response.status_code != 200:
             raise ProviderRequestError(self.provider_id, response.status_code)
         return self._response_text(response.json())
