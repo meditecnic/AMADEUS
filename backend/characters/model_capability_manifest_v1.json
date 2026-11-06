@@ -7,6 +7,7 @@
       "models": [
         {
           "id": "deepseek-flash",
+          "pricing": {"input": 0.3, "output": 1.2, "cached_input": 0.006, "currency": "USD", "as_of": "2026-11-06", "source": "https://api-docs.deepseek.com/quick_start/pricing/", "note": "Peak rates; off-peak bills half. Estimate uses peak rates throughout."},
           "display_name": "DeepSeek Flash",
           "lifecycle": "stable",
           "preferred": true,
@@ -39,6 +40,7 @@
         },
         {
           "id": "deepseek-v4-flash",
+          "pricing": {"input": 0.3, "output": 1.2, "cached_input": 0.006, "currency": "USD", "as_of": "2026-11-06", "source": "https://api-docs.deepseek.com/quick_start/pricing/", "note": "Peak rates; off-peak bills half. Estimate uses peak rates throughout."},
           "display_name": "deepseek-v4-flash",
           "lifecycle": "deprecated",
           "compatibility_of": "deepseek-flash",
@@ -72,6 +74,7 @@
         },
         {
           "id": "deepseek-v4-pro",
+          "pricing": {"input": 1.32, "output": 3.96, "cached_input": 0.044, "currency": "USD", "as_of": "2026-11-06", "source": "https://api-docs.deepseek.com/quick_start/pricing/", "note": "Peak rates; off-peak bills half. Estimate uses peak rates throughout."},
           "display_name": "DeepSeek V4 Pro",
           "lifecycle": "stable",
           "context_window": 1000000,
@@ -139,6 +142,7 @@
       "models": [
         {
           "id": "gpt-5.6-luna",
+          "pricing": {"input": 0.2, "output": 1.2, "cached_input": 0.02, "currency": "USD", "as_of": "2026-11-06", "source": "https://openai.com/api/pricing/", "max_input_tokens": 270000, "note": "Standard processing, input below 270K; longer requests are not estimated."},
           "display_name": "GPT-5.6 Luna",
           "lifecycle": "stable",
           "context_window": 1050000,

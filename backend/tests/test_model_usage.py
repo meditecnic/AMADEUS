@@ -174,3 +174,69 @@ def test_usage_migration_rolls_back_on_ddl_failure():
         conn.set_authorizer(None)
         assert conn.execute("SELECT value FROM schema_meta").fetchone()[0] == '12'
         assert not conn.execute("SELECT name FROM sqlite_master WHERE name='model_usage'").fetchone()
+
+
+def test_usage_currency_nulls_session_and_local_month(usage_store, monkeypatch):
+    from datetime import datetime, timezone
+    from app.services import usage_report as report
+    prices = {'usd': dict(input=2, output=10, cached_input=0.5, currency='USD'),
+              'cny': dict(input=7, output=14, cached_input=1, currency='CNY')}
+    monkeypatch.setattr(report.model_catalog, 'pricing_for', lambda p, m: prices.get(m))
+    values = [
+        ('2026-10-31T16:30:00+00:00', 'c1', 'usd', 1000000, 100000, 200000, 1),
+        ('2026-11-30T16:30:00+00:00', 'c1', 'usd', 100, 100, 0, 1),
+        ('2026-11-02T00:00:00+00:00', 'c2', 'cny', 1000000, 1000000, 0, 1),
+        ('2026-11-02T01:00:00+00:00', 'c1', 'unknown', None, None, None, 0),
+        ('2026-11-02T01:00:00+00:00', 'c1', 'usd', None, None, None, 0)]
+    with closing(sqlite3.connect(usage_store)) as conn:
+        conn.executemany('''INSERT INTO model_usage
+            (time_utc,conversation_id,model_id,input_tokens,output_tokens,cached_tokens,reported,
+             worldline,category,source,provider_id) VALUES(?,?,?,?,?,?,?,'beta','chat','chat','p')''', values)
+        conn.commit()
+    result = report.usage_report('month', None, 480, now=datetime(2026, 11, 15, tzinfo=timezone.utc))
+    assert result['estimate'] is True
+    assert result['totals_by_currency'] == {'CNY': 21.0, 'USD': 2.7}
+    assert result['unreported_calls'] == 2
+    assert result['unpriced_models'] == [{'provider_id': 'p', 'model_id': 'unknown'}]
+    by_model = {g['model_id']: g for g in result['groups']}
+    assert by_model['usd']['calls'] == 2 and by_model['usd']['input_tokens'] == 1000000
+    assert by_model['unknown']['estimated_cost'] is None and by_model['unknown']['input_tokens'] is None
+    assert sum(g['calls'] for g in report.usage_report('session', 'c1', 0)['groups']) == 4
+    assert sum(g['calls'] for g in report.usage_report('all', None, 0)['groups']) == 5
+
+
+def test_catalog_official_prices_and_long_context(usage_store):
+    from app.services.usage_report import usage_report, model_catalog
+    for model in ['deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4-pro']:
+        price = model_catalog.pricing_for('deepseek', model)
+        assert price['source'] == 'https://api-docs.deepseek.com/quick_start/pricing/'
+        assert price['as_of'] == '2026-11-06'
+    assert model_catalog.pricing_for('glm', 'glm-5.2') is None
+    price = model_catalog.pricing_for('openai', 'gpt-5.6-luna')
+    assert model_catalog.public_model('openai', 'gpt-5.6-luna')['pricing'] == price
+    price['input'] = 999
+    assert model_catalog.pricing_for('openai', 'gpt-5.6-luna')['input'] == 0.2
+    with closing(sqlite3.connect(usage_store)) as conn:
+        conn.execute('''INSERT INTO model_usage(time_utc,category,source,provider_id,model_id,input_tokens,output_tokens,reported)
+            VALUES('2026-11-06T00:00:00+00:00','chat','chat','openai','gpt-5.6-luna',270000,100,1)''')
+        conn.commit()
+    group, = usage_report('all', None, 0)['groups']
+    assert group['estimated_cost'] is None and group['unestimated_calls'] == 1
+
+
+@pytest.mark.parametrize('patch', [{'input': -1}, {'output': float('nan')}, {'currency': 'usd'}, {'as_of': 'bad'}, {'source': 'http://invalid'}, {'max_input_tokens': 0}])
+def test_invalid_catalog_pricing_rejected(patch):
+    from app.services.model_catalog import ModelCatalog
+    price = dict(input=1, output=2, cached_input=0.1, currency='USD', as_of='2026-11-06', source='https://official.example/pricing')
+    price.update(patch)
+    with pytest.raises(ValueError):
+        ModelCatalog._parse_pricing(price)
+
+
+def test_usage_api_validation_and_empty_totals(app_client):
+    response = app_client.get('/api/data/usage?range=all')
+    assert response.status_code == 200
+    assert response.json() == dict(estimate=True, range='all', tz=0, groups=[], totals_by_currency={}, unreported_calls=0, unpriced_models=[])
+    assert app_client.get('/api/data/usage?range=session').json() == {'detail': {'code': 'session_id_required'}}
+    for query in ['range=invalid', 'tz=841', 'tz=abc']:
+        assert app_client.get('/api/data/usage?'+query).status_code == 422

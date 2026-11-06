@@ -1,6 +1,8 @@
 import asyncio
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
+import sqlite3
+from typing import Literal
 
 from app.services import backups
 
@@ -45,3 +47,19 @@ async def restore_backup(backup_id: str):
 @router.delete("/backups/{backup_id}")
 async def delete_backup(backup_id: str):
     return await _call(backups.delete_backup, backup_id)
+
+
+@router.get("/usage")
+async def get_usage(
+    range: Literal["month", "session", "all"] = "month",
+    session_id: str | None = None,
+    tz: int = Query(0, ge=-840, le=840),
+):
+    from app.services.usage_report import usage_report
+
+    if range == "session" and not (session_id or "").strip():
+        raise HTTPException(422, detail={"code": "session_id_required"})
+    try:
+        return await asyncio.to_thread(usage_report, range, session_id, tz)
+    except (sqlite3.Error, OSError):
+        raise HTTPException(500, detail={"code": "usage_unavailable"}) from None
