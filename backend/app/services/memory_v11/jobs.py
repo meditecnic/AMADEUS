@@ -761,12 +761,15 @@ async def default_memory_completion(**kwargs: Any) -> Mapping[str, Any]:
             ),
         },
     ]
-    payload = await snapshot.adapter.complete_json(
-        messages=messages,
-        api_key=api_key,
-        model=snapshot.model_id,
-        temperature=0.1,
-    )
+    from app.services.model_usage import usage_scope
+
+    with usage_scope(source="memory", worldline=kwargs.get("worldline"), conversation_id=kwargs.get("conversation_id")):
+        payload = await snapshot.adapter.complete_json(
+            messages=messages,
+            api_key=api_key,
+            model=snapshot.model_id,
+            temperature=0.1,
+        )
     if not isinstance(payload, dict):
         raise ValueError("memory completion was not a JSON object")
     # Normalize list fields.

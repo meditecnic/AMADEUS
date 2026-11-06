@@ -327,25 +327,28 @@ class ConversationService:
         from app.services.provider_registry import ProviderTask
 
         provider_snapshot.require(ProviderTask.TITLE)
-        payload = await provider_snapshot.adapter.complete_json(
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "请为这段对话生成简洁、具体的中文标题。"
-                        "只返回 JSON 对象，格式为 {\"title\": \"...\"}。"
-                        "不要使用泛化标题，不要超过 20 个汉字。"
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": f"用户：{user_text}\n红莉栖：{assistant_text}",
-                },
-            ],
-            api_key=api_key,
-            model=provider_snapshot.model_id,
-            temperature=0.1,
-        )
+        from app.services.model_usage import usage_scope
+
+        with usage_scope(source="title", worldline=worldline, conversation_id=conversation_id):
+            payload = await provider_snapshot.adapter.complete_json(
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "请为这段对话生成简洁、具体的中文标题。"
+                            "只返回 JSON 对象，格式为 {\"title\": \"...\"}。"
+                            "不要使用泛化标题，不要超过 20 个汉字。"
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": f"用户：{user_text}\n红莉栖：{assistant_text}",
+                    },
+                ],
+                api_key=api_key,
+                model=provider_snapshot.model_id,
+                temperature=0.1,
+            )
         title = str(payload.get("title") or "").strip().replace("\n", " ")
         if not title:
             raise ValueError("provider returned an empty conversation title")

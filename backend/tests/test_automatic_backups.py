@@ -31,7 +31,7 @@ async def test_upgrade_snapshot_precedes_every_schema_write(data_root):
     with closing(sqlite3.connect(snapshot)) as connection:
         assert backups._schema(connection) == 11
     with closing(sqlite3.connect(path)) as connection:
-        assert backups._schema(connection) == 12
+        assert backups._schema(connection) == db.SCHEMA_VERSION
 
 
 async def test_failed_upgrade_backup_prevents_migration(data_root, monkeypatch):

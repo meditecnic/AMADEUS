@@ -35,7 +35,8 @@ EMBEDDING_DIMENSION = 768
 # v10: provider_configurations multi-profile fields (display_name/enabled/created_at).
 # v11: Memory observation–fact pipeline (additive tables; legacy core_facts retained).
 # v12: jina 768-dimension stable-fact version embeddings. Legacy tables unchanged.
-SCHEMA_VERSION = 12
+# v13: content-free model invocation accounting in the control store.
+SCHEMA_VERSION = 13
 
 DEFAULT_IDENTITY_MODE = "okabe"
 IDENTITY_MODES = frozenset({"okabe", "self"})
@@ -577,6 +578,26 @@ SHARED_USER_FACTS_REQUIRED_INDEXES = frozenset({
     "idx_shared_current_fact", "idx_shared_fact_hot",
 })
 
+MODEL_USAGE_DDL = """
+CREATE TABLE IF NOT EXISTS model_usage (
+    id INTEGER PRIMARY KEY,
+    time_utc TEXT NOT NULL,
+    worldline TEXT CHECK(worldline IN ('steins_gate','beta')),
+    conversation_id TEXT,
+    category TEXT NOT NULL CHECK(category IN ('chat','background')),
+    source TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    cached_tokens INTEGER,
+    reported INTEGER NOT NULL CHECK(reported IN (0,1))
+);
+CREATE INDEX IF NOT EXISTS idx_model_usage_time ON model_usage(time_utc);
+CREATE INDEX IF NOT EXISTS idx_model_usage_conversation ON model_usage(conversation_id);
+"""
+
+
 CONTROL_SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS session_worldlines (
@@ -607,7 +628,7 @@ CREATE TABLE IF NOT EXISTS provider_configurations (
     created_at_utc TEXT NOT NULL DEFAULT '',
     updated_at_utc TEXT NOT NULL
 );
-""" + SHARED_USER_FACTS_DDL
+""" + SHARED_USER_FACTS_DDL + MODEL_USAGE_DDL
 
 
 def _read_schema_version(connection: sqlite3.Connection) -> int | None:
@@ -1335,6 +1356,22 @@ def _migrate_v11_embeddings(connection: sqlite3.Connection) -> bool:
         raise
 
 
+def _migrate_v12_to_v13(connection: sqlite3.Connection, kind: DatabaseKind) -> None:
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        if kind == "control":
+            for statement in MODEL_USAGE_DDL.split(";"):
+                if statement.strip():
+                    connection.execute(statement)
+        connection.execute(
+            "INSERT OR REPLACE INTO schema_meta(key,value) VALUES('schema_version','13')"
+        )
+        connection.commit()
+    except BaseException:
+        connection.rollback()
+        raise
+
+
 def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str = "steins_gate") -> bool:
     db_path = Path(path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1391,6 +1428,9 @@ def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str 
                     return False
         if current == 11:
             current = 12
+        if current == 12:
+            _migrate_v12_to_v13(connection, kind)
+            current = 13
         if current not in (None, SCHEMA_VERSION):
             raise RuntimeError(f"unsupported {kind} schema version at {path}: {current}")
 

@@ -24,7 +24,7 @@ def make_database(root, name='control.sqlite3', value='before'):
     path.parent.mkdir(parents=True, exist_ok=True)
     with closing(sqlite3.connect(path)) as connection:
         connection.executescript("CREATE TABLE schema_meta(key TEXT PRIMARY KEY, value TEXT);"
-                                 "INSERT INTO schema_meta VALUES('schema_version','12');"
+                                 f"INSERT INTO schema_meta VALUES('schema_version','{db.SCHEMA_VERSION}');"
                                  "CREATE TABLE sample(value TEXT);")
         connection.execute('INSERT INTO sample VALUES(?)', (value,))
         connection.commit()
