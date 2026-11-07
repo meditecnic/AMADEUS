@@ -83,20 +83,33 @@ def process_creation_time(pid: int) -> int | None:
         kernel.CloseHandle(handle)
 
 
-def update_children(root_pid: int, tracked: set[int], processes=None, created=None) -> None:
+# Start times of tracked processes, kept across calls: a tracked parent may exit before its
+# child is first seen, and a tracked PID may be reused by an unrelated process.
+_births: dict[int, int] = {}
+
+
+def update_children(root_pid: int, tracked: set[int], processes=None, created=None, births=None) -> None:
     processes = process_snapshot() if processes is None else processes
     created = process_creation_time if created is None else created
-    times: dict[int, int | None] = {}
+    births = _births if births is None else births
+    current: dict[int, int | None] = {}
 
-    def born(pid: int) -> int | None:
-        if pid not in times:
-            times[pid] = created(pid)
-        return times[pid]
+    def now(pid: int) -> int | None:
+        if pid not in current:
+            current[pid] = created(pid)
+        return current[pid]
+
+    for pid in list(tracked):
+        if pid in births and pid in processes and now(pid) not in (None, births[pid]):
+            tracked.discard(pid)  # PID reused by a process this smoke did not start.
+            del births[pid]
+    if root_pid not in births and now(root_pid) is not None:
+        births[root_pid] = now(root_pid)
 
     def is_child(pid: int, parent: int) -> bool:
         # Windows keeps a dead parent's PID in th32ParentProcessID and reuses PIDs, so a process
         # started long before ours (e.g. wininit.exe) can name our PID as its parent.
-        child_time, parent_time = born(pid), born(parent)
+        child_time, parent_time = now(pid), births.get(parent, now(parent))
         return child_time is not None and parent_time is not None and child_time >= parent_time
 
     ancestors = tracked | {root_pid}
@@ -105,6 +118,8 @@ def update_children(root_pid: int, tracked: set[int], processes=None, created=No
                     if parent in ancestors and pid not in ancestors and is_child(pid, parent)}
         if not children:
             break
+        for pid in children:
+            births[pid] = current[pid]
         ancestors |= children
     tracked.update(ancestors - {root_pid})
 
