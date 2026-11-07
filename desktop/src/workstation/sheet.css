@@ -70,6 +70,9 @@
 /* specimens pinned about the β sheet (generated prints, recoloured to one amber ink) */
 .ds-moths img { position: absolute; display: block; height: auto; opacity: var(--o, .16); transform: rotate(var(--r, 0deg)); }
 
+/* a soda-can ring on the SG sheet: darker than the slate, as a dried stain is */
+.ds-ring { position: absolute; left: auto; top: auto; right: calc(var(--ws-stage) * .62); bottom: 15%; inset-inline-start: auto; width: clamp(110px, 9vw, 160px); height: auto; opacity: .42; transform: rotate(-24deg); filter: brightness(1.5) saturate(.7); }
+
 /* zone border, like the login sheet's: rows down the right edge, columns along the foot */
 .ds-zones .z { position: absolute; display: flex; font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .1em; color: rgba(226, 232, 235, .22); }
 .ds-zones .right { top: 60px; bottom: 14px; right: 3px; width: 10px; flex-direction: column; }
@@ -99,6 +102,11 @@
   filter: drop-shadow(0 14px 22px rgba(0, 0, 0, .45)) drop-shadow(0 2px 3px rgba(0, 0, 0, .35));
 }
 .ws2 .ws2-empty-card::before { left: 50px; top: 39px; width: 6px; height: 6px; box-shadow: none; }
+/* where a can was set down on the note */
+.ws2[data-wl='sg'] .ws2-empty-card::after {
+  content: ''; position: absolute; right: -34px; bottom: -40px; width: 150px; height: 150px; pointer-events: none;
+  background: url('/assets/sheet/ring-1.webp') center / contain no-repeat; opacity: .62; transform: rotate(18deg); mix-blend-mode: multiply;
+}
 .ws2 .ws2-empty-card .ws2-empty-kicker { color: rgba(43, 44, 48, .55); letter-spacing: .24em; }
 .ws2 .ws2-empty-card .ws2-empty-head { color: #22232a; font-family: 'EB Garamond', var(--ws-serif-cjk); font-size: 40px; letter-spacing: .1em; }
 .ws2 .ws2-empty-card .ws2-empty-msg { color: rgba(34, 35, 42, .78); font-size: 15px; }
@@ -124,7 +132,8 @@
     linear-gradient(rgba(233, 150, 80, .5), rgba(233, 150, 80, .5)) 0 100% / 100% 1px no-repeat,
     linear-gradient(rgba(233, 150, 80, .5), rgba(233, 150, 80, .5)) 0 0 / 1px 100% no-repeat,
     linear-gradient(rgba(233, 150, 80, .5), rgba(233, 150, 80, .5)) 100% 0 / 1px 100% no-repeat,
-    rgba(10, 14, 15, .72);
+    linear-gradient(rgba(8, 11, 12, .5), rgba(8, 11, 12, .5)),
+    url('/assets/sheet/beta-metal.webp') center / cover;
   outline: 1px solid rgba(233, 150, 80, .22); outline-offset: 4px;
   color: var(--ws-ink); transform: none; filter: none; padding: 30px 36px 26px 56px;
 }
@@ -170,3 +179,9 @@
 
 /* room under the composer for the guide */
 .ws2 .ws2-talk { padding-bottom: 32px; }
+
+/* β: the composer sits on chipped, near-black metal (under its own crop marks and tint) */
+.ws2[data-wl='beta'] .ws2-composer::before {
+  content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  background: url('/assets/sheet/beta-metal.webp') center / cover; opacity: .9;
+}

@@ -8,15 +8,20 @@ never go here; they belong in the separately distributed asset pack.
 |---|---|---|---|---|
 | `desktop/public/assets/sheet/sg-slate.webp` | ChatGPT image generation | 2026-11-07 | meditecnic | [01 SG slate](#01-sg-slate) |
 | `desktop/public/assets/sheet/beta-wall.webp` | ChatGPT image generation | 2026-11-07 | meditecnic | [02 β wall](#02-β-wall) |
-| `desktop/public/assets/sheet/moth-2.webp`, `moth-3.webp`, `moth-5.webp`, `moth-7.webp`, `moth-8.webp` | ChatGPT image generation | 2026-11-07 | meditecnic | [03 Specimens](#03-specimens) |
+| `desktop/public/assets/sheet/specimen-1.webp` … `specimen-6.webp` | ChatGPT image generation | 2026-11-07 | meditecnic | [03b Specimens](#03b-specimens) |
 | `desktop/public/assets/sheet/paper-spiral.webp` | ChatGPT image generation | 2026-11-07 | meditecnic | [04 Notebook paper](#04-notebook-paper) |
+| `desktop/public/assets/sheet/beta-metal.webp` | ChatGPT image generation | 2026-11-07 | meditecnic | [06b Dark metal](#06b-dark-metal) |
+| `desktop/public/assets/sheet/ring-1.webp`, `ring-3.webp` | ChatGPT image generation | 2026-11-07 | meditecnic | [07 Can rings](#07-can-rings) |
 
 Post-processing (designer, 2026-11-07): cropped to the subject, converted to WebP (quality 70–80, alpha kept).
-The specimens were cut from one sheet of eight (five kept) and recoloured to a single amber ink (luminance mapped from
-near-black `#1e120a` through amber `#c4803c` to bone `#ecdec4`). Nothing was traced or painted over.
+The specimens and the rings were generated on flat black and flat white and cut out by brightness (alpha from the
+ink's brightness or darkness, colour un-premultiplied); each sheet was split into its separate specimens or rings (two of the four rings kept).
+Nothing was traced or painted over. An earlier specimen sheet (prompt 03, five crops) was replaced the same day
+by 03b and is no longer in the tree.
 
 Usage: the slate and the wall are the paper under the login and the workstation (SG and β); the specimens are pinned
-about the β workstation; the spiral-bound scrap is the note on an empty conversation (SG).
+about the β workstation; the spiral-bound scrap is the note on an empty conversation (SG), with a can ring on it and
+another on the SG sheet; the dark metal is under the β composer and the β empty-conversation slip.
 
 ## 01 SG slate
 
@@ -43,19 +48,18 @@ Absolutely no drawings, lines, symbols, text, letters, numbers, logos, objects
 or people. Texture only.
 ```
 
-## 03 Specimens
+## 03b Specimens
 
 ```text
-A set of 8 separate butterfly and moth specimens in the style of distressed
-vintage screen prints / worn rubber-stamp prints of 19th-century entomology
-plates. Each specimen isolated, with clear empty space between them, arranged
-in a loose 4 x 2 grid, viewed straight from above, wings fully spread, varied
-species and sizes. Colours limited to burnt amber #b8732e, ochre #d99a4e,
-bone white #eee2cb and near-black ink. Uneven printing: ink dropouts, speckle,
-faded and half-missing patches; two of the eight are very faded.
-Transparent background (PNG with alpha). If transparency is not possible,
-use a flat pure black #000000 background.
-No text, labels, pins, frames, shadows, paper, or other objects.
+A sheet of 6 separate moth and butterfly specimens printed as distressed
+single-colour screen prints: one burnt-amber ink #b8732e only, on nothing.
+Coarse halftone dots in the shading, ink dropouts, speckle, worn and
+half-missing patches, slightly misregistered edges; two of the six are very
+faded. Each specimen isolated with wide empty space, loose 3 x 2 grid, viewed
+straight from above, wings fully spread, varied species and sizes.
+Background: flat pure black #000000 everywhere around them. Not transparent,
+not a checkerboard. No text, labels, pins, frames, shadows, paper or other
+objects. No pink, no white, no second colour.
 ```
 
 ## 04 Notebook paper
@@ -70,4 +74,27 @@ light pencil smudges, no writing at all.
 Soft, even, shadowless lighting. Transparent background (PNG with alpha);
 if transparency is not possible, flat pure black #000000 background.
 No text, no handwriting, no drawings, no objects, no hands.
+```
+
+## 06b Dark metal
+
+```text
+Wide horizontal strip of corroded dark metal, aspect ratio about 4:1, highest
+resolution available. About 85 percent of the surface is intact near-black
+paint #0f1212 with fine grain and hairline scratches; the rest is small,
+scattered flakes where the paint has chipped, showing dark rust #5a2a12 and a
+little burnt orange #8a3d16 at the very edges of the chips. Small scale: the
+chips are tiny compared with the strip. Flat, even, straight-on lighting.
+No vignette, no glow, no objects, no text, no rivets, no frame.
+```
+
+## 07 Can rings
+
+```text
+Four separate faint ring-shaped stains left on paper by the wet bottom of a
+soda can: thin, slightly broken circles of dried dark-red-brown liquid
+#5a2620, one with a small drip, one only half a ring, one doubled where the can
+was set down twice. Viewed straight from above, each isolated with wide empty
+space. Background: flat pure white #ffffff. No can, no paper texture, no text,
+no other objects.
 ```

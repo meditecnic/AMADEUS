@@ -149,11 +149,12 @@ const Butterfly = memo(function Butterfly() {
 
 /* Specimens pinned about the β sheet: most round the figure, two faint ones behind the reading column. */
 const MOTHS: { n: number; at: CSSProperties; w: string; r: number; o: number }[] = [
-  { n: 2, at: { right: '5%', top: '13%' }, w: 'clamp(120px, 11vw, 200px)', r: -12, o: .26 },
-  { n: 5, at: { right: '2.5%', bottom: '24%' }, w: 'clamp(130px, 12vw, 220px)', r: 9, o: .2 },
-  { n: 7, at: { right: '27%', bottom: '7%' }, w: 'clamp(100px, 8vw, 150px)', r: 18, o: .15 },
-  { n: 3, at: { left: '24%', top: '16%' }, w: 'clamp(80px, 7vw, 120px)', r: -28, o: .06 },
-  { n: 8, at: { left: '5%', bottom: '9%' }, w: 'clamp(90px, 8vw, 140px)', r: -6, o: .07 },
+  { n: 1, at: { right: '4%', top: '11%' }, w: 'clamp(130px, 11.5vw, 210px)', r: -10, o: .34 },
+  { n: 6, at: { right: '2%', bottom: '25%' }, w: 'clamp(120px, 11vw, 200px)', r: 8, o: .28 },
+  { n: 4, at: { right: '29%', bottom: '6%' }, w: 'clamp(110px, 9vw, 170px)', r: 16, o: .2 },
+  { n: 3, at: { right: '31%', top: '30%' }, w: 'clamp(90px, 7vw, 130px)', r: -22, o: .3 },
+  { n: 2, at: { left: '23%', top: '15%' }, w: 'clamp(90px, 7.5vw, 140px)', r: -26, o: .07 },
+  { n: 5, at: { left: '5%', bottom: '9%' }, w: 'clamp(90px, 8vw, 140px)', r: -6, o: .1 },
 ];
 
 const ROWS = ['A', 'B', 'C', 'D', 'E', 'F'];
@@ -167,10 +168,12 @@ export function DraftSheet({ worldline }: { worldline: 'steins_gate' | 'beta' })
       <svg className="ds-plate" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
         {worldline === 'beta' ? <Butterfly /> : <Movement />}
       </svg>
+      {/* one soda-can ring left on the SG sheet, by the clock */}
+      {worldline !== 'beta' && <img className="ds-ring" src="/assets/sheet/ring-3.webp" alt="" draggable={false} decoding="async" />}
       {worldline === 'beta' && (
         <div className="ds-moths">
           {MOTHS.map((m) => (
-            <img key={m.n} src={`/assets/sheet/moth-${m.n}.webp`} alt="" draggable={false} decoding="async"
+            <img key={m.n} src={`/assets/sheet/specimen-${m.n}.webp`} alt="" draggable={false} decoding="async"
               style={{ ...m.at, width: m.w, '--r': `${m.r}deg`, '--o': m.o } as CSSProperties} />
           ))}
         </div>
