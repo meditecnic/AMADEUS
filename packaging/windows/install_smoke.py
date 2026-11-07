@@ -84,7 +84,12 @@ def registration() -> dict | None:
         return None  # A clean profile may not have the Uninstall key until something installs.
     with parent_key as parent:
         for index in range(winreg.QueryInfoKey(parent)[0]):
-            with winreg.OpenKey(parent, winreg.EnumKey(parent, index)) as key:
+            # The uninstaller deletes keys while this polls, so a key can vanish after it is counted.
+            try:
+                key = winreg.OpenKey(parent, winreg.EnumKey(parent, index))
+            except OSError:
+                continue
+            with key:
                 try:
                     if winreg.QueryValueEx(key, "DisplayName")[0] == "Amadeus":
                         # Tauri's NSIS template stores this value with enclosing quotes.
@@ -436,11 +441,17 @@ def exercise(installer: Path, root: Path, timeout: float, result: dict, provider
             cdp.ws.close()
             started = time.monotonic()
             desktop_exit: dict = {}
+            names = {pid: name for pid, (_, name) in process_snapshot().items()
+                     if pid in tracked | {p.pid for p in launches}}
+            exits: dict[int, float] = {}
 
             def closed() -> bool:
                 if "seconds" not in desktop_exit and primary.poll() is not None:
                     desktop_exit["seconds"] = round(time.monotonic() - started, 3)
-                return not ((tracked | {p.pid for p in launches}) & process_snapshot().keys())
+                alive = (tracked | {p.pid for p in launches}) & process_snapshot().keys()
+                for pid in names.keys() - alive - exits.keys():
+                    exits[pid] = round(time.monotonic() - started, 3)
+                return not alive
 
             require(close_windows(primary.pid), "No visible primary window; interactive desktop unavailable")
             try:
@@ -471,6 +482,12 @@ def exercise(installer: Path, root: Path, timeout: float, result: dict, provider
                       "seconds": round(time.monotonic() - started, 3)}), flush=True)
                 raise
             result["close_seconds"] = round(time.monotonic() - started, 3)
+            # Last exit per executable name, to show which part of the tree slows shutdown.
+            timeline: dict[str, float] = {}
+            for pid, name in names.items():
+                timeline[name] = max(timeline.get(name, 0.0), exits.get(pid, result["close_seconds"]))
+            print("CLOSE_TIMELINE " + json.dumps({"desktop_exit_seconds": desktop_exit.get("seconds"),
+                  "last_exit_by_name": timeline, "processes": len(names)}), flush=True)
             result["desktop_exit_code"] = primary.wait(timeout=1)
             require(primary.returncode == 0, f"Desktop exited {primary.returncode} after WM_CLOSE")
             result["residual_processes"] = []
