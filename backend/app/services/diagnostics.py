@@ -928,6 +928,11 @@ class DiagnosticRuntime:
         self.observing = False
         self.mapping_fallbacks = 0
         self._turn_observers: dict[tuple[str, int], DiagnosticTurnObserver] = {}
+        self._pending: set[asyncio.Task] = set()
+
+    async def drain_pending(self) -> None:
+        while self._pending:
+            await asyncio.gather(*self._pending, return_exceptions=True)
 
     def _degrade(self, category: str) -> None:
         self._fallback_state = "degraded"
@@ -1067,6 +1072,8 @@ class DiagnosticTTSObserver:
 
     def _schedule(self, event: Mapping[str, Any]) -> None:
         task = asyncio.create_task(asyncio.to_thread(self.runtime.append_event, event))
+        self.runtime._pending.add(task)
+        task.add_done_callback(self.runtime._pending.discard)
         task.add_done_callback(self._consume_task)
 
     def _consume_task(self, task: asyncio.Task) -> None:

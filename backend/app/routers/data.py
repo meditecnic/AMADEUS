@@ -6,14 +6,14 @@ from starlette.background import BackgroundTask
 import sqlite3
 from typing import Literal
 
-from app.services import backups
+from app.services import backups, data_relocation
 
 router = APIRouter(prefix="/api/data")
 
 
 async def _call(function, *args):
     try:
-        return await asyncio.to_thread(function, *args)
+        return await data_relocation.run_in_thread(function, *args)
     except backups.BackupError as exc:
         raise HTTPException(exc.status, detail={"code": exc.code, "message": str(exc)}) from exc
     except OSError as exc:
