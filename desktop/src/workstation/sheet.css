@@ -20,6 +20,10 @@
     linear-gradient(90deg, rgba(4, 8, 9, .66) 0, rgba(4, 8, 9, .46) 34%, rgba(4, 8, 9, .16) 64%, rgba(4, 8, 9, .08) 100%),
     radial-gradient(120% 90% at 50% 50%, transparent 55%, rgba(0, 0, 0, .5) 100%);
 }
+/* The floor shade under the stage belongs to her portrait. Without her it only darkens the stage column and cuts a
+   seam into the sheet; with her it fades in from the left instead of starting at the column edge. */
+.ws2 .avatar-stage.avatar-absent::before, .ws2 .avatar-stage.avatar-absent::after { display: none; }
+.ws2 .avatar-stage::after { -webkit-mask-image: linear-gradient(90deg, transparent, #000 45%); mask-image: linear-gradient(90deg, transparent, #000 45%); }
 .ds-grid {
   background:
     linear-gradient(90deg, rgba(235, 238, 240, .045) 1px, transparent 1px) 0 0 / 80px 80px,
@@ -133,7 +137,7 @@
     linear-gradient(rgba(233, 150, 80, .5), rgba(233, 150, 80, .5)) 0 0 / 1px 100% no-repeat,
     linear-gradient(rgba(233, 150, 80, .5), rgba(233, 150, 80, .5)) 100% 0 / 1px 100% no-repeat,
     linear-gradient(rgba(8, 11, 12, .5), rgba(8, 11, 12, .5)),
-    url('/assets/sheet/beta-metal.webp') center / cover;
+    url('/assets/sheet/beta-metal.webp') 30% 40% / 1800px auto;
   outline: 1px solid rgba(233, 150, 80, .22); outline-offset: 4px;
   color: var(--ws-ink); transform: none; filter: none; padding: 30px 36px 26px 56px;
 }
@@ -183,5 +187,6 @@
 /* β: the composer sits on chipped, near-black metal (under its own crop marks and tint) */
 .ws2[data-wl='beta'] .ws2-composer::before {
   content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
-  background: url('/assets/sheet/beta-metal.webp') center / cover; opacity: .9;
+  /* At its own scale: under cover the chips shrink to specks on a strip this thin. */
+  background: url('/assets/sheet/beta-metal.webp') 62% 50% / 1800px auto; opacity: .9;
 }
