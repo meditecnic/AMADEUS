@@ -69,6 +69,9 @@ jobs:
         # The builder requires the snapshot directory to be named after the pinned revision.
         # Filenames are positional: `--include a b c` would take only the first as a pattern.
         run: hf download jinaai/jina-embeddings-v5-text-nano-retrieval onnx/model.onnx onnx/model.onnx_data tokenizer.json README.md --revision $env:JINA_REVISION --local-dir "$env:RUNNER_TEMP/jina-snapshot/$env:JINA_REVISION"
+      - name: Install locked update signature verifier
+        run: >-
+          python -m pip install --require-hashes --only-binary=:all: -r packaging/windows/requirements-verify.lock
       - name: Packaging tests and lint
         run: |
           python -m pytest -q packaging/windows/tests
@@ -185,7 +188,10 @@ jobs:
 
   draft-release:
     needs: [windows, install-smoke]
-    if: github.event_name == 'push' && github.ref_type == 'tag'
+    if: >-
+      always() && !cancelled() && needs.install-smoke.result == 'success' &&
+      (needs.windows.result == 'success' ||
+       (needs.windows.result == 'skipped' && github.event_name == 'workflow_dispatch' && inputs.smoke_run_id != ''))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -196,9 +202,43 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          name: amadeus-windows-x64-${{ needs.windows.outputs.version }}
+          pattern: amadeus-windows-x64-*
           path: release-files
+          merge-multiple: true
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.smoke_run_id || github.run_id }}
+      - name: Explain unsigned PR verification skip
+        if: github.event_name == 'pull_request'
+        run: echo 'UPDATE_SIGNATURE_SKIPPED — PR builds do not receive signing secrets or generate update signatures.'
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        if: github.event_name != 'pull_request'
+        with:
+          python-version: '3.11'
+      - name: Install locked update signature verifier
+        if: github.event_name != 'pull_request'
+        run: >-
+          python -m pip install --require-hashes --only-binary=:all: -r packaging/windows/requirements-verify.lock
+      - name: Verify update signature before creating a Release
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: |
+          shopt -s nullglob
+          installers=(release-files/*_x64-setup.exe)
+          if [[ ${#installers[@]} -ne 1 ]]; then
+            echo 'UPDATE_SIGNATURE_FAILED: expected exactly one Windows installer' >&2
+            exit 1
+          fi
+          for required in "${installers[0]}.sig" release-files/latest.json; do
+            if [[ ! -f "$required" ]]; then
+              echo "UPDATE_SIGNATURE_FAILED: signed tag/dispatch artifact missing $required" >&2
+              exit 1
+            fi
+          done
+          python packaging/windows/verify_update_signature.py \
+            --installer "${installers[0]}" --signature "${installers[0]}.sig" \
+            --config desktop/src-tauri/tauri.conf.json --latest release-files/latest.json
       - name: Create draft Release for tag pushes after install smoke
+        if: github.event_name == 'push' && github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
