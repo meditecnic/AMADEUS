@@ -44,8 +44,16 @@ Linux; Linux results do not establish Windows acceptance.
   `.git-blame-ignore-revs` depends on preserving the normalization commit ID.
 - Do not commit secrets or personal email addresses, including in commit
   metadata.
-- Do not add audio, voice model weights or image assets. Do not use original
-  game materials. See README sections on optional voice and the asset pack.
+- Do not add audio or voice model weights. Do not use original game
+  materials (character art, CG, logos, BGM, game screenshots or anything derived
+  from them); those belong only in the separately distributed asset pack. See
+  README sections on optional voice and the asset pack.
+- First-party generated images (textures, illustrations) may be added. Do not
+  generate characters from the original work, and do not name the original
+  work, its characters or a living artist in prompts. Register every file in
+  `assets/PROVENANCE.md` in the same commit: path, generator, date, full
+  prompt and who generated it. Commit only final, cropped picks (WebP or PNG,
+  at most 500 KB each): Git history is permanent.
 - Before importing backend `app` outside pytest, set `AMADEUS_DATA_DIR` to a
   fresh temporary directory and leave `AMADEUS_DB_PATH` unset (it overrides the
   data directory). Paths are resolved during import. Source and frozen runs refuse
