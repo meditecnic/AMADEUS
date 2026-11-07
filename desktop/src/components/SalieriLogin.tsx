@@ -7,6 +7,7 @@ import { useReducedMotion } from '../design-system/useReducedMotion';
 import { warmWorkstationFonts } from '../workstation/fontWarmup';
 import { Blueprint, type BlueprintHandle } from './login/Blueprint';
 import { Wordmark, type WordmarkHandle } from './login/Wordmark';
+import { DIVERGENCE, WORLDLINE_NAME } from '../workstation/Nixie';
 
 /**
  * Beats of the entrance the app listens for. draft: the pen starts across the sheet and the workstation is
@@ -121,9 +122,11 @@ function Peek({ open }: { open: boolean }) {
   );
 }
 
-export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEntranceCue }) => {
+export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEntranceCue, worldline = 'steins_gate' }) => {
   const [userId, setUserId] = useState('');
   const [password, setPassword] = useState('');
+  // [210] optional startup passcode. Until the server says otherwise a passcode is assumed, as before.
+  const [passcodeSet, setPasscodeSet] = useState(true);
   const [peek, setPeek] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   // Which field the error belongs to; the message text is localized or a raw backend detail.
@@ -213,6 +216,23 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
       window.clearTimeout(retryTimer);
     };
   }, []);
+
+  // Whether a startup passcode is set ([210]). Without one the field is left empty and Enter opens the terminal.
+  useEffect(() => {
+    if (backendStatus !== 'ready') return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await apiFetch('/api/auth/state');
+        if (!response.ok) return;
+        const state = await response.json().catch(() => null) as { passcode_set?: unknown } | null;
+        if (!cancelled && typeof state?.passcode_set === 'boolean') setPasscodeSet(state.passcode_set);
+      } catch {
+        // Unknown: keep asking for the passcode; the login call itself still decides.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [backendStatus]);
 
   // 统一错误设置与 3s 自动清除并复原函数
   const showAuthError = (msg: string, field: 'user' | 'password') => {
@@ -416,7 +436,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
       showAuthError('无效的 USER ID', 'user');
       return;
     }
-    if (!password) {
+    if (!password && passcodeSet) {
       showAuthError('请输入访问密码', 'password');
       return;
     }
@@ -434,12 +454,12 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
 
     let accepted = false;
     try {
-      const response = await apiFetch('/api/auth/salieri', {
+      const response = await apiFetch('/api/auth/login', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ passcode: password || null }),
       });
 
       if (response.ok) {
@@ -454,9 +474,12 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
         if (!reduced) runEntrance();
       } else if (response.status === 401 || response.status === 403) {
         showAuthError('密码错误', 'password');
+      } else if (response.status === 429) {
+        showAuthError('试得太快了，请稍等几秒', 'password');
       } else {
         const errorData = await response.json().catch(() => ({}));
-        showAuthError(errorData.detail || '访问被拒绝', 'password');
+        const detail = errorData.detail;
+        showAuthError(typeof detail === 'string' ? detail : detail?.message || '访问被拒绝', 'password');
       }
     } catch (error) {
       showAuthError('系统连接已断开', 'password');
@@ -494,16 +517,21 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
     >
       <div ref={backdropRef} className="sl-backdrop">
         <div className="sl-grid" aria-hidden="true" />
-        <div className="sl-plate"><Blueprint ref={plateRef} reduced={reduced} busy={busy} /></div>
+        <div className="sl-texture has-image" aria-hidden="true" />
+        <div className="sl-plate"><Blueprint ref={plateRef} reduced={reduced} busy={busy} divergence={DIVERGENCE[worldline]} /></div>
         <div className="sl-frame" aria-hidden="true">
           <div className="zones top">{[1, 2, 3, 4, 5, 6, 7, 8].map((n) => <span key={n}>{n}</span>)}</div>
           <div className="zones bottom">{[1, 2, 3, 4, 5, 6, 7, 8].map((n) => <span key={n}>{n}</span>)}</div>
           <div className="zones left">{['A', 'B', 'C', 'D', 'E', 'F'].map((n) => <span key={n}>{n}</span>)}</div>
           <div className="zones right">{['A', 'B', 'C', 'D', 'E', 'F'].map((n) => <span key={n}>{n}</span>)}</div>
         </div>
+        {/* The sheet's title block, lower right as on an engineering drawing: what this sheet is, whose system, when. */}
         <div className="sl-tblock" aria-hidden="true">
+          <span className="ttl">Amadeus System <i>—</i> Login</span>
+          <span className="org">VIKTOR CHONDRIA UNIV. · BRAIN SCIENCE INST.</span>
           <span className="k">DATE</span><span className="v">{clock.date}</span>
           <span className="k">TIME</span><span className="v">{clock.time}</span>
+          <span className="k">WORLDLINE</span><span className="v">{WORLDLINE_NAME[worldline]} · {DIVERGENCE[worldline]}</span>
         </div>
         <div className="sl-verse" aria-hidden="true">
           {VERSE.map((line, i) => (
@@ -619,6 +647,9 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
               <p key={errorSeq} className="sl-msg is-error" role="alert">
                 <i aria-hidden="true" />{errorMsg}
               </p>
+            )}
+            {!errorMsg && backendStatus === 'ready' && !passcodeSet && !exiting && (
+              <p className="sl-msg is-note">没有设口令，直接按 Enter 进入</p>
             )}
           </div>
         </form>

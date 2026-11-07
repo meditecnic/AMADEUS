@@ -563,11 +563,11 @@ describe('Workstation provider runtime changes', () => {
     wsSpies.useAmadeusWS.mockImplementation(() => state);
     const h = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
     expect(screen.getByText('正在接通')).toBeInTheDocument();
-    expect(screen.queryByText(/说第一句话/)).toBeNull();
+    expect(screen.queryByText(/这个会话还是空的/)).toBeNull();
     expect(screen.getByLabelText('输入消息')).toBeDisabled();
     state.sessionState = 'ready';
     h.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
-    expect(screen.getByText(/说第一句话/)).toBeInTheDocument();
+    expect(screen.getByText(/这个会话还是空的/)).toBeInTheDocument();
   });
 
   it('starts the signal only on local send, keeps draft materialization, and clears on completion or history switch', () => {

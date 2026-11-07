@@ -1,0 +1,38 @@
+{
+  "name": "slice",
+  "extends": "streaming",
+  "description": "Design slice: a short SG history and a four-sentence reply with a visible thinking pause.",
+  "conversations": [
+    {
+      "id": "lab-notes",
+      "worldline": "steins_gate",
+      "title": "实验记录",
+      "identity_mode": "okabe",
+      "messages": [
+        { "role": "user", "content": "昨晚的实验记录整理好了吗？" },
+        { "role": "assistant", "content": "整理は終わってる。三回目の測定だけ、誤差が大きかったけど。", "translation": "整理完了。只有第三次测量误差偏大。" },
+        { "role": "user", "content": "那就重做第三次吧。" },
+        { "role": "assistant", "content": "賛成。でも今夜はもう遅いから、明日の朝にしましょう。", "translation": "同意。不过今晚太晚了，明早再做吧。" }
+      ]
+    },
+    {
+      "id": "beta-notes",
+      "worldline": "beta",
+      "title": "上次的讨论",
+      "identity_mode": "self",
+      "messages": [
+        { "role": "user", "content": "继续上次的讨论吧。" },
+        { "role": "assistant", "content": "前提から確認しましょう。", "translation": "从前提开始确认吧。" }
+      ]
+    }
+  ],
+  "dialogue": {
+    "sentences": [
+      { "ja": "……また空調が止まってるの？", "zh": "……空调又停了？", "emotion": "annoyed", "delayMs": 2400 },
+      { "ja": "文句を言う前に、白衣くらい羽織りなさいよ。", "zh": "抱怨之前，先把白大褂披上。", "emotion": "tsundere", "delayMs": 1300 },
+      { "ja": "風邪をひいても、看病なんてしてあげないから。", "zh": "感冒了我也不会照顾你。", "emotion": "tsundere", "delayMs": 1400 },
+      { "ja": "……べ、別に心配してるわけじゃないわよ。データが途切れると困るだけ。", "zh": "……我、我才不是担心你。只是你病了，数据就断了。", "emotion": "embarrassed", "delayMs": 1600 }
+    ],
+    "completionDelayMs": 400
+  }
+}

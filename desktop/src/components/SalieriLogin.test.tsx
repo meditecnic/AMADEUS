@@ -38,8 +38,9 @@ it('keeps packaged login disabled until the local backend health check succeeds'
   await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
   expect(button).toBeEnabled();
   expect(screen.queryByRole('status')).not.toBeInTheDocument();
-  expect(fetchMock).toHaveBeenCalledTimes(2);
-  expect(fetchMock).toHaveBeenLastCalledWith('http://127.0.0.1:8000/health', expect.objectContaining({ signal: expect.any(AbortSignal) }));
+  const health = fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/health'));
+  expect(health).toHaveLength(2);
+  expect(health[1]).toEqual(['http://127.0.0.1:8000/health', expect.objectContaining({ signal: expect.any(AbortSignal) })]);
 });
 
 async function renderLogin(props: Record<string, unknown> = {}) {
@@ -68,9 +69,9 @@ it('sends a Unicode password unchanged and hands over to the entrance on success
   fireEvent.compositionEnd(pwd);
   await act(async () => { fireEvent.submit(pwd.closest('form')!); });
 
-  expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/auth/salieri'), expect.objectContaining({
+  expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/auth/login'), expect.objectContaining({
     method: 'POST',
-    body: JSON.stringify({ password: 'Gott würfelt nicht · 世界線 🜂' }),
+    body: JSON.stringify({ passcode: 'Gott würfelt nicht · 世界線 🜂' }),
   }));
   expect(onLoginSuccess).toHaveBeenCalledTimes(1);
   expect(container.querySelector('.sl-root')).toHaveClass('exiting');
@@ -116,7 +117,7 @@ it('validates USER ID before calling the backend', async () => {
   screen.getByLabelText('PASSWORD').focus();
   await act(async () => { fireEvent.submit(screen.getByLabelText('USER ID').closest('form')!); });
   expect(screen.getByRole('alert')).toHaveTextContent('无效的 USER ID');
-  expect(fetchMock).not.toHaveBeenCalled();
+  expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/api/auth/login'))).toHaveLength(0);
   // The keyboard goes back to the field at fault.
   expect(screen.getByLabelText('USER ID')).toHaveFocus();
 });
@@ -133,4 +134,29 @@ it('under reduced motion leaves with a short fade and still reports the terminal
   await act(async () => { await vi.advanceTimersByTimeAsync(450); });
   expect(onEntranceCue).toHaveBeenCalledWith('gone');
   expect(onEntranceCue).not.toHaveBeenCalledWith('draft');
+});
+
+it('without a startup passcode, Enter on an empty field signs in with no passcode', async () => {
+  vi.useFakeTimers();
+  const fetchMock = vi.fn(async (url: string) => (String(url).includes('/api/auth/state')
+    ? { ok: true, status: 200, json: async () => ({ passcode_set: false }) }
+    : { ok: true, status: 200, json: async () => ({ status: 'success', easter_egg: false }) }));
+  vi.stubGlobal('fetch', fetchMock);
+  const { onLoginSuccess } = await renderLogin();
+
+  expect(screen.getByText('没有设口令，直接按 Enter 进入')).toBeInTheDocument();
+  await act(async () => { fireEvent.submit(screen.getByLabelText('PASSWORD').closest('form')!); });
+  expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/auth/login'), expect.objectContaining({
+    method: 'POST', body: JSON.stringify({ passcode: null }),
+  }));
+  expect(onLoginSuccess).toHaveBeenCalledTimes(1);
+});
+
+it('asks to wait when the server is backing off retries', async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 429, json: async () => ({ detail: { code: 'too_many_attempts' } }) }));
+  await renderLogin();
+  fireEvent.change(screen.getByLabelText('PASSWORD'), { target: { value: 'x' } });
+  await act(async () => { fireEvent.submit(screen.getByLabelText('PASSWORD').closest('form')!); });
+  expect(screen.getByRole('alert')).toHaveTextContent('试得太快了，请稍等几秒');
 });

@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -6,6 +8,8 @@ import { MOCK_LOCAL_TOKEN } from './auth';
 import { installScenarioBridge } from './client-bridge';
 import { createMockRuntime, type Frame } from './runtime';
 import { readCookie, scenarios } from './scenarios';
+
+const PACK_TYPES: Record<string, string> = { '.png': 'image/png', '.ogg': 'audio/ogg', '.json': 'application/json' };
 
 async function readBody(request: IncomingMessage): Promise<Frame> {
   let text = '';
@@ -94,6 +98,23 @@ export function devMockPlugin(): Plugin {
           return;
         }
         if (!url.pathname.startsWith('/api/') && !url.pathname.startsWith('/health')) return next();
+        // Opt-in local asset pack for looking at the "pack installed" stage (same variable as the backend). The pack is
+        // read from the developer's own data directory and never bundled; unset, the pack stays absent as before.
+        const packDir = process.env.AMADEUS_ASSET_PACK_DIR;
+        if (packDir && url.pathname.startsWith('/api/asset-pack/')) {
+          const root = path.resolve(packDir);
+          const target = path.resolve(root, decodeURIComponent(url.pathname.slice('/api/asset-pack/'.length)));
+          const type = PACK_TYPES[path.extname(target).toLowerCase()];
+          if (!target.startsWith(root + path.sep) || !type || !fs.existsSync(target) || !fs.statSync(target).isFile()) {
+            response.statusCode = 404;
+            response.end();
+            return;
+          }
+          response.setHeader('Content-Type', type);
+          response.setHeader('Cache-Control', 'no-store');
+          fs.createReadStream(target).pipe(response);
+          return;
+        }
         response.setHeader('Content-Type', 'application/json; charset=utf-8');
         response.setHeader('Cache-Control', 'no-store');
         if (request.headers.authorization !== `Bearer ${MOCK_LOCAL_TOKEN}`) {

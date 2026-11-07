@@ -6,7 +6,8 @@
     "successStatus": 200,
     "failureStatus": 401,
     "failureMessage": "口令不正确，请重试。",
-    "forceFailure": false
+    "forceFailure": false,
+    "passcodeSet": false
   },
   "conversations": [
     {

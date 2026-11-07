@@ -2176,16 +2176,18 @@ export const Workstation: React.FC<WorkstationProps> = ({
             data-scroll-end={transcriptScroll.atEnd}
           >
             {visibleMessages.length === 0 ? (
-              // An empty conversation is a fresh observation log, not a terminal prompt.
+              // An empty conversation is a note left on the sheet (SG: a scrap of notebook paper taped down; β: a framed
+              // slip). "NO DATA" is what the original's empty save slots say.
               <div className="ws2-empty">
                 <div className={`ws2-empty-card ${emptyStateKind}`}>
-                  <small className="ws2-empty-kicker">OBSERVATION LOG · {dateLabel} ({dayLabel})</small>
+                  <i className="ws2-empty-tape a" aria-hidden="true" /><i className="ws2-empty-tape b" aria-hidden="true" />
+                  <small className="ws2-empty-kicker">{dateLabel} ({dayLabel})</small>
                   <h2 className="ws2-empty-head">
-                    {showSetupStatus ? '尚未接通' : sessionUsable ? '新的观测记录' : sessionConnecting || reconnecting ? '正在接通' : '暂时无法接通'}
+                    {showSetupStatus ? '尚未接通' : sessionUsable ? 'NO DATA' : sessionConnecting || reconnecting ? '正在接通' : '暂时无法接通'}
                   </h2>
                   <p className={`ws2-empty-msg ${emptyStateKind}`}>
                     {sessionUsable && !needsApiKey
-                      ? '说第一句话吧。她的日语原文与中文字幕会一并记在这里。'
+                      ? '这个会话还是空的。'
                       : emptyStateMessage.replace(/^>\s*/, '')}
                   </p>
                   {needsApiKey && (
@@ -2402,6 +2404,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
             >
               发送
             </button>
+          </div>
+          {/* Operation guide, as the originals print one under every screen: only keys that really work here. */}
+          <div className="ws2-guide" aria-hidden="true">
+            <span><kbd>Enter</kbd>发送</span><span><kbd>Shift</kbd><b>+</b><kbd>Enter</kbd>换行</span><small>OPERATION GUIDE</small>
           </div>
           {(messageTooLong || pendingModel || modelApplyError) && (
             <div className="ws2-composer-notes">

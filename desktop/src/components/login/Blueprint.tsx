@@ -2,10 +2,11 @@ import { forwardRef, memo, useEffect, useImperativeHandle, useMemo, useRef, type
 import { PROBE_AT, PROBE_FIXED, PROBE_SPIN, PROBE_YAW0, probeFrame, type ProbeFrame } from './probe';
 
 /**
- * The drafting plate behind the terminal (1920 × 1080 user space, sliced to the window):
- * a drive train of three meshing gears, a protractor with a working compass arm, centre lines and construction.
- * Drawn here, not traced from anything. The gears are the terminal's escapement: they tick while idle,
- * ratchet one tooth per keystroke, spin while the password is checked and jam when it is refused.
+ * The drafting plate behind the terminal (1920 × 1080 user space, sliced to the window). The main figure is the
+ * satellite, large on the right and running off the sheet; on the left a drive train of three meshing gears and a
+ * protractor with a working compass arm, joined by a construction line. Drawn here, not traced from anything.
+ * The gears are the terminal's escapement: they tick while idle, ratchet one tooth per keystroke, spin while the
+ * password is checked and jam when it is refused. Every caption names something real (design/references.md §3).
  */
 export interface BlueprintHandle {
   /** Advance the drive train by n teeth of the large gear (negative turns it back). */
@@ -17,9 +18,11 @@ export interface BlueprintHandle {
 interface Gear { cx: number; cy: number; n: number; r: number; phase: number; ratio: number }
 
 const M = 9.556;
-const G1: Gear = { cx: 1712, cy: 294, n: 36, r: 172, phase: 112, ratio: 1 };
-const G2: Gear = { cx: 1611.7, cy: 542.1, n: 20, r: 95.6, phase: 283, ratio: -36 / 20 };
-const G3: Gear = { cx: 1728.8, cy: 640.4, n: 12, r: 57.3, phase: 220, ratio: 36 / 12 };
+/* The train keeps its meshing geometry; it is only moved up into the left corner, the large gear cut by the sheet. */
+const TX = 230, TY = 130;
+const G1: Gear = { cx: TX, cy: TY, n: 36, r: 172, phase: 112, ratio: 1 };
+const G2: Gear = { cx: TX - 100.3, cy: TY + 248.1, n: 20, r: 95.6, phase: 283, ratio: -36 / 20 };
+const G3: Gear = { cx: TX + 16.8, cy: TY + 346.4, n: 12, r: 57.3, phase: 220, ratio: 36 / 12 };
 const STEP = 360 / G1.n;
 
 const f = (v: number) => Math.round(v * 10) / 10;
@@ -55,23 +58,25 @@ const SPOKES1 = Array.from({ length: 6 }, (_, i) => {
 }).join('');
 const HOLES2 = [45, 135, 225, 315].map((a) => polar(44, a).split(' ').map(Number));
 
-/* Protractor + compass, lower left. */
-const PC = { x: 196, y: 842, r: 318 };
+/* Protractor + compass, lower left, below the train. */
+const PC = { x: 170, y: 930, r: 318 };
 const PTICKS = Array.from({ length: 144 }, (_, i) => {
   const a = i * 2.5;
   const len = i % 12 === 0 ? 20 : i % 2 === 0 ? 11 : 6;
   return `M${polar(PC.r - 22, a)}L${polar(PC.r - 22 - len, a)}`;
 }).join('');
 const PLABELS = Array.from({ length: 12 }, (_, i) => i * 30);
+/* The large gear's caption hangs off its rim, to the right, above the wordmark. */
+const G1_LEAD = polar(G1.r + 12, 24).split(' ').map(Number);
 
 const dly = (ms: number) => ({ '--d': `${ms}ms` }) as CSSProperties;
 
 /*
- * A probe, upper left, drawn turned and tilted (see probe.ts). Kept up and left of the wordmark at any size.
- * It turns slowly about its own axis: the parts that are not solids of revolution are re-projected about 30 times
- * a second, straight into the paths (no React render per frame). Reduced motion keeps the still drawing.
+ * The satellite, drawn turned and tilted (see probe.ts). It turns slowly about its own axis: the parts that are not
+ * solids of revolution are re-projected about 30 times a second, straight into the paths (no React render per
+ * frame). Around the form it is masked down so the fields stay legible. Reduced motion keeps the still drawing.
  */
-const FRAME_KEYS = ['hidden', 'body', 'marks', 'grille', 'struts', 'booms', 'wings', 'cells', 'strips', 'axis'] as const;
+const FRAME_KEYS = ['faces', 'hidden', 'body', 'marks', 'grille', 'struts', 'booms', 'wings', 'cells', 'strips', 'axis'] as const;
 const SPIN_DELAY = 1600;
 const SPIN_RAMP = 2400;
 
@@ -107,34 +112,40 @@ const Probe = memo(function Probe({ spin }: { spin: boolean }) {
   const F = PROBE_FIXED;
   return (
     <g className="bp-probe">
-      <g className="bp-drift" style={{ transformOrigin: `${PROBE_AT.x}px ${PROBE_AT.y}px` }}>
-        <path className="cl" d={F.axis} />
-        <path ref={at('axis')} className="cl" d={first.axis} />
-        <path ref={at('hidden')} className="dash" d={first.hidden} />
-        <path ref={at('body')} className="ln" pathLength={1} style={dly(300)} d={first.body} />
-        <path ref={at('marks')} className="ln" pathLength={1} style={dly(520)} d={first.marks} />
-        <path ref={at('grille')} className="tk" d={first.grille} />
-        <path className="ln" pathLength={1} style={dly(380)} d={F.mast + F.dish} />
-        <path className="ln" pathLength={1} style={dly(440)} d={F.rim} />
-        <path className="ln" pathLength={1} style={dly(640)} d={F.rimInner} />
-        <path ref={at('struts')} className="ln" pathLength={1} style={dly(700)} d={first.struts} />
-        <path className="ln" pathLength={1} style={dly(700)} d={F.feed} />
-        <path className="ln" pathLength={1} style={dly(560)} d={F.nozzle} />
-        <path ref={at('booms')} className="ln" pathLength={1} style={dly(600)} d={first.booms} />
-        <path ref={at('wings')} className="ln" pathLength={1} style={dly(420)} d={first.wings} />
-        <path ref={at('cells')} className="ln" pathLength={1} style={dly(760)} d={first.cells} />
-        <path ref={at('strips')} className="tk" d={first.strips} />
-        {/* the sense of turn */}
-        <path className="dash" d={F.spin} />
-        <path className="ln" pathLength={1} style={dly(900)} d={F.arrow} />
-        <text className="lab" x={F.omega.x} y={F.omega.y}>{`\u03c9 ${PROBE_SPIN}\u00b0/s`}</text>
+      <g mask="url(#bp-clear)">
+        <g className="bp-drift" style={{ transformOrigin: `${PROBE_AT.x}px ${PROBE_AT.y}px` }}>
+          <path ref={at('faces')} className="face" d={first.faces} />
+          <path className="cl" d={F.axis} />
+          <path ref={at('axis')} className="cl" d={first.axis} />
+          <path ref={at('hidden')} className="dash" d={first.hidden} />
+          <path ref={at('body')} className="ln" pathLength={1} style={dly(300)} d={first.body} />
+          <path ref={at('marks')} className="ln" pathLength={1} style={dly(520)} d={first.marks} />
+          <path ref={at('grille')} className="tk" d={first.grille} />
+          <path className="ln" pathLength={1} style={dly(380)} d={F.mast + F.dish} />
+          <path className="ln" pathLength={1} style={dly(440)} d={F.rim} />
+          <path className="ln" pathLength={1} style={dly(640)} d={F.rimInner} />
+          <path ref={at('struts')} className="ln" pathLength={1} style={dly(700)} d={first.struts} />
+          <path className="ln" pathLength={1} style={dly(700)} d={F.feed} />
+          <path className="ln" pathLength={1} style={dly(560)} d={F.nozzle} />
+          <path ref={at('booms')} className="ln" pathLength={1} style={dly(600)} d={first.booms} />
+          <path ref={at('wings')} className="ln face" pathLength={1} style={dly(420)} d={first.wings} />
+          <path ref={at('cells')} className="ln" pathLength={1} style={dly(760)} d={first.cells} />
+          <path ref={at('strips')} className="tk" d={first.strips} />
+          {/* the sense of turn */}
+          <path className="dash" d={F.spin} />
+          <path className="ln" pathLength={1} style={dly(900)} d={F.arrow} />
+        </g>
       </g>
-      <text className="cap" x={PROBE_AT.x - 172} y={PROBE_AT.y + 152}>FIG. 3 — PROBE · ISO</text>
+      {/* The figure's caption: the day the satellite came down on Akihabara in the original story. */}
+      <path className="lead" d={`M${F.head.x} ${F.head.y}l-40 -16H${F.head.x - 520}`} />
+      <circle className="lead-dot" cx={F.head.x} cy={F.head.y} r={2.6} />
+      <text className="cap" x={F.head.x - 512} y={F.head.y - 26}>FIG. 1 — ARTIFICIAL SATELLITE</text>
+      <text className="cap sub" x={F.head.x - 512} y={F.head.y + 8}>AKIHABARA · 2010.07.28</text>
     </g>
   );
 });
 
-export const Blueprint = forwardRef<BlueprintHandle, { reduced: boolean; busy: boolean }>(function Blueprint({ reduced, busy }, ref) {
+export const Blueprint = forwardRef<BlueprintHandle, { reduced: boolean; busy: boolean; divergence: string }>(function Blueprint({ reduced, busy, divergence }, ref) {
   const gears = useRef<(SVGGElement | null)[]>([]);
   const teeth = useRef(0);
 
@@ -178,10 +189,28 @@ export const Blueprint = forwardRef<BlueprintHandle, { reduced: boolean; busy: b
 
   return (
     <svg className="bp-plate" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+      <defs>
+        {/* The sheet's grid, projected onto the model's faces as on a lit drafting model. */}
+        <pattern id="bp-mesh" width="16" height="16" patternUnits="userSpaceOnUse">
+          <rect width="16" height="16" fill="rgba(241, 240, 235, .035)" />
+          <path d="M16 0H0V16" fill="none" stroke="rgba(241, 240, 235, .16)" strokeWidth=".8" />
+        </pattern>
+        {/* The satellite gives way around the wordmark and the fields: it stays behind them, never through them. */}
+        <radialGradient id="bp-clear-g" cx="960" cy="560" r="560" gradientUnits="userSpaceOnUse" gradientTransform="translate(960 560) scale(1 .5) translate(-960 -560)">
+          <stop offset="0" stopColor="#fff" stopOpacity=".22" />
+          <stop offset=".62" stopColor="#fff" stopOpacity=".4" />
+          <stop offset="1" stopColor="#fff" stopOpacity="1" />
+        </radialGradient>
+        <mask id="bp-clear" maskUnits="userSpaceOnUse" x="-200" y="-200" width="2320" height="1480">
+          <rect x="-200" y="-200" width="2320" height="1480" fill="url(#bp-clear-g)" />
+        </mask>
+      </defs>
+
       {/* centre lines and construction */}
       <path className="cl" d="M0 540H1920M960 0V1080" />
       <g className="bp-cons">
-        <path className="dash" d={`M${PC.x} ${PC.y}L${G1.cx} ${G1.cy}`} />
+        <path className="dash" d={`M${PC.x} ${PC.y}L${G3.cx} ${G3.cy}`} />
+        <path className="dash" d={`M${G1.cx} ${G1.cy}L${PROBE_AT.x} ${PROBE_AT.y}`} />
       </g>
       <g className="bp-marks">
         {[[720, 980], [1210, 120]].map(([x, y], i) => (
@@ -211,7 +240,10 @@ export const Blueprint = forwardRef<BlueprintHandle, { reduced: boolean; busy: b
           <circle r={5} className="pivot" />
         </g>
       </g>
-      <text className="cap" x={PC.x + 12} y={PC.y - PC.r - 34}>FIG. 1 — R 318 · 2.5° DIV</text>
+      {/* the worldline the terminal opens on (1.048596 for Steins;Gate, 1.129848 for β) */}
+      <path className="lead" d={`M${PC.x + PC.r + 52} ${PC.y - 54}H${PC.x + PC.r + 470}`} />
+      <text className="cap" x={PC.x + PC.r + 60} y={PC.y - 66}>FIG. 3 — DIVERGENCE</text>
+      <text className="cap val" x={PC.x + PC.r + 60} y={PC.y - 22}>{divergence}</text>
 
       {/* drive train */}
       <g className="bp-train">
@@ -239,9 +271,10 @@ export const Blueprint = forwardRef<BlueprintHandle, { reduced: boolean; busy: b
           <circle className="ln" pathLength={1} style={dly(900)} r={8} />
           <path className="ln" pathLength={1} style={dly(940)} d="M0 -34V34M-34 0H34" />
         </g>
-        <path className="ln" pathLength={1} style={dly(1000)} d={`M${G3.cx - 30} ${G3.cy + 58}L${G3.cx - 64} ${G3.cy + 118}H${G3.cx - 400}`} />
-        <text className="cap" x={G3.cx - 72} y={G3.cy + 108} textAnchor="end">FIG. 2 — DRIVE · Z36 / Z20 / Z12</text>
-        <text className="lab" x={G3.cx + 74} y={G3.cy + 52}>m 9.56</text>
+        {/* they are an escapement: one tooth for each key you press */}
+        <path className="lead" d={`M${G1.cx + G1_LEAD[0]} ${G1.cy + G1_LEAD[1]}l46 46H${G1.cx + G1_LEAD[0] + 400}`} />
+        <circle className="lead-dot" cx={G1.cx + G1_LEAD[0]} cy={G1.cy + G1_LEAD[1]} r={2.6} />
+        <text className="cap" x={G1.cx + G1_LEAD[0] + 56} y={G1.cy + G1_LEAD[1] + 36}>FIG. 2 — ESCAPEMENT</text>
       </g>
     </svg>
   );

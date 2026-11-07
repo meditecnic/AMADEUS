@@ -75,12 +75,18 @@
 .bp-arm .trail { stroke: rgba(241, 240, 235, .3); stroke-width: 1.4; }
 .bp-arm .trail.t2 { stroke: rgba(241, 240, 235, .55); }
 @keyframes bp-arm { to { transform: rotate(360deg); } }
-/* The probe sits further back than the drive train: fainter lines, hidden edges dashed short. */
-.bp-plate .bp-probe .ln { stroke: rgba(241, 240, 235, .125); }
-.bp-plate .bp-probe .dash { stroke: rgba(241, 240, 235, .07); stroke-dasharray: 3 4; }
-.bp-plate .bp-probe .tk { stroke: rgba(241, 240, 235, .065); }
-.bp-plate .bp-probe .cl { stroke: rgba(241, 240, 235, .065); }
-.bp-plate .bp-probe text { fill: rgba(241, 240, 235, .22); }
+/* The satellite is the main figure: the strongest lines on the sheet, hidden edges dashed short. */
+.bp-plate .bp-probe .ln { stroke: rgba(241, 240, 235, .3); stroke-width: 1.15; }
+.bp-plate .bp-probe .dash { stroke: rgba(241, 240, 235, .14); stroke-dasharray: 4 5; }
+.bp-plate .bp-probe .tk { stroke: rgba(241, 240, 235, .15); }
+.bp-plate .bp-probe .cl { stroke: rgba(241, 240, 235, .1); }
+/* faces turned to the viewer carry the sheet's grid, so the model reads as solid */
+.bp-plate .bp-probe .face { fill: url(#bp-mesh); }
+/* leader lines and the captions they carry */
+.bp-plate .lead { stroke: rgba(241, 240, 235, .26); }
+.bp-plate .lead-dot { fill: rgba(241, 240, 235, .5); stroke: none; }
+.bp-plate .cap.sub { font-size: 11.5px; letter-spacing: .3em; fill: rgba(241, 240, 235, .26); }
+.bp-plate .cap.val { font-family: var(--serif); font-size: 30px; letter-spacing: .12em; fill: rgba(241, 240, 235, .42); }
 .bp-drift { transform-box: view-box; animation: bp-drift 14s ease-in-out infinite alternate; }
 @keyframes bp-drift { 0% { transform: translate(-3px, 2px) rotate(-.5deg); } 50% { transform: translate(2px, -4px) rotate(.2deg); } 100% { transform: translate(4px, 1px) rotate(.6deg); } }
 
@@ -110,22 +116,42 @@
 
 .sl-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
 
-/* The clock is the sheet's title block: two ruled rows in the upper right. */
+/* The sheet's title block, lower right: the sheet's name in the serif, whose system it is, the clock, the worldline. */
 .sl-tblock {
-  position: absolute; top: 40px; right: 50px;
-  display: grid; grid-template-columns: auto auto;
+  position: absolute; right: 42px; bottom: 40px;
+  display: grid; grid-template-columns: auto 1fr;
+  min-width: clamp(330px, 21vw, 420px);
   border: 1px solid var(--line-2);
-  font-family: var(--mono); font-size: clamp(10.5px, .56vw, 13px); line-height: 1; letter-spacing: .2em; white-space: nowrap;
+  outline: 1px solid var(--line); outline-offset: 3px;
+  background: rgba(10, 11, 12, .55);
+  font-family: var(--mono); font-size: clamp(10px, .54vw, 12.5px); line-height: 1; letter-spacing: .18em; white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
-.sl-tblock span { padding: 6px 10px 5px; }
-.sl-tblock .k { color: var(--ink-3); border-right: 1px solid var(--line); padding-right: 9px; }
+.sl-tblock span { padding: 7px 11px 6px; border-top: 1px solid var(--line); }
+.sl-tblock .ttl {
+  grid-column: 1 / -1; border-top: 0; padding: 11px 12px 8px;
+  font-family: var(--serif); font-size: clamp(17px, 1.06vw, 21px); letter-spacing: .06em; color: var(--ink);
+}
+.sl-tblock .ttl i { font-style: normal; color: var(--ink-3); padding: 0 .1em; }
+.sl-tblock .org { grid-column: 1 / -1; font-size: .86em; letter-spacing: .16em; color: var(--ink-3); }
+.sl-tblock .k { color: var(--ink-3); border-right: 1px solid var(--line); padding-right: 10px; }
 .sl-tblock .v { color: var(--ink-2); text-align: right; }
-.sl-tblock span:nth-child(n + 3) { border-top: 1px solid var(--line); }
+
+/* Under everything, the paper itself: smoky, mottled, never a flat black (a generated texture replaces this). */
+.sl-texture {
+  position: absolute; inset: 0; pointer-events: none; opacity: .5; mix-blend-mode: screen;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='600' height='600'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.007' numOctaves='5' seed='11'/%3E%3CfeColorMatrix values='0 0 0 0 .55  0 0 0 0 .6  0 0 0 0 .62  0 0 0 1.5 -.78'/%3E%3C/filter%3E%3Crect width='600' height='600' filter='url(%23n)'/%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' seed='3'/%3E%3CfeColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .9 -.42'/%3E%3C/filter%3E%3Crect width='220' height='220' filter='url(%23g)'/%3E%3C/svg%3E");
+  background-size: 1200px 1200px, 220px 220px;
+}
+.sl-texture.has-image {
+  background-image: url('/assets/sheet/sg-slate.webp'), url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' seed='3'/%3E%3CfeColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .9 -.42'/%3E%3C/filter%3E%3Crect width='220' height='220' filter='url(%23g)'/%3E%3C/svg%3E");
+  background-size: cover, 220px 220px; background-position: center; opacity: .42; mix-blend-mode: normal;
+}
 
 /* Lower right: the original's title-screen lines, set like a title menu (an easter egg). Nothing here can be chosen. */
 .sl-verse {
-  position: absolute; right: 50px; bottom: 66px;
+  position: absolute; right: 50px; bottom: calc(40px + clamp(150px, 8.8vw, 178px));
   display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
   padding-right: 14px; border-right: 1px solid var(--line);
   font-family: var(--mono); font-size: clamp(10px, .54vw, 13px); line-height: 1.15; letter-spacing: .02em; color: rgba(241, 240, 235, .3);
@@ -143,6 +169,9 @@
 
 .sl-root.intro :is(.sl-frame, .sl-tblock, .sl-note) { animation: sl-fade .8s ease .15s backwards; }
 .sl-root.intro .sl-verse { animation: sl-fade .4s ease 1.9s backwards; }
+/* the satellite's faces take the grid once its edges are drawn; the passcode note waits for the form */
+.sl-root.intro .bp-probe .face { animation: sl-fade 1.2s ease 1.5s backwards; }
+.sl-root.intro .sl-msg.is-note { animation: sl-fade .5s ease 1.5s backwards; }
 /* typed out once per visit; runs past the intro, so it is not tied to it */
 .sl-root:not(.reduced) .sl-verse p { animation: sl-type calc(var(--n) * 11ms) steps(var(--n)) calc(2.1s + var(--t)) backwards; }
 @keyframes sl-type { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
@@ -361,6 +390,7 @@
 .sl-msg.backend-status-banner { font-family: var(--mono); font-size: 12px; letter-spacing: .14em; }
 .sl-msg.backend-status-banner i { animation: sl-blink 1s steps(2) infinite; }
 .sl-msg.is-error { color: var(--err-ink); animation: sl-msg-in .26s var(--ease-out) both; }
+.sl-msg.is-note { font-size: clamp(14px, .9vw, 16px); color: var(--ink-3); }
 .sl-msg.is-error i { background: var(--err); }
 @keyframes sl-msg-in { from { opacity: 0; transform: translateY(-4px); } }
 @keyframes sl-blink { 50% { opacity: .2; } }
@@ -406,9 +436,9 @@
 .sl-pen i { transform-origin: right; }
 
 @media (max-height: 760px) {
-  .sl-tblock { top: 30px; }
+  .sl-tblock { bottom: 30px; }
   .sl-note { bottom: 28px; }
-  .sl-verse { bottom: 54px; gap: 7px; }
+  .sl-verse { bottom: calc(30px + 150px); gap: 7px; }
 }
 
 /* Reduced motion: the finished sheet, nothing moving. */

@@ -14,6 +14,8 @@ import "@fontsource/noto-serif-jp/400.css";
 import "@fontsource/noto-serif-jp/900.css";
 import "./App.css";
 import "./workstation/workstation.css";
+// The drafting sheet under the workstation (design/references.md §4); after workstation.css so it can restyle it.
+import "./workstation/sheet.css";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

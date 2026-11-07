@@ -24,6 +24,22 @@ export interface ConversationSummary {
   last_active_at: string;
 }
 
+/**
+ * The current conversation is underlined by hand in red pencil, as the original's settings page marks its current
+ * row. Each conversation gets its own stroke (seeded by id) so it never looks stamped.
+ */
+function PenMark({ seed }: { seed: string }) {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 16777619);
+  const r = (k: number) => (((h >>> (k * 3)) & 7) - 3.5) / 3.5;
+  const d = `M2 ${7 + r(1)}C${46 + r(2) * 8} ${4 + r(3) * 2} ${96 + r(4) * 10} ${9 + r(5) * 2} ${150 + r(6) * 6} ${6 + r(7)}S${190} ${5 + r(8) * 2} 198 ${8 + r(9)}`;
+  return (
+    <svg className="conversation-mark" viewBox="0 0 200 12" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+      <path d={d} pathLength={1} />
+    </svg>
+  );
+}
+
 type RowProps = {
   conversation: ConversationSummary;
   index: number;
@@ -261,6 +277,7 @@ const ConversationRow = memo(function ConversationRow({
               <span className="conversation-title">
                 {conversation.is_pinned && <span className="conversation-pin" aria-label="已置顶">◆ </span>}
                 {conversation.title}
+                {active && <PenMark seed={conversation.id} />}
               </span>
               <span className="conversation-meta">
                 <span
