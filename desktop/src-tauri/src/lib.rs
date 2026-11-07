@@ -352,7 +352,7 @@ pub fn run() {
     tauri::Builder::default()
         // Tauri initializes plugins during build, before creating configured WebViews.
         // A rejected second instance must not create a controller and then process::exit.
-        .plugin(tauri::plugin::Builder::new("instance-lock")
+        .plugin(tauri::plugin::Builder::<_, ()>::new("instance-lock")
             .setup(|app, _| {
                 let data_override = std::env::var_os("AMADEUS_DATA_DIR").map(PathBuf::from);
                 let runtime_dir = backend_runtime_dir(data_override.as_deref(), &app.path().app_local_data_dir()?);
