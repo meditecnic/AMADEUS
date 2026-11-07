@@ -12,16 +12,25 @@ never go here; they belong in the separately distributed asset pack.
 | `desktop/public/assets/sheet/paper-spiral.webp` | ChatGPT image generation | 2026-11-07 | meditecnic | [04 Notebook paper](#04-notebook-paper) |
 | `desktop/public/assets/sheet/beta-metal.webp` | ChatGPT image generation | 2026-11-07 | meditecnic | [06b Dark metal](#06b-dark-metal) |
 | `desktop/public/assets/sheet/ring-1.webp`, `ring-3.webp` | ChatGPT image generation | 2026-11-07 | meditecnic | [07 Can rings](#07-can-rings) |
+| `desktop/public/assets/sheet/tape-1.webp`, `tape-2.webp` | ChatGPT image generation | 2026-11-07 | meditecnic | [05c Masking tape](#05c-masking-tape) |
+| `desktop/public/assets/sheet/grain.webp`, `tooth.webp` | ChatGPT image generation | 2026-11-07 | meditecnic | [08 Grain tile](#08-grain-tile) |
+| `desktop/public/assets/sheet/eraser.webp` | ChatGPT image generation | 2026-11-07 | meditecnic | [09 Eraser marks](#09-eraser-marks) |
 
 Post-processing (designer, 2026-11-07): cropped to the subject, converted to WebP (quality 70–80, alpha kept).
 The specimens and the rings were generated on flat black and flat white and cut out by brightness (alpha from the
 ink's brightness or darkness, colour un-premultiplied); each sheet was split into its separate specimens or rings (two of the four rings kept).
-Nothing was traced or painted over. An earlier specimen sheet (prompt 03, five crops) was replaced the same day
+The tape was generated on flat black and cut out the same way (two of the six strips kept). The grain tile was
+cropped to 1024 px, cleared of broad light falloff and made to wrap (blended with a half-offset copy); `tooth.webp`
+is a 512 px alpha mask derived from it (opaque, with the paper's pits let through). The eraser marks were turned into
+an alpha mask (white, alpha from brightness) and resized to 1254 px. Nothing was traced or painted over. An earlier specimen sheet (prompt 03, five crops) was replaced the same day
 by 03b and is no longer in the tree.
 
 Usage: the slate and the wall are the paper under the login and the workstation (SG and β); the specimens are pinned
 about the β workstation; the spiral-bound scrap is the note on an empty conversation (SG), with a can ring on it and
 another on the SG sheet; the dark metal is under the β composer and the β empty-conversation slip.
+The tape holds the note on an empty conversation (SG). The grain is laid at its own size over the slate and the wall
+(workstation and login) so the paper keeps its tooth on large screens; the tooth mask breaks up the red pencil line under
+the current conversation. The eraser marks rub out the other worldline's figure under each sheet's own figure.
 
 ## 01 SG slate
 
@@ -97,4 +106,42 @@ soda can: thin, slightly broken circles of dried dark-red-brown liquid
 was set down twice. Viewed straight from above, each isolated with wide empty
 space. Background: flat pure white #ffffff. No can, no paper texture, no text,
 no other objects.
+```
+
+## 05c Masking tape
+
+```text
+Six separate short strips of torn paper masking tape, photographed flat from
+directly above, each isolated with wide empty space around it. Pale warm beige
+#d9d1bd, matte, slightly translucent, fine paper fibres visible; both short
+ends torn by hand into ragged, fibrous edges; a few soft wrinkles, one strip
+with a creased fold. Lengths from about 3 to 6 times their width; two strips
+slightly crooked. Highest resolution available.
+Background: flat pure black #000000 everywhere around the strips. Not
+transparent, not a checkerboard, no shadow, no gradient.
+Soft, even, shadowless lighting. No text, no printing, no logos, no other objects.
+```
+
+## 08 Grain tile
+
+```text
+Square close-up surface texture, 1024 x 1024 or the largest square size
+available. A macro photograph of fine grain only: tiny pores, paper fibres and
+specks, like fine-tooth drawing paper over cold-pressed concrete, spread evenly
+across the whole frame. Strictly neutral grey, no colour, average mid-grey
+around #7f7f7f, low contrast. Completely uniform: no stains, no clouds, no
+gradients, no vignette, no light falloff, no scratches, no edges, no objects,
+no text. Flat, straight-on lighting, sharp focus everywhere.
+```
+
+## 09 Eraser marks
+
+```text
+Abstract mask texture, landscape, highest resolution available. Only the marks
+a rubber eraser leaves when rubbing out a pencil drawing: soft directional
+smears, half-erased patches, streaks going several ways, uneven pressure, a few
+small crumbs, and wide areas left untouched. Rendered as white marks on a flat
+pure black #000000 background: black is untouched, white is rubbed hardest.
+No drawing, no lines, no shapes, no paper texture, no text, no objects.
+Not transparent, not a checkerboard.
 ```

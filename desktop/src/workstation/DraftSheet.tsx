@@ -9,7 +9,8 @@ import { arc, escapeWheel, f1, gearOutline, lorenzPath, polar, ticks } from './d
  *  - Steins;Gate: a clock movement — escape wheel, anchor, going train and dial. The dial shows the local time;
  *    the escape wheel steps once a second.
  *  - β: the Lorenz attractor (the butterfly), with its equations written beside it as on a blackboard.
- * Drawn here, not traced from anything. 1920 × 1080 user space, sliced to the window like the login plate.
+ * Under each figure is the other line's figure, rubbed out and not quite gone (<Trace>): the sheet changed worldlines,
+ * and only a trace of the old drawing is left. Drawn here, not traced from anything. 1920 × 1080 user space, sliced to the window like the login plate.
  */
 
 const C = { x: 1520, y: 590 };
@@ -147,6 +148,46 @@ const Butterfly = memo(function Butterfly() {
   );
 });
 
+/*
+ * The other worldline's figure, erased: drawn once, faint, then masked by a generated eraser texture (white where it
+ * was rubbed hardest, assets/PROVENANCE.md), with the graphite the eraser smeared left as a haze. Static, in its own
+ * SVG so the ticking clock never repaints it. The sheet earlier held the drawing a little off from where the new one sits.
+ */
+const RUB = { lorenz: { x: 1000, y: 190, w: 1000, h: 800 }, clock: { x: 860, y: 60, w: 1400, h: 1020 } };
+const Trace = memo(function Trace({ of }: { of: 'lorenz' | 'clock' }) {
+  const r = RUB[of];
+  const eraser = <image href="/assets/sheet/eraser.webp" x={r.x} y={r.y} width={r.w} height={r.h} preserveAspectRatio="none" />;
+  return (
+    <svg className="ds-plate ds-trace" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+      <defs>
+        <filter id="ds-rub-ink" colorInterpolationFilters="sRGB"><feColorMatrix values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1.6 0" /></filter>
+        <mask id="ds-rub" maskUnits="userSpaceOnUse" x={0} y={0} width={1920} height={1080}>
+          <rect width={1920} height={1080} fill="#fff" />
+          <g filter="url(#ds-rub-ink)">{eraser}</g>
+        </mask>
+      </defs>
+      <g className="smear">{eraser}</g>
+      <g mask="url(#ds-rub)">
+        {of === 'lorenz' ? (
+          <g transform="translate(1470 600) rotate(-7)">
+            <path className="cl" d="M-330 0H330M0 -360V360" />
+            <path className="orbit" d={LORENZ} />
+          </g>
+        ) : (
+          <g transform={`translate(${C.x + 30} ${C.y - 24})`}>
+            <circle className="ln" r={DIAL} /><circle className="ln" r={DIAL - 16} />
+            <path className="tk" d={ticks(60, DIAL - 16, DIAL - 30, 5, DIAL - 44)} />
+            <circle className="ln" r={DIAL - 136} />
+            {/* no numerals: set type does not rub out like pencil, and a second dial would read as a clock */}
+            <path className="ln" d={CENTER_WHEEL} />
+            <g transform={`translate(${ESC.at[0]} ${ESC.at[1]})`}><path className="ln" d={ESC_WHEEL} /></g>
+          </g>
+        )}
+      </g>
+    </svg>
+  );
+});
+
 /* Specimens pinned about the β sheet: most round the figure, two faint ones behind the reading column. */
 const MOTHS: { n: number; at: CSSProperties; w: string; r: number; o: number }[] = [
   { n: 1, at: { right: '4%', top: '11%' }, w: 'clamp(130px, 11.5vw, 210px)', r: -10, o: .34 },
@@ -165,6 +206,7 @@ export function DraftSheet({ worldline }: { worldline: 'steins_gate' | 'beta' })
     <div className={`ds-sheet ds-${worldline === 'beta' ? 'beta' : 'sg'}`} aria-hidden="true">
       <div className="ds-paper" />
       <div className="ds-grid" />
+      <Trace of={worldline === 'beta' ? 'clock' : 'lorenz'} />
       <svg className="ds-plate" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
         {worldline === 'beta' ? <Butterfly /> : <Movement />}
       </svg>

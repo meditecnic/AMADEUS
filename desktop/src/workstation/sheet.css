@@ -6,8 +6,13 @@
 
 /* ---------- paper ---------- */
 .ds-sheet, .ds-sheet > * { position: absolute; inset: 0; pointer-events: none; }
-.ds-paper { background: url('/assets/sheet/sg-slate.webp') center / cover no-repeat; opacity: .62; }
-.ds-beta .ds-paper { background-image: url('/assets/sheet/beta-wall.webp'); opacity: .78; }
+/* The slate gives the stains; a fine-grain tile laid at its own size keeps the paper's tooth sharp on 2K and 4K screens,
+   where the slate itself is stretched. */
+.ds-paper {
+  background: url('/assets/sheet/grain.webp') 0 0 / 1024px 1024px repeat, url('/assets/sheet/sg-slate.webp') center / cover no-repeat;
+  background-blend-mode: overlay, normal; opacity: .62;
+}
+.ds-beta .ds-paper { background-image: url('/assets/sheet/grain.webp'), url('/assets/sheet/beta-wall.webp'); opacity: .78; }
 /* Keep the reading side calm: the paper is darker where the text is, fuller where the figure is. */
 .ds-sheet::after {
   content: ''; position: absolute; inset: 0;
@@ -71,6 +76,15 @@
 .ds-plate .eq .small { font-size: 21px; letter-spacing: .1em; fill: rgba(240, 170, 110, .22); }
 .ds-plate .eq .ln { stroke: rgba(233, 150, 80, .2); }
 
+/* With her portrait on the stage the figure is only a backdrop: its captions and the β equations would sit behind her
+   and run into her name card, so they go. */
+.ws2:has(.avatar-stage:not(.avatar-absent)) .ds-plate :is(.cap, .lead, .lead-dot, .eq) { display: none; }
+
+/* the other worldline's figure, rubbed out (DraftSheet <Trace>): fainter than anything drawn, the eraser's smear fainter still */
+.ds-plate.ds-trace { opacity: .5; }
+.ds-trace .smear { opacity: .035; }
+.ds-beta .ds-trace .smear { opacity: .03; }
+
 /* specimens pinned about the β sheet (generated prints, recoloured to one amber ink) */
 .ds-moths img { position: absolute; display: block; height: auto; opacity: var(--o, .16); transform: rotate(var(--r, 0deg)); }
 
@@ -118,17 +132,14 @@
 .ws2 .ws2-empty-card .ws2-empty-rule i { background: rgba(43, 44, 48, .3); }
 .ws2 .ws2-empty-card .ws2-empty-action { color: #22232a; box-shadow: inset 0 0 0 1px rgba(34, 35, 42, .45); }
 .ws2 .ws2-empty-card .ws2-empty-action.is-quiet { color: rgba(34, 35, 42, .7); box-shadow: none; }
-/* masking tape over two corners: translucent, fibrous, torn at the ends */
+/* masking tape over two corners: two generated strips, torn by hand, a little translucent */
 .ws2-empty-tape {
-  position: absolute; width: 118px; height: 30px; pointer-events: none; mix-blend-mode: normal; opacity: .86;
-  background:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='30'%3E%3Cfilter id='f'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9 .25' numOctaves='3' seed='4'/%3E%3CfeColorMatrix values='0 0 0 0 .5  0 0 0 0 .46  0 0 0 0 .38  0 0 0 .5 0'/%3E%3C/filter%3E%3Crect width='120' height='30' filter='url(%23f)'/%3E%3C/svg%3E"),
-    rgba(226, 216, 190, .66);
-  clip-path: polygon(0 8%, 4% 0, 8% 10%, 13% 2%, 18% 6%, 22% 0, 78% 0, 83% 7%, 88% 1%, 93% 9%, 97% 2%, 100% 10%, 100% 92%, 96% 100%, 91% 91%, 86% 99%, 81% 92%, 76% 100%, 24% 100%, 19% 93%, 14% 100%, 9% 92%, 4% 99%, 0 90%);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, .2) inset;
+  position: absolute; width: 112px; height: 52px; pointer-events: none; opacity: .9;
+  background: url('/assets/sheet/tape-1.webp') center / contain no-repeat;
+  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, .3));
 }
-.ws2-empty-tape.a { left: -26px; top: -6px; transform: rotate(-32deg); }
-.ws2-empty-tape.b { right: -30px; top: -2px; transform: rotate(28deg); }
+.ws2-empty-tape.a { left: -36px; top: -22px; transform: rotate(-32deg); }
+.ws2-empty-tape.b { right: -40px; top: -20px; width: 118px; height: 56px; background-image: url('/assets/sheet/tape-2.webp'); transform: rotate(27deg); }
 /* β: a framed slip instead of paper — amber double rule, circuit stubs off two corners */
 .ws2[data-wl='beta'] .ws2-empty-card {
   background:
@@ -147,7 +158,7 @@
 .ws2[data-wl='beta'] .ws2-empty-card .ws2-empty-msg { color: var(--ws-ink-2); }
 .ws2[data-wl='beta'] .ws2-empty-card .ws2-empty-rule i { background: rgba(233, 150, 80, .4); }
 .ws2[data-wl='beta'] .ws2-empty-card .ws2-empty-action { color: var(--ws-ink); box-shadow: inset 0 0 0 1px rgba(233, 150, 80, .5); }
-.ws2[data-wl='beta'] .ws2-empty-tape { width: 64px; height: 1px; background: rgba(233, 150, 80, .5); clip-path: none; box-shadow: none; }
+.ws2[data-wl='beta'] .ws2-empty-tape { width: 64px; height: 1px; background: rgba(233, 150, 80, .5); filter: none; opacity: 1; }
 .ws2[data-wl='beta'] .ws2-empty-tape.a { left: -64px; top: 22px; transform: none; }
 .ws2[data-wl='beta'] .ws2-empty-tape.b { right: -64px; top: auto; bottom: 22px; transform: none; }
 .ws2[data-wl='beta'] .ws2-empty-tape::after { content: ''; position: absolute; top: -3px; width: 7px; height: 7px; border-radius: 50%; border: 1px solid rgba(233, 150, 80, .6); }
@@ -157,8 +168,12 @@
 /* ---------- the current conversation, underlined in red pencil ---------- */
 .ws2 .conversation-title { position: relative; overflow: visible; }
 .ws2 .conversation-select { overflow: hidden; }
-.conversation-mark { position: absolute; left: -3px; right: -2px; bottom: -6px; width: calc(100% + 5px); height: 9px; overflow: visible; pointer-events: none; }
-.conversation-mark path { fill: none; stroke: #d8343b; stroke-width: 1.6; stroke-linecap: round; opacity: .85; vector-effect: non-scaling-stroke; stroke-dasharray: 1; stroke-dashoffset: 1; animation: ds-draw .42s cubic-bezier(.5, 0, .3, 1) .08s forwards; }
+/* the pencil skips the pits of the paper (a tooth mask cut from the same grain as the sheet) */
+.conversation-mark {
+  position: absolute; left: -3px; right: -2px; bottom: -6px; width: calc(100% + 5px); height: 9px; overflow: visible; pointer-events: none;
+  -webkit-mask: url('/assets/sheet/tooth.webp') 0 0 / 256px 256px repeat; mask: url('/assets/sheet/tooth.webp') 0 0 / 256px 256px repeat;
+}
+.conversation-mark path { fill: none; stroke: #d8343b; stroke-width: 2; stroke-linecap: round; opacity: .85; vector-effect: non-scaling-stroke; stroke-dasharray: 1; stroke-dashoffset: 1; animation: ds-draw .42s cubic-bezier(.5, 0, .3, 1) .08s forwards; }
 .ws2[data-wl='beta'] .conversation-mark path { stroke: #e3542a; }
 
 /* ---------- operation guide under the composer ---------- */
