@@ -9,8 +9,9 @@ use std::time::{Duration, Instant};
 
 use tauri::{Manager, RunEvent};
 
-#[cfg(windows)]
-use std::os::windows::fs::OpenOptionsExt;
+mod instance;
+use instance::{acquire_instance_lock, backend_runtime_dir};
+
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
@@ -139,20 +140,6 @@ fn fail_backend_startup(startup: &BackendStartup, logs: &Path, reason: String) {
     startup.finish(Err(reason));
 }
 
-// Keep this handle alive until the desktop exits. The file itself may remain on disk.
-struct InstanceLock {
-    _file: Option<File>,
-}
-
-fn acquire_instance_lock(data_dir: &Path) -> io::Result<InstanceLock> {
-    fs::create_dir_all(data_dir)?;
-    #[cfg(windows)]
-    let file = Some(fs::OpenOptions::new().read(true).write(true).create(true)
-        .truncate(false).share_mode(0).open(data_dir.join("desktop.lock"))?);
-    #[cfg(not(windows))]
-    let file = None;
-    Ok(InstanceLock { _file: file })
-}
 
 #[cfg(windows)]
 fn create_backend_job() -> io::Result<std::os::windows::io::OwnedHandle> {
@@ -224,11 +211,6 @@ impl BackendProcess {
     }
 }
 
-// Logs and the instance lock share one root, including isolated DATA_DIR runs.
-fn backend_runtime_dir(data_override: Option<&Path>, default_root: &Path) -> PathBuf {
-    data_override.filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or(default_root).to_path_buf()
-}
 
 fn backend_data_dir(app: &tauri::AppHandle) -> tauri::Result<PathBuf> {
     if let Some(path) = std::env::var_os("AMADEUS_DATA_DIR").filter(|value| !value.is_empty()) {
@@ -368,6 +350,26 @@ fn show_startup_error(message: &str) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Tauri initializes plugins during build, before creating configured WebViews.
+        // A rejected second instance must not create a controller and then process::exit.
+        .plugin(tauri::plugin::Builder::new("instance-lock")
+            .setup(|app, _| {
+                let data_override = std::env::var_os("AMADEUS_DATA_DIR").map(PathBuf::from);
+                let runtime_dir = backend_runtime_dir(data_override.as_deref(), &app.path().app_local_data_dir()?);
+                match acquire_instance_lock(&runtime_dir) {
+                    Ok(lock) => { app.manage(lock); }
+                    Err(error) => {
+                        if cfg!(windows) && error.raw_os_error() == Some(32) {
+                            show_startup_error("Amadeus 已经在运行。");
+                        } else {
+                            show_startup_error("无法锁定数据目录，Amadeus 无法启动。");
+                        }
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            })
+            .build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![get_local_backend, restart_app])
@@ -384,17 +386,6 @@ pub fn run() {
                     return Ok(());
                 }
             };
-            match acquire_instance_lock(&runtime_dir) {
-                Ok(lock) => { app.manage(lock); }
-                Err(error) => {
-                    if cfg!(windows) && error.raw_os_error() == Some(32) {
-                        show_startup_error("Amadeus 已经在运行。");
-                    } else {
-                        show_startup_error("无法锁定数据目录，Amadeus 无法启动。");
-                    }
-                    std::process::exit(1);
-                }
-            }
             if let Some(window) = app.get_webview_window("main") {
                 let handle = app.handle().clone();
                 window.on_window_event(move |event| {
@@ -478,29 +469,6 @@ mod tests {
         backend.stop();
         assert!(backend.child.lock().unwrap().is_none());
         assert!(started.elapsed() < Duration::from_secs(4), "stdin EOF did not stop the probe");
-    }
-
-    #[test]
-    fn runtime_paths_follow_explicit_data_directories() {
-        let default = Path::new("default-app-root");
-        let first = backend_runtime_dir(Some(Path::new("isolated-a/data")), default);
-        let second = backend_runtime_dir(Some(Path::new("isolated-b/data")), default);
-        assert_eq!(first.join("logs/backend-stdout.log"), Path::new("isolated-a/data/logs/backend-stdout.log"));
-        assert_eq!(first.join("logs/backend-stderr.log"), Path::new("isolated-a/data/logs/backend-stderr.log"));
-        assert_eq!(first.join("logs/backend-startup.log"), Path::new("isolated-a/data/logs/backend-startup.log"));
-        assert_eq!(first.join("desktop.lock"), Path::new("isolated-a/data/desktop.lock"));
-        assert_ne!(first, second);
-    }
-
-    #[test]
-    fn runtime_paths_stay_at_default_root_without_override() {
-        let default = Path::new("default-app-root");
-        for value in [None, Some(Path::new(""))] {
-            let root = backend_runtime_dir(value, default);
-            assert_eq!(root.join("logs"), default.join("logs"));
-            assert_eq!(root.join("desktop.lock"), default.join("desktop.lock"));
-            assert!(!root.join("logs").starts_with(default.join("data")));
-        }
     }
 
     #[test]
