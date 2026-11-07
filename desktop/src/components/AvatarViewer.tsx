@@ -1,5 +1,5 @@
 ﻿import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
-import { hasAssetPack, packAsset } from '../assetPack';
+import { hasPackFile, packAsset } from '../assetPack';
 import { mouthFrame, voiceEnvelope } from '../workstation/voiceEnvelope';
 
 // The portraits are original game art, shipped only in the optional asset pack.
@@ -140,7 +140,7 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
     return () => { if (rafId) cancelAnimationFrame(rafId); };
   }, []);
 
-  if (!hasAssetPack()) {
+  if (!hasPackFile('assets/images/kurisu_normal1.png')) {
     return (
       <div className={`avatar-viewer-container avatar-absent${variant === 'stage' ? ' avatar-stage' : ''}`} data-testid="avatar-absent" />
     );

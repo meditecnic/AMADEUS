@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { BootSplash } from './components/BootSplash';
+import { BootSplash, hasBootSplash } from './components/BootSplash';
 import { SalieriLogin, type EntranceCue } from './components/SalieriLogin';
 import { Workstation, type EntrancePhase } from './components/Workstation';
 import { loadAssetPack } from './assetPack';
@@ -15,7 +15,7 @@ function App() {
   useEffect(() => {
     let cancelled = false;
     // The original entrance animation is part of the pack; without it the app opens on login.
-    void loadAssetPack().then((on) => { if (!cancelled) setStep(on ? 'splash' : 'login'); });
+    void loadAssetPack().then((on) => { if (!cancelled) setStep(on && hasBootSplash() ? 'splash' : 'login'); });
     return () => { cancelled = true; };
   }, []);
   const [worldline, setWorldline] = useState<'steins_gate' | 'beta'>(() => {
