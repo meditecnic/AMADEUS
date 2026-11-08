@@ -49,7 +49,9 @@ def _array(rows):
         if not first:
             yield ','
         first = False
-        yield from _ENCODER.iterencode(dict(row))
+        # Encode one row in C instead of visiting every JSON token in Python.
+        # stream() still splits UTF-8 output into bounded ZIP writes.
+        yield _ENCODER.encode(dict(row))
     yield ']'
 
 
