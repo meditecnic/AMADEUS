@@ -16,7 +16,7 @@
 - **Japanese conversation with paired Chinese subtitles.** Replies stream sentence by sentence; each Japanese sentence is matched with its translation, and missing translations are marked instead of silently dropped.
 - **Long-term memory that stays local.** Facts and experiences from your conversations are stored in SQLite (with 768-dimensional `jina-embeddings-v5-text-nano-retrieval` embeddings indexed on write). Facts are split into resident facts, which go into the prompt every turn, and on-demand facts: the model fetches them with the `recall_memory` tool (DeepSeek only) when a turn needs them, and facts that match the current message are added to that turn's prompt. Related past experiences are also added when the prompt is compiled. In the memory archive you can view, correct and delete stored facts and view and delete experiences; you can also optionally erase a conversation's exclusive long-term memories when clearing a chat, and browse memories on the star map.
 - **Two isolated worldlines.** *STEINS;GATE* and *β* each have their own persona, conversations, memory and visual theme. Conversations and memories are stored separately per worldline.
-- **Worldline instruments and transitions (M3).** The header, system-menu dial and WebGL2 transition share the same cathode digits. Open **系统 → 世界线**: the dial shows the current worldline, while the diagram previews the selected target; use the shift button to begin. Softer handoffs preserve conversations and drafts, and click/Esc skips the presentation while still waiting for target confirmation.
+- **Worldline transitions.** Switch between worldlines in **系统 → 世界线**: the dial shows the current worldline, the diagram previews the selected target, and the shift button starts the transition while preserving each worldline's conversations and draft. Click or press Esc to skip the transition animation while still waiting for target confirmation.
 - **Bring your own model.** DeepSeek, Zhipu GLM, or any OpenAI-compatible endpoint. Optional web search through Tavily or Firecrawl.
 - **Optional voice.** Text-to-speech through a local GPT-SoVITS server; speech recognition with SenseVoice via sherpa-onnx (backend only for now, no microphone UI yet).
 - **Local by design.** Every service binds to loopback, WebSocket connections are origin-checked, and API keys are stored in the Windows Credential Manager in installed builds or in memory by default in source runs. Conversation text is sent only to the model provider the user configures; if web search is enabled, search queries also go to the chosen search provider (Tavily or Firecrawl).
@@ -49,10 +49,7 @@ One chat turn: the UI sends the user's message over a WebSocket; the backend loa
 ## Engineering notes
 
 - **Measured recall behaviour.** In a controlled end-to-end run against a real model (`deepseek-flash`), 12 of 12 prompts that needed a stored fact used it, and 4 of 4 control prompts did not call the tool. That result covers that question set and environment only.
-- **Windows installer.** The Tauri shell bundles the backend (PyInstaller, with the embedding model cache) into an NSIS installer, starts it on a system-assigned loopback port on launch, allows only one instance per data directory, and shuts it down cleanly on exit. It passed a 10-item acceptance checklist on a clean English Windows Server 2022 VM: install, WebView2 bootstrap, real chat, memory write / recall / forget, restart persistence, and an uninstall that keeps user data. It is not published yet; packaging scripts are in `packaging/windows/`, and the frozen backend is a build artifact excluded from the repository.
-- **Historical checks (2026-10-18).** At that point the frontend suite contained 550 cases across 48 Vitest files, including 2 known visual assertions marked as expected failures, and the production build passed. Two earlier full Vitest runs each reported 547 passes + 2 expected failures + 1 timeout in the existing `dragStress.test.tsx` (5-second limit). A subsequent full run with `npx vitest run --maxWorkers=2` passed all 48 files: 548 passes + 2 expected failures, with all tests retained and timeouts unchanged. M1 browser user testing was still pending at that checkpoint; those checks alone did not establish milestone acceptance. The backend has its own pytest suite in `backend/tests/`.
-- **M3 closeout (2026-10-19).** The cloud delivery reported a passing build and 615 passes + 2 expected failures, with unit and proportionate browser checks. The developer accepted the actual Edge preview at `3723c6a6d445df102e9525bc6fad82c6fa0164fe`, merged in [`f0c18797f3ce8c178595e72f52671561f9378c23`](https://github.com/meditecnic/AMADEUS/commit/f0c18797f3ce8c178595e72f52671561f9378c23). These are prior delivery and host-acceptance results, not new test runs for this documentation update or a native GPU latency guarantee.
-- **Transition startup.** The MIT-vendored [runtime](desktop/src/worldline-engine/README.vendor.md) prepares its GPU stage asynchronously ahead of a shift. Login preloads workstation fonts, remembers the faces used after entry, and uses that record on the next refresh. Existing audio initialization happens on login interaction before entry; M3 adds no audio features or runtime dependencies. See the [desktop notes](desktop/README.md) for caption and skip-hint behavior.
+- **Windows installer.** The Tauri shell bundles the backend (PyInstaller, with the embedding model cache) into an NSIS installer, starts it on a system-assigned loopback port on launch, allows only one instance per data directory, and shuts it down cleanly on exit. Alongside the earlier 10-item acceptance pass on a clean English Windows Server 2022 VM (install, WebView2 bootstrap, real chat, memory write / recall / forget, restart persistence, and an uninstall that keeps user data), every packaging run in CI (`.github/workflows/release.yml`, `packaging/windows/`) checks that the frozen backend refuses to start without `AMADEUS_DATA_DIR`, runs `--self-check` and `smoke_frozen.py`, and runs `install_smoke.py` on a clean Windows runner: silent install (HKCU uninstall registration and Start Menu shortcut), login page and local keyless `OpenAI-compatible` provider reaching `ONLINE` with zero console errors, single-instance lock on a second launch, full desktop/backend/WebView2 process-tree exit on window close, Windows Filtering Platform and CDP checks for no external network connections, and silent uninstall that retains user data. For tagged and manual release builds, `verify_update_signature.py` verifies the `.sig` update signature and `latest.json` against the updater public key in `desktop/src-tauri/tauri.conf.json` before creating a draft Release. No release is published yet; the frozen backend is a build artifact excluded from the repository.
 
 ## How it was built
 
@@ -61,13 +58,21 @@ Built and maintained by one developer, who owns the product direction, architect
 ## Status
 
 - **v0.1.0 is being prepared.** There is no public release yet.
-- **M3 accepted and closed.** Worldline instruments, softer transitions and startup preparation are merged. M4 awaits authorization.
+- **The UI is being reworked across the app** (except the login screen); screenshots will be updated after the rework.
 - The desktop app supports **Windows 10/11 x64 only**; the browser dev mode also runs on Linux.
 - **Planned:** English and Japanese UI. Kurisu keeps speaking Japanese in every mode; in English mode her lines get English subtitles, and in Japanese mode subtitles are turned off.
 
 ## Installation
 
 Once v0.1.0 is published, download the Windows installer from [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases). The installer is unsigned, so Windows SmartScreen will warn; choose **More info → Run anyway** to continue. If WebView2 is missing, the installer downloads and installs it, which requires an internet connection. Voice is optional.
+
+## Troubleshooting
+
+- **Windows SmartScreen warning.** The installer is not Authenticode-signed. When SmartScreen warns about an unknown publisher, verify that the download came from this repository's GitHub Releases and that its SHA-256 matches `SHA256SUMS.txt`, then choose **More info → Run anyway**. (The Tauri update signature verifies update origin and does not replace Windows code signing.)
+- **Verify downloads (`SHA256SUMS.txt`).** Download `SHA256SUMS.txt` alongside the installer and run `Get-FileHash .\Amadeus_<version>_x64-setup.exe -Algorithm SHA256` in PowerShell. Compare `Hash` (case-insensitive) with the matching entry in `SHA256SUMS.txt` before installing; other release attachments can be checked with the same command.
+- **WebView2 installation.** The installer embeds the Microsoft Edge WebView2 bootstrapper (`embedBootstrapper`). If the WebView2 Runtime is missing on the machine, the installer downloads and installs it, which requires an internet connection.
+- **Log files.** Installed builds write backend logs (`backend-stdout.log`, `backend-stderr.log`, and `backend-startup.log` on startup failure) to `%LOCALAPPDATA%\com.amadeus.desktop\logs` by default, or `<AMADEUS_DATA_DIR>\logs` when `AMADEUS_DATA_DIR` is set.
+- **Reporting issues.** When opening an issue on [GitHub Issues](https://github.com/meditecnic/AMADEUS/issues), **do not include API keys, tokens, or conversation content**.
 
 ## Run it (development)
 
@@ -168,7 +173,7 @@ The desktop window comes from the installer build; its packaging scripts are in 
 
 ### Data location
 
-The Windows installer stores data in `%LOCALAPPDATA%\com.amadeus.desktop\data`. Uninstalling keeps data by default; selecting the uninstaller's option to delete app data removes this default directory. To use another location, set the user environment variable `AMADEUS_DATA_DIR` and restart the app. Source runs must set a nonempty `AMADEUS_DATA_DIR` to a separate development directory. The backend executable also refuses to start on its own without this variable; it has no fallback data directory.
+The Windows installer stores data in `%LOCALAPPDATA%\com.amadeus.desktop\data`. Uninstalling keeps data by default; selecting the uninstaller's option to delete app data removes this default directory. To use another location, set the user environment variable `AMADEUS_DATA_DIR` and restart the app. Source runs and standalone runs of `amadeus-backend.exe` require a nonempty `AMADEUS_DATA_DIR` and refuse to start without it; there is no fallback data directory. If a configured data directory is missing or invalid, or if existing databases fail startup checks, startup stops instead of creating an empty database. Desktop backend logs (`backend-stdout.log`, `backend-stderr.log`, and `backend-startup.log` when startup fails) are written to `%LOCALAPPDATA%\com.amadeus.desktop\logs` by default, or `<AMADEUS_DATA_DIR>\logs` when `AMADEUS_DATA_DIR` is set.
 
 Installed Windows builds store API keys in the Windows Credential Manager; source runs keep them only in memory by default, so re-enter them after each restart. To persist keys from a source run on Windows, set `AMADEUS_CREDENTIAL_BACKEND=windows`; this accesses your real Windows credentials. Other systems keep keys in memory only. The local mock does not use these backend data stores.
 
@@ -203,7 +208,7 @@ STEINS;GATE, STEINS;GATE 0 and their characters, names and original assets belon
 
 ### 现在做到哪了
 
-从 6 月中旬起已经开发了大约四个月。
+从 6 月中旬起已经开发了大约五个月。
 
 **新界面的 Windows 安装包已经打出来了**，在一台干净的英文 Windows Server 2022 虚拟机上，10 项验收全部通过：安装、自动装 WebView2、真实对话、记忆的写入/召回/遗忘、重启后还记得、卸载时保留数据。v0.1.0 正在准备，还没有公开发布。（打包脚本在 `packaging/windows/`，冻结后端是构建产物，不进仓库。）
 
@@ -212,20 +217,25 @@ STEINS;GATE, STEINS;GATE 0 and their characters, names and original assets belon
 - 和她用日语多轮对话，中文字幕逐句跟上
 - 长期记忆：她记住了什么随时能查，不想让她记得的可以让她忘掉（记忆星图还在打磨，现在先在档案页里看）
 - 在 SG 和 β 两条世界线之间跃迁，各自保留会话和草稿
-- M3 已接受并合并：右上角、系统菜单与跃迁演出统一阴极数字；「系统 → 世界线」的仪器显示当前线，图中预览目标，再按跃迁按钮。过渡更柔和，点击／Esc 可跳过演出，仍须等待目标确认。GPU 与字体提前异步预热；字体使用记录在下次刷新后用于预加载，既有音频初始化移到入场前，没有新增音频功能。
 - 接入你自己的大模型：DeepSeek、智谱 GLM，或任何兼容 OpenAI 接口的服务
 - 可选的联网搜索（Tavily、Firecrawl）
 - 用红莉栖的声音念出她的回答（需要另外跑 GPT-SoVITS，见上文 [Voice](#voice-optional)）
 
-M3 已收尾，M4 等待授权。英文和日文界面仍在计划中；她始终说日语，英文界面下配英文字幕，日文界面下就不再显示字幕了。
-
-正常 GPU 演出不显示状态字幕，但保留读屏状态；等待超过 0.7 秒才显示提示，失败立即显示。提示采用无底框琥珀字幕，失败使用错误色；Esc 提示在活动、键盘聚焦及前 3 次引导时出现。减少动态与降级路径仍保留同一切换事务，跳过不会伪造成功。验证来源和边界见上文 [Engineering notes](#engineering-notes)。
+界面正在整体重做（除了登录页），截图之后再换。英文和日文界面仍在计划中；她始终说日语，英文界面下配英文字幕，日文界面下就不再显示字幕了。
 
 ### 安装
 
 桌面版只支持 **Windows 10/11 x64**。v0.1.0 发布后可从 [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases) 下载安装包；安装包未签名，SmartScreen 提示时点「更多信息 → 仍要运行」。缺少 WebView2 时安装程序会联网安装；语音可选。后端只监听本机回环，端口由系统分配。
 
 代码使用 MIT 许可；安装包带 CC BY-NC 4.0 的 jina 嵌入模型，因此安装包整体仅限非商业使用。语音组件含 eSpeak NG（GPLv3），对应源码包 `amadeus-0.1.0-speech-sources.zip` 随每个版本在 Releases 发布，见 [第三方说明](THIRD_PARTY_NOTICES.md)。
+
+### 常见问题
+
+- **SmartScreen 提示未知发布者**：安装包未做 Authenticode 代码签名。请先确认下载来自本仓库的 GitHub Releases 且校验和与 `SHA256SUMS.txt` 一致，再选择「更多信息 → 仍要运行」。（更新包的 Tauri 签名仅用于验证更新来源，不代替 Windows 代码签名。）
+- **校验下载文件（`SHA256SUMS.txt`）**：下载 `SHA256SUMS.txt` 和安装包，在 PowerShell 中运行 `Get-FileHash .\Amadeus_<版本>_x64-setup.exe -Algorithm SHA256`，将 `Hash` 与清单中对应文件的 SHA-256 比较（忽略大小写），完全一致后再安装；其他附件可用同一命令校验。
+- **WebView2 联网安装**：安装包内置 WebView2 在线引导程序（`embedBootstrapper`）。若系统缺少 Microsoft Edge WebView2 Runtime，安装程序会联网下载安装，需要联网。
+- **日志位置**：安装版的后端日志（`backend-stdout.log`、`backend-stderr.log`，以及启动失败时的 `backend-startup.log`）默认写在 `%LOCALAPPDATA%\com.amadeus.desktop\logs`；设置了 `AMADEUS_DATA_DIR` 时写在 `<AMADEUS_DATA_DIR>\logs`。
+- **反馈问题**：去 [GitHub Issues](https://github.com/meditecnic/AMADEUS/issues) 报问题时，**不要贴 API 密钥、令牌和对话内容**。
 
 ### 运行
 
@@ -271,15 +281,22 @@ okeydokey，大概就是这些，那么来句帅气的收尾吧：El Psy Kongroo
 - ローカル長期記憶：SQLite + jina-embeddings-v5-text-nano-retrieval（Jina AI、fp32・768 次元、CC BY-NC 4.0、revision `ac5d898c8d382b17167c33e5c8af644a3519b47d`。事前取得には上記の `hf download` コマンドを使用）。事実は常駐と必要時の二種類。常駐の事実は毎ターンプロンプトに入り、それ以外は必要なときだけモデルが `recall_memory` ツール（DeepSeek のみ）で思い出す。記憶アーカイブで閲覧・修正・削除できる
 - DeepSeek、Zhipu GLM、OpenAI 互換 API（ローカルモデルを含む）に対応
 - 音声合成（GPT-SoVITS）は任意
-- M3 は実機 Edge プレビューで承認され、統合済み。ヘッダー・システムメニュー・遷移演出の陰極数字を統一。「系统 → 世界线」では計器に現在の世界線、図に選択した移動先を表示し、ボタンで遷移する。クリック／Esc で演出を省略しても、移動先の確認を待つ。
 
 この音声は『STEINS;GATE』の牧瀬紅莉栖の声を模倣したものです。キャラクター、原作の録音、声優の実演に関する権利は、それぞれの権利者に帰属します。モデルページの Apache-2.0 は、アップロードした本人が許諾できる範囲にのみ適用され、キャラクター、原作の録音、実演に関する権利の許諾を意味するものではありません。個人かつ非商用の用途に限って使用し、声優へのなりすましや、公式と誤認されるようなコンテンツの制作には使わないでください。権利者の方が関連内容の削除を希望される場合は、GitHub で issue を作成してください。速やかに対応します。
 
-遷移の受け渡しを柔らかくし、GPU を非同期で準備する。ログイン画面ではフォントを先読みし、入場後の使用記録を次回の再読み込みに使う。既存の音声初期化は入場前に移した。通常の GPU 演出中は状態字幕を隠して読み上げ用の状態を保ち、0.7 秒を超える待機や失敗時に表示する。字幕は背景枠のない琥珀色（失敗時はエラー色）。Esc の案内は操作・フォーカス・最初の 3 回の案内時に現れる。検証結果の出典と範囲は [Engineering notes](#engineering-notes) を参照。M3 は完了し、M4 は承認待ち。
+UI はログイン画面を除いて全面的に作り直しているところで、スクリーンショットは完了後に差し替える。
 
 デスクトップ版は **Windows 10/11 x64 のみ**に対応し、v0.1.0 は公開準備中で、まだ公開リリースはない。公開後は [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases) からインストーラーを入手できる。署名がないため SmartScreen の警告が出るので、「詳細情報 → 実行」を選ぶ。WebView2 がなければインストーラーがネット経由で導入する。音声は任意。バックエンドはループバックのみで待ち受け、ポートはシステムが割り当てる。ブラウザーでの開発モードは Linux でも動く。
 
 コードは MIT。インストーラーには CC BY-NC 4.0 の jina 埋め込みモデルが含まれるため、インストーラー全体は非商用利用に限る。音声コンポーネントには eSpeak NG（GPLv3）が含まれ、対応するソース `amadeus-0.1.0-speech-sources.zip` は各バージョンと一緒に Releases で公開する。詳細は [第三者ライセンス](THIRD_PARTY_NOTICES.md) を参照。
+
+### よくある質問
+
+- **SmartScreen の警告**：インストーラーには Authenticode 署名がない。SmartScreen が未知の発行元を警告した場合は、このリポジトリの GitHub Releases から取得したことと `SHA256SUMS.txt` のハッシュ一致を確認してから「詳細情報 → 実行」を選ぶ（更新パッケージの Tauri 署名は更新元の検証用であり、Windows のコード署名の代わりにはならない）。
+- **ダウンロードの検証（`SHA256SUMS.txt`）**：`SHA256SUMS.txt` とインストーラーをダウンロードし、PowerShell で `Get-FileHash .\Amadeus_<バージョン>_x64-setup.exe -Algorithm SHA256` を実行する。`Hash` を `SHA256SUMS.txt` の該当ファイルの SHA-256 と（大文字・小文字を区別せず）比較し、完全一致を確認してから導入する。他の添付ファイルも同じコマンドで検証できる。
+- **WebView2 の導入**：インストーラーは WebView2 のオンラインブートストラッパー（`embedBootstrapper`）を内蔵している。Microsoft Edge WebView2 Runtime が未導入の環境ではネット経由でダウンロード・導入するため、インターネット接続が必要になる。
+- **ログの場所**：インストール版のバックエンドログ（`backend-stdout.log`、`backend-stderr.log`、起動失敗時の `backend-startup.log`）は標準で `%LOCALAPPDATA%\com.amadeus.desktop\logs` に出力される。`AMADEUS_DATA_DIR` を設定している場合は `<AMADEUS_DATA_DIR>\logs` に出力される。
+- **不具合の報告**：[GitHub Issues](https://github.com/meditecnic/AMADEUS/issues) で問題を報告する際は、**API キー、トークン、会話内容は貼らないこと**。
 
 開発時の起動方法は [Run it](#run-it-development) を参照。セットアップと実行手順は英語版を正とする。**標準はローカル mock** で、Node.js だけで動き、Python バックエンド、API キー、実際のモデルや TTS は不要。[Local mock](#local-mock-default) の手順で `npm ci` と `npm run dev -- --port 1420 --strictPort` を実行し、http://localhost:1420/?scenario=streaming を開く。USER ID が `Salieri` と入力されるまで待ち、公開のローカルテスト用合言葉 `Gott würfelt nicht` でログインする。メッセージを送ると、日本語と中国語字幕の組が三つ、順番に届く。会話と記憶はテストデータで、開発サーバーの再起動でリセットされる。mock は開発専用で、製品ビルドには含まれず、`npm run preview` でも利用できない。
 
