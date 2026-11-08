@@ -1,5 +1,5 @@
 import { apiFetch, isPackagedTauri } from '../apiBase';
-import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import './SalieriLogin.css';
 import { audioService } from '../services/AudioService';
 import { audioPlayer } from '../hooks/useAudioPlayer';
@@ -7,7 +7,8 @@ import { useReducedMotion } from '../design-system/useReducedMotion';
 import { warmWorkstationFonts } from '../workstation/fontWarmup';
 import { Blueprint, type BlueprintHandle } from './login/Blueprint';
 import { Wordmark, type WordmarkHandle } from './login/Wordmark';
-import { DIVERGENCE, WORLDLINE_NAME } from '../workstation/Nixie';
+import { DIVERGENCE } from '../workstation/Nixie';
+import { KeyGlyph, Plate, PressFilter, Ruler } from './drafting/parts';
 
 /**
  * Beats of the entrance the app listens for. draft: the pen starts across the sheet and the workstation is
@@ -27,20 +28,6 @@ const T = { sweep: 330, sweepDur: 920, fly: 420, flyDur: 840, fade: 150 };
 /** Header wordmark baseline inside its 1em line box (EB Garamond: ascent 1.007, descent .298, line-height 1). */
 const HEADER_BASELINE = 0.8545;
 
-const DAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
-const pad = (n: number) => String(n).padStart(2, '0');
-function useClock() {
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(new Date()), 1000);
-    return () => window.clearInterval(id);
-  }, []);
-  return {
-    date: `${now.getFullYear()}.${pad(now.getMonth() + 1)}.${pad(now.getDate())} ${DAYS[now.getDay()]}`,
-    time: `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
-  };
-}
-
 /** Lower right, an easter egg: the title-screen lines of the original, verbatim (its English included, unedited). */
 const VERSE = [
   'There is no end though there is a start in space.\u2014Infinity.',
@@ -52,60 +39,6 @@ const VERSE = [
 ];
 /** Each line is typed out after the one before it (11 ms a character, a short pause between lines). */
 const VERSE_AT = VERSE.map((_, i) => VERSE.slice(0, i).reduce((t, l) => t + l.length * 11 + 90, 0));
-
-const CUT = 9;
-/**
- * A field label's nameplate: a drafted plate with a cut corner and an engraved inner rule, printed
- * slightly off register. Measured to the label so every line lands on a whole pixel. On focus the edge is drawn
- * first, then the plate is inked in (see .lp-* in the stylesheet).
- */
-function Plate() {
-  const ref = useRef<SVGSVGElement>(null);
-  const [box, setBox] = useState<{ w: number; h: number } | null>(null);
-  useLayoutEffect(() => {
-    const host = ref.current?.parentElement;
-    if (!host) return;
-    const read = () => {
-      const w = host.offsetWidth;
-      const h = host.offsetHeight;
-      if (w && h) setBox((b) => (b && b.w === w && b.h === h ? b : { w, h }));
-    };
-    read();
-    if (typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(read);
-    ro.observe(host);
-    return () => ro.disconnect();
-  }, []);
-  const w = box?.w ?? 0;
-  const h = box?.h ?? 0;
-  const shape = `M${CUT} 0H${w}V${h}H0V${CUT}Z`;
-  const i = 2.5;
-  const inner = `M${CUT + 1} ${i}H${w - i}V${h - i}H${i}V${CUT + 1}Z`;
-  return (
-    <svg ref={ref} className="lp" width={w} height={h} aria-hidden="true" focusable="false">
-      {box && (
-        <>
-          <path className="lp-reg r" d={shape} transform="translate(-1 0)" />
-          <path className="lp-reg b" d={shape} transform="translate(1 .5)" />
-          <path className="lp-fill" d={shape} filter="url(#sl-press)" />
-          <path className="lp-inner" d={inner} />
-          <path className="lp-ghost" d={shape} />
-          <path className="lp-edge" d={shape} pathLength={1} />
-        </>
-      )}
-    </svg>
-  );
-}
-
-/** A ruler under each field: one division per character, the nib at the end of the measurement. */
-function Ruler({ n }: { n: number }) {
-  return (
-    <span className="sl-ruler" aria-hidden="true" style={{ '--n': Math.min(n, 48) } as React.CSSProperties}>
-      {n > 0 && <i key={n} className="fresh" />}
-      <b className="nib" />
-    </span>
-  );
-}
 
 /** The password peek: an eye drawn in two lines. Shut while the password is masked; it opens to show it. */
 const LID_OPEN = 'M3 9Q13 .6 23 9';
@@ -142,7 +75,6 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
   const [glitch, setGlitch] = useState(0);
   const reduced = useReducedMotion();
   const [intro, setIntro] = useState(() => !reduced);
-  const clock = useClock();
 
   const rootRef = useRef<HTMLDivElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
@@ -525,14 +457,8 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
           <div className="zones left">{['A', 'B', 'C', 'D', 'E', 'F'].map((n) => <span key={n}>{n}</span>)}</div>
           <div className="zones right">{['A', 'B', 'C', 'D', 'E', 'F'].map((n) => <span key={n}>{n}</span>)}</div>
         </div>
-        {/* The sheet's title block, lower right as on an engineering drawing: what this sheet is, whose system, when. */}
-        <div className="sl-tblock" aria-hidden="true">
-          <span className="ttl">Amadeus System <i>—</i> Login</span>
-          <span className="org">VIKTOR CHONDRIA UNIV. · BRAIN SCIENCE INST.</span>
-          <span className="k">DATE</span><span className="v">{clock.date}</span>
-          <span className="k">TIME</span><span className="v">{clock.time}</span>
-          <span className="k">WORLDLINE</span><span className="v">{WORLDLINE_NAME[worldline]} · {DIVERGENCE[worldline]}</span>
-        </div>
+        {/* Whose paper this is, printed in the margin outside the border the way drafting stock carries its maker. */}
+        <p className="sl-imprint" aria-hidden="true">VIKTOR CHONDRIA UNIV. · BRAIN SCIENCE INST.</p>
         <div className="sl-verse" aria-hidden="true">
           {VERSE.map((line, i) => (
             <p key={i} style={{ '--n': line.length, '--t': `${VERSE_AT[i]}ms` } as React.CSSProperties}>{line}</p>
@@ -555,7 +481,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
 
         <form onSubmit={handleSubmit} className="sl-form salieri-login-form" noValidate>
           <div ref={userRowRef} className={`sl-row user${errorField === 'user' ? ' is-error' : ''}`}>
-            <label className={`sl-label${focusField === 'user' || errorField === 'user' ? ' is-on' : ''}`} htmlFor="salieri-user"><Plate /><span>USER ID</span></label>
+            <label className={`sl-label${focusField === 'user' || errorField === 'user' ? ' is-on' : ''}`} htmlFor="salieri-user"><Plate press="sl-press" /><span>USER ID</span></label>
             <div className="sl-slot">
               <input
                 ref={userRef}
@@ -577,7 +503,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
           </div>
 
           <div ref={pwdRowRef} className={`sl-row pwd${errorField === 'password' ? ' is-error' : ''}`}>
-            <label className={`sl-label${focusField === 'password' || errorField === 'password' ? ' is-on' : ''}`} htmlFor="salieri-pwd"><Plate /><span>PASSWORD</span></label>
+            <label className={`sl-label${focusField === 'password' || errorField === 'password' ? ' is-on' : ''}`} htmlFor="salieri-pwd"><Plate press="sl-press" /><span>PASSWORD</span></label>
             <div className={`sl-slot${capsLock ? ' has-caps' : ''}`}>
               <input
                 ref={pwdRef}
@@ -624,16 +550,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
               title="CONNECT"
               aria-label="Decrypt and Connect"
             >
-              <svg viewBox="0 0 64 64" aria-hidden="true">
-                <circle cx="32" cy="32" r="30.5" className="halo" />
-                <g className="ticks">
-                  {Array.from({ length: 24 }, (_, i) => <path key={i} d={`M32 4.2v${i % 6 === 0 ? 4.2 : 2.4}`} transform={`rotate(${i * 15} 32 32)`} />)}
-                </g>
-                <circle cx="32" cy="32" r="23" className="ring" pathLength={1} />
-                <circle cx="32" cy="32" r="23" className="disc" />
-                <path d="M23.5 32h16M34 26.5l5.5 5.5-5.5 5.5" className="arrow" />
-                <path d="M24 32.5l5.5 5.5 11-12" className="check" pathLength={1} />
-              </svg>
+              <KeyGlyph />
             </button>
           </div>
 
@@ -655,16 +572,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
         </form>
       </div>
 
-      {/* Letterpress: a little ink spread at the edges and paper grain through the ink. */}
-      <svg className="sl-defs" width="0" height="0" aria-hidden="true" focusable="false">
-        <filter id="sl-press" x="-4%" y="-20%" width="108%" height="140%" colorInterpolationFilters="sRGB">
-          <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves={2} seed={7} result="n" />
-          <feDisplacementMap in="SourceGraphic" in2="n" scale={1.3} xChannelSelector="R" yChannelSelector="G" result="d" />
-          <feGaussianBlur in="d" stdDeviation={0.3} result="s" />
-          <feColorMatrix in="n" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0.3 0 0 0 0.74" result="g" />
-          <feComposite in="s" in2="g" operator="in" />
-        </filter>
-      </svg>
+      <PressFilter id="sl-press" className="sl-defs" />
 
       <div ref={penRef} className="sl-pen" aria-hidden="true">
         <i className="s1" /><i className="s2" /><i className="s3" /><i className="s4" /><i className="s5" />

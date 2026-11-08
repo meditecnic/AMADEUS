@@ -116,26 +116,11 @@
 
 .sl-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
 
-/* The sheet's title block, lower right: the sheet's name in the serif, whose system it is, the clock, the worldline. */
-.sl-tblock {
-  position: absolute; right: 42px; bottom: 40px;
-  display: grid; grid-template-columns: auto 1fr;
-  min-width: clamp(330px, 21vw, 420px);
-  border: 1px solid var(--line-2);
-  outline: 1px solid var(--line); outline-offset: 3px;
-  background: rgba(10, 11, 12, .55);
-  font-family: var(--mono); font-size: clamp(10px, .54vw, 12.5px); line-height: 1; letter-spacing: .18em; white-space: nowrap;
-  font-variant-numeric: tabular-nums;
+/* The paper's imprint, in the margin outside the border at the lower right: whose drafting stock this is. */
+.sl-imprint {
+  position: absolute; right: 22px; bottom: 3px; margin: 0;
+  font-family: var(--mono); font-size: 9px; line-height: 12px; letter-spacing: .26em; color: var(--ink-3); opacity: .75; white-space: nowrap;
 }
-.sl-tblock span { padding: 7px 11px 6px; border-top: 1px solid var(--line); }
-.sl-tblock .ttl {
-  grid-column: 1 / -1; border-top: 0; padding: 11px 12px 8px;
-  font-family: var(--serif); font-size: clamp(17px, 1.06vw, 21px); letter-spacing: .06em; color: var(--ink);
-}
-.sl-tblock .ttl i { font-style: normal; color: var(--ink-3); padding: 0 .1em; }
-.sl-tblock .org { grid-column: 1 / -1; font-size: .86em; letter-spacing: .16em; color: var(--ink-3); }
-.sl-tblock .k { color: var(--ink-3); border-right: 1px solid var(--line); padding-right: 10px; }
-.sl-tblock .v { color: var(--ink-2); text-align: right; }
 
 /* Under everything, the paper itself: smoky, mottled, never a flat black (a generated texture replaces this). */
 .sl-texture {
@@ -153,7 +138,7 @@
 
 /* Lower right: the original's title-screen lines, set like a title menu (an easter egg). Nothing here can be chosen. */
 .sl-verse {
-  position: absolute; right: 50px; bottom: calc(40px + clamp(150px, 8.8vw, 178px));
+  position: absolute; right: 50px; bottom: 44px;
   display: flex; flex-direction: column; align-items: flex-end; gap: 8px;
   padding-right: 14px; border-right: 1px solid var(--line);
   font-family: var(--mono); font-size: clamp(10px, .54vw, 13px); line-height: 1.15; letter-spacing: .02em; color: rgba(241, 240, 235, .3);
@@ -169,7 +154,7 @@
   font-family: var(--mono); font-size: clamp(11px, .57vw, 14px); letter-spacing: .24em; color: var(--ink-3); white-space: nowrap;
 }
 
-.sl-root.intro :is(.sl-frame, .sl-tblock, .sl-note) { animation: sl-fade .8s ease .15s backwards; }
+.sl-root.intro :is(.sl-frame, .sl-imprint, .sl-note) { animation: sl-fade .8s ease .15s backwards; }
 .sl-root.intro .sl-verse { animation: sl-fade .4s ease 1.9s backwards; }
 /* the satellite's faces take the grid once its edges are drawn; the passcode note waits for the form */
 .sl-root.intro .bp-probe .face { animation: sl-fade 1.2s ease 1.5s backwards; }
@@ -438,12 +423,10 @@
 .sl-pen i { transform-origin: right; }
 
 @media (max-height: 760px) {
-  .sl-tblock { bottom: 30px; }
   .sl-note { bottom: 28px; }
-  .sl-verse { bottom: calc(30px + 150px); gap: 7px; }
 }
-/* The verse needs the band between the form and the title block. In the default 1280 × 720 window it ran across the
-   password row, and at 1440 × 900 it still crowds the passcode note; below a large window it is left out. */
+/* The verse's longest line is about 660 px of type: in a smaller window it runs into the divergence figure and
+   up to the form, so below a large window it is left out. */
 @media (max-height: 940px), (max-width: 1500px) {
   .sl-verse { display: none; }
 }
