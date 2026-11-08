@@ -9,6 +9,9 @@ use std::time::{Duration, Instant};
 
 use tauri::{Manager, RunEvent};
 
+mod backend_logs;
+use backend_logs::CappedLog;
+
 mod instance;
 use instance::{acquire_instance_lock, backend_runtime_dir};
 
@@ -132,11 +135,7 @@ fn read_backend_stdout(
 
 fn fail_backend_startup(startup: &BackendStartup, logs: &Path, reason: String) {
     let _ = fs::create_dir_all(logs);
-    if let Ok(mut log) = fs::OpenOptions::new().create(true).append(true)
-        .open(logs.join("backend-startup.log"))
-    {
-        let _ = writeln!(log, "AMADEUS_BACKEND_FAILED {reason}");
-    }
+    let _ = writeln!(CappedLog::open(&logs.join("backend-startup.log")), "AMADEUS_BACKEND_FAILED {reason}");
     startup.finish(Err(reason));
 }
 
@@ -267,8 +266,8 @@ fn start_backend(
     startup: Arc<BackendStartup>,
 ) -> Result<Arc<BackendProcess>, Box<dyn std::error::Error>> {
     let logs = logs.to_path_buf();
-    fs::create_dir_all(&logs)?;
-    let stdout_log = File::create(logs.join("backend-stdout.log"))?;
+    let stdout_log = CappedLog::open(&logs.join("backend-stdout.log"));
+    let mut stderr_log = CappedLog::open(&logs.join("backend-stderr.log"));
     let backend = app.path().resource_dir()?.join("backend/amadeus-backend.exe");
     let mut command = Command::new(backend);
     command
@@ -280,7 +279,7 @@ fn start_backend(
         .env("PYTHON_DOTENV_DISABLED", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(File::create(logs.join("backend-stderr.log"))?);
+        .stderr(Stdio::piped());
     command.env_remove("AMADEUS_LOCATION_FILE");
     if std::env::var_os("AMADEUS_DATA_DIR").filter(|value| !value.is_empty()).is_none() {
         command.env("AMADEUS_LOCATION_FILE", app.path().app_local_data_dir()?.join("data-location.json"));
@@ -301,6 +300,8 @@ fn start_backend(
     let started = Instant::now();
     let pid = child.id();
     let stdout = child.stdout.take().expect("stdout was configured as a pipe");
+    let mut stderr = child.stderr.take().expect("stderr was configured as a pipe");
+    std::thread::spawn(move || { let _ = io::copy(&mut stderr, &mut stderr_log); });
     let backend = Arc::new(BackendProcess {
         child: Mutex::new(Some(child)),
         #[cfg(windows)]
@@ -379,6 +380,7 @@ pub fn run() {
             let data_override = std::env::var_os("AMADEUS_DATA_DIR").map(PathBuf::from);
             let runtime_dir = backend_runtime_dir(data_override.as_deref(), &app.path().app_local_data_dir()?);
             let logs = runtime_dir.join("logs");
+            backend_logs::rotate(&logs);
             let data_dir = match backend_data_dir(app.handle()) {
                 Ok(path) => path,
                 Err(error) => {
