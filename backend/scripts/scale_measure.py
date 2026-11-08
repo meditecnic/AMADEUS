@@ -28,6 +28,31 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 
+def peak_rss_bytes():
+    if os.name != "nt":
+        import resource
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1 if sys.platform == "darwin" else 1024)
+    import ctypes
+    from ctypes import wintypes
+
+    class Counters(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [
+            (name, ctypes.c_size_t) for name in ("PeakWorkingSetSize", "WorkingSetSize",
+            "QuotaPeakPagedPoolUsage", "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage",
+            "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage")]
+
+    counters = Counters()
+    counters.cb = ctypes.sizeof(counters)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.GetCurrentProcess.restype = wintypes.HANDLE
+    get_memory = ctypes.WinDLL("psapi", use_last_error=True).GetProcessMemoryInfo
+    get_memory.argtypes = [wintypes.HANDLE, ctypes.POINTER(Counters), wintypes.DWORD]
+    get_memory.restype = wintypes.BOOL
+    if not get_memory(kernel.GetCurrentProcess(), ctypes.byref(counters), counters.cb):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return counters.PeakWorkingSetSize
+
+
 def offline(root):
     # Bind isolation BEFORE any app import, including config's dotenv loader.
     for key in list(os.environ):
@@ -241,8 +266,7 @@ def sample(root, launched):
                 assert before.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone() == after.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone(), table
     details["restored_counts_match"] = True
     details["db_bytes"] = {p.relative_to(root).as_posix(): p.stat().st_size for p in root.rglob("*.sqlite3") if "backups" not in p.parts}
-    import resource  # Linux benchmark process high-water RSS (all server threads).
-    details["peak_rss_bytes"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * (1 if sys.platform == "darwin" else 1024)
+    details["peak_rss_bytes"] = peak_rss_bytes()  # Process high-water RSS, all server threads.
     return {"seconds": metrics, "details": details}
 
 
