@@ -442,6 +442,11 @@
   .sl-note { bottom: 28px; }
   .sl-verse { bottom: calc(30px + 150px); gap: 7px; }
 }
+/* The verse needs the band between the form and the title block. In the default 1280 × 720 window it ran across the
+   password row, and at 1440 × 900 it still crowds the passcode note; below a large window it is left out. */
+@media (max-height: 940px), (max-width: 1500px) {
+  .sl-verse { display: none; }
+}
 
 /* Reduced motion: the finished sheet, nothing moving. */
 .sl-root.reduced *, .sl-root.reduced *::before, .sl-root.reduced *::after { animation: none !important; transition: none !important; }
