@@ -48,6 +48,8 @@ import { ConnectionCheckPanel, chatCheckMessage, requestChatCheck, type ChatChec
 import { ConnectionList } from '../workstation/ConnectionList';
 import { SendSignal } from '../workstation/SendSignal';
 import { PresenceIndicator, ThinkingMark, PRESENCE_LABELS } from '../workstation/PresenceIndicator';
+import { ErrorText, checkShortLabel } from '../workstation/logParts';
+import { KeyGlyph, Plate, PressFilter, Ruler } from './drafting/parts';
 import { VoiceScope } from '../workstation/VoiceScope';
 import { OverlayRootContext, Tip, TipProvider } from '../workstation/Tip';
 import { SelectionCopyMenu, TextFieldMenu } from '../workstation/menus';
@@ -1336,6 +1338,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
     if (!sendChat(inputText.trim())) return;
     scrollTranscriptToLatest();
     setInputText('');
+    // The composer is disabled while she answers. Hand the keyboard back when she is done, unless focus has been
+    // put somewhere else in the meantime (handComposerFocus gives up then).
+    composerHandoffUntil.current = Number.POSITIVE_INFINITY;
   };
 
   const beginConversationEntry = () => {
@@ -2215,7 +2220,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                 {visibleMessages.map((msg) => (
                   msg.systemError ? (
                     <article key={msg.id} className="ws2-line ws2-line-error">
-                      <p className="system-error-content" role="alert">{msg.content}</p>
+                      <p className="system-error-content" role="alert"><ErrorText content={msg.content} /></p>
                     </article>
                   ) : msg.role === 'user' ? (
                     <article key={msg.id} className="ws2-line ws2-line-user" data-message-id={msg.id}>
@@ -2232,7 +2237,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                     <article key={msg.id} className={`ws2-line ws2-line-kurisu${arrival.arriving(`m:${msg.id}`, Boolean(msg.streaming)) ? ' ws2-arrive' : ''}`}>
                       <header>
                         <span className="ws2-who" data-testid="speaker-assistant">
-                          <span data-testid="speaker-assistant-primary">KURISU</span>
+                          <span className="ws2-who-name" data-testid="speaker-assistant-primary">KURISU</span>
                           <span className="ws2-who-sub" data-testid="speaker-assistant-secondary">Amadeus</span>
                         </span>
                       </header>
@@ -2319,30 +2324,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
             <button type="button" onClick={() => openConnectionsAt('list')}>换一个接入</button>
           </div>
         )}
+        {/* The composer is the next entry of the log: your plate inks in while you write, a leader runs to what she
+            is running on, the slot measures the line and the round key sends it (the login's field again). */}
         <form className="ws2-composer" onSubmit={handleSend}>
-          <TextFieldMenu fieldRef={composerRef}>
-          <textarea
-            ref={composerRef}
-            rows={2}
-            value={inputText}
-            onChange={(e) => { setInputText(e.target.value); hearKeystroke(); }}
-            onKeyDown={(e) => {
-              if (e.nativeEvent.isComposing || e.keyCode === 229) {
-                if (e.key === 'Enter' || e.key === 'Escape') e.stopPropagation();
-                return;
-              }
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                e.currentTarget.form?.requestSubmit();
-              }
-            }}
-            className="chat-input-field"
-            placeholder="对红莉栖说点什么……"
-            aria-label="输入消息"
-            disabled={sendBlocked}
-          />
-          </TextFieldMenu>
-          <div className="ws2-composer-row">
+          <div className="ws2-entry-head">
+            <label className="ws2-nameplate" htmlFor="ws2-composer-input"><Plate press="ws2-press" /><span>{userHudLabel}</span></label>
+            <i className="ws2-leader" aria-hidden="true" />
             <div className="ws2-model">
               <ProviderControls
                 providers={providers.filter((row) => (
@@ -2388,26 +2375,57 @@ export const Workstation: React.FC<WorkstationProps> = ({
                 <Tip label={label}>
                   <button
                     type="button"
-                    className={`ws2-check-dot ${state?.status ?? 'untested'}`}
+                    className={`ws2-probe ${state?.status ?? 'untested'}`}
                     aria-label={label}
                     onClick={() => openMenu('connections')}
-                  />
+                  >
+                    <i className="ws2-probe-dot" aria-hidden="true" />
+                    <span aria-hidden="true">{checkShortLabel(state?.status)}</span>
+                  </button>
                 </Tip>
               );
             })()}
-
-            <button
-              type="submit"
-              className="ws2-send"
-              disabled={sendBlocked || !inputText.trim()}
-              aria-label="发送"
-            >
-              发送
-            </button>
           </div>
-          {/* Operation guide, as the originals print one under every screen: only keys that really work here. */}
+          <div className="ws2-field">
+          <div className="ws2-slot">
+          <TextFieldMenu fieldRef={composerRef}>
+          <textarea
+            id="ws2-composer-input"
+            ref={composerRef}
+            rows={2}
+            value={inputText}
+            onChange={(e) => { setInputText(e.target.value); hearKeystroke(); }}
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing || e.keyCode === 229) {
+                if (e.key === 'Enter' || e.key === 'Escape') e.stopPropagation();
+                return;
+              }
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                e.currentTarget.form?.requestSubmit();
+              }
+            }}
+            className="chat-input-field"
+            placeholder="对红莉栖说点什么……"
+            aria-label="输入消息"
+            disabled={sendBlocked}
+          />
+          </TextFieldMenu>
+          <i className="ws2-ul" aria-hidden="true" />
+          <Ruler n={[...inputText].length} max={400} className="ws2-measure" />
+          </div>
+          <button
+            type="submit"
+            className="ws2-send"
+            disabled={sendBlocked || !inputText.trim()}
+            aria-label="发送"
+          >
+            <KeyGlyph />
+          </button>
+          </div>
+          {/* The operation guide the originals print under every screen: only keys that really work here. */}
           <div className="ws2-guide" aria-hidden="true">
-            <span><kbd>Enter</kbd>发送</span><span><kbd>Shift</kbd><b>+</b><kbd>Enter</kbd>换行</span><small>OPERATION GUIDE</small>
+            <span><kbd>Enter</kbd>发送</span><span><kbd>Shift</kbd><b>+</b><kbd>Enter</kbd>换行</span>
           </div>
           {(messageTooLong || pendingModel || modelApplyError) && (
             <div className="ws2-composer-notes">
@@ -2427,6 +2445,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
               )}
             </div>
           )}
+          <PressFilter id="ws2-press" className="ws2-defs" />
         </form>
       </section>
 

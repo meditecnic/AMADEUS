@@ -374,12 +374,6 @@
 .ws2-lamp.bad { background: var(--ws-bad); box-shadow: 0 0 8px var(--ws-bad); }
 .ws2-lamp.busy { background: var(--ws-accent); animation: ws2-pulse 1s ease-in-out infinite; }
 .ws2-lamp.idle { box-shadow: inset 0 0 0 1.5px var(--ws-ink-3); }
-.ws2-check-dot { flex: none; width: 18px; height: 18px; border-radius: 50%; display: inline-grid; place-items: center; }
-.ws2-check-dot::after { content: ''; width: 6px; height: 6px; border-radius: 50%; box-shadow: inset 0 0 0 1.2px var(--ws-ink-3); }
-.ws2-check-dot.ok::after { background: var(--ws-ok); box-shadow: 0 0 6px var(--ws-ok); }
-.ws2-check-dot.failed::after { background: var(--ws-bad); box-shadow: 0 0 6px var(--ws-bad); }
-.ws2-check-dot.checking::after { background: var(--ws-accent); animation: ws2-pulse 1s ease-in-out infinite; }
-.ws2-check-dot:hover { background: rgba(255, 255, 255, .06); }
 .ws2-check-standing { margin-left: 8px; padding: 1px 7px; border-radius: 0; border: 1px dashed var(--ws-line-2); font-family: var(--ws-sans); font-size: 10.5px; font-weight: 400; color: var(--ws-ink-2); vertical-align: 1px; }
 .ws2-check.is-pending { padding: 4px 12px 8px; border: 1px dashed var(--ws-line-2); border-radius: 0; }
 .ws2-check-btn.ghost { color: var(--ws-ink-2); box-shadow: inset 0 0 0 1px var(--ws-line); }
@@ -603,35 +597,6 @@
 .ws2-transcript[data-scroll-overflow='true']:not([data-scroll-end='true']) { --ws-fade-bottom: 28px; }
 /* While the jump pill shows, the bottom band fades further so the pill never reads as a word inside a line. */
 .ws2-transcript-wrap:has(> .ws2-to-latest) > .ws2-transcript { --ws-fade-bottom: 64px; }
-.ws2-lines { display: flex; flex-direction: column; counter-reset: ws2-log; }
-.ws2-line { margin-bottom: 30px; max-width: 660px; }
-.ws2-line header { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
-.ws2-who { display: inline-flex; align-items: baseline; gap: 8px; font-family: var(--ws-display); font-size: 10.5px; letter-spacing: .3em; color: var(--ws-accent); }
-.ws2-who-sub { font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .12em; color: var(--ws-ink-3); }
-/* Her lines are numbered entries of the observation log. The name hangs between hairlines like the original's
- * "—— Mayuri ——" caption; β sets it in 0's copper on a hex plate. */
-.ws2-line-kurisu { counter-increment: ws2-log; }
-.ws2-line-kurisu header::before {
-  content: 'LOG.' counter(ws2-log, decimal-leading-zero); order: 3; font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .16em; color: var(--ws-ink-3);
-}
-.ws2-line-kurisu header::after { content: ''; order: 2; flex: 1; max-width: 260px; height: 1px; background: linear-gradient(90deg, var(--ws-line-2), var(--ws-line) 70%, transparent); }
-.ws2-line-kurisu .ws2-who { order: 1; align-items: center; gap: 0; padding-left: 26px; background: linear-gradient(var(--ws-line-2), var(--ws-line-2)) left center / 18px 1px no-repeat; }
-.ws2-line-kurisu .ws2-who > [data-testid='speaker-assistant-primary'] {
-  font-family: var(--ws-serif); font-weight: 500; font-size: 13.5px; letter-spacing: .3em; line-height: 1.3; color: var(--ws-ink);
-}
-.ws2[data-wl='beta'] .ws2-line-kurisu .ws2-who > [data-testid='speaker-assistant-primary'] {
-  padding: 2px 14px 1px 16px; font-size: 12.5px; color: var(--ws-accent); background: rgba(var(--ws-accent-rgb), .13); clip-path: var(--ws-plate-cut);
-}
-.ws2-line-kurisu .ws2-who-sub { margin-left: 10px; font-family: var(--ws-serif); font-style: italic; font-size: 12px; letter-spacing: .06em; color: var(--ws-ink-3); }
-.ws2-line-user { display: flex; flex-direction: column; align-items: flex-end; margin-left: auto; max-width: 78%; }
-.ws2-line-user .ws2-who { color: var(--ws-ink-3); font-family: var(--ws-sans); letter-spacing: .1em; font-size: 11.5px; }
-/* Your lines are not chat bubbles: right-set text hung from a thin rule, like entries you wrote into the log. */
-.ws2-user-text {
-  position: relative; margin: 0; padding: 1px 14px 1px 0; font-family: var(--ws-read); font-size: 15.5px; line-height: 1.75; color: var(--ws-ink); white-space: pre-wrap; overflow-wrap: anywhere;
-  text-align: right; background: none; border: 0; border-right: 1.5px solid rgba(var(--ws-accent-rgb), .55);
-}
-.ws2-user-text::after { content: ''; position: absolute; right: -4px; top: .55em; width: 6px; height: 6px; border-radius: 50%; background: var(--ws-bg); box-shadow: inset 0 0 0 1.5px rgba(var(--ws-accent-rgb), .7); }
-.ws2-line-error .system-error-content { margin: 0; padding: 10px 14px; border-left: 2px solid var(--ws-bad); background: rgba(255, 107, 94, .06); color: var(--ws-ink); font-size: 13.5px; line-height: 1.7; }
 
 .ws2 .bilingual-message { background: none; border: 0; padding: 0; }
 .ws2 .bilingual-message .chinese-main { margin: 0; font-family: var(--ws-read); font-synthesis: none; font-size: 17px; line-height: 1.85; color: var(--ws-ink); letter-spacing: .01em; font-weight: 400; text-shadow: none; }
@@ -664,32 +629,6 @@
 .ws2 .translation-degraded { margin: 8px 0 0; font-size: 12px; color: var(--ws-ink-3); }
 @keyframes ws2-pulse { 50% { opacity: .25; } }
 
-.ws2-thinking { display: flex; align-items: center; gap: 10px; margin-top: 8px; animation: ws2-status-in var(--dur-base) var(--ease-main) backwards; }
-@keyframes ws2-status-in { from { opacity: 0; } }
-/* Self-made stand-in for the asset-pack spinner, loops only while she is actually thinking.
-   SG: three stopwatch ticks stepping, no glow. β: three filament dots breathing on slightly uneven voltage. */
-.ws2-thinking-mark { display: inline-flex; align-items: center; gap: 4px; height: 22px; }
-.ws2-thinking-mark b { display: block; width: 7px; height: 3px; background: var(--ws-accent); opacity: .16; animation: ws2-tick 1.2s steps(1, end) infinite; }
-.ws2-thinking-mark b:nth-child(2) { animation-delay: .4s; }
-.ws2-thinking-mark b:nth-child(3) { animation-delay: .8s; }
-.ws2[data-wl='beta'] .ws2-thinking-mark b { width: 5px; height: 5px; border-radius: 50%; box-shadow: 0 0 6px rgba(var(--ws-accent-rgb), .7); opacity: .38; animation: ws2-filament 2.47s cubic-bezier(.45, 0, .55, 1) infinite; }
-.ws2[data-wl='beta'] .ws2-thinking-mark b:nth-child(2) { animation-duration: 2.61s; animation-delay: .19s; }
-.ws2[data-wl='beta'] .ws2-thinking-mark b:nth-child(3) { animation-duration: 2.38s; animation-delay: .41s; }
-@keyframes ws2-tick { 0% { opacity: 1; } 33.33%, 100% { opacity: .16; } }
-@keyframes ws2-filament {
-  0% { opacity: .38; transform: translateY(0); } 17% { opacity: .86; } 21% { opacity: .74; }
-  44% { opacity: 1; transform: translateY(-1.5px); } 58% { opacity: .9; } 66% { opacity: .97; } 100% { opacity: .38; transform: translateY(0); }
-}
-@media (prefers-reduced-motion: reduce) {
-  .ws2-thinking, .ws2-thinking-mark b { animation: none !important; }
-  .ws2-thinking-mark b, .ws2[data-wl='beta'] .ws2-thinking-mark b { opacity: .55; }
-}
-.ws2-thinking-label { font-family: var(--ws-mono); font-size: 11px; letter-spacing: .16em; color: var(--ws-accent); }
-.ws2-voicing { margin-top: 8px; font-size: 12px; letter-spacing: .1em; color: var(--ws-ink-3); }
-.ws2-actions { display: flex; gap: 4px; margin-top: 8px; }
-.ws2-actions button { height: 26px; padding: 0 10px; border-radius: 0; font-size: 12px; letter-spacing: .08em; color: var(--ws-ink-2); box-shadow: inset 0 0 0 1px var(--ws-line); }
-.ws2-actions button:hover:not(:disabled) { color: var(--ws-ink); background: rgba(255, 255, 255, .05); box-shadow: inset 0 0 0 1px var(--ws-line-2), inset 2px 0 0 var(--ws-accent); }
-.ws2-actions button:disabled { opacity: .4; }
 
 .ws2-empty { display: grid; place-items: safe center; height: 100%; }
 /* The transcript scrolls, so it clips x: the card never outgrows it, and its rule and node share a slot inside the card, with room for the glow. */
@@ -704,51 +643,6 @@
 .ws2-empty-rule { display: flex; align-items: center; gap: 12px; margin-top: 8px; font-family: var(--ws-mono); font-size: 10px; letter-spacing: .26em; color: var(--ws-ink-3); }
 .ws2-empty-rule i { width: 48px; height: 1px; background: var(--ws-line-2); }
 
-.ws2-to-latest {
-  position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); z-index: 3;
-  height: 28px; padding: 0 16px; border-radius: 0 !important; font-size: 12px; letter-spacing: .14em;
-  background: var(--ws-panel) !important; border: 0 !important; box-shadow: inset 0 0 0 1px var(--ws-line-2), inset 3px 0 0 var(--ws-accent);
-  color: var(--ws-ink); backdrop-filter: blur(8px);
-}
-
-/* ---------- composer ---------- */
-
-/* Input field as a drafting frame: crop marks at the four corners, a hairline floor that turns red when you write. */
-.ws2-composer {
-  --mark: var(--ws-ink-3);
-  position: relative; flex: none; border: 0; border-radius: 0; background-color: rgba(0, 0, 0, .34);
-  background-image:
-    linear-gradient(var(--mark), var(--mark)), linear-gradient(var(--mark), var(--mark)),
-    linear-gradient(var(--mark), var(--mark)), linear-gradient(var(--mark), var(--mark)),
-    linear-gradient(var(--mark), var(--mark)), linear-gradient(var(--mark), var(--mark)),
-    linear-gradient(var(--mark), var(--mark)), linear-gradient(var(--mark), var(--mark));
-  background-repeat: no-repeat;
-  background-size: 10px 1px, 1px 10px, 10px 1px, 1px 10px, 10px 1px, 1px 10px, 10px 1px, 1px 10px;
-  background-position: 0 0, 0 0, 100% 0, 100% 0, 0 100%, 0 100%, 100% 100%, 100% 100%;
-  box-shadow: var(--plate-bevel), inset 0 -1px 0 var(--ws-line-2);
-  transition: box-shadow var(--dur-instant) var(--ease-sg);
-}
-/* Focus is drawn once, inside the square frame: a 1px background offset at the edge, then a 1px accent line
- * (the crop marks close into it). Nothing is drawn outside, so no edge of the column can clip it. */
-.ws2-composer:focus-within { --mark: transparent; box-shadow: inset 0 0 0 1px var(--ws-bg), inset 0 0 0 2px var(--ws-accent); }
-.ws2 .ws2-composer textarea.chat-input-field {
-  display: block; box-sizing: border-box; width: 100%; resize: none; border: 0; outline: none; background: none; box-shadow: none;
-  padding: 12px 16px 4px; font-family: var(--ws-sans); font-size: 15px; line-height: 1.6; color: var(--ws-ink); caret-color: var(--ws-accent);
-}
-/* The frame carries focus for mouse and keyboard alike, so the textarea draws no ring of its own. */
-.ws2 .ws2-composer textarea.chat-input-field:focus-visible { outline: none; }
-.ws2 .ws2-composer textarea.chat-input-field::placeholder { color: var(--ws-ink-3); }
-.ws2 .ws2-composer textarea.chat-input-field:disabled { opacity: .55; }
-.ws2-composer-row { display: flex; align-items: center; gap: 6px; padding: 4px 8px 8px 10px; min-width: 0; }
-.ws2 .ws2-composer-row > .ws2-model { margin-right: auto; }
-.ws2-send {
-  flex: none; height: 32px; min-width: 84px; padding: 0 20px 0 22px; border-radius: 0; font-family: var(--ws-serif-cjk); font-size: 14px; letter-spacing: .3em; font-weight: 600;
-  color: var(--ws-blade-ink) !important; background: var(--ws-blade) !important;
-  box-shadow: inset 3px 0 0 var(--ws-tick); clip-path: var(--ws-plate-cut); transition: filter .15s;
-}
-.ws2-send:hover:not(:disabled) { filter: brightness(1.1); }
-.ws2-send:disabled { color: var(--ws-ink-3) !important; background: rgba(255, 255, 255, .07) !important; box-shadow: none; }
-.ws2-interrupt { flex: none; height: 30px; padding: 0 12px; border-radius: 0; font-size: 12px; color: var(--ws-ink); box-shadow: inset 0 0 0 1px var(--ws-line-2); }
 
 .ws2 .ws2-model { min-width: 0; margin: 0; padding: 0; border: 0; background: none; }
 .ws2 .ws2-model .provider-controls { display: flex; align-items: center; gap: 2px; min-width: 0; flex-wrap: nowrap; background: none; border: 0; padding: 0; }
@@ -940,6 +834,7 @@
 .ws2-presence[data-presence='offline'] i { background: var(--ws-bad); }
 .ws2-presence-ticks { display: inline-flex; align-items: center; gap: 3px; }
 .ws2-presence-ticks b { display: block; width: 5px; height: 2px; background: var(--ws-accent); opacity: .16; animation: ws2-tick 1.2s steps(1, end) infinite; }
+@keyframes ws2-tick { 0% { opacity: 1; } 33.33%, 100% { opacity: .16; } }
 .ws2-presence-ticks b:nth-child(2) { animation-delay: .4s; }
 .ws2-presence-ticks b:nth-child(3) { animation-delay: .8s; }
 .ws2-presence[data-presence='voicing'] .ws2-presence-ticks b { animation-duration: 1.8s; }

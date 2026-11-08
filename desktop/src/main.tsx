@@ -16,6 +16,8 @@ import "./App.css";
 import "./workstation/workstation.css";
 // The drafting sheet under the workstation (design/references.md §4); after workstation.css so it can restyle it.
 import "./workstation/sheet.css";
+// The observation log and its composer, on the sheet.
+import "./workstation/log.css";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

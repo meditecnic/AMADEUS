@@ -1,4 +1,5 @@
 import React, { useLayoutEffect, useRef, useState } from 'react';
+import './parts.css';
 
 /*
  * Field parts of the drafting sheet, shared by the login and the workstation's composer so the two are one

@@ -260,18 +260,7 @@
 .sl-label span { position: relative; z-index: 1; transition: text-shadow .16s ease; }
 .sl-row.is-error .sl-label { --pl: var(--err); }
 
-/* The nameplate. Resting: only a ghost of its outline. Focused: the edge is drawn round from the cut corner,
- * then the plate is inked in paper white (red when refused), off register by a pixel, grain showing through. */
-.lp { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
-.lp path { vector-effect: non-scaling-stroke; }
-.lp-ghost { fill: none; stroke: rgba(241, 240, 235, .1); stroke-width: 1; }
-.lp-edge { fill: none; stroke: var(--pl); stroke-width: 1; stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset .1s ease-in, stroke .2s ease; }
-.lp-fill { fill: var(--pl); opacity: 0; transition: opacity .1s ease, fill .2s ease; }
-.lp-reg { opacity: 0; transition: opacity .1s ease; }
-.lp-reg.r { fill: rgba(255, 46, 96, .5); }
-.lp-reg.b { fill: rgba(70, 150, 255, .42); }
-.lp-inner { fill: none; stroke: rgba(11, 12, 14, .5); stroke-width: .75; opacity: 0; transition: opacity .1s ease; }
-
+/* The nameplate (drafting/parts.css): focused, it is inked in paper white, red when refused. */
 .sl-label.is-on { color: var(--blade-ink); transition: color .14s ease .17s; }
 .sl-label.is-on span { text-shadow: -.6px 0 rgba(255, 46, 96, .34), .6px 0 rgba(70, 150, 255, .3), 0 0 .5px rgba(11, 12, 14, .55); transition-delay: .17s; }
 .sl-label.is-on .lp-edge { stroke-dashoffset: 0; transition: stroke-dashoffset .22s cubic-bezier(.5, 0, .3, 1), stroke .2s ease; }
