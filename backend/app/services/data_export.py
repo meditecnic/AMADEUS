@@ -21,7 +21,10 @@ class _ZipSink:
         self.position = 0
 
     def write(self, chunk):
-        self.chunks.append(chunk)
+        # Deflate often buffers small JSON tokens without producing bytes.
+        # Do not send an empty ASGI body (and thread-pool hop) for each token.
+        if chunk:
+            self.chunks.append(chunk)
         self.position += len(chunk)
         return len(chunk)
 
