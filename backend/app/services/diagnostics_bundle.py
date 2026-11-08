@@ -41,7 +41,7 @@ def redact(text: str, secrets: list[str]) -> str:
     for secret in secrets:
         text = text.replace(secret, "[REDACTED]")
     text = re.sub(r"(?i)\bBearer\s+[^\s\"',;]+", "Bearer [REDACTED]", text)
-    text = re.sub(r"\b(?:sk-[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{20,}|[a-fA-F0-9]{64})\b", "[REDACTED]", text)
+    text = re.sub(r"\b(?:(?:sk-|tvly-|fc-|xai-|gh[pousr]_)[A-Za-z0-9_-]{8,}|AIza[A-Za-z0-9_-]{20,}|[a-fA-F0-9]{64})\b", "[REDACTED]", text)
     text = re.sub(r'''(?i)(["']?(?:api[_-]?key|(?:local[_-]?)?(?:api[_-]?)?token|password|passcode|authorization)["']?\s*[:=]\s*)[^\r\n]+''', r"\1[REDACTED]", text)
     text = re.sub(r'''(?i)[a-z]:[\\/]+Users[\\/]+[^\\/\r\n"<>|]+''', "%USERPROFILE%", text)
     # URLs may contain credentials in userinfo, paths, or query parameters.

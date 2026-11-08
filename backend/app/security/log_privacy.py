@@ -13,6 +13,6 @@ class ServerErrorCategory(logging.Filter):
 
 def configure_logging() -> None:
     logging.getLogger("uvicorn.error").addFilter(ServerErrorCategory())
-    # These clients log request URLs at INFO and headers at DEBUG.
-    for name in ("httpx", "httpcore"):
+    # Client debug logs can contain URLs, headers, or SQL bound values.
+    for name in ("httpx", "httpcore", "aiosqlite"):
         logging.getLogger(name).setLevel(logging.WARNING)
