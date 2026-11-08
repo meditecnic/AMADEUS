@@ -22,7 +22,7 @@ def _frames(queue):
     return [queue.get_nowait()[1] for _ in range(queue.qsize())]
 
 
-def _assert_logged(capsys, prefix, error_type="RuntimeError", *, include_text=True):
+def _assert_logged(capsys, prefix, error_type="RuntimeError", *, include_text=False):
     output = capsys.readouterr().out
     assert prefix in output
     assert error_type in output

@@ -17,9 +17,12 @@ from app.services.tts_sidecar import sidecar_supervisor
 from app.services.search import search_service
 from app.services.soul_engine import soul_engine
 from app.services.diagnostics import diagnostic_runtime
+from app.security.log_privacy import configure_logging
 from app.security.data_availability import DataAvailabilityMiddleware
 from app.services.data_relocation import RelocationMiddleware
 
+
+configure_logging()
 
 DIAGNOSTICS_SWEEP_INTERVAL_SECONDS = 24 * 60 * 60
 
@@ -77,9 +80,6 @@ async def lifespan(app: FastAPI):
     soul_engine.load_profiles()
     await asyncio.to_thread(diagnostic_runtime.start)
     print("[Database] SQLite initialized.")
-    print(f"DeepSeek Model: {config.DEEPSEEK_MODEL}")
-    print(f"GPT-SoVITS URL: {config.SOVITS_URL}")
-    print(f"Assets Directory: {config.ASSETS_DIR}")
     print(f"History Compress Threshold: {config.HISTORY_COMPRESS_THRESHOLD} rounds")
     
     # Initialize async TTS client (health check per-request, not at startup)

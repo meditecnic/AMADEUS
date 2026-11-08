@@ -1325,7 +1325,6 @@ def _migrate_v11_embeddings(connection: sqlite3.Connection) -> bool:
                 connection.rollback()
                 logging.getLogger(__name__).warning(
                     "Embedding upgrade deferred (%s); using lexical retrieval", type(exc).__name__,
-                    exc_info=True,
                 )
                 return False
             prepared.append((fact_id, version_no, EMBEDDING_MODEL, EMBEDDING_DIMENSION, blob))

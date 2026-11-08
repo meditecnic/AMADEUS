@@ -59,7 +59,7 @@ def _build_emotion_ref_map():
     ref_map = {}
     for emotion, path, prompt_text in entries:
         if not Path(path).exists():
-            print(f"[WARN] TTS reference audio not found for '{emotion}': {path}")
+            print(f"[WARN] TTS reference audio not found for '{emotion}'")
             print(f"[WARN] Set AMADEUS_REF_{emotion.upper()} env var to a valid WAV file path")
             ref_map[emotion] = None
         else:
@@ -150,7 +150,7 @@ def _peak_limit_wav(audio_bytes: bytes, threshold: int = 32000, target_peak: int
             wf.writeframes(new_raw)
         return buf.getvalue()
     except Exception as e:
-        print(f"[TTS peak-limit] skipped: {e}", flush=True)
+        print(f"[TTS peak-limit] skipped: {type(e).__name__}", flush=True)
         return audio_bytes
 
 
@@ -405,7 +405,7 @@ class TTSQueueManager:
                 try:
                     await cb(self._next_send_seq[session_id], item)
                 except Exception as e:
-                    print(f"[TTS Dispatch] callback error seq={self._next_send_seq[session_id]}: {e}", flush=True)
+                    print(f"[TTS Dispatch] callback error seq={self._next_send_seq[session_id]}: {type(e).__name__}", flush=True)
             self._next_send_seq[session_id] = self._next_send_seq.get(session_id, 0) + 1
 
     async def synthesize_and_queue(self, session_id: str, text: str, emotion_tag: str, sovits_url: str = None) -> int:

@@ -821,7 +821,7 @@ async def _select_v11_memory_supplement(
         logger.warning(
             "v11 prompt: memory supplement %s (%s); omitting MEMORY CANDIDATES",
             result.status,
-            str((result.diagnostics or {}).get("reason") or "unknown"),
+            "unavailable",
         )
         return None
     if not result.records or not result.ranked_items:

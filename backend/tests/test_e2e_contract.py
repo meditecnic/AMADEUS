@@ -859,6 +859,36 @@ class TestBackendE2EContract:
                     "happy", "surprised", "annoyed", "disappointed", "sad"}
         assert ALLOWED_EMOTIONS == expected
 
+    def test_fake_turn_logs_exclude_credentials_and_user_content(
+        self, mock_services, isolated_provider_credentials, monkeypatch, capsys, caplog,
+    ):
+        from app.security import local_transport
+
+        key = "sk-test-216-private-provider-value"
+        token = "216-private-local-token"
+        message = "216-private-user-message こんにちは"
+        isolated_provider_credentials.set("deepseek", key)
+        monkeypatch.setattr(local_transport, "LOCAL_API_TOKEN", token.encode("utf-8"))
+        with self.client.websocket_connect(
+            "/ws/chat?session_id=log-privacy-216",
+            subprotocols=[local_transport.LOCAL_WS_PROTOCOL, f"amadeus.token.{token}"],
+        ) as ws:
+            ws.send_json({"type": "auth", "protocol_version": 2, "client": "desktop"})
+            assert ws.receive_json()["type"] == "session.ready"
+            ws.send_json({"type": "chat.send", "content": message})
+            events = []
+            while True:
+                event = ws.receive_json()
+                events.append(event["type"])
+                if event["type"] in {"turn.completed", "error"}:
+                    break
+            assert "turn.completed" in events and "segment.ready" in events
+        captured = capsys.readouterr()
+        logs = captured.out + captured.err + caplog.text
+        assert "[DEBUG]" in logs
+        for private in (key, token, message, "Authorization"):
+            assert private not in logs
+
     def test_v2_chat_uses_turn_and_segment_events_without_legacy_chunks(self, mock_services):
         client = self.client
         with client.websocket_connect("/ws/chat?session_id=test_protocol_v2") as websocket:
