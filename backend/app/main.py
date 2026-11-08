@@ -11,7 +11,7 @@ from app.security.local_transport import HTTPOriginGuardMiddleware, LOCAL_ORIGIN
 from pydantic import BaseModel, SecretStr
 from typing import Optional
 from app import config
-from app.routers import asset_pack, auth, chat_ws, conversations, data, data_location, history, providers, system_api, voice_ws
+from app.routers import asset_pack, auth, chat_ws, conversations, data, data_location, diagnostics, history, providers, system_api, voice_ws
 from app.services.tts_queue import tts_manager
 from app.services.tts_sidecar import sidecar_supervisor
 from app.services.search import search_service
@@ -164,6 +164,7 @@ app.add_middleware(
 app.include_router(auth.router)
 app.include_router(data.router)
 app.include_router(data_location.router)
+app.include_router(diagnostics.router)
 app.include_router(chat_ws.router)
 app.include_router(history.router)
 app.include_router(system_api.router)
