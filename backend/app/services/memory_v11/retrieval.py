@@ -131,21 +131,22 @@ async def _load_version_embeddings(
             seen.add(key)
             keys.append(key)
 
-    # Match on (fact_id, version_no) pairs via OR chain — SQLite-friendly.
-    clauses = " OR ".join("(fact_id=? AND version_no=?)" for _ in keys)
-    params: list[Any] = []
-    for fact_id, version_no in keys:
-        params.extend([fact_id, version_no])
-
     db = await get_db(wl, "memory")
     try:
-        cur = await db.execute(
-            f"""SELECT fact_id, version_no, model, dimensions, vector
-                  FROM stable_fact_version_embeddings
-                 WHERE {clauses}""",
-            params,
-        )
-        rows = await cur.fetchall()
+        rows = []
+        # Bound both expression depth (<1000) and parameters (<999 on older
+        # SQLite builds). Each pair still uses the existing composite PK.
+        for start in range(0, len(keys), 400):
+            batch = keys[start:start + 400]
+            clauses = " OR ".join("(fact_id=? AND version_no=?)" for _ in batch)
+            params = [value for key in batch for value in key]
+            cur = await db.execute(
+                f"""SELECT fact_id, version_no, model, dimensions, vector
+                      FROM stable_fact_version_embeddings
+                     WHERE {clauses}""",
+                params,
+            )
+            rows.extend(await cur.fetchall())
     finally:
         await db.close()
 
