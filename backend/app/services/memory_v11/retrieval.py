@@ -14,7 +14,7 @@ import struct
 import unicodedata
 from datetime import datetime, timezone
 from functools import cmp_to_key
-from typing import Any, Protocol
+from typing import Any, NamedTuple, Protocol
 
 from app.db import get_db, normalize_identity_mode, normalize_worldline
 from app.services.memory_v11.contracts import (
@@ -375,7 +375,22 @@ def _cjk_chars(text: str) -> list[str]:
     return [ch for ch in text if unicodedata.category(ch).startswith("Lo")]
 
 
-def _meaningful_cjk_evidence(display_text: str, query: str) -> bool:
+class _LexicalQuery(NamedTuple):
+    normalized: str
+    chars: tuple[str, ...]
+    bigrams: tuple[str, ...]
+    words: tuple[str, ...]
+
+
+def _prepare_lexical_query(normalized: str) -> _LexicalQuery:
+    chars = tuple(_cjk_chars(normalized))
+    return _LexicalQuery(
+        normalized, chars, tuple(a + b for a, b in zip(chars, chars[1:])),
+        tuple(w for w in re.findall(r"[0-9a-z]+", normalized) if len(w) > 1),
+    )
+
+
+def _meaningful_cjk_evidence(display_text: str, query: str, *, _prepared: _LexicalQuery | None = None) -> bool:
     """Eligibility gate: a single shared bigram (e.g. 昨天) is NOT evidence.
 
     Eligible when any of:
@@ -387,21 +402,22 @@ def _meaningful_cjk_evidence(display_text: str, query: str) -> bool:
     The continuous ranking score stays in _lexical_relevance; this gate only
     decides whether an experience may enter at all.
     """
-    query_norm = _normalized_text(query)
+    query_norm = _prepared.normalized if _prepared is not None else _normalized_text(query)
     display_norm = _normalized_text(display_text)
     if not query_norm or not display_norm:
         return False
     if query_norm in display_norm:
         return True
 
-    words_q = [w for w in re.findall(r"[0-9a-z]+", query_norm) if len(w) > 1]
+    prepared = _prepared if _prepared is not None else _prepare_lexical_query(query_norm)
+    words_q = prepared.words
     words_h = {w for w in re.findall(r"[0-9a-z]+", display_norm)}
     if words_q and any(w in words_h for w in words_q):
         return True
 
-    cjk_q = _cjk_chars(query_norm)
+    cjk_q = prepared.chars
     cjk_h = _cjk_chars(display_norm)
-    bigrams_q = [a + b for a, b in zip(cjk_q, cjk_q[1:])]
+    bigrams_q = prepared.bigrams
     bigrams_h = {a + b for a, b in zip(cjk_h, cjk_h[1:])}
     matched_bigrams = {b for b in bigrams_q if b in bigrams_h}
     if len(matched_bigrams) >= 2:
@@ -414,7 +430,7 @@ def _meaningful_cjk_evidence(display_text: str, query: str) -> bool:
     )
 
 
-def _lexical_relevance(display_text: str, query: str) -> float:
+def _lexical_relevance(display_text: str, query: str, *, _prepared: _LexicalQuery | None = None) -> float:
     """Deterministic local CJK-aware relevance; no embeddings, no network.
 
     Exact normalized substring is the strongest signal (1.0). Otherwise the
@@ -422,18 +438,19 @@ def _lexical_relevance(display_text: str, query: str) -> float:
     overlap (0.4). Very short pure-CJK queries fall back to character overlap
     scaled at 0.5. Anything unrelated scores exactly 0.0.
     """
-    query_norm = _normalized_text(query)
+    query_norm = _prepared.normalized if _prepared is not None else _normalized_text(query)
     display_norm = _normalized_text(display_text)
     if not query_norm or not display_norm:
         return 0.0
     if query_norm in display_norm:
         return 1.0
 
-    cjk_q = _cjk_chars(query_norm)
+    prepared = _prepared if _prepared is not None else _prepare_lexical_query(query_norm)
+    cjk_q = prepared.chars
     cjk_h = _cjk_chars(display_norm)
-    bigrams_q = [a + b for a, b in zip(cjk_q, cjk_q[1:])]
+    bigrams_q = prepared.bigrams
     bigrams_h = {a + b for a, b in zip(cjk_h, cjk_h[1:])}
-    words_q = [w for w in re.findall(r"[0-9a-z]+", query_norm) if len(w) > 1]
+    words_q = prepared.words
     words_h = {w for w in re.findall(r"[0-9a-z]+", display_norm)}
 
     if bigrams_q or words_q:
@@ -488,6 +505,8 @@ async def select_experience_candidates(
     finally:
         await db.close()
 
+    # Query features are identical for every row; keep them local to this read.
+    prepared_query = _prepare_lexical_query(_normalized_text(query))
     eligible: list[dict[str, Any]] = []
     for row in rows:
         expires_at = row["expires_at"]
@@ -499,9 +518,9 @@ async def select_experience_candidates(
                 # Unparseable expiry: fail closed, never inject.
                 continue
         display = str(row["display_text"] or "")
-        if not _meaningful_cjk_evidence(display, query):
+        if not _meaningful_cjk_evidence(display, query, _prepared=prepared_query):
             continue
-        relevance = _lexical_relevance(display, query)
+        relevance = _lexical_relevance(display, query, _prepared=prepared_query)
         if relevance <= 0.0:
             continue
         eligible.append(
