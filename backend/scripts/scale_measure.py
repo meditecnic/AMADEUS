@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from contextlib import closing
 import json
 import os
@@ -193,7 +193,10 @@ def sample(root, launched):
                     assert ready.wait(60), f"{name} never admitted"
                     latencies = [turn()]
                     while not future.done():
-                        latencies.append(turn())
+                        try:
+                            future.result(timeout=1)
+                        except FutureTimeout:
+                            latencies.append(turn())
                     value = future.result()
                 stop.set()
                 metrics[name + "_loop_lag"] = probe.result(timeout=10)
