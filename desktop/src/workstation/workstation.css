@@ -140,7 +140,7 @@
 .ws2-tool:hover .dl-teeth { transform: rotate(22.5deg); }
 /* the open page's key, ringed by hand (the pencil skips the paper's pits, as the current conversation's line does) */
 .ws2-ring {
-  position: absolute; left: 50%; top: 50%; width: 40px; height: 40px; margin: -20px 0 0 -20px; overflow: visible; pointer-events: none;
+  position: absolute; left: 50%; top: 50%; translate: -50% -50%; overflow: visible; pointer-events: none;
   -webkit-mask: url('/assets/sheet/tooth.webp') 0 0 / 256px 256px repeat; mask: url('/assets/sheet/tooth.webp') 0 0 / 256px 256px repeat;
 }
 .ws2-ring path { fill: none; stroke: #d8343b; stroke-width: 1.5; stroke-linecap: round; opacity: .9; stroke-dasharray: 1; stroke-dashoffset: 1; animation: ds-draw .5s cubic-bezier(.5, 0, .3, 1) forwards; }
@@ -267,13 +267,16 @@
 
 /* ---------- sessions column (restyles HistorySidebar) ---------- */
 
+/* The session list is the sheet's index. Conversations hang on one worldline spine, the newest at the top, each a slot
+ * as the original's save screen sets them: its number and when, joined by a dot leader, over its title. The open
+ * one has its number ringed in red pencil; NEW marks a reply that landed after you last had it open. The column ends
+ * on the sheet's frame. */
 .ws2-side { grid-column: 1; grid-row: 2; position: relative; z-index: 2; min-height: 0; overflow: hidden; border-right: 1px solid var(--ws-rule); }
 /* Both states keep a fixed width and the column clips them, so a width change never reflows titles or slides the rail nodes. */
-.ws2 .grid-history { display: flex; flex-direction: column; height: 100%; width: 256px; box-sizing: border-box; min-width: 0; transition: none; padding: 6px 12px 16px 16px; background: none; border: 0; box-shadow: none; }
-.ws2 .grid-history.collapsed { width: 60px; padding: 6px 0; align-items: center; }
+.ws2 .grid-history { display: flex; flex-direction: column; height: 100%; width: 256px; box-sizing: border-box; min-width: 0; transition: none; padding: 10px 12px calc(var(--fr-foot) + 8px) 16px; background: none; border: 0; box-shadow: none; }
+.ws2 .grid-history.collapsed { width: 60px; padding: 10px 0 calc(var(--fr-foot) + 8px); align-items: center; }
 /* Spine first, then nodes and rows in a sibling cascade capped at eight steps, so a long list lands promptly. */
-.ws2 .grid-history:not(.collapsed) > :is(.conversation-search-wrap, .history-sidebar-footer) { animation: ws2-side-in var(--dur-panel) var(--ease-main) calc(var(--dur-instant) * .66) backwards; }
-.ws2 .grid-history:not(.collapsed) .history-sidebar-footer { animation-delay: calc(var(--dur-instant) * 2.66); }
+.ws2 .grid-history:not(.collapsed) > :is(.conversation-search-wrap, .history-new-btn) { animation: ws2-side-in var(--dur-panel) var(--ease-main) calc(var(--dur-instant) * .66) backwards; }
 .ws2 .grid-history:not(.collapsed) .history-session-list::before { transform-origin: top; animation: ws2-spine var(--dur-page) var(--ease-sg) backwards; }
 .ws2 .grid-history:not(.collapsed) .conversation-item::before { animation: ws2-node-in var(--dur-base) var(--ease-main) calc(var(--dur-instant) * (.66 + .5 * min(var(--i, 0), 8))) backwards; }
 .ws2 .grid-history:not(.collapsed) :is(.conversation-select, .conversation-actions) { animation: ws2-side-in var(--dur-base) var(--ease-main) calc(var(--dur-instant) * (1.16 + .5 * min(var(--i, 0), 8))) backwards; }
@@ -282,7 +285,19 @@
 @keyframes ws2-node-in { from { opacity: 0; transform: scale(.2); } }
 @keyframes ws2-spine { from { transform: scaleY(0); } }
 .ws2 .history-sidebar-header { display: none; }
-.ws2 .conversation-search-wrap { position: relative; padding: 0 0 10px; }
+
+/* Search: a slot like the composer's, a floor with end ticks that the pen sweeps in when you write. */
+.ws2 .conversation-search-wrap {
+  position: relative; margin: 0 0 10px 6px; padding: 0; border-bottom: 1px solid var(--ws-line-2);
+  background: linear-gradient(var(--ws-line-2), var(--ws-line-2)) 0 100% / 1px 7px no-repeat, linear-gradient(var(--ws-line-2), var(--ws-line-2)) 100% 100% / 1px 7px no-repeat;
+}
+.ws2 .conversation-search-wrap::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; background: var(--ws-ink); pointer-events: none;
+  transform: scaleX(0); transform-origin: left; transition: transform .32s cubic-bezier(.6, 0, .2, 1);
+}
+.ws2 .conversation-search-wrap:focus-within::after { transform: none; }
+.ws2 .ws2-lens { position: absolute; left: 3px; top: 9px; width: 14px; height: 14px; fill: none; stroke: var(--ws-ink-3); stroke-width: 1.3; stroke-linecap: round; pointer-events: none; transition: stroke .15s; }
+.ws2 .conversation-search-wrap:focus-within .ws2-lens { stroke: var(--ws-ink); }
 .ws2 .conversation-search-wrap.has-query .conversation-search { padding-right: 28px; }
 .ws2 .conversation-search-clear {
   position: absolute; right: 2px; top: 5px; display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0;
@@ -291,34 +306,63 @@
 .ws2 .conversation-search-clear:hover { color: var(--ws-ink); background: rgba(255, 255, 255, .06); }
 .ws2 .conversation-search-clear:focus-visible { color: var(--ws-ink); outline: 1.5px solid var(--ws-accent); outline-offset: 0; }
 .ws2 .conversation-search {
-  width: 100%; height: 32px; padding: 0 4px; border-radius: 0; border: 0; border-bottom: 1px solid var(--ws-line-2); background: none;
-  font-size: 12.5px; color: var(--ws-ink); box-shadow: none; font-family: var(--ws-sans);
+  width: 100%; height: 32px; padding: 0 4px 0 25px; border-radius: 0; border: 0; background: none; box-shadow: none;
+  font-family: var(--ws-sans); font-size: 12.5px; letter-spacing: .04em; color: var(--ws-ink);
 }
 .ws2 .conversation-search::placeholder { color: var(--ws-ink-3); }
-.ws2 .conversation-search:focus { border-bottom-color: var(--ws-accent); outline: none; }
-/* One focus line, not a frame around a line: the underline thickens to 2px in the accent (no layout shift). */
-.ws2 .conversation-search:focus-visible { outline: none; box-shadow: 0 1px 0 var(--ws-accent); }
-/* Sessions hang on one worldline spine: each is a node (observation) on the line, the open one glows. */
-.ws2 .history-session-list { position: relative; flex: 1; min-height: 0; padding: 0; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--ws-line-2) transparent; }
-.ws2 .history-session-list::before { content: ''; position: absolute; left: 14px; top: 6px; bottom: 6px; width: 1px; background: linear-gradient(180deg, var(--ws-line-2), var(--ws-line) 70%, transparent); pointer-events: none; }
-.ws2 .conversation-item { position: relative; display: flex; align-items: center; gap: 4px; margin: 0; padding: 0 4px 0 0; border: 0; border-radius: 0; background: none; transition: background var(--dur-compat-150) var(--ease-compat); }
+.ws2 .conversation-search:is(:focus, :focus-visible) { outline: none; box-shadow: none; }
+
+/* A new conversation is a new node at the head of the spine: a ring with a cross in it, the spine running on below. */
+.ws2 .history-new-btn {
+  position: relative; flex: none; display: flex; align-items: center; justify-content: flex-start; gap: 13px; width: auto; height: 36px; margin: 0; padding: 0 8px 0 4px;
+  border: 0; border-radius: 0; background: none; color: var(--ws-ink-2);
+  font-family: var(--ws-serif-cjk); font-size: 13.5px; letter-spacing: .18em; transition: color .15s;
+}
+.ws2 .history-new-btn::after { content: ''; position: absolute; left: 14px; top: 28px; bottom: 0; width: 1px; background: var(--ws-line-2); pointer-events: none; }
+.ws2 .ws2-new-node { flex: none; width: 20px; height: 20px; overflow: visible; fill: var(--ws-bg); stroke: var(--ws-ink-3); stroke-width: 1.1; transition: stroke .15s; }
+.ws2 .ws2-new-node path { fill: none; stroke-linecap: round; transform-box: fill-box; transform-origin: center; transition: transform .35s cubic-bezier(.3, 1.4, .5, 1); }
+.ws2 :is(.history-new-btn, .history-sidebar-icon.add):hover:not(:disabled) { color: var(--ws-ink); }
+.ws2 :is(.history-new-btn, .history-sidebar-icon.add):hover:not(:disabled) .ws2-new-node { stroke: var(--ws-ink); }
+.ws2 :is(.history-new-btn, .history-sidebar-icon.add):hover:not(:disabled) .ws2-new-node path { transform: rotate(90deg); }
+.ws2 :is(.history-new-btn, .history-sidebar-icon.add):disabled { opacity: .45; }
+
+/* the list and its spine */
+.ws2 .history-session-list { position: relative; flex: 1; min-height: 0; padding: 0 0 6px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--ws-line-2) transparent; }
+.ws2 .history-session-list::before { content: ''; position: absolute; left: 14px; top: 0; bottom: 6px; width: 1px; background: linear-gradient(180deg, var(--ws-line-2), var(--ws-line) 70%, transparent); pointer-events: none; }
+.ws2 .conversation-item { position: relative; display: flex; align-items: flex-start; gap: 2px; margin: 0; padding: 0 2px 0 0; border: 0; border-radius: 0; background: none; transition: background var(--dur-compat-150) var(--ease-compat); }
+/* each conversation's node on the spine, level with its number */
 .ws2 .conversation-item::before {
-  content: ''; position: absolute; left: 11px; top: 15px; width: 7px; height: 7px; border-radius: 50%;
+  content: ''; position: absolute; left: 11px; top: 12.5px; width: 7px; height: 7px; border-radius: 50%;
   background: var(--ws-bg); box-shadow: inset 0 0 0 1px var(--ws-ink-3); transition: box-shadow .2s, background .2s, transform .2s;
 }
-.ws2 .conversation-item:is(:hover, [data-state='open'], :has(.conversation-more[data-state='open'])) { background: linear-gradient(90deg, transparent 25px, rgba(255, 255, 255, .035) 25px); }
+.ws2 .conversation-item:is(:hover, [data-state='open'], :has(.conversation-more[data-state='open'])) { background: linear-gradient(90deg, transparent 25px, rgba(255, 255, 255, .03) 25px); }
 .ws2 .conversation-item:is(:hover, [data-state='open'], :has(.conversation-more[data-state='open']))::before { box-shadow: inset 0 0 0 1px var(--ws-ink); }
 .ws2 .conversation-item.active { background: none; box-shadow: none; }
-.ws2 .conversation-active-plate { position: absolute; top: 0; right: 0; bottom: 0; left: 25px; background: rgba(var(--ws-accent-rgb), .07); pointer-events: none; }
+.ws2 .conversation-active-plate { position: absolute; top: 0; right: 0; bottom: 0; left: 25px; background: rgba(var(--ws-accent-rgb), .05); pointer-events: none; }
 .ws2 .conversation-item > :not(.conversation-active-plate) { position: relative; }
-.ws2 .conversation-item.active::before { background: var(--ws-accent); box-shadow: 0 0 0 3px rgba(var(--ws-accent-rgb), .18), 0 0 10px var(--ws-accent); transform: scale(1.1); }
-/* A pinned session hangs on the spine as a diamond, the same mark as the ◆ before its title. */
-.ws2 .conversation-item.pinned::before { border-radius: 0; rotate: 45deg; width: 6px; height: 6px; left: 11.5px; top: 15.5px; }
+.ws2 .conversation-item.active::before { background: var(--ws-accent); box-shadow: 0 0 0 3px rgba(var(--ws-accent-rgb), .16), 0 0 9px var(--ws-accent); }
+/* A pinned conversation hangs on the spine as a diamond. */
+.ws2 .conversation-item.pinned::before { border-radius: 0; rotate: 45deg; width: 6px; height: 6px; left: 11.5px; top: 13px; }
 .ws2 .conversation-item.pinned:not(.active)::before { box-shadow: inset 0 0 0 1px rgba(var(--ws-accent-rgb), .7); }
 .ws2 .conversation-item.pinned:not(.active):is(:hover, [data-state='open'], :has(.conversation-more[data-state='open']))::before { box-shadow: inset 0 0 0 1px var(--ws-accent); }
-.ws2 .conversation-select { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 6px 8px 33px; text-align: left; background: none; border: 0; }
-.ws2 .conversation-title { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; color: var(--ws-ink-2); }
-.ws2 .conversation-item.active .conversation-title, .ws2 .conversation-item:is(:hover, [data-state='open'], :has(.conversation-more[data-state='open'])) .conversation-title { color: var(--ws-ink); }
+.ws2 .conversation-pin { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.ws2 .conversation-select { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: stretch; gap: 4px; padding: 9px 2px 10px 33px; text-align: left; background: none; border: 0; }
+/* the slot's head: number, dot leader, who you are in it, when */
+.ws2 .conversation-slot {
+  display: flex; align-items: baseline; gap: 6px; min-width: 0; height: 14px;
+  font-family: var(--ws-mono); font-size: 10px; line-height: 14px; letter-spacing: .06em; color: var(--ws-ink-3); font-variant-numeric: tabular-nums;
+}
+.ws2 .conversation-no { position: relative; flex: none; letter-spacing: .08em; transition: color .15s; }
+.ws2 .conversation-no .ws2-ring path { stroke-width: 1.3; }
+.ws2 .conversation-leader { flex: 1; min-width: 10px; height: 1px; align-self: center; margin-top: 2px; background: repeating-linear-gradient(90deg, var(--ws-ink-3) 0 1px, transparent 1px 4px); opacity: .5; }
+.ws2 .identity-mode-badge { flex: none; padding: 0; border: 0; background: none; font-family: var(--ws-sans); font-size: 10.5px; letter-spacing: .1em; color: var(--ws-ink-3); }
+.ws2 .conversation-sep { flex: none; }
+.ws2 .conversation-slot time { flex: none; }
+.ws2 .conversation-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ws2 .conversation-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; line-height: 20px; color: var(--ws-ink-2); transition: color .15s; }
+.ws2 .conversation-item.active :is(.conversation-title, .conversation-no), .ws2 .conversation-item:is(:hover, [data-state='open'], :has(.conversation-more[data-state='open'])) .conversation-title { color: var(--ws-ink); }
+/* a reply you have not seen: a small stamped tag, as the original's tips mark a new entry */
+.ws2 .conversation-new { flex: none; padding: 2px 4px 2px 5px; font: 500 8.5px/1 var(--ws-mono); letter-spacing: .16em; color: var(--ws-accent); box-shadow: inset 0 0 0 1px var(--ws-accent); }
 /* Rename in place: the row opens into a field with room around it (the "…" steps aside); Enter saves,
    Esc or a click elsewhere restores. One frame marks it — no focus ring on top. */
 .ws2 .conversation-select.is-editing { cursor: text; gap: 6px; padding: 9px 4px 10px 33px; }
@@ -333,8 +377,7 @@
 .ws2 .conversation-rename[readonly] { color: var(--ws-ink-2); }
 .ws2 .conversation-rename-error { margin-left: -9px; font-size: 11px; letter-spacing: .04em; color: var(--ws-bad); }
 .ws2 .conversation-meta { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .04em; color: var(--ws-ink-3); }
-.ws2 .identity-mode-badge { color: var(--ws-ink-2); background: none; border: 0; padding: 0; }
-.ws2 .conversation-actions { position: relative; display: flex; gap: 0; opacity: 0; transition: opacity .15s; }
+.ws2 .conversation-actions { position: relative; display: flex; gap: 0; margin-top: 5px; opacity: 0; transition: opacity .15s; }
 .ws2 .conversation-item:hover .conversation-actions, .ws2 .conversation-item:focus-within .conversation-actions,
 .ws2 .conversation-item.active .conversation-actions, .ws2 .conversation-actions:has([data-state='open']), .ws2 .conversation-item[data-state='open'] .conversation-actions { opacity: 1; }
 .ws2 .conversation-more { display: inline-grid; place-items: center; width: 26px; height: 26px; padding: 0; border-radius: 0; color: var(--ws-ink-3); background: none; border: 0; }
@@ -367,9 +410,6 @@
 .ws2 .ws2-menu-item[data-highlighted] .ws2-menu-key { color: inherit; opacity: .7; }
 .ws2 .ws2-menu-sep { height: 1px; margin: 5px 0; background: var(--ws-line); }
 @media (prefers-reduced-motion: reduce) { .ws2 .ws2-menu { animation: none; } }
-.ws2 .conversation-pin { color: var(--ws-accent); font-size: 9px; vertical-align: 1px; }
-.ws2 .history-sidebar-icon.pinned { border-color: rgba(var(--ws-accent-rgb), .35); }
-.ws2 .history-sidebar-icon.add { border-style: dashed; color: var(--ws-ink-2); }
 
 /* selected-model verification */
 .ws2-check { margin: 0 0 18px; padding-bottom: 6px; }
@@ -557,30 +597,41 @@
 }
 .ws2-dialog-confirm.danger { background: var(--ws-bad) !important; color: #140605 !important; }
 .ws2-dialog :is(button):disabled { opacity: .5; }
-.ws2 .history-empty-tip { padding: 12px; font-size: 12.5px; color: var(--ws-ink-3); }
-.ws2 .history-retry { display: block; margin-top: 8px; padding: 4px 8px; font: inherit; color: var(--ws-ink-2); background: transparent; border: 1px solid var(--ws-line); cursor: pointer; }
-.ws2 .history-retry:focus-visible { outline: 1px solid var(--ws-accent); outline-offset: 2px; }
-.ws2 .list-refresh-error { display: flex; align-items: center; gap: 8px; padding: 6px 0; color: var(--ws-ink-3); font-size: 12px; }
-.ws2 .list-refresh-error .history-retry { margin-top: 0; }
-.ws2 .history-sidebar-footer { padding-top: 10px; border-top: 1px solid var(--ws-line); }
-.ws2 .history-new-btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; height: 34px; border-radius: 0; border: 1px dashed var(--ws-line-2); background: none; color: var(--ws-ink-2); font-size: 13px; letter-spacing: .12em; }
-.ws2 .history-new-btn:hover:not(:disabled) { color: var(--ws-ink); border-color: rgba(var(--ws-accent-rgb), .5); background: rgba(var(--ws-accent-rgb), .05); }
-/* Collapsed rail = the same worldline spine, nodes only (title on hover / aria-label). */
+/* An empty slot on the spine, as the original's save screen shows one: a hollow node, then what is missing. A list
+   that failed to load gets a cross for its node; the retry is the log's outline plate. */
+.ws2 .history-empty-tip { position: relative; padding: 9px 4px 10px 33px; text-align: left; }
+.ws2 .history-empty-tip::before {
+  content: ''; position: absolute; left: 10.5px; top: 12px; width: 8px; height: 8px; border-radius: 50%; background: var(--ws-bg);
+  box-shadow: none; outline: 1px dashed var(--ws-ink-3); outline-offset: -1px;
+}
+.ws2 .history-empty-tip.is-failed::before {
+  outline: 0; border-radius: 0;
+  background: linear-gradient(45deg, transparent 44%, var(--ws-bad) 44% 56%, transparent 56%), linear-gradient(-45deg, var(--ws-bg) 44%, var(--ws-bad) 44% 56%, var(--ws-bg) 56%);
+}
+.ws2 .history-empty-head { display: block; font-size: 13.5px; line-height: 20px; color: var(--ws-ink-2); }
+.ws2 .history-empty-tip.is-failed .history-empty-head { color: var(--ws-ink); }
+.ws2 .history-empty-sub { margin: 4px 0 0; font-size: 11px; line-height: 1.65; color: var(--ws-ink-3); text-wrap: pretty; }
+.ws2 .history-empty-tip .history-retry { margin-top: 10px; }
+.ws2 .list-refresh-error { position: relative; display: flex; align-items: center; gap: 10px; padding: 4px 4px 10px 33px; font-size: 11.5px; letter-spacing: .04em; color: var(--ws-warn); }
+/* Collapsed rail = the same worldline spine: the new node at its head, then a node for each conversation (its number
+   and title on hover), the open one ringed in pencil; the rest are counted under them. */
 .ws2 .grid-history.collapsed { justify-content: flex-start; }
-.ws2 .history-sidebar-icons { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 2px; padding-top: 4px; }
-.ws2 .history-sidebar-icons::before { content: ''; position: absolute; left: 50%; top: 44px; bottom: 0; width: 1px; background: linear-gradient(180deg, var(--ws-line-2), transparent); pointer-events: none; }
-.ws2 .history-sidebar-icon { position: relative; width: 34px; height: 34px; border-radius: 0; border: 1px solid var(--ws-line); background: none; color: var(--ws-ink-2); font-size: 12px; }
-.ws2 .history-sidebar-icon.add { margin: 0 0 8px; border-style: dashed; }
-.ws2 .history-sidebar-icon:not(.add) { height: 26px; font-size: 0; border: 0; }
+.ws2 .history-sidebar-icons { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 2px; padding-top: 2px; }
+.ws2 .history-sidebar-icons::before { content: ''; position: absolute; left: 50%; top: 30px; bottom: 0; width: 1px; background: linear-gradient(180deg, var(--ws-line-2), transparent); pointer-events: none; }
+.ws2 .history-sidebar-icon { position: relative; display: grid; place-items: center; width: 34px; height: 26px; padding: 0; border: 0; border-radius: 0; background: none; color: var(--ws-ink-2); font-size: 0; }
+.ws2 .history-sidebar-icon.add { height: 30px; margin: 0 0 6px; }
 .ws2 .history-sidebar-icon:not(.add)::before {
   content: ''; position: absolute; left: 50%; top: 50%; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%;
   background: var(--ws-bg); box-shadow: inset 0 0 0 1px var(--ws-ink-3); transition: box-shadow .2s, background .2s, transform .2s;
 }
 .ws2 .history-sidebar-icon.pinned:not(.add)::before { border-radius: 1px; transform: rotate(45deg); }
 .ws2 .history-sidebar-icon:not(.add):hover::before { box-shadow: inset 0 0 0 1px var(--ws-ink); transform: scale(1.25); }
-.ws2 .history-sidebar-icon.active:not(.add)::before { background: var(--ws-accent); box-shadow: 0 0 0 3px rgba(var(--ws-accent-rgb), .18), 0 0 10px var(--ws-accent); }
-.ws2 .history-sidebar-icon.active { color: var(--ws-ink); }
-.ws2 .history-sidebar-icon:hover { color: var(--ws-ink); }
+.ws2 .history-sidebar-icon.pinned:not(.add):hover::before { transform: rotate(45deg) scale(1.25); }
+.ws2 .history-sidebar-icon.active:not(.add)::before { background: var(--ws-accent); box-shadow: 0 0 0 3px rgba(var(--ws-accent-rgb), .16), 0 0 9px var(--ws-accent); }
+/* a reply you have not seen: a tick beside the node */
+.ws2 .history-sidebar-icon.is-new::after { content: ''; position: absolute; left: calc(50% + 7px); top: calc(50% - 7px); width: 5px; height: 5px; background: var(--ws-accent); clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
+.ws2 .history-rail-more { margin-top: 6px; padding: 3px 4px; border: 0; background: none; font: 10px/1 var(--ws-mono); letter-spacing: .06em; color: var(--ws-ink-3); }
+.ws2 .history-rail-more:hover { color: var(--ws-ink); }
 
 /* ---------- conversation ---------- */
 

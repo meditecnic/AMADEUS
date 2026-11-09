@@ -198,11 +198,11 @@ describe('Workstation provider runtime changes', () => {
 
     render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
     fireEvent.click(screen.getAllByRole('button', { name: '展开会话列表' })[0]);
-    expect(await screen.findByText('> 会话列表加载失败')).toBeInTheDocument();
-    expect(screen.queryByText('> 暂无会话')).not.toBeInTheDocument();
+    expect(await screen.findByText('会话列表加载失败')).toBeInTheDocument();
+    expect(screen.queryByText('暂无会话')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '重试' }));
     expect(await screen.findByText('Default Conversation')).toBeInTheDocument();
-    expect(screen.queryByText('> 会话列表加载失败')).not.toBeInTheDocument();
+    expect(screen.queryByText('会话列表加载失败')).not.toBeInTheDocument();
     expect(listRequests).toBe(2);
   });
 

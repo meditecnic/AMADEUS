@@ -9,7 +9,7 @@ type Reply = { status: number; body: unknown; delayMs?: number };
 type HistoryMessage = { role: string; content: string; translation?: string };
 type Conversation = {
   id: string; title: string; title_source: string; is_default: boolean; is_pinned: boolean;
-  provider_id: string; model_id: string; identity_mode: string; last_active_at: string;
+  provider_id: string; model_id: string; identity_mode: string; last_active_at: string; created_at: string;
   messages: HistoryMessage[];
 };
 const ok = (body: unknown, status = 200): Reply => ({ status, body });
@@ -44,9 +44,12 @@ export function createMockRuntime() {
     const key = JSON.stringify([session, worldline]);
     let rows = scopes.get(key);
     if (!rows) {
-      rows = scenarios[name].conversations.filter(row => row.worldline === worldline).map(row => ({
+      const listed = scenarios[name].conversations.filter(row => row.worldline === worldline);
+      rows = listed.map((row, index) => ({
         ...makeConversation(row.identity_mode), id: row.id, title: row.title,
         model_id: row.model_id ?? model.id,
+        // listed newest first: the first row was opened last
+        created_at: new Date(Date.parse(fixedTime) - (index + 1) * 3_600_000).toISOString(),
         messages: structuredClone(row.messages),
       }));
       scopes.set(key, rows);
@@ -58,7 +61,7 @@ export function createMockRuntime() {
     return {
       id: `mock-conversation-${++counter}`, title: '新会话', title_source: 'auto',
       is_default: false, is_pinned: false, provider_id: 'deepseek', model_id: model.id,
-      identity_mode: identityMode, last_active_at: fixedTime, messages: [],
+      identity_mode: identityMode, last_active_at: fixedTime, created_at: new Date().toISOString(), messages: [],
     };
   }
 

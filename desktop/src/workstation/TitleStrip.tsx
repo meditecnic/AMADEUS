@@ -46,12 +46,37 @@ export function OpenSwitch() {
   );
 }
 
-/** A pencil loop round the glyph of the page that is open. Drawn in once on arrival. */
-export function PencilRing({ seed }: { seed: string }) {
-  const d = useMemo(() => pencilLoop(seed, 15.5, 13.5), [seed]);
+/**
+ * A pencil loop round what is current: the glyph of the open page here, the number of the open conversation in the
+ * list. Centred on its parent, one unit to the pixel; drawn in once on arrival.
+ */
+export function PencilRing({ seed, rx = 15.5, ry = 13.5 }: { seed: string; rx?: number; ry?: number }) {
+  const d = useMemo(() => pencilLoop(seed, rx, ry), [seed, rx, ry]);
+  const w = Math.ceil(rx + 6);
+  const h = Math.ceil(ry + 6);
   return (
-    <svg className="ws2-ring" viewBox="-20 -20 40 40" aria-hidden="true" focusable="false">
+    <svg className="ws2-ring" width={w * 2} height={h * 2} viewBox={`${-w} ${-h} ${w * 2} ${h * 2}`} aria-hidden="true" focusable="false">
       <path d={d} pathLength={1} />
+    </svg>
+  );
+}
+
+/** A new node on the worldline: a ring on the spine with a cross in it. */
+export function NewNode() {
+  return (
+    <svg className="ws2-new-node" viewBox="0 0 20 20" aria-hidden="true" focusable="false">
+      <circle cx="10" cy="10" r="7.5" />
+      <path d="M10 6.2V13.8M6.2 10H13.8" />
+    </svg>
+  );
+}
+
+/** The search glyph, drawn like the rest: a lens and its handle. */
+export function Lens() {
+  return (
+    <svg className="ws2-lens" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <circle cx="6.8" cy="6.8" r="4.6" />
+      <path d="M10.3 10.3L14 14" />
     </svg>
   );
 }

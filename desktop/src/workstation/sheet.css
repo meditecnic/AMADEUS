@@ -1,7 +1,6 @@
 /* The workstation on the login's drafting sheet (design/references.md §4).
  * Loaded after workstation.css. Paper (first-party generated textures, assets/PROVENANCE.md), the sheet's grid and
- * zone border, one large figure per worldline (DraftSheet.tsx), and the small parts: a note on an empty conversation,
- * a red pencil line under the current conversation, an operation guide under the composer.
+ * zone border, one large figure per worldline (DraftSheet.tsx), and a note taped on an empty conversation.
  */
 
 /* ---------- paper ---------- */
@@ -189,17 +188,6 @@
 .ws2[data-wl='beta'] .ws2-empty-tape.a::after { left: -7px; }
 .ws2[data-wl='beta'] .ws2-empty-tape.b::after { right: -7px; }
 
-/* ---------- the current conversation, underlined in red pencil ---------- */
-.ws2 .conversation-title { position: relative; overflow: visible; }
-.ws2 .conversation-select { overflow: hidden; }
-/* the pencil skips the pits of the paper (a tooth mask cut from the same grain as the sheet) */
-.conversation-mark {
-  position: absolute; left: -3px; right: -2px; bottom: -6px; width: calc(100% + 5px); height: 9px; overflow: visible; pointer-events: none;
-  -webkit-mask: url('/assets/sheet/tooth.webp') 0 0 / 256px 256px repeat; mask: url('/assets/sheet/tooth.webp') 0 0 / 256px 256px repeat;
-}
-.conversation-mark path { fill: none; stroke: #d8343b; stroke-width: 2; stroke-linecap: round; opacity: .85; vector-effect: non-scaling-stroke; stroke-dasharray: 1; stroke-dashoffset: 1; animation: ds-draw .42s cubic-bezier(.5, 0, .3, 1) .08s forwards; }
-.ws2[data-wl='beta'] .conversation-mark path { stroke: #e3542a; }
-
 @media (prefers-reduced-motion: reduce) {
-  .ws2 .ds-plate *, .conversation-mark path { animation: none !important; stroke-dashoffset: 0 !important; }
+  .ws2 .ds-plate * { animation: none !important; stroke-dashoffset: 0 !important; }
 }
