@@ -8,6 +8,38 @@ export function polar(r: number, deg: number): [number, number] {
 }
 const pt = (r: number, deg: number) => polar(r, deg).join(' ');
 
+/**
+ * A loop drawn round something in pencil, as the original's settings page rings its choice in red: once round and a
+ * little over, starting low on the left, the radius wandering. Seeded, so each mark keeps its own stroke. Centred on 0.
+ */
+export function pencilLoop(seed: string, rx: number, ry: number) {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 16777619);
+  const rnd = (k: number) => ((h >>> ((k * 5) % 27)) & 31) / 31 - 0.5;
+  const n = 14;
+  const start = 2.35 + rnd(1) * 0.5;
+  const sweep = Math.PI * 2 + 0.6 + rnd(2) * 0.3;
+  const pts: [number, number][] = [];
+  for (let i = 0; i <= n; i++) {
+    const u = i / n;
+    const t = start + sweep * u;
+    // the hand wanders, and ends a little outside where it began
+    const k = (1 + 0.05 * Math.sin(t * 2 + rnd(3) * 6) + 0.03 * rnd(4 + (i % 5))) * (1 + 0.08 * u);
+    pts.push([rx * k * Math.cos(t), ry * k * Math.sin(t)]);
+  }
+  // a smooth line through them (Catmull-Rom as cubic Béziers)
+  let d = `M${f1(pts[0][0])} ${f1(pts[0][1])}`;
+  for (let i = 0; i < n; i++) {
+    const p0 = pts[Math.max(0, i - 1)];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[Math.min(n, i + 2)];
+    d += `C${f1(p1[0] + (p2[0] - p0[0]) / 6)} ${f1(p1[1] + (p2[1] - p0[1]) / 6)} `
+      + `${f1(p2[0] - (p3[0] - p1[0]) / 6)} ${f1(p2[1] - (p3[1] - p1[1]) / 6)} ${f1(p2[0])} ${f1(p2[1])}`;
+  }
+  return d;
+}
+
 /** Spur gear outline: straight flanks between root and tip circles, one tooth centred on 0°. */
 export function gearOutline(n: number, r: number, m = (2 * r) / n) {
   const ro = r + m * 0.92;

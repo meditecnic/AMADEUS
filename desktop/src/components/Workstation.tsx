@@ -1,5 +1,5 @@
 import { apiFetch } from '../apiBase';
-import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react';
 import { useReducedMotion } from '../design-system/useReducedMotion';
 import { useScrollPinning } from '../hooks/useScrollPinning';
 import {
@@ -50,13 +50,14 @@ import { SendSignal } from '../workstation/SendSignal';
 import { PresenceIndicator, ThinkingMark, PRESENCE_LABELS } from '../workstation/PresenceIndicator';
 import { ErrorText, checkShortLabel } from '../workstation/logParts';
 import { SendKey } from '../workstation/SendKey';
+import { Engram, GearDial, OpenSwitch, PencilRing } from '../workstation/TitleStrip';
+import { conversationNo, conversationNumbers } from '../workstation/numbering';
 import { VoiceScope } from '../workstation/VoiceScope';
 import { OverlayRootContext, Tip, TipProvider } from '../workstation/Tip';
 import { SelectionCopyMenu, TextFieldMenu } from '../workstation/menus';
 import { hearKeystroke } from '../workstation/voiceEnvelope';
 import { wsTransition } from '../workstation/motionTokens';
 import { MotionConfig, animate } from 'motion/react';
-import { LogOut } from 'lucide-react';
 import { ForgetConversationModal } from './ForgetConversationModal';
 import { MemorySpace, type MemoryLink, type MemorySpaceControl } from '../memory-space/MemorySpace';
 import { RecordedMarks, ReferencedMarks, type MemoryOpenRequest } from '../memory-space/ChatMarks';
@@ -992,6 +993,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
   }, [applyWebSearchSettings]);
 
   const activeConversation = conversations.find((row) => row.id === activeConversationId);
+  const conversationNos = useMemo(() => conversationNumbers(conversations), [conversations]);
+  const activeConversationNo = activeConversation ? conversationNos.get(activeConversation.id) : undefined;
   const activeProviderId = activeConversation?.provider_id || draftProviderId;
   const activeProvider = providers.find((provider) => provider.id === activeProviderId);
   const activeModelId = activeConversation?.model_id || model;
@@ -2048,17 +2051,24 @@ export const Workstation: React.FC<WorkstationProps> = ({
         </button>
         <div className="ws2-wordmark" aria-label="AMADEUS"><DraftWord key={worldline} text="AMADEUS" step={90} className={inkedLine.current === worldline ? 'is-inked' : ''} /></div>
         <span className="ws2-date">
-          <span className="d">{dateLabel}</span><b>{dayLabel}</b>
+          <span className="d">{dateLabel}</span><span className="dow">({dayLabel})</span>
         </span>
-        <span className="ws2-title">{activeConversation?.title ? <span className="t">{activeConversation.title}</span> : null}</span>
+        <span className="ws2-title">
+          {activeConversation?.title ? (
+            <>
+              {activeConversationNo ? <span className="no">{conversationNo(activeConversationNo)}</span> : null}
+              <span className="t">{activeConversation.title}</span>
+            </>
+          ) : null}
+        </span>
 
         <div className="ws2-top-right">
+          <Tip label={isMemoryOpen ? '回到对话（Esc）' : '记忆'}>
           <button
             type="button"
-            className={`ws2-memory-btn${isMemoryOpen ? ' is-on' : ''}`}
+            className={`ws2-tool is-memory${isMemoryOpen ? ' is-on' : ''}`}
             aria-label="MEMORY"
             aria-pressed={isMemoryOpen}
-            title={isMemoryOpen ? '回到对话（Esc）' : undefined}
             onClick={() => {
               if (isMemoryOpen) {
                 if (!memoryClosing) (memoryControlRef.current?.requestClose ?? closeMemory)();
@@ -2069,15 +2079,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
               setIsMemoryOpen(true);
             }}
           >
-            <svg className="ws2-engram" viewBox="0 0 32 32" width="22" height="22" aria-hidden="true">
-              <circle cx="16" cy="16" r="13" fill="none" stroke="currentColor" strokeWidth="1" strokeDasharray="62 20" transform="rotate(-40 16 16)" />
-              <circle cx="16" cy="16" r="8.5" fill="none" stroke="var(--ws-accent)" strokeWidth="1.2" strokeDasharray="36 18" transform="rotate(130 16 16)" />
-              <circle cx="16" cy="16" r="2.2" fill="var(--ws-accent-2)" />
-            </svg>
-            <span className="ws2-memory-zh" aria-hidden="true">记忆</span>
-            <span className="ws2-memory-en" aria-hidden="true">MEMORY</span>
-            {isMemoryOpen ? <span className="ws2-memory-esc" aria-hidden="true">ESC</span> : null}
+            <span className="glyph"><Engram />{isMemoryOpen ? <PencilRing seed="memory" /> : null}</span>
+            <span className="word" aria-hidden="true">记忆</span>
           </button>
+          </Tip>
           <div className="ws2-booth-mid">
             <Tip
               className="is-meter"
@@ -2112,11 +2117,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
             </div>
           </div>
           <div className="ws2-booth-end">
-          <Tip label="系统设置">
+          <Tip label={isSettingsOpen ? '回到对话（Esc）' : '系统设置'}>
           <button
             type="button"
             ref={systemButtonRef}
-            className={`ws2-sys-btn${isSettingsOpen ? ' on' : ''}`}
+            className={`ws2-tool is-system${isSettingsOpen ? ' is-on' : ''}`}
             onClick={() => {
               audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume);
               if (isSettingsOpen) closeMenu(); else openMenu();
@@ -2124,12 +2129,13 @@ export const Workstation: React.FC<WorkstationProps> = ({
             aria-label="系统设置"
             aria-expanded={isSettingsOpen}
           >
-            {isSettingsOpen ? <>返回<kbd>Esc</kbd></> : '系统'}
+            <span className="glyph"><GearDial />{isSettingsOpen ? <PencilRing seed="system" /> : null}</span>
+            <span className="word" aria-hidden="true">系统</span>
           </button>
           </Tip>
           <Tip label="断开连接">
-          <button type="button" className="ws2-icon-btn" onClick={onLogout} aria-label="断开连接">
-            <LogOut size={16} strokeWidth={1.8} aria-hidden="true" />
+          <button type="button" className="ws2-icon-btn ws2-unplug" onClick={onLogout} aria-label="断开连接">
+            <OpenSwitch />
           </button>
           </Tip>
           </div>

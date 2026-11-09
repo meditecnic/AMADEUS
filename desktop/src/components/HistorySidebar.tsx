@@ -22,6 +22,8 @@ export interface ConversationSummary {
   /** Q20-A / Q21: set at create; immutable for the conversation lifetime. */
   identity_mode?: IdentityMode;
   last_active_at: string;
+  /** Set by the server at create; numbers the list (workstation/numbering.ts). */
+  created_at?: string;
 }
 
 /**

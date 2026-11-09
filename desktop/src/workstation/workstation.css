@@ -6,7 +6,6 @@
 /* These existing content dimensions include padding/borders outside the box.
  * Keep their geometry when the global border-box reset is introduced.
  */
-.ws2-top-right,
 .ws2-sys-body,
 .ws2-sys-item .pad,
 .ws2-m-row,
@@ -46,7 +45,6 @@
 /* Narrow windows keep the reading column: the expanded session list floats over it instead of taking grid width. */
 @media (max-width: 1239px) {
   .ws2 { --ws-side: 60px; }
-  .ws2-memory-en { display: none; }
   .ws2-top-right { gap: 12px; }
   .ws2:not(.rail) .ws2-side {
     position: absolute; top: 0; bottom: 0; left: 0; width: 256px; z-index: 8;
@@ -106,41 +104,67 @@
 .ws2-top { grid-column: 1 / -1; grid-row: 1; position: relative; z-index: 6; display: flex; align-items: center; gap: 16px; padding: 0 18px 0 14px; min-width: 0; }
 .ws2-icon-btn { display: inline-grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: 0; color: var(--ws-ink-2); transition: color .15s, background .15s; }
 .ws2-icon-btn:hover, .ws2-icon-btn.is-active { color: var(--ws-ink); background: rgba(255, 255, 255, .05); }
-.ws2-wordmark { font-family: var(--ws-serif); font-size: 21px; letter-spacing: .22em; white-space: nowrap; line-height: 1; padding-top: 2px; }
+/* the wordmark's cell is as wide as the session list, so the date's hairline carries on down as the list's edge */
+.ws2-wordmark { flex: none; width: 178px; font-family: var(--ws-serif); font-size: 21px; letter-spacing: .22em; white-space: nowrap; line-height: 1; padding-top: 2px; }
 .ws2[data-wl='beta'] .ws2-wordmark .draft { --draft-ink: #ffcf96; }
-/* The original's corner date "7/28 (WED)", unboxed: bare numerals after a hairline, the weekday as a small solid tag
- * cut from the same plate as the system key (SG paper white with a cyan tick, β copper with hex ends). */
-.ws2-date { display: inline-flex; align-items: center; gap: 9px; flex: none; height: 30px; padding-left: 18px; border-left: 1px solid var(--ws-line); white-space: nowrap; }
-.ws2-date .d { font-family: var(--ws-mono); font-weight: 300; font-size: 21px; line-height: 1; letter-spacing: .04em; color: var(--ws-ink); font-variant-numeric: tabular-nums; }
-.ws2-date b {
-  font-family: var(--ws-mono); font-weight: 500; font-size: 9.5px; line-height: 1; letter-spacing: .16em; padding: 4px 5px 3px 7px;
-  color: var(--ws-bg); background: var(--ws-ink); box-shadow: inset 2px 0 0 var(--ws-accent);
+/* The band is the sheet's top margin (the frame is drawn under it, sheet.css). Its cells stand on the frame's top edge:
+ * hairlines rise from it between the wordmark, the date, the conversation and the booth over the stage, and carry on
+ * down the sheet as the session list's edge and the stage seam. */
+.ws2-date, .ws2-title { position: relative; align-self: stretch; display: flex; align-items: center; }
+:is(.ws2-date, .ws2-title, .ws2-top-right)::before {
+  content: ''; position: absolute; left: 0; top: 12px; bottom: 0; width: 1px; background: var(--ws-rule); pointer-events: none;
 }
-.ws2[data-wl='beta'] .ws2-date b { padding: 4px 8px 3px; background: var(--ws-accent); box-shadow: none; clip-path: polygon(4px 0, calc(100% - 4px) 0, 100% 50%, calc(100% - 4px) 100%, 4px 100%, 0 50%); }
-.ws2-title { min-width: 0; overflow: hidden; white-space: nowrap; font-family: var(--ws-serif-cjk); font-size: 14px; letter-spacing: .08em; color: var(--ws-ink-2); padding-left: 18px; border-left: 1px solid var(--ws-line); }
-.ws2-title .t { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+.ws2-date::before { left: -1px; }
+/* The original's corner date, "7/28 (WED)": serif numerals and the weekday in brackets. */
+.ws2-date { flex: none; gap: 7px; padding: 0 20px 0 19px; white-space: nowrap; }
+.ws2-date .d { padding-top: 2px; font-family: var(--ws-serif); font-size: 25px; line-height: 1; letter-spacing: .02em; font-variant-numeric: lining-nums tabular-nums; color: var(--ws-ink); }
+.ws2-date .dow { padding-top: 5px; font-family: var(--ws-serif); font-size: 13.5px; line-height: 1; letter-spacing: .12em; color: var(--ws-ink-2); }
+.ws2[data-wl='beta'] .ws2-date .dow { color: var(--ws-accent); }
+/* The conversation on the sheet: its number in the list, then its title. */
+.ws2-title { flex: 1; min-width: 0; gap: 9px; margin-left: -16px; padding-left: 20px; overflow: hidden; white-space: nowrap; }
+.ws2-title .no { flex: none; padding-top: 2px; font-family: var(--ws-mono); font-size: 10.5px; letter-spacing: .1em; color: var(--ws-ink-3); font-variant-numeric: tabular-nums; }
+.ws2-title .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-family: var(--ws-serif-cjk); font-size: 15px; letter-spacing: .08em; color: var(--ws-ink); }
 .ws2-title .t::before { content: '「'; color: var(--ws-ink-3); }
 .ws2-title .t::after { content: '」'; color: var(--ws-ink-3); }
-.ws2-top-right { margin-left: auto; display: flex; align-items: center; gap: 16px; flex: none; }
 
-.ws2-memory-btn { display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px 0 6px; border-radius: 0; transition: background .2s, color .2s; }
-.ws2-memory-btn:hover { background: rgba(255, 255, 255, .05); }
-/* Static mark: the workstation keeps no decorative idle loops. */
-.ws2-engram { color: var(--ws-ink-2); }
-.ws2-memory-zh { font-size: 13px; letter-spacing: .1em; }
-.ws2-memory-en { font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .2em; color: var(--ws-ink-3); }
+/* MEMORY and SYSTEM, one pair (TitleStrip.tsx): a drawn glyph and a word. Pointing turns the glyph a little; the key
+ * whose page is open is ringed in pencil, and its tip says how to go back (the key again, or Esc). */
+.ws2-tool { position: relative; display: inline-flex; align-items: center; gap: 9px; height: 34px; padding: 0 8px 0 4px; color: var(--ws-ink-2); transition: color .15s ease; }
+.ws2-tool:hover, .ws2-tool.is-on { color: var(--ws-ink); }
+.ws2-tool .glyph { position: relative; flex: none; width: 24px; height: 24px; }
+.ws2-tool .glyph > svg:first-child { display: block; width: 100%; height: 100%; overflow: visible; }
+.ws2-tool .word { font-family: var(--ws-serif-cjk); font-size: 14px; line-height: 1; letter-spacing: .2em; margin-right: -.2em; }
+.ws2-tool :is(.eg-a, .eg-b, .dl-teeth) { transform-box: fill-box; transform-origin: center; transition: transform .5s cubic-bezier(.3, 1.4, .5, 1); }
+.ws2-tool:hover .eg-a { transform: rotate(-30deg); }
+.ws2-tool:hover .eg-b { transform: rotate(45deg); }
+.ws2-tool:hover .dl-teeth { transform: rotate(22.5deg); }
+/* the open page's key, ringed by hand (the pencil skips the paper's pits, as the current conversation's line does) */
+.ws2-ring {
+  position: absolute; left: 50%; top: 50%; width: 40px; height: 40px; margin: -20px 0 0 -20px; overflow: visible; pointer-events: none;
+  -webkit-mask: url('/assets/sheet/tooth.webp') 0 0 / 256px 256px repeat; mask: url('/assets/sheet/tooth.webp') 0 0 / 256px 256px repeat;
+}
+.ws2-ring path { fill: none; stroke: #d8343b; stroke-width: 1.5; stroke-linecap: round; opacity: .9; stroke-dasharray: 1; stroke-dashoffset: 1; animation: ds-draw .5s cubic-bezier(.5, 0, .3, 1) forwards; }
+.ws2[data-wl='beta'] .ws2-ring path { stroke: #e3542a; }
+/* disconnect: the switch opens a little further when pointed at */
+.ws2-switch { width: 24px; height: 24px; overflow: visible; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; }
+.ws2-switch circle { fill: var(--ws-bg); }
+.ws2-switch .blade { transform-box: view-box; transform-origin: 7.9px 15.4px; transition: transform .3s cubic-bezier(.3, 1.4, .5, 1); }
+.ws2-unplug:hover .ws2-switch .blade { transform: rotate(-14deg); }
+@media (prefers-reduced-motion: reduce) {
+  .ws2-tool :is(.eg-a, .eg-b, .dl-teeth), .ws2-switch .blade { transition: none; }
+  .ws2-ring path { animation: none; stroke-dashoffset: 0; }
+}
 @keyframes ws2-spin { to { transform: rotate(360deg); } }
 
 /* Space split: the reading side's header carries only identity (wordmark, date, session title);
  * the booth band above her head carries the instruments — Memory at the left, the divergence meter with
  * its link status centred, System and disconnect at the right. Nothing sits on her; the band is empty air. */
 .ws2-top { padding-right: calc(var(--ws-stage) + 16px); }
-.ws2-title { flex: 1; }
 .ws2-top-right {
   position: absolute; top: 0; right: 0; width: var(--ws-stage); height: 100%; margin: 0; padding: 0 14px 0 18px;
   display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 10px;
 }
-.ws2-top-right > .ws2-memory-btn { justify-self: start; }
+.ws2-top-right > .ws2-tool { justify-self: start; }
 .ws2-booth-mid { display: flex; flex-direction: column; align-items: center; gap: 2px; }
 .ws2-booth-end { justify-self: end; display: flex; align-items: center; gap: 6px; }
 .ws2-meter {
@@ -176,20 +200,11 @@
 @media (prefers-reduced-motion: reduce) { .ws2-tip { animation: none; } }
 .ws2-wl-tag { font-family: var(--ws-mono); font-size: 8px; letter-spacing: .3em; color: var(--ws-ink-3); }
 .ws2-online { display: flex; align-items: center; gap: 5px; font-family: var(--ws-mono); font-size: 8.5px; letter-spacing: .2em; color: var(--ws-bad); white-space: nowrap; }
-.ws2-top-right .ws2-memory-en { display: none; }
-@media (max-width: 1239px) { .ws2-top-right .ws2-memory-zh { display: none; } .ws2-memory-btn { padding: 5px; } }
 .ws2-online-dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
 .ws2-online.is-online { color: var(--ws-ok); }
 .ws2-online.is-sync { color: var(--ws-warn); }
 .ws2-online.is-sync .ws2-online-dot { animation: ws2-blink 1s steps(2) infinite; }
 @keyframes ws2-blink { 50% { opacity: .25; } }
-/* System key: the title menu's plate — SG an off-white slab with a short cyan tick, β a copper hex plate. */
-.ws2-sys-btn {
-  white-space: nowrap; display: inline-flex; align-items: center; gap: 8px; height: 30px; padding: 0 14px 0 16px;
-  font-family: var(--ws-serif-cjk); font-size: 14px; letter-spacing: .24em; color: var(--ws-blade-ink) !important; background: var(--ws-blade) !important;
-  box-shadow: inset 3px 0 0 var(--ws-tick); clip-path: var(--ws-plate-cut); transition: filter .15s;
-}
-.ws2-sys-btn:hover { filter: brightness(1.1); }
 
 /* Header carries no sound key: BGM/SFX live in the system menu, her voice lives on the stage (VoiceScope). */
 
@@ -252,7 +267,7 @@
 
 /* ---------- sessions column (restyles HistorySidebar) ---------- */
 
-.ws2-side { grid-column: 1; grid-row: 2; position: relative; z-index: 2; min-height: 0; overflow: hidden; border-right: 1px solid var(--ws-line); }
+.ws2-side { grid-column: 1; grid-row: 2; position: relative; z-index: 2; min-height: 0; overflow: hidden; border-right: 1px solid var(--ws-rule); }
 /* Both states keep a fixed width and the column clips them, so a width change never reflows titles or slides the rail nodes. */
 .ws2 .grid-history { display: flex; flex-direction: column; height: 100%; width: 256px; box-sizing: border-box; min-width: 0; transition: none; padding: 6px 12px 16px 16px; background: none; border: 0; box-shadow: none; }
 .ws2 .grid-history.collapsed { width: 60px; padding: 6px 0; align-items: center; }
@@ -444,9 +459,6 @@
 .ws2-memory-layer.closing { animation: ws2-sheet-out .15s linear both; pointer-events: none; }
 @keyframes ws2-sheet-in { from { opacity: 0; } }
 @keyframes ws2-sheet-out { to { opacity: 0; } }
-.ws2-memory-btn.is-on { position: relative; color: var(--ws-ink); }
-.ws2-memory-btn.is-on::after { content: ''; position: absolute; left: 10px; right: 10px; bottom: -14px; height: 1px; background: var(--ws-accent); }
-.ws2-memory-esc { margin-left: 4px; padding: 3px 4px; border: 1px solid var(--ws-line-2); font: 10px/1 var(--ws-mono); color: var(--ws-ink-3); }
 @media (prefers-reduced-motion: reduce) {
   .ws2-memory-layer, .ws2-memory-layer.closing { animation: none; }
 }
@@ -691,7 +703,8 @@
 /* ---------- stage ---------- */
 
 .ws2-stage { grid-column: 3; grid-row: 1 / 3; position: relative; z-index: 1; overflow: hidden; }
-.ws2-seam { position: absolute; left: 0; top: 60px; bottom: 0; width: 1px; background: linear-gradient(180deg, transparent, var(--ws-line-2) 20%, var(--ws-line-2) 80%, transparent); }
+/* the stage's edge: a column line of the sheet, from the header cell above it down to the frame's foot */
+.ws2-seam { position: absolute; left: 0; top: 60px; bottom: var(--fr-foot); width: 1px; background: var(--ws-rule); }
 /* Her name as an original chapter card: black Mincho in one evenly set column with its kana reading running beside it,
  * drafting instruments (protractor arc, compass circles, ruler) behind it, an italic Latin line outside.
  * SG takes the chapter card's lavender; β takes 0's copper. All five kanji share one ink. */
@@ -886,9 +899,6 @@
 .ws2.menu-open .avatar-stage .avatar-sprite-wrapper { filter: var(--ws-portrait-light) drop-shadow(-18px -10px 0 var(--ws-slab)) brightness(.7) saturate(.85); }
 .ws2-rim-defs { position: absolute; width: 0; height: 0; overflow: hidden; pointer-events: none; }
 .ws2.menu-open .ws2-presence { opacity: 0; }
-.ws2-sys-btn.on { letter-spacing: .12em; color: var(--ws-ink) !important; background: transparent !important; box-shadow: inset 0 0 0 1px var(--ws-line-2), inset 3px 0 0 var(--ws-tick); }
-.ws2[data-wl='beta'] .ws2-sys-btn.on { background: rgba(var(--ws-accent-rgb), .14) !important; box-shadow: none; }
-.ws2-sys-btn kbd { font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .06em; padding: 1px 5px; border: 1px solid currentColor; opacity: .7; }
 
 .ws2-sysmenu {
   --bus: 44px; --row: 58px; --index: 250px;

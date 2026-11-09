@@ -106,17 +106,17 @@ const Movement = memo(function Movement() {
         <circle className="hub" r={11} />
       </g>
       {/* caption above the dial, under the header, clear of the reading column */}
-      <path className="lead" d={`M${C.x + DIAL_PT[0]} ${C.y + DIAL_PT[1]}L${C.x - 300} ${C.y - DIAL - 40}H${C.x + 120}`} />
+      <path className="lead" d={`M${C.x + DIAL_PT[0]} ${C.y + DIAL_PT[1]}L${C.x - 300} ${C.y - DIAL - 10}H${C.x + 120}`} />
       <circle className="lead-dot" cx={C.x + DIAL_PT[0]} cy={C.y + DIAL_PT[1]} r={2.6} />
-      <text className="cap" x={C.x - 292} y={C.y - DIAL - 52}>FIG. 4 — CLOCK MOVEMENT · LOCAL TIME</text>
-      <text className="cap sub" x={C.x - 292} y={C.y - DIAL - 16}>{`${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(s)}`}</text>
+      <text className="cap" x={C.x - 292} y={C.y - DIAL - 22}>FIG. 4 — CLOCK MOVEMENT · LOCAL TIME</text>
+      <text className="cap sub" x={C.x - 292} y={C.y - DIAL + 14}>{`${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(s)}`}</text>
     </g>
   );
 });
 
 const LORENZ = lorenzPath();
 const L = { x: 1500, y: 620 };
-const EQ = { x: 1160, y: 132 };
+const EQ = { x: 1160, y: 156 };
 /* the left fixed point, −√(β(ρ−1)), in plate units */
 const FP = f1(-Math.sqrt((8 / 3) * 27) * 13);
 
@@ -223,7 +223,7 @@ function Divergence() {
   }, [run]);
   if (!run) return null;
   return (
-    <svg className="ds-plate ds-pair" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+    <svg className="ds-plate ds-pair" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMin slice">
       <g ref={ref} transform={`translate(${L.x} ${L.y})`} style={{ opacity: 0 }}>
         <polyline className="tail sg" /><polyline className="tail sg near" />
         <polyline className="tail beta" /><polyline className="tail beta near" />
@@ -243,7 +243,7 @@ const Trace = memo(function Trace({ of }: { of: 'lorenz' | 'clock' }) {
   const r = RUB[of];
   const eraser = <image href="/assets/sheet/eraser.webp" x={r.x} y={r.y} width={r.w} height={r.h} preserveAspectRatio="none" />;
   return (
-    <svg className="ds-plate ds-trace" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+    <svg className="ds-plate ds-trace" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMin slice">
       <defs>
         <filter id="ds-rub-ink" colorInterpolationFilters="sRGB"><feColorMatrix values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1.6 0" /></filter>
         <mask id="ds-rub" maskUnits="userSpaceOnUse" x={0} y={0} width={1920} height={1080}>
@@ -292,7 +292,7 @@ export function DraftSheet({ worldline }: { worldline: 'steins_gate' | 'beta' })
       <div className="ds-paper" />
       <div className="ds-grid" />
       <Trace of={worldline === 'beta' ? 'clock' : 'lorenz'} />
-      <svg className="ds-plate" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+      <svg className="ds-plate" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMin slice">
         {worldline === 'beta' ? <Butterfly /> : <Movement />}
       </svg>
       {worldline === 'beta' && <Divergence />}
@@ -306,7 +306,10 @@ export function DraftSheet({ worldline }: { worldline: 'steins_gate' | 'beta' })
           ))}
         </div>
       )}
+      {/* the sheet's border, as on the login; the header band is the margin above it */}
+      <div className="ds-frame" />
       <div className="ds-zones">
+        <div className="z left">{ROWS.map((n) => <span key={n}>{n}</span>)}</div>
         <div className="z right">{ROWS.map((n) => <span key={n}>{n}</span>)}</div>
         <div className="z bottom">{COLS.map((n) => <span key={n}>{n}</span>)}</div>
       </div>

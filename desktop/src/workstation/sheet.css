@@ -105,20 +105,30 @@
 /* a soda-can ring on the SG sheet: darker than the slate, as a dried stain is */
 .ds-ring { position: absolute; left: auto; top: auto; right: calc(var(--ws-stage) * .62); bottom: 15%; inset-inline-start: auto; width: clamp(110px, 9vw, 160px); height: auto; opacity: .42; transform: rotate(-24deg); filter: brightness(1.5) saturate(.7); }
 
-/* zone border, like the login sheet's: rows down the right edge, columns along the foot */
+/* The sheet's border, the login's in the workstation's proportions: a hairline frame, zones lettered down both sides
+   and numbered along the foot in the margin outside it, each zone ticked off the frame line. The header band is the
+   top margin; its cells stand on the frame's top edge (workstation.css). */
+.ws2 { --fr-top: 60px; --fr-side: 14px; --fr-foot: 13px; --ws-rule: rgba(226, 232, 235, .14); }
+.ws2[data-wl='beta'] { --ws-rule: rgba(233, 150, 80, .15); }
+.ds-sheet > .ds-frame { inset: var(--fr-top) var(--fr-side) var(--fr-foot); border: 1px solid var(--ws-rule); }
 .ds-zones .z { position: absolute; display: flex; font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .1em; color: rgba(226, 232, 235, .22); }
-.ds-zones .right { top: 60px; bottom: 14px; right: 3px; width: 10px; flex-direction: column; }
-.ds-zones .bottom { left: 0; right: 14px; bottom: 2px; height: 11px; }
+.ds-zones :is(.left, .right) { top: var(--fr-top); bottom: var(--fr-foot); width: var(--fr-side); flex-direction: column; }
+.ds-zones .left { left: 0; }
+.ds-zones .right { right: 0; }
+.ds-zones .bottom { left: var(--fr-side); right: var(--fr-side); bottom: 0; height: var(--fr-foot); }
 .ds-zones span { flex: 1; display: grid; place-items: center; position: relative; }
-.ds-zones .right span + span::before { content: ''; position: absolute; top: 0; right: 0; width: 6px; height: 1px; background: rgba(226, 232, 235, .14); }
-.ds-zones .bottom span + span::before { content: ''; position: absolute; left: 0; bottom: 0; width: 1px; height: 6px; background: rgba(226, 232, 235, .14); }
+.ds-zones span + span::before { content: ''; position: absolute; background: rgba(226, 232, 235, .16); }
+.ds-zones .left span + span::before { top: 0; right: 0; width: 6px; height: 1px; }
+.ds-zones .right span + span::before { top: 0; left: 0; width: 6px; height: 1px; }
+.ds-zones .bottom span + span::before { top: 0; left: 0; width: 1px; height: 6px; }
 .ds-beta .ds-zones .z { color: rgba(233, 150, 80, .24); }
+.ds-beta .ds-zones span + span::before { background: rgba(233, 150, 80, .18); }
 
 /* drafted in with the workstation's entrance, like the login sheet */
 .ws2[data-entrance] .ds-plate [pathLength] { stroke-dasharray: 1; stroke-dashoffset: 1; animation: ds-draw 1.5s cubic-bezier(.3, .6, .2, 1) calc(var(--d, 0ms) + 160ms) forwards; }
 .ws2[data-entrance] .ds-plate .orbit { animation-duration: 3.2s; }
 .ws2[data-entrance] .ds-plate :is(.dash, .tk, .cl, text, .hand, .hub) { animation: ds-appear .9s ease .5s backwards; }
-.ws2[data-entrance] :is(.ds-paper, .ds-grid, .ds-moths) { animation: ds-appear .9s ease backwards; }
+.ws2[data-entrance] :is(.ds-paper, .ds-grid, .ds-moths, .ds-frame, .ds-zones) { animation: ds-appear .9s ease backwards; }
 @keyframes ds-draw { to { stroke-dashoffset: 0; } }
 @keyframes ds-appear { from { opacity: 0; } }
 
