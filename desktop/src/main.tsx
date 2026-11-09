@@ -18,6 +18,8 @@ import "./workstation/workstation.css";
 import "./workstation/sheet.css";
 // The observation log and its composer, on the sheet.
 import "./workstation/log.css";
+// Menus, the model picker, selects and confirm dialogs: slips laid on the sheet.
+import "./workstation/slips.css";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

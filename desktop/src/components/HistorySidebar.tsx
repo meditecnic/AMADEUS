@@ -117,8 +117,10 @@ function ConversationMenu({ conversation, actions }: {
           <DropdownMenu.Content
             className="ws2-menu conversation-menu"
             data-ws2-overlay=""
-            align="end"
-            sideOffset={4}
+            side="right"
+            align="start"
+            alignOffset={-3}
+            sideOffset={2}
             onEscapeKeyDown={keepImeEscape}
             onCloseAutoFocus={(event) => {
               // Back to "…" without scrolling the list — unless the row went into rename, whose field has focus.
@@ -134,6 +136,13 @@ function ConversationMenu({ conversation, actions }: {
               onForget={actions.onForget}
               onDelete={actions.onDelete}
             />
+            {/* Tied to its row like a tag: a leader from the slip back to "…", so the row's title stays in view. Radix
+                measures it with ResizeObserver; where there is none (an old engine, jsdom) the slip goes without. */}
+            {typeof ResizeObserver === 'function' && (
+              <DropdownMenu.Arrow asChild width={4} height={12}>
+                <svg className="ws2-menu-leader" viewBox="0 0 4 12" aria-hidden="true"><path d="M2 0V10.5" /><circle cx="2" cy="10.5" r="1.5" /></svg>
+              </DropdownMenu.Arrow>
+            )}
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
@@ -239,7 +248,7 @@ function RenameField({ conversation, onCommit, onDone }: {
       </TextFieldMenu>
       {error
         ? <span id={errorId} className="conversation-rename-error" role="alert">{error}</span>
-        : <span className="conversation-meta" aria-hidden="true">Enter 保存 · Esc 取消</span>}
+        : <span className="conversation-keys" aria-hidden="true"><kbd>Enter</kbd>保存<kbd>Esc</kbd>取消</span>}
     </div>
   );
 }

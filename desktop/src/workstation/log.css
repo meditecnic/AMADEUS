@@ -129,18 +129,23 @@
 .ws2-voicing { margin-top: 6px; font-size: 12px; letter-spacing: .1em; color: var(--ws-ink-3); }
 .ws2-actions { display: flex; gap: 6px; margin-top: 10px; }
 
-/* Back to the latest entry: a paper tab at the foot of the column, over the band the log fades out in. */
+/* Back to the latest entry: on the composer's head, before its leader, so it never covers a line of the log; a
+   pencil arrow points down to where the log ends. */
 .ws2 .ws2-to-latest {
-  position: absolute; right: 0; bottom: 8px; z-index: 3; display: inline-flex; align-items: center; height: 26px; padding: 0 12px 0 15px;
-  font-family: var(--ws-sans); font-size: 12px; letter-spacing: .14em; color: var(--ws-blade-ink); background: var(--ws-blade);
-  clip-path: polygon(6px 0, 100% 0, 100% 100%, 0 100%, 0 6px);
-  mask: url('/assets/sheet/tooth.webp') 0 0 / 256px 256px, linear-gradient(rgba(0, 0, 0, .78), rgba(0, 0, 0, .78));
-  mask-composite: add;
-  transition: filter .15s ease, transform .2s var(--ease-main);
+  order: -1; flex: none; display: inline-flex; align-items: center; gap: 5px; height: 24px; margin: 0 0 0 -3px; padding: 0 4px 0 2px;
+  border: 0; border-radius: 0; background: none; cursor: pointer;
+  font-family: var(--ws-sans); font-size: 11.5px; letter-spacing: .14em; color: var(--ws-ink-2);
+  text-decoration: underline; text-decoration-color: transparent; text-decoration-thickness: 1.5px; text-underline-offset: 5px;
+  transition: color .15s ease, text-decoration-color .15s ease;
+  animation: ws2-latest-in .22s cubic-bezier(.2, .8, .2, 1) both;
 }
-.ws2 .ws2-to-latest:hover { filter: brightness(1.08); }
-.ws2 .ws2-to-latest:active { transform: translateY(1px); }
-.ws2 .ws2-to-latest:focus-visible { outline: none; text-decoration: underline; text-underline-offset: 3px; }
+.ws2 .ws2-to-latest::before {
+  content: ''; flex: none; width: 13px; height: 11px; rotate: 90deg; background: var(--log-pencil);
+  -webkit-mask: var(--pencil-arrow) center / contain no-repeat; mask: var(--pencil-arrow) center / contain no-repeat;
+}
+.ws2 .ws2-to-latest:is(:hover, :focus-visible) { outline: none; color: var(--ws-ink); text-decoration-color: var(--log-pencil); }
+@keyframes ws2-latest-in { from { opacity: 0; transform: translateY(3px); } }
+@media (prefers-reduced-motion: reduce) { .ws2 .ws2-to-latest { animation: none; } }
 
 /* Notices between the log and the composer: a line of text behind a cut square, as the login prints its messages. */
 .ws2 :is(.ws2-key-missing, .ws2-link-state, .ws2-provider-gone) {
@@ -213,7 +218,7 @@
 .ws2 .ws2-composer textarea.chat-input-field:focus-visible { outline: none; }
 .ws2 .ws2-composer textarea.chat-input-field::placeholder { color: var(--ws-ink-3); }
 .ws2 .ws2-composer textarea.chat-input-field:disabled { color: var(--ws-ink-2); }
-.ws2 .ws2-composer textarea.chat-input-field::selection { background: var(--ws-blade); color: var(--ws-blade-ink); }
+.ws2 .ws2-composer textarea.chat-input-field::selection { background: color-mix(in srgb, var(--log-pencil) 34%, transparent); color: var(--ws-ink); }
 
 /* Send: the sheet's own key (SendKey.tsx), centred in your margin. */
 .ws2 .ws2-send {

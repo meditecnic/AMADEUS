@@ -1,0 +1,205 @@
+/*
+ * Overlays as slips laid on the sheet (amadeus-ops design/20261108-ui-inventory.md §2.8): the menus, the model
+ * picker, the shared select and the confirm dialogs. Each is ruled like the stage's title block: a dark ground, 1px
+ * rules, a margin cell down the left; no glow and no accent bar. What you point at is marked the way the log marks a
+ * sentence, in pencil: an arrow in the margin. An act that cannot be undone is stamped (Stamp.tsx). After log.css.
+ */
+
+.ws2 {
+  --slip-bg: color-mix(in srgb, var(--ws-bg) 95%, transparent);
+  --slip-edge: var(--ws-line-2);
+  --slip-rule: var(--ws-rule);
+  --slip-shadow: 0 16px 40px color-mix(in srgb, var(--shadow-tone) 48%, transparent);
+  /* the margin cell's rule, 24px in */
+  --slip-margin: linear-gradient(var(--slip-rule), var(--slip-rule)) 24px 0 / 1px 100% no-repeat;
+  /* red ink that still reads at 13px on the dark ground (a stamp's own ink is deeper) */
+  --ws-danger-ink: #e5484e;
+  /* a pencil arrow pointing right, drawn by hand; filled with the pencil's colour through a mask */
+  --pencil-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 13 11'%3E%3Cpath d='M1.2 5.8C3.9 5.5 6.9 5.3 11 5.4M7.6 2C8.9 3.3 10 4.4 11.3 5.4C10 6.4 8.9 7.6 7.5 9' fill='none' stroke='%23000' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+.ws2[data-wl='beta'] { --ws-danger-ink: #ec6a3c; }
+
+/* ---------- the rows every slip is made of ---------- */
+
+.ws2 :is(.ws2-menu-item, .ws2-picker-list li, .ws2-picker-sources button, .ws2-picker-manage, .salieri-select-option) {
+  position: relative; border-radius: 0; background: var(--slip-margin); box-shadow: none; clip-path: none;
+}
+/* each row ruled off from the one above */
+.ws2 :is(.ws2-menu-item, .ws2-picker-list li, .salieri-select-option) + :is(.ws2-menu-item, .ws2-picker-list li, .salieri-select-option),
+.ws2 .ws2-picker-sources button + button { box-shadow: inset 0 1px 0 var(--slip-rule); }
+.ws2 :is(.ws2-menu-item, .ws2-picker-list li, .ws2-picker-sources button, .ws2-picker-manage, .salieri-select-option)::before {
+  content: ''; position: absolute; left: 6px; top: 50%; width: 13px; height: 11px; margin-top: -5.5px; pointer-events: none;
+  background: var(--log-pencil); -webkit-mask: var(--pencil-arrow) center / contain no-repeat; mask: var(--pencil-arrow) center / contain no-repeat;
+  opacity: 0; transform: translateX(-3px); transition: opacity .12s ease, transform .16s cubic-bezier(.2, .8, .2, 1);
+}
+/* pointed at, by the mouse or the keys: the pencil arrow in the margin, the word in full ink */
+.ws2 :is(.ws2-menu-item[data-highlighted], .ws2-picker-list li.active, .ws2-picker-sources button:is(:hover, :focus-visible),
+  .ws2-picker-manage:is(:hover, :focus-visible), .salieri-select-option.is-active) {
+  color: var(--ws-ink); background-color: rgba(255, 255, 255, .04); outline: none;
+}
+.ws2 :is(.ws2-menu-item[data-highlighted], .ws2-picker-list li.active, .ws2-picker-sources button:is(:hover, :focus-visible),
+  .ws2-picker-manage:is(:hover, :focus-visible), .salieri-select-option.is-active)::before { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .ws2 :is(.ws2-menu-item, .ws2-picker-list li, .ws2-picker-sources button, .ws2-picker-manage, .salieri-select-option)::before { transition: none; }
+}
+
+/* ---------- menus (Radix DropdownMenu / ContextMenu, menus.tsx) ---------- */
+
+.ws2 .ws2-menu {
+  z-index: 85; min-width: 176px; padding: 0; outline: none;
+  border: 1px solid var(--slip-edge); border-radius: 0; background: var(--slip-bg); backdrop-filter: blur(8px); box-shadow: var(--slip-shadow);
+  animation: ws2-slip-down .16s cubic-bezier(.2, .7, .2, 1);
+}
+.ws2 .ws2-menu[data-side='top'] { animation-name: ws2-slip-up; }
+.ws2 .ws2-menu[data-side='right'] { animation-name: ws2-slip-right; }
+@keyframes ws2-slip-down { from { opacity: 0; transform: translateY(-4px); } }
+@keyframes ws2-slip-up { from { opacity: 0; transform: translateY(4px); } }
+@keyframes ws2-slip-right { from { opacity: 0; transform: translateX(-4px); } }
+/* a slip opened from a row hangs off it on a leader line */
+.ws2 .ws2-menu-leader { display: block; overflow: visible; }
+.ws2 .ws2-menu-leader path { fill: none; stroke: var(--ws-ink-3); stroke-width: 1; }
+.ws2 .ws2-menu-leader circle { fill: var(--ws-ink-3); }
+/* At the pointer a menu is simply there: no travel, nothing to wait for. */
+.ws2 .ws2-menu.is-pointer, .ws2 .ws2-menu.ws2-menu-text { animation: none; }
+.ws2 .ws2-menu-text { min-width: 160px; }
+.ws2 .ws2-menu-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 18px; height: 32px; padding: 0 14px 0 34px;
+  outline: none; cursor: default; user-select: none;
+  font-family: var(--ws-serif-cjk); font-size: 13px; letter-spacing: .14em; color: var(--ws-ink-2);
+}
+.ws2 .ws2-menu-item[data-disabled] { color: var(--ws-ink-3); opacity: .5; }
+/* what cannot be undone is written in red, and pointed at in red */
+.ws2 .ws2-menu-item.danger { color: var(--ws-danger-ink); }
+.ws2 .ws2-menu-item.danger[data-highlighted] { color: var(--ws-danger-ink); background-color: color-mix(in srgb, var(--ws-danger-ink) 9%, transparent); }
+.ws2 .ws2-menu-item.danger::before { background: var(--ws-danger-ink); }
+.ws2 .ws2-menu-key { font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .08em; color: var(--ws-ink-3); }
+.ws2 .ws2-menu-item[data-highlighted] .ws2-menu-key { color: var(--ws-ink-2); }
+/* a break between kinds of act is a double rule, as on a title block */
+.ws2 .ws2-menu-sep { height: 4px; margin: 0; border-top: 1px solid var(--slip-rule); border-bottom: 1px solid var(--slip-rule); background: none; }
+@media (prefers-reduced-motion: reduce) { .ws2 .ws2-menu { animation: none; } }
+
+/* ---------- the model picker (ModelPicker.tsx), over the composer ---------- */
+
+.ws2 .ws2-picker-pop {
+  position: absolute; left: 0; bottom: calc(100% + 10px); z-index: 30; width: 320px; max-height: min(420px, 60vh); display: flex; flex-direction: column;
+  padding: 0; border: 1px solid var(--slip-edge); border-radius: 0; background: var(--slip-bg); backdrop-filter: blur(8px); box-shadow: var(--slip-shadow);
+  transform-origin: 0 100%; animation: ws2-pick-in var(--dur-base) backwards;
+}
+/* the search is a line to write on, with a lens in the margin */
+.ws2 .ws2-picker-search {
+  flex: none; height: 36px; margin: 0; padding: 0 12px 0 34px; border: 0; border-bottom: 1px solid var(--slip-edge); border-radius: 0; box-shadow: none; outline: none;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 14 14'%3E%3Ccircle cx='6' cy='6' r='4.2' fill='none' stroke='%23f1f0eb' stroke-opacity='.5' stroke-width='1.2'/%3E%3Cpath d='M9.2 9.2L12.6 12.6' stroke='%23f1f0eb' stroke-opacity='.5' stroke-width='1.2' stroke-linecap='round'/%3E%3C/svg%3E") 6px 50% / 13px 13px no-repeat;
+  font-family: var(--ws-sans); font-size: 13px; letter-spacing: .02em; color: var(--ws-ink);
+}
+.ws2 .ws2-picker-search::placeholder { color: var(--ws-ink-3); }
+.ws2 .ws2-picker-search:focus { border-bottom-color: var(--ws-ink-3); }
+/* Focus inside a slip is shown by its own marks (the line under the search, the pencil arrow on a row), so the
+   sheet's general focus ring stays off the slip and its lists. */
+.ws2 :is(.ws2-picker-search, .ws2-picker-list, .ws2-menu, .salieri-select-menu, .ws2-dialog):focus-visible { outline: none; }
+/* a group's head: its mark in the margin, its name in small capitals */
+.ws2 .ws2-picker-group {
+  flex: none; display: flex; align-items: center; gap: 13px; min-height: 26px; padding: 0 12px 0 4px; border-bottom: 1px solid var(--slip-rule);
+  font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .2em; text-transform: uppercase; color: var(--ws-ink-3);
+}
+.ws2 .ws2-picker-group:not(:has(.ws2-pmark)) { padding-left: 34px; }
+.ws2 .ws2-picker-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; min-height: 0; outline: none; scrollbar-width: thin; scrollbar-color: var(--ws-line-2) transparent; }
+.ws2 .ws2-picker-list li { min-height: 32px; padding: 7px 30px 7px 34px; font-size: 13px; line-height: 18px; color: var(--ws-ink-2); cursor: pointer; }
+.ws2 .ws2-picker-list li[aria-selected='true'] { color: var(--ws-ink); }
+.ws2 .ws2-picker-list li.disabled { opacity: .4; cursor: default; }
+/* the model in use: a dot of ink at the row's end */
+.ws2 .ws2-picker-list li .check { position: absolute; right: 13px; top: 50%; width: 5px; height: 5px; margin-top: -2.5px; border-radius: 50%; background: var(--ws-ink); box-shadow: none; }
+.ws2 .ws2-picker-empty { padding: 9px 12px 9px 34px; font-size: 12.5px; color: var(--ws-ink-3); cursor: default; background: var(--slip-margin); }
+.ws2 .ws2-picker-sources { flex: none; display: flex; flex-direction: column; }
+.ws2 .ws2-picker-sources button {
+  display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 6px 12px 6px 34px; border: 0; text-align: left;
+  font-size: 12.5px; color: var(--ws-ink-2);
+}
+.ws2 .ws2-picker-sources button .ws2-pmark { width: 16px; height: 16px; }
+.ws2 .ws2-picker-sources small { margin-left: auto; font-family: var(--ws-mono); font-size: 10px; color: var(--ws-ink-3); }
+.ws2 .ws2-picker-sources button.needs-key small { color: var(--ws-danger-ink); }
+.ws2 .ws2-picker-manage {
+  flex: none; height: 34px; margin: 0; padding: 0 12px 0 34px; border: 0; border-top: 4px double var(--slip-rule) !important; text-align: left;
+  font-family: var(--ws-serif-cjk); font-size: 12.5px; letter-spacing: .14em; color: var(--ws-ink-2);
+}
+
+/* ---------- the shared select (SalieriSelect.tsx), portalled onto the sheet ---------- */
+
+.ws2 .salieri-select-menu {
+  padding: 0; border: 1px solid var(--slip-edge); border-radius: 0; background: var(--slip-bg); backdrop-filter: blur(8px); box-shadow: var(--slip-shadow);
+  font-family: var(--ws-sans);
+}
+.ws2 .salieri-select-option {
+  display: flex; align-items: center; justify-content: flex-start; gap: 0; min-height: 32px; padding: 6px 14px 6px 34px;
+  font-size: 12.5px; letter-spacing: .06em; color: var(--ws-ink-2);
+}
+.ws2 .salieri-select-option.is-selected { color: var(--ws-ink); }
+.ws2 .salieri-select-option.is-disabled { color: var(--ws-ink-3); opacity: .5; }
+/* the one in use: the same dot of ink as the picker's (the glyph itself is not drawn) */
+.ws2 .salieri-select-check {
+  flex: none; width: 5px; height: 5px; margin-left: auto; padding: 0; overflow: hidden; border: 0; border-radius: 50%;
+  font-size: 0; color: transparent; background: var(--ws-ink);
+}
+.ws2 .salieri-select-option-label { min-width: 0; padding-right: 12px; }
+
+/* ---------- confirm dialogs (ConfirmDialog.tsx) ---------- */
+
+/* A slip laid on the sheet, which only dims under it: no blur, so what is being acted on stays in sight. */
+.ws2-dialog-scrim {
+  position: absolute; inset: 0; z-index: 70; display: grid; place-items: center;
+  background: color-mix(in srgb, var(--ws-bg) 64%, transparent); animation: ws2-scrim-in var(--dur-quick) var(--ease-sg) backwards;
+}
+.ws2-dialog {
+  position: relative; width: min(430px, calc(100% - 48px)); padding: 0; border: 1px solid var(--slip-edge); border-radius: 0; outline: none;
+  background: var(--slip-bg); box-shadow: var(--slip-shadow); animation: ws2-dialog-in .26s cubic-bezier(.2, .7, .2, 1) backwards;
+}
+@keyframes ws2-dialog-in { from { opacity: 0; transform: translateY(8px) rotate(-.4deg); } }
+/* An act that cannot be undone is stamped across the slip's top edge once it has landed. */
+.ws2-dialog > .ws2-stamp { --stamp-word: 19px; right: 18px; top: -18px; z-index: 1; animation-delay: .18s; }
+/* Exit (≈0.6× enter) plays only on the committed, inert ghost. */
+.ws2-dialog-scrim.leaving { pointer-events: none; animation: ws2-fade-out var(--dur-quick) var(--ease-sg) forwards; }
+.ws2-dialog-scrim.leaving .ws2-dialog { animation: ws2-dialog-out var(--dur-quick) var(--ease-sg) forwards; }
+@keyframes ws2-dialog-out { to { opacity: 0; transform: translateY(4px); } }
+@keyframes ws2-fade-out { to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .ws2-dialog, .ws2-dialog-scrim.leaving .ws2-dialog, .ws2-dialog > .ws2-stamp { animation: none; }
+}
+.ws2-dialog h3 { margin: 0; padding: 22px 24px 0; font-family: var(--ws-serif-cjk); font-size: 19px; font-weight: 500; line-height: 1.4; letter-spacing: .1em; color: var(--ws-ink); }
+.ws2-dialog:has(> .ws2-stamp) h3 { padding-right: 150px; }
+.ws2-dialog-body { padding: 10px 24px 18px; }
+.ws2-dialog-body p { margin: 0 0 6px; font-family: var(--ws-read); font-size: 14px; line-height: 1.75; color: var(--ws-ink-2); }
+.ws2-dialog-body .ws2-dialog-hint { font-size: 12px; color: var(--ws-ink-3); }
+.ws2-dialog-input {
+  width: 100%; height: 36px; padding: 0 2px; border: 0; border-bottom: 1px solid var(--ws-line-2); border-radius: 0; background: none;
+  font-family: var(--ws-read); font-size: 15px; color: var(--ws-ink); outline: none;
+}
+.ws2-dialog-input:focus { border-bottom-color: var(--ws-ink); }
+.ws2-dialog-error { margin: -8px 24px 14px; font-size: 12.5px; color: var(--ws-bad); }
+/* its answers in the slip's foot, ruled off */
+.ws2-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--slip-rule); }
+.ws2 :is(.ws2-dialog-cancel, .ws2-dialog-confirm) {
+  --edge: var(--ws-line-2);
+  height: 30px; padding: 0 16px 0 18px; border: 0; border-radius: 0;
+  font-family: var(--ws-sans); font-size: 12.5px; letter-spacing: .14em; color: var(--ws-ink-2);
+  box-shadow: inset 0 0 0 1px var(--edge); clip-path: polygon(7px 0, 100% 0, 100% 100%, 0 100%, 0 7px);
+  background: linear-gradient(135deg, transparent 42.8%, var(--edge) 42.8% 52.8%, transparent 52.8%) 0 0 / 8px 8px no-repeat;
+  transition: color .15s ease, background-color .15s ease;
+}
+.ws2 .ws2-dialog-confirm { --edge: var(--ws-ink-3); color: var(--ws-ink); }
+.ws2 .ws2-dialog-confirm.danger { --edge: color-mix(in srgb, var(--ws-danger-ink) 70%, transparent); color: var(--ws-danger-ink); }
+.ws2 :is(.ws2-dialog-cancel, .ws2-dialog-confirm):is(:hover, :focus-visible):not(:disabled) {
+  --edge: var(--ws-ink-2); color: var(--ws-ink); background-color: rgba(255, 255, 255, .05); outline: none;
+}
+.ws2 .ws2-dialog-confirm.danger:is(:hover, :focus-visible):not(:disabled) {
+  --edge: var(--ws-danger-ink); color: var(--ws-danger-ink); background-color: color-mix(in srgb, var(--ws-danger-ink) 10%, transparent);
+}
+.ws2 .ws2-dialog button:disabled { opacity: .5; }
+/* a box on the slip to tick: ticked, it is filled in red ink */
+.ws2 .ws2-dialog-check { display: flex; gap: 11px; align-items: flex-start; margin: 14px 0 0; padding: 0; border: 0; font-size: 13px; line-height: 1.6; color: var(--ws-ink); cursor: pointer; }
+.ws2 .ws2-dialog-check input {
+  appearance: none; -webkit-appearance: none; flex: none; width: 14px; height: 14px; margin: 3px 0 0; border: 1px solid var(--ws-ink-3); border-radius: 0;
+  background: none; cursor: pointer; transition: box-shadow .15s ease, border-color .15s ease;
+}
+.ws2 .ws2-dialog-check input:checked { border-color: var(--ws-danger-ink); box-shadow: inset 0 0 0 2px var(--ws-bg), inset 0 0 0 7px var(--ws-danger-ink); }
+.ws2 .ws2-dialog-check input:focus-visible { outline: 1px dashed var(--ws-ink-2); outline-offset: 2px; }
+.ws2 .ws2-dialog-check input:disabled { opacity: .5; cursor: default; }
+.ws2 .ws2-dialog-check small { display: block; margin-top: 2px; font-size: 11.5px; color: var(--ws-ink-3); }

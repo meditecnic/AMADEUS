@@ -1,9 +1,12 @@
 import React, { useState } from 'react';
 
 import { ConfirmDialog } from '../workstation/ConfirmDialog';
+import { Stamp } from '../workstation/Stamp';
 
 interface ForgetConversationModalProps {
   title: string;
+  /** The conversation's number in the list (No.07), for the stamp. */
+  no?: string;
   busy: boolean;
   error?: string | null;
   onClose: () => void;
@@ -12,6 +15,7 @@ interface ForgetConversationModalProps {
 
 export const ForgetConversationModal: React.FC<ForgetConversationModalProps> = ({
   title,
+  no,
   busy,
   error,
   onClose,
@@ -24,6 +28,7 @@ export const ForgetConversationModal: React.FC<ForgetConversationModalProps> = (
       title="清空聊天记录？"
       confirmLabel="清空会话内容"
       danger
+      stamp={<Stamp sub={no}>不可撤回</Stamp>}
       busy={busy}
       error={error}
       onCancel={onClose}

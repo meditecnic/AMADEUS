@@ -996,6 +996,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const activeConversation = conversations.find((row) => row.id === activeConversationId);
   const conversationNos = useMemo(() => conversationNumbers(conversations), [conversations]);
   const activeConversationNo = activeConversation ? conversationNos.get(activeConversation.id) : undefined;
+  const numberOf = (id: string) => { const n = conversationNos.get(id); return n ? conversationNo(n) : undefined; };
   const activeProviderId = activeConversation?.provider_id || draftProviderId;
   const activeProvider = providers.find((provider) => provider.id === activeProviderId);
   const activeModelId = activeConversation?.model_id || model;
@@ -2303,23 +2304,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
             )}
           </div>
           </SelectionCopyMenu>
-          {showJumpToLatest && (
-            <button
-              type="button"
-              className="ws2-to-latest"
-              data-testid="jump-to-latest"
-              aria-label="跳到最新"
-              onClick={handleJumpToLatest}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault();
-                  handleJumpToLatest();
-                }
-              }}
-            >
-              回到最新 ↓
-            </button>
-          )}
         </div>
 
         {providerGone && (
@@ -2348,6 +2332,24 @@ export const Workstation: React.FC<WorkstationProps> = ({
             sheet's own send key in your margin (SG a clock hand, β a Nixie filament; workstation/SendKey.tsx). */}
         <form className="ws2-composer" onSubmit={handleSend}>
           <div className="ws2-entry-head">
+            {/* Back to the latest entry, on the head before its leader: it never covers a line of the log. */}
+            {showJumpToLatest && (
+              <button
+                type="button"
+                className="ws2-to-latest"
+                data-testid="jump-to-latest"
+                aria-label="跳到最新"
+                onClick={handleJumpToLatest}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    handleJumpToLatest();
+                  }
+                }}
+              >
+                回到最新
+              </button>
+            )}
             <div className="ws2-model">
               <ProviderControls
                 providers={providers.filter((row) => (
@@ -2844,6 +2846,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           title="删除这段对话？"
           confirmLabel="删除会话"
           danger
+          stamp={<Stamp sub={numberOf(deleteDialog.shown.id)}>不可撤回</Stamp>}
           leaving={deleteDialog.leaving}
           onExited={deleteDialog.done}
           returnFocus={() => sessionDialogFallback(wsRootRef.current, deleteDialog.shown?.id ?? '', activeConversationId === null)}
@@ -2860,6 +2863,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       {forgetTarget && (
         <ForgetConversationModal
           title={forgetTarget.title}
+          no={numberOf(forgetTarget.id)}
           busy={conversationBusy}
           error={forgetError}
           onClose={() => { if (!conversationBusy) { setForgetTarget(null); setForgetError(null); } }}
