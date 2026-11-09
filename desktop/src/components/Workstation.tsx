@@ -49,7 +49,7 @@ import { ConnectionList } from '../workstation/ConnectionList';
 import { SendSignal } from '../workstation/SendSignal';
 import { PresenceIndicator, ThinkingMark, PRESENCE_LABELS } from '../workstation/PresenceIndicator';
 import { ErrorText, checkShortLabel } from '../workstation/logParts';
-import { KeyGlyph, Ruler } from './drafting/parts';
+import { SendKey } from '../workstation/SendKey';
 import { VoiceScope } from '../workstation/VoiceScope';
 import { OverlayRootContext, Tip, TipProvider } from '../workstation/Tip';
 import { SelectionCopyMenu, TextFieldMenu } from '../workstation/menus';
@@ -340,6 +340,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
   // Once the login has let go (after the entrance, or at once without one), hand the keyboard to the composer
   // as soon as it can take input. The session settling can disable it for a moment, so the hand-off holds for a
   // short while and gives up as soon as the user puts focus anywhere else.
+  /** Keys pressed in the composer: the SG send key's bezel winds on a tooth for each (SendKey). */
+  const windRef = useRef(0);
   const composerHandoffUntil = useRef<number | null>(null);
   const handComposerFocus = useCallback(() => {
     if (composerHandoffUntil.current === null) composerHandoffUntil.current = Date.now() + 3000;
@@ -2224,7 +2226,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                     </article>
                   ) : msg.role === 'user' ? (
                     <article key={msg.id} className="ws2-line ws2-line-user" data-message-id={msg.id}>
-                      <header><span className="ws2-who" data-testid="speaker-user">{userHudLabel}</span></header>
+                      <header><span className="ws2-who" data-testid="speaker-user" data-blank={userHudLabel === '——' ? '' : undefined}>{userHudLabel}</span></header>
                       <p
                         className="ws2-user-text"
                         {...(contentHasJapaneseKana(msg.content) ? { lang: 'ja' as const } : {})}
@@ -2324,11 +2326,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
             <button type="button" onClick={() => openConnectionsAt('list')}>换一个接入</button>
           </div>
         )}
-        {/* The composer is the next entry of the log: your name in the margin darkens while you write, what she is
-            running on stands over the slot, the slot measures the line and the round key sends it (the login's key). */}
+        {/* The composer under the log, in its text column: what she is running on over the slot, the slot, and the
+            sheet's own send key in your margin (SG a clock hand, β a Nixie filament; workstation/SendKey.tsx). */}
         <form className="ws2-composer" onSubmit={handleSend}>
           <div className="ws2-entry-head">
-            <label className="ws2-nameplate" htmlFor="ws2-composer-input"><span>{userHudLabel}</span></label>
             <div className="ws2-model">
               <ProviderControls
                 providers={providers.filter((row) => (
@@ -2393,7 +2394,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             ref={composerRef}
             rows={2}
             value={inputText}
-            onChange={(e) => { setInputText(e.target.value); hearKeystroke(); }}
+            onChange={(e) => { windRef.current += 1; setInputText(e.target.value); hearKeystroke(); }}
             onKeyDown={(e) => {
               if (e.nativeEvent.isComposing || e.keyCode === 229) {
                 if (e.key === 'Enter' || e.key === 'Escape') e.stopPropagation();
@@ -2411,7 +2412,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
           />
           </TextFieldMenu>
           <i className="ws2-ul" aria-hidden="true" />
-          <Ruler n={[...inputText].length} max={400} className="ws2-measure" />
           </div>
           <button
             type="submit"
@@ -2419,7 +2419,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             disabled={sendBlocked || !inputText.trim()}
             aria-label="发送"
           >
-            <KeyGlyph />
+            <SendKey worldline={worldline} wound={windRef.current} length={[...inputText].length} />
           </button>
           </div>
           {/* The operation guide the originals print under every screen: only keys that really work here. */}
