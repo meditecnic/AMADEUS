@@ -1,0 +1,10 @@
+{
+  "name": "update-available",
+  "extends": "streaming",
+  "description": "A newer version is published; the download plays through.",
+  "update": {
+    "version": "0.2.0",
+    "date": "2026-11-20T08:00:00Z",
+    "notes": "记忆空间可以按时间线浏览。\n导出对话时可以只选一条世界线。\n修正：长对话切换世界线后偶尔停在同步中。"
+  }
+}

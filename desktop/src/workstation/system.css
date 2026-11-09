@@ -76,7 +76,7 @@
   display: flex; align-items: center; gap: 12px; margin: 28px 0 0; padding-bottom: 8px; border-bottom: 1px solid var(--ws-rule);
   font-family: var(--ws-mono); font-size: 10px; letter-spacing: .28em; color: var(--ws-ink-3);
 }
-.ws2-m-note { margin: 0; font-size: 12.5px; line-height: 1.7; color: var(--ws-ink-3); }
+.ws2-m-note { margin: 0; font-size: 12.5px; line-height: 1.7; color: var(--ws-ink-3); text-wrap: pretty; }
 /* a note reads as one line of context above the act; the act sits right and never squeezes the note */
 .ws2-m-foot { display: flex; flex-direction: column; align-items: flex-end; gap: 12px; margin-top: 18px; }
 .ws2-m-foot .ws2-m-note { align-self: stretch; }
@@ -376,9 +376,224 @@
 .ws2-conn-row.is-active { cursor: default; background: rgba(255, 255, 255, .03); }
 .ws2-conn-row.is-active::after { content: ''; position: absolute; left: 11px; top: 50%; width: 6px; height: 6px; margin-top: -3px; background: var(--ws-ink); }
 
+/* ---------- shared by 05–07: groups, acts, notes, fields, a choice ---------- */
+
+.ws2-m-sec > .ws2-m-group:first-child { margin-top: 22px; }
+.ws2-m-sec:first-child > .ws2-m-group:first-child { margin-top: 4px; }
+.ws2-m-group .aside { margin-left: auto; font-size: 10.5px; letter-spacing: .06em; }
+/* a row's acts sit at its right end; a lesser act beside a plate is a word underlined */
+.ws2-m-acts { display: flex; flex: none; align-items: center; gap: 18px; margin-left: auto; }
+.ws2 .ws2-m-link {
+  flex: none; height: 28px; padding: 0 2px; border: 0; background: none;
+  font-family: var(--ws-sans); font-size: 12.5px; letter-spacing: .1em; color: var(--ws-ink-2);
+  text-decoration: underline; text-decoration-color: var(--ws-line-2); text-decoration-thickness: 1px; text-underline-offset: 5px;
+  transition: color .15s, text-decoration-color .15s;
+}
+.ws2 .ws2-m-link:is(:hover, :focus-visible):not(:disabled) { outline: none; color: var(--ws-ink); text-decoration-color: var(--log-pencil); text-decoration-thickness: 1.5px; }
+.ws2 .ws2-m-link.is-danger { color: color-mix(in srgb, var(--ws-danger-ink) 80%, var(--ws-ink-2)); text-decoration-color: color-mix(in srgb, var(--ws-danger-ink) 35%, transparent); }
+.ws2 .ws2-m-link.is-danger:is(:hover, :focus-visible):not(:disabled) { color: var(--ws-danger-ink); text-decoration-color: var(--ws-danger-ink); }
+.ws2 .ws2-m-link:disabled { color: var(--ws-ink-3); text-decoration-color: transparent; }
+.ws2-m-label small.is-bad, .ws2-m-note.is-bad { color: var(--ws-bad); }
+.ws2-m-label small.is-done, .ws2-m-note.is-done { color: var(--ws-ok); }
+.ws2-m-note.ws2-m-warn { color: var(--ws-ink-2); }
+.ws2-m-sec > .ws2-m-note { margin-top: 10px; }
+/* a line that needs reading, behind a cut square, as the log prints its notices */
+.ws2-m-flag { position: relative; margin: 14px 0 0; padding: 2px 0 2px 21px; font-size: 13px; line-height: 1.7; color: var(--ws-ink); }
+.ws2-m-flag::before {
+  content: ''; position: absolute; left: 4px; top: 9px; width: 8px; height: 8px; background: var(--ws-ink-2);
+  clip-path: polygon(3px 0, 100% 0, 100% 100%, 0 100%, 0 3px);
+}
+.ws2-m-flag.is-bad::before { background: var(--ws-bad); }
+.ws2-m-flag code { display: block; margin-top: 3px; font-family: var(--ws-mono); font-size: 11px; line-height: 1.6; color: var(--ws-ink-3); overflow-wrap: anywhere; }
+
+/* a short form under its row: each field a line to write on, its name beside it */
+.ws2-m-form { display: grid; gap: 2px; padding: 4px 0 16px; border-bottom: 1px solid var(--ws-rule); animation: ws2-body-in .2s ease-out; }
+.ws2-m-field { display: grid; grid-template-columns: 132px minmax(0, 300px); align-items: end; gap: 18px; min-height: 46px; }
+.ws2-m-field > span { padding-bottom: 9px; font-size: 13px; color: var(--ws-ink-2); }
+.ws2 .ws2-m-field input {
+  width: 100%; height: 34px; padding: 0 2px; border: 0; border-bottom: 1px solid var(--ws-line-2); border-radius: 0; box-shadow: none;
+  background: linear-gradient(var(--ws-line-2), var(--ws-line-2)) 0 100% / 1px 7px no-repeat, linear-gradient(var(--ws-line-2), var(--ws-line-2)) 100% 100% / 1px 7px no-repeat;
+  font-family: var(--ws-mono); font-size: 14px; letter-spacing: .24em; color: var(--ws-ink);
+}
+.ws2 .ws2-m-field input:focus-visible { outline: none; border-bottom-color: var(--ws-ink); }
+.ws2-m-form-foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 14px; }
+.ws2-m-error { margin: 0; font-size: 12.5px; color: var(--ws-bad); }
+
+/* a choice among a few words: the chosen one ringed in pencil */
+.ws2-m-row.is-choice .ws2-m-label { min-width: 96px; }
+.ws2-choice { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; padding: 2px 0 2px 2px; }
+.ws2 .ws2-choice button { position: relative; padding: 6px 12px; font-size: 13.5px; letter-spacing: .06em; color: var(--ws-ink-2); transition: color .15s; }
+.ws2 .ws2-choice button:hover:not(:disabled) { color: var(--ws-ink); }
+.ws2 .ws2-choice button.on { color: var(--ws-ink); }
+.ws2 .ws2-choice button.on::after {
+  content: ''; position: absolute; inset: -3px -5px; pointer-events: none; background: var(--log-pencil);
+  -webkit-mask: var(--pencil-loop) center / 100% 100% no-repeat; mask: var(--pencil-loop) center / 100% 100% no-repeat;
+  animation: ws2-loop-in .28s cubic-bezier(.2, .8, .2, 1) both;
+}
+.ws2 .ws2-choice button:disabled { color: var(--ws-ink-3); opacity: .5; }
+.ws2 .ws2-choice button.on:disabled { opacity: 1; }
+.ws2 .ws2-choice button:focus-visible { outline: 1px dashed var(--ws-ink-3); outline-offset: 3px; }
+
+/* a path to read and copy */
+.ws2-m-row.ws2-m-path { padding: 10px 0; }
+.ws2-m-path .ws2-m-label { flex: 1; min-width: 0; }
+.ws2-path { font-family: var(--ws-mono); font-size: 12.5px; letter-spacing: .02em; line-height: 1.5; overflow-wrap: anywhere; user-select: text; }
+
+/* news under a section (a new version under 关于), and on the 系统 key: a dot of pencil */
+.ws2-news { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--log-pencil); }
+.ws2-sys-item .ws2-news { position: absolute; right: 4px; top: 50%; margin-top: -3px; }
+.ws2-tool .glyph > .ws2-news { position: absolute; right: -3px; top: -2px; box-shadow: 0 0 0 2px var(--ws-bg); animation: ws2-fade-in .3s ease both; }
+
+/* In a narrow body a row's name goes over its control. */
+@container (max-width: 520px) {
+  .ws2-m-row.is-choice .ws2-m-label { min-width: 56px; }
+  .ws2-m-field { grid-template-columns: 96px minmax(0, 1fr); gap: 12px; }
+}
+
+/* ---------- 05 data ---------- */
+
+/* backups: a ledger, newest first; the one to be restored pointed at in pencil, a broken one struck through */
+.ws2-backups { margin: 0; padding: 0; list-style: none; }
+.ws2-backups li {
+  position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0 14px;
+  min-height: 40px; padding: 0 0 0 24px; border-bottom: 1px solid var(--ws-rule); font-size: 12.5px; color: var(--ws-ink-2);
+}
+.ws2-backups li::before {
+  content: ''; position: absolute; left: 4px; top: 14px; width: 13px; height: 11px; background: var(--log-pencil); opacity: 0;
+  -webkit-mask: var(--pencil-arrow) center / contain no-repeat; mask: var(--pencil-arrow) center / contain no-repeat; transition: opacity .12s;
+}
+.ws2-backups li:is(:hover, :focus-within)::before { opacity: .45; }
+.ws2-backups li.is-pending::before { opacity: 1; }
+.ws2-backups .meta { display: grid; grid-template-columns: 136px 48px 64px auto; align-items: baseline; gap: 0 12px; min-width: 0; white-space: nowrap; }
+.ws2-backups .when { font-family: var(--ws-mono); font-size: 12px; letter-spacing: .03em; color: var(--ws-ink); font-variant-numeric: tabular-nums; }
+.ws2-backups .size { font-family: var(--ws-mono); font-size: 11.5px; text-align: right; font-variant-numeric: tabular-nums; }
+.ws2-backups .ver { font-family: var(--ws-mono); font-size: 10.5px; letter-spacing: .06em; color: var(--ws-ink-3); }
+.ws2-backups .acts { display: flex; align-items: center; justify-content: flex-end; gap: 16px; }
+/* restoring is offered on every row, quietly; deleting shows only on the row you point at */
+.ws2-backups .acts .ws2-m-link { opacity: .6; transition: opacity .12s, color .15s, text-decoration-color .15s; }
+.ws2-backups .acts .ws2-m-link.is-danger { opacity: 0; }
+.ws2-backups li:is(:hover, :focus-within) .acts .ws2-m-link { opacity: 1; }
+.ws2-backups .tag { font-family: var(--ws-mono); font-size: 10px; letter-spacing: .2em; color: var(--ws-ink-3); }
+.ws2-backups li.is-pending .tag { color: var(--log-pencil); }
+.ws2-backups li.is-broken :is(.when, .why) {
+  color: var(--ws-ink-3); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--log-pencil) 70%, transparent); text-decoration-thickness: 1.5px;
+}
+.ws2-backups .detail { grid-column: 1 / -1; padding: 0 0 9px; font-family: var(--ws-mono); font-size: 10.5px; line-height: 1.5; color: var(--ws-ink-3); overflow-wrap: anywhere; }
+@container (max-width: 520px) {
+  .ws2-backups .meta { grid-template-columns: 128px 42px auto; }
+  .ws2-backups .ver { display: none; }
+}
+
+/* what takes the room: a dimension line for each, measured against the largest */
+.ws2-disk { margin: 6px 0 0; padding: 0; list-style: none; }
+.ws2-disk li { display: grid; grid-template-columns: 84px minmax(0, 1fr) 76px; align-items: center; gap: 14px; height: 30px; border-bottom: 1px solid var(--ws-rule); font-size: 12.5px; color: var(--ws-ink-2); }
+.ws2-disk .size { font-family: var(--ws-mono); font-size: 11.5px; text-align: right; color: var(--ws-ink); font-variant-numeric: tabular-nums; }
+.ws2-disk .dim { position: relative; height: 9px; }
+.ws2-disk .dim i {
+  position: absolute; left: 0; top: 0; bottom: 0; border-left: 1px solid var(--ws-ink-3); border-right: 1px solid var(--ws-ink-3);
+  transform-origin: left center; animation: ws2-dim-in .5s cubic-bezier(.3, .7, .2, 1) .15s both;
+}
+.ws2-disk .dim i::before { content: ''; position: absolute; left: 0; right: 0; top: 4px; height: 1px; background: var(--ws-ink-2); }
+@keyframes ws2-dim-in { from { transform: scaleX(0); } }
+.ws2-disk li.total { height: 34px; border-bottom: 0; color: var(--ws-ink); }
+.ws2-disk li.total .size { font-size: 12.5px; }
+
+/* ---------- 06 usage ---------- */
+
+/* the estimate, large, its terms right under it; then the ledger by model */
+.ws2-usage-sum { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; margin: 22px 0 0; padding: 0 0 10px; border-bottom: 1px solid var(--ws-rule); }
+.ws2-usage-sum .lbl { font-size: 12px; letter-spacing: .2em; color: var(--ws-ink-3); }
+.ws2-usage-sum .amt { font-family: var(--ws-serif); font-size: 32px; line-height: 1.1; letter-spacing: .02em; color: var(--ws-ink); font-variant-numeric: lining-nums tabular-nums; transition: opacity .2s; }
+.ws2-usage-sum .amt .plus { margin: 0 .35em; font-style: normal; font-size: 20px; color: var(--ws-ink-3); }
+.ws2-usage-sum .amt .none { color: var(--ws-ink-3); }
+.ws2-usage-sum .calls { margin-left: auto; font-family: var(--ws-mono); font-size: 11px; letter-spacing: .1em; color: var(--ws-ink-3); }
+.ws2-m-note.ws2-usage-terms { margin-top: 8px; color: var(--ws-ink-2); }
+.ws2-usage-table { width: 100%; margin: 16px 0 0; border-collapse: collapse; transition: opacity .2s; }
+.ws2-usage-table :is(th, td) { padding: 8px 0 8px 12px; border-bottom: 1px solid var(--ws-rule); font-weight: 400; text-align: right; white-space: nowrap; vertical-align: baseline; }
+.ws2-usage-table :is(th, td):first-child { padding-left: 0; text-align: left; }
+.ws2-usage-table thead th { padding-top: 0; font-size: 11px; letter-spacing: .12em; color: var(--ws-ink-3); }
+.ws2-usage-table tbody th b { display: block; max-width: 200px; overflow: hidden; text-overflow: ellipsis; font-family: var(--ws-mono); font-weight: 400; font-size: 12px; color: var(--ws-ink); }
+.ws2-usage-table tbody th small { display: block; margin-top: 3px; font-size: 11px; color: var(--ws-ink-3); }
+.ws2-usage-table td { font-family: var(--ws-mono); font-size: 12px; color: var(--ws-ink-2); font-variant-numeric: tabular-nums; }
+.ws2-usage-table td:last-child { color: var(--ws-ink); }
+.ws2-usage-table td.na { font-family: var(--ws-sans); font-size: 12px; color: var(--ws-ink-3); }
+.ws2-usage-table td small { display: block; margin-top: 3px; font-family: var(--ws-sans); font-size: 10.5px; color: var(--ws-ink-3); }
+.ws2-usage.is-loading :is(.ws2-usage-sum .amt, .ws2-usage-table) { opacity: .4; }
+.ws2-usage-gaps { margin: 12px 0 0; padding: 0; list-style: none; }
+.ws2-usage-gaps li { position: relative; padding-left: 16px; font-size: 12.5px; line-height: 1.7; color: var(--ws-ink-3); }
+.ws2-usage-gaps li::before { content: ''; position: absolute; left: 2px; top: 11px; width: 7px; height: 1px; background: var(--ws-ink-3); }
+@container (max-width: 520px) {
+  .ws2-usage-table :is(th, td):nth-child(5) { display: none; }
+  .ws2-usage-table tbody th b { max-width: 120px; }
+}
+
+/* ---------- 07 about ---------- */
+
+.ws2-about-head { display: flex; align-items: baseline; gap: 16px; padding: 6px 0 2px; }
+.ws2-about-head .name { font-family: var(--ws-display); font-size: 26px; font-weight: 500; letter-spacing: .4em; color: var(--ws-ink); }
+.ws2-about-head .ver { font-family: var(--ws-mono); font-size: 12.5px; letter-spacing: .1em; color: var(--ws-ink-2); }
+/* a new version: its number, its notes as a short list, then the plate */
+.ws2-update { padding-top: 12px; }
+.ws2-update-head { display: flex; align-items: baseline; gap: 14px; }
+.ws2-update-head b { font-weight: 400; font-size: 15px; letter-spacing: .06em; color: var(--ws-ink); }
+.ws2-update-head .date { font-family: var(--ws-mono); font-size: 11px; letter-spacing: .08em; color: var(--ws-ink-3); }
+.ws2-update-notes { margin: 8px 0 0; padding: 0; list-style: none; }
+.ws2-update-notes li { position: relative; padding-left: 16px; font-family: var(--ws-read); font-size: 13.5px; line-height: 1.8; color: var(--ws-ink-2); }
+.ws2-update-notes li::before { content: ''; position: absolute; left: 2px; top: 12px; width: 7px; height: 1px; background: var(--ws-ink-3); }
+/* the download as a dimension line drawn out to its length */
+.ws2-update-progress { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; margin-top: 16px; }
+.ws2-update-progress .dim { position: relative; height: 9px; border-left: 1px solid var(--ws-ink-3); border-right: 1px solid var(--ws-line-2); }
+.ws2-update-progress .dim::before { content: ''; position: absolute; left: 0; right: 0; top: 4px; height: 1px; background: var(--ws-line-2); }
+.ws2-update-progress .dim i { position: absolute; left: 0; top: 2px; height: 5px; background: var(--log-pencil); transition: width .12s linear; }
+.ws2-update-progress .num { font-family: var(--ws-mono); font-size: 11px; letter-spacing: .04em; color: var(--ws-ink-2); font-variant-numeric: tabular-nums; }
+.ws2-credits { margin: 0; padding: 0; list-style: none; }
+.ws2-credits li { display: grid; gap: 3px; padding: 11px 0; border-bottom: 1px solid var(--ws-rule); }
+.ws2-credits b { font-family: var(--ws-mono); font-weight: 400; font-size: 12px; letter-spacing: .04em; color: var(--ws-ink); }
+.ws2-credits span { font-size: 12.5px; line-height: 1.75; color: var(--ws-ink-2); }
+.ws2-credits .ws2-m-link { height: auto; padding: 0; margin: 0 .15em; font-size: inherit; letter-spacing: .02em; }
+
+/* ---------- 数据异常: a fault report on the sheet, before login ---------- */
+
+.ws2.ws2-recovery { display: block; }
+.ws2.ws2-recovery:not(.rail)::after { content: none; }
+.ws2-recovery-scroll {
+  position: relative; z-index: 1; height: 100%; overflow-y: auto; overflow-x: hidden;
+  scrollbar-width: thin; scrollbar-color: var(--ws-line-2) transparent;
+}
+.ws2-recovery-sheet {
+  position: relative; width: min(620px, calc(100% - 48px)); margin: clamp(28px, 9vh, 96px) auto 40px; padding: 28px 34px 24px;
+  border: 1px solid var(--ws-rule); background: color-mix(in srgb, var(--ws-bg) 90%, transparent); backdrop-filter: blur(4px);
+  container-type: inline-size; animation: ws2-body-in .3s ease-out both;
+}
+/* its corners ticked like the frame's */
+.ws2-recovery-sheet::before {
+  content: ''; position: absolute; inset: -5px; pointer-events: none;
+  background:
+    linear-gradient(var(--ws-ink-3), var(--ws-ink-3)) 0 0 / 9px 1px no-repeat, linear-gradient(var(--ws-ink-3), var(--ws-ink-3)) 0 0 / 1px 9px no-repeat,
+    linear-gradient(var(--ws-ink-3), var(--ws-ink-3)) 100% 0 / 9px 1px no-repeat, linear-gradient(var(--ws-ink-3), var(--ws-ink-3)) 100% 0 / 1px 9px no-repeat,
+    linear-gradient(var(--ws-ink-3), var(--ws-ink-3)) 0 100% / 9px 1px no-repeat, linear-gradient(var(--ws-ink-3), var(--ws-ink-3)) 0 100% / 1px 9px no-repeat,
+    linear-gradient(var(--ws-ink-3), var(--ws-ink-3)) 100% 100% / 9px 1px no-repeat, linear-gradient(var(--ws-ink-3), var(--ws-ink-3)) 100% 100% / 1px 9px no-repeat;
+}
+.ws2-recovery-sheet > .ws2-stamp { --stamp-word: 22px; right: 28px; top: 22px; animation-delay: .35s; }
+.ws2-recovery-sheet > header { display: grid; gap: 8px; padding: 0 0 16px; border-bottom: 1px solid var(--ws-rule); }
+.ws2-recovery-sheet .fig { font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .3em; color: var(--ws-ink-3); }
+.ws2-recovery-sheet h1 { margin: 0; font-family: var(--ws-serif-cjk); font-size: 30px; font-weight: 400; letter-spacing: .2em; color: var(--ws-ink); }
+.ws2-recovery-sheet .lead { margin: 16px 0 6px; font-family: var(--ws-read); font-size: 15px; line-height: 1.8; color: var(--ws-ink); text-wrap: pretty; }
+.ws2-recovery-sheet .ws2-backups .acts .ws2-m-link { opacity: 1; }
+.ws2-recovery-detail { margin-top: 22px; padding-top: 12px; border-top: 1px solid var(--ws-rule); }
+.ws2-recovery-detail summary { width: max-content; font-size: 12px; letter-spacing: .14em; color: var(--ws-ink-3); cursor: pointer; }
+.ws2-recovery-detail summary:hover { color: var(--ws-ink-2); }
+.ws2-recovery-detail code { display: block; margin-top: 10px; font-family: var(--ws-mono); font-size: 11px; line-height: 1.7; color: var(--ws-ink-2); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+@container (max-width: 480px) {
+  .ws2-recovery-sheet > .ws2-stamp { --stamp-word: 18px; right: 14px; top: 14px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ws2 .ws2-wl-line :is(.main, .field) { stroke-dashoffset: 0; }
   .ws2 .ws2-wl-panel.aiming .ws2-wl-diagram .hop { animation: none; }
   .ws2 .ws2-wl-diagram .here { opacity: 1; }
   .ws2 .settings-embedded .identity-mode-option:has(input:checked)::after { animation: none; }
+  .ws2 :is(.ws2-disk .dim i, .ws2-m-form, .ws2-tool .glyph > .ws2-news, .ws2-recovery-sheet) { animation: none; }
+  .ws2 .ws2-choice button.on::after { animation: none; }
+  .ws2 .ws2-update-progress .dim i { transition: none; }
 }

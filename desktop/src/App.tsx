@@ -3,19 +3,31 @@ import { BootSplash, hasBootSplash } from './components/BootSplash';
 import { SalieriLogin, type EntranceCue } from './components/SalieriLogin';
 import { Workstation, type EntrancePhase } from './components/Workstation';
 import { loadAssetPack } from './assetPack';
+import { DataRecovery } from './workstation/DataRecovery';
+import { dataStatus, type DataStatus } from './workstation/dataApi';
 import { useReducedMotion } from './design-system/useReducedMotion';
 /* App.css is imported once from main.tsx (tokens.css → App.css) — sole cascade owner. */
 
-type AppStep = 'probe' | 'splash' | 'login' | 'workstation';
+type AppStep = 'probe' | 'splash' | 'login' | 'workstation' | 'recovery';
 /** Upper bound for the whole entrance; only reached if animation events never arrive. */
 const ENTRANCE_FALLBACK_MS = 12000;
 
 function App() {
   const [step, setStep] = useState<AppStep>('probe');
+  const [fault, setFault] = useState<DataStatus | null>(null);
   useEffect(() => {
     let cancelled = false;
-    // The original entrance animation is part of the pack; without it the app opens on login.
-    void loadAssetPack().then((on) => { if (!cancelled) setStep(on && hasBootSplash() ? 'splash' : 'login'); });
+    // The original entrance animation is part of the pack; without it the app opens on login. A database that failed
+    // its startup check (the backend then answers only its data routes) opens on the recovery sheet instead.
+    void Promise.all([loadAssetPack(), dataStatus().catch(() => null)]).then(([on, data]) => {
+      if (cancelled) return;
+      if (data?.status === 'corrupt') {
+        setFault(data);
+        setStep('recovery');
+        return;
+      }
+      setStep(on && hasBootSplash() ? 'splash' : 'login');
+    });
     return () => { cancelled = true; };
   }, []);
   const [worldline, setWorldline] = useState<'steins_gate' | 'beta'>(() => {
@@ -83,6 +95,8 @@ function App() {
   return (
     <main className="app-main-container">
       {step === 'splash' && <BootSplash onDone={handleSplashDone} />}
+
+      {step === 'recovery' && fault && <DataRecovery status={fault} worldline={worldline} />}
 
       {step === 'workstation' && (
         <Workstation

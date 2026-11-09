@@ -4,7 +4,7 @@ import { DIVERGENCE, Nixie, WORLDLINE_NAME, useTunedValue } from './Nixie';
 import { useReducedMotion } from '../design-system/useReducedMotion';
 import { PencilRing } from './TitleStrip';
 
-export type MenuSection = 'worldline' | 'connections' | 'sound' | 'character';
+export type MenuSection = 'worldline' | 'connections' | 'sound' | 'character' | 'data' | 'usage' | 'about';
 type Worldline = 'steins_gate' | 'beta';
 
 export const MENU_SECTIONS: { key: MenuSection; zh: string; en: string }[] = [
@@ -12,14 +12,19 @@ export const MENU_SECTIONS: { key: MenuSection; zh: string; en: string }[] = [
   { key: 'connections', zh: '连接', en: 'CONNECTIONS' },
   { key: 'sound', zh: '声音', en: 'SOUND' },
   { key: 'character', zh: '角色与对话', en: 'CHARACTER' },
+  { key: 'data', zh: '数据', en: 'DATA' },
+  { key: 'usage', zh: '用量', en: 'USAGE' },
+  { key: 'about', zh: '关于', en: 'ABOUT' },
 ];
 
 /** The system page: an index of its sections on the left (the current one's number ringed in pencil), the section's
  *  form on the right. The conversation stays mounted underneath. */
 export function SystemMenu({
-  open, section, onSection, onClose, returnFocusRef, children,
+  open, section, onSection, onClose, returnFocusRef, marks, children,
 }: {
   open: boolean;
+  /** A pencil dot by a section that has news (a new version under 关于), with words for screen readers. */
+  marks?: Partial<Record<MenuSection, string>>;
   section: MenuSection;
   onSection: (s: MenuSection) => void;
   onClose: () => void;
@@ -65,6 +70,7 @@ export function SystemMenu({
               {i === cur && open ? <PencilRing key={s.key} seed={`system-${s.key}`} rx={13} ry={10} /> : null}
             </span>
             <span className="lbl"><span className="zh">{s.zh}</span><span className="en">{s.en}</span></span>
+            {marks?.[s.key] ? <span className="ws2-news"><span className="ws2-sr-only">（{marks[s.key]}）</span></span> : null}
           </button>
         ))}
         <button

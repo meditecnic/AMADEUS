@@ -1,0 +1,9 @@
+{
+  "name": "data-restore-failed",
+  "extends": "streaming",
+  "description": "A scheduled restore failed at startup and was rolled back; the data is as it was before.",
+  "data": {
+    "status": "restore_failed",
+    "detail": "Restored checksum mismatch: memory.sqlite3; restored pre-restore backup"
+  }
+}

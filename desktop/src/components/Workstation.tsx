@@ -46,6 +46,11 @@ import { sessionDialogFallback } from '../workstation/focusHandoff';
 import { useExitPresence } from '../workstation/useExitPresence';
 import { ConnectionCheckPanel, chatCheckMessage, requestChatCheck, type ChatCheckState } from '../workstation/ConnectionCheck';
 import { ConnectionList } from '../workstation/ConnectionList';
+import { DataPanel } from '../workstation/DataPanel';
+import { UsagePanel } from '../workstation/UsagePanel';
+import { AboutPanel } from '../workstation/AboutPanel';
+import { RestoreNotice } from '../workstation/RestoreNotice';
+import { checkAfterLogin, updateWaiting, useUpdates } from '../workstation/updates';
 import { SendSignal } from '../workstation/SendSignal';
 import { PresenceIndicator, ThinkingMark, PRESENCE_LABELS } from '../workstation/PresenceIndicator';
 import { ErrorText, checkShortLabel } from '../workstation/logParts';
@@ -320,6 +325,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
     code: string;
   } | null>(null);
   const [menuSection, setMenuSection] = useState<MenuSection>('worldline');
+  // The quiet update check, once per run; a waiting version is marked on the 系统 key and under 关于.
+  const updates = useUpdates();
+  const updateMark = updateWaiting(updates);
+  useEffect(() => { checkAfterLogin(); }, []);
   const [shiftConfirm, setShiftConfirm] = useState<'steins_gate' | 'beta' | null>(null);
   const [pendingModel, setPendingModel] = useState<string | null>(null);
   const wsRootRef = useRef<HTMLDivElement>(null);
@@ -2126,7 +2135,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             </div>
           </div>
           <div className="ws2-booth-end">
-          <Tip label={isSettingsOpen ? '回到对话（Esc）' : '系统设置'}>
+          <Tip label={isSettingsOpen ? '回到对话（Esc）' : updateMark && 'update' in updates && updates.update ? `系统设置 · 新版本 ${updates.update.version}` : '系统设置'}>
           <button
             type="button"
             ref={systemButtonRef}
@@ -2135,10 +2144,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
               audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume);
               if (isSettingsOpen) closeMenu(); else openMenu();
             }}
-            aria-label="系统设置"
+            aria-label={updateMark ? '系统设置（有新版本）' : '系统设置'}
             aria-expanded={isSettingsOpen}
           >
-            <span className="glyph"><GearDial />{isSettingsOpen ? <PencilRing seed="system" /> : null}</span>
+            <span className="glyph"><GearDial />{isSettingsOpen ? <PencilRing seed="system" /> : null}{updateMark ? <i className="ws2-news" aria-hidden="true" /> : null}</span>
             <span className="word" aria-hidden="true">系统</span>
           </button>
           </Tip>
@@ -2328,6 +2337,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             </span>
           </div>
         )}
+        <RestoreNotice onOpen={() => openMenu('data')} />
         {/* The composer under the log, in its text column: what she is running on over the slot, the slot, and the
             sheet's own send key in your margin (SG a clock hand, β a Nixie filament; workstation/SendKey.tsx). */}
         <form className="ws2-composer" onSubmit={handleSend}>
@@ -2646,6 +2656,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         onSection={setMenuSection}
         onClose={closeMenu}
         returnFocusRef={systemButtonRef}
+        marks={updateMark ? { about: '有新版本' } : undefined}
       >
         {/* Fixed slots keep the embedded SettingsModal mounted across sections, so unsaved drafts survive. */}
         <div className={`ws2-conn${menuSection === 'connections' ? ' is-split' : ''}`}>
@@ -2717,7 +2728,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
             <div className="ws2-m-group">语音合成</div>
           </div>
         )}
-        <div className="ws2-settings-host" hidden={menuSection === 'worldline'}>
+        {menuSection === 'data' && <DataPanel />}
+        {menuSection === 'usage' && (
+          <UsagePanel
+            conversationId={activeConversationId}
+            providerName={(id) => providers.find((row) => row.id === id)?.display_name ?? id}
+          />
+        )}
+        {menuSection === 'about' && <AboutPanel />}
+        <div className="ws2-settings-host" hidden={menuSection !== 'connections' && menuSection !== 'sound' && menuSection !== 'character'}>
       <SettingsModal
         variant="embedded"
         tab={menuSection === 'connections' ? 'connections' : menuSection === 'sound' ? 'voice' : 'basic'}

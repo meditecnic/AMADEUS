@@ -7,7 +7,7 @@ import type { Plugin } from 'vite';
 import { MOCK_LOCAL_TOKEN } from './auth';
 import { installScenarioBridge } from './client-bridge';
 import { createMockRuntime, type Frame } from './runtime';
-import { readCookie, scenarios } from './scenarios';
+import { readCookie, scenarios, selectScenario } from './scenarios';
 
 const PACK_TYPES: Record<string, string> = { '.png': 'image/png', '.ogg': 'audio/ogg', '.json': 'application/json' };
 
@@ -97,6 +97,23 @@ export function devMockPlugin(): Plugin {
           } catch (error) { next(error as Error); }
           return;
         }
+        // The update check's stand-in (workstation/updates.ts): the version in tauri.conf.json, and what the scenario offers.
+        if (url.pathname === '/__mock/update') {
+          const offer = scenarios[selectScenario(url, request.headers.cookie || '')].update;
+          let current = '0.0.0';
+          try {
+            current = JSON.parse(fs.readFileSync(path.resolve(server.config.root, 'src-tauri/tauri.conf.json'), 'utf8')).version ?? current;
+          } catch { /* keep the placeholder */ }
+          response.setHeader('Content-Type', 'application/json; charset=utf-8');
+          response.setHeader('Cache-Control', 'no-store');
+          response.end(JSON.stringify({
+            current,
+            update: offer?.version ? { version: offer.version, date: offer.date ?? null, notes: offer.notes ?? '' } : null,
+            fail: offer?.fail ?? null,
+            size: offer?.size ?? 48_234_496,
+          }));
+          return;
+        }
         if (!url.pathname.startsWith('/api/') && !url.pathname.startsWith('/health')) return next();
         // Opt-in local asset pack for looking at the "pack installed" stage (same variable as the backend). The pack is
         // read from the developer's own data directory and never bundled; unset, the pack stays absent as before.
@@ -130,7 +147,8 @@ export function devMockPlugin(): Plugin {
           );
           if (reply.delayMs) await new Promise(resolve => setTimeout(resolve, reply.delayMs));
           response.statusCode = reply.status;
-          response.end(JSON.stringify(reply.body));
+          for (const [name, value] of Object.entries(reply.headers ?? {})) response.setHeader(name, value);
+          response.end(reply.raw ?? JSON.stringify(reply.body));
         } catch (error) {
           response.statusCode = error instanceof Error && error.message === 'body_too_large' ? 413 : 400;
           response.end(JSON.stringify({ detail: { code: 'invalid_mock_request' } }));

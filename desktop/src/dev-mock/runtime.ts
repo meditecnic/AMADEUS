@@ -1,11 +1,11 @@
 import { mockMemoryForTurn } from './chatMemory';
+import { createDataStore, dataUnavailable, handleData, type Reply } from './data';
 import { fixedTime, model, providers, searchSettings } from './fixtures';
 import { createMemoryStore, handleMemory } from './memory';
 import { scenarios, selectScenario, type Scenario } from './scenarios';
 
 export type Frame = Record<string, unknown>;
 const RECORDED_DELAY_MS = 1500;
-type Reply = { status: number; body: unknown; delayMs?: number };
 type HistoryMessage = { role: string; content: string; translation?: string };
 type Conversation = {
   id: string; title: string; title_source: string; is_default: boolean; is_pinned: boolean;
@@ -22,6 +22,7 @@ export function createMockRuntime() {
     memory: ReturnType<typeof createMemoryStore>;
     conversations: Map<string, Conversation[]>;
     search: typeof searchSettings;
+    data: ReturnType<typeof createDataStore>;
   }>();
   let counter = 0;
 
@@ -33,6 +34,8 @@ export function createMockRuntime() {
         memory: createMemoryStore(scenarios[name].memory),
         conversations: new Map(),
         search: structuredClone(searchSettings),
+        // [210] the passcode lives with the client, so setting one on the system page holds at the next login
+        data: createDataStore(scenarios[name].data, scenarios[name].login.passcodeSet ? scenarios[name].login.password : null),
       };
       clients.set(key, current);
     }
@@ -79,12 +82,15 @@ export function createMockRuntime() {
     const scriptedError = scenario.errors.find(error => error.method === method && path.startsWith(error.pathPrefix));
     if (scriptedError) return ok(scriptedError.body, scriptedError.status);
 
+    // [210] [211] [212] [216] data, passcode, usage, export, location, diagnostics; a corrupt store closes the rest.
+    const data = state(name, client).data;
+    const handled = dataUnavailable(data, path) ?? handleData(url, method, body, data);
+    if (handled) return handled;
     // [210] passcode login. No passcode by default; `login.passcodeSet` makes the scenario's password the passcode.
-    if (path === '/api/auth/state' && method === 'GET') return ok({ passcode_set: Boolean(scenario.login.passcodeSet) });
     if (path === '/api/auth/login' && method === 'POST') {
       const value = typeof body.passcode === 'string' ? body.passcode : null;
       const egg = value !== null && value.normalize('NFKD').replace(/\p{M}/gu, '').trim().toLowerCase().replace(/\s+/g, ' ') === 'gott wurfelt nicht';
-      const accepted = !scenario.login.forceFailure && (!scenario.login.passcodeSet || value === scenario.login.password);
+      const accepted = !scenario.login.forceFailure && (data.passcode === null || value === data.passcode);
       return accepted ? ok({ status: 'success', easter_egg: egg }) : ok({ detail: { code: 'invalid_passcode' } }, 401);
     }
     if (path === '/api/auth/salieri' && method === 'POST') {
