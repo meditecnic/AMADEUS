@@ -282,6 +282,33 @@ async def _seed_prompt_experience(
 
 
 @pytest.mark.asyncio
+async def test_experience_query_prepared_once_per_selection(isolated_store, monkeypatch):
+    from app.services.memory_v11 import retrieval
+
+    query = "Ｔｅａ 周末旅行"
+    texts = ("tea 周末旅行去了山里", "週末にteaを飲んだ", "今天学习数学")
+    ids = [await _seed_prompt_experience(session_id="scale", display_text=text) for text in texts]
+    await _seed_prompt_experience(session_id="scale", display_text=texts[0], expires_at="2020-01-01T00:00:00+00:00")
+    expected = {eid: retrieval._lexical_relevance(text, query) for eid, text in zip(ids, texts)
+                if retrieval._meaningful_cjk_evidence(text, query)}
+    normalize = retrieval._normalized_text
+    query_calls = 0
+
+    def counted(text):
+        nonlocal query_calls
+        query_calls += text == query
+        return normalize(text)
+
+    monkeypatch.setattr(retrieval, "_normalized_text", counted)
+    rows = await retrieval.select_experience_candidates(
+        session_id="scale", worldline="steins_gate", identity_mode="self", query=query,
+        now="2026-11-08T00:00:00+00:00",
+    )
+    assert {row["experience_id"]: row["relevance"] for row in rows} == expected
+    assert query_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_r5_v11_prompt_injects_both_sections(isolated_store, monkeypatch):
     """H: v11 prompt shows stable fact + experience in separate sections."""
     session_id = f"r5-both-{uuid4()}"
