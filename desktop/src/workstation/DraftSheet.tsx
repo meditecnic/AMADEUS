@@ -44,19 +44,22 @@ const ANCHOR = (() => {
 
 const dly = (ms: number) => ({ '--d': `${ms}ms` }) as CSSProperties;
 
-function useSecond() {
+/** The time, once a second; held where it was while `still`. */
+function useSecond(still: boolean) {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
+    if (still) return;
+    setNow(new Date());
     const id = window.setInterval(() => setNow(new Date()), 1000);
     return () => window.clearInterval(id);
-  }, []);
+  }, [still]);
   return now;
 }
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
-const Movement = memo(function Movement() {
-  const now = useSecond();
+const Movement = memo(function Movement({ still }: { still: boolean }) {
+  const now = useSecond(still);
   const s = now.getSeconds();
   const m = now.getMinutes() + s / 60;
   const h = (now.getHours() % 12) + m / 60;
@@ -181,9 +184,10 @@ function startPoint(): V3 {
 }
 const plot = (p: V3) => `${f1(p[0] * 13)},${f1(-(p[2] - 25) * 13)}`;
 
-function Divergence() {
+function Divergence({ still }: { still: boolean }) {
   const ref = useRef<SVGGElement>(null);
-  const [run, setRun] = useState(() => !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+  const [moving, setRun] = useState(() => !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+  const run = moving && !still;
   useEffect(() => {
     const mq = window.matchMedia?.('(prefers-reduced-motion: reduce)');
     if (!mq) return;
@@ -286,16 +290,16 @@ const MOTHS: { n: number; at: CSSProperties; w: string; r: number; o: number }[]
 const ROWS = ['A', 'B', 'C', 'D', 'E', 'F'];
 const COLS = [1, 2, 3, 4, 5, 6, 7, 8];
 
-export function DraftSheet({ worldline }: { worldline: 'steins_gate' | 'beta' }) {
+export function DraftSheet({ worldline, still = false }: { worldline: 'steins_gate' | 'beta'; still?: boolean }) {
   return (
     <div className={`ds-sheet ds-${worldline === 'beta' ? 'beta' : 'sg'}`} aria-hidden="true">
       <div className="ds-paper" />
       <div className="ds-grid" />
       <Trace of={worldline === 'beta' ? 'clock' : 'lorenz'} />
       <svg className="ds-plate" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMin slice">
-        {worldline === 'beta' ? <Butterfly /> : <Movement />}
+        {worldline === 'beta' ? <Butterfly /> : <Movement still={still} />}
       </svg>
-      {worldline === 'beta' && <Divergence />}
+      {worldline === 'beta' && <Divergence still={still} />}
       {/* one soda-can ring left on the SG sheet, by the clock */}
       {worldline !== 'beta' && <img className="ds-ring" src="/assets/sheet/ring-3.webp" alt="" draggable={false} decoding="async" />}
       {worldline === 'beta' && (

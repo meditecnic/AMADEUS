@@ -16,8 +16,7 @@ const BATCH = 6;
 /** Faces the workstation is known to draw on its first screen. Only used until it has reported its own. */
 const SEED: [font: string, text: string][] = [
   ['400 16px "LXGW Neo XiHei"', '这个会话还是空的'],
-  ['900 16px "Noto Serif JP"', '牧瀬紅莉栖'],
-  ['400 16px "Noto Serif JP"', 'まきせくりす'],
+  ['500 16px "Noto Serif JP"', '牧瀬紅莉栖'],
   ['400 16px "Noto Serif SC"', '这个会话还是空的世界线'],
   ['400 16px "Noto Sans SC"', '世界线会话记忆设置连接发送'],
   ['500 16px Oxanium', 'AMADEUS'],

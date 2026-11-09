@@ -51,6 +51,7 @@ import { PresenceIndicator, ThinkingMark, PRESENCE_LABELS } from '../workstation
 import { ErrorText, checkShortLabel } from '../workstation/logParts';
 import { SendKey } from '../workstation/SendKey';
 import { Engram, GearDial, OpenSwitch, PencilRing } from '../workstation/TitleStrip';
+import { Stamp } from '../workstation/Stamp';
 import { conversationNo, conversationNumbers } from '../workstation/numbering';
 import { VoiceScope } from '../workstation/VoiceScope';
 import { OverlayRootContext, Tip, TipProvider } from '../workstation/Tip';
@@ -1989,6 +1990,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
     : status === 'CONNECTING' || sessionPending ? 'OFFLINE · 连接中' : 'OFFLINE';
   const presence = isThinking ? 'thinking' : isPlaying ? 'speaking' : isSynthesizing ? 'voicing' : online ? 'listening' : sessionConnecting || reconnecting ? 'connecting' : 'offline';
   const presenceLabel = PRESENCE_LABELS[presence];
+  /** The sheet's own reading of the link: down (nothing is coming back) stamps the sheet and stops its clock. */
+  const linkState = online ? 'up'
+    : sessionConnecting || reconnecting ? 'connecting'
+    : showSetupStatus ? 'setup'
+    : awaitingWorldline || sessionPending ? 'connecting'
+    : 'down';
   const thinkingSprite = packAsset(worldline === 'steins_gate' ? 'assets/ui/spinner_sg_20f.png' : 'assets/ui/spinner_beta_20f.png');
   const lastAssistantId = [...visibleMessages].reverse().find((msg) => msg.role === 'assistant' && !msg.systemError)?.id;
   // An old conversation whose connection was removed keeps its history but must be re-pointed by the user.
@@ -2005,6 +2012,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       ref={setWsRoot}
       className={`ws2${isHistoryCollapsed ? ' rail' : ''}${isSettingsOpen ? ' menu-open' : ''}${isMemoryOpen ? ' memory-space-open' : ''}`}
       data-wl={worldline === 'beta' ? 'beta' : 'sg'}
+      data-link={linkState}
       data-entrance={entering ? entrance : undefined}
       inert={entering || undefined}
       onMouseDown={handleAudioInit}
@@ -2023,7 +2031,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         if (root.scrollTop || root.scrollLeft) root.scrollTo(0, 0);
       }}
     >
-      <Atmosphere worldline={worldline} />
+      <Atmosphere worldline={worldline} still={linkState === 'down'} />
       {entering && (
         <>
           <i
@@ -2109,7 +2117,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             </button>
             </Tip>
             <div
-              className={`ws2-online${online ? ' is-online' : ''}${awaitingWorldline ? ' is-sync' : ''}`}
+              className={`ws2-online${online ? ' is-online' : ''}${awaitingWorldline ? ' is-sync' : linkState === 'connecting' ? ' is-pending' : ''}`}
               role="status"
               data-status={showSetupStatus ? 'SETUP' : awaitingWorldline ? 'SYNC' : sessionRejected ? 'REJECTED' : status}
             >
@@ -2322,14 +2330,18 @@ export const Workstation: React.FC<WorkstationProps> = ({
         {(reconnectStopped || reconnecting || linkLost) && visibleMessages.length > 0 && (
           <div className={`ws2-link-state${linkLost || reconnectStopped ? ' is-lost' : ''}`} role="status">
             <span>{reconnectStopMessage ?? (linkLost ? '自动重连没有成功。' : `连接中断，正在自动重连（${retryCount}）。`)}</span>
-            {(linkLost || reconnectStopped) && <button type="button" onClick={reconnect}>重新连接</button>}
+            {(linkLost || reconnectStopped) && (
+              <span className="ws2-notice-ways"><button type="button" onClick={reconnect}>重新连接</button></span>
+            )}
           </div>
         )}
         {needsApiKey && !providerGone && visibleMessages.length > 0 && (
           <div className="ws2-key-missing" role="status">
             <span>「{activeProvider?.display_name || activeProviderId}」还没有密钥，她现在听不到你。</span>
-            <button type="button" onClick={() => openConnectionsAt('key')}>填写密钥</button>
-            <button type="button" onClick={() => openConnectionsAt('list')}>换一个接入</button>
+            <span className="ws2-notice-ways">
+              <button type="button" onClick={() => openConnectionsAt('key')}>填写密钥</button>
+              <button type="button" onClick={() => openConnectionsAt('list')}>换一个接入</button>
+            </span>
           </div>
         )}
         {/* The composer under the log, in its text column: what she is running on over the slot, the slot, and the
@@ -2455,28 +2467,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
       <section className={`ws2-stage presence-${presence}`} inert={isMemoryOpen || undefined}>
         <div className="ws2-seam" aria-hidden="true" />
-        {/* Her name set like the original's chapter cards: black Mincho over drafting instruments, redrawn on each shift. */}
-        <div className="ws2-chapter" key={`chapter-${worldline}`} aria-hidden="true">
-          <svg className="ws2-chapter-draft" viewBox="0 0 240 640" preserveAspectRatio="xMaxYMin meet">
-            <path pathLength={1} d="M232 120 A 200 200 0 0 0 52 320" />
-            <path pathLength={1} d="M232 120 V 320 H 52" />
-            <path pathLength={1} d="M232 60 V 612 M222 612 H 240" />
-            {Array.from({ length: 28 }, (_, i) => <path key={i} pathLength={1} d={`M232 ${80 + i * 19} h ${i % 5 === 0 ? -9 : -5}`} className="tick" />)}
-            <circle pathLength={1} cx="96" cy="196" r="17" /><circle pathLength={1} cx="96" cy="196" r="6" />
-            <path pathLength={1} d="M70 196 H 122 M96 170 V 222" />
-            <circle pathLength={1} cx="172" cy="236" r="30" /><circle pathLength={1} cx="172" cy="236" r="24" className="thin" />
-            <path pathLength={1} d="M26 596 L 206 356" />
-            {Array.from({ length: 16 }, (_, i) => <path key={i} pathLength={1} d={`M${38 + i * 10.6} ${580 - i * 14.1} l 4 3`} className="tick" />)}
-            <circle pathLength={1} cx="44" cy="572" r="9" /><path pathLength={1} d="M30 572 H 58 M44 558 V 586" />
-          </svg>
-          <div className="ws2-chapter-set">
-            <div className="ws2-chapter-kana" lang="ja">
-              {['まき', 'せ', 'く', 'り', 'す'].map((reading, i) => <span key={i} className={i === 2 ? 'giv' : undefined}>{reading}</span>)}
-            </div>
-            <div className="ws2-chapter-jp" lang="ja">牧瀬紅莉栖</div>
-            <div className="ws2-chapter-en"><i>Amadeus</i></div>
-          </div>
-        </div>
+        {/* The link is down: the sheet's clock has stopped, and the sheet says so in red. */}
+        {linkState === 'down' && (
+          <Stamp className="ws2-link-stamp" sub="OFFLINE" tilt={-8}>未连接</Stamp>
+        )}
         {/* Amadeus window: a dot-matrix field behind her that stirs while she thinks and pulses while she speaks. */}
         <div className="ws2-matrix" aria-hidden="true" />
         {/* Light from the screen side. On the lit edge (upper right) the figure's own colour is lifted toward the light
@@ -2553,16 +2547,25 @@ export const Workstation: React.FC<WorkstationProps> = ({
           isSpeaking={isPlaying}
           glitchState={glitchState}
         />
-        <div className="ws2-plate">
-          <VoiceScope
-            volume={voiceVolume}
-            muted={voiceMuted}
-            speaking={isPlaying}
-            onVolume={handleVoiceVolumeChange}
-            onToggleMute={() => setVoiceMuted((m) => !m)}
-            onStop={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); handleStopVoice(); }}
-          />
-          <PresenceIndicator state={presence} />
+        {/* The sheet's title block, in the frame's lower-right corner as on a drawing: whom the figure is of, how she
+            is now, and her voice. */}
+        <div className="ws2-plate" data-presence={presence}>
+          <div className="ws2-plate-name" aria-hidden="true"><span lang="ja">牧瀬紅莉栖</span><i>Amadeus</i></div>
+          <div className="ws2-plate-row">
+            <span className="ws2-plate-key" aria-hidden="true">STATE</span>
+            <PresenceIndicator state={presence} />
+          </div>
+          <div className="ws2-plate-row is-voice">
+            <span className="ws2-plate-key" aria-hidden="true">VOICE</span>
+            <VoiceScope
+              volume={voiceVolume}
+              muted={voiceMuted}
+              speaking={isPlaying}
+              onVolume={handleVoiceVolumeChange}
+              onToggleMute={() => setVoiceMuted((m) => !m)}
+              onStop={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); handleStopVoice(); }}
+            />
+          </div>
         </div>
         {isSettingsOpen && (() => {
           const latest = visibleMessages.find((msg) => msg.id === lastAssistantId);

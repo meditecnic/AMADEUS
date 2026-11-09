@@ -464,8 +464,10 @@ describe('Workstation S4-DS dark-only chrome', () => {
     expect(document.querySelector('.ws2')).toHaveClass('memory-space-open');
     expect(document.querySelector('.ws2-top')).toBeInTheDocument();
     expect(aperture).toHaveAttribute('aria-pressed', 'true');
-    expect(aperture).toHaveAttribute('title', '回到对话（Esc）');
-    expect(aperture).toHaveTextContent('ESC');
+    // open, the key is ringed in pencil (its tip, not a native title, says Esc goes back)
+    expect(aperture).toHaveClass('is-on');
+    expect(aperture.querySelector('.ws2-ring')).toBeTruthy();
+    expect(aperture).not.toHaveAttribute('title');
     expect(document.activeElement).toBe(screen.getByTestId('memory-space'));
     for (const covered of ['.ws2-side', '.ws2-talk', '.ws2-stage']) expect(document.querySelector(covered)).toHaveAttribute('inert');
     fireEvent.click(aperture);

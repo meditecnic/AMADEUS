@@ -144,8 +144,13 @@
 
 /* Notices between the log and the composer: a line of text behind a cut square, as the login prints its messages. */
 .ws2 :is(.ws2-key-missing, .ws2-link-state, .ws2-provider-gone) {
-  position: relative; padding: 2px 0 2px 21px; border: 0; background: none; font-size: 12.5px; line-height: 1.7; color: var(--ws-ink-2);
+  position: relative; flex: none; padding: 2px 0 2px 21px; border: 0; background: none; font-size: 12.5px; line-height: 1.7; color: var(--ws-ink-2);
+  text-wrap: pretty;
 }
+/* the ways out follow the line as one group, and drop under it together when they cannot fit beside it */
+.ws2 :is(.ws2-key-missing, .ws2-link-state) { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 16px; }
+.ws2 :is(.ws2-key-missing, .ws2-link-state) > span:first-child { flex: 0 1 auto; min-width: 0; }
+.ws2 .ws2-notice-ways { display: flex; flex: none; gap: 8px; }
 .ws2 :is(.ws2-key-missing, .ws2-link-state, .ws2-provider-gone)::before {
   content: ''; position: absolute; left: 4px; top: 9px; width: 8px; height: 8px; background: var(--ws-warn);
   clip-path: polygon(3px 0, 100% 0, 100% 100%, 0 100%, 0 3px);

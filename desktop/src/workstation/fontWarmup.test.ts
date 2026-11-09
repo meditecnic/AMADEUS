@@ -69,7 +69,7 @@ describe('workstation font warm-up', () => {
     warmWorkstationFonts(0);
     await vi.advanceTimersByTimeAsync(2000);
     expect(loadText).toHaveBeenCalledWith('400 16px "LXGW Neo XiHei"', expect.any(String));
-    expect(loadText.mock.calls.some(([font, text]) => font.includes('900') && text === '牧瀬紅莉栖')).toBe(true);
+    expect(loadText.mock.calls.some(([font, text]) => font.includes('Noto Serif JP') && text === '牧瀬紅莉栖')).toBe(true);
   });
 
   it('does nothing where the Font Loading API is missing', () => {

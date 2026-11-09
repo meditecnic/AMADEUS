@@ -9,13 +9,14 @@ const BINARY = (() => {
 
 /**
  * Same room, different light, on the same drafting sheet as the login: SG gets cool slate paper and a clock movement,
- * β teal-black paper, the Lorenz attractor, phosphor grain and the Amadeus screen's binary.
+ * β teal-black paper, the Lorenz attractor, phosphor grain and the Amadeus screen's binary. `still` stops the sheet's
+ * clock and the β pair while the link is down.
  */
-export function Atmosphere({ worldline }: { worldline: 'steins_gate' | 'beta' }) {
+export function Atmosphere({ worldline, still = false }: { worldline: 'steins_gate' | 'beta'; still?: boolean }) {
   return (
     <div className="ws2-atmo" aria-hidden="true">
       <div className="ws2-atmo-light" />
-      <DraftSheet worldline={worldline} />
+      <DraftSheet worldline={worldline} still={still} />
       {worldline === 'beta' && (
         <>
           <div className="ws2-atmo-bin">{BINARY}</div>

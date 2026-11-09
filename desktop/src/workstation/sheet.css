@@ -123,6 +123,14 @@
 .ds-beta .ds-zones .z { color: rgba(233, 150, 80, .24); }
 .ds-beta .ds-zones span + span::before { background: rgba(233, 150, 80, .18); }
 
+/* The link is down: the sheet goes dim and still (its clock stops, DraftSheet `still`), the meter's tubes cool, and
+   a stamp says so (workstation.css). On its way back, only the figure dims a little. */
+.ds-sheet :is(.ds-plate, .ds-ring, .ds-moths, .ds-paper) { transition: opacity .6s ease, filter .6s ease; }
+.ws2[data-link='down'] .ds-sheet .ds-plate { opacity: .4; filter: saturate(.3); }
+.ws2[data-link='down'] .ds-sheet :is(.ds-ring, .ds-moths) { opacity: .45; }
+.ws2[data-link='down'] .ds-sheet .ds-paper { filter: saturate(.55) brightness(.82); }
+.ws2[data-link='connecting'] .ds-sheet .ds-plate { opacity: .72; }
+
 /* drafted in with the workstation's entrance, like the login sheet */
 .ws2[data-entrance] .ds-plate [pathLength] { stroke-dasharray: 1; stroke-dashoffset: 1; animation: ds-draw 1.5s cubic-bezier(.3, .6, .2, 1) calc(var(--d, 0ms) + 160ms) forwards; }
 .ws2[data-entrance] .ds-plate .orbit { animation-duration: 3.2s; }
@@ -132,7 +140,6 @@
 @keyframes ds-appear { from { opacity: 0; } }
 
 /* ---------- stage without the asset pack: no stand-in for her; the sheet's figure is what shows there ---------- */
-:root:not([data-asset-pack='on']) .ws2-chapter,
 :root:not([data-asset-pack='on']) .ws2-matrix { display: none; }
 
 /* ---------- an empty conversation: a note taped to the sheet ---------- */
