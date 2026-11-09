@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { LocalBackendGate } from "./LocalBackendGate";
+import { fitWindow } from "./windowFit";
 import "./design-system/motion.css";
 import "./design-system/tokens.css";
 // Bundled OFL display faces (no CDN): Latin serif for the wordmark and menu, CJK serif for headings and her name.
@@ -22,6 +23,9 @@ import "./workstation/log.css";
 import "./workstation/slips.css";
 // The system page: an index of its sections and a ruled form for each.
 import "./workstation/system.css";
+
+// A large window shows the sheet zoomed, not a strip of it (windowFit.ts).
+fitWindow();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

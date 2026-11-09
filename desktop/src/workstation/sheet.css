@@ -198,3 +198,20 @@
 @media (prefers-reduced-motion: reduce) {
   .ws2 .ds-plate * { animation: none !important; stroke-dashoffset: 0 !important; }
 }
+
+/* ---------- the memory space, drawn on this same sheet ---------- */
+/* Its own black paper, grid and border are left out here (inventory §2.11: one ground and one border, its structure
+   and copy untouched): the layer is clear, so the chart lies on this paper inside this frame. The columns step out
+   from under it, and the sheet's figure fades back so the chart reads. Closing brings them back as the layer goes. */
+/* what the chart rubs out with (label halos, hollow stars, the cone's matte band) is this paper's tone, not black */
+.ws2-memory-layer .memory-space { --m-paper: #262b2d; background: transparent; }
+.ws2-memory-layer .memory-space[data-worldline="beta"] { --m-paper: #171f1c; }
+.ws2-memory-layer .memory-space :is(.m-grid, .m-frame) { display: none; }
+.ws2-stage, .ws2-toasts { transition: opacity .2s ease; }
+.ws2.memory-space-open :is(.ws2-talk, .ws2-side, .ws2-stage, .ws2-toasts) {
+  opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .2s ease, filter .2s ease, visibility 0s linear .2s;
+}
+.ws2.memory-space-open .ds-sheet :is(.ds-plate, .ds-ring, .ds-moths) { opacity: .14; }
+@media (prefers-reduced-motion: reduce) {
+  .ws2.memory-space-open :is(.ws2-talk, .ws2-side, .ws2-stage, .ws2-toasts) { transition: none; }
+}

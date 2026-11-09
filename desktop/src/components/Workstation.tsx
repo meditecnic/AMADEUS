@@ -2020,7 +2020,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     <TipProvider>
     <div
       ref={setWsRoot}
-      className={`ws2${isHistoryCollapsed ? ' rail' : ''}${isSettingsOpen ? ' menu-open' : ''}${isMemoryOpen ? ' memory-space-open' : ''}`}
+      className={`ws2${isHistoryCollapsed ? ' rail' : ''}${isSettingsOpen ? ' menu-open' : ''}${isMemoryOpen && !memoryClosing ? ' memory-space-open' : ''}`}
       data-wl={worldline === 'beta' ? 'beta' : 'sg'}
       data-link={linkState}
       data-entrance={entering ? entrance : undefined}
