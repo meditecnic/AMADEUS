@@ -113,8 +113,8 @@ class ConversationService:
         except Exception:
             try:
                 await self.delete(str(created["id"]), session_id, worldline)
-            except Exception:
-                logger.exception("failed to compensate unselected draft conversation")
+            except Exception as exc:
+                logger.warning("failed to compensate unselected draft conversation (%s)", type(exc).__name__)
             raise
 
     async def get_or_create_default(self, session_id: str, worldline: str) -> dict[str, object]:
@@ -370,7 +370,7 @@ class ConversationService:
             except asyncio.CancelledError:
                 pass
             except Exception as exc:
-                logger.warning("automatic conversation title skipped: %s", exc)
+                logger.warning("automatic conversation title skipped: %s", type(exc).__name__)
 
         task.add_done_callback(finished)
         return task

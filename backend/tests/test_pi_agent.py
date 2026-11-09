@@ -114,7 +114,8 @@ async def test_lf_framing_isolation_usage_and_secret_redaction(fake_pi, tmp_path
     assert not launch["run_dir"].exists()
     assert "synthetic-private-value" not in str(args) + launch["models"] + caplog.text
     assert "input_tokens=100 output_tokens=20" in caplog.text
-    assert "[redacted]" in caplog.text
+    assert "pi tool_execution_start" in caplog.text
+    assert str(tmp_path) not in caplog.text
 
 
 @pytest.mark.asyncio

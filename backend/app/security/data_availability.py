@@ -9,7 +9,8 @@ class DataAvailabilityMiddleware:
 
     async def __call__(self, scope, receive, send):
         if (scope['type'] == 'http' and not available()
-                and scope['path'] != '/health' and not scope['path'].startswith('/api/data/')):
+                and scope['path'] not in {'/health', '/api/diagnostics/bundle'}
+                and not scope['path'].startswith('/api/data/')):
             await JSONResponse({'detail': {'code': 'data_unavailable'}}, status_code=503)(scope, receive, send)
             return
         await self.app(scope, receive, send)

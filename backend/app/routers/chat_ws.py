@@ -805,7 +805,7 @@ async def get_clean_text_stream(
                 tag = "finish " if finish else ""
                 print(
                     f"[Guard] high-confidence foreign {tag}prose → renderer "
-                    f"len={len(segment_text)} preview={segment_text[:40]!r}",
+                    f"len={len(segment_text)}",
                     flush=True,
                 )
                 return
@@ -814,7 +814,7 @@ async def get_clean_text_stream(
             print(
                 f"[Guard] hard-reject collapse segment "
                 f"{'finish ' if finish else ''}"
-                f"len={len(segment_text)} preview={segment_text[:40]!r}",
+                f"len={len(segment_text)}",
                 flush=True,
             )
 
@@ -2373,7 +2373,7 @@ async def processor_loop(
             await segment_pipeline.cancel(reason=None)
         if segment_pipeline is not None and diagnostic_observer is not None:
             diagnostic_observer.turn_error(segment_pipeline.identity, "generation_failed")
-        print(f"[Processor Error] Session {session.session_id}: {e} ({type(e).__name__})")
+        print(f"[Processor Error] Session {session.session_id}: ({type(e).__name__})")
         await send_queue.put((epoch, {
             "type": "error",
             "code": "turn_failed",
@@ -2626,7 +2626,7 @@ async def run_tts_pipeline(session: SessionState, text: str, emotion: str, send_
         raise
     except Exception as e:
         # Broad on purpose: debug-only pipeline; report any failure to the client.
-        print(f"[TTS Debug Error] {e} ({type(e).__name__})")
+        print(f"[TTS Debug Error] ({type(e).__name__})")
         await send_queue.put((epoch, {"type": "error", "message": "TTS debug error"}))
     finally:
         session.is_busy = False
@@ -2686,7 +2686,7 @@ async def writer_loop(send_queue: asyncio.Queue, session: SessionState, websocke
     except Exception as e:
         # Broad on purpose: the writer ends quietly; the reader's finally
         # cancels and gathers it on disconnect.
-        print(f"[Writer Exception] Session {session.session_id}: {e}")
+        print(f"[Writer Exception] Session {session.session_id}: ({type(e).__name__})")
 
 @router.websocket("/ws/chat")
 async def websocket_chat_endpoint(websocket: WebSocket):
@@ -3355,7 +3355,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
     except Exception as e:
         # Broad on purpose: connection boundary; the finally below must still
         # cancel tasks and release the lease.
-        print(f"[Reader Exception] Session {session_id}: {e} ({type(e).__name__})")
+        print(f"[Reader Exception] Session {session_id}: ({type(e).__name__})")
         try:
             await send_queue.put((session.current_epoch, {"type": "error", "message": "Server error"}))
         except Exception as notify_exc:

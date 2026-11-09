@@ -364,6 +364,6 @@ def weekly_backup_if_due(stop: threading.Event | None = None) -> None:
             create_backup("weekly", stop=stop)
     except BackupError as exc:
         if exc.code != "backup_stopped":
-            logging.getLogger(__name__).warning("Weekly backup failed: %s", exc)
+            logging.getLogger(__name__).warning("Weekly backup failed: %s", type(exc).__name__)
     except Exception as exc:
-        logging.getLogger(__name__).warning("Weekly backup failed: %s", exc)
+        logging.getLogger(__name__).warning("Weekly backup failed: %s", type(exc).__name__)

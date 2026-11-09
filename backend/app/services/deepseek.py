@@ -270,7 +270,7 @@ class DeepSeekService(LLMInterface):
                 usage.observe(result)
                 return result["choices"][0]["message"]["content"].strip()
             except Exception as e:
-                print(f"[DeepSeek] Failed to compress history: {e}")
+                print(f"[DeepSeek] Failed to compress history: {type(e).__name__}")
                 return ""
 
     async def translate_to_zh(self, text: str, api_key: Optional[str] = None, model: Optional[str] = None) -> str:
@@ -309,13 +309,13 @@ class DeepSeekService(LLMInterface):
                 usage.observe(result)
                 return result["choices"][0]["message"]["content"].strip()
             except (httpx.TimeoutException, httpx.NetworkError) as e:
-                print(f"[DeepSeek] Translation failed: {e}", flush=True)
+                print(f"[DeepSeek] Translation failed: {type(e).__name__}", flush=True)
                 raise ConnectionError("translation_unavailable") from e
             except httpx.HTTPStatusError as e:
-                print(f"[DeepSeek] Translation failed: {e}", flush=True)
+                print(f"[DeepSeek] Translation failed: {type(e).__name__}", flush=True)
                 raise DeepSeekTranslationError(e.response.status_code) from e
             except Exception as e:
-                print(f"[DeepSeek] Translation failed: {e}", flush=True)
+                print(f"[DeepSeek] Translation failed: {type(e).__name__}", flush=True)
                 raise RuntimeError("translation_unavailable") from e
 
     async def complete_json(

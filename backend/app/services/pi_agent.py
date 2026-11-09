@@ -169,13 +169,7 @@ class PiSupervisor:
                             event = self._events.popleft() if self._events else await self._read()
                             kind = event.get("type")
                             if kind == "tool_execution_start":
-                                path = str((event.get("args") or {}).get("path", "."))
-                                if self._key:
-                                    path = path.replace(self._key, "[redacted]")
-                                tool = str(event.get("toolName", ""))
-                                if self._key:
-                                    tool = tool.replace(self._key, "[redacted]")
-                                logger.info("pi tool=%s path=%s", json.dumps(tool[:64]), json.dumps(path[:512]))
+                                logger.info("pi tool_execution_start")
                             elif kind == "message_end":
                                 message = event.get("message") or {}
                                 if message.get("role") == "assistant":

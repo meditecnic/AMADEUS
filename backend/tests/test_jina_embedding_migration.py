@@ -130,9 +130,10 @@ def test_model_failure_rolls_back_everything_then_next_start_completes(legacy_db
     fake_embedder(monkeypatch, fail_at=3)
     assert not storage._initialize_sync(str(legacy_db), storage.MEMORY_SCHEMA, 'memory')
     assert snapshot(legacy_db) == before
-    warning = next(record for record in caplog.records if record.name == 'app.db' and record.exc_info)
-    assert warning.exc_info[0] is RuntimeError
-    assert 'synthetic model failure' in caplog.text
+    warning = next(record for record in caplog.records if record.name == 'app.db')
+    assert warning.exc_info is None
+    assert 'RuntimeError' in warning.getMessage()
+    assert 'synthetic model failure' not in caplog.text
     fake_embedder(monkeypatch)
     assert storage._initialize_sync(str(legacy_db), storage.MEMORY_SCHEMA, 'memory')
     assert_upgraded(legacy_db, original_keys)
