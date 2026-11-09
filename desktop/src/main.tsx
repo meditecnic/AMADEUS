@@ -20,6 +20,8 @@ import "./workstation/sheet.css";
 import "./workstation/log.css";
 // Menus, the model picker, selects and confirm dialogs: slips laid on the sheet.
 import "./workstation/slips.css";
+// The system page: an index of its sections and a ruled form for each.
+import "./workstation/system.css";
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

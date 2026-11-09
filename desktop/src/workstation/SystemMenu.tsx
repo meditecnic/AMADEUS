@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 
 import { DraftWord } from './DraftWord';
 import { DIVERGENCE, Nixie, WORLDLINE_NAME, useTunedValue } from './Nixie';
 import { useReducedMotion } from '../design-system/useReducedMotion';
+import { PencilRing } from './TitleStrip';
 
 export type MenuSection = 'worldline' | 'connections' | 'sound' | 'character';
 type Worldline = 'steins_gate' | 'beta';
@@ -13,18 +14,8 @@ export const MENU_SECTIONS: { key: MenuSection; zh: string; en: string }[] = [
   { key: 'character', zh: '角色与对话', en: 'CHARACTER' },
 ];
 
-function Trace({ className }: { className: string }) {
-  return (
-    <svg className={`ws2-trace ${className}`} viewBox="0 0 150 120" width="150" height="120" aria-hidden="true">
-      <path pathLength={1} d="M0 18 H52 L70 36 V88" /><circle cx="70" cy="92" r="3.2" />
-      <path pathLength={1} d="M0 30 H40 L56 46 V110" /><circle cx="56" cy="114" r="2.4" />
-      <path pathLength={1} d="M0 42 H22 L34 54 V70 H118" /><circle cx="122" cy="70" r="3.2" />
-      <path pathLength={1} d="M84 0 V14 L98 28 H150" />
-    </svg>
-  );
-}
-
-/** Signal traces grow out of the SYSTEM button and become the menu's structure. The conversation stays mounted underneath. */
+/** The system page: an index of its sections on the left (the current one's number ringed in pencil), the section's
+ *  form on the right. The conversation stays mounted underneath. */
 export function SystemMenu({
   open, section, onSection, onClose, returnFocusRef, children,
 }: {
@@ -52,11 +43,7 @@ export function SystemMenu({
 
   return (
     <div className={`ws2-sysmenu${open ? ' open' : ''}`} aria-hidden={!open} inert={!open} style={{ '--cur': cur } as CSSProperties}>
-      <div className="ws2-sys-giant" key={`g-${section}-${open}`} aria-hidden="true">{MENU_SECTIONS[cur].en}</div>
-      <div className="ws2-trace-feed" aria-hidden="true"><i /></div>
-      <Trace className="deco-a" />
       <nav className="ws2-sys-index" aria-label="系统菜单">
-        <div className="ws2-trace-bus" aria-hidden="true" />
         {MENU_SECTIONS.map((s, i) => (
           <button
             key={s.key}
@@ -73,9 +60,11 @@ export function SystemMenu({
               (e.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('.ws2-sys-item')[MENU_SECTIONS.indexOf(next)])?.focus();
             }}
           >
-            <span className="stub" /><span className="pad" />
+            <span className="no" aria-hidden="true">
+              {String(i + 1).padStart(2, '0')}
+              {i === cur && open ? <PencilRing key={s.key} seed={`system-${s.key}`} rx={13} ry={10} /> : null}
+            </span>
             <span className="lbl"><span className="zh">{s.zh}</span><span className="en">{s.en}</span></span>
-            <span className="lead"><i /></span>
           </button>
         ))}
         <button
@@ -84,13 +73,13 @@ export function SystemMenu({
           style={{ '--i': MENU_SECTIONS.length } as CSSProperties}
           onClick={() => { onClose(); returnFocusRef?.current?.focus(); }}
         >
-          <span className="stub" /><span className="pad" />
-          <span className="lbl"><span className="zh">返回对话</span><span className="en">CLOSE · ESC</span></span>
+          <span className="no" aria-hidden="true" />
+          <span className="lbl"><span className="zh">返回对话</span><span className="en">ESC</span></span>
         </button>
       </nav>
       <section className="ws2-sys-body" key={`b-${section}-${open}`}>
         <header>
-          <span className="no">0{cur + 1}</span>
+          <span className="no">{String(cur + 1).padStart(2, '0')}</span>
           <h2>{open ? <DraftWord text={MENU_SECTIONS[cur].zh} step={110} /> : MENU_SECTIONS[cur].zh}</h2>
           <span className="en">{MENU_SECTIONS[cur].en}</span>
         </header>
@@ -237,7 +226,7 @@ export function SoundChannel({ name, hint, volume, onVolume, enabled, onEnabled 
     <div className={`ws2-m-row ws2-channel${muted ? ' muted' : ''}`}>
       <div className="ws2-m-label"><b>{name}</b><small>{hint}</small></div>
       {onEnabled
-        ? <button type="button" className={`ws2-led${muted ? ' on' : ''}`} aria-pressed={muted} aria-label={`${name}静音`} onClick={() => onEnabled(muted)}><i />MUTE</button>
+        ? <button type="button" className={`ws2-led${muted ? ' on' : ''}`} aria-pressed={muted} aria-label={`${name}静音`} onClick={() => onEnabled(muted)}><i />静音</button>
         : <span className="ws2-led-slot" />}
       <Ruler value={pct} onChange={(v) => onVolume(v / 100)} disabled={muted} label={`${name}音量`} />
       <span className="ws2-m-val">{muted ? '---' : String(pct).padStart(3, '0')}</span>
