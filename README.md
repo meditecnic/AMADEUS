@@ -43,7 +43,7 @@
 - **安装时需要联网吗**：如果你的电脑上还没有装过 Microsoft Edge WebView2 Runtime，安装程序会自动联网下载安装；已经装过的话就不需要了。
 - **聊天记录、记忆和日志存在哪**：
   - 安装版的数据默认存在 `%LOCALAPPDATA%\com.amadeus.desktop\data`。卸载时默认会帮你保留数据（除非在卸载向导里主动勾选删除应用数据）。如果想换个位置存放，可以设置系统的用户环境变量 `AMADEUS_DATA_DIR` 后重启应用。
-  - 如果原本配置的数据目录找不到，或者数据库启动自检异常，程序会直接停下提示，不会在原处新建空库把你的旧数据盖掉。
+  - 如果原本配置的数据目录找不到或无效，程序会直接停下提示，不会在原处新建空库把问题盖过去；要是已有的数据库在启动自检（`PRAGMA quick_check`）时异常，也不会新建空库，而是进入「数据异常」状态，暂停对话等功能并把原来的库原样留着（升级时如果数据迁移失败，则会先自动退回升级前的备份）。
   - 运行日志默认在 `%LOCALAPPDATA%\com.amadeus.desktop\logs`（如果设了 `AMADEUS_DATA_DIR`，则在 `<AMADEUS_DATA_DIR>\logs`），里面有 `backend-stdout.log`、`backend-stderr.log` 和启动失败时的 `backend-startup.log`。
 - **遇到 Bug 想反馈**：欢迎来 [GitHub Issues](https://github.com/meditecnic/AMADEUS/issues) 提问题，贴日志前记得看一眼，**千万不要把自己的 API 密钥、令牌或者私人聊天内容贴出来**。
 
@@ -295,7 +295,7 @@ The desktop window comes from the installer build; its packaging scripts are in 
 
 #### Data location
 
-The Windows installer stores data in `%LOCALAPPDATA%\com.amadeus.desktop\data`. Uninstalling keeps data by default; selecting the uninstaller's option to delete app data removes this default directory. To use another location, set the user environment variable `AMADEUS_DATA_DIR` and restart the app. Source runs and standalone runs of `amadeus-backend.exe` require a nonempty `AMADEUS_DATA_DIR` and refuse to start without it; there is no fallback data directory. If a configured data directory is missing or invalid, or if existing databases fail startup checks, startup stops instead of creating an empty database. Desktop backend logs (`backend-stdout.log`, `backend-stderr.log`, and `backend-startup.log` when startup fails) are written to `%LOCALAPPDATA%\com.amadeus.desktop\logs` by default, or `<AMADEUS_DATA_DIR>\logs` when `AMADEUS_DATA_DIR` is set.
+The Windows installer stores data in `%LOCALAPPDATA%\com.amadeus.desktop\data`. Uninstalling keeps data by default; selecting the uninstaller's option to delete app data removes this default directory. To use another location, set the user environment variable `AMADEUS_DATA_DIR` and restart the app. Source runs and standalone runs of `amadeus-backend.exe` require a nonempty `AMADEUS_DATA_DIR` and refuse to start without it; there is no fallback data directory. If a configured data directory is missing or invalid, startup stops instead of creating an empty database. If existing databases fail the startup check (`PRAGMA quick_check`), the app does not create new ones either: it enters a data-unavailable state, pauses chat and other features, and leaves the original databases untouched. If a data migration fails during an upgrade, it first rolls back to the pre-upgrade backup. Desktop backend logs (`backend-stdout.log`, `backend-stderr.log`, and `backend-startup.log` when startup fails) are written to `%LOCALAPPDATA%\com.amadeus.desktop\logs` by default, or `<AMADEUS_DATA_DIR>\logs` when `AMADEUS_DATA_DIR` is set.
 
 Installed Windows builds store API keys in the Windows Credential Manager; source runs keep them only in memory by default, so re-enter them after each restart. To persist keys from a source run on Windows, set `AMADEUS_CREDENTIAL_BACKEND=windows`; this accesses your real Windows credentials. Other systems keep keys in memory only. The local mock does not use these backend data stores.
 
