@@ -12,6 +12,8 @@ export type DataSeed = {
   status?: string;
   detail?: string;
   backups?: SeedBackup[];
+  /** The passcode file exists but cannot be read: treated as unset, and /api/auth/state says why. */
+  passcodeError?: string;
 };
 type SeedBackup = { id: string; size: number; app_version?: string | null; can_restore?: boolean; detail?: string };
 type Backup = { id: string; time: string | null; reason: string; size: number; app_version: string | null; can_restore: boolean; detail?: string };
@@ -49,6 +51,7 @@ export function createDataStore(seed: DataSeed | undefined, passcode: string | n
     backups: (seed?.backups ?? DEFAULT_BACKUPS).map(toBackup),
     pendingRestore: null as string | null,
     passcode,
+    passcodeError: seed?.passcodeError ?? null,
   };
 }
 export type DataStore = ReturnType<typeof createDataStore>;
@@ -62,13 +65,16 @@ export function dataUnavailable(store: DataStore, path: string): Reply | null {
 export function handleData(url: URL, method: string, body: Frame, store: DataStore): Reply | null {
   const path = decodeURIComponent(url.pathname);
 
-  if (path === '/api/auth/state' && method === 'GET') return ok({ passcode_set: store.passcode !== null });
+  if (path === '/api/auth/state' && method === 'GET') {
+    return ok(store.passcode === null && store.passcodeError ? { passcode_set: false, passcode_error: store.passcodeError } : { passcode_set: store.passcode !== null });
+  }
   if (path === '/api/auth/passcode' && method === 'PUT') {
     const current = typeof body.current === 'string' ? body.current : null;
     const next = body.new === null || body.new === undefined ? null : String(body.new);
     if (next !== null && !next.trim()) return fail(422, 'empty_passcode');
     if (store.passcode !== null && current !== store.passcode) return { ...fail(401, 'invalid_passcode'), delayMs: 500 };
     store.passcode = next;
+    store.passcodeError = null;
     return { ...ok({ status: 'success' }), delayMs: 500 };
   }
 

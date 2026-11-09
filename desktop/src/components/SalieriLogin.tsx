@@ -17,7 +17,8 @@ import { KeyGlyph, Plate, PressFilter, Ruler } from './drafting/parts';
 export type EntranceCue = 'draft' | 'docked' | 'gone' | 'skip';
 
 interface SalieriLoginProps {
-  onLoginSuccess: () => void;
+  /** easterEgg: the original's line was typed at the door ([210] says so only for a login it accepted). */
+  onLoginSuccess: (result?: { easterEgg: boolean }) => void;
   /** Kept for API stability: the terminal is one style on both worldlines. */
   worldline?: 'steins_gate' | 'beta';
   onEntranceCue?: (cue: EntranceCue) => void;
@@ -60,6 +61,8 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
   const [password, setPassword] = useState('');
   // [210] optional startup passcode. Until the server says otherwise a passcode is assumed, as before.
   const [passcodeSet, setPasscodeSet] = useState(true);
+  // The passcode record exists but cannot be read: the backend treats it as unset, and says why.
+  const [passcodeUnreadable, setPasscodeUnreadable] = useState(false);
   const [peek, setPeek] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   // Which field the error belongs to; the message text is localized or a raw backend detail.
@@ -157,8 +160,9 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
       try {
         const response = await apiFetch('/api/auth/state');
         if (!response.ok) return;
-        const state = await response.json().catch(() => null) as { passcode_set?: unknown } | null;
+        const state = await response.json().catch(() => null) as { passcode_set?: unknown; passcode_error?: unknown } | null;
         if (!cancelled && typeof state?.passcode_set === 'boolean') setPasscodeSet(state.passcode_set);
+        if (!cancelled) setPasscodeUnreadable(typeof state?.passcode_error === 'string');
       } catch {
         // Unknown: keep asking for the passcode; the login call itself still decides.
       }
@@ -395,6 +399,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
       });
 
       if (response.ok) {
+        const result = await response.json().catch(() => null) as { easter_egg?: unknown } | null;
         accepted = true;
         audioService.playSFX('/audio/sfx/连接成功，进入页面2.ogg');
         audioService.stopBGM();
@@ -402,7 +407,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
         (document.activeElement as HTMLElement | null)?.blur?.();
         setIntro(false);
         setExiting(true);
-        onLoginSuccess();
+        onLoginSuccess({ easterEgg: result?.easter_egg === true });
         if (!reduced) runEntrance();
       } else if (response.status === 401 || response.status === 403) {
         showAuthError('密码错误', 'password');
@@ -566,7 +571,9 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
               </p>
             )}
             {!errorMsg && backendStatus === 'ready' && !passcodeSet && !exiting && (
-              <p className="sl-msg is-note">没有设口令，直接按 Enter 进入</p>
+              <p className="sl-msg is-note">
+                {passcodeUnreadable ? '口令文件读不出来，这次不问口令' : '没有设口令，直接按 Enter 进入'}
+              </p>
             )}
           </div>
         </form>

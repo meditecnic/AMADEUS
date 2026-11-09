@@ -42,6 +42,7 @@ function App() {
   // The login terminal stays mounted over the workstation while the entrance plays, then lets go.
   const [loginOverlay, setLoginOverlay] = useState(false);
   const [entrance, setEntrance] = useState<EntrancePhase>('none');
+  const [easterEgg, setEasterEgg] = useState(false);
 
   useEffect(() => {
     try {
@@ -55,7 +56,8 @@ function App() {
     setStep('login');
   };
 
-  const handleLoginSuccess = () => {
+  const handleLoginSuccess = (result?: { easterEgg: boolean }) => {
+    setEasterEgg(Boolean(result?.easterEgg));
     // The workstation mounts at once, held still behind the terminal; it plays exactly once per login.
     setLoginOverlay(true);
     setEntrance(reducedMotion ? 'none' : 'hold');
@@ -105,6 +107,7 @@ function App() {
           onLogout={handleLogout}
           entrance={entrance}
           onEntranceSettled={handleEntranceSettled}
+          easterEgg={easterEgg}
         />
       )}
 

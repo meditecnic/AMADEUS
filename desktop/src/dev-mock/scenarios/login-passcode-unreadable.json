@@ -1,0 +1,6 @@
+{
+  "name": "login-passcode-unreadable",
+  "extends": "streaming",
+  "description": "The passcode file exists but cannot be read: the backend treats it as unset and says why.",
+  "data": { "passcodeError": "passcode file unreadable (JSONDecodeError)" }
+}

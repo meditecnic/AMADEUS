@@ -93,6 +93,8 @@ interface WorkstationProps {
   onLogout: () => void;
   entrance?: EntrancePhase;
   onEntranceSettled?: () => void;
+  /** The original's line was typed at the login: the meter rolls its digits like dice before it settles. */
+  easterEgg?: boolean;
 }
 
 type ConversationEntry = PendingConversationTarget & {
@@ -127,9 +129,24 @@ export const Workstation: React.FC<WorkstationProps> = ({
   onLogout,
   entrance = 'none',
   onEntranceSettled,
+  easterEgg = false,
 }) => {
   const reducedMotion = useReducedMotion();
   const entering = entrance === 'hold' || entrance === 'draft' || entrance === 'docked';
+  // Gott würfelt nicht: the meter comes in on a thrown reading and, once the sheet is drawn, tunes slowly to the line
+  // it is on, with the line pencilled under it for a while.
+  const [dice, setDice] = useState<string | null>(() => (easterEgg ? `${Math.floor(Math.random() * 2)}.${String(Math.floor(Math.random() * 1e6)).padStart(6, '0')}` : null));
+  const [eggNote, setEggNote] = useState(false);
+  useEffect(() => {
+    if (!dice || entrance === 'hold') return;
+    const id = window.setTimeout(() => { setDice(null); setEggNote(true); }, reducedMotion ? 0 : 650);
+    return () => window.clearTimeout(id);
+  }, [dice, entrance, reducedMotion]);
+  useEffect(() => {
+    if (!eggNote) return;
+    const id = window.setTimeout(() => setEggNote(false), 7600);
+    return () => window.clearTimeout(id);
+  }, [eggNote]);
   const [systemPrompt, setSystemPrompt] = useState('');
   const storedTtsChoice = useRef<string | null>(null);
   const [enableTts, setEnableTts] = useState(() => {
@@ -1977,7 +1994,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   };
 
   // The header meter keeps the source reading while the shift covers it, then tunes in view.
-  const meter = useTunedValue(DIVERGENCE[worldline], { hold: !!shift, duration: 1100 });
+  const meter = useTunedValue(dice ?? DIVERGENCE[worldline], { hold: !!shift, duration: eggNote ? 2800 : 1100 });
 
   const now = new Date();
   const dateLabel = `${now.getMonth() + 1}/${now.getDate()}`;
@@ -2102,6 +2119,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           </button>
           </Tip>
           <div className="ws2-booth-mid">
+            {eggNote ? <span className="ws2-egg-note" aria-hidden="true">Gott würfelt nicht.</span> : null}
             <Tip
               className="is-meter"
               side="bottom"

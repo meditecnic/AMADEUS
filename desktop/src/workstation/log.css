@@ -309,3 +309,14 @@
   .ws2 .ws2-err-tag { position: static; display: inline; width: auto; margin-right: 10px; }
   .ws2 .ws2-field { grid-template-columns: minmax(0, 1fr) 58px; }
 }
+
+/* Gott würfelt nicht (the original's line typed at the login): pencilled under the meter while it settles. */
+.ws2-booth-mid { position: relative; }
+.ws2 .ws2-egg-note {
+  position: absolute; top: calc(100% + 36px); left: 50%; translate: -50% 0; rotate: -2.5deg; white-space: nowrap; pointer-events: none;
+  font-family: var(--ws-serif); font-style: italic; font-size: 15px; letter-spacing: .04em; color: var(--log-pencil);
+  animation: ws2-egg-in .9s ease .4s both, ws2-egg-out 1s ease 6.6s forwards;
+}
+@keyframes ws2-egg-in { from { opacity: 0; clip-path: inset(0 100% 0 0); } to { opacity: 1; clip-path: inset(0 0 0 0); } }
+@keyframes ws2-egg-out { to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .ws2 .ws2-egg-note { animation: ws2-egg-out .01s linear 6.6s forwards; } }
