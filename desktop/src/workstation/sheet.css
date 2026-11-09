@@ -75,6 +75,20 @@
 .ds-plate .eq .v { font-style: normal; }
 .ds-plate .eq .small { font-size: 21px; letter-spacing: .1em; fill: rgba(240, 170, 110, .22); }
 .ds-plate .eq .ln { stroke: rgba(233, 150, 80, .2); }
+/* β: the axes and the two fixed points named, as on a plot */
+.ds-plate .ax { fill: rgba(240, 170, 110, .32); font-family: 'EB Garamond', Georgia, serif; font-style: italic; font-size: 25px; }
+.ds-plate .ax .sup { font-size: 16px; font-style: normal; }
+/* β: the live pair (DraftSheet <Divergence>), amber and Steins;Gate silver */
+.ds-plate.ds-pair { pointer-events: none; }
+.ds-pair .tail { fill: none; stroke-width: 1.2; stroke-linejoin: round; stroke-linecap: round; }
+.ds-pair .tail.beta { stroke: rgba(243, 166, 106, .2); }
+.ds-pair .tail.beta.near { stroke: rgba(243, 166, 106, .5); }
+.ds-pair .tail.sg { stroke: rgba(205, 222, 234, .16); }
+.ds-pair .tail.sg.near { stroke: rgba(205, 222, 234, .42); }
+.ds-pair .head { stroke: none; }
+.ds-pair .head.beta { fill: #f5ae76; filter: drop-shadow(0 0 5px rgba(245, 174, 118, .85)); }
+.ds-pair .head.sg { fill: #dce8ef; filter: drop-shadow(0 0 4px rgba(220, 232, 239, .75)); }
+.ws2:has(.avatar-stage:not(.avatar-absent)) .ds-pair { display: none; }
 
 /* With her portrait on the stage the figure is only a backdrop: its captions and the β equations would sit behind her
    and run into her name card, so they go. */

@@ -49,7 +49,7 @@ import { ConnectionList } from '../workstation/ConnectionList';
 import { SendSignal } from '../workstation/SendSignal';
 import { PresenceIndicator, ThinkingMark, PRESENCE_LABELS } from '../workstation/PresenceIndicator';
 import { ErrorText, checkShortLabel } from '../workstation/logParts';
-import { KeyGlyph, Plate, PressFilter, Ruler } from './drafting/parts';
+import { KeyGlyph, Ruler } from './drafting/parts';
 import { VoiceScope } from '../workstation/VoiceScope';
 import { OverlayRootContext, Tip, TipProvider } from '../workstation/Tip';
 import { SelectionCopyMenu, TextFieldMenu } from '../workstation/menus';
@@ -110,7 +110,7 @@ export function contentHasJapaneseKana(text: string): boolean {
 /** Q14: map known tool ids to Title Case labels; never render raw unknown tool names. */
 function activityOperationLabel(activeTool: string | null | undefined): string | null {
   if (!activeTool) return null;
-  if (activeTool === 'web_search') return 'Web Search';
+  if (activeTool === 'web_search') return '正在搜索网页';
   return null;
 }
 
@@ -1210,7 +1210,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   // Q14 single activity surface: known tools override Thinking; unknown tools fall back.
   // Raw activeNotice strings are never used as visible labels.
-  const operationLabel = activityOperationLabel(activeTool) ?? (isThinking ? 'Thinking' : null);
+  const operationLabel = activityOperationLabel(activeTool) ?? (isThinking ? '思考中' : null);
   const activityBusy = Boolean(operationLabel || activeNotice);
 
   const [glitchState, setGlitchState] = useState<'none' | 'light' | 'heavy'>('none');
@@ -2267,7 +2267,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                             fps={15}
                             loop={true}
                             autoplay={!reducedMotion}
-                          /> : <ThinkingMark />}
+                          /> : <ThinkingMark worldline={worldline} />}
                           <span className="ws2-thinking-label" data-testid="activity-operation-label">{operationLabel}</span>
                         </div>
                       )}
@@ -2324,12 +2324,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
             <button type="button" onClick={() => openConnectionsAt('list')}>换一个接入</button>
           </div>
         )}
-        {/* The composer is the next entry of the log: your plate inks in while you write, a leader runs to what she
-            is running on, the slot measures the line and the round key sends it (the login's field again). */}
+        {/* The composer is the next entry of the log: your name in the margin darkens while you write, what she is
+            running on stands over the slot, the slot measures the line and the round key sends it (the login's key). */}
         <form className="ws2-composer" onSubmit={handleSend}>
           <div className="ws2-entry-head">
-            <label className="ws2-nameplate" htmlFor="ws2-composer-input"><Plate press="ws2-press" /><span>{userHudLabel}</span></label>
-            <i className="ws2-leader" aria-hidden="true" />
+            <label className="ws2-nameplate" htmlFor="ws2-composer-input"><span>{userHudLabel}</span></label>
             <div className="ws2-model">
               <ProviderControls
                 providers={providers.filter((row) => (
@@ -2445,7 +2444,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
               )}
             </div>
           )}
-          <PressFilter id="ws2-press" className="ws2-defs" />
         </form>
       </section>
 

@@ -1,4 +1,4 @@
-import { memo, useEffect, useState, type CSSProperties } from 'react';
+import { memo, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { DIVERGENCE } from './Nixie';
 import { arc, escapeWheel, f1, gearOutline, lorenzPath, polar, ticks } from './drafting';
 
@@ -8,7 +8,9 @@ import { arc, escapeWheel, f1, gearOutline, lorenzPath, polar, ticks } from './d
  * figure means something:
  *  - Steins;Gate: a clock movement — escape wheel, anchor, going train and dial. The dial shows the local time;
  *    the escape wheel steps once a second.
- *  - β: the Lorenz attractor (the butterfly), with its equations written beside it as on a blackboard.
+ *  - β: the Lorenz attractor (the butterfly of the butterfly effect), with its equations written beside it as on a
+ *    blackboard. Two points are integrated on it live from starts 10⁻⁴ apart: for a minute they run as one, then
+ *    they come apart (<Divergence>).
  * Under each figure is the other line's figure, rubbed out and not quite gone (<Trace>): the sheet changed worldlines,
  * and only a trace of the old drawing is left. Drawn here, not traced from anything. 1920 × 1080 user space, sliced to the window like the login plate.
  */
@@ -128,8 +130,11 @@ const Butterfly = memo(function Butterfly() {
         {[-1, 1].map((sg) => (
           <g key={sg} transform={`translate(${f1(sg * Math.sqrt((8 / 3) * 27) * 13)} ${f1(-(27 - 25) * 13)})`}>
             <circle className="ln" r={4} /><path className="ln" d="M-12 0H12M0 -12V12" />
+            <text className="ax" x={sg < 0 ? -34 : 16} y={-16}>C<tspan dy={-9} className="sup">{sg < 0 ? '−' : '+'}</tspan></text>
           </g>
         ))}
+        <text className="ax" x={342} y={7}>x</text>
+        <text className="ax" x={12} y={-298}>z</text>
         <path className="tk" d={arc(372, 200, 340)} />
       </g>
       {/* title and equations at the head of the stage, clear of the reading column; the leader goes to a fixed point */}
@@ -137,7 +142,8 @@ const Butterfly = memo(function Butterfly() {
       <circle className="lead-dot" cx={L.x + FP} cy={L.y - 26} r={2.6} />
       <text className="cap" x={EQ.x} y={EQ.y - 30}>FIG. 4 — LORENZ ATTRACTOR</text>
       <text className="cap sub" x={EQ.x} y={EQ.y + 6}>{`β WORLDLINE · ${DIVERGENCE.beta}`}</text>
-      <g className="eq" transform={`translate(${EQ.x} ${EQ.y + 62})`}>
+      <text className="cap sub" x={EQ.x} y={EQ.y + 30}>THE BUTTERFLY EFFECT · E. N. LORENZ, 1963</text>
+      <g className="eq" transform={`translate(${EQ.x} ${EQ.y + 86})`}>
         <text y={0}><tspan className="v">ẋ</tspan> = σ ( y − x )</text>
         <text y={40}><tspan className="v">ẏ</tspan> = x ( ρ − z ) − y</text>
         <text y={80}><tspan className="v">ż</tspan> = x y − β z</text>
@@ -147,6 +153,85 @@ const Butterfly = memo(function Butterfly() {
     </g>
   );
 });
+
+/*
+ * Sensitive dependence, shown rather than told: two points integrated on the attractor live, from starts 10⁻⁴ apart
+ * in x. They run as one for about a minute, then come apart; a while later both fade and set out again from a new
+ * point. One is the β sheet's amber, the other the silver of Steins;Gate. Not run under reduced motion; the frame
+ * loop stops by itself while the window is hidden.
+ */
+const RATE = 0.2;            // time units of the system per second
+const H = 0.004;             // integration step
+const TAIL = 110;            // points kept in each tail (one a frame)
+const NEAR = 36;             // the stronger stretch behind the head
+const RUN = 150;             // seconds from one start to the next
+type V3 = [number, number, number];
+const lorenz = ([x, y, z]: V3): V3 => [10 * (y - x), x * (28 - z) - y, x * y - (8 / 3) * z];
+function rk4(p: V3, h: number): V3 {
+  const k1 = lorenz(p);
+  const k2 = lorenz([p[0] + (h / 2) * k1[0], p[1] + (h / 2) * k1[1], p[2] + (h / 2) * k1[2]]);
+  const k3 = lorenz([p[0] + (h / 2) * k2[0], p[1] + (h / 2) * k2[1], p[2] + (h / 2) * k2[2]]);
+  const k4 = lorenz([p[0] + h * k3[0], p[1] + h * k3[1], p[2] + h * k3[2]]);
+  return [0, 1, 2].map((i) => p[i] + (h / 6) * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i])) as V3;
+}
+function startPoint(): V3 {
+  let p: V3 = [Math.random() * 2 - 1, Math.random() * 2 - 1, 20 + Math.random() * 5];
+  for (let i = 0; i < 1500; i++) p = rk4(p, 0.01);
+  return p;
+}
+const plot = (p: V3) => `${f1(p[0] * 13)},${f1(-(p[2] - 25) * 13)}`;
+
+function Divergence() {
+  const ref = useRef<SVGGElement>(null);
+  const [run, setRun] = useState(() => !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+  useEffect(() => {
+    const mq = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    if (!mq) return;
+    const on = () => setRun(!mq.matches);
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, []);
+  useEffect(() => {
+    const g = ref.current;
+    if (!run || !g) return;
+    const tails = g.querySelectorAll<SVGPolylineElement>('polyline');
+    const heads = g.querySelectorAll<SVGCircleElement>('circle');
+    let a: V3, b: V3, ta: string[], tb: string[], born = 0, last = 0, owed = 0, raf = 0;
+    const reset = (now: number) => {
+      a = startPoint(); b = [a[0] + 1e-4, a[1], a[2]]; ta = []; tb = []; born = now; owed = 0;
+    };
+    const frame = (now: number) => {
+      if (!last || now - last > 500) { last = now; if (!born) reset(now); }
+      owed += ((now - last) / 1000) * RATE; last = now;
+      while (owed >= H) { a = rk4(a, H); b = rk4(b, H); owed -= H; }
+      ta.push(plot(a)); tb.push(plot(b));
+      if (ta.length > TAIL) { ta.shift(); tb.shift(); }
+      const age = (now - born) / 1000;
+      const fade = Math.min(1, age / 3, Math.max(0, (RUN - age) / 4));
+      g.style.opacity = String(fade);
+      // each tail twice: the whole of it faint, its last stretch stronger
+      tails[0].setAttribute('points', ta.join(' ')); tails[1].setAttribute('points', ta.slice(-NEAR).join(' '));
+      tails[2].setAttribute('points', tb.join(' ')); tails[3].setAttribute('points', tb.slice(-NEAR).join(' '));
+      const [ax, ay] = ta[ta.length - 1].split(','), [bx, by] = tb[tb.length - 1].split(',');
+      heads[0].setAttribute('cx', ax); heads[0].setAttribute('cy', ay);
+      heads[1].setAttribute('cx', bx); heads[1].setAttribute('cy', by);
+      if (age > RUN) reset(now);
+      raf = requestAnimationFrame(frame);
+    };
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
+  }, [run]);
+  if (!run) return null;
+  return (
+    <svg className="ds-plate ds-pair" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+      <g ref={ref} transform={`translate(${L.x} ${L.y})`} style={{ opacity: 0 }}>
+        <polyline className="tail sg" /><polyline className="tail sg near" />
+        <polyline className="tail beta" /><polyline className="tail beta near" />
+        <circle className="head sg" r={3.2} /><circle className="head beta" r={3.6} />
+      </g>
+    </svg>
+  );
+}
 
 /*
  * The other worldline's figure, erased: drawn once, faint, then masked by a generated eraser texture (white where it
@@ -210,6 +295,7 @@ export function DraftSheet({ worldline }: { worldline: 'steins_gate' | 'beta' })
       <svg className="ds-plate" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
         {worldline === 'beta' ? <Butterfly /> : <Movement />}
       </svg>
+      {worldline === 'beta' && <Divergence />}
       {/* one soda-can ring left on the SG sheet, by the clock */}
       {worldline !== 'beta' && <img className="ds-ring" src="/assets/sheet/ring-3.webp" alt="" draggable={false} decoding="async" />}
       {worldline === 'beta' && (

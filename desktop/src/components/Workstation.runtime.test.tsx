@@ -917,7 +917,7 @@ describe('Workstation Q14 activity operation labels', () => {
     );
 
     await waitFor(() => {
-      expect(getByTestId('activity-operation-label')).toHaveTextContent('Web Search');
+      expect(getByTestId('activity-operation-label')).toHaveTextContent('正在搜索网页');
     });
     expect(queryByText(/^Thinking/)).toBeNull();
   });
@@ -928,7 +928,7 @@ describe('Workstation Q14 activity operation labels', () => {
     );
 
     await waitFor(() => {
-      expect(getByTestId('activity-operation-label')).toHaveTextContent('Thinking');
+      expect(getByTestId('activity-operation-label')).toHaveTextContent('思考中');
     });
   });
 

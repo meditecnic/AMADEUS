@@ -23,7 +23,7 @@ function StatusPreview() {
         <PresenceIndicator key={worldline} state={state} />
       </div>
     </section>
-    {state === 'thinking' && <div className="ws2-thinking" style={{ marginTop: 16 }}><ThinkingMark /><span className="ws2-thinking-label">THINKING</span></div>}
+    {state === 'thinking' && <div className="ws2-thinking" style={{ marginTop: 16 }}><ThinkingMark /><span className="ws2-thinking-label">思考中</span></div>}
   </main>;
 }
 

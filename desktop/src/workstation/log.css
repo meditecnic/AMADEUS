@@ -1,114 +1,121 @@
 /*
  * The observation log and its composer (amadeus-ops design/20261108-ui-inventory.md, block 2). After sheet.css.
  *
- * The log hangs from a ledger margin: a double hairline down the left of the column, red like the margin of the
- * note on the sheet (β: the orange of its pencil), her replies numbered in the margin. Every speaker is on a plate
- * cut like the login's nameplates: hers inked, yours drawn in outline, a failed turn's in red.
- * The composer is the login's field again: your plate inks in while you write, the slot measures the line and the
- * round key sends it, over one spec line (the model she runs on, its check, the keys).
+ * Set like a script: who speaks stands in the margin, the line runs on to the right of a ledger rule. The rule is a
+ * double hairline, red like the margin of the note on the sheet (β: the orange of its pencil); her lines are numbered
+ * at the margin's outer edge. AMADEUS is the name of a play, and the login's passcode is Salieri.
+ * The composer is the next line of the script: your name already in the margin, darkening while you write; the slot
+ * measures the line and the login's round key sends it.
+ * Narrow columns fall back to the name over the line (container query at the end).
  */
 
-.ws2 { --log-margin: rgba(216, 52, 59, .34); --log-gutter: 44px; }
-.ws2[data-wl='beta'] { --log-margin: rgba(227, 84, 42, .36); }
+.ws2 { --log-rule: rgba(216, 52, 59, .34); }
+.ws2[data-wl='beta'] { --log-rule: rgba(227, 84, 42, .36); }
+/* the names column is the margin left of the rule; the line starts 14px right of it */
+.ws2 :is(.ws2-lines, .ws2-composer) { --log-names: 96px; --log-gutter: calc(var(--log-names) + 17px); }
 
-/* ---------- plates ---------- */
+/* ---------- plates (buttons only; who speaks is set as type) ---------- */
 
 /* Outline plate: a 1px edge with the corner cut; the cut is drawn by a gradient so the edge stays closed. */
-.ws2 :is(.ws2-line-user .ws2-who, .ws2-actions button, .ws2-key-missing button, .ws2-link-state button) {
+.ws2 :is(.ws2-actions button, .ws2-key-missing button, .ws2-link-state button) {
   --edge: var(--ws-line-2);
-  border: 0; border-radius: 0;
+  height: 24px; padding: 0 10px 0 12px; border: 0; border-radius: 0;
+  font-size: 11.5px; letter-spacing: .1em; color: var(--ws-ink-2);
   box-shadow: inset 0 0 0 1px var(--edge);
   clip-path: polygon(6px 0, 100% 0, 100% 100%, 0 100%, 0 6px);
   background: linear-gradient(135deg, transparent 42.8%, var(--edge) 42.8% 52.8%, transparent 52.8%) 0 0 / 7px 7px no-repeat;
-}
-.ws2 :is(.ws2-actions button, .ws2-key-missing button, .ws2-link-state button) {
-  height: 24px; padding: 0 10px 0 12px; font-size: 11.5px; letter-spacing: .1em; color: var(--ws-ink-2); transition: color .15s ease, background-color .15s ease;
+  transition: color .15s ease, background-color .15s ease;
 }
 .ws2 :is(.ws2-actions button, .ws2-key-missing button, .ws2-link-state button):is(:hover, :focus-visible):not(:disabled) {
   --edge: var(--ws-ink-3); color: var(--ws-ink); background-color: rgba(255, 255, 255, .05); outline: none;
 }
 .ws2 .ws2-actions button:disabled { opacity: .4; }
 
-/* Inked plate: the paper of the blade (β: its amber), printed with the grain of the sheet showing through. */
-.ws2 :is(.ws2-who-name, .ws2-to-latest, .ws2-err-tag) {
-  clip-path: polygon(6px 0, 100% 0, 100% 100%, 0 100%, 0 6px);
-  mask: url('/assets/sheet/tooth.webp') 0 0 / 256px 256px, linear-gradient(rgba(0, 0, 0, .78), rgba(0, 0, 0, .78));
-  mask-composite: add;
-}
-
 /* ---------- the log ---------- */
 
 .ws2-lines { position: relative; display: flex; flex-direction: column; padding: 2px 0 4px var(--log-gutter); counter-reset: ws2-log; }
 .ws2-lines::before {
-  content: ''; position: absolute; top: 0; bottom: 0; left: calc(var(--log-gutter) - 16px); width: 3px; pointer-events: none;
-  border-left: 1px solid var(--log-margin); border-right: 1px solid var(--log-margin);
+  content: ''; position: absolute; top: 0; bottom: 0; left: var(--log-names); width: 3px; pointer-events: none;
+  border-left: 1px solid var(--log-rule); border-right: 1px solid var(--log-rule);
 }
-.ws2-line { position: relative; max-width: 640px; margin-bottom: 26px; }
-.ws2-line header { position: relative; display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-/* Each entry's mark on the margin, level with its plate: hers a filled lozenge, yours a ring, a failed turn a cross. */
+/* --first is the height of an entry's first line box, so the name and the mark sit level with it */
+.ws2-line { --first: 31.5px; position: relative; max-width: 620px; margin-bottom: 24px; }
+.ws2-line-user { --first: 28px; }
+.ws2-line-error { --first: 25px; }
+
+/* Each entry's mark on the rule: hers a filled lozenge, yours a ring, a failed turn a cross. */
 .ws2-line::before {
-  content: ''; position: absolute; top: 9px; left: -16.5px; width: 5px; height: 5px; margin-left: -1px; pointer-events: none;
+  content: ''; position: absolute; top: calc(var(--first) / 2 - 2.5px); left: -18px; width: 5px; height: 5px; pointer-events: none;
 }
 .ws2-line-kurisu::before { background: var(--ws-ink); transform: rotate(45deg); }
+.ws2[data-wl='beta'] .ws2-line-kurisu::before { background: var(--ws-accent); }
 .ws2-line-user::before { border-radius: 50%; background: var(--ws-bg); box-shadow: inset 0 0 0 1.2px var(--ws-ink-3); }
 .ws2-line-error::before {
-  top: 7px; width: 9px; height: 9px; margin-left: -3px;
+  top: calc(var(--first) / 2 - 4.5px); left: -20px; width: 9px; height: 9px;
   background: linear-gradient(45deg, transparent 45%, var(--ws-bad) 45% 55%, transparent 55%), linear-gradient(-45deg, transparent 45%, var(--ws-bad) 45% 55%, transparent 55%);
 }
 
-/* Her entries are numbered in the margin; the name hangs on its plate with the record's hairline running on. */
-.ws2-line-kurisu { counter-increment: ws2-log; }
-.ws2-line-kurisu header::before {
-  content: counter(ws2-log, decimal-leading-zero); position: absolute; right: calc(100% + 24px); top: 50%; transform: translateY(-50%);
-  font-family: var(--ws-mono); font-size: 10px; letter-spacing: .08em; color: var(--ws-ink-3); font-variant-numeric: tabular-nums;
+/* Who speaks, in the margin, set flush against the rule. */
+.ws2-line > header {
+  position: absolute; top: calc(var(--first) / 2 - 7px); right: calc(100% + 28px); width: calc(var(--log-names) - 11px);
+  display: flex; flex-direction: column; align-items: flex-end; text-align: right;
 }
-.ws2-line-kurisu header::after { content: ''; flex: 1; max-width: 240px; height: 1px; background: linear-gradient(90deg, var(--ws-line-2), transparent); }
-.ws2-line-kurisu .ws2-who { display: inline-flex; align-items: center; gap: 10px; }
+.ws2-line-kurisu .ws2-who { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
 .ws2 .ws2-who-name {
-  display: inline-block; padding: 4px 8px 3px 12px;
-  font-family: var(--ws-serif); font-weight: 500; font-size: 12.5px; line-height: 1.15; letter-spacing: .3em;
-  color: var(--ws-blade-ink); background: var(--ws-blade);
-  text-shadow: -.6px 0 rgba(255, 46, 96, .32), .6px 0 rgba(70, 150, 255, .28);
+  font-family: var(--ws-serif); font-weight: 500; font-size: 12.5px; line-height: 14px; letter-spacing: .3em; margin-right: -.3em;
+  color: var(--ws-ink);
 }
-.ws2-line-kurisu .ws2-who-sub { font-family: var(--ws-serif); font-style: italic; font-size: 12.5px; letter-spacing: .06em; color: var(--ws-ink-3); }
-
-/* Your entries: your name on an outline plate, the line in the secondary ink; hers is the one being read. */
+.ws2[data-wl='beta'] .ws2-who-name { color: var(--ws-accent); }
+.ws2-line-kurisu .ws2-who-sub { font-family: var(--ws-serif); font-style: italic; font-size: 11.5px; line-height: 12px; letter-spacing: .04em; color: var(--ws-ink-3); }
+/* her lines are numbered at the outer edge of the margin */
+.ws2-line-kurisu { counter-increment: ws2-log; }
+.ws2-line-kurisu > header::before {
+  content: counter(ws2-log, decimal-leading-zero); position: absolute; left: 0; top: 0;
+  font-family: var(--ws-mono); font-size: 10px; line-height: 14px; letter-spacing: .08em; color: var(--ws-ink-3); font-variant-numeric: tabular-nums;
+}
+/* your name: the same type, lighter; a long chosen name keeps to two lines */
 .ws2 .ws2-line-user .ws2-who {
-  display: inline-block; padding: 3px 8px 2px 12px;
-  font-family: var(--ws-serif); font-weight: 500; font-size: 12px; line-height: 1.15; letter-spacing: .26em; color: var(--ws-ink-2);
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; max-width: 100%;
+  font-family: var(--ws-serif); font-weight: 500; font-size: 12px; line-height: 14px; letter-spacing: .24em; margin-right: -.24em;
+  color: var(--ws-ink-3); overflow-wrap: anywhere;
 }
 .ws2-user-text { margin: 0; font-family: var(--ws-read); font-size: 15.5px; line-height: 1.8; color: var(--ws-ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
 
-/* A failed turn: the prefix as a red plate, the reason in the reading ink. */
+/* A failed turn: SYSTEM ERROR stands where a name would, in red; the reason runs on in the reading ink. */
 .ws2-line-error .system-error-content { margin: 0; padding: 0; font-family: var(--ws-read); font-size: 14px; line-height: 1.8; color: var(--ws-ink-2); }
 .ws2 .ws2-err-tag {
-  display: inline-block; margin-right: 10px; padding: 3px 8px 2px 11px; vertical-align: 1px;
-  font-family: var(--ws-mono); font-size: 10px; line-height: 1.2; letter-spacing: .2em; color: #1c0907; background: var(--ws-bad);
+  position: absolute; top: calc(var(--first) / 2 - 7px); right: calc(100% + 28px); width: calc(var(--log-names) - 11px); text-align: right;
+  font-family: var(--ws-mono); font-size: 10px; line-height: 14px; letter-spacing: .2em; color: var(--ws-bad);
 }
 .ws2-vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
-/* She is thinking: a ring of code marks turning on its upright axis around a hairline ring turning across it,
- * the code-made stand-in for the pack's ring (SG silver, β gold). Still under reduced motion. */
-.ws2-thinking { display: flex; align-items: center; gap: 11px; min-height: 26px; animation: ws2-log-fade var(--dur-base) var(--ease-main) backwards; }
+/* She is thinking: a piece of the sheet's own figure working (SG: two wheels of the clock in mesh; β: a bright
+ * stretch running round the attractor), drawn in on arrival, and the state set like a stage direction.
+ * The asset pack's ring takes its place when there is one. Still under reduced motion. */
+.ws2-thinking { display: flex; align-items: center; gap: 8px; min-height: var(--first); animation: ws2-log-fade var(--dur-base) var(--ease-main) backwards; }
 @keyframes ws2-log-fade { from { opacity: 0; } }
-.ws2-thinking-label { font-family: var(--ws-mono); font-size: 10.5px; letter-spacing: .24em; text-transform: uppercase; color: var(--ws-ink-2); }
+.ws2-thinking-label { font-family: var(--ws-read); font-size: 14px; letter-spacing: .1em; color: var(--ws-ink-2); }
+.ws2-thinking-label::before { content: '（'; }
+.ws2-thinking-label::after { content: '）'; }
 .ws2[data-wl='beta'] .ws2-thinking-label { color: var(--ws-accent); }
-.ws2-thinking-mark { position: relative; flex: none; display: block; width: 24px; height: 24px; color: var(--ws-ink); perspective: 90px; }
+.ws2-thinking-mark { flex: none; display: block; width: 32px; height: 24px; overflow: visible; color: rgba(226, 232, 235, .78); }
+.ws2-thinking-mark :is(path, circle) { fill: none; stroke: currentColor; stroke-width: 1; }
+.ws2-thinking-mark .pin { fill: currentColor; stroke: none; }
+.ws2-thinking-mark .gear { stroke-dasharray: 1; stroke-dashoffset: 1; animation: ws2-mark-draw .7s cubic-bezier(.3, .6, .2, 1) forwards; }
+.ws2-thinking-mark .turn-a { animation: ws2-gear-a 9s linear infinite; }
+.ws2-thinking-mark .turn-b { animation: ws2-gear-b 9s linear infinite; }
+@keyframes ws2-mark-draw { to { stroke-dashoffset: 0; } }
+@keyframes ws2-gear-a { to { transform: rotate(360deg); } }
+@keyframes ws2-gear-b { to { transform: rotate(-617.142857deg); } }
 .ws2[data-wl='beta'] .ws2-thinking-mark { color: var(--ws-accent); }
-.ws2-thinking-mark b { position: absolute; display: block; border-radius: 50%; }
-.ws2-thinking-mark b:nth-child(1) {
-  inset: 0; opacity: .9;
-  background: repeating-conic-gradient(currentColor 0 19deg, transparent 19deg 30deg);
-  mask: radial-gradient(closest-side, transparent calc(100% - 2.2px), #000 calc(100% - 2.2px) calc(100% - .4px), transparent 100%);
-  animation: ws2-gimbal-y 2.4s linear infinite;
-}
-.ws2-thinking-mark b:nth-child(2) { inset: 6px; box-shadow: inset 0 0 0 1px currentColor; opacity: .7; animation: ws2-gimbal-x 3.6s linear infinite; }
-.ws2-thinking-mark b:nth-child(3) { left: 50%; top: 50%; width: 3px; height: 3px; margin: -1.5px 0 0 -1.5px; background: currentColor; }
-@keyframes ws2-gimbal-y { to { transform: rotateY(360deg); } }
-@keyframes ws2-gimbal-x { to { transform: rotateX(360deg); } }
+.ws2-thinking-mark .orbit { opacity: .42; stroke-width: .75; stroke-dasharray: 100; stroke-dashoffset: 100; animation: ws2-orbit-draw .9s cubic-bezier(.3, .6, .2, 1) forwards; }
+.ws2-thinking-mark .tracer { stroke-width: 1.8; stroke-linecap: round; stroke-dasharray: 4 96; filter: drop-shadow(0 0 2px currentColor); animation: ws2-trace 20s linear infinite; }
+@keyframes ws2-orbit-draw { to { stroke-dashoffset: 0; } }
+@keyframes ws2-trace { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } }
 @media (prefers-reduced-motion: reduce) {
-  .ws2-thinking, .ws2-thinking-mark b { animation: none !important; }
-  .ws2-thinking-mark b:nth-child(2) { transform: rotateX(62deg); }
+  .ws2-thinking, .ws2-thinking-mark * { animation: none !important; }
+  .ws2-thinking-mark :is(.gear, .orbit) { stroke-dashoffset: 0; }
+  .ws2-thinking-mark .tracer { stroke-dashoffset: 62; }
 }
 .ws2-voicing { margin-top: 6px; font-size: 12px; letter-spacing: .1em; color: var(--ws-ink-3); }
 .ws2-actions { display: flex; gap: 6px; margin-top: 10px; }
@@ -117,6 +124,9 @@
 .ws2 .ws2-to-latest {
   position: absolute; right: 0; bottom: 8px; z-index: 3; display: inline-flex; align-items: center; height: 26px; padding: 0 12px 0 15px;
   font-family: var(--ws-sans); font-size: 12px; letter-spacing: .14em; color: var(--ws-blade-ink); background: var(--ws-blade);
+  clip-path: polygon(6px 0, 100% 0, 100% 100%, 0 100%, 0 6px);
+  mask: url('/assets/sheet/tooth.webp') 0 0 / 256px 256px, linear-gradient(rgba(0, 0, 0, .78), rgba(0, 0, 0, .78));
+  mask-composite: add;
   transition: filter .15s ease, transform .2s var(--ease-main);
 }
 .ws2 .ws2-to-latest:hover { filter: brightness(1.08); }
@@ -135,41 +145,39 @@
 
 /* ---------- composer ---------- */
 
-/* The next entry of the log: the margin runs on into it, with your mark on it and your plate at its head. */
+/* The next line of the script: the rule runs on into it, your name and your mark level with the slot's first line.
+ * --slot-first is that line's middle: the head (28 + 4), the slot's top padding (12) and half a line (24.75 / 2). */
 .ws2 .ws2-composer {
-  --guide-w: 222px;
+  --slot-first: 56.5px;
   position: relative; flex: none; padding: 0 0 0 var(--log-gutter); border: 0; border-radius: 0; background: none; box-shadow: none;
 }
 .ws2 .ws2-composer::before {
-  content: ''; position: absolute; top: -12px; bottom: 25px; left: calc(var(--log-gutter) - 16px); width: 3px; pointer-events: none;
-  border-left: 1px solid var(--log-margin); border-right: 1px solid var(--log-margin);
+  content: ''; position: absolute; top: -12px; bottom: 25px; left: var(--log-names); width: 3px; pointer-events: none;
+  border-left: 1px solid var(--log-rule); border-right: 1px solid var(--log-rule);
   mask-image: linear-gradient(transparent, #000 14px);
 }
 .ws2 .ws2-composer::after {
-  content: ''; position: absolute; top: 11.5px; left: calc(var(--log-gutter) - 17.5px); width: 5px; height: 5px; border-radius: 50%; pointer-events: none;
+  content: ''; position: absolute; top: calc(var(--slot-first) - 2.5px); left: calc(var(--log-names) - 1px); width: 5px; height: 5px; border-radius: 50%; pointer-events: none;
   background: var(--ws-bg); box-shadow: inset 0 0 0 1.2px var(--ws-ink-3); transition: background .2s ease, box-shadow .2s ease;
 }
 .ws2 .ws2-composer:has(.chat-input-field:focus)::after { background: var(--ws-ink); box-shadow: 0 0 0 3px rgba(241, 240, 235, .1); }
-.ws2-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
 
-/* The head: your plate, a leader, what she is running on and whether it has been checked. */
+/* What she is running on and whether it has been checked, over the slot at its far end. */
 .ws2 .ws2-entry-head { display: flex; align-items: center; gap: 4px; min-width: 0; height: 28px; margin-bottom: 4px; }
+.ws2 .ws2-entry-head::before {
+  content: ''; flex: 1 1 24px; min-width: 16px; height: 1px; margin: 0 8px 0 2px;
+  background: repeating-linear-gradient(90deg, var(--ws-line-2) 0 1px, transparent 1px 4px);
+}
 .ws2 .ws2-entry-head > .ws2-model { flex: 0 1 auto; min-width: 0; margin: 0; }
 
-/* Your plate: a ghost until you write (the same outline as your entries above), then drawn round and inked in. */
+/* Your name in the margin: light until you write, then in the reading ink. */
 .ws2 .ws2-nameplate {
-  --pl: var(--ws-blade);
-  position: relative; flex: none; max-width: 150px; padding: 4px 8px 3px 12px;
-  font-family: var(--ws-serif); font-weight: 500; font-size: 12px; line-height: 1.15; letter-spacing: .26em;
-  color: var(--ws-ink-2); white-space: nowrap; cursor: text; transition: color .16s ease;
+  position: absolute; left: 0; top: calc(var(--slot-first) - 7px); width: calc(var(--log-names) - 11px); text-align: right;
+  font-family: var(--ws-serif); font-weight: 500; font-size: 12px; line-height: 14px; letter-spacing: .24em;
+  color: var(--ws-ink-3); cursor: text; transition: color .2s ease;
 }
-.ws2 .ws2-nameplate .lp-ghost { stroke: var(--ws-line-2); }
-.ws2 .ws2-nameplate span { position: relative; z-index: 1; display: block; overflow: hidden; text-overflow: ellipsis; transition: text-shadow .16s ease; }
-.ws2 .ws2-composer:has(.chat-input-field:focus) .ws2-nameplate { color: var(--ws-blade-ink); transition: color .14s ease .17s; }
-.ws2 .ws2-composer:has(.chat-input-field:focus) .ws2-nameplate span { text-shadow: -.6px 0 rgba(255, 46, 96, .34), .6px 0 rgba(70, 150, 255, .3), 0 0 .5px rgba(11, 12, 14, .55); transition-delay: .17s; }
-.ws2 .ws2-composer:has(.chat-input-field:focus) .ws2-nameplate .lp-edge { stroke-dashoffset: 0; transition: stroke-dashoffset .22s cubic-bezier(.5, 0, .3, 1), stroke .2s ease; }
-.ws2 .ws2-composer:has(.chat-input-field:focus) .ws2-nameplate .lp-fill { opacity: 1; transition: opacity .18s ease .16s, fill .2s ease; }
-.ws2 .ws2-composer:has(.chat-input-field:focus) .ws2-nameplate :is(.lp-reg, .lp-inner) { opacity: 1; transition: opacity .18s ease .2s; }
+.ws2 .ws2-nameplate span { display: block; margin-right: -.24em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws2 .ws2-composer:has(.chat-input-field:focus) .ws2-nameplate { color: var(--ws-ink); }
 
 .ws2 .ws2-field { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 14px; align-items: end; }
 
@@ -179,10 +187,7 @@
   background: linear-gradient(to top, rgba(241, 240, 235, .045), transparent 75%);
   border-bottom: 1px solid var(--ws-line-2); transition: background .2s ease;
 }
-.ws2[data-wl='beta'] .ws2-slot {
-  /* β: the slot is cut into chipped near-black metal, at the metal's own scale */
-  background: linear-gradient(to top, rgba(217, 133, 80, .07), transparent 80%), url('/assets/sheet/beta-metal.webp') 62% 50% / 1800px auto;
-}
+.ws2[data-wl='beta'] .ws2-slot { background: linear-gradient(to top, rgba(217, 133, 80, .06), transparent 75%); }
 .ws2 .ws2-slot::before, .ws2 .ws2-slot::after {
   content: ''; position: absolute; bottom: -1px; width: 1px; height: 9px; background: var(--ws-line-2);
   transition: height .22s cubic-bezier(.2, .8, .2, 1), background .2s ease;
@@ -209,7 +214,7 @@
 
 /* The ruler: a division for each character, hanging under the floor; the nib marks the end. */
 .ws2 .ws2-measure {
-  position: absolute; left: 14px; bottom: -6px; height: 5px; width: min(calc(var(--n) * 6px), calc(100% - 28px - var(--guide-w))); pointer-events: none;
+  position: absolute; left: 14px; bottom: -6px; height: 5px; width: min(calc(var(--n) * 6px), calc(100% - 28px)); pointer-events: none;
   background: repeating-linear-gradient(90deg, var(--ws-ink-3) 0 1px, transparent 1px 6px); transition: width .18s cubic-bezier(.2, .8, .2, 1);
 }
 .ws2 .ws2-measure .fresh {
@@ -253,10 +258,9 @@
 .ws2 .ws2-probe.failed { color: var(--ws-bad); }
 .ws2 .ws2-probe.failed .ws2-probe-dot { background: var(--ws-bad); box-shadow: 0 0 6px var(--ws-bad); }
 .ws2 .ws2-probe.checking .ws2-probe-dot { background: var(--ws-accent); animation: ws2-pulse 1s ease-in-out infinite; }
-.ws2 .ws2-leader { flex: 1 1 24px; min-width: 16px; height: 1px; margin: 0 8px 0 10px; background: repeating-linear-gradient(90deg, var(--ws-line-2) 0 1px, transparent 1px 4px); }
-/* The operation guide, under the floor at its far end, level with the ruler (which stops short of it). */
+/* The operation guide, under the floor at its far end, a row below the ruler. */
 .ws2 .ws2-guide {
-  display: flex; justify-content: flex-end; align-items: center; gap: 14px; height: 18px; margin: 7px 58px 0 0; pointer-events: none;
+  display: flex; justify-content: flex-end; align-items: center; gap: 14px; height: 18px; margin: 10px 58px 0 0; pointer-events: none;
   font-family: var(--ws-sans); font-size: 11.5px; letter-spacing: .08em; color: var(--ws-ink-3);
 }
 .ws2 .ws2-guide > span { display: inline-flex; align-items: center; gap: 6px; }
@@ -265,14 +269,26 @@
   font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .06em; color: var(--ws-ink-2); box-shadow: inset 0 0 0 1px var(--ws-line-2);
 }
 .ws2 .ws2-guide b { font-weight: 400; opacity: .6; }
-/* a narrow column keeps the model and its check; the keys step aside first */
-@container (max-width: 440px) {
-  .ws2 .ws2-composer { --guide-w: 96px; }
-  .ws2 .ws2-guide > span:last-child { display: none; }
-}
-@container (max-width: 380px) {
-  .ws2 .ws2-composer { --guide-w: 0px; }
-  .ws2 .ws2-guide { visibility: hidden; }
-}
 /* Model-state notes stand just above the composer's head, at its far end. */
 .ws2 .ws2-composer-notes { bottom: calc(100% + 6px); right: 0; }
+
+/* ---------- narrow columns ---------- */
+
+/* The keys step aside first, then the margin gives up its names: they go back over the line, the rule stays. */
+@container (max-width: 400px) {
+  .ws2 .ws2-guide > span:last-child { display: none; }
+}
+@container (max-width: 440px) {
+  .ws2 :is(.ws2-lines, .ws2-composer) { --log-names: 28px; }
+  .ws2-line { --first: 14px; }
+  .ws2-line-error { --first: 25px; }
+  .ws2-line > header { position: relative; top: auto; right: auto; width: auto; flex-direction: row; margin-bottom: 8px; text-align: left; }
+  .ws2-line-kurisu .ws2-who { flex-direction: row; align-items: baseline; gap: 10px; }
+  .ws2 :is(.ws2-who-name, .ws2-line-user .ws2-who) { margin-right: 0; }
+  .ws2-line-kurisu > header::before { left: auto; right: calc(100% + 24px); }
+  .ws2 .ws2-err-tag { position: static; display: inline; width: auto; margin-right: 10px; }
+  .ws2 .ws2-composer { --slot-first: 14px; }
+  .ws2 .ws2-nameplate { position: static; width: auto; max-width: 150px; text-align: left; }
+  .ws2 .ws2-entry-head::before { order: 1; }
+  .ws2 .ws2-entry-head > :not(.ws2-nameplate) { order: 2; }
+}

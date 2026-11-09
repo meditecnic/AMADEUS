@@ -27,10 +27,15 @@ describe('PresenceIndicator', () => {
     }
   });
 
-  it('keeps the thinking mark out of the accessibility tree', () => {
-    const { container } = render(<ThinkingMark />);
-    const mark = container.querySelector('.ws2-thinking-mark')!;
+  it('draws the thinking mark from each sheet and keeps it out of the accessibility tree', () => {
+    const { container, rerender } = render(<ThinkingMark />);
+    let mark = container.querySelector('.ws2-thinking-mark')!;
     expect(mark.getAttribute('aria-hidden')).toBe('true');
-    expect(mark.children).toHaveLength(3);
+    expect(mark.querySelectorAll('.gear')).toHaveLength(2);
+    rerender(<ThinkingMark worldline="beta" />);
+    mark = container.querySelector('.ws2-thinking-mark')!;
+    expect(mark.getAttribute('aria-hidden')).toBe('true');
+    expect(mark.querySelector('.tracer')).not.toBeNull();
+    expect(mark.querySelector('.gear')).toBeNull();
   });
 });
