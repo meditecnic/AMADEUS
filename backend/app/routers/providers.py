@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, SecretStr
 
 from app.db import (
     SelectorAdmission,
+    provider_visible_models,
     get_provider_configuration,
     list_provider_configurations,
     save_provider_configuration,
@@ -260,7 +261,20 @@ async def list_providers():
                 "configuration_version": config["configuration_version"],
             }
         )
+    for row in rows:
+        row["visible_models"] = await provider_visible_models(row["id"])
     return rows
+
+
+class ProviderSettings(BaseModel):
+    visible_models: list[str] = Field(max_length=1000)
+
+
+@router.patch("/{provider_id}/settings")
+async def update_provider_settings(provider_id: str, body: ProviderSettings):
+    _definition(provider_id)
+    return {"provider_id": provider_id,
+            "visible_models": await provider_visible_models(provider_id, body.visible_models)}
 
 
 def _custom_profile_response(saved: dict[str, object]) -> dict[str, object]:

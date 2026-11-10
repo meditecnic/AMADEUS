@@ -36,7 +36,7 @@ EMBEDDING_DIMENSION = 768
 # v11: Memory observation–fact pipeline (additive tables; legacy core_facts retained).
 # v12: jina 768-dimension stable-fact version embeddings. Legacy tables unchanged.
 # v13: content-free model invocation accounting in the control store.
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 DEFAULT_IDENTITY_MODE = "okabe"
 IDENTITY_MODES = frozenset({"okabe", "self"})
@@ -628,7 +628,12 @@ CREATE TABLE IF NOT EXISTS provider_configurations (
     created_at_utc TEXT NOT NULL DEFAULT '',
     updated_at_utc TEXT NOT NULL
 );
-""" + SHARED_USER_FACTS_DDL + MODEL_USAGE_DDL
+""" + SHARED_USER_FACTS_DDL + MODEL_USAGE_DDL + """
+CREATE TABLE IF NOT EXISTS provider_settings (
+    provider_id TEXT PRIMARY KEY,
+    visible_models TEXT NOT NULL DEFAULT '[]'
+);
+"""
 
 
 def _read_schema_version(connection: sqlite3.Connection) -> int | None:
@@ -1430,6 +1435,17 @@ def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str 
         if current == 12:
             _migrate_v12_to_v13(connection, kind)
             current = 13
+        if current == 13:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                if kind == "control":
+                    connection.execute("CREATE TABLE IF NOT EXISTS provider_settings (provider_id TEXT PRIMARY KEY, visible_models TEXT NOT NULL DEFAULT '[]')")
+                connection.execute("UPDATE schema_meta SET value='14' WHERE key='schema_version'")
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+            current = 14
         if current not in (None, SCHEMA_VERSION):
             raise RuntimeError(f"unsupported {kind} schema version at {path}: {current}")
 
@@ -1829,3 +1845,21 @@ async def validate_schema() -> dict[str, object]:
 def reset_initialization_cache() -> None:
     """Test helper for environment-path changes."""
     _initialized_paths.clear()
+
+
+async def provider_visible_models(provider_id: str, models: list[str] | None = None) -> list[str]:
+    db = await get_db("steins_gate", "control")
+    try:
+        if models is not None:
+            await db.execute(
+                "INSERT INTO provider_settings(provider_id,visible_models) VALUES(?,?) "
+                "ON CONFLICT(provider_id) DO UPDATE SET visible_models=excluded.visible_models",
+                (provider_id, json.dumps(models)),
+            )
+            await db.commit()
+        row = await (await db.execute(
+            "SELECT visible_models FROM provider_settings WHERE provider_id=?", (provider_id,),
+        )).fetchone()
+        return json.loads(row[0]) if row else []
+    finally:
+        await db.close()
