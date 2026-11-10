@@ -139,3 +139,67 @@ def test_save_failure_after_partial_configuration_is_compensated(connect, monkey
     else:
         assert client.portal.call(db.list_provider_configurations) == before
         assert not store._values
+
+
+@pytest.fixture(params=["deepseek", "custom"])
+def connected_target(connect, monkeypatch, request):
+    client, store = connect
+    target = request.param
+    model = "chosen" if target == "custom" else providers.provider_registry.snapshot(target).model_id
+    adapter_class = type(providers.provider_registry.snapshot(target).adapter)
+    monkeypatch.setattr(adapter_class, "list_models", AsyncMock(return_value=[model]))
+    chat_keys = []
+
+    async def stream(self, **kwargs):
+        chat_keys.append(kwargs["api_key"])
+        yield {"content": "OK"}
+
+    monkeypatch.setattr(adapter_class, "get_chat_stream", stream)
+    address = {"base_url": "https://connect.invalid/v1"} if target == "custom" else {"provider_id": target}
+    first = client.post("/api/providers/connect", json={**address, "model_id": model, "api_key": "original"})
+    assert first.status_code == 200, first.text
+    profile_id = first.json()["provider_id"]
+    chat_keys.clear()
+    return client, store, address, profile_id, model, adapter_class, chat_keys
+
+
+@pytest.mark.parametrize("admission", ["admitted", "manual", "pending"])
+def test_reconnect_without_model_preserves_selection_and_admission(connected_target, monkeypatch, admission):
+    client, store, address, profile_id, model, _, _ = connected_target
+    before = client.portal.call(db.get_provider_configuration, profile_id)
+    client.portal.call(db.update_provider_selector_admission, profile_id, admission, before["configuration_version"])
+    chat_check = AsyncMock(side_effect=AssertionError("key-only reconnect must only list models"))
+    monkeypatch.setattr(providers, "check_selected_model_chat", chat_check)
+    response = client.post("/api/providers/connect", json={**address, "api_key": "replacement"})
+    assert response.status_code == 200, response.text
+    assert response.json()["model_id"] == model
+    assert response.json()["check"] == {"ok": False, "code": "not_checked"}
+    after = client.portal.call(db.get_provider_configuration, profile_id)
+    assert after["default_model"] == model and after["selector_admission"] == admission
+    assert store.get(profile_id) == "replacement"
+    chat_check.assert_not_called()
+    assert client.post("/api/conversations", json={
+        "session_id": "reconnect", "provider_id": profile_id,
+    }).status_code == 201
+
+
+def test_rejected_reconnect_restores_key_and_keeps_conversation_callable(connected_target, monkeypatch):
+    client, store, address, profile_id, model, adapter_class, chat_keys = connected_target
+    before = client.portal.call(db.get_provider_configuration, profile_id)
+
+    async def list_models(self, *, api_key):
+        if api_key == "rejected":
+            raise ProviderRequestError(profile_id, 401)
+        return [model]
+
+    monkeypatch.setattr(adapter_class, "list_models", list_models)
+    response = client.post("/api/providers/connect", json={**address, "api_key": "rejected"})
+    assert response.status_code == 401
+    assert response.json() == {"detail": {"code": "credential_rejected", "step": "list"}}
+    assert client.portal.call(db.get_provider_configuration, profile_id) == before
+    assert store.get(profile_id) == "original"
+    assert client.post("/api/conversations", json={
+        "session_id": "reconnect", "provider_id": profile_id,
+    }).status_code == 201
+    assert client.post(f"/api/providers/{profile_id}/chat-check", json={"model_id": model}).status_code == 200
+    assert chat_keys == ["original"]

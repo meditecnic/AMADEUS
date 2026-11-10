@@ -348,7 +348,8 @@ async def _connect_provider(body: ProviderConnect):
 
     step = "save"
     try:
-        model = (body.model_id or "").strip()
+        keep_selection = body.model_id is None and existing is not None and bool(existing["default_model"])
+        model = str(existing["default_model"]) if keep_selection else (body.model_id or "").strip()
         if body.model_id is not None and not model:
             raise HTTPException(422, detail={"code": "model_id_required"})
         if is_custom_profile_id(provider_id):
@@ -365,10 +366,11 @@ async def _connect_provider(body: ProviderConnect):
                 initial_admission="pending", catalog_id=body.catalog_id,
             )
             provider_registry.replace(replace(old_definition, default_model=model), old_adapter)
-        # A check in flight is never an admission result.
-        saved = await update_provider_selector_admission(provider_id, "pending", saved["configuration_version"])
-        if saved is None:
-            raise HTTPException(409, detail={"code": "configuration_changed"})
+        # Replacing a key without selecting a model preserves the old admission.
+        if not keep_selection:
+            saved = await update_provider_selector_admission(provider_id, "pending", saved["configuration_version"])
+            if saved is None:
+                raise HTTPException(409, detail={"code": "configuration_changed"})
         if body.api_key is not None:
             credential_store.set(provider_id, body.api_key.get_secret_value())
         provider_model_cache.clear(provider_id)
@@ -376,14 +378,15 @@ async def _connect_provider(body: ProviderConnect):
         # Connect must prove live discovery; stale UI cache is not a success.
         result = await _discover_models(provider_id, refresh=True, allow_stale=False)
         model_catalog.reconcile(provider_id, result.models, result.metadata)
-        if model:
+        if model and not keep_selection:
             step = "check"
             await check_selected_model_chat(provider_id, ChatCheckRequest(model_id=model))
             saved = await update_provider_selector_admission(provider_id, "admitted", saved["configuration_version"])
             if saved is None:
                 raise HTTPException(409, detail={"code": "configuration_changed"})
         return {"provider_id": provider_id, "models": list(result.models), "model_id": model or None,
-                "check": {"ok": bool(model), "code": "ok" if model else "model_selection_required"},
+                "check": {"ok": bool(model) and not keep_selection,
+                          "code": "not_checked" if keep_selection else ("ok" if model else "model_selection_required")},
                 "configuration_version": saved["configuration_version"]}
     except Exception as exc:
         # Both phases restore the exact previous row, key and runtime. In phase
