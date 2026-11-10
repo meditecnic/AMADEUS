@@ -91,3 +91,8 @@ async def export_data(
         headers={"Content-Disposition": f'attachment; filename="{export.filename}"',
                  "Cache-Control": "no-store"},
         background=BackgroundTask(export.close))
+
+
+@router.delete("/restore")
+async def cancel_restore():
+    return await _call(backups.cancel_restore)
