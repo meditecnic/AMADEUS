@@ -38,6 +38,8 @@ import { DraftWord } from '../workstation/DraftWord';
 import { DIVERGENCE, Nixie, WORLDLINE_NAME, useTunedValue } from '../workstation/Nixie';
 import { MENU_SECTIONS, SoundChannel, SystemMenu, WorldlinePanel, type MenuSection } from '../workstation/SystemMenu';
 import { useWorldlineLedger } from '../workstation/worldlineLedger';
+import { ConnectionsPanel } from '../workstation/ConnectionsPanel';
+import { shelved, useModelShelf } from '../workstation/modelShelf';
 import { WorldlineShift } from '../workstation/WorldlineShift';
 import { scheduleShiftPrewarm } from '../workstation/shiftStage';
 import { rememberWorkstationFonts } from '../workstation/fontWarmup';
@@ -45,8 +47,7 @@ import { ShiftTransaction } from '../workstation/shiftTransaction';
 import { ConfirmDialog } from '../workstation/ConfirmDialog';
 import { sessionDialogFallback } from '../workstation/focusHandoff';
 import { useExitPresence } from '../workstation/useExitPresence';
-import { ConnectionCheckPanel, chatCheckMessage, requestChatCheck, type ChatCheckState } from '../workstation/ConnectionCheck';
-import { ConnectionList } from '../workstation/ConnectionList';
+import { chatCheckMessage, requestChatCheck, type ChatCheckState } from '../workstation/ConnectionCheck';
 import { DataPanel } from '../workstation/DataPanel';
 import { UsagePanel } from '../workstation/UsagePanel';
 import { AboutPanel } from '../workstation/AboutPanel';
@@ -215,6 +216,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [providerListFailed, setProviderListFailed] = useState(false);
   const [providerListLoaded, setProviderListLoaded] = useState(false);
   const [availableModels, setAvailableModels] = useState<ModelCatalogEntry[]>([]);
+  const modelShelf = useModelShelf();
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsDiscoveryStatus, setModelsDiscoveryStatus] = useState<ModelDiscoveryStatus>('idle');
   const providerModelsRequestEpochRef = useRef(0);
@@ -411,7 +413,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     openMenu('connections');
     const selector = target === 'key'
       ? '[data-testid="credential-input"]'
-      : '.ws2-conn-row:not(.is-active):not(:disabled)';
+      : '.ws2-cx-row:not(.is-active) .main';
     // A conversation's provider switch lands asynchronously, so the key field may appear a moment later.
     let tries = 0;
     const attempt = () => {
@@ -448,7 +450,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
   /* Chat-selector admission is stored by the backend (`selector_admission`): a new connection is pending until
    * its first chat-check passes or the user enables it by hand. */
   const pendingProviders = providers.filter((row) => row.selector_admission === 'pending').map((row) => row.id);
-  const manualProviders = providers.filter((row) => row.selector_admission === 'manual').map((row) => row.id);
   const [modelApplyError, setModelApplyError] = useState<string | null>(null);
   /** Address, key or model changes invalidate earlier results for that provider. */
   const bumpConfigVersion = useCallback((providerId: string) => {
@@ -1625,9 +1626,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
     } catch {}
     reconnect();
   };
-  const enableProviderManually = (providerId: string, modelId: string, version: string | null | undefined) => {
-    void admitProvider(providerId, modelId, version, 'manual');
-  };
 
   // Apply a model chosen mid-turn once the turn has fully finished.
   useEffect(() => {
@@ -1938,6 +1936,22 @@ export const Workstation: React.FC<WorkstationProps> = ({
     }
     const settings = await response.json() as WebSearchSettingsSnapshot;
     applyWebSearchSettings(settings);
+  };
+
+  const handleSaveWebSearchKey = async (provider: WebSearchProviderId, key: string) => {
+    const response = await apiFetch('/api/search/credential', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, api_key: key }),
+    });
+    if (!response.ok) throw new Error('web_search_credential_save_failed');
+    const payload = await response.json() as WebSearchSettingsSnapshot & { configured?: boolean };
+    applyWebSearchSettings({
+      active_provider: (payload.active_provider || provider) as WebSearchProviderId,
+      providers: payload.providers || webSearchProviders,
+      configured: payload.configured,
+      fallback_note: webSearchFallbackNote,
+    });
   };
 
   const handleClearWebSearchCredential = async (provider: WebSearchProviderId) => {
@@ -2410,7 +2424,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                 ))}
                 activeProviderId={activeProviderId}
                 activeModelId={activeConversation?.model_id || model}
-                models={availableModels}
+                models={shelved(modelShelf, activeProviderId, availableModels, activeConversation?.model_id || model)}
                 disabled={conversationBusy}
                 lockProvider={isThinking || isSynthesizing}
                 searchable
@@ -2701,16 +2715,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         marks={updateMark ? { about: '有新版本' } : undefined}
       >
         {/* Fixed slots keep the embedded SettingsModal mounted across sections, so unsaved drafts survive. */}
-        <div className={`ws2-conn${menuSection === 'connections' ? ' is-split' : ''}`}>
-        {menuSection === 'connections' && (
-          <ConnectionList
-            providers={providers}
-            activeProviderId={activeProviderId}
-            checkFor={(row) => chatChecks[checkKey(row.id, row.id === activeProviderId ? activeModelId : row.default_model || '')]}
-            locked={isThinking || isSynthesizing || conversationBusy}
-            onSelect={changeProvider}
-          />
-        )}
+        <div className="ws2-conn">
         <div className="ws2-conn-detail">
         {menuSection === 'worldline' && (
           <WorldlinePanel
@@ -2725,36 +2730,25 @@ export const Workstation: React.FC<WorkstationProps> = ({
           />
         )}
         {menuSection === 'connections' && (
-          <>
-            <ConnectionCheckPanel
-              providerName={activeProvider?.display_name || activeProviderId}
-              modelId={activeModelId}
-              state={chatChecks[checkKey(activeProviderId, activeModelId)]}
-              manual={manualProviders.includes(activeProviderId)}
-              onCheck={() => { void runChatCheck(activeProviderId, activeModelId); }}
-            />
-            {providers
-              .filter((row) => pendingProviders.includes(row.id) && row.enabled !== false && row.id !== activeProviderId)
-              .map((row) => {
-                const modelId = row.default_model || '';
-                const version = row.configuration_version;
-                return (
-                  <ConnectionCheckPanel
-                    key={row.id}
-                    providerName={row.display_name}
-                    modelId={modelId}
-                    state={chatChecks[checkKey(row.id, modelId)]}
-                    pending
-                    onCheck={() => {
-                      void runChatCheck(row.id, modelId).then((result) => {
-                        if (result?.status === 'ok') void admitProvider(row.id, modelId, version);
-                      });
-                    }}
-                    onManualEnable={() => enableProviderManually(row.id, modelId, version)}
-                  />
-                );
-              })}
-          </>
+          <ConnectionsPanel
+            providers={providers}
+            activeProviderId={activeProviderId}
+            activeModelId={activeModelId}
+            locked={isThinking || isSynthesizing || conversationBusy}
+            checkFor={(providerId, modelId) => chatChecks[checkKey(providerId, modelId)]}
+            onCheck={(providerId, modelId) => runChatCheck(providerId, modelId)}
+            onUse={changeProvider}
+            onAdmit={admitProvider}
+            onReload={() => loadProviders()}
+            onConfigChanged={(providerId) => { bumpConfigVersion(providerId); if (providerId === activeProviderId) void loadProviderModels(providerId, true); }}
+            search={{
+              active: webSearchActiveProvider,
+              providers: webSearchProviders,
+              onSelect: handleSelectWebSearchProvider,
+              onSaveKey: handleSaveWebSearchKey,
+              onClear: handleClearWebSearchCredential,
+            }}
+          />
         )}
         {menuSection === 'sound' && (
           <div className="ws2-sound-panel">
@@ -2779,10 +2773,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
           />
         )}
         {menuSection === 'about' && <AboutPanel />}
-        <div className="ws2-settings-host" hidden={menuSection !== 'connections' && menuSection !== 'sound' && menuSection !== 'character'}>
+        <div className="ws2-settings-host" hidden={menuSection !== 'sound' && menuSection !== 'character'}>
       <SettingsModal
         variant="embedded"
-        tab={menuSection === 'connections' ? 'connections' : menuSection === 'sound' ? 'voice' : 'basic'}
+        tab={menuSection === 'sound' ? 'voice' : 'basic'}
         isOpen={isSettingsOpen}
         onClose={closeMenu}
         worldline={worldline}

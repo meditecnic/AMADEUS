@@ -1,7 +1,8 @@
 import { mockMemoryForTurn } from './chatMemory';
 import { createDataStore, dataUnavailable, handleData, type Reply } from './data';
-import { fixedTime, model, providers, searchSettings } from './fixtures';
+import { fixedTime, model, searchSettings } from './fixtures';
 import { createMemoryStore, handleMemory } from './memory';
+import { createProviderStore, handleProviders } from './providers';
 import { scenarios, selectScenario, type Scenario } from './scenarios';
 
 export type Frame = Record<string, unknown>;
@@ -23,6 +24,7 @@ export function createMockRuntime() {
     conversations: Map<string, Conversation[]>;
     search: typeof searchSettings;
     data: ReturnType<typeof createDataStore>;
+    providers: ReturnType<typeof createProviderStore>;
   }>();
   let counter = 0;
 
@@ -34,6 +36,7 @@ export function createMockRuntime() {
         memory: createMemoryStore(scenarios[name].memory),
         conversations: new Map(),
         search: structuredClone(searchSettings),
+        providers: createProviderStore(),
         // [210] the passcode lives with the client, so setting one on the system page holds at the next login
         data: createDataStore(scenarios[name].data, scenarios[name].login.passcodeSet ? scenarios[name].login.password : null),
       };
@@ -102,13 +105,9 @@ export function createMockRuntime() {
     if (path.startsWith('/api/asset-pack/')) return fail(404, 'optional_asset_pack_absent');
     if (path === '/health') return ok({ ok: true, mode: 'dev-mock' });
     if (path === '/health/dependencies') return ok({ dependencies: { tts: { ok: false } } });
-    if (path === '/api/providers' && method === 'GET') return ok(structuredClone(providers.map(provider => ({ ...provider, catalog: scenario.models }))));
-    if (/^\/api\/providers\/[^/]+\/models$/.test(path) && method === 'GET') {
-      return ok({ catalog: scenario.models, discovery_status: 'live', id_only: false });
-    }
-    if (/^\/api\/providers\/[^/]+\/credentials$/.test(path) && method === 'POST') return ok({ ok: true });
-    if (/^\/api\/providers\/[^/]+\/chat-check$/.test(path) && method === 'POST') {
-      return ok({ ok: true, model_id: body.model_id });
+    if (path.startsWith('/api/providers')) {
+      const reply = handleProviders(path, method, body, state(name, client).providers, scenario.models);
+      if (reply) return reply;
     }
     if (path === '/api/search/settings') {
       const search = state(name, client).search;
