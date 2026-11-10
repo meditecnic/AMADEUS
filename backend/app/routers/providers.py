@@ -328,7 +328,8 @@ async def _connect_provider(body: ProviderConnect):
             rows = await list_provider_configurations(enabled_only=True)
             existing = next((row for row in rows
                 if is_custom_profile_id(str(row["provider_id"]))
-                and row["base_url"] == base_url and row.get("catalog_id") == body.catalog_id), None)
+                and row["base_url"] == base_url
+                and (body.catalog_id is None or row.get("catalog_id") == body.catalog_id)), None)
             provider_id = str(existing["provider_id"]) if existing else new_custom_provider_id()
         else:
             provider_id = body.provider_id

@@ -105,3 +105,37 @@ def test_builtin_connect_uses_same_steps(connect, monkeypatch, provider_id):
     assert response.status_code == 200
     assert response.json()["provider_id"] == provider_id
     assert response.json()["check"]["ok"] is True
+
+
+def test_missing_catalog_uses_address_only(connect):
+    client, _ = connect
+    labeled = submit(client, catalog_id="paid-plan").json()
+    assert submit(client).json()["provider_id"] == labeled["provider_id"]
+
+
+@pytest.mark.parametrize("reuse", [False, True])
+@pytest.mark.parametrize("failure", ["durable_write", "registration"])
+def test_save_failure_after_partial_configuration_is_compensated(connect, monkeypatch, reuse, failure):
+    client, store = connect
+    if reuse:
+        provider_id = submit(client, api_key="original").json()["provider_id"]
+        before = client.portal.call(db.get_provider_configuration, provider_id)
+    else:
+        before = client.portal.call(db.list_provider_configurations)
+    if failure == "durable_write":
+        save = providers.save_provider_configuration
+        async def partial(*args, **kwargs):
+            await save(*args, **kwargs)
+            raise RuntimeError("after commit")
+        monkeypatch.setattr(providers, "save_provider_configuration", partial)
+    else:
+        from unittest.mock import Mock
+        monkeypatch.setattr(providers, "configure_custom_provider", Mock(side_effect=RuntimeError("register failed")))
+    response = submit(client, model_id="chosen", api_key="replacement")
+    assert response.status_code == 502 and response.json()["detail"]["step"] == "save"
+    if reuse:
+        assert client.portal.call(db.get_provider_configuration, provider_id) == before
+        assert store.get(provider_id) == "original"
+    else:
+        assert client.portal.call(db.list_provider_configurations) == before
+        assert not store._values
