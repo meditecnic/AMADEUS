@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import os
 import re
 import uuid
@@ -104,8 +105,8 @@ def normalize_custom_display_name(value: str) -> str:
 
 def normalize_custom_default_model(value: str) -> str:
     model = (value or "").strip()
-    if not model or len(model) > 200:
-        raise ValueError("custom default model is required")
+    if len(model) > 200:
+        raise ValueError("custom default model must be at most 200 characters")
     return model
 
 
@@ -279,6 +280,11 @@ async def restore_custom_provider_configuration() -> None:
     for row in rows:
         provider_id = str(row["provider_id"])
         if not is_user_custom_provider(provider_id):
+            for definition in provider_registry.list_definitions():
+                if definition.id == provider_id:
+                    adapter = provider_registry.snapshot(provider_id, allow_unavailable=True).adapter
+                    provider_registry.replace(replace(definition, default_model=str(row["default_model"])), adapter)
+                    break
             continue
         if provider_id == "custom":
             has_custom_row = True

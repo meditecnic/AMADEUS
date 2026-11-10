@@ -1045,3 +1045,42 @@ async def dependencies_health():
     else:
         status = "ready"
     return {"status": status, "dependencies": dependencies}
+
+
+@router.get("/api/worldlines/summary")
+async def worldline_summary(session_id: str = Query(...)):
+    from app.services.conversations import conversation_service
+
+    sid = _require_session_id(session_id)
+    result = {}
+    for worldline in ("steins_gate", "beta"):
+        conversations = await conversation_service.list_for_session(sid, worldline)
+        memories = 0
+        for mode in ("self", "okabe"):
+            chart = await memory_chart(sid, worldline, mode)
+            memories += chart["counts"]["facts"] + chart["counts"]["experiences"]
+        result[worldline] = {
+            "conversations": len(conversations), "memories": memories,
+            "last_active_at": max((row["last_active_at"] for row in conversations
+                                   if row.get("last_active_at")), default=None),
+        }
+    return result
+
+
+@router.post("/api/memory/observations/{observation_id}/confirm")
+async def confirm_memory_observation(observation_id: str, session_id: str | None = Query(None),
+                                     worldline: str | None = Query(None), identity_mode: str | None = Query(None)):
+    from app.services.memory_v11.contracts import MemoryValidationError
+    from app.services.memory_v11.observations import confirm_observation
+    wl, mode = _validate_memory_scope(worldline, identity_mode)
+    sid = _require_session_id(session_id)
+    try:
+        return await confirm_observation(session_id=sid, worldline=wl, identity_mode=mode, observation_id=observation_id)
+    except MemoryValidationError as exc:
+        if exc.code == "embedding_not_ready":
+            raise HTTPException(503, detail={"code": exc.code}) from exc
+        if exc.code in {"observation_not_confirmable", "observation_state_conflict", "observation_changed"}:
+            raise HTTPException(409, detail={"code": exc.code}) from exc
+        raise _memory_error_response(exc) from exc
+    except Exception:
+        raise HTTPException(500, detail={"code": "memory_operation_failed"}) from None

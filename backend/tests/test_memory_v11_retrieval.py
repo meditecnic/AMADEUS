@@ -41,6 +41,33 @@ async def isolated_store(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.mark.asyncio
+async def test_embedding_lookup_above_sqlite_expression_limit(isolated_store):
+    """Large same-scope recall must use vectors rather than silently degrade."""
+    from app.db import EMBEDDING_MODEL
+    from app.services.memory_v11.retrieval import _load_version_embeddings
+
+    keys = [(f"scale-{i}", 1) for i in range(1200)]
+    vector = struct.pack("768f", 1.0, *([0.0] * 767))
+    connection = await get_db("steins_gate", "memory")
+    try:
+        await connection.executemany("""INSERT INTO stable_facts
+            (fact_id,session_id,identity_mode,state,active_version,created_at,updated_at)
+            VALUES(?,'scale','self','active',1,'now','now')""", [(key[0],) for key in keys])
+        await connection.executemany("""INSERT INTO stable_fact_versions
+            (fact_id,version_no,display_text,semantic_json,semantic_fingerprint,confidence,change_kind,valid_from)
+            VALUES(?,1,'旅行','{}',?,0.9,'create','now')""", [(key[0], key[0]) for key in keys])
+        await connection.executemany("INSERT INTO stable_fact_version_embeddings VALUES(?,1,?,768,?)",
+                                     [(key[0], EMBEDDING_MODEL, vector) for key in keys])
+        await connection.commit()
+    finally:
+        await connection.close()
+    loaded = await _load_version_embeddings(worldline="steins_gate", fact_versions=[*keys, keys[0], (keys[0][0], 2)])
+    assert set(loaded) == set(keys)
+    assert all(row["vector"] == vector and row["dimensions"] == 768 for row in loaded.values())
+    assert await _load_version_embeddings(worldline="beta", fact_versions=keys) == {}
+
+
 def _session_obj(session_id: str, *, identity_mode: str = "self") -> SimpleNamespace:
     return SimpleNamespace(
         session_id=session_id,

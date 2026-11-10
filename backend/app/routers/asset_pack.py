@@ -4,7 +4,7 @@ import os
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.db import get_data_root
 
@@ -27,6 +27,8 @@ def get_asset_pack_file(path: str) -> FileResponse:
         override = os.environ.get("AMADEUS_ASSET_PACK_DIR")
         root = (Path(override).expanduser() if override else get_data_root() / "asset-pack" / "amadeus-original").resolve()
         target = (root / relative).resolve()
+        if path == "manifest.json" and target.is_relative_to(root) and not target.exists():
+            return JSONResponse({"installed": False})
         if not target.is_relative_to(root) or not target.is_file():
             raise HTTPException(status_code=404, detail="asset not found")
     except (OSError, ValueError, RuntimeError) as exc:

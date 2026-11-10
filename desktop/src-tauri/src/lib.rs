@@ -9,8 +9,12 @@ use std::time::{Duration, Instant};
 
 use tauri::{Manager, RunEvent};
 
-#[cfg(windows)]
-use std::os::windows::fs::OpenOptionsExt;
+mod backend_logs;
+use backend_logs::CappedLog;
+
+mod instance;
+use instance::{acquire_instance_lock, backend_runtime_dir};
+
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
@@ -131,28 +135,10 @@ fn read_backend_stdout(
 
 fn fail_backend_startup(startup: &BackendStartup, logs: &Path, reason: String) {
     let _ = fs::create_dir_all(logs);
-    if let Ok(mut log) = fs::OpenOptions::new().create(true).append(true)
-        .open(logs.join("backend-startup.log"))
-    {
-        let _ = writeln!(log, "AMADEUS_BACKEND_FAILED {reason}");
-    }
+    let _ = writeln!(CappedLog::open(&logs.join("backend-startup.log")), "AMADEUS_BACKEND_FAILED {reason}");
     startup.finish(Err(reason));
 }
 
-// Keep this handle alive until the desktop exits. The file itself may remain on disk.
-struct InstanceLock {
-    _file: Option<File>,
-}
-
-fn acquire_instance_lock(data_dir: &Path) -> io::Result<InstanceLock> {
-    fs::create_dir_all(data_dir)?;
-    #[cfg(windows)]
-    let file = Some(fs::OpenOptions::new().read(true).write(true).create(true)
-        .truncate(false).share_mode(0).open(data_dir.join("desktop.lock"))?);
-    #[cfg(not(windows))]
-    let file = None;
-    Ok(InstanceLock { _file: file })
-}
 
 #[cfg(windows)]
 fn create_backend_job() -> io::Result<std::os::windows::io::OwnedHandle> {
@@ -224,22 +210,64 @@ impl BackendProcess {
     }
 }
 
+
 fn backend_data_dir(app: &tauri::AppHandle) -> tauri::Result<PathBuf> {
-    Ok(match std::env::var_os("AMADEUS_DATA_DIR").filter(|value| !value.is_empty()) {
-        Some(path) => PathBuf::from(path),
-        None => app.path().app_local_data_dir()?.join("data"),
-    })
+    if let Some(path) = std::env::var_os("AMADEUS_DATA_DIR").filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(path));
+    }
+    Ok(resolve_data_location(&app.path().app_local_data_dir()?.join("data"))?)
+}
+
+fn resolve_data_location(default: &Path) -> io::Result<PathBuf> {
+    let file = default.parent().unwrap().join("data-location.json");
+    let invalid = |path: &Path, detail: &str| io::Error::new(io::ErrorKind::InvalidData,
+        format!("data_location_missing: {}: {detail}", path.display()));
+    match fs::symlink_metadata(&file) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(default.to_path_buf()),
+        Err(error) => return Err(invalid(&file, &error.to_string())),
+        Ok(_) => {},
+    }
+    let text = fs::read_to_string(&file).map_err(|e| invalid(&file, &e.to_string()))?;
+    let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| invalid(&file, &e.to_string()))?;
+    let path = value["path"].as_str().map(PathBuf::from)
+        .filter(|path| path.is_absolute()).ok_or_else(|| invalid(&file, "invalid absolute path"))?;
+    if !path.is_dir() {
+        return Err(invalid(&path, "directory does not exist"));
+    }
+    let marker = fs::read_to_string(path.join("amadeus-data.json"))
+        .map_err(|e| invalid(&path, &e.to_string()))?;
+    let marker: serde_json::Value = serde_json::from_str(&marker)
+        .map_err(|e| invalid(&path, &e.to_string()))?;
+    if marker["format"].as_u64() != Some(1) {
+        return Err(invalid(&path, "unsupported data marker"));
+    }
+    Ok(path)
+}
+
+#[tauri::command]
+async fn restart_app(window: tauri::WebviewWindow, app: tauri::AppHandle) -> Result<(), String> {
+    if window.label() != "main" {
+        return Err("restart is only available to the main window".into());
+    }
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if let Some(backend) = handle.try_state::<Arc<BackendProcess>>() {
+            backend.stop();
+        }
+    }).await.map_err(|_| "backend shutdown failed".to_string())?;
+    app.restart();
 }
 
 fn start_backend(
     app: &tauri::AppHandle,
     data_dir: &Path,
+    logs: &Path,
     token: String,
     startup: Arc<BackendStartup>,
 ) -> Result<Arc<BackendProcess>, Box<dyn std::error::Error>> {
-    let logs = data_dir.join("logs");
-    fs::create_dir_all(&logs)?;
-    let stdout_log = File::create(logs.join("backend-stdout.log"))?;
+    let logs = logs.to_path_buf();
+    let stdout_log = CappedLog::open(&logs.join("backend-stdout.log"));
+    let mut stderr_log = CappedLog::open(&logs.join("backend-stderr.log"));
     let backend = app.path().resource_dir()?.join("backend/amadeus-backend.exe");
     let mut command = Command::new(backend);
     command
@@ -251,7 +279,12 @@ fn start_backend(
         .env("PYTHON_DOTENV_DISABLED", "1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(File::create(logs.join("backend-stderr.log"))?);
+        .stderr(Stdio::piped());
+    command.env_remove("AMADEUS_LOCATION_FILE");
+    if std::env::var_os("AMADEUS_DATA_DIR").filter(|value| !value.is_empty()).is_none() {
+        command.env("AMADEUS_LOCATION_FILE", app.path().app_local_data_dir()?.join("data-location.json"));
+    }
+    command.env("AMADEUS_INSTALL_DIR", app.path().resource_dir()?);
     #[cfg(windows)]
     command.creation_flags(0x0800_0000);
     #[cfg(windows)]
@@ -267,6 +300,8 @@ fn start_backend(
     let started = Instant::now();
     let pid = child.id();
     let stdout = child.stdout.take().expect("stdout was configured as a pipe");
+    let mut stderr = child.stderr.take().expect("stderr was configured as a pipe");
+    std::thread::spawn(move || { let _ = io::copy(&mut stderr, &mut stderr_log); });
     let backend = Arc::new(BackendProcess {
         child: Mutex::new(Some(child)),
         #[cfg(windows)]
@@ -316,28 +351,43 @@ fn show_startup_error(message: &str) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Tauri initializes plugins during build, before creating configured WebViews.
+        // A rejected second instance must not create a controller and then process::exit.
+        .plugin(tauri::plugin::Builder::<_, ()>::new("instance-lock")
+            .setup(|app, _| {
+                let data_override = std::env::var_os("AMADEUS_DATA_DIR").map(PathBuf::from);
+                let runtime_dir = backend_runtime_dir(data_override.as_deref(), &app.path().app_local_data_dir()?);
+                match acquire_instance_lock(&runtime_dir) {
+                    Ok(lock) => { app.manage(lock); }
+                    Err(error) => {
+                        if cfg!(windows) && error.raw_os_error() == Some(32) {
+                            show_startup_error("Amadeus 已经在运行。");
+                        } else {
+                            show_startup_error("无法锁定数据目录，Amadeus 无法启动。");
+                        }
+                        std::process::exit(1);
+                    }
+                }
+                Ok(())
+            })
+            .build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![get_local_backend])
+        .invoke_handler(tauri::generate_handler![get_local_backend, restart_app])
         .setup(|app| {
+            let startup = Arc::new(BackendStartup::default());
+            app.manage(Arc::clone(&startup));
+            let data_override = std::env::var_os("AMADEUS_DATA_DIR").map(PathBuf::from);
+            let runtime_dir = backend_runtime_dir(data_override.as_deref(), &app.path().app_local_data_dir()?);
+            let logs = runtime_dir.join("logs");
+            backend_logs::rotate(&logs);
             let data_dir = match backend_data_dir(app.handle()) {
                 Ok(path) => path,
-                Err(_) => {
-                    show_startup_error("无法确定数据目录，Amadeus 无法启动。");
-                    std::process::exit(1);
+                Err(error) => {
+                    fail_backend_startup(&startup, &logs, error.to_string());
+                    return Ok(());
                 }
             };
-            match acquire_instance_lock(&data_dir) {
-                Ok(lock) => { app.manage(lock); }
-                Err(error) => {
-                    if cfg!(windows) && error.raw_os_error() == Some(32) {
-                        show_startup_error("Amadeus 已经在运行。");
-                    } else {
-                        show_startup_error("无法锁定数据目录，Amadeus 无法启动。");
-                    }
-                    std::process::exit(1);
-                }
-            }
             if let Some(window) = app.get_webview_window("main") {
                 let handle = app.handle().clone();
                 window.on_window_event(move |event| {
@@ -351,14 +401,12 @@ pub fn run() {
                     }
                 });
             }
-            let startup = Arc::new(BackendStartup::default());
-            app.manage(Arc::clone(&startup));
             let result = generate_local_token()
                 .map_err(Into::into)
-                .and_then(|token| start_backend(app.handle(), &data_dir, token, Arc::clone(&startup)));
+                .and_then(|token| start_backend(app.handle(), &data_dir, &logs, token, Arc::clone(&startup)));
             match result {
                 Ok(backend) => { app.manage(backend); }
-                Err(error) => fail_backend_startup(&startup, &data_dir.join("logs"),
+                Err(error) => fail_backend_startup(&startup, &logs,
                     format!("unable to start backend: {error}")),
             }
             Ok(())
@@ -423,6 +471,34 @@ mod tests {
         backend.stop();
         assert!(backend.child.lock().unwrap().is_none());
         assert!(started.elapsed() < Duration::from_secs(4), "stdin EOF did not stop the probe");
+    }
+
+    #[test]
+    fn missing_or_invalid_location_never_creates_empty_data() {
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let base = std::env::temp_dir().join(format!("amadeus-location-{}-{nonce}", std::process::id()));
+        fs::create_dir_all(&base).unwrap();
+        let default = base.join("data");
+        let target = base.join("missing-target");
+        let file = base.join("data-location.json");
+        assert_eq!(resolve_data_location(&default).unwrap(), default);
+        assert!(!default.exists());
+        fs::write(&file, serde_json::json!({"path": target}).to_string()).unwrap();
+        let error = resolve_data_location(&default).unwrap_err().to_string();
+        assert!(error.contains("data_location_missing"));
+        assert!(error.contains(&target.display().to_string()));
+        assert!(!target.exists());
+        assert!(!default.exists());
+        fs::create_dir_all(&target).unwrap();
+        assert!(resolve_data_location(&default).is_err());
+        fs::write(target.join("amadeus-data.json"), r#"{"format":1}"#).unwrap();
+        assert_eq!(resolve_data_location(&default).unwrap(), target);
+        for broken in ["{broken", r#"{"path":"relative"}"#, r#"{}"#] {
+            fs::write(&file, broken).unwrap();
+            assert!(resolve_data_location(&default).is_err());
+            assert!(!default.exists());
+        }
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[test]

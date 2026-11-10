@@ -1,0 +1,50 @@
+name: 问题反馈 / Bug report
+description: 报告 Amadeus 的问题 / Report a problem with Amadeus
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 隐私提醒 / Privacy notice
+        **不要贴 API 密钥、令牌、口令或对话内容。**
+        **Do not post API keys, tokens, passcodes, or conversation content.**
+        请附上本地生成的问题反馈包；提交前检查附件和截图是否含个人信息。
+        Please attach the locally generated diagnostics bundle. Check attachments and screenshots for personal information before submitting.
+  - type: input
+    id: version
+    attributes:
+      label: 应用版本 / App version
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 版本 / Windows version
+      placeholder: "Windows 11 24H2"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+      description: 描述操作，不要包含对话原文。 / Describe the actions without quoting conversations.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待的结果 / Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际的结果 / Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: 问题反馈包 / Diagnostics bundle
+      description: 拖入本地生成的 amadeus-diagnostics-*.zip。不要附数据库、对话导出或参考音频。 / Attach the locally generated amadeus-diagnostics-*.zip. Do not attach databases, conversation exports, or reference audio.

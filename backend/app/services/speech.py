@@ -47,10 +47,25 @@ class SpeechService:
 
     def __init__(self):
         self._model = None
+        self._pending: set[asyncio.Task] = set()
         self._lock = threading.RLock()
         self._model_override = os.getenv('SENSEVOICE_MODEL', '')
         self.model_name = self._model_override or MODEL_PACKAGE
         self._cache_dir = get_data_root() / 'models' / 'speech'
+
+    async def _run(self, function, *args):
+        task = asyncio.create_task(asyncio.to_thread(function, *args))
+        self._pending.add(task)
+        def finished(done):
+            self._pending.discard(done)
+            if not done.cancelled():
+                done.exception()
+        task.add_done_callback(finished)
+        return await asyncio.shield(task)
+
+    async def drain_pending(self):
+        if self._pending:
+            await asyncio.gather(*self._pending, return_exceptions=True)
 
     @staticmethod
     def pcm_has_speech(pcm: bytes, threshold: float = 0.012) -> bool:
@@ -64,7 +79,7 @@ class SpeechService:
     async def has_speech(self, pcm: bytes, sample_rate: int = 16000, threshold: float = 0.5) -> bool:
         """Use local Silero VAD, falling back to RMS if its runtime is unavailable."""
         try:
-            return await asyncio.to_thread(self._silero_has_speech, pcm, sample_rate, threshold)
+            return await self._run(self._silero_has_speech, pcm, sample_rate, threshold)
         except (ImportError, OSError, RuntimeError, ValueError):
             return self.pcm_has_speech(pcm)
 
@@ -99,7 +114,7 @@ class SpeechService:
             return False
 
     async def transcribe_pcm(self, pcm: bytes, sample_rate: int = 16000, channels: int = 1) -> tuple[str, str, float]:
-        return await asyncio.to_thread(self._transcribe_sync, pcm, sample_rate, channels)
+        return await self._run(self._transcribe_sync, pcm, sample_rate, channels)
 
     def _model_paths(self) -> tuple[Path, Path]:
         if self._model_override:

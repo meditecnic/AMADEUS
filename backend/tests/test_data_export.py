@@ -147,6 +147,7 @@ def test_zip_stream_has_bounded_chunks_for_large_history(export_store):
     export = PreparedExport('conversations', 'json', 'sg', None).prepare()
     largest = total = 0
     for chunk in export.stream():
+        assert chunk, 'empty chunks create a thread-pool hop and HTTP send without data'
         largest = max(largest, len(chunk))
         total += len(chunk)
     assert largest < 100000 and total > 10000

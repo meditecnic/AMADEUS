@@ -106,7 +106,8 @@ async def change(current: str | None, new: str | None) -> dict:
             else:
                 salt = os.urandom(16)
                 digest = await asyncio.to_thread(_derive, new, salt)
-                await asyncio.to_thread(atomic_json, passcode_path(), {
+                from app.services.data_relocation import run_in_thread
+                await run_in_thread(atomic_json, passcode_path(), {
                     "algorithm": "scrypt", "parameters": PARAMETERS,
                     "salt": salt.hex(), "hash": digest.hex(),
                 })

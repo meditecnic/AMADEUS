@@ -1,88 +1,248 @@
 # AMADEUS
 
-**A local-first AI companion desktop app.** Users talk with Amadeus Kurisu, who answers in Japanese with a paired subtitle for every line. Her long-term memory is stored on the user's own machine, where it can be inspected and selectively forgotten.
+**一个可以在自己电脑上和牧濑红莉栖说话的桌面应用。**
 
-*Unofficial, non-commercial fan project based on STEINS;GATE. No original game assets are included.* · [中文](#中文) · [日本語](#日本語)
+她使用日语回答，屏幕上同时有中文字幕。她会记住你们聊过的事，能看得见，也能让她忘掉。（Amadeus 的人格设定基本上就是参考官方小说和相关资料）本项目共有两条世界线：**STEINS;GATE** 和 **β**。两边的对话、记忆互不相通，界面也各是各的样子。（sg 线相当于是架空的，在现实中红莉栖还活着的情况下，诞生的 Amadeus；加了些设定，你在 sg 线提到真实红莉栖，Amadeus 还会争风吃醋。）
+
+这是一个非官方、非商业的粉丝作品，和官方没有任何关系，仓库里也不包含任何原作素材。 · [English](#english) · [日本語](#日本語)
 
 | | |
 |---|---|
 | ![SG worldline chat](assets/screenshots/sg-chat.png) | ![β worldline chat](assets/screenshots/beta-chat.png) |
 | ![Worldline shift transition](assets/screenshots/worldline-shift.png) | ![Memory star map](assets/screenshots/memory-star-map.png) |
 
-*Screenshots were taken without the optional asset pack, so the stage shows placeholder art. The worldline-shift frame is a historical capture of the WebGL2 prototype whose runtime is now integrated; the star map shows test data.*
+*截图是没放原作素材包时截的，所以舞台上是自制的占位画面，记忆星图里是测试数据。除了登录页，界面正在整体重做，做完再换新截图。*
 
-## What it does
+## 现在做到哪了
 
-- **Japanese conversation with paired Chinese subtitles.** Replies stream sentence by sentence; each Japanese sentence is matched with its translation, and missing translations are marked instead of silently dropped.
-- **Long-term memory that stays local.** Facts and experiences from your conversations are stored in SQLite (with 768-dimensional `jina-embeddings-v5-text-nano-retrieval` embeddings indexed on write). Facts are split into resident facts, which go into the prompt every turn, and on-demand facts: the model fetches them with the `recall_memory` tool (DeepSeek only) when a turn needs them, and facts that match the current message are added to that turn's prompt. Related past experiences are also added when the prompt is compiled. In the memory archive you can view, correct and delete stored facts and view and delete experiences; you can also optionally erase a conversation's exclusive long-term memories when clearing a chat, and browse memories on the star map.
-- **Two isolated worldlines.** *STEINS;GATE* and *β* each have their own persona, conversations, memory and visual theme. Conversations and memories are stored separately per worldline.
-- **Worldline instruments and transitions (M3).** The header, system-menu dial and WebGL2 transition share the same cathode digits. Open **系统 → 世界线**: the dial shows the current worldline, while the diagram previews the selected target; use the shift button to begin. Softer handoffs preserve conversations and drafts, and click/Esc skips the presentation while still waiting for target confirmation.
-- **Bring your own model.** DeepSeek, Zhipu GLM, or any OpenAI-compatible endpoint. Optional web search through Tavily or Firecrawl.
-- **Optional voice.** Text-to-speech through a local GPT-SoVITS server; speech recognition with SenseVoice via sherpa-onnx (backend only for now, no microphone UI yet).
-- **Local by design.** Every service binds to loopback, WebSocket connections are origin-checked, and API keys are stored in the Windows Credential Manager in installed builds or in memory by default in source runs. Conversation text is sent only to the model provider the user configures; if web search is enabled, search queries also go to the chosen search provider (Tavily or Firecrawl).
+从 6 月中旬开始，做了大约五个月。
 
-## Architecture
+**Windows 安装包已经打出来了**，在一台干净的 Windows Server 2022 虚拟机上跑过完整的 10 项验收（安装、对话、记忆、重启、卸载保留数据这些）。现在每次打包，CI 也会在干净的 Windows 上自动装一遍、查一遍。v0.1.0 正在做最后的准备，还没公开发布。
+
+现在能用的：
+
+- **日语对话 + 中文字幕**：回复一句一句流出来，每句日语配一句中文。翻译慢了不会卡住正文，漏翻了会标出来。
+- **长期记忆**：存在你自己电脑上。她记了什么，在档案页里都能看、能改、能删，也能在记忆星图里整个逛一逛；清空某段对话时，可以把只属于那段对话的记忆一起抹掉。
+- **两条世界线**：**STEINS;GATE** 和 **β** 各有各的人格、会话、记忆和界面风格，对话和记忆分开存（模型连接设置两边共用）。在右上角「**系统 → 世界线**」切换，两边的会话和没发出去的草稿都会留着；跃迁动画不想看，点一下或按 Esc 就能跳过。
+- **用你自己的模型**：DeepSeek、智谱 GLM，或者任何兼容 OpenAI 接口的服务（本地跑的也行）。联网搜索可选 Tavily 或 Firecrawl。
+- **红莉栖的声音（可选）**：用本机的 GPT-SoVITS 念出来，见「[语音](#语音可选)」。
+- **只在本机跑**：服务只监听本机回环地址。对话内容只发给你自己配的模型服务；开了联网搜索的话，搜索词会发给你选的搜索服务。
+
+以后还会做英文和日文界面。不管哪种界面她都说日语：英文界面配英文字幕，日文界面就不显示字幕了。
+
+## 技术细节
 
 ```mermaid
 flowchart LR
-  subgraph Desktop["Desktop app (Tauri 2)"]
+  subgraph Desktop["桌面端 (Tauri 2)"]
     UI["React 19 + TypeScript UI"]
   end
-  subgraph Backend["Python backend (FastAPI, loopback, system-assigned port)"]
-    WS["/ws/chat streaming"]
-    Persona["Persona + prompt compiler"]
-    Mem["Memory: SQLite + jina"]
-    Tr["Subtitle translation"]
-    TTS["TTS queue"]
+  subgraph Backend["Python 后端 (FastAPI, 本机回环, 系统分配端口)"]
+    WS["/ws/chat 流式对话"]
+    Persona["人格 + 提示词编译"]
+    Mem["记忆: SQLite + jina"]
+    Tr["字幕翻译"]
+    TTS["TTS 队列"]
   end
-  LLM["LLM provider<br/>(DeepSeek / GLM / OpenAI-compatible)"]
-  Sovits["GPT-SoVITS (optional)"]
+  LLM["大模型服务<br/>(DeepSeek / GLM / OpenAI 兼容)"]
+  Sovits["GPT-SoVITS (可选)"]
   UI <--> WS
   WS --> Persona --> LLM
-  Mem -- "resident facts + experiences" --> Persona
+  Mem -- "常驻事实 + 过往经历" --> Persona
   WS --> Tr --> LLM
   WS --> TTS --> Sovits
 ```
 
-One chat turn: the UI sends the user's message over a WebSocket; the backend loads the resident facts and related past experiences for the active worldline and identity, compiles them into the persona prompt, and streams the model's Japanese reply. With DeepSeek, the model can call `recall_memory` to fetch on-demand facts, which adds a second model pass. Each sentence is published as soon as it is complete; its subtitle and (optional) speech follow on their own ordered tracks, so a slow translation never holds back the text and may arrive after the turn has finished.
+- **一轮对话**：前端通过 WebSocket 把你的话发给后端；后端取出当前世界线的常驻事实、和这句话对得上的事实以及相关的过往经历，编进人格提示词，再流式请求日语回复。用 DeepSeek 时，模型觉得要翻旧事，会调 `recall_memory` 工具把其余的事实找出来，再生成一遍。每句日语一写完就推给前端，字幕和语音各走各的队列，所以翻译慢了不拖正文，字幕晚到的话会在这一轮结束后补上。
+- **记忆**：事实和经历存在本机 SQLite，写入时用 `jina-embeddings-v5-text-nano-retrieval`（768 维）建向量索引；嵌入模型加载失败时退回关键词检索，聊天不受影响。
+- **召回实测**：接真实模型（`deepseek-flash`）的端到端测试里，12 道要用到旧事实的题全都调了记忆，4 道不需要的对照题一次也没误调。只代表那套题和那次的环境。
+- **安装包**：Tauri 外壳把 PyInstaller 打包的后端（带嵌入模型）一起装进 NSIS 安装程序；启动时在系统分配的本机端口拉起后端，一个数据目录只开一个实例，关窗口时后端一起退出。每次打包，CI（`.github/workflows/release.yml`、`packaging/windows/`）会先自检打包好的后端，再在干净的 Windows 上跑 `install_smoke.py`：静默安装、登录并连上本地模型端点、单实例、关窗后进程全部退出、没有任何对外网络连接、卸载后数据还在。发版前还会用 `verify_update_signature.py` 核对自动更新的签名。
+- **安全**：WebSocket 会校验 Origin。安装版的 API 密钥存在 Windows 凭据管理器里，源码运行默认只放在内存里。
+- **怎么开发的**：这个项目由我一个人维护，产品方向、架构取舍和最终验收都是我自己在管。代码大多由 AI 编程代理分小批写，合并前一般会让另一个代理对着规格审一遍；代码改动要过测试，界面改动看实机截图，安装包改动上干净的 Windows 跑一遍。
 
-## Engineering notes
+## 安装与常见问题
 
-- **Measured recall behaviour.** In a controlled end-to-end run against a real model (`deepseek-flash`), 12 of 12 prompts that needed a stored fact used it, and 4 of 4 control prompts did not call the tool. That result covers that question set and environment only.
-- **Windows installer.** The Tauri shell bundles the backend (PyInstaller, with the embedding model cache) into an NSIS installer, starts it on a system-assigned loopback port on launch, allows only one instance per data directory, and shuts it down cleanly on exit. It passed a 10-item acceptance checklist on a clean English Windows Server 2022 VM: install, WebView2 bootstrap, real chat, memory write / recall / forget, restart persistence, and an uninstall that keeps user data. It is not published yet; packaging scripts are in `packaging/windows/`, and the frozen backend is a build artifact excluded from the repository.
-- **Historical checks (2026-10-18).** At that point the frontend suite contained 550 cases across 48 Vitest files, including 2 known visual assertions marked as expected failures, and the production build passed. Two earlier full Vitest runs each reported 547 passes + 2 expected failures + 1 timeout in the existing `dragStress.test.tsx` (5-second limit). A subsequent full run with `npx vitest run --maxWorkers=2` passed all 48 files: 548 passes + 2 expected failures, with all tests retained and timeouts unchanged. M1 browser user testing was still pending at that checkpoint; those checks alone did not establish milestone acceptance. The backend has its own pytest suite in `backend/tests/`.
-- **M3 closeout (2026-10-19).** The cloud delivery reported a passing build and 615 passes + 2 expected failures, with unit and proportionate browser checks. The developer accepted the actual Edge preview at `3723c6a6d445df102e9525bc6fad82c6fa0164fe`, merged in [`f0c18797f3ce8c178595e72f52671561f9378c23`](https://github.com/meditecnic/AMADEUS/commit/f0c18797f3ce8c178595e72f52671561f9378c23). These are prior delivery and host-acceptance results, not new test runs for this documentation update or a native GPU latency guarantee.
-- **Transition startup.** The MIT-vendored [runtime](desktop/src/worldline-engine/README.vendor.md) prepares its GPU stage asynchronously ahead of a shift. Login preloads workstation fonts, remembers the faces used after entry, and uses that record on the next refresh. Existing audio initialization happens on login interaction before entry; M3 adds no audio features or runtime dependencies. See the [desktop notes](desktop/README.md) for caption and skip-hint behavior.
+桌面版只支持 **Windows 10/11（64 位）**。v0.1.0 发布后，从 [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases) 下载安装包。
 
-## How it was built
+- **SmartScreen 提示「未知发布者」**：个人项目，还没买代码签名证书。确认是从本仓库 Releases 下载的、校验和也对得上（见下一条），点「**更多信息 → 仍要运行**」就行。
+- **核对安装包**：发布页附了 `SHA256SUMS.txt`。在 PowerShell 里跑 `Get-FileHash .\Amadeus_<版本>_x64-setup.exe -Algorithm SHA256`，和文件里对应那一行比一下（不分大小写），一致再装。
+- **WebView2**：电脑上还没有 WebView2 运行时的话，安装程序会自动联网装上，这时要连着网。
+- **日志在哪**：`%LOCALAPPDATA%\com.amadeus.desktop\logs`；设了 `AMADEUS_DATA_DIR` 的话在 `<AMADEUS_DATA_DIR>\logs`。
+- **提 Bug**：欢迎来 [GitHub Issues](https://github.com/meditecnic/AMADEUS/issues) 反馈！贴日志和截图前看一眼，**别把 API 密钥、令牌和聊天内容贴出来**。
 
-Built and maintained by one developer, who owns the product direction, architecture decisions and acceptance testing. Most of the implementation was written by AI coding agents in small batches. A second agent reviews most batches against their specification before merging; code changes are gated on the test suite, UI changes are checked with screenshots, and installer changes on a clean Windows VM.
+## 本地开发运行
 
-## Status
-
-- **v0.1.0 is being prepared.** There is no public release yet.
-- **M3 accepted and closed.** Worldline instruments, softer transitions and startup preparation are merged. M4 awaits authorization.
-- The desktop app supports **Windows 10/11 x64 only**; the browser dev mode also runs on Linux.
-- **Planned:** English and Japanese UI. Kurisu keeps speaking Japanese in every mode; in English mode her lines get English subtitles, and in Japanese mode subtitles are turned off.
-
-## Installation
-
-Once v0.1.0 is published, download the Windows installer from [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases). The installer is unsigned, so Windows SmartScreen will warn; choose **More info → Run anyway** to continue. If WebView2 is missing, the installer downloads and installs it, which requires an internet connection. Voice is optional.
-
-## Run it (development)
-
-Choose between the default local mock for frontend work and a real backend for model integration. Both use the browser at http://localhost:1420.
+两种跑法，都是在浏览器里打开 http://localhost:1420（Linux 上也能跑）：只看界面用**本地 mock**，想真聊就起**真实后端**。
 
 ```powershell
 git clone https://github.com/meditecnic/AMADEUS.git
 cd AMADEUS
 ```
 
-### Local mock (default)
+### 1. 只看界面（本地 mock）
 
-You only need **Node.js 22.13+** (20.19+ on 20.x also works). No Python backend, API key, model provider or TTS server is needed.
+只要 **Node.js 22.13+**（20.x 的话要 20.19+），不用 Python、API 密钥、模型和语音。在仓库根目录下：
 
-From the repository root, in PowerShell:
+```powershell
+cd desktop
+npm ci
+# 之前设过连真实后端的变量的话，先清掉
+Remove-Item Env:AMADEUS_DEV_MOCK -ErrorAction SilentlyContinue
+npm run dev -- --port 1420 --strictPort
+```
+
+打开 http://localhost:1420/?scenario=streaming ，等 USER ID 自动打完 `Salieri`，用公开的本地测试口令 **`Gott würfelt nicht`** 登录。（算是原作的一个小彩蛋吧，后续我也会做些调整）发一句话，会收到三组预设的日语回复和中文字幕。会话和记忆都是测试数据，改了也只存在开发服务器的内存里，重启就还原。
+
+mock 只在开发服务器里有，打生产包时会被剔除。登录失败、空状态、离线、记忆档案等其他场景见 [场景说明](desktop/src/dev-mock/README.md)、[场景文件](desktop/src/dev-mock/scenarios/) 和 [浏览器走查说明](desktop/validation/README.md)。
+
+### 2. 接模型真聊（真实后端）
+
+还需要 **Python 3.11** 和一个大模型服务的 API 密钥。先把 mock 那个开发服务器停掉。
+
+Windows 上先装好这两样：
+
+1. **Visual C++ 2015–2022 运行库 (x64)**（[`vc_redist.x64.exe`](https://aka.ms/vs/17/release/vc_redist.x64.exe)）。缺了它，装依赖和启动后端都不报错，要等第一次写记忆、加载 `torch` 时才报 `WinError 1114`，很难查。
+2. **Python 3.11**（[3.11.9](https://www.python.org/downloads/release/python-3119/)，python.org 上最后一个带 Windows 安装包的 3.11 版本）。
+
+建虚拟环境、装依赖（只用做一次）：
+
+```powershell
+cd backend
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+cd ..
+```
+
+然后一条命令同时起前后端（`run_dev.bat` 也是同一个启动器）：
+
+```powershell
+# 在仓库根目录；开发单独用一个数据目录，别指向安装版的数据
+$env:AMADEUS_DATA_DIR = Join-Path $env:LOCALAPPDATA 'amadeus-dev-data'
+Remove-Item Env:AMADEUS_DB_PATH -ErrorAction SilentlyContinue
+cd desktop
+npm ci
+npm run dev:real
+```
+
+启动器会临时生成一个本地 API 令牌交给前后端，任意一边退出或者按 Ctrl+C，两边一起停。后端端口默认自动挑空闲的，想固定就设 `BACKEND_PORT`。Linux/macOS 一样：设好 `AMADEUS_DATA_DIR`、`unset AMADEUS_DB_PATH`，在 `desktop/` 下跑 `npm run dev:real`。
+
+想分两个终端、自己看日志也行。这样不开本地令牌认证（`AMADEUS_LOCAL_API_TOKEN`、`AMADEUS_DEV_LOCAL_API_TOKEN` 都别设），只适合调试：
+
+```powershell
+# 终端 1：后端（仓库根目录下）
+cd backend
+$env:AMADEUS_DATA_DIR = Join-Path $env:LOCALAPPDATA 'amadeus-dev-data'
+Remove-Item Env:AMADEUS_DB_PATH -ErrorAction SilentlyContinue
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+```powershell
+# 终端 2：前端（仓库根目录下）
+cd desktop
+$env:AMADEUS_DEV_MOCK = "0"
+npm run dev -- --port 1420 --strictPort
+```
+
+`AMADEUS_DEV_MOCK=0` 会关掉 mock，把 `/api`、`/ws` 和 `/health` 转给 `http://127.0.0.1:8000`（`AMADEUS_BACKEND_ORIGIN` 可改）。Linux/macOS 上后端用 `.venv/bin/python`，前端跑 `AMADEUS_DEV_MOCK=0 npm run dev -- --port 1420 --strictPort`。
+
+源码运行一定要设非空的 `AMADEUS_DATA_DIR`，没有默认目录，没设会直接报错退出；只设 `AMADEUS_DB_PATH` 绕不过去。
+
+起来以后打开 http://localhost:1420 ，还是用 `Gott würfelt nicht` 登录（真实后端不分大小写，`ü` 写成 `u` 或 `ue` 也行）。点右上角「**系统 → 连接**」，填好你的模型和 API 密钥并保存，连接测试通过就能聊了。列表里默认那条 `OpenAI-compatible · http://127.0.0.1:1234/v1 · local-model` 是给本地模型服务准备的预设。
+
+第一次写记忆时，会自动下载嵌入模型 `jinaai/jina-embeddings-v5-text-nano-retrieval`（约 866 MB，Jina AI，CC BY-NC 4.0）。想提前下好固定的版本：
+
+```sh
+hf download jinaai/jina-embeddings-v5-text-nano-retrieval --revision ac5d898c8d382b17167c33e5c8af644a3519b47d --include onnx/model.onnx onnx/model.onnx_data tokenizer.json README.md
+```
+
+没配语音的话，后端日志里的 `[WARN] TTS reference audio not found ...` 不用管。
+
+桌面窗口要靠安装包（打包脚本在 `packaging/windows/`）；源码里直接跑 `npm run tauri -- dev` 起不来，开发就用浏览器。
+
+### 3. 数据、日志和密钥
+
+- **数据**：安装版存在 `%LOCALAPPDATA%\com.amadeus.desktop\data`。卸载默认保留数据，只有在卸载时勾了删除应用数据才会删。想换位置，设用户环境变量 `AMADEUS_DATA_DIR` 再重启应用。
+- **数据出问题时**：设的数据目录找不到或者无效，启动会直接停下提示，不会新建空库盖过去。已有的库没通过启动自检（`PRAGMA quick_check`），也不会新建空库，而是进入「数据异常」状态：对话等功能暂停，原来的库原样留着。升级时数据迁移失败，会先退回升级前的备份。
+- **日志**：见上面「[安装与常见问题](#安装与常见问题)」。
+- **密钥**：安装版存在 Windows 凭据管理器里；源码运行默认只放内存，重启后要重新填。在 Windows 上跑源码也想存下来，可以设 `AMADEUS_CREDENTIAL_BACKEND=windows`（会读写你本机真实的凭据）。
+
+## 原作素材包
+
+仓库里**没有**任何原作素材（立绘、CG、Logo、BGM 这些）。没有素材包也能用，界面会显示自制的占位画面。（版权问题，目前的解法就只能是素材包了）
+
+有素材包的话，放到数据目录下的 `asset-pack/amadeus-original/`（根目录要有 `manifest.json`），重启应用就行。素材包单独分发，里面只有原作素材；应用自己生成的底纹和插画随仓库发布，来源登记在 [assets/PROVENANCE.md](assets/PROVENANCE.md)。
+
+## 语音（可选）
+
+不配语音的话，她的台词就只以文字和字幕出现。
+
+- **语音合成**：用本机的 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)，声音模型推荐 bysq 训练的 [TTS-KurisuMakise](https://huggingface.co/bysq/TTS-KurisuMakise)（GPT-SoVITS v2pro，Apache-2.0）。仓库不带也不下载权重和参考音频，要自己准备：参考音频放进数据目录下的 `voice-pack/ref/`（`ref_neutral.wav`、`ref_happy.wav` 等 9 种情绪，完整列表见 `backend/app/config.py`，也可以用 `AMADEUS_REF_*` 逐个指定），起好 GPT-SoVITS 的 API 服务（默认 `http://127.0.0.1:9880`，`SOVITS_URL` 可改），再把 `SOVITS_GPT_WEIGHTS` 和 `SOVITS_SOVITS_WEIGHTS` 指向权重文件。
+- **语音识别**：后端已经接好了（其实前端麦克风页面还没做，哈哈）。第一次用时会从 [sherpa-onnx releases](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) 下载 SenseVoice int8（约 163 MB）和 Silero VAD 模型，核对 SHA-256 后存在数据目录的 `models/speech/`；也可以用 `SENSEVOICE_MODEL`、`SENSEVOICE_TOKENS` 和 `AMADEUS_VAD_MODEL` 指向本地已有的文件。
+
+**关于声音的版权**：TTS-KurisuMakise 模仿的是《命运石之门》里牧濑红莉栖的声音。角色本身、原作录音以及声优的表演均归各自的权利人所有。模型页面上标注的 Apache-2.0 许可只覆盖上传者自己有权授权的部分，并不代表授予了角色、原作录音或声优表演的任何权利。AMADEUS 不会内置、下载或分发该模型及任何参考音频。请仅在个人、非商业场景下使用，不要用它去冒充声优本人，也不要制作让人误以为是官方出品的内容。权利人如果希望移除相关引用或内容，请在 GitHub 上提一个 issue，我们会第一时间处理。
+
+## 许可与声明
+
+代码采用 [MIT 许可](LICENSE)。连接设置页上的模型供应商图标来自 [Lobe Icons](https://github.com/lobehub/lobe-icons)（MIT），各供应商的名称与商标归各自所有者所有。安装程序内置了 CC BY-NC 4.0 许可的 Jina AI 嵌入模型，所以**安装包整体仅限非商业使用**。语音组件包含 eSpeak NG（GPLv3），对应的源码包 `amadeus-0.1.0-speech-sources.zip` 会随每个版本在 GitHub Releases 一并提供，详见 [第三方说明](THIRD_PARTY_NOTICES.md)。
+
+STEINS;GATE、STEINS;GATE 0 及其角色、名称与原作素材均归 MAGES. Inc. 及各自权利人所有。本仓库不包含这些原作素材，项目也不用于任何商业用途；权利人如有任何要求，我们会尽快配合处理。
+
+## 个人的碎碎念吧
+
+因为一直是个人开发，中途的困难挫折也有很多，目前最棘手的应该就是版权问题了。之前说尽量在 1 个月左右推送首个 MVP 安装包——安装包已经打好、过了工程验收，等我自己完整体验一轮就放出来。
+
+okeydokey，大概就是这些，那么来句帅气的收尾吧：El Psy Kongroo.
+
+---
+
+## English
+
+**A desktop app for talking with Makise Kurisu on your own computer.** She answers in Japanese with a paired subtitle for every line, and her long-term memory stays on your machine, where you can inspect it and make her forget.
+
+*Unofficial, non-commercial fan project based on STEINS;GATE. No original game assets are included.*
+
+### What it does
+
+- **Japanese conversation with Chinese subtitles.** Replies stream sentence by sentence, each paired with its translation. A slow translation never holds back the text, and a missing one is marked instead of dropped.
+- **Local long-term memory.** View, correct and delete what she remembers in the memory archive, or browse it on the star map. When clearing a chat, you can also erase the memories that only that chat produced.
+- **Two worldlines.** *STEINS;GATE* and *β* each have their own persona, conversations, memory and look. Conversations and memories are stored separately; model connection settings are shared. Switch in **系统 → 世界线** (System → Worldline); each side keeps its conversations and unsent draft. Click or press Esc to skip the transition.
+- **Bring your own model.** DeepSeek, Zhipu GLM, or any OpenAI-compatible endpoint, including local ones. Optional web search through Tavily or Firecrawl.
+- **Optional voice.** Text-to-speech through a local GPT-SoVITS server (see [Voice](#voice-optional)).
+- **Local by design.** Services bind to loopback only. Conversation text goes only to the model provider you configure; with web search on, search queries also go to the search provider you chose.
+
+**Status:** v0.1.0 is being prepared; there is no public release yet. The installer passed a 10-item acceptance run on a clean Windows Server 2022 VM. The UI is being reworked (except the login screen), so screenshots will change. English and Japanese UIs are planned; she always speaks Japanese, with English subtitles in English mode and none in Japanese mode.
+
+### Under the hood
+
+- **One chat turn.** The UI sends your message over a WebSocket. The backend loads the active worldline's resident facts, facts that match the message, and related past experiences into the persona prompt, then streams the Japanese reply. With DeepSeek, the model can call `recall_memory` to fetch other facts, which adds a second model pass. Each sentence is sent as soon as it is complete; subtitles and speech follow on their own queues and may arrive after the turn ends.
+- **Memory.** Facts and experiences live in local SQLite, embedded on write with `jina-embeddings-v5-text-nano-retrieval` (768 dimensions). If the embedding model fails to load, retrieval falls back to keyword matching and chat keeps working.
+- **Measured recall.** In an end-to-end run against a real model (`deepseek-flash`), 12 of 12 prompts that needed a stored fact used it, and 4 of 4 control prompts did not call the tool. That result covers that question set and environment only.
+- **Installer.** The Tauri shell bundles the PyInstaller backend (with the embedding model) into an NSIS installer, starts it on a system-assigned loopback port, allows one instance per data directory and stops it on exit. Every packaging run in CI (`.github/workflows/release.yml`, `packaging/windows/`) self-checks the frozen backend, then runs `install_smoke.py` on a clean Windows runner: silent install, login and a local model endpoint going online, single instance, full process exit on close, no external network connections, and an uninstall that keeps user data. Release builds also verify the update signature with `verify_update_signature.py`.
+- **Security.** WebSocket connections are origin-checked. Installed builds keep API keys in the Windows Credential Manager; source runs keep them in memory by default.
+- **How it was built.** One developer owns the product direction, architecture and acceptance testing. Most code is written by AI coding agents in small batches, and a second agent usually reviews each batch against its specification. Code changes must pass the test suite, UI changes are checked with screenshots, and installer changes on a clean Windows machine.
+
+### Install and troubleshooting
+
+The desktop app supports **Windows 10/11 x64 only**. Once v0.1.0 is out, download it from [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases).
+
+- **SmartScreen warning.** The installer is not code-signed. Check that it came from this repository's Releases and that its hash matches `SHA256SUMS.txt`, then choose **More info → Run anyway**.
+- **Verify the download.** Run `Get-FileHash .\Amadeus_<version>_x64-setup.exe -Algorithm SHA256` in PowerShell and compare `Hash` (case-insensitive) with the matching line in `SHA256SUMS.txt`.
+- **WebView2.** If the WebView2 Runtime is missing, the installer downloads it, which needs an internet connection.
+- **Logs.** `%LOCALAPPDATA%\com.amadeus.desktop\logs`, or `<AMADEUS_DATA_DIR>\logs` when `AMADEUS_DATA_DIR` is set.
+- **Reporting issues.** Use [GitHub Issues](https://github.com/meditecnic/AMADEUS/issues), and **do not paste API keys, tokens or conversation content**.
+
+### Run it (development)
+
+Both modes run in the browser at http://localhost:1420 (Linux works too): the default local mock for UI work, or a real backend for actual conversations.
+
+```powershell
+git clone https://github.com/meditecnic/AMADEUS.git
+cd AMADEUS
+```
+
+#### Local mock (default)
+
+You only need **Node.js 22.13+** (or 20.19+ on 20.x). From the repository root:
 
 ```powershell
 cd desktop
@@ -92,25 +252,28 @@ Remove-Item Env:AMADEUS_DEV_MOCK -ErrorAction SilentlyContinue
 npm run dev -- --port 1420 --strictPort
 ```
 
-Open http://localhost:1420/?scenario=streaming. Wait for USER ID to finish typing `Salieri`, then log in with the public local test passphrase **`Gott würfelt nicht`**. Send a message to receive three scripted Japanese/Chinese sentence pairs. Session histories and Memory use synthetic fixtures; edits live in the dev server's memory and reset when it restarts. The browser retains UI preferences and the selected scenario.
+Open http://localhost:1420/?scenario=streaming, wait for USER ID to finish typing `Salieri`, and log in with the public local test passphrase **`Gott würfelt nicht`**. Send a message to get three scripted Japanese/Chinese sentence pairs. Histories and memory are synthetic and reset when the dev server restarts. The mock exists only in the dev server and is stripped from production builds. Other scenarios (login failure, empty, offline, memory) are listed in the [scenario guide](desktop/src/dev-mock/README.md), [scenario files](desktop/src/dev-mock/scenarios/) and [browser walkthrough](desktop/validation/README.md).
 
-The mock handles `/api`, `/ws/chat` (and `/ws`) on the same port 1420 without contacting a backend, provider or TTS server. It is a **development-only** Vite plugin (`apply: 'serve'`); its mock server and selector script are excluded from production builds and are not available in `npm run preview`.
+#### Real backend
 
-See the [scenario catalog and switching guide](desktop/src/dev-mock/README.md), [scenario JSON files](desktop/src/dev-mock/scenarios/), and [browser evidence walkthrough](desktop/validation/README.md) for login failure, empty, offline, memory and other local checks.
+You also need **Python 3.11** and an API key for a model provider. Stop the mock dev server first. On Windows, install first:
 
-### Real backend
+1. **Visual C++ 2015–2022 Redistributable (x64)** ([`vc_redist.x64.exe`](https://aka.ms/vs/17/release/vc_redist.x64.exe)). Without it, installs and startup succeed, but the first memory write fails with `WinError 1114` when `torch` loads.
+2. **Python 3.11** ([3.11.9](https://www.python.org/downloads/release/python-3119/), the last 3.11 release with Windows installers on python.org).
 
-For real conversations, also install **Python 3.11** and use an API key for a model provider. Stop the mock dev server first.
-
-On Windows, install prerequisites before creating the virtual environment:
-
-1. **Microsoft Visual C++ 2015–2022 Redistributable (x64)** ([download page](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist), direct [`vc_redist.x64.exe`](https://aka.ms/vs/17/release/vc_redist.x64.exe)). On a clean system without `vcruntime140_1.dll`, `pip install` and backend startup still succeed, and the failure only surfaces later during the first memory write when importing `torch` raises `WinError 1114` (`c10.dll` initialization failed).
-2. **Python 3.11** ([Python 3.11.9 release page](https://www.python.org/downloads/release/python-3119/), 64-bit Windows installer [`python-3.11.9-amd64.exe`](https://www.python.org/ftp/python/3.11.9/python-3.11.9-amd64.exe) — 3.11.9 is the last 3.11 release on python.org that includes Windows binary installers).
-
-Recommended after installing the dependencies: start both processes with one command. The launcher generates a fresh in-memory local API token and passes it to the backend and Vite (never through a `VITE_*` variable). Both processes stop when either exits or you press Ctrl+C.
+Create the virtual environment once:
 
 ```powershell
-# From the repository root; create backend/.venv and install requirements first.
+cd backend
+py -3.11 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+cd ..
+```
+
+Then start both processes with one command (`run_dev.bat` runs the same launcher):
+
+```powershell
+# From the repository root; use a separate development data directory, never your installed app's data.
 $env:AMADEUS_DATA_DIR = Join-Path $env:LOCALAPPDATA 'amadeus-dev-data'
 Remove-Item Env:AMADEUS_DB_PATH -ErrorAction SilentlyContinue
 cd desktop
@@ -118,144 +281,66 @@ npm ci
 npm run dev:real
 ```
 
-`AMADEUS_PYTHON` can select a Python executable; the default is `backend/.venv/Scripts/python.exe` on Windows and `backend/.venv/bin/python` on Linux/macOS. On Linux/macOS, set `AMADEUS_DATA_DIR` to a separate development directory, unset `AMADEUS_DB_PATH`, then run `npm run dev:real` from `desktop/`. The launcher refuses an empty data directory and clears the legacy database override. It automatically selects a backend port by default (`BACKEND_PORT` unset or `0`); set `BACKEND_PORT` to 1–65535 to require a fixed port. An occupied fixed port fails startup. `run_dev.bat` now runs the same launcher.
+The launcher generates a fresh local API token for both processes and stops both when either exits or you press Ctrl+C. It picks a free backend port; set `BACKEND_PORT` to fix one. On Linux/macOS, set `AMADEUS_DATA_DIR`, unset `AMADEUS_DB_PATH`, and run `npm run dev:real` from `desktop/`.
 
-Alternative: two manual terminals, without local API authentication. The backend logs a WARNING that HTTP and WS are unauthenticated and intended only for development. Leave `AMADEUS_LOCAL_API_TOKEN` and `AMADEUS_DEV_LOCAL_API_TOKEN` unset for this alternative.
-
-Terminal 1, from the repository root (PowerShell — use `py -3.11` so another Python on `PATH` is not picked up silently):
+To run the two processes in separate terminals instead, leave `AMADEUS_LOCAL_API_TOKEN` and `AMADEUS_DEV_LOCAL_API_TOKEN` unset; local API authentication is then off, so use this only for debugging:
 
 ```powershell
+# Terminal 1: backend (from the repository root)
 cd backend
-py -3.11 --version
-py -3.11 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-# Use a separate development directory outside TEMP, which may be cleaned up; never select your installed app's data.
 $env:AMADEUS_DATA_DIR = Join-Path $env:LOCALAPPDATA 'amadeus-dev-data'
 Remove-Item Env:AMADEUS_DB_PATH -ErrorAction SilentlyContinue
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Terminal 2, from the repository root (PowerShell — skip `npm ci` if you already ran it in Local mock):
-
 ```powershell
+# Terminal 2: frontend (from the repository root)
 cd desktop
-npm ci
 $env:AMADEUS_DEV_MOCK = "0"
 npm run dev -- --port 1420 --strictPort
 ```
 
-`AMADEUS_DEV_MOCK=0` disables the mock and restores Vite's existing `/api`, `/ws` and `/health` proxies to `http://127.0.0.1:8000` (override with `AMADEUS_BACKEND_ORIGIN`). Vite's same-origin `POST /__amadeus/bootstrap` supplies the in-memory token (empty for the manual alternative); packaged builds obtain it from the main window's Tauri command. On Linux/macOS, use `python3.11 -m venv .venv` and `.venv/bin/python` for the backend, and `AMADEUS_DEV_MOCK=0 npm run dev -- --port 1420 --strictPort` for the UI.
+`AMADEUS_DEV_MOCK=0` turns off the mock and proxies `/api`, `/ws` and `/health` to `http://127.0.0.1:8000` (override with `AMADEUS_BACKEND_ORIGIN`). On Linux/macOS, use `.venv/bin/python` for the backend and `AMADEUS_DEV_MOCK=0 npm run dev -- --port 1420 --strictPort` for the UI.
 
-Before starting the backend on Linux/macOS, set a separate development directory in that terminal:
+Source runs require a nonempty `AMADEUS_DATA_DIR` and exit with an error without it; there is no default directory, and setting `AMADEUS_DB_PATH` alone does not get around it.
 
-```sh
-export AMADEUS_DATA_DIR="$(mktemp -d -t amadeus-dev.XXXXXXXX)"
-unset AMADEUS_DB_PATH
-.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
-```
+Open http://localhost:1420 and log in with `Gott würfelt nicht` (case-insensitive; `ü` can be typed as `u` or `ue`). Open **系统 → 连接** (System → Connections), enter your model and API key, and save; once the connection check passes, you can chat. The `OpenAI-compatible · http://127.0.0.1:1234/v1 · local-model` entry is a preset for a local server.
 
-Source runs (including scripts) refuse data-directory resolution without a nonempty `AMADEUS_DATA_DIR`: `RuntimeError: AMADEUS_DATA_DIR required; set it to an explicit data directory` (exit 1). `AMADEUS_DB_PATH` still takes precedence for database files when a data directory is set; setting it alone does not bypass this check. `run_dev.bat` and `npm run dev:real` clear that legacy override and check the data directory before starting either process; set `AMADEUS_DATA_DIR` before invoking it. A direct `uvicorn --reload` invocation can leave its parent watcher running after the backend child refuses to start. The offline snapshot builder and rehearsal CLIs keep their explicit-path isolation and do not require this variable.
-
-Open http://localhost:1420 and log in with `Gott würfelt nicht` (the real backend normalizes case and treats `ü` / `ue` as `u`, so `gott wurfelt nicht` and `Gott wuerfelt nicht` also work here). Then open **系统 → 连接** (System → Connections) in the top-right corner; the `OpenAI-compatible · http://127.0.0.1:1234/v1 · local-model` item already listed there is the built-in default preset for a local OpenAI-compatible server. Configure your model connection and save; once the connection check passes, the conversation can start. The memory embedding model (`jinaai/jina-embeddings-v5-text-nano-retrieval`, fp32, 768 dimensions, ~866 MB, CC BY-NC 4.0 by Jina AI; revision `ac5d898c8d382b17167c33e5c8af644a3519b47d`) is downloaded and loaded on first use; existing E5 indexes are rebuilt at startup (a failed load keeps chat available with lexical retrieval). Without a voice pack, `[WARN] TTS reference audio not found ...` lines in the backend log are normal; voice remains optional (see [Voice](#voice-optional)).
-
-To prefetch the pinned model (including its model card with the license declaration):
+The first memory write downloads the embedding model `jinaai/jina-embeddings-v5-text-nano-retrieval` (~866 MB, Jina AI, CC BY-NC 4.0). To prefetch the pinned revision:
 
 ```sh
 hf download jinaai/jina-embeddings-v5-text-nano-retrieval --revision ac5d898c8d382b17167c33e5c8af644a3519b47d --include onnx/model.onnx onnx/model.onnx_data tokenizer.json README.md
 ```
 
-The desktop window comes from the installer build; its packaging scripts are in `packaging/windows/`, and the frozen backend is a build artifact excluded from the repository; `npm run tauri -- dev` will not start from this checkout (the shell expects a bundled backend). For development, use the browser at http://localhost:1420.
+Without a voice setup, `[WARN] TTS reference audio not found ...` in the backend log is expected.
 
-### Data location
+The desktop window comes from the installer build (`packaging/windows/`); `npm run tauri -- dev` does not start from a source checkout, so use the browser for development.
 
-The Windows installer stores data in `%LOCALAPPDATA%\com.amadeus.desktop\data`. Uninstalling keeps data by default; selecting the uninstaller's option to delete app data removes this default directory. To use another location, set the user environment variable `AMADEUS_DATA_DIR` and restart the app. Source runs must set a nonempty `AMADEUS_DATA_DIR` to a separate development directory. The backend executable also refuses to start on its own without this variable; it has no fallback data directory.
+#### Data, logs and keys
 
-Installed Windows builds store API keys in the Windows Credential Manager; source runs keep them only in memory by default, so re-enter them after each restart. To persist keys from a source run on Windows, set `AMADEUS_CREDENTIAL_BACKEND=windows`; this accesses your real Windows credentials. Other systems keep keys in memory only. The local mock does not use these backend data stores.
+- **Data.** The installer stores data in `%LOCALAPPDATA%\com.amadeus.desktop\data`. Uninstalling keeps it unless you choose to delete app data in the uninstaller. To move it, set the user environment variable `AMADEUS_DATA_DIR` and restart the app.
+- **When data goes wrong.** If the configured data directory is missing or invalid, startup stops instead of creating an empty database. If existing databases fail the startup check (`PRAGMA quick_check`), the app enters a data-unavailable state: chat and other features pause and the original databases are left untouched. If a migration fails during an upgrade, the app rolls back to the pre-upgrade backup.
+- **Logs.** See [Install and troubleshooting](#install-and-troubleshooting).
+- **Keys.** Installed builds use the Windows Credential Manager; source runs keep keys in memory, so re-enter them after a restart. On Windows, `AMADEUS_CREDENTIAL_BACKEND=windows` persists keys from a source run (this uses your real Windows credentials).
 
-## Voice (optional)
+### Voice (optional)
 
-Without voice, her lines simply appear as text.
+Without voice, her lines appear as text and subtitles.
 
-- **Speech synthesis** uses [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) with the voice model [TTS-KurisuMakise](https://huggingface.co/bysq/TTS-KurisuMakise) by bysq (GPT-SoVITS v2pro, Apache-2.0). Weights and reference audio are not included. Put your own reference clips in `voice-pack/ref/` under the data directory (`ref_neutral.wav`, `ref_happy.wav`, `ref_sad.wav` and six more emotions; see `backend/app/config.py`), or point the `AMADEUS_REF_*` variables at them. Start the GPT-SoVITS API locally (default `http://127.0.0.1:9880`, override with `SOVITS_URL`) and set `SOVITS_GPT_WEIGHTS` / `SOVITS_SOVITS_WEIGHTS` to the weight files.
-- **Speech recognition** downloads the SenseVoice int8 model (~163 MB) and Silero VAD (~644 KB) from the [sherpa-onnx releases](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) on first use, verifies fixed SHA-256 hashes, and stores them under `models/speech/` in the data directory. Use `SENSEVOICE_MODEL`, `SENSEVOICE_TOKENS` and `AMADEUS_VAD_MODEL` to point at local copies.
+- **Speech synthesis** uses a local [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) server with the voice model [TTS-KurisuMakise](https://huggingface.co/bysq/TTS-KurisuMakise) by bysq (GPT-SoVITS v2pro, Apache-2.0). Weights and reference audio are not included or downloaded. Put your reference clips in `voice-pack/ref/` under the data directory (`ref_neutral.wav`, `ref_happy.wav` and seven more emotions; see `backend/app/config.py`), or point the `AMADEUS_REF_*` variables at them. Start the GPT-SoVITS API (default `http://127.0.0.1:9880`, override with `SOVITS_URL`) and set `SOVITS_GPT_WEIGHTS` / `SOVITS_SOVITS_WEIGHTS` to the weight files.
+- **Speech recognition** is wired up in the backend only (no microphone UI yet). On first use it downloads the SenseVoice int8 model (~163 MB) and Silero VAD from the [sherpa-onnx releases](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models), verifies fixed SHA-256 hashes, and stores them in `models/speech/` under the data directory. `SENSEVOICE_MODEL`, `SENSEVOICE_TOKENS` and `AMADEUS_VAD_MODEL` can point at local copies.
 
 **About the voice.** TTS-KurisuMakise imitates the voice of Makise Kurisu from STEINS;GATE. The character, the original recordings and the voice actor's performance belong to their respective rights holders. The Apache-2.0 label on the model page covers only what its uploader can license; it does not grant any rights to the character, the original recordings or the performance. AMADEUS does not include, download or redistribute the model or any reference audio. Use the voice for personal, non-commercial purposes only, and do not use it to impersonate the voice actor or to make content that looks official. Rights holders who want this reference removed can open a GitHub issue; we will respond promptly.
 
-## Original asset pack
+### Original asset pack
 
-This repository contains **no** original game assets (character art, CG, logos, BGM). The app runs without them and shows its own placeholder art. If you have an asset pack, put it in `asset-pack/amadeus-original/` under the data directory (with `manifest.json` at its root) and restart the backend. The pack is distributed separately with its own notice. The pack holds only material from the original work; the app's own generated textures and illustrations ship in this repository and are listed in [assets/PROVENANCE.md](assets/PROVENANCE.md).
+This repository contains **no** original game assets (character art, CG, logos, BGM). The app runs without them and shows its own placeholder art. If you have the separately distributed asset pack, put it in `asset-pack/amadeus-original/` under the data directory (with `manifest.json` at its root) and restart the app. The pack holds only material from the original work; the app's own generated textures and illustrations ship in this repository and are listed in [assets/PROVENANCE.md](assets/PROVENANCE.md).
 
-## License
+### License
 
-The code in this repository is released under the [MIT License](LICENSE). Provider icons on the connections page come from [Lobe Icons](https://github.com/lobehub/lobe-icons) (MIT); provider names and marks belong to their owners. The installer bundles the Jina AI embedding model under CC BY-NC 4.0, so the installer as a whole is for **non-commercial use only**. Speech components include eSpeak NG (GPLv3); the corresponding source package, `amadeus-0.1.0-speech-sources.zip`, will accompany each version on GitHub Releases. See [third-party notices](THIRD_PARTY_NOTICES.md) for details.
+The code is released under the [MIT License](LICENSE). Provider icons on the connections page come from [Lobe Icons](https://github.com/lobehub/lobe-icons) (MIT); provider names and marks belong to their owners. The installer bundles the Jina AI embedding model under CC BY-NC 4.0, so the installer as a whole is for **non-commercial use only**. Speech components include eSpeak NG (GPLv3); the corresponding source package, `amadeus-0.1.0-speech-sources.zip`, will accompany each version on GitHub Releases. See [third-party notices](THIRD_PARTY_NOTICES.md).
 
 STEINS;GATE, STEINS;GATE 0 and their characters, names and original assets belong to MAGES. Inc. and the respective rights holders. This repository does not include those assets and the project is not used for any commercial purpose. If a rights holder asks, we will act on it promptly.
-
----
-
-## 中文
-
-一个可以在自己电脑上和牧濑红莉栖说话的桌面应用。
-
-她使用日语回答，屏幕上同时有中文字幕。她会记住你们聊过的事，能看得见，也能让她忘掉。（Amadeus 的人格设定基本上就是参考官方小说和相关资料）本项目共有两条世界线：**STEINS;GATE** 和 **β**。两边的对话、记忆互不相通，界面也各是各的样子。（sg 线相当于是架空的，在现实中红莉栖还活着的情况下，诞生的 Amadeus；加了些设定，你在 sg 线提到真实红莉栖，Amadeus 还会争风吃醋。）
-
-这是一个粉丝作品，和官方没有任何关系。
-
-### 现在做到哪了
-
-从 6 月中旬起已经开发了大约四个月。
-
-**新界面的 Windows 安装包已经打出来了**，在一台干净的英文 Windows Server 2022 虚拟机上，10 项验收全部通过：安装、自动装 WebView2、真实对话、记忆的写入/召回/遗忘、重启后还记得、卸载时保留数据。v0.1.0 正在准备，还没有公开发布。（打包脚本在 `packaging/windows/`，冻结后端是构建产物，不进仓库。）
-
-已经能用的：
-
-- 和她用日语多轮对话，中文字幕逐句跟上
-- 长期记忆：她记住了什么随时能查，不想让她记得的可以让她忘掉（记忆星图还在打磨，现在先在档案页里看）
-- 在 SG 和 β 两条世界线之间跃迁，各自保留会话和草稿
-- M3 已接受并合并：右上角、系统菜单与跃迁演出统一阴极数字；「系统 → 世界线」的仪器显示当前线，图中预览目标，再按跃迁按钮。过渡更柔和，点击／Esc 可跳过演出，仍须等待目标确认。GPU 与字体提前异步预热；字体使用记录在下次刷新后用于预加载，既有音频初始化移到入场前，没有新增音频功能。
-- 接入你自己的大模型：DeepSeek、智谱 GLM，或任何兼容 OpenAI 接口的服务
-- 可选的联网搜索（Tavily、Firecrawl）
-- 用红莉栖的声音念出她的回答（需要另外跑 GPT-SoVITS，见上文 [Voice](#voice-optional)）
-
-M3 已收尾，M4 等待授权。英文和日文界面仍在计划中；她始终说日语，英文界面下配英文字幕，日文界面下就不再显示字幕了。
-
-正常 GPU 演出不显示状态字幕，但保留读屏状态；等待超过 0.7 秒才显示提示，失败立即显示。提示采用无底框琥珀字幕，失败使用错误色；Esc 提示在活动、键盘聚焦及前 3 次引导时出现。减少动态与降级路径仍保留同一切换事务，跳过不会伪造成功。验证来源和边界见上文 [Engineering notes](#engineering-notes)。
-
-### 安装
-
-桌面版只支持 **Windows 10/11 x64**。v0.1.0 发布后可从 [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases) 下载安装包；安装包未签名，SmartScreen 提示时点「更多信息 → 仍要运行」。缺少 WebView2 时安装程序会联网安装；语音可选。后端只监听本机回环，端口由系统分配。
-
-代码使用 MIT 许可；安装包带 CC BY-NC 4.0 的 jina 嵌入模型，因此安装包整体仅限非商业使用。语音组件含 eSpeak NG（GPLv3），对应源码包 `amadeus-0.1.0-speech-sources.zip` 随每个版本在 Releases 发布，见 [第三方说明](THIRD_PARTY_NOTICES.md)。
-
-### 运行
-
-开发有两种模式，命令见上文 [Run it](#run-it-development)。安装和运行以英文版为准。浏览器开发模式在 Linux 上也能跑。
-
-**默认本地 mock**：只需 Node.js，不用启动 Python 后端，不需要 API 密钥、真实模型或 TTS。按 [Local mock](#local-mock-default) 执行 `npm ci` 和 `npm run dev -- --port 1420 --strictPort`，打开 http://localhost:1420/?scenario=streaming 。等 USER ID 自动输入完 `Salieri` 后，用公开本地测试口令 `Gott würfelt nicht` 登录；发送任意消息即可看到三组逐句到达的日语和中文字幕。会话和记忆都是测试数据，服务重启后重置。mock 仅用于开发，不进入生产构建，`npm run preview` 也不提供 mock。
-
-其他状态见 [场景目录与切换说明](desktop/src/dev-mock/README.md) 和 [场景 JSON](desktop/src/dev-mock/scenarios/)；双世界线与减少动态的走查见 [浏览器证据指南](desktop/validation/README.md)。
-
-**真实后端**：按 [Real backend](#real-backend) 安装依赖并设置独立的 `AMADEUS_DATA_DIR` 后，在 `desktop/` 执行 `npm run dev:real`，一条命令启动带本地 API 认证的后端和 Vite；`run_dev.bat` 也调用这个启动器。手动两个终端、不带令牌的开发方式仍保留为备选，后端会记录未认证的 WARNING。登录口令仍是 `Gott würfelt nicht`。进去以后，从右上角的「系统」打开「连接」，配置自己的模型连接并保存。连接测试通过后，就可以开始说话了。第一次写入记忆时会下载记忆功能要用的模型；语音是可选项。
-
-真实后端开发模式下，必须先显式设置 `AMADEUS_DATA_DIR` 到独立开发目录（Windows：`$env:AMADEUS_DATA_DIR = Join-Path $env:LOCALAPPDATA 'amadeus-dev-data'`，即 `%LOCALAPPDATA%\amadeus-dev-data`，避免被 TEMP 清理），并清除 `AMADEUS_DB_PATH`；未设置或为空时拒绝启动，不再默认使用用户目录。单设 `AMADEUS_DB_PATH` 不能绕过检查。安装版数据放在 `%LOCALAPPDATA%\com.amadeus.desktop\data`，卸载默认保留，勾选删除应用数据时会删除此目录；高级用法可设置用户环境变量 `AMADEUS_DATA_DIR` 后重启应用以更换位置。单独运行后端可执行文件也必须设置非空的 `AMADEUS_DATA_DIR`，否则拒绝启动。Windows 安装版把 API key 存进 Windows 凭据管理器；源码运行默认只存内存，重启后要重新输入。若要在 Windows 源码运行时持久保存 key，设置 `AMADEUS_CREDENTIAL_BACKEND=windows`；这会访问你的真实 Windows 凭据。其他系统只存内存。所有服务只监听本机地址，你的对话只会发给你自己配置的那个模型服务；如果开启联网搜索，搜索词还会发给你配置的搜索服务（Tavily 或 Firecrawl）。本地 mock 不使用这些后端数据目录，也不调用模型或语音服务。
-
-### 原作素材包
-
-本仓库**不包含**任何原作素材，比如立绘、CG、Logo、BGM。没有素材包也能正常使用，界面会换成自制画面。（版权问题，目前的解法就只能是素材包了）素材包里只有原作相关的内容；应用自己生成的底纹和插画随仓库发布，来源登记在 [assets/PROVENANCE.md](assets/PROVENANCE.md)。
-
-### 语音
-
-语音合成是可选功能，通过本机的 GPT-SoVITS 服务完成。声音模型是 Hugging Face 上 bysq 训练的 [TTS-KurisuMakise](https://huggingface.co/bysq/TTS-KurisuMakise)。本仓库不附带、不下载、也不转发模型权重和参考音频，需要你自己准备。
-
-这个声音模仿的是《命运石之门》里的牧濑红莉栖。角色、原作录音和声优的表演归各自的权利人所有。模型页上的 Apache-2.0 只覆盖上传者自己能授权的部分，不代表获得了角色、原作录音或表演的授权。请只在个人、非商业场景使用，不要用它冒充声优，也不要制作看起来像官方的内容。权利人如需移除相关内容，请在 GitHub 提 issue，我们会尽快处理。
-
-语音识别的后端已经有了，前端页面还没做。
-
-### 个人的碎碎念吧
-
-因为一直是个人开发，中途的困难挫折也有很多，目前最棘手的应该就是版权问题了。之前说尽量在 1 个月左右推送首个 MVP 安装包——安装包已经打好、过了工程验收，等我自己完整体验一轮就放出来。
-
-okeydokey，大概就是这些，那么来句帅气的收尾吧：El Psy Kongroo.
 
 ---
 
@@ -271,17 +356,24 @@ okeydokey，大概就是这些，那么来句帅气的收尾吧：El Psy Kongroo
 - ローカル長期記憶：SQLite + jina-embeddings-v5-text-nano-retrieval（Jina AI、fp32・768 次元、CC BY-NC 4.0、revision `ac5d898c8d382b17167c33e5c8af644a3519b47d`。事前取得には上記の `hf download` コマンドを使用）。事実は常駐と必要時の二種類。常駐の事実は毎ターンプロンプトに入り、それ以外は必要なときだけモデルが `recall_memory` ツール（DeepSeek のみ）で思い出す。記憶アーカイブで閲覧・修正・削除できる
 - DeepSeek、Zhipu GLM、OpenAI 互換 API（ローカルモデルを含む）に対応
 - 音声合成（GPT-SoVITS）は任意
-- M3 は実機 Edge プレビューで承認され、統合済み。ヘッダー・システムメニュー・遷移演出の陰極数字を統一。「系统 → 世界线」では計器に現在の世界線、図に選択した移動先を表示し、ボタンで遷移する。クリック／Esc で演出を省略しても、移動先の確認を待つ。
 
 この音声は『STEINS;GATE』の牧瀬紅莉栖の声を模倣したものです。キャラクター、原作の録音、声優の実演に関する権利は、それぞれの権利者に帰属します。モデルページの Apache-2.0 は、アップロードした本人が許諾できる範囲にのみ適用され、キャラクター、原作の録音、実演に関する権利の許諾を意味するものではありません。個人かつ非商用の用途に限って使用し、声優へのなりすましや、公式と誤認されるようなコンテンツの制作には使わないでください。権利者の方が関連内容の削除を希望される場合は、GitHub で issue を作成してください。速やかに対応します。
 
-遷移の受け渡しを柔らかくし、GPU を非同期で準備する。ログイン画面ではフォントを先読みし、入場後の使用記録を次回の再読み込みに使う。既存の音声初期化は入場前に移した。通常の GPU 演出中は状態字幕を隠して読み上げ用の状態を保ち、0.7 秒を超える待機や失敗時に表示する。字幕は背景枠のない琥珀色（失敗時はエラー色）。Esc の案内は操作・フォーカス・最初の 3 回の案内時に現れる。検証結果の出典と範囲は [Engineering notes](#engineering-notes) を参照。M3 は完了し、M4 は承認待ち。
+UI はログイン画面を除いて全面的に作り直しているところで、スクリーンショットは完了後に差し替える。
 
 デスクトップ版は **Windows 10/11 x64 のみ**に対応し、v0.1.0 は公開準備中で、まだ公開リリースはない。公開後は [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases) からインストーラーを入手できる。署名がないため SmartScreen の警告が出るので、「詳細情報 → 実行」を選ぶ。WebView2 がなければインストーラーがネット経由で導入する。音声は任意。バックエンドはループバックのみで待ち受け、ポートはシステムが割り当てる。ブラウザーでの開発モードは Linux でも動く。
 
 コードは MIT。インストーラーには CC BY-NC 4.0 の jina 埋め込みモデルが含まれるため、インストーラー全体は非商用利用に限る。音声コンポーネントには eSpeak NG（GPLv3）が含まれ、対応するソース `amadeus-0.1.0-speech-sources.zip` は各バージョンと一緒に Releases で公開する。詳細は [第三者ライセンス](THIRD_PARTY_NOTICES.md) を参照。
 
-開発時の起動方法は [Run it](#run-it-development) を参照。セットアップと実行手順は英語版を正とする。**標準はローカル mock** で、Node.js だけで動き、Python バックエンド、API キー、実際のモデルや TTS は不要。[Local mock](#local-mock-default) の手順で `npm ci` と `npm run dev -- --port 1420 --strictPort` を実行し、http://localhost:1420/?scenario=streaming を開く。USER ID が `Salieri` と入力されるまで待ち、公開のローカルテスト用合言葉 `Gott würfelt nicht` でログインする。メッセージを送ると、日本語と中国語字幕の組が三つ、順番に届く。会話と記憶はテストデータで、開発サーバーの再起動でリセットされる。mock は開発専用で、製品ビルドには含まれず、`npm run preview` でも利用できない。
+### よくある質問
+
+- **SmartScreen の警告**：インストーラーには Authenticode 署名がない。SmartScreen が未知の発行元を警告した場合は、このリポジトリの GitHub Releases から取得したことと `SHA256SUMS.txt` のハッシュ一致を確認してから「詳細情報 → 実行」を選ぶ（更新パッケージの Tauri 署名は更新元の検証用であり、Windows のコード署名の代わりにはならない）。
+- **ダウンロードの検証（`SHA256SUMS.txt`）**：`SHA256SUMS.txt` とインストーラーをダウンロードし、PowerShell で `Get-FileHash .\Amadeus_<バージョン>_x64-setup.exe -Algorithm SHA256` を実行する。`Hash` を `SHA256SUMS.txt` の該当ファイルの SHA-256 と（大文字・小文字を区別せず）比較し、完全一致を確認してから導入する。他の添付ファイルも同じコマンドで検証できる。
+- **WebView2 の導入**：インストーラーは WebView2 のオンラインブートストラッパー（`embedBootstrapper`）を内蔵している。Microsoft Edge WebView2 Runtime が未導入の環境ではネット経由でダウンロード・導入するため、インターネット接続が必要になる。
+- **ログの場所**：インストール版のバックエンドログ（`backend-stdout.log`、`backend-stderr.log`、起動失敗時の `backend-startup.log`）は標準で `%LOCALAPPDATA%\com.amadeus.desktop\logs` に出力される。`AMADEUS_DATA_DIR` を設定している場合は `<AMADEUS_DATA_DIR>\logs` に出力される。
+- **不具合の報告**：[GitHub Issues](https://github.com/meditecnic/AMADEUS/issues) で問題を報告する際は、**API キー、トークン、会話内容は貼らないこと**。
+
+開発時の起動方法は [本地开发运行](#本地开发运行) / [Run it](#run-it-development) を参照。**標準はローカル mock** で、Node.js だけで動き、Python バックエンド、API キー、実際のモデルや TTS は不要。[Local mock](#local-mock-default) の手順で `npm ci` と `npm run dev -- --port 1420 --strictPort` を実行し、http://localhost:1420/?scenario=streaming を開く。USER ID が `Salieri` と入力されるまで待ち、公開のローカルテスト用合言葉 `Gott würfelt nicht` でログインする。メッセージを送ると、日本語と中国語字幕の組が三つ、順番に届く。会話と記憶はテストデータで、開発サーバーの再起動でリセットされる。mock は開発専用で、製品ビルドには含まれず、`npm run preview` でも利用できない。
 
 利用できる状態は [シナリオ一覧と切り替え方法](desktop/src/dev-mock/README.md) と [JSON ファイル](desktop/src/dev-mock/scenarios/)、確認手順は [ブラウザー検証ガイド](desktop/validation/README.md) を参照。
 

@@ -13,7 +13,6 @@ import re
 import socket
 import sys
 import threading
-import traceback
 
 
 def lifecycle_log(message: str, *, file=None) -> None:
@@ -147,7 +146,7 @@ async def serve(shutdown: threading.Event, port: int) -> int:
         port = listener.getsockname()[1]
         server = uvicorn.Server(uvicorn.Config(
             app, host="127.0.0.1", port=port, lifespan="on", log_level="info",
-            timeout_graceful_shutdown=3,
+            timeout_graceful_shutdown=3, access_log=False,
         ))
 
         async def request_shutdown() -> None:
@@ -198,12 +197,7 @@ def main() -> int:
         threading.Thread(target=watch_stdin, args=(shutdown,), daemon=True).start()
         return asyncio.run(serve(shutdown, port))
     except Exception as error:
-        lifecycle_log(f"AMADEUS_BACKEND_FAILED {type(error).__name__}: {error}")
-        if args.self_check:
-            try:
-                traceback.print_exc()
-            except (OSError, ValueError):
-                pass
+        lifecycle_log(f"AMADEUS_BACKEND_FAILED {type(error).__name__}")
         return 1
 
 

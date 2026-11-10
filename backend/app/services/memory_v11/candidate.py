@@ -147,7 +147,7 @@ _HISTORY_KNOWN_TABLES: frozenset[str] = frozenset(
 _CONTROL_KNOWN_TABLES: frozenset[str] = frozenset(
     {
         "schema_meta", "session_worldlines", "session_conversation_selections",
-        "search_usage", "provider_configurations", "shared_user_facts", "model_usage",
+        "search_usage", "provider_configurations", "provider_settings", "shared_user_facts", "model_usage",
     }
 )
 

@@ -222,6 +222,18 @@ def schedule_restore(backup_id: str) -> dict:
         return {"restart_required": True}
 
 
+def cancel_restore() -> dict:
+    with _lock:
+        request_path = _root() / "restore-request.json"
+        if not request_path.exists():
+            raise BackupError("restore_not_pending", "No pending restore", 409)
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+        if request.get("phase") != "pending":
+            raise BackupError("restore_in_progress", "Restore or rollback already started", 409)
+        request_path.unlink()
+        return {"cancelled": True}
+
+
 def delete_backup(backup_id: str) -> dict:
     with _lock:
         directory = _directory(backup_id)
@@ -364,6 +376,6 @@ def weekly_backup_if_due(stop: threading.Event | None = None) -> None:
             create_backup("weekly", stop=stop)
     except BackupError as exc:
         if exc.code != "backup_stopped":
-            logging.getLogger(__name__).warning("Weekly backup failed: %s", exc)
+            logging.getLogger(__name__).warning("Weekly backup failed: %s", type(exc).__name__)
     except Exception as exc:
-        logging.getLogger(__name__).warning("Weekly backup failed: %s", exc)
+        logging.getLogger(__name__).warning("Weekly backup failed: %s", type(exc).__name__)

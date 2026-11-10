@@ -11,27 +11,42 @@ from app.security.local_transport import HTTPOriginGuardMiddleware, LOCAL_ORIGIN
 from pydantic import BaseModel, SecretStr
 from typing import Optional
 from app import config
-from app.routers import asset_pack, auth, chat_ws, conversations, data, history, providers, system_api, voice_ws
+from app.routers import asset_pack, auth, chat_ws, conversations, data, data_location, diagnostics, history, providers, system_api, voice_ws
 from app.services.tts_queue import tts_manager
 from app.services.tts_sidecar import sidecar_supervisor
 from app.services.search import search_service
 from app.services.soul_engine import soul_engine
 from app.services.diagnostics import diagnostic_runtime
+from app.security.log_privacy import configure_logging
 from app.security.data_availability import DataAvailabilityMiddleware
+from app.services.data_relocation import RelocationMiddleware
 
+
+configure_logging()
 
 DIAGNOSTICS_SWEEP_INTERVAL_SECONDS = 24 * 60 * 60
 
 
-async def _diagnostics_sweep_loop() -> None:
-    while True:
+async def _diagnostics_sweep_loop(stop: asyncio.Event | None = None) -> None:
+    while stop is None or not stop.is_set():
         await asyncio.to_thread(diagnostic_runtime.sweep_best_effort)
-        await asyncio.sleep(DIAGNOSTICS_SWEEP_INTERVAL_SECONDS)
+        if stop is None:
+            await asyncio.sleep(DIAGNOSTICS_SWEEP_INTERVAL_SECONDS)
+        else:
+            try:
+                await asyncio.wait_for(stop.wait(), DIAGNOSTICS_SWEEP_INTERVAL_SECONDS)
+            except asyncio.TimeoutError:
+                pass
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
+    from app.services.data_location import validate_startup
+    validate_startup()
+    from app.services import data_relocation
+    data_relocation.reset()
+    data_relocation.pause_background = data_relocation.resume_background = None
     if not LOCAL_API_TOKEN:
         logging.getLogger(__name__).warning(
             "Local HTTP and WebSocket authentication is disabled; use only for development."
@@ -65,9 +80,6 @@ async def lifespan(app: FastAPI):
     soul_engine.load_profiles()
     await asyncio.to_thread(diagnostic_runtime.start)
     print("[Database] SQLite initialized.")
-    print(f"DeepSeek Model: {config.DEEPSEEK_MODEL}")
-    print(f"GPT-SoVITS URL: {config.SOVITS_URL}")
-    print(f"Assets Directory: {config.ASSETS_DIR}")
     print(f"History Compress Threshold: {config.HISTORY_COMPRESS_THRESHOLD} rounds")
     
     # Initialize async TTS client (health check per-request, not at startup)
@@ -87,11 +99,30 @@ async def lifespan(app: FastAPI):
     print("[MemoryV11] worker started")
     print("--------------------------------------------------")
 
-    diagnostics_sweep = asyncio.create_task(_diagnostics_sweep_loop())
+    diagnostics_stop = asyncio.Event()
+    diagnostics_sweep = asyncio.create_task(_diagnostics_sweep_loop(diagnostics_stop))
     weekly_backup_stop = threading.Event()
     weekly_backup = asyncio.create_task(asyncio.to_thread(weekly_backup_if_due, weekly_backup_stop)) if had_databases else None
+    async def pause_data_writers():
+        weekly_backup_stop.set()
+        diagnostics_stop.set()
+        if weekly_backup is not None:
+            await weekly_backup
+        await diagnostics_sweep
+        await stop_background_worker()
+
+    async def resume_data_writers():
+        nonlocal diagnostics_sweep, diagnostics_stop, weekly_backup, weekly_backup_stop
+        diagnostics_stop = asyncio.Event()
+        diagnostics_sweep = asyncio.create_task(_diagnostics_sweep_loop(diagnostics_stop))
+        weekly_backup_stop = threading.Event()
+        weekly_backup = asyncio.create_task(asyncio.to_thread(weekly_backup_if_due, weekly_backup_stop)) if had_databases else None
+        await start_background_worker()
+
+    data_relocation.pause_background = pause_data_writers
+    data_relocation.resume_background = resume_data_writers
     yield
-    
+    data_relocation.pause_background = data_relocation.resume_background = None
     # Shutdown
     weekly_backup_stop.set()
     await chat_ws.close_chat_sessions()
@@ -114,6 +145,7 @@ app = FastAPI(title="Amadeus Backend", version="3.0.0", lifespan=lifespan)
 allowed_origins = sorted(LOCAL_ORIGINS)
 
 app.add_middleware(DataAvailabilityMiddleware)
+app.add_middleware(RelocationMiddleware)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost'])
 
 # CORS is added last (outermost), preserving preflight and response headers.
@@ -131,6 +163,8 @@ app.add_middleware(
 # Include WebSocket router
 app.include_router(auth.router)
 app.include_router(data.router)
+app.include_router(data_location.router)
+app.include_router(diagnostics.router)
 app.include_router(chat_ws.router)
 app.include_router(history.router)
 app.include_router(system_api.router)

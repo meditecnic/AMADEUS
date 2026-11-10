@@ -8,6 +8,7 @@ retaining the row and its diagnostic content.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from typing import Any
 
 from app.db import get_db, normalize_identity_mode, normalize_worldline
@@ -195,3 +196,70 @@ async def ignore_observation(
         "scope": {"session_id": session, "worldline": wl, "identity_mode": mode},
         "idempotent": False,
     }
+
+
+async def confirm_observation(*, session_id: str, worldline: str, identity_mode: str,
+                              observation_id: str) -> dict[str, Any]:
+    """User authority: preserve provenance, require the index, commit atomically."""
+    from app.services.memory_v11.indexing import prepare_passage_embedding, insert_version_embedding
+    from app.services.memory_v11.reconciler import _create_fact_on_conn, _link_evidence
+    from app.services.memory_v11.repository import list_active_stable_facts_page
+    from app.services.memory_v11.recall import MemoryScope
+    from app.services.memory_v11.resident import load_resident_fact_ids
+
+    wl, mode = normalize_worldline(worldline), normalize_identity_mode(identity_mode)
+    session = _require_session_id(session_id)
+    oid = (observation_id or "").strip()
+    if not oid:
+        raise MemoryValidationError("empty_observation_id")
+
+    async def candidate(db):
+        row = await (await db.execute(
+            "SELECT * FROM memory_observations WHERE observation_id=? AND session_id=? AND identity_mode=?",
+            (oid, session, mode),
+        )).fetchone()
+        if row is None:
+            raise MemoryValidationError("observation_not_found")
+        if row["status"] != "candidate":
+            raise MemoryValidationError("observation_not_confirmable")
+        for table in ("stable_fact_evidence", "experiences"):
+            if await (await db.execute(f"SELECT 1 FROM {table} WHERE observation_id=? LIMIT 1", (oid,))).fetchone():
+                raise MemoryValidationError("observation_state_conflict")
+        return dict(row)
+
+    db = await get_db(wl, "memory")
+    try:
+        before = await candidate(db)
+        # indexing.py has no deferred rebuild path. No vector => no fact write.
+        try:
+            prepared = await prepare_passage_embedding(before["display_text"])
+        except MemoryValidationError as exc:
+            raise MemoryValidationError("embedding_not_ready") from exc
+        await db.execute("BEGIN IMMEDIATE")
+        current = await candidate(db)
+        if current != before:
+            raise MemoryValidationError("observation_changed")
+        semantic = json.loads(current["semantic_json"] or "{}")
+        if not isinstance(semantic, dict):
+            semantic = {"original": semantic}
+        qualifiers = semantic.get("qualifiers")
+        semantic["qualifiers"] = {**(qualifiers if isinstance(qualifiers, dict) else {}), "source": "user_confirm"}
+        created = await _create_fact_on_conn(
+            db, session_id=session, identity_mode=mode, display_text=current["display_text"],
+            semantic=semantic, confidence=1.0, change_kind="user_edit",
+        )
+        fid = created["fact_id"]
+        await insert_version_embedding(db, fact_id=fid, version_no=1, prepared=prepared)
+        await _link_evidence(db, fact_id=fid, version_no=1, observation_id=oid)
+        await db.execute("UPDATE memory_observations SET status='attached', updated_at=? WHERE observation_id=?", (_utc_now(), oid))
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
+    finally:
+        await db.close()
+    page = await list_active_stable_facts_page(session_id=session, worldline=wl, identity_mode=mode,
+                                              fact_id=fid, limit=1, offset=0)
+    fact = page["facts"][0]
+    fact["resident"] = fid in await load_resident_fact_ids(MemoryScope(session, wl, mode))
+    return fact
