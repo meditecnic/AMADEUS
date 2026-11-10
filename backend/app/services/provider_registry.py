@@ -243,6 +243,9 @@ class ProviderRegistry:
         except KeyError as exc:
             raise KeyError(f"unknown provider: {provider_id}") from exc
         selected_model = model_id or definition.default_model
+        if not selected_model and not allow_unavailable:
+            from app.services.model_catalog import ModelUnavailableError
+            raise ModelUnavailableError("provider_model_required")
         if self._model_catalog is not None and not allow_unavailable:
             self._model_catalog.ensure_callable(definition.id, selected_model)
         model = (

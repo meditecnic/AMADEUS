@@ -104,8 +104,8 @@ def normalize_custom_display_name(value: str) -> str:
 
 def normalize_custom_default_model(value: str) -> str:
     model = (value or "").strip()
-    if not model or len(model) > 200:
-        raise ValueError("custom default model is required")
+    if len(model) > 200:
+        raise ValueError("custom default model must be at most 200 characters")
     return model
 
 

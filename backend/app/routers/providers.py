@@ -53,14 +53,14 @@ class ChatCheckRequest(BaseModel):
 
 class CustomProviderConfiguration(BaseModel):
     base_url: str
-    default_model: str
+    default_model: str = ""
     display_name: str | None = None
 
 
 class CustomProfileCreate(BaseModel):
     display_name: str = Field(min_length=1, max_length=80)
     base_url: str
-    default_model: str
+    default_model: str = ""
 
 
 class CustomProfileUpdate(BaseModel):
@@ -373,7 +373,7 @@ async def update_custom_profile(provider_id: str, body: CustomProfileUpdate):
         settings = prepare_custom_provider_settings(
             provider_id=provider_id,
             base_url=body.base_url or prior_base,
-            default_model=body.default_model or prior_model,
+            default_model=prior_model if body.default_model is None else body.default_model,
             display_name=body.display_name or prior_name,
         )
     except (KeyError, ValueError) as exc:
