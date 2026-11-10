@@ -222,3 +222,36 @@ def test_backup_api_and_active_turn(app_client, monkeypatch):
     assert app_client.get('/api/data/backups').json()[0]['can_restore']
     assert app_client.delete('/api/data/backups/' + backup_id).status_code == 200
     assert app_client.get('/api/data/backups').json() == []
+
+
+def test_cancel_pending_restore_releases_backup(data_root):
+    make_database(data_root)
+    backup_id = backups.create_backup()["id"]
+    backups.schedule_restore(backup_id)
+    with pytest.raises(backups.BackupError) as error:
+        backups.delete_backup(backup_id)
+    assert error.value.code == "restore_pending"
+    assert backups.cancel_restore() == {"cancelled": True}
+    assert backups.delete_backup(backup_id) == {"status": "success"}
+    with pytest.raises(backups.BackupError) as error:
+        backups.cancel_restore()
+    assert error.value.status == 409 and error.value.code == "restore_not_pending"
+
+
+@pytest.mark.parametrize("phase", ["applying", "rolling_back", "complete", None])
+def test_cancel_never_removes_started_or_unknown_journal(data_root, phase):
+    path = data_root / "restore-request.json"
+    backups.atomic_json(path, {"id": "retained", "phase": phase})
+    with pytest.raises(backups.BackupError) as error:
+        backups.cancel_restore()
+    assert error.value.status == 409 and error.value.code == "restore_in_progress"
+    assert path.exists()
+
+
+def test_cancel_restore_http_envelopes(app_client):
+    response = app_client.delete("/api/data/restore")
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "restore_not_pending"
+    path = db.get_data_root() / "restore-request.json"
+    backups.atomic_json(path, {"id": "pending", "phase": "pending"})
+    assert app_client.delete("/api/data/restore").json() == {"cancelled": True}

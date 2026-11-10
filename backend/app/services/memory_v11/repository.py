@@ -360,6 +360,7 @@ async def list_active_stable_facts_page(
     worldline: str,
     identity_mode: str,
     query: str | None = None,
+    fact_id: str | None = None,
     topic_id: str | None = None,
     pinned_only: bool = False,
     created_from: datetime | None = None,
@@ -388,6 +389,9 @@ async def list_active_stable_facts_page(
         "f.state='active'",
     ]
     params: list[Any] = [session, mode]
+    if fact_id is not None:
+        clauses.append("f.fact_id=?")
+        params.append(fact_id)
     if topic_filter is not None:
         clauses.append("f.topic_id=?")
         params.append(topic_filter)
@@ -423,7 +427,11 @@ async def list_active_stable_facts_page(
             f"""SELECT f.fact_id, f.active_version, f.is_pinned, f.topic_id,
                       f.created_at, f.updated_at,
                       v.display_text, v.version_no, v.confidence,
-                      v.semantic_fingerprint
+                      v.semantic_fingerprint,
+                      CASE WHEN v.change_kind='user_edit' THEN
+                        CASE WHEN json_valid(v.semantic_json) AND json_extract(v.semantic_json, '$.qualifiers.source')='user_confirm'
+                             THEN 'user_confirm' ELSE 'user_edit' END
+                        ELSE 'automatic' END AS source
                  FROM stable_facts f
                  JOIN stable_fact_versions v
                    ON v.fact_id = f.fact_id
@@ -438,6 +446,7 @@ async def list_active_stable_facts_page(
         items = [
             {
                 "fact_id": row["fact_id"],
+                "source": row["source"],
                 "display_text": row["display_text"],
                 "version_no": int(row["version_no"]),
                 "active_version": int(row["active_version"]),

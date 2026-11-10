@@ -91,7 +91,7 @@ def _provider(provider_id: str, model_id: str | None = None):
     except ModelUnavailableError as exc:
         raise HTTPException(
             status_code=422,
-            detail={"code": "model_unavailable"},
+            detail={"code": "provider_model_required" if str(exc) == "provider_model_required" else "model_unavailable"},
         ) from exc
 
 

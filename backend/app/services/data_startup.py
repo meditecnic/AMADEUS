@@ -68,3 +68,12 @@ async def initialize() -> tuple[bool, bool]:
         return False, had_databases
     _available = True
     return True, had_databases
+
+
+def acknowledge_restore_result() -> dict:
+    global _state
+    # Delete the durable receipt before clearing the in-process notice.
+    (db.get_data_root() / "restore-result.json").unlink(missing_ok=True)
+    if _root_key == str(db.get_data_root()) and _state.get("status") in {"ok", "restore_failed"}:
+        _state = {"status": "ok", "detail": None}
+    return {"acknowledged": True}

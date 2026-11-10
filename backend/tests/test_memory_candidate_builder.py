@@ -1451,3 +1451,30 @@ def test_cli_refuses_preview_hardlinked_to_protected_files(tmp_path):
     assert snap_result.returncode == 2, snap_result.stdout + snap_result.stderr
     assert "preview_path_forbidden" in snap_result.stderr
     assert not (tmp_path / "cand-snap").exists()
+
+
+def test_candidate_preserves_provider_settings_and_catalog_id(tmp_path):
+    snapshot = _make_snapshot(tmp_path)
+    control = _db_paths(snapshot)["control"]
+    conn = _open(control)
+    try:
+        conn.execute(
+            "INSERT INTO provider_settings(provider_id,visible_models) VALUES(?,?)",
+            ("deepseek", '["deepseek-v4-flash","deepseek-v4-pro"]'),
+        )
+        conn.execute(
+            """INSERT INTO provider_configurations(
+                provider_id,base_url,default_model,catalog_id,updated_at_utc
+            ) VALUES(?,?,?,?,?)""",
+            ("custom", "https://example.invalid/v1", "model", "paid-plan", NOW),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    preview = _make_preview(snapshot, tmp_path / "inputs")
+    before = _snapshot_state(snapshot)
+    output = tmp_path / "candidate"
+    cand.build_memory_candidate(snapshot_dir=snapshot, preview_path=preview, output_dir=output)
+    for table in ("provider_settings", "provider_configurations"):
+        assert _row_tuples(_db_paths(output)["control"], table) == _row_tuples(control, table)
+    assert _snapshot_state(snapshot) == before

@@ -46,7 +46,7 @@ def test_missing_root_file_and_directory_are_404(app_client, pack_dir, monkeypat
     (pack_dir / "images").mkdir()
     assert app_client.get("/api/asset-pack/images").status_code == 404
     monkeypatch.setenv("AMADEUS_ASSET_PACK_DIR", str(pack_dir / "missing-root"))
-    assert app_client.get("/api/asset-pack/manifest.json").status_code == 404
+    assert app_client.get("/api/asset-pack/manifest.json").json() == {"installed": False}
 
 
 @pytest.mark.parametrize("path", [
@@ -83,3 +83,9 @@ def test_ogg_range_returns_selected_bytes(app_client, pack_dir):
     assert response.headers["accept-ranges"] == "bytes"
     assert response.headers["content-type"] == "audio/ogg"
     assert app_client.get("/api/asset-pack/theme.ogg", headers={"Range": "bytes=100-"}).status_code == 416
+
+
+def test_missing_manifest_is_success_without_relaxing_other_paths(app_client):
+    response = app_client.get("/api/asset-pack/manifest.json")
+    assert response.status_code == 200 and response.json() == {"installed": False}
+    assert app_client.get("/api/asset-pack/missing.json").status_code == 404

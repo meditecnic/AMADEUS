@@ -5,6 +5,7 @@ from app import config
 from app.services.llm_interface import LLMInterface, build_stream_messages
 from app.services.model_catalog import model_catalog
 from app.services.model_usage import usage_call
+from app.services.model_headers import model_headers
 from app.services.persona_bible import persona_bible
 from app.services.provider_adapters import ProviderRequestError, iter_provider_lines
 
@@ -164,6 +165,7 @@ class DeepSeekService(LLMInterface):
         )
         
         headers = {
+            **model_headers(),
             "Authorization": f"Bearer {effective_api_key}",
             "Content-Type": "application/json"
         }
@@ -249,6 +251,7 @@ class DeepSeekService(LLMInterface):
         prompt += f"【追加の会話履歴】\n{conversation_text}"
         
         headers = {
+            **model_headers(),
             "Authorization": f"Bearer {effective_api_key}",
             "Content-Type": "application/json"
         }
@@ -291,6 +294,7 @@ class DeepSeekService(LLMInterface):
         messages = build_translation_messages(text)
 
         headers = {
+            **model_headers(),
             "Authorization": f"Bearer {effective_api_key}",
             "Content-Type": "application/json"
         }
@@ -335,6 +339,7 @@ class DeepSeekService(LLMInterface):
             "response_format": {"type": "json_object"},
         }
         headers = {
+            **model_headers(),
             "Authorization": f"Bearer {effective_api_key}",
             "Content-Type": "application/json",
         }
@@ -363,15 +368,13 @@ class DeepSeekService(LLMInterface):
         effective_api_key = api_key or self.api_key
         if not effective_api_key:
             raise ValueError("DeepSeek credential is not configured")
-        headers = {"Authorization": f"Bearer {effective_api_key}"}
+        headers = {**model_headers(), "Authorization": f"Bearer {effective_api_key}"}
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(connect=5.0, read=20.0, write=10.0, pool=5.0)
         ) as client:
             response = await client.get(f"{self.base_url}/models", headers=headers)
         if response.status_code != 200:
-            raise RuntimeError(
-                f"DeepSeek model discovery failed with status {response.status_code}"
-            )
+            raise ProviderRequestError("deepseek", response.status_code)
         payload = response.json()
         rows = payload.get("data", []) if isinstance(payload, dict) else []
         return [

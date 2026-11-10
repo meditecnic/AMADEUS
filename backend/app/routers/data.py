@@ -91,3 +91,14 @@ async def export_data(
         headers={"Content-Disposition": f'attachment; filename="{export.filename}"',
                  "Cache-Control": "no-store"},
         background=BackgroundTask(export.close))
+
+
+@router.delete("/restore")
+async def cancel_restore():
+    return await _call(backups.cancel_restore)
+
+
+@router.post("/restore-result/ack")
+async def acknowledge_restore_result():
+    from app.services.data_startup import acknowledge_restore_result
+    return await _call(acknowledge_restore_result)

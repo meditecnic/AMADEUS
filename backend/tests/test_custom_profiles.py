@@ -578,3 +578,26 @@ async def test_model_cache_is_isolated_per_custom_profile(app_client, monkeypatc
             if provider_id:
                 app_client.delete(f"/api/providers/custom-profiles/{provider_id}")
                 provider_registry.unregister(provider_id)
+
+
+def test_pending_profile_requires_model_before_conversation(app_client):
+    response = app_client.post("/api/providers/custom-profiles", json={
+        "display_name": "Pending", "base_url": "https://example.invalid/v1",
+    })
+    assert response.status_code == 200
+    profile = response.json()
+    assert profile["default_model"] == ""
+    assert profile["selector_admission"] == "pending"
+    rejected = app_client.post("/api/conversations", json={
+        "session_id": "pending-model", "provider_id": profile["provider_id"],
+    })
+    assert rejected.status_code == 422
+    assert rejected.json()["detail"]["code"] == "provider_model_required"
+    assert app_client.post("/api/conversations", json={
+        "session_id": "pending-model", "provider_id": profile["provider_id"], "model_id": "chosen",
+    }).json()["detail"]["code"] == "provider_model_required"
+    assert app_client.patch(f"/api/providers/custom-profiles/{profile['provider_id']}",
+        json={"default_model": "chosen"}).status_code == 200
+    assert app_client.post("/api/conversations", json={
+        "session_id": "pending-model", "provider_id": profile["provider_id"],
+    }).status_code == 201

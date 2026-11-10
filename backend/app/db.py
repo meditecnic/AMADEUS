@@ -36,7 +36,7 @@ EMBEDDING_DIMENSION = 768
 # v11: Memory observation–fact pipeline (additive tables; legacy core_facts retained).
 # v12: jina 768-dimension stable-fact version embeddings. Legacy tables unchanged.
 # v13: content-free model invocation accounting in the control store.
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 15
 
 DEFAULT_IDENTITY_MODE = "okabe"
 IDENTITY_MODES = frozenset({"okabe", "self"})
@@ -621,6 +621,7 @@ CREATE TABLE IF NOT EXISTS provider_configurations (
     provider_id TEXT PRIMARY KEY,
     base_url TEXT NOT NULL,
     default_model TEXT NOT NULL,
+    catalog_id TEXT,
     display_name TEXT NOT NULL DEFAULT '',
     enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
     selector_admission TEXT NOT NULL DEFAULT 'admitted'
@@ -628,7 +629,12 @@ CREATE TABLE IF NOT EXISTS provider_configurations (
     created_at_utc TEXT NOT NULL DEFAULT '',
     updated_at_utc TEXT NOT NULL
 );
-""" + SHARED_USER_FACTS_DDL + MODEL_USAGE_DDL
+""" + SHARED_USER_FACTS_DDL + MODEL_USAGE_DDL + """
+CREATE TABLE IF NOT EXISTS provider_settings (
+    provider_id TEXT PRIMARY KEY,
+    visible_models TEXT NOT NULL DEFAULT '[]'
+);
+"""
 
 
 def _read_schema_version(connection: sqlite3.Connection) -> int | None:
@@ -1430,6 +1436,30 @@ def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str 
         if current == 12:
             _migrate_v12_to_v13(connection, kind)
             current = 13
+        if current == 13:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                if kind == "control":
+                    connection.execute("CREATE TABLE IF NOT EXISTS provider_settings (provider_id TEXT PRIMARY KEY, visible_models TEXT NOT NULL DEFAULT '[]')")
+                connection.execute("UPDATE schema_meta SET value='14' WHERE key='schema_version'")
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+            current = 14
+        if current == 14:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                if (kind == "control" and connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='provider_configurations'"
+                ).fetchone() and not _column_exists(connection, "provider_configurations", "catalog_id")):
+                    connection.execute("ALTER TABLE provider_configurations ADD COLUMN catalog_id TEXT")
+                connection.execute("UPDATE schema_meta SET value='15' WHERE key='schema_version'")
+                connection.commit()
+            except BaseException:
+                connection.rollback()
+                raise
+            current = 15
         if current not in (None, SCHEMA_VERSION):
             raise RuntimeError(f"unsupported {kind} schema version at {path}: {current}")
 
@@ -1527,7 +1557,7 @@ async def get_provider_configuration(provider_id: str) -> dict[str, object] | No
     db = await get_db("steins_gate", "control")
     try:
         cur = await db.execute(
-            """SELECT provider_id, base_url, default_model, display_name,
+            """SELECT provider_id, base_url, default_model, display_name, catalog_id,
                       enabled, selector_admission, created_at_utc, updated_at_utc
                FROM provider_configurations
                WHERE provider_id=?""",
@@ -1548,7 +1578,7 @@ async def list_provider_configurations(
     try:
         if enabled_only:
             cur = await db.execute(
-                """SELECT provider_id, base_url, default_model, display_name,
+                """SELECT provider_id, base_url, default_model, display_name, catalog_id,
                           enabled, selector_admission, created_at_utc, updated_at_utc
                    FROM provider_configurations
                    WHERE enabled=1
@@ -1556,14 +1586,14 @@ async def list_provider_configurations(
             )
         elif include_disabled:
             cur = await db.execute(
-                """SELECT provider_id, base_url, default_model, display_name,
+                """SELECT provider_id, base_url, default_model, display_name, catalog_id,
                           enabled, selector_admission, created_at_utc, updated_at_utc
                    FROM provider_configurations
                    ORDER BY enabled DESC, created_at_utc ASC, provider_id ASC"""
             )
         else:
             cur = await db.execute(
-                """SELECT provider_id, base_url, default_model, display_name,
+                """SELECT provider_id, base_url, default_model, display_name, catalog_id,
                           enabled, selector_admission, created_at_utc, updated_at_utc
                    FROM provider_configurations
                    WHERE enabled=1
@@ -1595,6 +1625,7 @@ async def save_provider_configuration(
     display_name: str | None = None,
     enabled: bool = True,
     initial_admission: SelectorAdmission = "admitted",
+    catalog_id: str | None = None,
 ) -> dict[str, object]:
     """Persist a profile row. Success is declared after COMMIT using known values.
 
@@ -1609,12 +1640,13 @@ async def save_provider_configuration(
     try:
         await db.execute("BEGIN IMMEDIATE")
         cur = await db.execute(
-            "SELECT created_at_utc, updated_at_utc, selector_admission FROM provider_configurations WHERE provider_id=?",
+            "SELECT created_at_utc, updated_at_utc, selector_admission, catalog_id FROM provider_configurations WHERE provider_id=?",
             (provider_id,),
         )
         existing = await cur.fetchone()
         now = _next_provider_configuration_version(existing["updated_at_utc"] if existing else None)
         admission = existing["selector_admission"] if existing else initial_admission
+        catalog_id = catalog_id if catalog_id is not None else (existing["catalog_id"] if existing else None)
         created_at = (
             str(existing["created_at_utc"] or now)
             if existing is not None
@@ -1623,13 +1655,14 @@ async def save_provider_configuration(
         await db.execute(
             """INSERT INTO provider_configurations(
                    provider_id,base_url,default_model,display_name,
-                   enabled,selector_admission,created_at_utc,updated_at_utc
-               ) VALUES(?,?,?,?,?,?,?,?)
+                   enabled,selector_admission,created_at_utc,updated_at_utc,catalog_id
+               ) VALUES(?,?,?,?,?,?,?,?,?)
                ON CONFLICT(provider_id) DO UPDATE SET
                    base_url=excluded.base_url,
                    default_model=excluded.default_model,
                    display_name=excluded.display_name,
                    enabled=excluded.enabled,
+                   catalog_id=excluded.catalog_id,
                    updated_at_utc=excluded.updated_at_utc""",
             (
                 provider_id,
@@ -1640,11 +1673,13 @@ async def save_provider_configuration(
                 admission,
                 created_at,
                 now,
+                catalog_id,
             ),
         )
         await db.commit()
         return {
             "provider_id": provider_id,
+            "catalog_id": catalog_id,
             "base_url": base_url,
             "default_model": default_model,
             "display_name": name,
@@ -1829,3 +1864,39 @@ async def validate_schema() -> dict[str, object]:
 def reset_initialization_cache() -> None:
     """Test helper for environment-path changes."""
     _initialized_paths.clear()
+
+
+async def provider_visible_models(provider_id: str, models: list[str] | None = None) -> list[str]:
+    db = await get_db("steins_gate", "control")
+    try:
+        if models is not None:
+            await db.execute(
+                "INSERT INTO provider_settings(provider_id,visible_models) VALUES(?,?) "
+                "ON CONFLICT(provider_id) DO UPDATE SET visible_models=excluded.visible_models",
+                (provider_id, json.dumps(models)),
+            )
+            await db.commit()
+        row = await (await db.execute(
+            "SELECT visible_models FROM provider_settings WHERE provider_id=?", (provider_id,),
+        )).fetchone()
+        return json.loads(row[0]) if row else []
+    finally:
+        await db.close()
+
+
+async def restore_provider_configuration(provider_id: str, previous: dict | None) -> None:
+    """Compensate connect with the exact pre-call durable row (including version)."""
+    db = await get_db("steins_gate", "control")
+    try:
+        await db.execute("BEGIN IMMEDIATE")
+        await db.execute("DELETE FROM provider_configurations WHERE provider_id=?", (provider_id,))
+        if previous is not None:
+            columns = ("provider_id", "base_url", "default_model", "display_name", "enabled",
+                       "selector_admission", "created_at_utc", "updated_at_utc", "catalog_id")
+            await db.execute(
+                f"INSERT INTO provider_configurations({','.join(columns)}) VALUES(?,?,?,?,?,?,?,?,?)",
+                tuple(previous[column] for column in columns),
+            )
+        await db.commit()
+    finally:
+        await db.close()
