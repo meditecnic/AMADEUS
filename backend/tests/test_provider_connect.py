@@ -107,10 +107,12 @@ def test_builtin_connect_uses_same_steps(connect, monkeypatch, provider_id):
     assert response.json()["check"]["ok"] is True
 
 
-def test_missing_catalog_uses_address_only(connect):
+def test_missing_catalog_does_not_take_over_a_labelled_profile(connect):
     client, _ = connect
     labeled = submit(client, catalog_id="paid-plan").json()
-    assert submit(client).json()["provider_id"] == labeled["provider_id"]
+    plain = submit(client).json()
+    assert plain["provider_id"] != labeled["provider_id"]
+    assert submit(client).json()["provider_id"] == plain["provider_id"]
 
 
 @pytest.mark.parametrize("reuse", [False, True])
@@ -219,3 +221,51 @@ def test_connect_rejects_blank_display_name_before_saving(connect, monkeypatch, 
     assert client.portal.call(db.list_provider_configurations) == before
     assert not store._values
     discover.assert_not_called()
+
+
+@pytest.mark.parametrize("missing", ["http_404", "unsupported"])
+def test_service_without_a_model_list_still_connects(connect, monkeypatch, missing):
+    client, store = connect
+    if missing == "http_404":
+        monkeypatch.setattr(OpenAICompatibleAdapter, "list_models",
+                            AsyncMock(side_effect=ProviderRequestError("custom", 404)))
+    else:
+        async def unsupported(*args, **kwargs):
+            raise providers.HTTPException(400, detail={"code": "model_discovery_unsupported"})
+        monkeypatch.setattr(providers, "_discover_models", unsupported)
+    first = submit(client, api_key="fake")
+    assert first.status_code == 200, first.text
+    body = first.json()
+    assert body["models"] == [] and body["models_listed"] is False
+    assert body["model_id"] is None and body["check"] == {"ok": False, "code": "model_selection_required"}
+    profile_id = body["provider_id"]
+    assert store.get(profile_id) == "fake"
+    second = submit(client, model_id="typed-by-hand")
+    assert second.status_code == 200, second.text
+    assert second.json()["provider_id"] == profile_id
+    assert second.json()["check"] == {"ok": True, "code": "ok"} and second.json()["models_listed"] is False
+    row = client.portal.call(db.get_provider_configuration, profile_id)
+    assert row["selector_admission"] == "admitted" and row["default_model"] == "typed-by-hand"
+
+
+def test_an_unreachable_address_still_fails_the_listing_step(connect, monkeypatch):
+    import httpx
+    client, store = connect
+    monkeypatch.setattr(OpenAICompatibleAdapter, "list_models", AsyncMock(side_effect=httpx.ConnectError("x")))
+    response = submit(client, api_key="fake")
+    assert response.status_code == 502
+    assert response.json() == {"detail": {"code": "address_unreachable", "step": "list"}}
+
+
+def test_labels_decide_which_profile_a_connect_reuses(connect):
+    client, store = connect
+    plain = submit(client, api_key="plain-key").json()["provider_id"]
+    # A label adopts the unlabelled profile at the address (made before labels existed) ...
+    adopted = submit(client, api_key="plan-key", catalog_id="plan")
+    assert adopted.json()["provider_id"] == plain
+    assert client.portal.call(db.get_provider_configuration, plain)["catalog_id"] == "plan"
+    # ... and no label never takes over a labelled one.
+    other = submit(client, api_key="relay-key")
+    assert other.json()["provider_id"] != plain
+    assert store.get(plain) == "plan-key"
+    assert client.portal.call(db.get_provider_configuration, plain)["catalog_id"] == "plan"

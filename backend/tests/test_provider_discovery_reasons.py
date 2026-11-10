@@ -31,6 +31,9 @@ def test_discovery_reasons(app_client, monkeypatch, error, status, code, operati
             yield
         monkeypatch.setattr(snapshot.adapter, "get_chat_stream", stream)
         response = app_client.post("/api/providers/custom/chat-check", json={"model_id": "local-model"})
+    # Listing: a 404 from the service means it has no model list, not a wrong address.
+    if operation == "models" and getattr(error, "status_code", None) == 404:
+        code = "model_list_not_found"
     assert response.status_code == status
     assert response.json() == {"detail": {"code": code}}
 
@@ -63,6 +66,8 @@ def test_builtin_http_failures_keep_status(app_client, monkeypatch, provider_id,
     else:
         model = providers.provider_registry.snapshot(provider_id, allow_unavailable=True).model_id
         response = app_client.post(f"/api/providers/{provider_id}/chat-check", json={"model_id": model})
+    if operation == "models" and upstream == 404:
+        code = "model_list_not_found"
     assert response.status_code == status, response.text
     assert response.json() == {"detail": {"code": code}}
     assert len(requests) == 1
