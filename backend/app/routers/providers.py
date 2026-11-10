@@ -542,6 +542,26 @@ async def delete_provider_credential(provider_id: str):
     return {"provider_id": provider_id, "configured": False}
 
 
+def _request_failure(exc: Exception) -> HTTPException:
+    """Map upstream failures to fixed, credential-free UI reasons."""
+    status = getattr(exc, "status_code", None)
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+    if status in {401, 403}:
+        status, code = 401, "credential_rejected"
+    elif isinstance(exc, (TimeoutError, httpx.TimeoutException)):
+        status, code = 504, "discovery_timeout"
+    elif status == 404 or isinstance(exc, httpx.ConnectError):
+        status, code = 502, "address_unreachable"
+    elif status == 429:
+        status, code = 429, "rate_limited"
+    elif status == 402:
+        status, code = 402, "insufficient_balance"
+    else:
+        status, code = 502, "provider_unavailable"
+    return HTTPException(status_code=status, detail={"code": code})
+
+
 async def _discover_models(provider_id: str, *, refresh: bool):
     snapshot = _definition(provider_id)
     if (
@@ -580,13 +600,7 @@ async def _discover_models(provider_id: str, *, refresh: bool):
         stale = provider_model_cache.peek(provider_id)
         if stale is not None:
             return stale
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "code": "provider_unavailable",
-                "message": "Provider request failed",
-            },
-        ) from exc
+        raise _request_failure(exc) from exc
 
 
 @router.get("/{provider_id}/models")
@@ -664,14 +678,8 @@ async def check_selected_model_chat(provider_id: str, request: ChatCheckRequest)
                     if str(chunk.get("content") or "").strip():
                         answered = True
                         break
-    except (TimeoutError, httpx.TimeoutException) as exc:
-        raise HTTPException(status_code=504, detail={"code": "chat_check_timeout"}) from exc
-    except ProviderRequestError as exc:
-        if exc.status_code in {401, 403}:
-            raise HTTPException(status_code=401, detail={"code": "credential_rejected"}) from exc
-        raise HTTPException(status_code=502, detail={"code": "provider_unavailable"}) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail={"code": "provider_unavailable"}) from exc
+        raise _request_failure(exc) from exc
 
     if not answered:
         raise HTTPException(status_code=502, detail={"code": "empty_response"})
