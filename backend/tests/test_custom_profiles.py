@@ -593,6 +593,9 @@ def test_pending_profile_requires_model_before_conversation(app_client):
     })
     assert rejected.status_code == 422
     assert rejected.json()["detail"]["code"] == "provider_model_required"
+    assert app_client.post("/api/conversations", json={
+        "session_id": "pending-model", "provider_id": profile["provider_id"], "model_id": "chosen",
+    }).json()["detail"]["code"] == "provider_model_required"
     assert app_client.patch(f"/api/providers/custom-profiles/{profile['provider_id']}",
         json={"default_model": "chosen"}).status_code == 200
     assert app_client.post("/api/conversations", json={
