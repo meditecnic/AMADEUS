@@ -20,6 +20,8 @@ export interface PendingConversationTarget {
 }
 
 export interface UseAmadeusWSParams {
+  /** false keeps the socket closed (a workstation drawn ahead under the login terminal); default true. */
+  enabled?: boolean;
   sessionId?: string;
   conversationId?: string | null;
   pendingConversation?: PendingConversationTarget | null;
@@ -1234,13 +1236,16 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     return true;
   }, []);
 
-  // Connect on mount, disconnect on unmount
+  // Connect on mount (or once enabled), disconnect on unmount. A workstation drawn ahead under the login terminal
+  // stays disconnected until the login unlocks it.
+  const enabled = params.enabled !== false;
   useEffect(() => {
+    if (!enabled) return undefined;
     connect();
     return () => {
       disconnect();
     };
-  }, [connect, disconnect]);
+  }, [enabled, connect, disconnect]);
 
   return {
     status,

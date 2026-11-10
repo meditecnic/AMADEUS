@@ -101,6 +101,21 @@ it('clears the form and sweeps as soon as the workstation behind it says it is d
   expect(container.querySelector('.sl-root')).toHaveClass('exiting');
 });
 
+it('lets the key go at the handover beat when the workstation was drawn ahead under the terminal', async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+  const { container, onLoginSuccess } = await renderLogin({ stagePrepared: true });
+  fireEvent.change(screen.getByLabelText('PASSWORD'), { target: { value: 'x' } });
+  await act(async () => { fireEvent.submit(screen.getByLabelText('PASSWORD').closest('form')!); });
+  // The tick is drawn and the form folds into the key first...
+  await act(async () => { await vi.advanceTimersByTimeAsync(370); });
+  expect(container.querySelector('.sl-root')).not.toHaveClass('exiting');
+  // ...then unlocking the workstation and the key going are one beat: no wait for its word.
+  await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+  expect(onLoginSuccess).toHaveBeenCalledTimes(1);
+  expect(container.querySelector('.sl-root')).toHaveClass('exiting');
+});
+
 it('does not take a "drawn" left over from the last visit for this one (U 11-10: re-entry played twice)', async () => {
   vi.useFakeTimers();
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));

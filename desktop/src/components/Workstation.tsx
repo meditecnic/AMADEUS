@@ -81,11 +81,12 @@ import {
 
 /**
  * Post-login entrance, driven by the login terminal's timeline:
- * hold (mounted, still, under the drafting sheet) → draft (the pen sweeps the sheet away and the
+ * locked (mounted under the login terminal while the password is typed: drawn, but inert, and nothing is read,
+ * connected or played until it is unlocked) → hold (unlocked, still, under the drafting sheet) → draft (the pen sweeps the sheet away and the
  * instruments are drawn in behind it) → docked (the title wordmark has landed in the header) → done.
  * 'none' skips it (reduced motion, tests, direct mounts).
  */
-export type EntrancePhase = 'none' | 'hold' | 'draft' | 'docked' | 'done';
+export type EntrancePhase = 'none' | 'locked' | 'hold' | 'draft' | 'docked' | 'done';
 
 // Keep in sync with backend chat_ws.MAX_USER_MESSAGE_LENGTH.
 const MAX_USER_MESSAGE_LENGTH = 8000;
@@ -98,6 +99,8 @@ interface WorkstationProps {
   onEntranceSettled?: () => void;
   /** Mounted under the terminal ('hold') and its first frames are on screen: the terminal may start its sweep. */
   onStageReady?: () => void;
+  /** Mounted ahead under the terminal ('locked') and drawn: a login now only has to unlock it. */
+  onPrepared?: () => void;
   /** The original's line was typed at the login: the meter rolls its digits like dice before it settles. */
   easterEgg?: boolean;
 }
@@ -135,10 +138,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
   entrance = 'none',
   onEntranceSettled,
   onStageReady,
+  onPrepared,
   easterEgg = false,
 }) => {
   const reducedMotion = useReducedMotion();
-  const entering = entrance === 'hold' || entrance === 'draft' || entrance === 'docked';
+  // Locked: drawn ahead under the login terminal (U 11-10: the first entrance still stalled while its pictures, layers
+  // and the GPU's shaders were made after the password was accepted). Until it is unlocked it reads nothing, opens
+  // no connection, plays nothing and takes no focus; every effect below that does is held back by `locked`.
+  const locked = entrance === 'locked';
+  const entering = locked || entrance === 'hold' || entrance === 'draft' || entrance === 'docked';
   // Gott würfelt nicht: the meter comes in on a thrown reading and, once the sheet is drawn, tunes slowly to the line
   // it is on, with the line pencilled under it for a while.
   const [dice, setDice] = useState<string | null>(() => (easterEgg ? `${Math.floor(Math.random() * 2)}.${String(Math.floor(Math.random() * 1e6)).padStart(6, '0')}` : null));
@@ -357,7 +365,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   // The quiet update check, once per run; a waiting version is marked on the 系统 key and under 关于.
   const updates = useUpdates();
   const updateMark = updateWaiting(updates);
-  useEffect(() => { checkAfterLogin(); }, []);
+  useEffect(() => { if (!locked) checkAfterLogin(); }, [locked]);
   const [shiftConfirm, setShiftConfirm] = useState<'steins_gate' | 'beta' | null>(null);
   // The plug at the end of the header is reached for out of curiosity too: it asks before it lets go.
   const [unplugAsk, setUnplugAsk] = useState(false);
@@ -410,15 +418,27 @@ export const Workstation: React.FC<WorkstationProps> = ({
   // flowing again once three in a row come at the display's pace, and only then may the pen sweep.
   const stageReadyRef = useRef(onStageReady);
   stageReadyRef.current = onStageReady;
+  const preparedRef = useRef(onPrepared);
+  preparedRef.current = onPrepared;
+  /** Drawn ahead under the login while locked: unlocking it changes nothing on screen, so the pen need not wait. */
+  const drawnAheadRef = useRef(false);
   useEffect(() => {
-    if (entrance !== 'hold') return undefined;
+    if (entrance !== 'hold' && entrance !== 'locked') return undefined;
     let raf = 0;
+    if (entrance === 'hold' && drawnAheadRef.current) {
+      // One frame for the unlock itself to reach the screen.
+      raf = requestAnimationFrame(() => stageReadyRef.current?.());
+      return () => cancelAnimationFrame(raf);
+    }
     let last = 0;
     let steady = 0;
     const frame = (t: number) => {
       steady = last && t - last < 24 ? steady + 1 : 0;
       last = t;
-      if (steady >= 3) { stageReadyRef.current?.(); return; }
+      if (steady >= 3) {
+        if (entrance === 'locked') { drawnAheadRef.current = true; preparedRef.current?.(); } else stageReadyRef.current?.();
+        return;
+      }
       raf = requestAnimationFrame(frame);
     };
     raf = requestAnimationFrame(frame);
@@ -542,21 +562,24 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   // Sync AudioService with state
   useEffect(() => {
+    if (locked) return;
     audioService.setEnableBGM(enableBgm);
     audioService.setBGMVolume(bgmVolume);
     audioService.setEnableSFX(enableSfx);
     audioService.setSFXVolume(sfxVolume);
-  }, [enableBgm, bgmVolume, enableSfx, sfxVolume]);
+  }, [locked, enableBgm, bgmVolume, enableSfx, sfxVolume]);
 
   // Start the worldline playlist on mount, switch it when the line changes,
   // and resume it when BGM is enabled again in the settings panel.
   useEffect(() => {
+    // The login's own theme plays while this waits under it.
+    if (locked) return undefined;
     if (enableBgm) audioService.playBGMForWorldline(worldline, bgmVolume);
     else audioService.stopBGM();
     return () => {
       audioService.stopBGM();
     };
-  }, [worldline, enableBgm]);
+  }, [locked, worldline, enableBgm]);
 
   // Auto-clear audio / session surface errors after 5s (independent channels).
   useEffect(() => {
@@ -765,6 +788,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     switchConversation,
     switchWorldline,
   } = useAmadeusWS({
+    enabled: !locked,
     sessionId,
     conversationId: activeConversationId,
     pendingConversation,
@@ -938,7 +962,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   // Check the service when read-aloud is enabled without changing the user's saved choice.
   useEffect(() => {
-    if (!enableTts) return;
+    if (!enableTts || locked) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -952,9 +976,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
       }
     })();
     return () => { cancelled = true; };
-  }, [enableTts]);
+  }, [enableTts, locked]);
 
   useEffect(() => {
+    if (locked) return;
     if (pendingConversationRef.current?.worldline !== worldline
       && pendingConversationRef.current !== null) abandonConversationEntry(false);
     setActiveConversationId(null);
@@ -962,7 +987,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     void loadConversations().catch((error) => {
       console.warn('Conversation synchronization failed:', error);
     });
-  }, [loadConversations]);
+  }, [locked, loadConversations]);
 
   // Compatibility only: production SettingsModal is embedded and cannot change the parent worldline directly.
   useEffect(() => {
@@ -988,6 +1013,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   }, [onWorldlineChange, switchWorldline, worldline]);
 
   useEffect(() => {
+    if (locked) return undefined;
     let cancelled = false;
     const synchronizeCredential = async () => {
       setCredentialStatus('checking');
@@ -1020,7 +1046,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     };
     void synchronizeCredential();
     return () => { cancelled = true; };
-  }, [loadProviders, reconnect]);
+  }, [locked, loadProviders, reconnect]);
 
   const applyWebSearchSettings = useCallback((settings: WebSearchSettingsSnapshot) => {
     const legacyProvider = (settings as WebSearchSettingsSnapshot & { provider?: WebSearchProviderId }).provider;
@@ -1040,6 +1066,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   }, []);
 
   useEffect(() => {
+    if (locked) return undefined;
     let cancelled = false;
     const loadWebSearchSettings = async () => {
       setWebSearchCredentialStatus('checking');
@@ -1055,7 +1082,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     };
     void loadWebSearchSettings();
     return () => { cancelled = true; };
-  }, [applyWebSearchSettings]);
+  }, [locked, applyWebSearchSettings]);
 
   const activeConversation = conversations.find((row) => row.id === activeConversationId);
   const conversationNos = useMemo(() => conversationNumbers(conversations), [conversations]);
@@ -1206,8 +1233,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
   }, [activeConversation?.model_id, model, providers]);
 
   useEffect(() => {
-    void loadProviderModels(activeProviderId);
-  }, [activeProviderId, loadProviderModels]);
+    if (!locked) void loadProviderModels(activeProviderId);
+  }, [locked, activeProviderId, loadProviderModels]);
 
   const { isPlaying } = useAudioPlayer();
   // stopAll() drops queued chunks without their onEnded; after a quiet moment the speaking queue is stale.
@@ -1244,7 +1271,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
       const missing = /缺失\s*(\S+)\s*API\s*Key/i.exec(message.content);
       return !missing || missing[1] === activeProviderId;
     });
-  const sessionConnecting = status === 'CONNECTING' || (status === 'READY' && sessionState === 'unknown');
+  // Drawn ahead under the login it shows what it will show the moment it is unlocked: connecting.
+  const sessionConnecting = locked || status === 'CONNECTING' || (status === 'READY' && sessionState === 'unknown');
   // Between automatic attempts the socket is closed but the app is still trying; once they run out only the user can.
   const reconnecting = Boolean(retry && !retry.exhausted);
   const linkLost = Boolean(retry?.exhausted && status !== 'READY');
@@ -2093,9 +2121,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
       data-link={linkState}
       // Held under the terminal the room is drawn as it will finally look (data-hold), so every picture, filter and
       // shader it needs is ready before the sweep; the entrance's own animations start with the sweep (data-entrance).
-      data-entrance={entering && entrance !== 'hold' ? entrance : undefined}
-      data-hold={entrance === 'hold' || undefined}
+      data-entrance={entering && entrance !== 'hold' && !locked ? entrance : undefined}
+      data-hold={entrance === 'hold' || locked || undefined}
       inert={entering || undefined}
+      aria-hidden={locked || undefined}
       onMouseDown={handleAudioInit}
       // A shipped desktop app has no use for the browser's page menu (Back, Reload, Inspect); text fields and the
       // transcript bring their own menus, and development builds keep the native one for DevTools.
@@ -2428,7 +2457,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
             </span>
           </div>
         )}
-        <RestoreNotice onOpen={() => openMenu('data')} />
+        {/* it reads the data status: not before the login has unlocked this */}
+        {!locked && <RestoreNotice onOpen={() => openMenu('data')} />}
         {/* The composer under the log, in its text column: what she is running on over the slot, the slot, and the
             sheet's own send key in your margin (SG a clock hand, β a Nixie filament; workstation/SendKey.tsx). */}
         <form className="ws2-composer" onSubmit={handleSend}>

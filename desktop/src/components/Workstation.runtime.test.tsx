@@ -185,6 +185,30 @@ describe('Workstation provider runtime changes', () => {
     }));
   });
 
+  it('drawn ahead under the login (locked) reads, connects and plays nothing until it is unlocked', async () => {
+    const props = { worldline: 'steins_gate' as const, onWorldlineChange: vi.fn(), onLogout: vi.fn() };
+    vi.mocked(audioService.playBGMForWorldline).mockClear();
+    const fetchMock = vi.mocked(globalThis.fetch);
+    const { container, rerender } = render(<Workstation {...props} entrance="locked" />);
+    await act(async () => { await Promise.resolve(); });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(wsSpies.useAmadeusWS).toHaveBeenLastCalledWith(expect.objectContaining({ enabled: false }));
+    expect(audioService.playBGMForWorldline).not.toHaveBeenCalled();
+    const root = container.querySelector('.ws2')!;
+    expect(root).toHaveAttribute('inert');
+    expect(root).toHaveAttribute('aria-hidden', 'true');
+    expect(root).toHaveAttribute('data-hold');
+    expect(root).not.toHaveAttribute('data-entrance');
+
+    // Unlocked by the login: the same instance, now live.
+    rerender(<Workstation {...props} entrance="hold" />);
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/conversations?'))).toBe(true));
+    expect(wsSpies.useAmadeusWS).toHaveBeenLastCalledWith(expect.objectContaining({ enabled: true }));
+    expect(audioService.playBGMForWorldline).toHaveBeenCalledWith('steins_gate', expect.any(Number));
+    expect(container.querySelector('.ws2')).not.toHaveAttribute('aria-hidden');
+  });
+
   it('shows a conversation list failure and recovers through retry', async () => {
     wsSpies.realHistory = true;
     const initialFetch = globalThis.fetch;
