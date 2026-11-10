@@ -95,6 +95,9 @@ function App() {
   const handleLogout = () => {
     setLoginOverlay(false);
     setEntrance('none');
+    // The last visit's "drawn" must not reach the next login: it would sweep before this visit's workstation exists,
+    // and the workstation would then play its entrance a second time over itself (U 11-10).
+    setStageReady(false);
     setStep('login');
   };
 

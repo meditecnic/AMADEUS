@@ -31,6 +31,8 @@ interface SalieriLoginProps {
 const STAGE_WAIT = 1400;
 /** The key's tick is drawn before the workstation starts mounting behind the terminal, so nothing heavy lands on it. */
 const OK_BEAT = 380;
+/** After the handover, the key starts to go this long before the pen sweeps. */
+const KEY_GO = 120;
 
 /** Entrance timeline (ms after the server says yes). */
 const T = { sweep: 330, sweepDur: 920, fly: 420, flyDur: 840, fade: 150 };
@@ -98,10 +100,13 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
   /** The server said yes; the terminal holds still, still "connecting", until the workstation behind it is drawn. */
   const [admitted, setAdmitted] = useState(false);
   const [stageWaitOver, setStageWaitOver] = useState(false);
+  /** The workstation has been mounted for this login (onLoginSuccess called). */
+  const [handedOff, setHandedOff] = useState(false);
   const plateRef = useRef<BlueprintHandle>(null);
   const userRowRef = useRef<HTMLDivElement>(null);
   const pwdRowRef = useRef<HTMLDivElement>(null);
   const pwdRef = useRef<HTMLInputElement>(null);
+  const goRef = useRef<HTMLButtonElement>(null);
   const userRef = useRef<HTMLInputElement>(null);
   const refocusRef = useRef<'user' | 'password' | null>(null);
   const errTimeoutRef = useRef<number | null>(null);
@@ -231,22 +236,22 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
   useEffect(() => warmWorkstationFonts(), []);
   useEffect(() => prewarmWorkstation(worldline), [worldline]);
 
-  // Once the password is accepted the terminal stays as it is (still connecting) while the workstation mounts behind
-  // it and draws its first frames: its first layout, paint, picture decoding and the GPU's first use of its effects
-  // all land on a still screen (U 11-09: the first entrance after the app starts stuttered). Then the form clears and
-  // the pen sweeps, on the timeline it always had. STAGE_WAIT caps the wait.
+  // Once the password is accepted the form folds into the key and the key's dial turns (handover) while the workstation
+  // mounts behind it and draws its first frames: its first layout, paint and picture decoding land there, under
+  // motion that only the compositor runs (U 11-09: the first entrance after the app starts stuttered; U 11-10: a still
+  // wait after the tick felt stuck). Then the key goes and the pen sweeps at once. STAGE_WAIT caps the wait.
   useEffect(() => {
     if (!admitted || reduced) return undefined;
     const id = window.setTimeout(() => setStageWaitOver(true), STAGE_WAIT);
     return () => window.clearTimeout(id);
   }, [admitted, reduced]);
+  // Only this visit's workstation can say it is drawn: the word is heard once it has been handed the login.
   useEffect(() => {
-    if (!admitted || exiting || reduced || !(stageReady || stageWaitOver)) return;
+    if (!handedOff || exiting || reduced || !(stageReady || stageWaitOver)) return;
     setExiting(true);
-    exitAtRef.current = performance.now();
     runEntrance();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [admitted, exiting, reduced, stageReady, stageWaitOver]);
+  }, [handedOff, exiting, reduced, stageReady, stageWaitOver]);
 
   // 卸载组件时清理定时器，防内存泄漏
   useEffect(() => {
@@ -337,9 +342,10 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
     const backdrop = backdropRef.current;
     const inner = backdropInRef.current;
     const canAnimate = typeof pen?.animate === 'function' && typeof backdrop?.animate === 'function' && typeof inner?.animate === 'function';
-    // Beats keep their spacing; any time spent waiting for the stage comes off the pause before the sweep.
+    // Beats keep their spacing; the form folded away during the handover, so that time comes off the pause before the
+    // sweep, which then waits only for the key to start going.
     const lag = exitAtRef.current ? performance.now() - exitAtRef.current : 0;
-    const sweepAt = Math.max(0, T.sweep - lag);
+    const sweepAt = Math.max(KEY_GO, T.sweep - lag);
     later(() => {
       plateRef.current?.tick(4);
       if (!canAnimate) { cue('draft'); cue('docked'); cue('gone'); return; }
@@ -446,13 +452,20 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
         succeededRef.current = true;
         (document.activeElement as HTMLElement | null)?.blur?.();
         setIntro(false);
+        // The dial glides onto the centre line under the wordmark for the handover.
+        const go = goRef.current?.getBoundingClientRect();
+        const word = wordWrapRef.current?.getBoundingClientRect();
+        if (go && word && go.width) {
+          rootRef.current?.style.setProperty('--go-x', `${Math.round(word.left + word.width / 2 - (go.left + go.width / 2))}px`);
+        }
         setAdmitted(true);
+        exitAtRef.current = performance.now();
         const easterEgg = result?.easter_egg === true;
         if (reduced) {
           setExiting(true);
           onLoginSuccess({ easterEgg });
         } else {
-          later(() => onLoginSuccess({ easterEgg }), OK_BEAT);
+          later(() => { setHandedOff(true); onLoginSuccess({ easterEgg }); }, OK_BEAT);
         }
       } else if (response.status === 401 || response.status === 403) {
         showAuthError('密码错误', 'password');
@@ -470,10 +483,12 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
     }
   };
 
-  // Accepted: the loader stops and the key shows its tick at once; the terminal then holds still until the sweep.
+  // Accepted: the loader stops and the key shows its tick at once; the form folds into the key, whose dial turns
+  // until the workstation behind it is drawn (handover), and then the pen sweeps.
   const busy = isAuthenticating && !admitted;
   const rootClass = [
     'sl-root',
+    admitted && !reduced && 'handover',
     exiting && 'exiting',
     sweeping && 'sweeping',
     reduced && 'reduced',
@@ -597,6 +612,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
               <Ruler n={[...password].length} />
             </div>
             <button
+              ref={goRef}
               type="submit"
               className={`decrypt-btn sl-go${busy ? ' is-busy' : ''}${admitted ? ' is-ok' : ''}`}
               disabled={isAuthenticating || backendStatus !== 'ready'}
@@ -608,6 +624,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
           </div>
 
           <div className="sl-msg-line">
+            {admitted && <p className="sl-sr" role="status">已连接，正在打开工作台</p>}
             {backendStatus !== 'ready' && (
               <p className="sl-msg backend-status-banner" role="status">
                 <i aria-hidden="true" />{backendStatus === 'starting' ? '正在启动本地服务…' : '本地服务没有启动，请重新打开 Amadeus'}

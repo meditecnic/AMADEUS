@@ -62,19 +62,32 @@ export function Ruler({ n, max = 48, className = 'sl-ruler' }: { n: number; max?
   );
 }
 
-/** The round key: a dial of ticks, a ring, an arrow; a check is drawn in when it succeeds. */
+/**
+ * The round key: a dial of ticks, a ring, an arrow; a check is drawn in when it succeeds. The dial of ticks is a
+ * drawing of its own in a box of its own (.bezel), so it can be turned as a whole by the compositor while the page
+ * behind the key is busy (the login turns it while the workstation is being opened).
+ */
 export function KeyGlyph() {
   return (
-    <svg viewBox="0 0 64 64" aria-hidden="true">
-      <circle cx="32" cy="32" r="30.5" className="halo" />
-      <g className="ticks">
-        {Array.from({ length: 24 }, (_, i) => <path key={i} d={`M32 4.2v${i % 6 === 0 ? 4.2 : 2.4}`} transform={`rotate(${i * 15} 32 32)`} />)}
-      </g>
-      <circle cx="32" cy="32" r="23" className="ring" pathLength={1} />
-      <circle cx="32" cy="32" r="23" className="disc" />
-      <path d="M23.5 32h16M34 26.5l5.5 5.5-5.5 5.5" className="arrow" />
-      <path d="M24 32.5l5.5 5.5 11-12" className="check" pathLength={1} />
-    </svg>
+    <>
+      <span className="bezel" aria-hidden="true">
+        <svg viewBox="0 0 64 64" aria-hidden="true">
+          {/* two trailing arcs on the halo, brightest at the head, as the compass arm on the login sheet drags */}
+          <circle cx="32" cy="32" r="30.5" className="trail t1" pathLength={1} />
+          <circle cx="32" cy="32" r="30.5" className="trail t2" pathLength={1} />
+          <g className="ticks">
+            {Array.from({ length: 24 }, (_, i) => <path key={i} d={`M32 4.2v${i % 6 === 0 ? 4.2 : 2.4}`} transform={`rotate(${i * 15} 32 32)`} />)}
+          </g>
+        </svg>
+      </span>
+      <svg viewBox="0 0 64 64" aria-hidden="true">
+        <circle cx="32" cy="32" r="30.5" className="halo" />
+        <circle cx="32" cy="32" r="23" className="ring" pathLength={1} />
+        <circle cx="32" cy="32" r="23" className="disc" />
+        <path d="M23.5 32h16M34 26.5l5.5 5.5-5.5 5.5" className="arrow" />
+        <path d="M24 32.5l5.5 5.5 11-12" className="check" pathLength={1} />
+      </svg>
+    </>
   );
 }
 

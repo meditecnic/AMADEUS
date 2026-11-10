@@ -73,12 +73,15 @@ it('sends a Unicode password unchanged and hands over to the entrance on success
     method: 'POST',
     body: JSON.stringify({ passcode: 'Gott würfelt nicht · 世界線 🜂' }),
   }));
-  // Accepted: the key shows its tick first; the workstation is mounted behind the terminal just after it.
+  // Accepted: the key shows its tick and the form folds into it (handover); the workstation is mounted behind the
+  // terminal just after the tick is drawn.
   expect(screen.getByRole('button', { name: 'Decrypt and Connect' })).toHaveClass('is-ok');
+  expect(container.querySelector('.sl-root')).toHaveClass('handover');
+  expect(screen.getByRole('status')).toHaveTextContent('已连接，正在打开工作台');
   expect(onLoginSuccess).not.toHaveBeenCalled();
   await act(async () => { await vi.advanceTimersByTimeAsync(380); });
   expect(onLoginSuccess).toHaveBeenCalledTimes(1);
-  // The terminal holds still while the workstation draws its first frames; with no word from it, it goes after 1.4 s.
+  // The dial turns while the workstation draws its first frames; with no word from it, the pen goes after 1.4 s.
   expect(container.querySelector('.sl-root')).not.toHaveClass('exiting');
   await act(async () => { await vi.advanceTimersByTimeAsync(1400); });
   expect(container.querySelector('.sl-root')).toHaveClass('exiting');
@@ -96,6 +99,20 @@ it('clears the form and sweeps as soon as the workstation behind it says it is d
   const { SalieriLogin } = await import('./SalieriLogin');
   rerender(<SalieriLogin onLoginSuccess={onLoginSuccess} stageReady />);
   expect(container.querySelector('.sl-root')).toHaveClass('exiting');
+});
+
+it('does not take a "drawn" left over from the last visit for this one (U 11-10: re-entry played twice)', async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+  const { container, onLoginSuccess } = await renderLogin({ stageReady: true });
+  fireEvent.change(screen.getByLabelText('PASSWORD'), { target: { value: 'x' } });
+  await act(async () => { fireEvent.submit(screen.getByLabelText('PASSWORD').closest('form')!); });
+  // Before this visit's workstation exists, nothing behind the terminal can have been drawn: no sweep yet.
+  await act(async () => { await vi.advanceTimersByTimeAsync(370); });
+  expect(onLoginSuccess).not.toHaveBeenCalled();
+  expect(container.querySelector('.sl-root')).not.toHaveClass('exiting');
+  await act(async () => { await vi.advanceTimersByTimeAsync(10); });
+  expect(onLoginSuccess).toHaveBeenCalledTimes(1);
 });
 
 it('rejects a wrong password with an alert, keeps the user on the terminal and clears after 3s', async () => {

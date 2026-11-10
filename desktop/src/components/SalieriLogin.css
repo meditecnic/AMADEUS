@@ -339,6 +339,10 @@
   transition: transform .2s var(--ease-out), opacity .2s ease;
 }
 .sl-go svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.sl-go .bezel { position: absolute; inset: 0; pointer-events: none; }
+.sl-go .trail { fill: none; stroke-width: 1.4; opacity: 0; transition: opacity .3s ease; }
+.sl-go .trail.t1 { stroke: rgba(241, 240, 235, .3); stroke-dasharray: .16 .84; }
+.sl-go .trail.t2 { stroke: rgba(241, 240, 235, .7); stroke-dasharray: .05 .95; stroke-dashoffset: -.11; }
 .sl-go .halo { fill: none; stroke: var(--line); stroke-width: 1; }
 .sl-go .ticks { stroke: var(--ink-3); stroke-width: 1; transform-origin: 32px 32px; transition: transform .5s cubic-bezier(.3, 1.6, .45, 1), stroke .2s ease; }
 .sl-go .ring { fill: none; stroke: var(--ink-2); stroke-width: 1.2; transition: stroke .2s ease; }
@@ -390,11 +394,31 @@
 @keyframes sl-ticks-in { from { transform: rotate(-90deg); opacity: 0; } }
 
 /* ---------- entrance ---------- */
-/* The form folds away into the dial before the pen comes through. */
-.sl-root.exiting:not(.reduced) .sl-label { animation: sl-out-left .26s ease-in forwards; }
-.sl-root.exiting:not(.reduced) .sl-slot { animation: sl-retract .36s cubic-bezier(.6, 0, .4, 1) .04s forwards; }
-.sl-root.exiting:not(.reduced) :is(.sl-msg-line, .sl-dim) { animation: sl-out .2s ease forwards; }
+/* Accepted (handover): the form folds away into the dial at once, and the dial's bezel spins up and keeps turning
+   while the workstation is opened behind the sheet. It is a box of its own turned by the compositor, so it keeps
+   moving through the page's busiest frames. Then the dial goes and the pen comes through. */
+.sl-root:is(.handover, .exiting):not(.reduced) .sl-label { animation: sl-out-left .26s ease-in forwards; }
+.sl-root:is(.handover, .exiting):not(.reduced) .sl-slot { animation: sl-retract .36s cubic-bezier(.6, 0, .4, 1) .04s forwards; }
+.sl-root:is(.handover, .exiting):not(.reduced) .sl-msg-line { animation: sl-out .2s ease forwards; }
+.sl-root.exiting:not(.reduced) .sl-dim { animation: sl-out .2s ease forwards; }
 .sl-root.exiting:not(.reduced) .sl-go { animation: sl-go-out .3s ease-in .3s forwards; }
+/* The dial glides onto the sheet's centre line under the wordmark (--go-x is measured when the password is accepted)
+   and turns there; it is done gliding before the workstation can be ready, and leaves from where it stands. */
+.sl-root.handover:not(.reduced) .sl-go { animation: sl-go-slide .42s cubic-bezier(.6, 0, .2, 1) .1s both; }
+.sl-root.handover.exiting:not(.reduced) .sl-go { animation: sl-go-leave .28s ease-in forwards; }
+@keyframes sl-go-slide { from { transform: none; } to { transform: translateX(var(--go-x, 0px)); } }
+@keyframes sl-go-leave { from { transform: translateX(var(--go-x, 0px)); } to { opacity: 0; transform: translateX(var(--go-x, 0px)) scale(.7); } }
+.sl-root.handover:not(.reduced) .sl-go .trail { opacity: 1; transition-delay: .36s; }
+/* One animation only: a second transform animation on the same box keeps the compositor from running either. The
+   spin-up (60° in .6 s, leaving at 200°/s) and the steady turn (a turn in 1.8 s) are one long run; STAGE_WAIT ends
+   the handover long before it does. */
+.sl-root.handover:not(.reduced) .sl-go .bezel { will-change: transform; animation: sl-bezel 30s linear .36s both; }
+@keyframes sl-bezel {
+  0% { transform: rotate(0deg); animation-timing-function: cubic-bezier(.5, 0, .75, .5); }
+  2% { transform: rotate(60deg); animation-timing-function: linear; }
+  100% { transform: rotate(5940deg); }
+}
+.sl-sr { position: absolute; width: 1px; height: 1px; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 @keyframes sl-out-left { to { opacity: 0; transform: translateX(-14px); } }
 @keyframes sl-retract { to { opacity: 0; transform: translateX(22px); } }
 @keyframes sl-out { to { opacity: 0; } }
