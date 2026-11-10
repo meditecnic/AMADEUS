@@ -14,6 +14,10 @@ logger = logging.getLogger(__name__)
 _context = ContextVar("model_usage_context", default=(None, None, "background", "unspecified"))
 
 
+def current_conversation_id() -> str | None:
+    return _context.get()[1]
+
+
 def set_chat_context(worldline: str, conversation_id: str | None) -> None:
     # Called inside the dedicated turn task after its conversation is fixed.
     # Child translation/render tasks inherit this immutable snapshot.

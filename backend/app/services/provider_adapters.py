@@ -73,7 +73,7 @@ class OpenAICompatibleAdapter(LLMInterface):
     def _headers(self, api_key: str | None) -> dict[str, str]:
         if self.credential_required and not api_key:
             raise ValueError("provider credential is not configured")
-        headers = {**model_headers(), "Content-Type": "application/json"}
+        headers = {**model_headers(self.base_url), "Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
