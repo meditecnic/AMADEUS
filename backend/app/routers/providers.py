@@ -59,6 +59,7 @@ class CustomProviderConfiguration(BaseModel):
 
 
 class CustomProfileCreate(BaseModel):
+    catalog_id: str | None = None
     display_name: str = Field(min_length=1, max_length=80)
     base_url: str
     default_model: str = ""
@@ -121,6 +122,7 @@ def _provider_row(definition) -> dict[str, Any]:
         "enabled": True,
         "selector_admission": "admitted",
         "configuration_version": None,
+        "catalog_id": None,
     }
 
 
@@ -154,6 +156,7 @@ async def _activate_custom_profile(
         display_name=settings["display_name"],
         enabled=False,
         initial_admission=initial_admission,
+        catalog_id=settings.get("catalog_id"),
     )
     try:
         configure_custom_provider(
@@ -227,6 +230,7 @@ async def list_providers():
             by_id[provider_id].update({
                 "selector_admission": config["selector_admission"],
                 "configuration_version": config["configuration_version"],
+                "catalog_id": config.get("catalog_id"),
             })
             continue
         if bool(config.get("enabled")):
@@ -259,6 +263,7 @@ async def list_providers():
                 "enabled": False,
                 "selector_admission": config["selector_admission"],
                 "configuration_version": config["configuration_version"],
+                "catalog_id": config.get("catalog_id"),
             }
         )
     for row in rows:
@@ -280,6 +285,7 @@ async def update_provider_settings(provider_id: str, body: ProviderSettings):
 def _custom_profile_response(saved: dict[str, object]) -> dict[str, object]:
     return {
         "provider_id": saved["provider_id"],
+        "catalog_id": saved.get("catalog_id"),
         "display_name": saved["display_name"],
         "base_url": saved["base_url"],
         "default_model": saved["default_model"],
@@ -307,6 +313,7 @@ async def create_custom_profile(body: CustomProfileCreate):
             detail={"code": "invalid_provider_configuration", "message": str(exc)},
         ) from exc
     try:
+        settings["catalog_id"] = body.catalog_id
         saved = await _activate_custom_profile(settings, initial_admission="pending")
     except Exception as exc:
         # Type only: provider/DB error text can contain request data or paths.

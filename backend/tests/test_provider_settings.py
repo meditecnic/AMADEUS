@@ -26,3 +26,16 @@ def test_builtin_and_custom_settings_survive_restart(app_client):
     for provider in ["deepseek", "custom"]:
         assert next(row for row in rows if row["id"] == provider)["visible_models"] == ["a", "b"]
     assert app_client.patch("/api/providers/missing/settings", json={"visible_models": []}).status_code == 404
+
+
+def test_catalog_label_is_persisted_without_validation(app_client):
+    response = app_client.post("/api/providers/custom-profiles", json={
+        "display_name": "Catalog", "base_url": "https://example.invalid/v1", "catalog_id": "arbitrary-plan",
+    })
+    assert response.status_code == 200
+    profile = response.json()
+    assert profile["catalog_id"] == "arbitrary-plan"
+    rows = app_client.get("/api/providers").json()
+    assert next(row for row in rows if row["id"] == profile["provider_id"])["catalog_id"] == "arbitrary-plan"
+    app_client.patch(f"/api/providers/custom-profiles/{profile['provider_id']}", json={"default_model": "a"})
+    assert app_client.portal.call(db.get_provider_configuration, profile["provider_id"])["catalog_id"] == "arbitrary-plan"
