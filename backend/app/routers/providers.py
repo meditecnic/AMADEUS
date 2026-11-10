@@ -304,7 +304,7 @@ class ProviderConnect(BaseModel):
     provider_id: str | None = None
     api_key: SecretStr | None = None
     model_id: str | None = Field(default=None, min_length=1, max_length=200)
-    display_name: str | None = Field(default=None, min_length=1, max_length=80)
+    display_name: str | None = Field(default=None, max_length=80)
     catalog_id: str | None = None
 
 
@@ -318,6 +318,8 @@ async def connect_provider(body: ProviderConnect):
 
 
 async def _connect_provider(body: ProviderConnect):
+    if body.display_name is not None and not body.display_name.strip():
+        raise HTTPException(422, detail={"code": "invalid_provider_configuration", "step": "save"})
     if bool(body.base_url) == bool(body.provider_id) or (
         body.provider_id and body.provider_id not in {"deepseek", "glm", "openai", "gemini"}
     ):

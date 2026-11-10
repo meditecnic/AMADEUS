@@ -203,3 +203,19 @@ def test_rejected_reconnect_restores_key_and_keeps_conversation_callable(connect
     }).status_code == 201
     assert client.post(f"/api/providers/{profile_id}/chat-check", json={"model_id": model}).status_code == 200
     assert chat_keys == ["original"]
+
+
+@pytest.mark.parametrize("name", ["", "   ", "\t\n"])
+@pytest.mark.parametrize("target", ["deepseek", "custom"])
+def test_connect_rejects_blank_display_name_before_saving(connect, monkeypatch, name, target):
+    client, store = connect
+    before = client.portal.call(db.list_provider_configurations)
+    discover = AsyncMock(side_effect=AssertionError("blank name must not reach discovery"))
+    monkeypatch.setattr(providers, "_discover_models", discover)
+    address = {"provider_id": target} if target == "deepseek" else {"base_url": "https://connect.invalid/v1"}
+    response = client.post("/api/providers/connect", json={**address, "display_name": name, "api_key": "fake"})
+    assert response.status_code == 422
+    assert response.json() == {"detail": {"code": "invalid_provider_configuration", "step": "save"}}
+    assert client.portal.call(db.list_provider_configurations) == before
+    assert not store._values
+    discover.assert_not_called()
