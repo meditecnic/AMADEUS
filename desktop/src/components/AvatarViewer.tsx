@@ -119,6 +119,7 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
     // Lips read the same envelope as the voice scope; a frame holds ≥70 ms so syllables read as shapes, not flicker.
     let mouth: 1 | 2 | 3 = 1;
     let changedAt = 0;
+    let lastShown = -1;
     const apply = (now: number) => {
       const speaking = isSpeakingRef.current;
       const blinking = isBlinkingRef.current;
@@ -130,10 +131,15 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
       const o2 = (!showBlink && mouthLevel === 2) ? 1 : 0;
       const o3 = (!showBlink && mouthLevel === 3) ? 1 : 0;
       const oBlink = showBlink ? 1 : 0;
-      if (img1Ref.current) img1Ref.current.style.opacity = String(o1);
-      if (img2Ref.current) img2Ref.current.style.opacity = String(o2);
-      if (img3Ref.current) img3Ref.current.style.opacity = String(o3);
-      if (imgBlinkRef.current) imgBlinkRef.current.style.opacity = String(oBlink);
+      // Written only when a frame changes: an unchanged write still costs the page a style pass every frame.
+      const shown = o1 * 1 + o2 * 2 + o3 * 3 + oBlink * 4;
+      if (shown !== lastShown) {
+        lastShown = shown;
+        if (img1Ref.current) img1Ref.current.style.opacity = String(o1);
+        if (img2Ref.current) img2Ref.current.style.opacity = String(o2);
+        if (img3Ref.current) img3Ref.current.style.opacity = String(o3);
+        if (imgBlinkRef.current) imgBlinkRef.current.style.opacity = String(oBlink);
+      }
       rafId = requestAnimationFrame(apply);
     };
     rafId = requestAnimationFrame(apply);

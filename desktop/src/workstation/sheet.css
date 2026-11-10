@@ -5,6 +5,19 @@
 
 /* ---------- paper ---------- */
 .ds-sheet, .ds-sheet > * { position: absolute; inset: 0; pointer-events: none; }
+/* The sheet is the size container the clock's moving parts are placed in (DraftSheet <Parts>): --s is the plate's
+   scale and --ox its left offset under the plate's 'xMidYMin slice', so a part at plate point (ux, uy) of radius r
+   lands where the plate would draw it. Each part turns on its own compositor layer. */
+.ds-sheet { container-type: size; }
+.ds-spin { --s: max(calc(100cqw / 1920), calc(100cqh / 1080)); --ox: calc((100cqw - 1920 * var(--s)) / 2); }
+.ds-part {
+  position: absolute; left: calc(var(--ox) + (var(--ux) - var(--r)) * var(--s)); top: calc((var(--uy) - var(--r)) * var(--s));
+  width: calc(var(--r) * 2 * var(--s)); height: calc(var(--r) * 2 * var(--s)); rotate: var(--a0);
+}
+.ds-part.run { animation: ds-turn var(--period) linear infinite; }
+.ds-part.rock { animation: ds-rock 1s ease-in-out infinite alternate; }
+@keyframes ds-turn { to { transform: rotate(360deg); } }
+@keyframes ds-rock { from { transform: rotate(-3deg); } to { transform: rotate(3deg); } }
 /* The slate gives the stains; a fine-grain tile laid at its own size keeps the paper's tooth sharp on 2K and 4K screens,
    where the slate itself is stretched. */
 .ds-paper {
@@ -132,9 +145,7 @@
 .ws2[data-link='connecting'] .ds-sheet .ds-plate { opacity: .72; }
 
 /* drafted in with the workstation's entrance, like the login sheet */
-.ws2[data-entrance] .ds-plate [pathLength] { stroke-dasharray: 1; stroke-dashoffset: 1; animation: ds-draw 1.5s cubic-bezier(.3, .6, .2, 1) calc(var(--d, 0ms) + 160ms) forwards; }
-.ws2[data-entrance] .ds-plate .orbit { animation-duration: 3.2s; }
-.ws2[data-entrance] .ds-plate :is(.dash, .tk, .cl, text, .hand, .hub) { animation: ds-appear .9s ease .5s backwards; }
+.ws2[data-entrance] .ds-plate { animation: ds-appear 1.2s ease .16s backwards; }
 .ws2[data-entrance] :is(.ds-paper, .ds-grid, .ds-moths, .ds-frame, .ds-zones) { animation: ds-appear .9s ease backwards; }
 @keyframes ds-draw { to { stroke-dashoffset: 0; } }
 @keyframes ds-appear { from { opacity: 0; } }

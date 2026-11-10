@@ -127,6 +127,8 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 async function createConnection() {
+  // The system page's sections are built when it first opens.
+  if (!hoisted.settingsProps.current) fireEvent.click(await screen.findByRole('button', { name: '系统设置' }));
   await waitFor(() => expect(hoisted.settingsProps.current?.onCreateCustomProfile).toBeTypeOf('function'));
   const create = hoisted.settingsProps.current!.onCreateCustomProfile as (input: unknown) => Promise<void>;
   await act(async () => {

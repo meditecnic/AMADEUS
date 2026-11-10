@@ -1,4 +1,5 @@
-import { memo, useEffect, useRef, useState, type CSSProperties } from 'react';
+import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useReducedMotion } from '../design-system/useReducedMotion';
 import { DIVERGENCE } from './Nixie';
 import { arc, escapeWheel, f1, gearOutline, lorenzPath, polar, ticks } from './drafting';
 
@@ -58,36 +59,89 @@ function useSecond(still: boolean) {
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
+/*
+ * The clock's moving parts sweep (U 11-09: it ticked once a second and read as stutter). Each part is a small drawing
+ * of its own, turned by a CSS animation on its own layer, so the compositor moves it continuously and the page does no
+ * work for it: the hands at the local time, the escape wheel once a minute, the going train slower, the anchor rocking
+ * once a second. The phase is set from the clock when the sweep starts (and again whenever the window comes back into
+ * view); while the sheet is still (the link is down) or motion is reduced, the parts are set once a second instead.
+ * Positions are plate user space; sheet.css maps them to the window the way the plate's slice does.
+ */
+type Part = { id: string; at: [number, number]; r: number; period: number; reverse?: boolean; rock?: boolean; angle: (t: Date) => number; body: ReactNode };
+
+const secs = (t: Date) => t.getSeconds() + t.getMilliseconds() / 1000;
+const mins = (t: Date) => t.getMinutes() + secs(t) / 60;
+const hours = (t: Date) => (t.getHours() % 12) + mins(t) / 60;
+
+const TRAIN: Part[] = [
+  {
+    id: 'center', at: [C.x, C.y], r: 216, period: 14400, angle: (t) => mins(t) * 1.5,
+    body: <><path className="ln" d={CENTER_WHEEL} /><path className="ln" d={CW_SPOKES} /></>,
+  },
+  {
+    id: 'third', at: [C.x + THIRD.at[0], C.y + THIRD.at[1]], r: THIRD.r + 14, period: 2400, reverse: true, angle: (t) => -mins(t) * 9,
+    body: <><path className="ln" d={THIRD_WHEEL} /><circle className="ln" r={22} /><circle className="ln" r={7} /></>,
+  },
+  {
+    id: 'escape', at: [C.x + ESC.at[0], C.y + ESC.at[1]], r: ESC.r + 6, period: 60, angle: (t) => secs(t) * 6,
+    body: <><path className="ln strong" d={ESC_WHEEL} /><path className="ln" d={ESC_SPOKES} /><circle className="ln" r={16} /><circle className="ln" r={5} /></>,
+  },
+  {
+    id: 'anchor', at: [C.x + ANCHOR_PIVOT.x, C.y + ANCHOR_PIVOT.y], r: 168, period: 1, rock: true, angle: () => 0,
+    body: <><path className="ln strong" d={ANCHOR} /><circle className="ln" r={9} /><circle className="ln" r={3} /></>,
+  },
+];
+const HANDS: Part[] = [
+  { id: 'hour', at: [C.x, C.y], r: 206, period: 43200, angle: (t) => hours(t) * 30, body: <path className="hand" d="M-7 34L-4 -150L0 -196L4 -150L7 34Z" /> },
+  { id: 'minute', at: [C.x, C.y], r: 326, period: 3600, angle: (t) => mins(t) * 6, body: <path className="hand" d="M-5 40L-2.5 -290L0 -318L2.5 -290L5 40Z" /> },
+  {
+    id: 'second', at: [C.x, C.y], r: 380, period: 60, angle: (t) => secs(t) * 6,
+    body: <><path className="hand sec" d="M0 70V-372" /><circle className="hand sec" cy={52} r={10} /><circle className="hub" r={11} /></>,
+  },
+];
+
+const Parts = memo(function Parts({ parts, at, run }: { parts: Part[]; at: Date; run: boolean }) {
+  return (
+    <div className="ds-spin">
+      {parts.map((p) => (
+        <div
+          key={run ? `${p.id}-${at.getTime()}` : p.id}
+          className={`ds-part${run ? (p.rock ? ' rock' : ' run') : ''}`}
+          style={{
+            '--ux': p.at[0], '--uy': p.at[1], '--r': p.r,
+            '--a0': `${f1(((p.angle(at) % 360) + 360) % 360)}deg`,
+            '--period': `${p.period}s`, animationDirection: p.reverse ? 'reverse' : undefined,
+          } as CSSProperties}
+        >
+          <svg className="ds-plate" viewBox={`${-p.r} ${-p.r} ${p.r * 2} ${p.r * 2}`}>{p.body}</svg>
+        </div>
+      ))}
+    </div>
+  );
+});
+
+/** When the sweep was set from the clock: on start, and again each time the window comes back into view. */
+function useSweepEpoch(run: boolean) {
+  const [epoch, setEpoch] = useState(() => new Date());
+  useEffect(() => {
+    if (!run) return undefined;
+    setEpoch(new Date());
+    const resync = () => { if (document.visibilityState === 'visible') setEpoch(new Date()); };
+    document.addEventListener('visibilitychange', resync);
+    return () => document.removeEventListener('visibilitychange', resync);
+  }, [run]);
+  return epoch;
+}
+
+/** The dial and everything on the plate that does not move; the moving parts are <Parts>, under and over it. */
 const Movement = memo(function Movement({ still }: { still: boolean }) {
   const now = useSecond(still);
   const s = now.getSeconds();
-  const m = now.getMinutes() + s / 60;
-  const h = (now.getHours() % 12) + m / 60;
   return (
     <g className="ds-fig ds-clock">
-      {/* going train, behind the dial */}
+      {/* going train, behind the dial: only the line joining the arbors is drawn here */}
       <g transform={`translate(${C.x} ${C.y})`}>
         <path className="dash" d={`M0 0L${THIRD.at[0]} ${THIRD.at[1]}L${ESC.at[0]} ${ESC.at[1]}`} />
-        <g transform={`rotate(${f1(m * 6 * 0.25)})`}><path className="ln" pathLength={1} style={dly(200)} d={CENTER_WHEEL} /><path className="ln" pathLength={1} style={dly(500)} d={CW_SPOKES} /></g>
-        <g transform={`translate(${THIRD.at[0]} ${THIRD.at[1]}) rotate(${f1(-m * 6 * 1.5)})`}>
-          <path className="ln" pathLength={1} style={dly(320)} d={THIRD_WHEEL} />
-          <circle className="ln" r={22} /><circle className="ln" r={7} />
-        </g>
-        {/* the escape wheel steps one tooth's half every second, as the seconds hand does */}
-        <g transform={`translate(${ESC.at[0]} ${ESC.at[1]})`}>
-          <g className="ds-esc" transform={`rotate(${s * 6})`}>
-            <path className="ln strong" pathLength={1} style={dly(420)} d={ESC_WHEEL} />
-            <path className="ln" d={ESC_SPOKES} />
-            <circle className="ln" r={16} /><circle className="ln" r={5} />
-          </g>
-        </g>
-      </g>
-      {/* the anchor rocks once a second */}
-      <g transform={`translate(${C.x + ANCHOR_PIVOT.x} ${C.y + ANCHOR_PIVOT.y})`}>
-        <g className="ds-anchor" transform={`rotate(${s % 2 ? 3 : -3})`}>
-          <path className="ln strong" pathLength={1} style={dly(600)} d={ANCHOR} />
-          <circle className="ln" r={9} /><circle className="ln" r={3} />
-        </g>
       </g>
       {/* dial */}
       <g transform={`translate(${C.x} ${C.y})`}>
@@ -102,11 +156,6 @@ const Movement = memo(function Movement({ still }: { still: boolean }) {
           return <text key={r} className="num" x={x} y={y} textAnchor="middle" dominantBaseline="central">{r}</text>;
         })}
         <path className="cl" d={`M${-DIAL - 40} 0H${DIAL + 40}M0 ${-DIAL - 40}V${DIAL + 40}`} />
-        {/* hands: local time */}
-        <g transform={`rotate(${f1(h * 30)})`}><path className="hand" d="M-7 34L-4 -150L0 -196L4 -150L7 34Z" /></g>
-        <g transform={`rotate(${f1(m * 6)})`}><path className="hand" d="M-5 40L-2.5 -290L0 -318L2.5 -290L5 40Z" /></g>
-        <g transform={`rotate(${s * 6})`}><path className="hand sec" d="M0 70V-372" /><circle className="hand sec" cy={52} r={10} /></g>
-        <circle className="hub" r={11} />
       </g>
       {/* caption above the dial, under the header, clear of the reading column */}
       <path className="lead" d={`M${C.x + DIAL_PT[0]} ${C.y + DIAL_PT[1]}L${C.x - 300} ${C.y - DIAL - 10}H${C.x + 120}`} />
@@ -116,6 +165,15 @@ const Movement = memo(function Movement({ still }: { still: boolean }) {
     </g>
   );
 });
+
+/** The clock's moving parts at the time; they sweep unless the sheet is still or motion is reduced. */
+function ClockParts({ still, layer }: { still: boolean; layer: 'train' | 'hands' }) {
+  const reduced = useReducedMotion();
+  const run = !still && !reduced;
+  const now = useSecond(still || run);
+  const epoch = useSweepEpoch(run);
+  return <Parts parts={layer === 'train' ? TRAIN : HANDS} at={run ? epoch : now} run={run} />;
+}
 
 const LORENZ = lorenzPath();
 const L = { x: 1500, y: 620 };
@@ -296,9 +354,11 @@ export function DraftSheet({ worldline, still = false }: { worldline: 'steins_ga
       <div className="ds-paper" />
       <div className="ds-grid" />
       <Trace of={worldline === 'beta' ? 'clock' : 'lorenz'} />
+      {worldline !== 'beta' && <ClockParts still={still} layer="train" />}
       <svg className="ds-plate" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMin slice">
         {worldline === 'beta' ? <Butterfly /> : <Movement still={still} />}
       </svg>
+      {worldline !== 'beta' && <ClockParts still={still} layer="hands" />}
       {worldline === 'beta' && <Divergence still={still} />}
       {/* one soda-can ring left on the SG sheet, by the clock */}
       {worldline !== 'beta' && <img className="ds-ring" src="/assets/sheet/ring-3.webp" alt="" draggable={false} decoding="async" />}

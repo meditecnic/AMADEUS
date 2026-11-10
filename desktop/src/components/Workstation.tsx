@@ -96,6 +96,8 @@ interface WorkstationProps {
   onLogout: () => void;
   entrance?: EntrancePhase;
   onEntranceSettled?: () => void;
+  /** Mounted under the terminal ('hold') and its first frames are on screen: the terminal may start its sweep. */
+  onStageReady?: () => void;
   /** The original's line was typed at the login: the meter rolls its digits like dice before it settles. */
   easterEgg?: boolean;
 }
@@ -132,6 +134,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   onLogout,
   entrance = 'none',
   onEntranceSettled,
+  onStageReady,
   easterEgg = false,
 }) => {
   const reducedMotion = useReducedMotion();
@@ -158,6 +161,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
   });
   const [sovitsUrl, setSovitsUrl] = useState('http://127.0.0.1:9880');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  // The system page's sections are built the first time it opens (or in idle time once the entrance is over), not
+  // with the rest of the workstation: they are not on screen, and the entrance should not wait for them.
+  const [menuMounted, setMenuMounted] = useState(false);
+  if (isSettingsOpen && !menuMounted) setMenuMounted(true);
   const [isMemoryOpen, setIsMemoryOpen] = useState(false);
   const [memoryClosing, setMemoryClosing] = useState(false);
   const memoryControlRef = useRef<MemorySpaceControl | null>(null);
@@ -399,10 +406,34 @@ export const Workstation: React.FC<WorkstationProps> = ({
     // The shift stage warms while the menu is read, never inside the click that starts a shift.
     scheduleShiftPrewarm(0);
   }, []);
+  // Held under the terminal, the first layout, paint and picture decoding happen while nothing moves; the frames are
+  // flowing again once three in a row come at the display's pace, and only then may the pen sweep.
+  const stageReadyRef = useRef(onStageReady);
+  stageReadyRef.current = onStageReady;
+  useEffect(() => {
+    if (entrance !== 'hold') return undefined;
+    let raf = 0;
+    let last = 0;
+    let steady = 0;
+    const frame = (t: number) => {
+      steady = last && t - last < 24 ? steady + 1 : 0;
+      last = t;
+      if (steady >= 3) { stageReadyRef.current?.(); return; }
+      raf = requestAnimationFrame(frame);
+    };
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
+  }, [entrance]);
+  useEffect(() => {
+    if (entering || menuMounted || typeof window.requestIdleCallback !== 'function') return undefined;
+    const id = window.requestIdleCallback(() => setMenuMounted(true), { timeout: 6000 });
+    return () => window.cancelIdleCallback(id);
+  }, [entering, menuMounted]);
   // ...and once the entrance has settled, in idle time (never on top of it).
   useEffect(() => {
     if (entering) return undefined;
-    const cancelPrewarm = scheduleShiftPrewarm(1500);
+    // Compiling the shift's shaders holds the GPU for a moment; well after the entrance, in idle time.
+    const cancelPrewarm = scheduleShiftPrewarm(6000);
     // The faces this screen used are loaded on the login terminal next time.
     const fonts = window.setTimeout(rememberWorkstationFonts, 4000);
     return () => { cancelPrewarm(); window.clearTimeout(fonts); };
@@ -2060,7 +2091,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
       className={`ws2${isHistoryCollapsed ? ' rail' : ''}${isSettingsOpen ? ' menu-open' : ''}${isMemoryOpen && !memoryClosing ? ' memory-space-open' : ''}`}
       data-wl={worldline === 'beta' ? 'beta' : 'sg'}
       data-link={linkState}
-      data-entrance={entering ? entrance : undefined}
+      // Held under the terminal the room is drawn as it will finally look (data-hold), so every picture, filter and
+      // shader it needs is ready before the sweep; the entrance's own animations start with the sweep (data-entrance).
+      data-entrance={entering && entrance !== 'hold' ? entrance : undefined}
+      data-hold={entrance === 'hold' || undefined}
       inert={entering || undefined}
       onMouseDown={handleAudioInit}
       // A shipped desktop app has no use for the browser's page menu (Back, Reload, Inspect); text fields and the
@@ -2716,6 +2750,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         marks={updateMark ? { about: '有新版本' } : undefined}
       >
         {/* Fixed slots keep the embedded SettingsModal mounted across sections, so unsaved drafts survive. */}
+        {menuMounted && (
         <div className="ws2-conn">
         <div className="ws2-conn-detail">
         {menuSection === 'worldline' && (
@@ -2859,6 +2894,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         </div>
         </div>
         </div>
+        )}
       </SystemMenu>
 
       {shift && (

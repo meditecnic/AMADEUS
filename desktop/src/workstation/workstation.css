@@ -434,8 +434,10 @@
  * draft: the pen sweeps the sheet away left to right and each instrument is drawn in just ahead of it.
  * docked: the title wordmark has landed in the header. Everything that normally animates on mount waits for draft.
  */
-.ws2[data-entrance='hold'] *, .ws2[data-entrance='hold'] *::before, .ws2[data-entrance='hold'] *::after { animation-play-state: paused !important; }
-.ws2:is([data-entrance='hold'], [data-entrance='draft']) .ws2-wordmark { opacity: 0; }
+.ws2:is([data-hold], [data-entrance='draft']) .ws2-wordmark { opacity: 0; }
+/* The large pictures keep layers of their own for good: the entrance's animations give them layers, and if those went
+   when it ended the whole window would be redrawn in one go (a visible stall on the first entrance). */
+.ws2 :is(.ds-sheet > *, .avatar-stage, .ws2-atmo) { will-change: transform; }
 .ws2[data-entrance='docked'] .ws2-wordmark { transition: opacity .12s linear; }
 .ws2-ent-timer { position: absolute; width: 0; height: 0; visibility: hidden; }
 .ws2:is([data-entrance='draft'], [data-entrance='docked']) .ws2-ent-timer { animation: ws2-ent-timer 1.7s linear forwards; }
@@ -446,12 +448,13 @@
 
 /* The drafting behind the room is drawn as the sheet goes. */
 .ws2[data-entrance] .ws2-atmo-light { animation: ws2-fade-in .9s ease .1s both; opacity: 0; }
-.ws2[data-entrance] .ws2-atmo-draft .ln { stroke-dasharray: 1; stroke-dashoffset: 1; animation: ws2-ent-draw 1.3s cubic-bezier(.3, .6, .2, 1) calc(var(--d, 0) * 1ms + 120ms) forwards; }
-.ws2[data-entrance] .ws2-atmo-draft :is(.bp, .dash) { animation: ws2-ent-appear .9s ease .4s backwards; }
+/* Everything the entrance moves is moved by opacity and transform only, which the compositor runs by itself: no blur,
+   clip or brightness to repaint, and no full-window drawing stroked in frame by frame (U 11-09: the first entrance
+   after the app starts stuttered). The pen's sweep is what draws the sheet in. */
+.ws2[data-entrance] .ws2-atmo-draft { animation: ws2-ent-appear 1.1s ease .12s backwards; }
 .ws2[data-entrance] .ws2-atmo-grid { animation: ws2-ent-appear .8s ease backwards; }
 .ws2[data-entrance] .ws2-atmo-bin { animation: ws2-ent-type 1.1s steps(14) .3s backwards; }
 .ws2[data-entrance] .ws2-atmo-crt { animation: ws2-ent-appear .5s steps(3) .2s backwards; }
-@keyframes ws2-ent-draw { to { stroke-dashoffset: 0; } }
 @keyframes ws2-ent-appear { from { opacity: 0; } }
 @keyframes ws2-ent-type { from { clip-path: inset(0 0 100% 0); } to { clip-path: inset(0); } }
 
@@ -472,11 +475,11 @@
 .ws2[data-entrance] .ws2-matrix { animation: ws2-ent-appear .8s ease .42s backwards; }
 .ws2[data-entrance] .ws2-plate { animation: ws2-ent-rise .5s cubic-bezier(.22, 1, .36, 1) .56s backwards; }
 .ws2[data-entrance] .avatar-stage { animation: ws2-ent-scan .9s cubic-bezier(.3, .7, .2, 1) .42s backwards; }
-@keyframes ws2-ent-drop { from { opacity: 0; transform: translateY(-7px); filter: blur(3px); } }
+@keyframes ws2-ent-drop { from { opacity: 0; transform: translateY(-7px); } }
 @keyframes ws2-ent-side { from { opacity: 0; transform: translateX(-18px); } }
-@keyframes ws2-ent-rise { from { opacity: 0; transform: translateY(16px) scale(.985); filter: blur(4px); } }
+@keyframes ws2-ent-rise { from { opacity: 0; transform: translateY(16px) scale(.985); } }
 @keyframes ws2-ent-seam { from { transform: scaleY(0); } }
-@keyframes ws2-ent-scan { from { clip-path: inset(0 0 100% 0); filter: brightness(1.8); } 60% { filter: brightness(1.15); } to { clip-path: inset(0); filter: none; } }
+@keyframes ws2-ent-scan { from { opacity: 0; transform: translateY(12px); } }
 
 /* Memory sheet: laid below the 60px header, which stays; the memory key reads as pressed while it is open. */
 .ws2-memory-layer { position: fixed; top: var(--fr-side); right: 0; bottom: 0; left: 0; z-index: 80; animation: ws2-sheet-in .2s linear both; }

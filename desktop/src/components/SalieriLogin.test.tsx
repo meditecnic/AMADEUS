@@ -73,9 +73,29 @@ it('sends a Unicode password unchanged and hands over to the entrance on success
     method: 'POST',
     body: JSON.stringify({ passcode: 'Gott würfelt nicht · 世界線 🜂' }),
   }));
+  // Accepted: the key shows its tick first; the workstation is mounted behind the terminal just after it.
+  expect(screen.getByRole('button', { name: 'Decrypt and Connect' })).toHaveClass('is-ok');
+  expect(onLoginSuccess).not.toHaveBeenCalled();
+  await act(async () => { await vi.advanceTimersByTimeAsync(380); });
   expect(onLoginSuccess).toHaveBeenCalledTimes(1);
+  // The terminal holds still while the workstation draws its first frames; with no word from it, it goes after 1.4 s.
+  expect(container.querySelector('.sl-root')).not.toHaveClass('exiting');
+  await act(async () => { await vi.advanceTimersByTimeAsync(1400); });
   expect(container.querySelector('.sl-root')).toHaveClass('exiting');
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});
+
+it('clears the form and sweeps as soon as the workstation behind it says it is drawn', async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+  const { container, onLoginSuccess, rerender } = await renderLogin();
+  fireEvent.change(screen.getByLabelText('PASSWORD'), { target: { value: 'x' } });
+  await act(async () => { fireEvent.submit(screen.getByLabelText('PASSWORD').closest('form')!); });
+  await act(async () => { await vi.advanceTimersByTimeAsync(380); });
+  expect(onLoginSuccess).toHaveBeenCalledTimes(1);
+  const { SalieriLogin } = await import('./SalieriLogin');
+  rerender(<SalieriLogin onLoginSuccess={onLoginSuccess} stageReady />);
+  expect(container.querySelector('.sl-root')).toHaveClass('exiting');
 });
 
 it('rejects a wrong password with an alert, keeps the user on the terminal and clears after 3s', async () => {
@@ -149,6 +169,7 @@ it('without a startup passcode, Enter on an empty field signs in with no passcod
   expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/auth/login'), expect.objectContaining({
     method: 'POST', body: JSON.stringify({ passcode: null }),
   }));
+  await act(async () => { await vi.advanceTimersByTimeAsync(380); });
   expect(onLoginSuccess).toHaveBeenCalledTimes(1);
 });
 

@@ -43,6 +43,9 @@ function App() {
   const [loginOverlay, setLoginOverlay] = useState(false);
   const [entrance, setEntrance] = useState<EntrancePhase>('none');
   const [easterEgg, setEasterEgg] = useState(false);
+  // The workstation has drawn its first frames behind the terminal; the pen's sweep waits for this.
+  const [stageReady, setStageReady] = useState(false);
+  const handleStageReady = useCallback(() => setStageReady(true), []);
 
   useEffect(() => {
     try {
@@ -58,6 +61,7 @@ function App() {
 
   const handleLoginSuccess = (result?: { easterEgg: boolean }) => {
     setEasterEgg(Boolean(result?.easterEgg));
+    setStageReady(false);
     // The workstation mounts at once, held still behind the terminal; it plays exactly once per login.
     setLoginOverlay(true);
     setEntrance(reducedMotion ? 'none' : 'hold');
@@ -107,6 +111,7 @@ function App() {
           onLogout={handleLogout}
           entrance={entrance}
           onEntranceSettled={handleEntranceSettled}
+          onStageReady={handleStageReady}
           easterEgg={easterEgg}
         />
       )}
@@ -116,6 +121,7 @@ function App() {
           worldline={worldline}
           onLoginSuccess={handleLoginSuccess}
           onEntranceCue={handleEntranceCue}
+          stageReady={stageReady}
         />
       )}
     </main>
