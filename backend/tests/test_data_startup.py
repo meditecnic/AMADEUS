@@ -227,3 +227,22 @@ asyncio.run(data_startup.initialize())
     assert 'No space for pre-upgrade backup' in result.stderr
     with closing(sqlite3.connect(path)) as connection:
         assert backups._schema(connection) == 11
+
+
+@pytest.mark.parametrize("status", ["ok", "restore_failed"])
+async def test_ack_restore_result_survives_next_start(data_root, status):
+    backups.atomic_json(data_root / "restore-result.json", {"status": status, "detail": "previous result"})
+    assert await data_startup.initialize() == (True, False)
+    assert data_startup.current_status()["detail"] == "previous result"
+    assert data_startup.acknowledge_restore_result() == {"acknowledged": True}
+    assert data_startup.current_status() == {"status": "ok", "detail": None}
+    assert not (data_root / "restore-result.json").exists()
+    db.reset_initialization_cache()
+    assert await data_startup.initialize() == (True, True)
+    assert data_startup.current_status() == {"status": "ok", "detail": None}
+
+
+def test_ack_restore_result_endpoint_is_idempotent(app_client):
+    for _ in range(2):
+        assert app_client.post("/api/data/restore-result/ack").json() == {"acknowledged": True}
+    assert app_client.get("/api/data/status").json()["detail"] is None

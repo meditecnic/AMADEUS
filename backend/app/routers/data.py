@@ -96,3 +96,9 @@ async def export_data(
 @router.delete("/restore")
 async def cancel_restore():
     return await _call(backups.cancel_restore)
+
+
+@router.post("/restore-result/ack")
+async def acknowledge_restore_result():
+    from app.services.data_startup import acknowledge_restore_result
+    return await _call(acknowledge_restore_result)
