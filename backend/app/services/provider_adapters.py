@@ -11,6 +11,7 @@ import httpx
 
 from app.security.prompt import compression_system_prompt
 from app.services.model_usage import usage_call
+from app.services.model_headers import model_headers
 from app.services.llm_interface import LLMInterface, build_stream_messages, fold_tail_reminder
 
 
@@ -72,7 +73,7 @@ class OpenAICompatibleAdapter(LLMInterface):
     def _headers(self, api_key: str | None) -> dict[str, str]:
         if self.credential_required and not api_key:
             raise ValueError("provider credential is not configured")
-        headers = {"Content-Type": "application/json"}
+        headers = {**model_headers(), "Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
@@ -343,6 +344,7 @@ class OpenAIResponsesAdapter(LLMInterface):
         if not api_key:
             raise ValueError("OpenAI credential is not configured")
         return {
+            **model_headers(),
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
@@ -594,7 +596,7 @@ class GeminiAdapter(LLMInterface):
     def _headers(api_key: str | None) -> dict[str, str]:
         if not api_key:
             raise ValueError("Gemini credential is not configured")
-        return {"x-goog-api-key": api_key, "Content-Type": "application/json"}
+        return {**model_headers(), "x-goog-api-key": api_key, "Content-Type": "application/json"}
 
     def _client(self, read_timeout: float = 120.0) -> httpx.AsyncClient:
         return httpx.AsyncClient(
