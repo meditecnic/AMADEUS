@@ -1045,3 +1045,23 @@ async def dependencies_health():
     else:
         status = "ready"
     return {"status": status, "dependencies": dependencies}
+
+
+@router.get("/api/worldlines/summary")
+async def worldline_summary(session_id: str = Query(...)):
+    from app.services.conversations import conversation_service
+
+    sid = _require_session_id(session_id)
+    result = {}
+    for worldline in ("steins_gate", "beta"):
+        conversations = await conversation_service.list_for_session(sid, worldline)
+        memories = 0
+        for mode in ("self", "okabe"):
+            chart = await memory_chart(sid, worldline, mode)
+            memories += chart["counts"]["facts"] + chart["counts"]["experiences"]
+        result[worldline] = {
+            "conversations": len(conversations), "memories": memories,
+            "last_active_at": max((row["last_active_at"] for row in conversations
+                                   if row.get("last_active_at")), default=None),
+        }
+    return result
