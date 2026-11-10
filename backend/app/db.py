@@ -1450,7 +1450,9 @@ def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str 
         if current == 14:
             connection.execute("BEGIN IMMEDIATE")
             try:
-                if kind == "control" and not _column_exists(connection, "provider_configurations", "catalog_id"):
+                if (kind == "control" and connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='provider_configurations'"
+                ).fetchone() and not _column_exists(connection, "provider_configurations", "catalog_id")):
                     connection.execute("ALTER TABLE provider_configurations ADD COLUMN catalog_id TEXT")
                 connection.execute("UPDATE schema_meta SET value='15' WHERE key='schema_version'")
                 connection.commit()

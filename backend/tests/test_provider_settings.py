@@ -6,13 +6,18 @@ from app import db
 def test_v13_settings_migration_preserves_configuration(tmp_path):
     path = tmp_path / "control.sqlite3"
     with sqlite3.connect(path) as connection:
-        connection.executescript(db.CONTROL_SCHEMA)
+        legacy_schema = db.CONTROL_SCHEMA.replace("    catalog_id TEXT,\n", "")
+        legacy_schema = legacy_schema.split("CREATE TABLE IF NOT EXISTS provider_settings")[0]
+        connection.executescript(legacy_schema)
+        assert not connection.execute("SELECT 1 FROM sqlite_master WHERE name='provider_settings'").fetchone()
+        assert "catalog_id" not in {row[1] for row in connection.execute("PRAGMA table_info(provider_configurations)")}
         connection.execute("INSERT INTO schema_meta VALUES('schema_version','13')")
         connection.execute("INSERT INTO provider_configurations(provider_id,base_url,default_model,updated_at_utc) VALUES('custom','https://example.invalid','model','old')")
     assert db._initialize_sync(str(path), db.CONTROL_SCHEMA, "control")
     with sqlite3.connect(path) as connection:
         assert connection.execute("SELECT default_model FROM provider_configurations").fetchone() == ("model",)
         assert connection.execute("SELECT * FROM provider_settings").fetchall() == []
+        assert connection.execute("SELECT catalog_id FROM provider_configurations").fetchone() == (None,)
         assert connection.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone() == (str(db.SCHEMA_VERSION),)
 
 

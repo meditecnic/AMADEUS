@@ -161,7 +161,7 @@ def test_v12_upgrade_is_backed_up_before_usage_ddl(usage_store, monkeypatch):
         assert conn.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()[0] == '12'
         assert not conn.execute("SELECT name FROM sqlite_master WHERE name='model_usage'").fetchone()
     with closing(sqlite3.connect(usage_store)) as conn:
-        assert conn.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()[0] == '13'
+        assert conn.execute("SELECT value FROM schema_meta WHERE key='schema_version'").fetchone()[0] == str(db.SCHEMA_VERSION)
         assert conn.execute('SELECT COUNT(*) FROM model_usage').fetchone()[0] == 0
     db._run_migration_locked()
     assert len(backups.list_backups()) == 1
