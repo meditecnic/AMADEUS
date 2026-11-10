@@ -374,9 +374,7 @@ class DeepSeekService(LLMInterface):
         ) as client:
             response = await client.get(f"{self.base_url}/models", headers=headers)
         if response.status_code != 200:
-            raise RuntimeError(
-                f"DeepSeek model discovery failed with status {response.status_code}"
-            )
+            raise ProviderRequestError("deepseek", response.status_code)
         payload = response.json()
         rows = payload.get("data", []) if isinstance(payload, dict) else []
         return [
