@@ -479,7 +479,7 @@
 @keyframes ws2-ent-scan { from { clip-path: inset(0 0 100% 0); filter: brightness(1.8); } 60% { filter: brightness(1.15); } to { clip-path: inset(0); filter: none; } }
 
 /* Memory sheet: laid below the 60px header, which stays; the memory key reads as pressed while it is open. */
-.ws2-memory-layer { position: fixed; top: 60px; right: 0; bottom: 0; left: 0; z-index: 80; animation: ws2-sheet-in .2s linear both; }
+.ws2-memory-layer { position: fixed; top: var(--fr-side); right: 0; bottom: 0; left: 0; z-index: 80; animation: ws2-sheet-in .2s linear both; }
 .ws2-memory-layer.closing { animation: ws2-sheet-out .15s linear both; pointer-events: none; }
 @keyframes ws2-sheet-in { from { opacity: 0; } }
 @keyframes ws2-sheet-out { to { opacity: 0; } }
@@ -730,27 +730,36 @@
 .ws2 .avatar-absent { display: grid; place-items: center; }
 @keyframes ws2-breathe { 50% { transform: translateY(-2px) scaleY(1.004); } }
 .ws2 .avatar-stage::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 22%; background: linear-gradient(0deg, var(--ws-bg) 8%, rgba(0, 0, 0, 0)); pointer-events: none; }
-/* The sheet's title block, in the frame's lower-right corner as on a drawing (its right and bottom edges are the
- * frame's): whom the figure is of, how she is now, and her voice. Ruled cells on a dark ground so it reads over her
- * portrait; the scope keeps its own controls (VoiceScope.tsx). */
+/* Her name card, lower right (U 11-09: the boxed title block welded to the frame corner read 生硬). Now a caption
+ * standing off the frame: her name large in Mincho with "Amadeus" after it, a hairline that fades in from the left,
+ * and one line under it with how she is and her voice. No box; a soft shade behind keeps it legible on her portrait.
+ * The scope keeps its own controls (VoiceScope.tsx). */
 .ws2-plate {
-  position: absolute; right: var(--fr-side); bottom: var(--fr-foot); z-index: 3; display: grid; width: 250px;
-  border: 1px solid var(--ws-rule); background: color-mix(in srgb, var(--ws-bg) 84%, transparent); backdrop-filter: blur(6px);
+  position: absolute; right: calc(var(--fr-side) + 22px); bottom: calc(var(--fr-foot) + 16px); z-index: 3;
+  display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 14px; width: 272px;
 }
-.ws2-plate-name { display: flex; align-items: baseline; gap: 10px; height: 34px; padding: 0 12px; border-bottom: 1px solid var(--ws-rule); }
-.ws2-plate-name > span { padding-top: 9px; font-family: var(--ws-serif-jp); font-weight: 500; font-size: 15px; line-height: 1; letter-spacing: .24em; color: var(--ws-ink); }
-.ws2-plate-name > i { margin-left: auto; font-family: var(--ws-serif); font-size: 13px; letter-spacing: .04em; color: var(--ws-ink-3); }
+.ws2-plate::before {
+  content: ''; position: absolute; inset: -34px -26px -18px -48px; z-index: -1; pointer-events: none;
+  background: radial-gradient(ellipse 72% 78% at 62% 66%, color-mix(in srgb, var(--ws-bg) 86%, transparent) 30%, transparent 100%);
+}
+.ws2-plate-name {
+  grid-column: 1 / -1; position: relative; display: flex; align-items: baseline; gap: 12px; padding: 0 2px 9px;
+}
+.ws2-plate-name::after {
+  content: ''; position: absolute; left: -26px; right: 0; bottom: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--ws-rule) 30%, var(--ws-line-2) 100%);
+}
+.ws2-plate-name > span { font-family: var(--ws-serif-jp); font-weight: 500; font-size: 19px; line-height: 1; letter-spacing: .2em; color: var(--ws-ink); text-shadow: 0 1px 10px rgba(0, 0, 0, .6); }
+.ws2-plate-name > i { margin-left: auto; font-family: var(--ws-serif); font-style: italic; font-size: 13.5px; letter-spacing: .04em; color: var(--ws-ink-3); }
 .ws2[data-wl='beta'] .ws2-plate-name > span { color: var(--ws-accent); }
-.ws2-plate-row { display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: center; min-height: 28px; }
-.ws2-plate-row + .ws2-plate-row { border-top: 1px solid var(--ws-rule); }
-.ws2-plate-key { align-self: stretch; display: flex; align-items: center; padding-left: 12px; border-right: 1px solid var(--ws-rule); font-family: var(--ws-mono); font-size: 8.5px; letter-spacing: .22em; color: var(--ws-ink-3); }
-.ws2-plate .ws2-presence { padding-left: 11px; }
-.ws2-plate-row.is-voice { min-height: 34px; }
-.ws2-plate .ws2-scope { min-width: 0; padding-right: 4px; }
+.ws2-plate-row { display: contents; }
+.ws2-plate-key { display: none; }
+.ws2-plate .ws2-presence { padding: 8px 0 0 2px; white-space: nowrap; }
+.ws2-plate .ws2-scope { min-width: 0; padding-top: 6px; justify-content: flex-end; }
 .ws2-plate .ws2-scope-tag { display: none; }
-.ws2-plate .ws2-scope-body { height: 34px; padding: 0 6px 0 10px; background: none; }
-.ws2-plate .ws2-scope-body:hover { background: rgba(255, 255, 255, .035); }
-.ws2-plate .ws2-scope-svg { width: 126px; }
+.ws2-plate .ws2-scope-body { height: 30px; padding: 0 4px 0 6px; background: none; }
+.ws2-plate .ws2-scope-body:hover { background: none; }
+.ws2-plate .ws2-scope-svg { width: 108px; }
 
 .ws2-scope { display: flex; align-items: center; gap: 6px; }
 .ws2-scope-body {
@@ -865,7 +874,6 @@
 
 .ws2-talk, .ws2-side { transition: opacity .2s ease, filter .2s ease; }
 .ws2.menu-open .ws2-talk, .ws2.menu-open .ws2-side { opacity: .06; filter: blur(6px); pointer-events: none; }
-.ws2.menu-open .ws2-title { opacity: .3; }
 .ws2 .avatar-stage .avatar-sprite-wrapper { transition: filter .3s ease; }
 .ws2[data-wl='beta'] .avatar-stage .avatar-sprite-wrapper { --ws-portrait-light: url(#ws2-rim-beta); }
 .ws2.menu-open .avatar-stage .avatar-sprite-wrapper { filter: var(--ws-portrait-light) drop-shadow(-18px -10px 0 var(--ws-slab)) brightness(.7) saturate(.85); }
@@ -902,4 +910,23 @@
   .ws2 .ws2-wl-line :is(.main, .field) { stroke-dashoffset: 0; }
   .ws2 .ws2-wl-panel.aiming .ws2-wl-diagram .hop { animation: none; }
   .ws2 .ws2-wl-diagram .here { opacity: 1; }
+}
+
+/* ---------- one page at a time: the header follows the page under it ---------- */
+/* The system page: the toggle's slot holds the way back, the title's slot says where you are. */
+.ws2-crumb { display: inline-flex; align-items: baseline; gap: 10px; min-width: 0; animation: ws2-crumb-in .24s ease-out both; }
+.ws2-crumb .root { font-family: var(--ws-serif-cjk); font-size: 15px; letter-spacing: .14em; color: var(--ws-ink-2); }
+.ws2-crumb i { font-style: normal; font-family: var(--ws-mono); font-size: 12px; color: var(--ws-ink-3); }
+.ws2-crumb .no { font-family: var(--ws-mono); font-size: 10.5px; letter-spacing: .1em; color: var(--ws-ink-3); }
+.ws2-crumb .here { font-family: var(--ws-serif-cjk); font-size: 15px; letter-spacing: .14em; color: var(--ws-ink); }
+@keyframes ws2-crumb-in { from { opacity: 0; translate: -4px 0; } }
+/* The memory page has the whole sheet: the header band lifts away and the frame closes up to the top margin. */
+.ws2-top { transition: opacity .2s ease, translate .2s ease, visibility 0s linear 0s; }
+.ws2.memory-space-open .ws2-top { opacity: 0; translate: 0 -8px; visibility: hidden; pointer-events: none; transition: opacity .18s ease, translate .18s ease, visibility 0s linear .18s; }
+.ws2.memory-space-open { --fr-top: var(--fr-side); }
+.ds-sheet > .ds-frame { transition: inset .28s cubic-bezier(.3, .6, .2, 1); }
+.ds-zones :is(.left, .right) { transition: top .28s cubic-bezier(.3, .6, .2, 1); }
+@media (prefers-reduced-motion: reduce) {
+  .ws2-crumb { animation: none; }
+  .ws2-top, .ws2.memory-space-open .ws2-top, .ds-sheet > .ds-frame, .ds-zones :is(.left, .right) { transition: none; }
 }

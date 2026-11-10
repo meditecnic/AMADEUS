@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { DraftWord } from './DraftWord';
-import { DIVERGENCE, Nixie, WORLDLINE_NAME, useTunedValue } from './Nixie';
-import { useReducedMotion } from '../design-system/useReducedMotion';
+import { DIVERGENCE, Nixie } from './Nixie';
 import { PencilRing } from './TitleStrip';
+import { VolumeNumber } from './VolumeNumber';
+import { shortDate, type Ledger } from './worldlineLedger';
 
 export type MenuSection = 'worldline' | 'connections' | 'sound' | 'character' | 'data' | 'usage' | 'about';
 type Worldline = 'steins_gate' | 'beta';
@@ -95,70 +96,98 @@ export function SystemMenu({
   );
 }
 
-function WorldlineDiagram({ worldline, target, reading, onTarget }: {
+/*
+ * FIG. 1 — the two world lines plotted as a drawing (U 11-09: the old diagram read 太塑料: neon curves, a lock-on
+ * reticle and marching dashes). Divergence runs up the left axis; both lines leave one branch point and run to their
+ * readings. β ends inside its attractor field, hatched in pencil; STEINS;GATE ends outside any field. The line you
+ * are on is inked in its colour and ringed in pencil; picking the other one dimensions the gap between them (Δ), the
+ * way a drawing gives a size. The lines answer the pointer; the ledger rows under the figure are the radios.
+ */
+const AXIS = { lo: 1.0, hi: 1.16, top: 34, bottom: 188 };
+const yOf = (v: number) => AXIS.bottom - ((v - AXIS.lo) / (AXIS.hi - AXIS.lo)) * (AXIS.bottom - AXIS.top);
+const END_X = 424;
+const ORIGIN = { x: 86, y: yOf(1.012) };
+const TICKS = [1.0, 1.04, 1.08, 1.12, 1.16];
+const MINOR = Array.from({ length: 17 }, (_, i) => Math.round((1.0 + i * 0.01) * 100) / 100).filter((t) => !TICKS.includes(t));
+
+function WorldlineDiagram({ worldline, target, aiming, onTarget }: {
   worldline: Worldline;
   target: Worldline;
-  /** The armed target's reading as it tunes in (the target preview lives on its endpoint). */
-  reading: string;
+  aiming: boolean;
   onTarget: (w: Worldline) => void;
 }) {
-  // SG sits outside any attractor field: one clean line. β lives inside a field: a converging bundle.
-  const field = [-10, -5, 0, 5, 10];
-  const endY = (w: Worldline) => (w === 'steins_gate' ? 36 : 128);
+  const y = { steins_gate: yOf(Number(DIVERGENCE.steins_gate)), beta: yOf(Number(DIVERGENCE.beta)) };
   const armed = target !== worldline;
-  const line = (w: Worldline) => `ws2-wl-line ${w === 'beta' ? 'beta' : 'sg'}${worldline === w ? ' cur' : ''}${target === w ? ' sel' : ''}`;
-  /** Endpoint caption; on the armed target it carries the tag and the tuning reading. */
-  const caption = (w: Worldline, y: number) => {
-    const aimed = armed && w === target;
-    return (
-      <text x="574" y={y} textAnchor="end">
-        {aimed && <tspan className="tag">TARGET · 目标{'\u2002'}</tspan>}
-        <tspan className="name">{WORLDLINE_NAME[w]}</tspan>
-        <tspan className="val"> · {aimed ? reading : DIVERGENCE[w]}%</tspan>
-      </text>
-    );
+  const path = (w: Worldline, bend = 0) => {
+    const end = y[w] + bend;
+    return `M${ORIGIN.x} ${ORIGIN.y} C ${ORIGIN.x + 130} ${ORIGIN.y}, ${ORIGIN.x + 140} ${end}, ${END_X} ${end}`;
   };
-  // The hop from the line you are on to the armed target, drawn while the shift key is aimed.
-  const from = endY(worldline);
-  const to = endY(target);
-  const hop = `M616 ${from + (from < to ? 12 : -12)} C 636 ${from}, 636 ${to}, 618 ${to + (from < to ? -15 : 15)}`;
+  const cls = (w: Worldline) => `ws2-wl-line ${w === 'beta' ? 'beta' : 'sg'}${worldline === w ? ' cur' : ''}${target === w ? ' sel' : ''}`;
+  const field = { top: yOf(1.152), bottom: yOf(1.112) };
+  const delta = Math.abs(Number(DIVERGENCE.beta) - Number(DIVERGENCE.steins_gate)).toFixed(6);
+  const lo = Math.max(y.steins_gate, y.beta);
+  const hi = Math.min(y.steins_gate, y.beta);
+  const up = worldline === 'beta';
   return (
-    <svg className="ws2-wl-diagram" viewBox="0 0 640 170" role="radiogroup" aria-label="选择世界线">
-      <g className="grid">{Array.from({ length: 9 }, (_, i) => <line key={i} x1={40 + i * 70} x2={40 + i * 70} y1="14" y2="156" />)}</g>
-      <circle cx="40" cy="85" r="3" className="origin" />
-      <g className={line('beta')} role="radio" aria-checked={target === 'beta'} aria-label="β 世界线" tabIndex={0}
-        onClick={() => onTarget('beta')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onTarget('beta'); } }}>
-        {field.map((o) => <path key={o} d={`M40 85 C 200 85, 260 ${124 + o}, 600 ${128 + o * 0.35}`} className={o === 0 ? 'main' : 'field'} />)}
-        <path d="M40 85 C 200 85, 260 124, 600 128" className="flow" />
-        <path d="M40 85 C 200 85, 260 124, 600 128" className="hit" />
-        {caption('beta', 152)}
+    <svg className="ws2-wl-diagram" viewBox="0 0 560 214" aria-hidden="true">
+      <defs>
+        <pattern id="ws2-wl-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(-38)">
+          <line x1="0" y1="0" x2="0" y2="6" />
+        </pattern>
+      </defs>
+      <text className="cap" x="20" y="16">FIG. 1 — DIVERGENCE</text>
+      <text className="cap zh" x="548" y="16" textAnchor="end">世界线变动率 %</text>
+      <g className="axis">
+        <line x1="64" y1={AXIS.top - 8} x2="64" y2={AXIS.bottom + 6} />
+        {TICKS.map((t) => (
+          <g key={t}>
+            <line x1="58" x2="64" y1={yOf(t)} y2={yOf(t)} />
+            <line className="rule" x1="66" x2="520" y1={yOf(t)} y2={yOf(t)} />
+            <text x="54" y={yOf(t) + 3.5} textAnchor="end">{t.toFixed(2)}</text>
+          </g>
+        ))}
+        {MINOR.map((t) => <line key={t} className="minor" x1="61" x2="64" y1={yOf(t)} y2={yOf(t)} />)}
       </g>
-      <g className={line('steins_gate')} role="radio" aria-checked={target === 'steins_gate'} aria-label="STEINS;GATE 世界线" tabIndex={0}
-        onClick={() => onTarget('steins_gate')} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onTarget('steins_gate'); } }}>
-        <path d="M40 85 C 200 85, 270 40, 600 36" className="main" />
-        <path d="M40 85 C 200 85, 270 40, 600 36" className="flow" />
-        <path d="M40 85 C 200 85, 270 40, 600 36" className="hit" />
-        {caption('steins_gate', 24)}
+      <g className="field">
+        <rect x="250" y={field.top} width="196" height={field.bottom - field.top} fill="url(#ws2-wl-hatch)" />
+        <path d={`M250 ${field.top}H446M250 ${field.bottom}H446`} />
+        <text x="254" y={field.top - 6}>β ATTRACTOR FIELD · 收束场</text>
       </g>
-      <g className="here" transform={`translate(600 ${endY(worldline)})`}>
-        <circle r="9" className="ring" /><circle r="3.5" />
+      <circle className="origin" cx={ORIGIN.x} cy={ORIGIN.y} r="2.6" />
+      <text className="note" x={ORIGIN.x - 6} y={ORIGIN.y + 18}>分歧点</text>
+      <g className={cls('beta')} onClick={() => onTarget('beta')}>
+        {[-9, -4.5, 4.5, 9].map((o) => <path key={o} className="strand" d={path('beta', o * 0.35)} pathLength={1} />)}
+        <path className="main" d={path('beta')} pathLength={1} />
+        <path className="hit" d={path('beta')} />
+        <circle className="end" cx={END_X} cy={y.beta} r="2.4" />
+        <text className="name" x={END_X + 12} y={y.beta - 6}>β</text>
+        <text className="val" x={END_X + 12} y={y.beta + 9}>{DIVERGENCE.beta}</text>
+      </g>
+      <g className={cls('steins_gate')} onClick={() => onTarget('steins_gate')}>
+        <path className="main" d={path('steins_gate')} pathLength={1} />
+        <path className="hit" d={path('steins_gate')} />
+        <circle className="end" cx={END_X} cy={y.steins_gate} r="2.4" />
+        <text className="name" x={END_X + 12} y={y.steins_gate - 6}>STEINS;GATE</text>
+        <text className="val" x={END_X + 12} y={y.steins_gate + 9}>{DIVERGENCE.steins_gate}</text>
+      </g>
+      <g className="here" key={`here-${worldline}`} transform={`translate(${END_X} ${y[worldline]})`}>
+        <path className="ring" d="M-13 -1 C -12 -9, 9 -10, 12 -2 C 14 6, -2 10, -9 7 C -14 4, -13 -3, -6 -6" pathLength={1} />
+        <path className="arrow" d={up ? 'M-62 34 C -44 30, -30 22, -16 9 M-16 9 l-7 1.5 M-16 9 l-1.5 7' : 'M-62 -34 C -44 -30, -30 -22, -16 -9 M-16 -9 l-7 -1.5 M-16 -9 l-1.5 -7'} pathLength={1} />
+        <text className="note" x="-66" y={up ? 46 : -40} textAnchor="middle">现在</text>
       </g>
       {armed && (
-        <g key={target} aria-hidden="true">
-          <path className="hop" d={hop} pathLength={1} />
-          <g className="aim" transform={`translate(600 ${endY(target)})`}>
-            <g className="aim-lock">
-              <circle r="13" /><path d="M-22 0H-10M10 0H22M0-22V-10M0 10V22" />
-              <path className="brk" d="M-17-9V-17H-9M9-17H17V-9M17 9V17H9M-9 17H-17V9" />
-            </g>
-          </g>
+        <g className={`dim${aiming ? ' is-aimed' : ''}`} key={`dim-${target}`}>
+          <path className="ext" d={`M${END_X + 82} ${y.steins_gate}H${END_X + 102}M${END_X + 82} ${y.beta}H${END_X + 102}`} />
+          <path className="line" d={`M${END_X + 96} ${hi + 1}V${lo - 1}`} pathLength={1} />
+          <path className="tick" d={`M${END_X + 92} ${hi + 5}l4 -4 4 4M${END_X + 92} ${lo - 5}l4 4 4 -4`} />
+          <text className="d" transform={`translate(${END_X + 113} ${(hi + lo) / 2}) rotate(-90)`} textAnchor="middle">Δ {delta}</text>
         </g>
       )}
     </svg>
   );
 }
 
-export function WorldlinePanel({ worldline, busy, onShift, onArm }: {
+export function WorldlinePanel({ worldline, busy, onShift, onArm, ledger = {} }: {
   worldline: Worldline;
   /** A shift is already running. */
   busy: boolean;
@@ -166,29 +195,22 @@ export function WorldlinePanel({ worldline, busy, onShift, onArm }: {
   onShift: (to: Worldline) => void;
   /** A different target line was picked. */
   onArm?: () => void;
+  /** What each line holds (conversations, memories, last used). */
+  ledger?: Ledger;
 }) {
   const [target, setTarget] = useState<Worldline>(worldline);
   const [aiming, setAiming] = useState(false);
-  const reducedMotion = useReducedMotion();
   useEffect(() => { setTarget(worldline); }, [worldline]);
   const armed = target !== worldline;
-  // The dial reads the line you are on; the target's endpoint on the diagram tunes to the armed reading.
-  const preview = useTunedValue(DIVERGENCE[target], { duration: 820 });
-  const diagramRef = useRef<HTMLDivElement>(null);
   const name = (w: Worldline) => (w === 'steins_gate' ? 'STEINS;GATE' : 'β WORLDLINE');
   const pick = (w: Worldline) => {
     if (w === target) return;
     setTarget(w);
     onArm?.();
-    const map = diagramRef.current;
-    if (reducedMotion || typeof map?.animate !== 'function') return;
-    map.animate([
-      { transform: 'translateX(-3px)', filter: 'drop-shadow(-3px 0 rgba(255,70,110,.75)) drop-shadow(3px 0 rgba(90,220,255,.75))' },
-      { transform: 'translateX(2px)', filter: 'drop-shadow(2px 0 rgba(255,70,110,.5)) drop-shadow(-2px 0 rgba(90,220,255,.5))', offset: .35 },
-      { transform: 'none', filter: 'none' },
-    ], { duration: 240, easing: 'steps(4, end)' });
   };
   const aim = (on: boolean) => setAiming(on && armed && !busy);
+  const lines: Worldline[] = ['steins_gate', 'beta'];
+  const count = (n: number | null | undefined) => (n === null || n === undefined ? '—' : String(n));
   return (
     <div className={`ws2-wl-panel${armed ? ' armed' : ''}${aiming && armed && !busy ? ' aiming' : ''}`} data-target={target === 'steins_gate' ? 'sg' : 'beta'}>
       <div className="ws2-wl-hero">
@@ -197,12 +219,46 @@ export function WorldlinePanel({ worldline, busy, onShift, onArm }: {
           <Nixie value={DIVERGENCE[worldline]} size="lg" blueprint={false} />
         </div>
       </div>
-      <div className="ws2-wl-map" ref={diagramRef}>
-        <WorldlineDiagram worldline={worldline} target={target} reading={preview.text} onTarget={pick} />
+      <div className="ws2-wl-map">
+        <WorldlineDiagram worldline={worldline} target={target} aiming={aiming && armed && !busy} onTarget={pick} />
+      </div>
+      <div className="ws2-wl-ledger" role="radiogroup" aria-label="选择世界线">
+        {lines.map((w) => {
+          const row = ledger[w];
+          const here = w === worldline;
+          return (
+            <div
+              key={w}
+              role="radio"
+              tabIndex={target === w ? 0 : -1}
+              aria-checked={target === w}
+              aria-label={w === 'beta' ? 'β 世界线' : 'STEINS;GATE 世界线'}
+              className={`ws2-wl-row ${w === 'beta' ? 'beta' : 'sg'}${here ? ' cur' : ''}${target === w ? ' sel' : ''}`}
+              onClick={() => pick(w)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pick(w); return; }
+                if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+                e.preventDefault();
+                const next: Worldline = w === 'beta' ? 'steins_gate' : 'beta';
+                pick(next);
+                e.currentTarget.parentElement?.querySelector<HTMLElement>(`.ws2-wl-row.${next === 'beta' ? 'beta' : 'sg'}`)?.focus();
+              }}
+            >
+              <span className="mark" aria-hidden="true" />
+              <span className="who"><b>{w === 'beta' ? 'β' : 'STEINS;GATE'}</b><small>{DIVERGENCE[w]}%</small></span>
+              <span className="facts">
+                <span><i>会话</i>{count(row?.conversations)}</span>
+                <span><i>记忆</i>{count(row?.memories)}</span>
+                <span><i>最近</i>{row ? shortDate(row.last) : '—'}</span>
+              </span>
+              <span className="tag">{here ? '当前' : target === w ? '目标' : ''}</span>
+            </div>
+          );
+        })}
       </div>
       <p className="ws2-sr-only" aria-live="polite">{armed ? `目标世界线：${name(target)} · ${DIVERGENCE[target]}%` : ''}</p>
       <div className="ws2-m-foot">
-        <p className="ws2-m-note">两条世界线各自保存会话、草稿与记忆。目标线就绪后才算切换完成。</p>
+        <p className="ws2-m-note">两条世界线各自保存会话、草稿与记忆，互不相通。目标线就绪后才算切换完成。</p>
         <button key={target} type="button" className={`ws2-m-btn${armed ? ' armed' : ''}`} disabled={!armed || busy} onClick={() => onShift(target)}
           onPointerEnter={() => aim(true)} onPointerLeave={() => aim(false)} onFocus={() => aim(true)} onBlur={() => aim(false)}>
           {target === worldline ? '当前所在' : `跃迁至 ${target === 'steins_gate' ? 'STEINS;GATE' : 'β'}`}
@@ -222,7 +278,7 @@ function Ruler({ value, onChange, disabled, label }: { value: number; onChange: 
   );
 }
 
-/** Channel volumes are 0..1 in state; shown as 000..100. */
+/** Channel volumes are 0..1 in state; shown and typed as 0..100. */
 export function SoundChannel({ name, hint, volume, onVolume, enabled, onEnabled }: {
   name: string; hint: string; volume: number; onVolume: (v: number) => void; enabled?: boolean; onEnabled?: (v: boolean) => void;
 }) {
@@ -235,7 +291,7 @@ export function SoundChannel({ name, hint, volume, onVolume, enabled, onEnabled 
         ? <button type="button" className={`ws2-led${muted ? ' on' : ''}`} aria-pressed={muted} aria-label={`${name}静音`} onClick={() => onEnabled(muted)}><i />静音</button>
         : <span className="ws2-led-slot" />}
       <Ruler value={pct} onChange={(v) => onVolume(v / 100)} disabled={muted} label={`${name}音量`} />
-      <span className="ws2-m-val">{muted ? '---' : String(pct).padStart(3, '0')}</span>
+      <VolumeNumber className="ws2-m-val" value={pct} onChange={(v) => onVolume(v / 100)} disabled={muted} label={`${name}音量（0–100）`} />
     </div>
   );
 }

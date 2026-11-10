@@ -419,7 +419,7 @@ describe('Workstation S4-DS dark-only chrome', () => {
     await waitFor(() => expect(meter).toHaveAttribute('aria-expanded', 'false'));
   });
 
-  it('worldline panel: one dial reads the current line; the armed target is tagged on the diagram and aimed by the shift key', async () => {
+  it('worldline panel: one dial reads the current line; picking the other line dimensions the gap and the shift key aims it', async () => {
     renderWorkstation();
     fireEvent.click(await screen.findByRole('button', { name: '世界线 STEINS;GATE · 1.048596%' }));
     await screen.findByText('当前世界线');
@@ -427,14 +427,15 @@ describe('Workstation S4-DS dark-only chrome', () => {
     // No second meter and no blueprint captions crowding the dial.
     expect(panel.querySelectorAll('.nixie')).toHaveLength(1);
     expect(panel.querySelector('.nx-blueprint')).toBeNull();
-    expect(screen.queryByText(/TARGET PREVIEW/)).not.toBeInTheDocument();
-    expect(panel.querySelector('.tag')).toBeNull();
     expect(screen.getByRole('button', { name: '当前所在' })).toBeDisabled();
+    expect(panel.querySelector('.dim')).toBeNull();
+    expect(panel.querySelector('.ws2-wl-row.cur .tag')?.textContent).toBe('当前');
 
     fireEvent.click(screen.getByRole('radio', { name: 'β 世界线' }));
-    await waitFor(() => expect(panel.querySelector('.ws2-wl-line.sel .tag')?.textContent).toMatch(/TARGET · 目标/));
-    await waitFor(() => expect(panel.querySelector('.ws2-wl-line.sel .val')?.textContent).toBe(' · 1.129848%'));
-    expect(panel.querySelector('.ws2-wl-line.cur .tag')).toBeNull();
+    expect(screen.getByRole('radio', { name: 'β 世界线' })).toHaveAttribute('aria-checked', 'true');
+    expect(panel.querySelector('.ws2-wl-row.sel .tag')?.textContent).toBe('目标');
+    expect(panel.querySelector('.ws2-wl-line.sel.beta')).toBeTruthy();
+    expect(panel.querySelector('.dim .d')?.textContent).toBe('Δ 0.081252');
     expect(screen.getByText('目标世界线：β WORLDLINE · 1.129848%')).toBeInTheDocument();
     // The dial still reads the line you are on.
     expect(within(panel).getByRole('img', { name: 'World line divergence 1.048596%' })).toBeInTheDocument();
@@ -442,7 +443,7 @@ describe('Workstation S4-DS dark-only chrome', () => {
     const key = screen.getByRole('button', { name: '跃迁至 β' });
     fireEvent.pointerEnter(key);
     expect(panel).toHaveClass('aiming');
-    expect(panel.querySelector('.hop')).toBeTruthy();
+    expect(panel.querySelector('.dim.is-aimed')).toBeTruthy();
     fireEvent.pointerLeave(key);
     expect(panel).not.toHaveClass('aiming');
     fireEvent.focus(key);
@@ -451,7 +452,7 @@ describe('Workstation S4-DS dark-only chrome', () => {
     expect(panel).not.toHaveClass('aiming');
   });
 
-  it('the MEMORY key lays the memory sheet below the header and closes it again', async () => {
+  it('the MEMORY key opens the memory page over the whole sheet (the header gives way) and it closes again', async () => {
     renderWorkstation();
     await waitFor(() => expect(screen.getByText('AMADEUS')).toBeInTheDocument());
     const aperture = await screen.findByRole('button', { name: /^MEMORY$/i });
@@ -462,7 +463,8 @@ describe('Workstation S4-DS dark-only chrome', () => {
     });
     expect(await screen.findByTestId('memory-plate')).toBeInTheDocument();
     expect(document.querySelector('.ws2')).toHaveClass('memory-space-open');
-    expect(document.querySelector('.ws2-top')).toBeInTheDocument();
+    // One page at a time: the header band lifts away under the memory page and is out of reach.
+    expect(document.querySelector('.ws2-top')).toHaveAttribute('inert');
     expect(aperture).toHaveAttribute('aria-pressed', 'true');
     // open, the key is ringed in pencil (its tip, not a native title, says Esc goes back)
     expect(aperture).toHaveClass('is-on');
@@ -470,7 +472,7 @@ describe('Workstation S4-DS dark-only chrome', () => {
     expect(aperture).not.toHaveAttribute('title');
     expect(document.activeElement).toBe(screen.getByTestId('memory-space'));
     for (const covered of ['.ws2-side', '.ws2-talk', '.ws2-stage']) expect(document.querySelector(covered)).toHaveAttribute('inert');
-    fireEvent.click(aperture);
+    fireEvent.click(within(screen.getByTestId('memory-space')).getByRole('button', { name: /回到对话/ }));
     await waitFor(() => expect(screen.queryByTestId('memory-space')).toBeNull());
     expect(aperture).toHaveAttribute('aria-pressed', 'false');
     expect(document.activeElement).toBe(aperture);

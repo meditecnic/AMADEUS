@@ -146,7 +146,7 @@
 
 /* The dial reads the line you are on, under a nameplate that spans its tubes. The target preview is not a second
    meter; it lives on the diagram, at the end of the line you aim for. */
-.ws2-wl-hero { display: flex; justify-content: center; padding: 8px 0 4px; }
+.ws2-wl-hero { display: flex; justify-content: center; padding: 2px 0 0; }
 .ws2-wl-hero .dial { display: inline-flex; flex-direction: column; align-items: stretch; gap: 14px; }
 .ws2-wl-hero .meta { display: flex; align-items: baseline; justify-content: space-between; gap: 28px; padding: 0 6px; white-space: nowrap; }
 .ws2-wl-hero .meta small { font-family: var(--ws-mono); font-size: 10px; letter-spacing: .3em; color: var(--ws-ink-3); }
@@ -154,75 +154,114 @@
 .ws2-wl-hero .meta b { font-family: var(--ws-display); font-weight: 500; font-size: 15px; letter-spacing: .3em; color: var(--ws-ink); }
 .ws2-sysmenu.open .ws2-wl-hero .dial .nx-lit { animation: ws2-ignite .55s steps(1) calc(.3s + var(--n) * 70ms) both; }
 @keyframes ws2-ignite { 0% { opacity: 0; } 20% { opacity: .7; } 32% { opacity: .08; } 50% { opacity: 1; } 64% { opacity: .35; } 76%, 100% { opacity: 1; } }
-.ws2-wl-diagram { display: block; width: 100%; height: auto; margin: 8px 0 0; overflow: visible; }
-.ws2-wl-diagram .grid line { stroke: var(--ws-line); stroke-dasharray: 2 5; }
-.ws2-wl-diagram .origin { fill: var(--ws-ink-3); }
-.ws2-wl-diagram text { font-family: var(--ws-mono); font-size: 11px; letter-spacing: .08em; fill: var(--ws-ink-2); }
-.ws2-wl-line { cursor: pointer; outline: none; }
-.ws2-wl-line path { fill: none; }
-.ws2-wl-line .main, .ws2-wl-line .field { stroke-dasharray: 700; stroke-dashoffset: 700; animation: ws2-draw .7s cubic-bezier(.3, .7, .2, 1) .35s forwards; }
-.ws2-wl-line .main { stroke: var(--ws-ink-3); stroke-width: 1.2; transition: stroke .15s; }
-.ws2-wl-line .field { stroke: var(--ws-ink-3); stroke-width: .6; opacity: .5; }
-.ws2-wl-line .hit { stroke: transparent; stroke-width: 22; }
-.ws2-wl-line:hover .main, .ws2-wl-line.sel .main, .ws2-wl-line:focus-visible .main { stroke: var(--ws-ink); }
-.ws2-wl-line.sel text, .ws2-wl-line:focus-visible text { fill: var(--ws-ink); }
-/* the line you are on, inked in the sheet's own colour */
-.ws2-wl-line.cur .main { stroke: var(--ws-accent); stroke-width: 1.6; }
-.ws2-wl-line.cur .field { stroke: var(--ws-accent); opacity: .35; }
-.ws2-wl-line.cur text { fill: var(--ws-accent); }
-@keyframes ws2-draw { to { stroke-dashoffset: 0; } }
-.ws2-wl-diagram .here { fill: var(--ws-accent); opacity: 0; animation: ws2-fade-in .2s ease 1s forwards; }
-.ws2-wl-diagram .here .ring { fill: none; stroke: var(--ws-accent); animation: ws2-ping 2.2s ease-out 1s infinite; }
-@keyframes ws2-ping { from { r: 4; opacity: 1; } to { r: 18; opacity: 0; } }
-@keyframes ws2-fade-in { to { opacity: 1; } }
-
-/* Arming a target: the meter retunes, the target line carries current toward its end, a reticle locks on, and the
-   shift key takes the target's colour. */
+/* FIG. 1 (SystemMenu.tsx): ink and pencil on the sheet. Rules and the scale in pencil; the line you are on inked in
+   its colour; the field hatched; the target picked out in its colour and the gap dimensioned. Drawn in once. */
 .ws2-wl-panel { --tgt: var(--scale-beta-accent-primary); --tgt-rgb: var(--scale-beta-accent-rgb); container-type: inline-size; }
 .ws2-wl-panel[data-target='sg'] { --tgt: var(--scale-sg-accent-primary); --tgt-rgb: var(--scale-sg-accent-rgb); }
-.ws2-wl-line .flow { stroke: var(--tgt); stroke-width: 2; stroke-linecap: round; stroke-dasharray: 3 14; opacity: 0; pointer-events: none; }
-.ws2-wl-line.sel:not(.cur) .flow { opacity: 1; animation: ws2-flow .7s linear infinite; }
-.ws2-wl-line.sel:not(.cur) .main { stroke: rgba(var(--tgt-rgb), .7); }
-.ws2-wl-line.sel:not(.cur) text { fill: var(--tgt); }
-@keyframes ws2-flow { to { stroke-dashoffset: -17; } }
-.ws2-wl-diagram .aim { pointer-events: none; }
-/* the armed target's endpoint carries the preview: its tag and the reading as it tunes in */
-.ws2-wl-map { margin-top: 12px; }
-.ws2-wl-diagram text .tag { font-size: 10px; letter-spacing: .2em; fill: var(--tgt); }
-.ws2-wl-diagram text .val { font-variant-numeric: tabular-nums; }
-/* aiming the shift key (hover or focus): current runs faster down the target line and a hop links the two ends */
-.ws2-wl-diagram .hop { fill: none; stroke: var(--tgt); stroke-width: 1.4; stroke-linecap: round; stroke-dasharray: .045 .05; opacity: 0; transition: opacity .18s ease-out; pointer-events: none; }
-.ws2-wl-panel.aiming .ws2-wl-diagram .hop { opacity: 1; animation: ws2-hop .8s linear infinite; }
-@keyframes ws2-hop { to { stroke-dashoffset: -.19; } }
-.ws2-wl-panel.aiming .ws2-wl-line.sel:not(.cur) .flow { animation-duration: .32s; }
-.ws2-wl-panel.aiming .ws2-wl-diagram .aim-lock > circle { stroke-width: 1.8; }
-.ws2-wl-diagram .aim-lock { fill: none; stroke: var(--tgt); stroke-width: 1.2; animation: ws2-aim .42s cubic-bezier(.2, .9, .25, 1.2) both; }
-.ws2-wl-diagram .aim-lock .brk { stroke-width: 1.6; animation: ws2-aim-spin 6s linear .42s infinite; }
-@keyframes ws2-aim { from { transform: scale(2.6) rotate(-60deg); opacity: 0; } 60% { opacity: 1; } to { transform: none; opacity: 1; } }
-@keyframes ws2-aim-spin { to { transform: rotate(360deg); } }
-/* the shift key, armed: the plate in the target line's colour */
+.ws2-wl-map { margin-top: 10px; }
+.ws2-wl-diagram { display: block; width: 100%; height: auto; overflow: visible; }
+.ws2-wl-diagram text { font-family: var(--ws-mono); font-size: 11.5px; letter-spacing: .08em; fill: var(--ws-ink-3); }
+.ws2-wl-diagram .cap { font-size: 10px; letter-spacing: .24em; }
+.ws2-wl-diagram .cap.zh { font-family: var(--font-ui); letter-spacing: .14em; }
+.ws2-wl-diagram .axis line { stroke: var(--ws-ink-3); stroke-width: 1; }
+.ws2-wl-diagram .axis .minor { stroke: var(--ws-line-2); }
+.ws2-wl-diagram .axis .rule { stroke: var(--ws-line); stroke-dasharray: 1 5; }
+.ws2-wl-diagram .axis text { font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.ws2-wl-diagram .field pattern line, .ws2-wl-diagram #ws2-wl-hatch line { stroke: rgba(var(--scale-beta-accent-rgb), .3); stroke-width: .8; }
+.ws2-wl-diagram .field path { fill: none; stroke: rgba(var(--scale-beta-accent-rgb), .34); stroke-width: .8; stroke-dasharray: 4 3; }
+.ws2-wl-diagram .field text { font-size: 10px; letter-spacing: .16em; fill: rgba(var(--scale-beta-accent-rgb), .62); }
+.ws2-wl-diagram .origin { fill: var(--ws-ink-2); }
+.ws2-wl-diagram .note { font-family: var(--font-ui); font-size: 12px; letter-spacing: .14em; fill: var(--log-pencil); }
+.ws2-wl-line { cursor: pointer; }
+.ws2-wl-line path { fill: none; }
+.ws2-wl-line :is(.main, .strand) { stroke-dasharray: 1; stroke-dashoffset: 1; animation: ws2-draw .9s cubic-bezier(.3, .7, .2, 1) .25s forwards; }
+.ws2-wl-line .main { stroke: var(--ws-ink-3); stroke-width: 1.2; transition: stroke .2s; }
+.ws2-wl-line .strand { stroke: var(--ws-ink-3); stroke-width: .55; opacity: .55; }
+.ws2-wl-line .hit { stroke: transparent; stroke-width: 20; }
+.ws2-wl-line .end { fill: var(--ws-ink-3); }
+.ws2-wl-line .name { font-size: 11px; letter-spacing: .2em; fill: var(--ws-ink-3); }
+.ws2-wl-line .val { font-size: 12px; font-variant-numeric: tabular-nums; fill: var(--ws-ink-2); }
+.ws2-wl-line:hover .main { stroke: var(--ws-ink-2); }
+.ws2-wl-line.cur .main { stroke: var(--ws-accent); stroke-width: 1.6; }
+.ws2-wl-line.cur .strand { stroke: var(--ws-accent); opacity: .4; }
+.ws2-wl-line.cur :is(.end) { fill: var(--ws-accent); }
+.ws2-wl-line.cur :is(.name, .val) { fill: var(--ws-accent); }
+.ws2-wl-line.sel:not(.cur) .main { stroke: var(--tgt); stroke-width: 1.4; }
+.ws2-wl-line.sel:not(.cur) .strand { stroke: var(--tgt); opacity: .4; }
+.ws2-wl-line.sel:not(.cur) :is(.end) { fill: var(--tgt); }
+.ws2-wl-line.sel:not(.cur) :is(.name, .val) { fill: var(--tgt); }
+/* you are here: pencil */
+.ws2-wl-diagram .here path { fill: none; stroke: var(--log-pencil); stroke-width: 1.1; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 1; }
+.ws2-wl-diagram .here .ring { animation: ws2-draw .6s ease-out 1s forwards; }
+.ws2-wl-diagram .here .arrow { animation: ws2-draw .5s ease-out 1.4s forwards; }
+.ws2-wl-diagram .here .note { opacity: 0; animation: ws2-fade-in .3s ease 1.7s forwards; }
+/* the gap, dimensioned */
+.ws2-wl-diagram .dim path { fill: none; stroke: var(--tgt); stroke-width: .9; }
+.ws2-wl-diagram .dim .ext { stroke-width: .6; opacity: .55; stroke-dasharray: 2 2; }
+.ws2-wl-diagram .dim .line { stroke-dasharray: 1; stroke-dashoffset: 1; animation: ws2-draw .35s ease-out forwards; }
+.ws2-wl-diagram .dim .tick { opacity: 0; animation: ws2-fade-in .2s ease .3s forwards; }
+.ws2-wl-diagram .dim .d { font-size: 11px; letter-spacing: .1em; fill: var(--tgt); font-variant-numeric: tabular-nums; opacity: 0; animation: ws2-fade-in .2s ease .3s forwards; }
+.ws2-wl-diagram .dim.is-aimed path { stroke-width: 1.3; }
+.ws2-wl-diagram .dim.is-aimed .ext { opacity: .9; }
+.ws2-wl-panel.aiming .ws2-wl-line.sel:not(.cur) .main { stroke-width: 2; }
+
+@keyframes ws2-draw { to { stroke-dashoffset: 0; } }
+@keyframes ws2-fade-in { to { opacity: 1; } }
+
+/* the ledger: what each line holds; a row is the radio for that line */
+.ws2-wl-ledger { margin-top: 10px; border-top: 1px solid var(--ws-rule); }
+.ws2-wl-row {
+  display: grid; grid-template-columns: 14px minmax(118px, auto) minmax(0, 1fr) 40px; align-items: center; column-gap: 12px;
+  min-height: 46px; padding: 0 6px; border-bottom: 1px solid var(--ws-rule); cursor: pointer; transition: background-color .15s;
+}
+.ws2-wl-row:hover { background: rgba(255, 255, 255, .03); }
+.ws2-wl-row .mark { width: 9px; height: 9px; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--ws-ink-3); }
+.ws2-wl-row.sel .mark { background: radial-gradient(circle, var(--tgt) 0 2.5px, transparent 3px); box-shadow: inset 0 0 0 1px var(--tgt); }
+.ws2-wl-row.cur .mark { background: radial-gradient(circle, var(--ws-accent) 0 2.5px, transparent 3px); box-shadow: inset 0 0 0 1px var(--ws-accent); }
+.ws2-wl-row .who { display: flex; flex-direction: column; gap: 3px; }
+.ws2-wl-row .who b { font-family: var(--ws-display); font-weight: 500; font-size: 13px; letter-spacing: .22em; color: var(--ws-ink); }
+.ws2-wl-row .who small { font-family: var(--ws-mono); font-size: 10.5px; letter-spacing: .08em; color: var(--ws-ink-3); font-variant-numeric: tabular-nums; }
+.ws2-wl-row .facts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 16px; font-family: var(--ws-mono); font-size: 12px; color: var(--ws-ink); font-variant-numeric: tabular-nums; }
+.ws2-wl-row .facts i { margin-right: 6px; font-style: normal; font-family: var(--font-ui); font-size: 11px; letter-spacing: .1em; color: var(--ws-ink-3); }
+.ws2-wl-row .tag { justify-self: end; font-size: 11px; letter-spacing: .14em; color: var(--ws-ink-3); }
+.ws2-wl-row.cur .tag { color: var(--ws-accent); }
+.ws2-wl-row.sel:not(.cur) .tag { color: var(--tgt); }
+.ws2-wl-row.sel:not(.cur) .who b { color: var(--tgt); }
+@container (max-width: 520px) {
+  .ws2-wl-row { grid-template-columns: 14px minmax(0, 1fr) 36px; padding: 8px 4px; }
+  .ws2-wl-row .facts { grid-column: 2 / 3; justify-content: flex-start; font-size: 11.5px; }
+  .ws2-wl-row .tag { grid-row: 1; grid-column: 3; }
+}
 .ws2 .ws2-m-btn.armed { --edge: var(--tgt); color: var(--tgt) !important; background-color: color-mix(in srgb, var(--tgt) 10%, transparent) !important; }
 .ws2 .ws2-m-btn.armed:is(:hover, :focus-visible):not(:disabled) { --edge: var(--tgt); background-color: color-mix(in srgb, var(--tgt) 17%, transparent) !important; }
 
 /* ---------- her, while the page is open ---------- */
 
-/* The title block gives way to this one in the same corner: her name and state, and the line she is saying. */
+/* The name card gives way to this one in the same place, drawn the same way (no box): who and how she is, over a
+   fading hairline, and the line she is saying. */
 .ws2-stage-preview {
-  position: absolute; right: var(--fr-side); bottom: var(--fr-foot); z-index: 4; width: 250px;
-  border: 1px solid var(--ws-rule); background: color-mix(in srgb, var(--ws-bg) 84%, transparent); backdrop-filter: blur(6px);
+  position: absolute; right: calc(var(--fr-side) + 22px); bottom: calc(var(--fr-foot) + 16px); z-index: 4; width: 272px;
   animation: ws2-body-in .22s ease-out .1s both;
 }
-.ws2-stage-preview .head { display: flex; align-items: center; gap: 10px; height: 30px; padding: 0 12px; border-bottom: 1px solid var(--ws-rule); }
-.ws2-stage-preview .who { font-family: var(--ws-serif); font-weight: 500; font-size: 12px; letter-spacing: .3em; color: var(--ws-ink); }
+.ws2-stage-preview::before {
+  content: ''; position: absolute; inset: -30px -26px -18px -48px; z-index: -1; pointer-events: none;
+  background: radial-gradient(ellipse 72% 78% at 62% 62%, color-mix(in srgb, var(--ws-bg) 88%, transparent) 30%, transparent 100%);
+}
+.ws2-stage-preview .head { position: relative; display: flex; align-items: baseline; gap: 10px; padding: 0 2px 8px; }
+.ws2-stage-preview .head::after {
+  content: ''; position: absolute; left: -26px; right: 0; bottom: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--ws-rule) 30%, var(--ws-line-2) 100%);
+}
+.ws2-stage-preview .who { font-family: var(--ws-serif); font-weight: 500; font-size: 13px; letter-spacing: .3em; color: var(--ws-ink); }
 .ws2-stage-preview .state { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 11px; letter-spacing: .12em; color: var(--ws-ink-2); }
 .ws2-stage-preview .state i { width: 5px; height: 5px; border-radius: 50%; background: var(--ws-ink-2); }
 .ws2-stage-preview p {
-  margin: 0; padding: 9px 12px 10px; font-family: var(--ws-read); font-size: 13px; line-height: 1.7; color: var(--ws-ink);
+  margin: 0; padding: 9px 2px 4px; font-family: var(--ws-read); font-size: 13px; line-height: 1.7; color: var(--ws-ink);
   display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
 }
 .ws2-stage-preview button {
   --edge: var(--ws-line-2);
-  height: 24px; margin: 0 12px 10px; padding: 0 10px 0 12px; border: 0; border-radius: 0; font-size: 11.5px; letter-spacing: .1em; color: var(--ws-ink-2);
+  height: 24px; margin: 6px 2px 0; padding: 0 10px 0 12px; border: 0; border-radius: 0; font-size: 11.5px; letter-spacing: .1em; color: var(--ws-ink-2);
   box-shadow: inset 0 0 0 1px var(--edge); clip-path: polygon(6px 0, 100% 0, 100% 100%, 0 100%, 0 6px);
   background: linear-gradient(135deg, transparent 42.8%, var(--edge) 42.8% 52.8%, transparent 52.8%) 0 0 / 7px 7px no-repeat;
 }
@@ -589,11 +628,22 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ws2 .ws2-wl-line :is(.main, .field) { stroke-dashoffset: 0; }
-  .ws2 .ws2-wl-panel.aiming .ws2-wl-diagram .hop { animation: none; }
-  .ws2 .ws2-wl-diagram .here { opacity: 1; }
+  .ws2 .ws2-wl-line :is(.main, .strand), .ws2 .ws2-wl-diagram :is(.here path, .dim .line) { animation: none; stroke-dashoffset: 0; }
+  .ws2 .ws2-wl-diagram :is(.here .note, .dim .tick, .dim .d) { animation: none; opacity: 1; }
   .ws2 .settings-embedded .identity-mode-option:has(input:checked)::after { animation: none; }
   .ws2 :is(.ws2-disk .dim i, .ws2-m-form, .ws2-tool .glyph > .ws2-news, .ws2-recovery-sheet) { animation: none; }
   .ws2 .ws2-choice button.on::after { animation: none; }
   .ws2 .ws2-update-progress .dim i { transition: none; }
 }
+
+/* A volume you can type (VolumeNumber): plain digits on the rule, a pencil blank under it when reached for. */
+.ws2 .ws2-num {
+  width: 4ch; min-width: 0; padding: 2px 0 1px; border: 0; border-bottom: 1px solid transparent; border-radius: 0; background: none;
+  font-family: var(--ws-mono); font-size: 12.5px; letter-spacing: .04em; color: var(--ws-ink); text-align: right;
+  font-variant-numeric: tabular-nums; caret-color: var(--ws-accent); cursor: text; transition: border-color .15s, color .15s;
+}
+.ws2 .ws2-num:hover:not(:disabled) { border-bottom-color: var(--ws-line-2); }
+.ws2 input.ws2-num:focus-visible { outline: none; border-bottom-color: var(--ws-accent); color: var(--ws-ink); }
+.ws2 .ws2-num::selection { background: rgba(var(--ws-accent-rgb), .32); color: var(--ws-ink); }
+.ws2 .ws2-num:disabled { color: var(--ws-ink-3); cursor: default; }
+.ws2 .ws2-scope .ws2-num { font-size: 11px; color: var(--ws-ink-2); }

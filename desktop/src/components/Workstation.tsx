@@ -36,7 +36,8 @@ import { sentenceArrivals, useArrivalMemory } from '../workstation/arrivalMemory
 import { Atmosphere } from '../workstation/Atmosphere';
 import { DraftWord } from '../workstation/DraftWord';
 import { DIVERGENCE, Nixie, WORLDLINE_NAME, useTunedValue } from '../workstation/Nixie';
-import { SoundChannel, SystemMenu, WorldlinePanel, type MenuSection } from '../workstation/SystemMenu';
+import { MENU_SECTIONS, SoundChannel, SystemMenu, WorldlinePanel, type MenuSection } from '../workstation/SystemMenu';
+import { useWorldlineLedger } from '../workstation/worldlineLedger';
 import { WorldlineShift } from '../workstation/WorldlineShift';
 import { scheduleShiftPrewarm } from '../workstation/shiftStage';
 import { rememberWorkstationFonts } from '../workstation/fontWarmup';
@@ -164,6 +165,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const openMemoryFromMark = (request: MemoryOpenRequest) => {
     memoryOriginRef.current = request.origin;
     setMemoryLink({ select: request.select, mark: request.mark, hintAt: request.hintAt });
+    setIsSettingsOpen(false);
     setIsMemoryOpen(true);
   };
   useEffect(() => {
@@ -347,6 +349,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const updateMark = updateWaiting(updates);
   useEffect(() => { checkAfterLogin(); }, []);
   const [shiftConfirm, setShiftConfirm] = useState<'steins_gate' | 'beta' | null>(null);
+  // The plug at the end of the header is reached for out of curiosity too: it asks before it lets go.
+  const [unplugAsk, setUnplugAsk] = useState(false);
   const [pendingModel, setPendingModel] = useState<string | null>(null);
   const wsRootRef = useRef<HTMLDivElement>(null);
   // Tips and menus portal into the root so they carry the worldline palette (state, so portals re-render once it exists).
@@ -401,6 +405,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     return () => { cancelPrewarm(); window.clearTimeout(fonts); };
   }, [entering]);
   const closeMenu = useCallback(() => setIsSettingsOpen(false), []);
+  const worldlineLedger = useWorldlineLedger(sessionId, isSettingsOpen && menuSection === 'worldline');
   /** Lands on the connections page with focus on either the key field or the first usable other connection. */
   const openConnectionsAt = useCallback((target: 'key' | 'list') => {
     openMenu('connections');
@@ -2073,7 +2078,16 @@ export const Workstation: React.FC<WorkstationProps> = ({
         sendId={localSend?.scope === presentationScope ? localSend.id : null}
       />
 
-      <header className="ws2-top">
+      {/* The header follows the page under it (U 11-09): on the conversation it carries the session list's toggle and
+          the session's title; on the system page, a way back and where you are; the memory page has the whole sheet. */}
+      <header className="ws2-top" inert={(isMemoryOpen && !memoryClosing) || undefined}>
+        {isSettingsOpen ? (
+          <Tip label="回到对话（Esc）" side="bottom" align="start">
+          <button type="button" className="ws2-icon-btn ws2-back" onClick={() => { closeMenu(); systemButtonRef.current?.focus({ preventScroll: true }); }} aria-label="回到对话">
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M13 8H3.5M7.5 3.8 3.3 8l4.2 4.2" fill="none" stroke="currentColor" strokeWidth="1.2" /></svg>
+          </button>
+          </Tip>
+        ) : (
         <button
           type="button"
           ref={sideToggleRef}
@@ -2084,12 +2098,20 @@ export const Workstation: React.FC<WorkstationProps> = ({
         >
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" fill="none" stroke="currentColor" strokeWidth="1.2" /><path d="M6 2.5v11" stroke="currentColor" strokeWidth="1.2" /></svg>
         </button>
+        )}
         <div className="ws2-wordmark" aria-label="AMADEUS"><DraftWord key={worldline} text="AMADEUS" step={90} className={inkedLine.current === worldline ? 'is-inked' : ''} /></div>
         <span className="ws2-date">
           <span className="d">{dateLabel}</span><span className="dow">({dayLabel})</span>
         </span>
         <span className="ws2-title">
-          {activeConversation?.title ? (
+          {isSettingsOpen ? (
+            <span className="ws2-crumb" key={menuSection}>
+              <span className="root">系统</span>
+              <i aria-hidden="true">/</i>
+              <span className="no">{String(Math.max(0, MENU_SECTIONS.findIndex((s) => s.key === menuSection)) + 1).padStart(2, '0')}</span>
+              <span className="here">{MENU_SECTIONS.find((s) => s.key === menuSection)?.zh}</span>
+            </span>
+          ) : activeConversation?.title ? (
             <>
               {activeConversationNo ? <span className="no">{conversationNo(activeConversationNo)}</span> : null}
               <span className="t">{activeConversation.title}</span>
@@ -2111,6 +2133,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
               }
               memoryOriginRef.current = null;
               setMemoryLink(null);
+              // One page at a time: the system page gives way to the memory page.
+              setIsSettingsOpen(false);
               setIsMemoryOpen(true);
             }}
           >
@@ -2170,7 +2194,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           </button>
           </Tip>
           <Tip label="断开连接">
-          <button type="button" className="ws2-icon-btn ws2-unplug" onClick={onLogout} aria-label="断开连接">
+          <button type="button" className="ws2-icon-btn ws2-unplug" onClick={() => setUnplugAsk(true)} aria-label="断开连接" aria-haspopup="dialog">
             <OpenSwitch />
           </button>
           </Tip>
@@ -2692,6 +2716,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           <WorldlinePanel
             worldline={worldline}
             busy={Boolean(shift)}
+            ledger={worldlineLedger}
             onArm={() => audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume)}
             onShift={(to) => {
               if (isThinking || isSynthesizing || isPlaying) setShiftConfirm(to);
@@ -2859,6 +2884,25 @@ export const Workstation: React.FC<WorkstationProps> = ({
             setShift(null);
           }}
         />
+      )}
+
+      {unplugAsk && (
+        <ConfirmDialog
+          title="断开连接？"
+          confirmLabel="断开"
+          onConfirm={() => {
+            setUnplugAsk(false);
+            if (isThinking || isSynthesizing) handleCancelTurn();
+            else handleStopVoice();
+            onLogout();
+          }}
+          onCancel={() => setUnplugAsk(false)}
+        >
+          <p>回到登录页。对话都已存好，再次进入就能接着聊。</p>
+          {isThinking || isSynthesizing || isPlaying
+            ? <p className="ws2-dialog-hint">她还在回复，断开会停下这一轮。</p>
+            : null}
+        </ConfirmDialog>
       )}
 
       {shiftConfirm && (
