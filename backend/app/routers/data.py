@@ -24,7 +24,11 @@ async def _call(function, *args):
 async def data_status():
     from app.services.data_startup import current_status
 
-    return {**current_status(), "backups": await _call(backups.list_backups)}
+    return {
+        **current_status(),
+        "backups": await _call(backups.list_backups),
+        "restore_pending": await _call(backups.pending_restore_id),
+    }
 
 
 @router.get("/backups")

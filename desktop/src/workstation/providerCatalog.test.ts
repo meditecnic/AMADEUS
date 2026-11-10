@@ -34,6 +34,9 @@ describe('provider catalog', () => {
   it('finds the entry a connected row came from, by built-in id or by address', () => {
     expect(entryFor({ id: 'glm' })?.id).toBe('glm');
     expect(entryFor({ id: 'custom:x', base_url: 'https://api.moonshot.ai/v1/' })?.id).toBe('moonshot');
+    // one address, two entries: the label it was connected with tells them apart
+    expect(entryFor({ id: 'custom:m', base_url: 'https://api.minimax.cn/v1' })?.id).toBe('minimax');
+    expect(entryFor({ id: 'custom:m', base_url: 'https://api.minimax.cn/v1', catalog_id: 'minimax-plan' })?.id).toBe('minimax-plan');
     expect(entryFor({ id: 'custom:y', base_url: 'https://relay.example.com/v1' })).toBeUndefined();
   });
 
@@ -54,6 +57,10 @@ describe('provider catalog', () => {
     expect(connectError(new ApiError(401, 'credential_rejected')).title).toBe('密钥被拒绝了');
     expect(connectError(new ApiError(502, 'provider_unavailable'), 'list').title).toBe('读不到模型列表');
     expect(connectError(new ApiError(502, 'provider_unavailable'), 'check').title).toBe('服务商没有正常回应');
+    expect(connectError(new ApiError(502, 'address_unreachable'), 'list').title).toBe('连不上这个地址');
+    expect(connectError(new ApiError(429, 'rate_limited'), 'check').fix).toContain('额度');
+    expect(connectError(new ApiError(402, 'insufficient_balance'), 'check').title).toBe('余额不足');
+    expect(connectError(new ApiError(504, 'discovery_timeout'), 'list').title).toBe('等了 20 秒没有回应');
     expect(connectError(new ApiError(0, 'something_new')).fix).toContain('something_new');
   });
 });

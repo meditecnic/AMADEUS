@@ -222,6 +222,19 @@ def schedule_restore(backup_id: str) -> dict:
         return {"restart_required": True}
 
 
+def pending_restore_id() -> str | None:
+    """The backup a restore is scheduled to, while it can still be cancelled."""
+    request_path = _root() / "restore-request.json"
+    try:
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(request, dict) or request.get("phase") != "pending":
+        return None
+    backup_id = request.get("id")
+    return backup_id if isinstance(backup_id, str) else None
+
+
 def cancel_restore() -> dict:
     with _lock:
         request_path = _root() / "restore-request.json"

@@ -674,6 +674,15 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
                   <span>候选观察：{item.displayText ?? '（内容不可显示）'}</span>
                   <button
                     type="button"
+                    data-testid={`archive-confirm-${item.observationId}`}
+                    onClick={() =>
+                      module.dispatch({ type: 'confirm-observation', observationId: item.observationId })
+                    }
+                  >
+                    确认
+                  </button>
+                  <button
+                    type="button"
                     data-testid={`archive-ignore-${item.observationId}`}
                     onClick={() =>
                       module.dispatch({ type: 'ignore-observation', observationId: item.observationId })

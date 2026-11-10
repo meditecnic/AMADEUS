@@ -50,13 +50,23 @@ export type Backup = {
   can_restore: boolean;
   detail?: string;
 };
-export type DataStatus = { status: 'ok' | 'corrupt' | 'restore_failed' | string; detail: string | null; backups: Backup[] };
+export type DataStatus = {
+  status: 'ok' | 'corrupt' | 'restore_failed' | string;
+  detail: string | null;
+  backups: Backup[];
+  /** The backup a restore is scheduled to at the next start, while it can still be cancelled. */
+  restore_pending?: string | null;
+};
 
 export const dataStatus = () => json<DataStatus>('/api/data/status');
 export const listBackups = () => json<Backup[]>('/api/data/backups');
 export const createBackup = () => json<{ id: string }>('/api/data/backups', send('POST'));
 export const restoreBackup = (id: string) => json<{ restart_required: boolean }>(`/api/data/backups/${encodeURIComponent(id)}/restore`, send('POST'));
 export const deleteBackup = (id: string) => json<unknown>(`/api/data/backups/${encodeURIComponent(id)}`, send('DELETE'));
+/** Call off a restore that is scheduled but has not started. */
+export const cancelRestore = () => json<{ cancelled: boolean }>('/api/data/restore', send('DELETE'));
+/** The result of the last restore has been read: it is not said again, at this start or the next. */
+export const ackRestoreResult = () => json<{ acknowledged: boolean }>('/api/data/restore-result/ack', send('POST'));
 
 /* ---------- the startup passcode ---------- */
 

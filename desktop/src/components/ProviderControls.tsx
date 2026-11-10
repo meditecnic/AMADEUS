@@ -77,6 +77,10 @@ export interface ProviderMetadata {
   selector_admission?: 'pending' | 'admitted' | 'manual';
   /** Custom connections only; admission writes must quote it. */
   configuration_version?: string | null;
+  /** The catalog entry it was connected from (providerCatalog), when it came from one. */
+  catalog_id?: string | null;
+  /** The models shown in the composer's menu; empty shows them all. */
+  visible_models?: string[];
 }
 
 interface ProviderControlsProps {

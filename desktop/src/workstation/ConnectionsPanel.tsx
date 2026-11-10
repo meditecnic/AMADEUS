@@ -5,7 +5,7 @@ import type { WebSearchProviderId, WebSearchProviderInfo } from '../components/S
 import { ConfirmDialog } from './ConfirmDialog';
 import { chatCheckMessage, type ChatCheckState } from './ConnectionCheck';
 import { connectionLamp, type ConnectionLamp } from './ConnectionList';
-import { clearKey, connectError, createProfile, listModels, removeProfile, saveKey, updateProfile } from './connectApi';
+import { clearKey, connect, ConnectFailure, connectError, listModels, removeProfile, saveKey, updateProfile } from './connectApi';
 import { ApiError } from './dataApi';
 import { setShelf, useModelShelf } from './modelShelf';
 import {
@@ -501,7 +501,7 @@ function ConnectSheet(props: ConnectionsPanelProps & {
   return <KeySheet {...props} />;
 }
 
-function KeySheet({ anchor, entry, existing, onClose, onCheck, onAdmit, onReload, onConfigChanged, onUse, locked }: ConnectionsPanelProps & {
+function KeySheet({ anchor, entry, existing, providers, onClose, onCheck, onAdmit, onReload, onConfigChanged, onUse, locked }: ConnectionsPanelProps & {
   anchor: React.RefObject<HTMLDivElement | null>;
   entry: CatalogEntry;
   existing?: ProviderMetadata;
@@ -518,7 +518,8 @@ function KeySheet({ anchor, entry, existing, onClose, onCheck, onAdmit, onReload
   const [models, setModels] = useState<string[] | null>(null);
   const [model, setModel] = useState('');
   const [phase, setPhase] = useState<'form' | 'working' | 'pick' | 'done'>('form');
-  const profile = useRef<{ id: string; version: string | null; url: string } | null>(null);
+  // The connection this window is working on; `made` when it did not exist before (so leaving early removes it).
+  const profile = useRef<{ id: string; version: string | null; made: boolean } | null>(null);
   const admitted = useRef(false);
 
   useEffect(() => { if (entry.regions) setBaseUrl(baseUrlOf(entry, region)); }, [entry, region]);
@@ -527,36 +528,37 @@ function KeySheet({ anchor, entry, existing, onClose, onCheck, onAdmit, onReload
   const providerId = () => entry.builtin ?? profile.current?.id ?? '';
   const needKey = !entry.noKey && !(entry.builtin && existing?.configured && !key);
 
-  /** Steps 1 and 2: keep the key (making the profile first), read the list. */
+  /**
+   * Steps 1 and 2 in one call: the backend keeps the key (making the connection, or reusing the one at this address
+   * with this label) and reads the list. A failure leaves nothing behind and says which step it was.
+   */
   const start = async () => {
     setFailure(null);
     setPhase('working');
-    let step: StepKey = 'save';
+    setSteps({ save: { state: 'doing' }, list: { state: 'idle' }, check: { state: 'idle' } });
     try {
-      mark('save', { state: 'doing' });
+      const url = baseUrl.trim();
+      const got = await connect(
+        entry.builtin
+          ? { providerId: entry.builtin }
+          : { baseUrl: url, name: name.trim() || hostOf(url), catalogId: entry.id === 'custom' ? undefined : entry.id },
+        key.trim(),
+      );
       if (custom) {
-        const url = baseUrl.trim();
-        if (!profile.current) {
-          const made = await createProfile(name.trim() || hostOf(url), url, entry.prefer?.[0] ?? '');
-          profile.current = { id: made.provider_id, version: made.configuration_version ?? null, url };
-        } else if (profile.current.url !== url) {
-          const moved = await updateProfile(profile.current.id, { base_url: url }, profile.current.version);
-          profile.current = { ...profile.current, version: moved.configuration_version ?? profile.current.version, url };
-        }
+        profile.current = { id: got.provider_id, version: got.configuration_version ?? null, made: !providers.some((row) => row.id === got.provider_id) };
       }
-      if (key.trim()) await saveKey(providerId(), key.trim());
-      onConfigChanged(providerId());
-      mark('save', { state: 'done', note: key.trim() ? '只存在这台电脑上' : entry.noKey ? '本机服务，不需要密钥' : '沿用已保存的密钥' });
-
-      step = 'list';
-      mark('list', { state: 'doing' });
-      const ids = await listModels(providerId());
-      const chat = ids ? chatModels(ids) : null;
+      onConfigChanged(got.provider_id);
+      // An existing connection that only got a new key keeps its model and its place in the menu.
+      const rekeyed = got.check.code === 'not_checked';
+      mark('save', { state: 'done', note: rekeyed ? '密钥已换，原来的模型不变' : key.trim() ? '只存在这台电脑上' : entry.noKey ? '本机服务，不需要密钥' : '沿用已保存的密钥' });
+      const chat = got.models_listed === false ? null : chatModels(got.models);
       setModels(chat);
-      setModel((current) => current || (chat ? suggestModel(entry, chat) : existing?.default_model ?? ''));
+      setModel((current) => current || got.model_id || (chat ? suggestModel(entry, chat) : existing?.default_model ?? ''));
       mark('list', { state: 'done', note: chat ? `${chat.length} 个对话模型` : '这家不提供列表，请手动填写模型名' });
       setPhase('pick');
     } catch (problem) {
+      const step: StepKey = problem instanceof ConnectFailure && problem.step ? problem.step : 'save';
+      if (step !== 'save') mark('save', { state: 'done' });
       mark(step, { state: 'failed' });
       setFailure(connectError(problem, step));
       setPhase('form');
@@ -592,8 +594,8 @@ function KeySheet({ anchor, entry, existing, onClose, onCheck, onAdmit, onReload
   };
 
   const close = () => {
-    // A profile made here that never passed stays out of the way: it is removed, not left pending.
-    if (profile.current && !admitted.current) {
+    // A connection made here that never passed stays out of the way: it is removed, not left pending.
+    if (profile.current?.made && !admitted.current) {
       void removeProfile(profile.current.id).catch(() => undefined).then(() => onReload());
     }
     onClose();

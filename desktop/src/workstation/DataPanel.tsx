@@ -5,7 +5,7 @@ import { ConfirmDialog } from './ConfirmDialog';
 import { Stamp } from './Stamp';
 import {
   ApiError, authState, createBackup, dataLocation, dataStatus, deleteBackup, diskUsage, exportArchive, formatBytes, formatStamp, formatVersion,
-  restoreBackup, setPasscode, type AuthState, type Backup, type DataLocation, type DiskCategory, type DiskUsage, type ExportRequest,
+  ackRestoreResult, cancelRestore, restoreBackup, setPasscode, type AuthState, type Backup, type DataLocation, type DiskCategory, type DiskUsage, type ExportRequest,
 } from './dataApi';
 import { inShell, revealInFolder, saveBlob } from './shell';
 
@@ -180,6 +180,8 @@ function BackupGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null> }
       if (!live) return;
       setBackups(status.backups);
       if (status.status === 'restore_failed') setRestoreFailed(status.detail ?? '');
+      // A restore scheduled earlier (before this page was opened, or before a reload) is still waiting.
+      setScheduled(status.backups.find((row) => row.id === status.restore_pending) ?? null);
     }, (failure) => { if (live) setLoadError(errorText(failure, '读不到备份。')); });
     return () => { live = false; };
   }, []);
@@ -219,6 +221,27 @@ function BackupGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null> }
     }
   };
 
+  const [calling, setCalling] = useState(false);
+  const callOff = async () => {
+    setCalling(true);
+    setNote(null);
+    try {
+      await cancelRestore();
+      setScheduled(null);
+      setNote({ text: '已取消恢复，数据保持现在的样子。' });
+    } catch (failure) {
+      // restore_not_pending: it was already called off, or has already run.
+      if (failure instanceof ApiError && failure.code === 'restore_not_pending') setScheduled(null);
+      setNote({ text: errorText(failure, '没能取消。'), bad: true });
+    } finally {
+      setCalling(false);
+    }
+  };
+  const readFailure = () => {
+    void ackRestoreResult().catch(() => undefined);
+    setRestoreFailed(null);
+  };
+
   const total = backups?.reduce((sum, row) => sum + row.size, 0) ?? 0;
   return (
     <section className="ws2-m-sec" aria-labelledby="ws2-data-backups">
@@ -230,11 +253,13 @@ function BackupGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null> }
         <p className="ws2-m-flag is-bad" role="status">
           上次的恢复没有做完，数据还是恢复前的样子。
           {restoreFailed ? <code>{restoreFailed}</code> : null}
+          <button type="button" className="ws2-m-link" onClick={readFailure}>知道了</button>
         </p>
       ) : null}
       {scheduled ? (
         <p className="ws2-m-flag" role="status">
           已安排：下次打开 AMADEUS 时，数据换成 {formatStamp(scheduled.time)} 的备份。现在关掉再打开即可。
+          <button type="button" className="ws2-m-link" onClick={() => { void callOff(); }} disabled={calling}>{calling ? '取消中…' : '取消恢复'}</button>
         </p>
       ) : null}
       <div className="ws2-m-row">

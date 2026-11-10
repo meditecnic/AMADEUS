@@ -40,7 +40,7 @@ import { MENU_SECTIONS, SoundChannel, SystemMenu, type MenuSection } from '../wo
 import { WorldlinePanel } from '../workstation/WorldlinePanel';
 import { useWorldlineLedger } from '../workstation/worldlineLedger';
 import { ConnectionsPanel } from '../workstation/ConnectionsPanel';
-import { shelved, useModelShelf } from '../workstation/modelShelf';
+import { adoptShelves, shelved, useModelShelf } from '../workstation/modelShelf';
 import { WorldlineShift } from '../workstation/WorldlineShift';
 import { scheduleShiftPrewarm } from '../workstation/shiftStage';
 import { rememberWorkstationFonts } from '../workstation/fontWarmup';
@@ -633,6 +633,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       if (!response.ok) throw new Error(`provider query failed: ${response.status}`);
       const rows = await response.json() as ProviderMetadata[];
       if (providersRequestEpochRef.current !== requestEpoch) return rows;
+      adoptShelves(rows);
       setProviders(rows);
       setProviderListLoaded(true);
       setProviderListFailed(false);

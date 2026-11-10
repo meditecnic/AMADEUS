@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { dataStatus } from './dataApi';
+import { ackRestoreResult, dataStatus } from './dataApi';
 
 const SEEN = 'amadeus_restore_failure_seen';
 
@@ -18,6 +18,8 @@ export function RestoreNotice({ onOpen }: { onOpen: () => void }) {
   }, []);
   if (detail === null) return null;
   const dismiss = () => {
+    // The backend forgets the result; the local mark covers a backend that could not write just now.
+    void ackRestoreResult().catch(() => undefined);
     try { localStorage.setItem(SEEN, detail); } catch { /* it shows again next time */ }
     setDetail(null);
   };

@@ -67,6 +67,57 @@ export function handleProviders(path: string, method: string, body: Record<strin
     return ok({ provider_id: id, display_name: row.display_name, base_url: url, default_model: row.default_model, enabled: true,
       selector_admission: 'pending', configuration_version: row.configuration_version, source: 'user_config', created_at_utc: fixedTime });
   }
+  // One call: make or reuse the connection (same address and label), keep the key, read the list.
+  if (path === '/api/providers/connect' && method === 'POST') {
+    const stepFail = (status: number, code: string, step: string) => ok({ detail: { code, step } }, status);
+    const key = String(body.api_key ?? '');
+    let row: Row | undefined;
+    let made = false;
+    if (typeof body.provider_id === 'string') {
+      row = find(body.provider_id);
+      if (!row || row.source !== 'builtin') return stepFail(422, 'invalid_provider_configuration', 'save');
+    } else {
+      const url = String(body.base_url ?? '').trim().replace(/\/+$/, '');
+      if (!/^https?:\/\/[^/?#\s]+/.test(url) || (body.display_name !== undefined && !String(body.display_name).trim())) {
+        return stepFail(422, 'invalid_provider_configuration', 'save');
+      }
+      const label = typeof body.catalog_id === 'string' ? body.catalog_id : null;
+      row = store.rows.find((r) => r.source === 'user_config' && r.enabled !== false && r.base_url === url && (r.catalog_id ?? null) === label);
+      if (!row) {
+        store.versions += 1;
+        row = {
+          ...builtin(`custom:00000000-0000-4000-8000-${String(store.versions).padStart(12, '0')}`, String(body.display_name ?? 'Custom'), ''),
+          credential_required: false, base_url_configurable: true, base_url: url, source: 'user_config', catalog_id: label,
+          selector_admission: 'pending', configuration_version: `v${store.versions}`,
+        };
+        store.rows.push(row);
+        made = true;
+      }
+    }
+    // A key containing "bad" is one the service refuses: nothing is kept of this attempt.
+    if (key.includes('bad')) {
+      if (made) store.rows.splice(store.rows.indexOf(row), 1);
+      return stepFail(401, 'credential_rejected', 'list');
+    }
+    if (row.credential_required && !row.configured && !key) {
+      return stepFail(409, 'credential_missing', 'list');
+    }
+    if (key) { row.configured = true; store.refused.delete(row.id); }
+    const kept = !made && Boolean(row.default_model);
+    return ok({
+      provider_id: row.id, models: row.id === 'deepseek' ? (catalog as { id: string }[]).map((m) => m.id) : modelsFor(row), models_listed: true,
+      model_id: kept ? row.default_model : null,
+      check: { ok: false, code: kept ? 'not_checked' : 'model_selection_required' },
+      configuration_version: row.configuration_version ?? null,
+    });
+  }
+  const settings = /^\/api\/providers\/([^/]+)\/settings$/.exec(path);
+  if (settings && method === 'PATCH') {
+    const row = find(decodeURIComponent(settings[1]));
+    if (!row) return fail(404, 'provider_not_found');
+    row.visible_models = Array.isArray(body.visible_models) ? body.visible_models.filter((id): id is string => typeof id === 'string') : [];
+    return ok({ provider_id: row.id, visible_models: row.visible_models });
+  }
   const profile = /^\/api\/providers\/custom-profiles\/([^/]+)$/.exec(path);
   if (profile) {
     const row = find(profile[1]);

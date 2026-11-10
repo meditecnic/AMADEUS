@@ -163,8 +163,8 @@ export const CATALOG: CatalogEntry[] = [
     plan: { fit: 'coding', note: '官方只给了编程工具的接法，没有写明聊天应用能不能用。', url: 'https://mimo.mi.com/docs/zh-CN/quick-start/summary/first-api-call' } },
   { id: 'opencode-go', name: 'OpenCode Go', blurb: 'OpenCode 的低价订阅，GLM、Kimi、DeepSeek、MiniMax 等开源模型。', group: 'plan',
     baseUrl: 'https://opencode.ai/inference/go/openai/v1', keyUrl: 'https://opencode.ai/', aliases: 'opencode go 套餐 订阅',
-    plan: { fit: 'coding', note: '官方说明 Go 为编程工具设计，会监测不像编程工具发出的流量。', url: 'https://opencode.ai/docs/console/go/' },
-    waiting: 'OpenCode Go 要求每个请求带上会话标识，AMADEUS 还没有发送它，现在接上也会被拒绝。' },
+    keyHint: '订阅 Go 后在 OpenCode 控制台的 Account › Personal API keys 里新建，只显示一次。',
+    plan: { fit: 'coding', note: '官方说明 Go 为编程工具设计，会监测不像编程工具发出的流量。', url: 'https://opencode.ai/docs/console/go/' } },
 
   // routers
   { id: 'openrouter', name: 'OpenRouter', blurb: '一个密钥用几百个模型，含 Claude、GPT、Gemini。', group: 'router', popular: true,
@@ -199,10 +199,12 @@ export const canConnect = (entry: CatalogEntry) => !entry.waiting;
 
 export const catalogEntry = (id: string | undefined) => (id ? CATALOG.find((entry) => entry.id === id) : undefined);
 
-/** The catalog entry a connected provider row came from (by built-in id, or by its address). */
-export function entryFor(row: { id: string; base_url?: string | null }): CatalogEntry | undefined {
+/** The catalog entry a connected provider row came from: by built-in id, by the label it was connected with, or by its address. */
+export function entryFor(row: { id: string; base_url?: string | null; catalog_id?: string | null }): CatalogEntry | undefined {
   const builtin = CATALOG.find((entry) => entry.builtin === row.id);
   if (builtin) return builtin;
+  const labelled = catalogEntry(row.catalog_id ?? undefined);
+  if (labelled) return labelled;
   const address = (row.base_url ?? '').replace(/\/+$/, '').toLowerCase();
   if (!address) return undefined;
   return CATALOG.find((entry) => [entry.baseUrl, ...(entry.regions ?? []).map((r) => r.baseUrl)]

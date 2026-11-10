@@ -25,6 +25,8 @@ export function loadAssetPack(): Promise<boolean> {
       // A pack may hold only part of the material (only her portraits, say); then the rest falls back as if absent.
       if (available) {
         const manifest: unknown = await response.json().catch(() => null);
+        // No pack answers 200 {"installed": false}; an older backend answered 404.
+        if ((manifest as { installed?: unknown } | null)?.installed === false) available = false;
         const files = (manifest as { files?: unknown } | null)?.files;
         listed = Array.isArray(files) ? new Set(files.filter((f): f is string => typeof f === 'string').map(normalize)) : null;
       }

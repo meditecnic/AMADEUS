@@ -41,15 +41,40 @@ async function memoriesOf(sessionId: string, worldline: Worldline): Promise<numb
   return counts.some((n) => n === null) ? null : (counts as number[]).reduce((a, b) => a + b, 0);
 }
 
+/** Both lines in one request (GET /api/worldlines/summary, the same counts as the six requests below). */
+async function summaryOf(sessionId: string): Promise<Ledger | null> {
+  try {
+    const response = await apiFetch(`/api/worldlines/summary?session_id=${encodeURIComponent(sessionId)}`);
+    if (!response.ok) return null;
+    const body = await response.json() as Partial<Record<Worldline, { conversations?: unknown; memories?: unknown; last_active_at?: unknown }>>;
+    const line = (key: Worldline): LedgerLine | null => {
+      const row = body?.[key];
+      if (!row || typeof row.conversations !== 'number' || typeof row.memories !== 'number') return null;
+      return { conversations: row.conversations, memories: row.memories, last: typeof row.last_active_at === 'string' ? row.last_active_at : null };
+    };
+    const sg = line('steins_gate');
+    const beta = line('beta');
+    return sg && beta ? { steins_gate: sg, beta } : null;
+  } catch {
+    return null;
+  }
+}
+
 export function useWorldlineLedger(sessionId: string, open: boolean): Ledger {
   const [ledger, setLedger] = useState<Ledger>({});
   useEffect(() => {
     if (!open || !sessionId) return;
     let live = true;
-    void Promise.all((['steins_gate', 'beta'] as const).map(async (line) => {
-      const [talk, memories] = await Promise.all([conversationsOf(sessionId, line), memoriesOf(sessionId, line)]);
-      return [line, { conversations: talk?.count ?? null, memories, last: talk?.last ?? null }] as const;
-    })).then((rows) => { if (live) setLedger(Object.fromEntries(rows)); });
+    void (async () => {
+      const summary = await summaryOf(sessionId);
+      if (summary) { if (live) setLedger(summary); return; }
+      // The summary fails as a whole when one line cannot be read; line by line still shows the one that can.
+      const rows = await Promise.all((['steins_gate', 'beta'] as const).map(async (line) => {
+        const [talk, memories] = await Promise.all([conversationsOf(sessionId, line), memoriesOf(sessionId, line)]);
+        return [line, { conversations: talk?.count ?? null, memories, last: talk?.last ?? null }] as const;
+      }));
+      if (live) setLedger(Object.fromEntries(rows));
+    })();
     return () => { live = false; };
   }, [sessionId, open]);
   return ledger;

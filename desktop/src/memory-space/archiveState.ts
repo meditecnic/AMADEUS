@@ -7,6 +7,7 @@ import {
   fetchMemoryStatus,
   fetchObservations,
   fetchTopics,
+  confirmObservation,
   ignoreObservation,
   renameTopic,
   retryFailedJob,
@@ -154,6 +155,7 @@ export type ArchiveIntent =
   | { type: 'rename-topic-save' }
   | { type: 'rename-topic-cancel' }
   | { type: 'ignore-observation'; observationId: string }
+  | { type: 'confirm-observation'; observationId: string }
   | { type: 'retry-job'; jobId: string }
   | { type: 'confirm-discard' }
   | { type: 'cancel-discard' }
@@ -785,6 +787,30 @@ export function createArchiveModule(deps?: {
           if (stale(guardEpoch)) return;
           if (result.type === 'ok' || result.type === 'validation') {
             commit({ announcement: '该观察项已忽略' });
+          } else {
+            commit({ announcement: '操作失败，观察项未变更' });
+          }
+          void loadPending(guardEpoch);
+        });
+        return;
+      }
+      case 'confirm-observation': {
+        // Eligibility is backend-declared (status), never inferred from text.
+        const target = state.pending.observations.find(
+          (item) => item.observationId === intent.observationId,
+        );
+        if (!target || target.status !== 'candidate' || !state.scope) return;
+        const scope = state.scope;
+        void runAuxiliaryMutation(async () => {
+          const result = await confirmObservation(scope, intent.observationId, { fetcher });
+          if (stale(guardEpoch)) return;
+          if (result.type === 'ok') {
+            commit({ announcement: '已记为事实' });
+            void loadFacts();
+          } else if (result.type === 'backend-failure' && result.code === 'embedding_not_ready') {
+            commit({ announcement: '记忆模型还没准备好，稍后再试' });
+          } else if (result.type === 'conflict') {
+            commit({ announcement: '这条观察已经处理过了' });
           } else {
             commit({ announcement: '操作失败，观察项未变更' });
           }
