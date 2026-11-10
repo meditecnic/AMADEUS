@@ -809,6 +809,12 @@ async def _apply_operation(db, *, op, obs_map, session, mode, source_by_id, rean
                 "expected_version_mismatch",
                 f"expected={expected} active={active_version}",
             )
+        authority = await (await db.execute(
+            "SELECT 1 FROM stable_fact_versions WHERE fact_id=? AND change_kind='user_edit' LIMIT 1",
+            (target,),
+        )).fetchone()
+        if authority is not None:
+            raise MemoryValidationError("user_fact_protected", "Automatic extraction cannot replace user authority")
         now = _utc_now()
         new_version = active_version + 1
         semantic_blob, fingerprint = _semantic_blob_and_fp(
