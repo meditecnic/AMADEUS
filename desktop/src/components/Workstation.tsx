@@ -36,7 +36,8 @@ import { sentenceArrivals, useArrivalMemory } from '../workstation/arrivalMemory
 import { Atmosphere } from '../workstation/Atmosphere';
 import { DraftWord } from '../workstation/DraftWord';
 import { DIVERGENCE, Nixie, WORLDLINE_NAME, useTunedValue } from '../workstation/Nixie';
-import { MENU_SECTIONS, SoundChannel, SystemMenu, WorldlinePanel, type MenuSection } from '../workstation/SystemMenu';
+import { MENU_SECTIONS, SoundChannel, SystemMenu, type MenuSection } from '../workstation/SystemMenu';
+import { WorldlinePanel } from '../workstation/WorldlinePanel';
 import { useWorldlineLedger } from '../workstation/worldlineLedger';
 import { ConnectionsPanel } from '../workstation/ConnectionsPanel';
 import { shelved, useModelShelf } from '../workstation/modelShelf';
@@ -2722,7 +2723,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
             worldline={worldline}
             busy={Boolean(shift)}
             ledger={worldlineLedger}
-            onArm={() => audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume)}
             onShift={(to) => {
               if (isThinking || isSynthesizing || isPlaying) setShiftConfirm(to);
               else startShift(to);

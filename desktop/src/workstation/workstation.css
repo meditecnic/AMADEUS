@@ -907,9 +907,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .ws2 *, .ws2 *::before, .ws2 *::after { animation: none !important; transition: none !important; }
-  .ws2 .ws2-wl-line :is(.main, .field) { stroke-dashoffset: 0; }
-  .ws2 .ws2-wl-panel.aiming .ws2-wl-diagram .hop { animation: none; }
-  .ws2 .ws2-wl-diagram .here { opacity: 1; }
+  .ws2 .ws2-wlc .fig [pathLength] { stroke-dashoffset: 0; }
 }
 
 /* ---------- one page at a time: the header follows the page under it ---------- */

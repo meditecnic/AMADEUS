@@ -414,42 +414,39 @@ describe('Workstation S4-DS dark-only chrome', () => {
     expect(meter).toHaveAccessibleDescription(/STEINS;GATE.*1\.048596%/);
     fireEvent.click(meter);
     await waitFor(() => expect(meter).toHaveAttribute('aria-expanded', 'true'));
-    expect(await screen.findByText('当前世界线')).toBeInTheDocument();
+    expect(await screen.findByRole('article', { name: 'STEINS;GATE 世界线（当前）' })).toBeInTheDocument();
     fireEvent.click(meter);
     await waitFor(() => expect(meter).toHaveAttribute('aria-expanded', 'false'));
   });
 
-  it('worldline panel: one dial reads the current line; picking the other line dimensions the gap and the shift key aims it', async () => {
+  it('worldline panel: a card per line; yours is lit and stamped, the other is cold until you reach for its key', async () => {
     renderWorkstation();
     fireEvent.click(await screen.findByRole('button', { name: '世界线 STEINS;GATE · 1.048596%' }));
-    await screen.findByText('当前世界线');
-    const panel = document.querySelector('.ws2-wl-panel') as HTMLElement;
-    // No second meter and no blueprint captions crowding the dial.
-    expect(panel.querySelectorAll('.nixie')).toHaveLength(1);
+    const here = await screen.findByRole('article', { name: 'STEINS;GATE 世界线（当前）' });
+    const there = screen.getByRole('article', { name: 'β 世界线' });
+    const panel = here.closest('.ws2-wl') as HTMLElement;
+    // Each card reads its own line on its own tubes, with no blueprint captions; only yours is lit.
+    expect(within(here).getByRole('img', { name: 'STEINS;GATE 世界线变动率 1.048596%' })).toBeInTheDocument();
+    expect(within(there).getByRole('img', { name: 'β 世界线变动率 1.129848%' })).toBeInTheDocument();
     expect(panel.querySelector('.nx-blueprint')).toBeNull();
-    expect(screen.getByRole('button', { name: '当前所在' })).toBeDisabled();
-    expect(panel.querySelector('.dim')).toBeNull();
-    expect(panel.querySelector('.ws2-wl-row.cur .tag')?.textContent).toBe('当前');
+    expect(here).toHaveClass('cur');
+    expect(there).not.toHaveClass('cur');
+    // Where you are is said in words (the stamp only repeats it); there is no key on your own card.
+    expect(within(here).getByText('当前所在', { selector: '.ws2-sr-only' })).toBeInTheDocument();
+    expect(within(here).queryByRole('button')).toBeNull();
+    expect(panel.querySelector('.ws2-wl-dim .d')?.textContent).toBe('Δ 0.081252');
 
-    fireEvent.click(screen.getByRole('radio', { name: 'β 世界线' }));
-    expect(screen.getByRole('radio', { name: 'β 世界线' })).toHaveAttribute('aria-checked', 'true');
-    expect(panel.querySelector('.ws2-wl-row.sel .tag')?.textContent).toBe('目标');
-    expect(panel.querySelector('.ws2-wl-line.sel.beta')).toBeTruthy();
-    expect(panel.querySelector('.dim .d')?.textContent).toBe('Δ 0.081252');
-    expect(screen.getByText('目标世界线：β WORLDLINE · 1.129848%')).toBeInTheDocument();
-    // The dial still reads the line you are on.
-    expect(within(panel).getByRole('img', { name: 'World line divergence 1.048596%' })).toBeInTheDocument();
-
-    const key = screen.getByRole('button', { name: '跃迁至 β' });
-    fireEvent.pointerEnter(key);
+    const key = within(there).getByRole('button', { name: '跃迁至 β' });
+    fireEvent.pointerEnter(there);
     expect(panel).toHaveClass('aiming');
-    expect(panel.querySelector('.dim.is-aimed')).toBeTruthy();
-    fireEvent.pointerLeave(key);
+    expect(there).toHaveClass('aim');
+    expect(panel.querySelector('.ws2-wl-dim.is-aimed')).toBeTruthy();
+    fireEvent.pointerLeave(there);
     expect(panel).not.toHaveClass('aiming');
     fireEvent.focus(key);
-    expect(panel).toHaveClass('aiming');
+    expect(there).toHaveClass('aim');
     fireEvent.blur(key);
-    expect(panel).not.toHaveClass('aiming');
+    expect(there).not.toHaveClass('aim');
   });
 
   it('the MEMORY key opens the memory page over the whole sheet (the header gives way) and it closes again', async () => {

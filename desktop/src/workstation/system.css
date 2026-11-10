@@ -142,96 +142,144 @@
 .ws2-ruler .ticks i.major { height: 7px; opacity: .9; }
 .ws2-ruler.off { opacity: .35; }
 
-/* ---------- 01 the worldline: one instrument ---------- */
+/* ---------- 01 the worldline: two cards, each cut from its own line's sheet (WorldlinePanel.tsx) ---------- */
 
-/* The dial reads the line you are on, under a nameplate that spans its tubes. The target preview is not a second
-   meter; it lives on the diagram, at the end of the line you aim for. */
-.ws2-wl-hero { display: flex; justify-content: center; padding: 2px 0 0; }
-.ws2-wl-hero .dial { display: inline-flex; flex-direction: column; align-items: stretch; gap: 14px; }
-.ws2-wl-hero .meta { display: flex; align-items: baseline; justify-content: space-between; gap: 28px; padding: 0 6px; white-space: nowrap; }
-.ws2-wl-hero .meta small { font-family: var(--ws-mono); font-size: 10px; letter-spacing: .3em; color: var(--ws-ink-3); }
-.ws2-wl-hero .meta small .zh { margin-left: 1.1em; padding-left: 1.1em; border-left: 1px solid var(--ws-line-2); font-family: var(--font-ui); font-size: 11px; letter-spacing: .12em; }
-.ws2-wl-hero .meta b { font-family: var(--ws-display); font-weight: 500; font-size: 15px; letter-spacing: .3em; color: var(--ws-ink); }
-.ws2-sysmenu.open .ws2-wl-hero .dial .nx-lit { animation: ws2-ignite .55s steps(1) calc(.3s + var(--n) * 70ms) both; }
-@keyframes ws2-ignite { 0% { opacity: 0; } 20% { opacity: .7; } 32% { opacity: .08; } 50% { opacity: 1; } 64% { opacity: .35; } 76%, 100% { opacity: 1; } }
-/* FIG. 1 (SystemMenu.tsx): ink and pencil on the sheet. Rules and the scale in pencil; the line you are on inked in
-   its colour; the field hatched; the target picked out in its colour and the gap dimensioned. Drawn in once. */
-.ws2-wl-panel { --tgt: var(--scale-beta-accent-primary); --tgt-rgb: var(--scale-beta-accent-rgb); container-type: inline-size; }
-.ws2-wl-panel[data-target='sg'] { --tgt: var(--scale-sg-accent-primary); --tgt-rgb: var(--scale-sg-accent-rgb); }
-.ws2-wl-map { margin-top: 10px; }
-.ws2-wl-diagram { display: block; width: 100%; height: auto; overflow: visible; }
-.ws2-wl-diagram text { font-family: var(--ws-mono); font-size: 11.5px; letter-spacing: .08em; fill: var(--ws-ink-3); }
-.ws2-wl-diagram .cap { font-size: 10px; letter-spacing: .24em; }
-.ws2-wl-diagram .cap.zh { font-family: var(--font-ui); letter-spacing: .14em; }
-.ws2-wl-diagram .axis line { stroke: var(--ws-ink-3); stroke-width: 1; }
-.ws2-wl-diagram .axis .minor { stroke: var(--ws-line-2); }
-.ws2-wl-diagram .axis .rule { stroke: var(--ws-line); stroke-dasharray: 1 5; }
-.ws2-wl-diagram .axis text { font-size: 10.5px; font-variant-numeric: tabular-nums; }
-.ws2-wl-diagram .field pattern line, .ws2-wl-diagram #ws2-wl-hatch line { stroke: rgba(var(--scale-beta-accent-rgb), .3); stroke-width: .8; }
-.ws2-wl-diagram .field path { fill: none; stroke: rgba(var(--scale-beta-accent-rgb), .34); stroke-width: .8; stroke-dasharray: 4 3; }
-.ws2-wl-diagram .field text { font-size: 10px; letter-spacing: .16em; fill: rgba(var(--scale-beta-accent-rgb), .62); }
-.ws2-wl-diagram .origin { fill: var(--ws-ink-2); }
-.ws2-wl-diagram .note { font-family: var(--font-ui); font-size: 12px; letter-spacing: .14em; fill: var(--log-pencil); }
-.ws2-wl-line { cursor: pointer; }
-.ws2-wl-line path { fill: none; }
-.ws2-wl-line :is(.main, .strand) { stroke-dasharray: 1; stroke-dashoffset: 1; animation: ws2-draw .9s cubic-bezier(.3, .7, .2, 1) .25s forwards; }
-.ws2-wl-line .main { stroke: var(--ws-ink-3); stroke-width: 1.2; transition: stroke .2s; }
-.ws2-wl-line .strand { stroke: var(--ws-ink-3); stroke-width: .55; opacity: .55; }
-.ws2-wl-line .hit { stroke: transparent; stroke-width: 20; }
-.ws2-wl-line .end { fill: var(--ws-ink-3); }
-.ws2-wl-line .name { font-size: 11px; letter-spacing: .2em; fill: var(--ws-ink-3); }
-.ws2-wl-line .val { font-size: 12px; font-variant-numeric: tabular-nums; fill: var(--ws-ink-2); }
-.ws2-wl-line:hover .main { stroke: var(--ws-ink-2); }
-.ws2-wl-line.cur .main { stroke: var(--ws-accent); stroke-width: 1.6; }
-.ws2-wl-line.cur .strand { stroke: var(--ws-accent); opacity: .4; }
-.ws2-wl-line.cur :is(.end) { fill: var(--ws-accent); }
-.ws2-wl-line.cur :is(.name, .val) { fill: var(--ws-accent); }
-.ws2-wl-line.sel:not(.cur) .main { stroke: var(--tgt); stroke-width: 1.4; }
-.ws2-wl-line.sel:not(.cur) .strand { stroke: var(--tgt); opacity: .4; }
-.ws2-wl-line.sel:not(.cur) :is(.end) { fill: var(--tgt); }
-.ws2-wl-line.sel:not(.cur) :is(.name, .val) { fill: var(--tgt); }
-/* you are here: pencil */
-.ws2-wl-diagram .here path { fill: none; stroke: var(--log-pencil); stroke-width: 1.1; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 1; }
-.ws2-wl-diagram .here .ring { animation: ws2-draw .6s ease-out 1s forwards; }
-.ws2-wl-diagram .here .arrow { animation: ws2-draw .5s ease-out 1.4s forwards; }
-.ws2-wl-diagram .here .note { opacity: 0; animation: ws2-fade-in .3s ease 1.7s forwards; }
-/* the gap, dimensioned */
-.ws2-wl-diagram .dim path { fill: none; stroke: var(--tgt); stroke-width: .9; }
-.ws2-wl-diagram .dim .ext { stroke-width: .6; opacity: .55; stroke-dasharray: 2 2; }
-.ws2-wl-diagram .dim .line { stroke-dasharray: 1; stroke-dashoffset: 1; animation: ws2-draw .35s ease-out forwards; }
-.ws2-wl-diagram .dim .tick { opacity: 0; animation: ws2-fade-in .2s ease .3s forwards; }
-.ws2-wl-diagram .dim .d { font-size: 11px; letter-spacing: .1em; fill: var(--tgt); font-variant-numeric: tabular-nums; opacity: 0; animation: ws2-fade-in .2s ease .3s forwards; }
-.ws2-wl-diagram .dim.is-aimed path { stroke-width: 1.3; }
-.ws2-wl-diagram .dim.is-aimed .ext { opacity: .9; }
-.ws2-wl-panel.aiming .ws2-wl-line.sel:not(.cur) .main { stroke-width: 2; }
+/* The other line's accent (its key, the gap dimension) is --tgt. */
+.ws2-wl {
+  --tgt: var(--scale-beta-accent-primary); --tgt-rgb: var(--scale-beta-accent-rgb);
+  --gap: clamp(16px, 5.4cqi, 40px);
+  container-type: inline-size;
+}
+.ws2-wl[data-target='sg'] { --tgt: var(--scale-sg-accent-primary); --tgt-rgb: var(--scale-sg-accent-rgb); }
+.ws2-wl-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--gap); padding-top: 20px; }
+
+/* --ink: the card's own line colour (slate silver, β amber), whatever line the page is on. */
+.ws2-wlc { --ink: 214, 226, 233; --p: clamp(11px, 3.2cqi, 22px); position: relative; min-width: 0; animation: ws2-wlc-in .5s cubic-bezier(.2, .7, .2, 1) .05s both; }
+.ws2-wlc.beta { --ink: 236, 156, 92; animation-delay: .14s; }
+@keyframes ws2-wlc-in { from { opacity: 0; transform: translateY(10px); } }
+
+.ws2-wlc .face { position: relative; height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+/* slate, lifted off the sheet and taped; a hairline frame inside the edge */
+.ws2-wlc.sg .face {
+  background:
+    linear-gradient(180deg, rgba(12, 15, 18, .3), rgba(9, 11, 13, .74) 70%),
+    url('/assets/sheet/grain.webp') 0 0 / 512px 512px repeat,
+    url('/assets/sheet/sg-slate.webp') 24% 34% / 900px auto;
+  background-color: #101418; background-blend-mode: normal, overlay, normal;
+  box-shadow: 0 18px 30px rgba(0, 0, 0, .5), 0 2px 4px rgba(0, 0, 0, .4), inset 0 0 0 1px rgba(226, 232, 235, .2);
+}
+.ws2-wlc.sg .face::before { content: ''; position: absolute; inset: 5px; z-index: 1; border: 1px solid rgba(226, 232, 235, .09); pointer-events: none; }
+/* β: the wall's metal in an amber double rule, as the β slips are framed */
+.ws2-wlc.beta .face {
+  background:
+    linear-gradient(180deg, rgba(6, 10, 10, .26), rgba(5, 8, 8, .76) 70%),
+    url('/assets/sheet/grain.webp') 0 0 / 512px 512px repeat,
+    url('/assets/sheet/beta-wall.webp') 62% 38% / 900px auto;
+  background-color: #0b1110; background-blend-mode: normal, overlay, normal;
+  box-shadow: inset 0 0 0 1px rgba(233, 150, 80, .5), 0 18px 30px rgba(0, 0, 0, .45);
+  outline: 1px solid rgba(233, 150, 80, .2); outline-offset: 4px;
+}
+/* a cold card sits in shadow; reaching for it brings it up */
+.ws2-wlc .face::after { content: ''; position: absolute; inset: 0; z-index: 0; background: rgba(4, 6, 8, .44); pointer-events: none; transition: opacity .45s ease; }
+.ws2-wlc:is(.cur, .aim) .face::after { opacity: 0; }
+.ws2-wlc .face > * { position: relative; z-index: 1; }
+
+/* the figure, run off the card's edges */
+.ws2-wlc .plate { aspect-ratio: 3 / 2; }
+.ws2-wlc .fig { position: absolute; inset: 0; display: block; width: 100%; height: 100%; transition: opacity .45s ease, filter .45s ease; }
+.ws2-wlc:not(.cur):not(.aim) .fig { opacity: .4; filter: saturate(.3); }
+.ws2-wlc .fig :is(path, circle) { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.ws2-wlc .fig .ln { stroke: rgba(var(--ink), .62); stroke-width: 1.15; }
+.ws2-wlc .fig .ln.fine { stroke: rgba(var(--ink), .4); stroke-width: .9; }
+.ws2-wlc .fig .tk { stroke: rgba(var(--ink), .6); stroke-width: 1.1; }
+.ws2-wlc .fig .dash { stroke: rgba(var(--ink), .3); stroke-width: .9; stroke-dasharray: 2 4; }
+.ws2-wlc .fig .cl { stroke: rgba(var(--ink), .16); stroke-width: .8; stroke-dasharray: 10 3 2 3; }
+.ws2-wlc .fig .num { fill: rgba(var(--ink), .7); font-family: 'EB Garamond', Georgia, serif; font-size: 12.5px; letter-spacing: .02em; }
+.ws2-wlc .fig .hand { fill: rgba(var(--ink), .2); stroke: rgba(var(--ink), .85); stroke-width: .9; }
+.ws2-wlc .fig .hub { fill: rgba(var(--ink), .9); }
+.ws2-wlc .fig .orbit { stroke: rgba(var(--ink), .62); stroke-width: .8; }
+/* drawn in as the page opens */
+.ws2-sysmenu.open .ws2-wlc .fig [pathLength] { stroke-dasharray: 1; stroke-dashoffset: 1; animation: ws2-draw 1.4s cubic-bezier(.4, .1, .2, 1) .25s forwards; }
+.ws2-sysmenu.open .ws2-wlc .fig .orbit { animation-duration: 2.4s; }
+.ws2-wlc .moth { position: absolute; left: 3%; bottom: 7%; width: 32%; rotate: -10deg; opacity: .72; pointer-events: none; transition: opacity .45s ease; }
+.ws2-wlc:not(.cur):not(.aim) .moth { opacity: .3; }
+.ws2-wlc .pl { position: absolute; left: var(--p); top: calc(var(--p) - 3px); font-family: 'EB Garamond', Georgia, serif; font-size: 14px; letter-spacing: .1em; color: rgba(var(--ink), .7); }
+.ws2-wlc .cap { position: absolute; right: var(--p); bottom: 5px; z-index: 1; font-family: var(--ws-mono); font-size: 9px; letter-spacing: .2em; color: rgba(var(--ink), .5); white-space: nowrap; }
+
+/* the name, then the reading on eight tubes with its figure under them */
+.ws2-wlc .nm {
+  display: flex; align-items: baseline; gap: 10px; min-height: 30px; margin: 0; padding: 6px var(--p) 0;
+  font-family: var(--ws-display); font-weight: 500; font-size: clamp(13px, 3.5cqi, 19px); line-height: 1.2; letter-spacing: .22em; color: var(--ws-ink); white-space: nowrap;
+  transition: color .3s ease;
+}
+.ws2-wlc.beta .nm { font-size: clamp(21px, 5.6cqi, 30px); line-height: .95; letter-spacing: 0; }
+.ws2-wlc.beta .nm small { font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .32em; color: var(--ws-ink-3); }
+.ws2-wlc:not(.cur):not(.aim) .nm { color: var(--ws-ink-2); }
+.ws2-wlc .meter { padding: 10px var(--p) 0; }
+.ws2-wlc .meter .nixie { display: block; width: 100%; }
+.ws2-wlc .meter .read { display: flex; justify-content: space-between; gap: 8px; margin: 7px 0 0; font-family: var(--ws-mono); font-size: 9px; letter-spacing: .2em; color: var(--ws-ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ws2-wlc .meter .read span:last-child { letter-spacing: .08em; color: var(--ws-ink-2); }
+/* lit, cold, warming: the glass stays; only the cathodes' glow changes */
+.ws2-wlc .nx-glow { transition: opacity .5s ease; }
+.ws2-wlc:not(.cur):not(.aim) .nx-glow { opacity: 0; }
+.ws2-wlc:not(.cur):not(.aim) .nx-glass { stroke: rgba(255, 179, 107, .26); }
+.ws2-wlc:not(.cur) .nx-stack path { stroke: rgba(255, 196, 150, .12); }
+.ws2-wlc.aim .nx-glow { opacity: .9; animation: ws2-warm .7s steps(1) both; }
+.ws2-wl.aiming .ws2-wlc.cur .nx-glow { opacity: .3; }
+.ws2-sysmenu.open .ws2-wlc.cur .nx-lit { animation: ws2-ignite .55s steps(1) calc(.5s + var(--n) * 70ms) both; }
+@keyframes ws2-warm { 0% { opacity: 0; } 16% { opacity: .5; } 28% { opacity: .08; } 44% { opacity: .72; } 58% { opacity: .3; } 72%, 100% { opacity: .9; } }
+
+/* a drawing's title block: what the line holds */
+.ws2-wlc .block {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 14px var(--p) 0;
+  border-top: 1px solid rgba(var(--ink), .24); border-bottom: 1px solid rgba(var(--ink), .24);
+}
+.ws2-wlc .block > div { min-width: 0; padding: 6px 0 7px 9px; }
+.ws2-wlc .block > div:first-child { padding-left: 0; }
+.ws2-wlc .block > div + div { border-left: 1px solid rgba(var(--ink), .14); }
+.ws2-wlc .block dt { font-size: 10.5px; letter-spacing: .14em; color: var(--ws-ink-3); }
+.ws2-wlc .block dd { margin: 3px 0 0; font-family: var(--ws-mono); font-size: clamp(12px, 3.2cqi, 16px); color: var(--ws-ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* the key, or where you are */
+.ws2-wlc .act { display: flex; margin-top: auto; padding: 14px var(--p) var(--p); }
+.ws2-wlc .act .ws2-m-btn { flex: 1 1 auto; min-width: 0; padding: 0 10px 0 12px; }
+/* where you are is stamped, where the other card has its key */
+.ws2-wlc .act .here { position: relative; flex: 1; height: 34px; }
+.ws2-wlc .act .ws2-wlc-stamp { --stamp-word: clamp(13px, 3.6cqi, 16px); left: 50%; top: 50%; translate: -50% -50%; padding: 5px 12px 4px; white-space: nowrap; animation-delay: .7s; }
+
+/* how each is held to the sheet: a strip of tape over the slate's top edge; two solder stubs off the metal's */
+.ws2-wlc .tape {
+  position: absolute; left: 50%; top: -15px; z-index: 3; width: 96px; height: 34px; margin-left: -48px; pointer-events: none;
+  background: url('/assets/sheet/tape-1.webp') center / 100% 100% no-repeat; opacity: .78; rotate: -3deg;
+  filter: brightness(.82) drop-shadow(0 1px 1.5px rgba(0, 0, 0, .35));
+}
+.ws2-wlc .stub { position: absolute; top: -20px; z-index: 3; width: 1px; height: 15px; background: rgba(233, 150, 80, .5); pointer-events: none; }
+.ws2-wlc .stub::after { content: ''; position: absolute; left: -3px; top: -7px; width: 7px; height: 7px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(233, 150, 80, .65); }
+.ws2-wlc .stub.a { left: 24%; }
+.ws2-wlc .stub.b { right: 24%; }
+
+/* the gap between the two readings, dimensioned from card to card */
+.ws2-wl-dim {
+  display: flex; align-items: center; gap: 10px; height: 14px; margin: 14px calc((100% - var(--gap)) / 4) 0;
+  background: linear-gradient(rgba(var(--tgt-rgb), .4), rgba(var(--tgt-rgb), .4)) 0 0 / 1px 100% no-repeat,
+    linear-gradient(rgba(var(--tgt-rgb), .4), rgba(var(--tgt-rgb), .4)) 100% 0 / 1px 100% no-repeat;
+  transition: opacity .3s ease;
+}
+.ws2-wl-dim::before, .ws2-wl-dim::after { content: ''; flex: 1; height: 1px; background: rgba(var(--tgt-rgb), .32); }
+.ws2-wl-dim .d { font-family: var(--ws-mono); font-size: 10.5px; letter-spacing: .14em; color: rgba(var(--tgt-rgb), .7); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ws2-wl-dim.is-aimed::before, .ws2-wl-dim.is-aimed::after { background: rgba(var(--tgt-rgb), .7); }
+.ws2-wl-dim.is-aimed .d { color: var(--tgt); }
+.ws2-wl .ws2-m-note { margin: 16px 0 0; }
+
+@container (max-width: 330px) {
+  .ws2-wl-pair { grid-template-columns: minmax(0, 1fr); row-gap: 34px; }
+  .ws2-wl-dim { display: none; }
+}
 
 @keyframes ws2-draw { to { stroke-dashoffset: 0; } }
 @keyframes ws2-fade-in { to { opacity: 1; } }
+@keyframes ws2-ignite { 0% { opacity: 0; } 20% { opacity: .7; } 32% { opacity: .08; } 50% { opacity: 1; } 64% { opacity: .35; } 76%, 100% { opacity: 1; } }
 
-/* the ledger: what each line holds; a row is the radio for that line */
-.ws2-wl-ledger { margin-top: 10px; border-top: 1px solid var(--ws-rule); }
-.ws2-wl-row {
-  display: grid; grid-template-columns: 14px minmax(118px, auto) minmax(0, 1fr) 40px; align-items: center; column-gap: 12px;
-  min-height: 46px; padding: 0 6px; border-bottom: 1px solid var(--ws-rule); cursor: pointer; transition: background-color .15s;
-}
-.ws2-wl-row:hover { background: rgba(255, 255, 255, .03); }
-.ws2-wl-row .mark { width: 9px; height: 9px; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--ws-ink-3); }
-.ws2-wl-row.sel .mark { background: radial-gradient(circle, var(--tgt) 0 2.5px, transparent 3px); box-shadow: inset 0 0 0 1px var(--tgt); }
-.ws2-wl-row.cur .mark { background: radial-gradient(circle, var(--ws-accent) 0 2.5px, transparent 3px); box-shadow: inset 0 0 0 1px var(--ws-accent); }
-.ws2-wl-row .who { display: flex; flex-direction: column; gap: 3px; }
-.ws2-wl-row .who b { font-family: var(--ws-display); font-weight: 500; font-size: 13px; letter-spacing: .22em; color: var(--ws-ink); }
-.ws2-wl-row .who small { font-family: var(--ws-mono); font-size: 10.5px; letter-spacing: .08em; color: var(--ws-ink-3); font-variant-numeric: tabular-nums; }
-.ws2-wl-row .facts { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 16px; font-family: var(--ws-mono); font-size: 12px; color: var(--ws-ink); font-variant-numeric: tabular-nums; }
-.ws2-wl-row .facts i { margin-right: 6px; font-style: normal; font-family: var(--font-ui); font-size: 11px; letter-spacing: .1em; color: var(--ws-ink-3); }
-.ws2-wl-row .tag { justify-self: end; font-size: 11px; letter-spacing: .14em; color: var(--ws-ink-3); }
-.ws2-wl-row.cur .tag { color: var(--ws-accent); }
-.ws2-wl-row.sel:not(.cur) .tag { color: var(--tgt); }
-.ws2-wl-row.sel:not(.cur) .who b { color: var(--tgt); }
-@container (max-width: 520px) {
-  .ws2-wl-row { grid-template-columns: 14px minmax(0, 1fr) 36px; padding: 8px 4px; }
-  .ws2-wl-row .facts { grid-column: 2 / 3; justify-content: flex-start; font-size: 11.5px; }
-  .ws2-wl-row .tag { grid-row: 1; grid-column: 3; }
-}
 .ws2 .ws2-m-btn.armed { --edge: var(--tgt); color: var(--tgt) !important; background-color: color-mix(in srgb, var(--tgt) 10%, transparent) !important; }
 .ws2 .ws2-m-btn.armed:is(:hover, :focus-visible):not(:disabled) { --edge: var(--tgt); background-color: color-mix(in srgb, var(--tgt) 17%, transparent) !important; }
 
@@ -628,8 +676,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ws2 .ws2-wl-line :is(.main, .strand), .ws2 .ws2-wl-diagram :is(.here path, .dim .line) { animation: none; stroke-dashoffset: 0; }
-  .ws2 .ws2-wl-diagram :is(.here .note, .dim .tick, .dim .d) { animation: none; opacity: 1; }
+  .ws2 .ws2-wlc, .ws2 .ws2-wlc .fig [pathLength], .ws2 .ws2-wlc.aim .nx-glow { animation: none; stroke-dashoffset: 0; }
+  .ws2 .ws2-wlc :is(.fig, .moth, .nx-glow, .nm), .ws2 .ws2-wlc .face::after { transition: none; }
   .ws2 .settings-embedded .identity-mode-option:has(input:checked)::after { animation: none; }
   .ws2 :is(.ws2-disk .dim i, .ws2-m-form, .ws2-tool .glyph > .ws2-news, .ws2-recovery-sheet) { animation: none; }
   .ws2 .ws2-choice button.on::after { animation: none; }

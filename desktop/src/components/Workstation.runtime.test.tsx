@@ -685,7 +685,6 @@ describe('Workstation provider runtime changes', () => {
     await waitFor(() => expect(screen.getByText('Default Conversation')).toBeTruthy());
     fireEvent.change(screen.getByLabelText('输入消息'), { target: { value: 'source draft' } });
     fireEvent.click(screen.getByRole('button', { name: '系统设置' }));
-    fireEvent.click(screen.getByRole('radio', { name: 'β 世界线' }));
     fireEvent.click(screen.getByRole('button', { name: '跃迁至 β' }));
     expect(wsSpies.switchWorldline).toHaveBeenCalledTimes(1);
     const [target, requestId] = wsSpies.switchWorldline.mock.calls[0];
