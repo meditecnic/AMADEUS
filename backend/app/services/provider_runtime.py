@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import os
 import re
 import uuid
@@ -279,6 +280,11 @@ async def restore_custom_provider_configuration() -> None:
     for row in rows:
         provider_id = str(row["provider_id"])
         if not is_user_custom_provider(provider_id):
+            for definition in provider_registry.list_definitions():
+                if definition.id == provider_id:
+                    adapter = provider_registry.snapshot(provider_id, allow_unavailable=True).adapter
+                    provider_registry.replace(replace(definition, default_model=str(row["default_model"])), adapter)
+                    break
             continue
         if provider_id == "custom":
             has_custom_row = True

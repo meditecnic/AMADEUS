@@ -1880,3 +1880,21 @@ async def provider_visible_models(provider_id: str, models: list[str] | None = N
         return json.loads(row[0]) if row else []
     finally:
         await db.close()
+
+
+async def restore_provider_configuration(provider_id: str, previous: dict | None) -> None:
+    """Compensate connect with the exact pre-call durable row (including version)."""
+    db = await get_db("steins_gate", "control")
+    try:
+        await db.execute("BEGIN IMMEDIATE")
+        await db.execute("DELETE FROM provider_configurations WHERE provider_id=?", (provider_id,))
+        if previous is not None:
+            columns = ("provider_id", "base_url", "default_model", "display_name", "enabled",
+                       "selector_admission", "created_at_utc", "updated_at_utc", "catalog_id")
+            await db.execute(
+                f"INSERT INTO provider_configurations({','.join(columns)}) VALUES(?,?,?,?,?,?,?,?,?)",
+                tuple(previous[column] for column in columns),
+            )
+        await db.commit()
+    finally:
+        await db.close()

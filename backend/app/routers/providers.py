@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import aclosing
+from dataclasses import replace
 from typing import Any
 
 import httpx
@@ -13,6 +14,7 @@ from pydantic import BaseModel, Field, SecretStr
 
 from app.db import (
     SelectorAdmission,
+    restore_provider_configuration,
     provider_visible_models,
     get_provider_configuration,
     list_provider_configurations,
@@ -33,6 +35,7 @@ from app.services.provider_runtime import (
     configure_custom_provider,
     is_custom_profile_id,
     new_custom_provider_id,
+    normalize_custom_base_url,
     prepare_custom_provider_settings,
     provider_registry,
     unregister_custom_provider,
@@ -224,13 +227,12 @@ async def list_providers():
     by_id = {row["id"]: row for row in rows}
     for config in await list_provider_configurations(include_disabled=True):
         provider_id = str(config["provider_id"])
-        if not is_user_custom_provider(provider_id):
-            continue
         if provider_id in known_ids:
             by_id[provider_id].update({
                 "selector_admission": config["selector_admission"],
                 "configuration_version": config["configuration_version"],
                 "catalog_id": config.get("catalog_id"),
+                "default_model": config["default_model"],
             })
             continue
         if bool(config.get("enabled")):
@@ -295,6 +297,112 @@ def _custom_profile_response(saved: dict[str, object]) -> dict[str, object]:
         "configuration_version": saved["configuration_version"],
         "source": "user_config",
     }
+
+
+class ProviderConnect(BaseModel):
+    base_url: str | None = None
+    provider_id: str | None = None
+    api_key: SecretStr | None = None
+    model_id: str | None = Field(default=None, min_length=1, max_length=200)
+    display_name: str | None = Field(default=None, min_length=1, max_length=80)
+    catalog_id: str | None = None
+
+
+_connect_lock = asyncio.Lock()
+
+
+@router.post("/connect")
+async def connect_provider(body: ProviderConnect):
+    async with _connect_lock:
+        return await _connect_provider(body)
+
+
+async def _connect_provider(body: ProviderConnect):
+    if bool(body.base_url) == bool(body.provider_id) or (
+        body.provider_id and body.provider_id not in {"deepseek", "glm", "openai", "gemini"}
+    ):
+        raise HTTPException(422, detail={"code": "invalid_provider_configuration", "step": "save"})
+    try:
+        if body.base_url:
+            base_url = normalize_custom_base_url(body.base_url)
+            rows = await list_provider_configurations(enabled_only=True)
+            existing = next((row for row in rows
+                if is_custom_profile_id(str(row["provider_id"]))
+                and row["base_url"] == base_url and row.get("catalog_id") == body.catalog_id), None)
+            provider_id = str(existing["provider_id"]) if existing else new_custom_provider_id()
+        else:
+            provider_id = body.provider_id
+            base_url = str(_definition(provider_id).adapter.base_url)
+            existing = await get_provider_configuration(provider_id)
+        definitions = {definition.id: definition for definition in provider_registry.list_definitions()}
+        old_definition = definitions.get(provider_id)
+        old_adapter = _definition(provider_id).adapter if old_definition else None
+        old_key = credential_store.get(provider_id)
+    except ValueError as exc:
+        raise HTTPException(422, detail={"code": "invalid_provider_configuration", "step": "save"}) from exc
+    except Exception as exc:
+        failure = _request_failure(exc)
+        failure.detail["step"] = "save"
+        raise failure from exc
+
+    step = "save"
+    try:
+        model = (body.model_id or "").strip()
+        if body.model_id is not None and not model:
+            raise HTTPException(422, detail={"code": "model_id_required"})
+        if is_custom_profile_id(provider_id):
+            settings = prepare_custom_provider_settings(
+                provider_id=provider_id, base_url=base_url, default_model=model,
+                display_name=body.display_name or (existing or {}).get("display_name"),
+            )
+            settings["catalog_id"] = body.catalog_id
+            saved = await _activate_custom_profile(settings, initial_admission="pending")
+        else:
+            saved = await save_provider_configuration(
+                provider_id, base_url=base_url, default_model=model,
+                display_name=body.display_name or old_definition.display_name,
+                initial_admission="pending", catalog_id=body.catalog_id,
+            )
+            provider_registry.replace(replace(old_definition, default_model=model), old_adapter)
+        # A check in flight is never an admission result.
+        saved = await update_provider_selector_admission(provider_id, "pending", saved["configuration_version"])
+        if saved is None:
+            raise HTTPException(409, detail={"code": "configuration_changed"})
+        if body.api_key is not None:
+            credential_store.set(provider_id, body.api_key.get_secret_value())
+        provider_model_cache.clear(provider_id)
+        step = "list"
+        # Connect must prove live discovery; stale UI cache is not a success.
+        result = await _discover_models(provider_id, refresh=True, allow_stale=False)
+        model_catalog.reconcile(provider_id, result.models, result.metadata)
+        if model:
+            step = "check"
+            await check_selected_model_chat(provider_id, ChatCheckRequest(model_id=model))
+            saved = await update_provider_selector_admission(provider_id, "admitted", saved["configuration_version"])
+            if saved is None:
+                raise HTTPException(409, detail={"code": "configuration_changed"})
+        return {"provider_id": provider_id, "models": list(result.models), "model_id": model or None,
+                "check": {"ok": bool(model), "code": "ok" if model else "model_selection_required"},
+                "configuration_version": saved["configuration_version"]}
+    except Exception as exc:
+        # Both phases restore the exact previous row, key and runtime. In phase
+        # two that previous row is the pending profile with an empty model.
+        provider_registry.unregister(provider_id)
+        try:
+            await restore_provider_configuration(provider_id, existing)
+        finally:
+            if credential_store.get(provider_id) != old_key:
+                if old_key is None:
+                    credential_store.delete(provider_id)
+                else:
+                    credential_store.set(provider_id, old_key)
+            if old_definition:
+                provider_registry.upsert(old_definition, old_adapter)
+            provider_model_cache.clear(provider_id)
+            model_catalog.clear_discovery(provider_id)
+        failure = exc if isinstance(exc, HTTPException) else _request_failure(exc)
+        detail = failure.detail if isinstance(failure.detail, dict) else {"code": "provider_unavailable"}
+        raise HTTPException(failure.status_code, detail={**detail, "step": step}) from exc
 
 
 @router.post("/custom-profiles")
@@ -583,7 +691,7 @@ def _request_failure(exc: Exception) -> HTTPException:
     return HTTPException(status_code=status, detail={"code": code})
 
 
-async def _discover_models(provider_id: str, *, refresh: bool):
+async def _discover_models(provider_id: str, *, refresh: bool, allow_stale: bool = True):
     snapshot = _definition(provider_id)
     if (
         ProviderTask.MODELS not in snapshot.capabilities.tasks
@@ -619,7 +727,7 @@ async def _discover_models(provider_id: str, *, refresh: bool):
         raise
     except Exception as exc:
         stale = provider_model_cache.peek(provider_id)
-        if stale is not None:
+        if allow_stale and stale is not None:
             return stale
         raise _request_failure(exc) from exc
 
