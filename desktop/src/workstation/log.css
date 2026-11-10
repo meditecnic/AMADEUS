@@ -213,7 +213,7 @@
   border: 0; outline: none; background: none; box-shadow: none;
   font-family: var(--ws-read); font-size: 15px; line-height: 1.65; color: var(--ws-ink); caret-color: var(--ws-ink);
   /* grows with what you write, from two lines to seven */
-  field-sizing: content; min-height: calc(2lh + 22px); max-height: calc(7lh + 22px); overflow-y: auto; scrollbar-width: thin;
+  field-sizing: content; min-height: calc(2lh + 22px); max-height: calc(7lh + 22px); overflow-y: auto;
 }
 .ws2 .ws2-composer textarea.chat-input-field:focus-visible { outline: none; }
 .ws2 .ws2-composer textarea.chat-input-field::placeholder { color: var(--ws-ink-3); }

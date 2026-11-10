@@ -55,7 +55,7 @@
 
 .ws2-sys-body {
   position: relative; z-index: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; max-width: 780px; padding: 0 12px 28px 40px; container-type: inline-size;
-  border-left: 1px solid var(--ws-rule); scrollbar-width: thin; scrollbar-color: var(--ws-line-2) transparent; opacity: 0; transition: opacity .08s;
+  border-left: 1px solid var(--ws-rule); opacity: 0; transition: opacity .08s;
 }
 .ws2-sysmenu.open .ws2-sys-body { opacity: 1; transition: opacity .2s ease .16s; animation: ws2-body-in .22s ease-out; }
 @keyframes ws2-body-in { from { opacity: 0; transform: translateY(6px); } }
@@ -645,7 +645,7 @@
 .ws2.ws2-recovery:not(.rail)::after { content: none; }
 .ws2-recovery-scroll {
   position: relative; z-index: 1; height: 100%; overflow-y: auto; overflow-x: hidden;
-  scrollbar-width: thin; scrollbar-color: var(--ws-line-2) transparent;
+ 
 }
 .ws2-recovery-sheet {
   position: relative; width: min(620px, calc(100% - 48px)); margin: clamp(28px, 9vh, 96px) auto 40px; padding: 28px 34px 24px;
@@ -706,7 +706,7 @@
 .ws2-cx-row { border-bottom: 1px solid var(--ws-rule); }
 .ws2-cx-row .head { display: flex; align-items: center; gap: 12px; min-height: 58px; }
 .ws2 .ws2-cx-row .main {
-  flex: 1; min-width: 0; display: grid; grid-template-columns: 26px minmax(0, 1fr) auto 14px; align-items: center; column-gap: 12px;
+  position: relative; flex: 1; min-width: 0; display: grid; grid-template-columns: 26px minmax(0, 1fr) auto 14px; align-items: center; column-gap: 12px;
   height: 58px; padding: 0 4px; border: 0; background: none; text-align: left; color: inherit; cursor: pointer;
 }
 .ws2 .ws2-cx-row .main:hover { background: rgba(255, 255, 255, .025); }
@@ -718,7 +718,9 @@
 .ws2-cx-row.is-open .chev { transform: rotate(-135deg) translate(-2px, -2px); }
 .ws2-cx-tag { flex: none; min-width: 40px; text-align: center; font-size: 11px; letter-spacing: .14em; color: var(--ws-accent); }
 .ws2-cx-use { flex: none; min-width: 40px; }
-.ws2 .ws2-cx-row.is-active .main { box-shadow: inset 2px 0 0 var(--ws-accent); }
+/* The one in use is marked in the page's margin, clear of its mark (U 11-10: a bar on the row's own edge sat against
+   the icon); every row keeps its icon in the same column. */
+.ws2 .ws2-cx-row.is-active .main::before { content: ''; position: absolute; left: -14px; top: 14px; bottom: 14px; width: 2px; background: var(--ws-accent); }
 .ws2-cx-lamp { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 11px; letter-spacing: .08em; color: var(--ws-ink-3); }
 .ws2-cx-lamp i { width: 6px; height: 6px; border-radius: 50%; background: var(--ws-ink-3); }
 .ws2-cx-lamp.is-ok { color: var(--ws-ink-2); }

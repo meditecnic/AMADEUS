@@ -102,7 +102,7 @@
   font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .2em; text-transform: uppercase; color: var(--ws-ink-3);
 }
 .ws2 .ws2-picker-group:not(:has(.ws2-pmark)) { padding-left: 34px; }
-.ws2 .ws2-picker-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; min-height: 0; outline: none; scrollbar-width: thin; scrollbar-color: var(--ws-line-2) transparent; }
+.ws2 .ws2-picker-list { list-style: none; margin: 0; padding: 0; overflow-y: auto; min-height: 0; outline: none; }
 .ws2 .ws2-picker-list li { min-height: 32px; padding: 7px 30px 7px 34px; font-size: 13px; line-height: 18px; color: var(--ws-ink-2); cursor: pointer; }
 .ws2 .ws2-picker-list li[aria-selected='true'] { color: var(--ws-ink); }
 .ws2 .ws2-picker-list li.disabled { opacity: .4; cursor: default; }
