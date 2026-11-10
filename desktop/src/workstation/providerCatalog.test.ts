@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { connectError } from './connectApi';
 import { ApiError } from './dataApi';
-import { CATALOG, chatModels, entryFor, searchCatalog, suggestModel } from './providerCatalog';
+import { canConnect, CATALOG, catalogEntry, chatModels, entryFor, searchCatalog, suggestModel } from './providerCatalog';
 
 describe('provider catalog', () => {
   it('has one entry per id, an address or a built-in for each, and http(s) addresses only', () => {
@@ -13,6 +13,22 @@ describe('provider catalog', () => {
       for (const url of urls) expect(url).toMatch(/^https?:\/\/[^/?#\s]+(\/[^?#\s]*)?$/);
       if (entry.keyUrl) expect(entry.keyUrl).toMatch(/^https:\/\//);
     }
+  });
+
+  it('says what each plan allows, and points an entry it cannot connect yet somewhere that works', () => {
+    const plans = CATALOG.filter((entry) => entry.group === 'plan');
+    expect(plans.length).toBeGreaterThan(0);
+    for (const entry of plans) {
+      expect(entry.plan?.url).toMatch(/^https:\/\//);
+      expect(entry.plan?.note).toBeTruthy();
+    }
+    for (const entry of CATALOG.filter((e) => !canConnect(e))) {
+      expect(entry.waiting).toBeTruthy();
+      if (entry.instead) expect(canConnect(catalogEntry(entry.instead)!)).toBe(true);
+    }
+    expect(canConnect(catalogEntry('anthropic')!)).toBe(false);
+    expect(canConnect(catalogEntry('minimax-plan')!)).toBe(true);
+    expect(searchCatalog('token plan').map((entry) => entry.id)).toEqual(expect.arrayContaining(['minimax-plan', 'mimo-plan']));
   });
 
   it('finds the entry a connected row came from, by built-in id or by address', () => {

@@ -9,8 +9,8 @@ import { clearKey, connectError, createProfile, listModels, removeProfile, saveK
 import { ApiError } from './dataApi';
 import { setShelf, useModelShelf } from './modelShelf';
 import {
-  baseUrlOf, CATALOG, chatModels, CUSTOM_ENTRY, entryFor, GROUP_LABEL, searchCatalog, suggestModel,
-  type CatalogEntry, type CatalogGroup,
+  baseUrlOf, canConnect, CATALOG, catalogEntry, chatModels, CUSTOM_ENTRY, entryFor, GROUP_LABEL, GROUP_SHORT, GROUPS, searchCatalog,
+  suggestModel, type CatalogEntry, type CatalogGroup,
 } from './providerCatalog';
 import { ProviderMark } from './ProviderMark';
 import { openExternal } from './shell';
@@ -74,7 +74,8 @@ export function ConnectionsPanel(props: ConnectionsPanelProps) {
     const active = providers.find((row) => row.id === activeProviderId);
     return active?.credential_required && !active.configured ? active.id : null;
   });
-  const [catalogOpen, setCatalogOpen] = useState(false);
+  // The whole list, opened on one group (套餐 from its own link) or on all of them.
+  const [catalogOpen, setCatalogOpen] = useState<CatalogGroup | 'all' | null>(null);
   const [connecting, setConnecting] = useState<CatalogEntry | null>(null);
 
   const rows = providers
@@ -122,7 +123,8 @@ export function ConnectionsPanel(props: ConnectionsPanelProps) {
           <p className="ws2-m-note">密钥只存在这台电脑上，不回显，也不会发给 AMADEUS 以外的地方。</p>
           <span className="ws2-m-acts">
             <button type="button" className="ws2-m-link" onClick={() => setConnecting(CUSTOM_ENTRY)}>其他 OpenAI 兼容服务</button>
-            <button type="button" className="ws2-m-btn" onClick={() => setCatalogOpen(true)}>全部服务商（{CATALOG.length}）</button>
+            <button type="button" className="ws2-m-link" onClick={() => setCatalogOpen('plan')}>用订阅套餐</button>
+            <button type="button" className="ws2-m-btn" onClick={() => setCatalogOpen('all')}>全部服务商（{CATALOG.length}）</button>
           </span>
         </div>
       </section>
@@ -130,17 +132,20 @@ export function ConnectionsPanel(props: ConnectionsPanelProps) {
       <SearchGroup {...props.search} />
 
       {catalogOpen ? (
-        <Sheet anchor={anchor} title="全部服务商" sub="选一家，下一步粘贴密钥。" onClose={() => setCatalogOpen(false)} wide>
+        <Sheet anchor={anchor} title="全部服务商" sub="选一家，下一步粘贴密钥。按月订阅的套餐在「套餐」里。" onClose={() => setCatalogOpen(null)} wide>
           <CatalogList
             taken={taken}
-            onPick={(entry) => { setCatalogOpen(false); setConnecting(entry); }}
+            initial={catalogOpen}
+            onPick={(entry) => { setCatalogOpen(null); setConnecting(entry); }}
           />
         </Sheet>
       ) : null}
       {connecting ? (
         <ConnectSheet
+          key={connecting.id}
           anchor={anchor}
           entry={connecting}
+          onSwitch={setConnecting}
           existing={connecting.builtin ? providers.find((row) => row.id === connecting.builtin) : undefined}
           {...props}
           onClose={() => setConnecting(null)}
@@ -372,30 +377,61 @@ const hostOf = (url: string) => { try { return new URL(url).host; } catch { retu
 
 /* ---------- the whole list ---------- */
 
-function CatalogList({ taken, onPick }: { taken: Set<string | undefined>; onPick: (entry: CatalogEntry) => void }) {
+/** A short tag after the name when the entry is not a plain "paste the key". */
+function entryTag(entry: CatalogEntry): { text: string; tone: 'ok' | 'warn' | 'off' } | null {
+  if (entry.waiting) return { text: '暂时接不了', tone: 'off' };
+  if (entry.plan?.fit === 'coding') return { text: '面向编程', tone: 'warn' };
+  if (entry.plan?.fit === 'ok') return { text: '可在这里用', tone: 'ok' };
+  return null;
+}
+
+function CatalogList({ taken, initial, onPick }: { taken: Set<string | undefined>; initial: CatalogGroup | 'all'; onPick: (entry: CatalogEntry) => void }) {
   const [query, setQuery] = useState('');
+  const [only, setOnly] = useState<CatalogGroup | 'all'>(initial);
+  const searching = Boolean(query.trim());
   const found = searchCatalog(query);
-  const groups = (['cn', 'global', 'router', 'local'] as CatalogGroup[])
+  // A search looks through every group; the chips narrow the list while nothing is typed.
+  const groups = GROUPS
+    .filter((group) => searching || only === 'all' || group === only)
     .map((group) => ({ group, entries: found.filter((entry) => entry.group === group) }))
     .filter((g) => g.entries.length);
   return (
     <div className="ws2-cx-catalog">
-      <input type="search" className="ws2-cx-field ws2-cx-search" placeholder="搜索服务商，比如 kimi、千问、claude" aria-label="搜索服务商"
-        value={query} onChange={(e) => setQuery(e.target.value)} data-autofocus />
+      <div className="head">
+        <input type="search" className="ws2-cx-field ws2-cx-search" placeholder="搜索服务商，比如 kimi、千问、claude、coding plan" aria-label="搜索服务商"
+          value={query} onChange={(e) => setQuery(e.target.value)} data-autofocus />
+        <span className="ws2-cx-regions ws2-cx-only" role="radiogroup" aria-label="只看">
+          {(['all', ...GROUPS] as const).map((group) => (
+            <button key={group} type="button" role="radio" aria-checked={!searching && only === group} className={!searching && only === group ? 'on' : undefined}
+              onClick={() => { setOnly(group); setQuery(''); }}>
+              {group === 'all' ? '全部' : GROUP_SHORT[group]}
+            </button>
+          ))}
+        </span>
+      </div>
       <div className="groups">
         {groups.map(({ group, entries }) => (
           <section key={group} aria-label={GROUP_LABEL[group]}>
             <h4>{GROUP_LABEL[group]}</h4>
             <ul>
-              {entries.map((entry) => (
-                <li key={entry.id}>
-                  <button type="button" className="ws2-cx-entry" onClick={() => onPick(entry)}>
-                    <ProviderMark provider={{ id: entry.builtin ?? entry.id, display_name: entry.name, base_url: baseUrlOf(entry) }} />
-                    <span className="txt"><b>{entry.name}</b><small>{entry.blurb}</small></span>
-                    <span className={`go${taken.has(entry.id) ? ' is-taken' : ''}`} aria-hidden="true">{taken.has(entry.id) ? '已接入' : '接入'}</span>
-                  </button>
-                </li>
-              ))}
+              {entries.map((entry) => {
+                const tag = entryTag(entry);
+                const open = canConnect(entry);
+                return (
+                  <li key={entry.id}>
+                    <button type="button" className={`ws2-cx-entry${open ? '' : ' is-closed'}`} onClick={() => onPick(entry)}>
+                      <ProviderMark provider={{ id: entry.builtin ?? entry.id, display_name: entry.name, base_url: baseUrlOf(entry) }} />
+                      <span className="txt">
+                        <b><span className="nm">{entry.name}</span>{tag ? <em className={`ws2-cx-fit is-${tag.tone}`}>{tag.text}</em> : null}</b>
+                        <small>{entry.blurb}</small>
+                      </span>
+                      <span className={`go${taken.has(entry.id) || !open ? ' is-taken' : ''}`} aria-hidden="true">
+                        {!open ? '说明' : taken.has(entry.id) ? '已接入' : '接入'}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           </section>
         ))}
@@ -420,7 +456,52 @@ const STEPS = [
 ] as const;
 type StepKey = typeof STEPS[number]['key'];
 
-function ConnectSheet({ anchor, entry, existing, onClose, onCheck, onAdmit, onReload, onConfigChanged, onUse, locked }: ConnectionsPanelProps & {
+/** For an entry that cannot take a key yet: why, and what to use instead. */
+function ClosedSheet({ anchor, entry, onClose, onSwitch }: {
+  anchor: React.RefObject<HTMLDivElement | null>;
+  entry: CatalogEntry;
+  onClose: () => void;
+  onSwitch: (entry: CatalogEntry) => void;
+}) {
+  const instead = catalogEntry(entry.instead);
+  return (
+    <Sheet anchor={anchor} title={entry.name} sub={entry.blurb} onClose={onClose}
+      mark={<ProviderMark provider={{ id: entry.id, display_name: entry.name, base_url: baseUrlOf(entry) }} />}>
+      <div className="ws2-cx-connect">
+        <div className="ws2-m-flag is-bad" role="note">
+          <b>现在还接不了</b>
+          <span>{entry.waiting}</span>
+          {entry.plan ? <span>{entry.plan.note}</span> : null}
+        </div>
+        {entry.plan ? (
+          <p className="ws2-cx-terms">
+            <button type="button" className="ws2-m-link" onClick={() => { void openExternal(entry.plan!.url).catch(() => undefined); }}>看 {hostOf(entry.plan.url)} 上的原文 ↗</button>
+          </p>
+        ) : null}
+        {instead ? (
+          <p className="ws2-m-note">想现在就用，可以先接：{instead.name}。</p>
+        ) : null}
+        <div className="ws2-cx-actions">
+          <button type="button" className="ws2-m-link" onClick={onClose}>关闭</button>
+          {instead ? <button type="button" className="ws2-m-btn" onClick={() => onSwitch(instead)} data-autofocus>改接 {instead.name}</button> : null}
+        </div>
+      </div>
+    </Sheet>
+  );
+}
+
+function ConnectSheet(props: ConnectionsPanelProps & {
+  anchor: React.RefObject<HTMLDivElement | null>;
+  entry: CatalogEntry;
+  existing?: ProviderMetadata;
+  onClose: () => void;
+  onSwitch: (entry: CatalogEntry) => void;
+}) {
+  if (!canConnect(props.entry)) return <ClosedSheet anchor={props.anchor} entry={props.entry} onClose={props.onClose} onSwitch={props.onSwitch} />;
+  return <KeySheet {...props} />;
+}
+
+function KeySheet({ anchor, entry, existing, onClose, onCheck, onAdmit, onReload, onConfigChanged, onUse, locked }: ConnectionsPanelProps & {
   anchor: React.RefObject<HTMLDivElement | null>;
   entry: CatalogEntry;
   existing?: ProviderMetadata;
@@ -539,18 +620,24 @@ function ConnectSheet({ anchor, entry, existing, onClose, onCheck, onAdmit, onRe
                 </span>
               </div>
             ) : null}
+            {entry.plan ? (
+              <p className={`ws2-m-note ws2-cx-plan is-${entry.plan.fit}`}>
+                {entry.plan.note}
+                <button type="button" className="ws2-m-link" onClick={() => { void openExternal(entry.plan!.url).catch(() => undefined); }}>原文 ↗</button>
+              </p>
+            ) : null}
             {entry.noKey ? (
               <p className="ws2-m-note">{entry.name} 在这台电脑上运行，不需要密钥。先确认它已经打开，并且下载了至少一个模型。</p>
             ) : (
               <label className="ws2-cx-labelled"><span>API 密钥</span>
                 <input type="password" className="ws2-cx-field" value={key} onChange={(e) => setKey(e.target.value)} autoComplete="new-password" spellCheck={false}
-                  placeholder={entry.builtin && existing?.configured ? '已保存过密钥 · 留空就沿用' : '粘贴密钥，通常以 sk- 开头'} data-autofocus={entry.id !== 'custom' || undefined} />
+                  placeholder={entry.builtin && existing?.configured ? '已保存过密钥 · 留空就沿用' : entry.plan ? '粘贴套餐的专属密钥' : '粘贴密钥，通常以 sk- 开头'} data-autofocus={entry.id !== 'custom' || undefined} />
               </label>
             )}
             {entry.keyUrl && !entry.noKey ? (
               <p className="ws2-cx-get">
                 还没有密钥？<button type="button" className="ws2-m-link" onClick={() => { void openExternal(entry.keyUrl!).catch(() => undefined); }}>到 {hostOf(entry.keyUrl)} 创建一个 ↗</button>
-                <small>注册、充值或领取免费额度后，在「API Keys」里新建，复制回来粘贴。</small>
+                <small>{entry.keyHint ?? '注册、充值或领取免费额度后，在「API Keys」里新建，复制回来粘贴。'}</small>
               </p>
             ) : entry.keyUrl && entry.noKey ? (
               <p className="ws2-cx-get">还没装？<button type="button" className="ws2-m-link" onClick={() => { void openExternal(entry.keyUrl!).catch(() => undefined); }}>下载 {entry.name} ↗</button></p>

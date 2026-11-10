@@ -776,7 +776,7 @@
 
 /* ---------- a small window on the sheet (ConnectionsPanel's Sheet) ---------- */
 .ws2 .ws2-dialog.ws2-sheet { width: min(520px, calc(100% - 48px)); max-height: calc(100% - 96px); display: flex; flex-direction: column; }
-.ws2 .ws2-dialog.ws2-sheet.is-wide { width: min(680px, calc(100% - 48px)); }
+.ws2 .ws2-dialog.ws2-sheet.is-wide { width: min(680px, calc(100% - 48px)); height: min(760px, calc(100% - 96px)); }
 .ws2-sheet-head { display: flex; align-items: center; gap: 14px; padding: 20px 22px 14px; border-bottom: 1px solid var(--ws-rule); }
 .ws2 .ws2-sheet-head .ws2-pmark { width: 30px; height: 30px; }
 .ws2-sheet-head .txt { flex: 1; }
@@ -786,11 +786,30 @@
 .ws2 .ws2-sheet-x:hover { color: var(--ws-ink); }
 .ws2-sheet-body { min-height: 0; overflow: auto; padding: 14px 22px 20px; }
 .ws2 .ws2-cx-catalog .ws2-cx-search { width: 100%; margin-bottom: 4px; }
+/* the search and the chips stay put while the list scrolls under them */
+.ws2-cx-catalog > .head { position: sticky; top: -14px; z-index: 1; margin: -14px 0 0; padding: 14px 0 8px; background: var(--ws-bg); }
 .ws2-cx-catalog h4 { margin: 18px 0 2px; padding-bottom: 6px; border-bottom: 1px solid var(--ws-rule); font-family: var(--ws-mono); font-weight: 400; font-size: 10px; letter-spacing: .2em; color: var(--ws-ink-3); }
 .ws2-cx-catalog ul { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0 18px; margin: 0; padding: 0; list-style: none; }
 .ws2-cx-catalog li { border-bottom: 1px solid var(--ws-rule); }
 .ws2 .ws2-cx-catalog .ws2-cx-entry.is-custom { margin-top: 18px; border-top: 1px dashed var(--ws-line-2); border-bottom: 1px dashed var(--ws-line-2); }
 .ws2-cx-catalog .ws2-m-note { margin-top: 16px; }
+.ws2 .ws2-cx-only { display: flex; flex-wrap: wrap; row-gap: 6px; margin: 10px 0 0; }
+.ws2 .ws2-cx-only button { height: 26px; padding: 0 12px; }
+/* a plan's fit, or why an entry only explains itself */
+.ws2-cx-fit { margin-left: 8px; padding: 0 5px; border: 1px solid currentColor; font-family: var(--ws-mono); font-style: normal; font-size: 9.5px; line-height: 15px; letter-spacing: .12em; vertical-align: 1px; }
+.ws2-cx-fit.is-ok { color: var(--ws-ok); }
+.ws2-cx-fit.is-warn { color: var(--ws-warn); }
+.ws2-cx-fit.is-off { color: var(--ws-ink-3); }
+.ws2 .ws2-cx-entry.is-closed .txt b { color: var(--ws-ink-2); }
+.ws2 .ws2-cx-catalog .txt b { display: flex; align-items: center; min-width: 0; }
+.ws2-cx-catalog .txt b .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws2-cx-catalog .txt b .ws2-cx-fit { flex: none; }
+.ws2-cx-plan { margin: 0; padding-left: 12px; border-left: 2px solid var(--ws-line-2); font-size: 12.5px; line-height: 1.7; color: var(--ws-ink-2); }
+.ws2-cx-plan.is-ok { border-left-color: var(--ws-ok); }
+.ws2-cx-plan.is-coding { border-left-color: var(--ws-warn); }
+.ws2-cx-plan .ws2-m-link { margin-left: 8px; }
+.ws2-cx-terms { margin: 6px 0 0 21px; font-size: 12.5px; }
+.ws2-cx-connect > .ws2-m-note { margin-top: 14px; }
 /* connecting one */
 .ws2-cx-connect fieldset { display: grid; gap: 14px; margin: 0; padding: 0; border: 0; min-width: 0; }
 .ws2-cx-connect fieldset:disabled { opacity: .6; }

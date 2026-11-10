@@ -145,7 +145,8 @@
 
 /* A slip laid on the sheet, which only dims under it: no blur, so what is being acted on stays in sight. */
 .ws2-dialog-scrim {
-  position: absolute; inset: 0; z-index: 70; display: grid; place-items: center;
+  /* one track the size of the scrim, so a sheet's height in % is of the scrim and a tall one stays centred */
+  position: absolute; inset: 0; z-index: 70; display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center;
   background: color-mix(in srgb, var(--ws-bg) 64%, transparent); animation: ws2-scrim-in var(--dur-quick) var(--ease-sg) backwards;
 }
 .ws2-dialog {
