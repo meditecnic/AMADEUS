@@ -124,7 +124,16 @@ export function handleProviders(path: string, method: string, body: Record<strin
     if (!row || row.enabled === false) return fail(404, 'unknown_profile');
     if (method === 'DELETE') { row.enabled = false; return ok({ provider_id: row.id, enabled: false }); }
     if (method === 'PATCH') {
-      if (body.expected_configuration_version && body.expected_configuration_version !== row.configuration_version) return fail(409, 'configuration_changed');
+      // As the backend does: the admission goes with the expected version and nothing else; name, address and
+      // model go on their own. A request mixing the two is refused.
+      const admitting = 'selector_admission' in body || 'expected_configuration_version' in body;
+      if (admitting) {
+        const others = Object.keys(body).some((key) => key !== 'selector_admission' && key !== 'expected_configuration_version');
+        if (typeof body.selector_admission !== 'string' || typeof body.expected_configuration_version !== 'string' || others) {
+          return fail(422, 'invalid_provider_configuration');
+        }
+        if (body.expected_configuration_version !== row.configuration_version) return fail(409, 'configuration_changed');
+      }
       if (typeof body.base_url === 'string') row.base_url = body.base_url.trim().replace(/\/+$/, '');
       if (typeof body.default_model === 'string') row.default_model = body.default_model;
       if (typeof body.display_name === 'string') row.display_name = body.display_name;

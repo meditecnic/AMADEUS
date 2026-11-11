@@ -65,8 +65,12 @@ export const connect = (target: { providerId: string } | { baseUrl: string; name
     api_key: key || undefined,
   }));
 
-export const updateProfile = (id: string, change: { display_name?: string; base_url?: string; default_model?: string }, version: string | null) =>
-  call<Profile>(`/api/providers/custom-profiles/${encodeURIComponent(id)}`, json('PATCH', { ...change, expected_configuration_version: version ?? undefined }));
+/**
+ * Changes a connection's name, address or model. The backend takes these on their own: a request that also carries
+ * the admission or the expected version is refused (422), so the version never rides along here.
+ */
+export const updateProfile = (id: string, change: { display_name?: string; base_url?: string; default_model?: string }) =>
+  call<Profile>(`/api/providers/custom-profiles/${encodeURIComponent(id)}`, json('PATCH', change));
 
 export const removeProfile = (id: string) =>
   call<unknown>(`/api/providers/custom-profiles/${encodeURIComponent(id)}`, { method: 'DELETE' });

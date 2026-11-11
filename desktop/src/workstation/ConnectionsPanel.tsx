@@ -291,7 +291,7 @@ function ConnectedRow({
               ) : (
                 <form className="ws2-cx-inline" onSubmit={(e) => {
                   e.preventDefault();
-                  void act(() => updateProfile(row.id, { base_url: urlEdit.trim() }, row.configuration_version ?? null), '地址已改。测一下看看能不能用。')
+                  void act(() => updateProfile(row.id, { base_url: urlEdit.trim() }), '地址已改。测一下看看能不能用。')
                     .then((ok) => { if (ok) { setUrlEdit(null); setModels(null); } });
                 }}>
                   <input type="url" className="ws2-cx-field" value={urlEdit} autoFocus spellCheck={false} aria-label="服务地址"
@@ -329,7 +329,7 @@ function ConnectedRow({
                           {custom && id !== row.default_model ? (
                             <button type="button" className="ws2-m-link mk" onClick={(e) => {
                               e.preventDefault();
-                              void act(() => updateProfile(row.id, { default_model: id }, row.configuration_version ?? null), `默认模型改为 ${id}。`);
+                              void act(() => updateProfile(row.id, { default_model: id }), `默认模型改为 ${id}。`);
                             }}>设为默认</button>
                           ) : null}
                         </label>
@@ -578,7 +578,7 @@ function KeySheet({ anchor, entry, existing, providers, onClose, onCheck, onAdmi
     mark('check', { state: 'doing' });
     try {
       if (custom && profile.current) {
-        const set = await updateProfile(profile.current.id, { default_model: chosen }, profile.current.version);
+        const set = await updateProfile(profile.current.id, { default_model: chosen });
         profile.current = { ...profile.current, version: set.configuration_version ?? profile.current.version };
         onConfigChanged(id);
       }
