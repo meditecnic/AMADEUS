@@ -5144,7 +5144,7 @@ async def test_221_dated_plan_episodic_expiry_and_source_created_at_forwarding(i
         credential_required=True,
         require=lambda _task: None,
     )
-    monkeypatch.setattr(provider_registry, "snapshot", lambda *a, **kw: fake_snapshot)
+    monkeypatch.setattr(type(provider_registry), "snapshot", staticmethod(lambda *a, **kw: fake_snapshot))
     monkeypatch.setattr(credential_store, "get", lambda _pid: "sk-valid-non-test-key-12345")
 
     job = await jobs.enqueue_memory_job(
