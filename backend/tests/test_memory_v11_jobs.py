@@ -5072,7 +5072,8 @@ def test_221_short_qa_extraction_prompt_contract():
     assert "Dated or time-bounded user plans, schedules, or appointments" in prompt
     assert 'memory_class="episodic", relation="new", candidate_index=null (NEVER stable_candidate)' in prompt
     assert "source_local_time" in prompt and "do NOT convert timezones or count weekdays" in prompt
-    assert "YYYY年M月D日" in prompt and "explicit timezone offset" in prompt
+    assert "YYYY年M月D日" in prompt and 'semantic.qualifiers.scheduled_date="YYYY-MM-DD"' in prompt
+    assert "ONLY dated plans carry scheduled_date" in prompt
     assert "User communication, speech-register, or address preferences" in prompt
     assert "不用跟我端着敬语" in prompt
     assert "Short or elliptical Q&A replies:" in prompt
@@ -5295,4 +5296,14 @@ def test_221_plan_dates_are_worked_out_in_code_not_by_the_model():
     assert fixed["expires_at"].startswith("2026-11-20T23:59:59")
     assert datetime.fromisoformat(fixed["expires_at"]).tzinfo is not None
     assert _with_aware_expiry({"expires_at": None}) == {"expires_at": None}
+
+    # [226] A marked plan ends at the close of its own local day, in that day's offset
+    # (summer time included), whatever the model wrote; unmarked rows keep theirs.
+    plan = _with_aware_expiry({
+        "semantic": {"qualifiers": {"scheduled_date": "2026-11-06"}},
+        "expires_at": "2026-11-06T23:59:59-04:00",
+    })
+    assert plan["expires_at"] == datetime(2026, 11, 6, 23, 59, 59).astimezone().isoformat()
+    assert _with_aware_expiry({"semantic": {"qualifiers": {"scheduled_date": "soon"}}, "expires_at": None}) == {
+        "semantic": {"qualifiers": {"scheduled_date": "soon"}}, "expires_at": None}
 

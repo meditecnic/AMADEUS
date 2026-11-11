@@ -175,12 +175,22 @@ def _validate_completion_collections(
 
 
 def _with_aware_expiry(obs: dict[str, Any]) -> dict[str, Any]:
-    """[221] A plan's expiry without an offset is read as this machine's local time.
+    """[221] Expiries the reads can compare.
 
-    Reads compare it with an aware clock and skip what they cannot compare, so a
-    naive "2026-11-20T23:59:59" would silently drop the plan.
+    A dated plan (semantic.qualifiers.scheduled_date) ends at the close of that
+    local day, in the offset that day has here: worked out in code, whatever the
+    model wrote. Any other expiry without an offset is read as local time; reads
+    skip what they cannot compare, so a naive value would silently drop the row.
     """
-    raw = obs.get("expires_at") if isinstance(obs, dict) else None
+    if not isinstance(obs, dict):
+        return obs
+    from app.services.memory_v11.experiences import plan_date
+
+    day = plan_date(obs.get("semantic"))
+    if day is not None:
+        end = datetime(day.year, day.month, day.day, 23, 59, 59).astimezone()
+        return {**obs, "expires_at": end.isoformat()}
+    raw = obs.get("expires_at")
     if not isinstance(raw, str) or not raw.strip():
         return obs
     try:
@@ -695,10 +705,11 @@ Rules:
   day_after_tomorrow, this_week, and next_week — do NOT convert timezones or count weekdays
   yourself) into an explicit absolute calendar date YYYY年M月D日（周X） in BOTH display_text
   and fact_text (e.g. "用户计划在2026年5月1日（周五）下午去取订好的替代件"), never leaving
-  bare "下周五"/"明天" without YYYY年M月D日. Set expires_at to the end of that scheduled local
-  date using source_local_time.utc_offset (e.g. "2026-05-01T23:59:59+08:00"; MUST include an
-  explicit timezone offset, never a naive timestamp). If source_local_time is null/missing and
-  only a relative date is given, do not guess a calendar date (set expires_at=null). Recurring
+  bare "下周五"/"明天" without YYYY年M月D日. Mark it as a plan: put the same local date as
+  semantic.qualifiers.scheduled_date="YYYY-MM-DD" (e.g. "2026-05-01"); the backend sets its
+  expiry from that date. ONLY dated plans carry scheduled_date; never put it on any other
+  observation. If source_local_time is null/missing and only a relative date is given, do not
+  guess a calendar date (no scheduled_date, expires_at=null). Recurring
   timeless habits (e.g. "每周三晚上固定跑步") remain memory_class="stable_candidate" with
   expires_at=null. Do NOT extract immediate same-night chatter (e.g. "待会儿去泡澡",
   "今晚不熬了", "去煮点面吃").

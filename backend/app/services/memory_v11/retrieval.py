@@ -22,6 +22,7 @@ from app.services.memory_v11.contracts import (
     D18_UNRESOLVED_POOL_LIMIT,
     D18_UNRESOLVED_TOKEN_BUDGET,
 )
+from app.services.memory_v11.experiences import plan_date
 from app.services.memory_v11.repository import list_active_stable_facts
 
 logger = logging.getLogger(__name__)
@@ -39,8 +40,9 @@ EXPERIENCE_CANDIDATE_LIMIT: int = 16
 EXPERIENCE_TOKEN_BUDGET: int = 1400
 # Overhead for "EPISODIC MEMORY" + EXPERIENCE_USE_CONTRACT header lines.
 EXPERIENCE_CONTRACT_OVERHEAD_TOKENS: int = 180
-# Upcoming dated arrangements (future expires_at) included without lexical overlap
-# so queries like "我下周有什么事来着" still see nearest scheduled plans.
+# Dated plans not yet due (semantic.qualifiers.scheduled_date plus a future
+# expires_at) enter without lexical overlap, so "我下周有什么事来着" still sees them.
+# Any other experience with an expiry keeps the lexical path.
 UPCOMING_EXPERIENCE_LIMIT: int = 5
 
 
@@ -498,7 +500,7 @@ async def select_experience_candidates(
     db = await get_db(wl, "memory")
     try:
         cur = await db.execute(
-            """SELECT experience_id, conversation_id, display_text,
+            """SELECT experience_id, conversation_id, display_text, semantic_json,
                       semantic_fingerprint, confidence, expires_at, created_at
                  FROM experiences
                 WHERE session_id=? AND identity_mode=? AND status='active'""",
@@ -548,7 +550,7 @@ async def select_experience_candidates(
         }
         if relevance > 0.0:
             eligible.append(item)
-        elif expiry_ts is not None:
+        elif expiry_ts is not None and plan_date(row["semantic_json"]) is not None:
             upcoming_fallback.append((expiry_ts, item))
 
     # Rank: relevance desc, newer created_at desc, confidence desc, id tie-break.
