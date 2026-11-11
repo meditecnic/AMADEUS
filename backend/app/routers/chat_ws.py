@@ -252,12 +252,13 @@ class SessionState:
             self.session_id, worldline=self.worldline, conversation_id=self.conversation_id,
         )
         await self.reload_history()
-        from app.services.soul_engine import soul_engine
-        await soul_engine.restore_emotion(
-            self.session_id,
-            self.worldline,
-            identity_mode=self.identity_mode,
-        )
+        if self.client_type == "voice":
+            from app.services.soul_engine import soul_engine
+            await soul_engine.restore_emotion(
+                self.session_id,
+                self.worldline,
+                identity_mode=self.identity_mode,
+            )
 
     async def reload_history(self):
         self._history = await models.get_recent_messages(
@@ -292,12 +293,13 @@ class SessionState:
         self._history = []
         self.memory_summary = ""
         self.content_epoch = 0
-        from app.services.soul_engine import soul_engine
-        await soul_engine.restore_emotion(
-            self.session_id,
-            self.worldline,
-            identity_mode=self.identity_mode,
-        )
+        if self.client_type == "voice":
+            from app.services.soul_engine import soul_engine
+            await soul_engine.restore_emotion(
+                self.session_id,
+                self.worldline,
+                identity_mode=self.identity_mode,
+            )
 
     @property
     def history(self):

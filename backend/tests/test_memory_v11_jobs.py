@@ -5065,3 +5065,97 @@ def test_v129_mixed_secrets_keep_original_offsets_and_url_fields():
     }
     assert _jobs().redact_user_text(text) == (expected, False)
     assert _jobs().redact_user_text(expected) == (expected, False)
+
+
+def test_221_short_qa_extraction_prompt_contract():
+    prompt = _jobs()._V11_MEMORY_SYSTEM
+    assert "Short or elliptical Q&A replies:" in prompt
+    assert "previous_assistant_text asks a concrete question about the user" in prompt
+    assert "confidence >= 0.85" in prompt
+    assert "bare or hedged assent" in prompt
+    assert "between\n     0.65 and 0.80" in prompt or "0.65 and 0.80" in prompt
+    assert 'relation="new", candidate_index=null' in prompt
+    assert "NOT a concrete personal question about the user" in prompt
+    assert "Never remember an assistant claim the user has not confirmed" in prompt
+
+
+@pytest.mark.asyncio
+async def test_221_short_qa_substantive_vs_hedged_assent_end_to_end(isolated_store):
+    jobs = _jobs()
+    session_id = f"s-221-qa-{uuid4().hex[:8]}"
+    conv = await conversation_service.create(session_id, "steins_gate", identity_mode="self")
+    cid = str(conv["id"])
+
+    # Case 1: substantive short answer (>= 0.85) -> active stable_facts row
+    await models.save_message(
+        session_id, "assistant", "[EMO:neutral] 普段コーヒーはどうやって飲むの？",
+        worldline="steins_gate", conversation_id=cid,
+    )
+    mid1 = await models.save_message(
+        session_id, "user", "美式，不加糖",
+        worldline="steins_gate", conversation_id=cid,
+    )
+    job1 = await jobs.enqueue_memory_job(
+        session_id=session_id, worldline="steins_gate", conversation_id=cid,
+        identity_mode="self", source_message_id=mid1, provider_id="fake", model_id="fake",
+    )
+
+    async def complete_substantive(**kwargs):
+        assert kwargs["previous_assistant_text"] == "普段コーヒーはどうやって飲むの？"
+        assert kwargs["user_text"] == "美式，不加糖"
+        obs = _v113_observation("o1", "喝美式咖啡不加糖")
+        obs["confidence"] = 0.91
+        return {"observations": [obs]}
+
+    res1 = await jobs.process_memory_job(
+        job_id=job1["job_id"], lease_owner="qa-1", memory_completion=complete_substantive,
+    )
+    assert res1["state"] == "completed"
+
+    # Case 2: bare/hedged assent (0.72, relation=new, candidate_index=None) -> candidate observation only, NOT active stable_facts
+    await models.save_message(
+        session_id, "assistant", "[EMO:neutral] 你平时经常熬夜写代码吗？",
+        worldline="steins_gate", conversation_id=cid,
+    )
+    mid2 = await models.save_message(
+        session_id, "user", "算是吧",
+        worldline="steins_gate", conversation_id=cid,
+    )
+    job2 = await jobs.enqueue_memory_job(
+        session_id=session_id, worldline="steins_gate", conversation_id=cid,
+        identity_mode="self", source_message_id=mid2, provider_id="fake", model_id="fake",
+    )
+
+    async def complete_hedged(**kwargs):
+        assert kwargs["previous_assistant_text"] == "你平时经常熬夜写代码吗？"
+        assert kwargs["user_text"] == "算是吧"
+        obs = _v113_observation("o2", "平时经常熬夜写代码")
+        obs["confidence"] = 0.72
+        return {"observations": [obs]}
+
+    res2 = await jobs.process_memory_job(
+        job_id=job2["job_id"], lease_owner="qa-2", memory_completion=complete_hedged,
+    )
+    assert res2["state"] == "completed"
+
+    db = await get_db("steins_gate", "memory")
+    try:
+        fact_rows = await (
+            await db.execute(
+                """SELECT v.display_text FROM stable_facts f
+                   JOIN stable_fact_versions v
+                     ON v.fact_id=f.fact_id AND v.version_no=f.active_version
+                  WHERE f.session_id=?""",
+                (session_id,),
+            )
+        ).fetchall()
+        obs_rows = await (
+            await db.execute(
+                "SELECT display_text, status FROM memory_observations WHERE session_id=? ORDER BY display_text",
+                (session_id,),
+            )
+        ).fetchall()
+    finally:
+        await db.close()
+    assert [str(r["display_text"]) for r in fact_rows] == ["喝美式咖啡不加糖"]
+    assert ("平时经常熬夜写代码", "candidate") in [(str(r["display_text"]), str(r["status"])) for r in obs_rows]

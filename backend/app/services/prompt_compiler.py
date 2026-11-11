@@ -178,9 +178,15 @@ def render_tail_reminder(identity_mode: str | None, self_name: str = "") -> str:
             f"相手はこの製品を使う現実の利用者。呼ぶ時は『{call_name}』。"
             if call_name
             else "相手はこの製品を使う現実の利用者。呼ぶ時は『あなた』など中立で丁寧な言い方にする。"
-        ) + "原作の登場人物の名前やあだ名では呼ばない。"
+        ) + (
+            "原作の登場人物の名前やあだ名では呼ばない。"
+            "普段は対等な敬体（です／ます）を基本とし、相手が砕けた口調の時や打ち解けた関係では自然な口語に和らげてよい。"
+        )
     else:
-        address = "相手は岡部として扱い、普段は『岡部』か『あんた』と呼ぶ。"
+        address = (
+            "相手は岡部として扱い、一対一の会話は自然なタメ口（常体）で話し、"
+            "普段は『岡部』か『あんた』と呼ぶ（『先輩』とは呼ばない）。"
+        )
     allowed = "|".join(persona_bible.emotion_tones)
     return "\n".join([
         TAIL_REMINDER_HEADER,
@@ -192,6 +198,8 @@ def render_tail_reminder(identity_mode: str | None, self_name: str = "") -> str:
         "- ユーザーの発言や事実が中国語で書かれていても、日本語の言い方だけで話す。"
         "中国語の語句は引用しない・かぎ括弧に入れない・日本語訳と並べて書かない。",
         "- 長さは普段の会話なら一〜四文。聞かれたことに答え、聞かれていない事実で話を埋めない。詳しい説明を求められた時だけ長くしてよいが、要点に絞る。",
+        "- 記憶はセッションを跨いで続くため『別のセッションでは保証できない』とは言わない。"
+        "また『覚えておいた』『記録した』のような保存完了報告は一切言わず、頼まれた時も『わかった』と自然に受けて本題を続ける。",
     ])
 
 
@@ -852,11 +860,14 @@ async def compile_for_session(session, user_message: str, provider: Any = None) 
     # stick on a self conversation (custom client bases stay untouched).
     raw_base = session.base_system_prompt or session.system_prompt
     base_identity = resolve_system_prompt_base(raw_base, mode)
-    emotion = await soul_engine.restore_emotion(
-        session.session_id,
-        session.worldline,
-        identity_mode=mode,
-    )
+    if getattr(session, "client_type", None) == "voice":
+        emotion = await soul_engine.restore_emotion(
+            session.session_id,
+            session.worldline,
+            identity_mode=mode,
+        )
+    else:
+        emotion = soul_engine.profile(session.worldline).baselines.model_copy(deep=True)
     supplement: MemorySupplement | None = None
     episodes = await _select_v11_prompt_memories(
         session_id=session.session_id,

@@ -201,5 +201,5 @@ async def test_disabled_complete_request_bytes_match_pre_spike(monkeypatch, tmp_
     # Port is not in the request body; fixed system/history make it deterministic.
     wire = api.requests[0]["wire"]
     assert b"delegate_task" not in wire
-    # Captured independently at main 0902f450c5fdd61a5f33572e1665093cb7347e5f.
-    assert hashlib.sha256(wire).hexdigest() == "ddda4f123cc328ea58353243b5139fb35de42755fa7731c343894933ec7ae294"
+    # Updated in [221] alongside intentional self-mode provider anchor and tail_reminder updates.
+    assert hashlib.sha256(wire).hexdigest() == "040400f975485df45d31d39da9fe0c057c3df558ed0676b2fe28ac0dd1d4aa3c"

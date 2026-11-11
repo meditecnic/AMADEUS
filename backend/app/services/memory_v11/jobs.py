@@ -623,6 +623,20 @@ Rules:
 - Only user_text establishes facts; prefer empty over invention.
 - previous_assistant_text is context only: use it to understand what the user
   answers or refers to. Never remember an assistant claim the user has not confirmed.
+- Short or elliptical Q&A replies:
+  1) When previous_assistant_text asks a concrete question about the user (preferences,
+     habits, profile, plans) and user_text supplies an explicit substantive answer
+     (e.g. "美式，不加糖", "上海", "ブラック"), rewrite display_text and fact_text into a
+     self-contained statement in user_text's language with evidence_kind="direct_user"
+     and confidence >= 0.85.
+  2) When previous_assistant_text asks a concrete personal question about the user and
+     user_text is only a bare or hedged assent (e.g. "嗯", "对", "算是吧", "差不多", "うん"),
+     extract at most one candidate observation with relation="new", candidate_index=null,
+     memory_class="stable_candidate", evidence_kind="direct_user", and confidence between
+     0.65 and 0.80 (never >= 0.85, and never use refines/supersedes below 0.85).
+  3) When previous_assistant_text is NOT a concrete personal question about the user
+     (e.g. advice, explanation, teasing, telling the user to rest) or user_text merely
+     acknowledges/deflects ("嗯", "好", "知道了", "行", "换个话题", "随便"), return [].
 - Write display_text and fact_text in the language of the user utterance; do not translate.
   For mixed-language speech, follow the language of the part supporting that fact.
   Do not store a separate Japanese or other normalized-language version.

@@ -361,8 +361,10 @@ def test_phase2_s3b_system_prompt_base_mode_frame_and_shared_security():
         assert needle in okabe
         assert needle in self_base
 
-    # Lore LabMem numbers remain (facts, not "user=Okabe").
-    assert "LabMem No.004" in self_base and "LabMem No.001" in self_base
+    # Lore LabMem No.001 remains; March-2010 Amadeus is explicitly not LabMem No.004.
+    assert "LabMem No.001" in self_base and "LabMem No.001" in okabe
+    assert "LabMem No.004" not in self_base and "LabMem No.004" not in okabe
+    assert "ラボメンではない" in self_base and "ラボメンではない" in okabe
 
     # Auth-frozen okabe constant must re-resolve to self frame for self mode.
     resolved_self = resolve_system_prompt_base(SYSTEM_PROMPT_BASE, "self")
@@ -667,21 +669,28 @@ def test_fewshot_demonstrates_range_without_teaching_scripted_replies():
     assistants: list[str] = []
     users: list[str] = []
     observed: set[str] = set()
+    all_emotions: list[str] = []
     for rows in sets.values():
         replies = [row["assistant"] for row in rows]
-        emotions = {
+        mode_emotions = [
             re.match(r"^\[EMO:([^]]+)] ", content).group(1)
             for content in replies
             if re.match(rf"^\[EMO:({allowed})] ", content)
-        }
-        # Within one identity mode every example shows a different emotion.
-        assert len(emotions) == len(replies)
+        ]
+        assert len(mode_emotions) == len(replies)
+        # [221] Designer review #3: neutral is the everyday baseline (>=2 per mode)
+        # while still showing >=4 distinct emotions per mode.
+        assert mode_emotions.count("neutral") >= 2
+        emotions = set(mode_emotions)
+        assert len(emotions) >= 4
         observed |= emotions
+        all_emotions.extend(mode_emotions)
         assistants.extend(replies)
         users.extend(row["user"] for row in rows)
 
     assert len(assistants) == len(users) >= 6
     assert {"neutral", "intellectual", "annoyed", "embarrassed", "sad"} <= observed
+    assert all_emotions.count("annoyed") <= 1
     assert any(any("\u4e00" <= char <= "\u9fff" for char in content) for content in users)
     assert any("根拠" in content and "仮説" in content for content in assistants)
     assert any("一つずつ" in content for content in assistants)
@@ -689,6 +698,40 @@ def test_fewshot_demonstrates_range_without_teaching_scripted_replies():
     assert "誰が助手よ！" not in joined
     assert "-tinaって言うな！" not in joined
     assert "何語？" not in joined
+    # [221] Designer review #1 & #2: no ojousama wayo/kashira, no storage-receipt claims.
+    assert "わよ" not in joined
+    assert "かしら" not in joined
+    for receipt in ("覚えておいた", "記録しておいた", "メモした"):
+        assert receipt not in joined
+    assert any("わかった" in content for content in assistants)
+
+
+def test_221_persona_contracts_cross_session_no_receipt_senpai_and_casual_shift():
+    bible = PersonaBible.load_default()
+    assert "sg0-v1" in bible.sources and "sg0-v2" in bible.sources
+    assert "cross-session-memory" in bible.shared_rule_ids
+
+    for worldline in ("steins_gate", "beta"):
+        for mode in ("okabe", "self"):
+            prompt = bible.render_prompt(worldline, identity_mode=mode)
+            assert "セッションを跨いで続く" in prompt
+            assert "別のセッションでは保証できない" in prompt
+            assert "覚えておいた" in prompt and "保存完了報告は一切言わず" in prompt
+            assert "比屋定真帆" in prompt and "『先輩』とは呼ばない" in prompt
+            assert "〜わよ" in prompt and "〜かしら" in prompt and "禁止" in prompt
+            for ch in dict.fromkeys(prompt):
+                if "\u4e00" <= ch <= "\u9fff":
+                    ch.encode("cp932")
+
+    self_rule = bible.rules["self-register"].instruction_ja
+    assert "です／ます" in self_rule
+    assert "砕けた口調" in self_rule and "CORE FACTS" in self_rule
+    assert "自然な口語へ和らげてよい" in self_rule
+    assert "『あんた』呼びはしない" in self_rule
+
+    okabe_rule = bible.rules["okabe-register"].instruction_ja
+    assert "タメ口" in okabe_rule
+    assert "『先輩』とは決して呼ばない" in okabe_rule
 
 
 def test_persona_regression_corpus_covers_positive_and_negative_boundaries():

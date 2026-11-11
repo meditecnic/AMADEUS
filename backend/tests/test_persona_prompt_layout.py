@@ -421,3 +421,45 @@ async def test_second_round_request_budget_keeps_history_and_current_turn(
     else:
         assert (f"{CURRENT}\n\n{reminder}") in [text for role, text in sent if role == "user"]
         assert sent[-1][0] == "system" and TAIL_REMINDER_HEADER not in sent[-1][1]
+
+
+def test_221_tail_reminder_covers_memory_continuity_no_receipt_and_registers():
+    okabe = render_tail_reminder("okabe")
+    self_rem = render_tail_reminder("self", "")
+    for text in (okabe, self_rem):
+        assert "セッションを跨いで続く" in text
+        assert "別のセッションでは保証できない" in text
+        assert "覚えておいた" in text and "保存完了報告は一切言わず" in text
+    assert "タメ口" in okabe and "『先輩』とは呼ばない" in okabe
+    assert "です／ます" in self_rem and "自然な口語に和らげてよい" in self_rem
+
+
+@pytest.mark.asyncio
+async def test_221_text_chat_skips_restore_emotion_while_voice_preserves_it(
+    isolated_store, monkeypatch
+):
+    from unittest.mock import AsyncMock
+
+    owner = f"emo-gate-{uuid4().hex}"
+    await conversation_service.create_and_select(owner, "steins_gate", identity_mode="okabe")
+    baseline = soul_engine.profile("steins_gate").baselines.model_copy(deep=True)
+    mock_restore = AsyncMock(return_value=baseline)
+    monkeypatch.setattr(type(soul_engine), "restore_emotion", mock_restore)
+
+    for client_type in ("mobile", "desktop"):
+        text_session = chat_ws.SessionState(owner)
+        text_session.worldline = "steins_gate"
+        text_session.client_type = client_type
+        await text_session.load_from_db()
+        await text_session.enter_draft()
+        prompt = await compile_for_session(text_session, "こんにちは")
+        assert "PERSONA BIBLE v1" in prompt
+        assert mock_restore.await_count == 0
+
+    voice_session = chat_ws.SessionState(owner)
+    voice_session.worldline = "steins_gate"
+    voice_session.client_type = "voice"
+    await voice_session.load_from_db()
+    await voice_session.enter_draft()
+    await compile_for_session(voice_session, "こんにちは")
+    assert mock_restore.await_count == 3
