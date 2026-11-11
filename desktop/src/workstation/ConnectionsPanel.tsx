@@ -548,8 +548,9 @@ function KeySheet({ anchor, entry, existing, providers, onClose, onCheck, onAdmi
         profile.current = { id: got.provider_id, version: got.configuration_version ?? null, made: !providers.some((row) => row.id === got.provider_id) };
       }
       onConfigChanged(got.provider_id);
-      // An existing connection that only got a new key keeps its model and its place in the menu.
-      const rekeyed = got.check.code === 'not_checked';
+      // An existing connection that only got a new key keeps its model and its place in the menu. Where the service
+      // has no list to prove the key against, the backend said one sentence with that model first (check.ok).
+      const rekeyed = got.check.code === 'not_checked' || got.check.ok;
       mark('save', { state: 'done', note: rekeyed ? '密钥已换，原来的模型不变' : key.trim() ? '只存在这台电脑上' : entry.noKey ? '本机服务，不需要密钥' : '沿用已保存的密钥' });
       const chat = got.models_listed === false ? null : chatModels(got.models);
       setModels(chat);
@@ -559,6 +560,8 @@ function KeySheet({ anchor, entry, existing, providers, onClose, onCheck, onAdmi
     } catch (problem) {
       const step: StepKey = problem instanceof ConnectFailure && problem.step ? problem.step : 'save';
       if (step !== 'save') mark('save', { state: 'done' });
+      // Only a new key on a service without a list reaches the sentence here: the old key is back in place.
+      if (step === 'check') mark('list', { state: 'done', note: '这家不提供列表' });
       mark(step, { state: 'failed' });
       setFailure(connectError(problem, step));
       setPhase('form');

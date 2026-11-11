@@ -269,3 +269,106 @@ def test_labels_decide_which_profile_a_connect_reuses(connect):
     assert other.json()["provider_id"] != plain
     assert store.get(plain) == "plan-key"
     assert client.portal.call(db.get_provider_configuration, plain)["catalog_id"] == "plan"
+
+
+@pytest.fixture(params=["http_404", "unsupported"])
+def listless(connect, monkeypatch, request):
+    """A service without a model list, already connected with a key that works."""
+    client, store = connect
+    if request.param == "http_404":
+        monkeypatch.setattr(OpenAICompatibleAdapter, "list_models",
+                            AsyncMock(side_effect=ProviderRequestError("custom", 404)))
+    else:
+        async def unsupported(*args, **kwargs):
+            raise providers.HTTPException(400, detail={"code": "model_discovery_unsupported"})
+        monkeypatch.setattr(providers, "_discover_models", unsupported)
+    response = submit(client, api_key="original", model_id="chosen")
+    assert response.status_code == 200, response.text
+    return client, store, response.json()["provider_id"]
+
+
+def test_no_list_key_only_keeps_the_old_key_when_the_new_one_is_refused(listless, monkeypatch):
+    client, store, profile_id = listless
+    before = client.portal.call(db.get_provider_configuration, profile_id)
+    monkeypatch.setattr(providers, "check_selected_model_chat", AsyncMock(
+        side_effect=providers.HTTPException(401, detail={"code": "credential_rejected"})))
+    response = submit(client, api_key="rejected")
+    assert response.status_code == 401
+    assert response.json() == {"detail": {"code": "credential_rejected", "step": "check"}}
+    assert store.get(profile_id) == "original"
+    assert client.portal.call(db.get_provider_configuration, profile_id) == before
+
+
+@pytest.mark.parametrize("admission", ["admitted", "manual", "pending"])
+def test_no_list_key_only_checks_the_kept_model_and_leaves_admission(listless, monkeypatch, admission):
+    client, store, profile_id = listless
+    row = client.portal.call(db.get_provider_configuration, profile_id)
+    client.portal.call(db.update_provider_selector_admission, profile_id, admission, row["configuration_version"])
+    chat_keys = []
+
+    async def stream(self, **kwargs):
+        chat_keys.append((kwargs["api_key"], kwargs["model"]))
+        yield {"content": "OK"}
+
+    monkeypatch.setattr(OpenAICompatibleAdapter, "get_chat_stream", stream)
+    response = submit(client, api_key="replacement")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["model_id"] == "chosen" and body["models_listed"] is False
+    assert body["check"] == {"ok": True, "code": "ok"}
+    assert chat_keys == [("replacement", "chosen")]
+    assert store.get(profile_id) == "replacement"
+    after = client.portal.call(db.get_provider_configuration, profile_id)
+    assert after["default_model"] == "chosen" and after["selector_admission"] == admission
+
+
+def test_no_list_reconnect_without_a_key_or_a_kept_model_says_nothing(connect, monkeypatch):
+    client, store = connect
+    monkeypatch.setattr(OpenAICompatibleAdapter, "list_models",
+                        AsyncMock(side_effect=ProviderRequestError("custom", 404)))
+    chat_check = AsyncMock(side_effect=AssertionError("nothing to check"))
+    monkeypatch.setattr(providers, "check_selected_model_chat", chat_check)
+    # No model was ever chosen: a new key is kept and the model is still to be typed.
+    profile_id = submit(client, api_key="first").json()["provider_id"]
+    waiting = submit(client, api_key="second")
+    assert waiting.json()["check"] == {"ok": False, "code": "model_selection_required"}
+    assert store.get(profile_id) == "second"
+    chat_check.assert_not_called()
+
+
+def test_no_list_reconnect_with_a_kept_model_and_no_new_key_is_not_checked(listless, monkeypatch):
+    client, store, profile_id = listless
+    chat_check = AsyncMock(side_effect=AssertionError("no key was written"))
+    monkeypatch.setattr(providers, "check_selected_model_chat", chat_check)
+    response = submit(client)
+    assert response.status_code == 200, response.text
+    assert response.json()["check"] == {"ok": False, "code": "not_checked"}
+    assert store.get(profile_id) == "original"
+    chat_check.assert_not_called()
+
+
+def test_a_failed_connect_gives_an_adopted_profile_its_blank_label_back(connect, monkeypatch):
+    client, store = connect
+    profile_id = submit(client, api_key="original", model_id="chosen").json()["provider_id"]
+    before = client.portal.call(db.get_provider_configuration, profile_id)
+    assert before["catalog_id"] is None
+    monkeypatch.setattr(OpenAICompatibleAdapter, "list_models",
+                        AsyncMock(side_effect=ProviderRequestError("custom", 401)))
+    response = submit(client, api_key="rejected", catalog_id="plan")
+    assert response.status_code == 401 and response.json()["detail"]["step"] == "list"
+    assert client.portal.call(db.get_provider_configuration, profile_id) == before
+    assert store.get(profile_id) == "original"
+
+
+def test_a_label_adopts_the_oldest_of_two_unlabelled_profiles(connect):
+    client, store = connect
+    made = [client.post("/api/providers/custom-profiles", json={
+        "display_name": name, "base_url": "https://connect.invalid/v1"}).json()["provider_id"] for name in ("a", "b")]
+    rows = {row["provider_id"]: row for row in client.portal.call(db.list_provider_configurations)}
+    oldest = min(made, key=lambda provider_id: (rows[provider_id]["created_at_utc"], provider_id))
+    other = next(provider_id for provider_id in made if provider_id != oldest)
+    untouched = rows[other]
+    assert submit(client, api_key="plan-key", catalog_id="plan").json()["provider_id"] == oldest
+    assert client.portal.call(db.get_provider_configuration, oldest)["catalog_id"] == "plan"
+    assert client.portal.call(db.get_provider_configuration, other) == untouched
+    assert store.get(other) is None

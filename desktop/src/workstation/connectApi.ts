@@ -48,7 +48,10 @@ export type Connected = {
   models_listed?: boolean;
   /** The model already chosen for a connection that existed, or null while one is still to be picked. */
   model_id: string | null;
-  /** not_checked: an existing connection got a new key and keeps its model and its place in the menu. */
+  /**
+   * not_checked: an existing connection got a new key and keeps its model and its place in the menu. Without a
+   * model sent, ok means the same, after one sentence with the kept model (the service has no list to prove the key).
+   */
   check: { ok: boolean; code: 'ok' | 'model_selection_required' | 'not_checked' | string };
   configuration_version: string | null;
 };

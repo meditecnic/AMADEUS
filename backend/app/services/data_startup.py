@@ -16,6 +16,15 @@ def current_status() -> dict:
     return dict(_state) if _root_key == str(db.get_data_root()) else {"status": "ok", "detail": None}
 
 
+def status_report(list_backups=None) -> dict:
+    """The data status as the settings page and the feedback bundle both report it."""
+    return {
+        **current_status(),
+        "backups": (list_backups or backups.list_backups)(),
+        "restore_pending": backups.pending_restore_id(),
+    }
+
+
 def available() -> bool:
     return _available if _root_key == str(db.get_data_root()) else True
 

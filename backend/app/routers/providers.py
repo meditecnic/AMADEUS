@@ -394,15 +394,20 @@ async def _connect_provider(body: ProviderConnect):
         else:
             model_catalog.reconcile(provider_id, result.models, result.metadata)
             models = list(result.models)
-        if model and not keep_selection:
+        # A new key with nothing to prove it against (no list was read) says one sentence with the kept model,
+        # so a key the service refuses never replaces one that works. The model and its admission stay as they are.
+        verify_kept = keep_selection and not models_listed and body.api_key is not None
+        checked = bool(model) and (not keep_selection or verify_kept)
+        if checked:
             step = "check"
             await check_selected_model_chat(provider_id, ChatCheckRequest(model_id=model))
-            saved = await update_provider_selector_admission(provider_id, "admitted", saved["configuration_version"])
-            if saved is None:
-                raise HTTPException(409, detail={"code": "configuration_changed"})
+            if not keep_selection:
+                saved = await update_provider_selector_admission(provider_id, "admitted", saved["configuration_version"])
+                if saved is None:
+                    raise HTTPException(409, detail={"code": "configuration_changed"})
+        code = "ok" if checked else ("not_checked" if keep_selection else "model_selection_required")
         return {"provider_id": provider_id, "models": models, "models_listed": models_listed, "model_id": model or None,
-                "check": {"ok": bool(model) and not keep_selection,
-                          "code": "not_checked" if keep_selection else ("ok" if model else "model_selection_required")},
+                "check": {"ok": checked, "code": code},
                 "configuration_version": saved["configuration_version"]}
     except Exception as exc:
         # Both phases restore the exact previous row, key and runtime. In phase
