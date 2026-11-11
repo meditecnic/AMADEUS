@@ -232,7 +232,11 @@ def test_tail_reminder_wording_per_identity_mode():
         assert "ユーザー入力の言語に関係なく、表示本文は必ず自然な日本語のみ" in text
         assert "[EMO:" in text
         assert "日本語の言い方だけで話す。中国語の語句は引用しない・かぎ括弧に入れない・日本語訳と並べて書かない。" in text
-        assert "- 長さは普段の会話なら一〜四文。聞かれたことに答え、聞かれていない事実で話を埋めない。詳しい説明を求められた時だけ長くしてよいが、要点に絞る。" in text
+        assert (
+            "- 長さは普段の会話なら一〜四文。聞かれたことに答え、聞かれていない事実で話を埋めない。"
+            "知識や科学の質問でも百科事典調にせず、まず一文で核心を言って三文前後で止め、相手が追問してから広げる（詳しい解説を明示的に頼まれた時だけ例外）。"
+            "末尾で『必要なら調べる』等の御用聞きはしない。"
+        ) in text
         assert "土豆" not in text
         assert [ch for ch in dict.fromkeys(text) if "\u4e00" <= ch <= "\u9fff" and not _cp932(ch)] == []
     assert "『岡部』" in okabe
@@ -243,7 +247,10 @@ def test_tail_reminder_wording_per_identity_mode():
 
 @pytest.mark.parametrize(("identity_mode", "self_name"), [("okabe", ""), ("self", "ミナ"), ("self", "")])
 def test_tail_reminder_allows_one_sentence_without_unasked_facts(identity_mode, self_name):
-    assert "- 長さは普段の会話なら一〜四文。聞かれたことに答え、聞かれていない事実で話を埋めない。詳しい説明を求められた時だけ長くしてよいが、要点に絞る。" in render_tail_reminder(identity_mode, self_name)
+    reminder = render_tail_reminder(identity_mode, self_name)
+    assert "- 長さは普段の会話なら一〜四文。聞かれたことに答え、聞かれていない事実で話を埋めない。" in reminder
+    assert "まず一文で核心を言って三文前後で止め" in reminder
+    assert "『必要なら調べる』等の御用聞きはしない" in reminder
 
 
 def _cp932(char: str) -> bool:
@@ -430,6 +437,8 @@ def test_221_tail_reminder_covers_memory_continuity_no_receipt_and_registers():
         assert "セッションを跨いで続く" in text
         assert "別のセッションでは保証できない" in text
         assert "覚えておいた" in text and "保存完了報告は一切言わず" in text
+        assert "まず一文で核心を言って三文前後で止め" in text
+        assert "『必要なら調べる』等の御用聞きはしない" in text
     assert "タメ口" in okabe and "『先輩』とは呼ばない" in okabe
     assert "です／ます" in self_rem and "自然な口語に和らげてよい" in self_rem
 

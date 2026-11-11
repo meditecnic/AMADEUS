@@ -704,6 +704,13 @@ def test_fewshot_demonstrates_range_without_teaching_scripted_replies():
     for receipt in ("覚えておいた", "記録しておいた", "メモした"):
         assert receipt not in joined
     assert any("わかった" in content for content in assistants)
+    # [221] Round-2 review: uncontextualized self examples stay in peer-level desu/masu
+    # without jumping into casual tameguchi or imperative endings.
+    for content in [row["assistant"] for row in sets["self"]]:
+        assert "わかった" not in content
+        assert "しなさい" not in content
+        assert "おきなさい" not in content
+        assert any(ending in content for ending in ("です", "ます", "でしょう", "ください"))
 
 
 def test_221_persona_contracts_cross_session_no_receipt_senpai_and_casual_shift():
@@ -719,6 +726,11 @@ def test_221_persona_contracts_cross_session_no_receipt_senpai_and_casual_shift(
             assert "覚えておいた" in prompt and "保存完了報告は一切言わず" in prompt
             assert "比屋定真帆" in prompt and "『先輩』とは呼ばない" in prompt
             assert "〜わよ" in prompt and "〜かしら" in prompt and "禁止" in prompt
+            # [221] Round-2 #1: knowledge/science questions lead with 1-sentence core,
+            # stop around ~3 sentences, and never offer assistant-style "調べますよ" closers.
+            assert "まず一文で核心を述べ" in prompt
+            assert "三文前後に収めて相手の追問を待つ" in prompt
+            assert "『必要なら調べる』" in prompt
             for ch in dict.fromkeys(prompt):
                 if "\u4e00" <= ch <= "\u9fff":
                     ch.encode("cp932")
@@ -784,11 +796,12 @@ def test_persona_regression_corpus_covers_positive_and_negative_boundaries():
 def test_channel_handle_attribution_invariant_in_both_modes():
     """@ch fix: the handle is Kurisu's own; never Okabe's name or posting history.
 
-    Rework: when asked directly who owns the account, she must FIRST state it is
-    her own handle (not Okabe's); only after that factual confirmation may the
-    restrained shy/deflecting reaction appear. Ownership-blurring evasions
-    ("not me", "just followed it") are banned. Unsolicited disclosure in
-    ordinary identity talk stays banned. Must render for every cell.
+    [221] Round-2 #2: when ordinarily recognized or asked whose handle it is, she
+    first admits it is her own handle and may show slight awkwardness or change
+    the subject, WITHOUT bringing up Okabe or accusing the counterpart of claiming
+    credit when they never said so. She corrects Okabe attribution ONLY when the
+    counterpart actually attributes the handle to Okabe. Ownership-blurring
+    evasions ("not me", "just followed it") and unsolicited disclosure stay banned.
     """
     bible = PersonaBible.load_default()
     assert "channel-trigger" in bible.shared_rule_ids
@@ -796,16 +809,18 @@ def test_channel_handle_attribution_invariant_in_both_modes():
     for worldline in ("steins_gate", "beta"):
         for mode in ("okabe", "self"):
             prompt = bible.render_prompt(worldline, identity_mode=mode)
-            # Ownership: her own @ch identity.
+            # Ownership: her own @ch identity, never Okabe's handle or posting record.
             assert "栗悟飯とカメハメ波" in prompt
             assert "紅莉栖自身の@ch名義" in prompt
-            # Never Okabe's handle or posting record; misattribution is corrected.
             assert "岡部の名義でも投稿歴でもない" in prompt
-            assert "帰属を岡部だと言われたら訂正" in prompt
-            # Direct ownership question -> factual confirmation comes FIRST.
-            assert "まず『私自身の名義で、岡部のものではない』と事実を明言" in prompt
-            # Shy/deflecting reaction is allowed only AFTER the confirmation.
-            assert "その後でだけ" in prompt
+            # Ordinary recognition / ownership question -> admit hers first + slight awkwardness,
+            # without arguing against an unstated Okabe claim.
+            assert "まず自分の名義だと認めた上で" in prompt
+            assert "少し気まずそうに" in prompt
+            assert "相手が言ってもいないのに岡部の名義や手柄だと否定・反論しない" in prompt
+            # Correct Okabe attribution ONLY when counterpart attributes it to Okabe.
+            assert "相手がその名義を岡部のものだと言った時だけ" in prompt
+            assert "岡部ではなく自分の名義だと訂正する" in prompt
             # Ownership-blurring evasions are banned outright.
             assert "所有をぼかす言い逃れは禁止" in prompt
             assert "ただ見ていただけ" in prompt
