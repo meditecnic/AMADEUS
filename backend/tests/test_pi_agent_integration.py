@@ -202,4 +202,4 @@ async def test_disabled_complete_request_bytes_match_pre_spike(monkeypatch, tmp_
     wire = api.requests[0]["wire"]
     assert b"delegate_task" not in wire
     # Updated in [221] alongside intentional self-mode provider anchor and tail_reminder updates.
-    assert hashlib.sha256(wire).hexdigest() == "d18f12f9536dde3b42df4bf98257ff68253dae467206cb24c068f432ea630550"
+    assert hashlib.sha256(wire).hexdigest() == "a80bcf7984b0e9a551745039ace8568a1a3f9936b2e363716ce7d3fbcc68833e"

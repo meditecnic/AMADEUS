@@ -39,6 +39,9 @@ EXPERIENCE_CANDIDATE_LIMIT: int = 16
 EXPERIENCE_TOKEN_BUDGET: int = 1400
 # Overhead for "EPISODIC MEMORY" + EXPERIENCE_USE_CONTRACT header lines.
 EXPERIENCE_CONTRACT_OVERHEAD_TOKENS: int = 180
+# Upcoming dated arrangements (future expires_at) included without lexical overlap
+# so queries like "我下周有什么事来着" still see nearest scheduled plans.
+UPCOMING_EXPERIENCE_LIMIT: int = 5
 
 
 class QueryEmbedder(Protocol):
@@ -505,36 +508,48 @@ async def select_experience_candidates(
     finally:
         await db.close()
 
+    try:
+        now_dt = datetime.fromisoformat(now_iso)
+    except (TypeError, ValueError):
+        now_dt = datetime.now(timezone.utc)
+
     # Query features are identical for every row; keep them local to this read.
     prepared_query = _prepare_lexical_query(_normalized_text(query))
     eligible: list[dict[str, Any]] = []
+    upcoming_fallback: list[tuple[float, dict[str, Any]]] = []
     for row in rows:
         expires_at = row["expires_at"]
+        expiry_ts: float | None = None
         if expires_at is not None:
             try:
-                if datetime.fromisoformat(expires_at) <= datetime.fromisoformat(now_iso):
+                expiry_dt = datetime.fromisoformat(expires_at)
+                if expiry_dt <= now_dt:
                     continue
+                expiry_ts = expiry_dt.timestamp()
             except (TypeError, ValueError):
                 # Unparseable expiry: fail closed, never inject.
                 continue
         display = str(row["display_text"] or "")
-        if not _meaningful_cjk_evidence(display, query, _prepared=prepared_query):
-            continue
-        relevance = _lexical_relevance(display, query, _prepared=prepared_query)
-        if relevance <= 0.0:
-            continue
-        eligible.append(
-            {
-                "experience_id": str(row["experience_id"]),
-                "conversation_id": str(row["conversation_id"] or ""),
-                "display_text": display,
-                "semantic_fingerprint": str(row["semantic_fingerprint"] or ""),
-                "confidence": float(row["confidence"] or 0.0),
-                "created_at": str(row["created_at"] or ""),
-                "expires_at": expires_at,
-                "relevance": relevance,
-            }
+        has_evidence = _meaningful_cjk_evidence(display, query, _prepared=prepared_query)
+        relevance = (
+            _lexical_relevance(display, query, _prepared=prepared_query)
+            if has_evidence
+            else 0.0
         )
+        item = {
+            "experience_id": str(row["experience_id"]),
+            "conversation_id": str(row["conversation_id"] or ""),
+            "display_text": display,
+            "semantic_fingerprint": str(row["semantic_fingerprint"] or ""),
+            "confidence": float(row["confidence"] or 0.0),
+            "created_at": str(row["created_at"] or ""),
+            "expires_at": expires_at,
+            "relevance": relevance,
+        }
+        if relevance > 0.0:
+            eligible.append(item)
+        elif expiry_ts is not None:
+            upcoming_fallback.append((expiry_ts, item))
 
     # Rank: relevance desc, newer created_at desc, confidence desc, id tie-break.
     def _cmp_experience(
@@ -550,7 +565,17 @@ async def select_experience_candidates(
             return 0
         return -1 if lid < rid else 1
 
+    def _cmp_upcoming(
+        left: tuple[float, dict[str, Any]], right: tuple[float, dict[str, Any]]
+    ) -> int:
+        if left[0] != right[0]:
+            return -1 if left[0] < right[0] else 1
+        return _cmp_experience(left[1], right[1])
+
     ranked = sorted(eligible, key=cmp_to_key(_cmp_experience))
+    if upcoming_fallback:
+        upcoming_sorted = sorted(upcoming_fallback, key=cmp_to_key(_cmp_upcoming))
+        ranked.extend(item for _, item in upcoming_sorted[:UPCOMING_EXPERIENCE_LIMIT])
     return _pack_whole_facts(
         ranked,
         limit=limit,

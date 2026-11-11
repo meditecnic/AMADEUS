@@ -378,7 +378,8 @@ async def test_current_time_is_sent_to_the_minute(isolated_store, monkeypatch):
     session.system_prompt = "SYSTEM"
     await _send(session, _provider("deepseek_service", captured, monkeypatch))
     system = captured[0]["messages"][0]["content"]
-    assert re.search(r"【現在時刻：\d{4}-\d{2}-\d{2} \d{2}:\d{2}】", system)
+    # [221] The weekday goes with it, so she can tell whether "the 20th" is next Friday.
+    assert re.search(r"【現在時刻：\d{4}-\d{2}-\d{2} \d{2}:\d{2}（[月火水木金土日]）】", system)
     assert not re.search(r"\d{2}:\d{2}:\d{2}", system)
 
 
@@ -437,10 +438,19 @@ def test_221_tail_reminder_covers_memory_continuity_no_receipt_and_registers():
         assert "セッションを跨いで続く" in text
         assert "別のセッションでは保証できない" in text
         assert "覚えておいた" in text and "保存完了報告は一切言わず" in text
+        assert "請け合わず" in text and "先に中身を聞く" in text
         assert "まず一文で核心を言って三文前後で止め" in text
         assert "『必要なら調べる』等の御用聞きはしない" in text
+        assert "二〜三字の短い返事ならこちらも一〜二文" in text
+        assert "指示・助言で締めない" in text
+        assert "相手がまだ言っていない状況や結果" in text
+        assert "【現在時刻】" not in text
+        assert "半数以下" not in text
+        assert "普通の受け答えは[EMO:neutral]でよい" in text
+        assert "疲れ・痛み・不調をこぼしている時に[EMO:happy]は選ばず" in text
     assert "タメ口" in okabe and "『先輩』とは呼ばない" in okabe
     assert "です／ます" in self_rem and "自然な口語に和らげてよい" in self_rem
+    assert "CORE FACTS" in self_rem and "新セッションの一言目から" in self_rem and "敬体を一切使わず自然な常体" in self_rem
 
 
 @pytest.mark.asyncio

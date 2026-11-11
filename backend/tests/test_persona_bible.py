@@ -678,18 +678,18 @@ def test_fewshot_demonstrates_range_without_teaching_scripted_replies():
             if re.match(rf"^\[EMO:({allowed})] ", content)
         ]
         assert len(mode_emotions) == len(replies)
-        # [221] Designer review #3: neutral is the everyday baseline (>=2 per mode)
-        # while still showing >=4 distinct emotions per mode.
-        assert mode_emotions.count("neutral") >= 2
+        # [221] Round-3 (#2): each mode shows 5 distinct emotions (neutral <= half)
+        # so few-shot examples do not pull everyday turns into flat neutral.
+        assert mode_emotions.count("neutral") == 1
         emotions = set(mode_emotions)
-        assert len(emotions) >= 4
+        assert len(emotions) == len(replies)
         observed |= emotions
         all_emotions.extend(mode_emotions)
         assistants.extend(replies)
         users.extend(row["user"] for row in rows)
 
     assert len(assistants) == len(users) >= 6
-    assert {"neutral", "intellectual", "annoyed", "embarrassed", "sad"} <= observed
+    assert {"neutral", "intellectual", "annoyed", "embarrassed", "sad", "happy", "tsundere", "disappointed"} <= observed
     assert all_emotions.count("annoyed") <= 1
     assert any(any("\u4e00" <= char <= "\u9fff" for char in content) for content in users)
     assert any("根拠" in content and "仮説" in content for content in assistants)
@@ -698,19 +698,24 @@ def test_fewshot_demonstrates_range_without_teaching_scripted_replies():
     assert "誰が助手よ！" not in joined
     assert "-tinaって言うな！" not in joined
     assert "何語？" not in joined
-    # [221] Designer review #1 & #2: no ojousama wayo/kashira, no storage-receipt claims.
-    assert "わよ" not in joined
-    assert "かしら" not in joined
+    # [221] Round-3 (#5): artificial ojousama keigo banned, natural casual wayo allowed; no receipts.
+    assert "ですわ" not in joined and "ますわ" not in joined
     for receipt in ("覚えておいた", "記録しておいた", "メモした"):
         assert receipt not in joined
     assert any("わかった" in content for content in assistants)
-    # [221] Round-2 review: uncontextualized self examples stay in peer-level desu/masu
-    # without jumping into casual tameguchi or imperative endings.
-    for content in [row["assistant"] for row in sets["self"]]:
+    # [221] Uncontextualized self examples stay in peer-level desu/masu; only an explicit
+    # user request to drop keigo shifts into friendly casual speech without "あんた".
+    for row in sets["self"]:
+        content = row["assistant"]
         assert "わかった" not in content
         assert "しなさい" not in content
         assert "おきなさい" not in content
-        assert any(ending in content for ending in ("です", "ます", "でしょう", "ください"))
+        assert "してください" not in content
+        assert "あんた" not in content
+        if "敬语" in row["user"]:
+            assert not any(ending in content for ending in ("です", "ます"))
+        else:
+            assert any(ending in content for ending in ("です", "ます", "でしょう"))
 
 
 def test_221_persona_contracts_cross_session_no_receipt_senpai_and_casual_shift():
@@ -724,13 +729,18 @@ def test_221_persona_contracts_cross_session_no_receipt_senpai_and_casual_shift(
             assert "セッションを跨いで続く" in prompt
             assert "別のセッションでは保証できない" in prompt
             assert "覚えておいた" in prompt and "保存完了報告は一切言わず" in prompt
+            assert "先に『覚えている』と請け合わず" in prompt
             assert "比屋定真帆" in prompt and "『先輩』とは呼ばない" in prompt
-            assert "〜わよ" in prompt and "〜かしら" in prompt and "禁止" in prompt
-            # [221] Round-2 #1: knowledge/science questions lead with 1-sentence core,
-            # stop around ~3 sentences, and never offer assistant-style "調べますよ" closers.
+            assert "自然な範囲の『〜わよ』『〜かしら』" in prompt
+            assert "お嬢様言葉（『〜ですわ』『〜ますわ』）や接客調は禁止" in prompt
             assert "まず一文で核心を述べ" in prompt
             assert "三文前後に収めて相手の追問を待つ" in prompt
             assert "『必要なら調べる』" in prompt
+            assert "相手が言っていない状況や結果" in prompt
+            assert "夜更かし決めつけ" not in prompt
+            assert "毎回『〜しなさい』『〜してください』『〜すること』等の指示で締めず" in prompt
+            assert "普通の受け答えは[EMO:neutral]" in prompt
+            assert "相手の疲れや不調を聞く時は[EMO:happy]を選ばず" in prompt
             for ch in dict.fromkeys(prompt):
                 if "\u4e00" <= ch <= "\u9fff":
                     ch.encode("cp932")
@@ -738,6 +748,7 @@ def test_221_persona_contracts_cross_session_no_receipt_senpai_and_casual_shift(
     self_rule = bible.rules["self-register"].instruction_ja
     assert "です／ます" in self_rule
     assert "砕けた口調" in self_rule and "CORE FACTS" in self_rule
+    assert "新セッションの一言目から" in self_rule and "敬体を一切使わず自然な常体" in self_rule
     assert "自然な口語へ和らげてよい" in self_rule
     assert "『あんた』呼びはしない" in self_rule
 

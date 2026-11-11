@@ -707,7 +707,9 @@ def _request_system_prompt(session, prompt_history, tools, attempt):
     eff_system_prompt = _with_memory_recall_read_gate(eff_system_prompt, tools)
 
     from datetime import datetime
-    time_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now_local = datetime.now()
+    weekday_ja = ("月", "火", "水", "木", "金", "土", "日")[now_local.weekday()]
+    time_str = f"{now_local.strftime('%Y-%m-%d %H:%M')}（{weekday_ja}）"
     time_supplement = f"\n【現在時刻：{time_str}】"
     eff_system_prompt = (eff_system_prompt or "") + time_supplement
     return eff_system_prompt

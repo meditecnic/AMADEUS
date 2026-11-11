@@ -171,7 +171,25 @@ def _validate_completion_collections(
         "operations",
         MAX_MEMORY_OPERATIONS_PER_MESSAGE,
     )
-    return observations, operations
+    return [_with_aware_expiry(obs) for obs in observations], operations
+
+
+def _with_aware_expiry(obs: dict[str, Any]) -> dict[str, Any]:
+    """[221] A plan's expiry without an offset is read as this machine's local time.
+
+    Reads compare it with an aware clock and skip what they cannot compare, so a
+    naive "2026-11-20T23:59:59" would silently drop the plan.
+    """
+    raw = obs.get("expires_at") if isinstance(obs, dict) else None
+    if not isinstance(raw, str) or not raw.strip():
+        return obs
+    try:
+        parsed = datetime.fromisoformat(raw.strip())
+    except ValueError:
+        return obs
+    if parsed.tzinfo is not None:
+        return obs
+    return {**obs, "expires_at": parsed.astimezone().isoformat()}
 
 
 async def enqueue_memory_job(
@@ -599,6 +617,51 @@ async def _load_user_source(
         await db.close()
 
 
+def _build_source_local_time(
+    created_at: Any, *, local_tz: Any = None
+) -> dict[str, Any] | None:
+    """Resolve source message timestamp in the machine's local timezone for date grounding."""
+    raw = str(created_at or "").strip()
+    if not raw:
+        return None
+    normalized = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    local_dt = parsed.astimezone(local_tz)
+    weekdays_zh = ("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+    offset = local_dt.utcoffset()
+    if offset is None:
+        utc_offset = "+00:00"
+    else:
+        total_minutes = int(offset.total_seconds() // 60)
+        sign = "+" if total_minutes >= 0 else "-"
+        hh, mm = divmod(abs(total_minutes), 60)
+        utc_offset = f"{sign}{hh:02d}:{mm:02d}"
+    today = local_dt.date()
+    monday = today - timedelta(days=today.weekday())
+    next_monday = monday + timedelta(days=7)
+    return {
+        "local_datetime": f"{local_dt.strftime('%Y-%m-%d %H:%M')} ({weekdays_zh[today.weekday()]})",
+        "local_date": today.isoformat(),
+        "weekday": weekdays_zh[today.weekday()],
+        "utc_offset": utc_offset,
+        "tomorrow": f"{(today + timedelta(days=1)).isoformat()} ({weekdays_zh[(today.weekday() + 1) % 7]})",
+        "day_after_tomorrow": f"{(today + timedelta(days=2)).isoformat()} ({weekdays_zh[(today.weekday() + 2) % 7]})",
+        "this_week": {
+            weekdays_zh[i]: (monday + timedelta(days=i)).isoformat()
+            for i in range(7)
+        },
+        "next_week": {
+            f"下{weekdays_zh[i]}": (next_monday + timedelta(days=i)).isoformat()
+            for i in range(7)
+        },
+    }
+
+
 _V11_MEMORY_SYSTEM = """You extract durable user memory from one user utterance.
 Return ONE JSON object only:
 {
@@ -623,6 +686,27 @@ Rules:
 - Only user_text establishes facts; prefer empty over invention.
 - previous_assistant_text is context only: use it to understand what the user
   answers or refers to. Never remember an assistant claim the user has not confirmed.
+- Dated or time-bounded user plans, schedules, or appointments (e.g. "下周五下午我去取订好的替代件",
+  "周三下午去秋叶原", "明天去医院复查", "11月20日交中期报告"): MUST extract as
+  memory_class="episodic", relation="new", candidate_index=null (NEVER stable_candidate),
+  evidence_kind="direct_user", and confidence >= 0.85. Resolve relative date expressions
+  (今天/明天/后天/这周X/下周X/下个月, etc.) directly from source_local_time (which is already
+  computed in the user's local timezone with local_date, weekday, utc_offset, tomorrow,
+  day_after_tomorrow, this_week, and next_week — do NOT convert timezones or count weekdays
+  yourself) into an explicit absolute calendar date YYYY年M月D日（周X） in BOTH display_text
+  and fact_text (e.g. "用户计划在2026年5月1日（周五）下午去取订好的替代件"), never leaving
+  bare "下周五"/"明天" without YYYY年M月D日. Set expires_at to the end of that scheduled local
+  date using source_local_time.utc_offset (e.g. "2026-05-01T23:59:59+08:00"; MUST include an
+  explicit timezone offset, never a naive timestamp). If source_local_time is null/missing and
+  only a relative date is given, do not guess a calendar date (set expires_at=null). Recurring
+  timeless habits (e.g. "每周三晚上固定跑步") remain memory_class="stable_candidate" with
+  expires_at=null. Do NOT extract immediate same-night chatter (e.g. "待会儿去泡澡",
+  "今晚不熬了", "去煮点面吃").
+- User communication, speech-register, or address preferences with the assistant (e.g.
+  "别太客气啦，平时不用跟我端着敬语", "不用说敬语", "叫我阿哲就行", "気楽にタメ口で話して"):
+  extract as memory_class="stable_candidate", relation="new" (or refines/supersedes when
+  updating a matching candidate), evidence_kind="direct_user", confidence >= 0.85, and
+  expires_at=null.
 - Short or elliptical Q&A replies:
   1) When previous_assistant_text asks a concrete question about the user (preferences,
      habits, profile, plans) and user_text supplies an explicit substantive answer
@@ -766,6 +850,10 @@ async def default_memory_completion(**kwargs: Any) -> Mapping[str, Any]:
                 {
                     "identity_mode": identity_mode,
                     "source_message_id": source_message_id,
+                    "source_created_at": kwargs.get("source_created_at"),
+                    "source_local_time": _build_source_local_time(
+                        kwargs.get("source_created_at")
+                    ),
                     "user_text": user_text,
                     "previous_assistant_text": kwargs.get("previous_assistant_text"),
                     "candidates": candidates,
@@ -969,6 +1057,7 @@ async def process_memory_job(
                 identity_mode=job["identity_mode"],
                 conversation_id=job["conversation_id"],
                 source_message_id=int(job["source_message_id"]),
+                source_created_at=source.get("created_at"),
                 user_text=redacted,
                 previous_assistant_text=source.get("previous_assistant_text"),
                 provider_id=job["provider_id"],
