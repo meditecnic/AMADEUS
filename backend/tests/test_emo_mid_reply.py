@@ -12,6 +12,7 @@ from app.domain.japanese_response_renderer import normalize_rendered_japanese
 from app.routers import chat_ws
 from app.services.conversations import conversation_service
 from app.services.memory_v11.jobs import _load_user_source
+from app.services.turn_events import TurnModeState
 
 BODY = "それはよかったわね。べ、別に心配してたわけじゃないけど。"
 TAG = "[EMO:embarrassed]"
@@ -144,6 +145,44 @@ async def test_only_first_tag_sets_emotion(monkeypatch, conversation):
     assert rows[-1]["content"] == f"[EMO:happy] {BODY}"
     assert {e["emotion"] for e in events if e.get("type") == "segment.ready"} == {"happy"}
     assert session.last_assistant_emotion == "happy"
+
+
+async def test_emo_prefix_in_separate_chunk(monkeypatch, conversation):
+    events, _, _, _ = await run_turn(monkeypatch, conversation, ["[EMO:happy]", BODY])
+    segments = [e for e in events if e.get("type") == "segment.ready"]
+    assert "".join(e["ja"] for e in segments) == BODY
+    assert {e["emotion"] for e in segments} == {"happy"}
+
+
+async def test_emo_prefix_split_inside_tag(monkeypatch, conversation):
+    events, _, _, _ = await run_turn(monkeypatch, conversation, ["[EM", "O:happy]", BODY])
+    segments = [e for e in events if e.get("type") == "segment.ready"]
+    assert "".join(e["ja"] for e in segments) == BODY
+    assert {e["emotion"] for e in segments} == {"happy"}
+
+
+async def test_emo_prefix_before_tool_call_is_not_published(monkeypatch):
+    call = {
+        "id": "emo-prefix-tool", "type": "function",
+        "function": {"name": "recall_memory", "arguments": "{}"},
+    }
+
+    async def stream(*args, **kwargs):
+        yield {"content": "[EMO:happy]"}
+        yield {"content": BODY, "tool_calls": [call]}
+
+    monkeypatch.setattr(type(chat_ws.deepseek_service), "get_chat_stream", stream)
+    publish = AsyncMock()
+    mode = TurnModeState()
+    text, _, calls, found = await chat_ws.get_clean_text_stream(
+        [], "", chat_ws.SessionState("emo-prefix-tool"),
+        on_text_delta=publish, mode_state=mode,
+    )
+    assert mode.mode == "tool_mode"
+    assert calls == {call["id"]: call}
+    assert text == ""
+    assert not found
+    publish.assert_not_awaited()
 
 
 async def assert_tagged_turn_matches_plain(monkeypatch, conversation, *, protocol=2, client="desktop"):

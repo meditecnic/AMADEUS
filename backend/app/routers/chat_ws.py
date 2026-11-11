@@ -932,6 +932,9 @@ async def get_clean_text_stream(
                         from app.services.turn_events import observe_chunk
 
                         observe_chunk(mode_state, chunk, event_seq)
+                        if mode_state.mode == "answer_mode" and mode_state.prefix_buffer:
+                            content = mode_state.prefix_buffer + (content or "")
+                            mode_state.prefix_buffer = ""
                         if mode_state.mode == "answer_mode" and tool_calls:
                             tool_calls = None
                         elif tool_calls:
