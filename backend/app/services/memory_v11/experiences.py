@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 from app.services.memory_v11.browse import apply_created_time_filters
@@ -23,6 +23,26 @@ from app.services.memory_v11.repository import _canonical_fingerprint
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def plan_date(semantic: Any) -> date | None:
+    """[221] The local day of a dated plan, from semantic.qualifiers.scheduled_date.
+
+    Only plans carry it; any other experience (with or without an expiry) gets None.
+    """
+    if isinstance(semantic, str):
+        try:
+            semantic = json.loads(semantic)
+        except ValueError:
+            return None
+    qualifiers = semantic.get("qualifiers") if isinstance(semantic, dict) else None
+    raw = qualifiers.get("scheduled_date") if isinstance(qualifiers, dict) else None
+    if not isinstance(raw, str):
+        return None
+    try:
+        return date.fromisoformat(raw.strip())
+    except ValueError:
+        return None
 
 
 def _semantic_blob_and_fp(semantic: Any) -> tuple[str, str]:

@@ -361,8 +361,10 @@ def test_phase2_s3b_system_prompt_base_mode_frame_and_shared_security():
         assert needle in okabe
         assert needle in self_base
 
-    # Lore LabMem numbers remain (facts, not "user=Okabe").
-    assert "LabMem No.004" in self_base and "LabMem No.001" in self_base
+    # Lore LabMem No.001 remains; March-2010 Amadeus is explicitly not LabMem No.004.
+    assert "LabMem No.001" in self_base and "LabMem No.001" in okabe
+    assert "LabMem No.004" not in self_base and "LabMem No.004" not in okabe
+    assert "ラボメンではない" in self_base and "ラボメンではない" in okabe
 
     # Auth-frozen okabe constant must re-resolve to self frame for self mode.
     resolved_self = resolve_system_prompt_base(SYSTEM_PROMPT_BASE, "self")
@@ -667,21 +669,28 @@ def test_fewshot_demonstrates_range_without_teaching_scripted_replies():
     assistants: list[str] = []
     users: list[str] = []
     observed: set[str] = set()
+    all_emotions: list[str] = []
     for rows in sets.values():
         replies = [row["assistant"] for row in rows]
-        emotions = {
+        mode_emotions = [
             re.match(r"^\[EMO:([^]]+)] ", content).group(1)
             for content in replies
             if re.match(rf"^\[EMO:({allowed})] ", content)
-        }
-        # Within one identity mode every example shows a different emotion.
+        ]
+        assert len(mode_emotions) == len(replies)
+        # [221] Round-3 (#2): each mode shows 5 distinct emotions (neutral <= half)
+        # so few-shot examples do not pull everyday turns into flat neutral.
+        assert mode_emotions.count("neutral") == 1
+        emotions = set(mode_emotions)
         assert len(emotions) == len(replies)
         observed |= emotions
+        all_emotions.extend(mode_emotions)
         assistants.extend(replies)
         users.extend(row["user"] for row in rows)
 
     assert len(assistants) == len(users) >= 6
-    assert {"neutral", "intellectual", "annoyed", "embarrassed", "sad"} <= observed
+    assert {"neutral", "intellectual", "annoyed", "embarrassed", "sad", "happy", "tsundere", "disappointed"} <= observed
+    assert all_emotions.count("annoyed") <= 1
     assert any(any("\u4e00" <= char <= "\u9fff" for char in content) for content in users)
     assert any("根拠" in content and "仮説" in content for content in assistants)
     assert any("一つずつ" in content for content in assistants)
@@ -689,6 +698,63 @@ def test_fewshot_demonstrates_range_without_teaching_scripted_replies():
     assert "誰が助手よ！" not in joined
     assert "-tinaって言うな！" not in joined
     assert "何語？" not in joined
+    # [221] Round-3 (#5): artificial ojousama keigo banned, natural casual wayo allowed; no receipts.
+    assert "ですわ" not in joined and "ますわ" not in joined
+    for receipt in ("覚えておいた", "記録しておいた", "メモした"):
+        assert receipt not in joined
+    assert any("わかった" in content for content in assistants)
+    # [221] Uncontextualized self examples stay in peer-level desu/masu; only an explicit
+    # user request to drop keigo shifts into friendly casual speech without "あんた".
+    for row in sets["self"]:
+        content = row["assistant"]
+        assert "わかった" not in content
+        assert "しなさい" not in content
+        assert "おきなさい" not in content
+        assert "してください" not in content
+        assert "あんた" not in content
+        if "敬语" in row["user"]:
+            assert not any(ending in content for ending in ("です", "ます"))
+        else:
+            assert any(ending in content for ending in ("です", "ます", "でしょう"))
+
+
+def test_221_persona_contracts_cross_session_no_receipt_senpai_and_casual_shift():
+    bible = PersonaBible.load_default()
+    assert "sg0-v1" in bible.sources and "sg0-v2" in bible.sources
+    assert "cross-session-memory" in bible.shared_rule_ids
+
+    for worldline in ("steins_gate", "beta"):
+        for mode in ("okabe", "self"):
+            prompt = bible.render_prompt(worldline, identity_mode=mode)
+            assert "セッションを跨いで続く" in prompt
+            assert "別のセッションでは保証できない" in prompt
+            assert "覚えておいた" in prompt and "保存完了報告は一切言わず" in prompt
+            assert "先に『覚えている』と請け合わず" in prompt
+            assert "比屋定真帆" in prompt and "『先輩』とは呼ばない" in prompt
+            assert "自然な範囲の『〜わよ』『〜かしら』" in prompt
+            assert "お嬢様言葉（『〜ですわ』『〜ますわ』）や接客調は禁止" in prompt
+            assert "まず一文で核心を述べ" in prompt
+            assert "三文前後に収めて相手の追問を待つ" in prompt
+            assert "『必要なら調べる』" in prompt
+            assert "相手が言っていない状況や結果" in prompt
+            assert "夜更かし決めつけ" not in prompt
+            assert "毎回『〜しなさい』『〜してください』『〜すること』等の指示で締めず" in prompt
+            assert "普通の受け答えは[EMO:neutral]" in prompt
+            assert "相手の疲れや不調を聞く時は[EMO:happy]を選ばず" in prompt
+            for ch in dict.fromkeys(prompt):
+                if "\u4e00" <= ch <= "\u9fff":
+                    ch.encode("cp932")
+
+    self_rule = bible.rules["self-register"].instruction_ja
+    assert "です／ます" in self_rule
+    assert "砕けた口調" in self_rule and "CORE FACTS" in self_rule
+    assert "新セッションの一言目から" in self_rule and "敬体を一切使わず自然な常体" in self_rule
+    assert "自然な口語へ和らげてよい" in self_rule
+    assert "『あんた』呼びはしない" in self_rule
+
+    okabe_rule = bible.rules["okabe-register"].instruction_ja
+    assert "タメ口" in okabe_rule
+    assert "『先輩』とは決して呼ばない" in okabe_rule
 
 
 def test_persona_regression_corpus_covers_positive_and_negative_boundaries():
@@ -741,11 +807,12 @@ def test_persona_regression_corpus_covers_positive_and_negative_boundaries():
 def test_channel_handle_attribution_invariant_in_both_modes():
     """@ch fix: the handle is Kurisu's own; never Okabe's name or posting history.
 
-    Rework: when asked directly who owns the account, she must FIRST state it is
-    her own handle (not Okabe's); only after that factual confirmation may the
-    restrained shy/deflecting reaction appear. Ownership-blurring evasions
-    ("not me", "just followed it") are banned. Unsolicited disclosure in
-    ordinary identity talk stays banned. Must render for every cell.
+    [221] Round-2 #2: when ordinarily recognized or asked whose handle it is, she
+    first admits it is her own handle and may show slight awkwardness or change
+    the subject, WITHOUT bringing up Okabe or accusing the counterpart of claiming
+    credit when they never said so. She corrects Okabe attribution ONLY when the
+    counterpart actually attributes the handle to Okabe. Ownership-blurring
+    evasions ("not me", "just followed it") and unsolicited disclosure stay banned.
     """
     bible = PersonaBible.load_default()
     assert "channel-trigger" in bible.shared_rule_ids
@@ -753,16 +820,18 @@ def test_channel_handle_attribution_invariant_in_both_modes():
     for worldline in ("steins_gate", "beta"):
         for mode in ("okabe", "self"):
             prompt = bible.render_prompt(worldline, identity_mode=mode)
-            # Ownership: her own @ch identity.
+            # Ownership: her own @ch identity, never Okabe's handle or posting record.
             assert "栗悟飯とカメハメ波" in prompt
             assert "紅莉栖自身の@ch名義" in prompt
-            # Never Okabe's handle or posting record; misattribution is corrected.
             assert "岡部の名義でも投稿歴でもない" in prompt
-            assert "帰属を岡部だと言われたら訂正" in prompt
-            # Direct ownership question -> factual confirmation comes FIRST.
-            assert "まず『私自身の名義で、岡部のものではない』と事実を明言" in prompt
-            # Shy/deflecting reaction is allowed only AFTER the confirmation.
-            assert "その後でだけ" in prompt
+            # Ordinary recognition / ownership question -> admit hers first + slight awkwardness,
+            # without arguing against an unstated Okabe claim.
+            assert "まず自分の名義だと認めた上で" in prompt
+            assert "少し気まずそうに" in prompt
+            assert "相手が言ってもいないのに岡部の名義や手柄だと否定・反論しない" in prompt
+            # Correct Okabe attribution ONLY when counterpart attributes it to Okabe.
+            assert "相手がその名義を岡部のものだと言った時だけ" in prompt
+            assert "岡部ではなく自分の名義だと訂正する" in prompt
             # Ownership-blurring evasions are banned outright.
             assert "所有をぼかす言い逃れは禁止" in prompt
             assert "ただ見ていただけ" in prompt

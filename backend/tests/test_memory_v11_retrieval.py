@@ -548,6 +548,74 @@ async def test_r5_experience_expiry_behavior(isolated_store):
     )
 
 
+def _plan(day: str) -> dict:
+    return {"subject": "user", "predicate": "plans", "object": {}, "polarity": "positive",
+            "qualifiers": {"scheduled_date": day}}
+
+
+@pytest.mark.asyncio
+async def test_221_upcoming_plans_enter_without_shared_words(isolated_store):
+    """[221] "我下周有什么事来着" shares no words with a dated plan; plans not yet due still enter.
+
+    Nearest first, at most UPCOMING_EXPERIENCE_LIMIT; past plans and undated unrelated rows stay out.
+    """
+    from app.services.memory_v11 import retrieval
+
+    session_id = f"221-upcoming-{uuid4()}"
+    now = "2026-11-11T02:00:00+00:00"
+    await _seed_experience(
+        session_id=session_id,
+        display_text="用户计划在2026年11月6日（周五）下午去取订好的替代件",
+        semantic=_plan("2026-11-06"),
+        expires_at="2026-11-06T23:59:59+08:00",
+    )
+    await _seed_experience(session_id=session_id, display_text="数学の本を読んでいる")
+    later = []
+    for day in range(30, 20, -1):
+        later.append(await _seed_experience(
+            session_id=session_id,
+            display_text=f"用户计划在2026年11月{day}日去医院复查",
+            semantic=_plan(f"2026-11-{day}"),
+            expires_at=f"2026-11-{day}T23:59:59+08:00",
+        ))
+    nearest = await _seed_experience(
+        session_id=session_id,
+        display_text="用户计划在2026年11月20日（周五）下午去取订好的替代件",
+        semantic=_plan("2026-11-20"),
+        expires_at="2026-11-20T23:59:59+08:00",
+    )
+    rows = await _select_experiences(session_id, "我下周有什么事来着", now=now)
+    ids = [r["experience_id"] for r in rows]
+    assert len(ids) == retrieval.UPCOMING_EXPERIENCE_LIMIT
+    assert ids[0] == nearest
+    assert ids[1:] == list(reversed(later))[: retrieval.UPCOMING_EXPERIENCE_LIMIT - 1]
+
+
+@pytest.mark.asyncio
+async def test_226_an_expiry_alone_does_not_make_a_plan(isolated_store):
+    """[226] "今天很累" expiring tomorrow is no plan: unrelated questions do not bring it in,
+    and five such rows do not take the places of the real plan on the 20th."""
+    session_id = f"226-ttl-{uuid4()}"
+    now = "2026-11-11T12:00:00+00:00"
+    for i in range(5):
+        await _seed_experience(
+            session_id=session_id,
+            display_text=f"用户今天很累{i}",
+            semantic={"subject": "user", "predicate": "feels", "object": {"state": "tired"},
+                      "polarity": "positive", "qualifiers": {}},
+            expires_at="2026-11-12T23:59:59+08:00",
+        )
+    plan = await _seed_experience(
+        session_id=session_id,
+        display_text="用户计划在2026年11月20日（周五）下午去取订好的替代件",
+        semantic=_plan("2026-11-20"),
+        expires_at="2026-11-20T23:59:59+08:00",
+    )
+    for query in ("解释一下黑洞", "咖啡豆该怎么买"):
+        rows = await _select_experiences(session_id, query, now=now)
+        assert [r["experience_id"] for r in rows] == [plan], query
+
+
 @pytest.mark.asyncio
 async def test_r5_experience_pending_source_delete_excluded(isolated_store):
     """D: status=pending_source_delete never enters retrieval."""

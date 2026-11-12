@@ -232,7 +232,11 @@ def test_tail_reminder_wording_per_identity_mode():
         assert "ユーザー入力の言語に関係なく、表示本文は必ず自然な日本語のみ" in text
         assert "[EMO:" in text
         assert "日本語の言い方だけで話す。中国語の語句は引用しない・かぎ括弧に入れない・日本語訳と並べて書かない。" in text
-        assert "- 長さは普段の会話なら一〜四文。聞かれたことに答え、聞かれていない事実で話を埋めない。詳しい説明を求められた時だけ長くしてよいが、要点に絞る。" in text
+        assert (
+            "- 長さは普段の会話なら一〜四文。聞かれたことに答え、聞かれていない事実で話を埋めない。"
+            "知識や科学の質問でも百科事典調にせず、まず一文で核心を言って三文前後で止め、相手が追問してから広げる（詳しい解説を明示的に頼まれた時だけ例外）。"
+            "末尾で『必要なら調べる』等の御用聞きはしない。"
+        ) in text
         assert "土豆" not in text
         assert [ch for ch in dict.fromkeys(text) if "\u4e00" <= ch <= "\u9fff" and not _cp932(ch)] == []
     assert "『岡部』" in okabe
@@ -243,7 +247,10 @@ def test_tail_reminder_wording_per_identity_mode():
 
 @pytest.mark.parametrize(("identity_mode", "self_name"), [("okabe", ""), ("self", "ミナ"), ("self", "")])
 def test_tail_reminder_allows_one_sentence_without_unasked_facts(identity_mode, self_name):
-    assert "- 長さは普段の会話なら一〜四文。聞かれたことに答え、聞かれていない事実で話を埋めない。詳しい説明を求められた時だけ長くしてよいが、要点に絞る。" in render_tail_reminder(identity_mode, self_name)
+    reminder = render_tail_reminder(identity_mode, self_name)
+    assert "- 長さは普段の会話なら一〜四文。聞かれたことに答え、聞かれていない事実で話を埋めない。" in reminder
+    assert "まず一文で核心を言って三文前後で止め" in reminder
+    assert "『必要なら調べる』等の御用聞きはしない" in reminder
 
 
 def _cp932(char: str) -> bool:
@@ -371,7 +378,8 @@ async def test_current_time_is_sent_to_the_minute(isolated_store, monkeypatch):
     session.system_prompt = "SYSTEM"
     await _send(session, _provider("deepseek_service", captured, monkeypatch))
     system = captured[0]["messages"][0]["content"]
-    assert re.search(r"【現在時刻：\d{4}-\d{2}-\d{2} \d{2}:\d{2}】", system)
+    # [221] The weekday goes with it, so she can tell whether "the 20th" is next Friday.
+    assert re.search(r"【現在時刻：\d{4}-\d{2}-\d{2} \d{2}:\d{2}（[月火水木金土日]）】", system)
     assert not re.search(r"\d{2}:\d{2}:\d{2}", system)
 
 
@@ -421,3 +429,56 @@ async def test_second_round_request_budget_keeps_history_and_current_turn(
     else:
         assert (f"{CURRENT}\n\n{reminder}") in [text for role, text in sent if role == "user"]
         assert sent[-1][0] == "system" and TAIL_REMINDER_HEADER not in sent[-1][1]
+
+
+def test_221_tail_reminder_covers_memory_continuity_no_receipt_and_registers():
+    okabe = render_tail_reminder("okabe")
+    self_rem = render_tail_reminder("self", "")
+    for text in (okabe, self_rem):
+        assert "セッションを跨いで続く" in text
+        assert "別のセッションでは保証できない" in text
+        assert "覚えておいた" in text and "保存完了報告は一切言わず" in text
+        assert "請け合わず" in text and "先に中身を聞く" in text
+        assert "まず一文で核心を言って三文前後で止め" in text
+        assert "『必要なら調べる』等の御用聞きはしない" in text
+        assert "二〜三字の短い返事ならこちらも一〜二文" in text
+        assert "指示・助言で締めない" in text
+        assert "相手がまだ言っていない状況や結果" in text
+        assert "【現在時刻】" not in text
+        assert "半数以下" not in text
+        assert "普通の受け答えは[EMO:neutral]でよい" in text
+        assert "疲れ・痛み・不調をこぼしている時に[EMO:happy]は選ばず" in text
+    assert "タメ口" in okabe and "『先輩』とは呼ばない" in okabe
+    assert "です／ます" in self_rem and "自然な口語に和らげてよい" in self_rem
+    assert "CORE FACTS" in self_rem and "新セッションの一言目から" in self_rem and "敬体を一切使わず自然な常体" in self_rem
+
+
+@pytest.mark.asyncio
+async def test_221_text_chat_skips_restore_emotion_while_voice_preserves_it(
+    isolated_store, monkeypatch
+):
+    from unittest.mock import AsyncMock
+
+    owner = f"emo-gate-{uuid4().hex}"
+    await conversation_service.create_and_select(owner, "steins_gate", identity_mode="okabe")
+    baseline = soul_engine.profile("steins_gate").baselines.model_copy(deep=True)
+    mock_restore = AsyncMock(return_value=baseline)
+    monkeypatch.setattr(type(soul_engine), "restore_emotion", mock_restore)
+
+    for client_type in ("mobile", "desktop"):
+        text_session = chat_ws.SessionState(owner)
+        text_session.worldline = "steins_gate"
+        text_session.client_type = client_type
+        await text_session.load_from_db()
+        await text_session.enter_draft()
+        prompt = await compile_for_session(text_session, "こんにちは")
+        assert "PERSONA BIBLE v1" in prompt
+        assert mock_restore.await_count == 0
+
+    voice_session = chat_ws.SessionState(owner)
+    voice_session.worldline = "steins_gate"
+    voice_session.client_type = "voice"
+    await voice_session.load_from_db()
+    await voice_session.enter_draft()
+    await compile_for_session(voice_session, "こんにちは")
+    assert mock_restore.await_count == 3

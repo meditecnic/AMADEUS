@@ -5065,3 +5065,245 @@ def test_v129_mixed_secrets_keep_original_offsets_and_url_fields():
     }
     assert _jobs().redact_user_text(text) == (expected, False)
     assert _jobs().redact_user_text(expected) == (expected, False)
+
+
+def test_221_short_qa_extraction_prompt_contract():
+    prompt = _jobs()._V11_MEMORY_SYSTEM
+    assert "Dated or time-bounded user plans, schedules, or appointments" in prompt
+    assert 'memory_class="episodic", relation="new", candidate_index=null (NEVER stable_candidate)' in prompt
+    assert "source_local_time" in prompt and "do NOT convert timezones or count weekdays" in prompt
+    assert "YYYY年M月D日" in prompt and 'semantic.qualifiers.scheduled_date="YYYY-MM-DD"' in prompt
+    assert "ONLY dated plans carry scheduled_date" in prompt
+    assert "User communication, speech-register, or address preferences" in prompt
+    assert "不用跟我端着敬语" in prompt
+    assert "Short or elliptical Q&A replies:" in prompt
+    assert "previous_assistant_text asks a concrete question about the user" in prompt
+    assert "confidence >= 0.85" in prompt
+    assert "bare or hedged assent" in prompt
+    assert "between\n     0.65 and 0.80" in prompt or "0.65 and 0.80" in prompt
+    assert 'relation="new", candidate_index=null' in prompt
+    assert "NOT a concrete personal question about the user" in prompt
+    assert "Never remember an assistant claim the user has not confirmed" in prompt
+
+
+@pytest.mark.asyncio
+async def test_221_dated_plan_episodic_expiry_and_source_created_at_forwarding(isolated_store, monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from app.services.credentials import credential_store
+    from app.services.memory_v11.experiences import list_experiences
+    from app.services.memory_v11.retrieval import select_experience_candidates
+    from app.services.provider_runtime import provider_registry
+
+    jobs = _jobs()
+    session_id = f"s-221-plan-{uuid4().hex[:8]}"
+    conv = await conversation_service.create(session_id, "steins_gate", identity_mode="self")
+    cid = str(conv["id"])
+
+    mid = await models.save_message(
+        session_id, "user", "对了，下周五下午我去取订好的替代件。",
+        worldline="steins_gate", conversation_id=cid,
+    )
+    hist_db = await get_db("steins_gate", "history")
+    try:
+        await hist_db.execute(
+            "UPDATE messages SET created_at=? WHERE id=?",
+            ("2026-11-11T12:30:00.000Z", int(mid)),
+        )
+        await hist_db.commit()
+    finally:
+        await hist_db.close()
+
+    captured_user_json: dict[str, Any] = {}
+
+    class FakeAdapter:
+        async def complete_json(self, *, messages, api_key, model, temperature=0.1):
+            nonlocal captured_user_json
+            captured_user_json = json.loads(messages[1]["content"])
+            return {
+                "observations": [
+                    {
+                        "observation_ref": "o1",
+                        "display_text": "计划安排：2026年11月20日（周五）下午去取订好的替代件",
+                        "fact_text": "计划安排：2026年11月20日（周五）下午去取订好的替代件",
+                        "semantic": {"subject": "user", "predicate": "scheduled_pickup", "object": {"item": "替代件"}, "polarity": "positive", "qualifiers": {"date": "2026-11-20"}},
+                        "evidence_kind": "direct_user",
+                        "memory_class": "episodic",
+                        "confidence": 0.92,
+                        "topic_label": "安排",
+                        "expires_at": "2026-11-20T23:59:59+00:00",
+                        "relation": "new",
+                        "candidate_index": None,
+                        "reanalysis_target_observation_index": None,
+                    }
+                ]
+            }
+
+    fake_snapshot = SimpleNamespace(
+        adapter=FakeAdapter(),
+        model_id="deepseek-chat",
+        credential_required=True,
+        require=lambda _task: None,
+    )
+    monkeypatch.setattr(type(provider_registry), "snapshot", staticmethod(lambda *a, **kw: fake_snapshot))
+    monkeypatch.setattr(credential_store, "get", lambda _pid: "sk-valid-non-test-key-12345")
+
+    job = await jobs.enqueue_memory_job(
+        session_id=session_id, worldline="steins_gate", conversation_id=cid,
+        identity_mode="self", source_message_id=mid, provider_id="deepseek", model_id="deepseek-chat",
+    )
+    res = await jobs.process_memory_job(job_id=job["job_id"], lease_owner="plan-1", memory_completion=None)
+    assert res["state"] == "completed"
+    assert captured_user_json["source_created_at"] == "2026-11-11T12:30:00.000Z"
+
+    mem_db = await get_db("steins_gate", "memory")
+    try:
+        stable_count = await (
+            await mem_db.execute("SELECT COUNT(*) AS n FROM stable_facts WHERE session_id=?", (session_id,))
+        ).fetchone()
+        assert int(stable_count["n"]) == 0
+    finally:
+        await mem_db.close()
+
+    unexpired = await select_experience_candidates(
+        session_id=session_id, worldline="steins_gate", identity_mode="self",
+        query="我订好的替代件是什么时候去取？",
+        now="2026-11-12T10:00:00+00:00",
+    )
+    assert len(unexpired) == 1
+    assert "2026年11月20日" in unexpired[0]["display_text"]
+
+    # Once expires_at is in the past, prompt retrieval skips it and browse marks is_expired=True
+    mem_db = await get_db("steins_gate", "memory")
+    try:
+        await mem_db.execute(
+            "UPDATE experiences SET expires_at=? WHERE session_id=?",
+            ("2020-01-01T23:59:59+00:00", session_id),
+        )
+        await mem_db.commit()
+    finally:
+        await mem_db.close()
+
+    expired_recall = await select_experience_candidates(
+        session_id=session_id, worldline="steins_gate", identity_mode="self",
+        query="我订好的替代件是什么时候去取？",
+        now="2026-11-22T10:00:00+00:00",
+    )
+    assert expired_recall == []
+    browsed = await list_experiences(session_id=session_id, worldline="steins_gate", identity_mode="self")
+    assert len(browsed["experiences"]) == 1 and browsed["experiences"][0]["is_expired"] is True
+
+
+@pytest.mark.asyncio
+async def test_221_short_qa_substantive_vs_hedged_assent_end_to_end(isolated_store):
+    jobs = _jobs()
+    session_id = f"s-221-qa-{uuid4().hex[:8]}"
+    conv = await conversation_service.create(session_id, "steins_gate", identity_mode="self")
+    cid = str(conv["id"])
+
+    # Case 1: substantive short answer (>= 0.85) -> active stable_facts row
+    await models.save_message(
+        session_id, "assistant", "[EMO:neutral] 普段コーヒーはどうやって飲むの？",
+        worldline="steins_gate", conversation_id=cid,
+    )
+    mid1 = await models.save_message(
+        session_id, "user", "美式，不加糖",
+        worldline="steins_gate", conversation_id=cid,
+    )
+    job1 = await jobs.enqueue_memory_job(
+        session_id=session_id, worldline="steins_gate", conversation_id=cid,
+        identity_mode="self", source_message_id=mid1, provider_id="fake", model_id="fake",
+    )
+
+    async def complete_substantive(**kwargs):
+        assert kwargs["previous_assistant_text"] == "普段コーヒーはどうやって飲むの？"
+        assert kwargs["user_text"] == "美式，不加糖"
+        obs = _v113_observation("o1", "喝美式咖啡不加糖")
+        obs["confidence"] = 0.91
+        return {"observations": [obs]}
+
+    res1 = await jobs.process_memory_job(
+        job_id=job1["job_id"], lease_owner="qa-1", memory_completion=complete_substantive,
+    )
+    assert res1["state"] == "completed"
+
+    # Case 2: bare/hedged assent (0.72, relation=new, candidate_index=None) -> candidate observation only, NOT active stable_facts
+    await models.save_message(
+        session_id, "assistant", "[EMO:neutral] 你平时经常熬夜写代码吗？",
+        worldline="steins_gate", conversation_id=cid,
+    )
+    mid2 = await models.save_message(
+        session_id, "user", "算是吧",
+        worldline="steins_gate", conversation_id=cid,
+    )
+    job2 = await jobs.enqueue_memory_job(
+        session_id=session_id, worldline="steins_gate", conversation_id=cid,
+        identity_mode="self", source_message_id=mid2, provider_id="fake", model_id="fake",
+    )
+
+    async def complete_hedged(**kwargs):
+        assert kwargs["previous_assistant_text"] == "你平时经常熬夜写代码吗？"
+        assert kwargs["user_text"] == "算是吧"
+        obs = _v113_observation("o2", "平时经常熬夜写代码")
+        obs["confidence"] = 0.72
+        return {"observations": [obs]}
+
+    res2 = await jobs.process_memory_job(
+        job_id=job2["job_id"], lease_owner="qa-2", memory_completion=complete_hedged,
+    )
+    assert res2["state"] == "completed"
+
+    db = await get_db("steins_gate", "memory")
+    try:
+        fact_rows = await (
+            await db.execute(
+                """SELECT v.display_text FROM stable_facts f
+                   JOIN stable_fact_versions v
+                     ON v.fact_id=f.fact_id AND v.version_no=f.active_version
+                  WHERE f.session_id=?""",
+                (session_id,),
+            )
+        ).fetchall()
+        obs_rows = await (
+            await db.execute(
+                "SELECT display_text, status FROM memory_observations WHERE session_id=? ORDER BY display_text",
+                (session_id,),
+            )
+        ).fetchall()
+    finally:
+        await db.close()
+    assert [str(r["display_text"]) for r in fact_rows] == ["喝美式咖啡不加糖"]
+    assert ("平时经常熬夜写代码", "candidate") in [(str(r["display_text"]), str(r["status"])) for r in obs_rows]
+
+
+def test_221_plan_dates_are_worked_out_in_code_not_by_the_model():
+    """Wednesday 2026-11-11 10:00 in UTC+8: "下周五" is 2026-11-20, and a naive expiry gets the local offset."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.services.memory_v11.jobs import _build_source_local_time, _with_aware_expiry
+
+    local = _build_source_local_time("2026-11-11T02:00:00.000Z", local_tz=timezone(timedelta(hours=8)))
+    assert local["local_date"] == "2026-11-11"
+    assert local["weekday"] == "周三"
+    assert local["utc_offset"] == "+08:00"
+    assert local["next_week"]["下周五"] == "2026-11-20"
+    assert local["this_week"]["周日"] == "2026-11-15"
+    assert _build_source_local_time(None) is None
+
+    aware = {"expires_at": "2026-11-20T23:59:59+08:00"}
+    assert _with_aware_expiry(aware) is aware
+    fixed = _with_aware_expiry({"expires_at": "2026-11-20T23:59:59"})
+    assert fixed["expires_at"].startswith("2026-11-20T23:59:59")
+    assert datetime.fromisoformat(fixed["expires_at"]).tzinfo is not None
+    assert _with_aware_expiry({"expires_at": None}) == {"expires_at": None}
+
+    # [226] A marked plan ends at the close of its own local day, in that day's offset
+    # (summer time included), whatever the model wrote; unmarked rows keep theirs.
+    plan = _with_aware_expiry({
+        "semantic": {"qualifiers": {"scheduled_date": "2026-11-06"}},
+        "expires_at": "2026-11-06T23:59:59-04:00",
+    })
+    assert plan["expires_at"] == datetime(2026, 11, 6, 23, 59, 59).astimezone().isoformat()
+    assert _with_aware_expiry({"semantic": {"qualifiers": {"scheduled_date": "soon"}}, "expires_at": None}) == {
+        "semantic": {"qualifiers": {"scheduled_date": "soon"}}, "expires_at": None}
+
