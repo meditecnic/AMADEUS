@@ -970,7 +970,7 @@ async def test_v11_compile_failure_resets_injected_ids(isolated_store, monkeypat
 @pytest.mark.asyncio
 async def test_v11_compile_cancelled_resets_injected_ids(isolated_store, monkeypatch):
     """[A1] dispatch 64: a compile cancelled after the reset leaves () behind."""
-    from app.services.soul_engine import soul_engine
+    import app.services.prompt_compiler as prompt_compiler_module
 
     sid = f"rp-cancel-{uuid4()}"
     await seed_fact(session_id=sid, text="猫を飼っている")
@@ -983,7 +983,7 @@ async def test_v11_compile_cancelled_resets_injected_ids(isolated_store, monkeyp
         entered.set()
         await never_set.wait()
 
-    monkeypatch.setattr(type(soul_engine), "restore_emotion", staticmethod(hang))
+    monkeypatch.setattr(prompt_compiler_module, "_select_v11_prompt_memories", hang)
     task = asyncio.create_task(
         compile_for_session(session, "こんにちは", provider=_deepseek_provider())
     )

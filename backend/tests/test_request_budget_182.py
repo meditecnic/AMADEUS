@@ -69,7 +69,9 @@ async def test_processor_request_budget(isolated_store, monkeypatch, caplog, kin
         # its own system instruction and must re-budget Memory as well.
         # Same shape as the product: strftime gets only the ASCII part (Windows
         # encodes the format with the locale codec).
-        effective = SYSTEM + f"\n【現在時刻：{datetime.now().strftime('%Y-%m-%d %H:%M')}】"
+        now = datetime.now()
+        weekday = ("月", "火", "水", "木", "金", "土", "日")[now.weekday()]
+        effective = SYSTEM + f"\n【現在時刻：{now.strftime('%Y-%m-%d %H:%M')}（{weekday}）】"
         tail = {"role": "system", "content": render_tail_reminder(
             session.identity_mode, getattr(session, "self_name", ""),
         )}

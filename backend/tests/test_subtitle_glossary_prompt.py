@@ -392,3 +392,20 @@ def test_no_string_replace_preserve_masquerade_in_prompt_module():
     source = inspect.getsource(mod)
     assert ".replace(" not in source
     assert "re.sub" not in source
+
+
+def test_221_subtitle_kurisu_voice_guards():
+    from app.domain.subtitle_glossary_prompt import (
+        build_translation_messages,
+        build_translation_system_content,
+    )
+
+    system = build_translation_system_content()
+    assert "牧瀬紅莉栖" in system and "Amadeus" in system
+    for anti_service in ("好的呢", "没问题哦", "请您", "为您"):
+        assert anti_service in system, anti_service
+    for anti_coquettish in ("人家", "讨厌啦"):
+        assert anti_coquettish in system, anti_coquettish
+    assert "乾いた皮肉" in system or "率直なツッコミ" in system
+    messages = build_translation_messages("わかった、ピーナッツは抜きの方向ね。")
+    assert messages[1]["content"] == "<source>\nわかった、ピーナッツは抜きの方向ね。\n</source>"
