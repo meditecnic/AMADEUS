@@ -650,6 +650,15 @@ fn redact_prefixed_keys_and_pairs(text: &str) -> String {
                                 i = end_q + 1;
                                 continue;
                             }
+                        } else {
+                            // Unterminated quote (log cut at its size cap or a crash mid-write): mask up to line end.
+                            let inner = &text[val_start + 1..scan];
+                            if !inner.is_empty() && !inner.starts_with("[REDACTED") {
+                                out.push_str(&text[i..=val_start]);
+                                out.push_str("[REDACTED]");
+                                i = scan;
+                                continue;
+                            }
                         }
                     } else if val_start < bytes.len() {
                         let mut val_end = text.len();
@@ -867,6 +876,11 @@ fn read_log_window(path: &Path, window_bytes: u64) -> io::Result<String> {
     }
     let mut raw = Vec::new();
     file.take(window_bytes).read_to_end(&mut raw)?;
+    if len >= backend_logs::MAX_BYTES && raw.last().is_some_and(|&b| b != b'\n') {
+        // The writer stopped at its size cap mid-line; the dangling tail may hold a half-written secret.
+        let keep = raw.iter().rposition(|&b| b == b'\n').map_or(0, |nl| nl + 1);
+        raw.truncate(keep);
+    }
 
     let mut valid_start = 0usize;
     if seek_pos > 0 {
@@ -2181,6 +2195,100 @@ mod tests {
         let cut_tail =
             read_redacted_log_tail_with_limits(&cut_long_path, &[], 8192, 80, 8192).unwrap();
         assert_eq!(cut_tail, "SAFE_TAIL");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn redact_masks_unterminated_quoted_values_before_newline_and_at_eof() {
+        assert_eq!(
+            redact_prefixed_keys_and_pairs("api_key=\"unclosedSecret123\nnext=ok"),
+            "api_key=\"[REDACTED]\nnext=ok"
+        );
+        assert_eq!(
+            redact_prefixed_keys_and_pairs("{\"token\": \"crlfSecret456\r\nnext=ok"),
+            "{\"token\": \"[REDACTED]\r\nnext=ok"
+        );
+        assert_eq!(
+            redact_prefixed_keys_and_pairs("{\"token\": \"eofSecret789"),
+            "{\"token\": \"[REDACTED]"
+        );
+        assert_eq!(
+            redact_prefixed_keys_and_pairs("password='trailSecret\\"),
+            "password='[REDACTED]"
+        );
+        assert_eq!(
+            redact_prefixed_keys_and_pairs("api_key=\"esc\\\"aped\\秘密"),
+            "api_key=\"[REDACTED]"
+        );
+        assert_eq!(redact_prefixed_keys_and_pairs("api_key=\"\nok"), "api_key=\"\nok");
+        assert_eq!(
+            redact_prefixed_keys_and_pairs("token=\"[REDACTED]"),
+            "token=\"[REDACTED]"
+        );
+
+        let redacted = redact_sensitive_with_homes(
+            "ok line\n\"access_token\": \"halfWrittenSecretAbc\\",
+            &[],
+            None,
+            None,
+        );
+        assert!(!redacted.contains("halfWritten"), "leaked fragment in {redacted}");
+        assert!(redacted.ends_with("[REDACTED]"), "residue after mask in {redacted}");
+    }
+
+    #[test]
+    fn read_log_window_drops_partial_last_line_when_log_hit_size_cap() {
+        let root = unique_test_dir("capped");
+        fs::create_dir_all(&root).unwrap();
+        let cap = backend_logs::MAX_BYTES as usize;
+
+        let capped_file = |name: &str, tail: &str| -> PathBuf {
+            let pad = cap - tail.len();
+            let mut body = String::with_capacity(cap);
+            while body.len() + 100 <= pad {
+                body.push_str(&"p".repeat(99));
+                body.push('\n');
+            }
+            let rest = pad - body.len();
+            if rest > 0 {
+                body.push_str(&"q".repeat(rest - 1));
+                body.push('\n');
+            }
+            body.push_str(tail);
+            let path = root.join(name);
+            fs::write(&path, body).unwrap();
+            assert_eq!(fs::metadata(&path).unwrap().len(), backend_logs::MAX_BYTES);
+            path
+        };
+
+        let cut = capped_file("cut.log", "SAFE_LINE ok\n\"token\": \"cutSecretFrag");
+        let window = read_log_window(&cut, STARTUP_DIAG_READ_WINDOW_BYTES).unwrap();
+        assert!(window.ends_with("SAFE_LINE ok\n"), "complete lines must survive");
+        assert!(!window.contains("cutSecretFrag"));
+        let tail = read_redacted_log_tail(&cut, &[]);
+        assert!(tail.ends_with("SAFE_LINE ok"));
+        assert!(!tail.contains("cutSecretFrag") && !tail.contains("token"));
+
+        let raw_cut = capped_file("raw-cut.log", "SAFE_LINE ok\nsk-proj12345");
+        let raw_tail = read_redacted_log_tail(&raw_cut, &[]);
+        assert!(raw_tail.ends_with("SAFE_LINE ok"));
+        assert!(!raw_tail.contains("sk-proj"));
+
+        let complete = capped_file("complete.log", "SAFE_LINE ok\nLAST_LINE\n");
+        let complete_window = read_log_window(&complete, STARTUP_DIAG_READ_WINDOW_BYTES).unwrap();
+        assert!(complete_window.ends_with("SAFE_LINE ok\nLAST_LINE\n"));
+
+        let no_newline = root.join("no-newline.log");
+        fs::write(&no_newline, "x".repeat(cap)).unwrap();
+        assert_eq!(read_log_window(&no_newline, cap as u64).unwrap(), "");
+
+        let under_cap = root.join("under-cap.log");
+        fs::write(&under_cap, "line1\nlast line still writing").unwrap();
+        assert_eq!(
+            read_log_window(&under_cap, STARTUP_DIAG_READ_WINDOW_BYTES).unwrap(),
+            "line1\nlast line still writing"
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
