@@ -42,7 +42,8 @@ describe('dev mock REST contracts', () => {
     expect(mock.rest(url('/api/providers/deepseek/models'), 'GET').body).toMatchObject({
       catalog: [expect.objectContaining({ id: 'deepseek-chat', callable: true })], id_only: false,
     });
-    expect(mock.rest(url('/api/asset-pack/manifest.json'), 'GET').status).toBe(404);
+    expect(mock.rest(url('/api/asset-pack/manifest.json'), 'GET')).toEqual({ status: 200, body: { installed: false } });
+    expect(mock.rest(url('/api/asset-pack/assets/images/kurisu_normal1.png'), 'GET').status).toBe(404);
     expect(mock.rest(url('/api/unimplemented'), 'GET').status).toBe(404);
   });
 
@@ -322,5 +323,128 @@ describe('dev mock protocol v2', () => {
     vi.runAllTimers();
     expect(frames).toHaveLength(length);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('keeps optional asset pack uninstalled by default and supports inspect/install/uninstall lifecycle', () => {
+    const mock = createMockRuntime();
+    expect(mock.rest(url('/api/asset-pack/manifest.json'), 'GET')).toEqual({ status: 200, body: { installed: false } });
+    expect(mock.rest(url('/api/asset-pack/assets/images/kurisu_normal1.png'), 'GET').status).toBe(404);
+    expect(mock.rest(url('/api/data/asset-pack'), 'GET').body).toMatchObject({
+      installed: false,
+      complete: false,
+      movable: true,
+      required_count: 34,
+      present_count: 0,
+    });
+
+    const inspectDir = mock.rest(url('/api/data/asset-pack/inspect'), 'POST', { source_path: '/tmp/amadeus-pack' });
+    expect(inspectDir.status).toBe(200);
+    expect(inspectDir.body).toMatchObject({
+      valid: true,
+      source_type: 'directory',
+      found_count: 34,
+      required_count: 34,
+    });
+    expect((inspectDir.body as { previews: unknown[] }).previews).toHaveLength(9);
+
+    const zipMagic = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x00]);
+    const installZip = mock.rest(
+      url('/api/data/asset-pack/install'),
+      'POST',
+      {},
+      'default',
+      '',
+      { rawBody: zipMagic, contentType: 'application/zip' },
+    );
+    expect(installZip.status).toBe(200);
+    expect(installZip.body).toMatchObject({ installed: true, complete: true, present_count: 34 });
+
+    expect(mock.rest(url('/api/asset-pack/manifest.json'), 'GET').status).toBe(200);
+    const pngReply = mock.rest(url('/api/asset-pack/assets/images/kurisu_normal1.png'), 'GET');
+    expect(pngReply.status).toBe(200);
+    expect(pngReply.headers?.['Content-Type']).toBe('image/png');
+
+    const oggReply = mock.rest(url('/api/asset-pack/audio/bgm/Amadeus.ogg'), 'GET');
+    expect(oggReply.status).toBe(200);
+    expect(oggReply.headers?.['Content-Type']).toBe('audio/ogg');
+    expect(oggReply.raw?.byteLength).toBe(197);
+    const oggAscii = Buffer.from(oggReply.raw!).toString('ascii');
+    expect(oggAscii.startsWith('OggS')).toBe(true);
+    expect(oggAscii).toContain('OpusHead');
+    expect(oggAscii).toContain('OpusTags');
+
+    // Client-isolated: another client remains uninstalled.
+    expect(mock.rest(url('/api/asset-pack/manifest.json'), 'GET', {}, 'other-client')).toEqual({
+      status: 200,
+      body: { installed: false },
+    });
+    expect(mock.rest(url('/api/asset-pack/assets/images/kurisu_normal1.png'), 'GET', {}, 'other-client').status).toBe(404);
+
+    // Reject DELETE with query/body, then succeed cleanly when bare DELETE is sent.
+    expect(mock.rest(url('/api/data/asset-pack?force=1'), 'DELETE').status).toBe(422);
+    const del = mock.rest(url('/api/data/asset-pack'), 'DELETE');
+    expect(del.status).toBe(200);
+    expect(del.body).toMatchObject({ installed: false, present_count: 0 });
+    expect(mock.rest(url('/api/asset-pack/manifest.json'), 'GET')).toEqual({ status: 200, body: { installed: false } });
+    expect(mock.rest(url('/api/asset-pack/assets/images/kurisu_normal1.png'), 'GET').status).toBe(404);
+
+    const lockedMock = createMockRuntime({ assetPackMovable: false });
+    expect(lockedMock.rest(url('/api/data/asset-pack/install'), 'POST', { source_path: '/tmp/amadeus-pack' }).status).toBe(409);
+  });
+
+  it('serves /api/worldlines/summary, restore cancellation/ack, and observation confirm in dev-mock', () => {
+    const mock = createMockRuntime();
+    expect(mock.rest(url('/api/worldlines/summary'), 'GET').status).toBe(422);
+    const summary = mock.rest(url('/api/worldlines/summary?session_id=test-session'), 'GET');
+    expect(summary.status).toBe(200);
+    expect(summary.body).toMatchObject({
+      steins_gate: { conversations: expect.any(Number), memories: expect.any(Number) },
+      beta: { conversations: expect.any(Number), memories: expect.any(Number) },
+    });
+
+    expect(mock.rest(url('/api/data/restore'), 'DELETE')).toEqual({
+      status: 409,
+      body: { detail: { code: 'restore_not_pending' } },
+    });
+    expect(mock.rest(url('/api/data/status'), 'GET').body).toMatchObject({ restore_pending: null });
+    const createdBackup = mock.rest(url('/api/data/backups'), 'POST').body as { id: string };
+    expect(mock.rest(url(`/api/data/backups/${createdBackup.id}/restore`), 'POST').status).toBe(200);
+    expect(mock.rest(url('/api/data/status'), 'GET').body).toMatchObject({ restore_pending: createdBackup.id });
+    expect(mock.rest(url('/api/data/restore'), 'DELETE')).toEqual({ status: 200, body: { cancelled: true } });
+    expect(mock.rest(url('/api/data/status'), 'GET').body).toMatchObject({ restore_pending: null });
+    expect(mock.rest(url('/api/data/restore-result/ack'), 'POST')).toEqual({ status: 200, body: { acknowledged: true } });
+
+    expect(
+      mock.rest(url('/api/memory/observations/obs-1/confirm?session_id=test-session&worldline=steins_gate&identity_mode=self'), 'POST'),
+    ).toEqual({
+      status: 200,
+      body: { ok: true, scope: { session_id: 'test-session', worldline: 'steins_gate', identity_mode: 'self' } },
+    });
+    expect(
+      mock.rest(url('/api/memory/observations?session_id=test-session&worldline=steins_gate&identity_mode=self'), 'GET').body,
+    ).toMatchObject({
+      observations: [
+        { observation_id: 'obs-1', status: 'attached' },
+        { observation_id: 'obs-2', status: 'candidate' },
+      ],
+    });
+    expect(
+      mock.rest(url('/api/memory/observations/obs-1/confirm?session_id=test-session&worldline=steins_gate&identity_mode=self'), 'POST'),
+    ).toEqual({ status: 409, body: { detail: { code: 'observation_not_confirmable' } } });
+    expect(
+      mock.rest(url('/api/memory/observations/obs-1/ignore?session_id=test-session&worldline=steins_gate&identity_mode=self'), 'POST'),
+    ).toEqual({ status: 409, body: { detail: { code: 'observation_state_conflict' } } });
+    expect(
+      mock.rest(url('/api/memory/observations/obs-2/ignore?session_id=test-session&worldline=steins_gate&identity_mode=self'), 'POST').status,
+    ).toBe(200);
+    for (const action of ['confirm', 'ignore']) {
+      expect(
+        mock.rest(url(`/api/memory/observations/obs-missing/${action}?session_id=test-session&worldline=steins_gate&identity_mode=self`), 'POST'),
+      ).toEqual({ status: 404, body: { detail: { code: 'observation_not_found' } } });
+    }
+
+    expect(
+      mock.rest(url('/api/memory/observations?session_id=test-session&worldline=steins_gate&identity_mode=self&scenario=empty'), 'GET').body,
+    ).toMatchObject({ observations: [] });
   });
 });

@@ -1,9 +1,9 @@
-﻿import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
-import { hasAssetPack, packAsset } from '../assetPack';
+﻿import React, { useState, useEffect, useRef, useLayoutEffect, useSyncExternalStore } from 'react';
+import * as assetPackMod from '../assetPack';
 import { mouthFrame, voiceEnvelope } from '../workstation/voiceEnvelope';
 
 // The portraits are original game art, shipped only in the optional asset pack.
-const art = (path: string) => packAsset(path) ?? '';
+const art = (path: string) => assetPackMod.packAsset?.(path) ?? '';
 
 const EMOTION_MAP: Record<string, { base: string; blink: string }> = {
   neutral: {
@@ -60,6 +60,15 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
   glitchState,
   variant = 'legacy',
 }) => {
+  const packRevision = useSyncExternalStore(
+    (cb) => assetPackMod.subscribeAssetPack?.(cb) ?? (() => {}),
+    () => assetPackMod.getAssetPackRevision?.() ?? 0,
+  );
+  const [imgError, setImgError] = useState<{ 1?: boolean; 2?: boolean; 3?: boolean; blink?: boolean }>({});
+  useEffect(() => {
+    setImgError({});
+  }, [packRevision, emotion]);
+
   const [isBlinking, setIsBlinking] = useState(false);
   const img1Ref = useRef<HTMLImageElement>(null);
   const img2Ref = useRef<HTMLImageElement>(null);
@@ -109,16 +118,22 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
   if (glitchState === 'heavy') glitchClass = 'glitch-heavy';
   else if (glitchState === 'light') glitchClass = 'glitch-light';
 
-  const img1 = art(`${config.base}1.png`);
-  const img2 = art(`${config.base}2.png`);
-  const img3 = art(`${config.base}3.png`);
-  const imgBlink = art(config.blink);
+  const hasMainSprite = assetPackMod.hasPackFile
+    ? assetPackMod.hasPackFile('assets/images/kurisu_normal1.png')
+    : Boolean(assetPackMod.packAsset?.('assets/images/kurisu_normal1.png'));
+
+  const img1 = imgError[1] ? art('/assets/images/kurisu_normal1.png') : art(`${config.base}1.png`);
+  const img2 = imgError[2] ? art('/assets/images/kurisu_normal2.png') : art(`${config.base}2.png`);
+  const img3 = imgError[3] ? art('/assets/images/kurisu_normal3.png') : art(`${config.base}3.png`);
+  const imgBlink = imgError.blink ? art('/assets/images/kurisu_eyes_closed1.png') : art(config.blink);
 
   useLayoutEffect(() => {
+    if (!hasMainSprite) return undefined;
     let rafId: number | null = null;
     // Lips read the same envelope as the voice scope; a frame holds ≥70 ms so syllables read as shapes, not flicker.
     let mouth: 1 | 2 | 3 = 1;
     let changedAt = 0;
+    let lastShown = -1;
     const apply = (now: number) => {
       const speaking = isSpeakingRef.current;
       const blinking = isBlinkingRef.current;
@@ -130,17 +145,22 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
       const o2 = (!showBlink && mouthLevel === 2) ? 1 : 0;
       const o3 = (!showBlink && mouthLevel === 3) ? 1 : 0;
       const oBlink = showBlink ? 1 : 0;
-      if (img1Ref.current) img1Ref.current.style.opacity = String(o1);
-      if (img2Ref.current) img2Ref.current.style.opacity = String(o2);
-      if (img3Ref.current) img3Ref.current.style.opacity = String(o3);
-      if (imgBlinkRef.current) imgBlinkRef.current.style.opacity = String(oBlink);
+      // Written only when a frame changes: an unchanged write still costs the page a style pass every frame.
+      const shown = o1 * 1 + o2 * 2 + o3 * 3 + oBlink * 4;
+      if (shown !== lastShown) {
+        lastShown = shown;
+        if (img1Ref.current) img1Ref.current.style.opacity = String(o1);
+        if (img2Ref.current) img2Ref.current.style.opacity = String(o2);
+        if (img3Ref.current) img3Ref.current.style.opacity = String(o3);
+        if (imgBlinkRef.current) imgBlinkRef.current.style.opacity = String(oBlink);
+      }
       rafId = requestAnimationFrame(apply);
     };
     rafId = requestAnimationFrame(apply);
     return () => { if (rafId) cancelAnimationFrame(rafId); };
-  }, []);
+  }, [hasMainSprite, packRevision]);
 
-  if (!hasAssetPack()) {
+  if (!hasMainSprite) {
     return (
       <div className={`avatar-viewer-container avatar-absent${variant === 'stage' ? ' avatar-stage' : ''}`} data-testid="avatar-absent" />
     );
@@ -180,8 +200,8 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
           alt="Kurisu Calm"
           className="avatar-sprite-layer"
           ref={img1Ref}
-          onError={(e) => {
-            e.currentTarget.src = art('/assets/images/kurisu_normal1.png');
+          onError={() => {
+            setImgError((prev) => (prev[1] ? prev : { ...prev, 1: true }));
           }}
         />
 
@@ -190,8 +210,8 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
           alt="Kurisu Talking Half"
           className="avatar-sprite-layer"
           ref={img2Ref}
-          onError={(e) => {
-            e.currentTarget.src = art('/assets/images/kurisu_normal2.png');
+          onError={() => {
+            setImgError((prev) => (prev[2] ? prev : { ...prev, 2: true }));
           }}
         />
 
@@ -200,8 +220,8 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
           alt="Kurisu Talking Open"
           className="avatar-sprite-layer"
           ref={img3Ref}
-          onError={(e) => {
-            e.currentTarget.src = art('/assets/images/kurisu_normal3.png');
+          onError={() => {
+            setImgError((prev) => (prev[3] ? prev : { ...prev, 3: true }));
           }}
         />
 
@@ -210,8 +230,8 @@ const AvatarViewer: React.FC<AvatarViewerProps> = ({
           alt="Kurisu Blink"
           className="avatar-sprite-layer"
           ref={imgBlinkRef}
-          onError={(e) => {
-            e.currentTarget.src = art('/assets/images/kurisu_eyes_closed1.png');
+          onError={() => {
+            setImgError((prev) => (prev.blink ? prev : { ...prev, blink: true }));
           }}
         />
       </div>

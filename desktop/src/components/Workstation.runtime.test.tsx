@@ -185,6 +185,30 @@ describe('Workstation provider runtime changes', () => {
     }));
   });
 
+  it('drawn ahead under the login (locked) reads, connects and plays nothing until it is unlocked', async () => {
+    const props = { worldline: 'steins_gate' as const, onWorldlineChange: vi.fn(), onLogout: vi.fn() };
+    vi.mocked(audioService.playBGMForWorldline).mockClear();
+    const fetchMock = vi.mocked(globalThis.fetch);
+    const { container, rerender } = render(<Workstation {...props} entrance="locked" />);
+    await act(async () => { await Promise.resolve(); });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(wsSpies.useAmadeusWS).toHaveBeenLastCalledWith(expect.objectContaining({ enabled: false }));
+    expect(audioService.playBGMForWorldline).not.toHaveBeenCalled();
+    const root = container.querySelector('.ws2')!;
+    expect(root).toHaveAttribute('inert');
+    expect(root).toHaveAttribute('aria-hidden', 'true');
+    expect(root).toHaveAttribute('data-hold');
+    expect(root).not.toHaveAttribute('data-entrance');
+
+    // Unlocked by the login: the same instance, now live.
+    rerender(<Workstation {...props} entrance="hold" />);
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).startsWith('/api/conversations?'))).toBe(true));
+    expect(wsSpies.useAmadeusWS).toHaveBeenLastCalledWith(expect.objectContaining({ enabled: true }));
+    expect(audioService.playBGMForWorldline).toHaveBeenCalledWith('steins_gate', expect.any(Number));
+    expect(container.querySelector('.ws2')).not.toHaveAttribute('aria-hidden');
+  });
+
   it('shows a conversation list failure and recovers through retry', async () => {
     wsSpies.realHistory = true;
     const initialFetch = globalThis.fetch;
@@ -198,11 +222,11 @@ describe('Workstation provider runtime changes', () => {
 
     render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
     fireEvent.click(screen.getAllByRole('button', { name: '展开会话列表' })[0]);
-    expect(await screen.findByText('> 会话列表加载失败')).toBeInTheDocument();
-    expect(screen.queryByText('> 暂无会话')).not.toBeInTheDocument();
+    expect(await screen.findByText('会话列表加载失败')).toBeInTheDocument();
+    expect(screen.queryByText('暂无会话')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '重试' }));
     expect(await screen.findByText('Default Conversation')).toBeInTheDocument();
-    expect(screen.queryByText('> 会话列表加载失败')).not.toBeInTheDocument();
+    expect(screen.queryByText('会话列表加载失败')).not.toBeInTheDocument();
     expect(listRequests).toBe(2);
   });
 
@@ -563,11 +587,11 @@ describe('Workstation provider runtime changes', () => {
     wsSpies.useAmadeusWS.mockImplementation(() => state);
     const h = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
     expect(screen.getByText('正在接通')).toBeInTheDocument();
-    expect(screen.queryByText(/说第一句话/)).toBeNull();
+    expect(screen.queryByText(/这个会话还是空的/)).toBeNull();
     expect(screen.getByLabelText('输入消息')).toBeDisabled();
     state.sessionState = 'ready';
     h.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
-    expect(screen.getByText(/说第一句话/)).toBeInTheDocument();
+    expect(screen.getByText(/这个会话还是空的/)).toBeInTheDocument();
   });
 
   it('starts the signal only on local send, keeps draft materialization, and clears on completion or history switch', () => {
@@ -685,7 +709,6 @@ describe('Workstation provider runtime changes', () => {
     await waitFor(() => expect(screen.getByText('Default Conversation')).toBeTruthy());
     fireEvent.change(screen.getByLabelText('输入消息'), { target: { value: 'source draft' } });
     fireEvent.click(screen.getByRole('button', { name: '系统设置' }));
-    fireEvent.click(screen.getByRole('radio', { name: 'β 世界线' }));
     fireEvent.click(screen.getByRole('button', { name: '跃迁至 β' }));
     expect(wsSpies.switchWorldline).toHaveBeenCalledTimes(1);
     const [target, requestId] = wsSpies.switchWorldline.mock.calls[0];
@@ -917,7 +940,7 @@ describe('Workstation Q14 activity operation labels', () => {
     );
 
     await waitFor(() => {
-      expect(getByTestId('activity-operation-label')).toHaveTextContent('Web Search');
+      expect(getByTestId('activity-operation-label')).toHaveTextContent('正在搜索网页');
     });
     expect(queryByText(/^Thinking/)).toBeNull();
   });
@@ -928,7 +951,7 @@ describe('Workstation Q14 activity operation labels', () => {
     );
 
     await waitFor(() => {
-      expect(getByTestId('activity-operation-label')).toHaveTextContent('Thinking');
+      expect(getByTestId('activity-operation-label')).toHaveTextContent('思考中');
     });
   });
 

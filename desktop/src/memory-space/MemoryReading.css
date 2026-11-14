@@ -1,7 +1,7 @@
 /* Reading surface (DIRECTION Q2 and section 6): one container, content swaps by opacity. */
 .m-reading { position: absolute; right: 44px; top: 160px; z-index: 5; width: 372px; max-height: calc(100% - 210px); overflow: auto;
   padding: 20px 22px 18px; background: rgba(8, 9, 10, .82); border: 1px solid var(--m-line2); box-shadow: 0 24px 60px rgba(0, 0, 0, .55);
-  scrollbar-width: thin; scrollbar-color: var(--m-ink3) transparent; }
+  --ws-scroll-thumb: var(--m-ink3); }
 .m-reading::before { content: ''; position: absolute; left: -1px; top: -1px; width: 12px; height: 12px; border-left: 1px solid var(--m-acc); border-top: 1px solid var(--m-acc); }
 .m-reading .r-x { position: absolute; right: 10px; top: 8px; width: 28px; height: 28px; color: var(--m-ink3); font-size: 16px; }
 .m-reading .r-x:hover { color: var(--m-ink); }

@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Workstation } from './Workstation';
@@ -127,6 +127,8 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 async function createConnection() {
+  // The system page's sections are built when it first opens.
+  if (!hoisted.settingsProps.current) fireEvent.click(await screen.findByRole('button', { name: '系统设置' }));
   await waitFor(() => expect(hoisted.settingsProps.current?.onCreateCustomProfile).toBeTypeOf('function'));
   const create = hoisted.settingsProps.current!.onCreateCustomProfile as (input: unknown) => Promise<void>;
   await act(async () => {
@@ -604,5 +606,275 @@ describe('PR #16 follow-ups (dispatch 61)', () => {
     await act(async () => { releaseSlow(); });
     expect(screen.getByTestId('conversation-open-error-toast')).toHaveTextContent('HTTP 404');
     expect(screen.getByTestId('conversation-open-error-toast')).not.toHaveTextContent('HTTP 500');
+  });
+});
+
+describe('ConnectionsPanel inline credential rekey (Fix #5)', () => {
+  it('routes built-in provider inline key replacement through POST /api/providers/connect and shows truthful copy', async () => {
+    const connectBodies: unknown[] = [];
+    let legacyCredCalls = 0;
+    const baseFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/providers/connect' && init?.method === 'POST') {
+        connectBodies.push(JSON.parse(String(init.body)));
+        return json(200, { provider_id: 'deepseek', configuration_version: 'v2', default_model: 'deepseek-v4-flash' });
+      }
+      if (url.endsWith('/credentials') && init?.method === 'POST') {
+        legacyCredCalls += 1;
+        return json(200, { configured: true });
+      }
+      return baseFetch(input, init);
+    }));
+
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: '系统设置' }));
+    const nav = screen.getByRole('navigation', { name: '系统菜单' });
+    fireEvent.click(within(nav).getByRole('button', { name: /连接/ }));
+
+    expect(await screen.findByText('密钥只保存在这台电脑上，界面不回显，仅在验证或对话时发往你所选的服务商接口。')).toBeInTheDocument();
+
+    const rowToggle = screen.getAllByRole('button', { name: /DeepSeek/ }).find((el) => el.hasAttribute('aria-expanded'))!;
+    if (rowToggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(rowToggle);
+    fireEvent.click(screen.getByRole('button', { name: '更换' }));
+
+    const keyInput = screen.getByLabelText('DeepSeek 的新密钥');
+    fireEvent.change(keyInput, { target: { value: 'sk-new-deepseek' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => expect(connectBodies).toHaveLength(1));
+    expect(connectBodies[0]).toEqual({ provider_id: 'deepseek', api_key: 'sk-new-deepseek' });
+    expect(legacyCredCalls).toBe(0);
+    await waitFor(() => expect(screen.queryByLabelText('DeepSeek 的新密钥')).toBeNull());
+  });
+
+  it('routes custom user_config profile inline rekey through connect() and keeps input open on credential_rejected', async () => {
+    providers = [
+      provider('deepseek', 'DeepSeek', 'deepseek-v4-flash', { credential_required: true, configured: true }),
+      provider('custom:relay', 'Relay Custom', 'gpt-4o', {
+        source: 'user_config',
+        base_url: 'https://relay.example.com/v1',
+        catalog_id: 'openai',
+        credential_required: true,
+        configured: true,
+      }),
+    ];
+    const connectBodies: unknown[] = [];
+    const baseFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/providers/connect' && init?.method === 'POST') {
+        connectBodies.push(JSON.parse(String(init.body)));
+        return json(401, { detail: { code: 'credential_rejected', step: 'check', message: 'bad key' } });
+      }
+      return baseFetch(input, init);
+    }));
+
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: '系统设置' }));
+    const nav = screen.getByRole('navigation', { name: '系统菜单' });
+    fireEvent.click(within(nav).getByRole('button', { name: /连接/ }));
+
+    const relayToggle = await screen.findByRole('button', { name: /Relay Custom/ });
+    if (relayToggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(relayToggle);
+    fireEvent.click(screen.getAllByRole('button', { name: '更换' })[0]);
+
+    const keyInput = screen.getByLabelText('Relay Custom 的新密钥');
+    fireEvent.change(keyInput, { target: { value: 'sk-bad-custom' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => expect(connectBodies).toHaveLength(1));
+    expect(connectBodies[0]).toEqual({
+      provider_id: 'custom:relay',
+      api_key: 'sk-bad-custom',
+    });
+    expect(await screen.findByRole('alert')).toHaveTextContent('密钥被拒绝了');
+    expect(screen.getByLabelText('Relay Custom 的新密钥')).toHaveValue('sk-bad-custom');
+  });
+
+  it('rekeys the exact custom profile by provider_id when two profiles share base_url and null catalog_id', async () => {
+    const idA = 'custom:11111111-1111-1111-1111-111111111111';
+    const idB = 'custom:22222222-2222-2222-2222-222222222222';
+    providers = [
+      provider('deepseek', 'DeepSeek', 'deepseek-v4-flash', { credential_required: true, configured: true }),
+      provider(idA, 'Relay A', 'gpt-4o', {
+        source: 'user_config',
+        base_url: 'https://relay.example.com/v1',
+        catalog_id: null,
+        credential_required: true,
+        configured: true,
+      }),
+      provider(idB, 'Relay B', 'gpt-4o', {
+        source: 'user_config',
+        base_url: 'https://relay.example.com/v1',
+        catalog_id: null,
+        credential_required: true,
+        configured: true,
+      }),
+    ];
+    const connectBodies: Array<Record<string, unknown>> = [];
+    let callCount = 0;
+    const baseFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/providers/connect' && init?.method === 'POST') {
+        callCount += 1;
+        connectBodies.push(JSON.parse(String(init.body)));
+        if (callCount === 1) {
+          return json(200, { provider_id: idB, configuration_version: 'v2', default_model: 'gpt-4o' });
+        }
+        return json(401, { detail: { code: 'credential_rejected', step: 'check', message: 'bad key' } });
+      }
+      if (decodeURIComponent(url).startsWith(`/api/providers/${idA}/models`)
+        || decodeURIComponent(url).startsWith(`/api/providers/${idB}/models`)) {
+        return json(200, { catalog: [capability('gpt-4o')] });
+      }
+      return baseFetch(input, init);
+    }));
+
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: '系统设置' }));
+    const nav = screen.getByRole('navigation', { name: '系统菜单' });
+    fireEvent.click(within(nav).getByRole('button', { name: /连接/ }));
+
+    const relayBToggle = await screen.findByRole('button', { name: /Relay B/ });
+    if (relayBToggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(relayBToggle);
+    const relayBRow = relayBToggle.closest('.ws2-cx-row') as HTMLElement;
+    fireEvent.click(within(relayBRow).getByRole('button', { name: '更换' }));
+
+    fireEvent.change(screen.getByLabelText('Relay B 的新密钥'), { target: { value: 'sk-new-b' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => expect(connectBodies).toHaveLength(1));
+    expect(connectBodies[0]).toEqual({ provider_id: idB, api_key: 'sk-new-b' });
+    expect('base_url' in connectBodies[0]).toBe(false);
+    await waitFor(() => expect(screen.queryByLabelText('Relay B 的新密钥')).toBeNull());
+
+    fireEvent.click(within(relayBRow).getByRole('button', { name: '更换' }));
+    fireEvent.change(screen.getByLabelText('Relay B 的新密钥'), { target: { value: 'sk-bad-b' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+
+    await waitFor(() => expect(connectBodies).toHaveLength(2));
+    expect(connectBodies[1]).toEqual({ provider_id: idB, api_key: 'sk-bad-b' });
+    expect(await screen.findByRole('alert')).toHaveTextContent('密钥被拒绝了');
+    expect(screen.getByLabelText('Relay B 的新密钥')).toHaveValue('sk-bad-b');
+  });
+});
+
+describe('Workstation data relocation restart lock across panels (Fix #6)', () => {
+  it('keeps restart banner and read-only lock across tab switches and closing back to chat without doomed remount fetches', async () => {
+    let moveDone = false;
+    const postMoveUrls: string[] = [];
+    const baseFetch = globalThis.fetch;
+
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+      if (moveDone && (
+        url === '/api/auth/state'
+        || url === '/api/data/status'
+        || url === '/api/data/location'
+        || url === '/api/data/disk'
+        || url.startsWith('/api/worldlines/summary')
+        || url.startsWith('/api/conversations')
+        || url.startsWith('/api/memory/chart')
+        || url.startsWith('/api/data/usage')
+        || url.startsWith('/api/data/asset-pack')
+        || url.startsWith('/api/asset-pack')
+        || (url.startsWith('/api/providers/') && url.endsWith('/models'))
+        || url === '/health/dependencies'
+      )) {
+        postMoveUrls.push(url);
+      }
+      if (url === '/api/auth/state') return json(200, { passcode_set: false });
+      if (url === '/api/data/status') return json(200, { status: 'ok', detail: null, backups: [] });
+      if (url === '/api/data/location' && method === 'GET') {
+        return json(200, {
+          path: '/Users/okabe/.amadeus',
+          default_path: '/Users/okabe/.amadeus',
+          source: 'default',
+          movable: true,
+          previous_path: null,
+          previous_exists: false,
+        });
+      }
+      if (url === '/api/data/disk' && method === 'GET') {
+        return json(200, { categories: { conversations_memory: 1024 }, total_bytes: 1024 });
+      }
+      if (url === '/api/data/location/check' && method === 'POST') {
+        return json(200, { ok: true, errors: [], warnings: [], needed_bytes: 1024, free_bytes: 10_000_000 });
+      }
+      if (url === '/api/data/location/move' && method === 'POST') {
+        moveDone = true;
+        return json(200, { restart_required: true, path: '/mnt/amadeus-next' });
+      }
+      return baseFetch(input, init);
+    }));
+
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    await waitFor(() => expect(screen.getByRole('button', { name: '模型供应商' })).not.toBeDisabled());
+    expect(screen.getByLabelText('输入消息')).not.toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: '系统设置' }));
+    const nav = screen.getByRole('navigation', { name: '系统菜单' });
+    fireEvent.click(within(nav).getByRole('button', { name: /数据/ }));
+
+    const targetInput = await screen.findByLabelText('目标数据目录');
+    fireEvent.change(targetInput, { target: { value: '/mnt/amadeus-next' } });
+    fireEvent.click(screen.getByRole('button', { name: '检查目标目录' }));
+    await screen.findByTestId('location-check-result');
+    fireEvent.click(screen.getByRole('button', { name: '开始迁移并重启' }));
+
+    await waitFor(() => expect(screen.getAllByTestId('location-restart-required')).toHaveLength(1));
+    expect(within(screen.getByTestId('location-restart-required')).getByRole('button', { name: '立即重启' })).toBeInTheDocument();
+
+    // Switch to 关于 tab: banner stays visible (1 instance), bundle button disabled with relocating note.
+    fireEvent.click(within(nav).getByRole('button', { name: /关于/ }));
+    expect(screen.getAllByTestId('location-restart-required')).toHaveLength(1);
+    expect(screen.getByTestId('about-relocating-note')).toHaveTextContent('数据已迁移至新位置，重启后才能生成反馈包。');
+    expect(screen.getByRole('button', { name: '生成反馈包' })).toBeDisabled();
+
+    // Switch to 世界线, 用量, and 角色与对话 tabs: zero post-move fetches, read-only notes visible.
+    fireEvent.click(within(nav).getByRole('button', { name: /世界线/ }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(postMoveUrls).toEqual([]);
+
+    fireEvent.click(within(nav).getByRole('button', { name: /用量/ }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(postMoveUrls).toEqual([]);
+    expect(screen.getByTestId('usage-relocating-note')).toHaveTextContent('数据已迁移至新位置，重启后才能查看用量。');
+    expect(screen.getByRole('radio', { name: '本月' })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: '这个会话' })).toBeDisabled();
+    expect(screen.getByRole('radio', { name: '全部' })).toBeDisabled();
+
+    fireEvent.click(within(nav).getByRole('button', { name: /角色与对话/ }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(postMoveUrls).toEqual([]);
+    expect(screen.getByTestId('pack-relocating-note')).toHaveTextContent('数据已迁移至新位置，重启后才能管理素材包。');
+    expect(screen.getByText('待重启后读取')).toBeInTheDocument();
+
+    // Switch back to 数据 tab: no doomed remount fetches, controls remain locked, still only 1 banner.
+    fireEvent.click(within(nav).getByRole('button', { name: /数据/ }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(postMoveUrls).toEqual([]);
+    expect(screen.getAllByTestId('location-restart-required')).toHaveLength(1);
+    const locationSec = screen.getByRole('region', { name: '数据位置' });
+    expect(within(locationSec).getByText('/mnt/amadeus-next')).toBeInTheDocument();
+    expect(screen.getByLabelText('目标数据目录')).toBeDisabled();
+    expect(screen.getByText('数据已迁移，重启 AMADEUS 后可查看或修改。')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '立即备份' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '导出' })).toBeDisabled();
+
+    // Close menu back to chat: banner stays visible above composer and chat controls stay locked.
+    fireEvent.click(screen.getByRole('button', { name: '回到对话' }));
+    expect(screen.getByTestId('location-restart-required')).toBeInTheDocument();
+    expect(screen.getByLabelText('输入消息')).toBeDisabled();
+    expect(screen.getByRole('button', { name: '发送' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '模型供应商' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'MEMORY' })).toBeDisabled();
   });
 });

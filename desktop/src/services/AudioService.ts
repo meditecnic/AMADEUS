@@ -1,5 +1,7 @@
 import { Howl, Howler } from 'howler';
-import { packAsset } from '../assetPack';
+import * as assetPackMod from '../assetPack';
+
+const resolvePackAsset = (path: string): string | null => assetPackMod.packAsset?.(path) ?? null;
 
 type Worldline = 'steins_gate' | 'beta';
 
@@ -23,12 +25,25 @@ class AudioService {
   private enableSFX = true;
   private readonly fadeDuration = 1800;
   private activeWorldline: Worldline | null = null;
+  private activeBgmPath: string | null = null;
   private playlist: string[] = [];
   private playlistIndex = 0;
   private transitionId = 0;
 
   constructor() {
     this.loadPreferences();
+    assetPackMod.subscribeAssetPack?.(() => {
+      this.handleAssetPackChange();
+    });
+  }
+
+  private handleAssetPackChange() {
+    if (!this.enableBGM) return;
+    if (this.activeWorldline) {
+      this.playBGMForWorldline(this.activeWorldline);
+    } else if (this.activeBgmPath) {
+      this.playBGM(this.activeBgmPath);
+    }
   }
 
   private loadPreferences() {
@@ -156,13 +171,17 @@ class AudioService {
   public playBGM(path: string, volume?: number) {
     if (!this.enableBGM) return;
     // All music is original soundtrack from the optional pack; without it the channel stays silent.
-    const src = packAsset(path);
-    if (!src) return;
+    const src = resolvePackAsset(path);
+    if (!src) {
+      this.stopBGM();
+      return;
+    }
     if (volume !== undefined) this.bgmVolume = Math.max(0, Math.min(1, volume));
 
     if (this.currentBGM && (this.currentBGM as any)._amadeusSrc === src) return;
 
     this.activeWorldline = null;
+    this.activeBgmPath = path;
     this.playlist = [];
     this.transitionTo(src, true);
   }
@@ -172,6 +191,7 @@ class AudioService {
     const oldBGM = this.currentBGM;
     this.currentBGM = null;
     this.activeWorldline = null;
+    this.activeBgmPath = null;
     this.playlist = [];
 
     if (oldBGM) this.unloadAfterFade(oldBGM);
@@ -181,12 +201,19 @@ class AudioService {
     if (!this.enableBGM) return;
     if (volume !== undefined) this.bgmVolume = Math.max(0, Math.min(1, volume));
 
-    const nextPlaylist = WORLDLINE_PLAYLISTS[worldline].map(packAsset).filter((src): src is string => Boolean(src));
-    if (nextPlaylist.length === 0) return;
-    const sameWorldline = this.activeWorldline === worldline && this.playlist.length > 0;
-    if (sameWorldline && this.currentBGM) return;
+    const nextPlaylist = WORLDLINE_PLAYLISTS[worldline].map(resolvePackAsset).filter((src): src is string => Boolean(src));
+    if (nextPlaylist.length === 0) {
+      this.stopBGM();
+      return;
+    }
+    const samePlaylist =
+      this.activeWorldline === worldline &&
+      this.playlist.length === nextPlaylist.length &&
+      this.playlist.every((src, idx) => src === nextPlaylist[idx]);
+    if (samePlaylist && this.currentBGM) return;
 
     this.activeWorldline = worldline;
+    this.activeBgmPath = null;
     this.playlist = [...nextPlaylist];
     // A worldline switch starts a fresh random draw. Using pickNextTrack here
     // would always select the opposite index because each playlist has two
@@ -197,7 +224,7 @@ class AudioService {
 
   public playSFX(path: string, volume?: number) {
     if (!this.enableSFX || this.isMuted) return;
-    const src = packAsset(path);
+    const src = resolvePackAsset(path);
     if (!src) return;
     const vol = volume !== undefined ? volume : this.sfxVolume;
 

@@ -329,8 +329,8 @@ describe('HistorySidebar conversations', () => {
       />,
     );
 
-    expect(screen.getByTestId('identity-badge-one')).toHaveTextContent('OKABE');
-    expect(screen.getByTestId('identity-badge-two')).toHaveTextContent('SELF');
+    expect(screen.getByTestId('identity-badge-one')).toHaveTextContent('冈部');
+    expect(screen.getByTestId('identity-badge-two')).toHaveTextContent('自己');
     // No control to mutate the active conversation's mode in place (Q21).
     expect(screen.queryByTestId('identity-mode-switch-active')).toBeNull();
     expect(screen.queryByLabelText(/切换当前会话身份/)).toBeNull();

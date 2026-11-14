@@ -1,0 +1,930 @@
+/*
+ * The system page (amadeus-ops design/20261108-ui-inventory.md §2.9), on the sheet like the rest. Down the left, an
+ * index of its sections, ruled like the title block, the current one's number ringed in pencil as the session list
+ * rings its conversation. Each section is a ruled form: a row per setting, the value it holds marked in pencil (a mark
+ * on a scale, a ring round a word, a ticked box), its acts on outline plates. The worldline instrument keeps its tubes
+ * and its diagram, without the glow. After slips.css.
+ */
+
+.ws2 {
+  /* a hand-drawn loop (drafting.ts pencilLoop, seed "choice"), stretched round a chosen word */
+  --pencil-loop: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-47 -19 94 38' preserveAspectRatio='none'%3E%3Cpath d='M-31.2 9.7C-32.5 8.7 -37.8 5.6 -39.1 3.4C-40.4 1.2 -40.3 -1 -39 -3.2C-37.7 -5.3 -35.4 -7.7 -31.4 -9.5C-27.3 -11.3 -21.2 -13.1 -14.8 -14C-8.4 -15 0.3 -15.4 7.2 -15C14.2 -14.6 21.6 -13.2 26.9 -11.7C32.2 -10.1 36.3 -7.9 38.8 -5.8C41.3 -3.6 42.5 -1.2 42.1 1.1C41.6 3.3 39.7 5.8 36.3 7.8C32.9 9.8 27.8 12 21.8 13.3C15.8 14.5 7.6 15.4 0.3 15.5C-7 15.5 -15.5 14.8 -21.8 13.6C-28.2 12.4 -34.1 10.4 -37.8 8.3C-41.4 6.3 -42.6 2.5 -43.6 1.3' fill='none' stroke='%23000' stroke-width='1.5' stroke-linecap='round' vector-effect='non-scaling-stroke'/%3E%3C/svg%3E");
+}
+
+/* ---------- the page ---------- */
+
+.ws2-sysmenu {
+  --index: 232px; --row: 50px;
+  grid-row: 2; grid-column: 1 / 3; position: relative; z-index: 5; min-height: 0;
+  display: grid; grid-template-columns: var(--index) minmax(0, 1fr);
+  padding: 26px clamp(24px, 3vw, 48px) 24px 0;
+  visibility: hidden; pointer-events: none; transition: visibility 0s .14s;
+}
+.ws2-sysmenu.open { visibility: visible; pointer-events: auto; transition: none; }
+
+/* The index: the sections by number, ruled off one from the next. */
+.ws2-sys-index { position: relative; z-index: 1; align-self: start; display: flex; flex-direction: column; padding: 0 24px 0 30px; }
+.ws2-sys-item {
+  position: relative; display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: center; height: var(--row); padding: 0 !important;
+  border: 0; border-bottom: 1px solid var(--ws-rule); border-radius: 0; background: none; text-align: left; color: var(--ws-ink-2);
+  opacity: 0; transform: translateX(-6px); transition: opacity .08s, transform .08s, color .15s;
+}
+.ws2-sys-item:first-child { border-top: 1px solid var(--ws-rule); }
+.ws2-sysmenu.open .ws2-sys-item {
+  opacity: 1; transform: none;
+  transition: opacity .18s ease calc(.1s + var(--i) * 30ms), transform .18s ease calc(.1s + var(--i) * 30ms), color .15s;
+}
+.ws2-sys-item .no { position: relative; justify-self: start; padding-left: 2px; font-family: var(--ws-mono); font-size: 10px; letter-spacing: .08em; color: var(--ws-ink-3); }
+.ws2-sys-item .no .ws2-ring { position: absolute; left: calc(50% + 1px); top: 50%; translate: -50% -50%; }
+.ws2-sys-item .lbl { display: flex; flex-direction: column; gap: 4px; min-width: 0; line-height: 1.1; }
+.ws2-sys-item .zh {
+  font-family: var(--ws-serif-cjk); font-size: 17px; letter-spacing: .16em; white-space: nowrap;
+  text-decoration: underline; text-decoration-color: transparent; text-decoration-thickness: 1.5px; text-underline-offset: 6px;
+  transition: color .15s, text-decoration-color .15s;
+}
+.ws2-sys-item .en { font-family: var(--ws-mono); font-size: 8.5px; letter-spacing: .3em; color: var(--ws-ink-3); }
+.ws2-sys-item:is(:hover, :focus-visible) { color: var(--ws-ink); outline: none; }
+/* pointed at: the pencil line under the word, as in the log */
+.ws2-sys-item:is(:hover, :focus-visible):not(.on) .zh { text-decoration-color: var(--log-pencil); }
+.ws2-sys-item.on, .ws2-sys-item.on .no { color: var(--ws-ink); }
+/* back to the conversation, under the list: a pencil arrow pointing out, and its key */
+.ws2-sys-item.back { height: 40px; margin-top: 18px; border-top: 0; border-bottom: 0; }
+.ws2-sys-item.back .zh { font-size: 13px; letter-spacing: .24em; }
+.ws2-sys-item.back .no { width: 13px; height: 11px; padding: 0; rotate: 180deg; background: var(--ws-ink-3); -webkit-mask: var(--pencil-arrow) center / contain no-repeat; mask: var(--pencil-arrow) center / contain no-repeat; transition: background .15s; }
+.ws2-sys-item.back:is(:hover, :focus-visible) .no { background: var(--log-pencil); }
+
+.ws2-sys-body {
+  position: relative; z-index: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; max-width: 780px; padding: 0 12px 28px 40px; container-type: inline-size;
+  border-left: 1px solid var(--ws-rule); opacity: 0; transition: opacity .08s;
+}
+.ws2-sysmenu.open .ws2-sys-body { opacity: 1; transition: opacity .2s ease .16s; animation: ws2-body-in .22s ease-out; }
+@keyframes ws2-body-in { from { opacity: 0; transform: translateY(6px); } }
+.ws2-sys-body > header { display: flex; align-items: baseline; gap: 14px; margin: 0 0 14px; padding: 2px 0 14px; border-bottom: 1px solid var(--ws-rule); }
+.ws2-sys-body > header .no { font-family: var(--ws-mono); font-size: 10.5px; letter-spacing: .08em; color: var(--ws-ink-3); }
+.ws2-sys-body > header h2 { margin: 0; font-family: var(--ws-serif-cjk); font-size: 26px; font-weight: 400; letter-spacing: .18em; color: var(--ws-ink); }
+.ws2-sys-body > header .en { font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .36em; color: var(--ws-ink-3); }
+
+/* ---------- rows ---------- */
+
+.ws2-m-row { display: flex; align-items: center; gap: 18px; width: 100%; min-height: 58px; border-bottom: 1px solid var(--ws-rule); }
+.ws2-m-label { display: flex; flex-direction: column; gap: 4px; min-width: 132px; }
+.ws2-m-label b { font-weight: 400; font-size: 14px; color: var(--ws-ink); }
+.ws2-m-label small { font-size: 11.5px; color: var(--ws-ink-3); }
+.ws2-m-val { min-width: 34px; font-family: var(--ws-mono); font-size: 12.5px; letter-spacing: .08em; color: var(--ws-ink); text-align: right; font-variant-numeric: tabular-nums; }
+/* a group of rows: its name in small capitals over a rule */
+.ws2-m-group {
+  display: flex; align-items: center; gap: 12px; margin: 28px 0 0; padding-bottom: 8px; border-bottom: 1px solid var(--ws-rule);
+  font-family: var(--ws-mono); font-size: 10px; letter-spacing: .28em; color: var(--ws-ink-3);
+}
+.ws2-m-note { margin: 0; font-size: 12.5px; line-height: 1.7; color: var(--ws-ink-3); text-wrap: pretty; }
+/* a note reads as one line of context above the act; the act sits right and never squeezes the note */
+.ws2-m-foot { display: flex; flex-direction: column; align-items: flex-end; gap: 12px; margin-top: 18px; }
+.ws2-m-foot .ws2-m-note { align-self: stretch; }
+.ws2-m-foot .ws2-m-btn { white-space: nowrap; }
+
+/* An act is an outline plate (the log's and the dialogs'), a size up. */
+/* (plain selectors, not one :is(), so the armed key below can outrank them) */
+.ws2 .ws2-m-btn, .ws2 .settings-embedded .modal-footer .save-btn {
+  --edge: var(--ws-ink-3);
+  position: relative; flex: none; height: 34px; padding: 0 20px 0 22px; border: 0; border-radius: 0; overflow: hidden;
+  font-family: var(--ws-sans); font-size: 12.5px; letter-spacing: .16em; color: var(--ws-ink) !important;
+  box-shadow: inset 0 0 0 1px var(--edge); clip-path: polygon(8px 0, 100% 0, 100% 100%, 0 100%, 0 8px);
+  background: linear-gradient(135deg, transparent 42.8%, var(--edge) 42.8% 52.8%, transparent 52.8%) 0 0 / 9px 9px no-repeat !important;
+  transition: color .15s ease, background-color .15s ease;
+}
+.ws2 .ws2-m-btn:is(:hover, :focus-visible):not(:disabled), .ws2 .settings-embedded .modal-footer .save-btn:is(:hover, :focus-visible):not(:disabled) {
+  --edge: var(--ws-ink-2); background-color: rgba(255, 255, 255, .05) !important; outline: none;
+}
+.ws2 .ws2-m-btn:disabled, .ws2 .settings-embedded .modal-footer .save-btn:disabled { --edge: var(--ws-line-2); color: var(--ws-ink-3) !important; cursor: default; }
+
+/* Mute: a box to tick, then the word; ticked, it is filled in ink. */
+.ws2-led {
+  display: inline-flex; align-items: center; gap: 8px; height: 26px; padding: 0 4px !important; flex: none; border: 0; border-radius: 0;
+  background: none; box-shadow: none; font-family: var(--ws-sans); font-size: 12px; letter-spacing: .12em; color: var(--ws-ink-3);
+}
+.ws2-led i { flex: none; width: 12px; height: 12px; border: 1px solid var(--ws-ink-3); border-radius: 0; background: none; transition: box-shadow .15s ease, border-color .15s ease; }
+.ws2-led:is(:hover, :focus-visible) { color: var(--ws-ink-2); outline: none; }
+.ws2-led:focus-visible i { outline: 1px dashed var(--ws-ink-2); outline-offset: 2px; }
+.ws2-led.on { color: var(--ws-ink); }
+.ws2-led.on i { border-color: var(--ws-ink-2); box-shadow: inset 0 0 0 2px var(--ws-bg), inset 0 0 0 6px var(--ws-ink); }
+.ws2-led-slot { width: 64px; flex: none; }
+.ws2-channel.muted .ws2-m-label { opacity: .5; }
+/* channel rows share one column grid, so the boxes and the scales line up */
+.ws2-channel .ws2-m-label { flex: 0 0 150px; min-width: 0; }
+
+/* In a narrow body a channel's name goes over its controls. */
+@container (max-width: 520px) {
+  .ws2-channel { flex-wrap: wrap; row-gap: 2px; padding: 10px 0 6px; }
+  .ws2-channel .ws2-m-label { flex: 1 0 100%; flex-direction: row; align-items: baseline; gap: 10px; }
+}
+/* A narrow window gives the index less room. */
+@media (max-width: 1180px) {
+  .ws2-sysmenu { --index: 192px; }
+  .ws2-sys-index { padding: 0 16px 0 22px; }
+  .ws2-sys-body { padding-left: 30px; }
+}
+
+/* A scale: a hairline with ticks under it, the value marked on it in pencil. */
+.ws2-ruler { position: relative; flex: 1; min-width: 140px; padding: 7px 0 12px; }
+.ws2 :is(.ws2-ruler, .settings-embedded) input[type='range'] {
+  -webkit-appearance: none; appearance: none; display: block; width: 100%; height: 1.5px; margin: 0; border: 0; border-radius: 0; box-shadow: none; cursor: pointer;
+  background: linear-gradient(90deg, var(--ws-ink-2) var(--val, 0%), var(--ws-line-2) var(--val, 0%));
+}
+.ws2 :is(.ws2-ruler, .settings-embedded) input[type='range']::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 3px; height: 17px; border: 0; border-radius: 0; background: var(--log-pencil); box-shadow: none; cursor: pointer;
+}
+.ws2 :is(.ws2-ruler, .settings-embedded) input[type='range']::-moz-range-thumb { width: 3px; height: 17px; border: 0; border-radius: 0; background: var(--log-pencil); }
+.ws2 :is(.ws2-ruler, .settings-embedded) input[type='range']:focus-visible { outline: none; }
+.ws2 :is(.ws2-ruler, .settings-embedded) input[type='range']:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px color-mix(in srgb, var(--log-pencil) 30%, transparent); }
+.ws2 :is(.ws2-ruler, .settings-embedded) input[type='range']:disabled { cursor: default; }
+.ws2-ruler .ticks { position: absolute; left: 1px; right: 1px; bottom: 0; display: flex; justify-content: space-between; align-items: flex-end; pointer-events: none; }
+.ws2-ruler .ticks i { width: 1px; height: 4px; background: var(--ws-ink-3); opacity: .5; }
+.ws2-ruler .ticks i.major { height: 7px; opacity: .9; }
+.ws2-ruler.off { opacity: .35; }
+
+/* ---------- 01 the worldline: two cards, each cut from its own line's sheet (WorldlinePanel.tsx) ---------- */
+
+/* The other line's accent (its key, the gap dimension) is --tgt. */
+.ws2-wl {
+  --tgt: var(--scale-beta-accent-primary); --tgt-rgb: var(--scale-beta-accent-rgb);
+  --gap: clamp(16px, 5.4cqi, 40px);
+  container-type: inline-size;
+}
+.ws2-wl[data-target='sg'] { --tgt: var(--scale-sg-accent-primary); --tgt-rgb: var(--scale-sg-accent-rgb); }
+.ws2-wl-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--gap); padding-top: 20px; }
+
+/* --ink: the card's own line colour (slate silver, β amber), whatever line the page is on. */
+.ws2-wlc { --ink: 214, 226, 233; --p: clamp(11px, 3.2cqi, 22px); position: relative; min-width: 0; animation: ws2-wlc-in .5s cubic-bezier(.2, .7, .2, 1) .05s both; }
+.ws2-wlc.beta { --ink: 236, 156, 92; animation-delay: .14s; }
+@keyframes ws2-wlc-in { from { opacity: 0; transform: translateY(10px); } }
+
+.ws2-wlc .face { position: relative; height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+/* slate, lifted off the sheet and taped; a hairline frame inside the edge */
+.ws2-wlc.sg .face {
+  background:
+    linear-gradient(180deg, rgba(12, 15, 18, .3), rgba(9, 11, 13, .74) 70%),
+    url('/assets/sheet/grain.webp') 0 0 / 512px 512px repeat,
+    url('/assets/sheet/sg-slate.webp') 24% 34% / 900px auto;
+  background-color: #101418; background-blend-mode: normal, overlay, normal;
+  box-shadow: 0 18px 30px rgba(0, 0, 0, .5), 0 2px 4px rgba(0, 0, 0, .4), inset 0 0 0 1px rgba(226, 232, 235, .2);
+}
+.ws2-wlc.sg .face::before { content: ''; position: absolute; inset: 5px; z-index: 1; border: 1px solid rgba(226, 232, 235, .09); pointer-events: none; }
+/* β: the wall's metal in an amber double rule, as the β slips are framed */
+.ws2-wlc.beta .face {
+  background:
+    linear-gradient(180deg, rgba(6, 10, 10, .26), rgba(5, 8, 8, .76) 70%),
+    url('/assets/sheet/grain.webp') 0 0 / 512px 512px repeat,
+    url('/assets/sheet/beta-wall.webp') 62% 38% / 900px auto;
+  background-color: #0b1110; background-blend-mode: normal, overlay, normal;
+  box-shadow: inset 0 0 0 1px rgba(233, 150, 80, .5), 0 18px 30px rgba(0, 0, 0, .45);
+  outline: 1px solid rgba(233, 150, 80, .2); outline-offset: 4px;
+}
+/* a cold card sits in shadow; reaching for it brings it up */
+.ws2-wlc .face::after { content: ''; position: absolute; inset: 0; z-index: 0; background: rgba(4, 6, 8, .44); pointer-events: none; transition: opacity .45s ease; }
+.ws2-wlc:is(.cur, .aim) .face::after { opacity: 0; }
+.ws2-wlc .face > * { position: relative; z-index: 1; }
+
+/* the figure, run off the card's edges */
+.ws2-wlc .plate { aspect-ratio: 3 / 2; }
+.ws2-wlc .fig { position: absolute; inset: 0; display: block; width: 100%; height: 100%; transition: opacity .45s ease, filter .45s ease; }
+.ws2-wlc:not(.cur):not(.aim) .fig { opacity: .4; filter: saturate(.3); }
+.ws2-wlc .fig :is(path, circle) { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.ws2-wlc .fig .ln { stroke: rgba(var(--ink), .62); stroke-width: 1.15; }
+.ws2-wlc .fig .ln.fine { stroke: rgba(var(--ink), .4); stroke-width: .9; }
+.ws2-wlc .fig .tk { stroke: rgba(var(--ink), .6); stroke-width: 1.1; }
+.ws2-wlc .fig .dash { stroke: rgba(var(--ink), .3); stroke-width: .9; stroke-dasharray: 2 4; }
+.ws2-wlc .fig .cl { stroke: rgba(var(--ink), .16); stroke-width: .8; stroke-dasharray: 10 3 2 3; }
+.ws2-wlc .fig .num { fill: rgba(var(--ink), .7); font-family: 'EB Garamond', Georgia, serif; font-size: 12.5px; letter-spacing: .02em; }
+.ws2-wlc .fig .hand { fill: rgba(var(--ink), .2); stroke: rgba(var(--ink), .85); stroke-width: .9; }
+.ws2-wlc .fig .hub { fill: rgba(var(--ink), .9); }
+.ws2-wlc .fig .orbit { stroke: rgba(var(--ink), .62); stroke-width: .8; }
+/* drawn in as the page opens */
+.ws2-sysmenu.open .ws2-wlc .fig [pathLength] { stroke-dasharray: 1; stroke-dashoffset: 1; animation: ws2-draw 1.4s cubic-bezier(.4, .1, .2, 1) .25s forwards; }
+.ws2-sysmenu.open .ws2-wlc .fig .orbit { animation-duration: 2.4s; }
+.ws2-wlc .moth { position: absolute; left: 3%; bottom: 7%; width: 32%; rotate: -10deg; opacity: .72; pointer-events: none; transition: opacity .45s ease; }
+.ws2-wlc:not(.cur):not(.aim) .moth { opacity: .3; }
+.ws2-wlc .pl { position: absolute; left: var(--p); top: calc(var(--p) - 3px); font-family: 'EB Garamond', Georgia, serif; font-size: 14px; letter-spacing: .1em; color: rgba(var(--ink), .7); }
+.ws2-wlc .cap { position: absolute; right: var(--p); bottom: 5px; z-index: 1; font-family: var(--ws-mono); font-size: 9px; letter-spacing: .2em; color: rgba(var(--ink), .5); white-space: nowrap; }
+
+/* the name, then the reading on eight tubes with its figure under them */
+.ws2-wlc .nm {
+  display: flex; align-items: baseline; gap: 10px; min-height: 30px; margin: 0; padding: 6px var(--p) 0;
+  font-family: var(--ws-display); font-weight: 500; font-size: clamp(13px, 3.5cqi, 19px); line-height: 1.2; letter-spacing: .22em; color: var(--ws-ink); white-space: nowrap;
+  transition: color .3s ease;
+}
+.ws2-wlc.beta .nm { font-size: clamp(21px, 5.6cqi, 30px); line-height: .95; letter-spacing: 0; }
+.ws2-wlc.beta .nm small { font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .32em; color: var(--ws-ink-3); }
+.ws2-wlc:not(.cur):not(.aim) .nm { color: var(--ws-ink-2); }
+.ws2-wlc .meter { padding: 10px var(--p) 0; }
+.ws2-wlc .meter .nixie { display: block; width: 100%; }
+.ws2-wlc .meter .read { display: flex; justify-content: space-between; gap: 8px; margin: 7px 0 0; font-family: var(--ws-mono); font-size: 9px; letter-spacing: .2em; color: var(--ws-ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ws2-wlc .meter .read span:last-child { letter-spacing: .08em; color: var(--ws-ink-2); }
+/* lit, cold, warming: the glass stays; only the cathodes' glow changes */
+.ws2-wlc .nx-glow { transition: opacity .5s ease; }
+.ws2-wlc:not(.cur):not(.aim) .nx-glow { opacity: 0; }
+.ws2-wlc:not(.cur):not(.aim) .nx-glass { stroke: rgba(255, 179, 107, .26); }
+.ws2-wlc:not(.cur) .nx-stack path { stroke: rgba(255, 196, 150, .12); }
+.ws2-wlc.aim .nx-glow { opacity: .9; animation: ws2-warm .7s steps(1) both; }
+.ws2-wl.aiming .ws2-wlc.cur .nx-glow { opacity: .3; }
+.ws2-sysmenu.open .ws2-wlc.cur .nx-lit { animation: ws2-ignite .55s steps(1) calc(.5s + var(--n) * 70ms) both; }
+@keyframes ws2-warm { 0% { opacity: 0; } 16% { opacity: .5; } 28% { opacity: .08; } 44% { opacity: .72; } 58% { opacity: .3; } 72%, 100% { opacity: .9; } }
+
+/* a drawing's title block: what the line holds */
+.ws2-wlc .block {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 14px var(--p) 0;
+  border-top: 1px solid rgba(var(--ink), .24); border-bottom: 1px solid rgba(var(--ink), .24);
+}
+.ws2-wlc .block > div { min-width: 0; padding: 6px 0 7px 9px; }
+.ws2-wlc .block > div:first-child { padding-left: 0; }
+.ws2-wlc .block > div + div { border-left: 1px solid rgba(var(--ink), .14); }
+.ws2-wlc .block dt { font-size: 10.5px; letter-spacing: .14em; color: var(--ws-ink-3); }
+.ws2-wlc .block dd { margin: 3px 0 0; font-family: var(--ws-mono); font-size: clamp(12px, 3.2cqi, 16px); color: var(--ws-ink); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* the key, or where you are */
+.ws2-wlc .act { display: flex; margin-top: auto; padding: 14px var(--p) var(--p); }
+.ws2-wlc .act .ws2-m-btn { flex: 1 1 auto; min-width: 0; padding: 0 10px 0 12px; }
+/* where you are is stamped, where the other card has its key */
+.ws2-wlc .act .here { position: relative; flex: 1; height: 34px; }
+.ws2-wlc .act .ws2-wlc-stamp { --stamp-word: clamp(13px, 3.6cqi, 16px); left: 50%; top: 50%; translate: -50% -50%; padding: 5px 12px 4px; white-space: nowrap; animation-delay: .7s; }
+
+/* how each is held to the sheet: a strip of tape over the slate's top edge; two solder stubs off the metal's */
+.ws2-wlc .tape {
+  position: absolute; left: 50%; top: -15px; z-index: 3; width: 96px; height: 34px; margin-left: -48px; pointer-events: none;
+  background: url('/assets/sheet/tape-1.webp') center / 100% 100% no-repeat; opacity: .78; rotate: -3deg;
+  filter: brightness(.82) drop-shadow(0 1px 1.5px rgba(0, 0, 0, .35));
+}
+.ws2-wlc .stub { position: absolute; top: -20px; z-index: 3; width: 1px; height: 15px; background: rgba(233, 150, 80, .5); pointer-events: none; }
+.ws2-wlc .stub::after { content: ''; position: absolute; left: -3px; top: -7px; width: 7px; height: 7px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgba(233, 150, 80, .65); }
+.ws2-wlc .stub.a { left: 24%; }
+.ws2-wlc .stub.b { right: 24%; }
+
+/* the gap between the two readings, dimensioned from card to card */
+.ws2-wl-dim {
+  display: flex; align-items: center; gap: 10px; height: 14px; margin: 14px calc((100% - var(--gap)) / 4) 0;
+  background: linear-gradient(rgba(var(--tgt-rgb), .4), rgba(var(--tgt-rgb), .4)) 0 0 / 1px 100% no-repeat,
+    linear-gradient(rgba(var(--tgt-rgb), .4), rgba(var(--tgt-rgb), .4)) 100% 0 / 1px 100% no-repeat;
+  transition: opacity .3s ease;
+}
+.ws2-wl-dim::before, .ws2-wl-dim::after { content: ''; flex: 1; height: 1px; background: rgba(var(--tgt-rgb), .32); }
+.ws2-wl-dim .d { font-family: var(--ws-mono); font-size: 10.5px; letter-spacing: .14em; color: rgba(var(--tgt-rgb), .7); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ws2-wl-dim.is-aimed::before, .ws2-wl-dim.is-aimed::after { background: rgba(var(--tgt-rgb), .7); }
+.ws2-wl-dim.is-aimed .d { color: var(--tgt); }
+.ws2-wl .ws2-m-note { margin: 16px 0 0; }
+
+@container (max-width: 330px) {
+  .ws2-wl-pair { grid-template-columns: minmax(0, 1fr); row-gap: 34px; }
+  .ws2-wl-dim { display: none; }
+}
+
+@keyframes ws2-draw { to { stroke-dashoffset: 0; } }
+@keyframes ws2-fade-in { to { opacity: 1; } }
+@keyframes ws2-ignite { 0% { opacity: 0; } 20% { opacity: .7; } 32% { opacity: .08; } 50% { opacity: 1; } 64% { opacity: .35; } 76%, 100% { opacity: 1; } }
+
+.ws2 .ws2-m-btn.armed { --edge: var(--tgt); color: var(--tgt) !important; background-color: color-mix(in srgb, var(--tgt) 10%, transparent) !important; }
+.ws2 .ws2-m-btn.armed:is(:hover, :focus-visible):not(:disabled) { --edge: var(--tgt); background-color: color-mix(in srgb, var(--tgt) 17%, transparent) !important; }
+
+/* ---------- her, while the page is open ---------- */
+
+/* The name card gives way to this one in the same place, drawn the same way (no box): who and how she is, over a
+   fading hairline, and the line she is saying. */
+.ws2-stage-preview {
+  position: absolute; right: calc(var(--fr-side) + 22px); bottom: calc(var(--fr-foot) + 16px); z-index: 4; width: 272px;
+  animation: ws2-body-in .22s ease-out .1s both;
+}
+.ws2-stage-preview::before {
+  content: ''; position: absolute; inset: -30px -26px -18px -48px; z-index: -1; pointer-events: none;
+  background: radial-gradient(ellipse 72% 78% at 62% 62%, color-mix(in srgb, var(--ws-bg) 88%, transparent) 30%, transparent 100%);
+}
+.ws2-stage-preview .head { position: relative; display: flex; align-items: baseline; gap: 10px; padding: 0 2px 8px; }
+.ws2-stage-preview .head::after {
+  content: ''; position: absolute; left: -26px; right: 0; bottom: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--ws-rule) 30%, var(--ws-line-2) 100%);
+}
+.ws2-stage-preview .who { font-family: var(--ws-serif); font-weight: 500; font-size: 13px; letter-spacing: .3em; color: var(--ws-ink); }
+.ws2-stage-preview .state { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font-size: 11px; letter-spacing: .12em; color: var(--ws-ink-2); }
+.ws2-stage-preview .state i { width: 5px; height: 5px; border-radius: 50%; background: var(--ws-ink-2); }
+.ws2-stage-preview p {
+  margin: 0; padding: 9px 2px 4px; font-family: var(--ws-read); font-size: 13px; line-height: 1.7; color: var(--ws-ink);
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.ws2-stage-preview button {
+  --edge: var(--ws-line-2);
+  height: 24px; margin: 6px 2px 0; padding: 0 10px 0 12px; border: 0; border-radius: 0; font-size: 11.5px; letter-spacing: .1em; color: var(--ws-ink-2);
+  box-shadow: inset 0 0 0 1px var(--edge); clip-path: polygon(6px 0, 100% 0, 100% 100%, 0 100%, 0 6px);
+  background: linear-gradient(135deg, transparent 42.8%, var(--edge) 42.8% 52.8%, transparent 52.8%) 0 0 / 7px 7px no-repeat;
+}
+.ws2-stage-preview button:is(:hover, :focus-visible) { --edge: var(--ws-ink-3); color: var(--ws-ink); background-color: rgba(255, 255, 255, .05); outline: none; }
+
+/* ---------- the embedded forms (SettingsModal's fields, set as rows) ---------- */
+
+.ws2 .settings-embedded { font-family: var(--ws-sans); color: var(--ws-ink); }
+.ws2 .settings-embedded .tab-panels, .ws2 .settings-embedded .tab-panel { display: block; padding: 0; margin: 0; background: none; border: 0; box-shadow: none; max-height: none; overflow: visible; }
+.ws2 .settings-embedded .setting-field { display: flex; flex-direction: column; gap: 8px; padding: 16px 0; margin: 0; border-bottom: 1px solid var(--ws-rule); background: none; }
+.ws2 .settings-embedded label, .ws2 .settings-embedded .connections-section-title { font-family: var(--ws-sans); font-size: 14px; letter-spacing: .02em; color: var(--ws-ink); text-transform: none; font-weight: 400; }
+.ws2 .settings-embedded .connections-section-title { margin: 24px 0 8px; font-family: var(--ws-mono); font-size: 10px; letter-spacing: .28em; color: var(--ws-ink-3); }
+.ws2 .settings-embedded :is(.setting-field-hint, .setting-hint, .connections-inline-hint, .connections-web-search-ops-note, .slider-endpoint, .custom-profile-meta, .search-provider-state) { font-size: 12px; line-height: 1.7; color: var(--ws-ink-3); }
+
+/* A field is a line to write on, as in the composer: a hairline floor with its end ticks. */
+.ws2 .settings-embedded :is(.salieri-input, .salieri-select-trigger) {
+  height: 36px; width: 100%; max-width: 520px; padding: 0 2px; border: 0 !important; border-bottom: 1px solid var(--ws-line-2) !important; border-radius: 0; box-shadow: none;
+  background: linear-gradient(var(--ws-line-2), var(--ws-line-2)) 0 100% / 1px 7px no-repeat, linear-gradient(var(--ws-line-2), var(--ws-line-2)) 100% 100% / 1px 7px no-repeat !important;
+  font-family: var(--ws-mono); font-size: 13px; color: var(--ws-ink);
+}
+.ws2 .settings-embedded .salieri-select-trigger { font-family: var(--ws-sans); }
+.ws2 .settings-embedded :is(.salieri-input, .salieri-select-trigger):is(:focus, :focus-visible) { outline: none; border-bottom-color: var(--ws-ink) !important; }
+.ws2 .settings-embedded .salieri-input::placeholder { font-family: var(--ws-sans); letter-spacing: .02em; color: var(--ws-ink-3); }
+
+/* a box to tick, filled in ink */
+.ws2 .settings-embedded .checkbox-label { display: inline-flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ws-ink); cursor: pointer; }
+.ws2 .settings-embedded .salieri-checkbox[type='checkbox'] {
+  appearance: none; -webkit-appearance: none; flex: none; width: 14px; height: 14px; margin: 0; border: 1px solid var(--ws-ink-3); border-radius: 0;
+  background: none; cursor: pointer; transition: box-shadow .15s ease, border-color .15s ease;
+}
+.ws2 .settings-embedded .salieri-checkbox[type='checkbox']:checked { border-color: var(--ws-ink-2); box-shadow: inset 0 0 0 2px var(--ws-bg), inset 0 0 0 7px var(--ws-ink); }
+.ws2 .settings-embedded .salieri-checkbox[type='checkbox']:focus-visible { outline: 1px dashed var(--ws-ink-2); outline-offset: 2px; }
+
+/* a choice among words: the chosen one ringed in pencil */
+.ws2 .settings-embedded .identity-mode-options { display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px 22px; max-width: 520px; margin: 0; padding: 4px 0 2px 4px; }
+.ws2 .settings-embedded .identity-mode-option { position: relative; padding: 6px 14px; border: 0; border-radius: 0; background: none; color: var(--ws-ink-2); cursor: pointer; transition: color .15s; }
+.ws2 .settings-embedded .identity-mode-option input { position: absolute; left: 0; top: 0; width: 1px; height: 1px; margin: 0; opacity: 0; pointer-events: none; }
+.ws2 .settings-embedded .identity-mode-option:hover { color: var(--ws-ink); }
+.ws2 .settings-embedded .identity-mode-option:has(input:checked) { color: var(--ws-ink); background: none; border: 0; }
+.ws2 .settings-embedded .identity-mode-option:has(input:checked)::after {
+  content: ''; position: absolute; inset: -4px -6px; pointer-events: none; background: var(--log-pencil);
+  -webkit-mask: var(--pencil-loop) center / 100% 100% no-repeat; mask: var(--pencil-loop) center / 100% 100% no-repeat;
+  animation: ws2-loop-in .28s cubic-bezier(.2, .8, .2, 1) both;
+}
+@keyframes ws2-loop-in { from { opacity: 0; transform: scale(1.1) rotate(-3deg); } }
+.ws2 .settings-embedded .identity-mode-option:has(input:focus-visible) { outline: 1px dashed var(--ws-ink-3); outline-offset: 3px; }
+
+/* the scale under a setting, with a tick for each step (RE:BOOT's ruled line) */
+.ws2 .settings-embedded .slider-row { display: flex; align-items: center; gap: 16px; max-width: 560px; }
+.ws2 .settings-embedded .personality-slider-row { position: relative; padding-bottom: 9px; }
+.ws2 .settings-embedded .personality-slider-row::after {
+  content: ''; position: absolute; left: 1px; right: 51px; bottom: 0; height: 5px; pointer-events: none; opacity: .6;
+  background: repeating-linear-gradient(90deg, var(--ws-ink-3) 0 1px, transparent 1px calc(100% / 12)); border-right: 1px solid var(--ws-ink-3);
+}
+.ws2 .settings-embedded :is(.volume-label, .personality-value) { font-family: var(--ws-mono); font-size: 12.5px; color: var(--ws-ink); min-width: 34px; text-align: right; }
+.ws2 .settings-embedded .personality-endpoints { display: flex; justify-content: space-between; max-width: 510px; }
+
+.ws2 .settings-embedded .connections-summary { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-bottom: 10px; }
+.ws2 .settings-embedded .connections-status-chip {
+  position: relative; padding: 0 0 0 14px; border: 0; border-radius: 0; background: none;
+  font-family: var(--ws-mono); font-size: 10.5px; letter-spacing: .04em; color: var(--ws-ink-2);
+}
+.ws2 .settings-embedded .connections-status-chip::before {
+  content: ''; position: absolute; left: 0; top: 50%; width: 7px; height: 7px; margin-top: -3.5px; background: var(--ws-ink-3);
+  clip-path: polygon(2.5px 0, 100% 0, 100% 100%, 0 100%, 0 2.5px);
+}
+.ws2 .settings-embedded :is(.connections-section, .credential-card) { padding: 0 0 16px; margin: 0; border: 0; border-bottom: 1px solid var(--ws-rule); background: none; box-shadow: none; }
+.ws2 .settings-embedded :is(.credential-card-header, .custom-profile-row-head) { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ws2 .settings-embedded :is(.credential-badge, .custom-profile-pill) { padding: 0; border: 0; border-radius: 0; background: none; font-family: var(--ws-mono); font-size: 10.5px; letter-spacing: .1em; color: var(--ws-ink-3); }
+.ws2 .settings-embedded .credential-badge.configured { color: var(--ws-ok); }
+.ws2 .settings-embedded .credential-badge.configured::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%; background: var(--ws-ok); vertical-align: 1px; }
+.ws2 .settings-embedded :is(.custom-profile-list > *, .search-provider-grid > *) { border: 0; border-bottom: 1px solid var(--ws-rule); border-radius: 0; background: none; box-shadow: none; padding: 12px 0; }
+.ws2 .settings-embedded .search-provider-grid { display: flex; flex-direction: column; gap: 0; }
+/* the form's small acts are the small outline plates */
+.ws2 .settings-embedded :is(.salieri-btn, .custom-profile-create-open, .disabled-profiles-toggle, .profile-details-toggle, .profile-action-delete, .profile-action-retry, .temperature-migration-dismiss) {
+  --edge: var(--ws-line-2);
+  height: 28px; padding: 0 12px 0 14px; border: 0 !important; border-radius: 0; text-transform: none;
+  font-family: var(--ws-sans); font-size: 12px; letter-spacing: .08em; color: var(--ws-ink-2);
+  box-shadow: inset 0 0 0 1px var(--edge); clip-path: polygon(6px 0, 100% 0, 100% 100%, 0 100%, 0 6px);
+  background: linear-gradient(135deg, transparent 42.8%, var(--edge) 42.8% 52.8%, transparent 52.8%) 0 0 / 7px 7px no-repeat !important;
+}
+.ws2 .settings-embedded :is(.salieri-btn, .custom-profile-create-open, .disabled-profiles-toggle, .profile-details-toggle, .profile-action-delete, .profile-action-retry, .temperature-migration-dismiss):is(:hover, :focus-visible):not(:disabled) {
+  --edge: var(--ws-ink-3); color: var(--ws-ink); background-color: rgba(255, 255, 255, .05) !important; outline: none;
+}
+.ws2 .settings-embedded .profile-action-delete { color: var(--ws-danger-ink); }
+.ws2 .settings-embedded .modal-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 22px 0 0; padding: 0; border: 0; background: none; }
+.ws2 .settings-embedded .settings-saved { font-family: var(--ws-mono); font-size: 11px; letter-spacing: .14em; color: var(--ws-ok); }
+.ws2 .settings-embedded .settings-save-error { margin: 12px 0 0; font-size: 12.5px; color: var(--ws-bad); }
+.ws2 .settings-embedded :is(.temperature-warning, .temperature-migration-notice) { font-size: 12px; color: var(--ws-bad); }
+.ws2 .settings-embedded .credential-status { font-size: 12px; color: var(--ws-ink-3); }
+.ws2 .settings-embedded .credential-status.configured { color: var(--ws-ok); }
+.ws2 .settings-embedded .credential-status.error { color: var(--ws-bad); }
+/* web search providers: the one in use is pointed at in pencil */
+.ws2 .settings-embedded .search-provider-card { position: relative; display: grid; gap: 4px; width: 100%; max-width: 560px; padding-left: 24px; text-align: left; color: var(--ws-ink-2); cursor: pointer; }
+.ws2 .settings-embedded .search-provider-card::before {
+  content: ''; position: absolute; left: 2px; top: 15px; width: 13px; height: 11px; background: var(--log-pencil);
+  -webkit-mask: var(--pencil-arrow) center / contain no-repeat; mask: var(--pencil-arrow) center / contain no-repeat; opacity: 0; transition: opacity .12s;
+}
+.ws2 .settings-embedded .search-provider-card:is(:hover, :focus-visible):not(:disabled, .active) { outline: none; color: var(--ws-ink); }
+.ws2 .settings-embedded .search-provider-card:is(:hover, :focus-visible):not(:disabled, .active)::before { opacity: .45; }
+.ws2 .settings-embedded .search-provider-card.active::before { opacity: 1; }
+.ws2 .settings-embedded .search-provider-name { font-family: var(--ws-sans); font-size: 14px; font-weight: 500; letter-spacing: .02em; color: var(--ws-ink); }
+.ws2 .settings-embedded .search-provider-docs { font-size: 12px; color: var(--ws-ink-2); text-decoration: underline; text-decoration-color: var(--ws-line-2); text-underline-offset: 3px; }
+.ws2 .settings-embedded .search-provider-docs:hover { color: var(--ws-ink); text-decoration-color: var(--log-pencil); }
+.ws2 .settings-embedded .custom-profile-row-head strong { color: var(--ws-ink); }
+.ws2 .settings-embedded .custom-profile-meta-sep { color: var(--ws-ink-3); }
+.ws2 .settings-embedded .connections-web-search-status { color: var(--ws-ink-2); }
+.ws2-settings-host[hidden] { display: none; }
+
+/* ---------- 02 connections: the list on the left, the one in use on the right ---------- */
+
+.ws2-sys-body:has(.ws2-conn.is-split) { max-width: 1040px; container-type: inline-size; }
+/* narrow body (the stage keeps most of a 1280 window): the list sits on top as a two-column grid */
+.ws2-conn-detail { min-width: 0; }
+.ws2-conn-list { display: grid; gap: 8px; padding: 2px 0 18px; margin-bottom: 18px; border-bottom: 1px solid var(--ws-rule); }
+.ws2-conn-list-title { font-family: var(--ws-mono); font-size: 10px; letter-spacing: .28em; color: var(--ws-ink-3); }
+.ws2-conn-list ul { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 0 8px; margin: 0; padding: 0; list-style: none; }
+@container (min-width: 760px) {
+  .ws2-conn.is-split { display: grid; grid-template-columns: 216px minmax(0, 1fr); gap: 0 32px; align-items: start; }
+  .ws2-conn-list { position: sticky; top: 0; margin-bottom: 0; border-bottom: 0; }
+  .ws2-conn-list ul { grid-template-columns: minmax(0, 1fr); border-top: 1px solid var(--ws-rule); }
+}
+/* a connection is a ruled row: pointed at in pencil, the one in use marked with a square of ink */
+.ws2-conn-row {
+  position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: auto auto; gap: 2px 10px; align-items: center;
+  width: 100%; padding: 9px 10px 9px 28px; text-align: left; color: var(--ws-ink-2); background: none; border: 0; border-bottom: 1px solid var(--ws-rule); border-radius: 0; cursor: pointer;
+}
+.ws2-conn-row::before {
+  content: ''; position: absolute; left: 7px; top: 50%; width: 13px; height: 11px; margin-top: -5.5px; background: var(--log-pencil);
+  -webkit-mask: var(--pencil-arrow) center / contain no-repeat; mask: var(--pencil-arrow) center / contain no-repeat; opacity: 0; transition: opacity .12s;
+}
+.ws2-conn-row .ws2-pmark { grid-row: 1 / span 2; }
+.ws2-conn-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--ws-serif-cjk); font-size: 14px; letter-spacing: .06em; color: var(--ws-ink); }
+.ws2-conn-lamp { grid-column: 2; display: inline-flex; align-items: center; gap: 6px; font-size: 11px; letter-spacing: .08em; color: var(--ws-ink-3); }
+.ws2-conn-lamp i { width: 6px; height: 6px; border-radius: 50%; background: var(--ws-ink-3); }
+.ws2-conn-lamp.is-ok i { background: var(--ws-ok); box-shadow: 0 0 6px var(--ws-ok); }
+.ws2-conn-lamp.is-manual i { background: transparent; box-shadow: inset 0 0 0 1px var(--ws-ok); }
+.ws2-conn-lamp.is-checking i { background: var(--ws-accent); animation: ws2-lamp-blink .8s steps(2) infinite; }
+.ws2-conn-lamp:is(.is-bad, .is-key) { color: var(--ws-bad); }
+.ws2-conn-lamp:is(.is-bad, .is-key) i { background: var(--ws-bad); box-shadow: 0 0 6px var(--ws-bad); }
+.ws2-conn-lamp.is-off i { background: transparent; box-shadow: inset 0 0 0 1px var(--ws-ink-3); }
+@keyframes ws2-lamp-blink { 50% { opacity: .25; } }
+.ws2-conn-tag, .ws2-conn-use { grid-column: 3; grid-row: 1 / span 2; font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .2em; }
+.ws2-conn-tag { color: var(--ws-ink-2); }
+.ws2-conn-use { color: var(--ws-ink-3); opacity: 0; transition: opacity .12s; }
+.ws2-conn-row:is(:hover:not(:disabled), :focus-visible) { background: rgba(255, 255, 255, .04); outline: none; }
+.ws2-conn-row:is(:hover:not(:disabled), :focus-visible)::before { opacity: .55; }
+.ws2-conn-row:is(:hover:not(:disabled), :focus-visible) .ws2-conn-use { opacity: 1; }
+.ws2-conn-row:disabled:not(.is-active) { cursor: default; }
+.ws2-conn-row:disabled:not(.is-active) .ws2-conn-name { color: var(--ws-ink-2); }
+.ws2-conn-row.is-active { cursor: default; background: rgba(255, 255, 255, .03); }
+.ws2-conn-row.is-active::after { content: ''; position: absolute; left: 11px; top: 50%; width: 6px; height: 6px; margin-top: -3px; background: var(--ws-ink); }
+
+/* ---------- shared by 05–07: groups, acts, notes, fields, a choice ---------- */
+
+.ws2-m-sec > .ws2-m-group:first-child { margin-top: 22px; }
+.ws2-m-sec:first-child > .ws2-m-group:first-child { margin-top: 4px; }
+.ws2-m-group .aside { margin-left: auto; font-size: 10.5px; letter-spacing: .06em; }
+/* a row's acts sit at its right end; a lesser act beside a plate is a word underlined */
+.ws2-m-acts { display: flex; flex: none; align-items: center; gap: 18px; margin-left: auto; }
+.ws2 .ws2-m-link {
+  flex: none; height: 28px; padding: 0 2px; border: 0; background: none;
+  font-family: var(--ws-sans); font-size: 12.5px; letter-spacing: .1em; color: var(--ws-ink-2);
+  text-decoration: underline; text-decoration-color: var(--ws-line-2); text-decoration-thickness: 1px; text-underline-offset: 5px;
+  transition: color .15s, text-decoration-color .15s;
+}
+.ws2 .ws2-m-link:is(:hover, :focus-visible):not(:disabled) { outline: none; color: var(--ws-ink); text-decoration-color: var(--log-pencil); text-decoration-thickness: 1.5px; }
+.ws2 .ws2-m-link.is-danger { color: color-mix(in srgb, var(--ws-danger-ink) 80%, var(--ws-ink-2)); text-decoration-color: color-mix(in srgb, var(--ws-danger-ink) 35%, transparent); }
+.ws2 .ws2-m-link.is-danger:is(:hover, :focus-visible):not(:disabled) { color: var(--ws-danger-ink); text-decoration-color: var(--ws-danger-ink); }
+.ws2 .ws2-m-link:disabled { color: var(--ws-ink-3); text-decoration-color: transparent; }
+.ws2-m-label small.is-bad, .ws2-m-note.is-bad { color: var(--ws-bad); }
+.ws2-m-label small.is-done, .ws2-m-note.is-done { color: var(--ws-ok); }
+.ws2-m-note.ws2-m-warn { color: var(--ws-ink-2); }
+.ws2-m-sec > .ws2-m-note { margin-top: 10px; }
+/* a line that needs reading, behind a cut square, as the log prints its notices */
+.ws2-m-flag { position: relative; margin: 14px 0 0; padding: 2px 0 2px 21px; font-size: 13px; line-height: 1.7; color: var(--ws-ink); }
+.ws2-m-flag::before {
+  content: ''; position: absolute; left: 4px; top: 9px; width: 8px; height: 8px; background: var(--ws-ink-2);
+  clip-path: polygon(3px 0, 100% 0, 100% 100%, 0 100%, 0 3px);
+}
+.ws2-m-flag.is-bad::before { background: var(--ws-bad); }
+.ws2-m-flag code { display: block; margin-top: 3px; font-family: var(--ws-mono); font-size: 11px; line-height: 1.6; color: var(--ws-ink-3); overflow-wrap: anywhere; }
+
+/* a short form under its row: each field a line to write on, its name beside it */
+.ws2-m-form { display: grid; gap: 2px; padding: 4px 0 16px; border-bottom: 1px solid var(--ws-rule); animation: ws2-body-in .2s ease-out; }
+.ws2-m-field { display: grid; grid-template-columns: 132px minmax(0, 300px); align-items: end; gap: 18px; min-height: 46px; }
+.ws2-m-field > span { padding-bottom: 9px; font-size: 13px; color: var(--ws-ink-2); }
+.ws2 .ws2-m-field input {
+  width: 100%; height: 34px; padding: 0 2px; border: 0; border-bottom: 1px solid var(--ws-line-2); border-radius: 0; box-shadow: none;
+  background: linear-gradient(var(--ws-line-2), var(--ws-line-2)) 0 100% / 1px 7px no-repeat, linear-gradient(var(--ws-line-2), var(--ws-line-2)) 100% 100% / 1px 7px no-repeat;
+  font-family: var(--ws-mono); font-size: 14px; letter-spacing: .24em; color: var(--ws-ink);
+}
+.ws2 .ws2-m-field input:focus-visible { outline: none; border-bottom-color: var(--ws-ink); }
+.ws2-m-form-foot { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 14px; }
+.ws2-m-error { margin: 0; font-size: 12.5px; color: var(--ws-bad); }
+
+/* a choice among a few words: the chosen one ringed in pencil */
+.ws2-m-row.is-choice .ws2-m-label { min-width: 96px; }
+.ws2-choice { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; padding: 2px 0 2px 2px; }
+.ws2 .ws2-choice button { position: relative; padding: 6px 12px; font-size: 13.5px; letter-spacing: .06em; color: var(--ws-ink-2); transition: color .15s; }
+.ws2 .ws2-choice button:hover:not(:disabled) { color: var(--ws-ink); }
+.ws2 .ws2-choice button.on { color: var(--ws-ink); }
+.ws2 .ws2-choice button.on::after {
+  content: ''; position: absolute; inset: -3px -5px; pointer-events: none; background: var(--log-pencil);
+  -webkit-mask: var(--pencil-loop) center / 100% 100% no-repeat; mask: var(--pencil-loop) center / 100% 100% no-repeat;
+  animation: ws2-loop-in .28s cubic-bezier(.2, .8, .2, 1) both;
+}
+.ws2 .ws2-choice button:disabled { color: var(--ws-ink-3); opacity: .5; }
+.ws2 .ws2-choice button.on:disabled { opacity: 1; }
+.ws2 .ws2-choice button:focus-visible { outline: 1px dashed var(--ws-ink-3); outline-offset: 3px; }
+
+/* a path to read and copy */
+.ws2-m-row.ws2-m-path { padding: 10px 0; }
+.ws2-m-path .ws2-m-label { flex: 1; min-width: 0; }
+.ws2-path { font-family: var(--ws-mono); font-size: 12.5px; letter-spacing: .02em; line-height: 1.5; overflow-wrap: anywhere; user-select: text; }
+
+/* news under a section (a new version under 关于), and on the 系统 key: a dot of pencil */
+.ws2-news { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--log-pencil); }
+.ws2-sys-item .ws2-news { position: absolute; right: 4px; top: 50%; margin-top: -3px; }
+.ws2-tool .glyph > .ws2-news { position: absolute; right: -3px; top: -2px; box-shadow: 0 0 0 2px var(--ws-bg); animation: ws2-fade-in .3s ease both; }
+
+/* In a narrow body a row's name goes over its control. */
+@container (max-width: 520px) {
+  .ws2-m-row.is-choice .ws2-m-label { min-width: 56px; }
+  .ws2-m-field { grid-template-columns: 96px minmax(0, 1fr); gap: 12px; }
+}
+
+/* ---------- 05 data ---------- */
+
+/* backups: a ledger, newest first; the one to be restored pointed at in pencil, a broken one struck through */
+.ws2-backups { margin: 0; padding: 0; list-style: none; }
+.ws2-backups li {
+  position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 0 14px;
+  min-height: 40px; padding: 0 0 0 24px; border-bottom: 1px solid var(--ws-rule); font-size: 12.5px; color: var(--ws-ink-2);
+}
+.ws2-backups li::before {
+  content: ''; position: absolute; left: 4px; top: 14px; width: 13px; height: 11px; background: var(--log-pencil); opacity: 0;
+  -webkit-mask: var(--pencil-arrow) center / contain no-repeat; mask: var(--pencil-arrow) center / contain no-repeat; transition: opacity .12s;
+}
+.ws2-backups li:is(:hover, :focus-within)::before { opacity: .45; }
+.ws2-backups li.is-pending::before { opacity: 1; }
+.ws2-backups .meta { display: grid; grid-template-columns: 136px 48px 64px auto; align-items: baseline; gap: 0 12px; min-width: 0; white-space: nowrap; }
+.ws2-backups .when { font-family: var(--ws-mono); font-size: 12px; letter-spacing: .03em; color: var(--ws-ink); font-variant-numeric: tabular-nums; }
+.ws2-backups .size { font-family: var(--ws-mono); font-size: 11.5px; text-align: right; font-variant-numeric: tabular-nums; }
+.ws2-backups .ver { font-family: var(--ws-mono); font-size: 10.5px; letter-spacing: .06em; color: var(--ws-ink-3); }
+.ws2-backups .acts { display: flex; align-items: center; justify-content: flex-end; gap: 16px; }
+/* restoring is offered on every row, quietly; deleting shows only on the row you point at */
+.ws2-backups .acts .ws2-m-link { opacity: .6; transition: opacity .12s, color .15s, text-decoration-color .15s; }
+.ws2-backups .acts .ws2-m-link.is-danger { opacity: 0; }
+.ws2-backups li:is(:hover, :focus-within) .acts .ws2-m-link { opacity: 1; }
+.ws2-backups .tag { font-family: var(--ws-mono); font-size: 10px; letter-spacing: .2em; color: var(--ws-ink-3); }
+.ws2-backups li.is-pending .tag { color: var(--log-pencil); }
+.ws2-backups li.is-broken :is(.when, .why) {
+  color: var(--ws-ink-3); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--log-pencil) 70%, transparent); text-decoration-thickness: 1.5px;
+}
+.ws2-backups .detail { grid-column: 1 / -1; padding: 0 0 9px; font-family: var(--ws-mono); font-size: 10.5px; line-height: 1.5; color: var(--ws-ink-3); overflow-wrap: anywhere; }
+@container (max-width: 520px) {
+  .ws2-backups .meta { grid-template-columns: 128px 42px auto; }
+  .ws2-backups .ver { display: none; }
+}
+
+/* what takes the room: a dimension line for each, measured against the largest */
+.ws2-disk { margin: 6px 0 0; padding: 0; list-style: none; }
+.ws2-disk li { display: grid; grid-template-columns: 84px minmax(0, 1fr) 76px; align-items: center; gap: 14px; height: 30px; border-bottom: 1px solid var(--ws-rule); font-size: 12.5px; color: var(--ws-ink-2); }
+.ws2-disk .size { font-family: var(--ws-mono); font-size: 11.5px; text-align: right; color: var(--ws-ink); font-variant-numeric: tabular-nums; }
+.ws2-disk .dim { position: relative; height: 9px; }
+.ws2-disk .dim i {
+  position: absolute; left: 0; top: 0; bottom: 0; border-left: 1px solid var(--ws-ink-3); border-right: 1px solid var(--ws-ink-3);
+  transform-origin: left center; animation: ws2-dim-in .5s cubic-bezier(.3, .7, .2, 1) .15s both;
+}
+.ws2-disk .dim i::before { content: ''; position: absolute; left: 0; right: 0; top: 4px; height: 1px; background: var(--ws-ink-2); }
+@keyframes ws2-dim-in { from { transform: scaleX(0); } }
+.ws2-disk li.total { height: 34px; border-bottom: 0; color: var(--ws-ink); }
+.ws2-disk li.total .size { font-size: 12.5px; }
+
+/* data relocation & previous directory cleanup */
+.ws2-loc-move { display: grid; gap: 12px; padding: 14px 0 12px; border-bottom: 1px solid var(--ws-rule); }
+.ws2-loc-move-head { display: flex; flex-direction: column; gap: 4px; }
+.ws2-loc-move-head b { font-weight: 400; font-size: 14px; color: var(--ws-ink); }
+.ws2-loc-move-head small { font-size: 11.5px; color: var(--ws-ink-3); }
+.ws2-loc-input-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.ws2 .ws2-loc-input {
+  flex: 1 1 240px; min-width: 0; height: 34px; padding: 0 2px; border: 0; border-bottom: 1px solid var(--ws-line-2); border-radius: 0; box-shadow: none;
+  background: linear-gradient(var(--ws-line-2), var(--ws-line-2)) 0 100% / 1px 7px no-repeat, linear-gradient(var(--ws-line-2), var(--ws-line-2)) 100% 100% / 1px 7px no-repeat;
+  font-family: var(--ws-mono); font-size: 12.5px; color: var(--ws-ink);
+}
+.ws2 .ws2-loc-input:focus-visible { outline: none; border-bottom-color: var(--ws-ink); }
+.ws2 .ws2-loc-input::placeholder { font-family: var(--ws-sans); color: var(--ws-ink-3); }
+.ws2 .ws2-loc-input:disabled { opacity: .55; cursor: default; }
+.ws2-loc-check { display: grid; gap: 10px; padding: 10px 14px; border-left: 2px solid var(--ws-line-2); background: rgba(255, 255, 255, .02); }
+.ws2-loc-space { display: flex; flex-wrap: wrap; gap: 6px 24px; font-size: 12px; color: var(--ws-ink-2); }
+.ws2-loc-space b { font-family: var(--ws-mono); font-weight: 400; color: var(--ws-ink); font-variant-numeric: tabular-nums; }
+.ws2-loc-issues { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 12.5px; line-height: 1.6; }
+.ws2-loc-issues li { position: relative; padding-left: 16px; }
+.ws2-loc-issues li::before {
+  content: ''; position: absolute; left: 2px; top: 8px; width: 6px; height: 6px;
+  clip-path: polygon(2px 0, 100% 0, 100% 100%, 0 100%, 0 2px);
+}
+.ws2-loc-issues.is-bad { color: var(--ws-bad); }
+.ws2-loc-issues.is-bad li::before { background: var(--ws-bad); }
+.ws2-loc-issues.is-warn { color: var(--ws-warn); }
+.ws2-loc-issues.is-warn li::before { background: var(--ws-warn); }
+.ws2-loc-warnings { display: grid; gap: 10px; }
+.ws2-loc-ack { display: inline-flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--ws-ink); cursor: pointer; }
+.ws2-loc-ack input[type='checkbox'] {
+  appearance: none; -webkit-appearance: none; flex: none; width: 14px; height: 14px; margin: 0; border: 1px solid var(--ws-ink-3); border-radius: 0;
+  background: none; cursor: pointer; transition: box-shadow .15s ease, border-color .15s ease;
+}
+.ws2-loc-ack input[type='checkbox']:checked { border-color: var(--ws-ink-2); box-shadow: inset 0 0 0 2px var(--ws-bg), inset 0 0 0 7px var(--ws-ink); }
+.ws2-loc-ack input[type='checkbox']:focus-visible { outline: 1px dashed var(--ws-ink-2); outline-offset: 2px; }
+.ws2-loc-ack input[type='checkbox']:disabled { opacity: .5; cursor: default; }
+.ws2-loc-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.ws2-loc-actions .ws2-m-note { flex: 1 1 260px; }
+.ws2-loc-restart {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  padding: 10px 14px; border: 1px solid var(--ws-line-2); border-left: 2px solid var(--ws-warn); background: rgba(255, 255, 255, .025);
+}
+.ws2-conn-relocate { margin-bottom: 18px; }
+.ws2-conn.is-split .ws2-conn-relocate { grid-column: 1 / -1; margin-bottom: 16px; }
+.ws2-talk .ws2-loc-restart { flex: none; margin-top: 0; }
+.ws2-loc-restart-copy { flex: 1 1 260px; min-width: 0; }
+.ws2-loc-restart-copy strong { font-weight: 400; font-size: 13px; color: var(--ws-ink); }
+.ws2-loc-restart-copy .ws2-m-note { margin-top: 4px; }
+.ws2-loc-previous .ws2-m-label { gap: 5px; }
+.ws2 .ws2-m-btn.is-danger { --edge: color-mix(in srgb, var(--ws-danger-ink) 70%, transparent); color: var(--ws-danger-ink) !important; }
+.ws2 .ws2-m-btn.is-danger:is(:hover, :focus-visible):not(:disabled) {
+  --edge: var(--ws-danger-ink); background-color: color-mix(in srgb, var(--ws-danger-ink) 10%, transparent) !important;
+}
+.ws2-loc-toast {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px; position: relative;
+  margin: 12px 0 0; padding: 9px 14px 9px 26px; border: 1px solid var(--ws-rule); background: rgba(255, 255, 255, .025);
+  font-size: 12.5px; line-height: 1.6; color: var(--ws-ink);
+}
+.ws2-loc-toast::before {
+  content: ''; position: absolute; left: 10px; top: 15px; width: 7px; height: 7px; background: var(--ws-ok);
+  clip-path: polygon(2.5px 0, 100% 0, 100% 100%, 0 100%, 0 2.5px);
+}
+.ws2-loc-toast.is-bad::before { background: var(--ws-bad); }
+@media (prefers-reduced-motion: reduce) {
+  .ws2-loc-ack input[type='checkbox'] { transition: none; }
+}
+
+/* ---------- 06 usage ---------- */
+
+/* the estimate, large, its terms right under it; then the ledger by model */
+.ws2-usage-sum { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; margin: 22px 0 0; padding: 0 0 10px; border-bottom: 1px solid var(--ws-rule); }
+.ws2-usage-sum .lbl { font-size: 12px; letter-spacing: .2em; color: var(--ws-ink-3); }
+.ws2-usage-sum .amt { font-family: var(--ws-serif); font-size: 32px; line-height: 1.1; letter-spacing: .02em; color: var(--ws-ink); font-variant-numeric: lining-nums tabular-nums; transition: opacity .2s; }
+.ws2-usage-sum .amt .plus { margin: 0 .35em; font-style: normal; font-size: 20px; color: var(--ws-ink-3); }
+.ws2-usage-sum .amt .none { color: var(--ws-ink-3); }
+.ws2-usage-sum .calls { margin-left: auto; font-family: var(--ws-mono); font-size: 11px; letter-spacing: .1em; color: var(--ws-ink-3); }
+.ws2-m-note.ws2-usage-terms { margin-top: 8px; color: var(--ws-ink-2); }
+.ws2-usage-table { width: 100%; margin: 16px 0 0; border-collapse: collapse; transition: opacity .2s; }
+.ws2-usage-table :is(th, td) { padding: 8px 0 8px 12px; border-bottom: 1px solid var(--ws-rule); font-weight: 400; text-align: right; white-space: nowrap; vertical-align: baseline; }
+.ws2-usage-table :is(th, td):first-child { padding-left: 0; text-align: left; }
+.ws2-usage-table thead th { padding-top: 0; font-size: 11px; letter-spacing: .12em; color: var(--ws-ink-3); }
+.ws2-usage-table tbody th b { display: block; max-width: 200px; overflow: hidden; text-overflow: ellipsis; font-family: var(--ws-mono); font-weight: 400; font-size: 12px; color: var(--ws-ink); }
+.ws2-usage-table tbody th small { display: block; margin-top: 3px; font-size: 11px; color: var(--ws-ink-3); }
+.ws2-usage-table td { font-family: var(--ws-mono); font-size: 12px; color: var(--ws-ink-2); font-variant-numeric: tabular-nums; }
+.ws2-usage-table td:last-child { color: var(--ws-ink); }
+.ws2-usage-table td.na { font-family: var(--ws-sans); font-size: 12px; color: var(--ws-ink-3); }
+.ws2-usage-table td small { display: block; margin-top: 3px; font-family: var(--ws-sans); font-size: 10.5px; color: var(--ws-ink-3); }
+.ws2-usage.is-loading :is(.ws2-usage-sum .amt, .ws2-usage-table) { opacity: .4; }
+.ws2-usage-gaps { margin: 12px 0 0; padding: 0; list-style: none; }
+.ws2-usage-gaps li { position: relative; padding-left: 16px; font-size: 12.5px; line-height: 1.7; color: var(--ws-ink-3); }
+.ws2-usage-gaps li::before { content: ''; position: absolute; left: 2px; top: 11px; width: 7px; height: 1px; background: var(--ws-ink-3); }
+@container (max-width: 520px) {
+  .ws2-usage-table :is(th, td):nth-child(5) { display: none; }
+  .ws2-usage-table tbody th b { max-width: 120px; }
+}
+
+/* ---------- 07 about ---------- */
+
+.ws2-about-head { display: flex; align-items: baseline; gap: 16px; padding: 6px 0 2px; }
+.ws2-about-head .name { font-family: var(--ws-display); font-size: 26px; font-weight: 500; letter-spacing: .4em; color: var(--ws-ink); }
+.ws2-about-head .ver { font-family: var(--ws-mono); font-size: 12.5px; letter-spacing: .1em; color: var(--ws-ink-2); }
+/* a new version: its number, its notes as a short list, then the plate */
+.ws2-update { padding-top: 12px; }
+.ws2-update-head { display: flex; align-items: baseline; gap: 14px; }
+.ws2-update-head b { font-weight: 400; font-size: 15px; letter-spacing: .06em; color: var(--ws-ink); }
+.ws2-update-head .date { font-family: var(--ws-mono); font-size: 11px; letter-spacing: .08em; color: var(--ws-ink-3); }
+.ws2-update-notes { margin: 8px 0 0; padding: 0; list-style: none; }
+.ws2-update-notes li { position: relative; padding-left: 16px; font-family: var(--ws-read); font-size: 13.5px; line-height: 1.8; color: var(--ws-ink-2); }
+.ws2-update-notes li::before { content: ''; position: absolute; left: 2px; top: 12px; width: 7px; height: 1px; background: var(--ws-ink-3); }
+/* the download as a dimension line drawn out to its length */
+.ws2-update-progress { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; margin-top: 16px; }
+.ws2-update-progress .dim { position: relative; height: 9px; border-left: 1px solid var(--ws-ink-3); border-right: 1px solid var(--ws-line-2); }
+.ws2-update-progress .dim::before { content: ''; position: absolute; left: 0; right: 0; top: 4px; height: 1px; background: var(--ws-line-2); }
+.ws2-update-progress .dim i { position: absolute; left: 0; top: 2px; height: 5px; background: var(--log-pencil); transition: width .12s linear; }
+.ws2-update-progress .num { font-family: var(--ws-mono); font-size: 11px; letter-spacing: .04em; color: var(--ws-ink-2); font-variant-numeric: tabular-nums; }
+.ws2-credits { margin: 0; padding: 0; list-style: none; }
+.ws2-credits li { display: grid; gap: 3px; padding: 11px 0; border-bottom: 1px solid var(--ws-rule); }
+.ws2-credits b { font-family: var(--ws-mono); font-weight: 400; font-size: 12px; letter-spacing: .04em; color: var(--ws-ink); }
+.ws2-credits span { font-size: 12.5px; line-height: 1.75; color: var(--ws-ink-2); }
+.ws2-credits .ws2-m-link { height: auto; padding: 0; margin: 0 .15em; font-size: inherit; letter-spacing: .02em; }
+
+/* ---------- 数据异常: a fault report on the sheet, before login ---------- */
+
+.ws2.ws2-recovery { display: block; }
+.ws2.ws2-recovery:not(.rail)::after { content: none; }
+.ws2-recovery-scroll {
+  position: relative; z-index: 1; height: 100%; overflow-y: auto; overflow-x: hidden;
+ 
+}
+.ws2-recovery-sheet {
+  position: relative; width: min(620px, calc(100% - 48px)); margin: clamp(28px, 9vh, 96px) auto 40px; padding: 28px 34px 24px;
+  border: 1px solid var(--ws-rule); background: color-mix(in srgb, var(--ws-bg) 90%, transparent); backdrop-filter: blur(4px);
+  container-type: inline-size; animation: ws2-body-in .3s ease-out both;
+}
+/* its corners ticked like the frame's */
+.ws2-recovery-sheet::before {
+  content: ''; position: absolute; inset: -5px; pointer-events: none;
+  background:
+    linear-gradient(var(--ws-ink-3), var(--ws-ink-3)) 0 0 / 9px 1px no-repeat, linear-gradient(var(--ws-ink-3), var(--ws-ink-3)) 0 0 / 1px 9px no-repeat,
+    linear-gradient(var(--ws-ink-3), var(--ws-ink-3)) 100% 0 / 9px 1px no-repeat, linear-gradient(var(--ws-ink-3), var(--ws-ink-3)) 100% 0 / 1px 9px no-repeat,
+    linear-gradient(var(--ws-ink-3), var(--ws-ink-3)) 0 100% / 9px 1px no-repeat, linear-gradient(var(--ws-ink-3), var(--ws-ink-3)) 0 100% / 1px 9px no-repeat,
+    linear-gradient(var(--ws-ink-3), var(--ws-ink-3)) 100% 100% / 9px 1px no-repeat, linear-gradient(var(--ws-ink-3), var(--ws-ink-3)) 100% 100% / 1px 9px no-repeat;
+}
+.ws2-recovery-sheet > .ws2-stamp { --stamp-word: 22px; right: 28px; top: 22px; animation-delay: .35s; }
+.ws2-recovery-sheet > header { display: grid; gap: 8px; padding: 0 0 16px; border-bottom: 1px solid var(--ws-rule); }
+.ws2-recovery-sheet .fig { font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .3em; color: var(--ws-ink-3); }
+.ws2-recovery-sheet h1 { margin: 0; font-family: var(--ws-serif-cjk); font-size: 30px; font-weight: 400; letter-spacing: .2em; color: var(--ws-ink); }
+.ws2-recovery-sheet .lead { margin: 16px 0 6px; font-family: var(--ws-read); font-size: 15px; line-height: 1.8; color: var(--ws-ink); text-wrap: pretty; }
+.ws2-recovery-sheet .ws2-backups .acts .ws2-m-link { opacity: 1; }
+.ws2-recovery-detail { margin-top: 22px; padding-top: 12px; border-top: 1px solid var(--ws-rule); }
+.ws2-recovery-detail summary { width: max-content; font-size: 12px; letter-spacing: .14em; color: var(--ws-ink-3); cursor: pointer; }
+.ws2-recovery-detail summary:hover { color: var(--ws-ink-2); }
+.ws2-recovery-detail code { display: block; margin-top: 10px; font-family: var(--ws-mono); font-size: 11px; line-height: 1.7; color: var(--ws-ink-2); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+@container (max-width: 480px) {
+  .ws2-recovery-sheet > .ws2-stamp { --stamp-word: 18px; right: 14px; top: 14px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ws2 .ws2-wlc, .ws2 .ws2-wlc .fig [pathLength], .ws2 .ws2-wlc.aim .nx-glow { animation: none; stroke-dashoffset: 0; }
+  .ws2 .ws2-wlc :is(.fig, .moth, .nx-glow, .nm), .ws2 .ws2-wlc .face::after { transition: none; }
+  .ws2 .settings-embedded .identity-mode-option:has(input:checked)::after { animation: none; }
+  .ws2 :is(.ws2-disk .dim i, .ws2-m-form, .ws2-tool .glyph > .ws2-news, .ws2-recovery-sheet) { animation: none; }
+  .ws2 .ws2-choice button.on::after { animation: none; }
+  .ws2 .ws2-update-progress .dim i { transition: none; }
+}
+
+/* A volume you can type (VolumeNumber): plain digits on the rule, a pencil blank under it when reached for. */
+.ws2 .ws2-num {
+  width: 4ch; min-width: 0; padding: 2px 0 1px; border: 0; border-bottom: 1px solid transparent; border-radius: 0; background: none;
+  font-family: var(--ws-mono); font-size: 12.5px; letter-spacing: .04em; color: var(--ws-ink); text-align: right;
+  font-variant-numeric: tabular-nums; caret-color: var(--ws-accent); cursor: text; transition: border-color .15s, color .15s;
+}
+.ws2 .ws2-num:hover:not(:disabled) { border-bottom-color: var(--ws-line-2); }
+.ws2 input.ws2-num:focus-visible { outline: none; border-bottom-color: var(--ws-accent); color: var(--ws-ink); }
+.ws2 .ws2-num::selection { background: rgba(var(--ws-accent-rgb), .32); color: var(--ws-ink); }
+.ws2 .ws2-num:disabled { color: var(--ws-ink-3); cursor: default; }
+.ws2 .ws2-scope .ws2-num { font-size: 11px; color: var(--ws-ink-2); }
+
+/* ---------- 02 connections (ConnectionsPanel.tsx) ---------- */
+/* Connected services as ruled rows that open in place; the services to add as one-line entries; small windows
+   (the whole list, connecting one) laid on the sheet like the other slips. */
+.ws2-cx { container-type: inline-size; }
+.ws2-cx .ws2-m-sec:first-child .ws2-m-group { margin-top: 4px; }
+.ws2-cx .ws2-m-group small { margin-left: auto; letter-spacing: .1em; }
+.ws2-cx-list, .ws2-cx-add { margin: 0; padding: 0; list-style: none; }
+.ws2-cx-row { border-bottom: 1px solid var(--ws-rule); }
+.ws2-cx-row .head { display: flex; align-items: center; gap: 12px; min-height: 58px; }
+.ws2 .ws2-cx-row .main {
+  position: relative; flex: 1; min-width: 0; display: grid; grid-template-columns: 26px minmax(0, 1fr) auto 14px; align-items: center; column-gap: 12px;
+  height: 58px; padding: 0 4px; border: 0; background: none; text-align: left; color: inherit; cursor: pointer;
+}
+.ws2 .ws2-cx-row .main:hover { background: rgba(255, 255, 255, .025); }
+.ws2-cx .txt, .ws2-sheet .txt { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.ws2-cx .txt b, .ws2-sheet .txt b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; font-size: 14px; color: var(--ws-ink); }
+.ws2-cx .txt small, .ws2-sheet .txt small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--ws-ink-3); }
+.ws2-cx-row .txt small { font-family: var(--ws-mono); font-size: 11px; letter-spacing: .02em; }
+.ws2-cx-row .chev { width: 7px; height: 7px; border-right: 1px solid var(--ws-ink-3); border-bottom: 1px solid var(--ws-ink-3); transform: rotate(45deg) translate(-2px, -2px); transition: transform .18s ease; }
+.ws2-cx-row.is-open .chev { transform: rotate(-135deg) translate(-2px, -2px); }
+.ws2-cx-tag { flex: none; min-width: 40px; text-align: center; font-size: 11px; letter-spacing: .14em; color: var(--ws-accent); }
+.ws2-cx-use { flex: none; min-width: 40px; }
+/* The one in use is marked in the page's margin, clear of its mark (U 11-10: a bar on the row's own edge sat against
+   the icon); every row keeps its icon in the same column. */
+.ws2 .ws2-cx-row.is-active .main::before { content: ''; position: absolute; left: -14px; top: 14px; bottom: 14px; width: 2px; background: var(--ws-accent); }
+.ws2-cx-lamp { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 11px; letter-spacing: .08em; color: var(--ws-ink-3); }
+.ws2-cx-lamp i { width: 6px; height: 6px; border-radius: 50%; background: var(--ws-ink-3); }
+.ws2-cx-lamp.is-ok { color: var(--ws-ink-2); }
+.ws2-cx-lamp.is-ok i { background: var(--ws-ok); box-shadow: 0 0 6px var(--ws-ok); }
+.ws2-cx-lamp.is-manual i { background: transparent; box-shadow: inset 0 0 0 1px var(--ws-ok); }
+.ws2-cx-lamp.is-checking i { background: var(--ws-accent); animation: ws2-lamp-blink .8s steps(2) infinite; }
+.ws2-cx-lamp:is(.is-bad, .is-key) { color: var(--ws-bad); }
+.ws2-cx-lamp:is(.is-bad, .is-key) i { background: var(--ws-bad); box-shadow: 0 0 6px var(--ws-bad); }
+.ws2-cx-lamp.is-pending i { background: transparent; box-shadow: inset 0 0 0 1px var(--ws-accent); }
+.ws2-cx-lamp.is-off i { background: transparent; box-shadow: inset 0 0 0 1px var(--ws-ink-3); }
+/* opened in place: indented under the mark, ruled like the page */
+.ws2-cx-row .detail { padding: 0 0 16px 42px; animation: ws2-body-in .18s ease-out; }
+.ws2-cx-row .detail .ws2-m-row { min-height: 52px; gap: 14px; flex-wrap: wrap; }
+.ws2-cx-row .detail .ws2-m-label { flex: 1; min-width: 160px; }
+.ws2-cx-row .detail .ws2-m-flag { margin: 8px 0 4px; }
+.ws2-cx .ws2-m-acts { display: inline-flex; align-items: center; gap: 16px; margin-left: auto; }
+.ws2-cx-inline { display: flex; align-items: center; gap: 14px; flex: 1 1 260px; min-width: 0; }
+.ws2 .ws2-cx-field {
+  flex: 1; min-width: 0; height: 34px; padding: 0 2px; border: 0; border-bottom: 1px solid var(--ws-line-2); border-radius: 0; background: none;
+  font-family: var(--ws-read); font-size: 14px; color: var(--ws-ink); outline: none;
+}
+.ws2 .ws2-cx-field.ws2-path, .ws2 input[type='url'].ws2-cx-field { font-family: var(--ws-mono); font-size: 12.5px; }
+.ws2 input.ws2-cx-field:focus-visible, .ws2 select.ws2-cx-field:focus-visible { outline: none; border-bottom-color: var(--ws-ink); }
+.ws2 .ws2-cx-field:focus { border-bottom-color: var(--ws-ink); }
+.ws2 select.ws2-cx-field { appearance: none; padding-right: 22px; font-family: var(--ws-mono); font-size: 12.5px; background: linear-gradient(45deg, transparent 50%, var(--ws-ink-3) 50%) right 8px center / 6px 6px no-repeat; }
+.ws2 select.ws2-cx-field option { background: var(--ws-bg); color: var(--ws-ink); }
+/* the models a menu shows */
+.ws2-cx-models { padding: 14px 0 4px; border-top: 1px solid var(--ws-rule); }
+.ws2-cx-models > .ws2-m-label { margin-bottom: 10px; }
+.ws2 .ws2-cx-filter { width: 100%; margin-bottom: 8px; }
+.ws2-cx-modelgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 0 18px; max-height: 260px; margin: 0 0 8px; padding: 0; overflow: auto; list-style: none; }
+.ws2-cx-modelgrid label { display: flex; align-items: center; gap: 9px; min-height: 30px; font-size: 12.5px; color: var(--ws-ink-3); cursor: pointer; }
+.ws2-cx-modelgrid label.on { color: var(--ws-ink); }
+.ws2 .ws2-cx-modelgrid input { flex: none; width: 13px; height: 13px; margin: 0; appearance: none; border: 1px solid var(--ws-ink-3); border-radius: 0; background: none; cursor: pointer; }
+.ws2 .ws2-cx-modelgrid input:checked { border-color: var(--ws-ink); background: linear-gradient(var(--ws-ink), var(--ws-ink)) center / 7px 7px no-repeat; }
+.ws2-cx-modelgrid .ws2-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--ws-mono); font-size: 12px; }
+.ws2-cx-modelgrid em { flex: none; font-style: normal; font-size: 10.5px; letter-spacing: .12em; color: var(--ws-accent); }
+.ws2 .ws2-cx-modelgrid .mk { flex: none; margin-left: auto; font-size: 11px; opacity: 0; transition: opacity .15s; }
+.ws2 .ws2-cx-modelgrid label:is(:hover, :focus-within) .mk { opacity: 1; }
+/* to add */
+.ws2-cx-add { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 0 22px; }
+.ws2-cx-add li { border-bottom: 1px solid var(--ws-rule); }
+.ws2 .ws2-cx-entry {
+  width: 100%; display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; align-items: center; column-gap: 12px;
+  min-height: 56px; padding: 6px 4px; border: 0; background: none; text-align: left; color: inherit; cursor: pointer;
+}
+.ws2-cx-entry .go { font-size: 11.5px; letter-spacing: .14em; color: var(--ws-ink-3); transition: color .15s; }
+.ws2-cx-entry .go::before { content: '+ '; }
+.ws2-cx-entry .go.is-taken::before { content: none; }
+.ws2 .ws2-cx-entry:is(:hover, :focus-visible) { background: rgba(255, 255, 255, .03); }
+.ws2-cx-entry:is(:hover, :focus-visible) .go { color: var(--ws-ink); }
+.ws2-cx .ws2-m-foot .ws2-m-acts { gap: 20px; }
+
+/* ---------- a small window on the sheet (ConnectionsPanel's Sheet) ---------- */
+.ws2 .ws2-dialog.ws2-sheet { width: min(520px, calc(100% - 48px)); max-height: calc(100% - 96px); display: flex; flex-direction: column; }
+.ws2 .ws2-dialog.ws2-sheet.is-wide { width: min(680px, calc(100% - 48px)); height: min(760px, calc(100% - 96px)); }
+.ws2-sheet-head { display: flex; align-items: center; gap: 14px; padding: 20px 22px 14px; border-bottom: 1px solid var(--ws-rule); }
+.ws2 .ws2-sheet-head .ws2-pmark { width: 30px; height: 30px; }
+.ws2-sheet-head .txt { flex: 1; }
+.ws2 .ws2-sheet-head h3 { margin: 0; padding: 0; font-family: var(--ws-serif-cjk); font-size: 19px; font-weight: 500; letter-spacing: .1em; color: var(--ws-ink); }
+.ws2 .ws2-sheet-head small { white-space: normal; font-size: 12px; line-height: 1.6; color: var(--ws-ink-3); }
+.ws2 .ws2-sheet-x { flex: none; align-self: flex-start; width: 28px; height: 28px; border: 0; background: none; font-size: 20px; line-height: 1; color: var(--ws-ink-3); cursor: pointer; }
+.ws2 .ws2-sheet-x:hover { color: var(--ws-ink); }
+.ws2-sheet-body { min-height: 0; overflow: auto; padding: 14px 22px 20px; }
+.ws2 .ws2-cx-catalog .ws2-cx-search { width: 100%; margin-bottom: 4px; }
+/* the search and the chips stay put while the list scrolls under them */
+.ws2-cx-catalog > .head { position: sticky; top: -14px; z-index: 1; margin: -14px 0 0; padding: 14px 0 8px; background: var(--ws-bg); }
+.ws2-cx-catalog h4 { margin: 18px 0 2px; padding-bottom: 6px; border-bottom: 1px solid var(--ws-rule); font-family: var(--ws-mono); font-weight: 400; font-size: 10px; letter-spacing: .2em; color: var(--ws-ink-3); }
+.ws2-cx-catalog ul { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0 18px; margin: 0; padding: 0; list-style: none; }
+.ws2-cx-catalog li { border-bottom: 1px solid var(--ws-rule); }
+.ws2 .ws2-cx-catalog .ws2-cx-entry.is-custom { margin-top: 18px; border-top: 1px dashed var(--ws-line-2); border-bottom: 1px dashed var(--ws-line-2); }
+.ws2-cx-catalog .ws2-m-note { margin-top: 16px; }
+.ws2 .ws2-cx-only { display: flex; flex-wrap: wrap; row-gap: 6px; margin: 10px 0 0; }
+.ws2 .ws2-cx-only button { height: 26px; padding: 0 12px; }
+/* a plan's fit, or why an entry only explains itself */
+.ws2-cx-fit { margin-left: 8px; padding: 0 5px; border: 1px solid currentColor; font-family: var(--ws-mono); font-style: normal; font-size: 9.5px; line-height: 15px; letter-spacing: .12em; vertical-align: 1px; }
+.ws2-cx-fit.is-ok { color: var(--ws-ok); }
+.ws2-cx-fit.is-warn { color: var(--ws-warn); }
+.ws2-cx-fit.is-off { color: var(--ws-ink-3); }
+.ws2 .ws2-cx-entry.is-closed .txt b { color: var(--ws-ink-2); }
+.ws2 .ws2-cx-catalog .txt b { display: flex; align-items: center; min-width: 0; }
+.ws2-cx-catalog .txt b .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ws2-cx-catalog .txt b .ws2-cx-fit { flex: none; }
+.ws2-cx-plan { margin: 0; padding-left: 12px; border-left: 2px solid var(--ws-line-2); font-size: 12.5px; line-height: 1.7; color: var(--ws-ink-2); }
+.ws2-cx-plan.is-ok { border-left-color: var(--ws-ok); }
+.ws2-cx-plan.is-coding { border-left-color: var(--ws-warn); }
+.ws2-cx-plan .ws2-m-link { margin-left: 8px; }
+.ws2-cx-terms { margin: 6px 0 0 21px; font-size: 12.5px; }
+.ws2-cx-connect > .ws2-m-note { margin-top: 14px; }
+/* connecting one */
+.ws2-cx-connect fieldset { display: grid; gap: 14px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.ws2-cx-connect fieldset:disabled { opacity: .6; }
+.ws2-cx-labelled { display: grid; grid-template-columns: 74px minmax(0, 1fr); align-items: center; column-gap: 14px; row-gap: 4px; }
+.ws2-cx-labelled > span:first-child { font-size: 12.5px; letter-spacing: .08em; color: var(--ws-ink-2); }
+.ws2-cx-labelled > small { grid-column: 2; font-size: 11.5px; line-height: 1.6; color: var(--ws-ink-3); }
+.ws2 .ws2-cx-labelled .ws2-cx-field { width: 100%; }
+.ws2-cx-regions { display: inline-flex; }
+.ws2 .ws2-cx-regions button {
+  height: 28px; padding: 0 14px; border: 1px solid var(--ws-line-2); border-radius: 0; background: none; font-size: 12px; letter-spacing: .08em; color: var(--ws-ink-3); cursor: pointer;
+}
+.ws2 .ws2-cx-regions button + button { border-left: 0; }
+.ws2 .ws2-cx-regions button.on { border-color: var(--ws-ink-2); color: var(--ws-ink); background: rgba(255, 255, 255, .06); }
+.ws2 .ws2-cx-regions button.on + button { border-left: 1px solid var(--ws-line-2); }
+.ws2-cx-connect .ws2-cx-regions { justify-self: start; }
+.ws2-cx-get { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; margin: 0 0 0 88px; font-size: 12.5px; color: var(--ws-ink-3); }
+.ws2-cx-get small { flex-basis: 100%; font-size: 11.5px; line-height: 1.6; }
+.ws2-cx-addr { margin: 0 0 0 88px; font-size: 12px; color: var(--ws-ink-3); }
+.ws2-cx-addr .ws2-path { margin: 0 6px; font-family: var(--ws-mono); color: var(--ws-ink-2); overflow-wrap: anywhere; }
+/* the steps, ticked in pencil as they pass */
+.ws2-cx-steps { display: grid; gap: 8px; margin: 18px 0 14px; padding: 12px 0 0; border-top: 1px solid var(--ws-rule); list-style: none; counter-reset: step; }
+.ws2-cx-steps li { display: grid; grid-template-columns: 18px auto minmax(0, 1fr); align-items: baseline; column-gap: 10px; font-size: 13px; color: var(--ws-ink-3); counter-increment: step; }
+.ws2-cx-steps li i { position: relative; top: 2px; width: 13px; height: 13px; border: 1px solid var(--ws-line-2); border-radius: 50%; }
+.ws2-cx-steps li i::after { content: counter(step); position: absolute; inset: 0; display: grid; place-items: center; font-family: var(--ws-mono); font-style: normal; font-size: 8.5px; color: var(--ws-ink-3); }
+.ws2-cx-steps li small { justify-self: end; font-size: 11.5px; color: var(--ws-ink-3); }
+.ws2-cx-steps li.is-doing { color: var(--ws-ink); }
+.ws2-cx-steps li.is-doing i { border-color: var(--ws-accent); animation: ws2-lamp-blink .8s steps(2) infinite; }
+.ws2-cx-steps li.is-done { color: var(--ws-ink-2); }
+.ws2-cx-steps li.is-done i { border-color: transparent; }
+.ws2-cx-steps li.is-done i::after { content: ''; inset: -3px 2px 2px 3px; border: solid var(--log-pencil); border-width: 0 2px 2px 0; transform: rotate(40deg) scale(.6, 1); }
+.ws2-cx-steps li.is-failed { color: var(--ws-bad); }
+.ws2-cx-steps li.is-failed i { border-color: var(--ws-bad); }
+.ws2-cx-steps li.is-failed i::after { content: '!'; color: var(--ws-bad); }
+.ws2-cx-connect > .ws2-cx-labelled { margin-bottom: 8px; }
+.ws2-cx-connect .ws2-m-flag { margin: 10px 0 0; }
+.ws2-cx-connect .ws2-m-flag b { display: block; font-weight: 500; }
+.ws2-cx-connect .ws2-m-flag span { display: block; font-size: 12.5px; color: var(--ws-ink-2); }
+.ws2-cx-actions { display: flex; justify-content: flex-end; align-items: center; gap: 20px; margin-top: 20px; }
+@container (max-width: 520px) {
+  .ws2 .ws2-cx-row .main { grid-template-columns: 26px minmax(0, 1fr) 14px; height: auto; min-height: 58px; padding: 8px 4px; }
+  .ws2-cx-row .main .ws2-cx-lamp { grid-column: 2; grid-row: 2; }
+  .ws2-cx-row .main .chev { grid-column: 3; grid-row: 1 / span 2; }
+  .ws2-cx-row .detail { padding-left: 4px; }
+  .ws2-cx-get, .ws2-cx-addr { margin-left: 0; }
+  .ws2-cx-labelled { grid-template-columns: minmax(0, 1fr); }
+  .ws2-cx-labelled > small { grid-column: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ws2-cx-row .detail { animation: none; }
+  .ws2-cx-row .chev { transition: none; }
+}

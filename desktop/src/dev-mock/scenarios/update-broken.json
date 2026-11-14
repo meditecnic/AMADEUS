@@ -1,0 +1,11 @@
+{
+  "name": "update-broken",
+  "extends": "streaming",
+  "description": "A newer version is published, but its download breaks part-way.",
+  "update": {
+    "version": "0.2.0",
+    "date": "2026-11-20T08:00:00Z",
+    "notes": "记忆空间可以按时间线浏览。",
+    "fail": "download"
+  }
+}

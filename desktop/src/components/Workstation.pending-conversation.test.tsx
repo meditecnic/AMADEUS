@@ -392,7 +392,6 @@ it('a committed worldline shift discards an unconfirmed conversation target', as
   fireEvent.click(newButton()); await flush(300); await recover();
   const retired = latest().onmessage!;
   fireEvent.click(screen.getByRole('button', { name: '系统设置' }));
-  fireEvent.click(screen.getByRole('radio', { name: 'β 世界线' }));
   fireEvent.click(screen.getByRole('button', { name: '跃迁至 β' }));
   await flush(600);
   expect(onWorldlineChange).toHaveBeenCalledWith('beta');
@@ -410,7 +409,6 @@ it('a failed worldline shift after pending entry reauthenticates the full source
   fireEvent.click(newButton()); await flush(300);
   // The target socket has not opened; the worldline transaction must fail in place.
   fireEvent.click(screen.getByRole('button', { name: '系统设置' }));
-  fireEvent.click(screen.getByRole('radio', { name: 'β 世界线' }));
   fireEvent.click(screen.getByRole('button', { name: '跃迁至 β' })); await flush(600);
   expect(onWorldlineChange).not.toHaveBeenCalled();
   expect(active()).toBe('old');

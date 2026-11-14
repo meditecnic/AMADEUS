@@ -1,33 +1,50 @@
+import ai302 from '@lobehub/icons-static-svg/icons/ai302.svg?raw';
 import anthropic from '@lobehub/icons-static-svg/icons/anthropic.svg?raw';
 import azure from '@lobehub/icons-static-svg/icons/azure.svg?raw';
 import baichuan from '@lobehub/icons-static-svg/icons/baichuan.svg?raw';
+import cerebras from '@lobehub/icons-static-svg/icons/cerebras.svg?raw';
 import cohere from '@lobehub/icons-static-svg/icons/cohere.svg?raw';
+import commandcode from '@lobehub/icons-static-svg/icons/commandcode.svg?raw';
+import deepinfra from '@lobehub/icons-static-svg/icons/deepinfra.svg?raw';
 import deepseek from '@lobehub/icons-static-svg/icons/deepseek.svg?raw';
 import doubao from '@lobehub/icons-static-svg/icons/doubao.svg?raw';
+import aihubmix from '@lobehub/icons-static-svg/icons/aihubmix.svg?raw';
 import fireworks from '@lobehub/icons-static-svg/icons/fireworks.svg?raw';
 import gemini from '@lobehub/icons-static-svg/icons/gemini.svg?raw';
 import groq from '@lobehub/icons-static-svg/icons/groq.svg?raw';
+import huggingface from '@lobehub/icons-static-svg/icons/huggingface.svg?raw';
+import kimi from '@lobehub/icons-static-svg/icons/kimi.svg?raw';
 import hunyuan from '@lobehub/icons-static-svg/icons/hunyuan.svg?raw';
 import lmstudio from '@lobehub/icons-static-svg/icons/lmstudio.svg?raw';
 import minimax from '@lobehub/icons-static-svg/icons/minimax.svg?raw';
 import mistral from '@lobehub/icons-static-svg/icons/mistral.svg?raw';
+import modelscope from '@lobehub/icons-static-svg/icons/modelscope.svg?raw';
 import moonshot from '@lobehub/icons-static-svg/icons/moonshot.svg?raw';
+import novita from '@lobehub/icons-static-svg/icons/novita.svg?raw';
+import nvidia from '@lobehub/icons-static-svg/icons/nvidia.svg?raw';
 import ollama from '@lobehub/icons-static-svg/icons/ollama.svg?raw';
+import opencode from '@lobehub/icons-static-svg/icons/opencode.svg?raw';
 import openai from '@lobehub/icons-static-svg/icons/openai.svg?raw';
 import openrouter from '@lobehub/icons-static-svg/icons/openrouter.svg?raw';
 import perplexity from '@lobehub/icons-static-svg/icons/perplexity.svg?raw';
+import ppio from '@lobehub/icons-static-svg/icons/ppio.svg?raw';
+import qiniu from '@lobehub/icons-static-svg/icons/qiniu.svg?raw';
 import qwen from '@lobehub/icons-static-svg/icons/qwen.svg?raw';
 import siliconcloud from '@lobehub/icons-static-svg/icons/siliconcloud.svg?raw';
 import stepfun from '@lobehub/icons-static-svg/icons/stepfun.svg?raw';
 import together from '@lobehub/icons-static-svg/icons/together.svg?raw';
+import vercel from '@lobehub/icons-static-svg/icons/vercel.svg?raw';
+import wenxin from '@lobehub/icons-static-svg/icons/wenxin.svg?raw';
 import xai from '@lobehub/icons-static-svg/icons/xai.svg?raw';
+import xiaomimimo from '@lobehub/icons-static-svg/icons/xiaomimimo.svg?raw';
 import yi from '@lobehub/icons-static-svg/icons/yi.svg?raw';
 import zhipu from '@lobehub/icons-static-svg/icons/zhipu.svg?raw';
 
 /* Monochrome marks from Lobe Icons (MIT); they inherit `currentColor`, so the worldline decides the tint. */
 const ICONS: Record<string, string> = {
-  anthropic, azure, baichuan, cohere, deepseek, doubao, fireworks, gemini, groq, hunyuan, lmstudio, minimax,
-  mistral, moonshot, ollama, openai, openrouter, perplexity, qwen, siliconcloud, stepfun, together, xai, yi, zhipu,
+  ai302, aihubmix, anthropic, azure, baichuan, cerebras, cohere, commandcode, deepinfra, deepseek, doubao, fireworks, gemini,
+  groq, huggingface, hunyuan, kimi, lmstudio, minimax, mistral, modelscope, moonshot, novita, nvidia, ollama, openai, opencode,
+  openrouter, perplexity, ppio, qiniu, qwen, siliconcloud, stepfun, together, vercel, wenxin, xai, xiaomimimo, yi, zhipu,
 };
 
 const BUILTIN: Record<string, string> = { deepseek: 'deepseek', glm: 'zhipu', openai: 'openai', gemini: 'gemini' };
@@ -46,7 +63,17 @@ const HOSTS: Array<[RegExp, string]> = [
   [/(^|\.)mistral\.ai$/, 'mistral'],
   [/(^|\.)groq\.com$/, 'groq'],
   [/(^|\.)volces\.com$/, 'doubao'],
-  [/(^|\.)(minimaxi?\.com|minimax\.chat)$/, 'minimax'],
+  [/(^|\.)(minimaxi?\.com|minimax\.(chat|cn|io))$/, 'minimax'],
+  [/(^|\.)kimi\.(com|ai)$/, 'kimi'],
+  [/(^|\.)tencentmaas\.com$/, 'hunyuan'],
+  [/(^|\.)xiaomimimo\.com$/, 'xiaomimimo'],
+  [/(^|\.)baidubce\.com$/, 'wenxin'],
+  [/(^|\.)commandcode\.ai$/, 'commandcode'],
+  [/(^|\.)opencode\.ai$/, 'opencode'],
+  [/(^|\.)cerebras\.ai$/, 'cerebras'],
+  [/(^|\.)vercel\.sh$/, 'vercel'],
+  [/(^|\.)aihubmix\.com$/, 'aihubmix'],
+  [/(^|\.)ppinfra\.com$/, 'ppio'],
   [/(^|\.)stepfun\.com$/, 'stepfun'],
   [/(^|\.)lingyiwanwu\.com$/, 'yi'],
   [/(^|\.)hunyuan\.cloud\.tencent\.com$/, 'hunyuan'],
@@ -56,6 +83,14 @@ const HOSTS: Array<[RegExp, string]> = [
   [/(^|\.)cohere\.(com|ai)$/, 'cohere'],
   [/(^|\.)baichuan-ai\.com$/, 'baichuan'],
   [/(^|\.)azure\.com$/, 'azure'],
+  [/(^|\.)nvidia\.com$/, 'nvidia'],
+  [/(^|\.)huggingface\.co$/, 'huggingface'],
+  [/(^|\.)modelscope\.cn$/, 'modelscope'],
+  [/(^|\.)novita\.ai$/, 'novita'],
+  [/(^|\.)deepinfra\.com$/, 'deepinfra'],
+  [/(^|\.)qnaigc\.com$/, 'qiniu'],
+  [/(^|\.)302\.ai$/, 'ai302'],
+  [/(^|\.)stepfun\.ai$/, 'stepfun'],
 ];
 
 /* Local servers are recognised by their conventional ports only. */

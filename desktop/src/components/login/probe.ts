@@ -10,8 +10,11 @@ type P2 = [number, number];
 const DEG = Math.PI / 180;
 const PITCH = 20 * DEG;
 const ROLL = 30 * DEG;
-/** Where the body's centre lands on the plate, and the drawing's scale. */
-export const PROBE_AT = { x: 380, y: 240, s: 0.92 };
+/**
+ * Where the body's centre lands on the plate, and the drawing's scale. The satellite is the sheet's main figure,
+ * as on the title screens: it fills the right half and its arrays run off the edge of the sheet.
+ */
+export const PROBE_AT = { x: 1350, y: 400, s: 2.9 };
 /** Resting yaw (the still drawing, and where the turn starts), and the turn rate. */
 export const PROBE_YAW0 = -30;
 export const PROBE_SPIN = 9;
@@ -104,14 +107,35 @@ const FIXED = (() => {
   const head = (k: number): P2 => [end[0] - u[0] * 7 + u[1] * 3.5 * k, end[1] - u[1] * 7 - u[0] * 3.5 * k];
   const spin = line(arcPts);
   const arrow = `M${fmt(head(1))}L${fmt(end)}L${fmt(head(-1))}`;
-  return { rim, rimInner, dish, mast, feed, nozzle, axis, spin, arrow, omega: { x: r1(end[0] + 10), y: r1(end[1] + 12) } };
+  /* a fixed point on the dish's rim (the far side from the body), for the figure's leader line */
+  const rimPts = ring((t) => dishAt(DR, t), 72).map(proj);
+  const [hx, hy] = rimPts.reduce((a, b) => (b[1] < a[1] ? b : a));
+  return { rim, rimInner, dish, mast, feed, nozzle, axis, spin, arrow, head: { x: r1(hx), y: r1(hy) } };
 })();
 export const PROBE_FIXED = FIXED;
 
-export type ProbeFrame = Record<'hidden' | 'body' | 'marks' | 'grille' | 'struts' | 'booms' | 'wings' | 'cells' | 'strips' | 'axis', string>;
+export type ProbeFrame = Record<'faces' | 'hidden' | 'body' | 'marks' | 'grille' | 'struts' | 'booms' | 'wings' | 'cells' | 'strips' | 'axis', string>;
+
+/* The body's six faces (outward normal, four corners), for the faces turned to the viewer. */
+const FACES: { n: V3; c: V3[] }[] = ([0, 1, 2] as const).flatMap((ax) => [-1, 1].map((s) => {
+  const n: V3 = [0, 0, 0];
+  n[ax] = s;
+  const half: V3 = [BW, BH, BD];
+  const [u, v] = [0, 1, 2].filter((k) => k !== ax);
+  const corner = (a: number, b: number): V3 => {
+    const p: V3 = [0, 0, 0];
+    p[ax] = s * half[ax];
+    p[u] = a * half[u];
+    p[v] = b * half[v];
+    return p;
+  };
+  return { n, c: [corner(-1, -1), corner(1, -1), corner(1, 1), corner(-1, 1)] };
+}));
 
 export function probeFrame(yawDeg: number): ProbeFrame {
   const { line, facing } = view(yawDeg);
+  /* faces seen from here, filled so the drawing's grid reads as projected onto the model */
+  const faces = FACES.filter((fc) => facing(fc.n)).map((fc) => line(fc.c, true)).join('');
   let body = '';
   let hidden = '';
   for (const e of EDGES) {
@@ -156,5 +180,5 @@ export function probeFrame(yawDeg: number): ProbeFrame {
     booms += line([[s * BW, 0, 0], [x0, 0, 0]]) + line(ring((t) => [s * 47, 5 * Math.cos(t), 5 * Math.sin(t)], 20), true);
   }
   const axis = line([[-WOUT - 34, 0, 0], [WOUT + 34, 0, 0]]);
-  return { hidden, body, marks, grille, struts, booms, wings, cells, strips, axis };
+  return { faces, hidden, body, marks, grille, struts, booms, wings, cells, strips, axis };
 }

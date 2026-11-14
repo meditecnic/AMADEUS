@@ -1,0 +1,228 @@
+/* The workstation on the login's drafting sheet (design/references.md §4).
+ * Loaded after workstation.css. Paper (first-party generated textures, assets/PROVENANCE.md), the sheet's grid and
+ * zone border, one large figure per worldline (DraftSheet.tsx), and a note taped on an empty conversation.
+ */
+
+/* ---------- paper ---------- */
+.ds-sheet, .ds-sheet > * { position: absolute; inset: 0; pointer-events: none; }
+/* The sheet is the size container the clock's moving parts are placed in (DraftSheet <Parts>): --s is the plate's
+   scale and --ox its left offset under the plate's 'xMidYMin slice', so a part at plate point (ux, uy) of radius r
+   lands where the plate would draw it. Each part turns on its own compositor layer. */
+.ds-sheet { container-type: size; }
+.ds-spin { --s: max(calc(100cqw / 1920), calc(100cqh / 1080)); --ox: calc((100cqw - 1920 * var(--s)) / 2); }
+.ds-part {
+  position: absolute; left: calc(var(--ox) + (var(--ux) - var(--r)) * var(--s)); top: calc((var(--uy) - var(--r)) * var(--s));
+  width: calc(var(--r) * 2 * var(--s)); height: calc(var(--r) * 2 * var(--s)); rotate: var(--a0);
+}
+.ds-part.run { animation: ds-turn var(--period) linear infinite; }
+.ds-part.rock { animation: ds-rock 1s ease-in-out infinite alternate; }
+@keyframes ds-turn { to { transform: rotate(360deg); } }
+@keyframes ds-rock { from { transform: rotate(-3deg); } to { transform: rotate(3deg); } }
+/* The slate gives the stains; a fine-grain tile laid at its own size keeps the paper's tooth sharp on 2K and 4K screens,
+   where the slate itself is stretched. */
+.ds-paper {
+  background: url('/assets/sheet/grain.webp') 0 0 / 1024px 1024px repeat, url('/assets/sheet/sg-slate.webp') center / cover no-repeat;
+  background-blend-mode: overlay, normal; opacity: .62;
+}
+.ds-beta .ds-paper { background-image: url('/assets/sheet/grain.webp'), url('/assets/sheet/beta-wall.webp'); opacity: .78; }
+/* Keep the reading side calm: the paper is darker where the text is, fuller where the figure is. */
+.ds-sheet::after {
+  content: ''; position: absolute; inset: 0;
+  background:
+    linear-gradient(90deg, rgba(6, 7, 8, .5) 0, rgba(6, 7, 8, .34) 34%, rgba(6, 7, 8, .1) 64%, rgba(6, 7, 8, .04) 100%),
+    radial-gradient(120% 90% at 50% 50%, transparent 55%, rgba(0, 0, 0, .45) 100%);
+}
+.ds-beta::after {
+  background:
+    linear-gradient(90deg, rgba(4, 8, 9, .66) 0, rgba(4, 8, 9, .46) 34%, rgba(4, 8, 9, .16) 64%, rgba(4, 8, 9, .08) 100%),
+    radial-gradient(120% 90% at 50% 50%, transparent 55%, rgba(0, 0, 0, .5) 100%);
+}
+/* The floor shade under the stage belongs to her portrait. Without her it only darkens the stage column and cuts a
+   seam into the sheet; with her it fades in from the left instead of starting at the column edge. */
+.ws2 .avatar-stage.avatar-absent::before, .ws2 .avatar-stage.avatar-absent::after { display: none; }
+.ws2 .avatar-stage::after { -webkit-mask-image: linear-gradient(90deg, transparent, #000 45%); mask-image: linear-gradient(90deg, transparent, #000 45%); }
+.ds-grid {
+  background:
+    linear-gradient(90deg, rgba(235, 238, 240, .045) 1px, transparent 1px) 0 0 / 80px 80px,
+    linear-gradient(rgba(235, 238, 240, .045) 1px, transparent 1px) 0 0 / 80px 80px,
+    linear-gradient(90deg, rgba(235, 238, 240, .018) 1px, transparent 1px) 0 0 / 16px 16px,
+    linear-gradient(rgba(235, 238, 240, .018) 1px, transparent 1px) 0 0 / 16px 16px;
+}
+.ds-beta .ds-grid {
+  background:
+    linear-gradient(90deg, rgba(233, 150, 80, .04) 1px, transparent 1px) 0 0 / 80px 80px,
+    linear-gradient(rgba(233, 150, 80, .04) 1px, transparent 1px) 0 0 / 80px 80px,
+    linear-gradient(90deg, rgba(233, 150, 80, .014) 1px, transparent 1px) 0 0 / 16px 16px,
+    linear-gradient(rgba(233, 150, 80, .014) 1px, transparent 1px) 0 0 / 16px 16px;
+}
+
+/* ---------- the figure ---------- */
+.ds-plate { width: 100%; height: 100%; overflow: visible; fill: none; stroke: rgba(226, 232, 235, .17); stroke-width: 1; }
+.ds-plate * { vector-effect: non-scaling-stroke; }
+.ds-plate .ln.strong { stroke: rgba(226, 232, 235, .3); }
+.ds-plate .dash { stroke: rgba(226, 232, 235, .11); stroke-dasharray: 2 7; }
+.ds-plate .cl { stroke: rgba(226, 232, 235, .07); stroke-dasharray: 34 7 5 7; }
+.ds-plate .tk { stroke: rgba(226, 232, 235, .22); }
+.ds-plate .tk.fine { stroke: rgba(226, 232, 235, .1); }
+.ds-plate .num { stroke: none; fill: rgba(226, 232, 235, .3); font-family: 'EB Garamond', Georgia, serif; font-size: 34px; letter-spacing: .04em; }
+.ds-plate .hand { fill: rgba(226, 232, 235, .1); stroke: rgba(226, 232, 235, .36); }
+.ds-plate .hand.sec { fill: none; stroke: color-mix(in srgb, var(--ws-accent) 70%, transparent); }
+.ds-plate .hub { fill: rgba(226, 232, 235, .55); stroke: none; }
+.ds-plate .lead { stroke: rgba(226, 232, 235, .24); }
+.ds-plate .lead-dot { fill: rgba(226, 232, 235, .5); stroke: none; }
+.ds-plate text { stroke: none; }
+.ds-plate .cap { fill: rgba(226, 232, 235, .36); font-family: var(--ws-mono); font-size: 12.5px; letter-spacing: .24em; }
+.ds-plate .cap.sub { fill: rgba(226, 232, 235, .26); font-size: 11.5px; letter-spacing: .3em; }
+
+.ds-beta .ds-plate { stroke: rgba(233, 150, 80, .16); }
+.ds-beta .ds-plate .orbit { stroke: rgba(240, 160, 90, .34); stroke-width: .9; }
+.ds-beta .ds-plate .tk { stroke: rgba(233, 150, 80, .2); }
+.ds-beta .ds-plate .cl { stroke: rgba(233, 150, 80, .08); }
+.ds-beta .ds-plate :is(.lead) { stroke: rgba(233, 150, 80, .26); }
+.ds-beta .ds-plate .lead-dot { fill: rgba(233, 150, 80, .6); }
+.ds-beta .ds-plate .cap { fill: rgba(240, 170, 110, .4); }
+.ds-beta .ds-plate .cap.sub { fill: rgba(240, 170, 110, .28); }
+/* the equations, chalked beside the attractor like the formulas behind the original's notes */
+.ds-plate .eq text { fill: rgba(240, 170, 110, .3); font-family: 'EB Garamond', Georgia, serif; font-style: italic; font-size: 31px; letter-spacing: .04em; }
+.ds-plate .eq .v { font-style: normal; }
+.ds-plate .eq .small { font-size: 21px; letter-spacing: .1em; fill: rgba(240, 170, 110, .22); }
+.ds-plate .eq .ln { stroke: rgba(233, 150, 80, .2); }
+/* β: the axes and the two fixed points named, as on a plot */
+.ds-plate .ax { fill: rgba(240, 170, 110, .32); font-family: 'EB Garamond', Georgia, serif; font-style: italic; font-size: 25px; }
+.ds-plate .ax .sup { font-size: 16px; font-style: normal; }
+/* β: the live pair (DraftSheet <Divergence>), amber and Steins;Gate silver */
+.ds-plate.ds-pair { pointer-events: none; }
+.ds-pair .tail { fill: none; stroke-width: 1.2; stroke-linejoin: round; stroke-linecap: round; }
+.ds-pair .tail.beta { stroke: rgba(243, 166, 106, .2); }
+.ds-pair .tail.beta.near { stroke: rgba(243, 166, 106, .5); }
+.ds-pair .tail.sg { stroke: rgba(205, 222, 234, .16); }
+.ds-pair .tail.sg.near { stroke: rgba(205, 222, 234, .42); }
+.ds-pair .head { stroke: none; }
+.ds-pair .head.beta { fill: #f5ae76; filter: drop-shadow(0 0 5px rgba(245, 174, 118, .85)); }
+.ds-pair .head.sg { fill: #dce8ef; filter: drop-shadow(0 0 4px rgba(220, 232, 239, .75)); }
+.ws2:has(.avatar-stage:not(.avatar-absent)) .ds-pair { display: none; }
+
+/* With her portrait on the stage the figure is only a backdrop: its captions and the β equations would sit behind her
+   and run into her name card, so they go. */
+.ws2:has(.avatar-stage:not(.avatar-absent)) .ds-plate :is(.cap, .lead, .lead-dot, .eq) { display: none; }
+
+/* the other worldline's figure, rubbed out (DraftSheet <Trace>): fainter than anything drawn, the eraser's smear fainter still */
+.ds-plate.ds-trace { opacity: .5; }
+.ds-trace .smear { opacity: .035; }
+.ds-beta .ds-trace .smear { opacity: .03; }
+
+/* specimens pinned about the β sheet (generated prints, recoloured to one amber ink) */
+.ds-moths img { position: absolute; display: block; height: auto; opacity: var(--o, .16); transform: rotate(var(--r, 0deg)); }
+
+/* a soda-can ring on the SG sheet: darker than the slate, as a dried stain is */
+.ds-ring { position: absolute; left: auto; top: auto; right: calc(var(--ws-stage) * .62); bottom: 15%; inset-inline-start: auto; width: clamp(110px, 9vw, 160px); height: auto; opacity: .42; transform: rotate(-24deg); filter: brightness(1.5) saturate(.7); }
+
+/* The sheet's border, the login's in the workstation's proportions: a hairline frame, zones lettered down both sides
+   and numbered along the foot in the margin outside it, each zone ticked off the frame line. The header band is the
+   top margin; its cells stand on the frame's top edge (workstation.css). */
+.ws2 { --fr-top: 60px; --fr-side: 14px; --fr-foot: 13px; --ws-rule: rgba(226, 232, 235, .14); }
+.ws2[data-wl='beta'] { --ws-rule: rgba(233, 150, 80, .15); }
+.ds-sheet > .ds-frame { inset: var(--fr-top) var(--fr-side) var(--fr-foot); border: 1px solid var(--ws-rule); }
+.ds-zones .z { position: absolute; display: flex; font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .1em; color: rgba(226, 232, 235, .22); }
+.ds-zones :is(.left, .right) { top: var(--fr-top); bottom: var(--fr-foot); width: var(--fr-side); flex-direction: column; }
+.ds-zones .left { left: 0; }
+.ds-zones .right { right: 0; }
+.ds-zones .bottom { left: var(--fr-side); right: var(--fr-side); bottom: 0; height: var(--fr-foot); }
+.ds-zones span { flex: 1; display: grid; place-items: center; position: relative; }
+.ds-zones span + span::before { content: ''; position: absolute; background: rgba(226, 232, 235, .16); }
+.ds-zones .left span + span::before { top: 0; right: 0; width: 6px; height: 1px; }
+.ds-zones .right span + span::before { top: 0; left: 0; width: 6px; height: 1px; }
+.ds-zones .bottom span + span::before { top: 0; left: 0; width: 1px; height: 6px; }
+.ds-beta .ds-zones .z { color: rgba(233, 150, 80, .24); }
+.ds-beta .ds-zones span + span::before { background: rgba(233, 150, 80, .18); }
+
+/* The link is down: the sheet goes dim and still (its clock stops, DraftSheet `still`), the meter's tubes cool, and
+   a stamp says so (workstation.css). On its way back, only the figure dims a little. */
+.ds-sheet :is(.ds-plate, .ds-ring, .ds-moths, .ds-paper) { transition: opacity .6s ease, filter .6s ease; }
+.ws2[data-link='down'] .ds-sheet .ds-plate { opacity: .4; filter: saturate(.3); }
+.ws2[data-link='down'] .ds-sheet :is(.ds-ring, .ds-moths) { opacity: .45; }
+.ws2[data-link='down'] .ds-sheet .ds-paper { filter: saturate(.55) brightness(.82); }
+.ws2[data-link='connecting'] .ds-sheet .ds-plate { opacity: .72; }
+
+/* drafted in with the workstation's entrance, like the login sheet */
+.ws2[data-entrance] .ds-plate { animation: ds-appear 1.2s ease .16s backwards; }
+.ws2[data-entrance] :is(.ds-paper, .ds-grid, .ds-moths, .ds-frame, .ds-zones) { animation: ds-appear .9s ease backwards; }
+@keyframes ds-draw { to { stroke-dashoffset: 0; } }
+@keyframes ds-appear { from { opacity: 0; } }
+
+/* ---------- stage without the asset pack: no stand-in for her; the sheet's figure is what shows there ---------- */
+:root:not([data-asset-pack='on']) .ws2-matrix { display: none; }
+
+/* ---------- an empty conversation: a note taped to the sheet ---------- */
+.ws2 .ws2-empty-card {
+  width: min(470px, 100%); padding: 34px 40px 30px 74px; gap: 10px;
+  background: url('/assets/sheet/paper-spiral.webp') center / 100% 100% no-repeat;
+  color: #2b2c30; transform: rotate(-1.2deg);
+  filter: drop-shadow(0 14px 22px rgba(0, 0, 0, .45)) drop-shadow(0 2px 3px rgba(0, 0, 0, .35));
+}
+.ws2 .ws2-empty-card::before { left: 50px; top: 39px; width: 6px; height: 6px; box-shadow: none; }
+/* where a can was set down on the note */
+.ws2[data-wl='sg'] .ws2-empty-card::after {
+  content: ''; position: absolute; right: -34px; bottom: -40px; width: 150px; height: 150px; pointer-events: none;
+  background: url('/assets/sheet/ring-1.webp') center / contain no-repeat; opacity: .62; transform: rotate(18deg); mix-blend-mode: multiply;
+}
+.ws2 .ws2-empty-card .ws2-empty-kicker { color: rgba(43, 44, 48, .55); letter-spacing: .24em; }
+.ws2 .ws2-empty-card .ws2-empty-head { color: #22232a; font-family: 'EB Garamond', var(--ws-serif-cjk); font-size: 40px; letter-spacing: .1em; }
+.ws2 .ws2-empty-card .ws2-empty-msg { color: rgba(34, 35, 42, .78); font-size: 15px; }
+.ws2 .ws2-empty-card .ws2-empty-rule { color: rgba(43, 44, 48, .5); }
+.ws2 .ws2-empty-card .ws2-empty-rule i { background: rgba(43, 44, 48, .3); }
+.ws2 .ws2-empty-card .ws2-empty-action { color: #22232a; box-shadow: inset 0 0 0 1px rgba(34, 35, 42, .45); }
+.ws2 .ws2-empty-card .ws2-empty-action.is-quiet { color: rgba(34, 35, 42, .7); box-shadow: none; }
+/* masking tape over two corners: two generated strips, torn by hand, a little translucent */
+.ws2-empty-tape {
+  position: absolute; width: 112px; height: 52px; pointer-events: none; opacity: .9;
+  background: url('/assets/sheet/tape-1.webp') center / contain no-repeat;
+  filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, .3));
+}
+.ws2-empty-tape.a { left: -36px; top: -22px; transform: rotate(-32deg); }
+.ws2-empty-tape.b { right: -40px; top: -20px; width: 118px; height: 56px; background-image: url('/assets/sheet/tape-2.webp'); transform: rotate(27deg); }
+/* β: a framed slip instead of paper — amber double rule, circuit stubs off two corners */
+.ws2[data-wl='beta'] .ws2-empty-card {
+  background:
+    linear-gradient(rgba(233, 150, 80, .5), rgba(233, 150, 80, .5)) 0 0 / 100% 1px no-repeat,
+    linear-gradient(rgba(233, 150, 80, .5), rgba(233, 150, 80, .5)) 0 100% / 100% 1px no-repeat,
+    linear-gradient(rgba(233, 150, 80, .5), rgba(233, 150, 80, .5)) 0 0 / 1px 100% no-repeat,
+    linear-gradient(rgba(233, 150, 80, .5), rgba(233, 150, 80, .5)) 100% 0 / 1px 100% no-repeat,
+    linear-gradient(rgba(8, 11, 12, .5), rgba(8, 11, 12, .5)),
+    url('/assets/sheet/beta-metal.webp') 30% 40% / 1800px auto;
+  outline: 1px solid rgba(233, 150, 80, .22); outline-offset: 4px;
+  color: var(--ws-ink); transform: none; filter: none; padding: 30px 36px 26px 56px;
+}
+.ws2[data-wl='beta'] .ws2-empty-card::before { left: 30px; top: 36px; }
+.ws2[data-wl='beta'] .ws2-empty-card :is(.ws2-empty-kicker, .ws2-empty-rule) { color: rgba(240, 170, 110, .55); }
+.ws2[data-wl='beta'] .ws2-empty-card .ws2-empty-head { color: var(--ws-ink); }
+.ws2[data-wl='beta'] .ws2-empty-card .ws2-empty-msg { color: var(--ws-ink-2); }
+.ws2[data-wl='beta'] .ws2-empty-card .ws2-empty-rule i { background: rgba(233, 150, 80, .4); }
+.ws2[data-wl='beta'] .ws2-empty-card .ws2-empty-action { color: var(--ws-ink); box-shadow: inset 0 0 0 1px rgba(233, 150, 80, .5); }
+.ws2[data-wl='beta'] .ws2-empty-tape { width: 64px; height: 1px; background: rgba(233, 150, 80, .5); filter: none; opacity: 1; }
+.ws2[data-wl='beta'] .ws2-empty-tape.a { left: -64px; top: 22px; transform: none; }
+.ws2[data-wl='beta'] .ws2-empty-tape.b { right: -64px; top: auto; bottom: 22px; transform: none; }
+.ws2[data-wl='beta'] .ws2-empty-tape::after { content: ''; position: absolute; top: -3px; width: 7px; height: 7px; border-radius: 50%; border: 1px solid rgba(233, 150, 80, .6); }
+.ws2[data-wl='beta'] .ws2-empty-tape.a::after { left: -7px; }
+.ws2[data-wl='beta'] .ws2-empty-tape.b::after { right: -7px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ws2 .ds-plate * { animation: none !important; stroke-dashoffset: 0 !important; }
+}
+
+/* ---------- the memory space, drawn on this same sheet ---------- */
+/* Its own black paper, grid and border are left out here (inventory §2.11: one ground and one border, its structure
+   and copy untouched): the layer is clear, so the chart lies on this paper inside this frame. The columns step out
+   from under it, and the sheet's figure fades back so the chart reads. Closing brings them back as the layer goes. */
+/* what the chart rubs out with (label halos, hollow stars, the cone's matte band) is this paper's tone, not black */
+.ws2-memory-layer .memory-space { --m-paper: #262b2d; background: transparent; }
+.ws2-memory-layer .memory-space[data-worldline="beta"] { --m-paper: #171f1c; }
+.ws2-memory-layer .memory-space :is(.m-grid, .m-frame) { display: none; }
+.ws2-stage, .ws2-toasts { transition: opacity .2s ease; }
+.ws2.memory-space-open :is(.ws2-talk, .ws2-side, .ws2-stage, .ws2-toasts) {
+  opacity: 0; visibility: hidden; pointer-events: none; transition: opacity .2s ease, filter .2s ease, visibility 0s linear .2s;
+}
+.ws2.memory-space-open .ds-sheet :is(.ds-plate, .ds-ring, .ds-moths) { opacity: .14; }
+@media (prefers-reduced-motion: reduce) {
+  .ws2.memory-space-open :is(.ws2-talk, .ws2-side, .ws2-stage, .ws2-toasts) { transition: none; }
+}

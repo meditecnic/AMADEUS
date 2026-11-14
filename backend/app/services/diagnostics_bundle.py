@@ -97,11 +97,10 @@ def _providers() -> list[dict]:
 
 def _summary(settings: dict) -> dict:
     errors = {}
-    status = data_startup.current_status()
     try:
-        status["backups"] = backups.list_backups()
+        status = data_startup.status_report()
     except (OSError, ValueError, backups.BackupError):
-        status["backups"] = []
+        status = data_startup.status_report(list)
         errors["backups"] = "unavailable"
     try:
         disk = data_location.disk_usage()

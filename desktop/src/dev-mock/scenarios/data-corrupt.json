@@ -1,0 +1,9 @@
+{
+  "name": "data-corrupt",
+  "extends": "streaming",
+  "description": "The database fails its check at startup: only /health, the data routes and the diagnostics bundle answer.",
+  "data": {
+    "status": "corrupt",
+    "detail": "quick_check failed: memory.sqlite3: [('*** in database main ***\nPage 214: btreeInitPage() returns error code 11',)]"
+  }
+}

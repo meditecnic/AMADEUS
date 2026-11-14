@@ -21,8 +21,9 @@ const BOOT_SEGMENTS = [
   { src: 'assets/boot/boot_ring_3.png', frameStart: 5, frameCount: 6, fps: 16 },
 ] as const;
 
-// App only mounts the splash once the pack probe succeeded.
+// App only mounts the splash once the pack probe succeeded and the pack holds all three sheets.
 const sheet = (src: string) => packAsset(src) ?? '';
+export const hasBootSplash = () => BOOT_SEGMENTS.every((segment) => packAsset(segment.src) !== null);
 
 const TITLE_HOLD_MS = 700;
 const TITLE_TRANSITION_MS = 360;

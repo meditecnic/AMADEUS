@@ -22,9 +22,9 @@ async def _call(function, *args):
 
 @router.get("/status")
 async def data_status():
-    from app.services.data_startup import current_status
+    from app.services.data_startup import status_report
 
-    return {**current_status(), "backups": await _call(backups.list_backups)}
+    return await _call(status_report)
 
 
 @router.get("/backups")

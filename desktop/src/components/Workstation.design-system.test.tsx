@@ -414,44 +414,42 @@ describe('Workstation S4-DS dark-only chrome', () => {
     expect(meter).toHaveAccessibleDescription(/STEINS;GATE.*1\.048596%/);
     fireEvent.click(meter);
     await waitFor(() => expect(meter).toHaveAttribute('aria-expanded', 'true'));
-    expect(await screen.findByText('当前世界线')).toBeInTheDocument();
+    expect(await screen.findByRole('article', { name: 'STEINS;GATE 世界线（当前）' })).toBeInTheDocument();
     fireEvent.click(meter);
     await waitFor(() => expect(meter).toHaveAttribute('aria-expanded', 'false'));
   });
 
-  it('worldline panel: one dial reads the current line; the armed target is tagged on the diagram and aimed by the shift key', async () => {
+  it('worldline panel: a card per line; yours is lit and stamped, the other is cold until you reach for its key', async () => {
     renderWorkstation();
     fireEvent.click(await screen.findByRole('button', { name: '世界线 STEINS;GATE · 1.048596%' }));
-    await screen.findByText('当前世界线');
-    const panel = document.querySelector('.ws2-wl-panel') as HTMLElement;
-    // No second meter and no blueprint captions crowding the dial.
-    expect(panel.querySelectorAll('.nixie')).toHaveLength(1);
+    const here = await screen.findByRole('article', { name: 'STEINS;GATE 世界线（当前）' });
+    const there = screen.getByRole('article', { name: 'β 世界线' });
+    const panel = here.closest('.ws2-wl') as HTMLElement;
+    // Each card reads its own line on its own tubes, with no blueprint captions; only yours is lit.
+    expect(within(here).getByRole('img', { name: 'STEINS;GATE 世界线变动率 1.048596%' })).toBeInTheDocument();
+    expect(within(there).getByRole('img', { name: 'β 世界线变动率 1.129848%' })).toBeInTheDocument();
     expect(panel.querySelector('.nx-blueprint')).toBeNull();
-    expect(screen.queryByText(/TARGET PREVIEW/)).not.toBeInTheDocument();
-    expect(panel.querySelector('.tag')).toBeNull();
-    expect(screen.getByRole('button', { name: '当前所在' })).toBeDisabled();
+    expect(here).toHaveClass('cur');
+    expect(there).not.toHaveClass('cur');
+    // Where you are is said in words (the stamp only repeats it); there is no key on your own card.
+    expect(within(here).getByText('当前所在', { selector: '.ws2-sr-only' })).toBeInTheDocument();
+    expect(within(here).queryByRole('button')).toBeNull();
+    expect(panel.querySelector('.ws2-wl-dim .d')?.textContent).toBe('Δ 0.081252');
 
-    fireEvent.click(screen.getByRole('radio', { name: 'β 世界线' }));
-    await waitFor(() => expect(panel.querySelector('.ws2-wl-line.sel .tag')?.textContent).toMatch(/TARGET · 目标/));
-    await waitFor(() => expect(panel.querySelector('.ws2-wl-line.sel .val')?.textContent).toBe(' · 1.129848%'));
-    expect(panel.querySelector('.ws2-wl-line.cur .tag')).toBeNull();
-    expect(screen.getByText('目标世界线：β WORLDLINE · 1.129848%')).toBeInTheDocument();
-    // The dial still reads the line you are on.
-    expect(within(panel).getByRole('img', { name: 'World line divergence 1.048596%' })).toBeInTheDocument();
-
-    const key = screen.getByRole('button', { name: '跃迁至 β' });
-    fireEvent.pointerEnter(key);
+    const key = within(there).getByRole('button', { name: '跃迁至 β' });
+    fireEvent.pointerEnter(there);
     expect(panel).toHaveClass('aiming');
-    expect(panel.querySelector('.hop')).toBeTruthy();
-    fireEvent.pointerLeave(key);
+    expect(there).toHaveClass('aim');
+    expect(panel.querySelector('.ws2-wl-dim.is-aimed')).toBeTruthy();
+    fireEvent.pointerLeave(there);
     expect(panel).not.toHaveClass('aiming');
     fireEvent.focus(key);
-    expect(panel).toHaveClass('aiming');
+    expect(there).toHaveClass('aim');
     fireEvent.blur(key);
-    expect(panel).not.toHaveClass('aiming');
+    expect(there).not.toHaveClass('aim');
   });
 
-  it('the MEMORY key lays the memory sheet below the header and closes it again', async () => {
+  it('the MEMORY key opens the memory page over the whole sheet (the header gives way) and it closes again', async () => {
     renderWorkstation();
     await waitFor(() => expect(screen.getByText('AMADEUS')).toBeInTheDocument());
     const aperture = await screen.findByRole('button', { name: /^MEMORY$/i });
@@ -462,13 +460,16 @@ describe('Workstation S4-DS dark-only chrome', () => {
     });
     expect(await screen.findByTestId('memory-plate')).toBeInTheDocument();
     expect(document.querySelector('.ws2')).toHaveClass('memory-space-open');
-    expect(document.querySelector('.ws2-top')).toBeInTheDocument();
+    // One page at a time: the header band lifts away under the memory page and is out of reach.
+    expect(document.querySelector('.ws2-top')).toHaveAttribute('inert');
     expect(aperture).toHaveAttribute('aria-pressed', 'true');
-    expect(aperture).toHaveAttribute('title', '回到对话（Esc）');
-    expect(aperture).toHaveTextContent('ESC');
+    // open, the key is ringed in pencil (its tip, not a native title, says Esc goes back)
+    expect(aperture).toHaveClass('is-on');
+    expect(aperture.querySelector('.ws2-ring')).toBeTruthy();
+    expect(aperture).not.toHaveAttribute('title');
     expect(document.activeElement).toBe(screen.getByTestId('memory-space'));
     for (const covered of ['.ws2-side', '.ws2-talk', '.ws2-stage']) expect(document.querySelector(covered)).toHaveAttribute('inert');
-    fireEvent.click(aperture);
+    fireEvent.click(within(screen.getByTestId('memory-space')).getByRole('button', { name: /回到对话/ }));
     await waitFor(() => expect(screen.queryByTestId('memory-space')).toBeNull());
     expect(aperture).toHaveAttribute('aria-pressed', 'false');
     expect(document.activeElement).toBe(aperture);

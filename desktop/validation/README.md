@@ -149,7 +149,7 @@ debug messages), and `browser_network_requests({static:true})` to the stage
 directory. Keep raw diagnostics and a short classification; do not hide errors.
 Expected on this mock host:
 
-- Optional `/api/asset-pack/manifest.json` → 404, documented by the mock catalog.
+- Optional `/api/asset-pack/manifest.json` → `200 {"installed": false}` when absent (individual uninstalled pack assets return `404`).
 - A StrictMode WebSocket handshake cancellation followed by a working socket.
 - Aborted superseded Memory fetches during unmount/filtering.
 - The motion library's reduced-motion notice when that preference is emulated.

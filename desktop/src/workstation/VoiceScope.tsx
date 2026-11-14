@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useReducedMotion } from '../design-system/useReducedMotion';
 import { Tip } from './Tip';
+import { VolumeNumber } from './VolumeNumber';
 import { voiceEnvelope, voiceHeard } from './voiceEnvelope';
 
 const POINTS = 56;
@@ -92,9 +93,11 @@ export function VoiceScope({ volume, muted, speaking, onVolume, onToggleMute, on
           ))}
           <path className="trace" d={d} />
         </svg>
-        <span className="ws2-scope-val" aria-hidden="true">{muted ? 'MUTE' : String(pct).padStart(3, '0')}</span>
       </div>
       </Tip>
+      {muted
+        ? <span className="ws2-scope-val" aria-hidden="true">MUTE</span>
+        : <VolumeNumber className="ws2-scope-val" value={pct} onChange={(v) => onVolume(v / 100)} label="角色语音音量（0–100）" />}
       {speaking && (
         <Tip label="停止本句" side="top">
           <button type="button" className="ws2-scope-stop" aria-label="停止本句" onClick={onStop}>

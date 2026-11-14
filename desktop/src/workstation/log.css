@@ -1,0 +1,322 @@
+/*
+ * The observation log and its composer (amadeus-ops design/20261108-ui-inventory.md, block 2). After sheet.css.
+ *
+ * Set like a script in two hands. Her lines hang from a ledger rule on the left (a double hairline, red like the
+ * margin of the note on the sheet; β: the orange of its pencil), her name and line number in the margin left of it.
+ * Your lines keep to the right, each on its own short rule with your name in the right-hand margin, so the two
+ * voices part at a glance. AMADEUS is the name of a play, and the login's passcode is Salieri.
+ * The composer sits under the log in her text column; its send key is the sheet's own (SendKey.tsx), in your margin.
+ * Narrow columns fall back to the names over the lines (container query at the end).
+ */
+
+.ws2 { --log-rule: rgba(216, 52, 59, .34); }
+.ws2[data-wl='beta'] { --log-rule: rgba(227, 84, 42, .36); }
+/* the names column is the margin left of the rule; the line starts 14px right of it */
+.ws2 :is(.ws2-lines, .ws2-composer) { --log-names: 96px; --log-gutter: calc(var(--log-names) + 17px); --log-right: 84px; }
+/* a sentence pointed at, and the one it pairs with: a pencil line under it (SG red, β amber) */
+.ws2 { --log-pencil: rgba(222, 62, 66, .8); }
+.ws2[data-wl='beta'] { --log-pencil: rgba(240, 156, 88, .85); }
+
+/* ---------- plates (buttons only; who speaks is set as type) ---------- */
+
+/* Outline plate: a 1px edge with the corner cut; the cut is drawn by a gradient so the edge stays closed. */
+.ws2 :is(.ws2-actions button, .ws2-key-missing button, .ws2-link-state button, .history-retry) {
+  --edge: var(--ws-line-2);
+  height: 24px; padding: 0 10px 0 12px; border: 0; border-radius: 0;
+  font-size: 11.5px; letter-spacing: .1em; color: var(--ws-ink-2);
+  box-shadow: inset 0 0 0 1px var(--edge);
+  clip-path: polygon(6px 0, 100% 0, 100% 100%, 0 100%, 0 6px);
+  background: linear-gradient(135deg, transparent 42.8%, var(--edge) 42.8% 52.8%, transparent 52.8%) 0 0 / 7px 7px no-repeat;
+  transition: color .15s ease, background-color .15s ease;
+}
+.ws2 :is(.ws2-actions button, .ws2-key-missing button, .ws2-link-state button, .history-retry):is(:hover, :focus-visible):not(:disabled) {
+  --edge: var(--ws-ink-3); color: var(--ws-ink); background-color: rgba(255, 255, 255, .05); outline: none;
+}
+.ws2 .ws2-actions button:disabled { opacity: .4; }
+
+/* ---------- the log ---------- */
+
+.ws2-lines { position: relative; display: flex; flex-direction: column; padding: 2px 0 4px var(--log-gutter); counter-reset: ws2-log; }
+.ws2-lines::before {
+  content: ''; position: absolute; top: 0; bottom: 0; left: var(--log-names); width: 3px; pointer-events: none;
+  border-left: 1px solid var(--log-rule); border-right: 1px solid var(--log-rule);
+}
+/* --first is the height of an entry's first line box, so the name and the mark sit level with it */
+.ws2-line { --first: 31.5px; position: relative; max-width: 620px; margin-bottom: 24px; }
+/* yours keep clear of her text column on the left too, however long, so the two hands never start level */
+.ws2-line-user { --first: 28px; align-self: flex-end; max-width: min(calc(100% - var(--log-right) - max(40px, 9%)), 520px); margin-right: var(--log-right); }
+.ws2-line-error { --first: 25px; }
+
+/* Each entry's mark on the rule: hers a filled lozenge, yours a ring, a failed turn a cross. */
+.ws2-line::before {
+  content: ''; position: absolute; top: calc(var(--first) / 2 - 2.5px); left: -18px; width: 5px; height: 5px; pointer-events: none;
+}
+.ws2-line-kurisu::before { background: var(--ws-ink); transform: rotate(45deg); }
+.ws2[data-wl='beta'] .ws2-line-kurisu::before { background: var(--ws-accent); }
+.ws2-line-user::before { left: auto; right: -16.5px; z-index: 1; border-radius: 50%; background: var(--ws-bg); box-shadow: inset 0 0 0 1.2px var(--ws-ink-3); }
+/* your own short rule, the height of the line */
+.ws2-line-user::after { content: ''; position: absolute; top: 4px; bottom: 4px; right: -14px; width: 1px; background: var(--ws-line-2); pointer-events: none; }
+.ws2-line-error::before {
+  top: calc(var(--first) / 2 - 4.5px); left: -20px; width: 9px; height: 9px;
+  background: linear-gradient(45deg, transparent 45%, var(--ws-bad) 45% 55%, transparent 55%), linear-gradient(-45deg, transparent 45%, var(--ws-bad) 45% 55%, transparent 55%);
+}
+
+/* Who speaks, in the margin, set flush against the rule. */
+.ws2-line > header {
+  position: absolute; top: calc(var(--first) / 2 - 7px); right: calc(100% + 28px); width: calc(var(--log-names) - 11px);
+  display: flex; flex-direction: column; align-items: flex-end; text-align: right;
+}
+.ws2-line-kurisu .ws2-who { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.ws2 .ws2-who-name {
+  font-family: var(--ws-serif); font-weight: 500; font-size: 12.5px; line-height: 14px; letter-spacing: .3em; margin-right: -.3em;
+  color: var(--ws-ink);
+}
+.ws2[data-wl='beta'] .ws2-who-name { color: var(--ws-accent); }
+.ws2-line-kurisu .ws2-who-sub { font-family: var(--ws-serif); font-style: italic; font-size: 11.5px; line-height: 12px; letter-spacing: .04em; color: var(--ws-ink-3); }
+/* her lines are numbered at the outer edge of the margin */
+.ws2-line-kurisu { counter-increment: ws2-log; }
+.ws2-line-kurisu > header::before {
+  content: counter(ws2-log, decimal-leading-zero); position: absolute; left: 0; top: 0;
+  font-family: var(--ws-mono); font-size: 10px; line-height: 14px; letter-spacing: .08em; color: var(--ws-ink-3); font-variant-numeric: tabular-nums;
+}
+/* your name in the right-hand margin: the same type, lighter; a long chosen name keeps to two lines */
+.ws2-line-user > header { right: auto; left: calc(100% + 26px); width: calc(var(--log-right) - 26px); align-items: flex-start; text-align: left; }
+.ws2 .ws2-line-user .ws2-who {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; max-width: 100%;
+  font-family: var(--ws-serif); font-weight: 500; font-size: 12px; line-height: 14px; letter-spacing: .2em;
+  color: var(--ws-ink-3); overflow-wrap: anywhere;
+}
+/* no name chosen: the dash stands unbroken, as a dash does in a script */
+.ws2 .ws2-line-user .ws2-who[data-blank] { letter-spacing: 0; }
+.ws2-user-text { margin: 0; font-family: var(--ws-read); font-size: 15.5px; line-height: 1.8; color: var(--ws-ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* A failed turn: SYSTEM ERROR stands where a name would, in red; the reason runs on in the reading ink. */
+.ws2-line-error .system-error-content { margin: 0; padding: 0; font-family: var(--ws-read); font-size: 14px; line-height: 1.8; color: var(--ws-ink-2); }
+.ws2 .ws2-err-tag {
+  position: absolute; top: calc(var(--first) / 2 - 7px); right: calc(100% + 28px); width: calc(var(--log-names) - 11px); text-align: right;
+  font-family: var(--ws-mono); font-size: 10px; line-height: 14px; letter-spacing: .2em; color: var(--ws-bad);
+}
+.ws2-vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* She is thinking: a piece of the sheet's own figure working (SG: two wheels of the clock in mesh; β: a bright
+ * stretch running round the attractor), drawn in on arrival, and the state set like a stage direction.
+ * The asset pack's ring takes its place when there is one. Still under reduced motion. */
+.ws2-thinking { display: flex; align-items: center; gap: 8px; min-height: var(--first); animation: ws2-log-fade var(--dur-base) var(--ease-main) backwards; }
+@keyframes ws2-log-fade { from { opacity: 0; } }
+.ws2-thinking-label { font-family: var(--ws-read); font-size: 14px; letter-spacing: .1em; color: var(--ws-ink-2); }
+.ws2-thinking-label::before { content: '（'; }
+.ws2-thinking-label::after { content: '）'; }
+.ws2[data-wl='beta'] .ws2-thinking-label { color: var(--ws-accent); }
+.ws2-thinking-mark { flex: none; display: block; width: 32px; height: 24px; overflow: visible; color: rgba(226, 232, 235, .78); }
+.ws2-thinking-mark :is(path, circle) { fill: none; stroke: currentColor; stroke-width: 1; }
+.ws2-thinking-mark .pin { fill: currentColor; stroke: none; }
+.ws2-thinking-mark .gear { stroke-dasharray: 1; stroke-dashoffset: 1; animation: ws2-mark-draw .7s cubic-bezier(.3, .6, .2, 1) forwards; }
+.ws2-thinking-mark .turn-a { animation: ws2-gear-a 9s linear infinite; }
+.ws2-thinking-mark .turn-b { animation: ws2-gear-b 9s linear infinite; }
+@keyframes ws2-mark-draw { to { stroke-dashoffset: 0; } }
+@keyframes ws2-gear-a { to { transform: rotate(360deg); } }
+@keyframes ws2-gear-b { to { transform: rotate(-617.142857deg); } }
+.ws2[data-wl='beta'] .ws2-thinking-mark { color: var(--ws-accent); }
+.ws2-thinking-mark .orbit { opacity: .42; stroke-width: .75; stroke-dasharray: 100; stroke-dashoffset: 100; animation: ws2-orbit-draw .9s cubic-bezier(.3, .6, .2, 1) forwards; }
+.ws2-thinking-mark .tracer { stroke-width: 1.8; stroke-linecap: round; stroke-dasharray: 4 96; filter: drop-shadow(0 0 2px currentColor); animation: ws2-trace 20s linear infinite; }
+@keyframes ws2-orbit-draw { to { stroke-dashoffset: 0; } }
+@keyframes ws2-trace { from { stroke-dashoffset: 100; } to { stroke-dashoffset: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .ws2-thinking, .ws2-thinking-mark * { animation: none !important; }
+  .ws2-thinking-mark :is(.gear, .orbit) { stroke-dashoffset: 0; }
+  .ws2-thinking-mark .tracer { stroke-dashoffset: 62; }
+}
+.ws2-voicing { margin-top: 6px; font-size: 12px; letter-spacing: .1em; color: var(--ws-ink-3); }
+.ws2-actions { display: flex; gap: 6px; margin-top: 10px; }
+
+/* Back to the latest entry: on the composer's head, before its leader, so it never covers a line of the log; a
+   pencil arrow points down to where the log ends. */
+.ws2 .ws2-to-latest {
+  order: -1; flex: none; display: inline-flex; align-items: center; gap: 5px; height: 24px; margin: 0 0 0 -3px; padding: 0 4px 0 2px;
+  border: 0; border-radius: 0; background: none; cursor: pointer;
+  font-family: var(--ws-sans); font-size: 11.5px; letter-spacing: .14em; color: var(--ws-ink-2);
+  text-decoration: underline; text-decoration-color: transparent; text-decoration-thickness: 1.5px; text-underline-offset: 5px;
+  transition: color .15s ease, text-decoration-color .15s ease;
+  animation: ws2-latest-in .22s cubic-bezier(.2, .8, .2, 1) both;
+}
+.ws2 .ws2-to-latest::before {
+  content: ''; flex: none; width: 13px; height: 11px; rotate: 90deg; background: var(--log-pencil);
+  -webkit-mask: var(--pencil-arrow) center / contain no-repeat; mask: var(--pencil-arrow) center / contain no-repeat;
+}
+.ws2 .ws2-to-latest:is(:hover, :focus-visible) { outline: none; color: var(--ws-ink); text-decoration-color: var(--log-pencil); }
+@keyframes ws2-latest-in { from { opacity: 0; transform: translateY(3px); } }
+@media (prefers-reduced-motion: reduce) { .ws2 .ws2-to-latest { animation: none; } }
+
+/* Notices between the log and the composer: a line of text behind a cut square, as the login prints its messages. */
+.ws2 :is(.ws2-key-missing, .ws2-link-state, .ws2-provider-gone) {
+  position: relative; flex: none; padding: 2px 0 2px 21px; border: 0; background: none; font-size: 12.5px; line-height: 1.7; color: var(--ws-ink-2);
+  text-wrap: pretty;
+}
+/* the ways out follow the line as one group, and drop under it together when they cannot fit beside it */
+.ws2 :is(.ws2-key-missing, .ws2-link-state) { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 16px; }
+.ws2 :is(.ws2-key-missing, .ws2-link-state) > span:first-child { flex: 0 1 auto; min-width: 0; }
+.ws2 .ws2-notice-ways { display: flex; flex: none; gap: 8px; }
+.ws2 :is(.ws2-key-missing, .ws2-link-state, .ws2-provider-gone)::before {
+  content: ''; position: absolute; left: 4px; top: 9px; width: 8px; height: 8px; background: var(--ws-warn);
+  clip-path: polygon(3px 0, 100% 0, 100% 100%, 0 100%, 0 3px);
+}
+.ws2 :is(.ws2-key-missing, .ws2-link-state.is-lost)::before { background: var(--ws-bad); }
+
+/* Pointing at a sentence lights the pair (her Chinese and the Japanese it translates): a pencil line under each, no box. */
+.ws2 .bilingual-message .s.hot {
+  background: none; box-shadow: none; color: var(--ws-ink);
+  text-decoration: underline; text-decoration-color: var(--log-pencil); text-decoration-thickness: 1.5px; text-underline-offset: 6px; text-decoration-skip-ink: none;
+}
+.ws2 .bilingual-message .japanese-sub .s.hot { text-decoration-thickness: 1px; text-underline-offset: 5px; }
+.ws2 .bilingual-message .chinese-main .s.hot { box-shadow: none; }
+/* selected text: a pencil wash, not the browser's blue */
+.ws2 :is(.ws2-lines, .ws2-lines *)::selection { background: color-mix(in srgb, var(--log-pencil) 34%, transparent); color: var(--ws-ink); }
+
+/* ---------- composer ---------- */
+
+/* Under the log, in her text column; the send key stands in your margin. */
+.ws2 .ws2-composer {
+  position: relative; flex: none; padding: 0 0 0 var(--log-gutter); border: 0; border-radius: 0; background: none; box-shadow: none;
+}
+
+/* What she is running on and whether it has been checked, over the slot at its far end. */
+.ws2 .ws2-entry-head { display: flex; align-items: center; gap: 4px; min-width: 0; height: 28px; margin-bottom: 4px; }
+.ws2 .ws2-entry-head::before {
+  content: ''; flex: 1 1 24px; min-width: 16px; height: 1px; margin: 0 8px 0 2px;
+  background: repeating-linear-gradient(90deg, var(--ws-line-2) 0 1px, transparent 1px 4px);
+}
+.ws2 .ws2-entry-head > .ws2-model { flex: 0 1 auto; min-width: 0; margin: 0; }
+
+.ws2 .ws2-field { display: grid; grid-template-columns: minmax(0, 1fr) var(--log-right); align-items: end; }
+
+/* The slot: a hairline floor with end ticks; writing sweeps the floor in. */
+.ws2 .ws2-slot {
+  position: relative; min-width: 0;
+  background: linear-gradient(to top, rgba(241, 240, 235, .045), transparent 75%);
+  border-bottom: 1px solid var(--ws-line-2); transition: background .2s ease;
+}
+.ws2[data-wl='beta'] .ws2-slot { background: linear-gradient(to top, rgba(217, 133, 80, .06), transparent 75%); }
+.ws2 .ws2-slot::before, .ws2 .ws2-slot::after {
+  content: ''; position: absolute; bottom: -1px; width: 1px; height: 9px; background: var(--ws-line-2);
+  transition: height .22s cubic-bezier(.2, .8, .2, 1), background .2s ease;
+}
+.ws2 .ws2-slot::before { left: 0; }
+.ws2 .ws2-slot::after { right: 0; }
+.ws2 .ws2-slot:focus-within::before, .ws2 .ws2-slot:focus-within::after { height: 15px; background: var(--ws-ink); }
+.ws2 .ws2-ul {
+  position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; background: var(--ws-ink); box-shadow: 0 0 8px rgba(241, 240, 235, .45);
+  transform: scaleX(0); transform-origin: left; transition: transform .32s cubic-bezier(.6, 0, .2, 1);
+}
+.ws2 .ws2-slot:focus-within .ws2-ul { transform: none; }
+.ws2 .ws2-composer textarea.chat-input-field {
+  display: block; box-sizing: border-box; width: 100%; margin: 0; padding: 12px 14px 10px; resize: none;
+  border: 0; outline: none; background: none; box-shadow: none;
+  font-family: var(--ws-read); font-size: 15px; line-height: 1.65; color: var(--ws-ink); caret-color: var(--ws-ink);
+  /* grows with what you write, from two lines to seven */
+  field-sizing: content; min-height: calc(2lh + 22px); max-height: calc(7lh + 22px); overflow-y: auto;
+}
+.ws2 .ws2-composer textarea.chat-input-field:focus-visible { outline: none; }
+.ws2 .ws2-composer textarea.chat-input-field::placeholder { color: var(--ws-ink-3); }
+.ws2 .ws2-composer textarea.chat-input-field:disabled { color: var(--ws-ink-2); }
+.ws2 .ws2-composer textarea.chat-input-field::selection { background: color-mix(in srgb, var(--log-pencil) 34%, transparent); color: var(--ws-ink); }
+
+/* Send: the sheet's own key (SendKey.tsx), centred in your margin. */
+.ws2 .ws2-send {
+  position: relative; justify-self: center; align-self: end; width: 46px; height: 46px; margin-bottom: 12px; padding: 0; border: 0; border-radius: 50%;
+  background: none; color: var(--ws-ink); outline: none; transition: transform .2s cubic-bezier(.2, .8, .2, 1), opacity .2s ease;
+}
+.ws2 .ws2-send svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.ws2 .ws2-send:not(:disabled):active { transform: scale(.95); }
+.ws2 .ws2-send:focus-visible { outline: none; }
+.ws2 .ws2-send:disabled { opacity: .8; }
+
+/* SG: a clock hand on a toothed bezel; the bezel winds on a tooth for every key pressed in the slot. */
+.ws2 .ws2-key.is-clock .halo { fill: none; stroke: transparent; stroke-width: 1; }
+.ws2 .ws2-key.is-clock .bezel { transform: rotate(var(--wind, 0deg)); transition: transform .28s cubic-bezier(.3, 1.5, .5, 1); }
+.ws2 .ws2-key.is-clock .bezel path { fill: none; stroke: var(--ws-ink-3); stroke-width: 1; transition: stroke .2s ease; }
+.ws2 .ws2-key.is-clock .face { fill: rgba(8, 12, 14, .42); stroke: var(--ws-line-2); stroke-width: 1; transition: fill .2s ease, stroke .2s ease; }
+.ws2 .ws2-key.is-clock .ticks { fill: none; stroke: var(--ws-ink-3); stroke-width: 1.2; }
+.ws2 .ws2-key.is-clock .hand { transition: transform .3s cubic-bezier(.3, 1.6, .5, 1); }
+.ws2 .ws2-key.is-clock .hand path { fill: var(--ws-ink-3); transition: fill .2s ease; }
+.ws2 .ws2-key.is-clock .hand .pivot { fill: var(--ws-bg); stroke: var(--ws-ink-3); stroke-width: 1.2; transition: stroke .2s ease; }
+.ws2 .ws2-send:not(:disabled) .ws2-key.is-clock .bezel path { stroke: var(--ws-ink-2); }
+.ws2 .ws2-send:not(:disabled) .ws2-key.is-clock .face { stroke: var(--ws-ink-3); }
+.ws2 .ws2-send:not(:disabled) .ws2-key.is-clock .hand path { fill: var(--ws-ink); }
+.ws2 .ws2-send:not(:disabled) .ws2-key.is-clock .hand .pivot { stroke: var(--ws-ink); }
+.ws2 .ws2-send:not(:disabled):hover .ws2-key.is-clock .hand { transform: translateX(2px); }
+.ws2 .ws2-send:not(:disabled):hover .ws2-key.is-clock .face { fill: rgba(241, 240, 235, .07); }
+.ws2 .ws2-send:not(:disabled) .ws2-key.is-clock .ticks { stroke: var(--ws-ink-2); }
+.ws2 .ws2-send:not(:disabled):active .ws2-key.is-clock .hand { transform: translateX(4px); transition-duration: .08s; }
+.ws2 .ws2-send:focus-visible .ws2-key.is-clock .halo { stroke: var(--ws-ink); stroke-dasharray: 3 3; }
+
+/* β: a Nixie tube end on; the filament warms with the line (--warm) and flickers when pressed. */
+.ws2 .ws2-key.is-tube .glass { fill: rgba(12, 18, 18, .55); stroke: rgba(240, 170, 110, .3); stroke-width: 1; transition: stroke .2s ease; }
+.ws2 .ws2-key.is-tube .glass.inner { fill: none; stroke: rgba(240, 170, 110, .12); }
+.ws2 .ws2-key.is-tube .mesh path { fill: none; stroke: rgba(240, 170, 110, .16); stroke-width: .6; }
+.ws2 .ws2-key.is-tube .filament { fill: none; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.ws2 .ws2-key.is-tube .filament.cold { stroke: rgba(150, 96, 60, .55); }
+.ws2 .ws2-key.is-tube .filament.glow { stroke: #ff9a4a; stroke-width: 4.5; opacity: calc(var(--warm, 0) * .55); filter: blur(2.2px); transition: opacity .35s ease; }
+.ws2 .ws2-key.is-tube .filament.hot { stroke: #ffc58a; opacity: var(--warm, 0); transition: opacity .35s ease; }
+.ws2 .ws2-key.is-tube .shine { fill: none; stroke: rgba(255, 236, 214, .22); stroke-width: 1.4; stroke-linecap: round; }
+.ws2 .ws2-key.is-tube .pins { fill: none; stroke: rgba(240, 170, 110, .25); stroke-width: 1; }
+.ws2 .ws2-send:not(:disabled):hover .ws2-key.is-tube .glass { stroke: rgba(240, 170, 110, .55); }
+.ws2 .ws2-send:not(:disabled):hover .ws2-key.is-tube .filament.glow { opacity: .75; }
+.ws2 .ws2-send:not(:disabled):hover .ws2-key.is-tube .filament.hot { opacity: 1; }
+.ws2 .ws2-send:not(:disabled):active .ws2-key.is-tube :is(.filament.glow, .filament.hot) { animation: ws2-flicker .18s steps(3) 1; }
+@keyframes ws2-flicker { 33% { opacity: .2; } 66% { opacity: 1; } }
+.ws2 .ws2-send:focus-visible .ws2-key.is-tube .glass { stroke: #ffc58a; stroke-dasharray: 3 3; }
+@media (prefers-reduced-motion: reduce) {
+  .ws2 .ws2-key :is(.bezel, .hand, .filament) { transition: none !important; animation: none !important; }
+}
+
+.ws2 .ws2-probe { display: inline-flex; align-items: center; gap: 7px; flex: none; height: 24px; padding: 0 6px; font-size: 11.5px; letter-spacing: .06em; color: var(--ws-ink-3); }
+.ws2 .ws2-probe:hover { color: var(--ws-ink-2); }
+.ws2 .ws2-probe-dot { width: 6px; height: 6px; border-radius: 50%; box-shadow: inset 0 0 0 1.2px var(--ws-ink-3); }
+.ws2 .ws2-probe.ok { color: var(--ws-ink-2); }
+.ws2 .ws2-probe.ok .ws2-probe-dot { background: var(--ws-ok); box-shadow: 0 0 6px var(--ws-ok); }
+.ws2 .ws2-probe.failed { color: var(--ws-bad); }
+.ws2 .ws2-probe.failed .ws2-probe-dot { background: var(--ws-bad); box-shadow: 0 0 6px var(--ws-bad); }
+.ws2 .ws2-probe.checking .ws2-probe-dot { background: var(--ws-accent); animation: ws2-pulse 1s ease-in-out infinite; }
+/* The operation guide, under the floor at its far end. */
+.ws2 .ws2-guide {
+  display: flex; justify-content: flex-end; align-items: center; gap: 14px; height: 18px; margin: 8px var(--log-right) 0 0; pointer-events: none;
+  font-family: var(--ws-sans); font-size: 11.5px; letter-spacing: .08em; color: var(--ws-ink-3);
+}
+.ws2 .ws2-guide > span { display: inline-flex; align-items: center; gap: 6px; }
+.ws2 .ws2-guide kbd {
+  display: inline-grid; place-items: center; min-width: 22px; height: 18px; padding: 0 6px; border-radius: 9px;
+  font-family: var(--ws-mono); font-size: 9.5px; letter-spacing: .06em; color: var(--ws-ink-2); box-shadow: inset 0 0 0 1px var(--ws-line-2);
+}
+.ws2 .ws2-guide b { font-weight: 400; opacity: .6; }
+/* Model-state notes stand just above the composer's head, at its far end. */
+.ws2 .ws2-composer-notes { bottom: calc(100% + 6px); right: var(--log-right); }
+
+/* ---------- narrow columns ---------- */
+
+/* The keys step aside first, then the margins give up their names: they go back over the lines, the rules stay. */
+@container (max-width: 400px) {
+  .ws2 .ws2-guide > span:last-child { display: none; }
+}
+@container (max-width: 440px) {
+  .ws2 :is(.ws2-lines, .ws2-composer) { --log-names: 28px; --log-right: 22px; }
+  .ws2-line { --first: 14px; }
+  .ws2-line-error { --first: 25px; }
+  .ws2-line > header { position: relative; top: auto; right: auto; left: auto; width: auto; flex-direction: row; margin-bottom: 8px; text-align: left; }
+  .ws2-line-user > header { justify-content: flex-end; text-align: right; }
+  .ws2-line-kurisu .ws2-who { flex-direction: row; align-items: baseline; gap: 10px; }
+  .ws2 .ws2-who-name { margin-right: 0; }
+  .ws2-line-kurisu > header::before { left: auto; right: calc(100% + 24px); }
+  .ws2 .ws2-err-tag { position: static; display: inline; width: auto; margin-right: 10px; }
+  .ws2 .ws2-field { grid-template-columns: minmax(0, 1fr) 58px; }
+}
+
+/* Gott würfelt nicht (the original's line typed at the login): pencilled under the meter while it settles. */
+.ws2-booth-mid { position: relative; }
+.ws2 .ws2-egg-note {
+  position: absolute; top: calc(100% + 36px); left: 50%; translate: -50% 0; rotate: -2.5deg; white-space: nowrap; pointer-events: none;
+  font-family: var(--ws-serif); font-style: italic; font-size: 15px; letter-spacing: .04em; color: var(--log-pencil);
+  animation: ws2-egg-in .9s ease .4s both, ws2-egg-out 1s ease 6.6s forwards;
+}
+@keyframes ws2-egg-in { from { opacity: 0; clip-path: inset(0 100% 0 0); } to { opacity: 1; clip-path: inset(0 0 0 0); } }
+@keyframes ws2-egg-out { to { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .ws2 .ws2-egg-note { animation: ws2-egg-out .01s linear 6.6s forwards; } }

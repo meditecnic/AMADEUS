@@ -5,6 +5,9 @@ import { Ellipsis, X } from 'lucide-react';
 import { motion } from 'motion/react';
 import { Tip, useOverlayRoot } from '../workstation/Tip';
 import { SessionMenuItems, TextFieldMenu, keepImeEscape } from '../workstation/menus';
+import { Lens, NewNode, PencilRing } from '../workstation/TitleStrip';
+import { conversationNo, conversationNumbers } from '../workstation/numbering';
+import { useSeenConversations } from '../workstation/seenConversations';
 import {
   type IdentityMode,
   normalizeIdentityMode,
@@ -22,11 +25,17 @@ export interface ConversationSummary {
   /** Q20-A / Q21: set at create; immutable for the conversation lifetime. */
   identity_mode?: IdentityMode;
   last_active_at: string;
+  /** Set by the server at create; numbers the list (workstation/numbering.ts). */
+  created_at?: string;
 }
 
 type RowProps = {
   conversation: ConversationSummary;
   index: number;
+  /** its number on the worldline (numbering.ts) */
+  no: number;
+  /** a reply landed after you last had it open (seenConversations.ts) */
+  isNew: boolean;
   active: boolean;
   editing: boolean;
   actions: RowActions;
@@ -71,9 +80,13 @@ function shortWhen(iso: string): string {
   return d.getFullYear() === now.getFullYear() ? `${d.getMonth() + 1}/${d.getDate()}` : `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
 }
 
+/** Who you are in it, as the settings name the modes (fixed when the conversation is opened). */
 function modeBadgeLabel(mode: IdentityMode | undefined): string {
-  return normalizeIdentityMode(mode) === 'self' ? 'SELF' : 'OKABE';
+  return normalizeIdentityMode(mode) === 'self' ? '自己' : '冈部';
 }
+
+/** The rail shows this many conversations as nodes; the rest are counted under them. */
+const RAIL_NODES = 8;
 
 type RowActions = {
   /** Remember the row; editing starts once the menu has closed (see `flushRename`). */
@@ -104,8 +117,10 @@ function ConversationMenu({ conversation, actions }: {
           <DropdownMenu.Content
             className="ws2-menu conversation-menu"
             data-ws2-overlay=""
-            align="end"
-            sideOffset={4}
+            side="right"
+            align="start"
+            alignOffset={-3}
+            sideOffset={2}
             onEscapeKeyDown={keepImeEscape}
             onCloseAutoFocus={(event) => {
               // Back to "…" without scrolling the list — unless the row went into rename, whose field has focus.
@@ -121,6 +136,13 @@ function ConversationMenu({ conversation, actions }: {
               onForget={actions.onForget}
               onDelete={actions.onDelete}
             />
+            {/* Tied to its row like a tag: a leader from the slip back to "…", so the row's title stays in view. Radix
+                measures it with ResizeObserver; where there is none (an old engine, jsdom) the slip goes without. */}
+            {typeof ResizeObserver === 'function' && (
+              <DropdownMenu.Arrow asChild width={4} height={12}>
+                <svg className="ws2-menu-leader" viewBox="0 0 4 12" aria-hidden="true"><path d="M2 0V10.5" /><circle cx="2" cy="10.5" r="1.5" /></svg>
+              </DropdownMenu.Arrow>
+            )}
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>
@@ -226,14 +248,14 @@ function RenameField({ conversation, onCommit, onDone }: {
       </TextFieldMenu>
       {error
         ? <span id={errorId} className="conversation-rename-error" role="alert">{error}</span>
-        : <span className="conversation-meta" aria-hidden="true">Enter 保存 · Esc 取消</span>}
+        : <span className="conversation-keys" aria-hidden="true"><kbd>Enter</kbd>保存<kbd>Esc</kbd>取消</span>}
     </div>
   );
 }
 
 /** One row. Memoised on its own data, so the many renders of a conversation switch leave the list alone. */
 const ConversationRow = memo(function ConversationRow({
-  conversation, index, active, editing, actions, onSelect, onRename, onRenameDone,
+  conversation, index, no, isNew, active, editing, actions, onSelect, onRename, onRenameDone,
 }: RowProps) {
   return (
     <RowContextMenu conversation={conversation} actions={actions}>
@@ -258,21 +280,28 @@ const ConversationRow = memo(function ConversationRow({
               className="conversation-select"
               onClick={() => onSelect(conversation)}
             >
-              <span className="conversation-title">
-                {conversation.is_pinned && <span className="conversation-pin" aria-label="已置顶">◆ </span>}
-                {conversation.title}
-              </span>
-              <span className="conversation-meta">
+              {/* the slot's head, as the original's save screen sets it: its number, a dot leader, who you are, when */}
+              <span className="conversation-slot">
+                <span className="conversation-no">
+                  {conversationNo(no)}
+                  {active && <PencilRing seed={conversation.id} rx={22} ry={9} />}
+                </span>
+                <span className="conversation-leader" aria-hidden="true" />
                 <span
                   className={`identity-mode-badge mode-${normalizeIdentityMode(conversation.identity_mode)}`}
                   data-testid={`identity-badge-${conversation.id}`}
                 >
                   {modeBadgeLabel(conversation.identity_mode)}
                 </span>
-                {' · '}
-                {/* When and with which model — never the raw provider id (custom ids are opaque UUIDs). */}
+                <span className="conversation-sep" aria-hidden="true">·</span>
                 <time dateTime={conversation.last_active_at}>{shortWhen(conversation.last_active_at)}</time>
-                {conversation.model_id ? ` · ${conversation.model_id}` : ''}
+              </span>
+              <span className="conversation-line">
+                <span className="conversation-title">
+                  {conversation.is_pinned && <span className="conversation-pin" aria-label="已置顶">◆ </span>}
+                  {conversation.title}
+                </span>
+                {isNew && <span className="conversation-new" title="有新回复">NEW</span>}
               </span>
             </button>
           </Tip>
@@ -281,7 +310,7 @@ const ConversationRow = memo(function ConversationRow({
       </motion.article>
     </RowContextMenu>
   );
-}, (a, b) => a.index === b.index && a.active === b.active && a.editing === b.editing
+}, (a, b) => a.index === b.index && a.no === b.no && a.isNew === b.isNew && a.active === b.active && a.editing === b.editing
   && a.actions === b.actions && a.onSelect === b.onSelect && a.onRename === b.onRename && a.onRenameDone === b.onRenameDone
   && sameRow(a.conversation, b.conversation));
 
@@ -306,6 +335,8 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
   const visible = conversations.filter((conversation) =>
     conversation.title.toLocaleLowerCase().includes(searchQuery.trim().toLocaleLowerCase())
   );
+  const numbers = useMemo(() => conversationNumbers(conversations), [conversations]);
+  const isNew = useSeenConversations(conversations, activeId);
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -416,26 +447,34 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
         <div className="history-sidebar-icons">
           <Tip label="新建会话" side="right">
             <button type="button" className="history-sidebar-icon add" onClick={onNew} aria-label="新建会话" disabled={busy}>
-              <span className="history-icon-plus">+</span>
+              <NewNode />
             </button>
           </Tip>
-          {visible.slice(0, 8).map((conversation, index) => (
-            <Tip key={conversation.id} label={conversation.title} side="right">
+          {visible.slice(0, RAIL_NODES).map((conversation, index) => (
+            <Tip key={conversation.id} label={`${conversationNo(numbers.get(conversation.id) ?? 0)}　${conversation.title}`} side="right">
               <button
                 type="button"
                 style={{ '--i': index } as React.CSSProperties}
-                className={`history-sidebar-icon ${conversation.id === shownActiveId ? 'active' : ''}${conversation.is_pinned ? ' pinned' : ''}`}
+                className={`history-sidebar-icon${conversation.id === shownActiveId ? ' active' : ''}${conversation.is_pinned ? ' pinned' : ''}${isNew(conversation) ? ' is-new' : ''}`}
                 aria-label={conversation.title}
                 onClick={() => select(conversation)}
               >
-                {conversation.title.slice(0, 1).toUpperCase()}
+                {conversation.id === shownActiveId && <PencilRing seed={conversation.id} rx={8.5} ry={8} />}
               </button>
             </Tip>
           ))}
+          {visible.length > RAIL_NODES && (
+            <Tip label="展开会话列表" side="right">
+              <button type="button" className="history-rail-more" onClick={onToggle} aria-label={`还有 ${visible.length - RAIL_NODES} 个会话，展开会话列表`}>
+                +{visible.length - RAIL_NODES}
+              </button>
+            </Tip>
+          )}
         </div>
       ) : (
         <>
           <div className={`conversation-search-wrap${searchQuery ? ' has-query' : ''}`}>
+            <Lens />
             <TextFieldMenu fieldRef={searchRef}>
               <input
                 ref={searchRef}
@@ -464,6 +503,11 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
               </button>
             )}
           </div>
+          {/* a new conversation is a new node at the head of the spine */}
+          <button type="button" className="history-new-btn" onClick={onNew} disabled={busy}>
+            <NewNode />
+            <span className="history-new-btn-text">新建会话</span>
+          </button>
           <motion.div className="history-session-list" ref={listRef} layoutScroll>
             {refreshFailed && (
               <div className="list-refresh-error" role="status">
@@ -471,14 +515,15 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
                 <button type="button" className="history-retry" onClick={onRetry} disabled={busy}>重试</button>
               </div>
             )}
+            {/* An empty slot on the spine, as the original's save screen shows one: a hollow node and what is missing. */}
             {loadFailed ? (
-              <div className="history-empty-tip" role="status">
-                <span>&gt; 会话列表加载失败</span>
+              <div className="history-empty-tip is-failed" role="status">
+                <span className="history-empty-head">会话列表加载失败</span>
                 <button type="button" className="history-retry" onClick={onRetry} disabled={busy}>重试</button>
               </div>
             ) : visible.length === 0 ? (
-              <div className="history-empty-tip">
-                <span>&gt; {searchQuery.trim() ? '没有匹配的会话' : '暂无会话'}</span>
+              <div className={`history-empty-tip${searchQuery.trim() ? ' is-search' : ''}`}>
+                <span className="history-empty-head">{searchQuery.trim() ? '没有匹配的会话' : '暂无会话'}</span>
                 {!searchQuery.trim() && <p className="history-empty-sub">下一次发言会在这条世界线开始新会话。</p>}
               </div>
             ) : visible.map((conversation, index) => (
@@ -486,6 +531,8 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
                   key={conversation.id}
                   conversation={conversation}
                   index={index}
+                  no={numbers.get(conversation.id) ?? 0}
+                  isNew={isNew(conversation)}
                   active={conversation.id === shownActiveId}
                   editing={conversation.id === editingId}
                   actions={actions}
@@ -495,12 +542,6 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
                 />
             ))}
           </motion.div>
-          <div className="history-sidebar-footer">
-            <button type="button" className="history-new-btn" onClick={onNew} disabled={busy}>
-              <span className="history-new-btn-icon">+</span>
-              <span className="history-new-btn-text">新建会话</span>
-            </button>
-          </div>
         </>
       )}
     </aside>

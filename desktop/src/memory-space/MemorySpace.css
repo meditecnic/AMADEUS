@@ -128,7 +128,7 @@
 .archive-view :where(select option) { background: #101921; color: var(--memory-text); }
 .memory-space[data-worldline="beta"] .archive-view :where(select option) { background: #1a120c; }
 .archive-view ::selection { background: var(--memory-accent-wash); color: var(--memory-text); }
-.memory-space :where(.archive-view) { scrollbar-color: var(--memory-faint) transparent; scrollbar-width: thin; }
+.memory-space :where(.archive-view) { --ws-scroll-thumb: var(--memory-faint); }
 .memory-space :where(.archive-view)::-webkit-scrollbar { width: 8px; height: 8px; }
 .memory-space :where(.archive-view)::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: var(--memory-faint); background-clip: padding-box; }
 .archive-reading dl { margin: 0; }

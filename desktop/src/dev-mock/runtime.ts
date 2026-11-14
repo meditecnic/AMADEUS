@@ -1,15 +1,17 @@
 import { mockMemoryForTurn } from './chatMemory';
-import { fixedTime, model, providers, searchSettings } from './fixtures';
+import { createAssetPackStore, handleAssetPack, type AssetPackRequestMeta } from './assetPackMock';
+import { createDataStore, dataUnavailable, handleData, type Reply } from './data';
+import { fixedTime, model, searchSettings } from './fixtures';
 import { createMemoryStore, handleMemory } from './memory';
+import { createProviderStore, handleProviders } from './providers';
 import { scenarios, selectScenario, type Scenario } from './scenarios';
 
 export type Frame = Record<string, unknown>;
 const RECORDED_DELAY_MS = 1500;
-type Reply = { status: number; body: unknown; delayMs?: number };
 type HistoryMessage = { role: string; content: string; translation?: string };
 type Conversation = {
   id: string; title: string; title_source: string; is_default: boolean; is_pinned: boolean;
-  provider_id: string; model_id: string; identity_mode: string; last_active_at: string;
+  provider_id: string; model_id: string; identity_mode: string; last_active_at: string; created_at: string;
   messages: HistoryMessage[];
 };
 const ok = (body: unknown, status = 200): Reply => ({ status, body });
@@ -17,11 +19,14 @@ const fail = (status: number, code: string): Reply => ok({ detail: { code } }, s
 const worldlineOf = (value: unknown) => value === 'beta' ? 'beta' : 'steins_gate';
 const summary = ({ messages: _messages, ...conversation }: Conversation) => ({ ...conversation });
 
-export function createMockRuntime() {
+export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) {
   const clients = new Map<string, {
     memory: ReturnType<typeof createMemoryStore>;
     conversations: Map<string, Conversation[]>;
     search: typeof searchSettings;
+    data: ReturnType<typeof createDataStore>;
+    providers: ReturnType<typeof createProviderStore>;
+    assetPack: ReturnType<typeof createAssetPackStore>;
   }>();
   let counter = 0;
 
@@ -33,6 +38,10 @@ export function createMockRuntime() {
         memory: createMemoryStore(scenarios[name].memory),
         conversations: new Map(),
         search: structuredClone(searchSettings),
+        providers: createProviderStore(),
+        assetPack: createAssetPackStore(options.assetPackMovable ?? true),
+        // [210] the passcode lives with the client, so setting one on the system page holds at the next login
+        data: createDataStore(scenarios[name].data, scenarios[name].login.passcodeSet ? scenarios[name].login.password : null),
       };
       clients.set(key, current);
     }
@@ -44,9 +53,12 @@ export function createMockRuntime() {
     const key = JSON.stringify([session, worldline]);
     let rows = scopes.get(key);
     if (!rows) {
-      rows = scenarios[name].conversations.filter(row => row.worldline === worldline).map(row => ({
+      const listed = scenarios[name].conversations.filter(row => row.worldline === worldline);
+      rows = listed.map((row, index) => ({
         ...makeConversation(row.identity_mode), id: row.id, title: row.title,
         model_id: row.model_id ?? model.id,
+        // listed newest first: the first row was opened last
+        created_at: new Date(Date.parse(fixedTime) - (index + 1) * 3_600_000).toISOString(),
         messages: structuredClone(row.messages),
       }));
       scopes.set(key, rows);
@@ -56,42 +68,71 @@ export function createMockRuntime() {
 
   function makeConversation(identityMode = 'okabe'): Conversation {
     return {
-      id: `mock-conversation-${++counter}`, title: '新的观测记录', title_source: 'auto',
+      id: `mock-conversation-${++counter}`, title: '新会话', title_source: 'auto',
       is_default: false, is_pinned: false, provider_id: 'deepseek', model_id: model.id,
-      identity_mode: identityMode, last_active_at: fixedTime, messages: [],
+      identity_mode: identityMode, last_active_at: fixedTime, created_at: new Date().toISOString(), messages: [],
     };
   }
 
-  function rest(url: URL, method: string, body: Frame = {}, client = 'default', cookies = ''): Reply {
-    const reply = respond(url, method, body, client, cookies);
+  function rest(
+    url: URL,
+    method: string,
+    body: Frame = {},
+    client = 'default',
+    cookies = '',
+    meta?: AssetPackRequestMeta,
+  ): Reply {
+    const reply = respond(url, method, body, client, cookies, meta);
     const path = decodeURIComponent(url.pathname);
     const delay = scenarios[selectScenario(url, cookies)].delays.find(item => item.method === method && path.startsWith(item.pathPrefix));
     return delay ? { ...reply, delayMs: delay.ms } : reply;
   }
 
-  function respond(url: URL, method: string, body: Frame, client: string, cookies: string): Reply {
+  function respond(
+    url: URL,
+    method: string,
+    body: Frame,
+    client: string,
+    cookies: string,
+    meta?: AssetPackRequestMeta,
+  ): Reply {
     const name = selectScenario(url, cookies);
     const scenario = scenarios[name];
     const path = decodeURIComponent(url.pathname);
     const scriptedError = scenario.errors.find(error => error.method === method && path.startsWith(error.pathPrefix));
     if (scriptedError) return ok(scriptedError.body, scriptedError.status);
 
+    // [210] [211] [212] [216] data, passcode, usage, export, location, diagnostics; a corrupt store closes the rest.
+    const clientState = state(name, client);
+    const data = clientState.data;
+    const unavail = dataUnavailable(data, path);
+    if (unavail) return unavail;
+    if (
+      data.status === 'corrupt' &&
+      ((path === '/api/data/asset-pack/install' && method === 'POST') ||
+        (path === '/api/data/asset-pack' && method === 'DELETE'))
+    ) {
+      return fail(409, 'data_unavailable');
+    }
+    const handled = handleAssetPack(url, method, body, clientState.assetPack, meta) ?? handleData(url, method, body, data);
+    if (handled) return handled;
+    // [210] passcode login. No passcode by default; `login.passcodeSet` makes the scenario's password the passcode.
+    if (path === '/api/auth/login' && method === 'POST') {
+      const value = typeof body.passcode === 'string' ? body.passcode : null;
+      const egg = value !== null && value.normalize('NFKD').replace(/\p{M}/gu, '').trim().toLowerCase().replace(/\s+/g, ' ') === 'gott wurfelt nicht';
+      const accepted = !scenario.login.forceFailure && (data.passcode === null || value === data.passcode);
+      return accepted ? ok({ status: 'success', easter_egg: egg }) : ok({ detail: { code: 'invalid_passcode' } }, 401);
+    }
     if (path === '/api/auth/salieri' && method === 'POST') {
       const accepted = body.password === scenario.login.password && !scenario.login.forceFailure;
       return accepted ? ok({ ok: true }, scenario.login.successStatus)
         : ok({ detail: scenario.login.failureMessage }, scenario.login.failureStatus);
     }
-    // Missing optional artwork is deliberate, preserving the app's original fallback.
-    if (path.startsWith('/api/asset-pack/')) return fail(404, 'optional_asset_pack_absent');
     if (path === '/health') return ok({ ok: true, mode: 'dev-mock' });
     if (path === '/health/dependencies') return ok({ dependencies: { tts: { ok: false } } });
-    if (path === '/api/providers' && method === 'GET') return ok(structuredClone(providers.map(provider => ({ ...provider, catalog: scenario.models }))));
-    if (/^\/api\/providers\/[^/]+\/models$/.test(path) && method === 'GET') {
-      return ok({ catalog: scenario.models, discovery_status: 'live', id_only: false });
-    }
-    if (/^\/api\/providers\/[^/]+\/credentials$/.test(path) && method === 'POST') return ok({ ok: true });
-    if (/^\/api\/providers\/[^/]+\/chat-check$/.test(path) && method === 'POST') {
-      return ok({ ok: true, model_id: body.model_id });
+    if (path.startsWith('/api/providers')) {
+      const reply = handleProviders(path, method, body, state(name, client).providers, scenario.models);
+      if (reply) return reply;
     }
     if (path === '/api/search/settings') {
       const search = state(name, client).search;
@@ -103,6 +144,27 @@ export function createMockRuntime() {
     // Credentials are never retained, echoed, or sent to a real service.
     if (path === '/api/search/credential' && ['PUT', 'DELETE'].includes(method)) {
       return ok(structuredClone(state(name, client).search));
+    }
+    if (path === '/api/worldlines/summary') {
+      if (method !== 'GET') return fail(405, 'method_not_allowed');
+      const sessionId = url.searchParams.get('session_id')?.trim();
+      if (!sessionId) return fail(422, 'session_id_required');
+      const result: Record<string, { conversations: number; memories: number; last_active_at: string | null }> = {};
+      for (const wl of ['steins_gate', 'beta'] as const) {
+        const convRows = conversations(name, client, sessionId, wl);
+        let memories = 0;
+        for (const mode of ['self', 'okabe'] as const) {
+          const memScope = clientState.memory.scope(JSON.stringify([sessionId, wl, mode]), wl);
+          memories += memScope.facts.length + memScope.experiences.length;
+        }
+        const lastActiveAt = convRows.map(row => row.last_active_at || '').filter(Boolean).sort().pop() ?? null;
+        result[wl] = {
+          conversations: convRows.length,
+          memories,
+          last_active_at: lastActiveAt,
+        };
+      }
+      return ok(result);
     }
     if (path.startsWith('/api/memory/')) return handleMemory(url, method, body, state(name, client).memory)!;
     if (!path.startsWith('/api/conversations')) return fail(404, 'mock_route_not_found');

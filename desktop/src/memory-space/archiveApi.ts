@@ -549,6 +549,21 @@ export function ignoreObservation(
   );
 }
 
+/** Keep a candidate observation as a fact, on the user's word (it then ranks and is protected like a hand edit). */
+export function confirmObservation(
+  scope: ArchiveScope,
+  observationId: string,
+  options: ArchiveRequestOptions = {},
+): Promise<ArchiveResult<Record<string, unknown>>> {
+  const params = scopeParams(scope);
+  return execute(
+    `/api/memory/observations/${encodeURIComponent(observationId)}/confirm?${params.toString()}`,
+    { method: 'POST' },
+    options,
+    parseEcho,
+  );
+}
+
 export function retryFailedJob(
   scope: ArchiveScope,
   jobId: string,

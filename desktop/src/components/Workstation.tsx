@@ -1,5 +1,5 @@
 import { apiFetch } from '../apiBase';
-import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useReducedMotion } from '../design-system/useReducedMotion';
 import { useScrollPinning } from '../hooks/useScrollPinning';
 import {
@@ -28,7 +28,7 @@ import { HistorySidebar, type ConversationSummary } from './HistorySidebar';
 import { TtsDebugPanel } from './TtsDebugPanel';
 import AvatarViewer from './AvatarViewer';
 import SpriteAnimator from './SpriteAnimator';
-import { packAsset } from '../assetPack';
+import * as assetPackMod from '../assetPack';
 import { useAudioPlayer, audioPlayer } from '../hooks/useAudioPlayer';
 import { audioService } from '../services/AudioService';
 import { BilingualMessage } from './BilingualMessage';
@@ -36,7 +36,11 @@ import { sentenceArrivals, useArrivalMemory } from '../workstation/arrivalMemory
 import { Atmosphere } from '../workstation/Atmosphere';
 import { DraftWord } from '../workstation/DraftWord';
 import { DIVERGENCE, Nixie, WORLDLINE_NAME, useTunedValue } from '../workstation/Nixie';
-import { SoundChannel, SystemMenu, WorldlinePanel, type MenuSection } from '../workstation/SystemMenu';
+import { MENU_SECTIONS, SoundChannel, SystemMenu, type MenuSection } from '../workstation/SystemMenu';
+import { WorldlinePanel } from '../workstation/WorldlinePanel';
+import { useWorldlineLedger } from '../workstation/worldlineLedger';
+import { ConnectionsPanel } from '../workstation/ConnectionsPanel';
+import { adoptShelves, shelved, useModelShelf } from '../workstation/modelShelf';
 import { WorldlineShift } from '../workstation/WorldlineShift';
 import { scheduleShiftPrewarm } from '../workstation/shiftStage';
 import { rememberWorkstationFonts } from '../workstation/fontWarmup';
@@ -44,17 +48,26 @@ import { ShiftTransaction } from '../workstation/shiftTransaction';
 import { ConfirmDialog } from '../workstation/ConfirmDialog';
 import { sessionDialogFallback } from '../workstation/focusHandoff';
 import { useExitPresence } from '../workstation/useExitPresence';
-import { ConnectionCheckPanel, chatCheckMessage, requestChatCheck, type ChatCheckState } from '../workstation/ConnectionCheck';
-import { ConnectionList } from '../workstation/ConnectionList';
+import { chatCheckMessage, requestChatCheck, type ChatCheckState } from '../workstation/ConnectionCheck';
+import { DataPanel, RelocationRestartBanner, type DataRelocationState } from '../workstation/DataPanel';
+import { AssetPackGroup } from '../workstation/AssetPackGroup';
+import { UsagePanel } from '../workstation/UsagePanel';
+import { AboutPanel } from '../workstation/AboutPanel';
+import { RestoreNotice } from '../workstation/RestoreNotice';
+import { checkAfterLogin, updateWaiting, useUpdates } from '../workstation/updates';
 import { SendSignal } from '../workstation/SendSignal';
 import { PresenceIndicator, ThinkingMark, PRESENCE_LABELS } from '../workstation/PresenceIndicator';
+import { ErrorText, checkShortLabel } from '../workstation/logParts';
+import { SendKey } from '../workstation/SendKey';
+import { Engram, GearDial, OpenSwitch, PencilRing } from '../workstation/TitleStrip';
+import { Stamp } from '../workstation/Stamp';
+import { conversationNo, conversationNumbers } from '../workstation/numbering';
 import { VoiceScope } from '../workstation/VoiceScope';
 import { OverlayRootContext, Tip, TipProvider } from '../workstation/Tip';
 import { SelectionCopyMenu, TextFieldMenu } from '../workstation/menus';
 import { hearKeystroke } from '../workstation/voiceEnvelope';
 import { wsTransition } from '../workstation/motionTokens';
 import { MotionConfig, animate } from 'motion/react';
-import { LogOut } from 'lucide-react';
 import { ForgetConversationModal } from './ForgetConversationModal';
 import { MemorySpace, type MemoryLink, type MemorySpaceControl } from '../memory-space/MemorySpace';
 import { RecordedMarks, ReferencedMarks, type MemoryOpenRequest } from '../memory-space/ChatMarks';
@@ -69,11 +82,12 @@ import {
 
 /**
  * Post-login entrance, driven by the login terminal's timeline:
- * hold (mounted, still, under the drafting sheet) → draft (the pen sweeps the sheet away and the
+ * locked (mounted under the login terminal while the password is typed: drawn, but inert, and nothing is read,
+ * connected or played until it is unlocked) → hold (unlocked, still, under the drafting sheet) → draft (the pen sweeps the sheet away and the
  * instruments are drawn in behind it) → docked (the title wordmark has landed in the header) → done.
  * 'none' skips it (reduced motion, tests, direct mounts).
  */
-export type EntrancePhase = 'none' | 'hold' | 'draft' | 'docked' | 'done';
+export type EntrancePhase = 'none' | 'locked' | 'hold' | 'draft' | 'docked' | 'done';
 
 // Keep in sync with backend chat_ws.MAX_USER_MESSAGE_LENGTH.
 const MAX_USER_MESSAGE_LENGTH = 8000;
@@ -84,6 +98,12 @@ interface WorkstationProps {
   onLogout: () => void;
   entrance?: EntrancePhase;
   onEntranceSettled?: () => void;
+  /** Mounted under the terminal ('hold') and its first frames are on screen: the terminal may start its sweep. */
+  onStageReady?: () => void;
+  /** Mounted ahead under the terminal ('locked') and drawn: a login now only has to unlock it. */
+  onPrepared?: () => void;
+  /** The original's line was typed at the login: the meter rolls its digits like dice before it settles. */
+  easterEgg?: boolean;
 }
 
 type ConversationEntry = PendingConversationTarget & {
@@ -108,7 +128,7 @@ export function contentHasJapaneseKana(text: string): boolean {
 /** Q14: map known tool ids to Title Case labels; never render raw unknown tool names. */
 function activityOperationLabel(activeTool: string | null | undefined): string | null {
   if (!activeTool) return null;
-  if (activeTool === 'web_search') return 'Web Search';
+  if (activeTool === 'web_search') return '正在搜索网页';
   return null;
 }
 
@@ -118,9 +138,30 @@ export const Workstation: React.FC<WorkstationProps> = ({
   onLogout,
   entrance = 'none',
   onEntranceSettled,
+  onStageReady,
+  onPrepared,
+  easterEgg = false,
 }) => {
   const reducedMotion = useReducedMotion();
-  const entering = entrance === 'hold' || entrance === 'draft' || entrance === 'docked';
+  // Locked: drawn ahead under the login terminal (U 11-10: the first entrance still stalled while its pictures, layers
+  // and the GPU's shaders were made after the password was accepted). Until it is unlocked it reads nothing, opens
+  // no connection, plays nothing and takes no focus; every effect below that does is held back by `locked`.
+  const locked = entrance === 'locked';
+  const entering = locked || entrance === 'hold' || entrance === 'draft' || entrance === 'docked';
+  // Gott würfelt nicht: the meter comes in on a thrown reading and, once the sheet is drawn, tunes slowly to the line
+  // it is on, with the line pencilled under it for a while.
+  const [dice, setDice] = useState<string | null>(() => (easterEgg ? `${Math.floor(Math.random() * 2)}.${String(Math.floor(Math.random() * 1e6)).padStart(6, '0')}` : null));
+  const [eggNote, setEggNote] = useState(false);
+  useEffect(() => {
+    if (!dice || entrance === 'hold') return;
+    const id = window.setTimeout(() => { setDice(null); setEggNote(true); }, reducedMotion ? 0 : 650);
+    return () => window.clearTimeout(id);
+  }, [dice, entrance, reducedMotion]);
+  useEffect(() => {
+    if (!eggNote) return;
+    const id = window.setTimeout(() => setEggNote(false), 7600);
+    return () => window.clearTimeout(id);
+  }, [eggNote]);
   const [systemPrompt, setSystemPrompt] = useState('');
   const storedTtsChoice = useRef<string | null>(null);
   const [enableTts, setEnableTts] = useState(() => {
@@ -129,6 +170,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
   });
   const [sovitsUrl, setSovitsUrl] = useState('http://127.0.0.1:9880');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  // The system page's sections are built the first time it opens (or in idle time once the entrance is over), not
+  // with the rest of the workstation: they are not on screen, and the entrance should not wait for them.
+  const [menuMounted, setMenuMounted] = useState(false);
+  if (isSettingsOpen && !menuMounted) setMenuMounted(true);
   const [isMemoryOpen, setIsMemoryOpen] = useState(false);
   const [memoryClosing, setMemoryClosing] = useState(false);
   const memoryControlRef = useRef<MemorySpaceControl | null>(null);
@@ -136,8 +181,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
   // The chat mark that opened the memory space gets focus back once the transcript is no longer inert.
   const memoryOriginRef = useRef<string | null>(null);
   const openMemoryFromMark = (request: MemoryOpenRequest) => {
+    if (relocating) return;
     memoryOriginRef.current = request.origin;
     setMemoryLink({ select: request.select, mark: request.mark, hintAt: request.hintAt });
+    setIsSettingsOpen(false);
     setIsMemoryOpen(true);
   };
   useEffect(() => {
@@ -187,9 +234,20 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [providerListFailed, setProviderListFailed] = useState(false);
   const [providerListLoaded, setProviderListLoaded] = useState(false);
   const [availableModels, setAvailableModels] = useState<ModelCatalogEntry[]>([]);
+  const modelShelf = useModelShelf();
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsDiscoveryStatus, setModelsDiscoveryStatus] = useState<ModelDiscoveryStatus>('idle');
   const providerModelsRequestEpochRef = useRef(0);
+  const assetPackRevision = useSyncExternalStore(
+    (cb) => assetPackMod.subscribeAssetPack?.(cb) ?? (() => {}),
+    () => assetPackMod.getAssetPackRevision?.() ?? 0,
+  );
+  const packInstalled = (
+    assetPackMod.hasAssetPack
+      ? assetPackMod.hasAssetPack()
+      : Boolean(assetPackMod.packAsset?.('assets/images/kurisu_normal1.png'))
+  ) && assetPackRevision >= 0;
+  const [assetPackNotice, setAssetPackNotice] = useState<{ text: string; kind: 'info' | 'error' } | null>(null);
   const [sessionId] = useState(getOrCreateAmadeusSessionId);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [conversationListFailed, setConversationListFailed] = useState(false);
@@ -316,7 +374,29 @@ export const Workstation: React.FC<WorkstationProps> = ({
     code: string;
   } | null>(null);
   const [menuSection, setMenuSection] = useState<MenuSection>('worldline');
+  const [dataRelocation, setDataRelocation] = useState<DataRelocationState | null>(null);
+  const relocating = Boolean(dataRelocation);
+  const markDataRelocating = useCallback((path?: string) => {
+    setDataRelocation((cur) => {
+      if (cur) return path && !cur.path ? { ...cur, path } : cur;
+      return {
+        ...(path ? { path } : {}),
+        restartNote: '数据已迁移至新位置，需要重启 AMADEUS 才能继续使用。',
+      };
+    });
+  }, []);
+  const flagIfRelocating = useCallback(async (response: Response) => {
+    if (response.status !== 503) return;
+    const body = await response.clone().json().catch(() => null);
+    if (body?.detail?.code === 'data_relocating') markDataRelocating();
+  }, [markDataRelocating]);
+  // The quiet update check, once per run; a waiting version is marked on the 系统 key and under 关于.
+  const updates = useUpdates();
+  const updateMark = updateWaiting(updates);
+  useEffect(() => { if (!locked) checkAfterLogin(); }, [locked]);
   const [shiftConfirm, setShiftConfirm] = useState<'steins_gate' | 'beta' | null>(null);
+  // The plug at the end of the header is reached for out of curiosity too: it asks before it lets go.
+  const [unplugAsk, setUnplugAsk] = useState(false);
   const [pendingModel, setPendingModel] = useState<string | null>(null);
   const wsRootRef = useRef<HTMLDivElement>(null);
   // Tips and menus portal into the root so they carry the worldline palette (state, so portals re-render once it exists).
@@ -338,6 +418,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
   // Once the login has let go (after the entrance, or at once without one), hand the keyboard to the composer
   // as soon as it can take input. The session settling can disable it for a moment, so the hand-off holds for a
   // short while and gives up as soon as the user puts focus anywhere else.
+  /** Keys pressed in the composer: the SG send key's bezel winds on a tooth for each (SendKey). */
+  const windRef = useRef(0);
   const composerHandoffUntil = useRef<number | null>(null);
   const handComposerFocus = useCallback(() => {
     if (composerHandoffUntil.current === null) composerHandoffUntil.current = Date.now() + 3000;
@@ -360,21 +442,58 @@ export const Workstation: React.FC<WorkstationProps> = ({
     // The shift stage warms while the menu is read, never inside the click that starts a shift.
     scheduleShiftPrewarm(0);
   }, []);
+  // Held under the terminal, the first layout, paint and picture decoding happen while nothing moves; the frames are
+  // flowing again once three in a row come at the display's pace, and only then may the pen sweep.
+  const stageReadyRef = useRef(onStageReady);
+  stageReadyRef.current = onStageReady;
+  const preparedRef = useRef(onPrepared);
+  preparedRef.current = onPrepared;
+  /** Drawn ahead under the login while locked: unlocking it changes nothing on screen, so the pen need not wait. */
+  const drawnAheadRef = useRef(false);
+  useEffect(() => {
+    if (entrance !== 'hold' && entrance !== 'locked') return undefined;
+    let raf = 0;
+    if (entrance === 'hold' && drawnAheadRef.current) {
+      // One frame for the unlock itself to reach the screen.
+      raf = requestAnimationFrame(() => stageReadyRef.current?.());
+      return () => cancelAnimationFrame(raf);
+    }
+    let last = 0;
+    let steady = 0;
+    const frame = (t: number) => {
+      steady = last && t - last < 24 ? steady + 1 : 0;
+      last = t;
+      if (steady >= 3) {
+        if (entrance === 'locked') { drawnAheadRef.current = true; preparedRef.current?.(); } else stageReadyRef.current?.();
+        return;
+      }
+      raf = requestAnimationFrame(frame);
+    };
+    raf = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(raf);
+  }, [entrance]);
+  useEffect(() => {
+    if (entering || menuMounted || typeof window.requestIdleCallback !== 'function') return undefined;
+    const id = window.requestIdleCallback(() => setMenuMounted(true), { timeout: 6000 });
+    return () => window.cancelIdleCallback(id);
+  }, [entering, menuMounted]);
   // ...and once the entrance has settled, in idle time (never on top of it).
   useEffect(() => {
     if (entering) return undefined;
-    const cancelPrewarm = scheduleShiftPrewarm(1500);
+    // Compiling the shift's shaders holds the GPU for a moment; well after the entrance, in idle time.
+    const cancelPrewarm = scheduleShiftPrewarm(6000);
     // The faces this screen used are loaded on the login terminal next time.
     const fonts = window.setTimeout(rememberWorkstationFonts, 4000);
     return () => { cancelPrewarm(); window.clearTimeout(fonts); };
   }, [entering]);
   const closeMenu = useCallback(() => setIsSettingsOpen(false), []);
+  const worldlineLedger = useWorldlineLedger(sessionId, isSettingsOpen && menuSection === 'worldline' && !relocating);
   /** Lands on the connections page with focus on either the key field or the first usable other connection. */
   const openConnectionsAt = useCallback((target: 'key' | 'list') => {
     openMenu('connections');
     const selector = target === 'key'
       ? '[data-testid="credential-input"]'
-      : '.ws2-conn-row:not(.is-active):not(:disabled)';
+      : '.ws2-cx-row:not(.is-active) .main';
     // A conversation's provider switch lands asynchronously, so the key field may appear a moment later.
     let tries = 0;
     const attempt = () => {
@@ -411,7 +530,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
   /* Chat-selector admission is stored by the backend (`selector_admission`): a new connection is pending until
    * its first chat-check passes or the user enables it by hand. */
   const pendingProviders = providers.filter((row) => row.selector_admission === 'pending').map((row) => row.id);
-  const manualProviders = providers.filter((row) => row.selector_admission === 'manual').map((row) => row.id);
   const [modelApplyError, setModelApplyError] = useState<string | null>(null);
   /** Address, key or model changes invalidate earlier results for that provider. */
   const bumpConfigVersion = useCallback((providerId: string) => {
@@ -472,21 +590,24 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   // Sync AudioService with state
   useEffect(() => {
+    if (locked) return;
     audioService.setEnableBGM(enableBgm);
     audioService.setBGMVolume(bgmVolume);
     audioService.setEnableSFX(enableSfx);
     audioService.setSFXVolume(sfxVolume);
-  }, [enableBgm, bgmVolume, enableSfx, sfxVolume]);
+  }, [locked, enableBgm, bgmVolume, enableSfx, sfxVolume]);
 
   // Start the worldline playlist on mount, switch it when the line changes,
   // and resume it when BGM is enabled again in the settings panel.
   useEffect(() => {
+    // The login's own theme plays while this waits under it.
+    if (locked) return undefined;
     if (enableBgm) audioService.playBGMForWorldline(worldline, bgmVolume);
     else audioService.stopBGM();
     return () => {
       audioService.stopBGM();
     };
-  }, [worldline, enableBgm]);
+  }, [locked, worldline, enableBgm, assetPackRevision]);
 
   // Auto-clear audio / session surface errors after 5s (independent channels).
   useEffect(() => {
@@ -495,6 +616,13 @@ export const Workstation: React.FC<WorkstationProps> = ({
       return () => window.clearTimeout(timer);
     }
   }, [audioError]);
+
+  useEffect(() => {
+    if (assetPackNotice) {
+      const timer = window.setTimeout(() => setAssetPackNotice(null), 5000);
+      return () => window.clearTimeout(timer);
+    }
+  }, [assetPackNotice]);
 
   useEffect(() => {
     if (sessionError) {
@@ -540,6 +668,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       if (!response.ok) throw new Error(`provider query failed: ${response.status}`);
       const rows = await response.json() as ProviderMetadata[];
       if (providersRequestEpochRef.current !== requestEpoch) return rows;
+      adoptShelves(rows);
       setProviders(rows);
       setProviderListLoaded(true);
       setProviderListFailed(false);
@@ -695,6 +824,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     switchConversation,
     switchWorldline,
   } = useAmadeusWS({
+    enabled: !locked,
     sessionId,
     conversationId: activeConversationId,
     pendingConversation,
@@ -868,7 +998,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   // Check the service when read-aloud is enabled without changing the user's saved choice.
   useEffect(() => {
-    if (!enableTts) return;
+    if (!enableTts || locked || relocating) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -882,9 +1012,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
       }
     })();
     return () => { cancelled = true; };
-  }, [enableTts]);
+  }, [enableTts, locked, relocating]);
 
   useEffect(() => {
+    if (locked) return;
     if (pendingConversationRef.current?.worldline !== worldline
       && pendingConversationRef.current !== null) abandonConversationEntry(false);
     setActiveConversationId(null);
@@ -892,7 +1023,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     void loadConversations().catch((error) => {
       console.warn('Conversation synchronization failed:', error);
     });
-  }, [loadConversations]);
+  }, [locked, loadConversations]);
 
   // Compatibility only: production SettingsModal is embedded and cannot change the parent worldline directly.
   useEffect(() => {
@@ -918,6 +1049,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   }, [onWorldlineChange, switchWorldline, worldline]);
 
   useEffect(() => {
+    if (locked) return undefined;
     let cancelled = false;
     const synchronizeCredential = async () => {
       setCredentialStatus('checking');
@@ -950,7 +1082,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     };
     void synchronizeCredential();
     return () => { cancelled = true; };
-  }, [loadProviders, reconnect]);
+  }, [locked, loadProviders, reconnect]);
 
   const applyWebSearchSettings = useCallback((settings: WebSearchSettingsSnapshot) => {
     const legacyProvider = (settings as WebSearchSettingsSnapshot & { provider?: WebSearchProviderId }).provider;
@@ -970,6 +1102,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   }, []);
 
   useEffect(() => {
+    if (locked) return undefined;
     let cancelled = false;
     const loadWebSearchSettings = async () => {
       setWebSearchCredentialStatus('checking');
@@ -985,9 +1118,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
     };
     void loadWebSearchSettings();
     return () => { cancelled = true; };
-  }, [applyWebSearchSettings]);
+  }, [locked, applyWebSearchSettings]);
 
   const activeConversation = conversations.find((row) => row.id === activeConversationId);
+  const conversationNos = useMemo(() => conversationNumbers(conversations), [conversations]);
+  const activeConversationNo = activeConversation ? conversationNos.get(activeConversation.id) : undefined;
+  const numberOf = (id: string) => { const n = conversationNos.get(id); return n ? conversationNo(n) : undefined; };
   const activeProviderId = activeConversation?.provider_id || draftProviderId;
   const activeProvider = providers.find((provider) => provider.id === activeProviderId);
   const activeModelId = activeConversation?.model_id || model;
@@ -1133,8 +1269,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
   }, [activeConversation?.model_id, model, providers]);
 
   useEffect(() => {
-    void loadProviderModels(activeProviderId);
-  }, [activeProviderId, loadProviderModels]);
+    if (!locked && !relocating) void loadProviderModels(activeProviderId);
+  }, [locked, relocating, activeProviderId, loadProviderModels]);
 
   const { isPlaying } = useAudioPlayer();
   // stopAll() drops queued chunks without their onEnded; after a quiet moment the speaking queue is stale.
@@ -1171,7 +1307,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
       const missing = /缺失\s*(\S+)\s*API\s*Key/i.exec(message.content);
       return !missing || missing[1] === activeProviderId;
     });
-  const sessionConnecting = status === 'CONNECTING' || (status === 'READY' && sessionState === 'unknown');
+  // Drawn ahead under the login it shows what it will show the moment it is unlocked: connecting.
+  const sessionConnecting = locked || status === 'CONNECTING' || (status === 'READY' && sessionState === 'unknown');
   // Between automatic attempts the socket is closed but the app is still trying; once they run out only the user can.
   const reconnecting = Boolean(retry && !retry.exhausted);
   const linkLost = Boolean(retry?.exhausted && status !== 'READY');
@@ -1208,7 +1345,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   // Q14 single activity surface: known tools override Thinking; unknown tools fall back.
   // Raw activeNotice strings are never used as visible labels.
-  const operationLabel = activityOperationLabel(activeTool) ?? (isThinking ? 'Thinking' : null);
+  const operationLabel = activityOperationLabel(activeTool) ?? (isThinking ? '思考中' : null);
   const activityBusy = Boolean(operationLabel || activeNotice);
 
   const [glitchState, setGlitchState] = useState<'none' | 'light' | 'heavy'>('none');
@@ -1305,7 +1442,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputText.trim() || messageTooLong || conversationBusy || conversationReconnectEpoch !== null
-      || sessionState === 'rejected' || sessionState === 'unknown' || providerGone) return;
+      || sessionState === 'rejected' || sessionState === 'unknown' || providerGone || relocating) return;
     // Draft materialize (no conversation_id) always stamps okabe on the backend.
     // When the settings default is self, pre-create via API so mode is correct.
     // Okabe default keeps the existing draft path (zero regression for most sessions).
@@ -1336,6 +1473,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
     if (!sendChat(inputText.trim())) return;
     scrollTranscriptToLatest();
     setInputText('');
+    // The composer is disabled while she answers. Hand the keyboard back when she is done, unless focus has been
+    // put somewhere else in the meantime (handComposerFocus gives up then).
+    composerHandoffUntil.current = Number.POSITIVE_INFINITY;
   };
 
   const beginConversationEntry = () => {
@@ -1373,6 +1513,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   };
 
   const selectConversation = async (conversation: ConversationSummary, force = false) => {
+    if (relocating) return false;
     if (!force && conversation.id === pendingConversationRef.current?.conversationId) return false;
     if (!force && conversation.id === activeConversationId) {
       if (pendingConversationRef.current) abandonConversationEntry();
@@ -1389,6 +1530,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       );
       if (!response.ok) {
         failedStatus = response.status;
+        await flagIfRelocating(response);
         throw new Error(`history query failed: ${response.status}`);
       }
       const rows = await response.json() as Array<{
@@ -1427,6 +1569,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     identityMode: IdentityMode = defaultIdentityMode,
     options: ConversationEntryOptions = {},
   ): Promise<ConversationCreateResult> => {
+    if (relocating) return { status: 'failed' };
     if (conversationBusy && !pendingConversationRef.current) return { status: 'failed' };
     const epoch = beginConversationEntry();
     setConversationCreateError(null);
@@ -1446,6 +1589,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         }),
       });
       if (!response.ok) {
+        await flagIfRelocating(response);
         const body = await response.json().catch(() => null);
         const code = body?.detail?.code;
         throw new Error(code === 'model_unavailable'
@@ -1470,6 +1614,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     conversation: ConversationSummary,
     patch: Record<string, unknown>,
   ) => {
+    if (relocating) throw new Error('data_relocating');
     const response = await apiFetch(`/api/conversations/${encodeURIComponent(conversation.id)}?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`,
       {
         method: 'PATCH',
@@ -1477,7 +1622,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
         body: JSON.stringify(patch),
       },
     );
-    if (!response.ok) throw new Error(`conversation update failed: ${response.status}`);
+    if (!response.ok) {
+      await flagIfRelocating(response);
+      throw new Error(`conversation update failed: ${response.status}`);
+    }
     const updated = await response.json() as ConversationSummary;
     // A list query sent before this write would land afterwards with the old provider/model.
     conversationRequestRef.current += 1;
@@ -1582,9 +1730,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
     } catch {}
     reconnect();
   };
-  const enableProviderManually = (providerId: string, modelId: string, version: string | null | undefined) => {
-    void admitProvider(providerId, modelId, version, 'manual');
-  };
 
   // Apply a model chosen mid-turn once the turn has fully finished.
   useEffect(() => {
@@ -1605,19 +1750,21 @@ export const Workstation: React.FC<WorkstationProps> = ({
   }, [activeConversationId, worldline]);
 
   const toggleConversationPin = (conversation: ConversationSummary) => {
+    if (relocating) return;
     void patchConversation(conversation, { is_pinned: !conversation.is_pinned }).catch((error) => {
       console.warn('Conversation pin update failed:', error);
     });
   };
 
   const deleteConversation = (conversation: ConversationSummary) => {
+    if (relocating) return;
     setDeleteError(null);
     setDeleteTarget(conversation);
   };
 
   const confirmDeleteConversation = async () => {
     const conversation = deleteTarget;
-    if (!conversation || deleteBusy) return;
+    if (!conversation || deleteBusy || relocating) return;
     setDeleteBusy(true);
     setDeleteError(null);
     const wasActive = conversation.id === activeConversationId;
@@ -1625,7 +1772,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
       const response = await apiFetch(`/api/conversations/${encodeURIComponent(conversation.id)}?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`,
         { method: 'DELETE' },
       );
-      if (!response.ok) throw new Error(`conversation delete failed: ${response.status}`);
+      if (!response.ok) {
+        await flagIfRelocating(response);
+        throw new Error(`conversation delete failed: ${response.status}`);
+      }
       if (presentationScopeRef.current !== presentationScope) return;
       // Commit the acknowledged deletion before optional list reconciliation.
       conversationRequestRef.current += 1;
@@ -1662,7 +1812,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   };
 
   const forgetConversation = async (forgetLongTerm: boolean) => {
-    if (!forgetTarget || conversationBusy) return;
+    if (!forgetTarget || conversationBusy || relocating) return;
     setConversationBusy(true);
     setForgetError(null);
     let waitingForSwitchAck = false;
@@ -1674,7 +1824,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
           body: JSON.stringify({ forget_long_term: forgetLongTerm }),
         },
       );
-      if (!response.ok) throw new Error(`conversation forget failed: ${response.status}`);
+      if (!response.ok) {
+        await flagIfRelocating(response);
+        throw new Error(`conversation forget failed: ${response.status}`);
+      }
       if (forgetTarget.id === activeConversationId) {
         audioPlayer.stopAll();
         waitingForSwitchAck = switchConversation(forgetTarget.id, []);
@@ -1751,6 +1904,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         }),
       });
       if (!response.ok) {
+        await flagIfRelocating(response);
         setAudioError('provider_config_save_failed');
         setCredentialStatus('error');
         throw new Error('provider_config_save_failed');
@@ -1766,6 +1920,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         body: JSON.stringify({ api_key: newSettings.apiKey.trim() }),
       });
       if (!response.ok) {
+        await flagIfRelocating(response);
         setAudioError('credential_save_failed');
         setCredentialStatus('error');
         throw new Error('credential_save_failed');
@@ -1784,6 +1939,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         }),
       });
       if (!response.ok) {
+        await flagIfRelocating(response);
         setWebSearchCredentialStatus('error');
         throw new Error('web_search_credential_save_failed');
       }
@@ -1897,6 +2053,22 @@ export const Workstation: React.FC<WorkstationProps> = ({
     applyWebSearchSettings(settings);
   };
 
+  const handleSaveWebSearchKey = async (provider: WebSearchProviderId, key: string) => {
+    const response = await apiFetch('/api/search/credential', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider, api_key: key }),
+    });
+    if (!response.ok) throw new Error('web_search_credential_save_failed');
+    const payload = await response.json() as WebSearchSettingsSnapshot & { configured?: boolean };
+    applyWebSearchSettings({
+      active_provider: (payload.active_provider || provider) as WebSearchProviderId,
+      providers: payload.providers || webSearchProviders,
+      configured: payload.configured,
+      fallback_note: webSearchFallbackNote,
+    });
+  };
+
   const handleClearWebSearchCredential = async (provider: WebSearchProviderId) => {
     setWebSearchCredentialStatus('saving');
     const response = await apiFetch(`/api/search/credential?provider=${encodeURIComponent(provider)}`,
@@ -1923,7 +2095,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   /** Dispatch once now. Only ACK + final lock may publish the outer worldline. */
   const startShift = (to: 'steins_gate' | 'beta') => {
-    if (shiftRef.current || to === worldline) return;
+    if (relocating || shiftRef.current || to === worldline) return;
     entryInterruptedByShiftRef.current = pendingConversationRef.current !== null;
     if (entryInterruptedByShiftRef.current) abandonConversationEntry(false);
     // Leftover voice fades out (well before the commit point of the animation), then stops.
@@ -1956,7 +2128,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   };
 
   // The header meter keeps the source reading while the shift covers it, then tunes in view.
-  const meter = useTunedValue(DIVERGENCE[worldline], { hold: !!shift, duration: 1100 });
+  const meter = useTunedValue(dice ?? DIVERGENCE[worldline], { hold: !!shift, duration: eggNote ? 2800 : 1100 });
 
   const now = new Date();
   const dateLabel = `${now.getMonth() + 1}/${now.getDate()}`;
@@ -1979,11 +2151,17 @@ export const Workstation: React.FC<WorkstationProps> = ({
     : status === 'CONNECTING' || sessionPending ? 'OFFLINE · 连接中' : 'OFFLINE';
   const presence = isThinking ? 'thinking' : isPlaying ? 'speaking' : isSynthesizing ? 'voicing' : online ? 'listening' : sessionConnecting || reconnecting ? 'connecting' : 'offline';
   const presenceLabel = PRESENCE_LABELS[presence];
-  const thinkingSprite = packAsset(worldline === 'steins_gate' ? 'assets/ui/spinner_sg_20f.png' : 'assets/ui/spinner_beta_20f.png');
+  /** The sheet's own reading of the link: down (nothing is coming back) stamps the sheet and stops its clock. */
+  const linkState = online ? 'up'
+    : sessionConnecting || reconnecting ? 'connecting'
+    : showSetupStatus ? 'setup'
+    : awaitingWorldline || sessionPending ? 'connecting'
+    : 'down';
+  const thinkingSprite = assetPackMod.packAsset?.(worldline === 'steins_gate' ? 'assets/ui/spinner_sg_20f.png' : 'assets/ui/spinner_beta_20f.png') ?? null;
   const lastAssistantId = [...visibleMessages].reverse().find((msg) => msg.role === 'assistant' && !msg.systemError)?.id;
   // An old conversation whose connection was removed keeps its history but must be re-pointed by the user.
   const providerGone = Boolean(activeConversation) && providers.length > 0 && (!activeProvider || activeProvider.enabled === false);
-  const sendBlocked = status !== 'READY' || sessionState === 'rejected' || sessionState === 'unknown' || isThinking || isSynthesizing || conversationBusy || conversationReconnectEpoch !== null || providerGone;
+  const sendBlocked = status !== 'READY' || sessionState === 'rejected' || sessionState === 'unknown' || isThinking || isSynthesizing || conversationBusy || conversationReconnectEpoch !== null || providerGone || relocating;
   useEffect(() => {
     if (!entering) handComposerFocus();
   }, [entering, sendBlocked, handComposerFocus]);
@@ -1993,10 +2171,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
     <TipProvider>
     <div
       ref={setWsRoot}
-      className={`ws2${isHistoryCollapsed ? ' rail' : ''}${isSettingsOpen ? ' menu-open' : ''}${isMemoryOpen ? ' memory-space-open' : ''}`}
+      className={`ws2${isHistoryCollapsed ? ' rail' : ''}${isSettingsOpen ? ' menu-open' : ''}${isMemoryOpen && !memoryClosing ? ' memory-space-open' : ''}`}
       data-wl={worldline === 'beta' ? 'beta' : 'sg'}
-      data-entrance={entering ? entrance : undefined}
+      data-link={linkState}
+      // Held under the terminal the room is drawn as it will finally look (data-hold), so every picture, filter and
+      // shader it needs is ready before the sweep; the entrance's own animations start with the sweep (data-entrance).
+      data-entrance={entering && entrance !== 'hold' && !locked ? entrance : undefined}
+      data-hold={entrance === 'hold' || locked || undefined}
       inert={entering || undefined}
+      aria-hidden={locked || undefined}
       onMouseDown={handleAudioInit}
       // A shipped desktop app has no use for the browser's page menu (Back, Reload, Inspect); text fields and the
       // transcript bring their own menus, and development builds keep the native one for DevTools.
@@ -2013,7 +2196,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         if (root.scrollTop || root.scrollLeft) root.scrollTo(0, 0);
       }}
     >
-      <Atmosphere worldline={worldline} />
+      <Atmosphere worldline={worldline} still={linkState === 'down'} />
       {entering && (
         <>
           <i
@@ -2028,7 +2211,16 @@ export const Workstation: React.FC<WorkstationProps> = ({
         sendId={localSend?.scope === presentationScope ? localSend.id : null}
       />
 
-      <header className="ws2-top">
+      {/* The header follows the page under it (U 11-09): on the conversation it carries the session list's toggle and
+          the session's title; on the system page, a way back and where you are; the memory page has the whole sheet. */}
+      <header className="ws2-top" inert={(isMemoryOpen && !memoryClosing) || undefined}>
+        {isSettingsOpen ? (
+          <Tip label="回到对话（Esc）" side="bottom" align="start">
+          <button type="button" className="ws2-icon-btn ws2-back" onClick={() => { closeMenu(); systemButtonRef.current?.focus({ preventScroll: true }); }} aria-label="回到对话">
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M13 8H3.5M7.5 3.8 3.3 8l4.2 4.2" fill="none" stroke="currentColor" strokeWidth="1.2" /></svg>
+          </button>
+          </Tip>
+        ) : (
         <button
           type="button"
           ref={sideToggleRef}
@@ -2039,39 +2231,54 @@ export const Workstation: React.FC<WorkstationProps> = ({
         >
           <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="2" y="2.5" width="12" height="11" fill="none" stroke="currentColor" strokeWidth="1.2" /><path d="M6 2.5v11" stroke="currentColor" strokeWidth="1.2" /></svg>
         </button>
+        )}
         <div className="ws2-wordmark" aria-label="AMADEUS"><DraftWord key={worldline} text="AMADEUS" step={90} className={inkedLine.current === worldline ? 'is-inked' : ''} /></div>
         <span className="ws2-date">
-          <span className="d">{dateLabel}</span><b>{dayLabel}</b>
+          <span className="d">{dateLabel}</span><span className="dow">({dayLabel})</span>
         </span>
-        <span className="ws2-title">{activeConversation?.title ? <span className="t">{activeConversation.title}</span> : null}</span>
+        <span className="ws2-title">
+          {isSettingsOpen ? (
+            <span className="ws2-crumb" key={menuSection}>
+              <span className="root">系统</span>
+              <i aria-hidden="true">/</i>
+              <span className="no">{String(Math.max(0, MENU_SECTIONS.findIndex((s) => s.key === menuSection)) + 1).padStart(2, '0')}</span>
+              <span className="here">{MENU_SECTIONS.find((s) => s.key === menuSection)?.zh}</span>
+            </span>
+          ) : activeConversation?.title ? (
+            <>
+              {activeConversationNo ? <span className="no">{conversationNo(activeConversationNo)}</span> : null}
+              <span className="t">{activeConversation.title}</span>
+            </>
+          ) : null}
+        </span>
 
         <div className="ws2-top-right">
+          <Tip label={isMemoryOpen ? '回到对话（Esc）' : '记忆'}>
           <button
             type="button"
-            className={`ws2-memory-btn${isMemoryOpen ? ' is-on' : ''}`}
+            className={`ws2-tool is-memory${isMemoryOpen ? ' is-on' : ''}`}
             aria-label="MEMORY"
             aria-pressed={isMemoryOpen}
-            title={isMemoryOpen ? '回到对话（Esc）' : undefined}
+            disabled={!isMemoryOpen && relocating}
             onClick={() => {
               if (isMemoryOpen) {
                 if (!memoryClosing) (memoryControlRef.current?.requestClose ?? closeMemory)();
                 return;
               }
+              if (relocating) return;
               memoryOriginRef.current = null;
               setMemoryLink(null);
+              // One page at a time: the system page gives way to the memory page.
+              setIsSettingsOpen(false);
               setIsMemoryOpen(true);
             }}
           >
-            <svg className="ws2-engram" viewBox="0 0 32 32" width="22" height="22" aria-hidden="true">
-              <circle cx="16" cy="16" r="13" fill="none" stroke="currentColor" strokeWidth="1" strokeDasharray="62 20" transform="rotate(-40 16 16)" />
-              <circle cx="16" cy="16" r="8.5" fill="none" stroke="var(--ws-accent)" strokeWidth="1.2" strokeDasharray="36 18" transform="rotate(130 16 16)" />
-              <circle cx="16" cy="16" r="2.2" fill="var(--ws-accent-2)" />
-            </svg>
-            <span className="ws2-memory-zh" aria-hidden="true">记忆</span>
-            <span className="ws2-memory-en" aria-hidden="true">MEMORY</span>
-            {isMemoryOpen ? <span className="ws2-memory-esc" aria-hidden="true">ESC</span> : null}
+            <span className="glyph"><Engram />{isMemoryOpen ? <PencilRing seed="memory" /> : null}</span>
+            <span className="word" aria-hidden="true">记忆</span>
           </button>
+          </Tip>
           <div className="ws2-booth-mid">
+            {eggNote ? <span className="ws2-egg-note" aria-hidden="true">Gott würfelt nicht.</span> : null}
             <Tip
               className="is-meter"
               side="bottom"
@@ -2097,7 +2304,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             </button>
             </Tip>
             <div
-              className={`ws2-online${online ? ' is-online' : ''}${awaitingWorldline ? ' is-sync' : ''}`}
+              className={`ws2-online${online ? ' is-online' : ''}${awaitingWorldline ? ' is-sync' : linkState === 'connecting' ? ' is-pending' : ''}`}
               role="status"
               data-status={showSetupStatus ? 'SETUP' : awaitingWorldline ? 'SYNC' : sessionRejected ? 'REJECTED' : status}
             >
@@ -2105,24 +2312,25 @@ export const Workstation: React.FC<WorkstationProps> = ({
             </div>
           </div>
           <div className="ws2-booth-end">
-          <Tip label="系统设置">
+          <Tip label={isSettingsOpen ? '回到对话（Esc）' : updateMark && 'update' in updates && updates.update ? `系统设置 · 新版本 ${updates.update.version}` : '系统设置'}>
           <button
             type="button"
             ref={systemButtonRef}
-            className={`ws2-sys-btn${isSettingsOpen ? ' on' : ''}`}
+            className={`ws2-tool is-system${isSettingsOpen ? ' is-on' : ''}`}
             onClick={() => {
               audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume);
               if (isSettingsOpen) closeMenu(); else openMenu();
             }}
-            aria-label="系统设置"
+            aria-label={updateMark ? '系统设置（有新版本）' : '系统设置'}
             aria-expanded={isSettingsOpen}
           >
-            {isSettingsOpen ? <>返回<kbd>Esc</kbd></> : '系统'}
+            <span className="glyph"><GearDial />{isSettingsOpen ? <PencilRing seed="system" /> : null}{updateMark ? <i className="ws2-news" aria-hidden="true" /> : null}</span>
+            <span className="word" aria-hidden="true">系统</span>
           </button>
           </Tip>
           <Tip label="断开连接">
-          <button type="button" className="ws2-icon-btn" onClick={onLogout} aria-label="断开连接">
-            <LogOut size={16} strokeWidth={1.8} aria-hidden="true" />
+          <button type="button" className="ws2-icon-btn ws2-unplug" onClick={() => setUnplugAsk(true)} aria-label="断开连接" aria-haspopup="dialog">
+            <OpenSwitch />
           </button>
           </Tip>
           </div>
@@ -2139,6 +2347,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           searchQuery={conversationSearch}
           onSearchChange={setConversationSearch}
           onSelect={(conversation) => {
+            if (relocating) return;
             if (window.innerWidth < 1240) {
               setIsHistoryCollapsed(true);
               // The drawer's rows leave with it; the keyboard returns to the control that opened it.
@@ -2146,12 +2355,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
             }
             void selectConversation(conversation);
           }}
-          onNew={() => { void createConversation(defaultIdentityMode); }}
-          onRename={async (conversation, title) => { await patchConversation(conversation, { title }); }}
+          onNew={() => { if (!relocating) void createConversation(defaultIdentityMode); }}
+          onRename={async (conversation, title) => { if (!relocating) await patchConversation(conversation, { title }); }}
           onTogglePin={toggleConversationPin}
           onDelete={(conversation) => { void deleteConversation(conversation); }}
-          onForget={(conversation) => { setForgetError(null); setForgetTarget(conversation); }}
-          busy={conversationBusy && !pendingConversation}
+          onForget={(conversation) => { if (relocating) return; setForgetError(null); setForgetTarget(conversation); }}
+          busy={relocating || (conversationBusy && !pendingConversation)}
           loadFailed={conversationListFailed && conversationListWorldline !== worldline}
           refreshFailed={conversationListFailed && conversationListWorldline === worldline}
           onRetry={() => { void loadConversations().catch(() => undefined); }}
@@ -2176,16 +2385,18 @@ export const Workstation: React.FC<WorkstationProps> = ({
             data-scroll-end={transcriptScroll.atEnd}
           >
             {visibleMessages.length === 0 ? (
-              // An empty conversation is a fresh observation log, not a terminal prompt.
+              // An empty conversation is a note left on the sheet (SG: a scrap of notebook paper taped down; β: a framed
+              // slip). "NO DATA" is what the original's empty save slots say.
               <div className="ws2-empty">
                 <div className={`ws2-empty-card ${emptyStateKind}`}>
-                  <small className="ws2-empty-kicker">OBSERVATION LOG · {dateLabel} ({dayLabel})</small>
+                  <i className="ws2-empty-tape a" aria-hidden="true" /><i className="ws2-empty-tape b" aria-hidden="true" />
+                  <small className="ws2-empty-kicker">{dateLabel} ({dayLabel})</small>
                   <h2 className="ws2-empty-head">
-                    {showSetupStatus ? '尚未接通' : sessionUsable ? '新的观测记录' : sessionConnecting || reconnecting ? '正在接通' : '暂时无法接通'}
+                    {showSetupStatus ? '尚未接通' : sessionUsable ? 'NO DATA' : sessionConnecting || reconnecting ? '正在接通' : '暂时无法接通'}
                   </h2>
                   <p className={`ws2-empty-msg ${emptyStateKind}`}>
                     {sessionUsable && !needsApiKey
-                      ? '说第一句话吧。她的日语原文与中文字幕会一并记在这里。'
+                      ? '这个会话还是空的。'
                       : emptyStateMessage.replace(/^>\s*/, '')}
                   </p>
                   {needsApiKey && (
@@ -2213,11 +2424,11 @@ export const Workstation: React.FC<WorkstationProps> = ({
                 {visibleMessages.map((msg) => (
                   msg.systemError ? (
                     <article key={msg.id} className="ws2-line ws2-line-error">
-                      <p className="system-error-content" role="alert">{msg.content}</p>
+                      <p className="system-error-content" role="alert"><ErrorText content={msg.content} /></p>
                     </article>
                   ) : msg.role === 'user' ? (
                     <article key={msg.id} className="ws2-line ws2-line-user" data-message-id={msg.id}>
-                      <header><span className="ws2-who" data-testid="speaker-user">{userHudLabel}</span></header>
+                      <header><span className="ws2-who" data-testid="speaker-user" data-blank={userHudLabel === '——' ? '' : undefined}>{userHudLabel}</span></header>
                       <p
                         className="ws2-user-text"
                         {...(contentHasJapaneseKana(msg.content) ? { lang: 'ja' as const } : {})}
@@ -2230,7 +2441,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                     <article key={msg.id} className={`ws2-line ws2-line-kurisu${arrival.arriving(`m:${msg.id}`, Boolean(msg.streaming)) ? ' ws2-arrive' : ''}`}>
                       <header>
                         <span className="ws2-who" data-testid="speaker-assistant">
-                          <span data-testid="speaker-assistant-primary">KURISU</span>
+                          <span className="ws2-who-name" data-testid="speaker-assistant-primary">KURISU</span>
                           <span className="ws2-who-sub" data-testid="speaker-assistant-secondary">Amadeus</span>
                         </span>
                       </header>
@@ -2260,7 +2471,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                             fps={15}
                             loop={true}
                             autoplay={!reducedMotion}
-                          /> : <ThinkingMark />}
+                          /> : <ThinkingMark worldline={worldline} />}
                           <span className="ws2-thinking-label" data-testid="activity-operation-label">{operationLabel}</span>
                         </div>
                       )}
@@ -2280,23 +2491,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
             )}
           </div>
           </SelectionCopyMenu>
-          {showJumpToLatest && (
-            <button
-              type="button"
-              className="ws2-to-latest"
-              data-testid="jump-to-latest"
-              aria-label="跳到最新"
-              onClick={handleJumpToLatest}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault();
-                  handleJumpToLatest();
-                }
-              }}
-            >
-              回到最新 ↓
-            </button>
-          )}
         </div>
 
         {providerGone && (
@@ -2307,40 +2501,45 @@ export const Workstation: React.FC<WorkstationProps> = ({
         {(reconnectStopped || reconnecting || linkLost) && visibleMessages.length > 0 && (
           <div className={`ws2-link-state${linkLost || reconnectStopped ? ' is-lost' : ''}`} role="status">
             <span>{reconnectStopMessage ?? (linkLost ? '自动重连没有成功。' : `连接中断，正在自动重连（${retryCount}）。`)}</span>
-            {(linkLost || reconnectStopped) && <button type="button" onClick={reconnect}>重新连接</button>}
+            {(linkLost || reconnectStopped) && (
+              <span className="ws2-notice-ways"><button type="button" onClick={reconnect}>重新连接</button></span>
+            )}
           </div>
         )}
         {needsApiKey && !providerGone && visibleMessages.length > 0 && (
           <div className="ws2-key-missing" role="status">
             <span>「{activeProvider?.display_name || activeProviderId}」还没有密钥，她现在听不到你。</span>
-            <button type="button" onClick={() => openConnectionsAt('key')}>填写密钥</button>
-            <button type="button" onClick={() => openConnectionsAt('list')}>换一个接入</button>
+            <span className="ws2-notice-ways">
+              <button type="button" onClick={() => openConnectionsAt('key')}>填写密钥</button>
+              <button type="button" onClick={() => openConnectionsAt('list')}>换一个接入</button>
+            </span>
           </div>
         )}
+        {/* it reads the data status: not before the login has unlocked this */}
+        {!locked && !dataRelocation && <RestoreNotice onOpen={() => openMenu('data')} />}
+        {!isSettingsOpen && dataRelocation && <RelocationRestartBanner state={dataRelocation} onUpdate={setDataRelocation} />}
+        {/* The composer under the log, in its text column: what she is running on over the slot, the slot, and the
+            sheet's own send key in your margin (SG a clock hand, β a Nixie filament; workstation/SendKey.tsx). */}
         <form className="ws2-composer" onSubmit={handleSend}>
-          <TextFieldMenu fieldRef={composerRef}>
-          <textarea
-            ref={composerRef}
-            rows={2}
-            value={inputText}
-            onChange={(e) => { setInputText(e.target.value); hearKeystroke(); }}
-            onKeyDown={(e) => {
-              if (e.nativeEvent.isComposing || e.keyCode === 229) {
-                if (e.key === 'Enter' || e.key === 'Escape') e.stopPropagation();
-                return;
-              }
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                e.currentTarget.form?.requestSubmit();
-              }
-            }}
-            className="chat-input-field"
-            placeholder="对红莉栖说点什么……"
-            aria-label="输入消息"
-            disabled={sendBlocked}
-          />
-          </TextFieldMenu>
-          <div className="ws2-composer-row">
+          <div className="ws2-entry-head">
+            {/* Back to the latest entry, on the head before its leader: it never covers a line of the log. */}
+            {showJumpToLatest && (
+              <button
+                type="button"
+                className="ws2-to-latest"
+                data-testid="jump-to-latest"
+                aria-label="跳到最新"
+                onClick={handleJumpToLatest}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    handleJumpToLatest();
+                  }
+                }}
+              >
+                回到最新
+              </button>
+            )}
             <div className="ws2-model">
               <ProviderControls
                 providers={providers.filter((row) => (
@@ -2349,8 +2548,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
                 ))}
                 activeProviderId={activeProviderId}
                 activeModelId={activeConversation?.model_id || model}
-                models={availableModels}
-                disabled={conversationBusy}
+                models={shelved(modelShelf, activeProviderId, availableModels, activeConversation?.model_id || model)}
+                disabled={conversationBusy || relocating}
                 lockProvider={isThinking || isSynthesizing}
                 searchable
                 onManageConnections={() => openMenu('connections')}
@@ -2386,22 +2585,56 @@ export const Workstation: React.FC<WorkstationProps> = ({
                 <Tip label={label}>
                   <button
                     type="button"
-                    className={`ws2-check-dot ${state?.status ?? 'untested'}`}
+                    className={`ws2-probe ${state?.status ?? 'untested'}`}
                     aria-label={label}
                     onClick={() => openMenu('connections')}
-                  />
+                  >
+                    <i className="ws2-probe-dot" aria-hidden="true" />
+                    <span aria-hidden="true">{checkShortLabel(state?.status)}</span>
+                  </button>
                 </Tip>
               );
             })()}
-
-            <button
-              type="submit"
-              className="ws2-send"
-              disabled={sendBlocked || !inputText.trim()}
-              aria-label="发送"
-            >
-              发送
-            </button>
+          </div>
+          <div className="ws2-field">
+          <div className="ws2-slot">
+          <TextFieldMenu fieldRef={composerRef}>
+          <textarea
+            id="ws2-composer-input"
+            ref={composerRef}
+            rows={2}
+            value={inputText}
+            onChange={(e) => { windRef.current += 1; setInputText(e.target.value); hearKeystroke(); }}
+            onKeyDown={(e) => {
+              if (e.nativeEvent.isComposing || e.keyCode === 229) {
+                if (e.key === 'Enter' || e.key === 'Escape') e.stopPropagation();
+                return;
+              }
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                e.currentTarget.form?.requestSubmit();
+              }
+            }}
+            className="chat-input-field"
+            placeholder="对红莉栖说点什么……"
+            aria-label="输入消息"
+            disabled={sendBlocked}
+          />
+          </TextFieldMenu>
+          <i className="ws2-ul" aria-hidden="true" />
+          </div>
+          <button
+            type="submit"
+            className="ws2-send"
+            disabled={sendBlocked || !inputText.trim()}
+            aria-label="发送"
+          >
+            <SendKey worldline={worldline} wound={windRef.current} length={[...inputText].length} />
+          </button>
+          </div>
+          {/* The operation guide the originals print under every screen: only keys that really work here. */}
+          <div className="ws2-guide" aria-hidden="true">
+            <span><kbd>Enter</kbd>发送</span><span><kbd>Shift</kbd><b>+</b><kbd>Enter</kbd>换行</span>
           </div>
           {(messageTooLong || pendingModel || modelApplyError) && (
             <div className="ws2-composer-notes">
@@ -2426,28 +2659,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
       <section className={`ws2-stage presence-${presence}`} inert={isMemoryOpen || undefined}>
         <div className="ws2-seam" aria-hidden="true" />
-        {/* Her name set like the original's chapter cards: black Mincho over drafting instruments, redrawn on each shift. */}
-        <div className="ws2-chapter" key={`chapter-${worldline}`} aria-hidden="true">
-          <svg className="ws2-chapter-draft" viewBox="0 0 240 640" preserveAspectRatio="xMaxYMin meet">
-            <path pathLength={1} d="M232 120 A 200 200 0 0 0 52 320" />
-            <path pathLength={1} d="M232 120 V 320 H 52" />
-            <path pathLength={1} d="M232 60 V 612 M222 612 H 240" />
-            {Array.from({ length: 28 }, (_, i) => <path key={i} pathLength={1} d={`M232 ${80 + i * 19} h ${i % 5 === 0 ? -9 : -5}`} className="tick" />)}
-            <circle pathLength={1} cx="96" cy="196" r="17" /><circle pathLength={1} cx="96" cy="196" r="6" />
-            <path pathLength={1} d="M70 196 H 122 M96 170 V 222" />
-            <circle pathLength={1} cx="172" cy="236" r="30" /><circle pathLength={1} cx="172" cy="236" r="24" className="thin" />
-            <path pathLength={1} d="M26 596 L 206 356" />
-            {Array.from({ length: 16 }, (_, i) => <path key={i} pathLength={1} d={`M${38 + i * 10.6} ${580 - i * 14.1} l 4 3`} className="tick" />)}
-            <circle pathLength={1} cx="44" cy="572" r="9" /><path pathLength={1} d="M30 572 H 58 M44 558 V 586" />
-          </svg>
-          <div className="ws2-chapter-set">
-            <div className="ws2-chapter-kana" lang="ja">
-              {['まき', 'せ', 'く', 'り', 'す'].map((reading, i) => <span key={i} className={i === 2 ? 'giv' : undefined}>{reading}</span>)}
-            </div>
-            <div className="ws2-chapter-jp" lang="ja">牧瀬紅莉栖</div>
-            <div className="ws2-chapter-en"><i>Amadeus</i></div>
-          </div>
-        </div>
+        {/* The link is down: the sheet's clock has stopped, and the sheet says so in red. */}
+        {linkState === 'down' && (
+          <Stamp className="ws2-link-stamp" sub="OFFLINE" tilt={-8}>未连接</Stamp>
+        )}
         {/* Amadeus window: a dot-matrix field behind her that stirs while she thinks and pulses while she speaks. */}
         <div className="ws2-matrix" aria-hidden="true" />
         {/* Light from the screen side. On the lit edge (upper right) the figure's own colour is lifted toward the light
@@ -2524,16 +2739,34 @@ export const Workstation: React.FC<WorkstationProps> = ({
           isSpeaking={isPlaying}
           glitchState={glitchState}
         />
-        <div className="ws2-plate">
-          <VoiceScope
-            volume={voiceVolume}
-            muted={voiceMuted}
-            speaking={isPlaying}
-            onVolume={handleVoiceVolumeChange}
-            onToggleMute={() => setVoiceMuted((m) => !m)}
-            onStop={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); handleStopVoice(); }}
-          />
-          <PresenceIndicator state={presence} />
+        {/* The sheet's title block, in the frame's lower-right corner as on a drawing: whom the figure is of, how she
+            is now, and her voice. */}
+        <div className="ws2-plate" data-presence={presence}>
+          <div className="ws2-plate-name" aria-hidden="true"><span lang="ja">牧瀬紅莉栖</span><i>Amadeus</i></div>
+          <div className="ws2-plate-row">
+            <span className="ws2-plate-key" aria-hidden="true">STATE</span>
+            <PresenceIndicator state={presence} />
+          </div>
+          <div className="ws2-plate-row is-voice">
+            <span className="ws2-plate-key" aria-hidden="true">VOICE</span>
+            <VoiceScope
+              volume={voiceVolume}
+              muted={voiceMuted}
+              speaking={isPlaying}
+              onVolume={handleVoiceVolumeChange}
+              onToggleMute={() => setVoiceMuted((m) => !m)}
+              onStop={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); handleStopVoice(); }}
+            />
+          </div>
+          {!packInstalled && (
+            <button
+              type="button"
+              className="ws2-plate-pack"
+              onClick={() => openMenu('character')}
+            >
+              装素材包
+            </button>
+          )}
         </div>
         {isSettingsOpen && (() => {
           const latest = visibleMessages.find((msg) => msg.id === lastAssistantId);
@@ -2590,6 +2823,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
             {!['action_only', 'tts_absent'].includes(audioError) && <code className="ws2-toast-code">TTS · {audioError}</code>}
           </div>
         )}
+        {assetPackNotice && (
+          <div
+            className={`audio-error-toast${assetPackNotice.kind === 'info' ? ' info' : ''}`}
+            data-testid="asset-pack-toast"
+            role="status"
+          >
+            <span className="audio-error-msg">{assetPackNotice.text}</span>
+          </div>
+        )}
       </div>
 
       {isMemoryOpen ? (
@@ -2612,61 +2854,51 @@ export const Workstation: React.FC<WorkstationProps> = ({
         onSection={setMenuSection}
         onClose={closeMenu}
         returnFocusRef={systemButtonRef}
+        marks={updateMark ? { about: '有新版本' } : undefined}
       >
         {/* Fixed slots keep the embedded SettingsModal mounted across sections, so unsaved drafts survive. */}
-        <div className={`ws2-conn${menuSection === 'connections' ? ' is-split' : ''}`}>
-        {menuSection === 'connections' && (
-          <ConnectionList
-            providers={providers}
-            activeProviderId={activeProviderId}
-            checkFor={(row) => chatChecks[checkKey(row.id, row.id === activeProviderId ? activeModelId : row.default_model || '')]}
-            locked={isThinking || isSynthesizing || conversationBusy}
-            onSelect={changeProvider}
-          />
+        {menuMounted && (
+        <div className="ws2-conn">
+        {isSettingsOpen && dataRelocation && (
+          <div className="ws2-conn-relocate">
+            <RelocationRestartBanner state={dataRelocation} onUpdate={setDataRelocation} />
+          </div>
         )}
         <div className="ws2-conn-detail">
         {menuSection === 'worldline' && (
           <WorldlinePanel
             worldline={worldline}
-            busy={Boolean(shift)}
-            onArm={() => audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume)}
+            busy={Boolean(shift) || relocating}
+            ledger={worldlineLedger}
             onShift={(to) => {
+              if (relocating) return;
               if (isThinking || isSynthesizing || isPlaying) setShiftConfirm(to);
               else startShift(to);
             }}
           />
         )}
         {menuSection === 'connections' && (
-          <>
-            <ConnectionCheckPanel
-              providerName={activeProvider?.display_name || activeProviderId}
-              modelId={activeModelId}
-              state={chatChecks[checkKey(activeProviderId, activeModelId)]}
-              manual={manualProviders.includes(activeProviderId)}
-              onCheck={() => { void runChatCheck(activeProviderId, activeModelId); }}
-            />
-            {providers
-              .filter((row) => pendingProviders.includes(row.id) && row.enabled !== false && row.id !== activeProviderId)
-              .map((row) => {
-                const modelId = row.default_model || '';
-                const version = row.configuration_version;
-                return (
-                  <ConnectionCheckPanel
-                    key={row.id}
-                    providerName={row.display_name}
-                    modelId={modelId}
-                    state={chatChecks[checkKey(row.id, modelId)]}
-                    pending
-                    onCheck={() => {
-                      void runChatCheck(row.id, modelId).then((result) => {
-                        if (result?.status === 'ok') void admitProvider(row.id, modelId, version);
-                      });
-                    }}
-                    onManualEnable={() => enableProviderManually(row.id, modelId, version)}
-                  />
-                );
-              })}
-          </>
+          <ConnectionsPanel
+            providers={providers}
+            activeProviderId={activeProviderId}
+            activeModelId={activeModelId}
+            locked={isThinking || isSynthesizing || conversationBusy || relocating}
+            relocating={relocating}
+            onRelocating={() => markDataRelocating()}
+            checkFor={(providerId, modelId) => chatChecks[checkKey(providerId, modelId)]}
+            onCheck={(providerId, modelId) => runChatCheck(providerId, modelId)}
+            onUse={changeProvider}
+            onAdmit={admitProvider}
+            onReload={() => loadProviders()}
+            onConfigChanged={(providerId) => { bumpConfigVersion(providerId); if (providerId === activeProviderId) void loadProviderModels(providerId, true); }}
+            search={{
+              active: webSearchActiveProvider,
+              providers: webSearchProviders,
+              onSelect: handleSelectWebSearchProvider,
+              onSaveKey: handleSaveWebSearchKey,
+              onClear: handleClearWebSearchCredential,
+            }}
+          />
         )}
         {menuSection === 'sound' && (
           <div className="ws2-sound-panel">
@@ -2683,10 +2915,23 @@ export const Workstation: React.FC<WorkstationProps> = ({
             <div className="ws2-m-group">语音合成</div>
           </div>
         )}
-        <div className="ws2-settings-host" hidden={menuSection === 'worldline'}>
+        {menuSection === 'data' && (
+          <DataPanel relocation={dataRelocation} onRelocationChange={setDataRelocation} />
+        )}
+        {menuSection === 'usage' && (
+          <UsagePanel
+            conversationId={activeConversationId}
+            providerName={(id) => providers.find((row) => row.id === id)?.display_name ?? id}
+            relocating={relocating}
+          />
+        )}
+        {menuSection === 'about' && (
+          <AboutPanel relocating={relocating} onRelocating={() => markDataRelocating()} />
+        )}
+        <div className="ws2-settings-host" hidden={menuSection !== 'sound' && menuSection !== 'character'}>
       <SettingsModal
         variant="embedded"
-        tab={menuSection === 'connections' ? 'connections' : menuSection === 'sound' ? 'voice' : 'basic'}
+        tab={menuSection === 'sound' ? 'voice' : 'basic'}
         isOpen={isSettingsOpen}
         onClose={closeMenu}
         worldline={worldline}
@@ -2734,12 +2979,16 @@ export const Workstation: React.FC<WorkstationProps> = ({
             configured: Boolean(row.configured),
           }))}
         onCreateCustomProfile={async (input) => {
+          if (relocating) throw new Error('data_relocating');
           const response = await apiFetch('/api/providers/custom-profiles', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(input),
           });
-          if (!response.ok) throw new Error('profile_create_failed');
+          if (!response.ok) {
+            await flagIfRelocating(response);
+            throw new Error('profile_create_failed');
+          }
           // The backend creates it as pending; it joins the chat selector once the check passes or it is enabled by hand.
           const created = await response.json() as { provider_id: string; default_model?: string; configuration_version?: string | null };
           await loadProviders();
@@ -2748,10 +2997,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
           if (result?.status === 'ok') await admitProvider(created.provider_id, created.default_model, created.configuration_version);
         }}
         onDisableCustomProfile={async (providerId) => {
+          if (relocating) throw new Error('data_relocating');
           const response = await apiFetch(`/api/providers/custom-profiles/${encodeURIComponent(providerId)}`,
             { method: 'DELETE' },
           );
-          if (!response.ok) throw new Error('profile_disable_failed');
+          if (!response.ok) {
+            await flagIfRelocating(response);
+            throw new Error('profile_disable_failed');
+          }
           // Keep the current selection so the user sees「已停用/不可用」until
           // they explicitly pick another provider — never auto-jump to DeepSeek.
           await loadProviders();
@@ -2767,8 +3020,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
         onClearWebSearchCredential={handleClearWebSearchCredential}
       />
         </div>
+        {menuSection === 'character' && (
+          <AssetPackGroup
+            relocating={relocating}
+            onNotice={(text, kind = 'info') => setAssetPackNotice({ text, kind })}
+          />
+        )}
         </div>
         </div>
+        )}
       </SystemMenu>
 
       {shift && (
@@ -2788,6 +3048,25 @@ export const Workstation: React.FC<WorkstationProps> = ({
             setShift(null);
           }}
         />
+      )}
+
+      {unplugAsk && (
+        <ConfirmDialog
+          title="断开连接？"
+          confirmLabel="断开"
+          onConfirm={() => {
+            setUnplugAsk(false);
+            if (isThinking || isSynthesizing) handleCancelTurn();
+            else handleStopVoice();
+            onLogout();
+          }}
+          onCancel={() => setUnplugAsk(false)}
+        >
+          <p>回到登录页。对话都已存好，再次进入就能接着聊。</p>
+          {isThinking || isSynthesizing || isPlaying
+            ? <p className="ws2-dialog-hint">她还在回复，断开会停下这一轮。</p>
+            : null}
+        </ConfirmDialog>
       )}
 
       {shiftConfirm && (
@@ -2812,6 +3091,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           title="删除这段对话？"
           confirmLabel="删除会话"
           danger
+          stamp={<Stamp sub={numberOf(deleteDialog.shown.id)}>不可撤回</Stamp>}
           leaving={deleteDialog.leaving}
           onExited={deleteDialog.done}
           returnFocus={() => sessionDialogFallback(wsRootRef.current, deleteDialog.shown?.id ?? '', activeConversationId === null)}
@@ -2828,6 +3108,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       {forgetTarget && (
         <ForgetConversationModal
           title={forgetTarget.title}
+          no={numberOf(forgetTarget.id)}
           busy={conversationBusy}
           error={forgetError}
           onClose={() => { if (!conversationBusy) { setForgetTarget(null); setForgetError(null); } }}

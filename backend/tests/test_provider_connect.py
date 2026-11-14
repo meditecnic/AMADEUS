@@ -107,10 +107,12 @@ def test_builtin_connect_uses_same_steps(connect, monkeypatch, provider_id):
     assert response.json()["check"]["ok"] is True
 
 
-def test_missing_catalog_uses_address_only(connect):
+def test_missing_catalog_does_not_take_over_a_labelled_profile(connect):
     client, _ = connect
     labeled = submit(client, catalog_id="paid-plan").json()
-    assert submit(client).json()["provider_id"] == labeled["provider_id"]
+    plain = submit(client).json()
+    assert plain["provider_id"] != labeled["provider_id"]
+    assert submit(client).json()["provider_id"] == plain["provider_id"]
 
 
 @pytest.mark.parametrize("reuse", [False, True])
@@ -219,3 +221,210 @@ def test_connect_rejects_blank_display_name_before_saving(connect, monkeypatch, 
     assert client.portal.call(db.list_provider_configurations) == before
     assert not store._values
     discover.assert_not_called()
+
+
+@pytest.mark.parametrize("missing", ["http_404", "unsupported"])
+def test_service_without_a_model_list_still_connects(connect, monkeypatch, missing):
+    client, store = connect
+    if missing == "http_404":
+        monkeypatch.setattr(OpenAICompatibleAdapter, "list_models",
+                            AsyncMock(side_effect=ProviderRequestError("custom", 404)))
+    else:
+        async def unsupported(*args, **kwargs):
+            raise providers.HTTPException(400, detail={"code": "model_discovery_unsupported"})
+        monkeypatch.setattr(providers, "_discover_models", unsupported)
+    first = submit(client, api_key="fake")
+    assert first.status_code == 200, first.text
+    body = first.json()
+    assert body["models"] == [] and body["models_listed"] is False
+    assert body["model_id"] is None and body["check"] == {"ok": False, "code": "model_selection_required"}
+    profile_id = body["provider_id"]
+    assert store.get(profile_id) == "fake"
+    second = submit(client, model_id="typed-by-hand")
+    assert second.status_code == 200, second.text
+    assert second.json()["provider_id"] == profile_id
+    assert second.json()["check"] == {"ok": True, "code": "ok"} and second.json()["models_listed"] is False
+    row = client.portal.call(db.get_provider_configuration, profile_id)
+    assert row["selector_admission"] == "admitted" and row["default_model"] == "typed-by-hand"
+
+
+def test_an_unreachable_address_still_fails_the_listing_step(connect, monkeypatch):
+    import httpx
+    client, store = connect
+    monkeypatch.setattr(OpenAICompatibleAdapter, "list_models", AsyncMock(side_effect=httpx.ConnectError("x")))
+    response = submit(client, api_key="fake")
+    assert response.status_code == 502
+    assert response.json() == {"detail": {"code": "address_unreachable", "step": "list"}}
+
+
+def test_labels_decide_which_profile_a_connect_reuses(connect):
+    client, store = connect
+    plain = submit(client, api_key="plain-key").json()["provider_id"]
+    # A label adopts the unlabelled profile at the address (made before labels existed) ...
+    adopted = submit(client, api_key="plan-key", catalog_id="plan")
+    assert adopted.json()["provider_id"] == plain
+    assert client.portal.call(db.get_provider_configuration, plain)["catalog_id"] == "plan"
+    # ... and no label never takes over a labelled one.
+    other = submit(client, api_key="relay-key")
+    assert other.json()["provider_id"] != plain
+    assert store.get(plain) == "plan-key"
+    assert client.portal.call(db.get_provider_configuration, plain)["catalog_id"] == "plan"
+
+
+@pytest.fixture(params=["http_404", "unsupported"])
+def listless(connect, monkeypatch, request):
+    """A service without a model list, already connected with a key that works."""
+    client, store = connect
+    if request.param == "http_404":
+        monkeypatch.setattr(OpenAICompatibleAdapter, "list_models",
+                            AsyncMock(side_effect=ProviderRequestError("custom", 404)))
+    else:
+        async def unsupported(*args, **kwargs):
+            raise providers.HTTPException(400, detail={"code": "model_discovery_unsupported"})
+        monkeypatch.setattr(providers, "_discover_models", unsupported)
+    response = submit(client, api_key="original", model_id="chosen")
+    assert response.status_code == 200, response.text
+    return client, store, response.json()["provider_id"]
+
+
+def test_no_list_key_only_keeps_the_old_key_when_the_new_one_is_refused(listless, monkeypatch):
+    client, store, profile_id = listless
+    before = client.portal.call(db.get_provider_configuration, profile_id)
+    monkeypatch.setattr(providers, "check_selected_model_chat", AsyncMock(
+        side_effect=providers.HTTPException(401, detail={"code": "credential_rejected"})))
+    response = submit(client, api_key="rejected")
+    assert response.status_code == 401
+    assert response.json() == {"detail": {"code": "credential_rejected", "step": "check"}}
+    assert store.get(profile_id) == "original"
+    assert client.portal.call(db.get_provider_configuration, profile_id) == before
+
+
+@pytest.mark.parametrize("admission", ["admitted", "manual", "pending"])
+def test_no_list_key_only_checks_the_kept_model_and_leaves_admission(listless, monkeypatch, admission):
+    client, store, profile_id = listless
+    row = client.portal.call(db.get_provider_configuration, profile_id)
+    client.portal.call(db.update_provider_selector_admission, profile_id, admission, row["configuration_version"])
+    chat_keys = []
+
+    async def stream(self, **kwargs):
+        chat_keys.append((kwargs["api_key"], kwargs["model"]))
+        yield {"content": "OK"}
+
+    monkeypatch.setattr(OpenAICompatibleAdapter, "get_chat_stream", stream)
+    response = submit(client, api_key="replacement")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["model_id"] == "chosen" and body["models_listed"] is False
+    assert body["check"] == {"ok": True, "code": "ok"}
+    assert chat_keys == [("replacement", "chosen")]
+    assert store.get(profile_id) == "replacement"
+    after = client.portal.call(db.get_provider_configuration, profile_id)
+    assert after["default_model"] == "chosen" and after["selector_admission"] == admission
+
+
+def test_no_list_reconnect_without_a_key_or_a_kept_model_says_nothing(connect, monkeypatch):
+    client, store = connect
+    monkeypatch.setattr(OpenAICompatibleAdapter, "list_models",
+                        AsyncMock(side_effect=ProviderRequestError("custom", 404)))
+    chat_check = AsyncMock(side_effect=AssertionError("nothing to check"))
+    monkeypatch.setattr(providers, "check_selected_model_chat", chat_check)
+    # No model was ever chosen: a new key is kept and the model is still to be typed.
+    profile_id = submit(client, api_key="first").json()["provider_id"]
+    waiting = submit(client, api_key="second")
+    assert waiting.json()["check"] == {"ok": False, "code": "model_selection_required"}
+    assert store.get(profile_id) == "second"
+    chat_check.assert_not_called()
+
+
+def test_no_list_reconnect_with_a_kept_model_and_no_new_key_is_not_checked(listless, monkeypatch):
+    client, store, profile_id = listless
+    chat_check = AsyncMock(side_effect=AssertionError("no key was written"))
+    monkeypatch.setattr(providers, "check_selected_model_chat", chat_check)
+    response = submit(client)
+    assert response.status_code == 200, response.text
+    assert response.json()["check"] == {"ok": False, "code": "not_checked"}
+    assert store.get(profile_id) == "original"
+    chat_check.assert_not_called()
+
+
+def test_a_failed_connect_gives_an_adopted_profile_its_blank_label_back(connect, monkeypatch):
+    client, store = connect
+    profile_id = submit(client, api_key="original", model_id="chosen").json()["provider_id"]
+    before = client.portal.call(db.get_provider_configuration, profile_id)
+    assert before["catalog_id"] is None
+    monkeypatch.setattr(OpenAICompatibleAdapter, "list_models",
+                        AsyncMock(side_effect=ProviderRequestError("custom", 401)))
+    response = submit(client, api_key="rejected", catalog_id="plan")
+    assert response.status_code == 401 and response.json()["detail"]["step"] == "list"
+    assert client.portal.call(db.get_provider_configuration, profile_id) == before
+    assert store.get(profile_id) == "original"
+
+
+def test_a_label_adopts_the_oldest_of_two_unlabelled_profiles(connect):
+    client, store = connect
+    made = [client.post("/api/providers/custom-profiles", json={
+        "display_name": name, "base_url": "https://connect.invalid/v1"}).json()["provider_id"] for name in ("a", "b")]
+    rows = {row["provider_id"]: row for row in client.portal.call(db.list_provider_configurations)}
+    oldest = min(made, key=lambda provider_id: (rows[provider_id]["created_at_utc"], provider_id))
+    other = next(provider_id for provider_id in made if provider_id != oldest)
+    untouched = rows[other]
+    assert submit(client, api_key="plan-key", catalog_id="plan").json()["provider_id"] == oldest
+    assert client.portal.call(db.get_provider_configuration, oldest)["catalog_id"] == "plan"
+    assert client.portal.call(db.get_provider_configuration, other) == untouched
+    assert store.get(other) is None
+
+
+def test_connect_by_custom_provider_id_rekeys_and_rolls_back_only_target(connect, monkeypatch):
+    client, store = connect
+    alpha_id = client.post("/api/providers/custom-profiles", json={
+        "display_name": "Alpha", "base_url": "https://connect.invalid/v1", "default_model": "chosen",
+    }).json()["provider_id"]
+    beta_id = client.post("/api/providers/custom-profiles", json={
+        "display_name": "Beta", "base_url": "https://connect.invalid/v1", "default_model": "chosen",
+    }).json()["provider_id"]
+    gamma_id = client.post("/api/providers/custom-profiles", json={
+        "display_name": "Gamma", "base_url": "https://connect.invalid/v1", "default_model": "chosen",
+        "catalog_id": "plan",
+    }).json()["provider_id"]
+    store.set(alpha_id, "key-alpha")
+    store.set(beta_id, "key-beta")
+
+    # Rekeying Beta via provider_id updates only beta_id and preserves its display_name.
+    ok = client.post("/api/providers/connect", json={"provider_id": beta_id, "api_key": "key-beta-2"})
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["provider_id"] == beta_id
+    assert store.get(beta_id) == "key-beta-2"
+    assert store.get(alpha_id) == "key-alpha"
+    assert client.portal.call(db.get_provider_configuration, beta_id)["display_name"] == "Beta"
+    assert client.portal.call(db.get_provider_configuration, alpha_id)["display_name"] == "Alpha"
+
+    # Rekeying Gamma preserves its existing catalog_id when omitted from connect payload.
+    gamma_ok = client.post("/api/providers/connect", json={"provider_id": gamma_id, "api_key": "key-gamma"})
+    assert gamma_ok.status_code == 200, gamma_ok.text
+    assert client.portal.call(db.get_provider_configuration, gamma_id)["catalog_id"] == "plan"
+
+    # Failed list_models rolls back only beta_id's key and leaves alpha_id untouched.
+    before_beta = client.portal.call(db.get_provider_configuration, beta_id)
+    before_alpha = client.portal.call(db.get_provider_configuration, alpha_id)
+    monkeypatch.setattr(OpenAICompatibleAdapter, "list_models",
+                        AsyncMock(side_effect=ProviderRequestError("custom", 401)))
+    failed = client.post("/api/providers/connect", json={"provider_id": beta_id, "api_key": "rejected"})
+    assert failed.status_code == 401
+    assert failed.json()["detail"]["step"] == "list"
+    assert store.get(beta_id) == "key-beta-2"
+    assert store.get(alpha_id) == "key-alpha"
+    assert client.portal.call(db.get_provider_configuration, beta_id) == before_beta
+    assert client.portal.call(db.get_provider_configuration, alpha_id) == before_alpha
+
+
+def test_connect_rejects_unknown_disabled_and_legacy_custom_provider_ids(connect):
+    client, _store = connect
+    gamma_id = client.post("/api/providers/custom-profiles", json={
+        "display_name": "Disabled", "base_url": "https://connect.invalid/v1",
+    }).json()["provider_id"]
+    assert client.delete(f"/api/providers/custom-profiles/{gamma_id}").status_code == 200
+
+    for bad_id in ("custom:00000000-0000-0000-0000-000000000000", gamma_id, "custom"):
+        resp = client.post("/api/providers/connect", json={"provider_id": bad_id, "api_key": "any-key"})
+        assert resp.status_code == 422, (bad_id, resp.text)
+        assert resp.json()["detail"]["code"] == "invalid_provider_configuration"

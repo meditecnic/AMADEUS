@@ -255,3 +255,28 @@ def test_cancel_restore_http_envelopes(app_client):
     path = db.get_data_root() / "restore-request.json"
     backups.atomic_json(path, {"id": "pending", "phase": "pending"})
     assert app_client.delete("/api/data/restore").json() == {"cancelled": True}
+
+
+def test_status_names_the_pending_restore_until_it_is_cancelled(data_root):
+    make_database(data_root)
+    manifest = backups.create_backup()
+    assert backups.pending_restore_id() is None
+    backups.schedule_restore(manifest['id'])
+    assert backups.pending_restore_id() == manifest['id']
+    backups.cancel_restore()
+    assert backups.pending_restore_id() is None
+
+
+def test_data_status_reports_the_pending_restore_over_http(app_client):
+    def pending():
+        return app_client.get("/api/data/status").json()["restore_pending"]
+
+    assert pending() is None
+    path = db.get_data_root() / "restore-request.json"
+    backups.atomic_json(path, {"id": "chosen-backup", "phase": "pending"})
+    assert pending() == "chosen-backup"
+    backups.atomic_json(path, {"id": "chosen-backup", "phase": "applying"})
+    assert pending() is None
+    backups.atomic_json(path, {"id": "chosen-backup", "phase": "pending"})
+    assert app_client.delete("/api/data/restore").json() == {"cancelled": True}
+    assert pending() is None

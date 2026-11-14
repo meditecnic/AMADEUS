@@ -320,27 +320,43 @@ async def connect_provider(body: ProviderConnect):
 async def _connect_provider(body: ProviderConnect):
     if body.display_name is not None and not body.display_name.strip():
         raise HTTPException(422, detail={"code": "invalid_provider_configuration", "step": "save"})
+    is_builtin_id = body.provider_id in {"deepseek", "glm", "openai", "gemini"}
+    is_custom_id = bool(
+        body.provider_id
+        and body.provider_id != "custom"
+        and is_custom_profile_id(body.provider_id)
+    )
     if bool(body.base_url) == bool(body.provider_id) or (
-        body.provider_id and body.provider_id not in {"deepseek", "glm", "openai", "gemini"}
+        body.provider_id and not (is_builtin_id or is_custom_id)
     ):
         raise HTTPException(422, detail={"code": "invalid_provider_configuration", "step": "save"})
     try:
         if body.base_url:
             base_url = normalize_custom_base_url(body.base_url)
-            rows = await list_provider_configurations(enabled_only=True)
-            existing = next((row for row in rows
-                if is_custom_profile_id(str(row["provider_id"]))
-                and row["base_url"] == base_url
-                and (body.catalog_id is None or row.get("catalog_id") == body.catalog_id)), None)
+            rows = [row for row in await list_provider_configurations(enabled_only=True)
+                    if is_custom_profile_id(str(row["provider_id"])) and row["base_url"] == base_url]
+            # Same address and same label is the same connection. A label also adopts an unlabelled profile at
+            # the address (made before labels existed); no label never takes over a labelled one.
+            existing = next((row for row in rows if row.get("catalog_id") == body.catalog_id), None)
+            if existing is None and body.catalog_id is not None:
+                existing = next((row for row in rows if row.get("catalog_id") is None), None)
             provider_id = str(existing["provider_id"]) if existing else new_custom_provider_id()
+        elif is_custom_id:
+            existing = await get_provider_configuration(str(body.provider_id))
+            if existing is None or not existing.get("enabled"):
+                raise HTTPException(422, detail={"code": "invalid_provider_configuration", "step": "save"})
+            provider_id = str(existing["provider_id"])
+            base_url = str(existing["base_url"])
         else:
-            provider_id = body.provider_id
+            provider_id = str(body.provider_id)
             base_url = str(_definition(provider_id).adapter.base_url)
             existing = await get_provider_configuration(provider_id)
         definitions = {definition.id: definition for definition in provider_registry.list_definitions()}
         old_definition = definitions.get(provider_id)
         old_adapter = _definition(provider_id).adapter if old_definition else None
         old_key = credential_store.get(provider_id)
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(422, detail={"code": "invalid_provider_configuration", "step": "save"}) from exc
     except Exception as exc:
@@ -359,7 +375,9 @@ async def _connect_provider(body: ProviderConnect):
                 provider_id=provider_id, base_url=base_url, default_model=model,
                 display_name=body.display_name or (existing or {}).get("display_name"),
             )
-            settings["catalog_id"] = body.catalog_id
+            settings["catalog_id"] = (
+                body.catalog_id if body.catalog_id is not None else (existing or {}).get("catalog_id")
+            )
             saved = await _activate_custom_profile(settings, initial_admission="pending")
         else:
             saved = await save_provider_configuration(
@@ -378,17 +396,34 @@ async def _connect_provider(body: ProviderConnect):
         provider_model_cache.clear(provider_id)
         step = "list"
         # Connect must prove live discovery; stale UI cache is not a success.
-        result = await _discover_models(provider_id, refresh=True, allow_stale=False)
-        model_catalog.reconcile(provider_id, result.models, result.metadata)
-        if model and not keep_selection:
+        # A service without a model list (its /models answers 404, or the adapter has no listing) still
+        # connects: the model is typed by hand and the chat check proves the address and the key.
+        models: list[str] = []
+        models_listed = True
+        try:
+            result = await _discover_models(provider_id, refresh=True, allow_stale=False)
+        except HTTPException as exc:
+            code = exc.detail.get("code") if isinstance(exc.detail, dict) else None
+            if code not in {"model_list_not_found", "model_discovery_unsupported"}:
+                raise
+            models_listed = False
+        else:
+            model_catalog.reconcile(provider_id, result.models, result.metadata)
+            models = list(result.models)
+        # A new key with nothing to prove it against (no list was read) says one sentence with the kept model,
+        # so a key the service refuses never replaces one that works. The model and its admission stay as they are.
+        verify_kept = keep_selection and not models_listed and body.api_key is not None
+        checked = bool(model) and (not keep_selection or verify_kept)
+        if checked:
             step = "check"
             await check_selected_model_chat(provider_id, ChatCheckRequest(model_id=model))
-            saved = await update_provider_selector_admission(provider_id, "admitted", saved["configuration_version"])
-            if saved is None:
-                raise HTTPException(409, detail={"code": "configuration_changed"})
-        return {"provider_id": provider_id, "models": list(result.models), "model_id": model or None,
-                "check": {"ok": bool(model) and not keep_selection,
-                          "code": "not_checked" if keep_selection else ("ok" if model else "model_selection_required")},
+            if not keep_selection:
+                saved = await update_provider_selector_admission(provider_id, "admitted", saved["configuration_version"])
+                if saved is None:
+                    raise HTTPException(409, detail={"code": "configuration_changed"})
+        code = "ok" if checked else ("not_checked" if keep_selection else "model_selection_required")
+        return {"provider_id": provider_id, "models": models, "models_listed": models_listed, "model_id": model or None,
+                "check": {"ok": checked, "code": code},
                 "configuration_version": saved["configuration_version"]}
     except Exception as exc:
         # Both phases restore the exact previous row, key and runtime. In phase
@@ -677,8 +712,12 @@ async def delete_provider_credential(provider_id: str):
     return {"provider_id": provider_id, "configured": False}
 
 
-def _request_failure(exc: Exception) -> HTTPException:
-    """Map upstream failures to fixed, credential-free UI reasons."""
+def _request_failure(exc: Exception, *, listing: bool = False) -> HTTPException:
+    """Map upstream failures to fixed, credential-free UI reasons.
+
+    While listing models, an HTTP 404 from the service means it has no model list (the address answered);
+    anywhere else, and for a host that cannot be reached, it is the address.
+    """
     status = getattr(exc, "status_code", None)
     if isinstance(exc, httpx.HTTPStatusError):
         status = exc.response.status_code
@@ -686,6 +725,8 @@ def _request_failure(exc: Exception) -> HTTPException:
         status, code = 401, "credential_rejected"
     elif isinstance(exc, (TimeoutError, httpx.TimeoutException)):
         status, code = 504, "discovery_timeout"
+    elif listing and status == 404:
+        status, code = 502, "model_list_not_found"
     elif status == 404 or isinstance(exc, httpx.ConnectError):
         status, code = 502, "address_unreachable"
     elif status == 429:
@@ -735,7 +776,7 @@ async def _discover_models(provider_id: str, *, refresh: bool, allow_stale: bool
         stale = provider_model_cache.peek(provider_id)
         if allow_stale and stale is not None:
             return stale
-        raise _request_failure(exc) from exc
+        raise _request_failure(exc, listing=True) from exc
 
 
 @router.get("/{provider_id}/models")

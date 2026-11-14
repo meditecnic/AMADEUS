@@ -1,12 +1,15 @@
 import { apiFetch, isPackagedTauri } from '../apiBase';
-import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import './SalieriLogin.css';
 import { audioService } from '../services/AudioService';
 import { audioPlayer } from '../hooks/useAudioPlayer';
 import { useReducedMotion } from '../design-system/useReducedMotion';
 import { warmWorkstationFonts } from '../workstation/fontWarmup';
+import { prewarmWorkstation } from '../workstation/prewarm';
 import { Blueprint, type BlueprintHandle } from './login/Blueprint';
 import { Wordmark, type WordmarkHandle } from './login/Wordmark';
+import { DIVERGENCE } from '../workstation/Nixie';
+import { KeyGlyph, Plate, PressFilter, Ruler } from './drafting/parts';
 
 /**
  * Beats of the entrance the app listens for. draft: the pen starts across the sheet and the workstation is
@@ -15,30 +18,28 @@ import { Wordmark, type WordmarkHandle } from './login/Wordmark';
 export type EntranceCue = 'draft' | 'docked' | 'gone' | 'skip';
 
 interface SalieriLoginProps {
-  onLoginSuccess: () => void;
+  /** easterEgg: the original's line was typed at the door ([210] says so only for a login it accepted). */
+  onLoginSuccess: (result?: { easterEgg: boolean }) => void;
   /** Kept for API stability: the terminal is one style on both worldlines. */
   worldline?: 'steins_gate' | 'beta';
   onEntranceCue?: (cue: EntranceCue) => void;
+  /** The workstation behind the terminal has drawn its first frames; the pen waits for it (STAGE_WAIT at most). */
+  stageReady?: boolean;
+  /** The workstation was drawn ahead under the terminal while the password was typed: there is nothing to wait for. */
+  stagePrepared?: boolean;
 }
+
+/** Longest the pen waits for the workstation behind the terminal to be drawn before sweeping anyway. */
+const STAGE_WAIT = 1400;
+/** The key's tick is drawn before the workstation starts mounting behind the terminal, so nothing heavy lands on it. */
+const OK_BEAT = 380;
+/** After the handover, the key starts to go this long before the pen sweeps. */
+const KEY_GO = 120;
 
 /** Entrance timeline (ms after the server says yes). */
 const T = { sweep: 330, sweepDur: 920, fly: 420, flyDur: 840, fade: 150 };
 /** Header wordmark baseline inside its 1em line box (EB Garamond: ascent 1.007, descent .298, line-height 1). */
 const HEADER_BASELINE = 0.8545;
-
-const DAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
-const pad = (n: number) => String(n).padStart(2, '0');
-function useClock() {
-  const [now, setNow] = useState(() => new Date());
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(new Date()), 1000);
-    return () => window.clearInterval(id);
-  }, []);
-  return {
-    date: `${now.getFullYear()}.${pad(now.getMonth() + 1)}.${pad(now.getDate())} ${DAYS[now.getDay()]}`,
-    time: `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`,
-  };
-}
 
 /** Lower right, an easter egg: the title-screen lines of the original, verbatim (its English included, unedited). */
 const VERSE = [
@@ -51,60 +52,6 @@ const VERSE = [
 ];
 /** Each line is typed out after the one before it (11 ms a character, a short pause between lines). */
 const VERSE_AT = VERSE.map((_, i) => VERSE.slice(0, i).reduce((t, l) => t + l.length * 11 + 90, 0));
-
-const CUT = 9;
-/**
- * A field label's nameplate: a drafted plate with a cut corner and an engraved inner rule, printed
- * slightly off register. Measured to the label so every line lands on a whole pixel. On focus the edge is drawn
- * first, then the plate is inked in (see .lp-* in the stylesheet).
- */
-function Plate() {
-  const ref = useRef<SVGSVGElement>(null);
-  const [box, setBox] = useState<{ w: number; h: number } | null>(null);
-  useLayoutEffect(() => {
-    const host = ref.current?.parentElement;
-    if (!host) return;
-    const read = () => {
-      const w = host.offsetWidth;
-      const h = host.offsetHeight;
-      if (w && h) setBox((b) => (b && b.w === w && b.h === h ? b : { w, h }));
-    };
-    read();
-    if (typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(read);
-    ro.observe(host);
-    return () => ro.disconnect();
-  }, []);
-  const w = box?.w ?? 0;
-  const h = box?.h ?? 0;
-  const shape = `M${CUT} 0H${w}V${h}H0V${CUT}Z`;
-  const i = 2.5;
-  const inner = `M${CUT + 1} ${i}H${w - i}V${h - i}H${i}V${CUT + 1}Z`;
-  return (
-    <svg ref={ref} className="lp" width={w} height={h} aria-hidden="true" focusable="false">
-      {box && (
-        <>
-          <path className="lp-reg r" d={shape} transform="translate(-1 0)" />
-          <path className="lp-reg b" d={shape} transform="translate(1 .5)" />
-          <path className="lp-fill" d={shape} filter="url(#sl-press)" />
-          <path className="lp-inner" d={inner} />
-          <path className="lp-ghost" d={shape} />
-          <path className="lp-edge" d={shape} pathLength={1} />
-        </>
-      )}
-    </svg>
-  );
-}
-
-/** A ruler under each field: one division per character, the nib at the end of the measurement. */
-function Ruler({ n }: { n: number }) {
-  return (
-    <span className="sl-ruler" aria-hidden="true" style={{ '--n': Math.min(n, 48) } as React.CSSProperties}>
-      {n > 0 && <i key={n} className="fresh" />}
-      <b className="nib" />
-    </span>
-  );
-}
 
 /** The password peek: an eye drawn in two lines. Shut while the password is masked; it opens to show it. */
 const LID_OPEN = 'M3 9Q13 .6 23 9';
@@ -121,9 +68,13 @@ function Peek({ open }: { open: boolean }) {
   );
 }
 
-export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEntranceCue }) => {
+export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEntranceCue, worldline = 'steins_gate', stageReady = false, stagePrepared = false }) => {
   const [userId, setUserId] = useState('');
   const [password, setPassword] = useState('');
+  // [210] optional startup passcode. Until the server says otherwise a passcode is assumed, as before.
+  const [passcodeSet, setPasscodeSet] = useState(true);
+  // The passcode record exists but cannot be read: the backend treats it as unset, and says why.
+  const [passcodeUnreadable, setPasscodeUnreadable] = useState(false);
   const [peek, setPeek] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   // Which field the error belongs to; the message text is localized or a raw backend detail.
@@ -139,13 +90,22 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
   const [glitch, setGlitch] = useState(0);
   const reduced = useReducedMotion();
   const [intro, setIntro] = useState(() => !reduced);
-  const clock = useClock();
 
   const rootRef = useRef<HTMLDivElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
   const wordWrapRef = useRef<HTMLSpanElement>(null);
   const wordRef = useRef<WordmarkHandle>(null);
   const penRef = useRef<HTMLDivElement>(null);
+  const backdropInRef = useRef<HTMLDivElement>(null);
+  /** When the server said yes: the entrance's beats are timed from here, however long the stage took. */
+  const exitAtRef = useRef(0);
+  /** The server said yes; the terminal holds still, still "connecting", until the workstation behind it is drawn. */
+  const [admitted, setAdmitted] = useState(false);
+  const [stageWaitOver, setStageWaitOver] = useState(false);
+  /** The workstation has been mounted for this login (onLoginSuccess called). */
+  const [handedOff, setHandedOff] = useState(false);
+  const stagePreparedRef = useRef(stagePrepared);
+  stagePreparedRef.current = stagePrepared;
   const plateRef = useRef<BlueprintHandle>(null);
   const userRowRef = useRef<HTMLDivElement>(null);
   const pwdRowRef = useRef<HTMLDivElement>(null);
@@ -214,6 +174,24 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
     };
   }, []);
 
+  // Whether a startup passcode is set ([210]). Without one the field is left empty and Enter opens the terminal.
+  useEffect(() => {
+    if (backendStatus !== 'ready') return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await apiFetch('/api/auth/state');
+        if (!response.ok) return;
+        const state = await response.json().catch(() => null) as { passcode_set?: unknown; passcode_error?: unknown } | null;
+        if (!cancelled && typeof state?.passcode_set === 'boolean') setPasscodeSet(state.passcode_set);
+        if (!cancelled) setPasscodeUnreadable(typeof state?.passcode_error === 'string');
+      } catch {
+        // Unknown: keep asking for the passcode; the login call itself still decides.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [backendStatus]);
+
   // 统一错误设置与 3s 自动清除并复原函数
   const showAuthError = (msg: string, field: 'user' | 'password') => {
     if (errTimeoutRef.current) {
@@ -257,8 +235,28 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
     return () => window.clearTimeout(id);
   }, [glitch]);
 
-  // While the terminal waits, the workstation's fonts load and decode, so the entrance does not have to.
+  // While the terminal waits, the workstation's fonts and pictures load and decode, so the entrance does not have to.
   useEffect(() => warmWorkstationFonts(), []);
+  useEffect(() => prewarmWorkstation(worldline), [worldline]);
+
+  // Once the password is accepted the form folds into the key (handover). Usually the workstation was drawn ahead
+  // under the terminal while the password was typed (App, `stagePrepared`): unlocking it and letting the key go are
+  // then one beat (U 11-10). Otherwise it mounts now, and the key's dial turns, a motion only the compositor runs,
+  // until its first frames are drawn (U 11-09: the first entrance after the app starts stuttered; U 11-10: a still
+  // wait after the tick felt stuck). Then the key goes and the pen sweeps. STAGE_WAIT caps the wait.
+  useEffect(() => {
+    if (!admitted || reduced) return undefined;
+    const id = window.setTimeout(() => setStageWaitOver(true), STAGE_WAIT);
+    return () => window.clearTimeout(id);
+  }, [admitted, reduced]);
+  // Only this visit's workstation can say it is drawn: the word is heard once it has been handed the login. One drawn
+  // ahead under the terminal (the usual case) needs no word: the key goes as soon as the form has folded into it.
+  useEffect(() => {
+    if (!handedOff || exiting || reduced || !(stageReady || stageWaitOver || stagePrepared)) return;
+    setExiting(true);
+    runEntrance();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handedOff, exiting, reduced, stageReady, stageWaitOver, stagePrepared]);
 
   // 卸载组件时清理定时器，防内存泄漏
   useEffect(() => {
@@ -347,18 +345,30 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
   const runEntrance = () => {
     const pen = penRef.current;
     const backdrop = backdropRef.current;
-    const canAnimate = typeof pen?.animate === 'function' && typeof backdrop?.animate === 'function';
+    const inner = backdropInRef.current;
+    const canAnimate = typeof pen?.animate === 'function' && typeof backdrop?.animate === 'function' && typeof inner?.animate === 'function';
+    // Beats keep their spacing; the form folded away during the handover, so that time comes off the pause before the
+    // sweep, which then waits only for the key to start going.
+    const lag = exitAtRef.current ? performance.now() - exitAtRef.current : 0;
+    const sweepAt = Math.max(KEY_GO, T.sweep - lag);
+    if (canAnimate) {
+      const timing: KeyframeAnimationOptions = { duration: T.sweepDur, delay: sweepAt, easing: 'cubic-bezier(.62, 0, .3, 1)', fill: 'forwards' };
+      // The paper is wiped from the left by sliding its window right while its contents slide left by as much: both
+      // are transforms, so the compositor runs the wipe even while the page's main thread is busy (a clip-path
+      // animation stalled with it on the first entrance after the app starts). They are handed to it now, with their
+      // delay, so a busy main thread (the workstation just unlocked behind) cannot hold the sweep back either.
+      animsRef.current.push(
+        pen!.animate([{ transform: 'translateX(0)', opacity: 1 }, { transform: 'translateX(100vw)', opacity: 1 }], timing),
+        backdrop!.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(100vw)' }], timing),
+        inner!.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(-100vw)' }], timing),
+      );
+    }
     later(() => {
       plateRef.current?.tick(4);
       if (!canAnimate) { cue('draft'); cue('docked'); cue('gone'); return; }
       setSweeping(true);
-      const timing: KeyframeAnimationOptions = { duration: T.sweepDur, easing: 'cubic-bezier(.62, 0, .3, 1)', fill: 'forwards' };
-      animsRef.current.push(
-        pen!.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(100vw)' }], timing),
-        backdrop!.animate([{ clipPath: 'inset(0 0 0 0)' }, { clipPath: 'inset(0 0 0 100%)' }], timing),
-      );
       cue('draft');
-    }, T.sweep);
+    }, sweepAt);
 
     later(() => {
       const wrap = wordWrapRef.current;
@@ -397,7 +407,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
       );
       animsRef.current.push(fly);
       fly.onfinish = land;
-    }, T.fly);
+    }, sweepAt + T.fly - T.sweep);
   };
 
   const handleInitAudio = () => {
@@ -406,7 +416,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (backendStatus !== 'ready' || exiting) return;
+    if (backendStatus !== 'ready' || exiting || admitted) return;
     handleInitAudio();
     if (!userId) {
       showAuthError('请输入 USER ID', 'user');
@@ -416,7 +426,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
       showAuthError('无效的 USER ID', 'user');
       return;
     }
-    if (!password) {
+    if (!password && passcodeSet) {
       showAuthError('请输入访问密码', 'password');
       return;
     }
@@ -434,29 +444,44 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
 
     let accepted = false;
     try {
-      const response = await apiFetch('/api/auth/salieri', {
+      const response = await apiFetch('/api/auth/login', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ password }),
+        body: JSON.stringify({ passcode: password || null }),
       });
 
       if (response.ok) {
+        const result = await response.json().catch(() => null) as { easter_egg?: unknown } | null;
         accepted = true;
         audioService.playSFX('/audio/sfx/连接成功，进入页面2.ogg');
         audioService.stopBGM();
         succeededRef.current = true;
         (document.activeElement as HTMLElement | null)?.blur?.();
         setIntro(false);
-        setExiting(true);
-        onLoginSuccess();
-        if (!reduced) runEntrance();
+        setAdmitted(true);
+        exitAtRef.current = performance.now();
+        const easterEgg = result?.easter_egg === true;
+        if (reduced) {
+          setExiting(true);
+          onLoginSuccess({ easterEgg });
+        } else {
+          later(() => {
+            setHandedOff(true);
+            // Drawn ahead: unlocking it and letting the key go are one beat, not a wait for its word.
+            if (stagePreparedRef.current) { setExiting(true); runEntrance(); }
+            onLoginSuccess({ easterEgg });
+          }, OK_BEAT);
+        }
       } else if (response.status === 401 || response.status === 403) {
         showAuthError('密码错误', 'password');
+      } else if (response.status === 429) {
+        showAuthError('试得太快了，请稍等几秒', 'password');
       } else {
         const errorData = await response.json().catch(() => ({}));
-        showAuthError(errorData.detail || '访问被拒绝', 'password');
+        const detail = errorData.detail;
+        showAuthError(typeof detail === 'string' ? detail : detail?.message || '访问被拒绝', 'password');
       }
     } catch (error) {
       showAuthError('系统连接已断开', 'password');
@@ -465,9 +490,12 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
     }
   };
 
-  const busy = isAuthenticating && !exiting;
+  // Accepted: the loader stops and the key shows its tick at once; the form folds into the key (handover), whose dial
+  // turns if the workstation behind it still has to be drawn, and then the pen sweeps.
+  const busy = isAuthenticating && !admitted;
   const rootClass = [
     'sl-root',
+    admitted && !reduced && 'handover',
     exiting && 'exiting',
     sweeping && 'sweeping',
     reduced && 'reduced',
@@ -493,18 +521,18 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
       }}
     >
       <div ref={backdropRef} className="sl-backdrop">
+        <div ref={backdropInRef} className="sl-backdrop-in">
         <div className="sl-grid" aria-hidden="true" />
-        <div className="sl-plate"><Blueprint ref={plateRef} reduced={reduced} busy={busy} /></div>
+        <div className="sl-texture has-image" aria-hidden="true" />
+        <div className="sl-plate"><Blueprint ref={plateRef} reduced={reduced} busy={busy} divergence={DIVERGENCE[worldline]} /></div>
         <div className="sl-frame" aria-hidden="true">
           <div className="zones top">{[1, 2, 3, 4, 5, 6, 7, 8].map((n) => <span key={n}>{n}</span>)}</div>
           <div className="zones bottom">{[1, 2, 3, 4, 5, 6, 7, 8].map((n) => <span key={n}>{n}</span>)}</div>
           <div className="zones left">{['A', 'B', 'C', 'D', 'E', 'F'].map((n) => <span key={n}>{n}</span>)}</div>
           <div className="zones right">{['A', 'B', 'C', 'D', 'E', 'F'].map((n) => <span key={n}>{n}</span>)}</div>
         </div>
-        <div className="sl-tblock" aria-hidden="true">
-          <span className="k">DATE</span><span className="v">{clock.date}</span>
-          <span className="k">TIME</span><span className="v">{clock.time}</span>
-        </div>
+        {/* Whose paper this is, printed in the margin outside the border the way drafting stock carries its maker. */}
+        <p className="sl-imprint" aria-hidden="true">VIKTOR CHONDRIA UNIV. · BRAIN SCIENCE INST.</p>
         <div className="sl-verse" aria-hidden="true">
           {VERSE.map((line, i) => (
             <p key={i} style={{ '--n': line.length, '--t': `${VERSE_AT[i]}ms` } as React.CSSProperties}>{line}</p>
@@ -512,6 +540,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
         </div>
         <p className="sl-note" aria-hidden="true">LOCAL LINK</p>
         <div className="sl-vignette" aria-hidden="true" />
+        </div>
       </div>
 
       <div className="sl-center">
@@ -527,7 +556,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
 
         <form onSubmit={handleSubmit} className="sl-form salieri-login-form" noValidate>
           <div ref={userRowRef} className={`sl-row user${errorField === 'user' ? ' is-error' : ''}`}>
-            <label className={`sl-label${focusField === 'user' || errorField === 'user' ? ' is-on' : ''}`} htmlFor="salieri-user"><Plate /><span>USER ID</span></label>
+            <label className={`sl-label${focusField === 'user' || errorField === 'user' ? ' is-on' : ''}`} htmlFor="salieri-user"><Plate press="sl-press" /><span>USER ID</span></label>
             <div className="sl-slot">
               <input
                 ref={userRef}
@@ -549,7 +578,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
           </div>
 
           <div ref={pwdRowRef} className={`sl-row pwd${errorField === 'password' ? ' is-error' : ''}`}>
-            <label className={`sl-label${focusField === 'password' || errorField === 'password' ? ' is-on' : ''}`} htmlFor="salieri-pwd"><Plate /><span>PASSWORD</span></label>
+            <label className={`sl-label${focusField === 'password' || errorField === 'password' ? ' is-on' : ''}`} htmlFor="salieri-pwd"><Plate press="sl-press" /><span>PASSWORD</span></label>
             <div className={`sl-slot${capsLock ? ' has-caps' : ''}`}>
               <input
                 ref={pwdRef}
@@ -591,25 +620,17 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
             </div>
             <button
               type="submit"
-              className={`decrypt-btn sl-go${busy ? ' is-busy' : ''}${exiting ? ' is-ok' : ''}`}
+              className={`decrypt-btn sl-go${busy ? ' is-busy' : ''}${admitted ? ' is-ok' : ''}`}
               disabled={isAuthenticating || backendStatus !== 'ready'}
               title="CONNECT"
               aria-label="Decrypt and Connect"
             >
-              <svg viewBox="0 0 64 64" aria-hidden="true">
-                <circle cx="32" cy="32" r="30.5" className="halo" />
-                <g className="ticks">
-                  {Array.from({ length: 24 }, (_, i) => <path key={i} d={`M32 4.2v${i % 6 === 0 ? 4.2 : 2.4}`} transform={`rotate(${i * 15} 32 32)`} />)}
-                </g>
-                <circle cx="32" cy="32" r="23" className="ring" pathLength={1} />
-                <circle cx="32" cy="32" r="23" className="disc" />
-                <path d="M23.5 32h16M34 26.5l5.5 5.5-5.5 5.5" className="arrow" />
-                <path d="M24 32.5l5.5 5.5 11-12" className="check" pathLength={1} />
-              </svg>
+              <KeyGlyph />
             </button>
           </div>
 
           <div className="sl-msg-line">
+            {admitted && <p className="sl-sr" role="status">已连接，正在打开工作台</p>}
             {backendStatus !== 'ready' && (
               <p className="sl-msg backend-status-banner" role="status">
                 <i aria-hidden="true" />{backendStatus === 'starting' ? '正在启动本地服务…' : '本地服务没有启动，请重新打开 Amadeus'}
@@ -620,20 +641,16 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
                 <i aria-hidden="true" />{errorMsg}
               </p>
             )}
+            {!errorMsg && backendStatus === 'ready' && !passcodeSet && !exiting && (
+              <p className="sl-msg is-note">
+                {passcodeUnreadable ? '口令文件读不出来，这次不问口令' : '没有设口令，直接按 Enter 进入'}
+              </p>
+            )}
           </div>
         </form>
       </div>
 
-      {/* Letterpress: a little ink spread at the edges and paper grain through the ink. */}
-      <svg className="sl-defs" width="0" height="0" aria-hidden="true" focusable="false">
-        <filter id="sl-press" x="-4%" y="-20%" width="108%" height="140%" colorInterpolationFilters="sRGB">
-          <feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves={2} seed={7} result="n" />
-          <feDisplacementMap in="SourceGraphic" in2="n" scale={1.3} xChannelSelector="R" yChannelSelector="G" result="d" />
-          <feGaussianBlur in="d" stdDeviation={0.3} result="s" />
-          <feColorMatrix in="n" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0.3 0 0 0 0.74" result="g" />
-          <feComposite in="s" in2="g" operator="in" />
-        </filter>
-      </svg>
+      <PressFilter id="sl-press" className="sl-defs" />
 
       <div ref={penRef} className="sl-pen" aria-hidden="true">
         <i className="s1" /><i className="s2" /><i className="s3" /><i className="s4" /><i className="s5" />

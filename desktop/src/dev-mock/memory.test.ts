@@ -98,7 +98,7 @@ describe('in-memory memory REST handler', () => {
     expect(call('observations').body).toMatchObject({ observations: [] });
     expect(call('topics').body).toMatchObject({ topics: [] });
     expect(call('graph/projection')).toMatchObject({ status: 404 });
-    expect(call('observations/o/ignore', 'POST').body).toMatchObject({ ok: true });
+    expect(call('observations/o/ignore', 'POST')).toEqual({ status: 404, body: { detail: { code: 'observation_not_found' } } });
     expect(call('jobs/j/retry', 'POST').body).toMatchObject({ ok: true });
     expect(call('unknown')).toMatchObject({ status: 404, body: { detail: { code: expect.any(String) } } });
     expect(handleMemory(new URL('http://mock/api/other'), 'GET', {}, store)).toBeUndefined();
@@ -155,5 +155,63 @@ describe('in-memory memory REST handler', () => {
     const fresh = harness({ facts: [], topics: [], preset: 'new' }).call('chart').body as MemoryChart;
     expect(fresh).toMatchObject({ topics: [], experiences: [], counts: { facts: 3 } });
     expect(harness({ facts: [], topics: [] }).call('chart').body).toMatchObject({ origin_at: null, facts: [], counts: { facts: 0 } });
+  });
+
+  it('tracks seeded observation confirm/ignore transitions and creates a fact on confirm', () => {
+    const { call } = harness({
+      facts: [],
+      topics: [],
+      observations: [
+        { observation_id: 'obs-a', display_text: '用户习惯先列提纲再讨论。' },
+        { observation_id: 'obs-b', display_text: '用户偶尔在午夜整理数据。' },
+      ],
+    });
+    expect(call('observations?limit=1&offset=0').body).toMatchObject({
+      observations: [{ observation_id: 'obs-a', status: 'candidate' }],
+      pagination: { total: 2, limit: 1, offset: 0, has_more: true },
+    });
+
+    expect(call('observations/obs-a/confirm', 'POST').status).toBe(200);
+    expect(call('observations').body).toMatchObject({
+      observations: [
+        { observation_id: 'obs-a', status: 'attached' },
+        { observation_id: 'obs-b', status: 'candidate' },
+      ],
+    });
+    expect(call('facts').body).toMatchObject({
+      facts: [{ fact_id: 'fact-obs-a', display_text: '用户习惯先列提纲再讨论。', version_no: 1 }],
+    });
+    expect(call('facts/fact-obs-a/details').body).toMatchObject({
+      provenance: [{ observation_id: 'obs-a', excerpt: '用户习惯先列提纲再讨论。' }],
+    });
+    expect(call('observations/obs-a/confirm', 'POST')).toEqual({
+      status: 409,
+      body: { detail: { code: 'observation_not_confirmable' } },
+    });
+    expect(call('observations/obs-a/ignore', 'POST')).toEqual({
+      status: 409,
+      body: { detail: { code: 'observation_state_conflict' } },
+    });
+
+    expect(call('observations/obs-b/ignore', 'POST').status).toBe(200);
+    expect(call('observations/obs-b/confirm', 'POST')).toEqual({
+      status: 409,
+      body: { detail: { code: 'observation_not_confirmable' } },
+    });
+  });
+
+  it('answers 404 observation_not_found for confirm and ignore of an unknown observation', () => {
+    const { call } = harness({
+      ...seed,
+      observations: [{ observation_id: 'obs-a', display_text: '用户习惯先列提纲再讨论。' }],
+    });
+    for (const action of ['confirm', 'ignore']) {
+      expect(call(`observations/obs-missing/${action}`, 'POST')).toEqual({
+        status: 404,
+        body: { detail: { code: 'observation_not_found' } },
+      });
+    }
+    expect(call('observations').body).toMatchObject({ observations: [{ observation_id: 'obs-a', status: 'candidate' }] });
+    expect(call('facts').body).toMatchObject({ pagination: { total: 3 } });
   });
 });

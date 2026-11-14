@@ -3,12 +3,14 @@ import { focusableTarget } from './focusHandoff';
 
 export function ConfirmDialog({
   title, children, confirmLabel, busy = false, error, danger = false, focusCancel = true, leaving = false, onExited, returnFocus,
-  onConfirm, onCancel,
+  stamp, onConfirm, onCancel,
 }: {
   /** false focuses the first field in the body (e.g. rename) instead of 取消. */
   focusCancel?: boolean;
   title: string;
   children: ReactNode;
+  /** Struck across the slip's top edge for an act that cannot be undone (a <Stamp>). */
+  stamp?: ReactNode;
   confirmLabel: string;
   busy?: boolean;
   error?: string | null;
@@ -89,6 +91,7 @@ export function ConfirmDialog({
       onAnimationEnd={(e) => { if (leaving && e.animationName === 'ws2-dialog-out') onExited?.(); }}
     >
       <div className="ws2-dialog" ref={dialogRef} tabIndex={-1} role="alertdialog" aria-modal="true" aria-labelledby="ws2-dialog-title" aria-busy={busy || undefined}>
+        {stamp}
         <h3 id="ws2-dialog-title">{title}</h3>
         <div className="ws2-dialog-body" ref={bodyRef}>{children}</div>
         {error && <p className="ws2-dialog-error" role="alert">{error}</p>}

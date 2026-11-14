@@ -1,0 +1,12 @@
+/* The nameplate (see parts.tsx). Resting: only a ghost of its outline. Each screen says when it is on (the login's
+ * focused field, the composer while you write): then the edge is drawn round from the cut corner and the plate is
+ * inked in --pl, off register by a pixel, grain showing through. */
+.lp { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.lp path { vector-effect: non-scaling-stroke; }
+.lp-ghost { fill: none; stroke: rgba(241, 240, 235, .1); stroke-width: 1; }
+.lp-edge { fill: none; stroke: var(--pl); stroke-width: 1; stroke-dasharray: 1; stroke-dashoffset: 1; transition: stroke-dashoffset .1s ease-in, stroke .2s ease; }
+.lp-fill { fill: var(--pl); opacity: 0; transition: opacity .1s ease, fill .2s ease; }
+.lp-reg { opacity: 0; transition: opacity .1s ease; }
+.lp-reg.r { fill: rgba(255, 46, 96, .5); }
+.lp-reg.b { fill: rgba(70, 150, 255, .42); }
+.lp-inner { fill: none; stroke: rgba(11, 12, 14, .5); stroke-width: .75; opacity: 0; transition: opacity .1s ease; }

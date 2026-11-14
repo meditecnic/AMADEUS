@@ -2,12 +2,20 @@
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 #[cfg(windows)]
 use std::os::windows::fs::OpenOptionsExt;
 
-// Keep this handle alive until the desktop exits. The file itself may remain on disk.
+// Keep this handle alive until the desktop exits (or releases right before restart). The file itself may remain on disk.
 pub(crate) struct InstanceLock {
-    _file: Option<File>,
+    file: Mutex<Option<File>>,
+}
+
+impl InstanceLock {
+    pub(crate) fn release(&self) {
+        let mut guard = self.file.lock().unwrap_or_else(|e| e.into_inner());
+        let _ = guard.take();
+    }
 }
 
 pub(crate) fn acquire_instance_lock(data_dir: &Path) -> io::Result<InstanceLock> {
@@ -17,7 +25,7 @@ pub(crate) fn acquire_instance_lock(data_dir: &Path) -> io::Result<InstanceLock>
         .truncate(false).share_mode(0).open(data_dir.join("desktop.lock"))?);
     #[cfg(not(windows))]
     let file = None;
-    Ok(InstanceLock { _file: file })
+    Ok(InstanceLock { file: Mutex::new(file) })
 }
 
 // Logs and the instance lock share one root, including isolated DATA_DIR runs.
@@ -57,6 +65,27 @@ mod tests {
         drop(first);
         let next = acquire_instance_lock(&root).unwrap();
         drop(next);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn release_drops_lock_before_struct_drop() {
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let root = std::env::temp_dir().join(format!("amadeus-release-{}-{nonce}", std::process::id()));
+        let first = acquire_instance_lock(&root).unwrap();
+        #[cfg(windows)]
+        {
+            let error = match acquire_instance_lock(&root) {
+                Ok(_) => panic!("an active instance lock allowed an overlapping acquire before release"),
+                Err(error) => error,
+            };
+            assert_eq!(error.raw_os_error(), Some(32));
+        }
+        first.release();
+        let second = acquire_instance_lock(&root).unwrap();
+        assert!(first.file.lock().unwrap().is_none());
+        drop(second);
+        drop(first);
         fs::remove_dir_all(root).unwrap();
     }
 

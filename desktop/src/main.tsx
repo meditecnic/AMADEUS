@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { LocalBackendGate } from "./LocalBackendGate";
+import { fitWindow } from "./windowFit";
 import "./design-system/motion.css";
 import "./design-system/tokens.css";
 // Bundled OFL display faces (no CDN): Latin serif for the wordmark and menu, CJK serif for headings and her name.
@@ -14,6 +15,17 @@ import "@fontsource/noto-serif-jp/400.css";
 import "@fontsource/noto-serif-jp/900.css";
 import "./App.css";
 import "./workstation/workstation.css";
+// The drafting sheet under the workstation (design/references.md §4); after workstation.css so it can restyle it.
+import "./workstation/sheet.css";
+// The observation log and its composer, on the sheet.
+import "./workstation/log.css";
+// Menus, the model picker, selects and confirm dialogs: slips laid on the sheet.
+import "./workstation/slips.css";
+// The system page: an index of its sections and a ruled form for each.
+import "./workstation/system.css";
+
+// A large window shows the sheet zoomed, not a strip of it (windowFit.ts).
+fitWindow();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
