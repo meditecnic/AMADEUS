@@ -620,6 +620,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     自己
                   </label>
                 </div>
+                <p className="setting-field-hint" data-testid="identity-memory-scope-hint">
+                  「冈部」与「自己」的对话记录、长期记忆与关系状态完全隔离、互不合并；切换回原身份模式时会恢复该身份原有记忆。更改仅对之后新建的对话生效，不影响当前或已有历史对话。
+                </p>
               </div>
               <div className="setting-field field-full" data-testid="self-name-settings">
                 <label htmlFor="self-name-input">self 模式称呼</label>

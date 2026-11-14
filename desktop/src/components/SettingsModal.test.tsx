@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -818,6 +818,20 @@ describe('SettingsModal UX contracts', () => {
     expect(screen.queryByText(/About this Amadeus/)).toBeNull();
     // No in-session mode switch control — only default for *new* conversations
     expect(screen.queryByTestId('identity-mode-switch-active')).toBeNull();
+    expect(screen.queryByLabelText(/当前会话身份/)).toBeNull();
+  });
+
+  it('explains separate memory scope and new-conversation-only effect under identity settings', () => {
+    render(<SettingsModal {...baseProps} onSaveSettings={vi.fn()} />);
+    const container = screen.getByTestId('identity-settings');
+    const hint = within(container).getByTestId('identity-memory-scope-hint');
+    expect(hint).toHaveClass('setting-field-hint');
+    expect(hint).toHaveTextContent('冈部');
+    expect(hint).toHaveTextContent('自己');
+    expect(hint).toHaveTextContent('完全隔离、互不合并');
+    expect(hint).toHaveTextContent('切换回原身份模式时会恢复该身份原有记忆');
+    expect(hint).toHaveTextContent('之后新建的对话生效');
+    expect(hint).toHaveTextContent('不影响当前或已有历史对话');
     expect(screen.queryByLabelText(/当前会话身份/)).toBeNull();
   });
 
