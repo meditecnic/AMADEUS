@@ -354,38 +354,37 @@ export function handleMemory(
     try { id = decodeURIComponent(obsMatch[1]); } catch { return failure(422, 'invalid_observation_id'); }
     const action = obsMatch[2];
     const obs = data.observations.find(item => item.observation_id === id);
-    if (obs) {
-      if (action === 'confirm') {
-        if (obs.status !== 'candidate') return failure(409, 'observation_not_confirmable');
-        obs.status = 'attached';
-        const factId = `fact-${id}`;
-        if (!data.facts.some(item => item.fact_id === factId)) {
-          const now = new Date().toISOString();
-          data.facts.push({
-            fact_id: factId,
-            display_text: obs.display_text,
-            topic_id: null,
-            is_pinned: false,
+    if (!obs) return failure(404, 'observation_not_found');
+    if (action === 'confirm') {
+      if (obs.status !== 'candidate') return failure(409, 'observation_not_confirmable');
+      obs.status = 'attached';
+      const factId = `fact-${id}`;
+      if (!data.facts.some(item => item.fact_id === factId)) {
+        const now = new Date().toISOString();
+        data.facts.push({
+          fact_id: factId,
+          display_text: obs.display_text,
+          topic_id: null,
+          is_pinned: false,
+          version_no: 1,
+          active_version: 1,
+          created_at: now,
+          updated_at: now,
+          versions: [version(1, obs.display_text, now)],
+          provenance: [{
             version_no: 1,
-            active_version: 1,
-            created_at: now,
-            updated_at: now,
-            versions: [version(1, obs.display_text, now)],
-            provenance: [{
-              version_no: 1,
-              observation_id: id,
-              source_message_id: 1,
-              conversation_id: 'mock-conversation-1',
-              source_created_at: obs.created_at,
-              source_state: 'present',
-              excerpt: obs.display_text,
-            }],
-          });
-        }
-      } else {
-        if (obs.status === 'attached') return failure(409, 'observation_state_conflict');
-        obs.status = 'ignored';
+            observation_id: id,
+            source_message_id: 1,
+            conversation_id: 'mock-conversation-1',
+            source_created_at: obs.created_at,
+            source_state: 'present',
+            excerpt: obs.display_text,
+          }],
+        });
       }
+    } else {
+      if (obs.status === 'attached') return failure(409, 'observation_state_conflict');
+      obs.status = 'ignored';
     }
     return success({ ok: true, scope });
   }

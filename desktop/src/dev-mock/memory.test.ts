@@ -98,7 +98,7 @@ describe('in-memory memory REST handler', () => {
     expect(call('observations').body).toMatchObject({ observations: [] });
     expect(call('topics').body).toMatchObject({ topics: [] });
     expect(call('graph/projection')).toMatchObject({ status: 404 });
-    expect(call('observations/o/ignore', 'POST').body).toMatchObject({ ok: true });
+    expect(call('observations/o/ignore', 'POST')).toEqual({ status: 404, body: { detail: { code: 'observation_not_found' } } });
     expect(call('jobs/j/retry', 'POST').body).toMatchObject({ ok: true });
     expect(call('unknown')).toMatchObject({ status: 404, body: { detail: { code: expect.any(String) } } });
     expect(handleMemory(new URL('http://mock/api/other'), 'GET', {}, store)).toBeUndefined();
@@ -198,5 +198,20 @@ describe('in-memory memory REST handler', () => {
       status: 409,
       body: { detail: { code: 'observation_not_confirmable' } },
     });
+  });
+
+  it('answers 404 observation_not_found for confirm and ignore of an unknown observation', () => {
+    const { call } = harness({
+      ...seed,
+      observations: [{ observation_id: 'obs-a', display_text: '用户习惯先列提纲再讨论。' }],
+    });
+    for (const action of ['confirm', 'ignore']) {
+      expect(call(`observations/obs-missing/${action}`, 'POST')).toEqual({
+        status: 404,
+        body: { detail: { code: 'observation_not_found' } },
+      });
+    }
+    expect(call('observations').body).toMatchObject({ observations: [{ observation_id: 'obs-a', status: 'candidate' }] });
+    expect(call('facts').body).toMatchObject({ pagination: { total: 3 } });
   });
 });

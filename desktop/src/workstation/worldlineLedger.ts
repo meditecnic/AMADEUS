@@ -45,7 +45,11 @@ async function memoriesOf(sessionId: string, worldline: Worldline): Promise<numb
 async function summaryOf(sessionId: string): Promise<Ledger | 'unavailable' | null> {
   try {
     const response = await apiFetch(`/api/worldlines/summary?session_id=${encodeURIComponent(sessionId)}`);
-    if (response.status === 503) return 'unavailable';
+    if (response.status === 503) {
+      // Only a data move blocks every read until restart; other 503s (one line's store down) still allow per-line reads.
+      const body = await response.json().catch(() => null) as { detail?: { code?: unknown } } | null;
+      return body?.detail?.code === 'data_relocating' ? 'unavailable' : null;
+    }
     if (!response.ok) return null;
     const body = await response.json() as Partial<Record<Worldline, { conversations?: unknown; memories?: unknown; last_active_at?: unknown }>>;
     const line = (key: Worldline): LedgerLine | null => {

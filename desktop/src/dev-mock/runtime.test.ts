@@ -437,6 +437,11 @@ describe('dev mock protocol v2', () => {
     expect(
       mock.rest(url('/api/memory/observations/obs-2/ignore?session_id=test-session&worldline=steins_gate&identity_mode=self'), 'POST').status,
     ).toBe(200);
+    for (const action of ['confirm', 'ignore']) {
+      expect(
+        mock.rest(url(`/api/memory/observations/obs-missing/${action}?session_id=test-session&worldline=steins_gate&identity_mode=self`), 'POST'),
+      ).toEqual({ status: 404, body: { detail: { code: 'observation_not_found' } } });
+    }
 
     expect(
       mock.rest(url('/api/memory/observations?session_id=test-session&worldline=steins_gate&identity_mode=self&scenario=empty'), 'GET').body,
