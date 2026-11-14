@@ -1,5 +1,5 @@
 import { apiFetch } from '../apiBase';
-import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useCallback, useMemo, useRef, useSyncExternalStore } from 'react';
 import { useReducedMotion } from '../design-system/useReducedMotion';
 import { useScrollPinning } from '../hooks/useScrollPinning';
 import {
@@ -28,7 +28,7 @@ import { HistorySidebar, type ConversationSummary } from './HistorySidebar';
 import { TtsDebugPanel } from './TtsDebugPanel';
 import AvatarViewer from './AvatarViewer';
 import SpriteAnimator from './SpriteAnimator';
-import { packAsset } from '../assetPack';
+import * as assetPackMod from '../assetPack';
 import { useAudioPlayer, audioPlayer } from '../hooks/useAudioPlayer';
 import { audioService } from '../services/AudioService';
 import { BilingualMessage } from './BilingualMessage';
@@ -50,6 +50,7 @@ import { sessionDialogFallback } from '../workstation/focusHandoff';
 import { useExitPresence } from '../workstation/useExitPresence';
 import { chatCheckMessage, requestChatCheck, type ChatCheckState } from '../workstation/ConnectionCheck';
 import { DataPanel } from '../workstation/DataPanel';
+import { AssetPackGroup } from '../workstation/AssetPackGroup';
 import { UsagePanel } from '../workstation/UsagePanel';
 import { AboutPanel } from '../workstation/AboutPanel';
 import { RestoreNotice } from '../workstation/RestoreNotice';
@@ -236,6 +237,16 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsDiscoveryStatus, setModelsDiscoveryStatus] = useState<ModelDiscoveryStatus>('idle');
   const providerModelsRequestEpochRef = useRef(0);
+  const assetPackRevision = useSyncExternalStore(
+    (cb) => assetPackMod.subscribeAssetPack?.(cb) ?? (() => {}),
+    () => assetPackMod.getAssetPackRevision?.() ?? 0,
+  );
+  const packInstalled = (
+    assetPackMod.hasAssetPack
+      ? assetPackMod.hasAssetPack()
+      : Boolean(assetPackMod.packAsset?.('assets/images/kurisu_normal1.png'))
+  ) && assetPackRevision >= 0;
+  const [assetPackNotice, setAssetPackNotice] = useState<{ text: string; kind: 'info' | 'error' } | null>(null);
   const [sessionId] = useState(getOrCreateAmadeusSessionId);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [conversationListFailed, setConversationListFailed] = useState(false);
@@ -579,7 +590,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     return () => {
       audioService.stopBGM();
     };
-  }, [locked, worldline, enableBgm]);
+  }, [locked, worldline, enableBgm, assetPackRevision]);
 
   // Auto-clear audio / session surface errors after 5s (independent channels).
   useEffect(() => {
@@ -588,6 +599,13 @@ export const Workstation: React.FC<WorkstationProps> = ({
       return () => window.clearTimeout(timer);
     }
   }, [audioError]);
+
+  useEffect(() => {
+    if (assetPackNotice) {
+      const timer = window.setTimeout(() => setAssetPackNotice(null), 5000);
+      return () => window.clearTimeout(timer);
+    }
+  }, [assetPackNotice]);
 
   useEffect(() => {
     if (sessionError) {
@@ -2103,7 +2121,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     : showSetupStatus ? 'setup'
     : awaitingWorldline || sessionPending ? 'connecting'
     : 'down';
-  const thinkingSprite = packAsset(worldline === 'steins_gate' ? 'assets/ui/spinner_sg_20f.png' : 'assets/ui/spinner_beta_20f.png');
+  const thinkingSprite = assetPackMod.packAsset?.(worldline === 'steins_gate' ? 'assets/ui/spinner_sg_20f.png' : 'assets/ui/spinner_beta_20f.png') ?? null;
   const lastAssistantId = [...visibleMessages].reverse().find((msg) => msg.role === 'assistant' && !msg.systemError)?.id;
   // An old conversation whose connection was removed keeps its history but must be re-pointed by the user.
   const providerGone = Boolean(activeConversation) && providers.length > 0 && (!activeProvider || activeProvider.enabled === false);
@@ -2700,6 +2718,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
               onStop={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); handleStopVoice(); }}
             />
           </div>
+          {!packInstalled && (
+            <button
+              type="button"
+              className="ws2-plate-pack"
+              onClick={() => openMenu('character')}
+            >
+              装素材包
+            </button>
+          )}
         </div>
         {isSettingsOpen && (() => {
           const latest = visibleMessages.find((msg) => msg.id === lastAssistantId);
@@ -2754,6 +2781,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
               {!['action_only', 'tts_absent', 'service_error', 'service_unavailable', 'unknown'].includes(audioError) && '语音未能播放，这一轮只显示文字。'}
             </span>
             {!['action_only', 'tts_absent'].includes(audioError) && <code className="ws2-toast-code">TTS · {audioError}</code>}
+          </div>
+        )}
+        {assetPackNotice && (
+          <div
+            className={`audio-error-toast${assetPackNotice.kind === 'info' ? ' info' : ''}`}
+            data-testid="asset-pack-toast"
+            role="status"
+          >
+            <span className="audio-error-msg">{assetPackNotice.text}</span>
           </div>
         )}
       </div>
@@ -2923,6 +2959,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
         onClearWebSearchCredential={handleClearWebSearchCredential}
       />
         </div>
+        {menuSection === 'character' && (
+          <AssetPackGroup onNotice={(text, kind = 'info') => setAssetPackNotice({ text, kind })} />
+        )}
         </div>
         </div>
         )}

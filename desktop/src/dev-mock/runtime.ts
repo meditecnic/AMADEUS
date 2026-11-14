@@ -1,4 +1,5 @@
 import { mockMemoryForTurn } from './chatMemory';
+import { createAssetPackStore, handleAssetPack, type AssetPackRequestMeta } from './assetPackMock';
 import { createDataStore, dataUnavailable, handleData, type Reply } from './data';
 import { fixedTime, model, searchSettings } from './fixtures';
 import { createMemoryStore, handleMemory } from './memory';
@@ -18,13 +19,14 @@ const fail = (status: number, code: string): Reply => ok({ detail: { code } }, s
 const worldlineOf = (value: unknown) => value === 'beta' ? 'beta' : 'steins_gate';
 const summary = ({ messages: _messages, ...conversation }: Conversation) => ({ ...conversation });
 
-export function createMockRuntime() {
+export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) {
   const clients = new Map<string, {
     memory: ReturnType<typeof createMemoryStore>;
     conversations: Map<string, Conversation[]>;
     search: typeof searchSettings;
     data: ReturnType<typeof createDataStore>;
     providers: ReturnType<typeof createProviderStore>;
+    assetPack: ReturnType<typeof createAssetPackStore>;
   }>();
   let counter = 0;
 
@@ -37,6 +39,7 @@ export function createMockRuntime() {
         conversations: new Map(),
         search: structuredClone(searchSettings),
         providers: createProviderStore(),
+        assetPack: createAssetPackStore(options.assetPackMovable ?? true),
         // [210] the passcode lives with the client, so setting one on the system page holds at the next login
         data: createDataStore(scenarios[name].data, scenarios[name].login.passcodeSet ? scenarios[name].login.password : null),
       };
@@ -71,14 +74,28 @@ export function createMockRuntime() {
     };
   }
 
-  function rest(url: URL, method: string, body: Frame = {}, client = 'default', cookies = ''): Reply {
-    const reply = respond(url, method, body, client, cookies);
+  function rest(
+    url: URL,
+    method: string,
+    body: Frame = {},
+    client = 'default',
+    cookies = '',
+    meta?: AssetPackRequestMeta,
+  ): Reply {
+    const reply = respond(url, method, body, client, cookies, meta);
     const path = decodeURIComponent(url.pathname);
     const delay = scenarios[selectScenario(url, cookies)].delays.find(item => item.method === method && path.startsWith(item.pathPrefix));
     return delay ? { ...reply, delayMs: delay.ms } : reply;
   }
 
-  function respond(url: URL, method: string, body: Frame, client: string, cookies: string): Reply {
+  function respond(
+    url: URL,
+    method: string,
+    body: Frame,
+    client: string,
+    cookies: string,
+    meta?: AssetPackRequestMeta,
+  ): Reply {
     const name = selectScenario(url, cookies);
     const scenario = scenarios[name];
     const path = decodeURIComponent(url.pathname);
@@ -86,8 +103,18 @@ export function createMockRuntime() {
     if (scriptedError) return ok(scriptedError.body, scriptedError.status);
 
     // [210] [211] [212] [216] data, passcode, usage, export, location, diagnostics; a corrupt store closes the rest.
-    const data = state(name, client).data;
-    const handled = dataUnavailable(data, path) ?? handleData(url, method, body, data);
+    const clientState = state(name, client);
+    const data = clientState.data;
+    const unavail = dataUnavailable(data, path);
+    if (unavail) return unavail;
+    if (
+      data.status === 'corrupt' &&
+      ((path === '/api/data/asset-pack/install' && method === 'POST') ||
+        (path === '/api/data/asset-pack' && method === 'DELETE'))
+    ) {
+      return fail(409, 'data_unavailable');
+    }
+    const handled = handleAssetPack(url, method, body, clientState.assetPack, meta) ?? handleData(url, method, body, data);
     if (handled) return handled;
     // [210] passcode login. No passcode by default; `login.passcodeSet` makes the scenario's password the passcode.
     if (path === '/api/auth/login' && method === 'POST') {
@@ -101,8 +128,6 @@ export function createMockRuntime() {
       return accepted ? ok({ ok: true }, scenario.login.successStatus)
         : ok({ detail: scenario.login.failureMessage }, scenario.login.failureStatus);
     }
-    // Missing optional artwork is deliberate, preserving the app's original fallback.
-    if (path.startsWith('/api/asset-pack/')) return fail(404, 'optional_asset_pack_absent');
     if (path === '/health') return ok({ ok: true, mode: 'dev-mock' });
     if (path === '/health/dependencies') return ok({ dependencies: { tts: { ok: false } } });
     if (path.startsWith('/api/providers')) {

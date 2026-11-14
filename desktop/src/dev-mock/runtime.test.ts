@@ -323,4 +323,55 @@ describe('dev mock protocol v2', () => {
     expect(frames).toHaveLength(length);
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it('keeps optional asset pack uninstalled by default and supports inspect/install/uninstall lifecycle', () => {
+    const mock = createMockRuntime();
+    expect(mock.rest(url('/api/asset-pack/manifest.json'), 'GET').status).toBe(404);
+    expect(mock.rest(url('/api/data/asset-pack'), 'GET').body).toMatchObject({
+      installed: false,
+      complete: false,
+      movable: true,
+      required_count: 34,
+      present_count: 0,
+    });
+
+    const inspectDir = mock.rest(url('/api/data/asset-pack/inspect'), 'POST', { source_path: '/tmp/amadeus-pack' });
+    expect(inspectDir.status).toBe(200);
+    expect(inspectDir.body).toMatchObject({
+      valid: true,
+      source_type: 'directory',
+      found_count: 34,
+      required_count: 34,
+    });
+    expect((inspectDir.body as { previews: unknown[] }).previews).toHaveLength(9);
+
+    const zipMagic = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x00]);
+    const installZip = mock.rest(
+      url('/api/data/asset-pack/install'),
+      'POST',
+      {},
+      'default',
+      '',
+      { rawBody: zipMagic, contentType: 'application/zip' },
+    );
+    expect(installZip.status).toBe(200);
+    expect(installZip.body).toMatchObject({ installed: true, complete: true, present_count: 34 });
+
+    expect(mock.rest(url('/api/asset-pack/manifest.json'), 'GET').status).toBe(200);
+    const pngReply = mock.rest(url('/api/asset-pack/assets/images/kurisu_normal1.png'), 'GET');
+    expect(pngReply.status).toBe(200);
+    expect(pngReply.headers?.['Content-Type']).toBe('image/png');
+    // Client-isolated: another client remains uninstalled.
+    expect(mock.rest(url('/api/asset-pack/manifest.json'), 'GET', {}, 'other-client').status).toBe(404);
+
+    // Reject DELETE with query/body, then succeed cleanly when bare DELETE is sent.
+    expect(mock.rest(url('/api/data/asset-pack?force=1'), 'DELETE').status).toBe(422);
+    const del = mock.rest(url('/api/data/asset-pack'), 'DELETE');
+    expect(del.status).toBe(200);
+    expect(del.body).toMatchObject({ installed: false, present_count: 0 });
+    expect(mock.rest(url('/api/asset-pack/manifest.json'), 'GET').status).toBe(404);
+
+    const lockedMock = createMockRuntime({ assetPackMovable: false });
+    expect(lockedMock.rest(url('/api/data/asset-pack/install'), 'POST', { source_path: '/tmp/amadeus-pack' }).status).toBe(409);
+  });
 });
