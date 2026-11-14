@@ -17,7 +17,7 @@ mod backend_logs;
 use backend_logs::CappedLog;
 
 mod instance;
-use instance::{acquire_instance_lock, backend_runtime_dir};
+use instance::{acquire_instance_lock, backend_runtime_dir, InstanceLock};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -294,6 +294,9 @@ async fn restart_app(window: tauri::WebviewWindow, app: tauri::AppHandle) -> Res
             backend.stop();
         }
     }).await.map_err(|_| "backend shutdown failed".to_string())?;
+    if let Some(lock) = app.try_state::<InstanceLock>() {
+        lock.release();
+    }
     app.restart();
 }
 
@@ -879,11 +882,12 @@ fn read_log_window(path: &Path, window_bytes: u64) -> io::Result<String> {
             text = text[nl + 1..].to_string();
         } else if let Some(ws_end) = text
             .char_indices()
-            .take_while(|&(idx, _)| idx < 4096)
             .find(|&(_, ch)| ch.is_ascii_whitespace())
             .map(|(idx, ch)| idx + ch.len_utf8())
         {
             text = text[ws_end..].to_string();
+        } else {
+            text.clear();
         }
     }
     Ok(text)
@@ -2122,7 +2126,61 @@ mod tests {
         );
         assert!(!home_diag.log_dir.contains("alice_ci"));
         assert!(!home_diag.runtime_dir.contains("alice_ci"));
-        assert_eq!(home_diag.log_dir, "/home/<USER>/amadeus-nonexistent/logs");
+        assert_eq!(
+            home_diag.log_dir.replace('\\', "/"),
+            "/home/<USER>/amadeus-nonexistent/logs"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn read_log_window_drops_unbroken_delimiterless_oversize_fragment() {
+        let root = unique_test_dir("delimiterless");
+        fs::create_dir_all(&root).unwrap();
+
+        let unbroken_path = root.join("unbroken.log");
+        fs::write(&unbroken_path, "A".repeat(128)).unwrap();
+        assert_eq!(read_log_window(&unbroken_path, 64).unwrap(), "");
+
+        let token_path = root.join("unbroken-secret.log");
+        let x_pad = "X".repeat(80);
+        let unbroken_secret = [
+            x_pad.as_str(),
+            "api_key=",
+            "unbrokenSecret123456",
+            "sk-",
+            "tailPart9999",
+        ]
+        .concat();
+        fs::write(&token_path, unbroken_secret).unwrap();
+        assert_eq!(read_log_window(&token_path, 64).unwrap(), "");
+        let token_tail =
+            read_redacted_log_tail_with_limits(&token_path, &[], 64, 80, 8192).unwrap();
+        assert_eq!(token_tail, "");
+
+        let long_ws_path = root.join("long-ws.log");
+        fs::write(&long_ws_path, format!("{} SAFE_TAIL", "A".repeat(9000))).unwrap();
+        assert_eq!(read_log_window(&long_ws_path, 8192).unwrap(), "SAFE_TAIL");
+
+        let cut_long_path = root.join("cut-secret-long-ws.log");
+        let p_pad = "P".repeat(20);
+        let y_pad = "Y".repeat(8180);
+        let cut_doc = [
+            "prefix_",
+            p_pad.as_str(),
+            "sk-",
+            "cutSecret8888",
+            y_pad.as_str(),
+            " SAFE_TAIL",
+        ]
+        .concat();
+        fs::write(&cut_long_path, cut_doc).unwrap();
+        let cut_window = read_log_window(&cut_long_path, 8192).unwrap();
+        assert_eq!(cut_window, "SAFE_TAIL");
+        let cut_tail =
+            read_redacted_log_tail_with_limits(&cut_long_path, &[], 8192, 80, 8192).unwrap();
+        assert_eq!(cut_tail, "SAFE_TAIL");
 
         fs::remove_dir_all(root).unwrap();
     }
