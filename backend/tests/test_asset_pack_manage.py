@@ -8,8 +8,10 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
 import tempfile
 from types import SimpleNamespace
+import warnings
 import zipfile
 
 import pytest
@@ -392,11 +394,32 @@ def test_os_symlinks_and_ntfs_reparse_points_rejected(app_client, tmp_path, monk
 
     pack_dir = _build_pack_dir(tmp_path / "dir-with-link")
     link = pack_dir / "assets" / "images" / "escape"
-    link.symlink_to(outside, target_is_directory=True)
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        if not (os.name == "nt" and getattr(exc, "winerror", None) == 1314):
+            raise
+    else:
+        resp = app_client.post("/api/data/asset-pack/inspect", json={"source_path": str(pack_dir)})
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["code"] == "unsafe_source_path"
 
-    resp = app_client.post("/api/data/asset-pack/inspect", json={"source_path": str(pack_dir)})
-    assert resp.status_code == 422
-    assert resp.json()["detail"]["code"] == "unsafe_source_path"
+    if os.name == "nt":
+        junc_pack = _build_pack_dir(tmp_path / "dir-with-real-junction")
+        junc_dir = junc_pack / "assets" / "images" / "escape-junc"
+        subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(junc_dir), str(outside)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        try:
+            resp = app_client.post("/api/data/asset-pack/inspect", json={"source_path": str(junc_pack)})
+            assert resp.status_code == 422
+            assert resp.json()["detail"]["code"] == "unsafe_source_path"
+        finally:
+            if installer._path_exists_or_link(junc_dir):
+                os.rmdir(junc_dir)
 
     # Simulate Windows FILE_ATTRIBUTE_REPARSE_POINT (0x400) on a directory entry.
     clean_dir = _build_pack_dir(tmp_path / "dir-with-junction")
@@ -621,3 +644,205 @@ def test_local_bearer_token_and_origin_guard_enforced(app_client, tmp_path, monk
         headers=good_headers,
     ).json()["installed"] is True
     assert app_client.delete("/api/data/asset-pack", headers=good_headers).json()["installed"] is False
+
+
+def test_windows_trailing_dot_space_and_reserved_names_rejected(app_client, tmp_path, monkeypatch):
+    pack_v1 = _build_pack_dir(tmp_path / "pack-v1", manifest={"format": 1, "name": "pack", "version": "1.0"})
+    assert app_client.post("/api/data/asset-pack/install", json={"source_path": str(pack_v1)}).status_code == 200
+    installed_sprite = (
+        Path(os.environ["AMADEUS_DATA_DIR"]) / "asset-pack" / "amadeus-original" / "assets" / "images" / "kurisu_normal1.png"
+    )
+    original_bytes = installed_sprite.read_bytes()
+
+    # Complete pack with trailing-dot directory alias -> 422 unsafe_archive and original pack intact.
+    dot_zip = _build_zip_bytes(extra_files={"assets/images./kurisu_normal1.png": _TINY_PNG + b"overwritten"})
+    for endpoint in ("/api/data/asset-pack/inspect", "/api/data/asset-pack/install"):
+        resp = app_client.post(endpoint, content=dot_zip, headers={"Content-Type": "application/zip"})
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["code"] == "unsafe_archive"
+
+    status = app_client.get("/api/data/asset-pack").json()
+    assert status["installed"] is True
+    assert status["version"] == "1.0"
+    assert installed_sprite.read_bytes() == original_bytes
+
+    # Trailing space segment and Windows reserved device names in ZIP -> 422 unsafe_archive.
+    for bad_rel in (
+        "assets/images /kurisu_normal1.png",
+        "assets/images/CON.png",
+        "audio/bgm/NUL.ogg",
+        "LPT1/extra.png",
+    ):
+        bad_zip = _build_zip_bytes(extra_files={bad_rel: _TINY_PNG + b"bad"})
+        resp = app_client.post("/api/data/asset-pack/inspect", content=bad_zip, headers={"Content-Type": "application/zip"})
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["code"] == "unsafe_archive"
+
+    # Directory inspection rejects Windows reserved names (real file on POSIX, scandir simulation everywhere).
+    if os.name != "nt":
+        bad_dir = _build_pack_dir(tmp_path / "dir-reserved")
+        (bad_dir / "assets" / "images" / "CON.png").write_bytes(_TINY_PNG)
+        resp = app_client.post("/api/data/asset-pack/inspect", json={"source_path": str(bad_dir)})
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["code"] == "unsafe_source_path"
+
+    clean_dir = _build_pack_dir(tmp_path / "dir-reserved-sim")
+    orig_scandir = os.scandir
+
+    class _FakeReservedEntry:
+        def __init__(self, parent: Path, name: str):
+            self.name = name
+            self.path = str(parent / name)
+
+        def is_symlink(self):
+            return False
+
+        def stat(self, *, follow_symlinks=True):
+            return SimpleNamespace(
+                st_mode=stat.S_IFREG | 0o644,
+                st_size=len(_TINY_PNG),
+                st_file_attributes=0,
+            )
+
+    class _ScanWithReserved:
+        def __init__(self, target):
+            self._target = Path(target)
+            self._ctx = orig_scandir(target)
+
+        def __enter__(self):
+            entries = list(self._ctx.__enter__())
+            if self._target.name == "images":
+                entries.append(_FakeReservedEntry(self._target, "CON.png"))
+            return entries
+
+        def __exit__(self, *args):
+            return self._ctx.__exit__(*args)
+
+    monkeypatch.setattr(os, "scandir", _ScanWithReserved)
+    try:
+        resp = app_client.post("/api/data/asset-pack/inspect", json={"source_path": str(clean_dir)})
+        assert resp.status_code == 422
+        assert resp.json()["detail"]["code"] == "unsafe_source_path"
+    finally:
+        monkeypatch.setattr(os, "scandir", orig_scandir)
+
+    # Exclusive staging ('xb') still blocks duplicate target writes if collision precheck were bypassed.
+    orig_collision_check = installer._check_path_collisions
+    monkeypatch.setattr(installer, "_check_path_collisions", lambda _paths: None)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            dup_zip = _build_zip_bytes(raw_entries=[("assets/images/kurisu_normal1.png", _TINY_PNG + b"dup")])
+        dup_resp = app_client.post("/api/data/asset-pack/install", content=dup_zip, headers={"Content-Type": "application/zip"})
+        assert dup_resp.status_code == 422
+        assert dup_resp.json()["detail"]["code"] == "unsafe_archive"
+    finally:
+        monkeypatch.setattr(installer, "_check_path_collisions", orig_collision_check)
+
+
+def test_uninstall_readonly_files_and_sweeps_stale_temp_dirs(app_client, tmp_path):
+    pack_dir = _build_pack_dir(tmp_path / "readonly-pack")
+    assert app_client.post("/api/data/asset-pack/install", json={"source_path": str(pack_dir)}).status_code == 200
+
+    pack_parent = Path(os.environ["AMADEUS_DATA_DIR"]) / "asset-pack"
+    installed_root = pack_parent / "amadeus-original"
+    ro_sprite = installed_root / "assets" / "images" / "kurisu_normal1.png"
+    ro_bgm = installed_root / "audio" / "bgm" / "Amadeus.ogg"
+    os.chmod(ro_sprite, 0o444)
+    os.chmod(ro_bgm, 0o444)
+
+    stale_del = pack_parent / ".del-asset-pack-stale"
+    stale_nested = stale_del / "nested"
+    stale_nested.mkdir(parents=True)
+    stale_file = stale_nested / "locked.png"
+    stale_file.write_bytes(_TINY_PNG)
+    os.chmod(stale_file, 0o444)
+    if os.name != "nt":
+        # On POSIX, a 0o555 subdir triggers PermissionError during rmtree -> exercises chmod + retry.
+        os.chmod(stale_nested, 0o555)
+
+    stale_tmp = pack_parent / ".tmp-asset-pack-stale"
+    stale_tmp.mkdir(parents=True)
+    (stale_tmp / "leftover.txt").write_text("stale", encoding="utf-8")
+
+    try:
+        resp = app_client.delete("/api/data/asset-pack")
+        assert resp.status_code == 200
+        status = resp.json()
+        assert status["installed"] is False
+        assert status["complete"] is False
+        assert not stale_del.exists()
+        assert not stale_tmp.exists()
+        assert not pack_parent.exists()
+    finally:
+        for path in (stale_nested, stale_file, ro_sprite, ro_bgm):
+            if path.exists():
+                try:
+                    os.chmod(path, 0o700 if path.is_dir() else 0o600)
+                except OSError:
+                    pass
+
+
+def test_uninstall_failure_rollback_and_partial_cleanup(app_client, tmp_path, monkeypatch):
+    pack_dir = _build_pack_dir(tmp_path / "rollback-pack", manifest={"format": 1, "name": "pack", "version": "1.0"})
+    assert app_client.post("/api/data/asset-pack/install", json={"source_path": str(pack_dir)}).status_code == 200
+    pack_parent = Path(os.environ["AMADEUS_DATA_DIR"]) / "asset-pack"
+
+    # Case 1: os.replace(target_dir, trash_dir) fails -> active pack untouched, 500.
+    real_replace = os.replace
+
+    def fail_trash_replace(src, dst):
+        if Path(dst).name.startswith(".del-asset-pack-"):
+            raise PermissionError("injected move lock")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", fail_trash_replace)
+    try:
+        resp = app_client.delete("/api/data/asset-pack")
+        assert resp.status_code == 500
+        assert resp.json()["detail"]["code"] == "asset_pack_remove_failed"
+    finally:
+        monkeypatch.setattr(os, "replace", real_replace)
+    assert app_client.get("/api/data/asset-pack").json()["installed"] is True
+    assert [p.name for p in pack_parent.iterdir()] == ["amadeus-original"]
+
+    # Case 2: rmtree fails before deleting anything -> rolled back to active pack, 500.
+    real_rmtree = installer._rmtree_managed
+
+    def fail_rmtree_intact(_path: Path):
+        raise PermissionError("injected intact lock")
+
+    monkeypatch.setattr(installer, "_rmtree_managed", fail_rmtree_intact)
+    try:
+        resp = app_client.delete("/api/data/asset-pack")
+        assert resp.status_code == 500
+        assert resp.json()["detail"]["code"] == "asset_pack_remove_failed"
+    finally:
+        monkeypatch.setattr(installer, "_rmtree_managed", real_rmtree)
+    status = app_client.get("/api/data/asset-pack").json()
+    assert status["installed"] is True
+    assert status["complete"] is True
+    assert status["version"] == "1.0"
+    assert [p.name for p in pack_parent.iterdir()] == ["amadeus-original"]
+
+    # Case 3: rmtree deletes one file then fails -> keeps .del-* for later sweep, installed is False.
+    def fail_rmtree_partial(path: Path):
+        (path / "manifest.json").unlink()
+        raise PermissionError("injected mid-delete lock")
+
+    monkeypatch.setattr(installer, "_rmtree_managed", fail_rmtree_partial)
+    try:
+        resp = app_client.delete("/api/data/asset-pack")
+        assert resp.status_code == 500
+        assert resp.json()["detail"]["code"] == "asset_pack_remove_failed"
+    finally:
+        monkeypatch.setattr(installer, "_rmtree_managed", real_rmtree)
+    assert app_client.get("/api/data/asset-pack").json()["installed"] is False
+    leftovers = [p.name for p in pack_parent.iterdir()]
+    assert len(leftovers) == 1 and leftovers[0].startswith(".del-asset-pack-")
+
+    # Subsequent DELETE sweeps the leftover .del-* cleanly.
+    retry = app_client.delete("/api/data/asset-pack")
+    assert retry.status_code == 200
+    assert retry.json()["installed"] is False
+    assert not pack_parent.exists()

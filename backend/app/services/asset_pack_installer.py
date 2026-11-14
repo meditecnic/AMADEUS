@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import shutil
 import stat
+import sys
 import tempfile
 import threading
 from typing import Any
@@ -39,6 +40,18 @@ STREAM_CHUNK_BYTES = 64 * 1024
 
 _REPARSE_ATTR = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
 _DRIVE_PREFIX_RE = re.compile(r"^[A-Za-z]:")
+_WINDOWS_RESERVED_NAMES = frozenset(
+    {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{i}" for i in range(1, 10)),
+        *(f"LPT{i}" for i in range(1, 10)),
+    }
+)
+_WINDOWS_ILLEGAL_CHARS = set('<>:"|?*')
+_MANAGED_TEMP_PREFIXES = (".del-asset-pack-", ".tmp-asset-pack-", ".old-asset-pack-")
 
 EMOTION_PREVIEWS: tuple[tuple[str, str], ...] = (
     ("neutral", "assets/images/kurisu_normal1.png"),
@@ -125,6 +138,115 @@ def _ensure_no_ancestor_links(
     for part in (path, *path.parents):
         if _path_exists_or_link(part) and _is_link(part):
             raise AssetPackError(code, f"Path must not traverse symbolic links or junctions: {part}", status)
+
+
+def _make_writable_non_link(target: Path) -> None:
+    if not _path_exists_or_link(target) or _is_link(target):
+        raise PermissionError(f"Refusing to modify permissions on link or missing path: {target}")
+    info = target.lstat()
+    mode = (stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC) if stat.S_ISDIR(info.st_mode) else (stat.S_IWRITE | stat.S_IREAD)
+    os.chmod(target, mode)
+
+
+def _rmtree_managed(path: Path) -> None:
+    if not _path_exists_or_link(path):
+        return
+    if _is_link(path):
+        raise OSError(f"Refusing to remove linked path: {path}")
+
+    def _on_exc(func: Any, func_path: str, exc: BaseException) -> None:
+        if not isinstance(exc, PermissionError):
+            raise exc
+        target = Path(func_path)
+        if not _path_exists_or_link(target) or _is_link(target):
+            raise exc
+        _make_writable_non_link(target)
+        if func is os.scandir or getattr(func, "__name__", "") in {"scandir", "listdir"}:
+            return
+        try:
+            func(func_path)
+        except PermissionError:
+            parent = target.parent
+            if parent != target and (parent == path or path in parent.parents) and _path_exists_or_link(parent) and not _is_link(parent):
+                _make_writable_non_link(parent)
+                func(func_path)
+            else:
+                raise
+
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=_on_exc)
+    else:
+        def _on_error(func: Any, func_path: str, exc_info: tuple[Any, BaseException, Any]) -> None:
+            _on_exc(func, func_path, exc_info[1])
+
+        shutil.rmtree(path, onerror=_on_error)
+
+
+def _rmtree_managed_best_effort(path: Path) -> None:
+    try:
+        _rmtree_managed(path)
+    except OSError:
+        pass
+
+
+def _sweep_managed_temps(pack_parent: Path) -> None:
+    if not _path_exists_or_link(pack_parent) or _is_link(pack_parent) or not pack_parent.is_dir():
+        return
+    try:
+        with os.scandir(pack_parent) as entries:
+            candidates = list(entries)
+    except OSError:
+        return
+    for entry in candidates:
+        if not entry.name.startswith(_MANAGED_TEMP_PREFIXES):
+            continue
+        try:
+            info = entry.stat(follow_symlinks=False)
+        except OSError:
+            continue
+        if entry.is_symlink() or stat.S_ISLNK(info.st_mode) or (getattr(info, "st_file_attributes", 0) & _REPARSE_ATTR):
+            continue
+        entry_path = Path(entry.path)
+        if stat.S_ISDIR(info.st_mode):
+            _rmtree_managed_best_effort(entry_path)
+        else:
+            try:
+                os.unlink(entry_path)
+            except PermissionError:
+                try:
+                    _make_writable_non_link(entry_path)
+                    os.unlink(entry_path)
+                except OSError:
+                    pass
+            except OSError:
+                pass
+
+
+def _snapshot_tree_paths(root: Path) -> frozenset[str] | None:
+    if not _path_exists_or_link(root) or _is_link(root):
+        return None
+    if not root.is_dir():
+        return frozenset({""})
+    paths: set[str] = set()
+    stack = [root]
+    try:
+        while stack:
+            current = stack.pop()
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    entry_path = Path(entry.path)
+                    paths.add(entry_path.relative_to(root).as_posix())
+                    info = entry.stat(follow_symlinks=False)
+                    if (
+                        not entry.is_symlink()
+                        and not stat.S_ISLNK(info.st_mode)
+                        and not (getattr(info, "st_file_attributes", 0) & _REPARSE_ATTR)
+                        and stat.S_ISDIR(info.st_mode)
+                    ):
+                        stack.append(entry_path)
+    except OSError:
+        return None
+    return frozenset(paths)
 
 
 def _env_override() -> Path | None:
@@ -396,6 +518,22 @@ def _finalize_inspection(
     }
 
 
+def _validate_portable_segment(seg: str) -> str | None:
+    if not seg or seg in {".", ".."}:
+        return "empty or dot path segment"
+    if seg.endswith((".", " ")):
+        return "trailing dot or space in path segment"
+    for ch in seg:
+        if ord(ch) < 0x20 or ord(ch) == 0x7F:
+            return "control character in path segment"
+        if ch in _WINDOWS_ILLEGAL_CHARS or ch in ("/", "\\"):
+            return "illegal filename character in path segment"
+    stem = seg.rstrip(". ").split(".", 1)[0].strip().upper()
+    if stem in _WINDOWS_RESERVED_NAMES:
+        return "reserved Windows device name"
+    return None
+
+
 def _validate_zip_entry_name(raw_name: str, *, is_dir: bool) -> str:
     if not raw_name or "\x00" in raw_name:
         raise AssetPackError("unsafe_archive", "Archive contains an invalid entry name", 422)
@@ -413,6 +551,10 @@ def _validate_zip_entry_name(raw_name: str, *, is_dir: bool) -> str:
     parts = [part for part in normalized.split("/") if part != ""]
     if not parts or any(part in {".", ".."} for part in parts):
         raise AssetPackError("unsafe_archive", f"Archive contains unsafe path traversal: {raw_name}", 422)
+    for part in parts:
+        reason = _validate_portable_segment(part)
+        if reason is not None:
+            raise AssetPackError("unsafe_archive", f"Archive contains unsafe path segment ({reason}): {raw_name}", 422)
 
     posix = PurePosixPath(*parts)
     if posix.is_absolute():
@@ -619,6 +761,14 @@ def _inspect_directory_internal(source_dir: Path) -> tuple[dict[str, Any], list[
                         raise AssetPackError("unsafe_source_path", f"Symbolic links and junctions are not allowed: {entry.name}", 422)
 
                     rel = entry_path.relative_to(source_dir).as_posix()
+                    for part in rel.split("/"):
+                        reason = _validate_portable_segment(part)
+                        if reason is not None:
+                            raise AssetPackError(
+                                "unsafe_source_path",
+                                f"Source directory contains unsafe path segment ({reason}): {rel}",
+                                422,
+                            )
                     if stat.S_ISDIR(info.st_mode):
                         raw_dirs.append(rel)
                         stack.append(entry_path)
@@ -793,6 +943,7 @@ def _stage_and_swap(
         raise AssetPackError("unsafe_target_path", "Asset pack target directory cannot be a link", 409)
 
     pack_parent.mkdir(parents=True, exist_ok=True)
+    _sweep_managed_temps(pack_parent)
     staging_dir = Path(tempfile.mkdtemp(prefix=".tmp-asset-pack-", dir=pack_parent))
     backup_dir: Path | None = None
     swapped_old = False
@@ -832,10 +983,10 @@ def _stage_and_swap(
                 pass
         raise AssetPackError("asset_pack_install_failed", f"Failed to install asset pack: {exc}", 500) from exc
     finally:
-        if staging_dir.exists():
-            shutil.rmtree(staging_dir, ignore_errors=True)
-        if swapped_new and backup_dir is not None and backup_dir.exists():
-            shutil.rmtree(backup_dir, ignore_errors=True)
+        if _path_exists_or_link(staging_dir):
+            _rmtree_managed_best_effort(staging_dir)
+        if swapped_new and backup_dir is not None and _path_exists_or_link(backup_dir):
+            _rmtree_managed_best_effort(backup_dir)
 
     return get_status()
 
@@ -877,7 +1028,13 @@ def install_from_path(raw_path: str) -> dict[str, Any]:
                     if not dest.is_relative_to(staging_resolved):
                         raise AssetPackError("unsafe_source_path", f"Target escapes staging: {rel}", 422)
                     dest.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(disk_path, dest)
+                    if _path_exists_or_link(dest):
+                        raise AssetPackError("unsafe_source_path", f"Duplicate staged target path: {rel}", 422)
+                    try:
+                        with disk_path.open("rb") as src, dest.open("xb") as out:
+                            shutil.copyfileobj(src, out, length=STREAM_CHUNK_BYTES)
+                    except FileExistsError as exc:
+                        raise AssetPackError("unsafe_source_path", f"Duplicate staged target path: {rel}", 422) from exc
                     copied.append(rel)
                 return copied
 
@@ -913,21 +1070,26 @@ def _install_zip_locked(zip_path: Path) -> dict[str, Any]:
                 if not dest.is_relative_to(staging_resolved):
                     raise AssetPackError("unsafe_archive", f"Archive entry escapes staging: {rel}", 422)
                 dest.parent.mkdir(parents=True, exist_ok=True)
+                if _path_exists_or_link(dest):
+                    raise AssetPackError("unsafe_archive", f"Archive entry collides in staging: {rel}", 422)
                 entry_bytes = 0
-                with zf.open(info, "r") as src, dest.open("wb") as dst:
-                    while True:
-                        chunk = src.read(STREAM_CHUNK_BYTES)
-                        if not chunk:
-                            break
-                        entry_bytes += len(chunk)
-                        actual_total += len(chunk)
-                        if entry_bytes > MAX_ENTRY_UNCOMPRESSED_BYTES or actual_total > MAX_TOTAL_UNCOMPRESSED_BYTES:
-                            raise AssetPackError("unsafe_archive", f"Archive entry exceeds size limit: {info.filename}", 422)
-                        if entry_bytes > MIN_RATIO_CHECK_BYTES and (
-                            info.compress_size <= 0 or (entry_bytes / info.compress_size) > MAX_COMPRESSION_RATIO
-                        ):
-                            raise AssetPackError("unsafe_archive", f"Archive entry exceeds compression ratio limit: {info.filename}", 422)
-                        dst.write(chunk)
+                try:
+                    with zf.open(info, "r") as src, dest.open("xb") as dst:
+                        while True:
+                            chunk = src.read(STREAM_CHUNK_BYTES)
+                            if not chunk:
+                                break
+                            entry_bytes += len(chunk)
+                            actual_total += len(chunk)
+                            if entry_bytes > MAX_ENTRY_UNCOMPRESSED_BYTES or actual_total > MAX_TOTAL_UNCOMPRESSED_BYTES:
+                                raise AssetPackError("unsafe_archive", f"Archive entry exceeds size limit: {info.filename}", 422)
+                            if entry_bytes > MIN_RATIO_CHECK_BYTES and (
+                                info.compress_size <= 0 or (entry_bytes / info.compress_size) > MAX_COMPRESSION_RATIO
+                            ):
+                                raise AssetPackError("unsafe_archive", f"Archive entry exceeds compression ratio limit: {info.filename}", 422)
+                            dst.write(chunk)
+                except FileExistsError as exc:
+                    raise AssetPackError("unsafe_archive", f"Archive entry collides in staging: {rel}", 422) from exc
                 copied.append(rel)
         return copied
 
@@ -971,14 +1133,30 @@ def uninstall_pack() -> dict[str, Any]:
         target_dir = pack_parent / "amadeus-original"
         if _path_exists_or_link(pack_parent) and _is_link(pack_parent):
             raise AssetPackError("unsafe_target_path", "Asset pack parent directory cannot be a link", 409)
+        _sweep_managed_temps(pack_parent)
         if _path_exists_or_link(target_dir):
             if _is_link(target_dir):
                 raise AssetPackError("unsafe_target_path", "Asset pack target directory cannot be a link", 409)
+            before_snapshot = _snapshot_tree_paths(target_dir)
             trash_dir = pack_parent / f".del-asset-pack-{uuid.uuid4().hex}"
             try:
                 os.replace(target_dir, trash_dir)
-                shutil.rmtree(trash_dir)
             except OSError as exc:
+                raise AssetPackError("asset_pack_remove_failed", f"Failed to remove asset pack: {exc}", 500) from exc
+            try:
+                _rmtree_managed(trash_dir)
+            except OSError as exc:
+                if (
+                    not _path_exists_or_link(target_dir)
+                    and _path_exists_or_link(trash_dir)
+                    and not _is_link(trash_dir)
+                    and before_snapshot is not None
+                    and _snapshot_tree_paths(trash_dir) == before_snapshot
+                ):
+                    try:
+                        os.replace(trash_dir, target_dir)
+                    except OSError:
+                        pass
                 raise AssetPackError("asset_pack_remove_failed", f"Failed to remove asset pack: {exc}", 500) from exc
         if pack_parent.is_dir():
             try:
