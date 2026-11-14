@@ -585,6 +585,70 @@
 .ws2-disk li.total { height: 34px; border-bottom: 0; color: var(--ws-ink); }
 .ws2-disk li.total .size { font-size: 12.5px; }
 
+/* data relocation & previous directory cleanup */
+.ws2-loc-move { display: grid; gap: 12px; padding: 14px 0 12px; border-bottom: 1px solid var(--ws-rule); }
+.ws2-loc-move-head { display: flex; flex-direction: column; gap: 4px; }
+.ws2-loc-move-head b { font-weight: 400; font-size: 14px; color: var(--ws-ink); }
+.ws2-loc-move-head small { font-size: 11.5px; color: var(--ws-ink-3); }
+.ws2-loc-input-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.ws2 .ws2-loc-input {
+  flex: 1 1 240px; min-width: 0; height: 34px; padding: 0 2px; border: 0; border-bottom: 1px solid var(--ws-line-2); border-radius: 0; box-shadow: none;
+  background: linear-gradient(var(--ws-line-2), var(--ws-line-2)) 0 100% / 1px 7px no-repeat, linear-gradient(var(--ws-line-2), var(--ws-line-2)) 100% 100% / 1px 7px no-repeat;
+  font-family: var(--ws-mono); font-size: 12.5px; color: var(--ws-ink);
+}
+.ws2 .ws2-loc-input:focus-visible { outline: none; border-bottom-color: var(--ws-ink); }
+.ws2 .ws2-loc-input::placeholder { font-family: var(--ws-sans); color: var(--ws-ink-3); }
+.ws2 .ws2-loc-input:disabled { opacity: .55; cursor: default; }
+.ws2-loc-check { display: grid; gap: 10px; padding: 10px 14px; border-left: 2px solid var(--ws-line-2); background: rgba(255, 255, 255, .02); }
+.ws2-loc-space { display: flex; flex-wrap: wrap; gap: 6px 24px; font-size: 12px; color: var(--ws-ink-2); }
+.ws2-loc-space b { font-family: var(--ws-mono); font-weight: 400; color: var(--ws-ink); font-variant-numeric: tabular-nums; }
+.ws2-loc-issues { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 12.5px; line-height: 1.6; }
+.ws2-loc-issues li { position: relative; padding-left: 16px; }
+.ws2-loc-issues li::before {
+  content: ''; position: absolute; left: 2px; top: 8px; width: 6px; height: 6px;
+  clip-path: polygon(2px 0, 100% 0, 100% 100%, 0 100%, 0 2px);
+}
+.ws2-loc-issues.is-bad { color: var(--ws-bad); }
+.ws2-loc-issues.is-bad li::before { background: var(--ws-bad); }
+.ws2-loc-issues.is-warn { color: var(--ws-warn); }
+.ws2-loc-issues.is-warn li::before { background: var(--ws-warn); }
+.ws2-loc-warnings { display: grid; gap: 10px; }
+.ws2-loc-ack { display: inline-flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--ws-ink); cursor: pointer; }
+.ws2-loc-ack input[type='checkbox'] {
+  appearance: none; -webkit-appearance: none; flex: none; width: 14px; height: 14px; margin: 0; border: 1px solid var(--ws-ink-3); border-radius: 0;
+  background: none; cursor: pointer; transition: box-shadow .15s ease, border-color .15s ease;
+}
+.ws2-loc-ack input[type='checkbox']:checked { border-color: var(--ws-ink-2); box-shadow: inset 0 0 0 2px var(--ws-bg), inset 0 0 0 7px var(--ws-ink); }
+.ws2-loc-ack input[type='checkbox']:focus-visible { outline: 1px dashed var(--ws-ink-2); outline-offset: 2px; }
+.ws2-loc-ack input[type='checkbox']:disabled { opacity: .5; cursor: default; }
+.ws2-loc-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.ws2-loc-actions .ws2-m-note { flex: 1 1 260px; }
+.ws2-loc-restart {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  padding: 10px 14px; border: 1px solid var(--ws-line-2); background: rgba(255, 255, 255, .025);
+}
+.ws2-loc-restart-copy { flex: 1 1 260px; min-width: 0; }
+.ws2-loc-restart-copy strong { font-weight: 400; font-size: 13px; color: var(--ws-ink); }
+.ws2-loc-restart-copy .ws2-m-note { margin-top: 4px; }
+.ws2-loc-previous .ws2-m-label { gap: 5px; }
+.ws2 .ws2-m-btn.is-danger { --edge: color-mix(in srgb, var(--ws-danger-ink) 70%, transparent); color: var(--ws-danger-ink) !important; }
+.ws2 .ws2-m-btn.is-danger:is(:hover, :focus-visible):not(:disabled) {
+  --edge: var(--ws-danger-ink); background-color: color-mix(in srgb, var(--ws-danger-ink) 10%, transparent) !important;
+}
+.ws2-loc-toast {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px; position: relative;
+  margin: 12px 0 0; padding: 9px 14px 9px 26px; border: 1px solid var(--ws-rule); background: rgba(255, 255, 255, .025);
+  font-size: 12.5px; line-height: 1.6; color: var(--ws-ink);
+}
+.ws2-loc-toast::before {
+  content: ''; position: absolute; left: 10px; top: 15px; width: 7px; height: 7px; background: var(--ws-ok);
+  clip-path: polygon(2.5px 0, 100% 0, 100% 100%, 0 100%, 0 2.5px);
+}
+.ws2-loc-toast.is-bad::before { background: var(--ws-bad); }
+@media (prefers-reduced-motion: reduce) {
+  .ws2-loc-ack input[type='checkbox'] { transition: none; }
+}
+
 /* ---------- 06 usage ---------- */
 
 /* the estimate, large, its terms right under it; then the ledger by model */

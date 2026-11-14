@@ -4,10 +4,13 @@ import { Choice } from './Choice';
 import { ConfirmDialog } from './ConfirmDialog';
 import { Stamp } from './Stamp';
 import {
-  ApiError, authState, createBackup, dataLocation, dataStatus, deleteBackup, diskUsage, exportArchive, formatBytes, formatStamp, formatVersion,
-  ackRestoreResult, cancelRestore, restoreBackup, setPasscode, type AuthState, type Backup, type DataLocation, type DiskCategory, type DiskUsage, type ExportRequest,
+  ApiError, authState, checkDataLocation, createBackup, dataLocation, dataStatus, deleteBackup, deletePreviousDataLocation,
+  diskUsage, exportArchive, formatBytes, formatStamp, formatVersion, moveDataLocation,
+  ackRestoreResult, cancelRestore, restoreBackup, setPasscode,
+  type AuthState, type Backup, type DataLocation, type DataLocationCheckResult, type DataLocationIssue,
+  type DiskCategory, type DiskUsage, type ExportRequest,
 } from './dataApi';
-import { inShell, revealInFolder, saveBlob } from './shell';
+import { inShell, pickPath, restartApp, revealInFolder, saveBlob } from './shell';
 
 /*
  * 05 数据: the startup passcode, backups (make one, restore to one, delete one), export, and where the data lives with
@@ -58,7 +61,7 @@ export function DataPanel() {
       <PasscodeGroup />
       <BackupGroup anchor={anchor} />
       <ExportGroup />
-      <LocationGroup />
+      <LocationGroup anchor={anchor} />
     </div>
   );
 }
@@ -422,10 +425,95 @@ const DISK: { key: DiskCategory; label: string }[] = [
 ];
 const SOURCE: Record<string, string> = { default: '默认位置', env: '由环境变量 AMADEUS_DATA_DIR 指定', file: '搬过的位置' };
 
-function LocationGroup() {
+const LOCATION_ERRORS: Record<string, string> = {
+  unreachable: '连不上本地服务。',
+  path_not_absolute: '请输入或选择完整的绝对路径（例如 D:\\AmadeusData）。',
+  path_overlap: '目标目录不能与当前数据目录相同或互相包含。',
+  system_directory: '不能放在系统目录或程序安装目录里。',
+  path_link: '目标路径不能包含符号链接或目录联接。',
+  target_not_empty: '目标目录必须是空目录，或还不存在的新目录。',
+  path_unwritable: '目标目录不可写，请检查权限或更换位置。',
+  insufficient_space: '目标磁盘可用空间不足（需要至少为当前数据总量的 1.2 倍）。',
+  filesystem_fat32: 'FAT32 分区不支持超过 4 GB 的单个文件，请改用 NTFS 或 exFAT 分区。',
+  sync_directory: '目标位置在同步盘（如 OneDrive / Dropbox）内，同步软件并发写入可能损坏数据库。',
+  network_drive: '目标位置在网络驱动器上，网络波动可能导致数据库写入失败或损坏。',
+  removable_drive: '目标位置在可移动设备（如 U 盘 / 移动硬盘）上，拔除后 AMADEUS 将无法启动。',
+  location_not_movable: '当前数据位置由环境变量或外部配置指定，不能在应用内迁移。',
+  data_unavailable: '当前数据库无法打开，不能进行迁移或清理。',
+  warnings_not_acknowledged: '目标目录存在风险提示，请先勾选确认后再继续迁移。',
+  data_relocating: '数据迁移正在进行或已完成，请重启 AMADEUS 以使用新目录。',
+  conversation_active: '她正在回话。等这一句说完再迁移数据。',
+  restore_pending: '有一次恢复还没做完。先关掉 AMADEUS 再打开。',
+  backup_busy: '正在进行备份，请等备份完成后再迁移。',
+  move_checksum_failed: '文件校验未通过，迁移已回滚，原数据目录保持完好。',
+  move_link_unsupported: '当前数据目录含有符号链接或目录联接，无法直接迁移。',
+  move_cleanup_failed: '迁移失败且部分临时文件未能清理，原数据目录保持完好。',
+  move_failed: '迁移没有完成，已回滚，原数据目录保持完好。',
+  location_file_invalid: '数据位置配置文件损坏或无法读取。',
+  previous_not_found: '旧数据目录已不存在或未记录。',
+  previous_path_unsafe: '记录的旧目录路径不安全，已拒绝删除。',
+  previous_unrecognized: '旧目录不像有效的 AMADEUS 数据目录，已拒绝自动删除。',
+  previous_delete_failed: '旧目录没能完全删除（可能有文件正在占用），记录已保留。',
+  previous_record_failed: '旧目录文件已删除，但位置记录未能更新。',
+  invalid_delete_request: '删除旧目录请求参数无效。',
+};
+
+const locationErrorText = (error: unknown, fallback: string) => {
+  const code = error instanceof ApiError ? error.code : null;
+  return code ? LOCATION_ERRORS[code] ?? `${fallback}（${code}）` : fallback;
+};
+
+const issueText = (issue: DataLocationIssue) =>
+  LOCATION_ERRORS[issue.code] ?? (issue.message ? `${issue.message}（${issue.code}）` : issue.code);
+
+const isCheckDetail = (detail: Record<string, unknown>) =>
+  Array.isArray(detail.errors) || Array.isArray(detail.warnings);
+
+const toIssueList = (value: unknown): DataLocationIssue[] => {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is { code?: unknown; message?: unknown } => Boolean(item && typeof item === 'object'))
+    .map((item) => ({
+      code: typeof item.code === 'string' ? item.code : 'unknown',
+      message: typeof item.message === 'string' ? item.message : '',
+    }));
+};
+
+const toCheckResult = (detail: Record<string, unknown>): DataLocationCheckResult => {
+  const errors = toIssueList(detail.errors);
+  const warnings = toIssueList(detail.warnings);
+  return {
+    ok: typeof detail.ok === 'boolean' ? detail.ok : errors.length === 0,
+    errors,
+    warnings,
+    needed_bytes: typeof detail.needed_bytes === 'number' ? detail.needed_bytes : 0,
+    free_bytes: typeof detail.free_bytes === 'number' ? detail.free_bytes : 0,
+  };
+};
+
+type MovePhase =
+  | { kind: 'idle' }
+  | { kind: 'moving' }
+  | { kind: 'moved'; path: string; restartNote: string };
+
+function LocationGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null> }) {
   const [location, setLocation] = useState<DataLocation | null | 'absent'>(null);
   const [disk, setDisk] = useState<DiskUsage | null>(null);
   const [revealError, setRevealError] = useState<string | null>(null);
+  const [previousRevealError, setPreviousRevealError] = useState<string | null>(null);
+  const [targetPath, setTargetPath] = useState('');
+  const [picking, setPicking] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [checkResult, setCheckResult] = useState<DataLocationCheckResult | null>(null);
+  const [checkedPath, setCheckedPath] = useState<string | null>(null);
+  const [ackWarnings, setAckWarnings] = useState(false);
+  const [movePhase, setMovePhase] = useState<MovePhase>({ kind: 'idle' });
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const [restarting, setRestarting] = useState(false);
+  const [confirmingDeletePrevious, setConfirmingDeletePrevious] = useState(false);
+  const [deletingPrevious, setDeletingPrevious] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [cleanupToast, setCleanupToast] = useState<{ text: string; bad?: boolean } | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -436,6 +524,153 @@ function LocationGroup() {
   }, []);
   if (location === 'absent' || location === null) return null;
 
+  const trimmedPath = targetPath.trim();
+  const moveLocked = movePhase.kind !== 'idle';
+  const currentCheck = checkResult && checkedPath === trimmedPath ? checkResult : null;
+  const hasErrors = Boolean(currentCheck && (!currentCheck.ok || currentCheck.errors.length > 0));
+  const hasWarnings = Boolean(currentCheck && currentCheck.warnings.length > 0);
+  const canStartMove = Boolean(
+    trimmedPath &&
+    currentCheck &&
+    !hasErrors &&
+    (!hasWarnings || ackWarnings) &&
+    !checking &&
+    !moveLocked,
+  );
+
+  const handlePathChange = (next: string) => {
+    setTargetPath(next);
+    setCheckResult(null);
+    setCheckedPath(null);
+    setAckWarnings(false);
+    setMoveError(null);
+    setCleanupToast(null);
+  };
+
+  const handlePickDirectory = async () => {
+    if (picking || checking || moveLocked) return;
+    setPicking(true);
+    setMoveError(null);
+    try {
+      const picked = await pickPath('directory');
+      if (picked) handlePathChange(picked);
+    } catch {
+      setMoveError('没能打开目录选择器，请手动输入目标路径。');
+    } finally {
+      setPicking(false);
+    }
+  };
+
+  const handleCheck = async () => {
+    if (!trimmedPath || checking || moveLocked) return;
+    setChecking(true);
+    setMoveError(null);
+    setCheckResult(null);
+    setCheckedPath(null);
+    setAckWarnings(false);
+    setCleanupToast(null);
+    try {
+      const result = await checkDataLocation(trimmedPath);
+      setCheckResult(result);
+      setCheckedPath(trimmedPath);
+    } catch (failure) {
+      setMoveError(locationErrorText(failure, '没能检查这个目标目录。'));
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const triggerRestart = async (movedPath: string) => {
+    if (!inShell) {
+      setMovePhase({
+        kind: 'moved',
+        path: movedPath,
+        restartNote: '当前不在桌面端外壳中，无法自动重启；请手动重启本地服务并刷新页面以切换到新目录。',
+      });
+      return;
+    }
+    setRestarting(true);
+    setMovePhase({
+      kind: 'moved',
+      path: movedPath,
+      restartNote: '正在尝试重启 AMADEUS 以切换到新目录…',
+    });
+    try {
+      await restartApp();
+    } catch {
+      setMovePhase({
+        kind: 'moved',
+        path: movedPath,
+        restartNote: '自动重启失败，请点击「立即重启」重试，或手动关闭并重新打开 AMADEUS。',
+      });
+    } finally {
+      setRestarting(false);
+    }
+  };
+
+  const handleMove = async () => {
+    if (!canStartMove || !trimmedPath) return;
+    setMovePhase({ kind: 'moving' });
+    setMoveError(null);
+    setCleanupToast(null);
+    try {
+      const result = await moveDataLocation(trimmedPath, ackWarnings);
+      if (result.restart_required) {
+        await triggerRestart(result.path);
+      } else {
+        setMovePhase({ kind: 'idle' });
+        setCleanupToast({ text: `数据已迁移到 ${result.path}。` });
+        const next = await dataLocation().catch(() => null);
+        if (next) setLocation(next);
+      }
+    } catch (failure) {
+      if (failure instanceof ApiError && failure.detail && isCheckDetail(failure.detail)) {
+        setCheckResult(toCheckResult(failure.detail));
+        setCheckedPath(trimmedPath);
+        if (failure.code === 'warnings_not_acknowledged') setAckWarnings(false);
+        setMovePhase({ kind: 'idle' });
+        setMoveError(
+          failure.code === 'warnings_not_acknowledged'
+            ? LOCATION_ERRORS.warnings_not_acknowledged
+            : '目标目录检查未通过，请查看下方错误后再试。',
+        );
+        return;
+      }
+      if (failure instanceof ApiError && failure.code === 'data_relocating') {
+        setMovePhase({
+          kind: 'moved',
+          path: trimmedPath,
+          restartNote: '数据迁移已在进行或已完成，需要重启 AMADEUS 才能继续使用。',
+        });
+        return;
+      }
+      setMovePhase({ kind: 'idle' });
+      setMoveError(locationErrorText(failure, '数据迁移没有完成，原目录数据保持不变。'));
+    }
+  };
+
+  const handleDeletePrevious = async () => {
+    const oldPath = location.previous_path;
+    if (!oldPath || deletingPrevious) return;
+    setDeletingPrevious(true);
+    setDeleteError(null);
+    try {
+      await deletePreviousDataLocation();
+      setConfirmingDeletePrevious(false);
+      setCleanupToast({ text: `已删除旧数据目录（${oldPath}）。` });
+      try {
+        const refreshed = await dataLocation();
+        setLocation(refreshed);
+      } catch {
+        setLocation((prev) => (prev && prev !== 'absent' ? { ...prev, previous_path: null, previous_exists: false } : prev));
+      }
+    } catch (failure) {
+      setDeleteError(locationErrorText(failure, '没能删除旧数据目录。'));
+    } finally {
+      setDeletingPrevious(false);
+    }
+  };
+
   const rows = disk ? DISK.map((row) => ({ ...row, bytes: disk.categories[row.key] ?? 0 })).filter((row) => row.bytes > 0) : [];
   const most = Math.max(1, ...rows.map((row) => row.bytes));
   return (
@@ -444,7 +679,7 @@ function LocationGroup() {
       <div className="ws2-m-row ws2-m-path">
         <div className="ws2-m-label">
           <b><span className="ws2-path">{location.path}</span></b>
-          <small>{revealError ?? SOURCE[location.source] ?? location.source}</small>
+          <small className={revealError ? 'is-bad' : undefined}>{revealError ?? SOURCE[location.source] ?? location.source}</small>
         </div>
         {inShell ? (
           <span className="ws2-m-acts">
@@ -455,6 +690,204 @@ function LocationGroup() {
           </span>
         ) : null}
       </div>
+
+      {location.movable ? (
+        <div className="ws2-loc-move" data-testid="location-relocation-form">
+          <div className="ws2-loc-move-head">
+            <b>迁移数据位置</b>
+            <small>
+              {inShell
+                ? '选择或输入新的空目录绝对路径；先检查目录，迁移完成后需重启 AMADEUS。'
+                : '浏览器模式下请直接输入新的空目录绝对路径；先检查目录，迁移完成后需重启生效。'}
+            </small>
+          </div>
+          <div className="ws2-loc-input-row">
+            <input
+              type="text"
+              className="ws2-loc-input ws2-path"
+              aria-label="目标数据目录"
+              placeholder={inShell ? '例如 D:\\AmadeusData，或点右侧选择目录' : '例如 D:\\AmadeusData'}
+              value={targetPath}
+              onChange={(e) => handlePathChange(e.target.value)}
+              disabled={checking || moveLocked}
+            />
+            {inShell ? (
+              <button
+                type="button"
+                className="ws2-m-link"
+                onClick={() => { void handlePickDirectory(); }}
+                disabled={picking || checking || moveLocked}
+              >
+                {picking ? '选择中…' : '选择目录'}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="ws2-m-btn"
+              onClick={() => { void handleCheck(); }}
+              disabled={checking || moveLocked || !trimmedPath}
+            >
+              {checking ? '检查中…' : '检查目标目录'}
+            </button>
+          </div>
+
+          {currentCheck ? (
+            <div className="ws2-loc-check" data-testid="location-check-result">
+              <div className="ws2-loc-space" data-testid="location-space-summary">
+                <span>预计需要空间：<b>{formatBytes(currentCheck.needed_bytes)}</b></span>
+                <span>目标可用空间：<b>{formatBytes(currentCheck.free_bytes)}</b></span>
+              </div>
+              {currentCheck.errors.length > 0 ? (
+                <ul className="ws2-loc-issues is-bad" role="alert" aria-label="目标目录错误">
+                  {currentCheck.errors.map((issue, index) => (
+                    <li key={`${issue.code}-${index}`}>{issueText(issue)}</li>
+                  ))}
+                </ul>
+              ) : null}
+              {currentCheck.warnings.length > 0 ? (
+                <div className="ws2-loc-warnings">
+                  <ul className="ws2-loc-issues is-warn" role="status" aria-label="目标目录风险提示">
+                    {currentCheck.warnings.map((issue, index) => (
+                      <li key={`${issue.code}-${index}`}>{issueText(issue)}</li>
+                    ))}
+                  </ul>
+                  <label className="ws2-loc-ack">
+                    <input
+                      type="checkbox"
+                      checked={ackWarnings}
+                      disabled={checking || moveLocked}
+                      onChange={(e) => setAckWarnings(e.target.checked)}
+                    />
+                    <span>我已了解以上提示，仍要继续迁移</span>
+                  </label>
+                </div>
+              ) : null}
+              {currentCheck.ok && currentCheck.errors.length === 0 && currentCheck.warnings.length === 0 ? (
+                <p className="ws2-m-note is-done" role="status">目标目录检查通过，可以开始迁移。</p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {moveError ? <p className="ws2-m-error" role="alert">{moveError}</p> : null}
+
+          {movePhase.kind === 'moving' ? (
+            <p className="ws2-m-flag" role="status" data-testid="location-moving-notice">
+              正在复制并校验数据，期间已锁定数据操作，请勿关闭 AMADEUS…
+            </p>
+          ) : null}
+
+          {movePhase.kind === 'moved' ? (
+            <div className="ws2-loc-restart" role="status" data-testid="location-restart-required">
+              <div className="ws2-loc-restart-copy">
+                <strong>数据已迁移到 <span className="ws2-path">{movePhase.path}</span>，需要重启 AMADEUS 才能生效（相关操作已锁定）。</strong>
+                <p className="ws2-m-note">{movePhase.restartNote}</p>
+              </div>
+              <button
+                type="button"
+                className="ws2-m-btn"
+                onClick={() => { void triggerRestart(movePhase.path); }}
+                disabled={restarting}
+              >
+                {restarting ? '正在重启…' : '立即重启'}
+              </button>
+            </div>
+          ) : null}
+
+          <div className="ws2-loc-actions">
+            <p className="ws2-m-note">迁移前会复制并校验全部数据库与文件，原目录会保留直至你手动删除。</p>
+            <button
+              type="button"
+              className="ws2-m-btn"
+              onClick={() => { void handleMove(); }}
+              disabled={!canStartMove}
+            >
+              {movePhase.kind === 'moving' ? '迁移中…' : '开始迁移并重启'}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="ws2-m-row" data-testid="location-non-movable">
+          <div className="ws2-m-label">
+            <b>迁移数据位置</b>
+            <small>
+              {location.source === 'env'
+                ? '当前由环境变量 AMADEUS_DATA_DIR 指定位置，应用内迁移已禁用。'
+                : '当前数据位置由外部指定，应用内迁移已禁用。'}
+            </small>
+          </div>
+          <span className="ws2-m-acts">
+            <button type="button" className="ws2-m-btn" disabled>开始迁移并重启</button>
+          </span>
+        </div>
+      )}
+
+      {location.previous_path && location.previous_exists ? (
+        <div className="ws2-m-row ws2-m-path ws2-loc-previous" data-testid="location-previous-dir">
+          <div className="ws2-m-label">
+            <b>旧数据目录</b>
+            <span className="ws2-path">{location.previous_path}</span>
+            <small className={previousRevealError ? 'is-bad' : undefined}>
+              {previousRevealError ?? '确认新位置一切正常后，可打开核对或删除旧目录释放空间。'}
+            </small>
+          </div>
+          <span className="ws2-m-acts">
+            {inShell ? (
+              <button
+                type="button"
+                className="ws2-m-link"
+                onClick={() => {
+                  setPreviousRevealError(null);
+                  revealInFolder(location.previous_path!).catch(() => setPreviousRevealError('没能打开旧目录。'));
+                }}
+              >
+                打开旧目录
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="ws2-m-btn is-danger"
+              onClick={() => {
+                setDeleteError(null);
+                setConfirmingDeletePrevious(true);
+              }}
+              disabled={moveLocked}
+            >
+              删除旧目录
+            </button>
+          </span>
+        </div>
+      ) : null}
+
+      {cleanupToast ? (
+        <div
+          className={`ws2-loc-toast ${cleanupToast.bad ? 'is-bad' : 'is-done'}`}
+          role="status"
+          data-testid="location-cleanup-toast"
+        >
+          <span>{cleanupToast.text}</span>
+          <button type="button" className="ws2-m-link" onClick={() => setCleanupToast(null)}>知道了</button>
+        </div>
+      ) : null}
+
+      {confirmingDeletePrevious && location.previous_path ? (
+        <OnSheet anchor={anchor}>
+          <ConfirmDialog
+            title="删除旧数据目录？"
+            confirmLabel="删除旧目录"
+            danger
+            stamp={<Stamp sub="PERMANENT">不可撤回</Stamp>}
+            busy={deletingPrevious}
+            error={deleteError}
+            onConfirm={() => { void handleDeletePrevious(); }}
+            onCancel={() => { if (!deletingPrevious) setConfirmingDeletePrevious(false); }}
+          >
+            <p>将永久删除以下旧数据目录及其中的全部文件：</p>
+            <p><code className="ws2-path">{location.previous_path}</code></p>
+            <p className="ws2-dialog-hint">当前正在使用的数据目录（{location.path}）不受影响；删除后无法恢复。</p>
+          </ConfirmDialog>
+        </OnSheet>
+      ) : null}
+
       {disk ? (
         <>
           <ul className="ws2-disk" aria-label="占用">

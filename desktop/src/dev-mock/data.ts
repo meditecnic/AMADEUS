@@ -14,6 +14,14 @@ export type DataSeed = {
   backups?: SeedBackup[];
   /** The passcode file exists but cannot be read: treated as unset, and /api/auth/state says why. */
   passcodeError?: string;
+  location?: {
+    path?: string;
+    defaultPath?: string;
+    source?: string;
+    movable?: boolean;
+    previousPath?: string | null;
+    previousExists?: boolean;
+  };
 };
 type SeedBackup = { id: string; size: number; app_version?: string | null; can_restore?: boolean; detail?: string };
 type Backup = { id: string; time: string | null; reason: string; size: number; app_version: string | null; can_restore: boolean; detail?: string };
@@ -22,6 +30,61 @@ const ok = (body: unknown, status = 200): Reply => ({ status, body });
 const fail = (status: number, code: string): Reply => ok({ detail: { code } }, status);
 
 const ROOT = 'C:\\Users\\lab\\AppData\\Roaming\\Amadeus';
+const MOCK_DISK_CATEGORIES = {
+  conversations_memory: 19_293_184, voice_models: 431_947_776, speech_models: 0, embedding_models: 0,
+  asset_pack: 1_395_864_371, pi_components: 0, logs: 3_250_585, backups: 70_778_880, other: 412_160,
+};
+const MOCK_TOTAL_BYTES = Object.values(MOCK_DISK_CATEGORIES).reduce((a, b) => a + b, 0);
+const MOCK_FREE_BYTES = 64 * 1024 * 1024 * 1024;
+
+function evaluateMockTarget(rawPath: string, currentPath: string) {
+  const trimmed = rawPath.trim();
+  const neededBytes = Math.ceil(MOCK_TOTAL_BYTES * 1.2);
+  const errors: Array<{ code: string; message: string }> = [];
+  const warnings: Array<{ code: string; message: string }> = [];
+  const isAbsolute = /^([A-Za-z]:[\\/]|\\\\|\/)/.test(trimmed);
+  if (!trimmed || !isAbsolute) {
+    errors.push({ code: 'path_not_absolute', message: 'Choose an absolute directory path' });
+    return { ok: false, errors, warnings, needed_bytes: neededBytes, free_bytes: 0 };
+  }
+  const normalize = (value: string) => value.replace(/[\\/]+/g, '\\').replace(/\\+$/, '').toLowerCase();
+  const targetNorm = normalize(trimmed);
+  const currentNorm = normalize(currentPath);
+  if (targetNorm === currentNorm || targetNorm.startsWith(`${currentNorm}\\`) || currentNorm.startsWith(`${targetNorm}\\`)) {
+    errors.push({ code: 'path_overlap', message: 'Current and target directories must not contain each other' });
+  }
+  if (/^[a-z]:\\(windows|program files( \(x86\))?)|^\/(usr|etc|var|system)\b/.test(targetNorm)) {
+    errors.push({ code: 'system_directory', message: 'System and application installation directories cannot hold user data' });
+  }
+  if (targetNorm.includes('nonempty') || targetNorm.includes('existing')) {
+    errors.push({ code: 'target_not_empty', message: 'Target must be an empty directory or a new directory' });
+  }
+  if (targetNorm.includes('readonly') || targetNorm.includes('unwritable')) {
+    errors.push({ code: 'path_unwritable', message: 'Cannot prepare target directory: Access denied' });
+  }
+  if (targetNorm.includes('fat32')) {
+    errors.push({ code: 'filesystem_fat32', message: 'FAT32 cannot store model files larger than 4 GB' });
+  }
+  const freeBytes = targetNorm.includes('full') || targetNorm.includes('small')
+    ? Math.max(0, Math.floor(neededBytes / 2))
+    : MOCK_FREE_BYTES;
+  if (errors.length === 0 && freeBytes < neededBytes) {
+    errors.push({ code: 'insufficient_space', message: 'Target needs 1.2 times the current data size' });
+  }
+  if (errors.length > 0) {
+    return { ok: false, errors, warnings, needed_bytes: neededBytes, free_bytes: freeBytes };
+  }
+  if (targetNorm.includes('onedrive') || targetNorm.includes('dropbox') || targetNorm.includes('icloud')) {
+    warnings.push({ code: 'sync_directory', message: 'Sync software can corrupt SQLite databases' });
+  }
+  if (trimmed.startsWith('\\\\') || trimmed.startsWith('//') || targetNorm.includes('network')) {
+    warnings.push({ code: 'network_drive', message: 'Network drives can corrupt SQLite databases' });
+  }
+  if (targetNorm.includes('usb') || targetNorm.includes('removable')) {
+    warnings.push({ code: 'removable_drive', message: 'Removing this drive makes your data unavailable' });
+  }
+  return { ok: true, errors, warnings, needed_bytes: neededBytes, free_bytes: freeBytes };
+}
 
 const DEFAULT_BACKUPS: SeedBackup[] = [
   { id: '20261108T224512000000Z-manual', size: 18_874_368, app_version: '0.1.0' },
@@ -52,12 +115,22 @@ export function createDataStore(seed: DataSeed | undefined, passcode: string | n
     pendingRestore: null as string | null,
     passcode,
     passcodeError: seed?.passcodeError ?? null,
+    location: {
+      path: seed?.location?.path ?? ROOT,
+      defaultPath: seed?.location?.defaultPath ?? ROOT,
+      source: seed?.location?.source ?? 'default',
+      movable: seed?.location?.movable ?? true,
+      previousPath: seed?.location?.previousPath ?? null,
+      previousExists: seed?.location?.previousExists ?? Boolean(seed?.location?.previousPath),
+    },
+    relocating: false,
   };
 }
 export type DataStore = ReturnType<typeof createDataStore>;
 
 /** A corrupt database closes every route but /health, the data routes and the diagnostics bundle, as the backend does. */
 export function dataUnavailable(store: DataStore, path: string): Reply | null {
+  if (store.relocating) return fail(503, 'data_relocating');
   if (store.status !== 'corrupt' || path === '/health' || path.startsWith('/api/data/') || path.startsWith('/api/diagnostics/')) return null;
   return fail(503, 'data_unavailable');
 }
@@ -124,14 +197,52 @@ export function handleData(url: URL, method: string, body: Frame, store: DataSto
     };
   }
   if (path === '/api/data/location' && method === 'GET') {
-    return ok({ path: ROOT, default_path: ROOT, source: 'default', movable: true, previous_path: null, previous_exists: false });
+    return ok({
+      path: store.location.path,
+      default_path: store.location.defaultPath,
+      source: store.location.source,
+      movable: store.location.movable,
+      previous_path: store.location.previousPath,
+      previous_exists: store.location.previousExists,
+    });
+  }
+  if (path === '/api/data/location/check' && method === 'POST') {
+    if (typeof body.path !== 'string') return fail(422, 'path_not_absolute');
+    return { ...ok(evaluateMockTarget(body.path, store.location.path)), delayMs: 250 };
+  }
+  if (path === '/api/data/location/move' && method === 'POST') {
+    if (!store.location.movable) return fail(409, 'location_not_movable');
+    if (store.status === 'corrupt') return fail(409, 'data_unavailable');
+    if (store.relocating) return fail(409, 'data_relocating');
+    if (store.pendingRestore) return fail(409, 'restore_pending');
+    const targetPath = typeof body.path === 'string' ? body.path : '';
+    const check = evaluateMockTarget(targetPath, store.location.path);
+    if (!check.ok) return ok({ detail: check }, 422);
+    if (check.warnings.length > 0 && body.acknowledge_warnings !== true) {
+      return ok({ detail: { code: 'warnings_not_acknowledged', ...check } }, 409);
+    }
+    const previousPath = store.location.path;
+    store.location = {
+      ...store.location,
+      path: targetPath.trim(),
+      source: 'file',
+      previousPath,
+      previousExists: true,
+    };
+    store.relocating = true;
+    return { ...ok({ restart_required: true, path: store.location.path }), delayMs: 800 };
+  }
+  if (path === '/api/data/location/previous' && method === 'DELETE') {
+    const hasDisallowedQuery = Array.from(url.searchParams.keys()).some((key) => key !== 'scenario');
+    if (hasDisallowedQuery || Object.keys(body).length > 0) return fail(422, 'invalid_delete_request');
+    if (store.status === 'corrupt') return fail(409, 'data_unavailable');
+    if (!store.location.movable) return fail(409, 'location_not_movable');
+    if (!store.location.previousPath || !store.location.previousExists) return fail(404, 'previous_not_found');
+    store.location = { ...store.location, previousPath: null, previousExists: false };
+    return { ...ok({ status: 'success' }), delayMs: 350 };
   }
   if (path === '/api/data/disk' && method === 'GET') {
-    const categories = {
-      conversations_memory: 19_293_184, voice_models: 431_947_776, speech_models: 0, embedding_models: 0,
-      asset_pack: 1_395_864_371, pi_components: 0, logs: 3_250_585, backups: 70_778_880, other: 412_160,
-    };
-    return { ...ok({ categories, total_bytes: Object.values(categories).reduce((a, b) => a + b, 0) }), delayMs: 450 };
+    return { ...ok({ categories: MOCK_DISK_CATEGORIES, total_bytes: MOCK_TOTAL_BYTES }), delayMs: 450 };
   }
   if (path === '/api/diagnostics/bundle' && method === 'POST') {
     const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');

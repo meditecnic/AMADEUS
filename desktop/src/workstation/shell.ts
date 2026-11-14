@@ -42,6 +42,19 @@ export async function licensesManifest(): Promise<string | null> {
   return resolveResource('licenses/manifest.json');
 }
 
+/** Opens a native directory or zip picker in the desktop shell, or returns null outside Tauri. */
+export async function pickPath(kind: 'directory' | 'zip'): Promise<string | null> {
+  if (!inShell) return null;
+  const picked = await invoke<string | null>('pick_path', { kind });
+  return typeof picked === 'string' && picked.length > 0 ? picked : null;
+}
+
+/** Restarts the desktop shell and backend so a pending restore or relocation takes effect. */
+export async function restartApp(): Promise<void> {
+  if (!inShell) throw new Error('shell_unavailable');
+  await invoke('restart_app');
+}
+
 /** Hands a downloaded file to the browser's save. */
 export function saveBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);

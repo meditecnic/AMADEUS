@@ -7,16 +7,34 @@ import { apiFetch } from '../apiBase';
  */
 
 export class ApiError extends Error {
-  constructor(readonly status: number, readonly code: string) { super(code); }
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    readonly detail?: Record<string, unknown>,
+  ) {
+    super(code);
+  }
 }
 
 async function failure(response: Response): Promise<ApiError> {
   let code = `http_${response.status}`;
+  let parsedDetail: Record<string, unknown> | undefined;
   try {
     const detail = (await response.json())?.detail;
-    if (detail && typeof detail === 'object' && typeof detail.code === 'string') code = detail.code;
+    if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+      parsedDetail = detail as Record<string, unknown>;
+      if (typeof parsedDetail.code === 'string') {
+        code = parsedDetail.code;
+      } else if (
+        Array.isArray(parsedDetail.errors) &&
+        parsedDetail.errors[0] &&
+        typeof (parsedDetail.errors[0] as { code?: unknown }).code === 'string'
+      ) {
+        code = (parsedDetail.errors[0] as { code: string }).code;
+      }
+    }
   } catch { /* not JSON: keep the status */ }
-  return new ApiError(response.status, code);
+  return new ApiError(response.status, code, parsedDetail);
 }
 
 async function call(path: string, init?: RequestInit): Promise<Response> {
@@ -131,12 +149,36 @@ export type DataLocation = {
   previous_path: string | null;
   previous_exists: boolean;
 };
+export type DataLocationIssue = {
+  code: string;
+  message: string;
+};
+export type DataLocationCheckResult = {
+  ok: boolean;
+  errors: DataLocationIssue[];
+  warnings: DataLocationIssue[];
+  needed_bytes: number;
+  free_bytes: number;
+};
+export type DataLocationMoveResult = {
+  restart_required: boolean;
+  path: string;
+};
 export type DiskCategory =
   | 'conversations_memory' | 'voice_models' | 'speech_models' | 'embedding_models' | 'asset_pack'
   | 'pi_components' | 'logs' | 'backups' | 'other';
 export type DiskUsage = { categories: Partial<Record<DiskCategory, number>>; total_bytes: number };
 export const dataLocation = () => json<DataLocation>('/api/data/location');
 export const diskUsage = () => json<DiskUsage>('/api/data/disk');
+export const checkDataLocation = (path: string) =>
+  json<DataLocationCheckResult>('/api/data/location/check', send('POST', { path }));
+export const moveDataLocation = (path: string, acknowledgeWarnings = false) =>
+  json<DataLocationMoveResult>(
+    '/api/data/location/move',
+    send('POST', { path, acknowledge_warnings: acknowledgeWarnings }),
+  );
+export const deletePreviousDataLocation = () =>
+  json<{ status: string }>('/api/data/location/previous', send('DELETE'));
 
 /* ---------- a bundle for reporting a problem (report 216) ---------- */
 
