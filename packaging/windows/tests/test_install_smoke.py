@@ -92,6 +92,26 @@ class InstallSmokeLogicTests(unittest.TestCase):
         self.assertTrue(smoke.is_update_url("https://github.com/meditecnic/AMADEUS/releases/download/v1/setup.exe"))
         self.assertFalse(smoke.is_update_url("http://127.0.0.1:1234/health"))
 
+    def test_is_external_url_classification(self):
+        for local_url in (
+            "http://127.0.0.1:8000/api/health",
+            "http://[::1]:8000/api/health",
+            "http://localhost:1420/",
+            "http://tauri.localhost/index.html",
+            "https://tauri.localhost/assets/app.js",
+            "tauri://localhost/index.html",
+            "data:image/png;base64,AA==",
+            "blob:http://tauri.localhost/123",
+        ):
+            with self.subTest(url=local_url):
+                self.assertFalse(smoke.is_external_url(local_url))
+        for external_url in (
+            "https://github.com/meditecnic/AMADEUS/releases/latest",
+            "https://140.82.112.3/api",
+        ):
+            with self.subTest(url=external_url):
+                self.assertTrue(smoke.is_external_url(external_url))
+
     def test_failed_installer_is_nonzero_and_has_timing(self):
         with tempfile.TemporaryDirectory() as temp:
             with patch.object(smoke.subprocess, "run", return_value=subprocess.CompletedProcess([], 17)):
@@ -168,7 +188,11 @@ class InstallSmokeLogicTests(unittest.TestCase):
 
 class CDPTests(unittest.TestCase):
     def client(self):
-        import websocket
+        try:
+            import websocket
+        except ModuleNotFoundError:
+            with patch.dict(sys.modules, {"websocket": MagicMock(create_connection=Mock(return_value=Mock()))}):
+                return smoke.CDP("ws://127.0.0.1:9222/page")
 
         with patch.object(websocket, "create_connection", return_value=Mock()):
             return smoke.CDP("ws://127.0.0.1:9222/page")
@@ -211,15 +235,27 @@ class CDPTests(unittest.TestCase):
 
 
 class NetworkAuditTests(unittest.TestCase):
-    def row(self, address="127.0.0.1", application=r"\device\harddiskvolume3\Apps\Amadeus\desktop.exe", direction="%%14593"):
+    def row(
+        self,
+        address="127.0.0.1",
+        application=r"\device\harddiskvolume3\Apps\Amadeus\desktop.exe",
+        direction="%%14593",
+        port="443",
+    ):
         return {"Application": application, "ProcessID": "0x1234", "DestAddress": address,
-                "DestPort": "443", "Direction": direction}
+                "DestPort": port, "Direction": direction}
 
-    def inspect(self, rows, path):
+    def inspect(self, rows, path, *, allow_desktop_updater=False):
         calibration = self.row(application=r"\device\python.exe")
         calibration.update(ProcessID=hex(os.getpid()), DestPort="4567")
         with patch.object(smoke, "powershell", return_value=[calibration, *rows]):
-            return smoke.audit_finish(10, PureWindowsPath(r"C:\Apps\Amadeus"), 4567, path)
+            return smoke.audit_finish(
+                10,
+                PureWindowsPath(r"C:\Apps\Amadeus"),
+                4567,
+                path,
+                allow_desktop_updater=allow_desktop_updater,
+            )
 
     def test_accepts_only_loopback_for_installed_native_processes(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -237,6 +273,30 @@ class NetworkAuditTests(unittest.TestCase):
             with patch.object(smoke, "powershell", return_value=[]):
                 with self.assertRaisesRegex(RuntimeError, "calibration"):
                     smoke.audit_finish(10, PureWindowsPath(r"C:\Apps\Amadeus"), 4567, path)
+
+    def test_post_login_audit_allows_only_desktop_https_updater(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "network.json"
+            updater_row = self.row("140.82.112.3", r"\device\harddiskvolume3\Apps\Amadeus\desktop.exe", "%%14593", "443")
+            rows = self.inspect([self.row(), updater_row], path, allow_desktop_updater=True)
+            self.assertEqual(len(rows), 2)
+
+            bad_port = self.row("140.82.112.3", r"\device\harddiskvolume3\Apps\Amadeus\desktop.exe", "%%14593", "80")
+            with self.assertRaisesRegex(RuntimeError, "external network"):
+                self.inspect([bad_port], path, allow_desktop_updater=True)
+
+            bad_dir = self.row("140.82.112.3", r"\device\harddiskvolume3\Apps\Amadeus\desktop.exe", "%%14592", "443")
+            with self.assertRaisesRegex(RuntimeError, "external network"):
+                self.inspect([bad_dir], path, allow_desktop_updater=True)
+
+            backend_row = self.row(
+                "140.82.112.3",
+                r"\device\harddiskvolume3\Apps\Amadeus\resources\backend\amadeus-backend.exe",
+                "%%14593",
+                "443",
+            )
+            with self.assertRaisesRegex(RuntimeError, "external network"):
+                self.inspect([backend_row], path, allow_desktop_updater=True)
 
     def test_webview2_debug_policy_is_set_for_launch_and_restored(self):
         values = {}

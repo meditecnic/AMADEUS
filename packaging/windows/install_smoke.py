@@ -47,6 +47,19 @@ def is_update_url(value: str) -> bool:
             parts.path.lower().startswith("/meditecnic/amadeus/releases/"))
 
 
+def is_external_url(value: str) -> bool:
+    parts = urlsplit(value)
+    if parts.scheme in {"data", "blob", "about", "javascript"} or not parts.hostname:
+        return False
+    host = parts.hostname.lower()
+    if host in {"localhost", "tauri.localhost", "asset.localhost"} or host.endswith(".localhost"):
+        return False
+    try:
+        return not ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return True
+
+
 def check_clean(local: Path) -> Path:
     root = local / IDENTIFIER
     require(not root.exists(), f"Refusing existing user data: {root}; use a clean disposable runner")
@@ -301,7 +314,35 @@ def audit_start() -> int:
     return powershell("(Get-WinEvent -LogName Security -MaxEvents 1).RecordId | ConvertTo-Json")
 
 
-def audit_finish(bookmark: int, install: Path, calibration_port: int, evidence: Path) -> list[dict]:
+def open_calibration_loopback() -> int:
+    with socket.socket() as calibration:
+        calibration.bind(("127.0.0.1", 0))
+        calibration.listen()
+        calibration_port = calibration.getsockname()[1]
+        with socket.create_connection(("127.0.0.1", calibration_port)), calibration.accept()[0]:
+            pass
+        return calibration_port
+
+
+def _is_allowed_desktop_updater_row(row: dict, *, allow_desktop_updater: bool) -> bool:
+    if not allow_desktop_updater:
+        return False
+    app_name = Path(str(row.get("Application", "")).replace("\\", "/")).name.casefold()
+    return (
+        row.get("Direction") == "%%14593"
+        and app_name == "desktop.exe"
+        and str(row.get("DestPort", "")) == "443"
+    )
+
+
+def audit_finish(
+    bookmark: int,
+    install: Path,
+    calibration_port: int,
+    evidence: Path,
+    *,
+    allow_desktop_updater: bool = False,
+) -> list[dict]:
     rows = powershell(
         "$filter=\"*[System[(EventID=5156 or EventID=5157) and EventRecordID > " + str(bookmark) + "]]\"; "
         "ConvertTo-Json -Compress -InputObject @(Get-WinEvent -LogName Security -FilterXPath $filter | ForEach-Object { "
@@ -315,8 +356,12 @@ def audit_finish(bookmark: int, install: Path, calibration_port: int, evidence: 
     native = [{key: row[key] for key in ("Application", "DestAddress", "DestPort", "Direction")}
               for row in rows if suffix in row["Application"].casefold()]
     write_json(evidence, native)
-    require(not any(row["Direction"] == "%%14593" and not ipaddress.ip_address(row["DestAddress"]).is_loopback
-                    for row in native), "Installed native process attempted external network access (possible updater)")
+    unexpected = [
+        row for row in native
+        if not ipaddress.ip_address(row["DestAddress"]).is_loopback
+        and not _is_allowed_desktop_updater_row(row, allow_desktop_updater=allow_desktop_updater)
+    ]
+    require(not unexpected, "Installed native process attempted external network access (possible updater)")
     return native
 
 
@@ -347,12 +392,7 @@ def exercise(installer: Path, root: Path, timeout: float, result: dict, provider
     env.update({"WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS": f"--remote-debugging-port={port}",
                 "WEBVIEW2_WAIT_FOR_SCRIPT_DEBUGGER": "1"})
     bookmark = audit_start()  # Requires administrator rights on the disposable hosted runner.
-    with socket.socket() as calibration:
-        calibration.bind(("127.0.0.1", 0))
-        calibration.listen()
-        calibration_port = calibration.getsockname()[1]
-        with socket.create_connection(("127.0.0.1", calibration_port)), calibration.accept()[0]:
-            pass
+    calibration_port = open_calibration_loopback()
     tracked: set[int] = set()
     launches = []
     cdp = None
@@ -378,14 +418,28 @@ def exercise(installer: Path, root: Path, timeout: float, result: dict, provider
             cdp.call("Page.reload", {"ignoreCache": True})
             wait_until(lambda: settled(cdp, "!window.__amadeusSmokeBeforeReload && "
                        "document.querySelector('#salieri-user')?.value === 'Salieri' && "
-                       "document.querySelector('button[type=submit]')?.disabled === false"), timeout,
+                       "document.querySelector('.salieri-login-form button[type=submit]')?.disabled === false"), timeout,
                        "Login page not ready after reload: check backend logs and WebView2 runtime", tick)
             result["login_page_seconds"] = round(time.monotonic() - started, 3)
             cdp.screenshot(root / "login.png")
             print("INSTALL_STEP login page captured", flush=True)
+            cdp.evaluate("true")
+            require(not any(is_update_url(item["url"]) for item in cdp.requests),
+                    "Startup contacted updater URL before login")
+            require(not any(is_external_url(item["url"]) for item in cdp.requests),
+                    "Startup contacted external URL before login")
+            result["pre_login_native_connections"] = audit_finish(
+                bookmark,
+                install,
+                calibration_port,
+                root / "pre-login-native-network.json",
+                allow_desktop_updater=False,
+            )
+            post_login_bookmark = audit_start()
+            post_login_calibration_port = open_calibration_loopback()
             cdp.evaluate("document.querySelector('#salieri-pwd').focus()")
             cdp.call("Input.insertText", {"text": "Gott w\u00fcrfelt nicht"})
-            cdp.evaluate("document.querySelector('button[type=submit]').click()")
+            cdp.evaluate("document.querySelector('.salieri-login-form button[type=submit]').click()")
             wait_until(lambda: cdp.evaluate("!document.querySelector('.salieri-login-form') && "
                        "document.querySelector('button[aria-label=\"模型供应商\"]')?.disabled === false"),
                        timeout, "Login did not reveal the workstation provider selector", tick)
@@ -435,6 +489,7 @@ def exercise(installer: Path, root: Path, timeout: float, result: dict, provider
             cdp.evaluate("true")
             require(not cdp.errors, f"Console/runtime errors: {json.dumps(cdp.errors, ensure_ascii=True)}")
             require(not any(is_update_url(item["url"]) for item in cdp.requests), "Startup contacted updater URL")
+            require(not any(is_external_url(item["url"]) for item in cdp.requests), "Unexpected external renderer request")
             require(not ({"chat", "chat.send", "voice.start"} & set(cdp.sent_types)), "Unexpected chat/voice request")
             result["console_errors"] = 0
             # Detach DevTools first so an attached client cannot keep the WebView2 browser process alive.
@@ -492,7 +547,13 @@ def exercise(installer: Path, root: Path, timeout: float, result: dict, provider
             require(primary.returncode == 0, f"Desktop exited {primary.returncode} after WM_CLOSE")
             result["residual_processes"] = []
             print("INSTALL_STEP WM_CLOSE cleared tracked process tree", flush=True)
-        result["native_connections"] = audit_finish(bookmark, install, calibration_port, root / "native-network.json")
+        result["native_connections"] = audit_finish(
+            post_login_bookmark,
+            install,
+            post_login_calibration_port,
+            root / "native-network.json",
+            allow_desktop_updater=True,
+        )
         result["native_audit_calibrated"] = True
     finally:
         if cdp:
