@@ -4,10 +4,14 @@ use std::io::{self, BufRead, BufReader, Write};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{mpsc, Arc, Condvar, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc, Arc, Condvar, Mutex,
+};
 use std::time::{Duration, Instant};
 
 use tauri::{Manager, RunEvent};
+use tauri_plugin_opener::OpenerExt;
 
 mod backend_logs;
 use backend_logs::CappedLog;
@@ -22,6 +26,9 @@ const BACKEND_READY_TIMEOUT: Duration = Duration::from_secs(120);
 const READY_PREFIX: &str = "AMADEUS_BACKEND_READY ";
 const STARTUP_DIAG_MAX_LINES: usize = 80;
 const STARTUP_DIAG_MAX_BYTES: usize = 8 * 1024;
+const STARTUP_DIAG_READ_WINDOW_BYTES: u64 = 64 * 1024;
+#[cfg(windows)]
+const FILE_ATTRIBUTE_REPARSE_POINT_MASK: u32 = 0x0400;
 const PICK_PATH_DIRECTORY: &str = "directory";
 const PICK_PATH_ZIP: &str = "zip";
 
@@ -705,11 +712,10 @@ fn redact_prefixed_keys_and_pairs(text: &str) -> String {
     out
 }
 
-fn redact_sensitive_with_homes(
+fn redact_sensitive_with_env_paths(
     text: &str,
     extra_secrets: &[&str],
-    userprofile: Option<&str>,
-    home: Option<&str>,
+    env_paths: &[(&str, &str)],
 ) -> String {
     let mut out = text.to_string();
     for secret in extra_secrets {
@@ -717,17 +723,29 @@ fn redact_sensitive_with_homes(
             out = out.replace(secret, "[REDACTED_TOKEN]");
         }
     }
-    for (var_value, placeholder) in [(userprofile, "%USERPROFILE%"), (home, "<HOME>")] {
-        if let Some(raw) = var_value {
-            let trimmed = raw.trim_end_matches(|c| c == '\\' || c == '/');
+    let mut normalized_envs: Vec<(String, &str)> = env_paths
+        .iter()
+        .filter_map(|&(raw, placeholder)| {
+            let trimmed = raw.trim().trim_end_matches(|c| c == '\\' || c == '/');
             if trimmed.len() >= 3 && trimmed != "/" {
-                out = replace_ascii_case_insensitive(&out, trimmed, placeholder);
-                if trimmed.contains('\\') {
-                    let doubled = trimmed.replace('\\', "\\\\");
-                    out = replace_ascii_case_insensitive(&out, &doubled, placeholder);
-                    let forward = trimmed.replace('\\', "/");
-                    out = replace_ascii_case_insensitive(&out, &forward, placeholder);
-                }
+                Some((trimmed.to_string(), placeholder))
+            } else {
+                None
+            }
+        })
+        .collect();
+    // Replace longer specific roots (e.g. %LOCALAPPDATA%/%APPDATA%) before parent home roots.
+    normalized_envs.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+
+    for (trimmed, placeholder) in normalized_envs {
+        let forward = trimmed.replace('\\', "/");
+        let backslash = trimmed.replace('/', "\\");
+        let doubled = backslash.replace('\\', "\\\\");
+        let mut seen: Vec<String> = Vec::with_capacity(4);
+        for variant in [doubled, trimmed, backslash, forward] {
+            if !seen.iter().any(|existing| existing == &variant) {
+                out = replace_ascii_case_insensitive(&out, &variant, placeholder);
+                seen.push(variant);
             }
         }
     }
@@ -736,38 +754,116 @@ fn redact_sensitive_with_homes(
     redact_prefixed_keys_and_pairs(&out)
 }
 
-fn redact_sensitive(text: &str, extra_secrets: &[&str]) -> String {
-    let userprofile = std::env::var_os("USERPROFILE").map(|v| v.to_string_lossy().into_owned());
-    let home = std::env::var_os("HOME").map(|v| v.to_string_lossy().into_owned());
-    redact_sensitive_with_homes(text, extra_secrets, userprofile.as_deref(), home.as_deref())
+#[cfg(test)]
+fn redact_sensitive_with_homes(
+    text: &str,
+    extra_secrets: &[&str],
+    userprofile: Option<&str>,
+    home: Option<&str>,
+) -> String {
+    let mut env_paths: Vec<(&str, &str)> = Vec::new();
+    if let Some(val) = userprofile {
+        env_paths.push((val, "%USERPROFILE%"));
+    }
+    if let Some(val) = home {
+        env_paths.push((val, "<HOME>"));
+    }
+    redact_sensitive_with_env_paths(text, extra_secrets, &env_paths)
 }
 
-fn read_log_tail_with_limits(path: &Path, max_lines: usize, max_bytes: usize) -> io::Result<String> {
+fn redact_sensitive(text: &str, extra_secrets: &[&str]) -> String {
+    let env_values: Vec<(Option<String>, &str)> = [
+        ("LOCALAPPDATA", "%LOCALAPPDATA%"),
+        ("APPDATA", "%APPDATA%"),
+        ("USERPROFILE", "%USERPROFILE%"),
+        ("HOME", "<HOME>"),
+    ]
+    .into_iter()
+    .map(|(name, placeholder)| {
+        (
+            std::env::var_os(name).map(|v| v.to_string_lossy().into_owned()),
+            placeholder,
+        )
+    })
+    .collect();
+    let env_refs: Vec<(&str, &str)> = env_values
+        .iter()
+        .filter_map(|(val, placeholder)| val.as_deref().map(|s| (s, *placeholder)))
+        .collect();
+    redact_sensitive_with_env_paths(text, extra_secrets, &env_refs)
+}
+
+fn metadata_is_link_or_reparse(meta: &fs::Metadata) -> bool {
+    if meta.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        (meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT_MASK) != 0
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+fn check_chain_with<F>(path: &Path, mut is_link: F) -> io::Result<()>
+where
+    F: FnMut(&Path) -> io::Result<bool>,
+{
+    for ancestor in path.ancestors() {
+        if ancestor.as_os_str().is_empty() || ancestor.parent().is_none() {
+            continue;
+        }
+        match is_link(ancestor) {
+            Ok(true) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "refusing symlink or reparse point in path",
+                ));
+            }
+            Ok(false) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+fn ensure_no_links_in_chain(path: &Path) -> io::Result<()> {
+    check_chain_with(path, |ancestor| {
+        let meta = fs::symlink_metadata(ancestor)?;
+        Ok(metadata_is_link_or_reparse(&meta))
+    })
+}
+
+fn read_log_window(path: &Path, window_bytes: u64) -> io::Result<String> {
     use std::io::{Read as _, Seek, SeekFrom};
 
-    if max_lines == 0 || max_bytes == 0 {
+    if window_bytes == 0 {
         return Ok(String::new());
     }
-    let meta = match fs::symlink_metadata(path) {
-        Ok(meta) => meta,
+    ensure_no_links_in_chain(path)?;
+    let mut file = match File::open(path) {
+        Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(String::new()),
         Err(error) => return Err(error),
     };
-    if meta.file_type().is_symlink() {
+    let meta = file.metadata()?;
+    if metadata_is_link_or_reparse(&meta) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "refusing symlink log file",
+            "refusing symlink or reparse point in path",
         ));
     }
-    let mut file = File::open(path)?;
-    let len = file.metadata()?.len();
-    let window = (max_bytes as u64).saturating_mul(2).max(max_bytes as u64 + 512);
-    let seek_pos = len.saturating_sub(window);
+    let len = meta.len();
+    let seek_pos = len.saturating_sub(window_bytes);
     if seek_pos > 0 {
         file.seek(SeekFrom::Start(seek_pos))?;
     }
     let mut raw = Vec::new();
-    file.take(window).read_to_end(&mut raw)?;
+    file.take(window_bytes).read_to_end(&mut raw)?;
 
     let mut valid_start = 0usize;
     if seek_pos > 0 {
@@ -776,10 +872,31 @@ fn read_log_tail_with_limits(path: &Path, max_lines: usize, max_bytes: usize) ->
         }
     }
     let decoded = String::from_utf8_lossy(&raw[valid_start..]);
-    let normalized = decoded.replace("\r\n", "\n").replace('\r', "\n");
+    let mut text = decoded.replace("\r\n", "\n").replace('\r', "\n");
+    if seek_pos > 0 {
+        // Drop a potentially split first fragment so secrets straddling the window start cannot survive half-cut.
+        if let Some(nl) = text.find('\n') {
+            text = text[nl + 1..].to_string();
+        } else if let Some(ws_end) = text
+            .char_indices()
+            .take_while(|&(idx, _)| idx < 4096)
+            .find(|&(_, ch)| ch.is_ascii_whitespace())
+            .map(|(idx, ch)| idx + ch.len_utf8())
+        {
+            text = text[ws_end..].to_string();
+        }
+    }
+    Ok(text)
+}
+
+fn bound_log_tail(text: &str, max_lines: usize, max_bytes: usize) -> String {
+    if max_lines == 0 || max_bytes == 0 {
+        return String::new();
+    }
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
     let trimmed = normalized.trim_end_matches('\n');
     if trimmed.is_empty() {
-        return Ok(String::new());
+        return String::new();
     }
 
     let lines: Vec<&str> = trimmed.split('\n').collect();
@@ -798,7 +915,7 @@ fn read_log_tail_with_limits(path: &Path, max_lines: usize, max_bytes: usize) ->
         }
         selected = selected[byte_start..].to_string();
     }
-    Ok(selected)
+    selected
 }
 
 fn contains_ascii_ci(haystack: &str, needle: &str) -> bool {
@@ -896,11 +1013,50 @@ fn extract_last_error_summary(
     parts.join("; ")
 }
 
+fn read_redacted_log_tail_with_limits(
+    path: &Path,
+    extra_secrets: &[&str],
+    window_bytes: u64,
+    max_lines: usize,
+    max_bytes: usize,
+) -> io::Result<String> {
+    let window = read_log_window(path, window_bytes)?;
+    if window.is_empty() {
+        return Ok(String::new());
+    }
+    let redacted = redact_sensitive(&window, extra_secrets);
+    Ok(bound_log_tail(&redacted, max_lines, max_bytes))
+}
+
 fn read_redacted_log_tail(path: &Path, extra_secrets: &[&str]) -> String {
-    match read_log_tail_with_limits(path, STARTUP_DIAG_MAX_LINES, STARTUP_DIAG_MAX_BYTES) {
-        Ok(content) => redact_sensitive(&content, extra_secrets),
+    match read_redacted_log_tail_with_limits(
+        path,
+        extra_secrets,
+        STARTUP_DIAG_READ_WINDOW_BYTES,
+        STARTUP_DIAG_MAX_LINES,
+        STARTUP_DIAG_MAX_BYTES,
+    ) {
+        Ok(content) => content,
         Err(error) => redact_sensitive(&format!("[unavailable: {error}]"), extra_secrets),
     }
+}
+
+fn ensure_main_window_label(label: &str) -> Result<(), String> {
+    if label == "main" {
+        Ok(())
+    } else {
+        Err("unauthorized window".into())
+    }
+}
+
+fn ensure_main_window(window: &tauri::WebviewWindow) -> Result<(), String> {
+    ensure_main_window_label(window.label())
+}
+
+fn resolve_startup_runtime_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let default_root = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
+    let data_override = std::env::var_os("AMADEUS_DATA_DIR").map(PathBuf::from);
+    Ok(backend_runtime_dir(data_override.as_deref(), &default_root))
 }
 
 fn collect_startup_diagnostics(
@@ -921,8 +1077,8 @@ fn collect_startup_diagnostics(
     );
     let last_error_summary = redact_sensitive(&raw_summary, extra_secrets);
     StartupDiagnostics {
-        log_dir: log_dir.to_string_lossy().into_owned(),
-        runtime_dir: runtime_dir.to_string_lossy().into_owned(),
+        log_dir: redact_sensitive(&log_dir.to_string_lossy(), extra_secrets),
+        runtime_dir: redact_sensitive(&runtime_dir.to_string_lossy(), extra_secrets),
         app_version: app_version.to_string(),
         platform: format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH),
         startup_log_tail,
@@ -933,10 +1089,12 @@ fn collect_startup_diagnostics(
 }
 
 #[tauri::command]
-async fn get_startup_diagnostics(app: tauri::AppHandle) -> Result<StartupDiagnostics, String> {
-    let default_root = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
-    let data_override = std::env::var_os("AMADEUS_DATA_DIR").map(PathBuf::from);
-    let runtime_dir = backend_runtime_dir(data_override.as_deref(), &default_root);
+async fn get_startup_diagnostics(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<StartupDiagnostics, String> {
+    ensure_main_window(&window)?;
+    let runtime_dir = resolve_startup_runtime_dir(&app)?;
     let app_version = app.package_info().version.to_string();
     let (active_token, last_error) = match app.try_state::<Arc<BackendStartup>>() {
         Some(startup) => (startup.active_token(), startup.last_error()),
@@ -953,6 +1111,33 @@ async fn get_startup_diagnostics(app: tauri::AppHandle) -> Result<StartupDiagnos
     })
     .await
     .map_err(|_| "startup diagnostics collection failed".to_string())?
+}
+
+#[tauri::command]
+async fn open_startup_log_dir(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
+    ensure_main_window(&window)?;
+    let runtime_dir = resolve_startup_runtime_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let log_dir = runtime_dir.join("logs");
+        ensure_no_links_in_chain(&runtime_dir).map_err(|e| e.to_string())?;
+        ensure_no_links_in_chain(&log_dir).map_err(|e| e.to_string())?;
+        let target = if log_dir.is_dir() {
+            log_dir
+        } else if runtime_dir.is_dir() {
+            runtime_dir
+        } else {
+            return Err("startup log directory does not exist".into());
+        };
+        ensure_no_links_in_chain(&target).map_err(|e| e.to_string())?;
+        app.opener()
+            .open_path(target.to_string_lossy().as_ref(), None::<&str>)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|_| "open startup log directory task failed".to_string())?
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1086,12 +1271,12 @@ mod win32_picker {
         String::from_utf16(&buf[..len]).map_err(|_| "selected path contains invalid UTF-16".into())
     }
 
-    fn pick_directory() -> Result<Option<String>, String> {
+    fn pick_directory(owner_hwnd: isize) -> Result<Option<String>, String> {
         let _com = ComApartmentGuard::init_apartment()?;
         let mut display_name = vec![0u16; 260];
         let title: Vec<u16> = "选择文件夹".encode_utf16().chain(Some(0)).collect();
         let mut info = BROWSEINFOW {
-            hwnd_owner: std::ptr::null_mut(),
+            hwnd_owner: owner_hwnd as *mut c_void,
             pidl_root: std::ptr::null(),
             psz_display_name: display_name.as_mut_ptr(),
             lpsz_title: title.as_ptr(),
@@ -1119,7 +1304,7 @@ mod win32_picker {
         }
     }
 
-    fn pick_zip() -> Result<Option<String>, String> {
+    fn pick_zip(owner_hwnd: isize) -> Result<Option<String>, String> {
         let _com = ComApartmentGuard::init_apartment()?;
         let filter: Vec<u16> = "Zip Archives\0*.zip\0All Files\0*.*\0\0"
             .encode_utf16()
@@ -1129,7 +1314,7 @@ mod win32_picker {
         let mut file_buf = vec![0u16; 32768];
         let mut ofn = OPENFILENAMEW {
             l_struct_size: std::mem::size_of::<OPENFILENAMEW>() as u32,
-            hwnd_owner: std::ptr::null_mut(),
+            hwnd_owner: owner_hwnd as *mut c_void,
             h_instance: std::ptr::null_mut(),
             lpstr_filter: filter.as_ptr(),
             lpstr_custom_filter: std::ptr::null_mut(),
@@ -1169,17 +1354,17 @@ mod win32_picker {
         }
     }
 
-    pub(super) fn pick_path(kind: PickerKind) -> Result<Option<String>, String> {
+    pub(super) fn pick_path(kind: PickerKind, owner_hwnd: isize) -> Result<Option<String>, String> {
         match kind {
-            PickerKind::Directory => pick_directory(),
-            PickerKind::Zip => pick_zip(),
+            PickerKind::Directory => pick_directory(owner_hwnd),
+            PickerKind::Zip => pick_zip(owner_hwnd),
         }
     }
 }
 
 #[cfg(target_os = "windows")]
-fn pick_path_native(kind: PickerKind) -> Result<Option<String>, String> {
-    win32_picker::pick_path(kind)
+fn pick_path_native(kind: PickerKind, owner_hwnd: isize) -> Result<Option<String>, String> {
+    win32_picker::pick_path(kind, owner_hwnd)
 }
 
 #[cfg(all(not(target_os = "windows"), unix))]
@@ -1199,7 +1384,7 @@ fn run_picker_command(program: &str, args: &[&str]) -> io::Result<Option<String>
 }
 
 #[cfg(target_os = "macos")]
-fn pick_path_native(kind: PickerKind) -> Result<Option<String>, String> {
+fn pick_path_native(kind: PickerKind, _owner_hwnd: isize) -> Result<Option<String>, String> {
     let script = match kind {
         PickerKind::Directory => r#"POSIX path of (choose folder with prompt "选择文件夹")"#,
         PickerKind::Zip => {
@@ -1214,7 +1399,7 @@ fn pick_path_native(kind: PickerKind) -> Result<Option<String>, String> {
 }
 
 #[cfg(all(not(target_os = "windows"), unix, not(target_os = "macos")))]
-fn pick_path_native(kind: PickerKind) -> Result<Option<String>, String> {
+fn pick_path_native(kind: PickerKind, _owner_hwnd: isize) -> Result<Option<String>, String> {
     let zenity_args: &[&str] = match kind {
         PickerKind::Directory => &["--file-selection", "--directory", "--title=选择文件夹"],
         PickerKind::Zip => &[
@@ -1242,18 +1427,55 @@ fn pick_path_native(kind: PickerKind) -> Result<Option<String>, String> {
 }
 
 #[cfg(not(any(target_os = "windows", unix)))]
-fn pick_path_native(_kind: PickerKind) -> Result<Option<String>, String> {
+fn pick_path_native(_kind: PickerKind, _owner_hwnd: isize) -> Result<Option<String>, String> {
     Ok(None)
 }
 
+static PICKER_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+struct PickerSingleFlightGuard;
+
+impl Drop for PickerSingleFlightGuard {
+    fn drop(&mut self) {
+        PICKER_IN_FLIGHT.store(false, Ordering::Release);
+    }
+}
+
+fn try_acquire_picker_guard() -> Option<PickerSingleFlightGuard> {
+    if PICKER_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        Some(PickerSingleFlightGuard)
+    } else {
+        None
+    }
+}
+
 #[tauri::command]
-async fn pick_path(kind: String) -> Result<Option<String>, String> {
+async fn pick_path(
+    window: tauri::WebviewWindow,
+    kind: String,
+) -> Result<Option<String>, String> {
+    ensure_main_window(&window)?;
     let parsed = parse_picker_kind(&kind)?;
+    #[cfg(target_os = "windows")]
+    let owner_hwnd: isize = window.hwnd().ok().map(|h| h.0 as isize).unwrap_or(0);
+    #[cfg(not(target_os = "windows"))]
+    let owner_hwnd: isize = 0;
+
+    let Some(guard) = try_acquire_picker_guard() else {
+        return Ok(None);
+    };
     tauri::async_runtime::spawn_blocking(move || {
-        // Run native dialogs on a dedicated OS thread so COM apartment state stays isolated.
-        std::thread::spawn(move || pick_path_native(parsed))
-            .join()
-            .map_err(|_| "native path picker thread panicked".to_string())?
+        // Hold the single-flight guard inside the OS picker thread until the modal returns or unwinds.
+        let _guard = guard;
+        std::thread::spawn(move || {
+            let _thread_guard = _guard;
+            pick_path_native(parsed, owner_hwnd)
+        })
+        .join()
+        .map_err(|_| "native path picker thread panicked".to_string())?
     })
     .await
     .map_err(|_| "native path picker task failed".to_string())?
@@ -1379,6 +1601,7 @@ pub fn run() {
             get_local_backend,
             restart_app,
             get_startup_diagnostics,
+            open_startup_log_dir,
             pick_path
         ])
         .setup(|app| {
@@ -1555,7 +1778,11 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        std::env::temp_dir().join(format!("amadeus-diag-{tag}-{}-{nonce}", std::process::id()))
+        #[cfg(target_os = "macos")]
+        let base = fs::canonicalize(std::env::temp_dir()).unwrap_or_else(|_| std::env::temp_dir());
+        #[cfg(not(target_os = "macos"))]
+        let base = std::env::temp_dir();
+        base.join(format!("amadeus-diag-{tag}-{}-{nonce}", std::process::id()))
     }
 
     #[test]
@@ -1636,11 +1863,70 @@ mod tests {
     }
 
     #[test]
+    fn redact_sensitive_handles_redirected_env_dirs_and_cross_platform_slashes() {
+        let input = concat!(
+            "local=D:\\Profiles\\Alice\\AppData\\Local\\Amadeus\\logs\\app.log\n",
+            "local_fwd=D:/Profiles/Alice/AppData/Local/Amadeus/logs\n",
+            "local_json=\"D:\\\\Profiles\\\\Alice\\\\AppData\\\\Local\\\\Amadeus\"\n",
+            "roaming=E:\\CustomRoaming\\Alice\\cfg\n",
+            "home_dir=D:\\Profiles\\Alice\\Desktop\n",
+            "posix_custom=/mnt/custom-home/bob/data\n",
+            "posix_escaped=/mnt/custom-home/bob\n",
+        );
+        let envs = [
+            ("D:\\Profiles\\Alice\\AppData\\Local", "%LOCALAPPDATA%"),
+            ("E:\\CustomRoaming\\Alice", "%APPDATA%"),
+            ("D:\\Profiles\\Alice", "%USERPROFILE%"),
+            ("/mnt/custom-home/bob", "<HOME>"),
+        ];
+        let redacted = redact_sensitive_with_env_paths(input, &[], &envs);
+        assert!(!redacted.contains("Alice"));
+        assert!(!redacted.contains("bob"));
+        assert!(redacted.contains("%LOCALAPPDATA%\\Amadeus\\logs\\app.log"));
+        assert!(redacted.contains("%LOCALAPPDATA%/Amadeus/logs"));
+        assert!(redacted.contains("%LOCALAPPDATA%\\\\Amadeus"));
+        assert!(redacted.contains("%APPDATA%\\cfg"));
+        assert!(redacted.contains("%USERPROFILE%\\Desktop"));
+        assert!(redacted.contains("<HOME>/data"));
+    }
+
+    #[test]
+    fn check_chain_with_walks_ancestors_allows_missing_leaf_and_rejects_links() {
+        let missing_leaf = PathBuf::from("alpha").join("beta").join("missing.log");
+        check_chain_with(&missing_leaf, |anc| {
+            if anc == missing_leaf.as_path() {
+                Err(io::Error::new(io::ErrorKind::NotFound, "missing leaf"))
+            } else {
+                Ok(false)
+            }
+        })
+        .expect("missing leaf under clean ancestors should succeed");
+
+        let blocked_ancestor = PathBuf::from("alpha").join("logs");
+        let under_link = blocked_ancestor.join("backend.log");
+        let err = check_chain_with(&under_link, |anc| {
+            Ok(anc == blocked_ancestor.as_path())
+        })
+        .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+
+        let err_leaf = check_chain_with(&under_link, |anc| {
+            Ok(anc == under_link.as_path())
+        })
+        .unwrap_err();
+        assert_eq!(err_leaf.kind(), io::ErrorKind::InvalidInput);
+    }
+
+    #[test]
     fn read_log_tail_enforces_line_and_byte_caps_and_utf8_boundaries() {
         let root = unique_test_dir("tail");
         fs::create_dir_all(&root).unwrap();
         let path = root.join("backend-stderr.log");
-        assert_eq!(read_log_tail_with_limits(&path, 80, 8192).unwrap(), "");
+        assert_eq!(
+            read_redacted_log_tail_with_limits(&path, &[], STARTUP_DIAG_READ_WINDOW_BYTES, 80, 8192)
+                .unwrap(),
+            ""
+        );
 
         let mut content = String::new();
         for idx in 0..120 {
@@ -1648,12 +1934,16 @@ mod tests {
         }
         fs::write(&path, &content).unwrap();
 
-        let capped_lines = read_log_tail_with_limits(&path, 10, 8192).unwrap();
+        let capped_lines =
+            read_redacted_log_tail_with_limits(&path, &[], STARTUP_DIAG_READ_WINDOW_BYTES, 10, 8192)
+                .unwrap();
         assert_eq!(capped_lines.lines().count(), 10);
         assert!(capped_lines.contains("line-119"));
         assert!(!capped_lines.contains("line-109"));
 
-        let capped_bytes = read_log_tail_with_limits(&path, 80, 96).unwrap();
+        let capped_bytes =
+            read_redacted_log_tail_with_limits(&path, &[], STARTUP_DIAG_READ_WINDOW_BYTES, 80, 96)
+                .unwrap();
         assert!(capped_bytes.len() <= 96);
         assert!(capped_bytes.contains("line-119"));
         assert!(!capped_bytes.contains("line-000"));
@@ -1662,24 +1952,104 @@ mod tests {
         let huge_path = root.join("huge.log");
         let huge = "日志".repeat(200);
         fs::write(&huge_path, huge).unwrap();
-        let tail = read_log_tail_with_limits(&huge_path, 80, 64).unwrap();
+        let tail =
+            read_redacted_log_tail_with_limits(&huge_path, &[], STARTUP_DIAG_READ_WINDOW_BYTES, 80, 64)
+                .unwrap();
         assert!(tail.len() <= 64);
         assert!(!tail.is_empty());
 
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn read_redacted_log_tail_redacts_secrets_straddling_tail_and_window_boundaries() {
+        let root = unique_test_dir("boundary");
+        fs::create_dir_all(&root).unwrap();
+        let live_token = "9f8e7d6c5b4a392817263544556677889900aabbccddeeff0011223344556677";
+
+        // > 12 KiB log where secrets straddle the 8 KiB tail boundary across multi-line and single-line spans.
+        let log_path = root.join("large-boundary.log");
+        let mut content = String::new();
+        for idx in 0..90 {
+            content.push_str(&format!("prefix_line_{idx:03}_safe_padding_value_0123456789abcdef\n"));
+        }
+        content.push_str(&format!(
+            "auth Authorization: Bearer secret_8k_boundary_token_xyz sk-secret8kboundarytoken123 token={live_token} {}\n",
+            "tail_span_".repeat(820)
+        ));
+        assert!(content.len() > 12 * 1024);
+        fs::write(&log_path, &content).unwrap();
+
+        let tail = read_redacted_log_tail_with_limits(
+            &log_path,
+            &[live_token],
+            STARTUP_DIAG_READ_WINDOW_BYTES,
+            STARTUP_DIAG_MAX_LINES,
+            STARTUP_DIAG_MAX_BYTES,
+        )
+        .unwrap();
+        assert!(tail.len() <= STARTUP_DIAG_MAX_BYTES);
+        for forbidden in [
+            "secret_8k_boundary_token_xyz",
+            "sk-secret8kboundarytoken123",
+            "secret8kboundarytoken123",
+            live_token,
+            &live_token[24..],
+        ] {
+            assert!(!tail.contains(forbidden), "leaked {forbidden:?} in tail");
+        }
+        assert!(tail.contains("tail_span_"));
+
+        // Seek boundary inside a secret splits off its prefix; window drop discards the partial first line.
+        let small_path = root.join("window-split.log");
+        let split_doc = format!(
+            "{} Authorization: Bearer split_window_secret_99999999\n{}\n",
+            "pad_".repeat(20),
+            "safe_after_line_".repeat(14),
+        );
+        fs::write(&small_path, &split_doc).unwrap();
+        let small_tail =
+            read_redacted_log_tail_with_limits(&small_path, &[], 256, 80, 8192).unwrap();
+        assert!(!small_tail.contains("split_window_secret_99999999"));
+        assert!(!small_tail.contains("99999999"));
+        assert!(small_tail.contains("safe_after_line_"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
-    fn read_log_tail_rejects_symlinks() {
+    fn read_redacted_log_tail_rejects_symlinks_in_leaf_or_ancestor() {
         let root = unique_test_dir("symlink");
         fs::create_dir_all(&root).unwrap();
         let target = root.join("target.log");
         let link = root.join("backend-stdout.log");
         fs::write(&target, "secret\n").unwrap();
         std::os::unix::fs::symlink(&target, &link).unwrap();
-        let err = read_log_tail_with_limits(&link, 80, 8192).unwrap_err();
+        let err = read_redacted_log_tail_with_limits(
+            &link,
+            &[],
+            STARTUP_DIAG_READ_WINDOW_BYTES,
+            80,
+            8192,
+        )
+        .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+
+        let real_dir = root.join("real_logs");
+        fs::create_dir_all(&real_dir).unwrap();
+        let dir_link = root.join("logs_link");
+        std::os::unix::fs::symlink(&real_dir, &dir_link).unwrap();
+        let err_parent = read_redacted_log_tail_with_limits(
+            &dir_link.join("nonexistent.log"),
+            &[],
+            STARTUP_DIAG_READ_WINDOW_BYTES,
+            80,
+            8192,
+        )
+        .unwrap_err();
+        assert_eq!(err_parent.kind(), io::ErrorKind::InvalidInput);
+
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1697,7 +2067,7 @@ mod tests {
     }
 
     #[test]
-    fn collect_startup_diagnostics_redacts_secrets_from_all_tails_and_summary() {
+    fn collect_startup_diagnostics_redacts_secrets_and_paths() {
         let root = unique_test_dir("collect");
         let logs = root.join("logs");
         fs::create_dir_all(&logs).unwrap();
@@ -1725,7 +2095,14 @@ mod tests {
             &[live_token],
         );
         assert_eq!(diag.app_version, "0.1.0");
-        assert_eq!(PathBuf::from(&diag.log_dir), logs);
+        assert_eq!(
+            diag.log_dir,
+            redact_sensitive(&logs.to_string_lossy(), &[live_token])
+        );
+        assert_eq!(
+            diag.runtime_dir,
+            redact_sensitive(&root.to_string_lossy(), &[live_token])
+        );
         for field in [
             &diag.startup_log_tail,
             &diag.stderr_log_tail,
@@ -1737,7 +2114,37 @@ mod tests {
             assert!(!field.contains("secret-bearer"));
         }
 
+        let home_diag = collect_startup_diagnostics(
+            Path::new("/home/alice_ci/amadeus-nonexistent"),
+            "0.1.0",
+            None,
+            &[],
+        );
+        assert!(!home_diag.log_dir.contains("alice_ci"));
+        assert!(!home_diag.runtime_dir.contains("alice_ci"));
+        assert_eq!(home_diag.log_dir, "/home/<USER>/amadeus-nonexistent/logs");
+
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ensure_main_window_label_allows_only_main() {
+        assert!(ensure_main_window_label("main").is_ok());
+        assert!(ensure_main_window_label("").is_err());
+        assert!(ensure_main_window_label("settings").is_err());
+        assert!(ensure_main_window_label("MAIN").is_err());
+    }
+
+    #[test]
+    fn picker_single_flight_guard_rejects_overlap_and_releases_on_drop() {
+        let guard = try_acquire_picker_guard().expect("first picker guard must succeed");
+        assert!(
+            try_acquire_picker_guard().is_none(),
+            "concurrent picker guard must be rejected"
+        );
+        drop(guard);
+        let reacquired = try_acquire_picker_guard().expect("picker guard must release on drop");
+        drop(reacquired);
     }
 
     #[test]

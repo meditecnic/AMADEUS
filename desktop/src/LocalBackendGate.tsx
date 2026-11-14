@@ -4,7 +4,7 @@ import { initializeLocalBackend } from './apiBase';
 import './LocalBackendGate.css';
 import { Atmosphere } from './workstation/Atmosphere';
 import { Stamp } from './workstation/Stamp';
-import { ISSUES_URL, openExternal, revealInFolder } from './workstation/shell';
+import { ISSUES_URL, openExternal } from './workstation/shell';
 
 export interface StartupDiagnostics {
   log_dir: string;
@@ -324,8 +324,12 @@ async function copyTextSafely(text: string): Promise<boolean> {
   }
 }
 
+function hasTauriInternals(): boolean {
+  return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+}
+
 async function loadStartupDiagnosticsSafely(): Promise<StartupDiagnostics | null> {
-  if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
+  if (!hasTauriInternals()) {
     return null;
   }
   try {
@@ -341,7 +345,8 @@ export function LocalBackendGate({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<'pending' | 'ready' | 'error'>('pending');
   const [errorMessage, setErrorMessage] = useState('');
   const [diagnostics, setDiagnostics] = useState<StartupDiagnostics | null>(null);
-  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(true);
+  const [retrying, setRetrying] = useState(false);
   const [feedback, setFeedback] = useState('');
 
   useEffect(() => {
@@ -406,9 +411,22 @@ export function LocalBackendGate({ children }: { children: ReactNode }) {
     : '';
   const previewText = buildSanitizedPreview(diagnosis, errorMessage, diagnostics);
 
-  const handleRetry = () => {
+  const handleRetry = async () => {
+    if (retrying) {
+      return;
+    }
     setFeedback('');
-    setPreviewOpen(false);
+    if (hasTauriInternals()) {
+      setRetrying(true);
+      try {
+        await invoke('restart_app');
+      } catch {
+        setRetrying(false);
+        setFeedback('未能自动重启应用，请手动关闭后重新打开 AMADEUS。');
+      }
+      return;
+    }
+    setPreviewOpen(true);
     setErrorMessage('');
     setDiagnostics(null);
     setStatus('pending');
@@ -416,15 +434,15 @@ export function LocalBackendGate({ children }: { children: ReactNode }) {
   };
 
   const handleOpenLogs = async () => {
-    if (!diagnostics?.log_dir) {
+    if (!hasTauriInternals()) {
       return;
     }
-    const opened = await revealInFolder(diagnostics.log_dir);
-    setFeedback(
-      opened
-        ? '已尝试在文件管理器中打开日志目录。'
-        : '未能直接拉起文件管理器，请根据下方日志路径手动打开。',
-    );
+    try {
+      await invoke('open_startup_log_dir');
+      setFeedback('已尝试在文件管理器中打开日志目录。');
+    } catch {
+      setFeedback('未能直接拉起文件管理器，请根据上方日志路径手动打开。');
+    }
   };
 
   const handleCopy = async () => {
@@ -514,10 +532,15 @@ export function LocalBackendGate({ children }: { children: ReactNode }) {
 
           <footer className="ws2-m-foot">
             <div className="ws2-m-acts">
-              <button type="button" className="ws2-m-btn primary" onClick={handleRetry}>
-                重试
+              <button
+                type="button"
+                className="ws2-m-btn primary"
+                disabled={retrying}
+                onClick={() => void handleRetry()}
+              >
+                {retrying ? '正在重启…' : '重试'}
               </button>
-              {diagnostics?.log_dir && (
+              {hasTauriInternals() && diagnostics !== null && (
                 <button
                   type="button"
                   className="ws2-m-btn"
