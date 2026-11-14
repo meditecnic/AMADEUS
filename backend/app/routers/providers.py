@@ -320,8 +320,14 @@ async def connect_provider(body: ProviderConnect):
 async def _connect_provider(body: ProviderConnect):
     if body.display_name is not None and not body.display_name.strip():
         raise HTTPException(422, detail={"code": "invalid_provider_configuration", "step": "save"})
+    is_builtin_id = body.provider_id in {"deepseek", "glm", "openai", "gemini"}
+    is_custom_id = bool(
+        body.provider_id
+        and body.provider_id != "custom"
+        and is_custom_profile_id(body.provider_id)
+    )
     if bool(body.base_url) == bool(body.provider_id) or (
-        body.provider_id and body.provider_id not in {"deepseek", "glm", "openai", "gemini"}
+        body.provider_id and not (is_builtin_id or is_custom_id)
     ):
         raise HTTPException(422, detail={"code": "invalid_provider_configuration", "step": "save"})
     try:
@@ -335,14 +341,22 @@ async def _connect_provider(body: ProviderConnect):
             if existing is None and body.catalog_id is not None:
                 existing = next((row for row in rows if row.get("catalog_id") is None), None)
             provider_id = str(existing["provider_id"]) if existing else new_custom_provider_id()
+        elif is_custom_id:
+            existing = await get_provider_configuration(str(body.provider_id))
+            if existing is None or not existing.get("enabled"):
+                raise HTTPException(422, detail={"code": "invalid_provider_configuration", "step": "save"})
+            provider_id = str(existing["provider_id"])
+            base_url = str(existing["base_url"])
         else:
-            provider_id = body.provider_id
+            provider_id = str(body.provider_id)
             base_url = str(_definition(provider_id).adapter.base_url)
             existing = await get_provider_configuration(provider_id)
         definitions = {definition.id: definition for definition in provider_registry.list_definitions()}
         old_definition = definitions.get(provider_id)
         old_adapter = _definition(provider_id).adapter if old_definition else None
         old_key = credential_store.get(provider_id)
+    except HTTPException:
+        raise
     except ValueError as exc:
         raise HTTPException(422, detail={"code": "invalid_provider_configuration", "step": "save"}) from exc
     except Exception as exc:
@@ -361,7 +375,9 @@ async def _connect_provider(body: ProviderConnect):
                 provider_id=provider_id, base_url=base_url, default_model=model,
                 display_name=body.display_name or (existing or {}).get("display_name"),
             )
-            settings["catalog_id"] = body.catalog_id
+            settings["catalog_id"] = (
+                body.catalog_id if body.catalog_id is not None else (existing or {}).get("catalog_id")
+            )
             saved = await _activate_custom_profile(settings, initial_admission="pending")
         else:
             saved = await save_provider_configuration(

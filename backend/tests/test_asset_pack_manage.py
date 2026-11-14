@@ -846,3 +846,67 @@ def test_uninstall_failure_rollback_and_partial_cleanup(app_client, tmp_path, mo
     assert retry.status_code == 200
     assert retry.json()["installed"] is False
     assert not pack_parent.exists()
+
+
+def test_orphan_old_pack_restored_or_preserved_across_failed_installs(app_client, tmp_path, monkeypatch):
+    pack_v1 = _build_pack_dir(tmp_path / "orphan-v1", manifest={"format": 1, "name": "pack", "version": "1.0"})
+    pack_v2 = _build_pack_dir(tmp_path / "orphan-v2", manifest={"format": 1, "name": "pack", "version": "2.0"})
+    assert app_client.post("/api/data/asset-pack/install", json={"source_path": str(pack_v1)}).status_code == 200
+
+    pack_parent = Path(os.environ["AMADEUS_DATA_DIR"]) / "asset-pack"
+    target_dir = pack_parent / "amadeus-original"
+    orphan_dir = pack_parent / ".old-asset-pack-orphan"
+    os.replace(target_dir, orphan_dir)
+    assert app_client.get("/api/data/asset-pack").json()["installed"] is False
+
+    # Case (a): target_dir absent and .old-* is intact -> failing second install restores .old-* to target_dir.
+    real_replace = os.replace
+
+    def fail_staging_replace(src, dst):
+        if Path(src).name.startswith(".tmp-asset-pack-") and Path(dst).name == "amadeus-original":
+            raise OSError("injected staging swap failure")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", fail_staging_replace)
+    try:
+        failed = app_client.post("/api/data/asset-pack/install", json={"source_path": str(pack_v2)})
+        assert failed.status_code == 500
+        assert failed.json()["detail"]["code"] == "asset_pack_install_failed"
+    finally:
+        monkeypatch.setattr(os, "replace", real_replace)
+
+    status = app_client.get("/api/data/asset-pack").json()
+    assert status["installed"] is True
+    assert status["complete"] is True
+    assert status["version"] == "1.0"
+    assert [p.name for p in pack_parent.iterdir()] == ["amadeus-original"]
+
+    # Case (b): restoring .old-* fails AND second install fails -> .old-* stays intact on disk; next success sweeps it.
+    os.replace(target_dir, orphan_dir)
+
+    def fail_restore_and_staging_replace(src, dst):
+        src_name = Path(src).name
+        if src_name.startswith(".old-asset-pack-") and Path(dst).name == "amadeus-original":
+            raise PermissionError("injected restore lock")
+        if src_name.startswith(".tmp-asset-pack-") and Path(dst).name == "amadeus-original":
+            raise OSError("injected second swap failure")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", fail_restore_and_staging_replace)
+    try:
+        failed_again = app_client.post("/api/data/asset-pack/install", json={"source_path": str(pack_v2)})
+        assert failed_again.status_code == 500
+        assert failed_again.json()["detail"]["code"] == "asset_pack_install_failed"
+    finally:
+        monkeypatch.setattr(os, "replace", real_replace)
+
+    assert orphan_dir.is_dir()
+    assert (orphan_dir / "manifest.json").is_file()
+    assert json.loads((orphan_dir / "manifest.json").read_text(encoding="utf-8"))["version"] == "1.0"
+    assert not target_dir.exists()
+
+    # Subsequent successful v2.0 install sweeps the leftover .old-* and installs v2.0 cleanly.
+    ok = app_client.post("/api/data/asset-pack/install", json={"source_path": str(pack_v2)})
+    assert ok.status_code == 200
+    assert ok.json()["version"] == "2.0"
+    assert [p.name for p in pack_parent.iterdir()] == ["amadeus-original"]

@@ -372,3 +372,59 @@ def test_a_label_adopts_the_oldest_of_two_unlabelled_profiles(connect):
     assert client.portal.call(db.get_provider_configuration, oldest)["catalog_id"] == "plan"
     assert client.portal.call(db.get_provider_configuration, other) == untouched
     assert store.get(other) is None
+
+
+def test_connect_by_custom_provider_id_rekeys_and_rolls_back_only_target(connect, monkeypatch):
+    client, store = connect
+    alpha_id = client.post("/api/providers/custom-profiles", json={
+        "display_name": "Alpha", "base_url": "https://connect.invalid/v1", "default_model": "chosen",
+    }).json()["provider_id"]
+    beta_id = client.post("/api/providers/custom-profiles", json={
+        "display_name": "Beta", "base_url": "https://connect.invalid/v1", "default_model": "chosen",
+    }).json()["provider_id"]
+    gamma_id = client.post("/api/providers/custom-profiles", json={
+        "display_name": "Gamma", "base_url": "https://connect.invalid/v1", "default_model": "chosen",
+        "catalog_id": "plan",
+    }).json()["provider_id"]
+    store.set(alpha_id, "key-alpha")
+    store.set(beta_id, "key-beta")
+
+    # Rekeying Beta via provider_id updates only beta_id and preserves its display_name.
+    ok = client.post("/api/providers/connect", json={"provider_id": beta_id, "api_key": "key-beta-2"})
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["provider_id"] == beta_id
+    assert store.get(beta_id) == "key-beta-2"
+    assert store.get(alpha_id) == "key-alpha"
+    assert client.portal.call(db.get_provider_configuration, beta_id)["display_name"] == "Beta"
+    assert client.portal.call(db.get_provider_configuration, alpha_id)["display_name"] == "Alpha"
+
+    # Rekeying Gamma preserves its existing catalog_id when omitted from connect payload.
+    gamma_ok = client.post("/api/providers/connect", json={"provider_id": gamma_id, "api_key": "key-gamma"})
+    assert gamma_ok.status_code == 200, gamma_ok.text
+    assert client.portal.call(db.get_provider_configuration, gamma_id)["catalog_id"] == "plan"
+
+    # Failed list_models rolls back only beta_id's key and leaves alpha_id untouched.
+    before_beta = client.portal.call(db.get_provider_configuration, beta_id)
+    before_alpha = client.portal.call(db.get_provider_configuration, alpha_id)
+    monkeypatch.setattr(OpenAICompatibleAdapter, "list_models",
+                        AsyncMock(side_effect=ProviderRequestError("custom", 401)))
+    failed = client.post("/api/providers/connect", json={"provider_id": beta_id, "api_key": "rejected"})
+    assert failed.status_code == 401
+    assert failed.json()["detail"]["step"] == "list"
+    assert store.get(beta_id) == "key-beta-2"
+    assert store.get(alpha_id) == "key-alpha"
+    assert client.portal.call(db.get_provider_configuration, beta_id) == before_beta
+    assert client.portal.call(db.get_provider_configuration, alpha_id) == before_alpha
+
+
+def test_connect_rejects_unknown_disabled_and_legacy_custom_provider_ids(connect):
+    client, _store = connect
+    gamma_id = client.post("/api/providers/custom-profiles", json={
+        "display_name": "Disabled", "base_url": "https://connect.invalid/v1",
+    }).json()["provider_id"]
+    assert client.delete(f"/api/providers/custom-profiles/{gamma_id}").status_code == 200
+
+    for bad_id in ("custom:00000000-0000-0000-0000-000000000000", gamma_id, "custom"):
+        resp = client.post("/api/providers/connect", json={"provider_id": bad_id, "api_key": "any-key"})
+        assert resp.status_code == 422, (bad_id, resp.text)
+        assert resp.json()["detail"]["code"] == "invalid_provider_configuration"

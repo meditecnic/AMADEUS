@@ -51,7 +51,8 @@ _WINDOWS_RESERVED_NAMES = frozenset(
     }
 )
 _WINDOWS_ILLEGAL_CHARS = set('<>:"|?*')
-_MANAGED_TEMP_PREFIXES = (".del-asset-pack-", ".tmp-asset-pack-", ".old-asset-pack-")
+_MANAGED_TEMP_PREFIXES = (".del-asset-pack-", ".tmp-asset-pack-")
+_MANAGED_OLD_PREFIX = ".old-asset-pack-"
 
 EMOTION_PREVIEWS: tuple[tuple[str, str], ...] = (
     ("neutral", "assets/images/kurisu_normal1.png"),
@@ -189,16 +190,17 @@ def _rmtree_managed_best_effort(path: Path) -> None:
         pass
 
 
-def _sweep_managed_temps(pack_parent: Path) -> None:
+def _sweep_managed_temps(pack_parent: Path, *, include_old: bool = False) -> None:
     if not _path_exists_or_link(pack_parent) or _is_link(pack_parent) or not pack_parent.is_dir():
         return
+    prefixes = (*_MANAGED_TEMP_PREFIXES, _MANAGED_OLD_PREFIX) if include_old else _MANAGED_TEMP_PREFIXES
     try:
         with os.scandir(pack_parent) as entries:
             candidates = list(entries)
     except OSError:
         return
     for entry in candidates:
-        if not entry.name.startswith(_MANAGED_TEMP_PREFIXES):
+        if not entry.name.startswith(prefixes):
             continue
         try:
             info = entry.stat(follow_symlinks=False)
@@ -220,6 +222,51 @@ def _sweep_managed_temps(pack_parent: Path) -> None:
                     pass
             except OSError:
                 pass
+
+
+def _restore_orphan_old_pack(pack_parent: Path, target_dir: Path) -> None:
+    if (
+        _path_exists_or_link(target_dir)
+        or not _path_exists_or_link(pack_parent)
+        or _is_link(pack_parent)
+        or not pack_parent.is_dir()
+    ):
+        return
+    try:
+        with os.scandir(pack_parent) as entries:
+            scanned = list(entries)
+    except OSError:
+        return
+    candidates: list[tuple[bool, int, Path]] = []
+    for entry in scanned:
+        if not entry.name.startswith(_MANAGED_OLD_PREFIX):
+            continue
+        try:
+            info = entry.stat(follow_symlinks=False)
+        except OSError:
+            continue
+        if (
+            entry.is_symlink()
+            or stat.S_ISLNK(info.st_mode)
+            or (getattr(info, "st_file_attributes", 0) & _REPARSE_ATTR)
+            or not stat.S_ISDIR(info.st_mode)
+        ):
+            continue
+        candidate_path = Path(entry.path)
+        manifest_path = candidate_path / "manifest.json"
+        has_manifest = (
+            _path_exists_or_link(manifest_path)
+            and not _is_link(manifest_path)
+            and manifest_path.is_file()
+        )
+        candidates.append((has_manifest, getattr(info, "st_mtime_ns", 0), candidate_path))
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    for _, _, candidate_path in candidates:
+        try:
+            os.replace(candidate_path, target_dir)
+            return
+        except OSError:
+            continue
 
 
 def _snapshot_tree_paths(root: Path) -> frozenset[str] | None:
@@ -943,7 +990,9 @@ def _stage_and_swap(
         raise AssetPackError("unsafe_target_path", "Asset pack target directory cannot be a link", 409)
 
     pack_parent.mkdir(parents=True, exist_ok=True)
-    _sweep_managed_temps(pack_parent)
+    if not _path_exists_or_link(target_dir):
+        _restore_orphan_old_pack(pack_parent, target_dir)
+    _sweep_managed_temps(pack_parent, include_old=False)
     staging_dir = Path(tempfile.mkdtemp(prefix=".tmp-asset-pack-", dir=pack_parent))
     backup_dir: Path | None = None
     swapped_old = False
@@ -985,8 +1034,10 @@ def _stage_and_swap(
     finally:
         if _path_exists_or_link(staging_dir):
             _rmtree_managed_best_effort(staging_dir)
-        if swapped_new and backup_dir is not None and _path_exists_or_link(backup_dir):
-            _rmtree_managed_best_effort(backup_dir)
+        if swapped_new:
+            if backup_dir is not None and _path_exists_or_link(backup_dir):
+                _rmtree_managed_best_effort(backup_dir)
+            _sweep_managed_temps(pack_parent, include_old=True)
 
     return get_status()
 
@@ -1133,7 +1184,7 @@ def uninstall_pack() -> dict[str, Any]:
         target_dir = pack_parent / "amadeus-original"
         if _path_exists_or_link(pack_parent) and _is_link(pack_parent):
             raise AssetPackError("unsafe_target_path", "Asset pack parent directory cannot be a link", 409)
-        _sweep_managed_temps(pack_parent)
+        _sweep_managed_temps(pack_parent, include_old=False)
         if _path_exists_or_link(target_dir):
             if _is_link(target_dir):
                 raise AssetPackError("unsafe_target_path", "Asset pack target directory cannot be a link", 409)
@@ -1158,6 +1209,7 @@ def uninstall_pack() -> dict[str, Any]:
                     except OSError:
                         pass
                 raise AssetPackError("asset_pack_remove_failed", f"Failed to remove asset pack: {exc}", 500) from exc
+        _sweep_managed_temps(pack_parent, include_old=True)
         if pack_parent.is_dir():
             try:
                 pack_parent.rmdir()
