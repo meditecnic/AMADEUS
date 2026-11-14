@@ -49,7 +49,7 @@ import { ConfirmDialog } from '../workstation/ConfirmDialog';
 import { sessionDialogFallback } from '../workstation/focusHandoff';
 import { useExitPresence } from '../workstation/useExitPresence';
 import { chatCheckMessage, requestChatCheck, type ChatCheckState } from '../workstation/ConnectionCheck';
-import { DataPanel } from '../workstation/DataPanel';
+import { DataPanel, RelocationRestartBanner, type DataRelocationState } from '../workstation/DataPanel';
 import { AssetPackGroup } from '../workstation/AssetPackGroup';
 import { UsagePanel } from '../workstation/UsagePanel';
 import { AboutPanel } from '../workstation/AboutPanel';
@@ -373,6 +373,22 @@ export const Workstation: React.FC<WorkstationProps> = ({
     code: string;
   } | null>(null);
   const [menuSection, setMenuSection] = useState<MenuSection>('worldline');
+  const [dataRelocation, setDataRelocation] = useState<DataRelocationState | null>(null);
+  const relocating = Boolean(dataRelocation);
+  const markDataRelocating = useCallback((path?: string) => {
+    setDataRelocation((cur) => {
+      if (cur) return path && !cur.path ? { ...cur, path } : cur;
+      return {
+        ...(path ? { path } : {}),
+        restartNote: '数据已迁移至新位置，需要重启 AMADEUS 才能继续使用。',
+      };
+    });
+  }, []);
+  const flagIfRelocating = useCallback(async (response: Response) => {
+    if (response.status !== 503) return;
+    const body = await response.clone().json().catch(() => null);
+    if (body?.detail?.code === 'data_relocating') markDataRelocating();
+  }, [markDataRelocating]);
   // The quiet update check, once per run; a waiting version is marked on the 系统 key and under 关于.
   const updates = useUpdates();
   const updateMark = updateWaiting(updates);
@@ -1425,7 +1441,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inputText.trim() || messageTooLong || conversationBusy || conversationReconnectEpoch !== null
-      || sessionState === 'rejected' || sessionState === 'unknown' || providerGone) return;
+      || sessionState === 'rejected' || sessionState === 'unknown' || providerGone || relocating) return;
     // Draft materialize (no conversation_id) always stamps okabe on the backend.
     // When the settings default is self, pre-create via API so mode is correct.
     // Okabe default keeps the existing draft path (zero regression for most sessions).
@@ -1496,6 +1512,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   };
 
   const selectConversation = async (conversation: ConversationSummary, force = false) => {
+    if (relocating) return false;
     if (!force && conversation.id === pendingConversationRef.current?.conversationId) return false;
     if (!force && conversation.id === activeConversationId) {
       if (pendingConversationRef.current) abandonConversationEntry();
@@ -1512,6 +1529,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       );
       if (!response.ok) {
         failedStatus = response.status;
+        await flagIfRelocating(response);
         throw new Error(`history query failed: ${response.status}`);
       }
       const rows = await response.json() as Array<{
@@ -1550,6 +1568,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     identityMode: IdentityMode = defaultIdentityMode,
     options: ConversationEntryOptions = {},
   ): Promise<ConversationCreateResult> => {
+    if (relocating) return { status: 'failed' };
     if (conversationBusy && !pendingConversationRef.current) return { status: 'failed' };
     const epoch = beginConversationEntry();
     setConversationCreateError(null);
@@ -1569,6 +1588,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         }),
       });
       if (!response.ok) {
+        await flagIfRelocating(response);
         const body = await response.json().catch(() => null);
         const code = body?.detail?.code;
         throw new Error(code === 'model_unavailable'
@@ -1593,6 +1613,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     conversation: ConversationSummary,
     patch: Record<string, unknown>,
   ) => {
+    if (relocating) throw new Error('data_relocating');
     const response = await apiFetch(`/api/conversations/${encodeURIComponent(conversation.id)}?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`,
       {
         method: 'PATCH',
@@ -1600,7 +1621,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
         body: JSON.stringify(patch),
       },
     );
-    if (!response.ok) throw new Error(`conversation update failed: ${response.status}`);
+    if (!response.ok) {
+      await flagIfRelocating(response);
+      throw new Error(`conversation update failed: ${response.status}`);
+    }
     const updated = await response.json() as ConversationSummary;
     // A list query sent before this write would land afterwards with the old provider/model.
     conversationRequestRef.current += 1;
@@ -1725,19 +1749,21 @@ export const Workstation: React.FC<WorkstationProps> = ({
   }, [activeConversationId, worldline]);
 
   const toggleConversationPin = (conversation: ConversationSummary) => {
+    if (relocating) return;
     void patchConversation(conversation, { is_pinned: !conversation.is_pinned }).catch((error) => {
       console.warn('Conversation pin update failed:', error);
     });
   };
 
   const deleteConversation = (conversation: ConversationSummary) => {
+    if (relocating) return;
     setDeleteError(null);
     setDeleteTarget(conversation);
   };
 
   const confirmDeleteConversation = async () => {
     const conversation = deleteTarget;
-    if (!conversation || deleteBusy) return;
+    if (!conversation || deleteBusy || relocating) return;
     setDeleteBusy(true);
     setDeleteError(null);
     const wasActive = conversation.id === activeConversationId;
@@ -1745,7 +1771,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
       const response = await apiFetch(`/api/conversations/${encodeURIComponent(conversation.id)}?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`,
         { method: 'DELETE' },
       );
-      if (!response.ok) throw new Error(`conversation delete failed: ${response.status}`);
+      if (!response.ok) {
+        await flagIfRelocating(response);
+        throw new Error(`conversation delete failed: ${response.status}`);
+      }
       if (presentationScopeRef.current !== presentationScope) return;
       // Commit the acknowledged deletion before optional list reconciliation.
       conversationRequestRef.current += 1;
@@ -1782,7 +1811,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   };
 
   const forgetConversation = async (forgetLongTerm: boolean) => {
-    if (!forgetTarget || conversationBusy) return;
+    if (!forgetTarget || conversationBusy || relocating) return;
     setConversationBusy(true);
     setForgetError(null);
     let waitingForSwitchAck = false;
@@ -1794,7 +1823,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
           body: JSON.stringify({ forget_long_term: forgetLongTerm }),
         },
       );
-      if (!response.ok) throw new Error(`conversation forget failed: ${response.status}`);
+      if (!response.ok) {
+        await flagIfRelocating(response);
+        throw new Error(`conversation forget failed: ${response.status}`);
+      }
       if (forgetTarget.id === activeConversationId) {
         audioPlayer.stopAll();
         waitingForSwitchAck = switchConversation(forgetTarget.id, []);
@@ -1871,6 +1903,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         }),
       });
       if (!response.ok) {
+        await flagIfRelocating(response);
         setAudioError('provider_config_save_failed');
         setCredentialStatus('error');
         throw new Error('provider_config_save_failed');
@@ -1886,6 +1919,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         body: JSON.stringify({ api_key: newSettings.apiKey.trim() }),
       });
       if (!response.ok) {
+        await flagIfRelocating(response);
         setAudioError('credential_save_failed');
         setCredentialStatus('error');
         throw new Error('credential_save_failed');
@@ -1904,6 +1938,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         }),
       });
       if (!response.ok) {
+        await flagIfRelocating(response);
         setWebSearchCredentialStatus('error');
         throw new Error('web_search_credential_save_failed');
       }
@@ -2059,7 +2094,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   /** Dispatch once now. Only ACK + final lock may publish the outer worldline. */
   const startShift = (to: 'steins_gate' | 'beta') => {
-    if (shiftRef.current || to === worldline) return;
+    if (relocating || shiftRef.current || to === worldline) return;
     entryInterruptedByShiftRef.current = pendingConversationRef.current !== null;
     if (entryInterruptedByShiftRef.current) abandonConversationEntry(false);
     // Leftover voice fades out (well before the commit point of the animation), then stops.
@@ -2125,7 +2160,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const lastAssistantId = [...visibleMessages].reverse().find((msg) => msg.role === 'assistant' && !msg.systemError)?.id;
   // An old conversation whose connection was removed keeps its history but must be re-pointed by the user.
   const providerGone = Boolean(activeConversation) && providers.length > 0 && (!activeProvider || activeProvider.enabled === false);
-  const sendBlocked = status !== 'READY' || sessionState === 'rejected' || sessionState === 'unknown' || isThinking || isSynthesizing || conversationBusy || conversationReconnectEpoch !== null || providerGone;
+  const sendBlocked = status !== 'READY' || sessionState === 'rejected' || sessionState === 'unknown' || isThinking || isSynthesizing || conversationBusy || conversationReconnectEpoch !== null || providerGone || relocating;
   useEffect(() => {
     if (!entering) handComposerFocus();
   }, [entering, sendBlocked, handComposerFocus]);
@@ -2309,6 +2344,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           searchQuery={conversationSearch}
           onSearchChange={setConversationSearch}
           onSelect={(conversation) => {
+            if (relocating) return;
             if (window.innerWidth < 1240) {
               setIsHistoryCollapsed(true);
               // The drawer's rows leave with it; the keyboard returns to the control that opened it.
@@ -2316,12 +2352,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
             }
             void selectConversation(conversation);
           }}
-          onNew={() => { void createConversation(defaultIdentityMode); }}
-          onRename={async (conversation, title) => { await patchConversation(conversation, { title }); }}
+          onNew={() => { if (!relocating) void createConversation(defaultIdentityMode); }}
+          onRename={async (conversation, title) => { if (!relocating) await patchConversation(conversation, { title }); }}
           onTogglePin={toggleConversationPin}
           onDelete={(conversation) => { void deleteConversation(conversation); }}
-          onForget={(conversation) => { setForgetError(null); setForgetTarget(conversation); }}
-          busy={conversationBusy && !pendingConversation}
+          onForget={(conversation) => { if (relocating) return; setForgetError(null); setForgetTarget(conversation); }}
+          busy={relocating || (conversationBusy && !pendingConversation)}
           loadFailed={conversationListFailed && conversationListWorldline !== worldline}
           refreshFailed={conversationListFailed && conversationListWorldline === worldline}
           onRetry={() => { void loadConversations().catch(() => undefined); }}
@@ -2477,7 +2513,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
           </div>
         )}
         {/* it reads the data status: not before the login has unlocked this */}
-        {!locked && <RestoreNotice onOpen={() => openMenu('data')} />}
+        {!locked && !dataRelocation && <RestoreNotice onOpen={() => openMenu('data')} />}
+        {!isSettingsOpen && dataRelocation && <RelocationRestartBanner state={dataRelocation} onUpdate={setDataRelocation} />}
         {/* The composer under the log, in its text column: what she is running on over the slot, the slot, and the
             sheet's own send key in your margin (SG a clock hand, β a Nixie filament; workstation/SendKey.tsx). */}
         <form className="ws2-composer" onSubmit={handleSend}>
@@ -2509,7 +2546,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                 activeProviderId={activeProviderId}
                 activeModelId={activeConversation?.model_id || model}
                 models={shelved(modelShelf, activeProviderId, availableModels, activeConversation?.model_id || model)}
-                disabled={conversationBusy}
+                disabled={conversationBusy || relocating}
                 lockProvider={isThinking || isSynthesizing}
                 searchable
                 onManageConnections={() => openMenu('connections')}
@@ -2819,13 +2856,19 @@ export const Workstation: React.FC<WorkstationProps> = ({
         {/* Fixed slots keep the embedded SettingsModal mounted across sections, so unsaved drafts survive. */}
         {menuMounted && (
         <div className="ws2-conn">
+        {isSettingsOpen && dataRelocation && (
+          <div className="ws2-conn-relocate">
+            <RelocationRestartBanner state={dataRelocation} onUpdate={setDataRelocation} />
+          </div>
+        )}
         <div className="ws2-conn-detail">
         {menuSection === 'worldline' && (
           <WorldlinePanel
             worldline={worldline}
-            busy={Boolean(shift)}
+            busy={Boolean(shift) || relocating}
             ledger={worldlineLedger}
             onShift={(to) => {
+              if (relocating) return;
               if (isThinking || isSynthesizing || isPlaying) setShiftConfirm(to);
               else startShift(to);
             }}
@@ -2836,7 +2879,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
             providers={providers}
             activeProviderId={activeProviderId}
             activeModelId={activeModelId}
-            locked={isThinking || isSynthesizing || conversationBusy}
+            locked={isThinking || isSynthesizing || conversationBusy || relocating}
+            relocating={relocating}
+            onRelocating={() => markDataRelocating()}
             checkFor={(providerId, modelId) => chatChecks[checkKey(providerId, modelId)]}
             onCheck={(providerId, modelId) => runChatCheck(providerId, modelId)}
             onUse={changeProvider}
@@ -2867,14 +2912,18 @@ export const Workstation: React.FC<WorkstationProps> = ({
             <div className="ws2-m-group">语音合成</div>
           </div>
         )}
-        {menuSection === 'data' && <DataPanel />}
+        {menuSection === 'data' && (
+          <DataPanel relocation={dataRelocation} onRelocationChange={setDataRelocation} />
+        )}
         {menuSection === 'usage' && (
           <UsagePanel
             conversationId={activeConversationId}
             providerName={(id) => providers.find((row) => row.id === id)?.display_name ?? id}
           />
         )}
-        {menuSection === 'about' && <AboutPanel />}
+        {menuSection === 'about' && (
+          <AboutPanel relocating={relocating} onRelocating={() => markDataRelocating()} />
+        )}
         <div className="ws2-settings-host" hidden={menuSection !== 'sound' && menuSection !== 'character'}>
       <SettingsModal
         variant="embedded"
@@ -2926,12 +2975,16 @@ export const Workstation: React.FC<WorkstationProps> = ({
             configured: Boolean(row.configured),
           }))}
         onCreateCustomProfile={async (input) => {
+          if (relocating) throw new Error('data_relocating');
           const response = await apiFetch('/api/providers/custom-profiles', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(input),
           });
-          if (!response.ok) throw new Error('profile_create_failed');
+          if (!response.ok) {
+            await flagIfRelocating(response);
+            throw new Error('profile_create_failed');
+          }
           // The backend creates it as pending; it joins the chat selector once the check passes or it is enabled by hand.
           const created = await response.json() as { provider_id: string; default_model?: string; configuration_version?: string | null };
           await loadProviders();
@@ -2940,10 +2993,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
           if (result?.status === 'ok') await admitProvider(created.provider_id, created.default_model, created.configuration_version);
         }}
         onDisableCustomProfile={async (providerId) => {
+          if (relocating) throw new Error('data_relocating');
           const response = await apiFetch(`/api/providers/custom-profiles/${encodeURIComponent(providerId)}`,
             { method: 'DELETE' },
           );
-          if (!response.ok) throw new Error('profile_disable_failed');
+          if (!response.ok) {
+            await flagIfRelocating(response);
+            throw new Error('profile_disable_failed');
+          }
           // Keep the current selection so the user sees「已停用/不可用」until
           // they explicitly pick another provider — never auto-jump to DeepSeek.
           await loadProviders();

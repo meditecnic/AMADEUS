@@ -9,16 +9,21 @@ const shellMock = vi.hoisted(() => ({
   saveBlob: vi.fn<(blob: Blob, name: string) => Promise<void>>(async () => undefined),
 }));
 
-vi.mock('./shell', () => ({
-  get inShell() {
-    return shellMock.inShell;
-  },
-  pickPath: shellMock.pickPath,
-  restartApp: shellMock.restartApp,
-  revealInFolder: shellMock.revealInFolder,
-  saveBlob: shellMock.saveBlob,
-}));
+vi.mock('./shell', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./shell')>();
+  return {
+    ...actual,
+    get inShell() {
+      return shellMock.inShell;
+    },
+    pickPath: shellMock.pickPath,
+    restartApp: shellMock.restartApp,
+    revealInFolder: shellMock.revealInFolder,
+    saveBlob: shellMock.saveBlob,
+  };
+});
 
+import { AboutPanel } from './AboutPanel';
 import { DataPanel } from './DataPanel';
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -448,5 +453,52 @@ describe('DataPanel', () => {
     const alert = await within(dialog).findByRole('alert');
     expect(alert).toHaveTextContent('旧数据目录已不存在或未记录。');
     expect(screen.getByRole('alertdialog', { name: '删除旧数据目录？' })).toBeInTheDocument();
+  });
+});
+
+describe('DataPanel controlled relocation & AboutPanel lock', () => {
+  it('skips mount fetches and suppresses duplicate inline banner when controlled with an active relocation', async () => {
+    const onRelocationChange = vi.fn();
+    render(
+      <div className="ws2">
+        <DataPanel relocation={{ path: '/mnt/new-amadeus' }} onRelocationChange={onRelocationChange} />
+      </div>,
+    );
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(calls).toHaveLength(0);
+    expect(screen.queryByTestId('location-restart-required')).toBeNull();
+    expect(screen.getByText('/mnt/new-amadeus')).toBeInTheDocument();
+    expect(screen.getByLabelText('目标数据目录')).toBeDisabled();
+    expect(screen.getByRole('button', { name: '检查目标目录' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '开始迁移并重启' })).toBeDisabled();
+    expect(screen.getByText('数据已迁移，重启 AMADEUS 后可查看或修改。')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '设口令' })).toBeNull();
+    expect(screen.getByRole('button', { name: '立即备份' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '导出' })).toBeDisabled();
+  });
+
+  it('locks AboutPanel diagnostic bundle generation during relocation and flags 503 data_relocating', async () => {
+    const onRelocating = vi.fn();
+    const { rerender } = render(<div className="ws2"><AboutPanel relocating onRelocating={onRelocating} /></div>);
+
+    expect(screen.getByTestId('about-relocating-note')).toHaveTextContent('数据已迁移至新位置，重启后才能生成反馈包。');
+    expect(screen.getByRole('button', { name: '生成反馈包' })).toBeDisabled();
+
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/diagnostics/bundle') {
+        return json(503, { detail: { code: 'data_relocating', message: 'relocating' } });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    }));
+
+    rerender(<div className="ws2"><AboutPanel relocating={false} onRelocating={onRelocating} /></div>);
+    fireEvent.click(screen.getByRole('button', { name: '生成反馈包' }));
+
+    await waitFor(() => expect(onRelocating).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole('alert')).toHaveTextContent('数据已迁移至新位置，需立即重启 AMADEUS 完成切换。');
   });
 });

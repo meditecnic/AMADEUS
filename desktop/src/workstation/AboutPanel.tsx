@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { errorText } from './DataPanel';
-import { diagnosticsBundle, formatBytes } from './dataApi';
+import { ApiError, diagnosticsBundle, formatBytes } from './dataApi';
 import { CC_BY_NC_URL, inShell, ISSUES_URL, JINA_MODEL_URL, licensesManifest, NOTICES_URL, openExternal, revealInFolder } from './shell';
 import { appVersion, checkForUpdate, installUpdate, useUpdates, type UpdateState } from './updates';
 
@@ -74,7 +74,13 @@ function UpdateRows({ state }: { state: UpdateState }) {
   );
 }
 
-export function AboutPanel() {
+export function AboutPanel({
+  relocating = false,
+  onRelocating,
+}: {
+  relocating?: boolean;
+  onRelocating?: () => void;
+} = {}) {
   const updates = useUpdates();
   const [version, setVersion] = useState<string | null | undefined>(undefined);
   const [bundle, setBundle] = useState<{ path: string; size: number } | null>(null);
@@ -89,11 +95,15 @@ export function AboutPanel() {
   }, []);
 
   const makeBundle = async () => {
+    if (bundling || relocating) return;
     setBundling(true);
     setBundleError(null);
     try {
       setBundle(await diagnosticsBundle());
     } catch (failure) {
+      if (failure instanceof ApiError && failure.code === 'data_relocating') {
+        onRelocating?.();
+      }
       setBundleError(errorText(failure, '反馈包没有生成。'));
     } finally {
       setBundling(false);
@@ -167,18 +177,22 @@ export function AboutPanel() {
           </div>
         ) : null}
         <div className="ws2-m-foot">
-          {bundleError ? <p className="ws2-m-note is-bad" role="alert">{bundleError}</p> : null}
+          {relocating ? (
+            <p className="ws2-m-note is-bad" role="status" data-testid="about-relocating-note">数据已迁移至新位置，重启后才能生成反馈包。</p>
+          ) : bundleError ? (
+            <p className="ws2-m-note is-bad" role="alert">{bundleError}</p>
+          ) : null}
           {/* first the bundle, then the issue page: whichever comes next is the plate */}
           <span className="ws2-m-acts">
             {bundle ? (
-              <button type="button" className="ws2-m-link" onClick={() => { void makeBundle(); }} disabled={bundling}>{bundling ? '生成中…' : '重新生成'}</button>
+              <button type="button" className="ws2-m-link" onClick={() => { void makeBundle(); }} disabled={bundling || relocating}>{bundling ? '生成中…' : '重新生成'}</button>
             ) : (
               <button type="button" className="ws2-m-link" onClick={() => shell(() => openExternal(ISSUES_URL))}>直接去问题页</button>
             )}
             {bundle ? (
               <button type="button" className="ws2-m-btn" onClick={() => shell(() => openExternal(ISSUES_URL))}>去问题页</button>
             ) : (
-              <button type="button" className="ws2-m-btn" onClick={() => { void makeBundle(); }} disabled={bundling}>{bundling ? '生成中…' : '生成反馈包'}</button>
+              <button type="button" className="ws2-m-btn" onClick={() => { void makeBundle(); }} disabled={bundling || relocating}>{bundling ? '生成中…' : '生成反馈包'}</button>
             )}
           </span>
         </div>

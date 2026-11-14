@@ -145,6 +145,13 @@ export function devMockPlugin(): Plugin {
             const target = path.resolve(root, decodeURIComponent(url.pathname.slice('/api/asset-pack/'.length)));
             const type = PACK_TYPES[path.extname(target).toLowerCase()];
             if (!target.startsWith(root + path.sep) || !type || !fs.existsSync(target) || !fs.statSync(target).isFile()) {
+              if (url.pathname === '/api/asset-pack/manifest.json' && target.startsWith(root + path.sep) && !fs.existsSync(target)) {
+                response.setHeader('Content-Type', 'application/json; charset=utf-8');
+                response.setHeader('Cache-Control', 'no-store');
+                response.statusCode = 200;
+                response.end(JSON.stringify({ installed: false }));
+                return;
+              }
               response.statusCode = 404;
               response.end();
               return;

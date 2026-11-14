@@ -42,11 +42,89 @@ const ERRORS: Record<string, string> = {
   invalid_export_scope: '这种导出不支持。',
   export_unavailable: '现在导不出来。',
   data_unavailable: '数据库现在打不开。',
+  data_relocating: '数据已迁移至新位置，需立即重启 AMADEUS 完成切换。',
 };
 export const errorText = (error: unknown, fallback: string) => {
   const code = error instanceof ApiError ? error.code : null;
   return code ? ERRORS[code] ?? `${fallback}（${code}）` : fallback;
 };
+
+export type DataRelocationState = {
+  path?: string;
+  restartNote?: string;
+};
+
+export function isDataRelocatingFailure(failure: unknown): boolean {
+  return failure instanceof ApiError && failure.code === 'data_relocating';
+}
+
+function defaultRestartNote(inDesktopShell: boolean): string {
+  return inDesktopShell
+    ? '请点击「立即重启」切换到新目录；如未能自动重启，请手动关闭并重新打开 AMADEUS。'
+    : '当前不在桌面端外壳中，无法自动重启；请手动重启本地服务并刷新页面以切换到新目录。';
+}
+
+/** Persistent banner rendered once relocation completes and awaits an app restart. */
+export function RelocationRestartBanner({
+  state,
+  onUpdate,
+}: {
+  state: DataRelocationState;
+  onUpdate?: (next: DataRelocationState) => void;
+}) {
+  const [restarting, setRestarting] = useState(false);
+
+  const triggerRestart = async () => {
+    if (restarting) return;
+    if (!inShell) {
+      onUpdate?.({
+        ...state,
+        restartNote: defaultRestartNote(false),
+      });
+      return;
+    }
+    setRestarting(true);
+    onUpdate?.({
+      ...state,
+      restartNote: '正在尝试重启 AMADEUS 以切换到新目录…',
+    });
+    try {
+      await restartApp();
+    } catch {
+      onUpdate?.({
+        ...state,
+        restartNote: '自动重启失败，请点击「立即重启」重试，或手动关闭并重新打开 AMADEUS。',
+      });
+    } finally {
+      setRestarting(false);
+    }
+  };
+
+  return (
+    <div className="ws2-loc-restart" role="status" data-testid="location-restart-required">
+      <div className="ws2-loc-restart-copy">
+        <strong>
+          {state.path ? (
+            <>
+              数据已迁移到 <span className="ws2-path">{state.path}</span>，需要重启 AMADEUS 才能生效（相关操作已锁定）。
+            </>
+          ) : (
+            '数据已迁移至新位置，需要重启 AMADEUS 才能生效（相关操作已锁定）。'
+          )}
+        </strong>
+        <p className="ws2-m-note">{state.restartNote || defaultRestartNote(inShell)}</p>
+      </div>
+      <button
+        type="button"
+        className="ws2-m-btn"
+        onClick={() => { void triggerRestart(); }}
+        disabled={restarting}
+      >
+        {restarting ? '正在重启…' : '立即重启'}
+      </button>
+    </div>
+  );
+}
 
 /** Dialogs belong on the sheet, over everything, not inside the scrolling form. */
 function OnSheet({ anchor, children }: { anchor: React.RefObject<HTMLElement | null>; children: ReactNode }) {
@@ -54,14 +132,40 @@ function OnSheet({ anchor, children }: { anchor: React.RefObject<HTMLElement | n
   return root ? createPortal(children, root) : <>{children}</>;
 }
 
-export function DataPanel() {
+export function DataPanel({
+  relocation,
+  onRelocationChange,
+}: {
+  relocation?: DataRelocationState | null;
+  onRelocationChange?: (next: DataRelocationState) => void;
+} = {}) {
   const anchor = useRef<HTMLDivElement>(null);
+  const controlled = Boolean(onRelocationChange || relocation !== undefined);
+  const [localRelocation, setLocalRelocation] = useState<DataRelocationState | null>(null);
+  const activeRelocation = relocation !== undefined ? relocation : localRelocation;
+  const reportRelocation = (next: DataRelocationState) => {
+    if (onRelocationChange) onRelocationChange(next);
+    else setLocalRelocation(next);
+  };
+  const flagRelocating = (path?: string) => {
+    reportRelocation({
+      ...(activeRelocation ?? {}),
+      ...(path && !activeRelocation?.path ? { path } : {}),
+      restartNote: activeRelocation?.restartNote ?? '数据迁移已在进行或已完成，需要重启 AMADEUS 才能继续使用。',
+    });
+  };
+  const relocated = Boolean(activeRelocation);
   return (
     <div className="ws2-data" ref={anchor}>
-      <PasscodeGroup />
-      <BackupGroup anchor={anchor} />
-      <ExportGroup />
-      <LocationGroup anchor={anchor} />
+      <PasscodeGroup relocated={relocated} onRelocating={() => flagRelocating()} />
+      <BackupGroup anchor={anchor} relocated={relocated} onRelocating={() => flagRelocating()} />
+      <ExportGroup relocated={relocated} onRelocating={() => flagRelocating()} />
+      <LocationGroup
+        anchor={anchor}
+        relocation={activeRelocation}
+        onRelocate={reportRelocation}
+        renderBannerInline={!controlled}
+      />
     </div>
   );
 }
@@ -70,7 +174,7 @@ export function DataPanel() {
 
 type PasscodeMode = 'view' | 'set' | 'change' | 'off';
 
-function PasscodeGroup() {
+function PasscodeGroup({ relocated, onRelocating }: { relocated: boolean; onRelocating: () => void }) {
   const [auth, setAuth] = useState<AuthState | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [mode, setMode] = useState<PasscodeMode>('view');
@@ -83,17 +187,25 @@ function PasscodeGroup() {
   const firstField = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    if (relocated) return;
     let live = true;
-    authState().then((state) => { if (live) setAuth(state); }, (failure) => { if (live) setLoadError(errorText(failure, '读不到口令的状态。')); });
+    authState().then(
+      (state) => { if (live) setAuth(state); },
+      (failure) => {
+        if (!live) return;
+        if (isDataRelocatingFailure(failure)) { onRelocating(); return; }
+        setLoadError(errorText(failure, '读不到口令的状态。'));
+      },
+    );
     return () => { live = false; };
-  }, []);
+  }, [relocated]);
   useEffect(() => { if (mode !== 'view') firstField.current?.focus({ preventScroll: true }); }, [mode]);
 
   const open = (to: PasscodeMode) => { setMode(to); setCurrent(''); setNext(''); setAgain(''); setError(null); setDone(null); };
   const set = Boolean(auth?.passcode_set);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (busy) return;
+    if (busy || relocated) return;
     if (mode !== 'off') {
       if (!next.trim()) { setError('口令不能是空白。'); return; }
       if (next !== again) { setError('两次输入的不一样。'); return; }
@@ -106,6 +218,7 @@ function PasscodeGroup() {
       setDone(mode === 'set' ? '口令已设好，下次打开时会问。' : mode === 'change' ? '口令已改好。' : '口令已关掉，下次打开不再问。');
       setMode('view');
     } catch (failure) {
+      if (isDataRelocatingFailure(failure)) onRelocating();
       setError(errorText(failure, '口令没有改成。'));
     } finally {
       setBusy(false);
@@ -121,12 +234,12 @@ function PasscodeGroup() {
           {loadError ? <small className="is-bad">{loadError}</small>
             : auth?.passcode_error ? <small className="is-bad">口令文件读不出来，现在打开时不会问口令；重新设一个即可。</small>
               : done ? <small className="is-done">{done}</small>
-                : <small>{auth ? (set ? '已设口令' : '没有口令，打开即进') : '读取中…'}</small>}
+                : <small>{auth ? (set ? '已设口令' : '没有口令，打开即进') : relocated ? '数据已迁移，重启 AMADEUS 后可查看或修改。' : '读取中…'}</small>}
         </div>
         {auth && mode === 'view' ? (
           <span className="ws2-m-acts">
-            {set ? <button type="button" className="ws2-m-link" onClick={() => open('off')}>关掉口令</button> : null}
-            <button type="button" className="ws2-m-btn" onClick={() => open(set ? 'change' : 'set')}>{set ? '改口令' : '设口令'}</button>
+            {set ? <button type="button" className="ws2-m-link" onClick={() => open('off')} disabled={relocated}>关掉口令</button> : null}
+            <button type="button" className="ws2-m-btn" onClick={() => open(set ? 'change' : 'set')} disabled={relocated}>{set ? '改口令' : '设口令'}</button>
           </span>
         ) : null}
       </div>
@@ -135,18 +248,18 @@ function PasscodeGroup() {
           {set ? (
             <label className="ws2-m-field">
               <span>现在的口令</span>
-              <input ref={firstField} type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} disabled={busy} />
+              <input ref={firstField} type="password" autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} disabled={busy || relocated} />
             </label>
           ) : null}
           {mode !== 'off' ? (
             <>
               <label className="ws2-m-field">
                 <span>新口令</span>
-                <input ref={set ? undefined : firstField} type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} disabled={busy} />
+                <input ref={set ? undefined : firstField} type="password" autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} disabled={busy || relocated} />
               </label>
               <label className="ws2-m-field">
                 <span>再输一次</span>
-                <input type="password" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value)} disabled={busy} />
+                <input type="password" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value)} disabled={busy || relocated} />
               </label>
             </>
           ) : null}
@@ -154,7 +267,7 @@ function PasscodeGroup() {
             {error ? <p className="ws2-m-error" role="alert">{error}</p> : <span />}
             <span className="ws2-m-acts">
               <button type="button" className="ws2-m-link" onClick={() => setMode('view')} disabled={busy}>取消</button>
-              <button type="submit" className="ws2-m-btn" disabled={busy}>{busy ? '保存中…' : mode === 'off' ? '关掉口令' : '保存口令'}</button>
+              <button type="submit" className="ws2-m-btn" disabled={busy || relocated}>{busy ? '保存中…' : mode === 'off' ? '关掉口令' : '保存口令'}</button>
             </span>
           </div>
         </form>
@@ -166,7 +279,7 @@ function PasscodeGroup() {
 
 /* ---------- backups ---------- */
 
-function BackupGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null> }) {
+function BackupGroup({ anchor, relocated, onRelocating }: { anchor: React.RefObject<HTMLElement | null>; relocated: boolean; onRelocating: () => void }) {
   const [backups, setBackups] = useState<Backup[] | null>(null);
   const [restoreFailed, setRestoreFailed] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -178,6 +291,7 @@ function BackupGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null> }
   const [askError, setAskError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (relocated) return;
     let live = true;
     dataStatus().then((status) => {
       if (!live) return;
@@ -185,11 +299,16 @@ function BackupGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null> }
       if (status.status === 'restore_failed') setRestoreFailed(status.detail ?? '');
       // A restore scheduled earlier (before this page was opened, or before a reload) is still waiting.
       setScheduled(status.backups.find((row) => row.id === status.restore_pending) ?? null);
-    }, (failure) => { if (live) setLoadError(errorText(failure, '读不到备份。')); });
+    }, (failure) => {
+      if (!live) return;
+      if (isDataRelocatingFailure(failure)) { onRelocating(); return; }
+      setLoadError(errorText(failure, '读不到备份。'));
+    });
     return () => { live = false; };
-  }, []);
+  }, [relocated]);
 
   const make = async () => {
+    if (making || relocated) return;
     setMaking(true);
     setNote(null);
     try {
@@ -198,6 +317,7 @@ function BackupGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null> }
       setBackups(status.backups);
       setNote({ text: `已备份（${formatStamp(status.backups.find((row) => row.id === made.id)?.time ?? null)}）。` });
     } catch (failure) {
+      if (isDataRelocatingFailure(failure)) onRelocating();
       setNote({ text: errorText(failure, '备份没有完成。'), bad: true });
     } finally {
       setMaking(false);
@@ -205,7 +325,7 @@ function BackupGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null> }
   };
 
   const answer = async () => {
-    if (!asking) return;
+    if (!asking || relocated) return;
     setBusy(true);
     setAskError(null);
     try {
@@ -218,6 +338,7 @@ function BackupGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null> }
       }
       setAsking(null);
     } catch (failure) {
+      if (isDataRelocatingFailure(failure)) onRelocating();
       setAskError(errorText(failure, asking.kind === 'restore' ? '没能安排恢复。' : '没能删除。'));
     } finally {
       setBusy(false);
@@ -226,6 +347,7 @@ function BackupGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null> }
 
   const [calling, setCalling] = useState(false);
   const callOff = async () => {
+    if (calling || relocated) return;
     setCalling(true);
     setNote(null);
     try {
@@ -233,6 +355,7 @@ function BackupGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null> }
       setScheduled(null);
       setNote({ text: '已取消恢复，数据保持现在的样子。' });
     } catch (failure) {
+      if (isDataRelocatingFailure(failure)) onRelocating();
       // restore_not_pending: it was already called off, or has already run.
       if (failure instanceof ApiError && failure.code === 'restore_not_pending') setScheduled(null);
       setNote({ text: errorText(failure, '没能取消。'), bad: true });
@@ -262,7 +385,7 @@ function BackupGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null> }
       {scheduled ? (
         <p className="ws2-m-flag" role="status">
           已安排：下次打开 AMADEUS 时，数据换成 {formatStamp(scheduled.time)} 的备份。现在关掉再打开即可。
-          <button type="button" className="ws2-m-link" onClick={() => { void callOff(); }} disabled={calling}>{calling ? '取消中…' : '取消恢复'}</button>
+          <button type="button" className="ws2-m-link" onClick={() => { void callOff(); }} disabled={calling || relocated}>{calling ? '取消中…' : '取消恢复'}</button>
         </p>
       ) : null}
       <div className="ws2-m-row">
@@ -272,10 +395,11 @@ function BackupGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null> }
             : <small>手动的备份不会被自动删除</small>}
         </div>
         <span className="ws2-m-acts">
-          <button type="button" className="ws2-m-btn" onClick={() => { void make(); }} disabled={making || !backups}>{making ? '备份中…' : '立即备份'}</button>
+          <button type="button" className="ws2-m-btn" onClick={() => { void make(); }} disabled={making || !backups || relocated}>{making ? '备份中…' : '立即备份'}</button>
         </span>
       </div>
       {loadError ? <p className="ws2-m-note is-bad">{loadError}</p> : null}
+      {!backups && relocated && !loadError ? <p className="ws2-m-note">数据已迁移，重启 AMADEUS 后可查看与操作备份。</p> : null}
       {backups && backups.length === 0 ? <p className="ws2-m-note">还没有备份。</p> : null}
       {backups && backups.length > 0 ? (
         <ol className="ws2-backups" aria-label="备份">
@@ -297,6 +421,7 @@ function BackupGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null> }
                         className="ws2-m-link"
                         aria-label={`恢复到 ${formatStamp(row.time)} 的备份`}
                         onClick={() => { setAskError(null); setAsking({ kind: 'restore', backup: row }); }}
+                        disabled={relocated}
                       >
                         恢复
                       </button>
@@ -306,7 +431,7 @@ function BackupGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null> }
                     className="ws2-m-link is-danger"
                     aria-label={`删除 ${formatStamp(row.time ?? idTime(row.id))} 的备份`}
                     onClick={() => { setAskError(null); setAsking({ kind: 'delete', backup: row }); }}
-                    disabled={pending}
+                    disabled={pending || relocated}
                   >
                     删除
                   </button>
@@ -358,7 +483,7 @@ function BackupGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null> }
 
 type Worldlines = ExportRequest['worldline'];
 
-function ExportGroup() {
+function ExportGroup({ relocated, onRelocating }: { relocated: boolean; onRelocating: () => void }) {
   const [kind, setKind] = useState<'conversations' | 'memory'>('conversations');
   const [format, setFormat] = useState<'md' | 'json'>('md');
   const [worldline, setWorldline] = useState<Worldlines>('all');
@@ -366,6 +491,7 @@ function ExportGroup() {
   const [note, setNote] = useState<{ text: string; bad?: boolean } | null>(null);
 
   const run = async () => {
+    if (busy || relocated) return;
     setBusy(true);
     setNote(null);
     try {
@@ -374,6 +500,7 @@ function ExportGroup() {
       saveBlob(blob, filename);
       setNote({ text: `已导出 ${filename}` });
     } catch (failure) {
+      if (isDataRelocatingFailure(failure)) onRelocating();
       setNote({ text: errorText(failure, '没有导出来。'), bad: true });
     } finally {
       setBusy(false);
@@ -403,8 +530,9 @@ function ExportGroup() {
       </div>
       <div className="ws2-m-foot">
         {note ? <p className={`ws2-m-note ${note.bad ? 'is-bad' : 'is-done'}`} role="status">{note.text}</p>
-          : <p className="ws2-m-note">{kind === 'memory' ? '导出为一个 zip 文件，里面是记忆的 JSON。' : '导出为一个 zip 文件，每个会话一份。'}</p>}
-        <button type="button" className="ws2-m-btn" onClick={() => { void run(); }} disabled={busy}>{busy ? '导出中…' : '导出'}</button>
+          : relocated ? <p className="ws2-m-note is-bad" role="status">数据已迁移，重启 AMADEUS 后才能导出。</p>
+            : <p className="ws2-m-note">{kind === 'memory' ? '导出为一个 zip 文件，里面是记忆的 JSON。' : '导出为一个 zip 文件，每个会话一份。'}</p>}
+        <button type="button" className="ws2-m-btn" onClick={() => { void run(); }} disabled={busy || relocated}>{busy ? '导出中…' : '导出'}</button>
       </div>
     </section>
   );
@@ -441,7 +569,7 @@ const LOCATION_ERRORS: Record<string, string> = {
   location_not_movable: '当前数据位置由环境变量或外部配置指定，不能在应用内迁移。',
   data_unavailable: '当前数据库无法打开，不能进行迁移或清理。',
   warnings_not_acknowledged: '目标目录存在风险提示，请先勾选确认后再继续迁移。',
-  data_relocating: '数据迁移正在进行或已完成，请重启 AMADEUS 以使用新目录。',
+  data_relocating: '数据已迁移至新位置，需立即重启 AMADEUS 完成切换。',
   conversation_active: '她正在回话。等这一句说完再迁移数据。',
   restore_pending: '有一次恢复还没做完。先关掉 AMADEUS 再打开。',
   backup_busy: '正在进行备份，请等备份完成后再迁移。',
@@ -491,12 +619,17 @@ const toCheckResult = (detail: Record<string, unknown>): DataLocationCheckResult
   };
 };
 
-type MovePhase =
-  | { kind: 'idle' }
-  | { kind: 'moving' }
-  | { kind: 'moved'; path: string; restartNote: string };
-
-function LocationGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null> }) {
+function LocationGroup({
+  anchor,
+  relocation,
+  onRelocate,
+  renderBannerInline,
+}: {
+  anchor: React.RefObject<HTMLElement | null>;
+  relocation: DataRelocationState | null;
+  onRelocate: (next: DataRelocationState) => void;
+  renderBannerInline: boolean;
+}) {
   const [location, setLocation] = useState<DataLocation | null | 'absent'>(null);
   const [disk, setDisk] = useState<DiskUsage | null>(null);
   const [revealError, setRevealError] = useState<string | null>(null);
@@ -507,25 +640,91 @@ function LocationGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null>
   const [checkResult, setCheckResult] = useState<DataLocationCheckResult | null>(null);
   const [checkedPath, setCheckedPath] = useState<string | null>(null);
   const [ackWarnings, setAckWarnings] = useState(false);
-  const [movePhase, setMovePhase] = useState<MovePhase>({ kind: 'idle' });
+  const [moving, setMoving] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
-  const [restarting, setRestarting] = useState(false);
   const [confirmingDeletePrevious, setConfirmingDeletePrevious] = useState(false);
   const [deletingPrevious, setDeletingPrevious] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [cleanupToast, setCleanupToast] = useState<{ text: string; bad?: boolean } | null>(null);
 
+  const relocated = Boolean(relocation);
+
   useEffect(() => {
+    if (relocated) return;
     let live = true;
     // A backend without these routes (before report 212) simply leaves the group out.
-    dataLocation().then((value) => { if (live) setLocation(value); }, () => { if (live) setLocation('absent'); });
-    diskUsage().then((value) => { if (live) setDisk(value); }, () => undefined);
+    dataLocation().then(
+      (value) => { if (live) setLocation(value); },
+      (failure) => {
+        if (!live) return;
+        if (isDataRelocatingFailure(failure)) {
+          onRelocate({
+            ...(relocation ?? {}),
+            restartNote: '数据迁移已在进行或已完成，需要重启 AMADEUS 才能继续使用。',
+          });
+          return;
+        }
+        setLocation('absent');
+      },
+    );
+    diskUsage().then(
+      (value) => { if (live) setDisk(value); },
+      (failure) => {
+        if (live && isDataRelocatingFailure(failure)) {
+          onRelocate({
+            ...(relocation ?? {}),
+            restartNote: '数据迁移已在进行或已完成，需要重启 AMADEUS 才能继续使用。',
+          });
+        }
+      },
+    );
     return () => { live = false; };
-  }, []);
-  if (location === 'absent' || location === null) return null;
+  }, [relocated]);
+
+  if ((location === 'absent' || location === null) && !relocated) return null;
+
+  if (location === 'absent' || location === null) {
+    return (
+      <section className="ws2-m-sec" aria-labelledby="ws2-data-location">
+        <div className="ws2-m-group" id="ws2-data-location">数据位置</div>
+        <div className="ws2-m-row ws2-m-path">
+          <div className="ws2-m-label">
+            <b><span className="ws2-path">{relocation?.path || '新数据目录'}</span></b>
+            <small>已迁移至此位置（重启 AMADEUS 后生效）</small>
+          </div>
+        </div>
+        <div className="ws2-loc-move" data-testid="location-relocation-form">
+          <div className="ws2-loc-move-head">
+            <b>迁移数据位置</b>
+            <small>数据已迁移至新位置，需重启 AMADEUS 后才能继续管理目录或清理旧文件。</small>
+          </div>
+          <div className="ws2-loc-input-row">
+            <input
+              type="text"
+              className="ws2-loc-input ws2-path"
+              aria-label="目标数据目录"
+              value={relocation?.path ?? ''}
+              readOnly
+              disabled
+            />
+            {inShell ? <button type="button" className="ws2-m-btn" disabled>选择目录</button> : null}
+            <button type="button" className="ws2-m-btn" disabled>检查目标目录</button>
+          </div>
+          {renderBannerInline && relocation ? (
+            <RelocationRestartBanner state={relocation} onUpdate={onRelocate} />
+          ) : null}
+          <div className="ws2-loc-actions">
+            <p className="ws2-m-note">相关数据操作已锁定，请先重启 AMADEUS。</p>
+            <button type="button" className="ws2-m-btn" disabled>开始迁移并重启</button>
+          </div>
+        </div>
+        <p className="ws2-m-note">重启 AMADEUS 后再统计新位置占用。</p>
+      </section>
+    );
+  }
 
   const trimmedPath = targetPath.trim();
-  const moveLocked = movePhase.kind !== 'idle';
+  const moveLocked = moving || relocated;
   const currentCheck = checkResult && checkedPath === trimmedPath ? checkResult : null;
   const hasErrors = Boolean(currentCheck && (!currentCheck.ok || currentCheck.errors.length > 0));
   const hasWarnings = Boolean(currentCheck && currentCheck.warnings.length > 0);
@@ -574,61 +773,54 @@ function LocationGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null>
       setCheckResult(result);
       setCheckedPath(trimmedPath);
     } catch (failure) {
+      if (isDataRelocatingFailure(failure)) {
+        onRelocate({
+          ...(relocation ?? {}),
+          ...(trimmedPath && !relocation?.path ? { path: trimmedPath } : {}),
+          restartNote: '数据迁移已在进行或已完成，需要重启 AMADEUS 才能继续使用。',
+        });
+        return;
+      }
       setMoveError(locationErrorText(failure, '没能检查这个目标目录。'));
     } finally {
       setChecking(false);
     }
   };
 
-  const triggerRestart = async (movedPath: string) => {
-    if (!inShell) {
-      setMovePhase({
-        kind: 'moved',
-        path: movedPath,
-        restartNote: '当前不在桌面端外壳中，无法自动重启；请手动重启本地服务并刷新页面以切换到新目录。',
-      });
-      return;
-    }
-    setRestarting(true);
-    setMovePhase({
-      kind: 'moved',
-      path: movedPath,
-      restartNote: '正在尝试重启 AMADEUS 以切换到新目录…',
-    });
-    try {
-      await restartApp();
-    } catch {
-      setMovePhase({
-        kind: 'moved',
-        path: movedPath,
-        restartNote: '自动重启失败，请点击「立即重启」重试，或手动关闭并重新打开 AMADEUS。',
-      });
-    } finally {
-      setRestarting(false);
-    }
-  };
-
   const handleMove = async () => {
     if (!canStartMove || !trimmedPath) return;
-    setMovePhase({ kind: 'moving' });
+    setMoving(true);
     setMoveError(null);
     setCleanupToast(null);
     try {
       const result = await moveDataLocation(trimmedPath, ackWarnings);
+      setMoving(false);
       if (result.restart_required) {
-        await triggerRestart(result.path);
+        onRelocate({
+          path: result.path,
+          restartNote: inShell ? '正在尝试重启 AMADEUS 以切换到新目录…' : defaultRestartNote(false),
+        });
+        if (inShell) {
+          try {
+            await restartApp();
+          } catch {
+            onRelocate({
+              path: result.path,
+              restartNote: '自动重启失败，请点击「立即重启」重试，或手动关闭并重新打开 AMADEUS。',
+            });
+          }
+        }
       } else {
-        setMovePhase({ kind: 'idle' });
         setCleanupToast({ text: `数据已迁移到 ${result.path}。` });
         const next = await dataLocation().catch(() => null);
         if (next) setLocation(next);
       }
     } catch (failure) {
+      setMoving(false);
       if (failure instanceof ApiError && failure.detail && isCheckDetail(failure.detail)) {
         setCheckResult(toCheckResult(failure.detail));
         setCheckedPath(trimmedPath);
         if (failure.code === 'warnings_not_acknowledged') setAckWarnings(false);
-        setMovePhase({ kind: 'idle' });
         setMoveError(
           failure.code === 'warnings_not_acknowledged'
             ? LOCATION_ERRORS.warnings_not_acknowledged
@@ -636,22 +828,20 @@ function LocationGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null>
         );
         return;
       }
-      if (failure instanceof ApiError && failure.code === 'data_relocating') {
-        setMovePhase({
-          kind: 'moved',
-          path: trimmedPath,
+      if (isDataRelocatingFailure(failure)) {
+        onRelocate({
+          path: relocation?.path || trimmedPath,
           restartNote: '数据迁移已在进行或已完成，需要重启 AMADEUS 才能继续使用。',
         });
         return;
       }
-      setMovePhase({ kind: 'idle' });
       setMoveError(locationErrorText(failure, '数据迁移没有完成，原目录数据保持不变。'));
     }
   };
 
   const handleDeletePrevious = async () => {
     const oldPath = location.previous_path;
-    if (!oldPath || deletingPrevious) return;
+    if (!oldPath || deletingPrevious || moveLocked) return;
     setDeletingPrevious(true);
     setDeleteError(null);
     try {
@@ -661,10 +851,25 @@ function LocationGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null>
       try {
         const refreshed = await dataLocation();
         setLocation(refreshed);
-      } catch {
+      } catch (refreshFailure) {
+        if (isDataRelocatingFailure(refreshFailure)) {
+          onRelocate({
+            ...(relocation ?? {}),
+            restartNote: '数据迁移已在进行或已完成，需要重启 AMADEUS 才能继续使用。',
+          });
+          return;
+        }
         setLocation((prev) => (prev && prev !== 'absent' ? { ...prev, previous_path: null, previous_exists: false } : prev));
       }
     } catch (failure) {
+      if (isDataRelocatingFailure(failure)) {
+        setConfirmingDeletePrevious(false);
+        onRelocate({
+          ...(relocation ?? {}),
+          restartNote: '数据迁移已在进行或已完成，需要重启 AMADEUS 才能继续使用。',
+        });
+        return;
+      }
       setDeleteError(locationErrorText(failure, '没能删除旧数据目录。'));
     } finally {
       setDeletingPrevious(false);
@@ -770,27 +975,14 @@ function LocationGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null>
 
           {moveError ? <p className="ws2-m-error" role="alert">{moveError}</p> : null}
 
-          {movePhase.kind === 'moving' ? (
+          {moving ? (
             <p className="ws2-m-flag" role="status" data-testid="location-moving-notice">
               正在复制并校验数据，期间已锁定数据操作，请勿关闭 AMADEUS…
             </p>
           ) : null}
 
-          {movePhase.kind === 'moved' ? (
-            <div className="ws2-loc-restart" role="status" data-testid="location-restart-required">
-              <div className="ws2-loc-restart-copy">
-                <strong>数据已迁移到 <span className="ws2-path">{movePhase.path}</span>，需要重启 AMADEUS 才能生效（相关操作已锁定）。</strong>
-                <p className="ws2-m-note">{movePhase.restartNote}</p>
-              </div>
-              <button
-                type="button"
-                className="ws2-m-btn"
-                onClick={() => { void triggerRestart(movePhase.path); }}
-                disabled={restarting}
-              >
-                {restarting ? '正在重启…' : '立即重启'}
-              </button>
-            </div>
+          {renderBannerInline && relocation ? (
+            <RelocationRestartBanner state={relocation} onUpdate={onRelocate} />
           ) : null}
 
           <div className="ws2-loc-actions">
@@ -801,7 +993,7 @@ function LocationGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null>
               onClick={() => { void handleMove(); }}
               disabled={!canStartMove}
             >
-              {movePhase.kind === 'moving' ? '迁移中…' : '开始迁移并重启'}
+              {moving ? '迁移中…' : '开始迁移并重启'}
             </button>
           </div>
         </div>
@@ -902,7 +1094,11 @@ function LocationGroup({ anchor }: { anchor: React.RefObject<HTMLElement | null>
           </ul>
           <p className="ws2-m-note">记忆用的嵌入模型装在程序目录里，不算在这里。</p>
         </>
-      ) : <p className="ws2-m-note">正在量占用…</p>}
+      ) : relocation ? (
+        <p className="ws2-m-note">重启 AMADEUS 后再统计新位置占用。</p>
+      ) : (
+        <p className="ws2-m-note">正在量占用…</p>
+      )}
     </section>
   );
 }

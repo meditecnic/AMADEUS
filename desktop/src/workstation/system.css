@@ -625,8 +625,11 @@
 .ws2-loc-actions .ws2-m-note { flex: 1 1 260px; }
 .ws2-loc-restart {
   display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
-  padding: 10px 14px; border: 1px solid var(--ws-line-2); background: rgba(255, 255, 255, .025);
+  padding: 10px 14px; border: 1px solid var(--ws-line-2); border-left: 2px solid var(--ws-warn); background: rgba(255, 255, 255, .025);
 }
+.ws2-conn-relocate { margin-bottom: 18px; }
+.ws2-conn.is-split .ws2-conn-relocate { grid-column: 1 / -1; margin-bottom: 16px; }
+.ws2-talk .ws2-loc-restart { flex: none; margin-top: 0; }
 .ws2-loc-restart-copy { flex: 1 1 260px; min-width: 0; }
 .ws2-loc-restart-copy strong { font-weight: 400; font-size: 13px; color: var(--ws-ink); }
 .ws2-loc-restart-copy .ws2-m-note { margin-top: 4px; }

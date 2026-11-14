@@ -306,7 +306,7 @@ export function handleMemory(
     const { created_at: _created, ...row } = topic;
     return success({ ok: true, scope, topic: row });
   }
-  if (method === 'POST' && (/^\/observations\/[^/]+\/ignore$/.test(path) || /^\/jobs\/[^/]+\/retry$/.test(path))) {
+  if (method === 'POST' && (/^\/observations\/[^/]+\/(?:ignore|confirm)$/.test(path) || /^\/jobs\/[^/]+\/retry$/.test(path))) {
     return success({ ok: true, scope });
   }
   return failure(404, 'memory_endpoint_not_found');

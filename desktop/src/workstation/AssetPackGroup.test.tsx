@@ -256,4 +256,66 @@ describe('AssetPackGroup', () => {
     await screen.findByTestId('asset-pack-inspect-preview');
     expect(inspectCalls).toEqual([goodFile]);
   });
+
+  it('re-syncs pack status and reloads assetPack when DELETE fails with 500 after directory removal', async () => {
+    let statusFetchCount = 0;
+    vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const method = (init?.method ?? 'GET').toUpperCase();
+      if (url.endsWith('/api/data/asset-pack') && method === 'GET') {
+        statusFetchCount += 1;
+        return json(200, statusFetchCount === 1 ? INSTALLED_STATUS : UNINSTALLED_STATUS);
+      }
+      if (url.endsWith('/api/data/asset-pack') && method === 'DELETE') {
+        return json(500, { detail: { code: 'asset_pack_remove_failed', message: 'cleanup failed' } });
+      }
+      return json(404, {});
+    }));
+
+    const onNotice = vi.fn();
+    render(<AssetPackGroup onNotice={onNotice} />);
+
+    expect(await screen.findByText(/已完整安装/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '卸载素材包' }));
+    const dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: '确认卸载' }));
+
+    await waitFor(() => {
+      expect(packMock.reloadAssetPack).toHaveBeenCalledTimes(1);
+    });
+    expect(statusFetchCount).toBe(2);
+    expect(await screen.findByText('未安装')).toBeTruthy();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(onNotice).toHaveBeenCalledWith(expect.stringContaining('已同步刷新'), 'error');
+  });
+
+  it('keeps native path pickers single-flight and disabled while pickPath is pending', async () => {
+    shellMock.inShell = true;
+    let resolvePick!: (value: string | null) => void;
+    shellMock.pickPath.mockImplementation(
+      () => new Promise<string | null>((resolve) => {
+        resolvePick = resolve;
+      }),
+    );
+
+    vi.stubGlobal('fetch', vi.fn(async () => json(200, UNINSTALLED_STATUS)));
+
+    render(<AssetPackGroup />);
+    const zipBtn = (await screen.findByRole('button', { name: '选择 ZIP 包' })) as HTMLButtonElement;
+    const dirBtn = screen.getByRole('button', { name: '选择目录' }) as HTMLButtonElement;
+
+    fireEvent.click(zipBtn);
+    fireEvent.click(zipBtn);
+    expect(shellMock.pickPath).toHaveBeenCalledTimes(1);
+    expect(shellMock.pickPath).toHaveBeenCalledWith('zip');
+    expect(zipBtn.disabled).toBe(true);
+    expect(dirBtn.disabled).toBe(true);
+
+    resolvePick('/Users/tester/KurisuPack.zip');
+    await waitFor(() => {
+      expect(zipBtn.disabled).toBe(false);
+    });
+    expect(dirBtn.disabled).toBe(false);
+    expect((screen.getByPlaceholderText(/amadeus-asset-pack/) as HTMLInputElement).value).toBe('/Users/tester/KurisuPack.zip');
+  });
 });

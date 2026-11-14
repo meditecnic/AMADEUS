@@ -117,6 +117,7 @@ export function AssetPackGroup({
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
 
+  const [picking, setPicking] = useState(false);
   const [inspecting, setInspecting] = useState(false);
   const [installing, setInstalling] = useState(false);
   const [uninstalling, setUninstalling] = useState(false);
@@ -127,16 +128,18 @@ export function AssetPackGroup({
   const [done, setDone] = useState<string | null>(null);
   const [uninstallError, setUninstallError] = useState<string | null>(null);
 
-  const busy = inspecting || installing || uninstalling;
+  const busy = picking || inspecting || installing || uninstalling;
   const movable = status?.movable !== false;
 
-  const loadStatus = useCallback(async () => {
+  const loadStatus = useCallback(async (): Promise<AssetPackStatus | null> => {
     try {
       const next = await assetPackStatus();
       setStatus(next);
       setLoadError(null);
+      return next;
     } catch (failure) {
       setLoadError(assetPackErrorText(failure, '读不到素材包状态。'));
+      return null;
     }
   }, []);
 
@@ -146,6 +149,7 @@ export function AssetPackGroup({
 
   const choosePickedPath = async (kind: 'directory' | 'zip') => {
     if (busy || !movable) return;
+    setPicking(true);
     setError(null);
     setDone(null);
     try {
@@ -156,6 +160,8 @@ export function AssetPackGroup({
       setInspectState(null);
     } catch {
       setError('无法打开系统文件选择器，也可以直接填写路径或选取 .zip 文件。');
+    } finally {
+      setPicking(false);
     }
   };
 
@@ -263,8 +269,21 @@ export function AssetPackGroup({
       onNotice?.(msg, 'info');
     } catch (failure) {
       const msg = assetPackErrorText(failure, '卸载素材包失败。');
-      setUninstallError(msg);
-      onNotice?.(msg, 'error');
+      const [statusRes] = await Promise.allSettled([
+        loadStatus(),
+        Promise.resolve(assetPackMod.reloadAssetPack?.()),
+      ]);
+      if (statusRes.status === 'fulfilled' && statusRes.value && !statusRes.value.installed) {
+        setInspectState(null);
+        setConfirmUninstall(false);
+        setUninstallError(null);
+        const syncMsg = `${msg} 已同步刷新当前状态（本地素材包目录已移除）。`;
+        setError(syncMsg);
+        onNotice?.(syncMsg, 'error');
+      } else {
+        setUninstallError(msg);
+        onNotice?.(msg, 'error');
+      }
     } finally {
       setUninstalling(false);
     }
@@ -397,6 +416,7 @@ export function AssetPackGroup({
                   type="button"
                   className="ws2-m-btn"
                   disabled={busy || !movable}
+                  aria-busy={picking || undefined}
                   onClick={() => { void choosePickedPath('directory'); }}
                 >
                   选择目录
@@ -405,6 +425,7 @@ export function AssetPackGroup({
                   type="button"
                   className="ws2-m-btn"
                   disabled={busy || !movable}
+                  aria-busy={picking || undefined}
                   onClick={() => { void choosePickedPath('zip'); }}
                 >
                   选择 ZIP 包

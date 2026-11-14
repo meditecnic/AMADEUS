@@ -50,6 +50,9 @@ export type ConnectionsPanelProps = {
   activeModelId: string;
   /** A turn is running: the service in use is kept until it ends. */
   locked: boolean;
+  /** Data relocation succeeded and awaits an app restart: mutating configuration actions are locked. */
+  relocating?: boolean;
+  onRelocating?: () => void;
   checkFor: (providerId: string, modelId: string) => ChatCheckState | undefined;
   onCheck: (providerId: string, modelId: string) => Promise<ChatCheckState | null>;
   onUse: (providerId: string) => void;
@@ -111,7 +114,7 @@ export function ConnectionsPanel(props: ConnectionsPanelProps) {
         <ul className="ws2-cx-add">
           {addable.map((entry) => (
             <li key={entry.id}>
-              <button type="button" className="ws2-cx-entry" onClick={() => setConnecting(entry)}>
+              <button type="button" className="ws2-cx-entry" disabled={props.relocating} onClick={() => setConnecting(entry)}>
                 <ProviderMark provider={{ id: entry.builtin ?? entry.id, display_name: entry.name, base_url: baseUrlOf(entry) }} />
                 <span className="txt"><b>{entry.name}</b><small>{entry.blurb}</small></span>
                 <span className="go" aria-hidden="true">接入</span>
@@ -120,16 +123,16 @@ export function ConnectionsPanel(props: ConnectionsPanelProps) {
           ))}
         </ul>
         <div className="ws2-m-foot">
-          <p className="ws2-m-note">密钥只存在这台电脑上，不回显，也不会发给 AMADEUS 以外的地方。</p>
+          <p className="ws2-m-note">密钥只保存在这台电脑上，界面不回显，仅在验证或对话时发往你所选的服务商接口。</p>
           <span className="ws2-m-acts">
-            <button type="button" className="ws2-m-link" onClick={() => setConnecting(CUSTOM_ENTRY)}>其他 OpenAI 兼容服务</button>
-            <button type="button" className="ws2-m-link" onClick={() => setCatalogOpen('plan')}>用订阅套餐</button>
-            <button type="button" className="ws2-m-btn" onClick={() => setCatalogOpen('all')}>全部服务商（{CATALOG.length}）</button>
+            <button type="button" className="ws2-m-link" disabled={props.relocating} onClick={() => setConnecting(CUSTOM_ENTRY)}>其他 OpenAI 兼容服务</button>
+            <button type="button" className="ws2-m-link" disabled={props.relocating} onClick={() => setCatalogOpen('plan')}>用订阅套餐</button>
+            <button type="button" className="ws2-m-btn" disabled={props.relocating} onClick={() => setCatalogOpen('all')}>全部服务商（{CATALOG.length}）</button>
           </span>
         </div>
       </section>
 
-      <SearchGroup {...props.search} />
+      <SearchGroup {...props.search} relocating={props.relocating} onRelocating={props.onRelocating} />
 
       {catalogOpen ? (
         <Sheet anchor={anchor} title="全部服务商" sub="选一家，下一步粘贴密钥。按月订阅的套餐在「套餐」里。" onClose={() => setCatalogOpen(null)} wide>
@@ -158,7 +161,7 @@ export function ConnectionsPanel(props: ConnectionsPanelProps) {
 /* ---------- a connected service ---------- */
 
 function ConnectedRow({
-  row, open, onToggle, anchor, activeProviderId, activeModelId, locked, checkFor, onCheck, onUse, onAdmit, onReload, onConfigChanged,
+  row, open, onToggle, anchor, activeProviderId, activeModelId, locked, relocating, onRelocating, checkFor, onCheck, onUse, onAdmit, onReload, onConfigChanged,
 }: ConnectionsPanelProps & { row: ProviderMetadata; open: boolean; onToggle: () => void; anchor: React.RefObject<HTMLDivElement | null> }) {
   const active = row.id === activeProviderId;
   const model = active ? activeModelId : row.default_model;
@@ -187,17 +190,26 @@ function ConnectedRow({
     const result = await onCheck(row.id, model);
     if (result?.status === 'ok' && row.selector_admission === 'pending') await onAdmit(row.id, model, row.configuration_version);
   };
-  const act = async (work: () => Promise<unknown>, done?: string) => {
+  const act = async (work: () => Promise<unknown>, done?: string | ((result: unknown) => string)) => {
     setBusy(true);
     setNote(null);
     try {
-      await work();
+      const result = await work();
       onConfigChanged(row.id);
       await onReload();
-      if (done) setNote({ text: done });
+      const text = typeof done === 'function' ? done(result) : done;
+      if (text) setNote({ text });
       return true;
     } catch (failure) {
-      const words = connectError(failure);
+      if (failure instanceof ApiError && failure.code === 'data_relocating') {
+        onRelocating?.();
+        setNote({ bad: true, text: '数据已迁移至新位置，需立即重启 AMADEUS 完成切换。' });
+        return false;
+      }
+      const mapped = failure instanceof ApiError && failure.code === 'invalid_credentials'
+        ? new ConnectFailure(failure.status, 'credential_rejected', failure instanceof ConnectFailure ? failure.step : undefined)
+        : failure;
+      const words = connectError(mapped, mapped instanceof ConnectFailure ? mapped.step : undefined);
       setNote({ bad: true, text: `${words.title}。${words.fix}` });
       return false;
     } finally {
@@ -248,9 +260,9 @@ function ConnectedRow({
             </div>
             <span className="ws2-m-acts">
               {lamp === 'pending' ? (
-                <button type="button" className="ws2-m-link" onClick={() => { void onAdmit(row.id, model, row.configuration_version, 'manual'); }}>不测，直接启用</button>
+                <button type="button" className="ws2-m-link" disabled={relocating} onClick={() => { void onAdmit(row.id, model, row.configuration_version, 'manual'); }}>不测，直接启用</button>
               ) : null}
-              <button type="button" className="ws2-m-btn" onClick={() => { void test(); }} disabled={check?.status === 'checking' || !model}>测一下</button>
+              <button type="button" className="ws2-m-btn" onClick={() => { void test(); }} disabled={relocating || check?.status === 'checking' || !model}>测一下</button>
             </span>
           </div>
 
@@ -263,21 +275,36 @@ function ConnectedRow({
               {keyEdit === null ? (
                 <span className="ws2-m-acts">
                   {entry?.keyUrl ? <button type="button" className="ws2-m-link" onClick={() => { void openExternal(entry.keyUrl!).catch(() => undefined); }}>去获取 ↗</button> : null}
-                  {row.configured && !custom ? <button type="button" className="ws2-m-link is-danger" onClick={() => setAsking('clear')}>清除</button> : null}
-                  <button type="button" className="ws2-m-btn" onClick={() => setKeyEdit('')}>{row.configured ? '更换' : '填写'}</button>
+                  {row.configured && !custom ? <button type="button" className="ws2-m-link is-danger" disabled={relocating} onClick={() => setAsking('clear')}>清除</button> : null}
+                  <button type="button" className="ws2-m-btn" disabled={relocating} onClick={() => setKeyEdit('')}>{row.configured ? '更换' : '填写'}</button>
                 </span>
               ) : (
                 <form className="ws2-cx-inline" onSubmit={(e) => {
                   e.preventDefault();
                   const key = keyEdit.trim();
-                  if (!key) return;
-                  void act(() => saveKey(row.id, key), '密钥已保存。测一下看看能不能用。').then((ok) => { if (ok) setKeyEdit(null); });
+                  if (!key || busy || relocating) return;
+                  const work = !custom
+                    ? () => connect({ providerId: row.id }, key)
+                    : row.id !== 'custom' && row.base_url
+                      ? () => connect({ baseUrl: row.base_url!, name: row.display_name, catalogId: row.catalog_id ?? undefined }, key)
+                      : () => saveKey(row.id, key);
+                  void act(
+                    work,
+                    (result) => (result && typeof result === 'object' && 'check' in result && (result as { check?: { ok?: boolean } }).check?.ok
+                      ? '密钥已验证并保存。'
+                      : '密钥已保存。测一下看看能不能用。'),
+                  ).then((ok) => {
+                    if (ok) {
+                      setKeyEdit(null);
+                      setModels(null);
+                    }
+                  });
                 }}>
                   <input type="password" className="ws2-cx-field" value={keyEdit} autoFocus autoComplete="new-password" spellCheck={false}
                     placeholder="粘贴新的 API 密钥" aria-label={`${row.display_name} 的新密钥`} data-testid={active ? 'credential-input' : undefined}
                     onChange={(e) => setKeyEdit(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); setKeyEdit(null); } }} />
                   <button type="button" className="ws2-m-link" onClick={() => setKeyEdit(null)}>取消</button>
-                  <button type="submit" className="ws2-m-btn" disabled={busy || !keyEdit.trim()}>{busy ? '保存中…' : '保存'}</button>
+                  <button type="submit" className="ws2-m-btn" disabled={busy || relocating || !keyEdit.trim()}>{busy ? '保存中…' : '保存'}</button>
                 </form>
               )}
             </div>
@@ -287,7 +314,7 @@ function ConnectedRow({
             <div className="ws2-m-row">
               <div className="ws2-m-label"><b>服务地址</b><small className="ws2-path">{row.base_url || '—'}</small></div>
               {urlEdit === null ? (
-                <span className="ws2-m-acts"><button type="button" className="ws2-m-btn" onClick={() => setUrlEdit(row.base_url ?? '')}>修改</button></span>
+                <span className="ws2-m-acts"><button type="button" className="ws2-m-btn" disabled={relocating} onClick={() => setUrlEdit(row.base_url ?? '')}>修改</button></span>
               ) : (
                 <form className="ws2-cx-inline" onSubmit={(e) => {
                   e.preventDefault();
@@ -297,7 +324,7 @@ function ConnectedRow({
                   <input type="url" className="ws2-cx-field" value={urlEdit} autoFocus spellCheck={false} aria-label="服务地址"
                     onChange={(e) => setUrlEdit(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); setUrlEdit(null); } }} />
                   <button type="button" className="ws2-m-link" onClick={() => setUrlEdit(null)}>取消</button>
-                  <button type="submit" className="ws2-m-btn" disabled={busy || !urlEdit.trim()}>{busy ? '保存中…' : '保存'}</button>
+                  <button type="submit" className="ws2-m-btn" disabled={busy || relocating || !urlEdit.trim()}>{busy ? '保存中…' : '保存'}</button>
                 </form>
               )}
             </div>
@@ -327,7 +354,7 @@ function ConnectedRow({
                           <span className="ws2-path">{id}</span>
                           {id === row.default_model ? <em>默认</em> : null}
                           {custom && id !== row.default_model ? (
-                            <button type="button" className="ws2-m-link mk" onClick={(e) => {
+                            <button type="button" className="ws2-m-link mk" disabled={busy || relocating} onClick={(e) => {
                               e.preventDefault();
                               void act(() => updateProfile(row.id, { default_model: id }), `默认模型改为 ${id}。`);
                             }}>设为默认</button>
@@ -343,10 +370,10 @@ function ConnectedRow({
           ) : null}
 
           <div className="ws2-m-foot">
-            {note ? <p className={`ws2-m-note${note.bad ? ' is-bad' : ''}`} role="status">{note.text}</p> : <span />}
+            {note ? <p className={`ws2-m-note${note.bad ? ' is-bad' : ''}`} role={note.bad ? 'alert' : 'status'}>{note.text}</p> : <span />}
             {custom && row.id !== 'custom' ? (
               <span className="ws2-m-acts">
-                <button type="button" className="ws2-m-link is-danger" onClick={() => setAsking('remove')} disabled={active && locked}>移除这个接入</button>
+                <button type="button" className="ws2-m-link is-danger" onClick={() => setAsking('remove')} disabled={relocating || (active && locked)}>移除这个接入</button>
               </span>
             ) : null}
           </div>
@@ -717,7 +744,7 @@ function KeySheet({ anchor, entry, existing, providers, onClose, onCheck, onAdmi
 
 /* ---------- search ---------- */
 
-function SearchGroup({ active, providers, onSelect, onSaveKey, onClear }: ConnectionsPanelProps['search']) {
+function SearchGroup({ active, providers, onSelect, onSaveKey, onClear, relocating, onRelocating }: ConnectionsPanelProps['search'] & { relocating?: boolean; onRelocating?: () => void }) {
   const ids = (Object.keys(providers) as WebSearchProviderId[]).length ? (Object.keys(providers) as WebSearchProviderId[]) : (['tavily', 'firecrawl'] as WebSearchProviderId[]);
   const info = providers[active];
   const [key, setKey] = useState<string | null>(null);
@@ -727,7 +754,15 @@ function SearchGroup({ active, providers, onSelect, onSaveKey, onClear }: Connec
     setBusy(true);
     setNote(null);
     try { await work(); if (done) setNote({ text: done }); return true; }
-    catch { setNote({ bad: true, text: '没有成功，稍后再试。' }); return false; }
+    catch (failure) {
+      if (failure instanceof ApiError && failure.code === 'data_relocating') {
+        onRelocating?.();
+        setNote({ bad: true, text: '数据已迁移至新位置，需立即重启 AMADEUS 完成切换。' });
+        return false;
+      }
+      setNote({ bad: true, text: '没有成功，稍后再试。' });
+      return false;
+    }
     finally { setBusy(false); }
   };
   return (
@@ -739,7 +774,7 @@ function SearchGroup({ active, providers, onSelect, onSaveKey, onClear }: Connec
         <span className="ws2-cx-regions" role="radiogroup" aria-label="搜索服务">
           {ids.map((id) => (
             <button key={id} type="button" role="radio" aria-checked={active === id} className={active === id ? 'on' : undefined}
-              disabled={busy} onClick={() => { if (id !== active) void run(() => onSelect(id)); }}>
+              disabled={busy || relocating} onClick={() => { if (id !== active) void run(() => onSelect(id)); }}>
               {providers[id]?.label ?? id}{providers[id]?.configured ? ' ·' : ''}
             </button>
           ))}
@@ -750,24 +785,24 @@ function SearchGroup({ active, providers, onSelect, onSaveKey, onClear }: Connec
         {key === null ? (
           <span className="ws2-m-acts">
             {info?.docs_url ? <button type="button" className="ws2-m-link" onClick={() => { void openExternal(info.docs_url!).catch(() => undefined); }}>去获取 ↗</button> : null}
-            {info?.configured ? <button type="button" className="ws2-m-link is-danger" disabled={busy} onClick={() => { void run(() => onClear(active), '密钥已清除。'); }}>清除</button> : null}
-            <button type="button" className="ws2-m-btn" onClick={() => setKey('')}>{info?.configured ? '更换' : '填写'}</button>
+            {info?.configured ? <button type="button" className="ws2-m-link is-danger" disabled={busy || relocating} onClick={() => { void run(() => onClear(active), '密钥已清除。'); }}>清除</button> : null}
+            <button type="button" className="ws2-m-btn" disabled={relocating} onClick={() => setKey('')}>{info?.configured ? '更换' : '填写'}</button>
           </span>
         ) : (
           <form className="ws2-cx-inline" onSubmit={(e) => {
             e.preventDefault();
             const value = key.trim();
-            if (value) void run(() => onSaveKey(active, value), '密钥已保存。').then((ok) => { if (ok) setKey(null); });
+            if (value && !busy && !relocating) void run(() => onSaveKey(active, value), '密钥已保存。').then((ok) => { if (ok) setKey(null); });
           }}>
             <input type="password" className="ws2-cx-field" value={key} autoFocus autoComplete="new-password" spellCheck={false}
               placeholder={`粘贴 ${info?.label ?? active} 密钥`} aria-label={`${info?.label ?? active} 密钥`} data-testid="web-search-credential-input"
               onChange={(e) => setKey(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); setKey(null); } }} />
             <button type="button" className="ws2-m-link" onClick={() => setKey(null)}>取消</button>
-            <button type="submit" className="ws2-m-btn" disabled={busy || !key.trim()}>{busy ? '保存中…' : '保存'}</button>
+            <button type="submit" className="ws2-m-btn" disabled={busy || relocating || !key.trim()}>{busy ? '保存中…' : '保存'}</button>
           </form>
         )}
       </div>
-      {note ? <p className={`ws2-m-note${note.bad ? ' is-bad' : ''}`} role="status">{note.text}</p> : null}
+      {note ? <p className={`ws2-m-note${note.bad ? ' is-bad' : ''}`} role={note.bad ? 'alert' : 'status'}>{note.text}</p> : null}
     </section>
   );
 }

@@ -151,7 +151,21 @@ export function handleData(url: URL, method: string, body: Frame, store: DataSto
     return { ...ok({ status: 'success' }), delayMs: 500 };
   }
 
-  if (path === '/api/data/status' && method === 'GET') return ok({ status: store.status, detail: store.detail, backups: store.backups });
+  if (path === '/api/data/status' && method === 'GET') {
+    return ok({ status: store.status, detail: store.detail, backups: store.backups, restore_pending: store.pendingRestore });
+  }
+  if (path === '/api/data/restore' && method === 'DELETE') {
+    if (!store.pendingRestore) return fail(409, 'restore_not_pending');
+    store.pendingRestore = null;
+    return ok({ cancelled: true });
+  }
+  if (path === '/api/data/restore-result/ack' && method === 'POST') {
+    if (store.status === 'restore_failed') {
+      store.status = 'ok';
+      store.detail = null;
+    }
+    return ok({ acknowledged: true });
+  }
   if (path === '/api/data/backups' && method === 'GET') return ok(store.backups);
   if (path === '/api/data/backups' && method === 'POST') {
     if (store.status === 'corrupt') return fail(500, 'backup_failed');

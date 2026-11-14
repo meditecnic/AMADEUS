@@ -145,6 +145,27 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
     if (path === '/api/search/credential' && ['PUT', 'DELETE'].includes(method)) {
       return ok(structuredClone(state(name, client).search));
     }
+    if (path === '/api/worldlines/summary') {
+      if (method !== 'GET') return fail(405, 'method_not_allowed');
+      const sessionId = url.searchParams.get('session_id')?.trim();
+      if (!sessionId) return fail(422, 'session_id_required');
+      const result: Record<string, { conversations: number; memories: number; last_active_at: string | null }> = {};
+      for (const wl of ['steins_gate', 'beta'] as const) {
+        const convRows = conversations(name, client, sessionId, wl);
+        let memories = 0;
+        for (const mode of ['self', 'okabe'] as const) {
+          const memScope = clientState.memory.scope(JSON.stringify([sessionId, wl, mode]), wl);
+          memories += memScope.facts.length + memScope.experiences.length;
+        }
+        const lastActiveAt = convRows.map(row => row.last_active_at || '').filter(Boolean).sort().pop() ?? null;
+        result[wl] = {
+          conversations: convRows.length,
+          memories,
+          last_active_at: lastActiveAt,
+        };
+      }
+      return ok(result);
+    }
     if (path.startsWith('/api/memory/')) return handleMemory(url, method, body, state(name, client).memory)!;
     if (!path.startsWith('/api/conversations')) return fail(404, 'mock_route_not_found');
 
