@@ -42,9 +42,10 @@ async function memoriesOf(sessionId: string, worldline: Worldline): Promise<numb
 }
 
 /** Both lines in one request (GET /api/worldlines/summary, the same counts as the six requests below). */
-async function summaryOf(sessionId: string): Promise<Ledger | null> {
+async function summaryOf(sessionId: string): Promise<Ledger | 'unavailable' | null> {
   try {
     const response = await apiFetch(`/api/worldlines/summary?session_id=${encodeURIComponent(sessionId)}`);
+    if (response.status === 503) return 'unavailable';
     if (!response.ok) return null;
     const body = await response.json() as Partial<Record<Worldline, { conversations?: unknown; memories?: unknown; last_active_at?: unknown }>>;
     const line = (key: Worldline): LedgerLine | null => {
@@ -67,6 +68,7 @@ export function useWorldlineLedger(sessionId: string, open: boolean): Ledger {
     let live = true;
     void (async () => {
       const summary = await summaryOf(sessionId);
+      if (summary === 'unavailable') return;
       if (summary) { if (live) setLedger(summary); return; }
       // The summary fails as a whole when one line cannot be read; line by line still shows the one that can.
       const rows = await Promise.all((['steins_gate', 'beta'] as const).map(async (line) => {

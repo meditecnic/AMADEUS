@@ -420,5 +420,26 @@ describe('dev mock protocol v2', () => {
       status: 200,
       body: { ok: true, scope: { session_id: 'test-session', worldline: 'steins_gate', identity_mode: 'self' } },
     });
+    expect(
+      mock.rest(url('/api/memory/observations?session_id=test-session&worldline=steins_gate&identity_mode=self'), 'GET').body,
+    ).toMatchObject({
+      observations: [
+        { observation_id: 'obs-1', status: 'attached' },
+        { observation_id: 'obs-2', status: 'candidate' },
+      ],
+    });
+    expect(
+      mock.rest(url('/api/memory/observations/obs-1/confirm?session_id=test-session&worldline=steins_gate&identity_mode=self'), 'POST'),
+    ).toEqual({ status: 409, body: { detail: { code: 'observation_not_confirmable' } } });
+    expect(
+      mock.rest(url('/api/memory/observations/obs-1/ignore?session_id=test-session&worldline=steins_gate&identity_mode=self'), 'POST'),
+    ).toEqual({ status: 409, body: { detail: { code: 'observation_state_conflict' } } });
+    expect(
+      mock.rest(url('/api/memory/observations/obs-2/ignore?session_id=test-session&worldline=steins_gate&identity_mode=self'), 'POST').status,
+    ).toBe(200);
+
+    expect(
+      mock.rest(url('/api/memory/observations?session_id=test-session&worldline=steins_gate&identity_mode=self&scenario=empty'), 'GET').body,
+    ).toMatchObject({ observations: [] });
   });
 });

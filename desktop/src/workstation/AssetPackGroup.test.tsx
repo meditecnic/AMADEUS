@@ -318,4 +318,19 @@ describe('AssetPackGroup', () => {
     expect(dirBtn.disabled).toBe(false);
     expect((screen.getByPlaceholderText(/amadeus-asset-pack/) as HTMLInputElement).value).toBe('/Users/tester/KurisuPack.zip');
   });
+
+  it('skips status fetches and locks controls when relocating', () => {
+    shellMock.inShell = true;
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<AssetPackGroup relocating />);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.getByText('待重启后读取')).toBeTruthy();
+    expect(screen.getByTestId('pack-relocating-note').textContent).toContain('数据已迁移至新位置，重启后才能管理素材包。');
+    expect((screen.getByRole('button', { name: '选择 ZIP 包' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '选择目录' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: '检查素材' }) as HTMLButtonElement).disabled).toBe(true);
+  });
 });

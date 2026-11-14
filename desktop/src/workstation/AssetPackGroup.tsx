@@ -105,8 +105,10 @@ type InspectState = {
 
 export function AssetPackGroup({
   onNotice,
+  relocating = false,
 }: {
   onNotice?: (message: string, kind?: 'info' | 'error') => void;
+  relocating?: boolean;
 }) {
   const anchor = useRef<HTMLElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -144,11 +146,12 @@ export function AssetPackGroup({
   }, []);
 
   useEffect(() => {
+    if (relocating) return;
     void loadStatus();
-  }, [loadStatus]);
+  }, [loadStatus, relocating]);
 
   const choosePickedPath = async (kind: 'directory' | 'zip') => {
-    if (busy || !movable) return;
+    if (busy || !movable || relocating) return;
     setPicking(true);
     setError(null);
     setDone(null);
@@ -166,7 +169,7 @@ export function AssetPackGroup({
   };
 
   const applyZipFile = (file: File | null) => {
-    if (!file) return;
+    if (relocating || !file) return;
     if (!isZipFile(file)) {
       setError('仅支持 .zip 压缩包文件；如需导入已解压目录，请在桌面端选择目录或填写路径。');
       return;
@@ -187,7 +190,7 @@ export function AssetPackGroup({
     e.preventDefault();
     e.stopPropagation();
     setDragOver(false);
-    if (busy || !movable) return;
+    if (busy || !movable || relocating) return;
     const file = e.dataTransfer?.files?.[0] ?? null;
     applyZipFile(file);
   };
@@ -197,7 +200,7 @@ export function AssetPackGroup({
 
   const handleInspect = async (e?: FormEvent) => {
     e?.preventDefault();
-    if (!activeSource || busy || !movable) return;
+    if (!activeSource || busy || !movable || relocating) return;
     setInspecting(true);
     setError(null);
     setDone(null);
@@ -223,7 +226,7 @@ export function AssetPackGroup({
   };
 
   const handleInstall = async () => {
-    if (!inspectState || !inspectState.result.valid || busy || !movable) return;
+    if (!inspectState || !inspectState.result.valid || busy || !movable || relocating) return;
     setInstalling(true);
     setError(null);
     setDone(null);
@@ -253,7 +256,7 @@ export function AssetPackGroup({
   };
 
   const handleConfirmUninstall = async () => {
-    if (busy || !movable) return;
+    if (busy || !movable || relocating) return;
     setUninstalling(true);
     setUninstallError(null);
     setError(null);
@@ -298,7 +301,7 @@ export function AssetPackGroup({
         : 'is-warn';
 
   const statusLabel = !status
-    ? '读取中…'
+    ? (relocating ? '待重启后读取' : '读取中…')
     : !status.installed
       ? '未安装'
       : status.complete
@@ -316,6 +319,10 @@ export function AssetPackGroup({
         Amadeus 不自带任何原版立绘或原声音乐。请使用你个人合法持有的素材目录或 .zip 压缩包在此检查并安装；安装或卸载后立即生效，无需重启应用。
       </p>
 
+      {relocating ? (
+        <p className="ws2-m-note is-bad" role="status" data-testid="pack-relocating-note">数据已迁移至新位置，重启后才能管理素材包。</p>
+      ) : null}
+
       {loadError ? (
         <p className="ws2-m-flag is-bad" role="alert">
           {loadError}
@@ -323,6 +330,7 @@ export function AssetPackGroup({
             type="button"
             className="ws2-m-link"
             style={{ marginLeft: 12 }}
+            disabled={relocating}
             onClick={() => { void loadStatus(); }}
           >
             重试
@@ -342,7 +350,7 @@ export function AssetPackGroup({
                 <button
                   type="button"
                   className="ws2-m-link is-danger"
-                  disabled={busy || !movable}
+                  disabled={busy || !movable || relocating}
                   onClick={() => {
                     setUninstallError(null);
                     setConfirmUninstall(true);
@@ -396,11 +404,11 @@ export function AssetPackGroup({
 
       <form className="ws2-pack-form" onSubmit={(e) => { void handleInspect(e); }}>
         <div
-          className={`ws2-pack-drop${dragOver ? ' is-over' : ''}${!movable ? ' is-disabled' : ''}`}
+          className={`ws2-pack-drop${dragOver ? ' is-over' : ''}${!movable || relocating ? ' is-disabled' : ''}`}
           data-testid="asset-pack-dropzone"
           onDragOver={(e) => {
             e.preventDefault();
-            if (!busy && movable) setDragOver(true);
+            if (!busy && movable && !relocating) setDragOver(true);
           }}
           onDragLeave={() => setDragOver(false)}
           onDrop={handleDrop}
@@ -415,7 +423,7 @@ export function AssetPackGroup({
                 <button
                   type="button"
                   className="ws2-m-btn"
-                  disabled={busy || !movable}
+                  disabled={busy || !movable || relocating}
                   aria-busy={picking || undefined}
                   onClick={() => { void choosePickedPath('directory'); }}
                 >
@@ -424,7 +432,7 @@ export function AssetPackGroup({
                 <button
                   type="button"
                   className="ws2-m-btn"
-                  disabled={busy || !movable}
+                  disabled={busy || !movable || relocating}
                   aria-busy={picking || undefined}
                   onClick={() => { void choosePickedPath('zip'); }}
                 >
@@ -435,7 +443,7 @@ export function AssetPackGroup({
             <button
               type="button"
               className="ws2-m-btn"
-              disabled={busy || !movable}
+              disabled={busy || !movable || relocating}
               onClick={() => fileInputRef.current?.click()}
             >
               上传 ZIP 文件
@@ -447,7 +455,7 @@ export function AssetPackGroup({
               className="ws2-pack-file-input"
               aria-label="选择本地 .zip 素材包"
               data-testid="asset-pack-file-input"
-              disabled={busy || !movable}
+              disabled={busy || !movable || relocating}
               onChange={handleFileChange}
             />
           </div>
@@ -461,7 +469,7 @@ export function AssetPackGroup({
             <button
               type="button"
               className="ws2-m-link"
-              disabled={busy}
+              disabled={busy || relocating}
               onClick={() => {
                 setSelectedFile(null);
                 setInspectState(null);
@@ -479,7 +487,7 @@ export function AssetPackGroup({
               type="text"
               className="ws2-pack-input"
               value={sourcePath}
-              disabled={busy || !movable}
+              disabled={busy || !movable || relocating}
               placeholder="/path/to/amadeus-asset-pack 或 .zip 文件路径"
               onChange={(e) => {
                 setSelectedFile(null);
@@ -493,7 +501,7 @@ export function AssetPackGroup({
           <button
             type="submit"
             className="ws2-m-btn"
-            disabled={busy || !movable || !activeSource}
+            disabled={busy || !movable || relocating || !activeSource}
           >
             {inspecting ? '检查中…' : '检查素材'}
           </button>
@@ -586,7 +594,7 @@ export function AssetPackGroup({
             <button
               type="button"
               className="ws2-m-btn"
-              disabled={busy || !movable || !inspectState.result.valid}
+              disabled={busy || !movable || relocating || !inspectState.result.valid}
               onClick={() => { void handleInstall(); }}
             >
               {installing ? '安装中…' : '确认安装素材包'}

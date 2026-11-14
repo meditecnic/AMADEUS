@@ -45,7 +45,11 @@
       { "fact_id": "fact-reading", "display_text": "你喜欢逐条核对假设与观测结果。", "topic_id": "topic-research", "is_pinned": false },
       { "fact_id": "fact-coffee", "display_text": "你会在午后休息时阅读科学随笔。", "topic_id": null, "is_pinned": false }
     ],
-    "topics": [{ "topic_id": "topic-research", "display_label": "实验与观测" }]
+    "topics": [{ "topic_id": "topic-research", "display_label": "实验与观测" }],
+    "observations": [
+      { "observation_id": "obs-1", "display_text": "你偏爱手冲深度烘焙的黑咖啡。", "status": "candidate" },
+      { "observation_id": "obs-2", "display_text": "你通常会在深夜整理新的实验笔记。", "status": "candidate" }
+    ]
   },
   "errors": [],
   "delays": [],

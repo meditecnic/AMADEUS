@@ -5,6 +5,7 @@ import type { MemoryChart } from '../memory-space/types';
 export type MemorySeed = {
   facts: Array<{ fact_id: string; display_text: string; topic_id: string | null; is_pinned: boolean }>;
   topics: Array<{ topic_id: string; display_label: string }>;
+  observations?: Array<{ observation_id: string; display_text: string; status?: string }>;
   /** Replaces facts/topics with a dated sample library (one per worldline). */
   preset?: string;
 };
@@ -25,7 +26,33 @@ type Experience = {
   experience_id: string; display_text: string; created_at: string; updated_at: string;
   expires_at: string | null; is_pinned: boolean; said: Said[];
 };
-type ScopeData = { facts: Fact[]; topics: Topic[]; experiences: Experience[]; origin_at: string | null };
+type Observation = {
+  observation_id: string;
+  display_text: string;
+  status: 'candidate' | 'attached' | 'ignored';
+  created_at: string;
+};
+type ScopeData = {
+  facts: Fact[];
+  topics: Topic[];
+  experiences: Experience[];
+  observations: Observation[];
+  origin_at: string | null;
+};
+
+const defaultObservations = (at = FIXED_TIME): Observation[] => [
+  { observation_id: 'obs-1', display_text: '你偏爱手冲深度烘焙的黑咖啡。', status: 'candidate', created_at: at },
+  { observation_id: 'obs-2', display_text: '你通常会在深夜整理新的实验笔记。', status: 'candidate', created_at: at },
+];
+
+const toObservation = (
+  obs: NonNullable<MemorySeed['observations']>[number],
+): Observation => ({
+  observation_id: obs.observation_id,
+  display_text: obs.display_text,
+  status: obs.status === 'attached' || obs.status === 'ignored' ? obs.status : 'candidate',
+  created_at: FIXED_TIME,
+});
 
 const iso = (at: string) => new Date(`${at.replace(' ', 'T')}${at.length <= 10 ? 'T12:00' : ''}:00+08:00`).toISOString();
 
@@ -70,6 +97,7 @@ function presetData(preset: ChartPreset): ScopeData {
       experience_id: e.id, display_text: e.text, created_at: iso(e.said[0][1]), updated_at: iso(e.said[0][1]),
       expires_at: e.expires ? iso(e.expires) : null, is_pinned: Boolean(e.pin), said: e.said,
     })),
+    observations: defaultObservations(preset.origin ? iso(preset.origin) : FIXED_TIME),
     origin_at: preset.origin ? iso(preset.origin) : null,
   };
 }
@@ -79,6 +107,7 @@ export function createMemoryStore(seed: MemorySeed) {
   const snapshot: MemorySeed = {
     facts: seed.facts.map(fact => ({ ...fact })),
     topics: seed.topics.map(topic => ({ ...topic })),
+    observations: seed.observations?.map(obs => ({ ...obs })),
     preset: seed.preset,
   };
   const scopes = new Map<string, ScopeData>();
@@ -86,15 +115,23 @@ export function createMemoryStore(seed: MemorySeed) {
     scope(key: string, worldline = 'steins_gate'): ScopeData {
       let data = scopes.get(key);
       if (!data) {
-        data = snapshot.preset ? presetData(chartPreset(snapshot.preset, worldline)) : {
-          facts: snapshot.facts.map(fact => ({
-            ...fact, version_no: 1, active_version: 1, created_at: FIXED_TIME, updated_at: FIXED_TIME,
-            versions: [version(1, fact.display_text)], provenance: [],
-          })),
-          topics: snapshot.topics.map(topic => ({ ...topic, created_at: FIXED_TIME })),
-          experiences: [],
-          origin_at: null,
-        };
+        if (snapshot.preset) {
+          data = presetData(chartPreset(snapshot.preset, worldline));
+          if (snapshot.observations) {
+            data.observations = snapshot.observations.map(toObservation);
+          }
+        } else {
+          data = {
+            facts: snapshot.facts.map(fact => ({
+              ...fact, version_no: 1, active_version: 1, created_at: FIXED_TIME, updated_at: FIXED_TIME,
+              versions: [version(1, fact.display_text)], provenance: [],
+            })),
+            topics: snapshot.topics.map(topic => ({ ...topic, created_at: FIXED_TIME })),
+            experiences: [],
+            observations: (snapshot.observations ?? []).map(toObservation),
+            origin_at: null,
+          };
+        }
         scopes.set(key, data);
       }
       return data;
@@ -221,7 +258,12 @@ export function handleMemory(
       return success({ scope, experiences: rows.slice(page.offset, page.offset + page.limit).map(experienceRow), pagination: page });
     }
     if (path === '/observations') {
-      return success({ scope, observations: [], pagination: pagination(params, 0) });
+      const page = pagination(params, data.observations.length);
+      return success({
+        scope,
+        observations: data.observations.slice(page.offset, page.offset + page.limit).map(obs => ({ ...obs })),
+        pagination: page,
+      });
     }
     if (path === '/topics') return success({
       scope, topics: data.topics.map(({ created_at: _created, ...topic }) => ({
@@ -306,7 +348,48 @@ export function handleMemory(
     const { created_at: _created, ...row } = topic;
     return success({ ok: true, scope, topic: row });
   }
-  if (method === 'POST' && (/^\/observations\/[^/]+\/(?:ignore|confirm)$/.test(path) || /^\/jobs\/[^/]+\/retry$/.test(path))) {
+  const obsMatch = path.match(/^\/observations\/([^/]+)\/(ignore|confirm)$/);
+  if (method === 'POST' && obsMatch) {
+    let id: string;
+    try { id = decodeURIComponent(obsMatch[1]); } catch { return failure(422, 'invalid_observation_id'); }
+    const action = obsMatch[2];
+    const obs = data.observations.find(item => item.observation_id === id);
+    if (obs) {
+      if (action === 'confirm') {
+        if (obs.status !== 'candidate') return failure(409, 'observation_not_confirmable');
+        obs.status = 'attached';
+        const factId = `fact-${id}`;
+        if (!data.facts.some(item => item.fact_id === factId)) {
+          const now = new Date().toISOString();
+          data.facts.push({
+            fact_id: factId,
+            display_text: obs.display_text,
+            topic_id: null,
+            is_pinned: false,
+            version_no: 1,
+            active_version: 1,
+            created_at: now,
+            updated_at: now,
+            versions: [version(1, obs.display_text, now)],
+            provenance: [{
+              version_no: 1,
+              observation_id: id,
+              source_message_id: 1,
+              conversation_id: 'mock-conversation-1',
+              source_created_at: obs.created_at,
+              source_state: 'present',
+              excerpt: obs.display_text,
+            }],
+          });
+        }
+      } else {
+        if (obs.status === 'attached') return failure(409, 'observation_state_conflict');
+        obs.status = 'ignored';
+      }
+    }
+    return success({ ok: true, scope });
+  }
+  if (method === 'POST' && /^\/jobs\/[^/]+\/retry$/.test(path)) {
     return success({ ok: true, scope });
   }
   return failure(404, 'memory_endpoint_not_found');

@@ -18,13 +18,26 @@ const money = (currency: string, amount: number) => {
 };
 const count = (value: number | null) => value === null ? '—' : value >= 1_000_000 ? `${(value / 1_000_000).toFixed(2)}M` : value >= 10_000 ? `${(value / 1000).toFixed(1)}K` : value.toLocaleString('en-US');
 
-export function UsagePanel({ conversationId, providerName }: { conversationId: string | null; providerName: (id: string) => string }) {
+export function UsagePanel({
+  conversationId,
+  providerName,
+  relocating = false,
+}: {
+  conversationId: string | null;
+  providerName: (id: string) => string;
+  relocating?: boolean;
+}) {
   const [range, setRange] = useState<Range>('month');
   const [report, setReport] = useState<UsageReport | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!relocating);
 
   useEffect(() => {
+    if (relocating) {
+      setLoading(false);
+      setError(null);
+      return;
+    }
     let live = true;
     setLoading(true);
     setError(null);
@@ -33,7 +46,7 @@ export function UsagePanel({ conversationId, providerName }: { conversationId: s
       (failure) => { if (live) { setError(errorText(failure, '读不到用量。')); setLoading(false); } },
     );
     return () => { live = false; };
-  }, [range, conversationId]);
+  }, [range, conversationId, relocating]);
 
   const totals = report ? Object.entries(report.totals_by_currency) : [];
   const calls = report?.groups.reduce((sum, group) => sum + group.calls, 0) ?? 0;
@@ -41,7 +54,7 @@ export function UsagePanel({ conversationId, providerName }: { conversationId: s
     <div className={`ws2-usage${loading ? ' is-loading' : ''}`} aria-busy={loading || undefined}>
       <div className="ws2-m-row is-choice">
         <div className="ws2-m-label"><b>范围</b></div>
-        <Choice label="用量范围" value={range} onChange={setRange} options={[
+        <Choice label="用量范围" value={range} onChange={setRange} disabled={relocating} options={[
           { value: 'month', label: '本月' },
           { value: 'conversation', label: '这个会话', disabled: !conversationId },
           { value: 'all', label: '全部' },
@@ -60,7 +73,9 @@ export function UsagePanel({ conversationId, providerName }: { conversationId: s
       </div>
       <p className="ws2-m-note ws2-usage-terms">估算，以服务商账单为准。按模型目录里的价格计算，不同币种分开合计，不换算汇率。</p>
 
-      {error ? <p className="ws2-m-note is-bad" role="alert">{error}</p> : null}
+      {relocating ? (
+        <p className="ws2-m-note is-bad" role="status" data-testid="usage-relocating-note">数据已迁移至新位置，重启后才能查看用量。</p>
+      ) : error ? <p className="ws2-m-note is-bad" role="alert">{error}</p> : null}
       {report && report.groups.length === 0 ? <p className="ws2-m-note">{range === 'conversation' ? '这个会话还没有调用。' : '这段时间没有调用。'}</p> : null}
       {report && report.groups.length > 0 ? (
         <table className="ws2-usage-table">

@@ -181,6 +181,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   // The chat mark that opened the memory space gets focus back once the transcript is no longer inert.
   const memoryOriginRef = useRef<string | null>(null);
   const openMemoryFromMark = (request: MemoryOpenRequest) => {
+    if (relocating) return;
     memoryOriginRef.current = request.origin;
     setMemoryLink({ select: request.select, mark: request.mark, hintAt: request.hintAt });
     setIsSettingsOpen(false);
@@ -486,7 +487,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     return () => { cancelPrewarm(); window.clearTimeout(fonts); };
   }, [entering]);
   const closeMenu = useCallback(() => setIsSettingsOpen(false), []);
-  const worldlineLedger = useWorldlineLedger(sessionId, isSettingsOpen && menuSection === 'worldline');
+  const worldlineLedger = useWorldlineLedger(sessionId, isSettingsOpen && menuSection === 'worldline' && !relocating);
   /** Lands on the connections page with focus on either the key field or the first usable other connection. */
   const openConnectionsAt = useCallback((target: 'key' | 'list') => {
     openMenu('connections');
@@ -997,7 +998,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   // Check the service when read-aloud is enabled without changing the user's saved choice.
   useEffect(() => {
-    if (!enableTts || locked) return;
+    if (!enableTts || locked || relocating) return;
     let cancelled = false;
     void (async () => {
       try {
@@ -1011,7 +1012,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       }
     })();
     return () => { cancelled = true; };
-  }, [enableTts, locked]);
+  }, [enableTts, locked, relocating]);
 
   useEffect(() => {
     if (locked) return;
@@ -1268,8 +1269,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
   }, [activeConversation?.model_id, model, providers]);
 
   useEffect(() => {
-    if (!locked) void loadProviderModels(activeProviderId);
-  }, [locked, activeProviderId, loadProviderModels]);
+    if (!locked && !relocating) void loadProviderModels(activeProviderId);
+  }, [locked, relocating, activeProviderId, loadProviderModels]);
 
   const { isPlaying } = useAudioPlayer();
   // stopAll() drops queued chunks without their onEnded; after a quiet moment the speaking queue is stale.
@@ -2258,11 +2259,13 @@ export const Workstation: React.FC<WorkstationProps> = ({
             className={`ws2-tool is-memory${isMemoryOpen ? ' is-on' : ''}`}
             aria-label="MEMORY"
             aria-pressed={isMemoryOpen}
+            disabled={!isMemoryOpen && relocating}
             onClick={() => {
               if (isMemoryOpen) {
                 if (!memoryClosing) (memoryControlRef.current?.requestClose ?? closeMemory)();
                 return;
               }
+              if (relocating) return;
               memoryOriginRef.current = null;
               setMemoryLink(null);
               // One page at a time: the system page gives way to the memory page.
@@ -2919,6 +2922,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
           <UsagePanel
             conversationId={activeConversationId}
             providerName={(id) => providers.find((row) => row.id === id)?.display_name ?? id}
+            relocating={relocating}
           />
         )}
         {menuSection === 'about' && (
@@ -3017,7 +3021,10 @@ export const Workstation: React.FC<WorkstationProps> = ({
       />
         </div>
         {menuSection === 'character' && (
-          <AssetPackGroup onNotice={(text, kind = 'info') => setAssetPackNotice({ text, kind })} />
+          <AssetPackGroup
+            relocating={relocating}
+            onNotice={(text, kind = 'info') => setAssetPackNotice({ text, kind })}
+          />
         )}
         </div>
         </div>

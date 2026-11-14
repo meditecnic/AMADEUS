@@ -180,10 +180,10 @@ function ConnectedRow({
   const shelf = useModelShelf();
 
   useEffect(() => {
-    if (!open || models !== null || !row.model_discovery || (row.credential_required && !row.configured)) return;
+    if (relocating || !open || models !== null || !row.model_discovery || (row.credential_required && !row.configured)) return;
     setModels('loading');
     listModels(row.id).then((ids) => setModels(ids ? chatModels(ids) : null)).catch(() => setModels('failed'));
-  }, [open, models, row]);
+  }, [relocating, open, models, row]);
 
   const test = async () => {
     setNote(null);
@@ -221,6 +221,7 @@ function ConnectedRow({
   const shown = (id: string) => !kept?.length || kept.includes(id);
   const visible = list.filter((id) => id.toLowerCase().includes(filter.trim().toLowerCase()));
   const toggle = (id: string) => {
+    if (busy || relocating) return;
     const base = kept?.length ? kept : list;
     const next = base.includes(id) ? base.filter((x) => x !== id) : [...base, id];
     setShelf(row.id, next.length === list.length ? null : next);
@@ -283,11 +284,9 @@ function ConnectedRow({
                   e.preventDefault();
                   const key = keyEdit.trim();
                   if (!key || busy || relocating) return;
-                  const work = !custom
-                    ? () => connect({ providerId: row.id }, key)
-                    : row.id !== 'custom' && row.base_url
-                      ? () => connect({ baseUrl: row.base_url!, name: row.display_name, catalogId: row.catalog_id ?? undefined }, key)
-                      : () => saveKey(row.id, key);
+                  const work = row.id === 'custom'
+                    ? () => saveKey(row.id, key)
+                    : () => connect({ providerId: row.id }, key);
                   void act(
                     work,
                     (result) => (result && typeof result === 'object' && 'check' in result && (result as { check?: { ok?: boolean } }).check?.ok
@@ -350,7 +349,7 @@ function ConnectedRow({
                     {visible.map((id) => (
                       <li key={id}>
                         <label className={shown(id) ? 'on' : undefined}>
-                          <input type="checkbox" checked={shown(id)} onChange={() => toggle(id)} />
+                          <input type="checkbox" checked={shown(id)} disabled={busy || relocating} onChange={() => toggle(id)} />
                           <span className="ws2-path">{id}</span>
                           {id === row.default_model ? <em>默认</em> : null}
                           {custom && id !== row.default_model ? (
@@ -363,7 +362,7 @@ function ConnectedRow({
                       </li>
                     ))}
                   </ul>
-                  {kept?.length ? <button type="button" className="ws2-m-link" onClick={() => setShelf(row.id, null)}>全部显示</button> : null}
+                  {kept?.length ? <button type="button" className="ws2-m-link" disabled={busy || relocating} onClick={() => setShelf(row.id, null)}>全部显示</button> : null}
                 </>
               ) : null}
             </div>

@@ -75,7 +75,10 @@ export function handleProviders(path: string, method: string, body: Record<strin
     let made = false;
     if (typeof body.provider_id === 'string') {
       row = find(body.provider_id);
-      if (!row || row.source !== 'builtin') return stepFail(422, 'invalid_provider_configuration', 'save');
+      const allowedCustom = Boolean(
+        row && row.source === 'user_config' && row.id !== 'custom' && row.id.startsWith('custom:') && row.enabled !== false,
+      );
+      if (!row || (row.source !== 'builtin' && !allowedCustom)) return stepFail(422, 'invalid_provider_configuration', 'save');
     } else {
       const url = String(body.base_url ?? '').trim().replace(/\/+$/, '');
       if (!/^https?:\/\/[^/?#\s]+/.test(url) || (body.display_name !== undefined && !String(body.display_name).trim())) {
