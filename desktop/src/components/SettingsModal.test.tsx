@@ -10,6 +10,7 @@ import {
   IDENTITY_MODE_STORAGE_KEY,
   RESERVED_OKABE_NAME_HINT,
   SELF_NAME_INVALID_CHARS_HINT,
+  SELF_NAME_REQUIRED_HINT,
   SELF_NAME_MAX_CODEPOINTS,
   SELF_NAME_STORAGE_KEY,
   SELF_NAME_TOO_LONG_HINT,
@@ -92,6 +93,99 @@ describe('connection default model', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存连接设置' }));
     await waitFor(() => expect(onSaveSettings).toHaveBeenCalled());
     expect(onSaveSettings.mock.calls[0][0].model).toBe('');
+  });
+});
+
+describe('embedded settings save as they change', () => {
+  const embeddedProps = {
+    ...baseProps,
+    variant: 'embedded' as const,
+    providerDisplayName: 'Old Local',
+    providerBaseUrl: 'http://127.0.0.1:1111/v1',
+    providerDefaultModel: 'old-model',
+    baseUrlConfigurable: true,
+    webSearchActiveProvider: 'tavily' as const,
+    selfName: 'Alice',
+  };
+  const ownedKeys = ['systemPrompt', 'enableTts', 'sovitsUrl', 'temperature', 'identityMode', 'selfName'];
+  const expectOwnedOnly = (save: ReturnType<typeof vi.fn>) => {
+    for (const [payload] of save.mock.calls) {
+      for (const key of Object.keys(payload)) expect(ownedKeys).toContain(key);
+    }
+  };
+
+  it('has no manual save button and saves a discrete change at once, without connection or search fields', async () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    const { rerender } = render(<SettingsModal {...embeddedProps} tab="voice" onSaveSettings={save} />);
+    expect(screen.queryByRole('button', { name: /^保存/ })).toBeNull();
+    // The connection is switched elsewhere while the panel stays mounted.
+    rerender(<SettingsModal {...embeddedProps} tab="voice" providerBaseUrl="http://127.0.0.1:2222/v1" providerDefaultModel="new-model" onSaveSettings={save} />);
+    fireEvent.click(screen.getByRole('checkbox', { name: /启用语音合成/ }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save).toHaveBeenLastCalledWith({ enableTts: false });
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('已保存'));
+
+    rerender(<SettingsModal {...embeddedProps} tab="basic" providerBaseUrl="http://127.0.0.1:2222/v1" onSaveSettings={save} />);
+    fireEvent.click(screen.getByTestId('identity-mode-self'));
+    expect(save).toHaveBeenLastCalledWith({ identityMode: 'self' });
+    const range = screen.getByTestId('personality-range');
+    fireEvent.change(range, { target: { value: '0.3' } });
+    expect(save).toHaveBeenCalledTimes(2);
+    fireEvent.pointerUp(range);
+    expect(save).toHaveBeenLastCalledWith({ temperature: 0.3 });
+    expectOwnedOnly(save);
+  });
+
+  it('saves text on blur, Enter, switching section or closing, and never an unchanged value', () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    const { rerender } = render(<SettingsModal {...embeddedProps} tab="basic" onSaveSettings={save} />);
+    const name = screen.getByTestId('self-name-input');
+    fireEvent.blur(name);
+    expect(save).not.toHaveBeenCalled();
+    fireEvent.change(name, { target: { value: '  Bob ' } });
+    fireEvent.blur(name);
+    expect(save).toHaveBeenLastCalledWith({ selfName: 'Bob' });
+
+    rerender(<SettingsModal {...embeddedProps} selfName="Bob" tab="basic" onSaveSettings={save} />);
+    fireEvent.change(screen.getByTestId('self-name-input'), { target: { value: 'Carol' } });
+    rerender(<SettingsModal {...embeddedProps} selfName="Bob" tab="voice" onSaveSettings={save} />);
+    expect(save).toHaveBeenLastCalledWith({ selfName: 'Carol' });
+
+    rerender(<SettingsModal {...embeddedProps} selfName="Carol" tab="voice" onSaveSettings={save} />);
+    const url = screen.getByPlaceholderText('http://127.0.0.1:9880');
+    fireEvent.change(url, { target: { value: 'http://127.0.0.1:9881' } });
+    fireEvent.keyDown(url, { key: 'Enter' });
+    expect(save).toHaveBeenLastCalledWith({ sovitsUrl: 'http://127.0.0.1:9881' });
+
+    rerender(<SettingsModal {...embeddedProps} selfName="Carol" sovitsUrl="http://127.0.0.1:9881" tab="voice" onSaveSettings={save} />);
+    fireEvent.change(screen.getByPlaceholderText('http://127.0.0.1:9880'), { target: { value: 'http://127.0.0.1:9882' } });
+    rerender(<SettingsModal {...embeddedProps} selfName="Carol" sovitsUrl="http://127.0.0.1:9881" tab="voice" active={false} onSaveSettings={save} />);
+    expect(save).toHaveBeenLastCalledWith({ sovitsUrl: 'http://127.0.0.1:9882' });
+    const calls = save.mock.calls.length;
+    rerender(<SettingsModal {...embeddedProps} selfName="Carol" sovitsUrl="http://127.0.0.1:9882" tab="voice" active={false} isOpen={false} onSaveSettings={save} />);
+    expect(save).toHaveBeenCalledTimes(calls);
+    expectOwnedOnly(save);
+  });
+
+  it('saves pending text when the panel unmounts', () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    const { unmount } = render(<SettingsModal {...embeddedProps} tab="voice" onSaveSettings={save} />);
+    fireEvent.change(screen.getByPlaceholderText('http://127.0.0.1:9880'), { target: { value: 'http://10.0.0.2:9880' } });
+    unmount();
+    expect(save).toHaveBeenCalledExactlyOnceWith({ sovitsUrl: 'http://10.0.0.2:9880' });
+  });
+
+  it('keeps the hint and the saved name when a self-mode name is emptied or invalid', () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    render(<SettingsModal {...embeddedProps} identityMode="self" tab="basic" onSaveSettings={save} />);
+    const name = screen.getByTestId('self-name-input');
+    fireEvent.change(name, { target: { value: '   ' } });
+    fireEvent.blur(name);
+    expect(screen.getByRole('alert')).toHaveTextContent(SELF_NAME_REQUIRED_HINT);
+    fireEvent.change(name, { target: { value: 'x'.repeat(SELF_NAME_MAX_CODEPOINTS + 1) } });
+    fireEvent.keyDown(name, { key: 'Enter' });
+    expect(screen.getByRole('alert')).toHaveTextContent(SELF_NAME_TOO_LONG_HINT);
+    expect(save).not.toHaveBeenCalled();
   });
 });
 

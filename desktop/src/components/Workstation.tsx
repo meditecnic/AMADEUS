@@ -2936,6 +2936,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       <SettingsModal
         variant="embedded"
         tab={menuSection === 'sound' ? 'voice' : 'basic'}
+        active={menuSection === 'sound' || menuSection === 'character'}
         isOpen={isSettingsOpen}
         onClose={closeMenu}
         worldline={worldline}
@@ -3015,6 +3016,17 @@ export const Workstation: React.FC<WorkstationProps> = ({
           void loadProviderModels(providerId, true);
         }}
         onSaveSettings={async (settings) => {
+          if (!('apiKey' in settings)) {
+            // An embedded patch carries only its own fields; everything else is the live state, so a connection
+            // switched or a search provider picked since the menu opened is never written back.
+            await handleSaveSettings({
+              worldline, apiKey: '', webSearchApiKey: '', webSearchProvider: webSearchActiveProvider,
+              systemPrompt, enableTts, sovitsUrl, enableBgm, bgmVolume, enableSfx, sfxVolume, temperature,
+              identityMode: defaultIdentityMode, selfName, baseUrl: '', model: '', reasoningEffort,
+              ...settings,
+            });
+            return;
+          }
           await handleSaveSettings(settings);
           if (menuSection !== 'connections') return;
           // Saving connection details invalidates the old result and verifies the selected model once.
