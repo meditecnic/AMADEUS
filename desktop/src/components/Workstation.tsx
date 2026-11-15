@@ -1332,7 +1332,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const emptyStateMessage = reconnectStopMessage
     ? `> ${reconnectStopMessage}`
     : showSetupStatus
-    ? `> 请为 ${activeProvider?.display_name || activeProviderId} 配置 API Key 以建立连接。`
+    ? `> 还没有配置 ${activeProvider?.display_name || activeProviderId} 的密钥，填写后即可连接。`
     : sessionState === 'rejected'
       ? '> 会话未被接受，请检查连接与模型。'
       : reconnecting
@@ -1344,7 +1344,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         : status === 'CLOSED'
           ? '> 会话连接已关闭，系统将尝试重新连接。'
           : status === 'ERROR'
-            ? '> 暂时无法连接，请检查后端服务与 API Key。'
+            ? '> 暂时无法连接，请检查后端服务与密钥。'
             : '> Amadeus 系统连接已建立。等待用户输入...';
 
   // Q14 single activity surface: known tools override Thinking; unknown tools fall back.

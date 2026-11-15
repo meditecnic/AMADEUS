@@ -137,13 +137,13 @@ describe('ProviderControls', () => {
         onConfigureCredential={onConfigureCredential}
       />
     );
-    fireEvent.click(screen.getByRole('button', { name: '配置 OpenAI 凭据' }));
+    fireEvent.click(screen.getByRole('button', { name: '配置 OpenAI 密钥' }));
 
     expect(onProviderChange).toHaveBeenCalledWith('deepseek');
     expect(onModelChange).toHaveBeenCalledWith('deepseek-v4-pro');
     expect(onRefreshModels).toHaveBeenCalledTimes(1);
     expect(onConfigureCredential).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('需要凭据')).toBeInTheDocument();
+    expect(screen.getByText('填写密钥')).toBeInTheDocument();
   });
 
   it('locks provider and model changes while a turn is active', () => {
@@ -187,7 +187,7 @@ describe('ProviderControls', () => {
     );
 
     expect(screen.getByRole('button', { name: '刷新模型列表' })).toBeEnabled();
-    expect(screen.queryByText('需要凭据')).not.toBeInTheDocument();
+    expect(screen.queryByText('填写密钥')).not.toBeInTheDocument();
   });
 
   it('renders compact backend-owned thinking menu without provider-name heuristics', () => {
