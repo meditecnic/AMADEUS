@@ -27,7 +27,8 @@ describe('ForgetConversationModal', () => {
         onConfirm={onConfirm}
       />
     );
-    fireEvent.click(screen.getByLabelText('同时遗忘该会话独占的长期记忆证据'));
+    expect(screen.getByText('你手动确认、修改或置顶的记忆，以及其他对话也提过的事会保留。')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: /^同时忘掉只在这段对话里提过的事/ }));
     fireEvent.click(screen.getByRole('button', { name: '清空会话内容' }));
     expect(onConfirm).toHaveBeenLastCalledWith(true);
   });

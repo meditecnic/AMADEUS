@@ -200,7 +200,8 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
     }
     if (!match[2] && method === 'DELETE') {
       rows.splice(rows.indexOf(conversation), 1);
-      return ok({ ok: true });
+      // Optional query flag (backend default false); echoed so the delete dialog's choice is visible in the mock.
+      return ok({ ok: true, forget_long_term: url.searchParams.get('forget_long_term') === 'true' });
     }
     return fail(405, 'method_not_allowed');
   }

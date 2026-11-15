@@ -41,11 +41,11 @@ export const ForgetConversationModal: React.FC<ForgetConversationModalProps> = (
           checked={forgetLongTerm}
           disabled={busy}
           onChange={(event) => setForgetLongTerm(event.target.checked)}
-          aria-label="同时遗忘该会话独占的长期记忆证据"
         />
         <span>
-          同时遗忘该会话独占的长期记忆证据
-          <small>被其他会话共同引用的证据不会删除。</small>
+          {/* Same wording as the delete dialog's option in Workstation. */}
+          同时忘掉只在这段对话里提过的事
+          <small>你手动确认、修改或置顶的记忆，以及其他对话也提过的事会保留。</small>
         </span>
       </label>
     </ConfirmDialog>

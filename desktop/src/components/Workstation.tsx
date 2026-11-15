@@ -267,6 +267,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [forgetError, setForgetError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ConversationSummary | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteForgetLongTerm, setDeleteForgetLongTerm] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deletedRefreshWorldline, setDeletedRefreshWorldline] = useState<string | null>(null);
   // Session dialogs commit first; these only keep a closing dialog on screen for its shorter exit.
@@ -1763,6 +1764,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const deleteConversation = (conversation: ConversationSummary) => {
     if (relocating) return;
     setDeleteError(null);
+    setDeleteForgetLongTerm(false);
     setDeleteTarget(conversation);
   };
 
@@ -1773,7 +1775,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     setDeleteError(null);
     const wasActive = conversation.id === activeConversationId;
     try {
-      const response = await apiFetch(`/api/conversations/${encodeURIComponent(conversation.id)}?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`,
+      const response = await apiFetch(`/api/conversations/${encodeURIComponent(conversation.id)}?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}${deleteForgetLongTerm ? '&forget_long_term=true' : ''}`,
         { method: 'DELETE' },
       );
       if (!response.ok) {
@@ -3116,8 +3118,19 @@ export const Workstation: React.FC<WorkstationProps> = ({
           onConfirm={() => { void confirmDeleteConversation(); }}
           onCancel={() => { setDeleteTarget(null); setDeleteError(null); }}
         >
-          <p>「{deleteDialog.shown.title}」的聊天记录将被删除，已形成的长期记忆仍会保留。</p>
-          <p className="ws2-dialog-hint">要同时遗忘这个会话的记忆，请改用「清空聊天记录」。</p>
+          <p>「{deleteDialog.shown.title}」的聊天记录将被删除。</p>
+          <label className="ws2-dialog-check">
+            <input
+              type="checkbox"
+              checked={deleteForgetLongTerm}
+              disabled={deleteBusy}
+              onChange={(event) => setDeleteForgetLongTerm(event.target.checked)}
+            />
+            <span>
+              同时忘掉只在这段对话里提过的事
+              <small>你手动确认、修改或置顶的记忆，以及其他对话也提过的事会保留。</small>
+            </span>
+          </label>
         </ConfirmDialog>
       )}
 

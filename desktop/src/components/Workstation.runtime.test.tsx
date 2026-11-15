@@ -683,6 +683,35 @@ describe('Workstation provider runtime changes', () => {
     },
   );
 
+  it.each([false, true])('the delete dialog sends forget_long_term only when its option is ticked (%s)', async (forget) => {
+    wsSpies.realHistory = true;
+    wsSpies.useAmadeusWS.mockImplementation(() => ({
+      status: 'READY', messages: [], isThinking: false, isSynthesizing: false,
+      emotion: 'neutral', sendChat: vi.fn(), stopVoice: vi.fn(), cancelTurn: vi.fn(), updateConfig: vi.fn(),
+      resetToDraft: vi.fn(), reconnect: wsSpies.reconnect, switchConversation: wsSpies.switchConversation, switchWorldline: wsSpies.switchWorldline,
+    }));
+    const sourceFetch = globalThis.fetch;
+    const deleteUrls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'DELETE') {
+        deleteUrls.push(String(input));
+        return Promise.resolve({ ok: true, status: 200 } as Response);
+      }
+      return sourceFetch(input, init);
+    }));
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    fireEvent.click(screen.getAllByRole('button', { name: '展开会话列表' })[0]);
+    await screen.findByText('Default Conversation');
+    fireEvent.keyDown(screen.getByRole('button', { name: '会话操作 Default Conversation' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: '删除 Default Conversation' }));
+    const option = screen.getByRole('checkbox', { name: /^同时忘掉只在这段对话里提过的事/ });
+    expect(option).not.toBeChecked();
+    if (forget) fireEvent.click(option);
+    fireEvent.click(screen.getByRole('button', { name: '删除会话' }));
+    await waitFor(() => expect(deleteUrls).toHaveLength(1));
+    expect(deleteUrls[0].includes('forget_long_term=true')).toBe(forget);
+  });
+
   it('requests an in-place worldline draft switch when the parent worldline changes', async () => {
     const onWorldlineChange = vi.fn();
     const { rerender } = render(<Workstation worldline="steins_gate" onWorldlineChange={onWorldlineChange} onLogout={vi.fn()} />,
