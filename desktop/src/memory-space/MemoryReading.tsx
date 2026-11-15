@@ -87,7 +87,7 @@ function StarReading(props: {
                 </details>
               ) : null}
             </>
-          ) : <p className="r-missing" data-testid="reading-sources-empty">未提供可显示的来源</p>}
+          ) : <p className="r-missing" data-testid="reading-sources-empty">暂无可显示的原话摘录</p>}
           <div className="r-her"><div className="k">她记成</div><p data-testid="reading-her">{herText}</p></div>
           <dl className="r-facts" data-testid="reading-facts">
             <dt>第一次记下</dt><dd>{ymd(star.createdAt)}</dd>

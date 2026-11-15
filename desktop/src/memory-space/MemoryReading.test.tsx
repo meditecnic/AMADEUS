@@ -108,4 +108,15 @@ describe('MemoryReading', () => {
     reading({ chart: later, model: moved, selection: { kind: 'month', key: '2026-10' } });
     expect(screen.getByTestId('reading-month-summary')).toHaveTextContent('家里的猫');
   });
+
+  it('shows plain Chinese copy when no source excerpts exist', () => {
+    const base = ok('fact', 'f12');
+    if (base.type !== 'ok') throw new Error('expected ok');
+    const emptySources: DetailsOutcome = {
+      ...base,
+      payload: { ...base.payload, provenance: [] } as DetailsPayload,
+    };
+    reading({ selection: { kind: 'star', id: 'f12' }, details: emptySources });
+    expect(screen.getByTestId('reading-sources-empty')).toHaveTextContent('暂无可显示的原话摘录');
+  });
 });
