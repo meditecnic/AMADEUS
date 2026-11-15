@@ -120,7 +120,12 @@ async def _erase_v11(request: dict, worldline: str) -> dict[str, int]:
                 affected.add(row['observation_id'])
         exclusive = {oid for oid, targets in by_observation.items() if targets and all(targets)}
         facts = await (await db.execute(
-            "SELECT fact_id,active_version FROM stable_facts WHERE session_id=? AND identity_mode=? AND state!='deleted'",
+            """SELECT f.fact_id,f.active_version FROM stable_facts f
+               WHERE f.session_id=? AND f.identity_mode=? AND f.state!='deleted'
+                 AND f.is_pinned=0 AND NOT EXISTS (
+                     SELECT 1 FROM stable_fact_versions v
+                     WHERE v.fact_id=f.fact_id AND v.change_kind='user_edit'
+                 )""",
             (owner, mode),
         )).fetchall()
         erasable_facts = []
