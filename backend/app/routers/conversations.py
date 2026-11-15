@@ -3,7 +3,7 @@
 from __future__ import annotations
 from contextlib import asynccontextmanager
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 
 from app import models
@@ -199,10 +199,13 @@ async def delete_conversation(
     conversation_id: str,
     session_id: str,
     worldline: str = "steins_gate",
+    forget_long_term: bool = Query(default=False),
 ):
     try:
         async with _erasure_runtime(conversation_id, session_id, normalize_worldline(worldline), deleting=True):
-            await conversation_service.delete(conversation_id, session_id, normalize_worldline(worldline))
+            await conversation_service.delete(
+                conversation_id, session_id, normalize_worldline(worldline), forget_long_term=forget_long_term,
+            )
     except ConversationNotFound as exc:
         raise _not_found(exc) from exc
     return Response(status_code=status.HTTP_204_NO_CONTENT)

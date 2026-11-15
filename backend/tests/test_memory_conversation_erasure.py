@@ -39,6 +39,14 @@ def test_retained_memory_marks_removed_history_source_unavailable(isolated_clien
     assert 'private source excerpt' not in str(details.json()['provenance'])
 
 
+def test_delete_can_also_erase_exclusive_long_term_memory(isolated_client):
+    client, owner = isolated_client, "delete-with-forget-owner"
+    conversation, _, fact, _ = _source(client, owner, "exclusive secret")
+    params = {"session_id": owner, "worldline": "steins_gate", "forget_long_term": True}
+    assert client.delete(f"/api/conversations/{conversation}", params=params).status_code == 204
+    assert client.get(f"/api/memory/facts/{fact}/details", params=_facts_scope(owner)).status_code == 404
+
+
 def test_forget_erases_v11_exclusive_fact_but_keeps_other_conversation(isolated_client):
     client = isolated_client
     owner = 'forget-v11-owner'

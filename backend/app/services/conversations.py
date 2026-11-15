@@ -388,6 +388,8 @@ class ConversationService:
         conversation_id: str,
         session_id: str,
         worldline: str,
+        *,
+        forget_long_term: bool = False,
     ) -> None:
         wl = normalize_worldline(worldline)
         record = await self.require_owned(conversation_id, session_id, wl)
@@ -405,7 +407,7 @@ class ConversationService:
         from app.services.conversation_erasure import request_erasure
         await request_erasure(session_id=session_id, identity_mode=str(record['identity_mode']),
                               worldline=wl, conversation_id=conversation_id,
-                              action='delete', forget_long_term=False)
+                              action='delete', forget_long_term=forget_long_term)
         if neighbor_id is not None:
             try:
                 await self.select(session_id, wl, neighbor_id)
