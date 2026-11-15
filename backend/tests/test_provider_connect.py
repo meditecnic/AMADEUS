@@ -43,6 +43,16 @@ def test_two_phase_connect_reuses_key_and_admits_only_after_check(connect):
     assert submit(client).json()["provider_id"] == no_label.json()["provider_id"]
 
 
+@pytest.mark.parametrize("prefix", ["", "/v1"])
+def test_connect_accepts_full_chat_completion_address(connect, prefix):
+    client, _ = connect
+    base = f"https://connect.invalid{prefix}"
+    response = submit(client, base_url=f" {base}/CHAT/Completions/ ")
+    assert response.status_code == 200, response.text
+    row = client.portal.call(db.get_provider_configuration, response.json()["provider_id"])
+    assert row["base_url"] == base
+
+
 @pytest.mark.parametrize("step", ["save", "list", "check"])
 @pytest.mark.parametrize("reuse", [False, True])
 def test_each_connect_failure_restores_durable_runtime_and_key(connect, monkeypatch, step, reuse):

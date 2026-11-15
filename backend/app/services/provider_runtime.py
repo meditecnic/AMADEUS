@@ -93,7 +93,11 @@ def normalize_custom_base_url(value: str) -> str:
         or parsed.fragment
     ):
         raise ValueError("custom base URL must be a credential-free HTTP(S) endpoint")
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", ""))
+    path = parsed.path.rstrip("/")
+    suffix = "/chat/completions"
+    if path.lower().endswith(suffix):
+        path = path[:-len(suffix)]
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 
 def normalize_custom_display_name(value: str) -> str:
