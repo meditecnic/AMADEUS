@@ -300,6 +300,7 @@
 .sl-input::-ms-reveal, .sl-input::-ms-clear { display: none; }
 .sl-input:disabled { color: var(--ink-2); }
 .sl-input::selection { background: var(--blade); color: var(--blade-ink); }
+.sl-input::placeholder { color: var(--ink-3); font-size: clamp(14px, .95vw, 17px); letter-spacing: .08em; opacity: .72; }
 
 /* The ruler: one division per character, hanging under the baseline; the nib marks the end. */
 .sl-ruler { position: absolute; left: 16px; bottom: -6px; height: 5px; width: min(calc(var(--n) * 8px), calc(100% - 32px)); pointer-events: none;
@@ -367,13 +368,14 @@
 .sl-go.is-ok .check { animation: bp-draw .3s ease .08s forwards; }
 .sl-go.is-ok .ticks { transform: rotate(45deg); stroke: var(--ink); }
 
-.sl-msg-line { grid-column: 2; min-height: 26px; margin-top: 2px; }
+.sl-msg-line { grid-column: 2; display: flex; flex-direction: column; gap: 6px; min-height: 26px; margin-top: 2px; }
 .sl-msg { display: flex; align-items: center; gap: 10px; margin: 0; font-family: var(--serif); font-size: clamp(16px, 1.05vw, 19px); letter-spacing: .08em; color: var(--ink-2); }
 .sl-msg i { flex: none; width: 9px; height: 9px; background: var(--ink-2); clip-path: polygon(3px 0, 100% 0, 100% 100%, 0 100%, 0 3px); }
 .sl-msg.backend-status-banner { font-family: var(--mono); font-size: 12px; letter-spacing: .14em; }
 .sl-msg.backend-status-banner i { animation: sl-blink 1s steps(2) infinite; }
 .sl-msg.is-error { color: var(--err-ink); animation: sl-msg-in .26s var(--ease-out) both; }
 .sl-msg.is-note { font-size: clamp(14px, .9vw, 16px); color: var(--ink-3); }
+.sl-msg.sl-forgot-hint { line-height: 1.55; letter-spacing: .04em; }
 .sl-msg.is-error i { background: var(--err); }
 @keyframes sl-msg-in { from { opacity: 0; transform: translateY(-4px); } }
 @keyframes sl-blink { 50% { opacity: .2; } }
