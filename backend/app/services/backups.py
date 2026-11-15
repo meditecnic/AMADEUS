@@ -212,11 +212,35 @@ def create_backup(reason: str = "manual", *, salvage: bool = False, stop: thread
         return manifest
 
 
+def _recover_interrupted_request(request: dict) -> bool:
+    from app.services import data_startup
+
+    # Only retry file moves in recovery mode, before normal database use.
+    if data_startup.available():
+        return False
+    try:
+        rollback_dir = _directory(request.get("rollback_id") or "") / "originals"
+    except (BackupError, OSError, TypeError):
+        return True
+    for relative in request.get("originals") or ():
+        try:
+            target = _local(_root(), relative)
+            saved = _local(rollback_dir, relative)
+            if not target.exists() and saved.exists():
+                target.parent.mkdir(parents=True, exist_ok=True)
+                os.replace(saved, target)
+        except (BackupError, OSError, TypeError):
+            logging.getLogger(__name__).warning("Could not finish moving a restore original")
+    return True
+
+
 def schedule_restore(backup_id: str) -> dict:
     with _lock:
         request_path = _root() / "restore-request.json"
-        if request_path.exists() and json.loads(request_path.read_text(encoding="utf-8")).get("phase") == "applying":
-            raise BackupError("restore_pending", "An interrupted rollback must finish first", 409)
+        if request_path.exists():
+            request = json.loads(request_path.read_text(encoding="utf-8"))
+            if request.get("phase") == "applying" and not _recover_interrupted_request(request):
+                raise BackupError("restore_pending", "An interrupted rollback must finish first", 409)
         load_manifest(backup_id)
         atomic_json(request_path, {"id": backup_id, "phase": "pending"})
         return {"restart_required": True}
@@ -241,7 +265,8 @@ def cancel_restore() -> dict:
         if not request_path.exists():
             raise BackupError("restore_not_pending", "No pending restore", 409)
         request = json.loads(request_path.read_text(encoding="utf-8"))
-        if request.get("phase") != "pending":
+        phase = request.get("phase")
+        if phase != "pending" and not (phase == "applying" and _recover_interrupted_request(request)):
             raise BackupError("restore_in_progress", "Restore or rollback already started", 409)
         request_path.unlink()
         return {"cancelled": True}
