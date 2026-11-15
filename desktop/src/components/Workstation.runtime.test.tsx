@@ -856,6 +856,7 @@ describe('Workstation provider runtime changes', () => {
 
 function mockStreamingAssistant(overrides: {
   isThinking?: boolean;
+  isTurnActive?: boolean;
   isSynthesizing?: boolean;
   activeTool?: string | null;
   activeNotice?: string | null;
@@ -867,7 +868,9 @@ function mockStreamingAssistant(overrides: {
     activeTool = null,
     activeNotice = null,
     streaming = true,
+    isTurnActive,
   } = overrides;
+  const cancelTurn = vi.fn();
   // Return a concrete value so the module mock's `override || default` path uses it.
   wsSpies.useAmadeusWS.mockReturnValue({
     status: 'READY',
@@ -880,13 +883,14 @@ function mockStreamingAssistant(overrides: {
       segments: [],
     }],
     isThinking,
+    isTurnActive,
     isSynthesizing,
     activeTool,
     activeNotice,
     emotion: 'neutral',
     sendChat: vi.fn(),
     stopVoice: vi.fn(),
-    cancelTurn: vi.fn(),
+    cancelTurn,
     sendDebugTts: vi.fn(),
     updateConfig: vi.fn(),
     reconnect: wsSpies.reconnect,
@@ -894,6 +898,7 @@ function mockStreamingAssistant(overrides: {
     switchWorldline: wsSpies.switchWorldline,
     wsRef: { current: null },
   });
+  return { cancelTurn };
 }
 
 
@@ -964,6 +969,20 @@ describe('Workstation Q14 activity operation labels', () => {
       expect(getAllByText('正在合成语音…').length).toBeGreaterThan(0);
     });
     expect(queryByTestId('activity-operation-label')).toBeNull();
+  });
+
+  it('keeps the composer locked and 停止本轮 available while sentences stream with TTS off', async () => {
+    const { cancelTurn } = mockStreamingAssistant({ isThinking: false, isTurnActive: true, isSynthesizing: false });
+    const { container } = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    const input = await waitFor(() => {
+      const element = container.querySelector<HTMLInputElement>('.chat-input-field');
+      expect(element).not.toBeNull();
+      return element as HTMLInputElement;
+    });
+    expect(input.disabled).toBe(true);
+    expect(screen.queryByTestId('activity-operation-label')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '停止本轮' }));
+    expect(cancelTurn).toHaveBeenCalledTimes(1);
   });
 
   it('hides the activity label after the turn is no longer streaming', async () => {

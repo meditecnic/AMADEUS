@@ -118,6 +118,9 @@ export interface UseAmadeusWSReturn {
   sessionState?: 'unknown' | 'ready' | 'rejected';
   messages: Message[];
   isThinking: boolean;
+  /** A reply turn is running from turn.started until it completes, is cancelled, errors or the link drops.
+   *  Unlike isThinking it stays true while sentences stream in. Optional so existing test doubles keep compiling. */
+  isTurnActive?: boolean;
   isSynthesizing: boolean;
   activeTool: string | null;
   activeNotice: string | null;
@@ -185,6 +188,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   };
   const [messages, setMessages] = useState<Message[]>([]);
   const [isThinking, setIsThinking] = useState(false);
+  const [isTurnActive, setIsTurnActive] = useState(false);
   const [isSynthesizing, setIsSynthesizing] = useState(false);
   const [activeTool, setActiveTool] = useState<string | null>(null);
   const [activeNotice, setActiveNotice] = useState<string | null>(null);
@@ -286,6 +290,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
 
   const surfaceAbortedTurn = () => {
     setIsThinking(false);
+    setIsTurnActive(false);
     setIsSynthesizing(false);
     setMessages((prev) => {
       const lastUserIndex = prev.reduce(
@@ -350,6 +355,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     setRetry(null);
     setReconnectStopReason(null);
     setIsThinking(false);
+    setIsTurnActive(false);
     setIsSynthesizing(false);
     voiceStoppedRef.current = false;
     audioDegradedNotifiedRef.current = false;
@@ -580,6 +586,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             // Authoritative new round: bind v2 dedup identity to the accepted turn.
             audioDegradedV2Ref.current = { turnId: msg.turn_id, generation: msg.generation, notified: false };
             setIsThinking(true);
+            setIsTurnActive(true);
             setMessages((prev) => [
               ...prev,
               {
@@ -729,6 +736,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             ) break;
             clearWatchdog();
             setIsThinking(false);
+            setIsTurnActive(false);
             setIsSynthesizing(false);
             setActiveTool(null);
             setActiveNotice(null);
@@ -742,6 +750,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             if (msg.turn_id !== activeTurnIdRef.current) break;
             clearWatchdog();
             setIsThinking(false);
+            setIsTurnActive(false);
             setIsSynthesizing(false);
             setActiveTool(null);
             setActiveNotice(null);
@@ -796,6 +805,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             }
             if (msg.dsk === 'thinking') {
               setIsThinking(true);
+              setIsTurnActive(true);
             } else if (msg.dsk === 'idle') {
               setIsThinking(false);
             }
@@ -862,6 +872,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             // Translation arrives at the end of the streaming lifecycle, clear watchdog
             clearWatchdog();
             setIsThinking(false);
+            setIsTurnActive(false);
             setIsSynthesizing(false);
             setActiveTool(null);
             setActiveNotice(null);
@@ -907,6 +918,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
             // Error clears watchdog
             clearWatchdog();
             setIsThinking(false);
+            setIsTurnActive(false);
             setIsSynthesizing(false);
             setStatus(msg.recoverable === true ? 'READY' : 'ERROR');
             setActiveTool(null);
@@ -972,6 +984,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       setActiveTool(null);
       setActiveNotice(null);
       setIsThinking(false);
+      setIsTurnActive(false);
       setIsSynthesizing(false);
       voiceStoppedRef.current = false;
 
@@ -1070,6 +1083,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     activeTurnIdRef.current = '';
     activeGenerationRef.current = -1;
     setIsThinking(false);
+    setIsTurnActive(false);
     setIsSynthesizing(false);
     voiceStoppedRef.current = true;
     // Keep partial content, but end streaming immediately so the bubble
@@ -1134,6 +1148,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
   const resetToDraft = useCallback(() => {
     activeConversationIdRef.current = null;
     activeTurnIdRef.current = '';
+    setIsTurnActive(false);
     messagesRef.current = [];
     setMessages([]);
     setEmotion('neutral');
@@ -1169,6 +1184,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       requestEpoch,
     };
     setIsThinking(false);
+    setIsTurnActive(false);
     setIsSynthesizing(false);
     wsRef.current.send(JSON.stringify({
       type: 'conversation.switch',
@@ -1196,6 +1212,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
       }
       pendingWorldlineSwitchRef.current = null;
       activeConversationIdRef.current = null;
+      setIsTurnActive(false);
       setMessages([]);
       messagesRef.current = [];
       setEmotion('neutral');
@@ -1210,6 +1227,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     voiceStoppedRef.current = true;
     pendingConversationSwitchRef.current = null;
     setIsThinking(false);
+    setIsTurnActive(false);
     setIsSynthesizing(false);
     setEmotion('neutral');
     // Snapshot then clear immediately so the target worldline UI never shows foreign transcript.
@@ -1252,6 +1270,7 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     sessionState,
     messages,
     isThinking,
+    isTurnActive,
     isSynthesizing,
     activeTool,
     activeNotice,

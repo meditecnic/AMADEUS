@@ -806,6 +806,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     sessionState,
     messages,
     isThinking,
+    isTurnActive,
     isSynthesizing,
     activeTool,
     activeNotice,
@@ -995,6 +996,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
       }
     },
   });
+  // isThinking drops at the first sentence; the turn itself (and its lock) lasts until it ends.
+  // Test doubles that only report isThinking still lock through it.
+  const turnActive = Boolean(isTurnActive || isThinking);
 
   // Check the service when read-aloud is enabled without changing the user's saved choice.
   useEffect(() => {
@@ -1454,7 +1458,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     // Only a send that is certain to go out may stop voice or play the cue. voice.stop must
     // still precede chat.send, so the gate is checked first and sendChat runs last.
     if (canSendChat && !canSendChat(inputText)) return;
-    // Turn text still gates send via isThinking/isSynthesizing. When only leftover
+    // Turn text still gates send via turnActive/isSynthesizing. When only leftover
     // voice is playing, stop the existing playback path then start the new Turn.
     if (isPlaying) {
       audioPlayer.stopAll();
@@ -1636,7 +1640,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   };
 
   const patchActiveConversationRuntime = async (patch: Record<string, unknown>) => {
-    if (!activeConversation || conversationBusy || isThinking || isSynthesizing) return;
+    if (!activeConversation || conversationBusy || turnActive || isSynthesizing) return;
     setConversationBusy(true);
     try {
       const updated = await patchConversation(activeConversation, patch);
@@ -1692,7 +1696,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   };
 
   const changeModel = (modelId: string) => {
-    if (isThinking || isSynthesizing) {
+    if (turnActive || isSynthesizing) {
       // The running turn keeps the model it started with; the choice applies from the next turn.
       setPendingModel(modelId === (activeConversation?.model_id || model) ? null : modelId);
       return;
@@ -1733,12 +1737,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   // Apply a model chosen mid-turn once the turn has fully finished.
   useEffect(() => {
-    if (!pendingModel || isThinking || isSynthesizing || conversationBusy) return;
+    if (!pendingModel || turnActive || isSynthesizing || conversationBusy) return;
     const next = pendingModel;
     setPendingModel(null);
     changeModel(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingModel, isThinking, isSynthesizing, conversationBusy]);
+  }, [pendingModel, turnActive, isSynthesizing, conversationBusy]);
 
   // A pending choice belongs to the conversation it was made in; never carry it across conversations or worldlines.
   const pendingScopeRef = useRef<{ conversation: string | null; worldline: string }>({ conversation: activeConversationId, worldline });
@@ -1786,7 +1790,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         // Deletion supersedes entry even before its HTTP history request has staged a target.
         abandonConversationEntry(false);
         // Q51: deleting the open conversation returns to a blank draft; never silently open another one.
-        if (isThinking || isSynthesizing || messages.some(message => message.streaming)) cancelTurn();
+        if (turnActive || isSynthesizing || messages.some(message => message.streaming)) cancelTurn();
         audioPlayer.stopAll();
         transcriptScroll.cancelPending();
         setLocalSend(null);
@@ -2161,7 +2165,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const lastAssistantId = [...visibleMessages].reverse().find((msg) => msg.role === 'assistant' && !msg.systemError)?.id;
   // An old conversation whose connection was removed keeps its history but must be re-pointed by the user.
   const providerGone = Boolean(activeConversation) && providers.length > 0 && (!activeProvider || activeProvider.enabled === false);
-  const sendBlocked = status !== 'READY' || sessionState === 'rejected' || sessionState === 'unknown' || isThinking || isSynthesizing || conversationBusy || conversationReconnectEpoch !== null || providerGone || relocating;
+  const sendBlocked = status !== 'READY' || sessionState === 'rejected' || sessionState === 'unknown' || turnActive || isSynthesizing || conversationBusy || conversationReconnectEpoch !== null || providerGone || relocating;
   useEffect(() => {
     if (!entering) handComposerFocus();
   }, [entering, sendBlocked, handComposerFocus]);
@@ -2478,7 +2482,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                       {msg.streaming && isSynthesizing && !isThinking && (
                         <div className="ws2-voicing">正在合成语音…</div>
                       )}
-                      {msg.id === lastAssistantId && (isThinking || isSynthesizing || isPlaying) && (
+                      {msg.id === lastAssistantId && (turnActive || isSynthesizing || isPlaying) && (
                         <div className="ws2-actions is-latest" role="group" aria-label="Current response controls">
                           <button type="button" onClick={handleStopVoice} disabled={!isSynthesizing && !isPlaying}>停止本句</button>
                           <button type="button" onClick={handleCancelTurn}>停止本轮</button>
@@ -2550,7 +2554,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                 activeModelId={activeConversation?.model_id || model}
                 models={shelved(modelShelf, activeProviderId, availableModels, activeConversation?.model_id || model)}
                 disabled={conversationBusy || relocating}
-                lockProvider={isThinking || isSynthesizing}
+                lockProvider={turnActive || isSynthesizing}
                 searchable
                 onManageConnections={() => openMenu('connections')}
                 loadingModels={modelsLoading}
@@ -2872,7 +2876,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             ledger={worldlineLedger}
             onShift={(to) => {
               if (relocating) return;
-              if (isThinking || isSynthesizing || isPlaying) setShiftConfirm(to);
+              if (turnActive || isSynthesizing || isPlaying) setShiftConfirm(to);
               else startShift(to);
             }}
           />
@@ -2882,7 +2886,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             providers={providers}
             activeProviderId={activeProviderId}
             activeModelId={activeModelId}
-            locked={isThinking || isSynthesizing || conversationBusy || relocating}
+            locked={turnActive || isSynthesizing || conversationBusy || relocating}
             relocating={relocating}
             onRelocating={() => markDataRelocating()}
             checkFor={(providerId, modelId) => chatChecks[checkKey(providerId, modelId)]}
@@ -3056,14 +3060,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
           confirmLabel="断开"
           onConfirm={() => {
             setUnplugAsk(false);
-            if (isThinking || isSynthesizing) handleCancelTurn();
+            if (turnActive || isSynthesizing) handleCancelTurn();
             else handleStopVoice();
             onLogout();
           }}
           onCancel={() => setUnplugAsk(false)}
         >
           <p>回到登录页。对话都已存好，再次进入就能接着聊。</p>
-          {isThinking || isSynthesizing || isPlaying
+          {turnActive || isSynthesizing || isPlaying
             ? <p className="ws2-dialog-hint">她还在回复，断开会停下这一轮。</p>
             : null}
         </ConfirmDialog>
@@ -3077,7 +3081,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             const to = shiftConfirm;
             setShiftConfirm(null);
             // Generation is cancelled outright; her voice is left to startShift, which fades it before stopping.
-            if (isThinking || isSynthesizing) cancelTurn();
+            if (turnActive || isSynthesizing) cancelTurn();
             startShift(to);
           }}
           onCancel={() => setShiftConfirm(null)}
