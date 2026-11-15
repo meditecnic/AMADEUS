@@ -2761,15 +2761,15 @@ async def websocket_chat_endpoint(websocket: WebSocket):
             memory_unsubscribe = None
         if session.protocol_version >= 2:
             from app.services.memory_v11.events import subscribe
-            scope = (session.session_id, session.worldline, session.identity_mode)
+            scope = (session.session_id, session.worldline)
 
             def receive(payload):
                 if (not writer_task.done()
-                        and scope == (session.session_id, session.worldline, session.identity_mode)
+                        and scope == (session.session_id, session.worldline)
                         and payload["conversation_id"] == session.conversation_id):
                     send_queue.put_nowait((session.current_epoch, payload))
 
-            memory_unsubscribe = subscribe(scope, receive)
+            memory_unsubscribe = subscribe((*scope, lambda: session.identity_mode), receive)
     
     try:
         # 4. Reader Coroutine (Main Loop): reads WebSocket frames and routes

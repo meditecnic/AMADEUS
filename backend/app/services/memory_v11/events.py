@@ -22,20 +22,27 @@ from app.db import get_db
 from app.services.memory_v11.projection import _is_expired
 
 logger = logging.getLogger(__name__)
-_subscribers: dict[tuple[str, str, str], set[Callable]] = {}
+_subscribers: dict[tuple[str, str], set[Callable]] = {}
 _pending: set[asyncio.Task] = set()
 
 
-def subscribe(scope: tuple[str, str, str], receive: Callable) -> Callable:
-    """Callbacks must only enqueue without blocking or awaiting transport."""
-    _subscribers.setdefault(scope, set()).add(receive)
+def subscribe(scope: tuple[str, str, str | Callable[[], str]], receive: Callable) -> Callable:
+    """Callbacks enqueue without blocking. A live identity is resolved at delivery."""
+    key = scope[:2]
+    identity = scope[2]
+
+    def deliver(identity_mode: str, payload: dict) -> None:
+        if identity_mode == (identity() if callable(identity) else identity):
+            receive(payload)
+
+    _subscribers.setdefault(key, set()).add(deliver)
 
     def unsubscribe():
-        listeners = _subscribers.get(scope)
+        listeners = _subscribers.get(key)
         if listeners is not None:
-            listeners.discard(receive)
+            listeners.discard(deliver)
             if not listeners:
-                _subscribers.pop(scope, None)
+                _subscribers.pop(key, None)
 
     return unsubscribe
 
@@ -74,7 +81,7 @@ def publish_recorded(job: dict, applied: dict) -> None:
     changes = [c for c in applied.get("changes", [])
                if c["change"] in {"create", "refine", "supersede"}]
     if (job["state"] != "completed" or applied.get("replay") or not changes
-            or not _subscribers.get(scope)):
+            or not _subscribers.get(scope[:2])):
         return
     task = asyncio.create_task(_deliver_recorded(scope, job, changes))
     _pending.add(task)
@@ -117,9 +124,9 @@ async def _deliver_recorded(scope, job, changes):
         payload = {"type": "memory.recorded", "conversation_id": job["conversation_id"],
                    "turn_id": source["turn_id"], "source_message_id": job["source_message_id"],
                    "changes": items}
-        for receive in tuple(_subscribers.get(scope, ())):
+        for deliver in tuple(_subscribers.get(scope[:2], ())):
             try:
-                receive(payload)
+                deliver(scope[2], payload)
             except Exception as exc:
                 logger.warning("Memory subscriber failed (%s)", type(exc).__name__)
     except Exception as exc:
