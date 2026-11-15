@@ -557,7 +557,7 @@ async def compress_and_update_history(
                         or getattr(session_data, "conversation_id", None) != conversation_id
                     ):
                         return
-                    session_data.history = session_data.history[N:]
+                    del session_data._history[:N]
                 print(
                     f"[History Compression] Session {session_id}: "
                     f"discarded {N} non-promptable old messages",
@@ -628,10 +628,7 @@ async def compress_and_update_history(
                     ):
                         return
                     session_data.memory_summary = summary
-                    if len(session_data.history) >= N:
-                        session_data.history = session_data.history[N:]
-                    else:
-                        session_data.history = []
+                    del session_data._history[:N]
                     print(
                         f"[History Compression] Session {session_id}: "
                         f"compression successful ({len(summary)} chars)"
@@ -1514,17 +1511,19 @@ _ABORTED_TURN_ZH = "这一问中断了，没有收到回复。请再发一次。
 
 async def _persist_aborted_turn(
     *,
-    session_id: str,
+    session: SessionState,
     worldline: str,
     conversation_id: str,
     turn_id: str,
     revision: int,
+    history_epoch: int,
 ) -> None:
+    content = f"[EMO:disappointed] {_ABORTED_TURN_JA}"
     try:
-        await models.save_message(
-            session_id,
+        message_id = await models.save_message(
+            session.session_id,
             "assistant",
-            f"[EMO:disappointed] {_ABORTED_TURN_JA}",
+            content,
             worldline=worldline,
             turn_id=turn_id,
             revision=revision,
@@ -1538,6 +1537,10 @@ async def _persist_aborted_turn(
             f"[Turn] aborted-turn notice failed ({type(exc).__name__})",
             flush=True,
         )
+    else:
+        if (session.history_epoch == history_epoch and session.worldline == worldline
+                and session.conversation_id == conversation_id):
+            session.append_message({"role": "assistant", "content": content, "id": message_id})
 
 
 def _system_prompt_changes_persona(session: "SessionState", incoming) -> bool:
@@ -1552,25 +1555,8 @@ def _system_prompt_changes_persona(session: "SessionState", incoming) -> bool:
     current = session.base_system_prompt or ""
     return incoming != current
 
-async def processor_loop(
-    session: SessionState, 
-    user_msg: str, 
-    send_queue: asyncio.Queue, 
-    epoch: int, 
-    start_history_epoch: int
-):
-    """
-    Processor Coroutine (In-flight Task):
-    Executes deepseek chat streaming, sentence extraction, launches TTS tasks, and queues results.
-    """
-    if session.erasure_pending:
-        session.is_busy = False
-        await send_queue.put((epoch, {'type': 'error', 'message': '正在清空会话，请稍后再试。'}))
-        return
-    session.is_busy = True
-    turn_id = session.active_turn_id or str(uuid4())
-    session.active_turn_id = turn_id
 
+async def _bind_turn_conversation(session: SessionState) -> None:
     from app.db import normalize_identity_mode
     from app.services.conversations import ConversationNotFound, conversation_service
 
@@ -1579,18 +1565,16 @@ async def processor_loop(
             getattr(session, "default_identity_mode", None)
             or getattr(session, "identity_mode", None)
         )
-        if session.conversation_mode == "draft":
+        selected = None
+        if session.conversation_mode != "draft":
+            selected = await conversation_service.get_selected(session.session_id, session.worldline)
+        if selected is None:
             selected = await conversation_service.create_and_select(
                 session.session_id,
                 session.worldline,
                 provider_id=session.provider_id,
                 model_id=session.model,
                 identity_mode=draft_mode,
-            )
-        else:
-            selected = await conversation_service.get_selected(
-                session.session_id,
-                session.worldline,
             )
         session.conversation_id = str(selected["id"])
         session.conversation_mode = "history"
@@ -1612,15 +1596,30 @@ async def processor_loop(
             session.identity_mode = normalize_identity_mode(
                 getattr(session, "identity_mode", None)
             )
-    conversation_id = session.conversation_id
-    turn_worldline = session.worldline
-    from app.services.model_usage import set_chat_context
 
-    set_chat_context(turn_worldline, conversation_id)
-    turn_api_key = session.api_key
-    # Pipeline resources are owned by the outer try/finally below. Fail-closed
-    # model_unavailable returns early *inside* that try so is_busy / pipeline
-    # cleanup always run — do not reintroduce a pre-try return that skips finally.
+
+async def process_queued_turn(
+    session: SessionState, user_msg: str, send_queue: asyncio.Queue, epoch: int, history_epoch: int,
+) -> None:
+    # A task cancelled before it starts must leave no pending row in history.
+    session.append_message({"role": "user", "content": user_msg})
+    await processor_loop(session, user_msg, send_queue, epoch, history_epoch)
+
+
+async def processor_loop(
+    session: SessionState,
+    user_msg: str,
+    send_queue: asyncio.Queue,
+    epoch: int,
+    start_history_epoch: int,
+):
+    """
+    Processor Coroutine (In-flight Task):
+    Executes deepseek chat streaming, sentence extraction, launches TTS tasks, and queues results.
+    """
+    session.is_busy = True
+    conversation_id = None
+    turn_worldline = session.worldline
     segment_pipeline = None
     diagnostic_observer = None
     segment_count = 0
@@ -1649,9 +1648,26 @@ async def processor_loop(
         turn_deadline = turn_loop.time() + TURN_TIMEOUT_SECONDS
         deadline_handle = turn_loop.call_at(turn_deadline, expire_turn)
 
-    active_history = session.history
+    pending_user = session._history[-1] if session._history else None
+    if pending_user is not None and (
+        pending_user.get("role") != "user" or pending_user.get("content") != user_msg
+        or pending_user.get("id") is not None
+    ):
+        pending_user = None
 
     try:
+        if session.erasure_pending:
+            await send_queue.put((epoch, {'type': 'error', 'message': '正在清空会话，请稍后再试。'}))
+            return
+        turn_id = session.active_turn_id or str(uuid4())
+        session.active_turn_id = turn_id
+        await _bind_turn_conversation(session)
+        conversation_id = session.conversation_id
+        from app.services.model_usage import set_chat_context
+
+        set_chat_context(turn_worldline, conversation_id)
+        turn_api_key = session.api_key
+        active_history = session.history
         try:
             registered_provider = provider_registry.snapshot(
                 session.provider_id,
@@ -1854,7 +1870,8 @@ async def processor_loop(
             revision=session.revision,
             conversation_id=conversation_id,
         )
-        session.set_last_message_id("user", int(user_message_id))
+        if pending_user is not None:
+            pending_user["id"] = int(user_message_id)
         
         from app.agent_tools import RECALL_MEMORY_TOOL_NAME
         from app.services.turn_events import TurnModeState
@@ -2340,11 +2357,12 @@ async def processor_loop(
             # Held by the session: if a second cancel interrupts the shield,
             # the notice keeps running and must not be garbage-collected.
             notice = _schedule_background_task(session, _persist_aborted_turn(
-                session_id=session.session_id,
+                session=session,
                 worldline=turn_worldline,
                 conversation_id=conversation_id,
                 turn_id=turn_id,
                 revision=epoch,
+                history_epoch=start_history_epoch,
             ))
             try:
                 await asyncio.shield(notice)
@@ -2388,25 +2406,32 @@ async def processor_loop(
             "message": f"Server error: {e}" if isinstance(e, ProviderRequestError) else "Server error",
         }))
     finally:
-        if deadline_handle is not None:
-            deadline_handle.cancel()
-        if (
-            not aborted_turn_written
-            and isinstance(user_message_id, int)
-            and user_message_id > 0
-            and assistant_message_id is None
-            and conversation_id
-        ):
-            await _persist_aborted_turn(
-                session_id=session.session_id,
-                worldline=turn_worldline,
-                conversation_id=conversation_id,
-                turn_id=turn_id,
-                revision=epoch,
-            )
-        if session.active_segment_pipeline is segment_pipeline:
-            session.active_segment_pipeline = None
-        session.is_busy = False
+        try:
+            if (pending_user is not None and pending_user.get("id") is None
+                    and session.history_epoch == start_history_epoch
+                    and session._history and session._history[-1] is pending_user):
+                session._history.pop()
+            if deadline_handle is not None:
+                deadline_handle.cancel()
+            if (
+                not aborted_turn_written
+                and isinstance(user_message_id, int)
+                and user_message_id > 0
+                and assistant_message_id is None
+                and conversation_id
+            ):
+                await _persist_aborted_turn(
+                    session=session,
+                    worldline=turn_worldline,
+                    conversation_id=conversation_id,
+                    turn_id=turn_id,
+                    revision=epoch,
+                    history_epoch=start_history_epoch,
+                )
+            if session.active_segment_pipeline is segment_pipeline:
+                session.active_segment_pipeline = None
+        finally:
+            session.is_busy = False
 
 
 async def _dispatch_tts_sentences(
@@ -3350,9 +3375,8 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                 session.is_busy = True
                 session.active_turn_id = str(uuid4())
                 session.voice_stopped_turn_id = None
-                session.append_message({"role": "user", "content": content, "id": None})
                 session.active_task = asyncio.create_task(
-                    processor_loop(session, content, send_queue, session.current_epoch, session.history_epoch)
+                    process_queued_turn(session, content, send_queue, session.current_epoch, session.history_epoch)
                 )
                 session.active_task_connection_id = connection_id
                 
@@ -3383,6 +3407,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
             if not session.active_task.done():
                 session.active_task.cancel()
             tasks_to_gather.append(session.active_task)
-        # Clean up session state active task reference if done
         await asyncio.gather(*tasks_to_gather, return_exceptions=True)
+        if session.active_task_connection_id == connection_id:
+            session.is_busy = False
         await session_coordinator.release_lease(session.session_id, session.worldline, websocket)

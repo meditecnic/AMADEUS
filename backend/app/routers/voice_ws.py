@@ -53,7 +53,7 @@ async def websocket_voice_endpoint(websocket: WebSocket):
         return
     session_id = websocket.query_params.get("session_id", "default")
     worldline = normalize_worldline(websocket.query_params.get("worldline", "steins_gate"))
-    from app.routers.chat_ws import SessionState, processor_loop, sessions, sessions_creation_lock
+    from app.routers.chat_ws import SessionState, process_queued_turn, sessions, sessions_creation_lock
     async with sessions_creation_lock:
         session = sessions.setdefault(session_id, SessionState(session_id))
     session.worldline = worldline
@@ -106,10 +106,10 @@ async def websocket_voice_endpoint(websocket: WebSocket):
         )
         await websocket.send_json({"type": "stt.final", "content": text, "emotion": emotion, "confidence": confidence})
         if text and not session.is_busy and not session.erasure_pending:
-            # id filled after chat processor save_message (Memory Ingest v2).
-            session.append_message({"role": "user", "content": text, "id": None})
             session.is_busy = True
-            session.active_task = asyncio.create_task(processor_loop(session, text, send_queue, session.current_epoch, session.history_epoch))
+            session.active_task = asyncio.create_task(
+                process_queued_turn(session, text, send_queue, session.current_epoch, session.history_epoch)
+            )
             session.active_task_connection_id = connection_id
 
     async def vad_monitor():

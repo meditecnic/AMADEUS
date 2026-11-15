@@ -308,11 +308,12 @@ async def test_aborted_turn_notice_is_held_when_the_shield_is_interrupted(
     await asyncio.sleep(0)
     assert notice not in session.background_tasks, "finished tasks are released"
 
-    rows = await models.get_session_messages(
+    rows = await models.get_recent_messages(
         session.session_id, worldline=SG, conversation_id=session.conversation_id
     )
     assert [row["role"] for row in rows] == ["user", "assistant"], rows
     assert chat_ws._ABORTED_TURN_JA in rows[1]["content"]
+    assert session.history == rows
 
 
 # ---------------------------------------------------------------------------
