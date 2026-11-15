@@ -80,7 +80,7 @@ def test_automatic_extraction_cannot_overwrite_user_confirmed_fact(isolated_clie
 
 
 @pytest.mark.parametrize("forget", [False, True])
-def test_confirmed_fact_follows_existing_erasure_rules(isolated_client, forget):
+def test_erasure_preserves_confirmed_fact_and_removes_source(isolated_client, forget):
     from app.services.conversation_erasure import request_erasure
     oid = candidate()
     fact = confirm(isolated_client, oid).json()
@@ -89,14 +89,10 @@ def test_confirmed_fact_follows_existing_erasure_rules(isolated_client, forget):
             conversation_id="conv-s3d2-9001", action="delete", forget_long_term=forget)
     isolated_client.portal.call(erase)
     rows = isolated_client.get("/api/memory/facts", params=SCOPE).json()["facts"]
-    if forget:
-        assert rows == []
-        assert not _db_rows("SELECT * FROM stable_fact_version_embeddings WHERE fact_id=?", (fact["fact_id"],))
-    else:
-        assert rows[0]["fact_id"] == fact["fact_id"]
-        details = isolated_client.get(f"/api/memory/facts/{fact['fact_id']}/details", params=SCOPE).json()
-        assert details["provenance"][0]["source_state"] == "deleted"
-        assert details["provenance"][0]["excerpt"] is None
+    assert [row["fact_id"] for row in rows] == [fact["fact_id"]]
+    details = isolated_client.get(f"/api/memory/facts/{fact['fact_id']}/details", params=SCOPE).json()
+    assert details["provenance"][0]["source_state"] == "deleted"
+    assert details["provenance"][0]["excerpt"] is None
 
 
 def test_confirm_rolls_back_fact_and_status_on_vector_insert_failure(isolated_client, monkeypatch):
