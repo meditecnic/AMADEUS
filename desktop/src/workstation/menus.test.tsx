@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { useRef } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SelectionCopyMenu, TextFieldMenu } from './menus';
+import { ModelPicker } from './ModelPicker';
 
 afterEach(cleanup);
 
@@ -49,5 +50,25 @@ describe('workstation text menus', () => {
     window.getSelection()?.addRange(range);
     fireEvent.contextMenu(log);
     expect(screen.getByRole('menuitem', { name: /^复制/ })).toBeInTheDocument();
+  });
+});
+
+describe('model picker', () => {
+  it('Escape hands focus back to the same 模型 trigger when the trigger carries a tip', () => {
+    render(
+      <ModelPicker
+        value="one"
+        title="模型说明"
+        options={['one', 'two'].map((value) => ({ value, label: value, title: `${value} 说明` }))}
+        onChange={() => {}}
+        sourceName="Mock"
+      />,
+    );
+    const trigger = screen.getByRole('button', { name: '模型' });
+    fireEvent.click(trigger);
+    fireEvent.keyDown(screen.getByRole('textbox', { name: '搜索模型' }), { key: 'Escape' });
+    expect(screen.getByRole('button', { name: '模型' })).toBe(trigger);
+    expect(trigger.isConnected).toBe(true);
+    expect(document.activeElement).toBe(trigger);
   });
 });

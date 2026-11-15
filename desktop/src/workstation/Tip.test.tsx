@@ -44,8 +44,22 @@ describe('Tip', () => {
     expect(await screen.findByRole('tooltip')).toHaveTextContent('一个很长很长的会话标题');
   });
 
-  it('renders the bare child when there is nothing to say', () => {
+  it('shows nothing when there is nothing to say', async () => {
     render(<Tip label={undefined}><button type="button">x</button></Tip>);
-    expect(screen.getByRole('button')).not.toHaveAttribute('data-state');
+    const button = screen.getByRole('button');
+    tabTo(button);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByRole('tooltip')).toBeNull();
+    expect(button).not.toHaveAttribute('aria-describedby');
+  });
+
+  it('keeps the same child node while the label comes and goes', () => {
+    const { rerender } = render(<Tip label="说明"><button type="button">x</button></Tip>);
+    const button = screen.getByRole('button');
+    button.focus();
+    rerender(<Tip label={undefined}><button type="button">x</button></Tip>);
+    rerender(<Tip label="说明"><button type="button">x</button></Tip>);
+    expect(screen.getByRole('button')).toBe(button);
+    expect(document.activeElement).toBe(button);
   });
 });

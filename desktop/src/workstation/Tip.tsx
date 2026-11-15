@@ -48,14 +48,15 @@ export function Tip({ label, children, side = 'bottom', align = 'center', sideOf
     const el = triggerRef.current;
     return isTruncated(truncated === true ? el : el?.querySelector(truncated as string));
   };
-  if (label === null || label === undefined || label === '' || label === false) return children;
+  const silent = label === null || label === undefined || label === '' || label === false;
+  // The wrapper stays mounted while silent: unwrapping would remount the child and drop its focus and refs.
   const root = (
     <Tooltip.Root
-      open={open}
-      onOpenChange={(next) => setOpen(next && (!truncated || cutOff()))}
+      open={open && !silent}
+      onOpenChange={(next) => setOpen(next && !silent && (!truncated || cutOff()))}
     >
       <Tooltip.Trigger asChild ref={triggerRef} onFocus={skipQuietFocus}>{children}</Tooltip.Trigger>
-      <Tooltip.Portal container={container}>
+      {!silent && <Tooltip.Portal container={container}>
         <Tooltip.Content
           className={`ws2-tip${className ? ` ${className}` : ''}`}
           side={side}
@@ -65,7 +66,7 @@ export function Tip({ label, children, side = 'bottom', align = 'center', sideOf
         >
           {label}
         </Tooltip.Content>
-      </Tooltip.Portal>
+      </Tooltip.Portal>}
     </Tooltip.Root>
   );
   // Standalone use (unit tests, surfaces outside the workstation) still works, just without the shared timing.
