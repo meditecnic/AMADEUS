@@ -91,6 +91,12 @@ export type EntrancePhase = 'none' | 'locked' | 'hold' | 'draft' | 'docked' | 'd
 
 // Keep in sync with backend chat_ws.MAX_USER_MESSAGE_LENGTH.
 const MAX_USER_MESSAGE_LENGTH = 8000;
+/** Plain explanations for worldline switch failure codes; the code itself is never shown. */
+const WORLDLINE_ERROR_HINTS: Record<string, string> = {
+  socket_not_ready: '和本地服务的连接还没就绪，请等连接恢复后再试。',
+  connection_closed: '跃迁途中和本地服务断开了，请等连接恢复后再试。',
+  session_rejected: '当前对话还没有连上模型，请先在「连接」里检查后再试。',
+};
 
 interface WorkstationProps {
   worldline: 'steins_gate' | 'beta';
@@ -626,7 +632,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
   }, [assetPackNotice]);
 
   useEffect(() => {
-    if (sessionError) {
+    // A failed worldline jump stays until dismissed or the next jump; it is easy to miss behind the shift overlay.
+    if (sessionError && sessionError.kind !== 'worldline') {
       const timer = window.setTimeout(() => setSessionError(null), 5000);
       return () => window.clearTimeout(timer);
     }
@@ -2798,14 +2805,19 @@ export const Workstation: React.FC<WorkstationProps> = ({
             <button type="button" onClick={() => { void loadConversations().catch(() => undefined); }}>重试刷新</button>
           </div>
         )}
-        {sessionError && (
+        {sessionError && (sessionError.kind === 'session' ? (
           <div className="audio-error-toast session-error-toast" data-testid="session-error-toast" role="status">
-            <span className="audio-error-msg">
-              {sessionError.kind === 'session' ? '会话同步失败' : '世界线切换失败，已留在原来的世界线'}
-            </span>
+            <span className="audio-error-msg">会话同步失败</span>
             <code className="ws2-toast-code">{sessionError.code}</code>
           </div>
-        )}
+        ) : (
+          <div className="audio-error-toast session-error-toast" data-testid="session-error-toast" role="status">
+            <span className="audio-error-msg">
+              世界线切换失败，已留在原来的世界线。{WORLDLINE_ERROR_HINTS[sessionError.code] ?? '请稍后再试。'}
+            </span>
+            <button type="button" onClick={() => setSessionError(null)}>知道了</button>
+          </div>
+        ))}
         {conversationOpenError && (
           <div className="audio-error-toast session-error-toast" data-testid="conversation-open-error-toast" role="status">
             <span className="audio-error-msg">没能打开这段对话，请稍后重试。</span>

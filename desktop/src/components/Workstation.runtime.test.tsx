@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Workstation } from './Workstation';
@@ -1351,9 +1351,27 @@ describe('Workstation UX-ERROR-SURFACE-01 switch vs TTS errors', () => {
 
     await waitFor(() => {
       expect(getByTestId('session-error-toast')).toHaveTextContent('世界线切换失败');
-      expect(getByTestId('session-error-toast')).toHaveTextContent('switch_failed');
     });
+    expect(getByTestId('session-error-toast')).not.toHaveTextContent('switch_failed');
     expect(queryByText(/TTS ·/)).toBeNull();
+  });
+
+  it('keeps a worldline failure until dismissed and explains a known code in plain words', async () => {
+    const { getByTestId, queryByTestId, getParams } = mountWithReadyCallbacks();
+    await waitFor(() => expect(getParams().onWorldlineSwitchError).toBeTypeOf('function'));
+    vi.useFakeTimers();
+    try {
+      act(() => { getParams().onWorldlineSwitchError?.({ worldline: 'beta', code: 'connection_closed' }); });
+      const toast = getByTestId('session-error-toast');
+      expect(toast).toHaveTextContent('跃迁途中和本地服务断开了');
+      expect(toast).not.toHaveTextContent('connection_closed');
+      act(() => { vi.advanceTimersByTime(6000); });
+      expect(queryByTestId('session-error-toast')).not.toBeNull();
+      fireEvent.click(within(getByTestId('session-error-toast')).getByRole('button', { name: '知道了' }));
+      expect(queryByTestId('session-error-toast')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('still shows TTS prefix for real audio degradation', async () => {
