@@ -322,19 +322,15 @@ def apply_pending_restore() -> str | None:
             try:
                 if 'request' in locals() and request.get("phase") == "applying":
                     rollback_dir = _directory(request["rollback_id"]) / "originals"
-                    # A file still at its original location was never moved; leave it alone.
                     for relative in database_files() | CONFIG_FILES:
-                        saved = _local(rollback_dir, relative)
-                        if saved.exists() or relative not in request["originals"]:
-                            _local(_root(), relative).unlink(missing_ok=True)
-                            for suffix in ("-wal", "-shm"):
-                                _local(_root(), relative + suffix).unlink(missing_ok=True)
-                    for relative in request["originals"]:
-                        saved = _local(rollback_dir, relative)
-                        if saved.exists():
-                            target = _local(_root(), relative)
-                            target.parent.mkdir(parents=True, exist_ok=True)
-                            os.replace(saved, target)
+                        for candidate in (relative, relative + "-wal", relative + "-shm"):
+                            saved = _local(rollback_dir, candidate)
+                            target = _local(_root(), candidate)
+                            if saved.exists():
+                                target.parent.mkdir(parents=True, exist_ok=True)
+                                os.replace(saved, target)
+                            elif candidate not in request["originals"]:
+                                target.unlink(missing_ok=True)
                     shutil.rmtree(rollback_dir, ignore_errors=True)
                 request_path.unlink(missing_ok=True)
             except Exception as rollback_error:

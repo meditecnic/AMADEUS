@@ -152,6 +152,35 @@ def test_restore_failure_rolls_back_all_originals(data_root, monkeypatch):
     assert not (data_root / 'restore-request.json').exists()
 
 
+@pytest.mark.parametrize("suffix", ["-wal", "-shm"])
+def test_failed_move_preserves_unmoved_sidecar(data_root, monkeypatch, suffix):
+    path = make_database(data_root)
+    selected = backups.create_backup()
+    pre_restore = backups.create_backup("pre-restore")
+    sidecar = path.with_name(path.name + suffix)
+    sidecar.write_bytes(b"unmoved original")
+    original = path.read_bytes()
+    backups.schedule_restore(selected["id"])
+    create_backup = backups.create_backup
+    replace = backups.os.replace
+
+    def created(reason, **kwargs):
+        if reason == "pre-restore":
+            return pre_restore
+        return create_backup(reason, **kwargs)
+
+    def fail_sidecar_move(source, target):
+        if source == sidecar:
+            raise OSError("injected sidecar move failure")
+        return replace(source, target)
+
+    monkeypatch.setattr(backups, "create_backup", created)
+    monkeypatch.setattr(backups.os, "replace", fail_sidecar_move)
+    assert "injected sidecar move failure" in backups.apply_pending_restore()
+    assert path.read_bytes() == original
+    assert sidecar.read_bytes() == b"unmoved original"
+
+
 def test_interrupted_restore_rolls_back_on_restart(data_root):
     path = make_database(data_root)
     original = path.read_bytes()
