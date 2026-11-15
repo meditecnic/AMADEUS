@@ -1,6 +1,8 @@
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 import json
 from pathlib import Path
+import sqlite3
 from zipfile import ZipFile
 
 import pytest
@@ -97,6 +99,28 @@ def test_corrupt_startup_allows_only_authenticated_bundle(data_root, monkeypatch
         assert summary["data_status"]["status"] == "corrupt"
         assert summary["schema_versions"]["control.sqlite3"] == "unreadable"
         assert files.keys() == {"summary.json"}
+
+
+def test_recovery_bundle_redacts_unregistered_provider_keys(data_root, isolated_provider_credentials):
+    keys = {f"custom:provider-{enabled}": f"private-provider-value-{enabled}" for enabled in (0, 1)}
+    with closing(sqlite3.connect(data_root / "control.sqlite3")) as connection:
+        connection.execute("CREATE TABLE provider_configurations(provider_id TEXT, enabled INTEGER)")
+        connection.executemany("INSERT INTO provider_configurations VALUES (?, ?)", zip(keys, (0, 1)))
+        connection.commit()
+    history = Path(db._resolve_path("steins_gate", "history"))
+    history.parent.mkdir(parents=True)
+    history.write_bytes(b"not a SQLite database")
+    logs = data_root / "logs"
+    logs.mkdir()
+    (logs / bundle.LOG_NAMES[0]).write_text("\n".join(keys.values()), encoding="utf-8")
+    for provider_id, key in keys.items():
+        assert provider_id not in {d.id for d in provider_registry.list_definitions()}
+        isolated_provider_credentials.set(provider_id, key)
+
+    with TestClient(app, base_url="http://localhost") as client:
+        assert client.get("/api/data/status").json()["available"] is False
+        files = read_bundle(client.post("/api/diagnostics/bundle"))
+    assert files[f"logs/{bundle.LOG_NAMES[0]}"].splitlines() == ["[REDACTED]", "[REDACTED]"]
 
 
 def test_keep_five_packages_and_preserve_unrelated_files(app_client):
