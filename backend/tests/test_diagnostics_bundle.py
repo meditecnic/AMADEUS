@@ -3,6 +3,7 @@ from contextlib import closing
 import json
 from pathlib import Path
 import sqlite3
+from uuid import uuid4
 from zipfile import ZipFile
 
 import pytest
@@ -102,7 +103,7 @@ def test_corrupt_startup_allows_only_authenticated_bundle(data_root, monkeypatch
 
 
 def test_recovery_bundle_redacts_unregistered_provider_keys(data_root, isolated_provider_credentials):
-    keys = {f"custom:provider-{enabled}": f"private-provider-value-{enabled}" for enabled in (0, 1)}
+    keys = {f"custom:{uuid4()}": f"private-provider-value-{enabled}" for enabled in (0, 1)}
     with closing(sqlite3.connect(data_root / "control.sqlite3")) as connection:
         connection.execute("CREATE TABLE provider_configurations(provider_id TEXT, enabled INTEGER)")
         connection.executemany("INSERT INTO provider_configurations VALUES (?, ?)", zip(keys, (0, 1)))
