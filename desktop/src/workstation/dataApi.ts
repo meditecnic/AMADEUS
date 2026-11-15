@@ -70,6 +70,7 @@ export type Backup = {
 };
 export type DataStatus = {
   status: 'ok' | 'corrupt' | 'restore_failed' | string;
+  available?: boolean;
   detail: string | null;
   backups: Backup[];
   /** The backup a restore is scheduled to at the next start, while it can still be cancelled. */

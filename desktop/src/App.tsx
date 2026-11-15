@@ -26,7 +26,7 @@ function App() {
     // its startup check (the backend then answers only its data routes) opens on the recovery sheet instead.
     void Promise.all([loadAssetPack(), dataStatus().catch(() => null)]).then(([on, data]) => {
       if (cancelled) return;
-      if (data?.status === 'corrupt') {
+      if (data?.available === false || data?.status === 'corrupt') {
         setFault(data);
         setStep('recovery');
         return;

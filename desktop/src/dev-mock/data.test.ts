@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it } from 'vitest';
+import { createDataStore, dataUnavailable, handleData } from './data';
 import { createMockRuntime } from './runtime';
 
 const url = (path: string) => new URL(path, 'http://localhost:1420');
@@ -67,5 +68,27 @@ describe('dev mock data routes', () => {
     expect(report.unpriced_models).toEqual([{ provider_id: 'openai-compatible', model_id: 'local-model' }]);
     expect(report.tz).toBe(480);
     expect(mock.rest(url('/api/data/usage?range=conversation'), 'GET').status).toBe(422);
+  });
+
+  it('exposes available in /api/data/status and gates non-data routes when available is false', () => {
+    const mock = createMockRuntime();
+    expect(mock.rest(url('/api/data/status'), 'GET').body).toMatchObject({ status: 'ok', available: true });
+    expect(mock.rest(url('/api/data/status?scenario=data-restore-failed'), 'GET').body).toMatchObject({
+      status: 'restore_failed',
+      available: true,
+    });
+    expect(mock.rest(url('/api/auth/state?scenario=data-restore-failed'), 'GET').status).toBe(200);
+    expect(mock.rest(url('/api/data/status?scenario=data-corrupt'), 'GET').body).toMatchObject({
+      status: 'corrupt',
+      available: false,
+    });
+
+    const unavailableRestore = createDataStore({ status: 'restore_failed', available: false }, null);
+    expect(handleData(url('/api/data/status'), 'GET', {}, unavailableRestore)?.body).toMatchObject({
+      status: 'restore_failed',
+      available: false,
+    });
+    expect(dataUnavailable(unavailableRestore, '/api/auth/state')?.status).toBe(503);
+    expect(dataUnavailable(unavailableRestore, '/api/data/status')).toBeNull();
   });
 });

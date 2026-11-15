@@ -10,6 +10,7 @@ type Frame = Record<string, unknown>;
 export type DataSeed = {
   /** 'ok' | 'corrupt' | 'restore_failed' */
   status?: string;
+  available?: boolean;
   detail?: string;
   backups?: SeedBackup[];
   /** The passcode file exists but cannot be read: treated as unset, and /api/auth/state says why. */
@@ -110,6 +111,7 @@ const toBackup = (seed: SeedBackup): Backup => {
 export function createDataStore(seed: DataSeed | undefined, passcode: string | null) {
   return {
     status: seed?.status ?? 'ok',
+    available: seed?.available ?? (seed?.status !== 'corrupt'),
     detail: seed?.detail ?? null,
     backups: (seed?.backups ?? DEFAULT_BACKUPS).map(toBackup),
     pendingRestore: null as string | null,
@@ -131,7 +133,7 @@ export type DataStore = ReturnType<typeof createDataStore>;
 /** A corrupt database closes every route but /health, the data routes and the diagnostics bundle, as the backend does. */
 export function dataUnavailable(store: DataStore, path: string): Reply | null {
   if (store.relocating) return fail(503, 'data_relocating');
-  if (store.status !== 'corrupt' || path === '/health' || path.startsWith('/api/data/') || path.startsWith('/api/diagnostics/')) return null;
+  if ((store.available && store.status !== 'corrupt') || path === '/health' || path.startsWith('/api/data/') || path.startsWith('/api/diagnostics/')) return null;
   return fail(503, 'data_unavailable');
 }
 
@@ -152,7 +154,7 @@ export function handleData(url: URL, method: string, body: Frame, store: DataSto
   }
 
   if (path === '/api/data/status' && method === 'GET') {
-    return ok({ status: store.status, detail: store.detail, backups: store.backups, restore_pending: store.pendingRestore });
+    return ok({ status: store.status, available: store.available, detail: store.detail, backups: store.backups, restore_pending: store.pendingRestore });
   }
   if (path === '/api/data/restore' && method === 'DELETE') {
     if (!store.pendingRestore) return fail(409, 'restore_not_pending');
@@ -160,7 +162,7 @@ export function handleData(url: URL, method: string, body: Frame, store: DataSto
     return ok({ cancelled: true });
   }
   if (path === '/api/data/restore-result/ack' && method === 'POST') {
-    if (store.status === 'restore_failed') {
+    if (store.status === 'restore_failed' && store.available) {
       store.status = 'ok';
       store.detail = null;
     }
@@ -168,7 +170,7 @@ export function handleData(url: URL, method: string, body: Frame, store: DataSto
   }
   if (path === '/api/data/backups' && method === 'GET') return ok(store.backups);
   if (path === '/api/data/backups' && method === 'POST') {
-    if (store.status === 'corrupt') return fail(500, 'backup_failed');
+    if (!store.available || store.status === 'corrupt') return fail(500, 'backup_failed');
     const now = new Date();
     const id = `${now.toISOString().replace(/[-:]/g, '').replace(/\.(\d{3})Z$/, '$1000Z')}-manual`;
     const backup = toBackup({ id, size: 18_903_040, app_version: '0.1.0' });
