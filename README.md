@@ -6,6 +6,8 @@
 
 这是一个非官方、非商业的粉丝作品，和官方没有任何关系，仓库里也不包含任何原作素材。 · [English](#english) · [日本語](#日本語)
 
+![Salieri login terminal](assets/screenshots/salieri-login.png)
+
 | | |
 |---|---|
 | ![SG worldline chat](assets/screenshots/sg-chat.png) | ![β worldline chat](assets/screenshots/beta-chat.png) |

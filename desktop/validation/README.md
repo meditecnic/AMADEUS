@@ -31,8 +31,8 @@ Set `missionDir`, `milestone`, `featureId` and a unique `runId` for the current
 task. **All paths passed to tools must be absolute.** For example:
 
 ```powershell
-$repo = 'D:\Amadeus\worktrees\frontend-kimi-20261017'
-$missionDir = 'C:\Users\reause\.factory\missions\<mission-id>'
+$repo = '<path-to-worktree>'
+$missionDir = '<path-to-mission-dir>'
 $milestone = 'm1-foundation'
 $featureId = 'm1-evidence-infra'
 $runId = '20261017-review-01'

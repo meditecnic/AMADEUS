@@ -581,14 +581,13 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
           </div>
 
           <div ref={pwdRowRef} className={`sl-row pwd${errorField === 'password' ? ' is-error' : ''}`}>
-            <label className={`sl-label${focusField === 'password' || errorField === 'password' ? ' is-on' : ''}`} htmlFor="salieri-pwd"><Plate press="sl-press" /><span>口令</span></label>
+            <label className={`sl-label${focusField === 'password' || errorField === 'password' ? ' is-on' : ''}`} htmlFor="salieri-pwd"><Plate press="sl-press" /><span>PASSWORD</span></label>
             <div className={`sl-slot${capsLock ? ' has-caps' : ''}`}>
               <input
                 ref={pwdRef}
                 id="salieri-pwd"
                 type={peek ? 'text' : 'password'}
                 className="sl-input password-input"
-                placeholder={passcodeSet ? '请输入口令' : undefined}
                 value={password}
                 onChange={(e) => { setPassword(e.target.value); if (!e.target.value) setPeek(false); plateRef.current?.tick(); }}
                 onFocus={() => setFocusField('password')}
