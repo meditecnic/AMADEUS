@@ -11,7 +11,7 @@
 | ![SG worldline chat](assets/screenshots/sg-chat.png) | ![β worldline chat](assets/screenshots/beta-chat.png) |
 | ![Worldline shift transition](assets/screenshots/worldline-shift.png) | ![Memory star map](assets/screenshots/memory-star-map.png) |
 
-*截图是没放原作素材包时截的，所以舞台上是自制的占位画面，记忆星图里是测试数据。除了登录页，界面正在整体重做，做完再换新截图。*
+*截图是没放原作素材包时截的，所以舞台上是自制的占位画面，记忆星图里是测试数据。*
 
 ## 现在做到哪了
 
@@ -91,7 +91,7 @@ Remove-Item Env:AMADEUS_DEV_MOCK -ErrorAction SilentlyContinue
 npm run dev -- --port 1420 --strictPort
 ```
 
-打开 http://localhost:1420/?scenario=streaming ，等 USER ID 自动打完 `Salieri`，用公开的本地测试口令 **`Gott würfelt nicht`** 登录。（算是原作的一个小彩蛋吧，后续我也会做些调整）发一句话，会收到三组预设的日语回复和中文字幕。会话和记忆都是测试数据，改了也只存在开发服务器的内存里，重启就还原。
+打开 http://localhost:1420/?scenario=streaming ，等 USER ID 自动打完 `Salieri`，默认没设启动口令，直接按 Enter 就进工作台。想看启动口令页，就打开 http://localhost:1420/?scenario=login-passcode ，用公开的本地测试口令 **`Gott würfelt nicht`** 登录。（算是原作的一个小彩蛋吧，后续我也会做些调整）发一句话，会收到三组预设的日语回复和中文字幕。会话和记忆都是测试数据，改了也只存在开发服务器的内存里，重启就还原。
 
 mock 只在开发服务器里有，打生产包时会被剔除。登录失败、空状态、离线、记忆档案等其他场景见 [场景说明](desktop/src/dev-mock/README.md)、[场景文件](desktop/src/dev-mock/scenarios/) 和 [浏览器走查说明](desktop/validation/README.md)。
 
@@ -147,7 +147,7 @@ npm run dev -- --port 1420 --strictPort
 
 源码运行一定要设非空的 `AMADEUS_DATA_DIR`，没有默认目录，没设会直接报错退出；只设 `AMADEUS_DB_PATH` 绕不过去。
 
-起来以后打开 http://localhost:1420 ，还是用 `Gott würfelt nicht` 登录（真实后端不分大小写，`ü` 写成 `u` 或 `ue` 也行）。点右上角「**系统 → 连接**」，填好你的模型和 API 密钥并保存，连接测试通过就能聊了。列表里默认那条 `OpenAI-compatible · http://127.0.0.1:1234/v1 · local-model` 是给本地模型服务准备的预设。
+起来以后打开 http://localhost:1420 ，默认没有启动口令，等 USER ID 打完直接按 Enter 就进工作台；在「**系统 → 数据**」里设了口令的话，就输你设的口令。（没设口令时输 `Gott würfelt nicht` 也能进，算个小彩蛋；不分大小写，`ü` 写成 `u` 或 `ue` 也行）点右上角「**系统 → 连接**」，填好你的模型和 API 密钥并保存，连接测试通过就能聊了。列表里默认那条 `OpenAI-compatible · http://127.0.0.1:1234/v1 · local-model` 是给本地模型服务准备的预设。
 
 第一次写记忆时，会自动下载嵌入模型 `jinaai/jina-embeddings-v5-text-nano-retrieval`（约 866 MB，Jina AI，CC BY-NC 4.0）。想提前下好固定的版本：
 
@@ -161,7 +161,7 @@ hf download jinaai/jina-embeddings-v5-text-nano-retrieval --revision ac5d898c8d3
 
 ### 3. 数据、日志和密钥
 
-- **数据**：安装版存在 `%LOCALAPPDATA%\com.amadeus.desktop\data`。卸载默认保留数据，只有在卸载时勾了删除应用数据才会删。想换位置，设用户环境变量 `AMADEUS_DATA_DIR` 再重启应用。
+- **数据**：安装版存在 `%LOCALAPPDATA%\com.amadeus.desktop\data`。卸载默认保留数据，只有在卸载时勾了删除应用数据才会删。想换位置，现在可以直接在「**系统 → 数据**」里选一个新的空目录迁移过去，迁完重启一下就行；也可以照旧设用户环境变量 `AMADEUS_DATA_DIR` 再重启应用（设了这个变量，应用内迁移就关掉了）。
 - **数据出问题时**：设的数据目录找不到或者无效，启动会直接停下提示，不会新建空库盖过去。已有的库没通过启动自检（`PRAGMA quick_check`），也不会新建空库，而是进入「数据异常」状态：对话等功能暂停，原来的库原样留着。升级时数据迁移失败，会先退回升级前的备份。
 - **日志**：见上面「[安装与常见问题](#安装与常见问题)」。
 - **密钥**：安装版存在 Windows 凭据管理器里；源码运行默认只放内存，重启后要重新填。在 Windows 上跑源码也想存下来，可以设 `AMADEUS_CREDENTIAL_BACKEND=windows`（会读写你本机真实的凭据）。
@@ -170,7 +170,7 @@ hf download jinaai/jina-embeddings-v5-text-nano-retrieval --revision ac5d898c8d3
 
 仓库里**没有**任何原作素材（立绘、CG、Logo、BGM 这些）。没有素材包也能用，界面会显示自制的占位画面。（版权问题，目前的解法就只能是素材包了）
 
-有素材包的话，放到数据目录下的 `asset-pack/amadeus-original/`（根目录要有 `manifest.json`），重启应用就行。素材包单独分发，里面只有原作素材；应用自己生成的底纹和插画随仓库发布，来源登记在 [assets/PROVENANCE.md](assets/PROVENANCE.md)。
+有素材包的话，现在可以直接在「**系统 → 角色与对话**」里选 `.zip` 或文件夹导入，装好立即生效，不用重启；不想要了也在那里卸载。手动放也照样行：放到数据目录下的 `asset-pack/amadeus-original/`（根目录要有 `manifest.json`），重启应用。素材包单独分发，里面只有原作素材；应用自己生成的底纹和插画随仓库发布，来源登记在 [assets/PROVENANCE.md](assets/PROVENANCE.md)。
 
 ## 语音（可选）
 
@@ -210,7 +210,7 @@ okeydokey，大概就是这些，那么来句帅气的收尾吧：El Psy Kongroo
 - **Optional voice.** Text-to-speech through a local GPT-SoVITS server (see [Voice](#voice-optional)).
 - **Local by design.** Services bind to loopback only. Conversation text goes only to the model provider you configure; with web search on, search queries also go to the search provider you chose.
 
-**Status:** v0.1.0 is being prepared; there is no public release yet. The installer passed a 10-item acceptance run on a clean Windows Server 2022 VM. The UI is being reworked (except the login screen), so screenshots will change. English and Japanese UIs are planned; she always speaks Japanese, with English subtitles in English mode and none in Japanese mode.
+**Status:** v0.1.0 is being prepared; there is no public release yet. The installer passed a 10-item acceptance run on a clean Windows Server 2022 VM. English and Japanese UIs are planned; she always speaks Japanese, with English subtitles in English mode and none in Japanese mode.
 
 ### Under the hood
 
@@ -252,7 +252,7 @@ Remove-Item Env:AMADEUS_DEV_MOCK -ErrorAction SilentlyContinue
 npm run dev -- --port 1420 --strictPort
 ```
 
-Open http://localhost:1420/?scenario=streaming, wait for USER ID to finish typing `Salieri`, and log in with the public local test passphrase **`Gott würfelt nicht`**. Send a message to get three scripted Japanese/Chinese sentence pairs. Histories and memory are synthetic and reset when the dev server restarts. The mock exists only in the dev server and is stripped from production builds. Other scenarios (login failure, empty, offline, memory) are listed in the [scenario guide](desktop/src/dev-mock/README.md), [scenario files](desktop/src/dev-mock/scenarios/) and [browser walkthrough](desktop/validation/README.md).
+Open http://localhost:1420/?scenario=streaming and wait for USER ID to finish typing `Salieri`. No startup passcode is set by default, so press Enter to open the workstation. To see the startup passcode screen, open http://localhost:1420/?scenario=login-passcode and log in with the public local test passphrase **`Gott würfelt nicht`**. Send a message to get three scripted Japanese/Chinese sentence pairs. Histories and memory are synthetic and reset when the dev server restarts. The mock exists only in the dev server and is stripped from production builds. Other scenarios (login failure, empty, offline, memory) are listed in the [scenario guide](desktop/src/dev-mock/README.md), [scenario files](desktop/src/dev-mock/scenarios/) and [browser walkthrough](desktop/validation/README.md).
 
 #### Real backend
 
@@ -304,7 +304,7 @@ npm run dev -- --port 1420 --strictPort
 
 Source runs require a nonempty `AMADEUS_DATA_DIR` and exit with an error without it; there is no default directory, and setting `AMADEUS_DB_PATH` alone does not get around it.
 
-Open http://localhost:1420 and log in with `Gott würfelt nicht` (case-insensitive; `ü` can be typed as `u` or `ue`). Open **系统 → 连接** (System → Connections), enter your model and API key, and save; once the connection check passes, you can chat. The `OpenAI-compatible · http://127.0.0.1:1234/v1 · local-model` entry is a preset for a local server.
+Open http://localhost:1420. No startup passcode is set by default: once USER ID is filled in, press Enter to open the workstation. If you set one in **系统 → 数据** (System → Data), type that passcode instead. (Without a passcode, `Gott würfelt nicht` also gets you in, with a small easter egg; it is case-insensitive, and `ü` can be typed as `u` or `ue`.) Open **系统 → 连接** (System → Connections), enter your model and API key, and save; once the connection check passes, you can chat. The `OpenAI-compatible · http://127.0.0.1:1234/v1 · local-model` entry is a preset for a local server.
 
 The first memory write downloads the embedding model `jinaai/jina-embeddings-v5-text-nano-retrieval` (~866 MB, Jina AI, CC BY-NC 4.0). To prefetch the pinned revision:
 
@@ -318,7 +318,7 @@ The desktop window comes from the installer build (`packaging/windows/`); `npm r
 
 #### Data, logs and keys
 
-- **Data.** The installer stores data in `%LOCALAPPDATA%\com.amadeus.desktop\data`. Uninstalling keeps it unless you choose to delete app data in the uninstaller. To move it, set the user environment variable `AMADEUS_DATA_DIR` and restart the app.
+- **Data.** The installer stores data in `%LOCALAPPDATA%\com.amadeus.desktop\data`. Uninstalling keeps it unless you choose to delete app data in the uninstaller. To move it, pick a new empty folder in **系统 → 数据** (System → Data) and restart once the move is done; setting the user environment variable `AMADEUS_DATA_DIR` and restarting still works too (while it is set, in-app moving is off).
 - **When data goes wrong.** If the configured data directory is missing or invalid, startup stops instead of creating an empty database. If existing databases fail the startup check (`PRAGMA quick_check`), the app enters a data-unavailable state: chat and other features pause and the original databases are left untouched. If a migration fails during an upgrade, the app rolls back to the pre-upgrade backup.
 - **Logs.** See [Install and troubleshooting](#install-and-troubleshooting).
 - **Keys.** Installed builds use the Windows Credential Manager; source runs keep keys in memory, so re-enter them after a restart. On Windows, `AMADEUS_CREDENTIAL_BACKEND=windows` persists keys from a source run (this uses your real Windows credentials).
@@ -334,7 +334,7 @@ Without voice, her lines appear as text and subtitles.
 
 ### Original asset pack
 
-This repository contains **no** original game assets (character art, CG, logos, BGM). The app runs without them and shows its own placeholder art. If you have the separately distributed asset pack, put it in `asset-pack/amadeus-original/` under the data directory (with `manifest.json` at its root) and restart the app. The pack holds only material from the original work; the app's own generated textures and illustrations ship in this repository and are listed in [assets/PROVENANCE.md](assets/PROVENANCE.md).
+This repository contains **no** original game assets (character art, CG, logos, BGM). The app runs without them and shows its own placeholder art. If you have the separately distributed asset pack, import it as a `.zip` or a folder in **系统 → 角色与对话** (System → Character); it takes effect immediately, without a restart, and can be removed from the same place. You can still put it in `asset-pack/amadeus-original/` under the data directory (with `manifest.json` at its root) by hand and restart the app. The pack holds only material from the original work; the app's own generated textures and illustrations ship in this repository and are listed in [assets/PROVENANCE.md](assets/PROVENANCE.md).
 
 ### License
 
@@ -359,8 +359,6 @@ STEINS;GATE, STEINS;GATE 0 and their characters, names and original assets belon
 
 この音声は『STEINS;GATE』の牧瀬紅莉栖の声を模倣したものです。キャラクター、原作の録音、声優の実演に関する権利は、それぞれの権利者に帰属します。モデルページの Apache-2.0 は、アップロードした本人が許諾できる範囲にのみ適用され、キャラクター、原作の録音、実演に関する権利の許諾を意味するものではありません。個人かつ非商用の用途に限って使用し、声優へのなりすましや、公式と誤認されるようなコンテンツの制作には使わないでください。権利者の方が関連内容の削除を希望される場合は、GitHub で issue を作成してください。速やかに対応します。
 
-UI はログイン画面を除いて全面的に作り直しているところで、スクリーンショットは完了後に差し替える。
-
 デスクトップ版は **Windows 10/11 x64 のみ**に対応し、v0.1.0 は公開準備中で、まだ公開リリースはない。公開後は [GitHub Releases](https://github.com/meditecnic/AMADEUS/releases) からインストーラーを入手できる。署名がないため SmartScreen の警告が出るので、「詳細情報 → 実行」を選ぶ。WebView2 がなければインストーラーがネット経由で導入する。音声は任意。バックエンドはループバックのみで待ち受け、ポートはシステムが割り当てる。ブラウザーでの開発モードは Linux でも動く。
 
 コードは MIT。インストーラーには CC BY-NC 4.0 の jina 埋め込みモデルが含まれるため、インストーラー全体は非商用利用に限る。音声コンポーネントには eSpeak NG（GPLv3）が含まれ、対応するソース `amadeus-0.1.0-speech-sources.zip` は各バージョンと一緒に Releases で公開する。詳細は [第三者ライセンス](THIRD_PARTY_NOTICES.md) を参照。
@@ -373,13 +371,13 @@ UI はログイン画面を除いて全面的に作り直しているところ�
 - **ログの場所**：インストール版のバックエンドログ（`backend-stdout.log`、`backend-stderr.log`、起動失敗時の `backend-startup.log`）は標準で `%LOCALAPPDATA%\com.amadeus.desktop\logs` に出力される。`AMADEUS_DATA_DIR` を設定している場合は `<AMADEUS_DATA_DIR>\logs` に出力される。
 - **不具合の報告**：[GitHub Issues](https://github.com/meditecnic/AMADEUS/issues) で問題を報告する際は、**API キー、トークン、会話内容は貼らないこと**。
 
-開発時の起動方法は [本地开发运行](#本地开发运行) / [Run it](#run-it-development) を参照。**標準はローカル mock** で、Node.js だけで動き、Python バックエンド、API キー、実際のモデルや TTS は不要。[Local mock](#local-mock-default) の手順で `npm ci` と `npm run dev -- --port 1420 --strictPort` を実行し、http://localhost:1420/?scenario=streaming を開く。USER ID が `Salieri` と入力されるまで待ち、公開のローカルテスト用合言葉 `Gott würfelt nicht` でログインする。メッセージを送ると、日本語と中国語字幕の組が三つ、順番に届く。会話と記憶はテストデータで、開発サーバーの再起動でリセットされる。mock は開発専用で、製品ビルドには含まれず、`npm run preview` でも利用できない。
+開発時の起動方法は [本地开发运行](#本地开发运行) / [Run it](#run-it-development) を参照。**標準はローカル mock** で、Node.js だけで動き、Python バックエンド、API キー、実際のモデルや TTS は不要。[Local mock](#local-mock-default) の手順で `npm ci` と `npm run dev -- --port 1420 --strictPort` を実行し、http://localhost:1420/?scenario=streaming を開く。USER ID が `Salieri` と入力されるまで待つ。標準では起動パスコードが未設定なので、そのまま Enter を押せばワークステーションに入れる。起動パスコード画面を見たいときは http://localhost:1420/?scenario=login-passcode を開き、公開のローカルテスト用合言葉 `Gott würfelt nicht` でログインする。メッセージを送ると、日本語と中国語字幕の組が三つ、順番に届く。会話と記憶はテストデータで、開発サーバーの再起動でリセットされる。mock は開発専用で、製品ビルドには含まれず、`npm run preview` でも利用できない。
 
 利用できる状態は [シナリオ一覧と切り替え方法](desktop/src/dev-mock/README.md) と [JSON ファイル](desktop/src/dev-mock/scenarios/)、確認手順は [ブラウザー検証ガイド](desktop/validation/README.md) を参照。
 
-**実際のバックエンドを使う場合**は [Real backend](#real-backend) に従って Python サーバーを起動し、フロントエンド側の PowerShell で `$env:AMADEUS_DEV_MOCK = "0"` を設定してから Vite を起動する。合言葉は同じ `Gott würfelt nicht`――神はサイコロを振らない。ログイン後、右上の「系统 → 连接」で自分のモデル接続を設定する。初回の記憶書き込み時に記憶用の埋め込みモデルがダウンロードされる。音声は任意。
+**実際のバックエンドを使う場合**は [Real backend](#real-backend) に従って Python サーバーを起動し、フロントエンド側の PowerShell で `$env:AMADEUS_DEV_MOCK = "0"` を設定してから Vite を起動する。標準では起動パスコードがないので、USER ID の入力が終わったら Enter を押すだけでいい。「系统 → 数据」でパスコードを設定した場合は、そのパスコードを入力する。パスコード未設定のときに合言葉 `Gott würfelt nicht`――神はサイコロを振らない――を打つと、ちょっとした仕掛けがある。ログイン後、右上の「系统 → 连接」で自分のモデル接続を設定する。初回の記憶書き込み時に記憶用の埋め込みモデルがダウンロードされる。音声は任意。
 
-インストール版のデータは `%LOCALAPPDATA%\com.amadeus.desktop\data` に保存され、アンインストール時は標準で保持される（アプリデータ削除を選ぶとこのディレクトリも削除される）。保存先はユーザー環境変数 `AMADEUS_DATA_DIR` を設定してアプリを再起動すると変更でき、ソース実行とバックエンド実行ファイルの単独起動ではこの変数が空または未設定なら起動を拒否する。
+インストール版のデータは `%LOCALAPPDATA%\com.amadeus.desktop\data` に保存され、アンインストール時は標準で保持される（アプリデータ削除を選ぶとこのディレクトリも削除される）。保存先は「系统 → 数据」で新しい空のフォルダーを選んで移行し、再起動すれば変更できる。ユーザー環境変数 `AMADEUS_DATA_DIR` を設定してアプリを再起動する方法も引き続き使える（この変数を設定している間はアプリ内での移行は無効）。ソース実行とバックエンド実行ファイルの単独起動ではこの変数が空または未設定なら起動を拒否する。別途配布の原作素材パックは「系统 → 角色与对话」で `.zip` かフォルダーを選べば導入・削除でき、再起動なしですぐに反映される（データディレクトリの `asset-pack/amadeus-original/` に手動で置いて再起動する方法も使える）。
 
 非公式・非営利のファン作品。原作素材は一切含まない。STEINS;GATE の権利は MAGES. Inc. および各権利者に帰属する。
 

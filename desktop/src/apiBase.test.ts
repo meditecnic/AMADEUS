@@ -46,10 +46,10 @@ it('routes packaged HTTP/assets and WS via official Tauri IPC with in-memory aut
   expect(invoke).toHaveBeenCalledExactlyOnceWith('get_local_backend');
   const controller = new AbortController();
   const init = { method: 'POST', body: '{}', signal: controller.signal, headers: { 'Content-Type': 'application/json' } };
-  await api.apiFetch('/api/auth/salieri', init);
+  await api.apiFetch('/api/auth/login', init);
   expect(fetch).toHaveBeenCalledTimes(1);
   const [url, options] = fetch.mock.calls[0];
-  expect(url).toBe('http://127.0.0.1:8000/api/auth/salieri');
+  expect(url).toBe('http://127.0.0.1:8000/api/auth/login');
   expect(options).toMatchObject({ method: 'POST', body: '{}', signal: controller.signal });
   expect(new Headers(options.headers).get('Authorization')).toBe(`Bearer ${payload().token}`);
   expect(new Headers(options.headers).get('Content-Type')).toBe('application/json');

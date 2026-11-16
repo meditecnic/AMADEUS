@@ -87,13 +87,17 @@ milestones change the markup. Do not reuse snapshot refs across navigations.
    produce `无效的 USER ID`. Use a bounded readiness check, not a long sleep.
    Capture `01-login.png`. Login is worldline-neutral: the drafting sheet looks
    the same on both lines; the saved worldline only shows once the workstation
-   is revealed behind the pen. A wrong passphrase must read `密码错误` in the
-   `role="alert"` line and return focus to `#salieri-pwd` with its text selected.
+   is revealed behind the pen. By default no startup passcode is set and the
+   note line reads `没有设口令，直接按 Enter 进入`. With
+   `?scenario=login-passcode` a passcode is set: a wrong one must read
+   `口令错误` in the `role="alert"` line and return focus to `#salieri-pwd`
+   with its text selected.
 
-3. `browser_fill_form` targets `#salieri-pwd` with the mock passphrase
-   `Gott würfelt nicht`, then `browser_click` targets `.decrypt-btn`.
-   Verify **POST `/api/auth/salieri` → 200** in network diagnostics.
-   The actual route is not `/api/login`. Wait for `.ws2`, an enabled
+3. Without a passcode, leave `#salieri-pwd` empty; with
+   `?scenario=login-passcode`, `browser_fill_form` targets `#salieri-pwd`
+   with the mock passcode `Gott würfelt nicht`. Then `browser_click` targets
+   `.decrypt-btn`. Verify **POST `/api/auth/login` → 200** in network
+   diagnostics. Wait for `.ws2`, an enabled
    `textarea[aria-label='输入消息']`, ONLINE status and the entrance to
    finish: `.sl-root` is removed and `.ws2` loses `data-entrance` and
    `inert` (about 2.5 s: the pen sweeps the sheet away left to right and the

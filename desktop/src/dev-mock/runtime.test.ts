@@ -27,11 +27,15 @@ describe('dev mock REST contracts', () => {
 
   it('matches the actual login route, passphrase and catalog-defined HTTP failures', () => {
     const mock = createMockRuntime();
-    expect(mock.rest(url('/api/auth/salieri'), 'POST', { password: 'Gott würfelt nicht' }).status).toBe(200);
-    expect(mock.rest(url('/api/auth/salieri'), 'POST', { password: 'wrong' })).toEqual({
-      status: 401, body: { detail: scenarios.streaming.login.failureMessage },
+    expect(mock.rest(url('/api/auth/login'), 'POST', {})).toEqual({ status: 200, body: { status: 'success', easter_egg: false } });
+    expect(mock.rest(url('/api/auth/login?scenario=login-passcode'), 'POST', { passcode: 'Gott würfelt nicht' })).toEqual({
+      status: 200, body: { status: 'success', easter_egg: true },
     });
-    expect(mock.rest(url('/api/auth/salieri?scenario=login-failure'), 'POST', { password: 'Gott würfelt nicht' }).status).toBe(401);
+    expect(mock.rest(url('/api/auth/login?scenario=login-passcode'), 'POST', { passcode: 'wrong' })).toEqual({
+      status: 401, body: { detail: { code: 'invalid_passcode' } },
+    });
+    expect(mock.rest(url('/api/auth/login?scenario=login-failure'), 'POST', { passcode: 'Gott würfelt nicht' }).status).toBe(401);
+    expect(mock.rest(url('/api/auth/salieri'), 'POST', { password: 'Gott würfelt nicht' }).status).toBe(404);
   });
 
   it('serves usable provider/model shapes and safe absent-asset response', () => {

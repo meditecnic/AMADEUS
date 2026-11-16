@@ -123,11 +123,6 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
       const accepted = !scenario.login.forceFailure && (data.passcode === null || value === data.passcode);
       return accepted ? ok({ status: 'success', easter_egg: egg }) : ok({ detail: { code: 'invalid_passcode' } }, 401);
     }
-    if (path === '/api/auth/salieri' && method === 'POST') {
-      const accepted = body.password === scenario.login.password && !scenario.login.forceFailure;
-      return accepted ? ok({ ok: true }, scenario.login.successStatus)
-        : ok({ detail: scenario.login.failureMessage }, scenario.login.failureStatus);
-    }
     if (path === '/health') return ok({ ok: true, mode: 'dev-mock' });
     if (path === '/health/dependencies') return ok({ dependencies: { tts: { ok: false } } });
     if (path.startsWith('/api/providers')) {
