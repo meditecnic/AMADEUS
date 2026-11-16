@@ -10,7 +10,6 @@ import {
   IDENTITY_MODE_STORAGE_KEY,
   RESERVED_OKABE_NAME_HINT,
   SELF_NAME_INVALID_CHARS_HINT,
-  SELF_NAME_REQUIRED_HINT,
   SELF_NAME_MAX_CODEPOINTS,
   SELF_NAME_STORAGE_KEY,
   SELF_NAME_TOO_LONG_HINT,
@@ -175,16 +174,34 @@ describe('embedded settings save as they change', () => {
     expect(save).toHaveBeenCalledExactlyOnceWith({ sovitsUrl: 'http://10.0.0.2:9880' });
   });
 
-  it('keeps the hint and the saved name when a self-mode name is emptied or invalid', () => {
+  it.each(['', '   '])('lets a self-mode name be cleared back to unset (%j)', (value) => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    const { rerender } = render(<SettingsModal {...embeddedProps} identityMode="self" tab="basic" onSaveSettings={save} />);
+    const name = screen.getByTestId('self-name-input');
+    fireEvent.change(name, { target: { value } });
+    fireEvent.blur(name);
+    expect(save).toHaveBeenCalledExactlyOnceWith({ selfName: '' });
+    expect(screen.queryByRole('alert')).toBeNull();
+
+    // Already unset: a blank field is not a change.
+    rerender(<SettingsModal {...embeddedProps} identityMode="self" selfName="" tab="basic" onSaveSettings={save} />);
+    fireEvent.change(name, { target: { value: '  ' } });
+    fireEvent.blur(name);
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['too long', 'x'.repeat(SELF_NAME_MAX_CODEPOINTS + 1), SELF_NAME_TOO_LONG_HINT],
+    ['reserved', '岡部倫太郎', RESERVED_OKABE_NAME_HINT],
+    ['disallowed characters', 'Ali<ce>', SELF_NAME_INVALID_CHARS_HINT],
+  ])('keeps the hint and the saved name when a self-mode name is %s', (_case, value, hint) => {
     const save = vi.fn().mockResolvedValue(undefined);
     render(<SettingsModal {...embeddedProps} identityMode="self" tab="basic" onSaveSettings={save} />);
     const name = screen.getByTestId('self-name-input');
-    fireEvent.change(name, { target: { value: '   ' } });
-    fireEvent.blur(name);
-    expect(screen.getByRole('alert')).toHaveTextContent(SELF_NAME_REQUIRED_HINT);
-    fireEvent.change(name, { target: { value: 'x'.repeat(SELF_NAME_MAX_CODEPOINTS + 1) } });
+    fireEvent.change(name, { target: { value } });
     fireEvent.keyDown(name, { key: 'Enter' });
-    expect(screen.getByRole('alert')).toHaveTextContent(SELF_NAME_TOO_LONG_HINT);
+    expect(screen.getByRole('alert')).toHaveTextContent(hint);
+    fireEvent.blur(name);
     expect(save).not.toHaveBeenCalled();
   });
 });

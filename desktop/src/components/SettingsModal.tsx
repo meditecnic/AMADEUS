@@ -183,8 +183,6 @@ export interface SettingsSavePayload {
 export type EmbeddedSettingsPatch = Partial<Pick<SettingsSavePayload,
   'systemPrompt' | 'enableTts' | 'sovitsUrl' | 'temperature' | 'identityMode' | 'selfName'>>;
 
-export const SELF_NAME_REQUIRED_HINT = '选择「自己」时需要填写称呼；留空不会保存。';
-
 export interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -438,7 +436,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     if (localSelfName !== selfName) {
       const checked = validateSelfName(localSelfName);
       if (!checked.ok) setSelfNameError(checked.error);
-      else if (!checked.value && localIdentityMode === 'self') setSelfNameError(SELF_NAME_REQUIRED_HINT);
       else if (checked.value !== selfName) patch.selfName = checked.value;
     }
     if (Object.keys(patch).length) void applyPatch(patch);
