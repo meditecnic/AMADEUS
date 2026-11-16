@@ -12,6 +12,7 @@ from starlette.websockets import WebSocketState
 
 from app import config
 from app.db import normalize_worldline
+from app.services import data_relocation, data_startup
 from app.services.credentials import credential_store
 from app.services.provider_runtime import provider_registry
 from app.services.session_manager import session_coordinator
@@ -45,15 +46,38 @@ async def _send_voice_payload(websocket: WebSocket, payload: dict) -> None:
     await websocket.send_json(payload)
 
 
+class _VoiceAdmission(WebSocket):
+    """Add the voice error code to the shared handshake's relocation refusal."""
+
+    async def send_json(self, data, mode="text"):
+        await super().send_json({**data, "code": "data_relocating"}, mode=mode)
+
+
+async def _reject_voice(websocket: WebSocket, code: str, message: str) -> None:
+    await websocket.send_json({"type": "voice.error", "code": code, "message": message})
+    await websocket.close()
+
+
 @router.websocket("/ws/voice")
 async def websocket_voice_endpoint(websocket: WebSocket):
     from app.security.local_transport import accept_local_websocket
 
-    if not await accept_local_websocket(websocket):
+    handshake = _VoiceAdmission(websocket.scope, websocket.receive, websocket.send)
+    if not await accept_local_websocket(handshake):
+        return
+    if not data_startup.available():
+        await _reject_voice(websocket, "data_unavailable", "Data is unavailable")
+        return
+    if data_relocation.relocating():
+        await _reject_voice(websocket, "data_relocating", "Data is being moved")
         return
     session_id = websocket.query_params.get("session_id", "default")
-    worldline = normalize_worldline(websocket.query_params.get("worldline", "steins_gate"))
-    from app.routers.chat_ws import SessionState, processor_loop, sessions, sessions_creation_lock
+    try:
+        worldline = normalize_worldline(websocket.query_params.get("worldline", "steins_gate"))
+    except ValueError:
+        await _reject_voice(websocket, "invalid_worldline", "Unsupported worldline")
+        return
+    from app.routers.chat_ws import SessionState, process_queued_turn, sessions, sessions_creation_lock
     async with sessions_creation_lock:
         session = sessions.setdefault(session_id, SessionState(session_id))
     session.worldline = worldline
@@ -106,10 +130,10 @@ async def websocket_voice_endpoint(websocket: WebSocket):
         )
         await websocket.send_json({"type": "stt.final", "content": text, "emotion": emotion, "confidence": confidence})
         if text and not session.is_busy and not session.erasure_pending:
-            # id filled after chat processor save_message (Memory Ingest v2).
-            session.append_message({"role": "user", "content": text, "id": None})
             session.is_busy = True
-            session.active_task = asyncio.create_task(processor_loop(session, text, send_queue, session.current_epoch, session.history_epoch))
+            session.active_task = asyncio.create_task(
+                process_queued_turn(session, text, send_queue, session.current_epoch, session.history_epoch)
+            )
             session.active_task_connection_id = connection_id
 
     async def vad_monitor():
@@ -130,8 +154,8 @@ async def websocket_voice_endpoint(websocket: WebSocket):
                 break
             if message.get("bytes") is not None:
                 if not authenticated:
-                    await websocket.send_json({"type": "voice.error", "message": "authentication required"})
-                    continue
+                    await _reject_voice(websocket, "unauthorized", "Authentication required")
+                    break
                 chunk = message["bytes"]
                 buffer.extend(chunk)
                 if await speech_service.has_speech(chunk, sample_rate, config.VAD_THRESHOLD):
@@ -151,6 +175,9 @@ async def websocket_voice_endpoint(websocket: WebSocket):
                 await websocket.send_json({'type': 'voice.error', 'code': 'invalid_frame', 'message': 'invalid JSON object'})
                 continue
             kind = frame.get("type")
+            if not authenticated and kind in ("voice.start", "voice.commit"):
+                await _reject_voice(websocket, "unauthorized", "Authentication required")
+                break
             if kind == "auth":
                 api_key = credential_store.get(session.provider_id)
                 provider_snapshot = provider_registry.snapshot(

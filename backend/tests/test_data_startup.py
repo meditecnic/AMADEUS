@@ -72,6 +72,7 @@ def test_corruption_keeps_recovery_api_and_existing_ws_error(data_root, monkeypa
         assert client.get('/health', headers=headers).json() == {'status': 'ok'}
         state = client.get('/api/data/status', headers=headers).json()
         assert state['status'] == 'corrupt'
+        assert state['available'] is False
         assert state['detail']
         assert state['backups'] == []
         response = client.get('/api/settings', headers=headers)
@@ -146,9 +147,45 @@ async def test_restore_validation_failure_reported_without_lockout(data_root):
     backups.schedule_restore(selected['id'])
     (data_root / 'backups' / selected['id'] / 'control.sqlite3').write_bytes(b'tampered')
     assert await data_startup.initialize() == (True, True)
-    assert data_startup.current_status()['status'] == 'restore_failed'
+    assert data_startup.status_report()['status'] == 'restore_failed'
+    assert data_startup.status_report()['available'] is True
     assert 'checksum mismatch' in data_startup.current_status()['detail']
     assert value_at(path) == 'before'
+
+
+@pytest.mark.parametrize("retry", ["schedule", "cancel"])
+async def test_recovery_resolves_interrupted_restore_journal(data_root, monkeypatch, retry):
+    path = make_database(data_root)
+    selected = backups.create_backup()
+    rollback = backups.create_backup("pre-restore")
+    saved = data_root / "backups" / rollback["id"] / "originals" / path.name
+    saved.parent.mkdir()
+    path.replace(saved)
+    journal = data_root / "restore-request.json"
+    backups.atomic_json(journal, {
+        "id": selected["id"], "phase": "applying", "rollback_id": rollback["id"],
+        "originals": [path.name],
+    })
+    replace = backups.os.replace
+
+    def fail_original_move(source, target):
+        if source == saved:
+            raise OSError("injected rollback interruption")
+        return replace(source, target)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(backups.os, "replace", fail_original_move)
+        assert await data_startup.initialize() == (False, True)
+    assert data_startup.status_report()["available"] is False
+    assert journal.exists() and not path.exists()
+
+    if retry == "schedule":
+        assert backups.schedule_restore(selected["id"]) == {"restart_required": True}
+        assert backups.pending_restore_id() == selected["id"]
+    else:
+        assert backups.cancel_restore() == {"cancelled": True}
+        assert not journal.exists()
+    assert value_at(path) == "before"
 
 
 def test_weekly_backup_does_not_block_startup(data_root, monkeypatch):

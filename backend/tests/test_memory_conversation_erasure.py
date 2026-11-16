@@ -39,6 +39,14 @@ def test_retained_memory_marks_removed_history_source_unavailable(isolated_clien
     assert 'private source excerpt' not in str(details.json()['provenance'])
 
 
+def test_delete_can_also_erase_exclusive_long_term_memory(isolated_client):
+    client, owner = isolated_client, "delete-with-forget-owner"
+    conversation, _, fact, _ = _source(client, owner, "exclusive secret")
+    params = {"session_id": owner, "worldline": "steins_gate", "forget_long_term": True}
+    assert client.delete(f"/api/conversations/{conversation}", params=params).status_code == 204
+    assert client.get(f"/api/memory/facts/{fact}/details", params=_facts_scope(owner)).status_code == 404
+
+
 def test_forget_erases_v11_exclusive_fact_but_keeps_other_conversation(isolated_client):
     client = isolated_client
     owner = 'forget-v11-owner'
@@ -51,6 +59,27 @@ def test_forget_erases_v11_exclusive_fact_but_keeps_other_conversation(isolated_
     assert client.get(f'/api/memory/facts/{other_fact}/details', params=_facts_scope(owner)).status_code == 200
     assert _db_rows('SELECT display_text, semantic_json FROM memory_observations WHERE observation_id=?', (observation,)) == [{'display_text': None, 'semantic_json': None}]
     assert _db_rows('SELECT excerpt FROM memory_observation_sources WHERE observation_id=?', (other_observation,))[0]['excerpt'] == 'other conversation'
+
+
+@pytest.mark.parametrize("protected_by", ["pin", "user_edit"])
+def test_forget_retains_user_protected_fact_and_erases_source(isolated_client, protected_by):
+    client, owner = isolated_client, "protected-fact-owner"
+    conversation, _, fact, observation = _source(client, owner, "private provenance")
+    fact_path = f"/api/memory/facts/{fact}"
+    if protected_by == "pin":
+        response = client.patch(f"{fact_path}/presentation", params=_facts_scope(owner), json={"is_pinned": True})
+    else:
+        response = client.patch(fact_path, params=_facts_scope(owner),
+                                json={"expected_version": 1, "display_text": "manually saved fact"})
+    assert response.status_code == 200, response.text
+
+    response = client.post(f"/api/conversations/{conversation}/forget",
+        params={"session_id": owner, "worldline": "steins_gate"}, json={"forget_long_term": True})
+    assert response.status_code == 200, response.text
+    assert client.get(f"{fact_path}/details", params=_facts_scope(owner)).status_code == 200
+    assert _db_rows(
+        "SELECT source_state,excerpt FROM memory_observation_sources WHERE observation_id=?", (observation,),
+    ) == [{"source_state": "deleted", "excerpt": None}]
 
 
 def test_forget_preserves_fact_supported_by_another_conversation(isolated_client):

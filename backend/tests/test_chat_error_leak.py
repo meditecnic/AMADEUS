@@ -49,6 +49,60 @@ async def test_turn_failed_hides_exception_and_preserves_contract(monkeypatch, c
     _assert_logged(capsys, "[Processor Error] Session error-leak-turn:", type(error).__name__)
 
 
+async def test_turn_setup_failure_releases_busy_and_discards_only_current_user(monkeypatch):
+    session = chat_ws.SessionState("turn-setup-failure")
+    previous = {"role": "user", "content": "same text", "id": 42}
+    session.append_message(previous)
+    session.append_message({"role": "user", "content": "same text", "id": None})
+    monkeypatch.setitem(vars(conversation_service), "get_selected", AsyncMock(side_effect=OSError("injected")))
+    queue = asyncio.Queue()
+
+    await chat_ws.processor_loop(session, "same text", queue, 0, session.history_epoch)
+
+    assert _frames(queue) == [{
+        "type": "error", "code": "turn_failed", "recoverable": True, "message": "Server error",
+    }]
+    assert session.history == [previous]
+    assert session.is_busy is False
+
+
+async def test_turn_creates_and_selects_conversation_when_history_is_empty(monkeypatch):
+    await chat_ws.init_db()
+    session = chat_ws.SessionState(f"empty-history-{uuid4()}")
+    existing = await conversation_service.create_and_select(session.session_id, session.worldline)
+    await conversation_service.delete(existing["id"], session.session_id, session.worldline)
+    assert await conversation_service.get_selected(session.session_id, session.worldline) is None
+    monkeypatch.setitem(vars(chat_ws.provider_registry), "snapshot", Mock(side_effect=KeyError))
+    queue = asyncio.Queue()
+
+    await chat_ws.process_queued_turn(session, "hello", queue, 0, session.history_epoch)
+
+    assert _frames(queue)[0]["code"] == "model_unavailable"
+    selected = await conversation_service.get_selected(session.session_id, session.worldline)
+    assert selected is not None and selected["id"] == session.conversation_id
+    assert session.history == []
+    assert session.is_busy is False
+
+
+async def test_turn_cancelled_during_compile_discards_the_unsaved_user(monkeypatch):
+    await chat_ws.init_db()
+    session = chat_ws.SessionState(f"cancel-before-save-{uuid4()}")
+    selected = await conversation_service.create_and_select(session.session_id, session.worldline)
+    session.conversation_id = selected["id"]
+
+    async def cancel_during_compile(state, user_msg, *, provider):
+        assert state.history[-1] == {"role": "user", "content": user_msg, "id": None}
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(chat_ws, "compile_for_session", cancel_during_compile)
+    with pytest.raises(asyncio.CancelledError):
+        await chat_ws.process_queued_turn(session, "hello", asyncio.Queue(), 0, session.history_epoch)
+
+    assert session.history == []
+    assert await chat_ws.models.get_recent_messages(session.session_id, conversation_id=session.conversation_id) == []
+    assert session.is_busy is False
+
+
 @pytest.mark.parametrize("status", [401, 403, 500])
 async def test_turn_failed_preserves_safe_provider_status(monkeypatch, status):
     session = chat_ws.SessionState("provider-error")

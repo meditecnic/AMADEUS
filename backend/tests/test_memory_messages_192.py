@@ -1,5 +1,6 @@
 """Offline contracts for the ephemeral memory WS notifications."""
 import asyncio
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -133,6 +134,33 @@ async def test_subscriber_failure_is_type_only_and_job_stays_completed(isolated_
         off()
 
 
+@pytest.mark.timeout(15)
+def test_memory_recorded_survives_http_delete_fallback_across_identity_modes(app_client, monkeypatch):
+    monkeypatch.setattr(jobs, "process_due_jobs_once", AsyncMock(return_value=[]))
+    session_id = f"delete-fallback-{uuid4()}"
+    job = app_client.portal.call(make_job, session_id)
+    current = app_client.post("/api/conversations", json={
+        "session_id": session_id, "identity_mode": "okabe",
+    }).json()
+
+    async def complete():
+        result = await jobs.process_memory_job(job_id=job["job_id"], memory_completion=create_completion)
+        assert result["state"] == "completed"
+        await drain()
+
+    with app_client.websocket_connect(f"/ws/chat?session_id={session_id}") as ws:
+        ws.send_json({"type": "auth", "protocol_version": 2, "conversation_id": current["id"]})
+        assert ws.receive_json()["conversation_id"] == current["id"]
+        response = app_client.delete(f"/api/conversations/{current['id']}", params={"session_id": session_id})
+        assert response.status_code == 204
+        app_client.portal.call(complete)
+        ws.send_json({"type": "unknown192"})
+        frame = ws.receive_json()
+        assert frame["type"] == "memory.recorded", frame
+        assert frame["conversation_id"] == job["conversation_id"]
+        assert ws.receive_json()["type"] == "error"
+
+
 @pytest.mark.parametrize("protocol", [1, 2])
 def test_ws_subscription_scope_conversation_and_cleanup(app_client, protocol):
     session_id = f"messages192-{uuid4()}"
@@ -140,28 +168,27 @@ def test_ws_subscription_scope_conversation_and_cleanup(app_client, protocol):
         "session_id": session_id, "worldline": "steins_gate", "identity_mode": "self"}).json()
     other = app_client.post("/api/conversations", json={
         "session_id": session_id, "worldline": "steins_gate", "identity_mode": "okabe"}).json()
-    scope = (session_id, "steins_gate", "self")
+    scope = (session_id, "steins_gate")
     with app_client.websocket_connect(f"/ws/chat?session_id={session_id}") as ws:
         ws.send_json({"type": "auth", "protocol_version": protocol, "conversation_id": conv["id"]})
         assert ws.receive_json()["type"] == "session.ready"
         assert bool(events._subscribers.get(scope)) == (protocol == 2)
 
-        def send(conversation):
+        def send(conversation, identity_mode):
             for receive in tuple(events._subscribers.get(scope, ())):
-                receive({"type": "memory.recorded", "conversation_id": conversation,
+                receive(identity_mode, {"type": "memory.recorded", "conversation_id": conversation,
                          "turn_id": "old-turn", "source_message_id": 123, "changes": []})
 
-        app_client.portal.call(send, other["id"])
-        app_client.portal.call(send, conv["id"])
+        app_client.portal.call(send, other["id"], "self")
+        app_client.portal.call(send, conv["id"], "okabe")
+        app_client.portal.call(send, conv["id"], "self")
         ws.send_json({"type": "unknown192"})
         if protocol == 2:
             assert ws.receive_json()["type"] == "memory.recorded"
         assert ws.receive_json()["type"] == "error"
         ws.send_json({"type": "conversation.switch", "conversation_id": other["id"]})
         assert ws.receive_json()["type"] == "conversation.switched"
-        assert scope not in events._subscribers
-        if protocol == 2:
-            assert (session_id, "steins_gate", "okabe") in events._subscribers
+        assert bool(events._subscribers.get(scope)) == (protocol == 2)
         ws.send_json({"type": "worldline.switch", "target_worldline": "beta"})
         assert ws.receive_json()["type"] == "worldline.switched"
         assert not any(s[:2] == (session_id, "steins_gate") for s in events._subscribers)

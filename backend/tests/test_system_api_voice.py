@@ -10,11 +10,19 @@ from app.main import app
 from app.routers.chat_ws import sessions
 
 
-@pytest.mark.parametrize('frame', ['{', '[]', '{"type":"voice.start","sample_rate":-1}', '{"type":"voice.start","channels":3}'])
-def test_voice_bad_frames_report_error_and_keep_connection(app_client, frame):
+@pytest.mark.parametrize(('frame', 'code'), [
+    ('{', 'invalid_frame'),
+    ('[]', 'invalid_frame'),
+    ('{"type":"voice.start","sample_rate":-1}', 'invalid_audio_format'),
+    ('{"type":"voice.start","channels":3}', 'invalid_audio_format'),
+])
+def test_voice_bad_frames_report_error_and_keep_connection(app_client, frame, code):
     with app_client.websocket_connect('/ws/voice?session_id=bad-voice-frame') as ws:
+        ws.send_json({'type': 'auth'})
+        assert ws.receive_json()['type'] == 'voice.ready'
         ws.send_text(frame)
-        assert ws.receive_json()['type'] == 'voice.error'
+        error = ws.receive_json()
+        assert (error['type'], error['code']) == ('voice.error', code)
         ws.send_json({'type': 'ping'})
         assert ws.receive_json()['type'] == 'pong'
 

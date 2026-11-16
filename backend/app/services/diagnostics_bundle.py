@@ -30,7 +30,13 @@ def _credential(provider: str) -> str:
 
 
 def _secrets() -> list[str]:
-    ids = [d.id for d in provider_registry.list_definitions()]
+    ids = {d.id for d in provider_registry.list_definitions()}
+    try:
+        path = Path(db._resolve_path("steins_gate", "control"))
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=0.2)) as connection:
+            ids.update(row[0] for row in connection.execute("SELECT provider_id FROM provider_configurations"))
+    except (sqlite3.Error, OSError):
+        pass
     values = [_credential(p) for p in [*ids, *SEARCH_CREDENTIAL_BY_PROVIDER.values()]]
     values += [search_service.configured_key(p) for p in SEARCH_CREDENTIAL_BY_PROVIDER]
     values.append(local_transport.LOCAL_API_TOKEN.decode("utf-8"))
