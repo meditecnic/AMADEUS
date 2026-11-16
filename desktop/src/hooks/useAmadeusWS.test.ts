@@ -803,6 +803,75 @@ describe('useAmadeusWS v2', () => {
     unmount();
   });
 
+  it('keeps the turn active through streamed sentences with TTS off, until the turn ends', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const { result, unmount } = renderHook(() => useAmadeusWS({ ...params, enableTts: false }));
+    const socket = FakeWebSocket.instances[0];
+    const segment = (id: number) => ({
+      type: 'segment.ready', conversation_id: 'c', turn_id: 't', generation: 1, segment_id: id, ja: `文${id}`, zh: '',
+    });
+    act(() => {
+      socket.onopen?.();
+      result.current.sendChat('hello');
+    });
+    expect(result.current.isTurnActive).toBe(false);
+    act(() => socket.emit({ type: 'turn.started', conversation_id: 'c', turn_id: 't', generation: 1 }));
+    expect(result.current.isTurnActive).toBe(true);
+    act(() => socket.emit(segment(0)));
+    expect(result.current.isThinking).toBe(false);
+    expect(result.current.isTurnActive).toBe(true);
+    act(() => socket.emit(segment(1)));
+    expect(result.current.isTurnActive).toBe(true);
+    act(() => socket.emit({ type: 'turn.completed', conversation_id: 'c', turn_id: 't', generation: 1 }));
+    expect(result.current.isTurnActive).toBe(false);
+    unmount();
+  });
+
+  it.each([
+    ['turn.cancelled', (s: FakeWebSocket) => s.emit({ type: 'turn.cancelled', turn_id: 't' })],
+    ['recoverable error', (s: FakeWebSocket) => s.emit({ type: 'error', code: 'turn_failed', recoverable: true, message: 'x' })],
+    ['socket close', (s: FakeWebSocket) => s.onclose?.()],
+  ] as const)('ends the active turn on %s', (_name, end) => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const { result, unmount } = renderHook(() => useAmadeusWS({ ...params, enableTts: false }));
+    const socket = FakeWebSocket.instances[0];
+    act(() => {
+      socket.onopen?.();
+      socket.emit({ type: 'session.ready', conversation_id: 'c', worldline: 'steins_gate', generation: 1 });
+      result.current.sendChat('hello');
+      socket.emit({ type: 'turn.started', conversation_id: 'c', turn_id: 't', generation: 1 });
+      socket.emit({ type: 'segment.ready', conversation_id: 'c', turn_id: 't', generation: 1, segment_id: 0, ja: '文', zh: '' });
+    });
+    expect(result.current.isTurnActive).toBe(true);
+    act(() => end(socket));
+    expect(result.current.isTurnActive).toBe(false);
+    unmount();
+  });
+
+  it('ends the active turn on a local cancel or a conversation / worldline switch', () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    const { result, unmount } = renderHook(() => useAmadeusWS({ ...params, enableTts: false }));
+    const socket = FakeWebSocket.instances[0];
+    const start = () => act(() => {
+      socket.emit({ type: 'turn.started', conversation_id: 'c', turn_id: 't', generation: 1 });
+    });
+    act(() => {
+      socket.onopen?.();
+      socket.emit({ type: 'session.ready', conversation_id: 'c', worldline: 'steins_gate', generation: 1 });
+    });
+    for (const end of [
+      () => result.current.cancelTurn(),
+      () => result.current.switchConversation('other', []),
+      () => result.current.switchWorldline('beta'),
+    ]) {
+      start();
+      expect(result.current.isTurnActive).toBe(true);
+      act(() => { end(); });
+      expect(result.current.isTurnActive).toBe(false);
+    }
+    unmount();
+  });
+
   it('keeps the socket ready after a recoverable turn error', () => {
     vi.stubGlobal('WebSocket', FakeWebSocket);
     const { result, unmount } = renderHook(() => useAmadeusWS(params));

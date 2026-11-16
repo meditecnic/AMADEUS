@@ -91,6 +91,12 @@ export type EntrancePhase = 'none' | 'locked' | 'hold' | 'draft' | 'docked' | 'd
 
 // Keep in sync with backend chat_ws.MAX_USER_MESSAGE_LENGTH.
 const MAX_USER_MESSAGE_LENGTH = 8000;
+/** Plain explanations for worldline switch failure codes; the code itself is never shown. */
+const WORLDLINE_ERROR_HINTS: Record<string, string> = {
+  socket_not_ready: '和本地服务的连接还没就绪，请等连接恢复后再试。',
+  connection_closed: '跃迁途中和本地服务断开了，请等连接恢复后再试。',
+  session_rejected: '当前对话还没有连上模型，请先在「连接」里检查后再试。',
+};
 
 interface WorkstationProps {
   worldline: 'steins_gate' | 'beta';
@@ -267,6 +273,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [forgetError, setForgetError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ConversationSummary | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteForgetLongTerm, setDeleteForgetLongTerm] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deletedRefreshWorldline, setDeletedRefreshWorldline] = useState<string | null>(null);
   // Session dialogs commit first; these only keep a closing dialog on screen for its shorter exit.
@@ -625,7 +632,8 @@ export const Workstation: React.FC<WorkstationProps> = ({
   }, [assetPackNotice]);
 
   useEffect(() => {
-    if (sessionError) {
+    // A failed worldline jump stays until dismissed or the next jump; it is easy to miss behind the shift overlay.
+    if (sessionError && sessionError.kind !== 'worldline') {
       const timer = window.setTimeout(() => setSessionError(null), 5000);
       return () => window.clearTimeout(timer);
     }
@@ -806,6 +814,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     sessionState,
     messages,
     isThinking,
+    isTurnActive,
     isSynthesizing,
     activeTool,
     activeNotice,
@@ -995,6 +1004,9 @@ export const Workstation: React.FC<WorkstationProps> = ({
       }
     },
   });
+  // isThinking drops at the first sentence; the turn itself (and its lock) lasts until it ends.
+  // Test doubles that only report isThinking still lock through it.
+  const turnActive = Boolean(isTurnActive || isThinking);
 
   // Check the service when read-aloud is enabled without changing the user's saved choice.
   useEffect(() => {
@@ -1328,7 +1340,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const emptyStateMessage = reconnectStopMessage
     ? `> ${reconnectStopMessage}`
     : showSetupStatus
-    ? `> 请为 ${activeProvider?.display_name || activeProviderId} 配置 API Key 以建立连接。`
+    ? `> 还没有配置 ${activeProvider?.display_name || activeProviderId} 的密钥，填写后即可连接。`
     : sessionState === 'rejected'
       ? '> 会话未被接受，请检查连接与模型。'
       : reconnecting
@@ -1340,7 +1352,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         : status === 'CLOSED'
           ? '> 会话连接已关闭，系统将尝试重新连接。'
           : status === 'ERROR'
-            ? '> 暂时无法连接，请检查后端服务与 API Key。'
+            ? '> 暂时无法连接，请检查后端服务与密钥。'
             : '> Amadeus 系统连接已建立。等待用户输入...';
 
   // Q14 single activity surface: known tools override Thinking; unknown tools fall back.
@@ -1454,7 +1466,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     // Only a send that is certain to go out may stop voice or play the cue. voice.stop must
     // still precede chat.send, so the gate is checked first and sendChat runs last.
     if (canSendChat && !canSendChat(inputText)) return;
-    // Turn text still gates send via isThinking/isSynthesizing. When only leftover
+    // Turn text still gates send via turnActive/isSynthesizing. When only leftover
     // voice is playing, stop the existing playback path then start the new Turn.
     if (isPlaying) {
       audioPlayer.stopAll();
@@ -1636,7 +1648,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   };
 
   const patchActiveConversationRuntime = async (patch: Record<string, unknown>) => {
-    if (!activeConversation || conversationBusy || isThinking || isSynthesizing) return;
+    if (!activeConversation || conversationBusy || turnActive || isSynthesizing) return;
     setConversationBusy(true);
     try {
       const updated = await patchConversation(activeConversation, patch);
@@ -1692,7 +1704,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   };
 
   const changeModel = (modelId: string) => {
-    if (isThinking || isSynthesizing) {
+    if (turnActive || isSynthesizing) {
       // The running turn keeps the model it started with; the choice applies from the next turn.
       setPendingModel(modelId === (activeConversation?.model_id || model) ? null : modelId);
       return;
@@ -1733,12 +1745,12 @@ export const Workstation: React.FC<WorkstationProps> = ({
 
   // Apply a model chosen mid-turn once the turn has fully finished.
   useEffect(() => {
-    if (!pendingModel || isThinking || isSynthesizing || conversationBusy) return;
+    if (!pendingModel || turnActive || isSynthesizing || conversationBusy) return;
     const next = pendingModel;
     setPendingModel(null);
     changeModel(next);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingModel, isThinking, isSynthesizing, conversationBusy]);
+  }, [pendingModel, turnActive, isSynthesizing, conversationBusy]);
 
   // A pending choice belongs to the conversation it was made in; never carry it across conversations or worldlines.
   const pendingScopeRef = useRef<{ conversation: string | null; worldline: string }>({ conversation: activeConversationId, worldline });
@@ -1759,6 +1771,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const deleteConversation = (conversation: ConversationSummary) => {
     if (relocating) return;
     setDeleteError(null);
+    setDeleteForgetLongTerm(false);
     setDeleteTarget(conversation);
   };
 
@@ -1769,7 +1782,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     setDeleteError(null);
     const wasActive = conversation.id === activeConversationId;
     try {
-      const response = await apiFetch(`/api/conversations/${encodeURIComponent(conversation.id)}?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}`,
+      const response = await apiFetch(`/api/conversations/${encodeURIComponent(conversation.id)}?session_id=${encodeURIComponent(sessionId)}&worldline=${encodeURIComponent(worldline)}${deleteForgetLongTerm ? '&forget_long_term=true' : ''}`,
         { method: 'DELETE' },
       );
       if (!response.ok) {
@@ -1786,7 +1799,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         // Deletion supersedes entry even before its HTTP history request has staged a target.
         abandonConversationEntry(false);
         // Q51: deleting the open conversation returns to a blank draft; never silently open another one.
-        if (isThinking || isSynthesizing || messages.some(message => message.streaming)) cancelTurn();
+        if (turnActive || isSynthesizing || messages.some(message => message.streaming)) cancelTurn();
         audioPlayer.stopAll();
         transcriptScroll.cancelPending();
         setLocalSend(null);
@@ -2161,7 +2174,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const lastAssistantId = [...visibleMessages].reverse().find((msg) => msg.role === 'assistant' && !msg.systemError)?.id;
   // An old conversation whose connection was removed keeps its history but must be re-pointed by the user.
   const providerGone = Boolean(activeConversation) && providers.length > 0 && (!activeProvider || activeProvider.enabled === false);
-  const sendBlocked = status !== 'READY' || sessionState === 'rejected' || sessionState === 'unknown' || isThinking || isSynthesizing || conversationBusy || conversationReconnectEpoch !== null || providerGone || relocating;
+  const sendBlocked = status !== 'READY' || sessionState === 'rejected' || sessionState === 'unknown' || turnActive || isSynthesizing || conversationBusy || conversationReconnectEpoch !== null || providerGone || relocating;
   useEffect(() => {
     if (!entering) handComposerFocus();
   }, [entering, sendBlocked, handComposerFocus]);
@@ -2478,7 +2491,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                       {msg.streaming && isSynthesizing && !isThinking && (
                         <div className="ws2-voicing">正在合成语音…</div>
                       )}
-                      {msg.id === lastAssistantId && (isThinking || isSynthesizing || isPlaying) && (
+                      {msg.id === lastAssistantId && (turnActive || isSynthesizing || isPlaying) && (
                         <div className="ws2-actions is-latest" role="group" aria-label="Current response controls">
                           <button type="button" onClick={handleStopVoice} disabled={!isSynthesizing && !isPlaying}>停止本句</button>
                           <button type="button" onClick={handleCancelTurn}>停止本轮</button>
@@ -2550,7 +2563,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                 activeModelId={activeConversation?.model_id || model}
                 models={shelved(modelShelf, activeProviderId, availableModels, activeConversation?.model_id || model)}
                 disabled={conversationBusy || relocating}
-                lockProvider={isThinking || isSynthesizing}
+                lockProvider={turnActive || isSynthesizing}
                 searchable
                 onManageConnections={() => openMenu('connections')}
                 loadingModels={modelsLoading}
@@ -2792,14 +2805,19 @@ export const Workstation: React.FC<WorkstationProps> = ({
             <button type="button" onClick={() => { void loadConversations().catch(() => undefined); }}>重试刷新</button>
           </div>
         )}
-        {sessionError && (
+        {sessionError && (sessionError.kind === 'session' ? (
           <div className="audio-error-toast session-error-toast" data-testid="session-error-toast" role="status">
-            <span className="audio-error-msg">
-              {sessionError.kind === 'session' ? '会话同步失败' : '世界线切换失败，已留在原来的世界线'}
-            </span>
+            <span className="audio-error-msg">会话同步失败</span>
             <code className="ws2-toast-code">{sessionError.code}</code>
           </div>
-        )}
+        ) : (
+          <div className="audio-error-toast session-error-toast" data-testid="session-error-toast" role="status">
+            <span className="audio-error-msg">
+              世界线切换失败，已留在原来的世界线。{WORLDLINE_ERROR_HINTS[sessionError.code] ?? '请稍后再试。'}
+            </span>
+            <button type="button" onClick={() => setSessionError(null)}>知道了</button>
+          </div>
+        ))}
         {conversationOpenError && (
           <div className="audio-error-toast session-error-toast" data-testid="conversation-open-error-toast" role="status">
             <span className="audio-error-msg">没能打开这段对话，请稍后重试。</span>
@@ -2872,7 +2890,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             ledger={worldlineLedger}
             onShift={(to) => {
               if (relocating) return;
-              if (isThinking || isSynthesizing || isPlaying) setShiftConfirm(to);
+              if (turnActive || isSynthesizing || isPlaying) setShiftConfirm(to);
               else startShift(to);
             }}
           />
@@ -2882,7 +2900,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             providers={providers}
             activeProviderId={activeProviderId}
             activeModelId={activeModelId}
-            locked={isThinking || isSynthesizing || conversationBusy || relocating}
+            locked={turnActive || isSynthesizing || conversationBusy || relocating}
             relocating={relocating}
             onRelocating={() => markDataRelocating()}
             checkFor={(providerId, modelId) => chatChecks[checkKey(providerId, modelId)]}
@@ -2932,6 +2950,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       <SettingsModal
         variant="embedded"
         tab={menuSection === 'sound' ? 'voice' : 'basic'}
+        active={menuSection === 'sound' || menuSection === 'character'}
         isOpen={isSettingsOpen}
         onClose={closeMenu}
         worldline={worldline}
@@ -3011,6 +3030,17 @@ export const Workstation: React.FC<WorkstationProps> = ({
           void loadProviderModels(providerId, true);
         }}
         onSaveSettings={async (settings) => {
+          if (!('apiKey' in settings)) {
+            // An embedded patch carries only its own fields; everything else is the live state, so a connection
+            // switched or a search provider picked since the menu opened is never written back.
+            await handleSaveSettings({
+              worldline, apiKey: '', webSearchApiKey: '', webSearchProvider: webSearchActiveProvider,
+              systemPrompt, enableTts, sovitsUrl, enableBgm, bgmVolume, enableSfx, sfxVolume, temperature,
+              identityMode: defaultIdentityMode, selfName, baseUrl: '', model: '', reasoningEffort,
+              ...settings,
+            });
+            return;
+          }
           await handleSaveSettings(settings);
           if (menuSection !== 'connections') return;
           // Saving connection details invalidates the old result and verifies the selected model once.
@@ -3056,14 +3086,14 @@ export const Workstation: React.FC<WorkstationProps> = ({
           confirmLabel="断开"
           onConfirm={() => {
             setUnplugAsk(false);
-            if (isThinking || isSynthesizing) handleCancelTurn();
+            if (turnActive || isSynthesizing) handleCancelTurn();
             else handleStopVoice();
             onLogout();
           }}
           onCancel={() => setUnplugAsk(false)}
         >
           <p>回到登录页。对话都已存好，再次进入就能接着聊。</p>
-          {isThinking || isSynthesizing || isPlaying
+          {turnActive || isSynthesizing || isPlaying
             ? <p className="ws2-dialog-hint">她还在回复，断开会停下这一轮。</p>
             : null}
         </ConfirmDialog>
@@ -3077,7 +3107,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             const to = shiftConfirm;
             setShiftConfirm(null);
             // Generation is cancelled outright; her voice is left to startShift, which fades it before stopping.
-            if (isThinking || isSynthesizing) cancelTurn();
+            if (turnActive || isSynthesizing) cancelTurn();
             startShift(to);
           }}
           onCancel={() => setShiftConfirm(null)}
@@ -3100,8 +3130,19 @@ export const Workstation: React.FC<WorkstationProps> = ({
           onConfirm={() => { void confirmDeleteConversation(); }}
           onCancel={() => { setDeleteTarget(null); setDeleteError(null); }}
         >
-          <p>「{deleteDialog.shown.title}」的聊天记录将被删除，已形成的长期记忆仍会保留。</p>
-          <p className="ws2-dialog-hint">要同时遗忘这个会话的记忆，请改用「清空聊天记录」。</p>
+          <p>「{deleteDialog.shown.title}」的聊天记录将被删除。</p>
+          <label className="ws2-dialog-check">
+            <input
+              type="checkbox"
+              checked={deleteForgetLongTerm}
+              disabled={deleteBusy}
+              onChange={(event) => setDeleteForgetLongTerm(event.target.checked)}
+            />
+            <span>
+              同时忘掉只在这段对话里提过的事
+              <small>你手动确认、修改或置顶的记忆，以及其他对话也提过的事会保留。</small>
+            </span>
+          </label>
         </ConfirmDialog>
       )}
 

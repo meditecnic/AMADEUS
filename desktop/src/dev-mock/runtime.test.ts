@@ -64,6 +64,18 @@ describe('dev mock REST contracts', () => {
     expect(mock.rest(url(`/api/conversations/${created.id}${scope}`), 'DELETE', {}, 'browser-a').status).toBe(200);
   });
 
+  it('deletes a conversation with or without forget_long_term', () => {
+    const mock = createMockRuntime();
+    const create = () => (mock.rest(url('/api/conversations'), 'POST', { session_id: 'test-session', worldline: 'steins_gate' }).body as { id: string }).id;
+    const plain = create();
+    const forgetting = create();
+    expect(mock.rest(url(`/api/conversations/${plain}${scope}`), 'DELETE')).toEqual({ status: 200, body: { ok: true, forget_long_term: false } });
+    expect(mock.rest(url(`/api/conversations/${forgetting}${scope}&forget_long_term=true`), 'DELETE')).toEqual({ status: 200, body: { ok: true, forget_long_term: true } });
+    const ids = (mock.rest(url(`/api/conversations${scope}`), 'GET').body as Array<{ id: string }>).map(row => row.id);
+    expect(ids).not.toContain(plain);
+    expect(ids).not.toContain(forgetting);
+  });
+
   it('switches scenarios from query/cookies and defines empty/error/shift hooks', () => {
     expect(selectScenario(url('/?scenario=empty'), 'amadeus_mock_scenario=error')).toBe('empty');
     expect(selectScenario(url('/'), 'amadeus_mock_scenario=error')).toBe('error');

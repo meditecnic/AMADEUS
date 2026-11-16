@@ -158,6 +158,31 @@ export function identityModeNewConversationConfirm(mode: IdentityMode): string {
 
 export type SettingsTab = 'basic' | 'connections' | 'voice';
 
+export interface SettingsSavePayload {
+  worldline: 'steins_gate' | 'beta';
+  apiKey: string;
+  webSearchApiKey: string;
+  webSearchProvider: WebSearchProviderId;
+  systemPrompt: string;
+  enableTts: boolean;
+  sovitsUrl: string;
+  enableBgm: boolean;
+  bgmVolume: number;
+  enableSfx: boolean;
+  sfxVolume: number;
+  temperature: number;
+  identityMode: IdentityMode;
+  selfName: string;
+  baseUrl: string;
+  model: string;
+  reasoningEffort: string | null;
+}
+
+/** The embedded variant saves only the fields it shows. Connection, search and reasoning values
+ *  live elsewhere and change while it stays mounted, so a copy taken here would overwrite them. */
+export type EmbeddedSettingsPatch = Partial<Pick<SettingsSavePayload,
+  'systemPrompt' | 'enableTts' | 'sovitsUrl' | 'temperature' | 'identityMode' | 'selfName'>>;
+
 export interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -165,6 +190,8 @@ export interface SettingsModalProps {
   variant?: 'modal' | 'embedded';
   /** Controlled tab for the embedded variant. */
   tab?: SettingsTab;
+  /** Embedded only: false while the host section is hidden; leaving saves pending text edits. */
+  active?: boolean;
   worldline: 'steins_gate' | 'beta';
   /** Gate 7A: durable session id for the Memory Ledger (read-only wiring). */
   sessionId?: string;
@@ -216,25 +243,8 @@ export interface SettingsModalProps {
     default_model: string;
   }) => void | Promise<void>;
   onDisableCustomProfile?: (providerId: string) => void | Promise<void>;
-  onSaveSettings: (settings: {
-    worldline: 'steins_gate' | 'beta';
-    apiKey: string;
-    webSearchApiKey: string;
-    webSearchProvider: WebSearchProviderId;
-    systemPrompt: string;
-    enableTts: boolean;
-    sovitsUrl: string;
-    enableBgm: boolean;
-    bgmVolume: number;
-    enableSfx: boolean;
-    sfxVolume: number;
-    temperature: number;
-    identityMode: IdentityMode;
-    selfName: string;
-    baseUrl: string;
-    model: string;
-    reasoningEffort: string | null;
-  }) => void | Promise<void>;
+  /** The modal variant submits a full payload; the embedded variant submits an EmbeddedSettingsPatch per change. */
+  onSaveSettings: (settings: SettingsSavePayload | EmbeddedSettingsPatch) => void | Promise<void>;
   onSelectWebSearchProvider?: (provider: WebSearchProviderId) => void | Promise<void>;
   onClearWebSearchCredential?: (provider: WebSearchProviderId) => void | Promise<void>;
 }
@@ -244,6 +254,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   variant = 'modal',
   tab,
+  active = true,
   worldline,
   apiKey,
   credentialConfigured,
@@ -399,6 +410,47 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setNewProfileModel('local-model');
   }, [isOpen, worldline, apiKey, webSearchApiKey, webSearchActiveProvider, systemPrompt, enableTts, sovitsUrl, temperature, identityMode, selfName, providerBaseUrl, providerDefaultModel, reasoningEffort]);
 
+  // Embedded fields have no draft of their own: a value changed elsewhere (TTS turned off for a missing service) shows here.
+  useEffect(() => { if (embedded) setLocalEnableTts(enableTts); }, [embedded, enableTts]);
+  useEffect(() => { if (embedded) setLocalTemperature(clampChatTemperature(temperature)); }, [embedded, temperature]);
+  useEffect(() => { if (embedded) setLocalIdentityMode(normalizeIdentityMode(identityMode)); }, [embedded, identityMode]);
+
+  const applyPatch = async (patch: EmbeddedSettingsPatch) => {
+    setSaveError(null);
+    try {
+      await onSaveSettings(patch);
+      setSavedFlash(true);
+      window.setTimeout(() => setSavedFlash(false), 1800);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : 'settings_save_failed');
+    }
+  };
+  const commitTemperature = () => {
+    const next = clampChatTemperature(localTemperature);
+    if (next !== clampChatTemperature(temperature)) void applyPatch({ temperature: next });
+  };
+  /** Saves edited text fields; an invalid call name keeps its hint and leaves the saved one alone. */
+  const commitText = () => {
+    const patch: EmbeddedSettingsPatch = {};
+    if (localSovitsUrl !== sovitsUrl) patch.sovitsUrl = localSovitsUrl;
+    if (localSelfName !== selfName) {
+      const checked = validateSelfName(localSelfName);
+      if (!checked.ok) setSelfNameError(checked.error);
+      else if (checked.value !== selfName) patch.selfName = checked.value;
+    }
+    if (Object.keys(patch).length) void applyPatch(patch);
+  };
+  const commitOnEnter = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter' && !event.nativeEvent.isComposing && event.keyCode !== 229) commitText();
+  };
+  // Switching section, closing the menu or unmounting never fires blur, so pending text is saved here.
+  const flushRef = useRef(commitText);
+  flushRef.current = commitText;
+  useEffect(() => {
+    const live = embedded && isOpen && active;
+    return () => { if (live) flushRef.current(); };
+  }, [embedded, activeTab, active, isOpen]);
+
   if (!isOpen) return null;
 
   const handleSave = async () => {
@@ -414,8 +466,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setSaveError(null);
     try {
       await onSaveSettings({
-        // Embedded fields never own the worldline: the menu switches it separately.
-        worldline: embedded ? worldline : localWorldline,
+        worldline: localWorldline,
         apiKey: localApiKey,
         webSearchApiKey: localWebSearchApiKey,
         webSearchProvider: localWebSearchProvider,
@@ -436,12 +487,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         reasoningEffort: localReasoningEffort,
       });
       setReplacingWebSearchKey(false);
-      if (embedded) {
-        setSavedFlash(true);
-        window.setTimeout(() => setSavedFlash(false), 1800);
-      } else {
-        onClose();
-      }
+      onClose();
     } catch (error) {
       const code = error instanceof Error ? error.message : 'settings_save_failed';
       setSaveError(code);
@@ -554,6 +600,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       step={CHAT_TEMPERATURE_STEP}
                       value={localTemperature}
                       onChange={(e) => setLocalTemperature(clampChatTemperature(parseFloat(e.target.value)))}
+                      onPointerUp={embedded ? commitTemperature : undefined}
+                      onKeyUp={embedded ? commitTemperature : undefined}
+                      onBlur={embedded ? commitTemperature : undefined}
                       className="volume-slider personality-range"
                       style={{ '--val': `${(localTemperature / CHAT_TEMPERATURE_MAX) * 100}%` } as React.CSSProperties}
                       aria-label="回复随机性"
@@ -602,7 +651,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       value="okabe"
                       data-testid="identity-mode-okabe"
                       checked={localIdentityMode === 'okabe'}
-                      onChange={() => setLocalIdentityMode('okabe')}
+                      onChange={() => {
+                        setLocalIdentityMode('okabe');
+                        if (embedded) void applyPatch({ identityMode: 'okabe' });
+                      }}
                       className="salieri-checkbox"
                     />
                     冈部（默认）
@@ -614,7 +666,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       value="self"
                       data-testid="identity-mode-self"
                       checked={localIdentityMode === 'self'}
-                      onChange={() => setLocalIdentityMode('self')}
+                      onChange={() => {
+                        setLocalIdentityMode('self');
+                        if (embedded) void applyPatch({ identityMode: 'self' });
+                      }}
                       className="salieri-checkbox"
                     />
                     自己
@@ -637,6 +692,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     setLocalSelfName(e.target.value);
                     setSelfNameError(null);
                   }}
+                  onBlur={embedded ? commitText : undefined}
+                  onKeyDown={embedded ? commitOnEnter : undefined}
                 />
                 {selfNameError && (
                   <p className="settings-save-error self-name-error" role="alert">
@@ -1087,13 +1144,29 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <section className="tab-panel active">
               <div className="setting-field">
                 <label className="checkbox-label">
-                  <input type="checkbox" checked={localEnableTts} onChange={(e) => setLocalEnableTts(e.target.checked)} className="salieri-checkbox" />
+                  <input
+                    type="checkbox"
+                    checked={localEnableTts}
+                    onChange={(e) => {
+                      setLocalEnableTts(e.target.checked);
+                      if (embedded) void applyPatch({ enableTts: e.target.checked });
+                    }}
+                    className="salieri-checkbox"
+                  />
                   启用语音合成 (TTS)
                 </label>
               </div>
               <div className="setting-field field-full">
                 <label>GPT-SoVITS 服务端点</label>
-                <input type="text" value={localSovitsUrl} onChange={(e) => setLocalSovitsUrl(e.target.value)} className="salieri-input" placeholder="http://127.0.0.1:9880" />
+                <input
+                  type="text"
+                  value={localSovitsUrl}
+                  onChange={(e) => setLocalSovitsUrl(e.target.value)}
+                  onBlur={embedded ? commitText : undefined}
+                  onKeyDown={embedded ? commitOnEnter : undefined}
+                  className="salieri-input"
+                  placeholder="http://127.0.0.1:9880"
+                />
               </div>
             </section>
             )}
@@ -1109,10 +1182,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     : '设置保存失败，请稍后重试。'}
             </p>
           )}
+          {embedded ? (
+            <div className="modal-footer">
+              <span className="settings-saved" role="status">{savedFlash ? '已保存' : ''}</span>
+            </div>
+          ) : (
           <div className="modal-footer">
-            {embedded
-              ? <span className="settings-saved" role="status">{savedFlash ? '已保存' : ''}</span>
-              : <button className="salieri-btn cancel-btn" onClick={onClose}>取消</button>}
+            <button className="salieri-btn cancel-btn" onClick={onClose}>取消</button>
             <button className="salieri-btn save-btn" onClick={() => { void handleSave(); }} disabled={isSaving}>
               {isSaving
                 ? '保存中…'
@@ -1123,6 +1199,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     : '保存语音设置'}
             </button>
           </div>
+          )}
     </>
   );
 };

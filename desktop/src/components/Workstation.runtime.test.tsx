@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Workstation } from './Workstation';
@@ -683,6 +683,35 @@ describe('Workstation provider runtime changes', () => {
     },
   );
 
+  it.each([false, true])('the delete dialog sends forget_long_term only when its option is ticked (%s)', async (forget) => {
+    wsSpies.realHistory = true;
+    wsSpies.useAmadeusWS.mockImplementation(() => ({
+      status: 'READY', messages: [], isThinking: false, isSynthesizing: false,
+      emotion: 'neutral', sendChat: vi.fn(), stopVoice: vi.fn(), cancelTurn: vi.fn(), updateConfig: vi.fn(),
+      resetToDraft: vi.fn(), reconnect: wsSpies.reconnect, switchConversation: wsSpies.switchConversation, switchWorldline: wsSpies.switchWorldline,
+    }));
+    const sourceFetch = globalThis.fetch;
+    const deleteUrls: string[] = [];
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'DELETE') {
+        deleteUrls.push(String(input));
+        return Promise.resolve({ ok: true, status: 200 } as Response);
+      }
+      return sourceFetch(input, init);
+    }));
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    fireEvent.click(screen.getAllByRole('button', { name: '展开会话列表' })[0]);
+    await screen.findByText('Default Conversation');
+    fireEvent.keyDown(screen.getByRole('button', { name: '会话操作 Default Conversation' }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('menuitem', { name: '删除 Default Conversation' }));
+    const option = screen.getByRole('checkbox', { name: /^同时忘掉只在这段对话里提过的事/ });
+    expect(option).not.toBeChecked();
+    if (forget) fireEvent.click(option);
+    fireEvent.click(screen.getByRole('button', { name: '删除会话' }));
+    await waitFor(() => expect(deleteUrls).toHaveLength(1));
+    expect(deleteUrls[0].includes('forget_long_term=true')).toBe(forget);
+  });
+
   it('requests an in-place worldline draft switch when the parent worldline changes', async () => {
     const onWorldlineChange = vi.fn();
     const { rerender } = render(<Workstation worldline="steins_gate" onWorldlineChange={onWorldlineChange} onLogout={vi.fn()} />,
@@ -856,6 +885,7 @@ describe('Workstation provider runtime changes', () => {
 
 function mockStreamingAssistant(overrides: {
   isThinking?: boolean;
+  isTurnActive?: boolean;
   isSynthesizing?: boolean;
   activeTool?: string | null;
   activeNotice?: string | null;
@@ -867,7 +897,9 @@ function mockStreamingAssistant(overrides: {
     activeTool = null,
     activeNotice = null,
     streaming = true,
+    isTurnActive,
   } = overrides;
+  const cancelTurn = vi.fn();
   // Return a concrete value so the module mock's `override || default` path uses it.
   wsSpies.useAmadeusWS.mockReturnValue({
     status: 'READY',
@@ -880,13 +912,14 @@ function mockStreamingAssistant(overrides: {
       segments: [],
     }],
     isThinking,
+    isTurnActive,
     isSynthesizing,
     activeTool,
     activeNotice,
     emotion: 'neutral',
     sendChat: vi.fn(),
     stopVoice: vi.fn(),
-    cancelTurn: vi.fn(),
+    cancelTurn,
     sendDebugTts: vi.fn(),
     updateConfig: vi.fn(),
     reconnect: wsSpies.reconnect,
@@ -894,6 +927,7 @@ function mockStreamingAssistant(overrides: {
     switchWorldline: wsSpies.switchWorldline,
     wsRef: { current: null },
   });
+  return { cancelTurn };
 }
 
 
@@ -964,6 +998,20 @@ describe('Workstation Q14 activity operation labels', () => {
       expect(getAllByText('正在合成语音…').length).toBeGreaterThan(0);
     });
     expect(queryByTestId('activity-operation-label')).toBeNull();
+  });
+
+  it('keeps the composer locked and 停止本轮 available while sentences stream with TTS off', async () => {
+    const { cancelTurn } = mockStreamingAssistant({ isThinking: false, isTurnActive: true, isSynthesizing: false });
+    const { container } = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    const input = await waitFor(() => {
+      const element = container.querySelector<HTMLInputElement>('.chat-input-field');
+      expect(element).not.toBeNull();
+      return element as HTMLInputElement;
+    });
+    expect(input.disabled).toBe(true);
+    expect(screen.queryByTestId('activity-operation-label')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '停止本轮' }));
+    expect(cancelTurn).toHaveBeenCalledTimes(1);
   });
 
   it('hides the activity label after the turn is no longer streaming', async () => {
@@ -1303,9 +1351,27 @@ describe('Workstation UX-ERROR-SURFACE-01 switch vs TTS errors', () => {
 
     await waitFor(() => {
       expect(getByTestId('session-error-toast')).toHaveTextContent('世界线切换失败');
-      expect(getByTestId('session-error-toast')).toHaveTextContent('switch_failed');
     });
+    expect(getByTestId('session-error-toast')).not.toHaveTextContent('switch_failed');
     expect(queryByText(/TTS ·/)).toBeNull();
+  });
+
+  it('keeps a worldline failure until dismissed and explains a known code in plain words', async () => {
+    const { getByTestId, queryByTestId, getParams } = mountWithReadyCallbacks();
+    await waitFor(() => expect(getParams().onWorldlineSwitchError).toBeTypeOf('function'));
+    vi.useFakeTimers();
+    try {
+      act(() => { getParams().onWorldlineSwitchError?.({ worldline: 'beta', code: 'connection_closed' }); });
+      const toast = getByTestId('session-error-toast');
+      expect(toast).toHaveTextContent('跃迁途中和本地服务断开了');
+      expect(toast).not.toHaveTextContent('connection_closed');
+      act(() => { vi.advanceTimersByTime(6000); });
+      expect(queryByTestId('session-error-toast')).not.toBeNull();
+      fireEvent.click(within(getByTestId('session-error-toast')).getByRole('button', { name: '知道了' }));
+      expect(queryByTestId('session-error-toast')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('still shows TTS prefix for real audio degradation', async () => {

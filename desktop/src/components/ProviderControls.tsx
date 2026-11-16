@@ -369,10 +369,10 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
         <button
           type="button"
           className="provider-credential-btn"
-          aria-label={`配置 ${activeProvider.display_name} 凭据`}
+          aria-label={`配置 ${activeProvider.display_name} 密钥`}
           onClick={onConfigureCredential}
         >
-          需要凭据
+          填写密钥
         </button>
       )}
       {thinkingControl && selectedThinking ? (
