@@ -186,7 +186,14 @@
 .archive-delete-confirm p, .archive-discard-confirm p { margin: 0 0 8px; color: var(--memory-muted); }
 .archive-discard-confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .archive-discard-confirm p { flex-basis: 100%; }
-.archive-pending { margin-top: auto; padding-top: 12px; border-top: 1px solid var(--memory-line); }
+.archive-pending { margin-top: auto; padding-top: 10px; border-top: 1px solid var(--memory-line); display: flex; flex-direction: column; min-height: 0; }
+.archive-pending.is-open { max-height: min(28vh, 196px); }
+.archive-pending-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.archive-pending-head h3 { margin: 0; }
+.archive-pending-count { color: var(--memory-accent); font-weight: 400; }
+.archive-pending-toggle { min-height: 24px; padding: 2px 9px; font-size: 11px; }
+.archive-pending-body { margin-top: 8px; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; padding-right: 4px; }
+.archive-pending-hint { margin: 0 0 6px; color: var(--memory-faint); font-size: 11px; line-height: 1.5; }
 .archive-pending li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 7px 0; color: var(--memory-muted); }
 .archive-disclosure { margin: 0; color: var(--memory-faint); font-size: 11px; line-height: 1.55; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
@@ -277,6 +284,52 @@
 /* Archive keeps its own surface for now; it sits inside the frame on the same paper. */
 .memory-space .archive-view, .memory-space[data-worldline="beta"] .archive-view {
   inset: 92px 44px 34px; z-index: 3; padding: 0; border: 0; border-radius: 0; background: none; box-shadow: none; backdrop-filter: none; animation: none;
+}
+
+@media (min-width: 901px) {
+  .archive-body:not(.is-narrow) {
+    grid-template-rows: minmax(0, 1fr);
+    overflow: hidden;
+  }
+  .archive-body:not(.is-narrow) > .archive-lists {
+    min-height: 0;
+    max-height: 100%;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+    padding-right: 4px;
+  }
+  .archive-body:not(.is-narrow) > .archive-detail {
+    position: static;
+    min-height: 0;
+    max-height: 100%;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+  }
+  .archive-body:not(.is-narrow) > .archive-detail[data-empty="true"] {
+    align-self: stretch;
+  }
+}
+
+@media (min-width: 901px) and (max-height: 760px) {
+  .memory-space .archive-view,
+  .memory-space[data-worldline="beta"] .archive-view {
+    inset: 82px 40px 24px;
+    gap: 12px;
+  }
+  .archive-toolbar {
+    padding: 8px 0 10px;
+  }
+  .archive-detail {
+    padding: 18px 24px;
+  }
+  .archive-detail h2 {
+    margin: 12px 0 16px;
+    font-size: 21px;
+  }
+  .archive-governance {
+    margin-top: 16px;
+    padding-top: 12px;
+  }
 }
 
 @media (max-width: 900px) {

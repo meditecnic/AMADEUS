@@ -358,7 +358,8 @@ describe('ArchiveView forbidden controls and disclosure', () => {
   it('discloses remote processing truthfully without a per-record consent ceremony', async () => {
     await renderArchive();
     const disclosure = screen.getByTestId('archive-disclosure');
-    expect(disclosure.textContent).toContain('远程服务商');
+    expect(disclosure.textContent).toContain('模型服务商');
+    expect(disclosure.textContent).toContain('保存在本机不代表对话时不外发');
     // Never promises local-only processing.
     expect(disclosure.textContent).not.toContain('从不发送');
     expect(disclosure.textContent).not.toContain('仅在本地处理');
@@ -466,5 +467,70 @@ describe('ArchiveView secondary 待处理 region', () => {
     expect(pending.querySelector('[role="alert"]')?.textContent).toContain('暂时不可用');
     // …and the empty state never masquerades behind a failure.
     expect(pending.textContent).not.toContain('没有待处理项');
+  });
+
+  it('defaults pending to expanded with guidance when items exist and allows collapsing, and collapses empty by default', async () => {
+    await renderArchive();
+    await waitFor(() => {
+      expect(screen.getByTestId('archive-pending-toggle')).toHaveAttribute('aria-expanded', 'true');
+    });
+    expect(screen.getByTestId('archive-pending-count').textContent).toContain('3');
+    expect(screen.getByTestId('archive-pending').textContent).toContain('确认后会记入「认知」，忽略则不再保留。');
+
+    fireEvent.click(screen.getByTestId('archive-pending-toggle'));
+    expect(screen.getByTestId('archive-pending-toggle')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByTestId('archive-ignore-o1')).toBeNull();
+
+    cleanup();
+    stubFetch((url) => {
+      if (url.startsWith('/api/memory/status?')) {
+        return {
+          status: 200,
+          body: {
+            session_id: SCOPE.sessionId,
+            worldline: SCOPE.worldline,
+            identity_mode: SCOPE.identityMode,
+            pending_count: 0,
+            processing_count: 0,
+            failed_count: 0,
+            failed_jobs: [],
+          },
+        };
+      }
+      if (url.startsWith('/api/memory/observations?')) {
+        return {
+          status: 200,
+          body: { scope: scopeBody(), observations: [], pagination: { limit: 20, offset: 0, total: 0, has_more: false } },
+        };
+      }
+      return viewResponder({ value: false })(url);
+    });
+    const emptyModule = createArchiveModule();
+    await act(async () => {
+      emptyModule.open(SCOPE);
+    });
+    await act(async () => {
+      render(<ArchiveView module={emptyModule} />);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('archive-pending-count').textContent).toContain('0');
+    });
+    const toggle = screen.getByTestId('archive-pending-toggle');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.getByTestId('archive-pending').textContent).not.toContain('当前范围内没有待处理项');
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByTestId('archive-pending').textContent).toContain('当前范围内没有待处理项。');
+  });
+
+  it('uses plain Chinese copy for empty provenance excerpts', async () => {
+    await renderArchive();
+    await waitFor(() => {
+      expect(screen.getByText('喜欢黑咖啡')).toBeTruthy();
+    });
+    fireEvent.click(screen.getByText('喜欢黑咖啡'));
+    await waitFor(() => {
+      expect(screen.getByTestId('archive-detail').textContent).toContain('暂无可显示的原话摘录');
+    });
   });
 });

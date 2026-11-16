@@ -156,6 +156,14 @@ const TIMEOUT_PATTERNS = [
   /timeout\s+after\s+\d+/i,
 ];
 
+const VC_REDIST_PATTERNS = [
+  /DLL load failed/i,
+  /vcruntime/i,
+  /msvcp140/i,
+  /WinError\s*126\b/i,
+  /找不到指定的模块/,
+];
+
 const BACKEND_EXIT_PATTERNS = [
   /unable to start backend/i,
   /stdout\s+(?:EOF|closed|read failed)\s+before\s+READY/i,
@@ -163,7 +171,7 @@ const BACKEND_EXIT_PATTERNS = [
   /Traceback\s+\(most recent call last\)/i,
   /ModuleNotFoundError/i,
   /ImportError/i,
-  /DLL load failed/i,
+  ...VC_REDIST_PATTERNS,
   /READY\s+(?:version mismatch|pid mismatch|port out of range|invalid JSON)/i,
   /exited unexpectedly/i,
   /amadeus-backend\.exe/i,
@@ -184,14 +192,14 @@ export function classifyStartupFailure(params: {
   if (PORT_CONFLICT_PATTERNS.some((pattern) => pattern.test(haystack))) {
     return {
       category: 'port_conflict',
-      badge: 'PORT / LOOPBACK',
-      title: '本地服务端口冲突或回环监听受限',
+      badge: '后台连接受阻',
+      title: '上次退出可能还没完全结束，或安全软件拦住了后台连接',
       summary:
-        '本地服务无法绑定 127.0.0.1 回环端口，可能是上次进程尚未完全退出，或本地安全策略拦截了回环监听。',
+        '上次退出可能还没完全结束，或本机安全软件拦住了后台服务连接。',
       steps: [
-        '等待数秒，或在任务管理器中结束残留的 Amadeus / amadeus-backend.exe 进程后点击「重试」。',
-        '检查防火墙、安全软件或系统代理规则是否限制了 127.0.0.1 本地端口监听。',
-        '打开日志目录检查 backend-stderr.log 中的端口绑定报错，或复制脱敏诊断信息反馈。',
+        '等几秒钟直接点下方「重试」；若仍不行，打开任务管理器结束残留的 AMADEUS 相关程序后再试。',
+        '检查防火墙、杀毒软件或代理工具，确认没有拦截 AMADEUS 在本机启动后台服务。',
+        '若反复出现，点下方「复制诊断信息」并到问题页反馈。',
       ],
     };
   }
@@ -199,14 +207,14 @@ export function classifyStartupFailure(params: {
   if (DATA_DIR_PATTERNS.some((pattern) => pattern.test(haystack))) {
     return {
       category: 'data_dir',
-      badge: 'DATA DIRECTORY',
-      title: '数据目录不可用、权限不足或被占用',
+      badge: '数据文件夹异常',
+      title: '无法读写数据文件夹，可能没有权限或正被其他程序占用',
       summary:
-        '桌面端无法读取、创建或锁定本地数据目录。可能是自定义目录已移动、缺少写入权限，或数据库正被其他进程占用。',
+        'AMADEUS 打不开或写不了本地数据文件夹，常见原因是移动过目录、文件夹只读，或网盘同步与重复打开的程序占用了文件。',
       steps: [
-        '确认目标数据目录存在且未被系统安全防护或只读属性限制写入。',
-        '若自定义过数据目录，请确认原路径完整有效，或移除异常残留的锁文件后再重试。',
-        '关闭可能正在同步或占用数据库文件的网盘/备份程序及重复实例。',
+        '如果同时打开了另一个 AMADEUS，或正在用网盘、备份软件同步数据文件夹，先关掉它们再点「重试」。',
+        '如果改过数据保存位置，确认那个文件夹还在、磁盘已连接，并且当前账号有读写权限。',
+        '仍无法打开时，点「打开日志文件夹」或「复制诊断信息」到问题页反馈。',
       ],
     };
   }
@@ -214,43 +222,58 @@ export function classifyStartupFailure(params: {
   if (TIMEOUT_PATTERNS.some((pattern) => pattern.test(haystack))) {
     return {
       category: 'timeout',
-      badge: 'STARTUP TIMEOUT',
-      title: '本地服务启动等待超时',
+      badge: '启动超时',
+      title: '后台服务启动较慢，等待超时',
       summary:
-        '本地服务未在预期时间内完成初始化，可能是首次冷启动耗时较长，或安全软件拦截了后端子进程输出。',
+        '后台服务没有在限定时间内准备好，首次打开或杀毒软件正在扫描时常会这样。',
       steps: [
-        '首次冷启动或杀毒软件实时扫描期间耗时可能较长，请点击「重试」再尝试连接。',
-        '检查安全软件是否拦截或隔离了 amadeus-backend.exe。',
-        '展开下方脱敏日志片段，确认启动停留在哪个阶段，必要时复制诊断信息反馈。',
+        '直接点下方「重试」，首次启动或电脑较忙时通常再试一次即可进入。',
+        '检查安全软件是否正在扫描或拦截了 AMADEUS 的后台程序。',
+        '如果多次重试都超时，点「复制诊断信息」并到问题页反馈。',
       ],
     };
   }
 
   if (BACKEND_EXIT_PATTERNS.some((pattern) => pattern.test(haystack))) {
+    if (VC_REDIST_PATTERNS.some((pattern) => pattern.test(haystack))) {
+      return {
+        category: 'backend_exit',
+        badge: '缺少系统组件',
+        title: '缺少系统运行库或安装文件不完整，后台未能启动',
+        summary:
+          'Windows 缺少必要的运行库（Microsoft Visual C++ Redistributable）或安装文件缺失，后台程序一启动就退出了。',
+        steps: [
+          '安装或修复微软官方的「Microsoft Visual C++ Redistributable (x64)」运行库后，重新打开 AMADEUS。',
+          '若已安装过该运行库，建议重新下载最新安装包覆盖安装一次，并确认杀毒软件没有误删文件。',
+          '仍无法解决时，点「复制诊断信息」并到问题页反馈。',
+        ],
+      };
+    }
+
     return {
       category: 'backend_exit',
-      badge: 'PROCESS EXIT',
-      title: '本地服务进程意外退出',
+      badge: '后台异常退出',
+      title: '后台服务启动中途退出',
       summary:
-        '后端子进程在就绪前提前退出或返回了异常状态，为避免数据损坏，业务界面已保持挂起。',
+        '后台服务在准备完成前意外停止了，为保护本地数据，暂时停留在当前页面。',
       steps: [
-        '点击「重试」重新拉起本地服务进程。',
-        '打开日志目录查看 backend-stderr.log 末尾异常堆栈；若提示组件缺失，建议重新覆盖安装最新版本。',
-        '复制下方脱敏诊断信息并前往问题页反馈，便于研发排查环境兼容性问题。',
+        '先点下方「重试」重新启动后台服务。',
+        '若重试仍然退出，建议重新覆盖安装最新版本，并确认安全软件没有隔离程序文件。',
+        '点「复制诊断信息」并到问题页反馈，方便定位原因。',
       ],
     };
   }
 
   return {
     category: 'general',
-    badge: 'CONNECTION FAULT',
-    title: '本地服务尚未就绪或连接被拒绝',
+    badge: '尚未连上',
+    title: '暂时没连上本地后台服务',
     summary:
-      '桌面端未能在本次启动中建立与本地后端的可用会话，业务页面已暂停挂载。',
+      'AMADEUS 还没能连上本机后台服务，请先试着重新连接。',
     steps: [
-      '点击「重试」重新检测本地服务连接。',
-      '若在本地开发模式下运行，请确认后端服务已启动且配置正确。',
-      '若问题持续存在，可展开脱敏诊断信息或前往问题页查找对应排查指南。',
+      '点下方「重试」重新连接后台服务。',
+      '如果完全退出后重新打开仍停在这里，检查安全软件是否拦截了 AMADEUS。',
+      '需要帮助时，点「复制诊断信息」并到问题页反馈。',
     ],
   };
 }
@@ -345,7 +368,7 @@ export function LocalBackendGate({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<'pending' | 'ready' | 'error'>('pending');
   const [errorMessage, setErrorMessage] = useState('');
   const [diagnostics, setDiagnostics] = useState<StartupDiagnostics | null>(null);
-  const [previewOpen, setPreviewOpen] = useState(true);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [feedback, setFeedback] = useState('');
 
@@ -426,7 +449,7 @@ export function LocalBackendGate({ children }: { children: ReactNode }) {
       }
       return;
     }
-    setPreviewOpen(true);
+    setPreviewOpen(false);
     setErrorMessage('');
     setDiagnostics(null);
     setStatus('pending');
@@ -477,32 +500,6 @@ export function LocalBackendGate({ children }: { children: ReactNode }) {
           <p className="lead">{diagnosis.summary}</p>
 
           <section className="ws2-m-sec">
-            <h2 className="ws2-m-group">错误摘要</h2>
-            <p className="ws2-gate-summary-box">{sanitizedErrorSummary}</p>
-            {diagnostics && (
-              <div className="ws2-gate-meta-grid">
-                <div className="ws2-gate-meta-item">
-                  <span className="ws2-gate-meta-label">版本 / 平台</span>
-                  <span className="ws2-gate-meta-val">
-                    {sanitizeDiagnosticsText(diagnostics.app_version)} ·{' '}
-                    {sanitizeDiagnosticsText(diagnostics.platform)}
-                  </span>
-                </div>
-                <div className="ws2-gate-meta-item">
-                  <span className="ws2-gate-meta-label">日志目录（已脱敏）</span>
-                  <span className="ws2-gate-meta-val">{sanitizedLogDir}</span>
-                </div>
-                {sanitizedRuntimeDir && (
-                  <div className="ws2-gate-meta-item">
-                    <span className="ws2-gate-meta-label">运行目录（已脱敏）</span>
-                    <span className="ws2-gate-meta-val">{sanitizedRuntimeDir}</span>
-                  </div>
-                )}
-              </div>
-            )}
-          </section>
-
-          <section className="ws2-m-sec">
             <h2 className="ws2-m-group">建议排查步骤</h2>
             <ol className="ws2-gate-guide">
               {diagnosis.steps.map((step) => (
@@ -512,15 +509,41 @@ export function LocalBackendGate({ children }: { children: ReactNode }) {
           </section>
 
           <section className="ws2-m-sec">
+            <h2 className="ws2-m-group">错误摘要</h2>
+            <p className="ws2-gate-summary-box">{sanitizedErrorSummary}</p>
+            {diagnostics && (
+              <dl className="ws2-gate-meta-grid">
+                <div className="ws2-gate-meta-item">
+                  <dt className="ws2-gate-meta-label">版本 / 平台</dt>
+                  <dd className="ws2-gate-meta-val">
+                    {sanitizeDiagnosticsText(diagnostics.app_version)} ·{' '}
+                    {sanitizeDiagnosticsText(diagnostics.platform)}
+                  </dd>
+                </div>
+                <div className="ws2-gate-meta-item">
+                  <dt className="ws2-gate-meta-label">日志目录（已脱敏）</dt>
+                  <dd className="ws2-gate-meta-val">{sanitizedLogDir}</dd>
+                </div>
+                {sanitizedRuntimeDir && (
+                  <div className="ws2-gate-meta-item">
+                    <dt className="ws2-gate-meta-label">运行目录（已脱敏）</dt>
+                    <dd className="ws2-gate-meta-val">{sanitizedRuntimeDir}</dd>
+                  </div>
+                )}
+              </dl>
+            )}
+          </section>
+
+          <section className="ws2-m-sec">
             <div className="ws2-m-group ws2-gate-diag-head">
-              <h2>脱敏诊断预览</h2>
+              <h2>诊断日志片段</h2>
               <button
                 type="button"
                 className="ws2-m-link ws2-gate-toggle"
                 aria-expanded={previewOpen}
                 onClick={() => setPreviewOpen((open) => !open)}
               >
-                {previewOpen ? '收起脱敏日志片段' : '查看脱敏日志片段'}
+                {previewOpen ? '收起诊断日志片段' : '查看诊断日志片段'}
               </button>
             </div>
             {previewOpen && (

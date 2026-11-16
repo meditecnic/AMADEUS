@@ -61,7 +61,7 @@ it('sends a Unicode password unchanged and hands over to the entrance on success
   const { onLoginSuccess, container } = await renderLogin();
 
   expect(screen.getByLabelText('USER ID')).toHaveValue('Salieri');
-  const pwd = screen.getByLabelText('PASSWORD');
+  const pwd = screen.getByLabelText('口令');
   expect(pwd).toHaveFocus();
   // An IME commits its text only after composition; the field must not submit mid-composition.
   fireEvent.compositionStart(pwd);
@@ -92,8 +92,8 @@ it('clears the form and sweeps as soon as the workstation behind it says it is d
   vi.useFakeTimers();
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
   const { container, onLoginSuccess, rerender } = await renderLogin();
-  fireEvent.change(screen.getByLabelText('PASSWORD'), { target: { value: 'x' } });
-  await act(async () => { fireEvent.submit(screen.getByLabelText('PASSWORD').closest('form')!); });
+  fireEvent.change(screen.getByLabelText('口令'), { target: { value: 'x' } });
+  await act(async () => { fireEvent.submit(screen.getByLabelText('口令').closest('form')!); });
   await act(async () => { await vi.advanceTimersByTimeAsync(380); });
   expect(onLoginSuccess).toHaveBeenCalledTimes(1);
   const { SalieriLogin } = await import('./SalieriLogin');
@@ -105,8 +105,8 @@ it('lets the key go at the handover beat when the workstation was drawn ahead un
   vi.useFakeTimers();
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
   const { container, onLoginSuccess } = await renderLogin({ stagePrepared: true });
-  fireEvent.change(screen.getByLabelText('PASSWORD'), { target: { value: 'x' } });
-  await act(async () => { fireEvent.submit(screen.getByLabelText('PASSWORD').closest('form')!); });
+  fireEvent.change(screen.getByLabelText('口令'), { target: { value: 'x' } });
+  await act(async () => { fireEvent.submit(screen.getByLabelText('口令').closest('form')!); });
   // The tick is drawn and the form folds into the key first...
   await act(async () => { await vi.advanceTimersByTimeAsync(370); });
   expect(container.querySelector('.sl-root')).not.toHaveClass('exiting');
@@ -120,8 +120,8 @@ it('does not take a "drawn" left over from the last visit for this one (U 11-10:
   vi.useFakeTimers();
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
   const { container, onLoginSuccess } = await renderLogin({ stageReady: true });
-  fireEvent.change(screen.getByLabelText('PASSWORD'), { target: { value: 'x' } });
-  await act(async () => { fireEvent.submit(screen.getByLabelText('PASSWORD').closest('form')!); });
+  fireEvent.change(screen.getByLabelText('口令'), { target: { value: 'x' } });
+  await act(async () => { fireEvent.submit(screen.getByLabelText('口令').closest('form')!); });
   // Before this visit's workstation exists, nothing behind the terminal can have been drawn: no sweep yet.
   await act(async () => { await vi.advanceTimersByTimeAsync(370); });
   expect(onLoginSuccess).not.toHaveBeenCalled();
@@ -135,17 +135,19 @@ it('rejects a wrong password with an alert, keeps the user on the terminal and c
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401, json: async () => ({ detail: 'Invalid password' }) }));
   const { onLoginSuccess, container } = await renderLogin();
 
-  const pwd = screen.getByLabelText('PASSWORD');
+  const pwd = screen.getByLabelText('口令');
   fireEvent.change(pwd, { target: { value: 'amadeus' } });
   await act(async () => { fireEvent.keyDown(pwd, { key: 'Enter' }); fireEvent.submit(pwd.closest('form')!); });
 
-  expect(screen.getByRole('alert')).toHaveTextContent(/^密码错误$/);
+  expect(screen.getByRole('alert')).toHaveTextContent(/^口令错误$/);
+  expect(screen.getByText('忘了口令？完全退出 AMADEUS 后，删除数据目录里的 auth\\passcode.json 再重新打开即可。')).toBeInTheDocument();
   expect(pwd).toHaveAttribute('aria-invalid', 'true');
   expect(onLoginSuccess).not.toHaveBeenCalled();
   expect(container.querySelector('.sl-root')).not.toHaveClass('exiting');
   expect(screen.getByRole('button', { name: 'Decrypt and Connect' })).toBeEnabled();
   await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
   expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  expect(screen.getByText('忘了口令？完全退出 AMADEUS 后，删除数据目录里的 auth\\passcode.json 再重新打开即可。')).toBeInTheDocument();
 });
 
 it('reports other backend refusals by their own detail, not as a wrong password', async () => {
@@ -153,10 +155,11 @@ it('reports other backend refusals by their own detail, not as a wrong password'
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 503, json: async () => ({ detail: '本地服务正在维护' }) }));
   await renderLogin();
 
-  const pwd = screen.getByLabelText('PASSWORD');
+  const pwd = screen.getByLabelText('口令');
   fireEvent.change(pwd, { target: { value: 'Gott würfelt nicht' } });
   await act(async () => { fireEvent.submit(pwd.closest('form')!); });
   expect(screen.getByRole('alert')).toHaveTextContent(/^本地服务正在维护$/);
+  expect(screen.queryByText(/auth\\passcode\.json/)).not.toBeInTheDocument();
 });
 
 it('validates USER ID before calling the backend', async () => {
@@ -166,7 +169,7 @@ it('validates USER ID before calling the backend', async () => {
   await renderLogin();
 
   fireEvent.change(screen.getByLabelText('USER ID'), { target: { value: 'Okabe' } });
-  screen.getByLabelText('PASSWORD').focus();
+  screen.getByLabelText('口令').focus();
   await act(async () => { fireEvent.submit(screen.getByLabelText('USER ID').closest('form')!); });
   expect(screen.getByRole('alert')).toHaveTextContent('无效的 USER ID');
   expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/api/auth/login'))).toHaveLength(0);
@@ -181,8 +184,8 @@ it('under reduced motion leaves with a short fade and still reports the terminal
   const { onEntranceCue, container } = await renderLogin();
 
   expect(container.querySelector('.sl-root')).toHaveClass('reduced');
-  fireEvent.change(screen.getByLabelText('PASSWORD'), { target: { value: 'Gott würfelt nicht' } });
-  await act(async () => { fireEvent.submit(screen.getByLabelText('PASSWORD').closest('form')!); });
+  fireEvent.change(screen.getByLabelText('口令'), { target: { value: 'Gott würfelt nicht' } });
+  await act(async () => { fireEvent.submit(screen.getByLabelText('口令').closest('form')!); });
   await act(async () => { await vi.advanceTimersByTimeAsync(450); });
   expect(onEntranceCue).toHaveBeenCalledWith('gone');
   expect(onEntranceCue).not.toHaveBeenCalledWith('draft');
@@ -197,7 +200,7 @@ it('without a startup passcode, Enter on an empty field signs in with no passcod
   const { onLoginSuccess } = await renderLogin();
 
   expect(screen.getByText('没有设口令，直接按 Enter 进入')).toBeInTheDocument();
-  await act(async () => { fireEvent.submit(screen.getByLabelText('PASSWORD').closest('form')!); });
+  await act(async () => { fireEvent.submit(screen.getByLabelText('口令').closest('form')!); });
   expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/api/auth/login'), expect.objectContaining({
     method: 'POST', body: JSON.stringify({ passcode: null }),
   }));
@@ -209,7 +212,22 @@ it('asks to wait when the server is backing off retries', async () => {
   vi.useFakeTimers();
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 429, json: async () => ({ detail: { code: 'too_many_attempts' } }) }));
   await renderLogin();
-  fireEvent.change(screen.getByLabelText('PASSWORD'), { target: { value: 'x' } });
-  await act(async () => { fireEvent.submit(screen.getByLabelText('PASSWORD').closest('form')!); });
+  fireEvent.change(screen.getByLabelText('口令'), { target: { value: 'x' } });
+  await act(async () => { fireEvent.submit(screen.getByLabelText('口令').closest('form')!); });
   expect(screen.getByRole('alert')).toHaveTextContent('试得太快了，请稍等几秒');
+});
+
+it('prompts with 口令 wording when submitting empty passcode with passcode_set true', async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => (String(url).includes('/api/auth/state')
+    ? { ok: true, status: 200, json: async () => ({ passcode_set: true }) }
+    : { ok: true, status: 200, json: async () => ({}) })));
+  await renderLogin();
+
+  const pwd = screen.getByLabelText('口令');
+  expect(pwd).toHaveAttribute('placeholder', '请输入口令');
+  await act(async () => { fireEvent.submit(pwd.closest('form')!); });
+  expect(screen.getByRole('alert')).toHaveTextContent('请输入口令');
+  fireEvent.change(pwd, { target: { value: 'abc' } });
+  expect(screen.getByRole('button', { name: '显示口令', hidden: true })).toBeInTheDocument();
 });

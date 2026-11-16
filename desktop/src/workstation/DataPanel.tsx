@@ -25,6 +25,31 @@ const idTime = (id: string) => {
   return m ? `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z` : null;
 };
 
+/** Translate backend backup validation errors into plain Chinese without leaking raw exception strings. */
+export function formatBackupDetail(detail: string): string {
+  const text = detail.trim();
+  if (!text) return '';
+  if (/checksum mismatch/i.test(text)) {
+    return '备份文件校验未通过（内容损坏或不完整），不能用来恢复，可直接删除';
+  }
+  if (/newer database schema/i.test(text)) {
+    return '该备份来自更高版本的 AMADEUS，当前版本无法恢复';
+  }
+  if (/unreadable databases/i.test(text)) {
+    return '备份时原数据库已损坏，含无法读取的数据文件，不能直接用来恢复';
+  }
+  if (/missing manifest|unsupported or empty manifest|manifest\.json|expecting value/i.test(text)) {
+    return '备份清单缺失或损坏，不能用来恢复，可直接删除';
+  }
+  if (/unexpected or duplicate file|invalid file path|symbolic links/i.test(text)) {
+    return '备份目录包含异常文件，不能用来恢复，可直接删除';
+  }
+  if (/no such file or directory|winerror\s*2\b|errno\s*2\b|missing file/i.test(text)) {
+    return '备份缺少必要的数据文件，不能用来恢复，可直接删除';
+  }
+  return '备份校验未通过，不能用来恢复，可直接删除';
+}
+
 const ERRORS: Record<string, string> = {
   unreachable: '连不上本地服务。',
   invalid_passcode: '现在的口令不对。',
@@ -436,7 +461,7 @@ function BackupGroup({ anchor, relocated, onRelocating }: { anchor: React.RefObj
                     删除
                   </button>
                 </span>
-                {!row.can_restore && row.detail ? <code className="detail">{row.detail}</code> : null}
+                {!row.can_restore && row.detail ? <span className="detail">{formatBackupDetail(row.detail)}</span> : null}
               </li>
             );
           })}

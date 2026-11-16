@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Atmosphere } from './Atmosphere';
 import { ConfirmDialog } from './ConfirmDialog';
 import { errorText } from './DataPanel';
-import { diagnosticsBundle, formatBytes, formatStamp, formatVersion, restoreBackup, type Backup, type DataStatus } from './dataApi';
+import { dataLocation, diagnosticsBundle, formatBytes, formatStamp, formatVersion, restoreBackup, type Backup, type DataStatus } from './dataApi';
 import { inShell, ISSUES_URL, openExternal, revealInFolder } from './shell';
 import { Stamp } from './Stamp';
 
@@ -15,6 +15,7 @@ import { Stamp } from './Stamp';
 const REASON: Record<string, string> = { manual: '手动', weekly: '每周', 'pre-upgrade': '升级前', 'pre-restore': '恢复前' };
 
 export function DataRecovery({ status, worldline }: { status: DataStatus; worldline: 'steins_gate' | 'beta' }) {
+  const restoreInterrupted = status.status === 'restore_failed';
   const restorable = status.backups.filter((row) => row.can_restore);
   const [asking, setAsking] = useState<Backup | null>(null);
   const [busy, setBusy] = useState(false);
@@ -56,13 +57,21 @@ export function DataRecovery({ status, worldline }: { status: DataStatus; worldl
       <Atmosphere worldline={worldline} still />
       <div className="ws2-recovery-scroll">
         <article className="ws2-recovery-sheet" aria-labelledby="ws2-recovery-title">
-          <Stamp sub="DATA FAULT" tilt={-6}>暂停</Stamp>
+          <Stamp sub={restoreInterrupted ? 'RESTORE FAULT' : 'DATA FAULT'} tilt={-6}>暂停</Stamp>
           <header>
-            <span className="fig">FIG. 0 — DATA FAULT</span>
-            <h1 id="ws2-recovery-title">数据异常</h1>
+            <span className="fig">{restoreInterrupted ? 'FIG. 0 — RESTORE INTERRUPTED' : 'FIG. 0 — DATA FAULT'}</span>
+            <h1 id="ws2-recovery-title">{restoreInterrupted ? '上次恢复未完成' : '数据异常'}</h1>
           </header>
-          <p className="lead">打开数据库时，检查没有通过。为了不让数据坏得更多，AMADEUS 先停在这里，不进入对话。</p>
-          <p className="ws2-m-note">原来的数据文件还在原处，没有被删除。</p>
+          <p className="lead">
+            {restoreInterrupted
+              ? '上次恢复未完成且未能自动还原，请重新选择有效备份恢复，或打开数据目录处理。'
+              : '打开数据库时，检查没有通过。为了不让数据坏得更多，AMADEUS 先停在这里，不进入对话。'}
+          </p>
+          <p className="ws2-m-note">
+            {restoreInterrupted
+              ? '为避免继续写入造成二次损坏，AMADEUS 已暂停进入对话；恢复前生成的数据备份仍保留在数据目录中。'
+              : '原来的数据文件还在原处，没有被删除。'}
+          </p>
 
           <section className="ws2-m-sec" aria-labelledby="ws2-recovery-backups">
             <div className="ws2-m-group" id="ws2-recovery-backups">恢复到一份备份</div>
@@ -115,6 +124,9 @@ export function DataRecovery({ status, worldline }: { status: DataStatus; worldl
             <div className="ws2-m-foot">
               {helpError ? <p className="ws2-m-note is-bad" role="alert">{helpError}</p> : null}
               <span className="ws2-m-acts">
+                {inShell ? (
+                  <button type="button" className="ws2-m-link" onClick={() => shell(() => dataLocation().then((loc) => revealInFolder(loc.path)))}>打开数据目录</button>
+                ) : null}
                 {bundle ? null : (
                   <button type="button" className="ws2-m-link" onClick={() => { void makeBundle(); }} disabled={bundling}>{bundling ? '生成中…' : '生成反馈包'}</button>
                 )}

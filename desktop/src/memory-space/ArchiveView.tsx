@@ -1,6 +1,6 @@
 import { MemorySelect } from './MemorySelect';
 import { motion, useReducedMotion } from 'motion/react';
-import { useSyncExternalStore } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 
 import type { ArchiveScope } from './archiveApi';
 import {
@@ -32,7 +32,7 @@ export type ArchiveViewProps = {
 const NARROW_WIDTH = 900;
 
 const PROVIDER_DISCLOSURE =
-  '受治理的记忆可能被用于对话，并可能由当前选择的远程服务商处理。本地保存不等于永不外发。';
+  '已记住的内容会在对话时发给当前所选的模型服务商；保存在本机不代表对话时不外发。';
 
 function useArchiveState(module: ArchiveModule): ArchiveState {
   return useSyncExternalStore(module.subscribe, module.snapshot);
@@ -40,7 +40,7 @@ function useArchiveState(module: ArchiveModule): ArchiveState {
 
 function SourceLines({ lines }: { lines: SourceLine[] }) {
   if (!lines.length) {
-    return <p className="archive-sources-empty">未提供可显示的来源</p>;
+    return <p className="archive-sources-empty">暂无可显示的原话摘录</p>;
   }
   return (
     <ul className="archive-sources">
@@ -156,6 +156,12 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
   const selectedTopicId = (selectedFactRow ? selectedFactRow.topicId : readingModel?.kind === 'fact' ? readingModel.diagnostics.topicIdRaw : null) ?? '';
   const showList = !narrow || !detailOpen;
   const showDetail = !narrow || detailOpen;
+  const [pendingOverride, setPendingOverride] = useState<boolean | null>(null);
+  const candidateObservations = state.pending.observations.filter((item) => item.status === 'candidate');
+  const pendingCount = candidateObservations.length + state.pending.failedJobs.length;
+  const pendingHasAlert = state.pending.observationsFailed || state.pending.statusFailed;
+  const pendingHasContent = pendingCount > 0 || pendingHasAlert;
+  const pendingOpen = pendingOverride ?? pendingHasContent;
 
   return (
     <motion.section className="archive-view" data-testid="archive-view" aria-label="记忆档案"
@@ -658,66 +664,87 @@ export function ArchiveView({ module, scope, width, reducedMotion: motionPrefere
         ) : null}
       </div>
 
-      <section className="archive-pending" data-testid="archive-pending" aria-label="待处理">
-        <h3>待处理</h3>
-        {state.pending.observationsFailed || state.pending.statusFailed ? (
-          <p role="alert" data-testid="archive-pending-partial">
-            部分内容暂时不可用。
-          </p>
-        ) : null}
-        {state.pending.observations.filter((item) => item.status === 'candidate').length ? (
-          <ul>
-            {state.pending.observations
-              .filter((item) => item.status === 'candidate')
-              .map((item) => (
-                <li key={item.observationId}>
-                  <span>候选观察：{item.displayText ?? '（内容不可显示）'}</span>
-                  <button
-                    type="button"
-                    data-testid={`archive-confirm-${item.observationId}`}
-                    onClick={() =>
-                      module.dispatch({ type: 'confirm-observation', observationId: item.observationId })
-                    }
-                  >
-                    确认
-                  </button>
-                  <button
-                    type="button"
-                    data-testid={`archive-ignore-${item.observationId}`}
-                    onClick={() =>
-                      module.dispatch({ type: 'ignore-observation', observationId: item.observationId })
-                    }
-                  >
-                    忽略
-                  </button>
-                </li>
-              ))}
-          </ul>
-        ) : null}
-        {state.pending.failedJobs.length ? (
-          <ul>
-            {state.pending.failedJobs.map((job) => (
-              <li key={job.jobId}>
-                <span>
-                  失败任务（尝试 {job.attemptCount} 次）
-                  {job.retryable ? '' : ' · 不可重试'}
-                </span>
-                {job.retryable ? (
-                  <button
-                    type="button"
-                    data-testid={`archive-retry-${job.jobId}`}
-                    onClick={() => module.dispatch({ type: 'retry-job', jobId: job.jobId })}
-                  >
-                    重试
-                  </button>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        ) : null}
-        {!state.pending.observationsFailed && !state.pending.statusFailed
-          && !state.pending.observations.length && !state.pending.failedJobs.length ? (
-          <p>当前范围内没有待处理项。</p>
+      <section
+        className={`archive-pending${pendingOpen ? ' is-open' : ' is-collapsed'}`}
+        data-testid="archive-pending"
+        aria-label="待处理"
+      >
+        <div className="archive-pending-head">
+          <h3>
+            待处理
+            <span className="archive-pending-count" data-testid="archive-pending-count">（{pendingCount}）</span>
+          </h3>
+          <button
+            type="button"
+            className="archive-pending-toggle"
+            data-testid="archive-pending-toggle"
+            aria-expanded={pendingOpen}
+            aria-controls="archive-pending-body"
+            onClick={() => setPendingOverride((prev) => !(prev ?? pendingHasContent))}
+          >
+            {pendingOpen ? '收起' : '展开'}
+          </button>
+        </div>
+        {pendingOpen ? (
+          <div className="archive-pending-body" id="archive-pending-body">
+            <p className="archive-pending-hint">确认后会记入「认知」，忽略则不再保留。</p>
+            {pendingHasAlert ? (
+              <p role="alert" data-testid="archive-pending-partial">
+                部分内容暂时不可用。
+              </p>
+            ) : null}
+            {candidateObservations.length ? (
+              <ul>
+                {candidateObservations.map((item) => (
+                  <li key={item.observationId}>
+                    <span>候选观察：{item.displayText ?? '（内容不可显示）'}</span>
+                    <button
+                      type="button"
+                      data-testid={`archive-confirm-${item.observationId}`}
+                      onClick={() =>
+                        module.dispatch({ type: 'confirm-observation', observationId: item.observationId })
+                      }
+                    >
+                      确认
+                    </button>
+                    <button
+                      type="button"
+                      data-testid={`archive-ignore-${item.observationId}`}
+                      onClick={() =>
+                        module.dispatch({ type: 'ignore-observation', observationId: item.observationId })
+                      }
+                    >
+                      忽略
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {state.pending.failedJobs.length ? (
+              <ul>
+                {state.pending.failedJobs.map((job) => (
+                  <li key={job.jobId}>
+                    <span>
+                      失败任务（尝试 {job.attemptCount} 次）
+                      {job.retryable ? '' : ' · 不可重试'}
+                    </span>
+                    {job.retryable ? (
+                      <button
+                        type="button"
+                        data-testid={`archive-retry-${job.jobId}`}
+                        onClick={() => module.dispatch({ type: 'retry-job', jobId: job.jobId })}
+                      >
+                        重试
+                      </button>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {!pendingHasAlert && !candidateObservations.length && !state.pending.failedJobs.length ? (
+              <p>当前范围内没有待处理项。</p>
+            ) : null}
+          </div>
         ) : null}
       </section>
 

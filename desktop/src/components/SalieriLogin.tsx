@@ -77,6 +77,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
   const [passcodeUnreadable, setPasscodeUnreadable] = useState(false);
   const [peek, setPeek] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [wrongPasscode, setWrongPasscode] = useState(false);
   // Which field the error belongs to; the message text is localized or a raw backend detail.
   const [errorField, setErrorField] = useState<'user' | 'password' | null>(null);
   const [errorSeq, setErrorSeq] = useState(0);
@@ -418,6 +419,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
     e.preventDefault();
     if (backendStatus !== 'ready' || exiting || admitted) return;
     handleInitAudio();
+    setWrongPasscode(false);
     if (!userId) {
       showAuthError('请输入 USER ID', 'user');
       return;
@@ -427,7 +429,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
       return;
     }
     if (!password && passcodeSet) {
-      showAuthError('请输入访问密码', 'password');
+      showAuthError('请输入口令', 'password');
       return;
     }
 
@@ -475,7 +477,8 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
           }, OK_BEAT);
         }
       } else if (response.status === 401 || response.status === 403) {
-        showAuthError('密码错误', 'password');
+        setWrongPasscode(true);
+        showAuthError('口令错误', 'password');
       } else if (response.status === 429) {
         showAuthError('试得太快了，请稍等几秒', 'password');
       } else {
@@ -578,13 +581,14 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
           </div>
 
           <div ref={pwdRowRef} className={`sl-row pwd${errorField === 'password' ? ' is-error' : ''}`}>
-            <label className={`sl-label${focusField === 'password' || errorField === 'password' ? ' is-on' : ''}`} htmlFor="salieri-pwd"><Plate press="sl-press" /><span>PASSWORD</span></label>
+            <label className={`sl-label${focusField === 'password' || errorField === 'password' ? ' is-on' : ''}`} htmlFor="salieri-pwd"><Plate press="sl-press" /><span>口令</span></label>
             <div className={`sl-slot${capsLock ? ' has-caps' : ''}`}>
               <input
                 ref={pwdRef}
                 id="salieri-pwd"
                 type={peek ? 'text' : 'password'}
                 className="sl-input password-input"
+                placeholder={passcodeSet ? '请输入口令' : undefined}
                 value={password}
                 onChange={(e) => { setPassword(e.target.value); if (!e.target.value) setPeek(false); plateRef.current?.tick(); }}
                 onFocus={() => setFocusField('password')}
@@ -605,10 +609,10 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
                 type="button"
                 className={`sl-peek${password ? ' is-shown' : ''}${peek ? ' is-open' : ''}`}
                 tabIndex={-1}
-                aria-label={peek ? '隐藏密码' : '显示密码'}
+                aria-label={peek ? '隐藏口令' : '显示口令'}
                 aria-pressed={peek}
                 aria-hidden={!password || undefined}
-                title={peek ? '隐藏密码（Alt+F8）' : '显示密码（Alt+F8）'}
+                title={peek ? '隐藏口令（Alt+F8）' : '显示口令（Alt+F8）'}
                 disabled={isAuthenticating || !password}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => { setPeek((v) => !v); pwdRef.current?.focus(); }}
@@ -641,7 +645,12 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
                 <i aria-hidden="true" />{errorMsg}
               </p>
             )}
-            {!errorMsg && backendStatus === 'ready' && !passcodeSet && !exiting && (
+            {wrongPasscode && !admitted && !exiting && (
+              <p className="sl-msg is-note sl-forgot-hint">
+                {'忘了口令？完全退出 AMADEUS 后，删除数据目录里的 auth\\passcode.json 再重新打开即可。'}
+              </p>
+            )}
+            {!errorMsg && !wrongPasscode && backendStatus === 'ready' && !passcodeSet && !exiting && (
               <p className="sl-msg is-note">
                 {passcodeUnreadable ? '口令文件读不出来，这次不问口令' : '没有设口令，直接按 Enter 进入'}
               </p>

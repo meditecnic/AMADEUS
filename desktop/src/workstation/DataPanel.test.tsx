@@ -24,7 +24,7 @@ vi.mock('./shell', async (importOriginal) => {
 });
 
 import { AboutPanel } from './AboutPanel';
-import { DataPanel } from './DataPanel';
+import { DataPanel, formatBackupDetail } from './DataPanel';
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 const BACKUPS = [
@@ -94,6 +94,27 @@ describe('DataPanel', () => {
     expect(await screen.findByText('口令已设好，下次打开时会问。')).toBeInTheDocument();
     expect(calls.find((call) => call.url === '/api/auth/passcode')?.body).toEqual({ current: null, new: 'lab-member' });
     expect(screen.getByRole('button', { name: '改口令' })).toBeInTheDocument();
+  });
+
+  it('translates broken backup validation details into plain Chinese in the list and helper', async () => {
+    expect(formatBackupDetail('Backup validation failed: checksum mismatch: memory.sqlite3')).toBe(
+      '备份文件校验未通过（内容损坏或不完整），不能用来恢复，可直接删除',
+    );
+    expect(formatBackupDetail('Backup validation failed: newer database schema: memory.sqlite3')).toBe(
+      '该备份来自更高版本的 AMADEUS，当前版本无法恢复',
+    );
+    expect(formatBackupDetail('Backup validation failed: unreadable databases: conversation.sqlite3')).toBe(
+      '备份时原数据库已损坏，含无法读取的数据文件，不能直接用来恢复',
+    );
+    expect(formatBackupDetail('Backup validation failed: missing manifest.json')).toBe(
+      '备份清单缺失或损坏，不能用来恢复，可直接删除',
+    );
+    expect(formatBackupDetail('Backup validation failed')).toBe('备份校验未通过，不能用来恢复，可直接删除');
+
+    mount();
+    const list = await screen.findByRole('list', { name: '备份' });
+    expect(list).toHaveTextContent('备份校验未通过，不能用来恢复，可直接删除');
+    expect(list.textContent).not.toContain('Backup validation failed');
   });
 
   it('deletes a backup only through the stamped slip', async () => {

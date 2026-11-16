@@ -317,13 +317,18 @@ function ConnectedRow({
               ) : (
                 <form className="ws2-cx-inline" onSubmit={(e) => {
                   e.preventDefault();
-                  void act(() => updateProfile(row.id, { base_url: urlEdit.trim() }), '地址已改。测一下看看能不能用。')
+                  const nextUrl = normalizeCustomBaseUrl(urlEdit);
+                  if (!nextUrl || busy || relocating) return;
+                  setUrlEdit(nextUrl);
+                  void act(() => updateProfile(row.id, { base_url: nextUrl }), '地址已改。测一下看看能不能用。')
                     .then((ok) => { if (ok) { setUrlEdit(null); setModels(null); } });
                 }}>
                   <input type="url" className="ws2-cx-field" value={urlEdit} autoFocus spellCheck={false} aria-label="服务地址"
-                    onChange={(e) => setUrlEdit(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); setUrlEdit(null); } }} />
+                    onChange={(e) => setUrlEdit(e.target.value)}
+                    onBlur={() => setUrlEdit((current) => (current === null ? null : normalizeCustomBaseUrl(current)))}
+                    onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); setUrlEdit(null); } }} />
                   <button type="button" className="ws2-m-link" onClick={() => setUrlEdit(null)}>取消</button>
-                  <button type="submit" className="ws2-m-btn" disabled={busy || relocating || !urlEdit.trim()}>{busy ? '保存中…' : '保存'}</button>
+                  <button type="submit" className="ws2-m-btn" disabled={busy || relocating || !normalizeCustomBaseUrl(urlEdit)}>{busy ? '保存中…' : '保存'}</button>
                 </form>
               )}
             </div>
@@ -397,6 +402,14 @@ function ConnectedRow({
       ) : null}
     </li>
   );
+}
+
+export function normalizeCustomBaseUrl(raw: string): string {
+  let normalized = raw.trim().replace(/\/+$/, '');
+  while (/\/chat\/completions$/i.test(normalized)) {
+    normalized = normalized.replace(/\/chat\/completions$/i, '').replace(/\/+$/, '');
+  }
+  return normalized;
 }
 
 const hostOf = (url: string) => { try { return new URL(url).host; } catch { return url; } };
@@ -552,7 +565,8 @@ function KeySheet({ anchor, entry, existing, providers, onClose, onCheck, onAdmi
 
   const mark = (step: StepKey, state: StepState) => setSteps((current) => ({ ...current, [step]: state }));
   const providerId = () => entry.builtin ?? profile.current?.id ?? '';
-  const needKey = !entry.noKey && !(entry.builtin && existing?.configured && !key);
+  const optionalKey = entry.id === 'custom';
+  const needKey = !entry.noKey && !optionalKey && !(entry.builtin && existing?.configured && !key);
 
   /**
    * Steps 1 and 2 in one call: the backend keeps the key (making the connection, or reusing the one at this address
@@ -563,7 +577,8 @@ function KeySheet({ anchor, entry, existing, providers, onClose, onCheck, onAdmi
     setPhase('working');
     setSteps({ save: { state: 'doing' }, list: { state: 'idle' }, check: { state: 'idle' } });
     try {
-      const url = baseUrl.trim();
+      const url = custom ? normalizeCustomBaseUrl(baseUrl) : baseUrl.trim();
+      if (custom && url !== baseUrl) setBaseUrl(url);
       const got = await connect(
         entry.builtin
           ? { providerId: entry.builtin }
@@ -577,7 +592,18 @@ function KeySheet({ anchor, entry, existing, providers, onClose, onCheck, onAdmi
       // An existing connection that only got a new key keeps its model and its place in the menu. Where the service
       // has no list to prove the key against, the backend said one sentence with that model first (check.ok).
       const rekeyed = got.check.code === 'not_checked' || got.check.ok;
-      mark('save', { state: 'done', note: rekeyed ? '密钥已换，原来的模型不变' : key.trim() ? '只存在这台电脑上' : entry.noKey ? '本机服务，不需要密钥' : '沿用已保存的密钥' });
+      mark('save', {
+        state: 'done',
+        note: rekeyed
+          ? '密钥已换，原来的模型不变'
+          : key.trim()
+            ? '只存在这台电脑上'
+            : entry.noKey
+              ? '本机服务，不需要密钥'
+              : optionalKey
+                ? '未填密钥（无密钥服务）'
+                : '沿用已保存的密钥',
+      });
       const chat = got.models_listed === false ? null : chatModels(got.models);
       setModels(chat);
       setModel((current) => current || got.model_id || (chat ? suggestModel(entry, chat) : existing?.default_model ?? ''));
@@ -662,7 +688,8 @@ function KeySheet({ anchor, entry, existing, providers, onClose, onCheck, onAdmi
             ) : (
               <label className="ws2-cx-labelled"><span>API 密钥</span>
                 <input type="password" className="ws2-cx-field" value={key} onChange={(e) => setKey(e.target.value)} autoComplete="new-password" spellCheck={false}
-                  placeholder={entry.builtin && existing?.configured ? '已保存过密钥 · 留空就沿用' : entry.plan ? '粘贴套餐的专属密钥' : '粘贴密钥，通常以 sk- 开头'} data-autofocus={entry.id !== 'custom' || undefined} />
+                  placeholder={optionalKey ? '粘贴密钥；无密钥的自建或本地网关服务可留空' : entry.builtin && existing?.configured ? '已保存过密钥 · 留空就沿用' : entry.plan ? '粘贴套餐的专属密钥' : '粘贴密钥，通常以 sk- 开头'} data-autofocus={entry.id !== 'custom' || undefined} />
+                {optionalKey ? <small>无密钥的自建或本地网关服务可留空。</small> : null}
               </label>
             )}
             {entry.keyUrl && !entry.noKey ? (
@@ -676,9 +703,10 @@ function KeySheet({ anchor, entry, existing, providers, onClose, onCheck, onAdmi
             {custom ? (
               advanced ? (
                 <label className="ws2-cx-labelled"><span>服务地址</span>
-                  <input type="url" className="ws2-cx-field ws2-path" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} spellCheck={false}
+                  <input type="url" className="ws2-cx-field ws2-path" value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)}
+                    onBlur={() => setBaseUrl((current) => normalizeCustomBaseUrl(current))} spellCheck={false}
                     placeholder="https://example.com/v1" />
-                  <small>服务商文档里的 Base URL，通常以 /v1 结尾，不要带 /chat/completions。</small>
+                  <small>服务商文档里的 Base URL，通常以 /v1 结尾；若误带 /chat/completions 会自动去掉。</small>
                 </label>
               ) : (
                 <p className="ws2-cx-addr">地址 <span className="ws2-path">{baseUrl}</span> <button type="button" className="ws2-m-link" onClick={() => setAdvanced(true)}>改</button></p>
@@ -691,7 +719,7 @@ function KeySheet({ anchor, entry, existing, providers, onClose, onCheck, onAdmi
           {STEPS.map(({ key: k, label }) => (
             <li key={k} className={`is-${steps[k].state}`}>
               <i aria-hidden="true" />
-              <span>{k === 'save' && entry.noKey ? '保存服务地址' : label}</span>
+              <span>{k === 'save' && (entry.noKey || (optionalKey && !key.trim())) ? '保存服务地址' : label}</span>
               {steps[k].note ? <small>{steps[k].note}</small> : null}
             </li>
           ))}
@@ -731,7 +759,7 @@ function KeySheet({ anchor, entry, existing, providers, onClose, onCheck, onAdmi
               {phase === 'pick' || (busy && steps.check.state === 'doing') ? (
                 <button type="submit" className="ws2-m-btn" disabled={busy || !model.trim()}>{busy ? '正在试…' : '试一下并接入'}</button>
               ) : (
-                <button type="submit" className="ws2-m-btn" disabled={busy || (needKey && !key.trim()) || (custom && !baseUrl.trim())}>{busy ? '正在接…' : '下一步'}</button>
+                <button type="submit" className="ws2-m-btn" disabled={busy || (needKey && !key.trim()) || (custom && !normalizeCustomBaseUrl(baseUrl))}>{busy ? '正在接…' : '下一步'}</button>
               )}
             </>
           )}
