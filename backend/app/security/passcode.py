@@ -67,31 +67,25 @@ def _derive(value: str, salt: bytes) -> bytes:
     return hashlib.scrypt(value.encode("utf-8"), salt=salt, maxmem=64 * 1024 * 1024, **PARAMETERS)
 
 
-async def _verify(record: dict | None, value: str | None, *, legacy: bool = False) -> None:
+async def _verify(record: dict | None, value: str | None) -> None:
     global _failures
-    if record is None:
-        valid = not legacy or normalize_password(value or "") == "gott wurfelt nicht"
-    else:
-        valid = value is not None and hmac.compare_digest(
-            await asyncio.to_thread(_derive, value, bytes.fromhex(record["salt"])),
-            bytes.fromhex(record["hash"]),
-        )
+    valid = record is None or (value is not None and hmac.compare_digest(
+        await asyncio.to_thread(_derive, value, bytes.fromhex(record["salt"])),
+        bytes.fromhex(record["hash"]),
+    ))
     if not valid:
         _failures += 1
         if _failures >= 5:
             await asyncio.sleep(min(_failures - 4, 30))
-        raise HTTPException(401, detail="Invalid password" if legacy else {"code": "invalid_passcode"})
+        raise HTTPException(401, detail={"code": "invalid_passcode"})
     _failures = 0
 
 
-async def login(value: str | None, *, legacy: bool = False) -> dict:
+async def login(value: str | None) -> dict:
     async with _lock:
         record, _ = await asyncio.to_thread(read_passcode)
-        await _verify(record, value, legacy=legacy)
-        result = {"status": "success"}
-        if not legacy:
-            result["easter_egg"] = normalize_password(value or "") == "gott wurfelt nicht"
-        return result
+        await _verify(record, value)
+        return {"status": "success", "easter_egg": normalize_password(value or "") == "gott wurfelt nicht"}
 
 
 async def change(current: str | None, new: str | None) -> dict:

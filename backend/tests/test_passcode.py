@@ -6,7 +6,7 @@ import pytest
 from app.security import passcode
 
 
-def test_lifecycle_and_legacy(app_client):
+def test_lifecycle(app_client):
     c = app_client
     assert c.get('/api/auth/state').json() == {'passcode_set': False}
     assert c.post('/api/auth/login', json={}).json() == {'status': 'success', 'easter_egg': False}
@@ -16,13 +16,16 @@ def test_lifecycle_and_legacy(app_client):
     assert 'test-only-phrase' not in json.dumps(record)
     assert record['algorithm'] == 'scrypt'
     assert c.post('/api/auth/login', json={'passcode': 'Gott würfelt nicht'}).status_code == 401
-    assert c.post('/api/auth/salieri', json={'password': 'Gott würfelt nicht'}).status_code == 401
-    assert c.post('/api/auth/salieri', json={'password': 'test-only-phrase'}).json() == {'status': 'success'}
+    assert c.post('/api/auth/login', json={'passcode': 'test-only-phrase'}).json() == {'status': 'success', 'easter_egg': False}
     assert c.put('/api/auth/passcode', json={'new': None}).status_code == 401
     assert c.put('/api/auth/passcode', json={'current': 'test-only-phrase', 'new': 'gott wurfelt nicht'}).status_code == 200
     assert c.post('/api/auth/login', json={'passcode': 'gott wurfelt nicht'}).json()['easter_egg']
     assert c.put('/api/auth/passcode', json={'current': 'gott wurfelt nicht', 'new': None}).status_code == 200
     assert c.get('/api/auth/state').json() == {'passcode_set': False}
+
+
+def test_retired_salieri_route_is_gone(app_client):
+    assert app_client.post('/api/auth/salieri', json={'password': 'Gott würfelt nicht'}).status_code == 404
 
 
 @pytest.mark.parametrize('content', ['{', 'null', '[]', '{"algorithm":"other"}'])

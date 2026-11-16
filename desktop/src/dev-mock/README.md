@@ -5,13 +5,15 @@ No backend, provider, TTS, credentials, or extra listener is needed. The Vite
 plugin has `apply: 'serve'`; its server modules and injected selector script do
 not enter `npm run build` or `npm run preview`.
 
-Open `http://localhost:1420/?scenario=streaming`. Every scenario starts at login.
-Use **`Gott würfelt nicht`**. The real frontend sends
-`POST /api/auth/salieri` with `{"password":"..."}`. All scenarios inherit
-**HTTP 200 on success and HTTP 401 on an incorrect passphrase**;
-`login-failure` forces **401 even for the correct passphrase**. The failure
-message is the response's `detail` string. These statuses live in the JSON
-catalog, including the forced-failure scenario.
+Open `http://localhost:1420/?scenario=streaming`. Every scenario starts at the
+Salieri login screen. By default no startup passcode is set: once USER ID has
+typed `Salieri`, press Enter to open the workstation. The frontend reads
+`GET /api/auth/state` and sends `POST /api/auth/login` with
+`{"passcode":"..."}` (or `null`). Open `?scenario=login-passcode` to get the
+startup passcode page; its passcode is **`Gott würfelt nicht`**. A wrong
+passcode returns **HTTP 401** with `{"detail":{"code":"invalid_passcode"}}`;
+`login-failure` forces **401 even for the correct passcode**. A successful
+login returns `easter_egg: true` when the passcode is `Gott würfelt nicht`.
 
 ## Catalog
 
@@ -22,8 +24,9 @@ arrays replace the base; `login` and `shift` merge individual fields.
 | Name / JSON file | Contents |
 | --- | --- |
 | `streaming` (default) | Login, SG/β session histories, three Japanese/Chinese sentence pairs and memory facts |
-| `login-success` | Explicit login success 200 / failure 401 |
-| `login-failure` | Forced login failure 401 with a retry message |
+| `login-success` | No passcode: every login succeeds with 200 |
+| `login-failure` | Forced login failure 401, even for the correct passcode |
+| `login-passcode` | Startup passcode `Gott würfelt nicht` set: correct 200 / wrong 401 |
 | `session-list` | Seeded SG and β histories; create, rename, pin, forget and delete |
 | `memory` | Dated sample library for SG and β (about 25 records each over three months), archive/details and `/api/memory/chart` |
 | `memory-new` | New user: three cognitions from the last week, no topics |
@@ -130,7 +133,7 @@ npm run build
 npx vitest run
 ```
 
-Browser checks: cold boot → incorrect login → successful login → send a draft
+Browser checks: cold boot (`login-passcode`) → incorrect passcode → successful login → send a draft
 message and observe three separate bilingual arrivals → select a history →
 open Memory. Reload with `empty`, `error`, `offline`, `shift-failure` or
 `shift-slow` to reach the corresponding states. Evidence belongs in the
