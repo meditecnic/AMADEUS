@@ -328,6 +328,34 @@ async def test_product_translate_forwards_context_once_and_applies_rewrites(monk
     assert "<source>\nクリスティーナはDメールを使った。\n</source>" in user_msg
 
 
+@pytest.mark.asyncio
+async def test_product_translate_keeps_legacy_adapter_without_context_param():
+    class LegacyTwoArgAdapter:
+        async def translate_to_zh(self, ja, api_key=None):
+            return f"two:{ja}:{api_key}"
+
+    class LegacyThreeArgAdapter:
+        async def translate_to_zh(self, ja, api_key=None, model=None):
+            return f"three:{ja}:{api_key}:{model}"
+
+    runtime = ev.Product.__new__(ev.Product)
+    runtime.key = "k"
+    runtime.model = "deepseek-flash"
+    runtime.apply_rewrites = lambda text: text
+
+    @ev.asynccontextmanager
+    async def noop_paid(_thinking):
+        yield
+
+    runtime.paid = noop_paid
+
+    runtime.adapter = LegacyTwoArgAdapter()
+    assert await runtime.translate("静かね。", "disabled", {"emotion_tag": "sad"}) == "two:静かね。:k"
+
+    runtime.adapter = LegacyThreeArgAdapter()
+    assert await runtime.translate("静かね。", "disabled", {"emotion_tag": "sad"}) == "three:静かね。:k:deepseek-flash"
+
+
 def test_path_guard_rejects_live_roots(tmp_path, monkeypatch):
     monkeypatch.setenv("APPDATA", str(tmp_path / "roaming"))
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))

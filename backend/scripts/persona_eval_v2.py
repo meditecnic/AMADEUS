@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager, redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from importlib.util import find_spec
+import inspect
 import json
 import math
 import os
@@ -241,6 +242,13 @@ def thinking_payload(payload, thinking):
     return payload
 
 
+def _supported_kwargs(callable_obj, values):
+    params = inspect.signature(callable_obj).parameters
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()):
+        return values
+    return {name: value for name, value in values.items() if name in params}
+
+
 class Product:
     """Compile and translate in the selected checkout; scope HTTP changes to DeepSeek."""
 
@@ -248,7 +256,10 @@ class Product:
         import httpx
 
         from app import db
-        from app.domain.subtitle_glossary_rewrite import apply_subtitle_glossary_rewrites
+        try:
+            from app.domain.subtitle_glossary_rewrite import apply_subtitle_glossary_rewrites
+        except ImportError:
+            apply_subtitle_glossary_rewrites = None
         from app.routers import chat_ws
         from app.services import deepseek, model_usage, provider_runtime, session_manager, usage_report
         from app.services.conversations import conversation_service
@@ -412,13 +423,18 @@ class Product:
                 "system_prompt_tokens_est": self.counter(self.wire_prompt), "provider_input_tokens": input_tokens}
 
     async def translate(self, ja, thinking, context=None):
+        values = {"api_key": self.key, "model": self.model}
+        if context is not None:
+            values["context"] = context
+        kwargs = _supported_kwargs(self.adapter.translate_to_zh, values)
         async with self.paid(thinking):
-            zh = await self.adapter.translate_to_zh(
-                ja, api_key=self.key, model=self.model, context=context
-            )
+            zh = await self.adapter.translate_to_zh(ja, **kwargs)
         if not zh:
             raise StopRun("subtitle: 模型未返回译文")
-        return self.apply_rewrites(zh, source=ja)
+        if self.apply_rewrites is None:
+            return zh
+        rewrite_kwargs = _supported_kwargs(self.apply_rewrites, {"source": ja})
+        return self.apply_rewrites(zh, **rewrite_kwargs)
 
 def chosen_thinking(args):
     return args.thinking or (list(THINKING[1:]) if args.mode == "latency" else ["default"])

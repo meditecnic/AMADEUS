@@ -32,7 +32,7 @@ FIRST_BATCH_PRESERVE_IDS: tuple[str, ...] = (
 _MAX_USER_TURN_CHARS = 240
 _MAX_PRIOR_ITEMS = 2
 _MAX_PRIOR_CHARS = 240
-_CONTEXT_HEADER = "【参考文脈（翻訳対象は <source> のみ・文脈自体は出力しない）】"
+_CONTEXT_HEADER = "【参考文脈（翻訳対象は source ブロックのみ・文脈自体は出力しない）】"
 _SCALAR_CONTEXT_KEYS = (
     "emotion_tag",
     "identity_mode",
@@ -190,7 +190,9 @@ def build_translation_user_source_content(
     compact_context = _normalize_translation_context(context)
     if not compact_context:
         return source_block
-    serialized = json.dumps(compact_context, ensure_ascii=False)
+    serialized = json.dumps(compact_context, ensure_ascii=False).translate(
+        {ord("<"): "\\u003c", ord(">"): "\\u003e"}
+    )
     return f"{_CONTEXT_HEADER}\n{serialized}\n\n{source_block}"
 
 
