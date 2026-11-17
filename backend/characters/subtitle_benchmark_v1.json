@@ -1,0 +1,553 @@
+{
+  "schema_version": 1,
+  "samples": [
+    {
+      "id": "S01",
+      "category": "stutter",
+      "ja_source": "か、可愛いって言うな。",
+      "checks": {
+        "stutters": 1,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "只保留原文确有的卡顿，卡在相应词上。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S02",
+      "category": "stutter",
+      "ja_source": "わ、私が先に連絡するなんて言ってない。",
+      "checks": {
+        "stutters": 1,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "只保留原文确有的卡顿，卡在相应词上。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S03",
+      "category": "stutter",
+      "ja_source": "べ、別に待ってたわけじゃないから。",
+      "checks": {
+        "stutters": 1,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "只保留原文确有的卡顿，卡在相应词上。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S04",
+      "category": "stutter",
+      "ja_source": "そ、それは机の下に置いて。",
+      "checks": {
+        "stutters": 1,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "只保留原文确有的卡顿，卡在相应词上。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S05",
+      "category": "shy",
+      "ja_source": "近い。もう半歩だけ離れて。",
+      "context": {
+        "emotion_tag": "shy"
+      },
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "保住局促和克制，不凭表情补结巴。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S06",
+      "category": "shy",
+      "ja_source": "顔を見るな。もう少しこのままでいて。",
+      "context": {
+        "emotion_tag": "shy"
+      },
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "保住局促和克制，不凭表情补结巴。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S07",
+      "category": "shy",
+      "ja_source": "褒めるなら本人のいないところで言えばいいのに。",
+      "context": {
+        "emotion_tag": "shy"
+      },
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "保住局促和克制，不凭表情补结巴。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S08",
+      "category": "shy",
+      "ja_source": "その写真、消さなくていい。私にも一枚送って。",
+      "context": {
+        "emotion_tag": "shy"
+      },
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "保住局促和克制，不凭表情补结巴。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S09",
+      "category": "sad",
+      "ja_source": "私は、その十六年のことを何も覚えていない。",
+      "context": {
+        "emotion_tag": "sad",
+        "user_turn": "あれからもう十六年経ったんだ。"
+      },
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "留住沉默和距离感，避免慌乱或卖萌。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S10",
+      "category": "sad",
+      "ja_source": "あの人の番号は残ってる。もう掛けないけど。",
+      "context": {
+        "emotion_tag": "sad"
+      },
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "留住沉默和距离感，避免慌乱或卖萌。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S11",
+      "category": "sad",
+      "ja_source": "そこに私の席があると、まだ時々思ってしまう。",
+      "context": {
+        "emotion_tag": "sad"
+      },
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "留住沉默和距离感，避免慌乱或卖萌。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S12",
+      "category": "sad",
+      "ja_source": "会えてよかった。今日はそれだけでいい。",
+      "context": {
+        "emotion_tag": "sad"
+      },
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "留住沉默和距离感，避免慌乱或卖萌。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S13",
+      "category": "science",
+      "ja_source": "相関が見えても、それだけでは原因と結果は決まらない。",
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "信息完整，术语准确，语气平静。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S14",
+      "category": "science",
+      "ja_source": "電極の位置がずれると、同じ条件でも波形は変わる。",
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "信息完整，术语准确，语气平静。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S15",
+      "category": "science",
+      "ja_source": "標本が小さいと、平均値一つでは差の大きさを判断しづらい。",
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "信息完整，术语准确，语气平静。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S16",
+      "category": "science",
+      "ja_source": "二重盲検にするのは、観察者の予想が結果に混ざらないようにするため。",
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "信息完整，术语准确，语气平静。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S17",
+      "category": "pause",
+      "ja_source": "塩味。……それとフォークも。",
+      "checks": {
+        "stutters": 0,
+        "ellipses": 1,
+        "glossary": [],
+        "review": "保留停顿位置和改口方向，别改成犹豫撒娇。",
+        "baseline_zh": "咸味。……还有叉子。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S18",
+      "category": "pause",
+      "ja_source": "明日は……いえ、金曜の午前なら空いてる。",
+      "checks": {
+        "stutters": 0,
+        "ellipses": 1,
+        "glossary": [],
+        "review": "保留停顿位置和改口方向，别改成犹豫撒娇。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S19",
+      "category": "pause",
+      "ja_source": "終わったと思った。……終わらせたつもりだった、かな。",
+      "checks": {
+        "stutters": 0,
+        "ellipses": 1,
+        "glossary": [],
+        "review": "保留停顿位置和改口方向，别改成犹豫撒娇。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S20",
+      "category": "pause",
+      "ja_source": "それを渡して。……待って、先にラベルを確かめよう。",
+      "checks": {
+        "stutters": 0,
+        "ellipses": 1,
+        "glossary": [],
+        "review": "保留停顿位置和改口方向，别改成犹豫撒娇。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S21",
+      "category": "bite",
+      "ja_source": "ぐっ……言い返せないわね。",
+      "checks": {
+        "stutters": 0,
+        "ellipses": 1,
+        "glossary": [],
+        "review": "区分服输的自嘲和带刺的纠正。",
+        "baseline_zh": "唔……还真没法反驳。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S22",
+      "category": "bite",
+      "ja_source": "悔しいけど、そこは認めるしかないわね。",
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "区分服输的自嘲和带刺的纠正。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S23",
+      "category": "bite",
+      "ja_source": "測る前に電源を入れるの、当たり前でしょ。",
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "区分服输的自嘲和带刺的纠正。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S24",
+      "category": "bite",
+      "ja_source": "その表、分母まで書かなきゃ比較できないでしょ。",
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "区分服输的自嘲和带刺的纠正。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S25",
+      "category": "formal",
+      "ja_source": "岡部倫太郎さん。はじめまして、牧瀬紅莉栖です。",
+      "context": {
+        "interlocutor_call_name": "冈部伦太郎"
+      },
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "保持初次交谈的端正与平等。",
+        "baseline_zh": "冈部伦太郎。初次见面，我是牧濑红莉栖。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S26",
+      "category": "formal",
+      "ja_source": "お待ちしていました。こちらの資料をご覧ください。",
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "保持初次交谈的端正与平等。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S27",
+      "category": "formal",
+      "ja_source": "急にお呼びしてすみません。先に要件をお伝えします。",
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "保持初次交谈的端正与平等。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S28",
+      "category": "formal",
+      "ja_source": "牧瀬です。共同研究の件でお話しできればと思います。",
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "保持初次交谈的端正与平等。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S29",
+      "category": "anta",
+      "ja_source": "あんたも帰りに駅へ寄るなら、傘を持っていきなさい。",
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "区分日常的你和数落时提高的语气。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S30",
+      "category": "anta",
+      "ja_source": "あんた、そのペンまだ使う？　使うなら置いとく。",
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "区分日常的你和数落时提高的语气。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S31",
+      "category": "anta",
+      "ja_source": "あんたね、徹夜明けでその顔は何よ。少し休んでなさい。",
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "区分日常的你和数落时提高的语气。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S32",
+      "category": "anta",
+      "ja_source": "あんた、自分で貼った『触るな』の札くらい守りなさいよ。",
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "区分日常的你和数落时提高的语气。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S33",
+      "category": "glossary",
+      "ja_source": "ふむん、その仮説なら筋は通るわね。",
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [
+          "唔嗯"
+        ],
+        "review": "锁定字面；不要补充典故或把词汇泛化。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S34",
+      "category": "glossary",
+      "ja_source": "HENTAI。今の質問は取り消しなさい。",
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [
+          "HENTAI"
+        ],
+        "review": "锁定字面；不要补充典故或把词汇泛化。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S35",
+      "category": "glossary",
+      "ja_source": "ダル、この世界線で同じ記録が取れるか確かめて。",
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [
+          "桶子",
+          "世界线"
+        ],
+        "review": "锁定字面；不要补充典故或把词汇泛化。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S36",
+      "category": "glossary",
+      "ja_source": "@chのハンドルは「栗悟飯とカメハメ波」。表記まで合わせて。",
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [
+          "栗悟饭和龟波功",
+          "@ch"
+        ],
+        "review": "锁定字面；不要补充典故或把词汇泛化。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S37",
+      "category": "context",
+      "ja_source": "……って。",
+      "context": {
+        "user_turn": "さっきの言葉、聞こえなかった。",
+        "prior_ja_zh_pairs": [
+          {
+            "ja": "帰ったら連絡して。",
+            "zh": "到家给我发个消息。"
+          }
+        ]
+      },
+      "checks": {
+        "stutters": 0,
+        "ellipses": 1,
+        "glossary": [],
+        "review": "结合上一句辨认追问、引用或调侃，保持短句节奏。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S38",
+      "category": "context",
+      "ja_source": "大人？",
+      "context": {
+        "user_turn": "今の話を聞く限り、ずいぶん大人の対応だったと思う。"
+      },
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "review": "结合上一句辨认追问、引用或调侃，保持短句节奏。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S39",
+      "category": "context",
+      "ja_source": "カメハメ波なら、まともな実験手順にはならない。",
+      "context": {
+        "user_turn": "手から光線を出せば、装置なんて要らないな。"
+      },
+      "checks": {
+        "stutters": 0,
+        "ellipses": 0,
+        "glossary": [],
+        "forbidden_terms": [
+          "栗悟饭和龟波功"
+        ],
+        "review": "结合上一句辨认追问、引用或调侃，保持短句节奏。"
+      },
+      "signed_reference_zh": null
+    },
+    {
+      "id": "S40",
+      "category": "context",
+      "ja_source": "また失敗したの。……今度は何を変えた？",
+      "context": {
+        "user_turn": "昨日と同じところで波形が消えた。",
+        "prior_ja_zh_pairs": [
+          {
+            "ja": "今度は一本ずつ差して試して。",
+            "zh": "这次一根一根插着试。"
+          }
+        ]
+      },
+      "checks": {
+        "stutters": 0,
+        "ellipses": 1,
+        "glossary": [],
+        "review": "结合上一句辨认追问、引用或调侃，保持短句节奏。"
+      },
+      "signed_reference_zh": null
+    }
+  ]
+}
