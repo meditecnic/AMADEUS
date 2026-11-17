@@ -364,7 +364,6 @@ async def test_processor_reference_publication_and_actual_second_request(isolate
 async def test_retry_keeps_refreshed_candidates_separate_from_sent_budget(isolated_store, monkeypatch):
     from unittest.mock import AsyncMock
     from app.services import turn_tool_orchestrator as orchestrator
-    from app.services.prompt_compiler import render_tail_reminder
     from test_chat_ws_background_tasks import _new_session, _suppress_auto_title
     from test_memory_v11_resident_profile import _fake_supplement
 
@@ -375,22 +374,31 @@ async def test_retry_keeps_refreshed_candidates_separate_from_sent_budget(isolat
     session.system_prompt = "SYSTEM"
     initial = _fake_supplement([
         ("m1", "first", "短い"), ("m2", "recovered", "短い"), ("m3", "never-sent", "短い")], need="好み").result
-    live_text = {"first": "猫", "recovered": "茶" * 1000, "never-sent": "旅行" * 10000}
+    live_text = {"first": "猫", "recovered": "茶" * 2400, "never-sent": "旅行" * 10000}
     two = _fake_supplement([(ref, fid, live_text[fid]) for ref, fid in [
         ("m1", "first"), ("m2", "recovered")]], need="好み").result
     builder = orchestrator.provider_message_builder(chat_ws.deepseek_service)
 
     def second_builder(history, summary, system):
-        tail = {"role": "system", "content": render_tail_reminder(session.identity_mode, "")}
-        return builder([*history, tail], summary, system)
+        return builder([*history, chat_ws.turn_tail_message(session, history)], summary, system)
 
-    # Fit two live records under the shorter leak-retry prompt, but not under
-    # attempt 0's additional Japanese-answer requirement. The third fits neither.
+    # Make the first answer envelope larger so its budget admits fewer records.
+    # The revalidation must still see the full pool when the answer retries.
+    request_prompt = chat_ws._request_system_prompt
+
+    def request_with_first_answer_padding(session, history, tools, attempt):
+        prompt = request_prompt(session, history, tools, attempt)
+        if tools is None and attempt == 0:
+            return prompt + "\n" + "余" * 256
+        return prompt
+
+    monkeypatch.setattr(chat_ws, "_request_system_prompt", request_with_first_answer_padding)
     short_system = chat_ws._request_system_prompt(session, session.history, None, 1)
     fitting = orchestrator.prepare_second_round_payload(
         session.history, two, input_budget=100000, system_prompt=short_system,
         message_builder=second_builder)
-    budget = orchestrator.request_envelope_tokens(fitting.history, short_system, "", second_builder)
+    budget = orchestrator.request_envelope_tokens(fitting.history, short_system, "", second_builder) + 64
+    assert budget > 2048  # Stay above the provider budget floor.
     monkeypatch.setattr(chat_ws.config, "REQUEST_INPUT_BUDGET", budget)
     monkeypatch.setattr(chat_ws, "compile_for_session", AsyncMock(return_value="SYSTEM"))
     monkeypatch.setattr(chat_ws, "translate_with_provider", AsyncMock(return_value="翻译"))
@@ -430,12 +438,12 @@ async def test_retry_keeps_refreshed_candidates_separate_from_sent_budget(isolat
         elif len(sent) == 2:
             assert set(record.sent_recall_result.records) == {"m1"}
             assert record.sent_recall_fact_ids == ()
-            assert "茶" * 1000 not in str(kwargs["active_history"])
+            assert "茶" * 2400 not in str(kwargs["active_history"])
             yield {"content": "私はAIアシスタントです。", "tool_calls": None}
         else:
             assert record.sent_recall_fact_ids == ("first",)
             assert set(record.sent_recall_result.records) == {"m1", "m2"}
-            assert "茶" * 1000 in str(kwargs["active_history"])
+            assert "茶" * 2400 in str(kwargs["active_history"])
             assert "旅行" * 10000 not in str(kwargs["active_history"])
             yield {"content": "そうね、覚えているわ。", "tool_calls": None}
 

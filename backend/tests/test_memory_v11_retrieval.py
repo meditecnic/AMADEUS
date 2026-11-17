@@ -244,7 +244,7 @@ async def test_r3_vector_candidate_participates_with_zero_lexical_overlap(
     # Dispatch 55: 30 same-scope facts fit the 32-fact resident profile, so
     # the target is resident; vector participation is checked on recall below.
     assert f"- {target_text}\n" in prompt
-    assert "\nCORE FACTS\n" in prompt
+    assert "について覚えていること】" in prompt
     assert "MEMORY CANDIDATES" not in prompt
     from app.services.memory_v11.recall import MemoryScope, RecallRequest, recall_stable_facts
 

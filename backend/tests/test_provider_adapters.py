@@ -50,7 +50,7 @@ async def test_openai_compatible_stream_preserves_canonical_persona_and_tools():
 
     payload = json.loads(requests[0].content)
     assert requests[0].url.path == "/v1/chat/completions"
-    assert "PERSONA BIBLE v1" in payload["messages"][0]["content"]
+    assert "[EMO:neutral|" in payload["messages"][0]["content"]
     assert payload["messages"][-1]["content"] == "你好"
     assert payload["tools"][0]["function"]["name"] == "search_web"
     assert chunks[0]["content"] == "[EMO:neutral] テスト"
@@ -187,7 +187,7 @@ async def test_openai_responses_stream_uses_instructions_and_delta_events():
 
     payload = json.loads(requests[0].content)
     assert requests[0].url.path == "/v1/responses"
-    assert "PERSONA BIBLE v1" in payload["instructions"]
+    assert "[EMO:neutral|" in payload["instructions"]
     assert payload["input"][-1]["content"] == "验证这个假设"
     assert payload["reasoning"] == {"effort": "high"}
     assert chunks == [
@@ -259,7 +259,7 @@ async def test_gemini_stream_maps_persona_roles_and_native_parts():
     assert requests[0].url.path.endswith(
         "/models/gemini-3.5-flash:streamGenerateContent"
     )
-    assert "PERSONA BIBLE v1" in payload["systemInstruction"]["parts"][0]["text"]
+    assert "[EMO:neutral|" in payload["systemInstruction"]["parts"][0]["text"]
     assert payload["contents"][-1] == {
         "role": "user",
         "parts": [{"text": "检查数据"}],
@@ -528,7 +528,7 @@ def test_compression_messages_identity_self_vs_okabe():
     assert "利用者を岡部と決めつけない" in sys_self
     assert "ユーザーは岡部と呼ぶ" not in sys_self
     assert "NO_WORKING_CONTEXT" in sys_self
-    assert "作業中コンテキスト" in sys_self
+    assert "紅莉栖の会話メモ" in sys_self
     assert "比較中" not in sys_self
 
     okabe_msgs = _compression_messages(history, "", "okabe")
@@ -571,4 +571,4 @@ async def test_openai_compatible_compression_uses_d38_identity_contract():
     assert "利用者を岡部と決めつけない" in system
     assert "ユーザーは岡部と呼ぶ" not in system
     assert "NO_WORKING_CONTEXT" in system
-    assert "作業中コンテキスト" in system
+    assert "紅莉栖の会話メモ" in system

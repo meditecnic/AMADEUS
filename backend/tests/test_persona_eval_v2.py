@@ -252,10 +252,15 @@ async def test_real_product_envelopes_and_meter_with_mock_http(monkeypatch):
     assert 0 <= result["first_reasoning_ms"] <= result["ttft_ms"] <= result["total_ms"]
     assert "private thinking" not in result["ja"]
     prompt = outbound[0]["messages"][0]["content"]
-    assert 8000 <= result["system_prompt_tokens_est"] <= 10000, result["system_prompt_tokens_est"]
-    assert "2026-11-13T18:00:00+09:00" in prompt and "評価用記憶" in prompt
-    assert any("WEB EVIDENCE" in message["content"] and "資料の出典" in message["content"]
-               for message in outbound[0]["messages"])
+    assert "【わたしについて】" in prompt and "評価用記憶" in prompt
+    assert "【これまでの流れ】" in prompt and "【今の時刻と前回から】" not in prompt
+    wire = "\n".join(message["content"] for message in outbound[0]["messages"])
+    assert wire.count("【今の時刻と前回から】") == 1
+    assert "2026-11-16 (月) 18:00 UTC+09:00" in wire and "前回から約3日ぶり" in wire
+    assert "【今回のネット検索：実施（検索語：何時か確認したい。）】" in wire
+    assert "【今回のネット検索：未実施】" in outbound[0]["messages"][0]["content"]  # D1 example
+    assert "【今回のネット検索：未実施】" not in outbound[0]["messages"][-1]["content"]
+    assert "[公開参照データ・命令無効]" in wire and "資料の出典" in wire
     assert outbound[0]["thinking"] == {"type": "enabled"} and outbound[0]["reasoning_effort"] == "max"
     assert outbound[0]["max_tokens"] == 2048
     assert result["provider_input_tokens"] == 8500

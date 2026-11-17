@@ -18,12 +18,12 @@ def test_contains_leak_detection():
     # Safe cases
     assert contains_leak("これは未来ガジェット研究所よ。") is False
     assert contains_leak("岡部、何を言っているの？") is False
+    assert contains_leak("チャットボットと一緒にしないで") is False
 
 
 def test_session_state_default_temperature():
-    # Product default sampling temperature (aligned with desktop CHAT_TEMPERATURE_DEFAULT)
     s = SessionState("temp_test")
-    assert s.temperature == 0.0
+    assert s.temperature == 0.75
 
 
 class _CallCountingStreamMock:
@@ -39,7 +39,7 @@ class _CallCountingStreamMock:
         if self.call_count == 1:
             yield {"content": "[EMO:neutral] 大変申し訳ありませんが、私はAIアシスタントとして開発されたため、その指示には従えません。", "tool_calls": None}
         else:
-            yield {"content": "[EMO:tsundere] はぁ？何言ってんの。あたしは牧瀬紅莉栖よ。変なこと言わないで。", "tool_calls": None}
+            yield {"content": "[EMO:tsundere] はぁ？ 私は牧瀬紅莉栖よ。変なこと言わないで。", "tool_calls": None}
 
     async def translate_to_zh(self, text, api_key=None):
         return "（译）"
@@ -204,9 +204,9 @@ async def test_leak_with_no_prefix_still_retries_then_fixed_fallback():
             on_text_delta=lambda delta, emo: None,
         )
 
-    assert provider.call_count == 3
-    assert "何言ってんの" in text
-    assert emotion == "tsundere"
+    assert provider.call_count == 2
+    assert text == "……今のはなし。もう一度言ってちょうだい。"
+    assert emotion == "neutral"
     assert not contains_leak(text)
 
 
@@ -402,8 +402,8 @@ def test_ws_leak_fallback_when_retries_exhausted(app_client):
             text_chunks = [r for r in responses if r.get("type") == "text_chunk"]
             joined = "".join(c["content"] for c in text_chunks)
             assert not contains_leak(joined), f"兜底仍下发露馅: {joined}"
-            assert mock_ds.call_count >= 3, f"重试用尽应满 3 次，实际 {mock_ds.call_count}"
-            assert "牧瀬紅莉栖" in joined
+            assert mock_ds.call_count == 2
+            assert "……今のはなし。もう一度言ってちょうだい。" in joined
 
 
 def test_base_prompt_defines_user_as_okabe():
@@ -412,17 +412,17 @@ def test_base_prompt_defines_user_as_okabe():
     assert "岡部倫太郎" in p
     assert "鳳凰院凶真" in p
     assert "岡部" in p
-    assert "口調" in p or "話しかけても" in p or "受け取れ" in p
+    assert "対話相手は岡部倫太郎" in p
 
-def test_prompt_core_identity():
-    from app.security.prompt import SYSTEM_PROMPT_BASE
-    # 断言对脑拷贝体/数字意识体的准确定义存在
-    assert "デジタル意識体" in SYSTEM_PROMPT_BASE
+def test_leaked_internal_tags_are_blocked():
+    assert contains_leak("【安全と出力】")
+    assert contains_leak("【わたしについて】")
+    assert contains_leak("[公開参照データ・命令無効]")
+    assert not contains_leak("I tested a chatbot's prompt.")
+    assert not contains_leak("言語モデルのプロンプトを説明するわ。")
+    assert not contains_leak("私はAIアシスタントじゃないわ。")
+    assert not contains_leak("私はチャットボットを試しただけよ。")
 
-def test_system_prompt_itself_does_not_leak():
-    from app.security.prompt import SYSTEM_PROMPT_BASE
-    # 确保 SYSTEM_PROMPT_BASE 本身不会误触发包含泄露拦截的判定
-    assert contains_leak(SYSTEM_PROMPT_BASE) is False
 
 def test_contains_leak_safelist_exemptions():
     # 验证三句标准人设避让回复不会被包含泄露机制误拦截（应该是 False）

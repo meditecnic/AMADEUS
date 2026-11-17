@@ -6,14 +6,15 @@ from app.db import DEFAULT_IDENTITY_MODE
 
 # Header of the per-request reply reminder that chat appends after the last
 # user message. It is never persisted; adapters find it by this header.
-TAIL_REMINDER_HEADER = "【返答前の確認（アプリが毎回付ける注記。ユーザーの発言ではない）】"
+TAIL_REMINDER_HEADER = "【今の時刻と前回から】"
+SEARCH_EXECUTED_HEADER = "【今回のネット検索：実施（検索語："
 
 
 def is_tail_reminder(message) -> bool:
     return (
         isinstance(message, dict)
         and message.get("role") == "system"
-        and str(message.get("content") or "").startswith(TAIL_REMINDER_HEADER)
+        and str(message.get("content") or "").startswith((TAIL_REMINDER_HEADER, SEARCH_EXECUTED_HEADER))
     )
 
 
@@ -90,7 +91,7 @@ class LLMInterface(ABC):
         model: Optional[str] = None,
         identity_mode: str = DEFAULT_IDENTITY_MODE,
     ) -> str:
-        """Compress conversation history into a working-summary line (D38)."""
+        """Compress conversation history into a first-person working summary."""
         ...
 
     @abstractmethod

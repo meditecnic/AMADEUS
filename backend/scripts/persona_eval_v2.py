@@ -359,26 +359,22 @@ class Product:
 
     async def reply(self, session, user, thinking, evidence=None):
         session.append_message({"role": "user", "content": user})
+        context = session.eval_context
+        session.turn_previous_user_at = session.turn_now_local if hasattr(session, "turn_now_local") else (
+            datetime.fromisoformat(session.last_interaction_at) if session.last_interaction_at else None
+        )
+        session.turn_now_local = (
+            datetime.fromisoformat(context["now"]) + timedelta(minutes=(len(session.history) - 1) // 2)
+            if "now" in context else datetime.now().astimezone()
+        )
         session.system_prompt = await self.compile(session, user, provider=self.snapshot)
         history = [{key: row[key] for key in ("role", "content")} for row in session.history]
         request_prompt = self.chat_ws._request_system_prompt(session, history, None, 0)
-        context = session.eval_context
-        if "now" in context:
-            now = datetime.fromisoformat(context["now"]) + timedelta(minutes=(len(history) - 1) // 2)
-            actual_clock = request_prompt.rpartition("\n【現在時刻：")
-            if actual_clock[1]:
-                request_prompt = actual_clock[0]
-            request_prompt += f"\n【現在時刻：{now.isoformat(timespec='minutes')}】"
-            if session.last_interaction_at:
-                request_prompt += f"\n【前回の会話時刻：{session.last_interaction_at}】"
-            session.last_interaction_at = now.isoformat(timespec="minutes")
         if context.get("memory_note"):
             request_prompt += "\n【過去の対話から取得した記憶】\n" + context["memory_note"]
         if evidence:
-            history = self.web_context(history, [("web_search", evidence)])
-        history.append({"role": "system", "content": self.chat_ws.render_tail_reminder(
-            session.identity_mode, session.self_name,
-        )})
+            history = self.web_context(history, [(user, evidence)])
+        history.append(self.chat_ws.turn_tail_message(session, history))
         self.model_usage.set_chat_context(session.worldline, session.conversation_id)
         original_lines = self.deepseek.iter_provider_lines
 

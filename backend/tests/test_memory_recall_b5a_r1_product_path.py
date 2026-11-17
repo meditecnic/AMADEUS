@@ -644,7 +644,7 @@ async def test_web_injection_is_json_string_in_adapter_payload():
     assert web_msg is not None
     parsed = json.loads(web_msg.split("WEB_EVIDENCE_DATA", 1)[-1].strip())
     assert parsed[0]["body"] == malicious
-    assert web_msg.startswith("[WEB EVIDENCE")
+    assert web_msg.startswith("【今回のネット検索：実施")
     _dump("web_evidence_adapter_payload", {"message": web_msg, "parsed": parsed})
 
 

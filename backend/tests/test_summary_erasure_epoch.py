@@ -39,7 +39,7 @@ async def test_paused_summary_cannot_repopulate_forgotten_conversation(isolated_
 
     session = SessionState(owner)
     session.conversation_id = cid
-    session.history = list(_HISTORY)
+    session.history = _HISTORY * 7
     sessions[owner] = session
     adapter = Adapter()
     task = asyncio.create_task(compress_and_update_history(

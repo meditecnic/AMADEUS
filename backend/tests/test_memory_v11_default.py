@@ -112,7 +112,7 @@ async def test_prompt_uses_v11_resident_facts(isolated_store):
     )
     prompt = await compile_for_session(session, "你好")
     assert marker in prompt
-    assert "\nCORE FACTS\n" in prompt
+    assert "について覚えていること】" in prompt
 
 
 @pytest.mark.parametrize("path", [

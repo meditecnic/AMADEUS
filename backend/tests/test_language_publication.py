@@ -234,7 +234,6 @@ async def test_kanji_only_identity_line_publishes_without_retry():
 )
 async def test_any_non_japanese_user_gets_first_pass_japanese_hard_requirement(user_text):
     from app.routers.chat_ws import _ANSWER_LANGUAGE_HARD_REQUIREMENT
-    from app.services.prompt_compiler import render_tail_reminder
 
     provider = _SequencedStreamProvider(
         ["[EMO:neutral] こんにちは。何か用？"]
@@ -261,8 +260,9 @@ async def test_any_non_japanese_user_gets_first_pass_japanese_hard_requirement(u
     assert "ユーザー入力の言語に関係なく" not in first_prompt
     sent = provider.calls[0]["active_history"]
     assert sent[-2] == {"role": "user", "content": user_text}
-    assert sent[-1] == {"role": "system", "content": render_tail_reminder(session.identity_mode)}
-    assert "ユーザー入力の言語に関係なく、表示本文は必ず自然な日本語のみ" in sent[-1]["content"]
+    assert sent[-1]["role"] == "system"
+    assert sent[-1]["content"].startswith("【今の時刻と前回から】")
+    assert "本文は自然な日本語のみ" in sent[-1]["content"]
     assert "こんにちは" in text
     assert "生成できなかった" not in text
     assert "崩れた" not in text
@@ -285,11 +285,10 @@ async def test_japanese_user_message_skips_non_japanese_first_pass_hint():
         )
 
     first_prompt = provider.prompts[0]
-    # Pure JA user turns do not get the evidence-style hard requirement; the
-    # language line lives only in the tail reminder, never in the system prompt.
+    # The per-turn format is enough for this Japanese input.
     assert "ANSWER LANGUAGE — HARD REQUIREMENT" not in first_prompt
     assert "ユーザー入力の言語に関係なく" not in first_prompt
-    assert "ユーザー入力の言語に関係なく" in provider.calls[0]["active_history"][-1]["content"]
+    assert "本文は自然な日本語のみ" in provider.calls[0]["active_history"][-1]["content"]
 
 
 @pytest.mark.asyncio
@@ -507,9 +506,9 @@ async def test_soft02_leak_after_good_jp_does_not_majority_publish():
     visible = "".join(published)
     assert "AIアシスタント" not in visible
     assert "AIアシスタント" not in text
-    # Leak recovery (persona) — not majority flush of the two JP sentences alone.
-    assert "牧瀬紅莉栖" in visible or "牧瀬紅莉栖" in text
-    assert emotion == "tsundere"
+    assert provider.call_count == 2
+    assert visible == text == "……今のはなし。もう一度言ってちょうだい。"
+    assert emotion == "neutral"
 
 
 @pytest.mark.asyncio
@@ -932,6 +931,9 @@ async def test_history_compression_uses_safe_projection_but_keeps_raw_slice_acco
         {"role": "assistant", "content": "[EMO:neutral] 分かった。", "id": 6},
         {"role": "user", "content": "keep-3", "id": 7},
         {"role": "assistant", "content": "[EMO:neutral] 了解したわ。", "id": 8},
+    ]
+    raw_history += [
+        {"role": "user", "content": "続き", "id": i} for i in range(9, 39)
     ]
     session.history = raw_history
     sessions[session_id] = session

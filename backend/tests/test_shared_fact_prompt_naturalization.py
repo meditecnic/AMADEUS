@@ -1,4 +1,4 @@
-"""GATE7A-NAT-01: CORE FACTS usage contract (FACT_USE_CONTRACT).
+"""Natural use of resident facts in Japanese.
 
 L3 expression: FACT_USE_CONTRACT instructs natural familiarity, forbids
 deny-then-guess and any worldline/DB/MEMORY mechanism talk.
@@ -74,11 +74,10 @@ def _compile_with_facts(facts: dict[str, str], message: str) -> str:
 def test_core_facts_section_has_naturalization_contract():
     prompt = _compile_with_facts({"favorite_food": "炸鸡"}, "我喜欢吃什么？")
     assert "炸鸡" in prompt
-    assert "CORE FACTS" in prompt
-    # Stable ASCII anchor — tests never depend on brittle JP/EN copy.
-    assert "FACT_USE_CONTRACT" in prompt
+    assert "【あなたについて覚えていること】" in prompt
+    assert "自然な日本語に直して話す" in prompt
     # The contract must precede the fact list (kept under budget truncation).
-    assert prompt.index("FACT_USE_CONTRACT") < prompt.index("炸鸡")
+    assert prompt.index("自然な日本語に直して話す") < prompt.index("炸鸡")
 
 
 def test_contract_instructs_selective_answer_not_full_recital():
@@ -92,16 +91,8 @@ def test_contract_instructs_selective_answer_not_full_recital():
     # Every fact is still available in context (needed to answer any single one).
     for value in ("炸鸡", "雪碧", "実況サッカー"):
         assert value in prompt
-    # The contract governs MANNER, not a rigid count. It must kill the
-    # pathological behavior (padding an unasked fact via a filler transition
-    # to show off memory) while NOT hard-forbidding a natural mention that the
-    # user's own words lead to. The old permissive "naturally relevant" licence
-    # that caused food→drink volunteering must be gone.
-    lowered = prompt.lower()
-    assert "genuinely knows the user" in lowered
-    assert "do not pad" in lowered
-    assert "let it stay unsaid" in lowered
-    assert "naturally relevant" not in lowered
+    assert "わざわざ全部を並べ立てたり" in prompt
+    assert "自然な会話へ溶かし込む" in prompt
 
 
 @pytest.mark.asyncio
@@ -111,4 +102,4 @@ async def test_empty_core_facts_do_not_carry_contract(isolated_store):
         _FakeSession(owner, "beta", "self"), "こんにちは"
     )
     # No facts → no contract (budget is not wasted on an unused instruction).
-    assert "FACT_USE_CONTRACT" not in prompt
+    assert "【あなたについて覚えていること】" not in prompt

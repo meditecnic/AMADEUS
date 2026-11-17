@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
-import re
+from datetime import datetime
 import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -162,11 +162,12 @@ async def chat_turn(monkeypatch, api, *, enabled, binary="unused"):
     async def compile_prompt(*_args, **_kwargs):
         return "SYNTHETIC SYSTEM"
     monkeypatch.setattr(chat_ws, "compile_for_session", compile_prompt)
-    original_system_prompt = chat_ws._request_system_prompt
-    def fixed_system_prompt(*args, **kwargs):
-        return re.sub(r"【現在時刻：[^】]+】", "【現在時刻：2026-11-05 00:00】",
-                      original_system_prompt(*args, **kwargs))
-    monkeypatch.setattr(chat_ws, "_request_system_prompt", fixed_system_prompt)
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls):
+            return cls.fromisoformat("2026-11-05T00:00:00+00:00")
+
+    monkeypatch.setattr(chat_ws, "datetime", FixedDatetime)
     user = "このフォルダーのメモを読んで。"
     session.append_message({"role": "user", "content": user, "id": None})
     queue = asyncio.Queue()
@@ -201,5 +202,4 @@ async def test_disabled_complete_request_bytes_match_pre_spike(monkeypatch, tmp_
     # Port is not in the request body; fixed system/history make it deterministic.
     wire = api.requests[0]["wire"]
     assert b"delegate_task" not in wire
-    # Updated in [221] alongside intentional self-mode provider anchor and tail_reminder updates.
-    assert hashlib.sha256(wire).hexdigest() == "a80bcf7984b0e9a551745039ace8568a1a3f9936b2e363716ce7d3fbcc68833e"
+    assert hashlib.sha256(wire).hexdigest() == "d3fde9e289be298dd9bdfc438eabc79eb7c8054d159cc9c0c4af033323f24923"
