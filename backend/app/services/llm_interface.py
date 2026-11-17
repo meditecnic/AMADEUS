@@ -110,6 +110,8 @@ class LLMInterface(ABC):
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         temperature: float = 0.1,
+        *,
+        reasoning_effort: Optional[str] = None,
     ) -> dict:
         """Return one validated JSON object from a non-streaming completion."""
         ...

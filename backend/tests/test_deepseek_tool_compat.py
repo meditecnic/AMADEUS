@@ -1,3 +1,6 @@
+import json
+
+import httpx
 import pytest
 
 from app.services import deepseek
@@ -217,3 +220,44 @@ def test_tool_results_do_not_fabricate_reasoning_dependent_messages():
     assert "A factual result" in context[-1]["content"]
     assert all("tool_calls" not in message for message in context)
     assert all("reasoning_content" not in message for message in context)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method", "kwargs", "expected_thinking"),
+    [
+        ("translate_to_zh", {}, "disabled"),
+        ("compress_history", {}, "disabled"),
+        ("complete_json", {}, "disabled"),
+        ("complete_json", {"reasoning_effort": "low"}, "enabled"),
+    ],
+)
+async def test_auxiliary_requests_control_deepseek_thinking(
+    monkeypatch, method, kwargs, expected_thinking
+):
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": '{"ok": true}'}}]}
+        )
+
+    async_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        deepseek.httpx,
+        "AsyncClient",
+        lambda **options: async_client(transport=httpx.MockTransport(handler), **options),
+    )
+    messages = [{"role": "user", "content": "こんにちは"}]
+    argument = messages[0]["content"] if method == "translate_to_zh" else messages
+    await getattr(DeepSeekService(), method)(
+        argument, api_key="test-key", model="deepseek-flash", **kwargs
+    )
+
+    (payload,) = requests
+    assert payload["thinking"] == {"type": expected_thinking}
+    if expected_thinking == "enabled":
+        assert payload["reasoning_effort"] == "low"
+    else:
+        assert "reasoning_effort" not in payload

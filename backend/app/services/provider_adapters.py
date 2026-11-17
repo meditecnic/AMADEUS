@@ -50,6 +50,19 @@ async def iter_provider_lines(response: httpx.Response) -> AsyncIterator[str]:
         yield line
 
 
+def _auxiliary_thinking_options(
+    provider_id: str, model: str, request_mode: str
+) -> frozenset[str] | None:
+    from app.services.model_catalog import is_user_custom_provider, model_catalog
+
+    if is_user_custom_provider(provider_id):
+        return None
+    control = model_catalog.control_for(provider_id, model)
+    if control is None or not control.native or control.request_mode != request_mode:
+        return None
+    return control.values
+
+
 class OpenAICompatibleAdapter(LLMInterface):
     def __init__(
         self,
@@ -184,15 +197,26 @@ class OpenAICompatibleAdapter(LLMInterface):
         model: str | None,
         temperature: float,
         response_format: dict[str, str] | None = None,
+        reasoning_effort: str | None = None,
     ) -> str:
+        effective_model = model or self.model
         payload: dict[str, Any] = {
-            "model": model or self.model,
+            "model": effective_model,
             "messages": messages,
             "temperature": temperature,
         }
+        options = _auxiliary_thinking_options(self.provider_id, effective_model, "reasoning_effort")
+        if options is not None:
+            effort = reasoning_effort if reasoning_effort in options else None
+            effort = effort or ("none" if "none" in options else None)
+            payload["thinking"] = {
+                "type": "enabled" if effort not in (None, "none") else "disabled"
+            }
+            if effort is not None:
+                payload["reasoning_effort"] = effort
         if response_format is not None:
             payload["response_format"] = response_format
-        async with usage_call(self.provider_id, model or self.model) as usage, self._client(read_timeout=30.0) as client:
+        async with usage_call(self.provider_id, effective_model) as usage, self._client(read_timeout=30.0) as client:
             response = await client.post(
                 f"{self.base_url}/chat/completions",
                 headers=self._headers(api_key),
@@ -211,6 +235,8 @@ class OpenAICompatibleAdapter(LLMInterface):
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         temperature: float = 0.1,
+        *,
+        reasoning_effort: str | None = None,
     ) -> dict:
         raw = await self._complete_text(
             messages,
@@ -218,6 +244,7 @@ class OpenAICompatibleAdapter(LLMInterface):
             model=model,
             temperature=temperature,
             response_format={"type": "json_object"},
+            reasoning_effort=reasoning_effort,
         )
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
@@ -502,16 +529,22 @@ class OpenAIResponsesAdapter(LLMInterface):
         api_key: str | None,
         model: str | None,
         json_mode: bool = False,
+        reasoning_effort: str | None = None,
     ) -> str:
+        effective_model = model or self.model
         instructions, inputs = self._split_instructions(messages)
         payload: dict[str, Any] = {
-            "model": model or self.model,
+            "model": effective_model,
             "instructions": instructions,
             "input": inputs,
         }
+        options = _auxiliary_thinking_options(self.provider_id, effective_model, "reasoning_effort") or ()
+        effort = reasoning_effort if reasoning_effort in options else "none"
+        if effort in options:
+            payload["reasoning"] = {"effort": effort}
         if json_mode:
             payload["text"] = {"format": {"type": "json_object"}}
-        async with usage_call(self.provider_id, model or self.model) as usage, self._client(30.0) as client:
+        async with usage_call(self.provider_id, effective_model) as usage, self._client(30.0) as client:
             response = await client.post(
                 f"{self.base_url}/responses",
                 headers=self._headers(api_key),
@@ -529,6 +562,8 @@ class OpenAIResponsesAdapter(LLMInterface):
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         temperature: float = 0.1,
+        *,
+        reasoning_effort: str | None = None,
     ) -> dict:
         return _json_object(
             await self._complete_text(
@@ -536,6 +571,7 @@ class OpenAIResponsesAdapter(LLMInterface):
                 api_key=api_key,
                 model=model,
                 json_mode=True,
+                reasoning_effort=reasoning_effort,
             )
         )
 
@@ -720,14 +756,20 @@ class GeminiAdapter(LLMInterface):
         api_key: str | None,
         model: str | None,
         json_mode: bool = False,
+        reasoning_effort: str | None = None,
     ) -> str:
+        effective_model = model or self.model
         system_instruction, contents = self._contents(messages)
         config: dict[str, Any] = {"temperature": 0.2}
+        options = _auxiliary_thinking_options(self.provider_id, effective_model, "gemini_thinking_level") or ()
+        effort = reasoning_effort if reasoning_effort in options else "minimal"
+        if effort in options:
+            config["thinkingConfig"] = {"thinkingLevel": effort}
         if json_mode:
             config["responseMimeType"] = "application/json"
-        async with usage_call(self.provider_id, model or self.model) as usage, self._client(30.0) as client:
+        async with usage_call(self.provider_id, effective_model) as usage, self._client(30.0) as client:
             response = await client.post(
-                f"{self.base_url}/models/{model or self.model}:generateContent",
+                f"{self.base_url}/models/{effective_model}:generateContent",
                 headers=self._headers(api_key),
                 json={
                     "systemInstruction": system_instruction,
@@ -741,10 +783,22 @@ class GeminiAdapter(LLMInterface):
             raise ProviderRequestError(self.provider_id, response.status_code)
         return self._response_text(response.json())
 
-    async def complete_json(self, messages: list[dict], api_key=None, model=None, temperature=0.1) -> dict:
+    async def complete_json(
+        self,
+        messages: list[dict],
+        api_key=None,
+        model=None,
+        temperature=0.1,
+        *,
+        reasoning_effort: str | None = None,
+    ) -> dict:
         return _json_object(
             await self._complete_text(
-                messages, api_key=api_key, model=model, json_mode=True
+                messages,
+                api_key=api_key,
+                model=model,
+                json_mode=True,
+                reasoning_effort=reasoning_effort,
             )
         )
 

@@ -425,6 +425,95 @@ async def test_custom_compatible_provider_never_guesses_reasoning_parameters():
     assert "reasoning_effort" not in payload
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_id", "model", "kwargs", "thinking_fields"),
+    [
+        ("glm", "glm-5.2", {}, {"thinking": {"type": "disabled"}, "reasoning_effort": "none"}),
+        (
+            "glm", "glm-5.2", {"reasoning_effort": "low"},
+            {"thinking": {"type": "enabled"}, "reasoning_effort": "low"},
+        ),
+        ("deepseek", "deepseek-flash", {}, {"thinking": {"type": "disabled"}}),
+        ("glm", "uncatalogued", {}, {}),
+        ("custom:00000000-0000-0000-0000-000000000001", "glm-5.2", {}, {}),
+        (
+            "custom:00000000-0000-0000-0000-000000000001", "glm-5.2",
+            {"reasoning_effort": "low"}, {},
+        ),
+    ],
+)
+async def test_compatible_auxiliary_thinking_follows_the_catalog(
+    provider_id, model, kwargs, thinking_fields
+):
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": '{"ok": true}'}}]}
+        )
+
+    adapter = OpenAICompatibleAdapter(
+        provider_id=provider_id,
+        base_url="https://compatible.example/v1",
+        default_model="local-model",
+        message_builder=deepseek_service.build_persona_messages,
+        thinking_request_mode="reasoning_effort",
+        transport=httpx.MockTransport(handler),
+    )
+    result = await adapter.complete_json(
+        [{"role": "user", "content": "Return JSON"}],
+        api_key="test-key", model=model, **kwargs,
+    )
+
+    assert result == {"ok": True}
+    (payload,) = requests
+    assert {
+        key: payload[key]
+        for key in ("thinking", "reasoning_effort", "reasoning") if key in payload
+    } == thinking_fields
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("adapter_type", "response", "config_field", "effort_field", "default_effort"),
+    [
+        (OpenAIResponsesAdapter, {"output_text": '{"ok": true}'}, "reasoning", "effort", "none"),
+        (
+            GeminiAdapter,
+            {"candidates": [{"content": {"parts": [{"text": '{"ok": true}'}]}}]},
+            "thinkingConfig", "thinkingLevel", "minimal",
+        ),
+    ],
+)
+async def test_native_auxiliary_thinking_defaults_and_overrides(
+    adapter_type, response, config_field, effort_field, default_effort
+):
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return httpx.Response(200, json=response)
+
+    adapter = adapter_type(
+        message_builder=deepseek_service.build_persona_messages,
+        transport=httpx.MockTransport(handler),
+    )
+    await adapter.translate_to_zh("こんにちは", api_key="test-key")
+
+    def thinking_config(payload):
+        return payload.get("generationConfig", payload)[config_field]
+
+    assert thinking_config(requests[0]) == {effort_field: default_effort}
+    result = await adapter.complete_json(
+        [{"role": "user", "content": "Return JSON"}],
+        api_key="test-key", reasoning_effort="low",
+    )
+    assert result == {"ok": True}
+    assert thinking_config(requests[1]) == {effort_field: "low"}
+
+
 # ---------------------------------------------------------------------------
 # MEMORY-V11-S3E-3: D38 identity-aware compression construction.
 # ---------------------------------------------------------------------------

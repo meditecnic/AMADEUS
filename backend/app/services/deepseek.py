@@ -263,6 +263,8 @@ class DeepSeekService(LLMInterface):
             ],
             "temperature": 0.3
         }
+        if model_catalog.uses_native_reasoning("deepseek", payload["model"]):
+            payload["thinking"] = {"type": "disabled"}
         
         async with usage_call("deepseek", model or self.model) as usage, httpx.AsyncClient(timeout=20.0) as client:
             try:
@@ -303,6 +305,8 @@ class DeepSeekService(LLMInterface):
             "messages": messages,
             "temperature": 0.3
         }
+        if model_catalog.uses_native_reasoning("deepseek", payload["model"]):
+            payload["thinking"] = {"type": "disabled"}
         
         async with usage_call("deepseek", model or self.model) as usage, httpx.AsyncClient(timeout=15.0) as client:
             try:
@@ -328,6 +332,8 @@ class DeepSeekService(LLMInterface):
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         temperature: float = 0.1,
+        *,
+        reasoning_effort: Optional[str] = None,
     ) -> dict:
         effective_api_key = api_key or self.api_key
         if not effective_api_key:
@@ -338,6 +344,10 @@ class DeepSeekService(LLMInterface):
             "temperature": temperature,
             "response_format": {"type": "json_object"},
         }
+        if model_catalog.uses_native_reasoning("deepseek", payload["model"]):
+            payload["thinking"] = {"type": "enabled" if reasoning_effort else "disabled"}
+            if reasoning_effort:
+                payload["reasoning_effort"] = reasoning_effort
         headers = {
             **model_headers(),
             "Authorization": f"Bearer {effective_api_key}",
