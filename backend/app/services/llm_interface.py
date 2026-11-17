@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
-from collections.abc import Callable
-from typing import AsyncGenerator, Optional
+from collections.abc import Callable, Mapping
+from typing import Any, AsyncGenerator, Optional
 
 from app.db import DEFAULT_IDENTITY_MODE
 
@@ -100,6 +100,7 @@ class LLMInterface(ABC):
         text: str,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
+        context: Optional[Mapping[str, Any]] = None,
     ) -> str:
         """Translate text (typically Japanese) to Chinese."""
         ...

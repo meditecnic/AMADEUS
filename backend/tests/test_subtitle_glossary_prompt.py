@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
+from pathlib import Path
 from unittest.mock import patch
+import uuid
 
 import httpx
 import pytest
@@ -178,12 +181,13 @@ def test_envelope_is_exactly_system_plus_user():
     assert "P10" not in user
     assert "翻訳の制約" not in user
     assert "字幕翻訳者" not in user
-    # System has reliability guards + anti-meta instructions.
-    assert "不自然な畳語" in system
-    assert "叠字" in system
-    assert "好、好、好……" in system
-    assert "過度な繰り返し" in system
+    # System has faithful stutter/anti-cutesy guards + anti-meta instructions.
+    assert "吃音表現を生成しない" not in system
     assert "吃音" in system
+    assert "卖萌叠词" in system
+    assert "好、好、好……" in system
+    assert "過剰な繰り返し" in system or "過度な反復" in system
+    assert "好好睡觉" in system and "慢慢来" in system
     assert "<source>" in system or "source" in system
     assert "簡体" in system or "中国語" in system
     assert "提供されていない" in system or "原文がない" in system or "主張" in system
@@ -207,9 +211,9 @@ def test_system_contains_eleven_surface_forms_and_guards():
         "Lab",
     ):
         assert needle in system, needle
-    assert "不自然な畳語" in system
-    assert "過度な繰り返し" in system
+    assert "吃音表現を生成しない" not in system
     assert "吃音" in system
+    assert "卖萌叠词" in system
 
 
 @pytest.mark.asyncio
@@ -409,3 +413,367 @@ def test_221_subtitle_kurisu_voice_guards():
     assert "乾いた皮肉" in system or "率直なツッコミ" in system
     messages = build_translation_messages("わかった、ピーナッツは抜きの方向ね。")
     assert messages[1]["content"] == "<source>\nわかった、ピーナッツは抜きの方向ね。\n</source>"
+
+
+def test_249_new_glossary_terms_and_faithful_voice_rules():
+    from app.domain.subtitle_glossary_prompt import (
+        build_translation_glossary_block,
+        build_translation_system_content,
+    )
+
+    block = build_translation_glossary_block()
+    system = build_translation_system_content()
+    for needle in (
+        "リーディング・シュタイナー",
+        "リーディングシュタイナー",
+        "Reading Steiner",
+        "命运探知之魔眼",
+        "ダル",
+        "桶子",
+        "达鲁",
+        "ふむん",
+        "唔嗯",
+        "HENTAI",
+        "变态",
+    ):
+        assert needle in block, needle
+        assert needle in system, needle
+
+    for rule_cue in (
+        "ご、誤解",
+        "别、别误会",
+        "embarrassed",
+        "sad",
+        "吃音数は厳密に 0",
+        "嘛～",
+        "呢呀",
+        "哦呢",
+        "吧呢",
+        "好好睡觉",
+        "慢慢来",
+        "平視の「你」",
+        "「您」は厳禁",
+        "我说你啊",
+        "わね",
+        "でしょ",
+        "【参考文脈（翻訳対象は <source> のみ・文脈自体は出力しない）】",
+    ):
+        assert rule_cue in system, rule_cue
+    assert "吃音表現を生成しない" not in system
+
+
+def test_context_envelope_empty_is_verbatim_and_nonempty_bounds_fields():
+    from app.domain.subtitle_glossary_prompt import (
+        build_translation_messages,
+        build_translation_system_content,
+        build_translation_user_source_content,
+    )
+
+    src = "テスト。"
+    verbatim = "<source>\nテスト。\n</source>"
+    for empty_ctx in (
+        None,
+        {},
+        {"emotion_tag": "", "user_turn": "   ", "prior_ja": [], "prior_ja_zh_pairs": []},
+        {"unknown_only": "ignored"},
+    ):
+        assert build_translation_user_source_content(src, context=empty_ctx) == verbatim
+
+    long_turn = "あ" * 300
+    ctx = {
+        "emotion_tag": "embarrassed",
+        "identity_mode": "okabe",
+        "user_turn": f"  {long_turn}  ",
+        "prior_ja": ["一文目。", "二文目。", "三文目。"],
+        "prior_ja_zh_pairs": [
+            {"ja": "A。", "zh": "甲。"},
+            {"ja": "B。", "zh": "乙。"},
+            {"ja": "C。", "zh": "丙。"},
+        ],
+    }
+    user = build_translation_user_source_content(src, context=ctx)
+    assert user.startswith("【参考文脈（翻訳対象は <source> のみ・文脈自体は出力しない）】\n")
+    assert user.endswith("\n\n" + verbatim)
+    payload_line = user.splitlines()[1]
+    parsed = json.loads(payload_line)
+    assert parsed["emotion_tag"] == "embarrassed"
+    assert parsed["identity_mode"] == "okabe"
+    assert len(parsed["user_turn"]) <= 240
+    assert parsed["prior_ja"] == ["二文目。", "三文目。"]
+    assert parsed["prior_ja_zh_pairs"] == [
+        {"ja": "B。", "zh": "乙。"},
+        {"ja": "C。", "zh": "丙。"},
+    ]
+
+    messages = build_translation_messages(src, context=ctx)
+    assert messages[0]["content"] == build_translation_system_content()
+    assert messages[1]["content"] == user
+    assert "embarrassed" in messages[1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_all_providers_forward_context_to_translation_envelope():
+    from app.domain.subtitle_glossary_prompt import build_translation_messages
+    from app.services.deepseek import DeepSeekService
+    from app.services.provider_adapters import (
+        GeminiAdapter,
+        OpenAICompatibleAdapter,
+        OpenAIResponsesAdapter,
+    )
+
+    source = "昨日の？"
+    ctx = {
+        "emotion_tag": "annoyed",
+        "identity_mode": "okabe",
+        "user_turn": "昨日の分を見てくれ。",
+        "prior_ja": ["先週のは見たわよ。"],
+    }
+    expected = build_translation_messages(source, context=ctx)
+
+    # 1. DeepSeekService
+    ds_payloads: list[dict] = []
+
+    class FakeDSResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "昨天的那份？"}}]}
+
+    class FakeDSClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return None
+
+        async def post(self, url, json=None, headers=None):
+            ds_payloads.append(json)
+            return FakeDSResponse()
+
+    service = DeepSeekService()
+    with patch("app.services.deepseek.httpx.AsyncClient", FakeDSClient):
+        assert await service.translate_to_zh(source, api_key="k", context=ctx) == "昨天的那份？"
+    assert ds_payloads[0]["messages"] == expected
+
+    # 2. OpenAICompatibleAdapter
+    compat_msgs: list[list[dict]] = []
+
+    async def fake_complete(self, messages, **kwargs):
+        compat_msgs.append(messages)
+        return "昨天的那份？"
+
+    compat = OpenAICompatibleAdapter(
+        provider_id="mock",
+        base_url="http://example.invalid",
+        default_model="m",
+        message_builder=lambda *a, **k: [],
+        credential_required=False,
+    )
+    with patch.object(OpenAICompatibleAdapter, "_complete_text", fake_complete):
+        assert await compat.translate_to_zh(source, api_key="k", context=ctx) == "昨天的那份？"
+    assert compat_msgs[0] == expected
+
+    # 3. OpenAIResponsesAdapter
+    resp_reqs: list[dict] = []
+
+    def resp_handler(request: httpx.Request) -> httpx.Response:
+        resp_reqs.append(json.loads(request.content))
+        return httpx.Response(200, json={"output_text": "昨天的那份？"})
+
+    responses_adapter = OpenAIResponsesAdapter(
+        message_builder=lambda *a, **k: [],
+        transport=httpx.MockTransport(resp_handler),
+    )
+    assert await responses_adapter.translate_to_zh(source, api_key="k", context=ctx) == "昨天的那份？"
+    assert resp_reqs[0]["instructions"] == expected[0]["content"]
+    assert resp_reqs[0]["input"][0]["content"] == expected[1]["content"]
+
+    # 4. GeminiAdapter
+    gem_reqs: list[dict] = []
+
+    def gem_handler(request: httpx.Request) -> httpx.Response:
+        gem_reqs.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={"candidates": [{"content": {"parts": [{"text": "昨天的那份？"}]}}]},
+        )
+
+    gemini_adapter = GeminiAdapter(
+        message_builder=lambda *a, **k: [],
+        transport=httpx.MockTransport(gem_handler),
+    )
+    assert await gemini_adapter.translate_to_zh(source, api_key="k", context=ctx) == "昨天的那份？"
+    assert gem_reqs[0]["systemInstruction"]["parts"][0]["text"] == expected[0]["content"]
+    assert gem_reqs[0]["contents"][0]["parts"][0]["text"] == expected[1]["content"]
+
+
+def test_subtitle_benchmark_emotions_valid_and_zero_prompt_leakage():
+    from app.domain.subtitle_glossary_prompt import build_translation_system_content
+    from app.services.persona_bible import persona_bible
+
+    system = build_translation_system_content()
+    benchmark_path = Path(__file__).resolve().parents[1] / "characters" / "subtitle_benchmark_v1.json"
+    samples = json.loads(benchmark_path.read_text(encoding="utf-8"))["samples"]
+    assert len(samples) == 40
+    allowed_emotions = set(persona_bible.emotion_tones)
+    for sample in samples:
+        assert sample["ja_source"] not in system, f"leaked benchmark sample {sample['id']}"
+        emo = sample.get("context", {}).get("emotion_tag")
+        if emo is not None:
+            assert emo in allowed_emotions, (sample["id"], emo)
+    by_id = {sample["id"]: sample for sample in samples}
+    for sid in ("S05", "S06", "S07", "S08"):
+        assert by_id[sid]["context"]["emotion_tag"] == "embarrassed"
+
+
+def test_chat_ws_v2_streaming_passes_context_without_blocking_and_supports_two_arg_mock(app_client):
+    recorded: list[tuple[str, dict | None]] = []
+    seg1_seen = asyncio.Event()
+
+    class _ContextProvider:
+        async def get_chat_stream(self, **kwargs):
+            yield {
+                "content": "[EMO:embarrassed] 第一文テスト。第二文テスト。",
+                "tool_calls": None,
+            }
+
+        async def translate_to_zh(self, text, api_key=None, model=None, context=None):
+            recorded.append((text, context))
+            if text == "第一文テスト。":
+                # Prove segment 2 starts translating without waiting for segment 1's ZH.
+                await asyncio.wait_for(seg1_seen.wait(), timeout=2.0)
+                return "第一句。"
+            seg1_seen.set()
+            return "第二句。"
+
+        async def compress_history(self, history, api_key=None, old_summary=""):
+            return old_summary
+
+    class _SilentTTS:
+        async def synthesize_async(self, text, emotion_tag, sovits_url=None):
+            return b""
+
+        def reset_sequence(self, session_id, send_callback):
+            return None
+
+        def cancel_pending(self, session_id):
+            return None
+
+        async def gather_pending(self, session_id):
+            return None
+
+    session_id = f"sub249-ctx-{uuid.uuid4().hex[:10]}"
+    with patch("app.routers.chat_ws.deepseek_service", _ContextProvider()), patch(
+        "app.routers.chat_ws.tts_manager", _SilentTTS()
+    ):
+        with app_client.websocket_connect(f"/ws/chat?session_id={session_id}") as ws:
+            ws.send_json({
+                "type": "auth",
+                "api_key": "test-key",
+                "client": "desktop",
+                "protocol_version": 2,
+                "enable_tts": False,
+            })
+            ws.send_json({"type": "chat.send", "content": "テスト送信"})
+            frames = []
+            while True:
+                frame = ws.receive_json()
+                frames.append(frame)
+                if frame.get("type") in {"turn.completed", "error", "turn.cancelled"}:
+                    break
+
+    assert frames[-1]["type"] == "turn.completed"
+    ready = [f for f in frames if f.get("type") == "segment.ready"]
+    assert [f["zh"] for f in ready] == ["第一句。", "第二句。"]
+    by_text = dict(recorded)
+    ctx0 = by_text["第一文テスト。"]
+    ctx1 = by_text["第二文テスト。"]
+    assert ctx0 is not None and ctx1 is not None
+    assert ctx0["emotion_tag"] == "embarrassed"
+    assert ctx0["user_turn"] == "テスト送信"
+    assert "prior_ja" not in ctx0
+    assert ctx1["emotion_tag"] == "embarrassed"
+    assert ctx1["user_turn"] == "テスト送信"
+    assert ctx1["prior_ja"] == ["第一文テスト。"]
+
+    # Legacy 2-arg mock adapter must still work cleanly via _supported_kwargs.
+    class _LegacyTwoArgProvider:
+        async def get_chat_stream(self, **kwargs):
+            yield {"content": "[EMO:neutral] 旧テスト。", "tool_calls": None}
+
+        async def translate_to_zh(self, text, api_key=None):
+            return "旧兼容。"
+
+        async def compress_history(self, history, api_key=None, old_summary=""):
+            return old_summary
+
+    legacy_session = f"sub249-legacy-{uuid.uuid4().hex[:10]}"
+    with patch("app.routers.chat_ws.deepseek_service", _LegacyTwoArgProvider()), patch(
+        "app.routers.chat_ws.tts_manager", _SilentTTS()
+    ):
+        with app_client.websocket_connect(f"/ws/chat?session_id={legacy_session}") as ws:
+            ws.send_json({
+                "type": "auth",
+                "api_key": "test-key",
+                "client": "desktop",
+                "protocol_version": 2,
+                "enable_tts": False,
+            })
+            ws.send_json({"type": "chat.send", "content": "互換テスト"})
+            legacy_frames = []
+            while True:
+                frame = ws.receive_json()
+                legacy_frames.append(frame)
+                if frame.get("type") in {"turn.completed", "error", "turn.cancelled"}:
+                    break
+
+    assert legacy_frames[-1]["type"] == "turn.completed"
+    legacy_ready = [f for f in legacy_frames if f.get("type") == "segment.ready"]
+    assert [f["zh"] for f in legacy_ready] == ["旧兼容。"]
+
+
+def test_chat_ws_v1_whole_turn_passes_context(app_client):
+    recorded: list[tuple[str, dict | None]] = []
+
+    class _V1Provider:
+        async def get_chat_stream(self, **kwargs):
+            yield {"content": "[EMO:intellectual] ふむん、なるほどね。", "tool_calls": None}
+
+        async def translate_to_zh(self, text, api_key=None, model=None, context=None):
+            recorded.append((text, context))
+            return "唔嗯，原来如此。"
+
+        async def compress_history(self, history, api_key=None, old_summary=""):
+            return old_summary
+
+    session_id = f"sub249-v1-{uuid.uuid4().hex[:10]}"
+    with patch("app.routers.chat_ws.deepseek_service", _V1Provider()):
+        with app_client.websocket_connect(f"/ws/chat?session_id={session_id}") as ws:
+            ws.send_json({
+                "type": "auth",
+                "api_key": "test-key",
+                "client": "desktop",
+                "protocol_version": 1,
+                "enable_tts": False,
+            })
+            ws.send_json({"type": "chat", "content": "解释一下"})
+            frames = []
+            while True:
+                frame = ws.receive_json()
+                frames.append(frame)
+                if frame.get("type") == "status" and frame.get("state") == "done":
+                    break
+
+    assert len(recorded) == 1
+    ja, ctx = recorded[0]
+    assert ja == "ふむん、なるほどね。"
+    assert ctx is not None
+    assert ctx["emotion_tag"] == "intellectual"
+    assert ctx["user_turn"] == "解释一下"
+    assert "identity_mode" in ctx

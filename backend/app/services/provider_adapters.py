@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Mapping
 from typing import Any, Optional
 
 import httpx
@@ -258,12 +258,13 @@ class OpenAICompatibleAdapter(LLMInterface):
         text: str,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
+        context: Optional[Mapping[str, Any]] = None,
     ) -> str:
         if not text.strip():
             return ""
         # Q87 Slice B PROMPT-ENVELOPE: shared system+user (see _translation_messages).
         return await self._complete_text(
-            _translation_messages(text),
+            _translation_messages(text, context=context),
             api_key=api_key,
             model=model,
             temperature=0.3,
@@ -316,10 +317,13 @@ class OpenAICompatibleAdapter(LLMInterface):
         ]
 
 
-def _translation_messages(text: str) -> list[dict]:
+def _translation_messages(
+    text: str,
+    context: Optional[Mapping[str, Any]] = None,
+) -> list[dict]:
     from app.domain.subtitle_glossary_prompt import build_translation_messages
 
-    return build_translation_messages(text)
+    return build_translation_messages(text, context=context)
 
 
 def _compression_messages(
@@ -575,11 +579,17 @@ class OpenAIResponsesAdapter(LLMInterface):
             )
         )
 
-    async def translate_to_zh(self, text: str, api_key=None, model=None) -> str:
+    async def translate_to_zh(
+        self,
+        text: str,
+        api_key=None,
+        model=None,
+        context: Optional[Mapping[str, Any]] = None,
+    ) -> str:
         if not text.strip():
             return ""
         return await self._complete_text(
-            _translation_messages(text), api_key=api_key, model=model
+            _translation_messages(text, context=context), api_key=api_key, model=model
         )
 
     async def compress_history(
@@ -802,11 +812,17 @@ class GeminiAdapter(LLMInterface):
             )
         )
 
-    async def translate_to_zh(self, text: str, api_key=None, model=None) -> str:
+    async def translate_to_zh(
+        self,
+        text: str,
+        api_key=None,
+        model=None,
+        context: Optional[Mapping[str, Any]] = None,
+    ) -> str:
         if not text.strip():
             return ""
         return await self._complete_text(
-            _translation_messages(text), api_key=api_key, model=model
+            _translation_messages(text, context=context), api_key=api_key, model=model
         )
 
     async def compress_history(

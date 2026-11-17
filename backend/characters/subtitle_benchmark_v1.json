@@ -54,7 +54,7 @@
       "category": "shy",
       "ja_source": "近い。もう半歩だけ離れて。",
       "context": {
-        "emotion_tag": "shy"
+        "emotion_tag": "embarrassed"
       },
       "checks": {
         "stutters": 0,
@@ -69,7 +69,7 @@
       "category": "shy",
       "ja_source": "顔を見るな。もう少しこのままでいて。",
       "context": {
-        "emotion_tag": "shy"
+        "emotion_tag": "embarrassed"
       },
       "checks": {
         "stutters": 0,
@@ -84,7 +84,7 @@
       "category": "shy",
       "ja_source": "褒めるなら本人のいないところで言えばいいのに。",
       "context": {
-        "emotion_tag": "shy"
+        "emotion_tag": "embarrassed"
       },
       "checks": {
         "stutters": 0,
@@ -99,7 +99,7 @@
       "category": "shy",
       "ja_source": "その写真、消さなくていい。私にも一枚送って。",
       "context": {
-        "emotion_tag": "shy"
+        "emotion_tag": "embarrassed"
       },
       "checks": {
         "stutters": 0,

@@ -813,7 +813,7 @@ class IncrementalJapaneseSegmenter:
 
 
 EventEmitter = Callable[[dict], object]
-TextOperation = Callable[[str], Awaitable[str]]
+TextOperation = Callable[..., Awaitable[str]]
 AudioOperation = Callable[[str, str], Awaitable[bytes]]
 TtsObserver = Callable[[TurnIdentity, Segment, bytes | None, str | None], object]
 TurnObserver = Any
@@ -846,6 +846,20 @@ class SegmentPipeline:
         self.identity = identity
         self._emit_callback = emit
         self._translate = translate
+        try:
+            translate_params = inspect.signature(translate).parameters
+        except (TypeError, ValueError):
+            translate_params = {}
+        self._translate_accepts_segment = (
+            "segment" in translate_params
+            and translate_params["segment"].kind
+            in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        )
+        self._translate_accepts_emotion = (
+            "emotion" in translate_params
+            and translate_params["emotion"].kind
+            in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+        )
         self._synthesize = synthesize
         self._tts_observer = tts_observer
         self._turn_observer = turn_observer
@@ -1005,7 +1019,7 @@ class SegmentPipeline:
                     _log_observer_failure("turn_terminal", exc)
 
     async def _process(self, segment: Segment) -> None:
-        translation_task = asyncio.create_task(self._translate_safe(segment.text))
+        translation_task = asyncio.create_task(self._translate_safe(segment))
         voice_task = asyncio.create_task(self._synthesize_safe(segment))
         self._voice_tasks.add(voice_task)
         try:
@@ -1036,13 +1050,18 @@ class SegmentPipeline:
 
         await self._submit_audio(segment, audio, audio_error)
 
-    async def _translate_safe(self, text: str) -> tuple[str, str | None]:
+    async def _translate_safe(self, segment: Segment) -> tuple[str, str | None]:
         attempts = self._translation_retries + 1
         last_error: Exception | None = None
+        kwargs: dict[str, Any] = {}
+        if self._translate_accepts_segment:
+            kwargs["segment"] = segment
+        if self._translate_accepts_emotion:
+            kwargs["emotion"] = segment.emotion
         for attempt in range(attempts):
             try:
                 translated = await asyncio.wait_for(
-                    self._translate(text),
+                    self._translate(segment.text, **kwargs),
                     timeout=self._translation_timeout,
                 )
                 if not translated or not translated.strip():

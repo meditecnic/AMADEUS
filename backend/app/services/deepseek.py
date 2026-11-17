@@ -1,6 +1,7 @@
-﻿import json
+﻿from collections.abc import Mapping
+import json
 import httpx
-from typing import Optional
+from typing import Any, Optional
 from app import config
 from app.services.llm_interface import LLMInterface, build_stream_messages
 from app.services.model_catalog import model_catalog
@@ -278,7 +279,13 @@ class DeepSeekService(LLMInterface):
                 print(f"[DeepSeek] Failed to compress history: {type(e).__name__}")
                 return ""
 
-    async def translate_to_zh(self, text: str, api_key: Optional[str] = None, model: Optional[str] = None) -> str:
+    async def translate_to_zh(
+        self,
+        text: str,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        context: Optional[Mapping[str, Any]] = None,
+    ) -> str:
         """
         Translate Japanese response (without emo tag) to Chinese.
         """
@@ -293,7 +300,7 @@ class DeepSeekService(LLMInterface):
         from app.domain.subtitle_glossary_prompt import build_translation_messages
 
         # Q87 Slice B PROMPT-ENVELOPE: system (guards+glossary) + user (<source>).
-        messages = build_translation_messages(text)
+        messages = build_translation_messages(text, context=context)
 
         headers = {
             **model_headers(),
