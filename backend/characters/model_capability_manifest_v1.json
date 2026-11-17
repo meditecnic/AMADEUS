@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "verified_at": "2026-09-12",
+  "verified_at": "2026-11-16",
   "providers": {
     "deepseek": {
       "allow_undiscovered_models": false,
@@ -8,12 +8,12 @@
         {
           "id": "deepseek-flash",
           "pricing": {"input": 0.3, "output": 1.2, "cached_input": 0.006, "currency": "USD", "as_of": "2026-11-06", "source": "https://api-docs.deepseek.com/quick_start/pricing/", "note": "UTC weekday peak windows; otherwise half price. Chinese public holidays use weekday rates (may overestimate); no holiday calendar is maintained.", "schedule": {"weekdays": [0, 1, 2, 3, 4], "utc_windows": [[60, 240], [360, 600]], "peak": {"input": 0.3, "output": 1.2, "cached_input": 0.006}, "off_peak": {"input": 0.15, "output": 0.6, "cached_input": 0.003}}},
-          "display_name": "DeepSeek Flash",
+          "display_name": "DeepSeek-V4.1-Flash",
           "lifecycle": "stable",
           "preferred": true,
-          "disclosed_version": "DeepSeek-V4.1-Flash",
-          "context_window": null,
-          "max_output_tokens": null,
+          "disclosed_version": "DeepSeek-V4.1-Flash-1017",
+          "context_window": 1048576,
+          "max_output_tokens": 393216,
           "persona_certification": "not_evaluated",
           "thinking_control": {
             "kind": "effort",
@@ -22,16 +22,17 @@
             "default": "high",
             "request_mode": "reasoning_effort",
             "options": [
+              { "value": "low", "label": "LOW" },
               { "value": "high", "label": "HIGH" },
               { "value": "max", "label": "MAX" }
             ],
             "aliases": {
-              "low": "high",
               "medium": "high",
               "xhigh": "max"
             }
           },
           "evidence": [
+            "https://api-docs.deepseek.com/updates",
             "https://www.deepseek.com/en/news/deepseek-v4-1-flash/",
             "https://api-docs.deepseek.com/news/news260910",
             "https://api-docs.deepseek.com/",
@@ -45,8 +46,8 @@
           "lifecycle": "deprecated",
           "compatibility_of": "deepseek-flash",
           "compatibility_scope": "official_direct",
-          "disclosed_version": "DeepSeek-V4.1-Flash",
-          "context_window": 1000000,
+          "disclosed_version": "DeepSeek-V4.1-Flash-1017",
+          "context_window": 1048576,
           "max_output_tokens": 393216,
           "persona_certification": "user_validated",
           "thinking_control": {
@@ -56,11 +57,11 @@
             "default": "high",
             "request_mode": "reasoning_effort",
             "options": [
+              { "value": "low", "label": "LOW" },
               { "value": "high", "label": "HIGH" },
               { "value": "max", "label": "MAX" }
             ],
             "aliases": {
-              "low": "high",
               "medium": "high",
               "xhigh": "max"
             }
@@ -75,9 +76,10 @@
         {
           "id": "deepseek-v4-pro",
           "pricing": {"input": 1.32, "output": 3.96, "cached_input": 0.044, "currency": "USD", "as_of": "2026-11-06", "source": "https://api-docs.deepseek.com/quick_start/pricing/", "note": "UTC weekday peak windows; otherwise half price. Chinese public holidays use weekday rates (may overestimate); no holiday calendar is maintained.", "schedule": {"weekdays": [0, 1, 2, 3, 4], "utc_windows": [[60, 240], [360, 600]], "peak": {"input": 1.32, "output": 3.96, "cached_input": 0.044}, "off_peak": {"input": 0.66, "output": 1.98, "cached_input": 0.022}}},
-          "display_name": "DeepSeek V4 Pro",
+          "display_name": "DeepSeek-V4-Pro",
           "lifecycle": "stable",
-          "context_window": 1000000,
+          "disclosed_version": "DeepSeek-V4-Pro-0813",
+          "context_window": 1048576,
           "max_output_tokens": 393216,
           "persona_certification": "not_evaluated",
           "thinking_control": {
@@ -87,16 +89,17 @@
             "default": "high",
             "request_mode": "reasoning_effort",
             "options": [
+              { "value": "low", "label": "LOW" },
               { "value": "high", "label": "HIGH" },
               { "value": "max", "label": "MAX" }
             ],
             "aliases": {
-              "low": "high",
               "medium": "high",
               "xhigh": "max"
             }
           },
           "evidence": [
+            "https://api-docs.deepseek.com/updates",
             "https://api-docs.deepseek.com/guides/thinking_mode",
             "https://api-docs.deepseek.com/quick_start/pricing"
           ]

@@ -21,10 +21,11 @@ const flashModel: ModelCatalogEntry = {
     default: 'high',
     request_mode: 'reasoning_effort',
     options: [
+      { value: 'low', label: 'LOW' },
       { value: 'high', label: 'HIGH' },
       { value: 'max', label: 'MAX' },
     ],
-    aliases: { low: 'high', medium: 'high', xhigh: 'max' },
+    aliases: { medium: 'high', xhigh: 'max' },
   },
 };
 
@@ -102,7 +103,7 @@ describe('ProviderControls', () => {
           {
             ...flashModel,
             id: 'deepseek-v4-pro',
-            display_name: 'DeepSeek V4 Pro',
+            display_name: 'DeepSeek-V4-Pro',
           },
         ]}
         disabled={false}
@@ -119,7 +120,7 @@ describe('ProviderControls', () => {
     fireEvent.click(screen.getByRole('button', { name: '模型供应商' }));
     fireEvent.click(screen.getByRole('option', { name: 'DeepSeek' }));
     fireEvent.click(screen.getByRole('button', { name: '模型' }));
-    fireEvent.click(screen.getByRole('option', { name: 'DeepSeek V4 Pro' }));
+    fireEvent.click(screen.getByRole('option', { name: 'DeepSeek-V4-Pro' }));
     fireEvent.click(screen.getByRole('button', { name: '刷新模型列表' }));
     rerender(
       <ProviderControls
@@ -229,7 +230,7 @@ describe('ProviderControls', () => {
           {
             ...flashModel,
             id: 'deepseek-v4-pro',
-            display_name: 'DeepSeek V4 Pro',
+            display_name: 'DeepSeek-V4-Pro',
             lifecycle: 'unavailable',
             callable: false,
           },
@@ -261,7 +262,7 @@ describe('ProviderControls', () => {
     expect(screen.getByRole('button', { name: '推理强度' })).toHaveAttribute('aria-description', '供应商原生模型控制。');
     fireEvent.click(screen.getByRole('button', { name: '模型' }));
     expect(screen.getByRole('option', {
-      name: 'DeepSeek V4 Pro（不可用）',
+      name: 'DeepSeek-V4-Pro（不可用）',
     })).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByRole('option', {
       name: 'deepseek-next（人格未评估）',
@@ -353,16 +354,17 @@ describe('ProviderControls', () => {
     expect(screen.getByText('当前模型未声明思考控制')).toBeInTheDocument();
   });
 
-  it('shows preferred request id, compatibility alias, and discovery status', () => {
+  it('shows official names in the searchable model picker while selecting by request ID', () => {
+    const onModelChange = vi.fn();
     const currentFlash: ModelCatalogEntry = {
       id: 'deepseek-flash',
       request_id: 'deepseek-flash',
-      display_name: 'DeepSeek Flash',
+      display_name: 'DeepSeek-V4.1-Flash',
       display_source: 'manifest',
       lifecycle: 'stable',
       callable: true,
       source: 'manifest',
-      disclosed_version: 'DeepSeek-V4.1-Flash',
+      disclosed_version: 'DeepSeek-V4.1-Flash-1017',
       preferred: true,
       thinking_control: flashModel.thinking_control,
     };
@@ -375,7 +377,7 @@ describe('ProviderControls', () => {
       source: 'manifest',
       compatibility_of: 'deepseek-flash',
       compatibility_scope: 'official_direct',
-      disclosed_version: 'DeepSeek-V4.1-Flash',
+      disclosed_version: 'DeepSeek-V4.1-Flash-1017',
       thinking_control: flashModel.thinking_control,
     };
     const unverified: ModelCatalogEntry = {
@@ -397,16 +399,18 @@ describe('ProviderControls', () => {
             default_model_capability: currentFlash,
             preferred_model_id: 'deepseek-flash',
           },
+          { ...providers[1], configured: true },
         ]}
         activeProviderId="deepseek"
-        activeModelId="deepseek-v4-flash"
+        activeModelId="deepseek-flash"
         models={[currentFlash, alias, unverified]}
+        searchable
         disabled={false}
         loadingModels={false}
         discoveryStatus="live"
         thinkingValue="high"
         onProviderChange={vi.fn()}
-        onModelChange={vi.fn()}
+        onModelChange={onModelChange}
         onThinkingChange={vi.fn()}
         onRefreshModels={vi.fn()}
         onConfigureCredential={vi.fn()}
@@ -414,17 +418,24 @@ describe('ProviderControls', () => {
     );
 
     expect(screen.getByText('已刷新')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: '模型' }));
-    expect(screen.getByRole('option', { name: 'DeepSeek Flash' })).toBeEnabled();
-    expect(screen.getByRole('option', { name: 'deepseek-v4-flash（兼容 ID）' })).toBeEnabled();
+    const trigger = screen.getByRole('button', { name: '模型' });
+    expect(trigger).toHaveTextContent(/^DeepSeek-V4\.1-Flash▾$/);
+    expect(trigger).toHaveAttribute('aria-description', expect.stringContaining('请求 ID：deepseek-flash'));
+    fireEvent.click(trigger);
+    expect(screen.getByRole('option', { name: 'DeepSeek-V4.1-Flash' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: /^OpenAI/ })).toHaveTextContent('GPT-5.6 Luna');
+    const compatible = screen.getByRole('option', { name: 'deepseek-v4-flash（兼容 ID）' });
+    expect(compatible).toBeEnabled();
     expect(screen.getByRole('option', { name: 'deepseek-next（人格未评估）' })).toHaveAttribute(
       'aria-disabled',
       'true',
     );
-    expect(screen.getByRole('option', { name: 'deepseek-v4-flash（兼容 ID）' })).toHaveAttribute(
+    expect(compatible).toHaveAttribute(
       'aria-description',
       expect.stringContaining('请求 ID：deepseek-v4-flash'),
     );
+    fireEvent.click(compatible);
+    expect(onModelChange).toHaveBeenCalledWith('deepseek-v4-flash');
   });
 
   it('keeps a saved alias visible when discovery fails', () => {
