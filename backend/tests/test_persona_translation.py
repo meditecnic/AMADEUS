@@ -1,3 +1,9 @@
+import hashlib
+import json
+import re
+
+from app import config
+from app.services.persona_bible import persona_bible
 from app.security.prompt import SYSTEM_PROMPT_BASE
 
 def test_prompt_contains_daru_mapping():
@@ -8,13 +14,26 @@ def test_prompt_contains_worldline_terms():
     assert "世界线" in SYSTEM_PROMPT_BASE
     assert "萨列里" in SYSTEM_PROMPT_BASE
 
-def test_fewshot_handles_chinese_without_language_confusion():
-    import json
-    data = json.load(open("prompts/kurisu_fewshot.json", encoding="utf-8"))
-    rows = [row for mode_rows in data.values() for row in mode_rows]
-    user_contents = [row["user"] for row in rows]
-    assistant_contents = [row["assistant"] for row in rows]
-    assert len(user_contents) >= 6
-    assert all(any("\u4e00" <= char <= "\u9fff" for char in content) for content in user_contents)
-    assert all(content.startswith("[EMO:") for content in assistant_contents)
-    assert not any("何語" in content or "翻訳して" in content for content in assistant_contents)
+def test_fewshot_preserves_the_signed_japanese_dialogues():
+    data = json.loads((config.PROMPTS_DIR / "kurisu_fewshot.json").read_text(encoding="utf-8"))
+    assert [scene["id"] for scene in data] == [
+        f"{pair}{number}" for pair in "ABCDEF" for number in (1, 2)
+    ]
+    texts = []
+    for scene in data:
+        turns = scene["turns"]
+        assert len(turns) in (4, 6, 8)
+        assert [turn["role"] for turn in turns] == ["user", "assistant"] * (len(turns) // 2)
+        for turn in turns:
+            content = turn["content"]
+            assert content.strip() and not any(word in content for word in ("何語", "翻訳して"))
+            if turn["role"] == "assistant":
+                match = re.match(r"^\[EMO:([a-z]+)\]\s+\S", content)
+                assert match and match[1] in persona_bible.emotion_tones
+            texts.append(content)
+
+    # [238] signed Japanese dialogue and in-line markers, with Markdown fences removed.
+    assert len(texts) == 74
+    assert hashlib.sha256("\0".join(texts).encode("utf-8")).hexdigest() == (
+        "aef0608c31d2f5554cd89a8835086c317685f994982a4161dde9794b770844ce"
+    )

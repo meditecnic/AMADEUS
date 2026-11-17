@@ -1,7 +1,7 @@
 """Byte-for-byte v11 prompt snapshots for scopes with no active stable facts.
 
 A v11 scope with no active stable facts must keep producing exactly this
-prompt: no CORE FACTS section, no "(none)" placeholder, no supplement block,
+prompt: no resident fact section, no "(none)" placeholder, no supplement block,
 and no current user message (it travels only as a message).
 
 Regenerate only when a change is *meant* to alter these prompts:
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -64,7 +65,6 @@ CASES = {
     "okabe_with_experiences": dict(
         identity_mode="okabe",
         self_name="",
-        identity_acknowledged=False,
         experiences=_experiences(2),
         summary="比較中、候補Bの確認待ち",
         history=_history(2),
@@ -73,7 +73,6 @@ CASES = {
     "self_empty": dict(
         identity_mode="self",
         self_name="マユリ",
-        identity_acknowledged=True,
         experiences=[],
         summary="",
         history=[],
@@ -81,12 +80,12 @@ CASES = {
     ),
     # history gone; tail experiences dropped whole
     "self_over_budget_episodic_drop": dict(
-        _OVER, identity_mode="self", identity_acknowledged=False,
-        message="長い質問", input_budget=5000,
+        _OVER, identity_mode="self",
+        message="長い質問", input_budget=6500,
     ),
-    # everything droppable gone; state char-sliced; persona and examples whole
+    # optional content can be dropped; persona and examples stay whole
     "okabe_over_budget_extreme": dict(
-        _OVER, identity_mode="okabe", identity_acknowledged=True,
+        _OVER, identity_mode="okabe",
         message="とても長い質問", input_budget=3000,
     ),
 }
@@ -164,11 +163,11 @@ async def test_v11_no_fact_prompt_snapshot(isolated_store, monkeypatch, case_nam
         memory_summary=case["summary"],
         history=list(case["history"]),
         self_name=case["self_name"],
-        identity_acknowledged=case["identity_acknowledged"],
+        turn_now_local=datetime.fromisoformat("2026-11-17T02:40:00+09:00"),
     )
     prompt = await compile_for_session(session, case["message"])
-    # Standalone section heading only; persona/WORKING CONTEXT text may name it.
-    assert "\n\nCORE FACTS\n" not in prompt
+
+    assert "について覚えていること】" not in prompt
     assert "(none)" not in prompt
     assert "MEMORY CANDIDATES" not in prompt
     _check(f"v11::{case_name}", prompt, case["message"])

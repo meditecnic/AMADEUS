@@ -106,8 +106,7 @@ MEMORY_CANDIDATE_DATA_ANCHOR = "MEMORY_CANDIDATE_DATA"
 
 
 def _has_core_facts_heading(system_prompt: str) -> bool:
-    """A standalone CORE FACTS section heading (legacy/shadow prompt shape)."""
-    return system_prompt.startswith("CORE FACTS\n") or "\nCORE FACTS\n" in system_prompt
+    return any(line.endswith("について覚えていること】") for line in system_prompt.splitlines())
 
 
 def _system_text(call: dict) -> str:
@@ -127,22 +126,10 @@ def _core_facts_heading_calls(capture: _ProviderCapture) -> list[int]:
 
 
 def _resident_fact_lines(system_prompt: str) -> list[str]:
-    """Fact lines of the v11 resident CORE FACTS section (dispatch 55).
-
-    The harness sessions have no base_system_prompt, so a later turn's
-    IDENTITY section embeds the previous compiled prompt (pre-existing
-    behaviour). The turn's own section is therefore the *last* heading.
-    """
-    marker = "CORE FACTS\n"
-    start = system_prompt.rfind("\n\n" + marker)
-    if start >= 0:
-        start += 2
-    elif system_prompt.startswith(marker):
-        start = 0
-    else:
-        return []
-    section = system_prompt[start + len(marker):].split("\n\n", 1)[0]
-    return [line[2:] for line in section.split("\n") if line.startswith("- ")]
+    for section in system_prompt.split("\n\n"):
+        if _has_core_facts_heading(section):
+            return [line[2:] for line in section.splitlines() if line.startswith("- ")]
+    return []
 
 
 def _candidate_records(text: str) -> list[str]:
@@ -155,32 +142,12 @@ def _candidate_records(text: str) -> list[str]:
 
 
 def _stable_fact_block(capture: _ProviderCapture) -> str:
-    """Stable-fact records the provider actually received on the last call.
-
-    Dispatch 55 (v11 resident profile): stable facts reach the provider as
-    the system prompt's resident CORE FACTS lines, the optional supplement
-    MEMORY CANDIDATES block in the system prompt, and the second-round
-    ``MEMORY CANDIDATES`` / ``MEMORY_CANDIDATE_DATA`` system message after
-    ``recall_memory`` (which excludes already-injected facts). Every captured
-    request is checked for the v11 CORE FACTS shape: never the legacy
-    ``CORE FACTS\n(none)`` form and never a heading without fact lines.
-    Returns the record texts of all three surfaces (need labels echo the
-    user query, so they are excluded).
-    """
-    capture.last_call  # fails clearly when the provider saw no request
+    """Read resident, recalled and supplement records sent to the provider."""
+    capture.last_call
     for index in _core_facts_heading_calls(capture):
         system_prompt = _system_text(capture.chat_calls[index])
-        assert "CORE FACTS\n(none)" not in system_prompt, (
-            f"v11 chat request {index} carries the legacy CORE FACTS (none) form"
-        )
-        assert _resident_fact_lines(system_prompt), (
-            f"v11 chat request {index} has a CORE FACTS heading without facts"
-        )
-    system_prompt = _system_text(capture.last_call)
-    # The supplement follows this turn's CURRENT STATE (last occurrence, see
-    # _resident_fact_lines on the embedded previous prompt).
-    own_tail = system_prompt[system_prompt.rfind("\n\nCURRENT STATE\n") + 1:]
-    texts = _resident_fact_lines(system_prompt) + _candidate_records(own_tail)
+        assert _resident_fact_lines(system_prompt)
+    texts = _resident_fact_lines(_system_text(capture.last_call))
     blocks = [
         str(message.get("content") or "")
         for message in capture.last_call["messages"][1:]
@@ -188,7 +155,8 @@ def _stable_fact_block(capture: _ProviderCapture) -> str:
         and MEMORY_CANDIDATE_DATA_ANCHOR in str(message.get("content") or "")
     ]
     assert blocks, "provider never received a MEMORY CANDIDATES block"
-    texts.extend(_candidate_records(blocks[-1]))
+    for block in blocks:
+        texts.extend(_candidate_records(block))
     return "\n".join(texts)
 
 

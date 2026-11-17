@@ -1,7 +1,6 @@
 """Offline request captures for dispatch 182; no model or TTS calls."""
 
 import asyncio
-from datetime import datetime
 from copy import deepcopy
 from unittest.mock import AsyncMock
 
@@ -67,14 +66,8 @@ async def test_processor_request_budget(isolated_store, monkeypatch, caplog, kin
     if kind == "refresh":
         # Fill the closed-tools envelope up to the budget. A leak retry adds
         # its own system instruction and must re-budget Memory as well.
-        # Same shape as the product: strftime gets only the ASCII part (Windows
-        # encodes the format with the locale codec).
-        now = datetime.now()
-        weekday = ("月", "火", "水", "木", "金", "土", "日")[now.weekday()]
-        effective = SYSTEM + f"\n【現在時刻：{now.strftime('%Y-%m-%d %H:%M')}（{weekday}）】"
-        tail = {"role": "system", "content": render_tail_reminder(
-            session.identity_mode, getattr(session, "self_name", ""),
-        )}
+        effective = SYSTEM
+        tail = {"role": "system", "content": render_tail_reminder()}
         empty_memory = {"role": "system", "content": memory(0).block + "\n" + MEMORY_SECOND_TURN_NOTE}
         base = tokens(envelope([original[-1], empty_memory, tail], effective))
         recalled = memory((BUDGET - base) // 2)
@@ -129,7 +122,8 @@ async def test_processor_request_budget(isolated_store, monkeypatch, caplog, kin
         assert getattr(session.turn_execution, "dropped_history_messages", 0) > 0
         assert "budget=32000" in caplog.text
     if kind in {"forced", "web_second"}:
-        assert {"role": "system", "content": web_evidence_system_message(WEB)} in captures[-1]
+        evidence = [(CURRENT, WEB[0][1])] if kind == "forced" else WEB
+        assert {"role": "system", "content": web_evidence_system_message(evidence)} in captures[-1]
     if kind in {"recall", "refresh"}:
         assert {"role": "system", "content": recalled.block + "\n" + MEMORY_SECOND_TURN_NOTE} in captures[1]
     if kind == "refresh":

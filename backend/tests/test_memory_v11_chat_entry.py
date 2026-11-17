@@ -279,8 +279,8 @@ async def test_fact_selector_failure_fails_soft_at_compiler_level(
     assert fact_marker not in prompt, "a failed Fact selector omits CORE FACTS"
     assert exp_marker in prompt, "independent Experiences must stay available"
     assert legacy_marker not in prompt, "no legacy fallback may run"
-    assert "\nCORE FACTS\n" not in prompt
-    assert "EXPERIENCE_USE_CONTRACT" in prompt
+    assert "について覚えていること】" not in prompt
+    assert "【最近のやりとりと気になっていること】" in prompt
 
 
 @pytest.mark.asyncio
@@ -556,7 +556,7 @@ async def test_v11_mode_delivers_scoped_memory_to_provider(isolated_store, monke
     assert self_marker in system_prompt, "v11 first round carries the resident profile"
     for forbidden in (okabe_marker, other_owner_marker, beta_marker, legacy_marker, shared_marker):
         assert forbidden not in system_prompt, forbidden
-    assert "\nCORE FACTS\n" in system_prompt
+    assert "について覚えていること】" in system_prompt
     tool_blob = json.dumps(capture.last_call.get("tools") or [], ensure_ascii=False)
     assert "recall_memory" in tool_blob
     assert legacy_marker not in json.dumps(capture.last_call["messages"], ensure_ascii=False)
@@ -719,7 +719,7 @@ async def test_migrated_legacy_import_reaches_chat_provider(tmp_path, monkeypatc
     assert _done(events) and not _errors(events), events
     system_prompt = capture.last_system_prompt
     assert "likes_anime: 喜欢看动漫" in system_prompt
-    assert "\nCORE FACTS\n" in system_prompt
+    assert "について覚えていること】" in system_prompt
     from app.services.memory_v11.recall import MemoryScope, RecallRequest, recall_stable_facts
 
     recalled = await recall_stable_facts(
@@ -874,7 +874,7 @@ async def test_fact_selector_failure_turn_survives_with_fresh_prompt(
     system_prompt = capture.last_system_prompt
     assert stale_marker not in system_prompt, "must not reuse the previous system_prompt"
     assert fact_marker not in system_prompt, "the failed Fact must be omitted"
-    assert "\nCORE FACTS\n" not in system_prompt, "a failed Fact selector omits CORE FACTS"
+    assert "について覚えていること】" not in system_prompt, "a failed Fact selector omits CORE FACTS"
     # The provider really got the current user message through real history.
     user_texts = [
         str(m.get("content")) for m in capture.last_call["messages"]
@@ -910,7 +910,7 @@ async def test_experience_selector_failure_keeps_facts(isolated_store, monkeypat
     events = await _run_turn(session, "このすば")
     assert _done(events) and not _errors(events), events
     assert fact_marker in capture.last_system_prompt
-    assert "\nCORE FACTS\n" in capture.last_system_prompt
+    assert "について覚えていること】" in capture.last_system_prompt
 
 
 # ---------------------------------------------------------------------------
@@ -990,7 +990,7 @@ async def test_voice_entry_reaches_same_boundary(isolated_store, monkeypatch):
     # chat request whose freshly compiled prompt carries the voice-scoped fact.
     assert len(capture.chat_calls) == 1
     assert voice_marker in capture.last_system_prompt
-    assert "\nCORE FACTS\n" in capture.last_system_prompt
+    assert "について覚えていること】" in capture.last_system_prompt
     assert "このすば" in json.dumps(
         capture.last_call["messages"], ensure_ascii=False
     )

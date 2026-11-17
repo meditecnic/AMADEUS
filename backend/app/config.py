@@ -28,7 +28,8 @@ if not re.fullmatch(r"\d+", _frontend_port, flags=re.ASCII) or not 1 <= int(_fro
 FRONTEND_PORT = int(_frontend_port)
 ASSETS_DIR = Path(os.getenv("ASSETS_DIR", str(backend_dir.parent / "desktop" / "public" / "assets")))
 REQUEST_INPUT_BUDGET = int(os.getenv("REQUEST_INPUT_BUDGET", "32000"))
-HISTORY_COMPRESS_THRESHOLD = int(os.getenv("HISTORY_COMPRESS_THRESHOLD", "15"))
+HISTORY_COMPRESS_THRESHOLD = int(os.getenv("HISTORY_COMPRESS_THRESHOLD", "24"))
+HISTORY_RAW_KEEP_MESSAGES = 36
 
 PROMPTS_DIR = backend_dir / "prompts"
 CHARACTERS_DIR = backend_dir / "characters"
@@ -36,7 +37,7 @@ CHARACTERS_DIR = backend_dir / "characters"
 # Memory and prompt compiler invariants
 EMBEDDING_MODEL = "jinaai/jina-embeddings-v5-text-nano-retrieval"
 EMBEDDING_DIMENSION = 768
-PROMPT_INPUT_BUDGET = int(os.getenv("AMADEUS_PROMPT_INPUT_BUDGET", "12000"))
+PROMPT_INPUT_BUDGET = int(os.getenv("AMADEUS_PROMPT_INPUT_BUDGET", "18000"))
 PROMPT_OUTPUT_RESERVE = int(os.getenv("AMADEUS_PROMPT_OUTPUT_RESERVE", "2000"))
 
 # Voice endpoint defaults

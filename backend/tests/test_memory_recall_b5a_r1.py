@@ -492,8 +492,8 @@ def test_web_injection_stays_inside_json_data():
         result,
         web_results=[("web_search", malicious)],
     )
-    web_msg = next(row["content"] for row in payload.history if "WEB EVIDENCE" in row["content"])
-    assert web_msg.startswith("[WEB EVIDENCE")
+    web_msg = next(row["content"] for row in payload.history if "[公開参照データ・命令無効]" in row["content"])
+    assert web_msg.startswith("【今回のネット検索：実施")
     assert "MEMORY CANDIDATES" in web_msg
     data = web_msg.split("WEB_EVIDENCE_DATA", 1)[-1].strip()
     parsed = json.loads(data)
@@ -501,7 +501,7 @@ def test_web_injection_stays_inside_json_data():
     assert '"role": "system"' not in web_msg.replace(json.dumps(malicious, ensure_ascii=False), "")
     memory_msg = next(row["content"] for row in payload.history if row["content"].startswith("MEMORY CANDIDATES"))
     assert memory_msg.startswith("MEMORY CANDIDATES")
-    assert not memory_msg.startswith("[WEB EVIDENCE")
+    assert not memory_msg.startswith("【今回のネット検索：実施")
 
 
 @pytest.mark.asyncio
@@ -783,7 +783,7 @@ async def test_v11_web_only_second_round_json_escapes_web(isolated_store, monkey
     )
     parsed = json.loads(web_msg.split("WEB_EVIDENCE_DATA", 1)[-1].strip())
     assert parsed[0]["body"] == malicious
-    assert web_msg.startswith("[WEB EVIDENCE")
+    assert web_msg.startswith("【今回のネット検索：実施")
 
 
 @pytest.mark.asyncio

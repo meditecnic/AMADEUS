@@ -70,8 +70,8 @@ async def test_phase2_p3_turn_resyncs_stale_identity_mode_from_conversation(isol
     ):
         prompt = await compile_for_session(session, "こんにちは")
 
-    assert "相手を岡部として扱い" in prompt
-    assert "相手は岡部ではなく" not in prompt
+    assert "「岡部」や「あんた」と呼びかける" in prompt
+    assert "新しく出会った現代の対話相手" not in prompt
 
     # Switch authority: self conversation row drives self rules.
     owned_self = await conversation_service.require_owned(
@@ -85,8 +85,8 @@ async def test_phase2_p3_turn_resyncs_stale_identity_mode_from_conversation(isol
         new=AsyncMock(return_value=emotion),
     ):
         self_prompt = await compile_for_session(session, "こんにちは")
-    assert "相手は岡部ではなく" in self_prompt
-    assert "相手を岡部として扱い" not in self_prompt
+    assert "新しく出会った現代の対話相手" in self_prompt
+    assert "「岡部」や「あんた」と呼びかける" not in self_prompt
 
 
 @pytest.mark.asyncio
@@ -114,9 +114,9 @@ async def test_phase2_s3_session_identity_mode_feeds_compile(isolated_store):
     ):
         self_prompt = await compile_for_session(session, "こんにちは")
 
-    assert "恋愛関係には進まない" in self_prompt
-    assert "馴染みある反発はしない" in self_prompt
-    assert "相手を岡部として扱い" not in self_prompt
+    assert "恋愛めいた話は、私の柄じゃない" in self_prompt
+    assert "対等な「です・ます」で話す" in self_prompt
+    assert "「岡部」や「あんた」と呼びかける" not in self_prompt
 
     okabe_conv = await conversation_service.create(
         "s3-okabe", "steins_gate", title="Okabe", identity_mode="okabe"
@@ -134,8 +134,8 @@ async def test_phase2_s3_session_identity_mode_feeds_compile(isolated_store):
     ):
         okabe_prompt = await compile_for_session(okabe_session, "こんにちは")
 
-    assert "相手を岡部として扱い" in okabe_prompt
-    assert "恋愛関係には進まない" not in okabe_prompt
+    assert "「岡部」や「あんた」と呼びかける" in okabe_prompt
+    assert "恋愛めいた話は、私の柄じゃない" not in okabe_prompt
 
     # Legacy / missing field → okabe (never infer from nicknames etc.)
     bare = SessionState("s3-legacy")
@@ -149,7 +149,7 @@ async def test_phase2_s3_session_identity_mode_feeds_compile(isolated_store):
         new=AsyncMock(return_value=emotion),
     ):
         legacy_prompt = await compile_for_session(bare, "hi")
-    assert "相手を岡部として扱い" in legacy_prompt
+    assert "「岡部」や「あんた」と呼びかける" in legacy_prompt
 
 
 @pytest.mark.asyncio

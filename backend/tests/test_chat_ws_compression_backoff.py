@@ -130,7 +130,7 @@ async def _compress_once(session: SessionState, adapter) -> None:
 
 async def test_failures_grow_backoff_and_success_resets_it(isolated_store, caplog):
     session = await _new_session("backoff-direct")
-    session.history = _history(5)
+    session.history = _history(25)
     adapter = _ScriptedCompressor("", RuntimeError("provider down"), "", GOOD_SUMMARY)
 
     with caplog.at_level(logging.WARNING, logger="app.routers.chat_ws"):
@@ -140,7 +140,7 @@ async def test_failures_grow_backoff_and_success_resets_it(isolated_store, caplo
         assert (session.compression_failures, session.compression_skip_turns) == (2, 2)
         await _compress_once(session, adapter)  # empty result again
         assert (session.compression_failures, session.compression_skip_turns) == (3, 4)
-        assert len(session.history) == 10, "failed compression never trims"
+        assert len(session.history) == 50, "failed compression never trims"
 
     warnings = [r.getMessage() for r in caplog.records if "consecutive failure" in r.getMessage()]
     assert len(warnings) == 3
@@ -151,11 +151,12 @@ async def test_failures_grow_backoff_and_success_resets_it(isolated_store, caplo
     assert session.memory_summary == GOOD_SUMMARY
     assert session.compressing is False
     assert adapter.calls == 4
+    assert session.history == _history(25)[-36:]
 
 
 async def test_stale_snapshot_leaves_backoff_unchanged(isolated_store):
     session = await _new_session("backoff-stale")
-    session.history = _history(5)
+    session.history = _history(25)
     session.compression_failures, session.compression_skip_turns = 2, 0
     adapter = _ScriptedCompressor(GOOD_SUMMARY)
     sessions[session.session_id] = session
@@ -268,6 +269,7 @@ async def test_turns_back_off_after_failures_and_resume_after_success(
 ):
     _install_fake_chat(monkeypatch)
     monkeypatch.setattr(chat_ws.config, "HISTORY_COMPRESS_THRESHOLD", 3)  # trigger = 8 rows
+    monkeypatch.setattr(chat_ws.config, "HISTORY_RAW_KEEP_MESSAGES", 6)
 
     outcomes = {"result": ""}  # "" = provider gave no working context (failure)
     requested_on: list[int] = []
@@ -355,7 +357,7 @@ async def test_late_outcome_after_session_changed_leaves_backoff(
     isolated_store, change, outcome
 ):
     session = await _new_session("backoff-late")
-    session.history = _history(5)
+    session.history = _history(25)
     session.compression_failures, session.compression_skip_turns = 2, 0
     adapter = _ChangesSessionMidRequest(session, change, outcome)
 
@@ -365,7 +367,7 @@ async def test_late_outcome_after_session_changed_leaves_backoff(
     # A late failure must not count, a late (rejected) success must not reset.
     assert (session.compression_failures, session.compression_skip_turns) == (2, 0)
     assert session.compressing is False
-    assert len(session.history) == 10, "a late result never trims"
+    assert len(session.history) == 50, "a late result never trims"
     assert session.memory_summary != GOOD_SUMMARY
 
 
@@ -378,7 +380,7 @@ PRIVATE_TEXT = "ユーザーの秘密メモ-7f3a"
 
 async def test_compression_error_is_logged_without_its_message(isolated_store, caplog, capsys):
     session = await _new_session("backoff-redact")
-    session.history = _history(5)
+    session.history = _history(25)
     adapter = _ScriptedCompressor(RuntimeError(f"upstream echoed: {PRIVATE_TEXT}"))
 
     with caplog.at_level(logging.DEBUG):

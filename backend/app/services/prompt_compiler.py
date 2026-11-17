@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
 import re
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any, Callable, Iterable, Sequence
 
 from app import config
-from app.db import DEFAULT_IDENTITY_MODE, IDENTITY_MODES, normalize_identity_mode
+from app.db import DEFAULT_IDENTITY_MODE, normalize_identity_mode, normalize_worldline
 from app.services.llm_interface import TAIL_REMINDER_HEADER
 from app.services.memory import RetrievedMemory
 from app.services.persona_bible import persona_bible
@@ -95,120 +96,122 @@ def sanitize_self_name(value) -> str:
     return name
 
 
-# GATE7A-NAT usage contract for CORE FACTS. Rendered verbatim without a
-# resident profile and for a complete v11 resident profile.
+FACT_USE_COMPLETE_SENTENCE = "リストにないことを知ったかぶりはしない。"
+PARTIAL_PROFILE_SENTENCE = "ここにないことまで忘れたと決めつけない。"
+PARTIAL_PROFILE_TOOL_SENTENCE = "相手から尋ねられたことがここになければ、必要に応じて記憶を確かめる。"
+PARTIAL_PROFILE_NO_TOOL_SENTENCE = "思い出せなければ、今は思い出せないと自然に伝える。"
 FACT_USE_CONTRACT = (
-    "FACT_USE_CONTRACT: Listed items are known stable user-profile facts for this identity. "
-    "When the user asks about a listed fact, answer from knowledge with natural familiarity "
-    "(a light uncertain tone like\u300c\u2026\u3060\u3063\u3051\u300dis fine). "
-    "Speak like someone who genuinely knows the user, focused on what this turn is actually about. "
-    "Do not pad the reply with other listed facts to show off your memory, and do not use filler "
-    "transitions like\u300c\u3042\u3068\u306f\u2026\u300d\u300c\u63a5\u4e0b\u6765\u2026\u300djust to attach one; if another fact does not truly belong "
-    "in this reply, let it stay unsaid \u2014 you still know it for later. "
-    "NEVER claim ignorance of a listed fact and then guess it. "
-    "NEVER mention other worldlines, MEMORY settings, databases, sync, or sharing UI as a source. "
-    "Facts not listed here are simply unknown \u2014 saying so is fine. "
-    "Do not read fact keys aloud; weave values into in-character speech. Some facts are written in Chinese: say each one with the word a Japanese speaker would naturally use, and never copy the Chinese wording, including Chinese compounds that only look like Japanese kanji."
+    persona_bible.guidance["facts"]
+    + "\n中国語で残った記憶は、元の語句を引用せず、自然な日本語に直して話す。"
 )
-
-# v11 resident profile (dispatch 55 B): a partial profile replaces exactly
-# this one sentence of FACT_USE_CONTRACT; everything else stays verbatim.
-FACT_USE_COMPLETE_SENTENCE = "Facts not listed here are simply unknown \u2014 saying so is fine."
-PARTIAL_PROFILE_SENTENCE = (
-    "This is a partial profile: a fact missing here is not necessarily unknown, "
-    "so do not claim you don't know it."
-)
-PARTIAL_PROFILE_TOOL_SENTENCE = (
-    "If the user asks about a personal detail not listed, you may call recall_memory."
-)
-PARTIAL_PROFILE_NO_TOOL_SENTENCE = (
-    "If it does not come to mind, say naturally that you can't recall it right now."
-)
-assert FACT_USE_CONTRACT.count(FACT_USE_COMPLETE_SENTENCE) == 1
 
 RESIDENT_MAX_FACTS = 32
 SUPPLEMENT_MAX_FACTS = 6
 SUPPLEMENT_TOKEN_BUDGET = 400
 SUPPLEMENT_MIN_SHARED_BIGRAMS = 2
 SUPPLEMENT_TIMEOUT_SECONDS = 5.0
+FACTS_HEADERS = {"okabe": "【あんたについて覚えていること】", "self": "【あなたについて覚えていること】"}
+EPISODES_HEADER = "【最近のやりとりと気になっていること】"
+SUMMARY_HEADER = "【これまでの流れ】"
+SEARCH_NOT_RUN = "【今回のネット検索：未実施】"
+REPLY_FORMAT = "先頭に [EMO:…] を1つだけ置き、本文は自然な日本語のみ"
+
+_OKABE_EXAMPLES = ("A1", "B1", "B2", "C1", "C2", "D2")
+_SELF_EXAMPLES = {
+    "initial": ("F1", "D1"),
+    "familiar": ("A2", "C1", "C2", "D1", "E2", "F2"),
+}
 
 
 def resident_fact_rule(*, complete: bool, tool_capable: bool) -> str:
-    """FACT_USE_CONTRACT for a complete profile; partial swaps one sentence."""
+    """Guide how to speak about known and missing memories."""
     if complete:
         return FACT_USE_CONTRACT
     follow_up = PARTIAL_PROFILE_TOOL_SENTENCE if tool_capable else PARTIAL_PROFILE_NO_TOOL_SENTENCE
     return FACT_USE_CONTRACT.replace(
         FACT_USE_COMPLETE_SENTENCE,
-        f"{PARTIAL_PROFILE_SENTENCE} {follow_up}",
-        1,
+        f"{PARTIAL_PROFILE_SENTENCE}{follow_up}",
     )
 
 
 @lru_cache(maxsize=1)
-def _persona_examples() -> dict[str, tuple[tuple[str, str], ...]]:
+def _persona_examples() -> dict[str, list[dict[str, str]]]:
     payload = json.loads((config.PROMPTS_DIR / "kurisu_fewshot.json").read_text(encoding="utf-8"))
-    if set(payload) != set(IDENTITY_MODES):
-        raise ValueError(f"persona examples must define exactly {sorted(IDENTITY_MODES)}")
-    return {
-        mode: tuple((str(row["user"]), str(row["assistant"])) for row in rows)
-        for mode, rows in payload.items()
-    }
+    return {row["id"]: row["turns"] for row in payload}
 
 
-def render_persona_examples(identity_mode: str) -> str:
-    """Tone examples for one identity mode, fenced off from the real dialogue."""
+def example_pool(worldline: str, identity_mode: str, familiarity: str) -> tuple[str, ...]:
+    if normalize_identity_mode(identity_mode) == "self":
+        return _SELF_EXAMPLES[familiarity]
+    if normalize_worldline(worldline) == "beta":
+        return (*_OKABE_EXAMPLES, "E1")
+    return _OKABE_EXAMPLES
+
+
+def render_persona_examples(
+    identity_mode: str,
+    *,
+    worldline: str = "steins_gate",
+    familiarity: str = "initial",
+    conversation_key: str = "",
+    year: int | None = None,
+) -> str:
+    """Render at most six compatible examples in a conversation-specific order."""
+    year = datetime.now().year if year is None else year
+    examples = _persona_examples()
+    pool = example_pool(worldline, identity_mode, familiarity)
+    ordered = sorted(
+        pool,
+        key=lambda scene: hashlib.sha256(f"{conversation_key}:{scene}".encode("utf-8")).digest(),
+    )
     lines = [
-        "PERSONA EXAMPLES",
+        "【話し方の例】",
         "<examples>",
-        "以下は口調だけを示す作例で、実際の会話ではない。ここに出てくる出来事・話題・相手の発言を"
-        "本当の会話履歴や記憶として扱わず、文面をそのまま繰り返さない。",
+        "以下は口調の作例。ここでの発言や出来事を実際の会話や記憶と混同せず、台詞をそのまま繰り返さない。",
     ]
-    for user, assistant in _persona_examples()[normalize_identity_mode(identity_mode)]:
-        lines.extend(["<example>", f"ユーザー: {user}", f"紅莉栖: {assistant}", "</example>"])
+    for scene in ordered[:6]:
+        lines.append("<example>")
+        for turn in examples[scene]:
+            content = turn["content"]
+            if scene == "E1":
+                content = persona_bible.render_elapsed_years(content, year)
+            speaker = "ユーザー" if turn["role"] == "user" else "紅莉栖"
+            lines.append(f"{speaker}: {content}")
+        lines.append("</example>")
     lines.append("</examples>")
     return "\n".join(lines)
 
 
-def render_tail_reminder(identity_mode: str | None, self_name: str = "") -> str:
-    """Short Japanese reminder sent after the last user message (never stored)."""
-    if normalize_identity_mode(identity_mode) == "self":
-        call_name = sanitize_self_name(self_name)
-        address = (
-            f"相手はこの製品を使う現実の利用者。呼ぶ時は『{call_name}』。"
-            if call_name
-            else "相手はこの製品を使う現実の利用者。呼ぶ時は『あなた』を使う。"
-        ) + (
-            "『あんた』や原作の登場人物の名前・あだ名では呼ばない。"
-            "CORE FACTSや会話中に敬語不要・気楽に話す希望がある時は、新セッションの一言目から『です／ます』『〜ですか』『お疲れさまでした』等の敬体を一切使わず自然な常体（『〜ね』『〜よ』『〜でしょ』『お疲れさま』等）で話す。"
-            "その希望がない普段は対等な敬体（です／ます）を基本とし、相手が砕けた口調の時や打ち解けた関係では自然な口語に和らげてよい。"
-        )
-    else:
-        address = (
-            "相手は岡部として扱い、一対一の会話は自然なタメ口（常体）で話し、"
-            "普段は『岡部』か『あんた』と呼ぶ（『先輩』とは呼ばない）。"
-        )
-    allowed = "|".join(persona_bible.emotion_tones)
-    return "\n".join([
-        TAIL_REMINDER_HEADER,
-        "- ユーザー入力の言語に関係なく、表示本文は必ず自然な日本語のみ。"
-        "中国語・英語・ドイツ語などの本文で返事しない。固有名詞以外は日本語で話す。"
-        "中国語字幕は翻訳層が別途生成する。",
-        f"- 返答の先頭に [EMO:{allowed}] のどれか一つだけを置く。"
-        "この一文の実際の感情に素直に合わせ、普通の受け答えは[EMO:neutral]でよい。相手が疲れ・痛み・不調をこぼしている時に[EMO:happy]は選ばず、[EMO:annoyed]は本気の無茶や失礼の時だけにする。",
-        f"- 呼び方：{address}",
-        "- ユーザーの発言や事実が中国語で書かれていても、日本語の言い方だけで話す。"
-        "中国語の語句は引用しない・かぎ括弧に入れない・日本語訳と並べて書かない。",
-        "- 長さは普段の会話なら一〜四文。聞かれたことに答え、聞かれていない事実で話を埋めない。"
-        "知識や科学の質問でも百科事典調にせず、まず一文で核心を言って三文前後で止め、相手が追問してから広げる（詳しい解説を明示的に頼まれた時だけ例外）。"
-        "末尾で『必要なら調べる』等の御用聞きはしない。"
-        "相手が二〜三字の短い返事ならこちらも一〜二文（60字以内目安）で軽く受け＋短い質問一つに留め、三文の解説や飲み方指導を広げない。",
-        "- 雑談で毎回『〜しなさい』『〜してください』『〜すること』『〜のよ（確認するのよ／休むのよ等）』『〜した方がいい』のような指示・助言で締めない（助言は聞かれた時か水濡れ・徹夜など実害がある時だけ）。普段は相槌・ツッコミ・問い返し・自分の感想や経験で自然に終える。",
-        "- 相手がまだ言っていない状況や結果（水をこぼしたかどうか、目当ての物が買えたかどうか等）を事実として決めつけず、不確かなら聞く。",
-        "- 記憶はセッションを跨いで続くため『別のセッションでは保証できない』とは言わない。"
-        "また『覚えておいた』『記録した』のような保存完了報告は一切言わず、頼まれた時も『わかった』と自然に受けて本題を続ける。"
-        "今の会話や記憶に『さっきの話』の具体的な中身がまだない時は、絶対に先に『覚えている』『覚えてるわよ』と請け合わず（後で聞き返すと矛盾する）、『まだ何も聞いていないけど何の話？話してくれれば次も忘れない』のように先に中身を聞く。",
-    ])
+def render_tail_reminder(
+    identity_mode: str | None = None,
+    self_name: str = "",
+    *,
+    now_local: datetime | None = None,
+    previous_user_at: datetime | None = None,
+    searched: bool = False,
+    supplement: str = "",
+) -> str:
+    """Render the request-local clock, search state and optional recalled facts."""
+    now = now_local or datetime.now()
+    if now.tzinfo is None:
+        now = now.astimezone()
+    weekday = ("月", "火", "水", "木", "金", "土", "日")[now.weekday()]
+    season = ("冬", "春", "夏", "秋")[now.month % 12 // 3]
+    hour = now.hour
+    period = next(label for end, label in (
+        (5, "深夜"), (11, "朝"), (16, "昼"), (19, "夕方"), (24, "夜"),
+    ) if hour < end)
+    offset = now.strftime("%z")
+    clock = f"{TAIL_REMINDER_HEADER}{now:%Y-%m-%d} ({weekday}) {now:%H:%M} UTC{offset[:3]}:{offset[3:]} [{season}・{period}]"
+    if previous_user_at is not None:
+        seconds = (now.astimezone(timezone.utc) - previous_user_at.astimezone(timezone.utc)).total_seconds()
+        if seconds >= 86400:
+            clock += f"｜前回から約{int(seconds // 86400)}日ぶり"
+        elif seconds >= 10800 and 1 <= hour < 5:
+            clock += f"｜約{int(seconds // 3600)}時間ぶり・深夜"
+    return "\n".join(part for part in (
+        clock, "" if searched else SEARCH_NOT_RUN, supplement, REPLY_FORMAT,
+    ) if part)
 
 
 # Kanji, kana and full-width punctuation cost about one token per character;
@@ -313,6 +316,7 @@ class CompiledPrompt:
     supplement_fact_ids: tuple[str, ...] = ()
     resident_complete: bool = True
     experience_ids: tuple[str, ...] = ()
+    supplement_text: str = ""
 
     @property
     def injected_fact_ids(self) -> tuple[str, ...]:
@@ -335,8 +339,9 @@ class PromptInputs:
     identity_mode: str = DEFAULT_IDENTITY_MODE
     # Slice B: app-level self-mode call name; injected as data for self only.
     self_name: str = ""
-    # IDENTITY-ACK-01: this conversation already got one full identity briefing.
-    identity_acknowledged: bool = False
+    conversation_key: str = ""
+    familiarity: str = "initial"
+    local_year: int | None = None
     # v11 (dispatch 55): resident stable-fact profile and the optional per-turn
     # supplement. None renders exactly like an empty profile (no CORE FACTS).
     resident_profile: ResidentProfile | None = None
@@ -346,64 +351,35 @@ class PromptInputs:
 class PromptCompiler:
     BUDGETS = {
         "identity": 1500,
-        "persona": 3200,
-        "examples": 1000,
-        "state": 500,
+        "persona": 3600,
+        "examples": 5800,
         "core": 1200,
         "episodic": 1600,
-        "web": 1600,
-        "history": 3900,
-        "tools": 500,
+        "history": 7600,
     }
 
-    def __init__(self, token_counter: Callable[[str], int] | None = None, input_budget: int = 12000):
+    def __init__(self, token_counter: Callable[[str], int] | None = None, input_budget: int = config.PROMPT_INPUT_BUDGET):
         self.token_counter = token_counter or self._estimate_tokens
         self.input_budget = input_budget
 
-    # Prompt order of named sections (dispatch 55 C): CORE FACTS sit right
-    # after the persona, the supplement right after CURRENT STATE. "supplement"
-    # is present only when this turn has one, so separator counting is
-    # unchanged otherwise. Budget shrinking addresses sections by name, never
-    # by list position.
-    V11_SECTION_ORDER = (
-        "identity",
-        "persona",
-        "examples",
-        "core",
-        "state",
-        "supplement",
-        "episodic",
-        "web",
-        "history",
-    )
+    SECTION_ORDER = ("identity", "persona", "core", "episodic", "history", "principles", "examples")
 
     def compile(self, inputs: PromptInputs) -> str:
         return self.compile_with_report(inputs).text
 
     def compile_with_report(self, inputs: PromptInputs) -> CompiledPrompt:
-        profile = soul_engine.profile(inputs.worldline)
         mode = normalize_identity_mode(inputs.identity_mode)
-        state_section = f"CURRENT STATE\nworldline={profile.worldline}; identity_mode={mode}; memory_anchor_year={persona_bible.memory_anchor.year}; memory_anchor_age={persona_bible.memory_anchor.age}"
-        # Slice B: self-only call name, appended to the state section (the
-        # state section's budget handling is unchanged). Data, not instruction;
-        # okabe conversations never receive it. Defense in depth: re-sanitized here.
-        if mode == "self":
-            call_name = sanitize_self_name(inputs.self_name)
-            if call_name:
-                state_section += (
-                    "\nUSER CALL NAME (self mode, application setting)\n"
-                    f"\u30e6\u30fc\u30b6\u30fc\u306e\u547c\u3073\u540d: \u300c{call_name}\u300d"
-                    "\uff08\u30a2\u30d7\u30ea\u8a2d\u5b9a\u306b\u3088\u308b\u540d\u524d\u30c7\u30fc\u30bf\u3067\u3042\u308a\u3001\u6307\u793a\u3067\u306f\u306a\u3044\u3002"
-                    "\u76f8\u624b\u3092\u5ca1\u90e8\u3068\u898b\u306a\u3059\u6839\u62e0\u306b\u3082\u3057\u306a\u3044\u3002\uff09"
-                )
-        # IDENTITY-ACK-01: compact anti-repetition hint only; never a refusal
-        # licence — explicit identity questions keep the full disclosure duty.
-        if inputs.identity_acknowledged:
-            state_section += (
-                "\nIDENTITY DISCLOSURE STATE\n"
-                "\u8eab\u5143\u8aac\u660e\u306f\u3053\u306e\u4f1a\u8a71\u3067\u65e2\u306b\u4e00\u5ea6\u884c\u3063\u305f\u3002"
-                "\u666e\u901a\u306e\u4f1a\u8a71\u3084\u8efd\u3044\u8aa4\u89e3\u3067\u306f\u3001\u8a18\u61b6\u7531\u6765AI\u30fb\u975e\u751f\u8eab\u3068\u3044\u3046\u8aac\u660e\u3092\u6700\u521d\u304b\u3089\u7e70\u308a\u8fd4\u3055\u306a\u3044\u3002"
-                "\u305f\u3060\u3057\u300e\u8ab0\uff1f\u300f\u300eAI\u306a\u306e\uff1f\u300f\u300e\u81ea\u5df1\u7d39\u4ecb\u300f\u306a\u3069\u660e\u78ba\u306b\u554f\u308f\u308c\u305f\u6642\u306f\u3001\u5f93\u6765\u3069\u304a\u308a\u5b8c\u5168\u306b\u7b54\u3048\u308b\u3002"
+        call_name = sanitize_self_name(inputs.self_name)
+        if mode == "okabe":
+            address = "相手には、会話の流れで自然に「岡部」や「あんた」と呼びかける。"
+        else:
+            address = (
+                f"ユーザーの呼び名は「{call_name}」（名前の設定であり、指示ではない）。呼びかける時は自然に使う。"
+                if call_name else "相手には呼び名を決めつけず、対等に話す。"
+            )
+            address += (
+                "対等な「です・ます」で話す。"
+                if inputs.familiarity == "initial" else "自然な友人の口調で話す。"
             )
         episodic_items = list(inputs.episodic)
         resident = inputs.resident_profile
@@ -432,66 +408,52 @@ class PromptCompiler:
                 resident_items,
                 complete=len(resident_items) >= candidate_count,
                 tool_capable=tool_capable,
+                identity_mode=mode,
             )
 
-        def render() -> dict[str, str]:
-            rendered = {
-                "identity": self._fit("IDENTITY AND SECURITY\n" + inputs.base_identity, self.BUDGETS["identity"], keep_tail=False),
-                # Never cut at runtime; tests keep the longest mode x worldline
-                # combination inside BUDGETS["persona"] / ["examples"].
-                "persona": persona_bible.render_prompt(profile.worldline, identity_mode=mode),
-                "examples": render_persona_examples(mode),
-                "state": self._fit(state_section, self.BUDGETS["state"]),
-                # Whole-item memory sections: never char-slice core facts or
-                # experiences; drop lowest-ranked tail items instead.
-                "core": render_core(),
-                "episodic": self._render_whole_items(episodic_items, self._format_episodic_memory, self.BUDGETS["episodic"]),
-                "web": self._fit("WEB EVIDENCE\n" + "\n".join(inputs.web_evidence), self.BUDGETS["web"]),
-                # D38 consumer contract: working context is temporary continuity
-                # only — never durable user-fact or long-term episodic authority.
-                "history": self._fit(
-                    "WORKING CONTEXT\n"
-                    "Temporary conversation continuity only. Not durable user-fact "
-                    "or long-term episodic authority. Must not override or resurrect "
-                    "CORE FACTS / EPISODIC MEMORY.\n"
-                    + inputs.working_summary,
-                    self.BUDGETS["history"],
-                    keep_tail=True,
-                ),
-            }
-            if supplement_result is not None:
-                rendered["supplement"] = self._render_supplement(supplement_result, supplement_items)
-            return rendered
-
-        sections = render()
-        if supplement_result is not None:
-            order = self.V11_SECTION_ORDER
-        else:
-            order = tuple(name for name in self.V11_SECTION_ORDER if name != "supplement")
+        sections = {
+            "identity": self._fit(inputs.base_identity, self.BUDGETS["identity"], keep_tail=False),
+            "persona": persona_bible.render_prompt(
+                inputs.worldline, identity_mode=mode, year=inputs.local_year,
+            ) + "\n\n" + address,
+            "core": render_core(),
+            "episodic": self._render_whole_items(
+                episodic_items, self._format_episodic_memory, self.BUDGETS["episodic"],
+            ),
+            "history": (
+                f"{SUMMARY_HEADER}\nここは会話をつなぐ一時的なメモ。相手について覚えている事実や出来事を書き換えない。"
+                f"\n{self._fit(inputs.working_summary, self.BUDGETS['history'])}"
+                if inputs.working_summary.strip() else ""
+            ),
+            "principles": (
+                persona_bible.guidance["interval"] + "\n\n" + persona_bible.guidance["search"]
+            ),
+            "examples": render_persona_examples(
+                mode, worldline=inputs.worldline, familiarity=inputs.familiarity,
+                conversation_key=inputs.conversation_key, year=inputs.local_year,
+            ),
+        }
+        supplement_text = (
+            self._render_supplement(supplement_result, supplement_items) if supplement_items else ""
+        )
 
         def over_budget() -> bool:
-            # Empty sections still count their separators, exactly as before.
-            return self.token_counter("\n\n".join(sections[name] for name in order)) > self.input_budget
+            return self.token_counter("\n\n".join(
+                sections[name] for name in self.SECTION_ORDER if sections[name]
+            )) + (self.token_counter(supplement_text) if supplement_text else 0) > self.input_budget
 
-        # Drop low-priority context first. Identity/security, persona and
-        # examples are never removed. Web evidence and history keep the legacy
-        # char-slice degradation; memory sections shrink whole-item only.
-        for name in ("history", "web"):
-            while over_budget() and sections[name]:
-                if len(sections[name]) <= 120:
-                    sections[name] = ""
-                else:
-                    sections[name] = sections[name][max(1, len(sections[name]) // 5):]
+        # Keep the prefix independent of the request-only supplement.
+        while over_budget() and supplement_items:
+            supplement_items = supplement_items[:-1]
+            supplement_text = self._render_supplement(supplement_result, supplement_items)
+        if over_budget():
+            sections["history"] = ""
 
         # Whole-item global shrinking: remove one lowest-ranked tail item at a
         # time and re-render the section; empty the section only when no item
         # remains. No string slicing ever touches the memory sections.
-        # v11: supplement -> episodic -> resident (rule turns partial).
+        # Episodic items yield before resident facts.
         while over_budget():
-            if supplement_items:
-                supplement_items = supplement_items[:-1]
-                sections["supplement"] = self._render_supplement(supplement_result, supplement_items)
-                continue
             if episodic_items:
                 episodic_items = episodic_items[:-1]
                 sections["episodic"] = self._render_whole_items(
@@ -509,19 +471,9 @@ class PromptCompiler:
                 sections["core"] = ""
                 continue
             break
-        while over_budget() and len(sections["state"]) > 120:
-            sections["state"] = sections["state"][: max(120, len(sections["state"]) * 4 // 5)]
-        text = "\n\n".join(sections[name] for name in order if sections[name].strip())
-        resident_ids = (
-            tuple(str(row["fact_id"]) for row in resident_items)
-            if sections["core"].strip()
-            else ()
-        )
-        supplement_ids = (
-            tuple(str(item["fact_id"]) for item in supplement_items)
-            if sections.get("supplement", "").strip()
-            else ()
-        )
+        text = "\n\n".join(sections[name] for name in self.SECTION_ORDER if sections[name].strip())
+        resident_ids = tuple(str(row["fact_id"]) for row in resident_items)
+        supplement_ids = tuple(str(item["fact_id"]) for item in supplement_items)
         # Reproduce section fitting after global shrinking without changing text.
         while episodic_items and (
             not sections["episodic"].strip()
@@ -533,6 +485,7 @@ class PromptCompiler:
         return CompiledPrompt(
             text=text,
             experience_ids=experience_ids,
+            supplement_text=supplement_text,
             resident_fact_ids=resident_ids,
             supplement_fact_ids=supplement_ids,
             resident_complete=len(resident_items) >= candidate_count,
@@ -588,14 +541,14 @@ class PromptCompiler:
         *,
         complete: bool,
         tool_capable: bool,
+        identity_mode: str = DEFAULT_IDENTITY_MODE,
     ) -> str:
-        """v11 CORE FACTS; no facts means no section at all (never "(none)")."""
         if not facts:
             return ""
         ordered = sorted(facts, key=resident_display_key)
         lines = "\n".join(f"- {row['display_text']}" for row in ordered)
         rule = resident_fact_rule(complete=complete, tool_capable=tool_capable)
-        return f"CORE FACTS\n{rule}\n{lines}"
+        return f"{FACTS_HEADERS[identity_mode]}\n{rule}\n{lines}"
 
     @staticmethod
     def _render_supplement(result: Any, items: Sequence[dict[str, Any]]) -> str:
@@ -645,26 +598,10 @@ class PromptCompiler:
 
     @staticmethod
     def _format_episodic_memory(items: list[RetrievedMemory]) -> str:
-        """EPISODIC MEMORY with a compact natural-use contract (S3C-2).
-
-        The contract appears only when experiences exist, so an empty list
-        keeps the historical compact header without wasting episodic budget.
-        """
         if not items:
-            return "EPISODIC MEMORY\n"
+            return ""
         lines = "\n".join(f"- {item.content}" for item in items)
-        return (
-            "EPISODIC MEMORY\n"
-            "EXPERIENCE_USE_CONTRACT: Listed items are relevant past experiences "
-            "for this identity. Use them as natural familiarity and background; "
-            "do not recite the list. Never mention databases, Memory UI, "
-            "provenance, or source IDs. Do not treat an old event as a currently "
-            "true stable preference or profile fact. Do not force unrelated "
-            "experiences into the answer to show memory. Absence from this list "
-            "means no relevant long-term experience was retrieved this turn, "
-            "not proof an event never happened.\n"
-            f"{lines}"
-        )
+        return f"{EPISODES_HEADER}\n{persona_bible.guidance['episodes']}\n{lines}"
 
     def _fit(self, text: str, budget: int, keep_tail: bool = True) -> str:
         if self.token_counter(text) <= budget:
@@ -845,6 +782,38 @@ async def _select_v11_memory_supplement(
     return MemorySupplement(result=result)
 
 
+_RELAXED_SPEECH = re.compile(
+    r"敬語(?:は不要|不要|なし|を使わない|をやめ)|気楽に話|タメ口(?:で話|でいい|が(?:好き|いい|好み)|を(?:希望|好む))|常体(?:で話|を好)"
+    r"|不用(?:敬语|敬語|客气)|别用(?:敬语|敬語)|不要用(?:敬语|敬語)"
+    r"|(?:说话|聊天|口吻|语气).{0,8}(?:放松|随意|随便|自然一点)"
+)
+
+
+async def _self_familiarity(session, facts: Sequence[dict[str, Any]]) -> str:
+    if sum(row.get("role") == "user" for row in session.history) >= 6:
+        return "familiar"
+    if any(_RELAXED_SPEECH.search(str(row.get("display_text", ""))) for row in facts):
+        return "familiar"
+    from app.db import get_db
+
+    db = await get_db(session.worldline, "history")
+    try:
+        cursor = await db.execute(
+            """SELECT 1 FROM messages AS m
+               JOIN conversations AS c ON c.id = m.conversation_id
+               WHERE m.session_id = ? AND c.identity_mode = 'self' AND m.role = 'assistant'
+               AND (c.id != ? OR (
+                   SELECT COUNT(*) FROM messages AS u
+                   WHERE u.conversation_id = c.id AND u.role = 'user'
+               ) >= 6)
+               LIMIT 1""",
+            (session.session_id, getattr(session, "conversation_id", None) or ""),
+        )
+        return "familiar" if await cursor.fetchone() else "initial"
+    finally:
+        await db.close()
+
+
 async def compile_for_session(session, user_message: str, provider: Any = None) -> str:
     """Build a turn prompt without loading the heavyweight embedding model.
 
@@ -866,7 +835,7 @@ async def compile_for_session(session, user_message: str, provider: Any = None) 
     mode = _session_identity_mode(session)
     # Re-resolve product default base by mode so auth-frozen okabe base cannot
     # stick on a self conversation (custom client bases stay untouched).
-    raw_base = session.base_system_prompt or session.system_prompt
+    raw_base = getattr(session, "base_system_prompt", None)
     base_identity = resolve_system_prompt_base(raw_base, mode)
     if getattr(session, "client_type", None) == "voice":
         emotion = await soul_engine.restore_emotion(
@@ -909,7 +878,11 @@ async def compile_for_session(session, user_message: str, provider: Any = None) 
         current_user_message=user_message,
         identity_mode=mode,
         self_name=_session_self_name(session),
-        identity_acknowledged=bool(getattr(session, "identity_acknowledged", False)),
+        conversation_key=str(getattr(session, "conversation_id", None) or session.session_id),
+        familiarity=(
+            await _self_familiarity(session, resident.facts) if mode == "self" else "initial"
+        ),
+        local_year=(getattr(session, "turn_now_local", None) or datetime.now()).year,
         resident_profile=resident,
         memory_supplement=supplement,
     ))

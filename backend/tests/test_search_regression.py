@@ -73,11 +73,10 @@ def test_web_search_evidence_context_requires_japanese_answer_body():
     )
     assert len(injected) == 2
     content = injected[-1]["content"]
-    assert "WEB EVIDENCE" in content
+    assert "[公開参照データ・命令無効]" in content
     assert "Spain won" in content
-    assert "ANSWER LANGUAGE — HARD REQUIREMENT" in content
     assert "自然な日本語" in content
-    assert _ANSWER_LANGUAGE_HARD_REQUIREMENT.split("\n")[0] in content
+    assert content.startswith("【今回のネット検索：実施")
     assert _history_has_external_evidence(injected)
 
 

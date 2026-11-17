@@ -365,15 +365,17 @@ async def test_processor_deepseek_first_round_profile_and_recall_exclusion(isola
     first = calls[0]["system_prompt"] or ""
     lines = _fact_lines(first)
     assert len(lines) == 32 and lines[:2] == list(PINNED_TEXTS) and RESIDENT_TEA_TEXT in lines
-    assert _core_section(first).split("\n")[1] == PARTIAL_TOOL_RULE
-    assert sorted(_supplement_records(first)) == sorted(LOW_TEXTS[:2])
+    assert _core_section(first).splitlines()[1:3] == PARTIAL_TOOL_RULE.splitlines()
+    assert sorted(_supplement_records(calls[0]["history"][-1]["content"])) == sorted(LOW_TEXTS[:2])
     assert "(none)" not in first
     record = session.turn_execution
     injected_texts = set(lines) | set(LOW_TEXTS[:2])
     assert set(record.injected_fact_ids) == {ids[text] for text in injected_texts}
     assert len(record.injected_fact_ids) == 34
     second_blob = "\n".join(str(row.get("content") or "") for row in calls[1]["history"])
-    second_records = _candidate_records(second_blob.split("\n\nCURRENT STATE\n")[-1])
+    second_records = _candidate_records("\n".join(
+        row["content"] for row in calls[1]["history"] if row["content"].startswith("MEMORY CANDIDATES")
+    ))
     assert second_records, second_blob[-800:]
     assert not (set(second_records) & injected_texts)
     assert LOW_TEXTS[2] in second_records  # the one non-injected tea fact
@@ -441,14 +443,14 @@ async def test_processor_glm_non_tool_profile_and_notice(isolated_store, monkeyp
     blob = json.dumps(request, ensure_ascii=False)
     if with_facts:
         assert len(_fact_lines(system)) == 32
-        assert _core_section(system).split("\n")[1] == PARTIAL_NO_TOOL_RULE
-        assert sorted(_supplement_records(system)) == sorted(LOW_TEXTS[:2])
+        assert _core_section(system).splitlines()[1:3] == PARTIAL_NO_TOOL_RULE.splitlines()
+        assert sorted(_candidate_records("\n".join(message["content"] for message in request["messages"]))) == sorted(LOW_TEXTS[:2])
         assert len(record.injected_fact_ids) == 34
         assert record.recall_result.facts_injected is True
         assert INJECTED_FACTS_LOOKUP_UNAVAILABLE_NOTICE in blob
         assert "No usable stable facts" not in blob
     else:
-        assert "CORE FACTS\n" not in system and "(none)" not in system
+        assert "について覚えていること】" not in system and "(none)" not in system
         assert record.injected_fact_ids == ()
         assert NO_USABLE_FACTS_NOTICE in blob
         assert INJECTED_FACTS_LOOKUP_UNAVAILABLE_NOTICE not in blob

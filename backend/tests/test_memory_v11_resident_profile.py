@@ -314,6 +314,7 @@ async def test_resident_loader_scope_and_observation_counts(isolated_store):
 # ---------------------------------------------------------------------------
 
 from app.services.prompt_compiler import (  # noqa: E402
+    FACTS_HEADERS,
     FACT_USE_COMPLETE_SENTENCE,
     FACT_USE_CONTRACT,
     PARTIAL_PROFILE_NO_TOOL_SENTENCE,
@@ -334,10 +335,10 @@ EMOTION = EmotionVector(
     trust=0.55, attachment=0.35, irritation=0.2, anxiety=0.1, jealousy=0.05, volatility=0.3
 )
 PARTIAL_TOOL_RULE = FACT_USE_CONTRACT.replace(
-    FACT_USE_COMPLETE_SENTENCE, f"{PARTIAL_PROFILE_SENTENCE} {PARTIAL_PROFILE_TOOL_SENTENCE}"
+    FACT_USE_COMPLETE_SENTENCE, f"{PARTIAL_PROFILE_SENTENCE}{PARTIAL_PROFILE_TOOL_SENTENCE}"
 )
 PARTIAL_NO_TOOL_RULE = FACT_USE_CONTRACT.replace(
-    FACT_USE_COMPLETE_SENTENCE, f"{PARTIAL_PROFILE_SENTENCE} {PARTIAL_PROFILE_NO_TOOL_SENTENCE}"
+    FACT_USE_COMPLETE_SENTENCE, f"{PARTIAL_PROFILE_SENTENCE}{PARTIAL_PROFILE_NO_TOOL_SENTENCE}"
 )
 
 
@@ -377,14 +378,14 @@ def _inputs(resident: ResidentProfile | None, *, supplement=None, episodic=(), m
 
 
 def _core_section(prompt: str) -> str:
-    start = prompt.index("CORE FACTS\n")
-    return prompt[start:].split("\n\n", 1)[0]
+    for header in FACTS_HEADERS.values():
+        if header + "\n" in prompt:
+            return prompt[prompt.index(header):].split("\n\n", 1)[0]
+    return ""
 
 
 def _fact_lines(prompt: str) -> list[str]:
-    if "CORE FACTS\n" not in prompt:
-        return []
-    return [line[2:] for line in _core_section(prompt).split("\n") if line.startswith("- ")]
+    return [line[2:] for line in _core_section(prompt).splitlines() if line.startswith("- ")]
 
 
 def test_rank_order_signals_and_fingerprint_dedupe():
@@ -426,8 +427,8 @@ def test_select_caps_at_32_and_keeps_highest_ranked():
     assert profile.complete is False
 
 
-def test_select_fits_1200_budget_dropping_lowest_rank_whole_facts():
-    """[A7][A3] core budget 1200 incl. header+rule; whole facts, lowest rank out."""
+def test_select_fits_core_budget_dropping_lowest_rank_whole_facts():
+    """[A7][A3] core budget incl. header+rule; whole facts, lowest rank out."""
     compiler = PromptCompiler()
     # Lowest rank is created first, so it would render first: rank != render.
     rows = [
@@ -444,10 +445,10 @@ def test_select_fits_1200_budget_dropping_lowest_rank_whole_facts():
     assert 0 < len(kept) < 12
     assert kept == [f"f{i:02d}" for i in range(len(kept))]
     section = compiler._format_resident_profile(profile.facts, complete=False, tool_capable=False)
-    assert compiler.token_counter(section) <= 1200
+    assert compiler.token_counter(section) <= compiler.BUDGETS["core"]
     # One more fact would not fit -> the cut is budget-driven, not arbitrary.
     bigger = compiler._format_resident_profile(rows[: len(kept) + 1], complete=False, tool_capable=False)
-    assert compiler.token_counter(bigger) > 1200
+    assert compiler.token_counter(bigger) > compiler.BUDGETS["core"]
     for row in profile.facts:
         assert f"- {row['display_text']}\n" in section + "\n"  # never char-sliced
 
@@ -479,7 +480,7 @@ def test_render_order_pinned_first_then_created_at_then_fact_id():
 @pytest.mark.parametrize("tool_capable", [True, False])
 def test_rule_naturalizes_chinese_fact_wording(complete, tool_capable):
     assert (
-        "Some facts are written in Chinese: say each one with the word a Japanese speaker would naturally use, and never copy the Chinese wording, including Chinese compounds that only look like Japanese kanji."
+        "中国語で残った記憶は、元の語句を引用せず、自然な日本語に直して話す。"
         in resident_fact_rule(complete=complete, tool_capable=tool_capable)
     )
 
@@ -490,7 +491,7 @@ def test_rule_complete_is_fact_use_contract_verbatim():
     profile = compiler.select_resident_profile([_row("f1", "猫を飼っている")], tool_capable=True)
     assert profile.complete
     prompt = compiler.compile(_inputs(profile))
-    assert _core_section(prompt) == f"CORE FACTS\n{FACT_USE_CONTRACT}\n- 猫を飼っている"
+    assert _core_section(prompt) == f"{FACTS_HEADERS['self']}\n{FACT_USE_CONTRACT}\n- 猫を飼っている"
     assert resident_fact_rule(complete=True, tool_capable=False) == FACT_USE_CONTRACT
 
 
@@ -509,7 +510,7 @@ def test_rule_partial_replaces_only_the_unknown_sentence(tool_capable, expected_
     assert not profile.complete
     prompt = compiler.compile(_inputs(profile))
     section = _core_section(prompt)
-    assert section.split("\n")[1] == expected_rule
+    assert section.splitlines()[1:3] == expected_rule.splitlines()
     assert FACT_USE_COMPLETE_SENTENCE not in prompt
     assert absent not in prompt
     before, after = FACT_USE_CONTRACT.split(FACT_USE_COMPLETE_SENTENCE)
@@ -522,34 +523,26 @@ def test_no_facts_means_no_section():
     empty = compiler.select_resident_profile([], tool_capable=True)
     v11_prompt = compiler.compile(_inputs(empty))
     # (The persona bible itself mentions "CORE FACTS" in prose.)
-    assert "CORE FACTS\n" not in v11_prompt and "(none)" not in v11_prompt
+    assert not _core_section(v11_prompt) and "(none)" not in v11_prompt
     assert "FACT_USE_CONTRACT" not in v11_prompt
     assert compiler.compile(_inputs(None)) == v11_prompt
 
 
-def test_v11_section_order_core_before_state_supplement_after():
-    """[C] identity, persona, examples, CORE FACTS, CURRENT STATE, supplement, episodic."""
+def test_persona_core_episodes_and_examples_order_with_separate_supplement():
     from app.services.memory import RetrievedMemory
 
     supplement = _fake_supplement([("m1", "s1", "紅茶はアールグレイが好き")], need="紅茶は？")
     compiler = PromptCompiler()
     profile = compiler.select_resident_profile([_row("f1", "猫を飼っている")], tool_capable=True)
     episode = RetrievedMemory(id=1, kind="episodic", content="去年京都へ行った", score=1, confidence=1, importance=0.5, pinned=False)
-    prompt = compiler.compile(_inputs(profile, supplement=supplement, episodic=[episode]))
-    order = [
-        prompt.index("IDENTITY AND SECURITY\n"),
-        prompt.index("PERSONA BIBLE"),
-        prompt.index("\n\nPERSONA EXAMPLES\n"),
-        prompt.index("\n\nCORE FACTS\n"),
-        prompt.index("\n\nCURRENT STATE\n"),
-        prompt.index("\n\nMEMORY CANDIDATES\n"),
-        prompt.index("\n\nEPISODIC MEMORY\n"),
-        prompt.index("\n\nWORKING CONTEXT\n"),
-    ]
+    compiled = compiler.compile_with_report(_inputs(profile, supplement=supplement, episodic=[episode]))
+    order = [compiled.text.index(heading) for heading in (
+        "【わたしについて】", FACTS_HEADERS["self"], "【最近のやりとりと気になっていること】", "【話し方の例】",
+    )]
     assert order == sorted(order)
-    # The current message travels only as the last chat message.
-    assert "CURRENT USER MESSAGE" not in prompt
-    assert "RECENT DIALOGUE" not in prompt
+    assert "MEMORY CANDIDATES" not in compiled.text
+    assert "紅茶はアールグレイが好き" in compiled.supplement_text
+    assert "MEMORY_CANDIDATE_DATA" in compiled.supplement_text
 
 
 def _fake_supplement(items: list[tuple[str, str, str]], *, need: str) -> MemorySupplement:
@@ -588,7 +581,7 @@ def _present_ids(prompt: str, rows: list[dict]) -> list[str]:
 
 
 def test_global_budget_drops_lowest_ranked_resident_not_last_rendered():
-    """[A3] CURRENT STATE survives; resident shrinks whole, lowest rank first.
+    """[A3] Persona stays whole; resident facts shrink lowest rank first.
 
     Rank order is the reverse of render order (the lowest-ranked fact was
     created first, so it renders first): the first fact to go must still be
@@ -612,7 +605,7 @@ def test_global_budget_drops_lowest_ranked_resident_not_last_rendered():
         compiler = PromptCompiler(input_budget=budget)
         report = compiler.compile_with_report(_inputs(profile))
         prompt = report.text
-        assert "\n\nCURRENT STATE\n" in prompt
+        assert "【わたしについて】" in prompt
         present = _present_ids(prompt, rows)
         # Always a prefix of the rank order: the lowest-ranked fact (which is
         # rendered first) is the first to go, never the last-rendered one.
@@ -642,15 +635,16 @@ def test_global_budget_drops_supplement_before_episodic():
     ]
     compiler = PromptCompiler()
     profile = compiler.select_resident_profile([_row("f1", "猫を飼っている")], tool_capable=True)
-    total = compiler.token_counter(compiler.compile(_inputs(profile, supplement=supplement, episodic=episodes)))
+    full = compiler.compile_with_report(_inputs(profile, supplement=supplement, episodic=episodes))
+    total = compiler.token_counter(full.text) + compiler.token_counter(full.supplement_text)
     seen_states = []
     for budget in range(total, 100, -4):
         report = PromptCompiler(input_budget=budget).compile_with_report(
             _inputs(profile, supplement=supplement, episodic=episodes)
         )
         state = (
-            "SUP1" in report.text,
-            "SUP2" in report.text,
+            "SUP1" in report.supplement_text,
+            "SUP2" in report.supplement_text,
             "EP0" in report.text,
             "EP1" in report.text,
         )
@@ -760,10 +754,9 @@ def _glm_provider():
 
 
 def _supplement_records(prompt: str) -> list[str]:
-    if "\n\nMEMORY CANDIDATES\n" not in prompt:
+    if "MEMORY_CANDIDATE_DATA\n" not in prompt:
         return []
-    tail = prompt.split("\n\nMEMORY CANDIDATES\n", 1)[1]
-    data = tail.split("MEMORY_CANDIDATE_DATA\n", 1)[1].split("\n", 1)[0]
+    data = prompt.split("MEMORY_CANDIDATE_DATA\n", 1)[1].split("\n", 1)[0]
     return list(json.loads(data)["records"].values())
 
 
@@ -785,13 +778,13 @@ async def test_forty_facts_profile_and_supplement(isolated_store, monkeypatch):
     assert lines[:2] == list(PINNED_TEXTS)  # pinned render first
     assert lines[2] == RESIDENT_TEA_TEXT  # then created_at order
     assert not any(line.startswith("L") for line in lines)
-    assert _core_section(prompt).split("\n")[1] == PARTIAL_TOOL_RULE
+    assert _core_section(prompt).splitlines()[1:3] == PARTIAL_TOOL_RULE.splitlines()
     # Supplement: only gated, non-resident facts; resident tea fact excluded.
-    records = _supplement_records(prompt)
+    records = _supplement_records(session.turn_compiled_prompt.supplement_text)
     assert sorted(records) == sorted([LOW_TEXTS[0], LOW_TEXTS[1]])
     assert RESIDENT_TEA_TEXT not in records and LOW_TEXTS[2] not in records
-    assert prompt.index("\n\nCURRENT STATE\n") < prompt.index("\n\nMEMORY CANDIDATES\n")
-    assert "\nMEMORY_CANDIDATE_DATA\n" in prompt
+    assert "MEMORY CANDIDATES" not in prompt
+    assert "\nMEMORY_CANDIDATE_DATA\n" in session.turn_compiled_prompt.supplement_text
     # Bigram-only supplement (dispatch 64): never encoded, readiness never consulted.
     assert spy.calls == []
     assert spy.readiness_calls == 0
@@ -803,7 +796,7 @@ async def test_forty_facts_profile_and_supplement(isolated_store, monkeypatch):
 
     # Non-tool provider: same profile, non-tool partial wording.
     glm_prompt = await compile_for_session(session, SUPPLEMENT_QUERY, provider=_glm_provider())
-    assert _core_section(glm_prompt).split("\n")[1] == PARTIAL_NO_TOOL_RULE
+    assert _core_section(glm_prompt).splitlines()[1:3] == PARTIAL_NO_TOOL_RULE.splitlines()
     assert _fact_lines(glm_prompt) == lines
 
 
@@ -817,10 +810,11 @@ async def test_supplement_never_uses_e5_even_when_loaded(isolated_store, monkeyp
     monkeypatch.setattr(memory_service, "embedder", spy)
     sid = f"rp-e5-{uuid4()}"
     await seed_forty(sid)
-    prompt = await compile_for_session(_v11_session(sid), SUPPLEMENT_QUERY, provider=_glm_provider())
+    session = _v11_session(sid)
+    await compile_for_session(session, SUPPLEMENT_QUERY, provider=_glm_provider())
     assert spy.calls == []
     assert spy.readiness_calls == 0
-    assert sorted(_supplement_records(prompt)) == sorted([LOW_TEXTS[0], LOW_TEXTS[1]])
+    assert sorted(_supplement_records(session.turn_compiled_prompt.supplement_text)) == sorted([LOW_TEXTS[0], LOW_TEXTS[1]])
 
 
 @pytest.mark.asyncio
@@ -853,10 +847,9 @@ async def test_prompt_never_imports_sentence_transformers_nor_calls_readiness(is
     try:
         for embedder in (spy, adapter):
             monkeypatch.setattr(memory_service, "embedder", embedder)
-            prompt = await compile_for_session(
-                _v11_session(sid), SUPPLEMENT_QUERY, provider=_deepseek_provider()
-            )
-            assert sorted(_supplement_records(prompt)) == sorted([LOW_TEXTS[0], LOW_TEXTS[1]])
+            session = _v11_session(sid)
+            await compile_for_session(session, SUPPLEMENT_QUERY, provider=_deepseek_provider())
+            assert sorted(_supplement_records(session.turn_compiled_prompt.supplement_text)) == sorted([LOW_TEXTS[0], LOW_TEXTS[1]])
     finally:
         monkeypatch.setattr(builtins, "__import__", real_import)
     assert spy.readiness_calls == 0 and spy.calls == []
@@ -902,10 +895,11 @@ async def test_real_embedding_adapter_is_never_loaded_by_prompt(isolated_store, 
     monkeypatch.setattr(memory_service, "embedder", adapter)
     sid = f"rp-real-{uuid4()}"
     await seed_forty(sid)
-    prompt = await compile_for_session(_v11_session(sid), SUPPLEMENT_QUERY, provider=_glm_provider())
+    session = _v11_session(sid)
+    await compile_for_session(session, SUPPLEMENT_QUERY, provider=_glm_provider())
     assert calls == {"_load": 0, "readiness": 0, "encode_query": 0, "_encode": 0}
     assert adapter._model is (sentinel_model if loaded else None)
-    assert sorted(_supplement_records(prompt)) == sorted([LOW_TEXTS[0], LOW_TEXTS[1]])
+    assert sorted(_supplement_records(session.turn_compiled_prompt.supplement_text)) == sorted([LOW_TEXTS[0], LOW_TEXTS[1]])
 
 
 @pytest.mark.asyncio
@@ -925,7 +919,7 @@ async def test_complete_profile_skips_supplement(isolated_store, monkeypatch):
     session = _v11_session(sid)
     prompt = await compile_for_session(session, SUPPLEMENT_QUERY, provider=_deepseek_provider())
     assert calls["n"] == 0
-    assert _core_section(prompt) == f"CORE FACTS\n{FACT_USE_CONTRACT}\n- 紅茶はアールグレイが好き"
+    assert _core_section(prompt) == f"{FACTS_HEADERS['self']}\n{FACT_USE_CONTRACT}\n- 紅茶はアールグレイが好き"
     assert "MEMORY CANDIDATES" not in prompt
     assert len(session.turn_injected_fact_ids) == 1
 
@@ -938,7 +932,7 @@ async def test_v11_no_facts_no_section_and_ids_reset(isolated_store, monkeypatch
     session.turn_injected_fact_ids = ("stale-id",)
     for provider in (_deepseek_provider(), _glm_provider(), None):
         prompt = await compile_for_session(session, "こんにちは", provider=provider)
-        assert "CORE FACTS\n" not in prompt
+        assert not _core_section(prompt)
         assert "(none)" not in prompt
         assert "MEMORY CANDIDATES" not in prompt
         assert session.turn_injected_fact_ids == ()

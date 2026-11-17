@@ -67,8 +67,8 @@ async def test_s3a_v11_mode_injects_same_scope_active_facts_only(
     # Dispatch 55: v11 carries a resident same-scope profile every turn.
     assert self_marker in self_prompt
     assert okabe_marker not in self_prompt
-    assert "\nCORE FACTS\n" in self_prompt
-    assert "FACT_USE_CONTRACT" in self_prompt
+    assert "【あなたについて覚えていること】" in self_prompt
+    assert "自然な日本語に直して話す" in self_prompt
 
     okabe_prompt = await compile_for_session(
         _session_obj(session_id, identity_mode="okabe"),
@@ -76,7 +76,7 @@ async def test_s3a_v11_mode_injects_same_scope_active_facts_only(
     )
     assert okabe_marker in okabe_prompt
     assert self_marker not in okabe_prompt
-    assert "\nCORE FACTS\n" in okabe_prompt
+    assert "【あんたについて覚えていること】" in okabe_prompt
 
 
 # ---------------------------------------------------------------------------
@@ -328,16 +328,13 @@ async def test_r5_v11_prompt_injects_both_sections(isolated_store, monkeypatch):
     prompt = await compile_for_session(_session_obj(session_id), "このすば")
     assert fact_marker in prompt
     assert exp_marker in prompt
-    assert "FACT_USE_CONTRACT" in prompt
-    assert "EXPERIENCE_USE_CONTRACT" in prompt
-    assert "\nCORE FACTS\n" in prompt
-    assert "EPISODIC MEMORY" in prompt
-    assert "WORKING CONTEXT" in prompt
-    # Dispatch 55 C: CORE FACTS precede CURRENT STATE, which precedes episodic.
+    assert "自然な日本語に直して話す" in prompt
+    assert "話の流れに合う時だけ自然に触れて" in prompt
+    assert "【あなたについて覚えていること】" in prompt
+    assert "【最近のやりとりと気になっていること】" in prompt
     assert (
-        prompt.index("\nCORE FACTS\n")
-        < prompt.index("\nCURRENT STATE\n")
-        < prompt.index("\nEPISODIC MEMORY\n")
+        prompt.index("【あなたについて覚えていること】")
+        < prompt.index("【最近のやりとりと気になっていること】")
     )
 
 
@@ -395,8 +392,8 @@ async def test_r5_experience_retrieval_failure_fail_soft(isolated_store, monkeyp
     prompt = await compile_for_session(_session_obj(session_id), "このすば")
     assert fact_marker in prompt, "resident facts survive an experience failure"
     assert exp_marker not in prompt, "failed experience retrieval must omit experiences"
-    assert "FACT_USE_CONTRACT" in prompt
-    assert "\nCORE FACTS\n" in prompt
+    assert "自然な日本語に直して話す" in prompt
+    assert "【あなたについて覚えていること】" in prompt
 
 @pytest.mark.asyncio
 async def test_r5_final_prompt_experience_whole_item_under_global_pressure(
@@ -431,7 +428,7 @@ async def test_r5_final_prompt_experience_whole_item_under_global_pressure(
             f"{marker}: experience marker present but content partial/truncated"
         )
     if survivors:
-        assert "EXPERIENCE_USE_CONTRACT" in prompt, (
+        assert "話の流れに合う時だけ自然に触れて" in prompt, (
             "surviving experiences must keep the usage contract intact"
         )
 
@@ -473,7 +470,7 @@ async def test_r5_final_prompt_core_facts_whole_item_under_global_pressure(
             f"{marker}: stable fact marker present but content partial/truncated"
         )
     if survivors:
-        assert "FACT_USE_CONTRACT" in prompt, (
+        assert "自然な日本語に直して話す" in prompt, (
             "surviving facts must keep the usage contract intact"
         )
 
@@ -490,20 +487,19 @@ async def test_s3e3_working_context_consumer_authority(isolated_store, monkeypat
     session = _session_obj(session_id)
     session.memory_summary = "比較中、候補Bの確認待ち"
     prompt = await compile_for_session(session, "こんにちは")
-    assert "WORKING CONTEXT" in prompt
-    assert "Temporary conversation continuity only" in prompt
-    assert "Not durable user-fact or long-term episodic authority" in prompt
-    assert "Must not override" in prompt
+    assert "【これまでの流れ】" in prompt
+    assert "会話をつなぐ一時的なメモ" in prompt
+    assert "覚えている事実や出来事を書き換えない" in prompt
     assert prompt.count("比較中、候補Bの確認待ち") == 1
     assert "AMADEUS_WORKING_SUMMARY_D38_V1" not in prompt
 
 
 @pytest.mark.asyncio
-async def test_s3e3_working_context_empty_still_renders_boundary(
+async def test_s3e3_empty_working_context_is_omitted(
     isolated_store, monkeypatch
 ):
     session_id = f"s3e3-wc-empty-{uuid4()}"
     session = _session_obj(session_id)
     prompt = await compile_for_session(session, "こんにちは")
-    assert "WORKING CONTEXT" in prompt
-    assert "Temporary conversation continuity only" in prompt
+    assert "【これまでの流れ】" not in prompt
+    assert "会話をつなぐ一時的なメモ" not in prompt

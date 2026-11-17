@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
-import re
+from datetime import datetime, timedelta, timezone
 import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -137,7 +137,7 @@ async def test_standalone_root_guard_and_u2028(pi_binary, tmp_path, monkeypatch)
     assert sorted(p.name for p in user_pi.iterdir()) == ["extensions"]
 
 
-async def chat_turn(monkeypatch, api, *, enabled, binary="unused"):
+async def chat_turn(monkeypatch, api, *, enabled, binary="unused", host_offset=0):
     from app.routers import chat_ws
     from app.services.conversations import conversation_service
     from app.services.credentials import InMemoryCredentialStore
@@ -162,11 +162,15 @@ async def chat_turn(monkeypatch, api, *, enabled, binary="unused"):
     async def compile_prompt(*_args, **_kwargs):
         return "SYNTHETIC SYSTEM"
     monkeypatch.setattr(chat_ws, "compile_for_session", compile_prompt)
-    original_system_prompt = chat_ws._request_system_prompt
-    def fixed_system_prompt(*args, **kwargs):
-        return re.sub(r"【現在時刻：[^】]+】", "【現在時刻：2026-11-05 00:00】",
-                      original_system_prompt(*args, **kwargs))
-    monkeypatch.setattr(chat_ws, "_request_system_prompt", fixed_system_prompt)
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls):
+            return cls.fromisoformat("2026-11-05T00:00:00+00:00")
+
+        def astimezone(self, tz=None):
+            return super().astimezone(tz if tz is not None else timezone(timedelta(hours=host_offset)))
+
+    monkeypatch.setattr(chat_ws, "datetime", FixedDatetime)
     user = "このフォルダーのメモを読んで。"
     session.append_message({"role": "user", "content": user, "id": None})
     queue = asyncio.Queue()
@@ -194,12 +198,12 @@ async def test_chat_delegate_pi_read_result_returns_in_her_reply(pi_binary, tmp_
 
 
 @pytest.mark.asyncio
-async def test_disabled_complete_request_bytes_match_pre_spike(monkeypatch, tmp_path):
+@pytest.mark.parametrize("host_offset", [0, -5])
+async def test_disabled_complete_request_bytes_match_pre_spike(monkeypatch, tmp_path, host_offset):
     with synthetic_api(tmp_path, delegate=False) as api:
-        await chat_turn(monkeypatch, api, enabled=False)
+        await chat_turn(monkeypatch, api, enabled=False, host_offset=host_offset)
     assert len(api.requests) == 1
     # Port is not in the request body; fixed system/history make it deterministic.
     wire = api.requests[0]["wire"]
     assert b"delegate_task" not in wire
-    # Updated in [221] alongside intentional self-mode provider anchor and tail_reminder updates.
-    assert hashlib.sha256(wire).hexdigest() == "a80bcf7984b0e9a551745039ace8568a1a3f9936b2e363716ce7d3fbcc68833e"
+    assert hashlib.sha256(wire).hexdigest() == "62034f0d638039e23a92bfcec90ecb266a32ab322b660da46bf29c68d76af223"
