@@ -6,7 +6,8 @@ import hashlib
 import logging
 from datetime import datetime, timezone
 from uuid import uuid4
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from typing import Any
 import starlette
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from starlette.websockets import WebSocketState
@@ -311,21 +312,48 @@ def _supported_kwargs(callable_obj, values: dict) -> dict:
     return {name: value for name, value in values.items() if name in signature.parameters}
 
 
+def _build_translation_context(
+    *,
+    emotion_tag: str | None = None,
+    identity_mode: str | None = None,
+    user_turn: str | None = None,
+    prior_ja: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    context: dict[str, Any] = {}
+    if isinstance(emotion_tag, str) and emotion_tag.strip():
+        context["emotion_tag"] = emotion_tag.strip()
+    if isinstance(identity_mode, str) and identity_mode.strip():
+        context["identity_mode"] = identity_mode.strip()
+    if isinstance(user_turn, str) and user_turn.strip():
+        context["user_turn"] = user_turn.strip()
+    if prior_ja:
+        items = [
+            item.strip()
+            for item in prior_ja
+            if isinstance(item, str) and item.strip()
+        ]
+        if items:
+            context["prior_ja"] = items[-2:]
+    return context
+
+
 async def translate_with_provider(
     provider_snapshot: ProviderSnapshot,
     text: str,
     api_key: str | None,
+    *,
+    context: Mapping[str, Any] | None = None,
 ) -> str:
     provider_snapshot.require(ProviderTask.TRANSLATION)
     method = provider_snapshot.adapter.translate_to_zh
-    kwargs = _supported_kwargs(
-        method,
-        {
-            "text": text,
-            "api_key": api_key,
-            "model": provider_snapshot.model_id,
-        },
-    )
+    values: dict[str, Any] = {
+        "text": text,
+        "api_key": api_key,
+        "model": provider_snapshot.model_id,
+    }
+    if context:
+        values["context"] = context
+    kwargs = _supported_kwargs(method, values)
     # Q87 (P-NORM-1): normalize Chinese subtitle after successful translation,
     # before WS emit and persistence. Pass original Japanese `text` as source
     # so R07 can gate on アトラクタフィールド (R01–R06 ignore source).
@@ -1612,6 +1640,7 @@ async def processor_loop(
 
         set_chat_context(turn_worldline, conversation_id)
         turn_api_key = session.api_key
+        turn_identity_mode = getattr(session, "identity_mode", None)
         active_history = session.history
         try:
             registered_provider = provider_registry.snapshot(
@@ -1661,8 +1690,29 @@ async def processor_loop(
                 if payload["type"] == "turn.started":
                     start_turn_deadline()
 
-            async def translate_segment(text: str) -> str:
-                return await translate_with_provider(turn_provider, text, session.api_key)
+            async def translate_segment(text: str, segment: Segment | None = None) -> str:
+                prior_ja = (
+                    [item.text for item in streamed_segments[:segment.id]]
+                    if segment is not None and segment.id > 0
+                    else None
+                )
+                emotion_tag = (
+                    segment.emotion
+                    if segment is not None
+                    else getattr(session, "last_assistant_emotion", None)
+                )
+                context = _build_translation_context(
+                    emotion_tag=emotion_tag,
+                    identity_mode=turn_identity_mode,
+                    user_turn=user_msg,
+                    prior_ja=prior_ja,
+                )
+                return await translate_with_provider(
+                    turn_provider,
+                    text,
+                    session.api_key,
+                    context=context or None,
+                )
 
             async def synthesize_segment(text: str, emotion: str) -> bytes:
                 from app.domain.language_publication import is_neutral_data_fragment
@@ -2121,6 +2171,11 @@ async def processor_loop(
                     turn_provider,
                     full_ja_text,
                     session.api_key,
+                    context=_build_translation_context(
+                        emotion_tag=final_emotion,
+                        identity_mode=turn_identity_mode,
+                        user_turn=user_msg,
+                    ) or None,
                 )
             except Exception as exc:
                 # Broad on purpose: translation is optional for v1 turns; any
@@ -2226,7 +2281,16 @@ async def processor_loop(
             and full_ja_text.strip()
         ):
             async def translate_whole_turn(text: str) -> str:
-                return await translate_with_provider(turn_provider, text, turn_api_key)
+                return await translate_with_provider(
+                    turn_provider,
+                    text,
+                    turn_api_key,
+                    context=_build_translation_context(
+                        emotion_tag=final_emotion,
+                        identity_mode=turn_identity_mode,
+                        user_turn=user_msg,
+                    ) or None,
+                )
 
             _schedule_background_task(
                 session,

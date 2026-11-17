@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager, redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from importlib.util import find_spec
+import inspect
 import json
 import math
 import os
@@ -241,12 +242,11 @@ def thinking_payload(payload, thinking):
     return payload
 
 
-def subtitle_context(messages, context):
-    if not context:
-        return messages
-    # Keep the source envelope intact; the extra material is translation context.
-    note = "【参考文脈（翻訳対象は <source> のみ）】\n" + json.dumps(context, ensure_ascii=False)
-    return [*messages[:-1], {**messages[-1], "content": note + "\n\n" + messages[-1]["content"]}]
+def _supported_kwargs(callable_obj, values):
+    params = inspect.signature(callable_obj).parameters
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()):
+        return values
+    return {name: value for name, value in values.items() if name in params}
 
 
 class Product:
@@ -256,6 +256,10 @@ class Product:
         import httpx
 
         from app import db
+        try:
+            from app.domain.subtitle_glossary_rewrite import apply_subtitle_glossary_rewrites
+        except ImportError:
+            apply_subtitle_glossary_rewrites = None
         from app.routers import chat_ws
         from app.services import deepseek, model_usage, provider_runtime, session_manager, usage_report
         from app.services.conversations import conversation_service
@@ -264,6 +268,7 @@ class Product:
         from app.services.turn_tool_orchestrator import build_v11_web_evidence_context
 
         self.db, self.chat_ws, self.deepseek = db, chat_ws, deepseek
+        self.apply_rewrites = apply_subtitle_glossary_rewrites
         self.model_usage, self.report = model_usage, usage_report.usage_report
         self.coordinator, self.conversations = session_manager.session_coordinator, conversation_service
         self.compile, self.counter, self.web_context = compile_for_session, prompt_compiler.token_counter, build_v11_web_evidence_context
@@ -291,8 +296,6 @@ class Product:
                     raise StopRun("transport: 仅允许官方 chat/completions")
                 payload = thinking_payload(dict(payload), product.thinking)
                 payload["max_tokens"] = product.max_output
-                if not payload.get("stream"):
-                    payload["messages"] = subtitle_context(payload["messages"], product.translation_context)
                 kwargs["json"] = payload
                 return super().build_request(method, url, **kwargs)
 
@@ -315,12 +318,11 @@ class Product:
         self.started = 0.0
         self.wire_prompt = ""
         self.thinking = "default"
-        self.translation_context = None
         self.first_reasoning = self.first_content = None
 
     @asynccontextmanager
-    async def paid(self, thinking, context=None):
-        self.thinking, self.translation_context = thinking, context
+    async def paid(self, thinking):
+        self.thinking = thinking
         self.first_reasoning = self.first_content = None
         self.blocked = None
         sent = self.gate.sent
@@ -421,11 +423,18 @@ class Product:
                 "system_prompt_tokens_est": self.counter(self.wire_prompt), "provider_input_tokens": input_tokens}
 
     async def translate(self, ja, thinking, context=None):
-        async with self.paid(thinking, context):
-            zh = await self.adapter.translate_to_zh(ja, api_key=self.key, model=self.model)
+        values = {"api_key": self.key, "model": self.model}
+        if context is not None:
+            values["context"] = context
+        kwargs = _supported_kwargs(self.adapter.translate_to_zh, values)
+        async with self.paid(thinking):
+            zh = await self.adapter.translate_to_zh(ja, **kwargs)
         if not zh:
             raise StopRun("subtitle: 模型未返回译文")
-        return zh
+        if self.apply_rewrites is None:
+            return zh
+        rewrite_kwargs = _supported_kwargs(self.apply_rewrites, {"source": ja})
+        return self.apply_rewrites(zh, **rewrite_kwargs)
 
 def chosen_thinking(args):
     return args.thinking or (list(THINKING[1:]) if args.mode == "latency" else ["default"])

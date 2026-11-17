@@ -100,6 +100,33 @@ async def test_segment_pipeline_uses_each_segment_emotion_snapshot():
 
 
 @pytest.mark.asyncio
+async def test_segment_pipeline_passes_optional_segment_and_emotion_to_translate():
+    events = []
+    seen_segments: list[tuple[str, Segment, str]] = []
+
+    async def translate_with_segment(text: str, *, segment: Segment, emotion: str) -> str:
+        seen_segments.append((text, segment, emotion))
+        return f"{emotion}:{text}"
+
+    async def synthesize(_text: str, _emotion: str) -> bytes:
+        return b"audio"
+
+    pipeline = SegmentPipeline(
+        TurnIdentity("conversation", "turn", 1),
+        emit=events.append,
+        translate=translate_with_segment,
+        synthesize=synthesize,
+    )
+    seg0 = Segment(0, "一。", "embarrassed")
+    seg1 = Segment(1, "二。", "intellectual")
+    await pipeline.run([seg0, seg1])
+
+    assert seen_segments == [("一。", seg0, "embarrassed"), ("二。", seg1, "intellectual")]
+    ready = [event for event in events if event["type"] == "segment.ready"]
+    assert [event["zh"] for event in ready] == ["embarrassed:一。", "intellectual:二。"]
+
+
+@pytest.mark.asyncio
 async def test_segment_pipeline_emits_in_order_despite_out_of_order_completion():
     events = []
 

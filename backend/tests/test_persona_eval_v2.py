@@ -205,8 +205,18 @@ def test_corpora_cover_all_scopes_and_have_unique_cases():
     assert len({r["id"] for r in samples}) == len(samples) == 40
     assert sorted(Counter(r["category"] for r in samples).values()) == [4] * 10
     assert all(r["signed_reference_zh"] is None for r in samples)
-    assert all(r["checks"]["stutters"] == 0 and r["context"]["emotion_tag"] == r["category"]
-               for r in samples if r["category"] in {"shy", "sad"})
+    expected_emotion = {"shy": "embarrassed", "sad": "sad"}
+    assert all(
+        r["checks"]["stutters"] == 0
+        and r["context"]["emotion_tag"] == expected_emotion[r["category"]]
+        for r in samples
+        if r["category"] in expected_emotion
+    )
+    assert all(
+        r["context"]["emotion_tag"] in ev.EMOTIONS
+        for r in samples
+        if "emotion_tag" in r.get("context", {})
+    )
 
 
 @pytest.mark.asyncio
@@ -267,13 +277,83 @@ async def test_real_product_envelopes_and_meter_with_mock_http(monkeypatch):
     assert outbound[0]["messages"][1] == {"role": "user", "content": "何時か確認したい。"}
     assert await runtime.translate("静かね。", "disabled", {"emotion_tag": "sad"}) == "很安静。"
     assert outbound[1]["thinking"] == {"type": "disabled"} and "reasoning_effort" not in outbound[1]
-    assert "emotion_tag" in outbound[1]["messages"][-1]["content"]
-    assert "<source>\n静かね。\n</source>" in outbound[1]["messages"][-1]["content"]
+    user_msg = outbound[1]["messages"][-1]["content"]
+    assert user_msg.count("【参考文脈") == 1
+    assert "emotion_tag" in user_msg
+    assert "<source>\n静かね。\n</source>" in user_msg
     assert runtime.gate.sent == runtime.gate.reported == 2 and runtime.gate.spent > 0
     runtime.gate.cap = runtime.gate.spent
     with pytest.raises(ev.StopRun, match="budget"):
         await runtime.translate("静かね。", "default")
     assert len(outbound) == 2
+
+
+@pytest.mark.asyncio
+async def test_product_translate_forwards_context_once_and_applies_rewrites(monkeypatch):
+    import httpx
+
+    from app import db
+
+    await db.init_db()
+    outbound = []
+
+    def network(request):
+        packet = json.loads(request.content)
+        outbound.append(packet)
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{"message": {"content": "克里斯缇娜用IBN5100发D邮件。"}}],
+                "usage": {"prompt_tokens": 400, "completion_tokens": 20},
+            },
+        )
+
+    native = httpx.AsyncClient
+
+    class OfflineClient(native):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, transport=httpx.MockTransport(network), **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", OfflineClient)
+    runtime = ev.Product(args_for("subtitles", allow_peak=True), "mock-transport", {})
+    zh = await runtime.translate(
+        "クリスティーナはDメールを使った。",
+        "disabled",
+        {"emotion_tag": "embarrassed", "user_turn": "刚才怎么回事？"},
+    )
+    assert zh == "克里斯蒂娜用IBN 5100发D-Mail。"
+    user_msg = outbound[0]["messages"][-1]["content"]
+    assert user_msg.count("【参考文脈") == 1
+    assert "embarrassed" in user_msg
+    assert "<source>\nクリスティーナはDメールを使った。\n</source>" in user_msg
+
+
+@pytest.mark.asyncio
+async def test_product_translate_keeps_legacy_adapter_without_context_param():
+    class LegacyTwoArgAdapter:
+        async def translate_to_zh(self, ja, api_key=None):
+            return f"two:{ja}:{api_key}"
+
+    class LegacyThreeArgAdapter:
+        async def translate_to_zh(self, ja, api_key=None, model=None):
+            return f"three:{ja}:{api_key}:{model}"
+
+    runtime = ev.Product.__new__(ev.Product)
+    runtime.key = "k"
+    runtime.model = "deepseek-flash"
+    runtime.apply_rewrites = lambda text: text
+
+    @ev.asynccontextmanager
+    async def noop_paid(_thinking):
+        yield
+
+    runtime.paid = noop_paid
+
+    runtime.adapter = LegacyTwoArgAdapter()
+    assert await runtime.translate("静かね。", "disabled", {"emotion_tag": "sad"}) == "two:静かね。:k"
+
+    runtime.adapter = LegacyThreeArgAdapter()
+    assert await runtime.translate("静かね。", "disabled", {"emotion_tag": "sad"}) == "three:静かね。:k:deepseek-flash"
 
 
 def test_path_guard_rejects_live_roots(tmp_path, monkeypatch):
