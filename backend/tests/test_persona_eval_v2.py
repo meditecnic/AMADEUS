@@ -28,6 +28,23 @@ def test_persona_metrics_separate_natural_endings_and_repeated_catchphrase():
     assert ev.persona_metrics([[turns[0]], [turns[1]]])["ojousama_and_catchphrase_spam_count"] == 1
 
 
+def test_gate_2b_metrics_use_user_history_through_current_turn():
+    turns = [
+        {"user": "こんばんは", "ja": "カップ麺とフォーク。十六年よ。寝なさい。どこで調べたの？"},
+        {"user": "フォークとカップ麺って？", "ja": "そこにあるわ。見せなさい。」"},
+        {"user": "日記の『波の音』のところが好き", "ja": "フォークね。日記を読んだの？"},
+        {"user": "１６年前は？ そろそろ寝なさい", "ja": "寝なさいって。十六年は長いわ。ごめんなさい。"},
+    ]
+    other_session = [{"user": "ねえ", "ja": "フォークね。読んだの？"}]
+    metrics = ev.persona_metrics([turns, other_session])
+    assert metrics["unprompted_motif_rates"] == {
+        "cup_noodle": 1 / 2, "fork": 1, "sixteen_years": 1 / 4, "sleep_nag": 1 / 4,
+    }
+    assert metrics["directive_or_question_ending_rate"] == 4 / 5
+    assert metrics["false_secret_trigger_counts"] == {"fork": 1, "diary": 1}
+    assert ev.persona_metrics([])["directive_or_question_ending_rate"] is None
+
+
 def test_subtitle_metrics_preserve_and_do_not_invent_stutter():
     rows = [
         {"zh": "别、别说我可爱。……唔嗯。", "checks": {"stutters": 1, "ellipses": 1, "glossary": ["唔嗯"]}},

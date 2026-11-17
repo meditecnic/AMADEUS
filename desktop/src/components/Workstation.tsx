@@ -344,6 +344,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
     try {
       const raw = localStorage.getItem('amadeus_pc_temperature');
       if (raw == null || raw === '') return CHAT_TEMPERATURE_DEFAULT;
+      // Stored temperatures are user settings, including an explicit zero.
       const parsed = parseFloat(raw);
       if (!Number.isFinite(parsed)) return CHAT_TEMPERATURE_DEFAULT;
       if (parsed > CHAT_TEMPERATURE_MAX) {
@@ -2986,6 +2987,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         credentialRequired={activeProvider?.credential_required !== false}
         baseUrlConfigurable={Boolean(activeProvider?.base_url_configurable)}
         modelOptions={availableModels}
+        thinkingControl={activeModelCapability?.thinking_control}
         reasoningEffort={reasoningEffort}
         customProfiles={providers
           .filter((row) => row.source === 'user_config' || row.id === 'custom' || row.id.startsWith('custom:'))

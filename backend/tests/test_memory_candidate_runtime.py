@@ -281,6 +281,9 @@ def _completion_payload(source_message_id: int, marker: str) -> dict:
 
 
 def _bind_candidate(monkeypatch, candidate: Path, embedder: _OfflineEmbedder) -> None:
+    from app.services.model_catalog import model_catalog
+
+    monkeypatch.setattr(model_catalog, "uses_native_reasoning", lambda *_args: False)
     monkeypatch.delenv("AMADEUS_DB_PATH", raising=False)
     monkeypatch.setenv("AMADEUS_DATA_DIR", str(candidate))
     reset_initialization_cache()

@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Callable, Mapping
+from contextlib import asynccontextmanager
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 from typing import Any, Optional
 
 import httpx
@@ -13,6 +15,45 @@ from app.security.prompt import compression_system_prompt
 from app.services.model_usage import usage_call
 from app.services.model_headers import model_headers
 from app.services.llm_interface import LLMInterface, build_stream_messages, fold_tail_reminder
+
+
+_HTTP_CLIENT_TYPE = httpx.AsyncClient
+_model_http_clients: dict[asyncio.AbstractEventLoop, dict[object, httpx.AsyncClient]] = {}
+
+
+@asynccontextmanager
+async def model_http_client(owner, client_type, *, timeout, transport=None):
+    # Injected transports and evaluation wrappers own their request lifecycle.
+    if client_type is not _HTTP_CLIENT_TYPE or transport is not None:
+        options = {"transport": transport} if transport is not None else {}
+        async with client_type(timeout=timeout, **options) as client:
+            yield client, {}
+        return
+
+    loop = asyncio.get_running_loop()
+    for previous in tuple(_model_http_clients):
+        if previous.is_closed():
+            # An HTTP pool must be closed on its owning loop.
+            _model_http_clients.pop(previous, None)
+    clients = _model_http_clients.setdefault(loop, {})
+    client = clients.get(owner)
+    if client is None or client.is_closed:
+        # Reuse connections without carrying cookies between credentials.
+        client = client_type(cookies=CookieJar(policy=DefaultCookiePolicy(allowed_domains=())))
+        clients[owner] = client
+    yield client, {"timeout": timeout}
+
+
+async def close_model_http_clients() -> None:
+    clients = _model_http_clients.pop(asyncio.get_running_loop(), {})
+    await asyncio.gather(*(client.aclose() for client in clients.values() if not client.is_closed))
+
+
+def _adapter_client(adapter, read_timeout: float = 120.0):
+    return model_http_client(
+        adapter, httpx.AsyncClient, transport=adapter._transport,
+        timeout=httpx.Timeout(connect=5.0, read=read_timeout, write=10.0, pool=5.0),
+    )
 
 
 class ProviderRequestError(RuntimeError):
@@ -91,17 +132,6 @@ class OpenAICompatibleAdapter(LLMInterface):
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
-    def _client(self, *, read_timeout: float = 120.0) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
-            transport=self._transport,
-            timeout=httpx.Timeout(
-                connect=5.0,
-                read=read_timeout,
-                write=10.0,
-                pool=5.0,
-            ),
-        )
-
     async def get_chat_stream(
         self,
         active_history: list,
@@ -156,12 +186,13 @@ class OpenAICompatibleAdapter(LLMInterface):
             }
             payload["reasoning_effort"] = reasoning_effort
 
-        async with usage_call(self.provider_id, model or self.model) as usage, self._client() as client:
+        async with usage_call(self.provider_id, model or self.model) as usage, _adapter_client(self) as (client, request_options):
             async with client.stream(
                 "POST",
                 f"{self.base_url}/chat/completions",
                 headers=self._headers(api_key),
                 json=payload,
+                **request_options,
             ) as response:
                 if response.status_code != 200:
                     await response.aread()
@@ -216,11 +247,12 @@ class OpenAICompatibleAdapter(LLMInterface):
                 payload["reasoning_effort"] = effort
         if response_format is not None:
             payload["response_format"] = response_format
-        async with usage_call(self.provider_id, effective_model) as usage, self._client(read_timeout=30.0) as client:
+        async with usage_call(self.provider_id, effective_model) as usage, _adapter_client(self, 30.0) as (client, request_options):
             response = await client.post(
                 f"{self.base_url}/chat/completions",
                 headers=self._headers(api_key),
                 json=payload,
+                **request_options,
             )
             usage.started = response.status_code == 200
             usage.observe(response.json() if response.status_code == 200 else {})
@@ -301,10 +333,11 @@ class OpenAICompatibleAdapter(LLMInterface):
         self,
         api_key: Optional[str] = None,
     ) -> list[str | dict[str, Any]]:
-        async with self._client(read_timeout=20.0) as client:
+        async with _adapter_client(self, 20.0) as (client, request_options):
             response = await client.get(
                 f"{self.base_url}/models",
                 headers=self._headers(api_key),
+                **request_options,
             )
         if response.status_code != 200:
             raise ProviderRequestError(self.provider_id, response.status_code)
@@ -380,12 +413,6 @@ class OpenAIResponsesAdapter(LLMInterface):
             "Content-Type": "application/json",
         }
 
-    def _client(self, read_timeout: float = 120.0) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
-            transport=self._transport,
-            timeout=httpx.Timeout(connect=5.0, read=read_timeout, write=10.0, pool=5.0),
-        )
-
     @staticmethod
     def _split_instructions(messages: list[dict]) -> tuple[str, list[dict]]:
         instructions = "\n\n".join(
@@ -451,12 +478,13 @@ class OpenAIResponsesAdapter(LLMInterface):
         if reasoning_effort:
             payload["reasoning"] = {"effort": reasoning_effort}
 
-        async with usage_call(self.provider_id, model or self.model) as usage, self._client() as client:
+        async with usage_call(self.provider_id, model or self.model) as usage, _adapter_client(self) as (client, request_options):
             async with client.stream(
                 "POST",
                 f"{self.base_url}/responses",
                 headers=self._headers(api_key),
                 json=payload,
+                **request_options,
             ) as response:
                 if response.status_code != 200:
                     await response.aread()
@@ -548,11 +576,12 @@ class OpenAIResponsesAdapter(LLMInterface):
             payload["reasoning"] = {"effort": effort}
         if json_mode:
             payload["text"] = {"format": {"type": "json_object"}}
-        async with usage_call(self.provider_id, effective_model) as usage, self._client(30.0) as client:
+        async with usage_call(self.provider_id, effective_model) as usage, _adapter_client(self, 30.0) as (client, request_options):
             response = await client.post(
                 f"{self.base_url}/responses",
                 headers=self._headers(api_key),
                 json=payload,
+                **request_options,
             )
             usage.started = response.status_code == 200
             usage.observe(response.json() if response.status_code == 200 else {})
@@ -610,10 +639,11 @@ class OpenAIResponsesAdapter(LLMInterface):
         self,
         api_key: Optional[str] = None,
     ) -> list[str | dict[str, Any]]:
-        async with self._client(20.0) as client:
+        async with _adapter_client(self, 20.0) as (client, request_options):
             response = await client.get(
                 f"{self.base_url}/models",
                 headers=self._headers(api_key),
+                **request_options,
             )
         if response.status_code != 200:
             raise ProviderRequestError(self.provider_id, response.status_code)
@@ -643,12 +673,6 @@ class GeminiAdapter(LLMInterface):
         if not api_key:
             raise ValueError("Gemini credential is not configured")
         return {**model_headers(), "x-goog-api-key": api_key, "Content-Type": "application/json"}
-
-    def _client(self, read_timeout: float = 120.0) -> httpx.AsyncClient:
-        return httpx.AsyncClient(
-            transport=self._transport,
-            timeout=httpx.Timeout(connect=5.0, read=read_timeout, write=10.0, pool=5.0),
-        )
 
     @staticmethod
     def _contents(messages: list[dict]) -> tuple[dict, list[dict]]:
@@ -721,13 +745,14 @@ class GeminiAdapter(LLMInterface):
         converted_tools = self._tools(tools)
         if converted_tools is not None:
             payload["tools"] = converted_tools
-        async with usage_call(self.provider_id, model or self.model) as usage, self._client() as client:
+        async with usage_call(self.provider_id, model or self.model) as usage, _adapter_client(self) as (client, request_options):
             async with client.stream(
                 "POST",
                 f"{self.base_url}/models/{model or self.model}:streamGenerateContent",
                 params={"alt": "sse"},
                 headers=self._headers(api_key),
                 json=payload,
+                **request_options,
             ) as response:
                 if response.status_code != 200:
                     await response.aread()
@@ -777,7 +802,7 @@ class GeminiAdapter(LLMInterface):
             config["thinkingConfig"] = {"thinkingLevel": effort}
         if json_mode:
             config["responseMimeType"] = "application/json"
-        async with usage_call(self.provider_id, effective_model) as usage, self._client(30.0) as client:
+        async with usage_call(self.provider_id, effective_model) as usage, _adapter_client(self, 30.0) as (client, request_options):
             response = await client.post(
                 f"{self.base_url}/models/{effective_model}:generateContent",
                 headers=self._headers(api_key),
@@ -786,6 +811,7 @@ class GeminiAdapter(LLMInterface):
                     "contents": contents,
                     "generationConfig": config,
                 },
+                **request_options,
             )
             usage.started = response.status_code == 200
             usage.observe(response.json() if response.status_code == 200 else {})
@@ -843,10 +869,11 @@ class GeminiAdapter(LLMInterface):
         self,
         api_key: Optional[str] = None,
     ) -> list[str | dict[str, Any]]:
-        async with self._client(20.0) as client:
+        async with _adapter_client(self, 20.0) as (client, request_options):
             response = await client.get(
                 f"{self.base_url}/models",
                 headers=self._headers(api_key),
+                **request_options,
             )
         if response.status_code != 200:
             raise ProviderRequestError(self.provider_id, response.status_code)

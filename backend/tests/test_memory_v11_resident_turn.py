@@ -328,7 +328,7 @@ def _candidate_records(text: str) -> list[str]:
 @pytest.mark.asyncio
 async def test_processor_deepseek_first_round_profile_and_recall_exclusion(isolated_store, monkeypatch):  # noqa: F811
     """[A1][A6] DeepSeek: CORE FACTS + supplement in round 1; recall excludes them."""
-    from app.routers.chat_ws import processor_loop
+    from app.routers.chat_ws import processor_loop, search_service
     from app.services.memory import memory_service
     from app.services.provider_runtime import deepseek_service
 
@@ -336,32 +336,51 @@ async def test_processor_deepseek_first_round_profile_and_recall_exclusion(isola
     owner = f"turn-ds-{uuid4()}"
     ids = await seed_forty(owner)
     calls: list[dict] = []
+    speculative_started = asyncio.Event()
+    speculative_closed = asyncio.Event()
 
     async def fake_stream(active_history=None, memory_summary=None, api_key=None, system_prompt=None,
                           temperature=0.7, tools=None, tool_choice=None, model=None,
                           reasoning_effort=None, isolated=False):
-        calls.append({"tools": tools, "system_prompt": system_prompt, "history": active_history})
-        if tools:
-            yield {
-                "content": None,
-                "tool_calls": [{
-                    "index": 0,
-                    "id": "call-recall",
-                    "type": "function",
-                    "function": {"name": "recall_memory", "arguments": json.dumps({"needs": ["紅茶"]})},
-                }],
-            }
+        calls.append({
+            "tools": tools, "system_prompt": system_prompt, "history": active_history,
+            "reasoning_effort": reasoning_effort,
+        })
+        if len(calls) == 1:
+            try:
+                if tools is None:
+                    yield {"content": "[EMO:neutral] これは公開しない返事よ。次の文よ。"}
+                    speculative_started.set()
+                    await asyncio.Future()
+            finally:
+                speculative_closed.set()
             return
+        assert speculative_closed.is_set()
         yield {"content": "[EMO:neutral] ミルクは入れないのよ。", "tool_calls": None}
 
+    async def route(*args, reasoning_effort, **kwargs):
+        assert reasoning_effort is None
+        await speculative_started.wait()
+        return {"recall_needs": ["紅茶"]}
+
+    monkeypatch.setattr(search_service, "any_paid_provider_configured", lambda: False)
     monkeypatch.setattr(type(deepseek_service), "get_chat_stream", staticmethod(fake_stream))
+    monkeypatch.setitem(vars(deepseek_service), "complete_json", route)
     _patch_turn_side_effects(monkeypatch, [deepseek_service])
     session = await _processor_session(owner, provider_id="deepseek", model="deepseek-v4-flash")
+    session.protocol_version = 2
     session.append_message({"role": "user", "content": SUPPLEMENT_QUERY, "id": None})
     queue: asyncio.Queue = asyncio.Queue()
     await processor_loop(session, SUPPLEMENT_QUERY, queue, session.current_epoch, session.history_epoch)
 
-    assert len(calls) == 2 and calls[0]["tools"] and calls[1]["tools"] is None
+    assert len(calls) == 2 and all(call["tools"] is None for call in calls)
+    assert all(call["reasoning_effort"] in {"low", "high", "max"} for call in calls)
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait()[1])
+    rendered = json.dumps(events, ensure_ascii=False)
+    assert "ミルクは入れないのよ" in rendered
+    assert "これは公開しない返事よ" not in rendered
     first = calls[0]["system_prompt"] or ""
     lines = _fact_lines(first)
     assert len(lines) == 32 and lines[:2] == list(PINNED_TEXTS) and RESIDENT_TEA_TEXT in lines

@@ -142,6 +142,9 @@ async def test_model_budget_all_requests(isolated_store, monkeypatch, caplog, wi
         monkeypatch.setattr(chat_ws, "deepseek_service", adapter)
     monkeypatch.setattr(chat_ws, "provider_registry", registry)
     monkeypatch.setattr(chat_ws, "model_catalog", catalog)
+    monkeypatch.setattr(chat_ws.search_service, "any_paid_provider_configured", lambda: kind == "forced")
+    if kind in {"web_second", "recall", "refresh"}:
+        monkeypatch.setattr(catalog, "uses_native_reasoning", lambda *_args: False)
     monkeypatch.setattr("datetime.datetime", FixedDatetime)
     monkeypatch.setattr(chat_ws, "compile_for_session", AsyncMock(return_value=SYSTEM))
     monkeypatch.setattr(chat_ws, "should_force_search", lambda text: kind == "forced")

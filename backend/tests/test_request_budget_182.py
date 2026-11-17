@@ -59,6 +59,9 @@ async def test_processor_request_budget(isolated_store, monkeypatch, caplog, kin
     _suppress_auto_title(monkeypatch)
     monkeypatch.setattr(chat_ws, "compile_for_session", AsyncMock(return_value=SYSTEM))
     monkeypatch.setattr(chat_ws, "should_force_search", lambda text: kind == "forced")
+    monkeypatch.setattr(chat_ws.search_service, "any_paid_provider_configured", lambda: kind == "forced")
+    if kind in {"web_second", "recall", "refresh"}:
+        monkeypatch.setattr(chat_ws.model_catalog, "uses_native_reasoning", lambda *_args: False)
     monkeypatch.setattr(chat_ws, "execute_tool_call", AsyncMock(return_value=WEB[0][1]))
     monkeypatch.setattr(chat_ws.config, "HISTORY_COMPRESS_THRESHOLD", 1000)
     monkeypatch.setattr("app.services.memory_v11.jobs.enqueue_memory_job", AsyncMock())

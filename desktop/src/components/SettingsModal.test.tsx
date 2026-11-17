@@ -39,7 +39,7 @@ const baseProps = {
   bgmVolume: 0.15,
   enableSfx: true,
   sfxVolume: 1,
-  temperature: 0.0,
+  temperature: CHAT_TEMPERATURE_DEFAULT,
   providerDisplayName: 'DeepSeek',
   providerBaseUrl: null,
   baseUrlConfigurable: false,
@@ -861,6 +861,27 @@ describe('SettingsModal self name field (Slice B)', () => {
 });
 
 describe('SettingsModal UX contracts', () => {
+  it.each(['modal', 'embedded'] as const)('locks temperature only during native thinking (%s)', (variant) => {
+    const thinkingControl = {
+      kind: 'effort', label: '思考强度', native: true, default: 'high',
+      request_mode: 'reasoning_effort',
+      options: [{ value: 'high', label: '高' }, { value: 'none', label: '关闭' }],
+    };
+    const props = { ...baseProps, variant, onSaveSettings: vi.fn() };
+    const { rerender } = render(<SettingsModal {...props} thinkingControl={thinkingControl} />);
+    const range = screen.getByRole('slider', { name: '回复随机性' });
+    expect(range).toBeDisabled();
+    expect(range).toHaveValue('0.75');
+    expect(screen.getByTestId('temperature-hint')).toHaveTextContent('采样由推理引擎自动接管');
+
+    rerender(<SettingsModal {...props} thinkingControl={thinkingControl} reasoningEffort="none" />);
+    expect(range).toBeEnabled();
+    expect(screen.getByTestId('temperature-hint')).toHaveTextContent('默认 0.75');
+
+    rerender(<SettingsModal {...props} thinkingControl={{ ...thinkingControl, native: false }} />);
+    expect(range).toBeEnabled();
+  });
+
   it('renders the sampling control with range 0–1.2, endpoints, and no legacy 2.0 max', () => {
     render(<SettingsModal {...baseProps} onSaveSettings={vi.fn()} />);
 
@@ -872,7 +893,7 @@ describe('SettingsModal UX contracts', () => {
     expect(range).toHaveClass('volume-slider', 'personality-range');
     expect(range.closest('.slider-row')).toHaveClass('personality-slider-row');
     expect(screen.getByTestId('personality-control')).toBeTruthy();
-    expect(screen.getByTestId('personality-value')).toHaveTextContent('0.0');
+    expect(screen.getByTestId('personality-value')).toHaveTextContent('0.75');
     expect(screen.getByText('回复随机性')).toBeTruthy();
     expect(screen.getByTestId('temperature-hint')).toHaveTextContent('不改变角色设定');
     expect(screen.getByTestId('temperature-endpoint-min')).toHaveTextContent('稳定 / 贴人设');
@@ -959,7 +980,7 @@ describe('SettingsModal UX contracts', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存基本设置' }));
     await waitFor(() =>
       expect(onSaveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({ identityMode: 'self', temperature: 0.0 }),
+        expect.objectContaining({ identityMode: 'self', temperature: 0.75 }),
       ),
     );
     expect(screen.queryByText(/Christina/)).toBeNull();

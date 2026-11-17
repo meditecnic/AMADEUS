@@ -1878,9 +1878,12 @@ async def processor_loop(
             apply_unsupported_combo,
             apply_v11_tool_batch,
             build_v11_web_evidence_context,
+            generate_with_retrieval_router,
             plan_first_round_tools,
             prepare_second_round_payload,
             refresh_candidates_for_send,
+            route_native_retrieval,
+            should_route_retrieval,
             snapshot_from_session,
             tool_status_payload,
             unsupported_failsoft_history,
@@ -1898,47 +1901,59 @@ async def processor_loop(
         )
         session.turn_execution = turn_record
         force_now = should_force_search(user_msg)
-        adapter_kind = type(getattr(turn_provider, "adapter", None) or object).__name__
-        tool_plan = plan_first_round_tools(
-            force_search=force_now,
-            provider_id=str(getattr(turn_provider, "provider_id", "") or ""),
-            adapter_kind=adapter_kind,
+        native = not config.PI_AGENT_ENABLED and model_catalog.uses_native_reasoning(
+            turn_provider.provider_id, turn_provider.model_id,
         )
-        turn_record.tool_plan_status = tool_plan.status
-        turn_record.tool_plan_reason = tool_plan.reason
-        if tool_plan.status == "unsupported":
-            tools_to_use = None
-            tool_choice_to_use = None
-            notice = apply_unsupported_combo(
-                turn_record, reason=tool_plan.reason or "undeclared_combo"
-            )
-            active_history = unsupported_failsoft_history(active_history, notice)
-            await send_queue.put((epoch, {
-                "type": "status",
-                "dsk": "thinking",
-                "state": "thinking",
-                "tts": "idle",
-                "notice": "Amadeus memory tools unsupported for this provider.",
-                "reason": notice.diagnostics.get("reason") or "undeclared_combo",
-            }))
+        tools_to_use = tool_choice_to_use = None
+        can_search = can_recall = False
+        if native:
+            turn_record.tool_plan_status = "ok"
+            can_search = search_service.any_paid_provider_configured()
+            can_recall = compiled_prompt is not None and not compiled_prompt.resident_complete
+            direct_search = force_now and can_search
         else:
-            tools_to_use = tool_plan.tools
-            tool_choice_to_use = "auto"
-        if config.PI_AGENT_ENABLED:
-            from app.services.pi_delegation import offer_tools
-
-            tools_to_use = offer_tools(tools_to_use, turn_provider)
-            if tools_to_use:
+            tool_plan = plan_first_round_tools(
+                force_search=force_now,
+                provider_id=turn_provider.provider_id,
+                adapter_kind=type(turn_provider.adapter).__name__,
+            )
+            turn_record.tool_plan_status = tool_plan.status
+            turn_record.tool_plan_reason = tool_plan.reason
+            direct_search = force_now and tool_plan.status != "unsupported"
+            if tool_plan.status == "unsupported":
+                notice = apply_unsupported_combo(
+                    turn_record, reason=tool_plan.reason or "undeclared_combo"
+                )
+                active_history = unsupported_failsoft_history(active_history, notice)
+                await send_queue.put((epoch, {
+                    "type": "status",
+                    "dsk": "thinking",
+                    "state": "thinking",
+                    "tts": "idle",
+                    "notice": "Amadeus memory tools unsupported for this provider.",
+                    "reason": notice.diagnostics.get("reason") or "undeclared_combo",
+                }))
+            else:
+                tools_to_use = tool_plan.tools
                 tool_choice_to_use = "auto"
-        if force_now and tool_plan.status != "unsupported":
-            web_status = tool_status_payload("web_search")
+            if config.PI_AGENT_ENABLED:
+                from app.services.pi_delegation import offer_tools
+
+                tools_to_use = offer_tools(tools_to_use, turn_provider)
+                if tools_to_use:
+                    tool_choice_to_use = "auto"
+
+        async def report_tool(name: str) -> None:
             await send_queue.put((epoch, {
                 "type": "status",
                 "dsk": "thinking",
                 "state": "thinking",
                 "tts": "idle",
-                **web_status,
+                **tool_status_payload(name),
             }))
+
+        if direct_search:
+            await report_tool("web_search")
             search_result = await execute_tool_call(
                 "web_search",
                 json.dumps({"query": user_msg}, ensure_ascii=False),
@@ -1949,17 +1964,30 @@ async def processor_loop(
                 [(user_msg, search_result)],
             )
         
-        final_text, final_emotion, merged_tool_calls, emo_tag_found = await get_clean_text_stream(
-            active_history=active_history,
-            memory_summary="",
-            session=session,
-            tools=tools_to_use,
-            tool_choice=tool_choice_to_use,
-            default_emotion=session.last_assistant_emotion,
-            on_text_delta=submit_text_delta if session.protocol_version >= 2 else None,
-            provider_snapshot=turn_provider,
-            mode_state=turn_record.mode_state,
-        )
+        async def generate(on_text_delta):
+            text, emotion, calls, found = await get_clean_text_stream(
+                active_history=active_history,
+                memory_summary="",
+                session=session,
+                tools=tools_to_use,
+                tool_choice=tool_choice_to_use,
+                default_emotion=session.last_assistant_emotion,
+                on_text_delta=on_text_delta,
+                provider_snapshot=turn_provider,
+                mode_state=TurnModeState() if native else turn_record.mode_state,
+            )
+            return text, emotion, {} if native else calls, found
+
+        publish = submit_text_delta if session.protocol_version >= 2 else None
+        if native and not force_now and (can_search or can_recall) and should_route_retrieval(user_msg):
+            route = route_native_retrieval(
+                turn_provider, turn_api_key, user_msg, active_history,
+                can_search=can_search, can_recall=can_recall,
+            )
+            generation = await generate_with_retrieval_router(route, generate, publish)
+        else:
+            generation = await generate(publish)
+        final_text, final_emotion, merged_tool_calls, emo_tag_found = generation
         print(f"[DEBUG] processor_loop: final_emotion='{final_emotion}' has_tool_call={bool(merged_tool_calls)} emo_tag_found={emo_tag_found}", flush=True)
         
         if merged_tool_calls:
@@ -1973,14 +2001,7 @@ async def processor_loop(
                 if name in shown:
                     continue
                 shown.append(name)
-                status = tool_status_payload(name)
-                await send_queue.put((epoch, {
-                    "type": "status",
-                    "dsk": "thinking",
-                    "state": "thinking",
-                    "tts": "idle",
-                    **status,
-                }))
+                await report_tool(name)
 
             calls = list(merged_tool_calls.values())
             turn_record.raw_calls = calls
@@ -2006,7 +2027,7 @@ async def processor_loop(
                 )
             extra_web = (
                 turn_record.web_results[1:]
-                if should_force_search(user_msg)
+                if direct_search
                 else turn_record.web_results
             )
             if recall_result is not None:
@@ -2061,7 +2082,7 @@ async def processor_loop(
                 tools=None,
                 tool_choice=None,
                 default_emotion=session.last_assistant_emotion,
-                on_text_delta=submit_text_delta if session.protocol_version >= 2 else None,
+                on_text_delta=publish,
                 provider_snapshot=turn_provider,
                 mode_state=TurnModeState(),
                 before_send=_refresh_candidate_history if recall_result is not None else None,

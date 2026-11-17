@@ -31,19 +31,9 @@ vi.mock('../services/AudioService', () => ({
     playBGMForWorldline: vi.fn(), stopBGM: vi.fn(), playSFX: vi.fn(),
   },
 }));
-vi.mock('./SettingsModal', () => ({
+vi.mock('./SettingsModal', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./SettingsModal')>(),
   SettingsModal: (props: Record<string, unknown>) => { hoisted.settingsProps.current = props; return null; },
-  CHAT_TEMPERATURE_MIN: 0,
-  CHAT_TEMPERATURE_MAX: 1.2,
-  CHAT_TEMPERATURE_STEP: 0.1,
-  CHAT_TEMPERATURE_DEFAULT: 0.0,
-  DEFAULT_IDENTITY_MODE: 'okabe',
-  clampChatTemperature: (value: number) => (Number.isFinite(value) ? Math.max(0, Math.min(1.2, value)) : 0),
-  normalizeIdentityMode: (value: unknown) => (value === 'self' ? 'self' : 'okabe'),
-  loadStoredIdentityMode: () => 'okabe' as const,
-  persistIdentityMode: () => {},
-  loadStoredSelfName: () => '',
-  persistSelfName: () => {},
 }));
 vi.mock('./HistorySidebar', () => ({
   HistorySidebar: (props: Record<string, unknown>) => { hoisted.sidebarProps.current = props; return null; },
@@ -880,6 +870,13 @@ describe('Workstation data relocation restart lock across panels (Fix #6)', () =
 });
 
 describe('Workstation embedded settings', () => {
+  it.each([[null, 0.75], ['0', 0]] as const)('uses the expected WS temperature with stored value %s', async (stored, expected) => {
+    if (stored !== null) localStorage.setItem('amadeus_pc_temperature', stored);
+    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    await screen.findByRole('button', { name: '系统设置' });
+    expect(hoisted.useAmadeusWS).toHaveBeenLastCalledWith(expect.objectContaining({ temperature: expected }));
+  });
+
   it('applies an embedded patch over live connection, search and reasoning state', async () => {
     providers = [provider('custom:new', 'New One', 'm1', {
       source: 'user_config', base_url: 'http://127.0.0.1:2222/v1', base_url_configurable: true,

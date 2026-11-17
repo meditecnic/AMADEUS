@@ -231,10 +231,12 @@ def test_deadline_includes_web_tools_and_renderer(app_client, fake_providers, mo
             "function": {"name": "web_search", "arguments": '{"query":"test"}'},
         }]}
 
-    monkeypatch.setattr(chat_ws, "TURN_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(chat_ws, "TURN_TIMEOUT_SECONDS", 0.5)
     if phase in {"web", "tool"}:
         monkeypatch.setattr(chat_ws, "execute_tool_call", blocked)
+        monkeypatch.setattr(chat_ws.search_service, "any_paid_provider_configured", lambda: True)
         if phase == "tool":
+            monkeypatch.setattr(chat_ws.model_catalog, "uses_native_reasoning", lambda *_args: False)
             monkeypatch.setitem(vars(chat_ws.deepseek_service), "get_chat_stream", tool_call)
     else:
         monkeypatch.setitem(vars(chat_ws.deepseek_service), "get_chat_stream", foreign_draft)

@@ -1575,6 +1575,15 @@
   width: 100%;
 }
 
+.personality-control-disabled {
+  filter: grayscale(1);
+  opacity: 0.55;
+}
+
+.personality-range:disabled {
+  cursor: default;
+}
+
 .personality-value {
   flex: 0 0 auto;
   min-width: 2.4em;
