@@ -36,7 +36,7 @@ def test_versioned_manifest_is_strict_and_covers_current_builtins():
     payload = model_catalog.manifest
 
     assert payload["version"] == 1
-    assert payload["verified_at"] == "2026-09-12"
+    assert payload["verified_at"] == "2026-11-16"
     assert set(payload["providers"]) == {
         "deepseek",
         "glm",
@@ -180,8 +180,10 @@ def test_live_discovery_metadata_survives_catalog_reconciliation():
     ("provider_id", "model_id", "raw", "expected"),
     [
         ("deepseek", "deepseek-flash", "xhigh", "max"),
+        ("deepseek", "deepseek-flash", "low", "low"),
         ("deepseek", "deepseek-v4-flash", "xhigh", "max"),
-        ("deepseek", "deepseek-v4-flash", "low", "high"),
+        ("deepseek", "deepseek-v4-flash", "low", "low"),
+        ("deepseek", "deepseek-v4-pro", "low", "low"),
         ("deepseek", "deepseek-v4-pro", "max", "max"),
         ("deepseek", "deepseek-v4-pro", "xhigh", "max"),
         ("glm", "glm-5.2", "minimal", "minimal"),
@@ -254,19 +256,21 @@ def test_provider_metadata_exposes_default_model_control_schema_and_no_kimi(app_
     assert all(row["id"] != "kimi" for row in rows)
     by_id = {row["id"]: row for row in rows}
     flash = by_id["deepseek"]["default_model_capability"]
-    assert by_id["deepseek"]["catalog_verified_at"] == "2026-09-12"
+    assert by_id["deepseek"]["catalog_verified_at"] == "2026-11-16"
     assert by_id["deepseek"]["preferred_model_id"] == "deepseek-flash"
     assert flash["id"] == "deepseek-flash"
-    assert flash["display_name"] == "DeepSeek Flash"
-    assert flash["context_window"] is None
-    assert flash["max_output_tokens"] is None
-    assert flash["disclosed_version"] == "DeepSeek-V4.1-Flash"
+    assert flash["display_name"] == "DeepSeek-V4.1-Flash"
+    assert flash["context_window"] == 1_048_576
+    assert flash["max_output_tokens"] == 393_216
+    assert flash["disclosed_version"] == "DeepSeek-V4.1-Flash-1017"
     assert flash["thinking_control"]["native"] is True
+    assert flash["thinking_control"]["default"] == "high"
     assert [row["value"] for row in flash["thinking_control"]["options"]] == [
+        "low",
         "high",
         "max",
     ]
-    assert flash["thinking_control"]["aliases"]["xhigh"] == "max"
+    assert flash["thinking_control"]["aliases"] == {"medium": "high", "xhigh": "max"}
     assert flash["thinking_control"]["request_mode"] == "reasoning_effort"
     assert "https://www.deepseek.com/en/news/deepseek-v4-1-flash/" in flash["evidence"]
     assert "https://api-docs.deepseek.com/" in flash["evidence"]
@@ -309,7 +313,7 @@ def test_models_endpoint_keeps_legacy_ids_and_adds_reconciled_catalog(
         payload = response.json()
         assert payload["models"] == ["deepseek-next", "deepseek-v4-flash"]
         assert payload["catalog_version"] == 1
-        assert payload["catalog_verified_at"] == "2026-09-12"
+        assert payload["catalog_verified_at"] == "2026-11-16"
         assert payload["discovery_status"] == "live"
         assert payload["preferred_model_id"] == "deepseek-flash"
         by_id = {row["id"]: row for row in payload["catalog"]}

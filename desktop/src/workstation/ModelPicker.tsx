@@ -6,7 +6,7 @@ import { Tip } from './Tip';
 /** Options past this index enter together, so a long catalog finishes its cascade promptly. */
 export const PICKER_CASCADE_CAP = 8;
 
-export interface PickerOption { value: string; label: string; disabled?: boolean; title?: string }
+export interface PickerOption { value: string; label: string; triggerLabel?: string; disabled?: boolean; title?: string }
 export interface PickerSource { id: string; name: string; model?: string; mark?: ReactNode; needsKey?: boolean }
 
 /** Searchable model picker for the composer. Keeps the accessible contract of the old select
@@ -95,8 +95,7 @@ export function ModelPicker({
         disabled={disabled}
         onClick={() => (open ? close() : openPicker())}
       >
-        {/* Trigger shows the bare model id; lifecycle/evaluation notes stay in the list and tooltip. */}
-        <span className="name">{current?.value ?? (value || '选择模型')}</span>
+        <span className="name">{current?.triggerLabel ?? current?.label ?? (value || '选择模型')}</span>
         <span className="caret" aria-hidden="true">▾</span>
       </button>
       </Tip>

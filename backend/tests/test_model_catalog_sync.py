@@ -25,7 +25,7 @@ def test_official_list_models_fixture_does_not_disclose_underlying_version():
     assert all(set(row) <= {"id", "object", "owned_by"} for row in payload["data"])
 
 
-def test_discovery_adds_new_request_id_without_copying_old_token_limits():
+def test_ids_only_discovery_keeps_official_capabilities_and_separate_pro_pricing():
     try:
         rows = model_catalog.reconcile(
             "deepseek",
@@ -35,11 +35,11 @@ def test_discovery_adds_new_request_id_without_copying_old_token_limits():
         by_id = {row["id"]: row for row in rows}
 
         assert by_id["deepseek-flash"]["callable"] is True
-        assert by_id["deepseek-flash"]["display_name"] == "DeepSeek Flash"
+        assert by_id["deepseek-flash"]["display_name"] == "DeepSeek-V4.1-Flash"
         assert by_id["deepseek-flash"]["display_source"] == "manifest"
-        assert by_id["deepseek-flash"]["disclosed_version"] == "DeepSeek-V4.1-Flash"
-        assert by_id["deepseek-flash"]["context_window"] is None
-        assert by_id["deepseek-flash"]["max_output_tokens"] is None
+        assert by_id["deepseek-flash"]["disclosed_version"] == "DeepSeek-V4.1-Flash-1017"
+        assert by_id["deepseek-flash"]["context_window"] == 1_048_576
+        assert by_id["deepseek-flash"]["max_output_tokens"] == 393_216
         assert by_id["deepseek-flash"]["thinking_control"]["request_mode"] == (
             "reasoning_effort"
         )
@@ -47,7 +47,16 @@ def test_discovery_adds_new_request_id_without_copying_old_token_limits():
         assert by_id["deepseek-v4-flash"]["callable"] is False
         assert by_id["deepseek-v4-flash"]["id"] == "deepseek-v4-flash"
         assert by_id["deepseek-v4-flash"]["compatibility_of"] == "deepseek-flash"
-        assert by_id["deepseek-v4-pro"]["lifecycle"] == "stable"
+        pro = by_id["deepseek-v4-pro"]
+        assert pro["display_name"] == "DeepSeek-V4-Pro"
+        assert pro["disclosed_version"] == "DeepSeek-V4-Pro-0813"
+        assert pro["lifecycle"] == "stable" and pro["callable"]
+        assert pro["compatibility_of"] is None
+        assert (pro["context_window"], pro["max_output_tokens"]) == (1_048_576, 393_216)
+        pricing = model_catalog.pricing_for("deepseek", "deepseek-v4-pro")
+        assert pricing is not None
+        assert pricing["schedule"]["peak"] == {"input": 1.32, "output": 3.96, "cached_input": 0.044}
+        assert pricing["schedule"]["off_peak"] == {"input": 0.66, "output": 1.98, "cached_input": 0.022}
         assert by_id["deepseek-flash"]["live_metadata"]["owned_by"] == "deepseek"
         assert "v4.1" not in json.dumps(by_id["deepseek-flash"]["live_metadata"]).lower()
     finally:
@@ -64,6 +73,8 @@ def test_saved_alias_is_not_rewritten_when_preferred_id_appears():
         assert by_id["deepseek-v4-flash"]["id"] == "deepseek-v4-flash"
         assert by_id["deepseek-flash"]["id"] == "deepseek-flash"
         assert by_id["deepseek-v4-flash"]["callable"] is True
+        assert by_id["deepseek-v4-flash"]["disclosed_version"] == "DeepSeek-V4.1-Flash-1017"
+        assert by_id["deepseek-v4-flash"]["context_window"] == 1_048_576
         model_catalog.ensure_callable("deepseek", "deepseek-v4-flash")
         model_catalog.ensure_callable("deepseek", "deepseek-flash")
     finally:

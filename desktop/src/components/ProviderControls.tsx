@@ -289,6 +289,7 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
           options={modelOptions.map((model) => ({
             value: model.id,
             label: modelOptionLabel(model),
+            triggerLabel: model.display_name,
             disabled: !model.callable,
             title: modelOptionTitle(model),
           }))}
@@ -301,7 +302,7 @@ export const ProviderControls: React.FC<ProviderControlsProps> = ({
             .map((provider) => ({
               id: provider.id,
               name: provider.display_name,
-              model: provider.default_model,
+              model: provider.default_model_capability?.display_name || provider.default_model,
               mark: <ProviderMark provider={provider} />,
               needsKey: provider.credential_required && !provider.configured,
             }))}
