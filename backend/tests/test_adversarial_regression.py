@@ -21,6 +21,32 @@ def test_contains_leak_detection():
     assert contains_leak("チャットボットと一緒にしないで") is False
 
 
+@pytest.mark.parametrize("text", [
+    "私はAIアシスタントの言語モデルです。",
+    "私は大規模言語モデルベースのAIです。",
+    "わたしは研究所が開発したAIアシスタントですが、",
+    "自分は人工知能アシスタントであり、",
+    "私がチャットボットだけど、",
+])
+def test_self_claims_with_modifiers_are_leaks(text):
+    assert contains_leak(text)
+
+
+@pytest.mark.parametrize("text", [
+    "私はAIアシスタントじゃないわ。",
+    "私はAIアシスタントの言語モデルではない。",
+    "私はチャットボットなんかじゃない。",
+    "私はチャットボットとは違う。",
+    "私をチャットボットと一緒にしないで。",
+    "私はAIアシスタントの開発者です。",
+    "私は行く。チャットボットです。",
+    "私は行く！チャットボットです。",
+    "私は行く\nチャットボットです。",
+])
+def test_japanese_ai_discussion_and_denials_are_not_leaks(text):
+    assert not contains_leak(text)
+
+
 def test_session_state_default_temperature():
     s = SessionState("temp_test")
     assert s.temperature == 0.75

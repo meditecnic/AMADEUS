@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import threading
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -137,7 +137,7 @@ async def test_standalone_root_guard_and_u2028(pi_binary, tmp_path, monkeypatch)
     assert sorted(p.name for p in user_pi.iterdir()) == ["extensions"]
 
 
-async def chat_turn(monkeypatch, api, *, enabled, binary="unused"):
+async def chat_turn(monkeypatch, api, *, enabled, binary="unused", host_offset=0):
     from app.routers import chat_ws
     from app.services.conversations import conversation_service
     from app.services.credentials import InMemoryCredentialStore
@@ -167,6 +167,9 @@ async def chat_turn(monkeypatch, api, *, enabled, binary="unused"):
         def now(cls):
             return cls.fromisoformat("2026-11-05T00:00:00+00:00")
 
+        def astimezone(self, tz=None):
+            return super().astimezone(tz if tz is not None else timezone(timedelta(hours=host_offset)))
+
     monkeypatch.setattr(chat_ws, "datetime", FixedDatetime)
     user = "このフォルダーのメモを読んで。"
     session.append_message({"role": "user", "content": user, "id": None})
@@ -195,11 +198,12 @@ async def test_chat_delegate_pi_read_result_returns_in_her_reply(pi_binary, tmp_
 
 
 @pytest.mark.asyncio
-async def test_disabled_complete_request_bytes_match_pre_spike(monkeypatch, tmp_path):
+@pytest.mark.parametrize("host_offset", [0, -5])
+async def test_disabled_complete_request_bytes_match_pre_spike(monkeypatch, tmp_path, host_offset):
     with synthetic_api(tmp_path, delegate=False) as api:
-        await chat_turn(monkeypatch, api, enabled=False)
+        await chat_turn(monkeypatch, api, enabled=False, host_offset=host_offset)
     assert len(api.requests) == 1
     # Port is not in the request body; fixed system/history make it deterministic.
     wire = api.requests[0]["wire"]
     assert b"delegate_task" not in wire
-    assert hashlib.sha256(wire).hexdigest() == "d3fde9e289be298dd9bdfc438eabc79eb7c8054d159cc9c0c4af033323f24923"
+    assert hashlib.sha256(wire).hexdigest() == "62034f0d638039e23a92bfcec90ecb266a32ab322b660da46bf29c68d76af223"

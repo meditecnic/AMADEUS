@@ -192,7 +192,7 @@ def render_tail_reminder(
     supplement: str = "",
 ) -> str:
     """Render the request-local clock, search state and optional recalled facts."""
-    now = now_local or datetime.now().astimezone()
+    now = now_local or datetime.now()
     if now.tzinfo is None:
         now = now.astimezone()
     weekday = ("月", "火", "水", "木", "金", "土", "日")[now.weekday()]
@@ -882,7 +882,7 @@ async def compile_for_session(session, user_message: str, provider: Any = None) 
         familiarity=(
             await _self_familiarity(session, resident.facts) if mode == "self" else "initial"
         ),
-        local_year=(getattr(session, "turn_now_local", None) or datetime.now().astimezone()).year,
+        local_year=(getattr(session, "turn_now_local", None) or datetime.now()).year,
         resident_profile=resident,
         memory_supplement=supplement,
     ))

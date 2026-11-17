@@ -4,7 +4,7 @@ import json
 import asyncio
 import hashlib
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 from collections.abc import Awaitable, Callable
 import starlette
@@ -634,7 +634,13 @@ async def _previous_user_interaction(session: SessionState) -> datetime | None:
             (session.session_id, session.identity_mode),
         )
         row = await cursor.fetchone()
-        return datetime.fromisoformat(row["created_at"].replace("Z", "+00:00")) if row else None
+        if row is None:
+            return None
+        try:
+            created_at = datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        return created_at.replace(tzinfo=timezone.utc) if created_at.tzinfo is None else created_at
     finally:
         await db.close()
 
@@ -1797,7 +1803,8 @@ async def processor_loop(
             "tts": "idle"
         }))
         
-        session.turn_now_local = datetime.now().astimezone()
+        now = datetime.now()
+        session.turn_now_local = now.astimezone() if now.tzinfo is None else now
         session.turn_previous_user_at = await _previous_user_interaction(session)
         session.turn_compiled_prompt = None
         session.system_prompt = await compile_for_session(session, user_msg, provider=turn_provider)

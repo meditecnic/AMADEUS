@@ -363,10 +363,11 @@ class Product:
         session.turn_previous_user_at = session.turn_now_local if hasattr(session, "turn_now_local") else (
             datetime.fromisoformat(session.last_interaction_at) if session.last_interaction_at else None
         )
-        session.turn_now_local = (
+        now = (
             datetime.fromisoformat(context["now"]) + timedelta(minutes=(len(session.history) - 1) // 2)
-            if "now" in context else datetime.now().astimezone()
+            if "now" in context else datetime.now()
         )
+        session.turn_now_local = now.astimezone() if now.tzinfo is None else now
         session.system_prompt = await self.compile(session, user, provider=self.snapshot)
         history = [{key: row[key] for key in ("role", "content")} for row in session.history]
         request_prompt = self.chat_ws._request_system_prompt(session, history, None, 0)
