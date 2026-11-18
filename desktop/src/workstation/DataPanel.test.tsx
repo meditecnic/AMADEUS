@@ -501,7 +501,11 @@ describe('DataPanel', () => {
 
     const savedRow = await within(exportSec).findByTestId('export-saved-path');
     expect(shellMock.saveFile).toHaveBeenCalledTimes(1);
-    expect(shellMock.saveFile).toHaveBeenCalledWith(expect.any(Blob), 'amadeus-20261118-conversations-all.zip');
+    const [savedBlob, savedName] = shellMock.saveFile.mock.calls[0];
+    expect(savedName).toBe('amadeus-20261118-conversations-all.zip');
+    expect(savedBlob.size).toBe(4);
+    expect(typeof savedBlob.arrayBuffer).toBe('function');
+    expect(Array.from(new Uint8Array(await savedBlob.arrayBuffer()))).toEqual([0x50, 0x4b, 0x05, 0x06]);
     expect(shellMock.saveBlob).not.toHaveBeenCalled();
     expect(savedRow).toHaveTextContent('D:\\Exports\\amadeus-20261118-conversations-all.zip');
     expect(within(exportSec).getByText('已导出 amadeus-20261118-conversations-all.zip')).toBeInTheDocument();
@@ -542,7 +546,11 @@ describe('DataPanel', () => {
 
     expect(await within(exportSec).findByText('已导出 amadeus-20261118-conversations-all.zip')).toBeInTheDocument();
     expect(shellMock.saveBlob).toHaveBeenCalledTimes(1);
-    expect(shellMock.saveBlob).toHaveBeenCalledWith(expect.any(Blob), 'amadeus-20261118-conversations-all.zip');
+    const [savedBlob, savedName] = shellMock.saveBlob.mock.calls[0];
+    expect(savedName).toBe('amadeus-20261118-conversations-all.zip');
+    expect(savedBlob.size).toBe(4);
+    expect(typeof savedBlob.arrayBuffer).toBe('function');
+    expect(Array.from(new Uint8Array(await savedBlob.arrayBuffer()))).toEqual([0x50, 0x4b, 0x05, 0x06]);
     expect(shellMock.saveFile).not.toHaveBeenCalled();
     expect(within(exportSec).queryByTestId('export-saved-path')).toBeNull();
     expect(within(exportSec).queryByRole('button', { name: '在文件夹中显示' })).toBeNull();
