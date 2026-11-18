@@ -590,10 +590,10 @@
 .ws2-transcript-wrap:has(> .ws2-to-latest) > .ws2-transcript { --ws-fade-bottom: 64px; }
 
 .ws2 .bilingual-message { background: none; border: 0; padding: 0; }
-.ws2 .bilingual-message .chinese-main { margin: 0; font-family: var(--ws-read); font-synthesis: none; font-size: 17px; line-height: 1.85; color: var(--ws-ink); letter-spacing: .01em; font-weight: 400; text-shadow: none; }
+.ws2 .bilingual-message .chinese-main { margin: 0; font-family: var(--ws-read); font-synthesis: none; font-size: 17px; line-height: 1.85; color: var(--ws-ink); letter-spacing: .01em; font-weight: 400; text-shadow: none; overflow-wrap: anywhere; }
 /* Her original words are set in Mincho: the Chinese is the reading, the Japanese is the record. */
-.ws2 .bilingual-message .japanese-sub { margin: 12px 0 0; padding-left: 14px; border-left: 1px solid var(--ws-line-2); font-family: var(--ws-serif-jp); font-size: 14px; line-height: 1.85; color: var(--ws-ink-2); letter-spacing: .03em; }
-.ws2 .bilingual-message .japanese-raw { margin: 0; font-family: var(--ws-serif-jp); font-size: 16px; line-height: 1.85; color: var(--ws-ink); }
+.ws2 .bilingual-message .japanese-sub { margin: 12px 0 0; padding-left: 14px; border-left: 1px solid var(--ws-line-2); font-family: var(--ws-serif-jp); font-size: 14px; line-height: 1.85; color: var(--ws-ink-2); letter-spacing: .03em; overflow-wrap: anywhere; }
+.ws2 .bilingual-message .japanese-raw { margin: 0; font-family: var(--ws-serif-jp); font-size: 16px; line-height: 1.85; color: var(--ws-ink); overflow-wrap: anywhere; }
 /* tokens.css gives every [lang='ja'] the UI sans; the record keeps Mincho down to each sentence span. */
 .ws2 .bilingual-message :is(.japanese-sub, .japanese-raw) :is([lang='ja'], .s) { font-family: var(--ws-serif-jp); }
 .ws2 .bilingual-message .s { border-radius: 0; outline: none; transition: background var(--dur-compat-150) var(--ease-compat), color var(--dur-compat-150) var(--ease-compat), box-shadow var(--dur-compat-150) var(--ease-compat); }

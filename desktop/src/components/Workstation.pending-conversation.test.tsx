@@ -18,9 +18,7 @@ vi.mock('../services/AudioService', () => ({
 }));
 vi.mock('./SettingsModal', () => ({
   SettingsModal: () => null,
-  CHAT_TEMPERATURE_MIN: 0, CHAT_TEMPERATURE_MAX: 1.2, CHAT_TEMPERATURE_STEP: 0.1,
-  CHAT_TEMPERATURE_DEFAULT: 0, DEFAULT_IDENTITY_MODE: 'okabe',
-  clampChatTemperature: (v: number) => Number.isFinite(v) ? Math.max(0, Math.min(1.2, v)) : 0,
+  DEFAULT_IDENTITY_MODE: 'okabe',
   normalizeIdentityMode: (v: unknown) => v === 'self' ? 'self' : 'okabe',
   loadStoredIdentityMode: () => localStorage.getItem('amadeus_pc_identity_mode') || 'okabe', persistIdentityMode: () => {},
   loadStoredSelfName: () => '', persistSelfName: () => {},

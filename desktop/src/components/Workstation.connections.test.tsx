@@ -870,24 +870,7 @@ describe('Workstation data relocation restart lock across panels (Fix #6)', () =
 });
 
 describe('Workstation embedded settings', () => {
-  it.each([null, '0', '0.0'] as const)('uses 0.75 on first load with stored value %s, then respects zero', async (stored) => {
-    const temperatureKey = 'amadeus_pc_temperature';
-    if (stored !== null) localStorage.setItem(temperatureKey, stored);
-    const workstation = <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />;
-    const { unmount } = render(workstation);
-    await screen.findByRole('button', { name: '系统设置' });
-    expect(hoisted.useAmadeusWS).toHaveBeenLastCalledWith(expect.objectContaining({ temperature: 0.75 }));
-    if (stored !== null) expect(localStorage.getItem(temperatureKey)).toBe('0.75');
-
-    unmount();
-    localStorage.setItem(temperatureKey, '0');
-    render(workstation);
-    await screen.findByRole('button', { name: '系统设置' });
-    expect(hoisted.useAmadeusWS).toHaveBeenLastCalledWith(expect.objectContaining({ temperature: 0 }));
-    expect(localStorage.getItem(temperatureKey)).toBe('0');
-  });
-
-  it('applies an embedded patch over live connection, search and reasoning state', async () => {
+  it('applies an embedded patch over live connection, search and reasoning state without sending temperature', async () => {
     providers = [provider('custom:new', 'New One', 'm1', {
       source: 'user_config', base_url: 'http://127.0.0.1:2222/v1', base_url_configurable: true,
     })];
@@ -896,20 +879,22 @@ describe('Workstation embedded settings', () => {
     const updateConfig = vi.fn();
     hoisted.useAmadeusWS.mockImplementation(() => wsState({ updateConfig }));
     render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+    expect(hoisted.useAmadeusWS.mock.lastCall?.[0]).not.toHaveProperty('temperature');
     fireEvent.click(await screen.findByRole('button', { name: '系统设置' }));
     await waitFor(() => expect(hoisted.settingsProps.current?.onSaveSettings).toBeTypeOf('function'));
     expect(hoisted.settingsProps.current?.variant).toBe('embedded');
     const fetchMock = vi.mocked(fetch);
     const before = fetchMock.mock.calls.length;
     const save = hoisted.settingsProps.current!.onSaveSettings as (patch: unknown) => Promise<void>;
-    await act(async () => { await save({ temperature: 0.3 }); });
+    await act(async () => { await save({ identityMode: 'self', enableTts: false }); });
     const writes = fetchMock.mock.calls.slice(before)
       .filter(([, init]) => init?.method && init.method !== 'GET')
       .map(([url, init]) => `${init!.method} ${String(url)}`);
     expect(writes).toEqual([]);
     expect(updateConfig).toHaveBeenLastCalledWith(expect.objectContaining({
-      temperature: 0.3, reasoningEffort: hoisted.settingsProps.current!.reasoningEffort,
+      identityMode: 'self', enableTts: false, reasoningEffort: hoisted.settingsProps.current!.reasoningEffort,
     }));
     expect(updateConfig.mock.lastCall?.[0]).not.toHaveProperty('systemPrompt');
+    expect(updateConfig.mock.lastCall?.[0]).not.toHaveProperty('temperature');
   });
 });

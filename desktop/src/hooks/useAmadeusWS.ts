@@ -26,7 +26,6 @@ export interface UseAmadeusWSParams {
   conversationId?: string | null;
   pendingConversation?: PendingConversationTarget | null;
   systemPrompt: string;
-  temperature: number;
   worldline: 'steins_gate' | 'beta';
   enableTts: boolean;
   sovitsUrl: string;
@@ -421,7 +420,6 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
         model: authTarget?.model || paramsRef.current.model,
         system_prompt: paramsRef.current.systemPrompt,
         enable_tts: paramsRef.current.enableTts,
-        temperature: paramsRef.current.temperature,
         worldline: paramsRef.current.worldline,
         reasoning_effort: paramsRef.current.reasoningEffort,
         default_identity_mode: paramsRef.current.identityMode || 'okabe',
@@ -1103,7 +1101,6 @@ export function useAmadeusWS(params: UseAmadeusWSParams): UseAmadeusWSReturn {
     // Map CamelCase to snake_case for Python backend API Contract
     const mappedPatch: Record<string, any> = {};
     if (patch.systemPrompt !== undefined) mappedPatch.system_prompt = patch.systemPrompt;
-    if (patch.temperature !== undefined) mappedPatch.temperature = patch.temperature;
     if (patch.worldline !== undefined) mappedPatch.worldline = patch.worldline;
     if (patch.enableTts !== undefined) mappedPatch.enable_tts = patch.enableTts;
     if (patch.sovitsUrl !== undefined) mappedPatch.sovits_url = patch.sovitsUrl;

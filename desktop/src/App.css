@@ -100,6 +100,7 @@
 
 .japanese-raw {
   margin: 0;
+  overflow-wrap: anywhere;
 }
 
 .chinese-main {
@@ -108,6 +109,7 @@
   font-size: 14.5px;
   font-weight: 500;
   line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .japanese-sub {
@@ -116,6 +118,7 @@
   font-size: 12px;
   opacity: 0.85;
   line-height: 1.3;
+  overflow-wrap: anywhere;
 }
 
 .bilingual-segment + .bilingual-segment {
@@ -1142,7 +1145,7 @@
 }
 .volume-slider:disabled, input[type="range"]:disabled { opacity: 0.35; cursor: not-allowed; }
 
-/* Slider row layout (for settings like 回复随机性) */
+/* Slider row layout */
 .slider-row {
   display: flex;
   align-items: center;
@@ -1496,7 +1499,6 @@
   }
 }
 
-/* ── Reply randomness (sampling temperature) control ── */
 .setting-field-hint {
   margin: 0 0 10px;
   font-size: 12px;
@@ -1504,129 +1506,8 @@
   color: var(--color-text-dim);
 }
 
-.temperature-migration-notice {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 0 0 8px;
-  padding: 6px 10px;
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--accent-primary);
-  background: color-mix(in srgb, var(--accent-primary) 45%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent);
-  border-radius: 4px;
-}
-
-.temperature-migration-dismiss {
-  margin-left: auto;
-  padding: 2px 8px;
-  font-size: 11px;
-  color: var(--accent-primary);
-  background: transparent;
-  border: 1px solid color-mix(in srgb, var(--accent-primary) 45%, transparent);
-  border-radius: 3px;
-  cursor: pointer;
-}
-
-.temperature-migration-dismiss:hover {
-  background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
-}
-
-.temperature-warning {
-  margin: 8px 0 0;
-  font-size: 12px;
-  line-height: 1.4;
-}
-
-.temperature-warning-mild {
-  color: var(--accent-primary);
-}
-
-.temperature-warning-strong {
-  color: var(--accent-primary);
-  font-weight: 600;
-}
-
-/*
- * Reply-randomness control layout (multi-agent contract):
- * - Width: moderate band min(28rem, 100%) ≈ 448px — not the old 370px stub,
- *   not full modal width.
- * - Track + value on one row; endpoint legends under the track (high contrast).
- */
-.personality-control {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  width: min(28rem, 100%);
-  max-width: 100%;
-}
-
-.personality-slider-row {
-  width: 100%;
-  max-width: none;
-  gap: 14px;
-  align-items: center;
-}
-
-.personality-range {
-  flex: 1 1 auto;
-  min-width: 0;
-  width: 100%;
-}
-
-.personality-control-disabled {
-  filter: grayscale(1);
-  opacity: 0.55;
-}
-
-.personality-range:disabled {
-  cursor: default;
-}
-
-.personality-value {
-  flex: 0 0 auto;
-  min-width: 2.4em;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--accent-primary);
-  text-align: right;
-  text-shadow: 0 0 6px color-mix(in srgb, var(--accent-primary) 35%, transparent);
-  font-variant-numeric: tabular-nums;
-}
-
-.personality-endpoints {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  width: 100%;
-  /* Align legends under the track (not under the numeric value). */
-  padding-right: calc(2.4em + 14px);
-  box-sizing: border-box;
-  gap: 12px;
-}
-
-.personality-endpoints .slider-endpoint {
-  font-size: 12px;
-  line-height: 1.35;
-  color: var(--accent-primary);
-  letter-spacing: 0.3px;
-  text-shadow: 0 0 8px color-mix(in srgb, var(--accent-primary) 18%, transparent);
-}
-
-.personality-endpoints .slider-endpoint[data-testid="temperature-endpoint-min"] {
-  color: var(--accent-primary);
-}
-
-.personality-endpoints .slider-endpoint[data-testid="temperature-endpoint-max"] {
-  color: var(--accent-primary);
-  text-align: right;
-}
-
-.personality-field { grid-column: 1 / -1; }
 .tab-panel.active > .setting-field:first-child { grid-column: 1 / -1; }
-/* Keep short width only for generic/sound-style rows; personality is full-width. */
-.slider-row:not(.personality-slider-row) { width: min(370px, 100%); gap: 12px; }
+.slider-row { width: min(370px, 100%); gap: 12px; }
 .slider-value { min-width: 30px; font-size: 14px; }
 
 .model-bottom-bar {

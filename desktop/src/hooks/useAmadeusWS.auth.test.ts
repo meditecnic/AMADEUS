@@ -29,7 +29,7 @@ it.each(['synthetic-ws-token', ''])('constructs the WS with bootstrap subprotoco
   await initializeLocalBackend();
   const { useAmadeusWS } = await import('./useAmadeusWS');
   const hook = renderHook(() => useAmadeusWS({
-    sessionId: 'auth-test', systemPrompt: '', temperature: 0.8, worldline: 'steins_gate',
+    sessionId: 'auth-test', systemPrompt: '', worldline: 'steins_gate',
     enableTts: false, sovitsUrl: '', model: 'mock', reasoningEffort: null,
   }));
   expect(Socket.instances).toHaveLength(1);
