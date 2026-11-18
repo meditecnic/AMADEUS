@@ -1,5 +1,4 @@
 import { startTransition, useCallback, useEffect, useState } from 'react';
-import { BootSplash, hasBootSplash } from './components/BootSplash';
 import { SalieriLogin, type EntranceCue } from './components/SalieriLogin';
 import { Workstation, type EntrancePhase } from './components/Workstation';
 import { loadAssetPack } from './assetPack';
@@ -8,7 +7,7 @@ import { dataStatus, type DataStatus } from './workstation/dataApi';
 import { useReducedMotion } from './design-system/useReducedMotion';
 /* App.css is imported once from main.tsx (tokens.css → App.css) — sole cascade owner. */
 
-type AppStep = 'probe' | 'splash' | 'login' | 'workstation' | 'recovery';
+type AppStep = 'probe' | 'login' | 'workstation' | 'recovery';
 /** Upper bound for the whole entrance; only reached if animation events never arrive. */
 const ENTRANCE_FALLBACK_MS = 12000;
 /** The workstation is drawn ahead under the login once the login has drawn itself in (its intro runs 3.4 s). */
@@ -22,16 +21,16 @@ function App() {
   const [fault, setFault] = useState<DataStatus | null>(null);
   useEffect(() => {
     let cancelled = false;
-    // The original entrance animation is part of the pack; without it the app opens on login. A database that failed
-    // its startup check (the backend then answers only its data routes) opens on the recovery sheet instead.
-    void Promise.all([loadAssetPack(), dataStatus().catch(() => null)]).then(([on, data]) => {
+    // A database that failed its startup check (the backend then answers only its data routes)
+    // opens on the recovery sheet instead.
+    void Promise.all([loadAssetPack(), dataStatus().catch(() => null)]).then(([, data]) => {
       if (cancelled) return;
       if (data?.available === false || data?.status === 'corrupt') {
         setFault(data);
         setStep('recovery');
         return;
       }
-      setStep(on && hasBootSplash() ? 'splash' : 'login');
+      setStep('login');
     });
     return () => { cancelled = true; };
   }, []);
@@ -93,10 +92,6 @@ function App() {
     }
   }, [worldline]);
 
-  const handleSplashDone = () => {
-    setStep('login');
-  };
-
   const handleLoginSuccess = (result?: { easterEgg: boolean }) => {
     setEasterEgg(Boolean(result?.easterEgg));
     setStageReady(false);
@@ -145,8 +140,6 @@ function App() {
 
   return (
     <main className="app-main-container">
-      {step === 'splash' && <BootSplash onDone={handleSplashDone} />}
-
       {step === 'recovery' && fault && <DataRecovery status={fault} worldline={worldline} />}
 
       {(step === 'workstation' || (step === 'login' && aheadMounted)) && (

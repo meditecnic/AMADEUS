@@ -1,5 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 
 vi.mock('../services/AudioService', () => ({
   audioService: { playBGM: vi.fn(), stopBGM: vi.fn(), playSFX: vi.fn() },
@@ -229,4 +231,15 @@ it('prompts with 口令 wording when submitting empty passcode with passcode_set
   expect(screen.getByRole('alert')).toHaveTextContent('请输入口令');
   fireEvent.change(pwd, { target: { value: 'abc' } });
   expect(screen.getByRole('button', { name: '显示口令', hidden: true })).toBeInTheDocument();
+});
+
+it('renders all 6 original verse lines and only hides .sl-verse below 1040x620 in CSS', async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ passcode_set: true }) }));
+  const { container } = await renderLogin();
+  const lines = container.querySelectorAll('.sl-verse p');
+  expect(lines).toHaveLength(6);
+  const css = fs.readFileSync(path.resolve(__dirname, './SalieriLogin.css'), 'utf8');
+  expect(css).not.toMatch(/@media\s*\(max-height:\s*940px\),\s*\(max-width:\s*1500px\)\s*\{\s*\.sl-verse\s*\{\s*display:\s*none;/);
+  expect(css).toMatch(/@media\s*\(max-height:\s*619px\),\s*\(max-width:\s*1039px\)\s*\{\s*\.sl-verse\s*\{\s*display:\s*none;/);
 });

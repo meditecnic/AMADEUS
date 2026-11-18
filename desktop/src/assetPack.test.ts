@@ -20,17 +20,16 @@ describe('asset pack', () => {
   beforeEach(() => { vi.resetModules(); apiFetch.mockReset(); });
   afterEach(() => {
     cleanup();
-    document.documentElement.style.removeProperty('--pack-ring');
-    document.documentElement.style.removeProperty('--pack-login-bg');
     delete document.documentElement.dataset.assetPack;
   });
 
   it('treats a manifest without a file list as the full pack', async () => {
     const { on, packAsset, hasPackFile } = await load({ format: 1 });
     expect(on).toBe(true);
-    expect(packAsset('/assets/boot/boot_ring_1.png')).toBe('/api/asset-pack/assets/boot/boot_ring_1.png');
-    expect(hasPackFile('audio/bgm/anything.ogg')).toBe(true);
-    expect(document.documentElement.style.getPropertyValue('--pack-ring')).toContain('ring_config.png');
+    expect(packAsset('/assets/images/kurisu_normal1.png')).toBe('/api/asset-pack/assets/images/kurisu_normal1.png');
+    expect(hasPackFile('audio/bgm/Amadeus.ogg')).toBe(true);
+    expect(document.documentElement.style.getPropertyValue('--pack-ring')).toBe('');
+    expect(document.documentElement.style.getPropertyValue('--pack-login-bg')).toBe('');
   });
 
   it('serves only the listed files of a partial pack', async () => {
@@ -39,8 +38,8 @@ describe('asset pack', () => {
     expect(document.documentElement.dataset.assetPack).toBe('on');
     expect(packAsset('/assets/images/kurisu_normal1.png')).toBe('/api/asset-pack/assets/images/kurisu_normal1.png');
     expect(hasPackFile('assets\\images\\kurisu_normal1.png')).toBe(true);
-    expect(packAsset('assets/boot/boot_ring_1.png')).toBeNull();
-    expect(packAsset('assets/ui/spinner_sg_20f.png')).toBeNull();
+    expect(packAsset('assets/images/kurisu_happy1.png')).toBeNull();
+    expect(packAsset('audio/bgm/Amadeus.ogg')).toBeNull();
     expect(document.documentElement.style.getPropertyValue('--pack-ring')).toBe('');
   });
 
@@ -52,7 +51,7 @@ describe('asset pack', () => {
     expect(hasPackFile('assets/images/kurisu_normal1.png')).toBe(false);
   });
 
-  it('hot-reloads pack state, busts cache on reload, removes CSS vars on uninstall, and notifies subscribers', async () => {
+  it('hot-reloads pack state, busts cache on reload, clears asset-pack attr on uninstall, and notifies subscribers', async () => {
     const {
       on,
       reloadAssetPack,
@@ -79,8 +78,8 @@ describe('asset pack', () => {
     );
     expect(packAsset('assets/images/kurisu_normal1.png')).toBe('/api/asset-pack/assets/images/kurisu_normal1.png?v=1');
     expect(document.documentElement.dataset.assetPack).toBe('on');
-    expect(document.documentElement.style.getPropertyValue('--pack-login-bg')).toContain('SG0_IBG006D.png?v=1');
-    expect(document.documentElement.style.getPropertyValue('--pack-ring')).toContain('ring_config.png?v=1');
+    expect(document.documentElement.style.getPropertyValue('--pack-login-bg')).toBe('');
+    expect(document.documentElement.style.getPropertyValue('--pack-ring')).toBe('');
     expect(listener).toHaveBeenCalledTimes(1);
 
     apiFetch.mockResolvedValueOnce(new Response(JSON.stringify({ installed: false }), { status: 200 }));

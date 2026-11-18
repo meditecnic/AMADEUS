@@ -27,7 +27,6 @@ import {
 import { HistorySidebar, type ConversationSummary } from './HistorySidebar';
 import { TtsDebugPanel } from './TtsDebugPanel';
 import AvatarViewer from './AvatarViewer';
-import SpriteAnimator from './SpriteAnimator';
 import * as assetPackMod from '../assetPack';
 import { useAudioPlayer, audioPlayer } from '../hooks/useAudioPlayer';
 import { audioService } from '../services/AudioService';
@@ -55,7 +54,6 @@ import { UsagePanel } from '../workstation/UsagePanel';
 import { AboutPanel } from '../workstation/AboutPanel';
 import { RestoreNotice } from '../workstation/RestoreNotice';
 import { checkAfterLogin, updateWaiting, useUpdates } from '../workstation/updates';
-import { SendSignal } from '../workstation/SendSignal';
 import { PresenceIndicator, ThinkingMark, PRESENCE_LABELS } from '../workstation/PresenceIndicator';
 import { ErrorText, checkShortLabel } from '../workstation/logParts';
 import { SendKey } from '../workstation/SendKey';
@@ -1455,7 +1453,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   useEffect(() => {
     // Missing credentials are an expected setup state, not a runtime failure.
     if (status === 'ERROR' && credentialConfigured) {
-      audioService.playSFX('/assets/audio/gah.ogg', sfxVolume);
+      audioService.playSFX('error', sfxVolume);
     }
   }, [status, credentialConfigured, sfxVolume]);
 
@@ -1480,7 +1478,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       audioPlayer.stopAll();
       stopVoice();
     }
-    audioService.playSFX('/audio/sfx/连接成功，进入页面1.ogg', sfxVolume);
+    audioService.playSFX('send', sfxVolume);
     const composer = composerRef.current;
     if (composer && !reducedMotion) {
       const box = composer.getBoundingClientRect();
@@ -2178,7 +2176,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
     : showSetupStatus ? 'setup'
     : awaitingWorldline || sessionPending ? 'connecting'
     : 'down';
-  const thinkingSprite = assetPackMod.packAsset?.(worldline === 'steins_gate' ? 'assets/ui/spinner_sg_20f.png' : 'assets/ui/spinner_beta_20f.png') ?? null;
   const lastAssistantId = [...visibleMessages].reverse().find((msg) => msg.role === 'assistant' && !msg.systemError)?.id;
   // An old conversation whose connection was removed keeps its history but must be re-pointed by the user.
   const providerGone = Boolean(activeConversation) && providers.length > 0 && (!activeProvider || activeProvider.enabled === false);
@@ -2227,10 +2224,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
           />
         </>
       )}
-      <SendSignal
-        rootRef={wsRootRef}
-        sendId={localSend?.scope === presentationScope ? localSend.id : null}
-      />
 
       {/* The header follows the page under it (U 11-09): on the conversation it carries the session list's toggle and
           the session's title; on the system page, a way back and where you are; the memory page has the whole sheet. */}
@@ -2339,7 +2332,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             ref={systemButtonRef}
             className={`ws2-tool is-system${isSettingsOpen ? ' is-on' : ''}`}
             onClick={() => {
-              audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume);
+              audioService.playSFX('ui', sfxVolume);
               if (isSettingsOpen) closeMenu(); else openMenu();
             }}
             aria-label={updateMark ? '系统设置（有新版本）' : '系统设置'}
@@ -2481,18 +2474,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                       ) : null}
                       {msg.streaming && isThinking && operationLabel && (
                         <div className="ws2-thinking" aria-busy={activityBusy}>
-                          {thinkingSprite ? <SpriteAnimator
-                            spriteSrc={thinkingSprite}
-                            cols={10}
-                            rows={2}
-                            frameWidth={worldline === 'beta' ? 54.5 : 54}
-                            frameHeight={63}
-                            frameRowOffsetY={worldline === 'steins_gate' ? 8 : 0}
-                            frameCount={20}
-                            fps={15}
-                            loop={true}
-                            autoplay={!reducedMotion}
-                          /> : <ThinkingMark worldline={worldline} />}
+                          <ThinkingMark worldline={worldline} />
                           <span className="ws2-thinking-label" data-testid="activity-operation-label">{operationLabel}</span>
                         </div>
                       )}
@@ -2776,7 +2758,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
               speaking={isPlaying}
               onVolume={handleVoiceVolumeChange}
               onToggleMute={() => setVoiceMuted((m) => !m)}
-              onStop={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); handleStopVoice(); }}
+              onStop={() => { audioService.playSFX('ui', sfxVolume); handleStopVoice(); }}
             />
           </div>
           {!packInstalled && (

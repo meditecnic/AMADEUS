@@ -105,6 +105,12 @@ describe('BilingualMessage', () => {
     expect(screen.getByText('翻译中')).toBeInTheDocument();
   });
 
+  it('does not set tabIndex on paragraph sentences so drag-selection across punctuation is not interrupted', () => {
+    const { container } = render(<BilingualMessage layout="paragraph" segments={segments} streaming={false} />);
+    expect(container.querySelectorAll('.s')).toHaveLength(4);
+    expect(container.querySelectorAll('[tabindex]')).toHaveLength(0);
+  });
+
   it('marks assistant raw-Japanese fallback with lang=ja', () => {
     render(
       <BilingualMessage

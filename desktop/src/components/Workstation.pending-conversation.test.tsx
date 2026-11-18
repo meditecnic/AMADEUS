@@ -674,7 +674,7 @@ it.each(['lands', 'fails'] as const)(
   },
 );
 
-const SEND_CUE = '/audio/sfx/连接成功，进入页面1.ogg';
+const SEND_CUE = 'send';
 const sentTypes = (socket: FakeWebSocket) => socket.sent.map(f => f.type);
 
 it('PR16 followup 2: a send that cannot go out neither stops voice nor plays the cue', async () => {

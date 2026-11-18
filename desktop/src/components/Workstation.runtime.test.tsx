@@ -594,7 +594,7 @@ describe('Workstation provider runtime changes', () => {
     expect(screen.getByText(/这个会话还是空的/)).toBeInTheDocument();
   });
 
-  it('starts the signal only on local send, keeps draft materialization, and clears on completion or history switch', () => {
+  it('handles local send lifecycle without rendering removed SendSignal particles', () => {
     const state = {
       status: 'READY', messages: [{ id: 'history-1', role: 'user', content: 'loaded history', streaming: false }],
       isThinking: false, isSynthesizing: false, emotion: 'neutral',
@@ -605,20 +605,13 @@ describe('Workstation provider runtime changes', () => {
     const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width: 20, height: 20, top: 0, left: 0, right: 20 } as DOMRect);
     const h = render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
     const signal = () => h.container.querySelector('.ws2-signal');
-    state.messages = [...state.messages, { id: 'history-2', role: 'user', content: 'another loaded history', streaming: false }];
-    h.rerender(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
     expect(signal()).toBeNull();
     state.isThinking = true;
     act(() => wsSpies.useAmadeusWS.mock.lastCall![0].onLocalSend('local-1'));
-    const first = signal();
-    expect(first).not.toBeNull();
-    act(() => wsSpies.useAmadeusWS.mock.lastCall![0].onTurnStarted('materialized'));
-    expect(signal()).toBe(first);
-    act(() => wsSpies.useAmadeusWS.mock.lastCall![0].onTurnCompleted());
     expect(signal()).toBeNull();
-    act(() => wsSpies.useAmadeusWS.mock.lastCall![0].onLocalSend('local-2'));
-    expect(signal()).not.toBeNull();
-    act(() => wsSpies.useAmadeusWS.mock.lastCall![0].onConversationSwitched({ conversationId: 'other-history' }));
+    act(() => wsSpies.useAmadeusWS.mock.lastCall![0].onTurnStarted('materialized'));
+    expect(signal()).toBeNull();
+    act(() => wsSpies.useAmadeusWS.mock.lastCall![0].onTurnCompleted());
     expect(signal()).toBeNull();
     h.unmount();
     bounds.mockRestore();

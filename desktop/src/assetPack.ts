@@ -1,5 +1,5 @@
 import { apiFetch, apiUrl } from './apiBase';
-/** Original Steins;Gate material (portraits, BGM, SFX, boot animation, login art) is not shipped with
+/** Original Steins;Gate material (portraits and BGM) is not shipped with
  *  the app. It is an optional pack that the user installs into the data directory; the backend serves
  *  it under /api/asset-pack/. Without it every caller falls back to self-made defaults. */
 
@@ -19,13 +19,6 @@ const present = (path: string) => available && (listed === null || listed.has(no
 
 function applyDocumentPackState() {
   const root = document.documentElement;
-  const applyCssAsset = (prop: string, path: string) => {
-    const url = packAsset(path);
-    if (url) root.style.setProperty(prop, `url("${url}")`);
-    else root.style.removeProperty(prop);
-  };
-  applyCssAsset('--pack-login-bg', 'bg/SG0_IBG006D.png');
-  applyCssAsset('--pack-ring', 'assets/ui/ring_config.png');
   root.dataset.assetPack = available ? 'on' : 'off';
 }
 

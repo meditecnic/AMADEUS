@@ -502,17 +502,6 @@
   .ws2-memory-layer, .ws2-memory-layer.closing { animation: none; }
 }
 
-/* send signal: send key → seam → her */
-.ws2-signal { position: absolute; inset: 0; z-index: 12; pointer-events: none; }
-.ws2-signal-layer { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
-.ws2-signal-trail { fill: none; stroke: var(--ws-accent); stroke-width: 1.2; stroke-dasharray: .16 1; stroke-dashoffset: .16; animation: ws2-trail .62s cubic-bezier(.5, 0, .3, 1) forwards; filter: drop-shadow(0 0 4px rgba(var(--ws-accent-rgb), .9)); }
-@keyframes ws2-trail { to { stroke-dashoffset: -1; } }
-.ws2-signal-dot { position: absolute; left: 0; top: 0; width: 6px; height: 6px; border-radius: 50%; background: #fff; offset-rotate: 0deg; offset-distance: 0%; box-shadow: 0 0 0 3px rgba(var(--ws-accent-rgb), .35), 0 0 14px 3px var(--ws-accent); animation: ws2-ride .62s cubic-bezier(.5, 0, .3, 1) forwards; }
-@keyframes ws2-ride { 90% { opacity: 1; } to { offset-distance: 100%; opacity: 0; } }
-.ws2-signal-hit { fill: none; stroke: var(--ws-accent); opacity: 0; transform-box: fill-box; transform-origin: center; animation: ws2-hit .6s ease-out .56s forwards; }
-@keyframes ws2-hit { 0% { opacity: .9; transform: scale(1); } 100% { opacity: 0; transform: scale(7); } }
-@media (prefers-reduced-motion: reduce) { .ws2-signal { display: none; } }
-
 /* searchable model picker (composer) */
 .ws2-picker { position: relative; min-width: 0; }
 .ws2-picker-trigger { display: inline-flex; align-items: center; gap: 6px; max-width: 220px; height: 28px; padding: 0 9px; border-radius: 0; font-size: 12.5px; color: var(--ws-ink); }
@@ -582,7 +571,7 @@
 @property --ws-fade-top { syntax: '<length>'; inherits: false; initial-value: 0px; }
 @property --ws-fade-bottom { syntax: '<length>'; inherits: false; initial-value: 0px; }
 .ws2-transcript {
-  box-sizing: border-box; height: 100%; overflow-y: auto; padding: 18px 12px 20px 0; background: none;
+  box-sizing: border-box; height: 100%; overflow-y: auto; overflow-x: hidden; padding: 18px 12px 20px 0; background: none;
   --ws-fade-top: 0px; --ws-fade-bottom: 0px;
   mask-image: linear-gradient(180deg,
     transparent 0, rgb(0 0 0 / .051) calc(var(--ws-fade-top) * .15), rgb(0 0 0 / .149) calc(var(--ws-fade-top) * .3),

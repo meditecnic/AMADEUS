@@ -127,4 +127,15 @@ describe('AudioService BGM loading', () => {
     expect(howlerState.configs).toHaveLength(2);
     expect((howlerState.configs[1].src as string[])[0]).toContain('?v=2');
   });
+
+  it('keeps playSFX decoupled from asset-pack SFX files while preserving 5 whitelist BGMs', () => {
+    pack.installed = true;
+    audioService.setEnableSFX(true);
+    audioService.playSFX('send', 0.8);
+    expect(howlerState.configs).toHaveLength(0);
+
+    audioService.playBGM('/audio/bgm/Messenger main theme.ogg', 0.2);
+    expect(howlerState.configs).toHaveLength(1);
+    expect(howlerState.configs[0].src).toEqual(['/api/asset-pack/audio/bgm/Messenger main theme.ogg']);
+  });
 });

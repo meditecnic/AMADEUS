@@ -22,7 +22,6 @@ import {
   type AssetPackInspectResult,
   type AssetPackStatus,
 } from './assetPackApi';
-import './AssetPackGroup.css';
 
 /*
  * 04 角色与对话 · 可选原版素材包: inspects and installs/removes the user's own
