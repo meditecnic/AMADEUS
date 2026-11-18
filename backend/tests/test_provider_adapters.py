@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from weakref import ref
 
 import httpx
 import pytest
@@ -62,6 +63,32 @@ def test_model_pool_reuses_client_across_requests_but_not_across_event_loops(mon
     asyncio.run(run_next_loop())
     assert len(clients) == 6
     assert all(client.is_closed for client in clients[2:])
+
+
+async def test_model_pool_does_not_retain_a_replaced_adapter(monkeypatch):
+    class OfflineClient(httpx.AsyncClient):
+        def __init__(self, **kwargs):
+            transport = httpx.MockTransport(
+                lambda request: httpx.Response(200, json={"data": [{"id": "offline-model"}]})
+            )
+            super().__init__(transport=transport, **kwargs)
+
+    monkeypatch.setattr(provider_adapters, "_HTTP_CLIENT_TYPE", OfflineClient)
+    monkeypatch.setattr(httpx, "AsyncClient", OfflineClient)
+
+    async def discover_models():
+        adapter = OpenAICompatibleAdapter(
+            provider_id="custom:replace", base_url="https://offline-check.invalid/v1",
+            default_model="offline-model", message_builder=deepseek_service.build_persona_messages,
+        )
+        assert await adapter.list_models(api_key="offline") == [{"id": "offline-model"}]
+        return ref(adapter)
+
+    old_adapter = await discover_models()
+    try:
+        assert old_adapter() is None
+    finally:
+        await provider_adapters.close_model_http_clients()
 
 
 @pytest.mark.asyncio

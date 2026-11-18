@@ -870,11 +870,21 @@ describe('Workstation data relocation restart lock across panels (Fix #6)', () =
 });
 
 describe('Workstation embedded settings', () => {
-  it.each([[null, 0.75], ['0', 0]] as const)('uses the expected WS temperature with stored value %s', async (stored, expected) => {
-    if (stored !== null) localStorage.setItem('amadeus_pc_temperature', stored);
-    render(<Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />);
+  it.each([null, '0', '0.0'] as const)('uses 0.75 on first load with stored value %s, then respects zero', async (stored) => {
+    const temperatureKey = 'amadeus_pc_temperature';
+    if (stored !== null) localStorage.setItem(temperatureKey, stored);
+    const workstation = <Workstation worldline="steins_gate" onWorldlineChange={vi.fn()} onLogout={vi.fn()} />;
+    const { unmount } = render(workstation);
     await screen.findByRole('button', { name: '系统设置' });
-    expect(hoisted.useAmadeusWS).toHaveBeenLastCalledWith(expect.objectContaining({ temperature: expected }));
+    expect(hoisted.useAmadeusWS).toHaveBeenLastCalledWith(expect.objectContaining({ temperature: 0.75 }));
+    if (stored !== null) expect(localStorage.getItem(temperatureKey)).toBe('0.75');
+
+    unmount();
+    localStorage.setItem(temperatureKey, '0');
+    render(workstation);
+    await screen.findByRole('button', { name: '系统设置' });
+    expect(hoisted.useAmadeusWS).toHaveBeenLastCalledWith(expect.objectContaining({ temperature: 0 }));
+    expect(localStorage.getItem(temperatureKey)).toBe('0');
   });
 
   it('applies an embedded patch over live connection, search and reasoning state', async () => {

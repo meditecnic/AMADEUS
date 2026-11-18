@@ -282,10 +282,12 @@ async def test_processor_reference_publication_and_actual_second_request(isolate
     from test_memory_v11_resident_profile import _fake_supplement
     session = await _new_session()
     session.protocol_version = 1 if case == "v1" else 2
+    wants_recall = case in {"recall", "all", "cancel", "unsent", "budget"}
     supplement, exp, resident, recalled = await seeded_memories(session.session_id)
     compiled = CompiledPrompt("SYSTEM", resident_fact_ids=(resident,),
         supplement_fact_ids=(supplement,) if case in {"supplement", "all", "v1", "cancel-before-complete"} else (),
-        experience_ids=(exp,) if case in {"episodic", "all"} else ())
+        experience_ids=(exp,) if case in {"episodic", "all"} else (),
+        resident_complete=not wants_recall)
 
     async def compile_prompt(*args, **kwargs):
         session.turn_compiled_prompt = compiled
@@ -318,19 +320,26 @@ async def test_processor_reference_publication_and_actual_second_request(isolate
 
         monkeypatch.setattr(events, "referenced_items_for_turn", cancel_during_describe)
     captures = []
-    wants_recall = case in {"recall", "all", "cancel", "unsent", "budget"}
+    draft_started = asyncio.Event()
 
     async def provider(self, **kwargs):
+        assert kwargs["tools"] is None
         captures.append(kwargs)
         if wants_recall and len(captures) == 1:
-            yield {"content": None, "tool_calls": [{"index": 0, "id": "recall192", "type": "function",
-                "function": {"name": "recall_memory", "arguments": '{"needs":["好み"]}'}}]}
+            draft_started.set()
+            await asyncio.Future()
         elif case == "cancel":
             raise asyncio.CancelledError()
         else:
             yield {"content": "そうね、覚えているわ。", "tool_calls": None}
 
     monkeypatch.setattr(type(chat_ws.deepseek_service), "get_chat_stream", provider)
+    if wants_recall:
+        async def route(self, *_args, **_kwargs):
+            await draft_started.wait()
+            return {"recall_needs": ["好み"]}
+
+        monkeypatch.setattr(type(chat_ws.deepseek_service), "complete_json", route)
     session.append_message({"role": "user", "content": "覚えてる？", "id": None})
     queue = asyncio.Queue()
     task = chat_ws.processor_loop(session, "覚えてる？", queue, session.current_epoch, session.history_epoch)
@@ -364,6 +373,7 @@ async def test_processor_reference_publication_and_actual_second_request(isolate
 async def test_retry_keeps_refreshed_candidates_separate_from_sent_budget(isolated_store, monkeypatch):
     from unittest.mock import AsyncMock
     from app.services import turn_tool_orchestrator as orchestrator
+    from app.services.prompt_compiler import CompiledPrompt
     from test_chat_ws_background_tasks import _new_session, _suppress_auto_title
     from test_memory_v11_resident_profile import _fake_supplement
 
@@ -400,7 +410,11 @@ async def test_retry_keeps_refreshed_candidates_separate_from_sent_budget(isolat
     budget = orchestrator.request_envelope_tokens(fitting.history, short_system, "", second_builder) + 64
     assert budget > 2048  # Stay above the provider budget floor.
     monkeypatch.setattr(chat_ws.config, "REQUEST_INPUT_BUDGET", budget)
-    monkeypatch.setattr(chat_ws, "compile_for_session", AsyncMock(return_value="SYSTEM"))
+    async def compile_prompt(*args, **kwargs):
+        session.turn_compiled_prompt = CompiledPrompt("SYSTEM", resident_complete=False)
+        return "SYSTEM"
+
+    monkeypatch.setattr(chat_ws, "compile_for_session", compile_prompt)
     monkeypatch.setattr(chat_ws, "translate_with_provider", AsyncMock(return_value="翻译"))
     monkeypatch.setattr(jobs, "enqueue_memory_job", AsyncMock())
     _suppress_auto_title(monkeypatch)
@@ -428,13 +442,19 @@ async def test_retry_keeps_refreshed_candidates_separate_from_sent_budget(isolat
 
     monkeypatch.setattr(orchestrator, "refresh_candidates_for_send", tracked_refresh)
     sent = []
+    draft_started = asyncio.Event()
+
+    async def route(self, *_args, **_kwargs):
+        await draft_started.wait()
+        return {"recall_needs": ["好み"]}
 
     async def capture(self, **kwargs):
+        assert kwargs["tools"] is None
         sent.append(kwargs)
         record = session.turn_execution
         if len(sent) == 1:
-            yield {"content": None, "tool_calls": [{"index": 0, "id": "retry192", "type": "function",
-                   "function": {"name": "recall_memory", "arguments": '{"needs":["好み"]}'}}]}
+            draft_started.set()
+            await asyncio.Future()
         elif len(sent) == 2:
             assert set(record.sent_recall_result.records) == {"m1"}
             assert record.sent_recall_fact_ids == ()
@@ -448,6 +468,7 @@ async def test_retry_keeps_refreshed_candidates_separate_from_sent_budget(isolat
             yield {"content": "そうね、覚えているわ。", "tool_calls": None}
 
     monkeypatch.setattr(type(chat_ws.deepseek_service), "get_chat_stream", capture)
+    monkeypatch.setattr(type(chat_ws.deepseek_service), "complete_json", route)
     await chat_ws.processor_loop(session, current, asyncio.Queue(), session.current_epoch, session.history_epoch)
     if session.background_tasks:
         await asyncio.gather(*session.background_tasks, return_exceptions=True)

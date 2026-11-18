@@ -417,7 +417,7 @@ async def test_fake_provider_two_round_recall(isolated_store, monkeypatch):
     from app.services.model_catalog import model_catalog
     from app.services.provider_runtime import deepseek_service
 
-    monkeypatch.setattr(model_catalog, "uses_native_reasoning", lambda *_args: False)
+    monkeypatch.setattr(type(model_catalog), "uses_native_reasoning", staticmethod(lambda *_args: False))
     owner = f"round-{uuid4()}"
     await _seed(owner, "cat", "我养了一只叫小白的猫。")
     monkeypatch.setattr(memory_service, "embedder", _StubEmbedder())

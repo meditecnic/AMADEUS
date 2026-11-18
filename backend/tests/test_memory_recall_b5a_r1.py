@@ -743,8 +743,8 @@ async def test_v11_web_only_second_round_json_escapes_web(isolated_store, monkey
         assert json.loads(arguments) == {"query": "秋葉原 天気"}
         return malicious
 
-    monkeypatch.setattr(search_service, "any_paid_provider_configured", lambda: True)
-    monkeypatch.setitem(vars(deepseek_service), "complete_json", route)
+    monkeypatch.setattr(type(search_service), "any_paid_provider_configured", lambda self: True)
+    monkeypatch.setattr(type(deepseek_service), "complete_json", staticmethod(route))
     monkeypatch.setattr(type(deepseek_service), "get_chat_stream", staticmethod(fake_stream))
     monkeypatch.setattr("app.routers.chat_ws.execute_tool_call", fake_web)
 
@@ -809,7 +809,7 @@ async def test_v11_force_search_first_round_json_web(isolated_store, monkeypatch
 
     monkeypatch.setattr(type(deepseek_service), "get_chat_stream", staticmethod(fake_stream))
     monkeypatch.setattr("app.routers.chat_ws.execute_tool_call", fake_web)
-    monkeypatch.setattr(search_service, "any_paid_provider_configured", lambda: True)
+    monkeypatch.setattr(type(search_service), "any_paid_provider_configured", lambda self: True)
 
     async def _async_cn(*_a, **_k):
         return "中文"

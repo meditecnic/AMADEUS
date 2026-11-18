@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from http.cookiejar import CookieJar, DefaultCookiePolicy
 from typing import Any, Optional
+from weakref import WeakKeyDictionary
 
 import httpx
 
@@ -18,7 +19,7 @@ from app.services.llm_interface import LLMInterface, build_stream_messages, fold
 
 
 _HTTP_CLIENT_TYPE = httpx.AsyncClient
-_model_http_clients: dict[asyncio.AbstractEventLoop, dict[object, httpx.AsyncClient]] = {}
+_model_http_clients: dict[asyncio.AbstractEventLoop, WeakKeyDictionary[object, httpx.AsyncClient]] = {}
 
 
 @asynccontextmanager
@@ -35,7 +36,7 @@ async def model_http_client(owner, client_type, *, timeout, transport=None):
         if previous.is_closed():
             # An HTTP pool must be closed on its owning loop.
             _model_http_clients.pop(previous, None)
-    clients = _model_http_clients.setdefault(loop, {})
+    clients = _model_http_clients.setdefault(loop, WeakKeyDictionary())
     client = clients.get(owner)
     if client is None or client.is_closed:
         # Reuse connections without carrying cookies between credentials.

@@ -92,7 +92,7 @@ class DeepSeekService(LLMInterface):
         identity_mode: str = "okabe",
     ) -> str:
         prompt = base_prompt if base_prompt is not None else self._system_prompt
-        if "【わたしについて】" in prompt:
+        if "【わたしについて】" in prompt and "[EMO:" in prompt:
             return prompt.strip()
         if "PERSONA BIBLE v1 (canonical runtime persona)" in prompt:
             # Full Bible already carries mode rules from compile; output contract only.

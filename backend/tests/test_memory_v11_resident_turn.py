@@ -281,7 +281,7 @@ def _patch_turn_side_effects(monkeypatch, translate_targets) -> None:
         return "中文"
 
     for target in translate_targets:
-        monkeypatch.setattr(target, "translate_to_zh", fake_zh)
+        monkeypatch.setattr(type(target), "translate_to_zh", staticmethod(fake_zh))
 
     def fake_title(*args, **kwargs):
         async def _noop():
@@ -326,9 +326,14 @@ def _candidate_records(text: str) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_processor_deepseek_first_round_profile_and_recall_exclusion(isolated_store, monkeypatch):  # noqa: F811
+@pytest.mark.parametrize(("forced", "search_configured"), [(False, False), (True, False), (True, True)])
+async def test_processor_deepseek_first_round_profile_and_recall_exclusion(
+    isolated_store, monkeypatch, forced, search_configured,
+):  # noqa: F811
     """[A1][A6] DeepSeek: CORE FACTS + supplement in round 1; recall excludes them."""
-    from app.routers.chat_ws import processor_loop, search_service
+    from unittest.mock import AsyncMock
+
+    from app.routers import chat_ws
     from app.services.memory import memory_service
     from app.services.provider_runtime import deepseek_service
 
@@ -361,19 +366,23 @@ async def test_processor_deepseek_first_round_profile_and_recall_exclusion(isola
     async def route(*args, reasoning_effort, **kwargs):
         assert reasoning_effort is None
         await speculative_started.wait()
-        return {"recall_needs": ["紅茶"]}
+        return {"recall_needs": ["紅茶"], "search_query": "unused"}
 
-    monkeypatch.setattr(search_service, "any_paid_provider_configured", lambda: False)
+    web = AsyncMock(return_value="Public evidence")
+    monkeypatch.setattr(chat_ws, "execute_tool_call", web)
+    monkeypatch.setattr(chat_ws, "should_force_search", lambda _: forced)
+    monkeypatch.setattr(type(chat_ws.search_service), "any_paid_provider_configured", lambda self: search_configured)
     monkeypatch.setattr(type(deepseek_service), "get_chat_stream", staticmethod(fake_stream))
-    monkeypatch.setitem(vars(deepseek_service), "complete_json", route)
+    monkeypatch.setattr(type(deepseek_service), "complete_json", staticmethod(route))
     _patch_turn_side_effects(monkeypatch, [deepseek_service])
     session = await _processor_session(owner, provider_id="deepseek", model="deepseek-v4-flash")
     session.protocol_version = 2
     session.append_message({"role": "user", "content": SUPPLEMENT_QUERY, "id": None})
     queue: asyncio.Queue = asyncio.Queue()
-    await processor_loop(session, SUPPLEMENT_QUERY, queue, session.current_epoch, session.history_epoch)
+    await chat_ws.processor_loop(session, SUPPLEMENT_QUERY, queue, session.current_epoch, session.history_epoch)
 
     assert len(calls) == 2 and all(call["tools"] is None for call in calls)
+    assert web.await_count == int(forced and search_configured)
     assert all(call["reasoning_effort"] in {"low", "high", "max"} for call in calls)
     events = []
     while not queue.empty():
@@ -392,6 +401,7 @@ async def test_processor_deepseek_first_round_profile_and_recall_exclusion(isola
     assert set(record.injected_fact_ids) == {ids[text] for text in injected_texts}
     assert len(record.injected_fact_ids) == 34
     second_blob = "\n".join(str(row.get("content") or "") for row in calls[1]["history"])
+    assert second_blob.count("WEB_EVIDENCE_DATA") == int(forced and search_configured)
     second_records = _candidate_records("\n".join(
         row["content"] for row in calls[1]["history"] if row["content"].startswith("MEMORY CANDIDATES")
     ))
@@ -417,10 +427,12 @@ class _CaptureTransport:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("with_facts", [True, False])
-async def test_processor_glm_non_tool_profile_and_notice(isolated_store, monkeypatch, with_facts):  # noqa: F811
+@pytest.mark.parametrize(("model", "with_facts"), [
+    ("glm-probe", True), ("glm-probe", False), ("glm-5.2", True),
+])
+async def test_processor_glm_non_tool_profile_and_notice(isolated_store, monkeypatch, model, with_facts):  # noqa: F811
     """[A1][A2][A8] GLM (no tools): CORE FACTS in round 1; injected notice only with facts."""
-    from app.routers.chat_ws import processor_loop
+    from app.routers.chat_ws import processor_loop, search_service
     from app.services.memory import memory_service
     from app.services.provider_adapters import OpenAICompatibleAdapter
     from app.services.provider_registry import ProviderCapabilities, ProviderSnapshot, ProviderTask
@@ -434,28 +446,32 @@ async def test_processor_glm_non_tool_profile_and_notice(isolated_store, monkeyp
     adapter = OpenAICompatibleAdapter(
         provider_id="glm",
         base_url="https://probe.invalid/v1",
-        default_model="glm-probe",
+        default_model=model,
         message_builder=deepseek_service.build_persona_messages,
         transport=httpx.MockTransport(capture.handler),
         credential_required=False,
     )
     snapshot = ProviderSnapshot(
         provider_id="glm",
-        model_id="glm-probe",
+        model_id=model,
         capabilities=ProviderCapabilities(tasks=frozenset({ProviderTask.CHAT, ProviderTask.TRANSLATION})),
         adapter=adapter,
         credential_required=False,
     )
+    monkeypatch.setattr(type(search_service), "any_paid_provider_configured", lambda self: True)
     monkeypatch.setattr('app.services.provider_registry.ProviderRegistry.snapshot', staticmethod(lambda *_a, **_k: snapshot))
     _patch_turn_side_effects(monkeypatch, [adapter, deepseek_service])
-    session = await _processor_session(owner, provider_id="glm", model="glm-probe")
+    session = await _processor_session(owner, provider_id="glm", model=model)
     session.append_message({"role": "user", "content": SUPPLEMENT_QUERY, "id": None})
     queue: asyncio.Queue = asyncio.Queue()
     await processor_loop(session, SUPPLEMENT_QUERY, queue, session.current_epoch, session.history_epoch)
 
     record = session.turn_execution
     assert record.tool_plan_status == "unsupported"
-    assert capture.requests
+    assert len(capture.requests) == 1
+    payloads = [queue.get_nowait()[1] for _ in range(queue.qsize())]
+    assert any(payload.get("reason") == "undeclared_combo" for payload in payloads)
+    assert not any(payload.get("tool") for payload in payloads)
     request = capture.requests[0]
     assert not request.get("tools")
     system = request["messages"][0]["content"]

@@ -347,13 +347,13 @@ async def test_processor_loop_triggers_web_search_for_weather(tmp_path, monkeypa
         sent_statuses.append(item)
         await original_put(item)
 
-    monkeypatch.setattr(chat_ws.search_service, "any_paid_provider_configured", lambda: True)
+    monkeypatch.setattr(type(chat_ws.search_service), "any_paid_provider_configured", lambda self: True)
     router = AsyncMock(side_effect=AssertionError("direct search must bypass the router"))
-    monkeypatch.setitem(vars(chat_ws.deepseek_service), "complete_json", router)
+    monkeypatch.setattr(type(chat_ws.deepseek_service), "complete_json", staticmethod(router))
     with patch.object(chat_ws, "get_clean_text_stream", side_effect=fake_clean_stream) as stream, \
          patch.object(chat_ws, "execute_tool_call", search), \
          patch.object(send_queue, "put", side_effect=capturing_put), \
-         patch.object(chat_ws.deepseek_service, "translate_to_zh", new_callable=AsyncMock, return_value="北京晴，24度。"):
+         patch.object(type(chat_ws.deepseek_service), "translate_to_zh", new_callable=AsyncMock, return_value="北京晴，24度。"):
         await processor_loop(session, "今天北京天气怎么样", send_queue, epoch, start_history_epoch)
 
     # Verify execute_tool_call was invoked for web_search
@@ -387,7 +387,7 @@ async def test_processor_does_not_generate_answer_without_search_evidence(tmp_pa
     chat_ws.sessions[session.session_id] = session
     send_queue = asyncio.Queue()
     model_stream = AsyncMock()
-    monkeypatch.setattr(chat_ws.search_service, "any_paid_provider_configured", lambda: True)
+    monkeypatch.setattr(type(chat_ws.search_service), "any_paid_provider_configured", lambda self: True)
 
     with patch.object(
         chat_ws,
@@ -467,13 +467,13 @@ async def test_native_stream_resumes_without_search_when_router_declines_or_fail
         yield {"content": "再現性も確認してね。"}
 
     monkeypatch.setattr(queue, "put", capture)
-    monkeypatch.setattr(_chat_ws_mod.search_service, "any_paid_provider_configured", lambda: True)
+    monkeypatch.setattr(type(_chat_ws_mod.search_service), "any_paid_provider_configured", lambda self: True)
     monkeypatch.setattr(turn_tool_orchestrator, "RETRIEVAL_ROUTER_TIMEOUT", 0.05)
-    service = vars(_chat_ws_mod.deepseek_service)
-    monkeypatch.setitem(service, "get_chat_stream", reply)
-    monkeypatch.setitem(service, "complete_json", classify)
-    monkeypatch.setitem(service, "translate_to_zh", AsyncMock(return_value="对照组。"))
-    monkeypatch.setitem(vars(conversation_service), "schedule_auto_title", lambda *_a, **_k: None)
+    service = type(_chat_ws_mod.deepseek_service)
+    monkeypatch.setattr(service, "get_chat_stream", staticmethod(reply))
+    monkeypatch.setattr(service, "complete_json", staticmethod(classify))
+    monkeypatch.setattr(service, "translate_to_zh", AsyncMock(return_value="对照组。"))
+    monkeypatch.setattr(type(conversation_service), "schedule_auto_title", lambda *_a, **_k: None)
     search = AsyncMock(side_effect=AssertionError("no search expected"))
     monkeypatch.setattr(_chat_ws_mod, "execute_tool_call", search)
     await asyncio.wait_for(

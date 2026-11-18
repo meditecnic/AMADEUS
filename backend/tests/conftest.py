@@ -1,4 +1,5 @@
 import hashlib
+import http.client
 import math
 import os
 import shutil
@@ -8,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import httpx
 from fastapi.testclient import TestClient
 
 # ---------------------------------------------------------------------------
@@ -236,12 +238,71 @@ def offline_tts_sidecar(isolated_user_dirs):
         instance_dict.update(saved)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def forbid_external_http():
+    """Reject non-local HTTP before the real transport opens a connection."""
+    local_hosts = {"127.0.0.1", "::1", "localhost", "testserver"}
+
+    def check(host):
+        if host not in local_hosts:
+            pytest.fail(f"external HTTP forbidden in tests: {host}", pytrace=False)
+
+    async_send = httpx.AsyncHTTPTransport.handle_async_request
+    sync_send = httpx.HTTPTransport.handle_request
+    connect = http.client.HTTPConnection.connect
+
+    async def guard_async(self, request):
+        check(request.url.host)
+        return await async_send(self, request)
+
+    def guard_sync(self, request):
+        check(request.url.host)
+        return sync_send(self, request)
+
+    def guard_connect(self):
+        check(self.host)
+        if self._tunnel_host is not None:
+            check(self._tunnel_host)
+        return connect(self)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(httpx.AsyncHTTPTransport, "handle_async_request", guard_async)
+        mp.setattr(httpx.HTTPTransport, "handle_request", guard_sync)
+        mp.setattr(http.client.HTTPConnection, "connect", guard_connect)
+        yield
+
+
+@pytest.fixture(autouse=True)
+def clean_shared_service_method_overrides(isolated_user_dirs):
+    from app.services.conversations import conversation_service
+    from app.services.memory import memory_service
+    from app.services.model_catalog import model_catalog
+    from app.services.provider_runtime import deepseek_service, gemini_adapter, openai_adapter, provider_registry
+    from app.services.search import search_service
+    from app.services.tts_queue import tts_manager
+
+    services = (
+        deepseek_service, openai_adapter, gemini_adapter, provider_registry, model_catalog,
+        conversation_service, memory_service, search_service, tts_manager,
+    )
+    existing = [(service, set(vars(service))) for service in services]
+    yield
+    # Undoing an instance patch can restore a bound method as an attribute
+    # and hide class-level patches installed by the next test.
+    for service, before in existing:
+        attrs = vars(service)
+        for name in attrs.keys() - before:
+            if callable(attrs[name]) and callable(getattr(type(service), name, None)):
+                del attrs[name]
+
+
 @pytest.fixture
-def monkeypatch(isolated_user_dirs, offline_tts_sidecar):
+def monkeypatch(isolated_user_dirs, offline_tts_sidecar, clean_shared_service_method_overrides):
     """Built-in ``monkeypatch``, made to depend on ``isolated_user_dirs``.
 
     It also depends on ``offline_tts_sidecar`` so that fixture's stand-ins
     are installed before, and removed after, anything a test patches.
+    Shared service overrides are checked after the patches have been undone.
     """
     mp = pytest.MonkeyPatch()
     yield mp

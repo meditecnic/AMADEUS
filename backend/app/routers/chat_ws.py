@@ -1901,24 +1901,28 @@ async def processor_loop(
         )
         session.turn_execution = turn_record
         force_now = should_force_search(user_msg)
-        native = not config.PI_AGENT_ENABLED and model_catalog.uses_native_reasoning(
-            turn_provider.provider_id, turn_provider.model_id,
+        tool_plan = plan_first_round_tools(
+            force_search=force_now,
+            provider_id=turn_provider.provider_id,
+            adapter_kind=type(turn_provider.adapter).__name__,
+        )
+        turn_record.tool_plan_status = tool_plan.status
+        turn_record.tool_plan_reason = tool_plan.reason
+        native = (
+            not config.PI_AGENT_ENABLED
+            and tool_plan.status != "unsupported"
+            and turn_provider.reasoning_effort != "none"
+            and model_catalog.uses_native_reasoning(
+                turn_provider.provider_id, turn_provider.model_id,
+            )
         )
         tools_to_use = tool_choice_to_use = None
         can_search = can_recall = False
         if native:
-            turn_record.tool_plan_status = "ok"
             can_search = search_service.any_paid_provider_configured()
             can_recall = compiled_prompt is not None and not compiled_prompt.resident_complete
             direct_search = force_now and can_search
         else:
-            tool_plan = plan_first_round_tools(
-                force_search=force_now,
-                provider_id=turn_provider.provider_id,
-                adapter_kind=type(turn_provider.adapter).__name__,
-            )
-            turn_record.tool_plan_status = tool_plan.status
-            turn_record.tool_plan_reason = tool_plan.reason
             direct_search = force_now and tool_plan.status != "unsupported"
             if tool_plan.status == "unsupported":
                 notice = apply_unsupported_combo(
@@ -1976,13 +1980,14 @@ async def processor_loop(
                 provider_snapshot=turn_provider,
                 mode_state=TurnModeState() if native else turn_record.mode_state,
             )
-            return text, emotion, {} if native else calls, found
+            return text, emotion, calls if tools_to_use is not None else {}, found
 
         publish = submit_text_delta if session.protocol_version >= 2 else None
-        if native and not force_now and (can_search or can_recall) and should_route_retrieval(user_msg):
+        route_search = can_search and not force_now
+        if native and (route_search or can_recall) and should_route_retrieval(user_msg):
             route = route_native_retrieval(
                 turn_provider, turn_api_key, user_msg, active_history,
-                can_search=can_search, can_recall=can_recall,
+                can_search=route_search, can_recall=can_recall,
             )
             generation = await generate_with_retrieval_router(route, generate, publish)
         else:
