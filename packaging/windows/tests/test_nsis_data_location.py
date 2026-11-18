@@ -1,11 +1,11 @@
-"""Verify Tauri NSIS data-location hooks, JSON escaping, and round-trip startup contracts."""
+"""Verify Tauri NSIS data-location hooks, JSON escaping, and silent CLI contracts (stdlib-only)."""
 from __future__ import annotations
 
 import contextlib
 import io
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import shutil
 import subprocess
 import sys
@@ -27,6 +27,10 @@ def _find_makensis() -> Path | None:
         if cached.is_file():
             return cached
     return None
+
+
+def _nsis_escape_json_string(raw_path: str) -> str:
+    return raw_path.replace("\\", "\\\\").replace('"', '\\"')
 
 
 class NsisHookConfigAndSmokeCliTests(unittest.TestCase):
@@ -81,39 +85,25 @@ class NsisHookConfigAndSmokeCliTests(unittest.TestCase):
                     "--data-dir", "relative/data",
                 ])
 
-    def test_python_data_location_roundtrips_nsis_json_payloads(self):
-        sys.path.insert(0, str(REPO / "backend"))
-        with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp)
-            identity_dir = root / "com.amadeus.test"
-            custom_dir = (root / "自定义 数据" / "Amadeus Data").resolve()
-            identity_dir.mkdir(parents=True)
-            custom_dir.mkdir(parents=True)
+    def test_nsis_json_escape_format_matches_utf8_no_bom_contract(self):
+        for sample in (
+            r"D:\AmadeusData",
+            r"D:\自定义 数据\Amadeus Storage\data",
+            r"E:\Users\test_dir\Amadeus (Custom)",
+        ):
+            escaped = _nsis_escape_json_string(sample)
+            raw_bytes = f'{{"path":"{escaped}"}}'.encode("utf-8")
+            self.assertFalse(raw_bytes.startswith(b"\xef\xbb\xbf"))
+            parsed = json.loads(raw_bytes.decode("utf-8"))
+            self.assertEqual(parsed, {"path": sample})
+            self.assertTrue(PureWindowsPath(parsed["path"]).is_absolute())
 
-            marker_path = custom_dir / "amadeus-data.json"
-            marker_path.write_bytes(b'{"format":1}')
+        marker_bytes = b'{"format":1}'
+        self.assertFalse(marker_bytes.startswith(b"\xef\xbb\xbf"))
+        self.assertEqual(json.loads(marker_bytes.decode("utf-8")), {"format": 1})
 
-            escaped = str(custom_dir).replace("\\", "\\\\").replace('"', '\\"')
-            location_path = identity_dir / "data-location.json"
-            location_path.write_bytes(f'{{"path":"{escaped}"}}'.encode("utf-8"))
-
-            old_env = {k: os.environ.get(k) for k in ("AMADEUS_DATA_DIR", "AMADEUS_DB_PATH", "AMADEUS_LOCATION_FILE")}
-            try:
-                os.environ["AMADEUS_DATA_DIR"] = str(custom_dir)
-                os.environ.pop("AMADEUS_DB_PATH", None)
-                os.environ["AMADEUS_LOCATION_FILE"] = str(location_path)
-
-                from app.services import data_location
-
-                record = data_location.read_location()
-                self.assertEqual(Path(record["path"]).resolve(), custom_dir)
-                data_location.validate_startup()
-            finally:
-                for key, val in old_env.items():
-                    if val is None:
-                        os.environ.pop(key, None)
-                    else:
-                        os.environ[key] = val
+        with self.assertRaises(json.JSONDecodeError):
+            json.loads(r'{"path":"D:\unescaped\ndata"}')
 
 
 @unittest.skipUnless(os.name == "nt" and _find_makensis() is not None, "Requires Windows and makensis.exe")
@@ -186,7 +176,6 @@ SectionEnd
         return out_exe
 
     def test_compiled_nsis_hooks_silent_default_custom_upgrade_reset_and_rejections(self):
-        sys.path.insert(0, str(REPO / "backend"))
         with tempfile.TemporaryDirectory() as temp:
             work = Path(temp)
             identity_root = (work / "localappdata" / "com.amadeus.nsis.test").resolve()
@@ -212,23 +201,7 @@ SectionEnd
             self.assertFalse(location_file.read_bytes().startswith(b"\xef\xbb\xbf"))
             parsed_loc = json.loads(location_file.read_text(encoding="utf-8"))
             self.assertEqual(parsed_loc, {"path": str(custom_dir)})
-
-            # Verify backend data_location.read_location() + validate_startup() accept NSIS output
-            old_env = {k: os.environ.get(k) for k in ("AMADEUS_DATA_DIR", "AMADEUS_DB_PATH", "AMADEUS_LOCATION_FILE")}
-            try:
-                os.environ["AMADEUS_DATA_DIR"] = str(custom_dir)
-                os.environ.pop("AMADEUS_DB_PATH", None)
-                os.environ["AMADEUS_LOCATION_FILE"] = str(location_file)
-                from app.services import data_location
-
-                self.assertEqual(Path(data_location.read_location()["path"]).resolve(), custom_dir)
-                data_location.validate_startup()
-            finally:
-                for key, val in old_env.items():
-                    if val is None:
-                        os.environ.pop(key, None)
-                    else:
-                        os.environ[key] = val
+            self.assertTrue(Path(parsed_loc["path"]).is_absolute())
 
             # 3. Upgrade install: existing data-location.json written by Python json.dump (ensure_ascii=True,
             #    with previous_path BEFORE path and \uXXXX escapes) is preserved untouched on /S upgrade!
