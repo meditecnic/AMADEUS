@@ -5,7 +5,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     mpsc, Arc, Condvar, Mutex,
 };
 use std::time::{Duration, Instant};
@@ -264,16 +264,32 @@ fn resolve_data_location(default: &Path) -> io::Result<PathBuf> {
     match fs::symlink_metadata(&file) {
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(default.to_path_buf()),
         Err(error) => return Err(invalid(&file, &error.to_string())),
+        Ok(meta) if metadata_is_link_or_reparse(&meta) => {
+            return Err(invalid(&file, "refusing symlink or reparse point"));
+        }
         Ok(_) => {},
     }
     let text = fs::read_to_string(&file).map_err(|e| invalid(&file, &e.to_string()))?;
     let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| invalid(&file, &e.to_string()))?;
     let path = value["path"].as_str().map(PathBuf::from)
         .filter(|path| path.is_absolute()).ok_or_else(|| invalid(&file, "invalid absolute path"))?;
-    if !path.is_dir() {
+    let path_meta = match fs::symlink_metadata(&path) {
+        Ok(meta) => meta,
+        Err(_) => return Err(invalid(&path, "directory does not exist")),
+    };
+    if metadata_is_link_or_reparse(&path_meta) {
+        return Err(invalid(&path, "refusing symlink or reparse point"));
+    }
+    if !path_meta.is_dir() {
         return Err(invalid(&path, "directory does not exist"));
     }
-    let marker = fs::read_to_string(path.join("amadeus-data.json"))
+    let marker_path = path.join("amadeus-data.json");
+    let marker_meta = fs::symlink_metadata(&marker_path)
+        .map_err(|e| invalid(&path, &e.to_string()))?;
+    if metadata_is_link_or_reparse(&marker_meta) || !marker_meta.is_file() {
+        return Err(invalid(&path, "refusing symlink or non-regular data marker"));
+    }
+    let marker = fs::read_to_string(&marker_path)
         .map_err(|e| invalid(&path, &e.to_string()))?;
     let marker: serde_json::Value = serde_json::from_str(&marker)
         .map_err(|e| invalid(&path, &e.to_string()))?;
@@ -1186,9 +1202,11 @@ mod win32_picker {
     const BIF_NEWDIALOGSTYLE: u32 = 0x0000_0040;
     const BIF_USENEWUI: u32 = 0x0000_0050;
 
+    const OFN_OVERWRITEPROMPT: u32 = 0x0000_0002;
     const OFN_FILEMUSTEXIST: u32 = 0x0000_1000;
     const OFN_PATHMUSTEXIST: u32 = 0x0000_0800;
     const OFN_NOCHANGEDIR: u32 = 0x0000_0008;
+    const OFN_EXPLORER: u32 = 0x0008_0000;
 
     #[allow(non_camel_case_types, dead_code)]
     #[repr(C)]
@@ -1247,6 +1265,7 @@ mod win32_picker {
     #[link(name = "comdlg32")]
     extern "system" {
         fn GetOpenFileNameW(lpofn: *mut OPENFILENAMEW) -> i32;
+        fn GetSaveFileNameW(lpofn: *mut OPENFILENAMEW) -> i32;
         fn CommDlgExtendedError() -> u32;
     }
 
@@ -1378,6 +1397,63 @@ mod win32_picker {
             PickerKind::Zip => pick_zip(owner_hwnd),
         }
     }
+
+    pub(super) fn save_file(
+        owner_hwnd: isize,
+        suggested_name: &str,
+        filter_spec: &str,
+        def_ext_spec: &str,
+    ) -> Result<Option<String>, String> {
+        let _com = ComApartmentGuard::init_apartment()?;
+        let filter: Vec<u16> = filter_spec.encode_utf16().collect();
+        let title: Vec<u16> = "导出另存为".encode_utf16().chain(Some(0)).collect();
+        let def_ext: Vec<u16> = def_ext_spec.encode_utf16().chain(Some(0)).collect();
+        let mut file_buf = vec![0u16; 32768];
+        let suggested_utf16: Vec<u16> = suggested_name.encode_utf16().collect();
+        let copy_len = suggested_utf16.len().min(file_buf.len().saturating_sub(1));
+        file_buf[..copy_len].copy_from_slice(&suggested_utf16[..copy_len]);
+
+        let mut ofn = OPENFILENAMEW {
+            l_struct_size: std::mem::size_of::<OPENFILENAMEW>() as u32,
+            hwnd_owner: owner_hwnd as *mut c_void,
+            h_instance: std::ptr::null_mut(),
+            lpstr_filter: filter.as_ptr(),
+            lpstr_custom_filter: std::ptr::null_mut(),
+            n_max_cust_filter: 0,
+            n_filter_index: 1,
+            lpstr_file: file_buf.as_mut_ptr(),
+            n_max_file: file_buf.len() as u32,
+            lpstr_file_title: std::ptr::null_mut(),
+            n_max_file_title: 0,
+            lpstr_initial_dir: std::ptr::null(),
+            lpstr_title: title.as_ptr(),
+            flags: OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER,
+            n_file_offset: 0,
+            n_file_extension: 0,
+            lpstr_def_ext: def_ext.as_ptr(),
+            l_cust_data: 0,
+            lpfn_hook: None,
+            lp_template_name: std::ptr::null(),
+            pv_reserved: std::ptr::null_mut(),
+            dw_reserved: 0,
+            flags_ex: 0,
+        };
+        // SAFETY: All pointers in OPENFILENAMEW remain valid and zero-terminated through GetSaveFileNameW.
+        if unsafe { GetSaveFileNameW(&mut ofn) } == 0 {
+            // SAFETY: CommDlgExtendedError reads the last common-dialog error on the calling thread.
+            let err = unsafe { CommDlgExtendedError() };
+            if err == 0 {
+                return Ok(None);
+            }
+            return Err(format!("save dialog failed (0x{err:04x})"));
+        }
+        let path = utf16_z_to_string(&file_buf)?;
+        if path.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(path))
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -1497,6 +1573,431 @@ async fn pick_path(
     })
     .await
     .map_err(|_| "native path picker task failed".to_string())?
+}
+
+const MAX_EXPORT_SAVE_BYTES: usize = 512 * 1024 * 1024;
+static EXPORT_TMP_SEQ: AtomicU64 = AtomicU64::new(1);
+
+fn decode_base64(input: &str) -> Result<Vec<u8>, String> {
+    let filtered: Vec<u8> = input
+        .bytes()
+        .filter(|b| !b.is_ascii_whitespace())
+        .collect();
+    if filtered.is_empty() {
+        return Ok(Vec::new());
+    }
+    if filtered.len() % 4 != 0 {
+        return Err("invalid base64 length".into());
+    }
+    let pad = filtered
+        .iter()
+        .rev()
+        .take(2)
+        .take_while(|&&b| b == b'=')
+        .count();
+    let estimated = (filtered.len() / 4) * 3 - pad;
+    if estimated > MAX_EXPORT_SAVE_BYTES {
+        return Err("export payload exceeds size limit".into());
+    }
+    let val = |b: u8| -> Option<u8> {
+        match b {
+            b'A'..=b'Z' => Some(b - b'A'),
+            b'a'..=b'z' => Some(b - b'a' + 26),
+            b'0'..=b'9' => Some(b - b'0' + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    };
+    let mut out = Vec::with_capacity(estimated);
+    let chunks = filtered.len() / 4;
+    for (idx, chunk) in filtered.chunks_exact(4).enumerate() {
+        let is_last = idx + 1 == chunks;
+        let a = val(chunk[0]).ok_or("invalid base64 character")?;
+        let b = val(chunk[1]).ok_or("invalid base64 character")?;
+        match (chunk[2], chunk[3]) {
+            (b'=', b'=') if is_last => {
+                out.push((a << 2) | (b >> 4));
+            }
+            (c_byte, b'=') if is_last && c_byte != b'=' => {
+                let c = val(c_byte).ok_or("invalid base64 character")?;
+                out.push((a << 2) | (b >> 4));
+                out.push((b << 4) | (c >> 2));
+            }
+            (c_byte, d_byte) if c_byte != b'=' && d_byte != b'=' => {
+                let c = val(c_byte).ok_or("invalid base64 character")?;
+                let d = val(d_byte).ok_or("invalid base64 character")?;
+                out.push((a << 2) | (b >> 4));
+                out.push((b << 4) | (c >> 2));
+                out.push((c << 6) | d);
+            }
+            _ => return Err("invalid base64 padding".into()),
+        }
+    }
+    Ok(out)
+}
+
+fn is_windows_reserved_stem(stem: &str) -> bool {
+    let upper = stem.trim().to_ascii_uppercase();
+    matches!(
+        upper.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
+}
+
+fn sanitize_suggested_filename(raw: &str) -> String {
+    let leaf = raw.rsplit(&['/', '\\'][..]).next().unwrap_or("");
+    let cleaned: String = leaf
+        .chars()
+        .map(|ch| {
+            if ch.is_control() || matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') {
+                '_'
+            } else {
+                ch
+            }
+        })
+        .collect();
+    let trimmed = cleaned.trim().trim_end_matches(&['.', ' '][..]);
+    if trimmed.is_empty() || trimmed == "." || trimmed == ".." {
+        return "amadeus-export.zip".to_string();
+    }
+    let stem = trimmed.split('.').next().unwrap_or("");
+    if is_windows_reserved_stem(stem) {
+        return "amadeus-export.zip".to_string();
+    }
+    if trimmed.encode_utf16().count() <= 200 {
+        return trimmed.to_string();
+    }
+    let (base, ext) = match trimmed.rfind('.') {
+        Some(dot) if dot > 0 && trimmed.len() - dot <= 16 => (&trimmed[..dot], &trimmed[dot..]),
+        _ => (trimmed, ""),
+    };
+    let max_base_units = 200usize.saturating_sub(ext.encode_utf16().count());
+    let mut short = String::new();
+    let mut used = 0usize;
+    for ch in base.chars() {
+        let w = ch.len_utf16();
+        if used + w > max_base_units {
+            break;
+        }
+        short.push(ch);
+        used += w;
+    }
+    let short_trimmed = short.trim_end_matches(&['.', ' '][..]);
+    if short_trimmed.is_empty() {
+        "amadeus-export.zip".to_string()
+    } else {
+        format!("{short_trimmed}{ext}")
+    }
+}
+
+fn save_dialog_spec(suggested_name: &str) -> (&'static str, &'static str) {
+    let lower = suggested_name.to_ascii_lowercase();
+    if lower.ends_with(".json") {
+        ("JSON Files (*.json)\0*.json\0All Files (*.*)\0*.*\0\0", "json")
+    } else if lower.ends_with(".md") {
+        ("Markdown Files (*.md)\0*.md\0All Files (*.*)\0*.*\0\0", "md")
+    } else {
+        (
+            "Zip Archives (*.zip)\0*.zip\0JSON Files (*.json)\0*.json\0All Files (*.*)\0*.*\0\0",
+            "zip",
+        )
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn save_path_native(suggested_name: &str, owner_hwnd: isize) -> Result<Option<String>, String> {
+    let (filter_spec, def_ext) = save_dialog_spec(suggested_name);
+    win32_picker::save_file(owner_hwnd, suggested_name, filter_spec, def_ext)
+}
+
+#[cfg(target_os = "macos")]
+fn save_path_native(suggested_name: &str, _owner_hwnd: isize) -> Result<Option<String>, String> {
+    let safe_name = suggested_name.replace('\\', "").replace('"', "");
+    let script = format!(
+        r#"POSIX path of (choose file name with prompt "导出另存为" default name "{safe_name}")"#
+    );
+    match run_picker_command("osascript", &["-e", &script]) {
+        Ok(result) => Ok(result),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[cfg(all(not(target_os = "windows"), unix, not(target_os = "macos")))]
+fn save_path_native(suggested_name: &str, _owner_hwnd: isize) -> Result<Option<String>, String> {
+    let filename_arg = format!("--filename={suggested_name}");
+    let zenity_args = [
+        "--file-selection",
+        "--save",
+        "--confirm-overwrite",
+        "--title=导出另存为",
+        &filename_arg,
+    ];
+    match run_picker_command("zenity", &zenity_args) {
+        Ok(result) => return Ok(result),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.to_string()),
+    }
+    match run_picker_command("kdialog", &["--getsavefilename", suggested_name]) {
+        Ok(result) => Ok(result),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[cfg(not(any(target_os = "windows", unix)))]
+fn save_path_native(_suggested_name: &str, _owner_hwnd: isize) -> Result<Option<String>, String> {
+    Ok(None)
+}
+
+fn normalize_compare_path(path: &Path) -> String {
+    let resolved = if path.exists() {
+        fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    } else if let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
+        if parent.exists() {
+            fs::canonicalize(parent)
+                .map(|p| p.join(name))
+                .unwrap_or_else(|_| path.to_path_buf())
+        } else {
+            path.to_path_buf()
+        }
+    } else {
+        path.to_path_buf()
+    };
+    let raw = resolved.to_string_lossy();
+    let stripped = if let Some(rest) = raw.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = raw.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        raw.into_owned()
+    };
+    if cfg!(windows) {
+        let mut s = stripped.replace('/', "\\");
+        while s.len() > 3 && s.ends_with('\\') {
+            s.pop();
+        }
+        s.to_lowercase()
+    } else {
+        let mut s = stripped;
+        while s.len() > 1 && s.ends_with('/') {
+            s.pop();
+        }
+        s
+    }
+}
+
+fn path_overlaps_protected(target_file: &Path, protected_dirs: &[PathBuf]) -> bool {
+    let target_norm = normalize_compare_path(target_file);
+    let sep = if cfg!(windows) { '\\' } else { '/' };
+    for dir in protected_dirs {
+        if dir.as_os_str().is_empty() {
+            continue;
+        }
+        let dir_norm = normalize_compare_path(dir);
+        if dir_norm.is_empty() {
+            continue;
+        }
+        if target_norm == dir_norm {
+            return true;
+        }
+        let prefix = if dir_norm.ends_with(sep) {
+            dir_norm
+        } else {
+            format!("{dir_norm}{sep}")
+        };
+        if target_norm.starts_with(&prefix) {
+            return true;
+        }
+    }
+    false
+}
+
+fn collect_protected_export_dirs(app: &tauri::AppHandle) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(local_dir) = app.path().app_local_data_dir() {
+        dirs.push(local_dir);
+    }
+    if let Ok(app_dir) = app.path().app_data_dir() {
+        dirs.push(app_dir);
+    }
+    if let Ok(runtime_dir) = resolve_startup_runtime_dir(app) {
+        dirs.push(runtime_dir);
+    }
+    if let Ok(data_dir) = backend_data_dir(app) {
+        dirs.push(data_dir);
+    }
+    if let Ok(res_dir) = app.path().resource_dir() {
+        dirs.push(res_dir);
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            dirs.push(parent.to_path_buf());
+        }
+    }
+    if let Some(appdata) = std::env::var_os("APPDATA").filter(|v| !v.is_empty()) {
+        dirs.push(PathBuf::from(appdata).join("Amadeus"));
+    }
+    for key in [
+        "SystemRoot",
+        "WINDIR",
+        "ProgramFiles",
+        "ProgramFiles(x86)",
+        "ProgramW6432",
+    ] {
+        if let Some(val) = std::env::var_os(key).filter(|v| !v.is_empty()) {
+            dirs.push(PathBuf::from(val));
+        }
+    }
+    dirs
+}
+
+fn validate_and_write_export_target(
+    selected_path: &Path,
+    contents: &[u8],
+    protected_dirs: &[PathBuf],
+) -> Result<PathBuf, String> {
+    if selected_path.as_os_str().is_empty() || !selected_path.is_absolute() {
+        return Err("target path must be an absolute file path".into());
+    }
+    let Some(file_name) = selected_path.file_name().and_then(|n| n.to_str()) else {
+        return Err("target path is missing a valid filename".into());
+    };
+    let trimmed_leaf = file_name.trim_end_matches(&['.', ' '][..]);
+    if trimmed_leaf.is_empty() || is_windows_reserved_stem(trimmed_leaf.split('.').next().unwrap_or("")) {
+        return Err("target filename is invalid or reserved".into());
+    }
+    let Some(parent) = selected_path.parent() else {
+        return Err("target path is missing parent directory".into());
+    };
+    ensure_no_links_in_chain(selected_path).map_err(|e| e.to_string())?;
+    let parent_meta = fs::symlink_metadata(parent).map_err(|e| e.to_string())?;
+    if metadata_is_link_or_reparse(&parent_meta) || !parent_meta.is_dir() {
+        return Err("target parent directory does not exist or is a link".into());
+    }
+    match fs::symlink_metadata(selected_path) {
+        Ok(meta) => {
+            if metadata_is_link_or_reparse(&meta) {
+                return Err("refusing symlink or reparse point in path".into());
+            }
+            if meta.is_dir() {
+                return Err("target path cannot be a directory".into());
+            }
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err.to_string()),
+    }
+    if path_overlaps_protected(selected_path, protected_dirs) {
+        return Err("refusing to write inside protected runtime directory".into());
+    }
+
+    let seq = EXPORT_TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let temp_path = parent.join(format!(
+        ".amadeus-export-{}-{nonce}-{seq}.tmp",
+        std::process::id()
+    ));
+    let write_res = (|| -> io::Result<()> {
+        let mut temp_file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)?;
+        temp_file.write_all(contents)?;
+        temp_file.sync_all()?;
+        drop(temp_file);
+
+        ensure_no_links_in_chain(selected_path)?;
+        match fs::symlink_metadata(selected_path) {
+            Ok(meta) => {
+                if metadata_is_link_or_reparse(&meta) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "refusing symlink or reparse point in path",
+                    ));
+                }
+                if meta.is_dir() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "target path cannot be a directory",
+                    ));
+                }
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+        }
+        fs::rename(&temp_path, selected_path)
+    })();
+
+    if let Err(err) = write_res {
+        let _ = fs::remove_file(&temp_path);
+        return Err(err.to_string());
+    }
+    Ok(selected_path.to_path_buf())
+}
+
+#[tauri::command]
+async fn save_export_file(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    suggested_name: String,
+    data_base64: String,
+) -> Result<Option<String>, String> {
+    ensure_main_window(&window)?;
+    let contents = decode_base64(&data_base64)?;
+    let clean_name = sanitize_suggested_filename(&suggested_name);
+    let protected_dirs = collect_protected_export_dirs(&app);
+    #[cfg(target_os = "windows")]
+    let owner_hwnd: isize = window.hwnd().ok().map(|h| h.0 as isize).unwrap_or(0);
+    #[cfg(not(target_os = "windows"))]
+    let owner_hwnd: isize = 0;
+
+    let Some(guard) = try_acquire_picker_guard() else {
+        return Ok(None);
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = guard;
+        std::thread::spawn(move || {
+            let _thread_guard = _guard;
+            let Some(chosen) = save_path_native(&clean_name, owner_hwnd)? else {
+                return Ok(None);
+            };
+            let saved = validate_and_write_export_target(
+                Path::new(&chosen),
+                &contents,
+                &protected_dirs,
+            )?;
+            Ok(Some(saved.to_string_lossy().into_owned()))
+        })
+        .join()
+        .map_err(|_| "native save dialog thread panicked".to_string())?
+    })
+    .await
+    .map_err(|_| "native save dialog task failed".to_string())?
 }
 
 fn start_backend(
@@ -1620,7 +2121,8 @@ pub fn run() {
             restart_app,
             get_startup_diagnostics,
             open_startup_log_dir,
-            pick_path
+            pick_path,
+            save_export_file
         ])
         .setup(|app| {
             let startup = Arc::new(BackendStartup::default());
@@ -2326,5 +2828,155 @@ mod tests {
     fn win32_picker_ffi_structs_match_x64_abi() {
         assert_eq!(std::mem::size_of::<win32_picker::BROWSEINFOW>(), 64);
         assert_eq!(std::mem::size_of::<win32_picker::OPENFILENAMEW>(), 152);
+    }
+
+    #[test]
+    fn decode_base64_handles_rfc4648_vectors_and_rejects_corrupt_inputs() {
+        assert_eq!(decode_base64("").unwrap(), b"");
+        assert_eq!(decode_base64("Zg==").unwrap(), b"f");
+        assert_eq!(decode_base64("Zm8=").unwrap(), b"fo");
+        assert_eq!(decode_base64("Zm9v").unwrap(), b"foo");
+        assert_eq!(decode_base64("Zm9vYg==").unwrap(), b"foob");
+        assert_eq!(decode_base64("Zm9vYmE=").unwrap(), b"fooba");
+        assert_eq!(decode_base64("Zm9vYmFy").unwrap(), b"foobar");
+        assert_eq!(decode_base64("UEsFBg==\r\n").unwrap(), &[0x50, 0x4b, 0x05, 0x06]);
+
+        for bad in ["abc", "====", "Zm=v", "Zm9v====", "Zm9$"] {
+            assert!(decode_base64(bad).is_err(), "expected error for {bad:?}");
+        }
+    }
+
+    #[test]
+    fn sanitize_suggested_filename_and_dialog_spec_normalize_inputs() {
+        assert_eq!(
+            sanitize_suggested_filename("amadeus-20261118-conversations-all.zip"),
+            "amadeus-20261118-conversations-all.zip"
+        );
+        assert_eq!(
+            sanitize_suggested_filename("../../evil/path:name?.json"),
+            "path_name_.json"
+        );
+        assert_eq!(sanitize_suggested_filename("CON.zip"), "amadeus-export.zip");
+        assert_eq!(sanitize_suggested_filename("..."), "amadeus-export.zip");
+        let long_name = format!("{}.zip", "a".repeat(260));
+        let capped = sanitize_suggested_filename(&long_name);
+        assert!(capped.ends_with(".zip"));
+        assert!(capped.encode_utf16().count() <= 200);
+
+        assert_eq!(save_dialog_spec("export.zip").1, "zip");
+        assert_eq!(save_dialog_spec("memory.JSON").1, "json");
+        assert_eq!(save_dialog_spec("notes.md").1, "md");
+    }
+
+    #[test]
+    fn validate_and_write_export_target_writes_atomically_and_guards_protected_and_links() {
+        let root = unique_test_dir("save-export");
+        let export_dir = root.join("exports");
+        let protected_dir = root.join("com.amadeus.desktop");
+        let sibling_allowed = root.join("com.amadeus.desktop-exports");
+        fs::create_dir_all(&export_dir).unwrap();
+        fs::create_dir_all(protected_dir.join("data")).unwrap();
+        fs::create_dir_all(&sibling_allowed).unwrap();
+
+        let protected = vec![protected_dir.clone()];
+
+        // 1. Atomic write & overwrite with zero temp residue
+        let dest = export_dir.join("amadeus-export.zip");
+        let saved = validate_and_write_export_target(&dest, b"PK\x05\x06v1", &protected).unwrap();
+        assert_eq!(saved, dest);
+        assert_eq!(fs::read(&dest).unwrap(), b"PK\x05\x06v1");
+        validate_and_write_export_target(&dest, b"PK\x05\x06v2-replaced", &protected).unwrap();
+        assert_eq!(fs::read(&dest).unwrap(), b"PK\x05\x06v2-replaced");
+        let entries: Vec<String> = fs::read_dir(&export_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(entries, vec!["amadeus-export.zip"]);
+
+        // 2. Sibling folder sharing prefix is allowed
+        let sibling_file = sibling_allowed.join("ok.zip");
+        assert!(validate_and_write_export_target(&sibling_file, b"ok", &protected).is_ok());
+
+        // 3. Protected runtime directory and relative/directory/reserved paths are rejected
+        assert!(validate_and_write_export_target(
+            &protected_dir.join("data").join("overwrite.zip"),
+            b"bad",
+            &protected
+        )
+        .is_err());
+        assert!(validate_and_write_export_target(Path::new("relative.zip"), b"bad", &protected).is_err());
+        assert!(validate_and_write_export_target(&export_dir, b"bad", &protected).is_err());
+        assert!(validate_and_write_export_target(&export_dir.join("NUL.zip"), b"bad", &protected).is_err());
+
+        // 4. Windows NTFS junction in ancestor chain is rejected
+        #[cfg(windows)]
+        {
+            let outside = root.join("outside");
+            fs::create_dir_all(&outside).unwrap();
+            let junc = root.join("junction-dir");
+            let status = Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&junc)
+                .arg(&outside)
+                .output()
+                .unwrap();
+            assert!(status.status.success(), "mklink /J failed");
+            let through_junc = junc.join("escape.zip");
+            let err = validate_and_write_export_target(&through_junc, b"escape", &protected).unwrap_err();
+            assert!(err.contains("symlink or reparse point"), "unexpected error: {err}");
+            assert!(!outside.join("escape.zip").exists());
+            let _ = fs::remove_dir(&junc);
+        }
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn nsis_escaped_data_location_roundtrips_and_rejects_reparse_points() {
+        let root = unique_test_dir("nsis-roundtrip");
+        let local_app = root.join("com.amadeus.desktop");
+        let default_data = local_app.join("data");
+        let custom_data = root.join("自定义 数据").join("AmadeusData");
+        fs::create_dir_all(&local_app).unwrap();
+        fs::create_dir_all(&custom_data).unwrap();
+
+        // Simulate exact UTF-8 without BOM files written by NSIS hooks
+        let marker_bytes = br#"{"format":1}"#;
+        fs::write(custom_data.join("amadeus-data.json"), marker_bytes).unwrap();
+        let escaped_custom = custom_data
+            .to_string_lossy()
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"");
+        let location_raw = format!("{{\"path\":\"{escaped_custom}\"}}");
+        assert!(!location_raw.as_bytes().starts_with(&[0xEF, 0xBB, 0xBF]));
+        fs::write(local_app.join("data-location.json"), location_raw.as_bytes()).unwrap();
+
+        assert_eq!(resolve_data_location(&default_data).unwrap(), custom_data);
+
+        #[cfg(windows)]
+        {
+            let junc_target = root.join("junc-target");
+            fs::create_dir_all(&junc_target).unwrap();
+            fs::write(junc_target.join("amadeus-data.json"), marker_bytes).unwrap();
+            let junc_data = root.join("junc-data");
+            let status = Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&junc_data)
+                .arg(&junc_target)
+                .output()
+                .unwrap();
+            assert!(status.status.success(), "mklink /J failed");
+            let escaped_junc = junc_data.to_string_lossy().replace('\\', "\\\\");
+            fs::write(
+                local_app.join("data-location.json"),
+                format!("{{\"path\":\"{escaped_junc}\"}}"),
+            )
+            .unwrap();
+            let err = resolve_data_location(&default_data).unwrap_err().to_string();
+            assert!(err.contains("symlink or reparse point"), "unexpected error: {err}");
+            let _ = fs::remove_dir(&junc_data);
+        }
+
+        fs::remove_dir_all(root).unwrap();
     }
 }

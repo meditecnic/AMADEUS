@@ -509,7 +509,7 @@ def _finalize_inspection(
         errors.append(f"{bad_count} file(s) failed format header validation")
 
     for skipped in sorted(skipped_files):
-        warnings.append(f"Skipped unsupported file type: {skipped}")
+        warnings.append(f"Skipped non-whitelisted file: {skipped}")
 
     if manifest_data is not None:
         listed = manifest_data.get("files")
@@ -517,8 +517,8 @@ def _finalize_inspection(
             missing_listed = [
                 f for f in listed
                 if isinstance(f, str)
+                and f.replace("\\", "/").lstrip("/") in REQUIRED_FILE_SET
                 and f.replace("\\", "/").lstrip("/") not in present_files
-                and f.replace("\\", "/").lstrip("/").lower() != "manifest.json"
             ]
             if missing_listed:
                 warnings.append(f"manifest.json lists {len(missing_listed)} absent file(s)")
@@ -701,7 +701,7 @@ def _inspect_zip_internal(zip_path: Path) -> tuple[dict[str, Any], list[tuple[zi
             install_entries: list[tuple[zipfile.ZipInfo, str]] = []
 
             for info, rel in non_junk_mapped:
-                ext = Path(rel).suffix.lower()
+                is_whitelisted = rel in REQUIRED_FILE_SET
                 is_preview = rel in PREVIEW_PATH_TO_EMOTION
                 is_manifest = rel.lower() == "manifest.json"
                 capture_bytes = is_manifest or is_preview
@@ -726,7 +726,7 @@ def _inspect_zip_internal(zip_path: Path) -> tuple[dict[str, Any], list[tuple[zi
                                 info.compress_size <= 0 or (entry_bytes / info.compress_size) > MAX_COMPRESSION_RATIO
                             ):
                                 raise AssetPackError("unsafe_archive", f"Archive entry exceeds compression ratio limit: {info.filename}", 422)
-                            if len(prefix) < 16:
+                            if is_whitelisted and len(prefix) < 16:
                                 prefix.extend(chunk[: 16 - len(prefix)])
                             if capture_bytes:
                                 limit = MAX_MANIFEST_BYTES if is_manifest else MAX_PREVIEW_BYTES
@@ -740,19 +740,19 @@ def _inspect_zip_internal(zip_path: Path) -> tuple[dict[str, Any], list[tuple[zi
                 except (zipfile.BadZipFile, RuntimeError, EOFError) as exc:
                     raise AssetPackError("invalid_archive", f"Corrupted zip archive: {exc}", 422) from exc
 
-                if ext not in ALLOWED_EXTENSIONS:
-                    skipped_files.append(rel)
-                    continue
-
-                total_eligible_bytes += entry_bytes
-                present_files.add(rel)
-
                 if is_manifest:
                     if entry_bytes > MAX_MANIFEST_BYTES:
                         manifest_error = "manifest.json exceeds size limit"
                     else:
                         manifest_data, manifest_error = _parse_manifest_bytes(bytes(captured))
                     continue
+
+                if not is_whitelisted:
+                    skipped_files.append(rel)
+                    continue
+
+                total_eligible_bytes += entry_bytes
+                present_files.add(rel)
 
                 reason = _validate_magic(rel, bytes(prefix))
                 if reason is not None:
@@ -859,14 +859,6 @@ def _inspect_directory_internal(source_dir: Path) -> tuple[dict[str, Any], list[
     install_entries: list[tuple[Path, str]] = []
 
     for disk_path, rel, size in non_junk:
-        ext = Path(rel).suffix.lower()
-        if ext not in ALLOWED_EXTENSIONS:
-            skipped_files.append(rel)
-            continue
-
-        total_eligible_bytes += size
-        present_files.add(rel)
-
         if rel.lower() == "manifest.json":
             if size > MAX_MANIFEST_BYTES:
                 manifest_error = "manifest.json exceeds size limit"
@@ -876,6 +868,13 @@ def _inspect_directory_internal(source_dir: Path) -> tuple[dict[str, Any], list[
                 except OSError as exc:
                     manifest_error = f"Cannot read manifest.json: {exc}"
             continue
+
+        if rel not in REQUIRED_FILE_SET:
+            skipped_files.append(rel)
+            continue
+
+        total_eligible_bytes += size
+        present_files.add(rel)
 
         try:
             with disk_path.open("rb") as handle:
@@ -960,19 +959,46 @@ def _verify_staged_dir(staging_dir: Path, expected_files: list[str]) -> None:
     except (OSError, ValueError, UnicodeDecodeError) as exc:
         raise AssetPackError("asset_pack_install_failed", f"Staged manifest.json invalid: {exc}", 500) from exc
 
-    if manifest.get("format") != 1 or manifest.get("files") != sorted(expected_files):
+    required_sorted = sorted(REQUIRED_FILES)
+    if (
+        sorted(expected_files) != required_sorted
+        or manifest.get("format") != 1
+        or manifest.get("files") != required_sorted
+    ):
         raise AssetPackError("asset_pack_install_failed", "Staged manifest contents mismatch", 500)
 
-    for rel in expected_files:
+    for rel in REQUIRED_FILES:
         staged = staging_dir / rel
         if not staged.is_file() or _is_link(staged):
             raise AssetPackError("asset_pack_install_failed", f"Staged file missing: {rel}", 500)
-        if rel in REQUIRED_FILE_SET:
-            with staged.open("rb") as handle:
-                header = handle.read(16)
-            reason = _validate_magic(rel, header)
-            if reason is not None:
-                raise AssetPackError("asset_pack_install_failed", f"Staged file invalid ({rel}): {reason}", 500)
+        with staged.open("rb") as handle:
+            header = handle.read(16)
+        reason = _validate_magic(rel, header)
+        if reason is not None:
+            raise AssetPackError("asset_pack_install_failed", f"Staged file invalid ({rel}): {reason}", 500)
+
+    allowed_staged_files = REQUIRED_FILE_SET | {"manifest.json"}
+    stack = [staging_dir]
+    actual_staged_files: set[str] = set()
+    while stack:
+        current = stack.pop()
+        with os.scandir(current) as entries:
+            for entry in entries:
+                entry_path = Path(entry.path)
+                info = entry.stat(follow_symlinks=False)
+                if entry.is_symlink() or stat.S_ISLNK(info.st_mode) or (getattr(info, "st_file_attributes", 0) & _REPARSE_ATTR):
+                    raise AssetPackError("asset_pack_install_failed", f"Staged link rejected: {entry.name}", 500)
+                if stat.S_ISDIR(info.st_mode):
+                    stack.append(entry_path)
+                elif stat.S_ISREG(info.st_mode):
+                    rel_staged = entry_path.relative_to(staging_dir).as_posix()
+                    if rel_staged not in allowed_staged_files:
+                        raise AssetPackError("asset_pack_install_failed", f"Unexpected non-whitelisted staged file: {rel_staged}", 500)
+                    actual_staged_files.add(rel_staged)
+                else:
+                    raise AssetPackError("asset_pack_install_failed", f"Unexpected special staged entry: {entry.name}", 500)
+    if actual_staged_files != allowed_staged_files:
+        raise AssetPackError("asset_pack_install_failed", "Staged directory file set mismatch", 500)
 
 
 def _stage_and_swap(
@@ -1073,6 +1099,8 @@ def install_from_path(raw_path: str) -> dict[str, Any]:
                 copied: list[str] = []
                 staging_resolved = staging_dir.resolve()
                 for disk_path, rel in entries:
+                    if rel not in REQUIRED_FILE_SET:
+                        continue
                     if _is_link(disk_path):
                         raise AssetPackError("unsafe_source_path", f"Linked source file rejected: {rel}", 422)
                     dest = (staging_dir / rel).resolve()
@@ -1117,6 +1145,8 @@ def _install_zip_locked(zip_path: Path) -> dict[str, Any]:
         actual_total = 0
         with zipfile.ZipFile(zip_path, "r") as zf:
             for info, rel in entries:
+                if rel not in REQUIRED_FILE_SET:
+                    continue
                 dest = (staging_dir / rel).resolve()
                 if not dest.is_relative_to(staging_resolved):
                     raise AssetPackError("unsafe_archive", f"Archive entry escapes staging: {rel}", 422)

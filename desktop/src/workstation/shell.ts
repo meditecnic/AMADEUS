@@ -55,6 +55,15 @@ export async function restartApp(): Promise<void> {
   await invoke('restart_app');
 }
 
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
 /** Hands a downloaded file to the browser's save. */
 export function saveBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
@@ -67,4 +76,23 @@ export function saveBlob(blob: Blob, filename: string): void {
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+/**
+ * Opens the native Save As dialog in the desktop shell and writes the file, returning the saved
+ * absolute path (or null when cancelled). Outside Tauri, falls back to a browser download.
+ */
+export async function saveFile(blob: Blob, filename: string): Promise<string | null> {
+  if (!inShell) {
+    saveBlob(blob, filename);
+    return null;
+  }
+  const buffer = typeof blob.arrayBuffer === 'function'
+    ? await blob.arrayBuffer()
+    : await new Response(blob).arrayBuffer();
+  const saved = await invoke<string | null>('save_export_file', {
+    suggestedName: filename,
+    dataBase64: bytesToBase64(new Uint8Array(buffer)),
+  });
+  return typeof saved === 'string' && saved.length > 0 ? saved : null;
 }

@@ -5,8 +5,9 @@ const shellMock = vi.hoisted(() => ({
   inShell: false,
   pickPath: vi.fn<(kind: 'directory' | 'zip') => Promise<string | null>>(async () => null),
   restartApp: vi.fn<() => Promise<void>>(async () => undefined),
-  revealInFolder: vi.fn<(path: string) => Promise<void>>(async () => undefined),
-  saveBlob: vi.fn<(blob: Blob, name: string) => Promise<void>>(async () => undefined),
+  revealInFolder: vi.fn<(path: string) => Promise<boolean | void>>(async () => true),
+  saveBlob: vi.fn<(blob: Blob, name: string) => void>(() => undefined),
+  saveFile: vi.fn<(blob: Blob, name: string) => Promise<string | null>>(async () => null),
 }));
 
 vi.mock('./shell', async (importOriginal) => {
@@ -20,6 +21,7 @@ vi.mock('./shell', async (importOriginal) => {
     restartApp: shellMock.restartApp,
     revealInFolder: shellMock.revealInFolder,
     saveBlob: shellMock.saveBlob,
+    saveFile: shellMock.saveFile,
   };
 });
 
@@ -43,8 +45,9 @@ beforeEach(() => {
   shellMock.inShell = false;
   shellMock.pickPath.mockReset().mockResolvedValue(null);
   shellMock.restartApp.mockReset().mockResolvedValue(undefined);
-  shellMock.revealInFolder.mockReset().mockResolvedValue(undefined);
-  shellMock.saveBlob.mockReset().mockResolvedValue(undefined);
+  shellMock.revealInFolder.mockReset().mockResolvedValue(true);
+  shellMock.saveBlob.mockReset();
+  shellMock.saveFile.mockReset().mockResolvedValue(null);
 
   let rows = [...BACKUPS];
   let passcodeSet = false;
@@ -57,6 +60,15 @@ beforeEach(() => {
     if (url === '/api/auth/state') return json(200, { passcode_set: passcodeSet });
     if (url === '/api/auth/passcode' && method === 'PUT') { passcodeSet = body.new !== null; return json(200, { status: 'success' }); }
     if (url === '/api/data/status') return json(200, { status: 'ok', detail: null, backups: rows });
+    if (url.startsWith('/api/data/export?') && method === 'GET') {
+      return new Response(new Uint8Array([0x50, 0x4b, 0x05, 0x06]), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/zip',
+          'Content-Disposition': 'attachment; filename="amadeus-20261118-conversations-all.zip"',
+        },
+      });
+    }
     if (url.endsWith('/restore') && method === 'POST') return json(200, { restart_required: true });
     if (url.startsWith('/api/data/backups/') && method === 'DELETE') {
       rows = rows.filter((row) => !url.endsWith(row.id));
@@ -475,6 +487,66 @@ describe('DataPanel', () => {
     expect(alert).toHaveTextContent('旧数据目录已不存在或未记录。');
     expect(screen.getByRole('alertdialog', { name: '删除旧数据目录？' })).toBeInTheDocument();
   });
+
+  it('saves export via native shell dialog, shows revealInFolder button, and surfaces reveal errors', async () => {
+    shellMock.inShell = true;
+    shellMock.saveFile.mockResolvedValueOnce('D:\\Exports\\amadeus-20261118-conversations-all.zip');
+    shellMock.revealInFolder
+      .mockResolvedValueOnce(true)
+      .mockRejectedValueOnce(new Error('reveal failed'));
+
+    mount();
+    const exportSec = screen.getByRole('region', { name: '导出' });
+    fireEvent.click(within(exportSec).getByRole('button', { name: '导出' }));
+
+    const savedRow = await within(exportSec).findByTestId('export-saved-path');
+    expect(shellMock.saveFile).toHaveBeenCalledTimes(1);
+    expect(shellMock.saveFile).toHaveBeenCalledWith(expect.any(Blob), 'amadeus-20261118-conversations-all.zip');
+    expect(shellMock.saveBlob).not.toHaveBeenCalled();
+    expect(savedRow).toHaveTextContent('D:\\Exports\\amadeus-20261118-conversations-all.zip');
+    expect(within(exportSec).getByText('已导出 amadeus-20261118-conversations-all.zip')).toBeInTheDocument();
+
+    const revealBtn = within(savedRow).getByRole('button', { name: '在文件夹中显示' });
+    fireEvent.click(revealBtn);
+    await waitFor(() => expect(shellMock.revealInFolder).toHaveBeenCalledWith('D:\\Exports\\amadeus-20261118-conversations-all.zip'));
+    expect(within(savedRow).queryByRole('alert')).toBeNull();
+
+    fireEvent.click(revealBtn);
+    expect(await within(savedRow).findByRole('alert')).toHaveTextContent('没能打开这个文件夹。');
+  });
+
+  it('stays silent without errors or saved path when user cancels native Save As dialog in shell', async () => {
+    shellMock.inShell = true;
+    shellMock.saveFile.mockResolvedValueOnce(null);
+
+    mount();
+    const exportSec = screen.getByRole('region', { name: '导出' });
+    fireEvent.click(within(exportSec).getByRole('button', { name: '导出' }));
+
+    await waitFor(() => expect(shellMock.saveFile).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(within(exportSec).getByRole('button', { name: '导出' })).toBeEnabled());
+    expect(shellMock.saveBlob).not.toHaveBeenCalled();
+    expect(within(exportSec).queryByTestId('export-saved-path')).toBeNull();
+    expect(within(exportSec).queryByRole('button', { name: '在文件夹中显示' })).toBeNull();
+    expect(within(exportSec).queryByRole('alert')).toBeNull();
+    expect(within(exportSec).queryByText(/没有导出来|已导出/)).toBeNull();
+    expect(within(exportSec).getByText('导出为一个 zip 文件，每个会话一份。')).toBeInTheDocument();
+  });
+
+  it('falls back to saveBlob download outside desktop shell without rendering revealInFolder', async () => {
+    shellMock.inShell = false;
+
+    mount();
+    const exportSec = screen.getByRole('region', { name: '导出' });
+    fireEvent.click(within(exportSec).getByRole('button', { name: '导出' }));
+
+    expect(await within(exportSec).findByText('已导出 amadeus-20261118-conversations-all.zip')).toBeInTheDocument();
+    expect(shellMock.saveBlob).toHaveBeenCalledTimes(1);
+    expect(shellMock.saveBlob).toHaveBeenCalledWith(expect.any(Blob), 'amadeus-20261118-conversations-all.zip');
+    expect(shellMock.saveFile).not.toHaveBeenCalled();
+    expect(within(exportSec).queryByTestId('export-saved-path')).toBeNull();
+    expect(within(exportSec).queryByRole('button', { name: '在文件夹中显示' })).toBeNull();
+  });
 });
 
 describe('DataPanel controlled relocation & AboutPanel lock', () => {
@@ -521,5 +593,26 @@ describe('DataPanel controlled relocation & AboutPanel lock', () => {
 
     await waitFor(() => expect(onRelocating).toHaveBeenCalledTimes(1));
     expect(await screen.findByRole('alert')).toHaveTextContent('数据已迁移至新位置，需立即重启 AMADEUS 完成切换。');
+  });
+
+  it('shell.saveFile falls back to anchor download and returns null outside Tauri', async () => {
+    const actualShell = await vi.importActual<typeof import('./shell')>('./shell');
+    const createObjectUrl = vi.fn(() => 'blob:mock-export-url');
+    const revokeObjectUrl = vi.fn();
+    const origCreate = URL.createObjectURL;
+    const origRevoke = URL.revokeObjectURL;
+    URL.createObjectURL = createObjectUrl;
+    URL.revokeObjectURL = revokeObjectUrl;
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    try {
+      const result = await actualShell.saveFile(new Blob(['zip-bytes']), 'amadeus-browser.zip');
+      expect(result).toBeNull();
+      expect(createObjectUrl).toHaveBeenCalledTimes(1);
+      expect(clickSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      clickSpy.mockRestore();
+      URL.createObjectURL = origCreate;
+      URL.revokeObjectURL = origRevoke;
+    }
   });
 });
