@@ -27,13 +27,13 @@ async def fast_reply(**kwargs):
 
 @pytest.fixture
 def fake_providers(monkeypatch):
-    monkeypatch.setitem(vars(chat_ws.deepseek_service), "get_chat_stream", fast_reply)
-    monkeypatch.setitem(
-        vars(chat_ws.deepseek_service), "translate_to_zh",
+    monkeypatch.setattr(type(chat_ws.deepseek_service), "get_chat_stream", staticmethod(fast_reply))
+    monkeypatch.setattr(
+        type(chat_ws.deepseek_service), "translate_to_zh",
         AsyncMock(return_value=TRANSLATION),
     )
     monkeypatch.setattr(chat_ws, "compile_for_session", AsyncMock(return_value="TEST"))
-    monkeypatch.setitem(vars(conversation_service), "schedule_auto_title", Mock())
+    monkeypatch.setattr(type(conversation_service), "schedule_auto_title", Mock())
     monkeypatch.setattr(jobs, "enqueue_memory_job", AsyncMock())
 
 
@@ -96,7 +96,7 @@ def test_deadline_cancels_stream_preserves_text_and_allows_next_chat(
             closed.append(True)
 
     monkeypatch.setattr(chat_ws, "TURN_TIMEOUT_SECONDS", 0.2)
-    monkeypatch.setitem(vars(chat_ws.deepseek_service), "get_chat_stream", hanging_stream)
+    monkeypatch.setattr(type(chat_ws.deepseek_service), "get_chat_stream", staticmethod(hanging_stream))
     session_id = str(uuid4())
     with app_client.websocket_connect(f"/ws/chat?session_id={session_id}") as ws:
         authenticate(ws)
@@ -146,7 +146,7 @@ def test_provider_stall_is_not_retried_by_guard_or_renderer(
             return
         raise ProviderStallError("no data")
 
-    monkeypatch.setitem(vars(chat_ws.deepseek_service), "get_chat_stream", stalled)
+    monkeypatch.setattr(type(chat_ws.deepseek_service), "get_chat_stream", staticmethod(stalled))
     with app_client.websocket_connect(f"/ws/chat?session_id={uuid4()}") as ws:
         authenticate(ws)
         ws.send_json({"type": "chat", "content": "おはよう"})
@@ -195,8 +195,8 @@ def test_deadline_cancels_unpublished_pipeline_work(app_client, fake_providers, 
             cancelled.append(text)
 
     monkeypatch.setattr(chat_ws, "TURN_TIMEOUT_SECONDS", 0.2)
-    monkeypatch.setitem(vars(chat_ws.deepseek_service), "get_chat_stream", two_sentences)
-    monkeypatch.setitem(vars(chat_ws.deepseek_service), "translate_to_zh", translate)
+    monkeypatch.setattr(type(chat_ws.deepseek_service), "get_chat_stream", staticmethod(two_sentences))
+    monkeypatch.setattr(type(chat_ws.deepseek_service), "translate_to_zh", staticmethod(translate))
     with app_client.websocket_connect(f"/ws/chat?session_id={uuid4()}") as ws:
         authenticate(ws)
         ws.send_json({"type": "chat", "content": "おはよう"})
@@ -231,13 +231,15 @@ def test_deadline_includes_web_tools_and_renderer(app_client, fake_providers, mo
             "function": {"name": "web_search", "arguments": '{"query":"test"}'},
         }]}
 
-    monkeypatch.setattr(chat_ws, "TURN_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(chat_ws, "TURN_TIMEOUT_SECONDS", 0.5)
     if phase in {"web", "tool"}:
         monkeypatch.setattr(chat_ws, "execute_tool_call", blocked)
+        monkeypatch.setattr(type(chat_ws.search_service), "any_paid_provider_configured", lambda self: True)
         if phase == "tool":
-            monkeypatch.setitem(vars(chat_ws.deepseek_service), "get_chat_stream", tool_call)
+            monkeypatch.setattr(type(chat_ws.model_catalog), "uses_native_reasoning", staticmethod(lambda *_args: False))
+            monkeypatch.setattr(type(chat_ws.deepseek_service), "get_chat_stream", staticmethod(tool_call))
     else:
-        monkeypatch.setitem(vars(chat_ws.deepseek_service), "get_chat_stream", foreign_draft)
+        monkeypatch.setattr(type(chat_ws.deepseek_service), "get_chat_stream", staticmethod(foreign_draft))
     with app_client.websocket_connect(f"/ws/chat?session_id={uuid4()}") as ws:
         authenticate(ws)
         ws.send_json({"type": "chat", "content": "查一下今天新闻" if phase == "web" else "おはよう"})
@@ -256,7 +258,7 @@ def test_guard_retries_share_one_deadline(app_client, fake_providers, monkeypatc
 
     monkeypatch.setattr(chat_ws, "TURN_TIMEOUT_SECONDS", 0.2)
     monkeypatch.setattr(chat_ws, "contains_leak", lambda text: bool(text))
-    monkeypatch.setitem(vars(chat_ws.deepseek_service), "get_chat_stream", rejected_stream)
+    monkeypatch.setattr(type(chat_ws.deepseek_service), "get_chat_stream", staticmethod(rejected_stream))
     with app_client.websocket_connect(f"/ws/chat?session_id={uuid4()}") as ws:
         authenticate(ws)
         ws.send_json({"type": "chat", "content": "おはよう"})
@@ -284,8 +286,8 @@ def test_disconnect_during_slow_pipeline_cancel_persists_abort(
             await asyncio.sleep(0.8)
             raise
 
-    monkeypatch.setitem(vars(chat_ws.deepseek_service), "get_chat_stream", streaming_reply)
-    monkeypatch.setitem(vars(chat_ws.deepseek_service), "translate_to_zh", slow_cancel_translation)
+    monkeypatch.setattr(type(chat_ws.deepseek_service), "get_chat_stream", staticmethod(streaming_reply))
+    monkeypatch.setattr(type(chat_ws.deepseek_service), "translate_to_zh", staticmethod(slow_cancel_translation))
     session_id = str(uuid4())
     # Starlette may propagate its cancelled WebSocket scope on context exit.
     with suppress(FutureCancelledError), app_client.websocket_connect(f"/ws/chat?session_id={session_id}") as ws:

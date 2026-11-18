@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 
 import {
+  resolveThinkingValue,
   type ModelCatalogEntry,
+  type ModelThinkingControl,
 } from './ProviderControls';
 import { SalieriSelect } from './SalieriSelect';
 import { packAsset } from '../assetPack';
@@ -27,12 +29,10 @@ export interface WebSearchSettingsSnapshot {
   configured?: boolean;
 }
 
-/** Chat sampling temperature exposed as Settings「回复随机性」. Not Persona content. */
 export const CHAT_TEMPERATURE_MIN = 0;
 export const CHAT_TEMPERATURE_MAX = 1.2;
-export const CHAT_TEMPERATURE_STEP = 0.1;
-/** New-install default; daily stable band is 0–0.5 (0 is the verified safe point). */
-export const CHAT_TEMPERATURE_DEFAULT = 0.0;
+export const CHAT_TEMPERATURE_STEP = 0.05;
+export const CHAT_TEMPERATURE_DEFAULT = 0.75;
 
 export function clampChatTemperature(value: number): number {
   if (!Number.isFinite(value)) return CHAT_TEMPERATURE_DEFAULT;
@@ -227,6 +227,7 @@ export interface SettingsModalProps {
   credentialRequired?: boolean;
   baseUrlConfigurable: boolean;
   modelOptions: ModelCatalogEntry[];
+  thinkingControl?: ModelThinkingControl | null;
   reasoningEffort: string | null;
   /** Enabled OpenAI-compatible connections for multi-profile management. */
   customProfiles?: Array<{
@@ -283,6 +284,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   credentialRequired = true,
   baseUrlConfigurable,
   modelOptions: _modelOptions,
+  thinkingControl,
   reasoningEffort,
   customProfiles = [],
   onCreateCustomProfile,
@@ -343,8 +345,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     (isSaving || isClearingWebSearch || isSwitchingSearchProvider)
       ? 'saving'
       : (webSearchStatus ?? (activeSearchConfigured ? 'configured' : 'not_configured'));
-  const temperatureWarning =
-    localTemperature >= 0.9
+  const selectedThinking = resolveThinkingValue(thinkingControl, reasoningEffort, null);
+  const nativeThinking = Boolean(thinkingControl?.native && selectedThinking && selectedThinking !== 'none');
+  const temperatureWarning = nativeThinking
+    ? null
+    : localTemperature >= 0.9
       ? 'strong' as const
       : localTemperature >= 0.8
         ? 'mild' as const
@@ -426,6 +431,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
   const commitTemperature = () => {
+    if (nativeThinking) return;
     const next = clampChatTemperature(localTemperature);
     if (next !== clampChatTemperature(temperature)) void applyPatch({ temperature: next });
   };
@@ -570,7 +576,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <div className="setting-field personality-field">
                 <label>回复随机性</label>
                 <p className="setting-field-hint" data-testid="temperature-hint">
-                  越高越发散、越容易跑题；不改变角色设定本身。默认 0（最稳）；需要轻微变化可用 0.1～0.3。
+                  {nativeThinking
+                    ? '当前模型已开启原生思考，采样由推理引擎自动接管，此滑块暂不生效（关闭原生思考或切换非思考模型时恢复，默认 0.75）。'
+                    : '越高越发散、越容易跑题；不改变角色设定本身。默认 0.75（自然口语与稳定平衡）。'}
                 </p>
                 {temperatureMigrationNotice && (
                   <p
@@ -590,7 +598,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     )}
                   </p>
                 )}
-                <div className="personality-control" data-testid="personality-control">
+                <div className={`personality-control${nativeThinking ? ' personality-control-disabled' : ''}`} data-testid="personality-control">
                   <div className="slider-row personality-slider-row">
                     <input
                       data-testid="personality-range"
@@ -599,6 +607,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       max={CHAT_TEMPERATURE_MAX}
                       step={CHAT_TEMPERATURE_STEP}
                       value={localTemperature}
+                      disabled={nativeThinking}
                       onChange={(e) => setLocalTemperature(clampChatTemperature(parseFloat(e.target.value)))}
                       onPointerUp={embedded ? commitTemperature : undefined}
                       onKeyUp={embedded ? commitTemperature : undefined}
@@ -608,7 +617,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       aria-label="回复随机性"
                     />
                     <span className="volume-label personality-value" data-testid="personality-value">
-                      {localTemperature.toFixed(1)}
+                      {localTemperature.toFixed(2)}
                     </span>
                   </div>
                   <div className="personality-endpoints" aria-hidden="true">

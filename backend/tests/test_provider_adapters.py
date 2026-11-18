@@ -1,16 +1,94 @@
 from __future__ import annotations
 
+import asyncio
 import json
+from weakref import ref
 
 import httpx
 import pytest
 
+from app.services import provider_adapters
+from app.services.deepseek import DeepSeekService
 from app.services.provider_adapters import (
     GeminiAdapter,
     OpenAICompatibleAdapter,
     OpenAIResponsesAdapter,
 )
 from app.services.provider_runtime import deepseek_service, provider_registry
+
+
+def test_model_pool_reuses_client_across_requests_but_not_across_event_loops(monkeypatch):
+    clients = []
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json={"data": [{"id": "offline-model"}]})
+        return httpx.Response(200, json={"choices": [{"message": {"content": '{"ok": true}'}}]})
+
+    class OfflineClient(httpx.AsyncClient):
+        def __init__(self, **kwargs):
+            super().__init__(transport=httpx.MockTransport(respond), **kwargs)
+            clients.append(self)
+
+    monkeypatch.setattr(provider_adapters, "_HTTP_CLIENT_TYPE", OfflineClient)
+    monkeypatch.setattr(httpx, "AsyncClient", OfflineClient)
+    adapters = [
+        DeepSeekService(),
+        OpenAICompatibleAdapter(
+            provider_id="fake-compatible", base_url="https://compatible.example/v1",
+            default_model="offline-model", message_builder=deepseek_service.build_persona_messages,
+        ),
+    ]
+
+    async def run_turns():
+        for adapter in adapters:
+            await adapter.list_models(api_key="offline")
+            result = await adapter.complete_json([{"role": "user", "content": "test"}], api_key="offline")
+            assert result == {"ok": True}
+
+    asyncio.run(run_turns())
+    assert len(clients) == 2
+    assert all(not client.is_closed for client in clients)
+    assert [item.extensions["timeout"]["read"] for item in requests] == [20, 30, 20, 30]
+
+    async def run_next_loop():
+        await run_turns()
+        await provider_adapters.close_model_http_clients()
+        assert all(client.is_closed for client in clients[2:])
+        await run_turns()
+        await provider_adapters.close_model_http_clients()
+
+    asyncio.run(run_next_loop())
+    assert len(clients) == 6
+    assert all(client.is_closed for client in clients[2:])
+
+
+async def test_model_pool_does_not_retain_a_replaced_adapter(monkeypatch):
+    class OfflineClient(httpx.AsyncClient):
+        def __init__(self, **kwargs):
+            transport = httpx.MockTransport(
+                lambda request: httpx.Response(200, json={"data": [{"id": "offline-model"}]})
+            )
+            super().__init__(transport=transport, **kwargs)
+
+    monkeypatch.setattr(provider_adapters, "_HTTP_CLIENT_TYPE", OfflineClient)
+    monkeypatch.setattr(httpx, "AsyncClient", OfflineClient)
+
+    async def discover_models():
+        adapter = OpenAICompatibleAdapter(
+            provider_id="custom:replace", base_url="https://offline-check.invalid/v1",
+            default_model="offline-model", message_builder=deepseek_service.build_persona_messages,
+        )
+        assert await adapter.list_models(api_key="offline") == [{"id": "offline-model"}]
+        return ref(adapter)
+
+    old_adapter = await discover_models()
+    try:
+        assert old_adapter() is None
+    finally:
+        await provider_adapters.close_model_http_clients()
 
 
 @pytest.mark.asyncio

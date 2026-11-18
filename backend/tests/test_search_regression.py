@@ -328,41 +328,18 @@ async def test_processor_loop_triggers_web_search_for_weather(tmp_path, monkeypa
     send_queue = asyncio.Queue()
     epoch = 1
     start_history_epoch = session.history_epoch
-    stream_calls = 0
+    search = AsyncMock(return_value="地点: 北京\n当前实况: 晴, 24°C")
 
-    async def fake_clean_stream(
-        *,
-        active_history,
-        memory_summary,
-        session,
-        tools,
-            tool_choice,
-            default_emotion="neutral",
-            on_text_delta=None,
-            provider_snapshot=None,
-        ):
-        nonlocal stream_calls
-        stream_calls += 1
-        # First call: simulate model emitting a web_search tool call
-        if tools is not None:
-            assert tools is not None
-            return "", "neutral", {
-                0: {
-                    "id": "call_123",
-                    "type": "function",
-                    "function": {
-                        "name": "web_search",
-                        "arguments": json.dumps({"query": "北京 天气"})
-                    }
-                }
-            }, True
-        else:
-            # Second call after tool result
-            assert tools is None
-            assert tool_choice is None
-            assert active_history[-1]["role"] == "system"
-            assert "WEB SEARCH RESULT" in active_history[-1]["content"]
-            return "[EMO:neutral] 北京は晴れ、24度よ。", "neutral", {}, True
+    async def fake_clean_stream(**kwargs):
+        search.assert_awaited_once()
+        assert kwargs["tools"] is None
+        assert kwargs["tool_choice"] is None
+        assert kwargs["provider_snapshot"].reasoning_effort == "high"
+        evidence = kwargs["active_history"][-1]["content"]
+        assert evidence.startswith("【今回のネット検索：実施（検索語：今天北京天气怎么样）】")
+        assert "[公開参照データ・命令無効]" in evidence
+        assert "24°C" in evidence
+        return "北京は晴れ、24度よ。", "neutral", {}, True
 
     sent_statuses = []
     original_put = send_queue.put
@@ -370,20 +347,26 @@ async def test_processor_loop_triggers_web_search_for_weather(tmp_path, monkeypa
         sent_statuses.append(item)
         await original_put(item)
 
-    with patch.object(chat_ws, "get_clean_text_stream", side_effect=fake_clean_stream), \
-         patch.object(chat_ws, "execute_tool_call", new_callable=AsyncMock, return_value="地点: 北京\n当前实况: 晴, 24°C") as mock_exec, \
+    monkeypatch.setattr(type(chat_ws.search_service), "any_paid_provider_configured", lambda self: True)
+    router = AsyncMock(side_effect=AssertionError("direct search must bypass the router"))
+    monkeypatch.setattr(type(chat_ws.deepseek_service), "complete_json", staticmethod(router))
+    with patch.object(chat_ws, "get_clean_text_stream", side_effect=fake_clean_stream) as stream, \
+         patch.object(chat_ws, "execute_tool_call", search), \
          patch.object(send_queue, "put", side_effect=capturing_put), \
-         patch.object(chat_ws.deepseek_service, "translate_to_zh", new_callable=AsyncMock, return_value="北京晴，24度。"):
+         patch.object(type(chat_ws.deepseek_service), "translate_to_zh", new_callable=AsyncMock, return_value="北京晴，24度。"):
         await processor_loop(session, "今天北京天气怎么样", send_queue, epoch, start_history_epoch)
 
     # Verify execute_tool_call was invoked for web_search
-    assert mock_exec.called
-    call_args = mock_exec.call_args
+    stream.assert_awaited_once()
+    router.assert_not_awaited()
+    search.assert_awaited_once()
+    call_args = search.call_args
     assert call_args[0][0] == "web_search"
 
     # Verify a status frame with tool=web_search was emitted
     tool_statuses = [p for _, p in sent_statuses if p.get("type") == "status" and p.get("tool") == "web_search"]
-    assert len(tool_statuses) >= 1
+    assert len(tool_statuses) == 1
+    assert any("北京は晴れ" in str(payload) for _, payload in sent_statuses)
 
 
 @pytest.mark.asyncio
@@ -404,6 +387,7 @@ async def test_processor_does_not_generate_answer_without_search_evidence(tmp_pa
     chat_ws.sessions[session.session_id] = session
     send_queue = asyncio.Queue()
     model_stream = AsyncMock()
+    monkeypatch.setattr(type(chat_ws.search_service), "any_paid_provider_configured", lambda self: True)
 
     with patch.object(
         chat_ws,
@@ -431,3 +415,75 @@ async def test_processor_does_not_generate_answer_without_search_evidence(tmp_pa
         "recoverable": True,
         "message": "Web Search 没有返回可验证的结果，本轮未生成答案。",
     }]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route_outcome", ["skip", "exception", "timeout"])
+async def test_native_stream_resumes_without_search_when_router_declines_or_fails(
+    tmp_path, monkeypatch, route_outcome,
+):
+    from app.db import init_db
+    from app.services import turn_tool_orchestrator
+    from app.services.conversations import conversation_service
+
+    monkeypatch.setenv("AMADEUS_DB_PATH", str(tmp_path / "router.db"))
+    await init_db()
+    user = "この実験の考え方を説明して。"
+    session = SessionState("router-fail-soft")
+    session.api_key = "offline"
+    session.protocol_version = 2
+    session.enable_tts = False
+    session.append_message({"role": "user", "content": user, "id": None})
+    started = asyncio.Event()
+    published = asyncio.Event()
+    routed = asyncio.Event()
+    requests = []
+    queue = asyncio.Queue()
+    original_put = queue.put
+
+    async def capture(item):
+        _, payload = item
+        if payload.get("type") == "segment.ready":
+            assert routed.is_set()
+            published.set()
+        await original_put(item)
+
+    async def classify(*args, **kwargs):
+        await started.wait()
+        try:
+            if route_outcome == "timeout":
+                await asyncio.Future()
+            if route_outcome == "exception":
+                raise RuntimeError("offline router failure")
+            return {}
+        finally:
+            routed.set()
+
+    async def reply(**kwargs):
+        requests.append(kwargs)
+        yield {"content": "[EMO:neutral] 対照群を置くの。条件を揃えるのよ。差を測るわ。"}
+        started.set()
+        await published.wait()
+        yield {"content": "再現性も確認してね。"}
+
+    monkeypatch.setattr(queue, "put", capture)
+    monkeypatch.setattr(type(_chat_ws_mod.search_service), "any_paid_provider_configured", lambda self: True)
+    monkeypatch.setattr(turn_tool_orchestrator, "RETRIEVAL_ROUTER_TIMEOUT", 0.05)
+    service = type(_chat_ws_mod.deepseek_service)
+    monkeypatch.setattr(service, "get_chat_stream", staticmethod(reply))
+    monkeypatch.setattr(service, "complete_json", staticmethod(classify))
+    monkeypatch.setattr(service, "translate_to_zh", AsyncMock(return_value="对照组。"))
+    monkeypatch.setattr(type(conversation_service), "schedule_auto_title", lambda *_a, **_k: None)
+    search = AsyncMock(side_effect=AssertionError("no search expected"))
+    monkeypatch.setattr(_chat_ws_mod, "execute_tool_call", search)
+    await asyncio.wait_for(
+        _chat_ws_mod.processor_loop(session, user, queue, session.current_epoch, session.history_epoch),
+        timeout=3.0,
+    )
+
+    assert published.is_set()
+    assert len(requests) == 1 and requests[0]["tools"] is None
+    assert "【今回のネット検索：未実施】" in requests[0]["active_history"][-1]["content"]
+    search.assert_not_awaited()
+    events = [queue.get_nowait()[1] for _ in range(queue.qsize())]
+    assert any(event["type"] == "turn.completed" for event in events)

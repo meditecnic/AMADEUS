@@ -52,6 +52,7 @@ async def test_web_second_round_preserves_each_evidence_once(isolated_store, mon
     _suppress_auto_title(monkeypatch)
     monkeypatch.setattr(chat_ws, "compile_for_session", AsyncMock(return_value="PERSONA BIBLE v1\n天気の確認"))
     monkeypatch.setattr(chat_ws, "should_force_search", lambda text: forced)
+    monkeypatch.setattr(type(chat_ws.model_catalog), "uses_native_reasoning", staticmethod(lambda *_args: False))
     monkeypatch.setattr(chat_ws, "translate_with_provider", AsyncMock(return_value="天气。"))
     monkeypatch.setattr("app.services.memory_v11.jobs.enqueue_memory_job", AsyncMock())
     monkeypatch.setattr(chat_ws, "execute_tool_call", AsyncMock(side_effect=[FORCED, FRESH] if forced else [FRESH]))

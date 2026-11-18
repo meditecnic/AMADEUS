@@ -8,7 +8,7 @@ from app.services.model_catalog import model_catalog
 from app.services.model_usage import usage_call
 from app.services.model_headers import model_headers
 from app.services.persona_bible import persona_bible
-from app.services.provider_adapters import ProviderRequestError, iter_provider_lines
+from app.services.provider_adapters import ProviderRequestError, iter_provider_lines, model_http_client
 
 
 class DeepSeekTranslationError(RuntimeError):
@@ -54,8 +54,7 @@ def build_chat_payload(
         and tool_choice != "auto"
     )
     if uses_thinking:
-        # Close thinking whenever tools are present (auto or forced). Only the
-        # post-tool final answer request re-enables native thinking + effort.
+        # Tool-free requests can use native thinking without replaying reasoning.
         payload["thinking"] = {
             "type": "disabled" if has_tools else "enabled"
         }
@@ -93,6 +92,8 @@ class DeepSeekService(LLMInterface):
         identity_mode: str = "okabe",
     ) -> str:
         prompt = base_prompt if base_prompt is not None else self._system_prompt
+        if "【わたしについて】" in prompt and "[EMO:" in prompt:
+            return prompt.strip()
         if "PERSONA BIBLE v1 (canonical runtime persona)" in prompt:
             # Full Bible already carries mode rules from compile; output contract only.
             anchor = persona_bible.render_output_anchor()
@@ -191,8 +192,14 @@ class DeepSeekService(LLMInterface):
             flush=True,
         )
         
-        async with usage_call("deepseek", model or self.model) as usage, httpx.AsyncClient(timeout=httpx.Timeout(connect=15.0, read=120.0, write=10.0, pool=5.0)) as client:
-            async with client.stream("POST", f"{self.base_url}/chat/completions", json=payload, headers=headers) as response:
+        timeout = httpx.Timeout(connect=15.0, read=120.0, write=10.0, pool=5.0)
+        async with usage_call("deepseek", model or self.model) as usage, model_http_client(
+            self, httpx.AsyncClient, timeout=timeout,
+        ) as (client, request_options):
+            async with client.stream(
+                "POST", f"{self.base_url}/chat/completions", json=payload, headers=headers,
+                **request_options,
+            ) as response:
                 if response.status_code != 200:
                     await response.aread()
                     raise ProviderRequestError("deepseek", response.status_code)
@@ -267,9 +274,13 @@ class DeepSeekService(LLMInterface):
         if model_catalog.uses_native_reasoning("deepseek", payload["model"]):
             payload["thinking"] = {"type": "disabled"}
         
-        async with usage_call("deepseek", model or self.model) as usage, httpx.AsyncClient(timeout=20.0) as client:
+        async with usage_call("deepseek", model or self.model) as usage, model_http_client(
+            self, httpx.AsyncClient, timeout=20.0,
+        ) as (client, request_options):
             try:
-                response = await client.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)
+                response = await client.post(
+                    f"{self.base_url}/chat/completions", json=payload, headers=headers, **request_options,
+                )
                 usage.started = response.status_code == 200
                 response.raise_for_status()
                 result = response.json()
@@ -315,9 +326,13 @@ class DeepSeekService(LLMInterface):
         if model_catalog.uses_native_reasoning("deepseek", payload["model"]):
             payload["thinking"] = {"type": "disabled"}
         
-        async with usage_call("deepseek", model or self.model) as usage, httpx.AsyncClient(timeout=15.0) as client:
+        async with usage_call("deepseek", model or self.model) as usage, model_http_client(
+            self, httpx.AsyncClient, timeout=15.0,
+        ) as (client, request_options):
             try:
-                response = await client.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)
+                response = await client.post(
+                    f"{self.base_url}/chat/completions", json=payload, headers=headers, **request_options,
+                )
                 usage.started = response.status_code == 200
                 response.raise_for_status()
                 result = response.json()
@@ -360,11 +375,14 @@ class DeepSeekService(LLMInterface):
             "Authorization": f"Bearer {effective_api_key}",
             "Content-Type": "application/json",
         }
-        async with usage_call("deepseek", model or self.model) as usage, httpx.AsyncClient(timeout=30.0) as client:
+        async with usage_call("deepseek", model or self.model) as usage, model_http_client(
+            self, httpx.AsyncClient, timeout=30.0,
+        ) as (client, request_options):
             response = await client.post(
                 f"{self.base_url}/chat/completions",
                 headers=headers,
                 json=payload,
+                **request_options,
             )
             usage.started = response.status_code == 200
             response.raise_for_status()
@@ -386,10 +404,10 @@ class DeepSeekService(LLMInterface):
         if not effective_api_key:
             raise ValueError("DeepSeek credential is not configured")
         headers = {**model_headers(), "Authorization": f"Bearer {effective_api_key}"}
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=5.0, read=20.0, write=10.0, pool=5.0)
-        ) as client:
-            response = await client.get(f"{self.base_url}/models", headers=headers)
+        async with model_http_client(
+            self, httpx.AsyncClient, timeout=httpx.Timeout(connect=5.0, read=20.0, write=10.0, pool=5.0)
+        ) as (client, request_options):
+            response = await client.get(f"{self.base_url}/models", headers=headers, **request_options)
         if response.status_code != 200:
             raise ProviderRequestError("deepseek", response.status_code)
         payload = response.json()

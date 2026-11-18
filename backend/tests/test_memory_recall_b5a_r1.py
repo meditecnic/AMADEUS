@@ -704,7 +704,7 @@ async def test_cancel_refresh_voids_candidates():
 
 @pytest.mark.asyncio
 async def test_v11_web_only_second_round_json_escapes_web(isolated_store, monkeypatch):
-    from app.routers.chat_ws import processor_loop
+    from app.routers.chat_ws import processor_loop, search_service
     from app.services.conversations import conversation_service
     from app.services.provider_runtime import deepseek_service
 
@@ -725,27 +725,26 @@ async def test_v11_web_only_second_round_json_escapes_web(isolated_store, monkey
         isolated=False,
     ):
         calls.append({"tools": tools, "history": active_history})
-        if tools:
-            yield {
-                "content": None,
-                "tool_calls": [
-                    {
-                        "index": 0,
-                        "id": "call-web",
-                        "type": "function",
-                        "function": {
-                            "name": "web_search",
-                            "arguments": json.dumps({"query": "秋葉原 天気"}),
-                        },
-                    }
-                ],
-            }
+        if len(calls) == 1:
+            yield {"content": "[EMO:neutral] 下書きよ。見せない文よ。"}
+            started.set()
+            await asyncio.Future()
             return
         yield {"content": "[EMO:neutral] 晴れよ。", "tool_calls": None}
 
-    async def fake_web(_name, _args):
+    started = asyncio.Event()
+
+    async def route(*args, **kwargs):
+        await started.wait()
+        return {"search_query": "秋葉原 天気"}
+
+    async def fake_web(name, arguments):
+        assert name == "web_search"
+        assert json.loads(arguments) == {"query": "秋葉原 天気"}
         return malicious
 
+    monkeypatch.setattr(type(search_service), "any_paid_provider_configured", lambda self: True)
+    monkeypatch.setattr(type(deepseek_service), "complete_json", staticmethod(route))
     monkeypatch.setattr(type(deepseek_service), "get_chat_stream", staticmethod(fake_stream))
     monkeypatch.setattr("app.routers.chat_ws.execute_tool_call", fake_web)
 
@@ -766,6 +765,7 @@ async def test_v11_web_only_second_round_json_escapes_web(isolated_store, monkey
     session = SessionState(owner)
     session.worldline = "steins_gate"
     session.enable_tts = False
+    session.protocol_version = 2
     session.api_key = "test"
     selected = await conversation_service.create_and_select(
         owner, "steins_gate", provider_id="deepseek", model_id="deepseek-v4-flash", identity_mode="self"
@@ -775,7 +775,11 @@ async def test_v11_web_only_second_round_json_escapes_web(isolated_store, monkey
     session.append_message({"role": "user", "content": "秋葉原のカフェは？", "id": None})
     queue: asyncio.Queue = asyncio.Queue()
     await processor_loop(session, "秋葉原のカフェは？", queue, session.current_epoch, session.history_epoch)
-    assert len(calls) == 2
+    assert len(calls) == 2 and all(call["tools"] is None for call in calls)
+    payloads = [queue.get_nowait()[1] for _ in range(queue.qsize())]
+    assert any(payload.get("tool") == "web_search" for payload in payloads)
+    assert "下書きよ" not in json.dumps(payloads, ensure_ascii=False)
+    assert any(payload.get("ja") == "晴れよ。" for payload in payloads)
     second = json.dumps(calls[1]["history"], ensure_ascii=False)
     assert "WEB_EVIDENCE_DATA" in second
     web_msg = next(
@@ -788,7 +792,7 @@ async def test_v11_web_only_second_round_json_escapes_web(isolated_store, monkey
 
 @pytest.mark.asyncio
 async def test_v11_force_search_first_round_json_web(isolated_store, monkeypatch):
-    from app.routers.chat_ws import processor_loop
+    from app.routers.chat_ws import processor_loop, search_service
     from app.services.conversations import conversation_service
     from app.services.provider_runtime import deepseek_service
 
@@ -805,6 +809,7 @@ async def test_v11_force_search_first_round_json_web(isolated_store, monkeypatch
 
     monkeypatch.setattr(type(deepseek_service), "get_chat_stream", staticmethod(fake_stream))
     monkeypatch.setattr("app.routers.chat_ws.execute_tool_call", fake_web)
+    monkeypatch.setattr(type(search_service), "any_paid_provider_configured", lambda self: True)
 
     async def _async_cn(*_a, **_k):
         return "中文"

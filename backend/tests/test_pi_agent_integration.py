@@ -146,8 +146,8 @@ async def chat_turn(monkeypatch, api, *, enabled, binary="unused", host_offset=0
     monkeypatch.setattr(config, "PI_AGENT_ENABLED", enabled)
     monkeypatch.setattr(config, "PI_AGENT_EXECUTABLE", binary)
     monkeypatch.setattr(deepseek_service, "base_url", api.url)
-    monkeypatch.setattr(deepseek_service, "translate_to_zh", AsyncMock(return_value="已读取。"))
-    monkeypatch.setattr(conversation_service, "schedule_auto_title", lambda *a, **kw: None)
+    monkeypatch.setattr(type(deepseek_service), "translate_to_zh", AsyncMock(return_value="已读取。"))
+    monkeypatch.setattr(type(conversation_service), "schedule_auto_title", lambda *a, **kw: None)
     store = InMemoryCredentialStore()
     store.set("deepseek", "synthetic-only")
     monkeypatch.setattr(chat_ws, "credential_store", store)
@@ -205,5 +205,10 @@ async def test_disabled_complete_request_bytes_match_pre_spike(monkeypatch, tmp_
     assert len(api.requests) == 1
     # Port is not in the request body; fixed system/history make it deterministic.
     wire = api.requests[0]["wire"]
+    body = json.loads(wire)
     assert b"delegate_task" not in wire
-    assert hashlib.sha256(wire).hexdigest() == "62034f0d638039e23a92bfcec90ecb266a32ab322b660da46bf29c68d76af223"
+    assert "tools" not in body
+    assert body["thinking"] == {"type": "enabled"}
+    assert body["reasoning_effort"] == "high"
+    assert body["temperature"] == 0.75
+    assert hashlib.sha256(wire).hexdigest() == "a8b1f62c5b794adfcc821d6c8adfccb2debc9faa4ffcc542787a0ac49ac8f9fc"

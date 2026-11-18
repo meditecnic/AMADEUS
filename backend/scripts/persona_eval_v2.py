@@ -24,6 +24,7 @@ import statistics
 import sys
 import tempfile
 import time
+import unicodedata
 from types import SimpleNamespace
 from unittest.mock import patch
 from uuid import uuid4
@@ -54,6 +55,25 @@ JAPANESE = re.compile(r"[\u3041-\u3096\u30a1-\u30fa\u3400-\u9fffー々]")
 STUTTER = re.compile(r"(?:^|(?<=[\s。！？!?，,；;：:…「『“]))([一-龯])(?:[、，,－—-]\1)+")
 ELLIPSIS = re.compile(r"…+|\.{3,}")
 CUTESY = re.compile(r"人家|讨厌啦|嘛[～〜~]+|[～〜~]+|(?:[呢哦呀啦]\s*){2,}|乖乖|萌萌|亲亲|抱抱|贴贴|棒棒|可可爱爱")
+
+
+MOTIFS = {
+    "cup_noodle": re.compile(r"カップ麺"),
+    "fork": re.compile(r"フォーク"),
+    "sixteen_years": re.compile(r"16年|十六年|三十代"),
+    "sleep_nag": re.compile(r"寝なさい|眠ること|画面を閉じなさい|さっさと寝"),
+}
+DIRECTIVE_ENDING = re.compile(
+    r"(?:聞かせて|言いなさい|見せなさい|話しなさい|教えなさい|寝なさい|閉じなさい|しなさい|やめなさい)"
+    r"[。！!…\s」』”’\"）)]*$"
+)
+SECRET_TRIGGERS = {
+    "fork": ("どこで調べた", re.compile(r"フォーク|叉子|\bfork\b", re.IGNORECASE)),
+    "diary": ("読んだの", re.compile(
+        r"(?:君|あなた|あんた|紅莉栖|クリスティーナ|你的).{0,24}(?:日記|日记)"
+        r"|(?:日記|日记).{0,24}(?:[「『“]|引用|読ん|中身|内容|里写)"
+    )),
+}
 
 
 class StopRun(RuntimeError):
@@ -102,16 +122,35 @@ def ratio(n, d):
 
 def persona_metrics(sessions):
     counts = Counter()
+    motif_eligible = Counter()
+    motif_unprompted = Counter()
+    false_secret_triggers = dict.fromkeys(SECRET_TRIGGERS, 0)
     lengths = []
     for session in sessions:
         seen, said_catchphrase = set(), False
+        prompted_motifs, given_clues = set(), set()
         for turn in session:
             ja = turn["ja"].strip()
             line = body(ja)
+            user = unicodedata.normalize("NFKC", turn.get("user") or "")
+            normalized_line = unicodedata.normalize("NFKC", line)
+            for motif, pattern in MOTIFS.items():
+                if pattern.search(user):
+                    prompted_motifs.add(motif)
+                if motif not in prompted_motifs:
+                    motif_eligible[motif] += 1
+                    motif_unprompted[motif] += bool(pattern.search(normalized_line))
+            for secret, (trigger, clue) in SECRET_TRIGGERS.items():
+                if clue.search(user):
+                    given_clues.add(secret)
+                if secret not in given_clues and trigger in line:
+                    false_secret_triggers[secret] += 1
             lengths.append(len(line))
             tag = TAG.match(ja)
             counts["legal"] += bool(tag and tag[1] in EMOTIONS)
-            counts["questions"] += line.rstrip('」』”’"）) ').endswith(("？", "?"))
+            question = line.rstrip('」』”’"）) ').endswith(("？", "?"))
+            counts["questions"] += question
+            counts["directive_or_question"] += question or bool(DIRECTIVE_ENDING.search(line))
             counts["feminine"] += bool(FEMININE.search(line.rstrip('」』”’"）) ')))
             counts["apology"] += len(APOLOGY.findall(line))
             counts["meta"] += len(META.findall(line))
@@ -131,6 +170,11 @@ def persona_metrics(sessions):
     return {
         "replies": n,
         "question_ending_rate": ratio(counts["questions"], n),
+        "unprompted_motif_rates": {
+            motif: ratio(motif_unprompted[motif], motif_eligible[motif]) for motif in MOTIFS
+        },
+        "directive_or_question_ending_rate": ratio(counts["directive_or_question"], n),
+        "false_secret_trigger_counts": false_secret_triggers,
         "apology_count": counts["apology"],
         "disclaimer_meta_count": counts["meta"],
         "ojousama_and_catchphrase_spam_count": counts["ojou"],

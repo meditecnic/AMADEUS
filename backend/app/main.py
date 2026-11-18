@@ -15,6 +15,7 @@ from app.routers import asset_pack, asset_pack_manage, auth, chat_ws, conversati
 from app.services.tts_queue import tts_manager
 from app.services.tts_sidecar import sidecar_supervisor
 from app.services.search import search_service
+from app.services.provider_adapters import close_model_http_clients
 from app.services.soul_engine import soul_engine
 from app.services.diagnostics import diagnostic_runtime
 from app.security.log_privacy import configure_logging
@@ -70,7 +71,10 @@ async def lifespan(app: FastAPI):
     data_ready, had_databases = await initialize()
     if not data_ready:
         logging.getLogger(__name__).error("Data unavailable; recovery API remains available")
-        yield
+        try:
+            yield
+        finally:
+            await close_model_http_clients()
         return
     from app.services.conversation_erasure import resume_erasures
     for worldline in ('steins_gate', 'beta'):
@@ -121,24 +125,28 @@ async def lifespan(app: FastAPI):
 
     data_relocation.pause_background = pause_data_writers
     data_relocation.resume_background = resume_data_writers
-    yield
-    data_relocation.pause_background = data_relocation.resume_background = None
-    # Shutdown
-    weekly_backup_stop.set()
-    await chat_ws.close_chat_sessions()
-    if weekly_backup is not None:
-        await weekly_backup
-    print("Amadeus Backend shutting down, cleaning resources...")
-    diagnostics_sweep.cancel()
-    await stop_background_worker()
-    await tts_manager.close_client()
-    await search_service.close()
-    await sidecar_supervisor.close()
-    from app.services.memory import memory_service
-    await memory_service.close()
-    from app.services.conversations import conversation_service
-    await conversation_service.close()
-    await asyncio.gather(diagnostics_sweep, return_exceptions=True)
+    try:
+        yield
+    finally:
+        try:
+            data_relocation.pause_background = data_relocation.resume_background = None
+            weekly_backup_stop.set()
+            await chat_ws.close_chat_sessions()
+            if weekly_backup is not None:
+                await weekly_backup
+            print("Amadeus Backend shutting down, cleaning resources...")
+            diagnostics_sweep.cancel()
+            await stop_background_worker()
+            await tts_manager.close_client()
+            await search_service.close()
+            await sidecar_supervisor.close()
+            from app.services.memory import memory_service
+            await memory_service.close()
+            from app.services.conversations import conversation_service
+            await conversation_service.close()
+            await asyncio.gather(diagnostics_sweep, return_exceptions=True)
+        finally:
+            await close_model_http_clients()
 
 app = FastAPI(title="Amadeus Backend", version="3.0.0", lifespan=lifespan)
 

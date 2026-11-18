@@ -23,13 +23,13 @@ def test_discovery_reasons(app_client, monkeypatch, error, status, code, operati
     snapshot = providers.provider_registry.snapshot("custom")
     providers.provider_model_cache.clear("custom")
     if operation == "models":
-        monkeypatch.setattr(snapshot.adapter, "list_models", AsyncMock(side_effect=error))
+        monkeypatch.setattr(type(snapshot.adapter), "list_models", AsyncMock(side_effect=error))
         response = app_client.get("/api/providers/custom/models?refresh=true")
     else:
         async def stream(**kwargs):
             raise error
             yield
-        monkeypatch.setattr(snapshot.adapter, "get_chat_stream", stream)
+        monkeypatch.setattr(type(snapshot.adapter), "get_chat_stream", staticmethod(stream))
         response = app_client.post("/api/providers/custom/chat-check", json={"model_id": "local-model"})
     # Listing: a 404 from the service means it has no model list, not a wrong address.
     if operation == "models" and getattr(error, "status_code", None) == 404:

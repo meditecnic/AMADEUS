@@ -342,7 +342,15 @@ export const Workstation: React.FC<WorkstationProps> = ({
   });
   const [temperature, setTemperature] = useState(() => {
     try {
-      const raw = localStorage.getItem('amadeus_pc_temperature');
+      let raw = localStorage.getItem('amadeus_pc_temperature');
+      const migrationKey = 'amadeus_pc_temp_v2_075_migrated';
+      if (localStorage.getItem(migrationKey) !== '1') {
+        if (raw === '0' || raw === '0.0') {
+          raw = String(CHAT_TEMPERATURE_DEFAULT);
+          localStorage.setItem('amadeus_pc_temperature', raw);
+        }
+        localStorage.setItem(migrationKey, '1');
+      }
       if (raw == null || raw === '') return CHAT_TEMPERATURE_DEFAULT;
       const parsed = parseFloat(raw);
       if (!Number.isFinite(parsed)) return CHAT_TEMPERATURE_DEFAULT;
@@ -2986,6 +2994,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
         credentialRequired={activeProvider?.credential_required !== false}
         baseUrlConfigurable={Boolean(activeProvider?.base_url_configurable)}
         modelOptions={availableModels}
+        thinkingControl={activeModelCapability?.thinking_control}
         reasoningEffort={reasoningEffort}
         customProfiles={providers
           .filter((row) => row.source === 'user_config' || row.id === 'custom' || row.id.startsWith('custom:'))

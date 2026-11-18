@@ -557,8 +557,7 @@ async def test_v11_mode_delivers_scoped_memory_to_provider(isolated_store, monke
     for forbidden in (okabe_marker, other_owner_marker, beta_marker, legacy_marker, shared_marker):
         assert forbidden not in system_prompt, forbidden
     assert "について覚えていること】" in system_prompt
-    tool_blob = json.dumps(capture.last_call.get("tools") or [], ensure_ascii=False)
-    assert "recall_memory" in tool_blob
+    assert capture.last_call["tools"] is None
     assert legacy_marker not in json.dumps(capture.last_call["messages"], ensure_ascii=False)
     # The processor passes memory_summary='' to the adapter: no double append.
     assert capture.last_call["memory_summary"] == ""
@@ -885,7 +884,7 @@ async def test_fact_selector_failure_turn_survives_with_fresh_prompt(
     events = await _run_turn(session, "このすば")
     assert _done(events) and not _errors(events), events
     assert fact_marker in capture.last_system_prompt, "next turn recovers the resident fact"
-    assert "recall_memory" in json.dumps(capture.last_call.get("tools") or [], ensure_ascii=False)
+    assert capture.last_call["tools"] is None
 
 
 @pytest.mark.asyncio
