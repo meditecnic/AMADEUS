@@ -1009,3 +1009,56 @@ def test_strict_34_item_whitelist_ignores_legacy_extras_in_zip_and_directory(app
     assert bad_resp.json()["detail"]["inspect"]["missing_files"] == ["assets/images/kurisu_sided_eyes_closed1.png"]
     # Previously installed clean pack remains untouched after rejected install
     assert_clean_installed_tree()
+
+
+def test_wrapper_folder_with_root_readme_unwraps_cleanly_while_ambiguous_multi_root_does_not(app_client, tmp_path):
+    # Single wrapper directory holding all 34 assets + root-level README.md / notes.txt
+    wrapped_with_root_readme_zip = _build_zip_bytes(
+        wrapper="amadeus-pack-v1",
+        manifest={"format": 1, "name": "wrapped-readme", "version": "1.2"},
+        extra_files={"assets/boot/boot_ring_1.png": _TINY_PNG},
+        raw_entries=[
+            ("README.md", b"# Top-level archive readme\n"),
+            ("LICENSE.txt", b"non-whitelisted root notice\n"),
+        ],
+    )
+    insp = app_client.post(
+        "/api/data/asset-pack/inspect",
+        content=wrapped_with_root_readme_zip,
+        headers={"Content-Type": "application/zip"},
+    )
+    assert insp.status_code == 200
+    insp_data = insp.json()
+    assert insp_data["valid"] is True
+    assert insp_data["stripped_root"] == "amadeus-pack-v1"
+    assert insp_data["found_count"] == 34
+    assert insp_data["missing_files"] == []
+
+    inst = app_client.post(
+        "/api/data/asset-pack/install",
+        content=wrapped_with_root_readme_zip,
+        headers={"Content-Type": "application/zip"},
+    )
+    assert inst.status_code == 200
+    installed_root = Path(os.environ["AMADEUS_DATA_DIR"]) / "asset-pack" / "amadeus-original"
+    on_disk = {p.relative_to(installed_root).as_posix() for p in installed_root.rglob("*") if p.is_file()}
+    assert on_disk == set(installer.REQUIRED_FILES) | {"manifest.json"}
+    assert not (installed_root / "README.md").exists()
+    assert not (installed_root / "LICENSE.txt").exists()
+    manifest = json.loads((installed_root / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["files"] == sorted(installer.REQUIRED_FILES)
+
+    # Ambiguous archive with two different top-level dirs containing assets/ or audio/ -> do NOT unwrap
+    ambiguous_zip = _build_zip_bytes(
+        wrapper="pack-a",
+        raw_entries=[("pack-b/audio/bgm/Amadeus.ogg", _TINY_OGG)],
+    )
+    amb_insp = app_client.post(
+        "/api/data/asset-pack/inspect",
+        content=ambiguous_zip,
+        headers={"Content-Type": "application/zip"},
+    )
+    assert amb_insp.status_code == 200
+    assert amb_insp.json()["valid"] is False
+    assert amb_insp.json()["stripped_root"] is None
+    assert amb_insp.json()["found_count"] == 0

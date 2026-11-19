@@ -436,23 +436,23 @@ def _strip_wrapper_paths(file_paths: list[str], dir_paths: list[str]) -> tuple[s
     if any(p == "assets" or p == "audio" or p.startswith(("assets/", "audio/")) for p in all_non_junk):
         return None, {p: p for p in file_paths}
 
-    if any("/" not in p for p in non_junk_files):
-        return None, {p: p for p in file_paths}
-
-    tops = {p.split("/", 1)[0] for p in all_non_junk}
-    if len(tops) == 1:
-        top = next(iter(tops))
-        has_expected_child = any(
-            p == f"{top}/assets" or p == f"{top}/audio" or p.startswith((f"{top}/assets/", f"{top}/audio/"))
-            for p in all_non_junk
-        )
-        if has_expected_child:
-            prefix = f"{top}/"
-            mapping = {
-                p: p[len(prefix):] if p.startswith(prefix) else p
-                for p in file_paths
-            }
-            return top, mapping
+    # Find top-level directories that directly contain an assets/ or audio/ folder.
+    wrapper_candidates = {
+        p.split("/", 2)[0]
+        for p in all_non_junk
+        if (parts := p.split("/"))
+        and len(parts) >= 2
+        and parts[1] in {"assets", "audio"}
+        and (len(parts) > 2 or p in non_junk_dirs)
+    }
+    if len(wrapper_candidates) == 1:
+        top = next(iter(wrapper_candidates))
+        prefix = f"{top}/"
+        mapping = {
+            p: p[len(prefix):] if p.startswith(prefix) else p
+            for p in file_paths
+        }
+        return top, mapping
 
     return None, {p: p for p in file_paths}
 

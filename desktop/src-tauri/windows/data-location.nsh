@@ -933,17 +933,221 @@ Var AmadeusDataPageHintLabel
 
     Function AmadeusDataDirPageLeave
       ${NSD_GetText} $AmadeusDataPageInput $0
+      Call AmadeusNormalizeWinPath
+      ${If} $AmadeusHadLocationFile == "1"
+      ${AndIf} $0 == $AmadeusExistingDataDir
+      ${AndIf} $AmadeusCliDataDirProvided != "1"
+      ${AndIf} ${FileExists} "$AmadeusLocationJsonFile"
+        StrCpy $AmadeusSelectedDataDir $0
+        Return
+      ${EndIf}
       Call AmadeusValidateDataDir
       ${If} $1 != ""
         MessageBox MB_OK|MB_ICONEXCLAMATION "$1"
         Abort
       ${EndIf}
       StrCpy $AmadeusSelectedDataDir $0
+      ${If} $AmadeusSelectedDataDir != $AmadeusDefaultDataDir
+        Call AmadeusVerifyExistingDataMarker
+        ${If} $0 == "0"
+          MessageBox MB_OK|MB_ICONEXCLAMATION "所选目录内已存在不支持或损坏的数据标记文件 amadeus-data.json，请选择其他目录。"
+          Abort
+        ${EndIf}
+      ${EndIf}
     FunctionEnd
 
     ; -------------------------------------------------------------------------
     ; Apply selected data directory during installation
     ; -------------------------------------------------------------------------
+
+      ; Validate existing amadeus-data.json format (or verify target does not have an invalid marker)
+      ; before publishing/updating data-location.json.
+      ; Input: $0 = directory path. Output: $0 = "1" if missing (when allow_missing=1) or valid {"format":1}, else "0".
+    Function AmadeusVerifyExistingDataMarker
+      System::Store "S"
+      StrCpy $R0 "$0\amadeus-data.json"
+      StrCpy $R9 "0"
+
+      System::Call 'kernel32::GetFileAttributesW(w R0) i .r1'
+      ${If} $1 == -1
+        ; Missing marker: caller decides whether to create {"format":1}
+        StrCpy $R9 "2"
+        Goto amadeus_marker_done
+      ${EndIf}
+      IntOp $2 $1 & 0x0410 ; refuse directory or reparse point
+      ${If} $2 <> 0
+        Goto amadeus_marker_done
+      ${EndIf}
+
+      StrCpy $0 "$R0"
+      Call AmadeusReadUtf8File
+      StrCpy $R1 "$0"
+      ${If} $R1 == ""
+        Goto amadeus_marker_done
+      ${EndIf}
+
+      ; Parse top-level JSON object looking for exact integer key "format": 1
+      StrLen $R2 $R1
+      StrCpy $R3 0
+      ${While} $R3 < $R2
+        StrCpy $R4 $R1 1 $R3
+        ${If} $R4 == " "
+        ${OrIf} $R4 == "$\t"
+        ${OrIf} $R4 == "$\r"
+        ${OrIf} $R4 == "$\n"
+          IntOp $R3 $R3 + 1
+        ${Else}
+          ${Break}
+        ${EndIf}
+      ${EndWhile}
+      StrCpy $R4 $R1 1 $R3
+      ${If} $R4 != "{"
+        Goto amadeus_marker_done
+      ${EndIf}
+      IntOp $R3 $R3 + 1
+
+      ${While} $R3 < $R2
+        ${While} $R3 < $R2
+          StrCpy $R4 $R1 1 $R3
+          ${If} $R4 == " "
+          ${OrIf} $R4 == "$\t"
+          ${OrIf} $R4 == "$\r"
+          ${OrIf} $R4 == "$\n"
+          ${OrIf} $R4 == ","
+            IntOp $R3 $R3 + 1
+          ${Else}
+            ${Break}
+          ${EndIf}
+        ${EndWhile}
+        ${If} $R3 >= $R2
+          ${Break}
+        ${EndIf}
+        StrCpy $R4 $R1 1 $R3
+        ${If} $R4 == "}"
+          ${Break}
+        ${EndIf}
+        ${If} $R4 != '"'
+          Goto amadeus_marker_done
+        ${EndIf}
+
+        IntOp $1 $R3 + 1
+        StrCpy $0 "$R1"
+        Call AmadeusDecodeJsonStringAt
+        ${If} $1 < 0
+          Goto amadeus_marker_done
+        ${EndIf}
+        StrCpy $R5 "$0" ; key
+        StrCpy $R3 $1
+
+        ${While} $R3 < $R2
+          StrCpy $R4 $R1 1 $R3
+          ${If} $R4 == " "
+          ${OrIf} $R4 == "$\t"
+          ${OrIf} $R4 == "$\r"
+          ${OrIf} $R4 == "$\n"
+            IntOp $R3 $R3 + 1
+          ${Else}
+            ${Break}
+          ${EndIf}
+        ${EndWhile}
+        StrCpy $R4 $R1 1 $R3
+        ${If} $R4 != ":"
+          Goto amadeus_marker_done
+        ${EndIf}
+        IntOp $R3 $R3 + 1
+
+        ${While} $R3 < $R2
+          StrCpy $R4 $R1 1 $R3
+          ${If} $R4 == " "
+          ${OrIf} $R4 == "$\t"
+          ${OrIf} $R4 == "$\r"
+          ${OrIf} $R4 == "$\n"
+            IntOp $R3 $R3 + 1
+          ${Else}
+            ${Break}
+          ${EndIf}
+        ${EndWhile}
+
+        StrCpy $R4 $R1 1 $R3
+        System::Call 'kernel32::lstrcmpW(w R5, w "format") i .r5'
+        ${If} $5 == 0
+          ; Must be an unquoted JSON integer token equal to 1 (reject "1", 1.0, 2, 01, true)
+          StrCpy $R6 ""
+          ${While} $R3 < $R2
+            StrCpy $R4 $R1 1 $R3
+            ${If} $R4 == " "
+            ${OrIf} $R4 == "$\t"
+            ${OrIf} $R4 == "$\r"
+            ${OrIf} $R4 == "$\n"
+            ${OrIf} $R4 == ","
+            ${OrIf} $R4 == "}"
+              ${Break}
+            ${EndIf}
+            StrCpy $R6 "$R6$R4"
+            IntOp $R3 $R3 + 1
+          ${EndWhile}
+          System::Call 'kernel32::lstrcmpW(w R6, w "1") i .r5'
+          ${If} $5 == 0
+            StrCpy $R9 "1"
+          ${EndIf}
+          Goto amadeus_marker_done
+        ${EndIf}
+
+        ; Skip non-"format" member value
+        ${If} $R4 == '"'
+          IntOp $1 $R3 + 1
+          StrCpy $0 "$R1"
+          Call AmadeusDecodeJsonStringAt
+          ${If} $1 < 0
+            Goto amadeus_marker_done
+          ${EndIf}
+          StrCpy $R3 $1
+        ${ElseIf} $R4 == "{"
+        ${OrIf} $R4 == "["
+          StrCpy $R6 0
+          StrCpy $R7 0
+          ${While} $R3 < $R2
+            StrCpy $R8 $R1 1 $R3
+            ${If} $R7 == 1
+              ${If} $R8 == "\"
+                IntOp $R3 $R3 + 1
+              ${ElseIf} $R8 == '"'
+                StrCpy $R7 0
+              ${EndIf}
+            ${Else}
+              ${If} $R8 == '"'
+                StrCpy $R7 1
+              ${ElseIf} $R8 == "{"
+              ${OrIf} $R8 == "["
+                IntOp $R6 $R6 + 1
+              ${ElseIf} $R8 == "}"
+              ${OrIf} $R8 == "]"
+                IntOp $R6 $R6 - 1
+                ${If} $R6 <= 0
+                  IntOp $R3 $R3 + 1
+                  ${Break}
+                ${EndIf}
+              ${EndIf}
+            ${EndIf}
+            IntOp $R3 $R3 + 1
+          ${EndWhile}
+        ${Else}
+          ${While} $R3 < $R2
+            StrCpy $R8 $R1 1 $R3
+            ${If} $R8 == ","
+            ${OrIf} $R8 == "}"
+              ${Break}
+            ${EndIf}
+            IntOp $R3 $R3 + 1
+          ${EndWhile}
+        ${EndIf}
+      ${EndWhile}
+
+      amadeus_marker_done:
+      Push $R9
+      System::Store "L"
+      Pop $0
+    FunctionEnd
 
     Function AmadeusApplyDataLocation
       Call AmadeusInitDataDirState
@@ -952,10 +1156,18 @@ Var AmadeusDataPageHintLabel
       SetShellVarContext current
       StrCpy $R0 "${AMADEUS_IDENTITY_ROOT}"
 
+      ; Case 0: Preserving an existing registered location during upgrade (neither user nor /DATADIR changed it)
+      ${If} $AmadeusHadLocationFile == "1"
+      ${AndIf} $AmadeusSelectedDataDir == $AmadeusExistingDataDir
+      ${AndIf} $AmadeusCliDataDirProvided != "1"
+      ${AndIf} ${FileExists} "$AmadeusLocationJsonFile"
+        Goto amadeus_apply_done
+      ${EndIf}
+
       ; Case 1: Selected directory equals default ($LOCALAPPDATA\${BUNDLEID}\data)
       ${If} $AmadeusSelectedDataDir == $AmadeusDefaultDataDir
         ${If} $AmadeusHadLocationFile == "1"
-          ; User explicitly reset a previous custom location back to default
+          ; User or explicit /DATADIR=<default> reset a previous custom location back to default
           StrCpy $0 "$R0"
           Call AmadeusCheckNoReparseChain
           ${If} $0 != "1"
@@ -982,6 +1194,14 @@ Var AmadeusDataPageHintLabel
       ${EndIf}
       StrCpy $AmadeusSelectedDataDir $0
 
+      ; If target directory already has an amadeus-data.json marker, validate {"format":1} BEFORE creating or modifying pointer
+      StrCpy $0 "$AmadeusSelectedDataDir"
+      Call AmadeusVerifyExistingDataMarker
+      ${If} $0 == "0"
+        Abort "所选目录内已存在不支持或损坏的数据标记文件 amadeus-data.json，无法作为数据储存位置。"
+      ${EndIf}
+      StrCpy $R3 "$0" ; "1" = valid existing marker, "2" = missing marker (create after dir check)
+
       ; Validate $LOCALAPPDATA\${BUNDLEID} chain has no reparse points
       StrCpy $0 "$R0"
       Call AmadeusCheckNoReparseChain
@@ -1002,24 +1222,17 @@ Var AmadeusDataPageHintLabel
         Abort "所选数据目录无效或包含符号链接：$AmadeusSelectedDataDir"
       ${EndIf}
 
-      ; Ensure <CustomDataDir>\amadeus-data.json exists (preserve existing marker on upgrade)
-      StrCpy $R1 "$AmadeusSelectedDataDir\amadeus-data.json"
-      System::Call 'kernel32::GetFileAttributesW(w R1) i .r2'
-      ${If} $2 == -1
-        StrCpy $0 "$R1"
+      ; Write {"format":1} only when missing; valid existing marker is preserved untouched
+      ${If} $R3 == "2"
+        StrCpy $0 "$AmadeusSelectedDataDir\amadeus-data.json"
         StrCpy $1 '{"format":1}'
         Call AmadeusAtomicWriteUtf8NoBom
         ${If} $0 != "1"
           Abort "无法在所选数据目录写入标记文件 amadeus-data.json。"
         ${EndIf}
-      ${Else}
-        IntOp $3 $2 & 0x0410
-        ${If} $3 <> 0
-          Abort "数据标记文件 amadeus-data.json 异常（目录或符号链接）。"
-        ${EndIf}
       ${EndIf}
 
-      ; Case 2: Upgrade keeping existing custom path -> keep existing data-location.json metadata intact
+      ; Case 2: /DATADIR=<same existing custom path> -> keep existing data-location.json metadata intact
       ${If} $AmadeusHadLocationFile == "1"
       ${AndIf} $AmadeusSelectedDataDir == $AmadeusExistingDataDir
       ${AndIf} ${FileExists} "$AmadeusLocationJsonFile"
@@ -1057,13 +1270,22 @@ Var AmadeusDataPageHintLabel
 
 !macro NSIS_HOOK_PREINSTALL
   Call AmadeusInitDataDirState
-  ${If} $AmadeusSelectedDataDir != $AmadeusDefaultDataDir
+  ${If} $AmadeusHadLocationFile == "1"
+  ${AndIf} $AmadeusSelectedDataDir == $AmadeusExistingDataDir
+  ${AndIf} $AmadeusCliDataDirProvided != "1"
+  ${AndIf} ${FileExists} "$AmadeusLocationJsonFile"
+    ; Upgrade keeping existing registered location: do not block or alter it pre-install.
+  ${ElseIf} $AmadeusSelectedDataDir != $AmadeusDefaultDataDir
     StrCpy $0 "$AmadeusSelectedDataDir"
     Call AmadeusValidateDataDir
     ${If} $1 != ""
       Abort "$1"
     ${EndIf}
     StrCpy $AmadeusSelectedDataDir $0
+    Call AmadeusVerifyExistingDataMarker
+    ${If} $0 == "0"
+      Abort "所选目录内已存在不支持或损坏的数据标记文件 amadeus-data.json，无法作为数据储存位置。"
+    ${EndIf}
   ${EndIf}
 !macroend
 

@@ -235,7 +235,49 @@ SectionEnd
             self.assertEqual(res_reset.returncode, 0)
             self.assertFalse(location_file.exists())
 
-            # 5. Unsafe / invalid /DATADIR= paths fail closed without writing data-location.json
+            # 5. Upgrade when pointer references a MISSING non-default directory (no /DATADIR) ->
+            #    must exit 0, keep pointer intact, and MUST NOT recreate empty dir or marker!
+            missing_custom = (work / "missing-custom-drive" / "AmadeusData").resolve()
+            missing_loc_bytes = json.dumps(
+                {"path": str(missing_custom)}, ensure_ascii=True
+            ).encode("utf-8")
+            location_file.write_bytes(missing_loc_bytes)
+            res_missing_upgrade = subprocess.run([str(exe), "/S"], timeout=30)
+            self.assertEqual(res_missing_upgrade.returncode, 0)
+            self.assertEqual(location_file.read_bytes(), missing_loc_bytes)
+            self.assertFalse(missing_custom.exists())
+
+            # 6. Upgrade when pointer was migrated back to default (path=default + previous_path) ->
+            #    must exit 0 and preserve data-location.json untouched so previous_path cleanup stays working!
+            back_to_default_bytes = json.dumps(
+                {
+                    "path": str(default_data),
+                    "previous_path": str(migrated_dir),
+                    "moved_at": "2026-11-18T01:00:00Z",
+                },
+                ensure_ascii=True,
+            ).encode("utf-8")
+            location_file.write_bytes(back_to_default_bytes)
+            res_default_upgrade = subprocess.run([str(exe), "/S"], timeout=30)
+            self.assertEqual(res_default_upgrade.returncode, 0)
+            self.assertTrue(location_file.is_file())
+            self.assertEqual(location_file.read_bytes(), back_to_default_bytes)
+
+            # 7. Selecting a custom dir with invalid amadeus-data.json (format!=1 / string "1" / broken JSON) ->
+            #    must abort non-zero and preserve existing data-location.json untouched!
+            for bad_marker in (b'{"format":2}', b'{"format":"1"}', b"{not-json"):
+                bad_marker_dir = (work / f"bad-marker-{len(bad_marker)}").resolve()
+                bad_marker_dir.mkdir(parents=True, exist_ok=True)
+                (bad_marker_dir / "amadeus-data.json").write_bytes(bad_marker)
+                res_bad_marker = subprocess.run([str(exe), "/S", f"/DATADIR={bad_marker_dir}"], timeout=30)
+                self.assertNotEqual(res_bad_marker.returncode, 0, f"expected failure for marker {bad_marker!r}")
+                self.assertEqual(location_file.read_bytes(), back_to_default_bytes)
+                self.assertEqual((bad_marker_dir / "amadeus-data.json").read_bytes(), bad_marker)
+
+            # Reset location_file back to absent before negative /DATADIR= checks
+            location_file.unlink()
+
+            # 8. Unsafe / invalid /DATADIR= paths fail closed without writing data-location.json
             outside = work / "outside-target"
             outside.mkdir()
             junc = work / "junction-data"
