@@ -1673,6 +1673,7 @@ async def processor_loop(
                 registered_provider.provider_id,
                 registered_provider.model_id,
                 session.reasoning_effort,
+                getattr(registered_provider.adapter, "base_url", None),
             ),
         )
         turn_provider.require(ProviderTask.CHAT)
@@ -1911,9 +1912,10 @@ async def processor_loop(
         native = (
             not config.PI_AGENT_ENABLED
             and tool_plan.status != "unsupported"
-            and turn_provider.reasoning_effort != "none"
+            and turn_provider.reasoning_effort not in {"none", "disabled"}
             and model_catalog.uses_native_reasoning(
                 turn_provider.provider_id, turn_provider.model_id,
+                getattr(turn_provider.adapter, "base_url", None),
             )
         )
         tools_to_use = tool_choice_to_use = None
@@ -2973,6 +2975,7 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                     session.provider_id,
                     session.model,
                     data.get("reasoning_effort"),
+                    getattr(provider_snapshot.adapter, "base_url", None),
                 )
                     
                 authenticated = True
@@ -3301,13 +3304,19 @@ async def websocket_chat_endpoint(websocket: WebSocket):
                         if row.get("callable"):
                             session.model = requested_model
                 if "reasoning_effort" in data:
+                    try:
+                        current_provider = provider_registry.snapshot(
+                            session.provider_id, session.model, allow_unavailable=True,
+                        )
+                    except KeyError:
+                        current_provider = None
                     session.reasoning_effort = model_catalog.normalize_control(
                         session.provider_id,
                         session.model,
                         data.get("reasoning_effort"),
+                        getattr(getattr(current_provider, "adapter", None), "base_url", None),
                     )
-                    # Echo the effective value so clients can reconcile aliases
-                    # (e.g. xhigh → max) instead of assuming the raw input stuck.
+                    # Echo the effective tier so clients can reconcile saved aliases.
                     await send_queue.put((session.current_epoch, {
                         "type": "config_applied",
                         "reasoning_effort": session.reasoning_effort,

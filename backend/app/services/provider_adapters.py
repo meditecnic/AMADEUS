@@ -13,6 +13,7 @@ from weakref import WeakKeyDictionary
 import httpx
 
 from app.security.prompt import compression_system_prompt
+from app.services.model_catalog import model_catalog
 from app.services.model_usage import usage_call
 from app.services.model_headers import model_headers
 from app.services.llm_interface import LLMInterface, build_stream_messages, fold_tail_reminder
@@ -92,17 +93,12 @@ async def iter_provider_lines(response: httpx.Response) -> AsyncIterator[str]:
         yield line
 
 
-def _auxiliary_thinking_options(
-    provider_id: str, model: str, request_mode: str
-) -> frozenset[str] | None:
-    from app.services.model_catalog import is_user_custom_provider, model_catalog
-
-    if is_user_custom_provider(provider_id):
-        return None
-    control = model_catalog.control_for(provider_id, model)
-    if control is None or not control.native or control.request_mode != request_mode:
-        return None
-    return control.values
+def apply_thinking_and_effort(payload: dict[str, Any], effort: str) -> None:
+    enabled = effort != "disabled"
+    payload["thinking"] = {"type": "enabled" if enabled else "disabled"}
+    if enabled:
+        payload["reasoning_effort"] = effort
+        payload.pop("temperature", None)
 
 
 class OpenAICompatibleAdapter(LLMInterface):
@@ -114,7 +110,6 @@ class OpenAICompatibleAdapter(LLMInterface):
         default_model: str,
         message_builder: Callable[..., list[dict]],
         credential_required: bool = True,
-        thinking_request_mode: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.provider_id = provider_id
@@ -122,7 +117,6 @@ class OpenAICompatibleAdapter(LLMInterface):
         self.model = default_model
         self._message_builder = message_builder
         self.credential_required = credential_required
-        self.thinking_request_mode = thinking_request_mode
         self._transport = transport
 
     def _headers(self, api_key: str | None) -> dict[str, str]:
@@ -133,13 +127,36 @@ class OpenAICompatibleAdapter(LLMInterface):
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
+    def _apply_thinking(
+        self, payload: dict[str, Any], reasoning_effort: str | None, *, auxiliary: bool = False
+    ) -> None:
+        control = model_catalog.control_for(self.provider_id, payload["model"], self.base_url)
+        if control is None:
+            return
+        if auxiliary:
+            # Controls are ordered from off / least thinking to most thinking.
+            effort = control.options[0][0]
+        elif control.disable_with_tools and "tools" in payload:
+            effort = "disabled"
+            if payload.get("tool_choice") == "auto":
+                payload.pop("tool_choice")
+        else:
+            effort = control.normalize(reasoning_effort)
+
+        if control.request_mode == "thinking_and_effort":
+            apply_thinking_and_effort(payload, effort)
+        elif control.request_mode == "openai_reasoning_effort":
+            payload["reasoning_effort"] = effort
+            if effort != "none":
+                payload.pop("temperature", None)
+
     async def get_chat_stream(
         self,
         active_history: list,
         memory_summary: Optional[str] = None,
         api_key: Optional[str] = None,
         system_prompt: Optional[str] = None,
-        temperature: float = 0.7,
+        temperature: float = 0.75,
         tools: Optional[list] = None,
         tool_choice: Optional[str] = None,
         model: Optional[str] = None,
@@ -165,8 +182,6 @@ class OpenAICompatibleAdapter(LLMInterface):
             "stream": True,
             "temperature": temperature,
         }
-        from app.services.model_catalog import model_catalog
-
         # Custom compatible endpoints may reject stream_options; do not risk the
         # conversation just to collect usage. Missing metadata stays null.
         if model_catalog.supports_stream_usage(self.provider_id):
@@ -177,15 +192,7 @@ class OpenAICompatibleAdapter(LLMInterface):
             payload["tools"] = tools
             if tool_choice is not None:
                 payload["tool_choice"] = tool_choice
-        if self.thinking_request_mode == "reasoning_effort" and reasoning_effort:
-            payload["thinking"] = {
-                "type": (
-                    "disabled"
-                    if reasoning_effort in {"none", "minimal"}
-                    else "enabled"
-                )
-            }
-            payload["reasoning_effort"] = reasoning_effort
+        self._apply_thinking(payload, reasoning_effort)
 
         async with usage_call(self.provider_id, model or self.model) as usage, _adapter_client(self) as (client, request_options):
             async with client.stream(
@@ -229,7 +236,6 @@ class OpenAICompatibleAdapter(LLMInterface):
         model: str | None,
         temperature: float,
         response_format: dict[str, str] | None = None,
-        reasoning_effort: str | None = None,
     ) -> str:
         effective_model = model or self.model
         payload: dict[str, Any] = {
@@ -237,15 +243,7 @@ class OpenAICompatibleAdapter(LLMInterface):
             "messages": messages,
             "temperature": temperature,
         }
-        options = _auxiliary_thinking_options(self.provider_id, effective_model, "reasoning_effort")
-        if options is not None:
-            effort = reasoning_effort if reasoning_effort in options else None
-            effort = effort or ("none" if "none" in options else None)
-            payload["thinking"] = {
-                "type": "enabled" if effort not in (None, "none") else "disabled"
-            }
-            if effort is not None:
-                payload["reasoning_effort"] = effort
+        self._apply_thinking(payload, None, auxiliary=True)
         if response_format is not None:
             payload["response_format"] = response_format
         async with usage_call(self.provider_id, effective_model) as usage, _adapter_client(self, 30.0) as (client, request_options):
@@ -277,7 +275,6 @@ class OpenAICompatibleAdapter(LLMInterface):
             model=model,
             temperature=temperature,
             response_format={"type": "json_object"},
-            reasoning_effort=reasoning_effort,
         )
         if raw.startswith("```"):
             raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
@@ -476,8 +473,9 @@ class OpenAIResponsesAdapter(LLMInterface):
             payload["tools"] = converted_tools
             if tool_choice is not None:
                 payload["tool_choice"] = tool_choice
-        if reasoning_effort:
-            payload["reasoning"] = {"effort": reasoning_effort}
+        effort = model_catalog.normalize_control(self.provider_id, payload["model"], reasoning_effort)
+        if effort is not None:
+            payload["reasoning"] = {"effort": effort}
 
         async with usage_call(self.provider_id, model or self.model) as usage, _adapter_client(self) as (client, request_options):
             async with client.stream(
@@ -571,10 +569,9 @@ class OpenAIResponsesAdapter(LLMInterface):
             "instructions": instructions,
             "input": inputs,
         }
-        options = _auxiliary_thinking_options(self.provider_id, effective_model, "reasoning_effort") or ()
-        effort = reasoning_effort if reasoning_effort in options else "none"
-        if effort in options:
-            payload["reasoning"] = {"effort": effort}
+        control = model_catalog.control_for(self.provider_id, effective_model)
+        if control is not None:
+            payload["reasoning"] = {"effort": control.normalize(reasoning_effort or "none")}
         if json_mode:
             payload["text"] = {"format": {"type": "json_object"}}
         async with usage_call(self.provider_id, effective_model) as usage, _adapter_client(self, 30.0) as (client, request_options):
@@ -658,7 +655,7 @@ class OpenAIResponsesAdapter(LLMInterface):
 class GeminiAdapter(LLMInterface):
     provider_id = "gemini"
     base_url = "https://generativelanguage.googleapis.com/v1beta"
-    model = "gemini-3.5-flash"
+    model = "gemini-3.6-flash"
 
     def __init__(
         self,
@@ -732,24 +729,26 @@ class GeminiAdapter(LLMInterface):
         )
         # _contents moves every system message into systemInstruction.
         system_instruction, contents = self._contents(fold_tail_reminder(messages))
+        effective_model = model_catalog.request_id(self.provider_id, model or self.model)
         payload: dict[str, Any] = {
             "systemInstruction": system_instruction,
             "contents": contents,
-            "generationConfig": {"temperature": temperature},
+            "generationConfig": {},
         }
         if max_output_tokens is not None:
             payload["generationConfig"]["maxOutputTokens"] = max_output_tokens
-        if reasoning_effort:
+        effort = model_catalog.normalize_control(self.provider_id, effective_model, reasoning_effort)
+        if effort is not None:
             payload["generationConfig"]["thinkingConfig"] = {
-                "thinkingLevel": reasoning_effort
+                "thinkingLevel": effort
             }
         converted_tools = self._tools(tools)
         if converted_tools is not None:
             payload["tools"] = converted_tools
-        async with usage_call(self.provider_id, model or self.model) as usage, _adapter_client(self) as (client, request_options):
+        async with usage_call(self.provider_id, effective_model) as usage, _adapter_client(self) as (client, request_options):
             async with client.stream(
                 "POST",
-                f"{self.base_url}/models/{model or self.model}:streamGenerateContent",
+                f"{self.base_url}/models/{effective_model}:streamGenerateContent",
                 params={"alt": "sse"},
                 headers=self._headers(api_key),
                 json=payload,
@@ -794,12 +793,11 @@ class GeminiAdapter(LLMInterface):
         json_mode: bool = False,
         reasoning_effort: str | None = None,
     ) -> str:
-        effective_model = model or self.model
+        effective_model = model_catalog.request_id(self.provider_id, model or self.model)
         system_instruction, contents = self._contents(messages)
-        config: dict[str, Any] = {"temperature": 0.2}
-        options = _auxiliary_thinking_options(self.provider_id, effective_model, "gemini_thinking_level") or ()
-        effort = reasoning_effort if reasoning_effort in options else "minimal"
-        if effort in options:
+        config: dict[str, Any] = {}
+        effort = model_catalog.normalize_control(self.provider_id, effective_model, reasoning_effort or "minimal")
+        if effort is not None:
             config["thinkingConfig"] = {"thinkingLevel": effort}
         if json_mode:
             config["responseMimeType"] = "application/json"

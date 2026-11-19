@@ -132,6 +132,8 @@ async def test_concurrent_health_starts_only_one_sidecar(monkeypatch):
     real_sleep = asyncio.sleep
     with monkeypatch.context() as mp:
         mp.setenv("SOVITS_SIDECAR_COMMAND", "python fake_sidecar.py --port {port}")
+        mp.setenv("PYTHONIOENCODING", "ascii")
+        mp.setenv("PYTHONUTF8", "0")
         supervisor = SidecarSupervisor()
         running = False
         process = MagicMock(returncode=None)
@@ -153,6 +155,8 @@ async def test_concurrent_health_starts_only_one_sidecar(monkeypatch):
 
     spawn.assert_awaited_once()
     assert spawn.await_args.args == ("python", "fake_sidecar.py", "--port", "9880")
+    assert spawn.await_args.kwargs["env"]["PYTHONIOENCODING"] == "utf-8"
+    assert spawn.await_args.kwargs["env"]["PYTHONUTF8"] == "1"
     assert supervisor._compatible.await_count == 2
     supervisor._load_configured_weights.assert_awaited_once_with("http://127.0.0.1:9880")
     assert all(result == {

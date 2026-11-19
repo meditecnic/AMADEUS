@@ -199,7 +199,7 @@ async def test_chat_delegate_pi_read_result_returns_in_her_reply(pi_binary, tmp_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("host_offset", [0, -5])
-async def test_disabled_complete_request_bytes_match_pre_spike(monkeypatch, tmp_path, host_offset):
+async def test_pi_disabled_complete_request_bytes_match_deepseek_protocol(monkeypatch, tmp_path, host_offset):
     with synthetic_api(tmp_path, delegate=False) as api:
         await chat_turn(monkeypatch, api, enabled=False, host_offset=host_offset)
     assert len(api.requests) == 1
@@ -209,6 +209,6 @@ async def test_disabled_complete_request_bytes_match_pre_spike(monkeypatch, tmp_
     assert b"delegate_task" not in wire
     assert "tools" not in body
     assert body["thinking"] == {"type": "enabled"}
-    assert body["reasoning_effort"] == "high"
-    assert body["temperature"] == 0.75
-    assert hashlib.sha256(wire).hexdigest() == "a8b1f62c5b794adfcc821d6c8adfccb2debc9faa4ffcc542787a0ac49ac8f9fc"
+    assert body["reasoning_effort"] == "low"
+    assert "temperature" not in body
+    assert hashlib.sha256(wire).hexdigest() == "f94122892104fc6fbbf4c9a0b9d3d0e4528cdc43933ee73b832c107aaf8a6856"

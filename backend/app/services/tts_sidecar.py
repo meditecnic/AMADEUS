@@ -100,7 +100,7 @@ class SidecarSupervisor:
                 continue
             if not command or in_cooldown:
                 continue
-            env = dict(os.environ, SOVITS_PORT=str(port))
+            env = dict(os.environ, SOVITS_PORT=str(port), PYTHONIOENCODING="utf-8", PYTHONUTF8="1")
             creationflags = 0x08000000 if os.name == "nt" else 0
             self.process = await asyncio.create_subprocess_exec(
                 *self._command_args(command, port),

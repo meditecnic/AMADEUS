@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "verified_at": "2026-11-16",
+  "verified_at": "2026-11-18",
   "providers": {
     "deepseek": {
       "allow_undiscovered_models": false,
@@ -19,16 +19,20 @@
             "kind": "effort",
             "label": "推理强度",
             "native": true,
-            "default": "high",
-            "request_mode": "reasoning_effort",
+            "default": "low",
+            "request_mode": "thinking_and_effort",
             "options": [
+              { "value": "disabled", "label": "OFF" },
               { "value": "low", "label": "LOW" },
               { "value": "high", "label": "HIGH" },
               { "value": "max", "label": "MAX" }
             ],
             "aliases": {
+              "none": "disabled",
+              "minimal": "low",
               "medium": "high",
-              "xhigh": "max"
+              "xhigh": "high",
+              "ultra": "max"
             }
           },
           "evidence": [
@@ -54,16 +58,20 @@
             "kind": "effort",
             "label": "推理强度",
             "native": true,
-            "default": "high",
-            "request_mode": "reasoning_effort",
+            "default": "low",
+            "request_mode": "thinking_and_effort",
             "options": [
+              { "value": "disabled", "label": "OFF" },
               { "value": "low", "label": "LOW" },
               { "value": "high", "label": "HIGH" },
               { "value": "max", "label": "MAX" }
             ],
             "aliases": {
+              "none": "disabled",
+              "minimal": "low",
               "medium": "high",
-              "xhigh": "max"
+              "xhigh": "high",
+              "ultra": "max"
             }
           },
           "evidence": [
@@ -86,16 +94,20 @@
             "kind": "effort",
             "label": "推理强度",
             "native": true,
-            "default": "high",
-            "request_mode": "reasoning_effort",
+            "default": "low",
+            "request_mode": "thinking_and_effort",
             "options": [
+              { "value": "disabled", "label": "OFF" },
               { "value": "low", "label": "LOW" },
               { "value": "high", "label": "HIGH" },
               { "value": "max", "label": "MAX" }
             ],
             "aliases": {
+              "none": "disabled",
+              "minimal": "low",
               "medium": "high",
-              "xhigh": "max"
+              "xhigh": "high",
+              "ultra": "max"
             }
           },
           "evidence": [
@@ -121,16 +133,19 @@
             "label": "推理强度",
             "native": true,
             "default": "max",
-            "request_mode": "reasoning_effort",
+            "request_mode": "thinking_and_effort",
             "options": [
-              { "value": "none", "label": "NONE" },
-              { "value": "minimal", "label": "MINIMAL" },
-              { "value": "low", "label": "LOW" },
-              { "value": "medium", "label": "MEDIUM" },
+              { "value": "disabled", "label": "OFF" },
               { "value": "high", "label": "HIGH" },
-              { "value": "xhigh", "label": "XHIGH" },
               { "value": "max", "label": "MAX" }
-            ]
+            ],
+            "aliases": {
+              "none": "disabled",
+              "minimal": "disabled",
+              "low": "high",
+              "medium": "high",
+              "xhigh": "max"
+            }
           },
           "evidence": [
             "https://docs.bigmodel.cn/cn/guide/capabilities/thinking",
@@ -145,7 +160,7 @@
       "models": [
         {
           "id": "gpt-5.6-luna",
-          "pricing": {"input": 0.2, "output": 1.2, "cached_input": 0.02, "currency": "USD", "as_of": "2026-11-06", "source": "https://openai.com/api/pricing/", "max_input_tokens": 270000, "note": "Standard processing, input below 270K; longer requests are not estimated."},
+          "pricing": {"input": 0.2, "output": 1.2, "cached_input": 0.02, "currency": "USD", "as_of": "2026-11-06", "source": "https://openai.com/api/pricing/", "max_input_tokens": 272000, "note": "Standard processing, input below 272K; longer requests are not estimated."},
           "display_name": "GPT-5.6 Luna",
           "lifecycle": "stable",
           "context_window": 1050000,
@@ -158,13 +173,17 @@
             "default": "medium",
             "request_mode": "reasoning_effort",
             "options": [
-              { "value": "none", "label": "NONE" },
+              { "value": "none", "label": "OFF" },
               { "value": "low", "label": "LOW" },
               { "value": "medium", "label": "MEDIUM" },
               { "value": "high", "label": "HIGH" },
               { "value": "xhigh", "label": "XHIGH" },
               { "value": "max", "label": "MAX" }
-            ]
+            ],
+            "aliases": {
+              "disabled": "none",
+              "minimal": "low"
+            }
           },
           "evidence": [
             "https://developers.openai.com/api/docs/models/gpt-5.6-luna",
@@ -177,9 +196,10 @@
       "allow_undiscovered_models": false,
       "models": [
         {
-          "id": "gemini-3.5-flash",
-          "display_name": "Gemini 3.5 Flash",
+          "id": "gemini-3.6-flash",
+          "display_name": "Gemini 3.6 Flash",
           "lifecycle": "stable",
+          "preferred": true,
           "context_window": 1048576,
           "max_output_tokens": 65536,
           "persona_certification": "not_evaluated",
@@ -194,11 +214,30 @@
               { "value": "low", "label": "LOW" },
               { "value": "medium", "label": "MEDIUM" },
               { "value": "high", "label": "HIGH" }
-            ]
+            ],
+            "aliases": {
+              "none": "minimal",
+              "disabled": "minimal",
+              "xhigh": "high",
+              "max": "high"
+            }
           },
           "evidence": [
-            "https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash",
+            "https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash",
             "https://ai.google.dev/gemini-api/docs/generate-content/thinking"
+          ]
+        },
+        {
+          "id": "gemini-3.5-flash",
+          "display_name": "Gemini 3.5 Flash",
+          "lifecycle": "deprecated",
+          "compatibility_of": "gemini-3.6-flash",
+          "compatibility_scope": "official_direct",
+          "context_window": 1048576,
+          "max_output_tokens": 65536,
+          "persona_certification": "not_evaluated",
+          "evidence": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash"
           ]
         }
       ]

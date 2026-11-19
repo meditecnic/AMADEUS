@@ -207,7 +207,8 @@ def test_usage_currency_nulls_conversation_and_local_month(usage_store, monkeypa
     assert sum(g['calls'] for g in report.usage_report('all', None, 0)['groups']) == 5
 
 
-def test_catalog_official_prices_and_long_context(usage_store):
+@pytest.mark.parametrize("tokens, estimated", [(271999, True), (272000, False)])
+def test_catalog_official_prices_and_long_context(usage_store, tokens, estimated):
     from app.services.usage_report import usage_report, model_catalog
     for model in ['deepseek-flash', 'deepseek-v4-flash', 'deepseek-v4-pro']:
         price = model_catalog.pricing_for('deepseek', model)
@@ -215,15 +216,17 @@ def test_catalog_official_prices_and_long_context(usage_store):
         assert price['as_of'] == '2026-11-06'
     assert model_catalog.pricing_for('glm', 'glm-5.2') is None
     price = model_catalog.pricing_for('openai', 'gpt-5.6-luna')
+    assert price["max_input_tokens"] == 272000
     assert model_catalog.public_model('openai', 'gpt-5.6-luna')['pricing'] == price
     price['input'] = 999
     assert model_catalog.pricing_for('openai', 'gpt-5.6-luna')['input'] == 0.2
     with closing(sqlite3.connect(usage_store)) as conn:
         conn.execute('''INSERT INTO model_usage(time_utc,category,source,provider_id,model_id,input_tokens,output_tokens,reported)
-            VALUES('2026-11-06T00:00:00+00:00','chat','chat','openai','gpt-5.6-luna',270000,100,1)''')
+            VALUES('2026-11-06T00:00:00+00:00','chat','chat','openai','gpt-5.6-luna',?,100,1)''', (tokens,))
         conn.commit()
     group, = usage_report('all', None, 0)['groups']
-    assert group['estimated_cost'] is None and group['unestimated_calls'] == 1
+    assert (group['estimated_cost'] is not None) is estimated
+    assert group['unestimated_calls'] == int(not estimated)
 
 
 @pytest.mark.parametrize('patch', [{'input': -1}, {'output': float('nan')}, {'currency': 'usd'}, {'as_of': 'bad'}, {'source': 'http://invalid'}, {'max_input_tokens': 0}])

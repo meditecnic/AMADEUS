@@ -328,14 +328,14 @@ async def test_gemini_stream_maps_persona_roles_and_native_parts():
         async for chunk in adapter.get_chat_stream(
             active_history=[{"role": "user", "content": "检查数据"}],
             api_key="gemini-secret",
-            model="gemini-3.5-flash",
+            model="gemini-3.6-flash",
             reasoning_effort="low",
         )
     ]
 
     payload = json.loads(requests[0].content)
     assert requests[0].url.path.endswith(
-        "/models/gemini-3.5-flash:streamGenerateContent"
+        "/models/gemini-3.6-flash:streamGenerateContent"
     )
     assert "[EMO:neutral|" in payload["systemInstruction"]["parts"][0]["text"]
     assert payload["contents"][-1] == {
@@ -425,7 +425,7 @@ def test_openai_and_gemini_native_providers_are_registered():
 
     assert definitions["openai"].default_model == "gpt-5.6-luna"
     assert "reasoning_effort" in definitions["openai"].capabilities.parameters
-    assert definitions["gemini"].default_model == "gemini-3.5-flash"
+    assert definitions["gemini"].default_model == "gemini-3.6-flash"
     assert definitions["gemini"].capabilities.model_discovery is True
 
 
@@ -449,7 +449,6 @@ async def test_glm_native_thinking_payload_is_model_controlled():
         base_url="https://open.bigmodel.cn/api/paas/v4",
         default_model="glm-5.2",
         message_builder=deepseek_service.build_persona_messages,
-        thinking_request_mode="reasoning_effort",
         transport=httpx.MockTransport(handler),
     )
 
@@ -465,7 +464,7 @@ async def test_glm_native_thinking_payload_is_model_controlled():
 
     payload = json.loads(requests[0].content)
     assert payload["thinking"] == {"type": "disabled"}
-    assert payload["reasoning_effort"] == "minimal"
+    assert "reasoning_effort" not in payload
 
 
 @pytest.mark.asyncio
@@ -507,10 +506,10 @@ async def test_custom_compatible_provider_never_guesses_reasoning_parameters():
 @pytest.mark.parametrize(
     ("provider_id", "model", "kwargs", "thinking_fields"),
     [
-        ("glm", "glm-5.2", {}, {"thinking": {"type": "disabled"}, "reasoning_effort": "none"}),
+        ("glm", "glm-5.2", {}, {"thinking": {"type": "disabled"}}),
         (
             "glm", "glm-5.2", {"reasoning_effort": "low"},
-            {"thinking": {"type": "enabled"}, "reasoning_effort": "low"},
+            {"thinking": {"type": "disabled"}},
         ),
         ("deepseek", "deepseek-flash", {}, {"thinking": {"type": "disabled"}}),
         ("glm", "uncatalogued", {}, {}),
@@ -537,7 +536,6 @@ async def test_compatible_auxiliary_thinking_follows_the_catalog(
         base_url="https://compatible.example/v1",
         default_model="local-model",
         message_builder=deepseek_service.build_persona_messages,
-        thinking_request_mode="reasoning_effort",
         transport=httpx.MockTransport(handler),
     )
     result = await adapter.complete_json(

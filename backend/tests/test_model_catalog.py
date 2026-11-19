@@ -36,7 +36,7 @@ def test_versioned_manifest_is_strict_and_covers_current_builtins():
     payload = model_catalog.manifest
 
     assert payload["version"] == 1
-    assert payload["verified_at"] == "2026-11-16"
+    assert payload["verified_at"] == "2026-11-18"
     assert set(payload["providers"]) == {
         "deepseek",
         "glm",
@@ -82,7 +82,8 @@ def test_versioned_manifest_is_strict_and_covers_current_builtins():
                 for alias, target in control.get("aliases", {}).items()
             )
             assert control["request_mode"] in {
-                "prompt_depth",
+                "thinking_and_effort",
+                "openai_reasoning_effort",
                 "reasoning_effort",
                 "gemini_thinking_level",
             }
@@ -179,14 +180,14 @@ def test_live_discovery_metadata_survives_catalog_reconciliation():
 @pytest.mark.parametrize(
     ("provider_id", "model_id", "raw", "expected"),
     [
-        ("deepseek", "deepseek-flash", "xhigh", "max"),
+        ("deepseek", "deepseek-flash", "xhigh", "high"),
         ("deepseek", "deepseek-flash", "low", "low"),
-        ("deepseek", "deepseek-v4-flash", "xhigh", "max"),
+        ("deepseek", "deepseek-v4-flash", "xhigh", "high"),
         ("deepseek", "deepseek-v4-flash", "low", "low"),
         ("deepseek", "deepseek-v4-pro", "low", "low"),
         ("deepseek", "deepseek-v4-pro", "max", "max"),
-        ("deepseek", "deepseek-v4-pro", "xhigh", "max"),
-        ("glm", "glm-5.2", "minimal", "minimal"),
+        ("deepseek", "deepseek-v4-pro", "xhigh", "high"),
+        ("glm", "glm-5.2", "minimal", "disabled"),
         ("openai", "gpt-5.6-luna", "none", "none"),
         ("gemini", "gemini-3.5-flash", "low", "low"),
         ("custom", "local-model", "high", None),
@@ -256,7 +257,7 @@ def test_provider_metadata_exposes_default_model_control_schema_and_no_kimi(app_
     assert all(row["id"] != "kimi" for row in rows)
     by_id = {row["id"]: row for row in rows}
     flash = by_id["deepseek"]["default_model_capability"]
-    assert by_id["deepseek"]["catalog_verified_at"] == "2026-11-16"
+    assert by_id["deepseek"]["catalog_verified_at"] == "2026-11-18"
     assert by_id["deepseek"]["preferred_model_id"] == "deepseek-flash"
     assert flash["id"] == "deepseek-flash"
     assert flash["display_name"] == "DeepSeek-V4.1-Flash"
@@ -264,21 +265,24 @@ def test_provider_metadata_exposes_default_model_control_schema_and_no_kimi(app_
     assert flash["max_output_tokens"] == 393_216
     assert flash["disclosed_version"] == "DeepSeek-V4.1-Flash-1017"
     assert flash["thinking_control"]["native"] is True
-    assert flash["thinking_control"]["default"] == "high"
+    assert flash["thinking_control"]["default"] == "low"
     assert [row["value"] for row in flash["thinking_control"]["options"]] == [
+        "disabled",
         "low",
         "high",
         "max",
     ]
-    assert flash["thinking_control"]["aliases"] == {"medium": "high", "xhigh": "max"}
-    assert flash["thinking_control"]["request_mode"] == "reasoning_effort"
+    assert flash["thinking_control"]["aliases"] == {
+        "none": "disabled", "minimal": "low", "medium": "high", "xhigh": "high", "ultra": "max",
+    }
+    assert flash["thinking_control"]["request_mode"] == "thinking_and_effort"
     assert "https://www.deepseek.com/en/news/deepseek-v4-1-flash/" in flash["evidence"]
     assert "https://api-docs.deepseek.com/" in flash["evidence"]
     assert by_id["openai"]["catalog_version"] == 1
     assert by_id["openai"]["default_model_capability"]["thinking_control"][
         "options"
     ] == [
-        {"value": "none", "label": "NONE"},
+        {"value": "none", "label": "OFF"},
         {"value": "low", "label": "LOW"},
         {"value": "medium", "label": "MEDIUM"},
         {"value": "high", "label": "HIGH"},
@@ -313,7 +317,7 @@ def test_models_endpoint_keeps_legacy_ids_and_adds_reconciled_catalog(
         payload = response.json()
         assert payload["models"] == ["deepseek-next", "deepseek-v4-flash"]
         assert payload["catalog_version"] == 1
-        assert payload["catalog_verified_at"] == "2026-11-16"
+        assert payload["catalog_verified_at"] == "2026-11-18"
         assert payload["discovery_status"] == "live"
         assert payload["preferred_model_id"] == "deepseek-flash"
         by_id = {row["id"]: row for row in payload["catalog"]}
@@ -407,9 +411,9 @@ def test_config_update_echoes_normalized_reasoning_effort(app_client, monkeypatc
         applied = websocket.receive_json()
         assert applied == {
             "type": "config_applied",
-            "reasoning_effort": "max",
+            "reasoning_effort": "high",
         }
-    assert chat_ws.sessions["q41-effort-echo"].reasoning_effort == "max"
+    assert chat_ws.sessions["q41-effort-echo"].reasoning_effort == "high"
 
 
 def test_config_update_accepts_catalog_model_and_rejects_unknown(

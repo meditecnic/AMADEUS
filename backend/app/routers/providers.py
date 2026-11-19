@@ -30,13 +30,14 @@ from app.services.model_catalog import (
     model_catalog,
 )
 from app.services.provider_adapters import ProviderRequestError
-from app.services.provider_registry import ProviderModelCache, ProviderTask
+from app.services.provider_registry import ProviderTask
 from app.services.provider_runtime import (
     configure_custom_provider,
     is_custom_profile_id,
     new_custom_provider_id,
     normalize_custom_base_url,
     prepare_custom_provider_settings,
+    provider_model_cache,
     provider_registry,
     unregister_custom_provider,
 )
@@ -44,7 +45,6 @@ from app.services.provider_runtime import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/providers", tags=["providers"])
-provider_model_cache = ProviderModelCache()
 
 
 class CredentialUpdate(BaseModel):
@@ -96,19 +96,22 @@ def _provider_row(definition) -> dict[str, Any]:
         allow_unavailable=True,
     )
     source = "user_config" if is_user_custom_provider(definition.id) else "builtin"
+    base_url = str(snapshot.adapter.base_url) if definition.base_url_configurable else None
+    default_model = model_catalog.request_id(definition.id, definition.default_model)
+    default_capability = model_catalog.public_model(definition.id, default_model, base_url=base_url)
+    catalog = model_catalog.list_provider(definition.id, base_url=base_url)
+    if base_url and default_model and all(row["id"] != default_model for row in catalog):
+        catalog.append(default_capability)
     return {
         "id": definition.id,
         "display_name": definition.display_name,
-        "default_model": definition.default_model,
+        "default_model": default_model,
         "source": source,
         "catalog_version": model_catalog.version,
         "catalog_verified_at": model_catalog.verified_at,
-        "default_model_capability": model_catalog.public_model(
-            definition.id,
-            definition.default_model,
-        ),
+        "default_model_capability": default_capability,
         "preferred_model_id": model_catalog.preferred_id(definition.id),
-        "catalog": model_catalog.list_provider(definition.id),
+        "catalog": catalog,
         "tasks": sorted(task.value for task in definition.capabilities.tasks),
         "parameters": sorted(definition.capabilities.parameters),
         "structured_output": definition.capabilities.structured_output,
@@ -117,11 +120,7 @@ def _provider_row(definition) -> dict[str, Any]:
         "base_url_configurable": definition.base_url_configurable,
         "configured": _credential_configured(definition.id),
         "credential_required": definition.credential_required,
-        "base_url": (
-            str(snapshot.adapter.base_url)
-            if definition.base_url_configurable
-            else None
-        ),
+        "base_url": base_url,
         "enabled": True,
         "selector_admission": "admitted",
         "configuration_version": None,
@@ -232,7 +231,6 @@ async def list_providers():
                 "selector_admission": config["selector_admission"],
                 "configuration_version": config["configuration_version"],
                 "catalog_id": config.get("catalog_id"),
-                "default_model": config["default_model"],
             })
             continue
         if bool(config.get("enabled")):
@@ -762,17 +760,28 @@ async def _discover_models(provider_id: str, *, refresh: bool, allow_stale: bool
         )
 
     async def load() -> list[str | dict[str, Any]]:
-        return await method(api_key=secret)
+        models = await method(api_key=secret)
+        # A response from an in-flight discovery must not repopulate the old
+        # model list after a custom connection changes address.
+        ensure_current_adapter()
+        return models
+
+    def ensure_current_adapter() -> None:
+        if snapshot.base_url_configurable and _definition(provider_id).adapter is not snapshot.adapter:
+            raise HTTPException(409, detail={"code": "configuration_changed"})
 
     try:
-        return await provider_model_cache.get(
+        result = await provider_model_cache.get(
             provider_id,
             load,
             refresh=refresh,
         )
+        ensure_current_adapter()
+        return result
     except HTTPException:
         raise
     except Exception as exc:
+        ensure_current_adapter()
         stale = provider_model_cache.peek(provider_id)
         if allow_stale and stale is not None:
             return stale
@@ -782,10 +791,12 @@ async def _discover_models(provider_id: str, *, refresh: bool, allow_stale: bool
 @router.get("/{provider_id}/models")
 async def list_provider_models(provider_id: str, refresh: bool = False):
     result = await _discover_models(provider_id, refresh=refresh)
+    snapshot = _definition(provider_id)
     catalog = model_catalog.reconcile(
         provider_id,
         result.models,
         result.metadata,
+        base_url=str(snapshot.adapter.base_url) if snapshot.base_url_configurable else None,
     )
     id_only = bool(catalog) and all(
         row.get("display_source") == "request_id" for row in catalog

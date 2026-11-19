@@ -309,8 +309,8 @@ class SearchService:
         assert self._client is not None
         response = await self._client.post(
             "https://api.tavily.com/search",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={
-                "api_key": api_key,
                 "query": query,
                 "search_depth": "basic",
                 "max_results": 5,
