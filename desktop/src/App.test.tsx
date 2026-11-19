@@ -5,10 +5,6 @@ import type { DataStatus } from './workstation/dataApi';
 const dataStatusMock = vi.hoisted(() => vi.fn<() => Promise<DataStatus>>());
 
 vi.mock('./assetPack', () => ({ loadAssetPack: vi.fn(async () => false) }));
-vi.mock('./components/BootSplash', () => ({
-  hasBootSplash: () => false,
-  BootSplash: () => <div data-testid="boot-splash" />,
-}));
 vi.mock('./components/SalieriLogin', () => ({
   SalieriLogin: () => <div data-testid="salieri-login" />,
 }));

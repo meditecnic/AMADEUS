@@ -52,12 +52,9 @@ export function BilingualMessage({
     const bind = (id: number, lang: 'ja' | 'zh') => {
       const arrive = arrival?.[lang].has(id) ? ' arrive' : '';
       return linked ? {
-        tabIndex: 0,
         className: `s${hot === id ? ' hot' : ''}${speakingId === id ? ' speaking' : ''}${arrive}`,
         onMouseEnter: () => setHot(id),
         onMouseLeave: () => setHot(null),
-        onFocus: () => setHot(id),
-        onBlur: () => setHot(null),
       } : { className: `s${arrive}` };
     };
     return (

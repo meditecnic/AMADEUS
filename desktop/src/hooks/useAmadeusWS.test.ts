@@ -28,7 +28,6 @@ const params: UseAmadeusWSParams = {
   sessionId: 'session-one',
   conversationId: 'conversation-one',
   systemPrompt: 'prompt',
-  temperature: 0.8,
   worldline: 'steins_gate',
   enableTts: true,
   sovitsUrl: '',
@@ -629,9 +628,12 @@ describe('useAmadeusWS v2', () => {
       conversation_id: 'conversation-one',
     });
     expect(auth).not.toHaveProperty('api_key');
+    expect(auth).not.toHaveProperty('temperature');
 
-    act(() => result.current.updateConfig({ temperature: 0.5 }));
-    expect(JSON.parse(socket.sent[socket.sent.length - 1])).not.toHaveProperty('api_key');
+    act(() => result.current.updateConfig({ systemPrompt: 'next prompt' }));
+    const updatedFrame = JSON.parse(socket.sent[socket.sent.length - 1]);
+    expect(updatedFrame).not.toHaveProperty('api_key');
+    expect(updatedFrame).not.toHaveProperty('temperature');
 
     act(() => result.current.sendChat('hello'));
     expect(JSON.parse(socket.sent[socket.sent.length - 1])).toEqual({ type: 'chat.send', content: 'hello' });

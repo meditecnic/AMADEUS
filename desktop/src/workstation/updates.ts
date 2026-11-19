@@ -107,12 +107,19 @@ export async function checkForUpdate({ silent = false } = {}): Promise<void> {
   if (state.phase === 'checking' || state.phase === 'downloading' || state.phase === 'installing') return;
   const from = getSource();
   if (!from) { set({ phase: 'unsupported' }); return; }
+  const prev = state;
   set({ phase: 'checking', silent });
   try {
     const update = await from.check();
     set(update ? { phase: 'available', update } : { phase: 'current', checkedAt: Date.now() });
   } catch (error) {
-    set(error instanceof Unsupported ? { phase: 'unsupported' } : { phase: 'failed', step: 'check', silent });
+    if (error instanceof Unsupported) {
+      set({ phase: 'unsupported' });
+    } else if (silent) {
+      set(prev.phase === 'current' || prev.phase === 'available' ? prev : { phase: 'idle' });
+    } else {
+      set({ phase: 'failed', step: 'check', silent: false });
+    }
   }
 }
 

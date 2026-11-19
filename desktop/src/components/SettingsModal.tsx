@@ -1,12 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-import {
-  resolveThinkingValue,
-  type ModelCatalogEntry,
-  type ModelThinkingControl,
-} from './ProviderControls';
+import { type ModelCatalogEntry } from './ProviderControls';
 import { SalieriSelect } from './SalieriSelect';
-import { packAsset } from '../assetPack';
 
 export type CredentialStatus = 'checking' | 'configured' | 'not_configured' | 'saving' | 'error';
 
@@ -27,16 +22,6 @@ export interface WebSearchSettingsSnapshot {
   fallback?: string;
   fallback_note?: string;
   configured?: boolean;
-}
-
-export const CHAT_TEMPERATURE_MIN = 0;
-export const CHAT_TEMPERATURE_MAX = 1.2;
-export const CHAT_TEMPERATURE_STEP = 0.05;
-export const CHAT_TEMPERATURE_DEFAULT = 0.75;
-
-export function clampChatTemperature(value: number): number {
-  if (!Number.isFinite(value)) return CHAT_TEMPERATURE_DEFAULT;
-  return Math.max(CHAT_TEMPERATURE_MIN, Math.min(CHAT_TEMPERATURE_MAX, value));
 }
 
 /** Q20-A / Q21: conversation identity mode. Never infer from nicknames. */
@@ -170,7 +155,6 @@ export interface SettingsSavePayload {
   bgmVolume: number;
   enableSfx: boolean;
   sfxVolume: number;
-  temperature: number;
   identityMode: IdentityMode;
   selfName: string;
   baseUrl: string;
@@ -181,7 +165,7 @@ export interface SettingsSavePayload {
 /** The embedded variant saves only the fields it shows. Connection, search and reasoning values
  *  live elsewhere and change while it stays mounted, so a copy taken here would overwrite them. */
 export type EmbeddedSettingsPatch = Partial<Pick<SettingsSavePayload,
-  'systemPrompt' | 'enableTts' | 'sovitsUrl' | 'temperature' | 'identityMode' | 'selfName'>>;
+  'systemPrompt' | 'enableTts' | 'sovitsUrl' | 'identityMode' | 'selfName'>>;
 
 export interface SettingsModalProps {
   isOpen: boolean;
@@ -211,10 +195,6 @@ export interface SettingsModalProps {
   bgmVolume: number;
   enableSfx: boolean;
   sfxVolume: number;
-  temperature: number;
-  /** One-shot notice after migrating a legacy localStorage value > max (1.2) */
-  temperatureMigrationNotice?: boolean;
-  onDismissTemperatureMigrationNotice?: () => void;
   /** Default for newly created conversations (not the active conversation's mode). */
   identityMode?: IdentityMode;
   /** Slice B: app-level call name for self conversations (empty = unset). */
@@ -227,7 +207,6 @@ export interface SettingsModalProps {
   credentialRequired?: boolean;
   baseUrlConfigurable: boolean;
   modelOptions: ModelCatalogEntry[];
-  thinkingControl?: ModelThinkingControl | null;
   reasoningEffort: string | null;
   /** Enabled OpenAI-compatible connections for multi-profile management. */
   customProfiles?: Array<{
@@ -273,9 +252,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   bgmVolume,
   enableSfx,
   sfxVolume,
-  temperature,
-  temperatureMigrationNotice = false,
-  onDismissTemperatureMigrationNotice,
   identityMode = DEFAULT_IDENTITY_MODE,
   selfName = '',
   providerDisplayName,
@@ -284,7 +260,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   credentialRequired = true,
   baseUrlConfigurable,
   modelOptions: _modelOptions,
-  thinkingControl,
   reasoningEffort,
   customProfiles = [],
   onCreateCustomProfile,
@@ -305,7 +280,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [localSystemPrompt, setLocalSystemPrompt] = useState(systemPrompt);
   const [localEnableTts, setLocalEnableTts] = useState(enableTts);
   const [localSovitsUrl, setLocalSovitsUrl] = useState(sovitsUrl);
-  const [localTemperature, setLocalTemperature] = useState(() => clampChatTemperature(temperature));
   const [localIdentityMode, setLocalIdentityMode] = useState<IdentityMode>(() =>
     normalizeIdentityMode(identityMode),
   );
@@ -345,15 +319,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     (isSaving || isClearingWebSearch || isSwitchingSearchProvider)
       ? 'saving'
       : (webSearchStatus ?? (activeSearchConfigured ? 'configured' : 'not_configured'));
-  const selectedThinking = resolveThinkingValue(thinkingControl, reasoningEffort, null);
-  const nativeThinking = Boolean(thinkingControl?.native && selectedThinking && selectedThinking !== 'none');
-  const temperatureWarning = nativeThinking
-    ? null
-    : localTemperature >= 0.9
-      ? 'strong' as const
-      : localTemperature >= 0.8
-        ? 'mild' as const
-        : null;
   const searchProviderCards: WebSearchProviderInfo[] = (
     ['tavily', 'firecrawl'] as const
   ).map((id) => webSearchProviders?.[id] ?? {
@@ -398,7 +363,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setLocalSystemPrompt(systemPrompt);
     setLocalEnableTts(enableTts);
     setLocalSovitsUrl(sovitsUrl);
-    setLocalTemperature(clampChatTemperature(temperature));
     setLocalIdentityMode(normalizeIdentityMode(identityMode));
     setLocalSelfName(selfName);
     setSelfNameError(null);
@@ -413,11 +377,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setNewProfileName('');
     setNewProfileBaseUrl('http://127.0.0.1:1234/v1');
     setNewProfileModel('local-model');
-  }, [isOpen, worldline, apiKey, webSearchApiKey, webSearchActiveProvider, systemPrompt, enableTts, sovitsUrl, temperature, identityMode, selfName, providerBaseUrl, providerDefaultModel, reasoningEffort]);
+  }, [isOpen, worldline, apiKey, webSearchApiKey, webSearchActiveProvider, systemPrompt, enableTts, sovitsUrl, identityMode, selfName, providerBaseUrl, providerDefaultModel, reasoningEffort]);
 
   // Embedded fields have no draft of their own: a value changed elsewhere (TTS turned off for a missing service) shows here.
   useEffect(() => { if (embedded) setLocalEnableTts(enableTts); }, [embedded, enableTts]);
-  useEffect(() => { if (embedded) setLocalTemperature(clampChatTemperature(temperature)); }, [embedded, temperature]);
   useEffect(() => { if (embedded) setLocalIdentityMode(normalizeIdentityMode(identityMode)); }, [embedded, identityMode]);
 
   const applyPatch = async (patch: EmbeddedSettingsPatch) => {
@@ -429,11 +392,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     } catch (error) {
       setSaveError(error instanceof Error ? error.message : 'settings_save_failed');
     }
-  };
-  const commitTemperature = () => {
-    if (nativeThinking) return;
-    const next = clampChatTemperature(localTemperature);
-    if (next !== clampChatTemperature(temperature)) void applyPatch({ temperature: next });
   };
   /** Saves edited text fields; an invalid call name keeps its hint and leaves the saved one alone. */
   const commitText = () => {
@@ -483,7 +441,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         bgmVolume: bgmVolume,
         enableSfx: enableSfx,
         sfxVolume: sfxVolume,
-        temperature: clampChatTemperature(localTemperature),
         identityMode: normalizeIdentityMode(localIdentityMode),
         selfName: selfNameCheck.value,
         baseUrl: localBaseUrl,
@@ -541,9 +498,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       <div className="salieri-settings-modal" data-testid="settings-modal-shell">
         {/* Rotating ring is clipped to modal bounds so it cannot expand a scrollport. */}
         <div className="config-ring-clip" aria-hidden="true">
-          <div className="config-ring-bg">
-            {packAsset('assets/ui/ring_config.png') && <img src={packAsset('assets/ui/ring_config.png') ?? ''} alt="" />}
-          </div>
+          <div className="config-ring-bg" />
         </div>
         <div className="modal-inner-content" data-testid="settings-modal-inner">
           <div className="modal-header">
@@ -573,69 +528,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             {/* BASIC tab — session defaults only */}
             {activeTab === 'basic' && (
             <section className="tab-panel active" data-testid="settings-panel-basic">
-              <div className="setting-field personality-field">
-                <label>回复随机性</label>
-                <p className="setting-field-hint" data-testid="temperature-hint">
-                  {nativeThinking
-                    ? '当前模型已开启原生思考，采样由推理引擎自动接管，此滑块暂不生效（关闭原生思考或切换非思考模型时恢复，默认 0.75）。'
-                    : '越高越发散、越容易跑题；不改变角色设定本身。默认 0.75（自然口语与稳定平衡）。'}
-                </p>
-                {temperatureMigrationNotice && (
-                  <p
-                    className="temperature-migration-notice"
-                    data-testid="temperature-migration-notice"
-                    role="status"
-                  >
-                    已从过高采样降至安全上限 1.2。
-                    {onDismissTemperatureMigrationNotice && (
-                      <button
-                        type="button"
-                        className="temperature-migration-dismiss"
-                        onClick={onDismissTemperatureMigrationNotice}
-                      >
-                        知道了
-                      </button>
-                    )}
-                  </p>
-                )}
-                <div className={`personality-control${nativeThinking ? ' personality-control-disabled' : ''}`} data-testid="personality-control">
-                  <div className="slider-row personality-slider-row">
-                    <input
-                      data-testid="personality-range"
-                      type="range"
-                      min={CHAT_TEMPERATURE_MIN}
-                      max={CHAT_TEMPERATURE_MAX}
-                      step={CHAT_TEMPERATURE_STEP}
-                      value={localTemperature}
-                      disabled={nativeThinking}
-                      onChange={(e) => setLocalTemperature(clampChatTemperature(parseFloat(e.target.value)))}
-                      onPointerUp={embedded ? commitTemperature : undefined}
-                      onKeyUp={embedded ? commitTemperature : undefined}
-                      onBlur={embedded ? commitTemperature : undefined}
-                      className="volume-slider personality-range"
-                      style={{ '--val': `${(localTemperature / CHAT_TEMPERATURE_MAX) * 100}%` } as React.CSSProperties}
-                      aria-label="回复随机性"
-                    />
-                    <span className="volume-label personality-value" data-testid="personality-value">
-                      {localTemperature.toFixed(2)}
-                    </span>
-                  </div>
-                  <div className="personality-endpoints" aria-hidden="true">
-                    <span className="slider-endpoint" data-testid="temperature-endpoint-min">稳定 / 贴人设</span>
-                    <span className="slider-endpoint" data-testid="temperature-endpoint-max">发散 / 易跑偏</span>
-                  </div>
-                </div>
-                {temperatureWarning === 'mild' && (
-                  <p className="temperature-warning temperature-warning-mild" data-testid="temperature-warning">
-                    当前采样偏高，回复可能不够稳定。
-                  </p>
-                )}
-                {temperatureWarning === 'strong' && (
-                  <p className="temperature-warning temperature-warning-strong" data-testid="temperature-warning">
-                    当前采样很高，容易跑题或句式不稳。
-                  </p>
-                )}
-              </div>
               {!embedded && <div className="setting-field">
                 <label>当前世界线</label>
                 <SalieriSelect

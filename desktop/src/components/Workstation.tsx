@@ -9,9 +9,6 @@ import {
   type PendingConversationTarget,
 } from '../hooks/useAmadeusWS';
 import {
-  CHAT_TEMPERATURE_DEFAULT,
-  CHAT_TEMPERATURE_MAX,
-  clampChatTemperature,
   loadStoredIdentityMode,
   loadStoredSelfName,
   normalizeIdentityMode,
@@ -27,7 +24,6 @@ import {
 import { HistorySidebar, type ConversationSummary } from './HistorySidebar';
 import { TtsDebugPanel } from './TtsDebugPanel';
 import AvatarViewer from './AvatarViewer';
-import SpriteAnimator from './SpriteAnimator';
 import * as assetPackMod from '../assetPack';
 import { useAudioPlayer, audioPlayer } from '../hooks/useAudioPlayer';
 import { audioService } from '../services/AudioService';
@@ -55,7 +51,6 @@ import { UsagePanel } from '../workstation/UsagePanel';
 import { AboutPanel } from '../workstation/AboutPanel';
 import { RestoreNotice } from '../workstation/RestoreNotice';
 import { checkAfterLogin, updateWaiting, useUpdates } from '../workstation/updates';
-import { SendSignal } from '../workstation/SendSignal';
 import { PresenceIndicator, ThinkingMark, PRESENCE_LABELS } from '../workstation/PresenceIndicator';
 import { ErrorText, checkShortLabel } from '../workstation/logParts';
 import { SendKey } from '../workstation/SendKey';
@@ -333,40 +328,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
   const [voiceMuted, setVoiceMuted] = useState(() => {
     try { return localStorage.getItem('amadeus_pc_voice_muted') === 'true'; } catch { return false; }
   });
-  const [temperatureMigrationNotice, setTemperatureMigrationNotice] = useState(() => {
-    try {
-      return sessionStorage.getItem('amadeus_pc_temperature_migrated_notice') === '1';
-    } catch {
-      return false;
-    }
-  });
-  const [temperature, setTemperature] = useState(() => {
-    try {
-      let raw = localStorage.getItem('amadeus_pc_temperature');
-      const migrationKey = 'amadeus_pc_temp_v2_075_migrated';
-      if (localStorage.getItem(migrationKey) !== '1') {
-        if (raw === '0' || raw === '0.0') {
-          raw = String(CHAT_TEMPERATURE_DEFAULT);
-          localStorage.setItem('amadeus_pc_temperature', raw);
-        }
-        localStorage.setItem(migrationKey, '1');
-      }
-      if (raw == null || raw === '') return CHAT_TEMPERATURE_DEFAULT;
-      const parsed = parseFloat(raw);
-      if (!Number.isFinite(parsed)) return CHAT_TEMPERATURE_DEFAULT;
-      if (parsed > CHAT_TEMPERATURE_MAX) {
-        const clamped = CHAT_TEMPERATURE_MAX;
-        try {
-          localStorage.setItem('amadeus_pc_temperature', String(clamped));
-          sessionStorage.setItem('amadeus_pc_temperature_migrated_notice', '1');
-        } catch { /* ignore quota / private mode */ }
-        return clamped;
-      }
-      return clampChatTemperature(parsed);
-    } catch {
-      return CHAT_TEMPERATURE_DEFAULT;
-    }
-  });
   /** Default for *new* conversations only (Q20-A). Active conversation mode is immutable (Q21). */
   const [defaultIdentityMode, setDefaultIdentityMode] = useState<IdentityMode>(() =>
     loadStoredIdentityMode(),
@@ -589,15 +550,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
   useEffect(() => {
     try { localStorage.setItem('amadeus_pc_history_collapsed', String(isHistoryCollapsed)); } catch {}
   }, [isHistoryCollapsed]);
-
-  // Temperature init may write the migration flag after the notice state constructor ran.
-  useEffect(() => {
-    try {
-      if (sessionStorage.getItem('amadeus_pc_temperature_migrated_notice') === '1') {
-        setTemperatureMigrationNotice(true);
-      }
-    } catch { /* ignore */ }
-  }, []);
 
   const TTS_DEBUG_ENABLED = (() => {
     try { return localStorage.getItem('amadeus_pc_debug_tts') === 'true'; } catch { return false; }
@@ -846,7 +798,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
     conversationId: activeConversationId,
     pendingConversation,
     systemPrompt,
-    temperature,
     worldline,
     identityMode: defaultIdentityMode,
     selfName,
@@ -1455,7 +1406,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
   useEffect(() => {
     // Missing credentials are an expected setup state, not a runtime failure.
     if (status === 'ERROR' && credentialConfigured) {
-      audioService.playSFX('/assets/audio/gah.ogg', sfxVolume);
+      audioService.playSFX('error', sfxVolume);
     }
   }, [status, credentialConfigured, sfxVolume]);
 
@@ -1480,7 +1431,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
       audioPlayer.stopAll();
       stopVoice();
     }
-    audioService.playSFX('/audio/sfx/连接成功，进入页面1.ogg', sfxVolume);
+    audioService.playSFX('send', sfxVolume);
     const composer = composerRef.current;
     if (composer && !reducedMotion) {
       const box = composer.getBoundingClientRect();
@@ -1887,7 +1838,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
     bgmVolume: number;
     enableSfx: boolean;
     sfxVolume: number;
-    temperature: number;
     identityMode: IdentityMode;
     selfName: string;
     baseUrl: string;
@@ -1991,8 +1941,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
     setBgmVolume(newSettings.bgmVolume);
     setEnableSfx(newSettings.enableSfx);
     setSfxVolume(newSettings.sfxVolume);
-    const safeTemperature = clampChatTemperature(newSettings.temperature);
-    setTemperature(safeTemperature);
     const nextIdentityMode = normalizeIdentityMode(newSettings.identityMode);
     setDefaultIdentityMode(nextIdentityMode);
     // Slice B: already validated by SettingsModal (reserved/overlong never arrive here).
@@ -2016,7 +1964,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
       localStorage.setItem('amadeus_pc_bgm_volume', String(newSettings.bgmVolume));
       localStorage.setItem('amadeus_pc_enable_sfx', String(newSettings.enableSfx));
       localStorage.setItem('amadeus_pc_sfx_volume', String(newSettings.sfxVolume));
-      localStorage.setItem('amadeus_pc_temperature', String(safeTemperature));
       persistIdentityMode(nextIdentityMode);
       persistSelfName(newSettings.selfName);
       if (newSettings.model) localStorage.setItem('amadeus_pc_model', newSettings.model);
@@ -2037,7 +1984,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
       const configPatch: Parameters<typeof updateConfig>[0] = {
         enableTts: newSettings.enableTts,
         sovitsUrl: newSettings.sovitsUrl,
-        temperature: safeTemperature,
         reasoningEffort: newSettings.reasoningEffort,
         identityMode: nextIdentityMode,
         selfName: newSettings.selfName,
@@ -2178,7 +2124,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
     : showSetupStatus ? 'setup'
     : awaitingWorldline || sessionPending ? 'connecting'
     : 'down';
-  const thinkingSprite = assetPackMod.packAsset?.(worldline === 'steins_gate' ? 'assets/ui/spinner_sg_20f.png' : 'assets/ui/spinner_beta_20f.png') ?? null;
   const lastAssistantId = [...visibleMessages].reverse().find((msg) => msg.role === 'assistant' && !msg.systemError)?.id;
   // An old conversation whose connection was removed keeps its history but must be re-pointed by the user.
   const providerGone = Boolean(activeConversation) && providers.length > 0 && (!activeProvider || activeProvider.enabled === false);
@@ -2227,10 +2172,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
           />
         </>
       )}
-      <SendSignal
-        rootRef={wsRootRef}
-        sendId={localSend?.scope === presentationScope ? localSend.id : null}
-      />
 
       {/* The header follows the page under it (U 11-09): on the conversation it carries the session list's toggle and
           the session's title; on the system page, a way back and where you are; the memory page has the whole sheet. */}
@@ -2339,7 +2280,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             ref={systemButtonRef}
             className={`ws2-tool is-system${isSettingsOpen ? ' is-on' : ''}`}
             onClick={() => {
-              audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume);
+              audioService.playSFX('ui', sfxVolume);
               if (isSettingsOpen) closeMenu(); else openMenu();
             }}
             aria-label={updateMark ? '系统设置（有新版本）' : '系统设置'}
@@ -2481,18 +2422,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
                       ) : null}
                       {msg.streaming && isThinking && operationLabel && (
                         <div className="ws2-thinking" aria-busy={activityBusy}>
-                          {thinkingSprite ? <SpriteAnimator
-                            spriteSrc={thinkingSprite}
-                            cols={10}
-                            rows={2}
-                            frameWidth={worldline === 'beta' ? 54.5 : 54}
-                            frameHeight={63}
-                            frameRowOffsetY={worldline === 'steins_gate' ? 8 : 0}
-                            frameCount={20}
-                            fps={15}
-                            loop={true}
-                            autoplay={!reducedMotion}
-                          /> : <ThinkingMark worldline={worldline} />}
+                          <ThinkingMark worldline={worldline} />
                           <span className="ws2-thinking-label" data-testid="activity-operation-label">{operationLabel}</span>
                         </div>
                       )}
@@ -2776,7 +2706,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
               speaking={isPlaying}
               onVolume={handleVoiceVolumeChange}
               onToggleMute={() => setVoiceMuted((m) => !m)}
-              onStop={() => { audioService.playSFX('/audio/sfx/提示音1.ogg', sfxVolume); handleStopVoice(); }}
+              onStop={() => { audioService.playSFX('ui', sfxVolume); handleStopVoice(); }}
             />
           </div>
           {!packInstalled && (
@@ -2980,12 +2910,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
         bgmVolume={bgmVolume}
         enableSfx={enableSfx}
         sfxVolume={sfxVolume}
-        temperature={temperature}
-        temperatureMigrationNotice={temperatureMigrationNotice}
-        onDismissTemperatureMigrationNotice={() => {
-          setTemperatureMigrationNotice(false);
-          try { sessionStorage.removeItem('amadeus_pc_temperature_migrated_notice'); } catch { /* ignore */ }
-        }}
         identityMode={defaultIdentityMode}
         selfName={selfName}
         providerDisplayName={activeProvider?.display_name || activeProviderId}
@@ -2994,7 +2918,6 @@ export const Workstation: React.FC<WorkstationProps> = ({
         credentialRequired={activeProvider?.credential_required !== false}
         baseUrlConfigurable={Boolean(activeProvider?.base_url_configurable)}
         modelOptions={availableModels}
-        thinkingControl={activeModelCapability?.thinking_control}
         reasoningEffort={reasoningEffort}
         customProfiles={providers
           .filter((row) => row.source === 'user_config' || row.id === 'custom' || row.id.startsWith('custom:'))
@@ -3044,7 +2967,7 @@ export const Workstation: React.FC<WorkstationProps> = ({
             // switched or a search provider picked since the menu opened is never written back.
             await handleSaveSettings({
               worldline, apiKey: '', webSearchApiKey: '', webSearchProvider: webSearchActiveProvider,
-              systemPrompt, enableTts, sovitsUrl, enableBgm, bgmVolume, enableSfx, sfxVolume, temperature,
+              systemPrompt, enableTts, sovitsUrl, enableBgm, bgmVolume, enableSfx, sfxVolume,
               identityMode: defaultIdentityMode, selfName, baseUrl: '', model: '', reasoningEffort,
               ...settings,
             });

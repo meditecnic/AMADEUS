@@ -357,15 +357,9 @@
 @keyframes ws2-loop-in { from { opacity: 0; transform: scale(1.1) rotate(-3deg); } }
 .ws2 .settings-embedded .identity-mode-option:has(input:focus-visible) { outline: 1px dashed var(--ws-ink-3); outline-offset: 3px; }
 
-/* the scale under a setting, with a tick for each step (RE:BOOT's ruled line) */
+/* the scale under a setting */
 .ws2 .settings-embedded .slider-row { display: flex; align-items: center; gap: 16px; max-width: 560px; }
-.ws2 .settings-embedded .personality-slider-row { position: relative; padding-bottom: 9px; }
-.ws2 .settings-embedded .personality-slider-row::after {
-  content: ''; position: absolute; left: 1px; right: 51px; bottom: 0; height: 5px; pointer-events: none; opacity: .6;
-  background: repeating-linear-gradient(90deg, var(--ws-ink-3) 0 1px, transparent 1px calc(100% / 12)); border-right: 1px solid var(--ws-ink-3);
-}
-.ws2 .settings-embedded :is(.volume-label, .personality-value) { font-family: var(--ws-mono); font-size: 12.5px; color: var(--ws-ink); min-width: 34px; text-align: right; }
-.ws2 .settings-embedded .personality-endpoints { display: flex; justify-content: space-between; max-width: 510px; }
+.ws2 .settings-embedded .volume-label { font-family: var(--ws-mono); font-size: 12.5px; color: var(--ws-ink); min-width: 34px; text-align: right; }
 
 .ws2 .settings-embedded .connections-summary { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-bottom: 10px; }
 .ws2 .settings-embedded .connections-status-chip {
@@ -384,21 +378,20 @@
 .ws2 .settings-embedded :is(.custom-profile-list > *, .search-provider-grid > *) { border: 0; border-bottom: 1px solid var(--ws-rule); border-radius: 0; background: none; box-shadow: none; padding: 12px 0; }
 .ws2 .settings-embedded .search-provider-grid { display: flex; flex-direction: column; gap: 0; }
 /* the form's small acts are the small outline plates */
-.ws2 .settings-embedded :is(.salieri-btn, .custom-profile-create-open, .disabled-profiles-toggle, .profile-details-toggle, .profile-action-delete, .profile-action-retry, .temperature-migration-dismiss) {
+.ws2 .settings-embedded :is(.salieri-btn, .custom-profile-create-open, .disabled-profiles-toggle, .profile-details-toggle, .profile-action-delete, .profile-action-retry) {
   --edge: var(--ws-line-2);
   height: 28px; padding: 0 12px 0 14px; border: 0 !important; border-radius: 0; text-transform: none;
   font-family: var(--ws-sans); font-size: 12px; letter-spacing: .08em; color: var(--ws-ink-2);
   box-shadow: inset 0 0 0 1px var(--edge); clip-path: polygon(6px 0, 100% 0, 100% 100%, 0 100%, 0 6px);
   background: linear-gradient(135deg, transparent 42.8%, var(--edge) 42.8% 52.8%, transparent 52.8%) 0 0 / 7px 7px no-repeat !important;
 }
-.ws2 .settings-embedded :is(.salieri-btn, .custom-profile-create-open, .disabled-profiles-toggle, .profile-details-toggle, .profile-action-delete, .profile-action-retry, .temperature-migration-dismiss):is(:hover, :focus-visible):not(:disabled) {
+.ws2 .settings-embedded :is(.salieri-btn, .custom-profile-create-open, .disabled-profiles-toggle, .profile-details-toggle, .profile-action-delete, .profile-action-retry):is(:hover, :focus-visible):not(:disabled) {
   --edge: var(--ws-ink-3); color: var(--ws-ink); background-color: rgba(255, 255, 255, .05) !important; outline: none;
 }
 .ws2 .settings-embedded .profile-action-delete { color: var(--ws-danger-ink); }
 .ws2 .settings-embedded .modal-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 22px 0 0; padding: 0; border: 0; background: none; }
 .ws2 .settings-embedded .settings-saved { font-family: var(--ws-mono); font-size: 11px; letter-spacing: .14em; color: var(--ws-ok); }
 .ws2 .settings-embedded .settings-save-error { margin: 12px 0 0; font-size: 12.5px; color: var(--ws-bad); }
-.ws2 .settings-embedded :is(.temperature-warning, .temperature-migration-notice) { font-size: 12px; color: var(--ws-bad); }
 .ws2 .settings-embedded .credential-status { font-size: 12px; color: var(--ws-ink-3); }
 .ws2 .settings-embedded .credential-status.configured { color: var(--ws-ok); }
 .ws2 .settings-embedded .credential-status.error { color: var(--ws-bad); }

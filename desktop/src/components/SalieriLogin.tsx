@@ -457,7 +457,7 @@ export const SalieriLogin: React.FC<SalieriLoginProps> = ({ onLoginSuccess, onEn
       if (response.ok) {
         const result = await response.json().catch(() => null) as { easter_egg?: unknown } | null;
         accepted = true;
-        audioService.playSFX('/audio/sfx/连接成功，进入页面2.ogg');
+        audioService.playSFX('login');
         audioService.stopBGM();
         succeededRef.current = true;
         (document.activeElement as HTMLElement | null)?.blur?.();

@@ -222,18 +222,9 @@ class AudioService {
     this.transitionTo(this.playlist[this.playlistIndex], false);
   }
 
-  public playSFX(path: string, volume?: number) {
+  public playSFX(_cue: string, _volume?: number) {
+    // Original pack SFX files are outside the 34-item pack whitelist; keep cue calls as a silent no-op fallback.
     if (!this.enableSFX || this.isMuted) return;
-    const src = resolvePackAsset(path);
-    if (!src) return;
-    const vol = volume !== undefined ? volume : this.sfxVolume;
-
-    const sfx = new Howl({
-      src: [src],
-      volume: vol,
-      onend: () => sfx.unload(),
-    });
-    sfx.play();
   }
 
   public setBGMVolume(volume: number) {

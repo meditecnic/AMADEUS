@@ -1,4 +1,6 @@
 import { cleanup, render, screen, within } from '@testing-library/react';
+import fs from 'node:fs';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { BilingualMessage } from './BilingualMessage';
@@ -105,6 +107,12 @@ describe('BilingualMessage', () => {
     expect(screen.getByText('翻译中')).toBeInTheDocument();
   });
 
+  it('does not set tabIndex on paragraph sentences so drag-selection across punctuation is not interrupted', () => {
+    const { container } = render(<BilingualMessage layout="paragraph" segments={segments} streaming={false} />);
+    expect(container.querySelectorAll('.s')).toHaveLength(4);
+    expect(container.querySelectorAll('[tabindex]')).toHaveLength(0);
+  });
+
   it('marks assistant raw-Japanese fallback with lang=ja', () => {
     render(
       <BilingualMessage
@@ -117,5 +125,14 @@ describe('BilingualMessage', () => {
     const ja = screen.getByText('これは原文フォールバックです。');
     expect(ja).toHaveClass('japanese-raw');
     expect(ja).toHaveAttribute('lang', 'ja');
+  });
+
+  it('keeps overflow-wrap: anywhere on assistant paragraph styles so unbroken strings wrap cleanly', () => {
+    const wsCss = fs.readFileSync(path.resolve(__dirname, '../workstation/workstation.css'), 'utf8');
+    const appCss = fs.readFileSync(path.resolve(__dirname, '../App.css'), 'utf8');
+    for (const selector of ['\\.chinese-main', '\\.japanese-sub', '\\.japanese-raw']) {
+      expect(wsCss).toMatch(new RegExp(`${selector}\\s*\\{[^}]*overflow-wrap:\\s*anywhere`));
+      expect(appCss).toMatch(new RegExp(`${selector}\\s*\\{[^}]*overflow-wrap:\\s*anywhere`));
+    }
   });
 });

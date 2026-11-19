@@ -2,10 +2,6 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  CHAT_TEMPERATURE_DEFAULT,
-  CHAT_TEMPERATURE_MAX,
-  CHAT_TEMPERATURE_MIN,
-  CHAT_TEMPERATURE_STEP,
   DEFAULT_IDENTITY_MODE,
   IDENTITY_MODE_STORAGE_KEY,
   RESERVED_OKABE_NAME_HINT,
@@ -13,7 +9,6 @@ import {
   SELF_NAME_MAX_CODEPOINTS,
   SELF_NAME_STORAGE_KEY,
   SELF_NAME_TOO_LONG_HINT,
-  clampChatTemperature,
   identityModeNewConversationConfirm,
   isReservedOkabeName,
   loadStoredIdentityMode,
@@ -39,7 +34,6 @@ const baseProps = {
   bgmVolume: 0.15,
   enableSfx: true,
   sfxVolume: 1,
-  temperature: CHAT_TEMPERATURE_DEFAULT,
   providerDisplayName: 'DeepSeek',
   providerBaseUrl: null,
   baseUrlConfigurable: false,
@@ -56,18 +50,6 @@ afterEach(() => {
   } catch {
     /* ignore */
   }
-});
-
-describe('clampChatTemperature', () => {
-  it('clamps to the approved [0, 1.2] band and uses the product default for non-finite input', () => {
-    expect(clampChatTemperature(-1)).toBe(CHAT_TEMPERATURE_MIN);
-    expect(clampChatTemperature(0)).toBe(0);
-    expect(clampChatTemperature(0.7)).toBe(0.7);
-    expect(clampChatTemperature(1)).toBe(1);
-    expect(clampChatTemperature(1.2)).toBe(CHAT_TEMPERATURE_MAX);
-    expect(clampChatTemperature(2)).toBe(CHAT_TEMPERATURE_MAX);
-    expect(clampChatTemperature(Number.NaN)).toBe(CHAT_TEMPERATURE_DEFAULT);
-  });
 });
 
 function openConnectionsTab() {
@@ -106,7 +88,7 @@ describe('embedded settings save as they change', () => {
     webSearchActiveProvider: 'tavily' as const,
     selfName: 'Alice',
   };
-  const ownedKeys = ['systemPrompt', 'enableTts', 'sovitsUrl', 'temperature', 'identityMode', 'selfName'];
+  const ownedKeys = ['systemPrompt', 'enableTts', 'sovitsUrl', 'identityMode', 'selfName'];
   const expectOwnedOnly = (save: ReturnType<typeof vi.fn>) => {
     for (const [payload] of save.mock.calls) {
       for (const key of Object.keys(payload)) expect(ownedKeys).toContain(key);
@@ -125,13 +107,11 @@ describe('embedded settings save as they change', () => {
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('已保存'));
 
     rerender(<SettingsModal {...embeddedProps} tab="basic" providerBaseUrl="http://127.0.0.1:2222/v1" onSaveSettings={save} />);
+    expect(screen.queryByRole('slider', { name: '回复随机性' })).toBeNull();
+    expect(screen.queryByTestId('temperature-hint')).toBeNull();
     fireEvent.click(screen.getByTestId('identity-mode-self'));
     expect(save).toHaveBeenLastCalledWith({ identityMode: 'self' });
-    const range = screen.getByTestId('personality-range');
-    fireEvent.change(range, { target: { value: '0.3' } });
     expect(save).toHaveBeenCalledTimes(2);
-    fireEvent.pointerUp(range);
-    expect(save).toHaveBeenLastCalledWith({ temperature: 0.3 });
     expectOwnedOnly(save);
   });
 
@@ -235,7 +215,7 @@ describe('SYSTEM CONFIG information architecture', () => {
       />,
     );
     expect(screen.getByRole('button', { name: 'BASIC' }).className).toContain('active');
-    expect(screen.getByTestId('personality-control')).toBeInTheDocument();
+    expect(screen.queryByTestId('personality-control')).toBeNull();
     expect(screen.getByTestId('identity-settings')).toBeInTheDocument();
     expect(screen.queryByTestId('credential-input')).toBeNull();
     expect(screen.queryByTestId('web-search-provider-grid')).toBeNull();
@@ -510,7 +490,7 @@ describe('SYSTEM CONFIG information architecture', () => {
         {...baseProps}
         isOpen
         apiKey=""
-        temperature={0.2}
+        selfName="Alice"
         webSearchActiveProvider="tavily"
         customProfiles={profiles}
         onCreateCustomProfile={vi.fn()}
@@ -531,7 +511,7 @@ describe('SYSTEM CONFIG information architecture', () => {
         {...baseProps}
         isOpen={false}
         apiKey=""
-        temperature={0.2}
+        selfName="Alice"
         webSearchActiveProvider="tavily"
         customProfiles={profiles}
         onCreateCustomProfile={vi.fn()}
@@ -545,7 +525,7 @@ describe('SYSTEM CONFIG information architecture', () => {
         {...baseProps}
         isOpen
         apiKey=""
-        temperature={0.9}
+        selfName="Bob"
         webSearchActiveProvider="firecrawl"
         customProfiles={profiles}
         onCreateCustomProfile={vi.fn()}
@@ -556,7 +536,7 @@ describe('SYSTEM CONFIG information architecture', () => {
     expect(screen.getByRole('button', { name: 'BASIC' }).className).toContain('active');
     expect(screen.getByTestId('settings-panel-basic')).toBeInTheDocument();
     expect(screen.queryByTestId('settings-panel-connections')).toBeNull();
-    expect(screen.getByTestId('personality-value')).toHaveTextContent('0.9');
+    expect(screen.getByTestId('self-name-input')).toHaveValue('Bob');
 
     openConnectionsTab();
     expect(screen.getByTestId('credential-input')).toHaveValue('');
@@ -861,80 +841,14 @@ describe('SettingsModal self name field (Slice B)', () => {
 });
 
 describe('SettingsModal UX contracts', () => {
-  it.each(['modal', 'embedded'] as const)('locks temperature only during native thinking (%s)', (variant) => {
-    const thinkingControl = {
-      kind: 'effort', label: '思考强度', native: true, default: 'high',
-      request_mode: 'reasoning_effort',
-      options: [{ value: 'high', label: '高' }, { value: 'none', label: '关闭' }],
-    };
-    const props = { ...baseProps, variant, onSaveSettings: vi.fn() };
-    const { rerender } = render(<SettingsModal {...props} thinkingControl={thinkingControl} />);
-    const range = screen.getByRole('slider', { name: '回复随机性' });
-    expect(range).toBeDisabled();
-    expect(range).toHaveValue('0.75');
-    expect(screen.getByTestId('temperature-hint')).toHaveTextContent('采样由推理引擎自动接管');
-
-    rerender(<SettingsModal {...props} thinkingControl={thinkingControl} reasoningEffort="none" />);
-    expect(range).toBeEnabled();
-    expect(screen.getByTestId('temperature-hint')).toHaveTextContent('默认 0.75');
-
-    rerender(<SettingsModal {...props} thinkingControl={{ ...thinkingControl, native: false }} />);
-    expect(range).toBeEnabled();
-  });
-
-  it('renders the sampling control with range 0–1.2, endpoints, and no legacy 2.0 max', () => {
-    render(<SettingsModal {...baseProps} onSaveSettings={vi.fn()} />);
-
-    const range = screen.getByTestId('personality-range');
-    expect(range).toHaveAttribute('type', 'range');
-    expect(range).toHaveAttribute('min', String(CHAT_TEMPERATURE_MIN));
-    expect(range).toHaveAttribute('max', String(CHAT_TEMPERATURE_MAX));
-    expect(range).toHaveAttribute('step', String(CHAT_TEMPERATURE_STEP));
-    expect(range).toHaveClass('volume-slider', 'personality-range');
-    expect(range.closest('.slider-row')).toHaveClass('personality-slider-row');
-    expect(screen.getByTestId('personality-control')).toBeTruthy();
-    expect(screen.getByTestId('personality-value')).toHaveTextContent('0.75');
-    expect(screen.getByText('回复随机性')).toBeTruthy();
-    expect(screen.getByTestId('temperature-hint')).toHaveTextContent('不改变角色设定');
-    expect(screen.getByTestId('temperature-endpoint-min')).toHaveTextContent('稳定 / 贴人设');
-    expect(screen.getByTestId('temperature-endpoint-max')).toHaveTextContent('发散 / 易跑偏');
-    // Endpoints sit under the track; control uses a moderate (not full-modal) width.
-    expect(screen.getByTestId('temperature-endpoint-min').closest('.personality-endpoints')).toBeTruthy();
-    expect(screen.getByTestId('personality-control')).toHaveClass('personality-control');
-    expect(screen.queryByText('个性')).toBeNull();
+  it.each(['modal', 'embedded'] as const)('omits user-adjustable temperature slider and hints (%s)', (variant) => {
+    render(<SettingsModal {...baseProps} variant={variant} onSaveSettings={vi.fn()} />);
+    expect(screen.queryByRole('slider', { name: '回复随机性' })).toBeNull();
+    expect(screen.queryByTestId('personality-control')).toBeNull();
+    expect(screen.queryByTestId('personality-range')).toBeNull();
+    expect(screen.queryByTestId('temperature-hint')).toBeNull();
+    expect(screen.queryByTestId('temperature-migration-notice')).toBeNull();
     expect(screen.queryByTestId('temperature-warning')).toBeNull();
-  });
-
-  it('shows mild then strong sampling warnings at 0.8 and 0.9', () => {
-    render(<SettingsModal {...baseProps} temperature={0.8} onSaveSettings={vi.fn()} />);
-    expect(screen.getByTestId('temperature-warning')).toHaveTextContent('不够稳定');
-
-    // Warnings track local draft edits, not parent prop patches while open.
-    fireEvent.change(screen.getByTestId('personality-range'), { target: { value: '0.9' } });
-    expect(screen.getByTestId('temperature-warning')).toHaveTextContent('容易跑题');
-  });
-
-  it('clamps a legacy temperature prop above 1.2 when opening the control', () => {
-    render(<SettingsModal {...baseProps} temperature={2} onSaveSettings={vi.fn()} />);
-    const range = screen.getByTestId('personality-range') as HTMLInputElement;
-    expect(range.value).toBe('1.2');
-    expect(screen.getByTestId('personality-value')).toHaveTextContent('1.2');
-  });
-
-  it('shows the one-shot migration notice when legacy storage was clamped', () => {
-    const onDismiss = vi.fn();
-    render(
-      <SettingsModal
-        {...baseProps}
-        temperature={1.2}
-        temperatureMigrationNotice
-        onDismissTemperatureMigrationNotice={onDismiss}
-        onSaveSettings={vi.fn()}
-      />,
-    );
-    expect(screen.getByTestId('temperature-migration-notice')).toHaveTextContent('安全上限 1.2');
-    fireEvent.click(screen.getByRole('button', { name: '知道了' }));
-    expect(onDismiss).toHaveBeenCalledOnce();
   });
 
   it('renders Identity settings with plain labels only (okabe default; no lore/about notes)', () => {
@@ -967,7 +881,7 @@ describe('SettingsModal UX contracts', () => {
     expect(screen.queryByLabelText(/当前会话身份/)).toBeNull();
   });
 
-  it('saves the selected default identity_mode (self) without nickname inference UI', async () => {
+  it('saves the selected default identity_mode (self) without nickname inference UI or temperature', async () => {
     const onSaveSettings = vi.fn().mockResolvedValue(undefined);
     render(
       <SettingsModal
@@ -980,22 +894,11 @@ describe('SettingsModal UX contracts', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存基本设置' }));
     await waitFor(() =>
       expect(onSaveSettings).toHaveBeenCalledWith(
-        expect.objectContaining({ identityMode: 'self', temperature: 0.75 }),
+        expect.objectContaining({ identityMode: 'self' }),
       ),
     );
+    expect(onSaveSettings.mock.calls[0][0]).not.toHaveProperty('temperature');
     expect(screen.queryByText(/Christina/)).toBeNull();
-  });
-
-  it('saves a clamped temperature never above 1.2', async () => {
-    const onSaveSettings = vi.fn().mockResolvedValue(undefined);
-    render(<SettingsModal {...baseProps} temperature={0.5} onSaveSettings={onSaveSettings} />);
-
-    fireEvent.change(screen.getByTestId('personality-range'), { target: { value: '1.2' } });
-    fireEvent.click(screen.getByRole('button', { name: '保存基本设置' }));
-
-    await waitFor(() =>
-      expect(onSaveSettings).toHaveBeenCalledWith(expect.objectContaining({ temperature: 1.2 })),
-    );
   });
 
   it('keeps configured credentials empty and shows a masked placeholder', () => {

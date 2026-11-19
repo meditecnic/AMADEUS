@@ -439,9 +439,31 @@
 @media (max-height: 760px) {
   .sl-note { bottom: 28px; }
 }
-/* The verse's longest line is about 660 px of type: in a smaller window it runs into the divergence figure and
-   up to the form, so below a large window it is left out. */
+/* The verse's longest line is about 660 px at full desktop size: between 1040x620 and 1500x940 it scales down and
+   wraps within the lower-right column so it stays clear of LOCAL LINK, the divergence figure and the form; below
+   1040x620 it is left out. */
 @media (max-height: 940px), (max-width: 1500px) {
+  .sl-verse {
+    right: clamp(28px, 3vw, 48px);
+    bottom: clamp(28px, 3.8vh, 42px);
+    max-width: min(640px, calc(50vw - 102px));
+    gap: clamp(4px, .6vh, 7px);
+    padding-right: clamp(10px, 1vw, 14px);
+    font-size: clamp(8px, min(.6vw, 1.15vh), 10.5px);
+    line-height: 1.12;
+    letter-spacing: 0;
+    white-space: normal;
+    text-align: right;
+  }
+  .sl-verse p {
+    text-wrap: balance;
+  }
+  .sl-verse p::after {
+    right: calc(-1 * clamp(10px, 1vw, 14px) - 1px);
+    width: 5px;
+  }
+}
+@media (max-height: 619px), (max-width: 1039px) {
   .sl-verse { display: none; }
 }
 

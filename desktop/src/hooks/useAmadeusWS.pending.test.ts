@@ -27,7 +27,7 @@ const target = (epoch = 1): PendingConversationTarget => ({
 });
 const base: UseAmadeusWSParams = {
   conversationId: 'old', worldline: 'steins_gate', sessionId: 'pending-unit',
-  systemPrompt: '', temperature: 0, enableTts: false, sovitsUrl: '',
+  systemPrompt: '', enableTts: false, sovitsUrl: '',
   model: 'source-model', providerId: 'deepseek', reasoningEffort: null,
 };
 const ready = { type: 'session.ready', conversation_mode: 'history', conversation_id: 'new', worldline: 'steins_gate' };

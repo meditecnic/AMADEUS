@@ -32,7 +32,6 @@ const params: UseAmadeusWSParams = {
   sessionId: 'session-memory',
   conversationId: 'c',
   systemPrompt: 'prompt',
-  temperature: 0.8,
   worldline: 'steins_gate',
   enableTts: false,
   sovitsUrl: '',

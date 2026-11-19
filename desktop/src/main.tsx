@@ -23,6 +23,8 @@ import "./workstation/log.css";
 import "./workstation/slips.css";
 // The system page: an index of its sections and a ruled form for each.
 import "./workstation/system.css";
+// Loaded at the end of the workstation layer stack so its input focus overrides workstation.css.
+import "./workstation/AssetPackGroup.css";
 
 // A large window shows the sheet zoomed, not a strip of it (windowFit.ts).
 fitWindow();
