@@ -563,7 +563,7 @@ async def test_compatible_auxiliary_thinking_follows_the_catalog(
         ),
     ],
 )
-async def test_native_auxiliary_thinking_defaults_and_overrides(
+async def test_native_auxiliary_thinking_stays_at_lowest_tier(
     adapter_type, response, config_field, effort_field, default_effort
 ):
     requests = []
@@ -587,7 +587,7 @@ async def test_native_auxiliary_thinking_defaults_and_overrides(
         api_key="test-key", reasoning_effort="low",
     )
     assert result == {"ok": True}
-    assert thinking_config(requests[1]) == {effort_field: "low"}
+    assert thinking_config(requests[1]) == {effort_field: default_effort}
 
 
 # ---------------------------------------------------------------------------

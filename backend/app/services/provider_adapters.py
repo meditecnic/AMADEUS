@@ -560,7 +560,6 @@ class OpenAIResponsesAdapter(LLMInterface):
         api_key: str | None,
         model: str | None,
         json_mode: bool = False,
-        reasoning_effort: str | None = None,
     ) -> str:
         effective_model = model or self.model
         instructions, inputs = self._split_instructions(messages)
@@ -571,7 +570,7 @@ class OpenAIResponsesAdapter(LLMInterface):
         }
         control = model_catalog.control_for(self.provider_id, effective_model)
         if control is not None:
-            payload["reasoning"] = {"effort": control.normalize(reasoning_effort or "none")}
+            payload["reasoning"] = {"effort": "none"}
         if json_mode:
             payload["text"] = {"format": {"type": "json_object"}}
         async with usage_call(self.provider_id, effective_model) as usage, _adapter_client(self, 30.0) as (client, request_options):
@@ -602,7 +601,6 @@ class OpenAIResponsesAdapter(LLMInterface):
                 api_key=api_key,
                 model=model,
                 json_mode=True,
-                reasoning_effort=reasoning_effort,
             )
         )
 
@@ -791,14 +789,12 @@ class GeminiAdapter(LLMInterface):
         api_key: str | None,
         model: str | None,
         json_mode: bool = False,
-        reasoning_effort: str | None = None,
     ) -> str:
         effective_model = model_catalog.request_id(self.provider_id, model or self.model)
         system_instruction, contents = self._contents(messages)
         config: dict[str, Any] = {}
-        effort = model_catalog.normalize_control(self.provider_id, effective_model, reasoning_effort or "minimal")
-        if effort is not None:
-            config["thinkingConfig"] = {"thinkingLevel": effort}
+        if model_catalog.control_for(self.provider_id, effective_model) is not None:
+            config["thinkingConfig"] = {"thinkingLevel": "minimal"}
         if json_mode:
             config["responseMimeType"] = "application/json"
         async with usage_call(self.provider_id, effective_model) as usage, _adapter_client(self, 30.0) as (client, request_options):
@@ -833,7 +829,6 @@ class GeminiAdapter(LLMInterface):
                 api_key=api_key,
                 model=model,
                 json_mode=True,
-                reasoning_effort=reasoning_effort,
             )
         )
 
