@@ -850,12 +850,16 @@ async def check_selected_model_chat(provider_id: str, request: ChatCheckRequest)
     if snapshot.credential_required and not secret:
         raise HTTPException(status_code=409, detail={"code": "credential_missing"})
 
+    control = model_catalog.control_for(
+        snapshot.provider_id, snapshot.model_id, getattr(snapshot.adapter, "base_url", None),
+    )
     answered = False
     try:
         stream = snapshot.adapter.get_chat_stream(
             active_history=[{"role": "user", "content": "Reply OK."}],
             api_key=secret,
             model=model_id,
+            reasoning_effort=control.options[0][0] if control is not None else None,
             isolated=True,
             max_output_tokens=512,
         )

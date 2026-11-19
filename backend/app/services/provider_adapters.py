@@ -187,7 +187,12 @@ class OpenAICompatibleAdapter(LLMInterface):
         if model_catalog.supports_stream_usage(self.provider_id):
             payload["stream_options"] = {"include_usage": True}
         if max_output_tokens is not None:
-            payload["max_tokens"] = max_output_tokens
+            limit_field = "max_tokens"
+            if self.base_url == "https://api.openai.com/v1":
+                control = model_catalog.control_for(self.provider_id, payload["model"], self.base_url)
+                if control is not None and control.request_mode == "openai_reasoning_effort":
+                    limit_field = "max_completion_tokens"
+            payload[limit_field] = max_output_tokens
         if tools is not None:
             payload["tools"] = tools
             if tool_choice is not None:

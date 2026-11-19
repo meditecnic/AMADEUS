@@ -13,6 +13,7 @@ from app.routers import chat_ws, providers
 from app.services import deepseek
 from app.services.model_catalog import ModelCatalog, model_catalog
 from app.services.provider_adapters import GeminiAdapter, OpenAICompatibleAdapter, OpenAIResponsesAdapter
+from app.services.provider_registry import ProviderCapabilities, ProviderSnapshot, ProviderTask
 from app.services.provider_runtime import (
     configure_custom_provider,
     custom_provider_settings,
@@ -71,6 +72,19 @@ BUILTIN_CASES = [
     ("gemini", None, "gemini-3.5-flash", GEMINI),
 ]
 MESSAGES = [{"role": "user", "content": "検証するわ。"}]
+AUXILIARY_STREAM_CASES = [
+    ("deepseek", None, "deepseek-flash", DEEPSEEK),
+    ("glm", None, "glm-5.2", GLM_52),
+    ("openai", None, "gpt-5.6-luna", ("reasoning_effort", *LUNA[1:])),
+    ("gemini", None, "gemini-3.6-flash", GEMINI),
+    (CUSTOM_ID, "https://api.moonshot.cn/v1", "kimi-k3.1-pro", KIMI),
+    (CUSTOM_ID, "https://api.z.ai/api/paas/v4", "glm-5.3", GLM_53),
+    (CUSTOM_ID, "https://api.x.ai/v1", "grok-4.7", GROK),
+    (CUSTOM_ID, "https://api.openai.com/v1", "gpt-6.2-sol", GPT_62),
+    (CUSTOM_ID, "https://api.openai.com/v1", "gpt-5.6-luna", LUNA),
+    (CUSTOM_ID, "https://api.openai.com/v1", "legacy-model", None),
+    (CUSTOM_ID, "https://openrouter.ai/api/v1", "gpt-6.2-sol", None),
+]
 
 
 @pytest.fixture
@@ -80,8 +94,15 @@ def outbound(monkeypatch):
     def handle(request):
         payload = json.loads(request.content)
         captured.append((request.url, payload))
+        reply = MESSAGES[0]["content"]
+        if request.url.path.endswith(":streamGenerateContent"):
+            event = {"candidates": [{"content": {"parts": [{"text": reply}]}}]}
+        elif request.url.path.endswith("/responses"):
+            event = {"type": "response.output_text.delta", "delta": reply}
+        else:
+            event = {"choices": [{"delta": {"content": reply}}]}
         if payload.get("stream") or request.url.path.endswith(":streamGenerateContent"):
-            return httpx.Response(200, text="data: [DONE]\n\n")
+            return httpx.Response(200, text=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n")
         raw = '{"ok": true}'
         return httpx.Response(200, json={
             "choices": [{"message": {"content": raw}}],
@@ -143,6 +164,78 @@ def assert_fields(payload, mode, tier, temperature):
         assert actual == {}
         actual = {key: value for key, value in payload["generationConfig"].items() if key in keys}
     assert actual == expected
+
+
+@pytest.fixture(params=[
+    pytest.param((provider, url, model, spec), id=f"{provider}-{url or 'builtin'}-{model}")
+    for provider, url, model, spec in AUXILIARY_STREAM_CASES
+])
+def auxiliary_stream_case(request, outbound):
+    provider, url, model, spec = request.param
+    captured, build = outbound
+    snapshot = ProviderSnapshot(
+        provider_id=provider,
+        model_id=model,
+        capabilities=ProviderCapabilities(tasks=frozenset({ProviderTask.CHAT})),
+        adapter=build(provider, url, model),
+    )
+    return captured, snapshot, spec
+
+
+def assert_stream_minimum(payload, spec, temperature):
+    if spec is None:
+        assert_fields(payload, None, None, temperature)
+        return
+    mode, tiers, _, _ = spec
+    lowest = tiers[0]
+    retains_temperature = lowest == "disabled" or (mode == "openai_reasoning_effort" and lowest == "none")
+    assert_fields(payload, mode, lowest, temperature if retains_temperature else None)
+
+
+def test_chat_check_stream_uses_protocol_minimum_and_token_limit(
+    app_client, auxiliary_stream_case, isolated_provider_credentials, monkeypatch,
+):
+    captured, snapshot, spec = auxiliary_stream_case
+    provider = snapshot.provider_id
+    isolated_provider_credentials.set(provider, "test-key")
+    monkeypatch.setattr(providers.provider_registry, "snapshot", lambda *_args, **_kwargs: snapshot)
+    response = app_client.post(
+        f"/api/providers/{provider}/chat-check", json={"model_id": snapshot.model_id},
+    )
+    assert response.status_code == 200, response.json()
+    (request_url, payload), = captured
+    assert_stream_minimum(payload, spec, 0.75)
+    if spec in (GPT_62, LUNA):
+        assert str(request_url) == "https://api.openai.com/v1/chat/completions"
+        assert payload["max_completion_tokens"] == 512
+        assert "max_tokens" not in payload
+    elif provider == "openai":
+        assert request_url.path.endswith("/responses")
+        assert payload["max_output_tokens"] == 512
+    elif provider == "gemini":
+        assert payload["generationConfig"]["maxOutputTokens"] == 512
+    else:
+        assert payload["max_tokens"] == 512
+        assert "max_completion_tokens" not in payload
+
+
+@pytest.mark.asyncio
+async def test_japanese_renderer_stream_uses_protocol_minimum(auxiliary_stream_case):
+    captured, snapshot, spec = auxiliary_stream_case
+    session = chat_ws.SessionState("thinking-protocol-renderer")
+    session.api_key = "test-key"
+    session.provider_id = snapshot.provider_id
+    session.model = snapshot.model_id
+    rendered = await chat_ws._render_foreign_speech_to_japanese(
+        provider=snapshot.adapter,
+        provider_snapshot=None if snapshot.provider_id == "deepseek" else snapshot,
+        session=session,
+        source_text="This result checks out.",
+        user_request="Check the result.",
+    )
+    assert rendered == MESSAGES[0]["content"]
+    (_, payload), = captured
+    assert_stream_minimum(payload, spec, 0.0)
 
 
 @pytest.mark.asyncio

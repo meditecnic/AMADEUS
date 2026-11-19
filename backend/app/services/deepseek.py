@@ -366,9 +366,11 @@ class DeepSeekService(LLMInterface):
             "temperature": temperature,
             "response_format": {"type": "json_object"},
         }
-        control = model_catalog.control_for("deepseek", payload["model"])
-        if control is not None:
-            effort = reasoning_effort if reasoning_effort in control.values else "disabled"
+        if reasoning_effort is None:
+            effort = "disabled" if model_catalog.control_for("deepseek", payload["model"]) else None
+        else:
+            effort = model_catalog.normalize_control("deepseek", payload["model"], reasoning_effort)
+        if effort is not None:
             apply_thinking_and_effort(payload, effort)
         headers = {
             **model_headers(),

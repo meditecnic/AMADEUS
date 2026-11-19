@@ -1199,6 +1199,9 @@ async def _render_foreign_speech_to_japanese(
     source = str(source_text or "").strip()
     if not source:
         return None
+    provider_id = provider_snapshot.provider_id if provider_snapshot is not None else session.provider_id
+    model_id = provider_snapshot.model_id if provider_snapshot is not None else session.model
+    control = model_catalog.control_for(provider_id, model_id, getattr(provider, "base_url", None))
     digest = hashlib.sha256(source.encode("utf-8", errors="replace")).hexdigest()[:12]
     for renderer_attempt in range(2):
         stream_kwargs = {
@@ -1213,12 +1216,8 @@ async def _render_foreign_speech_to_japanese(
             "temperature": 0.0,
             "tools": None,
             "tool_choice": None,
-            "model": (
-                provider_snapshot.model_id
-                if provider_snapshot is not None
-                else session.model
-            ),
-            "reasoning_effort": None,
+            "model": model_id,
+            "reasoning_effort": control.options[0][0] if control is not None else None,
             "isolated": True,
         }
         signature = inspect.signature(provider.get_chat_stream)
