@@ -17,6 +17,41 @@ Var AmadeusDataPageInput
 Var AmadeusDataPageBrowseBtn
 Var AmadeusDataPageResetBtn
 Var AmadeusDataPageHintLabel
+Var AmadeusReadHadBom
+
+; -----------------------------------------------------------------------------
+; Strict JSON helper macros (code-unit based, so every comparison is exact and
+; case-sensitive: NSIS "==" / lstrcmpi style comparisons are NOT).
+; -----------------------------------------------------------------------------
+
+; OUT = UTF-16 code unit at index POS of TEXT (0 when POS is outside TEXT).
+; OUT must not be $0 or $1 (both are preserved around the call).
+!macro AmadeusJsonPeek TEXT POS OUT
+  Push $0
+  Push $1
+  StrCpy $0 "${TEXT}"
+  StrCpy $1 "${POS}"
+  Call AmadeusJsonCodeAt
+  StrCpy ${OUT} $0
+  Pop $1
+  Pop $0
+!macroend
+
+; Consume a run of ASCII digits [0-9] starting at POS; COUNT = number consumed,
+; CODE = first code unit after the run.
+!macro AmadeusJsonDigits TEXT POS CODE COUNT
+  StrCpy ${COUNT} 0
+  ${Do}
+    !insertmacro AmadeusJsonPeek ${TEXT} ${POS} ${CODE}
+    ${If} ${CODE} >= 48
+    ${AndIf} ${CODE} <= 57
+      IntOp ${POS} ${POS} + 1
+      IntOp ${COUNT} ${COUNT} + 1
+    ${Else}
+      ${Break}
+    ${EndIf}
+  ${Loop}
+!macroend
 
 !macroundef MUI_PAGE_DIRECTORY
 !macro MUI_PAGE_DIRECTORY
@@ -42,6 +77,7 @@ Var AmadeusDataPageHintLabel
     Function AmadeusReadUtf8File
       System::Store "S"
       StrCpy $R9 ""
+      StrCpy $AmadeusReadHadBom "0"
 
       System::Call 'kernel32::GetFileAttributesW(w r0) i .r1'
       ${If} $1 == -1
@@ -77,12 +113,13 @@ Var AmadeusDataPageHintLabel
       System::Call 'kernel32::ReadFile(p r2, p r5, i r3, *i .r6, p 0) i .r7'
       System::Call 'kernel32::CloseHandle(p r2) i .r4'
       ${If} $7 == 0
-      ${OrIf} $6 <= 0
+      ${OrIf} $6 <> $3 ; short read: never validate a partial file
         System::Free $5
         Goto amadeus_read_done
       ${EndIf}
 
-      System::Call 'kernel32::MultiByteToWideChar(i 65001, i 0, p r5, i r6, p 0, i 0) i .r7'
+      ; MB_ERR_INVALID_CHARS (8): malformed UTF-8 fails instead of becoming U+FFFD
+      System::Call 'kernel32::MultiByteToWideChar(i 65001, i 8, p r5, i r6, p 0, i 0) i .r7'
       ${If} $7 <= 0
         System::Free $5
         Goto amadeus_read_done
@@ -97,9 +134,15 @@ Var AmadeusDataPageHintLabel
         Goto amadeus_read_done
       ${EndIf}
 
-      System::Call 'kernel32::MultiByteToWideChar(i 65001, i 0, p r5, i r6, p r9, i r7) i .r7'
+      System::Call 'kernel32::MultiByteToWideChar(i 65001, i 8, p r5, i r6, p r9, i r7) i .r7'
       ${If} $7 > 0
         System::Call 'kernel32::lstrcpynW(w .R9, p r9, i ${NSIS_MAX_STRLEN}) p .r8'
+        ; lstrcpynW silently truncates at the NSIS string limit and stops at an embedded
+        ; NUL: any length mismatch means we did not see the whole file -> refuse it.
+        StrLen $1 $R9
+        ${If} $1 <> $7
+          StrCpy $R9 ""
+        ${EndIf}
       ${EndIf}
       System::Free $9
       System::Free $5
@@ -108,6 +151,7 @@ Var AmadeusDataPageHintLabel
       StrCpy $1 $R9 1
       ${If} $1 == "${U+FEFF}"
         StrCpy $R9 $R9 "" 1
+        StrCpy $AmadeusReadHadBom "1"
       ${EndIf}
 
       amadeus_read_done:
@@ -960,9 +1004,467 @@ Var AmadeusDataPageHintLabel
     ; Apply selected data directory during installation
     ; -------------------------------------------------------------------------
 
-      ; Validate existing amadeus-data.json format (or verify target does not have an invalid marker)
+    ; -------------------------------------------------------------------------
+    ; Strict RFC 8259 JSON validation for amadeus-data.json (pure NSIS, no child
+    ; process). Mirrors lib.rs: serde_json::from_str::<Value>(..) must succeed for
+    ; the WHOLE file and marker["format"].as_u64() == Some(1) (duplicate keys: the
+    ; LAST value wins, only the exact integer token 1 is valid).
+    ; Known deliberate strictness beyond serde_json: nesting depth is capped at 32
+    ; (serde_json allows 128) and files that do not fit one NSIS string are refused.
+    ; -------------------------------------------------------------------------
+
+    ; Input: $0 = text, $1 = index. Output: $0 = UTF-16 code unit (0 if out of range).
+    Function AmadeusJsonCodeAt
+      System::Store "S"
+      StrLen $2 $0
+      StrCpy $R9 0
+      ${If} $1 >= 0
+      ${AndIf} $1 < $2
+        StrCpy $3 $0 1 $1
+        System::Call '*(&w2 r3) p .r4'
+        System::Call '*$4(&i2 .r5)'
+        System::Free $4
+        IntOp $R9 $5 & 0xFFFF
+      ${EndIf}
+      Push $R9
+      System::Store "L"
+      Pop $0
+    FunctionEnd
+
+    ; Input: $0, $1 = strings. Output: $0 = "1" only if byte-exact equal, else "0".
+    ; lstrcmpW is the case-sensitive compare (unlike NSIS "=="); CompareStringOrdinal
+    ; additionally refuses linguistic equality (ignorable chars such as U+00AD or
+    ; hyphens would otherwise make "for-mat" compare equal to "format").
+    Function AmadeusJsonStrEq
+      System::Store "S"
+      StrCpy $R9 "0"
+      System::Call 'kernel32::lstrcmpW(w r0, w r1) i .r2'
+      ${If} $2 == 0
+        System::Call 'kernel32::CompareStringOrdinal(w r0, i -1, w r1, i -1, i 0) i .r3'
+        ${If} $3 == 2
+          StrCpy $R9 "1"
+        ${EndIf}
+      ${EndIf}
+      Push $R9
+      System::Store "L"
+      Pop $0
+    FunctionEnd
+
+    ; Input: $0 = text, $1 = index of the first of exactly four hex digits.
+    ; Output: $0 = value 0..65535, or -1 if not four hex digits.
+    Function AmadeusJsonHex4
+      System::Store "S"
+      StrCpy $R9 -1
+      StrCpy $R0 $0
+      StrCpy $R1 $1
+      StrCpy $2 0
+      ${While} $2 < 4
+        IntOp $3 $R1 + $2
+        !insertmacro AmadeusJsonPeek $R0 $3 $4
+        ${If} $4 >= 48
+        ${AndIf} $4 <= 57
+          ; 0-9
+        ${ElseIf} $4 >= 65
+        ${AndIf} $4 <= 70
+          ; A-F
+        ${ElseIf} $4 >= 97
+        ${AndIf} $4 <= 102
+          ; a-f
+        ${Else}
+          Goto amadeus_hex4_done
+        ${EndIf}
+        IntOp $2 $2 + 1
+      ${EndWhile}
+      StrCpy $5 $R0 4 $R1
+      IntOp $R9 0x$5 + 0
+      amadeus_hex4_done:
+      Push $R9
+      System::Store "L"
+      Pop $0
+    FunctionEnd
+
+    ; Input: $0 = text, $1 = index right after the opening '"', $2 = "1" to decode.
+    ; Output: $0 = decoded string (only when $2 = "1"), $1 = index right after the
+    ; closing '"' or -1 on any error: unterminated, raw control char (< U+0020),
+    ; bad escape, bad \uXXXX, lone/unpaired UTF-16 surrogate escape.
+    Function AmadeusJsonScanString
+      System::Store "S"
+      StrCpy $R0 $0
+      StrCpy $R1 $1
+      StrCpy $R2 $2
+      StrCpy $R8 ""
+      StrCpy $R9 -1
+      ${Do}
+        !insertmacro AmadeusJsonPeek $R0 $R1 $3
+        ${If} $3 = 0
+          Goto amadeus_str_done
+        ${ElseIf} $3 = 34
+          IntOp $R9 $R1 + 1
+          Goto amadeus_str_done
+        ${ElseIf} $3 < 32
+          Goto amadeus_str_done
+        ${ElseIf} $3 = 92
+          IntOp $R1 $R1 + 1
+          !insertmacro AmadeusJsonPeek $R0 $R1 $3
+          ${If} $3 = 34
+          ${OrIf} $3 = 92
+          ${OrIf} $3 = 47
+            StrCpy $4 $R0 1 $R1
+            StrCpy $R8 "$R8$4"
+            IntOp $R1 $R1 + 1
+          ${ElseIf} $3 = 98
+          ${OrIf} $3 = 102
+          ${OrIf} $3 = 110
+          ${OrIf} $3 = 114
+          ${OrIf} $3 = 116
+            ; \b \f \n \r \t: placeholder keeps the decoded key different from any plain-letter key
+            StrCpy $R8 "$R8?"
+            IntOp $R1 $R1 + 1
+          ${ElseIf} $3 = 117
+            IntOp $R1 $R1 + 1
+            StrCpy $0 $R0
+            StrCpy $1 $R1
+            Call AmadeusJsonHex4
+            ${If} $0 < 0
+              Goto amadeus_str_done
+            ${EndIf}
+            StrCpy $5 $0
+            IntOp $R1 $R1 + 4
+            ${If} $5 >= 0xD800
+            ${AndIf} $5 <= 0xDBFF
+              ; high surrogate must be followed by \uDC00..\uDFFF
+              !insertmacro AmadeusJsonPeek $R0 $R1 $3
+              ${If} $3 <> 92
+                Goto amadeus_str_done
+              ${EndIf}
+              IntOp $6 $R1 + 1
+              !insertmacro AmadeusJsonPeek $R0 $6 $3
+              ${If} $3 <> 117
+                Goto amadeus_str_done
+              ${EndIf}
+              IntOp $6 $R1 + 2
+              StrCpy $0 $R0
+              StrCpy $1 $6
+              Call AmadeusJsonHex4
+              ${If} $0 < 0xDC00
+              ${OrIf} $0 > 0xDFFF
+                Goto amadeus_str_done
+              ${EndIf}
+              IntFmt $7 "%c" $5
+              IntFmt $8 "%c" $0
+              StrCpy $R8 "$R8$7$8"
+              IntOp $R1 $R1 + 6
+            ${ElseIf} $5 >= 0xDC00
+            ${AndIf} $5 <= 0xDFFF
+              Goto amadeus_str_done
+            ${ElseIf} $5 = 0
+              StrCpy $R8 "$R8?"
+            ${Else}
+              IntFmt $7 "%c" $5
+              StrCpy $R8 "$R8$7"
+            ${EndIf}
+          ${Else}
+            Goto amadeus_str_done
+          ${EndIf}
+        ${Else}
+          StrCpy $4 $R0 1 $R1
+          StrCpy $R8 "$R8$4"
+          IntOp $R1 $R1 + 1
+        ${EndIf}
+      ${Loop}
+      amadeus_str_done:
+      Push $R9
+      Push $R8
+      System::Store "L"
+      Pop $0
+      Pop $1
+    FunctionEnd
+
+    ; Input: $0 = text, $1 = index of '-' or first digit.
+    ; Output: $0 = number token, $1 = index after it, or -1 if the RFC 8259 number
+    ; grammar -? (0|[1-9][0-9]*) (.[0-9]+)? ([eE][+-]?[0-9]+)? is violated.
+    Function AmadeusJsonScanNumber
+      System::Store "S"
+      StrCpy $R0 $0
+      StrCpy $R1 $1
+      StrCpy $R2 $1
+      StrCpy $R8 ""
+      StrCpy $R9 -1
+
+      !insertmacro AmadeusJsonPeek $R0 $R2 $2
+      ${If} $2 = 45
+        IntOp $R2 $R2 + 1
+        !insertmacro AmadeusJsonPeek $R0 $R2 $2
+      ${EndIf}
+      ${If} $2 = 48
+        IntOp $R2 $R2 + 1
+      ${ElseIf} $2 >= 49
+      ${AndIf} $2 <= 57
+        !insertmacro AmadeusJsonDigits $R0 $R2 $2 $3
+      ${Else}
+        Goto amadeus_num_done
+      ${EndIf}
+
+      !insertmacro AmadeusJsonPeek $R0 $R2 $2
+      ${If} $2 = 46
+        IntOp $R2 $R2 + 1
+        !insertmacro AmadeusJsonDigits $R0 $R2 $2 $3
+        ${If} $3 = 0
+          Goto amadeus_num_done
+        ${EndIf}
+      ${EndIf}
+
+      !insertmacro AmadeusJsonPeek $R0 $R2 $2
+      ${If} $2 = 101
+      ${OrIf} $2 = 69
+        IntOp $R2 $R2 + 1
+        !insertmacro AmadeusJsonPeek $R0 $R2 $2
+        ${If} $2 = 43
+        ${OrIf} $2 = 45
+          IntOp $R2 $R2 + 1
+        ${EndIf}
+        !insertmacro AmadeusJsonDigits $R0 $R2 $2 $3
+        ${If} $3 = 0
+          Goto amadeus_num_done
+        ${EndIf}
+      ${EndIf}
+
+      IntOp $4 $R2 - $R1
+      StrCpy $R8 $R0 $4 $R1
+      StrCpy $R9 $R2
+      amadeus_num_done:
+      Push $R9
+      Push $R8
+      System::Store "L"
+      Pop $0
+      Pop $1
+    FunctionEnd
+
+    ; Input: $0 = whole file text. Output: $0 = "1" iff the text is exactly one valid
+    ; JSON object (only JSON whitespace after the closing brace) whose final top-level
+    ; "format" member is the integer token 1; otherwise "0".
+    ; States: T top, KO key-or-}, K key, C colon, V value, VA value-or-], N after value,
+    ; E end (only whitespace until EOF).
+    Function AmadeusJsonStrictMarker
+      System::Store "S"
+      StrCpy $R1 $0
+      StrCpy $R3 0
+      StrCpy $R5 ""
+      StrCpy $R6 0
+      StrCpy $R7 "T"
+      StrCpy $R8 "0"
+      StrCpy $R9 "0"
+      StrCpy $2 "0"
+
+      amadeus_jv_loop:
+      ; skip JSON whitespace (space, \t, \n, \r only)
+      ${Do}
+        !insertmacro AmadeusJsonPeek $R1 $R3 $R4
+        ${If} $R4 = 32
+        ${OrIf} $R4 = 9
+        ${OrIf} $R4 = 10
+        ${OrIf} $R4 = 13
+          IntOp $R3 $R3 + 1
+        ${Else}
+          ${Break}
+        ${EndIf}
+      ${Loop}
+
+      ${If} $R7 == "E"
+        ${If} $R4 = 0
+        ${AndIf} $R8 == "1"
+          StrCpy $R9 "1"
+        ${EndIf}
+        Goto amadeus_jv_done
+      ${EndIf}
+
+      ${If} $R7 == "T"
+        ${If} $R4 = 123
+          Goto amadeus_jv_open
+        ${EndIf}
+        Goto amadeus_jv_done
+      ${EndIf}
+
+      ${If} $R7 == "KO"
+      ${AndIf} $R4 = 125
+        Goto amadeus_jv_close
+      ${EndIf}
+      ${If} $R7 == "KO"
+      ${OrIf} $R7 == "K"
+        ${If} $R4 <> 34
+          Goto amadeus_jv_done
+        ${EndIf}
+        StrCpy $0 $R1
+        IntOp $1 $R3 + 1
+        ${If} $R6 = 1
+          StrCpy $2 "1"
+        ${Else}
+          StrCpy $2 "0"
+        ${EndIf}
+        Call AmadeusJsonScanString
+        ${If} $1 < 0
+          Goto amadeus_jv_done
+        ${EndIf}
+        StrCpy $R3 $1
+        StrCpy $9 "0"
+        ${If} $R6 = 1
+          StrCpy $1 "format"
+          Call AmadeusJsonStrEq
+          StrCpy $9 $0
+        ${EndIf}
+        StrCpy $R7 "C"
+        Goto amadeus_jv_loop
+      ${EndIf}
+
+      ${If} $R7 == "C"
+        ${If} $R4 <> 58
+          Goto amadeus_jv_done
+        ${EndIf}
+        IntOp $R3 $R3 + 1
+        StrCpy $R7 "V"
+        Goto amadeus_jv_loop
+      ${EndIf}
+
+      ${If} $R7 == "N"
+        StrCpy $3 $R5 1 -1
+        ${If} $R4 = 44
+          IntOp $R3 $R3 + 1
+          ${If} $3 == "O"
+            StrCpy $R7 "K"
+          ${Else}
+            StrCpy $R7 "V"
+          ${EndIf}
+          Goto amadeus_jv_loop
+        ${EndIf}
+        ${If} $R4 = 125
+        ${AndIf} $3 == "O"
+          Goto amadeus_jv_close
+        ${EndIf}
+        ${If} $R4 = 93
+        ${AndIf} $3 == "A"
+          Goto amadeus_jv_close
+        ${EndIf}
+        Goto amadeus_jv_done
+      ${EndIf}
+
+      ; ---- states V / VA: a JSON value is expected ----
+      ${If} $R7 == "VA"
+      ${AndIf} $R4 = 93
+        Goto amadeus_jv_close
+      ${EndIf}
+      ${If} $R4 = 123
+      ${OrIf} $R4 = 91
+        Goto amadeus_jv_open
+      ${EndIf}
+      StrCpy $5 ""
+      ${If} $R4 = 34
+        StrCpy $0 $R1
+        IntOp $1 $R3 + 1
+        StrCpy $2 "0"
+        Call AmadeusJsonScanString
+        ${If} $1 < 0
+          Goto amadeus_jv_done
+        ${EndIf}
+        StrCpy $R3 $1
+        Goto amadeus_jv_value_done
+      ${EndIf}
+      StrCpy $3 ""
+      ${If} $R4 = 116
+        StrCpy $3 "true"
+      ${ElseIf} $R4 = 102
+        StrCpy $3 "false"
+      ${ElseIf} $R4 = 110
+        StrCpy $3 "null"
+      ${EndIf}
+      ${If} $3 != ""
+        StrLen $4 $3
+        StrCpy $0 $R1 $4 $R3
+        StrCpy $1 $3
+        Call AmadeusJsonStrEq
+        ${If} $0 != "1"
+          Goto amadeus_jv_done
+        ${EndIf}
+        IntOp $R3 $R3 + $4
+        Goto amadeus_jv_value_done
+      ${EndIf}
+      StrCpy $3 "0"
+      ${If} $R4 = 45
+        StrCpy $3 "1"
+      ${ElseIf} $R4 >= 48
+      ${AndIf} $R4 <= 57
+        StrCpy $3 "1"
+      ${EndIf}
+      ${If} $3 == "1"
+        StrCpy $0 $R1
+        StrCpy $1 $R3
+        Call AmadeusJsonScanNumber
+        ${If} $1 < 0
+          Goto amadeus_jv_done
+        ${EndIf}
+        StrCpy $5 $0
+        StrCpy $R3 $1
+        Goto amadeus_jv_value_done
+      ${EndIf}
+      Goto amadeus_jv_done
+
+      amadeus_jv_value_done:
+      ; a scalar just ended; $5 = number token or "" (string/true/false/null)
+      ${If} $R6 = 1
+      ${AndIf} $9 == "1"
+        StrCpy $R8 "0"
+        ${If} $5 == "1"
+          StrCpy $R8 "1"
+        ${EndIf}
+        StrCpy $9 "0"
+      ${EndIf}
+      StrCpy $R7 "N"
+      Goto amadeus_jv_loop
+
+      amadeus_jv_open:
+      ; $R4 = 123 ('{') or 91 ('['); nesting limit 32
+      ${If} $R6 >= 32
+        Goto amadeus_jv_done
+      ${EndIf}
+      ${If} $R6 = 1
+      ${AndIf} $9 == "1"
+        ; the "format" member is a container, never the integer 1
+        StrCpy $R8 "0"
+        StrCpy $9 "0"
+      ${EndIf}
+      ${If} $R4 = 123
+        StrCpy $3 "O"
+        StrCpy $R7 "KO"
+      ${Else}
+        StrCpy $3 "A"
+        StrCpy $R7 "VA"
+      ${EndIf}
+      StrCpy $R5 "$R5$3"
+      IntOp $R6 $R6 + 1
+      IntOp $R3 $R3 + 1
+      Goto amadeus_jv_loop
+
+      amadeus_jv_close:
+      IntOp $R6 $R6 - 1
+      StrLen $3 $R5
+      IntOp $3 $3 - 1
+      StrCpy $R5 $R5 $3
+      IntOp $R3 $R3 + 1
+      ${If} $R6 = 0
+        StrCpy $R7 "E"
+      ${Else}
+        StrCpy $R7 "N"
+      ${EndIf}
+      Goto amadeus_jv_loop
+
+      amadeus_jv_done:
+      Push $R9
+      System::Store "L"
+      Pop $0
+    FunctionEnd
+
+      ; Validate existing amadeus-data.json (strict whole-file JSON + final "format" == 1)
       ; before publishing/updating data-location.json.
-      ; Input: $0 = directory path. Output: $0 = "1" if missing (when allow_missing=1) or valid {"format":1}, else "0".
+      ; Input: $0 = directory path. Output: $0 = "1" valid, "2" marker missing, else "0".
     Function AmadeusVerifyExistingDataMarker
       System::Store "S"
       StrCpy $R0 "$0\amadeus-data.json"
@@ -979,169 +1481,23 @@ Var AmadeusDataPageHintLabel
         Goto amadeus_marker_done
       ${EndIf}
 
+      ; AmadeusReadUtf8File returns "" for empty, oversize/truncated, invalid UTF-8,
+      ; short-read or NUL-containing files; serde_json rejects a leading BOM too.
       StrCpy $0 "$R0"
       Call AmadeusReadUtf8File
       StrCpy $R1 "$0"
       ${If} $R1 == ""
         Goto amadeus_marker_done
       ${EndIf}
-
-      ; Parse top-level JSON object looking for exact integer key "format": 1
-      StrLen $R2 $R1
-      StrCpy $R3 0
-      ${While} $R3 < $R2
-        StrCpy $R4 $R1 1 $R3
-        ${If} $R4 == " "
-        ${OrIf} $R4 == "$\t"
-        ${OrIf} $R4 == "$\r"
-        ${OrIf} $R4 == "$\n"
-          IntOp $R3 $R3 + 1
-        ${Else}
-          ${Break}
-        ${EndIf}
-      ${EndWhile}
-      StrCpy $R4 $R1 1 $R3
-      ${If} $R4 != "{"
+      ${If} $AmadeusReadHadBom == "1"
         Goto amadeus_marker_done
       ${EndIf}
-      IntOp $R3 $R3 + 1
 
-      ${While} $R3 < $R2
-        ${While} $R3 < $R2
-          StrCpy $R4 $R1 1 $R3
-          ${If} $R4 == " "
-          ${OrIf} $R4 == "$\t"
-          ${OrIf} $R4 == "$\r"
-          ${OrIf} $R4 == "$\n"
-          ${OrIf} $R4 == ","
-            IntOp $R3 $R3 + 1
-          ${Else}
-            ${Break}
-          ${EndIf}
-        ${EndWhile}
-        ${If} $R3 >= $R2
-          ${Break}
-        ${EndIf}
-        StrCpy $R4 $R1 1 $R3
-        ${If} $R4 == "}"
-          ${Break}
-        ${EndIf}
-        ${If} $R4 != '"'
-          Goto amadeus_marker_done
-        ${EndIf}
-
-        IntOp $1 $R3 + 1
-        StrCpy $0 "$R1"
-        Call AmadeusDecodeJsonStringAt
-        ${If} $1 < 0
-          Goto amadeus_marker_done
-        ${EndIf}
-        StrCpy $R5 "$0" ; key
-        StrCpy $R3 $1
-
-        ${While} $R3 < $R2
-          StrCpy $R4 $R1 1 $R3
-          ${If} $R4 == " "
-          ${OrIf} $R4 == "$\t"
-          ${OrIf} $R4 == "$\r"
-          ${OrIf} $R4 == "$\n"
-            IntOp $R3 $R3 + 1
-          ${Else}
-            ${Break}
-          ${EndIf}
-        ${EndWhile}
-        StrCpy $R4 $R1 1 $R3
-        ${If} $R4 != ":"
-          Goto amadeus_marker_done
-        ${EndIf}
-        IntOp $R3 $R3 + 1
-
-        ${While} $R3 < $R2
-          StrCpy $R4 $R1 1 $R3
-          ${If} $R4 == " "
-          ${OrIf} $R4 == "$\t"
-          ${OrIf} $R4 == "$\r"
-          ${OrIf} $R4 == "$\n"
-            IntOp $R3 $R3 + 1
-          ${Else}
-            ${Break}
-          ${EndIf}
-        ${EndWhile}
-
-        StrCpy $R4 $R1 1 $R3
-        System::Call 'kernel32::lstrcmpW(w R5, w "format") i .r5'
-        ${If} $5 == 0
-          ; Must be an unquoted JSON integer token equal to 1 (reject "1", 1.0, 2, 01, true)
-          StrCpy $R6 ""
-          ${While} $R3 < $R2
-            StrCpy $R4 $R1 1 $R3
-            ${If} $R4 == " "
-            ${OrIf} $R4 == "$\t"
-            ${OrIf} $R4 == "$\r"
-            ${OrIf} $R4 == "$\n"
-            ${OrIf} $R4 == ","
-            ${OrIf} $R4 == "}"
-              ${Break}
-            ${EndIf}
-            StrCpy $R6 "$R6$R4"
-            IntOp $R3 $R3 + 1
-          ${EndWhile}
-          System::Call 'kernel32::lstrcmpW(w R6, w "1") i .r5'
-          ${If} $5 == 0
-            StrCpy $R9 "1"
-          ${EndIf}
-          Goto amadeus_marker_done
-        ${EndIf}
-
-        ; Skip non-"format" member value
-        ${If} $R4 == '"'
-          IntOp $1 $R3 + 1
-          StrCpy $0 "$R1"
-          Call AmadeusDecodeJsonStringAt
-          ${If} $1 < 0
-            Goto amadeus_marker_done
-          ${EndIf}
-          StrCpy $R3 $1
-        ${ElseIf} $R4 == "{"
-        ${OrIf} $R4 == "["
-          StrCpy $R6 0
-          StrCpy $R7 0
-          ${While} $R3 < $R2
-            StrCpy $R8 $R1 1 $R3
-            ${If} $R7 == 1
-              ${If} $R8 == "\"
-                IntOp $R3 $R3 + 1
-              ${ElseIf} $R8 == '"'
-                StrCpy $R7 0
-              ${EndIf}
-            ${Else}
-              ${If} $R8 == '"'
-                StrCpy $R7 1
-              ${ElseIf} $R8 == "{"
-              ${OrIf} $R8 == "["
-                IntOp $R6 $R6 + 1
-              ${ElseIf} $R8 == "}"
-              ${OrIf} $R8 == "]"
-                IntOp $R6 $R6 - 1
-                ${If} $R6 <= 0
-                  IntOp $R3 $R3 + 1
-                  ${Break}
-                ${EndIf}
-              ${EndIf}
-            ${EndIf}
-            IntOp $R3 $R3 + 1
-          ${EndWhile}
-        ${Else}
-          ${While} $R3 < $R2
-            StrCpy $R8 $R1 1 $R3
-            ${If} $R8 == ","
-            ${OrIf} $R8 == "}"
-              ${Break}
-            ${EndIf}
-            IntOp $R3 $R3 + 1
-          ${EndWhile}
-        ${EndIf}
-      ${EndWhile}
+      StrCpy $0 "$R1"
+      Call AmadeusJsonStrictMarker
+      ${If} $0 == "1"
+        StrCpy $R9 "1"
+      ${EndIf}
 
       amadeus_marker_done:
       Push $R9
