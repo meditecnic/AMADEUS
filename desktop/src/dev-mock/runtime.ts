@@ -182,8 +182,22 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
     const conversation = rows.find(row => row.id === match?.[1]);
     if (!conversation || !match) return fail(404, 'conversation_not_found');
     if (match[2] === 'messages' && method === 'GET') return ok(structuredClone(conversation.messages));
+    const eraseConversationDiaries = (conversationId: string) => {
+      for (const mode of ['self', 'okabe'] as const) {
+        const memScope = clientState.memory.scope(JSON.stringify([session, worldline, mode]), worldline);
+        for (const diary of memScope.diaries) {
+          if (diary.conversation_id === conversationId && !diary.deleted) {
+            diary.deleted = true;
+            diary.body_ja = null;
+            diary.body_zh = null;
+            diary.verified_phrases_json = null;
+          }
+        }
+      }
+    };
     if (match[2] === 'forget' && method === 'POST') {
       conversation.messages = [];
+      if (body.forget_long_term === true) eraseConversationDiaries(conversation.id);
       return ok({ ok: true });
     }
     if (!match[2] && method === 'PATCH') {
@@ -195,6 +209,7 @@ export function createMockRuntime(options: { assetPackMovable?: boolean } = {}) 
     }
     if (!match[2] && method === 'DELETE') {
       rows.splice(rows.indexOf(conversation), 1);
+      eraseConversationDiaries(conversation.id);
       // Optional query flag (backend default false); echoed so the delete dialog's choice is visible in the mock.
       return ok({ ok: true, forget_long_term: url.searchParams.get('forget_long_term') === 'true' });
     }
