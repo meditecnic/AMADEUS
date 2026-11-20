@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   buildDetailsUrl,
+  changeKindHuman,
   CORRECTION_NOTICE,
   createDetailsController,
   deriveExperienceReading,
@@ -355,7 +356,12 @@ describe('deriveFactReadingArchive', () => {
     expect(model.topicAttribution).toEqual({ kind: 'grouped', label: '咖啡' });
     expect(model.versionCount).toBe(2);
     // §7.3: collapsed disclosure shows total count AND the latest change kind.
-    expect(model.revisionSummary).toBe('2 个版本 · 最新变更：用户修订');
+    expect(model.revisionSummary).toBe('2 个版本 · 最新变更：由你改过');
+    expect(changeKindHuman('create')).toBe('初次记下');
+    expect(changeKindHuman('refine')).toBe('后来补充');
+    expect(changeKindHuman('supersede')).toBe('按新说法更新');
+    expect(changeKindHuman('user_edit')).toBe('由你改过');
+    expect(changeKindHuman('legacy_import')).toBe('旧记录迁入');
     // Active-version sources are the default evidence region.
     expect(model.activeSources.map((line) => line.excerpt)).toEqual(['其实是黑咖啡']);
     // Historical sources stay attached to their own version only.

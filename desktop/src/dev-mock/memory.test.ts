@@ -214,4 +214,59 @@ describe('in-memory memory REST handler', () => {
     expect(call('observations').body).toMatchObject({ observations: [{ observation_id: 'obs-a', status: 'candidate' }] });
     expect(call('facts').body).toMatchObject({ pagination: { total: 3 } });
   });
+
+  it('supports diaries read/delete and user-retained empty topic create/move/delete flows', () => {
+    const { call } = harness({
+      topics: [
+        { topic_id: 'lab', display_label: 'Lab' },
+        { topic_id: 'retained', display_label: 'Reading', user_retained: true },
+      ],
+      facts: [{ fact_id: 'a', display_text: 'Coffee at the lab', topic_id: 'lab', is_pinned: false }],
+      diaries: [
+        {
+          diary_id: 'd1',
+          conversation_id: 'lab-notes',
+          body_ja: '覚えている。',
+          body_zh: '我还记得。',
+          written_at: '2026-11-18T12:00:00Z',
+        },
+      ],
+    });
+    expect(call('diaries').body).toMatchObject({ diaries: [{ diary_id: 'd1', body_zh: '我还记得。' }] });
+    expect(call('diaries/d1', 'DELETE').status).toBe(204);
+    expect(call('diaries').body).toMatchObject({ diaries: [] });
+    expect(call('diaries/d1', 'DELETE').status).toBe(404);
+
+    // Empty retained topic appears; creating same-name topic reuses existing id.
+    expect(call('topics').body).toMatchObject({
+      topics: [
+        { topic_id: 'lab', display_label: 'Lab', fact_count: 1 },
+        { topic_id: 'retained', display_label: 'Reading', fact_count: 0 },
+      ],
+    });
+    expect(call('topics', 'POST', { display_label: '  Lab  ' }).body).toMatchObject({
+      topic_id: 'lab',
+      display_label: 'Lab',
+      user_retained: true,
+    });
+    const created = call('topics', 'POST', { display_label: 'Notes' });
+    expect(created.status).toBe(200);
+    const createdId = (created.body as { topic_id: string }).topic_id;
+    expect(call(`topics/${createdId}`, 'DELETE').status).toBe(204);
+
+    // Deleting non-empty topic returns 409 topic_not_empty.
+    expect(call('topics/lab', 'DELETE')).toEqual({
+      status: 409,
+      body: { detail: { code: 'topic_not_empty' } },
+    });
+    // Moving last fact out retains topic with fact_count 0, then deleting succeeds.
+    expect(call('facts/a/presentation', 'PATCH', { topic_id: null }).status).toBe(200);
+    expect(call('topics').body).toMatchObject({
+      topics: [
+        { topic_id: 'lab', display_label: 'Lab', fact_count: 0 },
+        { topic_id: 'retained', display_label: 'Reading', fact_count: 0 },
+      ],
+    });
+    expect(call('topics/lab', 'DELETE').status).toBe(204);
+  });
 });

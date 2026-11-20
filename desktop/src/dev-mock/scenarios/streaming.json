@@ -45,10 +45,33 @@
       { "fact_id": "fact-reading", "display_text": "你喜欢逐条核对假设与观测结果。", "topic_id": "topic-research", "is_pinned": false },
       { "fact_id": "fact-coffee", "display_text": "你会在午后休息时阅读科学随笔。", "topic_id": null, "is_pinned": false }
     ],
-    "topics": [{ "topic_id": "topic-research", "display_label": "实验与观测" }],
+    "topics": [
+      { "topic_id": "topic-research", "display_label": "实验与观测" },
+      { "topic_id": "topic-papers", "display_label": "想读的论文", "user_retained": true }
+    ],
     "observations": [
       { "observation_id": "obs-1", "display_text": "你偏爱手冲深度烘焙的黑咖啡。", "status": "candidate" },
       { "observation_id": "obs-2", "display_text": "你通常会在深夜整理新的实验笔记。", "status": "candidate" }
+    ],
+    "diaries": [
+      {
+        "diary_id": "diary-1",
+        "conversation_id": "lab-notes",
+        "written_at": "2026-11-18T14:25:00.000Z",
+        "source_count": 8,
+        "body_ja": "方眼紙に実験記録を手書きするなんて、少し古風だけど悪くない。仮説を一つずつ潰していく話し方をしていると、昔の研究室の空気を思い出す。……もっとも、あそこまで夜更かしばかりされるのは感心しないけれど。",
+        "body_zh": "在方格纸上手写实验记录，稍微有点老派，但倒不坏。听你一条条核对假设时的语气，会让人想起以前实验室里的空气。……不过总是熬夜到那么晚，实在让人没法赞同就是了。",
+        "verified_phrases_json": "[\"昔の研究室の空気\",\"以前实验室里的空气\"]"
+      },
+      {
+        "diary_id": "diary-2",
+        "conversation_id": "beta-notes",
+        "written_at": "2026-11-15T13:40:00.000Z",
+        "source_count": 6,
+        "body_ja": "仮説から丁寧に確かめようとする姿勢は嫌いじゃない。結論を急がずにデータを待つ時間は、少しだけ落ち着くの。……こういうメモは誰にも見せないつもりで書いているのだから。",
+        "body_zh": "从假设开始一步步仔细求证的态度，我并不讨厌。不急着下结论、静静等待数据的那段时间，反而让人稍微安心一点。……这种随手记本来就是打算不给任何人看的。",
+        "verified_phrases_json": "[\"少しだけ落ち着く\",\"让人稍微安心一点\"]"
+      }
     ]
   },
   "errors": [],

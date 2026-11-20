@@ -173,7 +173,12 @@ export function devMockPlugin(): Plugin {
           response.setHeader('Cache-Control', 'no-store');
           response.statusCode = reply.status;
           for (const [name, value] of Object.entries(reply.headers ?? {})) response.setHeader(name, value);
-          response.end(reply.raw ? Buffer.from(reply.raw) : JSON.stringify(reply.body));
+          if (reply.status === 204) {
+            response.removeHeader('Content-Type');
+            response.end();
+          } else {
+            response.end(reply.raw ? Buffer.from(reply.raw) : JSON.stringify(reply.body));
+          }
           return;
         }
         response.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -194,7 +199,12 @@ export function devMockPlugin(): Plugin {
           if (reply.delayMs) await new Promise(resolve => setTimeout(resolve, reply.delayMs));
           response.statusCode = reply.status;
           for (const [name, value] of Object.entries(reply.headers ?? {})) response.setHeader(name, value);
-          response.end(reply.raw ? Buffer.from(reply.raw) : JSON.stringify(reply.body));
+          if (reply.status === 204) {
+            response.removeHeader('Content-Type');
+            response.end();
+          } else {
+            response.end(reply.raw ? Buffer.from(reply.raw) : JSON.stringify(reply.body));
+          }
         } catch (error) {
           response.statusCode = error instanceof Error && error.message === 'body_too_large' ? 413 : 400;
           response.end(JSON.stringify({ detail: { code: 'invalid_mock_request' } }));

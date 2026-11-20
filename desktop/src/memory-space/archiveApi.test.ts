@@ -4,8 +4,12 @@ import {
   buildExperiencesUrl,
   buildFactsUrl,
   correctFactText,
+  createTopic,
+  deleteDiary,
   deleteExperience,
   deleteFact,
+  deleteTopic,
+  fetchDiaries,
   fetchExperiencesPage,
   fetchFactsPage,
   fetchMemoryStatus,
@@ -616,5 +620,112 @@ describe('archiveApi honest outcome mapping', () => {
       retryable: true,
     });
     expect(result.payload.failedJobs[1].retryable).toBe(false);
+  });
+
+  it('fetches diaries fail-closed, drops verified_phrases_json, and handles 204 deletes', async () => {
+    const okDiaries = await fetchDiaries(scope, {
+      fetcher: vi.fn(async () =>
+        jsonResponse(200, {
+          scope: { session_id: 's1', worldline: 'steins_gate', identity_mode: 'okabe' },
+          diaries: [
+            {
+              diary_id: 'd1',
+              conversation_id: 'c1',
+              body_ja: '覚えている。',
+              body_zh: '我还记得。',
+              written_at: '2026-11-18T14:00:00Z',
+              source_count: 8,
+              verified_phrases_json: '["内部短语"]',
+            },
+          ],
+        }),
+      ),
+    });
+    expect(okDiaries.type).toBe('ok');
+    if (okDiaries.type === 'ok') {
+      expect(okDiaries.payload).toEqual([
+        {
+          diaryId: 'd1',
+          conversationId: 'c1',
+          bodyJa: '覚えている。',
+          bodyZh: '我还记得。',
+          writtenAt: '2026-11-18T14:00:00Z',
+          sourceCount: 8,
+        },
+      ]);
+      expect('verified_phrases_json' in okDiaries.payload[0]).toBe(false);
+    }
+
+    const wrongScope = await fetchDiaries(scope, {
+      fetcher: vi.fn(async () =>
+        jsonResponse(200, {
+          scope: { session_id: 's1', worldline: 'beta', identity_mode: 'okabe' },
+          diaries: [],
+        }),
+      ),
+    });
+    expect(wrongScope).toEqual({ type: 'backend-failure', code: 'invalid_payload', status: 200 });
+
+    const noContent = {
+      ok: true,
+      status: 204,
+      json: async () => {
+        throw new SyntaxError('Unexpected end of JSON input');
+      },
+    } as unknown as Response;
+    expect(await deleteDiary(scope, 'd1', { fetcher: vi.fn(async () => noContent) })).toEqual({
+      type: 'ok',
+      payload: true,
+    });
+  });
+
+  it('creates and deletes topics with 204 success and 409 topic_not_empty conflict', async () => {
+    const created = await createTopic(scope, '想读的论文', {
+      fetcher: vi.fn(async () =>
+        jsonResponse(200, {
+          topic_id: 't-new',
+          display_label: '想读的论文',
+          normalized_label: '想读的论文',
+          user_retained: true,
+          scope: { session_id: 's1', worldline: 'steins_gate', identity_mode: 'okabe' },
+        }),
+      ),
+    });
+    expect(created).toEqual({
+      type: 'ok',
+      payload: { topicId: 't-new', displayLabel: '想读的论文', userRetained: true },
+    });
+
+    const emptyTopicList = await fetchTopics(scope, {
+      fetcher: vi.fn(async () =>
+        jsonResponse(200, {
+          scope: { session_id: 's1', worldline: 'steins_gate', identity_mode: 'okabe' },
+          topics: [{ topic_id: 't-new', display_label: '想读的论文', fact_count: 0 }],
+        }),
+      ),
+    });
+    expect(emptyTopicList).toEqual({
+      type: 'ok',
+      payload: [{ topicId: 't-new', displayLabel: '想读的论文', activeFactCount: 0 }],
+    });
+
+    const blocked = await deleteTopic(scope, 't1', {
+      fetcher: vi.fn(async () =>
+        jsonResponse(409, { detail: { code: 'topic_not_empty', message: 'not empty' } }),
+      ),
+    });
+    expect(blocked).toEqual({ type: 'conflict', code: 'topic_not_empty' });
+
+    const noContent = {
+      ok: true,
+      status: 204,
+      json: async () => {
+        throw new SyntaxError('Unexpected end of JSON input');
+      },
+    } as unknown as Response;
+    expect(await deleteTopic(scope, 't-new', { fetcher: vi.fn(async () => noContent) })).toEqual({
+      type: 'ok',
+      payload: true,
+    });
   });
 });

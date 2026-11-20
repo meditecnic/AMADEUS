@@ -453,7 +453,15 @@ export function MemorySpace({ sessionId, chatWorldline, chatIdentityMode, onClos
     if (selection?.kind === 'month') crumbs.push({ key: 'month', label: selection.key.replace('-', '.') });
     if (selection?.kind === 'cell') crumbs.push({ key: 'cell', label: selection.key.split('|')[1].replace('-', '.') });
   }
-  const deeper = mode === 'chart' ? crumbs.length > 0 : Boolean(archiveState.selection || archiveState.editor || archiveState.deleteFlow);
+  const deeper = mode === 'chart'
+    ? crumbs.length > 0
+    : Boolean(
+        archiveState.selection
+        || archiveState.editor
+        || archiveState.deleteFlow
+        || archiveState.topicCreate
+        || archiveState.topicRename,
+      );
 
   const status = load.scopeKey !== scopeKey || load.status === 'loading' ? 'loading'
     : load.status === 'error' ? (load.error.kind === 'unavailable' ? 'unavailable' : 'error')

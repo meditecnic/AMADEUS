@@ -258,3 +258,28 @@ async def test_fresh_install_has_v16_in_all_databases():
             assert row["value"] == "16"
         finally:
             await db.close()
+
+
+@pytest.mark.parametrize(
+    "method,path,body,target",
+    [
+        ("POST", "/api/memory/topics", {"display_label": "Reading"}, "app.services.memory_v11.topics.create_topic"),
+        ("DELETE", "/api/memory/topics/t1", None, "app.services.memory_v11.topics.delete_empty_topic"),
+        ("GET", "/api/memory/diaries", None, "app.services.memory_v11.diaries.list_diaries"),
+        ("DELETE", "/api/memory/diaries/d1", None, "app.services.memory_v11.diaries.delete_diary"),
+    ],
+)
+def test_diary_and_topic_routes_wrap_unexpected_errors_as_500(memory_api, monkeypatch, method, path, body, target):
+    async def boom(**_kwargs):
+        raise RuntimeError("unexpected failure")
+
+    monkeypatch.setattr(target, boom)
+    kwargs = {"params": SCOPE}
+    if body is not None:
+        kwargs["json"] = body
+    response = memory_api.request(method, path, **kwargs)
+    assert response.status_code == 500
+    assert response.json()["detail"] == {
+        "code": "memory_operation_failed",
+        "message": "memory operation failed",
+    }
