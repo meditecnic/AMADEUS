@@ -564,6 +564,16 @@ async def update_fact_presentation(
              WHERE fact_id=? AND session_id=? AND identity_mode=?""",
             (1 if new_pinned else 0, new_topic, now, fid, session, mode),
         )
+        old_topic = row["topic_id"]
+        if old_topic is not None and old_topic != new_topic:
+            await db.execute(
+                """UPDATE memory_topics SET user_retained=1,updated_at=?
+                   WHERE topic_id=? AND session_id=? AND identity_mode=?
+                     AND NOT EXISTS (SELECT 1 FROM stable_facts f WHERE f.topic_id=memory_topics.topic_id
+                                     AND f.session_id=memory_topics.session_id
+                                     AND f.identity_mode=memory_topics.identity_mode AND f.state='active')""",
+                (now, old_topic, session, mode),
+            )
         await db.commit()
     except Exception:
         await db.rollback()

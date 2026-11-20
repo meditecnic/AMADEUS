@@ -41,7 +41,9 @@ def seed_legacy_embedding_db(path: Path):
             ("schema_version", "11"), ("embedding_model", "intfloat/multilingual-e5-small"),
             ("embedding_dimension", "384"),
         ))
-        db.execute("INSERT INTO memory_topics VALUES('topic','session','self','coffee','Coffee','t','t')")
+        db.execute("""INSERT INTO memory_topics(topic_id,session_id,identity_mode,normalized_label,
+                                                display_label,created_at,updated_at)
+                      VALUES('topic','session','self','coffee','Coffee','t','t')""")
         db.execute("INSERT INTO memory_topic_aliases VALUES('topic','session','self','cafe')")
         for fact_id in ('a', 'b', 'c'):
             db.execute("""INSERT INTO stable_facts(fact_id,session_id,identity_mode,topic_id,state,active_version,created_at,updated_at)

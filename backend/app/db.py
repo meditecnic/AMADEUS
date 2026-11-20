@@ -36,7 +36,7 @@ EMBEDDING_DIMENSION = 768
 # v11: Memory observation–fact pipeline (additive tables; legacy core_facts retained).
 # v12: jina 768-dimension stable-fact version embeddings. Legacy tables unchanged.
 # v13: content-free model invocation accounting in the control store.
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 DEFAULT_IDENTITY_MODE = "okabe"
 IDENTITY_MODES = frozenset({"okabe", "self"})
@@ -373,6 +373,7 @@ CREATE TABLE IF NOT EXISTS memory_topics (
     display_label TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
+    user_retained INTEGER NOT NULL DEFAULT 0 CHECK(user_retained IN (0,1)),
     PRIMARY KEY(topic_id, session_id, identity_mode)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_topics_scope_label
@@ -530,7 +531,32 @@ CREATE TABLE IF NOT EXISTS memory_ingest_receipts (
 );
 """
 
-MEMORY_SCHEMA = MEMORY_SCHEMA + MEMORY_V11_DDL
+MEMORY_DIARY_DDL = (
+    """CREATE TABLE IF NOT EXISTS memory_diaries (
+        diary_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        identity_mode TEXT NOT NULL CHECK(identity_mode IN ('self','okabe')),
+        conversation_id TEXT NOT NULL,
+        first_message_id INTEGER NOT NULL,
+        last_message_id INTEGER NOT NULL CHECK(last_message_id >= first_message_id),
+        source_count INTEGER NOT NULL CHECK(source_count > 0),
+        source_fingerprint TEXT NOT NULL,
+        content_epoch INTEGER NOT NULL,
+        due_at TEXT NOT NULL,
+        state TEXT NOT NULL CHECK(state IN ('pending','written','discarded')),
+        body_ja TEXT,
+        body_zh TEXT,
+        verified_phrases_json TEXT,
+        created_at TEXT NOT NULL,
+        written_at TEXT,
+        deleted_at TEXT,
+        UNIQUE(session_id, identity_mode, conversation_id, first_message_id, last_message_id)
+    )""",
+    """CREATE INDEX IF NOT EXISTS idx_memory_diaries_due
+       ON memory_diaries(state, due_at, diary_id)""",
+)
+
+MEMORY_SCHEMA = MEMORY_SCHEMA + MEMORY_V11_DDL + ";\n".join(MEMORY_DIARY_DDL) + ";\n"
 
 # Q18 foundation: cross-worldline shared stable user facts live only in
 # control.sqlite3. origin_identity_mode is constrained to 'self' — okabe
@@ -1377,6 +1403,27 @@ def _migrate_v12_to_v13(connection: sqlite3.Connection, kind: DatabaseKind) -> N
         raise
 
 
+def _migrate_v15_to_v16(connection: sqlite3.Connection, kind: DatabaseKind) -> None:
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        if kind == "memory":
+            has_topics = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_topics'"
+            ).fetchone()
+            if has_topics and not _column_exists(connection, "memory_topics", "user_retained"):
+                connection.execute(
+                    "ALTER TABLE memory_topics ADD COLUMN user_retained INTEGER "
+                    "NOT NULL DEFAULT 0 CHECK(user_retained IN (0,1))"
+                )
+            for statement in MEMORY_DIARY_DDL:
+                connection.execute(statement)
+        connection.execute("UPDATE schema_meta SET value='16' WHERE key='schema_version'")
+        connection.commit()
+    except BaseException:
+        connection.rollback()
+        raise
+
+
 def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str = "steins_gate") -> bool:
     db_path = Path(path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1460,6 +1507,9 @@ def _initialize_sync(path: str, schema: str, kind: DatabaseKind, worldline: str 
                 connection.rollback()
                 raise
             current = 15
+        if current == 15:
+            _migrate_v15_to_v16(connection, kind)
+            current = 16
         if current not in (None, SCHEMA_VERSION):
             raise RuntimeError(f"unsupported {kind} schema version at {path}: {current}")
 
