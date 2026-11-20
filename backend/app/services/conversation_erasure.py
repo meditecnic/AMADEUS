@@ -32,6 +32,8 @@ async def sources_erased(db: Any, *, session_id: str, identity_mode: str,
 
 async def request_erasure(*, session_id: str, identity_mode: str, worldline: str,
                           conversation_id: str, action: str, forget_long_term: bool) -> dict[str, int]:
+    from app.services.memory_v11.diaries import erase_conversation_diaries
+
     # Finish any previous attempt before snapshotting the current history.
     await resume_erasures(worldline=worldline, session_id=session_id, conversation_id=conversation_id)
     history = await get_db(worldline, 'history')
@@ -73,13 +75,16 @@ async def request_erasure(*, session_id: str, identity_mode: str, worldline: str
                :request_id,:session_id,:identity_mode,:conversation_id,:action,
                :forget_long_term,:source_message_ids,:state,:created_at)''', request,
         )
+        await erase_conversation_diaries(db, request)
         await db.execute(
             """UPDATE memory_ingest_jobs SET state='cancelled', retryable=0,
                lease_owner=NULL, lease_expires_at=NULL, next_attempt_at=NULL,
                last_error_code='source_missing', updated_at=?
                WHERE session_id=? AND identity_mode=? AND conversation_id=?
                  AND state IN ('pending','processing','failed')
-                 AND (?='delete' OR source_message_id IN (SELECT value FROM json_each(?)))""",
+                 AND (?='delete' OR source_message_id IN (SELECT value FROM json_each(?))
+                      OR EXISTS (SELECT 1 FROM memory_diaries d
+                                 WHERE d.diary_id=memory_ingest_jobs.job_id AND d.state='discarded'))""",
             (request['created_at'], session_id, identity_mode, conversation_id, action, request['source_message_ids']),
         )
         await db.commit()

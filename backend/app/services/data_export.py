@@ -130,6 +130,12 @@ def _memory_json(conn):
         ORDER BY x.created_at,x.experience_id''')
     yield ',"experiences":'
     yield from _array(experiences)
+    diaries = conn.execute("""SELECT diary_id,session_id,identity_mode,conversation_id,
+                                    first_message_id,last_message_id,body_ja,body_zh,written_at
+                             FROM memory_diaries WHERE state='written' AND deleted_at IS NULL
+                             ORDER BY written_at,diary_id""")
+    yield ',"diaries":'
+    yield from _array(diaries)
 
 
 class PreparedExport:

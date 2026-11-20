@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.db import normalize_identity_mode, normalize_worldline, validate_schema
 from app.services.memory import memory_service
@@ -290,6 +290,7 @@ def _memory_error_response(exc: MemoryValidationError) -> HTTPException:
     if code in {
         "fact_not_found",
         "topic_not_found",
+        "diary_not_found",
         "experience_not_found",
         "observation_not_found",
     }:
@@ -300,6 +301,7 @@ def _memory_error_response(exc: MemoryValidationError) -> HTTPException:
         "expected_version_mismatch",
         "pin_limit_reached",
         "topic_label_conflict",
+        "topic_not_empty",
         "experience_delete_pending",
         "observation_not_ignorable",
     }:
@@ -727,21 +729,16 @@ async def list_memory_topics(
         ) from None
 
 
-@router.patch("/api/memory/topics/{topic_id}")
-async def patch_memory_topic(
-    topic_id: str,
-    request: Request,
+def _memory_scope_params(
     session_id: str | None = Query(None),
     worldline: str | None = Query(None),
     identity_mode: str | None = Query(None),
-):
-    """v11 topic rename (plan §8.3): display_label only, no merges, local."""
-    from app.services.memory_v11.contracts import MemoryValidationError
-    from app.services.memory_v11.topics import rename_topic
-
+) -> dict[str, str]:
     wl, mode = _validate_memory_scope(worldline, identity_mode)
-    sid = _require_session_id(session_id)
+    return {"session_id": _require_session_id(session_id), "worldline": wl, "identity_mode": mode}
 
+
+async def _topic_display_label(request: Request) -> str:
     try:
         raw = await request.json()
     except Exception:
@@ -759,14 +756,62 @@ async def patch_memory_topic(
         raise _body_error("missing_display_label", "display_label is required")
     if not isinstance(raw["display_label"], str):
         raise _body_error("invalid_display_label", "display_label must be a string")
+    return raw["display_label"]
+
+
+@router.post("/api/memory/topics")
+async def create_memory_topic(request: Request, scope: dict = Depends(_memory_scope_params)):
+    from app.services.memory_v11.contracts import MemoryValidationError
+    from app.services.memory_v11.topics import create_topic
+
+    display_label = await _topic_display_label(request)
+    try:
+        return {**await create_topic(**scope, display_label=display_label), "scope": scope}
+    except MemoryValidationError as exc:
+        raise _memory_error_response(exc) from exc
+
+
+@router.delete("/api/memory/topics/{topic_id}", status_code=204)
+async def delete_memory_topic(topic_id: str, scope: dict = Depends(_memory_scope_params)):
+    from app.services.memory_v11.contracts import MemoryValidationError
+    from app.services.memory_v11.topics import delete_empty_topic
 
     try:
+        await delete_empty_topic(**scope, topic_id=topic_id)
+    except MemoryValidationError as exc:
+        raise _memory_error_response(exc) from exc
+
+
+@router.get("/api/memory/diaries")
+async def list_memory_diaries(scope: dict = Depends(_memory_scope_params)):
+    from app.services.memory_v11.diaries import list_diaries
+
+    return await list_diaries(**scope)
+
+
+@router.delete("/api/memory/diaries/{diary_id}", status_code=204)
+async def delete_memory_diary(diary_id: str, scope: dict = Depends(_memory_scope_params)):
+    from app.services.memory_v11.contracts import MemoryValidationError
+    from app.services.memory_v11.diaries import delete_diary
+
+    try:
+        await delete_diary(**scope, diary_id=diary_id)
+    except MemoryValidationError as exc:
+        raise _memory_error_response(exc) from exc
+
+
+@router.patch("/api/memory/topics/{topic_id}")
+async def patch_memory_topic(topic_id: str, request: Request, scope: dict = Depends(_memory_scope_params)):
+    """Rename one topic in the selected memory scope."""
+    from app.services.memory_v11.contracts import MemoryValidationError
+    from app.services.memory_v11.topics import rename_topic
+
+    display_label = await _topic_display_label(request)
+    try:
         return await rename_topic(
-            session_id=sid,
-            worldline=wl,
-            identity_mode=mode,
+            **scope,
             topic_id=topic_id,
-            display_label=raw["display_label"],
+            display_label=display_label,
         )
     except MemoryValidationError as exc:
         raise _memory_error_response(exc) from exc

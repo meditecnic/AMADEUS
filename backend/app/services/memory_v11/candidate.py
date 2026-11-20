@@ -75,6 +75,7 @@ _MEMORY_PRESERVED_TABLES: tuple[str, ...] = (
     "conversation_erasure_requests",
     "memory_tombstones",
     "memory_ingest_receipts",
+    "memory_diaries",
 )
 # Old v11 CONTENT tables, cleared in dependency order (children first).
 _V11_CONTENT_CLEAR_ORDER: tuple[str, ...] = (
@@ -111,7 +112,7 @@ _MEMORY_KNOWN_TABLES: frozenset[str] = frozenset(
         "stable_facts", "stable_fact_versions", "stable_fact_evidence",
         "memory_tombstones", "memory_consolidation_proposals",
         "stable_fact_version_embeddings", "experiences", "memory_ingest_receipts",
-        "legacy_core_fact_imports",
+        "legacy_core_fact_imports", "memory_diaries",
     }
 )
 _INDEX_FAMILY_PREFIXES: tuple[str, ...] = (
@@ -129,7 +130,7 @@ _MEMORY_REQUIRED_TABLES: frozenset[str] = frozenset(
         "memory_observation_sources", "memory_topics", "memory_topic_aliases",
         "stable_facts", "stable_fact_versions", "stable_fact_evidence",
         "memory_tombstones", "memory_consolidation_proposals",
-        "stable_fact_version_embeddings", "experiences", "memory_ingest_receipts",
+        "stable_fact_version_embeddings", "experiences", "memory_ingest_receipts", "memory_diaries",
     }
 )
 _MEMORY_RECEIPT_COLUMNS: frozenset[str] = frozenset(

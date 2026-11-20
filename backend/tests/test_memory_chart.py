@@ -43,7 +43,8 @@ def _memory(worldline="steins_gate"):
 
 def _topic(db, tid, *, mode="self", session="chart-session", created=FIRST):
     db.execute(
-        "INSERT INTO memory_topics VALUES(?,?,?,?,?,?,?)",
+        """INSERT INTO memory_topics(topic_id,session_id,identity_mode,normalized_label,
+                                      display_label,created_at,updated_at) VALUES(?,?,?,?,?,?,?)""",
         (tid, session, mode, tid, f"topic {tid}", created, LATER),
     )
 

@@ -136,7 +136,7 @@ async def list_topics(
     worldline: str,
     identity_mode: str,
 ) -> dict[str, Any]:
-    """Scoped topic list: active-fact counts only, zero-active hidden."""
+    """List populated and user-retained topics with their active-fact counts."""
     wl = normalize_worldline(worldline)
     mode = normalize_identity_mode(identity_mode)
     session = (session_id or "").strip()
@@ -147,7 +147,7 @@ async def list_topics(
     try:
         rows = await (
             await db.execute(
-                """SELECT t.topic_id, t.display_label,
+                  """SELECT t.topic_id, t.display_label,
                           COUNT(f.fact_id) AS fact_count
                      FROM memory_topics t
                      LEFT JOIN stable_facts f
@@ -156,8 +156,8 @@ async def list_topics(
                       AND f.identity_mode = t.identity_mode
                       AND f.state = 'active'
                     WHERE t.session_id=? AND t.identity_mode=?
-                    GROUP BY t.topic_id, t.display_label
-                   HAVING COUNT(f.fact_id) > 0
+                      GROUP BY t.topic_id, t.display_label, t.user_retained
+                     HAVING COUNT(f.fact_id) > 0 OR t.user_retained=1
                     ORDER BY t.normalized_label ASC, t.topic_id ASC""",
                 (session, mode),
             )
@@ -178,6 +178,49 @@ async def list_topics(
             },
             "topics": topics,
         }
+    finally:
+        await db.close()
+
+
+async def create_topic(*, session_id: str, worldline: str, identity_mode: str, display_label: str) -> dict:
+    prepared = prepare_topic_label(display_label)
+    if prepared is None:
+        raise MemoryValidationError("empty_display_label", "display_label is required")
+    mode = normalize_identity_mode(identity_mode)
+    db = await get_db(worldline, "memory")
+    try:
+        await db.execute("BEGIN IMMEDIATE")
+        topic_id = await resolve_or_create_topic(db, session_id=session_id, identity_mode=mode,
+                                                 display_label=prepared[0], normalized_label=prepared[1])
+        row = await (await db.execute(
+            """UPDATE memory_topics SET user_retained=1,updated_at=?
+               WHERE topic_id=? AND session_id=? AND identity_mode=?
+               RETURNING topic_id,display_label,normalized_label""",
+            (_utc_now(), topic_id, session_id, mode),
+        )).fetchone()
+        await db.commit()
+        return {**dict(row), "user_retained": True}
+    finally:
+        await db.close()
+
+
+async def delete_empty_topic(*, session_id: str, worldline: str, identity_mode: str, topic_id: str) -> None:
+    scope = (topic_id, session_id, normalize_identity_mode(identity_mode))
+    db = await get_db(worldline, "memory")
+    try:
+        await db.execute("BEGIN IMMEDIATE")
+        row = await (await db.execute(
+            """SELECT EXISTS (SELECT 1 FROM stable_facts f WHERE f.topic_id=t.topic_id
+                              AND f.session_id=t.session_id AND f.identity_mode=t.identity_mode) AS occupied
+               FROM memory_topics t WHERE t.topic_id=? AND t.session_id=? AND t.identity_mode=?""", scope,
+        )).fetchone()
+        if row is None:
+            raise MemoryValidationError("topic_not_found", f"topic_id={topic_id}")
+        if row["occupied"]:
+            raise MemoryValidationError("topic_not_empty", f"topic_id={topic_id}")
+        await db.execute("DELETE FROM memory_topic_aliases WHERE topic_id=? AND session_id=? AND identity_mode=?", scope)
+        await db.execute("DELETE FROM memory_topics WHERE topic_id=? AND session_id=? AND identity_mode=?", scope)
+        await db.commit()
     finally:
         await db.close()
 

@@ -562,6 +562,16 @@ def test_app_module_resolves_to_this_worktree():
 
 def test_candidate_build_preserves_legacy_and_rebuilds_v11(tmp_path):
     snapshot = _make_snapshot(tmp_path)
+    conn = _open(_db_paths(snapshot)["sg_memory"])
+    try:
+        conn.execute("""INSERT INTO memory_diaries(diary_id,session_id,identity_mode,conversation_id,
+                        first_message_id,last_message_id,source_count,source_fingerprint,content_epoch,
+                        due_at,state,body_ja,body_zh,created_at,written_at)
+                        VALUES('diary','ownerA','self','conv-a-self',101,101,1,'source',0,?,'written','記録','记录',?,?)""",
+                     (NOW, NOW, NOW))
+        conn.commit()
+    finally:
+        conn.close()
     preview_path = _make_preview(snapshot, tmp_path / "inputs")
     output = tmp_path / "candidate"
     before = _snapshot_state(snapshot)
@@ -589,6 +599,7 @@ def test_candidate_build_preserves_legacy_and_rebuilds_v11(tmp_path):
         "conversation_erasure_requests",
         "memory_tombstones",
         "memory_ingest_receipts",
+        "memory_diaries",
     ):
         assert _row_tuples(paths["sg_memory"], table) == _row_tuples(
             _db_paths(snapshot)["sg_memory"], table
