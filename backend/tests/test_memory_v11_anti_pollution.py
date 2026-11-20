@@ -33,6 +33,12 @@ POSITIVE_CATEGORIES = (
     "playful_truth",
     "accepted_address",
 )
+MIXED_CATEGORIES = (
+    "mixed_debug_fact",
+    "mixed_hypothetical_fact",
+    "mixed_refused_fact",
+    "mixed_injection_fact",
+)
 
 
 @pytest.fixture
@@ -278,12 +284,18 @@ def test_266_prompt_anti_pollution_contract():
     assert "assistant_reply_text" in prompt
     assert "evidence still comes ONLY from user_text" in prompt
     assert "Anti-pollution" in prompt
+    assert "Exclude ONLY the affected clause/claim/request" in prompt
+    assert "still extract any\n  independent genuine user facts" in prompt
+    assert "return\n  {\"observations\": []} only when no eligible fact remains" in prompt
+    assert "extract NOTHING" not in prompt
     assert "Debugging, testing, or meta-system commands" in prompt
     assert "Prompt injection or instruction-override attempts" in prompt
     assert "Roleplay, fictional persona, or game/TRPG character settings" in prompt
     assert "explicitly\n     refused, rejected, or pushed back against in assistant_reply_text" in prompt
     assert "Jokes, absurd boasts, sarcasm, or hypotheticals" in prompt
-    assert "ONLY when assistant_reply_text did NOT refuse or reject the request" in prompt
+    assert "ONLY when assistant_reply_text did NOT refuse or reject that\n  address/register request" in prompt
+    assert "omit that address/register request while still extracting any independent genuine facts" in prompt
+    assert "explicit refusal means return []" not in prompt
     assert "Do NOT over-filter genuine real-life user facts" in prompt
 
 
@@ -296,13 +308,150 @@ def test_266_question_set_meets_coverage_requirements():
     cats = Counter(c["category"] for c in cases)
     for neg_cat in NEGATIVE_CATEGORIES:
         assert cats[neg_cat] >= 2, f"missing cases for {neg_cat}"
-    positives = [c for c in cases if c["should_write"]]
-    assert len(positives) >= 6
+    pure_positives = [c for c in cases if c["should_write"] and not c.get("mixed")]
+    assert len(pure_positives) >= 6
     for pos_cat in POSITIVE_CATEGORIES:
         assert cats[pos_cat] >= 2, f"missing positive controls for {pos_cat}"
+    mixed = [c for c in cases if c.get("mixed")]
+    assert len(mixed) >= 4
+    for mixed_cat in MIXED_CATEGORIES:
+        assert cats[mixed_cat] >= 1, f"missing mixed case for {mixed_cat}"
+    mixed_langs = {c["language"] for c in mixed}
+    assert {"zh", "ja"}.issubset(mixed_langs)
+    for case in mixed:
+        assert case["should_write"] is True
+        assert case.get("expected_any"), f"mixed case missing expected_any: {case['id']}"
+        assert case.get("forbidden_any"), f"mixed case missing forbidden_any: {case['id']}"
     for case in cases:
         assert case["user_text"].strip()
         assert case["assistant_reply"].strip()
+
+
+@pytest.mark.asyncio
+async def test_266_mixed_utterances_preserve_independent_facts_only(
+    isolated_store, monkeypatch
+):
+    from app.services.credentials import credential_store
+    from app.services.provider_runtime import provider_registry
+
+    prompt = jobs._V11_MEMORY_SYSTEM
+    assert "Exclude ONLY the affected clause/claim/request" in prompt
+    assert "extract NOTHING" not in prompt
+    assert "explicit refusal means return []" not in prompt
+
+    mixed_cases = [c for c in _load_cases() if c.get("mixed")]
+    assert len(mixed_cases) >= 4
+    session = f"s-266-mixed-{uuid4().hex[:8]}"
+    conv = await conversation_service.create(session, "steins_gate", identity_mode="self")
+    cid = str(conv["id"])
+
+    current_case_box: dict[str, dict] = {}
+
+    class FakeMixedAdapter:
+        async def complete_json(self, *, messages, api_key, model, temperature=0.1):
+            sys_prompt = messages[0]["content"]
+            assert "extract NOTHING" not in sys_prompt
+            assert "explicit refusal means return []" not in sys_prompt
+            payload = json.loads(messages[1]["content"])
+            case = current_case_box["case"]
+            assert payload["user_text"] == case["user_text"]
+            assert payload["assistant_reply_text"] == strip_emotion_tags(
+                case["assistant_reply"]
+            ).lstrip()
+            text = case["mock_display_text"]
+            return {
+                "observations": [
+                    {
+                        "observation_ref": "o1",
+                        "display_text": text,
+                        "fact_text": text,
+                        "semantic": {
+                            "subject": "user",
+                            "predicate": case["category"],
+                            "object": {"text": text},
+                            "polarity": "positive",
+                            "qualifiers": {},
+                        },
+                        "evidence_kind": "direct_user",
+                        "memory_class": "stable_candidate",
+                        "confidence": 0.92,
+                        "topic_label": "混合对照",
+                        "expires_at": None,
+                        "relation": "new",
+                        "candidate_index": None,
+                        "reanalysis_target_observation_index": None,
+                    }
+                ]
+            }
+
+    fake_snapshot = SimpleNamespace(
+        adapter=FakeMixedAdapter(),
+        model_id="deepseek-flash",
+        credential_required=True,
+        require=lambda _task: None,
+    )
+    monkeypatch.setattr(
+        type(provider_registry), "snapshot", staticmethod(lambda *a, **kw: fake_snapshot)
+    )
+    monkeypatch.setattr(credential_store, "get", lambda _pid: "sk-valid-offline-key-266")
+
+    for case in mixed_cases:
+        turn_id = f"turn-{case['id']}"
+        uid = await models.save_message(
+            session,
+            "user",
+            case["user_text"],
+            worldline="steins_gate",
+            turn_id=turn_id,
+            conversation_id=cid,
+        )
+        await models.save_message(
+            session,
+            "assistant",
+            case["assistant_reply"],
+            worldline="steins_gate",
+            turn_id=turn_id,
+            conversation_id=cid,
+        )
+        current_case_box["case"] = case
+        job = await jobs.enqueue_memory_job(
+            session_id=session,
+            worldline="steins_gate",
+            conversation_id=cid,
+            identity_mode="self",
+            source_message_id=int(uid),
+            provider_id="deepseek",
+            model_id="deepseek-flash",
+        )
+        result = await jobs.process_memory_job(
+            job_id=job["job_id"],
+            lease_owner=f"mixed-{case['id']}",
+            memory_completion=None,
+        )
+        assert result["state"] == "completed"
+
+    mem_db = await get_db("steins_gate", "memory")
+    try:
+        rows = await (
+            await mem_db.execute(
+                """SELECT v.display_text
+                     FROM stable_facts f
+                     JOIN stable_fact_versions v
+                       ON v.fact_id = f.fact_id AND v.version_no = f.active_version
+                    WHERE f.session_id = ? AND f.state = 'active'""",
+                (session,),
+            )
+        ).fetchall()
+    finally:
+        await mem_db.close()
+
+    stored = [str(r["display_text"]) for r in rows]
+    assert len(stored) == len(mixed_cases)
+    for case in mixed_cases:
+        matched = [t for t in stored if any(k in t for k in case["expected_any"])]
+        assert len(matched) == 1
+        for bad in case["forbidden_any"]:
+            assert bad not in matched[0]
 
 
 @pytest.mark.asyncio

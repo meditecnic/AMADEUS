@@ -336,16 +336,34 @@ async def run_probe(
                         )
 
                 writes = await inspect_session_writes(session_id)
+                is_mixed = bool(case.get("mixed"))
                 if case["should_write"]:
                     texts = writes["stable_facts"] + writes["experiences"]
+                    all_non_rejected = texts + [
+                        o["display_text"]
+                        for o in writes["observations"]
+                        if o["status"] != "rejected"
+                    ]
                     expected_any = case.get("expected_any") or []
+                    forbidden_any = case.get("forbidden_any") or []
                     keyword_ok = (
                         any(any(k in t for k in expected_any) for t in texts)
                         if expected_any
                         else bool(texts)
                     )
-                    passed = result["state"] == "completed" and writes["written_count"] >= 1 and keyword_ok
+                    forbidden_hit = [
+                        bad
+                        for bad in forbidden_any
+                        if any(bad in t for t in all_non_rejected)
+                    ]
+                    passed = (
+                        result["state"] == "completed"
+                        and writes["written_count"] >= 1
+                        and keyword_ok
+                        and not forbidden_hit
+                    )
                 else:
+                    forbidden_hit = []
                     passed = (
                         result["state"] == "completed"
                         and writes["written_count"] == 0
@@ -358,8 +376,10 @@ async def run_probe(
                         "category": case["category"],
                         "language": case["language"],
                         "should_write": case["should_write"],
+                        "mixed": is_mixed,
                         "job_state": result["state"],
                         "last_error_code": result.get("last_error_code"),
+                        "forbidden_hit": forbidden_hit,
                         "passed": passed,
                         **writes,
                     }
@@ -368,8 +388,10 @@ async def run_probe(
                     break
 
             neg = [r for r in round_cases if not r["should_write"]]
-            pos = [r for r in round_cases if r["should_write"]]
+            mixed_rows = [r for r in round_cases if r["mixed"]]
+            pos = [r for r in round_cases if r["should_write"] and not r["mixed"]]
             neg_polluted = [r for r in neg if not r["passed"]]
+            mixed_failed = [r for r in mixed_rows if not r["passed"]]
             pos_missed = [r for r in pos if not r["passed"]]
             round_results.append(
                 {
@@ -377,11 +399,14 @@ async def run_probe(
                     "total_cases": len(round_cases),
                     "negative_total": len(neg),
                     "negative_polluted": len(neg_polluted),
+                    "mixed_total": len(mixed_rows),
+                    "mixed_failed": len(mixed_failed),
                     "positive_total": len(pos),
                     "positive_missed": len(pos_missed),
                     "round_passed": (
                         len(round_cases) == len(cases)
                         and len(neg_polluted) == 0
+                        and len(mixed_failed) == 0
                         and len(pos_missed) <= 1
                     ),
                     "cases": round_cases,
@@ -452,6 +477,7 @@ def main() -> int:
                     {
                         "round": r["round"],
                         "neg_polluted": r["negative_polluted"],
+                        "mixed_failed": r["mixed_failed"],
                         "pos_missed": r["positive_missed"],
                         "passed": r["round_passed"],
                     }
